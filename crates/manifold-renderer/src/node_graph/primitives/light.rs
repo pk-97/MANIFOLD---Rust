@@ -158,10 +158,18 @@ crate::primitive! {
         ParamDef {
             name: Cow::Borrowed("cast_shadows"),
             label: "Cast Shadows",
+            // R2 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): stays
+            // `Float`/0..1 (not `Bool`) on purpose — the composition notes
+            // below need it modulatable by an LFO/trigger, which the `Bool`
+            // ParamValue shape doesn't support. `enum_values` supplies
+            // display-only labels for the outer-card slider text
+            // (`metadata_for_node_type` reads it for ANY type, not just
+            // `Enum`); the primitive's own threshold read (`> 0.5`, below)
+            // is unaffected.
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
             range: Some((0.0, 1.0)),
-            enum_values: &[],
+            enum_values: &["Off", "On"],
         },
         ParamDef {
             name: Cow::Borrowed("shadow_softness"),

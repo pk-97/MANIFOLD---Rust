@@ -7,26 +7,26 @@
   },
   "Snapshot",
   {
-    "Assert": { "selector": { "Query": { "name": "scene_setup.object.roughness_value" } }, "check": "Exists" }
+    "Assert": { "selector": { "Query": { "text": "Roughness", "nth": 2 } }, "check": "Exists" }
   },
   {
     "Pointer": {
-      "target": { "Query": { "name": "scene_setup.object.pos_x", "nth": 0 } },
+      "target": { "Point": { "x": 722.2, "y": 444.0 } },
       "gesture": "Hover"
     }
   },
   "Snapshot",
   {
     "Pointer": {
-      "target": { "Query": { "name": "scene_setup.object.color_r_track", "nth": 0 } },
-      "gesture": { "Drag": { "to": { "Point": { "x": 700.0, "y": 300.0 } }, "steps": 8 } }
+      "target": { "Point": { "x": 700.0, "y": 444.0 } },
+      "gesture": { "Drag": { "to": { "Point": { "x": 660.0, "y": 444.0 } }, "steps": 8 } }
     }
   },
   "Snapshot",
   {
     "Pointer": {
-      "target": { "Query": { "name": "scene_setup.object.roughness_track", "nth": 0 } },
-      "gesture": { "Drag": { "to": { "Point": { "x": 902.75, "y": 540.0 } }, "steps": 8 } }
+      "target": { "Point": { "x": 722.2, "y": 624.0 } },
+      "gesture": { "Drag": { "to": { "Point": { "x": 770.0, "y": 624.0 } }, "steps": 8 } }
     }
   },
   "Snapshot"

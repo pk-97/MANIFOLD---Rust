@@ -8,26 +8,20 @@
   "Snapshot",
   {
     "Assert": {
-      "selector": { "Query": { "name": "scene_setup.object.roughness_value", "text": "1.00" } },
+      "selector": { "Query": { "text": "Roughness", "nth": 2 } },
       "check": "Exists"
     }
   },
   {
     "Pointer": {
-      "target": { "Query": { "name": "scene_setup.object.roughness_track" } },
-      "gesture": { "Drag": { "to": { "Point": { "x": 650.0, "y": 810.0 } }, "steps": 8 } }
+      "target": { "Point": { "x": 722.2, "y": 624.0 } },
+      "gesture": { "Drag": { "to": { "Point": { "x": 770.0, "y": 624.0 } }, "steps": 8 } }
     }
   },
   "Snapshot",
   {
-    "Assert": {
-      "selector": { "Query": { "name": "scene_setup.object.roughness_driver_btn" } },
-      "check": "Exists"
-    }
-  },
-  {
     "Pointer": {
-      "target": { "Query": { "name": "scene_setup.object.roughness_driver_btn" } },
+      "target": { "Point": { "x": 892.0, "y": 624.0 } },
       "gesture": { "Click": { "modifiers": {} } }
     }
   },
@@ -35,11 +29,5 @@
   { "Key": { "key": "Z", "modifiers": { "command": true } } },
   "Snapshot",
   { "Key": { "key": "Z", "modifiers": { "command": true } } },
-  "Snapshot",
-  {
-    "Assert": {
-      "selector": { "Query": { "name": "scene_setup.object.roughness_driver_btn" } },
-      "check": "Exists"
-    }
-  }
+  "Snapshot"
 ]

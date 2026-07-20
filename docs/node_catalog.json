@@ -10366,6 +10366,10 @@
         },
         {
           "default": "1",
+          "enum_values": [
+            "Off",
+            "On"
+          ],
           "label": "Cast Shadows",
           "name": "cast_shadows",
           "range": [

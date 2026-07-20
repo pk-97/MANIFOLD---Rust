@@ -33,7 +33,8 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "scene_setup.light.intensity_value"
+          "text": "Intensity",
+          "nth": 1
         }
       },
       "check": "Exists"
@@ -41,17 +42,13 @@
   },
   {
     "Pointer": {
-      "target": {
-        "Query": {
-          "name": "scene_setup.light.intensity_track"
-        }
-      },
+      "target": { "Point": { "x": 722.2, "y": 744.0 } },
       "gesture": {
         "Drag": {
           "to": {
             "Point": {
-              "x": 1020.0,
-              "y": 684.0
+              "x": 750.0,
+              "y": 744.0
             }
           },
           "steps": 8
@@ -64,7 +61,8 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "scene_setup.light.intensity_driver_btn"
+          "text": "6.88",
+          "nth": 1
         }
       },
       "check": "Exists"
@@ -72,11 +70,7 @@
   },
   {
     "Pointer": {
-      "target": {
-        "Query": {
-          "name": "scene_setup.light.intensity_driver_btn"
-        }
-      },
+      "target": { "Point": { "x": 892.0, "y": 744.0 } },
       "gesture": {
         "Click": {
           "modifiers": {}
