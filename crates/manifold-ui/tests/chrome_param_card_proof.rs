@@ -65,10 +65,10 @@ impl ProofCard {
             .pad(Pad::all(CARD_PAD))
             .bg(Color32::new(28, 28, 30, 255))
             .claims_area()
-            .on_right_click(PanelAction::CardRightClicked(target))
+            .on_right_click(PanelAction::CardRightClicked(target.clone()))
             .child(self.header_view());
         for (pi, p) in self.params.iter().enumerate() {
-            col = col.child(self.param_row_view(target, pi, p));
+            col = col.child(self.param_row_view(target.clone(), pi, p));
         }
         col
     }
@@ -106,7 +106,7 @@ impl ProofCard {
         let pid: ParamId = ParamId::from(p.id);
         let mut row_col = View::column(0.0)
             .claims_area()
-            .on_right_click(PanelAction::ParamLabelRightClick(target, pid.clone()))
+            .on_right_click(PanelAction::ParamLabelRightClick(target.clone(), pid.clone()))
             .child(
                 View::row(4.0)
                     .h(Sizing::Fixed(ROW_H))
@@ -123,12 +123,12 @@ impl ProofCard {
                     .child(
                         View::button("D")
                             .fixed(BTN, BTN)
-                            .on_click(PanelAction::DriverToggle(target, pid.clone())),
+                            .on_click(PanelAction::DriverToggle(target.clone(), pid.clone())),
                     )
                     .child(
                         View::button("E")
                             .fixed(BTN, BTN)
-                            .on_click(PanelAction::EnvelopeToggle(target, pid.clone())),
+                            .on_click(PanelAction::EnvelopeToggle(target.clone(), pid.clone())),
                     ),
             );
         if p.driver_open {
@@ -146,7 +146,7 @@ impl ProofCard {
                 View::button("1/4")
                     .fixed(28.0, DRAWER_BTN_H)
                     .on_click(PanelAction::DriverConfig(
-                        target,
+                        target.clone(),
                         pid.clone(),
                         DriverConfigAction::BeatDiv(2),
                     )),

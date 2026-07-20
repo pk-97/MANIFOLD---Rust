@@ -46,8 +46,16 @@ pub fn loaded_generator_presets_from_bundled()
         .load()
         .entries()
         .filter_map(|(id, json)| {
-            let def: EffectGraphDef = serde_json::from_str(&json)
+            let mut def: EffectGraphDef = serde_json::from_str(&json)
                 .unwrap_or_else(|e| panic!("bundled generator preset {id}: parse failed: {e}"));
+            // P1 scene-panel exposure convergence: the preset-definition
+            // registry seeds PresetInstance slots (via `init_defaults`), so it
+            // MUST carry the same stamped scene exposures as the def cache
+            // (`bundled_presets::rebuild_def_cache`). Without this, a bundled
+            // scene preset (SceneStarter, the default scene) shows exposed card
+            // rows whose backing instance slot never exists. Same deterministic
+            // migration, applied on this parallel parse path.
+            crate::node_graph::scene_exposure::migrate_scene_exposures(&mut def);
             def.preset_metadata
         })
         .collect()

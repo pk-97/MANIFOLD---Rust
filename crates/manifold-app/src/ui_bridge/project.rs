@@ -261,9 +261,8 @@ pub(super) fn dispatch_project(
             if let Some(default) = generator_catalog_default(project, layer_id) {
                 let target = manifold_core::GraphTarget::Generator(layer_id.clone());
                 // Bound param → edit the binding's instance slot, never the
-                // def (see inspector.rs `scene_bound_slot` for the full
-                // rationale — a def write on a bound param is re-seeded
-                // over on rebuild, the importer-camera deadness).
+                // def — a def write on a bound param is re-seeded over on
+                // rebuild (the importer-camera deadness this guards against).
                 let bound = project
                     .with_preset_graph_mut(&target, |inst| {
                         inst.binding_id_for_node_param(*node_doc_id, param_id)
@@ -361,6 +360,9 @@ pub(super) fn dispatch_project(
                     *render_scene_node_id,
                     *next_index,
                     centroid,
+                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.phong_material"),
+                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.transform_3d"),
+                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.scene_object"),
                     default,
                 );
                 let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
@@ -379,6 +381,7 @@ pub(super) fn dispatch_project(
                     *render_scene_node_id,
                     *next_index,
                     pos,
+                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.light"),
                     default,
                 );
                 let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
@@ -520,6 +523,7 @@ pub(super) fn dispatch_project(
                     *group_node_id,
                     type_id.clone(),
                     None,
+                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type(type_id),
                     default,
                 );
                 let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
@@ -1008,6 +1012,7 @@ mod tests {
             group_node_id,
             "node.twist_mesh".to_string(),
             None,
+            manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.twist_mesh"),
             def,
         );
         use manifold_editing::command::Command;
@@ -1017,9 +1022,24 @@ mod tests {
         let graph = layer.generator_graph().unwrap();
         let inserted_group = graph.nodes.iter().find(|n| n.id == group_node_id).unwrap();
         let body = inserted_group.group.as_deref().unwrap();
+        let inserted = body
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.twist_mesh")
+            .expect("the twist node lands inside the object's own group body");
+
+        // P1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): against a REAL
+        // SceneStarter def and the real registry-backed metadata, the
+        // inserted modifier's params land in the def's top-level
+        // `preset_metadata`, targeting its bare NodeId — an app-level
+        // round-trip proof, not just the hand-built editing-crate fixtures.
+        let meta = graph.preset_metadata.as_ref().expect("P1 stamped exposures into preset_metadata");
         assert!(
-            body.nodes.iter().any(|n| n.type_id == "node.twist_mesh"),
-            "the twist node lands inside the object's own group body"
+            meta.bindings.iter().any(|b| matches!(
+                &b.target,
+                manifold_core::effect_graph_def::BindingTarget::Node { node_id, .. } if *node_id == inserted.node_id
+            )),
+            "the twist modifier's params are exposed, targeting its bare NodeId"
         );
     }
     /// BUG-229 diagnosis (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md C-P1, orchestrator

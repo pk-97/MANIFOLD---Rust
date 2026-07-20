@@ -22584,6 +22584,1077 @@
           "max": "100",
           "min": "5",
           "name": "Camera Distance"
+        },
+        {
+          "default": "0.9",
+          "id": "1_fov_y",
+          "max": "2.5",
+          "min": "0.05",
+          "name": "FOV Y"
+        },
+        {
+          "default": "0",
+          "id": "1_look_y",
+          "max": "10",
+          "min": "-10",
+          "name": "Look Y"
+        },
+        {
+          "default": "0",
+          "id": "1_roll",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Roll"
+        },
+        {
+          "default": "0.05",
+          "id": "1_near",
+          "max": "10",
+          "min": "0.001",
+          "name": "Near"
+        },
+        {
+          "default": "200",
+          "id": "1_far",
+          "max": "10000",
+          "min": "1",
+          "name": "Far"
+        },
+        {
+          "default": "0.5",
+          "id": "2_fog_color_r",
+          "max": "1",
+          "min": "0",
+          "name": "Fog Color R"
+        },
+        {
+          "default": "0.55",
+          "id": "2_fog_color_g",
+          "max": "1",
+          "min": "0",
+          "name": "Fog Color G"
+        },
+        {
+          "default": "0.65",
+          "id": "2_fog_color_b",
+          "max": "1",
+          "min": "0",
+          "name": "Fog Color B"
+        },
+        {
+          "default": "0",
+          "id": "2_fog_density",
+          "max": "1",
+          "min": "0",
+          "name": "Fog Density"
+        },
+        {
+          "default": "0",
+          "id": "2_height_falloff",
+          "max": "2",
+          "min": "0",
+          "name": "Height Falloff"
+        },
+        {
+          "default": "1",
+          "id": "2_ambient_tint_r",
+          "max": "2",
+          "min": "0",
+          "name": "Ambient Tint R"
+        },
+        {
+          "default": "1",
+          "id": "2_ambient_tint_g",
+          "max": "2",
+          "min": "0",
+          "name": "Ambient Tint G"
+        },
+        {
+          "default": "1",
+          "id": "2_ambient_tint_b",
+          "max": "2",
+          "min": "0",
+          "name": "Ambient Tint B"
+        },
+        {
+          "default": "0",
+          "id": "2_shaft_intensity",
+          "max": "2",
+          "min": "0",
+          "name": "Shaft Intensity"
+        },
+        {
+          "default": "0.6",
+          "id": "2_shaft_anisotropy",
+          "max": "0.9",
+          "min": "-0.9",
+          "name": "Shaft Anisotropy"
+        },
+        {
+          "default": "1",
+          "id": "2_shaft_quality",
+          "max": "2",
+          "min": "0",
+          "name": "Shaft Quality"
+        },
+        {
+          "default": "0",
+          "id": "11_mode",
+          "max": "1",
+          "min": "0",
+          "name": "Mode"
+        },
+        {
+          "default": "0",
+          "id": "11_pos_x",
+          "max": "100",
+          "min": "-100",
+          "name": "Position X"
+        },
+        {
+          "default": "30",
+          "id": "11_pos_y",
+          "max": "100",
+          "min": "-100",
+          "name": "Position Y"
+        },
+        {
+          "default": "0",
+          "id": "11_pos_z",
+          "max": "100",
+          "min": "-100",
+          "name": "Position Z"
+        },
+        {
+          "default": "0",
+          "id": "11_aim_x",
+          "max": "100",
+          "min": "-100",
+          "name": "Aim X"
+        },
+        {
+          "default": "0",
+          "id": "11_aim_y",
+          "max": "100",
+          "min": "-100",
+          "name": "Aim Y"
+        },
+        {
+          "default": "0",
+          "id": "11_aim_z",
+          "max": "100",
+          "min": "-100",
+          "name": "Aim Z"
+        },
+        {
+          "default": "1",
+          "id": "11_color_r",
+          "max": "1",
+          "min": "0",
+          "name": "Colour R"
+        },
+        {
+          "default": "1",
+          "id": "11_color_g",
+          "max": "1",
+          "min": "0",
+          "name": "Colour G"
+        },
+        {
+          "default": "1",
+          "id": "11_color_b",
+          "max": "1",
+          "min": "0",
+          "name": "Colour B"
+        },
+        {
+          "default": "1",
+          "id": "11_intensity",
+          "max": "10",
+          "min": "0",
+          "name": "Intensity"
+        },
+        {
+          "default": "30",
+          "id": "11_range",
+          "max": "200",
+          "min": "0.01",
+          "name": "Range"
+        },
+        {
+          "default": "1",
+          "id": "11_cast_shadows",
+          "max": "1",
+          "min": "0",
+          "name": "Cast Shadows"
+        },
+        {
+          "default": "1",
+          "id": "11_shadow_softness",
+          "max": "3",
+          "min": "0",
+          "name": "Shadow Softness"
+        },
+        {
+          "default": "0.003",
+          "id": "11_shadow_bias",
+          "max": "0.1",
+          "min": "0",
+          "name": "Shadow Bias"
+        },
+        {
+          "default": "2048",
+          "id": "11_shadow_resolution",
+          "max": "8192",
+          "min": "128",
+          "name": "Shadow Resolution"
+        },
+        {
+          "default": "1",
+          "id": "11_light_size",
+          "max": "20",
+          "min": "0",
+          "name": "Light Size"
+        },
+        {
+          "default": "1",
+          "id": "15_axis",
+          "max": "2",
+          "min": "0",
+          "name": "Axis"
+        },
+        {
+          "default": "0.5",
+          "id": "15_angle",
+          "max": "1",
+          "min": "0",
+          "name": "Angle"
+        },
+        {
+          "default": "0",
+          "id": "15_center",
+          "max": "100",
+          "min": "-100",
+          "name": "Center"
+        },
+        {
+          "default": "0",
+          "id": "49_angle_x",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Angle X"
+        },
+        {
+          "default": "0",
+          "id": "49_angle_y",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Angle Y"
+        },
+        {
+          "default": "0",
+          "id": "49_angle_z",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Angle Z"
+        },
+        {
+          "default": "0",
+          "id": "51_angle_x",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Angle X"
+        },
+        {
+          "default": "0",
+          "id": "51_angle_y",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Angle Y"
+        },
+        {
+          "default": "0",
+          "id": "51_angle_z",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Angle Z"
+        },
+        {
+          "default": "0.85",
+          "id": "17_color_r",
+          "max": "1",
+          "min": "0",
+          "name": "Colour R"
+        },
+        {
+          "default": "0.88",
+          "id": "17_color_g",
+          "max": "1",
+          "min": "0",
+          "name": "Colour G"
+        },
+        {
+          "default": "0.92",
+          "id": "17_color_b",
+          "max": "1",
+          "min": "0",
+          "name": "Colour B"
+        },
+        {
+          "default": "1",
+          "id": "17_color_a",
+          "max": "1",
+          "min": "0",
+          "name": "Opacity"
+        },
+        {
+          "default": "0.15",
+          "id": "17_ambient",
+          "max": "1",
+          "min": "0",
+          "name": "Ambient"
+        },
+        {
+          "default": "1",
+          "id": "17_specular_color_r",
+          "max": "1",
+          "min": "0",
+          "name": "Specular R"
+        },
+        {
+          "default": "1",
+          "id": "17_specular_color_g",
+          "max": "1",
+          "min": "0",
+          "name": "Specular G"
+        },
+        {
+          "default": "1",
+          "id": "17_specular_color_b",
+          "max": "1",
+          "min": "0",
+          "name": "Specular B"
+        },
+        {
+          "default": "32",
+          "id": "17_specular_power",
+          "max": "256",
+          "min": "1",
+          "name": "Specular Power"
+        },
+        {
+          "default": "0",
+          "id": "17_emission_r",
+          "max": "1",
+          "min": "0",
+          "name": "Emission R"
+        },
+        {
+          "default": "0",
+          "id": "17_emission_g",
+          "max": "1",
+          "min": "0",
+          "name": "Emission G"
+        },
+        {
+          "default": "0",
+          "id": "17_emission_b",
+          "max": "1",
+          "min": "0",
+          "name": "Emission B"
+        },
+        {
+          "default": "0",
+          "id": "17_emission_intensity",
+          "max": "10",
+          "min": "0",
+          "name": "Emission Intensity"
+        },
+        {
+          "default": "0",
+          "id": "17_alpha_mode",
+          "max": "2",
+          "min": "0",
+          "name": "Alpha Mode"
+        },
+        {
+          "default": "0.5",
+          "id": "17_alpha_cutoff",
+          "max": "1",
+          "min": "0",
+          "name": "Alpha Cutoff"
+        },
+        {
+          "default": "0",
+          "id": "18_pos_x",
+          "max": "100",
+          "min": "-100",
+          "name": "Position X"
+        },
+        {
+          "default": "0",
+          "id": "18_pos_y",
+          "max": "100",
+          "min": "-100",
+          "name": "Position Y"
+        },
+        {
+          "default": "0",
+          "id": "18_pos_z",
+          "max": "100",
+          "min": "-100",
+          "name": "Position Z"
+        },
+        {
+          "default": "0",
+          "id": "18_rot_x",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Rotation X"
+        },
+        {
+          "default": "0",
+          "id": "18_rot_y",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Rotation Y"
+        },
+        {
+          "default": "0",
+          "id": "18_rot_z",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Rotation Z"
+        },
+        {
+          "default": "1",
+          "id": "18_scale_x",
+          "max": "10",
+          "min": "0.01",
+          "name": "Scale X"
+        },
+        {
+          "default": "1",
+          "id": "18_scale_y",
+          "max": "10",
+          "min": "0.01",
+          "name": "Scale Y"
+        },
+        {
+          "default": "1",
+          "id": "18_scale_z",
+          "max": "10",
+          "min": "0.01",
+          "name": "Scale Z"
+        },
+        {
+          "default": "1",
+          "id": "80_axis",
+          "max": "2",
+          "min": "0",
+          "name": "Axis"
+        },
+        {
+          "default": "0.5",
+          "id": "80_angle",
+          "max": "1",
+          "min": "0",
+          "name": "Angle"
+        },
+        {
+          "default": "0",
+          "id": "80_center",
+          "max": "100",
+          "min": "-100",
+          "name": "Center"
+        },
+        {
+          "default": "0",
+          "id": "81_angle_x",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Angle X"
+        },
+        {
+          "default": "0",
+          "id": "81_angle_y",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Angle Y"
+        },
+        {
+          "default": "0",
+          "id": "81_angle_z",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Angle Z"
+        },
+        {
+          "default": "1",
+          "id": "22_axis",
+          "max": "2",
+          "min": "0",
+          "name": "Axis"
+        },
+        {
+          "default": "0.5",
+          "id": "22_angle",
+          "max": "1",
+          "min": "0",
+          "name": "Angle"
+        },
+        {
+          "default": "0",
+          "id": "22_center",
+          "max": "100",
+          "min": "-100",
+          "name": "Center"
+        },
+        {
+          "default": "0",
+          "id": "53_angle_x",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Angle X"
+        },
+        {
+          "default": "0",
+          "id": "53_angle_y",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Angle Y"
+        },
+        {
+          "default": "0",
+          "id": "53_angle_z",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Angle Z"
+        },
+        {
+          "default": "0",
+          "id": "55_angle_x",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Angle X"
+        },
+        {
+          "default": "0",
+          "id": "55_angle_y",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Angle Y"
+        },
+        {
+          "default": "0",
+          "id": "55_angle_z",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Angle Z"
+        },
+        {
+          "default": "0.85",
+          "id": "24_color_r",
+          "max": "1",
+          "min": "0",
+          "name": "Colour R"
+        },
+        {
+          "default": "0.88",
+          "id": "24_color_g",
+          "max": "1",
+          "min": "0",
+          "name": "Colour G"
+        },
+        {
+          "default": "0.92",
+          "id": "24_color_b",
+          "max": "1",
+          "min": "0",
+          "name": "Colour B"
+        },
+        {
+          "default": "1",
+          "id": "24_color_a",
+          "max": "1",
+          "min": "0",
+          "name": "Opacity"
+        },
+        {
+          "default": "0.15",
+          "id": "24_ambient",
+          "max": "1",
+          "min": "0",
+          "name": "Ambient"
+        },
+        {
+          "default": "1",
+          "id": "24_specular_color_r",
+          "max": "1",
+          "min": "0",
+          "name": "Specular R"
+        },
+        {
+          "default": "1",
+          "id": "24_specular_color_g",
+          "max": "1",
+          "min": "0",
+          "name": "Specular G"
+        },
+        {
+          "default": "1",
+          "id": "24_specular_color_b",
+          "max": "1",
+          "min": "0",
+          "name": "Specular B"
+        },
+        {
+          "default": "32",
+          "id": "24_specular_power",
+          "max": "256",
+          "min": "1",
+          "name": "Specular Power"
+        },
+        {
+          "default": "0",
+          "id": "24_emission_r",
+          "max": "1",
+          "min": "0",
+          "name": "Emission R"
+        },
+        {
+          "default": "0",
+          "id": "24_emission_g",
+          "max": "1",
+          "min": "0",
+          "name": "Emission G"
+        },
+        {
+          "default": "0",
+          "id": "24_emission_b",
+          "max": "1",
+          "min": "0",
+          "name": "Emission B"
+        },
+        {
+          "default": "0",
+          "id": "24_emission_intensity",
+          "max": "10",
+          "min": "0",
+          "name": "Emission Intensity"
+        },
+        {
+          "default": "0",
+          "id": "24_alpha_mode",
+          "max": "2",
+          "min": "0",
+          "name": "Alpha Mode"
+        },
+        {
+          "default": "0.5",
+          "id": "24_alpha_cutoff",
+          "max": "1",
+          "min": "0",
+          "name": "Alpha Cutoff"
+        },
+        {
+          "default": "0",
+          "id": "25_pos_x",
+          "max": "100",
+          "min": "-100",
+          "name": "Position X"
+        },
+        {
+          "default": "0",
+          "id": "25_pos_y",
+          "max": "100",
+          "min": "-100",
+          "name": "Position Y"
+        },
+        {
+          "default": "0",
+          "id": "25_pos_z",
+          "max": "100",
+          "min": "-100",
+          "name": "Position Z"
+        },
+        {
+          "default": "0",
+          "id": "25_rot_x",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Rotation X"
+        },
+        {
+          "default": "0",
+          "id": "25_rot_y",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Rotation Y"
+        },
+        {
+          "default": "0",
+          "id": "25_rot_z",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Rotation Z"
+        },
+        {
+          "default": "1",
+          "id": "25_scale_x",
+          "max": "10",
+          "min": "0.01",
+          "name": "Scale X"
+        },
+        {
+          "default": "1",
+          "id": "25_scale_y",
+          "max": "10",
+          "min": "0.01",
+          "name": "Scale Y"
+        },
+        {
+          "default": "1",
+          "id": "25_scale_z",
+          "max": "10",
+          "min": "0.01",
+          "name": "Scale Z"
+        },
+        {
+          "default": "1",
+          "id": "82_axis",
+          "max": "2",
+          "min": "0",
+          "name": "Axis"
+        },
+        {
+          "default": "0.5",
+          "id": "82_angle",
+          "max": "1",
+          "min": "0",
+          "name": "Angle"
+        },
+        {
+          "default": "0",
+          "id": "82_center",
+          "max": "100",
+          "min": "-100",
+          "name": "Center"
+        },
+        {
+          "default": "0",
+          "id": "83_angle_x",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Angle X"
+        },
+        {
+          "default": "0",
+          "id": "83_angle_y",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Angle Y"
+        },
+        {
+          "default": "0",
+          "id": "83_angle_z",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Angle Z"
+        },
+        {
+          "default": "1",
+          "id": "29_axis",
+          "max": "2",
+          "min": "0",
+          "name": "Axis"
+        },
+        {
+          "default": "0.5",
+          "id": "29_angle",
+          "max": "1",
+          "min": "0",
+          "name": "Angle"
+        },
+        {
+          "default": "0",
+          "id": "29_center",
+          "max": "100",
+          "min": "-100",
+          "name": "Center"
+        },
+        {
+          "default": "0",
+          "id": "57_angle_x",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Angle X"
+        },
+        {
+          "default": "0",
+          "id": "57_angle_y",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Angle Y"
+        },
+        {
+          "default": "0",
+          "id": "57_angle_z",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Angle Z"
+        },
+        {
+          "default": "0",
+          "id": "59_angle_x",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Angle X"
+        },
+        {
+          "default": "0",
+          "id": "59_angle_y",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Angle Y"
+        },
+        {
+          "default": "0",
+          "id": "59_angle_z",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Angle Z"
+        },
+        {
+          "default": "0.85",
+          "id": "31_color_r",
+          "max": "1",
+          "min": "0",
+          "name": "Colour R"
+        },
+        {
+          "default": "0.88",
+          "id": "31_color_g",
+          "max": "1",
+          "min": "0",
+          "name": "Colour G"
+        },
+        {
+          "default": "0.92",
+          "id": "31_color_b",
+          "max": "1",
+          "min": "0",
+          "name": "Colour B"
+        },
+        {
+          "default": "1",
+          "id": "31_color_a",
+          "max": "1",
+          "min": "0",
+          "name": "Opacity"
+        },
+        {
+          "default": "0.15",
+          "id": "31_ambient",
+          "max": "1",
+          "min": "0",
+          "name": "Ambient"
+        },
+        {
+          "default": "1",
+          "id": "31_specular_color_r",
+          "max": "1",
+          "min": "0",
+          "name": "Specular R"
+        },
+        {
+          "default": "1",
+          "id": "31_specular_color_g",
+          "max": "1",
+          "min": "0",
+          "name": "Specular G"
+        },
+        {
+          "default": "1",
+          "id": "31_specular_color_b",
+          "max": "1",
+          "min": "0",
+          "name": "Specular B"
+        },
+        {
+          "default": "32",
+          "id": "31_specular_power",
+          "max": "256",
+          "min": "1",
+          "name": "Specular Power"
+        },
+        {
+          "default": "0",
+          "id": "31_emission_r",
+          "max": "1",
+          "min": "0",
+          "name": "Emission R"
+        },
+        {
+          "default": "0",
+          "id": "31_emission_g",
+          "max": "1",
+          "min": "0",
+          "name": "Emission G"
+        },
+        {
+          "default": "0",
+          "id": "31_emission_b",
+          "max": "1",
+          "min": "0",
+          "name": "Emission B"
+        },
+        {
+          "default": "0",
+          "id": "31_emission_intensity",
+          "max": "10",
+          "min": "0",
+          "name": "Emission Intensity"
+        },
+        {
+          "default": "0",
+          "id": "31_alpha_mode",
+          "max": "2",
+          "min": "0",
+          "name": "Alpha Mode"
+        },
+        {
+          "default": "0.5",
+          "id": "31_alpha_cutoff",
+          "max": "1",
+          "min": "0",
+          "name": "Alpha Cutoff"
+        },
+        {
+          "default": "0",
+          "id": "32_pos_x",
+          "max": "100",
+          "min": "-100",
+          "name": "Position X"
+        },
+        {
+          "default": "0",
+          "id": "32_pos_y",
+          "max": "100",
+          "min": "-100",
+          "name": "Position Y"
+        },
+        {
+          "default": "0",
+          "id": "32_pos_z",
+          "max": "100",
+          "min": "-100",
+          "name": "Position Z"
+        },
+        {
+          "default": "0",
+          "id": "32_rot_x",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Rotation X"
+        },
+        {
+          "default": "0",
+          "id": "32_rot_y",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Rotation Y"
+        },
+        {
+          "default": "0",
+          "id": "32_rot_z",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Rotation Z"
+        },
+        {
+          "default": "1",
+          "id": "32_scale_x",
+          "max": "10",
+          "min": "0.01",
+          "name": "Scale X"
+        },
+        {
+          "default": "1",
+          "id": "32_scale_y",
+          "max": "10",
+          "min": "0.01",
+          "name": "Scale Y"
+        },
+        {
+          "default": "1",
+          "id": "32_scale_z",
+          "max": "10",
+          "min": "0.01",
+          "name": "Scale Z"
+        },
+        {
+          "default": "1",
+          "id": "84_axis",
+          "max": "2",
+          "min": "0",
+          "name": "Axis"
+        },
+        {
+          "default": "0.5",
+          "id": "84_angle",
+          "max": "1",
+          "min": "0",
+          "name": "Angle"
+        },
+        {
+          "default": "0",
+          "id": "84_center",
+          "max": "100",
+          "min": "-100",
+          "name": "Center"
+        },
+        {
+          "default": "0",
+          "id": "85_angle_x",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Angle X"
+        },
+        {
+          "default": "0",
+          "id": "85_angle_y",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Angle Y"
+        },
+        {
+          "default": "0",
+          "id": "85_angle_z",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Angle Z"
+        },
+        {
+          "default": "1",
+          "id": "86_visible",
+          "max": "1",
+          "min": "0",
+          "name": "Visible"
+        },
+        {
+          "default": "1",
+          "id": "87_visible",
+          "max": "1",
+          "min": "0",
+          "name": "Visible"
+        },
+        {
+          "default": "1",
+          "id": "88_visible",
+          "max": "1",
+          "min": "0",
+          "name": "Visible"
         }
       ]
     },
@@ -22939,6 +24010,27 @@
           "max": "1",
           "min": "0",
           "name": "Color A"
+        },
+        {
+          "default": "0",
+          "id": "3_angle_x",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Angle X"
+        },
+        {
+          "default": "0",
+          "id": "3_angle_y",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Angle Y"
+        },
+        {
+          "default": "0",
+          "id": "3_angle_z",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Angle Z"
         }
       ]
     },
@@ -23433,6 +24525,55 @@
           "max": "120",
           "min": "20",
           "name": "Camera FOV"
+        },
+        {
+          "default": "0.7",
+          "id": "37_orbit",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Orbit"
+        },
+        {
+          "default": "0.3",
+          "id": "37_tilt",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Tilt"
+        },
+        {
+          "default": "0.9",
+          "id": "37_fov_y",
+          "max": "2.5",
+          "min": "0.05",
+          "name": "FOV Y"
+        },
+        {
+          "default": "0",
+          "id": "37_look_y",
+          "max": "10",
+          "min": "-10",
+          "name": "Look Y"
+        },
+        {
+          "default": "0",
+          "id": "37_roll",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Roll"
+        },
+        {
+          "default": "0.05",
+          "id": "37_near",
+          "max": "10",
+          "min": "0.001",
+          "name": "Near"
+        },
+        {
+          "default": "200",
+          "id": "37_far",
+          "max": "10000",
+          "min": "1",
+          "name": "Far"
         }
       ]
     },
@@ -23881,6 +25022,55 @@
           "max": "4",
           "min": "0.25",
           "name": "Pressure"
+        },
+        {
+          "default": "0.7",
+          "id": "2_orbit",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Orbit"
+        },
+        {
+          "default": "0.3",
+          "id": "2_tilt",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Tilt"
+        },
+        {
+          "default": "0.9",
+          "id": "2_fov_y",
+          "max": "2.5",
+          "min": "0.05",
+          "name": "FOV Y"
+        },
+        {
+          "default": "0",
+          "id": "2_look_y",
+          "max": "10",
+          "min": "-10",
+          "name": "Look Y"
+        },
+        {
+          "default": "0",
+          "id": "2_roll",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Roll"
+        },
+        {
+          "default": "0.05",
+          "id": "2_near",
+          "max": "10",
+          "min": "0.001",
+          "name": "Near"
+        },
+        {
+          "default": "200",
+          "id": "2_far",
+          "max": "10000",
+          "min": "1",
+          "name": "Far"
         }
       ]
     },
@@ -24275,6 +25465,895 @@
           "max": "2",
           "min": "-2",
           "name": "Look Y"
+        },
+        {
+          "default": "512",
+          "id": "32_width",
+          "max": "4096",
+          "min": "64",
+          "name": "Width"
+        },
+        {
+          "default": "256",
+          "id": "32_height",
+          "max": "2048",
+          "min": "32",
+          "name": "Height"
+        },
+        {
+          "default": "1",
+          "id": "32_horizon_strength",
+          "max": "4",
+          "min": "0",
+          "name": "Horizon Strength"
+        },
+        {
+          "default": "0.12",
+          "id": "32_azimuth_variation",
+          "max": "1",
+          "min": "0",
+          "name": "Azimuth Variation"
+        },
+        {
+          "default": "1",
+          "id": "32_intensity",
+          "max": "4",
+          "min": "0",
+          "name": "Environment Intensity"
+        },
+        {
+          "default": "0",
+          "id": "32_mode",
+          "max": "1",
+          "min": "0",
+          "name": "Mode"
+        },
+        {
+          "default": "3",
+          "id": "32_emitter_count",
+          "max": "8",
+          "min": "1",
+          "name": "Emitter Count"
+        },
+        {
+          "default": "6",
+          "id": "32_emitter_intensity",
+          "max": "50",
+          "min": "0",
+          "name": "Emitter Intensity"
+        },
+        {
+          "default": "0.15",
+          "id": "32_emitter_elevation",
+          "max": "1",
+          "min": "-1",
+          "name": "Emitter Elevation"
+        },
+        {
+          "default": "0.05",
+          "id": "32_emitter_width",
+          "max": "0.5",
+          "min": "0.001",
+          "name": "Emitter Width"
+        },
+        {
+          "default": "0",
+          "id": "32_sun_x",
+          "max": "1",
+          "min": "-1",
+          "name": "Sun X"
+        },
+        {
+          "default": "0",
+          "id": "32_sun_y",
+          "max": "1",
+          "min": "-1",
+          "name": "Sun Y"
+        },
+        {
+          "default": "0",
+          "id": "32_sun_z",
+          "max": "1",
+          "min": "-1",
+          "name": "Sun Z"
+        },
+        {
+          "default": "0",
+          "id": "32_sun_disc_intensity",
+          "max": "50",
+          "min": "0",
+          "name": "Sun Disc Intensity"
+        },
+        {
+          "default": "0",
+          "id": "32_sun_disc_size",
+          "max": "1",
+          "min": "0",
+          "name": "Sun Disc Size"
+        },
+        {
+          "default": "0",
+          "id": "32_fill",
+          "max": "2",
+          "min": "0",
+          "name": "Fill Light"
+        },
+        {
+          "default": "0.8",
+          "id": "62_color_r",
+          "max": "1",
+          "min": "0",
+          "name": "Base Colour R"
+        },
+        {
+          "default": "0.8",
+          "id": "62_color_g",
+          "max": "1",
+          "min": "0",
+          "name": "Base Colour G"
+        },
+        {
+          "default": "0.82",
+          "id": "62_color_b",
+          "max": "1",
+          "min": "0",
+          "name": "Base Colour B"
+        },
+        {
+          "default": "1",
+          "id": "62_color_a",
+          "max": "1",
+          "min": "0",
+          "name": "Opacity"
+        },
+        {
+          "default": "0.05",
+          "id": "62_ambient",
+          "max": "1",
+          "min": "0",
+          "name": "Ambient"
+        },
+        {
+          "default": "0",
+          "id": "62_metallic",
+          "max": "1",
+          "min": "0",
+          "name": "Metallic"
+        },
+        {
+          "default": "0",
+          "id": "62_emission_r",
+          "max": "1",
+          "min": "0",
+          "name": "Emission R"
+        },
+        {
+          "default": "0",
+          "id": "62_emission_g",
+          "max": "1",
+          "min": "0",
+          "name": "Emission G"
+        },
+        {
+          "default": "0",
+          "id": "62_emission_b",
+          "max": "1",
+          "min": "0",
+          "name": "Emission B"
+        },
+        {
+          "default": "0",
+          "id": "62_emission_intensity",
+          "max": "10",
+          "min": "0",
+          "name": "Emission Intensity"
+        },
+        {
+          "default": "0",
+          "id": "62_alpha_mode",
+          "max": "2",
+          "min": "0",
+          "name": "Alpha Mode"
+        },
+        {
+          "default": "0.5",
+          "id": "62_alpha_cutoff",
+          "max": "1",
+          "min": "0",
+          "name": "Alpha Cutoff"
+        },
+        {
+          "default": "1",
+          "id": "62_specular",
+          "max": "1",
+          "min": "0",
+          "name": "Specular"
+        },
+        {
+          "default": "1",
+          "id": "62_specular_tint_r",
+          "max": "2",
+          "min": "0",
+          "name": "Specular Tint R"
+        },
+        {
+          "default": "1",
+          "id": "62_specular_tint_g",
+          "max": "2",
+          "min": "0",
+          "name": "Specular Tint G"
+        },
+        {
+          "default": "1",
+          "id": "62_specular_tint_b",
+          "max": "2",
+          "min": "0",
+          "name": "Specular Tint B"
+        },
+        {
+          "default": "1.5",
+          "id": "62_ior",
+          "max": "3",
+          "min": "1",
+          "name": "Index of Refraction"
+        },
+        {
+          "default": "0",
+          "id": "62_clearcoat",
+          "max": "1",
+          "min": "0",
+          "name": "Clearcoat"
+        },
+        {
+          "default": "0",
+          "id": "62_clearcoat_roughness",
+          "max": "1",
+          "min": "0",
+          "name": "Clearcoat Roughness"
+        },
+        {
+          "default": "0",
+          "id": "62_sheen_color_r",
+          "max": "1",
+          "min": "0",
+          "name": "Sheen Colour R"
+        },
+        {
+          "default": "0",
+          "id": "62_sheen_color_g",
+          "max": "1",
+          "min": "0",
+          "name": "Sheen Colour G"
+        },
+        {
+          "default": "0",
+          "id": "62_sheen_color_b",
+          "max": "1",
+          "min": "0",
+          "name": "Sheen Colour B"
+        },
+        {
+          "default": "0",
+          "id": "62_sheen_roughness",
+          "max": "1",
+          "min": "0",
+          "name": "Sheen Roughness"
+        },
+        {
+          "default": "0",
+          "id": "62_iridescence",
+          "max": "1",
+          "min": "0",
+          "name": "Iridescence"
+        },
+        {
+          "default": "1.3",
+          "id": "62_iridescence_ior",
+          "max": "3",
+          "min": "1",
+          "name": "Iridescence IOR"
+        },
+        {
+          "default": "100",
+          "id": "62_iridescence_thickness_min",
+          "max": "1000",
+          "min": "0",
+          "name": "Iridescence Thickness Min (nm)"
+        },
+        {
+          "default": "400",
+          "id": "62_iridescence_thickness_max",
+          "max": "1000",
+          "min": "0",
+          "name": "Iridescence Thickness Max (nm)"
+        },
+        {
+          "default": "0",
+          "id": "62_anisotropy_strength",
+          "max": "1",
+          "min": "0",
+          "name": "Anisotropy Strength"
+        },
+        {
+          "default": "0",
+          "id": "62_anisotropy_rotation",
+          "max": "3.1415927",
+          "min": "-3.1415927",
+          "name": "Anisotropy Rotation"
+        },
+        {
+          "default": "0",
+          "id": "62_dispersion",
+          "max": "1",
+          "min": "0",
+          "name": "Dispersion"
+        },
+        {
+          "default": "0",
+          "id": "62_transmission",
+          "max": "1",
+          "min": "0",
+          "name": "Transmission"
+        },
+        {
+          "default": "0",
+          "id": "62_volume_thickness",
+          "max": "1000",
+          "min": "0",
+          "name": "Volume Thickness"
+        },
+        {
+          "default": "1000000",
+          "id": "62_volume_attenuation_distance",
+          "max": "1000000",
+          "min": "0.001",
+          "name": "Volume Attenuation Distance"
+        },
+        {
+          "default": "1",
+          "id": "62_volume_attenuation_color_r",
+          "max": "1",
+          "min": "0",
+          "name": "Volume Attenuation Colour R"
+        },
+        {
+          "default": "1",
+          "id": "62_volume_attenuation_color_g",
+          "max": "1",
+          "min": "0",
+          "name": "Volume Attenuation Colour G"
+        },
+        {
+          "default": "1",
+          "id": "62_volume_attenuation_color_b",
+          "max": "1",
+          "min": "0",
+          "name": "Volume Attenuation Colour B"
+        },
+        {
+          "default": "1",
+          "id": "62_uv_m00",
+          "max": "128",
+          "min": "-128",
+          "name": "UV Transform M00"
+        },
+        {
+          "default": "0",
+          "id": "62_uv_m01",
+          "max": "128",
+          "min": "-128",
+          "name": "UV Transform M01"
+        },
+        {
+          "default": "0",
+          "id": "62_uv_m10",
+          "max": "128",
+          "min": "-128",
+          "name": "UV Transform M10"
+        },
+        {
+          "default": "1",
+          "id": "62_uv_m11",
+          "max": "128",
+          "min": "-128",
+          "name": "UV Transform M11"
+        },
+        {
+          "default": "0",
+          "id": "62_uv_tx",
+          "max": "128",
+          "min": "-128",
+          "name": "UV Transform Offset X"
+        },
+        {
+          "default": "0",
+          "id": "62_uv_ty",
+          "max": "128",
+          "min": "-128",
+          "name": "UV Transform Offset Y"
+        },
+        {
+          "default": "1",
+          "id": "62_nrm_uv_m00",
+          "max": "128",
+          "min": "-128",
+          "name": "Normal UV M00"
+        },
+        {
+          "default": "0",
+          "id": "62_nrm_uv_m01",
+          "max": "128",
+          "min": "-128",
+          "name": "Normal UV M01"
+        },
+        {
+          "default": "0",
+          "id": "62_nrm_uv_m10",
+          "max": "128",
+          "min": "-128",
+          "name": "Normal UV M10"
+        },
+        {
+          "default": "1",
+          "id": "62_nrm_uv_m11",
+          "max": "128",
+          "min": "-128",
+          "name": "Normal UV M11"
+        },
+        {
+          "default": "0",
+          "id": "62_nrm_uv_tx",
+          "max": "128",
+          "min": "-128",
+          "name": "Normal UV Offset X"
+        },
+        {
+          "default": "0",
+          "id": "62_nrm_uv_ty",
+          "max": "128",
+          "min": "-128",
+          "name": "Normal UV Offset Y"
+        },
+        {
+          "default": "1",
+          "id": "62_mr_uv_m00",
+          "max": "128",
+          "min": "-128",
+          "name": "MR UV M00"
+        },
+        {
+          "default": "0",
+          "id": "62_mr_uv_m01",
+          "max": "128",
+          "min": "-128",
+          "name": "MR UV M01"
+        },
+        {
+          "default": "0",
+          "id": "62_mr_uv_m10",
+          "max": "128",
+          "min": "-128",
+          "name": "MR UV M10"
+        },
+        {
+          "default": "1",
+          "id": "62_mr_uv_m11",
+          "max": "128",
+          "min": "-128",
+          "name": "MR UV M11"
+        },
+        {
+          "default": "0",
+          "id": "62_mr_uv_tx",
+          "max": "128",
+          "min": "-128",
+          "name": "MR UV Offset X"
+        },
+        {
+          "default": "0",
+          "id": "62_mr_uv_ty",
+          "max": "128",
+          "min": "-128",
+          "name": "MR UV Offset Y"
+        },
+        {
+          "default": "1",
+          "id": "62_occ_uv_m00",
+          "max": "128",
+          "min": "-128",
+          "name": "Occlusion UV M00"
+        },
+        {
+          "default": "0",
+          "id": "62_occ_uv_m01",
+          "max": "128",
+          "min": "-128",
+          "name": "Occlusion UV M01"
+        },
+        {
+          "default": "0",
+          "id": "62_occ_uv_m10",
+          "max": "128",
+          "min": "-128",
+          "name": "Occlusion UV M10"
+        },
+        {
+          "default": "1",
+          "id": "62_occ_uv_m11",
+          "max": "128",
+          "min": "-128",
+          "name": "Occlusion UV M11"
+        },
+        {
+          "default": "0",
+          "id": "62_occ_uv_tx",
+          "max": "128",
+          "min": "-128",
+          "name": "Occlusion UV Offset X"
+        },
+        {
+          "default": "0",
+          "id": "62_occ_uv_ty",
+          "max": "128",
+          "min": "-128",
+          "name": "Occlusion UV Offset Y"
+        },
+        {
+          "default": "1",
+          "id": "62_em_uv_m00",
+          "max": "128",
+          "min": "-128",
+          "name": "Emissive UV M00"
+        },
+        {
+          "default": "0",
+          "id": "62_em_uv_m01",
+          "max": "128",
+          "min": "-128",
+          "name": "Emissive UV M01"
+        },
+        {
+          "default": "0",
+          "id": "62_em_uv_m10",
+          "max": "128",
+          "min": "-128",
+          "name": "Emissive UV M10"
+        },
+        {
+          "default": "1",
+          "id": "62_em_uv_m11",
+          "max": "128",
+          "min": "-128",
+          "name": "Emissive UV M11"
+        },
+        {
+          "default": "0",
+          "id": "62_em_uv_tx",
+          "max": "128",
+          "min": "-128",
+          "name": "Emissive UV Offset X"
+        },
+        {
+          "default": "0",
+          "id": "62_em_uv_ty",
+          "max": "128",
+          "min": "-128",
+          "name": "Emissive UV Offset Y"
+        },
+        {
+          "default": "0",
+          "id": "62_wrap_u",
+          "max": "2",
+          "min": "0",
+          "name": "Base Colour Wrap U"
+        },
+        {
+          "default": "0",
+          "id": "62_wrap_v",
+          "max": "2",
+          "min": "0",
+          "name": "Base Colour Wrap V"
+        },
+        {
+          "default": "0",
+          "id": "62_mag_filter",
+          "max": "1",
+          "min": "0",
+          "name": "Base Colour Mag Filter"
+        },
+        {
+          "default": "0",
+          "id": "62_min_filter",
+          "max": "1",
+          "min": "0",
+          "name": "Base Colour Min Filter"
+        },
+        {
+          "default": "0",
+          "id": "62_nrm_wrap_u",
+          "max": "2",
+          "min": "0",
+          "name": "Normal Wrap U"
+        },
+        {
+          "default": "0",
+          "id": "62_nrm_wrap_v",
+          "max": "2",
+          "min": "0",
+          "name": "Normal Wrap V"
+        },
+        {
+          "default": "0",
+          "id": "62_nrm_mag_filter",
+          "max": "1",
+          "min": "0",
+          "name": "Normal Mag Filter"
+        },
+        {
+          "default": "0",
+          "id": "62_nrm_min_filter",
+          "max": "1",
+          "min": "0",
+          "name": "Normal Min Filter"
+        },
+        {
+          "default": "0",
+          "id": "62_mr_wrap_u",
+          "max": "2",
+          "min": "0",
+          "name": "MR Wrap U"
+        },
+        {
+          "default": "0",
+          "id": "62_mr_wrap_v",
+          "max": "2",
+          "min": "0",
+          "name": "MR Wrap V"
+        },
+        {
+          "default": "0",
+          "id": "62_mr_mag_filter",
+          "max": "1",
+          "min": "0",
+          "name": "MR Mag Filter"
+        },
+        {
+          "default": "0",
+          "id": "62_mr_min_filter",
+          "max": "1",
+          "min": "0",
+          "name": "MR Min Filter"
+        },
+        {
+          "default": "0",
+          "id": "62_occ_wrap_u",
+          "max": "2",
+          "min": "0",
+          "name": "Occlusion Wrap U"
+        },
+        {
+          "default": "0",
+          "id": "62_occ_wrap_v",
+          "max": "2",
+          "min": "0",
+          "name": "Occlusion Wrap V"
+        },
+        {
+          "default": "0",
+          "id": "62_occ_mag_filter",
+          "max": "1",
+          "min": "0",
+          "name": "Occlusion Mag Filter"
+        },
+        {
+          "default": "0",
+          "id": "62_occ_min_filter",
+          "max": "1",
+          "min": "0",
+          "name": "Occlusion Min Filter"
+        },
+        {
+          "default": "0",
+          "id": "62_em_wrap_u",
+          "max": "2",
+          "min": "0",
+          "name": "Emissive Wrap U"
+        },
+        {
+          "default": "0",
+          "id": "62_em_wrap_v",
+          "max": "2",
+          "min": "0",
+          "name": "Emissive Wrap V"
+        },
+        {
+          "default": "0",
+          "id": "62_em_mag_filter",
+          "max": "1",
+          "min": "0",
+          "name": "Emissive Mag Filter"
+        },
+        {
+          "default": "0",
+          "id": "62_em_min_filter",
+          "max": "1",
+          "min": "0",
+          "name": "Emissive Min Filter"
+        },
+        {
+          "default": "0",
+          "id": "63_mode",
+          "max": "1",
+          "min": "0",
+          "name": "Mode"
+        },
+        {
+          "default": "0",
+          "id": "63_pos_x",
+          "max": "100",
+          "min": "-100",
+          "name": "Position X"
+        },
+        {
+          "default": "30",
+          "id": "63_pos_y",
+          "max": "100",
+          "min": "-100",
+          "name": "Position Y"
+        },
+        {
+          "default": "0",
+          "id": "63_pos_z",
+          "max": "100",
+          "min": "-100",
+          "name": "Position Z"
+        },
+        {
+          "default": "0",
+          "id": "63_aim_x",
+          "max": "100",
+          "min": "-100",
+          "name": "Aim X"
+        },
+        {
+          "default": "0",
+          "id": "63_aim_y",
+          "max": "100",
+          "min": "-100",
+          "name": "Aim Y"
+        },
+        {
+          "default": "0",
+          "id": "63_aim_z",
+          "max": "100",
+          "min": "-100",
+          "name": "Aim Z"
+        },
+        {
+          "default": "1",
+          "id": "63_color_r",
+          "max": "1",
+          "min": "0",
+          "name": "Colour R"
+        },
+        {
+          "default": "1",
+          "id": "63_color_g",
+          "max": "1",
+          "min": "0",
+          "name": "Colour G"
+        },
+        {
+          "default": "1",
+          "id": "63_color_b",
+          "max": "1",
+          "min": "0",
+          "name": "Colour B"
+        },
+        {
+          "default": "30",
+          "id": "63_range",
+          "max": "200",
+          "min": "0.01",
+          "name": "Range"
+        },
+        {
+          "default": "1",
+          "id": "63_cast_shadows",
+          "max": "1",
+          "min": "0",
+          "name": "Cast Shadows"
+        },
+        {
+          "default": "1",
+          "id": "63_shadow_softness",
+          "max": "3",
+          "min": "0",
+          "name": "Shadow Softness"
+        },
+        {
+          "default": "0.003",
+          "id": "63_shadow_bias",
+          "max": "0.1",
+          "min": "0",
+          "name": "Shadow Bias"
+        },
+        {
+          "default": "2048",
+          "id": "63_shadow_resolution",
+          "max": "8192",
+          "min": "128",
+          "name": "Shadow Resolution"
+        },
+        {
+          "default": "1",
+          "id": "63_light_size",
+          "max": "20",
+          "min": "0",
+          "name": "Light Size"
+        },
+        {
+          "default": "256",
+          "id": "34_cols",
+          "max": "4096",
+          "min": "2",
+          "name": "Columns"
+        },
+        {
+          "default": "256",
+          "id": "34_rows",
+          "max": "4096",
+          "min": "2",
+          "name": "Rows"
+        },
+        {
+          "default": "0.5",
+          "id": "34_height_bias",
+          "max": "1",
+          "min": "0",
+          "name": "Height Bias"
+        },
+        {
+          "default": "0.7",
+          "id": "43_orbit",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Orbit"
+        },
+        {
+          "default": "0.3",
+          "id": "43_tilt",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Tilt"
+        },
+        {
+          "default": "0.9",
+          "id": "43_fov_y",
+          "max": "2.5",
+          "min": "0.05",
+          "name": "FOV Y"
+        },
+        {
+          "default": "0",
+          "id": "43_roll",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Roll"
+        },
+        {
+          "default": "0.05",
+          "id": "43_near",
+          "max": "10",
+          "min": "0.001",
+          "name": "Near"
+        },
+        {
+          "default": "200",
+          "id": "43_far",
+          "max": "10000",
+          "min": "1",
+          "name": "Far"
         }
       ]
     },
@@ -24727,7 +26806,841 @@
       "is_line_based": false,
       "kind": "generator",
       "name": "Scene Starter",
-      "params": []
+      "params": [
+        {
+          "default": "0.7",
+          "id": "1_orbit",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Orbit"
+        },
+        {
+          "default": "0.3",
+          "id": "1_tilt",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Tilt"
+        },
+        {
+          "default": "4",
+          "id": "1_distance",
+          "max": "100",
+          "min": "0.01",
+          "name": "Distance"
+        },
+        {
+          "default": "0.9",
+          "id": "1_fov_y",
+          "max": "2.5",
+          "min": "0.05",
+          "name": "FOV Y"
+        },
+        {
+          "default": "0",
+          "id": "1_look_y",
+          "max": "10",
+          "min": "-10",
+          "name": "Look Y"
+        },
+        {
+          "default": "0",
+          "id": "1_roll",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Roll"
+        },
+        {
+          "default": "0.05",
+          "id": "1_near",
+          "max": "10",
+          "min": "0.001",
+          "name": "Near"
+        },
+        {
+          "default": "200",
+          "id": "1_far",
+          "max": "10000",
+          "min": "1",
+          "name": "Far"
+        },
+        {
+          "default": "0.5",
+          "id": "2_fog_color_r",
+          "max": "1",
+          "min": "0",
+          "name": "Fog Color R"
+        },
+        {
+          "default": "0.55",
+          "id": "2_fog_color_g",
+          "max": "1",
+          "min": "0",
+          "name": "Fog Color G"
+        },
+        {
+          "default": "0.65",
+          "id": "2_fog_color_b",
+          "max": "1",
+          "min": "0",
+          "name": "Fog Color B"
+        },
+        {
+          "default": "0",
+          "id": "2_fog_density",
+          "max": "1",
+          "min": "0",
+          "name": "Fog Density"
+        },
+        {
+          "default": "0",
+          "id": "2_height_falloff",
+          "max": "2",
+          "min": "0",
+          "name": "Height Falloff"
+        },
+        {
+          "default": "1",
+          "id": "2_ambient_tint_r",
+          "max": "2",
+          "min": "0",
+          "name": "Ambient Tint R"
+        },
+        {
+          "default": "1",
+          "id": "2_ambient_tint_g",
+          "max": "2",
+          "min": "0",
+          "name": "Ambient Tint G"
+        },
+        {
+          "default": "1",
+          "id": "2_ambient_tint_b",
+          "max": "2",
+          "min": "0",
+          "name": "Ambient Tint B"
+        },
+        {
+          "default": "0",
+          "id": "2_shaft_intensity",
+          "max": "2",
+          "min": "0",
+          "name": "Shaft Intensity"
+        },
+        {
+          "default": "0.6",
+          "id": "2_shaft_anisotropy",
+          "max": "0.9",
+          "min": "-0.9",
+          "name": "Shaft Anisotropy"
+        },
+        {
+          "default": "1",
+          "id": "2_shaft_quality",
+          "max": "2",
+          "min": "0",
+          "name": "Shaft Quality"
+        },
+        {
+          "default": "512",
+          "id": "3_width",
+          "max": "4096",
+          "min": "64",
+          "name": "Width"
+        },
+        {
+          "default": "256",
+          "id": "3_height",
+          "max": "2048",
+          "min": "32",
+          "name": "Height"
+        },
+        {
+          "default": "1",
+          "id": "3_horizon_strength",
+          "max": "4",
+          "min": "0",
+          "name": "Horizon Strength"
+        },
+        {
+          "default": "0.12",
+          "id": "3_azimuth_variation",
+          "max": "1",
+          "min": "0",
+          "name": "Azimuth Variation"
+        },
+        {
+          "default": "1",
+          "id": "3_intensity",
+          "max": "4",
+          "min": "0",
+          "name": "Environment Intensity"
+        },
+        {
+          "default": "0",
+          "id": "3_mode",
+          "max": "1",
+          "min": "0",
+          "name": "Mode"
+        },
+        {
+          "default": "3",
+          "id": "3_emitter_count",
+          "max": "8",
+          "min": "1",
+          "name": "Emitter Count"
+        },
+        {
+          "default": "6",
+          "id": "3_emitter_intensity",
+          "max": "50",
+          "min": "0",
+          "name": "Emitter Intensity"
+        },
+        {
+          "default": "0.15",
+          "id": "3_emitter_elevation",
+          "max": "1",
+          "min": "-1",
+          "name": "Emitter Elevation"
+        },
+        {
+          "default": "0.05",
+          "id": "3_emitter_width",
+          "max": "0.5",
+          "min": "0.001",
+          "name": "Emitter Width"
+        },
+        {
+          "default": "0",
+          "id": "3_sun_x",
+          "max": "1",
+          "min": "-1",
+          "name": "Sun X"
+        },
+        {
+          "default": "0",
+          "id": "3_sun_y",
+          "max": "1",
+          "min": "-1",
+          "name": "Sun Y"
+        },
+        {
+          "default": "0",
+          "id": "3_sun_z",
+          "max": "1",
+          "min": "-1",
+          "name": "Sun Z"
+        },
+        {
+          "default": "0",
+          "id": "3_sun_disc_intensity",
+          "max": "50",
+          "min": "0",
+          "name": "Sun Disc Intensity"
+        },
+        {
+          "default": "0",
+          "id": "3_sun_disc_size",
+          "max": "1",
+          "min": "0",
+          "name": "Sun Disc Size"
+        },
+        {
+          "default": "0",
+          "id": "3_fill",
+          "max": "2",
+          "min": "0",
+          "name": "Fill Light"
+        },
+        {
+          "default": "0",
+          "id": "4_mode",
+          "max": "1",
+          "min": "0",
+          "name": "Mode"
+        },
+        {
+          "default": "0",
+          "id": "4_pos_x",
+          "max": "100",
+          "min": "-100",
+          "name": "Position X"
+        },
+        {
+          "default": "30",
+          "id": "4_pos_y",
+          "max": "100",
+          "min": "-100",
+          "name": "Position Y"
+        },
+        {
+          "default": "0",
+          "id": "4_pos_z",
+          "max": "100",
+          "min": "-100",
+          "name": "Position Z"
+        },
+        {
+          "default": "0",
+          "id": "4_aim_x",
+          "max": "100",
+          "min": "-100",
+          "name": "Aim X"
+        },
+        {
+          "default": "0",
+          "id": "4_aim_y",
+          "max": "100",
+          "min": "-100",
+          "name": "Aim Y"
+        },
+        {
+          "default": "0",
+          "id": "4_aim_z",
+          "max": "100",
+          "min": "-100",
+          "name": "Aim Z"
+        },
+        {
+          "default": "1",
+          "id": "4_color_r",
+          "max": "1",
+          "min": "0",
+          "name": "Colour R"
+        },
+        {
+          "default": "1",
+          "id": "4_color_g",
+          "max": "1",
+          "min": "0",
+          "name": "Colour G"
+        },
+        {
+          "default": "1",
+          "id": "4_color_b",
+          "max": "1",
+          "min": "0",
+          "name": "Colour B"
+        },
+        {
+          "default": "1",
+          "id": "4_intensity",
+          "max": "10",
+          "min": "0",
+          "name": "Intensity"
+        },
+        {
+          "default": "30",
+          "id": "4_range",
+          "max": "200",
+          "min": "0.01",
+          "name": "Range"
+        },
+        {
+          "default": "1",
+          "id": "4_cast_shadows",
+          "max": "1",
+          "min": "0",
+          "name": "Cast Shadows"
+        },
+        {
+          "default": "1",
+          "id": "4_shadow_softness",
+          "max": "3",
+          "min": "0",
+          "name": "Shadow Softness"
+        },
+        {
+          "default": "0.003",
+          "id": "4_shadow_bias",
+          "max": "0.1",
+          "min": "0",
+          "name": "Shadow Bias"
+        },
+        {
+          "default": "2048",
+          "id": "4_shadow_resolution",
+          "max": "8192",
+          "min": "128",
+          "name": "Shadow Resolution"
+        },
+        {
+          "default": "1",
+          "id": "4_light_size",
+          "max": "20",
+          "min": "0",
+          "name": "Light Size"
+        },
+        {
+          "default": "0",
+          "id": "5_mode",
+          "max": "1",
+          "min": "0",
+          "name": "Mode"
+        },
+        {
+          "default": "0",
+          "id": "5_pos_x",
+          "max": "100",
+          "min": "-100",
+          "name": "Position X"
+        },
+        {
+          "default": "30",
+          "id": "5_pos_y",
+          "max": "100",
+          "min": "-100",
+          "name": "Position Y"
+        },
+        {
+          "default": "0",
+          "id": "5_pos_z",
+          "max": "100",
+          "min": "-100",
+          "name": "Position Z"
+        },
+        {
+          "default": "0",
+          "id": "5_aim_x",
+          "max": "100",
+          "min": "-100",
+          "name": "Aim X"
+        },
+        {
+          "default": "0",
+          "id": "5_aim_y",
+          "max": "100",
+          "min": "-100",
+          "name": "Aim Y"
+        },
+        {
+          "default": "0",
+          "id": "5_aim_z",
+          "max": "100",
+          "min": "-100",
+          "name": "Aim Z"
+        },
+        {
+          "default": "1",
+          "id": "5_color_r",
+          "max": "1",
+          "min": "0",
+          "name": "Colour R"
+        },
+        {
+          "default": "1",
+          "id": "5_color_g",
+          "max": "1",
+          "min": "0",
+          "name": "Colour G"
+        },
+        {
+          "default": "1",
+          "id": "5_color_b",
+          "max": "1",
+          "min": "0",
+          "name": "Colour B"
+        },
+        {
+          "default": "1",
+          "id": "5_intensity",
+          "max": "10",
+          "min": "0",
+          "name": "Intensity"
+        },
+        {
+          "default": "30",
+          "id": "5_range",
+          "max": "200",
+          "min": "0.01",
+          "name": "Range"
+        },
+        {
+          "default": "1",
+          "id": "5_cast_shadows",
+          "max": "1",
+          "min": "0",
+          "name": "Cast Shadows"
+        },
+        {
+          "default": "1",
+          "id": "5_shadow_softness",
+          "max": "3",
+          "min": "0",
+          "name": "Shadow Softness"
+        },
+        {
+          "default": "0.003",
+          "id": "5_shadow_bias",
+          "max": "0.1",
+          "min": "0",
+          "name": "Shadow Bias"
+        },
+        {
+          "default": "2048",
+          "id": "5_shadow_resolution",
+          "max": "8192",
+          "min": "128",
+          "name": "Shadow Resolution"
+        },
+        {
+          "default": "1",
+          "id": "5_light_size",
+          "max": "20",
+          "min": "0",
+          "name": "Light Size"
+        },
+        {
+          "default": "0.85",
+          "id": "12_color_r",
+          "max": "1",
+          "min": "0",
+          "name": "Colour R"
+        },
+        {
+          "default": "0.88",
+          "id": "12_color_g",
+          "max": "1",
+          "min": "0",
+          "name": "Colour G"
+        },
+        {
+          "default": "0.92",
+          "id": "12_color_b",
+          "max": "1",
+          "min": "0",
+          "name": "Colour B"
+        },
+        {
+          "default": "1",
+          "id": "12_color_a",
+          "max": "1",
+          "min": "0",
+          "name": "Opacity"
+        },
+        {
+          "default": "0.15",
+          "id": "12_ambient",
+          "max": "1",
+          "min": "0",
+          "name": "Ambient"
+        },
+        {
+          "default": "1",
+          "id": "12_specular_color_r",
+          "max": "1",
+          "min": "0",
+          "name": "Specular R"
+        },
+        {
+          "default": "1",
+          "id": "12_specular_color_g",
+          "max": "1",
+          "min": "0",
+          "name": "Specular G"
+        },
+        {
+          "default": "1",
+          "id": "12_specular_color_b",
+          "max": "1",
+          "min": "0",
+          "name": "Specular B"
+        },
+        {
+          "default": "32",
+          "id": "12_specular_power",
+          "max": "256",
+          "min": "1",
+          "name": "Specular Power"
+        },
+        {
+          "default": "0",
+          "id": "12_emission_r",
+          "max": "1",
+          "min": "0",
+          "name": "Emission R"
+        },
+        {
+          "default": "0",
+          "id": "12_emission_g",
+          "max": "1",
+          "min": "0",
+          "name": "Emission G"
+        },
+        {
+          "default": "0",
+          "id": "12_emission_b",
+          "max": "1",
+          "min": "0",
+          "name": "Emission B"
+        },
+        {
+          "default": "0",
+          "id": "12_emission_intensity",
+          "max": "10",
+          "min": "0",
+          "name": "Emission Intensity"
+        },
+        {
+          "default": "0",
+          "id": "12_alpha_mode",
+          "max": "2",
+          "min": "0",
+          "name": "Alpha Mode"
+        },
+        {
+          "default": "0.5",
+          "id": "12_alpha_cutoff",
+          "max": "1",
+          "min": "0",
+          "name": "Alpha Cutoff"
+        },
+        {
+          "default": "0",
+          "id": "13_pos_x",
+          "max": "100",
+          "min": "-100",
+          "name": "Position X"
+        },
+        {
+          "default": "0",
+          "id": "13_pos_y",
+          "max": "100",
+          "min": "-100",
+          "name": "Position Y"
+        },
+        {
+          "default": "0",
+          "id": "13_pos_z",
+          "max": "100",
+          "min": "-100",
+          "name": "Position Z"
+        },
+        {
+          "default": "0",
+          "id": "13_rot_x",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Rotation X"
+        },
+        {
+          "default": "0",
+          "id": "13_rot_y",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Rotation Y"
+        },
+        {
+          "default": "0",
+          "id": "13_rot_z",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Rotation Z"
+        },
+        {
+          "default": "1",
+          "id": "13_scale_x",
+          "max": "10",
+          "min": "0.01",
+          "name": "Scale X"
+        },
+        {
+          "default": "1",
+          "id": "13_scale_y",
+          "max": "10",
+          "min": "0.01",
+          "name": "Scale Y"
+        },
+        {
+          "default": "1",
+          "id": "13_scale_z",
+          "max": "10",
+          "min": "0.01",
+          "name": "Scale Z"
+        },
+        {
+          "default": "0.85",
+          "id": "22_color_r",
+          "max": "1",
+          "min": "0",
+          "name": "Colour R"
+        },
+        {
+          "default": "0.88",
+          "id": "22_color_g",
+          "max": "1",
+          "min": "0",
+          "name": "Colour G"
+        },
+        {
+          "default": "0.92",
+          "id": "22_color_b",
+          "max": "1",
+          "min": "0",
+          "name": "Colour B"
+        },
+        {
+          "default": "1",
+          "id": "22_color_a",
+          "max": "1",
+          "min": "0",
+          "name": "Opacity"
+        },
+        {
+          "default": "0.15",
+          "id": "22_ambient",
+          "max": "1",
+          "min": "0",
+          "name": "Ambient"
+        },
+        {
+          "default": "1",
+          "id": "22_specular_color_r",
+          "max": "1",
+          "min": "0",
+          "name": "Specular R"
+        },
+        {
+          "default": "1",
+          "id": "22_specular_color_g",
+          "max": "1",
+          "min": "0",
+          "name": "Specular G"
+        },
+        {
+          "default": "1",
+          "id": "22_specular_color_b",
+          "max": "1",
+          "min": "0",
+          "name": "Specular B"
+        },
+        {
+          "default": "32",
+          "id": "22_specular_power",
+          "max": "256",
+          "min": "1",
+          "name": "Specular Power"
+        },
+        {
+          "default": "0",
+          "id": "22_emission_r",
+          "max": "1",
+          "min": "0",
+          "name": "Emission R"
+        },
+        {
+          "default": "0",
+          "id": "22_emission_g",
+          "max": "1",
+          "min": "0",
+          "name": "Emission G"
+        },
+        {
+          "default": "0",
+          "id": "22_emission_b",
+          "max": "1",
+          "min": "0",
+          "name": "Emission B"
+        },
+        {
+          "default": "0",
+          "id": "22_emission_intensity",
+          "max": "10",
+          "min": "0",
+          "name": "Emission Intensity"
+        },
+        {
+          "default": "0",
+          "id": "22_alpha_mode",
+          "max": "2",
+          "min": "0",
+          "name": "Alpha Mode"
+        },
+        {
+          "default": "0.5",
+          "id": "22_alpha_cutoff",
+          "max": "1",
+          "min": "0",
+          "name": "Alpha Cutoff"
+        },
+        {
+          "default": "0",
+          "id": "23_pos_x",
+          "max": "100",
+          "min": "-100",
+          "name": "Position X"
+        },
+        {
+          "default": "0",
+          "id": "23_pos_y",
+          "max": "100",
+          "min": "-100",
+          "name": "Position Y"
+        },
+        {
+          "default": "0",
+          "id": "23_pos_z",
+          "max": "100",
+          "min": "-100",
+          "name": "Position Z"
+        },
+        {
+          "default": "0",
+          "id": "23_rot_x",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Rotation X"
+        },
+        {
+          "default": "0",
+          "id": "23_rot_y",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Rotation Y"
+        },
+        {
+          "default": "0",
+          "id": "23_rot_z",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Rotation Z"
+        },
+        {
+          "default": "1",
+          "id": "23_scale_x",
+          "max": "10",
+          "min": "0.01",
+          "name": "Scale X"
+        },
+        {
+          "default": "1",
+          "id": "23_scale_y",
+          "max": "10",
+          "min": "0.01",
+          "name": "Scale Y"
+        },
+        {
+          "default": "1",
+          "id": "23_scale_z",
+          "max": "10",
+          "min": "0.01",
+          "name": "Scale Z"
+        },
+        {
+          "default": "1",
+          "id": "32_visible",
+          "max": "1",
+          "min": "0",
+          "name": "Visible"
+        },
+        {
+          "default": "1",
+          "id": "33_visible",
+          "max": "1",
+          "min": "0",
+          "name": "Visible"
+        }
+      ]
     },
     {
       "category": "Stylize",
@@ -25308,6 +28221,27 @@
           "max": "1",
           "min": "0",
           "name": "Clip Trigger"
+        },
+        {
+          "default": "0",
+          "id": "9_angle_x",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Angle X"
+        },
+        {
+          "default": "0",
+          "id": "9_angle_y",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Angle Y"
+        },
+        {
+          "default": "0",
+          "id": "9_angle_z",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Angle Z"
         }
       ]
     },

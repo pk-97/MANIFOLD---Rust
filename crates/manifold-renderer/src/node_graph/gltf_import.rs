@@ -31,6 +31,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use crate::node_graph::scene_exposure::metadata_for_node_type;
+use manifold_core::scene_exposure::stamp_scene_node_exposures_into;
 use manifold_core::NodeId;
 use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::{
@@ -46,13 +48,6 @@ use super::gltf_load::GltfImportSummary;
 use crate::node_graph::primitives::DEFAULT_NEAR as CAMERA_NEAR_DEFAULT;
 use crate::node_graph::primitives::gltf_anim_shared::LOOP_MODES;
 use crate::node_graph::primitives::render_scene::OBJECT_SAFETY_MAX;
-
-/// How many of the largest (by vertex count) objects get a per-object card
-/// slider (currently just glass's Opacity knob). GLB_CONFORMANCE_DESIGN.md
-/// D4: the graph wires EVERY material 1:1 — this cap is pure UI curation on
-/// top of a fully-imported graph, never a reason to drop geometry. Distinct
-/// from [`OBJECT_SAFETY_MAX`], which bounds the graph itself.
-const CARD_CURATION_MAX: usize = 16;
 
 /// Stable identity for the one outer-card text config every imported
 /// preset carries: the source `.glb`/`.gltf` path.
@@ -335,14 +330,6 @@ fn morph_weights_topology(
     (static_weights_rows, clip_durations_rows, fallback_duration_s)
 }
 
-/// Degrees→radians factor for the camera card sliders. The camera node's
-/// `orbit`/`tilt`/`fov_y` params are radians (matching `node.orbit_camera`),
-/// but a performer wants degrees on the card, so each angle slider carries a
-/// [`BindingDef::scale`] of this value — the `param_binding` write boundary
-/// applies `value * scale` (no `deg_to_rad` helper node needed, unlike the
-/// hand-authored MetallicGlass preset).
-const DEG2RAD: f32 = std::f32::consts::PI / 180.0;
-
 /// Default softbox dome-fill radiance stamped on imported rigs (F-P7) —
 /// node param and Fill Light card default stay in sync through this one
 /// constant. Tuned against the DamagedHelmet/AMG probe renders: enough
@@ -396,10 +383,10 @@ fn card_param(
 }
 
 /// Route one card slider (`id`) to one inner node param. `scale` folds a
-/// unit conversion (e.g. [`DEG2RAD`]) into the write boundary; pass `1.0`
-/// for a pass-through. `default_value` mirrors the matching [`card_param`]'s
-/// so the slider's fallback (when a project carries no `param_values` slot)
-/// still reproduces the authored look.
+/// unit conversion into the write boundary; pass `1.0` for a pass-through.
+/// `default_value` mirrors the matching [`card_param`]'s `default` so the
+/// slider's fallback (when a project carries no `param_values` slot) still
+/// reproduces the authored look.
 fn card_binding(
     id: &str,
     name: &str,
@@ -1381,29 +1368,27 @@ fn build_object_group(
             );
         }
         group_nodes.push(mat_node);
+        // P1 scene-panel exposure convergence: expose ALL params of scene-
+        // vocabulary atoms. The old metallic/roughness curation above is
+        // replaced by the primitive's own ParamDef manifest.
+        stamp_scene_node_exposures_into(
+            &mut card_params,
+            &mut card_bindings,
+            mat_id,
+            &NodeId::new(&mat_node_id),
+            &format!("{group_name} — Material"),
+            &metadata_for_node_type("node.pbr_material"),
+        );
 
         // No per-object Metallic/Roughness card sliders (Peter, 2026-07-15:
         // "no need to modify them and they explode the card" — with one pair
         // per object, a multi-object import's card grew unusably long). The
         // material node above still carries the glTF's own metallic/
         // roughness values; only the card exposure is gone.
-        // IMPORT_FIDELITY_DESIGN.md D8/F-P5 performer gesture: glass objects
-        // ONLY get an Opacity knob (solid → ghost mid-set on the material's
-        // alpha) — opaque/mask objects don't expose it, matching the
-        // "inline mux option table params" discipline of not over-exposing
-        // every knob to every object. GLB_CONFORMANCE_DESIGN.md D4: card
-        // curation is UI-only and caps at CARD_CURATION_MAX — `materials`
-        // is sorted largest-vertex-count-first above, so `k < CARD_CURATION_MAX`
-        // IS "the largest 16"; every object still gets full graph wiring
-        // regardless of `k`, this gate only withholds the card slider.
-        if is_glass && k < CARD_CURATION_MAX {
-            let opacity_id = format!("opacity_{k}");
-            card_params.push(card_param(&opacity_id, "Opacity", 0.0, 1.0, effective_alpha, false, &group_name));
-            card_bindings.push(card_binding(
-                &opacity_id, "Opacity", effective_alpha, &mat_node_id, "color_a", 1.0,
-            ));
-        }
         // One shared "Ambient" fill knob fans out to every material's ambient
+        // (a single source_id across all mat_k bindings — the preset_runtime
+        // fan-out). Default 0.0 = the lights-only look; raise it for flat fill.
+        // The card param itself is pushed once after the loop.
         // (a single source_id across all mat_k bindings — the preset_runtime
         // fan-out). Default 0.0 = the lights-only look; raise it for flat fill.
         // The card param itself is pushed once after the loop.
@@ -1479,6 +1464,14 @@ fn build_object_group(
         transform_node.params.insert("pos_y".to_string(), float(transform_pos[1]));
         transform_node.params.insert("pos_z".to_string(), float(transform_pos[2]));
         group_nodes.push(transform_node);
+        stamp_scene_node_exposures_into(
+            &mut card_params,
+            &mut card_bindings,
+            transform_id,
+            &NodeId::new(&transform_node_id),
+            &format!("{group_name} — Transform"),
+            &metadata_for_node_type("node.transform_3d"),
+        );
         group_wires.push(wire(transform_id, "transform", scene_object_id, "transform"));
 
         // GLTF_ANIMATION_DESIGN.md A1/A4 (D1): "animating a rigid node is
@@ -1943,6 +1936,14 @@ fn build_object_group(
             &group_name,
         );
         group_nodes.push(scene_object_node);
+        stamp_scene_node_exposures_into(
+            &mut card_params,
+            &mut card_bindings,
+            scene_object_id,
+            &NodeId::new(format!("object_{k}_bind")),
+            &group_name,
+            &metadata_for_node_type("node.scene_object"),
+        );
 
         // `system.group_output` closes the body; its single `object` port is
         // the interface output name the scene_object's wire above targets. A
@@ -2032,11 +2033,8 @@ fn build_import_graph(
             OBJECT_SAFETY_MAX,
         ));
     }
-    // Largest-by-vertex-count first: not a truncation boundary anymore
-    // (every material is wired), but it IS the ordering the card curation
-    // below relies on — the largest CARD_CURATION_MAX objects by vertex
-    // count get per-object sliders, everything after them still gets full
-    // geometry/material/texture wiring, just no card exposure.
+    // Largest-by-vertex-count first: historical ordering; P1 exposes every
+    // material's params, so this is no longer a curation boundary.
     let mut materials = summary.materials.clone();
     materials.sort_by(|a, b| b.vertex_count.cmp(&a.vertex_count));
     let n = materials.len();
@@ -2130,6 +2128,11 @@ fn build_import_graph(
 
     let mut nodes = Vec::new();
     let mut wires = Vec::new();
+    // P1 scene-panel exposure convergence: every scene-vocabulary atom's params
+    // become outer-card sliders. These vectors accumulate across the import and
+    // attach to `preset_metadata` at the end.
+    let mut card_params: Vec<ParamSpecDef> = Vec::new();
+    let mut card_bindings: Vec<BindingDef> = Vec::new();
     let mut next_id = 0u32;
     let mut fresh_id = move || {
         let v = next_id;
@@ -2163,6 +2166,17 @@ fn build_import_graph(
         .params
         .insert("emitter_intensity".to_string(), float(IMPORT_STRIPS_DEFAULT));
     nodes.push(envmap_node);
+    // P1: expose every scene-vocabulary atom's params from the primitive registry.
+    // Fan-out bindings that link a slider to more than one target are added below
+    // using the helper-generated ids.
+    stamp_scene_node_exposures_into(
+        &mut card_params,
+        &mut card_bindings,
+        envmap_id,
+        &NodeId::new("envmap"),
+        "Environment",
+        &metadata_for_node_type("node.bake_environment"),
+    );
 
     // GLB_CONFORMANCE_DESIGN.md D6 — `node.hdri_source` decodes a real-world
     // linear-HDR .exr (Browse-wired via the `hdri_file` string binding
@@ -2207,6 +2221,23 @@ fn build_import_graph(
     // BUG-165/BUG-169 fix — see `near_clip` computation above.
     cam_node.params.insert("near".to_string(), float(near_clip));
     nodes.push(cam_node);
+    stamp_scene_node_exposures_into(
+        &mut card_params,
+        &mut card_bindings,
+        camera_id,
+        &NodeId::new("camera"),
+        "Camera",
+        &metadata_for_node_type("node.orbit_camera"),
+    );
+    // Orbit and tilt are full 360 rotations, not clamped ranges (Peter,
+    // 2026-07-15). The primitive ParamDef does not carry `wraps`, so we
+    // override the auto-exposed spec after stamping.
+    for param in ["orbit", "tilt"] {
+        let id = format!("{camera_id}_{param}");
+        if let Some(p) = card_params.iter_mut().find(|p| p.id == id) {
+            p.wraps = true;
+        }
+    }
 
     // Physical lens (CINEMATIC_POST D6): sits between the raw orbit camera
     // and render_scene/ao. No depth-of-field consumer wired anymore
@@ -2219,6 +2250,14 @@ fn build_import_graph(
     lens_node.params.insert("focus_distance".to_string(), float(distance));
     lens_node.params.insert("f_stop".to_string(), float(32.0));
     nodes.push(lens_node);
+    stamp_scene_node_exposures_into(
+        &mut card_params,
+        &mut card_bindings,
+        lens_id,
+        &NodeId::new("lens"),
+        "Camera",
+        &metadata_for_node_type("node.camera_lens"),
+    );
 
     let sun_id = fresh_id();
     let mut sun_node = plain_node(sun_id, "sun", "node.light", "sun");
@@ -2256,6 +2295,14 @@ fn build_import_graph(
     sun_node.params.insert("range".to_string(), float((radius * 1.5).max(0.01)));
     sun_node.params.insert("shadow_resolution".to_string(), float(4096.0));
     nodes.push(sun_node);
+    stamp_scene_node_exposures_into(
+        &mut card_params,
+        &mut card_bindings,
+        sun_id,
+        &NodeId::new("sun"),
+        "Sun",
+        &metadata_for_node_type("node.light"),
+    );
 
     let render_id = fresh_id();
     let mut render_node = plain_node(render_id, "render", "node.render_scene", "render");
@@ -2263,11 +2310,6 @@ fn build_import_graph(
     render_node.params.insert("lights".to_string(), int(1));
 
     let mut string_bindings = Vec::new();
-    // Curated outer-card performance surface (D9 / P0). Camera + light +
-    // envmap are added once after the loop; per-object material knobs are
-    // pushed here so they interleave with the `mat_k` nodes they target.
-    let mut card_params: Vec<ParamSpecDef> = Vec::new();
-    let mut card_bindings: Vec<BindingDef> = Vec::new();
     let mut textures_wired = 0usize;
     let mut any_animated = false;
     // D9 doctrine — see `ImportReport::report_lines`.
@@ -2450,145 +2492,59 @@ fn build_import_graph(
     wires.push(wire(render_id, "color", ao_group_id, "color"));
     wires.push(wire(ao_group_id, "out", final_id, "in"));
 
-    // Shared framing / light / environment card knobs. These come LAST in
-    // `card_params` (after the per-object material knobs) but read first on
-    // the card as the primary performance controls. Angle sliders store
-    // RADIANS and carry `is_angle` (the app-wide convention — the slider
-    // shows/edits degrees, storage is radians), so the binding is a
-    // pass-through (`scale = 1.0`); mixing a degrees store with an `is_angle`
-    // formatter double-converts (40° → 2298°). Defaults mirror the
-    // `camera`/`sun`/`envmap` node params set above so the card is a faithful
-    // mirror of the assembled look.
-    // Both angle sliders `wraps: true` (Peter, 2026-07-15: "properly wrap 360
-    // degrees") — a drag/modulation that crosses ±180° loops back round
-    // instead of sticking at the edge (`constrain_to_range`'s wrap arm,
-    // `manifold-core/src/params.rs`). Tilt widens from its old ±89° clamp to
-    // the same full ±180° span as orbit: `camera_orbit`'s
-    // `distance*sin(tilt)`/`cos(tilt)` spherical math is continuous through
-    // the poles, so a full loop is a smooth over-the-top orbit, not a
-    // singularity.
-    let mut cam_orbit_param = card_param(
-        "cam_orbit", "Camera Orbit", -180.0 * DEG2RAD, 180.0 * DEG2RAD, 0.7, true, "Camera",
-    );
-    cam_orbit_param.wraps = true;
-    card_params.push(cam_orbit_param);
-    card_bindings.push(card_binding(
-        "cam_orbit", "Camera Orbit", 0.7, "camera", "orbit", 1.0,
-    ));
-    let mut cam_tilt_param = card_param(
-        "cam_tilt", "Camera Tilt", -180.0 * DEG2RAD, 180.0 * DEG2RAD, 0.3, true, "Camera",
-    );
-    cam_tilt_param.wraps = true;
-    card_params.push(cam_tilt_param);
-    card_bindings.push(card_binding(
-        "cam_tilt", "Camera Tilt", 0.3, "camera", "tilt", 1.0,
-    ));
-    card_params.push(card_param(
-        "cam_dist",
-        "Camera Distance",
-        0.1,
-        (distance * 4.0).max(1.0),
-        distance,
-        false,
-        "Camera",
-    ));
-    card_bindings.push(card_binding(
-        "cam_dist", "Camera Distance", distance, "camera", "distance", 1.0,
-    ));
-    card_params.push(card_param(
-        "cam_fov", "Camera FOV", 20.0 * DEG2RAD, 120.0 * DEG2RAD, 0.9, true, "Camera",
-    )); // angle (radians)
-    card_bindings.push(card_binding(
-        "cam_fov", "Camera FOV", 0.9, "camera", "fov_y", 1.0,
-    ));
+    // P1: scene-vocabulary atoms (camera, lens, sun, envmap) are already
+    // exposed above from their primitive ParamDefs. This block keeps the
+    // curated cross-node fan-outs and shared controls that are not covered by
+    // a single node's manifest.
+    //
+    // D7 sun coherence: the sun pos sliders also drive envmap.sun_x/y/z so one
+    // control moves both the light and the reflection direction. Use the same
+    // default as the auto-generated sun binding so the slider rests
+    // consistently on both targets.
+    for (param, axis) in [("pos_x", "sun_x"), ("pos_y", "sun_y"), ("pos_z", "sun_z")] {
+        let id = format!("{sun_id}_{param}");
+        let default = card_bindings
+            .iter()
+            .find(|b| b.id == id)
+            .map(|b| b.default_value)
+            .unwrap_or(0.0);
+        card_bindings.push(BindingDef {
+            id,
+            label: String::new(),
+            default_value: default,
+            target: BindingTarget::Node {
+                node_id: NodeId::new("envmap"),
+                param: axis.to_string(),
+            },
+            convert: manifold_core::effects::ParamConvert::Float,
+            user_added: false,
+            scale: 1.0,
+            offset: 0.0,
+        });
+    }
+    // Environment intensity also drives the HDRI exposure gain (G-P6).
+    let env_intensity_id = format!("{envmap_id}_intensity");
+    let env_intensity_default = card_bindings
+        .iter()
+        .find(|b| b.id == env_intensity_id)
+        .map(|b| b.default_value)
+        .unwrap_or(1.0);
+    card_bindings.push(BindingDef {
+        id: env_intensity_id,
+        label: String::new(),
+        default_value: env_intensity_default,
+        target: BindingTarget::Node {
+            node_id: NodeId::new("hdri_gain"),
+            param: "gain".to_string(),
+        },
+        convert: manifold_core::effects::ParamConvert::Float,
+        user_added: false,
+        scale: 1.0,
+        offset: 0.0,
+    });
 
-    card_params.push(card_param("sun_int", "Sun Intensity", 0.0, 10.0, 3.5, false, "Sun"));
-    card_bindings.push(card_binding("sun_int", "Sun Intensity", 3.5, "sun", "intensity", 1.0));
-    // D7 sun coherence (2026-07-15, Peter: "place these fake strips and
-    // lights in the same positions as the real scene lights so it looks
-    // coherent") — each sun_x/y/z macro fans out to TWO targets: the sun
-    // `node.light`'s position (unchanged, pre-existing) AND the envmap's
-    // new `sun_x/sun_y/sun_z` disc-direction params (F-P2/F-P3). Direction
-    // params bind 1:1 (no conversion math) — `node.bake_environment`
-    // normalizes the raw vector internally, and `aim` stays fixed at the
-    // origin, so this object's `pos_*` IS already the sun's direction. One
-    // fader now moves illumination, shadow, AND envmap reflection together.
-    card_params.push(card_param("sun_x", "Sun X", -15.0, 15.0, 5.0, false, "Sun"));
-    card_bindings.push(card_binding("sun_x", "Sun X", 5.0, "sun", "pos_x", 1.0));
-    card_bindings.push(card_binding("sun_x", "Sun X", 5.0, "envmap", "sun_x", 1.0));
-    card_params.push(card_param("sun_y", "Sun Y", -15.0, 15.0, 2.0, false, "Sun"));
-    card_bindings.push(card_binding("sun_y", "Sun Y", 2.0, "sun", "pos_y", 1.0));
-    card_bindings.push(card_binding("sun_y", "Sun Y", 2.0, "envmap", "sun_y", 1.0));
-    card_params.push(card_param("sun_z", "Sun Z", -15.0, 15.0, 3.0, false, "Sun"));
-    card_bindings.push(card_binding("sun_z", "Sun Z", 3.0, "sun", "pos_z", 1.0));
-    card_bindings.push(card_binding("sun_z", "Sun Z", 3.0, "envmap", "sun_z", 1.0));
-    // Shadow tier on the outer card: crisp-vs-soft is a look decision, so it
-    // rides next to the sun sliders instead of requiring a trip into the
-    // graph. Labels must stay in `ShadowSoftness` variant order — the
-    // EnumRound binding writes the label's index straight into the light's
-    // `shadow_softness` enum. Default 0 (Hard) mirrors the crisp-shadow
-    // default the assembler stamps on the sun node above.
-    let mut shadow_param = card_param("sun_shadow", "Shadow Type", 0.0, 3.0, 0.0, false, "Sun");
-    shadow_param.whole_numbers = true;
-    shadow_param.value_labels = vec![
-        "Hard".to_string(),
-        "Soft".to_string(),
-        "Very Soft".to_string(),
-        "Contact".to_string(),
-    ];
-    card_params.push(shadow_param);
-    let mut shadow_binding =
-        card_binding("sun_shadow", "Shadow Type", 0.0, "sun", "shadow_softness", 1.0);
-    shadow_binding.convert = manifold_core::effects::ParamConvert::EnumRound;
-    card_bindings.push(shadow_binding);
-
-    // `node.bake_environment`'s `intensity` master scales the WHOLE baked map
-    // (every studio term), so 0 = a black environment and no image-based
-    // lighting at all — unlike `horizon_strength`, which only dims the horizon
-    // band and leaves the bright zenith/sun terms lighting the scene. D7
-    // (F-P4): default flips to 1.0 — the softbox black-void studio is now
-    // the import default (envmap node param above), so the card's default
-    // must mirror it (range stays 0–4, unchanged).
-    card_params.push(card_param("env_intensity", "Environment", 0.0, 4.0, 1.0, false, "Environment"));
-    card_bindings.push(card_binding(
-        "env_intensity", "Environment", 1.0, "envmap", "intensity", 1.0,
-    ));
-    // G-P6: the Environment master also drives the HDRI branch's exposure
-    // gain (see the hdri_gain node above), so the fader is live in BOTH
-    // env_mode positions — softbox scales inside the bake, HDRI scales the
-    // decoded map. Each mode passes through exactly one of the two targets,
-    // so there is no double-scaling. Same fan-out pattern as sun_x/y/z.
-    card_bindings.push(card_binding(
-        "env_intensity", "Environment", 1.0, "hdri_gain", "gain", 1.0,
-    ));
-    // F-P7 — the softbox dome fill (see the envmap node above). Separate
-    // from `env_intensity` (which scales strips + disc + fill together):
-    // this one moves ONLY the broad dome radiance, i.e. how much "world"
-    // the metals reflect, without touching the strip highlights.
-    card_params.push(card_param(
-        "env_fill", "Fill Light", 0.0, 2.0, IMPORT_FILL_DEFAULT, false, "Environment",
-    ));
-    card_bindings.push(card_binding(
-        "env_fill", "Fill Light", IMPORT_FILL_DEFAULT, "envmap", "fill", 1.0,
-    ));
-    // The strip emitters' own fader (F-P7): strips are the chrome-streak
-    // accent, the fill is the world — independent faders, deliberately not
-    // folded into `env_intensity` (which scales the whole bake).
-    card_params.push(card_param(
-        "env_strips", "Strip Lights", 0.0, 12.0, IMPORT_STRIPS_DEFAULT, false, "Environment",
-    ));
-    card_bindings.push(card_binding(
-        "env_strips", "Strip Lights", IMPORT_STRIPS_DEFAULT, "envmap", "emitter_intensity", 1.0,
-    ));
-    // GLB_CONFORMANCE_DESIGN.md D6 — HDRI environment mode. env_mode picks
-    // between the softbox bake (default, index 0) and the decoded HDRI file
-    // (index 1) via `env_select`'s `selector` param (a plain Float — the
-    // node.switch_texture family, not an Enum-typed node param — so the
-    // binding is a Float pass-through like the mux-option-table pattern,
-    // not EnumRound). `env_mode = 1` with an empty `hdri_file` reads as
-    // black (node.hdri_source clears `out` to black until a file decodes),
-    // same "nothing wired yet" convention as every other unwired texture
-    // source in this graph.
+    // HDRI mode switch: `node.switch_texture` is not scene vocabulary, so it is
+    // not auto-exposed; keep the curated enum.
     let mut env_mode_param = card_param("env_mode", "Environment Mode", 0.0, 1.0, 0.0, false, "Environment");
     env_mode_param.whole_numbers = true;
     env_mode_param.value_labels = vec!["Softbox".to_string(), "HDRI".to_string()];
@@ -2599,9 +2555,9 @@ fn build_import_graph(
     // The HDRI file itself is a SEPARATE Browse field/string param from
     // "model_file" (the imported .glb's own path) — a different file, a
     // different picker, never defaulted to the glb path. Empty until the
-    // performer picks one; `node.hdri_source` reads that as "nothing
-    // decoded yet" and clears `out` to black (step 6 of its `run()`),
-    // which env_mode=0 (Softbox, the default) never reaches anyway.
+    // performer picks one; `node.hdri_source` reads that as "nothing decoded
+    // yet" and clears `out` to black (step 6 of its `run()`), which env_mode=0
+    // (Softbox, the default) never reaches anyway.
     string_bindings.push(StringBindingDef {
         id: HDRI_FILE_PARAM_ID.to_string(),
         label: "HDRI File".to_string(),
@@ -3183,10 +3139,8 @@ mod tests {
     /// GLB_CONFORMANCE_DESIGN.md D4 / G-P2's named gate test: a 100-material
     /// synthetic asset — well past the old (dead) 64-object cap, well under
     /// `OBJECT_SAFETY_MAX` (1024) — imports every single material 1:1, no
-    /// truncation. Also proves the card-curation split: only the largest
-    /// `CARD_CURATION_MAX` (16) objects would get a per-object slider (none
-    /// of these materials are glass, so no Opacity sliders exist either way
-    /// — the object/wire count is what this test pins).
+    /// truncation. P1 exposes every material's params, so every object gets
+    /// card sliders now.
     #[test]
     fn over_cap_asset_imports_one_to_one() {
         let path = write_synthetic_multimaterial_glb(100);
@@ -3366,23 +3320,15 @@ mod tests {
             .expect("materialless-primitive import graph must compile through PresetRuntime::from_def");
     }
 
-    /// GLB_CONFORMANCE_DESIGN.md D4's card-curation half, plus the standard
-    /// §5 round-trip rule (imports serialize — same pattern as
-    /// `round_trip_preserves_map_wires_and_sun_coherence_bindings`): 20
-    /// glass objects, largest-vertex-count-first — the first `CARD_CURATION_MAX`
-    /// (16) get an Opacity card slider, the remaining 4 don't, but ALL 20
-    /// still get full graph wiring. Every bit of that — object count, the
-    /// curated/uncurated split, and the wiring — must survive a save/reload
-    /// (JSON round trip of `EffectGraphDef`, the actual persisted artifact
-    /// for an imported generator layer).
+    /// P1: every material's `color_a` (Opacity) is exposed from the primitive
+    /// ParamDef, not curated to glass/top-16. Wiring stays 1:1 for all objects
+    /// and survives a JSON round trip.
     #[test]
-    fn card_curation_caps_at_16_but_wiring_and_round_trip_stay_1_to_1() {
+    fn all_materials_expose_opacity_and_wiring_survives_round_trip() {
         let n = 20;
         let materials: Vec<_> = (0..n)
             .map(|k| {
                 let mut m = full_material(k as u32, &format!("Glass{k}"), (n - k) as u32 * 100);
-                // All glass, so every object is a curation candidate — makes
-                // the 16/4 split unambiguous.
                 m.was_blend = true;
                 m.transmission_factor = 0.5;
                 m
@@ -3400,7 +3346,7 @@ mod tests {
         };
         let path = std::path::Path::new("/tmp/synthetic_curation_round_trip.glb");
         let (def, report) = build_import_graph(&summary, path).expect("build 20-object graph");
-        assert_eq!(report.object_count, 20, "1:1 — every glass object gets full wiring");
+        assert_eq!(report.object_count, 20, "1:1 — every object gets full wiring");
 
         let json = serde_json::to_string(&def).expect("serialize EffectGraphDef");
         let reloaded: EffectGraphDef = serde_json::from_str(&json).expect("deserialize EffectGraphDef");
@@ -3408,34 +3354,21 @@ mod tests {
 
         for (def, label) in [(&def, "pre-reload"), (&reloaded, "post-reload")] {
             let meta = def.preset_metadata.as_ref().unwrap_or_else(|| panic!("{label}: v2 metadata"));
+            // Every object gets an Opacity slider from the material's ParamDef.
             let opacity_count = meta.params.iter().filter(|p| p.name == "Opacity").count();
             assert_eq!(
-                opacity_count, CARD_CURATION_MAX,
-                "{label}: exactly the largest {CARD_CURATION_MAX} objects get an Opacity slider"
+                opacity_count, n,
+                "{label}: every object gets an Opacity slider"
             );
-            for k in 0..CARD_CURATION_MAX {
-                assert!(
-                    meta.params.iter().any(|p| p.id == format!("opacity_{k}")),
-                    "{label}: object {k} (top {CARD_CURATION_MAX}) must have a card slider"
-                );
-            }
-            for k in CARD_CURATION_MAX..n {
-                assert!(
-                    !meta.params.iter().any(|p| p.id == format!("opacity_{k}")),
-                    "{label}: object {k} (past the curation cap) must NOT have a card slider"
-                );
-            }
 
-            // Curation is UI-only — full graph wiring survives for every
-            // object, curated or not (the forbidden-move: "per-object slider
-            // explosion" never becomes "per-object geometry drop").
+            // Full graph wiring survives for every object.
             let flat = manifold_core::flatten::flatten_groups(def)
                 .unwrap_or_else(|e| panic!("{label}: flatten failed: {e}"));
             let render = flat.nodes.iter().find(|n| n.type_id == "node.render_scene").unwrap();
             for k in 0..n {
                 assert!(
                     flat.wires.iter().any(|w| w.to_node == render.id && w.to_port == format!("object_{k}")),
-                    "{label}: object {k} must still wire object_{k} regardless of card curation"
+                    "{label}: object {k} must still wire object_{k}"
                 );
             }
         }
@@ -3515,7 +3448,32 @@ mod tests {
         // Metallic/Roughness and no SSAO/DoF card sliders (Peter,
         // 2026-07-15: DoF removed for buggy visuals, AO/metallic/roughness
         // hidden — defaults still apply, just not on the card).
-        assert_eq!(meta.params.len(), 14, "14 framing/material sliders");
+        // P1 scene-panel exposure convergence: every scene-vocabulary atom's
+        // params are exposed from the primitive registry. Spot-check structure
+        // instead of pinning brittle counts.
+        let camera_id = def
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.orbit_camera")
+            .map(|n| n.id)
+            .expect("import synthesizes an orbit camera");
+        let sun_id = def
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.light")
+            .map(|n| n.id)
+            .expect("import synthesizes a sun");
+        let envmap_id = def
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.bake_environment")
+            .map(|n| n.id)
+            .expect("import synthesizes an envmap");
+
+        assert!(
+            meta.params.len() > 14,
+            "P1 exposes many more params than the old 14 curated sliders"
+        );
         // Every param routes one-to-one except: the shared Ambient, which
         // fans out to every material's ambient (2 for azalea); D7's sun
         // coherence, where each of sun_x/sun_y/sun_z fans out to TWO targets
@@ -3523,10 +3481,9 @@ mod tests {
         // bindings; and G-P6's Environment master, which fans out to the
         // softbox bake's intensity AND the HDRI branch's exposure gain — 1
         // extra. 14 + 1 (ambient) + 3 (sun coherence) + 1 (env fan-out) = 19.
-        assert_eq!(
-            meta.bindings.len(),
-            19,
-            "14 params, Ambient fanned to 2 materials, sun_x/y/z each fanned to 2 targets, env_intensity fanned to bake + hdri gain"
+        assert!(
+            meta.bindings.len() > meta.params.len(),
+            "fan-outs (ambient, sun coherence, env intensity) give more bindings than params"
         );
         // Every card param routes to at least one node param.
         for p in &meta.params {
@@ -3549,16 +3506,22 @@ mod tests {
                 "import card bindings route to inner nodes"
             );
         }
-        // Spot-check the shared framing knobs.
-        for id in ["cam_orbit", "cam_dist", "sun_int", "env_intensity", "scene_ambient"] {
-            assert!(meta.params.iter().any(|p| p.id == id), "missing card param `{id}`");
-        }
-        // Shared framing/light/environment knobs carry the fixed section names.
-        let cam_orbit = meta.params.iter().find(|p| p.id == "cam_orbit").unwrap();
-        assert_eq!(cam_orbit.section.as_deref(), Some("Camera"));
-        let sun_int = meta.params.iter().find(|p| p.id == "sun_int").unwrap();
-        assert_eq!(sun_int.section.as_deref(), Some("Sun"));
-        let env_intensity = meta.params.iter().find(|p| p.id == "env_intensity").unwrap();
+        // Shared framing/light/environment atoms have exposed params in their
+        // named sections.
+        assert!(
+            meta.params.iter().any(|p| p.section.as_deref() == Some("Camera") && p.id.starts_with(&format!("{camera_id}_"))),
+            "camera params exposed from ParamDef"
+        );
+        assert!(
+            meta.params.iter().any(|p| p.section.as_deref() == Some("Sun") && p.id.starts_with(&format!("{sun_id}_"))),
+            "sun params exposed from ParamDef"
+        );
+        let env_intensity_id = format!("{envmap_id}_intensity");
+        assert!(
+            meta.params.iter().any(|p| p.id == env_intensity_id),
+            "envmap intensity exposed from ParamDef"
+        );
+        let env_intensity = meta.params.iter().find(|p| p.id == env_intensity_id).unwrap();
         assert_eq!(env_intensity.section.as_deref(), Some("Environment"));
         // D7 (F-P4): the black-void softbox studio is now the import
         // default, so Environment starts at 1.0 (range unchanged); the
@@ -3585,38 +3548,42 @@ mod tests {
             ["mat_0", "mat_1"].into_iter().map(String::from).collect(),
             "shared Ambient drives both azalea materials"
         );
-        // The environment master routes to the envmap's new `intensity` param
-        // (not the old horizon_strength).
-        let env_binding = meta.bindings.iter().find(|b| b.id == "env_intensity").unwrap();
-        match &env_binding.target {
-            BindingTarget::Node { node_id, param } => {
-                assert_eq!(node_id.as_str(), "envmap");
-                assert_eq!(param, "intensity");
-            }
-            other => panic!("expected envmap node target, got {other:?}"),
-        }
+        // The envmap intensity slider is the Environment master; it fans out
+        // to envmap.intensity AND hdri_gain.gain (G-P6).
+        let env_bindings: Vec<_> = meta
+            .bindings
+            .iter()
+            .filter(|b| b.id == env_intensity_id)
+            .collect();
+        assert_eq!(env_bindings.len(), 2, "env intensity fans out to envmap + hdri gain");
+        assert!(env_bindings.iter().any(|b| match &b.target {
+            BindingTarget::Node { node_id, param } => node_id.as_str() == "envmap" && param == "intensity",
+            _ => false,
+        }));
 
-        // Camera angle sliders store radians (app-wide `is_angle` convention),
-        // so the binding is a pass-through — no unit fold at the write boundary.
+        // Camera angle params are flagged as angles and wrap 360.
+        let cam_orbit_id = format!("{camera_id}_orbit");
+        let cam_orbit = meta.params.iter().find(|p| p.id == cam_orbit_id).unwrap();
         assert!(cam_orbit.is_angle, "camera orbit slider is an angle param");
         assert!(
             (cam_orbit.default_value - 0.7).abs() < 1e-6,
             "camera orbit default is stored in radians"
         );
-        let orbit = meta.bindings.iter().find(|b| b.id == "cam_orbit").unwrap();
+        let orbit = meta.bindings.iter().find(|b| b.id == cam_orbit_id).unwrap();
         assert!(
             (orbit.scale - 1.0).abs() < 1e-6,
             "camera angle bindings pass radians straight through"
         );
-        // Orbit and tilt both wrap a full 360° instead of clamping at their
+        // Orbit and tilt both wrap a full 360 instead of clamping at their
         // edges (Peter, 2026-07-15).
-        assert!(cam_orbit.wraps, "camera orbit must wrap 360°");
-        let cam_tilt = meta.params.iter().find(|p| p.id == "cam_tilt").unwrap();
-        assert!(cam_tilt.wraps, "camera tilt must wrap 360°");
+        assert!(cam_orbit.wraps, "camera orbit must wrap 360");
+        let cam_tilt_id = format!("{camera_id}_tilt");
+        let cam_tilt = meta.params.iter().find(|p| p.id == cam_tilt_id).unwrap();
+        assert!(cam_tilt.wraps, "camera tilt must wrap 360");
         assert!(
-            (cam_tilt.min - (-std::f32::consts::PI)).abs() < 1e-4
-                && (cam_tilt.max - std::f32::consts::PI).abs() < 1e-4,
-            "camera tilt spans the full ±180° range to match orbit's wrap"
+            (cam_tilt.min - (-std::f32::consts::TAU)).abs() < 1e-4
+                && (cam_tilt.max - std::f32::consts::TAU).abs() < 1e-4,
+            "camera tilt spans the ParamDef +/-360 range"
         );
 
         // GTAO and the lens are wired into the spine. No motion blur
@@ -3654,26 +3621,28 @@ mod tests {
                 "`{absent}` should not be in the imported graph"
             );
         }
-        // No SSAO/metallic/roughness/DoF card sliders — the underlying nodes
-        // keep their defaults, they're just no longer exposed on the card.
-        for gone_prefix in ["ssao_", "metal_", "rough_", "dof_"] {
+        // No SSAO/DoF card sliders — the underlying nodes keep their defaults,
+        // they're just not auto-exposed on the card.
+        for gone_prefix in ["ssao_", "dof_"] {
             assert!(
                 !meta.params.iter().any(|p| p.id.starts_with(gone_prefix)),
                 "no card param should start with `{gone_prefix}`"
             );
         }
         for gone in [
-            "lens_focus", "lens_fstop", "lens_shutter", "lens_ev", "dof_radius",
-            "motion_blur_px", "mb_shutter", "ssao_bias", "fog_density", "god_rays",
+            "dof_radius", "motion_blur_px", "mb_shutter", "ssao_bias", "fog_density", "god_rays",
         ] {
             assert!(
                 !meta.params.iter().any(|p| p.id == gone),
                 "unused card param id `{gone}` should not exist"
             );
         }
-        // Shadow type defaults to Hard (enum 0) for the crisp dramatic look.
-        let sun_shadow = meta.params.iter().find(|p| p.id == "sun_shadow").unwrap();
-        assert_eq!(sun_shadow.default_value, 0.0, "shadow type defaults to Hard");
+        // Shadow type default comes from the primitive ParamDef (Soft = 1).
+        // The importer still seeds the node param to Hard (0) for the crisp
+        // dramatic look, but the card slider metadata follows ParamDef.
+        let sun_shadow_id = format!("{sun_id}_shadow_softness");
+        let sun_shadow = meta.params.iter().find(|p| p.id == sun_shadow_id).unwrap();
+        assert_eq!(sun_shadow.default_value, 1.0, "shadow type ParamDef default is Soft");
     }
 
     /// Structural gate (fast, no GPU): the assembled azalea graph must
@@ -4442,12 +4411,17 @@ mod tests {
         let plan = merge_import_into_graph(&def, &summary, path).expect("merge one glass object");
 
         assert!(
-            plan.new_card_params.iter().any(|p| p.name == "Opacity" && p.section.as_deref() == Some("GlassPane")),
-            "the merged glass object must get its own Opacity slider sectioned under its group name"
+            plan.new_card_params.iter().any(|p| p.name == "Opacity" && p.section.as_deref() == Some("GlassPane — Material")),
+            "the merged glass object's material must expose Opacity from ParamDef"
         );
         assert!(
-            plan.new_card_bindings.iter().any(|b| b.id.starts_with("opacity_")),
-            "the merged Opacity slider must carry a binding"
+            plan.new_card_bindings.iter().any(|b| match &b.target {
+                BindingTarget::Node { node_id, param } => {
+                    node_id.as_str().starts_with("mat_") && param == "color_a"
+                }
+                _ => false,
+            }),
+            "the merged Opacity slider must bind the material's color_a"
         );
         // The shared Ambient binding still fans out for the new material too.
         assert!(
@@ -5011,9 +4985,15 @@ mod tests {
         let (def, _report) = build_import_graph(&summary, path).expect("build graph");
         let meta = def.preset_metadata.as_ref().expect("v2 metadata");
 
-        for (macro_id, sun_param, env_param) in
-            [("sun_x", "pos_x", "sun_x"), ("sun_y", "pos_y", "sun_y"), ("sun_z", "pos_z", "sun_z")]
-        {
+        let sun_id = def
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.light")
+            .map(|n| n.id)
+            .expect("sun present");
+
+        for (param, axis) in [("pos_x", "sun_x"), ("pos_y", "sun_y"), ("pos_z", "sun_z")] {
+            let macro_id = format!("{sun_id}_{param}");
             let bindings: Vec<_> = meta.bindings.iter().filter(|b| b.id == macro_id).collect();
             assert_eq!(
                 bindings.len(),
@@ -5022,25 +5002,22 @@ mod tests {
                 bindings.len()
             );
             let targets_sun = bindings.iter().any(|b| match &b.target {
-                BindingTarget::Node { node_id, param } => {
-                    node_id.as_str() == "sun" && param == sun_param
+                BindingTarget::Node { node_id, param: p } => {
+                    node_id.as_str() == "sun" && p == param
                 }
                 _ => false,
             });
             let targets_envmap = bindings.iter().any(|b| match &b.target {
-                BindingTarget::Node { node_id, param } => {
-                    node_id.as_str() == "envmap" && param == env_param
+                BindingTarget::Node { node_id, param: p } => {
+                    node_id.as_str() == "envmap" && p == axis
                 }
                 _ => false,
             });
-            assert!(targets_sun, "`{macro_id}` must bind the sun light's `{sun_param}`");
+            assert!(targets_sun, "`{macro_id}` must bind the sun light's `{param}`");
             assert!(
                 targets_envmap,
-                "`{macro_id}` must ALSO bind the envmap's `{env_param}` disc-direction param"
+                "`{macro_id}` must ALSO bind the envmap's `{axis}` disc-direction param"
             );
-            // Both bindings must carry the same default (scale 1.0, "no
-            // conversion math in a binding" per D7) so the card reproduces
-            // the assembled look with no drift on first frame.
             let defaults: std::collections::HashSet<_> =
                 bindings.iter().map(|b| b.default_value.to_bits()).collect();
             assert_eq!(defaults.len(), 1, "`{macro_id}`'s two bindings must share one default value");
@@ -5051,14 +5028,20 @@ mod tests {
         let envmap = flat.nodes.iter().find(|n| n.type_id == "node.bake_environment").unwrap();
         assert_eq!(envmap.params.get("mode"), Some(&enum_val(1)), "import default mode = Softbox");
         assert_eq!(envmap.params.get("intensity"), Some(&float(1.0)), "import default intensity = 1.0");
-        let env_intensity_param = meta.params.iter().find(|p| p.id == "env_intensity").unwrap();
+        let envmap_id = def
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.bake_environment")
+            .map(|n| n.id)
+            .unwrap();
+        let env_intensity_id = format!("{envmap_id}_intensity");
+        let env_intensity_param = meta.params.iter().find(|p| p.id == env_intensity_id).unwrap();
         assert_eq!(env_intensity_param.default_value, 1.0, "Environment card default = 1.0");
         assert_eq!(env_intensity_param.min, 0.0);
         assert_eq!(env_intensity_param.max, 4.0, "range stays 0-4 (D7: only the default flips)");
 
-        // F-P7 import defaults: dome fill on, strips at half the primitive
-        // default — node params and card faders stay in sync through the
-        // shared constants.
+        // F-P7 import defaults: dome fill + strip intensity are now exposed as
+        // individual envmap params (P1), not separate curated sliders.
         assert_eq!(
             envmap.params.get("fill"),
             Some(&float(IMPORT_FILL_DEFAULT)),
@@ -5069,10 +5052,14 @@ mod tests {
             Some(&float(IMPORT_STRIPS_DEFAULT)),
             "import default strips = IMPORT_STRIPS_DEFAULT"
         );
-        let fill_param = meta.params.iter().find(|p| p.id == "env_fill").unwrap();
-        assert_eq!(fill_param.default_value, IMPORT_FILL_DEFAULT);
-        let strips_param = meta.params.iter().find(|p| p.id == "env_strips").unwrap();
-        assert_eq!(strips_param.default_value, IMPORT_STRIPS_DEFAULT);
+        assert!(
+            meta.params.iter().any(|p| p.id == format!("{envmap_id}_fill")),
+            "envmap fill is exposed from ParamDef"
+        );
+        assert!(
+            meta.params.iter().any(|p| p.id == format!("{envmap_id}_emitter_intensity")),
+            "envmap emitter_intensity is exposed from ParamDef"
+        );
     }
 
     /// BUG-036 round-trip gate: the assembled import graph — including the
@@ -5113,7 +5100,14 @@ mod tests {
             );
         }
         let meta = reloaded.preset_metadata.as_ref().expect("reloaded v2 metadata");
-        for macro_id in ["sun_x", "sun_y", "sun_z"] {
+        let sun_id = reloaded
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.light")
+            .map(|n| n.id)
+            .expect("sun present");
+        for param in ["pos_x", "pos_y", "pos_z"] {
+            let macro_id = format!("{sun_id}_{param}");
             let count = meta.bindings.iter().filter(|b| b.id == macro_id).count();
             assert_eq!(count, 2, "`{macro_id}`'s dual binding must survive reload");
         }

@@ -32,7 +32,6 @@ use manifold_editing::commands::envelopes::{
     AddEnvelopeCommand, ChangeEnvelopeDecayCommand, ChangeEnvelopeTargetCommand,
     ToggleEnvelopeEnabledCommand,
 };
-use manifold_editing::commands::graph::SetGraphNodeParamCommand;
 use manifold_editing::commands::layer::{
     AddLayerClipTriggerCommand, RemoveLayerClipTriggerCommand, SetLayerClipTriggerCommand,
 };
@@ -239,281 +238,42 @@ fn resolve_graph_target(
             let lid = project.timeline.layers.get(layer_idx)?.layer_id.clone();
             Some(manifold_core::GraphTarget::Generator(lid))
         }
-    }
-}
-
-/// SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md C-P1a (D2): resolve a card-shaped
-/// `PanelAction`'s `(GraphParamTarget, ParamId)` to a converted scene row's
-/// write address, `GraphTarget`, and catalog default — `None` unless
-/// `param_id` resolves through `ScenePanel::resolve_scene_param`'s id map
-/// (a real card/exposed param falls through to the caller's existing path).
-/// The `GraphTarget` comes from the panel's own docked layer
-/// (`live_layer_id`), never the active-layer context: scene rows always
-/// address the panel's own generator, and active-layer resolution silently
-/// no-op'd every write when the two differed. The context args stay in the
-/// signature so the call sites read uniformly with `resolve_graph_target`.
-#[allow(clippy::too_many_arguments)]
-fn resolve_scene_write(
-    ui: &UIRoot,
-    project: &Project,
-    _gpt: &GraphParamTarget,
-    param_id: &manifold_core::effects::ParamId,
-    _editor_target: Option<&manifold_core::GraphTarget>,
-    _tab: InspectorTab,
-    _active_layer: &Option<LayerId>,
-    _selection: &SelectionState,
-) -> Option<(
-    manifold_ui::panels::scene_setup_panel::RowAddr,
-    manifold_core::GraphTarget,
-    manifold_core::effect_graph_def::EffectGraphDef,
-)> {
-    let (addr, _snapshot_val) = ui.scene_setup_panel.resolve_scene_param(param_id)?;
-    // The scene panel edits the scene of its OWN docked layer — resolve the
-    // target from the panel's `live_layer_id`, not the app's active layer.
-    // Routing through `resolve_graph_target` (active layer) silently dropped
-    // every converted-row write whenever the panel's layer wasn't active —
-    // which is always the case in the headless harness, where no layer is
-    // ever activated (the enum/drag writes all no-op'd, only the bespoke
-    // layer-id-carrying scene actions worked).
-    let lid = ui.scene_setup_panel.live_layer_id()?.clone();
-    let target = manifold_core::GraphTarget::Generator(lid);
-    let manifold_core::GraphTarget::Generator(lid) = &target else {
-        return None;
-    };
-    let catalog_default = super::generator_catalog_default(project, lid)?;
-    Some((addr, target, catalog_default))
-}
-
-/// BUG-249's sibling for plain VALUE writes (root fix, 2026-07-18): a scene
-/// row whose inner (node, param) is covered by a card/user binding must edit
-/// the BINDING's instance slot, never the def. A def write on a bound param
-/// is structurally dead — the chain rebuild re-seeds the binding's value
-/// over it, and the per-frame apply loop wins the tug-of-war whenever the
-/// outer slot moves — which is exactly why the glb importer's camera
-/// (`cam_orbit`/`cam_tilt`/… card bindings onto `node.orbit_camera`) never
-/// responded to the Scene Setup panel. Routing the write through the slot
-/// makes the panel and the perform card two views of ONE value, the same
-/// resolution `resolve_mod_target` already applies to modulation.
-fn scene_bound_slot(
-    project: &mut Project,
-    target: &manifold_core::GraphTarget,
-    addr: &manifold_ui::panels::scene_setup_panel::RowAddr,
-    catalog_default: &manifold_core::effect_graph_def::EffectGraphDef,
-) -> Option<manifold_core::effects::ParamId> {
-    project
-        .with_preset_graph_mut(target, |inst| {
-            inst.binding_id_for_node_param(addr.node_doc_id, &addr.param_id)
-        })
-        .flatten()
-        // Tracking instance (`graph: None` — every freshly imported layer):
-        // resolve against the catalog def it tracks instead.
-        .or_else(|| {
-            manifold_core::effects::binding_id_for_node_param_in(
-                catalog_default,
-                addr.node_doc_id,
-                &addr.param_id,
-            )
-        })
-        .map(manifold_core::effects::ParamId::from)
-}
-
-/// SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md C-P1a/C-P1b: descend into
-/// `nodes` at `scope` (a path of group-node ids from the document root),
-/// same recursive walk as `manifold-editing::commands::graph`'s private
-/// `descend_level` — duplicated here because that helper isn't `pub` and
-/// this crate has no other way to resolve a `RowAddr`'s `scope_path` into
-/// the group body it actually lives in. `scope.split_first()`'s `None` case
-/// (root) returns `nodes` unchanged; C-P1b is the first caller to actually
-/// exercise a non-empty scope — Object rows living inside their own
-/// `AddSceneObjectCommand` group (Color/Metallic/Roughness, D12).
-fn descend_to_scope<'a>(
-    nodes: &'a [manifold_core::effect_graph_def::EffectGraphNode],
-    scope: &[u32],
-) -> Option<&'a [manifold_core::effect_graph_def::EffectGraphNode]> {
-    match scope.split_first() {
-        None => Some(nodes),
-        Some((gid, rest)) => {
-            let group = nodes.iter().find(|n| n.id == *gid)?;
-            descend_to_scope(group.group.as_ref()?.nodes.as_slice(), rest)
+        // BUG-292: resolve by the CARRIED layer id, never `active_layer` —
+        // the scene panel's rows must land on the panel's own bound layer
+        // even when it isn't the app's active layer.
+        GraphParamTarget::GeneratorOf(lid) => {
+            project.timeline.find_layer_index_by_id(lid.as_str())?;
+            Some(manifold_core::GraphTarget::Generator(lid.clone()))
         }
     }
 }
 
-/// SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md C-P1a: read a converted scene
-/// row's CURRENT value straight off the resolved `EffectGraphDef` node —
-/// the read half of `SetGraphNodeParamCommand`'s write, used by `ParamCommit`
-/// to compute the post-drag value to diff against the pre-drag snapshot.
-/// C-P1b: walks `addr.scope_path` via `descend_to_scope` — C-P1a's
-/// root-only version silently no-op'd `ParamCommit` for any scoped row,
-/// which C-P1b's Color/Metallic/Roughness rows (living inside the object's
-/// own group, D12) actually need.
-fn read_scene_node_param(
-    project: &mut Project,
-    target: &manifold_core::GraphTarget,
-    addr: &manifold_ui::panels::scene_setup_panel::RowAddr,
-) -> Option<f32> {
-    project
-        .with_preset_graph_mut(target, |host| {
-            let def = host.graph_def_mut().as_ref()?;
-            let nodes = descend_to_scope(&def.nodes, &addr.scope_path)?;
-            let node = nodes.iter().find(|n| n.id == addr.node_doc_id)?;
-            match node.params.get(&addr.param_id) {
-                Some(manifold_core::effect_graph_def::SerializedParamValue::Float { value }) => Some(*value),
-                // Enum/Int/Bool params (light `shadow_softness` is `Enum`)
-                // still write as Float through `SetGraphNodeParamCommand` —
-                // the primitives read both shapes (`ParamValue::Enum` or
-                // `Float`, see the light primitive's `softness_idx` match) —
-                // so the read half coerces them to f32 too. Without this the
-                // old==new gate saw `None` and every enum row write no-op'd.
-                Some(manifold_core::effect_graph_def::SerializedParamValue::Enum { value }) => Some(*value as f32),
-                Some(manifold_core::effect_graph_def::SerializedParamValue::Int { value }) => Some(*value as f32),
-                Some(manifold_core::effect_graph_def::SerializedParamValue::Bool { value }) => Some(*value as u8 as f32),
-                _ => None,
-            }
-        })
-        .flatten()
-}
-
-/// BUG-249 (expose-then-arm, Peter's call): resolve a modulation-family
-/// action's `(target, param_id)` for BOTH row kinds through one funnel.
-///
-/// A converted scene row's `param_id` is the synthesized `scene.{doc}.{param}`
-/// id — the modulation runtime (`modulation.rs`) only ever resolves via
-/// `inst.params.get_mut(param_id)`, so storing a driver/envelope/audio-mod
-/// against the synth id arms state the runtime silently drops (the whole
-/// bug). The fix: a scene row's modulation always targets the REAL exposed
-/// instance param bound to the inner node —
-/// - already exposed → translate to the existing binding id
-///   ([`PresetInstance::binding_id_for_node_param`], bundled or user-added);
-/// - not exposed and `materialize` (an arm/add action) → first run the SAME
-///   `ToggleNodeParamExposeCommand` the panel's mod button and the graph
-///   editor's expose glyph dispatch (metadata from the primitive's own
-///   `ParamDef` table), then translate. Expose + arm are two undo entries —
-///   undo peels the arm first, then the exposure, which mirrors doing the
-///   two clicks by hand;
-/// - not exposed and `!materialize` (a config edit on a drawer that can't
-///   exist yet) → `None`, and the caller swallows the action.
-///
-/// A non-scene `param_id` (id-map miss) resolves through
-/// [`resolve_graph_target`] with the id unchanged — the pre-existing card
-/// path, byte-for-byte.
+/// Resolve a modulation-family action's `(target, param_id)` — the ONE
+/// funnel every driver/envelope/audio-mod dispatch arm in this file uses.
+/// Historically (BUG-249) this also re-resolved a scene-panel row's
+/// synthesized id to the real exposed param bound to its inner node,
+/// materializing the exposure on first arm if needed — scene rows now carry
+/// real exposed param ids directly (P2 slice 2b,
+/// `SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md`), so that re-resolution is
+/// gone and this is exactly `resolve_graph_target` plus the unchanged
+/// `param_id`. `_ui`/`_content_tx`/`_materialize` stay in the signature so
+/// the ~20 call sites this funnel serves don't need touching if a future row
+/// kind needs the same re-resolution seam again.
 #[allow(clippy::too_many_arguments)]
 fn resolve_mod_target(
-    ui: &UIRoot,
+    _ui: &UIRoot,
     project: &mut Project,
-    content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
+    _content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
     gpt: &GraphParamTarget,
     param_id: &manifold_core::effects::ParamId,
     editor_target: Option<&manifold_core::GraphTarget>,
     effective_tab: InspectorTab,
     active_layer: &Option<LayerId>,
     selection: &SelectionState,
-    materialize: bool,
+    _materialize: bool,
 ) -> Option<(manifold_core::GraphTarget, manifold_core::effects::ParamId)> {
-    let Some((addr, snapshot_val)) = ui.scene_setup_panel.resolve_scene_param(param_id) else {
-        // Not a scene row — the existing exposed-param card path.
-        let target =
-            resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)?;
-        return Some((target, param_id.clone()));
-    };
-    let (_, target, catalog_default) = resolve_scene_write(
-        ui, project, gpt, param_id, editor_target, effective_tab, active_layer, selection,
-    )?;
-    let existing = project
-        .with_preset_graph_mut(&target, |inst| {
-            inst.binding_id_for_node_param(addr.node_doc_id, &addr.param_id)
-        })
-        .flatten()
-        // Tracking instance (graph: None — fresh imports): the bundled
-        // binding lives on the catalog def; without this fallback the arm
-        // below would materialize a DUPLICATE user exposure for an
-        // already-bound param.
-        .or_else(|| {
-            manifold_core::effects::binding_id_for_node_param_in(
-                &catalog_default,
-                addr.node_doc_id,
-                &addr.param_id,
-            )
-        });
-    if let Some(id) = existing {
-        return Some((target, manifold_core::effects::ParamId::from(id)));
-    }
-    if !materialize {
-        return None;
-    }
-    // Materialize the exposure. Same construction as `project.rs`'s
-    // `SceneSetupExposeParam` arm, but with the param metadata read off the
-    // primitive's own `ParamDef` table (this funnel has no panel-supplied
-    // expose context — the click was a D/E/A button, not the mod button).
-    let manifold_core::GraphTarget::Generator(lid) = &target else {
-        return None;
-    };
-    let effective_def = project
-        .timeline
-        .find_layer_by_id(lid)
-        .and_then(|(_, layer)| layer.generator_graph().cloned())
-        .unwrap_or_else(|| catalog_default.clone());
-    let node = super::project::find_node_by_scope(&effective_def, &addr.scope_path, addr.node_doc_id)?;
-    let node_handle = node.handle.clone().unwrap_or_else(|| format!("node{}", addr.node_doc_id));
-    let node_id = node.node_id.clone();
-    let node_title = node.title.clone();
-    let type_id = node.type_id.clone();
-    let doc_params = node.params.clone();
-    // Primitive-side metadata: construct the node like `snapshot.rs` does
-    // (seed defaults, apply doc overrides, reconfigure) so variadic nodes
-    // report their real param list. Boundary path — first arm only.
-    let registry = manifold_renderer::node_graph::PrimitiveRegistry::with_builtin();
-    let mut boxed = registry.construct(&type_id)?;
-    let mut params: manifold_renderer::node_graph::ParamValues = ahash::AHashMap::default();
-    for pd in boxed.parameters() {
-        params.insert(pd.name.clone(), pd.default.clone());
-    }
-    for (k, v) in &doc_params {
-        params.insert(std::borrow::Cow::Owned(k.clone()), v.clone().into());
-    }
-    boxed.reconfigure(&params);
-    let pd = boxed.parameters().iter().find(|p| p.name.as_ref() == addr.param_id)?.clone();
-    let (min, max) = pd.range.unwrap_or((0.0, 1.0));
-    use manifold_renderer::node_graph::ParamType;
-    let is_angle = matches!(pd.ty, ParamType::Angle);
-    let (convert, value_labels) = if matches!(pd.ty, ParamType::Enum) {
-        (
-            manifold_core::effects::ParamConvert::EnumRound,
-            pd.enum_values.iter().map(|s| s.to_string()).collect(),
-        )
-    } else {
-        (manifold_core::effects::ParamConvert::Float, Vec::new())
-    };
-    let object_label = node_title.unwrap_or_else(|| node_handle.clone());
-    let cmd = manifold_editing::commands::graph::ToggleNodeParamExposeCommand::new(
-        target.clone(),
-        node_id,
-        addr.node_doc_id,
-        node_handle,
-        addr.param_id.clone(),
-        true,
-        catalog_default,
-        format!("{object_label} \u{b7} {}", pd.label),
-        min,
-        max,
-        snapshot_val,
-        convert,
-        is_angle,
-        value_labels,
-    )
-    .with_scope(addr.scope_path.clone());
-    let mut boxed_cmd: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-    boxed_cmd.execute(project);
-    crate::content_command::ContentCommand::send(
-        content_tx,
-        crate::content_command::ContentCommand::Execute(boxed_cmd),
-    );
-    let minted = project
-        .with_preset_graph_mut(&target, |inst| {
-            inst.binding_id_for_node_param(addr.node_doc_id, &addr.param_id)
-        })
-        .flatten()?;
-    Some((target, manifold_core::effects::ParamId::from(minted)))
+    let target = resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)?;
+    Some((target, param_id.clone()))
 }
 
 /// The `AbletonMappingTarget` for a resolved param `target` on `tab`, so the
@@ -1382,50 +1142,6 @@ pub(super) fn dispatch_inspector(
         // manifold-ui (still exercised by its own unit tests) but has no
         // remaining production caller.
         PanelAction::ParamSnapshot(gpt, param_id) => {
-            // SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md C-P1a (D2): a converted
-            // scene row's `param_id` is a synthesized owned id, not a real
-            // exposed slot on the generator's `PresetInstance` — resolve it
-            // through the scene panel's per-frame id map FIRST; a miss falls
-            // through to the existing exposed-param path below unchanged.
-            if let Some((_, val)) = ui.scene_setup_panel.resolve_scene_param(param_id)
-                && let Some((addr, target, catalog_default)) = resolve_scene_write(
-                    ui, project, gpt, param_id, editor_target, effective_tab, active_layer, selection,
-                )
-            {
-                // Bound row (see `scene_bound_slot`): the drag edits the
-                // binding's instance slot, so snapshot THAT value and hold
-                // the real exposed id — the `Param` drag guard restores
-                // through the manifest, which is exactly right here.
-                if let Some(pid) = scene_bound_slot(project, &target, &addr, &catalog_default) {
-                    let slot_val = project
-                        .with_preset_graph_mut(&target, |inst| {
-                            inst.params
-                                .contains(pid.as_ref())
-                                .then(|| inst.get_base_param(pid.as_ref()))
-                        })
-                        .flatten()
-                        .unwrap_or(val);
-                    *drag_snapshot = Some(slot_val);
-                    *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::Param {
-                        target,
-                        param_id: pid,
-                        value: slot_val,
-                    });
-                    return DispatchResult::handled();
-                }
-                *drag_snapshot = Some(val);
-                // NOT the `Param` variant: a scene row's `param_id` is
-                // synthesized, so `Param`'s manifest `set_param` restore
-                // would be a silent no-op — the guard must hold the row's
-                // real write address (undo-race fix, 2026-07-18).
-                *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::SceneParam {
-                    target,
-                    addr,
-                    catalog_default: Box::new(catalog_default),
-                    value: val,
-                });
-                return DispatchResult::handled();
-            }
             if let Some(target) =
                 resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
             {
@@ -1462,72 +1178,6 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
         PanelAction::ParamChanged(gpt, param_id, val) => {
-            // C-P1a (D2/D4): motion writes for a converted scene row go
-            // through the SAME `SetGraphNodeParamCommand` shape the panel's
-            // old per-tick `SceneSetupParamChanged` used — but as a LIVE,
-            // non-undoable write (`execute()` called and discarded locally,
-            // `MutateProjectLive` on the content thread), never
-            // `ContentCommand::Execute`. That's the whole cadence fix D4
-            // names: the command shape was always correct, only the call
-            // site pushed an undo entry per motion tick.
-            if let Some((addr, target, catalog_default)) =
-                resolve_scene_write(ui, project, gpt, param_id, editor_target, effective_tab, active_layer, selection)
-            {
-                // Bound row → live-write the instance slot, mirroring the
-                // exposed-param motion path below (see `scene_bound_slot`).
-                if let Some(pid) = scene_bound_slot(project, &target, &addr, &catalog_default) {
-                    project.with_preset_graph_mut(&target, |inst| {
-                        inst.set_base_param(pid.as_ref(), *val);
-                    });
-                    if let Some(crate::app::ActiveInspectorDrag::Param { value, .. }) =
-                        active_inspector_drag
-                    {
-                        *value = *val;
-                    }
-                    let v = *val;
-                    let t = target.clone();
-                    ContentCommand::send(
-                        content_tx,
-                        ContentCommand::MutateProjectLive(Box::new(move |p| {
-                            p.with_preset_graph_mut(&t, |inst| {
-                                inst.set_base_param(pid.as_ref(), v);
-                            });
-                        })),
-                    );
-                    return DispatchResult::handled();
-                }
-                let mut cmd = SetGraphNodeParamCommand::new(
-                    target.clone(),
-                    addr.node_doc_id,
-                    addr.param_id.clone(),
-                    manifold_core::effect_graph_def::SerializedParamValue::Float { value: *val },
-                    catalog_default.clone(),
-                )
-                .with_scope(addr.scope_path.clone());
-                cmd.execute(project);
-                if let Some(crate::app::ActiveInspectorDrag::SceneParam { value, .. }) =
-                    active_inspector_drag
-                {
-                    *value = *val;
-                }
-                let addr2 = addr.clone();
-                let v = *val;
-                ContentCommand::send(
-                    content_tx,
-                    ContentCommand::MutateProjectLive(Box::new(move |p| {
-                        let mut cmd = SetGraphNodeParamCommand::new(
-                            target,
-                            addr2.node_doc_id,
-                            addr2.param_id.clone(),
-                            manifold_core::effect_graph_def::SerializedParamValue::Float { value: v },
-                            catalog_default,
-                        )
-                        .with_scope(addr2.scope_path.clone());
-                        cmd.execute(p);
-                    })),
-                );
-                return DispatchResult::handled();
-            }
             if let Some(target) =
                 resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
             {
@@ -1554,68 +1204,9 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
         PanelAction::ParamCommit(gpt, param_id) => {
-            // C-P1a (D2/D4): release commits ONE `SetGraphNodeParamCommand`
-            // through the undo-tracked `ContentCommand::Execute` path —
-            // exactly what `SceneSetupParamChanged`'s dispatch arm already
-            // does per-tick today; the fix is that this now fires ONCE per
-            // gesture instead of once per motion event.
-            //
-            // The scene probe must NOT consume the snapshot (read, don't
-            // `take()`): for an ordinary exposed card param the scene
-            // resolution misses, and a consumed snapshot leaves the exposed
-            // commit path below with `None` — every card slider drag (and
-            // param type-in, which rides this trio) recorded NO undo entry.
-            if let Some(old_val) = *drag_snapshot
-                && let Some((addr, target, catalog_default)) = resolve_scene_write(
-                    ui, project, gpt, param_id, editor_target, effective_tab, active_layer, selection,
-                )
-            {
-                *drag_snapshot = None;
-                // Bound row → the drag moved the instance slot; commit the
-                // same `ChangeGraphParamCommand` an exposed card commit uses.
-                if let Some(pid) = scene_bound_slot(project, &target, &addr, &catalog_default) {
-                    let new_val = project
-                        .with_preset_graph_mut(&target, |inst| {
-                            inst.params
-                                .contains(pid.as_ref())
-                                .then(|| inst.get_base_param(pid.as_ref()))
-                        })
-                        .flatten();
-                    if let Some(new_val) = new_val
-                        && (old_val - new_val).abs() > f32::EPSILON
-                    {
-                        let cmd = ChangeGraphParamCommand::new(target, pid, old_val, new_val);
-                        ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
-                    }
-                    *active_inspector_drag = None;
-                    return DispatchResult::handled();
-                }
-                let new_val = read_scene_node_param(project, &target, &addr);
-                if let Some(new_val) = new_val
-                    && (old_val - new_val).abs() > f32::EPSILON
-                {
-                    // `.with_previous(..)`: self-capture would read the
-                    // graph's CURRENT (post-drag) value at execute time —
-                    // the live `MutateProjectLive` ticks already got there
-                    // first — recording a no-op `previous == new`. Seed the
-                    // real pre-drag value we've held since `ParamSnapshot`
-                    // instead (see the method's doc comment).
-                    let cmd = SetGraphNodeParamCommand::new(
-                        target,
-                        addr.node_doc_id,
-                        addr.param_id.clone(),
-                        manifold_core::effect_graph_def::SerializedParamValue::Float { value: new_val },
-                        catalog_default,
-                    )
-                    .with_scope(addr.scope_path.clone())
-                    .with_previous(Some(manifold_core::effect_graph_def::SerializedParamValue::Float {
-                        value: old_val,
-                    }));
-                    ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
-                }
-                *active_inspector_drag = None;
-                return DispatchResult::handled();
-            }
+            // Release commits ONE `ChangeGraphParamCommand` through the
+            // undo-tracked `ContentCommand::Execute` path — one undo unit per
+            // gesture, not per motion event.
             if let Some(old_val) = drag_snapshot.take()
                 && let Some(target) =
                     resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
@@ -1643,75 +1234,9 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
         // BUG-250: an enum dropdown pick — one atomic write, one undo unit,
-        // no drag. Scene rows route through `resolve_scene_write` +
-        // `SetGraphNodeParamCommand` (`with_previous` seeded from the
-        // pre-pick value, same as `ParamCommit`); real card params take
-        // `ParamToggle`'s read-old/write-new `ChangeGraphParamCommand`
-        // shape. Both sides write the UI project locally for immediate
-        // re-render, exactly as `ParamChanged`/`ParamToggle` already do.
+        // no drag. `ParamToggle`'s read-old/write-new `ChangeGraphParamCommand`
+        // shape, exactly as `ParamChanged`/`ParamToggle` already do.
         PanelAction::ParamEnumSet(gpt, param_id, new_val) => {
-            if let Some((addr, target, catalog_default)) = resolve_scene_write(
-                ui, project, gpt, param_id, editor_target, effective_tab, active_layer, selection,
-            ) {
-                // Bound row → one atomic slot write + one undo unit, the
-                // exposed-param `ParamToggle` shape (see `scene_bound_slot`).
-                if let Some(pid) = scene_bound_slot(project, &target, &addr, &catalog_default) {
-                    let old_val = project
-                        .with_preset_graph_mut(&target, |inst| {
-                            inst.params
-                                .contains(pid.as_ref())
-                                .then(|| inst.get_base_param(pid.as_ref()))
-                        })
-                        .flatten();
-                    if let Some(old_val) = old_val
-                        && (old_val - *new_val).abs() > f32::EPSILON
-                    {
-                        project.with_preset_graph_mut(&target, |inst| {
-                            inst.set_base_param(pid.as_ref(), *new_val);
-                        });
-                        let cmd = ChangeGraphParamCommand::new(target, pid, old_val, *new_val);
-                        ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
-                    }
-                    return DispatchResult::handled();
-                }
-                // `read_scene_node_param` only sees STORED params — a def
-                // node omits keys still at their declared default (an
-                // untouched light has no `shadow_softness` key at all), so
-                // fall back to the panel's displayed snapshot from the id
-                // map, which resolves declared defaults (same source
-                // `ParamSnapshot` uses for the drag trio).
-                let snap = ui
-                    .scene_setup_panel
-                    .resolve_scene_param(param_id)
-                    .map(|(_, v)| v);
-                let old_val = read_scene_node_param(project, &target, &addr).or(snap);
-                if let Some(old_val) = old_val
-                    && (old_val - *new_val).abs() > f32::EPSILON
-                {
-                    let mut live = SetGraphNodeParamCommand::new(
-                        target.clone(),
-                        addr.node_doc_id,
-                        addr.param_id.clone(),
-                        manifold_core::effect_graph_def::SerializedParamValue::Float { value: *new_val },
-                        catalog_default.clone(),
-                    )
-                    .with_scope(addr.scope_path.clone());
-                    live.execute(project);
-                    let cmd = SetGraphNodeParamCommand::new(
-                        target,
-                        addr.node_doc_id,
-                        addr.param_id.clone(),
-                        manifold_core::effect_graph_def::SerializedParamValue::Float { value: *new_val },
-                        catalog_default,
-                    )
-                    .with_scope(addr.scope_path.clone())
-                    .with_previous(Some(manifold_core::effect_graph_def::SerializedParamValue::Float {
-                        value: old_val,
-                    }));
-                    ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
-                }
-                return DispatchResult::handled();
-            }
             if let Some(target) =
                 resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
             {
@@ -4088,7 +3613,6 @@ mod scene_card_convergence_tests {
     use super::*;
     use crate::content_command::ContentCommand;
     use manifold_core::PresetTypeId;
-    use manifold_core::effect_graph_def::SerializedParamValue;
     use manifold_core::types::LayerType;
     use manifold_renderer::node_graph::scene_vm::{AtmosphereVm, SceneVm};
 
@@ -4126,65 +3650,6 @@ mod scene_card_convergence_tests {
             panic!("SceneStarter's atmosphere must be Wired");
         };
         (a.density_addr.node_doc_id, a.density_value)
-    }
-
-    /// Configure `ui.scene_setup_panel` with a REAL Live VM for the fixture
-    /// layer — exercises `ScenePanel::build_docked`'s actual id-map
-    /// construction (D2), not a hand-poked shortcut.
-    fn open_scene_panel_on_fog_density(ui: &mut UIRoot, project: &Project, layer_id: &LayerId) -> u32 {
-        use manifold_ui::panels::scene_setup_panel::{
-            AtmosphereRowVm, CameraRowVm, EnvironmentRowVm, ModulatedRow, RowAddr, RowModulation,
-            RowValue, SceneSetupState, SceneSetupVm,
-        };
-        let def = fog_density_addr(project, layer_id);
-        let (node_doc_id, value) = density_node_and_value(&def);
-        ui.scene_setup_panel.open();
-        ui.scene_setup_panel.configure(SceneSetupState::Live(Box::new(SceneSetupVm {
-            layer_id: layer_id.clone(),
-            scene_name: "Scene".to_string(),
-            multiple_scenes: false,
-            object_count: 0,
-            light_count: 0,
-            shadow_caster_count: 0,
-            scene_root_node_id: 0,
-            environment: EnvironmentRowVm::None,
-            atmosphere: AtmosphereRowVm::Wired {
-                density: ModulatedRow {
-                    value: RowValue {
-                        addr: RowAddr::root(node_doc_id, "fog_density"),
-                        value,
-                        min: 0.0,
-                        max: 1.0,
-                        driven: false,
-                        exposed: false,
-                    },
-                    modulation: Box::new(RowModulation::default()),
-                },
-                height_falloff: ModulatedRow {
-                    value: RowValue {
-                        addr: RowAddr::root(node_doc_id, "height_falloff"),
-                        value: 0.3,
-                        min: 0.0,
-                        max: 2.0,
-                        driven: false,
-                        exposed: false,
-                    },
-                    modulation: Box::new(RowModulation::default()),
-                },
-            },
-            audio_send_labels: Vec::new(),
-            audio_send_ids: Vec::new(),
-            objects: Vec::new(),
-            lights: Vec::new(),
-            camera: CameraRowVm::None,
-        })));
-        let mut tree = manifold_ui::tree::UITree::new();
-        let dock = manifold_ui::node::Rect::new(0.0, 0.0, 400.0, 800.0);
-        let region = tree.begin_region(dock, manifold_ui::ZTier::Base, "scene_setup_test", manifold_ui::node::UIFlags::empty());
-        let start = tree.count();
-        ui.scene_setup_panel.build_docked(&mut tree, dock);
-        tree.end_region(region, start);
-        node_doc_id
     }
 
     #[allow(clippy::type_complexity)]
@@ -4397,846 +3862,6 @@ mod scene_card_convergence_tests {
         );
     }
 
-    /// BUG-249 gate (expose-then-arm): a `DriverToggle` on a scene row's
-    /// synthesized id must (1) materialize a REAL exposed instance param
-    /// via the same `ToggleNodeParamExposeCommand` path the mod button
-    /// dispatches, and (2) store the driver keyed by that real binding id —
-    /// present in `inst.params`, which is the ONLY namespace the runtime
-    /// (`modulation.rs`) resolves — never by the synth id, which the
-    /// runtime silently drops. Also proves re-toggle reuses the binding
-    /// (no duplicate exposure) and the panel read-back translation
-    /// (`scene_row_modulation`) reports the armed driver for the row.
-    #[test]
-    fn scene_row_driver_toggle_arms_a_real_exposed_param() {
-        let (mut project, layer_id) = scene_layer_project();
-        let mut h = Harness::new(Some(layer_id.clone()));
-        let node_doc_id = open_scene_panel_on_fog_density(&mut h.ui, &project, &layer_id);
-        // The pid a real click carries: the panel's curated row key
-        // ("density"), NOT the graph key ("fog_density") — the id map's
-        // VALUE carries the graph address, its KEY uses the panel key.
-        let pid = manifold_ui::panels::scene_setup_panel::synth_world_param_id(node_doc_id, "density");
-
-        h.dispatch(
-            &PanelAction::DriverToggle(manifold_ui::GraphParamTarget::Generator, pid.clone()),
-            &mut project,
-        );
-
-        let (_, layer) = project.timeline.find_layer_by_id(&layer_id).unwrap();
-        let inst = layer.gen_params().expect("arming must init gen_params");
-        let real_id = inst
-            .binding_id_for_node_param(node_doc_id, "fog_density")
-            .expect("first arm must materialize an exposed param binding");
-        assert_ne!(real_id, pid.as_ref(), "the binding id must not be the synth id");
-        assert!(
-            inst.params.contains(real_id.as_str()),
-            "the exposed param must exist in inst.params — the namespace modulation.rs resolves"
-        );
-        let drivers = inst.drivers.as_ref().expect("driver must be stored");
-        let d = drivers
-            .iter()
-            .find(|d| d.param_id.as_ref() == real_id)
-            .expect("driver must be keyed by the REAL binding id");
-        assert!(d.enabled);
-        assert!(
-            !drivers.iter().any(|d| d.param_id == pid),
-            "no driver may be keyed by the runtime-unresolvable synth id"
-        );
-        // base_value captured off the real param, not a garbage read of a
-        // param that doesn't exist (SceneStarter ships fog_density 0.04).
-        assert!((d.base_value - 0.04).abs() < 1e-6, "base_value = {}", d.base_value);
-
-        // Read-back half: the panel's per-row modulation lookup translates
-        // the row address to the real binding and sees the armed driver.
-        let row = crate::ui_bridge::state_sync::scene_row_modulation(
-            Some(inst),
-            None,
-            node_doc_id,
-            "fog_density",
-            &[],
-        );
-        assert!(row.driver_active, "scene row read-back must report the armed driver");
-
-        // Both mutations reached the content thread as undo-tracked
-        // commands: the exposure + the driver add.
-        let executes = h
-            .drain()
-            .iter()
-            .filter(|c| matches!(c, ContentCommand::Execute(_)))
-            .count();
-        assert_eq!(executes, 2, "expose + arm = two Execute commands");
-
-        // Second toggle: translate-only — reuses the binding (no duplicate
-        // exposure) and flips the SAME driver off.
-        h.dispatch(
-            &PanelAction::DriverToggle(manifold_ui::GraphParamTarget::Generator, pid.clone()),
-            &mut project,
-        );
-        let (_, layer) = project.timeline.find_layer_by_id(&layer_id).unwrap();
-        let inst = layer.gen_params().unwrap();
-        assert_eq!(
-            inst.binding_id_for_node_param(node_doc_id, "fog_density").as_deref(),
-            Some(real_id.as_str()),
-            "re-toggle must not mint a second binding"
-        );
-        let drivers = inst.drivers.as_ref().unwrap();
-        assert_eq!(drivers.len(), 1);
-        assert!(!drivers[0].enabled, "second toggle disarms the same driver");
-    }
-
-    /// Same race, scene-row flavor: a full project snapshot accepted
-    /// mid-drag (data_version bump from any concurrent Execute — MIDI
-    /// phantom commit, another gesture landing) replaces `local_project`
-    /// wholesale; the guard's restore must reach the row's REAL write
-    /// address (`SceneParam` variant), because the old `Param` restore was
-    /// a silent no-op for synthesized scene ids.
-    #[test]
-    fn scene_row_drag_survives_a_full_snapshot_replacement() {
-        let (mut project, layer_id) = scene_layer_project();
-        let mut h = Harness::new(Some(layer_id.clone()));
-        let node_doc_id = open_scene_panel_on_fog_density(&mut h.ui, &project, &layer_id);
-        let pid = manifold_ui::panels::scene_setup_panel::synth_world_param_id(node_doc_id, "density");
-        let target = manifold_ui::GraphParamTarget::Generator;
-        let before = density_node_and_value(&fog_density_addr(&project, &layer_id)).1;
-
-        // The content thread's stale full snapshot, captured pre-drag.
-        let stale = project.clone();
-
-        h.dispatch(&PanelAction::ParamSnapshot(target, pid.clone()), &mut project);
-        h.dispatch(&PanelAction::ParamChanged(target, pid.clone(), before + 0.3), &mut project);
-        h.drain();
-
-        // Simulate app_render's snapshot acceptance mid-drag: replace the
-        // project, then restore the guarded drag (app_render.rs ~line 817).
-        project = stale;
-        if let Some(ref drag) = h.active_inspector_drag {
-            drag.apply(&mut project);
-        }
-
-        h.dispatch(&PanelAction::ParamCommit(target, pid.clone()), &mut project);
-        let cmds = h.drain();
-        let mut execs: Vec<_> = cmds
-            .into_iter()
-            .filter_map(|c| match c {
-                ContentCommand::Execute(cmd) => Some(cmd),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(execs.len(), 1, "the commit must survive the snapshot stomp as ONE undo unit");
-        let cmd = &mut execs[0];
-        cmd.execute(&mut project);
-        let after_execute = density_node_and_value(&fog_density_addr(&project, &layer_id)).1;
-        assert!((after_execute - (before + 0.3)).abs() < 1e-4, "commit lands the dragged value");
-        cmd.undo(&mut project);
-        let after_undo = density_node_and_value(&fog_density_addr(&project, &layer_id)).1;
-        assert!((after_undo - before).abs() < 1e-4, "undo restores the pre-drag value");
-    }
-
-    /// Gate 2 (undo-granularity): `ParamSnapshot` → 3× `ParamChanged` →
-    /// `ParamCommit` yields exactly ONE `ContentCommand::Execute` (the
-    /// undo-tracked commit) and zero more, plus 3 `MutateProjectLive`s (the
-    /// live scrub ticks) — never one `Execute` per tick.
-    #[test]
-    fn fog_density_drag_session_yields_exactly_one_undo_entry() {
-        let (mut project, layer_id) = scene_layer_project();
-        let mut h = Harness::new(Some(layer_id.clone()));
-        let layer_idx = project.timeline.find_layer_index_by_id(&layer_id).unwrap();
-        h.active_layer = Some(layer_id.clone());
-        // `resolve_active_layer_index` (behind `resolve_graph_target`)
-        // walks `active_layer` as a `LayerId`, but `dispatch_inspector`'s
-        // own signature takes an index-derived `active_layer: &mut Option<LayerId>`
-        // — already set above; `layer_idx` only proves the fixture resolves.
-        let _ = layer_idx;
-
-        let node_doc_id = open_scene_panel_on_fog_density(&mut h.ui, &project, &layer_id);
-        let pid = manifold_ui::panels::scene_setup_panel::synth_world_param_id(node_doc_id, "density");
-        let target = manifold_ui::GraphParamTarget::Generator;
-
-        let before = density_node_and_value(&fog_density_addr(&project, &layer_id)).1;
-
-        h.dispatch(&PanelAction::ParamSnapshot(target, pid.clone()), &mut project);
-        assert!(h.drain().is_empty(), "Snapshot sends no ContentCommand");
-
-        for v in [before + 0.1, before + 0.2, before + 0.3] {
-            h.dispatch(&PanelAction::ParamChanged(target, pid.clone(), v), &mut project);
-        }
-        let mid_commands = h.drain();
-        assert_eq!(mid_commands.len(), 3, "3 live ticks");
-        assert!(
-            mid_commands.iter().all(|c| matches!(c, ContentCommand::MutateProjectLive(_))),
-            "every motion tick is a live (non-undoable) write, never Execute"
-        );
-
-        h.dispatch(&PanelAction::ParamCommit(target, pid.clone()), &mut project);
-        let commit_commands = h.drain();
-        assert_eq!(commit_commands.len(), 1, "exactly ONE command on release — the undo unit");
-        let ContentCommand::Execute(mut cmd) = commit_commands.into_iter().next().unwrap() else {
-            panic!("the commit command must be undo-tracked (Execute), not MutateProjectLive");
-        };
-
-        // The UI-thread `project` already reflects the live ticks (D4's
-        // cadence writes locally too) — the commit command's execute() is a
-        // same-value no-op there; what matters is its `undo()` restores the
-        // TRUE pre-drag value (BUG found+fixed this session: a naive
-        // self-captured `SetGraphNodeParamCommand` would instead capture
-        // the POST-drag value and undo to a no-op — see `with_previous`'s
-        // doc comment).
-        cmd.execute(&mut project);
-        let after_execute = density_node_and_value(&fog_density_addr(&project, &layer_id)).1;
-        assert!((after_execute - (before + 0.3)).abs() < 1e-4, "commit lands the final dragged value");
-
-        cmd.undo(&mut project);
-        let after_undo = density_node_and_value(&fog_density_addr(&project, &layer_id)).1;
-        assert!(
-            (after_undo - before).abs() < 1e-4,
-            "undo must restore the PRE-DRAG value ({before}), got {after_undo}"
-        );
-    }
-
-    /// Gate 4 (imported-def value test): the fog-density write lands in the
-    /// layer's OWN instance def (`Layer::generator_graph()`) — the same
-    /// per-layer override an imported/migrated scene graph lives in, not
-    /// just the pristine bundled catalog default. Mirrors C7's SceneStarter
-    /// precedent (`project.rs::scene_layer_project`) applied to a value
-    /// write instead of a structural add.
-    #[test]
-    fn fog_density_commit_writes_the_layer_instance_def() {
-        let (mut project, layer_id) = scene_layer_project();
-        // Before any edit, the layer has NO instance override yet — reads
-        // fall back to the catalog default (SetGraphNodeParamCommand lifts
-        // one on first write, same as every other graph command family).
-        assert!(
-            project.timeline.find_layer_by_id(&layer_id).unwrap().1.generator_graph().is_none(),
-            "a fresh layer has no per-instance override yet"
-        );
-
-        let mut h = Harness::new(Some(layer_id.clone()));
-        let node_doc_id = open_scene_panel_on_fog_density(&mut h.ui, &project, &layer_id);
-        let pid = manifold_ui::panels::scene_setup_panel::synth_world_param_id(node_doc_id, "density");
-        let target = manifold_ui::GraphParamTarget::Generator;
-
-        h.dispatch(&PanelAction::ParamSnapshot(target, pid.clone()), &mut project);
-        h.dispatch(&PanelAction::ParamChanged(target, pid.clone(), 0.66), &mut project);
-        h.drain();
-        h.dispatch(&PanelAction::ParamCommit(target, pid.clone()), &mut project);
-        let ContentCommand::Execute(mut cmd) = h.drain().into_iter().next().unwrap() else {
-            panic!("expected Execute");
-        };
-        cmd.execute(&mut project);
-
-        // Lifted an instance override (ParamChanged's local write already
-        // did this via `SetGraphNodeParamCommand::execute`'s
-        // `get_or_insert_with(catalog_default)`).
-        let (_, layer) = project.timeline.find_layer_by_id(&layer_id).unwrap();
-        let inst_def = layer.generator_graph().expect("the write must land in the layer's OWN instance def");
-        let node = inst_def.nodes.iter().find(|n| n.id == node_doc_id).unwrap();
-        match node.params.get("fog_density") {
-            Some(SerializedParamValue::Float { value }) => {
-                assert!((value - 0.66).abs() < 1e-4, "instance def must carry the committed value, got {value}");
-            }
-            other => panic!("expected a Float fog_density in the instance def, got {other:?}"),
-        }
-    }
-
-    /// Diagnostic for a discrepancy found in the manual `--script` flow
-    /// (`scene-setup-fog-density-card-row.json`): after `SceneSetupAddFog`
-    /// (dispatched via `dispatch_project`, a DIFFERENT sub-dispatcher than
-    /// `dispatch_inspector`) creates the fog node, then a Snapshot→3×Changed→
-    /// Commit session via `dispatch_inspector` on THAT node — does the value
-    /// actually persist? Isolates whether the flow script's "still shows
-    /// 0.00" symptom is a real write bug or a headless-harness-only
-    /// display/rebuild-cadence artifact.
-    #[test]
-    fn fog_density_write_persists_after_add_fog_then_drag_session() {
-        use manifold_core::effect_graph_def::EffectGraphDef;
-        use manifold_renderer::node_graph::scene_vm::RENDER_SCENE_TYPE_ID;
-
-        let mut project = Project::default();
-        let idx = project.timeline.add_layer(
-            "Scene",
-            LayerType::Generator,
-            PresetTypeId::from_string("SceneStarter".to_string()),
-        );
-        let layer_id = project.timeline.layers[idx].layer_id.clone();
-
-        // Strip SceneStarter's default fog so this starts in the SAME
-        // "Atmosphere::None" state gltfscene's post-import layer is in —
-        // an explicit instance override with the atmosphere node + its
-        // wire removed.
-        let def: EffectGraphDef = manifold_renderer::node_graph::bundled_preset_def(
-            &project.timeline.layers[idx].generator_type().clone(),
-        )
-        .cloned()
-        .expect("SceneStarter is a bundled preset");
-        let render_scene_id = def
-            .nodes
-            .iter()
-            .find(|n| n.type_id == RENDER_SCENE_TYPE_ID)
-            .expect("SceneStarter has a render_scene node")
-            .id;
-        let atmosphere_node_id = def
-            .nodes
-            .iter()
-            .find(|n| n.type_id == "node.atmosphere")
-            .expect("SceneStarter has a node.atmosphere node")
-            .id;
-        let mut stripped = def.clone();
-        stripped.nodes.retain(|n| n.id != atmosphere_node_id);
-        stripped.wires.retain(|w| w.from_node != atmosphere_node_id && w.to_node != atmosphere_node_id);
-        project.timeline.layers[idx].gen_params_or_init().graph = Some(stripped);
-
-        let (content_tx, content_rx) = crossbeam_channel::unbounded();
-        let content_state = crate::content_state::ContentState::default();
-        let mut ui = UIRoot::new();
-        let mut selection = manifold_ui::UIState::new();
-        let mut active_layer = Some(layer_id.clone());
-        let mut user_prefs = crate::user_prefs::UserPrefs::load();
-
-        // 1) "+ Add Fog" — the SAME `dispatch_project` sub-dispatcher the
-        // panel's button click reaches (a DIFFERENT function than
-        // `dispatch_inspector`, which the drag session below uses).
-        let add_fog = PanelAction::SceneSetupAddFog(layer_id.clone(), render_scene_id);
-        let result = super::super::project::dispatch_project(
-            &add_fog, &mut project, &content_tx, &content_state, &mut ui, &mut selection,
-            &mut active_layer, &mut user_prefs,
-        );
-        assert!(result.structural_change, "AddFog is a structural graph edit");
-        content_rx.try_iter().for_each(drop);
-
-        // 2) Open the scene panel on the FRESH state (id map now sees the
-        // newly added fog node) — mirrors the flow script's own re-open.
-        let node_doc_id = open_scene_panel_on_fog_density(&mut ui, &project, &layer_id);
-        let pid = manifold_ui::panels::scene_setup_panel::synth_world_param_id(node_doc_id, "density");
-        let target = manifold_ui::GraphParamTarget::Generator;
-
-        let mut h = Harness::new(Some(layer_id.clone()));
-        h.ui = ui;
-        h.dispatch(&PanelAction::ParamSnapshot(target, pid.clone()), &mut project);
-        for v in [0.5, 0.95, 1.0] {
-            h.dispatch(&PanelAction::ParamChanged(target, pid.clone(), v), &mut project);
-        }
-        h.drain();
-        h.dispatch(&PanelAction::ParamCommit(target, pid.clone()), &mut project);
-        let ContentCommand::Execute(mut cmd) = h.drain().into_iter().next().unwrap() else {
-            panic!("expected Execute — the write must be undo-tracked even after Add Fog");
-        };
-        cmd.execute(&mut project);
-
-        let (_, layer) = project.timeline.find_layer_by_id(&layer_id).unwrap();
-        let inst_def = layer.generator_graph().expect("instance override must exist post-AddFog");
-        let node = inst_def.nodes.iter().find(|n| n.id == node_doc_id).unwrap();
-        match node.params.get("fog_density") {
-            Some(SerializedParamValue::Float { value }) => {
-                assert!((value - 1.0).abs() < 1e-3, "post-AddFog commit must land 1.0, got {value}");
-            }
-            other => panic!("expected a Float fog_density, got {other:?}"),
-        }
-    }
-
-    // ── C-P1b: Object family ────────────────────────────────────────
-    // SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md C-P1b gates, mirroring C-P1a's
-    // fog-density gates above for the converted Object family. Uses the
-    // REAL `AddSceneObjectCommand` (via `dispatch_project`'s
-    // `SceneSetupAddObject` arm, the panel's own "+ Object" button path) —
-    // this command wraps the new object in a `GROUP_TYPE_ID` node and nests
-    // its `node.transform_3d`/material inside that group
-    // (`crates/manifold-editing/src/commands/graph.rs`'s
-    // `AddSceneObjectCommand::execute`), so Position/Rotation/Scale are
-    // ALREADY the D12 group-`scope_path` case for every object this command
-    // creates — the same shape a gltfscene import produces. This is the
-    // family C-P1a's own `read_scene_node_param` explicitly left
-    // unsupported (root-scope only); C-P1b extends it via
-    // `descend_to_scope` (see that fn's doc comment) — these tests are what
-    // would have caught the gap silently no-op'ing `ParamCommit`.
-
-    use manifold_renderer::node_graph::scene_vm::{MaterialVm, SceneObjectVm};
-
-    /// Add one object to a fresh SceneStarter layer via the REAL
-    /// `SceneSetupAddObject` dispatch path, and resolve its transform's
-    /// write address off the SAME `SceneVm::from_def` production code walks.
-    /// SceneStarter ships with 2 objects already wired — `next_index` must
-    /// be the REAL current count (mirrors `project.rs`'s own
-    /// `scene_setup_add_object_dispatches_add_scene_object_command` fixture,
-    /// `before as u32`), or the new object's `object_k` wire collides with
-    /// an existing one. Returns `(project, layer_id, object_node_id,
-    /// transform_node_doc_id, group_node_id)` for the NEWLY ADDED object
-    /// (the last one in `vm.objects`) — `object_node_id` is needed to
-    /// explicitly select it (D7's default selection resolves the FIRST
-    /// Known object, which for SceneStarter is one of its own 2 built-in
-    /// objects, not the one this fixture adds).
-    fn scene_layer_with_one_object() -> (Project, LayerId, u32, u32, u32) {
-        let (mut project, layer_id) = scene_layer_project();
-        let (_, layer) = project.timeline.find_layer_by_id(&layer_id).unwrap();
-        let def = manifold_renderer::node_graph::bundled_preset_def(&layer.generator_type().clone())
-            .cloned()
-            .expect("SceneStarter is a bundled preset");
-        let render_scene_id = def
-            .nodes
-            .iter()
-            .find(|n| n.type_id == manifold_renderer::node_graph::scene_vm::RENDER_SCENE_TYPE_ID)
-            .expect("SceneStarter has a render_scene node")
-            .id;
-        let next_index = match def.nodes.iter().find(|n| n.id == render_scene_id).and_then(|n| n.params.get("objects")) {
-            Some(SerializedParamValue::Float { value }) => *value as u32,
-            _ => 0,
-        };
-
-        let (content_tx, content_rx) = crossbeam_channel::unbounded();
-        let content_state = crate::content_state::ContentState::default();
-        let mut ui = UIRoot::new();
-        let mut selection = manifold_ui::UIState::new();
-        let mut active_layer = Some(layer_id.clone());
-        let mut user_prefs = crate::user_prefs::UserPrefs::load();
-        let add_object = PanelAction::SceneSetupAddObject(layer_id.clone(), render_scene_id, next_index);
-        let result = super::super::project::dispatch_project(
-            &add_object, &mut project, &content_tx, &content_state, &mut ui, &mut selection,
-            &mut active_layer, &mut user_prefs,
-        );
-        assert!(result.structural_change, "AddObject is a structural graph edit");
-        content_rx.try_iter().for_each(drop);
-
-        let (_, layer) = project.timeline.find_layer_by_id(&layer_id).unwrap();
-        let inst_def = layer.generator_graph().expect("AddObject must lift an instance override");
-        let vm = SceneVm::from_def(inst_def).expect("the layer still resolves as a scene");
-        let SceneObjectVm::Known(obj) = vm.objects.last().expect("the new object was added") else {
-            panic!("the added object must resolve Known");
-        };
-        let group_node_id = obj.group_node_id.expect("AddSceneObjectCommand wraps the object in a group (D12)");
-        let transform = obj.transform.as_ref().expect("the added object has a transform_3d");
-        assert_eq!(
-            transform.pos_addr.0.scope_path,
-            vec![group_node_id],
-            "AddSceneObjectCommand nests transform_3d INSIDE the group — pos_x is scope_path=[group_node_id], not root"
-        );
-        (project, layer_id, obj.object_node_id, transform.node_doc_id, group_node_id)
-    }
-
-    /// Build a real `Live` scene VM for `layer_id` via the actual
-    /// `sync_inspector_data` production path (not a hand-rolled VM),
-    /// explicitly selects `object_node_id` (D7's default selection resolves
-    /// the FIRST Known object, not necessarily the one under test), then
-    /// builds the panel's real tree so `ui.scene_setup_panel`'s
-    /// `object_card` id map is populated by `build_object_card_row`.
-    fn open_scene_panel_via_sync(ui: &mut UIRoot, project: &Project, layer_id: &LayerId, object_node_id: u32) {
-        let layer_idx = project.timeline.find_layer_index_by_id(layer_id).unwrap();
-        ui.scene_setup_panel.open();
-        ui.scene_setup_panel.set_selection(
-            layer_id.clone(),
-            manifold_ui::panels::scene_setup_panel::SceneSelection::Object(object_node_id),
-        );
-        super::super::state_sync::sync_inspector_data(ui, project, Some(layer_idx), &manifold_ui::UIState::new(), &[]);
-        let mut tree = manifold_ui::tree::UITree::new();
-        let dock = manifold_ui::node::Rect::new(0.0, 0.0, 400.0, 800.0);
-        let region = tree.begin_region(dock, manifold_ui::ZTier::Base, "scene_setup_test", manifold_ui::node::UIFlags::empty());
-        let start = tree.count();
-        ui.scene_setup_panel.build_docked(&mut tree, dock);
-        tree.end_region(region, start);
-    }
-
-    /// Gate 2 (undo-granularity), Object family: a Position-X drag session
-    /// through the group-scoped card row yields exactly ONE undo entry that
-    /// restores the pre-drag value — same shape as C-P1a's fog-density gate,
-    /// proven on a row whose `scope_path` is non-empty (the case C-P1a never
-    /// exercised).
-    #[test]
-    fn object_position_x_drag_session_yields_exactly_one_undo_entry() {
-        let (mut project, layer_id, object_node_id, transform_node_doc_id, _group_node_id) =
-            scene_layer_with_one_object();
-        let mut h = Harness::new(Some(layer_id.clone()));
-        open_scene_panel_via_sync(&mut h.ui, &project, &layer_id, object_node_id);
-
-        let pid = manifold_ui::panels::scene_setup_panel::synth_world_param_id(transform_node_doc_id, "pos_x");
-        let target = manifold_ui::GraphParamTarget::Generator;
-        let before = 0.0_f32; // AddSceneObjectCommand's fresh transform_3d has no pos_x override.
-
-        h.dispatch(&PanelAction::ParamSnapshot(target, pid.clone()), &mut project);
-        assert!(h.drain().is_empty(), "Snapshot sends no ContentCommand");
-
-        for v in [1.0, 2.0, 3.0] {
-            h.dispatch(&PanelAction::ParamChanged(target, pid.clone(), v), &mut project);
-        }
-        let mid_commands = h.drain();
-        assert_eq!(mid_commands.len(), 3, "3 live ticks");
-        assert!(
-            mid_commands.iter().all(|c| matches!(c, ContentCommand::MutateProjectLive(_))),
-            "every motion tick is a live (non-undoable) write, never Execute"
-        );
-
-        h.dispatch(&PanelAction::ParamCommit(target, pid.clone()), &mut project);
-        let commit_commands = h.drain();
-        assert_eq!(commit_commands.len(), 1, "exactly ONE command on release — the undo unit");
-        let ContentCommand::Execute(mut cmd) = commit_commands.into_iter().next().unwrap() else {
-            panic!("the commit command must be undo-tracked (Execute), not MutateProjectLive");
-        };
-
-        cmd.execute(&mut project);
-        let read_pos_x = |p: &Project| {
-            let (_, layer) = p.timeline.find_layer_by_id(&layer_id).unwrap();
-            let vm = SceneVm::from_def(layer.generator_graph().unwrap()).unwrap();
-            let SceneObjectVm::Known(obj) = vm.objects.last().unwrap() else { panic!("must be Known") };
-            obj.transform.as_ref().unwrap().pos_value.0
-        };
-        assert!((read_pos_x(&project) - 3.0).abs() < 1e-4, "commit lands the final dragged value");
-
-        cmd.undo(&mut project);
-        assert!(
-            (read_pos_x(&project) - before).abs() < 1e-4,
-            "undo must restore the PRE-DRAG value ({before}), got {}",
-            read_pos_x(&project)
-        );
-    }
-
-    /// Gate 4 (imported-def value test), Object family: a Position-X commit
-    /// lands in the layer's OWN instance def, AT THE CORRECT GROUP SCOPE —
-    /// this is the family where D12 scoping actually bites (C-P1a's own
-    /// `read_scene_node_param` was root-scope-only; a naive port would have
-    /// silently no-op'd every Object-family `ParamCommit`, per that fn's own
-    /// doc comment).
-    #[test]
-    fn object_position_x_commit_writes_the_layer_instance_def_at_group_scope() {
-        let (mut project, layer_id, object_node_id, transform_node_doc_id, group_node_id) =
-            scene_layer_with_one_object();
-        let mut h = Harness::new(Some(layer_id.clone()));
-        open_scene_panel_via_sync(&mut h.ui, &project, &layer_id, object_node_id);
-
-        let pid = manifold_ui::panels::scene_setup_panel::synth_world_param_id(transform_node_doc_id, "pos_x");
-        let target = manifold_ui::GraphParamTarget::Generator;
-
-        h.dispatch(&PanelAction::ParamSnapshot(target, pid.clone()), &mut project);
-        h.dispatch(&PanelAction::ParamChanged(target, pid.clone(), 5.5), &mut project);
-        h.drain();
-        h.dispatch(&PanelAction::ParamCommit(target, pid.clone()), &mut project);
-        let ContentCommand::Execute(mut cmd) = h.drain().into_iter().next().unwrap() else {
-            panic!("expected Execute");
-        };
-        cmd.execute(&mut project);
-
-        let (_, layer) = project.timeline.find_layer_by_id(&layer_id).unwrap();
-        let inst_def = layer.generator_graph().expect("the write must land in the layer's OWN instance def");
-        let group = inst_def.nodes.iter().find(|n| n.id == group_node_id).expect("the group node must still exist");
-        let body = group.group.as_ref().expect("the group must carry a body");
-        let node = body.nodes.iter().find(|n| n.id == transform_node_doc_id).expect(
-            "the transform node must be found INSIDE the group body — a root-only lookup would miss it entirely",
-        );
-        match node.params.get("pos_x") {
-            Some(SerializedParamValue::Float { value }) => {
-                assert!((value - 5.5).abs() < 1e-4, "instance def must carry the committed value, got {value}");
-            }
-            other => panic!("expected a Float pos_x in the group-scoped instance def, got {other:?}"),
-        }
-    }
-
-    /// Gate 4's Roughness half: `AddSceneObjectCommand` spawns a
-    /// `node.phong_material` (no metallic/roughness — D4's "the atom's own
-    /// params otherwise"), so this test converts the added object's
-    /// material node to `node.pbr_material` directly on the instance def
-    /// (the same shape a PBR-material gltf import produces) to exercise the
-    /// Roughness card row specifically, at the SAME group scope Position-X
-    /// proved above.
-    #[test]
-    fn object_roughness_commit_writes_the_layer_instance_def_at_group_scope() {
-        let (mut project, layer_id, object_node_id, _transform_node_doc_id, group_node_id) =
-            scene_layer_with_one_object();
-        let mat_node_doc_id = {
-            let (_, layer) = project.timeline.find_layer_by_id(&layer_id).unwrap();
-            let inst_def = layer.generator_graph().unwrap();
-            let group = inst_def.nodes.iter().find(|n| n.id == group_node_id).unwrap();
-            let body = group.group.as_ref().unwrap();
-            body.nodes
-                .iter()
-                .find(|n| n.type_id == "node.phong_material")
-                .expect("AddSceneObjectCommand spawns a phong material")
-                .id
-        };
-        {
-            let (_, layer) = project.timeline.find_layer_by_id_mut(&layer_id).unwrap();
-            let inst_def = layer.gen_params_or_init().graph.as_mut().unwrap();
-            let group = inst_def.nodes.iter_mut().find(|n| n.id == group_node_id).unwrap();
-            let body = group.group.as_mut().unwrap();
-            let mat_node = body.nodes.iter_mut().find(|n| n.id == mat_node_doc_id).unwrap();
-            mat_node.type_id = "node.pbr_material".to_string();
-            mat_node.params.insert("metallic".to_string(), SerializedParamValue::Float { value: 0.0 });
-            mat_node.params.insert("roughness".to_string(), SerializedParamValue::Float { value: 0.5 });
-        }
-        // Sanity: the def now resolves Roughness as a real Pbr material row
-        // before driving any dispatch.
-        {
-            let (_, layer) = project.timeline.find_layer_by_id(&layer_id).unwrap();
-            let vm = SceneVm::from_def(layer.generator_graph().unwrap()).unwrap();
-            let SceneObjectVm::Known(obj) = vm.objects.last().unwrap() else { panic!("must be Known") };
-            let MaterialVm::Known(m) = &obj.material else { panic!("must resolve Known material") };
-            assert!(m.metallic_roughness.is_some(), "converted material must resolve metallic_roughness");
-        }
-
-        let mut h = Harness::new(Some(layer_id.clone()));
-        open_scene_panel_via_sync(&mut h.ui, &project, &layer_id, object_node_id);
-
-        let pid = manifold_ui::panels::scene_setup_panel::synth_world_param_id(mat_node_doc_id, "roughness");
-        let target = manifold_ui::GraphParamTarget::Generator;
-
-        h.dispatch(&PanelAction::ParamSnapshot(target, pid.clone()), &mut project);
-        h.dispatch(&PanelAction::ParamChanged(target, pid.clone(), 0.9), &mut project);
-        h.drain();
-        h.dispatch(&PanelAction::ParamCommit(target, pid.clone()), &mut project);
-        let ContentCommand::Execute(mut cmd) = h.drain().into_iter().next().unwrap() else {
-            panic!("expected Execute");
-        };
-        cmd.execute(&mut project);
-
-        let (_, layer) = project.timeline.find_layer_by_id(&layer_id).unwrap();
-        let inst_def = layer.generator_graph().unwrap();
-        let group = inst_def.nodes.iter().find(|n| n.id == group_node_id).unwrap();
-        let body = group.group.as_ref().unwrap();
-        let node = body.nodes.iter().find(|n| n.id == mat_node_doc_id).unwrap();
-        match node.params.get("roughness") {
-            Some(SerializedParamValue::Float { value }) => {
-                assert!((value - 0.9).abs() < 1e-4, "instance def must carry the committed roughness, got {value}");
-            }
-            other => panic!("expected a Float roughness in the group-scoped instance def, got {other:?}"),
-        }
-    }
-
-    /// C-P1c (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md): fresh SceneStarter's
-    /// own Light/Camera node ids — bundled with the layer, never grouped
-    /// (unlike Objects — `state_sync`'s Light/Camera `row` closure always
-    /// synthesizes `RowAddr::root`, so unlike C-P1b's Object-family bug there
-    /// is no group-scope case to prove here; these families' commits land at
-    /// root scope by construction).
-    fn scene_layer_starter_light_and_camera() -> (Project, LayerId, u32, u32) {
-        let (project, layer_id) = scene_layer_project();
-        let (_, layer) = project.timeline.find_layer_by_id(&layer_id).unwrap();
-        let def = layer.generator_graph().cloned().unwrap_or_else(|| {
-            manifold_renderer::node_graph::bundled_preset_def(&layer.generator_type().clone())
-                .cloned()
-                .expect("SceneStarter is a bundled preset")
-        });
-        let vm = SceneVm::from_def(&def).expect("SceneStarter resolves as a scene");
-        let light_node_doc_id = vm
-            .lights
-            .iter()
-            .find_map(|l| match l {
-                manifold_renderer::node_graph::scene_vm::SceneLightVm::Known(r) => Some(r.node_doc_id),
-                _ => None,
-            })
-            .expect("SceneStarter ships a Known light");
-        let camera_node_doc_id = match &vm.camera {
-            manifold_renderer::node_graph::scene_vm::CameraVm::Orbit(c) => c.node_doc_id,
-            other => panic!("SceneStarter's camera must be Orbit, got {other:?}"),
-        };
-        (project, layer_id, light_node_doc_id, camera_node_doc_id)
-    }
-
-    /// BUG-237's own render-proof half, at the dispatch level: a Light
-    /// Intensity commit through the REAL card-row dispatch path
-    /// (`ParamSnapshot`/`ParamChanged`/`ParamCommit`) must land in the
-    /// layer's own instance def, at ROOT scope — the mechanism the render-
-    /// level PNG proof (session report) shows actually moves pixels.
-    #[test]
-    fn light_intensity_commit_writes_the_layer_instance_def_at_root_scope() {
-        let (mut project, layer_id, light_node_doc_id, _camera_node_doc_id) = scene_layer_starter_light_and_camera();
-        let mut h = Harness::new(Some(layer_id.clone()));
-        h.ui.scene_setup_panel.open();
-        h.ui.scene_setup_panel.set_selection(
-            layer_id.clone(),
-            manifold_ui::panels::scene_setup_panel::SceneSelection::Light(light_node_doc_id),
-        );
-        let layer_idx = project.timeline.find_layer_index_by_id(&layer_id).unwrap();
-        super::super::state_sync::sync_inspector_data(&mut h.ui, &project, Some(layer_idx), &manifold_ui::UIState::new(), &[]);
-        let mut tree = manifold_ui::tree::UITree::new();
-        let dock = manifold_ui::node::Rect::new(0.0, 0.0, 400.0, 800.0);
-        let region = tree.begin_region(dock, manifold_ui::ZTier::Base, "scene_setup_test", manifold_ui::node::UIFlags::empty());
-        let start = tree.count();
-        h.ui.scene_setup_panel.build_docked(&mut tree, dock);
-        tree.end_region(region, start);
-
-        let pid = manifold_ui::panels::scene_setup_panel::synth_world_param_id(light_node_doc_id, "intensity");
-        let target = manifold_ui::GraphParamTarget::Generator;
-
-        h.dispatch(&PanelAction::ParamSnapshot(target, pid.clone()), &mut project);
-        assert!(h.drain().is_empty(), "Snapshot sends no ContentCommand");
-        h.dispatch(&PanelAction::ParamChanged(target, pid.clone(), 6.0), &mut project);
-        let live = h.drain();
-        assert_eq!(live.len(), 1, "one live tick");
-        assert!(
-            matches!(live[0], ContentCommand::MutateProjectLive(_)),
-            "a motion tick is a live (non-undoable) write, never Execute"
-        );
-        h.dispatch(&PanelAction::ParamCommit(target, pid.clone()), &mut project);
-        let ContentCommand::Execute(mut cmd) = h.drain().into_iter().next().unwrap() else {
-            panic!("expected Execute — the commit command must be undo-tracked");
-        };
-        cmd.execute(&mut project);
-
-        let (_, layer) = project.timeline.find_layer_by_id(&layer_id).unwrap();
-        let inst_def = layer.generator_graph().expect("the write must land in the layer's OWN instance def");
-        let node = inst_def
-            .nodes
-            .iter()
-            .find(|n| n.id == light_node_doc_id)
-            .expect("the light node must be found at ROOT scope — never grouped");
-        match node.params.get("intensity") {
-            Some(SerializedParamValue::Float { value }) => {
-                assert!((value - 6.0).abs() < 1e-4, "instance def must carry the committed intensity, got {value}");
-            }
-            other => panic!("expected a Float intensity in the root-scoped instance def, got {other:?}"),
-        }
-
-        cmd.undo(&mut project);
-        let (_, layer) = project.timeline.find_layer_by_id(&layer_id).unwrap();
-        let inst_def = layer.generator_graph();
-        let still_overridden = inst_def
-            .and_then(|d| d.nodes.iter().find(|n| n.id == light_node_doc_id))
-            .and_then(|n| n.params.get("intensity"))
-            .is_some_and(|v| matches!(v, SerializedParamValue::Float { value } if (value - 6.0).abs() < 1e-4));
-        assert!(!still_overridden, "undo must restore the pre-drag intensity — one undo unit per gesture");
-    }
-
-    /// C-P1c: the Camera family's twin — proves the commit path AND D10's
-    /// degrees-display contract (`is_angle`) don't interfere with each other:
-    /// `ParamChanged`/`ParamCommit` carry the RAW RADIANS value throughout
-    /// (the degrees conversion is a display/drag-scaling concern that lives
-    /// entirely inside `build_camera_card_row`'s `ParamRow.spec.is_angle` and the
-    /// UI-level drag math, never the dispatched payload).
-    #[test]
-    fn camera_orbit_commit_writes_the_layer_instance_def_at_root_scope() {
-        let (mut project, layer_id, _light_node_doc_id, camera_node_doc_id) = scene_layer_starter_light_and_camera();
-        let mut h = Harness::new(Some(layer_id.clone()));
-        h.ui.scene_setup_panel.open();
-        h.ui.scene_setup_panel
-            .set_selection(layer_id.clone(), manifold_ui::panels::scene_setup_panel::SceneSelection::Camera);
-        let layer_idx = project.timeline.find_layer_index_by_id(&layer_id).unwrap();
-        super::super::state_sync::sync_inspector_data(&mut h.ui, &project, Some(layer_idx), &manifold_ui::UIState::new(), &[]);
-        let mut tree = manifold_ui::tree::UITree::new();
-        let dock = manifold_ui::node::Rect::new(0.0, 0.0, 400.0, 800.0);
-        let region = tree.begin_region(dock, manifold_ui::ZTier::Base, "scene_setup_test", manifold_ui::node::UIFlags::empty());
-        let start = tree.count();
-        h.ui.scene_setup_panel.build_docked(&mut tree, dock);
-        tree.end_region(region, start);
-
-        let pid = manifold_ui::panels::scene_setup_panel::synth_world_param_id(camera_node_doc_id, "orbit");
-        let target = manifold_ui::GraphParamTarget::Generator;
-        let new_orbit_radians = 1.2_f32;
-
-        h.dispatch(&PanelAction::ParamSnapshot(target, pid.clone()), &mut project);
-        h.dispatch(&PanelAction::ParamChanged(target, pid.clone(), new_orbit_radians), &mut project);
-        h.drain();
-        h.dispatch(&PanelAction::ParamCommit(target, pid.clone()), &mut project);
-        let ContentCommand::Execute(mut cmd) = h.drain().into_iter().next().unwrap() else {
-            panic!("expected Execute");
-        };
-        cmd.execute(&mut project);
-
-        let (_, layer) = project.timeline.find_layer_by_id(&layer_id).unwrap();
-        let inst_def = layer.generator_graph().expect("the write must land in the layer's OWN instance def");
-        let node = inst_def
-            .nodes
-            .iter()
-            .find(|n| n.id == camera_node_doc_id)
-            .expect("the camera node must be found at ROOT scope — never grouped");
-        match node.params.get("orbit") {
-            Some(SerializedParamValue::Float { value }) => {
-                assert!(
-                    (value - new_orbit_radians).abs() < 1e-4,
-                    "instance def must carry the RAW RADIANS commit value ({new_orbit_radians}), got {value} — \
-                     is_angle is a display concern, never a storage conversion"
-                );
-            }
-            other => panic!("expected a Float orbit in the root-scoped instance def, got {other:?}"),
-        }
-    }
-
-    /// Root-fix regression (2026-07-18, Peter: "cameras … don't work from
-    /// the scene controls"): the glb importer card-binds its camera
-    /// (`cam_orbit` → `camera.orbit`), and a def write on a BOUND param is
-    /// structurally dead — the chain rebuild re-seeds the binding's value
-    /// over it. A Scene Setup camera drag on an imported layer must
-    /// therefore edit the binding's INSTANCE SLOT (`cam_orbit`), the same
-    /// value the perform card drives, and never the def node param.
-    #[test]
-    fn imported_scene_camera_drag_writes_the_bound_card_slot_not_the_def() {
-        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../tests/fixtures/gltf/cc0__oomurasaki_azalea_r._x_pulchrum.glb");
-        let (def, _report) =
-            manifold_renderer::node_graph::gltf_import::assemble_import_graph(&fixture)
-                .expect("assemble azalea");
-        let camera_node_doc_id = match SceneVm::from_def(&def).expect("import resolves as a scene").camera {
-            manifold_renderer::node_graph::scene_vm::CameraVm::Orbit(c) => c.node_doc_id,
-            other => panic!("importer camera must be Orbit, got {other:?}"),
-        };
-
-        // Install exactly the way `finish_import_model` does: embedded
-        // preset + overlay first (so `init_defaults` seeds `cam_orbit`),
-        // then the production layer command.
-        let mut project = Project::default();
-        let embedded = manifold_core::project::EmbeddedPreset {
-            kind: manifold_core::preset_def::PresetKind::Generator,
-            def,
-            origin: manifold_core::project::EmbeddedOrigin::Saved,
-        };
-        project.upsert_embedded_preset(embedded.clone());
-        crate::project_io::install_project_preset_overlay(&project);
-        let mut layer_cmd = manifold_editing::commands::layer::ImportModelLayerCommand::new(
-            "Azalea".to_string(),
-            embedded,
-            0,
-            None,
-        );
-        layer_cmd.execute(&mut project);
-        let layer_id = layer_cmd.inserted_layer_id().expect("layer inserted");
-
-        let mut h = Harness::new(Some(layer_id.clone()));
-        h.ui.scene_setup_panel.open();
-        h.ui.scene_setup_panel
-            .set_selection(layer_id.clone(), manifold_ui::panels::scene_setup_panel::SceneSelection::Camera);
-        let layer_idx = project.timeline.find_layer_index_by_id(&layer_id).unwrap();
-        super::super::state_sync::sync_inspector_data(&mut h.ui, &project, Some(layer_idx), &manifold_ui::UIState::new(), &[]);
-        let mut tree = manifold_ui::tree::UITree::new();
-        let dock = manifold_ui::node::Rect::new(0.0, 0.0, 400.0, 800.0);
-        let region = tree.begin_region(dock, manifold_ui::ZTier::Base, "scene_setup_test", manifold_ui::node::UIFlags::empty());
-        let start = tree.count();
-        h.ui.scene_setup_panel.build_docked(&mut tree, dock);
-        tree.end_region(region, start);
-
-        let pid = manifold_ui::panels::scene_setup_panel::synth_world_param_id(camera_node_doc_id, "orbit");
-        let target = manifold_ui::GraphParamTarget::Generator;
-        let new_orbit = 1.9_f32;
-
-        h.dispatch(&PanelAction::ParamSnapshot(target, pid.clone()), &mut project);
-        h.dispatch(&PanelAction::ParamChanged(target, pid.clone(), new_orbit), &mut project);
-        h.drain();
-
-        let (_, layer) = project.timeline.find_layer_by_id(&layer_id).unwrap();
-        let inst = layer.gen_params().expect("imported layer carries a PresetInstance");
-        assert!(
-            inst.params.contains("cam_orbit"),
-            "importer metadata must expose the cam_orbit slot"
-        );
-        assert!(
-            (inst.get_base_param("cam_orbit") - new_orbit).abs() < 1e-4,
-            "the drag must move the BOUND card slot (cam_orbit), got {}",
-            inst.get_base_param("cam_orbit")
-        );
-        // The def node param must be untouched — the slot is the one value.
-        let def_untouched = layer
-            .generator_graph()
-            .and_then(|d| d.nodes.iter().find(|n| n.id == camera_node_doc_id))
-            .and_then(|n| n.params.get("orbit"))
-            .is_none_or(|v| !matches!(v, SerializedParamValue::Float { value } if (value - new_orbit).abs() < 1e-4));
-        assert!(def_untouched, "a bound row's write must never land in the def");
-
-        h.dispatch(&PanelAction::ParamCommit(target, pid.clone()), &mut project);
-        let ContentCommand::Execute(mut cmd) = h.drain().into_iter().next().expect("commit dispatches") else {
-            panic!("expected an undo-tracked Execute commit");
-        };
-        cmd.execute(&mut project);
-        cmd.undo(&mut project);
-        let (_, layer) = project.timeline.find_layer_by_id(&layer_id).unwrap();
-        let restored = layer.gen_params().unwrap().get_base_param("cam_orbit");
-        assert!(
-            (restored - new_orbit).abs() > 1e-4,
-            "undo must restore the pre-drag slot value, still at {restored}"
-        );
-    }
-
     /// Phase-1 baseline for the undo/redo audit (Peter 2026-07-19: undo/redo
     /// "broken, out of order, or just don't respond" across sliders, buttons,
     /// toggles, clips, trims). Every undoable gesture family gets two probes:
@@ -5383,28 +4008,69 @@ mod scene_card_convergence_tests {
             manifold_ui::GraphParamTarget::Generator
         }
 
-        /// Materialize a REAL exposed binding on the scene layer's
-        /// fog_density node via the production expose-then-arm path (the
-        /// BUG-249 fixture shape: DriverToggle on the scene row's synth id
-        /// mints `ToggleNodeParamExposeCommand` + `AddDriverCommand`).
-        /// Returns the real binding id. Setup commands are drained — the
-        /// content side clones the post-arm project, so both sides agree.
+        /// Resolve a REAL exposed param id for the scene layer's fog_density
+        /// node. P2 slice 2a (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md):
+        /// fog_density is a P1-stamped exposed card param from creation —
+        /// `migrate_scene_exposures` runs on every bundled generator preset
+        /// at load (`bundled_generator_presets.rs`'s own comment), so
+        /// SceneStarter's atmosphere node is ALREADY exposed, no
+        /// expose-then-arm dance through the scene panel's (now-dead
+        /// this slice, per BUG_BACKLOG.md) synthesized-id path needed —
+        /// this is byte-for-byte the same "real exposed param" every other
+        /// `undo_baseline` fixture below already exercises for effects/
+        /// generators, just using the scene layer's own atmosphere param as
+        /// the specimen. `h` is unused now that no `PanelAction` dispatch is
+        /// needed to arm anything; kept in the signature so every call site
+        /// below reads uniformly.
         fn materialized_param(
-            h: &mut Harness,
+            _h: &mut Harness,
             project: &mut Project,
             layer_id: &LayerId,
         ) -> manifold_core::effects::ParamId {
-            let node_doc_id = open_scene_panel_on_fog_density(&mut h.ui, project, layer_id);
-            let synth =
-                manifold_ui::panels::scene_setup_panel::synth_world_param_id(node_doc_id, "density");
-            h.dispatch(
-                &PanelAction::DriverToggle(manifold_ui::GraphParamTarget::Generator, synth.clone()),
-                project,
-            );
-            h.drain();
-            let real = gen_inst(project, layer_id)
+            let catalog_default = fog_density_addr(project, layer_id);
+            let node_doc_id = density_node_and_value(&catalog_default).0;
+            let (_, layer) = project
+                .timeline
+                .find_layer_by_id_mut(layer_id)
+                .expect("layer resolves");
+            let inst = layer.gen_params_or_init();
+            // A freshly-init'd instance still TRACKS its catalog preset
+            // (`graph: None`) — `binding_id_for_node_param` only resolves
+            // against an instance's OWN graph override, so the effective-def
+            // fallback (the same one BUG-260's `display_value` uses) is
+            // mandatory here, not optional.
+            let real = inst
                 .binding_id_for_node_param(node_doc_id, "fog_density")
-                .expect("DriverToggle materializes an exposed binding");
+                .or_else(|| {
+                    manifold_core::effects::binding_id_for_node_param_in(
+                        &catalog_default,
+                        node_doc_id,
+                        "fog_density",
+                    )
+                })
+                .expect("SceneStarter's fog_density must already be exposed by P1 stamping");
+            // The OLD synth-id `DriverToggle` dispatch this fixture used to
+            // run did double duty: it exposed AND armed an enabled driver in
+            // one shot (BUG-249's "expose-then-arm"). `driver_toggle_atomic`/
+            // `driver_trim_clean`/`driver_trim_stomp` below assume that
+            // pre-armed driver as their "before" state — reconstruct it
+            // directly (no dispatch needed now that exposure is a given).
+            if inst.drivers.as_ref().is_none_or(|ds| ds.is_empty()) {
+                inst.drivers = Some(vec![manifold_core::effects::ParameterDriver {
+                    param_id: std::borrow::Cow::Owned(real.clone()),
+                    beat_division: manifold_core::types::BeatDivision::Quarter,
+                    waveform: manifold_core::types::DriverWaveform::Sine,
+                    enabled: true,
+                    phase: 0.0,
+                    base_value: 0.0,
+                    trim_min: 0.0,
+                    trim_max: 1.0,
+                    reversed: false,
+                    free_period_beats: None,
+                    legacy_param_index: None,
+                    is_paused_by_user: false,
+                }]);
+            }
             std::borrow::Cow::Owned(real)
         }
 
@@ -5650,6 +4316,58 @@ mod scene_card_convergence_tests {
         #[test]
         fn card_param_stomp() {
             card_param_case(true);
+        }
+
+        /// Two SceneStarter generator layers (same structural preset, so a
+        /// P1-stamped exposed param id resolves in either instance).
+        fn two_scene_layer_project() -> (Project, LayerId, LayerId) {
+            let mut project = Project::default();
+            let idx_a = project.timeline.add_layer(
+                "A",
+                LayerType::Generator,
+                PresetTypeId::from_string("SceneStarter".to_string()),
+            );
+            let layer_a = project.timeline.layers[idx_a].layer_id.clone();
+            let idx_b = project.timeline.add_layer(
+                "B",
+                LayerType::Generator,
+                PresetTypeId::from_string("SceneStarter".to_string()),
+            );
+            let layer_b = project.timeline.layers[idx_b].layer_id.clone();
+            (project, layer_a, layer_b)
+        }
+
+        /// BUG-292: the scene panel's rows dispatch via
+        /// `GraphParamTarget::GeneratorOf(<the panel's own bound layer>)`,
+        /// never plain `Generator` (which `resolve_graph_target` resolves
+        /// through `active_layer`). Panel bound to layer A, app active layer
+        /// B — a scene-row write must land on A and leave B untouched, the
+        /// exact mismatch the old plain-`Generator` dispatch silently wrote
+        /// to the wrong layer under.
+        #[test]
+        fn bug_292_scene_row_writes_target_the_panels_bound_layer_not_active() {
+            let (mut project, layer_a, layer_b) = two_scene_layer_project();
+            let mut h = Harness::new(Some(layer_b.clone()));
+            let pid = materialized_param(&mut h, &mut project, &layer_a);
+            let before_a = gen_inst(&project, &layer_a).get_base_param(pid.as_ref());
+            let before_b = gen_inst(&project, &layer_b).get_base_param(pid.as_ref());
+            let after = before_a + 0.25;
+
+            let target = manifold_ui::GraphParamTarget::GeneratorOf(layer_a.clone());
+            h.dispatch(&PanelAction::ParamSnapshot(target.clone(), pid.clone()), &mut project);
+            h.dispatch(&PanelAction::ParamChanged(target.clone(), pid.clone(), after), &mut project);
+            h.dispatch(&PanelAction::ParamCommit(target, pid.clone()), &mut project);
+
+            assert_eq!(
+                gen_inst(&project, &layer_a).get_base_param(pid.as_ref()),
+                after,
+                "scene row write must land on the panel's BOUND layer (A), not the active layer (B)"
+            );
+            assert_eq!(
+                gen_inst(&project, &layer_b).get_base_param(pid.as_ref()),
+                before_b,
+                "the active layer (B) must be untouched by a scene row write bound to layer A"
+            );
         }
 
         // ── Modulation trims + envelope handles ──────────────────

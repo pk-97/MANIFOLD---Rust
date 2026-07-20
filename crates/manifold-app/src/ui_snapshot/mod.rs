@@ -649,6 +649,9 @@ fn run_gltf_editor_add_scene_gesture(want_dump: bool, add_object: bool) {
             RENDER_SCENE_NODE_ID,
             OBJECTS_BEFORE,
             (900.0, 200.0),
+            manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.phong_material"),
+            manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.transform_3d"),
+            manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.scene_object"),
             (*view.canonical_def).clone(),
         );
         cmd.execute(&mut project);
@@ -659,6 +662,7 @@ fn run_gltf_editor_add_scene_gesture(want_dump: bool, add_object: bool) {
             RENDER_SCENE_NODE_ID,
             LIGHTS_BEFORE,
             (-260.0, 50.0),
+            manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.light"),
             (*view.canonical_def).clone(),
         );
         cmd.execute(&mut project);

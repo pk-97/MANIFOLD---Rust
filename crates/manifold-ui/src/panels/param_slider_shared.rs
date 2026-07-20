@@ -980,8 +980,8 @@ pub(crate) fn enum_value_cell_actions(
         let next = (current_index + 1) % count;
         let new_value = min + next as f32;
         vec![
-            PanelAction::ParamSnapshot(target, param_id.clone()),
-            PanelAction::ParamChanged(target, param_id.clone(), new_value),
+            PanelAction::ParamSnapshot(target.clone(), param_id.clone()),
+            PanelAction::ParamChanged(target.clone(), param_id.clone(), new_value),
             PanelAction::ParamCommit(target, param_id),
         ]
     } else {
@@ -1270,8 +1270,8 @@ pub(crate) fn build_envelope_config(
     // the same EnvDecay Snapshot/Changed/Commit trio the drag path already
     // emits, reset to `DEFAULT_ENV_DECAY`.
     let reset = PanelAction::slider_reset(
-        PanelAction::EnvDecaySnapshot(target, pid.clone()),
-        PanelAction::EnvDecayChanged(target, pid.clone(), DEFAULT_ENV_DECAY),
+        PanelAction::EnvDecaySnapshot(target.clone(), pid.clone()),
+        PanelAction::EnvDecayChanged(target.clone(), pid.clone(), DEFAULT_ENV_DECAY),
         PanelAction::EnvDecayCommit(target, pid),
     );
     let spec = DrawerSpec {
@@ -1941,8 +1941,8 @@ fn param_shape_reset(
     default: f32,
 ) -> PanelAction {
     PanelAction::slider_reset(
-        PanelAction::AudioModShapeSnapshot(gpt, pid.clone()),
-        PanelAction::AudioModShapeParamChanged(gpt, pid.clone(), which, default),
+        PanelAction::AudioModShapeSnapshot(gpt.clone(), pid.clone()),
+        PanelAction::AudioModShapeParamChanged(gpt.clone(), pid.clone(), which, default),
         PanelAction::AudioModShapeCommit(gpt, pid),
     )
 }
@@ -2134,8 +2134,9 @@ pub(crate) fn build_audio_mod_drawer(
     // Each shaping slider's right-click reset — AudioModShape's own default.
     // BUG-070: these never had a reset gesture before this (the drawer only
     // opens when armed, gated the same way the drag hit-test already is).
-    let shape_reset =
-        |which: AudioShapeParam, default: f32| param_shape_reset(gpt, pid.clone(), which, default);
+    let shape_reset = |which: AudioShapeParam, default: f32| {
+        param_shape_reset(gpt.clone(), pid.clone(), which, default)
+    };
     // Modifier toggle below the band row: "Invert" (loud → low). Flat index
     // sits one past the bands. Delta (rate-of-change) removed from the UI
     // (§7.2 item 2, 2026-07-11: "not very useful and adds a lot of clutter")
@@ -2231,9 +2232,9 @@ pub(crate) fn build_audio_mod_drawer(
                 format!("{amount:.2}")
             };
             let step_reset = PanelAction::slider_reset(
-                PanelAction::AudioModStepAmountSnapshot(gpt, pid.clone()),
-                PanelAction::AudioModStepAmountChanged(gpt, pid.clone(), default_amount),
-                PanelAction::AudioModStepAmountCommit(gpt, pid.clone()),
+                PanelAction::AudioModStepAmountSnapshot(gpt.clone(), pid.clone()),
+                PanelAction::AudioModStepAmountChanged(gpt.clone(), pid.clone(), default_amount),
+                PanelAction::AudioModStepAmountCommit(gpt.clone(), pid.clone()),
             );
             rows.push(shape_slider(
                 "Step",
@@ -2583,9 +2584,9 @@ pub(crate) fn build_param_row(
     // seed both `ids.slider_reset` (below) and the `BitmapSlider::build` call
     // that materialises the track it fires on.
     let reset = PanelAction::slider_reset(
-        PanelAction::ParamSnapshot(target, info.id.clone()),
-        PanelAction::ParamChanged(target, info.id.clone(), info.spec.default),
-        PanelAction::ParamCommit(target, info.id.clone()),
+        PanelAction::ParamSnapshot(target.clone(), info.id.clone()),
+        PanelAction::ParamChanged(target.clone(), info.id.clone(), info.spec.default),
+        PanelAction::ParamCommit(target.clone(), info.id.clone()),
     );
     let mut ids = ParamRowIds {
         // Overwritten with the real row-catcher node below before any read.
@@ -2932,7 +2933,7 @@ pub(crate) fn build_param_row(
     // handle on the track above; this is how fast the value falls back.
     if shown_tab == Some(ModTab::Envelope) {
         ids.envelope_config = Some(build_envelope_config(
-            tree, drawer_parent, drawer_x, cy, drawer_w, mod_state, i, target, info.id.clone(),
+            tree, drawer_parent, drawer_x, cy, drawer_w, mod_state, i, target.clone(), info.id.clone(),
             row_key_base.map(|b| b | ROW_ROLE_ENVELOPE_CONFIG),
         ));
         cy += ENV_CONFIG_HEIGHT;
@@ -3089,199 +3090,6 @@ pub(crate) fn resolve_audio_config_click(
         return Some(AudioConfigClick::SelectTriggerMode(f));
     }
     Some(AudioConfigClick::SelectTriggerMode(f))
-}
-
-/// A click on one of a parameter row's interactive elements, abstracted away
-/// from the effect-vs-generator [`PanelAction`] vocabulary. `ParamCardPanel`
-/// no longer uses this (P2 moved it onto `RowIndex` + `row_action` +
-/// the bundle `resolve` methods above) — this array-scanning form survives
-/// for `scene_setup_panel`'s per-card-kind dispatch (`world_card`/
-/// `object_card`/etc.), out of the widget-tree row model's scope
-/// (`docs/WIDGET_TREE_DESIGN.md` §8: "nothing in P1–P4 touches scene
-/// files"). Delegates to the same bundle resolvers `row_action` uses, so the
-/// two dispatch paths can't drift apart.
-pub(crate) enum RowClick {
-    /// The row's `→` driver toggle button (param index).
-    DriverToggle(usize),
-    /// The row's `E` envelope toggle button (param index).
-    EnvelopeToggle(usize),
-    /// A button inside the driver-config drawer (param index + action).
-    DriverConfig(usize, DriverConfigAction),
-    /// The Ableton-config invert button (param index).
-    AbletonInvert(usize),
-    /// The "A" audio-modulation button (param index) — arm/disarm.
-    AudioToggle(usize),
-    /// A send button in the audio drawer (param index, send index).
-    AudioSelectSend(usize, usize),
-    /// A Listen-row chip in the audio drawer (param index, chip index into
-    /// `trigger_source_chips(current)`) — sets kind AND band in one action.
-    AudioSelectChip(usize, usize),
-    /// The "Custom" cell trailing the Listen chips (param index) — opens or
-    /// closes the Feature×Band matrix. Session-only UI state, no model action.
-    AudioToggleMatrix(usize),
-    /// A feature-kind button in the audio drawer's open Custom matrix (param
-    /// index, kind index).
-    AudioSelectKind(usize, usize),
-    /// A band button in the audio drawer's open Custom matrix (param index,
-    /// band index).
-    AudioSelectBand(usize, usize),
-    /// The "Invert" toggle in the audio drawer (param index).
-    AudioToggleInvert(usize),
-    /// A mode button in an `is_trigger_gate` row's drawer (param index, mode
-    /// index — `[ClipEdge, Transient, Both]`, §9 U3). The drawer's trailing
-    /// row, only ever built for a trigger-gate target.
-    AudioSelectTriggerMode(usize, usize),
-    /// An Action-row button in a slider row's audio drawer (param index,
-    /// action index — `[Continuous, Step, Random]`, D2). Never built for a
-    /// toggle/trigger row (D8 forbidden move F2: those rows count events,
-    /// they don't step them).
-    AudioSelectAction(usize, usize),
-    /// A Wrap-row button (param index, wrap index — `[Wrap, Bounce, Clamp]`,
-    /// D2), only present while Action=Step.
-    AudioSelectWrap(usize, usize),
-    /// The slider's param label, when it carries an OSC address to copy.
-    /// No payload: every `scene_setup_panel` call site (the only remaining
-    /// consumer, P2) discards the row index — OSC-copy isn't wired for
-    /// scene cards yet.
-    LabelCopy,
-    /// BUG-250: a click on an enum (`value_labels`) row's value cell
-    /// (`SliderNodeIds.value_text`). Only matched when the param carries
-    /// value labels — a numeric row's value cell stays double-click-to-type
-    /// and single-click-inert. The caller maps this through
-    /// [`enum_value_cell_actions`].
-    EnumValueCell(usize),
-}
-
-/// Match a clicked node id against a parameter row's interactive elements —
-/// `scene_setup_panel`'s dispatch only (see [`RowClick`]'s doc). Driver/
-/// envelope toggle buttons on toggle/trigger params are skipped (they carry
-/// no slider to modulate); the audio button skips only PLAIN toggle params —
-/// `is_trigger` (D5b) and `is_trigger_gate` (§9) both reach it, the same
-/// drawer mechanism as any other audio mod.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn match_param_row_click(
-    id: NodeId,
-    driver_btn_ids: &[Option<NodeId>],
-    envelope_btn_ids: &[Option<NodeId>],
-    driver_config_ids: &[Option<DriverConfigIds>],
-    ableton_config_ids: &[Option<AbletonConfigIds>],
-    audio_btn_ids: &[Option<NodeId>],
-    audio_configs: &[Option<(crate::panels::drawer::DrawerIds, usize)>],
-    slider_ids: &[Option<SliderNodeIds>],
-    osc_addresses: &[Option<String>],
-    rows: &[ParamRow],
-    mod_state: &ParamModState,
-) -> Option<RowClick> {
-    // D/E buttons never apply to toggle OR trigger params — neither a sticky
-    // on/off nor a fire-once count has a continuous value an LFO/envelope
-    // could drive.
-    let skip_driver_envelope = |pi: usize| {
-        rows
-            .get(pi)
-            .map(|p| p.spec.is_toggle || p.spec.is_trigger)
-            .unwrap_or(false)
-    };
-    // The "A" audio button applies to `is_trigger` (D5b: a fire-button rides
-    // `ParameterAudioMod` — audio increments its count exactly like a clip
-    // edge does) AND `is_trigger_gate` (§9: same mechanism, plus the drawer's
-    // Mode row and the collapsed-row badge). Only a PLAIN toggle stays
-    // unreachable — a sticky on/off has no audio-mod semantics.
-    let skip_audio =
-        |pi: usize| rows.get(pi).map(|p| p.spec.is_toggle && !p.spec.is_trigger_gate).unwrap_or(false);
-
-    // D/E buttons (skip toggle/trigger params).
-    for (pi, &btn_id) in driver_btn_ids.iter().enumerate() {
-        if skip_driver_envelope(pi) {
-            continue;
-        }
-        if btn_id == Some(id) {
-            return Some(RowClick::DriverToggle(pi));
-        }
-    }
-    for (pi, &btn_id) in envelope_btn_ids.iter().enumerate() {
-        if skip_driver_envelope(pi) {
-            continue;
-        }
-        if btn_id == Some(id) {
-            return Some(RowClick::EnvelopeToggle(pi));
-        }
-    }
-
-    // Driver config drawer buttons (the Free field is handled separately, on the
-    // tree-aware type-in path) — each bundle resolves its own nodes.
-    for (pi, cfg) in driver_config_ids.iter().enumerate() {
-        if let Some(c) = cfg
-            && let Some(action) = c.resolve(id)
-        {
-            return Some(RowClick::DriverConfig(pi, action));
-        }
-    }
-
-    // Ableton config invert button.
-    for (pi, cfg) in ableton_config_ids.iter().enumerate() {
-        if let Some(c) = cfg
-            && c.resolve(id)
-        {
-            return Some(RowClick::AbletonInvert(pi));
-        }
-    }
-
-    // Audio "A" buttons (skip toggle params only — see `skip_audio`).
-    for (pi, &btn_id) in audio_btn_ids.iter().enumerate() {
-        if skip_audio(pi) {
-            continue;
-        }
-        if btn_id == Some(id) {
-            return Some(RowClick::AudioToggle(pi));
-        }
-    }
-
-    // Audio drawer — `resolve_audio_config_click` (the single-row resolver
-    // `row_action` also uses) walks each row's own flat button index.
-    for (pi, cfg) in audio_configs.iter().enumerate() {
-        if let Some((dids, send_count)) = cfg
-            && let Some(row) = rows.get(pi)
-            && let Some(click) = resolve_audio_config_click(dids, *send_count, mod_state, row, pi, id)
-        {
-            return Some(match click {
-                AudioConfigClick::SelectSend(k) => RowClick::AudioSelectSend(pi, k),
-                AudioConfigClick::SelectChip(c) => RowClick::AudioSelectChip(pi, c),
-                AudioConfigClick::ToggleMatrix => RowClick::AudioToggleMatrix(pi),
-                AudioConfigClick::SelectKind(k) => RowClick::AudioSelectKind(pi, k),
-                AudioConfigClick::SelectBand(b) => RowClick::AudioSelectBand(pi, b),
-                AudioConfigClick::ToggleInvert => RowClick::AudioToggleInvert(pi),
-                AudioConfigClick::SelectAction(k) => RowClick::AudioSelectAction(pi, k),
-                AudioConfigClick::SelectWrap(w) => RowClick::AudioSelectWrap(pi, w),
-                AudioConfigClick::SelectTriggerMode(m) => RowClick::AudioSelectTriggerMode(pi, m),
-            });
-        }
-    }
-
-    // Enum value cell (BUG-250): single click on a `value_labels` row's
-    // value text — the click-to-change interaction C-P1c/d lost.
-    for (pi, slider) in slider_ids.iter().enumerate() {
-        if let Some(ids) = slider
-            && ids.value_text == id
-            && rows
-                .get(pi)
-                .and_then(|p| p.spec.value_labels.as_ref())
-                .is_some()
-        {
-            return Some(RowClick::EnumValueCell(pi));
-        }
-    }
-
-    // Slider label → copy OSC address (only when one exists for this slot).
-    for (pi, slider) in slider_ids.iter().enumerate() {
-        if let Some(ids) = slider
-            && ids.label == Some(id)
-            && osc_addresses.get(pi).and_then(|a| a.as_ref()).is_some()
-        {
-            return Some(RowClick::LabelCopy);
-        }
-    }
-
-    None
 }
 
 #[cfg(test)]

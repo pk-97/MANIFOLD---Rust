@@ -31,7 +31,9 @@ use std::path::{Path, PathBuf};
 // COLOR is still grandfathered pending the §15 ramp.
 // DEBT: tokenize the graph-editor redesign's 69 raw literals before that
 // redesign closes, then ratchet the baseline back down toward the §15 ramp.
-const COLOR_BASELINE: usize = 214;
+// 214→213, 2026-07-21 (convergence-lane merge): the lane's P2 slice deleted
+// one raw literal in scene_setup_panel.rs; ratcheted per the test's own rule.
+const COLOR_BASELINE: usize = 213;
 const RADIUS_BASELINE: usize = 0;
 
 #[test]

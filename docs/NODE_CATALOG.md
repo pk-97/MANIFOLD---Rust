@@ -379,13 +379,13 @@ _Generated from the node registry. Do not hand-edit. 250 nodes registered, group
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
-| `ApricotWeather` | Apricot Weather | generator | Geometry | 5 |
+| `ApricotWeather` | Apricot Weather | generator | Geometry | 158 |
 | `AutoGain` | Auto Gain | effect | Stylize | 4 |
 | `BasicShapes` | Basic Shapes | generator | Pattern | 4 |
 | `BlackHole` | Black Hole | generator | Sim | 18 |
 | `BlobTracking` | Blob Track | effect | Diagnostic | 5 |
 | `Bloom` | Bloom | effect | Filmic | 1 |
-| `BlossomWire` | Blossom Wire | generator | Geometry | 11 |
+| `BlossomWire` | Blossom Wire | generator | Geometry | 14 |
 | `Caustics` | Caustics | generator | Pattern | 4 |
 | `ChromaticAberration` | Chromatic Aberration | effect | Filmic | 5 |
 | `ColorCompass` | Color Compass | effect | Spatial | 2 |
@@ -394,14 +394,14 @@ _Generated from the node registry. Do not hand-edit. 250 nodes registered, group
 | `Cymatics` | Cymatics | generator | Pattern | 7 |
 | `DepthOfField` | Depth of Field | effect | Filmic | 8 |
 | `DigitalDrift` | Digital Drift | effect | Filmic | 4 |
-| `DigitalPlants` | Digital Plants | generator | Geometry | 14 |
+| `DigitalPlants` | Digital Plants | generator | Geometry | 21 |
 | `Dither` | Dither | effect | Color | 2 |
 | `Duocylinder` | Duocylinder | generator | Geometry | 11 |
 | `EdgeDetect` | Edge Detect | effect | Diagnostic | 2 |
 | `EdgeStretch` | Edge Stretch | effect | Spatial | 3 |
 | `FilmGrain` | Film Grain | effect | Stylize | 2 |
 | `FluidSim2D` | Fluid Sim 2D | generator | Sim | 13 |
-| `FluidSim3D` | Fluid Sim 3D | generator | Sim | 22 |
+| `FluidSim3D` | Fluid Sim 3D | generator | Sim | 29 |
 | `Glitch` | Glitch | effect | Filmic | 5 |
 | `HighlightBoost` | Highlight Boost | effect | Filmic | 4 |
 | `Infrared` | Infrared | effect | Color | 3 |
@@ -409,7 +409,7 @@ _Generated from the node registry. Do not hand-edit. 250 nodes registered, group
 | `Kaleidoscope` | Kaleidoscope | effect | Spatial | 2 |
 | `Lightning` | Lightning | generator | Pattern | 7 |
 | `Lissajous` | Lissajous | generator | Geometry | 11 |
-| `MetallicGlass` | Metallic Glass | generator | Sim | 13 |
+| `MetallicGlass` | Metallic Glass | generator | Sim | 140 |
 | `Mirror` | Mirror | effect | Spatial | 2 |
 | `MriVolume` | MRI Volume | generator | Text & Media | 8 |
 | `NestedCubes` | Nested Cubes | generator | Geometry | 6 |
@@ -418,7 +418,7 @@ _Generated from the node registry. Do not hand-edit. 250 nodes registered, group
 | `ParticleText` | Particle Text | generator | Text & Media | 15 |
 | `Plasma` | Plasma | generator | Pattern | 6 |
 | `QuadMirror` | Quad Mirror | effect | Spatial | 1 |
-| `SceneStarter` | Scene Starter | generator | Geometry | 0 |
+| `SceneStarter` | Scene Starter | generator | Geometry | 119 |
 | `SoftFocus` | Soft Focus | effect | Stylize | 2 |
 | `StarField` | Star Field | generator | Pattern | 8 |
 | `StrangeAttractor` | Strange Attractor | generator | Sim | 11 |
@@ -429,7 +429,7 @@ _Generated from the node registry. Do not hand-edit. 250 nodes registered, group
 | `Transform` | Transform | effect | Spatial | 4 |
 | `VoronoiPrism` | Voronoi Prism | effect | Stylize | 3 |
 | `Watercolor` | Watercolor | effect | Stylize | 4 |
-| `Wireframe` | Wireframe | generator | Geometry | 9 |
+| `Wireframe` | Wireframe | generator | Geometry | 12 |
 | `WireframeDepth` | Wireframe Depth | effect | Diagnostic | 8 |
 
 <!-- END GENERATED: registered-node-index -->

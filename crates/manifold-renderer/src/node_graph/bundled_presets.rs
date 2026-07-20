@@ -31,6 +31,7 @@ use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::preset_def::PresetKind;
 
+use crate::node_graph::scene_exposure::migrate_scene_exposures;
 use crate::preset_loader::{EFFECT_CATALOG, GENERATOR_CATALOG, catalog_generation};
 
 /// Raw JSON for the bundled preset of `preset_type` (either kind), or
@@ -90,9 +91,12 @@ fn rebuild_def_cache(generation: u64) {
     let effect_catalog = EFFECT_CATALOG.load();
     let generator_catalog = GENERATOR_CATALOG.load();
     for (id, json) in effect_catalog.entries().chain(generator_catalog.entries()) {
-        let def: EffectGraphDef = serde_json::from_str(&json)
+        let mut def: EffectGraphDef = serde_json::from_str(&json)
             .unwrap_or_else(|e| panic!("bundled preset {id}: parse failed: {e}"));
         let id_static: &'static str = Box::leak(id.to_string().into_boxed_str());
+        // P1: stamp scene-vocabulary exposures so bundled scene presets carry
+        // the same full-param manifest as freshly imported models.
+        migrate_scene_exposures(&mut def);
         let def_static: &'static EffectGraphDef = Box::leak(Box::new(def));
         m.insert(id_static, def_static);
     }
@@ -146,8 +150,14 @@ pub fn loaded_presets_from_bundled() -> Vec<manifold_core::effect_graph_def::Pre
         .load()
         .entries()
         .filter_map(|(id, json)| {
-            let def: EffectGraphDef = serde_json::from_str(&json)
+            let mut def: EffectGraphDef = serde_json::from_str(&json)
                 .unwrap_or_else(|e| panic!("bundled preset {id}: parse failed: {e}"));
+            // P1 scene-panel exposure convergence: keep the preset-definition
+            // registry (instance-slot seed) in lockstep with the def cache's
+            // stamped exposures — same call as `rebuild_def_cache`. A no-op for
+            // effect presets today (no scene-vocabulary nodes), applied for
+            // symmetry so a future scene-effect can't silently reopen the gap.
+            migrate_scene_exposures(&mut def);
             def.preset_metadata
         })
         .collect()
