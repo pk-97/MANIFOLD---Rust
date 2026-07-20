@@ -1,6 +1,6 @@
 # Agent Routing — task shape → model, profile, gate
 
-**Status:** ACTIVE 2026-07-19 · steering model added 2026-07-20 (Peter's directive after the overnight-wave autopsy; plan: `docs/SYSTEM_UPGRADE_2026_07_PLAN.md`). Authoritative staffing/routing policy. CLAUDE.md §Agents and the `agent-model-staffing-preferences` memory are pointers here.
+**Status:** ACTIVE 2026-07-19 · steering model added 2026-07-20 (Peter's directive after the overnight-wave autopsy; plan: `docs/SYSTEM_UPGRADE_2026_07_PLAN.md`) · Opus middle-orchestrator added 2026-07-21 (Peter's directive: Fable window economy). Authoritative staffing/routing policy. CLAUDE.md §Agents and the `agent-model-staffing-preferences` memory are pointers here.
 
 ## The steering model (2026-07-20 — supersedes review-at-landing-only)
 
@@ -14,6 +14,7 @@ The overnight waves failed because Sonnet orchestrated Sonnet and let 100% of gr
 - **Review is the throttle.** Up to 8 lanes, but diffs queue for orchestrator review; landing never outpaces review.
 - **Per-wave adversarial pass.** Before a wave spawns, a Fable fork attacks the brief set (wrong fix shapes, non-disjoint lanes, over-deletion risk).
 - **Resume-note in every brief.** If the top session dies: lane state = branch + findings doc, recoverable by the next session.
+- **Opus middle-orchestrator for multi-stage waves (2026-07-21, Peter):** Fable usage is extremely expensive. Mechanical work is ALWAYS a Sonnet agent. When the work has multiple stages or waves to sequence, Fable spawns ONE Opus orchestration agent to manage the Sonnet workers (dispatch, collect, first-diff screening) and reports up; Fable keeps judgment only — diagnosis, fix shapes, brief authoring, the adversarial pass, final review, landing. Single-stage mechanical work needs no middle-man: one Sonnet agent direct. This is an orchestration seat, not a lane — "no Opus lanes" stands unchanged.
 
 ## The tiering
 
