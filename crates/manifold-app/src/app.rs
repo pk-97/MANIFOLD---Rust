@@ -34,7 +34,7 @@ use crate::user_prefs::UserPrefs;
 use crate::window_registry::{WindowRegistry, WindowRole, WindowState};
 use crate::workspace::{Workspace, WorkspaceKind};
 
-/// Re-export UIState as the selection state (replaces the old SelectionState).
+/// Re-export UIState as the selection state.
 /// UIState is the 1:1 port of Unity's UIState.cs with proper Ableton semantics:
 /// - SelectionVersion for dirty-checking
 /// - Layer selection (single/toggle/range)
