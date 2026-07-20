@@ -57,7 +57,7 @@ tests/fixtures/gltf/khronos/*
 # never vendored (audit table, GLB_CONFORMANCE_DESIGN.md §1).
 tests/fixtures/gltf/kloppenheim_07_puresky_4k.exr
 
-# Peter drops downloaded look-test GLBs (large, licensing unvetted) straight
+# Peter drops downloaded look-test GLBs/FBXs (large, licensing unvetted) straight
 # into this folder — blanket-ignore them so they never read as dirt in
 # worktree slots (untracked-but-not-ignored files wedge the ring: the slot
 # never returns to idle; bit 2026-07-17). Already-tracked fixtures
@@ -65,3 +65,5 @@ tests/fixtures/gltf/kloppenheim_07_puresky_4k.exr
 # applies to untracked files. To deliberately track a NEW fixture, use
 # `git add -f` or add a `!tests/fixtures/gltf/<name>.glb` exception here.
 tests/fixtures/gltf/*.glb
+tests/fixtures/gltf/*.fbx
+tests/fixtures/gltf/drogon__game_of_thrones_dragon/
