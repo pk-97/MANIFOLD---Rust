@@ -175,7 +175,7 @@ impl GraphCanvas {
         // the output preview (image), then labels (text); across bands a node
         // drawn later sits entirely above an earlier one. A single shared depth
         // would batch every body before every preview — putting all previews on
-        // top of all bodies regardless of node stacking, which was BUG-027. Wires
+        // top of all bodies regardless of node stacking. Wires
         // stay below CONTENT, so they still route behind every node.
         //
         // Draw order (low band → high band): everything else first, then the
@@ -700,8 +700,8 @@ impl GraphCanvas {
                 PREVIEW_SCREEN_BORDER,
             );
             // The live output preview, painted inline over the recessed screen at
-            // this node's depth band — so a node stacked above occludes it (the
-            // whole point of BUG-027's fix). The host populates `node_preview_src`
+            // this node's depth band — so a node stacked above occludes it.
+            // The host populates `node_preview_src`
             // each frame; `None` leaves just the recessed placeholder, exactly as
             // before the first atlas frame lands. Edge-straddle clipping is the
             // canvas viewport scissor (`push_immediate_clip` in `render`), so no

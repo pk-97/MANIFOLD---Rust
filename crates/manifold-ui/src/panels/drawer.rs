@@ -45,18 +45,15 @@ const STATUS_PAD: f32 = 6.0;
 /// Label glyph box height inside a status strip — matches the Ableton drawer.
 const STATUS_LABEL_H: f32 = 12.0;
 
-/// D6 fire meter (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` P3c,
-/// BUG-082's fix) — height reserved below an Amount slider whose
+/// D6 fire meter — height reserved below an Amount slider whose
 /// `show_meter` is set: a thin track+fill+threshold-tick underline,
-/// mirroring the deleted `TriggerRowIds`/`update_trigger_levels` meter
-/// (470228ec, `audio_setup_panel.rs`), generalized from a fixed per-send row
+/// mirroring the deleted `TriggerRowIds`/`update_trigger_levels` meter,
+/// generalized from a fixed per-send row
 /// to every audio-mod drawer's Amount row (2026-07-11: every drawer, not just
 /// fire-mode ones — see `show_amount_meter`). `pub(crate)` so
 /// `param_slider_shared::audio_config_height` — a caller reserving height for
 /// a drawer it isn't itself building — can add this term without duplicating
-/// the literal and drifting from what [`DrawerRow::height`] actually builds
-/// (the under-reservation this closes: a metered drawer used to overflow its
-/// reserved slot by exactly this many pixels).
+/// the literal and drifting from what [`DrawerRow::height`] actually builds.
 pub(crate) const METER_STRIP_H: f32 = 6.0;
 /// Bar thickness within the reserved strip.
 const METER_BAR_H: f32 = 3.0;
@@ -242,7 +239,7 @@ pub(crate) fn uniform_rows_height(n: usize) -> f32 {
     TOP_PAD * 2.0 + ROW_H * n as f32 + ROW_GAP * (n as f32 - 1.0)
 }
 
-/// BUG-109 §7.1 item 3: the content-thread signal this meter displays decays
+/// the content-thread signal this meter displays decays
 /// in milliseconds (a transient's shaped envelope), but `ContentState`
 /// snapshots only reach the UI at UI-tick cadence — an instantaneous fill
 /// between two snapshots is invisible. `PEAK_HOLD_SECONDS` is the minimum

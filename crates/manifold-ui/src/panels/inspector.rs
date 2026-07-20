@@ -136,7 +136,7 @@ pub struct InspectorCompositePanel {
     master_chrome: MasterChromePanel,
     layer_chrome: LayerChromePanel,
     clip_chrome: ClipChromePanel,
-    /// BUG-267 unification: one storage for both scopes, indexed by
+    /// one storage for both scopes, indexed by
     /// [`Self::scope_idx`] (`SCOPE_MASTER` / `SCOPE_LAYER`) instead of two
     /// parallel `Vec<ParamCardPanel>` fields. `Layer`/`Group`/`Clip` all
     /// canonicalize to `SCOPE_LAYER` — every former per-tab touchpoint now
@@ -1016,10 +1016,8 @@ impl InspectorCompositePanel {
         if self.layer_visible() {
             h += SECTION_CARD_PAD + self.layer_chrome.compute_height();
             if !self.layer_chrome.is_collapsed() {
-                // AUDIO TRIGGERS (P3b) sits at the top of the layer's detail
-                // content — above gen params and layer effects (Peter,
-                // 2026-07-10: "a single section that sits at the top of the
-                // inspector for the layer").
+                // AUDIO TRIGGERS sits at the top of the layer's detail
+                // content — above gen params and layer effects.
                 h += self.audio_trigger_section.height() + SECTION_GAP;
                 // Gen params sit above layer effects
                 if let Some(ref gp) = self.gen_params {

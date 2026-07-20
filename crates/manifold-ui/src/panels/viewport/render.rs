@@ -368,7 +368,7 @@ impl TimelineViewportPanel {
     pub(super) fn track_bg_color(&self, i: usize) -> Color32 {
         // The selected lane gets its OWN colour (a muted navy), not a brightened
         // zebra stripe — a lift was too close to the alternating greys to read as
-        // "selected" (Peter, 2026-06-28).
+        // "selected".
         if self.active_track_index == Some(i) {
             return color::TRACK_BG_SELECTED;
         }

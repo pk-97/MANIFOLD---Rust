@@ -20,7 +20,7 @@ use crate::tree::UITree;
 
 // ── Layout constants ───────────────────────────────────────────────
 
-// Peter, 2026-07-14 professional pass: 24px rows / 8px padding read cramped
+// 24px rows / 8px padding read cramped
 // once rows lost their per-item box (see the transparent-bg_color change in
 // `build_nodes`) — 28px/12px gives labels room to breathe against the
 // container edge and the hover/checked highlight.
@@ -174,7 +174,7 @@ impl DropdownPanel {
         }
     }
 
-    /// Popups open instantly at full size/opacity (Peter, 2026-07-14 — no
+    /// Popups open instantly at full size/opacity (no
     /// enter/exit motion). Kept as a no-op so `UIRoot::update()` can still
     /// call it unconditionally every frame without special-casing.
     pub fn update(&mut self, _tree: &mut UITree) {}
@@ -309,8 +309,7 @@ impl DropdownPanel {
         // anchor), then a final `.clamp(0.0, ...)` on BOTH axes catches the
         // left/top case too — an anchor that's itself off-screen (e.g. a
         // trigger scrolled partly past the left edge) used to leave `x`/`y`
-        // negative here with nothing pulling them back on-screen (Peter's
-        // note-picker screenshot, 2026-07-14: menu ran off both edges).
+        // negative here with nothing pulling them back on-screen.
         let w = w.min(self.screen_width);
         let mut x = anchor.x;
         let mut y = anchor.y;
@@ -378,8 +377,8 @@ impl DropdownPanel {
         self.separator_ids.clear();
         self.color_swatch_ids.clear();
 
-        // Popups appear instantly at full size/opacity (Peter, 2026-07-14 —
-        // no enter/exit motion). `bounds` is just the container rect.
+        // Popups appear instantly at full size/opacity (no
+        // enter/exit motion). `bounds` is just the container rect.
         let bounds = self.container_bounds;
 
         // Scrim + bordered container via the shared shell. The §17 overlay loop
@@ -423,7 +422,7 @@ impl DropdownPanel {
                 label
             };
 
-            // Peter, 2026-07-14: unchecked rows are TRANSPARENT, not an
+            // unchecked rows are TRANSPARENT, not an
             // opaque per-row rect — the old DROPDOWN_BG fill on every row
             // created AA seams between rows ("rows with pixel gaps"). The
             // menu container is the only opaque surface; rows only paint
@@ -451,7 +450,7 @@ impl DropdownPanel {
                 },
                 font_size: color::FONT_BODY,
                 text_align: TextAlign::Left,
-                // Peter, 2026-07-14: MENU_ITEM_RADIUS, up from SMALL_RADIUS
+                // MENU_ITEM_RADIUS, up from SMALL_RADIUS
                 // (2.0) — the hover/checked highlight reads as a distinct
                 // rounded chip against the flat container now that rows
                 // aren't boxed.
@@ -662,7 +661,7 @@ impl DropdownPanel {
                 self.close(tree);
                 Some(DropdownAction::Dismissed)
             }
-            // D3 (`docs/DRAG_CAPTURE_DESIGN.md`): the dropdown used to eat
+            // the dropdown used to eat
             // every drag event unconditionally here — the confirmed BUG-058
             // eater (an open dropdown swallowed a timeline drag's terminal
             // event, wedging move/trim). That arm is gone: a foreign drag
@@ -867,7 +866,7 @@ mod tests {
 
     #[test]
     fn opening_appears_instantly_at_full_size_and_opacity() {
-        // Peter, 2026-07-14: no enter/exit motion — a popup is fully sized
+        // no enter/exit motion — a popup is fully sized
         // and fully opaque on the very first frame it opens, no tween to
         // settle over subsequent frames.
         let mut tree = UITree::new();
@@ -895,7 +894,7 @@ mod tests {
 
     #[test]
     fn long_menu_opened_near_screen_edge_stays_fully_on_screen() {
-        // Peter's note-picker screenshot (2026-07-14): a long menu (the
+        // a long menu (the
         // MIDI note picker opens 128 items via this same `open()` path)
         // triggered near a screen edge ran off both the top/bottom AND the
         // left/right edges. A 40-item menu is plenty to blow past

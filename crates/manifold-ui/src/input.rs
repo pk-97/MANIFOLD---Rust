@@ -203,7 +203,7 @@ pub enum UIEvent {
     HoverExit {
         node_id: NodeId,
     },
-    /// `node_id` is best-effort context (D9, added 2026-07-07): the pressed
+    /// `node_id` is best-effort context: the pressed
     /// widget resolved to a live node WHEN THIS EVENT WAS EMITTED, but the
     /// motion stream is emitted unconditionally — a `None` means the pressed
     /// widget left the tree before the drag threshold crossed, not "no

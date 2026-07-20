@@ -107,7 +107,7 @@ impl SettingsPopup {
         self.open = false;
     }
 
-    /// Popups open instantly at full size/opacity (Peter, 2026-07-14 — no
+    /// Popups open instantly at full size/opacity (no
     /// enter/exit motion). Kept as a no-op so callers can still call it
     /// unconditionally every frame without special-casing.
     pub fn update(&mut self, _tree: &mut UITree) {}

@@ -356,8 +356,8 @@ mod tests {
 
     #[test]
     fn right_click_on_opacity_track_resolves_to_slider_reset_with_declared_default() {
-        // BUG-061: the layer opacity reset now rides the generic SliderReset
-        // trio (the old per-panel right-click reset action was deleted).
+        // the layer opacity reset now rides the generic SliderReset
+        // trio.
         let mut tree = UITree::new();
         let mut panel = LayerChromePanel::new();
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
