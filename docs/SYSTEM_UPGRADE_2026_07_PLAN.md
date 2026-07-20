@@ -26,7 +26,7 @@ The 2026-07 overnight Sonnet waves failed the same way everywhere: agents built 
 5. BUG_BACKLOG.md split: closed entries → `docs/BUG_ARCHIVE.md` (solo because every lane writes to the backlog — not laneable).
 6. Hook trim: DEFERRED to its own careful pass — behavior changes under live protocol are riskier than the bloat.
 
-## Wave 1 — lanes (after Step 1; briefs adversarially checked)
+## Wave 1 — lanes (COMPLETE 2026-07-20 — all four landed same day: W1-A `e8f066de`, W1-C `43c9d3d1`, W1-D `726de5a0`, W1-B `7915d4f3`. Full gpu-proofs suite green post-parity-removal. First wave under the steering model: 4/4 briefs executed to the letter, zero improvised mechanisms; lane reports caught one orchestrator-table error, adversarial pass caught 2 blockers pre-spawn.)
 
 - **W1-A doc cull:** move superseded docs to `docs/archive/` from a list Fable writes; regen index.
 - **W1-B gate cleanup:** CORRECTED 2026-07-20 at briefing — BUG-252's 8 flows were retargeted and fixed 2026-07-18 (`f101a585`/`d28bfff4`), NOT dead; only `scene-setup-scrub-fine.json` (BUG-240) dies. Scope now: that one script + retire ALL generated-vs-hand kernel parity tests and their hand-kernel oracles (Peter's ruling 2026-07-20 — migration scaffolding; fusion proofs and freeze proofs KEPT, headless render oracle untouchable) + look-oracle demotion note in HEADLESS_UI_HARNESS.md. Exact lists: the Wave 1 brief set (adversarially reviewed 2026-07-20, 11 findings folded).
@@ -41,6 +41,7 @@ The class: history narrated in code comments — dates, BUG-NNN provenance, "pre
 - **Lanes:** cheap Sonnet at LOW effort, one per crate cluster, one commit each, standard review-then-land.
 - **Docs half:** shipped design docs' status headers carrying correction genealogy → current state + git pointer, rest deleted. Same keep-rule, same lanes.
 - Sequenced after Wave 1 (comment diffs in `inspector.rs`/`state_sync.rs` would collide with W1-C/D).
+- **Input from W1-B's report — orphan-suspect audit rides this wave:** kept-per-table `.wgsl` files with zero remaining functional references in their own file (`bend_mesh`, `extrude_curve`, `revolve_curve`, `taper_mesh`, `tube_from_path`, `twist_mesh`, `morph_mesh`, `push_along_normals`); `fluid_scatter_3d.wgsl` (both sharers' gpu_tests now empty — re-verify the "shared" claim); `aces_tonemap_compute.wgsl` (verify `src/tonemap.rs` production usage). Delete-only-if-unreferenced, same rule as W1-B.
 
 ## Wave 2 — lanes
 
