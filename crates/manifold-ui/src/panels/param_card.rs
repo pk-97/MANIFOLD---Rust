@@ -958,6 +958,21 @@ impl ParamCardPanel {
             ParamCardKind::Generator => GraphParamTarget::Generator,
         }
     }
+
+    /// The card ROOT's identity key (D4): cards are siblings under the
+    /// inspector column, so the root's `View::key` — which now pins the
+    /// durable WidgetId — must be the card's stable identity, never a
+    /// shared constant. Effect instances key on their `EffectId`; generator
+    /// cards on their layer (one generator card per layer scope).
+    fn identity_key(&self) -> u64 {
+        match self.kind {
+            ParamCardKind::Effect => crate::param_surface::stable_key(self.effect_id.as_str()),
+            ParamCardKind::Generator => match &self.layer_id {
+                Some(lid) => crate::param_surface::stable_key(&format!("gen:{lid}")),
+                None => crate::param_surface::stable_key("gen:editor"),
+            },
+        }
+    }
     /// If `node_id` is a numeric param's value cell, build the [`PanelAction`]
     /// that opens a type-in box for it: target + id, the cell's anchor rect, the
     /// base value to prefill, the clamp range, and the int-rounding flag. Returns
@@ -2052,6 +2067,7 @@ impl ParamCardPanel {
             .interactive()
             .inert()
             .key(KEY_BORDER)
+            .identity(self.identity_key())
             .pad(Pad::all(BORDER_W))
             .child(
                 View::panel()
@@ -2101,6 +2117,7 @@ impl ParamCardPanel {
             .interactive()
             .inert()
             .key(KEY_BORDER)
+            .identity(self.identity_key())
             .pad(Pad::all(BORDER_W))
             .child(
                 View::panel()
@@ -6118,8 +6135,12 @@ mod tests {
         );
 
         // And the rebuilt drawer shows the envelope config, not the driver.
+        // (Clear first: live rebuilds truncate the card's region, so two live
+        // copies never coexist — identity-keyed roots correctly assert on a
+        // no-clear double build.)
         panel.state.mod_state.driver_expanded[0] = true;
         panel.state.mod_state.envelope_expanded[0] = true;
+        tree.clear();
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
         assert!(panel.envelope_config_ids[0].is_some());
         assert!(panel.driver_config_ids[0].is_none());
@@ -6825,6 +6846,48 @@ mod tests {
         assert_eq!(
             row1_slider_track_before, row1_slider_track_after,
             "row 1's slider track must keep its WidgetId once row 0 grows a drawer ahead of it"
+        );
+    }
+
+    #[test]
+    fn card_identity_survives_effect_chain_reorder() {
+        // D4's card-root half (fork-review BLOCKER-1): cards are siblings
+        // under the inspector column, so the card ROOT is keyed by its
+        // `EffectId` — reordering the chain must not renumber a later
+        // card's row widgets. Two cards build as root siblings here, then
+        // swap build order (the reorder), and card B's row-0 controls must
+        // keep their WidgetIds.
+        let mut cfg_a = effect_config();
+        let mut cfg_b = effect_config();
+        cfg_a.effect_id = manifold_foundation::EffectId::from("fx-card-a");
+        cfg_b.effect_id = manifold_foundation::EffectId::from("fx-card-b");
+        cfg_a.effect_index = 0;
+        cfg_b.effect_index = 1;
+
+        let mut tree = UITree::new();
+        let mut panel_a = ParamCardPanel::new();
+        let mut panel_b = ParamCardPanel::new();
+        panel_a.configure(&cfg_a);
+        panel_b.configure(&cfg_b);
+        panel_a.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
+        panel_b.build(&mut tree, Rect::new(0.0, 310.0, 280.0, 300.0));
+        let b_driver_before = tree.widget_of(panel_b.driver_btn_ids[0].unwrap());
+        let b_track_before = tree.widget_of(panel_b.slider_ids[0].as_ref().unwrap().track);
+
+        // The reorder: B now builds FIRST (sibling order swapped).
+        tree.clear();
+        panel_b.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
+        panel_a.build(&mut tree, Rect::new(0.0, 310.0, 280.0, 300.0));
+        let b_driver_after = tree.widget_of(panel_b.driver_btn_ids[0].unwrap());
+        let b_track_after = tree.widget_of(panel_b.slider_ids[0].as_ref().unwrap().track);
+
+        assert_eq!(
+            b_driver_before, b_driver_after,
+            "card B's driver button must keep its WidgetId across a chain reorder"
+        );
+        assert_eq!(
+            b_track_before, b_track_after,
+            "card B's slider track must keep its WidgetId across a chain reorder"
         );
     }
 

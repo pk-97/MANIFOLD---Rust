@@ -152,6 +152,14 @@ pub struct View {
     /// Optional stable-identity hint (currently advisory — the diff keys on
     /// structural shape; a future keyed reconciler reads this).
     pub(crate) key: Option<u64>,
+    /// Opt-in durable-WidgetId pin (D4, `docs/WIDGET_TREE_DESIGN.md`): when
+    /// set, the host mints this node via `add_node_keyed`, so its identity
+    /// survives sibling reorder (card roots in an effect chain). Distinct
+    /// from `key`, which is lookup-only and merely host-unique — hosts can
+    /// share a tree parent, so threading `key` into WidgetId salts would
+    /// collide across panels. Identity values must be globally derived
+    /// (`param_surface::stable_key` over a real id), never small constants.
+    pub(crate) identity: Option<u64>,
     /// Automation component name (`UI_AUTOMATION_DESIGN.md` D8/§3), registered
     /// on the built `NodeId` via `UITree::set_name` once this view lands in the
     /// tree. `None` for the overwhelming majority of views — set only at the
@@ -184,6 +192,7 @@ impl View {
             disabled: false,
             visible: true,
             key: None,
+            identity: None,
             name: None,
             slider: None,
         }
@@ -435,6 +444,14 @@ impl View {
 
     pub fn key(mut self, k: u64) -> Self {
         self.key = Some(k);
+        self
+    }
+
+    /// Pin this node's durable [`WidgetId`](crate::node::WidgetId) to a
+    /// globally-derived identity (see the `identity` field doc). Card roots
+    /// use `param_surface::stable_key(<card id>)`.
+    pub fn identity(mut self, k: u64) -> Self {
+        self.identity = Some(k);
         self
     }
 

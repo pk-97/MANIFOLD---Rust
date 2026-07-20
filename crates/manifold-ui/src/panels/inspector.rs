@@ -3374,6 +3374,11 @@ mod tests {
 
         // A full rebuild at the new offset lands the same node at the same y —
         // in-place and rebuild agree, so no jump when the next rebuild lands.
+        // Clear first: the live path truncates the inspector region before
+        // re-minting, so two live copies of one card never coexist — and
+        // card roots are identity-keyed (D4), so a no-clear double build
+        // would (correctly) trip the tree's duplicate-WidgetId assert.
+        tree.clear();
         panel.build(&mut tree, &layout);
         let y_rebuilt = tree
             .get_node(tree.id_at(panel.layer_chrome.first_node()))
