@@ -33,6 +33,15 @@ The 2026-07 overnight Sonnet waves failed the same way everywhere: agents built 
 - **W1-C BUG-266:** tab pin dies on incidental selection changes — decouple pin invalidation from `selection_version` (disjoint: `ui_state.rs`/`state_sync.rs`).
 - **W1-D BUG-267:** unify master/layer card vecs in `inspector.rs` (the wave's real-code lane; structural, goes BEFORE BUG-265 which touches the same lines).
 
+## Wave 1.5 — comment/noise sweep (approved by Peter 2026-07-20; runs after Wave 1 lands)
+
+The class: history narrated in code comments — dates, BUG-NNN provenance, "previously/used to", status-corrected notes. Measured 2026-07-20: ~1,400 such comment lines across 265 files in `crates/`. Git already holds all of it; in code it is context tax on every session and agent. The CLAUDE.md comment rule stops new instances; this wave clears the backlog.
+
+- **Keep-rule (the whole judgment, decided up front):** a comment survives only if it states a CURRENT constraint the code can't show (`never-unify-cvdisplaylinks`-class warnings survive; "renamed 2026-06-11, was FooBar" dies). Fable writes the rule + exemplar diffs into the wave brief; lanes execute mechanically, delete-only diffs; ambiguous = keep + report.
+- **Lanes:** cheap Sonnet at LOW effort, one per crate cluster, one commit each, standard review-then-land.
+- **Docs half:** shipped design docs' status headers carrying correction genealogy → current state + git pointer, rest deleted. Same keep-rule, same lanes.
+- Sequenced after Wave 1 (comment diffs in `inspector.rs`/`state_sync.rs` would collide with W1-C/D).
+
 ## Wave 2 — lanes
 
 - **W2-A test families:** state-level UI tests copied from exemplars Fable hand-writes (hit-test geometry math; click→command dispatch; display-value resolution à la BUG-260 conviction test). Lanes replicate patterns; zero new infrastructure permitted.

@@ -22,7 +22,7 @@ bleed into the output preview, no matter what a future feature builds inside
 it. The bug class dies by construction instead of panel-by-panel.
 
 Companions: `UI_ARCHITECTURE_OVERHAUL.md` (the substrate this extends),
-`UI_ARCHITECTURE_AUDIT.md` (as-built findings), `DRAG_CAPTURE_DESIGN.md` (the
+`archive/UI_ARCHITECTURE_AUDIT.md` (as-built findings), `DRAG_CAPTURE_DESIGN.md` (the
 input-side sibling: same single-owner principle applied to pointer events),
 `FOUNDATIONAL_GAPS.md` A2 (the inventory entry this design discharges).
 
@@ -94,7 +94,7 @@ ancestor stack, the scissor batching, the overlay registry. This design adds
   Editor window: the dock host does the same with `DockRects`. Rejected:
   *deriving scissors renderer-side from layout rects* — the renderer has no
   layout knowledge by design since the Phase-5 layering inversion
-  (`UI_LAYERING_INVERSION.md`); re-coupling it would undo that work.
+  (`archive/UI_LAYERING_INVERSION.md`); re-coupling it would undo that work.
 - **D6 — The timeline's `lane_content_scissor` RAII stays.** It is
   *within-region* containment (lane rows inside the timeline region), one
   level deeper than this design governs. Folding it into regions would turn
