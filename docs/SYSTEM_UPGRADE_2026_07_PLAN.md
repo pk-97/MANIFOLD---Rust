@@ -39,6 +39,10 @@ The 2026-07 overnight Sonnet waves failed the same way everywhere: agents built 
 - **W2-B BUG-265:** hit-test against live tree bounds (root fix), atop W1-D, turning W2-A's red baseline green.
 - **W2-C drag scoping:** Peter reported drag-and-drop broken beyond cards — survey clip/timeline/other drag surfaces, findings doc only.
 
+## Testing doctrine (agreed 2026-07-20; governs Wave 2 and all UI work)
+
+Pixels are for looking, not asserting. Nearly every UI bug of 2026-07 was a state/wiring bug with a visual symptom — PNG assertions are slow, GPU-bound, and green while click paths are dead. The gate tests state on the REAL dispatch path (real EditingService, real state sync): hit-test geometry as pure math, click→command dispatch, display-value resolution (BUG-260 conviction test and the undo baseline `1bdb69a9` are the only permitted patterns — replicate, never invent harness). Headless PNG render stays as an on-demand look oracle for humans/Fable, out of the automated gate. The structural fix behind all of it: a queryable widget/param layer at the UI↔engine boundary — the god files (param_card, inspector, state_sync, scene_setup_panel) are hand-written transcription this layer deletes. That design is Fable-authored, NON-DELEGABLE; a lane briefed with it recreates the scene panel at 10× scale.
+
 ## Ongoing, non-delegable
 
 - **Fable:** widget-tree / queryable-UI-layer design doc (the load-bearing structural fix; explicitly NOT laneable — a Sonnet lane here recreates the scene panel at 10× scale). Rides on UI_HARNESS_UNIFICATION groundwork.
