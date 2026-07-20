@@ -66,16 +66,6 @@ pub(crate) enum ActiveInspectorDrag {
     /// drag gets stomped back to the content thread's stale value mid-gesture
     /// and the commit sees old == new — no undo entry.
     Macro { idx: usize, value: f32 },
-    /// A converted scene-panel row drag (C-P1a). Its `ParamId` is
-    /// synthesized, not an exposed manifest slot, so the `Param` variant's
-    /// `set_param` restore is a silent no-op for it — the restore must go
-    /// through the row's real write address instead.
-    SceneParam {
-        target: manifold_core::GraphTarget,
-        addr: manifold_ui::panels::scene_setup_panel::RowAddr,
-        catalog_default: Box<manifold_core::effect_graph_def::EffectGraphDef>,
-        value: f32,
-    },
     /// A modulation trim-range handle drag (driver / audio-mod / Ableton
     /// sub-range bars, BUG-246). Not carried in any snapshot block, so a
     /// concurrent `data_version` bump mid-drag replaces `local_project`
@@ -207,26 +197,6 @@ impl ActiveInspectorDrag {
             }
             Self::Macro { idx, value } => {
                 manifold_core::macro_bank::MacroBank::apply_macro(project, *idx, *value);
-            }
-            Self::SceneParam {
-                target,
-                addr,
-                catalog_default,
-                value,
-            } => {
-                // Same production write path the drag's motion ticks use
-                // (inspector.rs's scene ParamChanged arm), so the restore
-                // lands in the layer's instance def, never a manifest slot.
-                use manifold_editing::command::Command as _;
-                let mut cmd = manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
-                    target.clone(),
-                    addr.node_doc_id,
-                    addr.param_id.clone(),
-                    manifold_core::effect_graph_def::SerializedParamValue::Float { value: *value },
-                    (**catalog_default).clone(),
-                )
-                .with_scope(addr.scope_path.clone());
-                cmd.execute(project);
             }
             Self::Trim {
                 kind,

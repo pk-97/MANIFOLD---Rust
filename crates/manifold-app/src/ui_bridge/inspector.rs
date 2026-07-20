@@ -32,7 +32,6 @@ use manifold_editing::commands::envelopes::{
     AddEnvelopeCommand, ChangeEnvelopeDecayCommand, ChangeEnvelopeTargetCommand,
     ToggleEnvelopeEnabledCommand,
 };
-use manifold_editing::commands::graph::SetGraphNodeParamCommand;
 use manifold_editing::commands::layer::{
     AddLayerClipTriggerCommand, RemoveLayerClipTriggerCommand, SetLayerClipTriggerCommand,
 };
@@ -249,295 +248,32 @@ fn resolve_graph_target(
     }
 }
 
-/// SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md C-P1a (D2): resolve a card-shaped
-/// `PanelAction`'s `(GraphParamTarget, ParamId)` to a converted scene row's
-/// write address, `GraphTarget`, and catalog default — `None` unless
-/// `param_id` resolves through `ScenePanel::resolve_scene_param`'s id map
-/// (a real card/exposed param falls through to the caller's existing path).
-/// The `GraphTarget` comes from the panel's own docked layer
-/// (`live_layer_id`), never the active-layer context: scene rows always
-/// address the panel's own generator, and active-layer resolution silently
-/// no-op'd every write when the two differed. The context args stay in the
-/// signature so the call sites read uniformly with `resolve_graph_target`.
-#[allow(clippy::too_many_arguments)]
-fn resolve_scene_write(
-    ui: &UIRoot,
-    project: &Project,
-    _gpt: &GraphParamTarget,
-    param_id: &manifold_core::effects::ParamId,
-    _editor_target: Option<&manifold_core::GraphTarget>,
-    _tab: InspectorTab,
-    _active_layer: &Option<LayerId>,
-    _selection: &SelectionState,
-) -> Option<(
-    manifold_ui::panels::scene_setup_panel::RowAddr,
-    manifold_core::GraphTarget,
-    manifold_core::effect_graph_def::EffectGraphDef,
-)> {
-    let (addr, _snapshot_val) = ui.scene_setup_panel.resolve_scene_param(param_id)?;
-    // The scene panel edits the scene of its OWN docked layer — resolve the
-    // target from the panel's `live_layer_id`, not the app's active layer.
-    // Routing through `resolve_graph_target` (active layer) silently dropped
-    // every converted-row write whenever the panel's layer wasn't active —
-    // which is always the case in the headless harness, where no layer is
-    // ever activated (the enum/drag writes all no-op'd, only the bespoke
-    // layer-id-carrying scene actions worked).
-    let lid = ui.scene_setup_panel.live_layer_id()?.clone();
-    let target = manifold_core::GraphTarget::Generator(lid);
-    let manifold_core::GraphTarget::Generator(lid) = &target else {
-        return None;
-    };
-    let catalog_default = super::generator_catalog_default(project, lid)?;
-    Some((addr, target, catalog_default))
-}
-
-/// BUG-249's sibling for plain VALUE writes (root fix, 2026-07-18): a scene
-/// row whose inner (node, param) is covered by a card/user binding must edit
-/// the BINDING's instance slot, never the def. A def write on a bound param
-/// is structurally dead — the chain rebuild re-seeds the binding's value
-/// over it, and the per-frame apply loop wins the tug-of-war whenever the
-/// outer slot moves — which is exactly why the glb importer's camera
-/// (`cam_orbit`/`cam_tilt`/… card bindings onto `node.orbit_camera`) never
-/// responded to the Scene Setup panel. Routing the write through the slot
-/// makes the panel and the perform card two views of ONE value, the same
-/// resolution `resolve_mod_target` already applies to modulation.
-fn scene_bound_slot(
-    project: &mut Project,
-    target: &manifold_core::GraphTarget,
-    addr: &manifold_ui::panels::scene_setup_panel::RowAddr,
-    catalog_default: &manifold_core::effect_graph_def::EffectGraphDef,
-) -> Option<manifold_core::effects::ParamId> {
-    let pid = project
-        .with_preset_graph_mut(target, |inst| {
-            inst.binding_id_for_node_param(addr.node_doc_id, &addr.param_id)
-        })
-        .flatten()
-        // Tracking instance (`graph: None` — every freshly imported layer):
-        // resolve against the catalog def it tracks instead.
-        .or_else(|| {
-            manifold_core::effects::binding_id_for_node_param_in(
-                catalog_default,
-                addr.node_doc_id,
-                &addr.param_id,
-            )
-        })
-        .map(manifold_core::effects::ParamId::from)?;
-
-    // Write-side twin of BUG-260 (P1, SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md):
-    // a structural command (AddSceneObjectCommand/AddSceneLightCommand/
-    // InsertMeshModifierCommand/ImportModelIntoSceneCommand) can stamp a
-    // fresh binding straight into the graph's `preset_metadata` without
-    // touching the LIVE instance's param manifest — that only reconciles at
-    // load (`Project::reconcile_param_manifests`), never mid-session. So the
-    // binding can resolve above before the instance actually carries a slot
-    // for it (e.g. an object added THIS session, never yet saved+reloaded).
-    // Treat that window as "not bound yet": every caller falls through to
-    // its unbound (direct graph-def) write path instead of silently writing
-    // nothing — the same "def walk as unbound fallback" doctrine BUG-260
-    // established for reads, applied here to writes.
-    let has_slot = project
-        .with_preset_graph_mut(target, |inst| inst.params.contains(pid.as_ref()))
-        .unwrap_or(false);
-    has_slot.then_some(pid)
-}
-
-/// SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md C-P1a/C-P1b: descend into
-/// `nodes` at `scope` (a path of group-node ids from the document root),
-/// same recursive walk as `manifold-editing::commands::graph`'s private
-/// `descend_level` — duplicated here because that helper isn't `pub` and
-/// this crate has no other way to resolve a `RowAddr`'s `scope_path` into
-/// the group body it actually lives in. `scope.split_first()`'s `None` case
-/// (root) returns `nodes` unchanged; C-P1b is the first caller to actually
-/// exercise a non-empty scope — Object rows living inside their own
-/// `AddSceneObjectCommand` group (Color/Metallic/Roughness, D12).
-fn descend_to_scope<'a>(
-    nodes: &'a [manifold_core::effect_graph_def::EffectGraphNode],
-    scope: &[u32],
-) -> Option<&'a [manifold_core::effect_graph_def::EffectGraphNode]> {
-    match scope.split_first() {
-        None => Some(nodes),
-        Some((gid, rest)) => {
-            let group = nodes.iter().find(|n| n.id == *gid)?;
-            descend_to_scope(group.group.as_ref()?.nodes.as_slice(), rest)
-        }
-    }
-}
-
-/// SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md C-P1a: read a converted scene
-/// row's CURRENT value straight off the resolved `EffectGraphDef` node —
-/// the read half of `SetGraphNodeParamCommand`'s write, used by `ParamCommit`
-/// to compute the post-drag value to diff against the pre-drag snapshot.
-/// C-P1b: walks `addr.scope_path` via `descend_to_scope` — C-P1a's
-/// root-only version silently no-op'd `ParamCommit` for any scoped row,
-/// which C-P1b's Color/Metallic/Roughness rows (living inside the object's
-/// own group, D12) actually need.
-fn read_scene_node_param(
-    project: &mut Project,
-    target: &manifold_core::GraphTarget,
-    addr: &manifold_ui::panels::scene_setup_panel::RowAddr,
-) -> Option<f32> {
-    project
-        .with_preset_graph_mut(target, |host| {
-            let def = host.graph_def_mut().as_ref()?;
-            let nodes = descend_to_scope(&def.nodes, &addr.scope_path)?;
-            let node = nodes.iter().find(|n| n.id == addr.node_doc_id)?;
-            match node.params.get(&addr.param_id) {
-                Some(manifold_core::effect_graph_def::SerializedParamValue::Float { value }) => Some(*value),
-                // Enum/Int/Bool params (light `shadow_softness` is `Enum`)
-                // still write as Float through `SetGraphNodeParamCommand` —
-                // the primitives read both shapes (`ParamValue::Enum` or
-                // `Float`, see the light primitive's `softness_idx` match) —
-                // so the read half coerces them to f32 too. Without this the
-                // old==new gate saw `None` and every enum row write no-op'd.
-                Some(manifold_core::effect_graph_def::SerializedParamValue::Enum { value }) => Some(*value as f32),
-                Some(manifold_core::effect_graph_def::SerializedParamValue::Int { value }) => Some(*value as f32),
-                Some(manifold_core::effect_graph_def::SerializedParamValue::Bool { value }) => Some(*value as u8 as f32),
-                _ => None,
-            }
-        })
-        .flatten()
-}
-
-/// BUG-249 (expose-then-arm, Peter's call): resolve a modulation-family
-/// action's `(target, param_id)` for BOTH row kinds through one funnel.
-///
-/// A converted scene row's `param_id` is the synthesized `scene.{doc}.{param}`
-/// id — the modulation runtime (`modulation.rs`) only ever resolves via
-/// `inst.params.get_mut(param_id)`, so storing a driver/envelope/audio-mod
-/// against the synth id arms state the runtime silently drops (the whole
-/// bug). The fix: a scene row's modulation always targets the REAL exposed
-/// instance param bound to the inner node —
-/// - already exposed → translate to the existing binding id
-///   ([`PresetInstance::binding_id_for_node_param`], bundled or user-added);
-/// - not exposed and `materialize` (an arm/add action) → first run the SAME
-///   `ToggleNodeParamExposeCommand` the panel's mod button and the graph
-///   editor's expose glyph dispatch (metadata from the primitive's own
-///   `ParamDef` table), then translate. Expose + arm are two undo entries —
-///   undo peels the arm first, then the exposure, which mirrors doing the
-///   two clicks by hand;
-/// - not exposed and `!materialize` (a config edit on a drawer that can't
-///   exist yet) → `None`, and the caller swallows the action.
-///
-/// A non-scene `param_id` (id-map miss) resolves through
-/// [`resolve_graph_target`] with the id unchanged — the pre-existing card
-/// path, byte-for-byte.
+/// Resolve a modulation-family action's `(target, param_id)` — the ONE
+/// funnel every driver/envelope/audio-mod dispatch arm in this file uses.
+/// Historically (BUG-249) this also re-resolved a scene-panel row's
+/// synthesized id to the real exposed param bound to its inner node,
+/// materializing the exposure on first arm if needed — scene rows now carry
+/// real exposed param ids directly (P2 slice 2b,
+/// `SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md`), so that re-resolution is
+/// gone and this is exactly `resolve_graph_target` plus the unchanged
+/// `param_id`. `_ui`/`_content_tx`/`_materialize` stay in the signature so
+/// the ~20 call sites this funnel serves don't need touching if a future row
+/// kind needs the same re-resolution seam again.
 #[allow(clippy::too_many_arguments)]
 fn resolve_mod_target(
-    ui: &UIRoot,
+    _ui: &UIRoot,
     project: &mut Project,
-    content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
+    _content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
     gpt: &GraphParamTarget,
     param_id: &manifold_core::effects::ParamId,
     editor_target: Option<&manifold_core::GraphTarget>,
     effective_tab: InspectorTab,
     active_layer: &Option<LayerId>,
     selection: &SelectionState,
-    materialize: bool,
+    _materialize: bool,
 ) -> Option<(manifold_core::GraphTarget, manifold_core::effects::ParamId)> {
-    let Some((addr, snapshot_val)) = ui.scene_setup_panel.resolve_scene_param(param_id) else {
-        // Not a scene row — the existing exposed-param card path.
-        let target =
-            resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)?;
-        return Some((target, param_id.clone()));
-    };
-    let (_, target, catalog_default) = resolve_scene_write(
-        ui, project, gpt, param_id, editor_target, effective_tab, active_layer, selection,
-    )?;
-    let existing = project
-        .with_preset_graph_mut(&target, |inst| {
-            inst.binding_id_for_node_param(addr.node_doc_id, &addr.param_id)
-        })
-        .flatten()
-        // Tracking instance (graph: None — fresh imports): the bundled
-        // binding lives on the catalog def; without this fallback the arm
-        // below would materialize a DUPLICATE user exposure for an
-        // already-bound param.
-        .or_else(|| {
-            manifold_core::effects::binding_id_for_node_param_in(
-                &catalog_default,
-                addr.node_doc_id,
-                &addr.param_id,
-            )
-        });
-    if let Some(id) = existing {
-        return Some((target, manifold_core::effects::ParamId::from(id)));
-    }
-    if !materialize {
-        return None;
-    }
-    // Materialize the exposure. Same construction as `project.rs`'s
-    // `SceneSetupExposeParam` arm, but with the param metadata read off the
-    // primitive's own `ParamDef` table (this funnel has no panel-supplied
-    // expose context — the click was a D/E/A button, not the mod button).
-    let manifold_core::GraphTarget::Generator(lid) = &target else {
-        return None;
-    };
-    let effective_def = project
-        .timeline
-        .find_layer_by_id(lid)
-        .and_then(|(_, layer)| layer.generator_graph().cloned())
-        .unwrap_or_else(|| catalog_default.clone());
-    let node = super::project::find_node_by_scope(&effective_def, &addr.scope_path, addr.node_doc_id)?;
-    let node_handle = node.handle.clone().unwrap_or_else(|| format!("node{}", addr.node_doc_id));
-    let node_id = node.node_id.clone();
-    let node_title = node.title.clone();
-    let type_id = node.type_id.clone();
-    let doc_params = node.params.clone();
-    // Primitive-side metadata: construct the node like `snapshot.rs` does
-    // (seed defaults, apply doc overrides, reconfigure) so variadic nodes
-    // report their real param list. Boundary path — first arm only.
-    let registry = manifold_renderer::node_graph::PrimitiveRegistry::with_builtin();
-    let mut boxed = registry.construct(&type_id)?;
-    let mut params: manifold_renderer::node_graph::ParamValues = ahash::AHashMap::default();
-    for pd in boxed.parameters() {
-        params.insert(pd.name.clone(), pd.default.clone());
-    }
-    for (k, v) in &doc_params {
-        params.insert(std::borrow::Cow::Owned(k.clone()), v.clone().into());
-    }
-    boxed.reconfigure(&params);
-    let pd = boxed.parameters().iter().find(|p| p.name.as_ref() == addr.param_id)?.clone();
-    let (min, max) = pd.range.unwrap_or((0.0, 1.0));
-    use manifold_renderer::node_graph::ParamType;
-    let is_angle = matches!(pd.ty, ParamType::Angle);
-    let (convert, value_labels) = if matches!(pd.ty, ParamType::Enum) {
-        (
-            manifold_core::effects::ParamConvert::EnumRound,
-            pd.enum_values.iter().map(|s| s.to_string()).collect(),
-        )
-    } else {
-        (manifold_core::effects::ParamConvert::Float, Vec::new())
-    };
-    let object_label = node_title.unwrap_or_else(|| node_handle.clone());
-    let cmd = manifold_editing::commands::graph::ToggleNodeParamExposeCommand::new(
-        target.clone(),
-        node_id,
-        addr.node_doc_id,
-        node_handle,
-        addr.param_id.clone(),
-        true,
-        catalog_default,
-        format!("{object_label} \u{b7} {}", pd.label),
-        min,
-        max,
-        snapshot_val,
-        convert,
-        is_angle,
-        value_labels,
-    )
-    .with_scope(addr.scope_path.clone());
-    let mut boxed_cmd: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-    boxed_cmd.execute(project);
-    crate::content_command::ContentCommand::send(
-        content_tx,
-        crate::content_command::ContentCommand::Execute(boxed_cmd),
-    );
-    let minted = project
-        .with_preset_graph_mut(&target, |inst| {
-            inst.binding_id_for_node_param(addr.node_doc_id, &addr.param_id)
-        })
-        .flatten()?;
-    Some((target, manifold_core::effects::ParamId::from(minted)))
+    let target = resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)?;
+    Some((target, param_id.clone()))
 }
 
 /// The `AbletonMappingTarget` for a resolved param `target` on `tab`, so the
@@ -1406,50 +1142,6 @@ pub(super) fn dispatch_inspector(
         // manifold-ui (still exercised by its own unit tests) but has no
         // remaining production caller.
         PanelAction::ParamSnapshot(gpt, param_id) => {
-            // SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md C-P1a (D2): a converted
-            // scene row's `param_id` is a synthesized owned id, not a real
-            // exposed slot on the generator's `PresetInstance` — resolve it
-            // through the scene panel's per-frame id map FIRST; a miss falls
-            // through to the existing exposed-param path below unchanged.
-            if let Some((_, val)) = ui.scene_setup_panel.resolve_scene_param(param_id)
-                && let Some((addr, target, catalog_default)) = resolve_scene_write(
-                    ui, project, gpt, param_id, editor_target, effective_tab, active_layer, selection,
-                )
-            {
-                // Bound row (see `scene_bound_slot`): the drag edits the
-                // binding's instance slot, so snapshot THAT value and hold
-                // the real exposed id — the `Param` drag guard restores
-                // through the manifest, which is exactly right here.
-                if let Some(pid) = scene_bound_slot(project, &target, &addr, &catalog_default) {
-                    let slot_val = project
-                        .with_preset_graph_mut(&target, |inst| {
-                            inst.params
-                                .contains(pid.as_ref())
-                                .then(|| inst.get_base_param(pid.as_ref()))
-                        })
-                        .flatten()
-                        .unwrap_or(val);
-                    *drag_snapshot = Some(slot_val);
-                    *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::Param {
-                        target,
-                        param_id: pid,
-                        value: slot_val,
-                    });
-                    return DispatchResult::handled();
-                }
-                *drag_snapshot = Some(val);
-                // NOT the `Param` variant: a scene row's `param_id` is
-                // synthesized, so `Param`'s manifest `set_param` restore
-                // would be a silent no-op — the guard must hold the row's
-                // real write address (undo-race fix, 2026-07-18).
-                *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::SceneParam {
-                    target,
-                    addr,
-                    catalog_default: Box::new(catalog_default),
-                    value: val,
-                });
-                return DispatchResult::handled();
-            }
             if let Some(target) =
                 resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
             {
@@ -1486,72 +1178,6 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
         PanelAction::ParamChanged(gpt, param_id, val) => {
-            // C-P1a (D2/D4): motion writes for a converted scene row go
-            // through the SAME `SetGraphNodeParamCommand` shape the panel's
-            // old per-tick `SceneSetupParamChanged` used — but as a LIVE,
-            // non-undoable write (`execute()` called and discarded locally,
-            // `MutateProjectLive` on the content thread), never
-            // `ContentCommand::Execute`. That's the whole cadence fix D4
-            // names: the command shape was always correct, only the call
-            // site pushed an undo entry per motion tick.
-            if let Some((addr, target, catalog_default)) =
-                resolve_scene_write(ui, project, gpt, param_id, editor_target, effective_tab, active_layer, selection)
-            {
-                // Bound row → live-write the instance slot, mirroring the
-                // exposed-param motion path below (see `scene_bound_slot`).
-                if let Some(pid) = scene_bound_slot(project, &target, &addr, &catalog_default) {
-                    project.with_preset_graph_mut(&target, |inst| {
-                        inst.set_base_param(pid.as_ref(), *val);
-                    });
-                    if let Some(crate::app::ActiveInspectorDrag::Param { value, .. }) =
-                        active_inspector_drag
-                    {
-                        *value = *val;
-                    }
-                    let v = *val;
-                    let t = target.clone();
-                    ContentCommand::send(
-                        content_tx,
-                        ContentCommand::MutateProjectLive(Box::new(move |p| {
-                            p.with_preset_graph_mut(&t, |inst| {
-                                inst.set_base_param(pid.as_ref(), v);
-                            });
-                        })),
-                    );
-                    return DispatchResult::handled();
-                }
-                let mut cmd = SetGraphNodeParamCommand::new(
-                    target.clone(),
-                    addr.node_doc_id,
-                    addr.param_id.clone(),
-                    manifold_core::effect_graph_def::SerializedParamValue::Float { value: *val },
-                    catalog_default.clone(),
-                )
-                .with_scope(addr.scope_path.clone());
-                cmd.execute(project);
-                if let Some(crate::app::ActiveInspectorDrag::SceneParam { value, .. }) =
-                    active_inspector_drag
-                {
-                    *value = *val;
-                }
-                let addr2 = addr.clone();
-                let v = *val;
-                ContentCommand::send(
-                    content_tx,
-                    ContentCommand::MutateProjectLive(Box::new(move |p| {
-                        let mut cmd = SetGraphNodeParamCommand::new(
-                            target,
-                            addr2.node_doc_id,
-                            addr2.param_id.clone(),
-                            manifold_core::effect_graph_def::SerializedParamValue::Float { value: v },
-                            catalog_default,
-                        )
-                        .with_scope(addr2.scope_path.clone());
-                        cmd.execute(p);
-                    })),
-                );
-                return DispatchResult::handled();
-            }
             if let Some(target) =
                 resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
             {
@@ -1578,68 +1204,9 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
         PanelAction::ParamCommit(gpt, param_id) => {
-            // C-P1a (D2/D4): release commits ONE `SetGraphNodeParamCommand`
-            // through the undo-tracked `ContentCommand::Execute` path —
-            // exactly what `SceneSetupParamChanged`'s dispatch arm already
-            // does per-tick today; the fix is that this now fires ONCE per
-            // gesture instead of once per motion event.
-            //
-            // The scene probe must NOT consume the snapshot (read, don't
-            // `take()`): for an ordinary exposed card param the scene
-            // resolution misses, and a consumed snapshot leaves the exposed
-            // commit path below with `None` — every card slider drag (and
-            // param type-in, which rides this trio) recorded NO undo entry.
-            if let Some(old_val) = *drag_snapshot
-                && let Some((addr, target, catalog_default)) = resolve_scene_write(
-                    ui, project, gpt, param_id, editor_target, effective_tab, active_layer, selection,
-                )
-            {
-                *drag_snapshot = None;
-                // Bound row → the drag moved the instance slot; commit the
-                // same `ChangeGraphParamCommand` an exposed card commit uses.
-                if let Some(pid) = scene_bound_slot(project, &target, &addr, &catalog_default) {
-                    let new_val = project
-                        .with_preset_graph_mut(&target, |inst| {
-                            inst.params
-                                .contains(pid.as_ref())
-                                .then(|| inst.get_base_param(pid.as_ref()))
-                        })
-                        .flatten();
-                    if let Some(new_val) = new_val
-                        && (old_val - new_val).abs() > f32::EPSILON
-                    {
-                        let cmd = ChangeGraphParamCommand::new(target, pid, old_val, new_val);
-                        ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
-                    }
-                    *active_inspector_drag = None;
-                    return DispatchResult::handled();
-                }
-                let new_val = read_scene_node_param(project, &target, &addr);
-                if let Some(new_val) = new_val
-                    && (old_val - new_val).abs() > f32::EPSILON
-                {
-                    // `.with_previous(..)`: self-capture would read the
-                    // graph's CURRENT (post-drag) value at execute time —
-                    // the live `MutateProjectLive` ticks already got there
-                    // first — recording a no-op `previous == new`. Seed the
-                    // real pre-drag value we've held since `ParamSnapshot`
-                    // instead (see the method's doc comment).
-                    let cmd = SetGraphNodeParamCommand::new(
-                        target,
-                        addr.node_doc_id,
-                        addr.param_id.clone(),
-                        manifold_core::effect_graph_def::SerializedParamValue::Float { value: new_val },
-                        catalog_default,
-                    )
-                    .with_scope(addr.scope_path.clone())
-                    .with_previous(Some(manifold_core::effect_graph_def::SerializedParamValue::Float {
-                        value: old_val,
-                    }));
-                    ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
-                }
-                *active_inspector_drag = None;
-                return DispatchResult::handled();
-            }
+            // Release commits ONE `ChangeGraphParamCommand` through the
+            // undo-tracked `ContentCommand::Execute` path — one undo unit per
+            // gesture, not per motion event.
             if let Some(old_val) = drag_snapshot.take()
                 && let Some(target) =
                     resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
@@ -1667,75 +1234,9 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
         // BUG-250: an enum dropdown pick — one atomic write, one undo unit,
-        // no drag. Scene rows route through `resolve_scene_write` +
-        // `SetGraphNodeParamCommand` (`with_previous` seeded from the
-        // pre-pick value, same as `ParamCommit`); real card params take
-        // `ParamToggle`'s read-old/write-new `ChangeGraphParamCommand`
-        // shape. Both sides write the UI project locally for immediate
-        // re-render, exactly as `ParamChanged`/`ParamToggle` already do.
+        // no drag. `ParamToggle`'s read-old/write-new `ChangeGraphParamCommand`
+        // shape, exactly as `ParamChanged`/`ParamToggle` already do.
         PanelAction::ParamEnumSet(gpt, param_id, new_val) => {
-            if let Some((addr, target, catalog_default)) = resolve_scene_write(
-                ui, project, gpt, param_id, editor_target, effective_tab, active_layer, selection,
-            ) {
-                // Bound row → one atomic slot write + one undo unit, the
-                // exposed-param `ParamToggle` shape (see `scene_bound_slot`).
-                if let Some(pid) = scene_bound_slot(project, &target, &addr, &catalog_default) {
-                    let old_val = project
-                        .with_preset_graph_mut(&target, |inst| {
-                            inst.params
-                                .contains(pid.as_ref())
-                                .then(|| inst.get_base_param(pid.as_ref()))
-                        })
-                        .flatten();
-                    if let Some(old_val) = old_val
-                        && (old_val - *new_val).abs() > f32::EPSILON
-                    {
-                        project.with_preset_graph_mut(&target, |inst| {
-                            inst.set_base_param(pid.as_ref(), *new_val);
-                        });
-                        let cmd = ChangeGraphParamCommand::new(target, pid, old_val, *new_val);
-                        ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
-                    }
-                    return DispatchResult::handled();
-                }
-                // `read_scene_node_param` only sees STORED params — a def
-                // node omits keys still at their declared default (an
-                // untouched light has no `shadow_softness` key at all), so
-                // fall back to the panel's displayed snapshot from the id
-                // map, which resolves declared defaults (same source
-                // `ParamSnapshot` uses for the drag trio).
-                let snap = ui
-                    .scene_setup_panel
-                    .resolve_scene_param(param_id)
-                    .map(|(_, v)| v);
-                let old_val = read_scene_node_param(project, &target, &addr).or(snap);
-                if let Some(old_val) = old_val
-                    && (old_val - *new_val).abs() > f32::EPSILON
-                {
-                    let mut live = SetGraphNodeParamCommand::new(
-                        target.clone(),
-                        addr.node_doc_id,
-                        addr.param_id.clone(),
-                        manifold_core::effect_graph_def::SerializedParamValue::Float { value: *new_val },
-                        catalog_default.clone(),
-                    )
-                    .with_scope(addr.scope_path.clone());
-                    live.execute(project);
-                    let cmd = SetGraphNodeParamCommand::new(
-                        target,
-                        addr.node_doc_id,
-                        addr.param_id.clone(),
-                        manifold_core::effect_graph_def::SerializedParamValue::Float { value: *new_val },
-                        catalog_default,
-                    )
-                    .with_scope(addr.scope_path.clone())
-                    .with_previous(Some(manifold_core::effect_graph_def::SerializedParamValue::Float {
-                        value: old_val,
-                    }));
-                    ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
-                }
-                return DispatchResult::handled();
-            }
             if let Some(target) =
                 resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
             {
@@ -4536,8 +4037,8 @@ mod scene_card_convergence_tests {
             // A freshly-init'd instance still TRACKS its catalog preset
             // (`graph: None`) — `binding_id_for_node_param` only resolves
             // against an instance's OWN graph override, so the effective-def
-            // fallback (the same one `resolve_scene_write`/BUG-260's
-            // `display_value` use) is mandatory here, not optional.
+            // fallback (the same one BUG-260's `display_value` uses) is
+            // mandatory here, not optional.
             let real = inst
                 .binding_id_for_node_param(node_doc_id, "fog_density")
                 .or_else(|| {

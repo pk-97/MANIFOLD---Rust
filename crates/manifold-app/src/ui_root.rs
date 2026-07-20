@@ -1839,7 +1839,7 @@ impl UIRoot {
 
             // Scene Setup dock — mirror of the Audio Setup routing above.
             if self.scene_setup_panel.is_open() {
-                let (consumed, mut acts) = self.scene_setup_panel.handle_event(event);
+                let (consumed, mut acts) = self.scene_setup_panel.handle_event(event, &self.tree);
                 actions.append(&mut acts);
                 if consumed {
                     continue;

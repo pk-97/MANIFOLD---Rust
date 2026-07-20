@@ -31,11 +31,11 @@ use super::{GraphParamTarget, PanelAction};
 use super::drawer::DrawerIds;
 use super::param_card::{RowGeometry, RowMod};
 use super::param_slider_shared::{
-    AbletonConfigIds, AudioCardState, DriverConfigIds, EnvelopeConfigIds, EnvelopeTargetIds, ModTab,
-    ParamModState, RowClick, TrimHandleIds, build_param_row, enum_value_cell_actions,
-    match_param_row_click,
+    AbletonConfigIds, AudioCardState, AudioConfigClick, DriverConfigIds, EnvelopeConfigIds,
+    EnvelopeTargetIds, ModTab, ParamModState, TrimHandleIds, build_param_row, enum_value_cell_actions,
+    resolve_audio_config_click,
 };
-use crate::param_surface::{ParamRow, ParamSurface, RowMapping, RowSpec};
+use crate::param_surface::{ParamRow, ParamSurface, RowIndex, RowMapping, RowRole, RowSpec};
 
 // ── Stable keys ──
 const KEY_BG: u64 = 80_001;
@@ -161,21 +161,6 @@ impl RowAddr {
     pub fn root(node_doc_id: u32, param_id: &str) -> Self {
         Self { scope_path: Vec::new(), node_doc_id, param_id: param_id.to_string() }
     }
-}
-
-/// SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md D2: synthesize a converted scene
-/// row's stable owned `ParamId` from its write address's `node_doc_id` +
-/// the graph node's own param name. The ONE definition both sides of the
-/// UI/app boundary use: `ScenePanel::build_world_param_row` (this crate)
-/// calls it when building the row's `ParamRow`/id map; `state_sync`'s VM
-/// construction (`manifold-app`, no access to this synthesis logic
-/// otherwise) calls it to look up that same row's driver/envelope/audio-mod
-/// state on `PresetInstance` — a driver armed via `DriverToggle` is stored
-/// keyed by exactly this string (`dispatch_inspector`'s modulation arms use
-/// `pid_at(pi)` verbatim, unchanged by C-P1a), so the two call sites must
-/// never drift.
-pub fn synth_world_param_id(node_doc_id: u32, param_key: &str) -> manifold_foundation::ParamId {
-    manifold_foundation::ParamId::from(format!("scene.{node_doc_id}.{param_key}"))
 }
 
 /// One numeric row: its write address, current value, range, and whether a
@@ -321,25 +306,6 @@ pub enum ObjectMaterialVm {
     None,
 }
 
-/// One editable param row inside a modifier's own param set (D6: "the atom's
-/// own params (amount/axis/center …) as ordinary editable rows"). `label` is
-/// the primitive's own param label, transcribed by `state_sync` (this crate
-/// can't depend on `manifold-renderer`'s `ParamDef`, same DTO-boundary
-/// convention as `EnvironmentRowVm::mode_is_hdri`). `Axis` covers
-/// Bend/Twist/Taper's own X/Y/Z selector — the same labeled-stepper shape
-/// Light's Mode/Cast Shadows/Shadow Softness rows already ride through
-/// `build_param_row`'s `value_labels` path, never a new widget kind.
-/// C-P1d (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md): both fields promoted to
-/// `ModulatedRow`/`ModulatedEnumRow` — the same promotion C-P1b/C-P1c
-/// already did for Object/Light — so Modifier's own rows build through
-/// `build_modifier_card_row` (the shared card row core) instead of the
-/// deleted pre-convergence bespoke numeric/enum stepper builders.
-#[derive(Clone, Debug, PartialEq)]
-pub enum ModifierParamRowVm {
-    Numeric { label: &'static str, row: ModulatedRow },
-    Axis { label: &'static str, row: ModulatedEnumRow },
-}
-
 /// One modifier-stack entry (D6/P5): the atom's display name, its own
 /// address, and its curated param rows. `index` is this modifier's 0-based
 /// position in wire order (source → … → output) — the same convention
@@ -350,7 +316,6 @@ pub struct ModifierKnownRow {
     pub index: usize,
     pub node_doc_id: u32,
     pub display_name: String,
-    pub params: Vec<ModifierParamRowVm>,
 }
 
 /// Payload for [`ObjectRowVm::Known`], boxed so the enum's footprint tracks
@@ -613,61 +578,13 @@ impl Default for SceneSetupState {
 /// between — D3's "no scene-local driven cache beyond it" reads off the SAME
 /// per-row facts every frame, but the row's IDENTITY — its index — must stay
 /// stable across frames independent of which sections are currently wired).
-/// How a driven row's read-only value label renders its number — captured at
-/// build time so the per-frame value sync (`sync_row_values`) reproduces the
-/// exact text the driven branch built, per row family (plain / degrees /
-/// enum-labelled).
-// removed in P2 slice 2b — no constructor left after P2 slice 2a deleted the
-// per-family `build_*_card_row` builders that populated `driven_value_ids`;
-// `sync_row_values`/`driven_text` still match on it for the five legacy
-// per-family cards, which stay declared (never populated) only so
-// `resolve_scene_param` keeps compiling. See docs/BUG_BACKLOG.md.
-#[allow(dead_code)]
-#[derive(Clone, Debug)]
-enum DrivenFmt {
-    Plain,
-    Degrees,
-    Labels(Vec<String>),
-}
-
-/// Per-frame sync handle for one driven (wire-fed) row: the value label's
-/// tree node, the row's real write/read address, and its display format.
-/// The driven branch used to discard the label `NodeId`, which froze driven
-/// rows between structural syncs — this is the handle that unfreezes them.
-#[derive(Clone, Debug)]
-struct DrivenValueLabel {
-    label: NodeId,
-    addr: RowAddr,
-    fmt: DrivenFmt,
-}
-
-fn driven_text(value: f32, fmt: &DrivenFmt) -> String {
-    match fmt {
-        DrivenFmt::Plain => format!("{value:.2} (driven)"),
-        DrivenFmt::Degrees => format!("{:.1}\u{00b0} (driven)", value.to_degrees()),
-        DrivenFmt::Labels(labels) => {
-            let idx = value.round().clamp(0.0, (labels.len().max(1) - 1) as f32) as usize;
-            format!("{} (driven)", labels.get(idx).map(String::as_str).unwrap_or("?"))
-        }
-    }
-}
-
 struct SceneCardState {
     rows: Vec<ParamRow>,
     mod_state: ParamModState,
-    /// D2: synthesized owned `ParamId` → `(write address, snapshot value)`.
-    /// Rebuilt fresh every `build_nodes` pass (D1 of SCENE_PANEL_UX_DESIGN.md:
-    /// "no rotting, no staleness") — `dispatch_inspector`'s three insertion
-    /// points resolve a card-shaped action's `param_id` through this before
-    /// falling into `with_preset_graph_mut`.
-    id_map: ahash::AHashMap<manifold_foundation::ParamId, (RowAddr, f32)>,
     /// P2 slice 2a: per-row CURRENT value cache for the unified properties
-    /// card's real-param rows — the `id_map`'s value-cache role, without the
-    /// `RowAddr` (a real exposed param has no synthesized address to carry).
-    /// Seeded from `ParamRow.value.base` at `configure_from_filtered`, kept
-    /// fresh every frame by `ScenePanel::sync_properties_values`. Always
-    /// empty for the five legacy per-family cards (`world_card` etc.) — they
-    /// stay on the `id_map` path, unused after this slice.
+    /// card's real-param rows — seeded from `ParamRow.value.base` at
+    /// `configure_from_filtered`, kept fresh every frame by
+    /// `ScenePanel::sync_properties_values`.
     current_values: Vec<f32>,
     slider_ids: Vec<Option<crate::slider::SliderNodeIds>>,
     /// Fixed-slot twin of `slider_ids`: the main slider's right-click reset
@@ -675,18 +592,13 @@ struct SceneCardState {
     /// dispatch by [`SceneCardState::register_intents`] — the same
     /// track+RightClick→reset contract every other slider in the app has.
     slider_resets: Vec<Option<PanelAction>>,
-    /// Fixed-slot twin of `slider_ids` for DRIVEN rows: the read-only value
-    /// label's sync handle. Exactly one of `slider_ids[slot]` /
-    /// `driven_value_ids[slot]` is `Some` for a built row; both `None` for an
-    /// unbuilt slot. Consumed by `sync_row_values` every frame.
-    driven_value_ids: Vec<Option<DrivenValueLabel>>,
     row_catcher_ids: Vec<Option<NodeId>>,
     driver_btn_ids: Vec<Option<NodeId>>,
     envelope_btn_ids: Vec<Option<NodeId>>,
     driver_config_ids: Vec<Option<DriverConfigIds>>,
     /// Always `None` — no Ableton mapping surface on scene rows this phase
-    /// (D1's `match_param_row_click` still takes the slice; an all-`None`
-    /// vector is a legitimate "never active" input, not a stub).
+    /// (an all-`None` vector is a legitimate "never active" input, not a
+    /// stub).
     ableton_config_ids: Vec<Option<AbletonConfigIds>>,
     audio_btn_ids: Vec<Option<NodeId>>,
     audio_configs: Vec<Option<(DrawerIds, usize)>>,
@@ -702,6 +614,12 @@ struct SceneCardState {
     /// (mirrors `ScenePanel::metallic_slider`/`roughness_slider`, generalized
     /// to N rows), motion writes live, release commits ONE undo unit.
     drag_sliders: Vec<crate::slider::SliderDragState>,
+    /// P2 slice 2b (`docs/WIDGET_TREE_DESIGN.md` §4): widget → `(row, role)`
+    /// for every interactive node this card's rows minted — populated by
+    /// `reindex_row` right after a row's fields are set, cleared at the top
+    /// of every `resize`. The only sanctioned way `ScenePanel::handle_event`
+    /// identifies a row element, mirroring `ParamCardPanel::row_index`.
+    row_index: RowIndex,
 }
 
 impl SceneCardState {
@@ -709,11 +627,9 @@ impl SceneCardState {
         Self {
             rows: Vec::new(),
             mod_state: ParamModState::allocate(0),
-            id_map: ahash::AHashMap::new(),
             current_values: Vec::new(),
             slider_ids: Vec::new(),
             slider_resets: Vec::new(),
-            driven_value_ids: Vec::new(),
             row_catcher_ids: Vec::new(),
             driver_btn_ids: Vec::new(),
             envelope_btn_ids: Vec::new(),
@@ -728,6 +644,7 @@ impl SceneCardState {
             mod_tab_ids: Vec::new(),
             mod_active_tab: Vec::new(),
             drag_sliders: Vec::new(),
+            row_index: RowIndex::default(),
         }
     }
 
@@ -750,7 +667,6 @@ impl SceneCardState {
         self.current_values.resize(n, 0.0);
         self.slider_ids.resize(n, None);
         self.slider_resets.resize_with(n, || None);
-        self.driven_value_ids.resize_with(n, || None);
         self.row_catcher_ids.resize(n, None);
         self.driver_btn_ids.resize(n, None);
         self.envelope_btn_ids.resize(n, None);
@@ -769,7 +685,7 @@ impl SceneCardState {
         while self.drag_sliders.len() < n {
             self.drag_sliders.push(crate::slider::SliderDragState::default());
         }
-        self.id_map.clear();
+        self.row_index.clear();
     }
 
 
@@ -802,31 +718,20 @@ impl SceneCardState {
         }
     }
 
-    /// BUG-250: map a [`RowClick::EnumValueCell`] hit to the shared
+    /// BUG-250: map an enum row's value-cell click to the shared
     /// cycle-or-dropdown action set (`enum_value_cell_actions`), targeting
     /// the layer's generator like every other scene-row card action —
     /// `target` is the caller's `GraphParamTarget::GeneratorOf(vm.layer_id)`
     /// (BUG-292), passed in the same way `audio_toggle_action`/
     /// `audio_set_source_action` already take it (`SceneCardState` has no
     /// `live_layer_id` of its own to derive it from). The current value
-    /// comes from this pass's `id_map` snapshot (D1: rebuilt every build,
-    /// never stale); the cell node id anchors the dropdown under the row's
-    /// own value text.
+    /// comes from `current_values` (D1: rebuilt every build, never stale);
+    /// the cell node id anchors the dropdown under the row's own value text.
     fn enum_value_cell_action(&self, target: GraphParamTarget, i: usize, clicked: NodeId) -> Vec<PanelAction> {
         let info = &self.rows[i];
         let labels = info.spec.value_labels.clone().unwrap_or_default();
         let pid = self.pid_at(i);
-        // P2 slice 2a: the unified properties card has no synthesized
-        // `id_map` entry (real param ids carry no `RowAddr`) — read the
-        // plain current-value cache instead. The legacy per-family cards
-        // (`world_card` etc.) never populate `current_values`, so this falls
-        // back to `id_map` for them, unchanged.
-        let value = self
-            .current_values
-            .get(i)
-            .copied()
-            .or_else(|| self.id_map.get(&pid).map(|(_, v)| *v))
-            .unwrap_or(info.spec.default);
+        let value = self.current_values.get(i).copied().unwrap_or(info.spec.default);
         let cell = self
             .slider_ids
             .get(i)
@@ -839,16 +744,14 @@ impl SceneCardState {
     /// P2 slice 2a: populate this card from a FILTERED slice of the layer's
     /// real generator [`ParamSurface`] — `retained` is a retained-index
     /// list into `config.rows`, applied UNIFORMLY so index-alignment
-    /// survives the filter. Unlike the legacy per-family builders, no
-    /// `id_map`/synthesized id: `rows[i].id` IS the real exposed param id
-    /// already, so writes dispatch through the byte-for-byte exposed-param
-    /// path every other card uses.
+    /// survives the filter. No synthesized id: `rows[i].id` IS the real
+    /// exposed param id already, so writes dispatch through the
+    /// byte-for-byte exposed-param path every other card uses.
     fn configure_from_filtered(&mut self, config: &ParamSurface, retained: &[usize]) {
         let n = retained.len();
         self.resize(n);
         self.rows = retained.iter().map(|&i| config.rows[i].clone()).collect();
         self.current_values = retained.iter().map(|&i| config.rows[i].value.base).collect();
-        self.id_map.clear();
 
         let mods: Vec<RowMod> = retained.iter().map(|&i| config.rows[i].modulation.clone()).collect();
         self.mod_state.sync_from_config(n, &mods);
@@ -873,10 +776,76 @@ impl SceneCardState {
         }
     }
 
-    fn mod_tab_hit(&self, id: NodeId) -> Option<(usize, ModTab)> {
-        self.mod_tab_ids.iter().enumerate().find_map(|(pi, tabs)| {
-            tabs.iter().find(|(tid, _)| *tid == id).map(|&(_, t)| (pi, t))
-        })
+    /// Populate `self.row_index` for row `i` from the per-row node-id fields
+    /// that were just built — mirrors `ParamCardPanel::reindex_row`
+    /// (`docs/WIDGET_TREE_DESIGN.md` §4/§5b): routing agrees with rendering
+    /// by construction. Only the roles this card's `build_properties_row`
+    /// actually populates are indexed (no toggle rows, no OSC/mapping
+    /// surface, no relight chrome on scene rows).
+    fn reindex_row(&mut self, tree: &UITree, i: usize) {
+        if let Some(s) = &self.slider_ids[i] {
+            self.row_index.insert(tree.widget_of(s.track), i, RowRole::Slider);
+            self.row_index.insert(tree.widget_of(s.value_text), i, RowRole::Slider);
+            if let Some(l) = s.label {
+                self.row_index.insert(tree.widget_of(l), i, RowRole::Slider);
+            }
+        }
+        if let Some(t) = &self.trim_ids[i] {
+            self.row_index.insert(tree.widget_of(t.fill_id), i, RowRole::Slider);
+            self.row_index.insert(tree.widget_of(t.min_bar_id), i, RowRole::Slider);
+            self.row_index.insert(tree.widget_of(t.max_bar_id), i, RowRole::Slider);
+        }
+        if let Some(t) = &self.target_ids[i] {
+            self.row_index.insert(tree.widget_of(t.target_bar_id), i, RowRole::Slider);
+        }
+        if let Some(rc) = self.row_catcher_ids[i] {
+            self.row_index.insert(tree.widget_of(rc), i, RowRole::RowCatcher);
+        }
+        if let Some(b) = self.driver_btn_ids[i] {
+            self.row_index.insert(tree.widget_of(b), i, RowRole::DriverBtn);
+        }
+        if let Some(b) = self.envelope_btn_ids[i] {
+            self.row_index.insert(tree.widget_of(b), i, RowRole::EnvelopeBtn);
+        }
+        if let Some(b) = self.audio_btn_ids[i] {
+            self.row_index.insert(tree.widget_of(b), i, RowRole::AudioBtn);
+        }
+        if let Some(c) = &self.driver_config_ids[i] {
+            for &b in c.beat_div_btn_ids.iter() {
+                self.row_index.insert(tree.widget_of(b), i, RowRole::DriverConfig);
+            }
+            for b in [c.straight_btn_id, c.dotted_btn_id, c.triplet_btn_id, c.free_btn_id, c.invert_btn_id] {
+                self.row_index.insert(tree.widget_of(b), i, RowRole::DriverConfig);
+            }
+            for &b in c.wave_btn_ids.iter() {
+                self.row_index.insert(tree.widget_of(b), i, RowRole::DriverConfig);
+            }
+        }
+        if let Some(c) = &self.envelope_config_ids[i] {
+            self.row_index.insert(tree.widget_of(c.decay_slider.track), i, RowRole::EnvelopeConfig);
+            self.row_index.insert(tree.widget_of(c.decay_slider.value_text), i, RowRole::EnvelopeConfig);
+            if let Some(l) = c.decay_slider.label {
+                self.row_index.insert(tree.widget_of(l), i, RowRole::EnvelopeConfig);
+            }
+        }
+        if let Some(c) = &self.ableton_config_ids[i] {
+            self.row_index.insert(tree.widget_of(c.invert_btn_id), i, RowRole::AbletonConfig);
+        }
+        if let Some((dids, _)) = &self.audio_configs[i] {
+            for &b in dids.button_ids() {
+                self.row_index.insert(tree.widget_of(b), i, RowRole::AudioConfig);
+            }
+            for s in &dids.sliders {
+                self.row_index.insert(tree.widget_of(s.track), i, RowRole::AudioConfig);
+                self.row_index.insert(tree.widget_of(s.value_text), i, RowRole::AudioConfig);
+                if let Some(l) = s.label {
+                    self.row_index.insert(tree.widget_of(l), i, RowRole::AudioConfig);
+                }
+            }
+        }
+        for &(node, _tab) in &self.mod_tab_ids[i] {
+            self.row_index.insert(tree.widget_of(node), i, RowRole::ModTab);
+        }
     }
 
     fn audio_toggle_action(&self, target: GraphParamTarget, pi: usize) -> Vec<PanelAction> {
@@ -999,54 +968,15 @@ pub struct ScenePanel {
     add_fog_id: Option<NodeId>,
     new_scene_id: Option<NodeId>,
     open_graph_editor_id: Option<NodeId>,
-    /// C-P1a (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md): the converted
-    /// Environment/Fog family's card-shaped row state. Replaces the deleted
-    /// `row_ids: [RowIds; 4]` — see `SceneCardState`'s doc comment for the
-    /// fixed-slot convention.
-    world_card: SceneCardState,
-    /// C-P1b (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md): the converted Object
-    /// family's card-shaped row state — same `SceneCardState` shape as
-    /// `world_card`, sized to `OBJ_ROW_COUNT` FIXED slots (`OBJ_ROW_POS_X`..
-    /// `OBJ_ROW_ROUGHNESS`) rather than World's 4, since only ONE object's
-    /// Properties body renders at a time (the outliner selection), same as
-    /// World only ever shows one Environment/Fog section. Replaces the
-    /// deleted `object_value_cells`/`metallic_slider`/`roughness_slider`.
-    object_card: SceneCardState,
-    /// C-P1c (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md): the converted Light
-    /// family's card-shaped row state — same `SceneCardState` shape,
-    /// `LIGHT_ROW_COUNT` fixed slots, one light's Properties body at a time.
-    light_card: SceneCardState,
-    /// C-P1c: the converted Camera family's card-shaped row state —
-    /// `CAM_ROW_COUNT` fixed slots (the union of every field across the
-    /// three curated camera atoms; only one row set exists per scene).
-    camera_card: SceneCardState,
-    /// C-P1d (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md): the converted
-    /// Modifier family's card-shaped row state — same `SceneCardState`
-    /// shape, but VARIABLE slot count (unlike World/Object/Light/Camera's
-    /// fixed unions): a modifier stack is a reorderable list of 0..N
-    /// modifiers, each contributing its own curated param rows, so the
-    /// selected object's `modifier_card` regrows every properties-body
-    /// build to the ACTUAL total row count for this frame (`build_modifier_row`
-    /// threads a running slot cursor across the stack). Row IDENTITY is
-    /// still stable across frames despite the index not being: the
-    /// synthesized `ParamId` (D2) encodes `(node_doc_id, param_key)`, not
-    /// the slot index, so `resolve_scene_param`/the id-map never depend on
-    /// slot stability — only `mod_active_tab`/`drag_sliders` (which
-    /// `SceneCardState::resize` already grows-never-truncates) could, in
-    /// principle, show the wrong row's drawer tab open for one frame after
-    /// a reorder mid-drawer-open; accepted as a cosmetic edge case, same
-    /// honesty standard as every other documented consequence in this file.
-    modifier_card: SceneCardState,
     /// P2 slice 2a (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): the ONE
     /// unified properties card — the selected outliner item's rows, filtered
     /// straight off `full_params` (the layer's REAL generator
-    /// `ParamSurface`) by section, rendered through the same
-    /// `build_param_row`/`match_param_row_click` core every effect/generator
-    /// card row uses. Replaces `world_card`/`object_card`/`light_card`/
-    /// `camera_card`/`modifier_card`'s ROW rendering above — those five
-    /// fields stay declared (never populated after this slice) only so
-    /// `resolve_scene_param`'s id-map read still compiles; they carry no
-    /// rows and are never rendered. See `docs/BUG_BACKLOG.md` slice 2b.
+    /// `ParamSurface`) by section, rendered and dispatched through the same
+    /// `build_param_row`/`RowIndex`/`row_action` core every effect/generator
+    /// card row uses (P2 slice 2b deleted the five per-family
+    /// `world_card`/`object_card`/`light_card`/`camera_card`/`modifier_card`
+    /// fields this replaced — they had stopped rendering rows in 2a and were
+    /// kept declared only to back a synthesized-id lookup that always missed).
     properties_card: SceneCardState,
     /// P2 slice 2a: the scene panel's bound layer's FULL generator
     /// `ParamSurface` (every exposed param, every section) — built by
@@ -1150,11 +1080,6 @@ impl Default for ScenePanel {
             add_fog_id: None,
             new_scene_id: None,
             open_graph_editor_id: None,
-            world_card: SceneCardState::new(),
-            object_card: SceneCardState::new(),
-            light_card: SceneCardState::new(),
-            camera_card: SceneCardState::new(),
-            modifier_card: SceneCardState::new(),
             properties_card: SceneCardState::new(),
             full_params: None,
             properties_retained: Vec::new(),
@@ -1187,29 +1112,16 @@ impl ScenePanel {
         self.open
     }
 
-    /// Node-intent dispatch for this panel's right-click gestures: every
-    /// card family's slider resets (main rows + armed drawers). Called from
-    /// `UIRoot::repopulate_intents` like every other intent-bearing panel —
-    /// the missing hookup was why scene-panel sliders had no right-click
-    /// reset while every other slider in the app did.
+    /// Node-intent dispatch for this panel's right-click gestures: the
+    /// properties card's slider resets (main rows + armed drawers). Called
+    /// from `UIRoot::repopulate_intents` like every other intent-bearing
+    /// panel — the missing hookup was why scene-panel sliders had no
+    /// right-click reset while every other slider in the app did.
     pub fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
         if !self.open || !matches!(self.state, SceneSetupState::Live(_)) {
             return;
         }
-        for card in [
-            &self.world_card,
-            &self.object_card,
-            &self.light_card,
-            &self.camera_card,
-            &self.modifier_card,
-            // P2 slice 2a: the unified properties card — its rows are the
-            // only ones actually built after this slice; the five above
-            // stay declared (never populated) only so `resolve_scene_param`
-            // keeps compiling.
-            &self.properties_card,
-        ] {
-            card.register_intents(intents);
-        }
+        self.properties_card.register_intents(intents);
     }
 
     pub fn open(&mut self) {
@@ -1235,10 +1147,9 @@ impl ScenePanel {
     /// P2 slice 2a: hand the panel the layer's FULL generator
     /// `ParamSurface` (state_sync builds it via the SAME
     /// `gen_params_to_surface` the main inspector's generator card uses, for
-    /// THIS panel's bound layer — `live_layer_id()`, never `active_layer`,
-    /// the same invariant `resolve_scene_write` established for the old
-    /// converted rows: the panel edits the scene of its OWN docked layer,
-    /// which can legitimately differ from the app's active layer). The
+    /// THIS panel's bound layer — `live_layer_id()`, never `active_layer`:
+    /// the panel edits the scene of its OWN docked layer, which can
+    /// legitimately differ from the app's active layer (BUG-292). The
     /// properties body filters this down to the selected item's sections at
     /// build time — see `build_filtered_properties`.
     pub fn configure_params(&mut self, config: Option<ParamSurface>) {
@@ -1256,53 +1167,13 @@ impl ScenePanel {
         }
     }
 
-    /// Per-frame VALUE sync (sibling of `ui_bridge::sync_card_values`): push
-    /// fresh row values onto the already-built panel without a structural
-    /// rebuild. `resolve` maps a row's `RowAddr` to its current value in the
-    /// caller's project; `None` skips the row (unresolvable rows keep their
-    /// built text). Non-driven rows update their card slider (fill + thumb +
-    /// readout); driven rows update their read-only value label through the
-    /// handle the driven branch now keeps (`driven_value_ids`).
-    pub fn sync_row_values(&self, tree: &mut UITree, resolve: &dyn Fn(&RowAddr) -> Option<f32>) {
-        if !self.open {
-            return;
-        }
-        for card in [
-            &self.world_card,
-            &self.object_card,
-            &self.light_card,
-            &self.camera_card,
-            &self.modifier_card,
-        ] {
-            for (slot, ids) in card.slider_ids.iter().enumerate() {
-                let Some(ids) = ids else { continue };
-                let info = &card.rows[slot];
-                let Some((addr, _)) = card.id_map.get(&info.id) else { continue };
-                let Some(v) = resolve(addr) else { continue };
-                let norm = crate::slider::BitmapSlider::value_to_normalized(v, info.spec.min, info.spec.max);
-                let text = super::param_slider_shared::format_param_value(
-                    v,
-                    info.spec.min,
-                    info.spec.whole_numbers,
-                    info.spec.is_angle,
-                    info.spec.value_labels.as_deref(),
-                );
-                crate::slider::BitmapSlider::update_value(tree, ids, norm, &text);
-            }
-            for entry in card.driven_value_ids.iter().flatten() {
-                let Some(v) = resolve(&entry.addr) else { continue };
-                tree.set_text(entry.label, &driven_text(v, &entry.fmt));
-            }
-        }
-    }
-
-    /// P2 slice 2a: the unified properties card's per-frame VALUE sync — the
-    /// real-param twin of `sync_row_values` above, without the `RowAddr`
-    /// indirection (a real exposed param's current value is already
-    /// index-aligned with `full_params.rows`/`properties_card.rows`
-    /// by construction). `slots` is `ui_translate::param_slots_to_ui(&gp.
-    /// params)` for the SAME layer `full_params` was built from — the exact
-    /// per-param index space `properties_card`'s filter selected from.
+    /// Per-frame VALUE sync (sibling of `ui_bridge::sync_card_values`): the
+    /// unified properties card's rows, without a structural rebuild. A real
+    /// exposed param's current value is already index-aligned with
+    /// `full_params.rows`/`properties_card.rows` by construction. `slots` is
+    /// `ui_translate::param_slots_to_ui(&gp.params)` for the SAME layer
+    /// `full_params` was built from — the exact per-param index space
+    /// `properties_card`'s filter selected from.
     pub fn sync_properties_values(&mut self, tree: &mut UITree, slots: &[crate::view::UiParamSlot]) {
         if !self.open {
             return;
@@ -1385,26 +1256,6 @@ impl ScenePanel {
         self.add_fog_id = None;
         self.new_scene_id = None;
         self.open_graph_editor_id = None;
-        // Cleared to 0 rows here (not just resized in `build_world_properties`)
-        // so a frame where World never builds (state isn't `Live`) doesn't
-        // leave stale ids — `build_world_properties` resizes back to
-        // `WORLD_ROW_COUNT` when it does run.
-        self.world_card.resize(0);
-        // C-P1b: same "cleared here, resized back by whichever build_*
-        // branch runs" contract as `world_card` above — `object_card` only
-        // ever grows back to `OBJ_ROW_COUNT` when an Object is selected AND
-        // its Properties body actually builds.
-        self.object_card.resize(0);
-        // C-P1c: same contract — `light_card`/`camera_card` only ever grow
-        // back to their fixed slot count when their own Properties body
-        // actually builds this frame.
-        self.light_card.resize(0);
-        self.camera_card.resize(0);
-        // C-P1d: same contract — `modifier_card` regrows to the selected
-        // object's ACTUAL total modifier-param-row count when its
-        // properties body builds this frame (variable, unlike the other
-        // three families' fixed unions — see `modifier_card`'s doc comment).
-        self.modifier_card.resize(0);
         self.add_object_id = None;
         self.add_light_id = None;
         self.import_model_id = None;
@@ -1821,9 +1672,9 @@ impl ScenePanel {
     /// own order (never re-sorted) — configures `self.properties_card` from
     /// the filtered slice (real param ids, real modulation state, no
     /// synthesis), and renders every retained row through the shared
-    /// `build_param_row` core (`ParamCardPanel::{build_param_row,
-    /// match_param_row_click}` — §5.6: one row component, no per-panel
-    /// forks). Stores the retained-index list on `self.properties_retained`
+    /// `build_param_row`/`RowIndex`/`row_action` core `ParamCardPanel` uses
+    /// (§5.6: one row component, no per-panel forks). Stores the
+    /// retained-index list on `self.properties_retained`
     /// so the per-frame value sync (`sync_properties_values`) doesn't need
     /// to re-filter. Renders nothing when there's no config or no section
     /// matches — callers render their own honest empty/custom messaging.
@@ -1932,11 +1783,11 @@ impl ScenePanel {
         card.mod_tab_ids[slot] = built.mod_tabs;
         card.slider_ids[slot] = built.slider;
         card.slider_resets[slot] = Some(built.slider_reset.clone());
-        card.driven_value_ids[slot] = None;
         if let Some(ids) = built.slider {
             card.drag_sliders[slot].set_ids(ids);
             card.drag_sliders[slot].set_range(info.spec.min, info.spec.max, false);
         }
+        card.reindex_row(tree, slot);
         built.new_cy
     }
 
@@ -2127,10 +1978,6 @@ impl ScenePanel {
     /// Light properties body: mode/color/intensity/pos/aim/cast_shadows/
     /// shadow_softness + the always-present Light Size sub-row — the body
     /// `build_light_row` used to render only when expanded; now always on.
-    /// C-P1c: every row now builds through `build_light_card_row` (the
-    /// shared card row core) — `self.light_card` regrows to its full fixed
-    /// slot count every time a Light's Properties body builds, mirroring
-    /// `build_object_properties_body`'s `self.object_card.resize(..)`.
     /// P2 slice 2a: replaced the 13 hand-listed Mode/Color/Intensity/Pos/
     /// Aim/Shadow/Light-Size rows with one `build_filtered_properties` pass
     /// over `row.sections` (the light's own P1 section — see
@@ -2369,7 +2216,7 @@ impl ScenePanel {
     // is deleted in the same commit.
 
     /// Handle one input event. Returns `(consumed, actions)`.
-    pub fn handle_event(&mut self, event: &UIEvent) -> (bool, Vec<PanelAction>) {
+    pub fn handle_event(&mut self, event: &UIEvent, tree: &UITree) -> (bool, Vec<PanelAction>) {
         if !self.open {
             return (false, Vec::new());
         }
@@ -2519,87 +2366,19 @@ impl ScenePanel {
                             vm.scene_root_node_id,
                             *index as u32,
                         ));
-                    } else if let Some(rc) = match_param_row_click(
-                        *node_id,
-                        &self.properties_card.driver_btn_ids,
-                        &self.properties_card.envelope_btn_ids,
-                        &self.properties_card.driver_config_ids,
-                        &self.properties_card.ableton_config_ids,
-                        &self.properties_card.audio_btn_ids,
-                        &self.properties_card.audio_configs,
-                        &self.properties_card.slider_ids,
-                        &self.properties_card.osc_addresses,
-                        &self.properties_card.rows,
-                        &self.properties_card.mod_state,
-                    ) {
-                        // P2 slice 2a: the ONE unified properties card's D/E/A
-                        // buttons + config drawers — the SAME dispatch shape
-                        // `ParamCardPanel::handle_click_generator` uses. BUG-292:
+                    } else if let Some((row, role)) = self.properties_card.row_index.get(tree.widget_of(*node_id)) {
+                        // P2 slice 2b (`docs/WIDGET_TREE_DESIGN.md` §4/§5b):
+                        // the ONE unified properties card's D/E/A buttons +
+                        // config drawers, routed through the same
+                        // `RowIndex`/`row_action` core `ParamCardPanel` uses
+                        // — the id-array scan this replaced is gone. BUG-292:
                         // targets `GeneratorOf(vm.layer_id)`, the panel's own
                         // bound layer, NOT the active-layer-resolved plain
-                        // `Generator` — a scene row always lives on the
-                        // layer its panel is docked to, which can differ from
-                        // the app's active layer. Replaces the five
-                        // near-duplicate per-family blocks (world/object/
-                        // light/camera/modifier `_card`) this slice deleted.
+                        // `Generator` — a scene row always lives on the layer
+                        // its panel is docked to, which can differ from the
+                        // app's active layer.
                         let target = GraphParamTarget::GeneratorOf(vm.layer_id.clone());
-                        actions.extend(match rc {
-                            RowClick::DriverToggle(pi) => {
-                                self.properties_card.focus_mod_tab(pi, ModTab::Driver);
-                                vec![PanelAction::DriverToggle(target, self.properties_card.pid_at(pi))]
-                            }
-                            RowClick::EnvelopeToggle(pi) => {
-                                self.properties_card.focus_mod_tab(pi, ModTab::Envelope);
-                                vec![PanelAction::EnvelopeToggle(target, self.properties_card.pid_at(pi))]
-                            }
-                            RowClick::DriverConfig(pi, action) => {
-                                vec![PanelAction::DriverConfig(target, self.properties_card.pid_at(pi), action)]
-                            }
-                            RowClick::AbletonInvert(pi) => {
-                                vec![PanelAction::AbletonInvertToggle(target, self.properties_card.pid_at(pi))]
-                            }
-                            RowClick::AudioToggle(pi) => {
-                                self.properties_card.focus_mod_tab(pi, ModTab::Audio);
-                                self.properties_card.audio_toggle_action(target, pi)
-                            }
-                            RowClick::AudioSelectSend(pi, k) => {
-                                self.properties_card.audio_set_source_action(target, pi, Some(k), None, None)
-                            }
-                            RowClick::AudioSelectChip(pi, c) => {
-                                self.world_card.audio_select_chip_action(target, pi, c)
-                            }
-                            RowClick::AudioToggleMatrix(pi) => {
-                                if let Some(open) = self.world_card.mod_state.audio_matrix_open.get_mut(pi) {
-                                    *open = !*open;
-                                }
-                                Vec::new()
-                            }
-                            RowClick::AudioSelectKind(pi, k) => {
-                                self.properties_card.audio_set_source_action(target, pi, None, Some(k), None)
-                            }
-                            RowClick::AudioSelectBand(pi, b) => {
-                                self.properties_card.audio_set_source_action(target, pi, None, None, Some(b))
-                            }
-                            RowClick::AudioToggleInvert(pi) => {
-                                vec![PanelAction::AudioModSetInvert(target, self.properties_card.pid_at(pi))]
-                            }
-                            RowClick::AudioSelectTriggerMode(pi, m) => {
-                                vec![PanelAction::AudioModSetTriggerMode(target, self.properties_card.pid_at(pi), m)]
-                            }
-                            RowClick::AudioSelectAction(pi, k) => {
-                                vec![PanelAction::AudioModSetActionKind(target, self.properties_card.pid_at(pi), k)]
-                            }
-                            RowClick::AudioSelectWrap(pi, w) => {
-                                vec![PanelAction::AudioModSetWrap(target, self.properties_card.pid_at(pi), w)]
-                            }
-                            RowClick::LabelCopy => Vec::new(),
-                            RowClick::EnumValueCell(pi) => {
-                                self.properties_card.enum_value_cell_action(target, pi, *node_id)
-                            }
-                        });
-                    } else if let Some((pi, tab)) = self.properties_card.mod_tab_hit(*node_id) {
-                        self.properties_card.focus_mod_tab(pi, tab);
-                        actions.push(PanelAction::ModConfigTabChanged);
+                        actions.extend(self.properties_row_action(row, role, *node_id, target));
                     }
                 }
                 match &self.state {
@@ -2733,29 +2512,124 @@ impl ScenePanel {
         }
     }
 
-    fn owns_node(&self, node_id: NodeId) -> bool {
-        node_id == self.bg_id
+    /// Route a resolved `(row, role)` hit on the unified properties card to
+    /// the `PanelAction` it emits — the scene-panel twin of
+    /// `ParamCardPanel::row_action` (`docs/WIDGET_TREE_DESIGN.md` §4/§5b):
+    /// bundle roles (`DriverConfig`/`AbletonConfig`/`AudioConfig`) delegate
+    /// to the bundle's own `resolve`, this function only knows which row it
+    /// belongs to. `target` is the caller's `GraphParamTarget::GeneratorOf(
+    /// vm.layer_id)` (BUG-292) — `SceneCardState` has no `live_layer_id` of
+    /// its own to derive it from.
+    fn properties_row_action(
+        &mut self,
+        row: usize,
+        role: RowRole,
+        node: NodeId,
+        target: GraphParamTarget,
+    ) -> Vec<PanelAction> {
+        let card = &mut self.properties_card;
+        match role {
+            RowRole::Slider => {
+                let Some(ids) = card.slider_ids[row] else {
+                    return Vec::new();
+                };
+                if ids.value_text == node && card.rows[row].spec.value_labels.is_some() {
+                    return card.enum_value_cell_action(target, row, node);
+                }
+                // The track itself (drag start) and a plain numeric value
+                // cell (double-click type-in, a different dispatch path)
+                // emit no click action — no OSC surface on scene rows this
+                // phase, so a label click is also inert here.
+                Vec::new()
+            }
+            RowRole::RowCatcher | RowRole::EnvelopeConfig => Vec::new(),
+            RowRole::DriverBtn => {
+                card.focus_mod_tab(row, ModTab::Driver);
+                vec![PanelAction::DriverToggle(target, card.pid_at(row))]
+            }
+            RowRole::EnvelopeBtn => {
+                card.focus_mod_tab(row, ModTab::Envelope);
+                vec![PanelAction::EnvelopeToggle(target, card.pid_at(row))]
+            }
+            RowRole::AudioBtn => {
+                card.focus_mod_tab(row, ModTab::Audio);
+                card.audio_toggle_action(target, row)
+            }
+            RowRole::DriverConfig => {
+                let Some(cfg) = &card.driver_config_ids[row] else {
+                    return Vec::new();
+                };
+                match cfg.resolve(node) {
+                    Some(action) => vec![PanelAction::DriverConfig(target, card.pid_at(row), action)],
+                    None => Vec::new(),
+                }
+            }
+            RowRole::AbletonConfig => {
+                let Some(cfg) = &card.ableton_config_ids[row] else {
+                    return Vec::new();
+                };
+                if cfg.resolve(node) {
+                    vec![PanelAction::AbletonInvertToggle(target, card.pid_at(row))]
+                } else {
+                    Vec::new()
+                }
+            }
+            RowRole::AudioConfig => {
+                let Some((dids, send_count)) = card.audio_configs[row].as_ref() else {
+                    return Vec::new();
+                };
+                let Some(click) =
+                    resolve_audio_config_click(dids, *send_count, &card.mod_state, &card.rows[row], row, node)
+                else {
+                    return Vec::new();
+                };
+                match click {
+                    AudioConfigClick::SelectSend(k) => card.audio_set_source_action(target, row, Some(k), None, None),
+                    AudioConfigClick::SelectChip(c) => card.audio_select_chip_action(target, row, c),
+                    AudioConfigClick::ToggleMatrix => {
+                        if let Some(open) = card.mod_state.audio_matrix_open.get_mut(row) {
+                            *open = !*open;
+                        }
+                        Vec::new()
+                    }
+                    AudioConfigClick::SelectKind(k) => card.audio_set_source_action(target, row, None, Some(k), None),
+                    AudioConfigClick::SelectBand(b) => card.audio_set_source_action(target, row, None, None, Some(b)),
+                    AudioConfigClick::ToggleInvert => {
+                        vec![PanelAction::AudioModSetInvert(target, card.pid_at(row))]
+                    }
+                    AudioConfigClick::SelectTriggerMode(m) => {
+                        vec![PanelAction::AudioModSetTriggerMode(target, card.pid_at(row), m)]
+                    }
+                    AudioConfigClick::SelectAction(k) => {
+                        vec![PanelAction::AudioModSetActionKind(target, card.pid_at(row), k)]
+                    }
+                    AudioConfigClick::SelectWrap(w) => {
+                        vec![PanelAction::AudioModSetWrap(target, card.pid_at(row), w)]
+                    }
+                }
+            }
+            RowRole::ModTab => {
+                let Some(&(_, tab)) = card.mod_tab_ids[row].iter().find(|(n, _)| *n == node) else {
+                    return Vec::new();
+                };
+                card.focus_mod_tab(row, tab);
+                vec![PanelAction::ModConfigTabChanged]
+            }
+            // Never inserted into `row_index` this phase (no toggle rows, no
+            // OSC/mapping surface, no relight chrome on scene rows) — kept
+            // here only for match exhaustiveness.
+            RowRole::Label
+            | RowRole::ToggleBtn
+            | RowRole::MappingChevron
+            | RowRole::SectionHeader
+            | RowRole::RelightToggle
+            | RowRole::RelightHeightBtn
+            | RowRole::RelightSlider => Vec::new(),
+        }
     }
 
-    /// SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md D2: resolve a card-shaped
-    /// action's synthesized `ParamId` back to this frame's write address +
-    /// snapshot value. `dispatch_inspector`'s `ParamSnapshot`/`ParamChanged`/
-    /// `ParamCommit` arms check this FIRST — a hit means the id addresses a
-    /// converted scene row (routes through `SetGraphNodeParamCommand`); a
-    /// miss falls through to the existing `with_preset_graph_mut` exposed-
-    /// param path unchanged. C-P1c: checks `light_card`/`camera_card` too;
-    /// C-P1d adds `modifier_card` — every card's map is disjoint by
-    /// construction (`synth_world_param_id`'s `node_doc_id` is document-wide
-    /// unique).
-    pub fn resolve_scene_param(&self, id: &manifold_foundation::ParamId) -> Option<(RowAddr, f32)> {
-        self.world_card
-            .id_map
-            .get(id)
-            .or_else(|| self.object_card.id_map.get(id))
-            .or_else(|| self.light_card.id_map.get(id))
-            .or_else(|| self.camera_card.id_map.get(id))
-            .or_else(|| self.modifier_card.id_map.get(id))
-            .cloned()
+    fn owns_node(&self, node_id: NodeId) -> bool {
+        node_id == self.bg_id
     }
 
     /// The name label's rect for `group_node_id`, if a row for it was built
@@ -3041,19 +2915,6 @@ mod tests {
                         index: 0,
                         node_doc_id: 70,
                         display_name: "Bend".to_string(),
-                        params: vec![
-                            ModifierParamRowVm::Axis {
-                                label: "Axis",
-                                row: menum(
-                                    RowValue { addr: RowAddr { scope_path: vec![42], node_doc_id: 70, param_id: "axis".to_string() }, value: 1.0, min: 0.0, max: 2.0, driven: false, exposed: false },
-                                    vec!["X", "Y", "Z"],
-                                ),
-                            },
-                            ModifierParamRowVm::Numeric {
-                                label: "Angle",
-                                row: mrow(RowValue { addr: RowAddr { scope_path: vec![42], node_doc_id: 70, param_id: "angle".to_string() }, value: 0.5, min: -6.28, max: 6.28, driven: false, exposed: false }),
-                            },
-                        ],
                     }],
                     modifiers_addable: true,
                     sections: Vec::new(),
@@ -3150,7 +3011,7 @@ mod tests {
             node_id: eye_id,
             pos: Vec2::ZERO,
             modifiers: Modifiers::default(),
-        });
+        }, &tree);
         assert!(consumed, "the eye toggle must be clickable");
         assert!(matches!(
             actions.as_slice(),
@@ -3176,7 +3037,7 @@ mod tests {
             node_id: eye_id_2,
             pos: Vec2::ZERO,
             modifiers: Modifiers::default(),
-        });
+        }, &tree);
         assert!(consumed_2);
         assert!(matches!(
             actions_2.as_slice(),
@@ -3195,13 +3056,11 @@ mod tests {
                 index: 0,
                 node_doc_id: 70,
                 display_name: "Bend".to_string(),
-                params: vec![],
             },
             ModifierKnownRow {
                 index: 1,
                 node_doc_id: 71,
                 display_name: "Twist".to_string(),
-                params: vec![],
             },
         ];
         row.modifiers_addable = modifiers_addable;
@@ -3230,7 +3089,7 @@ mod tests {
             node_id: button_id,
             pos: crate::node::Vec2::new(0.0, 0.0),
             modifiers: Modifiers::default(),
-        });
+        }, &tree);
         assert!(consumed);
         assert_eq!(actions.len(), 1);
         assert!(matches!(
@@ -3263,7 +3122,7 @@ mod tests {
             node_id: panel.close_id,
             pos: crate::node::Vec2::new(0.0, 0.0),
             modifiers: Modifiers::default(),
-        });
+        }, &tree);
         assert!(consumed);
         assert!(
             matches!(actions.as_slice(), [PanelAction::OpenSceneSetup]),
@@ -3292,7 +3151,7 @@ mod tests {
             node_id: remove_id,
             pos: crate::node::Vec2::new(0.0, 0.0),
             modifiers: Modifiers::default(),
-        });
+        }, &tree);
         assert!(consumed);
         assert!(matches!(
             &actions[0],
@@ -3346,7 +3205,7 @@ mod tests {
             node_id: move_id,
             pos: crate::node::Vec2::new(0.0, 0.0),
             modifiers: Modifiers::default(),
-        });
+        }, &tree);
         assert!(consumed);
         assert!(matches!(
             &actions[0],
@@ -3379,7 +3238,7 @@ mod tests {
             node_id: add_object_id,
             pos: crate::node::Vec2::new(0.0, 0.0),
             modifiers: Modifiers::default(),
-        });
+        }, &tree);
         assert!(consumed);
         assert_eq!(actions.len(), 1);
         assert!(matches!(
@@ -3391,7 +3250,7 @@ mod tests {
             node_id: add_light_id,
             pos: crate::node::Vec2::new(0.0, 0.0),
             modifiers: Modifiers::default(),
-        });
+        }, &tree);
         assert!(consumed);
         assert_eq!(actions.len(), 1);
         assert!(matches!(
@@ -3423,7 +3282,7 @@ mod tests {
             node_id: remove_id,
             pos: crate::node::Vec2::new(0.0, 0.0),
             modifiers: Modifiers::default(),
-        });
+        }, &tree);
         assert!(consumed);
         assert!(matches!(
             &actions[0],
@@ -3449,7 +3308,7 @@ mod tests {
             node_id: dup_id,
             pos: crate::node::Vec2::new(0.0, 0.0),
             modifiers: Modifiers::default(),
-        });
+        }, &tree);
         assert!(consumed);
         assert!(matches!(
             &actions[0],
@@ -3558,7 +3417,7 @@ mod tests {
             node_id: remove_id,
             pos: crate::node::Vec2::new(0.0, 0.0),
             modifiers: Modifiers::default(),
-        });
+        }, &tree);
         assert!(consumed);
         assert!(matches!(
             &actions[0],
@@ -3583,7 +3442,7 @@ mod tests {
             node_id: import_model_id,
             pos: crate::node::Vec2::new(0.0, 0.0),
             modifiers: Modifiers::default(),
-        });
+        }, &tree);
         assert!(consumed);
         assert_eq!(actions.len(), 1);
         assert!(matches!(
@@ -3605,7 +3464,7 @@ mod tests {
             node_id: name_id,
             pos: crate::node::Vec2::new(0.0, 0.0),
             modifiers: Modifiers::default(),
-        });
+        }, &tree);
         assert!(consumed);
         assert_eq!(actions.len(), 1);
         assert!(matches!(
@@ -3642,7 +3501,7 @@ mod tests {
             node_id: world_row_id,
             pos: crate::node::Vec2::new(0.0, 0.0),
             modifiers: Modifiers::default(),
-        });
+        }, &tree);
         assert!(consumed);
         assert_eq!(panel.selection.get(&LayerId::new("layer-1")), Some(&SceneSelection::World));
 

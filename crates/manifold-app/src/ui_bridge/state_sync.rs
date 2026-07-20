@@ -877,8 +877,6 @@ pub fn push_state(
 /// `local_project` upstream of every call, so this writes the user's own
 /// value straight back. No-op while the panel is closed or not Live.
 pub fn sync_scene_row_values(ui: &mut UIRoot, project: &Project) {
-    use manifold_ui::panels::scene_setup_panel::RowAddr;
-
     if !ui.scene_setup_panel.is_open() {
         return;
     }
@@ -888,72 +886,15 @@ pub fn sync_scene_row_values(ui: &mut UIRoot, project: &Project) {
     let Some((_, layer)) = project.timeline.find_layer_by_id(layer_id.as_str()) else {
         return;
     };
-    let gen_type = layer.generator_type().clone();
-    let bundled = manifold_renderer::node_graph::bundled_preset_def(&gen_type);
-    let def = layer.generator_graph().or(bundled);
-    let Some(def) = def else { return };
     let gen_inst = layer.gen_params();
 
-    // Resolve a row's address to its current numeric value. BOUND rows first
-    // (BUG-260): a row whose inner (node, param) is covered by a card/user
-    // binding lives in the binding's instance slot — the write path edits
-    // that slot (`inspector.rs::scene_bound_slot`; a def write on a bound
-    // param is structurally dead), so the display must read the slot too, or
-    // the row pins back to the def's stale value one frame after every write.
-    // Mirrors the structural build's `display_value` below; the def walk is
-    // the unbound fallback. A row whose param has no override entry (still at
-    // catalog default) resolves to `None` — the panel keeps the built text,
-    // which came from the same catalog default; a value only changes via a
-    // write that lifts the override.
-    let resolve = |addr: &RowAddr| -> Option<f32> {
-        let bound_value = gen_inst
-            .and_then(|inst| {
-                inst.binding_id_for_node_param(addr.node_doc_id, &addr.param_id)
-                    .or_else(|| {
-                        manifold_core::effects::binding_id_for_node_param_in(
-                            def,
-                            addr.node_doc_id,
-                            &addr.param_id,
-                        )
-                    })
-                    .and_then(|id| {
-                        inst.params
-                            .contains(id.as_str())
-                            .then(|| inst.get_base_param(id.as_str()))
-                    })
-            });
-        if let Some(v) = bound_value {
-            return Some(v);
-        }
-        let mut nodes = &def.nodes;
-        for scope_id in &addr.scope_path {
-            nodes = &nodes.iter().find(|n| n.id == *scope_id)?.group.as_ref()?.nodes;
-        }
-        let node = nodes.iter().find(|n| n.id == addr.node_doc_id)?;
-        match node.params.get(addr.param_id.as_str())? {
-            manifold_core::effect_graph_def::SerializedParamValue::Float { value } => Some(*value),
-            manifold_core::effect_graph_def::SerializedParamValue::Int { value } => {
-                Some(*value as f32)
-            }
-            manifold_core::effect_graph_def::SerializedParamValue::Enum { value } => {
-                Some(*value as f32)
-            }
-            manifold_core::effect_graph_def::SerializedParamValue::Bool { value } => {
-                Some(if *value { 1.0 } else { 0.0 })
-            }
-            _ => None,
-        }
-    };
-
-    ui.scene_setup_panel.sync_row_values(&mut ui.tree, &resolve);
-
-    // P2 slice 2a: the new unified properties card's per-frame value push —
-    // real exposed params, resolved the SAME way `sync_card_values` resolves
-    // the main generator inspector card's values (`ui_translate::
-    // param_slots_to_ui`), just against the SCENE PANEL's own bound layer
-    // (`live_layer_id`) rather than the app's `active_layer` — the same
-    // "panel's own layer, not active_layer" invariant `resolve_scene_write`
-    // established for the old converted rows (see that fn's doc comment).
+    // The unified properties card's per-frame value push — real exposed
+    // params, resolved the SAME way `sync_card_values` resolves the main
+    // generator inspector card's values (`ui_translate::param_slots_to_ui`),
+    // just against the SCENE PANEL's own bound layer (`live_layer_id`)
+    // rather than the app's `active_layer` (a scene row always lives on the
+    // layer its panel is docked to, which can differ from the app's active
+    // layer — BUG-292).
     if let Some(gp) = gen_inst {
         let slots = crate::ui_translate::param_slots_to_ui(&gp.params);
         ui.scene_setup_panel.sync_properties_values(&mut ui.tree, &slots);
@@ -1813,9 +1754,9 @@ pub fn sync_inspector_data(
                             // Bound-row value override: a row whose inner (node, param) is
                             // covered by a card/user binding LIVES in the
                             // binding's instance slot — the write path edits
-                            // that slot (inspector.rs `scene_bound_slot`), so
-                            // the displayed value must read it too, or the
-                            // panel shows the def's stale import default.
+                            // that slot, so the displayed value must read it
+                            // too, or the panel shows the def's stale import
+                            // default.
                             let hoisted_gen_inst = l.gen_params();
                             let display_value = |node_doc_id: u32, param_id: &str, fallback: f32| {
                                 hoisted_gen_inst
@@ -2066,11 +2007,6 @@ pub fn sync_inspector_data(
                                             modifier_chain_parseable,
                                             ..
                                         } = known.as_ref();
-                                        // D12: the modifier chain's own
-                                        // scope is the object's — the group
-                                        // when wrapped, else root (empty).
-                                        let modifier_scope =
-                                            group_node_id.map(|g| vec![g]).unwrap_or_default();
                                         // P2 slice 2a: the real P1 section
                                         // string(s) covering this object —
                                         // its scene_object node, transform
@@ -2119,16 +2055,6 @@ pub fn sync_inspector_data(
                                                         index: i,
                                                         node_doc_id: m.node_doc_id,
                                                         display_name: modifier_display_name(&m.type_id),
-                                                        params: modifier_param_rows(
-                                                            modifier_scope.clone(),
-                                                            m.node_doc_id,
-                                                            &m.type_id,
-                                                            &m.params,
-                                                            &m.driven,
-                                                            gen_inst,
-                                                            def.as_ref(),
-                                                            automation_latched,
-                                                        ),
                                                     })
                                                     .collect(),
                                                 modifiers_addable: *modifier_chain_parseable,
@@ -3789,119 +3715,6 @@ fn modifier_display_name(type_id: &str) -> String {
     }
 }
 
-/// D6/P5's curated modifier param rows: for each of the 7 mesh-modifier
-/// atoms, the SAME labels/ranges/defaults as the primitive's own `ParamDef`
-/// table (`crates/manifold-renderer/src/node_graph/primitives/*.rs`) —
-/// transcribed here because `manifold-ui` can't depend on `manifold-renderer`
-/// (the DTO-boundary convention `EnvironmentRowVm::mode_is_hdri` already
-/// uses). `params`/`driven` come straight off `ModifierVm`'s generic capture
-/// (`scene_vm.rs`); a value absent from `params` renders at the atom's own
-/// default (mirrors `param_f32`'s fallback), matching what the primitive
-/// itself would use for an unset param. An unrecognized `type_id` (a
-/// hand-edited chain with a non-curated node reached via the trace's
-/// tolerant walk) renders no param rows — the display name alone still
-/// shows, never a panic or a blank crash.
-///
-/// C-P1d (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md): rows are now
-/// `ModulatedRow`/`ModulatedEnumRow` — the same `mrow` promotion
-/// `transform_row`/`material_row`/Light's `enum_row` already do — so
-/// Modifier param rows can build through the shared card row core
-/// (`build_modifier_card_row`) and carry real driver/envelope/audio-mod
-/// facts instead of the old idle-always bespoke stepper. `exposed` stays
-/// `false` (UX-P3a's mod-button scoping is untouched by this phase — see
-/// `build_modifier_card_row`'s doc comment for why Numeric rows still draw
-/// a mod button despite `exposed` always starting `false`: same "expose at
-/// first click" contract every other family's rows already have).
-fn modifier_param_rows(
-    scope: Vec<u32>,
-    node_doc_id: u32,
-    type_id: &str,
-    params: &std::collections::BTreeMap<String, f32>,
-    driven: &std::collections::HashSet<String>,
-    gen_inst: Option<&PresetInstance>,
-    effective_def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
-    automation_latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
-) -> Vec<manifold_ui::panels::scene_setup_panel::ModifierParamRowVm> {
-    use manifold_ui::panels::scene_setup_panel::{
-        ModifierParamRowVm, ModulatedEnumRow, ModulatedRow, RowAddr, RowValue,
-    };
-    const AXIS_LABELS: &[&str] = &["X", "Y", "Z"];
-    // BUG-249: resolve through the real exposed-param binding id, same as
-    // the transform/material/light `mrow` above.
-    let mrow = |param_key: &str, v: RowValue| ModulatedRow {
-        modulation: Box::new(scene_row_modulation(
-            gen_inst,
-            effective_def,
-            node_doc_id,
-            param_key,
-            automation_latched,
-        )),
-        value: v,
-    };
-    let numeric = |label: &'static str, key: &str, default: f32, min: f32, max: f32| ModifierParamRowVm::Numeric {
-        label,
-        row: mrow(key, RowValue {
-            addr: RowAddr { scope_path: scope.clone(), node_doc_id, param_id: key.to_string() },
-            value: params.get(key).copied().unwrap_or(default),
-            min,
-            max,
-            driven: driven.contains(key),
-            // UX-P3a scoped the mod-button surface to Environment/Fog +
-            // Objects transform/material; C-P1d extends it to Modifier's
-            // own Numeric params too (every one is in the doc's exposable
-            // inventory) — `false` here just means "not yet exposed", the
-            // same starting state every other family's rows have.
-            exposed: false,
-        }),
-    };
-    let axis = |label: &'static str, key: &str, default: f32| ModifierParamRowVm::Axis {
-        label,
-        row: ModulatedEnumRow {
-            row: mrow(key, RowValue {
-                addr: RowAddr { scope_path: scope.clone(), node_doc_id, param_id: key.to_string() },
-                value: params.get(key).copied().unwrap_or(default),
-                min: 0.0,
-                max: (AXIS_LABELS.len() - 1) as f32,
-                driven: driven.contains(key),
-                exposed: false,
-            }),
-            labels: AXIS_LABELS.to_vec(),
-        },
-    };
-    match type_id {
-        "node.bend_mesh" => vec![
-            axis("Axis", "axis", 1.0),
-            numeric("Angle", "angle", 0.5, -std::f32::consts::TAU, std::f32::consts::TAU),
-            numeric("Center", "center", 0.0, -100.0, 100.0),
-        ],
-        "node.twist_mesh" => vec![
-            axis("Axis", "axis", 1.0),
-            numeric("Angle", "angle", 1.0, -std::f32::consts::TAU, std::f32::consts::TAU),
-            numeric("Center", "center", 0.0, -100.0, 100.0),
-        ],
-        "node.taper_mesh" => vec![
-            axis("Axis", "axis", 1.0),
-            numeric("Taper", "taper", 0.5, 0.0, 1.0),
-            numeric("Center", "center", 0.0, -100.0, 100.0),
-            numeric("Length", "length", 1.0, 0.001, 200.0),
-        ],
-        "node.push_along_normals" => vec![
-            numeric("Amount", "amount", 0.2, -10.0, 10.0),
-            numeric("Field Bias", "field_bias", 0.5, 0.0, 1.0),
-        ],
-        "node.push_mesh" => vec![
-            numeric("Displacement", "displacement", 0.2, -10.0, 10.0),
-            numeric("Height Bias", "height_bias", 0.5, 0.0, 1.0),
-        ],
-        "node.morph_mesh" => vec![numeric("Mix", "t", 0.5, 0.0, 1.0)],
-        "node.rotate_3d" => vec![
-            numeric("Angle X", "angle_x", 0.0, -std::f32::consts::TAU, std::f32::consts::TAU),
-            numeric("Angle Y", "angle_y", 0.0, -std::f32::consts::TAU, std::f32::consts::TAU),
-            numeric("Angle Z", "angle_z", 0.0, -std::f32::consts::TAU, std::f32::consts::TAU),
-        ],
-        _ => Vec::new(),
-    }
-}
 
 /// End-to-end round-trip: every fire-meter key the UI's `update_fire_meters`
 /// requests must resolve in the SAME `FireMeterCapture` the content-thread

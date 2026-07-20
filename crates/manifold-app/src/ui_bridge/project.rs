@@ -261,9 +261,8 @@ pub(super) fn dispatch_project(
             if let Some(default) = generator_catalog_default(project, layer_id) {
                 let target = manifold_core::GraphTarget::Generator(layer_id.clone());
                 // Bound param → edit the binding's instance slot, never the
-                // def (see inspector.rs `scene_bound_slot` for the full
-                // rationale — a def write on a bound param is re-seeded
-                // over on rebuild, the importer-camera deadness).
+                // def — a def write on a bound param is re-seeded over on
+                // rebuild (the importer-camera deadness this guards against).
                 let bound = project
                     .with_preset_graph_mut(&target, |inst| {
                         inst.binding_id_for_node_param(*node_doc_id, param_id)
