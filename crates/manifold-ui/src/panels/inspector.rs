@@ -3685,6 +3685,219 @@ mod tests {
         }
     }
 
+    /// P3 geometry monopoly, case (b): the hit-test loop in
+    /// `update_card_drag` sums PER-CARD live bounds, not a uniform stride —
+    /// a mixed-height list (one card settled collapsed, others expanded at
+    /// different row counts) must still resolve the correct drop-target
+    /// index at every card boundary. This is new coverage: the W2-B
+    /// (BUG-265) test family above only exercises uniform-height cards.
+    #[test]
+    fn drag_hit_test_target_index_with_mixed_height_cards() {
+        use super::super::param_card::ParamCardKind;
+        let mut tree = UITree::new();
+        let mut panel = InspectorCompositePanel::new();
+        let layout = inspector_layout();
+
+        let mut configs = vec![
+            mk_config(ParamCardKind::Effect, "FX0", 3), // expanded
+            mk_config(ParamCardKind::Effect, "FX1", 3), // collapsed below
+            mk_config(ParamCardKind::Effect, "FX2", 6), // expanded, taller
+            mk_config(ParamCardKind::Effect, "FX3", 1), // expanded, short
+        ];
+        configs[1].collapsed = true;
+        panel.configure_layer_effects(&configs, None);
+        panel.configure_tabs(
+            &[InspectorTab::Layer, InspectorTab::Master],
+            InspectorTab::Layer,
+        );
+        panel.build(&mut tree, &layout);
+
+        // Sanity: the mixed-height premise actually holds — the collapsed
+        // card is shorter than its expanded neighbors, so the boundary math
+        // below is exercising real height variation, not a uniform stride
+        // that happens to pass.
+        let collapsed_h = panel.effects[InspectorCompositePanel::SCOPE_LAYER][1]
+            .live_bounds(&tree)
+            .unwrap()
+            .height;
+        let expanded_h = panel.effects[InspectorCompositePanel::SCOPE_LAYER][0]
+            .live_bounds(&tree)
+            .unwrap()
+            .height;
+        assert!(
+            collapsed_h < expanded_h,
+            "test needs a real height difference: collapsed={collapsed_h} expanded={expanded_h}"
+        );
+
+        let handle_id =
+            find_drag_handle_id(&panel.effects[InspectorCompositePanel::SCOPE_LAYER][0], &tree);
+        assert!(panel.try_begin_card_drag(Some(handle_id), &mut tree));
+
+        let cursor_x = layout.inspector().x + 10.0;
+        for target_idx in 0..configs.len() {
+            let bounds = panel.effects[InspectorCompositePanel::SCOPE_LAYER][target_idx]
+                .live_bounds(&tree)
+                .expect("built card has live bounds");
+            let cursor_y = bounds.y + 1.0;
+            panel.update_card_drag(Vec2::new(cursor_x, cursor_y), &mut tree);
+            assert_eq!(
+                panel.card_drag_target_index, target_idx,
+                "mixed-height layout: card {target_idx} (height {}) must hit-test \
+                 to its own index, not a uniform-stride guess",
+                bounds.height
+            );
+        }
+    }
+
+    /// P3 geometry monopoly, case (d): `end_card_drag`'s target→effect-index
+    /// mapping, isolated from the hit-test geometry (covered above). Exact
+    /// regression pin for BUG-265 root cause 3 (findings doc): the
+    /// after-last-drop branch must use the HIGHEST `effect_index` among the
+    /// tab's cards, not `cards.last()`'s — this test builds a card list
+    /// whose Vec order deliberately diverges from effect_index order so the
+    /// two computations disagree, and pins the correct (max-based) one.
+    /// Also covers the ordinary to_card < cards.len() branch with the same
+    /// non-contiguous index set.
+    #[test]
+    fn end_card_drag_maps_target_index_to_effect_index_with_non_contiguous_indices() {
+        use super::super::param_card::ParamCardKind;
+        let mut tree = UITree::new();
+        let mut panel = InspectorCompositePanel::new();
+        let layout = inspector_layout();
+
+        let mut configs: Vec<_> = (0..4)
+            .map(|i| mk_config(ParamCardKind::Effect, &format!("FX{i}"), 2))
+            .collect();
+        // Non-monotonic effect_index, and the LAST card in Vec order (FX3)
+        // is deliberately NOT the max — the divergence root cause 3 fixed.
+        configs[0].effect_index = 7; // max
+        configs[1].effect_index = 1; // drag source
+        configs[2].effect_index = 3;
+        configs[3].effect_index = 2; // last in Vec order, but not max
+        panel.configure_layer_effects(&configs, None);
+        panel.configure_tabs(
+            &[InspectorTab::Layer, InspectorTab::Master],
+            InspectorTab::Layer,
+        );
+        panel.build(&mut tree, &layout);
+
+        // Middle drop: to_card < cards.len() reads the target card's own
+        // effect_index directly.
+        let handle_id =
+            find_drag_handle_id(&panel.effects[InspectorCompositePanel::SCOPE_LAYER][1], &tree);
+        assert!(panel.try_begin_card_drag(Some(handle_id), &mut tree));
+        panel.card_drag_target_index = 2; // FX2, effect_index 3
+        let actions = panel.end_card_drag(&mut tree);
+        assert_eq!(actions.len(), 1, "expected one action: {actions:?}");
+        match &actions[0] {
+            PanelAction::EffectReorder(from, to) => {
+                assert_eq!(*from, 1, "dragged card's effect_index");
+                assert_eq!(*to, 3, "middle drop reads the target card's own effect_index");
+            }
+            other => panic!("expected EffectReorder, got {other:?}"),
+        }
+
+        // After-last drop: to_card == cards.len() must use max(effect_index)
+        // + 1 (7 + 1 = 8), NOT cards.last()'s effect_index + 1 (2 + 1 = 3 —
+        // the pre-fix bug, and coincidentally equal to the middle-drop
+        // target above, so a regression here would be easy to miss without
+        // this explicit pin).
+        let handle_id =
+            find_drag_handle_id(&panel.effects[InspectorCompositePanel::SCOPE_LAYER][1], &tree);
+        assert!(panel.try_begin_card_drag(Some(handle_id), &mut tree));
+        panel.card_drag_target_index = panel.effects[InspectorCompositePanel::SCOPE_LAYER].len();
+        let actions = panel.end_card_drag(&mut tree);
+        assert_eq!(actions.len(), 1, "expected one action: {actions:?}");
+        match &actions[0] {
+            PanelAction::EffectReorder(from, to) => {
+                assert_eq!(*from, 1, "dragged card's effect_index");
+                assert_eq!(
+                    *to, 8,
+                    "after-last drop must land past the HIGHEST effect_index (7), \
+                     not past cards.last()'s effect_index (2)"
+                );
+            }
+            other => panic!("expected EffectReorder, got {other:?}"),
+        }
+    }
+
+    /// INV-3 regression pin (WIDGET_TREE_DESIGN §6/§7 P3): the drag
+    /// interaction path reads no geometry snapshot — it follows the live
+    /// tree end to end, from a post-scroll cursor position through to the
+    /// emitted `PanelAction`. The `drag_hit_test_uses_live_bounds_after_in_
+    /// place_scroll` test above (W2-B/BUG-265) already pins the target-index
+    /// half of this; this test extends the same repro through `end_card_
+    /// drag` to the dispatched command, closing the loop the invariant
+    /// actually promises.
+    #[test]
+    fn inv3_drag_targets_follow_live_bounds_after_in_place_scroll() {
+        use super::super::param_card::ParamCardKind;
+        let mut tree = UITree::new();
+        let mut panel = InspectorCompositePanel::new();
+        let layout = {
+            let mut l = ScreenLayout::new(1920.0, 1080.0);
+            l.inspector_width = 400.0;
+            l
+        };
+        let effects: Vec<_> = (0..12)
+            .map(|i| {
+                let mut cfg = mk_config(ParamCardKind::Effect, &format!("FX{i}"), 3);
+                // `mk_config` defaults every card's effect_index to 0 — fine
+                // for the target-index-only assertions the W2-B tests make,
+                // but this test asserts through to the dispatched command's
+                // effect_index, so the cards need distinct, position-
+                // matching indices like the real flat effects list has.
+                cfg.effect_index = i;
+                cfg
+            })
+            .collect();
+        panel.configure_layer_effects(&effects, None);
+        panel.configure_tabs(
+            &[InspectorTab::Layer, InspectorTab::Master],
+            InspectorTab::Layer,
+        );
+        panel.build(&mut tree, &layout);
+        assert!(
+            panel.layer_scroll.max_scroll() > 0.0,
+            "test needs scrollable content"
+        );
+
+        let handle_id =
+            find_drag_handle_id(&panel.effects[InspectorCompositePanel::SCOPE_LAYER][0], &tree);
+        assert!(panel.try_begin_card_drag(Some(handle_id), &mut tree));
+
+        // Scroll in place via the same API the app uses on wheel/scrollbar
+        // input — no rebuild, so any snapshot geometry would go stale.
+        let cursor_x = layout.inspector().x + 10.0;
+        let scrolled = panel.try_scroll_in_place(-30.0, cursor_x, &mut tree);
+        assert!(scrolled, "sanity: must scroll in place");
+
+        let target_idx = 5;
+        let target_bounds = panel.effects[InspectorCompositePanel::SCOPE_LAYER][target_idx]
+            .live_bounds(&tree)
+            .expect("built card has live bounds");
+        let expected_effect_index =
+            panel.effects[InspectorCompositePanel::SCOPE_LAYER][target_idx].effect_index();
+        let cursor_y = target_bounds.y + 1.0;
+
+        panel.update_card_drag(Vec2::new(cursor_x, cursor_y), &mut tree);
+        assert_eq!(panel.card_drag_target_index, target_idx);
+
+        let actions = panel.end_card_drag(&mut tree);
+        assert_eq!(actions.len(), 1, "expected one action: {actions:?}");
+        match &actions[0] {
+            PanelAction::EffectReorder(_from, to) => {
+                assert_eq!(
+                    *to, expected_effect_index,
+                    "the dispatched command must target the effect_index of the \
+                     card actually under the cursor post-scroll, not a stale \
+                     geometry snapshot's idea of it"
+                );
+            }
+            other => panic!("expected EffectReorder, got {other:?}"),
+        }
+    }
+
     #[test]
     fn find_target_for_scrollbar() {
         let mut tree = UITree::new();
