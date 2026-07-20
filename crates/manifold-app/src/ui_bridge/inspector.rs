@@ -4253,6 +4253,44 @@ mod scene_card_convergence_tests {
         fn drain(&self) -> Vec<ContentCommand> {
             self.content_rx.try_iter().collect()
         }
+
+        /// `dispatch`'s twin with an explicit `editor_target` — the graph
+        /// editor's own identity-addressed entry point
+        /// (`resolve_effect_id`/`editor_dispatch_context`, `ui_bridge/mod.rs`):
+        /// a `Some(GraphTarget::Effect(id))` resolves that exact instance
+        /// (master, layer, or clip) regardless of `GraphParamTarget`'s
+        /// positional index or the ambient `last_effect_tab`. `row_dispatch`
+        /// uses this to reach a master effect and a layer effect through the
+        /// identical dispatch call — the only production path that can
+        /// address a specific scope without driving a real pointer-down
+        /// through `InspectorPanel::handle_click` (private to manifold-ui,
+        /// P2's own test surface).
+        fn dispatch_with_editor(
+            &mut self,
+            action: &PanelAction,
+            project: &mut Project,
+            editor_target: Option<&manifold_core::GraphTarget>,
+        ) -> DispatchResult {
+            dispatch_inspector(
+                action,
+                project,
+                &self.content_tx,
+                &self.content_state,
+                &mut self.ui,
+                &mut self.selection,
+                &mut self.active_layer,
+                &mut self.drag_snapshot,
+                &mut self.trim_snapshot,
+                &mut self.target_snapshot,
+                &mut self.decay_snapshot,
+                &mut self.audio_shape_snapshot,
+                &mut self.audio_action_snapshot,
+                &mut self.audio_crossover_snapshot,
+                &mut self.audio_send_gain_drag_snapshot,
+                &mut self.active_inspector_drag,
+                editor_target,
+            )
+        }
     }
 
     /// Undo-race repro (param-feed regression, 2026-07-18): since
@@ -6554,6 +6592,476 @@ mod scene_card_convergence_tests {
                 0usize,
                 "clip_delete",
             );
+        }
+
+        /// WIDGET_TREE_DESIGN.md §7 P4, gaps #2/#3 carried from
+        /// `docs/landings/2026-07-21-widget-tree-p2.md`: bridge-level
+        /// dispatch tests for the modulation-family action kinds — every
+        /// test above this point dispatches against a GENERATOR target
+        /// only. Each kind here dispatches the SAME `PanelAction` against
+        /// BOTH a master-effect `GraphTarget` and a layer-effect
+        /// `GraphTarget`, through the identical generic path
+        /// (`resolve_mod_target`/`resolve_graph_target` →
+        /// `with_preset_graph_mut`/`DriverTarget::from`/`Project::
+        /// find_effect_by_id`) — the "fixed for Master, forgot Layer" class
+        /// detector the twin consolidation (D2) exists to make impossible.
+        ///
+        /// Master and layer targets are reached via `Harness::
+        /// dispatch_with_editor`'s `editor_target = Some(GraphTarget::
+        /// Effect(id))` — the graph editor's own identity-addressed entry
+        /// point (`resolve_effect_id`/`editor_dispatch_context`, `ui_bridge/
+        /// mod.rs`). That is the only production path that can select a
+        /// SPECIFIC effect instance from a bridge-level test: the ambient
+        /// route (`editor_target: None`) resolves positionally through
+        /// `ui.inspector.last_effect_tab()`, a field only a real
+        /// pointer-down sets (`InspectorPanel::update_last_effect_tab`,
+        /// private to `manifold-ui`) — driving that is P2's own click-
+        /// routing test surface, not this bridge's.
+        mod row_dispatch {
+            use super::*;
+
+            /// A real effect instance — `init_defaults()` populates `params`
+            /// from the registry the same way a live Add Effect does — plus
+            /// its first manifest param id.
+            fn effect_with_first_param(
+                effect_type: manifold_core::PresetTypeId,
+            ) -> (PresetInstance, manifold_core::effects::ParamId) {
+                let mut fx = PresetInstance::new(effect_type);
+                fx.init_defaults();
+                let pid = manifold_core::preset_definition_registry::try_get(fx.effect_type())
+                    .and_then(|def| def.param_defs.first().map(|pd| pd.spec.id.clone()))
+                    .expect("preset has at least one manifest param");
+                (fx, std::borrow::Cow::Owned(pid))
+            }
+
+            /// One project carrying the SAME preset type as both a master
+            /// effect and a layer effect, so a test can dispatch the
+            /// identical action against either `GraphTarget` and compare.
+            struct TwoScopes {
+                project: Project,
+                master_target: manifold_core::GraphTarget,
+                layer_target: manifold_core::GraphTarget,
+                pid: manifold_core::effects::ParamId,
+            }
+
+            fn two_scopes(effect_type: &'static str) -> TwoScopes {
+                let et = manifold_core::PresetTypeId::new(effect_type);
+                let (master_fx, pid) = effect_with_first_param(et.clone());
+                let master_id = master_fx.id.clone();
+                let (layer_fx, _) = effect_with_first_param(et);
+                let layer_effect_id = layer_fx.id.clone();
+
+                let (mut project, layer_id) = scene_layer_project();
+                project.settings.master_effects.push(master_fx);
+                project
+                    .timeline
+                    .find_layer_by_id_mut(&layer_id)
+                    .expect("fixture layer resolves")
+                    .1
+                    .effects_mut()
+                    .push(layer_fx);
+
+                TwoScopes {
+                    project,
+                    master_target: manifold_core::GraphTarget::Effect(master_id),
+                    layer_target: manifold_core::GraphTarget::Effect(layer_effect_id),
+                    pid,
+                }
+            }
+
+            fn arm_driver(
+                project: &mut Project,
+                target: &manifold_core::GraphTarget,
+                param_id: &manifold_core::effects::ParamId,
+            ) {
+                project.with_preset_graph_mut(target, |inst| {
+                    inst.drivers = Some(vec![ParameterDriver {
+                        param_id: param_id.clone(),
+                        beat_division: BeatDivision::Quarter,
+                        waveform: DriverWaveform::Sine,
+                        enabled: true,
+                        phase: 0.0,
+                        base_value: 0.0,
+                        trim_min: 0.0,
+                        trim_max: 1.0,
+                        reversed: false,
+                        free_period_beats: None,
+                        legacy_param_index: None,
+                        is_paused_by_user: false,
+                    }]);
+                });
+            }
+
+            fn arm_ableton_mapping(
+                project: &mut Project,
+                target: &manifold_core::GraphTarget,
+                param_id: &manifold_core::effects::ParamId,
+            ) {
+                project.with_preset_graph_mut(target, |inst| {
+                    inst.ableton_mappings = Some(vec![manifold_core::ableton_mapping::AbletonParamMapping {
+                        param_id: param_id.clone(),
+                        address: manifold_core::ableton_mapping::AbletonMacroAddress {
+                            track_id: 0,
+                            device_id: 0,
+                            param_id: 0,
+                            device_identity: manifold_core::ableton_mapping::AbletonDeviceIdentity {
+                                device_class_name: "InstrumentGroupDevice".to_string(),
+                            },
+                            track_name: String::new(),
+                            device_name: String::new(),
+                            macro_name: String::new(),
+                        },
+                        range_min: 0.0,
+                        range_max: 1.0,
+                        inverted: false,
+                        legacy_param_index: None,
+                        last_value: 0.0,
+                        status: manifold_core::ableton_mapping::AbletonMappingStatus::default(),
+                    }]);
+                });
+            }
+
+            /// Dispatch `action` against `target` via `editor_target`, drain
+            /// into a fresh `ContentSide`, and assert the atomic-gesture
+            /// undo-cycle shape `atomic_cycle` proves for the generator
+            /// target — replicated per scope target here.
+            fn scope_atomic<P>(
+                label: &str,
+                project: Project,
+                target: &manifold_core::GraphTarget,
+                action: PanelAction,
+                probe: impl Fn(&Project) -> P,
+                before: P,
+                after: P,
+            ) where
+                P: PartialEq + std::fmt::Debug,
+            {
+                let mut side = ContentSide::new(&project);
+                let mut project = project;
+                let mut h = Harness::new(None);
+                h.dispatch_with_editor(&action, &mut project, Some(target));
+                assert_undo_cycle(&mut side, h.drain(), probe, before, after, label);
+            }
+
+            /// The gesture must produce NO commands at all (dispatch is a
+            /// documented no-op for this scope) and leave `probe` unchanged.
+            fn scope_inert<P>(
+                label: &str,
+                mut project: Project,
+                target: &manifold_core::GraphTarget,
+                action: PanelAction,
+                probe: impl Fn(&Project) -> P,
+            ) where
+                P: PartialEq + std::fmt::Debug,
+            {
+                let before = probe(&project);
+                let mut h = Harness::new(None);
+                h.dispatch_with_editor(&action, &mut project, Some(target));
+                let cmds = h.drain();
+                assert!(
+                    cmds.is_empty(),
+                    "{label}: must be a documented no-op for this scope; got {} commands",
+                    cmds.len()
+                );
+                assert_eq!(probe(&project), before, "{label}: state must not move");
+            }
+
+            // ── DriverToggle ──────────────────────────────────────────
+
+            #[test]
+            fn driver_toggle_master() {
+                let s = two_scopes("Bloom");
+                let pid = s.pid.clone();
+                let t = s.master_target.clone();
+                scope_atomic(
+                    "driver_toggle_master",
+                    s.project,
+                    &s.master_target,
+                    PanelAction::DriverToggle(manifold_ui::GraphParamTarget::Effect(0), pid.clone()),
+                    move |p| {
+                        p.preset_instance(&t)
+                            .and_then(|inst| inst.drivers.as_ref())
+                            .and_then(|ds| ds.iter().find(|d| d.param_id == pid).map(|d| d.enabled))
+                    },
+                    None,
+                    Some(true),
+                );
+            }
+
+            #[test]
+            fn driver_toggle_layer() {
+                let s = two_scopes("Bloom");
+                let pid = s.pid.clone();
+                let t = s.layer_target.clone();
+                scope_atomic(
+                    "driver_toggle_layer",
+                    s.project,
+                    &s.layer_target,
+                    PanelAction::DriverToggle(manifold_ui::GraphParamTarget::Effect(0), pid.clone()),
+                    move |p| {
+                        p.preset_instance(&t)
+                            .and_then(|inst| inst.drivers.as_ref())
+                            .and_then(|ds| ds.iter().find(|d| d.param_id == pid).map(|d| d.enabled))
+                    },
+                    None,
+                    Some(true),
+                );
+            }
+
+            // ── AudioModToggle ────────────────────────────────────────
+
+            #[test]
+            fn audio_mod_toggle_master() {
+                let mut s = two_scopes("Bloom");
+                with_send(&mut s.project);
+                let pid = s.pid.clone();
+                let t = s.master_target.clone();
+                scope_atomic(
+                    "audio_mod_toggle_master",
+                    s.project,
+                    &s.master_target,
+                    PanelAction::AudioModToggle(manifold_ui::GraphParamTarget::Effect(0), pid.clone()),
+                    move |p| p.preset_instance(&t).and_then(|inst| inst.find_audio_mod(pid.as_ref())).map(|m| m.enabled),
+                    None,
+                    Some(true),
+                );
+            }
+
+            #[test]
+            fn audio_mod_toggle_layer() {
+                let mut s = two_scopes("Bloom");
+                with_send(&mut s.project);
+                let pid = s.pid.clone();
+                let t = s.layer_target.clone();
+                scope_atomic(
+                    "audio_mod_toggle_layer",
+                    s.project,
+                    &s.layer_target,
+                    PanelAction::AudioModToggle(manifold_ui::GraphParamTarget::Effect(0), pid.clone()),
+                    move |p| p.preset_instance(&t).and_then(|inst| inst.find_audio_mod(pid.as_ref())).map(|m| m.enabled),
+                    None,
+                    Some(true),
+                );
+            }
+
+            // ── EnvelopeToggle — layer arms; master is a documented
+            //    no-op ("effects are clip-timed", inspector.rs's own
+            //    comment on the handler) ─────────────────────────────
+
+            #[test]
+            fn envelope_toggle_layer_arms() {
+                let s = two_scopes("Bloom");
+                let pid = s.pid.clone();
+                let t = s.layer_target.clone();
+                scope_atomic(
+                    "envelope_toggle_layer",
+                    s.project,
+                    &s.layer_target,
+                    PanelAction::EnvelopeToggle(manifold_ui::GraphParamTarget::Effect(0), pid.clone()),
+                    move |p| {
+                        p.preset_instance(&t)
+                            .and_then(|inst| inst.envelopes.as_ref())
+                            .map(|es| es.iter().filter(|e| e.param_id == pid).count())
+                            .unwrap_or(0)
+                    },
+                    0usize,
+                    1usize,
+                );
+            }
+
+            #[test]
+            fn envelope_toggle_master_is_inert() {
+                let s = two_scopes("Bloom");
+                let pid = s.pid.clone();
+                let t = s.master_target.clone();
+                scope_inert(
+                    "envelope_toggle_master",
+                    s.project,
+                    &s.master_target,
+                    PanelAction::EnvelopeToggle(manifold_ui::GraphParamTarget::Effect(0), pid.clone()),
+                    move |p| {
+                        p.preset_instance(&t)
+                            .and_then(|inst| inst.envelopes.as_ref())
+                            .map(|es| es.iter().filter(|e| e.param_id == pid).count())
+                            .unwrap_or(0)
+                    },
+                );
+            }
+
+            // ── ParamToggle / ParamFire ───────────────────────────────
+
+            #[test]
+            fn param_toggle_master() {
+                let s = two_scopes("Bloom");
+                let pid = s.pid.clone();
+                let t = s.master_target.clone();
+                let before = s.project.preset_instance(&s.master_target).unwrap().get_base_param(pid.as_ref());
+                let after = if before > 0.5 { 0.0 } else { 1.0 };
+                scope_atomic(
+                    "param_toggle_master",
+                    s.project,
+                    &s.master_target,
+                    PanelAction::ParamToggle(manifold_ui::GraphParamTarget::Effect(0), pid.clone()),
+                    move |p| p.preset_instance(&t).unwrap().get_base_param(pid.as_ref()),
+                    before,
+                    after,
+                );
+            }
+
+            #[test]
+            fn param_toggle_layer() {
+                let s = two_scopes("Bloom");
+                let pid = s.pid.clone();
+                let t = s.layer_target.clone();
+                let before = s.project.preset_instance(&s.layer_target).unwrap().get_base_param(pid.as_ref());
+                let after = if before > 0.5 { 0.0 } else { 1.0 };
+                scope_atomic(
+                    "param_toggle_layer",
+                    s.project,
+                    &s.layer_target,
+                    PanelAction::ParamToggle(manifold_ui::GraphParamTarget::Effect(0), pid.clone()),
+                    move |p| p.preset_instance(&t).unwrap().get_base_param(pid.as_ref()),
+                    before,
+                    after,
+                );
+            }
+
+            #[test]
+            fn param_fire_master() {
+                let s = two_scopes("Bloom");
+                let pid = s.pid.clone();
+                let t = s.master_target.clone();
+                let before = s.project.preset_instance(&s.master_target).unwrap().get_base_param(pid.as_ref());
+                scope_atomic(
+                    "param_fire_master",
+                    s.project,
+                    &s.master_target,
+                    PanelAction::ParamFire(manifold_ui::GraphParamTarget::Effect(0), pid.clone()),
+                    move |p| p.preset_instance(&t).unwrap().get_base_param(pid.as_ref()),
+                    before,
+                    before + 1.0,
+                );
+            }
+
+            #[test]
+            fn param_fire_layer() {
+                let s = two_scopes("Bloom");
+                let pid = s.pid.clone();
+                let t = s.layer_target.clone();
+                let before = s.project.preset_instance(&s.layer_target).unwrap().get_base_param(pid.as_ref());
+                scope_atomic(
+                    "param_fire_layer",
+                    s.project,
+                    &s.layer_target,
+                    PanelAction::ParamFire(manifold_ui::GraphParamTarget::Effect(0), pid.clone()),
+                    move |p| p.preset_instance(&t).unwrap().get_base_param(pid.as_ref()),
+                    before,
+                    before + 1.0,
+                );
+            }
+
+            // ── DriverConfig (one representative: a BeatDiv click) ────
+
+            #[test]
+            fn driver_config_beat_div_master() {
+                let mut s = two_scopes("Bloom");
+                arm_driver(&mut s.project, &s.master_target, &s.pid);
+                let pid = s.pid.clone();
+                let t = s.master_target.clone();
+                scope_atomic(
+                    "driver_config_beat_div_master",
+                    s.project,
+                    &s.master_target,
+                    PanelAction::DriverConfig(
+                        manifold_ui::GraphParamTarget::Effect(0),
+                        pid.clone(),
+                        DriverConfigAction::BeatDiv(4), // -> Half
+                    ),
+                    move |p| {
+                        p.preset_instance(&t)
+                            .and_then(|inst| inst.drivers.as_ref())
+                            .and_then(|ds| ds.iter().find(|d| d.param_id == pid).map(|d| d.beat_division))
+                    },
+                    Some(BeatDivision::Quarter),
+                    Some(BeatDivision::Half),
+                );
+            }
+
+            #[test]
+            fn driver_config_beat_div_layer() {
+                let mut s = two_scopes("Bloom");
+                arm_driver(&mut s.project, &s.layer_target, &s.pid);
+                let pid = s.pid.clone();
+                let t = s.layer_target.clone();
+                scope_atomic(
+                    "driver_config_beat_div_layer",
+                    s.project,
+                    &s.layer_target,
+                    PanelAction::DriverConfig(
+                        manifold_ui::GraphParamTarget::Effect(0),
+                        pid.clone(),
+                        DriverConfigAction::BeatDiv(4), // -> Half
+                    ),
+                    move |p| {
+                        p.preset_instance(&t)
+                            .and_then(|inst| inst.drivers.as_ref())
+                            .and_then(|ds| ds.iter().find(|d| d.param_id == pid).map(|d| d.beat_division))
+                    },
+                    Some(BeatDivision::Quarter),
+                    Some(BeatDivision::Half),
+                );
+            }
+
+            // ── AbletonInvertToggle — NOT undo-tracked (mirrors
+            //    `TrimChanged`'s Ableton branch: a `MutateProject` write,
+            //    no `Execute`) — assert the flip lands identically on both
+            //    scopes without asserting a false undo requirement ───────
+
+            fn ableton_invert_case(label: &str, mut project: Project, target: &manifold_core::GraphTarget, pid: manifold_core::effects::ParamId) {
+                let t = target.clone();
+                let p2 = pid.clone();
+                let probe = move |proj: &Project| -> Option<bool> {
+                    proj.preset_instance(&t)
+                        .and_then(|inst| inst.ableton_mappings.as_ref())
+                        .and_then(|ms| ms.iter().find(|m| m.param_id == p2).map(|m| m.inverted))
+                };
+                let before = probe(&project).expect("fixture must start with a mapping present");
+                assert!(!before, "fixture starts uninverted");
+
+                let mut side = ContentSide::new(&project);
+                let mut h = Harness::new(None);
+                h.dispatch_with_editor(
+                    &PanelAction::AbletonInvertToggle(manifold_ui::GraphParamTarget::Effect(0), pid),
+                    &mut project,
+                    Some(target),
+                );
+                assert_eq!(probe(&project), Some(true), "{label}: local project must flip");
+
+                let cmds = h.drain();
+                assert!(
+                    !cmds.iter().any(|c| matches!(c, ContentCommand::Execute(_))),
+                    "{label}: Ableton mapping edits are deliberately not undo-tracked"
+                );
+                let landed = side.apply(cmds);
+                assert_eq!(landed, 0, "{label}: no undo-tracked command should land");
+                assert_eq!(probe(&side.project), Some(true), "{label}: content mirror must flip too");
+            }
+
+            #[test]
+            fn ableton_invert_toggle_master() {
+                let mut s = two_scopes("Bloom");
+                arm_ableton_mapping(&mut s.project, &s.master_target, &s.pid);
+                let pid = s.pid.clone();
+                ableton_invert_case("ableton_invert_master", s.project, &s.master_target, pid);
+            }
+
+            #[test]
+            fn ableton_invert_toggle_layer() {
+                let mut s = two_scopes("Bloom");
+                arm_ableton_mapping(&mut s.project, &s.layer_target, &s.pid);
+                let pid = s.pid.clone();
+                ableton_invert_case("ableton_invert_layer", s.project, &s.layer_target, pid);
+            }
         }
     }
 
