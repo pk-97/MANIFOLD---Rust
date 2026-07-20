@@ -1197,6 +1197,16 @@ impl ParamCardPanel {
     pub fn card_y(&self) -> f32 {
         self.card_y
     }
+    /// Live, scroll-current, animation-current bounds of this card's full
+    /// frame — the border node's rect. `None` if the card has never been
+    /// built (no `border_id`) or the node has since gone stale. This is a
+    /// read-through into `UITree`, not a cache: nothing is stored on
+    /// `ParamCardPanel` here. Use for hit-testing (e.g. drag); `card_y()` /
+    /// `compute_height()` are build-time/animated values that go stale
+    /// under in-place scroll (`ScrollContainer::offset_content`).
+    pub fn live_bounds(&self, tree: &UITree) -> Option<Rect> {
+        Some(tree.get_bounds(self.border_id?))
+    }
     pub fn first_node(&self) -> usize {
         self.first_node
     }
