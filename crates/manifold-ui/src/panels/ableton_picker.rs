@@ -168,7 +168,7 @@ impl AbletonPickerPopup {
         }
     }
 
-    /// Popups open instantly at full size/opacity (Peter, 2026-07-14 — no
+    /// Popups open instantly at full size/opacity (no
     /// enter/exit motion). Kept as a no-op so callers can still call it
     /// unconditionally every frame without special-casing.
     pub fn update(&mut self, _tree: &mut UITree) {}
@@ -251,8 +251,8 @@ impl AbletonPickerPopup {
         self.track_row_ids.clear();
         self.macro_item_ids.clear();
 
-        // Popups appear instantly at full size/opacity (Peter, 2026-07-14 —
-        // no enter/exit motion). Every position below derives from these
+        // Popups appear instantly at full size/opacity (no
+        // enter/exit motion). Every position below derives from these
         // four locals (never `self.popup_x`/`self.popup_h` directly), so
         // this is just the plain popup rect now.
         let px = self.popup_x;

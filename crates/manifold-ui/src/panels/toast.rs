@@ -327,9 +327,7 @@ mod tests {
     /// Reproduces the BUG-028-class crash: undo fires the toast the same frame
     /// a rebuild already shrank the tree (the toast's own nodes weren't built
     /// into it, since it was closed at rebuild time), leaving `bg_id`/`text_id`
-    /// pointing one-past-the-end of the new, smaller tree. Before the
-    /// `show()` id-reset + `get_node`-returns-`Option` fix, `update()` would
-    /// index out of bounds in release builds (the guard was a `debug_assert`).
+    /// pointing one-past-the-end of the new, smaller tree.
     #[test]
     fn re_show_across_shrinking_rebuild_never_panics() {
         let mut tree = UITree::new();

@@ -149,8 +149,7 @@ fn visible_node_thumbnails_preview_image_nodes_and_groups_via_producer() {
 
 #[test]
 fn preview_screen_size_follows_project_aspect() {
-    // Landscape (16:9) is width-bound: full inner width, short — the historical
-    // behaviour, unchanged.
+    // Landscape (16:9) is width-bound: full inner width, short.
     let (w, h) = preview_screen_size(16.0 / 9.0);
     assert!((w - PREVIEW_IMG_W).abs() < 0.01, "16:9 fills the node width");
     assert!((w / h - 16.0 / 9.0).abs() < 0.01, "16:9 aspect preserved");
@@ -818,7 +817,7 @@ fn pressing_row_body_scrubs_and_emits_no_expose() {
     );
 }
 
-/// BUG-105: right-clicking a numeric node-face slider's TRACK zone (right of
+/// right-clicking a numeric node-face slider's TRACK zone (right of
 /// the label cell) resets it to its declared default — the same gesture
 /// every card/panel slider already honors via `chrome/diff.rs`'s
 /// `Gesture::RightClick -> SliderReset`, which this immediate-mode canvas
@@ -846,7 +845,7 @@ fn right_click_track_zone_resets_numeric_param_to_default() {
     }
 }
 
-/// BUG-105 companion: the LABEL zone of the same row is untouched — a
+/// the LABEL zone of the same row is untouched — a
 /// right-click there still reports the row hit so the app's mapping-popover
 /// path (checked separately against whether the inner param is exposed as a
 /// card binding) keeps working exactly as before.
@@ -1749,7 +1748,7 @@ fn relayout_reframes_the_graph_into_view() {
     );
 }
 
-/// BUG-027 fix: each node draws in its OWN increasing depth band, and its output
+/// each node draws in its OWN increasing depth band, and its output
 /// preview is painted inline within that band — so a node stacked above (a
 /// higher band, drawn later) occludes the preview of one below it. A `Painter`
 /// that records the depth of every rect/image draw proves the ordering without

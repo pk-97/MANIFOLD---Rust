@@ -90,10 +90,10 @@ pub(crate) use model::{
 };
 
 const HEADER_HEIGHT: f32 = 28.0;
-/// Node body width in graph units. 210→240→270 (2026-07-01): the unified
+/// Node body width in graph units. the unified
 /// slider widget's fixed label + value-cell columns need real room to leave
 /// the track a usable width without eliding every param name. Still compact
-/// by design (was 300 originally): a narrower node is also a *shorter* node,
+/// by design: a narrower node is also a *shorter* node,
 /// since the always-on preview screen is sized to `NODE_WIDTH - 2·PREVIEW_PAD`
 /// at the project aspect. On-node param rows and the title still truncate to
 /// fit when a name genuinely doesn't (a long name + a "← wired"/"↳ outer"
@@ -143,9 +143,7 @@ pub(crate) fn preview_screen_size(aspect: f32) -> (f32, f32) {
 /// Vertical pitch of one on-node parameter row — from one row's top to the
 /// next. Matches the card's real row *rhythm*, `param_slider_shared::ROW_HEIGHT`
 /// (24) + `ROW_SPACING` (6) = 30, not just the bare row height: the card never
-/// packs consecutive rows edge-to-edge, and neither should the node (2026-07-01
-/// — an initial 18→24 pass matched the widget height but not the card's actual
-/// gap between rows, which is what actually reads as "padding"). The slider
+/// packs consecutive rows edge-to-edge, and neither should the node. The slider
 /// widget itself draws shorter than the full pitch and is vertically centered
 /// in it (see `PARAM_SLIDER_ROW_H`), so the gap is real whitespace, not just
 /// unused row height. Nodes carry their params on their face so you read (and
@@ -173,8 +171,7 @@ const PARAM_EXPOSE_D: f32 = 7.0;
 /// a small gap, so the label never overlaps the dot.
 const PARAM_LABEL_X: f32 = PARAM_PAD_X + PARAM_EXPOSE_D + 4.0;
 /// Label-cell width (graph units) for a ranged param's slider widget — the
-/// node-face analogue of `slider::DEFAULT_LABEL_WIDTH` (60). 52→72→84
-/// (2026-07-01): still elided common names like "Active Particle Count"
+/// node-face analogue of `slider::DEFAULT_LABEL_WIDTH` (60). still elided common names like "Active Particle Count"
 /// hard at 72, once `NODE_WIDTH` had the room to give it more.
 const PARAM_SLIDER_LABEL_W: f32 = 84.0;
 /// Pixels of horizontal drag that scrub a value across its full min..max
@@ -204,9 +201,7 @@ pub(crate) const MAX_ZOOM: f32 = 4.0;
 // Auto-layout grid spacing: NODE_WIDTH + ~60px breathing room for the wires
 // between columns, so nodes never touch horizontally. Derived (not a
 // hardcoded literal) so a future NODE_WIDTH change can't silently collapse
-// this gap again — it already did once (2026-07-01): NODE_WIDTH climbed
-// 210→240→270 across the slider-parity work while this stayed a bare `270.0`,
-// so columns ended up pitched at exactly the node width with zero gap.
+// this gap again.
 const COL_SPACING: f32 = NODE_WIDTH + 60.0;
 const LAYOUT_ORIGIN: (f32, f32) = (60.0, 60.0);
 /// Vertical gap between two stacked nodes (or routing lanes) within a
@@ -257,7 +252,7 @@ const FANIN_STAGGER_MIN: usize = 6;
 
 const BG_COLOR: Color32 = Color32::new(26, 26, 31, 255);
 const HEADER_BG: Color32 = Color32::new(36, 36, 43, 255);
-/// Faint grid-line colour. Toned down further (2026-07-01, from 15) once drawn
+/// Faint grid-line colour. Toned down further once drawn
 /// as lines rather than dots — a line carries a lot more ink than a 2px dot at
 /// the same spacing, so the same alpha read as louder than intended.
 const GRID_LINE: Color32 = Color32::new(255, 255, 255, 9);
@@ -267,8 +262,7 @@ const GRID_SPACING: f32 = 32.0;
 /// How many snap increments apart the *drawn* grid lines are
 /// (`GRID_SPACING * GRID_LINE_EVERY`). Dragging still snaps at the finer
 /// `GRID_SPACING`; the visible grid is deliberately sparser than that so it
-/// reads as a light reference, not a line for every step (2026-07-01 — the
-/// first pass drew one at every increment and it looked dense/busy).
+/// reads as a light reference, not a line for every step.
 const GRID_LINE_EVERY: f32 = 4.0;
 
 /// Round a graph-space coordinate to the nearest `GRID_SPACING` line.
@@ -431,7 +425,7 @@ pub struct GraphCanvas {
     /// `preview_node_id` → (texture handle registered on the renderer, source
     /// UV sub-rect `[u0, v0, u1, v1]`). `draw_node` paints this inline over the
     /// node's preview screen, at the node's own depth band, so a node stacked
-    /// above occludes it — replacing the old flat post-pass blit (BUG-027). The
+    /// above occludes it. The
     /// handle points at the shared preview atlas (live app) or a node's output
     /// texture (headless harness); empty until the host populates it.
     pub(crate) node_preview_src:
@@ -874,7 +868,7 @@ impl Rect {
 /// An open enum-param dropdown on the node face. Clicking the value of an `Enum`
 /// param row opens this list of the param's options, anchored directly under the
 /// row; clicking an option emits `SetGraphNodeParam` with the chosen index and
-/// closes it. Peter's call (2026-07-01): pick from a list, never click-to-cycle.
+/// closes it. pick from a list, never click-to-cycle.
 /// Canvas-owned and hit-tested inside the canvas's own press handler — no
 /// app-level input plumbing, same path as the row scrub + expose checkbox.
 // Single-host by design (UI_WIDGET_UNIFICATION D17): the chrome "twin" this

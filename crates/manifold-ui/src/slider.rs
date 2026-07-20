@@ -257,7 +257,7 @@ impl BitmapSlider {
         match (zone, g) {
             (Track, RightClick) => Some(SliderIntent::ResetToDefault),
             (Label, RightClick) => Some(SliderIntent::OpenMapping),
-            // D13 correction (2026-07-13, P3): DoubleClick, not Click —
+            // DoubleClick, not Click —
             // chrome's shipped type-in gesture (inspector.rs:2375 →
             // route_value_typein). P1's committed table said Click,
             // transcribing slider.rs's aspirational "click to type" comment

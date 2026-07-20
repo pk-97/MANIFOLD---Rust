@@ -365,29 +365,6 @@ fn node_matches(
 /// dump; this is the resolver matching that intent instead of a topology
 /// the real tree doesn't have.
 ///
-/// BUG-192: the ORIGINAL version of this function (git history) walked from
-/// EVERY node whose text equalled `under`, all the way up to the tree root,
-/// and returned `true` the instant that walk crossed ANY ancestor `nodes[i]`
-/// also has — not the NEAREST one. Two failure modes fell out of that:
-///
-/// 1. Zero match: `param_card.rs`'s generator rows parent every row's
-///    label/track/value_text FLAT to the literal tree root
-///    (`build_generator`/`build_param_row`'s `parent: None` — "generators
-///    parent rows flat to the root", source comment) — label, slider, and
-///    value across the WHOLE card share `parent_id: None`. A `None`-parented
-///    node's ancestor chain is empty, so neither check above could ever
-///    fire — a flat-sibling row's `under_text` query always returned zero
-///    matches, full stop, no matter which row.
-/// 2. Cross-match: a REAL dock with per-row containers nested under one
-///    shared OUTER container (`layer_header.rs`'s actual shape — every row's
-///    `row_clip` is itself a child of ONE shared scroll `clip_parent`) could
-///    walk THROUGH that shared outer container and match a DIFFERENT row's
-///    label, because "any shared ancestor, however far up" is true for
-///    almost every two nodes in a real tree (they all share the scroll
-///    clip, the dock, eventually the UI root). `under_text_walks_ancestors`
-///    (below) never caught this — its two rows are each parented straight
-///    to `None`, with no outer container in common.
-///
 /// The fix: walk OUTWARD from `nodes[i]` one enclosing level at a time
 /// (`level`, `level`'s parent, that parent's parent, …). At each level,
 /// first check whether the level's own immediate parent literally carries
@@ -570,7 +547,7 @@ mod tests {
         assert_eq!(resolved.rect, tree.nodes()[mute_a.index()].bounds);
     }
 
-    /// BUG-192: `under_text_walks_ancestors` (above) only covers the
+    /// `under_text_walks_ancestors` (above) only covers the
     /// "tight container" shape — each row gets its OWN real per-row parent
     /// `NodeId`, so a shared non-`None` ancestor always exists between a
     /// row's label and its controls. `param_card.rs`'s generator rows don't
@@ -645,7 +622,7 @@ mod tests {
         assert!(resolve(&tree, &[], &AutomationTarget::Query(q2)).is_err());
     }
 
-    /// BUG-192 regression guard, `layer_header.rs`'s real shape: EVERY
+    /// `layer_header.rs`'s real shape: EVERY
     /// layer row's per-row `row_clip` is itself parented to ONE shared
     /// scroll `clip_parent` (`build_layer_row`'s `clip_parent` param) — an
     /// extra shared level `under_text_walks_ancestors` never exercised

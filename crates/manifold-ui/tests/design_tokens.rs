@@ -24,59 +24,11 @@ use std::path::{Path, PathBuf};
 // `color.rs` (the token home) and `node.rs` (the `Color32` type + its own
 // `WHITE`/`BLACK` consts) are excluded from the scan.
 //
-// RADIUS hit zero in Phase 3 (§14.5 B′): every raw `corner_radius`/`.radius()`
+// Every raw `corner_radius`/`.radius()`
 // literal now references a radius token (`BUTTON`/`CARD`/`SMALL`/`POPUP`/
 // `HAIRLINE_RADIUS`). The one survivor is a `// design-token-exempt:` circular
 // status dot. From here the radius guard is absolute — any raw literal fails.
-// COLOR is still grandfathered pending the §15 ramp. (135→132: the §24 5b clip
-// cutover deleted `bitmap_painter::draw_clip` and its three test literals. 132→131:
-// the timeline-UI-redesign §K added `color::with_alpha` and routed three derived
-// `Color32::new(c.r, c.g, c.b, a)` call sites through it — net −1, absorbing the
-// inherited multi-selection-ux drift the redesign §J flagged. 131→200, 2026-07-03:
-// the graph-editor redesign (c89605ea..35f42ff9) added 69 raw literals mid-design;
-// re-baselined so the ratchet stays live for NEW drift while that pass is in
-// flight. DEBT: tokenize those 69 before the graph-editor redesign closes, then
-// ratchet back down toward the §15 ramp. 200→201, 2026-07-10: SCENE_BUILD P1
-// added an 8th port-pin-colour const (`PORT_TRANSFORM_COLOR`) in graph_canvas,
-// matching the seven grandfathered pin-colour consts beside it (Texture2D/3D,
-// Scalar, Array, Camera, Light, Material) — same defined-once-const pattern, folded
-// into the same pin-colour debt the §15 ramp will tokenise together. 201→187,
-// 2026-07-10: the AUDIO_SETUP_DOCK P3a landing deleted the Audio Setup Triggers
-// matrix + its drawer, removing ~14 raw `Color32::new(` literals; ratcheting the
-// baseline down to the new count (net of SCENE_BUILD P4's group-face row styling)
-// per the ratchet's own "count dropped → lower the baseline" rule. 187→190,
-// 2026-07-10: AUDIO_SETUP_DOCK P3b added the inspector AUDIO TRIGGERS authoring
-// section (`audio_trigger_section.rs`), adding 3 raw `Color32::new(` literals; its
-// scoped gate did not run this test, so it landed on main red — folded up here.
-// (Its 2 raw `corner_radius` literals were tokenized to `color::SMALL_RADIUS`
-// instead, keeping the radius guard absolute at 0.)) 190→198, 2026-07-10:
-// AUDIO_SETUP_DOCK P4 landed on top of an already-red base (P3c's merge tip,
-// `95a9939e`, measured 193 — 3 over 190 — before P4 touched anything; same
-// scoped-gate gap as P3b, never folded in). P4 itself added 5 for D7/D8
-// readability chips: the divider-line onset-lane chip (bg + border,
-// `audio_setup_panel.rs`), the selected-send-row highlight (bg + border), and
-// the "(missing layer)" repair copy's amber text colour (reusing the file's
-// own existing (232,168,92,255) warning-amber literal — already repeated
-// elsewhere in this file pre-P4, not tokenized here either; that cleanup is
-// the §15 ramp's job, not this phase's). 193 (inherited) + 5 (P4) = 198.
-// 198→199, 2026-07-11: REALTIME_3D P3 added a 9th port-pin-colour const
-// (`PORT_ATMOSPHERE_COLOR`) in graph_canvas for the new `PortType::Atmosphere`
-// wire — same grandfathered defined-once-const pattern as the eight pin
-// colours beside it (Texture2D/3D, Scalar, Array, Camera, Light, Material,
-// Transform), folded into the same pin-colour debt the §15 ramp tokenises.
-// 199→209, 2026-07-16: SCENE_SETUP_PANEL_DESIGN P1 added `scene_setup_panel.rs`
-// (the new dock column, cloned from `audio_setup_panel.rs`), which repeats
-// that file's own not-yet-tokenized chrome/label/drag-value colours (10 raw
-// literals) — same inherited pattern the audio dock's own literals already
-// carry in this baseline, not new debt shape, folded into the same §15 ramp.
-// 209→210, 2026-07-17: SCENE_OBJECT_AND_PANEL_V2_DESIGN P1 added a 10th
-// port-pin-colour const (`PORT_OBJECT_COLOR`) in graph_canvas for the new
-// `PortType::Object` wire — same grandfathered defined-once-const pattern as
-// the nine pin colours beside it, folded into the same §15 ramp.
-// 210→214, 2026-07-17: SCENE_OBJECT_AND_PANEL_V2_DESIGN P5 added the
-// outliner's eye-toggle/selection-highlight colours (`scene_setup_panel.rs`)
-// — same inherited not-yet-tokenized-chrome pattern as P1's dock column,
-// folded into the same §15 ramp.
+// COLOR is still grandfathered pending the §15 ramp.
 const COLOR_BASELINE: usize = 214;
 const RADIUS_BASELINE: usize = 0;
 

@@ -53,14 +53,11 @@ const KEY_DEVICE_DROPDOWN: u64 = 70_010;
 const KEY_ADD_SEND: u64 = 70_011;
 const KEY_FLOOR_MINUS: u64 = 70_012;
 const KEY_FLOOR_PLUS: u64 = 70_013;
-// KEY_ADD_LAYER (Inputs section "+ Layer") deleted with the section's
-// authoring (§7.2 item 7, P8, 2026-07-11) — read-only now.
 
 /// Per-send row controls (dynamic list, indexed by the send's position in
 /// `self.sends`): swatch, label, delete, gain_minus, gain_plus, ch_dropdown.
-/// Stride 20 leaves headroom; offsets 3 and 6 (formerly stereo, source) are
-/// retired, not reused (§7.2 items 6/7, P8: St/Mo toggle and the Cap chip
-/// both deleted outright).
+/// Stride 20 leaves headroom; offsets 3 and 6 are
+/// retired, not reused.
 const KEY_SEND_ROW_BASE: u64 = 71_000;
 const KEY_SEND_ROW_STRIDE: u64 = 20;
 const SEND_OFF_SWATCH: u64 = 0;
@@ -75,13 +72,6 @@ const SEND_OFF_CH_DROPDOWN: u64 = 7;
 const fn send_row_key(i: usize, offset: u64) -> u64 {
     KEY_SEND_ROW_BASE + (i as u64) * KEY_SEND_ROW_STRIDE + offset
 }
-
-// The Audio Setup Triggers matrix's config-row key block (KEY_CONFIG_ROW_BASE,
-// CFG_OFF_*, config_row_key) is deleted (P3, D2/D5): clip triggers are
-// authored on the layer only. See AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.
-
-// KEY_INPUTS_REMOVE_BASE (Inputs section per-layer ×) deleted with the
-// section's authoring (§7.2 item 7, P8, 2026-07-11) — read-only now.
 
 /// Consumers section: one row button per consumer of the selected send,
 /// indexed by position in that send's `consumers`.
@@ -137,9 +127,7 @@ pub struct AudioSendRow {
     /// chip and its click-to-reveal routings dropdown; both deleted §7.2
     /// item 7, P8, 2026-07-11 — this is the ONE place the detail lives now.)
     pub routings: Vec<String>,
-    // The Audio Setup Triggers matrix field (`triggers: Vec<TriggerRouteRow>`)
-    // is deleted (P3, D2): clip triggers are authored on the layer only
-    // (`LayerClipTrigger`). `consumers` below is the panel's sole surviving
+    // `consumers` below is the panel's sole surviving
     // trigger display.
     /// Whether any enabled `LayerClipTrigger` sources this send — drives the
     /// send label's amber "active trigger" accent (P3; replaces the matrix's
@@ -214,24 +202,9 @@ const BAND_METER_LABELS: [&str; 3] = ["L", "M", "H"];
 const LANE_CHIP_W: f32 = 34.0;
 const LANE_CHIP_H: f32 = 14.0;
 
-// `trigger_band_color` (the matrix's per-row band colour) and `dim_color`
-// (its resting-meter-fill dimmer) are deleted with the matrix (P3, D2).
-// Per-source-row level meters: NOT deferred — `SendRowIds::meter_fill` /
-// `AudioSetupPanel::update_meters` already ship a live RMS meter under each
-// send's channel dropdown (Phase 5.3, predates this design). D7's "each
-// source row gains an inline level meter" is satisfied by that existing
-// meter; nothing new was built for it in P4 (verified by headless render —
-// see docs/landings/2026-07-10-audio-dock-p4.md).
-
 /// Section header row height (Triggers/Inputs/Consumers all shared this before
 /// the matrix's deletion; kept for the two survivors).
 const TRIG_TITLE_H: f32 = 18.0;
-
-// `TRIG_ROW_H`/`TRIG_LABEL_W`/`TRIG_ENABLE_W`/`TRIG_SENS_BTN_W`/
-// `TRIG_SENS_VAL_W`/`TRIG_LEN_VAL_W`, `format_beats` (moved to
-// `param_slider_shared::format_beats` for the drawer's new Length row),
-// `TRIG_BANDS`, and `TriggerRowIds` (+ its `Default`) are deleted with the
-// Audio Setup Triggers matrix (P3, D2).
 
 /// Per-send interactive node ids.
 ///
@@ -399,8 +372,6 @@ pub struct AudioSetupPanel {
     /// frame by [`AudioSetupPanel::update_band_meters`] so they track the moving
     /// crossovers. `None` when not built.
     band_meter_ids: [(Option<NodeId>, Option<NodeId>, Option<NodeId>); 3],
-    // `inputs_remove_ids`/`add_layer_id` deleted with the Inputs section's
-    // authoring (§7.2 item 7, P8, 2026-07-11) — the section is read-only now.
     /// Consumers section (selected send): one row button per consumer,
     /// index-aligned with that send's `consumers`. Rebuilt with the panel.
     consumer_row_ids: Vec<NodeId>,
@@ -779,7 +750,7 @@ impl AudioSetupPanel {
 
             // Gain stepper [−] value [＋], left of the delete button. Discrete
             // 1 dB steps; the value is read-only display (0 dB = unity).
-            // St/Mo toggle removed (§7.2 item 7, P8, 2026-07-11): the channel
+            // the channel
             // dropdown below enumerates stereo pairs AND single channels
             // directly, so mono falls out of picking one.
             let gain_x = inner_x + inner_w - STEP_W - 4.0 - GAIN_W;
@@ -1203,8 +1174,8 @@ impl AudioSetupPanel {
 
     /// Build the Inputs section for the selected send: READ-ONLY routing
     /// display — the device line (when capturing) plus one line per feeding
-    /// layer, straight from `AudioSendRow::routings` (§7.2 item 7, P8,
-    /// 2026-07-11). Authoring ("+ Layer", per-layer ×, `AudioSendAddLayerClicked`)
+    /// layer, straight from `AudioSendRow::routings`.
+    /// Authoring ("+ Layer", per-layer ×, `AudioSendAddLayerClicked`)
     /// is gone: the panel's job is device in → sends → scope → who's
     /// listening, not routing edits — the layer header's Send dropdown is
     /// the one surviving authoring path (same `SetLayerAudioSend` command,
@@ -1375,12 +1346,6 @@ impl AudioSetupPanel {
     pub fn selected_send(&self) -> Option<&AudioSendId> {
         self.selected_send.as_ref()
     }
-
-    // `feeding_layer_ids` and `send_routings` removed (§7.2 item 7, P8,
-    // 2026-07-11): both existed only for the deleted Inputs-section
-    // authoring ("+ Layer" dropdown) and the deleted Cap-chip
-    // click-to-reveal routings popup — `AudioSendRow::routings` is now read
-    // directly by the (read-only) Inputs section build, no accessor needed.
 
     /// Screen-space rect (logical units) the present pass blits the spectrogram
     /// texture into, or `None` when the panel is closed / has no sends.
@@ -1731,8 +1696,8 @@ impl AudioSetupPanel {
             let delta = if self.floor_plus_id == Some(id) { 6.0 } else { -6.0 };
             return Some(PanelAction::AudioSendFloorStep(send, delta));
         }
-        // Inputs section authoring ("+ Layer" / per-layer ×) deleted (§7.2
-        // item 7, P8, 2026-07-11) — the section is read-only routing display
+        // Inputs section authoring ("+ Layer" / per-layer ×) deleted —
+        // the section is read-only routing display
         // now; the layer header's Send dropdown is the one surviving path to
         // `SetLayerAudioSend`.
         // Consumers section: navigate to the owning layer — read-only, no
@@ -1814,11 +1779,7 @@ impl AudioSetupPanel {
     }
 }
 
-// `TrigControl` (the matrix row's click-control enum) is deleted with the
-// Audio Setup Triggers matrix (P3, D2).
-
-/// Which interactive control of a send row was clicked. `Source`/`Stereo`
-/// (the Cap chip and St/Mo toggle) removed §7.2 items 6/7, P8, 2026-07-11.
+/// Which interactive control of a send row was clicked.
 enum RowControl {
     Select,
     Label,
@@ -1864,7 +1825,7 @@ impl AudioSetupPanel {
                     (false, Vec::new())
                 }
             }
-            // D8/BUG-070 remainder: right-click resets the gain stepper to
+            // right-click resets the gain stepper to
             // unity (0 dB) — the SAME intrinsic-reset gesture every other
             // value control in the app uses (`PanelAction::slider_reset`,
             // e.g. the layer header's audio-gain fader at
@@ -1989,15 +1950,14 @@ impl AudioSetupPanel {
                 }
                 None => (false, Vec::new()),
             },
-            // BUG-199: mouse-wheel scroll over the docked body, routed here by
+            // mouse-wheel scroll over the docked body, routed here by
             // `window_input.rs`'s `primary_mouse_wheel` through the generic
             // `UIEvent::Scroll` pipeline (same mechanism the dropdown uses) —
             // `window_input` already gated on `layout.audio_setup().contains(pos)`
             // before emitting this, so no further position check is needed here.
             // `window_input.rs`'s dock-scroll branch also sets
             // `needs_rebuild` so the next frame actually re-applies the
-            // new offset (BUG-223: it used to assume this happened for
-            // free every frame — it doesn't).
+            // new offset.
             UIEvent::Scroll { delta, .. } => {
                 self.handle_scroll(delta.y);
                 (true, Vec::new())
@@ -2188,7 +2148,7 @@ mod tests {
         assert!(p.scope_rect().is_none());
     }
 
-    /// BUG-059 / P2: a drag starting inside the dock that grabs nothing (missed
+    /// a drag starting inside the dock that grabs nothing (missed
     /// a divider) is still CLAIMED by ownership (`claims_drag`), which
     /// `UIRoot::resolve_drag_owner` reads so the gesture doesn't leak to the
     /// timeline. A `PointerDown` on an owned node is consumed; a `DragBegin`
@@ -2222,7 +2182,7 @@ mod tests {
         assert!(!drag_consumed, "handle_event needn't consume the missed-grab case — ownership does");
     }
 
-    /// BUG-059 guard-rail: a timeline drag whose origin is outside the dock is
+    /// a timeline drag whose origin is outside the dock is
     /// never claimed, even with nothing armed.
     #[test]
     fn claims_drag_false_for_origin_outside_panel_with_nothing_armed() {
@@ -2243,11 +2203,11 @@ mod tests {
         assert!(!consumed);
     }
 
-    /// P2: `gesture_ended` is the idempotent end-of-gesture clear
+    /// `gesture_ended` is the idempotent end-of-gesture clear
     /// `UIRoot::broadcast_gesture_end` calls on every OPEN overlay regardless
-    /// of ownership — it replaces the per-arm drag-swallow resets that used
-    /// to be scattered through `on_event`, and must be safe to call when
-    /// nothing is armed too. (P7.6: `dragging_band`/`calibration_drag` could
+    /// of ownership — it replaces the per-arm drag-swallow resets,
+    /// and must be safe to call when
+    /// nothing is armed too. (`dragging_band`/`calibration_drag` could
     /// previously both be armed at once — a bug class, never a feature, per
     /// D12 — `DragController<AudioSetupDrag>` makes that unrepresentable;
     /// this test now covers each drag kind separately, plus the "a fresh
@@ -2305,10 +2265,6 @@ mod tests {
         );
         assert!(!p.is_dragging_band(), "the fresh calibration grab must replace the band drag");
     }
-
-    // `source_chip_opens_routings_and_is_owned` removed (§7.2 item 7, P8,
-    // 2026-07-11): the Cap chip and its click-to-reveal routings dropdown are
-    // deleted outright — the row no longer has a `source` node at all.
 
     #[test]
     fn gain_buttons_emit_signed_steps() {
@@ -2570,17 +2526,9 @@ mod tests {
 
     // ─── Inputs / Consumers sections (AUDIO_SENDS_UX_DESIGN Phase 2) ───
 
-    // `add_layer_row_opens_add_layer_dropdown_for_selected_send` and
-    // `remove_feeding_layer_emits_set_layer_audio_send_none` removed (§7.2
-    // item 7, P8, 2026-07-11): the Inputs section's authoring ("+ Layer",
-    // per-layer ×, `AudioSendAddLayerClicked`) is deleted outright — see
-    // `inputs_section_is_read_only_routing_display` below for its
-    // replacement, and `feeding_layer_ids_accessor_reflects_configured_send`
-    // below-below for the accessor's removal.
-
     #[test]
     fn inputs_section_is_read_only_routing_display() {
-        // §7.2 item 7: no buttons in the Inputs section anymore — the
+        // no buttons in the Inputs section anymore — the
         // routing lines (device + feeding layers) are plain read-only text,
         // straight from `AudioSendRow::routings` (`state_sync`'s single
         // source now — no separate `feeding_layers` walk). Exercises the
@@ -2617,9 +2565,6 @@ mod tests {
         }
     }
 
-    // `feeding_layer_ids_accessor_reflects_configured_send` removed with
-    // `feeding_layer_ids` itself (§7.2 item 7, P8, 2026-07-11) — its sole
-    // caller was the deleted `AudioSendAddLayerClicked` dropdown builder.
 
     // ─── Stable WidgetId across rebuild (the double-click bug) ───
     //
