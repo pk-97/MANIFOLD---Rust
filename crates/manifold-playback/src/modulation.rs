@@ -1029,7 +1029,7 @@ mod tests {
         assert_eq!(fx.params.get("amount").unwrap().value, 0.0);
     }
 
-    /// Post-unification behavior (the bug fix): an envelope binds to the
+    /// An envelope binds to the
     /// instance it sits on, so two same-type effects no longer collide —
     /// each effect's own envelope modulates only that effect.
     #[test]

@@ -561,9 +561,6 @@ const SUPERFLUX_THRESH_FACTOR: f32 = 7.0;
 /// multiplicative term when the median baseline is ≈ 0 (the old 1e-3 was dead in
 /// these units). Active only in quiet passages, where band width barely differs,
 /// so one value works across bands.
-/// Raised 3.0 → 48.0 by the same P3 sweep — the plateau that clears the false
-/// fires runs from ~30 to ~300 (real kicks start dropping out above ~400), so
-/// 48.0 sits with margin on both sides against denser real material.
 /// Raised 48.0 → 80.0 by the BUG-243 sweep (2026-07-18): sustained-pad flux
 /// flickers ~80 ODF units against a ≈0 median baseline, clearing the old
 /// 48.0 floor and firing 6+29 median-criterion transients (full+low bands)

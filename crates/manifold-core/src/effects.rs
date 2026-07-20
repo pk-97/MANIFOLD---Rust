@@ -177,7 +177,7 @@ pub enum ParamConvert {
 }
 
 // `resolve_param_in` / `ResolvedParam` / the `override_range` closure are
-// DELETED (PARAM_STORAGE_DESIGN.md D3/D6/D7). Modulation no longer resolves an
+// DELETED. Modulation no longer resolves an
 // id to a positional slot: the driver / envelope / audio-mod evaluators read
 // `fx.params.get_mut(id)` and take range + whole-number data straight off the
 // entry — `p.spec.min` / `p.spec.max` / `p.whole_numbers()`. Calibration edits

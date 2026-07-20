@@ -1,6 +1,6 @@
 # Overlay Sessions & Picker Core — per-open state that cannot go stale, and one reusable pick-from-a-list component
 
-**Status:** SHIPPED — P1–P2 landed 2026-07-04/05 (`PickerCore`, `BrowserSession`, owned text sessions all live in-tree; status corrected 2026-07-05, it still read "not built") · designed 2026-07-04 · Fable
+**Status:** SHIPPED — P1–P2 landed 2026-07-04/05 (`PickerCore`, `BrowserSession`, owned text sessions all live in-tree) · designed 2026-07-04 · Fable
 **Prerequisites:** none (extends the SHIPPED overlay driver, `docs/OVERLAY_SYSTEM_DESIGN.md`)
 **Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5–§6 before starting any phase.
 

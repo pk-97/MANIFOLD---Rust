@@ -1,6 +1,6 @@
 # Preset Library — one mental model for presets, a library you can see, and explicit save/revert/push
 
-**Status:** SHIPPED — P0–P6 fully landed 2026-07-04/05 (last `4c860cad`; status corrected 2026-07-05, it still read "not built"). Open verification debt: the interactive GUI matrix (drag-drop, search-clear, management matrix, thumbnail display) is VD-002 in `docs/VERIFICATION_DEBT.md` — blocked on UI_AUTOMATION for scripted coverage. · designed 2026-07-04 · Fable
+**Status:** SHIPPED — P0–P6 fully landed 2026-07-04/05 (last `4c860cad`). Open verification debt: the interactive GUI matrix (drag-drop, search-clear, management matrix, thumbnail display) is VD-002 in `docs/VERIFICATION_DEBT.md` — blocked on UI_AUTOMATION for scripted coverage. · designed 2026-07-04 · Fable
 **Prerequisites:** none for P0–P4 (P0 is re-rankable first — it fixes live bugs); P5 (browser) has a hard edge on OVERLAY_SESSIONS_AND_PICKER P2; P6 (thumbnails) is verify-at-impl gated.
 **Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5–§6 before starting any phase.
 
