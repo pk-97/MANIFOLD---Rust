@@ -1755,6 +1755,43 @@ impl PresetInstance {
         }
     }
 
+    /// Rebuild this instance's `ParamManifest` from the CURRENT `graph`
+    /// metadata (BUG-295) — the live twin of [`Self::reconcile_manifest`],
+    /// for a structural scene edit (e.g. `AddSceneFogCommand`) that stamps a
+    /// freshly-minted node's exposures into `graph.preset_metadata.params`
+    /// at runtime. `reconcile_manifest` only fires from a `pending_wire`
+    /// stash set at load/deserialize time, so a live structural edit has no
+    /// path back into `self.params` without this: the new/changed rows stay
+    /// invisible to the panel until a save+reload round trip re-derives the
+    /// manifest from the file's wire.
+    ///
+    /// Value preservation: the CURRENT manifest is round-tripped through the
+    /// same wire encoding the file serializer uses
+    /// ([`ParamEntryWire::from_param`], `base_tracked` included) instead of
+    /// `reconcile_manifest`'s saved-file wire — this is exactly the encode
+    /// half of the save/load cycle that already preserves state on disk, run
+    /// in-memory instead. `build_param_manifest` then overlays that wire onto
+    /// descriptors freshly gathered from `graph` (§`gather_known_params`):
+    /// existing params keep their live value/base/exposed/calibration by id;
+    /// a param whose backing node was newly stamped appears with its spec
+    /// default; a param whose backing node is no longer in
+    /// `graph.preset_metadata.params` simply isn't re-seeded, so it drops.
+    ///
+    /// Does NOT touch `pending_wire` — that stash is load-path-only and
+    /// orthogonal to this method (`manifest_provisional` reads only
+    /// `pending_wire`, so this never flips it).
+    pub fn refresh_manifest_from_graph(&mut self) {
+        let wire: std::collections::BTreeMap<String, ParamEntryWire> = self
+            .params
+            .iter()
+            .map(|p| (p.id().to_string(), ParamEntryWire::from_param(p, self.base_tracked)))
+            .collect();
+        let (params, base_tracked) =
+            build_param_manifest(self.is_generator(), &self.effect_type, &self.graph, Some(wire));
+        self.params = params;
+        self.base_tracked = base_tracked;
+    }
+
     /// Whether this instance's preset def failed to resolve at load (BUG-036's
     /// class) — no registry template AND no inline generator `meta.params`,
     /// so its saved params are kept on a placeholder spec rather than dropped

@@ -101,6 +101,20 @@ where
         .flatten()
 }
 
+/// Refresh the target's live `ParamManifest` from its just-mutated graph
+/// metadata (BUG-295). `with_target_graph_mut`/`with_existing_target_graph_mut`
+/// bump `graph_version`/`graph_structure_version` — a different counter the
+/// renderer watches for chain rebuilds — but never touch
+/// `PresetInstance::params` itself, so a command that stamps a freshly-minted
+/// node's exposures into `preset_metadata.params` (or restores a prior
+/// `preset_metadata` on undo) leaves the panel's live manifest stale until a
+/// save+reload round trip. Called after every scene-structural command that
+/// touches `preset_metadata` at runtime — see call sites below. A no-op if
+/// the target no longer resolves (effect/layer deleted).
+fn refresh_target_manifest(project: &mut Project, target: &GraphTarget) {
+    project.with_preset_graph_mut(target, |host| host.refresh_manifest_from_graph());
+}
+
 /// Helper for the Revert command: take the target's current
 /// `Option<EffectGraphDef>` (consuming it; leaves `None` in place) and
 /// return what was there. Bumps the version counter.
@@ -2411,6 +2425,7 @@ impl Command for AddSceneObjectCommand {
         if let Some((pnw, pmeta)) = result.flatten() {
             self.prev = Some((pnw.0, pnw.1, pmeta));
         }
+        refresh_target_manifest(project, &self.target);
     }
 
     fn undo(&mut self, project: &mut Project) {
@@ -2425,6 +2440,7 @@ impl Command for AddSceneObjectCommand {
                 *wires = pw;
             }
         });
+        refresh_target_manifest(project, &self.target);
     }
 
     fn description(&self) -> &str {
@@ -2575,6 +2591,7 @@ impl Command for AddSceneLightCommand {
         if let Some((pnw, pmeta)) = result.flatten() {
             self.prev = Some((pnw.0, pnw.1, pmeta));
         }
+        refresh_target_manifest(project, &self.target);
     }
 
     fn undo(&mut self, project: &mut Project) {
@@ -2589,6 +2606,7 @@ impl Command for AddSceneLightCommand {
                 *wires = pw;
             }
         });
+        refresh_target_manifest(project, &self.target);
     }
 
     fn description(&self) -> &str {
@@ -3247,6 +3265,7 @@ impl Command for AddSceneEnvironmentCommand {
         if let Some((pnw, pmeta)) = result.flatten() {
             self.prev = Some((pnw.0, pnw.1, pmeta));
         }
+        refresh_target_manifest(project, &self.target);
     }
 
     fn undo(&mut self, project: &mut Project) {
@@ -3261,6 +3280,7 @@ impl Command for AddSceneEnvironmentCommand {
                 *wires = pw;
             }
         });
+        refresh_target_manifest(project, &self.target);
     }
 
     fn description(&self) -> &str {
@@ -3377,6 +3397,7 @@ impl Command for AddSceneFogCommand {
         if let Some((pnw, pmeta)) = result.flatten() {
             self.prev = Some((pnw.0, pnw.1, pmeta));
         }
+        refresh_target_manifest(project, &self.target);
     }
 
     fn undo(&mut self, project: &mut Project) {
@@ -3391,6 +3412,7 @@ impl Command for AddSceneFogCommand {
                 *wires = pw;
             }
         });
+        refresh_target_manifest(project, &self.target);
     }
 
     fn description(&self) -> &str {
@@ -4419,6 +4441,7 @@ impl Command for InsertMeshModifierCommand {
         if let Some((pnw, pmeta)) = result.flatten() {
             self.prev = Some((pnw.0, pnw.1, pmeta));
         }
+        refresh_target_manifest(project, &self.target);
     }
 
     fn undo(&mut self, project: &mut Project) {
@@ -4433,6 +4456,7 @@ impl Command for InsertMeshModifierCommand {
                 *wires = pw;
             }
         });
+        refresh_target_manifest(project, &self.target);
     }
 
     fn description(&self) -> &str {
@@ -7538,6 +7562,25 @@ mod tests {
         }
     }
 
+    /// A generator-hosted twin of [`project_with_graph`] (BUG-295 regression
+    /// coverage): production scene commands always target
+    /// `GraphTarget::Generator` — `is_generator()` gates
+    /// `gather_known_params`'s full-`meta.params`-authority branch, which is
+    /// what actually lets a freshly stamped exposure (whose binding carries
+    /// `user_added: false`, `scene_exposure.rs`) surface into the live
+    /// manifest. An `Effect`-target fixture like `project_with_graph` would
+    /// silently take the OTHER `gather_known_params` branch (registry
+    /// `param_defs` + `user_added`-flagged bindings only) and never see the
+    /// stamped param at all — not a proof of the live-refresh fix.
+    fn project_with_generator_graph(def: EffectGraphDef) -> (Project, LayerId) {
+        let mut project = Project::default();
+        let mut layer = Layer::new("Test Layer".to_string(), LayerType::Generator, 0);
+        let lid = layer.layer_id.clone();
+        layer.gen_params_or_init().graph = Some(def);
+        project.timeline.layers.push(layer);
+        (project, lid)
+    }
+
     #[test]
     fn add_scene_object_command_bumps_count_builds_group_and_undo_restores() {
         let (mut project, fx) = project_with_graph(render_scene_graph(2, 1));
@@ -8470,6 +8513,138 @@ mod tests {
 
         cmd.execute(&mut project); // redo
         assert_stamped(&project);
+    }
+
+    /// BUG-295: `AddSceneFogCommand` stamps the fog exposure into
+    /// `def.preset_metadata.params` (proven above), but until
+    /// `refresh_manifest_from_graph` is ALSO wired to run post-stamp, that
+    /// stamp is invisible to the LIVE `PresetInstance.params` the panel
+    /// actually reads — the bug's own root-cause finding (`reconcile_manifest`
+    /// only fires from a load-time `pending_wire` stash, never from a runtime
+    /// graph edit). Regression coverage for the live-manifest half of the fix:
+    /// execute → the fog row is in `inst.params`, not just `preset_metadata`;
+    /// undo → the row is gone from `inst.params`; redo → it's back. Targets
+    /// `GraphTarget::Generator` (see `project_with_generator_graph`) so
+    /// `gather_known_params`'s generator branch actually picks up the
+    /// stamped `meta.params` entry regardless of the binding's `user_added`
+    /// flag (scene exposures are always `user_added: false`).
+    #[test]
+    fn add_scene_fog_command_refreshes_live_manifest_and_undo_redo_restore_it() {
+        let (mut project, lid) = project_with_generator_graph(render_scene_graph(0, 0));
+
+        let mut cmd = AddSceneFogCommand::new(
+            GraphTarget::Generator(lid.clone()),
+            vec![],
+            0,
+            (30.0, 40.0),
+            vec![scene_param_meta("density", "Density")],
+            mirror_catalog_default(),
+        );
+
+        let has_fog_row = |project: &Project| {
+            project
+                .timeline
+                .find_layer_by_id(&lid)
+                .unwrap()
+                .1
+                .gen_params()
+                .unwrap()
+                .params
+                .iter()
+                .any(|p| p.spec.section.as_deref() == Some("Atmosphere"))
+        };
+
+        cmd.execute(&mut project);
+        assert!(
+            has_fog_row(&project),
+            "BUG-295: freshly-stamped fog param must land in the live inst.params after execute"
+        );
+
+        cmd.undo(&mut project);
+        assert!(
+            !has_fog_row(&project),
+            "undo must remove the fog row from the live manifest, not just def.preset_metadata"
+        );
+
+        cmd.execute(&mut project); // redo
+        assert!(has_fog_row(&project), "redo must restore the live fog row");
+    }
+
+    /// BUG-295 value-preservation proof: `refresh_manifest_from_graph`
+    /// round-trips the CURRENT manifest through the same wire encoding the
+    /// file serializer uses before overlaying the graph's descriptors, so a
+    /// pre-existing param's live (possibly non-default) value must survive a
+    /// LATER structural edit's refresh — not just the freshly-stamped one's
+    /// own default. Sets a light's Intensity to a hand-picked non-default
+    /// value, then executes `AddSceneFogCommand` (a second, unrelated
+    /// structural edit) and asserts Intensity kept its value rather than
+    /// resetting to the spec default a naive `build_param_manifest(..., None)`
+    /// resync would have produced.
+    #[test]
+    fn add_scene_fog_command_refresh_preserves_existing_param_values() {
+        let (mut project, lid) = project_with_generator_graph(render_scene_graph(0, 0));
+
+        let mut add_light = AddSceneLightCommand::new(
+            GraphTarget::Generator(lid.clone()),
+            vec![],
+            0,
+            0,
+            (0.0, 0.0),
+            vec![scene_param_meta("intensity", "Intensity")],
+            mirror_catalog_default(),
+        );
+        add_light.execute(&mut project);
+
+        let intensity_id = project
+            .timeline
+            .find_layer_by_id(&lid)
+            .unwrap()
+            .1
+            .gen_params()
+            .unwrap()
+            .params
+            .iter()
+            .find(|p| p.spec.name == "Intensity")
+            .expect("add-light's own refresh surfaced the stamped Intensity param live")
+            .id()
+            .to_string();
+
+        project
+            .timeline
+            .find_layer_by_id_mut(&lid)
+            .unwrap()
+            .1
+            .gen_params_or_init()
+            .params
+            .get_mut(&intensity_id)
+            .expect("intensity param resolves by its synthesized id")
+            .value = 0.42;
+
+        let mut add_fog = AddSceneFogCommand::new(
+            GraphTarget::Generator(lid.clone()),
+            vec![],
+            0,
+            (30.0, 40.0),
+            vec![scene_param_meta("density", "Density")],
+            mirror_catalog_default(),
+        );
+        add_fog.execute(&mut project);
+
+        let intensity_value = project
+            .timeline
+            .find_layer_by_id(&lid)
+            .unwrap()
+            .1
+            .gen_params()
+            .unwrap()
+            .params
+            .get(&intensity_id)
+            .expect("intensity param survives the fog add's refresh")
+            .value;
+        assert_eq!(
+            intensity_value, 0.42,
+            "BUG-295 refresh must preserve a pre-existing param's live value, not reset it to spec default"
+        );
     }
 
     // ── REALTIME_3D_DESIGN P6: Add Object Transform (gizmo auto-create) ──

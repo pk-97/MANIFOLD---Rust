@@ -85,7 +85,8 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Density"
+          "text": "Fog Density",
+          "nth": 0
         }
       },
       "check": "Exists"
@@ -104,7 +105,8 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Density"
+          "text": "Fog Density",
+          "nth": 0
         }
       },
       "check": {
@@ -136,7 +138,8 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Density"
+          "text": "Fog Density",
+          "nth": 0
         }
       },
       "check": "Exists"
