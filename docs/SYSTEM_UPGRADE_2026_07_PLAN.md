@@ -46,7 +46,7 @@ The class: history narrated in code comments — dates, BUG-NNN provenance, "pre
 ## Wave 2 — lanes
 
 - **W2-A test families:** state-level UI tests copied from exemplars Fable hand-writes (hit-test geometry math; click→command dispatch; display-value resolution à la BUG-260 conviction test). Lanes replicate patterns; zero new infrastructure permitted.
-- **W2-B BUG-265:** hit-test against live tree bounds (root fix), atop W1-D, turning W2-A's red baseline green.
+- **W2-B BUG-265:** hit-test against live tree bounds (root fix), atop W1-D. SEQUENCING INVERTED at briefing (2026-07-20, fork-verified): W2-B authors the geometry conviction tests itself — they assert private fields reachable only from inspector.rs's in-file `mod tests` — and W2-A replicates the test families AFTER W2-B lands, using them + `bug_266_tab_pin` as exemplars.
 - **W2-C drag scoping:** Peter reported drag-and-drop broken beyond cards — survey clip/timeline/other drag surfaces, findings doc only.
 
 ## Testing doctrine (agreed 2026-07-20; governs Wave 2 and all UI work)
