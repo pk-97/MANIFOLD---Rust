@@ -94,7 +94,7 @@ crate::primitive! {
             range: Some((0.0, 4.0)),
             enum_values: &[],
         },
-        // Quality knobs (2026-07-17): the original D9(a) budget (2 slices x
+        // Quality knobs: the original D9(a) budget (2 slices x
         // 4 steps = 16 taps) stays the DEFAULT — existing graphs render
         // bit-identically. Raising them buys real variance reduction (the
         // 16-tap hash noise is the whole grain complaint), still fusable,
@@ -115,7 +115,7 @@ crate::primitive! {
             range: Some((1.0, 16.0)),
             enum_values: &[],
         },
-        // Heightfield mode (2026-07-17, depth-relight probe): `Scene Depth`
+        // Heightfield mode: `Scene Depth`
         // (default) is the committed D9(a) perspective path, bit-identical.
         // `Height Field` treats `depth` as a raw height map in an
         // orthographic frame — position = (uv.x*aspect, uv.y, raw*relief),
@@ -789,9 +789,7 @@ mod gpu_tests {
     /// by more than 0.1, and the observed maximum is 0.194 — comfortably
     /// under the algebraic ceiling of 1.0 (visibility is clamped to [0,1]).
     /// The bound below is set with headroom above these measurements, not
-    /// tightened to them. (The generated-vs-hand-kernel parity test that
-    /// once proved the codegen path itself bit-exact was deleted 2026-07-20,
-    /// W1-B, migration scaffolding retired.) This test's job is the
+    /// tightened to them. This test's job is the
     /// algorithm-level cross-check, and the hash-driven jump class above is
     /// accepted as inherent to D9(a)'s committed integer-stepping — NOT
     /// something this phase may fix by substituting a different algorithm

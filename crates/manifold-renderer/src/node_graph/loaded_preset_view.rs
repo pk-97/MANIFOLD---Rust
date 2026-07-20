@@ -312,8 +312,7 @@ mod tests {
 
     /// BUG-103 regression: a glTF-imported scene's per-object card knobs can
     /// target the `mat_k` material node that lives INSIDE that object's
-    /// group box (originally caught via the since-hidden Metallic/Roughness
-    /// knobs; the shared Ambient fan-out now exercises the same path).
+    /// group box.
     /// `outer_routings_from_view` used to build its `node_id → handle` map
     /// from top-level nodes only, so those in-group bindings were silently
     /// dropped — the routing never reached the editor and the group face
@@ -357,8 +356,7 @@ mod tests {
         // material node is present, keyed by the material node's own
         // (unprefixed) handle so the D6 group-face join (`find_node_by_handle`)
         // finds it inside the group body — the in-group resolution path
-        // this test exists to cover (metallic/roughness card sliders, which
-        // used to exercise the same path, were hidden 2026-07-15).
+        // this test exists to cover.
         let has = |handle: &str, param: &str| {
             routings
                 .iter()

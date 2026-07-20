@@ -18,7 +18,7 @@ use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
 /// Public `TYPE_ID` re-exports for callers that pre-date the `primitive!`
-/// macro conversion (2026-07-14, P3 wave 2) — `persistence.rs`'s registry
+/// macro conversion — `persistence.rs`'s registry
 /// coverage test and `mod.rs`'s `pub use` both reference these by name.
 /// `PrimitiveSpec::TYPE_ID` (`Brightness::TYPE_ID` etc.) carries the same
 /// string; these constants are kept only for source compatibility.

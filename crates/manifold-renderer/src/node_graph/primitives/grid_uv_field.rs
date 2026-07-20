@@ -96,7 +96,7 @@ impl Primitive for GridUvField {
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
             // Single-source: kernel generated from the `wgsl_body` (buffer source
-            // path, 0 array inputs). grid_uv_field.wgsl (the hand-kernel parity oracle) was deleted 2026-07-20 (W1-B, migration scaffolding retired).
+            // path, 0 array inputs).
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
                     .expect("node.grid_uv_field standalone codegen"),

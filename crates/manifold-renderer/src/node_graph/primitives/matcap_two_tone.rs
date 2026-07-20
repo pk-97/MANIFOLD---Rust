@@ -105,9 +105,7 @@ impl Primitive for MatcapTwoTone {
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
             // Codegen path (mandatory for per-element GPU atoms): the kernel is
-            // generated from `wgsl_body` so the atom fuses. `shaders/
-            // matcap_two_tone.wgsl` (the hand-kernel parity oracle) was
-            // deleted 2026-07-20 (W1-B, migration scaffolding retired).
+            // generated from `wgsl_body` so the atom fuses.
             let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
                 .expect("node.matcap_two_tone standalone codegen");
             gpu.device.create_compute_pipeline(

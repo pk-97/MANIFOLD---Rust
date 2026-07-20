@@ -8,7 +8,7 @@ pub const MAX_GEN_PARAMS: usize = 32;
 /// This is the single unified context for the preset runtime — the union
 /// of what effects and generators each need. `time` / `beat` are stored at
 /// `f64` to match the `Beats` / `Seconds` precision used throughout the
-/// engine; at WGSL-uniform boundaries that previously took `f32`, narrow
+/// engine; at WGSL-uniform boundaries, narrow
 /// explicitly with `as f32` at the write site (the stored value stays f64,
 /// only the uniform write narrows).
 ///

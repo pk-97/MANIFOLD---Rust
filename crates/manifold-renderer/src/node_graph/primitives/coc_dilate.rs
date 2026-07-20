@@ -306,8 +306,7 @@ mod gpu_tests {
     /// step+spike fixture, cross-checked against a plain-Rust CPU reference
     /// implementing the same 3x3-max spec independently (the CPU-reference
     /// parity pattern this design doc's cluster uses everywhere,
-    /// `docs/CINEMATIC_POST_DESIGN.md` I1). (Generated-vs-hand-kernel half
-    /// retired 2026-07-20, W1-B — migration scaffolding.)
+    /// `docs/CINEMATIC_POST_DESIGN.md` I1).
     #[test]
     fn generated_dilate_matches_cpu_reference() {
         let device = crate::test_device();

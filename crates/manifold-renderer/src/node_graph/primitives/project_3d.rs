@@ -27,8 +27,7 @@ pub const PROJECT_3D_MODES: &[&str] = &["Orthographic", "Perspective"];
 /// Generated-codegen uniform layout: scalar params in PARAMS order (`mode`
 /// Enum → u32, `proj_scale` f32, `proj_dist` f32), then the derived fields —
 /// `active_count` (f32, unchanged), then the camera-branch block added for
-/// the optional `camera: Camera` port (docs/CAMERA_AND_LENS_DESIGN.md §2 D3,
-/// Amendment 2026-07-12): `cam_right`/`cam_up`/`cam_fwd`/`cam_pos` (vec3 each
+/// the optional `camera: Camera` port: `cam_right`/`cam_up`/`cam_fwd`/`cam_pos` (vec3 each
 /// → 3 scalars per codegen.rs:852-862), `proj_f` (= `1/tan(fov_y/2)` at
 /// aspect 1), `cam_near` (the wired camera's near-plane cull threshold), and
 /// `use_camera` (u32, 1 = wired) — then the codegen-injected `dispatch_count`
@@ -202,7 +201,6 @@ impl Primitive for Project3D {
         let pipeline = self.pipeline.get_or_insert_with(|| {
             // Single-source: kernel generated from the `wgsl_body` (buffer
             // coincident path, type-changing in/out + derived active_count).
-            // project_3d.wgsl (the hand-kernel parity oracle) was deleted 2026-07-20 (W1-B, migration scaffolding retired).
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
                     .expect("node.flatten_3d standalone codegen"),

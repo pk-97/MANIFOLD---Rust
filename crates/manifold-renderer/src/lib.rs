@@ -77,8 +77,7 @@ impl std::ops::Deref for TestDevice {
 #[cfg(all(test, feature = "gpu-proofs"))]
 impl TestDevice {
     /// A cheap `Arc` clone of the shared device, for constructors that now
-    /// take ownership of an `Arc<GpuDevice>` (BUG-054 — `Arc<GpuDevice>`
-    /// replaced cached raw `*const GpuDevice` pointers everywhere).
+    /// take ownership of an `Arc<GpuDevice>`.
     pub(crate) fn arc(&self) -> std::sync::Arc<manifold_gpu::GpuDevice> {
         std::sync::Arc::clone(&self.device)
     }

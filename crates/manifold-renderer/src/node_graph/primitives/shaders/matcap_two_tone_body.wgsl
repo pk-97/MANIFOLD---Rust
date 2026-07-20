@@ -7,8 +7,7 @@
 //
 // Matches matcap_two_tone.wgsl exactly. PARAMS order: [color_y_low,
 // color_y_high, color_x_low, color_x_high] — all four Color params, each
-// expanded to four consecutive f32 fields and reassembled as vec4<f32>
-// (freeze/codegen.rs's ParamType::Color branch, 2026-07-14 P3 wave 2).
+// expanded to four consecutive f32 fields and reassembled as vec4<f32>.
 fn body(
     c_normal: vec4<f32>,
     uv: vec2<f32>,

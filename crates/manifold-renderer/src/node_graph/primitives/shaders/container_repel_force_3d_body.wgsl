@@ -29,7 +29,7 @@ fn crf_container_sdf(p: vec3<f32>, ctype: u32, scale: f32) -> f32 {
     switch ctype {
         case 1u: { return crf_sd_box(centered, vec3<f32>(scale * 0.5)); }
         case 2u: { return crf_sd_sphere(centered, scale * 0.5); }
-        // tube 0.12 -> 0.18 (2026-07-10): 4.4x volume, hole kept — the
+        // tube 0.12 -> 0.18: 4.4x volume, hole kept — the
         // geometry half of the torus density normalization.
         case 3u: { return crf_sd_torus(centered, scale * 0.3, scale * 0.18); }
         default: { return -1.0; }

@@ -15,11 +15,7 @@ use crate::node_graph::primitive::Primitive;
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 // Field order MUST match the PARAMS declaration order below — the runtime
 // pipeline is the codegen-generated kernel (`standalone_for_spec`), whose
-// uniform layout is derived from PARAMS in order. BUG (found P7, 2026-07-18):
-// this struct had `power` 4th while PARAMS declare view_x/y/z before `power`,
-// so the standalone dispatch fed the kernel view=(48,0,0), power=1.0 — the
-// production "weird tints" specular. The gpu_tests parity oracle packs its
-// own bytes per kernel, so it never exercised THIS struct.
+// uniform layout is derived from PARAMS in order.
 struct BlinnUniforms {
     light_x: f32,
     light_y: f32,
@@ -185,9 +181,7 @@ impl Primitive for BlinnSpecular {
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
             // Codegen path (mandatory for per-element GPU atoms): the kernel is
-            // generated from `wgsl_body` so the atom fuses. `shaders/
-            // blinn_specular.wgsl` (the hand-kernel parity oracle) was
-            // deleted 2026-07-20 (W1-B, migration scaffolding retired).
+            // generated from `wgsl_body` so the atom fuses.
             let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
                 .expect("node.shininess standalone codegen");
             gpu.device.create_compute_pipeline(

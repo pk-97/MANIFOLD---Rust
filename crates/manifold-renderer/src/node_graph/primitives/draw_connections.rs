@@ -158,8 +158,6 @@ impl Primitive for DrawConnections {
         // texture region via the `BufferIndex` read path — this atom
         // exercises TWO BufferIndex-tagged array inputs (detections + edges),
         // the generic mechanism P4a built, not just one.
-        // `shaders/draw_connections.wgsl` (the hand-kernel parity oracle)
-        // was deleted 2026-07-20 (W1-B, migration scaffolding retired).
         let pipeline = self.pipeline.get_or_insert_with(|| {
             let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
                 .expect("node.draw_connections standalone codegen");

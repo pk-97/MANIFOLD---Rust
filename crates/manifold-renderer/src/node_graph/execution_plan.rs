@@ -44,7 +44,7 @@ pub struct ExecutionStep {
     /// inputs that aren't wired are omitted. Order follows the node's
     /// declared input ports. `&'static str` (interned from the port's
     /// `Cow` name via `intern_name` at plan-build) so the per-frame executor
-    /// reads names with zero allocation — Peter's Option-B call, 2026-07-05.
+    /// reads names with zero allocation.
     pub inputs: Vec<(&'static str, ResourceId)>,
 
     /// `(output_port_name, resource_id)` for every output port. Order follows
@@ -144,11 +144,7 @@ pub struct ExecutionPlan {
     /// [`persistent_resources`](Self::persistent_resources) they are
     /// excluded from every step's `free_after` at compile time — lifetime
     /// is decided ONCE here, and every plan consumer (the executor's pool
-    /// release, the chain runtime's slot planner) inherits it. The 2026-06
-    /// Infrared blackout was exactly this invariant living in the executor
-    /// only: the chain slot planner trusted `free_after`, recycled a
-    /// memo-held LUT's physical slot into the downstream card, and the
-    /// latched read went black.
+    /// release, the chain runtime's slot planner) inherits it.
     held_resources: Vec<ResourceId>,
     /// `hoistable_steps[i]` — step `i` is a pure node whose inputs are all
     /// produced by hoistable steps (the memoizable closure). Parallel to

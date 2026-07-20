@@ -25,8 +25,7 @@ use crate::preset_runtime::{JsonGeneratorLoadError, PresetRuntime};
 
 /// Blend/mix-family atoms whose declared param is a continuous
 /// crossfade weight between two authored "looks" — the structural
-/// identification the P4 brief calls for, derived from the registry
-/// (2026-07-13 audit, see the P4 landing report for the full search):
+/// identification the P4 brief calls for, derived from the registry:
 /// every `category: Composite` primitive whose param is a [0,1]-ranged
 /// blend factor between two texture inputs. `node.feedback` (Composite,
 /// but a single-input temporal loop, no blend weight) and
@@ -372,9 +371,7 @@ fn resolve_target_param(
 /// performer. Split by severity per D8: errors are structural breakage
 /// (a dead slider, a dangling target, a mislabeled mode, a
 /// trigger-type mismatch, a duplicate OSC address); warnings are
-/// idiom/consistency lints an authoring agent corrects in-session
-/// (Peter, 2026-07-13: "the likely thing is the warnings fire and they
-/// update the graph and cards").
+/// idiom/consistency lints an authoring agent corrects in-session.
 ///
 /// Takes the already-built `graph` (post `into_graph`, so post-flatten
 /// and post-wgsl-parse) for every check that needs to resolve a
@@ -390,8 +387,7 @@ fn resolve_target_param(
 /// `node_graph/composites/mod.rs`) is built at live-graph construction
 /// time from a runtime handle, not statically derivable from the
 /// `EffectGraphDef` alone. No bundled preset uses a Composite target
-/// today (verified 2026-07-13: zero `"kind": "composite"` hits under
-/// `assets/`), so this is a documented gap, not an observed miss.
+/// today, so this is a documented gap, not an observed miss.
 pub(crate) fn check_card_lints(
     def: &EffectGraphDef,
     graph: Option<&crate::node_graph::Graph>,

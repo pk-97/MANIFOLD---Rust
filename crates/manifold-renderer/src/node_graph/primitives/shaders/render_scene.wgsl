@@ -1302,8 +1302,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let g_v = n_dot_v / (n_dot_v * (1.0 - k) + k);
 
     // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E5: `KHR_materials_anisotropy` —
-    // tangent-space GGX stretch. Tangent basis RESOLVED (Fable's pre-
-    // execution audit, 2026-07-16): imported meshes carry no `TANGENT`
+    // tangent-space GGX stretch. Tangent basis RESOLVED: imported meshes carry no `TANGENT`
     // attribute (`MeshVertex` is a fixed 48-byte ABI, growing it is its
     // own vertex-layout project — see the design doc's §5 Deferred), so
     // this reuses `cotangent_frame` — the SAME screen-space-derivative

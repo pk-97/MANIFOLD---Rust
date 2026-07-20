@@ -69,7 +69,7 @@
 // (see ssao_from_depth.rs's `generated_ssao_matches_cpu_reference_on_
 // synthetic_ramp` doc comment for the precedent this avoids compounding).
 
-// Slice/step counts arrive as PARAMS since 2026-07-17 (quality knobs;
+// Slice/step counts arrive as PARAMS (quality knobs;
 // defaults 2/4 keep the original 16-tap D9(a) budget bit-identical).
 const GTAO_HALF_PI: f32 = 1.5707963267948966;
 

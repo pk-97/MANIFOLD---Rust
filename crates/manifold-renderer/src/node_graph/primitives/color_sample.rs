@@ -24,7 +24,7 @@ use crate::node_graph::primitive::Primitive;
 struct UvUniform {
     uv: [f32; 2],
     /// Half-extent of the region averaged around `uv`, in *pixels*.
-    /// `radius=0` reads a single pixel (the historical behaviour);
+    /// `radius=0` reads a single pixel;
     /// larger radii average a (2r+1)² window so high-frequency
     /// content doesn't pin the reading on whatever lone pixel happens
     /// to be at the UV. Color Compass sets this to ~16 so its

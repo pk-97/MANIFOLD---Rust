@@ -112,7 +112,7 @@ impl Primitive for InstanceRotationJitter {
         let pipeline = self.pipeline.get_or_insert_with(|| {
             // Single-source: kernel generated from the `wgsl_body` (buffer
             // coincident path; noise_common prepended via wgsl_includes for
-            // hash_u32). instance_rotation_jitter.wgsl (the hand-kernel parity oracle) was deleted 2026-07-20 (W1-B, migration scaffolding retired).
+            // hash_u32).
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
                     .expect("node.rotation_jitter standalone codegen"),

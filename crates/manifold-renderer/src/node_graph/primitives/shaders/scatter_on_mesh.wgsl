@@ -37,7 +37,7 @@ struct Params {
     // of them and parks slots >= count at zero scale — render_scene draws
     // buffer_size/32 instances unconditionally, so a stale tail (slots the
     // previous, higher count wrote) would otherwise stay on screen and the
-    // count fader would appear dead (Scene 2 BlossomField, 2026-07-11).
+    // count fader would appear dead.
     capacity: u32,
 };
 
@@ -206,8 +206,7 @@ fn place_main(@builtin(global_invocation_id) id: vec3<u32>) {
         // (shading) normals. Winding is not authoritative here — terrain
         // grids arrive with -Y winding but +Y vertex normals, and aligning
         // to the raw face normal planted every instance upside-down under
-        // the ground (Scene 2 BlossomField, 2026-07-11: ~98% of flowers
-        // invisible). Zero/degenerate vertex normals leave the face normal
+        // the ground. Zero/degenerate vertex normals leave the face normal
         // untouched.
         let n_vertex = vertices[tri * 3u].normal
             + vertices[tri * 3u + 1u].normal

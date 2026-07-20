@@ -113,9 +113,7 @@ impl Primitive for NeighborSmooth {
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
             // Single-source: the kernel is generated from the `wgsl_body` (buffer
-            // standalone codegen). `neighbor_smooth.wgsl` (the hand-kernel parity
-            // oracle) was deleted 2026-07-20 (W1-B, migration scaffolding
-            // retired). Bindings match: uniform(0), buf_in(1), buf_out(2).
+            // standalone codegen). Bindings match: uniform(0), buf_in(1), buf_out(2).
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
                     .expect("node.neighbor_smooth standalone codegen"),

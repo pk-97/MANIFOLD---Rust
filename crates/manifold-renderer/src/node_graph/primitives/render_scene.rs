@@ -96,11 +96,7 @@ const MSAA_SAMPLES: u32 = 4;
 /// doubles as the editor slider's advisory range. Any producer that would
 /// exceed it (the glTF importer, `gltf_import.rs`) must error loudly at
 /// import time rather than truncate — see [`ImportReport`] and
-/// `assemble_import_graph`. Until 2026-07-15 this was named
-/// `OBJECT_SLIDER_MAX` at 64 and `rebuild`/`reconfigure` silently clamped to
-/// it, which made it a de-facto hard cap despite the doc comment's claim
-/// otherwise — that mismatch dropped 14 of the AMG GT3's 78 materials,
-/// including its livery (BUG-163). Raise freely if a future asset
+/// `assemble_import_graph`. Raise freely if a future asset
 /// legitimately needs more; it is still just a port-list guard, no
 /// GPU/shader coupling.
 ///
@@ -114,8 +110,7 @@ pub(crate) const OBJECT_SAFETY_MAX: u32 = 1024;
 /// `setBytes` caps at 4 KB = 127 lights — do NOT raise this past 127
 /// without first switching the `@binding(8)` arm from `GpuBinding::Bytes`
 /// to a pooled `GpuBuffer` (docs/RENDER_SCENE_UNBOUNDED_LIGHTS_DESIGN.md
-/// §6). Was a hard `MAX_LIGHTS = 4` baked into a fixed uniform array
-/// until 2026-07-10.
+/// §6).
 const LIGHT_SLIDER_MAX: u32 = 64;
 
 const DEFAULT_OBJECTS: u32 = 2;
@@ -3669,8 +3664,7 @@ mod tests {
 
     #[test]
     fn lights_generalize_well_past_the_old_cap_of_4() {
-        // The whole point of the 2026-07-10 unbounded-lights change: light
-        // count is no longer capped at 4. Prove 8 lights (twice the old
+        // Prove 8 lights (twice the old
         // cap) wire cleanly.
         let mut s = RenderScene::new();
         let node: &mut dyn EffectNode = &mut s;
@@ -3681,8 +3675,7 @@ mod tests {
 
     #[test]
     fn objects_generalize_well_past_the_old_cap_of_8() {
-        // The whole point of the 2026-07-05 generalization: object count
-        // is no longer capped at 8. Prove 32 objects wire cleanly.
+        // Prove 32 objects wire cleanly.
         let mut s = RenderScene::new();
         let node: &mut dyn EffectNode = &mut s;
         node.reconfigure(&params_with(32.0, 2.0));

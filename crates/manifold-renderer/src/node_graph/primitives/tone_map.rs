@@ -39,9 +39,7 @@ pub const TONE_MAP_MODES: &[&str] = &["SDR", "PQ", "EDR", "EDR Passthrough"];
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 // Field order MUST match the PARAMS declaration order — the runtime pipeline
 // is the codegen-generated kernel, whose uniform layout is derived from
-// PARAMS in order. (Same drift class as the node.shininess "weird tints" bug
-// fixed in P7, 2026-07-18: this struct had mode/curve after the nit fields
-// while PARAMS declare curve/mode second and third.)
+// PARAMS in order.
 struct ToneMapUniforms {
     exposure: f32,
     curve: u32,

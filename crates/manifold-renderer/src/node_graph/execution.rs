@@ -1395,14 +1395,7 @@ impl Executor {
             // provably never-stale by construction (I3's contract is the
             // node's side of this; a false declaration is the only way this
             // could go wrong, and that's per-node-tested, not this site's
-            // job). **Superseded by RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md
-            // P3b/BUG-197:** alias-skip steps used to never set
-            // `node_declared_unchanged[idx]` (it always stayed reset-false),
-            // so EVERY passthrough alias — data-driven or param-driven —
-            // conservatively bumped, which is why a real glTF import's
-            // `bake_environment -> switch_texture -> render_scene` chain
-            // never let `render_scene`'s IBL cache key stabilize even after
-            // P3 landed the mechanism. Now a param-driven alias
+            // job). Now a param-driven alias
             // (`performed_alias && !data_skip`, e.g. `mux_texture`'s
             // inline-selector fast path) CAN set it — fenced to that exact
             // case just above, where `alias_propagation_state[idx]` proves
