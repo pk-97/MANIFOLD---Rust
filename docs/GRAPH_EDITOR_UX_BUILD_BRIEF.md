@@ -191,7 +191,7 @@ All groups render one fixed `GROUP_HEADER_BG`.
   window behaviour all shipped). Fix the status, keep the rationale.
 - `NODE_GROUPS_UI_DESIGN.md` — "planned, not started" is false (Phases A–C shipped);
   Phase D is explicitly dropped (no interface params); Phase E (naming/color) is §4 here.
-- `EDITOR_REORG_BUILD_BRIEF.md` — historical progress doc; mark superseded by this one
+- `archive/EDITOR_REORG_BUILD_BRIEF.md` — historical progress doc; mark superseded by this one
   for the editor's current state.
 - Comment sweep: as each area is touched, reconcile in-code comments that describe the
   pre-convergence state (e.g. graph_editor.rs's "demote then retire the sidebar"

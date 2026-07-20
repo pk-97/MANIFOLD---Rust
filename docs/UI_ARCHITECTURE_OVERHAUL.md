@@ -5,7 +5,7 @@ upgrading the entire GUI, UI, and interaction surface of MANIFOLD. It captures
 the full audit of what exists, an unbiased critique of what's weak, the target
 architecture, and the agent-authoring bar the new surface must meet.
 
-Companion: [`UI_ARCHITECTURE_AUDIT.md`](UI_ARCHITECTURE_AUDIT.md) holds the detailed
+Companion: [`UI_ARCHITECTURE_AUDIT.md`](archive/UI_ARCHITECTURE_AUDIT.md) holds the detailed
 as-built findings (every subsystem, file-level). This document is the *plan* built
 on top of that audit. Read the audit for "what is"; read this for "what should be
 and how we get there."
@@ -883,7 +883,7 @@ pass (see §0).
   is Phase-5 substrate work.
 
 ### Phase 5 — Layering inversion — **COMPLETE (2026-06-23)**
-> Sub-design `docs/UI_LAYERING_INVERSION.md`. `manifold-ui` now depends only on
+> Sub-design `docs/archive/UI_LAYERING_INVERSION.md`. `manifold-ui` now depends only on
 > the new zero-dep `manifold-foundation` crate (shared primitive vocabulary:
 > `Beats`/`Seconds`/`Bpm`, the typed string ids, `ParamId`), **not** on
 > `manifold-core`. `manifold-core` re-exports those primitives at their historic

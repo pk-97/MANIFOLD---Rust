@@ -1,6 +1,6 @@
 # Timeline Layout P0.0 — before evidence
 
-Generated 2026-07-04 against `docs/TIMELINE_LAYOUT_P0_SPEC.md`'s P0.0 phase, via
+Generated 2026-07-04 against `docs/archive/TIMELINE_LAYOUT_P0_SPEC.md`'s P0.0 phase, via
 the headless `ui-snap` harness (`docs/HEADLESS_UI_HARNESS.md`). Each command
 below is exact — re-run to regenerate, or to produce the P0.1+ "after" set for
 comparison. All commands assume cwd = repo root (or worktree root).
