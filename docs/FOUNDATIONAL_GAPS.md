@@ -39,7 +39,7 @@ BUG-036 (dead LFO on reload), BUG-060 (footer overpaint), `0327f20f` (stale
 chain on layer switch). Memory family: `ui-state-sync-path`,
 `per-window-resource-writes`, `effect-chain-state-caches`.
 
-**The missing system.** Not knowledge — `docs/UI_ARCHITECTURE_AUDIT.md`
+**The missing system.** Not knowledge — `docs/archive/UI_ARCHITECTURE_AUDIT.md`
 (2026-06-18) already maps the mechanism and judges it well-built. What's
 missing is *enforcement*: today every new snapshot field is a hand-written
 pair (content-side emit, UI-side apply) plus drag-suppression rules re-derived
@@ -82,7 +82,7 @@ test, both windows + perform surface. P1–P3, Sonnet-ready.
 `DRAG_CAPTURE_DESIGN.md` (approved 2026-07-07) — the proof this class exists.
 Uncovered remainder: focus and keyboard routing (BUG-022: Escape leaves popup
 open), modal ownership, and whatever an end-to-end read of the event path
-finds (see B3). `INPUT_IDENTITY_UNIFICATION.md` (shipped) covers widget
+finds (see B3). `archive/INPUT_IDENTITY_UNIFICATION.md` (shipped) covers widget
 identity, not routing.
 
 **The missing system.** The drag-capture design's single-owner principle,
@@ -177,7 +177,7 @@ current-state map and harvest its honest-edges section
 | Project IO / migration chain (`manifold-io`) | **`docs/PROJECT_IO_MAP.md` — written 2026-07-07 (this pass)** | A migration bug eats a show file silently; BUG-040 proved the chain can drop data | Work the map's honest-edges list |
 | Media/export pipeline as-built (`manifold-media`) | NO current-state map — `MEDIA_BACKEND_DESIGN.md` and the export designs are forward-looking contracts | Export failures surface days before a release deadline; recording seams covered by LIVE_RECORDING_PROOFS (proposed), decode/thumbnail/export paths are dark | Map next (Opus prompt pack candidate) |
 | Input event path end-to-end (`manifold-app` input_host → panels) | Slices only (INPUT_IDENTITY shipped, DRAG_CAPTURE approved) | Stuck/leaked input mid-set = BUG-058/059 class | Map feeds A3's design |
-| UI bridge / state sync | Mapped — `UI_ARCHITECTURE_AUDIT.md` (2026-06-18) | n/a | Gap is enforcement (A1), not knowledge |
+| UI bridge / state sync | Mapped — `archive/UI_ARCHITECTURE_AUDIT.md` (2026-06-18) | n/a | Gap is enforcement (A1), not knowledge |
 | Core engine, freeze compiler, GPU backend, audio stack | Mapped (CORE_ENGINE_MAP, FREEZE_COMPILER_MAP, MANIFOLD_GPU_ARCHITECTURE, AUDIO_INFRASTRUCTURE) | n/a | Work existing findings queues |
 
 Third lens, standing: **adversarial soak where usage is thin** — project
