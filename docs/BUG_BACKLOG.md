@@ -1591,12 +1591,8 @@ when one is fixed).
 **Symptom:** not a live defect — the duplication itself. Parallel arms at `cards_for_tab`/`cards_for_tab_mut` (inspector.rs:1836-1848), `find_drag_handle` (:1810-1834), selection sets (:1101-1125), `skip_to_settled` (:349-353), press routing (:1492-1501, :1530-1539). Layer/Group/Clip all alias `layer_effects`.
 **Fix shape:** one vec keyed by scope (or one vec + scope field on the card). Mechanical but wide — dedicated lane, don't fold into BUG-265.
 
-### BUG-266 (inspector-tab-pin-dies-on-incidental-selection-change) — tab scope pin is versioned one-shot; add-effect and other command side effects silently clear it → snap back to Layer default
-**Status:** OPEN (logged 2026-07-20, K3 investigation — findings doc `docs/INSPECTOR_DRAG_TAB_FINDINGS.md`; PENDING Fable review before implementation). Peter confirmed the Layer default itself is correct and stays.
-**Severity:** MEDIUM — user-visible: "tabs change randomly, especially when adding effects."
-**Symptom:** clicked inspector tab (e.g. Master) spontaneously reverts to Layer after unrelated actions.
-**Root cause:** `pin_scope` records `(tab, selection_version)` (ui_state.rs:203-209); `pinned_scope()` only honors it while the version matches (:193-197). Any selection mutation bumps the version — including add-effect's behind-the-scenes selection change — killing the pin. state_sync.rs:2293-2310 then falls back to the Layer default. Second path: the pin is filtered against a per-sync recomputed tab set (:2295); selection drift can remove the pinned tab from the set without a version bump.
-**Fix shape:** sticky pin — clear only on explicit user action (another tab click, genuine timeline selection change), decoupled from `selection_version`; key invalidation to selection-identity changes. Scope of "genuine" is a design call.
+### BUG-266 (inspector-tab-pin-dies-on-incidental-selection-change)
+**Status:** FIXED 2026-07-20 (W1-C lane, `fcd4c084`, merged `43c9d3d1`) — pin keyed to selection identity `(primary layer, primary clip, layer-id set)` instead of `selection_version`; transient empty selection holds the pin; 3 state-level regression tests in `ui_bridge/inspector.rs::bug_266_tab_pin`. Full entry: `docs/archive/BUG_BACKLOG_CLOSED.md`. Residue: pin resurrection-on-reselect quirk noted for Peter's feel-pass.
 
 ### BUG-265 (inspector-card-drag-indicator-stale-geometry) — blue drop indicator/target index wrong after any in-place scroll; hit-test uses snapshot `card_y` + live `compute_height()`
 **Status:** OPEN (logged 2026-07-20, K3 investigation — findings doc `docs/INSPECTOR_DRAG_TAB_FINDINGS.md`; PENDING Fable review before implementation).
