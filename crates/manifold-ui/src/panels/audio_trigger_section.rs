@@ -32,7 +32,8 @@
 use super::drawer::DrawerIds;
 use super::param_slider_shared::{
     AUDIO_ATTACK_DEFAULT_MS, AUDIO_MOD_ACTIVE_C32, AUDIO_RELEASE_DEFAULT_MS, AUDIO_SENS_MAX,
-    AudioCardState, DRAWER_BOTTOM_GAP, FONT_SIZE, LENGTH_OPTIONS, ParamModState, ROW_HEIGHT,
+    AudioCardState, AudioRowState, DRAWER_BOTTOM_GAP, FONT_SIZE, LENGTH_OPTIONS, ParamModState,
+    ROW_HEIGHT,
     audio_band_from_index, audio_kind_from_index, build_clip_trigger_drawer,
     clip_trigger_drawer_height, de_btn_style, toggle_btn_style, trigger_source_chips,
 };
@@ -204,21 +205,20 @@ impl AudioTriggerSection {
         // trigger never shows are filled with their defaults — inert here:
         // no row displays them and no gesture writes them.
         let audio = AudioCardState {
-            active: config.rows.iter().map(|r| r.enabled).collect(),
-            send_id: config.rows.iter().map(|r| r.send_id.clone()).collect(),
-            kind_idx: config.rows.iter().map(|r| r.kind_idx).collect(),
-            band_idx: config.rows.iter().map(|r| r.band_idx).collect(),
-            range_min: vec![0.0; n],
-            range_max: vec![1.0; n],
-            invert: vec![false; n],
-            rate: vec![false; n],
-            sensitivity: config.rows.iter().map(|r| r.sensitivity).collect(),
-            attack_ms: vec![AUDIO_ATTACK_DEFAULT_MS; n],
-            release_ms: vec![AUDIO_RELEASE_DEFAULT_MS; n],
-            trigger_mode_idx: vec![0; n],
-            action_idx: vec![0; n],
-            step_amount: vec![1.0; n],
-            wrap_idx: vec![0; n],
+            rows: config
+                .rows
+                .iter()
+                .map(|r| AudioRowState {
+                    active: r.enabled,
+                    send_id: r.send_id.clone(),
+                    kind_idx: r.kind_idx,
+                    band_idx: r.band_idx,
+                    sensitivity: r.sensitivity,
+                    attack_ms: AUDIO_ATTACK_DEFAULT_MS,
+                    release_ms: AUDIO_RELEASE_DEFAULT_MS,
+                    ..Default::default()
+                })
+                .collect(),
             send_labels: config.send_labels.clone(),
             send_ids: config.send_ids.clone(),
         };

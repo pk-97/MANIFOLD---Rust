@@ -2523,7 +2523,7 @@ fn in_range(idx: usize, first: usize, count: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::panels::param_card::RelightCardConfig;
+    use crate::panels::param_card::{RelightCardConfig, RowMod};
     use crate::tree::UITree;
 
     fn inspector_layout() -> ScreenLayout {
@@ -2711,21 +2711,8 @@ mod tests {
             has_abl: false,
             has_graph_mod: false,
             layer_id: None,
-            driver_active: vec![false; n],
-            envelope_active: vec![false; n],
-            trim_min: vec![0.0; n],
-            trim_max: vec![1.0; n],
-            target_norm: vec![1.0; n],
-            env_decay: vec![1.0; n],
-            driver_beat_div_idx: vec![-1; n],
-            driver_waveform_idx: vec![-1; n],
-            driver_reversed: vec![false; n],
-            driver_dotted: vec![false; n],
-            driver_triplet: vec![false; n],
-            driver_free_period: vec![None; n],
+            rows_mod: vec![RowMod::default(); n],
             audio: Default::default(),
-            automation_active: vec![false; n],
-            automation_overridden: vec![false; n],
             relight: RelightCardConfig::default(),
         }
     }
@@ -3399,7 +3386,7 @@ mod tests {
     #[test]
     fn layer_column_height_matches_settled_heights_with_armed_audio_drawers_on_first_configure() {
         use super::super::param_card::ParamCardKind;
-        use super::super::param_slider_shared::AudioCardState;
+        use super::super::param_slider_shared::{AudioCardState, AudioRowState};
 
         let mut tree = UITree::new();
         let mut panel = InspectorCompositePanel::new();
@@ -3417,7 +3404,12 @@ mod tests {
                 let mut c = mk_config(ParamCardKind::Effect, &format!("FX{i}"), 4);
                 if i % 2 == 0 {
                     c.audio = AudioCardState {
-                        active: vec![true, false, false, false],
+                        rows: vec![
+                            AudioRowState { active: true, ..Default::default() },
+                            AudioRowState::default(),
+                            AudioRowState::default(),
+                            AudioRowState::default(),
+                        ],
                         ..Default::default()
                     };
                 }
