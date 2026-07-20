@@ -61,6 +61,6 @@ Pixels are for looking, not asserting. Nearly every UI bug of 2026-07 was a stat
 ## Later (blocked/queued)
 
 - K3 verification lanes per surface when K3 usage resets.
-- Hook trim pass (Step 1.6).
+- Hook trim pass (Step 1.6). Scope addition (Peter approved 2026-07-20): PreToolUse hook denies Agent-tool calls from `lane-*` subagent sessions — lanes never spawn sub-agents, structurally (W15-A incident); consult/investigation agents stay instruction-governed. Escape valve unchanged: lane stops and reports the fan-out need up.
 - `manifold-core/effects.rs` dead-mass audit.
 - God-file decomposition follows the widget-tree design — splitting before killing the duplication just spreads the mess.
