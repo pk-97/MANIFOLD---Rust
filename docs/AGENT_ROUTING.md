@@ -1,6 +1,19 @@
 # Agent Routing — task shape → model, profile, gate
 
-**Status:** ACTIVE 2026-07-19. Authoritative staffing/routing policy. CLAUDE.md §Agents and the `agent-model-staffing-preferences` memory are pointers here. Peter's directive 2026-07-19, Fable-authored.
+**Status:** ACTIVE 2026-07-19 · steering model added 2026-07-20 (Peter's directive after the overnight-wave autopsy; plan: `docs/SYSTEM_UPGRADE_2026_07_PLAN.md`). Authoritative staffing/routing policy. CLAUDE.md §Agents and the `agent-model-staffing-preferences` memory are pointers here.
+
+## The steering model (2026-07-20 — supersedes review-at-landing-only)
+
+The overnight waves failed because Sonnet orchestrated Sonnet and let 100% of green through. Rules now:
+
+- **A judgment-tier model (Fable, or K3 as top session) is the only orchestrator.** Never Sonnet-over-Sonnet, at any depth.
+- **The orchestrator steers, not just reviews.** It chooses the approach before the lane spawns: every brief names the existing system the work rides on (the *reuse target*) and the conviction test that must fail before the fix. Building a parallel path is a brief violation, not a judgment call.
+- **Lanes make exactly ONE commit, then STOP and report.** The orchestrator reviews that first commit before the lane continues — wrong direction always shows in the first diff.
+- **Lanes have NO landing rights.** Only the top session merges to main. Lane branches are safe-to-abandon.
+- **Decisions flow up.** "Existing system doesn't cover X" or "this needs a new helper module" = stop and report, never improvise.
+- **Review is the throttle.** Up to 8 lanes, but diffs queue for orchestrator review; landing never outpaces review.
+- **Per-wave adversarial pass.** Before a wave spawns, a Fable fork attacks the brief set (wrong fix shapes, non-disjoint lanes, over-deletion risk).
+- **Resume-note in every brief.** If the top session dies: lane state = branch + findings doc, recoverable by the next session.
 
 ## The tiering
 
@@ -26,6 +39,8 @@ Consult output is advice; Fable integrates and owns the call. Spawn: `cc-fleet s
 Task shapes that route to Sonnet/K2.7: mechanical sweeps, clippy/format fixes, test runs + log reading, doc regeneration, read-only surveys with named targets, implementation where the fix shape is already written down in the brief.
 
 Never to mechanical agents: graph semantics, GPU/kernel work, undo/lifecycle, design judgment, anything where the fix shape isn't already decided.
+
+**Reasoning effort (2026-07-20):** mechanical lanes run at LOW effort — a fully-decided brief leaves nothing to deliberate, and overthinking is how executors "improve" the brief into parallel infra. Not zero: conflicts and gate failures still need a little reasoning. Investigation/consult work keeps normal effort.
 
 ## The brief contract (where the tokens are saved)
 
