@@ -1861,7 +1861,7 @@ impl InspectorCompositePanel {
         }
     }
 
-    fn route_click(&mut self, node_id: NodeId, modifiers: Modifiers) -> Vec<PanelAction> {
+    fn route_click(&mut self, node_id: NodeId, modifiers: Modifiers, tree: &UITree) -> Vec<PanelAction> {
         // Tab strip — selecting a tab mirrors the timeline selection.
         if let Some((_, tab)) = self.tab_node_ids.iter().find(|(id, _)| *id == node_id) {
             return vec![PanelAction::SelectInspectorTab(*tab)];
@@ -1897,7 +1897,7 @@ impl InspectorCompositePanel {
                 PressedTarget::MasterEffect(i) => {
                     let mut actions = self.effects[Self::SCOPE_MASTER]
                         .get_mut(i)
-                        .map(|c| c.handle_click(node_id))
+                        .map(|c| c.handle_click(node_id, tree))
                         .unwrap_or_default();
 
                     if actions
@@ -1924,7 +1924,7 @@ impl InspectorCompositePanel {
                 PressedTarget::LayerEffect(i) => {
                     let mut actions = self.effects[Self::SCOPE_LAYER]
                         .get_mut(i)
-                        .map(|c| c.handle_click(node_id))
+                        .map(|c| c.handle_click(node_id, tree))
                         .unwrap_or_default();
 
                     if actions
@@ -1950,7 +1950,7 @@ impl InspectorCompositePanel {
                 PressedTarget::GenParam => self
                     .gen_params
                     .as_mut()
-                    .map(|gp| gp.handle_click(node_id))
+                    .map(|gp| gp.handle_click(node_id, tree))
                     .unwrap_or_default(),
                 PressedTarget::Scrollbar => Vec::new(),
             }
@@ -2419,7 +2419,7 @@ impl Panel for InspectorCompositePanel {
                 if !typein.is_empty() {
                     return typein;
                 }
-                self.route_click(*node_id, *modifiers)
+                self.route_click(*node_id, *modifiers, tree)
             }
             UIEvent::PointerDown {
                 node_id,
@@ -2696,8 +2696,17 @@ mod tests {
     }
 
     fn mk_config(kind: super::super::param_card::ParamCardKind, name: &str, n: usize) -> ParamSurface {
+        // Unique id per row (D4, `docs/WIDGET_TREE_DESIGN.md`): a real
+        // manifest never repeats a `ParamId` within one card, and P2 keys
+        // every row widget off it — the old `["a","b","c","d"][i % 4]` cycle
+        // synthesized a duplicate-id collision no real card can produce, once
+        // `n > 4` (caught by `drag_hit_test_target_index_with_mixed_height_cards`).
         let rows: Vec<_> = (0..n)
-            .map(|i| mk_param(["a", "b", "c", "d"][i % 4], &format!("P{i}")))
+            .map(|i| {
+                let mut row = mk_param(["a", "b", "c", "d"][i % 4], &format!("P{i}"));
+                row.id = std::borrow::Cow::Owned(format!("row{i}"));
+                row
+            })
             .collect();
         ParamSurface {
             kind,
@@ -3932,6 +3941,7 @@ mod tests {
         let actions = panel.route_click(
             tree.id_at(panel.master_chrome.first_node() + 1),
             Modifiers::NONE,
+            &tree,
         );
         // Node at first_node+1 is the chevron button in master chrome build order
         // This should return MasterCollapseToggle

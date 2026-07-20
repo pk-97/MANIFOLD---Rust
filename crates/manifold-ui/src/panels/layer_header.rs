@@ -2043,6 +2043,7 @@ impl LayerHeaderPanel {
                         0.0,
                         gain_db_to_norm(0.0),
                         reset,
+                        None,
                     );
                     let track = built.ids.track;
                     let mut gs = crate::slider::SliderDragState::with_range(

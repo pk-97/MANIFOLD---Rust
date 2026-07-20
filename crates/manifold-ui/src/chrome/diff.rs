@@ -180,6 +180,7 @@ impl ChromeHost {
                 spec.label_width,
                 spec.default,
                 spec.reset.clone(),
+                None,
             );
             if let Some(k) = key {
                 self.slider_ids.push((k, built.ids, built.reset));

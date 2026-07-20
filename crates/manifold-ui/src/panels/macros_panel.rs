@@ -336,7 +336,7 @@ impl MacrosPanel {
                     .map(|id| tree.get_bounds(id))
                 {
                     self.ableton_config_ids[i] =
-                        Some(build_ableton_config(tree, None, slot.x, slot.y, slot.width, &display));
+                        Some(build_ableton_config(tree, None, slot.x, slot.y, slot.width, &display, None));
                 } else {
                     self.ableton_config_ids[i] = None;
                 }

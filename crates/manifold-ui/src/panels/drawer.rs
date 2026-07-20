@@ -388,6 +388,13 @@ fn uniform_widths(n: usize, content_w: f32) -> Vec<f32> {
 
 /// Build a drawer's `UITree` nodes under `parent` at `(x, y)` spanning width
 /// `w`. Returns the created ids + the height consumed.
+///
+/// `key`, when `Some` (D4, `docs/WIDGET_TREE_DESIGN.md`), pins the
+/// container's own `WidgetId` — the ONE node this function mints directly
+/// under the caller's (possibly flat, possibly shared) `parent`. Every button
+/// and slider a drawer builds nests under `container`, so once it's stable
+/// they inherit that stability through the parent chain with no key of their
+/// own; callers outside the row model pass `None` (auto-salted, unchanged).
 pub fn build(
     tree: &mut UITree,
     parent: Option<NodeId>,
@@ -395,6 +402,7 @@ pub fn build(
     y: f32,
     w: f32,
     spec: &DrawerSpec,
+    key: Option<u64>,
 ) -> DrawerIds {
     let height = spec.height();
     // Contents-only container: the source-tinted backing + accent spine are drawn
@@ -402,7 +410,18 @@ pub fn build(
     // `build_param_row`, so the drawer itself is transparent — its rows render on
     // that one shared card, which is what makes the drawer read as belonging to its
     // slider. The theme still colours the rows (option fills, slider fills, labels).
-    let container = tree.add_panel(parent, x, y, w, height, UIStyle::default());
+    let container = match key {
+        Some(k) => tree.add_node_keyed(
+            parent,
+            Rect::new(x, y, w, height),
+            UINodeType::Panel,
+            UIStyle::default(),
+            None,
+            UIFlags::empty(),
+            k,
+        ),
+        None => tree.add_panel(parent, x, y, w, height, UIStyle::default()),
+    };
 
     let mut button_ids: Vec<NodeId> = Vec::new();
     let mut sliders: Vec<SliderNodeIds> = Vec::new();
@@ -487,6 +506,7 @@ pub fn build(
                     *label_w,
                     default_norm.clamp(0.0, 1.0),
                     reset.clone(),
+                    None,
                 );
                 sliders.push(built.ids);
                 slider_resets.push(built.reset);
@@ -649,7 +669,7 @@ mod tests {
 
         let mut tree = UITree::new();
         let root = tree.add_panel(None, 0.0, 0.0, 400.0, 200.0, UIStyle::default());
-        let ids = build(&mut tree, Some(root), 0.0, 0.0, 240.0, &spec);
+        let ids = build(&mut tree, Some(root), 0.0, 0.0, 240.0, &spec, None);
 
         assert_eq!(ids.button_count(), 19, "11 + 8 buttons");
 
@@ -689,7 +709,7 @@ mod tests {
         };
         let mut tree = UITree::new();
         let root = tree.add_panel(None, 0.0, 0.0, 400.0, 200.0, UIStyle::default());
-        let ids = build(&mut tree, Some(root), 0.0, 0.0, 240.0, &spec);
+        let ids = build(&mut tree, Some(root), 0.0, 0.0, 240.0, &spec, None);
 
         assert_eq!(ids.button_count(), 0);
         assert_eq!(ids.sliders.len(), 1);
@@ -723,7 +743,7 @@ mod tests {
         };
         let mut tree = UITree::new();
         let root = tree.add_panel(None, 0.0, 0.0, 400.0, 200.0, UIStyle::default());
-        let ids = build(&mut tree, Some(root), 0.0, 0.0, 240.0, &spec);
+        let ids = build(&mut tree, Some(root), 0.0, 0.0, 240.0, &spec, None);
         let meter = ids.meters[0].as_ref().expect("show_meter=true builds a MeterIds");
 
         // Simulate `ScrollContainer::offset_content`: shift every node's
@@ -777,7 +797,7 @@ mod tests {
         };
         let mut tree = UITree::new();
         let root = tree.add_panel(None, 0.0, 0.0, 400.0, 200.0, UIStyle::default());
-        let ids = build(&mut tree, Some(root), 0.0, 0.0, 240.0, &spec);
+        let ids = build(&mut tree, Some(root), 0.0, 0.0, 240.0, &spec, None);
         assert_eq!(ids.button_count(), 8);
         let w0 = tree.get_node(ids.button_ids[0]).unwrap().bounds.width;
         let w7 = tree.get_node(ids.button_ids[7]).unwrap().bounds.width;
@@ -806,7 +826,7 @@ mod tests {
         };
         let mut tree = UITree::new();
         let root = tree.add_panel(None, 0.0, 0.0, 400.0, 200.0, UIStyle::default());
-        let ids = build(&mut tree, Some(root), 0.0, 0.0, 240.0, &spec);
+        let ids = build(&mut tree, Some(root), 0.0, 0.0, 240.0, &spec, None);
         // The INV button is the only addressable control.
         assert_eq!(ids.button_count(), 1);
         // Container height = TOP_PAD*2 + strip height = 8 + 16 = 24 (matches ABL).
