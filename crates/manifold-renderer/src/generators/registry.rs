@@ -69,13 +69,13 @@ impl GeneratorRegistry {
         // (`RENDER_TRACE` showed `generators=37.1ms` on that frame).
         RenderScene::prewarm_pipelines(device);
         GltfTextureSource::prewarm_pipeline(device);
-        // BUG-037 (remaining gap, freeze-profile confirmed 2026-07-14):
+        // BUG-037:
         // `node.scatter_on_mesh` is a barriered multi-pass scan/reduce
         // (exempt from the codegen path), so `prewarm_all_atom_codegen_pipelines`
         // below never reaches its three hand-written pipelines either. Same
         // asset-independent-fixed-source shape as the two lines above.
         ScatterOnMesh::prewarm_pipelines(device);
-        // BUG-191 (Lane 6 2026-07-17): `node.spawn_from_image` is the same
+        // BUG-191: `node.spawn_from_image` is the same
         // barriered-multi-pass, exempt-from-codegen shape as
         // `scatter_on_mesh` above, and no bundled preset happens to
         // reference it either — its four hand-written pipelines were never

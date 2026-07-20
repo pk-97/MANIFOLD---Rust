@@ -69,7 +69,7 @@ enum CheckSpec {
     NonBlackFractionMin { value: f64 },
     /// D8: render with `sun_int`/`env_intensity`/`scene_ambient` all zeroed —
     /// only emissive can light the frame. Pins that the emissive term is
-    /// NOT broken (certified 2026-07-15) independent of any other light.
+    /// NOT broken independent of any other light.
     #[serde(rename = "lights_off_nonblack_min")]
     LightsOffNonblackMin { value: f64 },
     /// Regression pin against our OWN prior render (D3) — never Khronos's.

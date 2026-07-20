@@ -261,8 +261,7 @@ macro_rules! hand_descriptor {
 }
 
 // Color (color.rs) — node.brightness / node.channel_mixer / node.gradient_map
-// moved onto the `primitive!` macro (2026-07-14, P3 wave 2 freeze-codegen
-// conversion), which now emits its own `NodeDescriptor` from the macro's
+// moved onto the `primitive!` macro, which now emits its own `NodeDescriptor` from the macro's
 // `summary`/`category`/`role`/`aliases` fields. The hand descriptors that
 // used to live here are gone — a macro-authored primitive AND a
 // `hand_descriptor!` entry for the same type_id double-register the

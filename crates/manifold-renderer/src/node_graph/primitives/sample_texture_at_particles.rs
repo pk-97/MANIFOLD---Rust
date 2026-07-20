@@ -111,7 +111,7 @@ impl Primitive for SampleTextureAtParticles {
         let pipeline = self.pipeline.get_or_insert_with(|| {
             // Single-source: kernel generated from the `wgsl_body` (buffer
             // coincident + texture path — the body samples tex_in at the particle
-            // position). sample_texture_at_particles.wgsl (the hand-kernel parity oracle) was deleted 2026-07-20 (W1-B, migration scaffolding retired).
+            // position).
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
                     .expect("node.sample_image_at_particles standalone codegen"),

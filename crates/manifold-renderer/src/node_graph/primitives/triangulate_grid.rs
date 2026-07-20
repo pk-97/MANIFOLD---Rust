@@ -238,10 +238,7 @@ mod gpu_tests {
     /// declared +Y up-vector (`tg_compute_normal`'s finite difference has no
     /// height variation to react to) — the emitted triangle WINDING must
     /// agree with that, i.e. `cross(v1-v0, v2-v0)` for every emitted
-    /// triangle must also point +Y, not -Y. Before the fix this primitive
-    /// wound every triangle CW-from-above while declaring +Y vertex normals
-    /// — exactly the disagreement scatter_on_mesh's align_to_normal had to
-    /// work around at the consumer (BUG-120's original finding). Checked on
+    /// triangle must also point +Y, not -Y. Checked on
     /// the hand kernel; the parity test above already proves the generated
     /// kernel matches it vertex-for-vertex.
     #[test]

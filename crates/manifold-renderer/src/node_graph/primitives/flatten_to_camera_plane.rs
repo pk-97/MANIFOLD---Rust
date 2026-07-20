@@ -154,7 +154,6 @@ impl Primitive for FlattenToCameraPlane {
         let pipeline = self.pipeline.get_or_insert_with(|| {
             // Single-source: kernel generated from the `wgsl_body` (buffer
             // coincident path; cam_fwd_x/y/z as derived fields).
-            // flatten_to_camera_plane.wgsl (the hand-kernel parity oracle) was deleted 2026-07-20 (W1-B, migration scaffolding retired).
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
                     .expect("node.flatten_to_camera_plane standalone codegen"),

@@ -2081,7 +2081,7 @@ mod tests {
     /// `material`/`transform` wired straight from the GROUP's own boundary port —
     /// not nested inside it (the shape a fresh glTF import produces instead,
     /// already covered by this file's `grouped_scene_object_def`-style tests).
-    /// Found 2026-07-17 during P5 landing: without `resolve_producer_through_group`,
+    /// without `resolve_producer_through_group`,
     /// every already-shipped, already-migrated bundled preset (SceneStarter and
     /// the ~9 others P2 regenerated) silently showed no transform/material
     /// controls and a wrong vertex count in the panel, despite rendering

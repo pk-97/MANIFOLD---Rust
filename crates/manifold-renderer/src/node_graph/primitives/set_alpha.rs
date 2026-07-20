@@ -84,7 +84,7 @@ impl Primitive for SetAlpha {
         let pipeline = self.pipeline.get_or_insert_with(|| {
             // Codegen path (mandatory for per-element GPU atoms): the
             // runtime kernel is generated from `wgsl_body` so the atom
-            // fuses; shaders/set_alpha.wgsl (the hand-kernel parity oracle) was deleted 2026-07-20 (W1-B, migration scaffolding retired).
+            // fuses.
             let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
                 .expect("node.set_alpha standalone codegen");
             gpu.device.create_compute_pipeline(

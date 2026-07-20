@@ -151,7 +151,6 @@ impl Primitive for ContainerRepelForce3D {
         let pipeline = self.pipeline.get_or_insert_with(|| {
             // Single-source: kernel generated from the `wgsl_body` (buffer
             // multi-input coincident; SDF helpers inlined).
-            // container_repel_force_3d.wgsl (the hand-kernel parity oracle) was deleted 2026-07-20 (W1-B, migration scaffolding retired).
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
                     .expect("node.push_from_walls_3d standalone codegen"),

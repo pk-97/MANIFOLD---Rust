@@ -118,8 +118,7 @@ pub enum InputAccess {
     /// texture `Gather`.
     BufferGather,
     /// TEXTURE-domain read of a storage `Array`/`Channels` input, by indices
-    /// the body computes — the array-into-texture read path (closes BUG-114,
-    /// `docs/FUSION_SOTA_DESIGN.md` D3). Only ever tags an `Array`-typed input
+    /// the body computes — the array-into-texture read path. Only ever tags an `Array`-typed input
     /// on an otherwise texture-domain atom (the `draw_*` family: a soft dot /
     /// marker / tick / gauge / scanline / connection layer that reads a
     /// detections array while writing the output pixel). Semantically this is
@@ -182,7 +181,7 @@ pub enum BoundaryReason {
     /// exempt: the debt lives in the compiler, not the atom.
     Blocked,
     /// Owed a `wgsl_body` conversion — legal ONLY for the `type_id`s in
-    /// `CONVERSION_DEBT_LEDGER` (seeded from the 2026-07-11 sweep triage).
+    /// `CONVERSION_DEBT_LEDGER`.
     /// Converting an atom removes it from the ledger; the meta-test fails
     /// if a listed atom becomes fusable (stale ledger) or if an
     /// undeclared atom claims this reason without a ledger entry.
@@ -190,12 +189,7 @@ pub enum BoundaryReason {
 }
 
 /// The exact set of `type_id`s legally allowed to declare
-/// `BoundaryReason::ConversionDebt` (design doc D5). Seeded verbatim from the
-/// 2026-07-11 conversion-sweep triage's wave 1–3 atom list, transcribed at
-/// P2 time — two triage names (`affine_transform`/`node.transform`,
-/// `lambert_directional`/`node.basic_light`) had already been converted to
-/// `FusionKind::Pointwise` by 2026-07-13 and are correctly NOT here (see the
-/// P2 landing report's escalation list). Converting an atom removes it from
+/// `BoundaryReason::ConversionDebt` (design doc D5). Converting an atom removes it from
 /// this list — a deliberate, review-visible edit; adding an atom without
 /// converting it is not permitted (the meta-test below checks both
 /// directions).
@@ -213,7 +207,7 @@ pub const CONVERSION_DEBT_LEDGER: &[&str] = &[
     // already tracks the real fix: decompose into `flow_field_noise` +
     // `uv_displace_by_flow` (both registered, unused) + existing
     // blur/displace atoms, composed as a graph). Left in this ledger
-    // (2026-07-14 wave 3) rather than reclassified, pending that
+    // rather than reclassified, pending that
     // decomposition design — same category as DigitalPlants/NestedCubes,
     // explicitly out of scope for a mechanical wgsl_body conversion.
     "node.watercolor",
@@ -586,7 +580,7 @@ mod tests {
         assert!(body.contains("gain"), "gain body must reference the gain param");
     }
 
-    /// Wave 1 of the conversion-debt sweep (2026-07-14): the three buffer/
+    /// the three buffer/
     /// texture SOURCE atoms `node.grid_mesh`, `node.hypercube_points`,
     /// `node.explosion_force` moved off `CONVERSION_DEBT_LEDGER` onto the
     /// codegen path — `FusionKind::Source`, `standalone_for_spec` builds the
@@ -649,7 +643,7 @@ mod tests {
         }
     }
 
-    /// P3 wave 2 (2026-07-14): the seven shading-family + color.rs atoms
+    /// the seven shading-family + color.rs atoms
     /// converted off `ConversionDebt` this wave are all `Pointwise` with a
     /// real `wgsl_body`, and none declare a `BoundaryReason` any more (the
     /// meta-test `every_boundary_atom_declares_its_reason` also proves the
@@ -710,7 +704,7 @@ mod tests {
         assert_eq!(InputAccess::default(), InputAccess::Coincident);
     }
 
-    /// D3 (BUG-114): `BufferIndex` is gather-shaped for the region-grower's
+    /// `BufferIndex` is gather-shaped for the region-grower's
     /// "never unions a gather-consumed wire" contract, same as `Gather` /
     /// `GatherTexel` / `BufferGather`.
     #[test]

@@ -560,8 +560,8 @@ impl std::fmt::Display for ChainError {
 impl std::error::Error for ChainError {}
 
 /// Push a [`ChainError`] onto an accumulator and emit one consistent
-/// `[chain-error]` line. Replaces the scattered `eprintln!` calls that
-/// previously lacked structure — same data lands in the log, plus
+/// `[chain-error]` line. Replaces the scattered `eprintln!` calls —
+/// same data lands in the log, plus
 /// it's now reachable through [`PresetRuntime::errors`] for the editor.
 fn record_chain_error(errors: &mut Vec<ChainError>, err: ChainError) {
     eprintln!("[chain-error] {err}");
@@ -680,10 +680,7 @@ struct EffectSlot {
     /// resolution, etc., without any per-effect Rust code.
     ///
     /// Every shipping effect that needs frame-context scalars uses this
-    /// surface now (Glitch / Strobe / Watercolor / VoronoiPrism
-    /// migrated 2026-05-28; see commits below). The previous
-    /// `ctx_target_node` field + `apply_ctx_params_at` hardcoded match
-    /// were deleted in the same change.
+    /// surface now.
     generator_input_node: Option<NodeInstanceId>,
     /// `freeze::segment::card_prefix(seg_idx)` for a card that is a member of
     /// a fused multi-card SEGMENT, `""` otherwise. [`Self::node_map`] and
@@ -2225,7 +2222,7 @@ impl PresetRuntime {
             // params. The standard port-shadows-param machinery
             // propagates these to inner primitives via scalar wires —
             // same surface generators have, no per-effect Rust code.
-            // §8 D5 (2026-07-07): `trigger_count` used to stay pinned at
+            // `trigger_count` used to stay pinned at
             // the primitive's 0.0 default here ("clip-side concepts that
             // don't reach the effect chain") — the caller now feeds the
             // owning layer's EFFECTIVE count (clip edge + audio fires,
@@ -2300,9 +2297,7 @@ impl PresetRuntime {
             delta: manifold_core::Seconds(f64::from(ctx.dt)),
             // Forward host frame counter so legacy effects (DoF /
             // WireframeDepth / BlobTracking) dispatched via the
-            // PresetRuntime fast path can throttle correctly. Was
-            // previously hardcoded to 0 in the adapter, breaking
-            // throttle gates.
+            // PresetRuntime fast path can throttle correctly.
             frame_count: ctx.frame_count,
         };
         // Use the StateStore-aware execute path so stateful primitives
@@ -3758,8 +3753,7 @@ fn assign_texture2d_slots(
     // texture without any intermediate write aliasing it. Held (memo-
     // latched LUTs etc.): the executor serves the latched write on
     // every later frame while upstream transient steps keep re-running
-    // — a shared slot would be stomped each frame (the 2026-06 Infrared
-    // → QuadMirror blackout). Dedicated slots are allocated at the
+    // — a shared slot would be stomped each frame. Dedicated slots are allocated at the
     // resource's RESOLVED dims, so a 256×1 LUT strip costs 256×1, not
     // a canvas-sized texture.
     let dedicated_set: std::collections::HashSet<ResourceId> = plan
@@ -4485,9 +4479,7 @@ mod user_binding_tests {
         // StylizedFeedback's graph registers an affine_transform under
         // the handle `"affine"`. Its static card exposes gain / scale /
         // rotation, but NOT `translate_x` — so a user-tail binding to
-        // `affine.translate_x` is the sole writer of that inner param
-        // (the clean regression vehicle the deleted Mirror.rotation
-        // test used to be).
+        // `affine.translate_x` is the sole writer of that inner param.
         fx.append_user_binding(UserParamBinding {
             id: "user.affine.translate_x.1".to_string(),
             label: "Translate X".to_string(),
@@ -5030,7 +5022,7 @@ mod generator_input_tests {
         assert_eq!(read("output_height"), Some(2160.0));
     }
 
-    /// §8 D5 (2026-07-07): `trigger_count` used to stay pinned at 0.0 for
+    /// `trigger_count` used to stay pinned at 0.0 for
     /// effect-chain generator_input nodes ("clip-side concepts that don't
     /// reach the effect chain"). This is the effect-chain half of the P2
     /// gate — the generator half lives in

@@ -165,7 +165,7 @@ impl Primitive for InstancePositionJitter {
         let pipeline = self.pipeline.get_or_insert_with(|| {
             // Single-source: kernel generated from the `wgsl_body` (buffer
             // coincident path; noise_common prepended via wgsl_includes for
-            // simplex3d). instance_position_jitter.wgsl (the hand-kernel parity oracle) was deleted 2026-07-20 (W1-B, migration scaffolding retired).
+            // simplex3d).
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
                     .expect("node.position_jitter standalone codegen"),

@@ -76,8 +76,7 @@ pub type ParamValues = AHashMap<std::borrow::Cow<'static, str>, ParamValue>;
 /// format per-instance names (`mesh_37`) with no object cap. But the execution
 /// plan, the freeze compiler, and the wire graph key everything by
 /// `&'static str` — and the per-frame executor reads those names, so keeping
-/// them `&'static` avoids any hot-path allocation (Peter's Option-B call,
-/// 2026-07-05). This bridges the two: a `Borrowed` name (every fixed port —
+/// them `&'static` avoids any hot-path allocation. This bridges the two: a `Borrowed` name (every fixed port —
 /// the overwhelming majority) returns its `&'static str` for free; an `Owned`
 /// name (a variadic node's formatted port) is interned once into a
 /// process-lifetime set and reused thereafter.
@@ -563,8 +562,7 @@ pub trait EffectNode: Send {
     /// this node were transparent. Without this hook, a skipping node
     /// would leave its dedicated output slot frozen at whatever was
     /// last written there, which downstream effects would read as
-    /// stale data (the classic Quad-Mirror-at-amount=0 +
-    /// Stylized-Feedback runaway from 2026-05-13).
+    /// stale data.
     ///
     /// Implementors must ensure the returned port pair maps to slots
     /// of compatible type — currently only `Texture2D` is supported.

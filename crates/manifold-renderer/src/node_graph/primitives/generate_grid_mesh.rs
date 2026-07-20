@@ -136,7 +136,7 @@ impl Primitive for GenerateGridMesh {
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
             // Single-source: kernel generated from the `wgsl_body` (buffer
-            // source path). generate_grid_mesh.wgsl (the hand-kernel parity oracle) was deleted 2026-07-20 (W1-B, migration scaffolding retired).
+            // source path).
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
                     .expect("node.grid_mesh standalone codegen"),

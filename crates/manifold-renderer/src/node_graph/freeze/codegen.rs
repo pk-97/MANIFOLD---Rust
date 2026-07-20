@@ -391,13 +391,7 @@ pub fn generate_standalone(
 }
 
 /// [`generate_standalone`] with the STENCIL-FETCH body ABI flag and shared
-/// WGSL library includes (CINEMATIC_POST P1: the texture-domain standalone
-/// path previously had no way to thread `wgsl_includes` at all — only
-/// [`generate_standalone_buffer`] did — so a texture atom whose body called a
-/// shared helper (`depth_common.wgsl`'s `linearize_depth`, the
-/// synthesis-drift-prevention header every depth consumer must use) failed
-/// naga parsing both at dispatch time and at `region.rs`'s classify gate,
-/// permanently boundary-stuck. `includes` mirrors the buffer path's handling
+/// WGSL library includes. `includes` mirrors the buffer path's handling
 /// exactly: deduped-by-caller, prepended verbatim before the body so its
 /// helper calls resolve (same shape as `generate_standalone_buffer`'s
 /// identical block). When
@@ -2654,8 +2648,7 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
 
     // --- shared WGSL library includes (e.g. depth_common's linearize_depth),
     // prepended so the bodies' helper calls resolve — mirrors
-    // generate_fused_buffer's identical block (BUG-135: this texture path
-    // previously never emitted node_includes at all). ---
+    // generate_fused_buffer's identical block. ---
     for inc in &includes {
         out.push_str(inc.trim_end());
         out.push_str("\n\n");
@@ -3135,8 +3128,7 @@ mod dispatch_contract_tests {
     /// Pins the `dim_forms` D3 workgroup string to [`VOLUME_WORKGROUP_3D`], the
     /// constant every volume primitive's `run()` sizes its dispatch grid with.
     /// If either side changes without the other, generated kernels and host
-    /// dispatches silently disagree and only a fraction of the volume computes
-    /// (the FluidSim3D one-octant force field, 2026-07-10).
+    /// dispatches silently disagree and only a fraction of the volume computes.
     #[test]
     fn volume_workgroup_constant_matches_emitted_kernel() {
         let n = VOLUME_WORKGROUP_3D;
@@ -3232,7 +3224,7 @@ mod dispatch_contract_tests {
         );
     }
 
-    /// P3 wave 2 (2026-07-14): a `ParamType::Color` param (the shading-family
+    /// a `ParamType::Color` param (the shading-family
     /// atoms' `color`/`color_a`/`color_x_low`/... tint) now lays out on the
     /// standalone codegen path exactly like Vec3 does — four consecutive f32
     /// fields (`<name>_x/_y/_z/_w`), reassembled at the body call as a
@@ -5545,9 +5537,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
 
     /// 3D CoincidentTexel parity (dual-packed): node.swirl_force_3d reads its
     /// gradient volume at the OWN voxel (integer textureLoad, no sampler) and
-    /// combines curl + slope around the single CPU-normalized ref_axis (the
-    /// legacy fused-pass force law; the corner-degenerate per-voxel wobble was
-    /// removed 2026-07-10). The hand uniform pads vol_res/vol_depth to 16 (48
+    /// combines curl + slope around the single CPU-normalized ref_axis. The hand uniform pads vol_res/vol_depth to 16 (48
     /// bytes); the generated Params are contiguous (32 bytes) — pack each from
     /// the same logical values.
     #[test]

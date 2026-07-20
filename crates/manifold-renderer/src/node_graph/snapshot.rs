@@ -838,9 +838,6 @@ fn title_from_type_id(type_id: &str) -> String {
 /// custom code rather than a native primitive. One definition, used by both
 /// the live (`from_graph`) and structural (group-preserving) snapshot paths.
 ///
-/// BUG-122: an author title used to REPLACE the type label outright, so once
-/// a node was renamed its actual type (`node.blur`, `node.mix`, …) was
-/// nowhere on the card — unreadable in a graph with several renamed nodes.
 /// Generalizes the `(WGSL)` marker's append-not-replace precedent: when the
 /// author title differs from the type's friendly label, both show as
 /// `"<author title> — <friendly type>"`. Skipped when they'd be identical

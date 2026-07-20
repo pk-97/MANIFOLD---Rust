@@ -72,7 +72,7 @@ fn is_display_category(c: Category) -> bool {
 const OPAQUE_BY_DESIGN: &[&str] = &[
     // Forcing alpha IS this node's one job — the explicit display-stage
     // opacity decision for generator termini whose blend chains have
-    // consumed the alpha channel (Lightning's feedback afterglow, 2026-07-16).
+    // consumed the alpha channel.
     // It is the composable form of the alpha=1 that resolve_scatter /
     // resolve_accumulator bake in-kernel. Never place it inside an effect.
     "node.set_alpha",

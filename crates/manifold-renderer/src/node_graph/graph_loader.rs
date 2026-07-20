@@ -1198,11 +1198,6 @@ impl std::error::Error for PreAllocationError {}
 ///    [`PreAllocationError::UnboundArrayResource`] naming the producer.
 ///    The architectural invariant: this function returns `Ok` only when
 ///    every resource is bound, or `Err` otherwise. No third state.
-///
-/// The chain-graph path previously had a stripped-down `pre_allocate_array_buffers_effect`
-/// that skipped step 2 entirely and step 3 wholesale — the silent-black-output
-/// bug class on effects. Routing both callers through this function
-/// structurally eliminates that gap.
 pub fn pre_allocate_resources(
     graph: &Graph,
     plan: &ExecutionPlan,

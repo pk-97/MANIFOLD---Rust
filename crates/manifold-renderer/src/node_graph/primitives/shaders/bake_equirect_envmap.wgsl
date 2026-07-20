@@ -92,8 +92,8 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // neutral-white studio dome — brighter overhead, dimmer toward
         // the floor, never zero anywhere — because metals are lit
         // exclusively by the environment: against a black void every
-        // metallic import reads as dark chrome no matter its albedo
-        // (the 2026-07-15 helmet/AMG fidelity failure). The strips keep
+        // metallic import reads as dark chrome no matter its albedo.
+        // The strips keep
         // supplying the specular streaks; the fill supplies the world.
         color = vec3<f32>(1.0, 0.985, 0.96)
             * uniforms.fill_intensity

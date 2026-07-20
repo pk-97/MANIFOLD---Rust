@@ -148,8 +148,6 @@ impl Primitive for DrawMarkers {
         // Codegen path (mandatory for per-element GPU atoms, D3/BUG-114): the
         // kernel is generated from `wgsl_body` so the atom fuses into a
         // texture region via the `BufferIndex` read path.
-        // `shaders/draw_markers.wgsl` (the hand-kernel parity oracle)
-        // was deleted 2026-07-20 (W1-B, migration scaffolding retired).
         let pipeline = self.pipeline.get_or_insert_with(|| {
             let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
                 .expect("node.draw_markers standalone codegen");
