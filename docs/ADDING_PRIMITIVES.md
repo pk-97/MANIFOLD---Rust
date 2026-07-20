@@ -89,12 +89,14 @@ buffer gather):
        .expect("node.<name> standalone codegen");
    gpu.device.create_compute_pipeline(&wgsl, crate::node_graph::freeze::codegen::ENTRY, "node.<name>")
    ```
-4. **Keep a hand `shaders/<name>.wgsl` as the parity oracle** and prove the two agree
-   in `gpu_tests`: dispatch the hand kernel and the `standalone_for_spec` kernel on the
-   same fixture, assert element-wise equality (see `displace_mesh.rs`'s
-   `generated_displace_matches_hand_kernel_with_inactive_passthrough`). **This
-   generated-vs-hand parity test is the machine check that proves the atom is genuinely
-   on the fusable path** — a per-element GPU atom is not done without it.
+4. **Prove the kernel's values in `gpu_tests`**: dispatch the `standalone_for_spec`
+   kernel on a fixture and assert element-wise equality against CPU-computed expected
+   output (the `*matches_hand_formula*` pattern, e.g. `mesh_ramp.rs`). If the atom can
+   fuse with a neighbor, the fused-vs-unfused fusion proof is the second mandatory check.
+   **RETIRED (Peter, 2026-07-20, W1-B):** the former generated-vs-hand-KERNEL parity
+   tests and their mirror `shaders/<name>.wgsl` oracles — both runtime paths are
+   generated now; the hand kernels only re-proved the node-graph migration. Do not add
+   new ones.
 
 **Scope — the in/out test (2026-07-11).** An atom is IN the mandate iff its kernel is a
 **barrier-free pure per-element function**: one thread computes one output element,

@@ -29,7 +29,7 @@ The 2026-07 overnight Sonnet waves failed the same way everywhere: agents built 
 ## Wave 1 — lanes (after Step 1; briefs adversarially checked)
 
 - **W1-A doc cull:** move superseded docs to `docs/archive/` from a list Fable writes; regen index.
-- **W1-B gate cleanup:** delete dead flow scripts (BUG-252's 8, BUG-240) and demote PNG assertions from the default gate — from an EXACT delete-list + keep-list (GPU parity tests, freeze proofs, headless render oracle are untouchable).
+- **W1-B gate cleanup:** CORRECTED 2026-07-20 at briefing — BUG-252's 8 flows were retargeted and fixed 2026-07-18 (`f101a585`/`d28bfff4`), NOT dead; only `scene-setup-scrub-fine.json` (BUG-240) dies. Scope now: that one script + retire ALL generated-vs-hand kernel parity tests and their hand-kernel oracles (Peter's ruling 2026-07-20 — migration scaffolding; fusion proofs and freeze proofs KEPT, headless render oracle untouchable) + look-oracle demotion note in HEADLESS_UI_HARNESS.md. Exact lists: the Wave 1 brief set (adversarially reviewed 2026-07-20, 11 findings folded).
 - **W1-C BUG-266:** tab pin dies on incidental selection changes — decouple pin invalidation from `selection_version` (disjoint: `ui_state.rs`/`state_sync.rs`).
 - **W1-D BUG-267:** unify master/layer card vecs in `inspector.rs` (the wave's real-code lane; structural, goes BEFORE BUG-265 which touches the same lines).
 
