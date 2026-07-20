@@ -50,6 +50,7 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-283 | **manifold-app-clippy-tests-target-drift** | `cargo clippy -p manifold-app --tests -- -D warnings` fails on three pre-existing files (doc_lazy_continuation / cloned_ref_to_slice_refs / approx_constant); the standard gates never compile the test target so the drift is invisible — LOW |
 | BUG-282 | **graph-canvas-unbound-param-scrub-floods-undo-stack** | dragging an unbound graph-node-face param/vec scrub pushes a fresh undo-worthy `Execute(SetGraphNodeParamCommand)` on EVERY pointer-move tick instead of batching to one entry at drag-end, unlike every other scrub family in the codebase — MED |
 | BUG-281 | **graph-canvas-bound-param-scrub-unguarded-mid-gesture** | a graph-node-face param scrub on a card-bound row live-writes `local_project` every tick via `bound_node_param_drag`, but the snapshot-acceptance restore path only ever consults `active_inspector_drag` — a mid-gesture snapshot reverts the in-flight value — MED |
 | BUG-280 | **marker-drag-unguarded-mid-gesture-race** | dragging a timeline marker writes its live beat directly into `project.timeline` every frame with no snapshot-suppression coverage (`MarkerDrag` lives outside `InteractionOverlay`'s `DragMode`, so `app_render.rs`'s `drag_active` check never sees it) — a mid-gesture content-thread snapshot reverts the drag — MED |
