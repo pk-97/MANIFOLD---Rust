@@ -196,6 +196,7 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 **Severity:** LOW — no runtime impact; a gate-hygiene gap. The failures: `tests/tree_render_call_sites.rs` (doc_lazy_continuation), `src/app_lifecycle.rs` (cloned_ref_to_slice_refs), `src/text_input.rs` (approx_constant). None touched by recent widget-tree work (verified via git log — last modified by unrelated prior commits); likely clippy/toolchain version drift.
 **Root cause:** the house clippy gates (`-p <crate> -- -D warnings` at commit; `--workspace -- -D warnings` at landing) don't enable `cfg(test)` compilation, so lints that only fire in test targets accumulate silently until someone runs `--tests`.
 **Fix shape:** one cleanup pass over the three files, then decide whether the landing gate should add `--tests` (cheap on a warm checkout) — a gate-policy call for Peter/orchestrator, not a lane.
+
 ### BUG-282 (graph-canvas-unbound-param-scrub-floods-undo-stack) — dragging an unbound graph-node-face param scrub records one undo entry PER POINTER-MOVE TICK instead of batching to one per gesture
 **Status:** OPEN (logged 2026-07-20, W2-C drag-surfaces survey).
 **Severity:** MEDIUM — not data corruption, but breaks the undo contract every other drag family in the codebase honors: a single scrub gesture can push dozens of entries into the 200-entry-capped undo stack, evicting older history and making Undo require many presses to unwind one visual drag.
@@ -1316,10 +1317,10 @@ clean).
 **Status:** OPEN
 
 ## Fixed
+
 - BUG-265 (inspector-card-drag-indicator-stale-geometry) — FIXED 2026-07-20 on `lane/w2b-bug265-drag-geometry` (`8cb1c437` + `94632d65` card_y removal, merged `f2ac71d9`) — full history in docs/archive/BUG_BACKLOG_CLOSED.md
 - BUG-266 (inspector-tab-pin-dies-on-incidental-selection-change) — FIXED 2026-07-20 on `lane/w1c-bug266-tab-pin` (`fcd4c084`, merged `43c9d3d1`) — full history in docs/archive/BUG_BACKLOG_CLOSED.md; residue: pin resurrection-on-reselect quirk for Peter's feel-pass
 - BUG-267 (inspector-duplicated-card-lists) — FIXED 2026-07-20 on `lane/w1d-bug267-card-vecs` (`717f8910`, merged `726de5a0`) — full history in docs/archive/BUG_BACKLOG_CLOSED.md
-
 - BUG-240 (scrub-fine-flow-tests-a-retired-shift-fine-delta-drag-gesture) — FIXED 2026-07-20 (script deleted per its own fix shape, W1-B) — full history in docs/archive/BUG_BACKLOG_CLOSED.md
 - BUG-186 (sheenwoodleathersofa-webp-error-message-misattribution) — FIXED @ IMPORT_ANYTHING_WAVE_DESIGN.md W1, 2026-07-17 — full history in docs/archive/BUG_BACKLOG_CLOSED.md
 - BUG-001 (pasting-effect-shares-sources-effectid) — FIXED — full history in docs/archive/BUG_BACKLOG_CLOSED.md
