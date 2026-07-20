@@ -1664,26 +1664,33 @@ impl InspectorCompositePanel {
             );
         }
 
-        // Compute target card index from Y position
+        // Compute target card index from Y position. Hit-test against live
+        // tree bounds (scroll-current, animation-current), not the
+        // build-time `card_y` snapshot / animated `compute_height()` — those
+        // go stale by exactly the scroll delta on the in-place scroll path
+        // (BUG-265). Cards without a live rect (never built) are skipped.
         let tab = self.card_drag_tab;
         let (target, indicator_y) = {
             let cards = self.cards_for_tab(tab);
             let card_count = cards.len();
             let mut t = card_count; // default: after last card
             for (i, card) in cards.iter().enumerate() {
-                let cy = card.card_y();
-                let ch = card.compute_height();
-                let mid = cy + ch * 0.5;
+                let Some(b) = card.live_bounds(tree) else {
+                    continue;
+                };
+                let mid = b.y + b.height * 0.5;
                 if pos.y < mid {
                     t = i;
                     break;
                 }
             }
             let iy = if t < card_count {
-                cards[t].card_y()
+                cards[t].live_bounds(tree).map(|b| b.y).unwrap_or(vp.y)
             } else if card_count > 0 {
-                let last = &cards[card_count - 1];
-                last.card_y() + last.compute_height()
+                cards[card_count - 1]
+                    .live_bounds(tree)
+                    .map(|b| b.y + b.height)
+                    .unwrap_or(vp.y)
             } else {
                 vp.y
             };
@@ -1744,7 +1751,13 @@ impl InspectorCompositePanel {
             if to_card < cards.len() {
                 cards[to_card].effect_index()
             } else if !cards.is_empty() {
-                cards.last().unwrap().effect_index() + 1
+                // After-last drop: one past the HIGHEST effect index in the
+                // tab's cards, not `cards.last()`'s index — the tab's cards
+                // are a contiguous run of the flat effects list today, but
+                // list order isn't guaranteed to track index order, and
+                // `.last()` silently breaks the moment it doesn't (BUG-265
+                // root cause 3).
+                cards.iter().map(|c| c.effect_index()).max().unwrap() + 1
             } else {
                 0
             }
@@ -3493,6 +3506,183 @@ mod tests {
             "content must move up when dragging the thumb down (before={y_before}, after={y_after})"
         );
         assert!(panel.layer_scroll.scroll_offset() > 0.0);
+    }
+
+    /// BUG-265: `update_card_drag`'s hit-test must track the ACTUAL
+    /// on-screen card position, not the `card_y()` snapshot written only at
+    /// `build()` time. Wheel/scrollbar scroll moves the tree nodes in place
+    /// (`try_scroll_in_place` → `ScrollContainer::offset_content`) WITHOUT a
+    /// rebuild, so `card_y()` goes stale by exactly the scroll delta while
+    /// the live tree bounds (what `live_bounds()` reads) stay correct.
+    fn find_drag_handle_id(card: &ParamCardPanel, tree: &UITree) -> NodeId {
+        for i in card.first_node()..card.first_node() + card.node_count() {
+            let id = tree.id_at(i);
+            if card.is_drag_handle(id) {
+                return id;
+            }
+        }
+        panic!("card has no drag handle node in its build range");
+    }
+
+    #[test]
+    fn drag_hit_test_uses_live_bounds_after_in_place_scroll() {
+        use super::super::param_card::ParamCardKind;
+        let mut tree = UITree::new();
+        let mut panel = InspectorCompositePanel::new();
+        let layout = {
+            let mut l = ScreenLayout::new(1920.0, 1080.0);
+            l.inspector_width = 400.0;
+            l
+        };
+        let effects: Vec<_> = (0..12)
+            .map(|i| mk_config(ParamCardKind::Effect, &format!("FX{i}"), 3))
+            .collect();
+        panel.configure_layer_effects(&effects, None);
+        panel.configure_tabs(
+            &[InspectorTab::Layer, InspectorTab::Master],
+            InspectorTab::Layer,
+        );
+        panel.build(&mut tree, &layout);
+        assert!(
+            panel.layer_scroll.max_scroll() > 0.0,
+            "test needs scrollable content"
+        );
+
+        // Begin a card drag (the source card is unrelated to the hit-test
+        // math below — any drag handle will do).
+        let handle_id =
+            find_drag_handle_id(&panel.effects[InspectorCompositePanel::SCOPE_LAYER][0], &tree);
+        assert!(panel.try_begin_card_drag(Some(handle_id), &mut tree));
+
+        // Scroll in place — no rebuild. Content nodes move; `card_y()` does not.
+        let cursor_x = layout.inspector().x + 10.0;
+        let scrolled = panel.try_scroll_in_place(-30.0, cursor_x, &mut tree);
+        assert!(scrolled, "sanity: must scroll in place");
+
+        // The ACTUAL, post-scroll on-screen position of a card well past the
+        // scroll delta — read via the same live-tree source the fix uses.
+        let target_idx = 5;
+        let target_bounds = panel.effects[InspectorCompositePanel::SCOPE_LAYER][target_idx]
+            .live_bounds(&tree)
+            .expect("built card has live bounds");
+        let cursor_y = target_bounds.y + 1.0; // just inside the card's top edge
+
+        panel.update_card_drag(Vec2::new(cursor_x, cursor_y), &mut tree);
+
+        assert_eq!(
+            panel.card_drag_target_index, target_idx,
+            "drop target must match the scrolled on-screen card position, not \
+             a `card_y()` snapshot stale by the scroll delta"
+        );
+        let indicator_bounds = tree.get_bounds(panel.card_drag_indicator_id.unwrap());
+        assert!(
+            (indicator_bounds.y - (target_bounds.y - DRAG_INDICATOR_H * 0.5)).abs() < 0.5,
+            "indicator must be drawn at the scrolled on-screen card position: \
+             got y={}, expected~{}",
+            indicator_bounds.y,
+            target_bounds.y - DRAG_INDICATOR_H * 0.5
+        );
+    }
+
+    /// BUG-265 root cause 2: `compute_height()` re-derives from animated
+    /// state (`collapse_frac()`) — mid-tween, without a rebuild, it
+    /// disagrees with what's actually still painted on screen (the frozen
+    /// tree bounds from the last `build()`). The fix must hit-test against
+    /// the frozen tree, matching the screen, not the ticked model state.
+    #[test]
+    fn drag_hit_test_uses_frozen_tree_bounds_mid_animation_without_rebuild() {
+        use super::super::param_card::ParamCardKind;
+        let mut tree = UITree::new();
+        let mut panel = InspectorCompositePanel::new();
+        let layout = {
+            let mut l = ScreenLayout::new(1920.0, 1080.0);
+            l.inspector_width = 400.0;
+            l
+        };
+        let mut configs: Vec<_> = (0..6)
+            .map(|i| mk_config(ParamCardKind::Effect, &format!("FX{i}"), 3))
+            .collect();
+        panel.configure_layer_effects(&configs, None);
+        panel.configure_tabs(
+            &[InspectorTab::Layer, InspectorTab::Master],
+            InspectorTab::Layer,
+        );
+        panel.build(&mut tree, &layout);
+
+        // Snapshot the still-on-screen (frozen) position of a card below the
+        // one about to collapse — this is what the cursor must still hit.
+        let watch_idx = 3;
+        let before_bounds = panel.effects[InspectorCompositePanel::SCOPE_LAYER][watch_idx]
+            .live_bounds(&tree)
+            .expect("built card has live bounds");
+
+        // Retarget an earlier card's collapse animation, then tick it
+        // PARTWAY — mid-tween, no rebuild, so the tree/screen is untouched.
+        configs[1].collapsed = true;
+        panel.configure_layer_effects(&configs, None);
+        panel.effects[InspectorCompositePanel::SCOPE_LAYER][1].tick_drawers(20.0);
+        assert!(
+            panel.effects[InspectorCompositePanel::SCOPE_LAYER][1].is_collapse_animating(),
+            "sanity: must actually be mid-tween, not settled"
+        );
+
+        let handle_id =
+            find_drag_handle_id(&panel.effects[InspectorCompositePanel::SCOPE_LAYER][0], &tree);
+        assert!(panel.try_begin_card_drag(Some(handle_id), &mut tree));
+
+        let cursor_x = layout.inspector().x + 10.0;
+        let cursor_y = before_bounds.y + 1.0;
+        panel.update_card_drag(Vec2::new(cursor_x, cursor_y), &mut tree);
+
+        assert_eq!(
+            panel.card_drag_target_index, watch_idx,
+            "hit-test must track the frozen, still-on-screen tree bounds — not \
+             `compute_height()`, which now reads the mid-tween collapse_frac \
+             and disagrees with what's actually painted until the next build()"
+        );
+    }
+
+    /// Regression guard: an unscrolled, settled (no in-flight animation)
+    /// layout must hit-test identically before and after the fix — the fix
+    /// changes the geometry SOURCE, not the math, so plain builds are
+    /// unaffected.
+    #[test]
+    fn drag_hit_test_matches_settled_unscrolled_layout() {
+        use super::super::param_card::ParamCardKind;
+        let mut tree = UITree::new();
+        let mut panel = InspectorCompositePanel::new();
+        let layout = {
+            let mut l = ScreenLayout::new(1920.0, 1080.0);
+            l.inspector_width = 400.0;
+            l
+        };
+        let configs: Vec<_> = (0..6)
+            .map(|i| mk_config(ParamCardKind::Effect, &format!("FX{i}"), 3))
+            .collect();
+        panel.configure_layer_effects(&configs, None);
+        panel.configure_tabs(
+            &[InspectorTab::Layer, InspectorTab::Master],
+            InspectorTab::Layer,
+        );
+        panel.build(&mut tree, &layout);
+
+        let handle_id =
+            find_drag_handle_id(&panel.effects[InspectorCompositePanel::SCOPE_LAYER][0], &tree);
+        assert!(panel.try_begin_card_drag(Some(handle_id), &mut tree));
+
+        let cursor_x = layout.inspector().x + 10.0;
+        for target_idx in 0..configs.len() {
+            let bounds = panel.effects[InspectorCompositePanel::SCOPE_LAYER][target_idx]
+                .live_bounds(&tree)
+                .expect("built card has live bounds");
+            let cursor_y = bounds.y + 1.0;
+            panel.update_card_drag(Vec2::new(cursor_x, cursor_y), &mut tree);
+            assert_eq!(
+                panel.card_drag_target_index, target_idx,
+                "unscrolled, settled layout: fix must agree with pre-fix \
+                 behavior for card {target_idx}"
+            );
+        }
     }
 
     #[test]
