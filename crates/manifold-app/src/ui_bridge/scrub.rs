@@ -56,9 +56,6 @@ use super::{DispatchCtx, DispatchResult};
 /// unified — the shape every interim field collapses into).
 #[derive(Default)]
 pub struct ScrubState {
-    /// Slider drag snapshot for undo (opacity, slip, etc.). Threaded as
-    /// `drag_snapshot` in the dispatch handlers (the arm bodies' name).
-    pub slider_snapshot: Option<f32>,
     /// Active inspector drag — prevents snapshot from overwriting dragged field.
     pub active_inspector_drag: Option<ActiveInspectorDrag>,
     /// The single P-I-ported gesture: undo baseline + resolved restore payload.
@@ -216,6 +213,19 @@ pub enum ResolvedScrub {
         slot_idx: usize,
         baseline: (f32, f32),
         live: (f32, f32),
+    },
+    /// A timeline-marker drag (BUG-280). NOT a `PanelAction::Scrub` family — the
+    /// gesture is viewport-driven (`ViewportDrag::MarkerDrag` → the
+    /// `MarkerAction::MarkerDrag{Started,Moved,Ended}` arms in `marker.rs`), which
+    /// compute `beat` from pixel geometry the panel owns. Only the
+    /// snapshot-stomp GUARD lives here: `baseline` is the pre-drag beat the commit
+    /// diffs against, `live` is the in-flight beat the restore path re-stamps
+    /// (the marker drag runs outside `InteractionOverlay`'s `DragMode`, so a
+    /// mid-gesture content-thread snapshot would otherwise revert `marker.beat`).
+    Marker {
+        marker_id: manifold_core::MarkerId,
+        baseline: f32,
+        live: f32,
     },
 }
 
@@ -424,6 +434,14 @@ impl ResolvedScrub {
                     m.range_min = *min;
                     m.range_max = *max;
                 }
+            }
+            ResolvedScrub::Marker {
+                marker_id, live, ..
+            } => {
+                if let Some(marker) = project.timeline.find_marker_mut(marker_id) {
+                    marker.beat = manifold_core::Beats::from_f32(*live);
+                }
+                project.timeline.sort_markers();
             }
         }
     }

@@ -205,8 +205,7 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
             ctx.content_tx,
             ctx.ui,
             ctx.selection,
-            &mut ctx.scrub.slider_snapshot,
-            &mut ctx.scrub.active_inspector_drag,
+            ctx.scrub,
         ),
         PanelAction::Project(a) => project::dispatch_project(
             a,
