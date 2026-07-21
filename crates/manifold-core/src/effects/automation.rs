@@ -192,3 +192,163 @@ pub struct RemovedAutomation {
     pub(super) audio_mods: Vec<crate::audio_mod::ParameterAudioMod>,
     pub(super) automation_lanes: Vec<AutomationLane>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::super::test_support::*;
+    use crate::units::Beats;
+
+    #[test]
+    fn automation_lane_empty_returns_zero() {
+        let lane = AutomationLane {
+            param_id: ParamId::from("amount"),
+            enabled: true,
+            points: Vec::new(),
+        };
+        assert_eq!(lane.value_at(Beats(4.0)), 0.0);
+    }
+
+    #[test]
+    fn automation_lane_single_point_holds_everywhere() {
+        let lane = AutomationLane {
+            param_id: ParamId::from("amount"),
+            enabled: true,
+            points: vec![pt(4.0, 0.7, SegmentShape::Linear)],
+        };
+        assert_eq!(lane.value_at(Beats(-10.0)), 0.7);
+        assert_eq!(lane.value_at(Beats(4.0)), 0.7);
+        assert_eq!(lane.value_at(Beats(100.0)), 0.7);
+    }
+
+    #[test]
+    fn automation_lane_before_first_point_holds_first_value() {
+        // Ableton behavior: no backward extrapolation.
+        let lane = AutomationLane {
+            param_id: ParamId::from("amount"),
+            enabled: true,
+            points: vec![
+                pt(4.0, 0.2, SegmentShape::Linear),
+                pt(8.0, 0.8, SegmentShape::Linear),
+            ],
+        };
+        assert_eq!(lane.value_at(Beats(0.0)), 0.2);
+        assert_eq!(lane.value_at(Beats(4.0)), 0.2);
+    }
+
+    #[test]
+    fn automation_lane_after_last_point_holds_last_value() {
+        let lane = AutomationLane {
+            param_id: ParamId::from("amount"),
+            enabled: true,
+            points: vec![
+                pt(4.0, 0.2, SegmentShape::Linear),
+                pt(8.0, 0.8, SegmentShape::Linear),
+            ],
+        };
+        assert_eq!(lane.value_at(Beats(8.0)), 0.8);
+        assert_eq!(lane.value_at(Beats(1000.0)), 0.8);
+    }
+
+    #[test]
+    fn automation_lane_linear_segment_interpolates() {
+        let lane = AutomationLane {
+            param_id: ParamId::from("amount"),
+            enabled: true,
+            points: vec![
+                pt(0.0, 0.0, SegmentShape::Linear),
+                pt(4.0, 1.0, SegmentShape::Linear),
+            ],
+        };
+        assert!((lane.value_at(Beats(2.0)) - 0.5).abs() < 1e-6);
+        assert!((lane.value_at(Beats(1.0)) - 0.25).abs() < 1e-6);
+    }
+
+    #[test]
+    fn automation_lane_hold_segment_steps() {
+        // `Hold` on the earlier point: the segment holds that point's value
+        // for its whole span, then jumps at the next point — required for
+        // enum/int-backed params.
+        let lane = AutomationLane {
+            param_id: ParamId::from("amount"),
+            enabled: true,
+            points: vec![
+                pt(0.0, 0.0, SegmentShape::Hold),
+                pt(4.0, 1.0, SegmentShape::Hold),
+                pt(8.0, 2.0, SegmentShape::Linear),
+            ],
+        };
+        assert_eq!(lane.value_at(Beats(0.0)), 0.0);
+        assert_eq!(lane.value_at(Beats(3.9)), 0.0, "holds through the segment");
+        assert_eq!(lane.value_at(Beats(4.0)), 1.0, "steps exactly at the next point");
+        assert_eq!(lane.value_at(Beats(7.9)), 1.0);
+    }
+
+    #[test]
+    fn automation_lane_curved_segment_bends_but_keeps_endpoints() {
+        let convex = AutomationLane {
+            param_id: ParamId::from("amount"),
+            enabled: true,
+            points: vec![
+                pt(0.0, 0.0, SegmentShape::Curved(1.0)),
+                pt(4.0, 1.0, SegmentShape::Linear),
+            ],
+        };
+        let concave = AutomationLane {
+            param_id: ParamId::from("amount"),
+            enabled: true,
+            points: vec![
+                pt(0.0, 0.0, SegmentShape::Curved(-1.0)),
+                pt(4.0, 1.0, SegmentShape::Linear),
+            ],
+        };
+        // Endpoints exact regardless of bend.
+        assert_eq!(convex.value_at(Beats(0.0)), 0.0);
+        assert_eq!(convex.value_at(Beats(4.0)), 1.0);
+        // Midpoint: positive bend (convex) sits BELOW the linear midpoint
+        // (slow start); negative bend (concave) sits ABOVE it (fast start).
+        let mid_linear = 0.5;
+        let mid_convex = convex.value_at(Beats(2.0));
+        let mid_concave = concave.value_at(Beats(2.0));
+        assert!(mid_convex < mid_linear, "convex bend lags at the midpoint");
+        assert!(mid_concave > mid_linear, "concave bend leads at the midpoint");
+    }
+
+    #[test]
+    fn automation_lane_bend_out_of_range_is_clamped() {
+        // `Curved` bends are only meaningful in -1..1; anything past that
+        // clamps rather than producing a wild exponent.
+        let over = AutomationLane {
+            param_id: ParamId::from("amount"),
+            enabled: true,
+            points: vec![
+                pt(0.0, 0.0, SegmentShape::Curved(5.0)),
+                pt(4.0, 1.0, SegmentShape::Linear),
+            ],
+        };
+        let clamped = AutomationLane {
+            param_id: ParamId::from("amount"),
+            enabled: true,
+            points: vec![
+                pt(0.0, 0.0, SegmentShape::Curved(1.0)),
+                pt(4.0, 1.0, SegmentShape::Linear),
+            ],
+        };
+        assert!((over.value_at(Beats(2.0)) - clamped.value_at(Beats(2.0))).abs() < 1e-6);
+    }
+
+    #[test]
+    fn automation_lane_three_points_binary_search_finds_middle_segment() {
+        let lane = AutomationLane {
+            param_id: ParamId::from("amount"),
+            enabled: true,
+            points: vec![
+                pt(0.0, 0.0, SegmentShape::Linear),
+                pt(4.0, 1.0, SegmentShape::Linear),
+                pt(8.0, 0.0, SegmentShape::Linear),
+            ],
+        };
+        assert!((lane.value_at(Beats(6.0)) - 0.5).abs() < 1e-6);
+    }
+
+}

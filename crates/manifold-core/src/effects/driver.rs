@@ -412,3 +412,242 @@ pub mod beat_division_helper {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::super::*;
+    use crate::units::Beats;
+
+    #[test]
+    fn test_driver_sine() {
+        let val =
+            ParameterDriver::evaluate(Beats(0.0), BeatDivision::Quarter, DriverWaveform::Sine, 0.0);
+        assert!((val - 0.5).abs() < 0.01);
+
+        let val = ParameterDriver::evaluate(
+            Beats(0.25),
+            BeatDivision::Quarter,
+            DriverWaveform::Sine,
+            0.0,
+        );
+        assert!((val - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_driver_square() {
+        let val = ParameterDriver::evaluate(
+            Beats(0.1),
+            BeatDivision::Quarter,
+            DriverWaveform::Square,
+            0.0,
+        );
+        assert_eq!(val, 1.0);
+
+        let val = ParameterDriver::evaluate(
+            Beats(0.6),
+            BeatDivision::Quarter,
+            DriverWaveform::Square,
+            0.0,
+        );
+        assert_eq!(val, 0.0);
+    }
+
+    #[test]
+    fn test_driver_random_hash_matches_unity() {
+        let val = ParameterDriver::evaluate(
+            Beats(1.0),
+            BeatDivision::Quarter,
+            DriverWaveform::Random,
+            0.0,
+        );
+        assert!((0.0..=1.0).contains(&val));
+        // Same cycle should give same value
+        let val2 = ParameterDriver::evaluate(
+            Beats(1.5),
+            BeatDivision::Quarter,
+            DriverWaveform::Random,
+            0.0,
+        );
+        assert_eq!(val, val2);
+    }
+
+    // ── ParameterDriver backward-compat Deserialize (step 8) ──────
+
+    #[test]
+    fn driver_deserialize_legacy_param_index() {
+        // V1.1.0 shape: { paramIndex: 1, ... }. The custom Deserialize
+        // parks the index in `legacy_param_index` and leaves
+        // `param_id` empty. The post-load resolver fills `param_id`
+        // later — this test only covers the Deserialize step.
+        let json = r#"{
+            "paramIndex": 2,
+            "beatDivision": 4,
+            "waveform": 0,
+            "enabled": true,
+            "phase": 0.0,
+            "baseValue": 0.0,
+            "trimMin": 0.0,
+            "trimMax": 1.0,
+            "reversed": false
+        }"#;
+        let d: ParameterDriver = serde_json::from_str(json).unwrap();
+        assert!(
+            d.param_id.is_empty(),
+            "legacy shape must leave param_id empty until post-load resolution"
+        );
+        assert_eq!(d.legacy_param_index, Some(2));
+        assert_eq!(d.beat_division, BeatDivision::Half);
+    }
+
+    #[test]
+    fn driver_deserialize_canonical_param_id() {
+        // V1.2+ shape: { paramId: "amount", ... }. No post-load
+        // resolution needed — `param_id` is already set, and
+        // `legacy_param_index` stays None.
+        let json = r#"{
+            "paramId": "amount",
+            "beatDivision": 5,
+            "waveform": 1,
+            "enabled": true,
+            "phase": 0.5,
+            "baseValue": 0.0,
+            "trimMin": 0.1,
+            "trimMax": 0.9,
+            "reversed": false
+        }"#;
+        let d: ParameterDriver = serde_json::from_str(json).unwrap();
+        assert_eq!(d.param_id, "amount");
+        assert_eq!(d.legacy_param_index, None);
+        assert_eq!(d.beat_division, BeatDivision::Whole);
+        assert!((d.phase - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn driver_deserialize_param_id_wins_when_both_present() {
+        // If both fields are sent (forward-migration test fixtures or
+        // a transitional save shape), `param_id` is canonical and
+        // `param_index` is ignored. No legacy resolution scheduled.
+        let json = r#"{
+            "paramId": "threshold",
+            "paramIndex": 99,
+            "beatDivision": 3,
+            "waveform": 0
+        }"#;
+        let d: ParameterDriver = serde_json::from_str(json).unwrap();
+        assert_eq!(d.param_id, "threshold");
+        assert_eq!(d.legacy_param_index, None);
+    }
+
+    #[test]
+    fn driver_deserialize_missing_both_loads_as_unresolvable() {
+        // No paramId, no paramIndex — load doesn't error; the driver
+        // stays present but inert. Better than refusing the entire
+        // project. Real recovery path is the post-load resolver, but
+        // there's nothing for it to do here.
+        let json = r#"{
+            "beatDivision": 4
+        }"#;
+        let d: ParameterDriver = serde_json::from_str(json).unwrap();
+        assert_eq!(d.param_id, "");
+        assert_eq!(d.legacy_param_index, None);
+    }
+
+    #[test]
+    fn driver_serialize_writes_param_id_only() {
+        // After step 8, saved files always carry the new shape. The
+        // legacy `paramIndex` field is never written (skipped via
+        // custom Deserialize / derived Serialize on the canonical
+        // field set).
+        let driver = ParameterDriver::new("amount", BeatDivision::Half, DriverWaveform::Triangle);
+        let json = serde_json::to_string(&driver).unwrap();
+        assert!(json.contains("\"paramId\":\"amount\""));
+        assert!(
+            !json.contains("paramIndex"),
+            "Serialize must not write legacy paramIndex field; got: {json}"
+        );
+        assert!(
+            !json.contains("legacyParamIndex"),
+            "Serialize must not leak the runtime-only legacy_param_index field; got: {json}"
+        );
+    }
+
+    #[test]
+    fn driver_round_trips_through_canonical_shape() {
+        let driver =
+            ParameterDriver::new("threshold", BeatDivision::FourWhole, DriverWaveform::Square);
+        let json = serde_json::to_string(&driver).unwrap();
+        let back: ParameterDriver = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.param_id, driver.param_id);
+        assert_eq!(back.beat_division, driver.beat_division);
+        assert_eq!(back.waveform, driver.waveform);
+        assert_eq!(back.legacy_param_index, None);
+    }
+
+    #[test]
+    fn driver_sync_mode_omits_free_period_field() {
+        // Sync mode (the default) must not write freePeriodBeats — pre-free-mode
+        // projects round-trip byte-identically and stay tiny.
+        let driver = ParameterDriver::new("amount", BeatDivision::Quarter, DriverWaveform::Sine);
+        assert_eq!(driver.free_period_beats, None);
+        let json = serde_json::to_string(&driver).unwrap();
+        assert!(
+            !json.contains("freePeriodBeats"),
+            "sync-mode driver must not emit freePeriodBeats; got: {json}"
+        );
+    }
+
+    #[test]
+    fn driver_free_period_round_trips() {
+        let mut driver =
+            ParameterDriver::new("amount", BeatDivision::Quarter, DriverWaveform::Sine);
+        driver.free_period_beats = Some(3.0);
+        let json = serde_json::to_string(&driver).unwrap();
+        assert!(json.contains("\"freePeriodBeats\":3"), "got: {json}");
+        let back: ParameterDriver = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.free_period_beats, Some(3.0));
+    }
+
+    #[test]
+    fn driver_legacy_json_loads_as_sync_mode() {
+        // A project saved before free mode existed has no freePeriodBeats key.
+        let json = r#"{
+            "paramId": "amount",
+            "beatDivision": 3,
+            "waveform": 0,
+            "enabled": true,
+            "phase": 0.0,
+            "baseValue": 0.0,
+            "trimMin": 0.0,
+            "trimMax": 1.0,
+            "reversed": false
+        }"#;
+        let d: ParameterDriver = serde_json::from_str(json).unwrap();
+        assert_eq!(d.free_period_beats, None, "legacy driver must default to sync mode");
+        assert_eq!(d.period_beats(), BeatDivision::Quarter.beats());
+    }
+
+    #[test]
+    fn free_period_overrides_division_for_evaluation() {
+        // period_beats() prefers the free period; evaluate_with_period cycles on it.
+        let mut d = ParameterDriver::new("amount", BeatDivision::Quarter, DriverWaveform::Sawtooth);
+        d.free_period_beats = Some(3.0);
+        assert_eq!(d.period_beats(), 3.0);
+        // Sawtooth = phase; at beat 0 phase 0, at beat 1.5 phase 0.5 over a 3-beat period.
+        let v0 = ParameterDriver::evaluate_with_period(
+            Beats(0.0),
+            d.period_beats(),
+            d.waveform,
+            d.phase,
+        );
+        let v_half = ParameterDriver::evaluate_with_period(
+            Beats(1.5),
+            d.period_beats(),
+            d.waveform,
+            d.phase,
+        );
+        assert!(v0.abs() < 1e-6, "phase 0 at beat 0");
+        assert!((v_half - 0.5).abs() < 1e-6, "half phase at beat 1.5 over 3-beat period");
+    }
+
+}

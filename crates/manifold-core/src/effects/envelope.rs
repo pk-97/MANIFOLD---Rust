@@ -170,3 +170,84 @@ impl<'de> Deserialize<'de> for ParamEnvelope {
 fn default_decay_beats() -> f32 {
     DEFAULT_ENVELOPE_DECAY_BEATS
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── ParamEnvelope backward-compat Deserialize (step 9) ──────
+
+    #[test]
+    fn envelope_deserialize_legacy_param_index() {
+        // V1.1 shape: { targetEffectType, targetParamIndex: 1, ... }. The
+        // leftover targetEffectType is ignored (the v1.5→v1.6 migration
+        // consumes it to place the envelope on the right instance).
+        let json = r#"{
+            "targetEffectType": "Bloom",
+            "targetParamIndex": 0,
+            "enabled": true,
+            "attackBeats": 0.25,
+            "decayBeats": 0.25,
+            "sustainLevel": 0.5,
+            "releaseBeats": 0.25,
+            "targetNormalized": 1.0
+        }"#;
+        let e: ParamEnvelope = serde_json::from_str(json).unwrap();
+        assert!(e.param_id.is_empty());
+        assert_eq!(e.legacy_param_index, Some(0));
+    }
+
+    #[test]
+    fn envelope_deserialize_canonical_param_id() {
+        // Legacy ADSR keys (attackBeats etc.) are ignored post-simplification —
+        // the envelope loads as a plain decay envelope keeping only its depth.
+        let json = r#"{
+            "paramId": "amount",
+            "enabled": true,
+            "attackBeats": 0.5,
+            "targetNormalized": 0.7
+        }"#;
+        let e: ParamEnvelope = serde_json::from_str(json).unwrap();
+        assert_eq!(e.param_id, "amount");
+        assert_eq!(e.legacy_param_index, None);
+        assert!((e.target_normalized - 0.7).abs() < 1e-6);
+    }
+
+    #[test]
+    fn envelope_deserialize_param_id_wins_when_both_present() {
+        let json = r#"{
+            "paramId": "threshold",
+            "targetParamIndex": 99,
+            "enabled": true
+        }"#;
+        let e: ParamEnvelope = serde_json::from_str(json).unwrap();
+        assert_eq!(e.param_id, "threshold");
+        assert_eq!(e.legacy_param_index, None);
+    }
+
+    #[test]
+    fn envelope_serialize_writes_param_id_only() {
+        let env = ParamEnvelope::new("amount");
+        let json = serde_json::to_string(&env).unwrap();
+        assert!(json.contains("\"paramId\":\"amount\""));
+        assert!(
+            !json.contains("targetParamIndex"),
+            "Serialize must not write legacy targetParamIndex; got: {json}"
+        );
+        assert!(!json.contains("legacyParamIndex"));
+        assert!(
+            !json.contains("targetEffectType"),
+            "Serialize must not write targetEffectType post-unification; got: {json}"
+        );
+    }
+
+    #[test]
+    fn envelope_round_trips_through_canonical_shape() {
+        let env = ParamEnvelope::new("amount");
+        let json = serde_json::to_string(&env).unwrap();
+        let back: ParamEnvelope = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.param_id, env.param_id);
+        assert_eq!(back.legacy_param_index, None);
+    }
+
+}

@@ -1591,3 +1591,625 @@ impl ParamSource for PresetInstance {
         PresetInstance::remove_driver(self, param_id);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::super::test_support::*;
+    use crate::units::Beats;
+
+    // `bundled_slider_delete_does_not_misroute_survivor_drivers` (and its
+    // `TestBundledSliderMisroute` fixture registration) was DELETED
+    // (PARAM_STORAGE_DESIGN.md D3): it existed to prove a fix for a bug
+    // that only the OLD dual-resolution scheme could have — a live
+    // per-instance `meta.params` position (`param_id_to_value_index`)
+    // disagreeing with a frozen-registry position (`resolve_param_in`)
+    // after a bundled slider was deleted mid-array. Both mechanisms are
+    // gone; every param is now addressed by stable id everywhere (card
+    // display, pruning, and runtime modulation resolution alike), so
+    // there is no positional index to disagree in the first place.
+
+    // ── §9 U1: unified trigger-gate mods ─────────────────────────────────
+
+    /// A bundled `is_trigger_gate` param — mirrors [`slot`] but flips the
+    /// gate flag, the same way a `clip_trigger` toggle card ships on the 11
+    /// trigger-responsive generator presets.
+    fn gate_slot(id: &str) -> crate::params::Param {
+        let mut p = slot(id, 0.0, true);
+        p.spec.is_toggle = true;
+        p.spec.is_trigger_gate = true;
+        p
+    }
+
+    #[test]
+    fn duplicated_assigns_fresh_id_and_drops_hardware_bindings() {
+        // BUG-001/004: a duplicated/pasted effect must be an INDEPENDENT copy —
+        // a fresh EffectId (not a shared reference) and no carried-over hardware
+        // bindings (Ableton mappings / audio mods). Per-instance modulation
+        // (drivers) is kept; group_id is left for the caller to decide.
+        let mut src = PresetInstance::new(PresetTypeId::new("Blur"));
+        src.ableton_mappings = Some(Vec::new());
+        src.audio_mods = Some(Vec::new());
+        src.group_id = Some(EffectGroupId::new("grp"));
+        src.create_driver("amount".into());
+        assert!(src.has_drivers());
+
+        let copy = src.duplicated();
+
+        assert_ne!(copy.id, src.id, "copy must get a fresh EffectId");
+        assert!(
+            copy.ableton_mappings.is_none(),
+            "Ableton mappings must not ride along on a copy"
+        );
+        assert!(
+            copy.audio_mods.is_none(),
+            "audio mods must not ride along on a copy"
+        );
+        assert!(copy.has_drivers(), "per-instance drivers are kept");
+        assert_eq!(
+            copy.group_id, src.group_id,
+            "duplicated() leaves group_id for the caller to remap/clear"
+        );
+    }
+
+    #[test]
+    fn user_exposed_angle_param_carries_is_angle_through_manifest_and_synth() {
+        // Regression guard for the P5 inspector fix: before `is_angle` had a
+        // home on the spec, exposing an angle inner param dropped the flag at
+        // persistence and `synth_user_binding` rebuilt it as `false`, so the
+        // card never showed degrees. Now the flag is seeded onto the manifest
+        // spec at expose, survives a JSON round-trip, and synth reads it back.
+        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+        fx.params = crate::params::ParamManifest::from_params(vec![slot("amount", 0.7, true)]);
+
+        let mut angle = sample_user_binding("user.rotate.angle.1", "rotate", "angle");
+        angle.is_angle = true;
+        fx.append_user_binding(angle);
+        let plain = sample_user_binding("user.mix.amount.1", "mix", "amount"); // is_angle: false
+        fx.append_user_binding(plain);
+
+        // Seed: the flag reached the live manifest spec (single home).
+        assert!(fx.params.get("user.rotate.angle.1").unwrap().spec.is_angle);
+        assert!(!fx.params.get("user.mix.amount.1").unwrap().spec.is_angle);
+
+        // Read-back: synth (the card/renderer view) reflects the spec, not a
+        // hardcoded false.
+        let synth = fx.user_param_bindings();
+        let a = synth.iter().find(|b| b.id == "user.rotate.angle.1").unwrap();
+        let p = synth.iter().find(|b| b.id == "user.mix.amount.1").unwrap();
+        assert!(a.is_angle, "angle user param must synth is_angle=true");
+        assert!(!p.is_angle, "plain user param must stay is_angle=false");
+
+        // Persistence: `is_angle: true` is emitted (skip_serializing_if only
+        // skips false), so the flag survives save/load; false stays off disk.
+        let json = serde_json::to_string(&fx).unwrap();
+        assert!(json.contains("\"isAngle\":true"), "true angle flag must serialize");
+        let back: PresetInstance = serde_json::from_str(&json).unwrap();
+        assert!(back.params.get("user.rotate.angle.1").unwrap().spec.is_angle);
+        assert!(!back.params.get("user.mix.amount.1").unwrap().spec.is_angle);
+        assert!(
+            back.user_param_bindings()
+                .iter()
+                .find(|b| b.id == "user.rotate.angle.1")
+                .unwrap()
+                .is_angle
+        );
+    }
+
+    /// Regression for PARAM_STORAGE_BOUNDARIES_DESIGN.md P2 (D12): `graph
+    /// .preset_metadata.params` is derived from the live manifest ONLY at
+    /// serialize time — `EditParamMappingCommand` no longer dual-writes it,
+    /// so the sole way a calibrated range can reach the wire is
+    /// `GraphWithDerivedParams`. This builds an instance whose graph carries
+    /// a STALE (template) `amount` spec that nothing in this test ever
+    /// touches again, calibrates ONLY the manifest (mirroring what the
+    /// command does post-P2), and proves the serialized `graph.presetMetadata
+    /// .params` entry reflects the calibration, not the stale shadow — with
+    /// a byte-comparison against the manifest's own spec.
+    #[test]
+    fn calibrated_param_derives_meta_params_on_save_not_the_stale_shadow() {
+        use crate::effect_graph_def::{
+            BindingDef, BindingTarget, EffectGraphDef, ParamSpecDef, PresetMetadata,
+        };
+
+        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+        fx.params = crate::params::ParamManifest::from_params(vec![slot("amount", 0.7, true)]);
+        // Calibrate the manifest — the live authority (PARAM_STORAGE_DESIGN
+        // D6) — diverging it from the template range the graph below still
+        // carries untouched.
+        {
+            let p = fx.params.get_mut("amount").unwrap();
+            p.spec.min = 10.0;
+            p.spec.max = 20.0;
+            p.spec.name = "Recalibrated Amount".to_string();
+            p.calibrated = true;
+        }
+        // The graph's own shadow copy — STALE template range (0..1, "Amount").
+        // Nothing after this construction ever writes to it directly; only
+        // the derive-on-save wrapper may change what actually serializes.
+        fx.graph = Some(EffectGraphDef {
+            version: crate::effect_graph_def::EFFECT_GRAPH_VERSION,
+            name: None,
+            description: None,
+            preset_metadata: Some(PresetMetadata {
+                id: PresetTypeId::BLOOM,
+                display_name: String::new(),
+                category: String::new(),
+                osc_prefix: String::new(),
+                legacy_discriminant: None,
+                available: true,
+                is_line_based: false,
+                params: vec![ParamSpecDef {
+                    id: "amount".to_string(),
+                    name: "Amount".to_string(),
+                    min: 0.0,
+                    max: 1.0,
+                    default_value: 0.7,
+                    whole_numbers: false,
+                    is_toggle: false,
+                    is_trigger: false,
+                    value_labels: Vec::new(),
+                    format_string: None,
+                    osc_suffix: String::new(),
+                    curve: Default::default(),
+                    invert: false,
+                    is_angle: false,
+                    is_trigger_gate: false,
+                    wraps: false,
+                    section: None,
+                }],
+                bindings: vec![BindingDef {
+                    id: "amount".to_string(),
+                    label: "Amount".to_string(),
+                    default_value: 0.7,
+                    target: BindingTarget::Node {
+                        node_id: NodeId::new("grade"),
+                        param: "amount".to_string(),
+                    },
+                    convert: ParamConvert::Float,
+                    user_added: false,
+                    scale: 1.0,
+                    offset: 0.0,
+                }],
+                skip_mode: Default::default(),
+                param_aliases: Vec::new(),
+                value_aliases: Vec::new(),
+                string_params: Vec::new(),
+                string_bindings: Vec::new(),
+            }),
+            nodes: Vec::new(),
+            wires: Vec::new(),
+        });
+
+        let json = serde_json::to_string(&fx).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let on_wire = &parsed["graph"]["presetMetadata"]["params"][0];
+        assert_eq!(
+            on_wire["min"], 10.0,
+            "serialized graph must carry the CALIBRATED min, not the stale template 0.0",
+        );
+        assert_eq!(
+            on_wire["max"], 20.0,
+            "serialized graph must carry the CALIBRATED max, not the stale template 1.0",
+        );
+        assert_eq!(on_wire["name"], "Recalibrated Amount");
+
+        // Byte-comparison guard: the derived wire entry is JSON-identical to
+        // the live manifest spec, serialized independently. Round-trip both
+        // sides through JSON TEXT (not `to_value` directly) so `serde_json`'s
+        // float-formatting path matches on both sides of the comparison
+        // (`to_value` on an f32-sourced f64 keeps its imprecise binary
+        // widening, e.g. `0.7_f32` -> `0.699999988079071`, while the text
+        // path prints/reparses the shortest round-tripping form, `0.7`).
+        let manifest_spec_json: serde_json::Value = serde_json::from_str(
+            &serde_json::to_string(&fx.params.get("amount").unwrap().spec).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            on_wire, &manifest_spec_json,
+            "the derived meta.params entry must be byte-identical to the manifest's own spec",
+        );
+
+        // Round trip: reload and confirm the manifest — the card's
+        // authority — carries the calibrated range through, not just the
+        // one-shot JSON snapshot above.
+        let back: PresetInstance = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.params.get("amount").unwrap().spec.min, 10.0);
+        assert_eq!(back.params.get("amount").unwrap().spec.max, 20.0);
+    }
+
+    #[test]
+    fn append_user_binding_grows_param_values_with_default() {
+        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+        fx.params = crate::params::ParamManifest::from_params(vec![slot("amount", 0.7, true)]);
+        fx.ensure_base_values();
+
+        fx.append_user_binding(sample_user_binding("user.a.b.1", "a", "b"));
+        assert_eq!(fx.params.len(), 2);
+        assert_eq!(fx.params.get("amount").unwrap().value, 0.7);
+        assert_eq!(fx.params.get("user.a.b.1").unwrap().value, 0.25);
+        // base rides each slot now (fork #16).
+        assert!(fx.base_tracked);
+        assert_eq!(fx.params.get("amount").unwrap().base, 0.7);
+        assert_eq!(fx.params.get("user.a.b.1").unwrap().base, 0.25);
+        // The binding now lives in the graph (the single storage list).
+        assert_eq!(fx.user_param_count(), 1);
+    }
+
+    #[test]
+    fn remove_user_binding_drops_corresponding_value_slot() {
+        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+        fx.params = crate::params::ParamManifest::from_params(vec![slot("amount", 0.7, true)]);
+        fx.append_user_binding(sample_user_binding("user.a.b.1", "a", "b"));
+        fx.append_user_binding(sample_user_binding("user.c.d.1", "c", "d"));
+        // A real slider edit sets base + value together (fork #16); set both so
+        // the surviving slot is coherent after compaction.
+        fx.set_base_param("user.a.b.1", 0.3);
+        fx.set_base_param("user.c.d.1", 0.6);
+
+        let removed = fx.remove_user_binding_by_id("user.a.b.1");
+        assert!(removed.is_some());
+        assert_eq!(fx.user_param_count(), 1);
+        // Static prefix preserved + user tail compacted around the gap.
+        // "amount" was seeded directly (never a `set_base_param` hand) so it
+        // stays untouched; "user.c.d.1"'s value came from
+        // `set_base_param("user.c.d.1", 0.6)` above, so it carries
+        // `touched: true` — the funnel every hand (including this test's own
+        // setup) writes through.
+        assert_eq!(fx.params.len(), 2);
+        let amount = fx.params.get("amount").unwrap();
+        assert_eq!(amount.value, 0.7);
+        assert!(!amount.touched);
+        let cd = fx.params.get("user.c.d.1").unwrap();
+        assert_eq!(cd.value, 0.6);
+        assert_eq!(cd.base, 0.6);
+        assert!(cd.exposed);
+        assert!(cd.touched);
+    }
+
+    #[test]
+    fn remove_user_binding_unknown_id_returns_none() {
+        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+        fx.params = crate::params::ParamManifest::from_params(vec![slot("amount", 0.7, true)]);
+        let removed = fx.remove_user_binding_by_id("user.nope.1");
+        assert!(removed.is_none());
+        assert_eq!(fx.params.len(), 1);
+        assert_eq!(fx.params.get("amount").unwrap().value, 0.7);
+    }
+
+    #[test]
+    fn user_binding_index_lookup_by_id() {
+        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+        fx.append_user_binding(sample_user_binding("user.a.b.1", "a", "b"));
+        fx.append_user_binding(sample_user_binding("user.c.d.1", "c", "d"));
+        assert_eq!(fx.user_binding_index("user.a.b.1"), Some(0));
+        assert_eq!(fx.user_binding_index("user.c.d.1"), Some(1));
+        assert_eq!(fx.user_binding_index("user.nope.1"), None);
+    }
+
+    #[test]
+    fn snapshot_values_into_def_bakes_current_base_as_default() {
+        // Make Unique / Export must freeze the card's current values into the
+        // def as its new defaults, so the preset reproduces the look later.
+        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+        fx.append_user_binding(sample_user_binding("user.a.b.1", "a", "b"));
+        assert!(fx.set_base_param_by_id("user.a.b.1", 0.83));
+
+        let mut def = fx.graph.clone().expect("graph carries metadata");
+        fx.snapshot_values_into_def(&mut def);
+
+        let meta = def.preset_metadata.as_ref().unwrap();
+        let p = meta.params.iter().find(|p| p.id == "user.a.b.1").unwrap();
+        assert_eq!(
+            p.default_value, 0.83,
+            "current base value becomes the def's param default"
+        );
+        let b = meta.bindings.iter().find(|b| b.id == "user.a.b.1").unwrap();
+        assert_eq!(b.default_value, 0.83, "the binding default tracks it too");
+    }
+
+    #[test]
+    fn reseed_param_values_from_def_replaces_values_with_def_defaults() {
+        // Import retargets to a def with a different param structure; the old
+        // positional values can't carry over, so reseed rebuilds them from the
+        // def's defaults (declaration order, all exposed).
+        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+        fx.params = manifest(&[(0.1, true), (0.2, true)]);
+
+        let mut donor = PresetInstance::new(PresetTypeId::BLOOM);
+        donor.append_user_binding(sample_user_binding("user.x.y.1", "x", "y"));
+        assert!(donor.set_base_param_by_id("user.x.y.1", 0.55));
+        let mut def = donor.graph.clone().expect("graph carries metadata");
+        donor.snapshot_values_into_def(&mut def);
+
+        fx.reseed_param_values_from_def(&def);
+        assert_eq!(
+            fx.params.len(),
+            1,
+            "reseed rebuilds the manifest from the def's (snapshotted) defaults",
+        );
+        assert_eq!(fx.params.get("user.x.y.1").unwrap().value, 0.55);
+    }
+
+    #[test]
+    fn remove_exposures_for_node_prunes_then_restores_round_trip() {
+        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+        // Two exposed user params on different nodes; we delete node "blur".
+        fx.append_user_binding(sample_user_binding("user.blur.radius.1", "blur", "radius"));
+        fx.append_user_binding(sample_user_binding("user.other.x.1", "other", "x"));
+        assert!(fx.set_base_param_by_id("user.blur.radius.1", 0.66));
+        // Automation on the blur param — must be pruned with it, restored on undo.
+        fx.create_driver(ParamId::from("user.blur.radius.1"));
+        fx.envelopes = Some(vec![ParamEnvelope::new("user.blur.radius.1")]);
+
+        // Snapshot entry content (not the whole manifest — `topology` bumps on
+        // every push/remove/insert_at, so it legitimately differs after a
+        // remove+restore round trip even though every param's own state is
+        // back to identical).
+        let pre_entries: Vec<crate::params::Param> = fx.params.iter().cloned().collect();
+
+        let removed = fx.remove_exposures_for_node(&NodeId::new("blur"));
+        assert_eq!(removed.len(), 1, "one slider was bound to the deleted node");
+
+        // Slider, slot, driver, envelope all gone; the unrelated slider survives.
+        assert!(!fx.params.contains("user.blur.radius.1"));
+        assert!(fx.find_driver("user.blur.radius.1").is_none());
+        assert!(
+            fx.envelopes.is_none(),
+            "pruning the last envelope collapses the list to None"
+        );
+        assert!(fx.params.contains("user.other.x.1"));
+
+        // Undo restores values, metadata, and automation.
+        fx.restore_exposures(removed);
+        let post_entries: Vec<crate::params::Param> = fx.params.iter().cloned().collect();
+        assert_eq!(
+            post_entries, pre_entries,
+            "value slots restored at their original positions"
+        );
+        assert!(
+            fx.params.contains("user.blur.radius.1"),
+            "binding + param spec restored"
+        );
+        assert!(fx.find_driver("user.blur.radius.1").is_some(), "driver restored");
+        assert!(
+            fx.find_envelope("user.blur.radius.1").is_some(),
+            "envelope restored"
+        );
+    }
+
+    #[test]
+    fn prune_orphaned_automation_drops_unresolvable_then_restores() {
+        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+        fx.append_user_binding(sample_user_binding("user.a.b.1", "a", "b")); // resolves
+        fx.create_driver(ParamId::from("user.a.b.1")); // live
+        fx.create_driver(ParamId::from("user.gone.x.1")); // orphan — never bound
+        fx.envelopes = Some(vec![ParamEnvelope::new("user.gone.x.1")]); // orphan
+        fx.automation_lanes = Some(vec![AutomationLane {
+            param_id: ParamId::from("user.gone.x.1"),
+            enabled: true,
+            points: vec![AutomationPoint {
+                beat: Beats(0.0),
+                value: 0.5,
+                shape: SegmentShape::Linear,
+            }],
+        }]); // orphan — same unresolvable id as the driver/envelope above
+
+        let removed = fx.prune_orphaned_automation();
+        assert!(fx.find_driver("user.a.b.1").is_some(), "live driver kept");
+        assert!(fx.find_driver("user.gone.x.1").is_none(), "orphan driver pruned");
+        assert!(
+            fx.envelopes.is_none(),
+            "sole orphan envelope pruned, list collapses to None"
+        );
+        assert!(
+            fx.automation_lanes.is_none(),
+            "sole orphan automation lane pruned, list collapses to None"
+        );
+
+        fx.restore_automation(removed);
+        assert!(
+            fx.find_driver("user.gone.x.1").is_some(),
+            "orphan driver restored on undo"
+        );
+        assert!(
+            fx.find_envelope("user.gone.x.1").is_some(),
+            "orphan envelope restored on undo"
+        );
+        assert_eq!(
+            fx.automation_lanes.as_ref().map(|v| v.len()),
+            Some(1),
+            "orphan automation lane restored on undo"
+        );
+    }
+
+    #[test]
+    fn remove_exposures_for_node_is_noop_when_nothing_bound() {
+        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+        fx.append_user_binding(sample_user_binding("user.blur.radius.1", "blur", "radius"));
+        let before = fx.params.clone();
+        let removed = fx.remove_exposures_for_node(&NodeId::new("nonexistent"));
+        assert!(removed.is_empty(), "no binding targets that node");
+        assert_eq!(fx.params, before, "nothing changed");
+    }
+
+    #[test]
+    fn get_param_def_synthesizes_user_binding_def() {
+        // ParamSource::get_param_def must return a ParamSpecDef shaped from
+        // the user binding for indices past the static count, so UI code
+        // (slider rendering, OSC formatting) gets correct min/max/label.
+        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+        fx.append_user_binding(UserParamBinding {
+            id: "user.uv.translate.1".to_string(),
+            label: "Translate".to_string(),
+            node_id: NodeId::new("uv_transform"),
+            legacy_node_handle: None,
+            inner_param: "translate".to_string(),
+            min: -2.0,
+            max: 2.0,
+            default_value: 0.0,
+            convert: ParamConvert::Float,
+            is_angle: false,
+            invert: false,
+            curve: Default::default(),
+            scale: 1.0,
+            offset: 0.0,
+            value_labels: Vec::new(),
+            section: None,
+        });
+        let pd = ParamSource::get_param_def(&fx, "user.uv.translate.1");
+        assert_eq!(pd.id, "user.uv.translate.1");
+        assert_eq!(pd.name, "Translate");
+        assert!((pd.min + 2.0).abs() < f32::EPSILON);
+        assert!((pd.max - 2.0).abs() < f32::EPSILON);
+        assert!(!pd.whole_numbers);
+        assert!(!pd.is_toggle);
+    }
+
+    #[test]
+    fn deserialize_keyed_param_values_routes_user_ids_to_tail() {
+        // The key insight: `params` comes in as a Map. The custom
+        // Deserialize must consult the graph's `user_added` bindings (the
+        // single storage list after the unification) to route user ids to
+        // the right tail slots — regardless of JSON key order in the Map.
+        let json = r#"{
+            "id": "abc12345",
+            "effectType": "Bloom",
+            "enabled": true,
+            "collapsed": false,
+            "params": {
+                "amount": { "value": 0.7 },
+                "user.foo.bar.1": { "value": 0.3 },
+                "user.baz.qux.1": { "value": 0.9 }
+            },
+            "graph": {
+                "version": 0,
+                "nodes": [],
+                "wires": [],
+                "presetMetadata": {
+                    "id": "",
+                    "displayName": "",
+                    "category": "",
+                    "oscPrefix": "",
+                    "params": [
+                        { "id": "user.foo.bar.1", "name": "Foo", "min": 0.0, "max": 1.0, "defaultValue": 0.5 },
+                        { "id": "user.baz.qux.1", "name": "Baz", "min": 0.0, "max": 1.0, "defaultValue": 0.5 }
+                    ],
+                    "bindings": [
+                        { "id": "user.foo.bar.1", "label": "Foo", "defaultValue": 0.5, "userAdded": true, "target": { "kind": "node", "nodeId": "foo", "param": "bar" } },
+                        { "id": "user.baz.qux.1", "label": "Baz", "defaultValue": 0.5, "userAdded": true, "target": { "kind": "node", "nodeId": "baz", "param": "qux" } }
+                    ]
+                }
+            }
+        }"#;
+        let fx: PresetInstance = serde_json::from_str(json).unwrap();
+        assert_eq!(fx.user_param_count(), 2);
+        assert_eq!(fx.params.len(), 3);
+        assert!((fx.params.get("amount").unwrap().value - 0.7).abs() < f32::EPSILON);
+        assert!((fx.params.get("user.foo.bar.1").unwrap().value - 0.3).abs() < f32::EPSILON);
+        assert!((fx.params.get("user.baz.qux.1").unwrap().value - 0.9).abs() < f32::EPSILON);
+    }
+
+    // ─── Per-instance graph override (Phase 1) ──────────────────
+
+    #[test]
+    fn new_effect_instance_has_no_graph_override() {
+        let fx = PresetInstance::new(PresetTypeId::new("Mirror"));
+        assert!(fx.graph.is_none());
+        assert_eq!(fx.graph_version, 0);
+    }
+
+    // ─── touched flag: the automation self-trigger footgun ───
+
+    #[test]
+    fn set_base_param_marks_touched() {
+        // The single funnel every live hand writes through — the automation
+        // evaluator's touch-detection relies on this.
+        let mut fx = PresetInstance::new(PresetTypeId::new("Mirror"));
+        fx.params = manifest(&[(0.0, true)]);
+        fx.set_base_param("p0", 0.5);
+        assert!(fx.params.get("p0").unwrap().touched, "set_base_param marks touched");
+    }
+
+    #[test]
+    fn write_base_param_does_not_mark_touched() {
+        // System-level seeding (registry defaults) must not look like a hand
+        // touch — see `preset_definition_registry::create_default`.
+        let mut fx = PresetInstance::new(PresetTypeId::new("Mirror"));
+        fx.params = manifest(&[(0.0, true)]);
+        fx.write_base_param("p0", 0.5);
+        assert!(
+            !fx.params.get("p0").unwrap().touched,
+            "write_base_param must not set touched"
+        );
+        assert_eq!(fx.params.get("p0").unwrap().base, 0.5);
+        assert_eq!(fx.params.get("p0").unwrap().value, 0.5);
+    }
+
+    #[test]
+    fn set_base_param_from_automation_does_not_mark_touched() {
+        // The automation evaluator's own write path — using the public
+        // set_base_param here would self-latch the very next frame.
+        let mut fx = PresetInstance::new(PresetTypeId::new("Mirror"));
+        fx.params = manifest(&[(0.0, true)]);
+        fx.set_base_param_from_automation("p0", 0.5);
+        assert!(
+            !fx.params.get("p0").unwrap().touched,
+            "set_base_param_from_automation must not set touched"
+        );
+        assert_eq!(fx.params.get("p0").unwrap().base, 0.5);
+        assert_eq!(fx.params.get("p0").unwrap().value, 0.5);
+    }
+
+    #[test]
+    fn create_default_does_not_mark_params_touched() {
+        // The exact bug this phase's call-site audit found: `create_default`
+        // used to seed via the public `set_base_param`, which would have
+        // marked every freshly-created effect's params `touched` before any
+        // lane or hand ever existed — pre-latching any lane authored on them
+        // later.
+        let inst = crate::preset_definition_registry::create_default(&PresetTypeId::new(
+            "TestCreateDefaultUntouched",
+        ));
+        assert!(
+            !inst.params.get("amount").unwrap().touched,
+            "create_default must not mark freshly-seeded params touched"
+        );
+        assert_eq!(inst.params.get("amount").unwrap().base, 0.42);
+    }
+
+    #[test]
+    fn clip_edge_enabled_matrix() {
+        use crate::audio_mod::{AudioBand, AudioFeature, AudioFeatureKind, ParameterAudioMod};
+        use crate::audio_trigger::TriggerFireMode;
+        use crate::id::AudioSendId;
+
+        let mut inst = PresetInstance::new(PresetTypeId::new("TestGate"));
+        inst.params.push(gate_slot("clip_trigger"));
+
+        // No mod at all → clip edge unconditionally on (pre-§8 behavior).
+        assert!(inst.clip_edge_enabled());
+
+        let mut m = ParameterAudioMod::new(
+            "clip_trigger".into(),
+            AudioSendId::new("send-1"),
+            AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Full),
+        );
+        m.trigger_mode = Some(TriggerFireMode::Transient);
+        m.enabled = false;
+        inst.audio_mods_mut().push(m);
+
+        // Disabled mod → disabled-means-absent, clip edge stays on.
+        assert!(inst.clip_edge_enabled(), "disabled mod must be inert");
+
+        inst.audio_mods.as_mut().unwrap()[0].enabled = true;
+        assert!(!inst.clip_edge_enabled(), "armed Transient mode gates the clip edge");
+
+        inst.audio_mods.as_mut().unwrap()[0].trigger_mode = Some(TriggerFireMode::ClipEdge);
+        assert!(inst.clip_edge_enabled());
+
+        inst.audio_mods.as_mut().unwrap()[0].trigger_mode = Some(TriggerFireMode::Both);
+        assert!(inst.clip_edge_enabled());
+    }
+
+}

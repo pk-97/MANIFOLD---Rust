@@ -352,3 +352,104 @@ pub struct RemovedExposure {
     pub(super) envelopes: Vec<ParamEnvelope>,
     pub(super) audio_mods: Vec<crate::audio_mod::ParameterAudioMod>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::super::test_support::*;
+
+    #[test]
+    fn card_reshape_identity_and_stages() {
+        use crate::macro_bank::MacroCurve;
+        // Identity: passes through untouched.
+        assert!((apply_card_reshape(2.5, 0.0, 10.0, false, MacroCurve::Linear, 1.0, 0.0) - 2.5).abs() < 1e-4);
+        // Invert: 25% of the range becomes 75%.
+        assert!((apply_card_reshape(2.5, 0.0, 10.0, true, MacroCurve::Linear, 1.0, 0.0) - 7.5).abs() < 1e-4);
+        // SCurve (Hermite 3t^2-2t^3): n=0.25 -> 0.15625 -> *10 = 1.5625.
+        assert!((apply_card_reshape(2.5, 0.0, 10.0, false, MacroCurve::SCurve, 1.0, 0.0) - 1.5625).abs() < 1e-3);
+        // Degenerate range: passthrough, no divide-by-zero.
+        assert!((apply_card_reshape(42.0, 5.0, 5.0, false, MacroCurve::Exponential, 1.0, 0.0) - 42.0).abs() < 1e-6);
+        // Folded affine (deg->rad): no invert/curve, so scale/offset apply to the
+        // RAW value, unclamped — a past-max 400° must NOT pin to the slider max.
+        let k = std::f32::consts::PI / 180.0;
+        assert!((apply_card_reshape(85.0, 0.0, 360.0, false, MacroCurve::Linear, k, 0.0) - 85.0 * k).abs() < 1e-5);
+        assert!((apply_card_reshape(400.0, 0.0, 360.0, false, MacroCurve::Linear, k, 0.0) - 400.0 * k).abs() < 1e-4);
+    }
+
+    /// `PARAM_TWO_WAY_BINDING_DESIGN.md` invariant: forward and inverse
+    /// cannot drift. For a grid of (min, max, invert, curve, scale, offset) ×
+    /// values: `apply(invert(x)) ≈ x` within 1e-4 across all four curves;
+    /// `invert(apply(x)) ≈ x` for in-range x.
+    #[test]
+    fn card_reshape_roundtrips() {
+        use crate::macro_bank::MacroCurve;
+        let curves = [
+            MacroCurve::Linear,
+            MacroCurve::Exponential,
+            MacroCurve::Logarithmic,
+            MacroCurve::SCurve,
+        ];
+        let ranges: [(f32, f32); 3] = [(0.0, 1.0), (0.0, 10.0), (-5.0, 5.0)];
+        let affines: [(f32, f32); 2] = [(1.0, 0.0), (2.0, 3.0)];
+        for curve in curves {
+            for invert in [false, true] {
+                for (min, max) in ranges {
+                    for (scale, offset) in affines {
+                        let mut x = min;
+                        let step = (max - min) / 10.0;
+                        while x <= max {
+                            let target = apply_card_reshape(x, min, max, invert, curve, scale, offset);
+                            let back = invert_card_reshape(target, min, max, invert, curve, scale, offset)
+                                .expect("non-degenerate scale");
+                            assert!(
+                                (back - x).abs() < 1e-3,
+                                "{curve:?} invert={invert} range=({min},{max}) affine=({scale},{offset}): \
+                                 invert_card_reshape(apply_card_reshape({x})) = {back}, expected ~{x}"
+                            );
+                            x += step;
+                        }
+                    }
+                }
+            }
+        }
+        // Degenerate affine: no inverse representable.
+        assert!(invert_card_reshape(1.0, 0.0, 1.0, false, MacroCurve::Linear, 0.0, 0.0).is_none());
+    }
+
+    #[test]
+    fn user_param_binding_serde_round_trip() {
+        // A standalone UserParamBinding round-trips through JSON
+        // without losing any field. Wire shape uses camelCase keys.
+        let ub = sample_user_binding("user.uv_transform.translate.1", "uv_transform", "translate");
+        let json = serde_json::to_string(&ub).unwrap();
+        assert!(json.contains("\"id\":\"user.uv_transform.translate.1\""));
+        assert!(json.contains("\"nodeId\":\"uv_transform\""));
+        // The runtime addressing key is `nodeId`; the legacy `nodeHandle`
+        // key only ever appears when reading a pre-node-id file and is
+        // skip-serialized once cleared.
+        assert!(!json.contains("nodeHandle"));
+        assert!(json.contains("\"innerParam\":\"translate\""));
+        assert!(json.contains("\"defaultValue\":0.25"));
+        assert!(json.contains("\"convert\":{\"type\":\"Float\"}"));
+        let back: UserParamBinding = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, ub);
+    }
+
+    #[test]
+    fn user_param_binding_convert_default_is_float() {
+        // Missing `convert` field defaults to Float — older serialized
+        // bindings (if we ever ship without it) load cleanly.
+        let json = r#"{
+            "id": "user.x.y.1", "label": "Y",
+            "nodeHandle": "x", "innerParam": "y",
+            "min": 0.0, "max": 1.0, "defaultValue": 0.5
+        }"#;
+        let ub: UserParamBinding = serde_json::from_str(json).unwrap();
+        assert_eq!(ub.convert, ParamConvert::Float);
+        // Pre-node-id `nodeHandle` is captured by the load shim (node_id
+        // stays empty until the renderer-layer migration resolves it).
+        assert_eq!(ub.legacy_node_handle.as_deref(), Some("x"));
+        assert!(ub.node_id.is_empty());
+    }
+
+}
