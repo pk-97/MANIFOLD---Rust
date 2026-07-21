@@ -1312,14 +1312,14 @@ impl GraphCanvas {
                     });
                 }
             }
-            // The scrub emitted its value on each pointer move; nothing to
-            // finalize for an ordinary row. `EndGraphNodeParamScrub` closes out
-            // a card-bound row's write-back gesture (PARAM_TWO_WAY_BINDING_
-            // DESIGN.md D1) with one undo-worthy commit — a no-op for every
-            // unbound row, which the app has nothing tracked for. Only emitted
-            // when the press actually moved: a zero-move press+release (a
-            // plain click) never emitted a `SetGraphNodeParam` in the first
-            // place, so there is nothing to close out — matches the existing
+            // `EndGraphNodeParamScrub` closes out the drag's write-back
+            // gesture with ONE undo-worthy commit: a card-bound row's
+            // (PARAM_TWO_WAY_BINDING_DESIGN.md D1) OR — since BUG-282 — an
+            // ordinary unbound row's `unbound_node_param_drag` session, whose
+            // in-flight ticks live-write with no undo entry. Only emitted when
+            // the press actually moved: a zero-move press+release (a plain
+            // click) never emitted a `SetGraphNodeParam` in the first place,
+            // so there is nothing to close out — matches the existing
             // "zero-move press+release emits nothing" contract.
             CanvasDrag::ParamScrub { node_id, param_name, .. } => {
                 let start = start.expect("a ParamScrub session always has a start position");
@@ -1332,8 +1332,22 @@ impl GraphCanvas {
                 }
             }
             // The Color/Vec editor stays open on release so the next channel
-            // can be grabbed — only a press outside it dismisses.
-            CanvasDrag::VecScrub { .. } => {}
+            // can be grabbed — only a press outside it dismisses. BUG-282:
+            // that's about whether the panel closes, not whether the drag's
+            // writes coalesce to one undo entry — so a channel scrub still
+            // needs the same `EndGraphNodeParamScrub` moved-guard emit
+            // `ParamScrub` uses, or the app never closes out its
+            // `unbound_node_param_drag` session for this channel grab.
+            CanvasDrag::VecScrub { node_id, param_name, .. } => {
+                let start = start.expect("a VecScrub session always has a start position");
+                let moved = (sx - start.x).hypot(sy - start.y) >= CLICK_MOVE_SLOP_PX;
+                if moved {
+                    self.pending_actions.push(GraphEditCommand::EndGraphNodeParamScrub {
+                        node_id,
+                        param_name,
+                    });
+                }
+            }
             CanvasDrag::Marquee => {
                 // A shift-press with no real drag leaves the selection alone —
                 // don't let a zero-area box wipe it. `origin_screen` is now the
