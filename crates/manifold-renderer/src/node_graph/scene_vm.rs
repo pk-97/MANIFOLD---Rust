@@ -30,7 +30,7 @@
 //! wrong architecture" callout: this module must never grow a persistent
 //! mirror of scene values.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 
 use manifold_core::effect_graph_def::{
     EffectGraphDef, EffectGraphNode, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, SerializedParamValue,
@@ -71,30 +71,6 @@ const MODIFIER_TYPE_IDS: &[&str] = &[
     "node.morph_mesh",
     "node.rotate_3d",
 ];
-/// `node.scene_object`'s 17 texture-map input ports (D2/D12's "map-presence
-/// flags" — mirrors the field list on `SceneObject`/`primitives/scene_object.rs`
-/// exactly; extend here alongside that struct if a future material
-/// extension adds another map).
-const MAP_PORT_NAMES: &[&str] = &[
-    "base_color_map",
-    "normal_map",
-    "mr_map",
-    "occlusion_map",
-    "emissive_map",
-    "sheen_color_map",
-    "sheen_roughness_map",
-    "iridescence_map",
-    "iridescence_thickness_map",
-    "anisotropy_map",
-    "clearcoat_map",
-    "clearcoat_roughness_map",
-    "clearcoat_normal_map",
-    "specular_map",
-    "specular_color_map",
-    "transmission_map",
-    "volume_thickness_map",
-];
-
 /// A write address for one editable value: the exact addressing
 /// `SetGraphNodeParamCommand::with_scope` takes.
 #[derive(Debug, Clone, PartialEq)]
@@ -102,12 +78,6 @@ pub struct ParamAddr {
     pub scope_path: Vec<u32>,
     pub node_doc_id: u32,
     pub param_id: String,
-}
-
-impl ParamAddr {
-    fn root(node_doc_id: u32, param_id: &str) -> Self {
-        Self { scope_path: Vec::new(), node_doc_id, param_id: param_id.to_string() }
-    }
 }
 
 /// Full-panel discovery result for one generator layer's graph.
@@ -163,7 +133,6 @@ pub struct SceneObjectKnownRow {
     /// group" case).
     pub group_node_id: Option<u32>,
     pub name: String,
-    pub tint: Option<[f32; 4]>,
     pub visible_addr: ParamAddr,
     pub visible_value: bool,
     /// `true` when a wire feeds `visible` directly (the primitive's
@@ -186,10 +155,6 @@ pub struct SceneObjectKnownRow {
     /// "Add modifier" only when this is `false` — never a blind splice
     /// into unrecognized topology (D6).
     pub modifier_chain_parseable: bool,
-    /// Names of `node.scene_object`'s 17 texture-map input ports that are
-    /// currently wired (D12's "map-presence flags") — mechanical capture,
-    /// not curation; `state_sync` decides which become labeled rows.
-    pub maps_present: HashSet<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -206,18 +171,6 @@ pub enum SceneObjectVm {
 pub struct ModifierVm {
     pub node_doc_id: u32,
     pub type_id: String,
-    /// Every declared param on this atom's serialized `params` map, read as
-    /// f32 (`param_f32`'s own int/enum/float coercion). Generic bookkeeping,
-    /// not curation — the Vm stays a mechanical trace; `state_sync` (which
-    /// CAN depend on the primitives' own `ParamDef` labels/ranges) curates
-    /// which of these become labeled panel rows, same split D3 already draws
-    /// for Light/Camera/Environment.
-    pub params: BTreeMap<String, f32>,
-    /// Names of `params` keys currently driven by a wire into this node (any
-    /// port, not just ones present in `params` — a port-shadow param may be
-    /// wired with no stored `params` entry at all) — same meaning as every
-    /// other `_driven` field in this module.
-    pub driven: HashSet<String>,
 }
 
 /// One `node.transform_3d`'s write addresses + current values — D4's "3
@@ -248,24 +201,16 @@ pub struct TransformVm {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MaterialColorRow {
     pub node_doc_id: u32,
-    pub type_id: String,
-    pub base_color_addr: (ParamAddr, ParamAddr, ParamAddr),
-    pub base_color_value: (f32, f32, f32),
-    pub base_color_driven: (bool, bool, bool),
-    /// `Some` only for `node.pbr_material` — metallic/roughness is a PBR-only
-    /// concept, so a phong/unlit/cel material's quick knobs are base color
-    /// alone (D4: "the atom's own params otherwise").
-    pub metallic_roughness: Option<MetallicRoughnessRow>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct MetallicRoughnessRow {
-    pub metallic_addr: ParamAddr,
-    pub metallic_value: f32,
-    pub metallic_driven: bool,
-    pub roughness_addr: ParamAddr,
-    pub roughness_value: f32,
-    pub roughness_driven: bool,
+    /// The scope this material atom's params write at — empty for a root/
+    /// ungrouped object, `[group_node_id]` for one living inside an object's
+    /// group (or, on the rare crossed-group shape, one level deeper). Kept
+    /// as addressing identity (not a param value) — the sole source of the
+    /// scope once `base_color_addr` no longer exists.
+    pub scope_path: Vec<u32>,
+    /// `true` only for `node.pbr_material` — metallic/roughness is a
+    /// PBR-only concept, so a phong/unlit/cel material's quick knobs are
+    /// base color alone (D4: "the atom's own params otherwise").
+    pub is_pbr: bool,
 }
 
 /// The Objects section's material quick-knob row (D3/D4).
@@ -298,32 +243,6 @@ pub struct LightRow {
     /// `"Light {k}"` (same convention as an object's name, D6). NEW: lights
     /// didn't have an editable display name before this design.
     pub name: String,
-    pub mode_addr: ParamAddr,
-    pub mode_value: u32,
-    pub mode_driven: bool,
-    pub color_addr: (ParamAddr, ParamAddr, ParamAddr),
-    pub color_value: (f32, f32, f32),
-    pub color_driven: (bool, bool, bool),
-    pub intensity_addr: ParamAddr,
-    pub intensity_value: f32,
-    pub intensity_driven: bool,
-    pub pos_addr: (ParamAddr, ParamAddr, ParamAddr),
-    pub pos_value: (f32, f32, f32),
-    pub pos_driven: (bool, bool, bool),
-    pub aim_addr: (ParamAddr, ParamAddr, ParamAddr),
-    pub aim_value: (f32, f32, f32),
-    pub aim_driven: (bool, bool, bool),
-    pub cast_shadows_addr: ParamAddr,
-    /// `true` when the raw [0,1] threshold is > 0.5 (`node.light`'s own
-    /// on/off convention, REALTIME_3D D4).
-    pub cast_shadows_value: bool,
-    pub cast_shadows_driven: bool,
-    pub shadow_softness_addr: ParamAddr,
-    pub shadow_softness_value: u32,
-    pub shadow_softness_driven: bool,
-    pub light_size_addr: ParamAddr,
-    pub light_size_value: f32,
-    pub light_size_driven: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -340,18 +259,6 @@ pub enum SceneLightVm {
 #[derive(Debug, Clone, PartialEq)]
 pub struct LensRow {
     pub node_doc_id: u32,
-    pub focus_distance_addr: ParamAddr,
-    pub focus_distance_value: f32,
-    pub focus_distance_driven: bool,
-    pub f_stop_addr: ParamAddr,
-    pub f_stop_value: f32,
-    pub f_stop_driven: bool,
-    pub shutter_angle_addr: ParamAddr,
-    pub shutter_angle_value: f32,
-    pub shutter_angle_driven: bool,
-    pub exposure_ev_addr: ParamAddr,
-    pub exposure_ev_value: f32,
-    pub exposure_ev_driven: bool,
 }
 
 /// Payload for [`CameraVm::Orbit`], boxed for the same reason as
@@ -360,18 +267,6 @@ pub struct LensRow {
 pub struct OrbitCameraRow {
     pub node_doc_id: u32,
     pub lens: Option<LensRow>,
-    pub orbit_addr: ParamAddr,
-    pub orbit_value: f32,
-    pub orbit_driven: bool,
-    pub tilt_addr: ParamAddr,
-    pub tilt_value: f32,
-    pub tilt_driven: bool,
-    pub distance_addr: ParamAddr,
-    pub distance_value: f32,
-    pub distance_driven: bool,
-    pub fov_y_addr: ParamAddr,
-    pub fov_y_value: f32,
-    pub fov_y_driven: bool,
 }
 
 /// Payload for [`CameraVm::Free`] (D3: "free: pos/euler/fov rows").
@@ -379,21 +274,6 @@ pub struct OrbitCameraRow {
 pub struct FreeCameraRow {
     pub node_doc_id: u32,
     pub lens: Option<LensRow>,
-    pub pos_addr: (ParamAddr, ParamAddr, ParamAddr),
-    pub pos_value: (f32, f32, f32),
-    pub pos_driven: (bool, bool, bool),
-    pub yaw_addr: ParamAddr,
-    pub yaw_value: f32,
-    pub yaw_driven: bool,
-    pub pitch_addr: ParamAddr,
-    pub pitch_value: f32,
-    pub pitch_driven: bool,
-    pub roll_addr: ParamAddr,
-    pub roll_value: f32,
-    pub roll_driven: bool,
-    pub fov_y_addr: ParamAddr,
-    pub fov_y_value: f32,
-    pub fov_y_driven: bool,
 }
 
 /// Payload for [`CameraVm::LookAt`] (D3: "look-at: pos/target/fov rows").
@@ -401,15 +281,6 @@ pub struct FreeCameraRow {
 pub struct LookAtCameraRow {
     pub node_doc_id: u32,
     pub lens: Option<LensRow>,
-    pub pos_addr: (ParamAddr, ParamAddr, ParamAddr),
-    pub pos_value: (f32, f32, f32),
-    pub pos_driven: (bool, bool, bool),
-    pub target_addr: (ParamAddr, ParamAddr, ParamAddr),
-    pub target_value: (f32, f32, f32),
-    pub target_driven: (bool, bool, bool),
-    pub fov_y_addr: ParamAddr,
-    pub fov_y_value: f32,
-    pub fov_y_driven: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -426,31 +297,22 @@ pub enum CameraVm {
 /// panel renders sliders, which need a live position, not just a target.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImporterEnvironmentRow {
-    pub mode_addr: ParamAddr,
-    pub mode_value: u32,
-    pub intensity_addr: ParamAddr,
-    pub intensity_value: f32,
-    /// `true` when a wire feeds `intensity` directly (the primitive's
-    /// port-shadow convention: an input port sharing the param's name) — the
-    /// panel renders the row read-only with the same "driven" styling the
-    /// group-face rows use (D4), never fighting the graph.
-    pub intensity_driven: bool,
-    pub fill_addr: ParamAddr,
-    pub fill_value: f32,
-    pub fill_driven: bool,
-    pub hdri_file_addr: ParamAddr,
+    /// The `node.switch_texture` selector's own doc id (the "mode" chip).
+    pub switch_node_id: u32,
+    /// The `node.bake_environment`'s doc id (the Softbox intensity/fill
+    /// params).
+    pub bake_node_id: u32,
+    /// The `node.hdri_source`'s doc id — its `path` param isn't manifest/
+    /// slider-backed (a file path, not a numeric row), so only the resolved
+    /// display string is carried, not an addr.
+    pub hdri_node_id: u32,
     pub hdri_file_value: String,
 }
 
 /// Payload for [`EnvironmentVm::Bare`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct BareEnvironmentRow {
-    pub intensity_addr: ParamAddr,
-    pub intensity_value: f32,
-    pub intensity_driven: bool,
-    pub fill_addr: ParamAddr,
-    pub fill_value: f32,
-    pub fill_driven: bool,
+    pub node_doc_id: u32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -472,16 +334,6 @@ pub enum EnvironmentVm {
 #[derive(Debug, Clone, PartialEq)]
 pub struct AtmosphereRow {
     pub node_doc_id: u32,
-    pub density_addr: ParamAddr,
-    pub density_value: f32,
-    pub density_driven: bool,
-    pub color_addr: (ParamAddr, ParamAddr, ParamAddr),
-    pub color_value: (f32, f32, f32),
-    pub height_falloff_addr: ParamAddr,
-    pub height_falloff_value: f32,
-    pub height_falloff_driven: bool,
-    pub ambient_tint_addr: (ParamAddr, ParamAddr, ParamAddr),
-    pub ambient_tint_value: (f32, f32, f32),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -659,18 +511,16 @@ fn trace_objects(level: &Level, scene_node: &EffectGraphNode) -> (Vec<SceneObjec
         let (row, source_vertex_count) = match level.producer(scene_node.id, &port) {
             Some((producer_id, _)) => match level.node(producer_id) {
                 Some(producer_node) if producer_node.type_id == SCENE_OBJECT_TYPE_ID => {
-                    trace_scene_object(level, Vec::new(), producer_node, None, None, k)
+                    trace_scene_object(level, Vec::new(), producer_node, None, k)
                 }
                 Some(producer_node) if producer_node.type_id == GROUP_TYPE_ID => {
                     match producer_node.group.as_deref().and_then(find_scene_object_in_group) {
                         Some((inner_node, inner_level)) => {
-                            let tint = producer_node.group.as_ref().and_then(|g| g.tint);
                             trace_scene_object(
                                 &inner_level,
                                 vec![producer_id],
                                 inner_node,
                                 Some(producer_id),
-                                tint,
                                 k,
                             )
                         }
@@ -700,7 +550,6 @@ fn trace_scene_object(
     scope_path: Vec<u32>,
     node: &EffectGraphNode,
     group_node_id: Option<u32>,
-    tint: Option<[f32; 4]>,
     k: usize,
 ) -> (SceneObjectVm, Option<u32>) {
     let object_node_id = node.id;
@@ -722,33 +571,15 @@ fn trace_scene_object(
 
     let material = resolve_producer_through_group(level, object_node_id, "material")
         .filter(|(_, _, n, _)| MATERIAL_TYPE_IDS.contains(&n.type_id.as_str()))
-        .map(|(lvl, crossed_group, n, _)| {
+        .map(|(_lvl, crossed_group, n, _)| {
             let mut scope_path = scope_path.clone();
             if let Some(g) = crossed_group {
                 scope_path.push(g);
             }
-            let driven = |name: &str| lvl.producer(n.id, name).is_some();
-            let addr =
-                |name: &str| ParamAddr { scope_path: scope_path.clone(), node_doc_id: n.id, param_id: name.to_string() };
-            let metallic_roughness = (n.type_id == "node.pbr_material").then(|| MetallicRoughnessRow {
-                metallic_addr: addr("metallic"),
-                metallic_value: param_f32(n, "metallic", 0.0),
-                metallic_driven: driven("metallic"),
-                roughness_addr: addr("roughness"),
-                roughness_value: param_f32(n, "roughness", 0.5),
-                roughness_driven: driven("roughness"),
-            });
             MaterialVm::Known(Box::new(MaterialColorRow {
                 node_doc_id: n.id,
-                type_id: n.type_id.clone(),
-                base_color_addr: (addr("color_r"), addr("color_g"), addr("color_b")),
-                base_color_value: (
-                    param_f32(n, "color_r", 0.8),
-                    param_f32(n, "color_g", 0.8),
-                    param_f32(n, "color_b", 0.8),
-                ),
-                base_color_driven: (driven("color_r"), driven("color_g"), driven("color_b")),
-                metallic_roughness,
+                scope_path,
+                is_pbr: n.type_id == "node.pbr_material",
             }))
         })
         .unwrap_or(MaterialVm::None);
@@ -798,39 +629,16 @@ fn trace_scene_object(
             source_vertex_count = node_source_vertex_count(n);
             break; // reached the mesh source (or something un-curated) — stop, still parseable.
         }
-        let driven: HashSet<String> = current_level
-            .wires
-            .iter()
-            .filter(|w| w.to_node == n.id)
-            .map(|w| w.to_port.clone())
-            .collect();
-        let params: BTreeMap<String, f32> = n
-            .params
-            .iter()
-            .filter_map(|(key, v)| match v {
-                SerializedParamValue::Float { value } => Some((key.clone(), *value)),
-                SerializedParamValue::Int { value } => Some((key.clone(), *value as f32)),
-                SerializedParamValue::Enum { value } => Some((key.clone(), *value as f32)),
-                _ => None,
-            })
-            .collect();
-        chain.push(ModifierVm { node_doc_id: n.id, type_id: n.type_id.clone(), params, driven });
+        chain.push(ModifierVm { node_doc_id: n.id, type_id: n.type_id.clone() });
         cursor = current_level.producer(n.id, "in");
     }
     chain.reverse(); // wire order: source → … → scene_object.
-
-    let maps_present: HashSet<String> = MAP_PORT_NAMES
-        .iter()
-        .filter(|port| level.producer(object_node_id, port).is_some())
-        .map(|s| s.to_string())
-        .collect();
 
     let row = SceneObjectVm::Known(Box::new(SceneObjectKnownRow {
         index: k,
         object_node_id,
         group_node_id,
         name,
-        tint,
         visible_addr,
         visible_value,
         visible_driven,
@@ -838,7 +646,6 @@ fn trace_scene_object(
         material,
         modifier_chain: chain,
         modifier_chain_parseable: parseable,
-        maps_present,
     }));
     (row, source_vertex_count)
 }
@@ -915,59 +722,10 @@ fn trace_lights(level: &Level, scene_node: &EffectGraphNode) -> Vec<SceneLightVm
             match level.producer(scene_node.id, &port) {
                 Some((node_id, _)) if level.node(node_id).is_some_and(|n| n.type_id == LIGHT_TYPE_ID) => {
                     let node = level.node(node_id).expect("checked above");
-                    let driven = |name: &str| level.producer(node_id, name).is_some();
                     SceneLightVm::Known(Box::new(LightRow {
                         index: k,
                         node_doc_id: node_id,
                         name: node.handle.clone().unwrap_or_else(|| format!("Light {k}")),
-                        mode_addr: ParamAddr::root(node_id, "mode"),
-                        mode_value: param_f32(node, "mode", 0.0) as u32,
-                        mode_driven: driven("mode"),
-                        color_addr: (
-                            ParamAddr::root(node_id, "color_r"),
-                            ParamAddr::root(node_id, "color_g"),
-                            ParamAddr::root(node_id, "color_b"),
-                        ),
-                        color_value: (
-                            param_f32(node, "color_r", 1.0),
-                            param_f32(node, "color_g", 1.0),
-                            param_f32(node, "color_b", 1.0),
-                        ),
-                        color_driven: (driven("color_r"), driven("color_g"), driven("color_b")),
-                        intensity_addr: ParamAddr::root(node_id, "intensity"),
-                        intensity_value: param_f32(node, "intensity", 1.0),
-                        intensity_driven: driven("intensity"),
-                        pos_addr: (
-                            ParamAddr::root(node_id, "pos_x"),
-                            ParamAddr::root(node_id, "pos_y"),
-                            ParamAddr::root(node_id, "pos_z"),
-                        ),
-                        pos_value: (
-                            param_f32(node, "pos_x", 0.0),
-                            param_f32(node, "pos_y", 30.0),
-                            param_f32(node, "pos_z", 0.0),
-                        ),
-                        pos_driven: (driven("pos_x"), driven("pos_y"), driven("pos_z")),
-                        aim_addr: (
-                            ParamAddr::root(node_id, "aim_x"),
-                            ParamAddr::root(node_id, "aim_y"),
-                            ParamAddr::root(node_id, "aim_z"),
-                        ),
-                        aim_value: (
-                            param_f32(node, "aim_x", 0.0),
-                            param_f32(node, "aim_y", 0.0),
-                            param_f32(node, "aim_z", 0.0),
-                        ),
-                        aim_driven: (driven("aim_x"), driven("aim_y"), driven("aim_z")),
-                        cast_shadows_addr: ParamAddr::root(node_id, "cast_shadows"),
-                        cast_shadows_value: param_f32(node, "cast_shadows", 1.0) > 0.5,
-                        cast_shadows_driven: driven("cast_shadows"),
-                        shadow_softness_addr: ParamAddr::root(node_id, "shadow_softness"),
-                        shadow_softness_value: param_f32(node, "shadow_softness", 1.0) as u32,
-                        shadow_softness_driven: driven("shadow_softness"),
-                        light_size_addr: ParamAddr::root(node_id, "light_size"),
-                        light_size_value: param_f32(node, "light_size", 1.0),
-                        light_size_driven: driven("light_size"),
                     }))
                 }
                 _ => SceneLightVm::Custom { index: k },
@@ -976,27 +734,13 @@ fn trace_lights(level: &Level, scene_node: &EffectGraphNode) -> Vec<SceneLightVm
         .collect()
 }
 
-/// Builds a [`LensRow`] for `node.camera_lens` at `node_id` — its four
-/// port-shadowed scalar params, addressed and valued (D3's "the lens node's
-/// own row beneath").
+/// Builds a [`LensRow`] for `node.camera_lens` at `node_id` — identity only;
+/// its four port-shadowed scalar params (focus_distance/f_stop/shutter_angle/
+/// exposure_ev) are read generically through `state_sync`'s manifest closures
+/// keyed on this node id (D3's "the lens node's own row beneath").
 fn trace_lens(level: &Level, node_id: u32) -> Option<LensRow> {
-    let node = level.node(node_id)?;
-    let driven = |name: &str| level.producer(node_id, name).is_some();
-    Some(LensRow {
-        node_doc_id: node_id,
-        focus_distance_addr: ParamAddr::root(node_id, "focus_distance"),
-        focus_distance_value: param_f32(node, "focus_distance", 0.0),
-        focus_distance_driven: driven("focus_distance"),
-        f_stop_addr: ParamAddr::root(node_id, "f_stop"),
-        f_stop_value: param_f32(node, "f_stop", 1000.0),
-        f_stop_driven: driven("f_stop"),
-        shutter_angle_addr: ParamAddr::root(node_id, "shutter_angle"),
-        shutter_angle_value: param_f32(node, "shutter_angle", 0.0),
-        shutter_angle_driven: driven("shutter_angle"),
-        exposure_ev_addr: ParamAddr::root(node_id, "exposure_ev"),
-        exposure_ev_value: param_f32(node, "exposure_ev", 0.0),
-        exposure_ev_driven: driven("exposure_ev"),
-    })
+    level.node(node_id)?;
+    Some(LensRow { node_doc_id: node_id })
 }
 
 /// Trace THROUGH single-camera-in/camera-out nodes (the importer's
@@ -1029,80 +773,16 @@ fn trace_camera(level: &Level, scene_node: &EffectGraphNode) -> CameraVm {
     }
     let Some(node) = level.node(node_id) else { return CameraVm::None };
     let lens = lens_node_doc_id.and_then(|id| trace_lens(level, id));
-    let driven = |name: &str| level.producer(node.id, name).is_some();
     match node.type_id.as_str() {
-        t if t == ORBIT_CAMERA_TYPE_ID => CameraVm::Orbit(Box::new(OrbitCameraRow {
-            node_doc_id: node.id,
-            lens,
-            orbit_addr: ParamAddr::root(node.id, "orbit"),
-            orbit_value: param_f32(node, "orbit", 0.7),
-            orbit_driven: driven("orbit"),
-            tilt_addr: ParamAddr::root(node.id, "tilt"),
-            tilt_value: param_f32(node, "tilt", 0.3),
-            tilt_driven: driven("tilt"),
-            distance_addr: ParamAddr::root(node.id, "distance"),
-            distance_value: param_f32(node, "distance", 4.0),
-            distance_driven: driven("distance"),
-            fov_y_addr: ParamAddr::root(node.id, "fov_y"),
-            fov_y_value: param_f32(node, "fov_y", 0.9),
-            fov_y_driven: driven("fov_y"),
-        })),
-        t if t == FREE_CAMERA_TYPE_ID => CameraVm::Free(Box::new(FreeCameraRow {
-            node_doc_id: node.id,
-            lens,
-            pos_addr: (
-                ParamAddr::root(node.id, "pos_x"),
-                ParamAddr::root(node.id, "pos_y"),
-                ParamAddr::root(node.id, "pos_z"),
-            ),
-            pos_value: (
-                param_f32(node, "pos_x", 0.0),
-                param_f32(node, "pos_y", 0.0),
-                param_f32(node, "pos_z", -3.0),
-            ),
-            pos_driven: (driven("pos_x"), driven("pos_y"), driven("pos_z")),
-            yaw_addr: ParamAddr::root(node.id, "yaw"),
-            yaw_value: param_f32(node, "yaw", 0.0),
-            yaw_driven: driven("yaw"),
-            pitch_addr: ParamAddr::root(node.id, "pitch"),
-            pitch_value: param_f32(node, "pitch", 0.0),
-            pitch_driven: driven("pitch"),
-            roll_addr: ParamAddr::root(node.id, "roll"),
-            roll_value: param_f32(node, "roll", 0.0),
-            roll_driven: driven("roll"),
-            fov_y_addr: ParamAddr::root(node.id, "fov_y"),
-            fov_y_value: param_f32(node, "fov_y", 0.9),
-            fov_y_driven: driven("fov_y"),
-        })),
-        t if t == LOOK_AT_CAMERA_TYPE_ID => CameraVm::LookAt(Box::new(LookAtCameraRow {
-            node_doc_id: node.id,
-            lens,
-            pos_addr: (
-                ParamAddr::root(node.id, "pos_x"),
-                ParamAddr::root(node.id, "pos_y"),
-                ParamAddr::root(node.id, "pos_z"),
-            ),
-            pos_value: (
-                param_f32(node, "pos_x", 0.0),
-                param_f32(node, "pos_y", 0.0),
-                param_f32(node, "pos_z", -3.0),
-            ),
-            pos_driven: (driven("pos_x"), driven("pos_y"), driven("pos_z")),
-            target_addr: (
-                ParamAddr::root(node.id, "target_x"),
-                ParamAddr::root(node.id, "target_y"),
-                ParamAddr::root(node.id, "target_z"),
-            ),
-            target_value: (
-                param_f32(node, "target_x", 0.0),
-                param_f32(node, "target_y", 0.0),
-                param_f32(node, "target_z", 0.0),
-            ),
-            target_driven: (driven("target_x"), driven("target_y"), driven("target_z")),
-            fov_y_addr: ParamAddr::root(node.id, "fov_y"),
-            fov_y_value: param_f32(node, "fov_y", 0.9),
-            fov_y_driven: driven("fov_y"),
-        })),
+        t if t == ORBIT_CAMERA_TYPE_ID => {
+            CameraVm::Orbit(Box::new(OrbitCameraRow { node_doc_id: node.id, lens }))
+        }
+        t if t == FREE_CAMERA_TYPE_ID => {
+            CameraVm::Free(Box::new(FreeCameraRow { node_doc_id: node.id, lens }))
+        }
+        t if t == LOOK_AT_CAMERA_TYPE_ID => {
+            CameraVm::LookAt(Box::new(LookAtCameraRow { node_doc_id: node.id, lens }))
+        }
         _ => CameraVm::Custom { node_doc_id: node.id },
     }
 }
@@ -1135,15 +815,9 @@ fn trace_environment(level: &Level, scene_node: &EffectGraphNode) -> Environment
                 })
                 .unwrap_or_default();
             return EnvironmentVm::Importer(Box::new(ImporterEnvironmentRow {
-                mode_addr: ParamAddr::root(node.id, "selector"),
-                mode_value: param_f32(node, "selector", 0.0) as u32,
-                intensity_addr: ParamAddr::root(bake.id, "intensity"),
-                intensity_value: param_f32(bake, "intensity", 1.0),
-                intensity_driven: level.producer(bake.id, "intensity").is_some(),
-                fill_addr: ParamAddr::root(bake.id, "fill"),
-                fill_value: param_f32(bake, "fill", 0.0),
-                fill_driven: level.producer(bake.id, "fill").is_some(),
-                hdri_file_addr: ParamAddr::root(hdri_id, "path"),
+                switch_node_id: node.id,
+                bake_node_id: bake.id,
+                hdri_node_id: hdri_id,
                 hdri_file_value,
             }));
         }
@@ -1151,14 +825,7 @@ fn trace_environment(level: &Level, scene_node: &EffectGraphNode) -> Environment
     }
 
     if node.type_id == BAKE_ENVIRONMENT_TYPE_ID {
-        return EnvironmentVm::Bare(Box::new(BareEnvironmentRow {
-            intensity_addr: ParamAddr::root(node.id, "intensity"),
-            intensity_value: param_f32(node, "intensity", 1.0),
-            intensity_driven: level.producer(node.id, "intensity").is_some(),
-            fill_addr: ParamAddr::root(node.id, "fill"),
-            fill_value: param_f32(node, "fill", 0.0),
-            fill_driven: level.producer(node.id, "fill").is_some(),
-        }));
+        return EnvironmentVm::Bare(Box::new(BareEnvironmentRow { node_doc_id: node.id }));
     }
 
     EnvironmentVm::Custom { node_doc_id: node.id }
@@ -1177,35 +844,7 @@ fn trace_atmosphere(level: &Level, scene_node: &EffectGraphNode) -> AtmosphereVm
         // before offering the add action, so this never double-adds).
         return AtmosphereVm::None;
     }
-    AtmosphereVm::Wired(Box::new(AtmosphereRow {
-        node_doc_id: node.id,
-        density_addr: ParamAddr::root(node.id, "fog_density"),
-        density_value: param_f32(node, "fog_density", 0.0),
-        density_driven: level.producer(node.id, "fog_density").is_some(),
-        color_addr: (
-            ParamAddr::root(node.id, "fog_color_r"),
-            ParamAddr::root(node.id, "fog_color_g"),
-            ParamAddr::root(node.id, "fog_color_b"),
-        ),
-        color_value: (
-            param_f32(node, "fog_color_r", 0.5),
-            param_f32(node, "fog_color_g", 0.55),
-            param_f32(node, "fog_color_b", 0.65),
-        ),
-        height_falloff_addr: ParamAddr::root(node.id, "height_falloff"),
-        height_falloff_value: param_f32(node, "height_falloff", 0.0),
-        height_falloff_driven: level.producer(node.id, "height_falloff").is_some(),
-        ambient_tint_addr: (
-            ParamAddr::root(node.id, "ambient_tint_r"),
-            ParamAddr::root(node.id, "ambient_tint_g"),
-            ParamAddr::root(node.id, "ambient_tint_b"),
-        ),
-        ambient_tint_value: (
-            param_f32(node, "ambient_tint_r", 1.0),
-            param_f32(node, "ambient_tint_g", 1.0),
-            param_f32(node, "ambient_tint_b", 1.0),
-        ),
-    }))
+    AtmosphereVm::Wired(Box::new(AtmosphereRow { node_doc_id: node.id }))
 }
 
 /// UX-P3a (SCENE_PANEL_UX_DESIGN.md D8/sizing amendment): whether `param_id`
@@ -1233,6 +872,34 @@ pub fn is_param_exposed(def: &EffectGraphDef, node_doc_id: u32, param_id: &str) 
         None
     }
     search(&def.nodes, node_doc_id, param_id).unwrap_or(false)
+}
+
+/// Sibling of [`is_param_exposed`]: true when `(node_doc_id, param_id)` has a
+/// wire feeding it at the level the node lives on — i.e. the param is
+/// wire-driven and renders read-only (wire-wins-at-eval). Replaces the
+/// per-struct `_driven` fields the scene VMs used to transcribe; the panel's
+/// manifest rows now source driven-state through here. Mirrors the
+/// `level.producer(node_id, name).is_some()` checks `from_def` used internally.
+pub fn is_param_driven(def: &EffectGraphDef, node_doc_id: u32, param_id: &str) -> bool {
+    fn search(
+        nodes: &[EffectGraphNode],
+        wires: &[manifold_core::effect_graph_def::EffectGraphWire],
+        node_doc_id: u32,
+        param_id: &str,
+    ) -> Option<bool> {
+        for n in nodes {
+            if n.id == node_doc_id {
+                return Some(wires.iter().any(|w| w.to_node == node_doc_id && w.to_port == param_id));
+            }
+            if let Some(group) = &n.group
+                && let Some(found) = search(&group.nodes, &group.wires, node_doc_id, param_id)
+            {
+                return Some(found);
+            }
+        }
+        None
+    }
+    search(&def.nodes, &def.wires, node_doc_id, param_id).unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -1380,7 +1047,7 @@ mod tests {
         let vm = SceneVm::from_def(&d).unwrap();
         match vm.environment {
             EnvironmentVm::Importer(row) => {
-                assert_eq!(row.hdri_file_addr.node_doc_id, 4);
+                assert_eq!(row.hdri_node_id, 4);
             }
             other => panic!("expected Importer shape, got {other:?}"),
         }
@@ -1388,7 +1055,6 @@ mod tests {
             CameraVm::Orbit(row) => {
                 assert_eq!(row.node_doc_id, 1);
                 assert_eq!(row.lens.as_ref().map(|l| l.node_doc_id), Some(2));
-                assert_eq!(row.orbit_value, 0.7, "picks up the orbit atom's own default");
             }
             other => panic!("expected Orbit camera, got {other:?}"),
         }
@@ -1472,7 +1138,7 @@ mod tests {
                 assert_eq!(t.pos_value.0, 4.0);
                 assert!(t.pos_addr.0.scope_path.is_empty(), "root-level transform has an empty scope");
                 match &row.material {
-                    MaterialVm::Known(m) => assert_eq!(m.type_id, "node.phong_material"),
+                    MaterialVm::Known(m) => assert!(!m.is_pbr, "phong material is not PBR"),
                     MaterialVm::None => panic!("expected a resolved material"),
                 }
             }
@@ -1531,14 +1197,13 @@ mod tests {
                 assert_eq!(row.object_node_id, 1);
                 assert_eq!(row.group_node_id, Some(2));
                 assert_eq!(row.name, "Hero");
-                assert_eq!(row.tint, Some([0.1, 0.2, 0.3, 1.0]));
                 assert_eq!(row.modifier_chain.len(), 1);
                 assert_eq!(row.modifier_chain[0].type_id, "node.bend_mesh");
                 assert!(row.modifier_chain_parseable, "a well-formed one-modifier chain parses");
                 match &row.material {
                     MaterialVm::Known(m) => {
-                        assert_eq!(m.type_id, "node.phong_material");
-                        assert_eq!(m.base_color_addr.0.scope_path, vec![2], "material lives inside the group — scoped address");
+                        assert!(!m.is_pbr, "phong material is not PBR");
+                        assert_eq!(m.scope_path, vec![2], "material lives inside the group — scoped address");
                     }
                     MaterialVm::None => panic!("expected a resolved material"),
                 }
@@ -1605,18 +1270,15 @@ mod tests {
     }
 
     #[test]
-    fn modifier_chain_captures_params_and_driven_ports() {
-        // P5: the chain walk generically reads a modifier's own params and
-        // which of its ports are wired — `state_sync` curates these into
-        // labeled rows, but the Vm's job is just the mechanical capture.
+    fn modifier_chain_captures_identity() {
+        // P5: the chain walk captures each modifier's identity only
+        // (node_doc_id/type_id) — `state_sync` reads each modifier's own
+        // params/driven-state generically off the def via `is_param_driven`
+        // and the manifest closures, keyed on that node id.
         let group_iface = GroupInterface { inputs: vec![], outputs: vec![], params: vec![] };
         let mesh = node(1, "node.cube_mesh", Some("mesh"));
         let angle_driver = node(2, "node.value", Some("angle_driver"));
-        let bend = with_param(
-            with_param(node(3, "node.bend_mesh", Some("bend")), "axis", SerializedParamValue::Enum { value: 2 }),
-            "center",
-            SerializedParamValue::Float { value: 1.5 },
-        );
+        let bend = node(3, "node.bend_mesh", Some("bend"));
         let scene_obj = node(4, SCENE_OBJECT_TYPE_ID, Some("Obj"));
         let gout = node(5, GROUP_OUTPUT_TYPE_ID, Some("output"));
         let mut group_node = node(10, GROUP_TYPE_ID, Some("Obj"));
@@ -1643,11 +1305,10 @@ mod tests {
                 assert!(row.modifier_chain_parseable);
                 assert_eq!(row.modifier_chain.len(), 1);
                 let m = &row.modifier_chain[0];
-                assert_eq!(m.params.get("axis"), Some(&2.0));
-                assert_eq!(m.params.get("center"), Some(&1.5));
-                assert!(!m.params.contains_key("angle"), "angle has no stored params entry — it's port-shadowed");
-                assert!(m.driven.contains("angle"), "angle is wired — driven");
-                assert!(!m.driven.contains("center"), "center is a plain param, not wired");
+                assert_eq!(m.node_doc_id, 3);
+                assert_eq!(m.type_id, "node.bend_mesh");
+                assert!(is_param_driven(&d, 3, "angle"), "angle is wired — driven, via the shared helper");
+                assert!(!is_param_driven(&d, 3, "center"), "center is a plain param, not wired");
             }
             other => panic!("expected Known object, got {other:?}"),
         }
@@ -1748,47 +1409,9 @@ mod tests {
         match &vm.objects[0] {
             SceneObjectVm::Known(row) if matches!(row.material, MaterialVm::Known(_)) => {
                 let MaterialVm::Known(m) = &row.material else { unreachable!() };
-                let mr = m.metallic_roughness.as_ref().expect("pbr gets metallic/roughness");
-                assert_eq!(mr.metallic_value, 0.7);
-                assert_eq!(mr.roughness_value, 0.3);
+                assert!(m.is_pbr, "pbr material atom flags is_pbr — metallic/roughness rows follow");
             }
             other => panic!("expected Known pbr object, got {other:?}"),
-        }
-    }
-
-    /// D12's new map-presence flags: only ports actually wired show up.
-    #[test]
-    fn maps_present_reports_only_wired_map_ports() {
-        let group_iface = GroupInterface { inputs: vec![], outputs: vec![], params: vec![] };
-        let mesh = node(1, "node.cube_mesh", Some("mesh"));
-        let tex = node(2, "node.gltf_texture_source", Some("basecolor_tex"));
-        let scene_obj = node(3, SCENE_OBJECT_TYPE_ID, Some("Obj"));
-        let gout = node(4, GROUP_OUTPUT_TYPE_ID, Some("output"));
-        let mut group_node = node(10, GROUP_TYPE_ID, Some("Obj"));
-        group_node.group = Some(Box::new(GroupDef {
-            interface: group_iface,
-            nodes: vec![mesh, tex, scene_obj, gout],
-            wires: vec![
-                wire(1, "vertices", 3, "vertices"),
-                wire(2, "out", 3, "base_color_map"),
-                wire(3, "object", 4, "object"),
-            ],
-            tint: None,
-        }));
-        let scene = with_param(node(20, RENDER_SCENE_TYPE_ID, None), "objects", SerializedParamValue::Float { value: 1.0 });
-        let out = node(30, "system.final_output", None);
-        let d = def(
-            vec![group_node, scene, out],
-            vec![wire(10, "object", 20, "object_0"), wire(20, "color", 30, "in")],
-        );
-        let vm = SceneVm::from_def(&d).unwrap();
-        match &vm.objects[0] {
-            SceneObjectVm::Known(row) => {
-                assert_eq!(row.maps_present.len(), 1);
-                assert!(row.maps_present.contains("base_color_map"));
-                assert!(!row.maps_present.contains("normal_map"));
-            }
-            other => panic!("expected Known object, got {other:?}"),
         }
     }
 
@@ -1844,17 +1467,12 @@ mod tests {
     // ── P3: Lights + Camera sections ──
 
     #[test]
-    fn known_light_row_resolves_full_param_addresses_and_values() {
+    fn known_light_row_resolves_identity() {
         let light = with_param(
-            with_param(
-                with_param(node(8, LIGHT_TYPE_ID, Some("sun")), "intensity", SerializedParamValue::Float { value: 2.5 }),
-                "cast_shadows",
-                SerializedParamValue::Float { value: 1.0 },
-            ),
-            "shadow_softness",
-            SerializedParamValue::Enum { value: 3 }, // Contact
+            node(8, LIGHT_TYPE_ID, Some("sun")),
+            "cast_shadows",
+            SerializedParamValue::Float { value: 1.0 },
         );
-        let light = with_param(light, "light_size", SerializedParamValue::Float { value: 4.0 });
         let scene = with_param(node(10, RENDER_SCENE_TYPE_ID, None), "lights", SerializedParamValue::Float { value: 1.0 });
         let out = node(20, "system.final_output", None);
         let d = def(vec![light, scene, out], vec![wire(8, "out", 10, "light_0"), wire(10, "color", 20, "in")]);
@@ -1863,12 +1481,7 @@ mod tests {
         match &vm.lights[0] {
             SceneLightVm::Known(row) => {
                 assert_eq!(row.node_doc_id, 8);
-                assert_eq!(row.intensity_value, 2.5);
-                assert!(row.cast_shadows_value, "cast_shadows > 0.5 reads as on");
-                assert_eq!(row.shadow_softness_value, 3, "Contact");
-                assert_eq!(row.light_size_value, 4.0, "light_size resolves even though it's a Contact-only knob — parameter dependency, not conditional UI");
-                assert!(!row.intensity_driven);
-                assert_eq!(row.intensity_addr, ParamAddr::root(8, "intensity"));
+                assert_eq!(row.name, "sun");
             }
             other => panic!("expected Known light, got {other:?}"),
         }
@@ -1903,9 +1516,9 @@ mod tests {
     }
 
     #[test]
-    fn free_camera_with_lens_pass_through_traces_full_rows() {
-        let cam = with_param(node(1, FREE_CAMERA_TYPE_ID, Some("camera")), "yaw", SerializedParamValue::Float { value: 1.2 });
-        let lens = with_param(node(2, CAMERA_LENS_TYPE_ID, Some("lens")), "f_stop", SerializedParamValue::Float { value: 2.8 });
+    fn free_camera_with_lens_pass_through_traces_identity() {
+        let cam = node(1, FREE_CAMERA_TYPE_ID, Some("camera"));
+        let lens = node(2, CAMERA_LENS_TYPE_ID, Some("lens"));
         let scene = node(10, RENDER_SCENE_TYPE_ID, None);
         let out = node(20, "system.final_output", None);
         let d = def(
@@ -1916,22 +1529,16 @@ mod tests {
         match vm.camera {
             CameraVm::Free(row) => {
                 assert_eq!(row.node_doc_id, 1);
-                assert_eq!(row.yaw_value, 1.2);
                 let lens_row = row.lens.as_ref().expect("lens pass-through resolves");
                 assert_eq!(lens_row.node_doc_id, 2);
-                assert_eq!(lens_row.f_stop_value, 2.8);
             }
             other => panic!("expected Free camera, got {other:?}"),
         }
     }
 
     #[test]
-    fn look_at_camera_shape_traces_pos_target_fov() {
-        let cam = with_param(
-            node(1, LOOK_AT_CAMERA_TYPE_ID, Some("camera")),
-            "target_y",
-            SerializedParamValue::Float { value: 1.5 },
-        );
+    fn look_at_camera_shape_traces_identity() {
+        let cam = node(1, LOOK_AT_CAMERA_TYPE_ID, Some("camera"));
         let scene = node(10, RENDER_SCENE_TYPE_ID, None);
         let out = node(20, "system.final_output", None);
         let d = def(
@@ -1942,7 +1549,6 @@ mod tests {
         match vm.camera {
             CameraVm::LookAt(row) => {
                 assert_eq!(row.node_doc_id, 1);
-                assert_eq!(row.target_value.1, 1.5);
                 assert!(row.lens.is_none(), "no lens node wired — no pass-through to trace");
             }
             other => panic!("expected LookAt camera, got {other:?}"),
@@ -2133,5 +1739,31 @@ mod tests {
         }));
         let grouped_def = def(vec![group], vec![]);
         assert!(is_param_exposed(&grouped_def, 10, "roughness"), "must find nodes nested inside a group body");
+    }
+
+    #[test]
+    fn is_param_driven_reads_root_and_grouped_wires() {
+        let root_node = node(1, TRANSFORM_3D_TYPE_ID, None);
+        let source = node(0, "node.other", None);
+        let d = def(
+            vec![source.clone(), root_node.clone()],
+            vec![wire(0, "out", 1, "pos_x")],
+        );
+        assert!(is_param_driven(&d, 1, "pos_x"), "wired param at root must be driven");
+        assert!(!is_param_driven(&d, 1, "pos_y"), "unwired param at root must not be driven");
+        assert!(!is_param_driven(&d, 99, "pos_x"), "unknown node id — no panic, just false");
+
+        let inner = node(10, MATERIAL_TYPE_IDS[0], None);
+        let inner_source = node(20, "node.other", None);
+        let mut group = node(11, GROUP_TYPE_ID, Some("Cube"));
+        group.group = Some(Box::new(GroupDef {
+            interface: GroupInterface { inputs: vec![], outputs: vec![], params: vec![] },
+            nodes: vec![inner_source, inner],
+            wires: vec![wire(20, "out", 10, "roughness")],
+            tint: None,
+        }));
+        let grouped_def = def(vec![group], vec![]);
+        assert!(is_param_driven(&grouped_def, 10, "roughness"), "must find wires at the level inside a group body");
+        assert!(!is_param_driven(&grouped_def, 10, "metallic"), "unwired grouped param must not be driven");
     }
 }

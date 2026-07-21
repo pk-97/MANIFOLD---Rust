@@ -1703,7 +1703,7 @@ pub fn sync_inspector_data(
     // marker, resolved): the selection's own layer, falling back to
     // `active_layer`.
     if ui.scene_setup_panel.is_open() {
-        use manifold_renderer::node_graph::scene_vm::{SceneVm, is_param_exposed};
+        use manifold_renderer::node_graph::scene_vm::{SceneVm, is_param_driven, is_param_exposed};
         use manifold_ui::panels::scene_setup_panel::{
             AtmosphereRowVm, EnvironmentRowVm, ObjectMaterialVm, ObjectRowVm, RowAddr, RowValue,
             SceneSetupState, SceneSetupVm, TransformRowVm,
@@ -1779,6 +1779,15 @@ pub fn sync_inspector_data(
                                             .then(|| inst.get_base_param(id.as_str()))
                                     })
                                     .unwrap_or(fallback)
+                            };
+                            // P3 (scene_vm slimming): `is_param_driven` is the
+                            // sole source of every row's driven-state now —
+                            // the per-struct `_driven` fields scene_vm used to
+                            // transcribe are gone; this wraps the shared
+                            // helper against the SAME `def` `display_value`
+                            // already closes over.
+                            let is_driven = |node_doc_id: u32, param_id: &str| {
+                                def.as_ref().is_some_and(|d| is_param_driven(d, node_doc_id, param_id))
                             };
                             let row = |node_doc_id: u32,
                                        param_id: &str,
@@ -1919,24 +1928,27 @@ pub fn sync_inspector_data(
                                 |m: &manifold_renderer::node_graph::scene_vm::MaterialVm| match m
                                 {
                                     manifold_renderer::node_graph::scene_vm::MaterialVm::Known(row_data) => {
-                                        // D12 fix: `row_data`'s own address
+                                        // D12 fix: `row_data.scope_path`
                                         // already carries the correct scope
                                         // (see `transform_row`'s identical
                                         // fix above) — no external
                                         // group_node_id needed, and it's
                                         // correct for an ungrouped object
                                         // too (empty scope).
-                                        let scope = row_data.base_color_addr.0.scope_path.clone();
+                                        let scope = row_data.scope_path.clone();
                                         // C-P1b: `ModulatedRow`s, same
                                         // `mrow` synthesis as `transform_row`
-                                        // above.
+                                        // above. Values/driven-state are P3
+                                        // manifest reads keyed on the same
+                                        // node id — the struct only carries
+                                        // identity now.
                                         let color = (
                                             mrow(row_data.node_doc_id, "color_r", scoped_row(
                                                 scope.clone(),
                                                 row_data.node_doc_id,
                                                 "color_r",
-                                                row_data.base_color_value.0,
-                                                row_data.base_color_driven.0,
+                                                0.8,
+                                                is_driven(row_data.node_doc_id, "color_r"),
                                                 0.0,
                                                 1.0,
                                             )),
@@ -1944,8 +1956,8 @@ pub fn sync_inspector_data(
                                                 scope.clone(),
                                                 row_data.node_doc_id,
                                                 "color_g",
-                                                row_data.base_color_value.1,
-                                                row_data.base_color_driven.1,
+                                                0.8,
+                                                is_driven(row_data.node_doc_id, "color_g"),
                                                 0.0,
                                                 1.0,
                                             )),
@@ -1953,21 +1965,21 @@ pub fn sync_inspector_data(
                                                 scope.clone(),
                                                 row_data.node_doc_id,
                                                 "color_b",
-                                                row_data.base_color_value.2,
-                                                row_data.base_color_driven.2,
+                                                0.8,
+                                                is_driven(row_data.node_doc_id, "color_b"),
                                                 0.0,
                                                 1.0,
                                             )),
                                         );
-                                        match &row_data.metallic_roughness {
-                                            Some(mr) => ObjectMaterialVm::Pbr {
+                                        if row_data.is_pbr {
+                                            ObjectMaterialVm::Pbr {
                                                 color,
                                                 metallic: mrow(row_data.node_doc_id, "metallic", scoped_row(
                                                     scope.clone(),
                                                     row_data.node_doc_id,
                                                     "metallic",
-                                                    mr.metallic_value,
-                                                    mr.metallic_driven,
+                                                    0.0,
+                                                    is_driven(row_data.node_doc_id, "metallic"),
                                                     0.0,
                                                     1.0,
                                                 )),
@@ -1975,13 +1987,14 @@ pub fn sync_inspector_data(
                                                     scope,
                                                     row_data.node_doc_id,
                                                     "roughness",
-                                                    mr.roughness_value,
-                                                    mr.roughness_driven,
+                                                    0.5,
+                                                    is_driven(row_data.node_doc_id, "roughness"),
                                                     0.01,
                                                     1.0,
                                                 )),
-                                            },
-                                            None => ObjectMaterialVm::Other { color },
+                                            }
+                                        } else {
+                                            ObjectMaterialVm::Other { color }
                                         }
                                     }
                                     manifold_renderer::node_graph::scene_vm::MaterialVm::None => {
@@ -2107,49 +2120,49 @@ pub fn sync_inspector_data(
                                                 index: r.index,
                                                 node_doc_id: r.node_doc_id,
                                                 name: r.name.clone(),
-                                                mode: enum_row(r.node_doc_id, "mode", r.mode_value, r.mode_driven, LIGHT_MODE_LABELS),
+                                                mode: enum_row(r.node_doc_id, "mode", 0, is_driven(r.node_doc_id, "mode"), LIGHT_MODE_LABELS),
                                                 color: (
-                                                    mrow(r.node_doc_id, "color_r", row(r.node_doc_id, "color_r", r.color_value.0, r.color_driven.0, 0.0, 1.0)),
-                                                    mrow(r.node_doc_id, "color_g", row(r.node_doc_id, "color_g", r.color_value.1, r.color_driven.1, 0.0, 1.0)),
-                                                    mrow(r.node_doc_id, "color_b", row(r.node_doc_id, "color_b", r.color_value.2, r.color_driven.2, 0.0, 1.0)),
+                                                    mrow(r.node_doc_id, "color_r", row(r.node_doc_id, "color_r", 1.0, is_driven(r.node_doc_id, "color_r"), 0.0, 1.0)),
+                                                    mrow(r.node_doc_id, "color_g", row(r.node_doc_id, "color_g", 1.0, is_driven(r.node_doc_id, "color_g"), 0.0, 1.0)),
+                                                    mrow(r.node_doc_id, "color_b", row(r.node_doc_id, "color_b", 1.0, is_driven(r.node_doc_id, "color_b"), 0.0, 1.0)),
                                                 ),
                                                 intensity: mrow(r.node_doc_id, "intensity", row(
                                                     r.node_doc_id,
                                                     "intensity",
-                                                    r.intensity_value,
-                                                    r.intensity_driven,
+                                                    1.0,
+                                                    is_driven(r.node_doc_id, "intensity"),
                                                     0.0,
                                                     10.0,
                                                 )),
                                                 pos: (
-                                                    mrow(r.node_doc_id, "pos_x", row(r.node_doc_id, "pos_x", r.pos_value.0, r.pos_driven.0, -100.0, 100.0)),
-                                                    mrow(r.node_doc_id, "pos_y", row(r.node_doc_id, "pos_y", r.pos_value.1, r.pos_driven.1, -100.0, 100.0)),
-                                                    mrow(r.node_doc_id, "pos_z", row(r.node_doc_id, "pos_z", r.pos_value.2, r.pos_driven.2, -100.0, 100.0)),
+                                                    mrow(r.node_doc_id, "pos_x", row(r.node_doc_id, "pos_x", 0.0, is_driven(r.node_doc_id, "pos_x"), -100.0, 100.0)),
+                                                    mrow(r.node_doc_id, "pos_y", row(r.node_doc_id, "pos_y", 30.0, is_driven(r.node_doc_id, "pos_y"), -100.0, 100.0)),
+                                                    mrow(r.node_doc_id, "pos_z", row(r.node_doc_id, "pos_z", 0.0, is_driven(r.node_doc_id, "pos_z"), -100.0, 100.0)),
                                                 ),
                                                 aim: (
-                                                    mrow(r.node_doc_id, "aim_x", row(r.node_doc_id, "aim_x", r.aim_value.0, r.aim_driven.0, -100.0, 100.0)),
-                                                    mrow(r.node_doc_id, "aim_y", row(r.node_doc_id, "aim_y", r.aim_value.1, r.aim_driven.1, -100.0, 100.0)),
-                                                    mrow(r.node_doc_id, "aim_z", row(r.node_doc_id, "aim_z", r.aim_value.2, r.aim_driven.2, -100.0, 100.0)),
+                                                    mrow(r.node_doc_id, "aim_x", row(r.node_doc_id, "aim_x", 0.0, is_driven(r.node_doc_id, "aim_x"), -100.0, 100.0)),
+                                                    mrow(r.node_doc_id, "aim_y", row(r.node_doc_id, "aim_y", 0.0, is_driven(r.node_doc_id, "aim_y"), -100.0, 100.0)),
+                                                    mrow(r.node_doc_id, "aim_z", row(r.node_doc_id, "aim_z", 0.0, is_driven(r.node_doc_id, "aim_z"), -100.0, 100.0)),
                                                 ),
                                                 cast_shadows: enum_row(
                                                     r.node_doc_id,
                                                     "cast_shadows",
-                                                    r.cast_shadows_value as u32,
-                                                    r.cast_shadows_driven,
+                                                    1,
+                                                    is_driven(r.node_doc_id, "cast_shadows"),
                                                     CAST_SHADOWS_LABELS,
                                                 ),
                                                 shadow_softness: enum_row(
                                                     r.node_doc_id,
                                                     "shadow_softness",
-                                                    r.shadow_softness_value,
-                                                    r.shadow_softness_driven,
+                                                    1,
+                                                    is_driven(r.node_doc_id, "shadow_softness"),
                                                     SHADOW_SOFTNESS_LABELS,
                                                 ),
                                                 light_size: mrow(r.node_doc_id, "light_size", row(
                                                     r.node_doc_id,
                                                     "light_size",
-                                                    r.light_size_value,
-                                                    r.light_size_driven,
+                                                    1.0,
+                                                    is_driven(r.node_doc_id, "light_size"),
                                                     0.0,
                                                     20.0,
                                                 )),
@@ -2170,25 +2183,25 @@ pub fn sync_inspector_data(
                                     focus_distance: mrow(l.node_doc_id, "focus_distance", row(
                                         l.node_doc_id,
                                         "focus_distance",
-                                        l.focus_distance_value,
-                                        l.focus_distance_driven,
+                                        0.0,
+                                        is_driven(l.node_doc_id, "focus_distance"),
                                         0.0,
                                         1000.0,
                                     )),
-                                    f_stop: mrow(l.node_doc_id, "f_stop", row(l.node_doc_id, "f_stop", l.f_stop_value, l.f_stop_driven, 0.5, 1000.0)),
+                                    f_stop: mrow(l.node_doc_id, "f_stop", row(l.node_doc_id, "f_stop", 1000.0, is_driven(l.node_doc_id, "f_stop"), 0.5, 1000.0)),
                                     shutter_angle: mrow(l.node_doc_id, "shutter_angle", row(
                                         l.node_doc_id,
                                         "shutter_angle",
-                                        l.shutter_angle_value,
-                                        l.shutter_angle_driven,
+                                        0.0,
+                                        is_driven(l.node_doc_id, "shutter_angle"),
                                         0.0,
                                         360.0,
                                     )),
                                     exposure_ev: mrow(l.node_doc_id, "exposure_ev", row(
                                         l.node_doc_id,
                                         "exposure_ev",
-                                        l.exposure_ev_value,
-                                        l.exposure_ev_driven,
+                                        0.0,
+                                        is_driven(l.node_doc_id, "exposure_ev"),
                                         -8.0,
                                         8.0,
                                     )),
@@ -2198,10 +2211,10 @@ pub fn sync_inspector_data(
                                 manifold_renderer::node_graph::scene_vm::CameraVm::Orbit(c) => {
                                     manifold_ui::panels::scene_setup_panel::CameraRowVm::Orbit(Box::new(
                                         manifold_ui::panels::scene_setup_panel::OrbitCameraRowVm {
-                                            orbit: mrow(c.node_doc_id, "orbit", row(c.node_doc_id, "orbit", c.orbit_value, c.orbit_driven, -std::f32::consts::TAU, std::f32::consts::TAU)),
-                                            tilt: mrow(c.node_doc_id, "tilt", row(c.node_doc_id, "tilt", c.tilt_value, c.tilt_driven, -std::f32::consts::TAU, std::f32::consts::TAU)),
-                                            distance: mrow(c.node_doc_id, "distance", row(c.node_doc_id, "distance", c.distance_value, c.distance_driven, 0.01, 100.0)),
-                                            fov_y: mrow(c.node_doc_id, "fov_y", row(c.node_doc_id, "fov_y", c.fov_y_value, c.fov_y_driven, 0.05, 2.5)),
+                                            orbit: mrow(c.node_doc_id, "orbit", row(c.node_doc_id, "orbit", 0.7, is_driven(c.node_doc_id, "orbit"), -std::f32::consts::TAU, std::f32::consts::TAU)),
+                                            tilt: mrow(c.node_doc_id, "tilt", row(c.node_doc_id, "tilt", 0.3, is_driven(c.node_doc_id, "tilt"), -std::f32::consts::TAU, std::f32::consts::TAU)),
+                                            distance: mrow(c.node_doc_id, "distance", row(c.node_doc_id, "distance", 4.0, is_driven(c.node_doc_id, "distance"), 0.01, 100.0)),
+                                            fov_y: mrow(c.node_doc_id, "fov_y", row(c.node_doc_id, "fov_y", 0.9, is_driven(c.node_doc_id, "fov_y"), 0.05, 2.5)),
                                             lens: c.lens.as_ref().map(lens_row),
                                         },
                                     ))
@@ -2210,14 +2223,14 @@ pub fn sync_inspector_data(
                                     manifold_ui::panels::scene_setup_panel::CameraRowVm::Free(Box::new(
                                         manifold_ui::panels::scene_setup_panel::FreeCameraRowVm {
                                             pos: (
-                                                mrow(c.node_doc_id, "pos_x", row(c.node_doc_id, "pos_x", c.pos_value.0, c.pos_driven.0, -1000.0, 1000.0)),
-                                                mrow(c.node_doc_id, "pos_y", row(c.node_doc_id, "pos_y", c.pos_value.1, c.pos_driven.1, -1000.0, 1000.0)),
-                                                mrow(c.node_doc_id, "pos_z", row(c.node_doc_id, "pos_z", c.pos_value.2, c.pos_driven.2, -1000.0, 1000.0)),
+                                                mrow(c.node_doc_id, "pos_x", row(c.node_doc_id, "pos_x", 0.0, is_driven(c.node_doc_id, "pos_x"), -1000.0, 1000.0)),
+                                                mrow(c.node_doc_id, "pos_y", row(c.node_doc_id, "pos_y", 0.0, is_driven(c.node_doc_id, "pos_y"), -1000.0, 1000.0)),
+                                                mrow(c.node_doc_id, "pos_z", row(c.node_doc_id, "pos_z", -3.0, is_driven(c.node_doc_id, "pos_z"), -1000.0, 1000.0)),
                                             ),
-                                            yaw: mrow(c.node_doc_id, "yaw", row(c.node_doc_id, "yaw", c.yaw_value, c.yaw_driven, -std::f32::consts::TAU, std::f32::consts::TAU)),
-                                            pitch: mrow(c.node_doc_id, "pitch", row(c.node_doc_id, "pitch", c.pitch_value, c.pitch_driven, -1.5, 1.5)),
-                                            roll: mrow(c.node_doc_id, "roll", row(c.node_doc_id, "roll", c.roll_value, c.roll_driven, -std::f32::consts::TAU, std::f32::consts::TAU)),
-                                            fov_y: mrow(c.node_doc_id, "fov_y", row(c.node_doc_id, "fov_y", c.fov_y_value, c.fov_y_driven, 0.05, 2.5)),
+                                            yaw: mrow(c.node_doc_id, "yaw", row(c.node_doc_id, "yaw", 0.0, is_driven(c.node_doc_id, "yaw"), -std::f32::consts::TAU, std::f32::consts::TAU)),
+                                            pitch: mrow(c.node_doc_id, "pitch", row(c.node_doc_id, "pitch", 0.0, is_driven(c.node_doc_id, "pitch"), -1.5, 1.5)),
+                                            roll: mrow(c.node_doc_id, "roll", row(c.node_doc_id, "roll", 0.0, is_driven(c.node_doc_id, "roll"), -std::f32::consts::TAU, std::f32::consts::TAU)),
+                                            fov_y: mrow(c.node_doc_id, "fov_y", row(c.node_doc_id, "fov_y", 0.9, is_driven(c.node_doc_id, "fov_y"), 0.05, 2.5)),
                                             lens: c.lens.as_ref().map(lens_row),
                                         },
                                     ))
@@ -2226,16 +2239,16 @@ pub fn sync_inspector_data(
                                     manifold_ui::panels::scene_setup_panel::CameraRowVm::LookAt(Box::new(
                                         manifold_ui::panels::scene_setup_panel::LookAtCameraRowVm {
                                             pos: (
-                                                mrow(c.node_doc_id, "pos_x", row(c.node_doc_id, "pos_x", c.pos_value.0, c.pos_driven.0, -1000.0, 1000.0)),
-                                                mrow(c.node_doc_id, "pos_y", row(c.node_doc_id, "pos_y", c.pos_value.1, c.pos_driven.1, -1000.0, 1000.0)),
-                                                mrow(c.node_doc_id, "pos_z", row(c.node_doc_id, "pos_z", c.pos_value.2, c.pos_driven.2, -1000.0, 1000.0)),
+                                                mrow(c.node_doc_id, "pos_x", row(c.node_doc_id, "pos_x", 0.0, is_driven(c.node_doc_id, "pos_x"), -1000.0, 1000.0)),
+                                                mrow(c.node_doc_id, "pos_y", row(c.node_doc_id, "pos_y", 0.0, is_driven(c.node_doc_id, "pos_y"), -1000.0, 1000.0)),
+                                                mrow(c.node_doc_id, "pos_z", row(c.node_doc_id, "pos_z", -3.0, is_driven(c.node_doc_id, "pos_z"), -1000.0, 1000.0)),
                                             ),
                                             target: (
-                                                mrow(c.node_doc_id, "target_x", row(c.node_doc_id, "target_x", c.target_value.0, c.target_driven.0, -1000.0, 1000.0)),
-                                                mrow(c.node_doc_id, "target_y", row(c.node_doc_id, "target_y", c.target_value.1, c.target_driven.1, -1000.0, 1000.0)),
-                                                mrow(c.node_doc_id, "target_z", row(c.node_doc_id, "target_z", c.target_value.2, c.target_driven.2, -1000.0, 1000.0)),
+                                                mrow(c.node_doc_id, "target_x", row(c.node_doc_id, "target_x", 0.0, is_driven(c.node_doc_id, "target_x"), -1000.0, 1000.0)),
+                                                mrow(c.node_doc_id, "target_y", row(c.node_doc_id, "target_y", 0.0, is_driven(c.node_doc_id, "target_y"), -1000.0, 1000.0)),
+                                                mrow(c.node_doc_id, "target_z", row(c.node_doc_id, "target_z", 0.0, is_driven(c.node_doc_id, "target_z"), -1000.0, 1000.0)),
                                             ),
-                                            fov_y: mrow(c.node_doc_id, "fov_y", row(c.node_doc_id, "fov_y", c.fov_y_value, c.fov_y_driven, 0.05, 2.5)),
+                                            fov_y: mrow(c.node_doc_id, "fov_y", row(c.node_doc_id, "fov_y", 0.9, is_driven(c.node_doc_id, "fov_y"), 0.05, 2.5)),
                                             lens: c.lens.as_ref().map(lens_row),
                                         },
                                     ))
@@ -2288,39 +2301,47 @@ pub fn sync_inspector_data(
                                 use manifold_renderer::node_graph::scene_vm::{AtmosphereVm, EnvironmentVm};
                                 let mut ids = Vec::new();
                                 match &vm.environment {
-                                    EnvironmentVm::Importer(e) => ids.push(e.intensity_addr.node_doc_id),
-                                    EnvironmentVm::Bare(e) => ids.push(e.intensity_addr.node_doc_id),
+                                    EnvironmentVm::Importer(e) => ids.push(e.bake_node_id),
+                                    EnvironmentVm::Bare(e) => ids.push(e.node_doc_id),
                                     EnvironmentVm::Custom { .. } | EnvironmentVm::None => {}
                                 }
                                 if let AtmosphereVm::Wired(a) = &vm.atmosphere {
-                                    ids.push(a.density_addr.node_doc_id);
+                                    ids.push(a.node_doc_id);
                                 }
                                 sections_for_doc_ids(def.as_ref(), &ids)
                             };
                             let environment = match vm.environment {
                                 manifold_renderer::node_graph::scene_vm::EnvironmentVm::Importer(e) => {
                                     EnvironmentRowVm::Importer {
-                                        mode_is_hdri: e.mode_value != 0,
+                                        // BUG-260's dead-chip case (design
+                                        // doc §3b.9): reads through
+                                        // `display_value` like every other
+                                        // row so a bound "selector" still
+                                        // shows correctly; still not a
+                                        // clickable RowValue — unchanged
+                                        // pre-existing behavior, not this
+                                        // lane's scope.
+                                        mode_is_hdri: display_value(e.switch_node_id, "selector", 0.0) != 0.0,
                                         intensity: mrow(
-                                            e.intensity_addr.node_doc_id,
+                                            e.bake_node_id,
                                             "intensity",
                                             row(
-                                                e.intensity_addr.node_doc_id,
-                                                &e.intensity_addr.param_id,
-                                                e.intensity_value,
-                                                e.intensity_driven,
+                                                e.bake_node_id,
+                                                "intensity",
+                                                1.0,
+                                                is_driven(e.bake_node_id, "intensity"),
                                                 0.0,
                                                 4.0,
                                             ),
                                         ),
                                         fill: mrow(
-                                            e.fill_addr.node_doc_id,
+                                            e.bake_node_id,
                                             "fill",
                                             row(
-                                                e.fill_addr.node_doc_id,
-                                                &e.fill_addr.param_id,
-                                                e.fill_value,
-                                                e.fill_driven,
+                                                e.bake_node_id,
+                                                "fill",
+                                                0.0,
+                                                is_driven(e.bake_node_id, "fill"),
                                                 0.0,
                                                 2.0,
                                             ),
@@ -2331,25 +2352,25 @@ pub fn sync_inspector_data(
                                 manifold_renderer::node_graph::scene_vm::EnvironmentVm::Bare(e) => {
                                     EnvironmentRowVm::Bare {
                                         intensity: mrow(
-                                            e.intensity_addr.node_doc_id,
+                                            e.node_doc_id,
                                             "intensity",
                                             row(
-                                                e.intensity_addr.node_doc_id,
-                                                &e.intensity_addr.param_id,
-                                                e.intensity_value,
-                                                e.intensity_driven,
+                                                e.node_doc_id,
+                                                "intensity",
+                                                1.0,
+                                                is_driven(e.node_doc_id, "intensity"),
                                                 0.0,
                                                 4.0,
                                             ),
                                         ),
                                         fill: mrow(
-                                            e.fill_addr.node_doc_id,
+                                            e.node_doc_id,
                                             "fill",
                                             row(
-                                                e.fill_addr.node_doc_id,
-                                                &e.fill_addr.param_id,
-                                                e.fill_value,
-                                                e.fill_driven,
+                                                e.node_doc_id,
+                                                "fill",
+                                                0.0,
+                                                is_driven(e.node_doc_id, "fill"),
                                                 0.0,
                                                 2.0,
                                             ),
@@ -2367,31 +2388,31 @@ pub fn sync_inspector_data(
                                 manifold_renderer::node_graph::scene_vm::AtmosphereVm::Wired(a) => {
                                     AtmosphereRowVm::Wired {
                                         density: mrow(
-                                            a.density_addr.node_doc_id,
+                                            a.node_doc_id,
                                             // BUG-249: the GRAPH param key
                                             // ("fog_density"), not the panel's
                                             // curated row key ("density") —
                                             // `scene_row_modulation` resolves
                                             // the binding by the inner node's
                                             // real param name.
-                                            &a.density_addr.param_id,
+                                            "fog_density",
                                             row(
-                                                a.density_addr.node_doc_id,
-                                                &a.density_addr.param_id,
-                                                a.density_value,
-                                                a.density_driven,
+                                                a.node_doc_id,
+                                                "fog_density",
+                                                0.0,
+                                                is_driven(a.node_doc_id, "fog_density"),
                                                 0.0,
                                                 1.0,
                                             ),
                                         ),
                                         height_falloff: mrow(
-                                            a.height_falloff_addr.node_doc_id,
+                                            a.node_doc_id,
                                             "height_falloff",
                                             row(
-                                                a.height_falloff_addr.node_doc_id,
-                                                &a.height_falloff_addr.param_id,
-                                                a.height_falloff_value,
-                                                a.height_falloff_driven,
+                                                a.node_doc_id,
+                                                "height_falloff",
+                                                0.0,
+                                                is_driven(a.node_doc_id, "height_falloff"),
                                                 0.0,
                                                 2.0,
                                             ),
