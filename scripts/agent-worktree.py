@@ -45,6 +45,10 @@ workstreams actually happen).
 
 Release is an optimization, not a safety mechanism: a forgotten lease
 expires after LEASE_TTL_HOURS and only ever pins one slot.
+
+Acquire also drops a `.metadata_never_index` marker at the pool root so
+Spotlight never indexes the slot target/ dirs (BUG-297 machine-lockup
+relief — see ensure_spotlight_exclusion).
 """
 
 import argparse
@@ -189,7 +193,28 @@ def cmd_list(_args):
               f"{head}  {warm:14} {reason}")
 
 
+def ensure_spotlight_exclusion():
+    """Keep the whole pool out of Spotlight — idempotent, self-healing.
+
+    Each slot's target/ is tens of GB of Rust build artifacts (BUG-297:
+    six 19-25 GB targets churned by concurrent lanes made mds_stores
+    re-index continuously, dirtying ~8.6 GB of mds_stores over one
+    orchestration window and thrashing the machine). A `.metadata_never_index`
+    file at the pool root excludes the entire subtree — every slot, its
+    target/, and its checkout — from Spotlight (Apple-documented, no sudo,
+    honored for the whole directory tree). It sits ABOVE target/ so
+    `cargo clean` never removes it; recreating it here on every acquire
+    means it survives the pool dir being deleted/recreated. The marker
+    lives in gitignored space, so THIS is its durable source of truth.
+    """
+    POOL.mkdir(parents=True, exist_ok=True)
+    marker = POOL / ".metadata_never_index"
+    if not marker.exists():
+        marker.write_text("")
+
+
 def cmd_acquire(args):
+    ensure_spotlight_exclusion()
     git(REPO, "fetch", "origin", "main")
     tip = args.tip or "origin/main"
     slots = pool_slots()
