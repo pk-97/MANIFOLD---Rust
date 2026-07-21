@@ -16,8 +16,19 @@ Design-doc P-S headline amendment is drafted at phase close (my close report).
 - Relight rows stay OUT of RowHost (census: not `row_index`'d — `handle_click` special-cases
   them; forcing them in is invention). Do not migrate `build_relight_rows` into RowHost.
 - NAMED ESCALATION POINTS — executing seat PAUSES and asks team-lead via me, never guesses:
-  (1) RowMod home (param_card.rs:234-296 — projection module vs param_surface/state?)
-  (2) generator string-param path (ParamCardStringInfo, param_card.rs:118, :3725).
+  (1) RowMod home (param_card.rs:237 — projection/model vs param_surface/state?)
+  (2) generator string-param path (ParamCardStringInfo, param_card.rs:121, :3726).
+  DISPATCHER PRE-FRAME (read-only evidence, gathered while P-S1 ran; team-lead still decides):
+  - RowMod: defined in param_card.rs but consumed CROSS-LAYER — crate-root `param_surface.rs`
+    already embeds it as `ParamRow.modulation: RowMod` (:95) and re-exports it via lib.rs:77;
+    also consumed by param_slider_shared (`ParamModState::sync_from_config(&[RowMod])`),
+    scene_setup_panel (`RowModulation`/RowMod), inspector tests. It is a shared projection/model
+    VM type, NOT param_card-private runtime — evidence points to the crate-root `param_surface`
+    MODEL home (with `ParamRow`), NOT RowHost's imperative state. Recommendation to team-lead when
+    P-S2 escalates: RowMod stays with the model layer; RowHost does not own it.
+  - ParamCardStringInfo: field of crate-root `ParamSurface.string_params` (:123), re-exported via
+    lib.rs; generator-only; explicitly OUTSIDE row_index scope (param_card.rs:3726 "separate slot").
+    Confirms census — stays OUT of RowHost (like relight rows). Home = model/generator surface.
 
 ## Per-slice gates (quote in commit messages; every cargo cmd via .claude/scripts/with-build-lock.sh)
 - Pure moves: `python3 scripts/move_identity_check.py <commit>` → residue 0 (scaffold classes established).
@@ -33,14 +44,25 @@ Design-doc P-S headline amendment is drafted at phase close (my close report).
 
 - [x] **P-S0** precondition: P-I landed. SATISFIED — origin/main @ a5bcaaf1 (D-37). No action.
 
-- [ ] **P-S1** `param_slider_shared.rs` layer split (PURE MOVE · ONE Sonnet lane · move_identity gate)
-      Split `crates/manifold-ui/src/panels/param_slider_shared.rs` (3160) into
-      `panels/param_surface/{builders,state,routing,geometry}.rs` per census §4 buckets:
+- [x] **P-S1** DONE — commit `1d724165`, five-file split. move_identity residue 2 (INDEPENDENTLY
+      RERUN, matches lane report): both lines are the sanctioned `no_bespoke_row_infra.rs` allowlist
+      filename swap `"param_slider_shared.rs"`→`"builders.rs"` — a legitimate sibling-test edit the
+      split forces, REVIEWED+ACCEPTED by team-lead (the eyeball the verifier docstring names).
+      Build/test gates INDEPENDENTLY GREEN: check=0, clippy(-D warnings)=0, nextest=0 (1172 passed
+      incl. no_bespoke_row_infra), renderer ui_color_swatches --no-run=0 (D-37). Carry-forward lessons from this lane
+      (team-lead): honest true-number-over-expected residue reporting; ast-grep/tree-sitter span
+      derivation for split ranges, NEVER hand-transcribed line numbers — bake into remaining briefs.
+      DISPATCHER DECISION (module-name preserved for pure-move property): split
+      `crates/manifold-ui/src/panels/param_slider_shared.rs` (3160) into a DIRECTORY module of
+      the SAME name — `panels/param_slider_shared/{mod,builders,state,routing,geometry}.rs` — with
+      `mod.rs` `pub use`-re-exporting every item so all external `param_slider_shared::X` paths stay
+      valid (renaming to `param_surface/` would churn call sites across the crate = residue, blows the
+      gate; crate-root `param_surface.rs` is the model layer and imports FROM here, so the builders
+      belong in panels). Census §4 buckets:
       - builders.rs: all `build_*` + styles + `build_mod_tab_strip` + Surface helpers
       - state.rs: `ParamModState`/`AudioRowState`/`AudioCardState`/`ParamDragState` + all id-bundle structs
       - routing.rs: `*Ids::resolve`, `resolve_audio_config_click`, `enum_value_cell_actions`
       - geometry.rs: `trim_bar_rects`/`target_bar_rect`/`reposition_trim_bars`
-      Re-export from a `param_surface/mod.rs` (or keep `param_slider_shared` as facade) preserving paths.
       Inline test mods follow their fns (D7a scaffold class). Does NOT touch escalation points.
       Gate: move_identity residue 0 + clippy/check + nextest(ui,app) + swatch --no-run + no_bespoke_row_infra.
 
