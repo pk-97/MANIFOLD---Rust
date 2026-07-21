@@ -35,8 +35,9 @@ pub fn sync_scene_row_values(ui: &mut UIRoot, project: &Project) {
     // layer its panel is docked to, which can differ from the app's active
     // layer — BUG-292).
     if let Some(gp) = gen_inst {
-        let slots = crate::ui_translate::param_slots_to_ui(&gp.params);
-        ui.scene_setup_panel.sync_properties_values(&mut ui.tree, &slots);
+        crate::ui_translate::with_param_slots(&gp.params, |slots| {
+            ui.scene_setup_panel.sync_properties_values(&mut ui.tree, slots)
+        });
     }
 }
 

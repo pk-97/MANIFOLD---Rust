@@ -440,9 +440,26 @@ pub fn param_slot_to_ui(p: &Param) -> UiParamSlot {
     }
 }
 
-/// Project a manifest into the UI's positional slot view (card order).
-pub fn param_slots_to_ui(params: &ParamManifest) -> Vec<UiParamSlot> {
-    params.iter().map(param_slot_to_ui).collect()
+thread_local! {
+    /// UI-thread scratch for [`with_param_slots`], reused across the several
+    /// per-frame card-value syncs so projecting a manifest into the positional
+    /// slot view never allocates on the hot path (D10,
+    /// `docs/UI_FUNNEL_DECOMPOSITION_DESIGN.md`; INV-W4).
+    static PARAM_SLOT_SCRATCH: std::cell::RefCell<Vec<UiParamSlot>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Project a manifest into the UI's positional slot view (card order) using a
+/// reused thread-local scratch buffer, handing the filled slice to `f`. The
+/// per-frame-alloc-free form of the former `param_slots_to_ui` (D10):
+/// `sync_card_values` calls this several times per frame per window, so a fresh
+/// `Vec` per call was a hot-path allocation.
+pub fn with_param_slots<R>(params: &ParamManifest, f: impl FnOnce(&[UiParamSlot]) -> R) -> R {
+    PARAM_SLOT_SCRATCH.with_borrow_mut(|scratch| {
+        scratch.clear();
+        scratch.extend(params.iter().map(param_slot_to_ui));
+        f(scratch)
+    })
 }
 
 // ── "3D Shading" relight (docs/DEPTH_RELIGHT_DESIGN.md P5b) ────────────────

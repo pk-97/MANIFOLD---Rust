@@ -41,7 +41,9 @@ pub fn sync_card_values(ui: &mut UIRoot, project: &Project, active_layer: Option
                 manifold_core::preset_type_registry::display_name(effect.effect_type()),
             );
             card.sync_enabled(tree, effect.enabled);
-            card.sync_values(tree, &crate::ui_translate::param_slots_to_ui(&effect.params));
+            crate::ui_translate::with_param_slots(&effect.params, |slots| {
+                card.sync_values(tree, slots)
+            });
         }
     }
 
@@ -57,7 +59,9 @@ pub fn sync_card_values(ui: &mut UIRoot, project: &Project, active_layer: Option
                     manifold_core::preset_type_registry::display_name(effect.effect_type()),
                 );
                 card.sync_enabled(tree, effect.enabled);
-                card.sync_values(tree, &crate::ui_translate::param_slots_to_ui(&effect.params));
+                crate::ui_translate::with_param_slots(&effect.params, |slots| {
+                    card.sync_values(tree, slots)
+                });
             }
         }
     }
@@ -72,7 +76,9 @@ pub fn sync_card_values(ui: &mut UIRoot, project: &Project, active_layer: Option
             tree,
             manifold_core::preset_type_registry::display_name(gp_state.generator_type()),
         );
-        gp.sync_values(tree, &crate::ui_translate::param_slots_to_ui(&gp_state.params));
+        crate::ui_translate::with_param_slots(&gp_state.params, |slots| {
+            gp.sync_values(tree, slots)
+        });
     }
 }
 
