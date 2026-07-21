@@ -38,6 +38,18 @@ the exit codes). Covers:
                                                            still caught, proving
                                                            generics no longer
                                                            mask genuine deletions)
+ 15. drifted preamble,    → exit 0, residue 0            (S5b: a sibling block
+     moved-flagged `);`                                    moves to a file that
+                                                           contains an identical
+                                                           `);`, so git flags the
+                                                           drifted preamble's own
+                                                           `);` as MOVED — the
+                                                           tracker must still
+                                                           advance through it so
+                                                           the NEXT drifted line
+                                                           doesn't fall to
+                                                           residue; reproduces
+                                                           fb59db17's residue-1)
 
 Run: python3 scripts/test_move_identity_check.py   (exit 0 = all pass)
 """
@@ -335,6 +347,37 @@ OUT_OF_SEQUENCE_CLOSE_PAREN_AFTER = (
 )
 
 
+# S5b fixture (see classify()'s "S5b fix" comments): reproduces the exact
+# moved-flag/tracker-desync collision the fix addresses. `caller()` is a
+# ≥3-line block that moves verbatim to sub.rs (so git detects it as MOVED),
+# and it happens to contain a `);` line IDENTICAL to the drifted preamble's
+# own `);` closer (DRIFTED_PREAMBLE_SEQUENCE[5]). Confirmed against real git
+# output: with both the caller() move and the drifted-preamble removal in the
+# same diff, git's `--color-moved` independently flags that drifted `);` line
+# as moved (it content-matches caller()'s own `);`, added elsewhere), even
+# though it's really the dead drifted preamble being deleted, not a move.
+# This is the exact shape of fb59db17's residue-1 regression: pre-S5b-fix,
+# the moved-flagged `);` would `continue` before the tracker ever consulted
+# it, leaving drifted_idx one step behind so the NEXT drifted line — `let
+# active_layer: &Option<LayerId> = ...` — no longer matched
+# DRIFTED_PREAMBLE_SEQUENCE[drifted_idx] and fell to residue. Verified
+# directly (outside this harness) that the pre-fix checker gives exit 1,
+# residue 1, with exactly that line as the reported residue; the post-fix
+# checker gives exit 0, residue 0 on the identical fixture.
+MOVED_COLLISION_CALLER = (
+    "fn caller() {\n"
+    "    do_thing(\n"
+    "        alpha,\n"
+    "        beta,\n"
+    "    );\n"
+    "    tail();\n"
+    "}\n"
+)
+MOVED_COLLISION_BASE = (
+    MOVED_COLLISION_CALLER + "\n" + DISPATCH_PARAMS_BASE_DRIFTED + "// tail\n"
+)
+
+
 def case_pure_move(repo: Path) -> tuple[bool, str]:
     commit_tree(repo, {"a.rs": HELPER + "// tail\n", "b.rs": "// b\n"}, "base")
     commit_tree(repo, {"a.rs": "// tail\n", "b.rs": "// b\n" + HELPER}, "move")
@@ -486,6 +529,19 @@ def case_out_of_sequence_close_paren(repo: Path) -> tuple[bool, str]:
     return ok, f"exit={code} {out.splitlines()[0]}"
 
 
+def case_drifted_preamble_moved_collision(repo: Path) -> tuple[bool, str]:
+    commit_tree(repo, {"inspector.rs": MOVED_COLLISION_BASE}, "base")
+    commit_tree(
+        repo,
+        {"inspector.rs": "// tail\n", "sub.rs": MOVED_COLLISION_CALLER,
+         "params.rs": PARAMS_MODULE},
+        "split-with-moved-flagged-drifted-close-paren",
+    )
+    code, out = run_checker(repo)
+    ok = code == 0 and field(out, "residue") == 0
+    return ok, f"exit={code} {out.splitlines()[0]}"
+
+
 CASES = [
     ("pure move -> exit 0", case_pure_move),
     ("smuggled edit -> exit 1", case_smuggled),
@@ -502,6 +558,8 @@ CASES = [
     ("impl-wrapper body edit -> exit 1 [D-15]", case_impl_wrapper_body_edit),
     ("out-of-sequence \");\" removal -> exit 1 [D-21, CAUGHT]",
      case_out_of_sequence_close_paren),
+    ("drifted preamble removed, moved-flagged \");\" -> exit 0 [S5b, PROVEN]",
+     case_drifted_preamble_moved_collision),
 ]
 
 

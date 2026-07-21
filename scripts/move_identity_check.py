@@ -294,6 +294,63 @@ def classify(out: str) -> tuple[dict[str, int], list[str]]:
             # progress (the removed lines a chain tracks are no longer
             # contiguous once an addition interrupts them).
             drifted_idx = None
+        # Drifted-preamble removal-side sequence MATCH/ADVANCE (D-21, S5b
+        # fix): computed BEFORE the is_moved short-circuit below, for every
+        # removal-side line unconditionally. git's move detector works on
+        # CONTENT identity alone — it flags a drifted removal line "moved"
+        # whenever some other hunk happens to add an identical line
+        # elsewhere (e.g. the short generic `");"` closer, which recurs
+        # verbatim in code that moved to a sibling module — confirmed
+        # against fb59db17's real diff). If the tracker were only consulted
+        # after the is_moved continue (as it was pre-S5b), such a line would
+        # be counted moved and skip the tracker entirely, leaving drifted_idx
+        # one step behind for every subsequent line — desyncing the sequence
+        # and surfacing a genuinely-dead later line as residue. Checking the
+        # match here, ahead of is_moved, means a matching line ADVANCES the
+        # tracker regardless of its moved-flag, keeping drifted_idx's
+        # position a function of the CONTENT sequence of removal-side lines,
+        # not of git's moved-flag.
+        #
+        # DISARM-on-mismatch deliberately stays OUT of this block (unlike the
+        # pre-S5b single-site version) and is decided below instead, at the
+        # original fallthrough site, AFTER open_block/ALLOW/COMMENT/
+        # PREAMBLE_LINES/SCAFFOLD have all had a chance to claim the line.
+        # Reason (also confirmed against fb59db17's real diff): the actual
+        # drifted preamble in inspector.rs has two ordinary comment lines
+        # ("// No arm mutates …") sitting between the sequence's `);` closer
+        # and its final `let active_layer: …` line — comment lines that were
+        # ALWAYS transparent to this tracker pre-S5b, because they are
+        # consumed by the COMMENT check (below) and `continue` before ever
+        # reaching the old single-site drifted check. Disarming here
+        # unconditionally on every non-matching removal line (including
+        # those comments) would break that transparency and reproduce a
+        # residue-1 regression of its own. So: ADVANCE is unconditional and
+        # happens here; DISARM only fires for a line that reaches the
+        # bottom of the classification chain without being claimed by
+        # anything else — exactly where it fired pre-S5b.
+        #
+        # ADVANCE is decoupled from CLASSIFICATION either way: this block
+        # only updates drifted_idx and records whether this line matched
+        # (drifted_match) — it does NOT touch counts. The line's bucket is
+        # decided further down: a moved line stays moved (the is_moved
+        # continue right here, untouched, no double-count); a non-moved
+        # matched line becomes scaffold at the original site; a non-moved
+        # unmatched line that reaches the bottom disarms the tracker there
+        # and falls to residue — the smuggle-proof catch (a lone
+        # out-of-sequence `");"` etc. is still residue) is unchanged.
+        drifted_match = False
+        if sign == "-":
+            body = _normalize_ws(plain[1:])
+            if drifted_idx is not None and body == DRIFTED_PREAMBLE_SEQUENCE[drifted_idx]:
+                drifted_match = True
+                drifted_idx += 1
+                if drifted_idx == len(DRIFTED_PREAMBLE_SEQUENCE):
+                    drifted_idx = None  # sequence complete: disarm
+            elif body == DRIFTED_PREAMBLE_SEQUENCE[0]:
+                # Either a fresh arm, or a mismatch that happens to be a new
+                # opener — re-arm on it either way.
+                drifted_match = True
+                drifted_idx = 1
         if is_moved:
             counts["moved"] += 1
             continue
@@ -324,28 +381,21 @@ def classify(out: str) -> tuple[dict[str, int], list[str]]:
             counts["scaffold"] += 1
             continue
         if sign == "-":
-            # Drifted-preamble removal-side sequence matcher (D-21). ARM only
-            # on the exact opener; while armed, advance only on the exact
-            # expected next line; disarm on completion (whole sequence
-            # matched) or on any mismatch. A mismatching line is NOT counted
-            # as scaffold — it falls straight through to residue below,
-            # exactly like any other genuinely deleted line — which is the
-            # whole point: a lone out-of-sequence `");"` (or any other short
-            # generic in this set) must still be caught, not masked.
-            body = _normalize_ws(plain[1:])
-            if drifted_idx is not None and body == DRIFTED_PREAMBLE_SEQUENCE[drifted_idx]:
+            # Reaching here means this line is NOT moved, and none of
+            # open_block/ALLOW/COMMENT/PREAMBLE_LINES/SCAFFOLD claimed it —
+            # the original fallthrough site (D-21), now driven by the
+            # match already computed above (S5b) rather than re-deriving it.
+            if drifted_match:
                 counts["scaffold"] += 1
-                drifted_idx += 1
-                if drifted_idx == len(DRIFTED_PREAMBLE_SEQUENCE):
-                    drifted_idx = None  # sequence complete: disarm
                 continue
-            if body == DRIFTED_PREAMBLE_SEQUENCE[0]:
-                # Either a fresh arm, or a mismatch that happens to be a new
-                # opener — re-arm on it either way.
-                counts["scaffold"] += 1
-                drifted_idx = 1
-                continue
-            drifted_idx = None  # disarm: this line is not part of the chain
+            # DISARM here, not in the pre-is_moved block above: this is the
+            # instant a removal-side line breaks the chain FOR REAL (it
+            # wasn't absorbed as comment/wiring/scaffold either), so the next
+            # line must not inherit a stale armed sequence — exactly the
+            # pre-S5b disarm-on-mismatch behavior, just relocated to keep
+            # comment/wiring/scaffold lines transparent to the tracker (see
+            # the comment above).
+            drifted_idx = None
         residue.append(plain)
     return counts, residue
 
