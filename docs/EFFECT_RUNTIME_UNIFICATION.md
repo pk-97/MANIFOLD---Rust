@@ -2,6 +2,8 @@
 
 **Status:** Closed. Phases 1–4 shipped through the May 2026 migration sweep. The legacy `EffectChain` runtime was deleted; the graph runtime is the sole dispatcher. The bindings unification (separately tracked in [BINDINGS_UNIFICATION_PLAN.md](BINDINGS_UNIFICATION_PLAN.md)) and the JSON-authoritative preset migration both ride on top of the unified runtime documented here. The §0 "true goal" framing remains the canonical north star — the primitive library *is* the product.
 
+> **Supersession note (2026-07-22, UI_FUNNEL P-Z):** references below to `dispatch_inspector` / `ActiveInspectorDrag` / `PanelAction` trio variants describe the PRE-decomposition architecture. Current state: 12 flat domain enums + exhaustive router (P-D), one Scrub gesture wire with `ScrubState.active` (P-I, `ActiveInspectorDrag` extinct), per-domain `dispatch/` handlers (P-B). Anchors here are historical.
+
 **Last updated:** 2026-05-17 (Phase 1–3 completion) / 2026-05-19 (status note)
 
 **Companion docs:** [`NODE_GRAPH_SYSTEM.md`](NODE_GRAPH_SYSTEM.md) — overall node-graph architecture. [`MANIFOLD_GPU_ARCHITECTURE.md`](MANIFOLD_GPU_ARCHITECTURE.md) — manifold-gpu crate. [`PRIMITIVE_LIBRARY_DESIGN.md`](PRIMITIVE_LIBRARY_DESIGN.md) — Phase 4a primitive catalog, decomposition recipes, parity test spec.
