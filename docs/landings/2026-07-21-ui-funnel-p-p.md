@@ -34,3 +34,9 @@ None in the landed code. Process deviation, recorded honestly: the executing sea
 1. Open any project with a layer effect → inspector card values update live under playback (projection path).
 2. Scrub any card slider mid-playback → value follows, exactly one undo entry (rider path, `undo_baseline` contract).
 3. Open the scene panel on a 3D layer → properties rows show live values (scene projection path).
+
+## Push-time addendum (gates run by the orchestrating session, warm main checkout)
+
+- Full sweep post-merge: `Summary [171.697s] 3850 tests run: 3850 passed (16 slow), 13 skipped`; `cargo clippy --workspace --tests -- -D warnings` exit 0; `cargo deny check bans` → `bans ok`.
+- Flows: **17/17 green** — all 15 `scene-setup-*` (14 `gltfscene`, `empty-states` `timeline`), `drag-clip` (`timeline`), `select-and-inspect` (`inspector`). One false FAIL during the run: `select-and-inspect` was first invoked under the wrong scene (`timeline`) from lore-based mapping — flow→scene mapping is not machine-readable. The P-B brief carries the fix as a deliverable: `scripts/ui-flows/manifest.json` + `run_ui_flows.py` so the BUG-252 count-match gate becomes mechanical.
+- Level reached: **L3** on the flow subset above; full-suite count-match deferred to the manifest (this landing's subset was chosen by documented mapping, not post hoc).
