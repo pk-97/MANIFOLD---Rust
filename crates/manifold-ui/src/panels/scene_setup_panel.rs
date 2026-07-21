@@ -19,7 +19,7 @@
 //! handling) — never a new mutation path. No direct project mutation and no
 //! shared-lock wrapper types appear anywhere in this file (§4 negative gate).
 
-use crate::{MappingAction, ModulationAction, ParamsAction, ProjectAction, RootAction};
+use crate::{ProjectAction, RootAction};
 use crate::chrome::{ChromeHost, Pad, Sizing, View};
 use crate::color;
 use crate::input::UIEvent;
@@ -29,14 +29,12 @@ use crate::tree::UITree;
 use manifold_foundation::{AudioSendId, LayerId};
 
 use super::{GraphParamTarget, PanelAction, ScrubPhase, ScrubValue, ValueRef};
-use super::drawer::DrawerIds;
+use super::copy_to_clipboard_label::CopyToClipboardLabelState;
 use super::param_card::{RowGeometry, RowMod};
 use super::param_slider_shared::{
-    AbletonConfigIds, AudioCardState, AudioConfigClick, DriverConfigIds, EnvelopeConfigIds,
-    EnvelopeTargetIds, ModTab, ParamModState, TrimHandleIds, build_param_row, enum_value_cell_actions,
-    resolve_audio_config_click,
+    AudioCardState, ModTab, ParamModState, RowHost, build_param_row,
 };
-use crate::param_surface::{ParamRow, ParamSurface, RowIndex, RowMapping, RowRole, RowSpec};
+use crate::param_surface::{ParamRow, ParamSurface, RowMapping, RowRole, RowSpec};
 
 // ── Stable keys ──
 const KEY_BG: u64 = 80_001;
@@ -587,40 +585,26 @@ struct SceneCardState {
     /// `configure_from_filtered`, kept fresh every frame by
     /// `ScenePanel::sync_properties_values`.
     current_values: Vec<f32>,
-    slider_ids: Vec<Option<crate::slider::SliderNodeIds>>,
-    /// Fixed-slot twin of `slider_ids`: the main slider's right-click reset
-    /// (`build_param_row`'s `slider_reset`), replayed into node-intent
-    /// dispatch by [`SceneCardState::register_intents`] — the same
-    /// track+RightClick→reset contract every other slider in the app has.
-    slider_resets: Vec<Option<PanelAction>>,
-    row_catcher_ids: Vec<Option<NodeId>>,
-    driver_btn_ids: Vec<Option<NodeId>>,
-    envelope_btn_ids: Vec<Option<NodeId>>,
-    driver_config_ids: Vec<Option<DriverConfigIds>>,
-    /// Always `None` — no Ableton mapping surface on scene rows this phase
-    /// (an all-`None` vector is a legitimate "never active" input, not a
-    /// stub).
-    ableton_config_ids: Vec<Option<AbletonConfigIds>>,
-    audio_btn_ids: Vec<Option<NodeId>>,
-    audio_configs: Vec<Option<(DrawerIds, usize)>>,
-    trim_ids: Vec<Option<TrimHandleIds>>,
-    target_ids: Vec<Option<EnvelopeTargetIds>>,
-    envelope_config_ids: Vec<Option<EnvelopeConfigIds>>,
-    /// Always `None` — no OSC address surface on scene rows this phase.
+    /// Always `None` — no OSC address surface on scene rows this phase. Kept
+    /// panel-side (like `ParamCardPanel::osc_addresses`) and passed by ref to
+    /// `RowHost::row_action`, which reads it to gate the label-copy path.
     osc_addresses: Vec<Option<String>>,
-    mod_tab_ids: Vec<Vec<(NodeId, ModTab)>>,
     mod_active_tab: Vec<ModTab>,
     /// One `SliderDragState` per row — the card drag protocol (D4): a
     /// track pointer-down snapshots + starts an absolute-position drag
     /// (mirrors `ScenePanel::metallic_slider`/`roughness_slider`, generalized
     /// to N rows), motion writes live, release commits ONE undo unit.
     drag_sliders: Vec<crate::slider::SliderDragState>,
-    /// P2 slice 2b (`docs/WIDGET_TREE_DESIGN.md` §4): widget → `(row, role)`
-    /// for every interactive node this card's rows minted — populated by
-    /// `reindex_row` right after a row's fields are set, cleared at the top
-    /// of every `resize`. The only sanctioned way `ScenePanel::handle_event`
-    /// identifies a row element, mirroring `ParamCardPanel::row_index`.
-    row_index: RowIndex,
+    /// The shared per-row id-bundle machinery + reverse `WidgetId → (row,
+    /// role)` index + click→`PanelAction` routing — the SAME [`RowHost`]
+    /// `ParamCardPanel` embeds (P-S3 host unification). Scene rows get their
+    /// widget-id bundles, `reindex_row` reverse-indexing, right-click-reset
+    /// intent replay and `row_action` routing from here instead of the
+    /// hand-copied twin this replaced. The card's own MODEL (rows, mod_state,
+    /// values, drag cadence) stays above; only the id bookkeeping and click
+    /// logic delegate — the same own-model/shared-machinery split
+    /// `ParamCardPanel` keeps.
+    row_host: RowHost,
 }
 
 impl SceneCardState {
@@ -629,23 +613,10 @@ impl SceneCardState {
             rows: Vec::new(),
             mod_state: ParamModState::allocate(0),
             current_values: Vec::new(),
-            slider_ids: Vec::new(),
-            slider_resets: Vec::new(),
-            row_catcher_ids: Vec::new(),
-            driver_btn_ids: Vec::new(),
-            envelope_btn_ids: Vec::new(),
-            driver_config_ids: Vec::new(),
-            ableton_config_ids: Vec::new(),
-            audio_btn_ids: Vec::new(),
-            audio_configs: Vec::new(),
-            trim_ids: Vec::new(),
-            target_ids: Vec::new(),
-            envelope_config_ids: Vec::new(),
             osc_addresses: Vec::new(),
-            mod_tab_ids: Vec::new(),
             mod_active_tab: Vec::new(),
             drag_sliders: Vec::new(),
-            row_index: RowIndex::default(),
+            row_host: RowHost::new(),
         }
     }
 
@@ -666,80 +637,41 @@ impl SceneCardState {
         self.rows.resize(n, placeholder_param_info());
         self.mod_state = ParamModState::allocate(n);
         self.current_values.resize(n, 0.0);
-        self.slider_ids.resize(n, None);
-        self.slider_resets.resize_with(n, || None);
-        self.row_catcher_ids.resize(n, None);
-        self.driver_btn_ids.resize(n, None);
-        self.envelope_btn_ids.resize(n, None);
-        self.driver_config_ids.resize_with(n, || None);
-        self.ableton_config_ids.resize_with(n, || None);
-        self.audio_btn_ids.resize(n, None);
-        self.audio_configs.resize_with(n, || None);
-        self.trim_ids.resize_with(n, || None);
-        self.target_ids.resize_with(n, || None);
-        self.envelope_config_ids.resize_with(n, || None);
         self.osc_addresses.resize(n, None);
-        self.mod_tab_ids.resize_with(n, Vec::new);
         while self.mod_active_tab.len() < n {
             self.mod_active_tab.push(ModTab::Driver);
         }
         while self.drag_sliders.len() < n {
             self.drag_sliders.push(crate::slider::SliderDragState::default());
         }
-        self.row_index.clear();
-    }
-
-
-    fn pid_at(&self, i: usize) -> manifold_foundation::ParamId {
-        self.rows[i].id.clone()
-    }
-
-    /// Replay every materialised slider's `Track + RightClick → reset` intent
-    /// — main rows plus the armed drawers' sliders (envelope Decay, audio
-    /// Amount/Attack/Release). Mirrors `ParamCardPanel::register_intents`'s
-    /// three loops; before this the scene cards built resets in
-    /// `build_param_row` and silently dropped them (right-click reset dead on
-    /// every scene row).
-    fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
-        use crate::slider::BitmapSlider;
-        for (pi, slider) in self.slider_ids.iter().enumerate() {
-            if let (Some(ids), Some(reset)) =
-                (slider, self.slider_resets.get(pi).and_then(|r| r.as_ref()))
-            {
-                BitmapSlider::register_track_reset(ids, reset, intents);
-            }
-        }
-        for cfg in self.envelope_config_ids.iter().flatten() {
-            BitmapSlider::register_track_reset(&cfg.decay_slider, &cfg.decay_reset, intents);
-        }
-        for (dids, _) in self.audio_configs.iter().flatten() {
-            for (sl, reset) in dids.sliders.iter().zip(dids.slider_resets.iter()) {
-                BitmapSlider::register_track_reset(sl, reset, intents);
-            }
-        }
-    }
-
-    /// BUG-250: map an enum row's value-cell click to the shared
-    /// cycle-or-dropdown action set (`enum_value_cell_actions`), targeting
-    /// the layer's generator like every other scene-row card action —
-    /// `target` is the caller's `GraphParamTarget::GeneratorOf(vm.layer_id)`
-    /// (BUG-292), passed in the same way `audio_toggle_action`/
-    /// `audio_set_source_action` already take it (`SceneCardState` has no
-    /// `live_layer_id` of its own to derive it from). The current value
-    /// comes from `current_values` (D1: rebuilt every build, never stale);
-    /// the cell node id anchors the dropdown under the row's own value text.
-    fn enum_value_cell_action(&self, target: GraphParamTarget, i: usize, clicked: NodeId) -> Vec<PanelAction> {
-        let info = &self.rows[i];
-        let labels = info.spec.value_labels.clone().unwrap_or_default();
-        let pid = self.pid_at(i);
-        let value = self.current_values.get(i).copied().unwrap_or(info.spec.default);
-        let cell = self
-            .slider_ids
-            .get(i)
-            .and_then(|s| s.as_ref())
-            .map(|s| s.value_text)
-            .unwrap_or(clicked);
-        enum_value_cell_actions(target, pid, &labels, value, info.spec.min, cell)
+        // Size EVERY embedded `RowHost` id-bundle vector to `n` — including the
+        // roles scene rows never populate (toggle, ableton/audio trim, mapping
+        // chevron, mode badges), which stay all-`None` — so `RowHost::reindex_row`'s
+        // per-row `[i]` indexing is always in bounds. Mirrors
+        // `ParamCardPanel::configure`'s RowHost sizing; the machinery vecs are
+        // rebuilt fresh every frame, so plain `resize` (grow AND truncate) is
+        // correct here even though `n` isn't monotonic across frames.
+        let rh = &mut self.row_host;
+        rh.slider_ids.resize(n, None);
+        rh.slider_resets.resize_with(n, || None);
+        rh.row_catcher_ids.resize(n, None);
+        rh.driver_btn_ids.resize(n, None);
+        rh.envelope_btn_ids.resize(n, None);
+        rh.driver_config_ids.resize_with(n, || None);
+        rh.ableton_config_ids.resize_with(n, || None);
+        rh.audio_btn_ids.resize(n, None);
+        rh.audio_configs.resize_with(n, || None);
+        rh.audio_trigger_mode_badge_ids.resize(n, None);
+        rh.trim_ids.resize_with(n, || None);
+        rh.ableton_trim_ids.resize_with(n, || None);
+        rh.audio_trim_ids.resize_with(n, || None);
+        rh.target_ids.resize_with(n, || None);
+        rh.envelope_config_ids.resize_with(n, || None);
+        rh.mod_tab_ids.resize_with(n, Vec::new);
+        rh.toggle_ids.resize_with(n, || None);
+        rh.mapping_chevron_ids.resize(n, None);
+        rh.section_header_ids.clear();
+        rh.row_index.clear();
     }
 
     /// P2 slice 2a: populate this card from a FILTERED slice of the layer's
@@ -769,158 +701,6 @@ impl SceneCardState {
             send_ids: config.audio.send_ids.clone(),
         };
         self.mod_state.sync_audio(n, &filtered_audio);
-    }
-
-    fn focus_mod_tab(&mut self, i: usize, tab: ModTab) {
-        if let Some(slot) = self.mod_active_tab.get_mut(i) {
-            *slot = tab;
-        }
-    }
-
-    /// Populate `self.row_index` for row `i` from the per-row node-id fields
-    /// that were just built — mirrors `ParamCardPanel::reindex_row`
-    /// (`docs/WIDGET_TREE_DESIGN.md` §4/§5b): routing agrees with rendering
-    /// by construction. Only the roles this card's `build_properties_row`
-    /// actually populates are indexed (no toggle rows, no OSC/mapping
-    /// surface, no relight chrome on scene rows).
-    fn reindex_row(&mut self, tree: &UITree, i: usize) {
-        if let Some(s) = &self.slider_ids[i] {
-            self.row_index.insert(tree.widget_of(s.track), i, RowRole::Slider);
-            self.row_index.insert(tree.widget_of(s.value_text), i, RowRole::Slider);
-            if let Some(l) = s.label {
-                self.row_index.insert(tree.widget_of(l), i, RowRole::Slider);
-            }
-        }
-        if let Some(t) = &self.trim_ids[i] {
-            self.row_index.insert(tree.widget_of(t.fill_id), i, RowRole::Slider);
-            self.row_index.insert(tree.widget_of(t.min_bar_id), i, RowRole::Slider);
-            self.row_index.insert(tree.widget_of(t.max_bar_id), i, RowRole::Slider);
-        }
-        if let Some(t) = &self.target_ids[i] {
-            self.row_index.insert(tree.widget_of(t.target_bar_id), i, RowRole::Slider);
-        }
-        if let Some(rc) = self.row_catcher_ids[i] {
-            self.row_index.insert(tree.widget_of(rc), i, RowRole::RowCatcher);
-        }
-        if let Some(b) = self.driver_btn_ids[i] {
-            self.row_index.insert(tree.widget_of(b), i, RowRole::DriverBtn);
-        }
-        if let Some(b) = self.envelope_btn_ids[i] {
-            self.row_index.insert(tree.widget_of(b), i, RowRole::EnvelopeBtn);
-        }
-        if let Some(b) = self.audio_btn_ids[i] {
-            self.row_index.insert(tree.widget_of(b), i, RowRole::AudioBtn);
-        }
-        if let Some(c) = &self.driver_config_ids[i] {
-            for &b in c.beat_div_btn_ids.iter() {
-                self.row_index.insert(tree.widget_of(b), i, RowRole::DriverConfig);
-            }
-            for b in [c.straight_btn_id, c.dotted_btn_id, c.triplet_btn_id, c.free_btn_id, c.invert_btn_id] {
-                self.row_index.insert(tree.widget_of(b), i, RowRole::DriverConfig);
-            }
-            for &b in c.wave_btn_ids.iter() {
-                self.row_index.insert(tree.widget_of(b), i, RowRole::DriverConfig);
-            }
-        }
-        if let Some(c) = &self.envelope_config_ids[i] {
-            self.row_index.insert(tree.widget_of(c.decay_slider.track), i, RowRole::EnvelopeConfig);
-            self.row_index.insert(tree.widget_of(c.decay_slider.value_text), i, RowRole::EnvelopeConfig);
-            if let Some(l) = c.decay_slider.label {
-                self.row_index.insert(tree.widget_of(l), i, RowRole::EnvelopeConfig);
-            }
-        }
-        if let Some(c) = &self.ableton_config_ids[i] {
-            self.row_index.insert(tree.widget_of(c.invert_btn_id), i, RowRole::AbletonConfig);
-        }
-        if let Some((dids, _)) = &self.audio_configs[i] {
-            for &b in dids.button_ids() {
-                self.row_index.insert(tree.widget_of(b), i, RowRole::AudioConfig);
-            }
-            for s in &dids.sliders {
-                self.row_index.insert(tree.widget_of(s.track), i, RowRole::AudioConfig);
-                self.row_index.insert(tree.widget_of(s.value_text), i, RowRole::AudioConfig);
-                if let Some(l) = s.label {
-                    self.row_index.insert(tree.widget_of(l), i, RowRole::AudioConfig);
-                }
-            }
-        }
-        for &(node, _tab) in &self.mod_tab_ids[i] {
-            self.row_index.insert(tree.widget_of(node), i, RowRole::ModTab);
-        }
-    }
-
-    fn audio_toggle_action(&self, target: GraphParamTarget, pi: usize) -> Vec<PanelAction> {
-        let ms = &self.mod_state;
-        if ms.audio_active.get(pi).copied().unwrap_or(false) {
-            vec![PanelAction::Modulation(ModulationAction::AudioModToggle(target, self.pid_at(pi)))]
-        } else if ms.audio_send_ids.is_empty() {
-            vec![PanelAction::Root(RootAction::OpenAudioSetup)]
-        } else {
-            vec![PanelAction::Modulation(ModulationAction::AudioModToggle(target, self.pid_at(pi)))]
-        }
-    }
-
-    fn audio_set_source_action(
-        &self,
-        target: GraphParamTarget,
-        pi: usize,
-        send_override: Option<usize>,
-        kind_override: Option<usize>,
-        band_override: Option<usize>,
-    ) -> Vec<PanelAction> {
-        use super::param_slider_shared::{audio_band_from_index, audio_kind_from_index};
-        let ms = &self.mod_state;
-        let send_k = send_override
-            .map(|k| k as i32)
-            .unwrap_or_else(|| ms.audio_send_idx.get(pi).copied().unwrap_or(-1));
-        let Some(send_id) = (send_k >= 0)
-            .then(|| ms.audio_send_ids.get(send_k as usize).cloned())
-            .flatten()
-        else {
-            return vec![];
-        };
-        let kind_idx =
-            kind_override.unwrap_or_else(|| ms.audio_kind_idx.get(pi).copied().unwrap_or(0) as usize);
-        let band_idx =
-            band_override.unwrap_or_else(|| ms.audio_band_idx.get(pi).copied().unwrap_or(0) as usize);
-        let feature = crate::types::AudioFeature::new(
-            audio_kind_from_index(kind_idx),
-            audio_band_from_index(band_idx),
-        );
-        vec![PanelAction::Modulation(ModulationAction::AudioModSetSource(target, self.pid_at(pi), send_id, feature))]
-    }
-
-    /// A click on a Listen-row chip — resolves the chip's `AudioFeature` to
-    /// (kind, band) indices and reuses the same set-source action a matrix
-    /// click would issue, one command carrying both axes. Mirrors
-    /// `ParamCardPanel::audio_select_chip_action`.
-    fn audio_select_chip_action(
-        &self,
-        target: GraphParamTarget,
-        pi: usize,
-        chip: usize,
-    ) -> Vec<PanelAction> {
-        use super::param_slider_shared::{
-            audio_band_from_index, audio_kind_from_index, trigger_source_chips,
-        };
-        let ms = &self.mod_state;
-        let current = crate::types::AudioFeature::new(
-            audio_kind_from_index(ms.audio_kind_idx.get(pi).copied().unwrap_or(0) as usize),
-            audio_band_from_index(ms.audio_band_idx.get(pi).copied().unwrap_or(0) as usize),
-        );
-        let chips = trigger_source_chips(current);
-        let Some(chip) = chips.get(chip) else {
-            return vec![];
-        };
-        let kind_idx = crate::types::AudioFeatureKind::ALL
-            .iter()
-            .position(|&k| k == chip.feature.kind)
-            .unwrap_or(0);
-        let band_idx = crate::types::AudioBand::ALL
-            .iter()
-            .position(|&b| b == chip.feature.band)
-            .unwrap_or(0);
-        self.audio_set_source_action(target, pi, None, Some(kind_idx), Some(band_idx))
     }
 }
 
@@ -1122,7 +902,7 @@ impl ScenePanel {
         if !self.open || !matches!(self.state, SceneSetupState::Live(_)) {
             return;
         }
-        self.properties_card.register_intents(intents);
+        self.properties_card.row_host.register_intents(intents);
     }
 
     pub fn open(&mut self) {
@@ -1183,7 +963,7 @@ impl ScenePanel {
         for (local_i, retained_i) in self.properties_retained.iter().enumerate() {
             let Some(slot) = slots.get(*retained_i) else { continue };
             card.current_values[local_i] = slot.value;
-            let Some(ids) = card.slider_ids.get(local_i).and_then(|s| s.as_ref()) else { continue };
+            let Some(ids) = card.row_host.slider_ids.get(local_i).and_then(|s| s.as_ref()) else { continue };
             let info = &card.rows[local_i];
             let norm =
                 crate::slider::BitmapSlider::value_to_normalized(slot.value, info.spec.min, info.spec.max);
@@ -1772,23 +1552,24 @@ impl ScenePanel {
             None,
         );
         let card = &mut self.properties_card;
-        card.row_catcher_ids[slot] = Some(built.row_catcher);
-        card.trim_ids[slot] = built.trim;
-        card.target_ids[slot] = built.target;
-        card.envelope_config_ids[slot] = built.envelope_config;
-        card.envelope_btn_ids[slot] = built.envelope_btn;
-        card.driver_btn_ids[slot] = Some(built.driver_btn);
-        card.driver_config_ids[slot] = built.driver_config;
-        card.audio_btn_ids[slot] = Some(built.audio_btn);
-        card.audio_configs[slot] = built.audio_config;
-        card.mod_tab_ids[slot] = built.mod_tabs;
-        card.slider_ids[slot] = built.slider;
-        card.slider_resets[slot] = Some(built.slider_reset.clone());
+        let rh = &mut card.row_host;
+        rh.row_catcher_ids[slot] = Some(built.row_catcher);
+        rh.trim_ids[slot] = built.trim;
+        rh.target_ids[slot] = built.target;
+        rh.envelope_config_ids[slot] = built.envelope_config;
+        rh.envelope_btn_ids[slot] = built.envelope_btn;
+        rh.driver_btn_ids[slot] = Some(built.driver_btn);
+        rh.driver_config_ids[slot] = built.driver_config;
+        rh.audio_btn_ids[slot] = Some(built.audio_btn);
+        rh.audio_configs[slot] = built.audio_config;
+        rh.mod_tab_ids[slot] = built.mod_tabs;
+        rh.slider_ids[slot] = built.slider;
+        rh.slider_resets[slot] = Some(built.slider_reset.clone());
         if let Some(ids) = built.slider {
             card.drag_sliders[slot].set_ids(ids);
             card.drag_sliders[slot].set_range(info.spec.min, info.spec.max, false);
         }
-        card.reindex_row(tree, slot);
+        card.row_host.reindex_row(tree, slot);
         built.new_cy
     }
 
@@ -2367,7 +2148,7 @@ impl ScenePanel {
                             vm.scene_root_node_id,
                             *index as u32,
                         )));
-                    } else if let Some((row, role)) = self.properties_card.row_index.get(tree.widget_of(*node_id)) {
+                    } else if let Some((row, role)) = self.properties_card.row_host.row_index.get(tree.widget_of(*node_id)) {
                         // P2 slice 2b (`docs/WIDGET_TREE_DESIGN.md` §4/§5b):
                         // the ONE unified properties card's D/E/A buttons +
                         // config drawers, routed through the same
@@ -2441,7 +2222,7 @@ impl ScenePanel {
                         // BUG-292: the panel's own bound layer, not the
                         // active-layer-resolved plain `Generator`.
                         let target = GraphParamTarget::GeneratorOf(vm.layer_id.clone());
-                        let pid = self.properties_card.pid_at(pi);
+                        let pid = self.properties_card.rows[pi].id.clone();
                         return (
                             true,
                             vec![
@@ -2476,7 +2257,7 @@ impl ScenePanel {
                         .find_map(|(pi, sl)| slider_drag_value(sl, pos.x).map(|v| (pi, v)))
                 {
                     let target = GraphParamTarget::GeneratorOf(lid);
-                    let pid = self.properties_card.pid_at(pi);
+                    let pid = self.properties_card.rows[pi].id.clone();
                     return (
                         true,
                         vec![PanelAction::Scrub(
@@ -2498,7 +2279,7 @@ impl ScenePanel {
                     if self.properties_card.drag_sliders[pi].end_drag()
                         && let Some(lid) = lid.clone()
                     {
-                        let pid = self.properties_card.pid_at(pi);
+                        let pid = self.properties_card.rows[pi].id.clone();
                         actions.push(PanelAction::Scrub(
                             ValueRef::Param(GraphParamTarget::GeneratorOf(lid), pid),
                             ScrubPhase::Commit,
@@ -2533,6 +2314,16 @@ impl ScenePanel {
     /// belongs to. `target` is the caller's `GraphParamTarget::GeneratorOf(
     /// vm.layer_id)` (BUG-292) — `SceneCardState` has no `live_layer_id` of
     /// its own to derive it from.
+    /// Route a resolved scene-row `(row, role)` hit to its `PanelAction` by
+    /// delegating to the SHARED [`RowHost::row_action`] — the exact same
+    /// routing core `ParamCardPanel` uses (P-S3). The card's own model (rows,
+    /// current values, mod state, active tab) is passed in by reference; the
+    /// widget-id bundles the routing reads live on the embedded `row_host`.
+    ///
+    /// Scene rows carry no OSC-copy flash and no foldable sections — neither
+    /// role is ever indexed into this card's `row_index` — so the router's
+    /// `copied_flash`/`section_folded` sinks are throwaway locals, genuinely
+    /// unused for scene rather than card state worth keeping.
     fn properties_row_action(
         &mut self,
         row: usize,
@@ -2541,104 +2332,21 @@ impl ScenePanel {
         target: GraphParamTarget,
     ) -> Vec<PanelAction> {
         let card = &mut self.properties_card;
-        match role {
-            RowRole::Slider => {
-                let Some(ids) = card.slider_ids[row] else {
-                    return Vec::new();
-                };
-                if ids.value_text == node && card.rows[row].spec.value_labels.is_some() {
-                    return card.enum_value_cell_action(target, row, node);
-                }
-                // The track itself (drag start) and a plain numeric value
-                // cell (double-click type-in, a different dispatch path)
-                // emit no click action — no OSC surface on scene rows this
-                // phase, so a label click is also inert here.
-                Vec::new()
-            }
-            RowRole::RowCatcher | RowRole::EnvelopeConfig => Vec::new(),
-            RowRole::DriverBtn => {
-                card.focus_mod_tab(row, ModTab::Driver);
-                vec![PanelAction::Modulation(ModulationAction::DriverToggle(target, card.pid_at(row)))]
-            }
-            RowRole::EnvelopeBtn => {
-                card.focus_mod_tab(row, ModTab::Envelope);
-                vec![PanelAction::Modulation(ModulationAction::EnvelopeToggle(target, card.pid_at(row)))]
-            }
-            RowRole::AudioBtn => {
-                card.focus_mod_tab(row, ModTab::Audio);
-                card.audio_toggle_action(target, row)
-            }
-            RowRole::DriverConfig => {
-                let Some(cfg) = &card.driver_config_ids[row] else {
-                    return Vec::new();
-                };
-                match cfg.resolve(node) {
-                    Some(action) => vec![PanelAction::Modulation(ModulationAction::DriverConfig(target, card.pid_at(row), action))],
-                    None => Vec::new(),
-                }
-            }
-            RowRole::AbletonConfig => {
-                let Some(cfg) = &card.ableton_config_ids[row] else {
-                    return Vec::new();
-                };
-                if cfg.resolve(node) {
-                    vec![PanelAction::Mapping(MappingAction::AbletonInvertToggle(target, card.pid_at(row)))]
-                } else {
-                    Vec::new()
-                }
-            }
-            RowRole::AudioConfig => {
-                let Some((dids, send_count)) = card.audio_configs[row].as_ref() else {
-                    return Vec::new();
-                };
-                let Some(click) =
-                    resolve_audio_config_click(dids, *send_count, &card.mod_state, &card.rows[row], row, node)
-                else {
-                    return Vec::new();
-                };
-                match click {
-                    AudioConfigClick::SelectSend(k) => card.audio_set_source_action(target, row, Some(k), None, None),
-                    AudioConfigClick::SelectChip(c) => card.audio_select_chip_action(target, row, c),
-                    AudioConfigClick::ToggleMatrix => {
-                        if let Some(open) = card.mod_state.audio_matrix_open.get_mut(row) {
-                            *open = !*open;
-                        }
-                        Vec::new()
-                    }
-                    AudioConfigClick::SelectKind(k) => card.audio_set_source_action(target, row, None, Some(k), None),
-                    AudioConfigClick::SelectBand(b) => card.audio_set_source_action(target, row, None, None, Some(b)),
-                    AudioConfigClick::ToggleInvert => {
-                        vec![PanelAction::Modulation(ModulationAction::AudioModSetInvert(target, card.pid_at(row)))]
-                    }
-                    AudioConfigClick::SelectTriggerMode(m) => {
-                        vec![PanelAction::Modulation(ModulationAction::AudioModSetTriggerMode(target, card.pid_at(row), m))]
-                    }
-                    AudioConfigClick::SelectAction(k) => {
-                        vec![PanelAction::Modulation(ModulationAction::AudioModSetActionKind(target, card.pid_at(row), k))]
-                    }
-                    AudioConfigClick::SelectWrap(w) => {
-                        vec![PanelAction::Modulation(ModulationAction::AudioModSetWrap(target, card.pid_at(row), w))]
-                    }
-                }
-            }
-            RowRole::ModTab => {
-                let Some(&(_, tab)) = card.mod_tab_ids[row].iter().find(|(n, _)| *n == node) else {
-                    return Vec::new();
-                };
-                card.focus_mod_tab(row, tab);
-                vec![PanelAction::Params(ParamsAction::ModConfigTabChanged)]
-            }
-            // Never inserted into `row_index` this phase (no toggle rows, no
-            // OSC/mapping surface, no relight chrome on scene rows) — kept
-            // here only for match exhaustiveness.
-            RowRole::Label
-            | RowRole::ToggleBtn
-            | RowRole::MappingChevron
-            | RowRole::SectionHeader
-            | RowRole::RelightToggle
-            | RowRole::RelightHeightBtn
-            | RowRole::RelightSlider => Vec::new(),
-        }
+        let mut copied_flash = CopyToClipboardLabelState::default();
+        let mut section_folded: ahash::AHashMap<String, bool> = ahash::AHashMap::new();
+        card.row_host.row_action(
+            target,
+            row,
+            role,
+            node,
+            &card.rows,
+            &card.current_values,
+            &card.osc_addresses,
+            &mut card.mod_state,
+            &mut card.mod_active_tab,
+            &mut copied_flash,
+            &mut section_folded,
+        )
     }
 
     fn owns_node(&self, node_id: NodeId) -> bool {

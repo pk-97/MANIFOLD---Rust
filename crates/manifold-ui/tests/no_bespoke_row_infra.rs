@@ -30,11 +30,14 @@ const BITMAP_SLIDER_ALLOWLIST: &[&str] = &[
     // The row model's shared per-row builders (`build_param_row`,
     // `build_driver_config`'s decay slider via `drawer::build`, the audio
     // shaping sliders) — THE sanctioned entry point for manifest-backed rows.
-    "param_slider_shared.rs",
+    // (`param_slider_shared/builders.rs` since the P-S1 directory-module split.)
+    "builders.rs",
     // The row model's card host — relight knobs (D9: out of `RowIndex`
     // scope, but still a manifest-backed per-instance control, built through
-    // this file, not a new system).
-    "param_card.rs",
+    // this file, not a new system). (`param_card/render.rs` since the P-S4
+    // directory-module split — the surface-builder half of the card host,
+    // where the relight sliders are actually constructed.)
+    "param_card/render.rs",
     // The generic declarative-drawer API (`docs/AUDIO_MODULATION_DESIGN.md`
     // §10.2) — `DrawerRow::Slider` materialises through the SAME widget, one
     // call site, shared by every drawer kind.
@@ -54,7 +57,16 @@ const NODE_ID_HOARD_ALLOWLIST: &[&str] = &[
     // The row model's card host. `RowIndex` replaced these as a ROUTING
     // mechanism (P2); they remain as widget-owned per-row storage (sync,
     // drag identification via direct field reads, not id-equality scans).
-    "param_card.rs",
+    // (`param_card/mod.rs` since the P-S4 directory-module split — the
+    // `ParamCardPanel` struct itself, where these fields live.)
+    "param_card/mod.rs",
+    // `RowHost` (P-S2): the shared per-row id-bundle storage + `RowIndex` +
+    // `row_action` routing lifted out of `param_card.rs` so a scene card can
+    // BE one instead of hand-copying it (the P-S3 `SceneCardState` unification).
+    // Same widget-owned-storage rationale as `param_card.rs` above — the hoard
+    // is NOT the routing (that IS `RowHost::row_index`/`row_action`); it's the
+    // per-row storage those read.
+    "row_host.rs",
     // Clip chrome's own per-row audio-shaping controls — a different,
     // non-`ParamRow` surface (D9 scope fence).
     "clip_chrome.rs",
@@ -66,6 +78,26 @@ const NODE_ID_HOARD_ALLOWLIST: &[&str] = &[
 
 fn panels_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("src/panels")
+}
+
+/// True if `path` (somewhere under `panels_dir()`) matches an allowlist
+/// entry — either the bare file name (the common case: names like
+/// `slider.rs`/`drawer.rs` are unique across the tree) or the path relative
+/// to `panels_dir()` with forward-slash separators (needed for directory
+/// modules whose file names are generic, e.g. `param_card/mod.rs` — a bare
+/// `"mod.rs"` entry would blanket-allowlist every OTHER directory module's
+/// `mod.rs` too, which defeats the point of the allowlist).
+fn is_allowlisted(path: &Path, allowlist: &[&str]) -> bool {
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+    if allowlist.contains(&name) {
+        return true;
+    }
+    let rel = path
+        .strip_prefix(panels_dir())
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace(std::path::MAIN_SEPARATOR, "/");
+    allowlist.contains(&rel.as_str())
 }
 
 fn rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -87,8 +119,7 @@ fn no_bespoke_bitmap_slider_construction_outside_the_allowlist() {
 
     let mut violations = Vec::new();
     for path in &files {
-        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default();
-        if BITMAP_SLIDER_ALLOWLIST.contains(&name) {
+        if is_allowlisted(path, BITMAP_SLIDER_ALLOWLIST) {
             continue;
         }
         let text = fs::read_to_string(path).expect("read panel source");
@@ -113,8 +144,7 @@ fn no_bespoke_node_id_row_hoard_outside_the_allowlist() {
 
     let mut violations = Vec::new();
     for path in &files {
-        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default();
-        if NODE_ID_HOARD_ALLOWLIST.contains(&name) {
+        if is_allowlisted(path, NODE_ID_HOARD_ALLOWLIST) {
             continue;
         }
         let text = fs::read_to_string(path).expect("read panel source");
