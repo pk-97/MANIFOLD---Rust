@@ -28,3 +28,8 @@ None in landed code. Process notes: mid-phase dual-dispatcher collision on slot-
 2. Right-click the same slider → reset to default, undo restores (SliderReset recursion through the new signature).
 3. Map a param to a macro from the mapping chevron → mapping appears, undo removes it (mapping domain module).
 4. Toggle an audio-mod driver on a card row → badge lights, drawer opens (modulation domain module).
+
+## Push-time addendum (landing session, warm main checkout, build-locked)
+
+- Full sweep: `Summary [ 168.277s] 3852 tests run: 3852 passed (13 slow), 13 skipped` · workspace clippy `-D warnings` clean · `bans ok`.
+- Flow runner (mechanical BUG-252 gate): `33/33 required flows passed · 7 known-red (xfail) still red · 40/40 flow files accounted for`. Level: **L3, full count-match**.
