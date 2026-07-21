@@ -373,3 +373,4 @@ zero *named* widgets (graph-editor chrome unnamed headless) — name points as f
 them, per §3 ("coverage grows organically"). Landing report:
 `docs/landings/2026-07-05-ui-automation-p2.md`.
 
+- VD-036 · 2026-07-21 · UI_FUNNEL P-P rider: INV-G4 MANIFOLD_RENDER_TRACE frame-cost spot-check not run (headless flows cover the sync calls, not the multi-window per-frame cadence). Burn down: next interactive session or the P-F landing trace gate. Owner: Wave-1 WS1.

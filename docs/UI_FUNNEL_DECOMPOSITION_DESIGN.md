@@ -1,6 +1,6 @@
 # UI Funnel Decomposition — Wave 1 of the god-file campaign
 
-**Status: PROPOSED — awaiting Peter's design review · 2026-07-21 · Fable**
+**Status: IN PROGRESS — P-P (projection split + scratch rider) SHIPPED 2026-07-21 (landing report `docs/landings/2026-07-21-ui-funnel-p-p.md`); Peter unblocked execution 2026-07-21 ("my review does not block you unless it's critical"); next: P-B (bridge split + context struct) · 2026-07-21 · Fable**
 **Prerequisites:** WIDGET_TREE (COMPLETE 2026-07-21), SCENE_PANEL_EXPOSURE_CONVERGENCE (COMPLETE 2026-07-21). Campaign register: `docs/ARCHITECTURE_DEBT.md` (inventory + wave map; status for this wave lives ONLY on this doc's Status line).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase. Pure-move commits gate on `scripts/move_identity_check.py` (built + self-tested 2026-07-21).
 
