@@ -20,9 +20,7 @@ use manifold_editing::commands::effects::{
     ChangeGraphParamCommand, RemoveEffectCommand, ReorderEffectCommand, ReorderEffectGroupCommand,
     SetRelightHeightFromCommand, SetRelightParamCommand, ToggleEffectCommand, ToggleRelightCommand,
 };
-use manifold_editing::commands::settings::{
-    ChangeLayerOpacityCommand, ChangeMacroCommand, PasteGeneratorCommand,
-};
+use manifold_editing::commands::settings::{ChangeMacroCommand, PasteGeneratorCommand};
 use manifold_ui::{InspectorTab, ParamsAction};
 
 use super::super::DispatchResult;
@@ -40,50 +38,9 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
         }
 
         // ── Macro sliders ─────────────────────────────────────────
-        ParamsAction::MacroSnapshot(idx) => {
-            let idx = *idx;
-            if idx < manifold_core::macro_bank::MACRO_COUNT {
-                let value = ctx.project.settings.macro_bank.slots[idx].value;
-                ctx.scrub.slider_snapshot = Some(value);
-                // Macros ride in every ModulationSnapshot block, so the drag
-                // must be guarded or the per-tick apply stomps it (undo-race
-                // regression, 2026-07-18).
-                ctx.scrub.active_inspector_drag = Some(crate::app::ActiveInspectorDrag::Macro { idx, value });
-            }
-            DispatchResult::handled()
-        }
-        ParamsAction::MacroChanged(idx, val) => {
-            let idx = *idx;
-            let val = *val;
-            if let Some(crate::app::ActiveInspectorDrag::Macro { idx: di, value }) =
-                &mut ctx.scrub.active_inspector_drag
-                && *di == idx
-            {
-                *value = val;
-            }
-            manifold_core::macro_bank::MacroBank::apply_macro(ctx.project, idx, val);
-            ContentCommand::send(
-                ctx.content_tx,
-                ContentCommand::MutateProjectLive(Box::new(move |p| {
-                    manifold_core::macro_bank::MacroBank::apply_macro(p, idx, val);
-                })),
-            );
-            DispatchResult::handled()
-        }
-        ParamsAction::MacroCommit(idx) => {
-            if let Some(old_val) = ctx.scrub.slider_snapshot.take() {
-                let idx = *idx;
-                if idx < manifold_core::macro_bank::MACRO_COUNT {
-                    let new_val = ctx.project.settings.macro_bank.slots[idx].value;
-                    if (old_val - new_val).abs() > f32::EPSILON {
-                        let cmd = ChangeMacroCommand::new(idx, old_val, new_val);
-                        ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
-                    }
-                }
-            }
-            ctx.scrub.active_inspector_drag = None;
-            DispatchResult::handled()
-        }
+        // Macro scrub trio migrated to `PanelAction::Scrub` (`ValueRef::Macro`,
+        // P-I / D4). `MacroReset`/`MacroLabelRename` are not scrub gestures and
+        // stay here.
         ParamsAction::MacroReset(idx) => {
             let idx = *idx;
             if idx < manifold_core::macro_bank::MACRO_COUNT {
@@ -200,59 +157,8 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
         }
 
         // ── Layer chrome ───────────────────────────────────────────
-        ParamsAction::LayerOpacitySnapshot => {
-            let layer_idx = super::resolve_active_layer_index(active_layer, ctx.project);
-            if let Some(idx) = layer_idx
-                && let Some(layer) = ctx.project.timeline.layers.get(idx)
-            {
-                ctx.scrub.slider_snapshot = Some(layer.opacity);
-                ctx.scrub.active_inspector_drag = Some(crate::app::ActiveInspectorDrag::LayerOpacity {
-                    layer_id: layer.layer_id.clone(),
-                    value: layer.opacity,
-                });
-            }
-            DispatchResult::handled()
-        }
-        ParamsAction::LayerOpacityChanged(val) => {
-            let layer_idx = super::resolve_active_layer_index(active_layer, ctx.project);
-            if let Some(idx) = layer_idx {
-                if let Some(layer) = ctx.project.timeline.layers.get_mut(idx) {
-                    layer.opacity = *val;
-                }
-                if let Some(crate::app::ActiveInspectorDrag::LayerOpacity { value, .. }) =
-                    &mut ctx.scrub.active_inspector_drag
-                {
-                    *value = *val;
-                }
-                let v = *val;
-                let layer_id = active_layer.clone().unwrap_or_default();
-                ContentCommand::send(
-                    ctx.content_tx,
-                    ContentCommand::MutateProjectLive(Box::new(move |p| {
-                        if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id) {
-                            layer.opacity = v;
-                        }
-                    })),
-                );
-            }
-            DispatchResult::handled()
-        }
-        ParamsAction::LayerOpacityCommit => {
-            let layer_idx = super::resolve_active_layer_index(active_layer, ctx.project);
-            if let Some(old_val) = ctx.scrub.slider_snapshot.take()
-                && let Some(idx) = layer_idx
-                && let Some(layer) = ctx.project.timeline.layers.get(idx)
-            {
-                let layer_id = layer.layer_id.clone();
-                let new_val = layer.opacity;
-                if (old_val - new_val).abs() > f32::EPSILON {
-                    let cmd = ChangeLayerOpacityCommand::new(layer_id, old_val, new_val);
-                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
-                }
-            }
-            ctx.scrub.active_inspector_drag = None;
-            DispatchResult::handled()
-        }
+        // Layer-opacity scrub trio migrated to `PanelAction::Scrub`
+        // (`ValueRef::LayerOpacity`, P-I / D4).
         ParamsAction::LayerChromeCollapseToggle => {
             ctx.ui.inspector.layer_chrome_mut().toggle_collapsed();
             DispatchResult::structural()

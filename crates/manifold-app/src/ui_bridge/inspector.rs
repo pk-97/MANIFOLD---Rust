@@ -173,18 +173,17 @@ mod scene_card_convergence_tests {
         stale.capture_into(&project);
 
         let mut h = Harness::new(None);
-        h.dispatch(&PanelAction::Params(ParamsAction::MacroSnapshot(0)), &mut project);
-        h.dispatch(&PanelAction::Params(ParamsAction::MacroChanged(0, 0.8)), &mut project);
+        h.dispatch(&PanelAction::Scrub(ValueRef::Macro(0), ScrubPhase::Begin), &mut project);
+        h.dispatch(&PanelAction::Scrub(ValueRef::Macro(0), ScrubPhase::Move(ScrubValue::Scalar(0.8))), &mut project);
         h.drain();
 
         // What the UI frame drain now does every tick (app_render.rs ~line
-        // 868): apply the snapshot, then restore only the guarded drag kinds.
+        // 868): apply the snapshot, then restore the guarded gesture (the macro
+        // rides the P-I `active` gesture now, restored via `restore_dragged`).
         stale.apply(&mut project);
-        if let Some(ref drag) = h.scrub.active_inspector_drag {
-            drag.apply(&mut project);
-        }
+        h.scrub.restore_dragged(&mut project);
 
-        h.dispatch(&PanelAction::Params(ParamsAction::MacroCommit(0)), &mut project);
+        h.dispatch(&PanelAction::Scrub(ValueRef::Macro(0), ScrubPhase::Commit), &mut project);
         let cmds = h.drain();
         assert!(
             cmds.iter().any(|c| matches!(c, ContentCommand::Execute(_))),
@@ -572,11 +571,11 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 |h, p| {
-                    h.dispatch(&PanelAction::Params(ParamsAction::MacroSnapshot(0)), p);
-                    h.dispatch(&PanelAction::Params(ParamsAction::MacroChanged(0, 0.5)), p);
-                    h.dispatch(&PanelAction::Params(ParamsAction::MacroChanged(0, 0.8)), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::Macro(0), ScrubPhase::Begin), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::Macro(0), ScrubPhase::Move(ScrubValue::Scalar(0.5))), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::Macro(0), ScrubPhase::Move(ScrubValue::Scalar(0.8))), p);
                 },
-                |h, p| h.dispatch(&PanelAction::Params(ParamsAction::MacroCommit(0)), p),
+                |h, p| h.dispatch(&PanelAction::Scrub(ValueRef::Macro(0), ScrubPhase::Commit), p),
                 |p| p.settings.macro_bank.slots[0].value,
                 0.2,
                 0.8,
@@ -610,11 +609,11 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 |h, p| {
-                    h.dispatch(&PanelAction::Params(ParamsAction::LayerOpacitySnapshot), p);
-                    h.dispatch(&PanelAction::Params(ParamsAction::LayerOpacityChanged(0.9)), p);
-                    h.dispatch(&PanelAction::Params(ParamsAction::LayerOpacityChanged(0.55)), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::LayerOpacity, ScrubPhase::Begin), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::LayerOpacity, ScrubPhase::Move(ScrubValue::Scalar(0.9))), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::LayerOpacity, ScrubPhase::Move(ScrubValue::Scalar(0.55))), p);
                 },
-                |h, p| h.dispatch(&PanelAction::Params(ParamsAction::LayerOpacityCommit), p),
+                |h, p| h.dispatch(&PanelAction::Scrub(ValueRef::LayerOpacity, ScrubPhase::Commit), p),
                 move |p| {
                     p.timeline
                         .find_layer_by_id(&lid)

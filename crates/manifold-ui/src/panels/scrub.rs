@@ -76,4 +76,10 @@ pub enum ValueRef {
     /// The LED master-brightness slider — was `LedBrightness{Snapshot,Changed,
     /// Commit}`.
     LedBrightness,
+    /// The active layer's opacity slider (layer chrome) — was
+    /// `LayerOpacity{Snapshot,Changed,Commit}`. Resolves through the active
+    /// layer, like its retired trio.
+    LayerOpacity,
+    /// A macro-bank knob by slot index — was `Macro{Snapshot,Changed,Commit}`.
+    Macro(usize),
 }

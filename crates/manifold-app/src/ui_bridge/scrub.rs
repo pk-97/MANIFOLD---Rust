@@ -27,9 +27,12 @@ use crate::content_command::ContentCommand;
 use manifold_core::audio_mod::{AudioModShape, TriggerAction};
 use manifold_core::effects::ParamId;
 use manifold_core::project::Project;
-use manifold_core::GraphTarget;
+use manifold_core::{GraphTarget, LayerId};
 use manifold_editing::commands::effects::ChangeGraphParamCommand;
-use manifold_editing::commands::settings::{ChangeLedBrightnessCommand, ChangeMasterOpacityCommand};
+use manifold_editing::commands::settings::{
+    ChangeLayerOpacityCommand, ChangeLedBrightnessCommand, ChangeMacroCommand,
+    ChangeMasterOpacityCommand,
+};
 use manifold_ui::{ScrubPhase, ValueRef};
 
 use super::dispatch::resolve::resolve_graph_target;
@@ -102,6 +105,17 @@ pub enum ResolvedScrub {
     MasterOpacity { baseline: f32, live: f32 },
     /// The LED master-brightness slider (`settings.led_brightness`).
     LedBrightness { baseline: f32, live: f32 },
+    /// A layer's opacity — `layer_id` captured at Begin so the restore path can
+    /// re-stamp it without the active-layer context.
+    LayerOpacity {
+        layer_id: LayerId,
+        baseline: f32,
+        live: f32,
+    },
+    /// A macro-bank knob (`idx`). Macros ride every ModulationSnapshot block, so
+    /// the restore path re-applies through `apply_macro` — the same write Move
+    /// uses — or a per-tick apply stomps the in-flight value.
+    Macro { idx: usize, baseline: f32, live: f32 },
 }
 
 impl ResolvedScrub {
@@ -128,6 +142,14 @@ impl ResolvedScrub {
             }
             ResolvedScrub::LedBrightness { live, .. } => {
                 project.settings.led_brightness = *live;
+            }
+            ResolvedScrub::LayerOpacity { layer_id, live, .. } => {
+                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id) {
+                    layer.opacity = *live;
+                }
+            }
+            ResolvedScrub::Macro { idx, live, .. } => {
+                manifold_core::macro_bank::MacroBank::apply_macro(project, *idx, *live);
             }
         }
     }
@@ -343,5 +365,117 @@ pub(crate) fn dispatch_scrub(
                 DispatchResult::handled()
             }
         },
+
+        ValueRef::LayerOpacity => match phase {
+            ScrubPhase::Begin => {
+                if let Some(idx) = super::resolve_active_layer_index(active_layer, ctx.project)
+                    && let Some(layer) = ctx.project.timeline.layers.get(idx)
+                {
+                    ctx.scrub.active = Some(ResolvedScrub::LayerOpacity {
+                        layer_id: layer.layer_id.clone(),
+                        baseline: layer.opacity,
+                        live: layer.opacity,
+                    });
+                }
+                DispatchResult::handled()
+            }
+            ScrubPhase::Move(sv) => {
+                if let (Some(v), Some(idx)) = (
+                    sv.scalar(),
+                    super::resolve_active_layer_index(active_layer, ctx.project),
+                ) {
+                    if let Some(layer) = ctx.project.timeline.layers.get_mut(idx) {
+                        layer.opacity = v;
+                    }
+                    if let Some(ResolvedScrub::LayerOpacity { live, .. }) = &mut ctx.scrub.active {
+                        *live = v;
+                    }
+                    let layer_id = active_layer.clone().unwrap_or_default();
+                    ContentCommand::send(
+                        ctx.content_tx,
+                        ContentCommand::MutateProjectLive(Box::new(move |p| {
+                            if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id) {
+                                layer.opacity = v;
+                            }
+                        })),
+                    );
+                }
+                DispatchResult::handled()
+            }
+            ScrubPhase::Commit => {
+                let baseline = match &ctx.scrub.active {
+                    Some(ResolvedScrub::LayerOpacity { baseline, .. }) => Some(*baseline),
+                    _ => None,
+                };
+                if let Some(old_val) = baseline
+                    && let Some(idx) = super::resolve_active_layer_index(active_layer, ctx.project)
+                    && let Some(layer) = ctx.project.timeline.layers.get(idx)
+                {
+                    let layer_id = layer.layer_id.clone();
+                    let new_val = layer.opacity;
+                    if (old_val - new_val).abs() > f32::EPSILON {
+                        let cmd = ChangeLayerOpacityCommand::new(layer_id, old_val, new_val);
+                        ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
+                    }
+                }
+                ctx.scrub.active = None;
+                DispatchResult::handled()
+            }
+        },
+
+        ValueRef::Macro(idx) => {
+            let idx = *idx;
+            match phase {
+                ScrubPhase::Begin => {
+                    if idx < manifold_core::macro_bank::MACRO_COUNT {
+                        let value = ctx.project.settings.macro_bank.slots[idx].value;
+                        ctx.scrub.active = Some(ResolvedScrub::Macro {
+                            idx,
+                            baseline: value,
+                            live: value,
+                        });
+                    }
+                    DispatchResult::handled()
+                }
+                ScrubPhase::Move(sv) => {
+                    if let Some(v) = sv.scalar() {
+                        if let Some(ResolvedScrub::Macro { idx: di, live, .. }) =
+                            &mut ctx.scrub.active
+                            && *di == idx
+                        {
+                            *live = v;
+                        }
+                        manifold_core::macro_bank::MacroBank::apply_macro(ctx.project, idx, v);
+                        ContentCommand::send(
+                            ctx.content_tx,
+                            ContentCommand::MutateProjectLive(Box::new(move |p| {
+                                manifold_core::macro_bank::MacroBank::apply_macro(p, idx, v);
+                            })),
+                        );
+                    }
+                    DispatchResult::handled()
+                }
+                ScrubPhase::Commit => {
+                    let baseline = match &ctx.scrub.active {
+                        Some(ResolvedScrub::Macro { baseline, .. }) => Some(*baseline),
+                        _ => None,
+                    };
+                    if let Some(old_val) = baseline
+                        && idx < manifold_core::macro_bank::MACRO_COUNT
+                    {
+                        let new_val = ctx.project.settings.macro_bank.slots[idx].value;
+                        if (old_val - new_val).abs() > f32::EPSILON {
+                            let cmd = ChangeMacroCommand::new(idx, old_val, new_val);
+                            ContentCommand::send(
+                                ctx.content_tx,
+                                ContentCommand::Execute(Box::new(cmd)),
+                            );
+                        }
+                    }
+                    ctx.scrub.active = None;
+                    DispatchResult::handled()
+                }
+            }
+        }
     }
 }

@@ -10,7 +10,7 @@
 //! inspector composite is untouched.
 
 use crate::{MappingAction, ParamsAction, RootAction};
-use super::PanelAction;
+use super::{PanelAction, ScrubPhase, ScrubValue, ValueRef};
 use super::copy_to_clipboard_label::CopyToClipboardLabelState;
 use super::param_slider_shared::{
     ABL_CONFIG_HEIGHT, AbletonConfigClick, AbletonConfigIds, AbletonMappingDisplay, TrimHandleIds,
@@ -264,9 +264,9 @@ impl MacrosPanel {
                     font_size: FONT_SIZE,
                     label_width: LABEL_WIDTH,
                     reset: PanelAction::slider_reset(
-                        PanelAction::Params(ParamsAction::MacroSnapshot(i)),
-                        PanelAction::Params(ParamsAction::MacroChanged(i, 0.0)),
-                        PanelAction::Params(ParamsAction::MacroCommit(i)),
+                        PanelAction::Scrub(ValueRef::Macro(i), ScrubPhase::Begin),
+                        PanelAction::Scrub(ValueRef::Macro(i), ScrubPhase::Move(ScrubValue::Scalar(0.0))),
+                        PanelAction::Scrub(ValueRef::Macro(i), ScrubPhase::Commit),
                     ),
                 };
                 inner = inner.child(
@@ -371,8 +371,8 @@ impl MacrosPanel {
         for (i, s) in self.sliders.iter_mut().enumerate() {
             if let Some(val) = s.try_start_drag(node_id, pos_x) {
                 return vec![
-                    PanelAction::Params(ParamsAction::MacroSnapshot(i)),
-                    PanelAction::Params(ParamsAction::MacroChanged(i, val)),
+                    PanelAction::Scrub(ValueRef::Macro(i), ScrubPhase::Begin),
+                    PanelAction::Scrub(ValueRef::Macro(i), ScrubPhase::Move(ScrubValue::Scalar(val))),
                 ];
             }
         }
@@ -406,7 +406,7 @@ impl MacrosPanel {
         // Slider drag
         for (i, s) in self.sliders.iter_mut().enumerate() {
             if let Some(val) = s.apply_drag(pos_x, tree, &fmt_macro) {
-                return vec![PanelAction::Params(ParamsAction::MacroChanged(i, val))];
+                return vec![PanelAction::Scrub(ValueRef::Macro(i), ScrubPhase::Move(ScrubValue::Scalar(val)))];
             }
         }
         Vec::new()
@@ -419,7 +419,7 @@ impl MacrosPanel {
         }
         for (i, s) in self.sliders.iter_mut().enumerate() {
             if s.end_drag() {
-                return vec![PanelAction::Params(ParamsAction::MacroCommit(i))];
+                return vec![PanelAction::Scrub(ValueRef::Macro(i), ScrubPhase::Commit)];
             }
         }
         Vec::new()
@@ -695,7 +695,7 @@ mod tests {
         let track = panel.sliders[0].track_id().unwrap();
         match reg.resolve(&tree, Some(track), crate::intent::Gesture::RightClick) {
             Some(PanelAction::Root(RootAction::SliderReset { changed, .. })) => {
-                assert!(matches!(*changed, PanelAction::Params(ParamsAction::MacroChanged(0, v)) if v.abs() < f32::EPSILON));
+                assert!(matches!(*changed, PanelAction::Scrub(ValueRef::Macro(0), ScrubPhase::Move(ScrubValue::Scalar(v))) if v.abs() < f32::EPSILON));
             }
             other => panic!("expected SliderReset, got {other:?}"),
         }

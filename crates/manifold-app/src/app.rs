@@ -51,19 +51,8 @@ pub type SelectionState = UIState;
 /// After snapshot acceptance, the dragged value is restored to prevent overwrite.
 #[derive(Debug, Clone)]
 pub(crate) enum ActiveInspectorDrag {
-    // MasterOpacity/LedBrightness migrated to the unified scrub gesture
-    // (`ui_bridge::scrub::ResolvedScrub`, P-I / D4).
-    LayerOpacity {
-        layer_id: LayerId,
-        value: f32,
-    },
-    // `Param` migrated to the unified scrub gesture (`ui_bridge::scrub::
-    // ResolvedScrub::Param`, P-I / D4).
-    /// A macro-knob drag. Macros are carried in every `ModulationSnapshot`
-    /// block (applied every tick since `ac96c65c`), so an unguarded macro
-    /// drag gets stomped back to the content thread's stale value mid-gesture
-    /// and the commit sees old == new — no undo entry.
-    Macro { idx: usize, value: f32 },
+    // MasterOpacity/LedBrightness/LayerOpacity/Macro/Param migrated to the
+    // unified scrub gesture (`ui_bridge::scrub::ResolvedScrub`, P-I / D4).
     /// A modulation trim-range handle drag (driver / audio-mod / Ableton
     /// sub-range bars, BUG-246). Not carried in any snapshot block, so a
     /// concurrent `data_version` bump mid-drag replaces `local_project`
@@ -175,14 +164,6 @@ impl ActiveInspectorDrag {
     /// Write the dragged value back into the project after snapshot acceptance.
     pub(crate) fn apply(&self, project: &mut manifold_core::project::Project) {
         match self {
-            Self::LayerOpacity { layer_id, value } => {
-                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id) {
-                    layer.opacity = *value;
-                }
-            }
-            Self::Macro { idx, value } => {
-                manifold_core::macro_bank::MacroBank::apply_macro(project, *idx, *value);
-            }
             Self::Trim {
                 kind,
                 target,

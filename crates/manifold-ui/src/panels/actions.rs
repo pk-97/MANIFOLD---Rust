@@ -323,9 +323,8 @@ pub enum ParamsAction {
     // (`ValueRef::MasterOpacity` / `ValueRef::LedBrightness`, P-I / D4).
     LedEnabledToggle,
     LayerChromeCollapseToggle,
-    LayerOpacitySnapshot,
-    LayerOpacityChanged(f32),
-    LayerOpacityCommit,
+    // LayerOpacity scrub trio migrated to `PanelAction::Scrub`
+    // (`ValueRef::LayerOpacity`, P-I / D4).
     EffectToggle(usize),
     EffectCollapseToggle(usize),
     /// Collapse or expand every effect card in the active inspector column at
@@ -430,9 +429,8 @@ pub enum ParamsAction {
     /// only when diverged, same gate as `RevertToLibrary`.
     PushToLibrary(GraphParamTarget),
     MacrosCollapseToggle,
-    MacroSnapshot(usize),
-    MacroChanged(usize, f32),
-    MacroCommit(usize),
+    // Macro scrub trio migrated to `PanelAction::Scrub` (`ValueRef::Macro`,
+    // P-I / D4).
     MacroLabelRename(usize),     // macro_index — opens inline rename input
     ParamLabelRightClick(GraphParamTarget, ParamId),
     MacroReset(usize), // macro_idx — reset to 0 from context menu
