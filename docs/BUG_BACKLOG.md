@@ -198,6 +198,10 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 
 ## Open
 
+### BUG-299 — OSC timecode test flaky under heavy CPU load ("timecode never observed — wiring broken")
+**Status:** OPEN · found 2026-07-21 (god-file wave, landing-gate run)
+Symptom: a manifold-playback OSC-timecode test failed with "timecode never observed — wiring broken" during a full nextest sweep that was accidentally run CONCURRENTLY with a second full sweep (extreme CPU starvation); the identical test passed in every solo run before and after. Root cause: unknown — suspects: real-clock timeout in the test's wait loop too tight under starvation, or a genuine wiring race that only loses under load. Fix shape: find the failing test's wait mechanism (rg "timecode never observed" crates/manifold-playback), replace wall-clock waits with a deterministic clock or widen the budget with an explicit starvation rationale. Not machine-specific; would also bite loaded CI.
+
 ### BUG-298 (slider-fill-under-modulation-pixel-unverified) — the modulated param's slider FILL/thumb visual is inferred-correct but never confirmed by a rendered PNG — the gap VD-031 originally mislabeled "BUG-235" — found 2026-07-21, BUG-234 landing verification
 **Status:** OPEN (logged 2026-07-21, verif-infra A-tail landing).
 **Severity:** LOW — verification gap, not a known defect. The value-text half is now proven (BUG-234's `scripts/ui-flows/envelope-modulation.json`); the slider fill/thumb norm is driven by `reconcile_state`'s `sync_param_value` off the SAME `effective` value the text reads, so it is very likely correct — but "very likely" off a shared-value inference is not a pixel observation (the CLAUDE.md oracle rule: a green value-text assert is not a look).
