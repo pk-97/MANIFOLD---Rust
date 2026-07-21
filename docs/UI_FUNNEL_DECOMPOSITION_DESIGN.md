@@ -1,6 +1,6 @@
 # UI Funnel Decomposition — Wave 1 of the god-file campaign
 
-**Status: IN PROGRESS — P-P/P-B/P-F/P-D SHIPPED; P-I (scrub wire) SHIPPED 2026-07-22 (landing report `docs/landings/2026-07-22-ui-funnel-p-i.md`; ActiveInspectorDrag extinct, D8 verb live); remaining: P-S (split-by-layer + RowHost dedup per census), P-Z (close) · 2026-07-22 · Fable**
+**Status: IN PROGRESS — P-P/P-B/P-F/P-D/P-I SHIPPED; P-S SHIPPED 2026-07-22 (re-headlined at execution per census: split-by-layer + RowHost dedup — landing report `docs/landings/2026-07-22-ui-funnel-p-s.md`); remaining: P-Z close only · 2026-07-22 · Fable**
 **Prerequisites:** WIDGET_TREE (COMPLETE 2026-07-21), SCENE_PANEL_EXPOSURE_CONVERGENCE (COMPLETE 2026-07-21). Campaign register: `docs/ARCHITECTURE_DEBT.md` (inventory + wave map; status for this wave lives ONLY on this doc's Status line).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase. Pure-move commits gate on `scripts/move_identity_check.py` (built + self-tested 2026-07-21).
 
@@ -147,6 +147,9 @@ Two workstreams; parallelism only where files don't overlap. Order within WS1 pe
 Phasing-completeness check: every §2 commitment lands in exactly one phase (D1/D2→P-P/P-B/P-F; D3→P-B; D4→P-I; D5→P-D; D6→P-B; D7→P-F1; D8→P-I; D9/D10→P-S (+P-P rider); D11→P-Z ceilings, test scaffold at first landing). Nothing deferred; nothing trigger-clause'd.
 
 **Forbidden moves, wave-wide:** a "temporary" second dispatch entry point · keeping any old path alive behind a flag · reshaping variant bodies during P-D · a data-binding/subscription system anywhere · new `Arc<Mutex>` · adapters around a misfit call site (escalate: the seam has a gap) · improving adjacent code mid-move (notes file for Peter instead) · landing with a red gate.
+
+
+**P-S — RE-HEADLINED at execution (2026-07-22, census + Peter rulings):** the original "migration into param_surface machinery" thesis was STALE (WIDGET_TREE completed that migration before P-S ran). As executed: split-by-layer directory modules (param_slider_shared, param_card, panels/inspector) + ONE real dedup — shared `RowHost` extracted from ParamCardPanel, SceneCardState collapsed onto it (the scene panel's hand-copied twin deleted, net −292 lines) + the D9 `--catalog` enumeration (structural BUG-239 kill; found BUG-302 on first run). D10 macros/settings: resolved per D-39 — deferred to the CHROME_PARAMS designed unification (register); the chrome category is an accident of history, guarded meanwhile by `no_bespoke_row_infra`.
 
 ## 5. Decided — do not reopen
 
