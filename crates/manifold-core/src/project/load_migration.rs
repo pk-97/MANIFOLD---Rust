@@ -123,7 +123,7 @@ impl Project {
     /// or never had any) is a no-op. Unresolvable routes (no such layer) are
     /// dropped — counted and named on stderr, never silent. See
     /// `docs/AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` §3.2.
-    pub(super) fn migrate_legacy_clip_triggers(&mut self) {
+    fn migrate_legacy_clip_triggers(&mut self) {
         let mut dropped = 0usize;
         for send_idx in 0..self.audio_setup.sends.len() {
             let routes = std::mem::take(&mut self.audio_setup.sends[send_idx].triggers);
@@ -199,7 +199,7 @@ impl Project {
     /// future re-wire; this migration only clears what a project SAVED
     /// while the now-removed button could still set it. Idempotent: a
     /// project with no `rate_of_change: true` anywhere is a no-op.
-    pub(super) fn clear_legacy_rate_on_flags(&mut self) {
+    fn clear_legacy_rate_on_flags(&mut self) {
         let mut cleared = 0usize;
         self.for_each_preset_instance_mut(|fx| {
             let Some(mods) = fx.audio_mods.as_mut() else { return };
@@ -236,7 +236,7 @@ impl Project {
     /// serde layer reads as `node_id == handle`) lands on the right node.
     /// Idempotent: non-empty ids and handle-less boundary nodes are left
     /// untouched, so post-cutover documents pass through unchanged.
-    pub(super) fn normalize_override_node_ids(&mut self) {
+    fn normalize_override_node_ids(&mut self) {
         use crate::effect_graph_def::{EffectGraphDef, EffectGraphNode};
 
         fn stamp_nodes(nodes: &mut [EffectGraphNode]) {
@@ -352,7 +352,7 @@ impl Project {
     ///   this preservation, loading on (e.g.) the `manifold-io` test
     ///   harness which doesn't link `manifold-renderer` would silently
     ///   strip every driver's addressing data on the first save.
-    pub(super) fn resolve_legacy_param_ids(&mut self) {
+    fn resolve_legacy_param_ids(&mut self) {
         use crate::effect_registration::resolve_param_alias;
 
         /// Outcome of a single addressing-site resolution attempt.
@@ -747,5 +747,529 @@ impl Project {
                 layer.duration_mode = Some(ClipDurationMode::NoteOff);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::super::test_support::*;
+    use crate::PresetTypeId;
+    use crate::effects::{ParameterDriver, PresetInstance};
+    use crate::types::{BeatDivision, DriverWaveform};
+
+    #[test]
+    fn backfill_legacy_fork_display_names_derives_variant_label_from_id() {
+        let mut p = Project::default();
+        p.embedded_presets.push(EmbeddedPreset {
+            kind: PresetKind::Effect,
+            def: graph_def_with_id("Bloom#1", ""),
+            origin: EmbeddedOrigin::Saved,
+        });
+        // A new-style fork already carries its own display_name — untouched.
+        p.embedded_presets.push(EmbeddedPreset {
+            kind: PresetKind::Effect,
+            def: graph_def_with_id("Bloom 2", "Bloom 2"),
+            origin: EmbeddedOrigin::Saved,
+        });
+
+        let n = p.backfill_legacy_fork_display_names();
+        assert_eq!(n, 1);
+        assert_eq!(
+            p.embedded_preset(&PresetTypeId::from_string("Bloom#1".to_string()))
+                .unwrap()
+                .def
+                .preset_metadata
+                .as_ref()
+                .unwrap()
+                .display_name,
+            "Bloom (variant)"
+        );
+        assert_eq!(
+            p.embedded_preset(&PresetTypeId::from_string("Bloom 2".to_string()))
+                .unwrap()
+                .def
+                .preset_metadata
+                .as_ref()
+                .unwrap()
+                .display_name,
+            "Bloom 2"
+        );
+    }
+
+    /// Step 8 regression: a driver deserialized from the legacy
+    /// `paramIndex` shape gets its `param_id` filled in by
+    /// `resolve_legacy_param_ids` during `on_after_deserialize`.
+    #[test]
+    fn legacy_param_index_resolved_to_param_id_for_effect_drivers() {
+        let mut p = Project::default();
+        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+        fx.params = crate::params::ParamManifest::from_params(vec![slot("amount", 0.5, true)]);
+        // Construct a driver as if it came from legacy JSON: empty
+        // param_id, legacy_param_index = Some(0).
+        fx.drivers = Some(vec![ParameterDriver {
+            param_id: std::borrow::Cow::Borrowed(""),
+            beat_division: BeatDivision::Quarter,
+            waveform: DriverWaveform::Sine,
+            enabled: true,
+            phase: 0.0,
+            base_value: 0.0,
+            trim_min: 0.0,
+            trim_max: 1.0,
+            reversed: false,
+            free_period_beats: None,
+            legacy_param_index: Some(0),
+            is_paused_by_user: false,
+        }]);
+        p.settings.master_effects.push(fx);
+
+        p.resolve_legacy_param_ids();
+
+        let d = &p.settings.master_effects[0].drivers.as_ref().unwrap()[0];
+        assert_eq!(
+            d.param_id, "amount",
+            "Bloom paramIndex 0 should resolve to 'amount'"
+        );
+        assert_eq!(d.legacy_param_index, None, "legacy index must be cleared");
+    }
+
+    #[test]
+    fn legacy_resolution_idempotent_when_param_id_already_set() {
+        let mut p = Project::default();
+        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+        fx.params = crate::params::ParamManifest::from_params(vec![slot("amount", 0.5, true)]);
+        fx.drivers = Some(vec![ParameterDriver::new(
+            "amount",
+            BeatDivision::Quarter,
+            DriverWaveform::Sine,
+        )]);
+        p.settings.master_effects.push(fx);
+
+        p.resolve_legacy_param_ids();
+        p.resolve_legacy_param_ids(); // idempotent
+
+        let d = &p.settings.master_effects[0].drivers.as_ref().unwrap()[0];
+        assert_eq!(d.param_id, "amount");
+        assert_eq!(d.legacy_param_index, None);
+    }
+
+    #[test]
+    fn legacy_param_index_resolved_for_effect_envelopes() {
+        use crate::effects::{ParamEnvelope, PresetInstance};
+        use crate::layer::Layer;
+        use crate::types::LayerType;
+
+        // Envelope-home unification: an effect envelope rides on the effect
+        // instance and resolves its legacy param index against the instance's
+        // own type (no `target_effect_type` on the envelope anymore).
+        let mut p = Project::default();
+        let mut layer = Layer::new("test".to_string(), LayerType::Video, 0);
+        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+        fx.params = crate::params::ParamManifest::from_params(vec![slot("amount", 0.5, true)]);
+        fx.envelopes = Some(vec![ParamEnvelope {
+            param_id: std::borrow::Cow::Borrowed(""),
+            enabled: true,
+            target_normalized: 1.0,
+            decay_beats: 1.0,
+            legacy_param_index: Some(0),
+            current_level: 0.0,
+            was_clip_active: false,
+        }]);
+        layer.effects = Some(vec![fx]);
+        p.timeline.layers.push(layer);
+
+        p.resolve_legacy_param_ids();
+
+        let env =
+            &p.timeline.layers[0].effects.as_ref().unwrap()[0].envelopes.as_ref().unwrap()[0];
+        assert_eq!(env.param_id, "amount");
+        assert_eq!(env.legacy_param_index, None);
+    }
+
+    #[test]
+    fn legacy_resolution_drops_orphans_when_effect_known() {
+        // If the registry knows the effect (Bloom) but the legacy index
+        // is out of range (param list shrunk since save), the entry is
+        // permanently orphaned: clear legacy index, leave param_id
+        // empty. Same fail-soft policy as alias-drop. Driver is then
+        // ignored at runtime (`param_id_to_index` returns None on "").
+        let mut p = Project::default();
+        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+        fx.params = crate::params::ParamManifest::from_params(vec![slot("amount", 0.5, true)]);
+        fx.drivers = Some(vec![ParameterDriver {
+            param_id: std::borrow::Cow::Borrowed(""),
+            beat_division: BeatDivision::Quarter,
+            waveform: DriverWaveform::Sine,
+            enabled: true,
+            phase: 0.0,
+            base_value: 0.0,
+            trim_min: 0.0,
+            trim_max: 1.0,
+            reversed: false,
+            free_period_beats: None,
+            legacy_param_index: Some(99),
+            is_paused_by_user: false,
+        }]);
+        p.settings.master_effects.push(fx);
+
+        p.resolve_legacy_param_ids();
+
+        let d = &p.settings.master_effects[0].drivers.as_ref().unwrap()[0];
+        assert_eq!(d.param_id, "", "out-of-range index leaves param_id empty");
+        assert_eq!(
+            d.legacy_param_index, None,
+            "registry-known + out-of-range = Drop; legacy idx cleared"
+        );
+    }
+
+    #[test]
+    fn registry_missing_recovery_round_trip() {
+        // End-to-end: a driver that loaded against an unregistered
+        // effect (RegistryMissing) keeps its `legacy_param_index`
+        // parked. The custom `Serialize` impl re-emits it as
+        // `paramIndex`, so a save→reload cycle on a build without the
+        // registry preserves recovery information verbatim. On a
+        // future load against a populated registry, the resolver fills
+        // in `param_id` cleanly.
+        use crate::effects::{ParamId, ParameterDriver};
+
+        // Step 1: simulate a load where the registry was missing for
+        // this effect type. The driver is in the parked state.
+        let driver = ParameterDriver {
+            param_id: ParamId::Borrowed(""),
+            beat_division: BeatDivision::Half,
+            waveform: DriverWaveform::Sine,
+            enabled: true,
+            phase: 0.25,
+            base_value: 0.0,
+            trim_min: 0.0,
+            trim_max: 1.0,
+            reversed: false,
+            free_period_beats: None,
+            legacy_param_index: Some(2),
+            is_paused_by_user: false,
+        };
+
+        // Step 2: serialize. Custom Serialize re-emits the parked
+        // index as `paramIndex` since param_id is empty.
+        let json = serde_json::to_string(&driver).expect("serialize");
+        assert!(
+            json.contains("\"paramIndex\":2"),
+            "registry-missing driver must re-emit legacy paramIndex on save; got: {json}"
+        );
+        assert!(
+            !json.contains("\"paramId\""),
+            "must NOT emit paramId when it's empty; got: {json}"
+        );
+
+        // Step 3: reload. Deserialize parks the index again.
+        let back: ParameterDriver = serde_json::from_str(&json).expect("deserialize");
+        assert!(
+            back.param_id.is_empty(),
+            "param_id remains empty until resolver"
+        );
+        assert_eq!(
+            back.legacy_param_index,
+            Some(2),
+            "index re-parked from wire"
+        );
+
+        // Step 4: now imagine the registry just came online (Bloom is
+        // registered in this test crate; pretend the driver was for it).
+        let mut p = Project::default();
+        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+        fx.params = crate::params::ParamManifest::from_params(vec![slot("amount", 0.5, true)]);
+        let mut driver_for_bloom = back.clone();
+        // (In a real load, the driver lands inside an PresetInstance
+        // from the deserialize tree; here we simulate by re-attaching.)
+        driver_for_bloom.legacy_param_index = Some(0); // Bloom only has 1 param; fake idx 0
+        fx.drivers = Some(vec![driver_for_bloom]);
+        p.settings.master_effects.push(fx);
+
+        // Step 5: resolver runs against the populated registry. Recovery
+        // completes: param_id resolves, legacy index clears.
+        p.resolve_legacy_param_ids();
+        let d = &p.settings.master_effects[0].drivers.as_ref().unwrap()[0];
+        assert_eq!(
+            d.param_id, "amount",
+            "registry came online; resolver fills param_id"
+        );
+        assert_eq!(
+            d.legacy_param_index, None,
+            "legacy index cleared on successful resolve"
+        );
+    }
+
+    #[test]
+    fn legacy_resolution_preserves_legacy_idx_when_registry_missing() {
+        // The cross-cutting recovery path: if the registry doesn't have a
+        // def for this effect type at load time (e.g., a tooling crate
+        // that didn't link manifold-renderer), the resolver must NOT
+        // clear `legacy_param_index`. Otherwise the next save→reload on
+        // a properly-registered build would silently lose the addressing
+        // forever. The custom Serialize for `ParameterDriver` re-emits
+        // `paramIndex` when `param_id` is empty, completing the recovery
+        // loop end-to-end.
+        let mut p = Project::default();
+        // Synthetic effect type with no registry def in this test build.
+        let unregistered = crate::PresetTypeId::from_string("not-a-real-effect-id".to_string());
+        let mut fx = PresetInstance::new(unregistered);
+        fx.params = crate::params::ParamManifest::from_params(vec![
+            slot("p0", 0.5, true),
+            slot("p1", 0.5, true),
+            slot("p2", 0.5, true),
+        ]);
+        fx.drivers = Some(vec![ParameterDriver {
+            param_id: std::borrow::Cow::Borrowed(""),
+            beat_division: BeatDivision::Quarter,
+            waveform: DriverWaveform::Sine,
+            enabled: true,
+            phase: 0.0,
+            base_value: 0.0,
+            trim_min: 0.0,
+            trim_max: 1.0,
+            reversed: false,
+            free_period_beats: None,
+            legacy_param_index: Some(2),
+            is_paused_by_user: false,
+        }]);
+        p.settings.master_effects.push(fx);
+
+        p.resolve_legacy_param_ids();
+
+        let d = &p.settings.master_effects[0].drivers.as_ref().unwrap()[0];
+        assert_eq!(d.param_id, "", "no registry def -> param_id stays empty");
+        assert_eq!(
+            d.legacy_param_index,
+            Some(2),
+            "RegistryMissing must preserve legacy index for next-load recovery"
+        );
+    }
+
+    #[test]
+    fn normalize_override_node_ids_stamps_empty_ids_with_handle() {
+        use crate::effect_graph_def::{EFFECT_GRAPH_VERSION, EffectGraphDef, EffectGraphNode};
+        use std::collections::{BTreeMap, BTreeSet};
+
+        let make_node = |id: u32, handle: Option<&str>| EffectGraphNode {
+            id,
+            node_id: crate::NodeId::default(), // pre-node-id document
+            type_id: "node.blur".to_string(),
+            handle: handle.map(|h| h.to_string()),
+            params: BTreeMap::new(),
+            exposed_params: BTreeSet::new(),
+            editor_pos: None,
+            wgsl_source: None,
+            title: None,
+            output_formats: BTreeMap::new(),
+            output_canvas_scales: BTreeMap::new(),
+            group: None,
+        };
+        let def = EffectGraphDef {
+            version: EFFECT_GRAPH_VERSION,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            // One handled node + one anonymous boundary node.
+            nodes: vec![make_node(0, Some("softblur")), make_node(1, None)],
+            wires: vec![],
+        };
+        let mut fx = PresetInstance::new(PresetTypeId::new("Mirror"));
+        fx.graph = Some(def);
+        let mut p = Project::default();
+        p.settings.master_effects.push(fx);
+
+        p.normalize_override_node_ids();
+
+        let nodes = &p.settings.master_effects[0].graph.as_ref().unwrap().nodes;
+        assert_eq!(nodes[0].node_id, "softblur", "handled node id defaults to handle");
+        assert!(
+            nodes[1].node_id.is_empty(),
+            "anonymous node left empty — never a binding target"
+        );
+
+        // Idempotent: a node that already has an explicit id is untouched.
+        let mut fx2 = PresetInstance::new(PresetTypeId::new("Mirror"));
+        let mut explicit = make_node(0, Some("softblur"));
+        explicit.node_id = crate::NodeId::new("explicit");
+        fx2.graph = Some(EffectGraphDef {
+            version: EFFECT_GRAPH_VERSION,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            nodes: vec![explicit],
+            wires: vec![],
+        });
+        let mut p2 = Project::default();
+        p2.settings.master_effects.push(fx2);
+        p2.normalize_override_node_ids();
+        assert_eq!(
+            p2.settings.master_effects[0].graph.as_ref().unwrap().nodes[0].node_id,
+            "explicit",
+            "explicit id preserved"
+        );
+    }
+
+    #[test]
+    fn migrate_legacy_clip_triggers_resolves_explicit_target_and_drains_send() {
+        let mut p = Project::default();
+        let send_a = send_with_id("Kick", "send-a");
+        let send_id = send_a.id.clone();
+        p.audio_setup.sends.push(send_a);
+
+        let target =
+            crate::layer::Layer::new("Strobe".to_string(), crate::types::LayerType::Video, 0);
+        let target_id = target.layer_id.clone();
+        p.timeline.layers.push(target);
+
+        let mut route = crate::audio_trigger::TriggerRoute::new(crate::audio_mod::AudioBand::Low);
+        route.enabled = true;
+        route.sensitivity = 0.8;
+        route.target_layer = Some(target_id.clone());
+        p.audio_setup.sends[0].triggers.push(route);
+
+        p.migrate_legacy_clip_triggers();
+
+        assert!(p.audio_setup.sends[0].triggers.is_empty(), "legacy storage drained");
+        let (_, layer) = p.timeline.find_layer_by_id(&target_id).unwrap();
+        assert_eq!(layer.clip_triggers.len(), 1);
+        let cfg = &layer.clip_triggers[0];
+        assert!(cfg.enabled);
+        assert_eq!(cfg.source.send_id, send_id);
+        assert_eq!(cfg.shape.sensitivity, 0.8, "U5-verbatim sensitivity-to-Amount mapping");
+    }
+
+    #[test]
+    fn migrate_legacy_clip_triggers_auto_routes_by_send_label_when_no_target_layer() {
+        let mut p = Project::default();
+        let send_a = send_with_id("Kick", "send-a"); // label "Kick"
+        let send_id = send_a.id.clone();
+        p.audio_setup.sends.push(send_a);
+
+        // Name-matches the send label — the fire-time auto-route rule, run
+        // once at load.
+        let layer = crate::layer::Layer::new("Kick".to_string(), crate::types::LayerType::Video, 0);
+        let target_id = layer.layer_id.clone();
+        p.timeline.layers.push(layer);
+
+        let mut route = crate::audio_trigger::TriggerRoute::new(crate::audio_mod::AudioBand::Full);
+        route.enabled = true;
+        // No target_layer set.
+        p.audio_setup.sends[0].triggers.push(route);
+
+        p.migrate_legacy_clip_triggers();
+
+        let (_, layer) = p.timeline.find_layer_by_id(&target_id).unwrap();
+        assert_eq!(layer.clip_triggers.len(), 1);
+        assert_eq!(layer.clip_triggers[0].source.send_id, send_id);
+    }
+
+    #[test]
+    fn migrate_legacy_clip_triggers_drops_unresolvable_route_and_still_drains() {
+        let mut p = Project::default();
+        // Label "Ghost" — no layer named "Ghost", no explicit target_layer.
+        let send_a = send_with_id("Ghost", "send-a");
+        p.audio_setup.sends.push(send_a);
+
+        let mut route = crate::audio_trigger::TriggerRoute::new(crate::audio_mod::AudioBand::Full);
+        route.enabled = true;
+        p.audio_setup.sends[0].triggers.push(route);
+
+        p.migrate_legacy_clip_triggers();
+
+        assert!(p.audio_setup.sends[0].triggers.is_empty(), "drained even when unresolvable");
+        assert!(p.timeline.layers.is_empty());
+    }
+
+    #[test]
+    fn migrate_legacy_clip_triggers_is_idempotent_on_a_project_with_no_legacy_routes() {
+        let mut p = Project::default();
+        p.audio_setup.sends.push(send_with_id("A", "send-a"));
+        p.timeline.layers.push(crate::layer::Layer::new(
+            "L".to_string(),
+            crate::types::LayerType::Video,
+            0,
+        ));
+        p.migrate_legacy_clip_triggers();
+        assert!(p.timeline.layers[0].clip_triggers.is_empty());
+        assert!(p.audio_setup.sends[0].triggers.is_empty());
+    }
+
+    #[test]
+    fn clear_legacy_rate_on_flags_clears_both_carriers_and_counts() {
+        let mut p = Project::default();
+
+        // A param mod (`PresetInstance.audio_mods`) with rate_of_change set.
+        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+        let mut m = crate::audio_mod::ParameterAudioMod::new(
+            "amount".into(),
+            crate::AudioSendId::new("send-a"),
+            crate::audio_mod::AudioFeature::new(
+                crate::audio_mod::AudioFeatureKind::Amplitude,
+                crate::audio_mod::AudioBand::Full,
+            ),
+        );
+        m.shape.rate_of_change = true;
+        fx.audio_mods = Some(vec![m]);
+        p.settings.master_effects.push(fx);
+
+        // A clip trigger (`Layer.clip_triggers`) with rate_of_change set.
+        let mut layer = layer_with_clip_trigger(
+            crate::AudioSendId::new("send-b"),
+            crate::audio_mod::AudioBand::Low,
+            true,
+        );
+        layer.clip_triggers[0].shape.rate_of_change = true;
+        p.timeline.layers.push(layer);
+
+        p.clear_legacy_rate_on_flags();
+
+        assert!(
+            !p.settings.master_effects[0].audio_mods.as_ref().unwrap()[0]
+                .shape
+                .rate_of_change,
+            "param-mod carrier cleared"
+        );
+        assert!(
+            !p.timeline.layers[0].clip_triggers[0].shape.rate_of_change,
+            "clip-trigger carrier cleared"
+        );
+    }
+
+    #[test]
+    fn clear_legacy_rate_on_flags_is_idempotent_when_none_are_set() {
+        let mut p = Project::default();
+        p.timeline.layers.push(layer_with_clip_trigger(
+            crate::AudioSendId::new("send-a"),
+            crate::audio_mod::AudioBand::Low,
+            true,
+        ));
+        // shape.rate_of_change defaults false — nothing to clear.
+        p.clear_legacy_rate_on_flags();
+        assert!(!p.timeline.layers[0].clip_triggers[0].shape.rate_of_change);
+    }
+
+    #[test]
+    fn clear_legacy_rate_on_flags_stays_cleared_across_a_save_reload_round_trip() {
+        // DESIGN_DOC_STANDARD §5's round-trip gate: create-path green is half
+        // a gate for stateful features. Save → reload must not resurrect the
+        // flag `on_after_deserialize` cleared on the previous load.
+        let mut p = Project::default();
+        p.timeline.layers.push(layer_with_clip_trigger(
+            crate::AudioSendId::new("send-a"),
+            crate::audio_mod::AudioBand::Low,
+            true,
+        ));
+        p.timeline.layers[0].clip_triggers[0].shape.rate_of_change = true;
+        p.clear_legacy_rate_on_flags();
+        assert!(!p.timeline.layers[0].clip_triggers[0].shape.rate_of_change);
+
+        let json = serde_json::to_string(&p).expect("serialize");
+        let mut reloaded: Project = serde_json::from_str(&json).expect("deserialize");
+        reloaded.on_after_deserialize();
+        assert!(
+            !reloaded.timeline.layers[0].clip_triggers[0].shape.rate_of_change,
+            "round trip must not resurrect rate_of_change"
+        );
     }
 }

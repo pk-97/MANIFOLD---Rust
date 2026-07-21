@@ -252,3 +252,173 @@ impl Project {
         Some(new_id)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::super::test_support::*;
+    use crate::PresetTypeId;
+    use crate::effects::PresetInstance;
+
+    #[test]
+    fn fork_preset_mints_id_and_retargets_instance() {
+        let mut p = Project::default();
+        let fx = PresetInstance::new(PresetTypeId::BLOOM);
+        let fx_id = fx.id.clone();
+        p.settings.master_effects.push(fx);
+
+        let target = crate::GraphTarget::Effect(fx_id.clone());
+        let new_id = p
+            .fork_preset(&target, PresetKind::Effect, graph_def_with_id("Bloom", "Bloom"))
+            .expect("fork retargets an existing instance");
+
+        // Minted a distinct project-scoped id.
+        assert_eq!(new_id.as_str(), "Bloom#1");
+        // The instance now points at the fork; the embedded preset exists.
+        assert_eq!(p.find_effect_by_id(&fx_id).unwrap().effect_type(), &new_id);
+        assert!(p.embedded_preset(&new_id).is_some());
+        assert_eq!(p.embedded_preset(&new_id).unwrap().def.preset_metadata.as_ref().unwrap().id, new_id);
+
+        // A second fork of the same base mints a fresh id.
+        let fx2 = PresetInstance::new(PresetTypeId::BLOOM);
+        let fx2_id = fx2.id.clone();
+        p.settings.master_effects.push(fx2);
+        let new_id2 = p
+            .fork_preset(
+                &crate::GraphTarget::Effect(fx2_id),
+                PresetKind::Effect,
+                graph_def_with_id("Bloom", "Bloom"),
+            )
+            .unwrap();
+        assert_eq!(new_id2.as_str(), "Bloom#2");
+        assert_eq!(p.embedded_presets.len(), 2);
+    }
+
+    #[test]
+    fn mint_forked_preset_id_starts_at_2_and_probes_past_collisions() {
+        let mut p = Project::default();
+        // No embedded presets yet: first fork of "Bloom" reads as "Bloom 2",
+        // not "Bloom 1" (D2 — a fork is presented as the preset's second
+        // instance).
+        assert_eq!(p.mint_forked_preset_id("Bloom").as_str(), "Bloom 2");
+
+        p.embedded_presets.push(EmbeddedPreset {
+            kind: PresetKind::Effect,
+            def: graph_def_with_id("Bloom 2", "Bloom 2"),
+            origin: EmbeddedOrigin::Saved,
+        });
+        // "Bloom 2" is taken — probes to "Bloom 3".
+        assert_eq!(p.mint_forked_preset_id("Bloom").as_str(), "Bloom 3");
+    }
+
+    #[test]
+    fn embedded_presets_round_trip_and_skip_when_empty() {
+        // Empty by default → no `embeddedPresets` field on the wire (existing
+        // fixtures stay byte-identical).
+        let p = Project::default();
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(!json.contains("embeddedPresets"), "empty must be skipped: {json}");
+
+        // A forked preset round-trips inside the project JSON.
+        let mut p = Project::default();
+        let mut def = crate::effect_graph_def::EffectGraphDef {
+            version: crate::effect_graph_def::EFFECT_GRAPH_VERSION,
+            name: Some("Oily Fluid (Layer 2 variant)".to_string()),
+            description: None,
+            preset_metadata: None,
+            nodes: Vec::new(),
+            wires: Vec::new(),
+        };
+        def.preset_metadata = Some(crate::effect_graph_def::PresetMetadata {
+            id: PresetTypeId::from_string("OilyFluid#layer2".to_string()),
+            display_name: "Oily Fluid (Layer 2 variant)".to_string(),
+            category: String::new(),
+            osc_prefix: String::new(),
+            legacy_discriminant: None,
+            available: true,
+            is_line_based: false,
+            params: Vec::new(),
+            bindings: Vec::new(),
+            skip_mode: Default::default(),
+            param_aliases: Vec::new(),
+            value_aliases: Vec::new(),
+            string_params: Vec::new(),
+            string_bindings: Vec::new(),
+        });
+        p.embedded_presets.push(EmbeddedPreset {
+            kind: PresetKind::Generator,
+            def,
+            origin: EmbeddedOrigin::Saved,
+        });
+
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(json.contains("embeddedPresets"), "non-empty must serialize: {json}");
+        let back: Project = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.embedded_presets.len(), 1);
+        assert_eq!(back.embedded_presets[0].kind, PresetKind::Generator);
+        assert_eq!(back.embedded_presets[0].origin, EmbeddedOrigin::Saved);
+        assert_eq!(
+            back.embedded_presets[0].id().map(|i| i.as_str()),
+            Some("OilyFluid#layer2")
+        );
+    }
+
+    /// D5: `origin` round-trips for BOTH variants, and a legacy embedded
+    /// preset with no `origin` field on the wire (pre-P2 project files)
+    /// loads as `Saved` — the deliberate, on-top-of-disk default that
+    /// matches what those files' entries always meant before `Snapshot`
+    /// existed.
+    #[test]
+    fn embedded_preset_origin_round_trips_both_variants_and_defaults_legacy_to_saved() {
+        let mut p = Project::default();
+        p.embedded_presets.push(EmbeddedPreset {
+            kind: PresetKind::Effect,
+            def: graph_def_with_id("Bloom 2", "Bloom 2"),
+            origin: EmbeddedOrigin::Saved,
+        });
+        p.embedded_presets.push(EmbeddedPreset {
+            kind: PresetKind::Effect,
+            def: graph_def_with_id("Bloom", "Bloom"),
+            origin: EmbeddedOrigin::Snapshot,
+        });
+
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(json.contains("\"origin\":\"Saved\""), "Saved must serialize: {json}");
+        assert!(json.contains("\"origin\":\"Snapshot\""), "Snapshot must serialize: {json}");
+
+        let back: Project = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            back.embedded_preset(&PresetTypeId::from_string("Bloom 2".to_string()))
+                .unwrap()
+                .origin,
+            EmbeddedOrigin::Saved
+        );
+        assert_eq!(
+            back.embedded_preset(&PresetTypeId::from_string("Bloom".to_string()))
+                .unwrap()
+                .origin,
+            EmbeddedOrigin::Snapshot
+        );
+
+        // Legacy shape: an embedded preset JSON object with no `origin` key
+        // at all (as every pre-P2 project file has) must default to Saved.
+        // `origin` is the last field in `EmbeddedPreset`, so it serializes
+        // with a LEADING comma and no trailing one.
+        let legacy_json = json.replacen(",\"origin\":\"Snapshot\"", "", 1);
+        assert_eq!(
+            legacy_json.matches("\"origin\"").count(),
+            1,
+            "sanity: exactly the Snapshot entry's origin key must be gone \
+             (the untouched Saved entry still carries its own): {legacy_json}"
+        );
+        let legacy_back: Project = serde_json::from_str(&legacy_json).unwrap();
+        assert_eq!(
+            legacy_back
+                .embedded_preset(&PresetTypeId::from_string("Bloom".to_string()))
+                .unwrap()
+                .origin,
+            EmbeddedOrigin::Saved,
+            "no `origin` field on the wire must default to Saved"
+        );
+    }
+}
