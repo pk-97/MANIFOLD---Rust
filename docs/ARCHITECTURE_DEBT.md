@@ -31,7 +31,7 @@ Campaign origin: Peter, 2026-07-21 — *"I want god files gone, I want proper so
 | `manifold-ui/src/panels/param_slider_shared.rs` | 3,166 | 92 | same (P-S) |
 | `manifold-ui/src/panels/mod.rs` (`PanelAction`, 303 variants) | — | 131 | per-domain intent enums under one wire type |
 
-## Wave 2 — model/command layer (design doc: not yet authored)
+## Wave 2 — model/command layer (design: `docs/MODEL_COMMAND_DECOMPOSITION_DESIGN.md`)
 
 | File | Lines | Commits | Note |
 |---|---|---|---|
