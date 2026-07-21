@@ -8,8 +8,9 @@ The proven recipe (browser slice, twice-validated) — per domain:
 2. In `dispatch_inspector`: `let r = super::dispatch::<d>::dispatch_<d>(action, ctx); if !r.unhandled { return r; }` · in `dispatch/mod.rs`: `pub(crate) mod <d>;`
 3. Run the four gates.
 
-- [ ] **S1 clip** — arms inspector.rs:753–930 + `apply_detection_edit` (clip-only) + its imports. Preamble-free. READY.
-- [ ] **S2 resolve** — pure helper move: dual-edit helpers (:61–223), resolvers (:223–341), `resolve_param_range`, `preset_source_def`, `audio_setup_command` → `dispatch/resolve.rs` (pub(crate)); 86 call sites keep working via use-wiring/path updates (wiring class in the verifier). No chain call, no census change; chain-completeness exempts resolve.rs already.
+- [x] **S1 clip** — arms inspector.rs:753–930 + `apply_detection_edit` (clip-only) + its imports. Preamble-free. READY. — DONE 4d271d97 (G1 pure move residue 0 scaffold 5/25; census 150; clippy 0; nextest 319/319 incl. chain-completeness). Accepted, gates re-run independently.
+- [x] **S2 resolve** — pure helper move: dual-edit helpers (:61–223), resolvers (:223–341), `resolve_param_range`, `preset_source_def`, `audio_setup_command` → `dispatch/resolve.rs` (pub(crate)); 86 call sites keep working via use-wiring/path updates (wiring class in the verifier). No chain call, no census change; chain-completeness exempts resolve.rs already. — DONE 1f5c9247 (UNAMENDED; G1 initially residue 4 = use-block continuation lines, a verifier class gap → fixed in S2b; post-fix G1 PURE MOVE PROVEN residue 0, 11 visibility pairs; census 150; clippy 0; nextest green). Accepted after S2b.
+- [x] **S2b verifier class fix (D-18)** — move_identity_check.py stateful use-block tracking (multi-line `use{…}` continuation lines are wiring, smuggle-proof) + 2 self-test fixtures. — DONE 4b3a6bbb (self-test 7/7 incl. both new D-18 cases; G1 on 1f5c9247 → residue 0). Own tooling commit per D-7. Shared gate per D-19 (2nd lander merges the D-15 wrapper class + fixtures).
 - [ ] **S3 params** — preamble domain (see decisions D-11).
 - [ ] **S4 modulation** — preamble domain; heaviest helper user.
 - [ ] **S5 mapping** — preamble domain.
