@@ -576,7 +576,15 @@ pub fn dispatch(
         | PanelAction::MarkerDragEnded(..)
         | PanelAction::MarkerRightClicked(_)
         | PanelAction::DeleteSelectedMarkers => {
-            marker::dispatch_marker(action, project, content_tx, ui, selection, drag_snapshot)
+            marker::dispatch_marker(
+                action,
+                project,
+                content_tx,
+                ui,
+                selection,
+                drag_snapshot,
+                active_inspector_drag,
+            )
         }
 
         // ── Project/file/export/audio ─────────────────────────────

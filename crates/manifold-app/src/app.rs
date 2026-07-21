@@ -162,6 +162,15 @@ pub(crate) enum ActiveInspectorDrag {
         scale: f32,
         offset: f32,
     },
+    /// A timeline-marker drag (BUG-280). Marker drag is driven by
+    /// `ViewportDrag::MarkerDrag`, outside `InteractionOverlay`'s `DragMode`,
+    /// so a mid-gesture content-thread snapshot would revert `marker.beat`.
+    /// Restores the in-flight beat through the same `timeline` write the live
+    /// `MarkerDragMoved` arm uses.
+    Marker {
+        marker_id: manifold_core::MarkerId,
+        beat: f32,
+    },
 }
 
 impl ActiveInspectorDrag {
@@ -398,6 +407,12 @@ impl ActiveInspectorDrag {
                 };
                 crate::app_render::build_mapping_command(target, param_id, edit, seed)
                     .execute(project);
+            }
+            Self::Marker { marker_id, beat } => {
+                if let Some(marker) = project.timeline.find_marker_mut(marker_id) {
+                    marker.beat = manifold_core::Beats::from_f32(*beat);
+                }
+                project.timeline.sort_markers();
             }
         }
     }

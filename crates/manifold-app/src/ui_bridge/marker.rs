@@ -17,6 +17,7 @@ pub(super) fn dispatch_marker(
     _ui: &mut UIRoot,
     selection: &mut SelectionState,
     drag_snapshot: &mut Option<f32>,
+    active_inspector_drag: &mut Option<crate::app::ActiveInspectorDrag>,
 ) -> DispatchResult {
     match action {
         // ── Click: select/multi-select marker ──────────────────
@@ -40,6 +41,12 @@ pub(super) fn dispatch_marker(
                 .timeline
                 .find_marker(&marker_id)
                 .map(|m| m.beat.as_f32());
+            if let Some(beat) = *drag_snapshot {
+                *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::Marker {
+                    marker_id: marker_id.clone(),
+                    beat,
+                });
+            }
             // Select the marker being dragged
             selection.select_marker(marker_id);
             DispatchResult::handled()
@@ -52,11 +59,16 @@ pub(super) fn dispatch_marker(
                 marker.beat = Beats::from_f32(*new_beat);
             }
             project.timeline.sort_markers();
+            *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::Marker {
+                marker_id: marker_id.clone(),
+                beat: *new_beat,
+            });
             DispatchResult::structural()
         }
 
         // ── Drag end: commit MoveMarkerCommand ─────────────────
         PanelAction::MarkerDragEnded(marker_id_str, final_beat) => {
+            *active_inspector_drag = None;
             let marker_id = MarkerId::new(marker_id_str.as_str());
             if let Some(old_beat) = drag_snapshot.take() {
                 // Only commit if the marker actually moved
@@ -109,5 +121,46 @@ pub(super) fn dispatch_marker(
         }
 
         _ => DispatchResult::unhandled(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use manifold_core::marker::TimelineMarker;
+    use manifold_core::{Beats, project::Project};
+
+    /// BUG-280 regression. Marker drag is driven by `ViewportDrag::MarkerDrag`,
+    /// outside `InteractionOverlay`'s `DragMode`, so a mid-gesture content-thread
+    /// snapshot swap used to revert the in-flight `marker.beat`. This mirrors
+    /// `bound_node_param_drag_survives_snapshot_stomp`: build the guard the live
+    /// `MarkerDragMoved` arm installs, apply it to a stomped (stale) project, and
+    /// confirm the dragged beat survives.
+    #[test]
+    fn marker_drag_survives_snapshot_stomp() {
+        let mut project = Project::default();
+        let marker = TimelineMarker::new(Beats::from_f32(0.0));
+        let marker_id = marker.id.clone();
+        project.timeline.markers.push(marker);
+
+        let guard = crate::app::ActiveInspectorDrag::Marker {
+            marker_id: marker_id.clone(),
+            beat: 5.0,
+        };
+
+        // A full snapshot lands mid-drag carrying the stale pre-drag project;
+        // app_render restores the guarded drag onto it.
+        let mut stomped = project.clone();
+        guard.apply(&mut stomped);
+
+        let after = stomped
+            .timeline
+            .find_marker(&marker_id)
+            .expect("marker still present")
+            .beat
+            .as_f32();
+        assert_eq!(
+            after, 5.0,
+            "marker-drag stomp must be undone so the marker doesn't revert mid-gesture"
+        );
     }
 }
