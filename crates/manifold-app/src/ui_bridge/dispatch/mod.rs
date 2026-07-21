@@ -7,6 +7,7 @@
 
 pub(crate) mod browser;
 pub(crate) mod clip;
+pub(crate) mod modulation;
 pub(crate) mod params;
 pub(crate) mod resolve;
 
