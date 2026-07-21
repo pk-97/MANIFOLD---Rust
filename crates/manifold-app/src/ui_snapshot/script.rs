@@ -182,6 +182,15 @@ pub fn run(scene: &str, script_path: &str) {
     );
 
     let mut runner = Runner::new();
+    // BUG-296: `resolve_effect_target` falls back to `timeline.layers.first()`
+    // when `Runner.active_layer` is None, silently mutating the wrong layer's
+    // effect chain for structural PanelActions dispatched before any
+    // `LayerClicked` gesture. Seed it from the fixture's actual active layer
+    // (`data.active`) so a script's first structural dispatch (e.g.
+    // `EffectReorder`) targets the layer the display is actually showing.
+    runner.active_layer = data
+        .active
+        .and_then(|i| data.project.timeline.layers.get(i).map(|l| l.layer_id.clone()));
     let mut results = Vec::with_capacity(actions.len());
     let mut ok = true;
 
@@ -658,6 +667,22 @@ impl Runner {
                     } else {
                         ui.inspector.handle_scroll_at(delta.y, center.x);
                     }
+                } else if ui.scene_setup_panel.is_open() && ui.layout.scene_setup().contains(center) {
+                    // BUG-294: the Scene Setup dock's own scroll-offset setter
+                    // (`ScenePanel::handle_scroll`, the same one
+                    // `ScenePanel::handle_event`'s `UIEvent::Scroll` arm calls
+                    // when the live app routes through the generic pipeline,
+                    // `window_input.rs`'s `primary_mouse_wheel`) — called
+                    // direct here rather than through the generic
+                    // `UIEvent::Scroll` pipeline because that pipeline alone
+                    // never forces the rebuild that bakes the new offset into
+                    // built node positions (BUG-223's exact gap, mirrored for
+                    // this harness): `window_input.rs` explicitly sets
+                    // `needs_rebuild` right after routing scene/audio-setup
+                    // scroll, so this does the same with
+                    // `needs_structural_sync`.
+                    ui.scene_setup_panel.handle_scroll(delta.y);
+                    self.needs_structural_sync = true;
                 } else {
                     ui.input.process_scroll(center, *delta);
                     self.drain_and_dispatch(ui, data);
@@ -777,10 +802,19 @@ impl Runner {
                 _ => {}
             }
         }
-        let _ = host.pending_actions; // context-menu actions: no proving script needs these yet
+        // BUG-293: context-menu / overlay-originated actions land in
+        // `host.pending_actions` (e.g. `AppEditingHost::push_context_menu`)
+        // and the live app drains them the same way (`app_render.rs:1471`,
+        // `actions.append(&mut host.pending_actions)`); this driver used to
+        // just discard them. Take them before `host`'s borrow of
+        // `data.project` ends, then dispatch through the same real bridge
+        // every other `PanelAction` here goes through.
+        let pending = std::mem::take(&mut host.pending_actions);
+        drop(host);
         if rebuild_flag {
             self.needs_structural_sync = true;
         }
+        self.apply_panel_actions(ui, data, &pending);
     }
 
     /// Route every `PanelAction` through the REAL `ui_bridge::dispatch` —
