@@ -24,6 +24,8 @@ D7 lists six modules: `frame/{drain,events,sync,push,present}.rs` + `editor_brid
 
 **Landed (verified):** editor_bridge `57f17529` (residue 0, 319 tests) · present `bc42e9a2` (residue 0). app_render.rs 6548 → 3774 lines. `tick_and_render` stays the ~3,250-line inline monolith (111–~3360) — the drain/events/sync/push body split is the parked semantic work, so the "orchestrator under one page" end-state is NOT reached this phase.
 
+**P-F1 CLOSED (D-28).** Both pure-move clusters my census identified are landed — nothing pure-movable remains. Dispositions: drain/events/sync/push → daytime semantic phase **P-F1b** (FrameCtx-shaped, its own brief); `Bound`/`UnboundNodeParamDrag` → **stay** as P-I deletion targets (die into `ScrubState`, design D4); `mini_timeline_data`/`render_text_input_overlay` → stay (shared helpers).
+
 **`frame/present.rs`** — `present_all_windows` (4853–5530), `represent_cached_offscreen` (5531–5587) + present-path private helpers `bug060_dump_every`, `bug060_dump_png`, `format_scope_readout`, `fmt_table_cell_seed`.
 
 ## Parked, not forced (brief: "anything not fitting cleanly → park")
