@@ -28,8 +28,8 @@ use crate::anim::{AnimF32, Transient};
 use crate::chrome::{Align, ChromeHost, Pad, Sizing, View};
 use crate::color;
 use crate::node::*;
-use crate::param_surface::{ParamRow, ParamSurface, RowIndex, RowRole};
-use crate::slider::{BitmapSlider, SliderColors, SliderNodeIds, TrackSpan};
+use crate::param_surface::{ParamRow, ParamSurface, RowRole};
+use crate::slider::{BitmapSlider, SliderColors, TrackSpan};
 use crate::transform2d::Affine2;
 use crate::tree::UITree;
 use manifold_foundation::{EffectId, LayerId, RELIGHT_FEATURE_ENABLED};
@@ -514,13 +514,6 @@ pub struct ParamCardPanel {
     rows: Vec<ParamRow>,
     string_param_info: Vec<ParamCardStringInfo>,
 
-    /// WidgetId → (row, role) reverse map, rebuilt every `build()` from the
-    /// same rows being rendered (D5, `docs/WIDGET_TREE_DESIGN.md` P2) — the
-    /// ONLY sanctioned way `handle_click`/`handle_pointer_down`/`handle_drag`
-    /// identify a row element. Cleared at the top of `build()`, repopulated
-    /// by `reindex_row` as each row's controls land.
-    row_index: RowIndex,
-
     // ── State ──
     state: ParamCardState,
 
@@ -584,42 +577,19 @@ pub struct ParamCardPanel {
     cached_has_graph_mod: bool,
 
     // ── Node IDs — per-param (shared) ──
-    slider_ids: Vec<Option<SliderNodeIds>>,
-    /// Per-param right-click reset for `slider_ids[pi]`'s track — a parallel
-    /// array (rather than folding into `slider_ids`) so the many existing
-    /// `slider_ids[pi].track`/`.value_text`/etc. access sites are untouched.
-    /// `Some` exactly when `slider_ids[pi]` is `Some` (BUG-070 follow-through).
-    slider_resets: Vec<Option<PanelAction>>,
+    /// The per-row id-bundle machinery + reverse `WidgetId → (row, role)`
+    /// index (P-S2): every slider/trim/target/driver/envelope/audio/toggle/
+    /// mapping/section node id this card's rows mint, plus `row_index`. The
+    /// row builders populate its fields, then `reindex_row` folds them into
+    /// the index; `handle_click`/`handle_pointer_down`/`register_intents`
+    /// resolve through it. The per-row *data* (rows, `mod_state`, the value /
+    /// osc / tab caches below) stays on the panel and is passed to
+    /// `RowHost::row_action` by reference.
+    row_host: RowHost,
     /// Per-param base (pre-modulation) value, cached each sync so a value-cell
     /// double-click prefills the type-in box with the user-set value, not the
     /// live modulated display. Sized to the param count in `configure`.
     base_values: Vec<f32>,
-    /// Per-param transparent full-row hit catcher behind the slider widgets.
-    /// Carries the param's right-click menu intent so the value cell + gaps
-    /// resolve to the param menu (track stays instant-reset). None if unbuilt.
-    row_catcher_ids: Vec<Option<NodeId>>,
-    driver_btn_ids: Vec<Option<NodeId>>,
-    envelope_btn_ids: Vec<Option<NodeId>>,
-    driver_config_ids: Vec<Option<DriverConfigIds>>,
-    /// Per-param "A" audio-mod button node id.
-    audio_btn_ids: Vec<Option<NodeId>>,
-    /// Per-param audio drawer ids + send count (for click resolution). An
-    /// `is_trigger_gate` row's "A" button + drawer live here too (§9) —
-    /// same mechanism as any other audio mod.
-    audio_configs: Vec<Option<(crate::panels::drawer::DrawerIds, usize)>>,
-    /// Per-param collapsed-row mode-indicator label (§9, carried over from §8
-    /// D6 — shown even when the drawer is closed, `is_trigger_gate` rows
-    /// only).
-    audio_trigger_mode_badge_ids: Vec<Option<NodeId>>,
-    /// Per-param orange envelope target handle on the slider track (when armed).
-    target_ids: Vec<Option<EnvelopeTargetIds>>,
-    /// Per-param envelope drawer — the single "Decay" slider (when armed).
-    envelope_config_ids: Vec<Option<EnvelopeConfigIds>>,
-    trim_ids: Vec<Option<TrimHandleIds>>,
-    ableton_trim_ids: Vec<Option<TrimHandleIds>>,
-    /// Per-param green audio-mod trim handles (when an audio mod is armed).
-    audio_trim_ids: Vec<Option<TrimHandleIds>>,
-    ableton_config_ids: Vec<Option<AbletonConfigIds>>,
     /// Per-param stored modulation-config tab choice — which config the shared
     /// drawer shows when ≥2 are active. UI-only state, preserved across rebuilds
     /// (configure resizes without clobbering existing entries). `resolve_active_tab`
@@ -633,10 +603,6 @@ pub struct ParamCardPanel {
     /// `Perform` (inspector) cards; `Author` (graph-editor) cards snap, since
     /// nothing drives their tick — see `configure`.
     drawer_height_anim: Vec<AnimF32>,
-    /// Per-param modulation-config tab strip node ids paired with their `ModTab`,
-    /// for routing tab clicks. Empty for rows with fewer than two active configs.
-    /// Rebuilt each frame.
-    mod_tab_ids: Vec<Vec<(NodeId, ModTab)>>,
     /// D1 "tab-ink slide" (`UI_CRAFT_AND_MOTION_PLAN.md` P2) — per-param x-position
     /// tween for the sliding underline beneath the mod-config tab strip
     /// (`Trigger`/`LFO`/`Audio`/`Ableton`). Preserved across rebuilds like
@@ -652,12 +618,7 @@ pub struct ParamCardPanel {
     compact: bool,
 
     // ── Node IDs — per-param (generator) ──
-    toggle_ids: Vec<Option<ToggleParamIds>>,
     string_param_btn_ids: Vec<Option<NodeId>>,
-
-    /// Per-param sideways-mapping-drawer chevron (Author context, mappable rows
-    /// only). `None` for rows without one. Indexed by param index.
-    mapping_chevron_ids: Vec<Option<NodeId>>,
 
     // Per-param OSC addresses (for click-to-copy). Indexed by param index.
     osc_addresses: Vec<Option<String>>,
@@ -670,10 +631,6 @@ pub struct ParamCardPanel {
     /// (default). A section not present in the current `rows` is
     /// simply never consulted — no pruning needed.
     section_folded: ahash::AHashMap<String, bool>,
-    /// Rebuilt every build pass: `(header_node_id, section_name)` for every
-    /// section-header row drawn this frame, so `handle_click` can resolve a
-    /// header click back to its section without a second id → name map.
-    section_header_ids: Vec<(NodeId, String)>,
 
     copied_flash: CopyToClipboardLabelState,
 
@@ -761,7 +718,7 @@ impl ParamCardPanel {
             supports_envelopes: true,
             rows: Vec::new(),
             string_param_info: Vec::new(),
-            row_index: RowIndex::default(),
+            row_host: RowHost::new(),
             state: ParamCardState::new(0),
             host: ChromeHost::new(),
             border_id: None,
@@ -795,33 +752,14 @@ impl ParamCardPanel {
             cached_has_abl: false,
             cached_has_audio: false,
             cached_has_graph_mod: false,
-            slider_ids: Vec::new(),
-            slider_resets: Vec::new(),
             base_values: Vec::new(),
-            row_catcher_ids: Vec::new(),
-            driver_btn_ids: Vec::new(),
-            envelope_btn_ids: Vec::new(),
-            driver_config_ids: Vec::new(),
-            audio_btn_ids: Vec::new(),
-            audio_configs: Vec::new(),
-            audio_trigger_mode_badge_ids: Vec::new(),
-            target_ids: Vec::new(),
-            envelope_config_ids: Vec::new(),
-            trim_ids: Vec::new(),
-            ableton_trim_ids: Vec::new(),
-            audio_trim_ids: Vec::new(),
-            ableton_config_ids: Vec::new(),
             mod_active_tab: Vec::new(),
             drawer_height_anim: Vec::new(),
-            mod_tab_ids: Vec::new(),
             mod_tab_ink: Vec::new(),
             compact: false,
-            toggle_ids: Vec::new(),
             string_param_btn_ids: Vec::new(),
-            mapping_chevron_ids: Vec::new(),
             osc_addresses: Vec::new(),
             section_folded: ahash::AHashMap::new(),
-            section_header_ids: Vec::new(),
             copied_flash: CopyToClipboardLabelState::default(),
             drag: ParamDragState::new(),
             param_cache: Vec::new(),
@@ -874,30 +812,30 @@ impl ParamCardPanel {
             .map(|r| r.mapping.osc_address.clone())
             .collect();
         self.copied_flash.clear();
-        self.slider_ids = vec![None; n];
-        self.slider_resets = vec![None; n];
+        self.row_host.slider_ids = vec![None; n];
+        self.row_host.slider_resets = vec![None; n];
         self.base_values = vec![0.0; n];
-        self.row_catcher_ids = vec![None; n];
-        self.driver_btn_ids = vec![None; n];
-        self.envelope_btn_ids = vec![None; n];
-        self.driver_config_ids = Vec::new();
-        self.driver_config_ids.resize_with(n, || None);
-        self.audio_btn_ids = vec![None; n];
-        self.audio_configs = Vec::new();
-        self.audio_configs.resize_with(n, || None);
-        self.audio_trigger_mode_badge_ids = vec![None; n];
-        self.target_ids = Vec::new();
-        self.target_ids.resize_with(n, || None);
-        self.envelope_config_ids = Vec::new();
-        self.envelope_config_ids.resize_with(n, || None);
-        self.trim_ids = Vec::new();
-        self.trim_ids.resize_with(n, || None);
-        self.ableton_trim_ids = Vec::new();
-        self.ableton_trim_ids.resize_with(n, || None);
-        self.audio_trim_ids = Vec::new();
-        self.audio_trim_ids.resize_with(n, || None);
-        self.ableton_config_ids = Vec::new();
-        self.ableton_config_ids.resize_with(n, || None);
+        self.row_host.row_catcher_ids = vec![None; n];
+        self.row_host.driver_btn_ids = vec![None; n];
+        self.row_host.envelope_btn_ids = vec![None; n];
+        self.row_host.driver_config_ids = Vec::new();
+        self.row_host.driver_config_ids.resize_with(n, || None);
+        self.row_host.audio_btn_ids = vec![None; n];
+        self.row_host.audio_configs = Vec::new();
+        self.row_host.audio_configs.resize_with(n, || None);
+        self.row_host.audio_trigger_mode_badge_ids = vec![None; n];
+        self.row_host.target_ids = Vec::new();
+        self.row_host.target_ids.resize_with(n, || None);
+        self.row_host.envelope_config_ids = Vec::new();
+        self.row_host.envelope_config_ids.resize_with(n, || None);
+        self.row_host.trim_ids = Vec::new();
+        self.row_host.trim_ids.resize_with(n, || None);
+        self.row_host.ableton_trim_ids = Vec::new();
+        self.row_host.ableton_trim_ids.resize_with(n, || None);
+        self.row_host.audio_trim_ids = Vec::new();
+        self.row_host.audio_trim_ids.resize_with(n, || None);
+        self.row_host.ableton_config_ids = Vec::new();
+        self.row_host.ableton_config_ids.resize_with(n, || None);
         // Preserve the per-param tab choice across rebuilds (UI state); only grow
         // for new params. resolve_active_tab clamps stale choices at build time.
         self.mod_active_tab.resize(n, ModTab::Driver);
@@ -928,15 +866,15 @@ impl ParamCardPanel {
                 self.drawer_height_anim[i].snap(target);
             }
         }
-        self.mod_tab_ids = vec![Vec::new(); n];
+        self.row_host.mod_tab_ids = vec![Vec::new(); n];
         // Ink x-position targets are only knowable once the tab strip is laid
         // out (build time, not here) — resize only; `sync_mod_tab_ink` sets
         // targets per-row after `build_param_row` returns.
         self.mod_tab_ink.resize_with(n, || AnimF32::new(0.0, color::MOTION_MED_MS));
         self.mod_tab_ink.truncate(n);
-        self.toggle_ids = Vec::new();
-        self.toggle_ids.resize_with(n, || None);
-        self.mapping_chevron_ids = vec![None; n];
+        self.row_host.toggle_ids = Vec::new();
+        self.row_host.toggle_ids.resize_with(n, || None);
+        self.row_host.mapping_chevron_ids = vec![None; n];
         self.string_param_btn_ids = vec![None; config.string_params.len()];
         self.param_cache = vec![f32::NAN; n];
         self.toggle_cache = vec![false; n];
@@ -1001,7 +939,7 @@ impl ParamCardPanel {
         if !self.is_live() {
             return None;
         }
-        for (pi, slot) in self.slider_ids.iter().enumerate() {
+        for (pi, slot) in self.row_host.slider_ids.iter().enumerate() {
             let Some(ids) = slot else { continue };
             if ids.value_text != node_id {
                 continue;
@@ -1034,7 +972,7 @@ impl ParamCardPanel {
         }
         let pi = crate::panels::param_slider_shared::driver_free_field_index(
             node_id,
-            &self.driver_config_ids,
+            &self.row_host.driver_config_ids,
         )?;
         Some(PanelAction::Root(RootAction::BeginDriverPeriodTextInput {
             target: self.param_target(),
@@ -1071,7 +1009,7 @@ impl ParamCardPanel {
         fire_level: &dyn Fn(u64) -> Option<f32>,
         dt: f32,
     ) {
-        for (pi, cfg) in self.audio_configs.iter().enumerate() {
+        for (pi, cfg) in self.row_host.audio_configs.iter().enumerate() {
             let Some((dids, _)) = cfg else { continue };
             let Some(info) = self.rows.get(pi) else { continue };
             let Some(Some(meter)) = dids.meters.first() else { continue };
@@ -1092,7 +1030,7 @@ impl ParamCardPanel {
     /// never matches. First match wins; a card with two armed trigger-gate
     /// rows is not a case this app produces today.
     fn open_fire_mode_drawer_row(&self) -> Option<usize> {
-        self.audio_configs.iter().enumerate().find_map(|(pi, cfg)| {
+        self.row_host.audio_configs.iter().enumerate().find_map(|(pi, cfg)| {
             cfg.as_ref()?;
             let info = self.rows.get(pi)?;
             info.spec.is_trigger_gate.then_some(pi)
@@ -1454,7 +1392,7 @@ impl ParamCardPanel {
     /// drawn (Perform context).
     pub fn mapping_chevron_rect(&self, tree: &UITree, param_id: &str) -> Option<Rect> {
         let pi = self.rows.iter().position(|p| p.id == param_id)?;
-        let cid = (*self.mapping_chevron_ids.get(pi)?)?;
+        let cid = (*self.row_host.mapping_chevron_ids.get(pi)?)?;
         Some(tree.get_bounds(cid))
     }
 
@@ -1471,13 +1409,13 @@ impl ParamCardPanel {
     ) -> Option<manifold_foundation::ParamId> {
         let pos = Vec2::new(sx, sy);
         for (i, info) in self.rows.iter().enumerate() {
-            let label_id = self
+            let label_id = self.row_host
                 .slider_ids
                 .get(i)
                 .and_then(|s| s.as_ref())
                 .and_then(|ids| ids.label)
                 .or_else(|| {
-                    self.toggle_ids
+                    self.row_host.toggle_ids
                         .get(i)
                         .and_then(|t| t.as_ref())
                         .and_then(|ids| ids.label_id)
@@ -1515,13 +1453,13 @@ impl ParamCardPanel {
     /// never overlaps the last card row" class-kill.
     pub fn param_row_rect(&self, tree: &UITree, param_id: &str) -> Option<Rect> {
         let i = self.rows.iter().position(|p| p.id == param_id)?;
-        let label_id = self
+        let label_id = self.row_host
             .slider_ids
             .get(i)
             .and_then(|s| s.as_ref())
             .and_then(|ids| ids.label)
             .or_else(|| {
-                self.toggle_ids
+                self.row_host.toggle_ids
                     .get(i)
                     .and_then(|t| t.as_ref())
                     .and_then(|ids| ids.label_id)
@@ -1535,7 +1473,7 @@ impl ParamCardPanel {
     /// class-kill in `panels::inspector`'s tests, which can't reach the
     /// private `section_header_ids` field directly).
     pub fn section_header_ids(&self) -> &[(NodeId, String)] {
-        &self.section_header_ids
+        &self.row_host.section_header_ids
     }
 
     // ── compute_height ────────────────────────────────────────────
@@ -1779,7 +1717,7 @@ impl ParamCardPanel {
             if !still_active && !was_active {
                 continue; // idle both before and after — nothing to repaint
             }
-            let Some(ref ids) = self.slider_ids[i] else {
+            let Some(ref ids) = self.row_host.slider_ids[i] else {
                 continue;
             };
             // Read-modify-write on the node's existing style so bg/radius/font
@@ -1801,7 +1739,7 @@ impl ParamCardPanel {
                 continue;
             }
             any |= anim.tick(dt_ms);
-            let Some(ref ids) = self.slider_ids[i] else {
+            let Some(ref ids) = self.row_host.slider_ids[i] else {
                 continue;
             };
             // Re-derive the (already-settled) value text rather than touch
@@ -1819,9 +1757,9 @@ impl ParamCardPanel {
     /// D1 "tab-ink slide": after a row's mod-config tab strip is built, point
     /// this param's ink tween at the shown tab's on-screen x and draw the
     /// sliding underline. A no-op when fewer than two configs are active (no
-    /// strip was built — `self.mod_tab_ids[i]` is empty).
+    /// strip was built — `self.row_host.mod_tab_ids[i]` is empty).
     fn sync_mod_tab_ink(&mut self, tree: &mut UITree, i: usize) {
-        let tabs = self.mod_tab_ids[i].clone();
+        let tabs = self.row_host.mod_tab_ids[i].clone();
         if tabs.len() < 2 {
             if let Some(ink) = self.mod_tab_ink.get_mut(i) {
                 ink.snap(0.0);
@@ -1862,106 +1800,10 @@ impl ParamCardPanel {
     // ── Build ─────────────────────────────────────────────────────
 
     pub fn build(&mut self, tree: &mut UITree, rect: Rect) {
-        self.row_index.clear();
+        self.row_host.row_index.clear();
         match self.kind {
             ParamCardKind::Effect => self.build_effect(tree, rect),
             ParamCardKind::Generator => self.build_generator(tree, rect),
-        }
-    }
-
-    /// Populate `self.row_index` for row `i` from the per-row node-id fields
-    /// that were just built — the SAME fields the row renders (D5: routing
-    /// agrees with rendering by construction). Called once per row from both
-    /// the toggle/trigger and slider row builders, right after their fields
-    /// land. Bundles register EVERY interactive node they own under one role
-    /// (the widget-contract split — `row_action`'s bundle `resolve` methods
-    /// name the sub-element).
-    fn reindex_row(&mut self, tree: &UITree, i: usize) {
-        if let Some(s) = &self.slider_ids[i] {
-            self.row_index.insert(tree.widget_of(s.track), i, RowRole::Slider);
-            self.row_index.insert(tree.widget_of(s.value_text), i, RowRole::Slider);
-            if let Some(l) = s.label {
-                self.row_index.insert(tree.widget_of(l), i, RowRole::Slider);
-            }
-        }
-        // Trim/target overlay handles nest under the slider track (they
-        // inherit its stability through the parent chain — D4) and belong to
-        // the slider bundle functionally; indexed under the same role so
-        // `handle_pointer_down` resolves them by row instead of scanning.
-        if let Some(t) = &self.trim_ids[i] {
-            self.row_index.insert(tree.widget_of(t.fill_id), i, RowRole::Slider);
-            self.row_index.insert(tree.widget_of(t.min_bar_id), i, RowRole::Slider);
-            self.row_index.insert(tree.widget_of(t.max_bar_id), i, RowRole::Slider);
-        }
-        if let Some(t) = &self.ableton_trim_ids[i] {
-            self.row_index.insert(tree.widget_of(t.fill_id), i, RowRole::Slider);
-            self.row_index.insert(tree.widget_of(t.min_bar_id), i, RowRole::Slider);
-            self.row_index.insert(tree.widget_of(t.max_bar_id), i, RowRole::Slider);
-        }
-        if let Some(t) = &self.audio_trim_ids[i] {
-            self.row_index.insert(tree.widget_of(t.fill_id), i, RowRole::Slider);
-            self.row_index.insert(tree.widget_of(t.min_bar_id), i, RowRole::Slider);
-            self.row_index.insert(tree.widget_of(t.max_bar_id), i, RowRole::Slider);
-        }
-        if let Some(t) = &self.target_ids[i] {
-            self.row_index.insert(tree.widget_of(t.target_bar_id), i, RowRole::Slider);
-        }
-        if let Some(rc) = self.row_catcher_ids[i] {
-            self.row_index.insert(tree.widget_of(rc), i, RowRole::RowCatcher);
-        }
-        if let Some(b) = self.driver_btn_ids[i] {
-            self.row_index.insert(tree.widget_of(b), i, RowRole::DriverBtn);
-        }
-        if let Some(b) = self.envelope_btn_ids[i] {
-            self.row_index.insert(tree.widget_of(b), i, RowRole::EnvelopeBtn);
-        }
-        if let Some(b) = self.audio_btn_ids[i] {
-            self.row_index.insert(tree.widget_of(b), i, RowRole::AudioBtn);
-        }
-        if let Some(t) = &self.toggle_ids[i] {
-            self.row_index.insert(tree.widget_of(t.button_id), i, RowRole::ToggleBtn);
-            if let Some(l) = t.label_id {
-                self.row_index.insert(tree.widget_of(l), i, RowRole::Label);
-            }
-        }
-        if let Some(c) = &self.driver_config_ids[i] {
-            for &b in c.beat_div_btn_ids.iter() {
-                self.row_index.insert(tree.widget_of(b), i, RowRole::DriverConfig);
-            }
-            for b in [c.straight_btn_id, c.dotted_btn_id, c.triplet_btn_id, c.free_btn_id, c.invert_btn_id] {
-                self.row_index.insert(tree.widget_of(b), i, RowRole::DriverConfig);
-            }
-            for &b in c.wave_btn_ids.iter() {
-                self.row_index.insert(tree.widget_of(b), i, RowRole::DriverConfig);
-            }
-        }
-        if let Some(c) = &self.envelope_config_ids[i] {
-            self.row_index.insert(tree.widget_of(c.decay_slider.track), i, RowRole::EnvelopeConfig);
-            self.row_index.insert(tree.widget_of(c.decay_slider.value_text), i, RowRole::EnvelopeConfig);
-            if let Some(l) = c.decay_slider.label {
-                self.row_index.insert(tree.widget_of(l), i, RowRole::EnvelopeConfig);
-            }
-        }
-        if let Some(c) = &self.ableton_config_ids[i] {
-            self.row_index.insert(tree.widget_of(c.invert_btn_id), i, RowRole::AbletonConfig);
-        }
-        if let Some((dids, _)) = &self.audio_configs[i] {
-            for &b in dids.button_ids() {
-                self.row_index.insert(tree.widget_of(b), i, RowRole::AudioConfig);
-            }
-            for s in &dids.sliders {
-                self.row_index.insert(tree.widget_of(s.track), i, RowRole::AudioConfig);
-                self.row_index.insert(tree.widget_of(s.value_text), i, RowRole::AudioConfig);
-                if let Some(l) = s.label {
-                    self.row_index.insert(tree.widget_of(l), i, RowRole::AudioConfig);
-                }
-            }
-        }
-        if let Some(c) = self.mapping_chevron_ids[i] {
-            self.row_index.insert(tree.widget_of(c), i, RowRole::MappingChevron);
-        }
-        for &(node, _tab) in &self.mod_tab_ids[i] {
-            self.row_index.insert(tree.widget_of(node), i, RowRole::ModTab);
         }
     }
 
@@ -2685,24 +2527,24 @@ impl ParamCardPanel {
     /// fold-skip path only (the pre-existing `!exposed` skip is untouched —
     /// out of scope for this phase).
     fn clear_row_ids(&mut self, i: usize) {
-        self.slider_ids[i] = None;
-        self.slider_resets[i] = None;
-        self.row_catcher_ids[i] = None;
-        self.driver_btn_ids[i] = None;
-        self.envelope_btn_ids[i] = None;
-        self.driver_config_ids[i] = None;
-        self.audio_btn_ids[i] = None;
-        self.audio_configs[i] = None;
-        self.audio_trigger_mode_badge_ids[i] = None;
-        self.target_ids[i] = None;
-        self.envelope_config_ids[i] = None;
-        self.trim_ids[i] = None;
-        self.ableton_trim_ids[i] = None;
-        self.audio_trim_ids[i] = None;
-        self.ableton_config_ids[i] = None;
-        self.mapping_chevron_ids[i] = None;
-        self.toggle_ids[i] = None;
-        self.mod_tab_ids[i] = Vec::new();
+        self.row_host.slider_ids[i] = None;
+        self.row_host.slider_resets[i] = None;
+        self.row_host.row_catcher_ids[i] = None;
+        self.row_host.driver_btn_ids[i] = None;
+        self.row_host.envelope_btn_ids[i] = None;
+        self.row_host.driver_config_ids[i] = None;
+        self.row_host.audio_btn_ids[i] = None;
+        self.row_host.audio_configs[i] = None;
+        self.row_host.audio_trigger_mode_badge_ids[i] = None;
+        self.row_host.target_ids[i] = None;
+        self.row_host.envelope_config_ids[i] = None;
+        self.row_host.trim_ids[i] = None;
+        self.row_host.ableton_trim_ids[i] = None;
+        self.row_host.audio_trim_ids[i] = None;
+        self.row_host.ableton_config_ids[i] = None;
+        self.row_host.mapping_chevron_ids[i] = None;
+        self.row_host.toggle_ids[i] = None;
+        self.row_host.mod_tab_ids[i] = Vec::new();
     }
 
     fn build_effect_sliders(
@@ -2725,7 +2567,7 @@ impl ParamCardPanel {
         // builders' lane math can't drift from each other.
         let RowGeometry { label_width, slider_w } = row_geometry(w - PADDING * 2.0, author);
 
-        self.section_header_ids.clear();
+        self.row_host.section_header_ids.clear();
         let runs = self.section_runs();
         for (start, len, section) in runs {
             if let Some(name) = &section {
@@ -2741,8 +2583,8 @@ impl ParamCardPanel {
                     len,
                     param_row_key_base(&self.rows[start].id),
                 );
-                self.section_header_ids.push((header_id, name.clone()));
-                self.row_index.insert(tree.widget_of(header_id), start, RowRole::SectionHeader);
+                self.row_host.section_header_ids.push((header_id, name.clone()));
+                self.row_host.row_index.insert(tree.widget_of(header_id), start, RowRole::SectionHeader);
                 cy += ROW_HEIGHT + ROW_SPACING;
                 if folded {
                     // Folded run: no rows built for start..start+len. Clear
@@ -2798,15 +2640,15 @@ impl ParamCardPanel {
                         .filter(|a| a.is_animating())
                         .map(|a| a.value()),
                 );
-                self.toggle_ids[i] = Some(ToggleParamIds {
+                self.row_host.toggle_ids[i] = Some(ToggleParamIds {
                     label_id: row.label_id,
                     button_id: row.button_id,
                 });
                 self.toggle_cache[i] = info.spec.default > 0.5;
-                self.audio_btn_ids[i] = row.audio_btn;
-                self.audio_configs[i] = row.audio_config;
-                self.audio_trigger_mode_badge_ids[i] = row.mode_badge_id;
-                self.reindex_row(tree, i);
+                self.row_host.audio_btn_ids[i] = row.audio_btn;
+                self.row_host.audio_configs[i] = row.audio_config;
+                self.row_host.audio_trigger_mode_badge_ids[i] = row.mode_badge_id;
+                self.row_host.reindex_row(tree, i);
                 cy = row.new_cy;
                 continue;
             }
@@ -2840,21 +2682,21 @@ impl ParamCardPanel {
                     .filter(|a| a.is_animating())
                     .map(|a| a.value()),
             );
-            self.slider_ids[i] = row.slider;
-            self.slider_resets[i] = Some(row.slider_reset);
-            self.row_catcher_ids[i] = Some(row.row_catcher);
-            self.trim_ids[i] = row.trim;
-            self.target_ids[i] = row.target;
-            self.envelope_config_ids[i] = row.envelope_config;
-            self.ableton_trim_ids[i] = row.ableton_trim;
-            self.audio_trim_ids[i] = row.audio_trim;
-            self.envelope_btn_ids[i] = row.envelope_btn;
-            self.driver_btn_ids[i] = Some(row.driver_btn);
-            self.driver_config_ids[i] = row.driver_config;
-            self.ableton_config_ids[i] = row.ableton_config;
-            self.audio_btn_ids[i] = Some(row.audio_btn);
-            self.audio_configs[i] = row.audio_config;
-            self.mod_tab_ids[i] = row.mod_tabs;
+            self.row_host.slider_ids[i] = row.slider;
+            self.row_host.slider_resets[i] = Some(row.slider_reset);
+            self.row_host.row_catcher_ids[i] = Some(row.row_catcher);
+            self.row_host.trim_ids[i] = row.trim;
+            self.row_host.target_ids[i] = row.target;
+            self.row_host.envelope_config_ids[i] = row.envelope_config;
+            self.row_host.ableton_trim_ids[i] = row.ableton_trim;
+            self.row_host.audio_trim_ids[i] = row.audio_trim;
+            self.row_host.envelope_btn_ids[i] = row.envelope_btn;
+            self.row_host.driver_btn_ids[i] = Some(row.driver_btn);
+            self.row_host.driver_config_ids[i] = row.driver_config;
+            self.row_host.ableton_config_ids[i] = row.ableton_config;
+            self.row_host.audio_btn_ids[i] = Some(row.audio_btn);
+            self.row_host.audio_configs[i] = row.audio_config;
+            self.row_host.mod_tab_ids[i] = row.mod_tabs;
             self.sync_mod_tab_ink(tree, i);
             // Mapping-drawer chevron at the row's right edge (Author + mappable).
             // A subtle ">" that opens the sideways range/scale/offset/invert/
@@ -2866,7 +2708,7 @@ impl ParamCardPanel {
                 // Keyed by (row | chevron role): the chevron's identity must not
                 // shift when an earlier row arms a modulator and inserts drawer
                 // nodes ahead of it. See `docs/INPUT_IDENTITY_UNIFICATION.md`.
-                self.mapping_chevron_ids[i] = Some(tree.add_button_keyed(
+                self.row_host.mapping_chevron_ids[i] = Some(tree.add_button_keyed(
                     Some(parent),
                     ch_x,
                     ch_y,
@@ -2888,11 +2730,11 @@ impl ParamCardPanel {
                 // Naming pass (UI_AUTOMATION_DESIGN.md D8/§3): one static name for
                 // every row's chevron — which row comes from the selector's
                 // `under_text` query, not a per-row name string.
-                if let Some(id) = self.mapping_chevron_ids[i] {
+                if let Some(id) = self.row_host.mapping_chevron_ids[i] {
                     tree.set_name(id, "inspector.param_card.mapping_chevron");
                 }
             }
-            self.reindex_row(tree, i);
+            self.row_host.reindex_row(tree, i);
             cy = row.new_cy;
         }
         }
@@ -3056,7 +2898,7 @@ impl ParamCardPanel {
             let RowGeometry { label_width, slider_w } = row_geometry(content_w, author);
 
             if !self.rows.is_empty() {
-            self.section_header_ids.clear();
+            self.row_host.section_header_ids.clear();
             let runs = self.section_runs();
             for (start, len, section) in runs {
                 if let Some(name) = &section {
@@ -3072,8 +2914,8 @@ impl ParamCardPanel {
                         len,
                         param_row_key_base(&self.rows[start].id),
                     );
-                    self.section_header_ids.push((header_id, name.clone()));
-                self.row_index.insert(tree.widget_of(header_id), start, RowRole::SectionHeader);
+                    self.row_host.section_header_ids.push((header_id, name.clone()));
+                self.row_host.row_index.insert(tree.widget_of(header_id), start, RowRole::SectionHeader);
                     cy += ROW_HEIGHT + ROW_SPACING;
                     if folded {
                         // See the effect-card twin of this branch for why
@@ -3118,15 +2960,15 @@ impl ParamCardPanel {
                             .filter(|a| a.is_animating())
                             .map(|a| a.value()),
                     );
-                    self.toggle_ids[i] = Some(ToggleParamIds {
+                    self.row_host.toggle_ids[i] = Some(ToggleParamIds {
                         label_id: row.label_id,
                         button_id: row.button_id,
                     });
                     self.toggle_cache[i] = info.spec.default > 0.5;
-                    self.audio_btn_ids[i] = row.audio_btn;
-                    self.audio_configs[i] = row.audio_config;
-                    self.audio_trigger_mode_badge_ids[i] = row.mode_badge_id;
-                    self.reindex_row(tree, i);
+                    self.row_host.audio_btn_ids[i] = row.audio_btn;
+                    self.row_host.audio_configs[i] = row.audio_config;
+                    self.row_host.audio_trigger_mode_badge_ids[i] = row.mode_badge_id;
+                    self.row_host.reindex_row(tree, i);
                     cy = row.new_cy;
                 } else {
                     // Slider row — shared per-param core. Generators parent rows
@@ -3157,21 +2999,21 @@ impl ParamCardPanel {
                             .filter(|a| a.is_animating())
                             .map(|a| a.value()),
                     );
-                    self.slider_ids[i] = row.slider;
-                    self.slider_resets[i] = Some(row.slider_reset);
-                    self.row_catcher_ids[i] = Some(row.row_catcher);
-                    self.trim_ids[i] = row.trim;
-                    self.target_ids[i] = row.target;
-                    self.envelope_config_ids[i] = row.envelope_config;
-                    self.ableton_trim_ids[i] = row.ableton_trim;
-                    self.audio_trim_ids[i] = row.audio_trim;
-                    self.envelope_btn_ids[i] = row.envelope_btn;
-                    self.driver_btn_ids[i] = Some(row.driver_btn);
-                    self.driver_config_ids[i] = row.driver_config;
-                    self.ableton_config_ids[i] = row.ableton_config;
-                    self.audio_btn_ids[i] = Some(row.audio_btn);
-                    self.audio_configs[i] = row.audio_config;
-                    self.mod_tab_ids[i] = row.mod_tabs;
+                    self.row_host.slider_ids[i] = row.slider;
+                    self.row_host.slider_resets[i] = Some(row.slider_reset);
+                    self.row_host.row_catcher_ids[i] = Some(row.row_catcher);
+                    self.row_host.trim_ids[i] = row.trim;
+                    self.row_host.target_ids[i] = row.target;
+                    self.row_host.envelope_config_ids[i] = row.envelope_config;
+                    self.row_host.ableton_trim_ids[i] = row.ableton_trim;
+                    self.row_host.audio_trim_ids[i] = row.audio_trim;
+                    self.row_host.envelope_btn_ids[i] = row.envelope_btn;
+                    self.row_host.driver_btn_ids[i] = Some(row.driver_btn);
+                    self.row_host.driver_config_ids[i] = row.driver_config;
+                    self.row_host.ableton_config_ids[i] = row.ableton_config;
+                    self.row_host.audio_btn_ids[i] = Some(row.audio_btn);
+                    self.row_host.audio_configs[i] = row.audio_config;
+                    self.row_host.mod_tab_ids[i] = row.mod_tabs;
                     self.sync_mod_tab_ink(tree, i);
                     // Mapping-drawer chevron at the row's right edge (Author +
                     // mappable) — identical to the effect card. Opens the same
@@ -3180,7 +3022,7 @@ impl ParamCardPanel {
                     if author && info.mapping.mappable {
                         let ch_x = cx + content_w - MAP_CHEVRON_W;
                         let ch_y = row_y + (ROW_HEIGHT - DE_BUTTON_SIZE) * 0.5;
-                        self.mapping_chevron_ids[i] = Some(tree.add_button_keyed(
+                        self.row_host.mapping_chevron_ids[i] = Some(tree.add_button_keyed(
                             None,
                             ch_x,
                             ch_y,
@@ -3200,7 +3042,7 @@ impl ParamCardPanel {
                             param_row_key_base(&info.id) | ROW_ROLE_CHEVRON,
                         ));
                     }
-                    self.reindex_row(tree, i);
+                    self.row_host.reindex_row(tree, i);
                     cy = row.new_cy;
                 }
             }
@@ -3385,7 +3227,7 @@ impl ParamCardPanel {
             let new_label = Some(info.spec.name.clone());
             if self.label_cache[i] != new_label {
                 self.label_cache[i] = new_label;
-                if let Some(ref ids) = self.slider_ids[i]
+                if let Some(ref ids) = self.row_host.slider_ids[i]
                     && let Some(label) = ids.label
                 {
                     tree.set_text(label, &info.spec.name);
@@ -3397,7 +3239,7 @@ impl ParamCardPanel {
             let on = val > 0.5;
             if on != self.toggle_cache[i] {
                 self.toggle_cache[i] = on;
-                if let Some(ref ids) = self.toggle_ids[i] {
+                if let Some(ref ids) = self.row_host.toggle_ids[i] {
                     tree.set_style(ids.button_id, toggle_btn_style(on));
                     tree.set_text(ids.button_id, if on { "ON" } else { "OFF" });
                 }
@@ -3416,7 +3258,7 @@ impl ParamCardPanel {
                 flash.fire(color::MOTION_SLOW_MS);
             }
             self.param_cache[i] = val;
-            if let Some(ref ids) = self.slider_ids[i] {
+            if let Some(ref ids) = self.row_host.slider_ids[i] {
                 let norm = BitmapSlider::value_to_normalized(val, info.spec.min, info.spec.max);
                 let text = format_param_value(
                     val,
@@ -3466,7 +3308,7 @@ impl ParamCardPanel {
 
     /// Find the original param name for a label node ID (slider or toggle).
     fn find_label_name(&self, label_id: NodeId) -> String {
-        for (pi, s) in self.slider_ids.iter().enumerate() {
+        for (pi, s) in self.row_host.slider_ids.iter().enumerate() {
             if let Some(ids) = s
                 && ids.label == Some(label_id)
             {
@@ -3477,7 +3319,7 @@ impl ParamCardPanel {
                     .unwrap_or_default();
             }
         }
-        for (pi, t) in self.toggle_ids.iter().enumerate() {
+        for (pi, t) in self.row_host.toggle_ids.iter().enumerate() {
             if let Some(ids) = t
                 && ids.label_id == Some(label_id)
             {
@@ -3548,7 +3390,7 @@ impl ParamCardPanel {
     ) -> Vec<PanelAction> {
         let info = &self.rows[pi];
         let labels = info.spec.value_labels.clone().unwrap_or_default();
-        let cell = self
+        let cell = self.row_host
             .slider_ids
             .get(pi)
             .and_then(|s| s.as_ref())
@@ -3741,7 +3583,7 @@ impl ParamCardPanel {
         // P2) — the ONLY sanctioned way this function identifies a row
         // element.
         let widget = tree.widget_of(id);
-        if let Some((row, role)) = self.row_index.get(widget) {
+        if let Some((row, role)) = self.row_host.row_index.get(widget) {
             return self.row_action(row, role, id);
         }
 
@@ -3760,7 +3602,7 @@ impl ParamCardPanel {
         let target = self.param_target();
         match role {
             RowRole::Slider => {
-                let Some(ids) = self.slider_ids[row] else {
+                let Some(ids) = self.row_host.slider_ids[row] else {
                     return Vec::new();
                 };
                 if ids.label == Some(node) {
@@ -3813,7 +3655,7 @@ impl ParamCardPanel {
                 }
             }
             RowRole::DriverConfig => {
-                let Some(cfg) = &self.driver_config_ids[row] else {
+                let Some(cfg) = &self.row_host.driver_config_ids[row] else {
                     return Vec::new();
                 };
                 match cfg.resolve(node) {
@@ -3826,7 +3668,7 @@ impl ParamCardPanel {
             // never checked envelope-config nodes in `handle_click`.
             RowRole::EnvelopeConfig => Vec::new(),
             RowRole::AudioConfig => {
-                let Some((dids, send_count)) = self.audio_configs[row].as_ref() else {
+                let Some((dids, send_count)) = self.row_host.audio_configs[row].as_ref() else {
                     return Vec::new();
                 };
                 let Some(click) =
@@ -3864,7 +3706,7 @@ impl ParamCardPanel {
                 }
             }
             RowRole::AbletonConfig => {
-                let Some(cfg) = &self.ableton_config_ids[row] else {
+                let Some(cfg) = &self.row_host.ableton_config_ids[row] else {
                     return Vec::new();
                 };
                 if cfg.resolve(node) {
@@ -3874,7 +3716,7 @@ impl ParamCardPanel {
                 }
             }
             RowRole::ModTab => {
-                let Some(&(_, tab)) = self.mod_tab_ids[row].iter().find(|(n, _)| *n == node) else {
+                let Some(&(_, tab)) = self.row_host.mod_tab_ids[row].iter().find(|(n, _)| *n == node) else {
                     return Vec::new();
                 };
                 if let Some(slot) = self.mod_active_tab.get_mut(row) {
@@ -3884,7 +3726,7 @@ impl ParamCardPanel {
             }
             RowRole::MappingChevron => vec![PanelAction::Root(RootAction::OpenCardMapping(self.rows[row].id.clone()))],
             RowRole::SectionHeader => {
-                let Some(name) = self
+                let Some(name) = self.row_host
                     .section_header_ids
                     .iter()
                     .find(|(hid, _)| *hid == node)
@@ -3910,9 +3752,9 @@ impl ParamCardPanel {
     /// this is the one place a `TrimKind` selects between them.
     fn trim_ids_for(&self, kind: TrimKind) -> &[Option<TrimHandleIds>] {
         match kind {
-            TrimKind::Driver => &self.trim_ids,
-            TrimKind::Ableton => &self.ableton_trim_ids,
-            TrimKind::Audio => &self.audio_trim_ids,
+            TrimKind::Driver => &self.row_host.trim_ids,
+            TrimKind::Ableton => &self.row_host.ableton_trim_ids,
+            TrimKind::Audio => &self.row_host.audio_trim_ids,
         }
     }
 
@@ -3991,10 +3833,10 @@ impl ParamCardPanel {
         // the resolved row. Relight knobs (below) aren't row-indexed
         // (relight has no `self.rows` slot); a lookup miss falls through to
         // them, matching the old gauntlet's tail.
-        if let Some((row, role)) = self.row_index.get(tree.widget_of(node_id)) {
+        if let Some((row, role)) = self.row_host.row_index.get(tree.widget_of(node_id)) {
             match role {
                 RowRole::EnvelopeConfig => {
-                    if let Some(c) = &self.envelope_config_ids[row]
+                    if let Some(c) = &self.row_host.envelope_config_ids[row]
                         && node_id == c.decay_slider.track
                     {
                         self.drag.begin(ParamDragTarget::EnvDecay { index: row }, pos);
@@ -4012,7 +3854,7 @@ impl ParamCardPanel {
                     Vec::new()
                 }
                 RowRole::AudioConfig => {
-                    if let Some((dids, _)) = &self.audio_configs[row] {
+                    if let Some((dids, _)) = &self.row_host.audio_configs[row] {
                         for (si, which) in [
                             (0usize, AudioShapeParam::Sensitivity),
                             (1, AudioShapeParam::Attack),
@@ -4057,7 +3899,7 @@ impl ParamCardPanel {
                 }
                 RowRole::Slider => {
                     // Envelope target handle (exact hit).
-                    if let Some(t) = &self.target_ids[row]
+                    if let Some(t) = &self.row_host.target_ids[row]
                         && node_id == t.target_bar_id
                     {
                         self.drag.begin(ParamDragTarget::EnvTarget { index: row }, pos);
@@ -4081,7 +3923,7 @@ impl ParamCardPanel {
                     if self.rows.get(row).map(|i| i.spec.is_toggle || i.spec.is_trigger).unwrap_or(false) {
                         return Vec::new();
                     }
-                    let Some(ids) = self.slider_ids[row] else {
+                    let Some(ids) = self.row_host.slider_ids[row] else {
                         return Vec::new();
                     };
                     // Only the track itself and a trim FILL overlay (visual-
@@ -4089,16 +3931,16 @@ impl ParamCardPanel {
                     // drag below — min/max bars and the target handle were
                     // already handled above (matches the old gauntlet's
                     // "track or fill/target overlay" reachability).
-                    let is_overlay_fill = self.trim_ids[row].as_ref().is_some_and(|t| node_id == t.fill_id)
-                        || self.ableton_trim_ids[row].as_ref().is_some_and(|t| node_id == t.fill_id)
-                        || self.audio_trim_ids[row].as_ref().is_some_and(|t| node_id == t.fill_id);
+                    let is_overlay_fill = self.row_host.trim_ids[row].as_ref().is_some_and(|t| node_id == t.fill_id)
+                        || self.row_host.ableton_trim_ids[row].as_ref().is_some_and(|t| node_id == t.fill_id)
+                        || self.row_host.audio_trim_ids[row].as_ref().is_some_and(|t| node_id == t.fill_id);
                     if node_id != ids.track && !is_overlay_fill {
                         return Vec::new();
                     }
                     // If driver is expanded, check proximity to trim handles
                     // before falling through to param drag.
                     if self.state.mod_state.driver_expanded.get(row).copied().unwrap_or(false)
-                        && self.trim_ids[row].is_some()
+                        && self.row_host.trim_ids[row].is_some()
                     {
                         let tmin = self.state.mod_state.trim_min.get(row).copied().unwrap_or(0.0);
                         let tmax = self.state.mod_state.trim_max.get(row).copied().unwrap_or(1.0);
@@ -4189,7 +4031,7 @@ impl ParamCardPanel {
         // Envelope target handle drag — update depth, reposition the orange bar
         // along the parameter's own track, dispatch the Target change.
         if let Some(pi) = self.drag.env_target_index()
-            && let Some(slider) = self.slider_ids.get(pi).and_then(|s| s.as_ref())
+            && let Some(slider) = self.row_host.slider_ids.get(pi).and_then(|s| s.as_ref())
         {
             // Live bounds, not the cached `track_rect`: in-place scroll shifts
             // the tree nodes without refreshing the cache, so its y is stale.
@@ -4198,7 +4040,7 @@ impl ParamCardPanel {
             if let Some(v) = self.state.mod_state.target_norm.get_mut(pi) {
                 *v = norm;
             }
-            if let Some(t) = self.target_ids.get(pi).and_then(|t| t.as_ref()) {
+            if let Some(t) = self.row_host.target_ids.get(pi).and_then(|t| t.as_ref()) {
                 tree.set_bounds(t.target_bar_id, target_bar_rect(track_rect, norm));
             }
             let pid = self.rows[pi].id.clone();
@@ -4211,7 +4053,7 @@ impl ParamCardPanel {
         // Envelope decay slider drag — update the drawer slider's fill + value,
         // dispatch the decay change (in beats).
         if let Some(pi) = self.drag.env_decay_index()
-            && let Some(cfg) = self.envelope_config_ids.get(pi).and_then(|c| c.as_ref())
+            && let Some(cfg) = self.row_host.envelope_config_ids.get(pi).and_then(|c| c.as_ref())
         {
             let norm = BitmapSlider::x_to_normalized(
                 TrackSpan::of(tree.get_bounds(cfg.decay_slider.track)),
@@ -4237,7 +4079,7 @@ impl ParamCardPanel {
                 AudioShapeParam::Attack => 1,
                 AudioShapeParam::Release => 2,
             };
-            let track_id = self
+            let track_id = self.row_host
                 .audio_configs
                 .get(pi)
                 .and_then(|c| c.as_ref())
@@ -4268,7 +4110,7 @@ impl ParamCardPanel {
                     }
                 }
                 let text = audio_shape_value_text(which, value);
-                if let Some((d, _)) = self.audio_configs.get(pi).and_then(|c| c.as_ref())
+                if let Some((d, _)) = self.row_host.audio_configs.get(pi).and_then(|c| c.as_ref())
                     && let Some(sl) = d.sliders.get(si)
                 {
                     BitmapSlider::update_value(tree, sl, norm, &text);
@@ -4290,7 +4132,7 @@ impl ParamCardPanel {
         // Step-Amount slider drag (D8) — its own path, see `handle_pointer_down`
         // 2c. Updates fill + value and dispatches the live edit.
         if let Some(pi) = self.drag.step_amount() {
-            let track_id = self
+            let track_id = self.row_host
                 .audio_configs
                 .get(pi)
                 .and_then(|c| c.as_ref())
@@ -4313,7 +4155,7 @@ impl ParamCardPanel {
                 let text =
                     if info.spec.whole_numbers { format!("{value:.0}") } else { format!("{value:.2}") };
                 let display_norm = step_amount_to_norm(value, info.spec.min, info.spec.max);
-                if let Some((d, _)) = self.audio_configs.get(pi).and_then(|c| c.as_ref())
+                if let Some((d, _)) = self.row_host.audio_configs.get(pi).and_then(|c| c.as_ref())
                     && let Some(sl) = d.sliders.get(3)
                 {
                     BitmapSlider::update_value(tree, sl, display_norm, &text);
@@ -4338,7 +4180,7 @@ impl ParamCardPanel {
         // old `norm.min`/`norm.clamp` spellings coincide); only the backing
         // store differs, and `TrimKind` selects it via the trim accessors.
         if let Some((kind, pi, is_min)) = self.drag.trim()
-            && let Some(track_id) = self
+            && let Some(track_id) = self.row_host
                 .slider_ids
                 .get(pi)
                 .and_then(|s| s.as_ref())
@@ -4378,7 +4220,7 @@ impl ParamCardPanel {
 
         // Param slider drag
         if let Some(pi) = self.drag.param_index()
-            && let Some(ids) = self.slider_ids.get(pi).and_then(|s| s.as_ref())
+            && let Some(ids) = self.row_host.slider_ids.get(pi).and_then(|s| s.as_ref())
         {
             let info = &self.rows[pi];
             let norm = BitmapSlider::x_to_normalized(TrackSpan::of(tree.get_bounds(ids.track)), pos.x);
@@ -4526,25 +4368,11 @@ impl ParamCardPanel {
         // trigger-gate). This is what fixes BUG-070: a trigger-gate row has no
         // main slider, but its armed drawer's sliders are stored in
         // `audio_configs[pi]` regardless, so this pass reaches them directly
-        // instead of piggybacking on the main-slider loop below (which is
-        // exactly the loop that used to bail before ever checking
-        // `audio_configs`).
-        for (pi, slider) in self.slider_ids.iter().enumerate() {
-            if let (Some(ids), Some(reset)) =
-                (slider, self.slider_resets.get(pi).and_then(|r| r.as_ref()))
-            {
-                BitmapSlider::register_track_reset(ids, reset, intents);
-            }
-        }
-        for cfg in self.envelope_config_ids.iter().flatten() {
-            BitmapSlider::register_track_reset(&cfg.decay_slider, &cfg.decay_reset, intents);
-        }
-        for cfg in self.audio_configs.iter().flatten() {
-            let (dids, _) = cfg;
-            for (sl, reset) in dids.sliders.iter().zip(dids.slider_resets.iter()) {
-                BitmapSlider::register_track_reset(sl, reset, intents);
-            }
-        }
+        // instead of piggybacking on the main-slider loop below. The row-level
+        // reset replay lives on `RowHost` (it owns those id bundles); the panel
+        // adds the card-chrome intents (border claim above, relight resets +
+        // per-param mapping menus below).
+        self.row_host.register_intents(intents);
         // D3 relight-knob resets (`docs/DEPTH_RELIGHT_DESIGN.md` P5b) — same
         // pattern as the main-row loop above.
         for (ids, reset) in self.relight_slider_ids.iter().zip(self.relight_slider_resets.iter()) {
@@ -4554,7 +4382,7 @@ impl ParamCardPanel {
         }
 
         // Per-param perform-mapping menu.
-        for (pi, slider) in self.slider_ids.iter().enumerate() {
+        for (pi, slider) in self.row_host.slider_ids.iter().enumerate() {
             // Generator toggle/trigger rows have no map gesture — they fall
             // through to the card claim like any other dead zone.
             if matches!(self.kind, ParamCardKind::Generator)
@@ -4581,7 +4409,7 @@ impl ParamCardPanel {
                 // — host-attached chrome, not a contract zone (it's a
                 // full-row dead-zone catcher behind the value cell + gaps,
                 // no `SliderZone` of its own), so it stays hand-registered.
-                if let Some(Some(catcher)) = self.row_catcher_ids.get(pi).copied() {
+                if let Some(Some(catcher)) = self.row_host.row_catcher_ids.get(pi).copied() {
                     intents.claim_area(catcher);
                     intents.on(catcher, RightClick, menu.clone());
                 }
@@ -4745,17 +4573,17 @@ mod tests {
         // Task A: a toggle/trigger param must build a toggle row (button),
         // NOT a slider — the bug was `build_effect_sliders` calling
         // `build_param_row` unconditionally for every param.
-        assert!(panel.slider_ids[0].is_some()); // Radius = slider
-        assert!(panel.slider_ids[1].is_some()); // Strength = slider
-        assert!(panel.slider_ids[2].is_none()); // Invert = toggle, no slider
-        assert!(panel.slider_ids[3].is_none()); // Reset = trigger, no slider
-        assert!(panel.toggle_ids[2].is_some());
-        assert!(panel.toggle_ids[3].is_some());
+        assert!(panel.row_host.slider_ids[0].is_some()); // Radius = slider
+        assert!(panel.row_host.slider_ids[1].is_some()); // Strength = slider
+        assert!(panel.row_host.slider_ids[2].is_none()); // Invert = toggle, no slider
+        assert!(panel.row_host.slider_ids[3].is_none()); // Reset = trigger, no slider
+        assert!(panel.row_host.toggle_ids[2].is_some());
+        assert!(panel.row_host.toggle_ids[3].is_some());
 
         // Task B (D5b): the trigger row reaches the audio-mod "A" button;
         // the toggle row does not (zero D/E/A lane, unchanged rule).
-        assert!(panel.audio_btn_ids[2].is_none());
-        assert!(panel.audio_btn_ids[3].is_some());
+        assert!(panel.row_host.audio_btn_ids[2].is_none());
+        assert!(panel.row_host.audio_btn_ids[3].is_some());
     }
 
     /// `WIDGET_TREE_DESIGN.md` §5 dump-queryability: every converged card row
@@ -4772,17 +4600,17 @@ mod tests {
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
 
         // Slider row ("radius"): row-root + track + value cell + driver button.
-        let rc = panel.row_catcher_ids[0].expect("radius row has a row catcher");
+        let rc = panel.row_host.row_catcher_ids[0].expect("radius row has a row catcher");
         assert_eq!(tree.name_of(rc), Some("param_row.radius"));
-        let slider = panel.slider_ids[0].expect("radius row has a slider");
+        let slider = panel.row_host.slider_ids[0].expect("radius row has a slider");
         assert_eq!(tree.name_of(slider.track), Some("param_row.radius.slider"));
         assert_eq!(tree.name_of(slider.value_text), Some("param_row.radius.value"));
-        let drv = panel.driver_btn_ids[0].expect("radius row has a driver button");
+        let drv = panel.row_host.driver_btn_ids[0].expect("radius row has a driver button");
         assert_eq!(tree.name_of(drv), Some("param_row.radius.driver_btn"));
 
         // Toggle row ("invert"): no separate row-catcher — its button IS the
         // row's identity, so the row name lands there.
-        let toggle = panel.toggle_ids[2].as_ref().expect("invert row is a toggle");
+        let toggle = panel.row_host.toggle_ids[2].as_ref().expect("invert row is a toggle");
         assert_eq!(tree.name_of(toggle.button_id), Some("param_row.invert"));
     }
 
@@ -4793,7 +4621,7 @@ mod tests {
         panel.configure(&effect_config_with_toggle_and_trigger());
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
 
-        let button_id = panel.toggle_ids[2].as_ref().unwrap().button_id;
+        let button_id = panel.row_host.toggle_ids[2].as_ref().unwrap().button_id;
         let actions = panel.handle_click(button_id, &tree);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
@@ -4812,7 +4640,7 @@ mod tests {
         panel.configure(&effect_config_with_toggle_and_trigger());
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
 
-        let button_id = panel.toggle_ids[3].as_ref().unwrap().button_id;
+        let button_id = panel.row_host.toggle_ids[3].as_ref().unwrap().button_id;
         let actions = panel.handle_click(button_id, &tree);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
@@ -4824,7 +4652,7 @@ mod tests {
         }
 
         // The trigger row's "A" button reaches the shared audio-mod dispatch.
-        let audio_btn = panel.audio_btn_ids[3].unwrap();
+        let audio_btn = panel.row_host.audio_btn_ids[3].unwrap();
         let actions = panel.handle_click(audio_btn, &tree);
         assert_eq!(actions.len(), 1);
         assert!(matches!(actions[0], PanelAction::Root(RootAction::OpenAudioSetup) | PanelAction::Modulation(ModulationAction::AudioModToggle(..))));
@@ -4889,13 +4717,13 @@ mod tests {
         // Renders as a toggle row (not a slider), same as a plain toggle —
         // but ALSO reaches the standard audio-mod "A" button + drawer, which
         // a plain toggle never does.
-        assert!(panel.slider_ids[gi].is_none());
-        assert!(panel.toggle_ids[gi].is_some());
-        assert!(panel.audio_btn_ids[gi].is_some());
+        assert!(panel.row_host.slider_ids[gi].is_none());
+        assert!(panel.row_host.toggle_ids[gi].is_some());
+        assert!(panel.row_host.audio_btn_ids[gi].is_some());
         // Armed in the fixture (`active[gi] = true`) — the drawer must build.
-        assert!(panel.audio_configs[gi].is_some());
+        assert!(panel.row_host.audio_configs[gi].is_some());
         // The collapsed-row mode badge exists (mode = Both, index 2 > 0).
-        assert!(panel.audio_trigger_mode_badge_ids[gi].is_some());
+        assert!(panel.row_host.audio_trigger_mode_badge_ids[gi].is_some());
     }
 
     #[test]
@@ -4946,7 +4774,7 @@ mod tests {
         panel.configure(&cfg);
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
 
-        assert!(panel.audio_configs[gi].is_some(), "sanity: the drawer still builds");
+        assert!(panel.row_host.audio_configs[gi].is_some(), "sanity: the drawer still builds");
         assert_eq!(panel.open_fire_mode_drawer_send(), None);
         assert_eq!(panel.open_fire_mode_drawer_band(), None);
     }
@@ -4962,7 +4790,7 @@ mod tests {
         // The "A" button toggles the mod (armed → disarm, since the fixture
         // starts active) through the SAME `AudioModToggle` every other
         // audio-mod row uses.
-        let audio_btn = panel.audio_btn_ids[gi].unwrap();
+        let audio_btn = panel.row_host.audio_btn_ids[gi].unwrap();
         let actions = panel.handle_click(audio_btn, &tree);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
@@ -4976,7 +4804,7 @@ mod tests {
         // The drawer's Source (send) button — flat index 0 (only one send).
         // Clone the button ids out first: `handle_click` needs `&mut panel`,
         // which would otherwise conflict with the borrow of `dids`.
-        let (dids, send_count) = panel.audio_configs[gi].as_ref().unwrap();
+        let (dids, send_count) = panel.row_host.audio_configs[gi].as_ref().unwrap();
         assert_eq!(*send_count, 1);
         let button_ids: Vec<NodeId> = dids.button_ids().to_vec();
         let send_btn = button_ids[0];
@@ -5049,7 +4877,7 @@ mod tests {
             tree.nodes().iter().filter(|n| n.node_type == UINodeType::ClipRegion).count();
         assert!(clips_midflight >= 1, "an animating trigger-gate drawer builds under a clip region");
         // The drawer still builds (not skipped) — just clipped to the reveal.
-        assert!(panel.audio_configs[gi].is_some());
+        assert!(panel.row_host.audio_configs[gi].is_some());
 
         for _ in 0..20 {
             panel.tick_drawers(20.0);
@@ -5083,9 +4911,9 @@ mod tests {
         assert!(panel.name_label_id.is_some());
         assert!(panel.toggle_btn_id.is_some());
         assert!(panel.chevron_btn_id.is_some());
-        assert_eq!(panel.slider_ids.len(), 2);
-        assert!(panel.slider_ids[0].is_some());
-        assert!(panel.slider_ids[1].is_some());
+        assert_eq!(panel.row_host.slider_ids.len(), 2);
+        assert!(panel.row_host.slider_ids[0].is_some());
+        assert!(panel.row_host.slider_ids[1].is_some());
         assert!(panel.node_count > 0);
     }
 
@@ -5118,7 +4946,7 @@ mod tests {
         panel.configure(&effect_config());
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
 
-        let value_cell = panel.slider_ids[0].as_ref().unwrap().value_text;
+        let value_cell = panel.row_host.slider_ids[0].as_ref().unwrap().value_text;
         let drag_icon = panel.drag_icon_id.unwrap();
         let border = panel.border_id.unwrap();
 
@@ -5167,9 +4995,9 @@ mod tests {
             "drag handle suppressed in Author"
         );
         // Mapping chevron only on the mappable row.
-        assert!(panel.mapping_chevron_ids[0].is_none(), "row 0 not mappable");
+        assert!(panel.row_host.mapping_chevron_ids[0].is_none(), "row 0 not mappable");
         assert!(
-            panel.mapping_chevron_ids[1].is_some(),
+            panel.row_host.mapping_chevron_ids[1].is_some(),
             "row 1 mappable → chevron"
         );
     }
@@ -5183,7 +5011,7 @@ mod tests {
 
         // Perform keeps the cog and never draws the mapping chevron.
         assert!(panel.cog_btn_id.is_some(), "cog present in Perform");
-        assert!(panel.mapping_chevron_ids.iter().all(|id| id.is_none()));
+        assert!(panel.row_host.mapping_chevron_ids.iter().all(|id| id.is_none()));
     }
 
     #[test]
@@ -5194,7 +5022,7 @@ mod tests {
         panel.configure(&effect_config_with_mappable());
         panel.build(&mut tree, Rect::new(0.0, 0.0, 340.0, 200.0));
 
-        let chevron = panel.mapping_chevron_ids[1].expect("row 1 mappable → chevron");
+        let chevron = panel.row_host.mapping_chevron_ids[1].expect("row 1 mappable → chevron");
         let actions = panel.handle_click(chevron, &tree);
         assert!(
             matches!(&actions[..], [PanelAction::Root(RootAction::OpenCardMapping(pid))] if pid == "strength"),
@@ -5219,7 +5047,7 @@ mod tests {
             panel.set_context(CardContext::Author);
             panel.configure(&c);
             panel.build(&mut tree, Rect::new(0.0, 0.0, 340.0, 300.0));
-            let chevron = panel.mapping_chevron_ids[1].expect("row 1 mappable → chevron");
+            let chevron = panel.row_host.mapping_chevron_ids[1].expect("row 1 mappable → chevron");
             (tree.widget_of(chevron), tree.count())
         };
 
@@ -5245,7 +5073,7 @@ mod tests {
         panel.configure(&effect_config_with_mappable());
         panel.build(&mut tree, Rect::new(0.0, 0.0, 340.0, 200.0));
 
-        let chevron = panel.mapping_chevron_ids[1].expect("row 1 mappable → chevron");
+        let chevron = panel.row_host.mapping_chevron_ids[1].expect("row 1 mappable → chevron");
         let rect = panel
             .mapping_chevron_rect(&tree, "strength")
             .expect("chevron rect");
@@ -5278,8 +5106,8 @@ mod tests {
 
         // Same as the effect card: chevron only on the mappable row, click opens
         // the card mapping drawer, and the anchor rect resolves by binding id.
-        assert!(panel.mapping_chevron_ids[0].is_none(), "row 0 not mappable");
-        let chevron = panel.mapping_chevron_ids[1].expect("generator mappable row → chevron");
+        assert!(panel.row_host.mapping_chevron_ids[0].is_none(), "row 0 not mappable");
+        let chevron = panel.row_host.mapping_chevron_ids[1].expect("generator mappable row → chevron");
         let actions = panel.handle_click(chevron, &tree);
         assert!(
             matches!(&actions[..], [PanelAction::Root(RootAction::OpenCardMapping(pid))] if pid == "strength"),
@@ -5294,7 +5122,7 @@ mod tests {
         let mut panel = ParamCardPanel::new(); // default Perform
         panel.configure(&generator_config_with_mappable());
         panel.build(&mut tree, Rect::new(0.0, 0.0, 340.0, 200.0));
-        assert!(panel.mapping_chevron_ids.iter().all(|id| id.is_none()));
+        assert!(panel.row_host.mapping_chevron_ids.iter().all(|id| id.is_none()));
     }
 
     #[test]
@@ -5328,7 +5156,7 @@ mod tests {
         panel.configure(&effect_config());
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
 
-        let actions = panel.handle_click(panel.driver_btn_ids[0].unwrap(), &tree);
+        let actions = panel.handle_click(panel.row_host.driver_btn_ids[0].unwrap(), &tree);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
             PanelAction::Modulation(ModulationAction::DriverToggle(GraphParamTarget::Effect(ei), param_id)) => {
@@ -5383,7 +5211,7 @@ mod tests {
         // tick_value_flash paints the accent while active, then reverts once —
         // the id-based read-modify-write leaves everything else on the node
         // untouched (font/bg/align), only `text_color` moves.
-        let value_text_id = panel.slider_ids[0].as_ref().unwrap().value_text;
+        let value_text_id = panel.row_host.slider_ids[0].as_ref().unwrap().value_text;
         panel.tick_value_flash(&mut tree, 1.0);
         assert_eq!(tree.get_node(value_text_id).unwrap().style.text_color, color::ACCENT_BLUE_C32);
 
@@ -5415,7 +5243,7 @@ mod tests {
         use crate::view::UiParamSlot as ParamSlot;
         // Row 0 is "radius", min 0 / max 100 / default 10.
         panel.sync_values(&mut tree, &[ParamSlot::exposed(50.0), ParamSlot::exposed(0.8)]);
-        let fill_id = panel.slider_ids[0].as_ref().unwrap().fill;
+        let fill_id = panel.row_host.slider_ids[0].as_ref().unwrap().fill;
         let width_at_50 = tree.get_bounds(fill_id).width;
 
         // The reset gesture: data goes 50 -> 10 instantly; this only starts
@@ -5485,8 +5313,8 @@ mod tests {
         panel.configure(&effect_config());
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
 
-        let track = panel.slider_ids[0].as_ref().unwrap().track;
-        let track_rect = tree.get_bounds(panel.slider_ids[0].as_ref().unwrap().track);
+        let track = panel.row_host.slider_ids[0].as_ref().unwrap().track;
+        let track_rect = tree.get_bounds(panel.row_host.slider_ids[0].as_ref().unwrap().track);
         let mid_x = track_rect.x + track_rect.width * 0.5;
 
         let down = panel.handle_pointer_down(track, Vec2::new(mid_x, track_rect.y), &tree);
@@ -5520,7 +5348,7 @@ mod tests {
         panel.state.mod_state.driver_expanded[0] = true;
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
 
-        let trim = panel.trim_ids[0].as_ref().expect("driver trim built");
+        let trim = panel.row_host.trim_ids[0].as_ref().expect("driver trim built");
         let min_bar_id = trim.min_bar_id;
 
         let down = panel.handle_pointer_down(min_bar_id, Vec2::new(0.0, 0.0), &tree);
@@ -5530,7 +5358,7 @@ mod tests {
         );
         assert!(panel.is_dragging());
 
-        let track_rect = tree.get_bounds(panel.slider_ids[0].as_ref().unwrap().track);
+        let track_rect = tree.get_bounds(panel.row_host.slider_ids[0].as_ref().unwrap().track);
         let new_x = track_rect.x + track_rect.width * 0.4;
         let moved = panel.handle_drag(Vec2::new(new_x, track_rect.y), &mut tree);
         assert!(
@@ -5566,8 +5394,8 @@ mod tests {
         panel.state.mod_state.driver_expanded[0] = true;
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
 
-        let track = panel.slider_ids[0].as_ref().unwrap().track;
-        let trim = panel.trim_ids[0].as_ref().expect("driver trim built");
+        let track = panel.row_host.slider_ids[0].as_ref().unwrap().track;
+        let trim = panel.row_host.trim_ids[0].as_ref().expect("driver trim built");
         let (min_bar, max_bar, fill) = (trim.min_bar_id, trim.max_bar_id, trim.fill_id);
 
         scroll_shift(&mut tree, 137.0);
@@ -5598,8 +5426,8 @@ mod tests {
         panel.state.mod_state.envelope_expanded[0] = true;
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
 
-        let track = panel.slider_ids[0].as_ref().unwrap().track;
-        let target_bar = panel.target_ids[0].as_ref().expect("envelope target built").target_bar_id;
+        let track = panel.row_host.slider_ids[0].as_ref().unwrap().track;
+        let target_bar = panel.row_host.target_ids[0].as_ref().expect("envelope target built").target_bar_id;
 
         scroll_shift(&mut tree, 137.0);
 
@@ -5627,7 +5455,7 @@ mod tests {
         panel.state.mod_state.envelope_expanded[0] = true;
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
 
-        let target = panel.target_ids[0].as_ref().expect("envelope target built");
+        let target = panel.row_host.target_ids[0].as_ref().expect("envelope target built");
         let target_bar_id = target.target_bar_id;
 
         let down = panel.handle_pointer_down(target_bar_id, Vec2::new(0.0, 0.0), &tree);
@@ -5637,7 +5465,7 @@ mod tests {
         );
         assert!(panel.is_dragging());
 
-        let track_rect = tree.get_bounds(panel.slider_ids[0].as_ref().unwrap().track);
+        let track_rect = tree.get_bounds(panel.row_host.slider_ids[0].as_ref().unwrap().track);
         let new_x = track_rect.x + track_rect.width * 0.3;
         let moved = panel.handle_drag(Vec2::new(new_x, track_rect.y), &mut tree);
         assert!(
@@ -5661,7 +5489,7 @@ mod tests {
         panel.state.mod_state.envelope_expanded[0] = true;
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
 
-        let cfg = panel.envelope_config_ids[0].as_ref().expect("envelope config built");
+        let cfg = panel.row_host.envelope_config_ids[0].as_ref().expect("envelope config built");
         let decay_track = cfg.decay_slider.track;
         let decay_rect = tree.get_bounds(cfg.decay_slider.track);
 
@@ -5711,7 +5539,7 @@ mod tests {
         panel.configure(&effect_config_with_audio_shape_armed());
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
 
-        let (dids, _) = panel.audio_configs[0].as_ref().expect("audio drawer built");
+        let (dids, _) = panel.row_host.audio_configs[0].as_ref().expect("audio drawer built");
         let sens_slider = dids.sliders[0]; // Sensitivity — the first shaping slider
         let sens_track = sens_slider.track;
         let sens_rect = tree.get_bounds(sens_track);
@@ -5751,7 +5579,7 @@ mod tests {
         panel.configure(&cfg);
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
 
-        let (dids, _) = panel.audio_configs[0].as_ref().expect("audio drawer built");
+        let (dids, _) = panel.row_host.audio_configs[0].as_ref().expect("audio drawer built");
         let step_slider = *dids.sliders.get(3).expect("Step slider built while Action=Step");
         let step_track = step_slider.track;
         let step_rect = tree.get_bounds(step_track);
@@ -5907,8 +5735,8 @@ mod tests {
         panel.state.mod_state.driver_expanded[0] = true;
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
 
-        assert!(panel.driver_config_ids[0].is_some());
-        assert!(panel.trim_ids[0].is_some());
+        assert!(panel.row_host.driver_config_ids[0].is_some());
+        assert!(panel.row_host.trim_ids[0].is_some());
     }
 
     #[test]
@@ -5975,7 +5803,7 @@ mod tests {
             clips_settled < clips_midflight,
             "settled build drops the drawer clip: settled={clips_settled} midflight={clips_midflight}"
         );
-        assert!(panel.driver_config_ids[0].is_some(), "driver config built (unclipped) when settled");
+        assert!(panel.row_host.driver_config_ids[0].is_some(), "driver config built (unclipped) when settled");
     }
 
     // BUG-076 instrumentation: a card configured for the FIRST time (no prior
@@ -6026,7 +5854,7 @@ mod tests {
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
 
         // Arming the envelope adds the orange target handle on the slider track.
-        assert!(panel.target_ids[0].is_some());
+        assert!(panel.row_host.target_ids[0].is_some());
     }
 
     #[test]
@@ -6042,22 +5870,22 @@ mod tests {
         // A tab strip appears with one tab per active config, and only the shown
         // config (the stored default, Driver) is built — not both stacked.
         assert_eq!(
-            panel.mod_tab_ids[0].len(),
+            panel.row_host.mod_tab_ids[0].len(),
             2,
             "tab strip shows both active configs"
         );
         assert!(
-            panel.driver_config_ids[0].is_some(),
+            panel.row_host.driver_config_ids[0].is_some(),
             "the shown config (driver) is built"
         );
         assert!(
-            panel.envelope_config_ids[0].is_none(),
+            panel.row_host.envelope_config_ids[0].is_none(),
             "the hidden config is not built (no stacking)"
         );
         // Track overlays still show for every armed mod regardless of the tab.
-        assert!(panel.trim_ids[0].is_some(), "driver trim stays on the track");
+        assert!(panel.row_host.trim_ids[0].is_some(), "driver trim stays on the track");
         assert!(
-            panel.target_ids[0].is_some(),
+            panel.row_host.target_ids[0].is_some(),
             "envelope target stays on the track"
         );
     }
@@ -6094,7 +5922,7 @@ mod tests {
         panel.state.mod_state.envelope_expanded[0] = true;
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
 
-        let (env_tab_id, _) = panel.mod_tab_ids[0]
+        let (env_tab_id, _) = panel.row_host.mod_tab_ids[0]
             .iter()
             .find(|(_, t)| *t == ModTab::Envelope)
             .copied()
@@ -6117,7 +5945,7 @@ mod tests {
         panel.state.mod_state.envelope_expanded[0] = true;
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
 
-        let (driver_id, _) = panel.mod_tab_ids[0]
+        let (driver_id, _) = panel.row_host.mod_tab_ids[0]
             .iter()
             .find(|(_, t)| *t == ModTab::Driver)
             .copied()
@@ -6128,7 +5956,7 @@ mod tests {
         assert_eq!(panel.mod_tab_ink[0].value(), driver_x);
         assert!(!panel.mod_tab_ink[0].is_animating());
 
-        let (env_id, _) = panel.mod_tab_ids[0]
+        let (env_id, _) = panel.row_host.mod_tab_ids[0]
             .iter()
             .find(|(_, t)| *t == ModTab::Envelope)
             .copied()
@@ -6163,7 +5991,7 @@ mod tests {
         panel.state.mod_state.envelope_expanded[0] = true;
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
 
-        let (env_tab_id, _) = panel.mod_tab_ids[0]
+        let (env_tab_id, _) = panel.row_host.mod_tab_ids[0]
             .iter()
             .find(|(_, t)| *t == ModTab::Envelope)
             .copied()
@@ -6187,8 +6015,8 @@ mod tests {
         panel.state.mod_state.envelope_expanded[0] = true;
         tree.clear();
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
-        assert!(panel.envelope_config_ids[0].is_some());
-        assert!(panel.driver_config_ids[0].is_none());
+        assert!(panel.row_host.envelope_config_ids[0].is_some());
+        assert!(panel.row_host.driver_config_ids[0].is_none());
     }
 
     #[test]
@@ -6254,7 +6082,7 @@ mod tests {
             panel.configure(cfg);
             panel.set_collapsed(false);
             panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
-            panel
+            panel.row_host
                 .slider_ids
                 .iter()
                 .flatten()
@@ -6452,9 +6280,9 @@ mod tests {
         assert!(panel.border_id.is_some());
         assert!(panel.name_label_id.is_some());
         assert!(panel.chevron_btn_id.is_some());
-        assert!(panel.slider_ids[0].is_some()); // Speed = slider
-        assert!(panel.toggle_ids[1].is_some()); // Invert = toggle
-        assert!(panel.slider_ids[2].is_some()); // Scale = slider
+        assert!(panel.row_host.slider_ids[0].is_some()); // Speed = slider
+        assert!(panel.row_host.toggle_ids[1].is_some()); // Invert = toggle
+        assert!(panel.row_host.slider_ids[2].is_some()); // Scale = slider
         assert!(panel.node_count > 0);
     }
 
@@ -6505,13 +6333,13 @@ mod tests {
         panel.configure(&gen_config_with_sections());
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
 
-        assert_eq!(panel.section_header_ids.len(), 1, "exactly one header — the Leaf run");
-        assert_eq!(panel.section_header_ids[0].1, "Leaf");
+        assert_eq!(panel.row_host.section_header_ids.len(), 1, "exactly one header — the Leaf run");
+        assert_eq!(panel.row_host.section_header_ids[0].1, "Leaf");
         // Every row still builds (unfolded by default) — Speed/Invert/Scale
         // widgets all present, same as the no-sections case.
-        assert!(panel.slider_ids[0].is_some());
-        assert!(panel.toggle_ids[1].is_some());
-        assert!(panel.slider_ids[2].is_some());
+        assert!(panel.row_host.slider_ids[0].is_some());
+        assert!(panel.row_host.toggle_ids[1].is_some());
+        assert!(panel.row_host.slider_ids[2].is_some());
     }
 
     #[test]
@@ -6521,7 +6349,7 @@ mod tests {
         panel.configure(&gen_config_with_sections());
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
 
-        let header_id = panel.section_header_ids[0].0;
+        let header_id = panel.row_host.section_header_ids[0].0;
         let actions = panel.handle_click(header_id, &tree);
         assert!(
             matches!(actions.as_slice(), [PanelAction::Params(ParamsAction::SectionFoldToggled)]),
@@ -6541,10 +6369,10 @@ mod tests {
         // convention `mod_active_tab`/`drawer_height_anim` already use.
         let mut tree2 = UITree::new();
         panel.build(&mut tree2, Rect::new(0.0, 0.0, 280.0, 300.0));
-        assert_eq!(panel.section_header_ids.len(), 1, "the header itself still draws while folded");
-        assert!(panel.slider_ids[0].is_none(), "Speed's row was skipped (folded)");
-        assert!(panel.toggle_ids[1].is_none(), "Invert's row was skipped (folded)");
-        assert!(panel.slider_ids[2].is_some(), "Scale (outside the folded run) still builds");
+        assert_eq!(panel.row_host.section_header_ids.len(), 1, "the header itself still draws while folded");
+        assert!(panel.row_host.slider_ids[0].is_none(), "Speed's row was skipped (folded)");
+        assert!(panel.row_host.toggle_ids[1].is_none(), "Invert's row was skipped (folded)");
+        assert!(panel.row_host.slider_ids[2].is_some(), "Scale (outside the folded run) still builds");
 
         // Click again — unfolds.
         let actions = panel.handle_click(header_id, &tree);
@@ -6552,7 +6380,7 @@ mod tests {
         assert_eq!(panel.section_folded.get("Leaf"), Some(&false));
         let mut tree3 = UITree::new();
         panel.build(&mut tree3, Rect::new(0.0, 0.0, 280.0, 300.0));
-        assert!(panel.slider_ids[0].is_some(), "Speed's row is back once unfolded");
+        assert!(panel.row_host.slider_ids[0].is_some(), "Speed's row is back once unfolded");
     }
 
     #[test]
@@ -6562,7 +6390,7 @@ mod tests {
         panel.configure(&gen_config());
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
 
-        let button_id = panel.toggle_ids[1].as_ref().unwrap().button_id;
+        let button_id = panel.row_host.toggle_ids[1].as_ref().unwrap().button_id;
         let actions = panel.handle_click(button_id, &tree);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
@@ -6660,7 +6488,7 @@ mod tests {
         let mut reg = crate::intent::IntentRegistry::new();
         panel.register_intents(&mut reg);
 
-        let track = panel.slider_ids[0].as_ref().unwrap().track;
+        let track = panel.row_host.slider_ids[0].as_ref().unwrap().track;
         match reg.resolve(&tree, Some(track), crate::intent::Gesture::RightClick) {
             Some(PanelAction::Root(RootAction::SliderReset { changed, .. })) => {
                 assert!(matches!(*changed, PanelAction::Scrub(ValueRef::Param(..), ScrubPhase::Move(ScrubValue::Scalar(v))) if (v - 10.0).abs() < f32::EPSILON));
@@ -6683,7 +6511,7 @@ mod tests {
         let mut reg = crate::intent::IntentRegistry::new();
         panel.register_intents(&mut reg);
 
-        let dids = &panel.audio_configs[0].as_ref().expect("audio drawer built").0;
+        let dids = &panel.row_host.audio_configs[0].as_ref().expect("audio drawer built").0;
         assert_eq!(dids.sliders.len(), 3, "Amount/Attack/Release");
 
         let expected = [
@@ -6735,12 +6563,12 @@ mod tests {
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
 
         let gi = panel.rows.len() - 1;
-        assert!(panel.slider_ids[gi].is_none(), "trigger-gate row has no main slider");
+        assert!(panel.row_host.slider_ids[gi].is_none(), "trigger-gate row has no main slider");
 
         let mut reg = crate::intent::IntentRegistry::new();
         panel.register_intents(&mut reg);
 
-        let dids = &panel.audio_configs[gi].as_ref().expect("audio drawer armed in fixture").0;
+        let dids = &panel.row_host.audio_configs[gi].as_ref().expect("audio drawer armed in fixture").0;
         // Param-drawer unification (2026-07-19): a trigger-gate target fires
         // on the raw BUG-242 edge, so Attack/Release are placebo there and
         // the drawer builds only Sensitivity.
@@ -6764,7 +6592,7 @@ mod tests {
         let mut reg = crate::intent::IntentRegistry::new();
         panel.register_intents(&mut reg);
 
-        let track = panel.slider_ids[0].as_ref().unwrap().track;
+        let track = panel.row_host.slider_ids[0].as_ref().unwrap().track;
         assert_track_resets(&reg, &tree, track);
     }
 
@@ -6789,7 +6617,7 @@ mod tests {
         panel.configure(&effect_config());
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
 
-        let btn = panel.envelope_btn_ids[0].expect("row 0 supports envelopes");
+        let btn = panel.row_host.envelope_btn_ids[0].expect("row 0 supports envelopes");
         let actions = panel.handle_click(btn, &tree);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
@@ -6812,7 +6640,7 @@ mod tests {
         panel.configure(&effect_config());
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
 
-        let catcher = panel.row_catcher_ids[0].expect("row 0 built a catcher");
+        let catcher = panel.row_host.row_catcher_ids[0].expect("row 0 built a catcher");
         let actions = panel.handle_click(catcher, &tree);
         assert!(actions.is_empty(), "left click on the row catcher must be a no-op, got {actions:?}");
     }
@@ -6824,7 +6652,7 @@ mod tests {
         panel.configure(&effect_config_with_osc_and_enum());
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
 
-        let label = panel.slider_ids[0].as_ref().unwrap().label.expect("row 0 has a label");
+        let label = panel.row_host.slider_ids[0].as_ref().unwrap().label.expect("row 0 has a label");
         let actions = panel.handle_click(label, &tree);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
@@ -6843,7 +6671,7 @@ mod tests {
         panel.configure(&effect_config_with_osc_and_enum());
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
 
-        let label = panel.slider_ids[1].as_ref().unwrap().label.expect("row 1 has a label");
+        let label = panel.row_host.slider_ids[1].as_ref().unwrap().label.expect("row 1 has a label");
         let actions = panel.handle_click(label, &tree);
         assert!(actions.is_empty(), "no OSC address on this row → no-op, got {actions:?}");
     }
@@ -6858,7 +6686,7 @@ mod tests {
         panel.configure(&effect_config_with_osc_and_enum());
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
 
-        let value_cell = panel.slider_ids[1].as_ref().unwrap().value_text;
+        let value_cell = panel.row_host.slider_ids[1].as_ref().unwrap().value_text;
         let actions = panel.handle_click(value_cell, &tree);
         assert!(!actions.is_empty(), "an enum row's value-cell click must resolve to an action");
     }
@@ -6874,15 +6702,15 @@ mod tests {
         let mut panel = ParamCardPanel::new();
         panel.configure(&effect_config());
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
-        let row1_driver_btn_before = tree.widget_of(panel.driver_btn_ids[1].unwrap());
-        let row1_slider_track_before = tree.widget_of(panel.slider_ids[1].as_ref().unwrap().track);
+        let row1_driver_btn_before = tree.widget_of(panel.row_host.driver_btn_ids[1].unwrap());
+        let row1_slider_track_before = tree.widget_of(panel.row_host.slider_ids[1].as_ref().unwrap().track);
 
         tree.clear();
         panel.state.mod_state.driver_expanded[0] = true;
         panel.mod_active_tab[0] = ModTab::Driver;
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
-        let row1_driver_btn_after = tree.widget_of(panel.driver_btn_ids[1].unwrap());
-        let row1_slider_track_after = tree.widget_of(panel.slider_ids[1].as_ref().unwrap().track);
+        let row1_driver_btn_after = tree.widget_of(panel.row_host.driver_btn_ids[1].unwrap());
+        let row1_slider_track_after = tree.widget_of(panel.row_host.slider_ids[1].as_ref().unwrap().track);
 
         assert_eq!(
             row1_driver_btn_before, row1_driver_btn_after,
@@ -6916,15 +6744,15 @@ mod tests {
         panel_b.configure(&cfg_b);
         panel_a.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
         panel_b.build(&mut tree, Rect::new(0.0, 310.0, 280.0, 300.0));
-        let b_driver_before = tree.widget_of(panel_b.driver_btn_ids[0].unwrap());
-        let b_track_before = tree.widget_of(panel_b.slider_ids[0].as_ref().unwrap().track);
+        let b_driver_before = tree.widget_of(panel_b.row_host.driver_btn_ids[0].unwrap());
+        let b_track_before = tree.widget_of(panel_b.row_host.slider_ids[0].as_ref().unwrap().track);
 
         // The reorder: B now builds FIRST (sibling order swapped).
         tree.clear();
         panel_b.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
         panel_a.build(&mut tree, Rect::new(0.0, 310.0, 280.0, 300.0));
-        let b_driver_after = tree.widget_of(panel_b.driver_btn_ids[0].unwrap());
-        let b_track_after = tree.widget_of(panel_b.slider_ids[0].as_ref().unwrap().track);
+        let b_driver_after = tree.widget_of(panel_b.row_host.driver_btn_ids[0].unwrap());
+        let b_track_after = tree.widget_of(panel_b.row_host.slider_ids[0].as_ref().unwrap().track);
 
         assert_eq!(
             b_driver_before, b_driver_after,
@@ -6948,7 +6776,7 @@ mod tests {
         panel.configure(&cfg);
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
 
-        let label = panel.toggle_ids[toggle_row]
+        let label = panel.row_host.toggle_ids[toggle_row]
             .as_ref()
             .expect("toggle row built")
             .label_id

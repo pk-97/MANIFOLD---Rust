@@ -24,10 +24,12 @@ mod builders;
 mod state;
 mod routing;
 mod geometry;
+mod row_host;
 pub(crate) use builders::*;
 pub use state::*;
 pub(crate) use routing::*;
 pub(crate) use geometry::*;
+pub(crate) use row_host::*;
 
 // ── Shared layout constants ─────────────────────────────────────
 
