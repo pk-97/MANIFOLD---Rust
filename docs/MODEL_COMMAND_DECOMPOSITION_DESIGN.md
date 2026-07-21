@@ -1,6 +1,6 @@
 # Model/Command Decomposition — Wave 2 of the god-file campaign
 
-**Status: IN PROGRESS — P2-G SHIPPED 2026-07-22 (`docs/landings/2026-07-22-wave2-p2-g.md`: graph.rs → commands/graph/ 8 modules, 10 residue-0 commits, censuses diff-empty, 3850/3850 + LiveSchool oracle green; D7a verifier class landed); design decisions still PROPOSED — awaiting Peter's review (D-28/D-29 authorized overnight mechanical execution); next: P2-E, P2-P, P2-Z · 2026-07-22 · Fable**
+**Status: IN PROGRESS — P2-G SHIPPED 2026-07-22 (`docs/landings/2026-07-22-wave2-p2-g.md`) · P2-E SHIPPED 2026-07-22 (`docs/landings/2026-07-22-wave2-p2-e.md`: effects.rs → effects/ 11 modules, 6 residue-0 commits, serde constraints held, 728/728 focused + 3850/3850 + oracle green); design decisions still PROPOSED — awaiting Peter's review (D-28/D-29 authorized overnight mechanical execution); next: P2-P, P2-Z · 2026-07-22 · Fable**
 **Prerequisites:** Wave 1 P-B landed (the pure-move tooling + census pattern this wave reuses: `scripts/move_identity_check.py`, slice-queue orchestration, landing-claim protocol). Campaign register: `docs/ARCHITECTURE_DEBT.md`. Status for this wave lives ONLY on this doc's Status line.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase. Adversarially reviewed 2026-07-22 (fresh Fable agent, full repo verification): 2 HIGH + 4 MEDIUM + 4 LOW findings, ALL upheld and folded below (marked "review H1" etc.); ~40 anchors, the D6 serde argument, the partition completeness, and the pub(super) plan verified correct.
 
