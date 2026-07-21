@@ -50,6 +50,7 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-303 | **gltf-import-objects-all-at-origin** | Scene/glTF import places every object at 0,0,0 instead of authored transforms (Peter, in-app). Suspects: transform propagation in gltf_import/gltf_load or drop at scene instantiation. Fix in the graph/import path, never baked into meshes. | OPEN |
 | BUG-302 | **ea-arm-buttons-nameless-to-harness** | EnvelopeBtn/AudioBtn carry no queryable name while sibling DriverBtn does (WS3 residue, BUG-239 family); flows can't drive E/A arming. Found by the D9 catalog's first run. Fix ~2 lines + catalog self-test symmetry assert; batch with VERIFICATION_INFRA. | OPEN |
 | BUG-301 | **three-panelactions-dispatch-to-nothing** | AudioSetupDeviceClicked/AudioSendChannelClicked/OpenAbletonPickerForParam emit but fall through to unhandled() — dead wire traffic or silently missing features; parity-preserved through P-B/P-D/P-I, needs git archaeology then delete-or-wire. Rider: re-audit the 12 non-trio partials. | OPEN |
 | BUG-300 | **ui-flow-asserts-drifted-from-fixtures** | Five UI-flows are red under their correct manifest scene from stale asserts / fixture drift since authoring (audio-clip-trigger-add: 3 `Snare` not 1; audio-dock-toggle: inspector `Amount` row gone post-toggle; audio-dock-scroll: consumer-row scroll rect ~273px stale; calibrated-param-card-reads-manifest: expects 5 `Amount`, 3 render; drag-clip-release-over-inspector: no `Video 3` clip) — surfaced by S8's `run_ui_flows.py`, XFAIL'd in `scripts/ui-flows/manifest.json`; each needs a fixture-vs-authoring-commit bisect — LOW (test infra) |
@@ -201,6 +202,10 @@ workflow journal at
 System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md).
 
 ## Open
+
+### BUG-303 — glTF/scene import places all objects at 0,0,0 instead of their authored locations
+**Status:** OPEN · reported by Peter 2026-07-22 (in-app observation)
+Symptom: importing a glTF scene (and scene placement generally) puts every object at the origin rather than its authored transform. Root cause: unknown — suspects: node/world transform not applied during import graph assembly (gltf_import.rs / gltf_load.rs transform propagation), or transforms imported but dropped when objects are instantiated into the scene graph (assemble_import_graph → scene build). Note [fix-asset-transforms-in-graph-not-mesh-files]: the fix belongs in the graph/import path, never by baking transforms into mesh files. Fix shape: trace one object's authored transform from file → gltf_load parse → import graph → scene instantiation; find where it's lost; add a value-level import test asserting a known fixture's object positions (held-out input per DESIGN_DOC_STANDARD §5).
 
 ### BUG-302 — E/A arm buttons nameless to the flow harness (driver_btn asymmetry, BUG-239 family)
 **Status:** OPEN · found 2026-07-22 by the D9 catalog's first run (the tool doing its job)
