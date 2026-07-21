@@ -1,0 +1,28 @@
+[
+  "Snapshot",
+  "Dump",
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "0.50", "type": "Label", "under_text": "Amount" } },
+      "check": "Exists"
+    }
+  },
+  { "Step": { "frames": 1 } },
+  "Snapshot",
+  "Dump",
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "4.85", "type": "Label", "under_text": "Amount" } },
+      "check": "Exists"
+    }
+  },
+  { "Step": { "frames": 59 } },
+  "Snapshot",
+  "Dump",
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "0.50", "type": "Label", "under_text": "Amount" } },
+      "check": "Exists"
+    }
+  }
+]

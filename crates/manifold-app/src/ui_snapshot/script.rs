@@ -105,7 +105,7 @@ pub fn run(scene: &str, script_path: &str) {
         eprintln!(
             "ui-snap --script: unknown scene '{scene}' (known: timeline, states, inspector, \
              paramsteps, scrollshrink, hairlineclips, automation, selectionclips, gltfscene, \
-             gltfanimscene)"
+             gltfanimscene, envmod)"
         );
         std::process::exit(2);
     };
@@ -141,6 +141,7 @@ pub fn run(scene: &str, script_path: &str) {
         || scene == "gltfscene"
         || scene == "gltfanimscene"
         || scene == "bug047"
+        || scene == "envmod"
     {
         ui.layout.inspector_width = 600.0;
         ui.layout.timeline_split_ratio = 0.6;
@@ -336,6 +337,13 @@ struct Runner {
     // one on the readback COPY only.
     filmstrip: Vec<Vec<u8>>,
     last_gesture_points: Vec<Vec2>,
+    // BUG-234: persistent scratch for `evaluate_modulation`'s per-tick
+    // clip-timing/trigger-pulse buffers — reused across `Step` frames so the
+    // harness's modulation tick allocates nothing extra per frame, matching
+    // the content thread's own `PlaybackEngine` fields
+    // (`modulation_timing_scratch`/`pending_trigger_pulses`).
+    modulation_timing_scratch: Vec<(manifold_core::Beats, manifold_core::Beats)>,
+    modulation_pulses: Vec<manifold_playback::modulation::TriggerPulse>,
 }
 
 impl Runner {
@@ -366,6 +374,8 @@ impl Runner {
             active_inspector_drag: None,
             filmstrip: Vec::new(),
             last_gesture_points: Vec::new(),
+            modulation_timing_scratch: Vec::new(),
+            modulation_pulses: Vec::new(),
         }
     }
 
@@ -396,6 +406,37 @@ impl Runner {
                     if ui.inspector.drawer_anim_active() {
                         self.needs_structural_sync = true;
                     }
+                    // BUG-234: the harness's frame-advance never ran the
+                    // modulation pipeline, so no flow could show a
+                    // driver/envelope-modulated value change (VD-031). Wire
+                    // the SAME public tick entry point the content thread's
+                    // `PlaybackEngine::tick_playing`/`tick_non_playing` call
+                    // (`engine.rs:911`/`:1020`) directly against the
+                    // fixture's `data.project` — no new wrapper, no
+                    // manifold-playback change. Audio is empty (headless has
+                    // no capture backend); clip-edge layers empty (no
+                    // sync_clips_to_time driver here to populate it — the
+                    // envelope path this proves runs off elapsed-since-start,
+                    // not the edge queue).
+                    let current_beat = manifold_core::tempo::TempoMapConverter::seconds_to_beat(
+                        &mut data.project.tempo_map,
+                        manifold_core::Seconds(self.clock as f64),
+                        data.project.settings.bpm,
+                    );
+                    let mut fire_meters = manifold_core::audio_trigger::FireMeterCapture::default();
+                    let modulation_dirty = manifold_playback::modulation::evaluate_modulation(
+                        &mut data.project,
+                        current_beat,
+                        manifold_core::Seconds(DT as f64),
+                        &manifold_core::audio_features::AudioFeatureSnapshot::default(),
+                        &mut self.modulation_timing_scratch,
+                        &mut self.modulation_pulses,
+                        &[],
+                        &mut fire_meters,
+                    );
+                    if modulation_dirty {
+                        self.needs_structural_sync = true;
+                    }
                     let mut signals = UiFrameSignals {
                         needs_structural_sync: self.needs_structural_sync,
                         scroll_dirty: self.scroll_dirty,
@@ -404,6 +445,16 @@ impl Runner {
                     apply_ui_frame_invalidations(ui, Some(&mut render.cache), &mut signals);
                     self.needs_structural_sync = signals.needs_structural_sync;
                     self.scroll_dirty = signals.scroll_dirty;
+                    // BUG-234 cont'd: `apply_ui_frame_invalidations` only
+                    // decides whether to rebuild STRUCTURE; the already-built
+                    // widgets' VALUE text (the slider fill/label
+                    // `push_state`/`UiParamSlot::value` writes) is only
+                    // refreshed by `reconcile_state`, same as every other
+                    // per-frame caller (`advance_frame` above calls both, in
+                    // this same order). Without this, `evaluate_modulation`'s
+                    // write into `data.project`'s param `effective` value
+                    // never reaches the widget tree a `Dump`/`Snapshot` reads.
+                    super::reconcile_state(ui, data);
                     composite_frame(
                         &render.device,
                         &mut render.ui_renderer,
