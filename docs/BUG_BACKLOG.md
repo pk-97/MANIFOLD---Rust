@@ -50,6 +50,7 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-298 | **slider-fill-under-modulation-pixel-unverified** | the `--script` harness now proves a modulation-changed param VALUE (text) across snapshots (BUG-234), but the slider FILL/thumb visual under modulation is only inferred-correct (rides `reconcile_state`'s `sync_param_value` off the same `effective` value) — never confirmed by a rendered PNG diff; this is the gap VD-031 originally mislabeled "BUG-235" before that id was reassigned to an audio-timing bug — LOW (verification gap) |
 | BUG-297 | **multi-session-memory-exhaustion-freezes-machine** | four ~4GB rust-analyzer instances (one per live session) + a workspace gate = jetsam; reads identically to BUG-290's GPU freeze from the user's seat — check gpuEvent vs JetsamEvent before attributing any lockup |
 | ~~BUG-296~~ FIXED | **script-driver-effect-cards-never-rebuild-after-structural-dispatch** | FIXED 2026-07-21 — real root cause was `Runner.active_layer` never seeded from the fixture's active layer, not a missing rebuild; a structural dispatch was silently mutating the WRONG layer's chain. Seeded `runner.active_layer` from `data.active` in `script.rs::run` |
 | ~~BUG-294~~ FIXED | **scene-setup-dock-scroll-headless-noop** | FIXED 2026-07-21 — `Gesture::Scroll` now routes into the Scene Setup dock's own `ScenePanel::handle_scroll` setter when the pointer falls inside its rect, and forces `needs_structural_sync` (mirrors `window_input.rs`'s explicit `needs_rebuild`) |
@@ -195,6 +196,13 @@ workflow journal at
 System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md).
 
 ## Open
+
+### BUG-298 (slider-fill-under-modulation-pixel-unverified) — the modulated param's slider FILL/thumb visual is inferred-correct but never confirmed by a rendered PNG — the gap VD-031 originally mislabeled "BUG-235" — found 2026-07-21, BUG-234 landing verification
+**Status:** OPEN (logged 2026-07-21, verif-infra A-tail landing).
+**Severity:** LOW — verification gap, not a known defect. The value-text half is now proven (BUG-234's `scripts/ui-flows/envelope-modulation.json`); the slider fill/thumb norm is driven by `reconcile_state`'s `sync_param_value` off the SAME `effective` value the text reads, so it is very likely correct — but "very likely" off a shared-value inference is not a pixel observation (the CLAUDE.md oracle rule: a green value-text assert is not a look).
+**Symptom:** under a driver/envelope, the numeric value text updates across `--script` snapshots, but no test confirms the slider's rendered fill width / thumb position tracks it.
+**Root cause:** none known — this is an unproven surface, not a convicted bug. It exists as a distinct id only because VD-031's original "BUG-235" pointer was reassigned to `manifold-own-kick-fixtures-systematic-adtof-timing-bias` (an unrelated audio-timing entry), leaving the slider-fill gap with no live id.
+**Fix shape:** render the `envmod` flow's modulated frame to PNG and diff the slider fill region against the base frame (a real look, per BUG-234's `envelope-modulation.json` beats); close if the fill tracks, or convert to a real defect entry if it doesn't. No code change expected.
 
 ### BUG-283 (manifold-app-clippy-tests-target-drift) — `cargo clippy -p manifold-app --tests -- -D warnings` fails on three pre-existing files; the standard gates never compile the test target so the drift is invisible
 **Status:** OPEN (logged 2026-07-21, surfaced by the widget-tree P4 lane while gating its own test-only diff).

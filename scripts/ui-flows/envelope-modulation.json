@@ -12,8 +12,8 @@
   "Dump",
   {
     "Assert": {
-      "selector": { "Query": { "text": "4.85", "type": "Label", "under_text": "Amount" } },
-      "check": "Exists"
+      "selector": { "Query": { "text": "0.50", "type": "Label", "under_text": "Amount" } },
+      "check": { "Count": 0 }
     }
   },
   { "Step": { "frames": 59 } },
