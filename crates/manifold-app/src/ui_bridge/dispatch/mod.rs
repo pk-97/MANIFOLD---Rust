@@ -7,6 +7,16 @@
 
 pub(crate) mod browser;
 pub(crate) mod clip;
+pub(crate) mod resolve;
+
+// `resolve.rs`'s moved helpers reference `super::resolve_effect_id` /
+// `super::resolve_active_layer_index` verbatim (their `super::` was written
+// relative to `inspector.rs`'s nesting depth under `ui_bridge`, one level
+// shallower than `resolve.rs`'s own depth under `ui_bridge::dispatch`). This
+// re-export makes both names members of `dispatch` too, so the moved bodies
+// resolve unchanged — a private `use`, visible to `dispatch` and its
+// descendants (`resolve.rs`), needs no wider visibility.
+use super::{resolve_active_layer_index, resolve_effect_id};
 
 #[cfg(test)]
 mod chain_completeness {
