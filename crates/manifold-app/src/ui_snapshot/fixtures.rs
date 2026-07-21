@@ -47,6 +47,7 @@ pub fn build(scene: &str) -> Option<SceneData> {
         "gltfanimscene" => Some(gltf_anim_scene()),
         "heldoutmerge" => Some(heldout_merge_scene()),
         "empty" => Some(empty_scene()),
+        "envmod" => Some(envelope_modulation_scene()),
         _ => None,
     }
 }
@@ -262,6 +263,20 @@ fn arm_lfo(fx: &mut PresetInstance) {
             BeatDivision::Quarter,
             DriverWaveform::Sine,
         )]);
+    }
+}
+
+/// Arm a decay envelope on the effect's first parameter, default target
+/// (`target_normalized = 1.0`, i.e. the param's max) and default decay
+/// (`DEFAULT_ENVELOPE_DECAY_BEATS`, 1 beat) — mirrors `arm_lfo` above. No-op
+/// if the effect has no params. BUG-234: the harness's `--script` `Step`
+/// action had no fixture exercising this modulation source (only
+/// `arm_lfo`'s drivers existed) — see `envelope_modulation_scene`.
+fn arm_envelope(fx: &mut PresetInstance) {
+    let param_id = manifold_core::preset_definition_registry::try_get(fx.effect_type())
+        .and_then(|def| def.param_defs.first().map(|pd| pd.spec.id.clone()));
+    if let Some(param_id) = param_id {
+        fx.envelopes = Some(vec![manifold_core::effects::ParamEnvelope::new(param_id)]);
     }
 }
 
@@ -1084,6 +1099,42 @@ fn param_steps_scene() -> SceneData {
     selection.select_layer(lid("plasma"));
 
     SceneData { project, content, active: Some(1), selection }
+}
+
+/// BUG-234 acceptance scene (`scripts/ui-flows/envelope-modulation.json`):
+/// one video layer, one long clip starting at the timeline origin so a
+/// `--script` run's `Step`-driven clock walks straight into (and stays well
+/// inside) its active-clip window, carrying one Bloom effect with
+/// `arm_envelope` applied to its only param (`amount`, default 0.50,
+/// range 0..5 — see `assets/effect-presets/Bloom.json`). Default envelope
+/// target (`target_normalized = 1.0` ⇒ pulls toward 5.00) and decay
+/// (`DEFAULT_ENVELOPE_DECAY_BEATS` = 1 beat) make the base (0.50) and the
+/// near-start pulled-toward-target value visibly different, and the
+/// post-decay value provably settle back to exactly the base (0.50) once
+/// elapsed-into-clip clears 1 beat — a clean, computable curve endpoint
+/// that only holds if the harness's `Step` action actually runs
+/// `evaluate_modulation` each frame. A dedicated fixture (not an existing
+/// inspector-bearing one) so this acceptance flow can't disturb
+/// `inspector-card-drag-reorder.json`'s pixel assertions.
+fn envelope_modulation_scene() -> SceneData {
+    let mut glow = Layer::new("GLOW".into(), LayerType::Video, 0);
+    glow.layer_id = lid("glow");
+    glow.clips
+        .push(TimelineClip::new_video("glow_loop.mov".into(), Beats(0.0), Beats(64.0), Seconds::ZERO));
+
+    let mut bloom = effect("Bloom");
+    arm_envelope(&mut bloom);
+    glow.effects = Some(vec![bloom]);
+
+    let mut project = Project::default();
+    project.timeline.layers = vec![glow];
+
+    let content = ContentState { current_beat: Beats(0.0), is_playing: false, ..Default::default() };
+
+    let mut selection = UIState::default();
+    selection.select_layer(lid("glow"));
+
+    SceneData { project, content, active: Some(0), selection }
 }
 
 /// One layer per state, so a single real render shows the whole state matrix in
