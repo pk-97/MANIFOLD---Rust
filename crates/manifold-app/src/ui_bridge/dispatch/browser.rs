@@ -8,6 +8,15 @@ use super::super::DispatchResult;
 use crate::content_command::ContentCommand;
 use manifold_ui::PanelAction;
 
+/// `manifold_ui::panels::browser_popup::BrowserPopupMode` stands in for
+/// `manifold_core::preset_def::PresetKind` on the UI side of the browser's
+/// management actions (PRESET_LIBRARY_DESIGN P5) — `manifold-ui` mirrors core
+/// types rather than depending on `manifold-core` (see `BrowserCellContext`'s
+/// doc comment). `Node` never reaches these arms in practice: the browser
+/// only classifies a source (and therefore only ever fires
+/// `BrowserCellRightClicked`) for the Effect/Generator pickers, never the
+/// graph-editor's node picker — degrade to `Effect` rather than panic if that
+/// invariant is ever violated.
 pub(crate) fn browser_mode_to_kind(
     mode: manifold_ui::panels::browser_popup::BrowserPopupMode,
 ) -> manifold_core::preset_def::PresetKind {
