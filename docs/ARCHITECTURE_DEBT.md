@@ -33,11 +33,15 @@ Campaign origin: Peter, 2026-07-21 — *"I want god files gone, I want proper so
 
 ## Wave 2 — model/command layer (design: `docs/MODEL_COMMAND_DECOMPOSITION_DESIGN.md`)
 
-| File | Lines | Commits | Note |
-|---|---|---|---|
-| `manifold-editing/src/commands/graph.rs` | 9,538 | 80 | largest file in repo; every graph edit funnels through it |
-| `manifold-core/src/effects.rs` | 5,594 | 104 | Unity-port sediment concentration |
-| `manifold-core/src/project.rs` | 2,922 | 74 | assess at Wave 2 Phase 0 |
+Layer vocabulary for this crate pair (design D2): **Model** (type + impl + serde, per domain) · **Migration** (load-time normalization) · **Query** (read-only traversal) · **Command** (mutation + undo, per domain).
+
+| File | Was (2026-07-21) | Now (P2-G/E/P landed 2026-07-22) |
+|---|---|---|
+| `manifold-editing/src/commands/graph.rs` | 9,538 lines, 80 commits | `commands/graph/` — 8 modules, facade at mod.rs |
+| `manifold-core/src/effects.rs` | 5,594 lines, 104 commits | `effects/` — 11 modules |
+| `manifold-core/src/project.rs` | 2,922 lines, 74 commits | `project/` — 6 modules |
+
+Non-target (assessed at Wave 2, cohesive): `manifold-editing/src/service.rs` (1,541 — clip/selection orchestration) and `undo.rs` (159).
 
 ## Wave 3 — renderer runtime (design: `docs/RENDERER_RUNTIME_DECOMPOSITION_DESIGN.md`; cohesion verdicts recorded there)
 
@@ -58,5 +62,5 @@ Campaign origin: Peter, 2026-07-21 — *"I want god files gone, I want proper so
 
 ## Enforcement
 
-- Pure moves: `scripts/move_identity_check.py` (zero non-wiring residue).
-- Regrowth: `godfile_regrowth` invariant test — per-file line ceilings for every file listed here (ceilings set at each wave's final landing; rides nextest).
+- Pure moves: `scripts/move_identity_check.py` (zero non-wiring residue; test-mod wiring class added Wave 2 D7a).
+- Regrowth: `crates/manifold-app/tests/godfile_regrowth.rs` — per-file line ceilings, rides nextest (BUILT at Wave 2 P2-Z, 2026-07-22 — Wave 1 D11 specified it but never built it; Wave-1 rows carry interim ceilings that tighten at Wave 1 close).
