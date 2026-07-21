@@ -13,6 +13,7 @@ use manifold_ui::timeline_editing_host::TimelineEditingHost;
 use crate::app::Application;
 use crate::content_command::ContentCommand;
 use crate::content_state::ContentState;
+use manifold_editing::command::Command;
 use manifold_editing::commands::effects::BindingMappingEdit;
 
 /// Build the reshape-edit command for the watched graph target — one
@@ -240,6 +241,22 @@ fn node_param_is_wired(
         .any(|w| w.to_node == node_id && w.to_port == param_name)
 }
 
+/// Read `(node_id, param_name)`'s current value at `scope_path` within
+/// `def` — the BUG-282 pre-drag-baseline read. `None` distinguishes "no
+/// stored override" (falls back to the primitive's own default at apply
+/// time) from an unresolvable scope/node, both of which the caller treats
+/// the same way (`with_previous(None)`).
+fn node_param_value(
+    def: &manifold_core::effect_graph_def::EffectGraphDef,
+    scope_path: &[u32],
+    node_id: u32,
+    param_name: &str,
+) -> Option<manifold_core::effect_graph_def::SerializedParamValue> {
+    let nodes = descend_level_ref(&def.nodes, scope_path)?;
+    let node = nodes.iter().find(|n| n.id == node_id)?;
+    node.params.get(param_name).cloned()
+}
+
 /// Extract the scalar f32 value from a graph-def `SerializedParamValue`.
 /// `None` for the non-scalar kinds (`Vec*`, `Color`, `Table`, `String`) —
 /// card bindings are scalar-only (`BindingDef::default_value: f32`), so a
@@ -288,6 +305,28 @@ impl BoundNodeParamDrag {
             inst.set_base_param(&self.outer_param_id, self.current_value);
         });
     }
+}
+
+/// BUG-282: an ordinary (unbound) node-face param/vec scrub session — the
+/// mirror of [`BoundNodeParamDrag`] for the un-rerouted path. Opened at the
+/// first `SetGraphNodeParam`/`SetOuterParam`-family move on a given
+/// `(target, node_id, param_name, scope_path)`, live-written on every
+/// subsequent move via `MutateProjectLive` (no undo entry), closed on the
+/// matching `EndGraphNodeParamScrub` — ONE undo-worthy
+/// `SetGraphNodeParamCommand` for the whole drag (`pre_drag_value` →
+/// `current_value`), not one `Execute` per pointer-move tick.
+#[derive(Debug, Clone)]
+pub(crate) struct UnboundNodeParamDrag {
+    target: manifold_core::GraphTarget,
+    node_id: u32,
+    param_name: String,
+    scope_path: Vec<u32>,
+    catalog_default: manifold_core::effect_graph_def::EffectGraphDef,
+    /// Value before the drag started. `None` means the key was absent —
+    /// the same `Option<SerializedParamValue>` shape `with_previous` takes.
+    pre_drag_value: Option<manifold_core::effect_graph_def::SerializedParamValue>,
+    /// Value as of the last move — the undo redo target.
+    current_value: manifold_core::effect_graph_def::SerializedParamValue,
 }
 
 impl Application {
@@ -429,6 +468,39 @@ impl Application {
                 binding_for_node_param(&view.canonical_def, scope_path, node_id, param_name)
             }
         }
+    }
+
+    /// BUG-282: the current value of `(node_id, param_name)` on the watched
+    /// graph at `scope_path`, before any drag write touches it — the
+    /// pre-drag undo baseline for an UNBOUND node-face scrub. `catalog_default`
+    /// is the same fallback `SetGraphNodeParamCommand` itself uses when the
+    /// instance has no per-instance `graph` override yet
+    /// (`with_target_graph_mut`'s `get_or_insert_with`), so this mirrors
+    /// exactly what `execute()` would read/self-capture if it ran right now.
+    fn watched_current_node_param_value(
+        &self,
+        scope_path: &[u32],
+        node_id: u32,
+        param_name: &str,
+        catalog_default: &manifold_core::effect_graph_def::EffectGraphDef,
+    ) -> Option<manifold_core::effect_graph_def::SerializedParamValue> {
+        let target = self.watched_graph_target.as_ref()?;
+        let def = match target {
+            manifold_core::GraphTarget::Effect(eid) => {
+                let fx = self.local_project.find_effect_by_id(eid)?;
+                fx.graph.as_ref().unwrap_or(catalog_default)
+            }
+            manifold_core::GraphTarget::Generator(lid) => {
+                let layer = self
+                    .local_project
+                    .timeline
+                    .layers
+                    .iter()
+                    .find(|l| &l.layer_id == lid)?;
+                layer.generator_graph().unwrap_or(catalog_default)
+            }
+        };
+        node_param_value(def, scope_path, node_id, param_name)
     }
 
     /// `true` when `(node_id, param_name)` on the watched graph at
@@ -2992,15 +3064,58 @@ impl Application {
                             // write; the row keeps showing the bound badge.
                             continue;
                         }
-                        let cmd = manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
-                            target,
-                            *node_id,
-                            param_name.clone(),
-                            crate::ui_translate::serialized_param_value_to_core(new_value),
-                            default.clone(),
-                        )
-                        .with_scope(canvas_scope.clone());
-                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                        // BUG-282: mirror the bound arm above — one session
+                        // opened on the first move, live-written every tick
+                        // via `MutateProjectLive` (no undo entry), committed
+                        // as ONE undo-worthy `Execute` on
+                        // `EndGraphNodeParamScrub` with the true pre-drag
+                        // value seeded through `with_previous` (graph.rs
+                        // `SetGraphNodeParamCommand::with_previous` doc).
+                        let core_value =
+                            crate::ui_translate::serialized_param_value_to_core(new_value);
+                        let is_new_session = !self
+                            .unbound_node_param_drag
+                            .as_ref()
+                            .is_some_and(|d| {
+                                d.target == target
+                                    && d.node_id == *node_id
+                                    && d.param_name == *param_name
+                                    && d.scope_path == canvas_scope
+                            });
+                        if is_new_session {
+                            let pre_drag_value = self.watched_current_node_param_value(
+                                &canvas_scope,
+                                *node_id,
+                                param_name,
+                                default,
+                            );
+                            self.unbound_node_param_drag = Some(UnboundNodeParamDrag {
+                                target: target.clone(),
+                                node_id: *node_id,
+                                param_name: param_name.clone(),
+                                scope_path: canvas_scope.clone(),
+                                catalog_default: default.clone(),
+                                pre_drag_value,
+                                current_value: core_value.clone(),
+                            });
+                        }
+                        if let Some(drag) = self.unbound_node_param_drag.as_mut() {
+                            drag.current_value = core_value.clone();
+                        }
+                        let mut live_cmd =
+                            manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
+                                target,
+                                *node_id,
+                                param_name.clone(),
+                                core_value,
+                                default.clone(),
+                            )
+                            .with_scope(canvas_scope.clone());
+                        self.send_content_cmd(ContentCommand::MutateProjectLive(Box::new(
+                            move |p| {
+                                live_cmd.execute(p);
+                            },
+                        )));
                     }
                     continue;
                 }
@@ -3021,6 +3136,38 @@ impl Application {
                             drag.current_value,
                         );
                         self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                    }
+                    // BUG-282: close out an ordinary (unbound) node-face
+                    // scrub session the same way — ONE undo-worthy
+                    // `SetGraphNodeParamCommand`, seeded with the true
+                    // pre-drag value via `with_previous` so undo restores
+                    // it (not the post-drag value `execute()`'s self-capture
+                    // would otherwise see). No-op if the drag never touched
+                    // this `(node_id, param_name)`, or never actually moved
+                    // (pre-drag value present and unchanged).
+                    if let Some(drag) = self.unbound_node_param_drag.take()
+                        && drag.node_id == *node_id
+                        && drag.param_name == *param_name
+                    {
+                        let moved = match &drag.pre_drag_value {
+                            Some(prev) => *prev != drag.current_value,
+                            // Key was absent before the drag — inserting it
+                            // now is always a real change.
+                            None => true,
+                        };
+                        if moved {
+                            let cmd =
+                                manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
+                                    drag.target,
+                                    drag.node_id,
+                                    drag.param_name,
+                                    drag.current_value,
+                                    drag.catalog_default,
+                                )
+                                .with_scope(drag.scope_path)
+                                .with_previous(drag.pre_drag_value);
+                            self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                        }
                     }
                     continue;
                 }
@@ -6285,6 +6432,140 @@ mod bound_node_param_drag_tests {
         assert_eq!(
             after, 0.7,
             "bound-node-param stomp must be undone so the card doesn't revert mid-gesture"
+        );
+    }
+}
+
+/// BUG-282 regression. An UNBOUND node-face param scrub used to push a
+/// fresh undo-worthy `SetGraphNodeParamCommand::execute` on EVERY
+/// pointer-move tick — an N-tick drag flooded the 200-cap undo stack
+/// instead of coalescing to one entry. The fix mirrors the bound-row
+/// pattern: N in-flight ticks land via `MutateProjectLive` — a direct
+/// `Command::execute` call on the content-thread `Project` that never
+/// touches an undo manager — and only the ONE release-time command, seeded
+/// with `with_previous(pre_drag_value)` (the seam
+/// `SetGraphNodeParamCommand::with_previous`'s doc comment describes for
+/// exactly this drag-cadence-commit case), goes through
+/// `UndoRedoManager::execute`. This test drives that same sequence against
+/// a real `UndoRedoManager`: N direct `execute()` calls (the tick writes)
+/// followed by one `UndoRedoManager::execute` (the release commit), then
+/// asserts `undo_count() == 1` (not `N + 1`) and that `undo()` restores the
+/// true pre-drag value rather than whatever `execute()`'s self-capture
+/// would have seen post-drag.
+#[cfg(test)]
+mod unbound_node_param_drag_tests {
+    use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, SerializedParamValue};
+    use manifold_core::effects::PresetInstance;
+    use manifold_core::project::Project;
+    use manifold_core::{GraphTarget, NodeId, PresetTypeId};
+    use manifold_editing::command::Command;
+    use manifold_editing::commands::graph::SetGraphNodeParamCommand;
+    use manifold_editing::undo::UndoRedoManager;
+    use std::collections::BTreeMap;
+
+    fn empty_def() -> EffectGraphDef {
+        EffectGraphDef {
+            version: 1,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            nodes: vec![],
+            wires: vec![],
+        }
+    }
+
+    /// One master effect carrying a per-instance graph override with a
+    /// single node (id 1) holding one param ("amount") at `initial` — the
+    /// unbound node-face scrub's write target.
+    fn project_with_node_param(initial: f32) -> (Project, GraphTarget) {
+        let mut project = Project::default();
+        let mut fx = PresetInstance::new(PresetTypeId::new("Test"));
+        let effect_id = fx.id.clone();
+        let mut params = BTreeMap::new();
+        params.insert("amount".to_string(), SerializedParamValue::Float { value: initial });
+        let mut def = empty_def();
+        def.nodes.push(EffectGraphNode {
+            id: 1,
+            node_id: NodeId::new("inner"),
+            type_id: "node.test".to_string(),
+            handle: None,
+            params,
+            exposed_params: Default::default(),
+            editor_pos: None,
+            wgsl_source: None,
+            title: None,
+            output_formats: BTreeMap::new(),
+            output_canvas_scales: BTreeMap::new(),
+            group: None,
+        });
+        fx.graph = Some(def);
+        project.settings.master_effects.push(fx);
+        (project, GraphTarget::Effect(effect_id))
+    }
+
+    fn read_amount(project: &Project) -> f32 {
+        let def = project.settings.master_effects[0].graph.as_ref().unwrap();
+        match def.nodes[0].params.get("amount") {
+            Some(SerializedParamValue::Float { value }) => *value,
+            other => panic!("expected a Float amount, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn n_tick_scrub_is_one_undo_entry_and_undo_restores_pre_drag_value() {
+        let (mut project, target) = project_with_node_param(0.0);
+        let pre_drag_value = Some(SerializedParamValue::Float { value: 0.0 });
+
+        // N pointer-move ticks: each is a live write — the app's
+        // `MutateProjectLive` path (`live_cmd.execute(p)` in the
+        // `SetGraphNodeParam` arm) calling `Command::execute` directly on
+        // the content-thread project, never touching an undo manager.
+        let ticks = [0.1_f32, 0.3, 0.55, 0.72, 0.9];
+        for &v in &ticks {
+            let mut live = SetGraphNodeParamCommand::new(
+                target.clone(),
+                1,
+                "amount".to_string(),
+                SerializedParamValue::Float { value: v },
+                empty_def(),
+            );
+            live.execute(&mut project);
+        }
+        let last_tick_value = *ticks.last().unwrap();
+        assert_eq!(
+            read_amount(&project),
+            last_tick_value,
+            "live writes DO land on the project every tick"
+        );
+
+        // Release: ONE command, seeded with the true pre-drag baseline via
+        // `with_previous`, pushed through the real undo manager — mirrors
+        // `EndGraphNodeParamScrub`'s unbound-drag close-out.
+        let mut undo_mgr = UndoRedoManager::new();
+        assert_eq!(undo_mgr.undo_count(), 0, "sanity: fresh manager");
+        let commit = SetGraphNodeParamCommand::new(
+            target,
+            1,
+            "amount".to_string(),
+            SerializedParamValue::Float { value: last_tick_value },
+            empty_def(),
+        )
+        .with_previous(pre_drag_value);
+        undo_mgr.execute(Box::new(commit), &mut project);
+
+        assert_eq!(
+            undo_mgr.undo_count(),
+            1,
+            "an N-tick drag must be EXACTLY one undo-worthy commit, not one per tick"
+        );
+        assert_eq!(read_amount(&project), last_tick_value);
+
+        let _ = undo_mgr.undo(&mut project);
+        assert_eq!(
+            read_amount(&project),
+            0.0,
+            "undo must restore the true pre-drag value, not whatever execute()'s \
+             self-capture would have seen post-drag"
         );
     }
 }

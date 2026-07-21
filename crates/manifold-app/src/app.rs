@@ -550,6 +550,13 @@ pub struct Application {
     /// per whole drag, not one per pointer-move).
     pub(crate) bound_node_param_drag: Option<crate::app_render::BoundNodeParamDrag>,
 
+    /// BUG-282: an ordinary (unbound) node-face param/vec scrub session,
+    /// mirroring `bound_node_param_drag` for the un-rerouted path — set at
+    /// the first `SetGraphNodeParam`/`SetOuterParam`-family move, cleared on
+    /// the matching `EndGraphNodeParamScrub` (one undo-worthy
+    /// `SetGraphNodeParamCommand` per whole drag, not one per pointer-move).
+    pub(crate) unbound_node_param_drag: Option<crate::app_render::UnboundNodeParamDrag>,
+
     // Effect clipboard (Unity: static EffectClipboard singleton, Rust: instance)
     pub(crate) effect_clipboard: manifold_editing::clipboard::EffectClipboard,
 
@@ -973,6 +980,7 @@ impl Application {
             mapping_affine_snapshot: None,
             active_inspector_drag: None,
             bound_node_param_drag: None,
+            unbound_node_param_drag: None,
             effect_clipboard: manifold_editing::clipboard::EffectClipboard::new(),
             #[cfg(target_os = "macos")]
             internal_clipboard_change_count: None,
