@@ -72,3 +72,16 @@ Spawn: `cc-fleet subagent kimi-code --prompt-file <brief> [--profile slim-ro] --
 No Opus lanes anywhere (overthinks, rabbit-holes — Peter's settled call). All agents obey every rule in CLAUDE.md — worktree slots, pathspec commits, the landing protocol.
 
 Related: `agent-execution-playbook` memory (hazards), `docs/DESIGN_AUTHORING.md` (upstream of routing — how work gets shaped), `opus-prompt-pack` memory (paste-ready prompts).
+
+## Overnight orchestration pattern (added 2026-07-21, god-file wave — Peter's directives)
+
+Proven shape for unattended multi-slice runs; use it whenever a phase's judgment is DONE and only mechanical bulk remains.
+
+- **Three tiers, strict:** Fable top session = judgment + landings only, alive on ~50-min wakeups. ONE Opus dispatcher seat = clerical: pop the slice queue, brief a Sonnet lane from the template, run the exit-code gates, accept/reject, next. It holds no code in context, implements nothing, decides nothing, never lands. Sonnet lanes (LOW effort, foreground) = all code, one slice = one lane = one commit.
+- **Decisions are files, not messages.** Rulings live in `.claude/orchestration/decisions.md` (append-only, team-lead writes); the queue in `ws1-queue.md`-style files; parked items in `parked.md`. Chat messages cross agent loops mid-flight (observed twice 2026-07-21) — a seat re-reads the decisions file BEFORE pausing on any fork.
+- **Skip-and-park, never block:** any friction not covered by a standing decision → park the slice, continue the queue. Parked items drain at the top session's heartbeats.
+- **Every gate is an exit code** (move-identity, census equality, invariant tests, focused clippy/nextest) — that is what makes the dispatcher clerical and the night unattended.
+- **One heavy build machine-wide:** all full sweeps/flow runs through `.claude/scripts/with-build-lock.sh` (GUI-lockup incidents 2026-07-21).
+- **Auto-mode command hygiene:** phrase lane commands so the permission classifier reads them as non-destructive (single-purpose commands; no `$()` writes or repo-path redirects; `/tmp`//dev/null` fine). A blocked command = park, never retry variants.
+- **Scope fence per night, written into the queue:** only pre-decided mechanical phases run; semantic phases wait for daytime judgment.
+- **Rotation on context growth:** seats hand off via recipe-carrying files at clean commit boundaries (~500K observed as the sensible ceiling); the lane + queue are the crash barrier — machine restarts cost only in-flight context.
