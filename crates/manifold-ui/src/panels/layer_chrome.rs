@@ -5,6 +5,9 @@
 //! is dropped into the recovered slot, byte-identical. Public interface unchanged,
 //! so the inspector composite is untouched.
 
+use crate::ParamsAction;
+#[cfg(test)]
+use crate::RootAction;
 use super::PanelAction;
 use crate::chrome::{Align, ChromeHost, Pad, Sizing, SliderSpec, View};
 use crate::color;
@@ -161,9 +164,9 @@ impl LayerChromePanel {
                 font_size: FONT_SIZE,
                 label_width: OPACITY_LABEL_W,
                 reset: PanelAction::slider_reset(
-                    PanelAction::LayerOpacitySnapshot,
-                    PanelAction::LayerOpacityChanged(1.0),
-                    PanelAction::LayerOpacityCommit,
+                    PanelAction::Params(ParamsAction::LayerOpacitySnapshot),
+                    PanelAction::Params(ParamsAction::LayerOpacityChanged(1.0)),
+                    PanelAction::Params(ParamsAction::LayerOpacityCommit),
                 ),
             };
             header = header.child(
@@ -235,7 +238,7 @@ impl LayerChromePanel {
 
     pub fn handle_click(&self, node_id: NodeId) -> Vec<PanelAction> {
         if self.host.node_id_for_key(KEY_CHEVRON) == Some(node_id) {
-            return vec![PanelAction::LayerChromeCollapseToggle];
+            return vec![PanelAction::Params(ParamsAction::LayerChromeCollapseToggle)];
         }
         Vec::new()
     }
@@ -243,8 +246,8 @@ impl LayerChromePanel {
     pub fn handle_pointer_down(&mut self, node_id: NodeId, pos: Vec2) -> Vec<PanelAction> {
         if let Some(val) = self.opacity.try_start_drag(node_id, pos.x) {
             return vec![
-                PanelAction::LayerOpacitySnapshot,
-                PanelAction::LayerOpacityChanged(val),
+                PanelAction::Params(ParamsAction::LayerOpacitySnapshot),
+                PanelAction::Params(ParamsAction::LayerOpacityChanged(val)),
             ];
         }
         Vec::new()
@@ -252,14 +255,14 @@ impl LayerChromePanel {
 
     pub fn handle_drag(&mut self, pos: Vec2, tree: &mut UITree) -> Vec<PanelAction> {
         if let Some(val) = self.opacity.apply_drag(pos.x, tree, &fmt_opacity) {
-            return vec![PanelAction::LayerOpacityChanged(val)];
+            return vec![PanelAction::Params(ParamsAction::LayerOpacityChanged(val))];
         }
         Vec::new()
     }
 
     pub fn handle_drag_end(&mut self, _tree: &mut UITree) -> Vec<PanelAction> {
         if self.opacity.end_drag() {
-            return vec![PanelAction::LayerOpacityCommit];
+            return vec![PanelAction::Params(ParamsAction::LayerOpacityCommit)];
         }
         Vec::new()
     }
@@ -335,7 +338,7 @@ mod tests {
         let chev = panel.host.node_id_for_key(KEY_CHEVRON).unwrap();
         assert!(matches!(
             panel.handle_click(chev).as_slice(),
-            [PanelAction::LayerChromeCollapseToggle]
+            [PanelAction::Params(ParamsAction::LayerChromeCollapseToggle)]
         ));
     }
 
@@ -367,8 +370,8 @@ mod tests {
 
         let track = panel.opacity.track_id().unwrap();
         match reg.resolve(&tree, Some(track), crate::intent::Gesture::RightClick) {
-            Some(PanelAction::SliderReset { changed, .. }) => {
-                assert!(matches!(*changed, PanelAction::LayerOpacityChanged(v) if (v - 1.0).abs() < f32::EPSILON));
+            Some(PanelAction::Root(RootAction::SliderReset { changed, .. })) => {
+                assert!(matches!(*changed, PanelAction::Params(ParamsAction::LayerOpacityChanged(v)) if (v - 1.0).abs() < f32::EPSILON));
             }
             other => panic!("expected SliderReset, got {other:?}"),
         }

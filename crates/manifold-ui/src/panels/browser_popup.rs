@@ -14,6 +14,7 @@
 //! rendering and click routing (drawing stays per-surface — see picker_core's
 //! module doc).
 
+use crate::{BrowserAction, ParamsAction, ProjectAction};
 use super::InspectorTab;
 use super::PanelAction;
 use super::overlay::{Anchor, Modality, Overlay, OverlayPlacement, OverlayResponse};
@@ -1045,14 +1046,14 @@ impl Overlay for BrowserPopupPanel {
                     layer_id,
                 }) => {
                     let action = match mode {
-                        BrowserPopupMode::Effect => PanelAction::AddEffect(
+                        BrowserPopupMode::Effect => PanelAction::Params(ParamsAction::AddEffect(
                             tab,
                             crate::types::PresetTypeId::from_string(type_id),
-                        ),
-                        BrowserPopupMode::Generator => PanelAction::SetGenType(
+                        )),
+                        BrowserPopupMode::Generator => PanelAction::Project(ProjectAction::SetGenType(
                             layer_id,
                             crate::types::PresetTypeId::from_string(type_id),
-                        ),
+                        )),
                         // Node mode is editor-window only; never reached on
                         // the main-window overlay path.
                         BrowserPopupMode::Node => return OverlayResponse::Consumed(Vec::new()),
@@ -1067,7 +1068,7 @@ impl Overlay for BrowserPopupPanel {
             },
             UIEvent::Click { node_id, .. } => {
                 if self.is_search_bar(*node_id) {
-                    return OverlayResponse::Consumed(vec![PanelAction::BrowserSearchClicked]);
+                    return OverlayResponse::Consumed(vec![PanelAction::Params(ParamsAction::BrowserSearchClicked)]);
                 }
                 match self.handle_click(*node_id) {
                     Some(BrowserPopupAction::Selected {
@@ -1077,14 +1078,14 @@ impl Overlay for BrowserPopupPanel {
                         layer_id,
                     }) => {
                         let action = match mode {
-                            BrowserPopupMode::Effect => PanelAction::AddEffect(
+                            BrowserPopupMode::Effect => PanelAction::Params(ParamsAction::AddEffect(
                                 tab,
                                 crate::types::PresetTypeId::from_string(type_id),
-                            ),
-                            BrowserPopupMode::Generator => PanelAction::SetGenType(
+                            )),
+                            BrowserPopupMode::Generator => PanelAction::Project(ProjectAction::SetGenType(
                                 layer_id,
                                 crate::types::PresetTypeId::from_string(type_id),
-                            ),
+                            )),
                             // Node mode is editor-window only; never reached on
                             // the main-window overlay path.
                             BrowserPopupMode::Node => {
@@ -1094,7 +1095,7 @@ impl Overlay for BrowserPopupPanel {
                         OverlayResponse::Consumed(vec![action])
                     }
                     Some(BrowserPopupAction::Paste) => {
-                        OverlayResponse::Consumed(vec![PanelAction::PasteEffects])
+                        OverlayResponse::Consumed(vec![PanelAction::Params(ParamsAction::PasteEffects)])
                     }
                     // Dismissed (incl. backdrop), or an internal chip/category
                     // click that needs a rebuild — consume so the modal swallows
@@ -1118,7 +1119,7 @@ impl Overlay for BrowserPopupPanel {
                 ..
             } => {
                 let action = self.handle_right_click(*node_id).map(|ctx| {
-                    PanelAction::BrowserCellRightClicked(ctx.mode, ctx.type_id, ctx.source)
+                    PanelAction::Browser(BrowserAction::BrowserCellRightClicked(ctx.mode, ctx.type_id, ctx.source))
                 });
                 OverlayResponse::Consumed(action.into_iter().collect())
             }

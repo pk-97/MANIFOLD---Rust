@@ -18,6 +18,8 @@
 //!   and touches nothing; the app re-runs `build()` for the affected range, the
 //!   same way it already handles a collapse or drawer toggle.
 
+#[cfg(test)]
+use crate::{TransportAction};
 use crate::chrome::layout::{self, LaidNode};
 use crate::chrome::view::{validate, View};
 use crate::intent::{Gesture, IntentRegistry};
@@ -392,7 +394,7 @@ mod tests {
             .child(
                 View::button("OK")
                     .fixed(40.0, 18.0)
-                    .on_click(PanelAction::Stop),
+                    .on_click(PanelAction::Transport(TransportAction::Stop)),
             )
     }
 
@@ -477,7 +479,7 @@ mod tests {
 
         let button_id = host.node_id(2).unwrap();
         let action = reg.resolve(&t, Some(button_id), Gesture::Click);
-        assert!(matches!(action, Some(PanelAction::Stop)));
+        assert!(matches!(action, Some(PanelAction::Transport(TransportAction::Stop))));
     }
 
     #[test]

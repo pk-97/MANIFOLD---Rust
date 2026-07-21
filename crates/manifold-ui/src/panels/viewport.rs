@@ -1,3 +1,5 @@
+#[cfg(test)]
+use crate::{MarkerAction, TransportAction};
 use super::{Panel, PanelAction};
 use crate::bitmap_painter;
 use crate::color;
@@ -1639,10 +1641,10 @@ mod tests {
         let origin = Vec2::new(r.x + 20.0, r.y + r.height * 0.5);
 
         let began = vp.on_timeline_event(&drag_begin(origin));
-        assert!(matches!(began.as_slice(), [PanelAction::Seek(_)]), "ruler drag-begin must Seek");
+        assert!(matches!(began.as_slice(), [PanelAction::Transport(TransportAction::Seek(_))]), "ruler drag-begin must Seek");
 
         let moved = vp.on_timeline_event(&drag(Vec2::new(r.x + 80.0, origin.y)));
-        assert!(matches!(moved.as_slice(), [PanelAction::Seek(_)]), "ruler drag continuation must Seek");
+        assert!(matches!(moved.as_slice(), [PanelAction::Transport(TransportAction::Seek(_))]), "ruler drag continuation must Seek");
 
         let ended = vp.on_timeline_event(&drag_end(Vec2::new(r.x + 80.0, origin.y)));
         assert!(ended.is_empty(), "ruler scrub end emits nothing further");
@@ -1660,11 +1662,11 @@ mod tests {
         let origin = Vec2::new(ov.x + 5.0, ov.y + ov.height * 0.5);
 
         let began = vp.on_timeline_event(&drag_begin(origin));
-        assert!(matches!(began.as_slice(), [PanelAction::OverviewScrub(_)]));
+        assert!(matches!(began.as_slice(), [PanelAction::Transport(TransportAction::OverviewScrub(_))]));
 
         let moved = vp.on_timeline_event(&drag(Vec2::new(ov.x + ov.width * 0.5, origin.y)));
         match moved.as_slice() {
-            [PanelAction::OverviewScrub(norm)] => {
+            [PanelAction::Transport(TransportAction::OverviewScrub(norm))] => {
                 assert!((0.4..0.6).contains(norm), "midpoint drag should read ~0.5, got {norm}");
             }
             other => panic!("expected OverviewScrub, got {other:?}"),
@@ -1681,13 +1683,13 @@ mod tests {
 
         let began = vp.on_timeline_event(&drag_begin(origin));
         match began.as_slice() {
-            [PanelAction::MarkerDragStarted(id)] => assert_eq!(id, "m1"),
+            [PanelAction::Marker(MarkerAction::MarkerDragStarted(id))] => assert_eq!(id, "m1"),
             other => panic!("expected MarkerDragStarted, got {other:?}"),
         }
 
         let moved = vp.on_timeline_event(&drag(Vec2::new(origin.x + 40.0, origin.y)));
         match moved.as_slice() {
-            [PanelAction::MarkerDragMoved(id, beat)] => {
+            [PanelAction::Marker(MarkerAction::MarkerDragMoved(id, beat))] => {
                 assert_eq!(id, "m1");
                 assert!(*beat > 4.0, "dragging right must move the marker later");
             }
@@ -1696,7 +1698,7 @@ mod tests {
 
         let ended = vp.on_timeline_event(&drag_end(Vec2::new(origin.x + 40.0, origin.y)));
         match ended.as_slice() {
-            [PanelAction::MarkerDragEnded(id, _)] => assert_eq!(id, "m1"),
+            [PanelAction::Marker(MarkerAction::MarkerDragEnded(id, _))] => assert_eq!(id, "m1"),
             other => panic!("expected MarkerDragEnded, got {other:?}"),
         }
     }
@@ -1734,7 +1736,7 @@ mod tests {
         assert!(vp.scrollbar_h_dragging(), "scrollbar_h_dragging() must reflect the live session");
 
         let moved = vp.on_timeline_event(&drag(Vec2::new(sb.x + sb.width * 0.5, origin.y)));
-        assert!(matches!(moved.as_slice(), [PanelAction::TimelineScrollbarH(_)]));
+        assert!(matches!(moved.as_slice(), [PanelAction::Transport(TransportAction::TimelineScrollbarH(_))]));
 
         vp.on_timeline_event(&drag_end(Vec2::new(sb.x + sb.width * 0.5, origin.y)));
         assert!(!vp.scrollbar_h_dragging(), "drag-end must clear the session");
@@ -2274,7 +2276,7 @@ mod tests {
             &tree,
         );
         assert_eq!(actions.len(), 1);
-        assert!(matches!(actions[0], PanelAction::Seek(_)));
+        assert!(matches!(actions[0], PanelAction::Transport(TransportAction::Seek(_))));
     }
 
     #[test]

@@ -10,7 +10,7 @@ use manifold_core::audio_clip_detection::DetectionConfig;
 use manifold_core::project::Project;
 use manifold_editing::commands::clip::{ChangeClipLoopCommand, ChangeClipRecordedBpmCommand};
 use manifold_editing::commands::clip_detection::SetClipDetectionConfigCommand;
-use manifold_ui::PanelAction;
+use manifold_ui::ClipAction;
 
 use super::super::DispatchResult;
 use crate::content_command::ContentCommand;
@@ -41,15 +41,15 @@ fn apply_detection_edit(
     ContentCommand::send(content_tx, ContentCommand::ReplanClip(clip_id.clone()));
 }
 
-pub(crate) fn dispatch_clip(action: &PanelAction, ctx: &mut super::super::DispatchCtx) -> DispatchResult {
+pub(crate) fn dispatch_clip(action: &ClipAction, ctx: &mut super::super::DispatchCtx) -> DispatchResult {
     match action {
         // ── Clip chrome ────────────────────────────────────────────
-        PanelAction::ClipChromeCollapseToggle => {
+        ClipAction::ClipChromeCollapseToggle => {
             ctx.ui.inspector.clip_chrome_mut().toggle_collapsed();
             DispatchResult::structural()
         }
-        PanelAction::ClipBpmClicked => DispatchResult::handled(),
-        PanelAction::ClipWarpToggled => {
+        ClipAction::ClipBpmClicked => DispatchResult::handled(),
+        ClipAction::ClipWarpToggled => {
             // Audio warp toggle: off (recorded_bpm 0, native speed) ⇄ on (lock to
             // the project tempo as a sensible default). One BPM command, which
             // also rescales the clip's timeline length to hold the audio span.
@@ -68,7 +68,7 @@ pub(crate) fn dispatch_clip(action: &PanelAction, ctx: &mut super::super::Dispat
             }
             DispatchResult::structural()
         }
-        PanelAction::ClipDetectClicked => {
+        ClipAction::ClipDetectClicked => {
             // Per-clip detection: analyze the selected audio clip's file and place
             // its triggers. The orchestrator (content thread) does the work and the
             // result syncs back; status shows via the global percussion status.
@@ -77,7 +77,7 @@ pub(crate) fn dispatch_clip(action: &PanelAction, ctx: &mut super::super::Dispat
             }
             DispatchResult::handled()
         }
-        PanelAction::ClipClearTriggersClicked => {
+        ClipAction::ClipClearTriggersClicked => {
             if let Some(clip_id) = &ctx.selection.primary_selected_clip_id {
                 ContentCommand::send(
                     ctx.content_tx,
@@ -86,7 +86,7 @@ pub(crate) fn dispatch_clip(action: &PanelAction, ctx: &mut super::super::Dispat
             }
             DispatchResult::handled()
         }
-        PanelAction::ClipReplaceAudioClicked => {
+        ClipAction::ClipReplaceAudioClicked => {
             // Replace the clip's source file (TIMELINE_INGEST_DESIGN D6/D7): a
             // native file dialog picks the new file, `ReplaceAudioFileCommand`
             // swaps path/duration/in_point/BPM and clears the cached analysis
@@ -143,7 +143,7 @@ pub(crate) fn dispatch_clip(action: &PanelAction, ctx: &mut super::super::Dispat
             }
             DispatchResult::structural()
         }
-        PanelAction::ClipDetectInstrumentToggled(idx) => {
+        ClipAction::ClipDetectInstrumentToggled(idx) => {
             let idx = *idx;
             if let Some(clip_id) = ctx.selection.primary_selected_clip_id.clone() {
                 apply_detection_edit(ctx.project, ctx.content_tx, &clip_id, |c| {
@@ -154,7 +154,7 @@ pub(crate) fn dispatch_clip(action: &PanelAction, ctx: &mut super::super::Dispat
             }
             DispatchResult::structural()
         }
-        PanelAction::ClipDetectSensitivityChanged(idx, value) => {
+        ClipAction::ClipDetectSensitivityChanged(idx, value) => {
             let (idx, value) = (*idx, *value);
             if let Some(clip_id) = ctx.selection.primary_selected_clip_id.clone() {
                 apply_detection_edit(ctx.project, ctx.content_tx, &clip_id, |c| {
@@ -165,7 +165,7 @@ pub(crate) fn dispatch_clip(action: &PanelAction, ctx: &mut super::super::Dispat
             }
             DispatchResult::structural()
         }
-        PanelAction::ClipDetectOnsetChanged(ms) => {
+        ClipAction::ClipDetectOnsetChanged(ms) => {
             let secs = manifold_core::Seconds((*ms / 1000.0) as f64);
             if let Some(clip_id) = ctx.selection.primary_selected_clip_id.clone() {
                 apply_detection_edit(ctx.project, ctx.content_tx, &clip_id, |c| {
@@ -174,7 +174,7 @@ pub(crate) fn dispatch_clip(action: &PanelAction, ctx: &mut super::super::Dispat
             }
             DispatchResult::structural()
         }
-        PanelAction::ClipDetectSetQuantize(step) => {
+        ClipAction::ClipDetectSetQuantize(step) => {
             let step = *step;
             if let Some(clip_id) = ctx.selection.primary_selected_clip_id.clone() {
                 apply_detection_edit(ctx.project, ctx.content_tx, &clip_id, |c| match step {
@@ -187,7 +187,7 @@ pub(crate) fn dispatch_clip(action: &PanelAction, ctx: &mut super::super::Dispat
             }
             DispatchResult::structural()
         }
-        PanelAction::ClipDetectSetLayer(idx, layer) => {
+        ClipAction::ClipDetectSetLayer(idx, layer) => {
             let (idx, layer) = (*idx, layer.clone());
             if let Some(clip_id) = ctx.selection.primary_selected_clip_id.clone() {
                 apply_detection_edit(ctx.project, ctx.content_tx, &clip_id, |c| {
@@ -200,10 +200,10 @@ pub(crate) fn dispatch_clip(action: &PanelAction, ctx: &mut super::super::Dispat
         }
         // The open actions are consumed by UIRoot::try_open_dropdown before
         // dispatch; these arms are defensive no-ops.
-        PanelAction::ClipDetectQuantizeClicked | PanelAction::ClipDetectLayerClicked(_) => {
+        ClipAction::ClipDetectQuantizeClicked | ClipAction::ClipDetectLayerClicked(_) => {
             DispatchResult::handled()
         }
-        PanelAction::ClipLoopToggle => {
+        ClipAction::ClipLoopToggle => {
             if let Some(clip_id) = &ctx.selection.primary_selected_clip_id {
                 let clip_id = clip_id.clone();
                 if let Some(clip) = ctx.project.timeline.find_clip_by_id(&clip_id) {
@@ -228,6 +228,5 @@ pub(crate) fn dispatch_clip(action: &PanelAction, ctx: &mut super::super::Dispat
         // The clip LOOP-DURATION trio (`ClipLoopSnapshot`/`Changed`/`Commit`)
         // was dead for the same reason and removed alongside it.
         // `ClipLoopToggle` is a real, live toggle (is_looping) — kept above.
-        _ => DispatchResult::unhandled(),
     }
 }

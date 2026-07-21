@@ -16,6 +16,8 @@
 //!
 //! See `docs/AUDIO_MODULATION_DESIGN.md` §10.2.
 
+#[cfg(test)]
+use crate::{ParamsAction};
 use std::cell::Cell;
 
 use super::PanelAction;
@@ -685,9 +687,9 @@ mod tests {
 
     fn placeholder_reset() -> PanelAction {
         PanelAction::slider_reset(
-            PanelAction::MasterOpacitySnapshot,
-            PanelAction::MasterOpacityChanged(1.0),
-            PanelAction::MasterOpacityCommit,
+            PanelAction::Params(ParamsAction::MasterOpacitySnapshot),
+            PanelAction::Params(ParamsAction::MasterOpacityChanged(1.0)),
+            PanelAction::Params(ParamsAction::MasterOpacityCommit),
         )
     }
 

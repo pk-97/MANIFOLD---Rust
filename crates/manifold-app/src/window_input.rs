@@ -24,6 +24,7 @@
 //! `offscreen_dirty` marking (the editor has no idle repaint loop) are preserved
 //! exactly — losing either would mis-hit-test or freeze the editor.
 
+use manifold_ui::{ParamsAction, ProjectAction};
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, MouseButton, MouseScrollDelta};
 use winit::keyboard::{Key, NamedKey};
@@ -2268,12 +2269,12 @@ impl Application {
         {
             let panel_action = match mode {
                 BrowserPopupMode::Effect => {
-                    PanelAction::AddEffect(tab, manifold_ui::types::PresetTypeId::from_string(type_id))
+                    PanelAction::Params(ParamsAction::AddEffect(tab, manifold_ui::types::PresetTypeId::from_string(type_id)))
                 }
-                BrowserPopupMode::Generator => PanelAction::SetGenType(
+                BrowserPopupMode::Generator => PanelAction::Project(ProjectAction::SetGenType(
                     layer_id,
                     manifold_ui::types::PresetTypeId::from_string(type_id),
-                ),
+                )),
                 BrowserPopupMode::Node => return,
             };
             self.ws.ui_root.pending_keyboard_actions.push(panel_action);

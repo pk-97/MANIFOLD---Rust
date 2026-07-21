@@ -1,3 +1,4 @@
+use manifold_ui::{AudioSetupAction, ModulationAction, ParamsAction, ProjectAction};
 use std::sync::Arc;
 
 use winit::application::ApplicationHandler;
@@ -1412,8 +1413,8 @@ impl Application {
                         let content_tx = self.content_tx.as_ref().unwrap().clone();
                         use manifold_ui::panels::PanelAction;
                         for act in [
-                            PanelAction::ParamChanged(ctx.target.clone(), ctx.param_id.clone(), v),
-                            PanelAction::ParamCommit(ctx.target, ctx.param_id.clone()),
+                            PanelAction::Params(ParamsAction::ParamChanged(ctx.target.clone(), ctx.param_id.clone(), v)),
+                            PanelAction::Params(ParamsAction::ParamCommit(ctx.target, ctx.param_id.clone())),
                         ] {
                             let mut dctx = crate::ui_bridge::DispatchCtx {
                                 project: &mut self.local_project,
@@ -1450,13 +1451,13 @@ impl Application {
                     // dock's own drag/steppers already use
                     // (`SceneSetupParamChanged`), so type-in is not a
                     // second mutation path.
-                    let act = PanelAction::SceneSetupParamChanged(
+                    let act = PanelAction::Project(ProjectAction::SceneSetupParamChanged(
                         ctx.layer_id,
                         ctx.scope_path,
                         node_doc_id,
                         ctx.param_id,
                         value,
-                    );
+                    ));
                     let mut dctx = crate::ui_bridge::DispatchCtx {
                         project: &mut self.local_project,
                         content_tx: &content_tx,
@@ -1480,7 +1481,7 @@ impl Application {
                 {
                     let content_tx = self.content_tx.as_ref().unwrap().clone();
                     use manifold_ui::panels::PanelAction;
-                    let act = PanelAction::AudioSendGainSetTyped(ctx.send_id, parsed);
+                    let act = PanelAction::AudioSetup(AudioSetupAction::AudioSendGainSetTyped(ctx.send_id, parsed));
                     let mut dctx = crate::ui_bridge::DispatchCtx {
                         project: &mut self.local_project,
                         content_tx: &content_tx,
@@ -1511,11 +1512,11 @@ impl Application {
                     {
                         let content_tx = self.content_tx.as_ref().unwrap().clone();
                         use manifold_ui::panels::{DriverConfigAction, PanelAction};
-                        let act = PanelAction::DriverConfig(
+                        let act = PanelAction::Modulation(ModulationAction::DriverConfig(
                             ctx.target,
                             ctx.param_id.clone(),
                             DriverConfigAction::SetFreePeriod(parsed),
-                        );
+                        ));
                         let mut dctx = crate::ui_bridge::DispatchCtx {
                             project: &mut self.local_project,
                             content_tx: &content_tx,
@@ -2055,11 +2056,11 @@ impl Application {
                                         manifold_ui::panels::GraphParamTarget::Generator
                                     }
                                 };
-                                let action = PanelAction::ParamChanged(
+                                let action = PanelAction::Params(ParamsAction::ParamChanged(
                                     gpt,
                                     manifold_core::effects::ParamId::from(outer_param_id),
                                     v,
-                                );
+                                ));
                                 let content_tx = self.content_tx.as_ref().unwrap();
                                 let editor_target = self.watched_graph_target.as_ref();
                                 let mut dctx = crate::ui_bridge::DispatchCtx {

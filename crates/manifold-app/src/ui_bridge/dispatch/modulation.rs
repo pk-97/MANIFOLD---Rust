@@ -26,7 +26,7 @@ use manifold_editing::commands::envelopes::{
     AddEnvelopeCommand, ChangeEnvelopeDecayCommand, ChangeEnvelopeTargetCommand,
     ToggleEnvelopeEnabledCommand,
 };
-use manifold_ui::{AudioShapeParam, DriverConfigAction, InspectorTab, PanelAction, TrimKind};
+use manifold_ui::{AudioShapeParam, DriverConfigAction, InspectorTab, ModulationAction, TrimKind};
 
 use super::super::DispatchResult;
 use super::resolve::{
@@ -35,11 +35,11 @@ use super::resolve::{
 };
 use crate::content_command::ContentCommand;
 
-pub(crate) fn dispatch_modulation(action: &PanelAction, ctx: &mut super::super::DispatchCtx) -> DispatchResult {
+pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::super::DispatchCtx) -> DispatchResult {
     let (effective_tab, effective_active_layer) = super::editor_dispatch_context(ctx.editor_target, &*ctx.project, ctx.ui.inspector.last_effect_tab(), ctx.active_layer);
     let active_layer = &effective_active_layer;
     match action {
-        PanelAction::DriverToggle(gpt, param_id) => {
+        ModulationAction::DriverToggle(gpt, param_id) => {
             // BUG-249: scene rows redirect to their real exposed param
             // (materializing the exposure on first arm) — see
             // `resolve_mod_target`. Non-scene ids resolve exactly as before.
@@ -89,7 +89,7 @@ pub(crate) fn dispatch_modulation(action: &PanelAction, ctx: &mut super::super::
             ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
             DispatchResult::structural()
         }
-        PanelAction::AudioModToggle(gpt, param_id) => {
+        ModulationAction::AudioModToggle(gpt, param_id) => {
             let Some((target, param_id)) = resolve_mod_target(
                 ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
                 ctx.selection, true,
@@ -130,7 +130,7 @@ pub(crate) fn dispatch_modulation(action: &PanelAction, ctx: &mut super::super::
             ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
             DispatchResult::structural()
         }
-        PanelAction::AudioModSetSource(gpt, param_id, send_id, feature) => {
+        ModulationAction::AudioModSetSource(gpt, param_id, send_id, feature) => {
             let Some((target, param_id)) = resolve_mod_target(
                 ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
                 ctx.selection, true,
@@ -168,7 +168,7 @@ pub(crate) fn dispatch_modulation(action: &PanelAction, ctx: &mut super::super::
             ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
             DispatchResult::structural()
         }
-        PanelAction::AudioModRemove(gpt, param_id) => {
+        ModulationAction::AudioModRemove(gpt, param_id) => {
             let Some((target, param_id)) = resolve_mod_target(
                 ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
                 ctx.selection, false,
@@ -183,7 +183,7 @@ pub(crate) fn dispatch_modulation(action: &PanelAction, ctx: &mut super::super::
             ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
             DispatchResult::structural()
         }
-        PanelAction::AudioModSetInvert(gpt, param_id) => {
+        ModulationAction::AudioModSetInvert(gpt, param_id) => {
             // Flip the mod's invert flag in one undo step. Reads the current
             // shape, flips `invert`, commits old→new via the shape command.
             if let Some((target, param_id)) = resolve_mod_target(
@@ -216,7 +216,7 @@ pub(crate) fn dispatch_modulation(action: &PanelAction, ctx: &mut super::super::
             DispatchResult::handled()
         }
 
-        PanelAction::AudioModSetRateOfChange(gpt, param_id) => {
+        ModulationAction::AudioModSetRateOfChange(gpt, param_id) => {
             // Flip the mod's rate-of-change flag in one undo step — same shape
             // path as invert: read the current shape, flip `rate_of_change`,
             // commit old→new via the shape command.
@@ -250,7 +250,7 @@ pub(crate) fn dispatch_modulation(action: &PanelAction, ctx: &mut super::super::
             DispatchResult::handled()
         }
 
-        PanelAction::AudioModShapeSnapshot(gpt, param_id) => {
+        ModulationAction::AudioModShapeSnapshot(gpt, param_id) => {
             // Capture the pre-drag shape so the commit can record one undo step.
             if let Some((target, param_id)) = resolve_mod_target(
                 ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
@@ -275,7 +275,7 @@ pub(crate) fn dispatch_modulation(action: &PanelAction, ctx: &mut super::super::
             }
             DispatchResult::handled()
         }
-        PanelAction::AudioModShapeParamChanged(gpt, param_id, which, value) => {
+        ModulationAction::AudioModShapeParamChanged(gpt, param_id, which, value) => {
             // Live edit (no undo entry per frame) — the handle tracks the cursor.
             if let Some((target, param_id)) = resolve_mod_target(
                 ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
@@ -303,7 +303,7 @@ pub(crate) fn dispatch_modulation(action: &PanelAction, ctx: &mut super::super::
             }
             DispatchResult::handled()
         }
-        PanelAction::AudioModShapeCommit(gpt, param_id) => {
+        ModulationAction::AudioModShapeCommit(gpt, param_id) => {
             // One undo step: snapshot (old) → current shape (new) via the shape command.
             ctx.scrub.active_inspector_drag = None;
             if let Some(old_shape) = ctx.scrub.audio_shape_snapshot.take()
@@ -341,7 +341,7 @@ pub(crate) fn dispatch_modulation(action: &PanelAction, ctx: &mut super::super::
         // §9 U3: a trigger-gate row's Mode button — set `trigger_mode` on the
         // SAME `ParameterAudioMod` every other drawer edit targets (no
         // separate per-instance config, no separate command family).
-        PanelAction::AudioModSetTriggerMode(gpt, param_id, mode_idx) => {
+        ModulationAction::AudioModSetTriggerMode(gpt, param_id, mode_idx) => {
             if let Some((target, param_id)) = resolve_mod_target(
                 ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
                 ctx.selection, false,
@@ -378,7 +378,7 @@ pub(crate) fn dispatch_modulation(action: &PanelAction, ctx: &mut super::super::
         // no-op (keeps the user's dialed-in amount/wrap). Structural: the
         // Amount/Wrap/Mode rows and the collapsed "A"→"S"/"R" glyph all
         // depend on which action is armed.
-        PanelAction::AudioModSetActionKind(gpt, param_id, kind_idx) => {
+        ModulationAction::AudioModSetActionKind(gpt, param_id, kind_idx) => {
             if let Some((target, param_id)) = resolve_mod_target(
                 ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
                 ctx.selection, false,
@@ -428,7 +428,7 @@ pub(crate) fn dispatch_modulation(action: &PanelAction, ctx: &mut super::super::
             DispatchResult::structural()
         }
 
-        PanelAction::AudioModStepAmountSnapshot(gpt, param_id) => {
+        ModulationAction::AudioModStepAmountSnapshot(gpt, param_id) => {
             // Capture the pre-drag action so the commit can record one undo step.
             if let Some((target, param_id)) = resolve_mod_target(
                 ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
@@ -455,7 +455,7 @@ pub(crate) fn dispatch_modulation(action: &PanelAction, ctx: &mut super::super::
             }
             DispatchResult::handled()
         }
-        PanelAction::AudioModStepAmountChanged(gpt, param_id, value) => {
+        ModulationAction::AudioModStepAmountChanged(gpt, param_id, value) => {
             // Live edit (no undo entry per frame) — the handle tracks the cursor.
             if let Some((target, param_id)) = resolve_mod_target(
                 ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
@@ -479,7 +479,7 @@ pub(crate) fn dispatch_modulation(action: &PanelAction, ctx: &mut super::super::
             }
             DispatchResult::handled()
         }
-        PanelAction::AudioModStepAmountCommit(gpt, param_id) => {
+        ModulationAction::AudioModStepAmountCommit(gpt, param_id) => {
             // One undo step: snapshot (old) → current action (new).
             ctx.scrub.active_inspector_drag = None;
             if let Some(old_action) = ctx.scrub.audio_action_snapshot.take()
@@ -514,7 +514,7 @@ pub(crate) fn dispatch_modulation(action: &PanelAction, ctx: &mut super::super::
         // The Wrap segmented row — only meaningful while Action=Step; a stray
         // click while some other action is armed (shouldn't happen — the row
         // isn't built then) is a harmless no-op.
-        PanelAction::AudioModSetWrap(gpt, param_id, wrap_idx) => {
+        ModulationAction::AudioModSetWrap(gpt, param_id, wrap_idx) => {
             if let Some((target, param_id)) = resolve_mod_target(
                 ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
                 ctx.selection, false,
@@ -550,7 +550,7 @@ pub(crate) fn dispatch_modulation(action: &PanelAction, ctx: &mut super::super::
             DispatchResult::structural()
         }
 
-        PanelAction::EnvelopeToggle(gpt, param_id) => {
+        ModulationAction::EnvelopeToggle(gpt, param_id) => {
             // Envelope-home unification: the envelope rides on the resolved
             // instance (keyed by param_id) for effects and generators alike.
             // Toggle the existing one's `enabled`, or create a fresh enabled
@@ -604,7 +604,7 @@ pub(crate) fn dispatch_modulation(action: &PanelAction, ctx: &mut super::super::
             }
             DispatchResult::structural()
         }
-        PanelAction::DriverConfig(gpt, param_id, cfg) => {
+        ModulationAction::DriverConfig(gpt, param_id, cfg) => {
             let Some((target, param_id)) = resolve_mod_target(
                 ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
                 ctx.selection, false,
@@ -698,7 +698,7 @@ pub(crate) fn dispatch_modulation(action: &PanelAction, ctx: &mut super::super::
         // `TrimKind` selects the backing store. Each kind keeps the exact
         // edit it had before the unification (driver dual-edit, audio dual-edit,
         // Ableton mapping local + content-sync).
-        PanelAction::TrimChanged(kind, gpt, param_id, min, max) => {
+        ModulationAction::TrimChanged(kind, gpt, param_id, min, max) => {
             if let Some(target) =
                 resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
             {
@@ -769,7 +769,7 @@ pub(crate) fn dispatch_modulation(action: &PanelAction, ctx: &mut super::super::
             }
             DispatchResult::handled()
         }
-        PanelAction::TargetChanged(gpt, param_id, norm) => {
+        ModulationAction::TargetChanged(gpt, param_id, norm) => {
             if let Some((target, param_id)) = resolve_mod_target(
                 ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
                 ctx.selection, false,
@@ -787,7 +787,7 @@ pub(crate) fn dispatch_modulation(action: &PanelAction, ctx: &mut super::super::
             }
             DispatchResult::handled()
         }
-        PanelAction::EnvDecayChanged(gpt, param_id, decay) => {
+        ModulationAction::EnvDecayChanged(gpt, param_id, decay) => {
             if let Some((target, param_id)) = resolve_mod_target(
                 ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
                 ctx.selection, false,
@@ -809,7 +809,7 @@ pub(crate) fn dispatch_modulation(action: &PanelAction, ctx: &mut super::super::
         // ── Modulation undo: snapshot/commit ────────────────────────
         // Snapshot the kind's pre-drag range into the shared `trim_snapshot`.
         // Only one trim handle drags at a time, so one slot serves all kinds.
-        PanelAction::TrimSnapshot(kind, gpt, param_id) => {
+        ModulationAction::TrimSnapshot(kind, gpt, param_id) => {
             if let Some(target) =
                 resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
             {
@@ -847,7 +847,7 @@ pub(crate) fn dispatch_modulation(action: &PanelAction, ctx: &mut super::super::
             }
             DispatchResult::handled()
         }
-        PanelAction::TrimCommit(kind, gpt, param_id) => {
+        ModulationAction::TrimCommit(kind, gpt, param_id) => {
             match kind {
                 TrimKind::Driver => {
                     if let Some((old_min, old_max)) = ctx.scrub.trim_snapshot.take()
@@ -946,7 +946,7 @@ pub(crate) fn dispatch_modulation(action: &PanelAction, ctx: &mut super::super::
             ctx.scrub.active_inspector_drag = None;
             DispatchResult::handled()
         }
-        PanelAction::TargetSnapshot(gpt, param_id) => {
+        ModulationAction::TargetSnapshot(gpt, param_id) => {
             if let Some((target, param_id)) = resolve_mod_target(
                 ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
                 ctx.selection, false,
@@ -971,7 +971,7 @@ pub(crate) fn dispatch_modulation(action: &PanelAction, ctx: &mut super::super::
             }
             DispatchResult::handled()
         }
-        PanelAction::TargetCommit(gpt, param_id) => {
+        ModulationAction::TargetCommit(gpt, param_id) => {
             if let Some(old_target) = ctx.scrub.target_snapshot.take()
                 && let Some((target, param_id)) = resolve_mod_target(
                     ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab,
@@ -998,7 +998,7 @@ pub(crate) fn dispatch_modulation(action: &PanelAction, ctx: &mut super::super::
             ctx.scrub.active_inspector_drag = None;
             DispatchResult::handled()
         }
-        PanelAction::EnvDecaySnapshot(gpt, param_id) => {
+        ModulationAction::EnvDecaySnapshot(gpt, param_id) => {
             if let Some((target, param_id)) = resolve_mod_target(
                 ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
                 ctx.selection, false,
@@ -1023,7 +1023,7 @@ pub(crate) fn dispatch_modulation(action: &PanelAction, ctx: &mut super::super::
             }
             DispatchResult::handled()
         }
-        PanelAction::EnvDecayCommit(gpt, param_id) => {
+        ModulationAction::EnvDecayCommit(gpt, param_id) => {
             if let Some(old_decay) = ctx.scrub.decay_snapshot.take()
                 && let Some((target, param_id)) = resolve_mod_target(
                     ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab,
@@ -1050,6 +1050,5 @@ pub(crate) fn dispatch_modulation(action: &PanelAction, ctx: &mut super::super::
             ctx.scrub.active_inspector_drag = None;
             DispatchResult::handled()
         }
-        _ => DispatchResult::unhandled(),
     }
 }

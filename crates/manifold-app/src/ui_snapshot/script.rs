@@ -50,6 +50,7 @@
 //! bitmap invalidation is a live-app-only Pass-4c mechanism this headless
 //! harness never renders, so it's a dead sink, same as it always was.
 
+use manifold_ui::{LayerAction};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -1022,7 +1023,7 @@ impl Runner {
             // The fixture's active-layer INDEX feeds `sync_build`'s inspector
             // sync; derive it from the id the real bridge maintains (the old
             // mirrored arm set it directly).
-            if let PanelAction::LayerClicked(..) = action {
+            if let PanelAction::Layer(LayerAction::LayerClicked(..)) = action {
                 data.active = self
                     .active_layer
                     .as_ref()

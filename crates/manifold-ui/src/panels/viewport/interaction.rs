@@ -2,6 +2,7 @@
 //! overview / marker-drag event routing. (Clip move/trim/region lives in
 //! `interaction_overlay.rs`.) See `docs/TIMELINE_API_DESIGN.md` §3.6.
 
+use crate::{EditingAction, MarkerAction, TransportAction};
 use super::*;
 use crate::clip_hit_tester::ClipHitTester;
 
@@ -53,7 +54,7 @@ impl TimelineViewportPanel {
         if !self.tracks_rect.contains(pos) {
             if self.hovered_clip_id.is_some() {
                 self.hovered_clip_id = None;
-                return vec![PanelAction::ViewportHoverChanged(None)];
+                return vec![PanelAction::Editing(EditingAction::ViewportHoverChanged(None))];
             }
             return Vec::new();
         }
@@ -61,7 +62,7 @@ impl TimelineViewportPanel {
         let new_hover = self.hit_test_clip(pos).map(|h| h.clip_id);
         if new_hover != self.hovered_clip_id {
             self.hovered_clip_id = new_hover.clone();
-            return vec![PanelAction::ViewportHoverChanged(new_hover)];
+            return vec![PanelAction::Editing(EditingAction::ViewportHoverChanged(new_hover))];
         }
         Vec::new()
     }
@@ -81,7 +82,7 @@ impl TimelineViewportPanel {
         };
         let thumb_left = pos.x - grab_dx;
         let sx = self.scrollbar_h_scroll_at(thumb_left)?;
-        Some((grab_dx, PanelAction::TimelineScrollbarH(sx)))
+        Some((grab_dx, PanelAction::Transport(TransportAction::TimelineScrollbarH(sx))))
     }
 
     /// Route a viewport-local pointer event (the `Panel::handle_event` body).
@@ -94,20 +95,20 @@ impl TimelineViewportPanel {
             UIEvent::Click { pos, modifiers, .. } => {
                 // Marker flag hit-test (priority over ruler scrub)
                 if let Some(marker_id) = self.hit_test_marker_flag(*pos) {
-                    return vec![PanelAction::MarkerClicked(
+                    return vec![PanelAction::Marker(MarkerAction::MarkerClicked(
                         marker_id.to_string(),
                         *modifiers,
-                    )];
+                    ))];
                 }
                 if self.overview_rect.contains(*pos) {
                     let norm =
                         ((pos.x - self.overview_rect.x) / self.overview_rect.width).clamp(0.0, 1.0);
-                    return vec![PanelAction::OverviewScrub(norm)];
+                    return vec![PanelAction::Transport(TransportAction::OverviewScrub(norm))];
                 }
                 if self.ruler_rect.contains(*pos) {
                     let raw = self.pixel_to_beat(pos.x);
                     let beat = self.scrub_snap_beat(raw, modifiers.alt);
-                    return vec![PanelAction::Seek(beat.as_f32())];
+                    return vec![PanelAction::Transport(TransportAction::Seek(beat.as_f32()))];
                 }
                 // Horizontal scrollbar: click the track to jump (centre the thumb
                 // under the pointer), or click the thumb to no-op-then-drag. A
@@ -136,14 +137,14 @@ impl TimelineViewportPanel {
                         ViewportDrag::MarkerDrag { marker_id: marker_id.clone(), start_beat },
                         *origin,
                     );
-                    return vec![PanelAction::MarkerDragStarted(marker_id.to_string())];
+                    return vec![PanelAction::Marker(MarkerAction::MarkerDragStarted(marker_id.to_string()))];
                 }
                 if self.overview_rect.contains(*origin) {
                     self.drag.start(ViewportDrag::OverviewScrub, *origin);
                     self.scrub_free = false;
                     let norm = ((origin.x - self.overview_rect.x) / self.overview_rect.width)
                         .clamp(0.0, 1.0);
-                    return vec![PanelAction::OverviewScrub(norm)];
+                    return vec![PanelAction::Transport(TransportAction::OverviewScrub(norm))];
                 }
                 if self.ruler_rect.contains(*origin) {
                     self.drag.start(ViewportDrag::RulerScrub, *origin);
@@ -152,7 +153,7 @@ impl TimelineViewportPanel {
                     self.scrub_free = modifiers.alt;
                     let raw = self.pixel_to_beat(origin.x);
                     let beat = self.scrub_snap_beat(raw, self.scrub_free);
-                    return vec![PanelAction::Seek(beat.as_f32())];
+                    return vec![PanelAction::Transport(TransportAction::Seek(beat.as_f32()))];
                 }
                 // Horizontal scrollbar drag (§24 5e). Latches the grab offset so
                 // the thumb tracks the pointer 1:1.
@@ -173,12 +174,12 @@ impl TimelineViewportPanel {
                         let marker_id = marker_id.clone();
                         let raw = self.pixel_to_beat(pos.x);
                         let beat = self.scrub_snap_beat(raw, false).max(Beats::ZERO);
-                        vec![PanelAction::MarkerDragMoved(marker_id.to_string(), beat.as_f32())]
+                        vec![PanelAction::Marker(MarkerAction::MarkerDragMoved(marker_id.to_string(), beat.as_f32()))]
                     }
                     Some(ViewportDrag::OverviewScrub) => {
                         let norm = ((pos.x - self.overview_rect.x) / self.overview_rect.width)
                             .clamp(0.0, 1.0);
-                        vec![PanelAction::OverviewScrub(norm)]
+                        vec![PanelAction::Transport(TransportAction::OverviewScrub(norm))]
                     }
                     Some(ViewportDrag::RulerScrub) => {
                         // Clamp pixel to ruler rect so dragging outside the viewport
@@ -188,12 +189,12 @@ impl TimelineViewportPanel {
                             .clamp(self.ruler_rect.x, self.ruler_rect.x + self.ruler_rect.width);
                         let raw = self.pixel_to_beat(clamped_x);
                         let beat = self.scrub_snap_beat(raw, self.scrub_free);
-                        vec![PanelAction::Seek(beat.as_f32())]
+                        vec![PanelAction::Transport(TransportAction::Seek(beat.as_f32()))]
                     }
                     Some(ViewportDrag::ScrollbarHDrag { grab_dx }) => {
                         let thumb_left = pos.x - grab_dx;
                         match self.scrollbar_h_scroll_at(thumb_left) {
-                            Some(sx) => vec![PanelAction::TimelineScrollbarH(sx)],
+                            Some(sx) => vec![PanelAction::Transport(TransportAction::TimelineScrollbarH(sx))],
                             None => Vec::new(),
                         }
                     }
@@ -207,7 +208,7 @@ impl TimelineViewportPanel {
                     Some(ViewportDrag::MarkerDrag { marker_id, .. }) => {
                         let raw = self.pixel_to_beat(pos.x);
                         let beat = self.scrub_snap_beat(raw, false).max(Beats::ZERO);
-                        vec![PanelAction::MarkerDragEnded(marker_id.to_string(), beat.as_f32())]
+                        vec![PanelAction::Marker(MarkerAction::MarkerDragEnded(marker_id.to_string(), beat.as_f32()))]
                     }
                     Some(_) => {
                         self.scrub_free = false;
@@ -220,7 +221,7 @@ impl TimelineViewportPanel {
             // ── DoubleClick: marker rename ────────────────────────
             UIEvent::DoubleClick { pos, .. } => {
                 if let Some(marker_id) = self.hit_test_marker_flag(*pos) {
-                    return vec![PanelAction::MarkerDoubleClicked(marker_id.to_string())];
+                    return vec![PanelAction::Marker(MarkerAction::MarkerDoubleClicked(marker_id.to_string()))];
                 }
                 Vec::new()
             }
@@ -228,7 +229,7 @@ impl TimelineViewportPanel {
             // ── RightClick: marker context menu ──────────────────
             UIEvent::RightClick { pos, .. } => {
                 if let Some(marker_id) = self.hit_test_marker_flag(*pos) {
-                    return vec![PanelAction::MarkerRightClicked(marker_id.to_string())];
+                    return vec![PanelAction::Marker(MarkerAction::MarkerRightClicked(marker_id.to_string()))];
                 }
                 Vec::new()
             }

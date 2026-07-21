@@ -31,6 +31,7 @@
 //! rects/text rather than through a retained text-field widget — the same
 //! immediate-mode convention every other row here already uses.
 
+use crate::{RootAction};
 use crate::MacroCurve;
 use crate::PanelAction;
 use crate::apply_card_reshape;
@@ -595,10 +596,10 @@ impl MappingPopover {
         // INV toggle.
         if Self::point_in(self.invert_btn_rect(), sx, sy) {
             self.invert = !self.invert;
-            self.pending_actions.push(PanelAction::EffectMappingInvert {
+            self.pending_actions.push(PanelAction::Root(RootAction::EffectMappingInvert {
                 binding_id: self.binding_id.clone(),
                 invert: self.invert,
-            });
+            }));
             return true;
         }
         // Curve cells.
@@ -606,11 +607,11 @@ impl MappingPopover {
             if Self::point_in(self.curve_cell_rect(idx), sx, sy) {
                 if c != self.curve {
                     self.curve = c;
-                    self.pending_actions.push(PanelAction::EffectMappingCurve {
+                    self.pending_actions.push(PanelAction::Root(RootAction::EffectMappingCurve {
                         binding_id: self.binding_id.clone(),
                         // `c` is already the UI `MacroCurve` the action carries.
                         curve: c,
-                    });
+                    }));
                 }
                 return true;
             }
@@ -621,9 +622,9 @@ impl MappingPopover {
         for which in [DragTarget::Scale, DragTarget::Offset] {
             if Self::point_in(self.value_field_rect(which), sx, sy) {
                 self.pending_actions
-                    .push(PanelAction::EffectMappingAffineSnapshot {
+                    .push(PanelAction::Root(RootAction::EffectMappingAffineSnapshot {
                         binding_id: self.binding_id.clone(),
-                    });
+                    }));
                 self.dragging = Some(which);
                 self.drag_moved = false;
                 self.scrub_press_x = sx;
@@ -638,9 +639,9 @@ impl MappingPopover {
         // exposed from. Read-only navigation; emit and close so the canvas is
         // unobstructed when it centres.
         if Self::point_in(self.goto_btn_rect(), sx, sy) {
-            self.pending_actions.push(PanelAction::EffectMappingGotoNode {
+            self.pending_actions.push(PanelAction::Root(RootAction::EffectMappingGotoNode {
                 binding_id: self.binding_id.clone(),
-            });
+            }));
             self.open = false;
             return true;
         }
@@ -675,9 +676,9 @@ impl MappingPopover {
         if let Some(which) = self.dragging.take() {
             if self.drag_moved {
                 self.pending_actions
-                    .push(PanelAction::EffectMappingAffineCommit {
+                    .push(PanelAction::Root(RootAction::EffectMappingAffineCommit {
                         binding_id: self.binding_id.clone(),
-                    });
+                    }));
             } else {
                 self.enter_edit(which.into());
             }
@@ -763,10 +764,10 @@ impl MappingPopover {
             if !label.is_empty() && label != self.label {
                 self.label = label.clone();
                 self.pending_actions
-                    .push(PanelAction::EffectMappingLabel {
+                    .push(PanelAction::Root(RootAction::EffectMappingLabel {
                         binding_id: id,
                         label,
-                    });
+                    }));
             }
             return;
         }
@@ -779,10 +780,10 @@ impl MappingPopover {
             let new_section = if trimmed.is_empty() { None } else { Some(trimmed.to_string()) };
             if new_section != self.section {
                 self.section = new_section.clone();
-                self.pending_actions.push(PanelAction::EffectMappingSection {
+                self.pending_actions.push(PanelAction::Root(RootAction::EffectMappingSection {
                     binding_id: id,
                     section: new_section,
-                });
+                }));
             }
             return;
         }
@@ -794,9 +795,9 @@ impl MappingPopover {
         match field {
             EditField::Min | EditField::Max => {
                 self.pending_actions
-                    .push(PanelAction::EffectMappingRangeSnapshot {
+                    .push(PanelAction::Root(RootAction::EffectMappingRangeSnapshot {
                         binding_id: id.clone(),
-                    });
+                    }));
                 if field == EditField::Min {
                     self.cur_min = v.min(self.cur_max);
                     self.range_lo = self.range_lo.min(self.cur_min);
@@ -805,32 +806,32 @@ impl MappingPopover {
                     self.range_hi = self.range_hi.max(self.cur_max);
                 }
                 self.pending_actions
-                    .push(PanelAction::EffectMappingRangeChanged {
+                    .push(PanelAction::Root(RootAction::EffectMappingRangeChanged {
                         binding_id: id.clone(),
                         min: self.cur_min,
                         max: self.cur_max,
-                    });
+                    }));
                 self.pending_actions
-                    .push(PanelAction::EffectMappingRangeCommit { binding_id: id });
+                    .push(PanelAction::Root(RootAction::EffectMappingRangeCommit { binding_id: id }));
             }
             EditField::Scale | EditField::Offset => {
                 self.pending_actions
-                    .push(PanelAction::EffectMappingAffineSnapshot {
+                    .push(PanelAction::Root(RootAction::EffectMappingAffineSnapshot {
                         binding_id: id.clone(),
-                    });
+                    }));
                 if field == EditField::Scale {
                     self.cur_scale = v;
                 } else {
                     self.cur_offset = v;
                 }
                 self.pending_actions
-                    .push(PanelAction::EffectMappingAffineChanged {
+                    .push(PanelAction::Root(RootAction::EffectMappingAffineChanged {
                         binding_id: id.clone(),
                         scale: self.cur_scale,
                         offset: self.cur_offset,
-                    });
+                    }));
                 self.pending_actions
-                    .push(PanelAction::EffectMappingAffineCommit { binding_id: id });
+                    .push(PanelAction::Root(RootAction::EffectMappingAffineCommit { binding_id: id }));
             }
             EditField::Label | EditField::Section => unreachable!("handled above"),
         }
@@ -856,11 +857,11 @@ impl MappingPopover {
             _ => {}
         }
         self.pending_actions
-            .push(PanelAction::EffectMappingAffineChanged {
+            .push(PanelAction::Root(RootAction::EffectMappingAffineChanged {
                 binding_id: self.binding_id.clone(),
                 scale: self.cur_scale,
                 offset: self.cur_offset,
-            });
+            }));
     }
 
     // ── Render ──────────────────────────────────────────────────────
@@ -1204,7 +1205,7 @@ mod tests {
         let actions = p.drain_actions();
         assert!(matches!(
             actions.as_slice(),
-            [PanelAction::EffectMappingInvert { invert: true, .. }]
+            [PanelAction::Root(RootAction::EffectMappingInvert { invert: true, .. })]
         ));
         assert!(p.invert);
     }
@@ -1219,10 +1220,10 @@ mod tests {
         let actions = p.drain_actions();
         assert!(matches!(
             actions.as_slice(),
-            [PanelAction::EffectMappingCurve {
+            [PanelAction::Root(RootAction::EffectMappingCurve {
                 curve: MacroCurve::Exponential,
                 ..
-            }]
+            })]
         ));
         assert_eq!(p.curve, MacroCurve::Exponential);
     }
@@ -1238,14 +1239,14 @@ mod tests {
         let after_press = p.drain_actions();
         assert!(matches!(
             after_press.first(),
-            Some(PanelAction::EffectMappingAffineSnapshot { .. })
+            Some(PanelAction::Root(RootAction::EffectMappingAffineSnapshot { .. }))
         ));
         // Drag right → scale increases above its 1.0 start.
         p.on_move(r.x + r.w * 0.5 + 80.0, r.y);
         let changed = p.drain_actions();
         assert!(matches!(
             changed.last(),
-            Some(PanelAction::EffectMappingAffineChanged { .. })
+            Some(PanelAction::Root(RootAction::EffectMappingAffineChanged { .. }))
         ));
         assert!(p.cur_scale > 1.0, "drag right raises scale, got {}", p.cur_scale);
         // Offset untouched by a scale scrub.
@@ -1255,7 +1256,7 @@ mod tests {
         let commit = p.drain_actions();
         assert!(matches!(
             commit.as_slice(),
-            [PanelAction::EffectMappingAffineCommit { .. }]
+            [PanelAction::Root(RootAction::EffectMappingAffineCommit { .. })]
         ));
     }
 
@@ -1295,15 +1296,15 @@ mod tests {
         let actions = p.drain_actions();
         assert!(matches!(
             actions.first(),
-            Some(PanelAction::EffectMappingRangeSnapshot { .. })
+            Some(PanelAction::Root(RootAction::EffectMappingRangeSnapshot { .. }))
         ));
         assert!(actions.iter().any(|a| matches!(
             a,
-            PanelAction::EffectMappingRangeChanged { max, .. } if (*max - 128.0).abs() < 1e-3
+            PanelAction::Root(RootAction::EffectMappingRangeChanged { max, .. }) if (*max - 128.0).abs() < 1e-3
         )));
         assert!(matches!(
             actions.last(),
-            Some(PanelAction::EffectMappingRangeCommit { .. })
+            Some(PanelAction::Root(RootAction::EffectMappingRangeCommit { .. }))
         ));
     }
 
@@ -1324,11 +1325,11 @@ mod tests {
         let actions = p.drain_actions();
         assert!(actions.iter().any(|a| matches!(
             a,
-            PanelAction::EffectMappingAffineChanged { scale, .. } if (*scale - 2.5).abs() < 1e-3
+            PanelAction::Root(RootAction::EffectMappingAffineChanged { scale, .. }) if (*scale - 2.5).abs() < 1e-3
         )));
         assert!(matches!(
             actions.last(),
-            Some(PanelAction::EffectMappingAffineCommit { .. })
+            Some(PanelAction::Root(RootAction::EffectMappingAffineCommit { .. }))
         ));
     }
 
@@ -1376,7 +1377,7 @@ mod tests {
         let actions = p.drain_actions();
         assert!(matches!(
             actions.as_slice(),
-            [PanelAction::EffectMappingLabel { label, .. }] if label == "Chaos X"
+            [PanelAction::Root(RootAction::EffectMappingLabel { label, .. })] if label == "Chaos X"
         ));
     }
 
@@ -1399,7 +1400,7 @@ mod tests {
         let actions = p.drain_actions();
         assert!(matches!(
             actions.as_slice(),
-            [PanelAction::EffectMappingSection { section: Some(s), .. }] if s == "Lights"
+            [PanelAction::Root(RootAction::EffectMappingSection { section: Some(s), .. })] if s == "Lights"
         ));
     }
 
@@ -1427,7 +1428,7 @@ mod tests {
         let actions = p.drain_actions();
         assert!(matches!(
             actions.as_slice(),
-            [PanelAction::EffectMappingSection { section: None, .. }]
+            [PanelAction::Root(RootAction::EffectMappingSection { section: None, .. })]
         ));
     }
 

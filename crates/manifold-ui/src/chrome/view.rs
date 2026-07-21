@@ -8,6 +8,8 @@
 //! [`layout`]: crate::chrome::layout
 //! [`diff`]: crate::chrome::diff
 
+#[cfg(test)]
+use crate::{TransportAction};
 use crate::node::{Color32, FontWeight, TextAlign, UINodeType, UIStyle};
 use crate::panels::PanelAction;
 use crate::slider::SliderColors;
@@ -542,7 +544,7 @@ mod tests {
         let v = View::row(4.0)
             .pad(Pad::all(8.0))
             .child(View::label("hi").fill_w())
-            .child(View::button("OK").fixed(40.0, 18.0).on_click(PanelAction::Stop));
+            .child(View::button("OK").fixed(40.0, 18.0).on_click(PanelAction::Transport(TransportAction::Stop)));
         assert_eq!(v.layout, Layout::Row);
         assert_eq!(v.gap, 4.0);
         assert_eq!(v.pad, Pad::all(8.0));
@@ -555,7 +557,7 @@ mod tests {
     fn validate_flags_unwired_button() {
         let v = View::column(2.0)
             .child(View::button("dead")) // no intent, not inert
-            .child(View::button("live").on_click(PanelAction::PlayPause))
+            .child(View::button("live").on_click(PanelAction::Transport(TransportAction::PlayPause)))
             .child(View::button("ok-inert").inert());
         let warnings = validate(&v);
         assert_eq!(warnings.len(), 1, "exactly the unwired button warns: {warnings:?}");

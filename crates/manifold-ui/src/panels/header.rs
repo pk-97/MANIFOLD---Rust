@@ -6,6 +6,7 @@
 //! so the centered group lands at true screen-centre. See the footer for the
 //! integration pattern and `docs/CHROME_API_DESIGN.md`.
 
+use crate::{RootAction, TransportAction};
 use super::{Panel, PanelAction};
 use crate::chrome::{Align, ChromeHost, Pad, Reconcile, Sizing, View, components};
 use crate::color;
@@ -252,14 +253,14 @@ impl HeaderPanel {
                     .w(Sizing::Fixed(60.0))
                     .fill_h()
                     .style(Self::dock_toggle_style(self.audio_setup_open))
-                    .on_click(PanelAction::OpenAudioSetup),
+                    .on_click(PanelAction::Root(RootAction::OpenAudioSetup)),
             )
             .child(
                 View::button("Scene")
                     .w(Sizing::Fixed(60.0))
                     .fill_h()
                     .style(Self::dock_toggle_style(self.scene_setup_open))
-                    .on_click(PanelAction::OpenSceneSetup),
+                    .on_click(PanelAction::Root(RootAction::OpenSceneSetup)),
             );
 
         // Tight zoom cluster [−][label][+], end-aligned to the inset right edge.
@@ -270,7 +271,7 @@ impl HeaderPanel {
                     .w(Sizing::Fixed(ZOOM_BUTTON_W))
                     .fill_h()
                     .style(Self::zoom_button_style())
-                    .on_click(PanelAction::ZoomOut),
+                    .on_click(PanelAction::Transport(TransportAction::ZoomOut)),
             )
             .child(
                 View::label(self.zoom_label.as_str())
@@ -285,7 +286,7 @@ impl HeaderPanel {
                     .w(Sizing::Fixed(ZOOM_BUTTON_W))
                     .fill_h()
                     .style(Self::zoom_button_style())
-                    .on_click(PanelAction::ZoomIn),
+                    .on_click(PanelAction::Transport(TransportAction::ZoomIn)),
             );
 
         View::row(GROUP_SPACING)
@@ -433,7 +434,7 @@ mod tests {
         let zin = node_with_text(&tree, "+").id;
         assert!(matches!(
             intents.resolve(&tree, Some(zin), Gesture::Click),
-            Some(PanelAction::ZoomIn)
+            Some(PanelAction::Transport(TransportAction::ZoomIn))
         ));
     }
 

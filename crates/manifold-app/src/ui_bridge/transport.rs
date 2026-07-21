@@ -2,14 +2,14 @@
 
 use manifold_core::{Beats, project::Project};
 use manifold_editing::commands::settings::ChangeQuantizeModeCommand;
-use manifold_ui::PanelAction;
+use manifold_ui::TransportAction;
 
 use super::DispatchResult;
 use crate::app::SelectionState;
 use crate::ui_root::UIRoot;
 
 pub(super) fn dispatch_transport(
-    action: &PanelAction,
+    action: &TransportAction,
     project: &mut Project,
     content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
     content_state: &crate::content_state::ContentState,
@@ -18,7 +18,7 @@ pub(super) fn dispatch_transport(
 ) -> DispatchResult {
     use crate::content_command::ContentCommand;
     match action {
-        PanelAction::PlayPause => {
+        TransportAction::PlayPause => {
             if content_state.is_playing {
                 ContentCommand::send(content_tx, ContentCommand::Pause);
             } else {
@@ -29,25 +29,25 @@ pub(super) fn dispatch_transport(
             }
             DispatchResult::handled()
         }
-        PanelAction::Stop => {
+        TransportAction::Stop => {
             ContentCommand::send(content_tx, ContentCommand::Stop);
             if let Some(cursor_beat) = selection.insert_cursor_beat {
                 ContentCommand::send(content_tx, ContentCommand::SeekToBeat(cursor_beat));
             }
             DispatchResult::handled()
         }
-        PanelAction::Record => {
+        TransportAction::Record => {
             ContentCommand::send(
                 content_tx,
                 ContentCommand::SetRecording(!content_state.is_recording),
             );
             DispatchResult::handled()
         }
-        PanelAction::ResetBpm => {
+        TransportAction::ResetBpm => {
             // Intercepted by Application before dispatch
             DispatchResult::handled()
         }
-        PanelAction::ClearBpm => {
+        TransportAction::ClearBpm => {
             {
                 let old_points = project.tempo_map.clone_points();
                 let bpm = project.settings.bpm;
@@ -63,18 +63,18 @@ pub(super) fn dispatch_transport(
             }
             DispatchResult::handled()
         }
-        PanelAction::BpmFieldClicked => {
+        TransportAction::BpmFieldClicked => {
             log::debug!("BPM field clicked (text input not yet implemented)");
             DispatchResult::handled()
         }
-        PanelAction::Seek(beat) => {
+        TransportAction::Seek(beat) => {
             ContentCommand::send(
                 content_tx,
                 ContentCommand::SeekToBeat(Beats::from_f32(*beat)),
             );
             DispatchResult::handled()
         }
-        PanelAction::OverviewScrub(norm) => {
+        TransportAction::OverviewScrub(norm) => {
             // Unity: ViewportManager.OnOverviewStripScrub — center viewport on click
             let ppb = ui.viewport.pixels_per_beat();
             let viewport_w = ui.viewport.get_tracks_rect().width;
@@ -87,13 +87,13 @@ pub(super) fn dispatch_transport(
                 .set_scroll(target_scroll, ui.viewport.scroll_y_px());
             DispatchResult::structural()
         }
-        PanelAction::TimelineScrollbarH(scroll_x_beats) => {
+        TransportAction::TimelineScrollbarH(scroll_x_beats) => {
             // Horizontal scrollbar drag/jump (§24 5e) — absolute scroll-x in beats.
             ui.viewport
                 .set_scroll(*scroll_x_beats, ui.viewport.scroll_y_px());
             DispatchResult::structural()
         }
-        PanelAction::SetInsertCursor(beat) => {
+        TransportAction::SetInsertCursor(beat) => {
             // Legacy path — when no layer context available.
             // Uses set_insert_cursor_beat (non-clearing variant)
             // since we don't have a layer index here.
@@ -102,18 +102,18 @@ pub(super) fn dispatch_transport(
         }
 
         // ── Clock/Sync (handled at Application level, these are fallbacks) ──
-        PanelAction::CycleClockAuthority
-        | PanelAction::ToggleLink
-        | PanelAction::ToggleMidiClock
-        | PanelAction::ToggleSyncOutput => {
+        TransportAction::CycleClockAuthority
+        | TransportAction::ToggleLink
+        | TransportAction::ToggleMidiClock
+        | TransportAction::ToggleSyncOutput => {
             // Intercepted by Application before dispatch — should not reach here
             DispatchResult::handled()
         }
-        PanelAction::SelectClkDevice => {
+        TransportAction::SelectClkDevice => {
             // Handled by try_open_dropdown — should not reach here
             DispatchResult::handled()
         }
-        PanelAction::SetMidiClockDevice(index) => {
+        TransportAction::SetMidiClockDevice(index) => {
             // Handled by app_render.rs intercept — should not reach here
             ContentCommand::send(content_tx, ContentCommand::SetMidiClockDevice(*index));
             DispatchResult::handled()
@@ -122,14 +122,14 @@ pub(super) fn dispatch_transport(
         // ── Automation globals (P4, docs/AUTOMATION_LANES_DESIGN.md §4/§5) ──
         // Runtime-only latch/arm state, not a project mutation — no undo entry,
         // same shape as `SessionBackToArrangement`/session quantize.
-        PanelAction::ToggleAutomationArm => {
+        TransportAction::ToggleAutomationArm => {
             ContentCommand::send(
                 content_tx,
                 ContentCommand::AutomationSetArmed(!content_state.automation_armed),
             );
             DispatchResult::handled()
         }
-        PanelAction::AutomationBackToArrangement => {
+        TransportAction::AutomationBackToArrangement => {
             ContentCommand::send(content_tx, ContentCommand::AutomationBackToArrangement);
             DispatchResult::handled()
         }
@@ -138,12 +138,12 @@ pub(super) fn dispatch_transport(
         // lane grows its track), so this must return `structural()`, not
         // `handled()`, to force `sync_project_data` to re-derive
         // `automation_lane_count` and the lane list on the next frame.
-        PanelAction::ToggleAutomationMode => {
+        TransportAction::ToggleAutomationMode => {
             selection.automation_mode_visible = !selection.automation_mode_visible;
             DispatchResult::structural()
         }
 
-        PanelAction::CycleQuantize => {
+        TransportAction::CycleQuantize => {
             {
                 let old = project.settings.quantize_mode;
                 let new = old.next();
@@ -157,11 +157,11 @@ pub(super) fn dispatch_transport(
             }
             DispatchResult::handled()
         }
-        PanelAction::ResolutionClicked => {
+        TransportAction::ResolutionClicked => {
             // Intercepted by UIRoot::try_open_dropdown (opens dropdown at button).
             DispatchResult::handled()
         }
-        PanelAction::FpsFieldClicked => {
+        TransportAction::FpsFieldClicked => {
             log::debug!("FPS field clicked (text input not yet implemented)");
             DispatchResult::handled()
         }
@@ -171,14 +171,14 @@ pub(super) fn dispatch_transport(
         // (no cursor to anchor to). `zoom_level_stepped` resolves the nearest
         // level first, so the buttons stay sane after a continuous scroll-zoom
         // (§24 5e); `zoom_to` is the one shared anchored-zoom path.
-        PanelAction::ZoomIn => {
+        TransportAction::ZoomIn => {
             let playhead = content_state.current_beat.as_f32();
             let playhead_px = ui.viewport.beat_to_pixel(Beats::from_f32(playhead));
             let new_ppb = ui.viewport.zoom_level_stepped(1);
             ui.viewport.zoom_to(new_ppb, playhead, playhead_px);
             DispatchResult::structural()
         }
-        PanelAction::ZoomOut => {
+        TransportAction::ZoomOut => {
             let playhead = content_state.current_beat.as_f32();
             let playhead_px = ui.viewport.beat_to_pixel(Beats::from_f32(playhead));
             let new_ppb = ui.viewport.zoom_level_stepped(-1);
@@ -188,15 +188,14 @@ pub(super) fn dispatch_transport(
 
         // ── Inspector navigation ───────────────────────────────────
         // SelectInspectorTab is handled in `dispatch` (it needs active_layer).
-        PanelAction::InspectorScrolled(delta) => {
+        TransportAction::InspectorScrolled(delta) => {
             ui.inspector.handle_scroll(*delta);
             DispatchResult::handled()
         }
-        PanelAction::InspectorSectionClicked(idx) => {
+        TransportAction::InspectorSectionClicked(idx) => {
             log::debug!("Inspector section clicked: {}", idx);
             DispatchResult::handled()
         }
 
-        _ => DispatchResult::unhandled(),
     }
 }

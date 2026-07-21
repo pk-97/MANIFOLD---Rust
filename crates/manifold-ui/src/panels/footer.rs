@@ -5,6 +5,7 @@
 //! is no `build()`/`update()` dual write and no hand-stored `self.*_id` fields.
 //! See `docs/CHROME_API_DESIGN.md`.
 
+use crate::{TransportAction};
 use super::{Panel, PanelAction};
 use crate::chrome::{ChromeHost, Pad, Reconcile, Sizing, View, components};
 use crate::color;
@@ -114,7 +115,7 @@ impl FooterPanel {
                     .w(Sizing::Fixed(QUANTIZE_BUTTON_W))
                     .fill_h()
                     .style(Self::footer_button_style())
-                    .on_click(PanelAction::CycleQuantize),
+                    .on_click(PanelAction::Transport(TransportAction::CycleQuantize)),
             );
 
         let fps = View::row(LABEL_GAP)
@@ -125,7 +126,7 @@ impl FooterPanel {
                     .w(Sizing::Fixed(FPS_FIELD_W))
                     .fill_h()
                     .style(Self::footer_button_style())
-                    .on_click(PanelAction::FpsFieldClicked)
+                    .on_click(PanelAction::Transport(TransportAction::FpsFieldClicked))
                     .key(KEY_FPS_FIELD),
             );
 
@@ -290,7 +291,7 @@ mod tests {
         panel.register_intents(&mut intents);
 
         let fps = intents.resolve(&tree, panel.fps_field_id(), Gesture::Click);
-        assert!(matches!(fps, Some(PanelAction::FpsFieldClicked)));
+        assert!(matches!(fps, Some(PanelAction::Transport(TransportAction::FpsFieldClicked))));
         assert!(intents.resolve(&tree, None, Gesture::Click).is_none());
     }
 

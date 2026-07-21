@@ -11,6 +11,9 @@
 //! slider drag never fight. The public interface is unchanged, so the inspector
 //! composite that drives this card is untouched. See `docs/CHROME_API_DESIGN.md`.
 
+use crate::ParamsAction;
+#[cfg(test)]
+use crate::RootAction;
 use super::PanelAction;
 use crate::chrome::{Align, ChromeHost, Pad, Sizing, SliderSpec, View, components};
 use crate::color;
@@ -197,9 +200,9 @@ impl MasterChromePanel {
                     Some("Opacity"),
                     OPACITY_LABEL_W,
                     PanelAction::slider_reset(
-                        PanelAction::MasterOpacitySnapshot,
-                        PanelAction::MasterOpacityChanged(1.0),
-                        PanelAction::MasterOpacityCommit,
+                        PanelAction::Params(ParamsAction::MasterOpacitySnapshot),
+                        PanelAction::Params(ParamsAction::MasterOpacityChanged(1.0)),
+                        PanelAction::Params(ParamsAction::MasterOpacityCommit),
                     ),
                 ))
                 .fill_w()
@@ -234,9 +237,9 @@ impl MasterChromePanel {
             None,
             0.0,
             PanelAction::slider_reset(
-                PanelAction::LedBrightnessSnapshot,
-                PanelAction::LedBrightnessChanged(1.0),
-                PanelAction::LedBrightnessCommit,
+                PanelAction::Params(ParamsAction::LedBrightnessSnapshot),
+                PanelAction::Params(ParamsAction::LedBrightnessChanged(1.0)),
+                PanelAction::Params(ParamsAction::LedBrightnessCommit),
             ),
         ))
         .fixed(LED_SLIDER_W, SLIDER_ROW_H)
@@ -340,13 +343,13 @@ impl MasterChromePanel {
 
     pub fn handle_click(&self, node_id: NodeId) -> Vec<PanelAction> {
         if self.host.node_id_for_key(KEY_CHEVRON) == Some(node_id) {
-            return vec![PanelAction::MasterCollapseToggle];
+            return vec![PanelAction::Params(ParamsAction::MasterCollapseToggle)];
         }
         if self.host.node_id_for_key(KEY_EXIT_PATH) == Some(node_id) {
-            return vec![PanelAction::MasterExitPathClicked];
+            return vec![PanelAction::Params(ParamsAction::MasterExitPathClicked)];
         }
         if self.host.node_id_for_key(KEY_LED_TOGGLE) == Some(node_id) {
-            return vec![PanelAction::LedEnabledToggle];
+            return vec![PanelAction::Params(ParamsAction::LedEnabledToggle)];
         }
         Vec::new()
     }
@@ -354,14 +357,14 @@ impl MasterChromePanel {
     pub fn handle_pointer_down(&mut self, node_id: NodeId, pos: Vec2) -> Vec<PanelAction> {
         if let Some(val) = self.opacity.try_start_drag(node_id, pos.x) {
             return vec![
-                PanelAction::MasterOpacitySnapshot,
-                PanelAction::MasterOpacityChanged(val),
+                PanelAction::Params(ParamsAction::MasterOpacitySnapshot),
+                PanelAction::Params(ParamsAction::MasterOpacityChanged(val)),
             ];
         }
         if let Some(val) = self.led_brightness.try_start_drag(node_id, pos.x) {
             return vec![
-                PanelAction::LedBrightnessSnapshot,
-                PanelAction::LedBrightnessChanged(val),
+                PanelAction::Params(ParamsAction::LedBrightnessSnapshot),
+                PanelAction::Params(ParamsAction::LedBrightnessChanged(val)),
             ];
         }
         Vec::new()
@@ -369,20 +372,20 @@ impl MasterChromePanel {
 
     pub fn handle_drag(&mut self, pos: Vec2, tree: &mut UITree) -> Vec<PanelAction> {
         if let Some(val) = self.opacity.apply_drag(pos.x, tree, &fmt_opacity) {
-            return vec![PanelAction::MasterOpacityChanged(val)];
+            return vec![PanelAction::Params(ParamsAction::MasterOpacityChanged(val))];
         }
         if let Some(val) = self.led_brightness.apply_drag(pos.x, tree, &fmt_opacity) {
-            return vec![PanelAction::LedBrightnessChanged(val)];
+            return vec![PanelAction::Params(ParamsAction::LedBrightnessChanged(val))];
         }
         Vec::new()
     }
 
     pub fn handle_drag_end(&mut self, _tree: &mut UITree) -> Vec<PanelAction> {
         if self.opacity.end_drag() {
-            return vec![PanelAction::MasterOpacityCommit];
+            return vec![PanelAction::Params(ParamsAction::MasterOpacityCommit)];
         }
         if self.led_brightness.end_drag() {
-            return vec![PanelAction::LedBrightnessCommit];
+            return vec![PanelAction::Params(ParamsAction::LedBrightnessCommit)];
         }
         Vec::new()
     }
@@ -495,12 +498,12 @@ mod tests {
         let chev = panel.host.node_id_for_key(KEY_CHEVRON).unwrap();
         assert!(matches!(
             panel.handle_click(chev).as_slice(),
-            [PanelAction::MasterCollapseToggle]
+            [PanelAction::Params(ParamsAction::MasterCollapseToggle)]
         ));
         let exit = panel.host.node_id_for_key(KEY_EXIT_PATH).unwrap();
         assert!(matches!(
             panel.handle_click(exit).as_slice(),
-            [PanelAction::MasterExitPathClicked]
+            [PanelAction::Params(ParamsAction::MasterExitPathClicked)]
         ));
     }
 
@@ -528,14 +531,14 @@ mod tests {
         let mid_x = track_rect.x + track_rect.width * 0.5;
 
         let actions = panel.handle_pointer_down(track_id, Vec2::new(mid_x, 10.0));
-        assert!(matches!(actions[0], PanelAction::MasterOpacitySnapshot));
+        assert!(matches!(actions[0], PanelAction::Params(ParamsAction::MasterOpacitySnapshot)));
         assert!(panel.is_dragging());
 
         let actions = panel.handle_drag(Vec2::new(mid_x + 10.0, 10.0), &mut tree);
         assert_eq!(actions.len(), 1);
 
         let actions = panel.handle_drag_end(&mut tree);
-        assert!(matches!(actions[0], PanelAction::MasterOpacityCommit));
+        assert!(matches!(actions[0], PanelAction::Params(ParamsAction::MasterOpacityCommit)));
         assert!(!panel.is_dragging());
     }
 
@@ -553,16 +556,16 @@ mod tests {
 
         let opacity_track = panel.opacity.track_id().unwrap();
         match reg.resolve(&tree, Some(opacity_track), crate::intent::Gesture::RightClick) {
-            Some(PanelAction::SliderReset { changed, .. }) => {
-                assert!(matches!(*changed, PanelAction::MasterOpacityChanged(v) if (v - 1.0).abs() < f32::EPSILON));
+            Some(PanelAction::Root(RootAction::SliderReset { changed, .. })) => {
+                assert!(matches!(*changed, PanelAction::Params(ParamsAction::MasterOpacityChanged(v)) if (v - 1.0).abs() < f32::EPSILON));
             }
             other => panic!("expected SliderReset, got {other:?}"),
         }
 
         let brightness_track = panel.led_brightness.track_id().unwrap();
         match reg.resolve(&tree, Some(brightness_track), crate::intent::Gesture::RightClick) {
-            Some(PanelAction::SliderReset { changed, .. }) => {
-                assert!(matches!(*changed, PanelAction::LedBrightnessChanged(v) if (v - 1.0).abs() < f32::EPSILON));
+            Some(PanelAction::Root(RootAction::SliderReset { changed, .. })) => {
+                assert!(matches!(*changed, PanelAction::Params(ParamsAction::LedBrightnessChanged(v)) if (v - 1.0).abs() < f32::EPSILON));
             }
             other => panic!("expected SliderReset, got {other:?}"),
         }

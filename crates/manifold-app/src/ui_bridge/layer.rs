@@ -8,14 +8,14 @@ use manifold_editing::commands::audio_setup::SetLayerAudioSendCommand;
 use manifold_editing::commands::layer::{AddLayerCommand, DeleteLayerCommand};
 use manifold_editing::commands::settings::ChangeLayerBlendModeCommand;
 use manifold_editing::service::EditingService;
-use manifold_ui::PanelAction;
+use manifold_ui::LayerAction;
 
 use super::DispatchResult;
 use crate::app::SelectionState;
 use crate::ui_root::UIRoot;
 
 pub(super) fn dispatch_layer(
-    action: &PanelAction,
+    action: &LayerAction,
     project: &mut Project,
     content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
     content_state: &crate::content_state::ContentState,
@@ -26,7 +26,7 @@ pub(super) fn dispatch_layer(
     use crate::content_command::ContentCommand;
     match action {
         // ── Layer operations ───────────────────────────────────────
-        PanelAction::ToggleMute(id) => {
+        LayerAction::ToggleMute(id) => {
             // If the clicked layer is part of a multi-selection, apply to all selected layers
             let target_ids: Vec<LayerId> = if selection.selected_layer_ids.len() > 1
                 && selection.is_layer_selected(id)
@@ -58,7 +58,7 @@ pub(super) fn dispatch_layer(
             );
             DispatchResult::handled()
         }
-        PanelAction::ToggleAnalysisOnly(id) => {
+        LayerAction::ToggleAnalysisOnly(id) => {
             // Audio "analysis-only" output: silent to master, still feeding the
             // send. Direct dual-write (local + content thread) like mute/solo —
             // a live perform toggle, not an undo step. Multi-select aware.
@@ -91,7 +91,7 @@ pub(super) fn dispatch_layer(
             );
             DispatchResult::handled()
         }
-        PanelAction::ToggleSolo(id) => {
+        LayerAction::ToggleSolo(id) => {
             let target_ids: Vec<LayerId> = if selection.selected_layer_ids.len() > 1
                 && selection.is_layer_selected(id)
             {
@@ -121,7 +121,7 @@ pub(super) fn dispatch_layer(
             );
             DispatchResult::handled()
         }
-        PanelAction::ToggleLed(id) => {
+        LayerAction::ToggleLed(id) => {
             let target_ids: Vec<LayerId> = if selection.selected_layer_ids.len() > 1
                 && selection.is_layer_selected(id)
             {
@@ -151,7 +151,7 @@ pub(super) fn dispatch_layer(
             );
             DispatchResult::handled()
         }
-        PanelAction::LayerClicked(id, modifiers) => {
+        LayerAction::LayerClicked(id, modifiers) => {
             // From Unity UIState.cs layer selection methods (lines 247-333).
             let layer_id = id.clone();
             *active_layer = Some(layer_id.clone());
@@ -175,11 +175,11 @@ pub(super) fn dispatch_layer(
 
             DispatchResult::structural()
         }
-        PanelAction::LayerDoubleClicked(_id) => {
+        LayerAction::LayerDoubleClicked(_id) => {
             // Intercepted by app.rs — opens text input for layer rename
             DispatchResult::handled()
         }
-        PanelAction::ChevronClicked(id) => {
+        LayerAction::ChevronClicked(id) => {
             let target_ids: Vec<LayerId> = if selection.selected_layer_ids.len() > 1
                 && selection.is_layer_selected(id)
             {
@@ -209,11 +209,11 @@ pub(super) fn dispatch_layer(
             );
             DispatchResult::structural()
         }
-        PanelAction::BlendModeClicked(_id) => {
+        LayerAction::BlendModeClicked(_id) => {
             // Intercepted by UIRoot::try_open_dropdown (opens dropdown at button).
             DispatchResult::handled()
         }
-        PanelAction::SetBlendMode(id, mode_str) => {
+        LayerAction::SetBlendMode(id, mode_str) => {
             {
                 if let Some((_, layer)) = project.timeline.find_layer_by_id(id) {
                     let layer_id = layer.layer_id.clone();
@@ -234,7 +234,7 @@ pub(super) fn dispatch_layer(
             }
             DispatchResult::structural()
         }
-        PanelAction::SetLayerAudioSend(id, send_id) => {
+        LayerAction::SetLayerAudioSend(id, send_id) => {
             // Layer-centric routing: this layer feeds the chosen send (or none).
             // Additive — the target send keeps its capture flag, so routing a
             // layer onto a default send makes a live capture+layer mix.
@@ -247,7 +247,7 @@ pub(super) fn dispatch_layer(
             }
             DispatchResult::structural()
         }
-        PanelAction::ExpandLayer(id) => {
+        LayerAction::ExpandLayer(id) => {
             // Collapse/expand is a view-state toggle (MutateProject, not undoable),
             // multi-select aware — same pattern as ChevronClicked.
             let target_ids: Vec<LayerId> = if selection.selected_layer_ids.len() > 1
@@ -274,7 +274,7 @@ pub(super) fn dispatch_layer(
             );
             DispatchResult::structural()
         }
-        PanelAction::CollapseLayer(id) => {
+        LayerAction::CollapseLayer(id) => {
             // Collapse/expand is a view-state toggle (MutateProject, not undoable),
             // multi-select aware — same pattern as ChevronClicked.
             let target_ids: Vec<LayerId> = if selection.selected_layer_ids.len() > 1
@@ -301,11 +301,11 @@ pub(super) fn dispatch_layer(
             );
             DispatchResult::structural()
         }
-        PanelAction::FolderClicked(_id) => {
+        LayerAction::FolderClicked(_id) => {
             log::info!("Folder clicked (file picker not yet implemented)");
             DispatchResult::handled()
         }
-        PanelAction::NewClipClicked(id) => {
+        LayerAction::NewClipClicked(id) => {
             let beat = content_state.current_beat;
             let spb = 60.0 / project.settings.bpm.0.max(1.0);
             // create_clip_at_position takes a positional index; resolve the
@@ -323,7 +323,7 @@ pub(super) fn dispatch_layer(
             }
             DispatchResult::structural()
         }
-        PanelAction::AddGenClipClicked(id) => {
+        LayerAction::AddGenClipClicked(id) => {
             let beat = content_state.current_beat;
             let spb = 60.0 / project.settings.bpm.0.max(1.0);
             if let Some((layer_idx, _)) = project.timeline.find_layer_by_id(id)
@@ -339,22 +339,22 @@ pub(super) fn dispatch_layer(
             }
             DispatchResult::structural()
         }
-        PanelAction::MidiInputClicked(_id) => {
+        LayerAction::MidiInputClicked(_id) => {
             // Intercepted by UIRoot::try_open_dropdown (opens dropdown at button).
             DispatchResult::handled()
         }
-        PanelAction::MidiChannelClicked(_id) => {
+        LayerAction::MidiChannelClicked(_id) => {
             // Intercepted by UIRoot::try_open_dropdown (opens dropdown at button).
             DispatchResult::handled()
         }
-        PanelAction::MidiDeviceClicked(_id) => {
+        LayerAction::MidiDeviceClicked(_id) => {
             // Intercepted by UIRoot::try_open_dropdown (opens dropdown at button).
             DispatchResult::handled()
         }
-        PanelAction::LayerDragStarted(_) | PanelAction::LayerDragMoved(..) => {
+        LayerAction::LayerDragStarted(_) | LayerAction::LayerDragMoved(..) => {
             DispatchResult::handled()
         }
-        PanelAction::LayerDragEnded(from, to) => {
+        LayerAction::LayerDragEnded(from, to) => {
             // From Unity LayerHeaderPanel.HandleDragEnd + ReorderLayerCommand.
             // Supports multi-select: if dragged layer is part of a selection,
             // all selected layers move as a group.
@@ -484,7 +484,7 @@ pub(super) fn dispatch_layer(
         }
 
         // ── Layer management ───────────────────────────────────────
-        PanelAction::AddLayerClicked => {
+        LayerAction::AddLayerClicked => {
             {
                 let count = project.timeline.layers.len();
                 let name = format!("Layer {}", count + 1);
@@ -504,7 +504,7 @@ pub(super) fn dispatch_layer(
             }
             DispatchResult::structural()
         }
-        PanelAction::DeleteLayerClicked(id) => {
+        LayerAction::DeleteLayerClicked(id) => {
             {
                 if project.timeline.layers.len() > 1
                     && let Some((_, layer)) = project.timeline.find_layer_by_id(id)
@@ -528,6 +528,5 @@ pub(super) fn dispatch_layer(
             DispatchResult::structural()
         }
 
-        _ => DispatchResult::unhandled(),
     }
 }

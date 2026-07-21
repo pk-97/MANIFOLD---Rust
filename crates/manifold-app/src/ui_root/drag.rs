@@ -175,6 +175,7 @@ mod drag_capture_tests {
     //! the layout) without needing a live `Project` (the same sequencing
     //! `ui_snapshot/script.rs` uses before `sync_build`).
     use super::*;
+    use manifold_ui::AudioSetupAction; // test-only (relocated from file scope, P-D landing)
 
     const W: f32 = 1536.0;
     const H: f32 = 1216.0;
@@ -398,7 +399,7 @@ mod drag_capture_tests {
         assert!(
             down_actions
                 .iter()
-                .any(|a| matches!(a, PanelAction::AudioCrossoverDragBegin)),
+                .any(|a| matches!(a, PanelAction::AudioSetup(AudioSetupAction::AudioCrossoverDragBegin))),
             "PointerDown on the divider should arm the band grab: {down_actions:?}"
         );
         assert!(ui.audio_setup_panel.is_dragging_band(), "divider grab should be armed");
@@ -424,7 +425,7 @@ mod drag_capture_tests {
         assert!(
             move2_actions
                 .iter()
-                .any(|a| matches!(a, PanelAction::AudioCrossoverChanged(BandDivider::Low, _))),
+                .any(|a| matches!(a, PanelAction::AudioSetup(AudioSetupAction::AudioCrossoverChanged(BandDivider::Low, _)))),
             "the Drag following the immediate DragBegin should yield an \
              AudioCrossoverChanged(Low, _) action: {move2_actions:?}"
         );
@@ -525,7 +526,7 @@ mod drag_capture_tests {
 
         let steps = |acts: &[PanelAction]| {
             acts.iter()
-                .filter(|a| matches!(a, PanelAction::AudioSendFloorStep(..)))
+                .filter(|a| matches!(a, PanelAction::AudioSetup(AudioSetupAction::AudioSendFloorStep(..))))
                 .count()
         };
 
