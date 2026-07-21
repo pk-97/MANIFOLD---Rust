@@ -319,13 +319,9 @@ pub enum ParamsAction {
     MasterExitPathClicked,
     /// Set LED exit path index: -1 = after all FX, 0 = before FX, N = after effect N-1.
     SetLedExitIndex(i32),
-    MasterOpacitySnapshot,
-    MasterOpacityChanged(f32),
-    MasterOpacityCommit,
+    // MasterOpacity/LedBrightness scrub trios migrated to `PanelAction::Scrub`
+    // (`ValueRef::MasterOpacity` / `ValueRef::LedBrightness`, P-I / D4).
     LedEnabledToggle,
-    LedBrightnessSnapshot,
-    LedBrightnessChanged(f32),
-    LedBrightnessCommit,
     LayerChromeCollapseToggle,
     LayerOpacitySnapshot,
     LayerOpacityChanged(f32),

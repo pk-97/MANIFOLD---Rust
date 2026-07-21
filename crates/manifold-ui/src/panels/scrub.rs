@@ -70,4 +70,10 @@ pub enum ValueRef {
     /// An exposed card param on an effect/generator graph — was the
     /// `ParamSnapshot` / `ParamChanged` / `ParamCommit` trio.
     Param(GraphParamTarget, ParamId),
+    /// The master-opacity slider (master chrome) — was `MasterOpacity{Snapshot,
+    /// Changed,Commit}`.
+    MasterOpacity,
+    /// The LED master-brightness slider — was `LedBrightness{Snapshot,Changed,
+    /// Commit}`.
+    LedBrightness,
 }

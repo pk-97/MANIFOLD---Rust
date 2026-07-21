@@ -21,8 +21,7 @@ use manifold_editing::commands::effects::{
     SetRelightHeightFromCommand, SetRelightParamCommand, ToggleEffectCommand, ToggleRelightCommand,
 };
 use manifold_editing::commands::settings::{
-    ChangeLayerOpacityCommand, ChangeLedBrightnessCommand, ChangeMacroCommand,
-    ChangeMasterOpacityCommand, PasteGeneratorCommand,
+    ChangeLayerOpacityCommand, ChangeMacroCommand, PasteGeneratorCommand,
 };
 use manifold_ui::{InspectorTab, ParamsAction};
 
@@ -99,39 +98,8 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
         }
         ParamsAction::MacroLabelRename(_) => DispatchResult::handled(),
 
-        // ── Master chrome ──────────────────────────────────────────
-        ParamsAction::MasterOpacitySnapshot => {
-            ctx.scrub.slider_snapshot = Some(ctx.project.settings.master_opacity);
-            ctx.scrub.active_inspector_drag = Some(crate::app::ActiveInspectorDrag::MasterOpacity(
-                ctx.project.settings.master_opacity,
-            ));
-            DispatchResult::handled()
-        }
-        ParamsAction::MasterOpacityChanged(val) => {
-            ctx.project.settings.master_opacity = *val;
-            if let Some(crate::app::ActiveInspectorDrag::MasterOpacity(v)) = &mut ctx.scrub.active_inspector_drag {
-                *v = *val;
-            }
-            let v = *val;
-            ContentCommand::send(
-                ctx.content_tx,
-                ContentCommand::MutateProjectLive(Box::new(move |p| {
-                    p.settings.master_opacity = v;
-                })),
-            );
-            DispatchResult::handled()
-        }
-        ParamsAction::MasterOpacityCommit => {
-            if let Some(old_val) = ctx.scrub.slider_snapshot.take() {
-                let new_val = ctx.project.settings.master_opacity;
-                if (old_val - new_val).abs() > f32::EPSILON {
-                    let cmd = ChangeMasterOpacityCommand::new(old_val, new_val);
-                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
-                }
-            }
-            ctx.scrub.active_inspector_drag = None;
-            DispatchResult::handled()
-        }
+        // Master-opacity + LED-brightness scrub trios migrated to the unified
+        // `PanelAction::Scrub` wire (`ui_bridge/scrub.rs`, P-I / D4).
         // ── Audio-layer gain slider (layer header) ─────────────────
         ParamsAction::AudioGainSnapshot(id) => {
             ctx.scrub.slider_snapshot = ctx.project
@@ -231,39 +199,6 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             DispatchResult::handled()
         }
 
-        // ── LED brightness ───────────────────────────────────────
-        ParamsAction::LedBrightnessSnapshot => {
-            ctx.scrub.slider_snapshot = Some(ctx.project.settings.led_brightness);
-            ctx.scrub.active_inspector_drag = Some(crate::app::ActiveInspectorDrag::LedBrightness(
-                ctx.project.settings.led_brightness,
-            ));
-            DispatchResult::handled()
-        }
-        ParamsAction::LedBrightnessChanged(val) => {
-            ctx.project.settings.led_brightness = *val;
-            if let Some(crate::app::ActiveInspectorDrag::LedBrightness(v)) = &mut ctx.scrub.active_inspector_drag {
-                *v = *val;
-            }
-            let v = *val;
-            ContentCommand::send(
-                ctx.content_tx,
-                ContentCommand::MutateProject(Box::new(move |p| {
-                    p.settings.led_brightness = v;
-                })),
-            );
-            DispatchResult::handled()
-        }
-        ParamsAction::LedBrightnessCommit => {
-            if let Some(old_val) = ctx.scrub.slider_snapshot.take() {
-                let new_val = ctx.project.settings.led_brightness;
-                if (old_val - new_val).abs() > f32::EPSILON {
-                    let cmd = ChangeLedBrightnessCommand::new(old_val, new_val);
-                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
-                }
-            }
-            ctx.scrub.active_inspector_drag = None;
-            DispatchResult::handled()
-        }
         // ── Layer chrome ───────────────────────────────────────────
         ParamsAction::LayerOpacitySnapshot => {
             let layer_idx = super::resolve_active_layer_index(active_layer, ctx.project);

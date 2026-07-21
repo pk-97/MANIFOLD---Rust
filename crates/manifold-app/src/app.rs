@@ -51,8 +51,8 @@ pub type SelectionState = UIState;
 /// After snapshot acceptance, the dragged value is restored to prevent overwrite.
 #[derive(Debug, Clone)]
 pub(crate) enum ActiveInspectorDrag {
-    MasterOpacity(f32),
-    LedBrightness(f32),
+    // MasterOpacity/LedBrightness migrated to the unified scrub gesture
+    // (`ui_bridge::scrub::ResolvedScrub`, P-I / D4).
     LayerOpacity {
         layer_id: LayerId,
         value: f32,
@@ -175,12 +175,6 @@ impl ActiveInspectorDrag {
     /// Write the dragged value back into the project after snapshot acceptance.
     pub(crate) fn apply(&self, project: &mut manifold_core::project::Project) {
         match self {
-            Self::MasterOpacity(v) => {
-                project.settings.master_opacity = *v;
-            }
-            Self::LedBrightness(v) => {
-                project.settings.led_brightness = *v;
-            }
             Self::LayerOpacity { layer_id, value } => {
                 if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id) {
                     layer.opacity = *value;

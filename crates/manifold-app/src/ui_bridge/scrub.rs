@@ -29,6 +29,7 @@ use manifold_core::effects::ParamId;
 use manifold_core::project::Project;
 use manifold_core::GraphTarget;
 use manifold_editing::commands::effects::ChangeGraphParamCommand;
+use manifold_editing::commands::settings::{ChangeLedBrightnessCommand, ChangeMasterOpacityCommand};
 use manifold_ui::{ScrubPhase, ValueRef};
 
 use super::dispatch::resolve::resolve_graph_target;
@@ -97,6 +98,10 @@ pub enum ResolvedScrub {
         baseline: f32,
         live: f32,
     },
+    /// The master-opacity slider (`settings.master_opacity`).
+    MasterOpacity { baseline: f32, live: f32 },
+    /// The LED master-brightness slider (`settings.led_brightness`).
+    LedBrightness { baseline: f32, live: f32 },
 }
 
 impl ResolvedScrub {
@@ -117,6 +122,12 @@ impl ResolvedScrub {
                 project.with_preset_graph_mut(target, |inst| {
                     inst.set_base_param(param_id.as_ref(), *live);
                 });
+            }
+            ResolvedScrub::MasterOpacity { live, .. } => {
+                project.settings.master_opacity = *live;
+            }
+            ResolvedScrub::LedBrightness { live, .. } => {
+                project.settings.led_brightness = *live;
             }
         }
     }
@@ -247,6 +258,84 @@ pub(crate) fn dispatch_scrub(
                     {
                         let cmd =
                             ChangeGraphParamCommand::new(target, param_id.clone(), old_val, new_val);
+                        ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
+                    }
+                }
+                ctx.scrub.active = None;
+                DispatchResult::handled()
+            }
+        },
+
+        ValueRef::MasterOpacity => match phase {
+            ScrubPhase::Begin => {
+                let baseline = ctx.project.settings.master_opacity;
+                ctx.scrub.active = Some(ResolvedScrub::MasterOpacity {
+                    baseline,
+                    live: baseline,
+                });
+                DispatchResult::handled()
+            }
+            ScrubPhase::Move(sv) => {
+                if let Some(v) = sv.scalar() {
+                    ctx.project.settings.master_opacity = v;
+                    if let Some(ResolvedScrub::MasterOpacity { live, .. }) = &mut ctx.scrub.active {
+                        *live = v;
+                    }
+                    ContentCommand::send(
+                        ctx.content_tx,
+                        ContentCommand::MutateProjectLive(Box::new(move |p| {
+                            p.settings.master_opacity = v;
+                        })),
+                    );
+                }
+                DispatchResult::handled()
+            }
+            ScrubPhase::Commit => {
+                if let Some(ResolvedScrub::MasterOpacity { baseline, .. }) = &ctx.scrub.active {
+                    let baseline = *baseline;
+                    let new_val = ctx.project.settings.master_opacity;
+                    if (baseline - new_val).abs() > f32::EPSILON {
+                        let cmd = ChangeMasterOpacityCommand::new(baseline, new_val);
+                        ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
+                    }
+                }
+                ctx.scrub.active = None;
+                DispatchResult::handled()
+            }
+        },
+
+        ValueRef::LedBrightness => match phase {
+            ScrubPhase::Begin => {
+                let baseline = ctx.project.settings.led_brightness;
+                ctx.scrub.active = Some(ResolvedScrub::LedBrightness {
+                    baseline,
+                    live: baseline,
+                });
+                DispatchResult::handled()
+            }
+            ScrubPhase::Move(sv) => {
+                if let Some(v) = sv.scalar() {
+                    ctx.project.settings.led_brightness = v;
+                    if let Some(ResolvedScrub::LedBrightness { live, .. }) = &mut ctx.scrub.active {
+                        *live = v;
+                    }
+                    // LED brightness lands via a plain (non-Live) mutation, as
+                    // the retired `LedBrightnessChanged` did.
+                    ContentCommand::send(
+                        ctx.content_tx,
+                        ContentCommand::MutateProject(Box::new(move |p| {
+                            p.settings.led_brightness = v;
+                        })),
+                    );
+                }
+                DispatchResult::handled()
+            }
+            ScrubPhase::Commit => {
+                if let Some(ResolvedScrub::LedBrightness { baseline, .. }) = &ctx.scrub.active {
+                    let baseline = *baseline;
+                    let new_val = ctx.project.settings.led_brightness;
+                    if (baseline - new_val).abs() > f32::EPSILON {
+                        let cmd = ChangeLedBrightnessCommand::new(baseline, new_val);
                         ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
                     }
                 }

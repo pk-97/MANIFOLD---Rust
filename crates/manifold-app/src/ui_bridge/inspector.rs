@@ -509,11 +509,11 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 |h, p| {
-                    h.dispatch(&PanelAction::Params(ParamsAction::MasterOpacitySnapshot), p);
-                    h.dispatch(&PanelAction::Params(ParamsAction::MasterOpacityChanged(0.6)), p);
-                    h.dispatch(&PanelAction::Params(ParamsAction::MasterOpacityChanged(after)), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Begin), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Move(ScrubValue::Scalar(0.6))), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Move(ScrubValue::Scalar(after))), p);
                 },
-                |h, p| h.dispatch(&PanelAction::Params(ParamsAction::MasterOpacityCommit), p),
+                |h, p| h.dispatch(&PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Commit), p),
                 |p| p.settings.master_opacity,
                 before,
                 after,
@@ -541,11 +541,11 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 |h, p| {
-                    h.dispatch(&PanelAction::Params(ParamsAction::LedBrightnessSnapshot), p);
-                    h.dispatch(&PanelAction::Params(ParamsAction::LedBrightnessChanged(0.9)), p);
-                    h.dispatch(&PanelAction::Params(ParamsAction::LedBrightnessChanged(after)), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::LedBrightness, ScrubPhase::Begin), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::LedBrightness, ScrubPhase::Move(ScrubValue::Scalar(0.9))), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::LedBrightness, ScrubPhase::Move(ScrubValue::Scalar(after))), p);
                 },
-                |h, p| h.dispatch(&PanelAction::Params(ParamsAction::LedBrightnessCommit), p),
+                |h, p| h.dispatch(&PanelAction::Scrub(ValueRef::LedBrightness, ScrubPhase::Commit), p),
                 |p| p.settings.led_brightness,
                 before,
                 after,
