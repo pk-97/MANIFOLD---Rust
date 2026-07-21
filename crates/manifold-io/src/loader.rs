@@ -400,6 +400,8 @@ impl std::fmt::Display for LoadError {
     }
 }
 
+impl std::error::Error for LoadError {}
+
 #[cfg(test)]
 mod legacy_clip_trigger_migration_tests {
     //! Round-trip gate for the P2 clip-trigger migration
@@ -535,5 +537,3 @@ mod legacy_clip_trigger_migration_tests {
         );
     }
 }
-
-impl std::error::Error for LoadError {}

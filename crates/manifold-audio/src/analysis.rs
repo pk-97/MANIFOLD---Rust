@@ -3362,8 +3362,8 @@ mod tests {
         println!("== true fundamental bin ==");
         breakdown(true_bin);
         println!("== raw col around bottom two octaves (bins 0..60, magnitude) ==");
-        for k in 0..60 {
-            println!("  col[{k:2}] {:6.2} Hz = {:.5}", hz_of(k as f32), col[k]);
+        for (k, value) in col.iter().enumerate().take(60) {
+            println!("  col[{k:2}] {:6.2} Hz = {:.5}", hz_of(k as f32), value);
         }
 
         let (argmax_bin, _) = salience_peak(&sal).expect("a loud sub is not an all-floored column");

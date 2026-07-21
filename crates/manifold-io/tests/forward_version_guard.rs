@@ -120,9 +120,9 @@ fn malformed_project_version_degrades_instead_of_panicking() {
     // Not a string — degrades to "1.0.0", which is never newer than
     // CURRENT_PROJECT_VERSION, so this must NOT come back as TooNew.
     let result = loader::load_project_from_json(json);
-    match result {
-        Err(LoadError::TooNew { .. }) => panic!("malformed projectVersion must not read as too-new"),
-        _ => {} // Deserialize/Migration error or Ok are both fine — the point is no panic, no false TooNew.
+    // Deserialize/Migration error or Ok are both fine — the point is no panic, no false TooNew.
+    if let Err(LoadError::TooNew { .. }) = result {
+        panic!("malformed projectVersion must not read as too-new");
     }
 }
 

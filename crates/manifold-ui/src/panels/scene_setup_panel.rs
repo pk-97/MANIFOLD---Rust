@@ -2903,7 +2903,7 @@ mod tests {
                     visible: RowValue { addr: RowAddr { scope_path: vec![42], node_doc_id: 40, param_id: "visible".to_string() }, value: 1.0, min: 0.0, max: 1.0, driven: false, exposed: false },
                     transform: Some(Box::new(TransformRowVm {
                         pos: mtriplet(50, 1.0, 2.0, 3.0, -100.0, 100.0),
-                        rot: mtriplet(50, 0.0, 0.0, 0.0, -6.28, 6.28),
+                        rot: mtriplet(50, 0.0, 0.0, 0.0, -std::f32::consts::TAU, std::f32::consts::TAU),
                         scale: mtriplet(50, 1.0, 1.0, 1.0, 0.01, 10.0),
                     })),
                     material: ObjectMaterialVm::Pbr {
@@ -2948,8 +2948,8 @@ mod tests {
                 LightRowVm::Custom { index: 1 },
             ],
             camera: CameraRowVm::Orbit(Box::new(OrbitCameraRowVm {
-                orbit: mrow(RowValue { addr: RowAddr::root(70, "orbit"), value: 0.7, min: -6.28, max: 6.28, driven: false, exposed: false }),
-                tilt: mrow(RowValue { addr: RowAddr::root(70, "tilt"), value: 0.3, min: -6.28, max: 6.28, driven: false, exposed: false }),
+                orbit: mrow(RowValue { addr: RowAddr::root(70, "orbit"), value: 0.7, min: -std::f32::consts::TAU, max: std::f32::consts::TAU, driven: false, exposed: false }),
+                tilt: mrow(RowValue { addr: RowAddr::root(70, "tilt"), value: 0.3, min: -std::f32::consts::TAU, max: std::f32::consts::TAU, driven: false, exposed: false }),
                 distance: mrow(RowValue { addr: RowAddr::root(70, "distance"), value: 4.0, min: 0.01, max: 100.0, driven: false, exposed: false }),
                 fov_y: mrow(RowValue { addr: RowAddr::root(70, "fov_y"), value: 0.9, min: 0.05, max: 2.5, driven: false, exposed: false }),
                 lens: Some(LensRowVm {

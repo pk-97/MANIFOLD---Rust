@@ -228,19 +228,6 @@ pub fn stable_key(id: &str) -> u64 {
     z ^ (z >> 31)
 }
 
-#[cfg(test)]
-mod stable_key_tests {
-    /// INV-4's cross-process pin: known bytes → known salt, forever. If this
-    /// test ever needs updating, held dump `Widget(u64)` values in flow
-    /// scripts break — that is a breaking change to the automation surface,
-    /// not a refactor.
-    #[test]
-    fn stable_key_is_pinned() {
-        assert_eq!(super::stable_key("intensity"), 9_466_175_151_710_844_563_u64);
-        assert_ne!(super::stable_key("intensity"), super::stable_key("speed"));
-    }
-}
-
 impl ParamSurface {
     /// The card's wire identity — derived, never stored twice.
     pub fn target(&self) -> GraphParamTarget {
@@ -264,5 +251,18 @@ impl ParamSurface {
     /// ABL badge: any row has an Ableton mapping.
     pub fn has_abl(&self) -> bool {
         self.rows.iter().any(|r| r.mapping.ableton_display.is_some())
+    }
+}
+
+#[cfg(test)]
+mod stable_key_tests {
+    /// INV-4's cross-process pin: known bytes → known salt, forever. If this
+    /// test ever needs updating, held dump `Widget(u64)` values in flow
+    /// scripts break — that is a breaking change to the automation surface,
+    /// not a refactor.
+    #[test]
+    fn stable_key_is_pinned() {
+        assert_eq!(super::stable_key("intensity"), 9_466_175_151_710_844_563_u64);
+        assert_ne!(super::stable_key("intensity"), super::stable_key("speed"));
     }
 }
