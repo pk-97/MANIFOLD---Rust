@@ -29,7 +29,7 @@ pub fn sync_scene_row_values(ui: &mut UIRoot, project: &Project) {
 
     // The unified properties card's per-frame value push — real exposed
     // params, resolved the SAME way `sync_card_values` resolves the main
-    // generator inspector card's values (`ui_translate::param_slots_to_ui`),
+    // generator inspector card's values (`ui_translate::with_param_slots`),
     // just against the SCENE PANEL's own bound layer (`live_layer_id`)
     // rather than the app's `active_layer` (a scene row always lives on the
     // layer its panel is docked to, which can differ from the app's active

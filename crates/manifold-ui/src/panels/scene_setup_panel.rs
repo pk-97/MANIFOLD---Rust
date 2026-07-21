@@ -1171,7 +1171,7 @@ impl ScenePanel {
     /// unified properties card's rows, without a structural rebuild. A real
     /// exposed param's current value is already index-aligned with
     /// `full_params.rows`/`properties_card.rows` by construction. `slots` is
-    /// `ui_translate::param_slots_to_ui(&gp.params)` for the SAME layer
+    /// `ui_translate::with_param_slots(&gp.params, …)`'s slice for the SAME layer
     /// `full_params` was built from — the exact per-param index space
     /// `properties_card`'s filter selected from.
     pub fn sync_properties_values(&mut self, tree: &mut UITree, slots: &[crate::view::UiParamSlot]) {

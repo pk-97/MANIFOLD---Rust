@@ -49,6 +49,51 @@ ALLOW = re.compile(
 )
 HEADER = re.compile(r"^(\+\+\+|---)\s")
 
+# Comment-only lines: behavior-neutral in Rust (nextest does not run doctests
+# in this repo's gate). Counted and reported, never fatal.
+COMMENT = re.compile(r"^[+-]\s*(//|///|//!)")
+
+# Visibility qualifiers a move may add/remove on an otherwise-identical line —
+# widening is required wiring when a private item crosses a module wall, and
+# cannot change runtime behavior (it only widens who may call).
+VIS = re.compile(r"^(pub(\((crate|super)\))?\s+)")
+
+
+def drop_visibility_pairs(residue: list[str]) -> tuple[list[str], int]:
+    """Remove matched -old/+new pairs that are identical after stripping a
+    leading visibility qualifier from the line's code (post +/- marker,
+    whitespace-insensitive). Returns (remaining residue, pairs dropped)."""
+
+    def key(line: str) -> str:
+        body = line[1:].lstrip()
+        return " ".join(VIS.sub("", body, count=1).split())
+
+    minus: dict[str, int] = {}
+    plus: dict[str, int] = {}
+    for line in residue:
+        (minus if line.startswith("-") else plus)[key(line)] = (
+            (minus if line.startswith("-") else plus).get(key(line), 0) + 1
+        )
+    pairs = 0
+    remaining: list[str] = []
+    # Two passes so ordering inside the diff doesn't matter: count matches,
+    # then emit unmatched lines in original order.
+    matched: dict[str, int] = {}
+    for k in minus:
+        m = min(minus[k], plus.get(k, 0))
+        if m:
+            matched[k] = m
+            pairs += m
+    spent: dict[tuple[str, str], int] = {}
+    for line in residue:
+        k = key(line)
+        side = "-" if line.startswith("-") else "+"
+        if matched.get(k, 0) > spent.get((k, side), 0):
+            spent[(k, side)] = spent.get((k, side), 0) + 1
+            continue
+        remaining.append(line)
+    return remaining, pairs
+
 
 def main() -> int:
     args = [a for a in sys.argv[1:] if a != "--show-all"]
@@ -81,6 +126,7 @@ def main() -> int:
     residue: list[str] = []
     allowed = 0
     moved = 0
+    comments = 0
     for raw in out.splitlines():
         is_moved = bool(MOVED_RE.match(raw))
         plain = ANSI.sub("", raw)
@@ -92,9 +138,21 @@ def main() -> int:
         if ALLOW.match(plain):
             allowed += 1
             continue
+        if COMMENT.match(plain):
+            comments += 1
+            continue
         residue.append(plain)
 
-    print(f"moved lines: {moved}  allowlisted wiring: {allowed}  residue: {len(residue)}")
+    residue, vis_pairs = drop_visibility_pairs(residue)
+
+    print(
+        f"moved lines: {moved}  allowlisted wiring: {allowed}  "
+        f"comment lines: {comments}  visibility pairs: {vis_pairs}  "
+        f"residue: {len(residue)}"
+    )
+    if vis_pairs:
+        print(f"  note: {vis_pairs} signature(s) widened visibility (fn -> pub(crate) fn "
+              f"etc.) — required wiring when private items move across module walls.")
     if residue:
         limit = len(residue) if show_all else 40
         for line in residue[:limit]:
