@@ -19,6 +19,7 @@
 //! handling) — never a new mutation path. No direct project mutation and no
 //! shared-lock wrapper types appear anywhere in this file (§4 negative gate).
 
+use crate::{MappingAction, ModulationAction, ParamsAction, ProjectAction, RootAction};
 use crate::chrome::{ChromeHost, Pad, Sizing, View};
 use crate::color;
 use crate::input::UIEvent;
@@ -851,11 +852,11 @@ impl SceneCardState {
     fn audio_toggle_action(&self, target: GraphParamTarget, pi: usize) -> Vec<PanelAction> {
         let ms = &self.mod_state;
         if ms.audio_active.get(pi).copied().unwrap_or(false) {
-            vec![PanelAction::AudioModToggle(target, self.pid_at(pi))]
+            vec![PanelAction::Modulation(ModulationAction::AudioModToggle(target, self.pid_at(pi)))]
         } else if ms.audio_send_ids.is_empty() {
-            vec![PanelAction::OpenAudioSetup]
+            vec![PanelAction::Root(RootAction::OpenAudioSetup)]
         } else {
-            vec![PanelAction::AudioModToggle(target, self.pid_at(pi))]
+            vec![PanelAction::Modulation(ModulationAction::AudioModToggle(target, self.pid_at(pi)))]
         }
     }
 
@@ -886,7 +887,7 @@ impl SceneCardState {
             audio_kind_from_index(kind_idx),
             audio_band_from_index(band_idx),
         );
-        vec![PanelAction::AudioModSetSource(target, self.pid_at(pi), send_id, feature)]
+        vec![PanelAction::Modulation(ModulationAction::AudioModSetSource(target, self.pid_at(pi), send_id, feature))]
     }
 
     /// A click on a Listen-row chip — resolves the chip's `AudioFeature` to
@@ -2237,7 +2238,7 @@ impl ScenePanel {
                     // Escape use, so `ui.toggle_scene_dock()` runs through
                     // the single owning path (width + open + rebuild +
                     // header sync all in lockstep).
-                    return (true, vec![PanelAction::OpenSceneSetup]);
+                    return (true, vec![PanelAction::Root(RootAction::OpenSceneSetup)]);
                 }
                 // D7: an outliner row click sets the UI-local selection —
                 // no command, no undo unit, valid even before a `Live` state
@@ -2248,7 +2249,7 @@ impl ScenePanel {
                 if let Some((_, sel)) = self.outliner_row_ids.iter().find(|(id, _)| *id == *node_id) {
                     if let SceneSetupState::Live(vm) = &self.state {
                         self.selection.insert(vm.layer_id.clone(), *sel);
-                        return (true, vec![PanelAction::SceneSetupSelectionChanged(vm.layer_id.clone())]);
+                        return (true, vec![PanelAction::Root(RootAction::SceneSetupSelectionChanged(vm.layer_id.clone()))]);
                     }
                     return (true, Vec::new());
                 }
@@ -2262,64 +2263,64 @@ impl ScenePanel {
                         // row uses — the [0,1] threshold flips between 0.0
                         // and 1.0 (D3's on/off convention).
                         let new_value = if row_value.value > 0.5 { 0.0 } else { 1.0 };
-                        actions.push(PanelAction::SceneSetupParamChanged(
+                        actions.push(PanelAction::Project(ProjectAction::SceneSetupParamChanged(
                             vm.layer_id.clone(),
                             row_value.addr.scope_path.clone(),
                             row_value.addr.node_doc_id,
                             row_value.addr.param_id.clone(),
                             new_value,
-                        ));
+                        )));
                     } else if let Some((_, index)) =
                         self.object_duplicate_ids.iter().find(|(id, _)| *id == *node_id)
                     {
-                        actions.push(PanelAction::SceneSetupDuplicateObject(
+                        actions.push(PanelAction::Project(ProjectAction::SceneSetupDuplicateObject(
                             vm.layer_id.clone(),
                             vm.scene_root_node_id,
                             *index as u32,
-                        ));
+                        )));
                     } else if let Some((light_node_id, _, current_name)) =
                         self.light_name_ids.iter().find(|(_, id, _)| *id == *node_id)
                     {
-                        actions.push(PanelAction::SceneSetupRenameLightClicked(
+                        actions.push(PanelAction::Root(RootAction::SceneSetupRenameLightClicked(
                             vm.layer_id.clone(),
                             *light_node_id,
                             current_name.clone(),
-                        ));
+                        )));
                     }
                 }
                 if let SceneSetupState::Live(vm) = &self.state {
                     if self.add_environment_id == Some(*node_id) {
-                        actions.push(PanelAction::SceneSetupAddEnvironment(
+                        actions.push(PanelAction::Project(ProjectAction::SceneSetupAddEnvironment(
                             vm.layer_id.clone(),
                             vm.scene_root_node_id,
-                        ));
+                        )));
                     } else if self.add_fog_id == Some(*node_id) {
-                        actions.push(PanelAction::SceneSetupAddFog(vm.layer_id.clone(), vm.scene_root_node_id));
+                        actions.push(PanelAction::Project(ProjectAction::SceneSetupAddFog(vm.layer_id.clone(), vm.scene_root_node_id)));
                     } else if self.add_object_id == Some(*node_id) {
-                        actions.push(PanelAction::SceneSetupAddObject(
+                        actions.push(PanelAction::Project(ProjectAction::SceneSetupAddObject(
                             vm.layer_id.clone(),
                             vm.scene_root_node_id,
                             vm.object_count as u32,
-                        ));
+                        )));
                     } else if self.add_light_id == Some(*node_id) {
-                        actions.push(PanelAction::SceneSetupAddLight(
+                        actions.push(PanelAction::Project(ProjectAction::SceneSetupAddLight(
                             vm.layer_id.clone(),
                             vm.scene_root_node_id,
                             vm.light_count as u32,
-                        ));
+                        )));
                     } else if self.import_model_id == Some(*node_id) {
-                        actions.push(PanelAction::SceneSetupImportModelClicked(
+                        actions.push(PanelAction::Project(ProjectAction::SceneSetupImportModelClicked(
                             vm.layer_id.clone(),
                             vm.scene_root_node_id,
-                        ));
+                        )));
                     } else if let Some((group_node_id, _, current_name)) =
                         self.object_name_ids.iter().find(|(_, id, _)| *id == *node_id)
                     {
-                        actions.push(PanelAction::SceneSetupRenameObjectClicked(
+                        actions.push(PanelAction::Root(RootAction::SceneSetupRenameObjectClicked(
                             vm.layer_id.clone(),
                             *group_node_id,
                             current_name.clone(),
-                        ));
+                        )));
                     } else if let Some((_, group_node_id)) =
                         self.add_modifier_button_id.filter(|(id, _)| *id == *node_id)
                     {
@@ -2328,44 +2329,44 @@ impl ScenePanel {
                         // dropdown (`SceneSetupAddModifierClicked`), which
                         // lists `MESH_MODIFIER_CHOICES` and dispatches the
                         // SAME `SceneSetupAddModifier` each old chip did.
-                        actions.push(PanelAction::SceneSetupAddModifierClicked(
+                        actions.push(PanelAction::Root(RootAction::SceneSetupAddModifierClicked(
                             vm.layer_id.clone(),
                             group_node_id,
                             *node_id,
-                        ));
+                        )));
                     } else if let Some((_, group_node_id, modifier_node_id)) =
                         self.modifier_remove_ids.iter().find(|(id, _, _)| *id == *node_id)
                     {
-                        actions.push(PanelAction::SceneSetupRemoveModifier(
+                        actions.push(PanelAction::Project(ProjectAction::SceneSetupRemoveModifier(
                             vm.layer_id.clone(),
                             *group_node_id,
                             *modifier_node_id,
-                        ));
+                        )));
                     } else if let Some((_, group_node_id, modifier_node_id, new_position)) =
                         self.modifier_move_ids.iter().find(|(id, _, _, _)| *id == *node_id)
                     {
-                        actions.push(PanelAction::SceneSetupMoveModifier(
+                        actions.push(PanelAction::Project(ProjectAction::SceneSetupMoveModifier(
                             vm.layer_id.clone(),
                             *group_node_id,
                             *modifier_node_id,
                             *new_position,
-                        ));
+                        )));
                     } else if let Some((_, index)) =
                         self.object_remove_ids.iter().find(|(id, _)| *id == *node_id)
                     {
-                        actions.push(PanelAction::SceneSetupRemoveObject(
+                        actions.push(PanelAction::Project(ProjectAction::SceneSetupRemoveObject(
                             vm.layer_id.clone(),
                             vm.scene_root_node_id,
                             *index as u32,
-                        ));
+                        )));
                     } else if let Some((_, index)) =
                         self.light_remove_ids.iter().find(|(id, _)| *id == *node_id)
                     {
-                        actions.push(PanelAction::SceneSetupRemoveLight(
+                        actions.push(PanelAction::Project(ProjectAction::SceneSetupRemoveLight(
                             vm.layer_id.clone(),
                             vm.scene_root_node_id,
                             *index as u32,
-                        ));
+                        )));
                     } else if let Some((row, role)) = self.properties_card.row_index.get(tree.widget_of(*node_id)) {
                         // P2 slice 2b (`docs/WIDGET_TREE_DESIGN.md` §4/§5b):
                         // the ONE unified properties card's D/E/A buttons +
@@ -2383,10 +2384,10 @@ impl ScenePanel {
                 }
                 match &self.state {
                     SceneSetupState::NoGenerator { layer_id } if self.new_scene_id == Some(*node_id) => {
-                        actions.push(PanelAction::SceneSetupNewScene(layer_id.clone()));
+                        actions.push(PanelAction::Project(ProjectAction::SceneSetupNewScene(layer_id.clone())));
                     }
                     SceneSetupState::NoScene { layer_id } if self.open_graph_editor_id == Some(*node_id) => {
-                        actions.push(PanelAction::SceneSetupOpenGraphEditor(layer_id.clone()));
+                        actions.push(PanelAction::Root(RootAction::SceneSetupOpenGraphEditor(layer_id.clone())));
                     }
                     _ => {}
                 }
@@ -2444,8 +2445,8 @@ impl ScenePanel {
                         return (
                             true,
                             vec![
-                                PanelAction::ParamSnapshot(target.clone(), pid.clone()),
-                                PanelAction::ParamChanged(target, pid, new_value),
+                                PanelAction::Params(ParamsAction::ParamSnapshot(target.clone(), pid.clone())),
+                                PanelAction::Params(ParamsAction::ParamChanged(target, pid, new_value)),
                             ],
                         );
                     }
@@ -2473,7 +2474,7 @@ impl ScenePanel {
                 {
                     let target = GraphParamTarget::GeneratorOf(lid);
                     let pid = self.properties_card.pid_at(pi);
-                    return (true, vec![PanelAction::ParamChanged(target, pid, new_value)]);
+                    return (true, vec![PanelAction::Params(ParamsAction::ParamChanged(target, pid, new_value))]);
                 }
                 (false, Vec::new())
             }
@@ -2489,7 +2490,7 @@ impl ScenePanel {
                         && let Some(lid) = lid.clone()
                     {
                         let pid = self.properties_card.pid_at(pi);
-                        actions.push(PanelAction::ParamCommit(GraphParamTarget::GeneratorOf(lid), pid));
+                        actions.push(PanelAction::Params(ParamsAction::ParamCommit(GraphParamTarget::GeneratorOf(lid), pid)));
                     }
                 }
                 self.drag_layer_id = None;
@@ -2545,11 +2546,11 @@ impl ScenePanel {
             RowRole::RowCatcher | RowRole::EnvelopeConfig => Vec::new(),
             RowRole::DriverBtn => {
                 card.focus_mod_tab(row, ModTab::Driver);
-                vec![PanelAction::DriverToggle(target, card.pid_at(row))]
+                vec![PanelAction::Modulation(ModulationAction::DriverToggle(target, card.pid_at(row)))]
             }
             RowRole::EnvelopeBtn => {
                 card.focus_mod_tab(row, ModTab::Envelope);
-                vec![PanelAction::EnvelopeToggle(target, card.pid_at(row))]
+                vec![PanelAction::Modulation(ModulationAction::EnvelopeToggle(target, card.pid_at(row)))]
             }
             RowRole::AudioBtn => {
                 card.focus_mod_tab(row, ModTab::Audio);
@@ -2560,7 +2561,7 @@ impl ScenePanel {
                     return Vec::new();
                 };
                 match cfg.resolve(node) {
-                    Some(action) => vec![PanelAction::DriverConfig(target, card.pid_at(row), action)],
+                    Some(action) => vec![PanelAction::Modulation(ModulationAction::DriverConfig(target, card.pid_at(row), action))],
                     None => Vec::new(),
                 }
             }
@@ -2569,7 +2570,7 @@ impl ScenePanel {
                     return Vec::new();
                 };
                 if cfg.resolve(node) {
-                    vec![PanelAction::AbletonInvertToggle(target, card.pid_at(row))]
+                    vec![PanelAction::Mapping(MappingAction::AbletonInvertToggle(target, card.pid_at(row)))]
                 } else {
                     Vec::new()
                 }
@@ -2595,16 +2596,16 @@ impl ScenePanel {
                     AudioConfigClick::SelectKind(k) => card.audio_set_source_action(target, row, None, Some(k), None),
                     AudioConfigClick::SelectBand(b) => card.audio_set_source_action(target, row, None, None, Some(b)),
                     AudioConfigClick::ToggleInvert => {
-                        vec![PanelAction::AudioModSetInvert(target, card.pid_at(row))]
+                        vec![PanelAction::Modulation(ModulationAction::AudioModSetInvert(target, card.pid_at(row)))]
                     }
                     AudioConfigClick::SelectTriggerMode(m) => {
-                        vec![PanelAction::AudioModSetTriggerMode(target, card.pid_at(row), m)]
+                        vec![PanelAction::Modulation(ModulationAction::AudioModSetTriggerMode(target, card.pid_at(row), m))]
                     }
                     AudioConfigClick::SelectAction(k) => {
-                        vec![PanelAction::AudioModSetActionKind(target, card.pid_at(row), k)]
+                        vec![PanelAction::Modulation(ModulationAction::AudioModSetActionKind(target, card.pid_at(row), k))]
                     }
                     AudioConfigClick::SelectWrap(w) => {
-                        vec![PanelAction::AudioModSetWrap(target, card.pid_at(row), w)]
+                        vec![PanelAction::Modulation(ModulationAction::AudioModSetWrap(target, card.pid_at(row), w))]
                     }
                 }
             }
@@ -2613,7 +2614,7 @@ impl ScenePanel {
                     return Vec::new();
                 };
                 card.focus_mod_tab(row, tab);
-                vec![PanelAction::ModConfigTabChanged]
+                vec![PanelAction::Params(ParamsAction::ModConfigTabChanged)]
             }
             // Never inserted into `row_index` this phase (no toggle rows, no
             // OSC/mapping surface, no relight chrome on scene rows) — kept
@@ -3015,7 +3016,7 @@ mod tests {
         assert!(consumed, "the eye toggle must be clickable");
         assert!(matches!(
             actions.as_slice(),
-            [PanelAction::SceneSetupParamChanged(layer, scope, node, param, value)]
+            [PanelAction::Project(ProjectAction::SceneSetupParamChanged(layer, scope, node, param, value))]
                 if *layer == LayerId::new("layer-1")
                     && *scope == vec![42]
                     && *node == 40
@@ -3041,7 +3042,7 @@ mod tests {
         assert!(consumed_2);
         assert!(matches!(
             actions_2.as_slice(),
-            [PanelAction::SceneSetupParamChanged(_, _, _, param, value)]
+            [PanelAction::Project(ProjectAction::SceneSetupParamChanged(_, _, _, param, value))]
                 if param == "visible" && *value == 1.0
         ), "hidden eye click must flip back to 1.0, got {actions_2:?}");
     }
@@ -3094,7 +3095,7 @@ mod tests {
         assert_eq!(actions.len(), 1);
         assert!(matches!(
             &actions[0],
-            PanelAction::SceneSetupAddModifierClicked(l, 42, n)
+            PanelAction::Root(RootAction::SceneSetupAddModifierClicked(l, 42, n))
                 if *l == LayerId::new("layer-1") && *n == button_id
         ));
     }
@@ -3125,7 +3126,7 @@ mod tests {
         }, &tree);
         assert!(consumed);
         assert!(
-            matches!(actions.as_slice(), [PanelAction::OpenSceneSetup]),
+            matches!(actions.as_slice(), [PanelAction::Root(RootAction::OpenSceneSetup)]),
             "close (×) must emit the shared toggle action, not flip `open` \
              locally: got {actions:?}"
         );
@@ -3155,7 +3156,7 @@ mod tests {
         assert!(consumed);
         assert!(matches!(
             &actions[0],
-            PanelAction::SceneSetupRemoveModifier(l, 42, 70) if *l == LayerId::new("layer-1")
+            PanelAction::Project(ProjectAction::SceneSetupRemoveModifier(l, 42, 70)) if *l == LayerId::new("layer-1")
         ));
     }
 
@@ -3209,7 +3210,7 @@ mod tests {
         assert!(consumed);
         assert!(matches!(
             &actions[0],
-            PanelAction::SceneSetupMoveModifier(l, 42, 71, 0) if *l == LayerId::new("layer-1")
+            PanelAction::Project(ProjectAction::SceneSetupMoveModifier(l, 42, 71, 0)) if *l == LayerId::new("layer-1")
         ));
     }
 
@@ -3243,7 +3244,7 @@ mod tests {
         assert_eq!(actions.len(), 1);
         assert!(matches!(
             &actions[0],
-            PanelAction::SceneSetupAddObject(l, 99, 2) if *l == LayerId::new("layer-1")
+            PanelAction::Project(ProjectAction::SceneSetupAddObject(l, 99, 2)) if *l == LayerId::new("layer-1")
         ));
 
         let (consumed, actions) = panel.handle_event(&UIEvent::Click {
@@ -3255,7 +3256,7 @@ mod tests {
         assert_eq!(actions.len(), 1);
         assert!(matches!(
             &actions[0],
-            PanelAction::SceneSetupAddLight(l, 99, 1) if *l == LayerId::new("layer-1")
+            PanelAction::Project(ProjectAction::SceneSetupAddLight(l, 99, 1)) if *l == LayerId::new("layer-1")
         ));
     }
 
@@ -3286,7 +3287,7 @@ mod tests {
         assert!(consumed);
         assert!(matches!(
             &actions[0],
-            PanelAction::SceneSetupRemoveObject(l, 99, 0) if *l == LayerId::new("layer-1")
+            PanelAction::Project(ProjectAction::SceneSetupRemoveObject(l, 99, 0)) if *l == LayerId::new("layer-1")
         ));
     }
 
@@ -3312,7 +3313,7 @@ mod tests {
         assert!(consumed);
         assert!(matches!(
             &actions[0],
-            PanelAction::SceneSetupDuplicateObject(l, 99, 0) if *l == LayerId::new("layer-1")
+            PanelAction::Project(ProjectAction::SceneSetupDuplicateObject(l, 99, 0)) if *l == LayerId::new("layer-1")
         ));
     }
 
@@ -3421,7 +3422,7 @@ mod tests {
         assert!(consumed);
         assert!(matches!(
             &actions[0],
-            PanelAction::SceneSetupRemoveLight(l, 99, 0) if *l == LayerId::new("layer-1")
+            PanelAction::Project(ProjectAction::SceneSetupRemoveLight(l, 99, 0)) if *l == LayerId::new("layer-1")
         ));
     }
 
@@ -3447,7 +3448,7 @@ mod tests {
         assert_eq!(actions.len(), 1);
         assert!(matches!(
             &actions[0],
-            PanelAction::SceneSetupImportModelClicked(l, 99) if *l == LayerId::new("layer-1")
+            PanelAction::Project(ProjectAction::SceneSetupImportModelClicked(l, 99)) if *l == LayerId::new("layer-1")
         ));
     }
 
@@ -3469,7 +3470,7 @@ mod tests {
         assert_eq!(actions.len(), 1);
         assert!(matches!(
             &actions[0],
-            PanelAction::SceneSetupRenameObjectClicked(l, 42, n)
+            PanelAction::Root(RootAction::SceneSetupRenameObjectClicked(l, 42, n))
                 if *l == LayerId::new("layer-1") && n == "Azalea"
         ));
     }

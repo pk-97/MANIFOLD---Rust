@@ -29,7 +29,7 @@ use manifold_core::LayerId;
 use manifold_core::effects::PresetInstance;
 use manifold_core::project::Project;
 use manifold_editing::commands::effect_target::EffectTarget;
-use manifold_ui::{InspectorTab, PanelAction};
+use manifold_ui::{InspectorTab, PanelAction, RootAction};
 
 use crate::app::SelectionState;
 use crate::ui_root::UIRoot;
@@ -193,128 +193,24 @@ fn inspector_select_tab(
 /// Dispatch a panel action. Mutates local_project for immediate feedback;
 /// sends commands to the content thread for authoritative execution.
 pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
+    // Flat sum routing (UI_FUNNEL_DECOMPOSITION P-D / D-D1): one arm per domain,
+    // exhaustive over `PanelAction` — the compiler now PROVES routing totality,
+    // which is why the former `dispatch_inspector` first-non-unhandled chain and
+    // its `dispatch_chain_completeness` invariant were retired in this same
+    // change (a second copy of the routing beside an exhaustive match is exactly
+    // the parallel-old-path the design forbids). Each arm destructures the sum
+    // ONCE and hands the domain value to its handler.
     match action {
-        // Right-click reset of a slider to its default, expressed as the
-        // slider's own value-change trio (BUG-061). NOT delegated to a
-        // sub-dispatcher — it recurses into this same `dispatch` for each of
-        // the three inner actions, in order, reusing every existing
-        // value-change handler verbatim. That makes reset literally "a drag
-        // that lands on the default": undo behaves exactly like a drag to
-        // that value, and there is no separate reset code path to keep in
-        // sync with each slider's Snapshot/Changed/Commit handler.
-        PanelAction::SliderReset { snapshot, changed, commit } => {
-            dispatch(snapshot, ctx);
-            dispatch(changed, ctx);
-            dispatch(commit, ctx)
-        }
-
-        // ── Transport ──────────────────────────────────────────────
-        PanelAction::PlayPause
-        | PanelAction::Stop
-        | PanelAction::Record
-        | PanelAction::ResetBpm
-        | PanelAction::ClearBpm
-        | PanelAction::BpmFieldClicked
-        | PanelAction::Seek(_)
-        | PanelAction::OverviewScrub(_)
-        | PanelAction::TimelineScrollbarH(_)
-        | PanelAction::SetInsertCursor(_)
-        | PanelAction::CycleClockAuthority
-        | PanelAction::ToggleLink
-        | PanelAction::ToggleMidiClock
-        | PanelAction::ToggleSyncOutput
-        | PanelAction::SelectClkDevice
-        | PanelAction::SetMidiClockDevice(_)
-        | PanelAction::CycleQuantize
-        | PanelAction::ResolutionClicked
-        | PanelAction::FpsFieldClicked
-        | PanelAction::ZoomIn
-        | PanelAction::ZoomOut
-        | PanelAction::InspectorScrolled(_)
-        | PanelAction::InspectorSectionClicked(_)
-        | PanelAction::ToggleAutomationArm
-        | PanelAction::AutomationBackToArrangement
-        | PanelAction::ToggleAutomationMode => {
-            transport::dispatch_transport(
-                action,
-                ctx.project,
-                ctx.content_tx,
-                ctx.content_state,
-                ctx.ui,
-                ctx.selection,
-            )
-        }
-
-        // Inspector tab strip — mirrors the timeline selection (needs
-        // `active_layer`, which the transport handler doesn't carry).
-        PanelAction::SelectInspectorTab(tab) => {
-            inspector_select_tab(*tab, ctx.project, ctx.selection, ctx.active_layer, ctx.ui);
-            DispatchResult::structural()
-        }
-
-        // Opens a param type-in session — handled at the Application layer
-        // (app_render) before dispatch, so it never actually reaches here; the
-        // arm exists only to keep this match exhaustive.
-        PanelAction::BeginParamTextInput { .. } => DispatchResult::handled(),
-        // Same: the driver Free-period type-in is opened in app_render before
-        // dispatch; this arm only keeps the match exhaustive.
-        PanelAction::BeginDriverPeriodTextInput { .. } => DispatchResult::handled(),
-        // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md P4: the Scene Setup dock's
-        // numeric type-in is opened in app_render before dispatch (same
-        // early-intercept as `BeginParamTextInput` above); this arm only
-        // keeps the match exhaustive.
-        PanelAction::SceneSetupBeginNumericTextInput { .. } => DispatchResult::handled(),
-        // D9: the enum dropdown is intercepted by `UIRoot::try_open_dropdown`
-        // before it ever reaches this dispatcher; this arm only keeps the
-        // match exhaustive.
-        PanelAction::SceneSetupEnumClicked { .. } => DispatchResult::handled(),
-        // BUG-250: the shared card core's enum value-cell dropdown is
-        // intercepted by `UIRoot::try_open_dropdown` the same way
-        // `SceneSetupEnumClicked` is; this arm only keeps the match
-        // exhaustive.
-        PanelAction::ParamEnumDropdown { .. } => DispatchResult::handled(),
-        // UX-P2 D6: the "+ Add Modifier" button's dropdown is intercepted by
-        // `UIRoot::try_open_dropdown` the same way `SceneSetupEnumClicked`
-        // is, before it ever reaches this dispatcher; this arm only keeps
-        // the match exhaustive.
-        PanelAction::SceneSetupAddModifierClicked(..) => DispatchResult::handled(),
-        // D1 of SCENE_PANEL_UX_DESIGN.md: the panel already updated its
-        // UI-local selection before emitting this action; its only job here
-        // is to ride `structural_change: true` back to app_render.rs's
-        // per-frame loop, which re-runs `sync_inspector_data` THIS frame so
-        // Properties follows the click instead of the next unrelated sync.
-        PanelAction::SceneSetupSelectionChanged(_) => DispatchResult::structural(),
-        // P4 audio-dock sibling: same early-intercept as
-        // `SceneSetupBeginNumericTextInput` above; this arm only keeps the
-        // match exhaustive.
-        PanelAction::AudioSendGainBeginTextInput(..) => DispatchResult::handled(),
-
-        // ── Viewport clip interaction + context menus ──────────────
-        PanelAction::ClipClicked(..)
-        | PanelAction::ClipDoubleClicked(_)
-        | PanelAction::TrackClicked(..)
-        | PanelAction::TrackDoubleClicked(..)
-        | PanelAction::ViewportHoverChanged(_)
-        | PanelAction::ContextSplitAtPlayhead(_)
-        | PanelAction::ContextDeleteClip(_)
-        | PanelAction::ContextDuplicateClip(_)
-        | PanelAction::ContextPasteAtTrack(..)
-        | PanelAction::ContextAddVideoLayer(_)
-        | PanelAction::ContextAddGeneratorLayer(_)
-        | PanelAction::ContextAddAudioLayer(_)
-        | PanelAction::ContextDeleteLayer(_)
-        | PanelAction::ContextDuplicateLayer(_)
-        | PanelAction::ContextPasteAtLayer(_)
-        | PanelAction::ContextImportMidi(_)
-        | PanelAction::ContextGroupSelectedLayers
-        | PanelAction::ContextUngroup(_)
-        | PanelAction::ContextSetLayerColor(..)
-        | PanelAction::ClipRightClicked(_)
-        | PanelAction::TrackRightClicked(..)
-        | PanelAction::LayerHeaderRightClicked(_)
-        | PanelAction::AutomationLaneRightClicked(..)
-        | PanelAction::DropdownSelected(_) => editing::dispatch_editing(
-            action,
+        PanelAction::Transport(a) => transport::dispatch_transport(
+            a,
+            ctx.project,
+            ctx.content_tx,
+            ctx.content_state,
+            ctx.ui,
+            ctx.selection,
+        ),
+        PanelAction::Editing(a) => editing::dispatch_editing(
+            a,
             ctx.project,
             ctx.content_tx,
             ctx.content_state,
@@ -323,185 +219,8 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
             ctx.active_layer,
             ctx.user_prefs,
         ),
-
-        // ── Inspector: chrome, effects, generators ────────────────
-        PanelAction::MasterOpacitySnapshot
-        | PanelAction::MasterOpacityChanged(_)
-        | PanelAction::MasterOpacityCommit
-        | PanelAction::AudioGainSnapshot(_)
-        | PanelAction::AudioGainChanged(..)
-        | PanelAction::AudioGainCommit(_)
-        | PanelAction::MasterCollapseToggle
-        | PanelAction::MasterExitPathClicked
-        | PanelAction::SetLedExitIndex(_)
-        | PanelAction::LedEnabledToggle
-        | PanelAction::LedBrightnessSnapshot
-        | PanelAction::LedBrightnessChanged(_)
-        | PanelAction::LedBrightnessCommit
-        | PanelAction::LayerOpacitySnapshot
-        | PanelAction::LayerOpacityChanged(_)
-        | PanelAction::LayerOpacityCommit
-        | PanelAction::LayerChromeCollapseToggle
-        | PanelAction::ClipChromeCollapseToggle
-        | PanelAction::ClipBpmClicked
-        | PanelAction::ClipWarpToggled
-        | PanelAction::ClipDetectClicked
-        | PanelAction::ClipClearTriggersClicked
-        | PanelAction::ClipReplaceAudioClicked
-        | PanelAction::ClipDetectInstrumentToggled(_)
-        | PanelAction::ClipDetectSensitivityChanged(..)
-        | PanelAction::ClipDetectOnsetChanged(_)
-        | PanelAction::ClipDetectQuantizeClicked
-        | PanelAction::ClipDetectLayerClicked(_)
-        | PanelAction::ClipDetectSetQuantize(_)
-        | PanelAction::ClipDetectSetLayer(..)
-        | PanelAction::ClipLoopToggle
-        | PanelAction::EffectToggle(_)
-        | PanelAction::EffectCollapseToggle(_)
-        | PanelAction::SetAllCardsCollapsed { .. }
-        | PanelAction::ModConfigTabChanged
-        | PanelAction::SectionFoldToggled
-        | PanelAction::ModsCompactToggled
-        | PanelAction::EffectCardClicked(_)
-        | PanelAction::ParamSnapshot(..)
-        | PanelAction::ParamChanged(..)
-        | PanelAction::ParamCommit(..)
-        | PanelAction::ParamEnumSet(..)
-        | PanelAction::DriverToggle(..)
-        | PanelAction::EnvelopeToggle(..)
-        | PanelAction::DriverConfig(..)
-        | PanelAction::AudioModToggle(..)
-        | PanelAction::AudioModSetSource(..)
-        | PanelAction::AudioModRemove(..)
-        | PanelAction::AudioModSetInvert(..)
-        | PanelAction::AudioModSetRateOfChange(..)
-        | PanelAction::AudioModShapeSnapshot(..)
-        | PanelAction::AudioModShapeParamChanged(..)
-        | PanelAction::AudioModShapeCommit(..)
-        | PanelAction::AudioModSetTriggerMode(..)
-        | PanelAction::AudioModSetActionKind(..)
-        | PanelAction::AudioModStepAmountSnapshot(..)
-        | PanelAction::AudioModStepAmountChanged(..)
-        | PanelAction::AudioModStepAmountCommit(..)
-        | PanelAction::AudioModSetWrap(..)
-        | PanelAction::AudioTriggerSectionToggle
-        | PanelAction::AudioTriggerRowExpandToggle(..)
-        | PanelAction::AudioTriggerAdd(..)
-        | PanelAction::AudioTriggerRemove(..)
-        | PanelAction::AudioTriggerEnabledToggle(..)
-        | PanelAction::AudioTriggerSetSource(..)
-        | PanelAction::AudioTriggerShapeSnapshot(..)
-        | PanelAction::AudioTriggerShapeParamChanged(..)
-        | PanelAction::AudioTriggerShapeCommit(..)
-        | PanelAction::AudioTriggerSetLength(..)
-        | PanelAction::AudioSetDevice(..)
-        | PanelAction::AudioAddSend
-        | PanelAction::AudioRemoveSend(..)
-        | PanelAction::AudioSendGainStep(..)
-        | PanelAction::AudioSendGainDragBegin(..)
-        | PanelAction::AudioSendGainDragChanged(..)
-        | PanelAction::AudioSendGainDragCommit(..)
-        | PanelAction::AudioSendGainSetTyped(..)
-        | PanelAction::AudioSendFloorStep(..)
-        | PanelAction::AudioCrossoverDragBegin
-        | PanelAction::AudioCrossoverChanged(..)
-        | PanelAction::AudioCrossoverCommit
-        | PanelAction::AudioRenameSend(..)
-        | PanelAction::AudioSetSendChannels(..)
-        | PanelAction::AudioSetupDeviceClicked
-        | PanelAction::AudioSendChannelClicked(..)
-        | PanelAction::TrimChanged(..)
-        | PanelAction::TargetChanged(..)
-        | PanelAction::TrimSnapshot(..)
-        | PanelAction::TrimCommit(..)
-        | PanelAction::TargetSnapshot(..)
-        | PanelAction::TargetCommit(..)
-        | PanelAction::EnvDecayChanged(..)
-        | PanelAction::EnvDecaySnapshot(..)
-        | PanelAction::EnvDecayCommit(..)
-        | PanelAction::ParamLabelRightClick(..)
-        | PanelAction::AddEffectClicked(_)
-        | PanelAction::BrowserSearchClicked
-        | PanelAction::RemoveEffect(_)
-        | PanelAction::EffectReorder(..)
-        | PanelAction::EffectReorderGroup(..)
-        | PanelAction::GenTypeClicked(_)
-        | PanelAction::ParamToggle(..)
-        | PanelAction::ParamFire(..)
-        | PanelAction::GenStringParamClicked(_)
-        | PanelAction::GenStringParamDropdownClicked(_)
-        | PanelAction::GenStringParamSelected(..)
-        | PanelAction::GenCollapseToggle
-        | PanelAction::GenCardClicked
-        | PanelAction::CardRightClicked(..)
-        | PanelAction::CopyGenerator
-        | PanelAction::PasteGenerator
-        | PanelAction::MakePresetUnique(..)
-        | PanelAction::SaveToLibrary(..)
-        | PanelAction::SaveToProject(..)
-        | PanelAction::RevertToLibrary(..)
-        | PanelAction::PushToLibrary(..)
-        | PanelAction::ExportPreset(..)
-        | PanelAction::ImportPreset(..)
-        | PanelAction::BrowserCellRightClicked(..)
-        | PanelAction::BrowserRenamePresetClicked(..)
-        | PanelAction::BrowserDuplicatePresetClicked(..)
-        | PanelAction::BrowserDeletePresetClicked(..)
-        | PanelAction::BrowserRevealPresetClicked(..)
-        | PanelAction::MacrosCollapseToggle
-        | PanelAction::MacroSnapshot(_)
-        | PanelAction::MacroChanged(..)
-        | PanelAction::MacroCommit(_)
-        | PanelAction::MacroReset(_)
-        | PanelAction::MacroLabelRightClick(_)
-        | PanelAction::MacroLabelRename(_)
-        | PanelAction::MapParamToMacro(..)
-        | PanelAction::UnmapMacro(..)
-        | PanelAction::ClearMacroMappings(_)
-        | PanelAction::MapParamToAbleton(..)
-        | PanelAction::UnmapParamAbleton(..)
-        | PanelAction::OpenAbletonPickerForParam(..)
-        | PanelAction::MapMacroToAbleton(..)
-        | PanelAction::UnmapMacroAbleton(_)
-        | PanelAction::OpenAbletonPickerForMacro(_)
-        | PanelAction::AbletonMacroTrimSnapshot(_)
-        | PanelAction::AbletonMacroTrimChanged(..)
-        | PanelAction::AbletonMacroTrimCommit(_)
-        | PanelAction::AbletonInvertToggle(..)
-        | PanelAction::AbletonMacroInvertToggle(_)
-        | PanelAction::AddEffect(..)
-        | PanelAction::PasteEffects
-        | PanelAction::RelightToggle(..)
-        | PanelAction::RelightParamSnapshot(..)
-        | PanelAction::RelightParamChanged(..)
-        | PanelAction::RelightParamCommit(..)
-        | PanelAction::RelightHeightFromChanged(..) => inspector::dispatch_inspector(action, ctx),
-
-        // ── Layer operations ──────────────────────────────────────
-        PanelAction::ToggleMute(_)
-        | PanelAction::ToggleSolo(_)
-        | PanelAction::ToggleAnalysisOnly(_)
-        | PanelAction::ToggleLed(_)
-        | PanelAction::LayerClicked(..)
-        | PanelAction::LayerDoubleClicked(_)
-        | PanelAction::ChevronClicked(_)
-        | PanelAction::BlendModeClicked(_)
-        | PanelAction::SetBlendMode(..)
-        | PanelAction::ExpandLayer(_)
-        | PanelAction::CollapseLayer(_)
-        | PanelAction::FolderClicked(_)
-        | PanelAction::NewClipClicked(_)
-        | PanelAction::AddGenClipClicked(_)
-        | PanelAction::MidiInputClicked(_)
-        | PanelAction::MidiChannelClicked(_)
-        | PanelAction::MidiDeviceClicked(_)
-        | PanelAction::LayerDragStarted(_)
-        | PanelAction::LayerDragMoved(..)
-        | PanelAction::LayerDragEnded(..)
-        | PanelAction::AddLayerClicked
-        | PanelAction::DeleteLayerClicked(_)
-        | PanelAction::SetLayerAudioSend(..) => layer::dispatch_layer(
-            action,
+        PanelAction::Layer(a) => layer::dispatch_layer(
+            a,
             ctx.project,
             ctx.content_tx,
             ctx.content_state,
@@ -509,68 +228,17 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
             ctx.selection,
             ctx.active_layer,
         ),
-
-        // ── Timeline markers ─────────────────────────────────────────
-        PanelAction::MarkerClicked(..)
-        | PanelAction::MarkerDoubleClicked(_)
-        | PanelAction::MarkerDragStarted(_)
-        | PanelAction::MarkerDragMoved(..)
-        | PanelAction::MarkerDragEnded(..)
-        | PanelAction::MarkerRightClicked(_)
-        | PanelAction::DeleteSelectedMarkers => {
-            marker::dispatch_marker(
-                action,
-                ctx.project,
-                ctx.content_tx,
-                ctx.ui,
-                ctx.selection,
-                &mut ctx.scrub.slider_snapshot,
-                &mut ctx.scrub.active_inspector_drag,
-            )
-        }
-
-        // ── Project/file/export/audio ─────────────────────────────
-        PanelAction::ToggleHdr
-        | PanelAction::ToggleLiveRecording
-        | PanelAction::SelectAudioInputDevice
-        | PanelAction::SetAudioInputDevice(_)
-        | PanelAction::ToggleMonitor
-        | PanelAction::EnterPerformMode
-        | PanelAction::NewProject
-        | PanelAction::OpenProject
-        | PanelAction::OpenRecent
-        | PanelAction::SaveProject
-        | PanelAction::SaveProjectAs
-        | PanelAction::ExportVideo
-        | PanelAction::ExportFrame
-        | PanelAction::ExportXml
-        | PanelAction::SetMidiNote(..)
-        | PanelAction::SetMidiChannel(..)
-        | PanelAction::SetMidiDevice(..)
-        | PanelAction::SetMidiTriggerMode(..)
-        | PanelAction::MidiTriggerModeClicked(_)
-        | PanelAction::SetResolution(_)
-        | PanelAction::SetDisplayResolution(..)
-        | PanelAction::SetRenderScale(_)
-        | PanelAction::SetTonemapCurve(_)
-        | PanelAction::SetGenType(..)
-        | PanelAction::SceneSetupParamChanged(..)
-        | PanelAction::SceneSetupAddEnvironment(..)
-        | PanelAction::SceneSetupAddFog(..)
-        | PanelAction::SceneSetupAddObject(..)
-        | PanelAction::SceneSetupAddLight(..)
-        | PanelAction::SceneSetupRemoveObject(..)
-        | PanelAction::SceneSetupRemoveLight(..)
-        | PanelAction::SceneSetupDuplicateObject(..)
-        | PanelAction::SceneSetupImportModelClicked(..)
-        | PanelAction::SceneSetupAddModifier(..)
-        | PanelAction::SceneSetupRemoveModifier(..)
-        | PanelAction::SceneSetupMoveModifier(..)
-        | PanelAction::SceneSetupNewScene(..)
-        | PanelAction::SceneSetupExposeParam { .. }
-        | PanelAction::ContextClearAutomationLane(..)
-        | PanelAction::ContextRemoveAutomationLane(..) => project::dispatch_project(
-            action,
+        PanelAction::Marker(a) => marker::dispatch_marker(
+            a,
+            ctx.project,
+            ctx.content_tx,
+            ctx.ui,
+            ctx.selection,
+            &mut ctx.scrub.slider_snapshot,
+            &mut ctx.scrub.active_inspector_drag,
+        ),
+        PanelAction::Project(a) => project::dispatch_project(
+            a,
             ctx.project,
             ctx.content_tx,
             ctx.content_state,
@@ -579,60 +247,79 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
             ctx.active_layer,
             ctx.user_prefs,
         ),
+        PanelAction::Browser(a) => dispatch::browser::dispatch_browser(a, ctx),
+        PanelAction::Clip(a) => dispatch::clip::dispatch_clip(a, ctx),
+        PanelAction::Params(a) => dispatch::params::dispatch_params(a, ctx),
+        PanelAction::Modulation(a) => dispatch::modulation::dispatch_modulation(a, ctx),
+        PanelAction::Mapping(a) => dispatch::mapping::dispatch_mapping(a, ctx),
+        PanelAction::AudioSetup(a) => dispatch::audio_setup::dispatch_audio_setup(a, ctx),
 
-        // Handled in app_render.rs (Application-level intercept, never reaches dispatch)
-        PanelAction::CopyOscAddress(_)
-        | PanelAction::OpenGraphEditor(_)
-        | PanelAction::OpenCardMapping(_)
-        | PanelAction::OpenGeneratorGraphEditor
-        // D7 "Open Graph Editor" empty-state action — same watch_generator_graph
-        // + pending_open_graph_editor mechanism as OpenGeneratorGraphEditor
-        // above, just addressed by an explicit layer_id instead of
-        // `active_layer_id`. Only `Application` (app_render.rs) holds those
-        // fields, so this never reaches `dispatch` either.
-        | PanelAction::SceneSetupOpenGraphEditor(_)
-        // (Graph-editor mutations are `GraphEditCommand` now — Phase 4.3 —
-        // dispatched in app_render's `graph_edits` loop, not here.)
-        | PanelAction::EffectMappingRangeSnapshot { .. }
-        | PanelAction::EffectMappingRangeChanged { .. }
-        | PanelAction::EffectMappingRangeCommit { .. }
-        | PanelAction::EffectMappingLabel { .. }
-        | PanelAction::EffectMappingSection { .. }
-        | PanelAction::EffectMappingInvert { .. }
-        | PanelAction::EffectMappingCurve { .. }
-        | PanelAction::EffectMappingAffineSnapshot { .. }
-        | PanelAction::EffectMappingAffineChanged { .. }
-        | PanelAction::EffectMappingAffineCommit { .. }
-        | PanelAction::EffectMappingGotoNode { .. }
-        // Consumed in app_render (opens the inline rename editor); no-op here.
-        | PanelAction::AudioSendLabelClicked(_)
-        // Consumed in app_render (opens the Scene Setup object-rename inline
-        // editor, SCENE_SETUP_PANEL_DESIGN.md P2) — same shape as
-        // `AudioSendLabelClicked` above.
-        | PanelAction::SceneSetupRenameObjectClicked(..)
-        // Consumed in app_render (opens the Scene Setup light-rename inline
-        // editor, SCENE_OBJECT_AND_PANEL_V2_DESIGN.md P5) — same shape as
-        // `SceneSetupRenameObjectClicked` above.
-        | PanelAction::SceneSetupRenameLightClicked(..)
-        // Consumed in ui_root::try_open_dropdown (opens the send picker); no-op here.
-        | PanelAction::AudioSendClicked(_) => DispatchResult::handled(),
-
-        // Audio Setup dock toggle (D1). The live app handles this in
-        // app_render (with its own structural-sync flag); the headless script
-        // harness routes every action through here, so the toggle lives on
-        // UIRoot and both call it. Structural: it changes `audio_setup_width`,
-        // so the tree must rebuild at the new geometry.
-        PanelAction::OpenAudioSetup => {
-            ctx.ui.toggle_audio_dock();
-            DispatchResult::structural()
-        }
-
-        // Scene Setup dock toggle — mirror of `OpenAudioSetup` above
-        // (SCENE_SETUP_PANEL_DESIGN D2).
-        PanelAction::OpenSceneSetup => {
-            ctx.ui.toggle_scene_dock();
-            DispatchResult::structural()
-        }
+        // ── Root: actions with no domain handler — inline terminal arms, moved
+        // verbatim from the pre-decomposition inline match (bodies unchanged).
+        PanelAction::Root(a) => match a {
+            // Right-click slider reset: recurses into this same `dispatch` for
+            // the value-change trio (BUG-061), so undo == a drag to the default.
+            RootAction::SliderReset { snapshot, changed, commit } => {
+                dispatch(snapshot, ctx);
+                dispatch(changed, ctx);
+                dispatch(commit, ctx)
+            }
+            // Inspector tab strip — mirrors the timeline selection.
+            RootAction::SelectInspectorTab(tab) => {
+                inspector_select_tab(*tab, ctx.project, ctx.selection, ctx.active_layer, ctx.ui);
+                DispatchResult::structural()
+            }
+            // Opened at the Application layer (app_render) / ui_root before
+            // dispatch; these arms only keep the match exhaustive and no-op if
+            // reached (e.g. via the headless script harness).
+            RootAction::BeginParamTextInput { .. }
+            | RootAction::BeginDriverPeriodTextInput { .. }
+            | RootAction::SceneSetupBeginNumericTextInput { .. }
+            | RootAction::SceneSetupEnumClicked { .. }
+            | RootAction::ParamEnumDropdown { .. }
+            | RootAction::SceneSetupAddModifierClicked(..)
+            | RootAction::AudioSendGainBeginTextInput(..)
+            | RootAction::CopyOscAddress(_)
+            | RootAction::OpenGraphEditor(_)
+            | RootAction::OpenCardMapping(_)
+            | RootAction::OpenGeneratorGraphEditor
+            | RootAction::SceneSetupOpenGraphEditor(_)
+            | RootAction::EffectMappingRangeSnapshot { .. }
+            | RootAction::EffectMappingRangeChanged { .. }
+            | RootAction::EffectMappingRangeCommit { .. }
+            | RootAction::EffectMappingLabel { .. }
+            | RootAction::EffectMappingSection { .. }
+            | RootAction::EffectMappingInvert { .. }
+            | RootAction::EffectMappingCurve { .. }
+            | RootAction::EffectMappingAffineSnapshot { .. }
+            | RootAction::EffectMappingAffineChanged { .. }
+            | RootAction::EffectMappingAffineCommit { .. }
+            | RootAction::EffectMappingGotoNode { .. }
+            | RootAction::AudioSendLabelClicked(_)
+            | RootAction::SceneSetupRenameObjectClicked(..)
+            | RootAction::SceneSetupRenameLightClicked(..)
+            | RootAction::AudioSendClicked(_) => DispatchResult::handled(),
+            // Panel already updated its UI-local selection; ride
+            // `structural_change: true` back so Properties follows this frame.
+            RootAction::SceneSetupSelectionChanged(_) => DispatchResult::structural(),
+            // Audio/Scene Setup dock toggles (headless-harness path; the live
+            // app toggles in app_render). Structural: geometry changes.
+            RootAction::OpenAudioSetup => {
+                ctx.ui.toggle_audio_dock();
+                DispatchResult::structural()
+            }
+            RootAction::OpenSceneSetup => {
+                ctx.ui.toggle_scene_dock();
+                DispatchResult::structural()
+            }
+            // Dropdown/picker opens intercepted earlier in ui_root/app_render.
+            // The pre-decomposition router routed these through the inspector
+            // chain, which no handler claimed, so they returned `unhandled()`;
+            // preserve that exactly.
+            RootAction::AudioSetupDeviceClicked
+            | RootAction::AudioSendChannelClicked(_)
+            | RootAction::OpenAbletonPickerForParam(..) => DispatchResult::unhandled(),
+        },
     }
 }
 

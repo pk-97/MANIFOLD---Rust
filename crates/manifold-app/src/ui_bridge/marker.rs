@@ -3,7 +3,7 @@ use manifold_core::Beats;
 use manifold_core::MarkerId;
 use manifold_core::project::Project;
 use manifold_editing::commands::marker::{DeleteMarkerCommand, MoveMarkerCommand};
-use manifold_ui::PanelAction;
+use manifold_ui::MarkerAction;
 
 use super::DispatchResult;
 use crate::app::SelectionState;
@@ -11,7 +11,7 @@ use crate::content_command::ContentCommand;
 use crate::ui_root::UIRoot;
 
 pub(super) fn dispatch_marker(
-    action: &PanelAction,
+    action: &MarkerAction,
     project: &mut Project,
     content_tx: &crossbeam_channel::Sender<ContentCommand>,
     _ui: &mut UIRoot,
@@ -21,7 +21,7 @@ pub(super) fn dispatch_marker(
 ) -> DispatchResult {
     match action {
         // ── Click: select/multi-select marker ──────────────────
-        PanelAction::MarkerClicked(marker_id_str, modifiers) => {
+        MarkerAction::MarkerClicked(marker_id_str, modifiers) => {
             let marker_id = MarkerId::new(marker_id_str.as_str());
             if modifiers.shift {
                 selection.toggle_marker_selection(marker_id);
@@ -32,10 +32,10 @@ pub(super) fn dispatch_marker(
         }
 
         // ── DoubleClick: intercepted in app_render.rs for text input
-        PanelAction::MarkerDoubleClicked(_) => DispatchResult::handled(),
+        MarkerAction::MarkerDoubleClicked(_) => DispatchResult::handled(),
 
         // ── Drag start: snapshot beat for undo ─────────────────
-        PanelAction::MarkerDragStarted(marker_id_str) => {
+        MarkerAction::MarkerDragStarted(marker_id_str) => {
             let marker_id = MarkerId::new(marker_id_str.as_str());
             *drag_snapshot = project
                 .timeline
@@ -53,7 +53,7 @@ pub(super) fn dispatch_marker(
         }
 
         // ── Drag move: update marker position for live preview ─
-        PanelAction::MarkerDragMoved(marker_id_str, new_beat) => {
+        MarkerAction::MarkerDragMoved(marker_id_str, new_beat) => {
             let marker_id = MarkerId::new(marker_id_str.as_str());
             if let Some(marker) = project.timeline.find_marker_mut(&marker_id) {
                 marker.beat = Beats::from_f32(*new_beat);
@@ -67,7 +67,7 @@ pub(super) fn dispatch_marker(
         }
 
         // ── Drag end: commit MoveMarkerCommand ─────────────────
-        PanelAction::MarkerDragEnded(marker_id_str, final_beat) => {
+        MarkerAction::MarkerDragEnded(marker_id_str, final_beat) => {
             *active_inspector_drag = None;
             let marker_id = MarkerId::new(marker_id_str.as_str());
             if let Some(old_beat) = drag_snapshot.take() {
@@ -93,13 +93,13 @@ pub(super) fn dispatch_marker(
         }
 
         // ── Right-click: context menu (placeholder) ────────────
-        PanelAction::MarkerRightClicked(_marker_id_str) => {
+        MarkerAction::MarkerRightClicked(_marker_id_str) => {
             // Future: show context menu with Delete / Change Color
             DispatchResult::handled()
         }
 
         // ── Delete selected markers ────────────────────────────
-        PanelAction::DeleteSelectedMarkers => {
+        MarkerAction::DeleteSelectedMarkers => {
             let ids: Vec<MarkerId> = selection.selected_marker_ids.iter().cloned().collect();
             if ids.is_empty() {
                 return DispatchResult::handled();
@@ -120,7 +120,6 @@ pub(super) fn dispatch_marker(
             DispatchResult::structural()
         }
 
-        _ => DispatchResult::unhandled(),
     }
 }
 

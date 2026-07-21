@@ -3,6 +3,7 @@
 //! broadcast, plus the tracks-stash classification. Moved verbatim from
 //! ui_root/mod.rs (UI_FUNNEL_DECOMPOSITION P-F2a, pure move).
 
+use manifold_ui::{AudioSetupAction};
 use super::*;
 
 impl UIRoot {
@@ -398,7 +399,7 @@ mod drag_capture_tests {
         assert!(
             down_actions
                 .iter()
-                .any(|a| matches!(a, PanelAction::AudioCrossoverDragBegin)),
+                .any(|a| matches!(a, PanelAction::AudioSetup(AudioSetupAction::AudioCrossoverDragBegin))),
             "PointerDown on the divider should arm the band grab: {down_actions:?}"
         );
         assert!(ui.audio_setup_panel.is_dragging_band(), "divider grab should be armed");
@@ -424,7 +425,7 @@ mod drag_capture_tests {
         assert!(
             move2_actions
                 .iter()
-                .any(|a| matches!(a, PanelAction::AudioCrossoverChanged(BandDivider::Low, _))),
+                .any(|a| matches!(a, PanelAction::AudioSetup(AudioSetupAction::AudioCrossoverChanged(BandDivider::Low, _)))),
             "the Drag following the immediate DragBegin should yield an \
              AudioCrossoverChanged(Low, _) action: {move2_actions:?}"
         );
@@ -525,7 +526,7 @@ mod drag_capture_tests {
 
         let steps = |acts: &[PanelAction]| {
             acts.iter()
-                .filter(|a| matches!(a, PanelAction::AudioSendFloorStep(..)))
+                .filter(|a| matches!(a, PanelAction::AudioSetup(AudioSetupAction::AudioSendFloorStep(..))))
                 .count()
         };
 

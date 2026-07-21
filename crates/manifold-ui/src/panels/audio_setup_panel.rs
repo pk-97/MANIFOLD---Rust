@@ -17,6 +17,7 @@
 //! gain trim. Per-send labels are auto-assigned ("Audio N") until a text-field
 //! rename lands; multi-channel downmix and the v2 analysis toggles are future.
 
+use crate::{AudioSetupAction, LayerAction, RootAction};
 use crate::types::AudioDeviceRef;
 use manifold_foundation::{AudioSendId, LayerId};
 
@@ -1683,18 +1684,18 @@ impl AudioSetupPanel {
         if id == self.device_dropdown_id {
             self.delete_armed = None;
             // App opens the device dropdown anchored to this trigger.
-            return Some(PanelAction::AudioSetupDeviceClicked);
+            return Some(PanelAction::Root(RootAction::AudioSetupDeviceClicked));
         }
         if id == self.add_send_id {
             self.delete_armed = None;
-            return Some(PanelAction::AudioAddSend);
+            return Some(PanelAction::AudioSetup(AudioSetupAction::AudioAddSend));
         }
         // Pre-analysis floor stepper (the spectrogram squelch) for the selected send.
         if self.floor_minus_id == Some(id) || self.floor_plus_id == Some(id) {
             self.delete_armed = None;
             let send = self.selected_send.clone()?;
             let delta = if self.floor_plus_id == Some(id) { 6.0 } else { -6.0 };
-            return Some(PanelAction::AudioSendFloorStep(send, delta));
+            return Some(PanelAction::AudioSetup(AudioSetupAction::AudioSendFloorStep(send, delta)));
         }
         // Inputs section authoring ("+ Layer" / per-layer ×) deleted —
         // the section is read-only routing display
@@ -1711,7 +1712,7 @@ impl AudioSetupPanel {
                 .map(|s| s.consumers.clone())
                 .unwrap_or_default();
             let layer_id = consumers.get(i)?.layer_id.clone()?;
-            return Some(PanelAction::LayerClicked(layer_id, Modifiers::NONE));
+            return Some(PanelAction::Layer(LayerAction::LayerClicked(layer_id, Modifiers::NONE)));
         }
         // Find which send row + control was hit (clone out so we don't hold a
         // borrow across the delete-arm mutation).
@@ -1747,19 +1748,19 @@ impl AudioSetupPanel {
             }
             RowControl::Label => {
                 self.delete_armed = None;
-                Some(PanelAction::AudioSendLabelClicked(send_id))
+                Some(PanelAction::Root(RootAction::AudioSendLabelClicked(send_id)))
             }
             RowControl::Channel => {
                 self.delete_armed = None;
-                Some(PanelAction::AudioSendChannelClicked(send_id))
+                Some(PanelAction::Root(RootAction::AudioSendChannelClicked(send_id)))
             }
             RowControl::GainDown => {
                 self.delete_armed = None;
-                Some(PanelAction::AudioSendGainStep(send_id, -1.0))
+                Some(PanelAction::AudioSetup(AudioSetupAction::AudioSendGainStep(send_id, -1.0)))
             }
             RowControl::GainUp => {
                 self.delete_armed = None;
-                Some(PanelAction::AudioSendGainStep(send_id, 1.0))
+                Some(PanelAction::AudioSetup(AudioSetupAction::AudioSendGainStep(send_id, 1.0)))
             }
             RowControl::Delete => {
                 // Confirm before deleting a send that still drives params: the
@@ -1769,7 +1770,7 @@ impl AudioSetupPanel {
                     || self.delete_armed.as_ref() == Some(&send_id)
                 {
                     self.delete_armed = None;
-                    Some(PanelAction::AudioRemoveSend(send_id))
+                    Some(PanelAction::AudioSetup(AudioSetupAction::AudioRemoveSend(send_id)))
                 } else {
                     self.delete_armed = Some(send_id);
                     None
@@ -1814,7 +1815,7 @@ impl AudioSetupPanel {
                 if id == self.close_id {
                     // One toggle path: the app closes the dock (width → 0 +
                     // panel.close()) on this action, same as Escape / header.
-                    (true, vec![PanelAction::OpenAudioSetup])
+                    (true, vec![PanelAction::Root(RootAction::OpenAudioSetup)])
                 } else if let Some(action) = self.handle_click_inner(id) {
                     (true, vec![action])
                 } else if self.owns_node(id) || self.point_in_scope(*pos) {
@@ -1862,9 +1863,9 @@ impl AudioSetupPanel {
                     (
                         true,
                         vec![PanelAction::slider_reset(
-                            PanelAction::AudioSendGainDragBegin(send_id.clone()),
-                            PanelAction::AudioSendGainDragChanged(send_id.clone(), 0.0),
-                            PanelAction::AudioSendGainDragCommit(send_id),
+                            PanelAction::AudioSetup(AudioSetupAction::AudioSendGainDragBegin(send_id.clone())),
+                            PanelAction::AudioSetup(AudioSetupAction::AudioSendGainDragChanged(send_id.clone(), 0.0)),
+                            PanelAction::AudioSetup(AudioSetupAction::AudioSendGainDragCommit(send_id)),
                         )],
                     )
                 } else {
@@ -1887,7 +1888,7 @@ impl AudioSetupPanel {
                         crate::intent::Gesture::DoubleClick,
                     )
                 {
-                    (true, vec![PanelAction::AudioSendGainBeginTextInput(send, db, *node_id)])
+                    (true, vec![PanelAction::Root(RootAction::AudioSendGainBeginTextInput(send, db, *node_id))])
                 } else {
                     (false, Vec::new())
                 }
@@ -1902,7 +1903,7 @@ impl AudioSetupPanel {
             UIEvent::PointerDown { node_id, pos, modifiers } => {
                 if let Some(band) = self.divider_at(*pos) {
                     self.drag.start(AudioSetupDrag::Band(band), *pos);
-                    (true, vec![PanelAction::AudioCrossoverDragBegin])
+                    (true, vec![PanelAction::AudioSetup(AudioSetupAction::AudioCrossoverDragBegin)])
                 } else if let Some((send, start_db)) = self.gain_drag_target(*node_id) {
                     self.drag.start(
                         AudioSetupDrag::Calibration(CalibrationDrag::Gain {
@@ -1913,7 +1914,7 @@ impl AudioSetupPanel {
                         }),
                         *pos,
                     );
-                    (true, vec![PanelAction::AudioSendGainDragBegin(send)])
+                    (true, vec![PanelAction::AudioSetup(AudioSetupAction::AudioSendGainDragBegin(send))])
                 } else if self.owns_node(*node_id) || self.point_in_scope(*pos) {
                     (true, Vec::new())
                 } else {
@@ -1929,7 +1930,7 @@ impl AudioSetupPanel {
             }
             UIEvent::Drag { pos, .. } => match self.drag.payload().cloned() {
                 Some(AudioSetupDrag::Band(band)) => match self.scope_y_to_hz(pos.y) {
-                    Some(hz) => (true, vec![PanelAction::AudioCrossoverChanged(band, hz)]),
+                    Some(hz) => (true, vec![PanelAction::AudioSetup(AudioSetupAction::AudioCrossoverChanged(band, hz))]),
                     None => (true, Vec::new()),
                 },
                 // 1 px = 0.1 dB / 0.5% (D7, `docs/AUDIO_SENDS_UX_DESIGN.md`
@@ -1939,14 +1940,14 @@ impl AudioSetupPanel {
                 Some(AudioSetupDrag::Calibration(CalibrationDrag::Gain { send, start_x, start_db, fine })) => {
                     let db_per_px = if fine { 0.01 } else { 0.1 };
                     let new_db = start_db + (pos.x - start_x) * db_per_px;
-                    (true, vec![PanelAction::AudioSendGainDragChanged(send, new_db)])
+                    (true, vec![PanelAction::AudioSetup(AudioSetupAction::AudioSendGainDragChanged(send, new_db))])
                 }
                 None => (false, Vec::new()),
             },
             UIEvent::DragEnd { .. } | UIEvent::PointerUp { .. } => match self.drag.release() {
-                Some(AudioSetupDrag::Band(_)) => (true, vec![PanelAction::AudioCrossoverCommit]),
+                Some(AudioSetupDrag::Band(_)) => (true, vec![PanelAction::AudioSetup(AudioSetupAction::AudioCrossoverCommit)]),
                 Some(AudioSetupDrag::Calibration(CalibrationDrag::Gain { send, .. })) => {
-                    (true, vec![PanelAction::AudioSendGainDragCommit(send)])
+                    (true, vec![PanelAction::AudioSetup(AudioSetupAction::AudioSendGainDragCommit(send))])
                 }
                 None => (false, Vec::new()),
             },
@@ -2096,24 +2097,24 @@ mod tests {
         p.build_docked(&mut tree, test_dock_rect());
 
         // Add send.
-        assert!(matches!(p.handle_click(p.add_send_id), Some(PanelAction::AudioAddSend)));
+        assert!(matches!(p.handle_click(p.add_send_id), Some(PanelAction::AudioSetup(AudioSetupAction::AudioAddSend))));
 
         // Device trigger opens the device dropdown (app builds the list).
         assert!(matches!(
             p.handle_click(p.device_dropdown_id),
-            Some(PanelAction::AudioSetupDeviceClicked)
+            Some(PanelAction::Root(RootAction::AudioSetupDeviceClicked))
         ));
 
         // Channel trigger on send 2 opens its channel dropdown.
         let ch_dropdown = p.send_ids[1].ch_dropdown;
         match p.handle_click(ch_dropdown) {
-            Some(PanelAction::AudioSendChannelClicked(id)) => assert_eq!(id.as_str(), "s2"),
+            Some(PanelAction::Root(RootAction::AudioSendChannelClicked(id))) => assert_eq!(id.as_str(), "s2"),
             other => panic!("expected channel dropdown open, got {other:?}"),
         }
 
         // Delete send 1.
         let del = p.send_ids[0].delete;
-        assert!(matches!(p.handle_click(del), Some(PanelAction::AudioRemoveSend(_))));
+        assert!(matches!(p.handle_click(del), Some(PanelAction::AudioSetup(AudioSetupAction::AudioRemoveSend(_)))));
 
         // Close (×) routes through handle_event and emits the toggle action
         // (the app closes the dock — one path with Escape / header button).
@@ -2123,7 +2124,7 @@ mod tests {
             modifiers: Modifiers::default(),
         });
         assert!(consumed);
-        assert!(matches!(acts.as_slice(), [PanelAction::OpenAudioSetup]));
+        assert!(matches!(acts.as_slice(), [PanelAction::Root(RootAction::OpenAudioSetup)]));
     }
 
     // `trigger_row_clicks_resolve_to_actions` (the matrix row-click test) is
@@ -2273,14 +2274,14 @@ mod tests {
         p.build_docked(&mut tree, test_dock_rect());
 
         match p.handle_click(p.send_ids[0].gain_plus) {
-            Some(PanelAction::AudioSendGainStep(id, d)) => {
+            Some(PanelAction::AudioSetup(AudioSetupAction::AudioSendGainStep(id, d))) => {
                 assert_eq!(id.as_str(), "s1");
                 assert_eq!(d, 1.0);
             }
             other => panic!("expected gain step +1, got {other:?}"),
         }
         match p.handle_click(p.send_ids[1].gain_minus) {
-            Some(PanelAction::AudioSendGainStep(id, d)) => {
+            Some(PanelAction::AudioSetup(AudioSetupAction::AudioSendGainStep(id, d))) => {
                 assert_eq!(id.as_str(), "s2");
                 assert_eq!(d, -1.0);
             }
@@ -2308,7 +2309,7 @@ mod tests {
         assert!(p.handle_click(del).is_none());
         assert!(p.active_notice().is_some_and(|n| n.contains("drives 2 params")));
         // Second click confirms the delete.
-        assert!(matches!(p.handle_click(del), Some(PanelAction::AudioRemoveSend(_))));
+        assert!(matches!(p.handle_click(del), Some(PanelAction::AudioSetup(AudioSetupAction::AudioRemoveSend(_)))));
         assert!(p.active_notice().is_none(), "arm cleared after confirm");
     }
 
@@ -2323,7 +2324,7 @@ mod tests {
         // Clicking the channel dropdown clears the arm instead of deleting.
         assert!(matches!(
             p.handle_click(p.send_ids[0].ch_dropdown),
-            Some(PanelAction::AudioSendChannelClicked(_))
+            Some(PanelAction::Root(RootAction::AudioSendChannelClicked(_)))
         ));
         assert!(p.active_notice().is_none());
     }
@@ -2369,8 +2370,8 @@ mod tests {
             });
             assert!(consumed, "right-click on a stepper zone must be consumed");
             match actions.as_slice() {
-                [PanelAction::SliderReset { changed, .. }] => match changed.as_ref() {
-                    PanelAction::AudioSendGainDragChanged(sid, db) => {
+                [PanelAction::Root(RootAction::SliderReset { changed, .. })] => match changed.as_ref() {
+                    PanelAction::AudioSetup(AudioSetupAction::AudioSendGainDragChanged(sid, db)) => {
                         assert_eq!(sid.as_str(), "s1");
                         assert!((db - 0.0).abs() < 1e-6, "reset must target unity (0 dB), got {db}");
                     }
@@ -2397,7 +2398,7 @@ mod tests {
         assert!(consumed);
         assert!(matches!(
             actions.as_slice(),
-            [PanelAction::AudioSendGainDragBegin(id)] if id.as_str() == "s1"
+            [PanelAction::AudioSetup(AudioSetupAction::AudioSendGainDragBegin(id))] if id.as_str() == "s1"
         ));
 
         // 20 px right at 0.1 dB/px, starting from send 1's 0 dB.
@@ -2407,7 +2408,7 @@ mod tests {
             delta: Vec2::new(20.0, 0.0),
         });
         match actions.as_slice() {
-            [PanelAction::AudioSendGainDragChanged(id, db)] => {
+            [PanelAction::AudioSetup(AudioSetupAction::AudioSendGainDragChanged(id, db))] => {
                 assert_eq!(id.as_str(), "s1");
                 assert!((db - 2.0).abs() < 1e-4, "expected +2.0 dB, got {db}");
             }
@@ -2420,7 +2421,7 @@ mod tests {
         });
         assert!(matches!(
             actions.as_slice(),
-            [PanelAction::AudioSendGainDragCommit(id)] if id.as_str() == "s1"
+            [PanelAction::AudioSetup(AudioSetupAction::AudioSendGainDragCommit(id))] if id.as_str() == "s1"
         ));
         assert!(!p.is_dragging_band(), "gain drag must not arm the crossover drag flag");
     }
@@ -2557,7 +2558,7 @@ mod tests {
         assert_eq!(p.consumer_row_ids.len(), 1);
 
         match p.handle_click(p.consumer_row_ids[0]) {
-            Some(PanelAction::LayerClicked(layer, modifiers)) => {
+            Some(PanelAction::Layer(LayerAction::LayerClicked(layer, modifiers))) => {
                 assert_eq!(layer.as_str(), "bloom-layer");
                 assert!(!modifiers.shift && !modifiers.ctrl && !modifiers.command);
             }

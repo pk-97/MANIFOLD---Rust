@@ -1,6 +1,7 @@
 //! Pure-logic tests for the group-aware canvas. Everything that isn't
 //! pixels is exercised here so a misbehaving canvas points to rendering
 //! (eyes only), not logic. Per the handoff doc's debug-friendly mandate.
+use crate::{ParamsAction};
 use super::*;
 // Items used only by tests are imported directly from their module rather than
 // re-exported crate-wide from `mod.rs` (which would read as unused in a
@@ -2432,20 +2433,20 @@ fn group_face_scrub_emits_set_outer_param_matching_card_value() {
     // The card-path equivalent: what `param_card.rs`'s own ParamChanged arm
     // would build for this exact (id, value) pair.
     let target = GraphParamTarget::Effect(0);
-    let mirrored = PanelAction::ParamChanged(
+    let mirrored = PanelAction::Params(ParamsAction::ParamChanged(
         target,
         manifold_foundation::ParamId::from(outer_param_id.clone()),
         new_value,
-    );
-    let card_would_emit = PanelAction::ParamChanged(
+    ));
+    let card_would_emit = PanelAction::Params(ParamsAction::ParamChanged(
         GraphParamTarget::Effect(0),
         manifold_foundation::ParamId::from("card_amount".to_string()),
         0.75,
-    );
+    ));
     match (mirrored, card_would_emit) {
         (
-            PanelAction::ParamChanged(mt, mid, mv),
-            PanelAction::ParamChanged(ct, cid, cv),
+            PanelAction::Params(ParamsAction::ParamChanged(mt, mid, mv)),
+            PanelAction::Params(ParamsAction::ParamChanged(ct, cid, cv)),
         ) => {
             assert_eq!(mt, ct, "same GraphParamTarget");
             assert_eq!(mid, cid, "same ParamId");

@@ -9,6 +9,7 @@
 
 #![cfg(target_os = "macos")]
 
+use manifold_ui::{ParamsAction};
 use std::ffi::c_void;
 use std::slice;
 
@@ -1299,9 +1300,9 @@ fn modulation_drawer_sheet() {
     // reset action serves as a placeholder for the now-required field/param.
     let placeholder_reset = || {
         PanelAction::slider_reset(
-            PanelAction::MasterOpacitySnapshot,
-            PanelAction::MasterOpacityChanged(1.0),
-            PanelAction::MasterOpacityCommit,
+            PanelAction::Params(ParamsAction::MasterOpacitySnapshot),
+            PanelAction::Params(ParamsAction::MasterOpacityChanged(1.0)),
+            PanelAction::Params(ParamsAction::MasterOpacityCommit),
         )
     };
 

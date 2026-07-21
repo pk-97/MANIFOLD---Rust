@@ -3,6 +3,7 @@
 //! bookkeeping, and selection lowering. Moved verbatim from ui_root/mod.rs
 //! (UI_FUNNEL_DECOMPOSITION P-F2a, pure move).
 
+use manifold_ui::{MappingAction};
 use super::*;
 
 impl UIRoot {
@@ -322,10 +323,10 @@ impl UIRoot {
             use manifold_ui::panels::ableton_picker::AbletonPickerContext;
             actions.push(match ctx {
                 AbletonPickerContext::Param { gpt, param_id } => {
-                    PanelAction::MapParamToAbleton(gpt, param_id, addr)
+                    PanelAction::Mapping(MappingAction::MapParamToAbleton(gpt, param_id, addr))
                 }
                 AbletonPickerContext::MacroSlot { slot_idx } => {
-                    PanelAction::MapMacroToAbleton(slot_idx, addr)
+                    PanelAction::Mapping(MappingAction::MapMacroToAbleton(slot_idx, addr))
                 }
             });
         }

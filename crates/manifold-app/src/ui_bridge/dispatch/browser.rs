@@ -6,7 +6,7 @@
 
 use super::super::DispatchResult;
 use crate::content_command::ContentCommand;
-use manifold_ui::PanelAction;
+use manifold_ui::BrowserAction;
 
 /// `manifold_ui::panels::browser_popup::BrowserPopupMode` stands in for
 /// `manifold_core::preset_def::PresetKind` on the UI side of the browser's
@@ -29,10 +29,10 @@ pub(crate) fn browser_mode_to_kind(
     }
 }
 
-pub(crate) fn dispatch_browser(action: &PanelAction, ctx: &mut super::super::DispatchCtx) -> DispatchResult {
+pub(crate) fn dispatch_browser(action: &BrowserAction, ctx: &mut super::super::DispatchCtx) -> DispatchResult {
     match action {
-        PanelAction::BrowserCellRightClicked(..) => DispatchResult::handled(),
-        PanelAction::BrowserRenamePresetClicked(mode, type_id, source) => {
+        BrowserAction::BrowserCellRightClicked(..) => DispatchResult::handled(),
+        BrowserAction::BrowserRenamePresetClicked(mode, type_id, source) => {
             use manifold_ui::panels::picker_core::Source;
 
             let kind = browser_mode_to_kind(*mode);
@@ -57,7 +57,7 @@ pub(crate) fn dispatch_browser(action: &PanelAction, ctx: &mut super::super::Dis
             ctx.ui.browser_popup.close();
             result
         }
-        PanelAction::BrowserDuplicatePresetClicked(mode, type_id) => {
+        BrowserAction::BrowserDuplicatePresetClicked(mode, type_id) => {
             // My Library only — the menu never offers Duplicate for Project.
             let kind = browser_mode_to_kind(*mode);
             let id = manifold_core::PresetTypeId::from_string(type_id.clone());
@@ -69,7 +69,7 @@ pub(crate) fn dispatch_browser(action: &PanelAction, ctx: &mut super::super::Dis
             ctx.ui.browser_popup.close();
             DispatchResult::handled()
         }
-        PanelAction::BrowserDeletePresetClicked(mode, type_id, source) => {
+        BrowserAction::BrowserDeletePresetClicked(mode, type_id, source) => {
             use manifold_ui::panels::picker_core::Source;
 
             let kind = browser_mode_to_kind(*mode);
@@ -106,7 +106,7 @@ pub(crate) fn dispatch_browser(action: &PanelAction, ctx: &mut super::super::Dis
                 Source::Factory => unreachable!("returned above"),
             }
         }
-        PanelAction::BrowserRevealPresetClicked(mode, type_id) => {
+        BrowserAction::BrowserRevealPresetClicked(mode, type_id) => {
             // My Library only — the menu never offers Reveal for Project
             // (a project-embedded preset has no file to reveal). Doesn't
             // close the popup: a read-only peek shouldn't interrupt browsing.
@@ -115,6 +115,5 @@ pub(crate) fn dispatch_browser(action: &PanelAction, ctx: &mut super::super::Dis
             crate::user_library::UserLibrary::new().reveal(kind, &id);
             DispatchResult::handled()
         }
-        _ => DispatchResult::unhandled(),
     }
 }

@@ -4,6 +4,7 @@
 //! overlay rendering helper. All methods are `impl Application` blocks that
 //! operate on the struct defined in app.rs.
 
+use manifold_ui::{ClipAction, LayerAction, MarkerAction, ParamsAction, ProjectAction, RootAction, TransportAction};
 use manifold_renderer::ui_renderer::UIRenderer;
 
 use manifold_ui::node::FontWeight;
@@ -522,8 +523,8 @@ impl Application {
             use crate::menu::MenuAction as M;
             use manifold_ui::panels::PanelAction as P;
             match ma {
-                M::New => actions.push(P::NewProject),
-                M::Open => actions.push(P::OpenProject),
+                M::New => actions.push(P::Project(ProjectAction::NewProject)),
+                M::Open => actions.push(P::Project(ProjectAction::OpenProject)),
                 M::OpenRecentPath(path) => {
                     self.open_project_from_path(path);
                     self.needs_structural_sync = true;
@@ -532,8 +533,8 @@ impl Application {
                     self.project_io.clear_recent_projects(&mut self.user_prefs);
                     self.refresh_recent_menu();
                 }
-                M::Save => actions.push(P::SaveProject),
-                M::SaveAs => actions.push(P::SaveProjectAs),
+                M::Save => actions.push(P::Project(ProjectAction::SaveProject)),
+                M::SaveAs => actions.push(P::Project(ProjectAction::SaveProjectAs)),
                 M::RestoreSnapshot(hash) => {
                     if crate::alerts::confirm(
                         "Restore snapshot",
@@ -547,12 +548,12 @@ impl Application {
                 M::OpenSnapshotCopy(hash) => {
                     self.open_history_snapshot_copy(&hash);
                 }
-                M::ExportVideo => actions.push(P::ExportVideo),
-                M::ExportFrame => actions.push(P::ExportFrame),
-                M::Perform => actions.push(P::EnterPerformMode),
-                M::Monitor => actions.push(P::ToggleMonitor),
-                M::Audio => actions.push(P::OpenAudioSetup),
-                M::Scene => actions.push(P::OpenSceneSetup),
+                M::ExportVideo => actions.push(P::Project(ProjectAction::ExportVideo)),
+                M::ExportFrame => actions.push(P::Project(ProjectAction::ExportFrame)),
+                M::Perform => actions.push(P::Project(ProjectAction::EnterPerformMode)),
+                M::Monitor => actions.push(P::Project(ProjectAction::ToggleMonitor)),
+                M::Audio => actions.push(P::Root(RootAction::OpenAudioSetup)),
+                M::Scene => actions.push(P::Root(RootAction::OpenSceneSetup)),
                 M::ImportVideo => self.import_video_clip(),
                 M::Undo => {
                     if let Some(tx) = self.content_tx.as_ref() {
@@ -879,13 +880,13 @@ impl Application {
         for (action_idx, action) in actions.iter().enumerate().take(editor_card_seg_start) {
             // Intercept actions that need Application-level access
             match action {
-                PanelAction::CopyOscAddress(addr) => {
+                PanelAction::Root(RootAction::CopyOscAddress(addr)) => {
                     if let Ok(mut clipboard) = arboard::Clipboard::new() {
                         let _ = clipboard.set_text(addr.clone());
                     }
                     continue;
                 }
-                PanelAction::ToggleLiveRecording => {
+                PanelAction::Project(ProjectAction::ToggleLiveRecording) => {
                     if self.content_state.is_live_recording {
                         self.send_content_cmd(ContentCommand::StopLiveRecording);
                     } else {
@@ -896,7 +897,7 @@ impl Application {
                     }
                     continue;
                 }
-                PanelAction::SetAudioInputDevice(name) => {
+                PanelAction::Project(ProjectAction::SetAudioInputDevice(name)) => {
                     let display = if name.is_empty() {
                         self.ws.ui_root.selected_audio_input_device = None;
                         "No audio input".to_string()
@@ -910,11 +911,11 @@ impl Application {
                         .set_audio_device_name(&mut self.ws.ui_root.tree, &display);
                     continue;
                 }
-                PanelAction::ToggleMonitor => {
+                PanelAction::Project(ProjectAction::ToggleMonitor) => {
                     self.pending_toggle_output = true;
                     continue;
                 }
-                PanelAction::OpenAudioSetup => {
+                PanelAction::Root(RootAction::OpenAudioSetup) => {
                     // Toggle the docked Audio Setup column (D1). The panel's
                     // `open` flag and the layout's `audio_setup_width` are the
                     // two halves of "docked": `open` gates build/update/draw,
@@ -930,7 +931,7 @@ impl Application {
                     needs_structural_sync = true;
                     continue;
                 }
-                PanelAction::OpenSceneSetup => {
+                PanelAction::Root(RootAction::OpenSceneSetup) => {
                     // Mirror of `OpenAudioSetup` above (SCENE_SETUP_PANEL_DESIGN
                     // D2) — same lockstep `open`/`scene_setup_width` toggle,
                     // same structural rebuild, same dual reachability (live app
@@ -939,7 +940,7 @@ impl Application {
                     needs_structural_sync = true;
                     continue;
                 }
-                PanelAction::SceneSetupOpenGraphEditor(layer_id) => {
+                PanelAction::Root(RootAction::SceneSetupOpenGraphEditor(layer_id)) => {
                     // D7 "Open Graph Editor" empty state — same mechanism as
                     // `OpenGeneratorGraphEditor` below, addressed explicitly by
                     // the panel's own layer instead of `active_layer_id`.
@@ -947,7 +948,7 @@ impl Application {
                     self.pending_open_graph_editor = true;
                     continue;
                 }
-                PanelAction::SceneSetupRenameObjectClicked(layer_id, group_node_id, name) => {
+                PanelAction::Root(RootAction::SceneSetupRenameObjectClicked(layer_id, group_node_id, name)) => {
                     // P2 object-name click — same shape as
                     // `AudioSendLabelClicked` below: begin the shared inline
                     // text-input session anchored over the row's own name
@@ -970,7 +971,7 @@ impl Application {
                     }
                     continue;
                 }
-                PanelAction::SceneSetupRenameLightClicked(layer_id, light_node_id, name) => {
+                PanelAction::Root(RootAction::SceneSetupRenameLightClicked(layer_id, light_node_id, name)) => {
                     // P5 light-row/properties-header name click — same shape
                     // as `SceneSetupRenameObjectClicked` above, addressed by
                     // the light's own doc id (no group indirection).
@@ -990,7 +991,7 @@ impl Application {
                     }
                     continue;
                 }
-                PanelAction::OpenGeneratorGraphEditor => {
+                PanelAction::Root(RootAction::OpenGeneratorGraphEditor) => {
                     // Ask the content thread to snapshot the active layer's
                     // generator graph and set the unified watched_graph_target
                     // so every downstream edit dispatches against the generator
@@ -1003,7 +1004,7 @@ impl Application {
                     self.pending_open_graph_editor = true;
                     continue;
                 }
-                PanelAction::OpenGraphEditor(ei) => {
+                PanelAction::Root(RootAction::OpenGraphEditor(ei)) => {
                     // Resolve `ei` (effect index in the active inspector tab) to
                     // the effect's stable `EffectId`, then start snapshotting
                     // that specific instance's graph. Keyed by instance id — not
@@ -1026,7 +1027,7 @@ impl Application {
                 // ── Graph-editor mutations moved to the `graph_edits` loop
                 // below (Phase 4.3) — they're `GraphEditCommand` now, not
                 // `PanelAction`. ──
-                PanelAction::EffectMappingRangeSnapshot { binding_id } => {
+                PanelAction::Root(RootAction::EffectMappingRangeSnapshot { binding_id }) => {
                     // Pre-drag (min, max) so the commit can record one undo
                     // for the whole range drag. Store-aware (user binding /
                     // note / seed) and kind-aware (effect / generator).
@@ -1047,11 +1048,11 @@ impl Application {
                     }
                     continue;
                 }
-                PanelAction::EffectMappingRangeChanged {
+                PanelAction::Root(RootAction::EffectMappingRangeChanged {
                     binding_id,
                     min,
                     max,
-                } => {
+                }) => {
                     // Track the in-flight range on the guard so a snapshot
                     // stomp restores the latest dragged value, not the pre-drag
                     // one (BUG-262).
@@ -1077,7 +1078,7 @@ impl Application {
                     }
                     continue;
                 }
-                PanelAction::EffectMappingRangeCommit { binding_id } => {
+                PanelAction::Root(RootAction::EffectMappingRangeCommit { binding_id }) => {
                     self.scrub.active_inspector_drag = None;
                     let snap = self.mapping_range_snapshot.take();
                     if let (Some((old_min, old_max)), Some(t)) = (snap, self.mapping_target())
@@ -1102,7 +1103,7 @@ impl Application {
                     }
                     continue;
                 }
-                PanelAction::EffectMappingLabel { binding_id, label } => {
+                PanelAction::Root(RootAction::EffectMappingLabel { binding_id, label }) => {
                     if let Some(t) = self.mapping_target() {
                         self.commit_mapping(
                             &t,
@@ -1115,7 +1116,7 @@ impl Application {
                     }
                     continue;
                 }
-                PanelAction::EffectMappingSection { binding_id, section } => {
+                PanelAction::Root(RootAction::EffectMappingSection { binding_id, section }) => {
                     if let Some(t) = self.mapping_target() {
                         self.commit_mapping(
                             &t,
@@ -1128,7 +1129,7 @@ impl Application {
                     }
                     continue;
                 }
-                PanelAction::EffectMappingInvert { binding_id, invert } => {
+                PanelAction::Root(RootAction::EffectMappingInvert { binding_id, invert }) => {
                     if let Some(t) = self.mapping_target() {
                         self.commit_mapping(
                             &t,
@@ -1141,7 +1142,7 @@ impl Application {
                     }
                     continue;
                 }
-                PanelAction::EffectMappingCurve { binding_id, curve } => {
+                PanelAction::Root(RootAction::EffectMappingCurve { binding_id, curve }) => {
                     if let Some(t) = self.mapping_target() {
                         self.commit_mapping(
                             &t,
@@ -1154,7 +1155,7 @@ impl Application {
                     }
                     continue;
                 }
-                PanelAction::EffectMappingAffineSnapshot { binding_id } => {
+                PanelAction::Root(RootAction::EffectMappingAffineSnapshot { binding_id }) => {
                     self.mapping_affine_snapshot =
                         self.watched_reshape(binding_id).map(|(_, _, sc, of)| (sc, of));
                     // Guard the in-flight scale/offset against a mid-drag
@@ -1172,11 +1173,11 @@ impl Application {
                     }
                     continue;
                 }
-                PanelAction::EffectMappingAffineChanged {
+                PanelAction::Root(RootAction::EffectMappingAffineChanged {
                     binding_id,
                     scale,
                     offset,
-                } => {
+                }) => {
                     if let Some(crate::app::ActiveInspectorDrag::MappingAffine {
                         scale: gscale,
                         offset: goffset,
@@ -1199,7 +1200,7 @@ impl Application {
                     }
                     continue;
                 }
-                PanelAction::EffectMappingAffineCommit { binding_id } => {
+                PanelAction::Root(RootAction::EffectMappingAffineCommit { binding_id }) => {
                     self.scrub.active_inspector_drag = None;
                     let snap = self.mapping_affine_snapshot.take();
                     if let (Some((old_scale, old_offset)), Some(t)) = (snap, self.mapping_target())
@@ -1225,7 +1226,7 @@ impl Application {
                     }
                     continue;
                 }
-                PanelAction::EffectMappingGotoNode { binding_id } => {
+                PanelAction::Root(RootAction::EffectMappingGotoNode { binding_id }) => {
                     // Read-only navigation: resolve the binding's stable NodeId
                     // from the live snapshot (outer routing → node handle → id)
                     // and centre the editor canvas on it. Same path as the
@@ -1239,37 +1240,37 @@ impl Application {
                     }
                     continue;
                 }
-                PanelAction::EnterPerformMode => {
+                PanelAction::Project(ProjectAction::EnterPerformMode) => {
                     self.perform.pending_enter = true;
                     continue;
                 }
-                PanelAction::SaveProject => {
+                PanelAction::Project(ProjectAction::SaveProject) => {
                     self.save_project();
                     continue;
                 }
-                PanelAction::SaveProjectAs => {
+                PanelAction::Project(ProjectAction::SaveProjectAs) => {
                     self.save_project_as();
                     continue;
                 }
-                PanelAction::ExportVideo => {
+                PanelAction::Project(ProjectAction::ExportVideo) => {
                     self.start_export();
                     continue;
                 }
-                PanelAction::ExportFrame => {
+                PanelAction::Project(ProjectAction::ExportFrame) => {
                     self.export_frame();
                     continue;
                 }
-                PanelAction::OpenProject => {
+                PanelAction::Project(ProjectAction::OpenProject) => {
                     self.open_project();
                     needs_structural_sync = true;
                     continue;
                 }
-                PanelAction::OpenRecent => {
+                PanelAction::Project(ProjectAction::OpenRecent) => {
                     self.open_recent_project();
                     needs_structural_sync = true;
                     continue;
                 }
-                PanelAction::PasteEffects => {
+                PanelAction::Params(ParamsAction::PasteEffects) => {
                     // Browser popup paste button → route through same logic as Cmd+V
                     let tab = self.ws.ui_root.inspector.last_effect_tab();
                     let target = match tab {
@@ -1324,7 +1325,7 @@ impl Application {
                     needs_structural_sync = true;
                     continue;
                 }
-                PanelAction::BrowserSearchClicked => {
+                PanelAction::Params(ParamsAction::BrowserSearchClicked) => {
                     let r = self
                         .ws
                         .ui_root
@@ -1341,7 +1342,7 @@ impl Application {
                     );
                     continue;
                 }
-                PanelAction::BpmFieldClicked => {
+                PanelAction::Transport(TransportAction::BpmFieldClicked) => {
                     let bpm = Some(&self.local_project).map_or(120.0, |p| p.settings.bpm.0);
                     let r = if let Some(id) = self.ws.ui_root.transport.bpm_field_id() {
                         self.ws.ui_root.tree.get_bounds(id)
@@ -1356,7 +1357,7 @@ impl Application {
                     );
                     continue;
                 }
-                PanelAction::FpsFieldClicked => {
+                PanelAction::Transport(TransportAction::FpsFieldClicked) => {
                     let fps = Some(&self.local_project).map_or(60.0, |p| p.settings.frame_rate);
                     let r = if let Some(id) = self.ws.ui_root.footer.fps_field_id() {
                         self.ws.ui_root.tree.get_bounds(id)
@@ -1371,7 +1372,7 @@ impl Application {
                     );
                     continue;
                 }
-                PanelAction::BeginParamTextInput {
+                PanelAction::Root(RootAction::BeginParamTextInput {
                     target,
                     param_id,
                     anchor,
@@ -1379,7 +1380,7 @@ impl Application {
                     min: _,
                     max: _,
                     whole_numbers,
-                } => {
+                }) => {
                     // Prefill the box with the base (set) value, formatted as a
                     // plain number so editing in place stays parseable.
                     let initial = if *whole_numbers {
@@ -1406,7 +1407,7 @@ impl Application {
                     });
                     continue;
                 }
-                PanelAction::SceneSetupBeginNumericTextInput {
+                PanelAction::Root(RootAction::SceneSetupBeginNumericTextInput {
                     layer_id,
                     scope_path,
                     node_doc_id,
@@ -1414,7 +1415,7 @@ impl Application {
                     value,
                     cell_node_id,
                     degrees,
-                } => {
+                }) => {
                     // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md P4, D8/D10: same
                     // early-intercept shape as `BeginParamTextInput` above.
                     // The panel has no `&UITree` in `handle_event`, so the
@@ -1440,7 +1441,7 @@ impl Application {
                         });
                     continue;
                 }
-                PanelAction::AudioSendGainBeginTextInput(send_id, value, cell_node_id) => {
+                PanelAction::Root(RootAction::AudioSendGainBeginTextInput(send_id, value, cell_node_id)) => {
                     // P4 audio-dock sibling of `SceneSetupBeginNumericTextInput`.
                     let r = self.ws.ui_root.tree.get_bounds(*cell_node_id);
                     let initial = format!("{value:.1}");
@@ -1454,12 +1455,12 @@ impl Application {
                         Some(crate::text_input::AudioSendGainParamCtx { send_id: send_id.clone() });
                     continue;
                 }
-                PanelAction::BeginDriverPeriodTextInput {
+                PanelAction::Root(RootAction::BeginDriverPeriodTextInput {
                     target,
                     param_id,
                     anchor,
                     value,
-                } => {
+                }) => {
                     // Prefill with the current period in beats (whole numbers
                     // without a decimal), select-all so the first keystroke
                     // replaces it.
@@ -1486,7 +1487,7 @@ impl Application {
                         });
                     continue;
                 }
-                PanelAction::LayerDoubleClicked(id) => {
+                PanelAction::Layer(LayerAction::LayerDoubleClicked(id)) => {
                     // Open text input for layer rename. The action carries a
                     // stable LayerId, stored on `text_input.layer_id` and
                     // re-resolved to the live row at commit time (BUG-031) —
@@ -1514,7 +1515,7 @@ impl Application {
                     }
                     continue;
                 }
-                PanelAction::MarkerDoubleClicked(marker_id_str) => {
+                PanelAction::Marker(MarkerAction::MarkerDoubleClicked(marker_id_str)) => {
                     // Open text input for marker rename
                     let marker_id = manifold_core::MarkerId::new(marker_id_str.as_str());
                     if let Some(marker) = self.local_project.timeline.find_marker(&marker_id) {
@@ -1540,7 +1541,7 @@ impl Application {
                     }
                     continue;
                 }
-                PanelAction::ClipBpmClicked => {
+                PanelAction::Clip(ClipAction::ClipBpmClicked) => {
                     // Open text input for clip recorded BPM editing.
                     // Unity: ClipInspector.OnBitmapBpmClicked → BitmapTextInput.BeginEdit
                     if let Some(clip_id) = &self.selection.primary_selected_clip_id {
@@ -1575,7 +1576,7 @@ impl Application {
                     }
                     continue;
                 }
-                PanelAction::GenStringParamClicked(sp_idx) => {
+                PanelAction::Params(ParamsAction::GenStringParamClicked(sp_idx)) => {
                     // Open text input for a generator string param.
                     if let Some(gp) = self.ws.ui_root.inspector.gen_params()
                         && let Some(sp) = gp.string_param(*sp_idx)
@@ -1592,7 +1593,7 @@ impl Application {
                     }
                     continue;
                 }
-                PanelAction::GenStringParamDropdownClicked(sp_idx) => {
+                PanelAction::Params(ParamsAction::GenStringParamDropdownClicked(sp_idx)) => {
                     // Open a dropdown for a string param (e.g. font selector).
                     if let Some(gp) = self.ws.ui_root.inspector.gen_params()
                         && let Some(sp) = gp.string_param(*sp_idx)
@@ -1606,7 +1607,7 @@ impl Application {
                                 manifold_renderer::text_rasterizer::TextRasterizer::available_font_families()
                                         .into_iter()
                                         .map(|name| manifold_ui::panels::dropdown::DropdownItem::new(&name)
-                                            .with_action(PanelAction::GenStringParamSelected(*sp_idx, name.clone())))
+                                            .with_action(PanelAction::Params(ParamsAction::GenStringParamSelected(*sp_idx, name.clone()))))
                                         .collect()
                             } else {
                                 vec![]
@@ -1620,7 +1621,7 @@ impl Application {
                     }
                     continue;
                 }
-                PanelAction::AudioSendLabelClicked(send_id) => {
+                PanelAction::Root(RootAction::AudioSendLabelClicked(send_id)) => {
                     if let Some(send) = self.local_project.audio_setup.find_send(send_id)
                         && let Some(r) = self
                             .ws
@@ -1639,7 +1640,7 @@ impl Application {
                     }
                     continue;
                 }
-                PanelAction::MacroLabelRename(idx) => {
+                PanelAction::Params(ParamsAction::MacroLabelRename(idx)) => {
                     if let Some(slot) = self.local_project.settings.macro_bank.slots.get(*idx)
                         && let Some(r) = self
                             .ws
@@ -1656,7 +1657,7 @@ impl Application {
                     }
                     continue;
                 }
-                PanelAction::NewProject => {
+                PanelAction::Project(ProjectAction::NewProject) => {
                     let action = self.project_io.new_project();
                     self.apply_project_io_action(action);
                     needs_structural_sync = true;
@@ -1664,23 +1665,23 @@ impl Application {
                 }
                 // Transport controller actions — intercept here for Application-level access
                 // CycleClockAuthority removed — authority is auto-determined from enabled sources
-                PanelAction::ToggleLink => {
+                PanelAction::Transport(TransportAction::ToggleLink) => {
                     self.send_content_cmd(ContentCommand::ToggleLink);
                     continue;
                 }
-                PanelAction::ToggleMidiClock => {
+                PanelAction::Transport(TransportAction::ToggleMidiClock) => {
                     self.send_content_cmd(ContentCommand::ToggleMidiClock);
                     continue;
                 }
-                PanelAction::ToggleSyncOutput => {
+                PanelAction::Transport(TransportAction::ToggleSyncOutput) => {
                     self.send_content_cmd(ContentCommand::ToggleOscSyncMode);
                     continue;
                 }
-                PanelAction::SetMidiClockDevice(index) => {
+                PanelAction::Transport(TransportAction::SetMidiClockDevice(index)) => {
                     self.send_content_cmd(ContentCommand::SetMidiClockDevice(*index));
                     continue;
                 }
-                PanelAction::ResetBpm => {
+                PanelAction::Transport(TransportAction::ResetBpm) => {
                     self.send_content_cmd(ContentCommand::ResetBpm);
                     self.needs_rebuild = true;
                     continue;
@@ -1700,7 +1701,7 @@ impl Application {
                 // editor_card_seg_start`): the editor's own card lane emits the
                 // same two actions, and resolving those against the main
                 // inspector's tab/selection would retarget to the wrong graph.
-                PanelAction::EffectCardClicked(ei) => {
+                PanelAction::Params(ParamsAction::EffectCardClicked(ei)) => {
                     if action_idx < editor_card_seg_start
                         && self.graph_editor_window_id.is_some()
                         && let Some(eid) = self.resolve_effect_card_id(*ei)
@@ -1708,7 +1709,7 @@ impl Application {
                         self.watch_effect_graph(eid);
                     }
                 }
-                PanelAction::GenCardClicked => {
+                PanelAction::Params(ParamsAction::GenCardClicked) => {
                     if action_idx < editor_card_seg_start
                         && self.graph_editor_window_id.is_some()
                         && let Some(lid) = self.active_layer_id.clone()
@@ -1778,7 +1779,7 @@ impl Application {
             let pending_mapping_open = actions[editor_card_seg_start..]
                 .iter()
                 .find_map(|a| match a {
-                    PanelAction::OpenCardMapping(pid) => {
+                    PanelAction::Root(RootAction::OpenCardMapping(pid)) => {
                         Some((pid.to_string(), self.watched_full_reshape(pid.as_ref())))
                     }
                     _ => None,
@@ -1796,9 +1797,9 @@ impl Application {
                 let content_tx = self.content_tx.as_ref().unwrap();
                 for action in &actions[editor_card_seg_start..] {
                     match action {
-                        PanelAction::EffectCardClicked(ei) => retarget_effect = Some(*ei),
-                        PanelAction::GenCardClicked => retarget_generator = true,
-                        PanelAction::OpenCardMapping(param_id) => {
+                        PanelAction::Params(ParamsAction::EffectCardClicked(ei)) => retarget_effect = Some(*ei),
+                        PanelAction::Params(ParamsAction::GenCardClicked) => retarget_generator = true,
+                        PanelAction::Root(RootAction::OpenCardMapping(param_id)) => {
                             if let Some((_, Some((label, min, max, invert, curve, scale, offset)))) =
                                 pending_mapping_open
                                     .as_ref()
@@ -2450,11 +2451,11 @@ impl Application {
                                 manifold_ui::panels::GraphParamTarget::Generator
                             }
                         };
-                        let action = PanelAction::ParamChanged(
+                        let action = PanelAction::Params(ParamsAction::ParamChanged(
                             gpt,
                             manifold_core::effects::ParamId::from(outer_param_id.clone()),
                             *new_value,
-                        );
+                        ));
                         let content_tx = self.content_tx.as_ref().unwrap();
                         let editor_target = self.watched_graph_target.as_ref();
                         let mut dctx = crate::ui_bridge::DispatchCtx {

@@ -15,6 +15,7 @@
 //! needs a runtime visual pass); this proves the foundation is correct on the
 //! hardest real card shape first. See `docs/CHROME_API_DESIGN.md`.
 
+use manifold_ui::{ModulationAction, ParamsAction};
 use manifold_ui::chrome::{validate, Align, ChromeHost, Pad, Reconcile, Sizing, View};
 use manifold_ui::intent::{Gesture, IntentRegistry};
 use manifold_ui::node::{Color32, FontWeight, Rect, UIFlags, UINodeType, Vec2};
@@ -65,7 +66,7 @@ impl ProofCard {
             .pad(Pad::all(CARD_PAD))
             .bg(Color32::new(28, 28, 30, 255))
             .claims_area()
-            .on_right_click(PanelAction::CardRightClicked(target.clone()))
+            .on_right_click(PanelAction::Params(ParamsAction::CardRightClicked(target.clone())))
             .child(self.header_view());
         for (pi, p) in self.params.iter().enumerate() {
             col = col.child(self.param_row_view(target.clone(), pi, p));
@@ -98,7 +99,7 @@ impl ProofCard {
             .child(
                 View::button(if self.enabled { "ON" } else { "OFF" })
                     .fixed(36.0, 18.0)
-                    .on_click(PanelAction::EffectToggle(self.effect_index)),
+                    .on_click(PanelAction::Params(ParamsAction::EffectToggle(self.effect_index))),
             )
     }
 
@@ -106,7 +107,7 @@ impl ProofCard {
         let pid: ParamId = ParamId::from(p.id);
         let mut row_col = View::column(0.0)
             .claims_area()
-            .on_right_click(PanelAction::ParamLabelRightClick(target.clone(), pid.clone()))
+            .on_right_click(PanelAction::Params(ParamsAction::ParamLabelRightClick(target.clone(), pid.clone())))
             .child(
                 View::row(4.0)
                     .h(Sizing::Fixed(ROW_H))
@@ -123,12 +124,12 @@ impl ProofCard {
                     .child(
                         View::button("D")
                             .fixed(BTN, BTN)
-                            .on_click(PanelAction::DriverToggle(target.clone(), pid.clone())),
+                            .on_click(PanelAction::Modulation(ModulationAction::DriverToggle(target.clone(), pid.clone()))),
                     )
                     .child(
                         View::button("E")
                             .fixed(BTN, BTN)
-                            .on_click(PanelAction::EnvelopeToggle(target.clone(), pid.clone())),
+                            .on_click(PanelAction::Modulation(ModulationAction::EnvelopeToggle(target.clone(), pid.clone()))),
                     ),
             );
         if p.driver_open {
@@ -145,20 +146,20 @@ impl ProofCard {
             .child(
                 View::button("1/4")
                     .fixed(28.0, DRAWER_BTN_H)
-                    .on_click(PanelAction::DriverConfig(
+                    .on_click(PanelAction::Modulation(ModulationAction::DriverConfig(
                         target.clone(),
                         pid.clone(),
                         DriverConfigAction::BeatDiv(2),
-                    )),
+                    ))),
             )
             .child(
                 View::button("sine")
                     .fixed(34.0, DRAWER_BTN_H)
-                    .on_click(PanelAction::DriverConfig(
+                    .on_click(PanelAction::Modulation(ModulationAction::DriverConfig(
                         target,
                         pid,
                         DriverConfigAction::Wave(0),
-                    )),
+                    ))),
             )
     }
 
@@ -324,28 +325,28 @@ fn intents_resolve_and_fold_up() {
     let toggle = card.host.node_id(5).unwrap();
     assert!(matches!(
         reg.resolve(&t, Some(toggle), Gesture::Click),
-        Some(PanelAction::EffectToggle(3))
+        Some(PanelAction::Params(ParamsAction::EffectToggle(3)))
     ));
 
     // Click the D button → DriverToggle for param 0.
     let d_btn = card.host.node_id(11).unwrap();
     assert!(matches!(
         reg.resolve(&t, Some(d_btn), Gesture::Click),
-        Some(PanelAction::DriverToggle(GraphParamTarget::Effect(3), _))
+        Some(PanelAction::Modulation(ModulationAction::DriverToggle(GraphParamTarget::Effect(3), _)))
     ));
 
     // Right-click the inert slider folds up to the param row's menu, not the card.
     let slider0 = card.host.node_id(9).unwrap();
     assert!(matches!(
         reg.resolve(&t, Some(slider0), Gesture::RightClick),
-        Some(PanelAction::ParamLabelRightClick(GraphParamTarget::Effect(3), _))
+        Some(PanelAction::Params(ParamsAction::ParamLabelRightClick(GraphParamTarget::Effect(3), _)))
     ));
 
     // Right-click the header drag handle (no row claim above it) folds to the card.
     let handle = card.host.node_id(2).unwrap();
     assert!(matches!(
         reg.resolve(&t, Some(handle), Gesture::RightClick),
-        Some(PanelAction::CardRightClicked(GraphParamTarget::Effect(3)))
+        Some(PanelAction::Params(ParamsAction::CardRightClicked(GraphParamTarget::Effect(3))))
     ));
 
     // Left-click the slider is absorbed by the row's claim (no click intent there).

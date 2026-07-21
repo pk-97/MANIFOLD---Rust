@@ -5,6 +5,7 @@
 //! dividers folded into the section gaps as cross-centred fixed cells. See the
 //! footer/header for the integration pattern and `docs/CHROME_API_DESIGN.md`.
 
+use crate::{TransportAction};
 use super::{Panel, PanelAction};
 use crate::chrome::{Align, ChromeHost, Pad, Reconcile, Sizing, View, components};
 use crate::color;
@@ -309,21 +310,21 @@ impl TransportPanel {
                     .inert(),
             )
             .child(self.section_break(SECTION_SPACER))
-            .child(Self::btn("LINK", LINK_BUTTON_W, button_style(link_bg), PanelAction::ToggleLink))
+            .child(Self::btn("LINK", LINK_BUTTON_W, button_style(link_bg), PanelAction::Transport(TransportAction::ToggleLink)))
             .child(Self::dot(self.link_dot_color))
             .child(Self::status(self.link_status_text.as_str(), self.link_status_color))
             .child(self.section_break(SECTION_SPACER))
-            .child(Self::btn("CLK", CLK_BUTTON_W, button_style(clk_bg), PanelAction::ToggleMidiClock))
+            .child(Self::btn("CLK", CLK_BUTTON_W, button_style(clk_bg), PanelAction::Transport(TransportAction::ToggleMidiClock)))
             .child(Self::btn(
                 self.clk_device_text.as_str(),
                 CLK_DEVICE_W,
                 button_style(color::BUTTON_INACTIVE_C32),
-                PanelAction::SelectClkDevice,
+                PanelAction::Transport(TransportAction::SelectClkDevice),
             ))
             .child(Self::dot(self.clk_dot_color))
             .child(Self::status(self.clk_status_text.as_str(), self.clk_status_color))
             .child(self.section_break(SECTION_SPACER))
-            .child(Self::btn("SYNC", SYNC_BUTTON_W, button_style(sync_bg), PanelAction::ToggleSyncOutput))
+            .child(Self::btn("SYNC", SYNC_BUTTON_W, button_style(sync_bg), PanelAction::Transport(TransportAction::ToggleSyncOutput)))
             .child(Self::dot(self.sync_dot_color))
             .child(Self::status(self.sync_status_text.as_str(), self.sync_status_color))
     }
@@ -351,12 +352,12 @@ impl TransportPanel {
             .main_align(Align::Center)
             .cross_align(Align::Center)
             .child(
-                Self::btn(self.play_text.as_str(), PLAY_BUTTON_W, button_style(self.play_color), PanelAction::PlayPause)
+                Self::btn(self.play_text.as_str(), PLAY_BUTTON_W, button_style(self.play_color), PanelAction::Transport(TransportAction::PlayPause))
                     .name("transport.play"),
             )
-            .child(Self::btn("STOP", STOP_BUTTON_W, button_style(self.stop_color), PanelAction::Stop).name("transport.stop"))
+            .child(Self::btn("STOP", STOP_BUTTON_W, button_style(self.stop_color), PanelAction::Transport(TransportAction::Stop)).name("transport.stop"))
             .child(
-                Self::btn("REC", REC_BUTTON_W, button_style(rec_c), PanelAction::Record)
+                Self::btn("REC", REC_BUTTON_W, button_style(rec_c), PanelAction::Transport(TransportAction::Record))
                     .disabled(!self.rec_enabled)
                     .name("transport.record"),
             )
@@ -374,15 +375,15 @@ impl TransportPanel {
                     .w(Sizing::Fixed(BPM_FIELD_W))
                     .fill_h()
                     .style(bpm_field_style)
-                    .on_click(PanelAction::BpmFieldClicked)
+                    .on_click(PanelAction::Transport(TransportAction::BpmFieldClicked))
                     .key(KEY_BPM_FIELD),
             )
             .child(
-                Self::btn("R", BPM_RESET_W, button_style(reset_c), PanelAction::ResetBpm)
+                Self::btn("R", BPM_RESET_W, button_style(reset_c), PanelAction::Transport(TransportAction::ResetBpm))
                     .disabled(!self.bpm_reset_active),
             )
             .child(
-                Self::btn("CLR", BPM_CLEAR_W, button_style(clear_c), PanelAction::ClearBpm)
+                Self::btn("CLR", BPM_CLEAR_W, button_style(clear_c), PanelAction::Transport(TransportAction::ClearBpm))
                     .disabled(!self.bpm_clear_active),
             )
     }
@@ -408,9 +409,9 @@ impl TransportPanel {
             .fill()
             .main_align(Align::End)
             .cross_align(Align::Center)
-            .child(Self::btn("LANES", AUTO_LANES_BUTTON_W, button_style(lanes_bg), PanelAction::ToggleAutomationMode))
-            .child(Self::btn("BACK", AUTO_BACK_BUTTON_W, button_style(back_bg), PanelAction::AutomationBackToArrangement))
-            .child(Self::btn("ARM", AUTO_ARM_BUTTON_W, button_style(arm_bg), PanelAction::ToggleAutomationArm))
+            .child(Self::btn("LANES", AUTO_LANES_BUTTON_W, button_style(lanes_bg), PanelAction::Transport(TransportAction::ToggleAutomationMode)))
+            .child(Self::btn("BACK", AUTO_BACK_BUTTON_W, button_style(back_bg), PanelAction::Transport(TransportAction::AutomationBackToArrangement)))
+            .child(Self::btn("ARM", AUTO_ARM_BUTTON_W, button_style(arm_bg), PanelAction::Transport(TransportAction::ToggleAutomationArm)))
     }
 
     fn view(&self) -> View {
@@ -591,29 +592,29 @@ mod tests {
         };
         assert!(matches!(
             intents.resolve(&tree, id_of("PLAY"), Gesture::Click),
-            Some(PanelAction::PlayPause)
+            Some(PanelAction::Transport(TransportAction::PlayPause))
         ));
         assert!(matches!(
             intents.resolve(&tree, id_of("SYNC"), Gesture::Click),
-            Some(PanelAction::ToggleSyncOutput)
+            Some(PanelAction::Transport(TransportAction::ToggleSyncOutput))
         ));
         assert!(matches!(
             intents.resolve(&tree, panel.bpm_field_id(), Gesture::Click),
-            Some(PanelAction::BpmFieldClicked)
+            Some(PanelAction::Transport(TransportAction::BpmFieldClicked))
         ));
         // Clock authority is display-only: interactive, but no resolved action.
         assert!(intents.resolve(&tree, id_of("SRC:INT"), Gesture::Click).is_none());
         assert!(matches!(
             intents.resolve(&tree, id_of("ARM"), Gesture::Click),
-            Some(PanelAction::ToggleAutomationArm)
+            Some(PanelAction::Transport(TransportAction::ToggleAutomationArm))
         ));
         assert!(matches!(
             intents.resolve(&tree, id_of("BACK"), Gesture::Click),
-            Some(PanelAction::AutomationBackToArrangement)
+            Some(PanelAction::Transport(TransportAction::AutomationBackToArrangement))
         ));
         assert!(matches!(
             intents.resolve(&tree, id_of("LANES"), Gesture::Click),
-            Some(PanelAction::ToggleAutomationMode)
+            Some(PanelAction::Transport(TransportAction::ToggleAutomationMode))
         ));
     }
 

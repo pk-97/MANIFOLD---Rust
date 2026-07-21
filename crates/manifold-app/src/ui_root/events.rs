@@ -2,6 +2,7 @@
 //! `process_events` drain-and-route loop, and viewport-event stashing. Moved
 //! verbatim from ui_root/mod.rs (UI_FUNNEL_DECOMPOSITION P-F2a, pure move).
 
+use manifold_ui::{RootAction};
 use super::*;
 
 impl UIRoot {
@@ -90,7 +91,7 @@ impl UIRoot {
                 && modifiers.command
                 && modifiers.shift
             {
-                actions.push(PanelAction::OpenAudioSetup);
+                actions.push(PanelAction::Root(RootAction::OpenAudioSetup));
                 continue;
             }
 
@@ -119,7 +120,7 @@ impl UIRoot {
             if self.audio_setup_panel.is_open()
                 && matches!(event, UIEvent::KeyDown { key: Key::Escape, .. })
             {
-                actions.push(PanelAction::OpenAudioSetup);
+                actions.push(PanelAction::Root(RootAction::OpenAudioSetup));
                 continue;
             }
 
@@ -128,7 +129,7 @@ impl UIRoot {
             if self.scene_setup_panel.is_open()
                 && matches!(event, UIEvent::KeyDown { key: Key::Escape, .. })
             {
-                actions.push(PanelAction::OpenSceneSetup);
+                actions.push(PanelAction::Root(RootAction::OpenSceneSetup));
                 continue;
             }
 

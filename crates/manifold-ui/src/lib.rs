@@ -81,8 +81,10 @@ pub use panels::viewport::{
     ClipHitResult, SelectionRegion, TimelineViewportPanel, TrackInfo, ViewportClip,
 };
 pub use panels::{
-    AudioShapeParam, BandDivider, DriverConfigAction, GraphParamTarget, HitRegion, InspectorTab,
-    Panel, PanelAction, SyncSource, TrimKind, UiRelightField, UiRelightHeightFrom,
+    AudioSetupAction, AudioShapeParam, BandDivider, BrowserAction, ClipAction, DriverConfigAction,
+    EditingAction, GraphParamTarget, HitRegion, InspectorTab, LayerAction, MappingAction,
+    MarkerAction, ModulationAction, Panel, PanelAction, ParamsAction, ProjectAction, RootAction,
+    SyncSource, TransportAction, TrimKind, UiRelightField, UiRelightHeightFrom,
 };
 pub use slider::{BitmapSlider, SliderColors, SliderNodeIds};
 pub use transform2d::Affine2;
