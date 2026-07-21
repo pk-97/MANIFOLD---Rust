@@ -89,6 +89,28 @@ pub(crate) fn test_device() -> TestDevice {
     static SHARED: OnceLock<Arc<manifold_gpu::GpuDevice>> = OnceLock::new();
     // Acquire the serialization lock first, then hand back the shared device.
     let _lock = GPU_TEST_LOCK.lock();
+    // BUG-290: GPU_TEST_LOCK is invisible across processes — nextest is
+    // process-per-test, and a second session can run its own gpu-proofs
+    // binary. Concurrent GPU test processes correlate with AGX firmware
+    // faults (whole-display freeze). One flock'd file per machine gives
+    // cross-process exclusion; held for the process lifetime after first
+    // acquisition (the OS releases it on exit, including crash/SIGKILL).
+    static CROSS_PROCESS_LOCK: OnceLock<std::fs::File> = OnceLock::new();
+    CROSS_PROCESS_LOCK.get_or_init(|| {
+        let path = std::env::temp_dir().join("manifold-gpu-test.lock");
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(&path)
+            .unwrap_or_else(|e| panic!("BUG-290 cross-process GPU lock: cannot open {path:?}: {e}"));
+        // Blocks until any other gpu-proofs process releases it — that wait
+        // IS the fix, not a hang; a concurrent run would previously have
+        // raced the GPU and risked a firmware fault.
+        file.lock()
+            .unwrap_or_else(|e| panic!("BUG-290 cross-process GPU lock: flock on {path:?} failed: {e}"));
+        file
+    });
     let device = SHARED
         .get_or_init(|| Arc::new(manifold_gpu::GpuDevice::new()))
         .clone();
