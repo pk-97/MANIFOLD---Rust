@@ -297,10 +297,7 @@ mod tests {
     use manifold_core::EffectId;
     use manifold_core::PresetTypeId;
     use manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION;
-    use manifold_core::effect_graph_def::{
-        BindingDef, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, GroupDef, GroupInterface, InterfacePortDef,
-        ParamSpecDef, PresetMetadata, SkipModeDef, StringBindingDef,
-    };
+    use manifold_core::effect_graph_def::{BindingDef, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, GroupDef, GroupInterface, InterfacePortDef, ParamSpecDef, PresetMetadata, SkipModeDef, StringBindingDef};
     use manifold_core::effects::PresetInstance;
     use crate::command::Command;
     use super::modifiers::MESH_MODIFIER_TYPE_IDS;
