@@ -1063,11 +1063,11 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 move |h, p| {
-                    h.dispatch(&PanelAction::AudioSetup(AudioSetupAction::AudioSendGainDragBegin(sid.clone())), p);
-                    h.dispatch(&PanelAction::AudioSetup(AudioSetupAction::AudioSendGainDragChanged(sid.clone(), 4.0)), p);
-                    h.dispatch(&PanelAction::AudioSetup(AudioSetupAction::AudioSendGainDragChanged(sid.clone(), -3.0)), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::AudioSendGain(sid.clone()), ScrubPhase::Begin), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::AudioSendGain(sid.clone()), ScrubPhase::Move(ScrubValue::Scalar(4.0))), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::AudioSendGain(sid.clone()), ScrubPhase::Move(ScrubValue::Scalar(-3.0))), p);
                 },
-                move |h, p| h.dispatch(&PanelAction::AudioSetup(AudioSetupAction::AudioSendGainDragCommit(sid2.clone())), p),
+                move |h, p| h.dispatch(&PanelAction::Scrub(ValueRef::AudioSendGain(sid2.clone()), ScrubPhase::Commit), p),
                 move |p| p.audio_setup.find_send(&sid3).unwrap().gain_db,
                 before,
                 -3.0,

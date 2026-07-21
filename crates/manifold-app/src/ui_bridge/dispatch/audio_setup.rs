@@ -24,10 +24,10 @@ use manifold_ui::AudioSetupAction;
 use super::super::DispatchResult;
 use super::resolve::audio_setup_command;
 
-/// Send gain trim range (dB) — shared by the stepper (`AudioSendGainStep`) and
-/// the D7 drag (`AudioSendGainDragChanged`/`Commit`).
-const AUDIO_SEND_GAIN_MIN_DB: f32 = -24.0;
-const AUDIO_SEND_GAIN_MAX_DB: f32 = 24.0;
+/// Send gain trim range (dB) — shared by the stepper (`AudioSendGainStep`, here)
+/// and the D7 calibration drag (`ValueRef::AudioSendGain`, now in `scrub.rs`).
+pub(crate) const AUDIO_SEND_GAIN_MIN_DB: f32 = -24.0;
+pub(crate) const AUDIO_SEND_GAIN_MAX_DB: f32 = 24.0;
 
 pub(crate) fn dispatch_audio_setup(action: &AudioSetupAction, ctx: &mut super::super::DispatchCtx) -> DispatchResult {
     use crate::content_command::ContentCommand;
@@ -219,63 +219,11 @@ pub(crate) fn dispatch_audio_setup(action: &AudioSetupAction, ctx: &mut super::s
                 Box::new(SetAudioSendGainCommand::new(id.clone(), old, new)),
             )
         }
-        AudioSetupAction::AudioSendGainDragBegin(id) => {
-            // Snapshot the pre-drag gain so the commit records one undo step —
-            // the `AudioCrossoverDragBegin` pattern, per-send (D7).
-            ctx.scrub.audio_send_gain_drag_snapshot = Some(
-                ctx.project
-                    .audio_setup
-                    .find_send(id)
-                    .map(|s| s.gain_db)
-                    .unwrap_or(0.0),
-            );
-            if let Some(db) = ctx.scrub.audio_send_gain_drag_snapshot {
-                ctx.scrub.active_inspector_drag = Some(crate::app::ActiveInspectorDrag::AudioSendGain {
-                    send_id: id.clone(),
-                    db,
-                });
-            }
-            DispatchResult::handled()
-        }
-        AudioSetupAction::AudioSendGainDragChanged(id, db) => {
-            // Live edit (no per-frame undo): clamp to the stepper's trim range,
-            // then apply to the local project and the content thread so the
-            // label + `GainBank` track the cursor — no capture restart.
-            let clamped = db.clamp(AUDIO_SEND_GAIN_MIN_DB, AUDIO_SEND_GAIN_MAX_DB);
-            if let Some(crate::app::ActiveInspectorDrag::AudioSendGain { db: guard, .. }) =
-                &mut ctx.scrub.active_inspector_drag
-            {
-                *guard = clamped;
-            }
-            if let Some(s) = ctx.project.audio_setup.find_send_mut(id) {
-                s.gain_db = clamped;
-            }
-            let id = id.clone();
-            ContentCommand::send(
-                ctx.content_tx,
-                ContentCommand::MutateProjectLive(Box::new(move |p| {
-                    if let Some(s) = p.audio_setup.find_send_mut(&id) {
-                        s.gain_db = clamped;
-                    }
-                })),
-            );
-            DispatchResult::handled()
-        }
-        AudioSetupAction::AudioSendGainDragCommit(id) => {
-            // One undo step: snapshot (old) → current gain (new).
-            ctx.scrub.active_inspector_drag = None;
-            if let Some(old) = ctx.scrub.audio_send_gain_drag_snapshot.take() {
-                let new = ctx.project.audio_setup.find_send(id).map(|s| s.gain_db).unwrap_or(old);
-                if (new - old).abs() > f32::EPSILON {
-                    return audio_setup_command(
-                        ctx.project,
-                        ctx.content_tx,
-                        Box::new(SetAudioSendGainCommand::new(id.clone(), old, new)),
-                    );
-                }
-            }
-            DispatchResult::handled()
-        }
+        // Send-gain calibration-drag trio migrated to the unified
+        // `PanelAction::Scrub` wire (`ValueRef::AudioSendGain`, P-I / D4): keyed
+        // by `AudioSendId`, the raw dB rides `ScrubValue::Scalar` (Move clamps +
+        // pushes a live edit), Commit emits `SetAudioSendGainCommand`. The
+        // stepper / type-in / floor actions below stay one-shot commands.
         // P4 (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D8, audio-dock sibling):
         // the type-in commit — ONE undo step, no clamp. Unlike
         // `AudioSendGainDragChanged`'s live-drag path, a typed value is free

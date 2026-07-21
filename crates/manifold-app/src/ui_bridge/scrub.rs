@@ -30,6 +30,7 @@ use manifold_core::project::Project;
 use manifold_core::{GraphTarget, LayerId};
 use manifold_editing::commands::ableton::ChangeAbletonTrimCommand;
 use manifold_editing::commands::audio_mod::{SetAudioModActionCommand, SetAudioModShapeCommand};
+use manifold_editing::commands::audio_setup::SetAudioSendGainCommand;
 use manifold_editing::commands::drivers::ChangeTrimCommand;
 use manifold_editing::commands::effect_target::DriverTarget;
 use manifold_editing::commands::effects::{ChangeGraphParamCommand, SetRelightParamCommand};
@@ -41,9 +42,10 @@ use manifold_editing::commands::settings::{
 };
 use manifold_ui::{AudioShapeParam, ScrubPhase, ValueRef};
 
+use super::dispatch::audio_setup::{AUDIO_SEND_GAIN_MAX_DB, AUDIO_SEND_GAIN_MIN_DB};
 use super::dispatch::resolve::{
-    ableton_mapping_target, clip_trigger_shape_dual_edit, graph_audio_mod_dual_edit,
-    graph_driver_dual_edit, graph_env_dual_edit, resolve_graph_target,
+    ableton_mapping_target, audio_setup_command, clip_trigger_shape_dual_edit,
+    graph_audio_mod_dual_edit, graph_driver_dual_edit, graph_env_dual_edit, resolve_graph_target,
 };
 use super::{DispatchCtx, DispatchResult};
 
@@ -61,8 +63,6 @@ pub struct ScrubState {
     pub trim_snapshot: Option<(f32, f32)>,
     /// Band-divider drag snapshot `(low_hz, mid_hz)` for undo.
     pub audio_crossover_snapshot: Option<(f32, f32)>,
-    /// Send-gain drag snapshot (old dB) for undo (D7).
-    pub audio_send_gain_drag_snapshot: Option<f32>,
     /// Active inspector drag — prevents snapshot from overwriting dragged field.
     pub active_inspector_drag: Option<ActiveInspectorDrag>,
     /// The single P-I-ported gesture: undo baseline + resolved restore payload.
@@ -192,6 +192,14 @@ pub enum ResolvedScrub {
         index: usize,
         baseline: AudioModShape,
         live: AudioModShape,
+    },
+    /// An Audio Setup send-gain (dB) calibration drag. `baseline` is the pre-drag
+    /// gain the commit diffs against; `live` is the latest clamped dB the restore
+    /// path re-stamps on the send.
+    AudioSendGain {
+        send_id: manifold_core::AudioSendId,
+        baseline: f32,
+        live: f32,
     },
 }
 
@@ -372,6 +380,11 @@ impl ResolvedScrub {
                     && let Some(t) = layer.clip_triggers.get_mut(*index)
                 {
                     t.shape = *live;
+                }
+            }
+            ResolvedScrub::AudioSendGain { send_id, live, .. } => {
+                if let Some(s) = project.audio_setup.find_send_mut(send_id) {
+                    s.gain_db = *live;
                 }
             }
         }
@@ -1601,6 +1614,77 @@ pub(crate) fn dispatch_scrub(
                         );
                         boxed.execute(ctx.project);
                         ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
+                    }
+                }
+                DispatchResult::handled()
+            }
+        },
+
+        ValueRef::AudioSendGain(send_id) => match phase {
+            ScrubPhase::Begin => {
+                // Snapshot the pre-drag gain as the undo baseline — addressed
+                // directly by `AudioSendId`, no resolution (the retired
+                // `AudioSendGainDragBegin`).
+                let baseline = ctx
+                    .project
+                    .audio_setup
+                    .find_send(send_id)
+                    .map(|s| s.gain_db)
+                    .unwrap_or(0.0);
+                ctx.scrub.active = Some(ResolvedScrub::AudioSendGain {
+                    send_id: send_id.clone(),
+                    baseline,
+                    live: baseline,
+                });
+                DispatchResult::handled()
+            }
+            ScrubPhase::Move(sv) => {
+                if let Some(db) = sv.scalar() {
+                    // Clamp to the stepper's trim range, then push a LIVE
+                    // (non-undo) edit to both the local project and the content
+                    // thread so the label + `GainBank` track the cursor without a
+                    // capture restart (the retired `AudioSendGainDragChanged`).
+                    let clamped = db.clamp(AUDIO_SEND_GAIN_MIN_DB, AUDIO_SEND_GAIN_MAX_DB);
+                    if let Some(ResolvedScrub::AudioSendGain { live, .. }) = &mut ctx.scrub.active {
+                        *live = clamped;
+                    }
+                    if let Some(s) = ctx.project.audio_setup.find_send_mut(send_id) {
+                        s.gain_db = clamped;
+                    }
+                    let id = send_id.clone();
+                    ContentCommand::send(
+                        ctx.content_tx,
+                        ContentCommand::MutateProjectLive(Box::new(move |p| {
+                            if let Some(s) = p.audio_setup.find_send_mut(&id) {
+                                s.gain_db = clamped;
+                            }
+                        })),
+                    );
+                }
+                DispatchResult::handled()
+            }
+            ScrubPhase::Commit => {
+                // One undo step: baseline (old) → current gain (new), via
+                // `audio_setup_command` (which rebuilds the panel — structural),
+                // matching the retired trio.
+                let baseline = match &ctx.scrub.active {
+                    Some(ResolvedScrub::AudioSendGain { baseline, .. }) => Some(*baseline),
+                    _ => None,
+                };
+                ctx.scrub.active = None;
+                if let Some(old) = baseline {
+                    let new = ctx
+                        .project
+                        .audio_setup
+                        .find_send(send_id)
+                        .map(|s| s.gain_db)
+                        .unwrap_or(old);
+                    if (new - old).abs() > f32::EPSILON {
+                        return audio_setup_command(
+                            ctx.project,
+                            ctx.content_tx,
+                            Box::new(SetAudioSendGainCommand::new(send_id.clone(), old, new)),
+                        );
                     }
                 }
                 DispatchResult::handled()

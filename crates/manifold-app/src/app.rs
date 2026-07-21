@@ -72,11 +72,9 @@ pub(crate) enum ActiveInspectorDrag {
     // trio) migrated to the unified scrub gesture
     // (`ui_bridge::scrub::ResolvedScrub::AudioTriggerShape`, P-I / D4) —
     // whole-shape restore preserved.
-    /// An Audio Setup send-gain label drag (`AudioSendGainDrag*` trio).
-    AudioSendGain {
-        send_id: manifold_core::AudioSendId,
-        db: f32,
-    },
+    // AudioSendGain (send-gain calibration-drag `AudioSendGainDrag*` trio)
+    // migrated to the unified scrub gesture
+    // (`ui_bridge::scrub::ResolvedScrub::AudioSendGain`, P-I / D4).
     /// An Audio Setup band-divider drag (`AudioCrossover*` trio).
     AudioCrossover {
         low_hz: f32,
@@ -130,11 +128,6 @@ impl ActiveInspectorDrag {
             // Every restore below writes through the SAME store the family's
             // live `*Changed` arm writes, so a mid-drag snapshot swap can't
             // revert the in-flight value (undo audit 2026-07-19, cluster C).
-            Self::AudioSendGain { send_id, db } => {
-                if let Some(s) = project.audio_setup.find_send_mut(send_id) {
-                    s.gain_db = *db;
-                }
-            }
             Self::AudioCrossover { low_hz, mid_hz } => {
                 project.audio_setup.low_hz = *low_hz;
                 project.audio_setup.mid_hz = *mid_hz;

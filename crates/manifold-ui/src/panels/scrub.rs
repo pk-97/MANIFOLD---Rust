@@ -19,7 +19,7 @@
 //! data (the resolved core target captured for the mid-gesture snapshot-stomp
 //! guard) lives app-side in `ui_bridge::scrub::ScrubState`, not here.
 
-use manifold_foundation::{LayerId, ParamId};
+use manifold_foundation::{AudioSendId, LayerId, ParamId};
 
 use super::{AudioShapeParam, GraphParamTarget, TrimKind, UiRelightField};
 
@@ -128,4 +128,10 @@ pub enum ValueRef {
     /// which scalar this gesture drags (value rides `ScrubValue::Scalar` on
     /// Move), and the restore path re-stamps the whole shape.
     AudioTriggerShape(LayerId, usize, AudioShapeParam),
+    /// An Audio Setup send-gain (dB) calibration drag — was
+    /// `AudioSendGainDrag{Begin,Changed,Commit}`. Keyed by `AudioSendId`; the
+    /// raw dB rides `ScrubValue::Scalar` on Move (the host clamps it to the
+    /// stepper's trim range and pushes a live, non-undo edit). The stepper,
+    /// type-in, and floor drags are separate one-shot actions, not this gesture.
+    AudioSendGain(AudioSendId),
 }

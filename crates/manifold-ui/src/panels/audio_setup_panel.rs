@@ -17,7 +17,7 @@
 //! gain trim. Per-send labels are auto-assigned ("Audio N") until a text-field
 //! rename lands; multi-channel downmix and the v2 analysis toggles are future.
 
-use crate::{AudioSetupAction, LayerAction, RootAction};
+use crate::{AudioSetupAction, LayerAction, RootAction, ScrubPhase, ScrubValue, ValueRef};
 use crate::types::AudioDeviceRef;
 use manifold_foundation::{AudioSendId, LayerId};
 
@@ -1863,9 +1863,9 @@ impl AudioSetupPanel {
                     (
                         true,
                         vec![PanelAction::slider_reset(
-                            PanelAction::AudioSetup(AudioSetupAction::AudioSendGainDragBegin(send_id.clone())),
-                            PanelAction::AudioSetup(AudioSetupAction::AudioSendGainDragChanged(send_id.clone(), 0.0)),
-                            PanelAction::AudioSetup(AudioSetupAction::AudioSendGainDragCommit(send_id)),
+                            PanelAction::Scrub(ValueRef::AudioSendGain(send_id.clone()), ScrubPhase::Begin),
+                            PanelAction::Scrub(ValueRef::AudioSendGain(send_id.clone()), ScrubPhase::Move(ScrubValue::Scalar(0.0))),
+                            PanelAction::Scrub(ValueRef::AudioSendGain(send_id), ScrubPhase::Commit),
                         )],
                     )
                 } else {
@@ -1914,7 +1914,7 @@ impl AudioSetupPanel {
                         }),
                         *pos,
                     );
-                    (true, vec![PanelAction::AudioSetup(AudioSetupAction::AudioSendGainDragBegin(send))])
+                    (true, vec![PanelAction::Scrub(ValueRef::AudioSendGain(send), ScrubPhase::Begin)])
                 } else if self.owns_node(*node_id) || self.point_in_scope(*pos) {
                     (true, Vec::new())
                 } else {
@@ -1940,14 +1940,14 @@ impl AudioSetupPanel {
                 Some(AudioSetupDrag::Calibration(CalibrationDrag::Gain { send, start_x, start_db, fine })) => {
                     let db_per_px = if fine { 0.01 } else { 0.1 };
                     let new_db = start_db + (pos.x - start_x) * db_per_px;
-                    (true, vec![PanelAction::AudioSetup(AudioSetupAction::AudioSendGainDragChanged(send, new_db))])
+                    (true, vec![PanelAction::Scrub(ValueRef::AudioSendGain(send), ScrubPhase::Move(ScrubValue::Scalar(new_db)))])
                 }
                 None => (false, Vec::new()),
             },
             UIEvent::DragEnd { .. } | UIEvent::PointerUp { .. } => match self.drag.release() {
                 Some(AudioSetupDrag::Band(_)) => (true, vec![PanelAction::AudioSetup(AudioSetupAction::AudioCrossoverCommit)]),
                 Some(AudioSetupDrag::Calibration(CalibrationDrag::Gain { send, .. })) => {
-                    (true, vec![PanelAction::AudioSetup(AudioSetupAction::AudioSendGainDragCommit(send))])
+                    (true, vec![PanelAction::Scrub(ValueRef::AudioSendGain(send), ScrubPhase::Commit)])
                 }
                 None => (false, Vec::new()),
             },
@@ -2371,11 +2371,11 @@ mod tests {
             assert!(consumed, "right-click on a stepper zone must be consumed");
             match actions.as_slice() {
                 [PanelAction::Root(RootAction::SliderReset { changed, .. })] => match changed.as_ref() {
-                    PanelAction::AudioSetup(AudioSetupAction::AudioSendGainDragChanged(sid, db)) => {
+                    PanelAction::Scrub(ValueRef::AudioSendGain(sid), ScrubPhase::Move(ScrubValue::Scalar(db))) => {
                         assert_eq!(sid.as_str(), "s1");
                         assert!((db - 0.0).abs() < 1e-6, "reset must target unity (0 dB), got {db}");
                     }
-                    other => panic!("expected AudioSendGainDragChanged, got {other:?}"),
+                    other => panic!("expected AudioSendGain scrub move, got {other:?}"),
                 },
                 other => panic!("expected a SliderReset trio, got {other:?}"),
             }
@@ -2398,7 +2398,7 @@ mod tests {
         assert!(consumed);
         assert!(matches!(
             actions.as_slice(),
-            [PanelAction::AudioSetup(AudioSetupAction::AudioSendGainDragBegin(id))] if id.as_str() == "s1"
+            [PanelAction::Scrub(ValueRef::AudioSendGain(id), ScrubPhase::Begin)] if id.as_str() == "s1"
         ));
 
         // 20 px right at 0.1 dB/px, starting from send 1's 0 dB.
@@ -2408,11 +2408,11 @@ mod tests {
             delta: Vec2::new(20.0, 0.0),
         });
         match actions.as_slice() {
-            [PanelAction::AudioSetup(AudioSetupAction::AudioSendGainDragChanged(id, db))] => {
+            [PanelAction::Scrub(ValueRef::AudioSendGain(id), ScrubPhase::Move(ScrubValue::Scalar(db)))] => {
                 assert_eq!(id.as_str(), "s1");
                 assert!((db - 2.0).abs() < 1e-4, "expected +2.0 dB, got {db}");
             }
-            other => panic!("expected AudioSendGainDragChanged, got {other:?}"),
+            other => panic!("expected AudioSendGain scrub move, got {other:?}"),
         }
 
         let (_, actions) = p.handle_event(&UIEvent::PointerUp {
@@ -2421,7 +2421,7 @@ mod tests {
         });
         assert!(matches!(
             actions.as_slice(),
-            [PanelAction::AudioSetup(AudioSetupAction::AudioSendGainDragCommit(id))] if id.as_str() == "s1"
+            [PanelAction::Scrub(ValueRef::AudioSendGain(id), ScrubPhase::Commit)] if id.as_str() == "s1"
         ));
         assert!(!p.is_dragging_band(), "gain drag must not arm the crossover drag flag");
     }
