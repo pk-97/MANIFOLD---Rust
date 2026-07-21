@@ -10,7 +10,7 @@
 use super::PanelAction;
 use super::{
     AudioShapeParam, BandDivider, DriverConfigAction, GraphParamTarget, InspectorTab,
-    TrimKind, UiRelightHeightFrom,
+    UiRelightHeightFrom,
 };
 use super::{browser_popup, picker_core};
 use crate::input::Modifiers;
@@ -499,14 +499,8 @@ pub enum ModulationAction {
     /// Set a Step action's wrap mode — index into `[Wrap, Bounce, Clamp]`
     /// (D2) — the drawer's Wrap segmented row, shown only while Action=Step.
     AudioModSetWrap(GraphParamTarget, ParamId, usize),
-    /// A modulator output sub-range handle moved during a drag. `TrimKind`
-    /// selects which modulator (driver / Ableton / audio) — the three formerly
-    /// parallel `*TrimChanged` variants are one path now.
-    TrimChanged(TrimKind, GraphParamTarget, ParamId, f32, f32),
-    /// Snapshot trim state before drag (for undo).
-    TrimSnapshot(TrimKind, GraphParamTarget, ParamId),
-    /// Commit trim drag (record undo command).
-    TrimCommit(TrimKind, GraphParamTarget, ParamId),
+    // Trim-range scrub trio (driver / Ableton / audio sub-range handles)
+    // migrated to `PanelAction::Scrub` (`ValueRef::Trim`, P-I / D4).
     /// Envelope target (orange handle / `target_normalized`) changed.
     TargetChanged(GraphParamTarget, ParamId, f32),
     /// Snapshot target before drag (for undo).

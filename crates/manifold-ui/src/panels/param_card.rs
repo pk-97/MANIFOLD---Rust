@@ -4069,11 +4069,11 @@ impl ParamCardPanel {
                         if let Some(t) = self.trim_ids_for(kind)[row].as_ref() {
                             if node_id == t.min_bar_id {
                                 self.drag.begin(ParamDragTarget::Trim { kind, index: row, is_min: true }, pos);
-                                return vec![PanelAction::Modulation(ModulationAction::TrimSnapshot(kind, target, self.rows[row].id.clone()))];
+                                return vec![PanelAction::Scrub(ValueRef::Trim(kind, target, self.rows[row].id.clone()), ScrubPhase::Begin)];
                             }
                             if node_id == t.max_bar_id {
                                 self.drag.begin(ParamDragTarget::Trim { kind, index: row, is_min: false }, pos);
-                                return vec![PanelAction::Modulation(ModulationAction::TrimSnapshot(kind, target, self.rows[row].id.clone()))];
+                                return vec![PanelAction::Scrub(ValueRef::Trim(kind, target, self.rows[row].id.clone()), ScrubPhase::Begin)];
                             }
                         }
                     }
@@ -4115,14 +4115,14 @@ impl ParamCardPanel {
                                 ParamDragTarget::Trim { kind: TrimKind::Driver, index: row, is_min: true },
                                 pos,
                             );
-                            return vec![PanelAction::Modulation(ModulationAction::TrimSnapshot(TrimKind::Driver, target, self.rows[row].id.clone()))];
+                            return vec![PanelAction::Scrub(ValueRef::Trim(TrimKind::Driver, target, self.rows[row].id.clone()), ScrubPhase::Begin)];
                         }
                         if dist_max < hit_zone {
                             self.drag.begin(
                                 ParamDragTarget::Trim { kind: TrimKind::Driver, index: row, is_min: false },
                                 pos,
                             );
-                            return vec![PanelAction::Modulation(ModulationAction::TrimSnapshot(TrimKind::Driver, target, self.rows[row].id.clone()))];
+                            return vec![PanelAction::Scrub(ValueRef::Trim(TrimKind::Driver, target, self.rows[row].id.clone()), ScrubPhase::Begin)];
                         }
                     }
                     // If the envelope is armed, the orange target handle gets
@@ -4373,10 +4373,10 @@ impl ParamCardPanel {
             let pid = self.rows[pi].id.clone();
             return match self.kind {
                 ParamCardKind::Effect => {
-                    vec![PanelAction::Modulation(ModulationAction::TrimChanged(kind, GraphParamTarget::Effect(ei), pid, new_min, new_max))]
+                    vec![PanelAction::Scrub(ValueRef::Trim(kind, GraphParamTarget::Effect(ei), pid), ScrubPhase::Move(ScrubValue::Range(new_min, new_max)))]
                 }
                 ParamCardKind::Generator => {
-                    vec![PanelAction::Modulation(ModulationAction::TrimChanged(kind, GraphParamTarget::Generator, pid, new_min, new_max))]
+                    vec![PanelAction::Scrub(ValueRef::Trim(kind, GraphParamTarget::Generator, pid), ScrubPhase::Move(ScrubValue::Range(new_min, new_max)))]
                 }
             };
         }
@@ -4474,9 +4474,9 @@ impl ParamCardPanel {
             Some(ParamDragTarget::Trim { kind, index: pi, .. }) => {
                 let pid = self.rows[pi].id.clone();
                 match self.kind {
-                    ParamCardKind::Effect => vec![PanelAction::Modulation(ModulationAction::TrimCommit(kind, GraphParamTarget::Effect(ei), pid))],
+                    ParamCardKind::Effect => vec![PanelAction::Scrub(ValueRef::Trim(kind, GraphParamTarget::Effect(ei), pid), ScrubPhase::Commit)],
                     ParamCardKind::Generator => {
-                        vec![PanelAction::Modulation(ModulationAction::TrimCommit(kind, GraphParamTarget::Generator, pid))]
+                        vec![PanelAction::Scrub(ValueRef::Trim(kind, GraphParamTarget::Generator, pid), ScrubPhase::Commit)]
                     }
                 }
             }
@@ -5530,7 +5530,7 @@ mod tests {
 
         let down = panel.handle_pointer_down(min_bar_id, Vec2::new(0.0, 0.0), &tree);
         assert!(
-            matches!(down.as_slice(), [PanelAction::Modulation(ModulationAction::TrimSnapshot(TrimKind::Driver, GraphParamTarget::Effect(0), pid))] if pid.as_ref() == "radius"),
+            matches!(down.as_slice(), [PanelAction::Scrub(ValueRef::Trim(TrimKind::Driver, GraphParamTarget::Effect(0), pid), ScrubPhase::Begin)] if pid.as_ref() == "radius"),
             "begin emits a trim snapshot: {down:?}"
         );
         assert!(panel.is_dragging());
@@ -5539,13 +5539,13 @@ mod tests {
         let new_x = track_rect.x + track_rect.width * 0.4;
         let moved = panel.handle_drag(Vec2::new(new_x, track_rect.y), &mut tree);
         assert!(
-            matches!(moved.as_slice(), [PanelAction::Modulation(ModulationAction::TrimChanged(TrimKind::Driver, GraphParamTarget::Effect(0), pid, ..))] if pid.as_ref() == "radius"),
+            matches!(moved.as_slice(), [PanelAction::Scrub(ValueRef::Trim(TrimKind::Driver, GraphParamTarget::Effect(0), pid), ScrubPhase::Move(..))] if pid.as_ref() == "radius"),
             "track emits the live trim range: {moved:?}"
         );
 
         let ended = panel.handle_drag_end(&mut tree);
         assert!(
-            matches!(ended.as_slice(), [PanelAction::Modulation(ModulationAction::TrimCommit(TrimKind::Driver, GraphParamTarget::Effect(0), pid))] if pid.as_ref() == "radius"),
+            matches!(ended.as_slice(), [PanelAction::Scrub(ValueRef::Trim(TrimKind::Driver, GraphParamTarget::Effect(0), pid), ScrubPhase::Commit)] if pid.as_ref() == "radius"),
             "end emits exactly one trim commit: {ended:?}"
         );
         assert!(!panel.is_dragging());
@@ -5581,7 +5581,7 @@ mod tests {
         let live = tree.get_bounds(track);
         let moved = panel.handle_drag(Vec2::new(live.x + live.width * 0.3, live.y), &mut tree);
         assert!(
-            matches!(moved.as_slice(), [PanelAction::Modulation(ModulationAction::TrimChanged(TrimKind::Driver, ..))]),
+            matches!(moved.as_slice(), [PanelAction::Scrub(ValueRef::Trim(TrimKind::Driver, ..), ScrubPhase::Move(..))]),
             "trim drag still routes after scroll: {moved:?}"
         );
 

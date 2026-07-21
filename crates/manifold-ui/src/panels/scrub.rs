@@ -21,7 +21,7 @@
 
 use manifold_foundation::{LayerId, ParamId};
 
-use super::{GraphParamTarget, UiRelightField};
+use super::{GraphParamTarget, TrimKind, UiRelightField};
 
 /// One edge of a scrub gesture — maps 1:1 onto the retired
 /// `*Snapshot`/`*Changed`/`*Commit` trio (D4). The scrubbed value rides
@@ -49,6 +49,9 @@ pub enum ScrubPhase {
 pub enum ScrubValue {
     /// A single scalar — an opacity, a card param, a knob position.
     Scalar(f32),
+    /// A `(min, max)` sub-range — a modulation trim-bar drag (driver / audio /
+    /// Ableton), where one gesture carries both edges.
+    Range(f32, f32),
 }
 
 impl ScrubValue {
@@ -56,6 +59,15 @@ impl ScrubValue {
     pub fn scalar(self) -> Option<f32> {
         match self {
             ScrubValue::Scalar(v) => Some(v),
+            ScrubValue::Range(..) => None,
+        }
+    }
+
+    /// The `(min, max)` range payload, or `None` for a non-range shape.
+    pub fn range(self) -> Option<(f32, f32)> {
+        match self {
+            ScrubValue::Range(min, max) => Some((min, max)),
+            ScrubValue::Scalar(_) => None,
         }
     }
 }
@@ -88,4 +100,8 @@ pub enum ValueRef {
     /// A "3D Shading" relight knob on an effect/generator graph — was
     /// `RelightParam{Snapshot,Changed,Commit}`.
     RelightParam(GraphParamTarget, UiRelightField),
+    /// A modulation trim-range handle (driver / audio-mod / Ableton sub-range
+    /// bars) — was `Trim{Snapshot,Changed,Commit}`. `TrimKind` selects the
+    /// backing store; the `(min, max)` value rides `ScrubValue::Range` on Move.
+    Trim(TrimKind, GraphParamTarget, ParamId),
 }

@@ -203,7 +203,7 @@ mod scene_card_convergence_tests {
     /// same store `TrimChanged`'s driver dual-edit uses.
     #[test]
     fn driver_trim_range_survives_a_mid_gesture_snapshot() {
-        use crate::app::ActiveInspectorDrag;
+        use crate::ui_bridge::scrub::{ResolvedScrub, ScrubState};
         let (mut project, layer_id) = scene_layer_project();
         let target = manifold_core::GraphTarget::Generator(layer_id.clone());
         let pid: manifold_core::effects::ParamId = std::borrow::Cow::Owned("density".to_string());
@@ -235,17 +235,21 @@ mod scene_card_convergence_tests {
             }
         });
 
-        // app_render mid-drag: local_project := stale, then restore the drag.
-        let drag = ActiveInspectorDrag::Trim {
-            kind: manifold_ui::panels::TrimKind::Driver,
-            target: target.clone(),
-            ableton_target: None,
-            param_id: pid.clone(),
-            min: 0.3,
-            max: 0.9,
+        // app_render mid-drag: local_project := stale, then restore the gesture
+        // through the P-I `active` scrub state (the production restore path).
+        let scrub = ScrubState {
+            active: Some(ResolvedScrub::Trim {
+                kind: manifold_ui::panels::TrimKind::Driver,
+                target: target.clone(),
+                ableton_target: None,
+                param_id: pid.clone(),
+                baseline: (0.3, 0.9),
+                live: (0.3, 0.9),
+            }),
+            ..Default::default()
         };
         let mut local = stale;
-        drag.apply(&mut local);
+        scrub.restore_dragged(&mut local);
 
         let (mn, mx) = local
             .with_preset_graph_mut(&target, |inst| {
@@ -790,23 +794,26 @@ mod scene_card_convergence_tests {
                 &mut h,
                 |h, p| {
                     h.dispatch(
-                        &PanelAction::Modulation(ModulationAction::TrimSnapshot(manifold_ui::panels::TrimKind::Driver, gpt(), pid.clone())),
+                        &PanelAction::Scrub(
+                            ValueRef::Trim(manifold_ui::panels::TrimKind::Driver, gpt(), pid.clone()),
+                            ScrubPhase::Begin,
+                        ),
                         p,
                     );
                     h.dispatch(
-                        &PanelAction::Modulation(ModulationAction::TrimChanged(
-                            manifold_ui::panels::TrimKind::Driver,
-                            gpt(),
-                            pid.clone(),
-                            0.3,
-                            0.9,
-                        )),
+                        &PanelAction::Scrub(
+                            ValueRef::Trim(manifold_ui::panels::TrimKind::Driver, gpt(), pid.clone()),
+                            ScrubPhase::Move(ScrubValue::Range(0.3, 0.9)),
+                        ),
                         p,
                     );
                 },
                 |h, p| {
                     h.dispatch(
-                        &PanelAction::Modulation(ModulationAction::TrimCommit(manifold_ui::panels::TrimKind::Driver, gpt(), pid.clone())),
+                        &PanelAction::Scrub(
+                            ValueRef::Trim(manifold_ui::panels::TrimKind::Driver, gpt(), pid.clone()),
+                            ScrubPhase::Commit,
+                        ),
                         p,
                     )
                 },

@@ -28,6 +28,10 @@ use manifold_core::audio_mod::{AudioModShape, TriggerAction};
 use manifold_core::effects::ParamId;
 use manifold_core::project::Project;
 use manifold_core::{GraphTarget, LayerId};
+use manifold_editing::commands::ableton::ChangeAbletonTrimCommand;
+use manifold_editing::commands::audio_mod::SetAudioModShapeCommand;
+use manifold_editing::commands::drivers::ChangeTrimCommand;
+use manifold_editing::commands::effect_target::DriverTarget;
 use manifold_editing::commands::effects::{ChangeGraphParamCommand, SetRelightParamCommand};
 use manifold_editing::commands::settings::{
     ChangeLayerOpacityCommand, ChangeLedBrightnessCommand, ChangeMacroCommand,
@@ -35,7 +39,9 @@ use manifold_editing::commands::settings::{
 };
 use manifold_ui::{ScrubPhase, ValueRef};
 
-use super::dispatch::resolve::resolve_graph_target;
+use super::dispatch::resolve::{
+    ableton_mapping_target, graph_audio_mod_dual_edit, graph_driver_dual_edit, resolve_graph_target,
+};
 use super::{DispatchCtx, DispatchResult};
 
 /// The in-flight scrub-gesture snapshots threaded through `dispatch`. Every
@@ -130,6 +136,19 @@ pub enum ResolvedScrub {
         baseline: f32,
         live: f32,
     },
+    /// A modulation trim-range handle (driver / audio-mod / Ableton sub-range
+    /// bars, BUG-246). `kind` selects the store; `ableton_target` is resolved
+    /// only for `TrimKind::Ableton` (`None` for driver/audio). `baseline`/`live`
+    /// are `(min, max)` pairs — the pre-gesture range the commit diffs against
+    /// and the latest dragged range the restore path re-stamps.
+    Trim {
+        kind: manifold_ui::panels::TrimKind,
+        target: GraphTarget,
+        ableton_target: Option<manifold_core::ableton_mapping::AbletonMappingTarget>,
+        param_id: ParamId,
+        baseline: (f32, f32),
+        live: (f32, f32),
+    },
 }
 
 impl ResolvedScrub {
@@ -176,6 +195,55 @@ impl ResolvedScrub {
                 project.with_preset_graph_mut(target, |inst| {
                     field.set(&mut inst.relight_params, *live);
                 });
+            }
+            ResolvedScrub::Trim {
+                kind,
+                target,
+                ableton_target,
+                param_id,
+                live: (min, max),
+                ..
+            } => {
+                use manifold_ui::panels::TrimKind;
+                // Same store each kind's live Move write lands in, re-applied so a
+                // mid-drag snapshot swap can't revert the in-flight range.
+                match kind {
+                    TrimKind::Driver => {
+                        project.with_preset_graph_mut(target, |inst| {
+                            if let Some(d) = inst
+                                .drivers
+                                .as_mut()
+                                .and_then(|ds| ds.iter_mut().find(|d| d.param_id == *param_id))
+                            {
+                                d.trim_min = *min;
+                                d.trim_max = *max;
+                            }
+                        });
+                    }
+                    TrimKind::Audio => {
+                        project.with_preset_graph_mut(target, |inst| {
+                            if let Some(m) = inst
+                                .audio_mods
+                                .as_mut()
+                                .and_then(|ms| ms.iter_mut().find(|a| a.param_id == *param_id))
+                            {
+                                m.shape.range_min = *min;
+                                m.shape.range_max = *max;
+                            }
+                        });
+                    }
+                    TrimKind::Ableton => {
+                        if let Some(mt) = ableton_target
+                            && let Some(ms) = project
+                                .ableton_param_mappings_mut(mt)
+                                .and_then(|opt| opt.as_mut())
+                            && let Some(m) = ms.iter_mut().find(|m| m.param_id == *param_id)
+                        {
+                            m.range_min = *min;
+                            m.range_max = *max;
+                        }
+                    }
+                }
             }
         }
     }
@@ -643,6 +711,274 @@ pub(crate) fn dispatch_scrub(
                         {
                             let cmd = SetRelightParamCommand::new(target, f, old_val, new_val);
                             ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
+                        }
+                    }
+                    ctx.scrub.active = None;
+                    DispatchResult::handled()
+                }
+            }
+        }
+
+        ValueRef::Trim(kind, gpt, param_id) => {
+            use manifold_ui::panels::TrimKind;
+            match phase {
+                ScrubPhase::Begin => {
+                    if let Some(target) = resolve_graph_target(
+                        gpt,
+                        ctx.editor_target,
+                        effective_tab,
+                        active_layer,
+                        ctx.selection,
+                        ctx.project,
+                    ) {
+                        // The ValueRef→resolved mapping done ONCE, at Begin (FORK
+                        // 1): resolve the Ableton mapping target for the restore
+                        // payload, and read the pre-gesture range from the kind's
+                        // store as the undo baseline.
+                        let ableton_target = matches!(kind, TrimKind::Ableton)
+                            .then(|| {
+                                ableton_mapping_target(
+                                    &target,
+                                    effective_tab,
+                                    active_layer,
+                                    ctx.project,
+                                    param_id,
+                                )
+                            })
+                            .flatten();
+                        let baseline = match kind {
+                            TrimKind::Driver => ctx
+                                .project
+                                .with_preset_graph_mut(&target, |inst| {
+                                    inst.drivers
+                                        .as_ref()
+                                        .and_then(|ds| ds.iter().find(|d| d.param_id == *param_id))
+                                        .map(|d| (d.trim_min, d.trim_max))
+                                })
+                                .flatten(),
+                            TrimKind::Audio => ctx
+                                .project
+                                .with_preset_graph_mut(&target, |inst| {
+                                    inst.audio_mods
+                                        .as_ref()
+                                        .and_then(|ms| ms.iter().find(|a| a.param_id == *param_id))
+                                        .map(|m| (m.shape.range_min, m.shape.range_max))
+                                })
+                                .flatten(),
+                            TrimKind::Ableton => ableton_target.as_ref().and_then(|mt| {
+                                ctx.project
+                                    .ableton_param_mappings(mt)
+                                    .and_then(|opt| opt.as_ref())
+                                    .and_then(|ms| ms.iter().find(|m| m.param_id == *param_id))
+                                    .map(|m| (m.range_min, m.range_max))
+                            }),
+                        };
+                        if let Some(baseline) = baseline {
+                            ctx.scrub.active = Some(ResolvedScrub::Trim {
+                                kind: *kind,
+                                target,
+                                ableton_target,
+                                param_id: param_id.clone(),
+                                baseline,
+                                live: baseline,
+                            });
+                        }
+                    }
+                    DispatchResult::handled()
+                }
+                ScrubPhase::Move(sv) => {
+                    if let (Some((mn, mx)), Some(target)) = (
+                        sv.range(),
+                        resolve_graph_target(
+                            gpt,
+                            ctx.editor_target,
+                            effective_tab,
+                            active_layer,
+                            ctx.selection,
+                            ctx.project,
+                        ),
+                    ) {
+                        if let Some(ResolvedScrub::Trim { live, .. }) = &mut ctx.scrub.active {
+                            *live = (mn, mx);
+                        }
+                        // Each kind keeps the exact live edit it had before the
+                        // unification (driver dual-edit, audio dual-edit, Ableton
+                        // mapping local + content-sync).
+                        match kind {
+                            TrimKind::Driver => {
+                                graph_driver_dual_edit(
+                                    ctx.project,
+                                    ctx.content_tx,
+                                    &target,
+                                    param_id.clone(),
+                                    move |d| {
+                                        d.trim_min = mn;
+                                        d.trim_max = mx;
+                                    },
+                                );
+                            }
+                            TrimKind::Audio => {
+                                graph_audio_mod_dual_edit(
+                                    ctx.project,
+                                    ctx.content_tx,
+                                    &target,
+                                    param_id.clone(),
+                                    move |m| {
+                                        m.shape.range_min = mn;
+                                        m.shape.range_max = mx;
+                                    },
+                                );
+                            }
+                            TrimKind::Ableton => {
+                                if let Some(mapping_target) = ableton_mapping_target(
+                                    &target,
+                                    effective_tab,
+                                    active_layer,
+                                    ctx.project,
+                                    param_id,
+                                ) {
+                                    // Local edit + content sync route through the
+                                    // shared locate-fork so they can't split.
+                                    if let Some(ms) = ctx
+                                        .project
+                                        .ableton_param_mappings_mut(&mapping_target)
+                                        .and_then(|opt| opt.as_mut())
+                                        && let Some(m) =
+                                            ms.iter_mut().find(|m| m.param_id == *param_id)
+                                    {
+                                        m.range_min = mn;
+                                        m.range_max = mx;
+                                    }
+                                    let mt = mapping_target.clone();
+                                    let pid = param_id.clone();
+                                    ContentCommand::send(
+                                        ctx.content_tx,
+                                        ContentCommand::MutateProject(Box::new(move |p| {
+                                            if let Some(ms) = p
+                                                .ableton_param_mappings_mut(&mt)
+                                                .and_then(|opt| opt.as_mut())
+                                                && let Some(m) =
+                                                    ms.iter_mut().find(|m| m.param_id == pid)
+                                            {
+                                                m.range_min = mn;
+                                                m.range_max = mx;
+                                            }
+                                        })),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    DispatchResult::handled()
+                }
+                ScrubPhase::Commit => {
+                    let baseline = match &ctx.scrub.active {
+                        Some(ResolvedScrub::Trim { baseline, .. }) => Some(*baseline),
+                        _ => None,
+                    };
+                    if let Some((old_min, old_max)) = baseline
+                        && let Some(target) = resolve_graph_target(
+                            gpt,
+                            ctx.editor_target,
+                            effective_tab,
+                            active_layer,
+                            ctx.selection,
+                            ctx.project,
+                        )
+                    {
+                        match kind {
+                            TrimKind::Driver => {
+                                let info = ctx
+                                    .project
+                                    .with_preset_graph_mut(&target, |inst| {
+                                        inst.drivers
+                                            .as_ref()
+                                            .and_then(|ds| {
+                                                ds.iter().position(|d| d.param_id == *param_id)
+                                            })
+                                            .map(|di| {
+                                                let d = &inst.drivers.as_ref().unwrap()[di];
+                                                (di, d.trim_min, d.trim_max)
+                                            })
+                                    })
+                                    .flatten();
+                                if let Some((di, new_min, new_max)) = info
+                                    && ((old_min - new_min).abs() > f32::EPSILON
+                                        || (old_max - new_max).abs() > f32::EPSILON)
+                                {
+                                    let cmd = ChangeTrimCommand::new(
+                                        DriverTarget::from(&target),
+                                        di,
+                                        old_min,
+                                        old_max,
+                                        new_min,
+                                        new_max,
+                                    );
+                                    ContentCommand::send(
+                                        ctx.content_tx,
+                                        ContentCommand::Execute(Box::new(cmd)),
+                                    );
+                                }
+                            }
+                            TrimKind::Audio => {
+                                let new_shape = ctx
+                                    .project
+                                    .with_preset_graph_mut(&target, |inst| {
+                                        inst.audio_mods
+                                            .as_ref()
+                                            .and_then(|ms| {
+                                                ms.iter().find(|a| a.param_id == *param_id)
+                                            })
+                                            .map(|m| m.shape)
+                                    })
+                                    .flatten();
+                                if let Some(new_shape) = new_shape
+                                    && ((old_min - new_shape.range_min).abs() > f32::EPSILON
+                                        || (old_max - new_shape.range_max).abs() > f32::EPSILON)
+                                {
+                                    let mut old_shape = new_shape;
+                                    old_shape.range_min = old_min;
+                                    old_shape.range_max = old_max;
+                                    let cmd = SetAudioModShapeCommand::new(
+                                        DriverTarget::from(&target),
+                                        param_id.clone(),
+                                        old_shape,
+                                        new_shape,
+                                    );
+                                    ContentCommand::send(
+                                        ctx.content_tx,
+                                        ContentCommand::Execute(Box::new(cmd)),
+                                    );
+                                }
+                            }
+                            TrimKind::Ableton => {
+                                if let Some(mt) = ableton_mapping_target(
+                                    &target,
+                                    effective_tab,
+                                    active_layer,
+                                    ctx.project,
+                                    param_id,
+                                ) {
+                                    let new = ctx
+                                        .project
+                                        .ableton_param_mappings(&mt)
+                                        .and_then(|opt| opt.as_ref())
+                                        .and_then(|ms| ms.iter().find(|m| m.param_id == *param_id))
+                                        .map(|m| (m.range_min, m.range_max));
+                                    if let Some((new_min, new_max)) = new
+                                        && ((old_min - new_min).abs() > f32::EPSILON
+                                            || (old_max - new_max).abs() > f32::EPSILON)
+                                    {
+                                        let cmd = ChangeAbletonTrimCommand::new(
+                                            mt, old_min, old_max, new_min, new_max,
+                                        );
+                                        ContentCommand::send(
+                                            ctx.content_tx,
+                                            ContentCommand::Execute(Box::new(cmd)),
+                                        );
+                                    }
+                                }
+                            }
                         }
                     }
                     ctx.scrub.active = None;

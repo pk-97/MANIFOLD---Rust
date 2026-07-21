@@ -53,20 +53,9 @@ pub type SelectionState = UIState;
 pub(crate) enum ActiveInspectorDrag {
     // MasterOpacity/LedBrightness/LayerOpacity/Macro/Param migrated to the
     // unified scrub gesture (`ui_bridge::scrub::ResolvedScrub`, P-I / D4).
-    /// A modulation trim-range handle drag (driver / audio-mod / Ableton
-    /// sub-range bars, BUG-246). Not carried in any snapshot block, so a
-    /// concurrent `data_version` bump mid-drag replaces `local_project`
-    /// wholesale and the in-flight `[min, max]` snaps back. This restores the
-    /// live range through the same store each `TrimKind` writes.
-    Trim {
-        kind: manifold_ui::panels::TrimKind,
-        target: manifold_core::GraphTarget,
-        /// Resolved only for `TrimKind::Ableton`; `None` for driver/audio.
-        ableton_target: Option<manifold_core::ableton_mapping::AbletonMappingTarget>,
-        param_id: manifold_core::effects::ParamId,
-        min: f32,
-        max: f32,
-    },
+    // Trim (modulation trim-range handle trio, driver / audio-mod / Ableton,
+    // BUG-246) migrated to the unified scrub gesture
+    // (`ui_bridge::scrub::ResolvedScrub::Trim`, P-I / D4).
     // AudioGain (layer-header audio-gain trio) migrated to the unified scrub
     // gesture (`ui_bridge::scrub::ResolvedScrub::LayerAudioGain`, P-I / D4).
     /// An envelope target (orange handle) drag (`Target*` trio).
@@ -155,56 +144,6 @@ impl ActiveInspectorDrag {
     /// Write the dragged value back into the project after snapshot acceptance.
     pub(crate) fn apply(&self, project: &mut manifold_core::project::Project) {
         match self {
-            Self::Trim {
-                kind,
-                target,
-                ableton_target,
-                param_id,
-                min,
-                max,
-            } => {
-                use manifold_ui::panels::TrimKind;
-                // Same store each kind's live `TrimChanged` write lands in
-                // (inspector.rs), re-applied so a mid-drag snapshot swap can't
-                // revert the in-flight range.
-                match kind {
-                    TrimKind::Driver => {
-                        project.with_preset_graph_mut(target, |inst| {
-                            if let Some(d) = inst
-                                .drivers
-                                .as_mut()
-                                .and_then(|ds| ds.iter_mut().find(|d| d.param_id == *param_id))
-                            {
-                                d.trim_min = *min;
-                                d.trim_max = *max;
-                            }
-                        });
-                    }
-                    TrimKind::Audio => {
-                        project.with_preset_graph_mut(target, |inst| {
-                            if let Some(m) = inst
-                                .audio_mods
-                                .as_mut()
-                                .and_then(|ms| ms.iter_mut().find(|a| a.param_id == *param_id))
-                            {
-                                m.shape.range_min = *min;
-                                m.shape.range_max = *max;
-                            }
-                        });
-                    }
-                    TrimKind::Ableton => {
-                        if let Some(mt) = ableton_target
-                            && let Some(ms) = project
-                                .ableton_param_mappings_mut(mt)
-                                .and_then(|opt| opt.as_mut())
-                            && let Some(m) = ms.iter_mut().find(|m| m.param_id == *param_id)
-                        {
-                            m.range_min = *min;
-                            m.range_max = *max;
-                        }
-                    }
-                }
-            }
             // Every restore below writes through the SAME store the family's
             // live `*Changed` arm writes, so a mid-drag snapshot swap can't
             // revert the in-flight value (undo audit 2026-07-19, cluster C).
