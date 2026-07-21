@@ -66,19 +66,30 @@ Design-doc P-S headline amendment is drafted at phase close (my close report).
       Inline test mods follow their fns (D7a scaffold class). Does NOT touch escalation points.
       Gate: move_identity residue 0 + clippy/check + nextest(ui,app) + swatch --no-run + no_bespoke_row_infra.
 
-- [ ] **P-S2** extract shared `RowHost` (SEMANTIC · ONE Opus lane · commit-at-checkpoints)
-      Lift `ParamCardPanel`'s id-bundle vecs + `row_index` + `reindex_row` + `register_intents`
-      + `row_action`/audio/enum row-actions (param_card.rs:472-636, :1876, :3756, :3529-3660, :4489)
-      into a `RowHost` struct in `param_surface/`. Re-point `ParamCardPanel` to EMBED it.
-      Relight rows stay OUT (ruling). RowMod + generator string-param = ESCALATE if encountered.
-      Gate: no_bespoke_row_infra + card/golden/undo + row_dispatch suites (assertions unmodified)
-      + widget-tree INV-1..8 green + headless PNG look-oracle. REPORT to team-lead on completion.
+- [x] **P-S2** DONE — RowHost extracted into `param_slider_shared/row_host.rs`, ParamCardPanel embeds it.
+      Commits `35b55a41` (CP1: id-bundle machinery) + `bc361cbb` (CP2: row_action + helpers).
+      SEAM DECISION (team-lead ACCEPTED): id/routing machinery extracted; per-row MODEL stays
+      panel-owned and rides by reference — extract-the-seam, NOT fold-the-rows (folding rows/mod_state
+      would be the rewrite the census flagged as risk). Two compile-forced field additions fine
+      (the P-S3 twin owns both). NODE_ID_HOARD_ALLOWLIST entry for RowHost = allowlist-DATA consistent
+      with INV-5 (RowHost is the sanctioned shared home). Wide `row_action` param list = named honest cost.
+      NO escalation fired — RowMod + string_param_btn_ids correctly left on the panel per pre-frame.
+      Gates INDEPENDENTLY GREEN: clippy(-D warnings)=0, nextest=0 (1172 passed incl. no_bespoke_row_infra
+      + chrome_param_card_proof + param_surface INV + app baseline suites), swatch --no-run=0 (D-37);
+      team-lead already accepted incl. look-oracle. REVIEWED + ACCEPTED by team-lead before P-S3.
 
-- [ ] **P-S3** collapse `SceneCardState` into `RowHost` (SEMANTIC · Opus lane · depends P-S2)
-      Delete scene twin `scene_setup_panel.rs:582-930` + fold `properties_row_action` (:2524)
-      into `RowHost::row_action`. `pid_at` dies (INV-2). SceneCardState BECOMES RowHost.
-      Gate: no_bespoke_row_infra + scene flow subset (`run_ui_flows.py scene-` green)
-      + `rg 'pid_at' scene_setup_panel.rs` → 0 + scene undo/golden. REPORT to team-lead on completion.
+- [ ] **P-S3** collapse `SceneCardState` onto `RowHost` (SEMANTIC · Opus lane · depends P-S2) — GO
+      TEAM-LEAD RULING (bake into brief): SceneCardState EMBEDS a RowHost matching ParamCardPanel's
+      shape — own model fields, delegated machinery. Do NOT fold rows/mod_state into RowHost (host
+      SYMMETRY beats param-count; asymmetric ownership between the two hosts = a new divergence axis).
+      The param-list collapse is a post-campaign refinement if it ever bites. Delete SceneCardState's
+      DUPLICATED `reindex_row`/`register_intents`/audio-helper twins (they now live on RowHost); scene
+      delegates to shared `RowHost::row_action` (fold `properties_row_action`'s duplicated logic).
+      `pid_at` dies (INV-2). "Mirrors ParamCardPanel" comments die WITH the mirrors.
+      DELETION GATE: `rg 'reindex_row|register_intents|pid_at' scene_setup_panel.rs` → 0 duplicated twins;
+      `rg 'Mirrors ParamCardPanel' scene_setup_panel.rs` → 0; scene-setup flow subset green via manifest
+      runner (`run_ui_flows.py scene-`). Plus clippy/nextest(ui,app)/swatch + scene undo/golden.
+      REPORT to team-lead on completion (reviews before P-S4/5 run).
 
 - [ ] **P-S4** `param_card.rs` render/routing/state split (PURE MOVE · Sonnet lane · after P-S2)
       `param_card/{render,routing,state}.rs` per census §1. Embeds the RowHost field from P-S2.
