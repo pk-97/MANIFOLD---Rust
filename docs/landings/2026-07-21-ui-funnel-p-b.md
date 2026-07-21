@@ -33,3 +33,7 @@ None in landed code. Process notes: mid-phase dual-dispatcher collision on slot-
 
 - Full sweep: `Summary [ 168.277s] 3852 tests run: 3852 passed (13 slow), 13 skipped` · workspace clippy `-D warnings` clean · `bans ok`.
 - Flow runner (mechanical BUG-252 gate): `33/33 required flows passed · 7 known-red (xfail) still red · 40/40 flow files accounted for`. Level: **L3, full count-match**.
+
+## Independent post-push verification (ws1 orchestrator, per D-25/D-27)
+
+Run against pushed main (`10a12c1e` lineage, verifier at tip): full sweep `Summary [168.096s] 3852 tests run: 3852 passed (13 slow, 1 leaky), 13 skipped`; `cargo clippy --workspace --tests -- -D warnings` clean; `cargo deny check bans` → `bans ok`; census (name-dedup) = 150 with sorted-LIST diff vs entry census EMPTY; `dispatch_inspector` read directly — router-only (6 ordered chain calls + bare unhandled terminal); flow suite via `scripts/run_ui_flows.py`: **33/33 required passed, 7 known-red xfail (BUG-300/264/239 annotated), 40/40 flow files accounted for in the manifest** — the BUG-252 count-match rule is now mechanically enforced. P-B stands verified end-to-end by a second session.
