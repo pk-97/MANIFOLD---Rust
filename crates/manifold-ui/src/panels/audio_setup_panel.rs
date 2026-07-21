@@ -2483,11 +2483,11 @@ mod tests {
         let consumers: Vec<SendConsumerRow> = (0..12)
             .map(|i| SendConsumerRow {
                 label: format!("LAYER {i} \u{2022} Effect \u{2022} Param"),
-                layer_id: Some(LayerId::new(&format!("layer{i}"))),
+                layer_id: Some(LayerId::new(format!("layer{i}"))),
             })
             .collect();
         let feeding: Vec<(LayerId, String)> = (0..6)
-            .map(|i| (LayerId::new(&format!("src{i}")), format!("SRC {i}")))
+            .map(|i| (LayerId::new(format!("src{i}")), format!("SRC {i}")))
             .collect();
         p.configure(
             None,

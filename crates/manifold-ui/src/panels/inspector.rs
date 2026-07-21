@@ -2925,7 +2925,7 @@ mod tests {
         let mut author_tree = UITree::new();
         let mut author_panel = InspectorCompositePanel::new();
         author_panel.set_card_context(CardContext::Author);
-        author_panel.configure_master_effects(&[config.clone()]);
+        author_panel.configure_master_effects(std::slice::from_ref(&config));
         author_panel.configure_tabs(&[InspectorTab::Master], InspectorTab::Master);
         author_panel.build_in_rect(&mut author_tree, rect);
         let author_row = author_panel

@@ -2915,6 +2915,26 @@ mod p1_4_gesture_integrity_tests {
         is_generator: bool,
     }
 
+    type AutomationPointMove = (
+        UiGraphTarget,
+        ParamId,
+        (Beats, f32, UiSegmentShape),
+        (Beats, f32, UiSegmentShape),
+    );
+    type AutomationSegmentDragCommit = (
+        UiGraphTarget,
+        ParamId,
+        (Beats, f32, f32, UiSegmentShape),
+        (Beats, f32, f32, UiSegmentShape),
+    );
+    type AutomationGroupMoveCommit = Vec<(UiGraphTarget, ParamId, Beats, f32, f32, UiSegmentShape)>;
+    type AutomationDrawCommit = (
+        UiGraphTarget,
+        ParamId,
+        Vec<(Beats, f32, UiSegmentShape)>,
+        Option<Vec<(Beats, f32, UiSegmentShape)>>,
+    );
+
     struct GestureTestHost {
         layers: Vec<UiLayer>,
         clips: Vec<ClipEntry>,
@@ -2924,25 +2944,10 @@ mod p1_4_gesture_integrity_tests {
         committed_batches: Vec<usize>,
         // P7.3 automation-fold pinning (recorded, not no-op'd, so the tests
         // below can assert exactly what a gesture committed).
-        automation_point_moves: Vec<(
-            UiGraphTarget,
-            ParamId,
-            (Beats, f32, UiSegmentShape),
-            (Beats, f32, UiSegmentShape),
-        )>,
-        automation_segment_drag_commits: Vec<(
-            UiGraphTarget,
-            ParamId,
-            (Beats, f32, f32, UiSegmentShape),
-            (Beats, f32, f32, UiSegmentShape),
-        )>,
-        automation_group_move_commits: Vec<Vec<(UiGraphTarget, ParamId, Beats, f32, f32, UiSegmentShape)>>,
-        automation_draw_commits: Vec<(
-            UiGraphTarget,
-            ParamId,
-            Vec<(Beats, f32, UiSegmentShape)>,
-            Option<Vec<(Beats, f32, UiSegmentShape)>>,
-        )>,
+        automation_point_moves: Vec<AutomationPointMove>,
+        automation_segment_drag_commits: Vec<AutomationSegmentDragCommit>,
+        automation_group_move_commits: Vec<AutomationGroupMoveCommit>,
+        automation_draw_commits: Vec<AutomationDrawCommit>,
         // records every `on_automation_lane_right_click` call.
         automation_lane_right_clicks: Vec<(UiGraphTarget, ParamId)>,
     }
