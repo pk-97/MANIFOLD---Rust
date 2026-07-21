@@ -11,7 +11,7 @@ Per-slice gate (exit codes, no eyeballs): `python3 scripts/move_identity_check.p
 - [x] **S3 — `expose.rs`**: ToggleNodeParamExpose + reverse enums + mirror/unmirror + `find_node_by_id_or_handle_mut`/`effective_value_to_serialized` (design D3 row 3; both helpers are expose-region-only, review-verified).
 - [x] **S4 — `groups.rs`**: GroupNodes/UngroupNode/SetGroupTint/RenameGroup + group helpers (design D3 row 4). CENSUS-CRITICAL slice: the multiset census exists because a second `RenameGroupCommand` lives in commands/effect_groups.rs — a set-census is blind here. Verify raw count 161 preserved.
 - [x] **S5 — `scene.rs`**: the 11 scene commands + scene builders/id helpers (design D3 row 5).
-- [ ] **S6 — `modifiers.rs` + `paste.rs`** (design D3 rows 6–7).
+- [x] **S6 — `modifiers.rs` + `paste.rs`** (design D3 rows 6–7).
 - [ ] **S7 — `test_support.rs` + test distribution.** Requires S0b landed on this lane. Shared fixtures → `test_support.rs` (`#[cfg(test)]`), per-module `mod tests` beside their commands, bodies verbatim, cfg on declarations. The ONLY sanctioned edits are the S0b wiring classes. A fixture may NOT be copied — import from test_support.
 - [ ] **S8 — Phase-end lane gate.** Full `cargo nextest run -p manifold-editing` + clippy `-p manifold-editing -- -D warnings` + both multiset censuses vs baselines + deletion proof (`test -f crates/manifold-editing/src/commands/graph.rs` exits 1, `test -d .../graph` exits 0). Report all outputs in the final message. STOP — top session lands.
 
