@@ -58,6 +58,27 @@ COMMENT = re.compile(r"^[+-]\s*(//|///|//!)")
 # cannot change runtime behavior (it only widens who may call).
 VIS = re.compile(r"^(pub(\((crate|super)\))?\s+)")
 
+# Multi-line `use { ... }` brace-list continuation (D-18): the single-line
+# ALLOW regex above only matches lines that themselves start with `use`, so
+# the inner list lines and the closing `};` of a multi-line import block were
+# surfacing as residue even though they are pure wiring. Fixed with STATEFUL
+# per-sign block tracking in `classify()`: a +/- line matching USE_OPEN below
+# (a `use` line ending in an unclosed `{`) opens a block for that sign; while
+# open, a same-sign line is allowed ONLY if it matches USE_ITEM — one or more
+# `ident`/`a::b::c` path items, comma-separated, optional `as alias`, optional
+# trailing comma, optional closing `};` (which closes the block). Anything
+# else inside an open block is NOT import-shaped and falls through to residue
+# — this is the smuggle-proofing: a real code statement hidden between the
+# `use x::{` opener and the `};` closer must still be caught. Per-sign state
+# resets on every non-content diff line (hunk/file header, context line) so a
+# stray unrelated line elsewhere in the diff can never inherit an open block.
+USE_OPEN = re.compile(r"^(pub(\((crate|super)\))?\s+)?use\s.*\{\s*$")
+_IDENT = r"[A-Za-z_]\w*"
+_PATH_ITEM = rf"{_IDENT}(?:::{_IDENT})*(?:\s+as\s+{_IDENT})?"
+USE_ITEM = re.compile(
+    rf"^(?:{_PATH_ITEM}(?:\s*,\s*{_PATH_ITEM})*,?\s*(?:\}}\s*;?)?|\}}\s*;?)$"
+)
+
 # Dispatch-split scaffold (UI_FUNNEL_DECOMPOSITION P-B): the structural glue a
 # `dispatch_inspector` match-split adds that git cannot classify as a move
 # because it is genuinely new text, not relocated — a sub-dispatcher signature,
@@ -128,16 +149,36 @@ def classify(out: str) -> tuple[dict[str, int], list[str]]:
     without constructing a git repo."""
     residue: list[str] = []
     counts = {"moved": 0, "allowed": 0, "comments": 0, "scaffold": 0}
+    # Per-sign use-block state (D-18): True while a `-` (resp. `+`) multi-line
+    # `use { ... }` is open and hasn't hit its closing `};` yet.
+    open_block = {"+": False, "-": False}
     for raw in out.splitlines():
         is_moved = bool(MOVED_RE.match(raw))
         plain = ANSI.sub("", raw)
         if not plain.startswith(("+", "-")) or HEADER.match(plain):
+            # Non-content line (hunk/file header, unchanged context): a use
+            # block can never legitimately span one, so reset both signs.
+            open_block["+"] = False
+            open_block["-"] = False
             continue
+        sign = plain[0]
         if is_moved:
             counts["moved"] += 1
             continue
+        if open_block[sign]:
+            body = plain[1:].strip()
+            if USE_ITEM.match(body):
+                counts["allowed"] += 1
+                if "}" in body:
+                    open_block[sign] = False
+                continue
+            # Not import-item-shaped: a real line was smuggled inside the
+            # open block. Leave the block "open" (a well-formed diff will
+            # still close it later) and fall through to residue below.
         if ALLOW.match(plain):
             counts["allowed"] += 1
+            if USE_OPEN.match(plain[1:].strip()):
+                open_block[sign] = True
             continue
         if COMMENT.match(plain):
             counts["comments"] += 1
