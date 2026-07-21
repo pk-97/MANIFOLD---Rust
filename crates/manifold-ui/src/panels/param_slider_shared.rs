@@ -5,7 +5,7 @@
 //! builders, and formatting helpers across both kinds. This module is the
 //! single source of truth for them.
 
-use crate::{AudioSetupAction, ModulationAction, RootAction};
+use crate::{AudioSetupAction, RootAction};
 use super::DriverConfigAction;
 use super::TrimKind;
 use super::param_card::RowMod;
@@ -2242,9 +2242,12 @@ pub(crate) fn build_audio_mod_drawer(
                 format!("{amount:.2}")
             };
             let step_reset = PanelAction::slider_reset(
-                PanelAction::Modulation(ModulationAction::AudioModStepAmountSnapshot(gpt.clone(), pid.clone())),
-                PanelAction::Modulation(ModulationAction::AudioModStepAmountChanged(gpt.clone(), pid.clone(), default_amount)),
-                PanelAction::Modulation(ModulationAction::AudioModStepAmountCommit(gpt.clone(), pid.clone())),
+                PanelAction::Scrub(ValueRef::AudioModStepAmount(gpt.clone(), pid.clone()), ScrubPhase::Begin),
+                PanelAction::Scrub(
+                    ValueRef::AudioModStepAmount(gpt.clone(), pid.clone()),
+                    ScrubPhase::Move(ScrubValue::Scalar(default_amount)),
+                ),
+                PanelAction::Scrub(ValueRef::AudioModStepAmount(gpt.clone(), pid.clone()), ScrubPhase::Commit),
             );
             rows.push(shape_slider(
                 "Step",

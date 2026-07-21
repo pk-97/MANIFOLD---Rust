@@ -29,7 +29,7 @@ use manifold_core::effects::ParamId;
 use manifold_core::project::Project;
 use manifold_core::{GraphTarget, LayerId};
 use manifold_editing::commands::ableton::ChangeAbletonTrimCommand;
-use manifold_editing::commands::audio_mod::SetAudioModShapeCommand;
+use manifold_editing::commands::audio_mod::{SetAudioModActionCommand, SetAudioModShapeCommand};
 use manifold_editing::commands::drivers::ChangeTrimCommand;
 use manifold_editing::commands::effect_target::DriverTarget;
 use manifold_editing::commands::effects::{ChangeGraphParamCommand, SetRelightParamCommand};
@@ -60,8 +60,6 @@ pub struct ScrubState {
     pub trim_snapshot: Option<(f32, f32)>,
     /// Audio-mod shaping-slider drag snapshot (whole shape) for undo.
     pub audio_shape_snapshot: Option<AudioModShape>,
-    /// Step-Amount drag snapshot (PARAM_STEP_ACTIONS D8) for undo.
-    pub audio_action_snapshot: Option<TriggerAction>,
     /// Band-divider drag snapshot `(low_hz, mid_hz)` for undo.
     pub audio_crossover_snapshot: Option<(f32, f32)>,
     /// Send-gain drag snapshot (old dB) for undo (D7).
@@ -172,6 +170,18 @@ pub enum ResolvedScrub {
         param_id: ParamId,
         baseline: AudioModShape,
         live: AudioModShape,
+    },
+    /// An audio-mod Step-action amount slider. The undo `baseline` is the WHOLE
+    /// pre-drag `TriggerAction` (the commit emits `SetAudioModActionCommand`
+    /// old→new), while the restore path only needs `live_amount`: it re-stamps
+    /// `TriggerAction::Step { amount: live_amount, wrap }` reading the current
+    /// wrap from the store, matching the retired
+    /// `ActiveInspectorDrag::AudioModStepAmount`.
+    AudioModStepAmount {
+        target: GraphTarget,
+        param_id: ParamId,
+        baseline: TriggerAction,
+        live_amount: f32,
     },
 }
 
@@ -314,6 +324,31 @@ impl ResolvedScrub {
                         .and_then(|ms| ms.iter_mut().find(|a| a.param_id == *param_id))
                     {
                         m.shape = *live;
+                    }
+                });
+            }
+            ResolvedScrub::AudioModStepAmount {
+                target,
+                param_id,
+                live_amount,
+                ..
+            } => {
+                project.with_preset_graph_mut(target, |inst| {
+                    if let Some(m) = inst
+                        .audio_mods
+                        .as_mut()
+                        .and_then(|ms| ms.iter_mut().find(|a| a.param_id == *param_id))
+                    {
+                        // Re-stamp the Step action, preserving the current wrap —
+                        // the same write the live `Move` arm lands.
+                        let wrap = match m.action {
+                            TriggerAction::Step { wrap, .. } => wrap,
+                            _ => manifold_core::audio_mod::WrapMode::Wrap,
+                        };
+                        m.action = TriggerAction::Step {
+                            amount: *live_amount,
+                            wrap,
+                        };
                     }
                 });
             }
@@ -1352,6 +1387,118 @@ pub(crate) fn dispatch_scrub(
                                 param_id.clone(),
                                 old_shape,
                                 new_shape,
+                            ));
+                        boxed.execute(ctx.project);
+                        ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
+                    }
+                }
+                DispatchResult::handled()
+            }
+        },
+
+        ValueRef::AudioModStepAmount(gpt, param_id) => match phase {
+            ScrubPhase::Begin => {
+                if let Some(target) = resolve_graph_target(
+                    gpt,
+                    ctx.editor_target,
+                    effective_tab,
+                    active_layer,
+                    ctx.selection,
+                    ctx.project,
+                ) {
+                    // Capture the WHOLE pre-drag action as the undo baseline (the
+                    // commit diffs it against the new action); the restore path
+                    // re-stamps only the live amount, preserving wrap.
+                    let baseline = ctx
+                        .project
+                        .with_preset_graph_mut(&target, |inst| {
+                            inst.find_audio_mod(param_id.as_ref()).map(|m| m.action)
+                        })
+                        .flatten();
+                    if let Some(baseline) = baseline {
+                        let live_amount = match baseline {
+                            TriggerAction::Step { amount, .. } => amount,
+                            _ => 0.0,
+                        };
+                        ctx.scrub.active = Some(ResolvedScrub::AudioModStepAmount {
+                            target,
+                            param_id: param_id.clone(),
+                            baseline,
+                            live_amount,
+                        });
+                    }
+                }
+                DispatchResult::handled()
+            }
+            ScrubPhase::Move(sv) => {
+                if let (Some(v), Some(target)) = (
+                    sv.scalar(),
+                    resolve_graph_target(
+                        gpt,
+                        ctx.editor_target,
+                        effective_tab,
+                        active_layer,
+                        ctx.selection,
+                        ctx.project,
+                    ),
+                ) {
+                    if let Some(ResolvedScrub::AudioModStepAmount { live_amount, .. }) =
+                        &mut ctx.scrub.active
+                    {
+                        *live_amount = v;
+                    }
+                    // Re-stamp the Step action preserving the current wrap — the
+                    // same dual-edit the retired `AudioModStepAmountChanged` arm ran.
+                    graph_audio_mod_dual_edit(
+                        ctx.project,
+                        ctx.content_tx,
+                        &target,
+                        param_id.clone(),
+                        move |m| {
+                            let wrap = match m.action {
+                                TriggerAction::Step { wrap, .. } => wrap,
+                                _ => manifold_core::audio_mod::WrapMode::Wrap,
+                            };
+                            m.action = TriggerAction::Step { amount: v, wrap };
+                        },
+                    );
+                }
+                DispatchResult::handled()
+            }
+            ScrubPhase::Commit => {
+                // One undo step: baseline action (old) → current action (new),
+                // via `SetAudioModActionCommand` — matches the retired trio,
+                // including the local `execute` on the UI project.
+                let old_action = match &ctx.scrub.active {
+                    Some(ResolvedScrub::AudioModStepAmount { baseline, .. }) => Some(*baseline),
+                    _ => None,
+                };
+                ctx.scrub.active = None;
+                if let Some(old_action) = old_action
+                    && let Some(target) = resolve_graph_target(
+                        gpt,
+                        ctx.editor_target,
+                        effective_tab,
+                        active_layer,
+                        ctx.selection,
+                        ctx.project,
+                    )
+                {
+                    let new_action = ctx
+                        .project
+                        .with_preset_graph_mut(&target, |inst| {
+                            inst.find_audio_mod(param_id.as_ref()).map(|m| m.action)
+                        })
+                        .flatten();
+                    if let Some(new_action) = new_action
+                        && new_action != old_action
+                    {
+                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                            Box::new(SetAudioModActionCommand::new(
+                                DriverTarget::from(&target),
+                                param_id.clone(),
+                                old_action,
+                                new_action,
                             ));
                         boxed.execute(ctx.project);
                         ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));

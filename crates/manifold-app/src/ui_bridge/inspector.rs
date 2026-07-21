@@ -1482,10 +1482,10 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 |h, p| {
-                    h.dispatch(&PanelAction::Modulation(ModulationAction::AudioModStepAmountSnapshot(gpt(), pid.clone())), p);
-                    h.dispatch(&PanelAction::Modulation(ModulationAction::AudioModStepAmountChanged(gpt(), pid.clone(), 0.65)), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::AudioModStepAmount(gpt(), pid.clone()), ScrubPhase::Begin), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::AudioModStepAmount(gpt(), pid.clone()), ScrubPhase::Move(ScrubValue::Scalar(0.65))), p);
                 },
-                |h, p| h.dispatch(&PanelAction::Modulation(ModulationAction::AudioModStepAmountCommit(gpt(), pid.clone())), p),
+                |h, p| h.dispatch(&PanelAction::Scrub(ValueRef::AudioModStepAmount(gpt(), pid.clone()), ScrubPhase::Commit), p),
                 read_amount,
                 0.1,
                 0.65,

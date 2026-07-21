@@ -478,15 +478,9 @@ pub enum ModulationAction {
     /// enum has nowhere to keep them outside the `Step` variant — re-entering
     /// reseeds, matching D2's "seeding only" contract).
     AudioModSetActionKind(GraphParamTarget, ParamId, usize),
-    /// Snapshot an audio mod's action before a Step-Amount slider drag (undo
-    /// start). `amount` lives on `TriggerAction::Step`, not `AudioModShape`,
-    /// so it rides its own snapshot/changed/commit trio rather than
-    /// `AudioShapeParam`'s.
-    AudioModStepAmountSnapshot(GraphParamTarget, ParamId),
-    /// Live-edit the Step amount during a drawer-slider drag (no undo entry).
-    AudioModStepAmountChanged(GraphParamTarget, ParamId, f32),
-    /// Commit a Step-Amount drag as one undo step (drag end).
-    AudioModStepAmountCommit(GraphParamTarget, ParamId),
+    // Audio-mod Step-amount scrub trio migrated to `PanelAction::Scrub`
+    // (`ValueRef::AudioModStepAmount`, P-I / D4): the amount rides
+    // `ScrubValue::Scalar`, the whole `TriggerAction` is the undo baseline.
     /// Set a Step action's wrap mode — index into `[Wrap, Bounce, Clamp]`
     /// (D2) — the drawer's Wrap segmented row, shown only while Action=Step.
     AudioModSetWrap(GraphParamTarget, ParamId, usize),

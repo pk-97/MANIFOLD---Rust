@@ -115,4 +115,10 @@ pub enum ValueRef {
     /// names which of the three scalars this gesture drags; the value rides
     /// `ScrubValue::Scalar` on Move (the restore path re-stamps the whole shape).
     AudioModShape(GraphParamTarget, ParamId, AudioShapeParam),
+    /// An audio-mod Step-action amount slider — was
+    /// `AudioModStepAmount{Snapshot,Changed,Commit}`. The dragged `amount` rides
+    /// `ScrubValue::Scalar` on Move; the restore path re-stamps
+    /// `TriggerAction::Step { amount, wrap }` (preserving the current wrap), and
+    /// the undo baseline is the whole pre-drag `TriggerAction`.
+    AudioModStepAmount(GraphParamTarget, ParamId),
 }

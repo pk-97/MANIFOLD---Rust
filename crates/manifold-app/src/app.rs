@@ -64,12 +64,10 @@ pub(crate) enum ActiveInspectorDrag {
     // AudioModShape (drawer shaping-slider `AudioModShape*` trio) migrated to the
     // unified scrub gesture (`ui_bridge::scrub::ResolvedScrub::AudioModShape`,
     // P-I / D4) — whole-shape restore preserved.
-    /// An audio-mod Step-amount drag (`AudioModStepAmount*` trio).
-    AudioModStepAmount {
-        target: manifold_core::GraphTarget,
-        param_id: manifold_core::effects::ParamId,
-        amount: f32,
-    },
+    // AudioModStepAmount (drawer Step-amount slider `AudioModStepAmount*` trio)
+    // migrated to the unified scrub gesture
+    // (`ui_bridge::scrub::ResolvedScrub::AudioModStepAmount`, P-I / D4) — whole
+    // `TriggerAction` baseline, wrap-preserving restore.
     /// A layer clip-trigger shape-slider drag (`AudioTriggerShape*` trio).
     AudioTriggerShape {
         layer_id: LayerId,
@@ -134,28 +132,6 @@ impl ActiveInspectorDrag {
             // Every restore below writes through the SAME store the family's
             // live `*Changed` arm writes, so a mid-drag snapshot swap can't
             // revert the in-flight value (undo audit 2026-07-19, cluster C).
-            Self::AudioModStepAmount {
-                target,
-                param_id,
-                amount,
-            } => {
-                project.with_preset_graph_mut(target, |inst| {
-                    if let Some(m) = inst
-                        .audio_mods
-                        .as_mut()
-                        .and_then(|ms| ms.iter_mut().find(|a| a.param_id == *param_id))
-                    {
-                        let wrap = match m.action {
-                            manifold_core::audio_mod::TriggerAction::Step { wrap, .. } => wrap,
-                            _ => manifold_core::audio_mod::WrapMode::Wrap,
-                        };
-                        m.action = manifold_core::audio_mod::TriggerAction::Step {
-                            amount: *amount,
-                            wrap,
-                        };
-                    }
-                });
-            }
             Self::AudioTriggerShape {
                 layer_id,
                 index,

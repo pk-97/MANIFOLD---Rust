@@ -25,7 +25,7 @@ use manifold_editing::commands::envelopes::{AddEnvelopeCommand, ToggleEnvelopeEn
 use manifold_ui::{DriverConfigAction, InspectorTab, ModulationAction};
 
 use super::super::DispatchResult;
-use super::resolve::{graph_audio_mod_dual_edit, resolve_mod_target};
+use super::resolve::resolve_mod_target;
 use crate::content_command::ContentCommand;
 
 pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::super::DispatchCtx) -> DispatchResult {
@@ -338,88 +338,11 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
             DispatchResult::structural()
         }
 
-        ModulationAction::AudioModStepAmountSnapshot(gpt, param_id) => {
-            // Capture the pre-drag action so the commit can record one undo step.
-            if let Some((target, param_id)) = resolve_mod_target(
-                ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
-                ctx.selection, false,
-            ) {
-                let param_id = &param_id;
-                ctx.scrub.audio_action_snapshot = ctx.project
-                    .with_preset_graph_mut(&target, |inst| {
-                        inst.find_audio_mod(param_id.as_ref()).map(|m| m.action)
-                    })
-                    .flatten();
-                let amount = match ctx.scrub.audio_action_snapshot.as_ref() {
-                    Some(manifold_core::audio_mod::TriggerAction::Step { amount, .. }) => *amount,
-                    _ => 0.0,
-                };
-                if ctx.scrub.audio_action_snapshot.is_some() {
-                    ctx.scrub.active_inspector_drag =
-                        Some(crate::app::ActiveInspectorDrag::AudioModStepAmount {
-                            target,
-                            param_id: param_id.clone(),
-                            amount,
-                        });
-                }
-            }
-            DispatchResult::handled()
-        }
-        ModulationAction::AudioModStepAmountChanged(gpt, param_id, value) => {
-            // Live edit (no undo entry per frame) — the handle tracks the cursor.
-            if let Some((target, param_id)) = resolve_mod_target(
-                ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
-                ctx.selection, false,
-            ) {
-                let param_id = &param_id;
-                let v = *value;
-                if let Some(crate::app::ActiveInspectorDrag::AudioModStepAmount {
-                    amount, ..
-                }) = &mut ctx.scrub.active_inspector_drag
-                {
-                    *amount = v;
-                }
-                graph_audio_mod_dual_edit(ctx.project, ctx.content_tx, &target, param_id.clone(), move |m| {
-                    let wrap = match m.action {
-                        manifold_core::audio_mod::TriggerAction::Step { wrap, .. } => wrap,
-                        _ => manifold_core::audio_mod::WrapMode::Wrap,
-                    };
-                    m.action = manifold_core::audio_mod::TriggerAction::Step { amount: v, wrap };
-                });
-            }
-            DispatchResult::handled()
-        }
-        ModulationAction::AudioModStepAmountCommit(gpt, param_id) => {
-            // One undo step: snapshot (old) → current action (new).
-            ctx.scrub.active_inspector_drag = None;
-            if let Some(old_action) = ctx.scrub.audio_action_snapshot.take()
-                && let Some((target, param_id)) = resolve_mod_target(
-                    ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab,
-                    active_layer, ctx.selection, false,
-                )
-            {
-                let param_id = &param_id;
-                let new_action = ctx.project
-                    .with_preset_graph_mut(&target, |inst| {
-                        inst.find_audio_mod(param_id.as_ref()).map(|m| m.action)
-                    })
-                    .flatten();
-                if let Some(new_action) = new_action
-                    && new_action != old_action
-                {
-                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                        Box::new(SetAudioModActionCommand::new(
-                            DriverTarget::from(&target),
-                            param_id.clone(),
-                            old_action,
-                            new_action,
-                        ));
-                    boxed.execute(ctx.project);
-                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
-                }
-            }
-            DispatchResult::handled()
-        }
+        // Audio-mod Step-amount scrub trio migrated to the unified
+        // `PanelAction::Scrub` wire (`ValueRef::AudioModStepAmount`, P-I / D4):
+        // the dragged amount rides `ScrubValue::Scalar`, the whole pre-drag
+        // `TriggerAction` is the undo baseline, and Commit emits
+        // `SetAudioModActionCommand`.
 
         // The Wrap segmented row — only meaningful while Action=Step; a stray
         // click while some other action is armed (shouldn't happen — the row

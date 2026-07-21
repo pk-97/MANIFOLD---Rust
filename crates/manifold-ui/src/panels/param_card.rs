@@ -4048,8 +4048,8 @@ impl ParamCardPanel {
                             self.drag.begin(ParamDragTarget::StepAmount { index: row }, pos);
                             let pid = self.rows[row].id.clone();
                             return vec![
-                                PanelAction::Modulation(ModulationAction::AudioModStepAmountSnapshot(target.clone(), pid.clone())),
-                                PanelAction::Modulation(ModulationAction::AudioModStepAmountChanged(target, pid, value)),
+                                PanelAction::Scrub(ValueRef::AudioModStepAmount(target.clone(), pid.clone()), ScrubPhase::Begin),
+                                PanelAction::Scrub(ValueRef::AudioModStepAmount(target, pid), ScrubPhase::Move(ScrubValue::Scalar(value))),
                             ];
                         }
                     }
@@ -4321,13 +4321,12 @@ impl ParamCardPanel {
                 let pid = self.rows[pi].id.clone();
                 return match self.kind {
                     ParamCardKind::Effect => {
-                        vec![PanelAction::Modulation(ModulationAction::AudioModStepAmountChanged(GraphParamTarget::Effect(ei), pid, value))]
+                        vec![PanelAction::Scrub(ValueRef::AudioModStepAmount(GraphParamTarget::Effect(ei), pid), ScrubPhase::Move(ScrubValue::Scalar(value)))]
                     }
-                    ParamCardKind::Generator => vec![PanelAction::Modulation(ModulationAction::AudioModStepAmountChanged(
-                        GraphParamTarget::Generator,
-                        pid,
-                        value,
-                    ))],
+                    ParamCardKind::Generator => vec![PanelAction::Scrub(
+                        ValueRef::AudioModStepAmount(GraphParamTarget::Generator, pid),
+                        ScrubPhase::Move(ScrubValue::Scalar(value)),
+                    )],
                 };
             }
         }
@@ -4460,10 +4459,10 @@ impl ParamCardPanel {
                 let pid = self.rows[pi].id.clone();
                 match self.kind {
                     ParamCardKind::Effect => {
-                        vec![PanelAction::Modulation(ModulationAction::AudioModStepAmountCommit(GraphParamTarget::Effect(ei), pid))]
+                        vec![PanelAction::Scrub(ValueRef::AudioModStepAmount(GraphParamTarget::Effect(ei), pid), ScrubPhase::Commit)]
                     }
                     ParamCardKind::Generator => {
-                        vec![PanelAction::Modulation(ModulationAction::AudioModStepAmountCommit(GraphParamTarget::Generator, pid))]
+                        vec![PanelAction::Scrub(ValueRef::AudioModStepAmount(GraphParamTarget::Generator, pid), ScrubPhase::Commit)]
                     }
                 }
             }
@@ -5761,7 +5760,7 @@ mod tests {
         assert!(
             matches!(
                 down.as_slice(),
-                [PanelAction::Modulation(ModulationAction::AudioModStepAmountSnapshot(GraphParamTarget::Effect(0), pid1)), PanelAction::Modulation(ModulationAction::AudioModStepAmountChanged(GraphParamTarget::Effect(0), pid2, _))]
+                [PanelAction::Scrub(ValueRef::AudioModStepAmount(GraphParamTarget::Effect(0), pid1), ScrubPhase::Begin), PanelAction::Scrub(ValueRef::AudioModStepAmount(GraphParamTarget::Effect(0), pid2), ScrubPhase::Move(..))]
                 if pid1.as_ref() == "radius" && pid2.as_ref() == "radius"
             ),
             "begin emits snapshot + first step value: {down:?}"
@@ -5771,13 +5770,13 @@ mod tests {
         let new_x = step_rect.x + step_rect.width * 0.8;
         let moved = panel.handle_drag(Vec2::new(new_x, step_rect.y), &mut tree);
         assert!(
-            matches!(moved.as_slice(), [PanelAction::Modulation(ModulationAction::AudioModStepAmountChanged(GraphParamTarget::Effect(0), pid, _))] if pid.as_ref() == "radius"),
+            matches!(moved.as_slice(), [PanelAction::Scrub(ValueRef::AudioModStepAmount(GraphParamTarget::Effect(0), pid), ScrubPhase::Move(..))] if pid.as_ref() == "radius"),
             "track emits the live step value: {moved:?}"
         );
 
         let ended = panel.handle_drag_end(&mut tree);
         assert!(
-            matches!(ended.as_slice(), [PanelAction::Modulation(ModulationAction::AudioModStepAmountCommit(GraphParamTarget::Effect(0), pid))] if pid.as_ref() == "radius"),
+            matches!(ended.as_slice(), [PanelAction::Scrub(ValueRef::AudioModStepAmount(GraphParamTarget::Effect(0), pid), ScrubPhase::Commit)] if pid.as_ref() == "radius"),
             "end emits exactly one step commit: {ended:?}"
         );
         assert!(!panel.is_dragging());
