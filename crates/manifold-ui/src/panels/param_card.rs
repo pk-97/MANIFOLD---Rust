@@ -4061,7 +4061,7 @@ impl ParamCardPanel {
                         && node_id == t.target_bar_id
                     {
                         self.drag.begin(ParamDragTarget::EnvTarget { index: row }, pos);
-                        return vec![PanelAction::Modulation(ModulationAction::TargetSnapshot(target, self.rows[row].id.clone()))];
+                        return vec![PanelAction::Scrub(ValueRef::EnvelopeTarget(target, self.rows[row].id.clone()), ScrubPhase::Begin)];
                     }
                     // Trim bars (exact hit) — driver, Ableton, audio, same
                     // probe order the old three-loop scan used.
@@ -4133,7 +4133,7 @@ impl ParamCardPanel {
                         let target_center = bar.x + TARGET_BAR_W * 0.5;
                         if (pos.x - target_center).abs() < 8.0 {
                             self.drag.begin(ParamDragTarget::EnvTarget { index: row }, pos);
-                            return vec![PanelAction::Modulation(ModulationAction::TargetSnapshot(target, self.rows[row].id.clone()))];
+                            return vec![PanelAction::Scrub(ValueRef::EnvelopeTarget(target, self.rows[row].id.clone()), ScrubPhase::Begin)];
                         }
                     }
                     // No trim/target handle nearby — normal param slider drag.
@@ -4203,8 +4203,8 @@ impl ParamCardPanel {
             }
             let pid = self.rows[pi].id.clone();
             return match self.kind {
-                ParamCardKind::Effect => vec![PanelAction::Modulation(ModulationAction::TargetChanged(GraphParamTarget::Effect(ei), pid, norm))],
-                ParamCardKind::Generator => vec![PanelAction::Modulation(ModulationAction::TargetChanged(GraphParamTarget::Generator, pid, norm))],
+                ParamCardKind::Effect => vec![PanelAction::Scrub(ValueRef::EnvelopeTarget(GraphParamTarget::Effect(ei), pid), ScrubPhase::Move(ScrubValue::Scalar(norm)))],
+                ParamCardKind::Generator => vec![PanelAction::Scrub(ValueRef::EnvelopeTarget(GraphParamTarget::Generator, pid), ScrubPhase::Move(ScrubValue::Scalar(norm)))],
             };
         }
 
@@ -4440,8 +4440,8 @@ impl ParamCardPanel {
             Some(ParamDragTarget::EnvTarget { index: pi }) => {
                 let pid = self.rows[pi].id.clone();
                 match self.kind {
-                    ParamCardKind::Effect => vec![PanelAction::Modulation(ModulationAction::TargetCommit(GraphParamTarget::Effect(ei), pid))],
-                    ParamCardKind::Generator => vec![PanelAction::Modulation(ModulationAction::TargetCommit(GraphParamTarget::Generator, pid))],
+                    ParamCardKind::Effect => vec![PanelAction::Scrub(ValueRef::EnvelopeTarget(GraphParamTarget::Effect(ei), pid), ScrubPhase::Commit)],
+                    ParamCardKind::Generator => vec![PanelAction::Scrub(ValueRef::EnvelopeTarget(GraphParamTarget::Generator, pid), ScrubPhase::Commit)],
                 }
             }
             Some(ParamDragTarget::EnvDecay { index: pi }) => {
@@ -5612,7 +5612,7 @@ mod tests {
         let live = tree.get_bounds(track);
         let moved = panel.handle_drag(Vec2::new(live.x + live.width * 0.5, live.y), &mut tree);
         assert!(
-            matches!(moved.as_slice(), [PanelAction::Modulation(ModulationAction::TargetChanged(..))]),
+            matches!(moved.as_slice(), [PanelAction::Scrub(ValueRef::EnvelopeTarget(..), ScrubPhase::Move(..))]),
             "target drag still routes after scroll: {moved:?}"
         );
 
@@ -5637,7 +5637,7 @@ mod tests {
 
         let down = panel.handle_pointer_down(target_bar_id, Vec2::new(0.0, 0.0), &tree);
         assert!(
-            matches!(down.as_slice(), [PanelAction::Modulation(ModulationAction::TargetSnapshot(GraphParamTarget::Effect(0), pid))] if pid.as_ref() == "radius"),
+            matches!(down.as_slice(), [PanelAction::Scrub(ValueRef::EnvelopeTarget(GraphParamTarget::Effect(0), pid), ScrubPhase::Begin)] if pid.as_ref() == "radius"),
             "begin emits a target snapshot: {down:?}"
         );
         assert!(panel.is_dragging());
@@ -5646,13 +5646,13 @@ mod tests {
         let new_x = track_rect.x + track_rect.width * 0.3;
         let moved = panel.handle_drag(Vec2::new(new_x, track_rect.y), &mut tree);
         assert!(
-            matches!(moved.as_slice(), [PanelAction::Modulation(ModulationAction::TargetChanged(GraphParamTarget::Effect(0), pid, norm))] if pid.as_ref() == "radius" && (*norm - 0.3).abs() < 0.05),
+            matches!(moved.as_slice(), [PanelAction::Scrub(ValueRef::EnvelopeTarget(GraphParamTarget::Effect(0), pid), ScrubPhase::Move(ScrubValue::Scalar(norm)))] if pid.as_ref() == "radius" && (*norm - 0.3).abs() < 0.05),
             "track emits the live target norm: {moved:?}"
         );
 
         let ended = panel.handle_drag_end(&mut tree);
         assert!(
-            matches!(ended.as_slice(), [PanelAction::Modulation(ModulationAction::TargetCommit(GraphParamTarget::Effect(0), pid))] if pid.as_ref() == "radius"),
+            matches!(ended.as_slice(), [PanelAction::Scrub(ValueRef::EnvelopeTarget(GraphParamTarget::Effect(0), pid), ScrubPhase::Commit)] if pid.as_ref() == "radius"),
             "end emits exactly one target commit: {ended:?}"
         );
         assert!(!panel.is_dragging());

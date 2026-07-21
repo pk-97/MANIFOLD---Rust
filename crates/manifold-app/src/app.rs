@@ -58,12 +58,8 @@ pub(crate) enum ActiveInspectorDrag {
     // (`ui_bridge::scrub::ResolvedScrub::Trim`, P-I / D4).
     // AudioGain (layer-header audio-gain trio) migrated to the unified scrub
     // gesture (`ui_bridge::scrub::ResolvedScrub::LayerAudioGain`, P-I / D4).
-    /// An envelope target (orange handle) drag (`Target*` trio).
-    EnvelopeTarget {
-        target: manifold_core::GraphTarget,
-        param_id: manifold_core::effects::ParamId,
-        value: f32,
-    },
+    // EnvelopeTarget (orange handle / `Target*` trio) migrated to the unified
+    // scrub gesture (`ui_bridge::scrub::ResolvedScrub::EnvelopeTarget`, P-I / D4).
     /// An envelope decay slider drag (`EnvDecay*` trio).
     EnvelopeDecay {
         target: manifold_core::GraphTarget,
@@ -147,21 +143,6 @@ impl ActiveInspectorDrag {
             // Every restore below writes through the SAME store the family's
             // live `*Changed` arm writes, so a mid-drag snapshot swap can't
             // revert the in-flight value (undo audit 2026-07-19, cluster C).
-            Self::EnvelopeTarget {
-                target,
-                param_id,
-                value,
-            } => {
-                project.with_preset_graph_mut(target, |inst| {
-                    if let Some(e) = inst
-                        .envelopes
-                        .as_mut()
-                        .and_then(|es| es.iter_mut().find(|e| e.param_id == *param_id))
-                    {
-                        e.target_normalized = *value;
-                    }
-                });
-            }
             Self::EnvelopeDecay {
                 target,
                 param_id,

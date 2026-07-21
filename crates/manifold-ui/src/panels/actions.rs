@@ -501,12 +501,8 @@ pub enum ModulationAction {
     AudioModSetWrap(GraphParamTarget, ParamId, usize),
     // Trim-range scrub trio (driver / Ableton / audio sub-range handles)
     // migrated to `PanelAction::Scrub` (`ValueRef::Trim`, P-I / D4).
-    /// Envelope target (orange handle / `target_normalized`) changed.
-    TargetChanged(GraphParamTarget, ParamId, f32),
-    /// Snapshot target before drag (for undo).
-    TargetSnapshot(GraphParamTarget, ParamId),
-    /// Commit target drag (record undo command).
-    TargetCommit(GraphParamTarget, ParamId),
+    // Envelope-target scrub trio (orange handle / `target_normalized`) migrated
+    // to `PanelAction::Scrub` (`ValueRef::EnvelopeTarget`, P-I / D4).
     /// Envelope decay slider (`decay_beats`) changed.
     EnvDecayChanged(GraphParamTarget, ParamId, f32),
     /// Snapshot decay before drag (for undo).

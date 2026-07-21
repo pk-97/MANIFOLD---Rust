@@ -869,10 +869,10 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 |h, p| {
-                    h.dispatch(&PanelAction::Modulation(ModulationAction::TargetSnapshot(gpt(), pid.clone())), p);
-                    h.dispatch(&PanelAction::Modulation(ModulationAction::TargetChanged(gpt(), pid.clone(), 0.75)), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::EnvelopeTarget(gpt(), pid.clone()), ScrubPhase::Begin), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::EnvelopeTarget(gpt(), pid.clone()), ScrubPhase::Move(ScrubValue::Scalar(0.75))), p);
                 },
-                |h, p| h.dispatch(&PanelAction::Modulation(ModulationAction::TargetCommit(gpt(), pid.clone())), p),
+                |h, p| h.dispatch(&PanelAction::Scrub(ValueRef::EnvelopeTarget(gpt(), pid.clone()), ScrubPhase::Commit), p),
                 move |p| gen_inst(p, &probe_lid).envelopes.as_ref().unwrap()[0].target_normalized,
                 0.2,
                 0.75,

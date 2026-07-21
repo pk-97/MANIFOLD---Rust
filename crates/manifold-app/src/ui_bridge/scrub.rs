@@ -33,6 +33,7 @@ use manifold_editing::commands::audio_mod::SetAudioModShapeCommand;
 use manifold_editing::commands::drivers::ChangeTrimCommand;
 use manifold_editing::commands::effect_target::DriverTarget;
 use manifold_editing::commands::effects::{ChangeGraphParamCommand, SetRelightParamCommand};
+use manifold_editing::commands::envelopes::ChangeEnvelopeTargetCommand;
 use manifold_editing::commands::settings::{
     ChangeLayerOpacityCommand, ChangeLedBrightnessCommand, ChangeMacroCommand,
     ChangeMasterOpacityCommand,
@@ -40,7 +41,8 @@ use manifold_editing::commands::settings::{
 use manifold_ui::{ScrubPhase, ValueRef};
 
 use super::dispatch::resolve::{
-    ableton_mapping_target, graph_audio_mod_dual_edit, graph_driver_dual_edit, resolve_graph_target,
+    ableton_mapping_target, graph_audio_mod_dual_edit, graph_driver_dual_edit, graph_env_dual_edit,
+    resolve_graph_target,
 };
 use super::{DispatchCtx, DispatchResult};
 
@@ -56,8 +58,6 @@ pub struct ScrubState {
     pub slider_snapshot: Option<f32>,
     /// Trim drag snapshot (min, max) for undo.
     pub trim_snapshot: Option<(f32, f32)>,
-    /// Envelope target-handle drag snapshot for undo.
-    pub target_snapshot: Option<f32>,
     /// Envelope decay-slider drag snapshot for undo.
     pub decay_snapshot: Option<f32>,
     /// Audio-mod shaping-slider drag snapshot (whole shape) for undo.
@@ -148,6 +148,14 @@ pub enum ResolvedScrub {
         param_id: ParamId,
         baseline: (f32, f32),
         live: (f32, f32),
+    },
+    /// An envelope target handle (`target_normalized`) — `target`/`param_id`
+    /// resolved at Begin so the restore path can re-stamp without dispatch ctx.
+    EnvelopeTarget {
+        target: GraphTarget,
+        param_id: ParamId,
+        baseline: f32,
+        live: f32,
     },
 }
 
@@ -244,6 +252,22 @@ impl ResolvedScrub {
                         }
                     }
                 }
+            }
+            ResolvedScrub::EnvelopeTarget {
+                target,
+                param_id,
+                live,
+                ..
+            } => {
+                project.with_preset_graph_mut(target, |inst| {
+                    if let Some(e) = inst
+                        .envelopes
+                        .as_mut()
+                        .and_then(|es| es.iter_mut().find(|e| e.param_id == *param_id))
+                    {
+                        e.target_normalized = *live;
+                    }
+                });
             }
         }
     }
@@ -986,5 +1010,101 @@ pub(crate) fn dispatch_scrub(
                 }
             }
         }
+
+        ValueRef::EnvelopeTarget(gpt, param_id) => match phase {
+            ScrubPhase::Begin => {
+                if let Some(target) = resolve_graph_target(
+                    gpt,
+                    ctx.editor_target,
+                    effective_tab,
+                    active_layer,
+                    ctx.selection,
+                    ctx.project,
+                ) {
+                    let baseline = ctx
+                        .project
+                        .with_preset_graph_mut(&target, |inst| {
+                            inst.envelopes
+                                .as_ref()
+                                .and_then(|es| es.iter().find(|e| e.param_id == *param_id))
+                                .map(|e| e.target_normalized)
+                        })
+                        .flatten();
+                    if let Some(baseline) = baseline {
+                        ctx.scrub.active = Some(ResolvedScrub::EnvelopeTarget {
+                            target,
+                            param_id: param_id.clone(),
+                            baseline,
+                            live: baseline,
+                        });
+                    }
+                }
+                DispatchResult::handled()
+            }
+            ScrubPhase::Move(sv) => {
+                if let (Some(v), Some(target)) = (
+                    sv.scalar(),
+                    resolve_graph_target(
+                        gpt,
+                        ctx.editor_target,
+                        effective_tab,
+                        active_layer,
+                        ctx.selection,
+                        ctx.project,
+                    ),
+                ) {
+                    if let Some(ResolvedScrub::EnvelopeTarget { live, .. }) = &mut ctx.scrub.active {
+                        *live = v;
+                    }
+                    graph_env_dual_edit(
+                        ctx.project,
+                        ctx.content_tx,
+                        &target,
+                        param_id.clone(),
+                        move |env| {
+                            env.target_normalized = v;
+                        },
+                    );
+                }
+                DispatchResult::handled()
+            }
+            ScrubPhase::Commit => {
+                let baseline = match &ctx.scrub.active {
+                    Some(ResolvedScrub::EnvelopeTarget { baseline, .. }) => Some(*baseline),
+                    _ => None,
+                };
+                if let Some(old_target) = baseline
+                    && let Some(target) = resolve_graph_target(
+                        gpt,
+                        ctx.editor_target,
+                        effective_tab,
+                        active_layer,
+                        ctx.selection,
+                        ctx.project,
+                    )
+                {
+                    let info = ctx
+                        .project
+                        .with_preset_graph_mut(&target, |inst| {
+                            inst.envelopes
+                                .as_ref()
+                                .and_then(|es| es.iter().position(|e| e.param_id == *param_id))
+                                .map(|idx| {
+                                    (idx, inst.envelopes.as_ref().unwrap()[idx].target_normalized)
+                                })
+                        })
+                        .flatten();
+                    if let Some((env_idx, new_t)) = info
+                        && (old_target - new_t).abs() > f32::EPSILON
+                    {
+                        let cmd =
+                            ChangeEnvelopeTargetCommand::new(target, env_idx, old_target, new_t);
+                        ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
+                    }
+                }
+                ctx.scrub.active = None;
+                DispatchResult::handled()
+            }
+        },
     }
 }

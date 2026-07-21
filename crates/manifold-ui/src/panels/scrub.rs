@@ -104,4 +104,7 @@ pub enum ValueRef {
     /// bars) — was `Trim{Snapshot,Changed,Commit}`. `TrimKind` selects the
     /// backing store; the `(min, max)` value rides `ScrubValue::Range` on Move.
     Trim(TrimKind, GraphParamTarget, ParamId),
+    /// An envelope target handle (orange bar, `target_normalized`) — was
+    /// `Target{Snapshot,Changed,Commit}`.
+    EnvelopeTarget(GraphParamTarget, ParamId),
 }
