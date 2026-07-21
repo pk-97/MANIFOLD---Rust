@@ -16,3 +16,9 @@
 
 ## Verification level
 L1 + L3 (flow suite at landing). Behavior identical by construction (verbatim bodies, one wire type); the flow suite exercises the re-parented wire end-to-end.
+
+## Push-time addendum (lander's full gates on final merged main)
+Full sweep: `Summary [169.293s] 3850 tests run: 3850 passed (13 slow), 13 skipped`; clippy workspace + focused (cache-busted, both build flavors) clean; deny `bans ok`. Fix commit `18980416` folded pre-push: dead `unhandled` field retired (its only readers were its own sentinel tests), test-only imports relocated to test mods. Flow suite: quoted below from the manifest runner.
+33/33 required flows passed
+7 known-red (xfail) still red
+40/40 flow files accounted for in the manifest
