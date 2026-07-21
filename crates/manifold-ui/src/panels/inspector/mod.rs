@@ -508,6 +508,34 @@ impl InspectorCompositePanel {
         self.gen_params.as_mut()
     }
 
+    /// D9 widget catalog for the inspector's manifest-backed cards — every LIVE
+    /// [`ParamCardPanel`] this panel owns (both effect scopes' cards + the
+    /// generator card) as a [`CatalogSurface`], in render order. Only cards
+    /// built this frame contribute affordances; the inactive scope's cards
+    /// (cleared node range) and any card that minted no addressable row
+    /// affordance are dropped, so the catalog lists exactly the sanctioned row
+    /// surface a flow harness can reach right now. The `--catalog` dump mode
+    /// serializes this. Pure enumeration over the existing per-node durable
+    /// ids + names — no new protocol (each card's `catalog` does the walk).
+    pub fn catalog(&self, tree: &UITree) -> Vec<crate::param_surface::CatalogSurface> {
+        let mut out = Vec::new();
+        for scope in &self.effects {
+            for card in scope {
+                let surface = card.catalog(tree);
+                if !surface.affordances.is_empty() {
+                    out.push(surface);
+                }
+            }
+        }
+        if let Some(gen_card) = &self.gen_params {
+            let surface = gen_card.catalog(tree);
+            if !surface.affordances.is_empty() {
+                out.push(surface);
+            }
+        }
+        out
+    }
+
     /// Returns true if the effect param at `(fx_idx, param_id)` has an
     /// Ableton mapping. Keyed by stable id (Phase 2): `fx_idx` is
     /// structural (chain position), `param_id` is the unified id

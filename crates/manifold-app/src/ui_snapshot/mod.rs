@@ -75,6 +75,11 @@ pub fn run(args: &[String]) {
     }
 
     let want_dump = args.iter().any(|a| a == "--dump");
+    // D9 widget catalog (`docs/UI_FUNNEL_DECOMPOSITION_DESIGN.md`): the
+    // enumeration view over the inspector's manifest-backed cards — every
+    // `ParamSurface` row's durable id + `RowRole` + named chrome, reusing the
+    // dump's per-node durable ids (no new protocol). UITree scenes only.
+    let want_catalog = args.iter().any(|a| a == "--catalog");
     let want_vs_mockup = args.iter().any(|a| a == "--vs-mockup");
     let want_thumbs = args.iter().any(|a| a == "--thumbs");
     // `EDITOR_WINDOW_UNIFICATION_DESIGN.md` P1 acceptance demo: `editor`-scene
@@ -138,7 +143,7 @@ pub fn run(args: &[String]) {
         // `--probe`/`--crop` were rejected above (exit 2) — which of the five
         // PNGs this sweep writes would "the" target be is ambiguous by design.
         for s in ["timeline", "states", "inspector"] {
-            render_ui_scene(s, want_dump, false, want_thumbs, None, None, None, None);
+            render_ui_scene(s, want_dump, false, false, want_thumbs, None, None, None, None);
         }
         run_graph_preset("Mirror");
         run_editor_preset("FluidSim2D", want_dump, false, false);
@@ -236,6 +241,7 @@ pub fn run(args: &[String]) {
     render_ui_scene(
         scene,
         want_dump,
+        want_catalog,
         want_vs_mockup,
         want_thumbs,
         interact,
@@ -262,6 +268,7 @@ fn zoom_ppb_for_scene(scene: &str) -> f32 {
 fn render_ui_scene(
     scene: &str,
     want_dump: bool,
+    want_catalog: bool,
     want_vs_mockup: bool,
     want_thumbs: bool,
     interact: Option<String>,
@@ -358,6 +365,22 @@ fn render_ui_scene(
         want_dump,
         want_thumbs,
     );
+
+    // D9 widget catalog (`--catalog`): the enumeration view over the inspector's
+    // manifest-backed cards, written next to the base PNG. Reuses the dump's
+    // per-node durable ids + names (no new protocol) — see `dump::catalog_json`.
+    // Emitted off the SAME built tree the base render used, so the catalog
+    // agrees with what's on screen. Scenes with no live card yield an empty
+    // `surfaces` list rather than an error.
+    if want_catalog {
+        let surfaces = ui.inspector.catalog(&ui.tree);
+        let json = dump::catalog_json("inspector", &surfaces);
+        let json_path = dir.join(format!("{scene}.catalog.json"));
+        std::fs::write(&json_path, serde_json::to_string_pretty(&json).expect("serialize catalog"))
+            .expect("write catalog json");
+        println!("ui-snap: wrote {}", json_path.display());
+        print!("{}", dump::terse_catalog("inspector", &surfaces));
+    }
 
     // `--probe`/`--crop` (`readback.rs`): applied to the BASE PNG only, right
     // after it's written — an `--interact` "after" render below would make

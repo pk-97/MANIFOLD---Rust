@@ -28,7 +28,7 @@ use crate::anim::{AnimF32, Transient};
 use crate::chrome::{Align, ChromeHost, Pad, Sizing, View};
 use crate::color;
 use crate::node::*;
-use crate::param_surface::{ParamRow, ParamSurface, RowRole};
+use crate::param_surface::{CatalogAffordance, CatalogSurface, ParamRow, ParamSurface, RowRole};
 use crate::slider::{BitmapSlider, SliderColors, TrackSpan};
 use crate::transform2d::Affine2;
 use crate::tree::UITree;
@@ -646,6 +646,38 @@ impl ParamCardPanel {
         self.node_count
     }
 
+    /// D9 widget catalog — enumerate this card's sanctioned row affordances by
+    /// walking its own node range and resolving each interactive node through
+    /// the SAME [`RowIndex`](crate::param_surface::RowIndex) routing uses,
+    /// pairing the owning row's durable id + [`RowRole`] with the node's
+    /// durable `WidgetId` + queryable `name_of` name (the two facts the tree
+    /// dump already serializes). This is the enumeration VIEW, not a new
+    /// protocol: identity comes from the widget salt and the name, exactly as
+    /// in the dump; the catalog only regroups them per row and adds the role.
+    ///
+    /// A `name == None` entry is a nameless sanctioned affordance surfaced (the
+    /// BUG-239 shape) — never invented here. Non-live cards (no nodes built
+    /// this frame) yield an empty affordance list. Call after `build()`.
+    pub fn catalog(&self, tree: &UITree) -> CatalogSurface {
+        let mut affordances = Vec::new();
+        if self.is_live() {
+            let end = self.first_node.saturating_add(self.node_count);
+            for idx in self.first_node..end {
+                let node_id = tree.id_at(idx);
+                let widget = tree.widget_of(node_id);
+                if let Some((row, role)) = self.row_host.row_index.get(widget) {
+                    affordances.push(CatalogAffordance {
+                        row_id: self.rows[row].id.to_string(),
+                        role,
+                        widget: widget.raw(),
+                        name: tree.name_of(node_id).map(str::to_string),
+                    });
+                }
+            }
+        }
+        CatalogSurface { kind: self.kind, title: self.name.clone(), affordances }
+    }
+
     /// Reset this card to "not built": the stored node range becomes empty, so
     /// [`is_live`](Self::is_live) reports false and every method that resolves or
     /// mutates by a cached node id no-ops. The inspector calls this on the cards
@@ -1113,6 +1145,64 @@ mod tests {
         // row's identity, so the row name lands there.
         let toggle = panel.row_host.toggle_ids[2].as_ref().expect("invert row is a toggle");
         assert_eq!(tree.name_of(toggle.button_id), Some("param_row.invert"));
+    }
+
+    /// D9 widget-catalog self-test — the enumeration view proves out, and the
+    /// BUG-239 structural kill holds: the catalog enumerates every sanctioned
+    /// row affordance with its durable id + role + queryable name, and NO row
+    /// can appear without at least one queryable name (a nameless row would be
+    /// undriveable by a flow harness — the exact BUG-239 gap this closes).
+    #[test]
+    fn catalog_enumerates_rows_roles_names_and_no_row_is_nameless() {
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&effect_config_with_toggle_and_trigger());
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
+
+        let cat = panel.catalog(&tree);
+        assert_eq!(cat.kind, ParamCardKind::Effect);
+        assert_eq!(cat.title, "Blur");
+        assert!(!cat.affordances.is_empty(), "a live card must enumerate affordances");
+
+        // Enumeration proves out: the slider row's track/value/driver arm and
+        // the toggle row's button appear with their exact durable roles + names
+        // (the same names `param_rows_carry_queryable_names` asserts on-node —
+        // the catalog surfaces them by enumeration, not a second source).
+        let has = |row: &str, role: RowRole, name: &str| {
+            cat.affordances
+                .iter()
+                .any(|a| a.row_id == row && a.role == role && a.name.as_deref() == Some(name))
+        };
+        assert!(has("radius", RowRole::Slider, "param_row.radius.slider"));
+        assert!(has("radius", RowRole::Slider, "param_row.radius.value"));
+        assert!(has("radius", RowRole::DriverBtn, "param_row.radius.driver_btn"));
+        assert!(has("radius", RowRole::RowCatcher, "param_row.radius"));
+        assert!(has("invert", RowRole::ToggleBtn, "param_row.invert"));
+
+        // Every enumerated affordance's durable WidgetId is non-zero and its
+        // row_id is a real row — the catalog can't manufacture an entry.
+        let known: std::collections::BTreeSet<&str> =
+            ["radius", "strength", "invert", "reset"].into_iter().collect();
+        for a in &cat.affordances {
+            assert!(a.widget != 0, "affordance carries a durable WidgetId");
+            assert!(known.contains(a.row_id.as_str()), "enumerated row {} is a real row", a.row_id);
+        }
+
+        // ── The BUG-239 structural kill ──────────────────────────────────
+        // Every ROW the catalog surfaces carries at least one queryable name.
+        // A row with only `name == None` affordances would be a row a flow
+        // harness cannot address — precisely the class D9 forecloses. If a
+        // future edit ships such a row, THIS assertion goes red.
+        let rows: std::collections::BTreeSet<String> =
+            cat.affordances.iter().map(|a| a.row_id.clone()).collect();
+        for rid in &rows {
+            assert!(
+                cat.affordances.iter().any(|a| &a.row_id == rid && a.name.is_some()),
+                "row `{rid}` has no queryable name on ANY affordance — BUG-239 structural regression"
+            );
+        }
+        // All four rows are present (nothing silently dropped).
+        assert_eq!(rows, known.iter().map(|s| s.to_string()).collect());
     }
 
     #[test]

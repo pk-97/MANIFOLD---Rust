@@ -87,6 +87,61 @@ pub fn dump_tree_ex(tree: &UITree, surfaces: &[&dyn HitTargets]) -> Value {
     json!({ "node_count": nodes.len(), "nodes": nodes, "custom_surfaces": custom_surfaces })
 }
 
+/// D9 widget catalog as JSON — the enumeration view over the surface layer
+/// (`docs/UI_FUNNEL_DECOMPOSITION_DESIGN.md` D9). Reuses the tree dump's own
+/// field encodings verbatim: `widget` is the SAME `{:016x}` durable `WidgetId`
+/// hex [`dump_tree_ex`] emits, `name` the SAME `name_of` string. This is not a
+/// new protocol — it only regroups those durable facts per panel → per card →
+/// per row affordance, adding the `RowRole` (from the card's `RowIndex`). A
+/// `name` of `null` is a nameless sanctioned affordance surfaced (the BUG-239
+/// shape), never invented. Empty `surfaces` when no card is live in the scene.
+pub fn catalog_json(panel: &str, surfaces: &[manifold_ui::param_surface::CatalogSurface]) -> Value {
+    let surfaces_json: Vec<Value> = surfaces
+        .iter()
+        .map(|s| {
+            let affordances: Vec<Value> = s
+                .affordances
+                .iter()
+                .map(|a| {
+                    json!({
+                        "row_id": a.row_id,
+                        "role": format!("{:?}", a.role),
+                        // Same durable WidgetId encoding as the node dump's `widget`.
+                        "widget": format!("{:016x}", a.widget),
+                        "name": a.name,
+                    })
+                })
+                .collect();
+            json!({
+                "kind": format!("{:?}", s.kind),
+                "title": s.title,
+                "affordance_count": affordances.len(),
+                "affordances": affordances,
+            })
+        })
+        .collect();
+    json!({
+        "panel": panel,
+        "surface_count": surfaces_json.len(),
+        "surfaces": surfaces_json,
+    })
+}
+
+/// Terse stdout catalog — one line per card, then one per affordance, marking
+/// a nameless affordance with `name=<none>` so a BUG-239 gap is obvious inline.
+pub fn terse_catalog(panel: &str, surfaces: &[manifold_ui::param_surface::CatalogSurface]) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "catalog[{panel}]: {} surface(s)", surfaces.len());
+    for s in surfaces {
+        let _ = writeln!(out, "  [{:?}] {} — {} affordance(s)", s.kind, s.title, s.affordances.len());
+        for a in &s.affordances {
+            let name = a.name.as_deref().unwrap_or("<none>");
+            let _ = writeln!(out, "    {} {:?} name={} widget={:016x}", a.row_id, a.role, name, a.widget);
+        }
+    }
+    out
+}
+
 /// One line per node — compact, for inline reading. Shows the fields that
 /// actually distinguish a node: type, rect, bg, text, font size, radius, border.
 pub fn terse(tree: &UITree) -> String {

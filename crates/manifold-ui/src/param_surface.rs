@@ -254,6 +254,47 @@ impl ParamSurface {
     }
 }
 
+/// One enumerated affordance in the D9 widget catalog: a single sanctioned
+/// interactive node on a manifest-backed card, paired with the row it belongs
+/// to. The catalog is the enumeration of these over a *built* tree — it reuses
+/// the two durable facts the tree dump already serializes per node (the
+/// [`WidgetId`](crate::node::WidgetId) salt and the `name_of` name); the
+/// [`RowRole`] comes from the card's [`RowIndex`] (the SAME index routing
+/// resolves through, so the catalog can never disagree with what a click
+/// reaches). No new addressing protocol — only a regrouping of those durable
+/// facts, plus the role.
+///
+/// `name == None` is the BUG-239 shape made visible: a sanctioned affordance
+/// with no queryable name. Every ROW carries at least one named affordance
+/// (its slider or its toggle button, `param_row.<id>…`), so a row is always
+/// nameable; a nameless *sub-element* (an arm button, a drawer cell) is reached
+/// through its bundle's own `resolve(NodeId)` — the widget-contract split — not
+/// by name. The catalog surfaces which is which rather than hiding it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogAffordance {
+    /// The owning row's durable param id (`ParamRow::id`).
+    pub row_id: String,
+    /// The affordance's role in the row.
+    pub role: RowRole,
+    /// The durable `WidgetId` salt — the SAME value the dump emits as `widget`.
+    pub widget: u64,
+    /// The queryable name (`UITree::name_of`), or `None` for a nameless
+    /// sanctioned affordance (a BUG-239-shaped gap, made visible not fixed).
+    pub name: Option<String>,
+}
+
+/// One manifest-backed card's catalog: its identity plus every sanctioned
+/// affordance its rows minted this build, in tree order. Produced by
+/// `ParamCardPanel::catalog`; the `--catalog` dump mode serializes a `Vec` of
+/// these under the owning panel.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogSurface {
+    pub kind: ParamCardKind,
+    /// The card's display title (effect name or generator type name).
+    pub title: String,
+    pub affordances: Vec<CatalogAffordance>,
+}
+
 #[cfg(test)]
 mod stable_key_tests {
     /// INV-4's cross-process pin: known bytes → known salt, forever. If this
