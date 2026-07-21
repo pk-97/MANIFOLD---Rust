@@ -5,7 +5,7 @@ use manifold_core::types::LayerType;
 use manifold_core::{Beats, ClipId, LayerId};
 use manifold_editing::commands::layer::{AddLayerCommand, DeleteLayerCommand};
 use manifold_editing::service::EditingService;
-use manifold_ui::PanelAction;
+use manifold_ui::EditingAction;
 
 use super::DispatchResult;
 use crate::app::SelectionState;
@@ -14,7 +14,7 @@ use crate::ui_root::UIRoot;
 use crate::user_prefs::UserPrefs;
 
 pub(super) fn dispatch_editing(
-    action: &PanelAction,
+    action: &EditingAction,
     project: &mut Project,
     content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
     content_state: &crate::content_state::ContentState,
@@ -26,7 +26,7 @@ pub(super) fn dispatch_editing(
     use crate::content_command::ContentCommand;
     match action {
         // ── Viewport clip interaction ─────────────────────────────
-        PanelAction::ClipClicked(clip_id, modifiers) => {
+        EditingAction::ClipClicked(clip_id, modifiers) => {
             let clip_id = ClipId::new(clip_id.as_str());
             // Find the clip's layer index and layer ID for UIState. The end
             // beat this used to carry for the shift-click region extension
@@ -71,11 +71,11 @@ pub(super) fn dispatch_editing(
                 .map(|l| l.layer_id.clone());
             DispatchResult::structural()
         }
-        PanelAction::ClipDoubleClicked(_clip_id) => {
+        EditingAction::ClipDoubleClicked(_clip_id) => {
             // Future: open clip properties or enter clip editing mode
             DispatchResult::handled()
         }
-        PanelAction::TrackClicked(beat, layer, modifiers) => {
+        EditingAction::TrackClicked(beat, layer, modifiers) => {
             if modifiers.shift {
                 // Shift+Click on empty area: extend region from anchor to beat/layer.
                 // From Unity InteractionOverlay.OnPointerClick (line 177-180).
@@ -99,7 +99,7 @@ pub(super) fn dispatch_editing(
                 .map(|l| l.layer_id.clone());
             DispatchResult::structural()
         }
-        PanelAction::TrackDoubleClicked(beat, layer) => {
+        EditingAction::TrackDoubleClicked(beat, layer) => {
             // From Unity InteractionOverlay.OnPointerClick double-click path:
             // Use FloorBeatToGrid (grid cell start), NOT SnapBeatToGrid (nearest line).
             let grid_step = Beats::from_f32(ui.viewport.grid_step());
@@ -133,13 +133,13 @@ pub(super) fn dispatch_editing(
                 .map(|l| l.layer_id.clone());
             DispatchResult::structural()
         }
-        PanelAction::ViewportHoverChanged(_clip_id) => {
+        EditingAction::ViewportHoverChanged(_clip_id) => {
             // Hover state is already tracked on viewport panel
             DispatchResult::handled()
         }
 
         // ── Context menu actions ──────────────────────────────────
-        PanelAction::ContextSplitAtPlayhead(clip_id) => {
+        EditingAction::ContextSplitAtPlayhead(clip_id) => {
             let beat = content_state.current_beat.as_f32();
             {
                 let spb = 60.0 / project.settings.bpm.0;
@@ -153,7 +153,7 @@ pub(super) fn dispatch_editing(
             }
             DispatchResult::structural()
         }
-        PanelAction::ContextDeleteClip(clip_id) => {
+        EditingAction::ContextDeleteClip(clip_id) => {
             let clip_id = ClipId::new(clip_id.as_str());
             // If the right-clicked clip is part of a multi-selection, delete every
             // selected clip in one undo step; otherwise just this clip. Mirrors the
@@ -174,7 +174,7 @@ pub(super) fn dispatch_editing(
             selection.deselect_clips(&target_ids);
             DispatchResult::structural()
         }
-        PanelAction::ContextDuplicateClip(clip_id) => {
+        EditingAction::ContextDuplicateClip(clip_id) => {
             let clip_id = ClipId::new(clip_id.as_str());
             {
                 // Calculate region from the single clip for proper offset
@@ -200,7 +200,7 @@ pub(super) fn dispatch_editing(
             }
             DispatchResult::structural()
         }
-        PanelAction::ContextPasteAtTrack(beat, layer) => {
+        EditingAction::ContextPasteAtTrack(beat, layer) => {
             // Paste the clip clipboard at the clicked beat/layer — same content-thread
             // PasteClips path as Cmd+V (EditingService owns the clipboard).
             let snapped = ui.viewport.snap_to_grid(Beats::from_f32(*beat));
@@ -222,7 +222,7 @@ pub(super) fn dispatch_editing(
             }
             DispatchResult::structural()
         }
-        PanelAction::ContextAddVideoLayer(after_layer) => {
+        EditingAction::ContextAddVideoLayer(after_layer) => {
             {
                 // Re-resolve the target layer's current index at execution time
                 // (BUG-031) — the id survives any reordering between menu-open
@@ -242,7 +242,7 @@ pub(super) fn dispatch_editing(
             }
             DispatchResult::structural()
         }
-        PanelAction::ContextAddGeneratorLayer(after_layer) => {
+        EditingAction::ContextAddGeneratorLayer(after_layer) => {
             {
                 if let Some((idx, _)) = project.timeline.find_layer_by_id(after_layer.as_str()) {
                     let idx = idx + 1;
@@ -264,7 +264,7 @@ pub(super) fn dispatch_editing(
             }
             DispatchResult::structural()
         }
-        PanelAction::ContextAddAudioLayer(after_layer) => {
+        EditingAction::ContextAddAudioLayer(after_layer) => {
             {
                 if let Some((idx, _)) = project.timeline.find_layer_by_id(after_layer.as_str()) {
                     let idx = idx + 1;
@@ -282,7 +282,7 @@ pub(super) fn dispatch_editing(
             DispatchResult::structural()
         }
 
-        PanelAction::ContextDeleteLayer(layer_id) => {
+        EditingAction::ContextDeleteLayer(layer_id) => {
             {
                 if project.timeline.layers.len() > 1
                     && let Some((_, layer)) = project.timeline.find_layer_by_id(layer_id.as_str())
@@ -300,7 +300,7 @@ pub(super) fn dispatch_editing(
             DispatchResult::structural()
         }
 
-        PanelAction::ContextDuplicateLayer(layer_id) => {
+        EditingAction::ContextDuplicateLayer(layer_id) => {
             {
                 if project
                     .timeline
@@ -326,13 +326,13 @@ pub(super) fn dispatch_editing(
             DispatchResult::structural()
         }
 
-        PanelAction::LayerHeaderRightClicked(_) => {
+        EditingAction::LayerHeaderRightClicked(_) => {
             // Handled by UIRoot::try_open_dropdown — should not reach dispatch
             DispatchResult::handled()
         }
 
         // Context menu items — not yet wired to subsystems
-        PanelAction::ContextPasteAtLayer(layer_id) => {
+        EditingAction::ContextPasteAtLayer(layer_id) => {
             // Paste at the current playhead beat on the right-clicked layer.
             // Re-resolve the id to its current index at execution time (BUG-031).
             let Some((idx, _)) = project.timeline.find_layer_by_id(layer_id.as_str()) else {
@@ -354,7 +354,7 @@ pub(super) fn dispatch_editing(
             }
             DispatchResult::structural()
         }
-        PanelAction::ContextImportMidi(layer_id) => {
+        EditingAction::ContextImportMidi(layer_id) => {
             // Open file dialog for MIDI import
             let last_dir =
                 dialog_path_memory::get_last_directory(DialogContext::MidiImport, user_prefs);
@@ -396,7 +396,7 @@ pub(super) fn dispatch_editing(
             }
             DispatchResult::structural()
         }
-        PanelAction::ContextGroupSelectedLayers => {
+        EditingAction::ContextGroupSelectedLayers => {
             let selected_ids: Vec<manifold_core::LayerId> =
                 selection.selected_layer_ids.iter().cloned().collect();
             if selected_ids.len() >= 2 {
@@ -426,7 +426,7 @@ pub(super) fn dispatch_editing(
             ContentCommand::send(content_tx, ContentCommand::MarkCompositorDirty);
             DispatchResult::structural()
         }
-        PanelAction::ContextUngroup(layer_id) => {
+        EditingAction::ContextUngroup(layer_id) => {
             if let Some((_, layer)) = project.timeline.find_layer_by_id(layer_id.as_str())
                 && layer.is_group()
             {
@@ -456,7 +456,7 @@ pub(super) fn dispatch_editing(
             DispatchResult::structural()
         }
 
-        PanelAction::ContextSetLayerColor(layer_id, color) => {
+        EditingAction::ContextSetLayerColor(layer_id, color) => {
             use crate::content_command::ContentCommand;
             let r = color.r as f32 / 255.0;
             let g = color.g as f32 / 255.0;
@@ -482,16 +482,15 @@ pub(super) fn dispatch_editing(
         }
 
         // Right-click actions (intercepted by UIRoot for dropdown; should not reach dispatch)
-        PanelAction::ClipRightClicked(_)
-        | PanelAction::TrackRightClicked(_, _)
-        | PanelAction::AutomationLaneRightClicked(..) => DispatchResult::handled(),
+        EditingAction::ClipRightClicked(_)
+        | EditingAction::TrackRightClicked(_, _)
+        | EditingAction::AutomationLaneRightClicked(..) => DispatchResult::handled(),
 
         // Generic dropdown fallback (should not normally fire)
-        PanelAction::DropdownSelected(index) => {
+        EditingAction::DropdownSelected(index) => {
             log::debug!("Dropdown selected: {} (no context)", index);
             DispatchResult::handled()
         }
 
-        _ => DispatchResult::unhandled(),
     }
 }

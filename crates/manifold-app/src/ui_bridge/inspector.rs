@@ -1,6 +1,7 @@
 //! Inspector-related dispatch: effect params, drivers, envelopes, generator params,
 //! master/layer/clip chrome, slider interactions.
 
+use manifold_ui::{AudioSetupAction, EditingAction, MappingAction, ModulationAction, ParamsAction};
 use manifold_core::effects::ParameterDriver;
 use manifold_core::types::{BeatDivision, DriverWaveform};
 use manifold_core::LayerId;
@@ -8,41 +9,14 @@ use manifold_ui::{DriverConfigAction, PanelAction};
 
 use super::DispatchResult;
 
-pub(super) fn dispatch_inspector(
-    action: &PanelAction,
-    ctx: &mut super::DispatchCtx,
-) -> DispatchResult {
-    // Ordered first-non-unhandled chain over the `dispatch/` handler modules
-    // (D6). Each `_ => unhandled()` fall-through advances to the next; the
-    // `dispatch_chain_completeness` invariant proves every module is chained.
-    let r = super::dispatch::browser::dispatch_browser(action, ctx);
-    if !r.unhandled { return r; }
-    let r = super::dispatch::clip::dispatch_clip(action, ctx);
-    if !r.unhandled { return r; }
-    let r = super::dispatch::params::dispatch_params(action, ctx);
-    if !r.unhandled { return r; }
-    let r = super::dispatch::modulation::dispatch_modulation(action, ctx);
-    if !r.unhandled { return r; }
-    let r = super::dispatch::mapping::dispatch_mapping(action, ctx);
-    if !r.unhandled { return r; }
-    let r = super::dispatch::audio_setup::dispatch_audio_setup(action, ctx);
-    if !r.unhandled { return r; }
-
-    // The single-effect VALUE / expose / mapping arms address their instance by
-    // stable `EffectId` via `super::resolve_effect_id(ctx.editor_target, …)` and
-    // ignore `effective_tab` / `active_layer` when the editor supplies an
-    // identity. The MODULATION arms (drivers, layer-stored envelopes, trims,
-    // envelope targets) still resolve positionally through `(tab, active_layer)`
-    // + the effect's row index, so they need a tab/layer that points at the
-    // editor's WATCHED effect — not the main window's selection — when a card
-    // action is dispatched from the editor. `editor_dispatch_context` expresses
-    // the editor's identity in those positional terms (Master / its Layer /
-    // Clip), byte-identical to the inspector's own context on the perform path
-    // (`ctx.editor_target == None`). Arm bodies read `ctx` fields DIRECTLY (P-B
-    // D6): a mis-referenced field is visible at the use site, and the split
-    // moves each arm verbatim into its `(action, ctx)` sub-dispatcher.
-    DispatchResult::unhandled()
-}
+// `dispatch_inspector` (the first-non-unhandled chain over the six
+// `dispatch/` handler modules) was RETIRED in P-D / D-D1: with `PanelAction`
+// now a flat sum, the top-level `ui_bridge::dispatch` routes each domain arm
+// directly to its handler, and the compiler proves routing totality. Keeping
+// the chain — or its `dispatch_chain_completeness` invariant — beside the
+// exhaustive sum match would be a second copy of the routing, exactly the
+// parallel-old-path the design forbids. The tests below now drive dispatch
+// through the real `ui_bridge::dispatch` entry point (see `Harness::dispatch`).
 
 #[cfg(test)]
 mod scene_card_convergence_tests {
@@ -142,7 +116,7 @@ mod scene_card_convergence_tests {
                 editor_target: None,
                 scrub: &mut self.scrub,
             };
-            dispatch_inspector(action, &mut ctx)
+            crate::ui_bridge::dispatch(action, &mut ctx)
         }
 
         fn drain(&self) -> Vec<ContentCommand> {
@@ -177,7 +151,7 @@ mod scene_card_convergence_tests {
                 editor_target,
                 scrub: &mut self.scrub,
             };
-            dispatch_inspector(action, &mut ctx)
+            crate::ui_bridge::dispatch(action, &mut ctx)
         }
     }
 
@@ -198,8 +172,8 @@ mod scene_card_convergence_tests {
         stale.capture_into(&project);
 
         let mut h = Harness::new(None);
-        h.dispatch(&PanelAction::MacroSnapshot(0), &mut project);
-        h.dispatch(&PanelAction::MacroChanged(0, 0.8), &mut project);
+        h.dispatch(&PanelAction::Params(ParamsAction::MacroSnapshot(0)), &mut project);
+        h.dispatch(&PanelAction::Params(ParamsAction::MacroChanged(0, 0.8)), &mut project);
         h.drain();
 
         // What the UI frame drain now does every tick (app_render.rs ~line
@@ -209,7 +183,7 @@ mod scene_card_convergence_tests {
             drag.apply(&mut project);
         }
 
-        h.dispatch(&PanelAction::MacroCommit(0), &mut project);
+        h.dispatch(&PanelAction::Params(ParamsAction::MacroCommit(0)), &mut project);
         let cmds = h.drain();
         assert!(
             cmds.iter().any(|c| matches!(c, ContentCommand::Execute(_))),
@@ -534,11 +508,11 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 |h, p| {
-                    h.dispatch(&PanelAction::MasterOpacitySnapshot, p);
-                    h.dispatch(&PanelAction::MasterOpacityChanged(0.6), p);
-                    h.dispatch(&PanelAction::MasterOpacityChanged(after), p);
+                    h.dispatch(&PanelAction::Params(ParamsAction::MasterOpacitySnapshot), p);
+                    h.dispatch(&PanelAction::Params(ParamsAction::MasterOpacityChanged(0.6)), p);
+                    h.dispatch(&PanelAction::Params(ParamsAction::MasterOpacityChanged(after)), p);
                 },
-                |h, p| h.dispatch(&PanelAction::MasterOpacityCommit, p),
+                |h, p| h.dispatch(&PanelAction::Params(ParamsAction::MasterOpacityCommit), p),
                 |p| p.settings.master_opacity,
                 before,
                 after,
@@ -566,11 +540,11 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 |h, p| {
-                    h.dispatch(&PanelAction::LedBrightnessSnapshot, p);
-                    h.dispatch(&PanelAction::LedBrightnessChanged(0.9), p);
-                    h.dispatch(&PanelAction::LedBrightnessChanged(after), p);
+                    h.dispatch(&PanelAction::Params(ParamsAction::LedBrightnessSnapshot), p);
+                    h.dispatch(&PanelAction::Params(ParamsAction::LedBrightnessChanged(0.9)), p);
+                    h.dispatch(&PanelAction::Params(ParamsAction::LedBrightnessChanged(after)), p);
                 },
-                |h, p| h.dispatch(&PanelAction::LedBrightnessCommit, p),
+                |h, p| h.dispatch(&PanelAction::Params(ParamsAction::LedBrightnessCommit), p),
                 |p| p.settings.led_brightness,
                 before,
                 after,
@@ -597,11 +571,11 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 |h, p| {
-                    h.dispatch(&PanelAction::MacroSnapshot(0), p);
-                    h.dispatch(&PanelAction::MacroChanged(0, 0.5), p);
-                    h.dispatch(&PanelAction::MacroChanged(0, 0.8), p);
+                    h.dispatch(&PanelAction::Params(ParamsAction::MacroSnapshot(0)), p);
+                    h.dispatch(&PanelAction::Params(ParamsAction::MacroChanged(0, 0.5)), p);
+                    h.dispatch(&PanelAction::Params(ParamsAction::MacroChanged(0, 0.8)), p);
                 },
-                |h, p| h.dispatch(&PanelAction::MacroCommit(0), p),
+                |h, p| h.dispatch(&PanelAction::Params(ParamsAction::MacroCommit(0)), p),
                 |p| p.settings.macro_bank.slots[0].value,
                 0.2,
                 0.8,
@@ -635,11 +609,11 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 |h, p| {
-                    h.dispatch(&PanelAction::LayerOpacitySnapshot, p);
-                    h.dispatch(&PanelAction::LayerOpacityChanged(0.9), p);
-                    h.dispatch(&PanelAction::LayerOpacityChanged(0.55), p);
+                    h.dispatch(&PanelAction::Params(ParamsAction::LayerOpacitySnapshot), p);
+                    h.dispatch(&PanelAction::Params(ParamsAction::LayerOpacityChanged(0.9)), p);
+                    h.dispatch(&PanelAction::Params(ParamsAction::LayerOpacityChanged(0.55)), p);
                 },
-                |h, p| h.dispatch(&PanelAction::LayerOpacityCommit, p),
+                |h, p| h.dispatch(&PanelAction::Params(ParamsAction::LayerOpacityCommit), p),
                 move |p| {
                     p.timeline
                         .find_layer_by_id(&lid)
@@ -677,11 +651,11 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 |h, p| {
-                    h.dispatch(&PanelAction::AudioGainSnapshot(lid.clone()), p);
-                    h.dispatch(&PanelAction::AudioGainChanged(lid.clone(), 3.0), p);
-                    h.dispatch(&PanelAction::AudioGainChanged(lid.clone(), -6.0), p);
+                    h.dispatch(&PanelAction::Params(ParamsAction::AudioGainSnapshot(lid.clone())), p);
+                    h.dispatch(&PanelAction::Params(ParamsAction::AudioGainChanged(lid.clone(), 3.0)), p);
+                    h.dispatch(&PanelAction::Params(ParamsAction::AudioGainChanged(lid.clone(), -6.0)), p);
                 },
-                |h, p| h.dispatch(&PanelAction::AudioGainCommit(lid.clone()), p),
+                |h, p| h.dispatch(&PanelAction::Params(ParamsAction::AudioGainCommit(lid.clone())), p),
                 move |p| {
                     p.timeline
                         .find_layer_by_id(&lid2)
@@ -719,11 +693,11 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 |h, p| {
-                    h.dispatch(&PanelAction::ParamSnapshot(gpt(), pid.clone()), p);
-                    h.dispatch(&PanelAction::ParamChanged(gpt(), pid.clone(), before + 0.1), p);
-                    h.dispatch(&PanelAction::ParamChanged(gpt(), pid.clone(), after), p);
+                    h.dispatch(&PanelAction::Params(ParamsAction::ParamSnapshot(gpt(), pid.clone())), p);
+                    h.dispatch(&PanelAction::Params(ParamsAction::ParamChanged(gpt(), pid.clone(), before + 0.1)), p);
+                    h.dispatch(&PanelAction::Params(ParamsAction::ParamChanged(gpt(), pid.clone(), after)), p);
                 },
-                |h, p| h.dispatch(&PanelAction::ParamCommit(gpt(), pid.clone()), p),
+                |h, p| h.dispatch(&PanelAction::Params(ParamsAction::ParamCommit(gpt(), pid.clone())), p),
                 move |p| gen_inst(p, &probe_lid).get_base_param(probe_pid.as_ref()),
                 before,
                 after,
@@ -777,9 +751,9 @@ mod scene_card_convergence_tests {
             let after = before_a + 0.25;
 
             let target = manifold_ui::GraphParamTarget::GeneratorOf(layer_a.clone());
-            h.dispatch(&PanelAction::ParamSnapshot(target.clone(), pid.clone()), &mut project);
-            h.dispatch(&PanelAction::ParamChanged(target.clone(), pid.clone(), after), &mut project);
-            h.dispatch(&PanelAction::ParamCommit(target, pid.clone()), &mut project);
+            h.dispatch(&PanelAction::Params(ParamsAction::ParamSnapshot(target.clone(), pid.clone())), &mut project);
+            h.dispatch(&PanelAction::Params(ParamsAction::ParamChanged(target.clone(), pid.clone(), after)), &mut project);
+            h.dispatch(&PanelAction::Params(ParamsAction::ParamCommit(target, pid.clone())), &mut project);
 
             assert_eq!(
                 gen_inst(&project, &layer_a).get_base_param(pid.as_ref()),
@@ -816,23 +790,23 @@ mod scene_card_convergence_tests {
                 &mut h,
                 |h, p| {
                     h.dispatch(
-                        &PanelAction::TrimSnapshot(manifold_ui::panels::TrimKind::Driver, gpt(), pid.clone()),
+                        &PanelAction::Modulation(ModulationAction::TrimSnapshot(manifold_ui::panels::TrimKind::Driver, gpt(), pid.clone())),
                         p,
                     );
                     h.dispatch(
-                        &PanelAction::TrimChanged(
+                        &PanelAction::Modulation(ModulationAction::TrimChanged(
                             manifold_ui::panels::TrimKind::Driver,
                             gpt(),
                             pid.clone(),
                             0.3,
                             0.9,
-                        ),
+                        )),
                         p,
                     );
                 },
                 |h, p| {
                     h.dispatch(
-                        &PanelAction::TrimCommit(manifold_ui::panels::TrimKind::Driver, gpt(), pid.clone()),
+                        &PanelAction::Modulation(ModulationAction::TrimCommit(manifold_ui::panels::TrimKind::Driver, gpt(), pid.clone())),
                         p,
                     )
                 },
@@ -888,10 +862,10 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 |h, p| {
-                    h.dispatch(&PanelAction::TargetSnapshot(gpt(), pid.clone()), p);
-                    h.dispatch(&PanelAction::TargetChanged(gpt(), pid.clone(), 0.75), p);
+                    h.dispatch(&PanelAction::Modulation(ModulationAction::TargetSnapshot(gpt(), pid.clone())), p);
+                    h.dispatch(&PanelAction::Modulation(ModulationAction::TargetChanged(gpt(), pid.clone(), 0.75)), p);
                 },
-                |h, p| h.dispatch(&PanelAction::TargetCommit(gpt(), pid.clone()), p),
+                |h, p| h.dispatch(&PanelAction::Modulation(ModulationAction::TargetCommit(gpt(), pid.clone())), p),
                 move |p| gen_inst(p, &probe_lid).envelopes.as_ref().unwrap()[0].target_normalized,
                 0.2,
                 0.75,
@@ -919,10 +893,10 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 |h, p| {
-                    h.dispatch(&PanelAction::EnvDecaySnapshot(gpt(), pid.clone()), p);
-                    h.dispatch(&PanelAction::EnvDecayChanged(gpt(), pid.clone(), 3.5), p);
+                    h.dispatch(&PanelAction::Modulation(ModulationAction::EnvDecaySnapshot(gpt(), pid.clone())), p);
+                    h.dispatch(&PanelAction::Modulation(ModulationAction::EnvDecayChanged(gpt(), pid.clone(), 3.5)), p);
                 },
-                |h, p| h.dispatch(&PanelAction::EnvDecayCommit(gpt(), pid.clone()), p),
+                |h, p| h.dispatch(&PanelAction::Modulation(ModulationAction::EnvDecayCommit(gpt(), pid.clone())), p),
                 move |p| gen_inst(p, &probe_lid).envelopes.as_ref().unwrap()[0].decay_beats,
                 1.0,
                 3.5,
@@ -977,18 +951,18 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 |h, p| {
-                    h.dispatch(&PanelAction::AudioModShapeSnapshot(gpt(), pid.clone()), p);
+                    h.dispatch(&PanelAction::Modulation(ModulationAction::AudioModShapeSnapshot(gpt(), pid.clone())), p);
                     h.dispatch(
-                        &PanelAction::AudioModShapeParamChanged(
+                        &PanelAction::Modulation(ModulationAction::AudioModShapeParamChanged(
                             gpt(),
                             pid.clone(),
                             manifold_ui::panels::AudioShapeParam::Sensitivity,
                             0.83,
-                        ),
+                        )),
                         p,
                     );
                 },
-                |h, p| h.dispatch(&PanelAction::AudioModShapeCommit(gpt(), pid.clone()), p),
+                |h, p| h.dispatch(&PanelAction::Modulation(ModulationAction::AudioModShapeCommit(gpt(), pid.clone())), p),
                 move |p| {
                     gen_inst(p, &probe_lid)
                         .find_audio_mod(probe_pid.as_ref())
@@ -1037,18 +1011,18 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 move |h, p| {
-                    h.dispatch(&PanelAction::AudioTriggerShapeSnapshot(lid.clone(), 0), p);
+                    h.dispatch(&PanelAction::AudioSetup(AudioSetupAction::AudioTriggerShapeSnapshot(lid.clone(), 0)), p);
                     h.dispatch(
-                        &PanelAction::AudioTriggerShapeParamChanged(
+                        &PanelAction::AudioSetup(AudioSetupAction::AudioTriggerShapeParamChanged(
                             lid.clone(),
                             0,
                             manifold_ui::panels::AudioShapeParam::Sensitivity,
                             0.91,
-                        ),
+                        )),
                         p,
                     );
                 },
-                move |h, p| h.dispatch(&PanelAction::AudioTriggerShapeCommit(lid2.clone(), 0), p),
+                move |h, p| h.dispatch(&PanelAction::AudioSetup(AudioSetupAction::AudioTriggerShapeCommit(lid2.clone(), 0)), p),
                 move |p| {
                     p.timeline
                         .find_layer_by_id(&lid3)
@@ -1086,11 +1060,11 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 move |h, p| {
-                    h.dispatch(&PanelAction::AudioSendGainDragBegin(sid.clone()), p);
-                    h.dispatch(&PanelAction::AudioSendGainDragChanged(sid.clone(), 4.0), p);
-                    h.dispatch(&PanelAction::AudioSendGainDragChanged(sid.clone(), -3.0), p);
+                    h.dispatch(&PanelAction::AudioSetup(AudioSetupAction::AudioSendGainDragBegin(sid.clone())), p);
+                    h.dispatch(&PanelAction::AudioSetup(AudioSetupAction::AudioSendGainDragChanged(sid.clone(), 4.0)), p);
+                    h.dispatch(&PanelAction::AudioSetup(AudioSetupAction::AudioSendGainDragChanged(sid.clone(), -3.0)), p);
                 },
-                move |h, p| h.dispatch(&PanelAction::AudioSendGainDragCommit(sid2.clone()), p),
+                move |h, p| h.dispatch(&PanelAction::AudioSetup(AudioSetupAction::AudioSendGainDragCommit(sid2.clone())), p),
                 move |p| p.audio_setup.find_send(&sid3).unwrap().gain_db,
                 before,
                 -3.0,
@@ -1118,13 +1092,13 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 move |h, p| {
-                    h.dispatch(&PanelAction::AudioCrossoverDragBegin, p);
+                    h.dispatch(&PanelAction::AudioSetup(AudioSetupAction::AudioCrossoverDragBegin), p);
                     h.dispatch(
-                        &PanelAction::AudioCrossoverChanged(manifold_ui::BandDivider::Mid, after.1),
+                        &PanelAction::AudioSetup(AudioSetupAction::AudioCrossoverChanged(manifold_ui::BandDivider::Mid, after.1)),
                         p,
                     );
                 },
-                |h, p| h.dispatch(&PanelAction::AudioCrossoverCommit, p),
+                |h, p| h.dispatch(&PanelAction::AudioSetup(AudioSetupAction::AudioCrossoverCommit), p),
                 |p| (p.audio_setup.low_hz, p.audio_setup.mid_hz),
                 before,
                 after,
@@ -1158,10 +1132,10 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 |h, p| {
-                    h.dispatch(&PanelAction::RelightParamSnapshot(gpt(), field), p);
-                    h.dispatch(&PanelAction::RelightParamChanged(gpt(), field, after), p);
+                    h.dispatch(&PanelAction::Params(ParamsAction::RelightParamSnapshot(gpt(), field)), p);
+                    h.dispatch(&PanelAction::Params(ParamsAction::RelightParamChanged(gpt(), field, after)), p);
                 },
-                |h, p| h.dispatch(&PanelAction::RelightParamCommit(gpt(), field), p),
+                |h, p| h.dispatch(&PanelAction::Params(ParamsAction::RelightParamCommit(gpt(), field)), p),
                 move |p| core_field.get(&gen_inst(p, &probe_lid).relight_params),
                 before,
                 after,
@@ -1214,7 +1188,7 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 move |h, p| {
-                    h.dispatch(&PanelAction::ParamToggle(gpt(), pid.clone()), p);
+                    h.dispatch(&PanelAction::Params(ParamsAction::ParamToggle(gpt(), pid.clone())), p);
                 },
                 move |p| gen_inst(p, &probe_lid).get_base_param(probe_pid.as_ref()),
                 before,
@@ -1235,7 +1209,7 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 move |h, p| {
-                    h.dispatch(&PanelAction::ParamFire(gpt(), pid.clone()), p);
+                    h.dispatch(&PanelAction::Params(ParamsAction::ParamFire(gpt(), pid.clone())), p);
                 },
                 move |p| gen_inst(p, &probe_lid).get_base_param(probe_pid.as_ref()),
                 before,
@@ -1257,7 +1231,7 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 move |h, p| {
-                    h.dispatch(&PanelAction::DriverToggle(gpt(), pid.clone()), p);
+                    h.dispatch(&PanelAction::Modulation(ModulationAction::DriverToggle(gpt(), pid.clone())), p);
                 },
                 move |p| {
                     gen_inst(p, &lid)
@@ -1283,7 +1257,7 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 move |h, p| {
-                    h.dispatch(&PanelAction::EnvelopeToggle(gpt(), pid.clone()), p);
+                    h.dispatch(&PanelAction::Modulation(ModulationAction::EnvelopeToggle(gpt(), pid.clone())), p);
                 },
                 move |p| {
                     gen_inst(p, &lid)
@@ -1310,7 +1284,7 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 move |h, p| {
-                    h.dispatch(&PanelAction::AudioModToggle(gpt(), pid.clone()), p);
+                    h.dispatch(&PanelAction::Modulation(ModulationAction::AudioModToggle(gpt(), pid.clone())), p);
                 },
                 move |p| {
                     gen_inst(p, &lid)
@@ -1337,7 +1311,7 @@ mod scene_card_convergence_tests {
             };
             // Add: one undo unit, (0, None) → (1, Some(true)) — the clip-trigger
             // drawer redesign lands an ENABLED kick trigger so one click fires.
-            h.dispatch(&PanelAction::AudioTriggerAdd(layer_id.clone()), &mut project);
+            h.dispatch(&PanelAction::AudioSetup(AudioSetupAction::AudioTriggerAdd(layer_id.clone())), &mut project);
             let cmds = h.drain();
             assert_undo_cycle(
                 &mut side,
@@ -1350,7 +1324,7 @@ mod scene_card_convergence_tests {
             // Toggle the fresh (already-enabled) row off: one undo unit,
             // Some(true) → Some(false).
             h.dispatch(
-                &PanelAction::AudioTriggerEnabledToggle(layer_id.clone(), 0),
+                &PanelAction::AudioSetup(AudioSetupAction::AudioTriggerEnabledToggle(layer_id.clone(), 0)),
                 &mut project,
             );
             let cmds = h.drain();
@@ -1363,7 +1337,7 @@ mod scene_card_convergence_tests {
                 "audio_trigger_toggle",
             );
             // Remove: one undo unit, back to (0, None).
-            h.dispatch(&PanelAction::AudioTriggerRemove(layer_id.clone(), 0), &mut project);
+            h.dispatch(&PanelAction::AudioSetup(AudioSetupAction::AudioTriggerRemove(layer_id.clone(), 0)), &mut project);
             let cmds = h.drain();
             assert_undo_cycle(
                 &mut side,
@@ -1388,7 +1362,7 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 move |h, p| {
-                    h.dispatch(&PanelAction::AudioSendGainSetTyped(sid.clone(), 7.5), p);
+                    h.dispatch(&PanelAction::AudioSetup(AudioSetupAction::AudioSendGainSetTyped(sid.clone(), 7.5)), p);
                 },
                 move |p| p.audio_setup.find_send(&sid2).unwrap().gain_db,
                 before,
@@ -1409,7 +1383,7 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 move |h, p| {
-                    h.dispatch(&PanelAction::AudioSendFloorStep(sid.clone(), 1.0), p);
+                    h.dispatch(&PanelAction::AudioSetup(AudioSetupAction::AudioSendFloorStep(sid.clone(), 1.0)), p);
                 },
                 move |p| p.audio_setup.find_send(&sid2).unwrap().floor_db,
                 before,
@@ -1448,10 +1422,10 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 |h, p| {
-                    h.dispatch(&PanelAction::AbletonMacroTrimSnapshot(0), p);
-                    h.dispatch(&PanelAction::AbletonMacroTrimChanged(0, 0.2, 0.7), p);
+                    h.dispatch(&PanelAction::Mapping(MappingAction::AbletonMacroTrimSnapshot(0)), p);
+                    h.dispatch(&PanelAction::Mapping(MappingAction::AbletonMacroTrimChanged(0, 0.2, 0.7)), p);
                 },
-                |h, p| h.dispatch(&PanelAction::AbletonMacroTrimCommit(0), p),
+                |h, p| h.dispatch(&PanelAction::Mapping(MappingAction::AbletonMacroTrimCommit(0)), p),
                 |p| {
                     let m = p.settings.macro_bank.slots[0].ableton_mapping.as_ref().unwrap();
                     (m.range_min, m.range_max)
@@ -1503,10 +1477,10 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 |h, p| {
-                    h.dispatch(&PanelAction::AudioModStepAmountSnapshot(gpt(), pid.clone()), p);
-                    h.dispatch(&PanelAction::AudioModStepAmountChanged(gpt(), pid.clone(), 0.65), p);
+                    h.dispatch(&PanelAction::Modulation(ModulationAction::AudioModStepAmountSnapshot(gpt(), pid.clone())), p);
+                    h.dispatch(&PanelAction::Modulation(ModulationAction::AudioModStepAmountChanged(gpt(), pid.clone(), 0.65)), p);
                 },
-                |h, p| h.dispatch(&PanelAction::AudioModStepAmountCommit(gpt(), pid.clone()), p),
+                |h, p| h.dispatch(&PanelAction::Modulation(ModulationAction::AudioModStepAmountCommit(gpt(), pid.clone())), p),
                 read_amount,
                 0.1,
                 0.65,
@@ -1716,7 +1690,7 @@ mod scene_card_convergence_tests {
             let mut active_layer = None;
             let mut prefs = crate::user_prefs::UserPrefs::for_test();
             crate::ui_bridge::editing::dispatch_editing(
-                &PanelAction::ContextDeleteClip(clip_id.to_string()),
+                &PanelAction::Editing(EditingAction::ContextDeleteClip(clip_id.to_string())),
                 &mut rig.project,
                 &rig.tx,
                 &rig.content_state,
@@ -1918,7 +1892,7 @@ mod scene_card_convergence_tests {
                     "driver_toggle_master",
                     s.project,
                     &s.master_target,
-                    PanelAction::DriverToggle(manifold_ui::GraphParamTarget::Effect(0), pid.clone()),
+                    PanelAction::Modulation(ModulationAction::DriverToggle(manifold_ui::GraphParamTarget::Effect(0), pid.clone())),
                     move |p| {
                         p.preset_instance(&t)
                             .and_then(|inst| inst.drivers.as_ref())
@@ -1938,7 +1912,7 @@ mod scene_card_convergence_tests {
                     "driver_toggle_layer",
                     s.project,
                     &s.layer_target,
-                    PanelAction::DriverToggle(manifold_ui::GraphParamTarget::Effect(0), pid.clone()),
+                    PanelAction::Modulation(ModulationAction::DriverToggle(manifold_ui::GraphParamTarget::Effect(0), pid.clone())),
                     move |p| {
                         p.preset_instance(&t)
                             .and_then(|inst| inst.drivers.as_ref())
@@ -1961,7 +1935,7 @@ mod scene_card_convergence_tests {
                     "audio_mod_toggle_master",
                     s.project,
                     &s.master_target,
-                    PanelAction::AudioModToggle(manifold_ui::GraphParamTarget::Effect(0), pid.clone()),
+                    PanelAction::Modulation(ModulationAction::AudioModToggle(manifold_ui::GraphParamTarget::Effect(0), pid.clone())),
                     move |p| p.preset_instance(&t).and_then(|inst| inst.find_audio_mod(pid.as_ref())).map(|m| m.enabled),
                     None,
                     Some(true),
@@ -1978,7 +1952,7 @@ mod scene_card_convergence_tests {
                     "audio_mod_toggle_layer",
                     s.project,
                     &s.layer_target,
-                    PanelAction::AudioModToggle(manifold_ui::GraphParamTarget::Effect(0), pid.clone()),
+                    PanelAction::Modulation(ModulationAction::AudioModToggle(manifold_ui::GraphParamTarget::Effect(0), pid.clone())),
                     move |p| p.preset_instance(&t).and_then(|inst| inst.find_audio_mod(pid.as_ref())).map(|m| m.enabled),
                     None,
                     Some(true),
@@ -1998,7 +1972,7 @@ mod scene_card_convergence_tests {
                     "envelope_toggle_layer",
                     s.project,
                     &s.layer_target,
-                    PanelAction::EnvelopeToggle(manifold_ui::GraphParamTarget::Effect(0), pid.clone()),
+                    PanelAction::Modulation(ModulationAction::EnvelopeToggle(manifold_ui::GraphParamTarget::Effect(0), pid.clone())),
                     move |p| {
                         p.preset_instance(&t)
                             .and_then(|inst| inst.envelopes.as_ref())
@@ -2019,7 +1993,7 @@ mod scene_card_convergence_tests {
                     "envelope_toggle_master",
                     s.project,
                     &s.master_target,
-                    PanelAction::EnvelopeToggle(manifold_ui::GraphParamTarget::Effect(0), pid.clone()),
+                    PanelAction::Modulation(ModulationAction::EnvelopeToggle(manifold_ui::GraphParamTarget::Effect(0), pid.clone())),
                     move |p| {
                         p.preset_instance(&t)
                             .and_then(|inst| inst.envelopes.as_ref())
@@ -2042,7 +2016,7 @@ mod scene_card_convergence_tests {
                     "param_toggle_master",
                     s.project,
                     &s.master_target,
-                    PanelAction::ParamToggle(manifold_ui::GraphParamTarget::Effect(0), pid.clone()),
+                    PanelAction::Params(ParamsAction::ParamToggle(manifold_ui::GraphParamTarget::Effect(0), pid.clone())),
                     move |p| p.preset_instance(&t).unwrap().get_base_param(pid.as_ref()),
                     before,
                     after,
@@ -2060,7 +2034,7 @@ mod scene_card_convergence_tests {
                     "param_toggle_layer",
                     s.project,
                     &s.layer_target,
-                    PanelAction::ParamToggle(manifold_ui::GraphParamTarget::Effect(0), pid.clone()),
+                    PanelAction::Params(ParamsAction::ParamToggle(manifold_ui::GraphParamTarget::Effect(0), pid.clone())),
                     move |p| p.preset_instance(&t).unwrap().get_base_param(pid.as_ref()),
                     before,
                     after,
@@ -2077,7 +2051,7 @@ mod scene_card_convergence_tests {
                     "param_fire_master",
                     s.project,
                     &s.master_target,
-                    PanelAction::ParamFire(manifold_ui::GraphParamTarget::Effect(0), pid.clone()),
+                    PanelAction::Params(ParamsAction::ParamFire(manifold_ui::GraphParamTarget::Effect(0), pid.clone())),
                     move |p| p.preset_instance(&t).unwrap().get_base_param(pid.as_ref()),
                     before,
                     before + 1.0,
@@ -2094,7 +2068,7 @@ mod scene_card_convergence_tests {
                     "param_fire_layer",
                     s.project,
                     &s.layer_target,
-                    PanelAction::ParamFire(manifold_ui::GraphParamTarget::Effect(0), pid.clone()),
+                    PanelAction::Params(ParamsAction::ParamFire(manifold_ui::GraphParamTarget::Effect(0), pid.clone())),
                     move |p| p.preset_instance(&t).unwrap().get_base_param(pid.as_ref()),
                     before,
                     before + 1.0,
@@ -2113,11 +2087,11 @@ mod scene_card_convergence_tests {
                     "driver_config_beat_div_master",
                     s.project,
                     &s.master_target,
-                    PanelAction::DriverConfig(
+                    PanelAction::Modulation(ModulationAction::DriverConfig(
                         manifold_ui::GraphParamTarget::Effect(0),
                         pid.clone(),
                         DriverConfigAction::BeatDiv(4), // -> Half
-                    ),
+                    )),
                     move |p| {
                         p.preset_instance(&t)
                             .and_then(|inst| inst.drivers.as_ref())
@@ -2138,11 +2112,11 @@ mod scene_card_convergence_tests {
                     "driver_config_beat_div_layer",
                     s.project,
                     &s.layer_target,
-                    PanelAction::DriverConfig(
+                    PanelAction::Modulation(ModulationAction::DriverConfig(
                         manifold_ui::GraphParamTarget::Effect(0),
                         pid.clone(),
                         DriverConfigAction::BeatDiv(4), // -> Half
-                    ),
+                    )),
                     move |p| {
                         p.preset_instance(&t)
                             .and_then(|inst| inst.drivers.as_ref())
@@ -2172,7 +2146,7 @@ mod scene_card_convergence_tests {
                 let mut side = ContentSide::new(&project);
                 let mut h = Harness::new(None);
                 h.dispatch_with_editor(
-                    &PanelAction::AbletonInvertToggle(manifold_ui::GraphParamTarget::Effect(0), pid),
+                    &PanelAction::Mapping(MappingAction::AbletonInvertToggle(manifold_ui::GraphParamTarget::Effect(0), pid)),
                     &mut project,
                     Some(target),
                 );

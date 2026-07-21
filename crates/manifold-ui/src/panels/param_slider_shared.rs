@@ -5,6 +5,7 @@
 //! builders, and formatting helpers across both kinds. This module is the
 //! single source of truth for them.
 
+use crate::{AudioSetupAction, ModulationAction, ParamsAction, RootAction};
 use super::DriverConfigAction;
 use super::TrimKind;
 use super::param_card::RowMod;
@@ -980,18 +981,18 @@ pub(crate) fn enum_value_cell_actions(
         let next = (current_index + 1) % count;
         let new_value = min + next as f32;
         vec![
-            PanelAction::ParamSnapshot(target.clone(), param_id.clone()),
-            PanelAction::ParamChanged(target.clone(), param_id.clone(), new_value),
-            PanelAction::ParamCommit(target, param_id),
+            PanelAction::Params(ParamsAction::ParamSnapshot(target.clone(), param_id.clone())),
+            PanelAction::Params(ParamsAction::ParamChanged(target.clone(), param_id.clone(), new_value)),
+            PanelAction::Params(ParamsAction::ParamCommit(target, param_id)),
         ]
     } else {
-        vec![PanelAction::ParamEnumDropdown {
+        vec![PanelAction::Root(RootAction::ParamEnumDropdown {
             target,
             param_id,
             labels: labels.to_vec(),
             current_index: current_index as u32,
             cell_node_id,
-        }]
+        })]
     }
 }
 
@@ -1270,9 +1271,9 @@ pub(crate) fn build_envelope_config(
     // the same EnvDecay Snapshot/Changed/Commit trio the drag path already
     // emits, reset to `DEFAULT_ENV_DECAY`.
     let reset = PanelAction::slider_reset(
-        PanelAction::EnvDecaySnapshot(target.clone(), pid.clone()),
-        PanelAction::EnvDecayChanged(target.clone(), pid.clone(), DEFAULT_ENV_DECAY),
-        PanelAction::EnvDecayCommit(target, pid),
+        PanelAction::Modulation(ModulationAction::EnvDecaySnapshot(target.clone(), pid.clone())),
+        PanelAction::Modulation(ModulationAction::EnvDecayChanged(target.clone(), pid.clone(), DEFAULT_ENV_DECAY)),
+        PanelAction::Modulation(ModulationAction::EnvDecayCommit(target, pid)),
     );
     let spec = DrawerSpec {
         rows: vec![DrawerRow::Slider {
@@ -1941,9 +1942,9 @@ fn param_shape_reset(
     default: f32,
 ) -> PanelAction {
     PanelAction::slider_reset(
-        PanelAction::AudioModShapeSnapshot(gpt.clone(), pid.clone()),
-        PanelAction::AudioModShapeParamChanged(gpt.clone(), pid.clone(), which, default),
-        PanelAction::AudioModShapeCommit(gpt, pid),
+        PanelAction::Modulation(ModulationAction::AudioModShapeSnapshot(gpt.clone(), pid.clone())),
+        PanelAction::Modulation(ModulationAction::AudioModShapeParamChanged(gpt.clone(), pid.clone(), which, default)),
+        PanelAction::Modulation(ModulationAction::AudioModShapeCommit(gpt, pid)),
     )
 }
 
@@ -1956,9 +1957,9 @@ fn clip_trigger_shape_reset(
     default: f32,
 ) -> PanelAction {
     PanelAction::slider_reset(
-        PanelAction::AudioTriggerShapeSnapshot(layer_id.clone(), row),
-        PanelAction::AudioTriggerShapeParamChanged(layer_id.clone(), row, which, default),
-        PanelAction::AudioTriggerShapeCommit(layer_id.clone(), row),
+        PanelAction::AudioSetup(AudioSetupAction::AudioTriggerShapeSnapshot(layer_id.clone(), row)),
+        PanelAction::AudioSetup(AudioSetupAction::AudioTriggerShapeParamChanged(layer_id.clone(), row, which, default)),
+        PanelAction::AudioSetup(AudioSetupAction::AudioTriggerShapeCommit(layer_id.clone(), row)),
     )
 }
 
@@ -2232,9 +2233,9 @@ pub(crate) fn build_audio_mod_drawer(
                 format!("{amount:.2}")
             };
             let step_reset = PanelAction::slider_reset(
-                PanelAction::AudioModStepAmountSnapshot(gpt.clone(), pid.clone()),
-                PanelAction::AudioModStepAmountChanged(gpt.clone(), pid.clone(), default_amount),
-                PanelAction::AudioModStepAmountCommit(gpt.clone(), pid.clone()),
+                PanelAction::Modulation(ModulationAction::AudioModStepAmountSnapshot(gpt.clone(), pid.clone())),
+                PanelAction::Modulation(ModulationAction::AudioModStepAmountChanged(gpt.clone(), pid.clone(), default_amount)),
+                PanelAction::Modulation(ModulationAction::AudioModStepAmountCommit(gpt.clone(), pid.clone())),
             );
             rows.push(shape_slider(
                 "Step",
@@ -2591,9 +2592,9 @@ pub(crate) fn build_param_row(
     // seed both `ids.slider_reset` (below) and the `BitmapSlider::build` call
     // that materialises the track it fires on.
     let reset = PanelAction::slider_reset(
-        PanelAction::ParamSnapshot(target.clone(), info.id.clone()),
-        PanelAction::ParamChanged(target.clone(), info.id.clone(), info.spec.default),
-        PanelAction::ParamCommit(target.clone(), info.id.clone()),
+        PanelAction::Params(ParamsAction::ParamSnapshot(target.clone(), info.id.clone())),
+        PanelAction::Params(ParamsAction::ParamChanged(target.clone(), info.id.clone(), info.spec.default)),
+        PanelAction::Params(ParamsAction::ParamCommit(target.clone(), info.id.clone())),
     );
     let mut ids = ParamRowIds {
         // Overwritten with the real row-catcher node below before any read.

@@ -1,3 +1,4 @@
+use crate::{MappingAction, ParamsAction, RootAction};
 use crate::color;
 use crate::drag::DragController;
 use crate::draw::{Painter, elide_to_width, text_width};
@@ -903,9 +904,9 @@ mod tests {
 
     fn placeholder_reset() -> PanelAction {
         PanelAction::slider_reset(
-            PanelAction::MasterOpacitySnapshot,
-            PanelAction::MasterOpacityChanged(1.0),
-            PanelAction::MasterOpacityCommit,
+            PanelAction::Params(ParamsAction::MasterOpacitySnapshot),
+            PanelAction::Params(ParamsAction::MasterOpacityChanged(1.0)),
+            PanelAction::Params(ParamsAction::MasterOpacityCommit),
         )
     }
 
@@ -1001,7 +1002,7 @@ mod tests {
         // PanelAction carries no PartialEq; SliderReset is the marker of
         // interest here (it's what `register_intents` should have replayed
         // — the same `reset` this slider was built with, above).
-        assert!(matches!(resolved, Some(PanelAction::SliderReset { .. })));
+        assert!(matches!(resolved, Some(PanelAction::Root(RootAction::SliderReset { .. }))));
     }
 
     /// P3/D14: `register_label_mapping` is the label's build-time contract
@@ -1028,11 +1029,11 @@ mod tests {
         .ids;
         assert!(ids.label.is_some());
 
-        let mapping = PanelAction::MacroLabelRightClick(0);
+        let mapping = PanelAction::Mapping(MappingAction::MacroLabelRightClick(0));
         let mut reg = IntentRegistry::new();
         BitmapSlider::register_label_mapping(&ids, &mapping, &mut reg);
         let resolved = reg.resolve(&tree, ids.label, Gesture::RightClick);
-        assert!(matches!(resolved, Some(PanelAction::MacroLabelRightClick(0))));
+        assert!(matches!(resolved, Some(PanelAction::Mapping(MappingAction::MacroLabelRightClick(0)))));
     }
 
     /// P3/D15: a labelless slider has nothing to register the mapping on —
@@ -1059,7 +1060,7 @@ mod tests {
         .ids;
         assert!(ids.label.is_none());
 
-        let mapping = PanelAction::MacroLabelRightClick(0);
+        let mapping = PanelAction::Mapping(MappingAction::MacroLabelRightClick(0));
         let mut reg = IntentRegistry::new();
         // Must not panic; nothing to assert-resolve since there's no label
         // node to register on.

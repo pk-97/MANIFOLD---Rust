@@ -8,6 +8,7 @@
 //! next blocks to typify). The sliders are materialised by the host; their drag
 //! stays with `SliderDragState`. Public interface unchanged → inspector untouched.
 
+use crate::{ClipAction};
 use super::PanelAction;
 use super::param_slider_shared::dropdown_trigger_view;
 use crate::chrome::{Align, ChromeHost, Pad, Sizing, SliderSpec, View, components};
@@ -428,9 +429,9 @@ impl ClipChromePanel {
                         // slots IS "a drag that lands on the default" — there
                         // is no separate snapshot/commit to invent.
                         reset: PanelAction::slider_reset(
-                            PanelAction::ClipDetectOnsetChanged(0.0),
-                            PanelAction::ClipDetectOnsetChanged(0.0),
-                            PanelAction::ClipDetectOnsetChanged(0.0),
+                            PanelAction::Clip(ClipAction::ClipDetectOnsetChanged(0.0)),
+                            PanelAction::Clip(ClipAction::ClipDetectOnsetChanged(0.0)),
+                            PanelAction::Clip(ClipAction::ClipDetectOnsetChanged(0.0)),
                         ),
                     })
                     .fill_w()
@@ -513,9 +514,9 @@ impl ClipChromePanel {
                     // Same "excluded from BUG-061, real reset via the one
                     // existing action" reasoning as the Onset slider above.
                     reset: PanelAction::slider_reset(
-                        PanelAction::ClipDetectSensitivityChanged(i, 0.5),
-                        PanelAction::ClipDetectSensitivityChanged(i, 0.5),
-                        PanelAction::ClipDetectSensitivityChanged(i, 0.5),
+                        PanelAction::Clip(ClipAction::ClipDetectSensitivityChanged(i, 0.5)),
+                        PanelAction::Clip(ClipAction::ClipDetectSensitivityChanged(i, 0.5)),
+                        PanelAction::Clip(ClipAction::ClipDetectSensitivityChanged(i, 0.5)),
                     ),
                 })
                 .fill_w()
@@ -752,22 +753,22 @@ impl ClipChromePanel {
         let key_is = |k: u64| self.host.node_id_for_key(k) == Some(node_id);
 
         if key_is(KEY_BPM) && (self.mode_video || self.mode_audio) {
-            return vec![PanelAction::ClipBpmClicked];
+            return vec![PanelAction::Clip(ClipAction::ClipBpmClicked)];
         }
         if key_is(KEY_WARP) && self.mode_audio {
-            return vec![PanelAction::ClipWarpToggled];
+            return vec![PanelAction::Clip(ClipAction::ClipWarpToggled)];
         }
         if key_is(KEY_DETECT) && self.mode_audio && !self.cached_detect_show {
-            return vec![PanelAction::ClipDetectClicked];
+            return vec![PanelAction::Clip(ClipAction::ClipDetectClicked)];
         }
         if key_is(KEY_CLEAR) && self.mode_audio {
-            return vec![PanelAction::ClipClearTriggersClicked];
+            return vec![PanelAction::Clip(ClipAction::ClipClearTriggersClicked)];
         }
         if key_is(KEY_REPLACE_AUDIO) && self.mode_audio {
-            return vec![PanelAction::ClipReplaceAudioClicked];
+            return vec![PanelAction::Clip(ClipAction::ClipReplaceAudioClicked)];
         }
         if key_is(KEY_QUANTIZE) && self.mode_audio {
-            return vec![PanelAction::ClipDetectQuantizeClicked];
+            return vec![PanelAction::Clip(ClipAction::ClipDetectQuantizeClicked)];
         }
         if self.mode_audio {
             if let Some(idx) = self
@@ -775,18 +776,18 @@ impl ClipChromePanel {
                 .iter()
                 .position(|&b| b == Some(node_id))
             {
-                return vec![PanelAction::ClipDetectInstrumentToggled(idx)];
+                return vec![PanelAction::Clip(ClipAction::ClipDetectInstrumentToggled(idx))];
             }
             if let Some(idx) = self
                 .instrument_layer_btn_ids
                 .iter()
                 .position(|&b| b == Some(node_id))
             {
-                return vec![PanelAction::ClipDetectLayerClicked(idx)];
+                return vec![PanelAction::Clip(ClipAction::ClipDetectLayerClicked(idx))];
             }
         }
         if key_is(KEY_LOOP) && self.mode_video {
-            return vec![PanelAction::ClipLoopToggle];
+            return vec![PanelAction::Clip(ClipAction::ClipLoopToggle)];
         }
         Vec::new()
     }
@@ -823,11 +824,11 @@ impl ClipChromePanel {
 
     pub fn handle_drag_end(&mut self, _tree: &mut UITree) -> Vec<PanelAction> {
         if self.onset_slider.end_drag() {
-            return vec![PanelAction::ClipDetectOnsetChanged(self.onset_slider.cached_value())];
+            return vec![PanelAction::Clip(ClipAction::ClipDetectOnsetChanged(self.onset_slider.cached_value()))];
         }
         for (i, slider) in self.instrument_sens_sliders.iter_mut().enumerate() {
             if slider.end_drag() {
-                return vec![PanelAction::ClipDetectSensitivityChanged(i, slider.cached_value())];
+                return vec![PanelAction::Clip(ClipAction::ClipDetectSensitivityChanged(i, slider.cached_value()))];
             }
         }
         Vec::new()
@@ -923,22 +924,22 @@ mod tests {
         let warp = panel.host.node_id_for_key(KEY_WARP).unwrap();
         assert!(matches!(
             panel.handle_click(warp).as_slice(),
-            [PanelAction::ClipWarpToggled]
+            [PanelAction::Clip(ClipAction::ClipWarpToggled)]
         ));
         let en0 = panel.host.node_id_for_key(KEY_INSTR_ENABLE_BASE).unwrap();
         assert!(matches!(
             panel.handle_click(en0).as_slice(),
-            [PanelAction::ClipDetectInstrumentToggled(0)]
+            [PanelAction::Clip(ClipAction::ClipDetectInstrumentToggled(0))]
         ));
         let clear = panel.host.node_id_for_key(KEY_CLEAR).unwrap();
         assert!(matches!(
             panel.handle_click(clear).as_slice(),
-            [PanelAction::ClipClearTriggersClicked]
+            [PanelAction::Clip(ClipAction::ClipClearTriggersClicked)]
         ));
         let replace = panel.host.node_id_for_key(KEY_REPLACE_AUDIO).unwrap();
         assert!(matches!(
             panel.handle_click(replace).as_slice(),
-            [PanelAction::ClipReplaceAudioClicked]
+            [PanelAction::Clip(ClipAction::ClipReplaceAudioClicked)]
         ));
     }
 

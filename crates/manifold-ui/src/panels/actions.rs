@@ -872,3 +872,44 @@ pub enum RootAction {
     OpenAbletonPickerForParam(GraphParamTarget, ParamId), // gpt, param_id
     CopyOscAddress(String),
 }
+
+// `From<DomainAction> for PanelAction` — wraps a domain value into its sum arm.
+// One per domain; lets an emit site read `DomainAction::X(..).into()` where a
+// builder returns the domain type naturally, though the sweep prefers explicit
+// `PanelAction::Domain(DomainAction::X(..))` wrapping.
+impl From<TransportAction> for PanelAction {
+    fn from(a: TransportAction) -> Self { PanelAction::Transport(a) }
+}
+impl From<EditingAction> for PanelAction {
+    fn from(a: EditingAction) -> Self { PanelAction::Editing(a) }
+}
+impl From<LayerAction> for PanelAction {
+    fn from(a: LayerAction) -> Self { PanelAction::Layer(a) }
+}
+impl From<MarkerAction> for PanelAction {
+    fn from(a: MarkerAction) -> Self { PanelAction::Marker(a) }
+}
+impl From<ProjectAction> for PanelAction {
+    fn from(a: ProjectAction) -> Self { PanelAction::Project(a) }
+}
+impl From<BrowserAction> for PanelAction {
+    fn from(a: BrowserAction) -> Self { PanelAction::Browser(a) }
+}
+impl From<ClipAction> for PanelAction {
+    fn from(a: ClipAction) -> Self { PanelAction::Clip(a) }
+}
+impl From<ParamsAction> for PanelAction {
+    fn from(a: ParamsAction) -> Self { PanelAction::Params(a) }
+}
+impl From<ModulationAction> for PanelAction {
+    fn from(a: ModulationAction) -> Self { PanelAction::Modulation(a) }
+}
+impl From<MappingAction> for PanelAction {
+    fn from(a: MappingAction) -> Self { PanelAction::Mapping(a) }
+}
+impl From<AudioSetupAction> for PanelAction {
+    fn from(a: AudioSetupAction) -> Self { PanelAction::AudioSetup(a) }
+}
+impl From<RootAction> for PanelAction {
+    fn from(a: RootAction) -> Self { PanelAction::Root(a) }
+}

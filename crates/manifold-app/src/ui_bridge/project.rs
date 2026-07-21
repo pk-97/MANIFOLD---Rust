@@ -5,7 +5,7 @@ use manifold_core::LayerId;
 use manifold_core::PresetTypeId;
 use manifold_core::project::Project;
 use manifold_editing::command::Command;
-use manifold_ui::PanelAction;
+use manifold_ui::ProjectAction;
 
 use super::DispatchResult;
 use crate::app::SelectionState;
@@ -13,7 +13,7 @@ use crate::ui_root::UIRoot;
 use crate::user_prefs::UserPrefs;
 
 pub(super) fn dispatch_project(
-    action: &PanelAction,
+    action: &ProjectAction,
     project: &mut Project,
     content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
     _content_state: &crate::content_state::ContentState,
@@ -25,7 +25,7 @@ pub(super) fn dispatch_project(
     use crate::content_command::ContentCommand;
     match action {
         // ── Export/Header/Footer ───────────────────────────────────
-        PanelAction::ToggleHdr => {
+        ProjectAction::ToggleHdr => {
             let old_hdr = project.settings.export_hdr;
             let cmd = manifold_editing::commands::settings::ToggleExportHdrCommand::new(old_hdr);
             {
@@ -36,30 +36,30 @@ pub(super) fn dispatch_project(
             log::info!("HDR export → {}", project.settings.export_hdr);
             DispatchResult::handled()
         }
-        PanelAction::ToggleLiveRecording
-        | PanelAction::SelectAudioInputDevice
-        | PanelAction::SetAudioInputDevice(_)
-        | PanelAction::ToggleMonitor => DispatchResult::handled(),
-        PanelAction::EnterPerformMode => DispatchResult::handled(),
+        ProjectAction::ToggleLiveRecording
+        | ProjectAction::SelectAudioInputDevice
+        | ProjectAction::SetAudioInputDevice(_)
+        | ProjectAction::ToggleMonitor => DispatchResult::handled(),
+        ProjectAction::EnterPerformMode => DispatchResult::handled(),
 
-        PanelAction::NewProject
-        | PanelAction::OpenProject
-        | PanelAction::OpenRecent
-        | PanelAction::SaveProject
-        | PanelAction::SaveProjectAs => {
+        ProjectAction::NewProject
+        | ProjectAction::OpenProject
+        | ProjectAction::OpenRecent
+        | ProjectAction::SaveProject
+        | ProjectAction::SaveProjectAs => {
             log::warn!(
                 "File action {:?} reached ui_bridge (should be intercepted in app.rs)",
                 action
             );
             DispatchResult::handled()
         }
-        PanelAction::ExportVideo | PanelAction::ExportFrame | PanelAction::ExportXml => {
+        ProjectAction::ExportVideo | ProjectAction::ExportFrame | ProjectAction::ExportXml => {
             log::info!("Export action: {:?} (not yet wired)", action);
             DispatchResult::handled()
         }
 
         // ── Dropdown results (context-routed from UIRoot) ────────────
-        PanelAction::SetMidiNote(id, note) => {
+        ProjectAction::SetMidiNote(id, note) => {
             if let Some((_, layer)) = project.timeline.find_layer_by_id(id) {
                 let layer_id = layer.layer_id.clone();
                 let old_note = layer.midi_note;
@@ -75,7 +75,7 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::structural()
         }
-        PanelAction::SetMidiChannel(id, channel) => {
+        ProjectAction::SetMidiChannel(id, channel) => {
             if let Some((_, layer)) = project.timeline.find_layer_by_id(id) {
                 let layer_id = layer.layer_id.clone();
                 let old_channel = layer.midi_channel;
@@ -93,7 +93,7 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::structural()
         }
-        PanelAction::SetMidiDevice(id, device) => {
+        ProjectAction::SetMidiDevice(id, device) => {
             if let Some((_, layer)) = project.timeline.find_layer_by_id(id) {
                 let layer_id = layer.layer_id.clone();
                 let old_device = layer.midi_device.clone();
@@ -108,7 +108,7 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::structural()
         }
-        PanelAction::MidiTriggerModeClicked(id) => {
+        ProjectAction::MidiTriggerModeClicked(id) => {
             use manifold_core::types::MidiTriggerMode;
             if let Some((_, layer)) = project.timeline.find_layer_by_id(id) {
                 let layer_id = layer.layer_id.clone();
@@ -127,7 +127,7 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::structural()
         }
-        PanelAction::SetMidiTriggerMode(id, new_mode) => {
+        ProjectAction::SetMidiTriggerMode(id, new_mode) => {
             if let Some((_, layer)) = project.timeline.find_layer_by_id(id) {
                 let layer_id = layer.layer_id.clone();
                 let old_mode = layer.midi_trigger_mode;
@@ -143,7 +143,7 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::structural()
         }
-        PanelAction::SetResolution(preset_idx) => {
+        ProjectAction::SetResolution(preset_idx) => {
             use manifold_core::types::ResolutionPreset;
             let old = project.settings.resolution_preset;
             if let Some(new) = ResolutionPreset::from_index(*preset_idx) {
@@ -158,7 +158,7 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::resolution()
         }
-        PanelAction::SetDisplayResolution(w, h) => {
+        ProjectAction::SetDisplayResolution(w, h) => {
             let old_w = project.settings.output_width;
             let old_h = project.settings.output_height;
             let cmd = manifold_editing::commands::settings::SetDisplayDimensionsCommand::new(
@@ -171,7 +171,7 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::resolution()
         }
-        PanelAction::SetRenderScale(scale) => {
+        ProjectAction::SetRenderScale(scale) => {
             let old_scale = project.settings.render_scale;
             let new_scale = scale.clamp(0.01, 1.0);
             if (new_scale - old_scale).abs() > 0.01 {
@@ -187,7 +187,7 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::resolution()
         }
-        PanelAction::SetTonemapCurve(curve) => {
+        ProjectAction::SetTonemapCurve(curve) => {
             let old_curve = project.settings.tonemap_curve;
             let curve = crate::ui_translate::tonemap_curve_to_core(*curve);
             if curve != old_curve {
@@ -203,7 +203,7 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::handled()
         }
-        PanelAction::SetGenType(opt_layer_id, new_type) => {
+        ProjectAction::SetGenType(opt_layer_id, new_type) => {
             let new_type = crate::ui_translate::preset_type_id_to_core(new_type);
             let resolved_idx = opt_layer_id
                 .as_ref()
@@ -257,7 +257,7 @@ pub(super) fn dispatch_project(
         // `Application::watch_generator_graph` does, then dispatch the SAME
         // command a card/node-face/group-face write would — no new mutation
         // path (§4).
-        PanelAction::SceneSetupParamChanged(layer_id, scope_path, node_doc_id, param_id, value) => {
+        ProjectAction::SceneSetupParamChanged(layer_id, scope_path, node_doc_id, param_id, value) => {
             if let Some(default) = generator_catalog_default(project, layer_id) {
                 let target = manifold_core::GraphTarget::Generator(layer_id.clone());
                 // Bound param → edit the binding's instance slot, never the
@@ -312,7 +312,7 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::handled()
         }
-        PanelAction::SceneSetupAddEnvironment(layer_id, render_scene_node_id) => {
+        ProjectAction::SceneSetupAddEnvironment(layer_id, render_scene_node_id) => {
             if let Some(default) = generator_catalog_default(project, layer_id) {
                 let target = manifold_core::GraphTarget::Generator(layer_id.clone());
                 let cmd = manifold_editing::commands::graph::AddSceneEnvironmentCommand::new(
@@ -329,7 +329,7 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::structural()
         }
-        PanelAction::SceneSetupAddFog(layer_id, render_scene_node_id) => {
+        ProjectAction::SceneSetupAddFog(layer_id, render_scene_node_id) => {
             if let Some(default) = generator_catalog_default(project, layer_id) {
                 let target = manifold_core::GraphTarget::Generator(layer_id.clone());
                 let cmd = manifold_editing::commands::graph::AddSceneFogCommand::new(
@@ -352,7 +352,7 @@ pub(super) fn dispatch_project(
         // rides on the action (the panel reads it off the live Vm's own
         // `object_count`/`light_count`, same source the canvas button uses).
         // The centroid/pos offsets are cosmetic editor-canvas placement only.
-        PanelAction::SceneSetupAddObject(layer_id, render_scene_node_id, next_index) => {
+        ProjectAction::SceneSetupAddObject(layer_id, render_scene_node_id, next_index) => {
             if let Some(default) = generator_catalog_default(project, layer_id) {
                 let target = manifold_core::GraphTarget::Generator(layer_id.clone());
                 let centroid = (900.0, 200.0 + 40.0 * *next_index as f32);
@@ -373,7 +373,7 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::structural()
         }
-        PanelAction::SceneSetupAddLight(layer_id, render_scene_node_id, next_index) => {
+        ProjectAction::SceneSetupAddLight(layer_id, render_scene_node_id, next_index) => {
             if let Some(default) = generator_catalog_default(project, layer_id) {
                 let target = manifold_core::GraphTarget::Generator(layer_id.clone());
                 let pos = (-260.0, 50.0 + 40.0 * *next_index as f32);
@@ -396,7 +396,7 @@ pub(super) fn dispatch_project(
         // SceneSetupAddLight above — `object_index`/`light_index` ride on
         // the action exactly as `next_index` does for the Add commands (the
         // panel's own live Vm row index, not re-derived here).
-        PanelAction::SceneSetupRemoveObject(layer_id, render_scene_node_id, object_index) => {
+        ProjectAction::SceneSetupRemoveObject(layer_id, render_scene_node_id, object_index) => {
             if let Some(default) = generator_catalog_default(project, layer_id) {
                 let target = manifold_core::GraphTarget::Generator(layer_id.clone());
                 let cmd = manifold_editing::commands::graph::RemoveSceneObjectCommand::new(
@@ -412,7 +412,7 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::structural()
         }
-        PanelAction::SceneSetupRemoveLight(layer_id, render_scene_node_id, light_index) => {
+        ProjectAction::SceneSetupRemoveLight(layer_id, render_scene_node_id, light_index) => {
             if let Some(default) = generator_catalog_default(project, layer_id) {
                 let target = manifold_core::GraphTarget::Generator(layer_id.clone());
                 let cmd = manifold_editing::commands::graph::RemoveSceneLightCommand::new(
@@ -431,7 +431,7 @@ pub(super) fn dispatch_project(
         // P5 properties-header "Duplicate" (Object selection, D11): the same
         // `DuplicateSceneObjectCommand` construction shape as
         // `SceneSetupRemoveObject` above.
-        PanelAction::SceneSetupDuplicateObject(layer_id, render_scene_node_id, source_index) => {
+        ProjectAction::SceneSetupDuplicateObject(layer_id, render_scene_node_id, source_index) => {
             if let Some(default) = generator_catalog_default(project, layer_id) {
                 let target = manifold_core::GraphTarget::Generator(layer_id.clone());
                 let cmd = manifold_editing::commands::graph::DuplicateSceneObjectCommand::new(
@@ -457,7 +457,7 @@ pub(super) fn dispatch_project(
         // failure (log + no-op), never a silent partial merge — same
         // posture as `Application::import_model_file`'s own parse-failure
         // branch.
-        PanelAction::SceneSetupImportModelClicked(layer_id, render_scene_node_id) => {
+        ProjectAction::SceneSetupImportModelClicked(layer_id, render_scene_node_id) => {
             let Some(default) = generator_catalog_default(project, layer_id) else {
                 return DispatchResult::handled();
             };
@@ -516,7 +516,7 @@ pub(super) fn dispatch_project(
         // the P1/P2 arms above — no new mutation path, just the three named
         // composites `InsertMeshModifierCommand`/`RemoveMeshModifierCommand`/
         // `MoveMeshModifierCommand`.
-        PanelAction::SceneSetupAddModifier(layer_id, group_node_id, type_id) => {
+        ProjectAction::SceneSetupAddModifier(layer_id, group_node_id, type_id) => {
             if let Some(default) = generator_catalog_default(project, layer_id) {
                 let target = manifold_core::GraphTarget::Generator(layer_id.clone());
                 let cmd = manifold_editing::commands::graph::InsertMeshModifierCommand::new(
@@ -534,7 +534,7 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::structural()
         }
-        PanelAction::SceneSetupRemoveModifier(layer_id, group_node_id, modifier_node_id) => {
+        ProjectAction::SceneSetupRemoveModifier(layer_id, group_node_id, modifier_node_id) => {
             if let Some(default) = generator_catalog_default(project, layer_id) {
                 let target = manifold_core::GraphTarget::Generator(layer_id.clone());
                 let cmd = manifold_editing::commands::graph::RemoveMeshModifierCommand::new(
@@ -550,7 +550,7 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::structural()
         }
-        PanelAction::SceneSetupMoveModifier(layer_id, group_node_id, modifier_node_id, new_position) => {
+        ProjectAction::SceneSetupMoveModifier(layer_id, group_node_id, modifier_node_id, new_position) => {
             if let Some(default) = generator_catalog_default(project, layer_id) {
                 let target = manifold_core::GraphTarget::Generator(layer_id.clone());
                 let cmd = manifold_editing::commands::graph::MoveMeshModifierCommand::new(
@@ -571,7 +571,7 @@ pub(super) fn dispatch_project(
         // Starter preset via the SAME `ChangeGeneratorTypeCommand` the
         // browser-popup generator picker's `SetGenType` dispatches (§1 VERIFY
         // marker, resolved).
-        PanelAction::SceneSetupNewScene(layer_id) => {
+        ProjectAction::SceneSetupNewScene(layer_id) => {
             let new_type = manifold_core::PresetTypeId::from_string("SceneStarter".to_string());
             if let Some((_, layer)) = project.timeline.find_layer_by_id(layer_id) {
                 let old_type = layer
@@ -609,7 +609,7 @@ pub(super) fn dispatch_project(
         // — `ClearLaneCommand`/`RemoveLaneCommand` had zero UI callers before
         // this. Same `to_graph_target` conversion `editing_host.rs`'s
         // automation-point arms use.
-        PanelAction::ContextClearAutomationLane(target, param_id) => {
+        ProjectAction::ContextClearAutomationLane(target, param_id) => {
             let graph_target = crate::editing_host::to_graph_target(target);
             let mut cmd = manifold_editing::commands::automation::ClearLaneCommand::new(
                 graph_target,
@@ -619,7 +619,7 @@ pub(super) fn dispatch_project(
             ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
             DispatchResult::structural()
         }
-        PanelAction::ContextRemoveAutomationLane(target, param_id) => {
+        ProjectAction::ContextRemoveAutomationLane(target, param_id) => {
             let graph_target = crate::editing_host::to_graph_target(target);
             let param_id_str = param_id.as_ref();
             let index = project.preset_instance(&graph_target).and_then(|inst| {
@@ -655,7 +655,7 @@ pub(super) fn dispatch_project(
         // click never un-exposes and never mints a second binding. The panel
         // emits regardless of lit state (see the action's own doc), so this
         // guard is the actual one-way enforcement point.
-        PanelAction::SceneSetupExposeParam {
+        ProjectAction::SceneSetupExposeParam {
             layer_id,
             scope_path,
             node_doc_id,
@@ -707,7 +707,6 @@ pub(super) fn dispatch_project(
             DispatchResult::structural()
         }
 
-        _ => DispatchResult::unhandled(),
     }
 }
 
@@ -848,7 +847,7 @@ mod tests {
             dispatch_harness();
 
         let action =
-            PanelAction::SceneSetupAddObject(layer_id.clone(), render_scene_id, before as u32);
+            ProjectAction::SceneSetupAddObject(layer_id.clone(), render_scene_id, before as u32);
         let result = dispatch_project(
             &action,
             &mut project,
@@ -871,7 +870,7 @@ mod tests {
             dispatch_harness();
 
         let action =
-            PanelAction::SceneSetupAddLight(layer_id.clone(), render_scene_id, before as u32);
+            ProjectAction::SceneSetupAddLight(layer_id.clone(), render_scene_id, before as u32);
         let result = dispatch_project(
             &action,
             &mut project,
@@ -902,7 +901,7 @@ mod tests {
         let (content_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
             dispatch_harness();
 
-        let action = PanelAction::SceneSetupRemoveObject(
+        let action = ProjectAction::SceneSetupRemoveObject(
             layer_id.clone(),
             render_scene_id,
             (before - 1.0) as u32,
@@ -930,7 +929,7 @@ mod tests {
         let (content_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
             dispatch_harness();
 
-        let action = PanelAction::SceneSetupRemoveLight(
+        let action = ProjectAction::SceneSetupRemoveLight(
             layer_id.clone(),
             render_scene_id,
             (before - 1.0) as u32,
@@ -1081,7 +1080,7 @@ mod tests {
 
         let (content_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
             dispatch_harness();
-        let action = PanelAction::SceneSetupParamChanged(
+        let action = ProjectAction::SceneSetupParamChanged(
             layer_id.clone(),
             Vec::new(),
             light_node_id,
@@ -1117,7 +1116,7 @@ mod tests {
 
         let (content_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
             dispatch_harness();
-        let action = PanelAction::SceneSetupParamChanged(
+        let action = ProjectAction::SceneSetupParamChanged(
             layer_id.clone(),
             Vec::new(),
             camera_node_id,
@@ -1150,7 +1149,7 @@ mod tests {
         let (content_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
             dispatch_harness();
 
-        let add_fog = PanelAction::SceneSetupAddFog(layer_id.clone(), render_scene_id);
+        let add_fog = ProjectAction::SceneSetupAddFog(layer_id.clone(), render_scene_id);
         dispatch_project(
             &add_fog, &mut project, &content_tx, &content_state, &mut ui, &mut selection, &mut active_layer,
             &mut user_prefs,
@@ -1165,7 +1164,7 @@ mod tests {
             }
         };
 
-        let action = PanelAction::SceneSetupParamChanged(
+        let action = ProjectAction::SceneSetupParamChanged(
             layer_id.clone(),
             Vec::new(),
             fog_node_id,

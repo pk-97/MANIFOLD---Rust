@@ -3,6 +3,7 @@
 //! builders. Moved verbatim from ui_root/mod.rs (UI_FUNNEL_DECOMPOSITION P-F2a,
 //! pure move).
 
+use manifold_ui::{AudioSetupAction, BrowserAction, ClipAction, EditingAction, LayerAction, MappingAction, ParamsAction, ProjectAction, RootAction, TransportAction};
 use super::*;
 
 /// Convert an AbletonSession into the picker's thin data struct.
@@ -61,7 +62,7 @@ pub(crate) fn build_picker_session(
 /// dropdown carries stereo pairing directly now — no separate St/Mo toggle,
 /// mono falls out of picking a single channel).
 fn send_channels_action(send_id: &manifold_core::AudioSendId, channels: Vec<u16>) -> PanelAction {
-    PanelAction::AudioSetSendChannels(send_id.clone(), channels)
+    PanelAction::AudioSetup(AudioSetupAction::AudioSetSendChannels(send_id.clone(), channels))
 }
 
 /// Push one channel run's rows: a "A + B" stereo-pair item for each adjacent
@@ -314,7 +315,7 @@ impl UIRoot {
         };
 
         match action {
-            PanelAction::BlendModeClicked(idx) => {
+            PanelAction::Layer(LayerAction::BlendModeClicked(idx)) => {
                 use manifold_core::types::BlendMode;
                 // Typed dropdown (2b.11): each item carries its own SetBlendMode
                 // action, so selection fires it directly — no DropdownContext /
@@ -326,36 +327,36 @@ impl UIRoot {
                         // Debug form, exactly as the old index→action map did
                         // (`format!("{:?}", BlendMode::from_index(i))`).
                         DropdownItem::new(m.display_name())
-                            .with_action(PanelAction::SetBlendMode(idx.clone(), format!("{:?}", m)))
+                            .with_action(PanelAction::Layer(LayerAction::SetBlendMode(idx.clone(), format!("{:?}", m))))
                     })
                     .collect();
                 self.open_dropdown_typed(items, trigger);
                 true
             }
-            PanelAction::ClipDetectQuantizeClicked => {
+            PanelAction::Clip(ClipAction::ClipDetectQuantizeClicked) => {
                 // Typed (2b.11): each grid option carries its quantize step.
                 let items: Vec<DropdownItem> =
                     manifold_core::audio_clip_detection::quantize_grid_options()
                         .iter()
                         .map(|(label, step)| {
                             DropdownItem::new(label)
-                                .with_action(PanelAction::ClipDetectSetQuantize(*step))
+                                .with_action(PanelAction::Clip(ClipAction::ClipDetectSetQuantize(*step)))
                         })
                         .collect();
                 self.open_dropdown_typed(items, trigger);
                 true
             }
-            PanelAction::ClipDetectLayerClicked(idx) => {
+            PanelAction::Clip(ClipAction::ClipDetectLayerClicked(idx)) => {
                 // "Auto" (route by trigger name) first, then every candidate
                 // layer cached by state_sync — each carries its target layer.
                 let mut items = Vec::with_capacity(self.clip_detect_layers.len() + 1);
                 items.push(
                     DropdownItem::new("Auto")
-                        .with_action(PanelAction::ClipDetectSetLayer(*idx, None)),
+                        .with_action(PanelAction::Clip(ClipAction::ClipDetectSetLayer(*idx, None))),
                 );
                 for (id, name) in &self.clip_detect_layers {
                     items.push(DropdownItem::new(name).with_action(
-                        PanelAction::ClipDetectSetLayer(*idx, Some(id.clone())),
+                        PanelAction::Clip(ClipAction::ClipDetectSetLayer(*idx, Some(id.clone()))),
                     ));
                 }
                 self.open_dropdown_typed(items, trigger);
@@ -364,7 +365,7 @@ impl UIRoot {
             // The Audio Setup Triggers matrix's target-layer dropdown
             // (`AudioTriggerLayerClicked` → `AudioTriggerSetLayer`) is deleted
             // with the matrix (P3, D2).
-            PanelAction::AudioSendClicked(idx) => {
+            PanelAction::Root(RootAction::AudioSendClicked(idx)) => {
                 // "No source" first, then every named send from Audio Setup so the
                 // layer dropdown and the setup panel can never disagree — each
                 // carries its SetLayerAudioSend directly.
@@ -372,18 +373,18 @@ impl UIRoot {
                 let mut items = Vec::with_capacity(sends.len() + 1);
                 items.push(
                     DropdownItem::new("No source")
-                        .with_action(PanelAction::SetLayerAudioSend(idx.clone(), None)),
+                        .with_action(PanelAction::Layer(LayerAction::SetLayerAudioSend(idx.clone(), None))),
                 );
                 for (id, label) in sends {
                     items.push(
                         DropdownItem::new(&label)
-                            .with_action(PanelAction::SetLayerAudioSend(idx.clone(), Some(id))),
+                            .with_action(PanelAction::Layer(LayerAction::SetLayerAudioSend(idx.clone(), Some(id)))),
                     );
                 }
                 self.open_dropdown_typed(items, trigger);
                 true
             }
-            PanelAction::AddEffectClicked(tab) => {
+            PanelAction::Params(ParamsAction::AddEffectClicked(tab)) => {
                 use manifold_core::{preset_def::PresetKind, preset_type_registry};
                 use manifold_ui::panels::browser_popup::*;
 
@@ -417,7 +418,7 @@ impl UIRoot {
                 });
                 true
             }
-            PanelAction::GenTypeClicked(layer_id) => {
+            PanelAction::Params(ParamsAction::GenTypeClicked(layer_id)) => {
                 use manifold_core::preset_def::PresetKind;
                 use manifold_ui::panels::browser_popup::*;
 
@@ -441,35 +442,35 @@ impl UIRoot {
                 });
                 true
             }
-            PanelAction::BrowserCellRightClicked(mode, type_id, source) => {
+            PanelAction::Browser(BrowserAction::BrowserCellRightClicked(mode, type_id, source)) => {
                 use manifold_ui::panels::picker_core::Source;
 
                 let mut items = Vec::new();
                 items.push(
-                    DropdownItem::new("Rename…").with_action(PanelAction::BrowserRenamePresetClicked(
+                    DropdownItem::new("Rename…").with_action(PanelAction::Browser(BrowserAction::BrowserRenamePresetClicked(
                         *mode,
                         type_id.clone(),
                         *source,
-                    )),
+                    ))),
                 );
                 if matches!(source, Source::MyLibrary) {
                     items.push(
                         DropdownItem::new("Duplicate").with_action(
-                            PanelAction::BrowserDuplicatePresetClicked(*mode, type_id.clone()),
+                            PanelAction::Browser(BrowserAction::BrowserDuplicatePresetClicked(*mode, type_id.clone())),
                         ),
                     );
                 }
                 items.push(
-                    DropdownItem::new("Delete…").with_action(PanelAction::BrowserDeletePresetClicked(
+                    DropdownItem::new("Delete…").with_action(PanelAction::Browser(BrowserAction::BrowserDeletePresetClicked(
                         *mode,
                         type_id.clone(),
                         *source,
-                    )),
+                    ))),
                 );
                 if matches!(source, Source::MyLibrary) {
                     items.push(
                         DropdownItem::new("Reveal in Finder").with_action(
-                            PanelAction::BrowserRevealPresetClicked(*mode, type_id.clone()),
+                            PanelAction::Browser(BrowserAction::BrowserRevealPresetClicked(*mode, type_id.clone())),
                         ),
                     );
                 }
@@ -477,7 +478,7 @@ impl UIRoot {
                     .open_context(items, right_click_pos, &mut self.tree);
                 true
             }
-            PanelAction::SelectAudioInputDevice => {
+            PanelAction::Project(ProjectAction::SelectAudioInputDevice) => {
                 // Enumerate audio input devices on demand; each item carries its
                 // SetAudioInputDevice action ("" = none/video-only).
                 let device_names: Vec<String> =
@@ -487,15 +488,15 @@ impl UIRoot {
                         .collect();
                 let mut items: Vec<DropdownItem> = vec![
                     DropdownItem::new("None (video only)")
-                        .with_action(PanelAction::SetAudioInputDevice(String::new())),
+                        .with_action(PanelAction::Project(ProjectAction::SetAudioInputDevice(String::new()))),
                 ];
                 items.extend(device_names.into_iter().map(|name| {
-                    DropdownItem::new(&name).with_action(PanelAction::SetAudioInputDevice(name))
+                    DropdownItem::new(&name).with_action(PanelAction::Project(ProjectAction::SetAudioInputDevice(name)))
                 }));
                 self.open_dropdown_typed(items, trigger);
                 true
             }
-            PanelAction::AudioSetupDeviceClicked => {
+            PanelAction::Root(RootAction::AudioSetupDeviceClicked) => {
                 // Enumerate input devices + tappable sources on demand for the
                 // Audio Setup modal. The list is three sections: the default, the
                 // hardware/virtual input devices, and the output taps (system +
@@ -513,7 +514,7 @@ impl UIRoot {
 
                 items.push(
                     DropdownItem::new("System Default")
-                        .with_action(PanelAction::AudioSetDevice(None)),
+                        .with_action(PanelAction::AudioSetup(AudioSetupAction::AudioSetDevice(None))),
                 );
 
                 if !self.audio_setup_devices.is_empty() {
@@ -526,9 +527,9 @@ impl UIRoot {
                             format!("{} (offline)", d.name)
                         };
                         // Store stable UID + display name from the cached metadata.
-                        let action = PanelAction::AudioSetDevice(Some(
+                        let action = PanelAction::AudioSetup(AudioSetupAction::AudioSetDevice(Some(
                             manifold_ui::AudioDeviceRef::new(d.uid.clone(), d.name.clone()),
-                        ));
+                        )));
                         items.push(DropdownItem::new(&label).with_action(action));
                     }
                 }
@@ -537,9 +538,9 @@ impl UIRoot {
                     items.push(DropdownItem::disabled("Capture Output"));
                     if caps.system_audio {
                         items.push(DropdownItem::new("System Audio").with_action(
-                            PanelAction::AudioSetDevice(Some(
+                            PanelAction::AudioSetup(AudioSetupAction::AudioSetDevice(Some(
                                 manifold_ui::AudioDeviceRef::system_audio(),
-                            )),
+                            ))),
                         ));
                     }
                     for app in &self.audio_setup_apps {
@@ -551,12 +552,12 @@ impl UIRoot {
                         } else {
                             format!("{} (idle)", app.name)
                         };
-                        let action = PanelAction::AudioSetDevice(Some(
+                        let action = PanelAction::AudioSetup(AudioSetupAction::AudioSetDevice(Some(
                             manifold_ui::AudioDeviceRef::app(
                                 app.bundle_id.clone(),
                                 app.name.clone(),
                             ),
-                        ));
+                        )));
                         items.push(DropdownItem::new(&label).with_action(action));
                     }
                 }
@@ -564,7 +565,7 @@ impl UIRoot {
                 self.open_dropdown_typed(items, trigger);
                 true
             }
-            PanelAction::AudioSendChannelClicked(send_id) => {
+            PanelAction::Root(RootAction::AudioSendChannelClicked(send_id)) => {
                 // A tap source (system / app output) is a fixed stereo mixdown, so
                 // it has no hardware channel layout — present Left/Right. A device
                 // source builds its true layout, grouped by subdevice, with
@@ -589,7 +590,7 @@ impl UIRoot {
                 self.open_dropdown_typed(items, trigger);
                 true
             }
-            PanelAction::SelectClkDevice => {
+            PanelAction::Transport(TransportAction::SelectClkDevice) => {
                 if self.midi_device_names.is_empty() {
                     log::info!("[UIRoot] No MIDI devices available for CLK selection");
                     return false;
@@ -601,49 +602,49 @@ impl UIRoot {
                     .enumerate()
                     .map(|(i, name)| {
                         DropdownItem::new(name)
-                            .with_action(PanelAction::SetMidiClockDevice(i as i32))
+                            .with_action(PanelAction::Transport(TransportAction::SetMidiClockDevice(i as i32)))
                     })
                     .collect();
                 self.open_dropdown_typed(items, trigger);
                 true
             }
-            PanelAction::MidiInputClicked(idx) => {
+            PanelAction::Layer(LayerAction::MidiInputClicked(idx)) => {
                 // Typed dropdown (2b.11): item n carries SetMidiNote(idx, n).
                 let items: Vec<DropdownItem> = (0..128)
                     .map(|n| {
                         DropdownItem::new(&manifold_core::midi::note_number_to_name(n))
-                            .with_action(PanelAction::SetMidiNote(idx.clone(), n))
+                            .with_action(PanelAction::Project(ProjectAction::SetMidiNote(idx.clone(), n)))
                     })
                     .collect();
                 self.open_dropdown_typed(items, trigger);
                 true
             }
-            PanelAction::MidiChannelClicked(idx) => {
+            PanelAction::Layer(LayerAction::MidiChannelClicked(idx)) => {
                 // "All" (-1) then channels 0..15 (displayed 1..16).
                 let mut items: Vec<DropdownItem> = vec![
-                    DropdownItem::new("All").with_action(PanelAction::SetMidiChannel(idx.clone(), -1)),
+                    DropdownItem::new("All").with_action(PanelAction::Project(ProjectAction::SetMidiChannel(idx.clone(), -1))),
                 ];
                 items.extend((1..=16).map(|ch| {
                     DropdownItem::new(&format!("Ch {}", ch))
-                        .with_action(PanelAction::SetMidiChannel(idx.clone(), ch - 1))
+                        .with_action(PanelAction::Project(ProjectAction::SetMidiChannel(idx.clone(), ch - 1)))
                 }));
                 self.open_dropdown_typed(items, trigger);
                 true
             }
-            PanelAction::MidiDeviceClicked(idx) => {
+            PanelAction::Layer(LayerAction::MidiDeviceClicked(idx)) => {
                 // "All Devices" (None) then each named device.
                 let mut items: Vec<DropdownItem> = vec![
                     DropdownItem::new("All Devices")
-                        .with_action(PanelAction::SetMidiDevice(idx.clone(), None)),
+                        .with_action(PanelAction::Project(ProjectAction::SetMidiDevice(idx.clone(), None))),
                 ];
                 items.extend(self.midi_device_names.iter().map(|name| {
                     DropdownItem::new(name)
-                        .with_action(PanelAction::SetMidiDevice(idx.clone(), Some(name.clone())))
+                        .with_action(PanelAction::Project(ProjectAction::SetMidiDevice(idx.clone(), Some(name.clone()))))
                 }));
                 self.open_dropdown_typed(items, trigger);
                 true
             }
-            PanelAction::ResolutionClicked => {
+            PanelAction::Transport(TransportAction::ResolutionClicked) => {
                 use manifold_core::types::ResolutionPreset;
                 let has_displays = !self.display_resolutions.is_empty();
 
@@ -653,7 +654,7 @@ impl UIRoot {
                     .enumerate()
                     .map(|(i, r)| {
                         DropdownItem::new(&r.dropdown_label())
-                            .with_action(PanelAction::SetResolution(i))
+                            .with_action(PanelAction::Project(ProjectAction::SetResolution(i)))
                     })
                     .collect();
 
@@ -664,7 +665,7 @@ impl UIRoot {
                     for (w, h, label) in &self.display_resolutions {
                         items.push(
                             DropdownItem::new(&format!("{}  ({}x{})", label, w, h)).with_action(
-                                PanelAction::SetDisplayResolution(*w as i32, *h as i32),
+                                PanelAction::Project(ProjectAction::SetDisplayResolution(*w as i32, *h as i32)),
                             ),
                         );
                     }
@@ -673,38 +674,38 @@ impl UIRoot {
                 self.open_dropdown_typed(items, trigger);
                 true
             }
-            PanelAction::MasterExitPathClicked => {
+            PanelAction::Params(ParamsAction::MasterExitPathClicked) => {
                 // Typed (2b.11): "After All FX" → exit -1, "Before FX" → 0, then each
                 // effect → its 1-based exit index.
                 let mut items = vec![
                     DropdownItem::new("After All FX")
-                        .with_action(PanelAction::SetLedExitIndex(-1)),
-                    DropdownItem::new("Before FX").with_action(PanelAction::SetLedExitIndex(0)),
+                        .with_action(PanelAction::Params(ParamsAction::SetLedExitIndex(-1))),
+                    DropdownItem::new("Before FX").with_action(PanelAction::Params(ParamsAction::SetLedExitIndex(0))),
                 ];
                 for (e, name) in self.master_effect_names.iter().enumerate() {
                     items.push(
                         DropdownItem::new(&format!("After {}", name))
-                            .with_action(PanelAction::SetLedExitIndex(e as i32 + 1)),
+                            .with_action(PanelAction::Params(ParamsAction::SetLedExitIndex(e as i32 + 1))),
                     );
                 }
                 self.open_dropdown_typed(items, trigger);
                 true
             }
-            PanelAction::ClipRightClicked(clip_id) => {
+            PanelAction::Editing(EditingAction::ClipRightClicked(clip_id)) => {
                 // Typed (2b.11): each item carries its clip action.
                 let items = vec![
                     DropdownItem::new("Split at Playhead")
-                        .with_action(PanelAction::ContextSplitAtPlayhead(clip_id.clone())),
+                        .with_action(PanelAction::Editing(EditingAction::ContextSplitAtPlayhead(clip_id.clone()))),
                     DropdownItem::new("Delete")
-                        .with_action(PanelAction::ContextDeleteClip(clip_id.clone())),
+                        .with_action(PanelAction::Editing(EditingAction::ContextDeleteClip(clip_id.clone()))),
                     DropdownItem::new("Duplicate")
-                        .with_action(PanelAction::ContextDuplicateClip(clip_id.clone())),
+                        .with_action(PanelAction::Editing(EditingAction::ContextDuplicateClip(clip_id.clone()))),
                 ];
                 self.dropdown
                     .open_context(items, right_click_pos, &mut self.tree);
                 true
             }
-            PanelAction::TrackRightClicked(beat, layer) => {
+            PanelAction::Editing(EditingAction::TrackRightClicked(beat, layer)) => {
                 // Typed (2b.11): each item carries its track action. Paste stays
                 // index-based (`ContextPasteAtTrack` targets the clicked track
                 // slot, not a specific layer's identity) but the Context*Layer
@@ -712,7 +713,7 @@ impl UIRoot {
                 // cursor's id once, synchronously, same as the layer-header menu.
                 let mut items = vec![
                     DropdownItem::new("Paste")
-                        .with_action(PanelAction::ContextPasteAtTrack(*beat, *layer)),
+                        .with_action(PanelAction::Editing(EditingAction::ContextPasteAtTrack(*beat, *layer))),
                 ];
                 if let Some(layer_id) = self
                     .layer_headers
@@ -721,19 +722,19 @@ impl UIRoot {
                 {
                     items.push(
                         DropdownItem::new("Import MIDI File")
-                            .with_action(PanelAction::ContextImportMidi(layer_id.clone())),
+                            .with_action(PanelAction::Editing(EditingAction::ContextImportMidi(layer_id.clone()))),
                     );
                     items.push(
                         DropdownItem::new("Insert Video Layer")
-                            .with_action(PanelAction::ContextAddVideoLayer(layer_id.clone())),
+                            .with_action(PanelAction::Editing(EditingAction::ContextAddVideoLayer(layer_id.clone()))),
                     );
                     items.push(
                         DropdownItem::new("Insert Generator Layer")
-                            .with_action(PanelAction::ContextAddGeneratorLayer(layer_id.clone())),
+                            .with_action(PanelAction::Editing(EditingAction::ContextAddGeneratorLayer(layer_id.clone()))),
                     );
                     items.push(
                         DropdownItem::new("Insert Audio Layer")
-                            .with_action(PanelAction::ContextAddAudioLayer(layer_id)),
+                            .with_action(PanelAction::Editing(EditingAction::ContextAddAudioLayer(layer_id))),
                     );
                 }
                 self.dropdown
@@ -742,20 +743,20 @@ impl UIRoot {
             }
             // Two-item menu, same typed with_action shape as
             // ClipRightClicked/TrackRightClicked above.
-            PanelAction::AutomationLaneRightClicked(target, param_id) => {
+            PanelAction::Editing(EditingAction::AutomationLaneRightClicked(target, param_id)) => {
                 let items = vec![
                     DropdownItem::new("Clear Automation").with_action(
-                        PanelAction::ContextClearAutomationLane(target.clone(), param_id.clone()),
+                        PanelAction::Project(ProjectAction::ContextClearAutomationLane(target.clone(), param_id.clone())),
                     ),
                     DropdownItem::new("Remove Lane").with_action(
-                        PanelAction::ContextRemoveAutomationLane(target.clone(), param_id.clone()),
+                        PanelAction::Project(ProjectAction::ContextRemoveAutomationLane(target.clone(), param_id.clone())),
                     ),
                 ];
                 self.dropdown
                     .open_context(items, right_click_pos, &mut self.tree);
                 true
             }
-            PanelAction::LayerHeaderRightClicked(layer_id) => {
+            PanelAction::Editing(EditingAction::LayerHeaderRightClicked(layer_id)) => {
                 // The action carries a stable LayerId; every context-menu item
                 // below carries that same id (not a resolved row index), so a
                 // layer-list change between menu-open and item-click can't make
@@ -769,49 +770,49 @@ impl UIRoot {
                 let is_group = layer_info.is_some_and(|l| l.is_group);
                 let mut items = vec![
                     DropdownItem::new("Paste")
-                        .with_action(PanelAction::ContextPasteAtLayer(layer_id.clone())),
+                        .with_action(PanelAction::Editing(EditingAction::ContextPasteAtLayer(layer_id.clone()))),
                 ];
                 if !is_group {
                     items.push(
                         DropdownItem::new("Import MIDI File")
-                            .with_action(PanelAction::ContextImportMidi(layer_id.clone())),
+                            .with_action(PanelAction::Editing(EditingAction::ContextImportMidi(layer_id.clone()))),
                     );
                 }
                 items.push(
                     DropdownItem::new("Insert Video Layer")
-                        .with_action(PanelAction::ContextAddVideoLayer(layer_id.clone())),
+                        .with_action(PanelAction::Editing(EditingAction::ContextAddVideoLayer(layer_id.clone()))),
                 );
                 items.push(
                     DropdownItem::new("Insert Generator Layer")
-                        .with_action(PanelAction::ContextAddGeneratorLayer(layer_id.clone())),
+                        .with_action(PanelAction::Editing(EditingAction::ContextAddGeneratorLayer(layer_id.clone()))),
                 );
                 items.push(
                     DropdownItem::new("Insert Audio Layer")
-                        .with_action(PanelAction::ContextAddAudioLayer(layer_id.clone())),
+                        .with_action(PanelAction::Editing(EditingAction::ContextAddAudioLayer(layer_id.clone()))),
                 );
                 items.push(
                     DropdownItem::new("Duplicate Layer")
-                        .with_action(PanelAction::ContextDuplicateLayer(layer_id.clone())),
+                        .with_action(PanelAction::Editing(EditingAction::ContextDuplicateLayer(layer_id.clone()))),
                 );
                 // "Group" only when 2+ non-group, non-nested layers are selected
                 let can_group = self.layer_headers.layer_count() >= 2 && !is_group;
                 if can_group {
                     items.push(
                         DropdownItem::new("Group Selected Layers")
-                            .with_action(PanelAction::ContextGroupSelectedLayers),
+                            .with_action(PanelAction::Editing(EditingAction::ContextGroupSelectedLayers)),
                     );
                 }
                 if is_group {
                     items.push(
                         DropdownItem::new("Ungroup")
-                            .with_action(PanelAction::ContextUngroup(layer_id.clone())),
+                            .with_action(PanelAction::Editing(EditingAction::ContextUngroup(layer_id.clone()))),
                     );
                 }
                 // Only allow delete if more than 1 layer exists
                 if self.layer_headers.layer_count() > 1 {
                     items.push(
                         DropdownItem::new("Delete Layer")
-                            .with_action(PanelAction::ContextDeleteLayer(layer_id.clone())),
+                            .with_action(PanelAction::Editing(EditingAction::ContextDeleteLayer(layer_id.clone()))),
                     );
                 }
                 // Last text item gets a separator before the color grid
@@ -828,7 +829,7 @@ impl UIRoot {
                 );
                 true
             }
-            PanelAction::ParamLabelRightClick(gpt, param_id) => {
+            PanelAction::Params(ParamsAction::ParamLabelRightClick(gpt, param_id)) => {
                 let mut items = Vec::with_capacity(manifold_core::MACRO_COUNT + 3);
                 for i in 0..manifold_core::MACRO_COUNT {
                     let label = {
@@ -841,7 +842,7 @@ impl UIRoot {
                     };
                     // Typed (2b.11): item i maps the param to macro i.
                     items.push(DropdownItem::new(&label).with_action(
-                        PanelAction::MapParamToMacro(gpt.clone(), param_id.clone(), i),
+                        PanelAction::Mapping(MappingAction::MapParamToMacro(gpt.clone(), param_id.clone(), i)),
                     ));
                 }
                 // Ableton picker entry
@@ -851,7 +852,7 @@ impl UIRoot {
                 let ableton_connected = self.ableton_session.as_ref().is_some_and(|s| s.connected);
                 if ableton_connected {
                     items.push(DropdownItem::new("Map to Ableton Macro…").with_action(
-                        PanelAction::OpenAbletonPickerForParam(gpt.clone(), param_id.clone()),
+                        PanelAction::Root(RootAction::OpenAbletonPickerForParam(gpt.clone(), param_id.clone())),
                     ));
                 } else {
                     items.push(DropdownItem::disabled("Ableton not connected"));
@@ -877,19 +878,19 @@ impl UIRoot {
                 };
                 if is_ableton_mapped {
                     items.push(DropdownItem::new("Remove Ableton Mapping").with_action(
-                        PanelAction::UnmapParamAbleton(gpt.clone(), param_id.clone()),
+                        PanelAction::Mapping(MappingAction::UnmapParamAbleton(gpt.clone(), param_id.clone())),
                     ));
                 }
                 self.dropdown
                     .open_context(items, right_click_pos, &mut self.tree);
                 true
             }
-            PanelAction::MacroLabelRightClick(macro_idx) => {
+            PanelAction::Mapping(MappingAction::MacroLabelRightClick(macro_idx)) => {
                 // Typed (2b.11): rename, each mapping (unmap), Clear All, and the
                 // Ableton entries each carry their own action.
                 let descs = &self.macro_mapping_descs[*macro_idx];
                 let rename = DropdownItem::new("Rename")
-                    .with_action(PanelAction::MacroLabelRename(*macro_idx))
+                    .with_action(PanelAction::Params(ParamsAction::MacroLabelRename(*macro_idx)))
                     .with_separator();
                 let mut items = vec![rename];
                 if descs.is_empty() {
@@ -900,7 +901,7 @@ impl UIRoot {
                     for (i, desc) in descs.iter().enumerate() {
                         items.push(
                             DropdownItem::new(desc)
-                                .with_action(PanelAction::UnmapMacro(*macro_idx, i)),
+                                .with_action(PanelAction::Mapping(MappingAction::UnmapMacro(*macro_idx, i))),
                         );
                     }
                     if descs.len() > 1 {
@@ -909,7 +910,7 @@ impl UIRoot {
                         }
                         items.push(
                             DropdownItem::new("Clear All")
-                                .with_action(PanelAction::ClearMacroMappings(*macro_idx)),
+                                .with_action(PanelAction::Mapping(MappingAction::ClearMacroMappings(*macro_idx))),
                         );
                     }
                 }
@@ -919,7 +920,7 @@ impl UIRoot {
                 }
                 if self.ableton_session.is_some() {
                     items.push(DropdownItem::new("Map to Ableton Macro\u{2026}").with_action(
-                        PanelAction::OpenAbletonPickerForMacro(*macro_idx),
+                        PanelAction::Mapping(MappingAction::OpenAbletonPickerForMacro(*macro_idx)),
                     ));
                 } else {
                     let mut item = DropdownItem::new("Ableton not connected");
@@ -929,14 +930,14 @@ impl UIRoot {
                 // "Remove Ableton Mapping" if this macro is mapped
                 if self.macro_ableton_mapped[*macro_idx] {
                     items.push(DropdownItem::new("Remove Ableton Mapping").with_action(
-                        PanelAction::UnmapMacroAbleton(*macro_idx),
+                        PanelAction::Mapping(MappingAction::UnmapMacroAbleton(*macro_idx)),
                     ));
                 }
                 self.dropdown
                     .open_context(items, right_click_pos, &mut self.tree);
                 true
             }
-            PanelAction::CardRightClicked(gpt) => {
+            PanelAction::Params(ParamsAction::CardRightClicked(gpt)) => {
                 // Generators carry Copy/Paste (their own clipboard); both kinds
                 // share Make Unique / Export / Import. The menu CONTENTS differ
                 // per kind by design (the legitimately-divergent shell); the
@@ -947,18 +948,18 @@ impl UIRoot {
                 if matches!(gpt, GraphParamTarget::Generator) {
                     items.push(
                         DropdownItem::new("Copy Generator")
-                            .with_action(PanelAction::CopyGenerator),
+                            .with_action(PanelAction::Params(ParamsAction::CopyGenerator)),
                     );
                     if self.gen_clipboard.has_content() {
                         items.push(
                             DropdownItem::new("Paste Generator")
-                                .with_action(PanelAction::PasteGenerator),
+                                .with_action(PanelAction::Params(ParamsAction::PasteGenerator)),
                         );
                     }
                 }
                 items.push(
                     DropdownItem::new("Make Unique")
-                        .with_action(PanelAction::MakePresetUnique(gpt.clone())),
+                        .with_action(PanelAction::Params(ParamsAction::MakePresetUnique(gpt.clone()))),
                 );
                 // Divergence actions (PRESET_LIBRARY_DESIGN D3, P4): only
                 // meaningful once the instance has diverged from its library
@@ -981,7 +982,7 @@ impl UIRoot {
                 if has_graph_mod {
                     items.push(
                         DropdownItem::new("Revert to Library")
-                            .with_action(PanelAction::RevertToLibrary(gpt.clone())),
+                            .with_action(PanelAction::Params(ParamsAction::RevertToLibrary(gpt.clone()))),
                     );
                     // Wording states the blast radius WITHOUT computing it
                     // (PRESET_LIBRARY_DESIGN §4/§6: counting how many
@@ -989,30 +990,30 @@ impl UIRoot {
                     // design deletes) — "instances", not a computed N.
                     items.push(
                         DropdownItem::new("Push to Library — updates instances tracking this preset")
-                            .with_action(PanelAction::PushToLibrary(gpt.clone())),
+                            .with_action(PanelAction::Params(ParamsAction::PushToLibrary(gpt.clone()))),
                     );
                 }
                 // Library doors (PRESET_LIBRARY_DESIGN D4) — explicit "publish a
                 // copy" actions, distinct from Make Unique's divergence/retarget.
                 items.push(
                     DropdownItem::new("Save to Library…")
-                        .with_action(PanelAction::SaveToLibrary(gpt.clone())),
+                        .with_action(PanelAction::Params(ParamsAction::SaveToLibrary(gpt.clone()))),
                 );
                 items.push(
                     DropdownItem::new("Save to Project…")
-                        .with_action(PanelAction::SaveToProject(gpt.clone())),
+                        .with_action(PanelAction::Params(ParamsAction::SaveToProject(gpt.clone()))),
                 );
                 items.push(
-                    DropdownItem::new("Export Preset…").with_action(PanelAction::ExportPreset(gpt.clone())),
+                    DropdownItem::new("Export Preset…").with_action(PanelAction::Params(ParamsAction::ExportPreset(gpt.clone()))),
                 );
                 items.push(
-                    DropdownItem::new("Import Preset…").with_action(PanelAction::ImportPreset(gpt.clone())),
+                    DropdownItem::new("Import Preset…").with_action(PanelAction::Params(ParamsAction::ImportPreset(gpt.clone()))),
                 );
                 self.dropdown
                     .open_context(items, right_click_pos, &mut self.tree);
                 true
             }
-            PanelAction::OpenAbletonPickerForParam(gpt, param_id) => {
+            PanelAction::Root(RootAction::OpenAbletonPickerForParam(gpt, param_id)) => {
                 use manifold_ui::panels::ableton_picker::AbletonPickerContext;
                 if let Some(session) = &self.ableton_session {
                     // Carry the unified target straight through. The mapping
@@ -1029,7 +1030,7 @@ impl UIRoot {
                 }
                 true
             }
-            PanelAction::OpenAbletonPickerForMacro(slot_idx) => {
+            PanelAction::Mapping(MappingAction::OpenAbletonPickerForMacro(slot_idx)) => {
                 use manifold_ui::panels::ableton_picker::AbletonPickerContext;
                 if let Some(session) = &self.ableton_session {
                     self.ableton_picker_context = Some(AbletonPickerContext::MacroSlot {
@@ -1049,7 +1050,7 @@ impl UIRoot {
             // the dock's steppers already dispatch (no new mutation path).
             // `cell_node_id` resolves the anchor directly (the panel has no
             // `&UITree` in `handle_event` to compute it itself).
-            PanelAction::SceneSetupEnumClicked {
+            PanelAction::Root(RootAction::SceneSetupEnumClicked {
                 layer_id,
                 scope_path,
                 node_doc_id,
@@ -1057,7 +1058,7 @@ impl UIRoot {
                 labels,
                 current_index,
                 cell_node_id,
-            } => {
+            }) => {
                 let cell_trigger = self.tree.get_bounds(*cell_node_id);
                 let items: Vec<DropdownItem> = labels
                     .iter()
@@ -1065,13 +1066,13 @@ impl UIRoot {
                     .map(|(i, label)| {
                         DropdownItem::new(label)
                             .with_check(i as u32 == *current_index)
-                            .with_action(PanelAction::SceneSetupParamChanged(
+                            .with_action(PanelAction::Project(ProjectAction::SceneSetupParamChanged(
                                 layer_id.clone(),
                                 scope_path.clone(),
                                 *node_doc_id,
                                 param_id.clone(),
                                 i as f32,
-                            ))
+                            )))
                     })
                     .collect();
                 self.open_dropdown_typed(items, cell_trigger);
@@ -1083,13 +1084,13 @@ impl UIRoot {
             // rows and scene rows share the one path. Each item dispatches
             // `ParamEnumSet` (the Snapshot/Changed/Commit trio in one
             // action — one undo unit, no new mutation path).
-            PanelAction::ParamEnumDropdown {
+            PanelAction::Root(RootAction::ParamEnumDropdown {
                 target,
                 param_id,
                 labels,
                 current_index,
                 cell_node_id,
-            } => {
+            }) => {
                 let cell_trigger = self.tree.get_bounds(*cell_node_id);
                 let items: Vec<DropdownItem> = labels
                     .iter()
@@ -1097,11 +1098,11 @@ impl UIRoot {
                     .map(|(i, label)| {
                         DropdownItem::new(label)
                             .with_check(i as u32 == *current_index)
-                            .with_action(PanelAction::ParamEnumSet(
+                            .with_action(PanelAction::Params(ParamsAction::ParamEnumSet(
                                 target.clone(),
                                 param_id.clone(),
                                 i as f32,
-                            ))
+                            )))
                     })
                     .collect();
                 self.open_dropdown_typed(items, cell_trigger);
@@ -1113,16 +1114,16 @@ impl UIRoot {
             // SAME `SceneSetupAddModifier` action the chips fired directly.
             // `button_node_id` resolves the anchor directly, same
             // resolve-at-open convention as `SceneSetupEnumClicked` above.
-            PanelAction::SceneSetupAddModifierClicked(layer_id, group_node_id, button_node_id) => {
+            PanelAction::Root(RootAction::SceneSetupAddModifierClicked(layer_id, group_node_id, button_node_id)) => {
                 let trigger = self.tree.get_bounds(*button_node_id);
                 let items: Vec<DropdownItem> = manifold_ui::panels::scene_setup_panel::MESH_MODIFIER_CHOICES
                     .iter()
                     .map(|(label, type_id)| {
-                        DropdownItem::new(label).with_action(PanelAction::SceneSetupAddModifier(
+                        DropdownItem::new(label).with_action(PanelAction::Project(ProjectAction::SceneSetupAddModifier(
                             layer_id.clone(),
                             *group_node_id,
                             (*type_id).to_string(),
-                        ))
+                        )))
                     })
                     .collect();
                 self.open_dropdown_typed(items, trigger);
@@ -1141,7 +1142,7 @@ impl UIRoot {
         match ctx {
             DropdownContext::LayerContext(layer_id) => {
                 let color = manifold_ui::color::COLOR_GRID.get(color_idx)?;
-                Some(PanelAction::ContextSetLayerColor(layer_id, *color))
+                Some(PanelAction::Editing(EditingAction::ContextSetLayerColor(layer_id, *color)))
             }
         }
     }

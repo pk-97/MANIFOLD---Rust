@@ -11,7 +11,7 @@
 //! lines, byte-exact, as the sanctioned preamble.
 
 use manifold_editing::commands::ableton::ChangeAbletonTrimCommand;
-use manifold_ui::PanelAction;
+use manifold_ui::MappingAction;
 
 use super::super::DispatchResult;
 use super::resolve::{
@@ -19,11 +19,11 @@ use super::resolve::{
 };
 use crate::content_command::ContentCommand;
 
-pub(crate) fn dispatch_mapping(action: &PanelAction, ctx: &mut super::super::DispatchCtx) -> DispatchResult {
+pub(crate) fn dispatch_mapping(action: &MappingAction, ctx: &mut super::super::DispatchCtx) -> DispatchResult {
     let (effective_tab, effective_active_layer) = super::editor_dispatch_context(ctx.editor_target, &*ctx.project, ctx.ui.inspector.last_effect_tab(), ctx.active_layer);
     let active_layer = &effective_active_layer;
     match action {
-        PanelAction::MapParamToMacro(gpt, param_id, macro_idx) => {
+        MappingAction::MapParamToMacro(gpt, param_id, macro_idx) => {
             use manifold_core::{MacroCurve, MacroMapping};
             let macro_idx = *macro_idx;
             if let Some(target) =
@@ -57,9 +57,9 @@ pub(crate) fn dispatch_mapping(action: &PanelAction, ctx: &mut super::super::Dis
             DispatchResult::handled()
         }
         // Label right-click consumed by try_open_dropdown — shouldn't reach here
-        PanelAction::MacroLabelRightClick(_) => DispatchResult::handled(),
+        MappingAction::MacroLabelRightClick(_) => DispatchResult::handled(),
 
-        PanelAction::UnmapMacro(macro_idx, mapping_idx) => {
+        MappingAction::UnmapMacro(macro_idx, mapping_idx) => {
             let macro_idx = *macro_idx;
             let mapping_idx = *mapping_idx;
             if macro_idx < manifold_core::MACRO_COUNT {
@@ -79,7 +79,7 @@ pub(crate) fn dispatch_mapping(action: &PanelAction, ctx: &mut super::super::Dis
             }
             DispatchResult::handled()
         }
-        PanelAction::ClearMacroMappings(macro_idx) => {
+        MappingAction::ClearMacroMappings(macro_idx) => {
             let macro_idx = *macro_idx;
             if macro_idx < manifold_core::MACRO_COUNT {
                 ctx.project.settings.macro_bank.slots[macro_idx]
@@ -102,7 +102,7 @@ pub(crate) fn dispatch_mapping(action: &PanelAction, ctx: &mut super::super::Dis
         // layer; clip tab → None, no clip-scoped Ableton mappings), then send
         // the content command. Mirrors `UnmapParamAbleton` below exactly — the
         // only difference is AbletonMapParam (with address) vs AbletonUnmapParam.
-        PanelAction::MapParamToAbleton(gpt, param_id, address) => {
+        MappingAction::MapParamToAbleton(gpt, param_id, address) => {
             if let Some(target) =
                 resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
                 && let Some(mapping_target) =
@@ -118,7 +118,7 @@ pub(crate) fn dispatch_mapping(action: &PanelAction, ctx: &mut super::super::Dis
             }
             DispatchResult::handled()
         }
-        PanelAction::UnmapParamAbleton(gpt, param_id) => {
+        MappingAction::UnmapParamAbleton(gpt, param_id) => {
             if let Some(target) =
                 resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
                 && let Some(mapping_target) =
@@ -134,7 +134,7 @@ pub(crate) fn dispatch_mapping(action: &PanelAction, ctx: &mut super::super::Dis
             DispatchResult::handled()
         }
 
-        PanelAction::MapMacroToAbleton(slot_idx, address) => {
+        MappingAction::MapMacroToAbleton(slot_idx, address) => {
             use manifold_core::ableton_mapping::AbletonMappingTarget;
             let target = AbletonMappingTarget::MacroSlot {
                 slot_index: *slot_idx,
@@ -148,7 +148,7 @@ pub(crate) fn dispatch_mapping(action: &PanelAction, ctx: &mut super::super::Dis
             );
             DispatchResult::handled()
         }
-        PanelAction::UnmapMacroAbleton(slot_idx) => {
+        MappingAction::UnmapMacroAbleton(slot_idx) => {
             use manifold_core::ableton_mapping::AbletonMappingTarget;
             let target = AbletonMappingTarget::MacroSlot {
                 slot_index: *slot_idx,
@@ -157,12 +157,12 @@ pub(crate) fn dispatch_mapping(action: &PanelAction, ctx: &mut super::super::Dis
             DispatchResult::handled()
         }
         // Picker open is consumed by try_open_dropdown — never reaches dispatch.
-        PanelAction::OpenAbletonPickerForMacro(_) => DispatchResult::handled(),
+        MappingAction::OpenAbletonPickerForMacro(_) => DispatchResult::handled(),
 
         // Driver / Ableton / audio trim handles are unified into the
         // `Trim{Changed,Snapshot,Commit}(TrimKind, …)` arms above.
 
-        PanelAction::AbletonMacroTrimChanged(slot_idx, min, max) => {
+        MappingAction::AbletonMacroTrimChanged(slot_idx, min, max) => {
             let slot_idx = *slot_idx;
             let min = *min;
             let max = *max;
@@ -194,7 +194,7 @@ pub(crate) fn dispatch_mapping(action: &PanelAction, ctx: &mut super::super::Dis
             );
             DispatchResult::handled()
         }
-        PanelAction::AbletonMacroTrimSnapshot(slot_idx) => {
+        MappingAction::AbletonMacroTrimSnapshot(slot_idx) => {
             if let Some(range) = ctx.project
                 .settings
                 .macro_bank
@@ -212,7 +212,7 @@ pub(crate) fn dispatch_mapping(action: &PanelAction, ctx: &mut super::super::Dis
             }
             DispatchResult::handled()
         }
-        PanelAction::AbletonMacroTrimCommit(slot_idx) => {
+        MappingAction::AbletonMacroTrimCommit(slot_idx) => {
             use manifold_core::ableton_mapping::AbletonMappingTarget;
             ctx.scrub.active_inspector_drag = None;
             if let Some((old_min, old_max)) = ctx.scrub.trim_snapshot.take()
@@ -238,7 +238,7 @@ pub(crate) fn dispatch_mapping(action: &PanelAction, ctx: &mut super::super::Dis
             DispatchResult::handled()
         }
 
-        PanelAction::AbletonInvertToggle(gpt, param_id) => {
+        MappingAction::AbletonInvertToggle(gpt, param_id) => {
             if let Some(target) =
                 resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
                 && let Some(mapping_target) =
@@ -268,7 +268,7 @@ pub(crate) fn dispatch_mapping(action: &PanelAction, ctx: &mut super::super::Dis
             DispatchResult::structural()
         }
 
-        PanelAction::AbletonMacroInvertToggle(slot_idx) => {
+        MappingAction::AbletonMacroInvertToggle(slot_idx) => {
             let slot_idx = *slot_idx;
             if let Some(slot) = ctx.project.settings.macro_bank.slots.get_mut(slot_idx)
                 && let Some(m) = &mut slot.ableton_mapping
@@ -288,6 +288,5 @@ pub(crate) fn dispatch_mapping(action: &PanelAction, ctx: &mut super::super::Dis
             DispatchResult::structural()
         }
 
-        _ => DispatchResult::unhandled(),
     }
 }

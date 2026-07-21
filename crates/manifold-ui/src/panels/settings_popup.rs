@@ -13,6 +13,7 @@
 //! only by the video-export encoder — live on-screen HDR is automatic, driven by
 //! the display's EDR headroom.
 
+use crate::{ProjectAction, TransportAction};
 use crate::chrome::{ChromeHost, Pad, Sizing, View, components};
 use crate::color;
 use crate::input::{Key, UIEvent};
@@ -215,7 +216,7 @@ impl SettingsPopup {
             components::dropdown_trigger_style(BTN_FONT),
             &self.resolution_text,
         );
-        self.actions.push((res_id, PanelAction::ResolutionClicked));
+        self.actions.push((res_id, PanelAction::Transport(TransportAction::ResolutionClicked)));
         cy += ROW_H + ROW_GAP;
 
         // Render scale: 1× / 75% / 50% segmented.
@@ -226,7 +227,7 @@ impl SettingsPopup {
             let sx = ctrl_x + i as f32 * (seg_w + SEG_GAP);
             let active = (scale - self.render_scale).abs() < 0.01;
             let id = tree.add_button(Some(self.bg_id), sx, cy, seg_w, ROW_H, btn_style(active), label);
-            self.actions.push((id, PanelAction::SetRenderScale(*scale)));
+            self.actions.push((id, PanelAction::Project(ProjectAction::SetRenderScale(*scale))));
         }
         cy += ROW_H + ROW_GAP;
 
@@ -243,7 +244,7 @@ impl SettingsPopup {
             let sx = ctrl_x + i as f32 * (seg_w + SEG_GAP);
             let active = *curve == self.tonemap;
             let id = tree.add_button(Some(self.bg_id), sx, cy, seg_w, ROW_H, btn_style(active), label);
-            self.actions.push((id, PanelAction::SetTonemapCurve(*curve)));
+            self.actions.push((id, PanelAction::Project(ProjectAction::SetTonemapCurve(*curve))));
         }
         cy += ROW_H + ROW_GAP;
 
@@ -259,7 +260,7 @@ impl SettingsPopup {
             toggle_style(self.hdr_on),
             if self.hdr_on { "On" } else { "Off" },
         );
-        self.actions.push((hdr_id, PanelAction::ToggleHdr));
+        self.actions.push((hdr_id, PanelAction::Project(ProjectAction::ToggleHdr)));
     }
 
     fn row_label(&self, tree: &mut UITree, x: f32, y: f32, text: &str) {

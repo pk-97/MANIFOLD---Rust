@@ -29,6 +29,7 @@
 //! `ParamCardPanel` has with its drawer builder (builder = visuals + the
 //! slider's reset action; click/drag resolution = caller-owned).
 
+use crate::{AudioSetupAction};
 use super::drawer::DrawerIds;
 use super::param_slider_shared::{
     AUDIO_ATTACK_DEFAULT_MS, AUDIO_MOD_ACTIVE_C32, AUDIO_RELEASE_DEFAULT_MS, AUDIO_SENS_MAX,
@@ -437,22 +438,22 @@ impl AudioTriggerSection {
 
     pub fn handle_click(&mut self, node_id: NodeId) -> Vec<PanelAction> {
         if self.host.node_id_for_key(KEY_CHEVRON) == Some(node_id) {
-            return vec![PanelAction::AudioTriggerSectionToggle];
+            return vec![PanelAction::AudioSetup(AudioSetupAction::AudioTriggerSectionToggle)];
         }
         let Some(layer_id) = self.layer_id.clone() else { return Vec::new() };
 
         if self.host.node_id_for_key(KEY_ADD_BTN) == Some(node_id) {
-            return vec![PanelAction::AudioTriggerAdd(layer_id)];
+            return vec![PanelAction::AudioSetup(AudioSetupAction::AudioTriggerAdd(layer_id))];
         }
         for i in 0..self.labels.len() {
             if self.host.node_id_for_key(KEY_ROW_TOGGLE_BASE + i as u64) == Some(node_id) {
-                return vec![PanelAction::AudioTriggerEnabledToggle(layer_id, i)];
+                return vec![PanelAction::AudioSetup(AudioSetupAction::AudioTriggerEnabledToggle(layer_id, i))];
             }
             if self.host.node_id_for_key(KEY_ROW_LABEL_BASE + i as u64) == Some(node_id) {
-                return vec![PanelAction::AudioTriggerRowExpandToggle(layer_id, i)];
+                return vec![PanelAction::AudioSetup(AudioSetupAction::AudioTriggerRowExpandToggle(layer_id, i))];
             }
             if self.host.node_id_for_key(KEY_ROW_REMOVE_BASE + i as u64) == Some(node_id) {
-                return vec![PanelAction::AudioTriggerRemove(layer_id, i)];
+                return vec![PanelAction::AudioSetup(AudioSetupAction::AudioTriggerRemove(layer_id, i))];
             }
         }
 
@@ -469,23 +470,23 @@ impl AudioTriggerSection {
                 let Some(send_id) = self.mod_state.audio_send_ids.get(flat).cloned() else {
                     return vec![];
                 };
-                return vec![PanelAction::AudioTriggerSetSource(layer_id, i, send_id, feature)];
+                return vec![PanelAction::AudioSetup(AudioSetupAction::AudioTriggerSetSource(layer_id, i, send_id, feature))];
             }
             let f = flat - send_count;
             let chips = trigger_source_chips(feature);
             if f < chips.len() {
                 // Chip click: keep the row's send, listen to the chip's cell.
                 let Some(send_id) = self.current_send_id(i) else { return vec![] };
-                return vec![PanelAction::AudioTriggerSetSource(
+                return vec![PanelAction::AudioSetup(AudioSetupAction::AudioTriggerSetSource(
                     layer_id,
                     i,
                     send_id,
                     chips[f].feature,
-                )];
+                ))];
             }
             let f = f - chips.len();
             if f < LENGTH_OPTIONS.len() {
-                return vec![PanelAction::AudioTriggerSetLength(layer_id, i, LENGTH_OPTIONS[f])];
+                return vec![PanelAction::AudioSetup(AudioSetupAction::AudioTriggerSetLength(layer_id, i, LENGTH_OPTIONS[f]))];
             }
         }
         Vec::new()
@@ -508,13 +509,13 @@ impl AudioTriggerSection {
                 self.dragging_shape
                     .start((i, AudioShapeParam::Sensitivity), Vec2::new(pos_x, 0.0));
                 return vec![
-                    PanelAction::AudioTriggerShapeSnapshot(layer_id.clone(), i),
-                    PanelAction::AudioTriggerShapeParamChanged(
+                    PanelAction::AudioSetup(AudioSetupAction::AudioTriggerShapeSnapshot(layer_id.clone(), i)),
+                    PanelAction::AudioSetup(AudioSetupAction::AudioTriggerShapeParamChanged(
                         layer_id,
                         i,
                         AudioShapeParam::Sensitivity,
                         value,
-                    ),
+                    )),
                 ];
             }
         }
@@ -542,18 +543,18 @@ impl AudioTriggerSection {
         {
             BitmapSlider::update_value(tree, sl, norm, &text);
         }
-        vec![PanelAction::AudioTriggerShapeParamChanged(
+        vec![PanelAction::AudioSetup(AudioSetupAction::AudioTriggerShapeParamChanged(
             layer_id,
             i,
             AudioShapeParam::Sensitivity,
             value,
-        )]
+        ))]
     }
 
     pub fn handle_release(&mut self) -> Vec<PanelAction> {
         let Some((i, _)) = self.dragging_shape.release() else { return Vec::new() };
         let Some(layer_id) = self.layer_id.clone() else { return Vec::new() };
-        vec![PanelAction::AudioTriggerShapeCommit(layer_id, i)]
+        vec![PanelAction::AudioSetup(AudioSetupAction::AudioTriggerShapeCommit(layer_id, i))]
     }
 
     pub fn is_dragging(&self) -> bool {
@@ -657,7 +658,7 @@ mod tests {
         assert!(!section.is_dragging(), "release must clear the drag");
         assert_eq!(actions.len(), 1);
         match &actions[0] {
-            PanelAction::AudioTriggerShapeCommit(layer_id, row) => {
+            PanelAction::AudioSetup(AudioSetupAction::AudioTriggerShapeCommit(layer_id, row)) => {
                 assert_eq!(layer_id, &LayerId::new("layer-1"));
                 assert_eq!(*row, 2);
             }

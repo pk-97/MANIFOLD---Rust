@@ -24,24 +24,24 @@ use manifold_editing::commands::settings::{
     ChangeLayerOpacityCommand, ChangeLedBrightnessCommand, ChangeMacroCommand,
     ChangeMasterOpacityCommand, PasteGeneratorCommand,
 };
-use manifold_ui::{InspectorTab, PanelAction};
+use manifold_ui::{InspectorTab, ParamsAction};
 
 use super::super::DispatchResult;
 use super::{resolve_effects_mut, resolve_effects_read};
 use super::resolve::{preset_source_def, resolve_graph_target};
 
-pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::DispatchCtx) -> DispatchResult {
+pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::DispatchCtx) -> DispatchResult {
     let (effective_tab, effective_active_layer) = super::editor_dispatch_context(ctx.editor_target, &*ctx.project, ctx.ui.inspector.last_effect_tab(), ctx.active_layer);
     let active_layer = &effective_active_layer;
     match action {
         // ── Macros panel collapse ─────────────────────────────────
-        PanelAction::MacrosCollapseToggle => {
+        ParamsAction::MacrosCollapseToggle => {
             ctx.ui.inspector.macros_panel_mut().toggle_collapsed();
             DispatchResult::structural()
         }
 
         // ── Macro sliders ─────────────────────────────────────────
-        PanelAction::MacroSnapshot(idx) => {
+        ParamsAction::MacroSnapshot(idx) => {
             let idx = *idx;
             if idx < manifold_core::macro_bank::MACRO_COUNT {
                 let value = ctx.project.settings.macro_bank.slots[idx].value;
@@ -53,7 +53,7 @@ pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::Disp
             }
             DispatchResult::handled()
         }
-        PanelAction::MacroChanged(idx, val) => {
+        ParamsAction::MacroChanged(idx, val) => {
             let idx = *idx;
             let val = *val;
             if let Some(crate::app::ActiveInspectorDrag::Macro { idx: di, value }) =
@@ -71,7 +71,7 @@ pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::Disp
             );
             DispatchResult::handled()
         }
-        PanelAction::MacroCommit(idx) => {
+        ParamsAction::MacroCommit(idx) => {
             if let Some(old_val) = ctx.scrub.slider_snapshot.take() {
                 let idx = *idx;
                 if idx < manifold_core::macro_bank::MACRO_COUNT {
@@ -85,7 +85,7 @@ pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::Disp
             ctx.scrub.active_inspector_drag = None;
             DispatchResult::handled()
         }
-        PanelAction::MacroReset(idx) => {
+        ParamsAction::MacroReset(idx) => {
             let idx = *idx;
             if idx < manifold_core::macro_bank::MACRO_COUNT {
                 let old = ctx.project.settings.macro_bank.slots[idx].value;
@@ -97,17 +97,17 @@ pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::Disp
             }
             DispatchResult::handled()
         }
-        PanelAction::MacroLabelRename(_) => DispatchResult::handled(),
+        ParamsAction::MacroLabelRename(_) => DispatchResult::handled(),
 
         // ── Master chrome ──────────────────────────────────────────
-        PanelAction::MasterOpacitySnapshot => {
+        ParamsAction::MasterOpacitySnapshot => {
             ctx.scrub.slider_snapshot = Some(ctx.project.settings.master_opacity);
             ctx.scrub.active_inspector_drag = Some(crate::app::ActiveInspectorDrag::MasterOpacity(
                 ctx.project.settings.master_opacity,
             ));
             DispatchResult::handled()
         }
-        PanelAction::MasterOpacityChanged(val) => {
+        ParamsAction::MasterOpacityChanged(val) => {
             ctx.project.settings.master_opacity = *val;
             if let Some(crate::app::ActiveInspectorDrag::MasterOpacity(v)) = &mut ctx.scrub.active_inspector_drag {
                 *v = *val;
@@ -121,7 +121,7 @@ pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::Disp
             );
             DispatchResult::handled()
         }
-        PanelAction::MasterOpacityCommit => {
+        ParamsAction::MasterOpacityCommit => {
             if let Some(old_val) = ctx.scrub.slider_snapshot.take() {
                 let new_val = ctx.project.settings.master_opacity;
                 if (old_val - new_val).abs() > f32::EPSILON {
@@ -133,7 +133,7 @@ pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::Disp
             DispatchResult::handled()
         }
         // ── Audio-layer gain slider (layer header) ─────────────────
-        PanelAction::AudioGainSnapshot(id) => {
+        ParamsAction::AudioGainSnapshot(id) => {
             ctx.scrub.slider_snapshot = ctx.project
                 .timeline
                 .find_layer_by_id(id)
@@ -146,7 +146,7 @@ pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::Disp
             }
             DispatchResult::handled()
         }
-        PanelAction::AudioGainChanged(id, db) => {
+        ParamsAction::AudioGainChanged(id, db) => {
             let db = *db;
             if let Some(crate::app::ActiveInspectorDrag::AudioGain { db: guard, .. }) =
                 &mut ctx.scrub.active_inspector_drag
@@ -167,7 +167,7 @@ pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::Disp
             }
             DispatchResult::handled()
         }
-        PanelAction::AudioGainCommit(id) => {
+        ParamsAction::AudioGainCommit(id) => {
             ctx.scrub.active_inspector_drag = None;
             if let Some(old_db) = ctx.scrub.slider_snapshot.take()
                 && let Some((_, layer)) = ctx.project.timeline.find_layer_by_id(id)
@@ -184,15 +184,15 @@ pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::Disp
             }
             DispatchResult::handled()
         }
-        PanelAction::MasterCollapseToggle => {
+        ParamsAction::MasterCollapseToggle => {
             ctx.ui.inspector.master_chrome_mut().toggle_collapsed();
             DispatchResult::structural()
         }
-        PanelAction::MasterExitPathClicked => {
+        ParamsAction::MasterExitPathClicked => {
             // Handled by try_open_dropdown in ui_root.rs — opens exit path dropdown.
             DispatchResult::handled()
         }
-        PanelAction::SetLedExitIndex(idx) => {
+        ParamsAction::SetLedExitIndex(idx) => {
             let idx = *idx;
             ctx.project.settings.led_exit_index = idx;
             // Push to content thread so the LED pipeline picks it up
@@ -205,7 +205,7 @@ pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::Disp
             DispatchResult::handled()
         }
         // ── LED enabled toggle ───────────────────────────────────
-        PanelAction::LedEnabledToggle => {
+        ParamsAction::LedEnabledToggle => {
             let new_enabled = !ctx.content_state.led_enabled;
             // Persist the new ON/OFF state in project settings so the LED
             // pipeline auto-initialises on project load.
@@ -232,14 +232,14 @@ pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::Disp
         }
 
         // ── LED brightness ───────────────────────────────────────
-        PanelAction::LedBrightnessSnapshot => {
+        ParamsAction::LedBrightnessSnapshot => {
             ctx.scrub.slider_snapshot = Some(ctx.project.settings.led_brightness);
             ctx.scrub.active_inspector_drag = Some(crate::app::ActiveInspectorDrag::LedBrightness(
                 ctx.project.settings.led_brightness,
             ));
             DispatchResult::handled()
         }
-        PanelAction::LedBrightnessChanged(val) => {
+        ParamsAction::LedBrightnessChanged(val) => {
             ctx.project.settings.led_brightness = *val;
             if let Some(crate::app::ActiveInspectorDrag::LedBrightness(v)) = &mut ctx.scrub.active_inspector_drag {
                 *v = *val;
@@ -253,7 +253,7 @@ pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::Disp
             );
             DispatchResult::handled()
         }
-        PanelAction::LedBrightnessCommit => {
+        ParamsAction::LedBrightnessCommit => {
             if let Some(old_val) = ctx.scrub.slider_snapshot.take() {
                 let new_val = ctx.project.settings.led_brightness;
                 if (old_val - new_val).abs() > f32::EPSILON {
@@ -265,7 +265,7 @@ pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::Disp
             DispatchResult::handled()
         }
         // ── Layer chrome ───────────────────────────────────────────
-        PanelAction::LayerOpacitySnapshot => {
+        ParamsAction::LayerOpacitySnapshot => {
             let layer_idx = super::resolve_active_layer_index(active_layer, ctx.project);
             if let Some(idx) = layer_idx
                 && let Some(layer) = ctx.project.timeline.layers.get(idx)
@@ -278,7 +278,7 @@ pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::Disp
             }
             DispatchResult::handled()
         }
-        PanelAction::LayerOpacityChanged(val) => {
+        ParamsAction::LayerOpacityChanged(val) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, ctx.project);
             if let Some(idx) = layer_idx {
                 if let Some(layer) = ctx.project.timeline.layers.get_mut(idx) {
@@ -302,7 +302,7 @@ pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::Disp
             }
             DispatchResult::handled()
         }
-        PanelAction::LayerOpacityCommit => {
+        ParamsAction::LayerOpacityCommit => {
             let layer_idx = super::resolve_active_layer_index(active_layer, ctx.project);
             if let Some(old_val) = ctx.scrub.slider_snapshot.take()
                 && let Some(idx) = layer_idx
@@ -318,13 +318,13 @@ pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::Disp
             ctx.scrub.active_inspector_drag = None;
             DispatchResult::handled()
         }
-        PanelAction::LayerChromeCollapseToggle => {
+        ParamsAction::LayerChromeCollapseToggle => {
             ctx.ui.inspector.layer_chrome_mut().toggle_collapsed();
             DispatchResult::structural()
         }
 
         // ── Effect operations ──────────────────────────────────────
-        PanelAction::EffectToggle(fx_idx) => {
+        ParamsAction::EffectToggle(fx_idx) => {
             let tab = effective_tab;
             let selected = ctx.ui.inspector.get_selected_effect_indices();
             // If clicked effect is part of multi-selection, apply to all selected
@@ -386,7 +386,7 @@ pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::Disp
             }
             DispatchResult::handled()
         }
-        PanelAction::EffectCollapseToggle(fx_idx) => {
+        ParamsAction::EffectCollapseToggle(fx_idx) => {
             let tab = effective_tab;
             let selected = ctx.ui.inspector.get_selected_effect_indices();
             // If clicked effect is part of multi-selection, apply to all selected
@@ -434,7 +434,7 @@ pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::Disp
             );
             DispatchResult::structural()
         }
-        PanelAction::SetAllCardsCollapsed { collapsed } => {
+        ParamsAction::SetAllCardsCollapsed { collapsed } => {
             // Collapse/expand every effect card in the active column at once.
             // Mirrors EffectCollapseToggle's two-write pattern (snapshot now,
             // MutateProject so the content thread's snapshot doesn't overwrite).
@@ -469,26 +469,26 @@ pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::Disp
             );
             DispatchResult::structural()
         }
-        PanelAction::ModConfigTabChanged => {
+        ParamsAction::ModConfigTabChanged => {
             // The card already switched its own active-tab UI state in
             // handle_click; this just forces a rebuild so the drawer repaints
             // with the newly-selected config. No model mutation.
             DispatchResult::structural()
         }
-        PanelAction::SectionFoldToggled => {
+        ParamsAction::SectionFoldToggled => {
             // D5 — the card already flipped its own `section_folded` UI-only
             // state in handle_click; this just forces a rebuild so the
             // folded/unfolded rows repaint. No model mutation (fold state is
             // workspace-local, never serialized).
             DispatchResult::structural()
         }
-        PanelAction::ModsCompactToggled => {
+        ParamsAction::ModsCompactToggled => {
             // §6b — the inspector already flipped its own compact flag in
             // route_click; rebuild so every card hides/shows its mod drawers.
             // No model mutation.
             DispatchResult::structural()
         }
-        PanelAction::EffectCardClicked(_) => {
+        ParamsAction::EffectCardClicked(_) => {
             // Deselect generator card when an effect card is clicked
             if let Some(gp) = ctx.ui.inspector.gen_params_mut() {
                 gp.update_selection_visual(&mut ctx.ui.tree, false);
@@ -508,7 +508,7 @@ pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::Disp
         // easing to it. `begin_value_snapback` itself is left in place in
         // manifold-ui (still exercised by its own unit tests) but has no
         // remaining production caller.
-        PanelAction::ParamSnapshot(gpt, param_id) => {
+        ParamsAction::ParamSnapshot(gpt, param_id) => {
             if let Some(target) =
                 resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
             {
@@ -544,7 +544,7 @@ pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::Disp
             }
             DispatchResult::handled()
         }
-        PanelAction::ParamChanged(gpt, param_id, val) => {
+        ParamsAction::ParamChanged(gpt, param_id, val) => {
             if let Some(target) =
                 resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
             {
@@ -570,7 +570,7 @@ pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::Disp
             }
             DispatchResult::handled()
         }
-        PanelAction::ParamCommit(gpt, param_id) => {
+        ParamsAction::ParamCommit(gpt, param_id) => {
             // Release commits ONE `ChangeGraphParamCommand` through the
             // undo-tracked `ContentCommand::Execute` path — one undo unit per
             // gesture, not per motion event.
@@ -603,7 +603,7 @@ pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::Disp
         // BUG-250: an enum dropdown pick — one atomic write, one undo unit,
         // no drag. `ParamToggle`'s read-old/write-new `ChangeGraphParamCommand`
         // shape, exactly as `ParamChanged`/`ParamToggle` already do.
-        PanelAction::ParamEnumSet(gpt, param_id, new_val) => {
+        ParamsAction::ParamEnumSet(gpt, param_id, new_val) => {
             if let Some(target) =
                 resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
             {
@@ -629,9 +629,9 @@ pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::Disp
 
         // ── Effect modulation ──────────────────────────────────────
         // ── Effect management ──────────────────────────────────────
-        PanelAction::AddEffectClicked(_tab) => DispatchResult::handled(),
-        PanelAction::BrowserSearchClicked => DispatchResult::handled(),
-        PanelAction::RemoveEffect(fx_idx) => {
+        ParamsAction::AddEffectClicked(_tab) => DispatchResult::handled(),
+        ParamsAction::BrowserSearchClicked => DispatchResult::handled(),
+        ParamsAction::RemoveEffect(fx_idx) => {
             let tab = effective_tab;
             let (effects_ref, target) = resolve_effects_read(tab, ctx.project, active_layer, ctx.selection);
             if let Some(effects) = effects_ref
@@ -647,7 +647,7 @@ pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::Disp
             }
             DispatchResult::structural()
         }
-        PanelAction::EffectReorder(from_idx, to_idx) => {
+        ParamsAction::EffectReorder(from_idx, to_idx) => {
             let tab = effective_tab;
             let target = super::resolve_effect_target(tab, active_layer, ctx.project);
             let cmd = ReorderEffectCommand::new(target, *from_idx, *to_idx);
@@ -659,12 +659,12 @@ pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::Disp
             // Selection follows automatically (ID-based, no remapping needed)
             DispatchResult::structural()
         }
-        // `PanelAction::ToggleNodeParamExpose` is handled in
+        // `ParamsAction::ToggleNodeParamExpose` is handled in
         // `app_render.rs` alongside the other graph commands so it can
         // access `watched_graph_target` + `watched_catalog_default`
         // directly. No fork on Effect vs Generator at the dispatch
         // layer — the command itself handles both.
-        PanelAction::EffectReorderGroup(source_indices, target_idx) => {
+        ParamsAction::EffectReorderGroup(source_indices, target_idx) => {
             // Multi-select reorder: move a group of effects to the target position.
             let tab = effective_tab;
             let target = super::resolve_effect_target(tab, active_layer, ctx.project);
@@ -706,11 +706,11 @@ pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::Disp
         }
 
         // ── Generator card actions ─────────────────────────────────
-        PanelAction::GenStringParamClicked(_) | PanelAction::GenStringParamDropdownClicked(_) => {
+        ParamsAction::GenStringParamClicked(_) | ParamsAction::GenStringParamDropdownClicked(_) => {
             // Intercepted in app_render.rs to open text input / dropdown.
             DispatchResult::handled()
         }
-        PanelAction::GenStringParamSelected(sp_idx, selected_value) => {
+        ParamsAction::GenStringParamSelected(sp_idx, selected_value) => {
             // A dropdown string param was selected (e.g. font family).
             // Commit it as a SetClipStringParamCommand.
             let layer_idx = super::resolve_active_layer_index(active_layer, ctx.project);
@@ -752,14 +752,14 @@ pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::Disp
             }
             DispatchResult::handled()
         }
-        PanelAction::GenCollapseToggle => {
+        ParamsAction::GenCollapseToggle => {
             if let Some(gp) = ctx.ui.inspector.gen_params_mut() {
                 let new_val = !gp.is_collapsed();
                 gp.set_collapsed(new_val);
             }
             DispatchResult::structural()
         }
-        PanelAction::GenCardClicked => {
+        ParamsAction::GenCardClicked => {
             // Select the generator card (blue highlight border), deselect effect cards
             if let Some(gp) = ctx.ui.inspector.gen_params_mut() {
                 gp.update_selection_visual(&mut ctx.ui.tree, true);
@@ -768,12 +768,12 @@ pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::Disp
             ctx.ui.inspector.clear_effect_selection(&mut ctx.ui.tree);
             DispatchResult::handled()
         }
-        PanelAction::CardRightClicked(_) => {
+        ParamsAction::CardRightClicked(_) => {
             // Handled by UIRoot::try_open_dropdown (opens the card context menu)
             // — should not reach dispatch.
             DispatchResult::handled()
         }
-        PanelAction::CopyGenerator => {
+        ParamsAction::CopyGenerator => {
             let layer_idx = super::resolve_active_layer_index(active_layer, ctx.project);
             if let Some(layer_idx) = layer_idx
                 && let Some(layer) = ctx.project.timeline.layers.get(layer_idx)
@@ -783,7 +783,7 @@ pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::Disp
             }
             DispatchResult::handled()
         }
-        PanelAction::PasteGenerator => {
+        ParamsAction::PasteGenerator => {
             if let Some(snapshot) = ctx.ui.gen_clipboard.get_paste_snapshot() {
                 let layer_idx = super::resolve_active_layer_index(active_layer, ctx.project);
                 if let Some(layer_idx) = layer_idx
@@ -815,7 +815,7 @@ pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::Disp
             }
             DispatchResult::structural()
         }
-        PanelAction::MakePresetUnique(gpt) => {
+        ParamsAction::MakePresetUnique(gpt) => {
             // Fork the targeted preset (effect OR generator) into a
             // project-embedded copy and retarget the instance to it. One path
             // for both kinds: resolve the GraphTarget, take its source def
@@ -838,7 +838,7 @@ pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::Disp
             }
             DispatchResult::structural()
         }
-        PanelAction::ExportPreset(gpt) => {
+        ParamsAction::ExportPreset(gpt) => {
             // Export the targeted preset's graph to a .json via a native save
             // dialog. Source def is the diverged per-instance graph else the
             // catalog canonical; the preset id is the filename stem.
@@ -860,7 +860,7 @@ pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::Disp
             }
             DispatchResult::handled()
         }
-        PanelAction::ImportPreset(gpt) => {
+        ParamsAction::ImportPreset(gpt) => {
             // Import a .json preset and retarget the targeted instance to it
             // (registered as a project-embedded preset via the shared fork
             // command, so it rides undo + the overlay refresh).
@@ -890,7 +890,7 @@ pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::Disp
             }
             DispatchResult::structural()
         }
-        PanelAction::SaveToLibrary(gpt) | PanelAction::SaveToProject(gpt) => {
+        ParamsAction::SaveToLibrary(gpt) | ParamsAction::SaveToProject(gpt) => {
             // Library doors (PRESET_LIBRARY_DESIGN D4): resolve the target's
             // current effective def (same `preset_source_def` resolution as
             // Make Unique / Export) and hand it back on `DispatchResult` for
@@ -908,7 +908,7 @@ pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::Disp
                 ctx.project,
             ) && let Some((def, _)) = preset_source_def(&target, ctx.project)
             {
-                let destination = if matches!(action, PanelAction::SaveToLibrary(_)) {
+                let destination = if matches!(action, ParamsAction::SaveToLibrary(_)) {
                     crate::text_input::SavePresetDestination::Library
                 } else {
                     crate::text_input::SavePresetDestination::Project
@@ -917,7 +917,7 @@ pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::Disp
             }
             result
         }
-        PanelAction::RevertToLibrary(gpt) => {
+        ParamsAction::RevertToLibrary(gpt) => {
             // PRESET_LIBRARY_DESIGN D3/P4: clear the per-instance graph
             // override, undoable — but ONLY if the tracked library id still
             // resolves in the catalog. The resolution check happens HERE
@@ -948,7 +948,7 @@ pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::Disp
             }
             DispatchResult::structural()
         }
-        PanelAction::PushToLibrary(gpt) => {
+        ParamsAction::PushToLibrary(gpt) => {
             // Push to Library (D3, P4): overwrite the targeted preset's
             // tracked user-library file with its current (diverged)
             // definition in place — no name prompt (id/filename never
@@ -986,14 +986,14 @@ pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::Disp
         // `UIRoot::try_open_dropdown` — this arm only keeps the match
         // exhaustive (same pattern as `CardRightClicked` above).
         // ── Generator params ───────────────────────────────────────
-        PanelAction::GenTypeClicked(_) => DispatchResult::handled(),
+        ParamsAction::GenTypeClicked(_) => DispatchResult::handled(),
         // `ParamToggle`/`ParamFire` (§8.4 P3b): unified effect+generator via
         // the same `resolve_graph_target` + `with_preset_graph_mut` path
         // `ParamChanged`/`ParamCommit` already use, rather than the old
         // `GenParamToggle`/`GenParamFire`'s generator-only `gen_params_mut()`
         // lookup — a click is atomic (no drag), so one command captures the
         // old value and writes the new one in the same arm.
-        PanelAction::ParamToggle(gpt, param_id) => {
+        ParamsAction::ParamToggle(gpt, param_id) => {
             if let Some(target) =
                 resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
             {
@@ -1015,7 +1015,7 @@ pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::Disp
             }
             DispatchResult::handled()
         }
-        PanelAction::ParamFire(gpt, param_id) => {
+        ParamsAction::ParamFire(gpt, param_id) => {
             // Trigger button click: increment the monotonic counter by one.
             // Mirrors ParamToggle's plumbing exactly except the value
             // transform is `+1` instead of `0↔1`.
@@ -1046,7 +1046,7 @@ pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::Disp
         // structural. The D3 float knobs are now live uniforms written per
         // frame, so a drag updates the local project + the content thread via
         // `MutateProjectLive` and returns `handled()` — no chain rebuild.
-        PanelAction::RelightToggle(gpt) => {
+        ParamsAction::RelightToggle(gpt) => {
             if let Some(target) =
                 resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
             {
@@ -1057,7 +1057,7 @@ pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::Disp
             }
             DispatchResult::structural()
         }
-        PanelAction::RelightParamSnapshot(gpt, field) => {
+        ParamsAction::RelightParamSnapshot(gpt, field) => {
             if let Some(target) =
                 resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
             {
@@ -1074,7 +1074,7 @@ pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::Disp
             }
             DispatchResult::handled()
         }
-        PanelAction::RelightParamChanged(gpt, field, val) => {
+        ParamsAction::RelightParamChanged(gpt, field, val) => {
             if let Some(target) =
                 resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
             {
@@ -1104,7 +1104,7 @@ pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::Disp
             }
             DispatchResult::handled()
         }
-        PanelAction::RelightParamCommit(gpt, field) => {
+        ParamsAction::RelightParamCommit(gpt, field) => {
             ctx.scrub.active_inspector_drag = None;
             if let Some(old_val) = ctx.scrub.slider_snapshot.take()
                 && let Some(target) =
@@ -1122,7 +1122,7 @@ pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::Disp
             }
             DispatchResult::handled()
         }
-        PanelAction::RelightHeightFromChanged(gpt, height_from) => {
+        ParamsAction::RelightHeightFromChanged(gpt, height_from) => {
             if let Some(target) =
                 resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
             {
@@ -1137,7 +1137,7 @@ pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::Disp
             DispatchResult::structural()
         }
 
-        PanelAction::AddEffect(tab, effect_type) => {
+        ParamsAction::AddEffect(tab, effect_type) => {
             use manifold_core::effects::PresetInstance;
             // The action carries the chosen preset id directly (registry
             // entries AND project-embedded presets), so no index lookup.
@@ -1188,14 +1188,13 @@ pub(crate) fn dispatch_params(action: &PanelAction, ctx: &mut super::super::Disp
             DispatchResult::structural()
         }
 
-        PanelAction::PasteEffects => DispatchResult::handled(),
+        ParamsAction::PasteEffects => DispatchResult::handled(),
 
         // Label right-clicks are consumed by try_open_dropdown — shouldn't reach here
-        PanelAction::ParamLabelRightClick(..) => {
+        ParamsAction::ParamLabelRightClick(..) => {
             DispatchResult::handled()
         }
 
         // ── Macro mapping ─────────────────────────────────────────
-        _ => DispatchResult::unhandled(),
     }
 }

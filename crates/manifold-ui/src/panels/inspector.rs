@@ -1,3 +1,4 @@
+use crate::{ParamsAction, RootAction, TransportAction};
 use super::clip_chrome::ClipChromePanel;
 use super::layer_chrome::LayerChromePanel;
 use super::audio_trigger_section::AudioTriggerSection;
@@ -1465,7 +1466,7 @@ impl InspectorCompositePanel {
             if moved {
                 self.scrolled_in_place = true;
             }
-            return vec![PanelAction::InspectorScrolled(0.0)];
+            return vec![PanelAction::Transport(TransportAction::InspectorScrolled(0.0))];
         }
 
         if let Some(target) = self.pressed_target {
@@ -1789,12 +1790,12 @@ impl InspectorCompositePanel {
                 .collect();
             effect_indices.sort_unstable();
             if !effect_indices.is_empty() {
-                vec![PanelAction::EffectReorderGroup(effect_indices, to_fx)]
+                vec![PanelAction::Params(ParamsAction::EffectReorderGroup(effect_indices, to_fx))]
             } else {
                 Vec::new()
             }
         } else if to_fx != from && to_fx != from + 1 {
-            vec![PanelAction::EffectReorder(from, to_fx)]
+            vec![PanelAction::Params(ParamsAction::EffectReorder(from, to_fx))]
         } else {
             Vec::new()
         }
@@ -1864,27 +1865,27 @@ impl InspectorCompositePanel {
     fn route_click(&mut self, node_id: NodeId, modifiers: Modifiers, tree: &UITree) -> Vec<PanelAction> {
         // Tab strip — selecting a tab mirrors the timeline selection.
         if let Some((_, tab)) = self.tab_node_ids.iter().find(|(id, _)| *id == node_id) {
-            return vec![PanelAction::SelectInspectorTab(*tab)];
+            return vec![PanelAction::Root(RootAction::SelectInspectorTab(*tab))];
         }
         // Collapse-all / expand-all — resolve the target state from the active
         // column's current cards (collapse if any open, else expand).
         if self.collapse_all_btn_id == Some(node_id) {
             let collapsed = self.any_active_card_expanded();
-            return vec![PanelAction::SetAllCardsCollapsed { collapsed }];
+            return vec![PanelAction::Params(ParamsAction::SetAllCardsCollapsed { collapsed })];
         }
         // §6b — compact toggle: flip global mod-drawer visibility (UI-only). Flip
         // here and return a structural no-op so the inspector rebuilds with the
         // new state propagated to every card.
         if self.compact_toggle_btn_id == Some(node_id) {
             self.mods_compact = !self.mods_compact;
-            return vec![PanelAction::ModsCompactToggled];
+            return vec![PanelAction::Params(ParamsAction::ModsCompactToggled)];
         }
         // Add Effect buttons
         if self.add_master_effect_btn == Some(node_id) {
-            return vec![PanelAction::AddEffectClicked(InspectorTab::Master)];
+            return vec![PanelAction::Params(ParamsAction::AddEffectClicked(InspectorTab::Master))];
         }
         if self.add_layer_effect_btn == Some(node_id) {
-            return vec![PanelAction::AddEffectClicked(InspectorTab::Layer)];
+            return vec![PanelAction::Params(ParamsAction::AddEffectClicked(InspectorTab::Layer))];
         }
         if let Some(target) = self.find_target_for_node(node_id) {
             self.update_last_effect_tab(&target);
@@ -1902,7 +1903,7 @@ impl InspectorCompositePanel {
 
                     if actions
                         .iter()
-                        .any(|a| matches!(a, PanelAction::EffectCardClicked(_)))
+                        .any(|a| matches!(a, PanelAction::Params(ParamsAction::EffectCardClicked(_))))
                     {
                         self.on_effect_card_clicked(InspectorTab::Master, i, modifiers);
                     } else if !self.is_effect_target_selected(&PressedTarget::MasterEffect(i)) {
@@ -1915,9 +1916,9 @@ impl InspectorCompositePanel {
                         .unwrap_or(0);
                     if !actions
                         .iter()
-                        .any(|a| matches!(a, PanelAction::EffectCardClicked(_)))
+                        .any(|a| matches!(a, PanelAction::Params(ParamsAction::EffectCardClicked(_))))
                     {
-                        actions.insert(0, PanelAction::EffectCardClicked(ei));
+                        actions.insert(0, PanelAction::Params(ParamsAction::EffectCardClicked(ei)));
                     }
                     actions
                 }
@@ -1929,7 +1930,7 @@ impl InspectorCompositePanel {
 
                     if actions
                         .iter()
-                        .any(|a| matches!(a, PanelAction::EffectCardClicked(_)))
+                        .any(|a| matches!(a, PanelAction::Params(ParamsAction::EffectCardClicked(_))))
                     {
                         self.on_effect_card_clicked(InspectorTab::Layer, i, modifiers);
                     } else if !self.is_effect_target_selected(&PressedTarget::LayerEffect(i)) {
@@ -1941,9 +1942,9 @@ impl InspectorCompositePanel {
                         .unwrap_or(0);
                     if !actions
                         .iter()
-                        .any(|a| matches!(a, PanelAction::EffectCardClicked(_)))
+                        .any(|a| matches!(a, PanelAction::Params(ParamsAction::EffectCardClicked(_))))
                     {
-                        actions.insert(0, PanelAction::EffectCardClicked(ei));
+                        actions.insert(0, PanelAction::Params(ParamsAction::EffectCardClicked(ei)));
                     }
                     actions
                 }
@@ -1987,18 +1988,18 @@ impl InspectorCompositePanel {
         if let Some(target) = target {
             // For effect targets, prepend EffectCardClicked to trigger visual update
             let select_action = match target {
-                PressedTarget::MasterEffect(i) => Some(PanelAction::EffectCardClicked(
+                PressedTarget::MasterEffect(i) => Some(PanelAction::Params(ParamsAction::EffectCardClicked(
                     self.effects[Self::SCOPE_MASTER]
                         .get(i)
                         .map(|c| c.effect_index())
                         .unwrap_or(0),
-                )),
-                PressedTarget::LayerEffect(i) => Some(PanelAction::EffectCardClicked(
+                ))),
+                PressedTarget::LayerEffect(i) => Some(PanelAction::Params(ParamsAction::EffectCardClicked(
                     self.effects[Self::SCOPE_LAYER]
                         .get(i)
                         .map(|c| c.effect_index())
                         .unwrap_or(0),
-                )),
+                ))),
                 _ => None,
             };
 
@@ -3799,7 +3800,7 @@ mod tests {
         let actions = panel.end_card_drag(&mut tree);
         assert_eq!(actions.len(), 1, "expected one action: {actions:?}");
         match &actions[0] {
-            PanelAction::EffectReorder(from, to) => {
+            PanelAction::Params(ParamsAction::EffectReorder(from, to)) => {
                 assert_eq!(*from, 1, "dragged card's effect_index");
                 assert_eq!(*to, 3, "middle drop reads the target card's own effect_index");
             }
@@ -3818,7 +3819,7 @@ mod tests {
         let actions = panel.end_card_drag(&mut tree);
         assert_eq!(actions.len(), 1, "expected one action: {actions:?}");
         match &actions[0] {
-            PanelAction::EffectReorder(from, to) => {
+            PanelAction::Params(ParamsAction::EffectReorder(from, to)) => {
                 assert_eq!(*from, 1, "dragged card's effect_index");
                 assert_eq!(
                     *to, 8,
@@ -3895,7 +3896,7 @@ mod tests {
         let actions = panel.end_card_drag(&mut tree);
         assert_eq!(actions.len(), 1, "expected one action: {actions:?}");
         match &actions[0] {
-            PanelAction::EffectReorder(_from, to) => {
+            PanelAction::Params(ParamsAction::EffectReorder(_from, to)) => {
                 assert_eq!(
                     *to, expected_effect_index,
                     "the dispatched command must target the effect_index of the \
@@ -3951,7 +3952,7 @@ mod tests {
         // Node at first_node+1 is the chevron button in master chrome build order
         // This should return MasterCollapseToggle
         if !actions.is_empty() {
-            assert!(matches!(actions[0], PanelAction::MasterCollapseToggle));
+            assert!(matches!(actions[0], PanelAction::Params(ParamsAction::MasterCollapseToggle)));
         }
     }
 

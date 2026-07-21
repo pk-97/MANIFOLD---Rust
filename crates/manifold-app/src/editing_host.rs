@@ -6,6 +6,7 @@
 //! The wrapper struct `AppEditingHost` borrows individual Application fields
 //! to avoid borrowing the entire Application — this lets the overlay
 //! simultaneously borrow ui_root and selection from Application.
+use manifold_ui::{EditingAction};
 use manifold_core::{Beats, ClipId, GraphTarget, LayerId, Seconds};
 use std::collections::HashSet;
 
@@ -375,12 +376,12 @@ impl TimelineEditingHost for AppEditingHost<'_> {
 
     fn on_clip_right_click(&mut self, clip_id: &str, _screen_pos: Vec2) {
         self.pending_actions
-            .push(PanelAction::ClipRightClicked(clip_id.to_string()));
+            .push(PanelAction::Editing(EditingAction::ClipRightClicked(clip_id.to_string())));
     }
 
     fn on_track_right_click(&mut self, beat: Beats, layer_index: usize, _screen_pos: Vec2) {
         self.pending_actions
-            .push(PanelAction::TrackRightClicked(beat.as_f32(), layer_index));
+            .push(PanelAction::Editing(EditingAction::TrackRightClicked(beat.as_f32(), layer_index)));
     }
 
     fn on_automation_lane_right_click(
@@ -389,10 +390,10 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         param_id: &ParamId,
         _screen_pos: Vec2,
     ) {
-        self.pending_actions.push(PanelAction::AutomationLaneRightClicked(
+        self.pending_actions.push(PanelAction::Editing(EditingAction::AutomationLaneRightClicked(
             target.clone(),
             param_id.clone(),
-        ));
+        )));
     }
 
     fn inspect_layer(&mut self, layer_index: usize) {
