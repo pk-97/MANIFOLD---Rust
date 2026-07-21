@@ -374,3 +374,4 @@ them, per §3 ("coverage grows organically"). Landing report:
 `docs/landings/2026-07-05-ui-automation-p2.md`.
 
 - VD-036 · 2026-07-21 · UI_FUNNEL P-P rider: INV-G4 MANIFOLD_RENDER_TRACE frame-cost spot-check not run (headless flows cover the sync calls, not the multi-window per-frame cadence). Burn down: next interactive session or the P-F landing trace gate. Owner: Wave-1 WS1.
+- VD-037 · 2026-07-22 · P-I single-active-gesture invariant: cross-window overlap unexercised by tests (field-asserted only). Burn down: interactive two-window drag smoke or scripted two-window flow. Owner: Wave-1 close.
