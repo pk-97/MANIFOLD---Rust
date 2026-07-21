@@ -16,3 +16,11 @@ They share locals across boundaries — `needs_structural_sync` (declared line 1
 2. Or a `FrameCtx` struct carrying the cross-segment locals.
 
 **Delivered instead this phase (pure moves):** `editor_bridge.rs` (graph-editor bridge cluster + drag structs + tests) and `frame/present.rs` (`present_all_windows` / `represent_cached_offscreen` + present helpers). See `docs/landings/2026-07-21-ui-funnel-p-f1-census.md`.
+
+## P-F1-drag-structs — `Bound`/`UnboundNodeParamDrag` stay in app_render.rs (verifier limit)
+
+**Parked 2026-07-21 (P-F1 editor_bridge slice).** The brief wants the drag structs + `bound_node_param_drag_tests`/`unbound_node_param_drag_tests` in `editor_bridge.rs`; they stay in `app_render.rs` instead.
+
+**Why:** their fields are constructed/read by the staying scrub code inside `tick_and_render` (`self.bound_node_param_drag`, `.current_value`, `.node_id`, …). Moving the struct definitions to a sibling module (`editor_bridge`) requires widening every field to `pub(crate)`. `move_identity_check`'s visibility-pair matcher pairs a removed `    node_id: u32,` with the added `    pub(crate) node_id: u32,` — but `node_id: u32,` also appears ~7× elsewhere in the moved code (fn params, test helpers), so git's `--color-moved=plain` colors ALL plain `node_id: u32,` lines as moves on both sides, consuming the removed struct-field twin. The `+pub(crate) node_id: u32,` lines are then orphaned → residue 2, unavoidable without changing the verifier. The brief forbids extending the verifier without a decisions ruling.
+
+**Unpark condition:** a decisions ruling on either (a) a verifier rule that treats `+pub(crate) <field>: <ty>,` as a visibility pair when the unprefixed form appears anywhere on the removed side (smuggle-risk to weigh), or (b) accept the 2 named residue lines under D-9 (reviewer eyeballs). Then move the two structs, their `impl BoundNodeParamDrag`, and the two drag-struct test modules into `editor_bridge.rs`.
