@@ -1,5 +1,7 @@
 # Scene Object & Panel v2 — objects become graph vocabulary; the panel becomes outliner + properties
 
+> **SUPERSEDED for the param mechanism (2026-07-21) → [`docs/SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md`](SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md) is the current authority.** The `node.scene_object` + `Object`-wire vocabulary and the outliner-plus-properties layout this doc established still stand and are load-bearing. What changed: the properties body is no longer a transcribed value-cell contract — it renders exposed-param manifest rows via the card path (P1/P2 LANDED), and `scene_vm.rs` is slimmed to item-discovery only (P3 LANDED `7ee0a887`, `scene_vm::is_param_driven` sources driven-state generically).
+
 **Status: SHIPPED — all 5 phases landed on main 2026-07-17 (P1+P2 @ `5c5dacfe`,
 P3 @ `da452351`, P4+P5 @ `7d3c41b6`). Landing reports:
 `docs/landings/2026-07-17-scene-object-v2-p1-p2.md`,
