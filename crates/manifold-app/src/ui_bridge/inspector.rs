@@ -1428,10 +1428,16 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 |h, p| {
-                    h.dispatch(&PanelAction::Mapping(MappingAction::AbletonMacroTrimSnapshot(0)), p);
-                    h.dispatch(&PanelAction::Mapping(MappingAction::AbletonMacroTrimChanged(0, 0.2, 0.7)), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::AbletonMacroTrim(0), ScrubPhase::Begin), p);
+                    h.dispatch(
+                        &PanelAction::Scrub(
+                            ValueRef::AbletonMacroTrim(0),
+                            ScrubPhase::Move(ScrubValue::Range(0.2, 0.7)),
+                        ),
+                        p,
+                    );
                 },
-                |h, p| h.dispatch(&PanelAction::Mapping(MappingAction::AbletonMacroTrimCommit(0)), p),
+                |h, p| h.dispatch(&PanelAction::Scrub(ValueRef::AbletonMacroTrim(0), ScrubPhase::Commit), p),
                 |p| {
                     let m = p.settings.macro_bank.slots[0].ableton_mapping.as_ref().unwrap();
                     (m.range_min, m.range_max)

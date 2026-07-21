@@ -142,4 +142,13 @@ pub enum ValueRef {
     /// core-only) and restores the whole `(low_hz, mid_hz)` pair — so the value
     /// stays a single-band Scalar, not a Range (the panel can't run the clamp).
     AudioCrossover(BandDivider),
+    /// An Ableton macro-bank trim-bar drag (the min/max sub-range under a macro
+    /// slot's Ableton mapping) — was `AbletonMacroTrim{Snapshot,Changed,Commit}`.
+    /// Keyed by the macro slot index; the `(min, max)` range rides
+    /// `ScrubValue::Range` on Move — the panel computes BOTH edges from the
+    /// dragged bar (unlike crossover, where the panel knows only one line), so
+    /// the wire carries the pair and the restore path re-stamps it on the slot's
+    /// `ableton_mapping`. Distinct from the graph-param `Trim(TrimKind::Ableton,
+    /// …)` family: this addresses a macro-bank slot, not a `GraphParamTarget`.
+    AbletonMacroTrim(usize),
 }

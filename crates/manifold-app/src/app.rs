@@ -80,12 +80,9 @@ pub(crate) enum ActiveInspectorDrag {
     // P-I / D4).
     // RelightParam (3D-Shading knob trio) migrated to the unified scrub gesture
     // (`ui_bridge::scrub::ResolvedScrub::RelightParam`, P-I / D4).
-    /// An Ableton macro trim-bar drag (`AbletonMacroTrim*` trio).
-    AbletonMacroTrim {
-        slot_idx: usize,
-        min: f32,
-        max: f32,
-    },
+    // AbletonMacroTrim (macro-bank trim-bar `AbletonMacroTrim*` trio) migrated to
+    // the unified scrub gesture (`ui_bridge::scrub::ResolvedScrub::AbletonMacroTrim`,
+    // P-I / D4) — whole `(min, max)` range restore preserved.
     /// A graph-editor mapping-sidebar range drag (`EffectMappingRange*` trio,
     /// BUG-262). Unlike the cluster-C families this one dispatches through
     /// `app_render`'s `pending_actions` loop, not the inspector: the commit
@@ -126,18 +123,6 @@ impl ActiveInspectorDrag {
             // Every restore below writes through the SAME store the family's
             // live `*Changed` arm writes, so a mid-drag snapshot swap can't
             // revert the in-flight value (undo audit 2026-07-19, cluster C).
-            Self::AbletonMacroTrim { slot_idx, min, max } => {
-                if let Some(m) = project
-                    .settings
-                    .macro_bank
-                    .slots
-                    .get_mut(*slot_idx)
-                    .and_then(|s| s.ableton_mapping.as_mut())
-                {
-                    m.range_min = *min;
-                    m.range_max = *max;
-                }
-            }
             // The two mapping families restore through the SAME command
             // `preview_mapping` executes each `*Changed` tick — build the
             // reshape edit and run it on the project so a mid-drag snapshot

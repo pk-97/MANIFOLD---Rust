@@ -59,8 +59,6 @@ pub struct ScrubState {
     /// Slider drag snapshot for undo (opacity, slip, etc.). Threaded as
     /// `drag_snapshot` in the dispatch handlers (the arm bodies' name).
     pub slider_snapshot: Option<f32>,
-    /// Trim drag snapshot (min, max) for undo.
-    pub trim_snapshot: Option<(f32, f32)>,
     /// Active inspector drag — prevents snapshot from overwriting dragged field.
     pub active_inspector_drag: Option<ActiveInspectorDrag>,
     /// The single P-I-ported gesture: undo baseline + resolved restore payload.
@@ -205,6 +203,17 @@ pub enum ResolvedScrub {
     /// the `BandDivider` on the wire — and writes both). The dragged band lives
     /// on the ValueRef address, not here (restore/commit act on the pair).
     AudioCrossover {
+        baseline: (f32, f32),
+        live: (f32, f32),
+    },
+    /// An Ableton macro-bank trim-bar drag. Keyed by the macro slot `slot_idx`;
+    /// `baseline`/`live` are the `(min, max)` range the commit diffs against and
+    /// the restore path re-stamps on the slot's `ableton_mapping`. The panel
+    /// carries both edges, so the value is a `ScrubValue::Range` (unlike
+    /// crossover's single-band Scalar). Distinct from `Trim` — this addresses a
+    /// macro-bank slot, not a `GraphParamTarget`.
+    AbletonMacroTrim {
+        slot_idx: usize,
         baseline: (f32, f32),
         live: (f32, f32),
     },
@@ -399,6 +408,22 @@ impl ResolvedScrub {
             } => {
                 project.audio_setup.low_hz = *low;
                 project.audio_setup.mid_hz = *mid;
+            }
+            ResolvedScrub::AbletonMacroTrim {
+                slot_idx,
+                live: (min, max),
+                ..
+            } => {
+                if let Some(m) = project
+                    .settings
+                    .macro_bank
+                    .slots
+                    .get_mut(*slot_idx)
+                    .and_then(|s| s.ableton_mapping.as_mut())
+                {
+                    m.range_min = *min;
+                    m.range_max = *max;
+                }
             }
         }
     }
@@ -1761,6 +1786,103 @@ pub(crate) fn dispatch_scrub(
                             Box::new(SetAudioCrossoversCommand::new(old, new)),
                         );
                     }
+                }
+                DispatchResult::handled()
+            }
+        },
+
+        ValueRef::AbletonMacroTrim(slot_idx) => match phase {
+            ScrubPhase::Begin => {
+                // Snapshot the pre-drag `(min, max)` range as the undo baseline —
+                // addressed directly by the macro slot index, no resolution (the
+                // retired `AbletonMacroTrimSnapshot`).
+                let baseline = ctx
+                    .project
+                    .settings
+                    .macro_bank
+                    .slots
+                    .get(*slot_idx)
+                    .and_then(|s| s.ableton_mapping.as_ref())
+                    .map(|m| (m.range_min, m.range_max));
+                if let Some(baseline) = baseline {
+                    ctx.scrub.active = Some(ResolvedScrub::AbletonMacroTrim {
+                        slot_idx: *slot_idx,
+                        baseline,
+                        live: baseline,
+                    });
+                }
+                DispatchResult::handled()
+            }
+            ScrubPhase::Move(sv) => {
+                if let Some((min, max)) = sv.range() {
+                    // Live edit (no per-frame undo): write both edges locally and
+                    // to the content thread so the mapping tracks the cursor (the
+                    // retired `AbletonMacroTrimChanged` — `MutateProject`, not
+                    // `MutateProjectLive`).
+                    let slot_idx = *slot_idx;
+                    if let Some(ResolvedScrub::AbletonMacroTrim { live, .. }) = &mut ctx.scrub.active
+                    {
+                        *live = (min, max);
+                    }
+                    if let Some(m) = ctx
+                        .project
+                        .settings
+                        .macro_bank
+                        .slots
+                        .get_mut(slot_idx)
+                        .and_then(|s| s.ableton_mapping.as_mut())
+                    {
+                        m.range_min = min;
+                        m.range_max = max;
+                    }
+                    ContentCommand::send(
+                        ctx.content_tx,
+                        ContentCommand::MutateProject(Box::new(move |p| {
+                            if let Some(m) = p
+                                .settings
+                                .macro_bank
+                                .slots
+                                .get_mut(slot_idx)
+                                .and_then(|s| s.ableton_mapping.as_mut())
+                            {
+                                m.range_min = min;
+                                m.range_max = max;
+                            }
+                        })),
+                    );
+                }
+                DispatchResult::handled()
+            }
+            ScrubPhase::Commit => {
+                // One undo step: baseline range (old) → current range (new), via
+                // `ChangeAbletonTrimCommand` on the macro-slot target — matches
+                // the retired trio.
+                use manifold_core::ableton_mapping::AbletonMappingTarget;
+                let baseline = match &ctx.scrub.active {
+                    Some(ResolvedScrub::AbletonMacroTrim { baseline, .. }) => Some(*baseline),
+                    _ => None,
+                };
+                ctx.scrub.active = None;
+                if let Some((old_min, old_max)) = baseline
+                    && let Some((new_min, new_max)) = ctx
+                        .project
+                        .settings
+                        .macro_bank
+                        .slots
+                        .get(*slot_idx)
+                        .and_then(|s| s.ableton_mapping.as_ref())
+                        .map(|m| (m.range_min, m.range_max))
+                    && ((old_min - new_min).abs() > f32::EPSILON
+                        || (old_max - new_max).abs() > f32::EPSILON)
+                {
+                    let cmd = ChangeAbletonTrimCommand::new(
+                        AbletonMappingTarget::MacroSlot { slot_index: *slot_idx },
+                        old_min,
+                        old_max,
+                        new_min,
+                        new_max,
+                    );
+                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
                 }
                 DispatchResult::handled()
             }

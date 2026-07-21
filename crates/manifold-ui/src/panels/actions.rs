@@ -502,9 +502,9 @@ pub enum MappingAction {
     MapMacroToAbleton(usize, AbletonMacroAddress),
     UnmapMacroAbleton(usize),
     OpenAbletonPickerForMacro(usize),
-    AbletonMacroTrimSnapshot(usize),                                      // slot_idx
-    AbletonMacroTrimChanged(usize, f32, f32),                             // slot_idx, min, max
-    AbletonMacroTrimCommit(usize),                                        // slot_idx
+    // Macro-bank trim-bar scrub trio migrated to `PanelAction::Scrub`
+    // (`ValueRef::AbletonMacroTrim`, P-I / D4): keyed by the macro slot index,
+    // the `(min, max)` range rides `ScrubValue::Range` on Move.
     AbletonInvertToggle(GraphParamTarget, ParamId),
     AbletonMacroInvertToggle(usize),                             // slot_idx
 }
