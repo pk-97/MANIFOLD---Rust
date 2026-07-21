@@ -125,6 +125,8 @@ SCAFFOLD = re.compile(
     r"(?:pub(?:\((?:crate|super)\))?\s+)?fn dispatch_\w+\(.*"  # (1) sub-dispatcher signature (single line)
     r"|match action \{"                                        # (2) the per-domain match head
     r"|_ => DispatchResult::unhandled\(\),?"                   # (3) the fall-through sentinel
+    r"|DispatchResult::unhandled\(\)"                          # (3b) bare tail expr: router
+                                                                #      fully collapsed (S6b)
     r"|let \w+ = [\w:]+::dispatch_\w+\(action, ctx\);"         # (5) chain-router delegation call
     r"|if !(\w+)\.unhandled \{ return \1; \}"                  # (6) chain-router fall-through guard
     r"|\}\)?,?;?"                                              # (4) a bare closing brace

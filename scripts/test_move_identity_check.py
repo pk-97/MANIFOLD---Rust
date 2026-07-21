@@ -50,6 +50,22 @@ the exit codes). Covers:
                                                            doesn't fall to
                                                            residue; reproduces
                                                            fb59db17's residue-1)
+ 16. router collapses to  → exit 0, residue 0            (S6b: the last domain
+     bare `unhandled()`                                    arm is extracted,
+     tail                                                  leaving `match
+                                                           action { _ =>
+                                                           unhandled() }` with
+                                                           no arms — it
+                                                           collapses to a bare
+                                                           `DispatchResult::
+                                                           unhandled()` tail
+                                                           expression, the
+                                                           router's null
+                                                           action; the ADDED
+                                                           bare line must
+                                                           classify as
+                                                           scaffold, not
+                                                           residue)
 
 Run: python3 scripts/test_move_identity_check.py   (exit 0 = all pass)
 """
@@ -378,6 +394,36 @@ MOVED_COLLISION_BASE = (
 )
 
 
+# S6b fixture: the terminal router-collapse shape from the real ruling —
+# `dispatch_inspector` starts as INSPECTOR_ROUTER (browser arm already
+# extracted, one `match action { SCENE arm; _ => unhandled() }` left), and its
+# LAST remaining arm (scene) is extracted too. With no arms left, the match
+# has nothing to dispatch on, so it collapses to a bare
+# `DispatchResult::unhandled()` tail expression — no `_ =>`, no trailing
+# comma/semicolon, because it's now the fn's tail expr, not a match arm.
+# Proves: the removed `match action {` / SCENE arm (MOVED, verbatim into
+# scene.rs) / sentinel arm / closing brace are scaffold as before, AND the
+# newly-ADDED bare `DispatchResult::unhandled()` line — previously
+# unclassified residue — is now recognized as scaffold too.
+ROUTER_FULLY_COLLAPSED = (
+    "pub fn dispatch_inspector(action: &PanelAction, ctx: &mut Ctx) -> DispatchResult {\n"
+    "    let r = browser::dispatch_browser(action, ctx);\n"
+    "    if !r.unhandled { return r; }\n"
+    "    let r = scene::dispatch_scene(action, ctx);\n"
+    "    if !r.unhandled { return r; }\n"
+    "    DispatchResult::unhandled()\n"
+    "}\n"
+)
+SCENE_MODULE = (
+    "pub fn dispatch_scene(action: &PanelAction, ctx: &mut Ctx) -> DispatchResult {\n"
+    "    match action {\n"
+    + ARM_SCENE
+    + "        _ => DispatchResult::unhandled(),\n"
+    "    }\n"
+    "}\n"
+)
+
+
 def case_pure_move(repo: Path) -> tuple[bool, str]:
     commit_tree(repo, {"a.rs": HELPER + "// tail\n", "b.rs": "// b\n"}, "base")
     commit_tree(repo, {"a.rs": "// tail\n", "b.rs": "// b\n" + HELPER}, "move")
@@ -542,6 +588,23 @@ def case_drifted_preamble_moved_collision(repo: Path) -> tuple[bool, str]:
     return ok, f"exit={code} {out.splitlines()[0]}"
 
 
+def case_router_collapse_bare_unhandled(repo: Path) -> tuple[bool, str]:
+    commit_tree(
+        repo,
+        {"inspector.rs": INSPECTOR_ROUTER, "dispatch/browser.rs": BROWSER_MODULE},
+        "base",
+    )
+    commit_tree(
+        repo,
+        {"inspector.rs": ROUTER_FULLY_COLLAPSED, "dispatch/browser.rs": BROWSER_MODULE,
+         "dispatch/scene.rs": SCENE_MODULE},
+        "collapse-to-bare-unhandled",
+    )
+    code, out = run_checker(repo)
+    ok = code == 0 and field(out, "residue") == 0 and field(out, "scaffold") > 0
+    return ok, f"exit={code} {out.splitlines()[0]}"
+
+
 CASES = [
     ("pure move -> exit 0", case_pure_move),
     ("smuggled edit -> exit 1", case_smuggled),
@@ -560,6 +623,8 @@ CASES = [
      case_out_of_sequence_close_paren),
     ("drifted preamble removed, moved-flagged \");\" -> exit 0 [S5b, PROVEN]",
      case_drifted_preamble_moved_collision),
+    ("router collapses to bare unhandled() tail -> exit 0 [S6b, PROVEN]",
+     case_router_collapse_bare_unhandled),
 ]
 
 
