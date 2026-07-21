@@ -145,27 +145,41 @@ SCAFFOLD = re.compile(
 # adapt" (D-11). Encodes D-11's text as the truth, not whatever inspector.rs happens
 # to contain today.
 #
-# Drifted removal-side entries (D-20 iii): inspector.rs's ACTUAL in-source
-# preamble (still in `dispatch_inspector`, verified against the source at the
-# time of this fix) drifted from the canonical form above — an explicit
-# `&*ctx.active_layer` reborrow on the call's last arg, an explicit
-# `&Option<LayerId>` type annotation on the second `let`, and the call
-# formatted across multiple lines rather than one. Each drifted source LINE
-# is its own PREAMBLE_LINES entry (not one joined statement, unlike the
-# canonical form above) because matching is per DIFF LINE, and git emits each
-# physical source line of a multi-line statement as its own `-` line when the
-# whole statement is removed. These are REMOVAL-side only: when the LAST
-# preamble-using domain moves out, the drifted original is deleted with
-# nothing left behind to inherit it (the new location recomputes the
-# CANONICAL form, matched above) — so these only ever need to match `-` diff
-# lines, never `+`. Sanctioned as scaffold for the same reason as the
-# canonical form: zero behavior change, byte-exact match only.
+# Drifted removal-side SEQUENCE (D-21, replacing D-20 iii's per-line entries):
+# inspector.rs's ACTUAL in-source preamble (still in `dispatch_inspector`,
+# verified against the source at the time of the D-20 iii fix) drifted from
+# the canonical form above — an explicit `&*ctx.active_layer` reborrow on the
+# call's last arg, an explicit `&Option<LayerId>` type annotation on the
+# second `let`, and the call formatted across multiple lines rather than one.
+#
+# D-20 iii originally registered each drifted source line as an independent
+# PREAMBLE_LINES member. That over-generalized: several of those lines are
+# short generics (`");"`, `"ctx.editor_target,"`, `"&*ctx.project,"`) that, as
+# permanent standalone entries, mask ANY genuinely-deleted matching line in
+# ALL future commits — e.g. a dropped match arm's call-closer `");"` would
+# silently vanish from its residue signature instead of being caught. D-21
+# fixes this: the drifted lines are kept as an ORDERED SEQUENCE, and
+# classify() below matches them with a stateful REMOVAL-SIDE-only tracker —
+# armed only by the exact opener, advanced only by the exact next line in
+# order, disarmed (mismatch falls to residue) the instant a line breaks the
+# chain. A `");"` (or any other member of this sequence) seen out of order or
+# in isolation is no longer scaffold — it is caught as residue, same as any
+# other genuinely deleted line.
 PREAMBLE_LINES = {
     "let (effective_tab, effective_active_layer) = super::editor_dispatch_context"
     "(ctx.editor_target, &*ctx.project, ctx.ui.inspector.last_effect_tab(), "
     "ctx.active_layer);",
     "let active_layer = &effective_active_layer;",
-    # Drifted form (D-20 iii), one entry per physical source line:
+}
+# The exact ordered drifted sequence (opener first, through the closer), one
+# physical source line each — git emits each physical line of a removed
+# multi-line statement as its own `-` line, which is why this is a sequence
+# of lines rather than one joined statement like the canonical form above.
+# REMOVAL-side only: when the LAST preamble-using domain moves out, the
+# drifted original is deleted with nothing left behind to inherit it (the new
+# location recomputes the CANONICAL form, matched above), so this sequence
+# only ever needs to match `-` diff lines, never `+`.
+DRIFTED_PREAMBLE_SEQUENCE = (
     "let (effective_tab, effective_active_layer) = super::editor_dispatch_context(",
     "ctx.editor_target,",
     "&*ctx.project,",
@@ -173,7 +187,7 @@ PREAMBLE_LINES = {
     "&*ctx.active_layer,",
     ");",
     "let active_layer: &Option<LayerId> = &effective_active_layer;",
-}
+)
 
 
 def _normalize_ws(body: str) -> str:
@@ -234,6 +248,12 @@ def classify(out: str) -> tuple[dict[str, int], list[str]]:
     # applies to both the old and new file, and governs +/- inner lines of
     # either sign until a context (unchanged) closer disarms it.
     context_block = False
+    # Drifted-preamble removal-side sequence state (D-21): index of the NEXT
+    # expected line in DRIFTED_PREAMBLE_SEQUENCE, or None while disarmed.
+    # Removal-side only, so unlike open_block it is not per-sign. Reset
+    # everywhere the other block trackers reset — a stray later `-");"`
+    # elsewhere in the diff must never inherit an armed sequence.
+    drifted_idx: int | None = None
     for raw in out.splitlines():
         is_moved = bool(MOVED_RE.match(raw))
         plain = ANSI.sub("", raw)
@@ -243,6 +263,7 @@ def classify(out: str) -> tuple[dict[str, int], list[str]]:
             open_block["+"] = False
             open_block["-"] = False
             context_block = False
+            drifted_idx = None
             continue
         if not plain.startswith(("+", "-")):
             # Hunk header (`@@ ... @@`) or real unchanged context line. A
@@ -250,6 +271,7 @@ def classify(out: str) -> tuple[dict[str, int], list[str]]:
             # always resets here.
             open_block["+"] = False
             open_block["-"] = False
+            drifted_idx = None
             if plain.startswith("@"):
                 # Hunk boundary: never content, and a context-opened block
                 # can't legitimately span one either — two unrelated use
@@ -266,6 +288,12 @@ def classify(out: str) -> tuple[dict[str, int], list[str]]:
                 context_block = True
             continue
         sign = plain[0]
+        if sign == "+":
+            # The drifted sequence is removal-side only: a `+` line can never
+            # arm, advance, or belong to it, and it breaks any run in
+            # progress (the removed lines a chain tracks are no longer
+            # contiguous once an addition interrupts them).
+            drifted_idx = None
         if is_moved:
             counts["moved"] += 1
             continue
@@ -295,6 +323,29 @@ def classify(out: str) -> tuple[dict[str, int], list[str]]:
         if SCAFFOLD.match(plain):
             counts["scaffold"] += 1
             continue
+        if sign == "-":
+            # Drifted-preamble removal-side sequence matcher (D-21). ARM only
+            # on the exact opener; while armed, advance only on the exact
+            # expected next line; disarm on completion (whole sequence
+            # matched) or on any mismatch. A mismatching line is NOT counted
+            # as scaffold — it falls straight through to residue below,
+            # exactly like any other genuinely deleted line — which is the
+            # whole point: a lone out-of-sequence `");"` (or any other short
+            # generic in this set) must still be caught, not masked.
+            body = _normalize_ws(plain[1:])
+            if drifted_idx is not None and body == DRIFTED_PREAMBLE_SEQUENCE[drifted_idx]:
+                counts["scaffold"] += 1
+                drifted_idx += 1
+                if drifted_idx == len(DRIFTED_PREAMBLE_SEQUENCE):
+                    drifted_idx = None  # sequence complete: disarm
+                continue
+            if body == DRIFTED_PREAMBLE_SEQUENCE[0]:
+                # Either a fresh arm, or a mismatch that happens to be a new
+                # opener — re-arm on it either way.
+                counts["scaffold"] += 1
+                drifted_idx = 1
+                continue
+            drifted_idx = None  # disarm: this line is not part of the chain
         residue.append(plain)
     return counts, residue
 

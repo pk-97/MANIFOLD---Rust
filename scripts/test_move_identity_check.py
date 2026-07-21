@@ -31,6 +31,13 @@ the exit codes). Covers:
                                                            submodule is ALLOW wiring)
  13. impl-wrapper body    → exit 1, residue > 0          (D-15: a body edit hiding
      edit                                                 inside the moved wrapper)
+ 14. out-of-sequence      → exit 1, residue > 0          (D-21: a lone `");"`
+     `");"` removed                                       removed OUTSIDE the
+                                                           drifted-preamble opener
+                                                           →sequence chain is
+                                                           still caught, proving
+                                                           generics no longer
+                                                           mask genuine deletions)
 
 Run: python3 scripts/test_move_identity_check.py   (exit 0 = all pass)
 """
@@ -302,6 +309,32 @@ IMPL_OVERLAY_AFTER = "use super::*;\n\nimpl Foo {\n" + IMPL_FN_B + "}\n"
 IMPL_OVERLAY_AFTER_EDIT = "use super::*;\n\nimpl Foo {\n" + IMPL_FN_B_EDITED + "}\n"
 
 
+# D-21 fixture: a lone `");"` deleted OUTSIDE the drifted-preamble opener→
+# sequence chain — nothing before it in the diff matches
+# DRIFTED_PREAMBLE_SEQUENCE[0], so the stateful matcher never arms on it.
+# Proves the sequence rework didn't regress to the D-20 iii bug it fixed: a
+# short generic line that happens to also appear in the drifted sequence
+# (here, the call-closer `");"`) must still be caught as residue when it is
+# a genuine, unrelated deletion — never silently masked as scaffold.
+OUT_OF_SEQUENCE_CLOSE_PAREN_BASE = (
+    "fn caller() {\n"
+    "    do_thing(\n"
+    "        alpha,\n"
+    "        beta,\n"
+    "    );\n"
+    "    tail();\n"
+    "}\n"
+)
+OUT_OF_SEQUENCE_CLOSE_PAREN_AFTER = (
+    "fn caller() {\n"
+    "    do_thing(\n"
+    "        alpha,\n"
+    "        beta,\n"
+    "    tail();\n"
+    "}\n"
+)
+
+
 def case_pure_move(repo: Path) -> tuple[bool, str]:
     commit_tree(repo, {"a.rs": HELPER + "// tail\n", "b.rs": "// b\n"}, "base")
     commit_tree(repo, {"a.rs": "// tail\n", "b.rs": "// b\n" + HELPER}, "move")
@@ -441,6 +474,18 @@ def case_impl_wrapper_body_edit(repo: Path) -> tuple[bool, str]:
     return ok, f"exit={code} {out.splitlines()[0]}"
 
 
+def case_out_of_sequence_close_paren(repo: Path) -> tuple[bool, str]:
+    commit_tree(repo, {"caller.rs": OUT_OF_SEQUENCE_CLOSE_PAREN_BASE}, "base")
+    commit_tree(
+        repo,
+        {"caller.rs": OUT_OF_SEQUENCE_CLOSE_PAREN_AFTER},
+        "drop-out-of-sequence-close-paren",
+    )
+    code, out = run_checker(repo)
+    ok = code == 1 and field(out, "residue") > 0
+    return ok, f"exit={code} {out.splitlines()[0]}"
+
+
 CASES = [
     ("pure move -> exit 0", case_pure_move),
     ("smuggled edit -> exit 1", case_smuggled),
@@ -455,6 +500,8 @@ CASES = [
     ("drifted preamble removed -> exit 0 [D-20 iii]", case_drifted_preamble_removed),
     ("impl-wrapper move -> exit 0 [D-15]", case_impl_wrapper_move),
     ("impl-wrapper body edit -> exit 1 [D-15]", case_impl_wrapper_body_edit),
+    ("out-of-sequence \");\" removal -> exit 1 [D-21, CAUGHT]",
+     case_out_of_sequence_close_paren),
 ]
 
 
