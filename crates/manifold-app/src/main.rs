@@ -5,6 +5,7 @@ mod alerts;
 mod app;
 mod app_lifecycle;
 mod app_render;
+mod editor_bridge;
 mod audio_mod_runtime;
 mod autosave;
 mod audio_waveform_cache;
@@ -528,3 +529,4 @@ mod resume_arg_tests {
         );
     }
 }
+
