@@ -1,6 +1,8 @@
 # Graph Editor ↔ Main Inspector Unification
 
 **Status:** IN PROGRESS — Change 2 (selection-follows) SHIPPED 2026-07-01. Change 3
+
+> **Supersession note (2026-07-22, UI_FUNNEL P-Z):** references below to `dispatch_inspector` / `ActiveInspectorDrag` / `PanelAction` trio variants describe the PRE-decomposition architecture. Current state: 12 flat domain enums + exhaustive router (P-D), one Scrub gesture wire with `ScrubState.active` (P-I, `ActiveInspectorDrag` extinct), per-domain `dispatch/` handlers (P-B). Anchors here are historical.
 (full inspector column in the editor) SHIPPED with EDITOR_WINDOW_UNIFICATION P1–P3
 (2026-07-14). Change 4 (layout invariance, closes BUG-160): P2 (tick parity, D4)
 SHIPPED 2026-07-15 (`d85ab207`); P1 PARTIAL — D1/D2/D7 shipped in the same

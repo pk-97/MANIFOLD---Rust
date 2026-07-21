@@ -1,6 +1,8 @@
 # UI ↔ Content Projection Layer — the A1 kill-test, run to completion
 
 **Status:** SHIPPED (P0, the only surviving phase) · 2026-07-09 · Fable. The A1 kill-test came
+
+> **Supersession note (2026-07-22, UI_FUNNEL P-Z):** references below to `dispatch_inspector` / `ActiveInspectorDrag` / `PanelAction` trio variants describe the PRE-decomposition architecture. Current state: 12 flat domain enums + exhaustive router (P-D), one Scrub gesture wire with `ScrubState.active` (P-I, `ActiveInspectorDrag` extinct), per-domain `dispatch/` handlers (P-B). Anchors here are historical.
 back **KILL** for the declarative projection layer; the surviving piece — compiler-enforced
 orphan coverage — landed the same session. This reverses the pre-Fable draft's C-then-A
 recommendation (`0271934b`); Peter may override — §2 names the trigger that would revive the layer.

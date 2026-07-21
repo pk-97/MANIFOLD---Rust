@@ -1,6 +1,6 @@
 # UI Funnel Decomposition — Wave 1 of the god-file campaign
 
-**Status: IN PROGRESS — P-P/P-B/P-F/P-D/P-I SHIPPED; P-S SHIPPED 2026-07-22 (re-headlined at execution per census: split-by-layer + RowHost dedup — landing report `docs/landings/2026-07-22-ui-funnel-p-s.md`); remaining: P-Z close only · 2026-07-22 · Fable**
+**Status: COMPLETE — all phases shipped: P-P/P-B 2026-07-21, P-D/P-I/P-S 2026-07-22, P-Z closed 2026-07-22. Landing reports in docs/landings/2026-07-2{1,2}-ui-funnel-*. Follow-on design items on the register: CHROME_PARAMS, GESTURE_ENTRY, ROW_MODEL_EDGES, VERIFICATION_INFRA (priority one). · Fable**
 **Prerequisites:** WIDGET_TREE (COMPLETE 2026-07-21), SCENE_PANEL_EXPOSURE_CONVERGENCE (COMPLETE 2026-07-21). Campaign register: `docs/ARCHITECTURE_DEBT.md` (inventory + wave map; status for this wave lives ONLY on this doc's Status line).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase. Pure-move commits gate on `scripts/move_identity_check.py` (built + self-tested 2026-07-21).
 
