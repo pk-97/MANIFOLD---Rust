@@ -45,8 +45,19 @@ ALLOW = re.compile(
     r"|(pub(\((crate|super)\))?\s+)?use\s"      # use / pub use
     r"|#\[path\s*=\s*\".*\"\]"                  # #[path] attr on a mod decl
     r"|//!"                                     # module-level doc comment
+    r"|impl\s+\w+\s*\{\s*$"                     # bare inherent-impl wrapper
     r")"
 )
+# The inherent-impl wrapper case (P-F2a, god-file wave): relocating methods into
+# a submodule needs a fresh `impl UIRoot {` line the source never removed — pure
+# structural scaffolding, behavior-neutral, exactly like the `mod`/`use` wiring
+# above. Kept deliberately TIGHT: `impl <Name> {` on its own line only. A trait
+# impl (`impl X for Y {`) has ` for ` after the name and does NOT match — it
+# stays residue by design (a moved trait impl is rare enough to justify in
+# review). A same-line body (`impl Foo { fn ... }`) fails the `\s*$` and stays
+# residue too, so a smuggled edit can't hide behind the wrapper. The matching
+# bare `}` is already picked up as a move by plain-mode (methods always carry
+# removed `}` lines for it to pair against).
 HEADER = re.compile(r"^(\+\+\+|---)\s")
 
 # Comment-only lines: behavior-neutral in Rust (nextest does not run doctests

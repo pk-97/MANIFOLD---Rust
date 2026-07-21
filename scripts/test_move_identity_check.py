@@ -19,6 +19,11 @@ the exit codes). Covers:
   9. D-11 deviated        → exit 1, residue > 0          (one token off the
      preamble                                            byte-exact form — any
                                                            deviation = residue)
+ 10. impl-wrapper move    → exit 0, residue 0            (D-15: a bare inherent-impl
+                                                           wrapper relocated into a
+                                                           submodule is ALLOW wiring)
+ 11. impl-wrapper body    → exit 1, residue > 0          (D-15: a body edit hiding
+     edit                                                 inside the moved wrapper)
 
 Run: python3 scripts/test_move_identity_check.py   (exit 0 = all pass)
 """
@@ -215,6 +220,32 @@ PARAMS_MODULE_DEVIATED = (
 )
 
 
+# D-15 fixtures (P-F2a, merged from origin/main): a bare inherent-impl wrapper
+# (`impl Foo {` + closing brace) relocated into a submodule is ALLOW-class
+# wiring — the wrapper line carries no behavior, only the methods do — but a
+# body edit hiding inside that moved wrapper is still caught. Ported into this
+# harness's commit_tree/CASES style during the P-F2a→lane merge (D-19).
+IMPL_FN_A = (
+    "    fn a(&self) -> u32 {\n"
+    "        let x = 1;\n"
+    "        let y = 2;\n"
+    "        x + y\n"
+    "    }\n"
+)
+IMPL_FN_B = (
+    "    fn b(&self) -> u32 {\n"
+    "        let p = 10;\n"
+    "        let q = 20;\n"
+    "        p + q\n"
+    "    }\n"
+)
+IMPL_FN_B_EDITED = IMPL_FN_B.replace("let q = 20", "let q = 30")
+IMPL_BASE = "struct Foo;\nimpl Foo {\n" + IMPL_FN_A + "\n" + IMPL_FN_B + "}\n"
+IMPL_MOD_AFTER = "struct Foo;\n\nmod overlay;\n\nimpl Foo {\n" + IMPL_FN_A + "}\n"
+IMPL_OVERLAY_AFTER = "use super::*;\n\nimpl Foo {\n" + IMPL_FN_B + "}\n"
+IMPL_OVERLAY_AFTER_EDIT = "use super::*;\n\nimpl Foo {\n" + IMPL_FN_B_EDITED + "}\n"
+
+
 def case_pure_move(repo: Path) -> tuple[bool, str]:
     commit_tree(repo, {"a.rs": HELPER + "// tail\n", "b.rs": "// b\n"}, "base")
     commit_tree(repo, {"a.rs": "// tail\n", "b.rs": "// b\n" + HELPER}, "move")
@@ -310,6 +341,30 @@ def case_preamble_deviated(repo: Path) -> tuple[bool, str]:
     return ok, f"exit={code} {out.splitlines()[0]}"
 
 
+def case_impl_wrapper_move(repo: Path) -> tuple[bool, str]:
+    commit_tree(repo, {"mod.rs": IMPL_BASE}, "base")
+    commit_tree(
+        repo,
+        {"mod.rs": IMPL_MOD_AFTER, "overlay.rs": IMPL_OVERLAY_AFTER},
+        "wrapper-move",
+    )
+    code, out = run_checker(repo)
+    ok = code == 0 and field(out, "residue") == 0 and field(out, "moved lines") > 0
+    return ok, f"exit={code} {out.splitlines()[0]}"
+
+
+def case_impl_wrapper_body_edit(repo: Path) -> tuple[bool, str]:
+    commit_tree(repo, {"mod.rs": IMPL_BASE}, "base")
+    commit_tree(
+        repo,
+        {"mod.rs": IMPL_MOD_AFTER, "overlay.rs": IMPL_OVERLAY_AFTER_EDIT},
+        "wrapper-body-edit",
+    )
+    code, out = run_checker(repo)
+    ok = code == 1 and field(out, "residue") > 0
+    return ok, f"exit={code} {out.splitlines()[0]}"
+
+
 CASES = [
     ("pure move -> exit 0", case_pure_move),
     ("smuggled edit -> exit 1", case_smuggled),
@@ -320,6 +375,8 @@ CASES = [
     ("smuggled use-block -> exit 1 [D-18]", case_smuggled_use_block),
     ("D-11 preamble move -> exit 0, scaffold [PROVEN]", case_preamble_scaffold),
     ("D-11 deviated preamble -> exit 1 [CAUGHT]", case_preamble_deviated),
+    ("impl-wrapper move -> exit 0 [D-15]", case_impl_wrapper_move),
+    ("impl-wrapper body edit -> exit 1 [D-15]", case_impl_wrapper_body_edit),
 ]
 
 
