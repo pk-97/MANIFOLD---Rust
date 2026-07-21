@@ -81,7 +81,7 @@ pub struct UITree {
     /// per-frame alloc on the UI thread). `None` for the overwhelming majority
     /// of nodes — the automation dump (§3) reaches unnamed nodes via
     /// text/type/structure instead.
-    names: Vec<Option<&'static str>>,
+    names: Vec<Option<Box<str>>>,
     /// Per-slot count of children added so far, parallel to `nodes`. The auto
     /// sibling salt for the next child of a node — so siblings get 0, 1, 2, … in
     /// build order, deterministically reproduced on rebuild.
@@ -1093,7 +1093,15 @@ impl UITree {
     /// the builder that minted `id` returns, at a high-value interaction point
     /// (§3's naming-pass scope) — most nodes stay unnamed and stay reachable via
     /// text/type/structure. A no-op (debug-asserts) on a stale/invalid id.
-    pub fn set_name(&mut self, id: NodeId, name: &'static str) {
+    ///
+    /// Accepts both `&'static str` literals (the mute/solo-chip style: one
+    /// static name shared across every instance, disambiguated by `under_text`)
+    /// and owned `String`s (the per-row identity style: param-id-derived names
+    /// on converged card rows, `WIDGET_TREE_DESIGN.md` §5 — a row's own name IS
+    /// its selector because `under_text` can't reach a control past the value
+    /// cell in a flat row). Owned names live in the tree's `names` vec and die
+    /// with the rebuild — no leak, no global interner.
+    pub fn set_name(&mut self, id: NodeId, name: impl Into<Box<str>>) {
         debug_assert!(
             self.is_live(id),
             "set_name on a stale/invalid NodeId (index {} gen {})",
@@ -1101,17 +1109,17 @@ impl UITree {
             id.generation()
         );
         if self.is_live(id) {
-            self.names[id.index()] = Some(name);
+            self.names[id.index()] = Some(name.into());
         }
     }
 
     /// `id`'s registered component name, or `None` if it was never named (the
     /// common case) or `id` is stale. Read by the automation dump (§3).
-    pub fn name_of(&self, id: NodeId) -> Option<&'static str> {
+    pub fn name_of(&self, id: NodeId) -> Option<&str> {
         if !self.is_live(id) {
             return None;
         }
-        self.names[id.index()]
+        self.names[id.index()].as_deref()
     }
 
     // ── Clear ───────────────────────────────────────────────────────

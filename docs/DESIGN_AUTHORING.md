@@ -271,9 +271,11 @@ Phasing is part of the design, not packaging. The rules that matter:
   Two rules follow. A landing that claims flow verification must account for every
   flow file on disk for that surface — a count match, not a named subset chosen
   post hoc. And when the harness *cannot observe* the behavior that matters most
-  (BUG-239: live values invisible to `--script`), the options are fix the oracle
+  (BUG-239: live values were invisible to `--script`), the options are fix the oracle
   or don't land — waiving the most important assertion and landing anyway is how
-  "green" came to mean nothing on this surface.
+  "green" came to mean nothing on this surface. (BUG-239 was later fixed the right
+  way — WS3 2026-07-21 gave converged rows queryable names + a `ScrollTo` action, so
+  a flow can now drive and observe the slider it once could only waive.)
 
 ## 8. Done deciding vs. done surveying
 
