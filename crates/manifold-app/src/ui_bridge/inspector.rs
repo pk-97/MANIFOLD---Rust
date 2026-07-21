@@ -3644,12 +3644,12 @@ mod scene_card_convergence_tests {
         })
     }
 
-    fn density_node_and_value(def: &manifold_core::effect_graph_def::EffectGraphDef) -> (u32, f32) {
+    fn density_node_id(def: &manifold_core::effect_graph_def::EffectGraphDef) -> u32 {
         let vm = SceneVm::from_def(def).expect("SceneStarter resolves as a scene");
         let AtmosphereVm::Wired(a) = vm.atmosphere else {
             panic!("SceneStarter's atmosphere must be Wired");
         };
-        (a.density_addr.node_doc_id, a.density_value)
+        a.node_doc_id
     }
 
     #[allow(clippy::type_complexity)]
@@ -4028,7 +4028,7 @@ mod scene_card_convergence_tests {
             layer_id: &LayerId,
         ) -> manifold_core::effects::ParamId {
             let catalog_default = fog_density_addr(project, layer_id);
-            let node_doc_id = density_node_and_value(&catalog_default).0;
+            let node_doc_id = density_node_id(&catalog_default);
             let (_, layer) = project
                 .timeline
                 .find_layer_by_id_mut(layer_id)

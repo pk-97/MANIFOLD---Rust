@@ -432,7 +432,6 @@ mod tests {
             object_node_id: id,
             group_node_id: None,
             name: "Obj".to_string(),
-            tint: None,
             visible_addr: addr("visible"),
             visible_value: true,
             visible_driven: false,
@@ -451,7 +450,6 @@ mod tests {
             material: crate::node_graph::scene_vm::MaterialVm::None,
             modifier_chain: Vec::new(),
             modifier_chain_parseable: true,
-            maps_present: Default::default(),
         }))
     }
 
@@ -519,7 +517,6 @@ mod tests {
             object_node_id: 5,
             group_node_id: None,
             name: "Bare".to_string(),
-            tint: None,
             visible_addr: addr("visible"),
             visible_value: true,
             visible_driven: false,
@@ -527,7 +524,6 @@ mod tests {
             material: crate::node_graph::scene_vm::MaterialVm::None,
             modifier_chain: Vec::new(),
             modifier_chain_parseable: true,
-            maps_present: Default::default(),
         }));
         let scene = scene_with(vec![row]);
         let target = gizmo_target_for(&scene, 5).unwrap();

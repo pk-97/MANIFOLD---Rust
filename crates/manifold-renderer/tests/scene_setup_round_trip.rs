@@ -45,6 +45,20 @@ fn wire(from_node: u32, from_port: &str, to_node: u32, to_port: &str) -> EffectG
     }
 }
 
+/// P3 (scene_vm slimming): `AtmosphereRow` no longer transcribes param
+/// values — it's identity-only (`node_doc_id`), the same manifest-sourced
+/// shape every other scene row now uses. This test's job is round-trip
+/// fidelity of the value itself, so it reads the reloaded def's raw param
+/// directly, by the SAME node id the Vm resolved — exactly what
+/// `state_sync.rs`'s `display_value` does downstream of this.
+fn fog_density_value(def: &EffectGraphDef, node_doc_id: u32) -> f32 {
+    let node = def.nodes.iter().find(|n| n.id == node_doc_id).expect("atmosphere node present in def");
+    match node.params.get("fog_density") {
+        Some(SerializedParamValue::Float { value }) => *value,
+        _ => 0.0,
+    }
+}
+
 /// A minimal graph: a bare `render_scene` (no objects/lights) with a wired
 /// `node.atmosphere`, at the given `fog_density`.
 fn def_with_fog(fog_density: f32) -> EffectGraphDef {
@@ -93,7 +107,9 @@ fn scene_setup_fog_edit_survives_save_reload_and_scene_vm_re_shows_it() {
         let def = layer.generator_graph().expect("graph override present");
         let vm = SceneVm::from_def(def).expect("scene found");
         match vm.atmosphere {
-            AtmosphereVm::Wired(row) => assert!((row.density_value - 0.37).abs() < 1e-6),
+            AtmosphereVm::Wired(row) => {
+                assert!((fog_density_value(def, row.node_doc_id) - 0.37).abs() < 1e-6)
+            }
             AtmosphereVm::None => panic!("expected wired atmosphere before save"),
         }
     }
@@ -122,11 +138,10 @@ fn scene_setup_fog_edit_survives_save_reload_and_scene_vm_re_shows_it() {
         .expect("graph override survived reload — the panel's edit is not silently dropped");
     let vm = SceneVm::from_def(def).expect("scene still resolves after reload");
     match vm.atmosphere {
-        AtmosphereVm::Wired(row) => assert!(
-            (row.density_value - 0.37).abs() < 1e-6,
-            "fog density must round-trip exactly; got {}",
-            row.density_value
-        ),
+        AtmosphereVm::Wired(row) => {
+            let v = fog_density_value(def, row.node_doc_id);
+            assert!((v - 0.37).abs() < 1e-6, "fog density must round-trip exactly; got {v}");
+        }
         AtmosphereVm::None => panic!(
             "atmosphere wire must survive the round trip — the panel would silently \
              show 'None' + an Add Fog button instead of the user's edit"

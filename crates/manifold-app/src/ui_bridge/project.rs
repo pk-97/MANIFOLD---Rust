@@ -1159,7 +1159,7 @@ mod tests {
         let def = effective_def(&project, &layer_id);
         let vm = manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&def).expect("scene vm");
         let fog_node_id = match vm.atmosphere {
-            manifold_renderer::node_graph::scene_vm::AtmosphereVm::Wired(a) => a.density_addr.node_doc_id,
+            manifold_renderer::node_graph::scene_vm::AtmosphereVm::Wired(a) => a.node_doc_id,
             manifold_renderer::node_graph::scene_vm::AtmosphereVm::None => {
                 panic!("SceneSetupAddFog should have wired an atmosphere node")
             }
