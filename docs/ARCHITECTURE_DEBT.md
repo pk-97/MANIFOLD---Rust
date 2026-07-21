@@ -51,6 +51,15 @@ Non-target (assessed at Wave 2, cohesive): `manifold-editing/src/service.rs` (1,
 | `manifold-renderer/src/preset_runtime.rs` | 8,175 | 63 | |
 | `manifold-renderer/src/node_graph/gltf_import.rs` | 8,502 | 77 | importer — may be largely cohesive |
 
+## Named design items (from the Wave-1 close audit, 2026-07-22 — each is a Peter-in-the-room design session, scheduled work with an owner, never a revival trigger)
+
+| Item | Scope | Origin |
+|---|---|---|
+| **CHROME_PARAMS** | App-level built-in performance params (master opacity, layer gain, crossovers) declared via a small static manifest, hosted on ParamSurface; exposure/automation/perform-surface semantics | D-39 (Peter: chrome hard-coding is an accident of history) |
+| **GESTURE_ENTRY** | Unify the frame-resident gestures (editor mapping range/affine, node-face drags) onto one designed gesture entry path; kills VD-037's two-entry-point risk class by construction | P-I Fork-2 compromise |
+| **ROW_MODEL_EDGES** | Decide end-states for relight rows outside RowHost (historical special-casing) and RowHost's params-by-reference routing surface | P-S2/P-S3 seam compromises |
+| **VERIFICATION_INFRA (priority-one prerequisite for any future UI wave)** | The flow-driver blind-spot family (BUG-234/293/294/296/300) behind all 7 known-red flows — the oracle every UI wave leans on | Wave-1 close audit |
+
 ## Explicit non-targets (cohesive; do not split for size)
 
 `render_scene.rs` (one primitive) · `freeze/proof.rs`, `freeze/region.rs` (single compiler stages) · `wgsl_compute.rs` (one primitive) · test files except where their code moves.
