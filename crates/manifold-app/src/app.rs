@@ -1,4 +1,4 @@
-use manifold_ui::{AudioSetupAction, ModulationAction, ParamsAction, ProjectAction};
+use manifold_ui::{AudioSetupAction, ModulationAction, ProjectAction};
 use std::sync::Arc;
 
 use winit::application::ApplicationHandler;
@@ -57,11 +57,8 @@ pub(crate) enum ActiveInspectorDrag {
         layer_id: LayerId,
         value: f32,
     },
-    Param {
-        target: manifold_core::GraphTarget,
-        param_id: manifold_core::effects::ParamId,
-        value: f32,
-    },
+    // `Param` migrated to the unified scrub gesture (`ui_bridge::scrub::
+    // ResolvedScrub::Param`, P-I / D4).
     /// A macro-knob drag. Macros are carried in every `ModulationSnapshot`
     /// block (applied every tick since `ac96c65c`), so an unguarded macro
     /// drag gets stomped back to the content thread's stale value mid-gesture
@@ -188,22 +185,6 @@ impl ActiveInspectorDrag {
                 if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id) {
                     layer.opacity = *value;
                 }
-            }
-            Self::Param {
-                target,
-                param_id,
-                value,
-            } => {
-                project.with_preset_graph_mut(target, |inst| {
-                    // Restore through the SAME write the drag's motion ticks
-                    // use (`ParamChanged` → `set_base_param`): the commit
-                    // reads the BASE value, so an effective-only restore
-                    // (`set_param`) leaves base stale after a snapshot swap
-                    // and the commit sees old == new — no undo entry. The
-                    // `touched` mark is correct here: this replays a live
-                    // user gesture, and the drag's own ticks already set it.
-                    inst.set_base_param(param_id.as_ref(), *value);
-                });
             }
             Self::Macro { idx, value } => {
                 manifold_core::macro_bank::MacroBank::apply_macro(project, *idx, *value);
@@ -1406,15 +1387,26 @@ impl Application {
                         if ctx.whole_numbers {
                             v = v.round();
                         }
-                        // Mirror the slider drag's live-set + commit so the type-in
-                        // is one undoable step: snapshot the old base, set the new
-                        // value live, then commit (builds the undo from the snap).
-                        self.scrub.slider_snapshot = Some(ctx.old_value);
+                        // Mirror the slider drag as one undoable step by driving
+                        // the SAME scrub wire (P-I / D4, the D8 direct-set
+                        // shape): Begin captures the old base as the undo
+                        // baseline, Move sets the new value live, Commit builds
+                        // the one undo entry (old base → typed value).
                         let content_tx = self.content_tx.as_ref().unwrap().clone();
-                        use manifold_ui::panels::PanelAction;
+                        use manifold_ui::panels::{PanelAction, ScrubPhase, ScrubValue, ValueRef};
                         for act in [
-                            PanelAction::Params(ParamsAction::ParamChanged(ctx.target.clone(), ctx.param_id.clone(), v)),
-                            PanelAction::Params(ParamsAction::ParamCommit(ctx.target, ctx.param_id.clone())),
+                            PanelAction::Scrub(
+                                ValueRef::Param(ctx.target.clone(), ctx.param_id.clone()),
+                                ScrubPhase::Begin,
+                            ),
+                            PanelAction::Scrub(
+                                ValueRef::Param(ctx.target.clone(), ctx.param_id.clone()),
+                                ScrubPhase::Move(ScrubValue::Scalar(v)),
+                            ),
+                            PanelAction::Scrub(
+                                ValueRef::Param(ctx.target, ctx.param_id.clone()),
+                                ScrubPhase::Commit,
+                            ),
                         ] {
                             let mut dctx = crate::ui_bridge::DispatchCtx {
                                 project: &mut self.local_project,
@@ -2047,7 +2039,7 @@ impl Application {
                             // uses (app_render.rs), never `SetGraphNodeParam`
                             // on the inner node.
                             if let Some(target) = self.watched_graph_target.as_ref() {
-                                use manifold_ui::panels::PanelAction;
+                                use manifold_ui::panels::{PanelAction, ScrubPhase, ScrubValue, ValueRef};
                                 let gpt = match target {
                                     manifold_core::GraphTarget::Effect(_) => {
                                         manifold_ui::panels::GraphParamTarget::Effect(0)
@@ -2056,11 +2048,13 @@ impl Application {
                                         manifold_ui::panels::GraphParamTarget::Generator
                                     }
                                 };
-                                let action = PanelAction::Params(ParamsAction::ParamChanged(
-                                    gpt,
-                                    manifold_core::effects::ParamId::from(outer_param_id),
-                                    v,
-                                ));
+                                let action = PanelAction::Scrub(
+                                    ValueRef::Param(
+                                        gpt,
+                                        manifold_core::effects::ParamId::from(outer_param_id),
+                                    ),
+                                    ScrubPhase::Move(ScrubValue::Scalar(v)),
+                                );
                                 let content_tx = self.content_tx.as_ref().unwrap();
                                 let editor_target = self.watched_graph_target.as_ref();
                                 let mut dctx = crate::ui_bridge::DispatchCtx {

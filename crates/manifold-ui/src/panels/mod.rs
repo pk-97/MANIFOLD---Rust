@@ -20,6 +20,7 @@ pub mod overlay;
 pub mod param_card;
 pub mod picker_core;
 pub mod param_slider_shared;
+pub mod scrub;
 pub mod perf_hud;
 pub mod scene_setup_panel;
 pub mod settings_popup;
@@ -42,6 +43,10 @@ pub use actions::{
     AudioSetupAction, BrowserAction, ClipAction, EditingAction, LayerAction, MappingAction,
     MarkerAction, ModulationAction, ParamsAction, ProjectAction, RootAction, TransportAction,
 };
+
+// The unified scrub wire (P-I / D4): one `Scrub` arm collapses the
+// per-family `*Snapshot`/`*Changed`/`*Commit` trios.
+pub use scrub::{ScrubPhase, ScrubValue, ValueRef};
 
 /// A stable, distinct identity color for an audio send, derived from its id so
 /// it survives reorders without any stored field. Used by the Audio Setup row
@@ -193,6 +198,10 @@ pub enum PanelAction {
     Mapping(MappingAction),
     AudioSetup(AudioSetupAction),
     Root(RootAction),
+    /// A value-scrub gesture, addressed not by family (P-I / D4): one arm for
+    /// every slider/knob/enum-cycle drag, replacing the retired
+    /// `*Snapshot`/`*Changed`/`*Commit` trios. See [`scrub`].
+    Scrub(ValueRef, ScrubPhase),
 }
 
 impl PanelAction {

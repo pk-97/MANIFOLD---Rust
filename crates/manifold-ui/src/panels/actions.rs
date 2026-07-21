@@ -355,11 +355,8 @@ pub enum ParamsAction {
     /// structural rebuild so every card's drawers hide/show. No model mutation.
     ModsCompactToggled,
     EffectCardClicked(usize),
-    ParamSnapshot(GraphParamTarget, ParamId),
-    ParamChanged(GraphParamTarget, ParamId, f32),
-    ParamCommit(GraphParamTarget, ParamId),
     /// one atomic enum write (a dropdown pick). Dispatch runs the
-    /// existing `ParamSnapshot`/`ParamChanged`/`ParamCommit` trio in
+    /// generic `Scrub(ValueRef::Param, …)` gesture (Begin/Move/Commit) in
     /// sequence, so the scene id_map interception and the one-undo-unit
     /// granularity come free — no new mutation path.
     ParamEnumSet(GraphParamTarget, ParamId, f32),

@@ -29,7 +29,7 @@ mod scene_card_convergence_tests {
     use manifold_core::effects::ParameterDriver;
     use manifold_core::types::{BeatDivision, DriverWaveform};
     use manifold_core::LayerId;
-    use manifold_ui::{DriverConfigAction, PanelAction};
+    use manifold_ui::{DriverConfigAction, PanelAction, ScrubPhase, ScrubValue, ValueRef};
     use crate::ui_bridge::DispatchResult;
     use crate::app::SelectionState;
     use crate::content_command::ContentCommand;
@@ -365,9 +365,9 @@ mod scene_card_convergence_tests {
         /// guarded drag (app_render.rs ~808-817).
         fn snapshot_stomp(h: &Harness, stale: &Project) -> Project {
             let mut p = stale.clone();
-            if let Some(ref drag) = h.scrub.active_inspector_drag {
-                drag.apply(&mut p);
-            }
+            // Restore whichever gesture is live — the interim
+            // `active_inspector_drag` families or the P-I `active` gesture.
+            h.scrub.restore_dragged(&mut p);
             p
         }
 
@@ -694,11 +694,11 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 |h, p| {
-                    h.dispatch(&PanelAction::Params(ParamsAction::ParamSnapshot(gpt(), pid.clone())), p);
-                    h.dispatch(&PanelAction::Params(ParamsAction::ParamChanged(gpt(), pid.clone(), before + 0.1)), p);
-                    h.dispatch(&PanelAction::Params(ParamsAction::ParamChanged(gpt(), pid.clone(), after)), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::Param(gpt(), pid.clone()), ScrubPhase::Begin), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::Param(gpt(), pid.clone()), ScrubPhase::Move(ScrubValue::Scalar(before + 0.1))), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::Param(gpt(), pid.clone()), ScrubPhase::Move(ScrubValue::Scalar(after))), p);
                 },
-                |h, p| h.dispatch(&PanelAction::Params(ParamsAction::ParamCommit(gpt(), pid.clone())), p),
+                |h, p| h.dispatch(&PanelAction::Scrub(ValueRef::Param(gpt(), pid.clone()), ScrubPhase::Commit), p),
                 move |p| gen_inst(p, &probe_lid).get_base_param(probe_pid.as_ref()),
                 before,
                 after,
@@ -752,9 +752,9 @@ mod scene_card_convergence_tests {
             let after = before_a + 0.25;
 
             let target = manifold_ui::GraphParamTarget::GeneratorOf(layer_a.clone());
-            h.dispatch(&PanelAction::Params(ParamsAction::ParamSnapshot(target.clone(), pid.clone())), &mut project);
-            h.dispatch(&PanelAction::Params(ParamsAction::ParamChanged(target.clone(), pid.clone(), after)), &mut project);
-            h.dispatch(&PanelAction::Params(ParamsAction::ParamCommit(target, pid.clone())), &mut project);
+            h.dispatch(&PanelAction::Scrub(ValueRef::Param(target.clone(), pid.clone()), ScrubPhase::Begin), &mut project);
+            h.dispatch(&PanelAction::Scrub(ValueRef::Param(target.clone(), pid.clone()), ScrubPhase::Move(ScrubValue::Scalar(after))), &mut project);
+            h.dispatch(&PanelAction::Scrub(ValueRef::Param(target, pid.clone()), ScrubPhase::Commit), &mut project);
 
             assert_eq!(
                 gen_inst(&project, &layer_a).get_base_param(pid.as_ref()),

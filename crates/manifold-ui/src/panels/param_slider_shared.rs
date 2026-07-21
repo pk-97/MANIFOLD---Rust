@@ -5,12 +5,12 @@
 //! builders, and formatting helpers across both kinds. This module is the
 //! single source of truth for them.
 
-use crate::{AudioSetupAction, ModulationAction, ParamsAction, RootAction};
+use crate::{AudioSetupAction, ModulationAction, RootAction};
 use super::DriverConfigAction;
 use super::TrimKind;
 use super::param_card::RowMod;
 use crate::param_surface::ParamRow;
-use super::{AudioShapeParam, GraphParamTarget, PanelAction};
+use super::{AudioShapeParam, GraphParamTarget, PanelAction, ScrubPhase, ScrubValue, ValueRef};
 use crate::chrome::{Theme, View};
 use crate::color;
 use crate::drag::DragController;
@@ -981,9 +981,12 @@ pub(crate) fn enum_value_cell_actions(
         let next = (current_index + 1) % count;
         let new_value = min + next as f32;
         vec![
-            PanelAction::Params(ParamsAction::ParamSnapshot(target.clone(), param_id.clone())),
-            PanelAction::Params(ParamsAction::ParamChanged(target.clone(), param_id.clone(), new_value)),
-            PanelAction::Params(ParamsAction::ParamCommit(target, param_id)),
+            PanelAction::Scrub(ValueRef::Param(target.clone(), param_id.clone()), ScrubPhase::Begin),
+            PanelAction::Scrub(
+                ValueRef::Param(target.clone(), param_id.clone()),
+                ScrubPhase::Move(ScrubValue::Scalar(new_value)),
+            ),
+            PanelAction::Scrub(ValueRef::Param(target, param_id), ScrubPhase::Commit),
         ]
     } else {
         vec![PanelAction::Root(RootAction::ParamEnumDropdown {
@@ -2592,9 +2595,12 @@ pub(crate) fn build_param_row(
     // seed both `ids.slider_reset` (below) and the `BitmapSlider::build` call
     // that materialises the track it fires on.
     let reset = PanelAction::slider_reset(
-        PanelAction::Params(ParamsAction::ParamSnapshot(target.clone(), info.id.clone())),
-        PanelAction::Params(ParamsAction::ParamChanged(target.clone(), info.id.clone(), info.spec.default)),
-        PanelAction::Params(ParamsAction::ParamCommit(target.clone(), info.id.clone())),
+        PanelAction::Scrub(ValueRef::Param(target.clone(), info.id.clone()), ScrubPhase::Begin),
+        PanelAction::Scrub(
+            ValueRef::Param(target.clone(), info.id.clone()),
+            ScrubPhase::Move(ScrubValue::Scalar(info.spec.default)),
+        ),
+        PanelAction::Scrub(ValueRef::Param(target.clone(), info.id.clone()), ScrubPhase::Commit),
     );
     let mut ids = ParamRowIds {
         // Overwritten with the real row-catcher node below before any read.

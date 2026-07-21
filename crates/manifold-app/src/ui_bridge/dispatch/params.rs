@@ -498,108 +498,13 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             inspector.apply_selection_visuals(tree);
             DispatchResult::handled()
         }
-        // BUG-061: the old bespoke per-param right-click reset action was
-        // deleted — reset now rides the generic `SliderReset` trio
-        // (`ParamSnapshot`/`ParamChanged`/`ParamCommit` below), reusing
-        // these same handlers instead of a bespoke code path. Known
-        // trade-off: this drops the eased "value snap-back" fill animation
-        // the old handler drove via `begin_value_snapback` (D15) — the value
-        // now jumps to default like any other committed change instead of
-        // easing to it. `begin_value_snapback` itself is left in place in
-        // manifold-ui (still exercised by its own unit tests) but has no
-        // remaining production caller.
-        ParamsAction::ParamSnapshot(gpt, param_id) => {
-            if let Some(target) =
-                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
-            {
-                let val = ctx.project
-                    .with_preset_graph_mut(&target, |inst| {
-                        inst.params
-                            .contains(param_id.as_ref())
-                            .then(|| inst.get_base_param(param_id.as_ref()))
-                    })
-                    .flatten();
-                if let Some(val) = val {
-                    // Touch-to-select (P5, `docs/AUTOMATION_LANES_DESIGN.md`
-                    // §7 addendum): the ONE funnel every param drag fires
-                    // through, once per touch. Layer-scoped only (Master/Clip
-                    // tabs have no layer for the chooser to live on, per §7's
-                    // "automation lives on the layer").
-                    if effective_tab.is_layer_scope()
-                        && let Some(layer_id) = active_layer.clone()
-                    {
-                        ctx.selection.set_chosen_automation_param(
-                            layer_id,
-                            crate::editing_host::to_ui_graph_target(&target),
-                            param_id.clone(),
-                        );
-                    }
-                    ctx.scrub.slider_snapshot = Some(val);
-                    ctx.scrub.active_inspector_drag = Some(crate::app::ActiveInspectorDrag::Param {
-                        target,
-                        param_id: param_id.clone(),
-                        value: val,
-                    });
-                }
-            }
-            DispatchResult::handled()
-        }
-        ParamsAction::ParamChanged(gpt, param_id, val) => {
-            if let Some(target) =
-                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
-            {
-                ctx.project.with_preset_graph_mut(&target, |inst| {
-                    inst.set_base_param(param_id.as_ref(), *val);
-                });
-                if let Some(crate::app::ActiveInspectorDrag::Param { value, .. }) =
-                    &mut ctx.scrub.active_inspector_drag
-                {
-                    *value = *val;
-                }
-                let pid = param_id.clone();
-                let v = *val;
-                let t = target.clone();
-                ContentCommand::send(
-                    ctx.content_tx,
-                    ContentCommand::MutateProjectLive(Box::new(move |p| {
-                        p.with_preset_graph_mut(&t, |inst| {
-                            inst.set_base_param(pid.as_ref(), v);
-                        });
-                    })),
-                );
-            }
-            DispatchResult::handled()
-        }
-        ParamsAction::ParamCommit(gpt, param_id) => {
-            // Release commits ONE `ChangeGraphParamCommand` through the
-            // undo-tracked `ContentCommand::Execute` path — one undo unit per
-            // gesture, not per motion event.
-            if let Some(old_val) = ctx.scrub.slider_snapshot.take()
-                && let Some(target) =
-                    resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
-            {
-                let new_val = ctx.project
-                    .with_preset_graph_mut(&target, |inst| {
-                        inst.params
-                            .contains(param_id.as_ref())
-                            .then(|| inst.get_base_param(param_id.as_ref()))
-                    })
-                    .flatten();
-                if let Some(new_val) = new_val
-                    && (old_val - new_val).abs() > f32::EPSILON
-                {
-                    let cmd = ChangeGraphParamCommand::new(
-                        target,
-                        param_id.clone(),
-                        old_val,
-                        new_val,
-                    );
-                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
-                }
-            }
-            ctx.scrub.active_inspector_drag = None;
-            DispatchResult::handled()
-        }
+        // The plain-param scrub trio (`ParamSnapshot`/`ParamChanged`/
+        // `ParamCommit`) migrated to the unified `PanelAction::Scrub` wire
+        // (`ui_bridge/scrub.rs`, P-I / D4). Right-click reset still rides the
+        // generic `SliderReset` — its three boxed actions are now `Scrub`
+        // gestures. (The old bespoke reset dropped the eased snap-back fill
+        // `begin_value_snapback` drove; that helper stays in manifold-ui with
+        // no production caller.)
         // BUG-250: an enum dropdown pick — one atomic write, one undo unit,
         // no drag. `ParamToggle`'s read-old/write-new `ChangeGraphParamCommand`
         // shape, exactly as `ParamChanged`/`ParamToggle` already do.

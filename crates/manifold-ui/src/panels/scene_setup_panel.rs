@@ -28,7 +28,7 @@ use crate::scroll_container::{SCROLLBAR_W, ScrollContainer, ScrollbarStyle};
 use crate::tree::UITree;
 use manifold_foundation::{AudioSendId, LayerId};
 
-use super::{GraphParamTarget, PanelAction};
+use super::{GraphParamTarget, PanelAction, ScrubPhase, ScrubValue, ValueRef};
 use super::drawer::DrawerIds;
 use super::param_card::{RowGeometry, RowMod};
 use super::param_slider_shared::{
@@ -2445,8 +2445,11 @@ impl ScenePanel {
                         return (
                             true,
                             vec![
-                                PanelAction::Params(ParamsAction::ParamSnapshot(target.clone(), pid.clone())),
-                                PanelAction::Params(ParamsAction::ParamChanged(target, pid, new_value)),
+                                PanelAction::Scrub(ValueRef::Param(target.clone(), pid.clone()), ScrubPhase::Begin),
+                                PanelAction::Scrub(
+                                    ValueRef::Param(target, pid),
+                                    ScrubPhase::Move(ScrubValue::Scalar(new_value)),
+                                ),
                             ],
                         );
                     }
@@ -2474,7 +2477,13 @@ impl ScenePanel {
                 {
                     let target = GraphParamTarget::GeneratorOf(lid);
                     let pid = self.properties_card.pid_at(pi);
-                    return (true, vec![PanelAction::Params(ParamsAction::ParamChanged(target, pid, new_value))]);
+                    return (
+                        true,
+                        vec![PanelAction::Scrub(
+                            ValueRef::Param(target, pid),
+                            ScrubPhase::Move(ScrubValue::Scalar(new_value)),
+                        )],
+                    );
                 }
                 (false, Vec::new())
             }
@@ -2490,7 +2499,10 @@ impl ScenePanel {
                         && let Some(lid) = lid.clone()
                     {
                         let pid = self.properties_card.pid_at(pi);
-                        actions.push(PanelAction::Params(ParamsAction::ParamCommit(GraphParamTarget::GeneratorOf(lid), pid)));
+                        actions.push(PanelAction::Scrub(
+                            ValueRef::Param(GraphParamTarget::GeneratorOf(lid), pid),
+                            ScrubPhase::Commit,
+                        ));
                     }
                 }
                 self.drag_layer_id = None;

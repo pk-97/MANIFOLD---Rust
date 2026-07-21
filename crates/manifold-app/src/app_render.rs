@@ -8,7 +8,7 @@ use manifold_ui::{ClipAction, LayerAction, MarkerAction, ParamsAction, ProjectAc
 use manifold_renderer::ui_renderer::UIRenderer;
 
 use manifold_ui::node::FontWeight;
-use manifold_ui::panels::PanelAction;
+use manifold_ui::panels::{PanelAction, ScrubPhase, ScrubValue, ValueRef};
 use manifold_ui::timeline_editing_host::TimelineEditingHost;
 
 use crate::app::Application;
@@ -178,10 +178,10 @@ impl Application {
                             drop(snapshot);
                         }
                         // Restore actively-dragged inspector field so snapshot
-                        // doesn't overwrite the value the user is manipulating.
-                        if let Some(ref drag) = self.scrub.active_inspector_drag {
-                            drag.apply(&mut self.local_project);
-                        }
+                        // doesn't overwrite the value the user is manipulating
+                        // (interim `ActiveInspectorDrag` families + the P-I
+                        // `active` gesture).
+                        self.scrub.restore_dragged(&mut self.local_project);
                         // Same for a bound-node-param card scrub (BUG-281):
                         // its live writes go straight to `local_project`
                         // every tick, so a snapshot swap mid-gesture must
@@ -240,10 +240,10 @@ impl Application {
                 {
                     mod_snap.apply(&mut self.local_project);
                     // Restore actively-dragged inspector field so modulation
-                    // doesn't overwrite the value the user is manipulating.
-                    if let Some(ref drag) = self.scrub.active_inspector_drag {
-                        drag.apply(&mut self.local_project);
-                    }
+                    // doesn't overwrite the value the user is manipulating
+                    // (interim `ActiveInspectorDrag` families + the P-I `active`
+                    // gesture).
+                    self.scrub.restore_dragged(&mut self.local_project);
                     // BUG-281: mirror for a bound-node-param card scrub.
                     if let Some(ref drag) = self.bound_node_param_drag {
                         drag.apply(&mut self.local_project);
@@ -1402,7 +1402,6 @@ impl Application {
                     self.text_input.inspector_param = Some(crate::text_input::InspectorParamCtx {
                         target: target.clone(),
                         param_id: param_id.clone(),
-                        old_value: *value,
                         whole_numbers: *whole_numbers,
                     });
                     continue;
@@ -2451,11 +2450,13 @@ impl Application {
                                 manifold_ui::panels::GraphParamTarget::Generator
                             }
                         };
-                        let action = PanelAction::Params(ParamsAction::ParamChanged(
-                            gpt,
-                            manifold_core::effects::ParamId::from(outer_param_id.clone()),
-                            *new_value,
-                        ));
+                        let action = PanelAction::Scrub(
+                            ValueRef::Param(
+                                gpt,
+                                manifold_core::effects::ParamId::from(outer_param_id.clone()),
+                            ),
+                            ScrubPhase::Move(ScrubValue::Scalar(*new_value)),
+                        );
                         let content_tx = self.content_tx.as_ref().unwrap();
                         let editor_target = self.watched_graph_target.as_ref();
                         let mut dctx = crate::ui_bridge::DispatchCtx {

@@ -291,6 +291,10 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
             | RootAction::AudioSendChannelClicked(_)
             | RootAction::OpenAbletonPickerForParam(..) => DispatchResult::unhandled(),
         },
+
+        // ── Scrub: the unified value-scrub gesture (P-I / D4). One handler for
+        // every ported family, addressed by `ValueRef`, phased Begin/Move/Commit.
+        PanelAction::Scrub(value_ref, phase) => scrub::dispatch_scrub(value_ref, phase, ctx),
     }
 }
 

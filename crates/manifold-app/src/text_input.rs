@@ -167,8 +167,6 @@ pub struct TableCellEdit {
 pub struct InspectorParamCtx {
     pub target: manifold_ui::panels::GraphParamTarget,
     pub param_id: manifold_core::effects::ParamId,
-    /// Base value at open — the undo "from" value and the slider's set point.
-    pub old_value: f32,
     pub whole_numbers: bool,
 }
 
