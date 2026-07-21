@@ -78,7 +78,14 @@ Design-doc P-S headline amendment is drafted at phase close (my close report).
       + chrome_param_card_proof + param_surface INV + app baseline suites), swatch --no-run=0 (D-37);
       team-lead already accepted incl. look-oracle. REVIEWED + ACCEPTED by team-lead before P-S3.
 
-- [ ] **P-S3** collapse `SceneCardState` onto `RowHost` (SEMANTIC · Opus lane · depends P-S2) — GO
+- [x] **P-S3** DONE — commit `b1213b5e`. SceneCardState embeds+delegates to shared RowHost (symmetry
+      ruling honored, RowHost untouched). Deletion gates INDEPENDENTLY PASS: `fn pid_at`→0,
+      `mirror.*ParamCardPanel`→0. scene_setup_panel.rs 3585→3305 (~280 net deleted; honest under-estimate
+      vs census ~350-450, team-lead prefers honest number). Behavioral-equivalence sound on all three legs
+      (all-None osc gating, unreachable role branches, INV-4 salts pinned) — team-lead REVIEWED + ACCEPTED.
+      Heavy gates INDEPENDENTLY GREEN: clippy=0, nextest=0 (1172 passed), swatch=0, scene flows 17/17
+      passed (1 xfail = pre-existing BUG-239/VD-035 known-red, NOT a regression; 41/41 accounted).
+      The two surfaces now share ONE row-host and cannot diverge again.
       TEAM-LEAD RULING (bake into brief): SceneCardState EMBEDS a RowHost matching ParamCardPanel's
       shape — own model fields, delegated machinery. Do NOT fold rows/mod_state into RowHost (host
       SYMMETRY beats param-count; asymmetric ownership between the two hosts = a new divergence axis).
