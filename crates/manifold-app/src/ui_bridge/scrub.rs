@@ -116,6 +116,12 @@ pub enum ResolvedScrub {
     /// the restore path re-applies through `apply_macro` — the same write Move
     /// uses — or a per-tick apply stomps the in-flight value.
     Macro { idx: usize, baseline: f32, live: f32 },
+    /// A layer's audio-input gain (dB) — `layer_id` captured at Begin.
+    LayerAudioGain {
+        layer_id: LayerId,
+        baseline: f32,
+        live: f32,
+    },
 }
 
 impl ResolvedScrub {
@@ -150,6 +156,11 @@ impl ResolvedScrub {
             }
             ResolvedScrub::Macro { idx, live, .. } => {
                 manifold_core::macro_bank::MacroBank::apply_macro(project, *idx, *live);
+            }
+            ResolvedScrub::LayerAudioGain { layer_id, live, .. } => {
+                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id) {
+                    layer.audio_gain_db = *live;
+                }
             }
         }
     }
@@ -477,5 +488,60 @@ pub(crate) fn dispatch_scrub(
                 }
             }
         }
+
+        ValueRef::LayerAudioGain(id) => match phase {
+            ScrubPhase::Begin => {
+                if let Some((_, layer)) = ctx.project.timeline.find_layer_by_id(id) {
+                    let db = layer.audio_gain_db;
+                    ctx.scrub.active = Some(ResolvedScrub::LayerAudioGain {
+                        layer_id: id.clone(),
+                        baseline: db,
+                        live: db,
+                    });
+                }
+                DispatchResult::handled()
+            }
+            ScrubPhase::Move(sv) => {
+                if let Some(v) = sv.scalar()
+                    && let Some((_, layer)) = ctx.project.timeline.find_layer_by_id_mut(id)
+                {
+                    layer.audio_gain_db = v;
+                    if let Some(ResolvedScrub::LayerAudioGain { live, .. }) = &mut ctx.scrub.active {
+                        *live = v;
+                    }
+                    let id = id.clone();
+                    ContentCommand::send(
+                        ctx.content_tx,
+                        ContentCommand::MutateProjectLive(Box::new(move |p| {
+                            if let Some((_, l)) = p.timeline.find_layer_by_id_mut(&id) {
+                                l.audio_gain_db = v;
+                            }
+                        })),
+                    );
+                }
+                DispatchResult::handled()
+            }
+            ScrubPhase::Commit => {
+                let baseline = match &ctx.scrub.active {
+                    Some(ResolvedScrub::LayerAudioGain { baseline, .. }) => Some(*baseline),
+                    _ => None,
+                };
+                if let Some(old_db) = baseline
+                    && let Some((_, layer)) = ctx.project.timeline.find_layer_by_id(id)
+                {
+                    let new_db = layer.audio_gain_db;
+                    if (old_db - new_db).abs() > f32::EPSILON {
+                        let cmd = manifold_editing::commands::layer::SetLayerAudioGainCommand::new(
+                            layer.layer_id.clone(),
+                            old_db,
+                            new_db,
+                        );
+                        ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
+                    }
+                }
+                ctx.scrub.active = None;
+                DispatchResult::handled()
+            }
+        },
     }
 }

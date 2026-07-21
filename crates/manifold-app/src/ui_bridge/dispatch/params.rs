@@ -57,58 +57,8 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
 
         // Master-opacity + LED-brightness scrub trios migrated to the unified
         // `PanelAction::Scrub` wire (`ui_bridge/scrub.rs`, P-I / D4).
-        // ── Audio-layer gain slider (layer header) ─────────────────
-        ParamsAction::AudioGainSnapshot(id) => {
-            ctx.scrub.slider_snapshot = ctx.project
-                .timeline
-                .find_layer_by_id(id)
-                .map(|(_, l)| l.audio_gain_db);
-            if let Some(db) = ctx.scrub.slider_snapshot {
-                ctx.scrub.active_inspector_drag = Some(crate::app::ActiveInspectorDrag::AudioGain {
-                    layer_id: id.clone(),
-                    db,
-                });
-            }
-            DispatchResult::handled()
-        }
-        ParamsAction::AudioGainChanged(id, db) => {
-            let db = *db;
-            if let Some(crate::app::ActiveInspectorDrag::AudioGain { db: guard, .. }) =
-                &mut ctx.scrub.active_inspector_drag
-            {
-                *guard = db;
-            }
-            if let Some((_, layer)) = ctx.project.timeline.find_layer_by_id_mut(id) {
-                layer.audio_gain_db = db;
-                let id = id.clone();
-                ContentCommand::send(
-                    ctx.content_tx,
-                    ContentCommand::MutateProjectLive(Box::new(move |p| {
-                        if let Some((_, l)) = p.timeline.find_layer_by_id_mut(&id) {
-                            l.audio_gain_db = db;
-                        }
-                    })),
-                );
-            }
-            DispatchResult::handled()
-        }
-        ParamsAction::AudioGainCommit(id) => {
-            ctx.scrub.active_inspector_drag = None;
-            if let Some(old_db) = ctx.scrub.slider_snapshot.take()
-                && let Some((_, layer)) = ctx.project.timeline.find_layer_by_id(id)
-            {
-                let new_db = layer.audio_gain_db;
-                if (old_db - new_db).abs() > f32::EPSILON {
-                    let cmd = manifold_editing::commands::layer::SetLayerAudioGainCommand::new(
-                        layer.layer_id.clone(),
-                        old_db,
-                        new_db,
-                    );
-                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
-                }
-            }
-            DispatchResult::handled()
-        }
+        // Layer audio-gain scrub trio migrated to `PanelAction::Scrub`
+        // (`ValueRef::LayerAudioGain`, P-I / D4).
         ParamsAction::MasterCollapseToggle => {
             ctx.ui.inspector.master_chrome_mut().toggle_collapsed();
             DispatchResult::structural()

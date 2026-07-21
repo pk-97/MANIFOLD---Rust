@@ -309,12 +309,8 @@ pub enum ClipAction {
 
 #[derive(Debug, Clone)]
 pub enum ParamsAction {
-    /// Audio-layer Gain slider drag begins — snapshot for undo.
-    AudioGainSnapshot(LayerId),
-    /// Audio-layer Gain slider dragged to a new dB value (layer, dB).
-    AudioGainChanged(LayerId, f32),
-    /// Audio-layer Gain slider released — commit one undo step.
-    AudioGainCommit(LayerId),
+    // Audio-layer Gain scrub trio migrated to `PanelAction::Scrub`
+    // (`ValueRef::LayerAudioGain`, P-I / D4).
     MasterCollapseToggle,
     MasterExitPathClicked,
     /// Set LED exit path index: -1 = after all FX, 0 = before FX, N = after effect N-1.

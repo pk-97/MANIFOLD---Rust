@@ -19,7 +19,7 @@
 //! data (the resolved core target captured for the mid-gesture snapshot-stomp
 //! guard) lives app-side in `ui_bridge::scrub::ScrubState`, not here.
 
-use manifold_foundation::ParamId;
+use manifold_foundation::{LayerId, ParamId};
 
 use super::GraphParamTarget;
 
@@ -82,4 +82,7 @@ pub enum ValueRef {
     LayerOpacity,
     /// A macro-bank knob by slot index — was `Macro{Snapshot,Changed,Commit}`.
     Macro(usize),
+    /// A layer's audio-input gain (layer header) — was `AudioGain{Snapshot,
+    /// Changed,Commit}`. Keyed by the layer id.
+    LayerAudioGain(LayerId),
 }

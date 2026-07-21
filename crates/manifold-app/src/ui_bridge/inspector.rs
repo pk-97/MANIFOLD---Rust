@@ -651,11 +651,11 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 |h, p| {
-                    h.dispatch(&PanelAction::Params(ParamsAction::AudioGainSnapshot(lid.clone())), p);
-                    h.dispatch(&PanelAction::Params(ParamsAction::AudioGainChanged(lid.clone(), 3.0)), p);
-                    h.dispatch(&PanelAction::Params(ParamsAction::AudioGainChanged(lid.clone(), -6.0)), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::LayerAudioGain(lid.clone()), ScrubPhase::Begin), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::LayerAudioGain(lid.clone()), ScrubPhase::Move(ScrubValue::Scalar(3.0))), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::LayerAudioGain(lid.clone()), ScrubPhase::Move(ScrubValue::Scalar(-6.0))), p);
                 },
-                |h, p| h.dispatch(&PanelAction::Params(ParamsAction::AudioGainCommit(lid.clone())), p),
+                |h, p| h.dispatch(&PanelAction::Scrub(ValueRef::LayerAudioGain(lid.clone()), ScrubPhase::Commit), p),
                 move |p| {
                     p.timeline
                         .find_layer_by_id(&lid2)

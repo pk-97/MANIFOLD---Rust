@@ -67,13 +67,8 @@ pub(crate) enum ActiveInspectorDrag {
         min: f32,
         max: f32,
     },
-    /// A layer-header audio-gain drag (`AudioGain*` trio). Unguarded, a
-    /// mid-drag snapshot swap reverted the in-flight dB and the commit saw
-    /// old == new — no undo entry (undo audit 2026-07-19, cluster C).
-    AudioGain {
-        layer_id: LayerId,
-        db: f32,
-    },
+    // AudioGain (layer-header audio-gain trio) migrated to the unified scrub
+    // gesture (`ui_bridge::scrub::ResolvedScrub::LayerAudioGain`, P-I / D4).
     /// An envelope target (orange handle) drag (`Target*` trio).
     EnvelopeTarget {
         target: manifold_core::GraphTarget,
@@ -217,11 +212,6 @@ impl ActiveInspectorDrag {
             // Every restore below writes through the SAME store the family's
             // live `*Changed` arm writes, so a mid-drag snapshot swap can't
             // revert the in-flight value (undo audit 2026-07-19, cluster C).
-            Self::AudioGain { layer_id, db } => {
-                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id) {
-                    layer.audio_gain_db = *db;
-                }
-            }
             Self::EnvelopeTarget {
                 target,
                 param_id,
