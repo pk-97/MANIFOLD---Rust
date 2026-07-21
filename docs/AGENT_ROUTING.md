@@ -23,6 +23,7 @@ The overnight waves failed because Sonnet orchestrated Sonnet and let 100% of gr
   - **Briefs restate the invariants every time** (one commit then stop, pathspec commits, no landing, worktree via the slot ring, explicit `model`, LOW effort). The proving run held discipline because every brief repeated it, not because agents absorbed CLAUDE.md.
   - **Enforcement is mechanical where possible:** `agent-model-guard.py` (explicit model per spawn), `agent-tier-spawn-guard.py` (denies Agent spawns by Sonnet/Haiku-tier callers — kills Sonnet-over-Sonnet at any depth by machinery, not policy), `agent-worktree-isolation-guard.py` (no ad-hoc worktrees).
   - Heartbeat: for long orchestration waits the top session keeps a ~50-min ScheduleWakeup liveness check (also keeps its prompt cache warm); orchestrators do NOT self-ping.
+  - **The Opus seat MAY implement directly (Peter's ruling 2026-07-21, after the WS3 queryable-rows landing):** when the work is delicate, design-integrated, or needs empirical iteration (run-observe-adjust loops, selector/storage semantics), the orchestrator writes the code itself in its worktree instead of briefing a Sonnet lane — the lane round-trip plus re-verification would cost more than direct work. Sonnet lanes remain the route for mechanical bulk on fully-decided briefs. This is the seat implementing, not an Opus lane: one seat per workstream, same landing ceremony, same escalate-only-on list. Flag the call in the post-landing summary.
 
 ## The tiering
 
