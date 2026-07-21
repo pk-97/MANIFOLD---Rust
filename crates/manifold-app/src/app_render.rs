@@ -906,7 +906,7 @@ impl Application {
                         }
                         // Restore actively-dragged inspector field so snapshot
                         // doesn't overwrite the value the user is manipulating.
-                        if let Some(ref drag) = self.active_inspector_drag {
+                        if let Some(ref drag) = self.scrub.active_inspector_drag {
                             drag.apply(&mut self.local_project);
                         }
                         // Same for a bound-node-param card scrub (BUG-281):
@@ -968,7 +968,7 @@ impl Application {
                     mod_snap.apply(&mut self.local_project);
                     // Restore actively-dragged inspector field so modulation
                     // doesn't overwrite the value the user is manipulating.
-                    if let Some(ref drag) = self.active_inspector_drag {
+                    if let Some(ref drag) = self.scrub.active_inspector_drag {
                         drag.apply(&mut self.local_project);
                     }
                     // BUG-281: mirror for a bound-node-param card scrub.
@@ -1765,7 +1765,7 @@ impl Application {
                     if let (Some(t), Some((mn, mx))) =
                         (self.mapping_target(), self.mapping_range_snapshot)
                     {
-                        self.active_inspector_drag =
+                        self.scrub.active_inspector_drag =
                             Some(crate::app::ActiveInspectorDrag::MappingRange {
                                 target: t,
                                 param_id: binding_id.to_string(),
@@ -1787,7 +1787,7 @@ impl Application {
                         min: gmin,
                         max: gmax,
                         ..
-                    }) = &mut self.active_inspector_drag
+                    }) = &mut self.scrub.active_inspector_drag
                     {
                         *gmin = *min;
                         *gmax = *max;
@@ -1806,7 +1806,7 @@ impl Application {
                     continue;
                 }
                 PanelAction::EffectMappingRangeCommit { binding_id } => {
-                    self.active_inspector_drag = None;
+                    self.scrub.active_inspector_drag = None;
                     let snap = self.mapping_range_snapshot.take();
                     if let (Some((old_min, old_max)), Some(t)) = (snap, self.mapping_target())
                         && let Some((new_min, new_max, _, _)) = self.watched_reshape(binding_id)
@@ -1890,7 +1890,7 @@ impl Application {
                     if let (Some(t), Some((sc, of))) =
                         (self.mapping_target(), self.mapping_affine_snapshot)
                     {
-                        self.active_inspector_drag =
+                        self.scrub.active_inspector_drag =
                             Some(crate::app::ActiveInspectorDrag::MappingAffine {
                                 target: t,
                                 param_id: binding_id.to_string(),
@@ -1909,7 +1909,7 @@ impl Application {
                         scale: gscale,
                         offset: goffset,
                         ..
-                    }) = &mut self.active_inspector_drag
+                    }) = &mut self.scrub.active_inspector_drag
                     {
                         *gscale = *scale;
                         *goffset = *offset;
@@ -1928,7 +1928,7 @@ impl Application {
                     continue;
                 }
                 PanelAction::EffectMappingAffineCommit { binding_id } => {
-                    self.active_inspector_drag = None;
+                    self.scrub.active_inspector_drag = None;
                     let snap = self.mapping_affine_snapshot.take();
                     if let (Some((old_scale, old_offset)), Some(t)) = (snap, self.mapping_target())
                         && let Some((_, _, new_scale, new_offset)) =
@@ -2447,26 +2447,18 @@ impl Application {
                 _ => {}
             }
             let content_tx = self.content_tx.as_ref().unwrap();
-            let result = crate::ui_bridge::dispatch(
-                action,
-                &mut self.local_project,
+            let mut dctx = crate::ui_bridge::DispatchCtx {
+                project: &mut self.local_project,
                 content_tx,
-                &self.content_state,
-                &mut self.ws.ui_root,
-                &mut self.selection,
-                &mut self.active_layer_id,
-                &mut self.slider_snapshot,
-                &mut self.trim_snapshot,
-                &mut self.target_snapshot,
-                &mut self.decay_snapshot,
-                &mut self.audio_shape_snapshot,
-                &mut self.audio_action_snapshot,
-                &mut self.audio_crossover_snapshot,
-                &mut self.audio_send_gain_drag_snapshot,
-                &mut self.user_prefs,
-                &mut self.active_inspector_drag,
-                None,
-            );
+                content_state: &self.content_state,
+                ui: &mut self.ws.ui_root,
+                selection: &mut self.selection,
+                active_layer: &mut self.active_layer_id,
+                user_prefs: &mut self.user_prefs,
+                editor_target: None,
+                scrub: &mut self.scrub,
+            };
+            let result = crate::ui_bridge::dispatch(action, &mut dctx);
             if result.structural_change {
                 needs_structural_sync = true;
             }
@@ -2569,26 +2561,18 @@ impl Application {
                         }
                         _ => {}
                     }
-                    let result = crate::ui_bridge::dispatch(
-                        action,
-                        &mut self.local_project,
+                    let mut dctx = crate::ui_bridge::DispatchCtx {
+                        project: &mut self.local_project,
                         content_tx,
-                        &self.content_state,
-                        &mut ed.ui_root,
-                        &mut self.selection,
-                        &mut self.active_layer_id,
-                        &mut self.slider_snapshot,
-                        &mut self.trim_snapshot,
-                        &mut self.target_snapshot,
-                        &mut self.decay_snapshot,
-                        &mut self.audio_shape_snapshot,
-                        &mut self.audio_action_snapshot,
-                        &mut self.audio_crossover_snapshot,
-                        &mut self.audio_send_gain_drag_snapshot,
-                        &mut self.user_prefs,
-                        &mut self.active_inspector_drag,
-                        None,
-                    );
+                        content_state: &self.content_state,
+                        ui: &mut ed.ui_root,
+                        selection: &mut self.selection,
+                        active_layer: &mut self.active_layer_id,
+                        user_prefs: &mut self.user_prefs,
+                        editor_target: None,
+                        scrub: &mut self.scrub,
+                    };
+                    let result = crate::ui_bridge::dispatch(action, &mut dctx);
                     if result.structural_change {
                         needs_structural_sync = true;
                     }
@@ -3200,26 +3184,19 @@ impl Application {
                             *new_value,
                         );
                         let content_tx = self.content_tx.as_ref().unwrap();
-                        let _ = crate::ui_bridge::dispatch(
-                            &action,
-                            &mut self.local_project,
+                        let editor_target = self.watched_graph_target.as_ref();
+                        let mut dctx = crate::ui_bridge::DispatchCtx {
+                            project: &mut self.local_project,
                             content_tx,
-                            &self.content_state,
-                            &mut self.ws.ui_root,
-                            &mut self.selection,
-                            &mut self.active_layer_id,
-                            &mut self.slider_snapshot,
-                            &mut self.trim_snapshot,
-                            &mut self.target_snapshot,
-                            &mut self.decay_snapshot,
-                            &mut self.audio_shape_snapshot,
-                            &mut self.audio_action_snapshot,
-                            &mut self.audio_crossover_snapshot,
-                            &mut self.audio_send_gain_drag_snapshot,
-                            &mut self.user_prefs,
-                            &mut self.active_inspector_drag,
-                            self.watched_graph_target.as_ref(),
-                        );
+                            content_state: &self.content_state,
+                            ui: &mut self.ws.ui_root,
+                            selection: &mut self.selection,
+                            active_layer: &mut self.active_layer_id,
+                            user_prefs: &mut self.user_prefs,
+                            editor_target,
+                            scrub: &mut self.scrub,
+                        };
+                        let _ = crate::ui_bridge::dispatch(&action, &mut dctx);
                     }
                     continue;
                 }

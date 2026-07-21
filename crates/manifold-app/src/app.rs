@@ -520,31 +520,12 @@ pub struct Application {
     // Selection
     pub(crate) selection: SelectionState,
     pub(crate) active_layer_id: Option<LayerId>,
-    /// Slider drag snapshot for undo (opacity, slip, etc.). Stores the old value
-    /// on snapshot, committed on release. NOT related to clip drag state.
-    pub(crate) slider_snapshot: Option<f32>,
-    /// Trim drag snapshot (min, max) for undo. Unity: onTrimSnapshot/onTrimCommit.
-    pub(crate) trim_snapshot: Option<(f32, f32)>,
-    /// Envelope target-handle drag snapshot for undo.
-    pub(crate) target_snapshot: Option<f32>,
-    /// Envelope decay-slider drag snapshot for undo.
-    pub(crate) decay_snapshot: Option<f32>,
-    /// Audio-mod shaping-slider drag snapshot (whole shape) for undo. A
-    /// trigger-gate row's Amount/Attack/Release sliders ride this SAME
-    /// snapshot (§9 unified the drawer) — no separate trigger-mod drag state.
-    pub(crate) audio_shape_snapshot: Option<manifold_core::audio_mod::AudioModShape>,
-    /// Step-Amount drag snapshot (PARAM_STEP_ACTIONS D8) for undo. `amount`
-    /// lives on `TriggerAction::Step`, not `AudioModShape`, so it rides its
-    /// own slot rather than `audio_shape_snapshot`'s.
-    pub(crate) audio_action_snapshot: Option<manifold_core::audio_mod::TriggerAction>,
-    /// Band-divider drag snapshot `(low_hz, mid_hz)` for undo. Captured on
-    /// `AudioCrossoverDragBegin`, committed as one `SetAudioCrossoversCommand`
-    /// on `AudioCrossoverCommit`.
-    pub(crate) audio_crossover_snapshot: Option<(f32, f32)>,
-    /// Send-gain drag snapshot (old dB) for undo (D7). Captured on
-    /// `AudioSendGainDragBegin`, committed as one `SetAudioSendGainCommand` on
-    /// `AudioSendGainDragCommit`.
-    pub(crate) audio_send_gain_drag_snapshot: Option<f32>,
+    /// In-flight scrub-gesture snapshots (eight slider/trim/audio snapshots +
+    /// `active_inspector_drag`), regrouped off the field list into one struct
+    /// (UI_FUNNEL_DECOMPOSITION P-B, D3; `ui_bridge::scrub::ScrubState`). Threaded
+    /// into `dispatch` as `ctx.scrub`. Interim shape — P-I replaces it with the
+    /// addressed gesture engine.
+    pub(crate) scrub: crate::ui_bridge::ScrubState,
     /// User param-binding mapping range drag snapshot `(min, max)` for
     /// undo. Captured on `EffectMappingRangeSnapshot`, committed as one
     /// `EditUserParamBindingCommand` on `EffectMappingRangeCommit`.
@@ -553,9 +534,6 @@ pub struct Application {
     /// undo. Captured on `EffectMappingAffineSnapshot`, committed as one
     /// `EditUserParamBindingCommand` on `EffectMappingAffineCommit`.
     pub(crate) mapping_affine_snapshot: Option<(f32, f32)>,
-
-    /// Active inspector drag — prevents snapshot from overwriting dragged field.
-    pub(crate) active_inspector_drag: Option<ActiveInspectorDrag>,
 
     /// A node-face scrub session currently rerouted through a card binding's
     /// write-back path (`PARAM_TWO_WAY_BINDING_DESIGN.md` D1). `None` when no
@@ -983,17 +961,9 @@ impl Application {
             pending_resume: None,
             selection: UIState::new(),
             active_layer_id: None,
-            slider_snapshot: None,
-            trim_snapshot: None,
-            target_snapshot: None,
-            decay_snapshot: None,
-            audio_shape_snapshot: None,
-            audio_action_snapshot: None,
-            audio_crossover_snapshot: None,
-            audio_send_gain_drag_snapshot: None,
+            scrub: crate::ui_bridge::ScrubState::default(),
             mapping_range_snapshot: None,
             mapping_affine_snapshot: None,
-            active_inspector_drag: None,
             bound_node_param_drag: None,
             unbound_node_param_drag: None,
             effect_clipboard: manifold_editing::clipboard::EffectClipboard::new(),
@@ -1438,33 +1408,25 @@ impl Application {
                         // Mirror the slider drag's live-set + commit so the type-in
                         // is one undoable step: snapshot the old base, set the new
                         // value live, then commit (builds the undo from the snap).
-                        self.slider_snapshot = Some(ctx.old_value);
+                        self.scrub.slider_snapshot = Some(ctx.old_value);
                         let content_tx = self.content_tx.as_ref().unwrap().clone();
                         use manifold_ui::panels::PanelAction;
                         for act in [
                             PanelAction::ParamChanged(ctx.target.clone(), ctx.param_id.clone(), v),
                             PanelAction::ParamCommit(ctx.target, ctx.param_id.clone()),
                         ] {
-                            let _ = crate::ui_bridge::dispatch(
-                                &act,
-                                &mut self.local_project,
-                                &content_tx,
-                                &self.content_state,
-                                &mut self.ws.ui_root,
-                                &mut self.selection,
-                                &mut self.active_layer_id,
-                                &mut self.slider_snapshot,
-                                &mut self.trim_snapshot,
-                                &mut self.target_snapshot,
-                                &mut self.decay_snapshot,
-                                &mut self.audio_shape_snapshot,
-                                &mut self.audio_action_snapshot,
-                                &mut self.audio_crossover_snapshot,
-                                &mut self.audio_send_gain_drag_snapshot,
-                                &mut self.user_prefs,
-                                &mut self.active_inspector_drag,
-                                None,
-                            );
+                            let mut dctx = crate::ui_bridge::DispatchCtx {
+                                project: &mut self.local_project,
+                                content_tx: &content_tx,
+                                content_state: &self.content_state,
+                                ui: &mut self.ws.ui_root,
+                                selection: &mut self.selection,
+                                active_layer: &mut self.active_layer_id,
+                                user_prefs: &mut self.user_prefs,
+                                editor_target: None,
+                                scrub: &mut self.scrub,
+                            };
+                            let _ = crate::ui_bridge::dispatch(&act, &mut dctx);
                         }
                         self.needs_rebuild = true;
                     }
@@ -1495,26 +1457,18 @@ impl Application {
                         ctx.param_id,
                         value,
                     );
-                    let _ = crate::ui_bridge::dispatch(
-                        &act,
-                        &mut self.local_project,
-                        &content_tx,
-                        &self.content_state,
-                        &mut self.ws.ui_root,
-                        &mut self.selection,
-                        &mut self.active_layer_id,
-                        &mut self.slider_snapshot,
-                        &mut self.trim_snapshot,
-                        &mut self.target_snapshot,
-                        &mut self.decay_snapshot,
-                        &mut self.audio_shape_snapshot,
-                        &mut self.audio_action_snapshot,
-                        &mut self.audio_crossover_snapshot,
-                        &mut self.audio_send_gain_drag_snapshot,
-                        &mut self.user_prefs,
-                        &mut self.active_inspector_drag,
-                        None,
-                    );
+                    let mut dctx = crate::ui_bridge::DispatchCtx {
+                        project: &mut self.local_project,
+                        content_tx: &content_tx,
+                        content_state: &self.content_state,
+                        ui: &mut self.ws.ui_root,
+                        selection: &mut self.selection,
+                        active_layer: &mut self.active_layer_id,
+                        user_prefs: &mut self.user_prefs,
+                        editor_target: None,
+                        scrub: &mut self.scrub,
+                    };
+                    let _ = crate::ui_bridge::dispatch(&act, &mut dctx);
                     self.needs_rebuild = true;
                 }
             }
@@ -1527,26 +1481,18 @@ impl Application {
                     let content_tx = self.content_tx.as_ref().unwrap().clone();
                     use manifold_ui::panels::PanelAction;
                     let act = PanelAction::AudioSendGainSetTyped(ctx.send_id, parsed);
-                    let _ = crate::ui_bridge::dispatch(
-                        &act,
-                        &mut self.local_project,
-                        &content_tx,
-                        &self.content_state,
-                        &mut self.ws.ui_root,
-                        &mut self.selection,
-                        &mut self.active_layer_id,
-                        &mut self.slider_snapshot,
-                        &mut self.trim_snapshot,
-                        &mut self.target_snapshot,
-                        &mut self.decay_snapshot,
-                        &mut self.audio_shape_snapshot,
-                        &mut self.audio_action_snapshot,
-                        &mut self.audio_crossover_snapshot,
-                        &mut self.audio_send_gain_drag_snapshot,
-                        &mut self.user_prefs,
-                        &mut self.active_inspector_drag,
-                        None,
-                    );
+                    let mut dctx = crate::ui_bridge::DispatchCtx {
+                        project: &mut self.local_project,
+                        content_tx: &content_tx,
+                        content_state: &self.content_state,
+                        ui: &mut self.ws.ui_root,
+                        selection: &mut self.selection,
+                        active_layer: &mut self.active_layer_id,
+                        user_prefs: &mut self.user_prefs,
+                        editor_target: None,
+                        scrub: &mut self.scrub,
+                    };
+                    let _ = crate::ui_bridge::dispatch(&act, &mut dctx);
                     self.needs_rebuild = true;
                 }
             }
@@ -1570,26 +1516,18 @@ impl Application {
                             ctx.param_id.clone(),
                             DriverConfigAction::SetFreePeriod(parsed),
                         );
-                        let _ = crate::ui_bridge::dispatch(
-                            &act,
-                            &mut self.local_project,
-                            &content_tx,
-                            &self.content_state,
-                            &mut self.ws.ui_root,
-                            &mut self.selection,
-                            &mut self.active_layer_id,
-                            &mut self.slider_snapshot,
-                            &mut self.trim_snapshot,
-                            &mut self.target_snapshot,
-                            &mut self.decay_snapshot,
-                            &mut self.audio_shape_snapshot,
-                            &mut self.audio_action_snapshot,
-                            &mut self.audio_crossover_snapshot,
-                            &mut self.audio_send_gain_drag_snapshot,
-                            &mut self.user_prefs,
-                            &mut self.active_inspector_drag,
-                            None,
-                        );
+                        let mut dctx = crate::ui_bridge::DispatchCtx {
+                            project: &mut self.local_project,
+                            content_tx: &content_tx,
+                            content_state: &self.content_state,
+                            ui: &mut self.ws.ui_root,
+                            selection: &mut self.selection,
+                            active_layer: &mut self.active_layer_id,
+                            user_prefs: &mut self.user_prefs,
+                            editor_target: None,
+                            scrub: &mut self.scrub,
+                        };
+                        let _ = crate::ui_bridge::dispatch(&act, &mut dctx);
                         self.needs_rebuild = true;
                     }
                 }
@@ -2123,26 +2061,19 @@ impl Application {
                                     v,
                                 );
                                 let content_tx = self.content_tx.as_ref().unwrap();
-                                let _ = crate::ui_bridge::dispatch(
-                                    &action,
-                                    &mut self.local_project,
+                                let editor_target = self.watched_graph_target.as_ref();
+                                let mut dctx = crate::ui_bridge::DispatchCtx {
+                                    project: &mut self.local_project,
                                     content_tx,
-                                    &self.content_state,
-                                    &mut self.ws.ui_root,
-                                    &mut self.selection,
-                                    &mut self.active_layer_id,
-                                    &mut self.slider_snapshot,
-                                    &mut self.trim_snapshot,
-                                    &mut self.target_snapshot,
-                                    &mut self.decay_snapshot,
-                                    &mut self.audio_shape_snapshot,
-                                    &mut self.audio_action_snapshot,
-                                    &mut self.audio_crossover_snapshot,
-                                    &mut self.audio_send_gain_drag_snapshot,
-                                    &mut self.user_prefs,
-                                    &mut self.active_inspector_drag,
-                                    self.watched_graph_target.as_ref(),
-                                );
+                                    content_state: &self.content_state,
+                                    ui: &mut self.ws.ui_root,
+                                    selection: &mut self.selection,
+                                    active_layer: &mut self.active_layer_id,
+                                    user_prefs: &mut self.user_prefs,
+                                    editor_target,
+                                    scrub: &mut self.scrub,
+                                };
+                                let _ = crate::ui_bridge::dispatch(&action, &mut dctx);
                             }
                         } else if let (Some(target), Some(default)) = (
                             self.watched_graph_target.clone(),

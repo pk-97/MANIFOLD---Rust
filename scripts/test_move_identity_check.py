@@ -1,147 +1,650 @@
 #!/usr/bin/env python3
-"""Self-test for move_identity_check.py — the pure-move gate.
+"""Self-test for move_identity_check.py — the pure-move / dispatch-split gate.
 
-Each case builds a throwaway git repo, commits a "before" tree, commits an
-"after" tree that relocates code, and asserts the checker's verdict (exit 0 =
-PURE MOVE PROVEN, exit 1 = residue). Run: `python3 scripts/test_move_identity_check.py`.
+Builds throwaway git repos in a temp dir and runs the checker end-to-end (it
+consumes real `git diff --color-moved` output, so synthetic diffs can't prove
+the exit codes). Covers:
 
-Cases 1-5 lock in the classes the P-P landing established (plain move, smuggled
-edit caught, visibility widening, comment lines, mod/use wiring). Case 6 is the
-P-F2a addition (D-15): a bare inherent-impl wrapper is ALLOW-class wiring, but a
-body edit hiding inside that wrapper is still caught.
+  1. pure move            → exit 0, residue 0            (a relocated fn)
+  2. smuggled edit        → exit 1, residue > 0          (move + one changed line)
+  3. dispatch-split       → exit 0, scaffold > 0, res 0  (arms → sub-dispatcher)
+  4. dropped arm          → exit 1, residue > 0          (arm deleted, not re-added)
+  5. scaffold over cap    → exit 1                       (too much structural glue)
+  6. multi-line use move  → exit 0, residue 0            (D-18: brace-list moves)
+  7. smuggled use-block   → exit 1, residue > 0          (D-18: code hidden in a
+                                                           `use { ... }` block)
+  8. context-opened       → exit 0, residue 0            (D-20 i: opener/closer
+     use-block edit                                      unchanged, inner list
+                                                           line edited)
+  9. D-11 preamble move   → exit 0, residue 0, scaffold>0 (byte-exact 2-line
+                                                           preamble recomputed atop
+                                                           a moved dispatch_<d> fn)
+ 10. D-11 deviated        → exit 1, residue > 0          (one token off the
+     preamble                                            byte-exact form — any
+                                                           deviation = residue)
+ 11. drifted preamble     → exit 0, residue 0            (D-20 iii: inspector.rs's
+     removed                                             actual drifted original
+                                                           deleted, canonical form
+                                                           recomputed elsewhere)
+ 12. impl-wrapper move    → exit 0, residue 0            (D-15: a bare inherent-impl
+                                                           wrapper relocated into a
+                                                           submodule is ALLOW wiring)
+ 13. impl-wrapper body    → exit 1, residue > 0          (D-15: a body edit hiding
+     edit                                                 inside the moved wrapper)
+ 14. out-of-sequence      → exit 1, residue > 0          (D-21: a lone `");"`
+     `");"` removed                                       removed OUTSIDE the
+                                                           drifted-preamble opener
+                                                           →sequence chain is
+                                                           still caught, proving
+                                                           generics no longer
+                                                           mask genuine deletions)
+ 15. drifted preamble,    → exit 0, residue 0            (S5b: a sibling block
+     moved-flagged `);`                                    moves to a file that
+                                                           contains an identical
+                                                           `);`, so git flags the
+                                                           drifted preamble's own
+                                                           `);` as MOVED — the
+                                                           tracker must still
+                                                           advance through it so
+                                                           the NEXT drifted line
+                                                           doesn't fall to
+                                                           residue; reproduces
+                                                           fb59db17's residue-1)
+ 16. router collapses to  → exit 0, residue 0            (S6b: the last domain
+     bare `unhandled()`                                    arm is extracted,
+     tail                                                  leaving `match
+                                                           action { _ =>
+                                                           unhandled() }` with
+                                                           no arms — it
+                                                           collapses to a bare
+                                                           `DispatchResult::
+                                                           unhandled()` tail
+                                                           expression, the
+                                                           router's null
+                                                           action; the ADDED
+                                                           bare line must
+                                                           classify as
+                                                           scaffold, not
+                                                           residue)
+
+Run: python3 scripts/test_move_identity_check.py   (exit 0 = all pass)
 """
-import os
+
+import re
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 
-CHECKER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "move_identity_check.py")
-
-
-def git(cwd, *args):
-    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
+CHECKER = str(Path(__file__).resolve().parent / "move_identity_check.py")
 
 
-def write_tree(d, tree):
-    for name, content in tree.items():
-        with open(os.path.join(d, name), "w") as f:
-            f.write(content)
+def git(repo: Path, *args: str) -> None:
+    subprocess.run(["git", *args], cwd=repo, check=True,
+                   capture_output=True, text=True)
 
 
-def run_case(name, before, after, expect_pure):
-    with tempfile.TemporaryDirectory() as d:
-        git(d, "init", "-q")
-        git(d, "config", "user.email", "t@example.com")
-        git(d, "config", "user.name", "Test")
-        write_tree(d, before)
-        git(d, "add", "-A")
-        git(d, "commit", "-qm", "before")
-        for f in before:
-            if f not in after:
-                os.remove(os.path.join(d, f))
-        write_tree(d, after)
-        git(d, "add", "-A")
-        git(d, "commit", "-qm", "after")
-        r = subprocess.run(
-            [sys.executable, CHECKER, "HEAD"], cwd=d, capture_output=True, text=True
-        )
-        is_pure = r.returncode == 0
-        ok = is_pure == expect_pure
-        print(f"[{'PASS' if ok else 'FAIL'}] {name}: exit={r.returncode} "
-              f"(expected {'PROVEN' if expect_pure else 'residue'})")
-        if not ok:
-            print("--- checker output ---")
-            print(r.stdout)
-            print(r.stderr)
-        return ok
+def init_repo(repo: Path) -> None:
+    git(repo, "init", "-q")
+    git(repo, "config", "user.email", "selftest@example.com")
+    git(repo, "config", "user.name", "selftest")
 
 
-FN_A = (
+def commit_tree(repo: Path, files: dict[str, str], msg: str) -> None:
+    for rel, content in files.items():
+        p = repo / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", msg)
+
+
+def run_checker(repo: Path) -> tuple[int, str]:
+    r = subprocess.run([sys.executable, CHECKER, "HEAD"], cwd=repo,
+                       capture_output=True, text=True)
+    return r.returncode, r.stdout
+
+
+def field(out: str, name: str) -> int:
+    m = re.search(rf"{name}: (\d+)", out)
+    return int(m.group(1)) if m else -1
+
+
+# ── Fixture bodies ──────────────────────────────────────────────────────────
+# A ≥3-line block so git's move detector fires.
+HELPER = (
+    "fn helper(x: i32) -> i32 {\n"
+    "    let y = x + 1;\n"
+    "    let z = y * 2;\n"
+    "    z + y\n"
+    "}\n"
+)
+HELPER_EDITED = HELPER.replace("y * 2", "y * 3")
+
+# A dispatch match with two ≥3-line arms and the sentinel.
+ARM_BROWSER = (
+    "        PanelAction::BrowserRename(a) => {\n"
+    "            let k = mode_to_kind(a);\n"
+    "            ui.close();\n"
+    "            DispatchResult::handled()\n"
+    "        }\n"
+)
+ARM_SCENE = (
+    "        PanelAction::SceneAdd(a) => {\n"
+    "            let n = build_node(a);\n"
+    "            project.push(n);\n"
+    "            DispatchResult::structural()\n"
+    "        }\n"
+)
+INSPECTOR_BASE = (
+    "pub fn dispatch_inspector(action: &PanelAction, ctx: &mut Ctx) -> DispatchResult {\n"
+    "    match action {\n"
+    + ARM_BROWSER
+    + ARM_SCENE
+    + "        _ => DispatchResult::unhandled(),\n"
+    "    }\n"
+    "}\n"
+)
+# Router keeps its name; the browser arm moves to a sub-dispatcher.
+INSPECTOR_ROUTER = (
+    "pub fn dispatch_inspector(action: &PanelAction, ctx: &mut Ctx) -> DispatchResult {\n"
+    "    let r = browser::dispatch_browser(action, ctx);\n"
+    "    if !r.unhandled { return r; }\n"
+    "    match action {\n"
+    + ARM_SCENE
+    + "        _ => DispatchResult::unhandled(),\n"
+    "    }\n"
+    "}\n"
+)
+BROWSER_MODULE = (
+    "pub fn dispatch_browser(action: &PanelAction, ctx: &mut Ctx) -> DispatchResult {\n"
+    "    match action {\n"
+    + ARM_BROWSER
+    + "        _ => DispatchResult::unhandled(),\n"
+    "    }\n"
+    "}\n"
+)
+# Same router, but the browser arm is DROPPED (not re-homed anywhere).
+INSPECTOR_ROUTER_DROPPED = (
+    "pub fn dispatch_inspector(action: &PanelAction, ctx: &mut Ctx) -> DispatchResult {\n"
+    "    match action {\n"
+    + ARM_SCENE
+    + "        _ => DispatchResult::unhandled(),\n"
+    "    }\n"
+    "}\n"
+)
+
+# D-18 fixtures: a multi-line `use { ... }` brace-list import that moves
+# across a module wall alongside the code that needs it (case 6), and a real
+# statement smuggled inside an otherwise-open use block (case 7).
+#
+# Every identifier below is globally unique across the base/after/sub bodies
+# (no shared tokens, including the import path on the opener line) so git's
+# `--color-moved` can never recognize a line as unchanged context or as a
+# move elsewhere in the diff — every changed line is forced through the
+# ALLOW/use-block classifier, which is exactly what this fixture proves.
+DISPATCH_BASE = (
+    "use crate::widgets::{\n"
+    "    AlphaWidget,\n"
+    "    BetaWidget,\n"
+    "    GammaWidget,\n"
+    "};\n"
+    "\n"
+    + HELPER
+)
+# helper() moves out to sub.rs; the import that stays behind is edited to
+# drop the now-dead names and pick up an unrelated one.
+DISPATCH_AFTER_MOVE = (
+    "use crate::sprockets::{\n"
+    "    DeltaSprocket,\n"
+    "};\n"
+)
+SUB_AFTER_MOVE = (
+    "// sub\n"
+    "use super::widgets::{\n"
+    "    EpsilonThing,\n"
+    "    ZetaThing,\n"
+    "};\n"
+    "\n"
+    + HELPER
+)
+# A real statement smuggled between a use block's opener and its closer.
+SMUGGLED_USE_BLOCK = (
+    "use crate::types::{\n"
+    "    Alpha,\n"
+    '    println!("smuggled");\n'
+    "    Beta,\n"
+    "};\n"
+    "// placeholder\n"
+)
+
+# D-20(i) fixture: a multi-line `use { ... }` whose OPENER and CLOSER are
+# both UNCHANGED (context) lines — only an inner list line is edited (one
+# name removed, a different name added). Before the fix, block tracking never
+# armed (the opener never appears as a +/- line), so the inner +/- lines fell
+# to residue. `KeepGadget,` stays byte-identical in both versions so it
+# remains a genuine context line inside the block, proving the tracker
+# doesn't need every inner line touched to work.
+CONTEXT_USE_BASE = (
+    "use crate::gadgets::{\n"
+    "    OmicronGadget,\n"
+    "    KeepGadget,\n"
+    "};\n"
+    "\n"
+    "fn keep_fn() {}\n"
+)
+CONTEXT_USE_AFTER = (
+    "use crate::gadgets::{\n"
+    "    RhoGadget,\n"
+    "    KeepGadget,\n"
+    "};\n"
+    "\n"
+    "fn keep_fn() {}\n"
+)
+
+
+# D-11 fixtures: the byte-exact 2-line preamble a split-out `dispatch_<d>` fn
+# recomputes at its top (it can't inherit the outer fn's locals). Case 8 proves
+# the canonical form is recognized as scaffold when a fn moves across a module
+# wall and gains it; case 9 proves one deviated token (smuggle-proofing, D-18
+# precedent) is NOT recognized — it must fall through to residue.
+PARAMS_BODY = (
+    "    let scaled = ctx.value * 2;\n"
+    "    let offset = scaled + 1;\n"
+    "    DispatchResult::from(offset)\n"
+)
+DISPATCH_PARAMS_BASE = (
+    "pub fn dispatch_params(action: &PanelAction, ctx: &mut Ctx) -> DispatchResult {\n"
+    + PARAMS_BODY
+    + "}\n"
+)
+PREAMBLE_CANONICAL = (
+    "    let (effective_tab, effective_active_layer) = super::editor_dispatch_context"
+    "(ctx.editor_target, &*ctx.project, ctx.ui.inspector.last_effect_tab(), "
+    "ctx.active_layer);\n"
+    "    let active_layer = &effective_active_layer;\n"
+)
+# One token deviated from the byte-exact form: the trailing arg is a different
+# field (`ctx.previous_layer` instead of `ctx.active_layer`).
+PREAMBLE_DEVIATED = (
+    "    let (effective_tab, effective_active_layer) = super::editor_dispatch_context"
+    "(ctx.editor_target, &*ctx.project, ctx.ui.inspector.last_effect_tab(), "
+    "ctx.previous_layer);\n"
+    "    let active_layer = &effective_active_layer;\n"
+)
+PARAMS_MODULE = (
+    "pub fn dispatch_params(action: &PanelAction, ctx: &mut Ctx) -> DispatchResult {\n"
+    + PREAMBLE_CANONICAL
+    + PARAMS_BODY
+    + "}\n"
+)
+PARAMS_MODULE_DEVIATED = (
+    "pub fn dispatch_params(action: &PanelAction, ctx: &mut Ctx) -> DispatchResult {\n"
+    + PREAMBLE_DEVIATED
+    + PARAMS_BODY
+    + "}\n"
+)
+
+# D-20(iii) fixture: the drifted preamble actually present in inspector.rs's
+# `dispatch_inspector` (verified against the source, not invented) — an
+# explicit `&*ctx.active_layer` reborrow, an explicit `&Option<LayerId>` type
+# annotation on the second `let`, and the call split across multiple lines.
+# Proves the drifted form's REMOVED lines (the `-` side, when the last
+# preamble-using domain moves out and the drifted original is deleted with
+# nothing left behind) are recognized as scaffold, not residue. The ADD side
+# uses the CANONICAL form (already proven by case_preamble_scaffold above) —
+# this fixture is specifically about the removal-side drifted entries.
+PREAMBLE_DRIFTED_INSPECTOR = (
+    "    let (effective_tab, effective_active_layer) = super::editor_dispatch_context(\n"
+    "        ctx.editor_target,\n"
+    "        &*ctx.project,\n"
+    "        ctx.ui.inspector.last_effect_tab(),\n"
+    "        &*ctx.active_layer,\n"
+    "    );\n"
+    "    let active_layer: &Option<LayerId> = &effective_active_layer;\n"
+)
+DISPATCH_PARAMS_BASE_DRIFTED = (
+    "pub fn dispatch_params(action: &PanelAction, ctx: &mut Ctx) -> DispatchResult {\n"
+    + PREAMBLE_DRIFTED_INSPECTOR
+    + PARAMS_BODY
+    + "}\n"
+)
+
+
+# D-15 fixtures (P-F2a, merged from origin/main): a bare inherent-impl wrapper
+# (`impl Foo {` + closing brace) relocated into a submodule is ALLOW-class
+# wiring — the wrapper line carries no behavior, only the methods do — but a
+# body edit hiding inside that moved wrapper is still caught. Ported into this
+# harness's commit_tree/CASES style during the P-F2a→lane merge (D-19).
+IMPL_FN_A = (
     "    fn a(&self) -> u32 {\n"
     "        let x = 1;\n"
     "        let y = 2;\n"
     "        x + y\n"
     "    }\n"
 )
+IMPL_FN_B = (
+    "    fn b(&self) -> u32 {\n"
+    "        let p = 10;\n"
+    "        let q = 20;\n"
+    "        p + q\n"
+    "    }\n"
+)
+IMPL_FN_B_EDITED = IMPL_FN_B.replace("let q = 20", "let q = 30")
+IMPL_BASE = "struct Foo;\nimpl Foo {\n" + IMPL_FN_A + "\n" + IMPL_FN_B + "}\n"
+IMPL_MOD_AFTER = "struct Foo;\n\nmod overlay;\n\nimpl Foo {\n" + IMPL_FN_A + "}\n"
+IMPL_OVERLAY_AFTER = "use super::*;\n\nimpl Foo {\n" + IMPL_FN_B + "}\n"
+IMPL_OVERLAY_AFTER_EDIT = "use super::*;\n\nimpl Foo {\n" + IMPL_FN_B_EDITED + "}\n"
 
 
-def fn_b(q_val=20):
-    return (
-        "    fn b(&self) -> u32 {\n"
-        "        let p = 10;\n"
-        f"        let q = {q_val};\n"
-        "        p + q\n"
-        "    }\n"
+# D-21 fixture: a lone `");"` deleted OUTSIDE the drifted-preamble opener→
+# sequence chain — nothing before it in the diff matches
+# DRIFTED_PREAMBLE_SEQUENCE[0], so the stateful matcher never arms on it.
+# Proves the sequence rework didn't regress to the D-20 iii bug it fixed: a
+# short generic line that happens to also appear in the drifted sequence
+# (here, the call-closer `");"`) must still be caught as residue when it is
+# a genuine, unrelated deletion — never silently masked as scaffold.
+OUT_OF_SEQUENCE_CLOSE_PAREN_BASE = (
+    "fn caller() {\n"
+    "    do_thing(\n"
+    "        alpha,\n"
+    "        beta,\n"
+    "    );\n"
+    "    tail();\n"
+    "}\n"
+)
+OUT_OF_SEQUENCE_CLOSE_PAREN_AFTER = (
+    "fn caller() {\n"
+    "    do_thing(\n"
+    "        alpha,\n"
+    "        beta,\n"
+    "    tail();\n"
+    "}\n"
+)
+
+
+# S5b fixture (see classify()'s "S5b fix" comments): reproduces the exact
+# moved-flag/tracker-desync collision the fix addresses. `caller()` is a
+# ≥3-line block that moves verbatim to sub.rs (so git detects it as MOVED),
+# and it happens to contain a `);` line IDENTICAL to the drifted preamble's
+# own `);` closer (DRIFTED_PREAMBLE_SEQUENCE[5]). Confirmed against real git
+# output: with both the caller() move and the drifted-preamble removal in the
+# same diff, git's `--color-moved` independently flags that drifted `);` line
+# as moved (it content-matches caller()'s own `);`, added elsewhere), even
+# though it's really the dead drifted preamble being deleted, not a move.
+# This is the exact shape of fb59db17's residue-1 regression: pre-S5b-fix,
+# the moved-flagged `);` would `continue` before the tracker ever consulted
+# it, leaving drifted_idx one step behind so the NEXT drifted line — `let
+# active_layer: &Option<LayerId> = ...` — no longer matched
+# DRIFTED_PREAMBLE_SEQUENCE[drifted_idx] and fell to residue. Verified
+# directly (outside this harness) that the pre-fix checker gives exit 1,
+# residue 1, with exactly that line as the reported residue; the post-fix
+# checker gives exit 0, residue 0 on the identical fixture.
+MOVED_COLLISION_CALLER = (
+    "fn caller() {\n"
+    "    do_thing(\n"
+    "        alpha,\n"
+    "        beta,\n"
+    "    );\n"
+    "    tail();\n"
+    "}\n"
+)
+MOVED_COLLISION_BASE = (
+    MOVED_COLLISION_CALLER + "\n" + DISPATCH_PARAMS_BASE_DRIFTED + "// tail\n"
+)
+
+
+# S6b fixture: the terminal router-collapse shape from the real ruling —
+# `dispatch_inspector` starts as INSPECTOR_ROUTER (browser arm already
+# extracted, one `match action { SCENE arm; _ => unhandled() }` left), and its
+# LAST remaining arm (scene) is extracted too. With no arms left, the match
+# has nothing to dispatch on, so it collapses to a bare
+# `DispatchResult::unhandled()` tail expression — no `_ =>`, no trailing
+# comma/semicolon, because it's now the fn's tail expr, not a match arm.
+# Proves: the removed `match action {` / SCENE arm (MOVED, verbatim into
+# scene.rs) / sentinel arm / closing brace are scaffold as before, AND the
+# newly-ADDED bare `DispatchResult::unhandled()` line — previously
+# unclassified residue — is now recognized as scaffold too.
+ROUTER_FULLY_COLLAPSED = (
+    "pub fn dispatch_inspector(action: &PanelAction, ctx: &mut Ctx) -> DispatchResult {\n"
+    "    let r = browser::dispatch_browser(action, ctx);\n"
+    "    if !r.unhandled { return r; }\n"
+    "    let r = scene::dispatch_scene(action, ctx);\n"
+    "    if !r.unhandled { return r; }\n"
+    "    DispatchResult::unhandled()\n"
+    "}\n"
+)
+SCENE_MODULE = (
+    "pub fn dispatch_scene(action: &PanelAction, ctx: &mut Ctx) -> DispatchResult {\n"
+    "    match action {\n"
+    + ARM_SCENE
+    + "        _ => DispatchResult::unhandled(),\n"
+    "    }\n"
+    "}\n"
+)
+
+
+def case_pure_move(repo: Path) -> tuple[bool, str]:
+    commit_tree(repo, {"a.rs": HELPER + "// tail\n", "b.rs": "// b\n"}, "base")
+    commit_tree(repo, {"a.rs": "// tail\n", "b.rs": "// b\n" + HELPER}, "move")
+    code, out = run_checker(repo)
+    ok = code == 0 and field(out, "residue") == 0 and field(out, "moved lines") > 0
+    return ok, f"exit={code} {out.splitlines()[0]}"
+
+
+def case_smuggled(repo: Path) -> tuple[bool, str]:
+    commit_tree(repo, {"a.rs": HELPER + "// tail\n", "b.rs": "// b\n"}, "base")
+    commit_tree(repo, {"a.rs": "// tail\n", "b.rs": "// b\n" + HELPER_EDITED}, "edit")
+    code, out = run_checker(repo)
+    ok = code == 1 and field(out, "residue") > 0
+    return ok, f"exit={code} {out.splitlines()[0]}"
+
+
+def case_dispatch_split(repo: Path) -> tuple[bool, str]:
+    commit_tree(repo, {"inspector.rs": INSPECTOR_BASE}, "base")
+    commit_tree(repo, {"inspector.rs": INSPECTOR_ROUTER,
+                       "dispatch/browser.rs": BROWSER_MODULE}, "split")
+    code, out = run_checker(repo)
+    ok = code == 0 and field(out, "residue") == 0 and field(out, "scaffold") > 0
+    return ok, f"exit={code} {out.splitlines()[0]}"
+
+
+def case_dropped_arm(repo: Path) -> tuple[bool, str]:
+    commit_tree(repo, {"inspector.rs": INSPECTOR_BASE}, "base")
+    commit_tree(repo, {"inspector.rs": INSPECTOR_ROUTER_DROPPED}, "drop")
+    code, out = run_checker(repo)
+    ok = code == 1 and field(out, "residue") > 0
+    return ok, f"exit={code} {out.splitlines()[0]}"
+
+
+def case_over_cap(repo: Path) -> tuple[bool, str]:
+    # 30 sub-dispatcher signatures added at once — all scaffold, over the cap.
+    base = INSPECTOR_BASE
+    extra = "".join(
+        f"pub fn dispatch_x{i}(action: &PanelAction, ctx: &mut Ctx) -> DispatchResult {{\n"
+        f"    match action {{\n"
+        f"        _ => DispatchResult::unhandled(),\n"
+        f"    }}\n"
+        f"}}\n"
+        for i in range(11)  # 11 * 3 scaffold-matching lines = 33 > cap 25
     )
+    commit_tree(repo, {"inspector.rs": base}, "base")
+    commit_tree(repo, {"inspector.rs": base, "extra.rs": extra}, "bulk-scaffold")
+    code, out = run_checker(repo)
+    ok = code == 1 and field(out, "scaffold") > 25
+    return ok, f"exit={code} {out.splitlines()[0]}"
 
 
-def main():
-    ok = True
-
-    # 1. Pure whole-fn move from one module to another.
-    ok &= run_case(
-        "pure move",
-        {"lib.rs": "mod a;\nmod b;\n",
-         "a.rs": FN_A,
-         "b.rs": fn_b()},
-        {"lib.rs": "mod a;\nmod b;\n",
-         "a.rs": "",
-         "b.rs": FN_A + "\n" + fn_b()},
-        expect_pure=True,
+def case_multiline_use_move(repo: Path) -> tuple[bool, str]:
+    commit_tree(repo, {"dispatch.rs": DISPATCH_BASE, "sub.rs": "// sub\n"}, "base")
+    commit_tree(
+        repo,
+        {"dispatch.rs": DISPATCH_AFTER_MOVE, "sub.rs": SUB_AFTER_MOVE},
+        "move",
     )
+    code, out = run_checker(repo)
+    ok = code == 0 and field(out, "residue") == 0 and field(out, "moved lines") > 0
+    return ok, f"exit={code} {out.splitlines()[0]}"
 
-    # 2. Smuggled edit inside the moved block (q: 20 -> 30) is caught.
-    ok &= run_case(
-        "smuggled edit caught",
-        {"a.rs": FN_A + "\n" + fn_b(20)},
-        {"a.rs": FN_A, "b.rs": fn_b(30)},
-        expect_pure=False,
+
+def case_smuggled_use_block(repo: Path) -> tuple[bool, str]:
+    commit_tree(repo, {"dispatch.rs": "// placeholder\n"}, "base")
+    commit_tree(repo, {"dispatch.rs": SMUGGLED_USE_BLOCK}, "smuggle")
+    code, out = run_checker(repo)
+    ok = code == 1 and field(out, "residue") > 0
+    return ok, f"exit={code} {out.splitlines()[0]}"
+
+
+def case_context_use_block(repo: Path) -> tuple[bool, str]:
+    commit_tree(repo, {"dispatch.rs": CONTEXT_USE_BASE}, "base")
+    commit_tree(repo, {"dispatch.rs": CONTEXT_USE_AFTER}, "context-use-edit")
+    code, out = run_checker(repo)
+    ok = code == 0 and field(out, "residue") == 0
+    return ok, f"exit={code} {out.splitlines()[0]}"
+
+
+def case_preamble_scaffold(repo: Path) -> tuple[bool, str]:
+    commit_tree(repo, {"inspector.rs": DISPATCH_PARAMS_BASE + "// tail\n"}, "base")
+    commit_tree(
+        repo,
+        {"inspector.rs": "// tail\n", "params.rs": PARAMS_MODULE},
+        "split-with-preamble",
     )
+    code, out = run_checker(repo)
+    ok = code == 0 and field(out, "residue") == 0 and field(out, "scaffold") >= 2
+    return ok, f"exit={code} {out.splitlines()[0]}"
 
-    # 3. Visibility widening on the moved fn (fn -> pub(crate) fn).
-    ok &= run_case(
-        "visibility widening",
-        {"a.rs": FN_A + "\n" + fn_b()},
-        {"a.rs": FN_A, "b.rs": "    pub(crate) " + fn_b().lstrip()},
-        expect_pure=True,
+
+def case_preamble_deviated(repo: Path) -> tuple[bool, str]:
+    commit_tree(repo, {"inspector.rs": DISPATCH_PARAMS_BASE + "// tail\n"}, "base")
+    commit_tree(
+        repo,
+        {"inspector.rs": "// tail\n", "params.rs": PARAMS_MODULE_DEVIATED},
+        "split-with-deviated-preamble",
     )
+    code, out = run_checker(repo)
+    ok = code == 1 and field(out, "residue") > 0
+    return ok, f"exit={code} {out.splitlines()[0]}"
 
-    # 4. A comment line added alongside the move is counted, not fatal.
-    ok &= run_case(
-        "comment line non-fatal",
-        {"a.rs": FN_A + "\n" + fn_b()},
-        {"a.rs": FN_A, "b.rs": "    // relocated helper\n" + fn_b()},
-        expect_pure=True,
+
+def case_drifted_preamble_removed(repo: Path) -> tuple[bool, str]:
+    commit_tree(repo, {"inspector.rs": DISPATCH_PARAMS_BASE_DRIFTED + "// tail\n"}, "base")
+    commit_tree(
+        repo,
+        {"inspector.rs": "// tail\n", "params.rs": PARAMS_MODULE},
+        "split-with-drifted-preamble-removed",
     )
+    code, out = run_checker(repo)
+    ok = code == 0 and field(out, "residue") == 0
+    return ok, f"exit={code} {out.splitlines()[0]}"
 
-    # 5. mod / use wiring added alongside the move.
-    ok &= run_case(
-        "mod/use wiring",
-        {"lib.rs": "fn root() {}\n", "a.rs": fn_b()},
-        {"lib.rs": "mod b;\nuse crate::b::*;\nfn root() {}\n", "a.rs": "", "b.rs": fn_b()},
-        expect_pure=True,
+
+def case_impl_wrapper_move(repo: Path) -> tuple[bool, str]:
+    commit_tree(repo, {"mod.rs": IMPL_BASE}, "base")
+    commit_tree(
+        repo,
+        {"mod.rs": IMPL_MOD_AFTER, "overlay.rs": IMPL_OVERLAY_AFTER},
+        "wrapper-move",
     )
+    code, out = run_checker(repo)
+    ok = code == 0 and field(out, "residue") == 0 and field(out, "moved lines") > 0
+    return ok, f"exit={code} {out.splitlines()[0]}"
 
-    # 6a. Bare inherent-impl wrapper move (D-15): methods relocate into a fresh
-    #     `impl Foo {` in a submodule — PROVEN.
-    before_impl = {
-        "mod.rs": "struct Foo;\nimpl Foo {\n" + FN_A + "\n" + fn_b() + "}\n",
-    }
-    after_impl = {
-        "mod.rs": "struct Foo;\n\nmod overlay;\n\nimpl Foo {\n" + FN_A + "}\n",
-        "overlay.rs": "use super::*;\n\nimpl Foo {\n" + fn_b() + "}\n",
-    }
-    ok &= run_case("impl-wrapper move", before_impl, after_impl, expect_pure=True)
 
-    # 6b. A body edit hiding inside that same wrapper is still caught.
-    after_impl_edit = {
-        "mod.rs": "struct Foo;\n\nmod overlay;\n\nimpl Foo {\n" + FN_A + "}\n",
-        "overlay.rs": "use super::*;\n\nimpl Foo {\n" + fn_b(30) + "}\n",
-    }
-    ok &= run_case("impl-wrapper body edit caught", before_impl, after_impl_edit, expect_pure=False)
+def case_impl_wrapper_body_edit(repo: Path) -> tuple[bool, str]:
+    commit_tree(repo, {"mod.rs": IMPL_BASE}, "base")
+    commit_tree(
+        repo,
+        {"mod.rs": IMPL_MOD_AFTER, "overlay.rs": IMPL_OVERLAY_AFTER_EDIT},
+        "wrapper-body-edit",
+    )
+    code, out = run_checker(repo)
+    ok = code == 1 and field(out, "residue") > 0
+    return ok, f"exit={code} {out.splitlines()[0]}"
 
-    print("\n" + ("ALL PASS" if ok else "FAILURES ABOVE"))
-    return 0 if ok else 1
+
+def case_out_of_sequence_close_paren(repo: Path) -> tuple[bool, str]:
+    commit_tree(repo, {"caller.rs": OUT_OF_SEQUENCE_CLOSE_PAREN_BASE}, "base")
+    commit_tree(
+        repo,
+        {"caller.rs": OUT_OF_SEQUENCE_CLOSE_PAREN_AFTER},
+        "drop-out-of-sequence-close-paren",
+    )
+    code, out = run_checker(repo)
+    ok = code == 1 and field(out, "residue") > 0
+    return ok, f"exit={code} {out.splitlines()[0]}"
+
+
+def case_drifted_preamble_moved_collision(repo: Path) -> tuple[bool, str]:
+    commit_tree(repo, {"inspector.rs": MOVED_COLLISION_BASE}, "base")
+    commit_tree(
+        repo,
+        {"inspector.rs": "// tail\n", "sub.rs": MOVED_COLLISION_CALLER,
+         "params.rs": PARAMS_MODULE},
+        "split-with-moved-flagged-drifted-close-paren",
+    )
+    code, out = run_checker(repo)
+    ok = code == 0 and field(out, "residue") == 0
+    return ok, f"exit={code} {out.splitlines()[0]}"
+
+
+def case_router_collapse_bare_unhandled(repo: Path) -> tuple[bool, str]:
+    commit_tree(
+        repo,
+        {"inspector.rs": INSPECTOR_ROUTER, "dispatch/browser.rs": BROWSER_MODULE},
+        "base",
+    )
+    commit_tree(
+        repo,
+        {"inspector.rs": ROUTER_FULLY_COLLAPSED, "dispatch/browser.rs": BROWSER_MODULE,
+         "dispatch/scene.rs": SCENE_MODULE},
+        "collapse-to-bare-unhandled",
+    )
+    code, out = run_checker(repo)
+    ok = code == 0 and field(out, "residue") == 0 and field(out, "scaffold") > 0
+    return ok, f"exit={code} {out.splitlines()[0]}"
+
+
+CASES = [
+    ("pure move -> exit 0", case_pure_move),
+    ("smuggled edit -> exit 1", case_smuggled),
+    ("dispatch-split scaffold -> exit 0", case_dispatch_split),
+    ("dropped arm -> exit 1", case_dropped_arm),
+    ("scaffold over cap -> exit 1", case_over_cap),
+    ("multi-line use move -> exit 0 [D-18]", case_multiline_use_move),
+    ("smuggled use-block -> exit 1 [D-18]", case_smuggled_use_block),
+    ("context-opened use-block edit -> exit 0 [D-20 i]", case_context_use_block),
+    ("D-11 preamble move -> exit 0, scaffold [PROVEN]", case_preamble_scaffold),
+    ("D-11 deviated preamble -> exit 1 [CAUGHT]", case_preamble_deviated),
+    ("drifted preamble removed -> exit 0 [D-20 iii]", case_drifted_preamble_removed),
+    ("impl-wrapper move -> exit 0 [D-15]", case_impl_wrapper_move),
+    ("impl-wrapper body edit -> exit 1 [D-15]", case_impl_wrapper_body_edit),
+    ("out-of-sequence \");\" removal -> exit 1 [D-21, CAUGHT]",
+     case_out_of_sequence_close_paren),
+    ("drifted preamble removed, moved-flagged \");\" -> exit 0 [S5b, PROVEN]",
+     case_drifted_preamble_moved_collision),
+    ("router collapses to bare unhandled() tail -> exit 0 [S6b, PROVEN]",
+     case_router_collapse_bare_unhandled),
+]
+
+
+def main() -> int:
+    failures = 0
+    for name, fn in CASES:
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            init_repo(repo)
+            try:
+                ok, detail = fn(repo)
+            except Exception as e:  # noqa: BLE001 — surface any fixture breakage
+                ok, detail = False, f"EXCEPTION {e}"
+        print(f"  [{'PASS' if ok else 'FAIL'}] {name}  ({detail})")
+        failures += not ok
+    if failures:
+        print(f"move_identity_check self-test: {failures} FAILED")
+        return 1
+    print(f"move_identity_check self-test: all {len(CASES)} passed")
+    return 0
 
 
 if __name__ == "__main__":

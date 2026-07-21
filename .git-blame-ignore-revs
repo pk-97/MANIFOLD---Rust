@@ -1,0 +1,18 @@
+# God-file decomposition wave — pure-move commits, proven by scripts/move_identity_check.py.
+# Configure once: git config blame.ignoreRevsFile .git-blame-ignore-revs
+# P-P projection split (2026-07-21)
+51993a1310d6e503b0a9c42fbc242a2d03bbe3e6
+# P-F2a ui_root split (2026-07-21)
+1257af0dd7f474e9e764dfdb4fd9d90ca776e719
+de27295d548119ece8f50102d65cef5a8110d346
+a58c67e9ac3dc59a8d0671daf2094df19d86190c
+54138cfb994d45344c9097658bb274dd59ce346a
+1348e98792b1089129ccf8750743308198e29144
+# P-B dispatch split (2026-07-21)
+957e6c0db9dfef643996c2089463b422ad88f106
+4d271d97a67833b87df150424aee8cdb70f07e49
+1f5c9247717e6ea660d113a05f12969ddaacf6c3
+c1740f2f704a5cd1adb8c6c778a0214ebfe56a31
+4bad469e5400bb684f510c5662200f13f3a1ae02
+fb59db170a58b7bcabfa2a80a1f5522b50cf5014
+5c1cb98268263458c0d03176ef67700cf0b23afe

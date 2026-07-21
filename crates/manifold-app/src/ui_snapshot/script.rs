@@ -320,15 +320,7 @@ struct Runner {
     // headlessly (drag snapshots stay None between atomic gestures; prefs
     // are in-memory, never the user's file — D7 determinism holds).
     user_prefs: crate::user_prefs::UserPrefs,
-    slider_snapshot: Option<f32>,
-    trim_snapshot: Option<(f32, f32)>,
-    target_snapshot: Option<f32>,
-    decay_snapshot: Option<f32>,
-    audio_shape_snapshot: Option<manifold_core::audio_mod::AudioModShape>,
-    audio_action_snapshot: Option<manifold_core::audio_mod::TriggerAction>,
-    audio_crossover_snapshot: Option<(f32, f32)>,
-    audio_send_gain_drag_snapshot: Option<f32>,
-    active_inspector_drag: Option<crate::app::ActiveInspectorDrag>,
+    scrub: crate::ui_bridge::ScrubState,
     // D9a: every composited frame a `Step` action advanced, in order —
     // assembled into one contact-sheet PNG at the end of `run` when
     // non-empty. D9b: the most recent `Pointer` gesture's synthesized
@@ -363,15 +355,7 @@ impl Runner {
             clock: 0.0,
             modifiers: manifold_ui::input::Modifiers::NONE,
             user_prefs: crate::user_prefs::UserPrefs::in_memory(),
-            slider_snapshot: None,
-            trim_snapshot: None,
-            target_snapshot: None,
-            decay_snapshot: None,
-            audio_shape_snapshot: None,
-            audio_action_snapshot: None,
-            audio_crossover_snapshot: None,
-            audio_send_gain_drag_snapshot: None,
-            active_inspector_drag: None,
+            scrub: crate::ui_bridge::ScrubState::default(),
             filmstrip: Vec::new(),
             last_gesture_points: Vec::new(),
             modulation_timing_scratch: Vec::new(),
@@ -1019,26 +1003,18 @@ impl Runner {
     /// any host, `save()` diverted to the temp dir.
     fn apply_panel_actions(&mut self, ui: &mut UIRoot, data: &mut SceneData, actions: &[PanelAction]) {
         for action in actions {
-            let result = crate::ui_bridge::dispatch(
-                action,
-                &mut data.project,
-                &self.content_tx,
-                &self.content_state,
-                ui,
-                &mut data.selection,
-                &mut self.active_layer,
-                &mut self.slider_snapshot,
-                &mut self.trim_snapshot,
-                &mut self.target_snapshot,
-                &mut self.decay_snapshot,
-                &mut self.audio_shape_snapshot,
-                &mut self.audio_action_snapshot,
-                &mut self.audio_crossover_snapshot,
-                &mut self.audio_send_gain_drag_snapshot,
-                &mut self.user_prefs,
-                &mut self.active_inspector_drag,
-                None,
-            );
+            let mut dctx = crate::ui_bridge::DispatchCtx {
+                project: &mut data.project,
+                content_tx: &self.content_tx,
+                content_state: &self.content_state,
+                ui: &mut *ui,
+                selection: &mut data.selection,
+                active_layer: &mut self.active_layer,
+                user_prefs: &mut self.user_prefs,
+                editor_target: None,
+                scrub: &mut self.scrub,
+            };
+            let result = crate::ui_bridge::dispatch(action, &mut dctx);
             println!("ui-snap --script: dispatched {action:?} (structural={})", result.structural_change);
             if result.structural_change {
                 self.needs_structural_sync = true;
