@@ -1,14 +1,6 @@
 //! Inspector-related dispatch: effect params, drivers, envelopes, generator params,
 //! master/layer/clip chrome, slider interactions.
 
-use manifold_ui::{AudioSetupAction, EditingAction, MappingAction, ModulationAction, ParamsAction};
-use manifold_core::effects::ParameterDriver;
-use manifold_core::types::{BeatDivision, DriverWaveform};
-use manifold_core::LayerId;
-use manifold_ui::{DriverConfigAction, PanelAction};
-
-use super::DispatchResult;
-
 // `dispatch_inspector` (the first-non-unhandled chain over the six
 // `dispatch/` handler modules) was RETIRED in P-D / D-D1: with `PanelAction`
 // now a flat sum, the top-level `ui_bridge::dispatch` routes each domain arm
@@ -29,7 +21,16 @@ mod scene_card_convergence_tests {
     //! `scene_layer_project` SceneStarter fixture — C7's precedent for
     //! testing a scene write against the layer's REAL def, not a bare
     //! `EffectGraphDef` literal).
-    use super::*;
+    // Test-only imports, relocated from file scope at the P-D landing: this
+    // file's only production content was `dispatch_inspector`, retired in D-D1,
+    // so these were unused in a non-test build. (The former `use super::*` here
+    // is dropped: the inspector module now has no non-test items to re-export.)
+    use manifold_ui::{AudioSetupAction, EditingAction, MappingAction, ModulationAction, ParamsAction};
+    use manifold_core::effects::ParameterDriver;
+    use manifold_core::types::{BeatDivision, DriverWaveform};
+    use manifold_core::LayerId;
+    use manifold_ui::{DriverConfigAction, PanelAction};
+    use crate::ui_bridge::DispatchResult;
     use crate::app::SelectionState;
     use crate::content_command::ContentCommand;
     use crate::ui_root::UIRoot;

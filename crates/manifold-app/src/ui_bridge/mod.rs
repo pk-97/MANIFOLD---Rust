@@ -64,16 +64,6 @@ pub struct DispatchResult {
         manifold_ui::panels::picker_core::Source,
         String,
     )>,
-    /// Chain-router fall-through marker: `true` ONLY when built by `unhandled()`
-    /// (a sub-dispatcher's `match action` had no arm for the action). Private —
-    /// every `DispatchResult` is built through the four constructors here, so it
-    /// can never be set externally. The SOLE consumer is `dispatch_inspector`'s
-    /// first-non-unhandled chain router; do NOT branch on it anywhere else
-    /// (UI_FUNNEL_DECOMPOSITION P-B, D6). `pub(crate)` so the router in
-    /// `inspector.rs` reads it; still unforgeable (built only via the four
-    /// constructors here — see the zero-struct-literal gate on the sentinel
-    /// commit).
-    pub(crate) unhandled: bool,
 }
 
 impl DispatchResult {
@@ -83,7 +73,6 @@ impl DispatchResult {
             resolution_changed: false,
             begin_save_preset: None,
             begin_rename_preset: None,
-            unhandled: false,
         }
     }
     pub(crate) fn structural() -> Self {
@@ -92,7 +81,6 @@ impl DispatchResult {
             resolution_changed: false,
             begin_save_preset: None,
             begin_rename_preset: None,
-            unhandled: false,
         }
     }
     pub(crate) fn resolution() -> Self {
@@ -101,34 +89,17 @@ impl DispatchResult {
             resolution_changed: true,
             begin_save_preset: None,
             begin_rename_preset: None,
-            unhandled: false,
         }
     }
+    /// Distinction retired with the chain router (P-D); kept as call-site
+    /// documentation for unclaimed variants — identical to `handled()`.
     pub(crate) fn unhandled() -> Self {
         Self {
             structural_change: false,
             resolution_changed: false,
             begin_save_preset: None,
             begin_rename_preset: None,
-            unhandled: true,
         }
-    }
-}
-
-#[cfg(test)]
-mod dispatch_result_sentinel {
-    use super::DispatchResult;
-
-    /// The chain router (P-B D6, split slice) relies on EXACTLY one constructor
-    /// reporting unhandled — `handled()` and `unhandled()` were byte-identical
-    /// before this field, so a chain would have stopped at the first module
-    /// every time. Reads the private field directly (same module).
-    #[test]
-    fn only_unhandled_sets_the_sentinel() {
-        assert!(DispatchResult::unhandled().unhandled);
-        assert!(!DispatchResult::handled().unhandled);
-        assert!(!DispatchResult::structural().unhandled);
-        assert!(!DispatchResult::resolution().unhandled);
     }
 }
 

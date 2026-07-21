@@ -3,7 +3,6 @@
 //! broadcast, plus the tracks-stash classification. Moved verbatim from
 //! ui_root/mod.rs (UI_FUNNEL_DECOMPOSITION P-F2a, pure move).
 
-use manifold_ui::{AudioSetupAction};
 use super::*;
 
 impl UIRoot {
@@ -176,6 +175,7 @@ mod drag_capture_tests {
     //! the layout) without needing a live `Project` (the same sequencing
     //! `ui_snapshot/script.rs` uses before `sync_build`).
     use super::*;
+    use manifold_ui::AudioSetupAction; // test-only (relocated from file scope, P-D landing)
 
     const W: f32 = 1536.0;
     const H: f32 = 1216.0;
