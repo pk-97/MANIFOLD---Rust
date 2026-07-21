@@ -17,10 +17,12 @@ D7 lists six modules: `frame/{drain,events,sync,push,present}.rs` + `editor_brid
 
 **`editor_bridge.rs`** — the graph-editor bridge cluster (`:26–838` + `:4087–4852`):
 - Methods: `mapping_target`, `scope_hover_uv`, `watched_reshape`, `watched_full_reshape`, `watched_binding_for_node_param`, `watched_current_node_param_value`, `watched_node_param_is_wired`, `seed_def_for`, `watched_def_cloned`, `copy_selected_graph_nodes`, `confirm_remove_node_orphans`, `watched_value`, `preview_mapping`, `commit_mapping`, `commit_mapping_with_reverse`, `resolve_effect_card_id`, `watch_effect_graph`, `watch_generator_graph`, `begin_save_preset_prompt`, `begin_rename_preset_prompt`, `editor_canvas_viewport`, `editor_ui_snapshot`, `present_graph_editor_window`.
-- Structs: `BoundNodeParamDrag`, `UnboundNodeParamDrag` (+ their impls).
+- Structs: ~~`BoundNodeParamDrag`, `UnboundNodeParamDrag` (+ their impls)~~ **PARKED — stay in app_render.rs** (field-widening not provable residue-0; see `parked.md` P-F1-drag-structs).
 - Free fns: `build_mapping_command`, `seed_def_for_project`, `build_mapping_command_with_reverse`, `descend_def_level`, `full_reshape_from_def`, `descend_level_ref`, `binding_for_node_param`, `node_param_is_wired`, `node_param_value`, `serialized_value_as_f32`, `find_snapshot_node`, `resolve_preview_target`, `resolve_boundary_node`, `resolve_producer`, `producer_into`, `primary_texture_port`, `non_empty_node_id`, `resolve_canvas_binding`.
-- Tests: `preview_target_tests`, `binding_reroute_tests`, `bound_node_param_drag_tests`, `unbound_node_param_drag_tests`.
-- Re-exports (external callers, fenced files): `build_mapping_command`, `seed_def_for_project` (`app.rs`), `resolve_canvas_binding` (`window_input.rs`) keep their `crate::app_render::` path via `pub(crate) use`.
+- Tests: `preview_target_tests`, `binding_reroute_tests` (moved); ~~`bound_node_param_drag_tests`, `unbound_node_param_drag_tests`~~ **PARKED with the structs**.
+- Re-exports (external/staying callers): `build_mapping_command`, `seed_def_for_project` (`app.rs`), `resolve_canvas_binding` (`window_input.rs`), `serialized_value_as_f32` keep their `crate::app_render::` path via `pub(crate) use`.
+
+**Landed (verified):** editor_bridge `57f17529` (residue 0, 319 tests) · present `bc42e9a2` (residue 0). app_render.rs 6548 → 3774 lines. `tick_and_render` stays the ~3,250-line inline monolith (111–~3360) — the drain/events/sync/push body split is the parked semantic work, so the "orchestrator under one page" end-state is NOT reached this phase.
 
 **`frame/present.rs`** — `present_all_windows` (4853–5530), `represent_cached_offscreen` (5531–5587) + present-path private helpers `bug060_dump_every`, `bug060_dump_png`, `format_scope_readout`, `fmt_table_cell_seed`.
 
