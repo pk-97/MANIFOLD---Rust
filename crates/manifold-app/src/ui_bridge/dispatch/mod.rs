@@ -7,6 +7,7 @@
 
 pub(crate) mod browser;
 pub(crate) mod clip;
+pub(crate) mod params;
 pub(crate) mod resolve;
 
 // `resolve.rs`'s moved helpers reference `super::resolve_effect_id` /
@@ -15,8 +16,16 @@ pub(crate) mod resolve;
 // shallower than `resolve.rs`'s own depth under `ui_bridge::dispatch`). This
 // re-export makes both names members of `dispatch` too, so the moved bodies
 // resolve unchanged — a private `use`, visible to `dispatch` and its
-// descendants (`resolve.rs`), needs no wider visibility.
-use super::{resolve_active_layer_index, resolve_effect_id};
+// descendants (`resolve.rs`), needs no wider visibility. `params.rs` (S3)
+// extends the same set: its moved arm bodies and D-11 preamble reference
+// `super::editor_dispatch_context` / `super::resolve_effect_target` verbatim,
+// and its own top-level `use super::{resolve_effects_mut,
+// resolve_effects_read};` (mirroring inspector.rs's own import, one level
+// deeper) needs those two re-exported here too.
+use super::{
+    editor_dispatch_context, resolve_active_layer_index, resolve_effect_id, resolve_effect_target,
+    resolve_effects_mut, resolve_effects_read,
+};
 
 #[cfg(test)]
 mod chain_completeness {
