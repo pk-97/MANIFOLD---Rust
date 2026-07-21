@@ -397,3 +397,48 @@ keep it in the router's scope). Inspector chain (`dispatch_inspector`) and its
 
 ## D-D3 (scrub-trio annotation) -- TODO, pre-derived while warm
 Snapshot/Changed/Commit trio membership per variant is P-I's kill list; annotate here in D-D3.
+
+## D-D3 — scrub-trio annotation (P-I kill list; Snapshot/Changed/Commit + Drag Begin/Change/Commit gestures)
+
+Computed from the baseline by suffix family. **15 full trios** (all of open/change/close present). 
+These are the value-scrub gestures P-I's `Scrub` wire absorbs (D4/D8) — RootAction holds them until then.
+
+- **AbletonMacroTrim** [Mapping]: AbletonMacroTrimSnapshot, AbletonMacroTrimChanged, AbletonMacroTrimCommit
+- **AudioCrossover** [AudioSetup]: AudioCrossoverDragBegin, AudioCrossoverChanged, AudioCrossoverCommit
+- **AudioGain** [Params]: AudioGainSnapshot, AudioGainChanged, AudioGainCommit
+- **AudioModStepAmount** [Modulation]: AudioModStepAmountSnapshot, AudioModStepAmountChanged, AudioModStepAmountCommit
+- **EffectMappingAffine** [Root]: EffectMappingAffineSnapshot, EffectMappingAffineChanged, EffectMappingAffineCommit
+- **EffectMappingRange** [Root]: EffectMappingRangeSnapshot, EffectMappingRangeChanged, EffectMappingRangeCommit
+- **EnvDecay** [Modulation]: EnvDecaySnapshot, EnvDecayChanged, EnvDecayCommit
+- **LayerOpacity** [Params]: LayerOpacitySnapshot, LayerOpacityChanged, LayerOpacityCommit
+- **LedBrightness** [Params]: LedBrightnessSnapshot, LedBrightnessChanged, LedBrightnessCommit
+- **Macro** [Params]: MacroSnapshot, MacroChanged, MacroCommit
+- **MasterOpacity** [Params]: MasterOpacitySnapshot, MasterOpacityChanged, MasterOpacityCommit
+- **Param** [Params]: ParamSnapshot, ParamChanged, ParamCommit
+- **RelightParam** [Params]: RelightParamSnapshot, RelightParamChanged, RelightParamCommit
+- **Target** [Modulation]: TargetSnapshot, TargetChanged, TargetCommit
+- **Trim** [Modulation]: TrimSnapshot, TrimChanged, TrimCommit
+
+### Partial families (15) — 2-of-3 or lone; review at P-I, NOT auto-trios
+- AudioModShape [Modulation]: AudioModShapeCommit, AudioModShapeSnapshot
+- AudioModShapeParam [Modulation]: AudioModShapeParamChanged
+- AudioSendGain [AudioSetup]: AudioSendGainDragBegin
+- AudioSendGainDrag [AudioSetup]: AudioSendGainDragChanged, AudioSendGainDragCommit
+- AudioTriggerShape [AudioSetup]: AudioTriggerShapeCommit, AudioTriggerShapeSnapshot
+- AudioTriggerShapeParam [AudioSetup]: AudioTriggerShapeParamChanged
+- ClipDetectOnset [Clip]: ClipDetectOnsetChanged
+- ClipDetectSensitivity [Clip]: ClipDetectSensitivityChanged
+- Layer [Layer]: LayerDragEnded, LayerDragMoved
+- Marker [Marker]: MarkerDragEnded, MarkerDragMoved
+- ModConfigTab [Params]: ModConfigTabChanged
+- RelightHeightFrom [Params]: RelightHeightFromChanged
+- SceneSetupParam [Project]: SceneSetupParamChanged
+- SceneSetupSelection [Root]: SceneSetupSelectionChanged
+- ViewportHover [Editing]: ViewportHoverChanged
+
+**Reconstructed trios (split above by infix naming — P-I should treat as full trios, +3 → 18 real):**
+- AudioModShape [Modulation]: Snapshot / **AudioModShapeParamChanged** / Commit (middle carries `Param` infix)
+- AudioTriggerShape [AudioSetup]: Snapshot / **AudioTriggerShapeParamChanged** / Commit (middle carries `Param` infix)
+- AudioSendGain [AudioSetup]: **DragBegin** / DragChanged / DragCommit (opener stem lacks `Drag`)
+
+Remaining partials are genuine non-trios: LayerDrag*/MarkerDrag* are POSITION drags (not value-scrub), and the lone `*Changed` (ViewportHover, ClipDetectOnset/Sensitivity, ModConfigTab, SceneSetupParam, RelightHeightFrom) are single-shot changes with no begin/commit envelope.
