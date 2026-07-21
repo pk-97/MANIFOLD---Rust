@@ -9,6 +9,7 @@ mod inspector;
 mod layer;
 mod marker;
 mod project;
+mod projection;
 mod state_sync;
 mod transport;
 
