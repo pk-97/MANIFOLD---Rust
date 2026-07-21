@@ -50,6 +50,7 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-300 | **ui-flow-asserts-drifted-from-fixtures** | Five UI-flows are red under their correct manifest scene from stale asserts / fixture drift since authoring (audio-clip-trigger-add: 3 `Snare` not 1; audio-dock-toggle: inspector `Amount` row gone post-toggle; audio-dock-scroll: consumer-row scroll rect ~273px stale; calibrated-param-card-reads-manifest: expects 5 `Amount`, 3 render; drag-clip-release-over-inspector: no `Video 3` clip) — surfaced by S8's `run_ui_flows.py`, XFAIL'd in `scripts/ui-flows/manifest.json`; each needs a fixture-vs-authoring-commit bisect — LOW (test infra) |
 | BUG-299 | **osc-timecode-test-flaky-under-cpu-starvation** | `osc_timecode_arrival_triggers_play` failed once ("timecode never observed — wiring broken") during concurrent duplicate full sweeps on 2026-07-21, passed solo and in every later sweep; timing-sensitive test starved of CPU, not a wiring bug — fix shape: give the arrival-wait a starvation-tolerant deadline or mark the test `serial`; LOW (test infra) |
 | BUG-298 | **slider-fill-under-modulation-pixel-unverified** | the `--script` harness now proves a modulation-changed param VALUE (text) across snapshots (BUG-234), but the slider FILL/thumb visual under modulation is only inferred-correct (rides `reconcile_state`'s `sync_param_value` off the same `effective` value) — never confirmed by a rendered PNG diff; this is the gap VD-031 originally mislabeled "BUG-235" before that id was reassigned to an audio-timing bug — LOW (verification gap) |
 | BUG-290 | **gpu-proofs-test-binary-faults-gpu-firmware** | AGX firmware faults (BIF0 page fault + progress timeout) during GPU test runs freeze every display; hardening landed @ `7cacb965` (cross-process flock + sg_blur_dynamic clamp), conviction run owed with Peter present |
@@ -198,6 +199,20 @@ workflow journal at
 System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md).
 
 ## Open
+
+### BUG-300 (ui-flow-asserts-drifted-from-fixtures) — five UI-flows red under their correct manifest scene: stale assertions / fixture drift since authoring — surfaced 2026-07-21 by S8's `run_ui_flows.py`
+**Status:** OPEN · found 2026-07-21 (WS2 S8 flow-manifest lane)
+Each flow was green at authoring (dates below) and fails now under its correct authoring scene; a whole-scene sweep (every built-in fixture) confirmed none pass under any scene, so this is assertion/fixture drift, not a scene-mapping error. All five are XFAIL'd in `scripts/ui-flows/manifest.json` (`expected_fail`, `bug: BUG-300`) so the S8 gate stays green and the runner flags any that turns green for promotion back into `flows`.
+
+Per-flow symptom (scene in brackets):
+- `audio-clip-trigger-add` [inspector] — clicks a `Snare` Button; **3 match, need 1**. Inspector fixture gained trigger drawers since the 14/14-green authoring (2026-07-10 audio-dock-p3b). Fix: narrow the selector (`under_text`/`nth`) or a single-trigger scene.
+- `audio-dock-toggle` [inspector] — asserts an inspector `Amount` row after the ⌘⇧A dock open; **found none** (was 9/9, 2026-07-10 audio-dock-p1). Suspect the toggled-dock tree no longer carries that label, or the assert predates a rename.
+- `audio-dock-scroll` [audiosends] — `EXTRA 23 • Bloom • Amount` lands y≈1405 vs expected 1132 (**~273px**). Suspect stale expected rect after the BUG-251/294 dock-scroll direction fixes.
+- `calibrated-param-card-reads-manifest` [inspector] — asserts `Count(5)` for `Amount`; **3 render** (2026-07-09 param-boundaries-p2). Stale count vs fixture.
+- `drag-clip-release-over-inspector` [timeline] — asserts a `Video 3` clip the timeline fixture **no longer builds** (was 12/12, 2026-07-08 drag-capture-p1).
+
+Root cause: unknown per-flow — suspects: `ui_snapshot/fixtures.rs` scenes edited after each flow was authored (labels/counts/clips changed) without updating the flow's asserts, vs a genuine app regression. Each needs a bisect of the current fixture against the flow's authoring commit.
+Fix shape: per flow, diff the current fixture vs the authoring-commit fixture; update the stale assert OR open a real regression if the app (not the fixture) changed. Promote each back into `manifest.json` `flows` as it goes green. Not investigated in S8 (scope = manifest + runner). Sibling tracked reds already in `expected_fail`: `param-step-action` (BUG-264), `scene-panel-card-convergence-c-p1b-object-scrub` (BUG-239/VD-035).
 
 ### BUG-299 — OSC timecode test flaky under heavy CPU load ("timecode never observed — wiring broken")
 **Status:** OPEN · found 2026-07-21 (god-file wave, landing-gate run)

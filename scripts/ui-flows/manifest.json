@@ -1,0 +1,76 @@
+{
+  "_comment": "Flow -> headless scene map for the UI-flow gate (UI_FUNNEL_DECOMPOSITION S8). Each flow runs as `cargo xtask ui-snap <scene> --script scripts/ui-flows/<flow>.json`; the scene builds a fixture (crates/manifold-app/src/ui_snapshot/fixtures.rs) whose tree carries the flow's selectors. Scenes derived from selectors vs fixtures.rs + the fixed rules (select-and-inspect=inspector; scene-setup-*=gltfscene except empty-states=timeline; drag-clip=timeline) and VERIFIED by scripts/run_ui_flows.py: every 'flows' entry PASSes; every 'expected_fail' entry is a known-red flow (mapped to its correct authoring scene, red for a tracked/pending reason, NOT a mapping error — the whole-scene sweep confirmed none pass under any built-in fixture). Validate/regenerate: python3 scripts/run_ui_flows.py.",
+  "flows": {
+    "audio-setup-hygiene": "audiosends",
+    "automation-placeholder-first-click": "automationplaceholder",
+    "bug060-inspector-footer-containment": "bug060",
+    "drag-automation-point": "automation",
+    "drag-clip": "timeline",
+    "envelope-modulation": "envmod",
+    "gltf-clip-scrub-retrigger": "gltfanimscene",
+    "gltf-import-card-sections": "gltfscene",
+    "inspector-card-drag-reorder": "inspector",
+    "inspector-drawer-filmstrip": "inspector",
+    "inspector-scroll": "inspector",
+    "ruler-scrub": "timeline",
+    "scene-card-convergence-c-p1d-light-scrub-drawer": "gltfscene",
+    "scene-card-convergence-c-p1d-roughness-scrub-drawer-undo": "gltfscene",
+    "scene-setup-add-fog-drag": "gltfscene",
+    "scene-setup-add-object": "gltfscene",
+    "scene-setup-close-button": "gltfscene",
+    "scene-setup-empty-states": "timeline",
+    "scene-setup-eye-toggle": "gltfscene",
+    "scene-setup-fog-density-card-row": "gltfscene",
+    "scene-setup-fog-undo-removes-fog": "gltfscene",
+    "scene-setup-heldout-merge-snapshot": "gltfscene",
+    "scene-setup-light-cast-shadows-toggle": "gltfscene",
+    "scene-setup-light-intensity-drag": "gltfscene",
+    "scene-setup-modifier-stack": "gltfscene",
+    "scene-setup-numeric-typein-box": "gltfscene",
+    "scene-setup-select-updates": "gltfscene",
+    "scene-setup-shadow-softness-dropdown": "gltfscene",
+    "scene-setup-ux-p2-demo": "gltfscene",
+    "select-and-inspect": "inspector",
+    "toggle-lanes": "automation",
+    "trim-clip-left": "timeline",
+    "zoom-out": "timeline"
+  },
+  "expected_fail": {
+    "param-step-action": {
+      "scene": "inspector",
+      "bug": "BUG-264",
+      "reason": "step 6 asserts an 'A'/'S' step-button under_text='Amount'; finds 0 on main (stale flow assert, pre-existing). Tracked OPEN."
+    },
+    "scene-panel-card-convergence-c-p1b-object-scrub": {
+      "scene": "gltfscene",
+      "bug": "BUG-239/VD-035",
+      "reason": "asserts name='scene_setup.object.roughness_value'; the converged object rows still expose name=None (no queryable widget name). Tracked (scene-flow no-name class; BUG-294 dock-scroll was the sibling, now fixed)."
+    },
+    "audio-clip-trigger-add": {
+      "scene": "inspector",
+      "bug": "BUG-300",
+      "reason": "authored 14/14 green on the GLOW inspector (2026-07-10 audio-dock-p3b); now 3 'Snare' buttons match where the flow needs exactly 1 — inspector fixture gained trigger drawers since authoring. Untracked before S8."
+    },
+    "audio-dock-toggle": {
+      "scene": "inspector",
+      "bug": "BUG-300",
+      "reason": "authored 9/9 green opening the dock via cmd+shift+A from the inspector (2026-07-10 audio-dock-p1); now the asserted inspector 'Amount' row is not found post-toggle. Untracked before S8."
+    },
+    "audio-dock-scroll": {
+      "scene": "audiosends",
+      "bug": "BUG-300",
+      "reason": "reaches the consumer-row scroll assert; 'EXTRA 23 • Bloom • Amount' lands at y~1405 vs expected 1132 (~273px). Suspect stale expected rect after the BUG-251/294 dock-scroll fixes. Untracked before S8."
+    },
+    "calibrated-param-card-reads-manifest": {
+      "scene": "inspector",
+      "bug": "BUG-300",
+      "reason": "asserts Count(5) 'Amount' labels; inspector fixture now renders 3. Stale count vs fixture drift since authoring (2026-07-09 param-boundaries-p2). Untracked before S8."
+    },
+    "drag-clip-release-over-inspector": {
+      "scene": "timeline",
+      "bug": "BUG-300",
+      "reason": "authored 12/12 green on timeline (2026-07-08 drag-capture-p1); now asserts a 'Video 3' clip the timeline fixture no longer builds. Untracked before S8."
+    }
+  },
+  "unresolved": {}
+}
