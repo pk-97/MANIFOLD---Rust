@@ -64,6 +64,39 @@ pub enum AutomationAction {
     ScrollTo {
         target: AutomationTarget,
     },
+    /// D8 (UI_FUNNEL_DECOMPOSITION): direct-set a scrubable param through the
+    /// REAL dispatch path — the runner emits `Scrub(Begin) → Scrub(Move, value)
+    /// → Scrub(Commit)` through `ui_bridge::dispatch`, so the set is
+    /// undo-correct by construction (one command per gesture) with no pixel
+    /// geometry. Fast setup for a flow's preconditions, no bypass.
+    SetParam {
+        param: FlowScrubTarget,
+        value: f32,
+    },
+}
+
+/// A direct-set scrub address for the [`AutomationAction::SetParam`] verb (D8).
+/// A small, JSON-friendly subset of the scrub families — the runner maps each
+/// to the real `ValueRef` before dispatching. A card `Param` needs a
+/// `GraphParamTarget`, expressed here as `EffectParam`/`GeneratorParam`; the
+/// keyless families (`MasterOpacity`, `LedBrightness`, `LayerOpacity`) and the
+/// index-keyed `Macro` carry no fixture-specific ids.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub enum FlowScrubTarget {
+    /// `ValueRef::MasterOpacity` — `settings.master_opacity`.
+    MasterOpacity,
+    /// `ValueRef::LedBrightness` — `settings.led_brightness`.
+    LedBrightness,
+    /// `ValueRef::LayerOpacity` — the active layer's opacity.
+    LayerOpacity,
+    /// `ValueRef::Macro(idx)` — a macro-bank knob by slot index.
+    Macro(usize),
+    /// `ValueRef::Param(GraphParamTarget::Effect(effect), param)` — a card param
+    /// on the active layer's `effect`-th effect.
+    EffectParam { effect: usize, param: String },
+    /// `ValueRef::Param(GraphParamTarget::Generator, param)` — a generator card
+    /// param on the active layer.
+    GeneratorParam { param: String },
 }
 
 /// §4 committed shape. `Surface`'s `surface` field is `&'static str` in the

@@ -8,7 +8,7 @@
 use crate::ParamsAction;
 #[cfg(test)]
 use crate::RootAction;
-use super::PanelAction;
+use super::{PanelAction, ScrubPhase, ScrubValue, ValueRef};
 use crate::chrome::{Align, ChromeHost, Pad, Sizing, SliderSpec, View};
 use crate::color;
 use crate::node::*;
@@ -164,9 +164,9 @@ impl LayerChromePanel {
                 font_size: FONT_SIZE,
                 label_width: OPACITY_LABEL_W,
                 reset: PanelAction::slider_reset(
-                    PanelAction::Params(ParamsAction::LayerOpacitySnapshot),
-                    PanelAction::Params(ParamsAction::LayerOpacityChanged(1.0)),
-                    PanelAction::Params(ParamsAction::LayerOpacityCommit),
+                    PanelAction::Scrub(ValueRef::LayerOpacity, ScrubPhase::Begin),
+                    PanelAction::Scrub(ValueRef::LayerOpacity, ScrubPhase::Move(ScrubValue::Scalar(1.0))),
+                    PanelAction::Scrub(ValueRef::LayerOpacity, ScrubPhase::Commit),
                 ),
             };
             header = header.child(
@@ -246,8 +246,8 @@ impl LayerChromePanel {
     pub fn handle_pointer_down(&mut self, node_id: NodeId, pos: Vec2) -> Vec<PanelAction> {
         if let Some(val) = self.opacity.try_start_drag(node_id, pos.x) {
             return vec![
-                PanelAction::Params(ParamsAction::LayerOpacitySnapshot),
-                PanelAction::Params(ParamsAction::LayerOpacityChanged(val)),
+                PanelAction::Scrub(ValueRef::LayerOpacity, ScrubPhase::Begin),
+                PanelAction::Scrub(ValueRef::LayerOpacity, ScrubPhase::Move(ScrubValue::Scalar(val))),
             ];
         }
         Vec::new()
@@ -255,14 +255,14 @@ impl LayerChromePanel {
 
     pub fn handle_drag(&mut self, pos: Vec2, tree: &mut UITree) -> Vec<PanelAction> {
         if let Some(val) = self.opacity.apply_drag(pos.x, tree, &fmt_opacity) {
-            return vec![PanelAction::Params(ParamsAction::LayerOpacityChanged(val))];
+            return vec![PanelAction::Scrub(ValueRef::LayerOpacity, ScrubPhase::Move(ScrubValue::Scalar(val)))];
         }
         Vec::new()
     }
 
     pub fn handle_drag_end(&mut self, _tree: &mut UITree) -> Vec<PanelAction> {
         if self.opacity.end_drag() {
-            return vec![PanelAction::Params(ParamsAction::LayerOpacityCommit)];
+            return vec![PanelAction::Scrub(ValueRef::LayerOpacity, ScrubPhase::Commit)];
         }
         Vec::new()
     }
@@ -371,7 +371,7 @@ mod tests {
         let track = panel.opacity.track_id().unwrap();
         match reg.resolve(&tree, Some(track), crate::intent::Gesture::RightClick) {
             Some(PanelAction::Root(RootAction::SliderReset { changed, .. })) => {
-                assert!(matches!(*changed, PanelAction::Params(ParamsAction::LayerOpacityChanged(v)) if (v - 1.0).abs() < f32::EPSILON));
+                assert!(matches!(*changed, PanelAction::Scrub(ValueRef::LayerOpacity, ScrubPhase::Move(ScrubValue::Scalar(v))) if (v - 1.0).abs() < f32::EPSILON));
             }
             other => panic!("expected SliderReset, got {other:?}"),
         }

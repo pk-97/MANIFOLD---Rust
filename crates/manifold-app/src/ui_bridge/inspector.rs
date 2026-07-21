@@ -29,7 +29,7 @@ mod scene_card_convergence_tests {
     use manifold_core::effects::ParameterDriver;
     use manifold_core::types::{BeatDivision, DriverWaveform};
     use manifold_core::LayerId;
-    use manifold_ui::{DriverConfigAction, PanelAction};
+    use manifold_ui::{DriverConfigAction, PanelAction, ScrubPhase, ScrubValue, ValueRef};
     use crate::ui_bridge::DispatchResult;
     use crate::app::SelectionState;
     use crate::content_command::ContentCommand;
@@ -159,10 +159,11 @@ mod scene_card_convergence_tests {
     /// Undo-race repro (param-feed regression, 2026-07-18): since
     /// `ac96c65c` the content thread ships a `ModulationSnapshot` EVERY
     /// tick and `app_render.rs` applies it to `local_project`
-    /// unconditionally (only overlay drags gate it). The restore guard
-    /// (`ActiveInspectorDrag`) has no Macro variant, so a stale snapshot
-    /// landing mid-drag stomps the in-flight value back to pre-drag; the
-    /// commit handler then sees old == new and emits NO undo command.
+    /// unconditionally (only overlay drags gate it). At the time the restore
+    /// guard had no Macro variant, so a stale snapshot landing mid-drag stomped
+    /// the in-flight value back to pre-drag and the commit handler saw
+    /// old == new and emitted NO undo command. The guard is now
+    /// `ScrubState.active` (`ResolvedScrub::Macro`); this proves it holds.
     #[test]
     fn macro_drag_survives_a_mid_gesture_modulation_snapshot() {
         let mut project = Project::default();
@@ -173,18 +174,17 @@ mod scene_card_convergence_tests {
         stale.capture_into(&project);
 
         let mut h = Harness::new(None);
-        h.dispatch(&PanelAction::Params(ParamsAction::MacroSnapshot(0)), &mut project);
-        h.dispatch(&PanelAction::Params(ParamsAction::MacroChanged(0, 0.8)), &mut project);
+        h.dispatch(&PanelAction::Scrub(ValueRef::Macro(0), ScrubPhase::Begin), &mut project);
+        h.dispatch(&PanelAction::Scrub(ValueRef::Macro(0), ScrubPhase::Move(ScrubValue::Scalar(0.8))), &mut project);
         h.drain();
 
         // What the UI frame drain now does every tick (app_render.rs ~line
-        // 868): apply the snapshot, then restore only the guarded drag kinds.
+        // 868): apply the snapshot, then restore the guarded gesture (the macro
+        // rides the P-I `active` gesture now, restored via `restore_dragged`).
         stale.apply(&mut project);
-        if let Some(ref drag) = h.scrub.active_inspector_drag {
-            drag.apply(&mut project);
-        }
+        h.scrub.restore_dragged(&mut project);
 
-        h.dispatch(&PanelAction::Params(ParamsAction::MacroCommit(0)), &mut project);
+        h.dispatch(&PanelAction::Scrub(ValueRef::Macro(0), ScrubPhase::Commit), &mut project);
         let cmds = h.drain();
         assert!(
             cmds.iter().any(|c| matches!(c, ContentCommand::Execute(_))),
@@ -204,7 +204,7 @@ mod scene_card_convergence_tests {
     /// same store `TrimChanged`'s driver dual-edit uses.
     #[test]
     fn driver_trim_range_survives_a_mid_gesture_snapshot() {
-        use crate::app::ActiveInspectorDrag;
+        use crate::ui_bridge::scrub::{ResolvedScrub, ScrubState};
         let (mut project, layer_id) = scene_layer_project();
         let target = manifold_core::GraphTarget::Generator(layer_id.clone());
         let pid: manifold_core::effects::ParamId = std::borrow::Cow::Owned("density".to_string());
@@ -236,17 +236,20 @@ mod scene_card_convergence_tests {
             }
         });
 
-        // app_render mid-drag: local_project := stale, then restore the drag.
-        let drag = ActiveInspectorDrag::Trim {
-            kind: manifold_ui::panels::TrimKind::Driver,
-            target: target.clone(),
-            ableton_target: None,
-            param_id: pid.clone(),
-            min: 0.3,
-            max: 0.9,
+        // app_render mid-drag: local_project := stale, then restore the gesture
+        // through the P-I `active` scrub state (the production restore path).
+        let scrub = ScrubState {
+            active: Some(ResolvedScrub::Trim {
+                kind: manifold_ui::panels::TrimKind::Driver,
+                target: target.clone(),
+                ableton_target: None,
+                param_id: pid.clone(),
+                baseline: (0.3, 0.9),
+                live: (0.3, 0.9),
+            }),
         };
         let mut local = stale;
-        drag.apply(&mut local);
+        scrub.restore_dragged(&mut local);
 
         let (mn, mx) = local
             .with_preset_graph_mut(&target, |inst| {
@@ -272,9 +275,10 @@ mod scene_card_convergence_tests {
     ///   (data_version bump from any concurrent command — playback, MIDI
     ///   phantom commit, another gesture), simulated exactly the way
     ///   app_render.rs ~808-817 applies it: replace the local project, then
-    ///   restore the guarded drag. Families without an `ActiveInspectorDrag`
-    ///   variant lose the in-flight value here — the commit then sees
-    ///   old == new and emits NO undo entry ("doesn't respond").
+    ///   restore the guarded drag (`ScrubState::restore_dragged`). A family
+    ///   whose gesture doesn't reach the `active` restore slot loses the
+    ///   in-flight value here — the commit then sees old == new and emits NO
+    ///   undo entry ("doesn't respond").
     mod undo_baseline {
         use super::*;
         use manifold_editing::service::EditingService;
@@ -365,9 +369,9 @@ mod scene_card_convergence_tests {
         /// guarded drag (app_render.rs ~808-817).
         fn snapshot_stomp(h: &Harness, stale: &Project) -> Project {
             let mut p = stale.clone();
-            if let Some(ref drag) = h.scrub.active_inspector_drag {
-                drag.apply(&mut p);
-            }
+            // Restore whichever gesture is live — the interim
+            // `active_inspector_drag` families or the P-I `active` gesture.
+            h.scrub.restore_dragged(&mut p);
             p
         }
 
@@ -509,11 +513,11 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 |h, p| {
-                    h.dispatch(&PanelAction::Params(ParamsAction::MasterOpacitySnapshot), p);
-                    h.dispatch(&PanelAction::Params(ParamsAction::MasterOpacityChanged(0.6)), p);
-                    h.dispatch(&PanelAction::Params(ParamsAction::MasterOpacityChanged(after)), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Begin), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Move(ScrubValue::Scalar(0.6))), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Move(ScrubValue::Scalar(after))), p);
                 },
-                |h, p| h.dispatch(&PanelAction::Params(ParamsAction::MasterOpacityCommit), p),
+                |h, p| h.dispatch(&PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Commit), p),
                 |p| p.settings.master_opacity,
                 before,
                 after,
@@ -541,11 +545,11 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 |h, p| {
-                    h.dispatch(&PanelAction::Params(ParamsAction::LedBrightnessSnapshot), p);
-                    h.dispatch(&PanelAction::Params(ParamsAction::LedBrightnessChanged(0.9)), p);
-                    h.dispatch(&PanelAction::Params(ParamsAction::LedBrightnessChanged(after)), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::LedBrightness, ScrubPhase::Begin), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::LedBrightness, ScrubPhase::Move(ScrubValue::Scalar(0.9))), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::LedBrightness, ScrubPhase::Move(ScrubValue::Scalar(after))), p);
                 },
-                |h, p| h.dispatch(&PanelAction::Params(ParamsAction::LedBrightnessCommit), p),
+                |h, p| h.dispatch(&PanelAction::Scrub(ValueRef::LedBrightness, ScrubPhase::Commit), p),
                 |p| p.settings.led_brightness,
                 before,
                 after,
@@ -572,11 +576,11 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 |h, p| {
-                    h.dispatch(&PanelAction::Params(ParamsAction::MacroSnapshot(0)), p);
-                    h.dispatch(&PanelAction::Params(ParamsAction::MacroChanged(0, 0.5)), p);
-                    h.dispatch(&PanelAction::Params(ParamsAction::MacroChanged(0, 0.8)), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::Macro(0), ScrubPhase::Begin), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::Macro(0), ScrubPhase::Move(ScrubValue::Scalar(0.5))), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::Macro(0), ScrubPhase::Move(ScrubValue::Scalar(0.8))), p);
                 },
-                |h, p| h.dispatch(&PanelAction::Params(ParamsAction::MacroCommit(0)), p),
+                |h, p| h.dispatch(&PanelAction::Scrub(ValueRef::Macro(0), ScrubPhase::Commit), p),
                 |p| p.settings.macro_bank.slots[0].value,
                 0.2,
                 0.8,
@@ -610,11 +614,11 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 |h, p| {
-                    h.dispatch(&PanelAction::Params(ParamsAction::LayerOpacitySnapshot), p);
-                    h.dispatch(&PanelAction::Params(ParamsAction::LayerOpacityChanged(0.9)), p);
-                    h.dispatch(&PanelAction::Params(ParamsAction::LayerOpacityChanged(0.55)), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::LayerOpacity, ScrubPhase::Begin), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::LayerOpacity, ScrubPhase::Move(ScrubValue::Scalar(0.9))), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::LayerOpacity, ScrubPhase::Move(ScrubValue::Scalar(0.55))), p);
                 },
-                |h, p| h.dispatch(&PanelAction::Params(ParamsAction::LayerOpacityCommit), p),
+                |h, p| h.dispatch(&PanelAction::Scrub(ValueRef::LayerOpacity, ScrubPhase::Commit), p),
                 move |p| {
                     p.timeline
                         .find_layer_by_id(&lid)
@@ -652,11 +656,11 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 |h, p| {
-                    h.dispatch(&PanelAction::Params(ParamsAction::AudioGainSnapshot(lid.clone())), p);
-                    h.dispatch(&PanelAction::Params(ParamsAction::AudioGainChanged(lid.clone(), 3.0)), p);
-                    h.dispatch(&PanelAction::Params(ParamsAction::AudioGainChanged(lid.clone(), -6.0)), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::LayerAudioGain(lid.clone()), ScrubPhase::Begin), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::LayerAudioGain(lid.clone()), ScrubPhase::Move(ScrubValue::Scalar(3.0))), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::LayerAudioGain(lid.clone()), ScrubPhase::Move(ScrubValue::Scalar(-6.0))), p);
                 },
-                |h, p| h.dispatch(&PanelAction::Params(ParamsAction::AudioGainCommit(lid.clone())), p),
+                |h, p| h.dispatch(&PanelAction::Scrub(ValueRef::LayerAudioGain(lid.clone()), ScrubPhase::Commit), p),
                 move |p| {
                     p.timeline
                         .find_layer_by_id(&lid2)
@@ -694,11 +698,11 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 |h, p| {
-                    h.dispatch(&PanelAction::Params(ParamsAction::ParamSnapshot(gpt(), pid.clone())), p);
-                    h.dispatch(&PanelAction::Params(ParamsAction::ParamChanged(gpt(), pid.clone(), before + 0.1)), p);
-                    h.dispatch(&PanelAction::Params(ParamsAction::ParamChanged(gpt(), pid.clone(), after)), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::Param(gpt(), pid.clone()), ScrubPhase::Begin), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::Param(gpt(), pid.clone()), ScrubPhase::Move(ScrubValue::Scalar(before + 0.1))), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::Param(gpt(), pid.clone()), ScrubPhase::Move(ScrubValue::Scalar(after))), p);
                 },
-                |h, p| h.dispatch(&PanelAction::Params(ParamsAction::ParamCommit(gpt(), pid.clone())), p),
+                |h, p| h.dispatch(&PanelAction::Scrub(ValueRef::Param(gpt(), pid.clone()), ScrubPhase::Commit), p),
                 move |p| gen_inst(p, &probe_lid).get_base_param(probe_pid.as_ref()),
                 before,
                 after,
@@ -752,9 +756,9 @@ mod scene_card_convergence_tests {
             let after = before_a + 0.25;
 
             let target = manifold_ui::GraphParamTarget::GeneratorOf(layer_a.clone());
-            h.dispatch(&PanelAction::Params(ParamsAction::ParamSnapshot(target.clone(), pid.clone())), &mut project);
-            h.dispatch(&PanelAction::Params(ParamsAction::ParamChanged(target.clone(), pid.clone(), after)), &mut project);
-            h.dispatch(&PanelAction::Params(ParamsAction::ParamCommit(target, pid.clone())), &mut project);
+            h.dispatch(&PanelAction::Scrub(ValueRef::Param(target.clone(), pid.clone()), ScrubPhase::Begin), &mut project);
+            h.dispatch(&PanelAction::Scrub(ValueRef::Param(target.clone(), pid.clone()), ScrubPhase::Move(ScrubValue::Scalar(after))), &mut project);
+            h.dispatch(&PanelAction::Scrub(ValueRef::Param(target, pid.clone()), ScrubPhase::Commit), &mut project);
 
             assert_eq!(
                 gen_inst(&project, &layer_a).get_base_param(pid.as_ref()),
@@ -791,23 +795,26 @@ mod scene_card_convergence_tests {
                 &mut h,
                 |h, p| {
                     h.dispatch(
-                        &PanelAction::Modulation(ModulationAction::TrimSnapshot(manifold_ui::panels::TrimKind::Driver, gpt(), pid.clone())),
+                        &PanelAction::Scrub(
+                            ValueRef::Trim(manifold_ui::panels::TrimKind::Driver, gpt(), pid.clone()),
+                            ScrubPhase::Begin,
+                        ),
                         p,
                     );
                     h.dispatch(
-                        &PanelAction::Modulation(ModulationAction::TrimChanged(
-                            manifold_ui::panels::TrimKind::Driver,
-                            gpt(),
-                            pid.clone(),
-                            0.3,
-                            0.9,
-                        )),
+                        &PanelAction::Scrub(
+                            ValueRef::Trim(manifold_ui::panels::TrimKind::Driver, gpt(), pid.clone()),
+                            ScrubPhase::Move(ScrubValue::Range(0.3, 0.9)),
+                        ),
                         p,
                     );
                 },
                 |h, p| {
                     h.dispatch(
-                        &PanelAction::Modulation(ModulationAction::TrimCommit(manifold_ui::panels::TrimKind::Driver, gpt(), pid.clone())),
+                        &PanelAction::Scrub(
+                            ValueRef::Trim(manifold_ui::panels::TrimKind::Driver, gpt(), pid.clone()),
+                            ScrubPhase::Commit,
+                        ),
                         p,
                     )
                 },
@@ -863,10 +870,10 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 |h, p| {
-                    h.dispatch(&PanelAction::Modulation(ModulationAction::TargetSnapshot(gpt(), pid.clone())), p);
-                    h.dispatch(&PanelAction::Modulation(ModulationAction::TargetChanged(gpt(), pid.clone(), 0.75)), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::EnvelopeTarget(gpt(), pid.clone()), ScrubPhase::Begin), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::EnvelopeTarget(gpt(), pid.clone()), ScrubPhase::Move(ScrubValue::Scalar(0.75))), p);
                 },
-                |h, p| h.dispatch(&PanelAction::Modulation(ModulationAction::TargetCommit(gpt(), pid.clone())), p),
+                |h, p| h.dispatch(&PanelAction::Scrub(ValueRef::EnvelopeTarget(gpt(), pid.clone()), ScrubPhase::Commit), p),
                 move |p| gen_inst(p, &probe_lid).envelopes.as_ref().unwrap()[0].target_normalized,
                 0.2,
                 0.75,
@@ -894,10 +901,10 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 |h, p| {
-                    h.dispatch(&PanelAction::Modulation(ModulationAction::EnvDecaySnapshot(gpt(), pid.clone())), p);
-                    h.dispatch(&PanelAction::Modulation(ModulationAction::EnvDecayChanged(gpt(), pid.clone(), 3.5)), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::EnvDecay(gpt(), pid.clone()), ScrubPhase::Begin), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::EnvDecay(gpt(), pid.clone()), ScrubPhase::Move(ScrubValue::Scalar(3.5))), p);
                 },
-                |h, p| h.dispatch(&PanelAction::Modulation(ModulationAction::EnvDecayCommit(gpt(), pid.clone())), p),
+                |h, p| h.dispatch(&PanelAction::Scrub(ValueRef::EnvDecay(gpt(), pid.clone()), ScrubPhase::Commit), p),
                 move |p| gen_inst(p, &probe_lid).envelopes.as_ref().unwrap()[0].decay_beats,
                 1.0,
                 3.5,
@@ -952,18 +959,16 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 |h, p| {
-                    h.dispatch(&PanelAction::Modulation(ModulationAction::AudioModShapeSnapshot(gpt(), pid.clone())), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::AudioModShape(gpt(), pid.clone(), manifold_ui::panels::AudioShapeParam::Sensitivity), ScrubPhase::Begin), p);
                     h.dispatch(
-                        &PanelAction::Modulation(ModulationAction::AudioModShapeParamChanged(
-                            gpt(),
-                            pid.clone(),
-                            manifold_ui::panels::AudioShapeParam::Sensitivity,
-                            0.83,
-                        )),
+                        &PanelAction::Scrub(
+                            ValueRef::AudioModShape(gpt(), pid.clone(), manifold_ui::panels::AudioShapeParam::Sensitivity),
+                            ScrubPhase::Move(ScrubValue::Scalar(0.83)),
+                        ),
                         p,
                     );
                 },
-                |h, p| h.dispatch(&PanelAction::Modulation(ModulationAction::AudioModShapeCommit(gpt(), pid.clone())), p),
+                |h, p| h.dispatch(&PanelAction::Scrub(ValueRef::AudioModShape(gpt(), pid.clone(), manifold_ui::panels::AudioShapeParam::Sensitivity), ScrubPhase::Commit), p),
                 move |p| {
                     gen_inst(p, &probe_lid)
                         .find_audio_mod(probe_pid.as_ref())
@@ -1012,18 +1017,16 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 move |h, p| {
-                    h.dispatch(&PanelAction::AudioSetup(AudioSetupAction::AudioTriggerShapeSnapshot(lid.clone(), 0)), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::AudioTriggerShape(lid.clone(), 0, manifold_ui::panels::AudioShapeParam::Sensitivity), ScrubPhase::Begin), p);
                     h.dispatch(
-                        &PanelAction::AudioSetup(AudioSetupAction::AudioTriggerShapeParamChanged(
-                            lid.clone(),
-                            0,
-                            manifold_ui::panels::AudioShapeParam::Sensitivity,
-                            0.91,
-                        )),
+                        &PanelAction::Scrub(
+                            ValueRef::AudioTriggerShape(lid.clone(), 0, manifold_ui::panels::AudioShapeParam::Sensitivity),
+                            ScrubPhase::Move(ScrubValue::Scalar(0.91)),
+                        ),
                         p,
                     );
                 },
-                move |h, p| h.dispatch(&PanelAction::AudioSetup(AudioSetupAction::AudioTriggerShapeCommit(lid2.clone(), 0)), p),
+                move |h, p| h.dispatch(&PanelAction::Scrub(ValueRef::AudioTriggerShape(lid2.clone(), 0, manifold_ui::panels::AudioShapeParam::Sensitivity), ScrubPhase::Commit), p),
                 move |p| {
                     p.timeline
                         .find_layer_by_id(&lid3)
@@ -1061,11 +1064,11 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 move |h, p| {
-                    h.dispatch(&PanelAction::AudioSetup(AudioSetupAction::AudioSendGainDragBegin(sid.clone())), p);
-                    h.dispatch(&PanelAction::AudioSetup(AudioSetupAction::AudioSendGainDragChanged(sid.clone(), 4.0)), p);
-                    h.dispatch(&PanelAction::AudioSetup(AudioSetupAction::AudioSendGainDragChanged(sid.clone(), -3.0)), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::AudioSendGain(sid.clone()), ScrubPhase::Begin), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::AudioSendGain(sid.clone()), ScrubPhase::Move(ScrubValue::Scalar(4.0))), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::AudioSendGain(sid.clone()), ScrubPhase::Move(ScrubValue::Scalar(-3.0))), p);
                 },
-                move |h, p| h.dispatch(&PanelAction::AudioSetup(AudioSetupAction::AudioSendGainDragCommit(sid2.clone())), p),
+                move |h, p| h.dispatch(&PanelAction::Scrub(ValueRef::AudioSendGain(sid2.clone()), ScrubPhase::Commit), p),
                 move |p| p.audio_setup.find_send(&sid3).unwrap().gain_db,
                 before,
                 -3.0,
@@ -1093,13 +1096,16 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 move |h, p| {
-                    h.dispatch(&PanelAction::AudioSetup(AudioSetupAction::AudioCrossoverDragBegin), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::AudioCrossover(manifold_ui::BandDivider::Mid), ScrubPhase::Begin), p);
                     h.dispatch(
-                        &PanelAction::AudioSetup(AudioSetupAction::AudioCrossoverChanged(manifold_ui::BandDivider::Mid, after.1)),
+                        &PanelAction::Scrub(
+                            ValueRef::AudioCrossover(manifold_ui::BandDivider::Mid),
+                            ScrubPhase::Move(ScrubValue::Scalar(after.1)),
+                        ),
                         p,
                     );
                 },
-                |h, p| h.dispatch(&PanelAction::AudioSetup(AudioSetupAction::AudioCrossoverCommit), p),
+                |h, p| h.dispatch(&PanelAction::Scrub(ValueRef::AudioCrossover(manifold_ui::BandDivider::Mid), ScrubPhase::Commit), p),
                 |p| (p.audio_setup.low_hz, p.audio_setup.mid_hz),
                 before,
                 after,
@@ -1133,10 +1139,10 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 |h, p| {
-                    h.dispatch(&PanelAction::Params(ParamsAction::RelightParamSnapshot(gpt(), field)), p);
-                    h.dispatch(&PanelAction::Params(ParamsAction::RelightParamChanged(gpt(), field, after)), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::RelightParam(gpt(), field), ScrubPhase::Begin), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::RelightParam(gpt(), field), ScrubPhase::Move(ScrubValue::Scalar(after))), p);
                 },
-                |h, p| h.dispatch(&PanelAction::Params(ParamsAction::RelightParamCommit(gpt(), field)), p),
+                |h, p| h.dispatch(&PanelAction::Scrub(ValueRef::RelightParam(gpt(), field), ScrubPhase::Commit), p),
                 move |p| core_field.get(&gen_inst(p, &probe_lid).relight_params),
                 before,
                 after,
@@ -1423,10 +1429,16 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 |h, p| {
-                    h.dispatch(&PanelAction::Mapping(MappingAction::AbletonMacroTrimSnapshot(0)), p);
-                    h.dispatch(&PanelAction::Mapping(MappingAction::AbletonMacroTrimChanged(0, 0.2, 0.7)), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::AbletonMacroTrim(0), ScrubPhase::Begin), p);
+                    h.dispatch(
+                        &PanelAction::Scrub(
+                            ValueRef::AbletonMacroTrim(0),
+                            ScrubPhase::Move(ScrubValue::Range(0.2, 0.7)),
+                        ),
+                        p,
+                    );
                 },
-                |h, p| h.dispatch(&PanelAction::Mapping(MappingAction::AbletonMacroTrimCommit(0)), p),
+                |h, p| h.dispatch(&PanelAction::Scrub(ValueRef::AbletonMacroTrim(0), ScrubPhase::Commit), p),
                 |p| {
                     let m = p.settings.macro_bank.slots[0].ableton_mapping.as_ref().unwrap();
                     (m.range_min, m.range_max)
@@ -1478,10 +1490,10 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 |h, p| {
-                    h.dispatch(&PanelAction::Modulation(ModulationAction::AudioModStepAmountSnapshot(gpt(), pid.clone())), p);
-                    h.dispatch(&PanelAction::Modulation(ModulationAction::AudioModStepAmountChanged(gpt(), pid.clone(), 0.65)), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::AudioModStepAmount(gpt(), pid.clone()), ScrubPhase::Begin), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::AudioModStepAmount(gpt(), pid.clone()), ScrubPhase::Move(ScrubValue::Scalar(0.65))), p);
                 },
-                |h, p| h.dispatch(&PanelAction::Modulation(ModulationAction::AudioModStepAmountCommit(gpt(), pid.clone())), p),
+                |h, p| h.dispatch(&PanelAction::Scrub(ValueRef::AudioModStepAmount(gpt(), pid.clone()), ScrubPhase::Commit), p),
                 read_amount,
                 0.1,
                 0.65,
@@ -2186,10 +2198,11 @@ mod scene_card_convergence_tests {
     /// the matrix above drives, so they can't ride `trio_cycle`. What made
     /// them lose undo entries was a mid-gesture full-snapshot *stomp*
     /// reverting the in-flight reshape before the commit read it back via
-    /// `watched_reshape` — the exact failure `ActiveInspectorDrag::apply` now
-    /// prevents. These prove the restore at that level: given the guard a live
-    /// drag installs, a stale pre-drag snapshot must come back carrying the
-    /// dragged value, so the commit sees new != old and records one undo.
+    /// `watched_reshape` — the exact failure the `ResolvedScrub::Mapping*`
+    /// restore now prevents. These prove the restore at that level: given the
+    /// guard a live drag installs, a stale pre-drag snapshot must come back
+    /// carrying the dragged value, so the commit sees new != old and records one
+    /// undo.
     mod mapping_undo_baseline {
         use super::*;
 
@@ -2246,17 +2259,21 @@ mod scene_card_convergence_tests {
             let (min0, max0, _, _) = reshape(&project, &binding_id);
             assert_eq!((min0, max0), (0.0, 1.0), "fixture starts at the default range");
 
-            // The guard a live range drag installs (in-flight range 0.2..0.8).
-            let guard = crate::app::ActiveInspectorDrag::MappingRange {
-                target,
-                param_id: binding_id.clone(),
-                min: 0.2,
-                max: 0.8,
+            // The guard a live range drag installs (in-flight range 0.2..0.8),
+            // now a `ResolvedScrub::MappingRange` in `ScrubState.active`.
+            let scrub = crate::ui_bridge::scrub::ScrubState {
+                active: Some(crate::ui_bridge::scrub::ResolvedScrub::MappingRange {
+                    target,
+                    param_id: binding_id.clone(),
+                    baseline: (0.2, 0.8),
+                    live: (0.2, 0.8),
+                }),
             };
             // A full snapshot lands mid-drag carrying the stale pre-drag
-            // project; app_render restores the guarded drag onto it.
+            // project; app_render restores the guarded drag onto it via the real
+            // restore path.
             let mut stomped = project.clone();
-            guard.apply(&mut stomped);
+            scrub.restore_dragged(&mut stomped);
 
             let (min, max, _, _) = reshape(&stomped, &binding_id);
             assert_eq!(
@@ -2272,14 +2289,16 @@ mod scene_card_convergence_tests {
             let (_, _, scale0, offset0) = reshape(&project, &binding_id);
             assert_eq!((scale0, offset0), (1.0, 0.0), "fixture starts at identity affine");
 
-            let guard = crate::app::ActiveInspectorDrag::MappingAffine {
-                target,
-                param_id: binding_id.clone(),
-                scale: 2.5,
-                offset: -0.5,
+            let scrub = crate::ui_bridge::scrub::ScrubState {
+                active: Some(crate::ui_bridge::scrub::ResolvedScrub::MappingAffine {
+                    target,
+                    param_id: binding_id.clone(),
+                    baseline: (2.5, -0.5),
+                    live: (2.5, -0.5),
+                }),
             };
             let mut stomped = project.clone();
-            guard.apply(&mut stomped);
+            scrub.restore_dragged(&mut stomped);
 
             let (_, _, scale, offset) = reshape(&stomped, &binding_id);
             assert_eq!(

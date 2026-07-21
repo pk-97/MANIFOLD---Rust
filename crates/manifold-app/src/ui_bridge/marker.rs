@@ -6,6 +6,7 @@ use manifold_editing::commands::marker::{DeleteMarkerCommand, MoveMarkerCommand}
 use manifold_ui::MarkerAction;
 
 use super::DispatchResult;
+use super::scrub::{ResolvedScrub, ScrubState};
 use crate::app::SelectionState;
 use crate::content_command::ContentCommand;
 use crate::ui_root::UIRoot;
@@ -16,8 +17,7 @@ pub(super) fn dispatch_marker(
     content_tx: &crossbeam_channel::Sender<ContentCommand>,
     _ui: &mut UIRoot,
     selection: &mut SelectionState,
-    drag_snapshot: &mut Option<f32>,
-    active_inspector_drag: &mut Option<crate::app::ActiveInspectorDrag>,
+    scrub: &mut ScrubState,
 ) -> DispatchResult {
     match action {
         // ── Click: select/multi-select marker ──────────────────
@@ -37,14 +37,19 @@ pub(super) fn dispatch_marker(
         // ── Drag start: snapshot beat for undo ─────────────────
         MarkerAction::MarkerDragStarted(marker_id_str) => {
             let marker_id = MarkerId::new(marker_id_str.as_str());
-            *drag_snapshot = project
+            // The pre-drag beat is the undo baseline; the guard (baseline == live
+            // at Begin) unifies into `ScrubState.active` — this gesture is
+            // viewport-driven, not a `PanelAction::Scrub` family, but shares the
+            // one snapshot-stomp restore slot (P-I).
+            let baseline = project
                 .timeline
                 .find_marker(&marker_id)
                 .map(|m| m.beat.as_f32());
-            if let Some(beat) = *drag_snapshot {
-                *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::Marker {
+            if let Some(beat) = baseline {
+                scrub.active = Some(ResolvedScrub::Marker {
                     marker_id: marker_id.clone(),
-                    beat,
+                    baseline: beat,
+                    live: beat,
                 });
             }
             // Select the marker being dragged
@@ -59,18 +64,21 @@ pub(super) fn dispatch_marker(
                 marker.beat = Beats::from_f32(*new_beat);
             }
             project.timeline.sort_markers();
-            *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::Marker {
-                marker_id: marker_id.clone(),
-                beat: *new_beat,
-            });
+            if let Some(ResolvedScrub::Marker { live, .. }) = &mut scrub.active {
+                *live = *new_beat;
+            }
             DispatchResult::structural()
         }
 
         // ── Drag end: commit MoveMarkerCommand ─────────────────
         MarkerAction::MarkerDragEnded(marker_id_str, final_beat) => {
-            *active_inspector_drag = None;
             let marker_id = MarkerId::new(marker_id_str.as_str());
-            if let Some(old_beat) = drag_snapshot.take() {
+            let baseline = match &scrub.active {
+                Some(ResolvedScrub::Marker { baseline, .. }) => Some(*baseline),
+                _ => None,
+            };
+            scrub.active = None;
+            if let Some(old_beat) = baseline {
                 // Only commit if the marker actually moved
                 if (old_beat - *final_beat).abs() > 0.001 {
                     // Undo the live preview mutation first — the command will redo it
@@ -132,24 +140,30 @@ mod tests {
     /// outside `InteractionOverlay`'s `DragMode`, so a mid-gesture content-thread
     /// snapshot swap used to revert the in-flight `marker.beat`. This mirrors
     /// `bound_node_param_drag_survives_snapshot_stomp`: build the guard the live
-    /// `MarkerDragMoved` arm installs, apply it to a stomped (stale) project, and
-    /// confirm the dragged beat survives.
+    /// `MarkerDragMoved` arm installs (now a `ResolvedScrub::Marker` in
+    /// `ScrubState.active`), run the real restore entry point on a stomped (stale)
+    /// project, and confirm the dragged beat survives.
     #[test]
     fn marker_drag_survives_snapshot_stomp() {
+        use crate::ui_bridge::scrub::{ResolvedScrub, ScrubState};
+
         let mut project = Project::default();
         let marker = TimelineMarker::new(Beats::from_f32(0.0));
         let marker_id = marker.id.clone();
         project.timeline.markers.push(marker);
 
-        let guard = crate::app::ActiveInspectorDrag::Marker {
-            marker_id: marker_id.clone(),
-            beat: 5.0,
+        let scrub = ScrubState {
+            active: Some(ResolvedScrub::Marker {
+                marker_id: marker_id.clone(),
+                baseline: 0.0,
+                live: 5.0,
+            }),
         };
 
         // A full snapshot lands mid-drag carrying the stale pre-drag project;
-        // app_render restores the guarded drag onto it.
+        // app_render restores the guarded drag onto it via the real restore path.
         let mut stomped = project.clone();
-        guard.apply(&mut stomped);
+        scrub.restore_dragged(&mut stomped);
 
         let after = stomped
             .timeline

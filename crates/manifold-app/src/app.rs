@@ -1,4 +1,4 @@
-use manifold_ui::{AudioSetupAction, ModulationAction, ParamsAction, ProjectAction};
+use manifold_ui::{AudioSetupAction, ModulationAction, ProjectAction};
 use std::sync::Arc;
 
 use winit::application::ApplicationHandler;
@@ -47,377 +47,11 @@ pub type SelectionState = UIState;
 // ClipDragMode, ClipDragSnapshot, ClipDragState — REMOVED.
 // All drag state now lives in InteractionOverlay (interaction_overlay.rs).
 
-/// Tracks which inspector field is actively being dragged by the user.
-/// After snapshot acceptance, the dragged value is restored to prevent overwrite.
-#[derive(Debug, Clone)]
-pub(crate) enum ActiveInspectorDrag {
-    MasterOpacity(f32),
-    LedBrightness(f32),
-    LayerOpacity {
-        layer_id: LayerId,
-        value: f32,
-    },
-    Param {
-        target: manifold_core::GraphTarget,
-        param_id: manifold_core::effects::ParamId,
-        value: f32,
-    },
-    /// A macro-knob drag. Macros are carried in every `ModulationSnapshot`
-    /// block (applied every tick since `ac96c65c`), so an unguarded macro
-    /// drag gets stomped back to the content thread's stale value mid-gesture
-    /// and the commit sees old == new — no undo entry.
-    Macro { idx: usize, value: f32 },
-    /// A modulation trim-range handle drag (driver / audio-mod / Ableton
-    /// sub-range bars, BUG-246). Not carried in any snapshot block, so a
-    /// concurrent `data_version` bump mid-drag replaces `local_project`
-    /// wholesale and the in-flight `[min, max]` snaps back. This restores the
-    /// live range through the same store each `TrimKind` writes.
-    Trim {
-        kind: manifold_ui::panels::TrimKind,
-        target: manifold_core::GraphTarget,
-        /// Resolved only for `TrimKind::Ableton`; `None` for driver/audio.
-        ableton_target: Option<manifold_core::ableton_mapping::AbletonMappingTarget>,
-        param_id: manifold_core::effects::ParamId,
-        min: f32,
-        max: f32,
-    },
-    /// A layer-header audio-gain drag (`AudioGain*` trio). Unguarded, a
-    /// mid-drag snapshot swap reverted the in-flight dB and the commit saw
-    /// old == new — no undo entry (undo audit 2026-07-19, cluster C).
-    AudioGain {
-        layer_id: LayerId,
-        db: f32,
-    },
-    /// An envelope target (orange handle) drag (`Target*` trio).
-    EnvelopeTarget {
-        target: manifold_core::GraphTarget,
-        param_id: manifold_core::effects::ParamId,
-        value: f32,
-    },
-    /// An envelope decay slider drag (`EnvDecay*` trio).
-    EnvelopeDecay {
-        target: manifold_core::GraphTarget,
-        param_id: manifold_core::effects::ParamId,
-        value: f32,
-    },
-    /// An audio-mod drawer shape-slider drag (`AudioModShape*` trio) —
-    /// holds the whole shape so any of the three scalars restores.
-    AudioModShape {
-        target: manifold_core::GraphTarget,
-        param_id: manifold_core::effects::ParamId,
-        shape: manifold_core::audio_mod::AudioModShape,
-    },
-    /// An audio-mod Step-amount drag (`AudioModStepAmount*` trio).
-    AudioModStepAmount {
-        target: manifold_core::GraphTarget,
-        param_id: manifold_core::effects::ParamId,
-        amount: f32,
-    },
-    /// A layer clip-trigger shape-slider drag (`AudioTriggerShape*` trio).
-    AudioTriggerShape {
-        layer_id: LayerId,
-        index: usize,
-        shape: manifold_core::audio_mod::AudioModShape,
-    },
-    /// An Audio Setup send-gain label drag (`AudioSendGainDrag*` trio).
-    AudioSendGain {
-        send_id: manifold_core::AudioSendId,
-        db: f32,
-    },
-    /// An Audio Setup band-divider drag (`AudioCrossover*` trio).
-    AudioCrossover {
-        low_hz: f32,
-        mid_hz: f32,
-    },
-    /// A "3D Shading" knob drag (`RelightParam*` trio).
-    RelightParam {
-        target: manifold_core::GraphTarget,
-        field: manifold_core::effects::RelightField,
-        value: f32,
-    },
-    /// An Ableton macro trim-bar drag (`AbletonMacroTrim*` trio).
-    AbletonMacroTrim {
-        slot_idx: usize,
-        min: f32,
-        max: f32,
-    },
-    /// A graph-editor mapping-sidebar range drag (`EffectMappingRange*` trio,
-    /// BUG-262). Unlike the cluster-C families this one dispatches through
-    /// `app_render`'s `pending_actions` loop, not the inspector: the commit
-    /// reads the new range back via `watched_reshape`, so an unguarded
-    /// mid-drag snapshot swap reverts the def and the commit sees old == new —
-    /// no undo entry. Restores the in-flight range through the same
-    /// `build_mapping_command` write `preview_mapping` lands each tick.
-    MappingRange {
-        target: manifold_core::GraphTarget,
-        param_id: String,
-        min: f32,
-        max: f32,
-    },
-    /// A graph-editor mapping-sidebar affine (scale/offset) drag
-    /// (`EffectMappingAffine*` trio, BUG-262). Same restore path as
-    /// `MappingRange`, writing the binding's scale/offset.
-    MappingAffine {
-        target: manifold_core::GraphTarget,
-        param_id: String,
-        scale: f32,
-        offset: f32,
-    },
-    /// A timeline-marker drag (BUG-280). Marker drag is driven by
-    /// `ViewportDrag::MarkerDrag`, outside `InteractionOverlay`'s `DragMode`,
-    /// so a mid-gesture content-thread snapshot would revert `marker.beat`.
-    /// Restores the in-flight beat through the same `timeline` write the live
-    /// `MarkerDragMoved` arm uses.
-    Marker {
-        marker_id: manifold_core::MarkerId,
-        beat: f32,
-    },
-}
-
-impl ActiveInspectorDrag {
-    /// Write the dragged value back into the project after snapshot acceptance.
-    pub(crate) fn apply(&self, project: &mut manifold_core::project::Project) {
-        match self {
-            Self::MasterOpacity(v) => {
-                project.settings.master_opacity = *v;
-            }
-            Self::LedBrightness(v) => {
-                project.settings.led_brightness = *v;
-            }
-            Self::LayerOpacity { layer_id, value } => {
-                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id) {
-                    layer.opacity = *value;
-                }
-            }
-            Self::Param {
-                target,
-                param_id,
-                value,
-            } => {
-                project.with_preset_graph_mut(target, |inst| {
-                    // Restore through the SAME write the drag's motion ticks
-                    // use (`ParamChanged` → `set_base_param`): the commit
-                    // reads the BASE value, so an effective-only restore
-                    // (`set_param`) leaves base stale after a snapshot swap
-                    // and the commit sees old == new — no undo entry. The
-                    // `touched` mark is correct here: this replays a live
-                    // user gesture, and the drag's own ticks already set it.
-                    inst.set_base_param(param_id.as_ref(), *value);
-                });
-            }
-            Self::Macro { idx, value } => {
-                manifold_core::macro_bank::MacroBank::apply_macro(project, *idx, *value);
-            }
-            Self::Trim {
-                kind,
-                target,
-                ableton_target,
-                param_id,
-                min,
-                max,
-            } => {
-                use manifold_ui::panels::TrimKind;
-                // Same store each kind's live `TrimChanged` write lands in
-                // (inspector.rs), re-applied so a mid-drag snapshot swap can't
-                // revert the in-flight range.
-                match kind {
-                    TrimKind::Driver => {
-                        project.with_preset_graph_mut(target, |inst| {
-                            if let Some(d) = inst
-                                .drivers
-                                .as_mut()
-                                .and_then(|ds| ds.iter_mut().find(|d| d.param_id == *param_id))
-                            {
-                                d.trim_min = *min;
-                                d.trim_max = *max;
-                            }
-                        });
-                    }
-                    TrimKind::Audio => {
-                        project.with_preset_graph_mut(target, |inst| {
-                            if let Some(m) = inst
-                                .audio_mods
-                                .as_mut()
-                                .and_then(|ms| ms.iter_mut().find(|a| a.param_id == *param_id))
-                            {
-                                m.shape.range_min = *min;
-                                m.shape.range_max = *max;
-                            }
-                        });
-                    }
-                    TrimKind::Ableton => {
-                        if let Some(mt) = ableton_target
-                            && let Some(ms) = project
-                                .ableton_param_mappings_mut(mt)
-                                .and_then(|opt| opt.as_mut())
-                            && let Some(m) = ms.iter_mut().find(|m| m.param_id == *param_id)
-                        {
-                            m.range_min = *min;
-                            m.range_max = *max;
-                        }
-                    }
-                }
-            }
-            // Every restore below writes through the SAME store the family's
-            // live `*Changed` arm writes, so a mid-drag snapshot swap can't
-            // revert the in-flight value (undo audit 2026-07-19, cluster C).
-            Self::AudioGain { layer_id, db } => {
-                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id) {
-                    layer.audio_gain_db = *db;
-                }
-            }
-            Self::EnvelopeTarget {
-                target,
-                param_id,
-                value,
-            } => {
-                project.with_preset_graph_mut(target, |inst| {
-                    if let Some(e) = inst
-                        .envelopes
-                        .as_mut()
-                        .and_then(|es| es.iter_mut().find(|e| e.param_id == *param_id))
-                    {
-                        e.target_normalized = *value;
-                    }
-                });
-            }
-            Self::EnvelopeDecay {
-                target,
-                param_id,
-                value,
-            } => {
-                project.with_preset_graph_mut(target, |inst| {
-                    if let Some(e) = inst
-                        .envelopes
-                        .as_mut()
-                        .and_then(|es| es.iter_mut().find(|e| e.param_id == *param_id))
-                    {
-                        e.decay_beats = *value;
-                    }
-                });
-            }
-            Self::AudioModShape {
-                target,
-                param_id,
-                shape,
-            } => {
-                project.with_preset_graph_mut(target, |inst| {
-                    if let Some(m) = inst
-                        .audio_mods
-                        .as_mut()
-                        .and_then(|ms| ms.iter_mut().find(|a| a.param_id == *param_id))
-                    {
-                        m.shape = *shape;
-                    }
-                });
-            }
-            Self::AudioModStepAmount {
-                target,
-                param_id,
-                amount,
-            } => {
-                project.with_preset_graph_mut(target, |inst| {
-                    if let Some(m) = inst
-                        .audio_mods
-                        .as_mut()
-                        .and_then(|ms| ms.iter_mut().find(|a| a.param_id == *param_id))
-                    {
-                        let wrap = match m.action {
-                            manifold_core::audio_mod::TriggerAction::Step { wrap, .. } => wrap,
-                            _ => manifold_core::audio_mod::WrapMode::Wrap,
-                        };
-                        m.action = manifold_core::audio_mod::TriggerAction::Step {
-                            amount: *amount,
-                            wrap,
-                        };
-                    }
-                });
-            }
-            Self::AudioTriggerShape {
-                layer_id,
-                index,
-                shape,
-            } => {
-                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id)
-                    && let Some(t) = layer.clip_triggers.get_mut(*index)
-                {
-                    t.shape = *shape;
-                }
-            }
-            Self::AudioSendGain { send_id, db } => {
-                if let Some(s) = project.audio_setup.find_send_mut(send_id) {
-                    s.gain_db = *db;
-                }
-            }
-            Self::AudioCrossover { low_hz, mid_hz } => {
-                project.audio_setup.low_hz = *low_hz;
-                project.audio_setup.mid_hz = *mid_hz;
-            }
-            Self::RelightParam {
-                target,
-                field,
-                value,
-            } => {
-                project.with_preset_graph_mut(target, |inst| {
-                    field.set(&mut inst.relight_params, *value);
-                });
-            }
-            Self::AbletonMacroTrim { slot_idx, min, max } => {
-                if let Some(m) = project
-                    .settings
-                    .macro_bank
-                    .slots
-                    .get_mut(*slot_idx)
-                    .and_then(|s| s.ableton_mapping.as_mut())
-                {
-                    m.range_min = *min;
-                    m.range_max = *max;
-                }
-            }
-            // The two mapping families restore through the SAME command
-            // `preview_mapping` executes each `*Changed` tick — build the
-            // reshape edit and run it on the project so a mid-drag snapshot
-            // swap can't revert the def value the commit reads back via
-            // `watched_reshape` (BUG-262, undo audit 2026-07-19 cluster C).
-            Self::MappingRange {
-                target,
-                param_id,
-                min,
-                max,
-            } => {
-                let seed = crate::app_render::seed_def_for_project(project, target);
-                let edit = manifold_editing::commands::effects::BindingMappingEdit {
-                    min: Some(*min),
-                    max: Some(*max),
-                    ..Default::default()
-                };
-                crate::app_render::build_mapping_command(target, param_id, edit, seed)
-                    .execute(project);
-            }
-            Self::MappingAffine {
-                target,
-                param_id,
-                scale,
-                offset,
-            } => {
-                let seed = crate::app_render::seed_def_for_project(project, target);
-                let edit = manifold_editing::commands::effects::BindingMappingEdit {
-                    scale: Some(*scale),
-                    offset: Some(*offset),
-                    ..Default::default()
-                };
-                crate::app_render::build_mapping_command(target, param_id, edit, seed)
-                    .execute(project);
-            }
-            Self::Marker { marker_id, beat } => {
-                if let Some(marker) = project.timeline.find_marker_mut(marker_id) {
-                    marker.beat = manifold_core::Beats::from_f32(*beat);
-                }
-                project.timeline.sort_markers();
-            }
-        }
-    }
-}
+// ActiveInspectorDrag — REMOVED (UI_FUNNEL_DECOMPOSITION P-I). Every scrubable
+// gesture's snapshot-stomp guard — panel-wired and frame-resident (the
+// graph-editor mapping drags, the graph-canvas node-param drags, the marker
+// drag) — now rides the single `ui_bridge::scrub::ScrubState.active` slot as a
+// `ResolvedScrub` variant. The restore path is `ScrubState::restore_dragged`.
 
 pub struct Application {
     // GPU
@@ -521,35 +155,15 @@ pub struct Application {
     // Selection
     pub(crate) selection: SelectionState,
     pub(crate) active_layer_id: Option<LayerId>,
-    /// In-flight scrub-gesture snapshots (eight slider/trim/audio snapshots +
-    /// `active_inspector_drag`), regrouped off the field list into one struct
-    /// (UI_FUNNEL_DECOMPOSITION P-B, D3; `ui_bridge::scrub::ScrubState`). Threaded
-    /// into `dispatch` as `ctx.scrub`. Interim shape — P-I replaces it with the
-    /// addressed gesture engine.
+    /// The single in-flight scrub gesture — panel-wired and frame-resident alike
+    /// (UI_FUNNEL_DECOMPOSITION P-I, D4; `ui_bridge::scrub::ScrubState`). Threaded
+    /// into `dispatch` as `ctx.scrub`; the graph-editor mapping drags and
+    /// graph-canvas node-param drags in `app_render` open it directly. The old
+    /// per-gesture snapshot fields (`mapping_range_snapshot`,
+    /// `mapping_affine_snapshot`, `bound_node_param_drag`,
+    /// `unbound_node_param_drag`, `active_inspector_drag`) folded into its one
+    /// `active` slot.
     pub(crate) scrub: crate::ui_bridge::ScrubState,
-    /// User param-binding mapping range drag snapshot `(min, max)` for
-    /// undo. Captured on `EffectMappingRangeSnapshot`, committed as one
-    /// `EditUserParamBindingCommand` on `EffectMappingRangeCommit`.
-    pub(crate) mapping_range_snapshot: Option<(f32, f32)>,
-    /// User param-binding scale/offset drag snapshot `(scale, offset)` for
-    /// undo. Captured on `EffectMappingAffineSnapshot`, committed as one
-    /// `EditUserParamBindingCommand` on `EffectMappingAffineCommit`.
-    pub(crate) mapping_affine_snapshot: Option<(f32, f32)>,
-
-    /// A node-face scrub session currently rerouted through a card binding's
-    /// write-back path (`PARAM_TWO_WAY_BINDING_DESIGN.md` D1). `None` when no
-    /// bound-param drag is in flight. Set at the first `SetGraphNodeParam` on
-    /// a bound `(node_id, param_name)`; cleared on the matching
-    /// `EndGraphNodeParamScrub` (one undo-worthy `ChangeGraphParamCommand`
-    /// per whole drag, not one per pointer-move).
-    pub(crate) bound_node_param_drag: Option<crate::app_render::BoundNodeParamDrag>,
-
-    /// BUG-282: an ordinary (unbound) node-face param/vec scrub session,
-    /// mirroring `bound_node_param_drag` for the un-rerouted path — set at
-    /// the first `SetGraphNodeParam`/`SetOuterParam`-family move, cleared on
-    /// the matching `EndGraphNodeParamScrub` (one undo-worthy
-    /// `SetGraphNodeParamCommand` per whole drag, not one per pointer-move).
-    pub(crate) unbound_node_param_drag: Option<crate::app_render::UnboundNodeParamDrag>,
 
     // Effect clipboard (Unity: static EffectClipboard singleton, Rust: instance)
     pub(crate) effect_clipboard: manifold_editing::clipboard::EffectClipboard,
@@ -963,10 +577,6 @@ impl Application {
             selection: UIState::new(),
             active_layer_id: None,
             scrub: crate::ui_bridge::ScrubState::default(),
-            mapping_range_snapshot: None,
-            mapping_affine_snapshot: None,
-            bound_node_param_drag: None,
-            unbound_node_param_drag: None,
             effect_clipboard: manifold_editing::clipboard::EffectClipboard::new(),
             #[cfg(target_os = "macos")]
             internal_clipboard_change_count: None,
@@ -1406,15 +1016,26 @@ impl Application {
                         if ctx.whole_numbers {
                             v = v.round();
                         }
-                        // Mirror the slider drag's live-set + commit so the type-in
-                        // is one undoable step: snapshot the old base, set the new
-                        // value live, then commit (builds the undo from the snap).
-                        self.scrub.slider_snapshot = Some(ctx.old_value);
+                        // Mirror the slider drag as one undoable step by driving
+                        // the SAME scrub wire (P-I / D4, the D8 direct-set
+                        // shape): Begin captures the old base as the undo
+                        // baseline, Move sets the new value live, Commit builds
+                        // the one undo entry (old base → typed value).
                         let content_tx = self.content_tx.as_ref().unwrap().clone();
-                        use manifold_ui::panels::PanelAction;
+                        use manifold_ui::panels::{PanelAction, ScrubPhase, ScrubValue, ValueRef};
                         for act in [
-                            PanelAction::Params(ParamsAction::ParamChanged(ctx.target.clone(), ctx.param_id.clone(), v)),
-                            PanelAction::Params(ParamsAction::ParamCommit(ctx.target, ctx.param_id.clone())),
+                            PanelAction::Scrub(
+                                ValueRef::Param(ctx.target.clone(), ctx.param_id.clone()),
+                                ScrubPhase::Begin,
+                            ),
+                            PanelAction::Scrub(
+                                ValueRef::Param(ctx.target.clone(), ctx.param_id.clone()),
+                                ScrubPhase::Move(ScrubValue::Scalar(v)),
+                            ),
+                            PanelAction::Scrub(
+                                ValueRef::Param(ctx.target, ctx.param_id.clone()),
+                                ScrubPhase::Commit,
+                            ),
                         ] {
                             let mut dctx = crate::ui_bridge::DispatchCtx {
                                 project: &mut self.local_project,
@@ -2047,7 +1668,7 @@ impl Application {
                             // uses (app_render.rs), never `SetGraphNodeParam`
                             // on the inner node.
                             if let Some(target) = self.watched_graph_target.as_ref() {
-                                use manifold_ui::panels::PanelAction;
+                                use manifold_ui::panels::{PanelAction, ScrubPhase, ScrubValue, ValueRef};
                                 let gpt = match target {
                                     manifold_core::GraphTarget::Effect(_) => {
                                         manifold_ui::panels::GraphParamTarget::Effect(0)
@@ -2056,11 +1677,13 @@ impl Application {
                                         manifold_ui::panels::GraphParamTarget::Generator
                                     }
                                 };
-                                let action = PanelAction::Params(ParamsAction::ParamChanged(
-                                    gpt,
-                                    manifold_core::effects::ParamId::from(outer_param_id),
-                                    v,
-                                ));
+                                let action = PanelAction::Scrub(
+                                    ValueRef::Param(
+                                        gpt,
+                                        manifold_core::effects::ParamId::from(outer_param_id),
+                                    ),
+                                    ScrubPhase::Move(ScrubValue::Scalar(v)),
+                                );
                                 let content_tx = self.content_tx.as_ref().unwrap();
                                 let editor_target = self.watched_graph_target.as_ref();
                                 let mut dctx = crate::ui_bridge::DispatchCtx {

@@ -8,7 +8,7 @@ use manifold_ui::{ClipAction, LayerAction, MarkerAction, ParamsAction, ProjectAc
 use manifold_renderer::ui_renderer::UIRenderer;
 
 use manifold_ui::node::FontWeight;
-use manifold_ui::panels::PanelAction;
+use manifold_ui::panels::{PanelAction, ScrubPhase, ScrubValue, ValueRef};
 use manifold_ui::timeline_editing_host::TimelineEditingHost;
 
 use crate::app::Application;
@@ -58,7 +58,8 @@ impl BoundNodeParamDrag {
     /// Re-apply the in-flight card value after snapshot acceptance — the
     /// same write the live scrub path uses (`with_preset_graph_mut` +
     /// `set_base_param` on `outer_param_id`), mirroring
-    /// `ActiveInspectorDrag::apply`'s `Self::Param` arm (BUG-262 precedent).
+    /// `ResolvedScrub::Param`'s restore arm (BUG-262 precedent). Called via
+    /// `ResolvedScrub::BoundNodeParam`'s restore arm (P-I).
     pub(crate) fn apply(&self, project: &mut manifold_core::project::Project) {
         project.with_preset_graph_mut(&self.target, |inst| {
             inst.set_base_param(&self.outer_param_id, self.current_value);
@@ -177,18 +178,13 @@ impl Application {
                             // Same Arc — skip deep clone. Drop the Arc ref.
                             drop(snapshot);
                         }
-                        // Restore actively-dragged inspector field so snapshot
-                        // doesn't overwrite the value the user is manipulating.
-                        if let Some(ref drag) = self.scrub.active_inspector_drag {
-                            drag.apply(&mut self.local_project);
-                        }
-                        // Same for a bound-node-param card scrub (BUG-281):
-                        // its live writes go straight to `local_project`
-                        // every tick, so a snapshot swap mid-gesture must
-                        // restore it too, not just `active_inspector_drag`.
-                        if let Some(ref drag) = self.bound_node_param_drag {
-                            drag.apply(&mut self.local_project);
-                        }
+                        // Restore the one actively-dragged gesture so a snapshot
+                        // doesn't overwrite the value the user is manipulating —
+                        // every family, panel-wired and frame-resident (the
+                        // bound-node-param card scrub, BUG-281, whose live writes
+                        // land in `local_project` every tick, is now a
+                        // `ResolvedScrub::BoundNodeParam` in `active`).
+                        self.scrub.restore_dragged(&mut self.local_project);
                         // Clear suppression once we've accepted a post-load snapshot
                         self.suppress_snapshot_until = 0;
 
@@ -239,15 +235,11 @@ impl Application {
                     && let Some(ref mod_snap) = state.modulation_snapshot
                 {
                     mod_snap.apply(&mut self.local_project);
-                    // Restore actively-dragged inspector field so modulation
-                    // doesn't overwrite the value the user is manipulating.
-                    if let Some(ref drag) = self.scrub.active_inspector_drag {
-                        drag.apply(&mut self.local_project);
-                    }
-                    // BUG-281: mirror for a bound-node-param card scrub.
-                    if let Some(ref drag) = self.bound_node_param_drag {
-                        drag.apply(&mut self.local_project);
-                    }
+                    // Restore the one actively-dragged gesture so modulation
+                    // doesn't overwrite the value the user is manipulating —
+                    // every family, panel-wired and frame-resident (BUG-281's
+                    // bound-node-param card scrub included, now in `active`).
+                    self.scrub.restore_dragged(&mut self.local_project);
                 }
                 // Accumulate VQT columns from EVERY drained snapshot — the
                 // assignment below keeps only the latest, so reading columns off
@@ -1028,22 +1020,21 @@ impl Application {
                 // below (Phase 4.3) — they're `GraphEditCommand` now, not
                 // `PanelAction`. ──
                 PanelAction::Root(RootAction::EffectMappingRangeSnapshot { binding_id }) => {
-                    // Pre-drag (min, max) so the commit can record one undo
-                    // for the whole range drag. Store-aware (user binding /
-                    // note / seed) and kind-aware (effect / generator).
-                    self.mapping_range_snapshot =
-                        self.watched_reshape(binding_id).map(|(mn, mx, _, _)| (mn, mx));
-                    // Guard the in-flight range against a mid-drag full-snapshot
-                    // stomp (BUG-262); restored by `ActiveInspectorDrag::apply`.
-                    if let (Some(t), Some((mn, mx))) =
-                        (self.mapping_target(), self.mapping_range_snapshot)
-                    {
-                        self.scrub.active_inspector_drag =
-                            Some(crate::app::ActiveInspectorDrag::MappingRange {
+                    // Pre-drag (min, max) as the undo baseline AND the
+                    // snapshot-stomp guard, folded into the one
+                    // `ScrubState.active` slot (P-I). Frame-resident: dispatched
+                    // here, not on the `PanelAction::Scrub` wire, because the
+                    // commit reads the range back via `watched_reshape` (needs the
+                    // editor context). Store-aware / kind-aware.
+                    let snap = self.watched_reshape(binding_id).map(|(mn, mx, _, _)| (mn, mx));
+                    if let (Some(t), Some((mn, mx))) = (self.mapping_target(), snap) {
+                        self.scrub.check_single_active_on_begin("mapping-range");
+                        self.scrub.active =
+                            Some(crate::ui_bridge::scrub::ResolvedScrub::MappingRange {
                                 target: t,
                                 param_id: binding_id.to_string(),
-                                min: mn,
-                                max: mx,
+                                baseline: (mn, mx),
+                                live: (mn, mx),
                             });
                     }
                     continue;
@@ -1056,14 +1047,11 @@ impl Application {
                     // Track the in-flight range on the guard so a snapshot
                     // stomp restores the latest dragged value, not the pre-drag
                     // one (BUG-262).
-                    if let Some(crate::app::ActiveInspectorDrag::MappingRange {
-                        min: gmin,
-                        max: gmax,
-                        ..
-                    }) = &mut self.scrub.active_inspector_drag
+                    if let Some(crate::ui_bridge::scrub::ResolvedScrub::MappingRange {
+                        live, ..
+                    }) = &mut self.scrub.active
                     {
-                        *gmin = *min;
-                        *gmax = *max;
+                        *live = (*min, *max);
                     }
                     if let Some(t) = self.mapping_target() {
                         self.preview_mapping(
@@ -1079,9 +1067,19 @@ impl Application {
                     continue;
                 }
                 PanelAction::Root(RootAction::EffectMappingRangeCommit { binding_id }) => {
-                    self.scrub.active_inspector_drag = None;
-                    let snap = self.mapping_range_snapshot.take();
-                    if let (Some((old_min, old_max)), Some(t)) = (snap, self.mapping_target())
+                    // Take the baseline out of `active` only if it holds THIS
+                    // gesture's range guard (leave any other live gesture alone).
+                    let baseline = if let Some(
+                        crate::ui_bridge::scrub::ResolvedScrub::MappingRange { baseline, .. },
+                    ) = &self.scrub.active
+                    {
+                        let b = *baseline;
+                        self.scrub.active = None;
+                        Some(b)
+                    } else {
+                        None
+                    };
+                    if let (Some((old_min, old_max)), Some(t)) = (baseline, self.mapping_target())
                         && let Some((new_min, new_max, _, _)) = self.watched_reshape(binding_id)
                         && ((old_min - new_min).abs() > f32::EPSILON
                             || (old_max - new_max).abs() > f32::EPSILON)
@@ -1156,19 +1154,18 @@ impl Application {
                     continue;
                 }
                 PanelAction::Root(RootAction::EffectMappingAffineSnapshot { binding_id }) => {
-                    self.mapping_affine_snapshot =
-                        self.watched_reshape(binding_id).map(|(_, _, sc, of)| (sc, of));
-                    // Guard the in-flight scale/offset against a mid-drag
-                    // snapshot stomp (BUG-262).
-                    if let (Some(t), Some((sc, of))) =
-                        (self.mapping_target(), self.mapping_affine_snapshot)
-                    {
-                        self.scrub.active_inspector_drag =
-                            Some(crate::app::ActiveInspectorDrag::MappingAffine {
+                    // Pre-drag (scale, offset) as the undo baseline + stomp guard,
+                    // folded into `ScrubState.active` (P-I; frame-resident, same
+                    // as the range gesture above).
+                    let snap = self.watched_reshape(binding_id).map(|(_, _, sc, of)| (sc, of));
+                    if let (Some(t), Some((sc, of))) = (self.mapping_target(), snap) {
+                        self.scrub.check_single_active_on_begin("mapping-affine");
+                        self.scrub.active =
+                            Some(crate::ui_bridge::scrub::ResolvedScrub::MappingAffine {
                                 target: t,
                                 param_id: binding_id.to_string(),
-                                scale: sc,
-                                offset: of,
+                                baseline: (sc, of),
+                                live: (sc, of),
                             });
                     }
                     continue;
@@ -1178,14 +1175,11 @@ impl Application {
                     scale,
                     offset,
                 }) => {
-                    if let Some(crate::app::ActiveInspectorDrag::MappingAffine {
-                        scale: gscale,
-                        offset: goffset,
-                        ..
-                    }) = &mut self.scrub.active_inspector_drag
+                    if let Some(crate::ui_bridge::scrub::ResolvedScrub::MappingAffine {
+                        live, ..
+                    }) = &mut self.scrub.active
                     {
-                        *gscale = *scale;
-                        *goffset = *offset;
+                        *live = (*scale, *offset);
                     }
                     if let Some(t) = self.mapping_target() {
                         self.preview_mapping(
@@ -1201,9 +1195,17 @@ impl Application {
                     continue;
                 }
                 PanelAction::Root(RootAction::EffectMappingAffineCommit { binding_id }) => {
-                    self.scrub.active_inspector_drag = None;
-                    let snap = self.mapping_affine_snapshot.take();
-                    if let (Some((old_scale, old_offset)), Some(t)) = (snap, self.mapping_target())
+                    let baseline = if let Some(
+                        crate::ui_bridge::scrub::ResolvedScrub::MappingAffine { baseline, .. },
+                    ) = &self.scrub.active
+                    {
+                        let b = *baseline;
+                        self.scrub.active = None;
+                        Some(b)
+                    } else {
+                        None
+                    };
+                    if let (Some((old_scale, old_offset)), Some(t)) = (baseline, self.mapping_target())
                         && let Some((_, _, new_scale, new_offset)) =
                             self.watched_reshape(binding_id)
                         && ((old_scale - new_scale).abs() > f32::EPSILON
@@ -1402,7 +1404,6 @@ impl Application {
                     self.text_input.inspector_param = Some(crate::text_input::InspectorParamCtx {
                         target: target.clone(),
                         param_id: param_id.clone(),
-                        old_value: *value,
                         whole_numbers: *whole_numbers,
                     });
                     continue;
@@ -2269,31 +2270,38 @@ impl Application {
                                     offset,
                                 )
                             {
-                                let is_new_session = !self
-                                    .bound_node_param_drag
-                                    .as_ref()
-                                    .is_some_and(|d| {
-                                        d.target == target
+                                let is_new_session = !matches!(
+                                    &self.scrub.active,
+                                    Some(crate::ui_bridge::scrub::ResolvedScrub::BoundNodeParam(d))
+                                        if d.target == target
                                             && d.node_id == *node_id
                                             && d.param_name == *param_name
-                                    });
+                                );
                                 if is_new_session {
+                                    self.scrub.check_single_active_on_begin("bound-node-param");
                                     let old_value = self
                                         .local_project
                                         .with_preset_graph_mut(&target, |inst| {
                                             inst.get_base_param(&outer_id)
                                         })
                                         .unwrap_or(card_value);
-                                    self.bound_node_param_drag = Some(BoundNodeParamDrag {
-                                        target: target.clone(),
-                                        node_id: *node_id,
-                                        param_name: param_name.clone(),
-                                        outer_param_id: outer_id.clone(),
-                                        old_value,
-                                        current_value: old_value,
-                                    });
+                                    self.scrub.active = Some(
+                                        crate::ui_bridge::scrub::ResolvedScrub::BoundNodeParam(
+                                            Box::new(BoundNodeParamDrag {
+                                                target: target.clone(),
+                                                node_id: *node_id,
+                                                param_name: param_name.clone(),
+                                                outer_param_id: outer_id.clone(),
+                                                old_value,
+                                                current_value: old_value,
+                                            }),
+                                        ),
+                                    );
                                 }
-                                if let Some(drag) = self.bound_node_param_drag.as_mut() {
+                                if let Some(
+                                    crate::ui_bridge::scrub::ResolvedScrub::BoundNodeParam(drag),
+                                ) = self.scrub.active.as_mut()
+                                {
                                     drag.current_value = card_value;
                                 }
                                 // Live write — the same arms
@@ -2330,33 +2338,40 @@ impl Application {
                         // `SetGraphNodeParamCommand::with_previous` doc).
                         let core_value =
                             crate::ui_translate::serialized_param_value_to_core(new_value);
-                        let is_new_session = !self
-                            .unbound_node_param_drag
-                            .as_ref()
-                            .is_some_and(|d| {
-                                d.target == target
+                        let is_new_session = !matches!(
+                            &self.scrub.active,
+                            Some(crate::ui_bridge::scrub::ResolvedScrub::UnboundNodeParam(d))
+                                if d.target == target
                                     && d.node_id == *node_id
                                     && d.param_name == *param_name
                                     && d.scope_path == canvas_scope
-                            });
+                        );
                         if is_new_session {
+                            self.scrub.check_single_active_on_begin("unbound-node-param");
                             let pre_drag_value = self.watched_current_node_param_value(
                                 &canvas_scope,
                                 *node_id,
                                 param_name,
                                 default,
                             );
-                            self.unbound_node_param_drag = Some(UnboundNodeParamDrag {
-                                target: target.clone(),
-                                node_id: *node_id,
-                                param_name: param_name.clone(),
-                                scope_path: canvas_scope.clone(),
-                                catalog_default: default.clone(),
-                                pre_drag_value,
-                                current_value: core_value.clone(),
-                            });
+                            self.scrub.active = Some(
+                                crate::ui_bridge::scrub::ResolvedScrub::UnboundNodeParam(
+                                    Box::new(UnboundNodeParamDrag {
+                                        target: target.clone(),
+                                        node_id: *node_id,
+                                        param_name: param_name.clone(),
+                                        scope_path: canvas_scope.clone(),
+                                        catalog_default: default.clone(),
+                                        pre_drag_value,
+                                        current_value: core_value.clone(),
+                                    }),
+                                ),
+                            );
                         }
-                        if let Some(drag) = self.unbound_node_param_drag.as_mut() {
+                        if let Some(
+                            crate::ui_bridge::scrub::ResolvedScrub::UnboundNodeParam(drag),
+                        ) = self.scrub.active.as_mut()
+                        {
                             drag.current_value = core_value.clone();
                         }
                         let mut live_cmd =
@@ -2377,54 +2392,58 @@ impl Application {
                     continue;
                 }
                 manifold_ui::GraphEditCommand::EndGraphNodeParamScrub { node_id, param_name } => {
-                    // Close out a bound-param write-back gesture (D1) with
-                    // ONE undo-worthy `ChangeGraphParamCommand` for the whole
-                    // drag — a no-op for an ordinary (unbound) row, which
-                    // never opened a `bound_node_param_drag` session.
-                    if let Some(drag) = self.bound_node_param_drag.take()
-                        && drag.node_id == *node_id
-                        && drag.param_name == *param_name
-                        && (drag.old_value - drag.current_value).abs() > f32::EPSILON
-                    {
-                        let cmd = manifold_editing::commands::effects::ChangeGraphParamCommand::new(
-                            drag.target,
-                            drag.outer_param_id,
-                            drag.old_value,
-                            drag.current_value,
-                        );
-                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
-                    }
-                    // BUG-282: close out an ordinary (unbound) node-face
-                    // scrub session the same way — ONE undo-worthy
-                    // `SetGraphNodeParamCommand`, seeded with the true
-                    // pre-drag value via `with_previous` so undo restores
-                    // it (not the post-drag value `execute()`'s self-capture
-                    // would otherwise see). No-op if the drag never touched
-                    // this `(node_id, param_name)`, or never actually moved
-                    // (pre-drag value present and unchanged).
-                    if let Some(drag) = self.unbound_node_param_drag.take()
-                        && drag.node_id == *node_id
-                        && drag.param_name == *param_name
-                    {
-                        let moved = match &drag.pre_drag_value {
-                            Some(prev) => *prev != drag.current_value,
-                            // Key was absent before the drag — inserting it
-                            // now is always a real change.
-                            None => true,
-                        };
-                        if moved {
-                            let cmd =
-                                manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
-                                    drag.target,
-                                    drag.node_id,
-                                    drag.param_name,
-                                    drag.current_value,
-                                    drag.catalog_default,
-                                )
-                                .with_scope(drag.scope_path)
-                                .with_previous(drag.pre_drag_value);
-                            self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                    // Close out whichever node-param gesture `active` holds — a
+                    // bound (D1) or unbound (BUG-282) session — with ONE
+                    // undo-worthy command for the whole drag. A foreign gesture
+                    // (or none) is left in place; a matching-but-unmoved one is
+                    // dropped without a command.
+                    match self.scrub.active.take() {
+                        Some(crate::ui_bridge::scrub::ResolvedScrub::BoundNodeParam(drag)) => {
+                            if drag.node_id == *node_id
+                                && drag.param_name == *param_name
+                                && (drag.old_value - drag.current_value).abs() > f32::EPSILON
+                            {
+                                let cmd =
+                                    manifold_editing::commands::effects::ChangeGraphParamCommand::new(
+                                        drag.target,
+                                        drag.outer_param_id,
+                                        drag.old_value,
+                                        drag.current_value,
+                                    );
+                                self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                            }
                         }
+                        Some(crate::ui_bridge::scrub::ResolvedScrub::UnboundNodeParam(drag)) => {
+                            // Seeded with the true pre-drag value via
+                            // `with_previous` so undo restores it (not the
+                            // post-drag value `execute()`'s self-capture would
+                            // otherwise see). No-op if the drag never touched this
+                            // `(node_id, param_name)`, or never actually moved.
+                            if drag.node_id == *node_id && drag.param_name == *param_name {
+                                let moved = match &drag.pre_drag_value {
+                                    Some(prev) => *prev != drag.current_value,
+                                    // Key was absent before the drag — inserting
+                                    // it now is always a real change.
+                                    None => true,
+                                };
+                                if moved {
+                                    let cmd =
+                                        manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
+                                            drag.target,
+                                            drag.node_id,
+                                            drag.param_name,
+                                            drag.current_value,
+                                            drag.catalog_default,
+                                        )
+                                        .with_scope(drag.scope_path)
+                                        .with_previous(drag.pre_drag_value);
+                                    self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                                }
+                            }
+                        }
+                        // Not a node-param gesture — EndScrub shouldn't fire
+                        // against a panel/mapping/marker gesture; leave it live.
+                        other => self.scrub.active = other,
                     }
                     continue;
                 }
@@ -2451,11 +2470,13 @@ impl Application {
                                 manifold_ui::panels::GraphParamTarget::Generator
                             }
                         };
-                        let action = PanelAction::Params(ParamsAction::ParamChanged(
-                            gpt,
-                            manifold_core::effects::ParamId::from(outer_param_id.clone()),
-                            *new_value,
-                        ));
+                        let action = PanelAction::Scrub(
+                            ValueRef::Param(
+                                gpt,
+                                manifold_core::effects::ParamId::from(outer_param_id.clone()),
+                            ),
+                            ScrubPhase::Move(ScrubValue::Scalar(*new_value)),
+                        );
                         let content_tx = self.content_tx.as_ref().unwrap();
                         let editor_target = self.watched_graph_target.as_ref();
                         let mut dctx = crate::ui_bridge::DispatchCtx {

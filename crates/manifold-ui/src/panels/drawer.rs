@@ -16,8 +16,6 @@
 //!
 //! See `docs/AUDIO_MODULATION_DESIGN.md` §10.2.
 
-#[cfg(test)]
-use crate::{ParamsAction};
 use std::cell::Cell;
 
 use super::PanelAction;
@@ -631,6 +629,7 @@ pub fn build(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::panels::{ScrubPhase, ScrubValue, ValueRef};
 
     fn buttons(labels: &[(&str, bool)]) -> DrawerRow {
         DrawerRow::Buttons {
@@ -687,9 +686,9 @@ mod tests {
 
     fn placeholder_reset() -> PanelAction {
         PanelAction::slider_reset(
-            PanelAction::Params(ParamsAction::MasterOpacitySnapshot),
-            PanelAction::Params(ParamsAction::MasterOpacityChanged(1.0)),
-            PanelAction::Params(ParamsAction::MasterOpacityCommit),
+            PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Begin),
+            PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Move(ScrubValue::Scalar(1.0))),
+            PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Commit),
         )
     }
 

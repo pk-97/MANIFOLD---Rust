@@ -20,7 +20,10 @@
 use crate::{MappingAction, ModulationAction, ParamsAction, RootAction};
 use super::copy_to_clipboard_label::CopyToClipboardLabelState;
 use super::param_slider_shared::*;
-use super::{AudioShapeParam, GraphParamTarget, PanelAction, TrimKind, UiRelightField, UiRelightHeightFrom};
+use super::{
+    AudioShapeParam, GraphParamTarget, PanelAction, ScrubPhase, ScrubValue, TrimKind,
+    UiRelightField, UiRelightHeightFrom, ValueRef,
+};
 use crate::anim::{AnimF32, Transient};
 use crate::chrome::{Align, ChromeHost, Pad, Sizing, View};
 use crate::color;
@@ -2949,9 +2952,9 @@ impl ParamCardPanel {
             let default_norm = BitmapSlider::value_to_normalized(spec.default, spec.min, spec.max);
             let value_text = format!("{value:.2}");
             let reset = PanelAction::slider_reset(
-                PanelAction::Params(ParamsAction::RelightParamSnapshot(target.clone(), spec.field)),
-                PanelAction::Params(ParamsAction::RelightParamChanged(target.clone(), spec.field, spec.default)),
-                PanelAction::Params(ParamsAction::RelightParamCommit(target.clone(), spec.field)),
+                PanelAction::Scrub(ValueRef::RelightParam(target.clone(), spec.field), ScrubPhase::Begin),
+                PanelAction::Scrub(ValueRef::RelightParam(target.clone(), spec.field), ScrubPhase::Move(ScrubValue::Scalar(spec.default))),
+                PanelAction::Scrub(ValueRef::RelightParam(target.clone(), spec.field), ScrubPhase::Commit),
             );
             let slider = BitmapSlider::build(
                 tree,
@@ -4002,8 +4005,8 @@ impl ParamCardPanel {
                         let decay = norm.clamp(0.0, 1.0) * ENV_DECAY_MAX;
                         let pid = self.rows[row].id.clone();
                         return vec![
-                            PanelAction::Modulation(ModulationAction::EnvDecaySnapshot(target.clone(), pid.clone())),
-                            PanelAction::Modulation(ModulationAction::EnvDecayChanged(target, pid, decay)),
+                            PanelAction::Scrub(ValueRef::EnvDecay(target.clone(), pid.clone()), ScrubPhase::Begin),
+                            PanelAction::Scrub(ValueRef::EnvDecay(target, pid), ScrubPhase::Move(ScrubValue::Scalar(decay))),
                         ];
                     }
                     Vec::new()
@@ -4024,8 +4027,8 @@ impl ParamCardPanel {
                                 self.drag.begin(ParamDragTarget::AudioShape { index: row, param: which }, pos);
                                 let pid = self.rows[row].id.clone();
                                 return vec![
-                                    PanelAction::Modulation(ModulationAction::AudioModShapeSnapshot(target.clone(), pid.clone())),
-                                    PanelAction::Modulation(ModulationAction::AudioModShapeParamChanged(target, pid, which, value)),
+                                    PanelAction::Scrub(ValueRef::AudioModShape(target.clone(), pid.clone(), which), ScrubPhase::Begin),
+                                    PanelAction::Scrub(ValueRef::AudioModShape(target, pid, which), ScrubPhase::Move(ScrubValue::Scalar(value))),
                                 ];
                             }
                         }
@@ -4045,8 +4048,8 @@ impl ParamCardPanel {
                             self.drag.begin(ParamDragTarget::StepAmount { index: row }, pos);
                             let pid = self.rows[row].id.clone();
                             return vec![
-                                PanelAction::Modulation(ModulationAction::AudioModStepAmountSnapshot(target.clone(), pid.clone())),
-                                PanelAction::Modulation(ModulationAction::AudioModStepAmountChanged(target, pid, value)),
+                                PanelAction::Scrub(ValueRef::AudioModStepAmount(target.clone(), pid.clone()), ScrubPhase::Begin),
+                                PanelAction::Scrub(ValueRef::AudioModStepAmount(target, pid), ScrubPhase::Move(ScrubValue::Scalar(value))),
                             ];
                         }
                     }
@@ -4058,7 +4061,7 @@ impl ParamCardPanel {
                         && node_id == t.target_bar_id
                     {
                         self.drag.begin(ParamDragTarget::EnvTarget { index: row }, pos);
-                        return vec![PanelAction::Modulation(ModulationAction::TargetSnapshot(target, self.rows[row].id.clone()))];
+                        return vec![PanelAction::Scrub(ValueRef::EnvelopeTarget(target, self.rows[row].id.clone()), ScrubPhase::Begin)];
                     }
                     // Trim bars (exact hit) — driver, Ableton, audio, same
                     // probe order the old three-loop scan used.
@@ -4066,11 +4069,11 @@ impl ParamCardPanel {
                         if let Some(t) = self.trim_ids_for(kind)[row].as_ref() {
                             if node_id == t.min_bar_id {
                                 self.drag.begin(ParamDragTarget::Trim { kind, index: row, is_min: true }, pos);
-                                return vec![PanelAction::Modulation(ModulationAction::TrimSnapshot(kind, target, self.rows[row].id.clone()))];
+                                return vec![PanelAction::Scrub(ValueRef::Trim(kind, target, self.rows[row].id.clone()), ScrubPhase::Begin)];
                             }
                             if node_id == t.max_bar_id {
                                 self.drag.begin(ParamDragTarget::Trim { kind, index: row, is_min: false }, pos);
-                                return vec![PanelAction::Modulation(ModulationAction::TrimSnapshot(kind, target, self.rows[row].id.clone()))];
+                                return vec![PanelAction::Scrub(ValueRef::Trim(kind, target, self.rows[row].id.clone()), ScrubPhase::Begin)];
                             }
                         }
                     }
@@ -4112,14 +4115,14 @@ impl ParamCardPanel {
                                 ParamDragTarget::Trim { kind: TrimKind::Driver, index: row, is_min: true },
                                 pos,
                             );
-                            return vec![PanelAction::Modulation(ModulationAction::TrimSnapshot(TrimKind::Driver, target, self.rows[row].id.clone()))];
+                            return vec![PanelAction::Scrub(ValueRef::Trim(TrimKind::Driver, target, self.rows[row].id.clone()), ScrubPhase::Begin)];
                         }
                         if dist_max < hit_zone {
                             self.drag.begin(
                                 ParamDragTarget::Trim { kind: TrimKind::Driver, index: row, is_min: false },
                                 pos,
                             );
-                            return vec![PanelAction::Modulation(ModulationAction::TrimSnapshot(TrimKind::Driver, target, self.rows[row].id.clone()))];
+                            return vec![PanelAction::Scrub(ValueRef::Trim(TrimKind::Driver, target, self.rows[row].id.clone()), ScrubPhase::Begin)];
                         }
                     }
                     // If the envelope is armed, the orange target handle gets
@@ -4130,7 +4133,7 @@ impl ParamCardPanel {
                         let target_center = bar.x + TARGET_BAR_W * 0.5;
                         if (pos.x - target_center).abs() < 8.0 {
                             self.drag.begin(ParamDragTarget::EnvTarget { index: row }, pos);
-                            return vec![PanelAction::Modulation(ModulationAction::TargetSnapshot(target, self.rows[row].id.clone()))];
+                            return vec![PanelAction::Scrub(ValueRef::EnvelopeTarget(target, self.rows[row].id.clone()), ScrubPhase::Begin)];
                         }
                     }
                     // No trim/target handle nearby — normal param slider drag.
@@ -4140,8 +4143,14 @@ impl ParamCardPanel {
                     let val = BitmapSlider::normalized_to_value(norm, info.spec.min, info.spec.max);
                     let val = if info.spec.whole_numbers { val.round() } else { val };
                     vec![
-                        PanelAction::Params(ParamsAction::ParamSnapshot(target.clone(), self.rows[row].id.clone())),
-                        PanelAction::Params(ParamsAction::ParamChanged(target, self.rows[row].id.clone(), val)),
+                        PanelAction::Scrub(
+                            ValueRef::Param(target.clone(), self.rows[row].id.clone()),
+                            ScrubPhase::Begin,
+                        ),
+                        PanelAction::Scrub(
+                            ValueRef::Param(target, self.rows[row].id.clone()),
+                            ScrubPhase::Move(ScrubValue::Scalar(val)),
+                        ),
                     ]
                 }
                 _ => Vec::new(),
@@ -4162,8 +4171,8 @@ impl ParamCardPanel {
                     let norm = BitmapSlider::x_to_normalized(TrackSpan::of(tree.get_bounds(ids.track)), pos.x);
                     let val = BitmapSlider::normalized_to_value(norm, spec.min, spec.max);
                     return vec![
-                        PanelAction::Params(ParamsAction::RelightParamSnapshot(target.clone(), field)),
-                        PanelAction::Params(ParamsAction::RelightParamChanged(target, field, val)),
+                        PanelAction::Scrub(ValueRef::RelightParam(target.clone(), field), ScrubPhase::Begin),
+                        PanelAction::Scrub(ValueRef::RelightParam(target, field), ScrubPhase::Move(ScrubValue::Scalar(val))),
                     ];
                 }
             }
@@ -4194,8 +4203,8 @@ impl ParamCardPanel {
             }
             let pid = self.rows[pi].id.clone();
             return match self.kind {
-                ParamCardKind::Effect => vec![PanelAction::Modulation(ModulationAction::TargetChanged(GraphParamTarget::Effect(ei), pid, norm))],
-                ParamCardKind::Generator => vec![PanelAction::Modulation(ModulationAction::TargetChanged(GraphParamTarget::Generator, pid, norm))],
+                ParamCardKind::Effect => vec![PanelAction::Scrub(ValueRef::EnvelopeTarget(GraphParamTarget::Effect(ei), pid), ScrubPhase::Move(ScrubValue::Scalar(norm)))],
+                ParamCardKind::Generator => vec![PanelAction::Scrub(ValueRef::EnvelopeTarget(GraphParamTarget::Generator, pid), ScrubPhase::Move(ScrubValue::Scalar(norm)))],
             };
         }
 
@@ -4216,8 +4225,8 @@ impl ParamCardPanel {
             BitmapSlider::update_value(tree, &cfg.decay_slider, norm, &format!("{decay:.2}"));
             let pid = self.rows[pi].id.clone();
             return match self.kind {
-                ParamCardKind::Effect => vec![PanelAction::Modulation(ModulationAction::EnvDecayChanged(GraphParamTarget::Effect(ei), pid, decay))],
-                ParamCardKind::Generator => vec![PanelAction::Modulation(ModulationAction::EnvDecayChanged(GraphParamTarget::Generator, pid, decay))],
+                ParamCardKind::Effect => vec![PanelAction::Scrub(ValueRef::EnvDecay(GraphParamTarget::Effect(ei), pid), ScrubPhase::Move(ScrubValue::Scalar(decay)))],
+                ParamCardKind::Generator => vec![PanelAction::Scrub(ValueRef::EnvDecay(GraphParamTarget::Generator, pid), ScrubPhase::Move(ScrubValue::Scalar(decay)))],
             };
         }
 
@@ -4266,18 +4275,14 @@ impl ParamCardPanel {
                 }
                 let pid = self.rows[pi].id.clone();
                 return match self.kind {
-                    ParamCardKind::Effect => vec![PanelAction::Modulation(ModulationAction::AudioModShapeParamChanged(
-                        GraphParamTarget::Effect(ei),
-                        pid,
-                        which,
-                        value,
-                    ))],
-                    ParamCardKind::Generator => vec![PanelAction::Modulation(ModulationAction::AudioModShapeParamChanged(
-                        GraphParamTarget::Generator,
-                        pid,
-                        which,
-                        value,
-                    ))],
+                    ParamCardKind::Effect => vec![PanelAction::Scrub(
+                        ValueRef::AudioModShape(GraphParamTarget::Effect(ei), pid, which),
+                        ScrubPhase::Move(ScrubValue::Scalar(value)),
+                    )],
+                    ParamCardKind::Generator => vec![PanelAction::Scrub(
+                        ValueRef::AudioModShape(GraphParamTarget::Generator, pid, which),
+                        ScrubPhase::Move(ScrubValue::Scalar(value)),
+                    )],
                 };
             }
         }
@@ -4316,13 +4321,12 @@ impl ParamCardPanel {
                 let pid = self.rows[pi].id.clone();
                 return match self.kind {
                     ParamCardKind::Effect => {
-                        vec![PanelAction::Modulation(ModulationAction::AudioModStepAmountChanged(GraphParamTarget::Effect(ei), pid, value))]
+                        vec![PanelAction::Scrub(ValueRef::AudioModStepAmount(GraphParamTarget::Effect(ei), pid), ScrubPhase::Move(ScrubValue::Scalar(value)))]
                     }
-                    ParamCardKind::Generator => vec![PanelAction::Modulation(ModulationAction::AudioModStepAmountChanged(
-                        GraphParamTarget::Generator,
-                        pid,
-                        value,
-                    ))],
+                    ParamCardKind::Generator => vec![PanelAction::Scrub(
+                        ValueRef::AudioModStepAmount(GraphParamTarget::Generator, pid),
+                        ScrubPhase::Move(ScrubValue::Scalar(value)),
+                    )],
                 };
             }
         }
@@ -4364,10 +4368,10 @@ impl ParamCardPanel {
             let pid = self.rows[pi].id.clone();
             return match self.kind {
                 ParamCardKind::Effect => {
-                    vec![PanelAction::Modulation(ModulationAction::TrimChanged(kind, GraphParamTarget::Effect(ei), pid, new_min, new_max))]
+                    vec![PanelAction::Scrub(ValueRef::Trim(kind, GraphParamTarget::Effect(ei), pid), ScrubPhase::Move(ScrubValue::Range(new_min, new_max)))]
                 }
                 ParamCardKind::Generator => {
-                    vec![PanelAction::Modulation(ModulationAction::TrimChanged(kind, GraphParamTarget::Generator, pid, new_min, new_max))]
+                    vec![PanelAction::Scrub(ValueRef::Trim(kind, GraphParamTarget::Generator, pid), ScrubPhase::Move(ScrubValue::Range(new_min, new_max)))]
                 }
             };
         }
@@ -4392,8 +4396,14 @@ impl ParamCardPanel {
             self.param_cache[pi] = val;
             let pid = self.rows[pi].id.clone();
             return match self.kind {
-                ParamCardKind::Effect => vec![PanelAction::Params(ParamsAction::ParamChanged(GraphParamTarget::Effect(ei), pid, val))],
-                ParamCardKind::Generator => vec![PanelAction::Params(ParamsAction::ParamChanged(GraphParamTarget::Generator, pid, val))],
+                ParamCardKind::Effect => vec![PanelAction::Scrub(
+                    ValueRef::Param(GraphParamTarget::Effect(ei), pid),
+                    ScrubPhase::Move(ScrubValue::Scalar(val)),
+                )],
+                ParamCardKind::Generator => vec![PanelAction::Scrub(
+                    ValueRef::Param(GraphParamTarget::Generator, pid),
+                    ScrubPhase::Move(ScrubValue::Scalar(val)),
+                )],
             };
         }
 
@@ -4410,7 +4420,7 @@ impl ParamCardPanel {
             let display_norm = BitmapSlider::value_to_normalized(val, spec.min, spec.max);
             self.relight.set_value(field, val);
             BitmapSlider::update_value(tree, ids, display_norm, &format!("{val:.2}"));
-            return vec![PanelAction::Params(ParamsAction::RelightParamChanged(self.param_target(), field, val))];
+            return vec![PanelAction::Scrub(ValueRef::RelightParam(self.param_target(), field), ScrubPhase::Move(ScrubValue::Scalar(val)))];
         }
 
         Vec::new()
@@ -4425,23 +4435,23 @@ impl ParamCardPanel {
             Some(ParamDragTarget::EnvTarget { index: pi }) => {
                 let pid = self.rows[pi].id.clone();
                 match self.kind {
-                    ParamCardKind::Effect => vec![PanelAction::Modulation(ModulationAction::TargetCommit(GraphParamTarget::Effect(ei), pid))],
-                    ParamCardKind::Generator => vec![PanelAction::Modulation(ModulationAction::TargetCommit(GraphParamTarget::Generator, pid))],
+                    ParamCardKind::Effect => vec![PanelAction::Scrub(ValueRef::EnvelopeTarget(GraphParamTarget::Effect(ei), pid), ScrubPhase::Commit)],
+                    ParamCardKind::Generator => vec![PanelAction::Scrub(ValueRef::EnvelopeTarget(GraphParamTarget::Generator, pid), ScrubPhase::Commit)],
                 }
             }
             Some(ParamDragTarget::EnvDecay { index: pi }) => {
                 let pid = self.rows[pi].id.clone();
                 match self.kind {
-                    ParamCardKind::Effect => vec![PanelAction::Modulation(ModulationAction::EnvDecayCommit(GraphParamTarget::Effect(ei), pid))],
-                    ParamCardKind::Generator => vec![PanelAction::Modulation(ModulationAction::EnvDecayCommit(GraphParamTarget::Generator, pid))],
+                    ParamCardKind::Effect => vec![PanelAction::Scrub(ValueRef::EnvDecay(GraphParamTarget::Effect(ei), pid), ScrubPhase::Commit)],
+                    ParamCardKind::Generator => vec![PanelAction::Scrub(ValueRef::EnvDecay(GraphParamTarget::Generator, pid), ScrubPhase::Commit)],
                 }
             }
-            Some(ParamDragTarget::AudioShape { index: pi, .. }) => {
+            Some(ParamDragTarget::AudioShape { index: pi, param: which }) => {
                 let pid = self.rows[pi].id.clone();
                 match self.kind {
-                    ParamCardKind::Effect => vec![PanelAction::Modulation(ModulationAction::AudioModShapeCommit(GraphParamTarget::Effect(ei), pid))],
+                    ParamCardKind::Effect => vec![PanelAction::Scrub(ValueRef::AudioModShape(GraphParamTarget::Effect(ei), pid, which), ScrubPhase::Commit)],
                     ParamCardKind::Generator => {
-                        vec![PanelAction::Modulation(ModulationAction::AudioModShapeCommit(GraphParamTarget::Generator, pid))]
+                        vec![PanelAction::Scrub(ValueRef::AudioModShape(GraphParamTarget::Generator, pid, which), ScrubPhase::Commit)]
                     }
                 }
             }
@@ -4449,31 +4459,37 @@ impl ParamCardPanel {
                 let pid = self.rows[pi].id.clone();
                 match self.kind {
                     ParamCardKind::Effect => {
-                        vec![PanelAction::Modulation(ModulationAction::AudioModStepAmountCommit(GraphParamTarget::Effect(ei), pid))]
+                        vec![PanelAction::Scrub(ValueRef::AudioModStepAmount(GraphParamTarget::Effect(ei), pid), ScrubPhase::Commit)]
                     }
                     ParamCardKind::Generator => {
-                        vec![PanelAction::Modulation(ModulationAction::AudioModStepAmountCommit(GraphParamTarget::Generator, pid))]
+                        vec![PanelAction::Scrub(ValueRef::AudioModStepAmount(GraphParamTarget::Generator, pid), ScrubPhase::Commit)]
                     }
                 }
             }
             Some(ParamDragTarget::Trim { kind, index: pi, .. }) => {
                 let pid = self.rows[pi].id.clone();
                 match self.kind {
-                    ParamCardKind::Effect => vec![PanelAction::Modulation(ModulationAction::TrimCommit(kind, GraphParamTarget::Effect(ei), pid))],
+                    ParamCardKind::Effect => vec![PanelAction::Scrub(ValueRef::Trim(kind, GraphParamTarget::Effect(ei), pid), ScrubPhase::Commit)],
                     ParamCardKind::Generator => {
-                        vec![PanelAction::Modulation(ModulationAction::TrimCommit(kind, GraphParamTarget::Generator, pid))]
+                        vec![PanelAction::Scrub(ValueRef::Trim(kind, GraphParamTarget::Generator, pid), ScrubPhase::Commit)]
                     }
                 }
             }
             Some(ParamDragTarget::Param { index: pi }) => {
                 let pid = self.rows[pi].id.clone();
                 match self.kind {
-                    ParamCardKind::Effect => vec![PanelAction::Params(ParamsAction::ParamCommit(GraphParamTarget::Effect(ei), pid))],
-                    ParamCardKind::Generator => vec![PanelAction::Params(ParamsAction::ParamCommit(GraphParamTarget::Generator, pid))],
+                    ParamCardKind::Effect => vec![PanelAction::Scrub(
+                        ValueRef::Param(GraphParamTarget::Effect(ei), pid),
+                        ScrubPhase::Commit,
+                    )],
+                    ParamCardKind::Generator => vec![PanelAction::Scrub(
+                        ValueRef::Param(GraphParamTarget::Generator, pid),
+                        ScrubPhase::Commit,
+                    )],
                 }
             }
             Some(ParamDragTarget::Relight { field }) => {
-                vec![PanelAction::Params(ParamsAction::RelightParamCommit(self.param_target(), field))]
+                vec![PanelAction::Scrub(ValueRef::RelightParam(self.param_target(), field), ScrubPhase::Commit)]
             }
             None => Vec::new(),
         }
@@ -5475,7 +5491,7 @@ mod tests {
 
         let down = panel.handle_pointer_down(track, Vec2::new(mid_x, track_rect.y), &tree);
         assert!(
-            matches!(down.as_slice(), [PanelAction::Params(ParamsAction::ParamSnapshot(..)), PanelAction::Params(ParamsAction::ParamChanged(..))]),
+            matches!(down.as_slice(), [PanelAction::Scrub(ValueRef::Param(..), ScrubPhase::Begin), PanelAction::Scrub(ValueRef::Param(..), ScrubPhase::Move(..))]),
             "begin emits snapshot + first value: {down:?}"
         );
         assert!(panel.is_dragging());
@@ -5483,14 +5499,14 @@ mod tests {
         let quarter_x = track_rect.x + track_rect.width * 0.25;
         let moved = panel.handle_drag(Vec2::new(quarter_x, track_rect.y), &mut tree);
         assert!(
-            matches!(moved.as_slice(), [PanelAction::Params(ParamsAction::ParamChanged(target, pid, val))]
+            matches!(moved.as_slice(), [PanelAction::Scrub(ValueRef::Param(target, pid), ScrubPhase::Move(ScrubValue::Scalar(val)))]
                 if *target == GraphParamTarget::Effect(0) && pid.as_ref() == "radius" && (*val - 25.0).abs() < 1.0),
             "track emits the live value at the new position: {moved:?}"
         );
 
         let ended = panel.handle_drag_end(&mut tree);
         assert!(
-            matches!(ended.as_slice(), [PanelAction::Params(ParamsAction::ParamCommit(GraphParamTarget::Effect(0), pid))] if pid.as_ref() == "radius"),
+            matches!(ended.as_slice(), [PanelAction::Scrub(ValueRef::Param(GraphParamTarget::Effect(0), pid), ScrubPhase::Commit)] if pid.as_ref() == "radius"),
             "end emits exactly one commit: {ended:?}"
         );
         assert!(!panel.is_dragging(), "drag slot cleared after end");
@@ -5509,7 +5525,7 @@ mod tests {
 
         let down = panel.handle_pointer_down(min_bar_id, Vec2::new(0.0, 0.0), &tree);
         assert!(
-            matches!(down.as_slice(), [PanelAction::Modulation(ModulationAction::TrimSnapshot(TrimKind::Driver, GraphParamTarget::Effect(0), pid))] if pid.as_ref() == "radius"),
+            matches!(down.as_slice(), [PanelAction::Scrub(ValueRef::Trim(TrimKind::Driver, GraphParamTarget::Effect(0), pid), ScrubPhase::Begin)] if pid.as_ref() == "radius"),
             "begin emits a trim snapshot: {down:?}"
         );
         assert!(panel.is_dragging());
@@ -5518,13 +5534,13 @@ mod tests {
         let new_x = track_rect.x + track_rect.width * 0.4;
         let moved = panel.handle_drag(Vec2::new(new_x, track_rect.y), &mut tree);
         assert!(
-            matches!(moved.as_slice(), [PanelAction::Modulation(ModulationAction::TrimChanged(TrimKind::Driver, GraphParamTarget::Effect(0), pid, ..))] if pid.as_ref() == "radius"),
+            matches!(moved.as_slice(), [PanelAction::Scrub(ValueRef::Trim(TrimKind::Driver, GraphParamTarget::Effect(0), pid), ScrubPhase::Move(..))] if pid.as_ref() == "radius"),
             "track emits the live trim range: {moved:?}"
         );
 
         let ended = panel.handle_drag_end(&mut tree);
         assert!(
-            matches!(ended.as_slice(), [PanelAction::Modulation(ModulationAction::TrimCommit(TrimKind::Driver, GraphParamTarget::Effect(0), pid))] if pid.as_ref() == "radius"),
+            matches!(ended.as_slice(), [PanelAction::Scrub(ValueRef::Trim(TrimKind::Driver, GraphParamTarget::Effect(0), pid), ScrubPhase::Commit)] if pid.as_ref() == "radius"),
             "end emits exactly one trim commit: {ended:?}"
         );
         assert!(!panel.is_dragging());
@@ -5560,7 +5576,7 @@ mod tests {
         let live = tree.get_bounds(track);
         let moved = panel.handle_drag(Vec2::new(live.x + live.width * 0.3, live.y), &mut tree);
         assert!(
-            matches!(moved.as_slice(), [PanelAction::Modulation(ModulationAction::TrimChanged(TrimKind::Driver, ..))]),
+            matches!(moved.as_slice(), [PanelAction::Scrub(ValueRef::Trim(TrimKind::Driver, ..), ScrubPhase::Move(..))]),
             "trim drag still routes after scroll: {moved:?}"
         );
 
@@ -5591,7 +5607,7 @@ mod tests {
         let live = tree.get_bounds(track);
         let moved = panel.handle_drag(Vec2::new(live.x + live.width * 0.5, live.y), &mut tree);
         assert!(
-            matches!(moved.as_slice(), [PanelAction::Modulation(ModulationAction::TargetChanged(..))]),
+            matches!(moved.as_slice(), [PanelAction::Scrub(ValueRef::EnvelopeTarget(..), ScrubPhase::Move(..))]),
             "target drag still routes after scroll: {moved:?}"
         );
 
@@ -5616,7 +5632,7 @@ mod tests {
 
         let down = panel.handle_pointer_down(target_bar_id, Vec2::new(0.0, 0.0), &tree);
         assert!(
-            matches!(down.as_slice(), [PanelAction::Modulation(ModulationAction::TargetSnapshot(GraphParamTarget::Effect(0), pid))] if pid.as_ref() == "radius"),
+            matches!(down.as_slice(), [PanelAction::Scrub(ValueRef::EnvelopeTarget(GraphParamTarget::Effect(0), pid), ScrubPhase::Begin)] if pid.as_ref() == "radius"),
             "begin emits a target snapshot: {down:?}"
         );
         assert!(panel.is_dragging());
@@ -5625,13 +5641,13 @@ mod tests {
         let new_x = track_rect.x + track_rect.width * 0.3;
         let moved = panel.handle_drag(Vec2::new(new_x, track_rect.y), &mut tree);
         assert!(
-            matches!(moved.as_slice(), [PanelAction::Modulation(ModulationAction::TargetChanged(GraphParamTarget::Effect(0), pid, norm))] if pid.as_ref() == "radius" && (*norm - 0.3).abs() < 0.05),
+            matches!(moved.as_slice(), [PanelAction::Scrub(ValueRef::EnvelopeTarget(GraphParamTarget::Effect(0), pid), ScrubPhase::Move(ScrubValue::Scalar(norm)))] if pid.as_ref() == "radius" && (*norm - 0.3).abs() < 0.05),
             "track emits the live target norm: {moved:?}"
         );
 
         let ended = panel.handle_drag_end(&mut tree);
         assert!(
-            matches!(ended.as_slice(), [PanelAction::Modulation(ModulationAction::TargetCommit(GraphParamTarget::Effect(0), pid))] if pid.as_ref() == "radius"),
+            matches!(ended.as_slice(), [PanelAction::Scrub(ValueRef::EnvelopeTarget(GraphParamTarget::Effect(0), pid), ScrubPhase::Commit)] if pid.as_ref() == "radius"),
             "end emits exactly one target commit: {ended:?}"
         );
         assert!(!panel.is_dragging());
@@ -5653,7 +5669,7 @@ mod tests {
         assert!(
             matches!(
                 down.as_slice(),
-                [PanelAction::Modulation(ModulationAction::EnvDecaySnapshot(GraphParamTarget::Effect(0), pid1)), PanelAction::Modulation(ModulationAction::EnvDecayChanged(GraphParamTarget::Effect(0), pid2, _))]
+                [PanelAction::Scrub(ValueRef::EnvDecay(GraphParamTarget::Effect(0), pid1), ScrubPhase::Begin), PanelAction::Scrub(ValueRef::EnvDecay(GraphParamTarget::Effect(0), pid2), ScrubPhase::Move(..))]
                 if pid1.as_ref() == "radius" && pid2.as_ref() == "radius"
             ),
             "begin emits snapshot + first decay value: {down:?}"
@@ -5663,13 +5679,13 @@ mod tests {
         let new_x = decay_rect.x + decay_rect.width * 0.6;
         let moved = panel.handle_drag(Vec2::new(new_x, decay_rect.y), &mut tree);
         assert!(
-            matches!(moved.as_slice(), [PanelAction::Modulation(ModulationAction::EnvDecayChanged(GraphParamTarget::Effect(0), pid, _))] if pid.as_ref() == "radius"),
+            matches!(moved.as_slice(), [PanelAction::Scrub(ValueRef::EnvDecay(GraphParamTarget::Effect(0), pid), ScrubPhase::Move(..))] if pid.as_ref() == "radius"),
             "track emits the live decay value: {moved:?}"
         );
 
         let ended = panel.handle_drag_end(&mut tree);
         assert!(
-            matches!(ended.as_slice(), [PanelAction::Modulation(ModulationAction::EnvDecayCommit(GraphParamTarget::Effect(0), pid))] if pid.as_ref() == "radius"),
+            matches!(ended.as_slice(), [PanelAction::Scrub(ValueRef::EnvDecay(GraphParamTarget::Effect(0), pid), ScrubPhase::Commit)] if pid.as_ref() == "radius"),
             "end emits exactly one decay commit: {ended:?}"
         );
         assert!(!panel.is_dragging());
@@ -5704,7 +5720,7 @@ mod tests {
         assert!(
             matches!(
                 down.as_slice(),
-                [PanelAction::Modulation(ModulationAction::AudioModShapeSnapshot(GraphParamTarget::Effect(0), pid1)), PanelAction::Modulation(ModulationAction::AudioModShapeParamChanged(GraphParamTarget::Effect(0), pid2, AudioShapeParam::Sensitivity, _))]
+                [PanelAction::Scrub(ValueRef::AudioModShape(GraphParamTarget::Effect(0), pid1, AudioShapeParam::Sensitivity), ScrubPhase::Begin), PanelAction::Scrub(ValueRef::AudioModShape(GraphParamTarget::Effect(0), pid2, AudioShapeParam::Sensitivity), ScrubPhase::Move(..))]
                 if pid1.as_ref() == "radius" && pid2.as_ref() == "radius"
             ),
             "begin emits snapshot + first shape value: {down:?}"
@@ -5714,13 +5730,13 @@ mod tests {
         let new_x = sens_rect.x + sens_rect.width * 0.7;
         let moved = panel.handle_drag(Vec2::new(new_x, sens_rect.y), &mut tree);
         assert!(
-            matches!(moved.as_slice(), [PanelAction::Modulation(ModulationAction::AudioModShapeParamChanged(GraphParamTarget::Effect(0), pid, AudioShapeParam::Sensitivity, _))] if pid.as_ref() == "radius"),
+            matches!(moved.as_slice(), [PanelAction::Scrub(ValueRef::AudioModShape(GraphParamTarget::Effect(0), pid, AudioShapeParam::Sensitivity), ScrubPhase::Move(..))] if pid.as_ref() == "radius"),
             "track emits the live shape value: {moved:?}"
         );
 
         let ended = panel.handle_drag_end(&mut tree);
         assert!(
-            matches!(ended.as_slice(), [PanelAction::Modulation(ModulationAction::AudioModShapeCommit(GraphParamTarget::Effect(0), pid))] if pid.as_ref() == "radius"),
+            matches!(ended.as_slice(), [PanelAction::Scrub(ValueRef::AudioModShape(GraphParamTarget::Effect(0), pid, _), ScrubPhase::Commit)] if pid.as_ref() == "radius"),
             "end emits exactly one shape commit: {ended:?}"
         );
         assert!(!panel.is_dragging());
@@ -5744,7 +5760,7 @@ mod tests {
         assert!(
             matches!(
                 down.as_slice(),
-                [PanelAction::Modulation(ModulationAction::AudioModStepAmountSnapshot(GraphParamTarget::Effect(0), pid1)), PanelAction::Modulation(ModulationAction::AudioModStepAmountChanged(GraphParamTarget::Effect(0), pid2, _))]
+                [PanelAction::Scrub(ValueRef::AudioModStepAmount(GraphParamTarget::Effect(0), pid1), ScrubPhase::Begin), PanelAction::Scrub(ValueRef::AudioModStepAmount(GraphParamTarget::Effect(0), pid2), ScrubPhase::Move(..))]
                 if pid1.as_ref() == "radius" && pid2.as_ref() == "radius"
             ),
             "begin emits snapshot + first step value: {down:?}"
@@ -5754,13 +5770,13 @@ mod tests {
         let new_x = step_rect.x + step_rect.width * 0.8;
         let moved = panel.handle_drag(Vec2::new(new_x, step_rect.y), &mut tree);
         assert!(
-            matches!(moved.as_slice(), [PanelAction::Modulation(ModulationAction::AudioModStepAmountChanged(GraphParamTarget::Effect(0), pid, _))] if pid.as_ref() == "radius"),
+            matches!(moved.as_slice(), [PanelAction::Scrub(ValueRef::AudioModStepAmount(GraphParamTarget::Effect(0), pid), ScrubPhase::Move(..))] if pid.as_ref() == "radius"),
             "track emits the live step value: {moved:?}"
         );
 
         let ended = panel.handle_drag_end(&mut tree);
         assert!(
-            matches!(ended.as_slice(), [PanelAction::Modulation(ModulationAction::AudioModStepAmountCommit(GraphParamTarget::Effect(0), pid))] if pid.as_ref() == "radius"),
+            matches!(ended.as_slice(), [PanelAction::Scrub(ValueRef::AudioModStepAmount(GraphParamTarget::Effect(0), pid), ScrubPhase::Commit)] if pid.as_ref() == "radius"),
             "end emits exactly one step commit: {ended:?}"
         );
         assert!(!panel.is_dragging());
@@ -6647,7 +6663,7 @@ mod tests {
         let track = panel.slider_ids[0].as_ref().unwrap().track;
         match reg.resolve(&tree, Some(track), crate::intent::Gesture::RightClick) {
             Some(PanelAction::Root(RootAction::SliderReset { changed, .. })) => {
-                assert!(matches!(*changed, PanelAction::Params(ParamsAction::ParamChanged(_, _, v)) if (v - 10.0).abs() < f32::EPSILON));
+                assert!(matches!(*changed, PanelAction::Scrub(ValueRef::Param(..), ScrubPhase::Move(ScrubValue::Scalar(v))) if (v - 10.0).abs() < f32::EPSILON));
             }
             other => panic!("expected SliderReset, got {other:?}"),
         }
@@ -6679,11 +6695,11 @@ mod tests {
             let track = dids.sliders[si].track;
             match reg.resolve(&tree, Some(track), crate::intent::Gesture::RightClick) {
                 Some(PanelAction::Root(RootAction::SliderReset { changed, .. })) => match *changed {
-                    PanelAction::Modulation(ModulationAction::AudioModShapeParamChanged(_, _, got_which, v)) => {
+                    PanelAction::Scrub(ValueRef::AudioModShape(_, _, got_which), ScrubPhase::Move(ScrubValue::Scalar(v))) => {
                         assert_eq!(got_which, which);
                         assert!((v - default).abs() < f32::EPSILON, "slider {si}: {v} != {default}");
                     }
-                    other => panic!("slider {si}: expected AudioModShapeParamChanged, got {other:?}"),
+                    other => panic!("slider {si}: expected AudioModShape scrub move, got {other:?}"),
                 },
                 other => panic!("slider {si}: expected SliderReset, got {other:?}"),
             }

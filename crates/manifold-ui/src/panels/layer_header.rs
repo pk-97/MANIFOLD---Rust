@@ -1,5 +1,5 @@
-use crate::{EditingAction, LayerAction, ParamsAction, ProjectAction, RootAction};
-use super::PanelAction;
+use crate::{EditingAction, LayerAction, ProjectAction, RootAction};
+use super::{PanelAction, ScrubPhase, ScrubValue, ValueRef};
 use crate::chrome::{ChromeHost, Pad, Sizing, View, components};
 use crate::color::{self, darken, lighten};
 use crate::coordinate_mapper::CoordinateMapper;
@@ -1324,8 +1324,8 @@ impl LayerHeaderPanel {
                     return Vec::new();
                 };
                 return vec![
-                    PanelAction::Params(ParamsAction::AudioGainSnapshot(lid.clone())),
-                    PanelAction::Params(ParamsAction::AudioGainChanged(lid, val)),
+                    PanelAction::Scrub(ValueRef::LayerAudioGain(lid.clone()), ScrubPhase::Begin),
+                    PanelAction::Scrub(ValueRef::LayerAudioGain(lid), ScrubPhase::Move(ScrubValue::Scalar(val))),
                 ];
             }
         }
@@ -1342,7 +1342,7 @@ impl LayerHeaderPanel {
         if let Some(val) = self.gain_sliders[i].apply_drag(pos_x, tree, &gain_db_text)
             && let Some(lid) = self.layer_id_at(i)
         {
-            return vec![PanelAction::Params(ParamsAction::AudioGainChanged(lid, val))];
+            return vec![PanelAction::Scrub(ValueRef::LayerAudioGain(lid), ScrubPhase::Move(ScrubValue::Scalar(val)))];
         }
         Vec::new()
     }
@@ -1357,7 +1357,7 @@ impl LayerHeaderPanel {
         if self.gain_sliders[i].end_drag()
             && let Some(lid) = self.layer_id_at(i)
         {
-            return vec![PanelAction::Params(ParamsAction::AudioGainCommit(lid))];
+            return vec![PanelAction::Scrub(ValueRef::LayerAudioGain(lid), ScrubPhase::Commit)];
         }
         Vec::new()
     }
@@ -2028,9 +2028,9 @@ impl LayerHeaderPanel {
                     let value_text = gain_db_text(layer.audio_gain_db);
                     let lid = LayerId::new(&layer.layer_id);
                     let reset = PanelAction::slider_reset(
-                        PanelAction::Params(ParamsAction::AudioGainSnapshot(lid.clone())),
-                        PanelAction::Params(ParamsAction::AudioGainChanged(lid.clone(), 0.0)),
-                        PanelAction::Params(ParamsAction::AudioGainCommit(lid)),
+                        PanelAction::Scrub(ValueRef::LayerAudioGain(lid.clone()), ScrubPhase::Begin),
+                        PanelAction::Scrub(ValueRef::LayerAudioGain(lid.clone()), ScrubPhase::Move(ScrubValue::Scalar(0.0))),
+                        PanelAction::Scrub(ValueRef::LayerAudioGain(lid), ScrubPhase::Commit),
                     );
                     let built = crate::slider::BitmapSlider::build(
                         tree,
@@ -3219,7 +3219,7 @@ mod tests {
             Some(PanelAction::Root(RootAction::SliderReset { changed, .. })) => {
                 assert!(matches!(
                     *changed,
-                    PanelAction::Params(ParamsAction::AudioGainChanged(ref id, v))
+                    PanelAction::Scrub(ValueRef::LayerAudioGain(ref id), ScrubPhase::Move(ScrubValue::Scalar(v)))
                         if *id == LayerId::new("Drums In") && v.abs() < f32::EPSILON
                 ));
             }

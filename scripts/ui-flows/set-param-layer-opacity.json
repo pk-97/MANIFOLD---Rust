@@ -1,0 +1,40 @@
+[
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Opacity" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "0.37" } },
+      "check": { "Count": 0 }
+    }
+  },
+  {
+    "SetParam": {
+      "param": "LayerOpacity",
+      "value": 0.37
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "0.37" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": { "command": true }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "0.37" } },
+      "check": { "Count": 0 }
+    }
+  }
+]

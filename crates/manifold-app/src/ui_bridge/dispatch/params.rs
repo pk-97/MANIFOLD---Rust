@@ -18,12 +18,9 @@ use manifold_editing::command::Command;
 use manifold_editing::commands::effect_target::EffectTarget;
 use manifold_editing::commands::effects::{
     ChangeGraphParamCommand, RemoveEffectCommand, ReorderEffectCommand, ReorderEffectGroupCommand,
-    SetRelightHeightFromCommand, SetRelightParamCommand, ToggleEffectCommand, ToggleRelightCommand,
+    SetRelightHeightFromCommand, ToggleEffectCommand, ToggleRelightCommand,
 };
-use manifold_editing::commands::settings::{
-    ChangeLayerOpacityCommand, ChangeLedBrightnessCommand, ChangeMacroCommand,
-    ChangeMasterOpacityCommand, PasteGeneratorCommand,
-};
+use manifold_editing::commands::settings::{ChangeMacroCommand, PasteGeneratorCommand};
 use manifold_ui::{InspectorTab, ParamsAction};
 
 use super::super::DispatchResult;
@@ -41,50 +38,9 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
         }
 
         // ── Macro sliders ─────────────────────────────────────────
-        ParamsAction::MacroSnapshot(idx) => {
-            let idx = *idx;
-            if idx < manifold_core::macro_bank::MACRO_COUNT {
-                let value = ctx.project.settings.macro_bank.slots[idx].value;
-                ctx.scrub.slider_snapshot = Some(value);
-                // Macros ride in every ModulationSnapshot block, so the drag
-                // must be guarded or the per-tick apply stomps it (undo-race
-                // regression, 2026-07-18).
-                ctx.scrub.active_inspector_drag = Some(crate::app::ActiveInspectorDrag::Macro { idx, value });
-            }
-            DispatchResult::handled()
-        }
-        ParamsAction::MacroChanged(idx, val) => {
-            let idx = *idx;
-            let val = *val;
-            if let Some(crate::app::ActiveInspectorDrag::Macro { idx: di, value }) =
-                &mut ctx.scrub.active_inspector_drag
-                && *di == idx
-            {
-                *value = val;
-            }
-            manifold_core::macro_bank::MacroBank::apply_macro(ctx.project, idx, val);
-            ContentCommand::send(
-                ctx.content_tx,
-                ContentCommand::MutateProjectLive(Box::new(move |p| {
-                    manifold_core::macro_bank::MacroBank::apply_macro(p, idx, val);
-                })),
-            );
-            DispatchResult::handled()
-        }
-        ParamsAction::MacroCommit(idx) => {
-            if let Some(old_val) = ctx.scrub.slider_snapshot.take() {
-                let idx = *idx;
-                if idx < manifold_core::macro_bank::MACRO_COUNT {
-                    let new_val = ctx.project.settings.macro_bank.slots[idx].value;
-                    if (old_val - new_val).abs() > f32::EPSILON {
-                        let cmd = ChangeMacroCommand::new(idx, old_val, new_val);
-                        ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
-                    }
-                }
-            }
-            ctx.scrub.active_inspector_drag = None;
-            DispatchResult::handled()
-        }
+        // Macro scrub trio migrated to `PanelAction::Scrub` (`ValueRef::Macro`,
+        // P-I / D4). `MacroReset`/`MacroLabelRename` are not scrub gestures and
+        // stay here.
         ParamsAction::MacroReset(idx) => {
             let idx = *idx;
             if idx < manifold_core::macro_bank::MACRO_COUNT {
@@ -99,91 +55,10 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
         }
         ParamsAction::MacroLabelRename(_) => DispatchResult::handled(),
 
-        // ── Master chrome ──────────────────────────────────────────
-        ParamsAction::MasterOpacitySnapshot => {
-            ctx.scrub.slider_snapshot = Some(ctx.project.settings.master_opacity);
-            ctx.scrub.active_inspector_drag = Some(crate::app::ActiveInspectorDrag::MasterOpacity(
-                ctx.project.settings.master_opacity,
-            ));
-            DispatchResult::handled()
-        }
-        ParamsAction::MasterOpacityChanged(val) => {
-            ctx.project.settings.master_opacity = *val;
-            if let Some(crate::app::ActiveInspectorDrag::MasterOpacity(v)) = &mut ctx.scrub.active_inspector_drag {
-                *v = *val;
-            }
-            let v = *val;
-            ContentCommand::send(
-                ctx.content_tx,
-                ContentCommand::MutateProjectLive(Box::new(move |p| {
-                    p.settings.master_opacity = v;
-                })),
-            );
-            DispatchResult::handled()
-        }
-        ParamsAction::MasterOpacityCommit => {
-            if let Some(old_val) = ctx.scrub.slider_snapshot.take() {
-                let new_val = ctx.project.settings.master_opacity;
-                if (old_val - new_val).abs() > f32::EPSILON {
-                    let cmd = ChangeMasterOpacityCommand::new(old_val, new_val);
-                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
-                }
-            }
-            ctx.scrub.active_inspector_drag = None;
-            DispatchResult::handled()
-        }
-        // ── Audio-layer gain slider (layer header) ─────────────────
-        ParamsAction::AudioGainSnapshot(id) => {
-            ctx.scrub.slider_snapshot = ctx.project
-                .timeline
-                .find_layer_by_id(id)
-                .map(|(_, l)| l.audio_gain_db);
-            if let Some(db) = ctx.scrub.slider_snapshot {
-                ctx.scrub.active_inspector_drag = Some(crate::app::ActiveInspectorDrag::AudioGain {
-                    layer_id: id.clone(),
-                    db,
-                });
-            }
-            DispatchResult::handled()
-        }
-        ParamsAction::AudioGainChanged(id, db) => {
-            let db = *db;
-            if let Some(crate::app::ActiveInspectorDrag::AudioGain { db: guard, .. }) =
-                &mut ctx.scrub.active_inspector_drag
-            {
-                *guard = db;
-            }
-            if let Some((_, layer)) = ctx.project.timeline.find_layer_by_id_mut(id) {
-                layer.audio_gain_db = db;
-                let id = id.clone();
-                ContentCommand::send(
-                    ctx.content_tx,
-                    ContentCommand::MutateProjectLive(Box::new(move |p| {
-                        if let Some((_, l)) = p.timeline.find_layer_by_id_mut(&id) {
-                            l.audio_gain_db = db;
-                        }
-                    })),
-                );
-            }
-            DispatchResult::handled()
-        }
-        ParamsAction::AudioGainCommit(id) => {
-            ctx.scrub.active_inspector_drag = None;
-            if let Some(old_db) = ctx.scrub.slider_snapshot.take()
-                && let Some((_, layer)) = ctx.project.timeline.find_layer_by_id(id)
-            {
-                let new_db = layer.audio_gain_db;
-                if (old_db - new_db).abs() > f32::EPSILON {
-                    let cmd = manifold_editing::commands::layer::SetLayerAudioGainCommand::new(
-                        layer.layer_id.clone(),
-                        old_db,
-                        new_db,
-                    );
-                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
-                }
-            }
-            DispatchResult::handled()
-        }
+        // Master-opacity + LED-brightness scrub trios migrated to the unified
+        // `PanelAction::Scrub` wire (`ui_bridge/scrub.rs`, P-I / D4).
+        // Layer audio-gain scrub trio migrated to `PanelAction::Scrub`
+        // (`ValueRef::LayerAudioGain`, P-I / D4).
         ParamsAction::MasterCollapseToggle => {
             ctx.ui.inspector.master_chrome_mut().toggle_collapsed();
             DispatchResult::structural()
@@ -231,93 +106,9 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             DispatchResult::handled()
         }
 
-        // ── LED brightness ───────────────────────────────────────
-        ParamsAction::LedBrightnessSnapshot => {
-            ctx.scrub.slider_snapshot = Some(ctx.project.settings.led_brightness);
-            ctx.scrub.active_inspector_drag = Some(crate::app::ActiveInspectorDrag::LedBrightness(
-                ctx.project.settings.led_brightness,
-            ));
-            DispatchResult::handled()
-        }
-        ParamsAction::LedBrightnessChanged(val) => {
-            ctx.project.settings.led_brightness = *val;
-            if let Some(crate::app::ActiveInspectorDrag::LedBrightness(v)) = &mut ctx.scrub.active_inspector_drag {
-                *v = *val;
-            }
-            let v = *val;
-            ContentCommand::send(
-                ctx.content_tx,
-                ContentCommand::MutateProject(Box::new(move |p| {
-                    p.settings.led_brightness = v;
-                })),
-            );
-            DispatchResult::handled()
-        }
-        ParamsAction::LedBrightnessCommit => {
-            if let Some(old_val) = ctx.scrub.slider_snapshot.take() {
-                let new_val = ctx.project.settings.led_brightness;
-                if (old_val - new_val).abs() > f32::EPSILON {
-                    let cmd = ChangeLedBrightnessCommand::new(old_val, new_val);
-                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
-                }
-            }
-            ctx.scrub.active_inspector_drag = None;
-            DispatchResult::handled()
-        }
         // ── Layer chrome ───────────────────────────────────────────
-        ParamsAction::LayerOpacitySnapshot => {
-            let layer_idx = super::resolve_active_layer_index(active_layer, ctx.project);
-            if let Some(idx) = layer_idx
-                && let Some(layer) = ctx.project.timeline.layers.get(idx)
-            {
-                ctx.scrub.slider_snapshot = Some(layer.opacity);
-                ctx.scrub.active_inspector_drag = Some(crate::app::ActiveInspectorDrag::LayerOpacity {
-                    layer_id: layer.layer_id.clone(),
-                    value: layer.opacity,
-                });
-            }
-            DispatchResult::handled()
-        }
-        ParamsAction::LayerOpacityChanged(val) => {
-            let layer_idx = super::resolve_active_layer_index(active_layer, ctx.project);
-            if let Some(idx) = layer_idx {
-                if let Some(layer) = ctx.project.timeline.layers.get_mut(idx) {
-                    layer.opacity = *val;
-                }
-                if let Some(crate::app::ActiveInspectorDrag::LayerOpacity { value, .. }) =
-                    &mut ctx.scrub.active_inspector_drag
-                {
-                    *value = *val;
-                }
-                let v = *val;
-                let layer_id = active_layer.clone().unwrap_or_default();
-                ContentCommand::send(
-                    ctx.content_tx,
-                    ContentCommand::MutateProjectLive(Box::new(move |p| {
-                        if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id) {
-                            layer.opacity = v;
-                        }
-                    })),
-                );
-            }
-            DispatchResult::handled()
-        }
-        ParamsAction::LayerOpacityCommit => {
-            let layer_idx = super::resolve_active_layer_index(active_layer, ctx.project);
-            if let Some(old_val) = ctx.scrub.slider_snapshot.take()
-                && let Some(idx) = layer_idx
-                && let Some(layer) = ctx.project.timeline.layers.get(idx)
-            {
-                let layer_id = layer.layer_id.clone();
-                let new_val = layer.opacity;
-                if (old_val - new_val).abs() > f32::EPSILON {
-                    let cmd = ChangeLayerOpacityCommand::new(layer_id, old_val, new_val);
-                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
-                }
-            }
-            ctx.scrub.active_inspector_drag = None;
-            DispatchResult::handled()
-        }
+        // Layer-opacity scrub trio migrated to `PanelAction::Scrub`
+        // (`ValueRef::LayerOpacity`, P-I / D4).
         ParamsAction::LayerChromeCollapseToggle => {
             ctx.ui.inspector.layer_chrome_mut().toggle_collapsed();
             DispatchResult::structural()
@@ -498,108 +289,13 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             inspector.apply_selection_visuals(tree);
             DispatchResult::handled()
         }
-        // BUG-061: the old bespoke per-param right-click reset action was
-        // deleted — reset now rides the generic `SliderReset` trio
-        // (`ParamSnapshot`/`ParamChanged`/`ParamCommit` below), reusing
-        // these same handlers instead of a bespoke code path. Known
-        // trade-off: this drops the eased "value snap-back" fill animation
-        // the old handler drove via `begin_value_snapback` (D15) — the value
-        // now jumps to default like any other committed change instead of
-        // easing to it. `begin_value_snapback` itself is left in place in
-        // manifold-ui (still exercised by its own unit tests) but has no
-        // remaining production caller.
-        ParamsAction::ParamSnapshot(gpt, param_id) => {
-            if let Some(target) =
-                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
-            {
-                let val = ctx.project
-                    .with_preset_graph_mut(&target, |inst| {
-                        inst.params
-                            .contains(param_id.as_ref())
-                            .then(|| inst.get_base_param(param_id.as_ref()))
-                    })
-                    .flatten();
-                if let Some(val) = val {
-                    // Touch-to-select (P5, `docs/AUTOMATION_LANES_DESIGN.md`
-                    // §7 addendum): the ONE funnel every param drag fires
-                    // through, once per touch. Layer-scoped only (Master/Clip
-                    // tabs have no layer for the chooser to live on, per §7's
-                    // "automation lives on the layer").
-                    if effective_tab.is_layer_scope()
-                        && let Some(layer_id) = active_layer.clone()
-                    {
-                        ctx.selection.set_chosen_automation_param(
-                            layer_id,
-                            crate::editing_host::to_ui_graph_target(&target),
-                            param_id.clone(),
-                        );
-                    }
-                    ctx.scrub.slider_snapshot = Some(val);
-                    ctx.scrub.active_inspector_drag = Some(crate::app::ActiveInspectorDrag::Param {
-                        target,
-                        param_id: param_id.clone(),
-                        value: val,
-                    });
-                }
-            }
-            DispatchResult::handled()
-        }
-        ParamsAction::ParamChanged(gpt, param_id, val) => {
-            if let Some(target) =
-                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
-            {
-                ctx.project.with_preset_graph_mut(&target, |inst| {
-                    inst.set_base_param(param_id.as_ref(), *val);
-                });
-                if let Some(crate::app::ActiveInspectorDrag::Param { value, .. }) =
-                    &mut ctx.scrub.active_inspector_drag
-                {
-                    *value = *val;
-                }
-                let pid = param_id.clone();
-                let v = *val;
-                let t = target.clone();
-                ContentCommand::send(
-                    ctx.content_tx,
-                    ContentCommand::MutateProjectLive(Box::new(move |p| {
-                        p.with_preset_graph_mut(&t, |inst| {
-                            inst.set_base_param(pid.as_ref(), v);
-                        });
-                    })),
-                );
-            }
-            DispatchResult::handled()
-        }
-        ParamsAction::ParamCommit(gpt, param_id) => {
-            // Release commits ONE `ChangeGraphParamCommand` through the
-            // undo-tracked `ContentCommand::Execute` path — one undo unit per
-            // gesture, not per motion event.
-            if let Some(old_val) = ctx.scrub.slider_snapshot.take()
-                && let Some(target) =
-                    resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
-            {
-                let new_val = ctx.project
-                    .with_preset_graph_mut(&target, |inst| {
-                        inst.params
-                            .contains(param_id.as_ref())
-                            .then(|| inst.get_base_param(param_id.as_ref()))
-                    })
-                    .flatten();
-                if let Some(new_val) = new_val
-                    && (old_val - new_val).abs() > f32::EPSILON
-                {
-                    let cmd = ChangeGraphParamCommand::new(
-                        target,
-                        param_id.clone(),
-                        old_val,
-                        new_val,
-                    );
-                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
-                }
-            }
-            ctx.scrub.active_inspector_drag = None;
-            DispatchResult::handled()
-        }
+        // The plain-param scrub trio (`ParamSnapshot`/`ParamChanged`/
+        // `ParamCommit`) migrated to the unified `PanelAction::Scrub` wire
+        // (`ui_bridge/scrub.rs`, P-I / D4). Right-click reset still rides the
+        // generic `SliderReset` — its three boxed actions are now `Scrub`
+        // gestures. (The old bespoke reset dropped the eased snap-back fill
+        // `begin_value_snapback` drove; that helper stays in manifold-ui with
+        // no production caller.)
         // BUG-250: an enum dropdown pick — one atomic write, one undo unit,
         // no drag. `ParamToggle`'s read-old/write-new `ChangeGraphParamCommand`
         // shape, exactly as `ParamChanged`/`ParamToggle` already do.
@@ -1057,71 +753,8 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             }
             DispatchResult::structural()
         }
-        ParamsAction::RelightParamSnapshot(gpt, field) => {
-            if let Some(target) =
-                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
-            {
-                let f = crate::ui_translate::relight_field_to_editing(*field);
-                ctx.scrub.slider_snapshot =
-                    ctx.project.with_preset_graph_mut(&target, |inst| f.get(&inst.relight_params));
-                if let Some(value) = ctx.scrub.slider_snapshot {
-                    ctx.scrub.active_inspector_drag = Some(crate::app::ActiveInspectorDrag::RelightParam {
-                        target,
-                        field: f,
-                        value,
-                    });
-                }
-            }
-            DispatchResult::handled()
-        }
-        ParamsAction::RelightParamChanged(gpt, field, val) => {
-            if let Some(target) =
-                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
-            {
-                let f = crate::ui_translate::relight_field_to_editing(*field);
-                let v = *val;
-                if let Some(crate::app::ActiveInspectorDrag::RelightParam { value, .. }) =
-                    &mut ctx.scrub.active_inspector_drag
-                {
-                    *value = v;
-                }
-                // Live drag: update the UI-side project immediately so the
-                // slider follows the pointer, and mirror to the content thread
-                // via `MutateProjectLive`. No `bump_graph_structure_version`
-                // — float knobs are per-frame uniforms (D8/P7).
-                ctx.project.with_preset_graph_mut(&target, |inst| {
-                    f.set(&mut inst.relight_params, v);
-                });
-                let t = target.clone();
-                ContentCommand::send(
-                    ctx.content_tx,
-                    ContentCommand::MutateProjectLive(Box::new(move |p| {
-                        p.with_preset_graph_mut(&t, |inst| {
-                            f.set(&mut inst.relight_params, v);
-                        });
-                    })),
-                );
-            }
-            DispatchResult::handled()
-        }
-        ParamsAction::RelightParamCommit(gpt, field) => {
-            ctx.scrub.active_inspector_drag = None;
-            if let Some(old_val) = ctx.scrub.slider_snapshot.take()
-                && let Some(target) =
-                    resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
-            {
-                let f = crate::ui_translate::relight_field_to_editing(*field);
-                let new_val =
-                    ctx.project.with_preset_graph_mut(&target, |inst| f.get(&inst.relight_params));
-                if let Some(new_val) = new_val
-                    && (old_val - new_val).abs() > f32::EPSILON
-                {
-                    let cmd = SetRelightParamCommand::new(target, f, old_val, new_val);
-                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
-                }
-            }
-            DispatchResult::handled()
-        }
+        // Relight-knob scrub trio migrated to `PanelAction::Scrub`
+        // (`ValueRef::RelightParam`, P-I / D4).
         ParamsAction::RelightHeightFromChanged(gpt, height_from) => {
             if let Some(target) =
                 resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)

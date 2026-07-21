@@ -29,7 +29,7 @@
 //! `ParamCardPanel` has with its drawer builder (builder = visuals + the
 //! slider's reset action; click/drag resolution = caller-owned).
 
-use crate::{AudioSetupAction};
+use crate::{AudioSetupAction, ScrubPhase, ScrubValue, ValueRef};
 use super::drawer::DrawerIds;
 use super::param_slider_shared::{
     AUDIO_ATTACK_DEFAULT_MS, AUDIO_MOD_ACTIVE_C32, AUDIO_RELEASE_DEFAULT_MS, AUDIO_SENS_MAX,
@@ -509,13 +509,14 @@ impl AudioTriggerSection {
                 self.dragging_shape
                     .start((i, AudioShapeParam::Sensitivity), Vec2::new(pos_x, 0.0));
                 return vec![
-                    PanelAction::AudioSetup(AudioSetupAction::AudioTriggerShapeSnapshot(layer_id.clone(), i)),
-                    PanelAction::AudioSetup(AudioSetupAction::AudioTriggerShapeParamChanged(
-                        layer_id,
-                        i,
-                        AudioShapeParam::Sensitivity,
-                        value,
-                    )),
+                    PanelAction::Scrub(
+                        ValueRef::AudioTriggerShape(layer_id.clone(), i, AudioShapeParam::Sensitivity),
+                        ScrubPhase::Begin,
+                    ),
+                    PanelAction::Scrub(
+                        ValueRef::AudioTriggerShape(layer_id, i, AudioShapeParam::Sensitivity),
+                        ScrubPhase::Move(ScrubValue::Scalar(value)),
+                    ),
                 ];
             }
         }
@@ -543,18 +544,19 @@ impl AudioTriggerSection {
         {
             BitmapSlider::update_value(tree, sl, norm, &text);
         }
-        vec![PanelAction::AudioSetup(AudioSetupAction::AudioTriggerShapeParamChanged(
-            layer_id,
-            i,
-            AudioShapeParam::Sensitivity,
-            value,
-        ))]
+        vec![PanelAction::Scrub(
+            ValueRef::AudioTriggerShape(layer_id, i, AudioShapeParam::Sensitivity),
+            ScrubPhase::Move(ScrubValue::Scalar(value)),
+        )]
     }
 
     pub fn handle_release(&mut self) -> Vec<PanelAction> {
         let Some((i, _)) = self.dragging_shape.release() else { return Vec::new() };
         let Some(layer_id) = self.layer_id.clone() else { return Vec::new() };
-        vec![PanelAction::AudioSetup(AudioSetupAction::AudioTriggerShapeCommit(layer_id, i))]
+        vec![PanelAction::Scrub(
+            ValueRef::AudioTriggerShape(layer_id, i, AudioShapeParam::Sensitivity),
+            ScrubPhase::Commit,
+        )]
     }
 
     pub fn is_dragging(&self) -> bool {
@@ -658,11 +660,11 @@ mod tests {
         assert!(!section.is_dragging(), "release must clear the drag");
         assert_eq!(actions.len(), 1);
         match &actions[0] {
-            PanelAction::AudioSetup(AudioSetupAction::AudioTriggerShapeCommit(layer_id, row)) => {
+            PanelAction::Scrub(ValueRef::AudioTriggerShape(layer_id, row, _), ScrubPhase::Commit) => {
                 assert_eq!(layer_id, &LayerId::new("layer-1"));
                 assert_eq!(*row, 2);
             }
-            other => panic!("expected AudioTriggerShapeCommit, got {other:?}"),
+            other => panic!("expected AudioTriggerShape scrub commit, got {other:?}"),
         }
 
         // Releasing again with nothing in flight signals nothing — take-once.

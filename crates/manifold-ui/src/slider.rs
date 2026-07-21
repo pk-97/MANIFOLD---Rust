@@ -1,5 +1,5 @@
 #[cfg(test)]
-use crate::{MappingAction, ParamsAction, RootAction};
+use crate::{MappingAction, RootAction};
 use crate::color;
 use crate::drag::DragController;
 use crate::draw::{Painter, elide_to_width, text_width};
@@ -902,12 +902,13 @@ fn compute_thumb_rect(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::panels::{ScrubPhase, ScrubValue, ValueRef};
 
     fn placeholder_reset() -> PanelAction {
         PanelAction::slider_reset(
-            PanelAction::Params(ParamsAction::MasterOpacitySnapshot),
-            PanelAction::Params(ParamsAction::MasterOpacityChanged(1.0)),
-            PanelAction::Params(ParamsAction::MasterOpacityCommit),
+            PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Begin),
+            PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Move(ScrubValue::Scalar(1.0))),
+            PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Commit),
         )
     }
 

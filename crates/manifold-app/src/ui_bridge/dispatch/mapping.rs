@@ -10,7 +10,6 @@
 //! outer function's locals, so it recomputes them here — the same two
 //! lines, byte-exact, as the sanctioned preamble.
 
-use manifold_editing::commands::ableton::ChangeAbletonTrimCommand;
 use manifold_ui::MappingAction;
 
 use super::super::DispatchResult;
@@ -162,82 +161,13 @@ pub(crate) fn dispatch_mapping(action: &MappingAction, ctx: &mut super::super::D
         // Driver / Ableton / audio trim handles are unified into the
         // `Trim{Changed,Snapshot,Commit}(TrimKind, …)` arms above.
 
-        MappingAction::AbletonMacroTrimChanged(slot_idx, min, max) => {
-            let slot_idx = *slot_idx;
-            let min = *min;
-            let max = *max;
-            if let Some(crate::app::ActiveInspectorDrag::AbletonMacroTrim {
-                min: g_min,
-                max: g_max,
-                ..
-            }) = &mut ctx.scrub.active_inspector_drag
-            {
-                *g_min = min;
-                *g_max = max;
-            }
-            if let Some(slot) = ctx.project.settings.macro_bank.slots.get_mut(slot_idx)
-                && let Some(m) = &mut slot.ableton_mapping
-            {
-                m.range_min = min;
-                m.range_max = max;
-            }
-            ContentCommand::send(
-                ctx.content_tx,
-                ContentCommand::MutateProject(Box::new(move |p| {
-                    if let Some(slot) = p.settings.macro_bank.slots.get_mut(slot_idx)
-                        && let Some(m) = &mut slot.ableton_mapping
-                    {
-                        m.range_min = min;
-                        m.range_max = max;
-                    }
-                })),
-            );
-            DispatchResult::handled()
-        }
-        MappingAction::AbletonMacroTrimSnapshot(slot_idx) => {
-            if let Some(range) = ctx.project
-                .settings
-                .macro_bank
-                .slots
-                .get(*slot_idx)
-                .and_then(|s| s.ableton_mapping.as_ref())
-                .map(|m| (m.range_min, m.range_max))
-            {
-                ctx.scrub.trim_snapshot = Some(range);
-                ctx.scrub.active_inspector_drag = Some(crate::app::ActiveInspectorDrag::AbletonMacroTrim {
-                    slot_idx: *slot_idx,
-                    min: range.0,
-                    max: range.1,
-                });
-            }
-            DispatchResult::handled()
-        }
-        MappingAction::AbletonMacroTrimCommit(slot_idx) => {
-            use manifold_core::ableton_mapping::AbletonMappingTarget;
-            ctx.scrub.active_inspector_drag = None;
-            if let Some((old_min, old_max)) = ctx.scrub.trim_snapshot.take()
-                && let Some((new_min, new_max)) = ctx.project
-                    .settings
-                    .macro_bank
-                    .slots
-                    .get(*slot_idx)
-                    .and_then(|s| s.ableton_mapping.as_ref())
-                    .map(|m| (m.range_min, m.range_max))
-                && ((old_min - new_min).abs() > f32::EPSILON
-                    || (old_max - new_max).abs() > f32::EPSILON)
-            {
-                let cmd = ChangeAbletonTrimCommand::new(
-                    AbletonMappingTarget::MacroSlot { slot_index: *slot_idx },
-                    old_min,
-                    old_max,
-                    new_min,
-                    new_max,
-                );
-                ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
-            }
-            DispatchResult::handled()
-        }
-
+        // Ableton macro-bank trim-bar scrub trio migrated to the unified
+        // `PanelAction::Scrub` wire (`ValueRef::AbletonMacroTrim`, P-I / D4):
+        // keyed by the macro slot index, the `(min, max)` range rides
+        // `ScrubValue::Range` (Move writes both edges + a live `MutateProject`
+        // edit), Commit emits `ChangeAbletonTrimCommand` on the macro-slot
+        // target. The undo baseline `(min, max)` now lives in `ScrubState.active`
+        // (the retired `trim_snapshot` field's last reader).
         MappingAction::AbletonInvertToggle(gpt, param_id) => {
             if let Some(target) =
                 resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)

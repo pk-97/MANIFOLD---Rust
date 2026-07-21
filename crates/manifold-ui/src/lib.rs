@@ -84,7 +84,8 @@ pub use panels::{
     AudioSetupAction, AudioShapeParam, BandDivider, BrowserAction, ClipAction, DriverConfigAction,
     EditingAction, GraphParamTarget, HitRegion, InspectorTab, LayerAction, MappingAction,
     MarkerAction, ModulationAction, Panel, PanelAction, ParamsAction, ProjectAction, RootAction,
-    SyncSource, TransportAction, TrimKind, UiRelightField, UiRelightHeightFrom,
+    ScrubPhase, ScrubValue, SyncSource, TransportAction, TrimKind, UiRelightField,
+    UiRelightHeightFrom, ValueRef,
 };
 pub use slider::{BitmapSlider, SliderColors, SliderNodeIds};
 pub use transform2d::Affine2;

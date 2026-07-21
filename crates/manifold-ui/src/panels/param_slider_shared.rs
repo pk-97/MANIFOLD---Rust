@@ -5,12 +5,12 @@
 //! builders, and formatting helpers across both kinds. This module is the
 //! single source of truth for them.
 
-use crate::{AudioSetupAction, ModulationAction, ParamsAction, RootAction};
+use crate::RootAction;
 use super::DriverConfigAction;
 use super::TrimKind;
 use super::param_card::RowMod;
 use crate::param_surface::ParamRow;
-use super::{AudioShapeParam, GraphParamTarget, PanelAction};
+use super::{AudioShapeParam, GraphParamTarget, PanelAction, ScrubPhase, ScrubValue, ValueRef};
 use crate::chrome::{Theme, View};
 use crate::color;
 use crate::drag::DragController;
@@ -981,9 +981,12 @@ pub(crate) fn enum_value_cell_actions(
         let next = (current_index + 1) % count;
         let new_value = min + next as f32;
         vec![
-            PanelAction::Params(ParamsAction::ParamSnapshot(target.clone(), param_id.clone())),
-            PanelAction::Params(ParamsAction::ParamChanged(target.clone(), param_id.clone(), new_value)),
-            PanelAction::Params(ParamsAction::ParamCommit(target, param_id)),
+            PanelAction::Scrub(ValueRef::Param(target.clone(), param_id.clone()), ScrubPhase::Begin),
+            PanelAction::Scrub(
+                ValueRef::Param(target.clone(), param_id.clone()),
+                ScrubPhase::Move(ScrubValue::Scalar(new_value)),
+            ),
+            PanelAction::Scrub(ValueRef::Param(target, param_id), ScrubPhase::Commit),
         ]
     } else {
         vec![PanelAction::Root(RootAction::ParamEnumDropdown {
@@ -1268,12 +1271,15 @@ pub(crate) fn build_envelope_config(
         .unwrap_or(DEFAULT_ENV_DECAY);
     // BUG-070 follow-through: the envelope drawer never had a reset gesture
     // before (`DrawerRow::Slider::reset` is now required) — wired here using
-    // the same EnvDecay Snapshot/Changed/Commit trio the drag path already
-    // emits, reset to `DEFAULT_ENV_DECAY`.
+    // the same `EnvDecay` scrub gesture the drag path already emits, reset to
+    // `DEFAULT_ENV_DECAY`.
     let reset = PanelAction::slider_reset(
-        PanelAction::Modulation(ModulationAction::EnvDecaySnapshot(target.clone(), pid.clone())),
-        PanelAction::Modulation(ModulationAction::EnvDecayChanged(target.clone(), pid.clone(), DEFAULT_ENV_DECAY)),
-        PanelAction::Modulation(ModulationAction::EnvDecayCommit(target, pid)),
+        PanelAction::Scrub(ValueRef::EnvDecay(target.clone(), pid.clone()), ScrubPhase::Begin),
+        PanelAction::Scrub(
+            ValueRef::EnvDecay(target.clone(), pid.clone()),
+            ScrubPhase::Move(ScrubValue::Scalar(DEFAULT_ENV_DECAY)),
+        ),
+        PanelAction::Scrub(ValueRef::EnvDecay(target, pid), ScrubPhase::Commit),
     );
     let spec = DrawerSpec {
         rows: vec![DrawerRow::Slider {
@@ -1942,9 +1948,12 @@ fn param_shape_reset(
     default: f32,
 ) -> PanelAction {
     PanelAction::slider_reset(
-        PanelAction::Modulation(ModulationAction::AudioModShapeSnapshot(gpt.clone(), pid.clone())),
-        PanelAction::Modulation(ModulationAction::AudioModShapeParamChanged(gpt.clone(), pid.clone(), which, default)),
-        PanelAction::Modulation(ModulationAction::AudioModShapeCommit(gpt, pid)),
+        PanelAction::Scrub(ValueRef::AudioModShape(gpt.clone(), pid.clone(), which), ScrubPhase::Begin),
+        PanelAction::Scrub(
+            ValueRef::AudioModShape(gpt.clone(), pid.clone(), which),
+            ScrubPhase::Move(ScrubValue::Scalar(default)),
+        ),
+        PanelAction::Scrub(ValueRef::AudioModShape(gpt, pid, which), ScrubPhase::Commit),
     )
 }
 
@@ -1957,9 +1966,12 @@ fn clip_trigger_shape_reset(
     default: f32,
 ) -> PanelAction {
     PanelAction::slider_reset(
-        PanelAction::AudioSetup(AudioSetupAction::AudioTriggerShapeSnapshot(layer_id.clone(), row)),
-        PanelAction::AudioSetup(AudioSetupAction::AudioTriggerShapeParamChanged(layer_id.clone(), row, which, default)),
-        PanelAction::AudioSetup(AudioSetupAction::AudioTriggerShapeCommit(layer_id.clone(), row)),
+        PanelAction::Scrub(ValueRef::AudioTriggerShape(layer_id.clone(), row, which), ScrubPhase::Begin),
+        PanelAction::Scrub(
+            ValueRef::AudioTriggerShape(layer_id.clone(), row, which),
+            ScrubPhase::Move(ScrubValue::Scalar(default)),
+        ),
+        PanelAction::Scrub(ValueRef::AudioTriggerShape(layer_id.clone(), row, which), ScrubPhase::Commit),
     )
 }
 
@@ -2233,9 +2245,12 @@ pub(crate) fn build_audio_mod_drawer(
                 format!("{amount:.2}")
             };
             let step_reset = PanelAction::slider_reset(
-                PanelAction::Modulation(ModulationAction::AudioModStepAmountSnapshot(gpt.clone(), pid.clone())),
-                PanelAction::Modulation(ModulationAction::AudioModStepAmountChanged(gpt.clone(), pid.clone(), default_amount)),
-                PanelAction::Modulation(ModulationAction::AudioModStepAmountCommit(gpt.clone(), pid.clone())),
+                PanelAction::Scrub(ValueRef::AudioModStepAmount(gpt.clone(), pid.clone()), ScrubPhase::Begin),
+                PanelAction::Scrub(
+                    ValueRef::AudioModStepAmount(gpt.clone(), pid.clone()),
+                    ScrubPhase::Move(ScrubValue::Scalar(default_amount)),
+                ),
+                PanelAction::Scrub(ValueRef::AudioModStepAmount(gpt.clone(), pid.clone()), ScrubPhase::Commit),
             );
             rows.push(shape_slider(
                 "Step",
@@ -2592,9 +2607,12 @@ pub(crate) fn build_param_row(
     // seed both `ids.slider_reset` (below) and the `BitmapSlider::build` call
     // that materialises the track it fires on.
     let reset = PanelAction::slider_reset(
-        PanelAction::Params(ParamsAction::ParamSnapshot(target.clone(), info.id.clone())),
-        PanelAction::Params(ParamsAction::ParamChanged(target.clone(), info.id.clone(), info.spec.default)),
-        PanelAction::Params(ParamsAction::ParamCommit(target.clone(), info.id.clone())),
+        PanelAction::Scrub(ValueRef::Param(target.clone(), info.id.clone()), ScrubPhase::Begin),
+        PanelAction::Scrub(
+            ValueRef::Param(target.clone(), info.id.clone()),
+            ScrubPhase::Move(ScrubValue::Scalar(info.spec.default)),
+        ),
+        PanelAction::Scrub(ValueRef::Param(target.clone(), info.id.clone()), ScrubPhase::Commit),
     );
     let mut ids = ParamRowIds {
         // Overwritten with the real row-catcher node below before any read.

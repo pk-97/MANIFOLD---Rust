@@ -564,6 +564,9 @@ impl Runner {
             AutomationAction::ScrollTo { target } => {
                 self.scroll_to(ui, data, zoom_ppb, index, action_desc, target, out_dir, render)
             }
+            AutomationAction::SetParam { param, value } => {
+                self.set_param(ui, data, zoom_ppb, index, action_desc, param, *value, render)
+            }
         };
         // BUG-198: whatever this step just sent over `content_tx` (via
         // `AppEditingHost`/`ui_bridge::dispatch`) has already been applied
@@ -1029,6 +1032,56 @@ impl Runner {
                     .as_ref()
                     .and_then(|lid| data.project.timeline.find_layer_by_id(lid).map(|(i, _)| i));
             }
+        }
+    }
+
+    /// D8 (UI_FUNNEL_DECOMPOSITION): direct-set a scrubable param by dispatching
+    /// the three scrub phases (`Begin → Move → Commit`) through the SAME
+    /// `ui_bridge::dispatch` a live drag reaches (`apply_panel_actions`), then
+    /// advancing a frame so the result renders. Undo-correct by construction —
+    /// one command per gesture — with no pixel geometry, so a flow can set up a
+    /// param value in one line instead of a fragile pointer-drag.
+    #[allow(clippy::too_many_arguments)]
+    fn set_param(
+        &mut self,
+        ui: &mut UIRoot,
+        data: &mut SceneData,
+        zoom_ppb: f32,
+        index: usize,
+        action_desc: String,
+        param: &manifold_ui::automation::FlowScrubTarget,
+        value: f32,
+        render: &mut RenderState,
+    ) -> StepResult {
+        use manifold_ui::automation::FlowScrubTarget;
+        use manifold_ui::panels::{GraphParamTarget, ScrubPhase, ScrubValue, ValueRef};
+        let value_ref = match param {
+            FlowScrubTarget::MasterOpacity => ValueRef::MasterOpacity,
+            FlowScrubTarget::LedBrightness => ValueRef::LedBrightness,
+            FlowScrubTarget::LayerOpacity => ValueRef::LayerOpacity,
+            FlowScrubTarget::Macro(idx) => ValueRef::Macro(*idx),
+            FlowScrubTarget::EffectParam { effect, param } => ValueRef::Param(
+                GraphParamTarget::Effect(*effect),
+                std::borrow::Cow::Owned(param.clone()),
+            ),
+            FlowScrubTarget::GeneratorParam { param } => ValueRef::Param(
+                GraphParamTarget::Generator,
+                std::borrow::Cow::Owned(param.clone()),
+            ),
+        };
+        let actions = vec![
+            PanelAction::Scrub(value_ref.clone(), ScrubPhase::Begin),
+            PanelAction::Scrub(value_ref.clone(), ScrubPhase::Move(ScrubValue::Scalar(value))),
+            PanelAction::Scrub(value_ref, ScrubPhase::Commit),
+        ];
+        self.apply_panel_actions(ui, data, &actions);
+        self.advance_frame(ui, data, zoom_ppb, render, false);
+        StepResult {
+            index,
+            action: action_desc,
+            status: "ok",
+            detail: format!("set {param:?} = {value} (Begin/Move/Commit through dispatch)"),
+            artifact: None,
         }
     }
 

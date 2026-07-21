@@ -8,10 +8,7 @@
 //! `.claude/orchestration/pd-partition.md`.
 
 use super::PanelAction;
-use super::{
-    AudioShapeParam, BandDivider, DriverConfigAction, GraphParamTarget, InspectorTab,
-    TrimKind, UiRelightField, UiRelightHeightFrom,
-};
+use super::{DriverConfigAction, GraphParamTarget, InspectorTab, UiRelightHeightFrom};
 use super::{browser_popup, picker_core};
 use crate::input::Modifiers;
 use crate::node::Rect;
@@ -309,27 +306,18 @@ pub enum ClipAction {
 
 #[derive(Debug, Clone)]
 pub enum ParamsAction {
-    /// Audio-layer Gain slider drag begins — snapshot for undo.
-    AudioGainSnapshot(LayerId),
-    /// Audio-layer Gain slider dragged to a new dB value (layer, dB).
-    AudioGainChanged(LayerId, f32),
-    /// Audio-layer Gain slider released — commit one undo step.
-    AudioGainCommit(LayerId),
+    // Audio-layer Gain scrub trio migrated to `PanelAction::Scrub`
+    // (`ValueRef::LayerAudioGain`, P-I / D4).
     MasterCollapseToggle,
     MasterExitPathClicked,
     /// Set LED exit path index: -1 = after all FX, 0 = before FX, N = after effect N-1.
     SetLedExitIndex(i32),
-    MasterOpacitySnapshot,
-    MasterOpacityChanged(f32),
-    MasterOpacityCommit,
+    // MasterOpacity/LedBrightness scrub trios migrated to `PanelAction::Scrub`
+    // (`ValueRef::MasterOpacity` / `ValueRef::LedBrightness`, P-I / D4).
     LedEnabledToggle,
-    LedBrightnessSnapshot,
-    LedBrightnessChanged(f32),
-    LedBrightnessCommit,
     LayerChromeCollapseToggle,
-    LayerOpacitySnapshot,
-    LayerOpacityChanged(f32),
-    LayerOpacityCommit,
+    // LayerOpacity scrub trio migrated to `PanelAction::Scrub`
+    // (`ValueRef::LayerOpacity`, P-I / D4).
     EffectToggle(usize),
     EffectCollapseToggle(usize),
     /// Collapse or expand every effect card in the active inspector column at
@@ -355,11 +343,8 @@ pub enum ParamsAction {
     /// structural rebuild so every card's drawers hide/show. No model mutation.
     ModsCompactToggled,
     EffectCardClicked(usize),
-    ParamSnapshot(GraphParamTarget, ParamId),
-    ParamChanged(GraphParamTarget, ParamId, f32),
-    ParamCommit(GraphParamTarget, ParamId),
     /// one atomic enum write (a dropdown pick). Dispatch runs the
-    /// existing `ParamSnapshot`/`ParamChanged`/`ParamCommit` trio in
+    /// generic `Scrub(ValueRef::Param, …)` gesture (Begin/Move/Commit) in
     /// sequence, so the scene id_map interception and the one-undo-unit
     /// granularity come free — no new mutation path.
     ParamEnumSet(GraphParamTarget, ParamId, f32),
@@ -373,16 +358,9 @@ pub enum ParamsAction {
     /// Toggle the "3D Shading" header icon (`docs/DEPTH_RELIGHT_DESIGN.md`
     /// D2/P5). Atomic like `ParamToggle` — a click, not a drag.
     RelightToggle(GraphParamTarget),
-    /// Press on a D3 relight knob's track — snapshot the pre-drag value for
-    /// undo (mirrors `ParamSnapshot`).
-    RelightParamSnapshot(GraphParamTarget, UiRelightField),
-    /// Live drag of a D3 relight knob (mirrors `ParamChanged`). Always
-    /// live even while the toggle is off — the row renders greyed, not
-    /// hidden, and must still take effect for when it's switched on.
-    RelightParamChanged(GraphParamTarget, UiRelightField, f32),
-    /// Release on a D3 relight knob's track — commits one undo entry
-    /// (mirrors `ParamCommit`).
-    RelightParamCommit(GraphParamTarget, UiRelightField),
+    // Relight-knob scrub trio migrated to `PanelAction::Scrub`
+    // (`ValueRef::RelightParam`, P-I / D4). Always-live behaviour (the knob
+    // takes effect even while the toggle is off) is preserved on the wire.
     /// D4 "Height From" enum row click (Auto / Luminance / Inverted
     /// Luminance) — atomic like `ParamToggle`.
     RelightHeightFromChanged(GraphParamTarget, UiRelightHeightFrom),
@@ -437,9 +415,8 @@ pub enum ParamsAction {
     /// only when diverged, same gate as `RevertToLibrary`.
     PushToLibrary(GraphParamTarget),
     MacrosCollapseToggle,
-    MacroSnapshot(usize),
-    MacroChanged(usize, f32),
-    MacroCommit(usize),
+    // Macro scrub trio migrated to `PanelAction::Scrub` (`ValueRef::Macro`,
+    // P-I / D4).
     MacroLabelRename(usize),     // macro_index — opens inline rename input
     ParamLabelRightClick(GraphParamTarget, ParamId),
     MacroReset(usize), // macro_idx — reset to 0 from context menu
@@ -482,17 +459,8 @@ pub enum ModulationAction {
     /// strands: re-wire per AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md
     /// §7.2 item 2.
     AudioModSetRateOfChange(GraphParamTarget, ParamId),
-    /// Snapshot an audio mod's shape before a drawer-slider drag (undo start).
-    AudioModShapeSnapshot(GraphParamTarget, ParamId),
-    /// Live-edit one shape scalar during a drawer-slider drag (no undo entry).
-    AudioModShapeParamChanged(
-        GraphParamTarget,
-        ParamId,
-        AudioShapeParam,
-        f32,
-    ),
-    /// Commit a shape-slider drag as one undo step (drag end).
-    AudioModShapeCommit(GraphParamTarget, ParamId),
+    // Audio-mod shaping-slider scrub trio (sensitivity / attack / release)
+    // migrated to `PanelAction::Scrub` (`ValueRef::AudioModShape`, P-I / D4).
     /// Set a trigger-gate param's fire mode — index into `[ClipEdge,
     /// Transient, Both]` (§9 U3), converted to `TriggerFireMode` at the
     /// dispatch boundary (this crate mirrors core enums rather than
@@ -507,38 +475,15 @@ pub enum ModulationAction {
     /// enum has nowhere to keep them outside the `Step` variant — re-entering
     /// reseeds, matching D2's "seeding only" contract).
     AudioModSetActionKind(GraphParamTarget, ParamId, usize),
-    /// Snapshot an audio mod's action before a Step-Amount slider drag (undo
-    /// start). `amount` lives on `TriggerAction::Step`, not `AudioModShape`,
-    /// so it rides its own snapshot/changed/commit trio rather than
-    /// `AudioShapeParam`'s.
-    AudioModStepAmountSnapshot(GraphParamTarget, ParamId),
-    /// Live-edit the Step amount during a drawer-slider drag (no undo entry).
-    AudioModStepAmountChanged(GraphParamTarget, ParamId, f32),
-    /// Commit a Step-Amount drag as one undo step (drag end).
-    AudioModStepAmountCommit(GraphParamTarget, ParamId),
+    // Audio-mod Step-amount scrub trio migrated to `PanelAction::Scrub`
+    // (`ValueRef::AudioModStepAmount`, P-I / D4): the amount rides
+    // `ScrubValue::Scalar`, the whole `TriggerAction` is the undo baseline.
     /// Set a Step action's wrap mode — index into `[Wrap, Bounce, Clamp]`
     /// (D2) — the drawer's Wrap segmented row, shown only while Action=Step.
     AudioModSetWrap(GraphParamTarget, ParamId, usize),
-    /// A modulator output sub-range handle moved during a drag. `TrimKind`
-    /// selects which modulator (driver / Ableton / audio) — the three formerly
-    /// parallel `*TrimChanged` variants are one path now.
-    TrimChanged(TrimKind, GraphParamTarget, ParamId, f32, f32),
-    /// Snapshot trim state before drag (for undo).
-    TrimSnapshot(TrimKind, GraphParamTarget, ParamId),
-    /// Commit trim drag (record undo command).
-    TrimCommit(TrimKind, GraphParamTarget, ParamId),
-    /// Envelope target (orange handle / `target_normalized`) changed.
-    TargetChanged(GraphParamTarget, ParamId, f32),
-    /// Snapshot target before drag (for undo).
-    TargetSnapshot(GraphParamTarget, ParamId),
-    /// Commit target drag (record undo command).
-    TargetCommit(GraphParamTarget, ParamId),
-    /// Envelope decay slider (`decay_beats`) changed.
-    EnvDecayChanged(GraphParamTarget, ParamId, f32),
-    /// Snapshot decay before drag (for undo).
-    EnvDecaySnapshot(GraphParamTarget, ParamId),
-    /// Commit decay drag (record undo command).
-    EnvDecayCommit(GraphParamTarget, ParamId),
+    // Trim-range, envelope-target, and envelope-decay scrub trios migrated to
+    // `PanelAction::Scrub` (`ValueRef::{Trim, EnvelopeTarget, EnvDecay}`,
+    // P-I / D4).
 }
 
 #[derive(Debug, Clone)]
@@ -557,9 +502,9 @@ pub enum MappingAction {
     MapMacroToAbleton(usize, AbletonMacroAddress),
     UnmapMacroAbleton(usize),
     OpenAbletonPickerForMacro(usize),
-    AbletonMacroTrimSnapshot(usize),                                      // slot_idx
-    AbletonMacroTrimChanged(usize, f32, f32),                             // slot_idx, min, max
-    AbletonMacroTrimCommit(usize),                                        // slot_idx
+    // Macro-bank trim-bar scrub trio migrated to `PanelAction::Scrub`
+    // (`ValueRef::AbletonMacroTrim`, P-I / D4): keyed by the macro slot index,
+    // the `(min, max)` range rides `ScrubValue::Range` on Move.
     AbletonInvertToggle(GraphParamTarget, ParamId),
     AbletonMacroInvertToggle(usize),                             // slot_idx
 }
@@ -586,16 +531,10 @@ pub enum AudioSetupAction {
     /// `AudioModSetSource`). A chip click and a Source-row click both arrive
     /// as this one action, carrying the full cell.
     AudioTriggerSetSource(LayerId, usize, AudioSendId, AudioFeature),
-    /// Snapshot a clip trigger's shape before a drawer-slider drag (undo
-    /// start) — mirrors `AudioModShapeSnapshot`.
-    AudioTriggerShapeSnapshot(LayerId, usize),
-    /// Live-edit one shape scalar during a drawer-slider drag (no undo
-    /// entry) — mirrors `AudioModShapeParamChanged`. The clip-trigger drawer
-    /// only ever sends `AudioShapeParam::Sensitivity` (its only slider).
-    AudioTriggerShapeParamChanged(LayerId, usize, AudioShapeParam, f32),
-    /// Commit a shape-slider drag as one undo step — mirrors
-    /// `AudioModShapeCommit`.
-    AudioTriggerShapeCommit(LayerId, usize),
+    // Clip-trigger shaping-slider scrub trio migrated to `PanelAction::Scrub`
+    // (`ValueRef::AudioTriggerShape`, P-I / D4): `(LayerId, index)` addresses the
+    // trigger, the `AudioShapeParam` rides the address, the whole shape is the
+    // restore payload.
     /// Set the one-shot fire length (`one_shot_beats`) — the drawer's Length
     /// row (D4/D5), clip triggers only.
     AudioTriggerSetLength(LayerId, usize, f32),
@@ -620,17 +559,9 @@ pub enum AudioSetupAction {
     /// The host reads the send's current gain, applies the delta, clamps, and
     /// commits — so the project stays the single source of truth.
     AudioSendGainStep(AudioSendId, f32),
-    /// Begin dragging a send's gain value label (D7) — snapshot the pre-drag
-    /// gain so the commit records one undo step. Same pattern as
-    /// `AudioCrossoverDragBegin`, per-send.
-    AudioSendGainDragBegin(AudioSendId),
-    /// Live gain change while dragging the value label: the absolute candidate
-    /// dB (1 px = 0.1 dB, computed by the panel from pointer movement; the
-    /// host clamps to the trim range). Applied immediately via
-    /// `MutateProjectLive` — no per-frame undo.
-    AudioSendGainDragChanged(AudioSendId, f32),
-    /// Commit the gain drag as one undo step (`SetAudioSendGainCommand`).
-    AudioSendGainDragCommit(AudioSendId),
+    // Send-gain calibration-drag trio migrated to `PanelAction::Scrub`
+    // (`ValueRef::AudioSendGain`, P-I / D4): keyed by `AudioSendId`, the raw dB
+    // rides `ScrubValue::Scalar` (host clamps + live-edits on Move).
     /// P4 type-in commit: set a send's gain to an EXACT typed value, ONE
     /// undo step, NO clamp (`PARAM_RANGE_CONTRACT` P1 — unlike
     /// `AudioSendGainDragChanged`'s live-drag clamp to the trim range).
@@ -638,15 +569,10 @@ pub enum AudioSetupAction {
     /// Step the selected send's pre-analysis noise floor by a dB delta (the
     /// spectrogram's Floor −/＋). Off ⇄ engaged is handled host-side.
     AudioSendFloorStep(AudioSendId, f32),
-    /// Begin dragging a band-divider line on the spectrogram — snapshot the
-    /// current crossovers so the commit records one undo step.
-    AudioCrossoverDragBegin,
-    /// Live crossover change while dragging a divider: which line + its new Hz.
-    /// Applied immediately (no per-frame undo) so the line tracks the cursor and
-    /// the analysis bands retune live.
-    AudioCrossoverChanged(BandDivider, f32),
-    /// Commit the band-divider drag as one undo step.
-    AudioCrossoverCommit,
+    // Band-divider (crossover) drag trio migrated to `PanelAction::Scrub`
+    // (`ValueRef::AudioCrossover`, P-I / D4): the dragged `BandDivider` rides the
+    // address, its raw Hz rides `ScrubValue::Scalar` (host clamps + live-edits
+    // both lines on Move).
 }
 
 #[derive(Debug, Clone)]
@@ -799,6 +725,16 @@ pub enum RootAction {
     /// node id (the app resolves its screen rect at open time — same
     /// convention as `SceneSetupBeginNumericTextInput`).
     AudioSendGainBeginTextInput(AudioSendId, f32, crate::node::NodeId),
+    // ── Graph-editor mapping-sidebar drags (`EffectMappingRange*` /
+    // `EffectMappingAffine*`) are FRAME-RESIDENT (UI_FUNNEL_DECOMPOSITION P-I,
+    // Fork-2): they stay `RootAction` variants dispatched from `app_render`'s
+    // pending-actions loop, NOT `PanelAction::Scrub`. Reason: the commit reads
+    // the reshaped range/affine back via `watched_reshape`, which needs the
+    // app's graph-editor watch context — folding them onto the wire would force
+    // that context into `DispatchCtx` (a rejected cascade-redesign). Only their
+    // snapshot-stomp guard folded into `ScrubState.active` (a
+    // `ResolvedScrub::Mapping{Range,Affine}`); the wire variants below are
+    // unchanged.
     /// Snapshot the binding's `(min, max)` before a range drag begins.
     EffectMappingRangeSnapshot {
         binding_id: String,

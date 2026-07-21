@@ -12,7 +12,11 @@ mod layer;
 mod marker;
 mod project;
 mod projection;
-mod scrub;
+// `pub(crate)` so the frame-resident gestures in `app_render` (graph-editor
+// mapping drags, graph-canvas node-param drags) can name `ResolvedScrub`
+// directly — they open the one `ScrubState.active` slot without going through
+// the `PanelAction::Scrub` wire (P-I, Fork-2).
+pub(crate) mod scrub;
 mod state_sync;
 mod transport;
 
@@ -205,8 +209,7 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
             ctx.content_tx,
             ctx.ui,
             ctx.selection,
-            &mut ctx.scrub.slider_snapshot,
-            &mut ctx.scrub.active_inspector_drag,
+            ctx.scrub,
         ),
         PanelAction::Project(a) => project::dispatch_project(
             a,
@@ -291,6 +294,10 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
             | RootAction::AudioSendChannelClicked(_)
             | RootAction::OpenAbletonPickerForParam(..) => DispatchResult::unhandled(),
         },
+
+        // ── Scrub: the unified value-scrub gesture (P-I / D4). One handler for
+        // every ported family, addressed by `ValueRef`, phased Begin/Move/Commit.
+        PanelAction::Scrub(value_ref, phase) => scrub::dispatch_scrub(value_ref, phase, ctx),
     }
 }
 

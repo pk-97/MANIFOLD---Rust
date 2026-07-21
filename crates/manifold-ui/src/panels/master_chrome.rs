@@ -14,7 +14,7 @@
 use crate::ParamsAction;
 #[cfg(test)]
 use crate::RootAction;
-use super::PanelAction;
+use super::{PanelAction, ScrubPhase, ScrubValue, ValueRef};
 use crate::chrome::{Align, ChromeHost, Pad, Sizing, SliderSpec, View, components};
 use crate::color;
 use crate::node::*;
@@ -200,9 +200,9 @@ impl MasterChromePanel {
                     Some("Opacity"),
                     OPACITY_LABEL_W,
                     PanelAction::slider_reset(
-                        PanelAction::Params(ParamsAction::MasterOpacitySnapshot),
-                        PanelAction::Params(ParamsAction::MasterOpacityChanged(1.0)),
-                        PanelAction::Params(ParamsAction::MasterOpacityCommit),
+                        PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Begin),
+                        PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Move(ScrubValue::Scalar(1.0))),
+                        PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Commit),
                     ),
                 ))
                 .fill_w()
@@ -237,9 +237,9 @@ impl MasterChromePanel {
             None,
             0.0,
             PanelAction::slider_reset(
-                PanelAction::Params(ParamsAction::LedBrightnessSnapshot),
-                PanelAction::Params(ParamsAction::LedBrightnessChanged(1.0)),
-                PanelAction::Params(ParamsAction::LedBrightnessCommit),
+                PanelAction::Scrub(ValueRef::LedBrightness, ScrubPhase::Begin),
+                PanelAction::Scrub(ValueRef::LedBrightness, ScrubPhase::Move(ScrubValue::Scalar(1.0))),
+                PanelAction::Scrub(ValueRef::LedBrightness, ScrubPhase::Commit),
             ),
         ))
         .fixed(LED_SLIDER_W, SLIDER_ROW_H)
@@ -357,14 +357,14 @@ impl MasterChromePanel {
     pub fn handle_pointer_down(&mut self, node_id: NodeId, pos: Vec2) -> Vec<PanelAction> {
         if let Some(val) = self.opacity.try_start_drag(node_id, pos.x) {
             return vec![
-                PanelAction::Params(ParamsAction::MasterOpacitySnapshot),
-                PanelAction::Params(ParamsAction::MasterOpacityChanged(val)),
+                PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Begin),
+                PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Move(ScrubValue::Scalar(val))),
             ];
         }
         if let Some(val) = self.led_brightness.try_start_drag(node_id, pos.x) {
             return vec![
-                PanelAction::Params(ParamsAction::LedBrightnessSnapshot),
-                PanelAction::Params(ParamsAction::LedBrightnessChanged(val)),
+                PanelAction::Scrub(ValueRef::LedBrightness, ScrubPhase::Begin),
+                PanelAction::Scrub(ValueRef::LedBrightness, ScrubPhase::Move(ScrubValue::Scalar(val))),
             ];
         }
         Vec::new()
@@ -372,20 +372,20 @@ impl MasterChromePanel {
 
     pub fn handle_drag(&mut self, pos: Vec2, tree: &mut UITree) -> Vec<PanelAction> {
         if let Some(val) = self.opacity.apply_drag(pos.x, tree, &fmt_opacity) {
-            return vec![PanelAction::Params(ParamsAction::MasterOpacityChanged(val))];
+            return vec![PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Move(ScrubValue::Scalar(val)))];
         }
         if let Some(val) = self.led_brightness.apply_drag(pos.x, tree, &fmt_opacity) {
-            return vec![PanelAction::Params(ParamsAction::LedBrightnessChanged(val))];
+            return vec![PanelAction::Scrub(ValueRef::LedBrightness, ScrubPhase::Move(ScrubValue::Scalar(val)))];
         }
         Vec::new()
     }
 
     pub fn handle_drag_end(&mut self, _tree: &mut UITree) -> Vec<PanelAction> {
         if self.opacity.end_drag() {
-            return vec![PanelAction::Params(ParamsAction::MasterOpacityCommit)];
+            return vec![PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Commit)];
         }
         if self.led_brightness.end_drag() {
-            return vec![PanelAction::Params(ParamsAction::LedBrightnessCommit)];
+            return vec![PanelAction::Scrub(ValueRef::LedBrightness, ScrubPhase::Commit)];
         }
         Vec::new()
     }
@@ -531,14 +531,14 @@ mod tests {
         let mid_x = track_rect.x + track_rect.width * 0.5;
 
         let actions = panel.handle_pointer_down(track_id, Vec2::new(mid_x, 10.0));
-        assert!(matches!(actions[0], PanelAction::Params(ParamsAction::MasterOpacitySnapshot)));
+        assert!(matches!(actions[0], PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Begin)));
         assert!(panel.is_dragging());
 
         let actions = panel.handle_drag(Vec2::new(mid_x + 10.0, 10.0), &mut tree);
         assert_eq!(actions.len(), 1);
 
         let actions = panel.handle_drag_end(&mut tree);
-        assert!(matches!(actions[0], PanelAction::Params(ParamsAction::MasterOpacityCommit)));
+        assert!(matches!(actions[0], PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Commit)));
         assert!(!panel.is_dragging());
     }
 
@@ -557,7 +557,7 @@ mod tests {
         let opacity_track = panel.opacity.track_id().unwrap();
         match reg.resolve(&tree, Some(opacity_track), crate::intent::Gesture::RightClick) {
             Some(PanelAction::Root(RootAction::SliderReset { changed, .. })) => {
-                assert!(matches!(*changed, PanelAction::Params(ParamsAction::MasterOpacityChanged(v)) if (v - 1.0).abs() < f32::EPSILON));
+                assert!(matches!(*changed, PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Move(ScrubValue::Scalar(v))) if (v - 1.0).abs() < f32::EPSILON));
             }
             other => panic!("expected SliderReset, got {other:?}"),
         }
@@ -565,7 +565,7 @@ mod tests {
         let brightness_track = panel.led_brightness.track_id().unwrap();
         match reg.resolve(&tree, Some(brightness_track), crate::intent::Gesture::RightClick) {
             Some(PanelAction::Root(RootAction::SliderReset { changed, .. })) => {
-                assert!(matches!(*changed, PanelAction::Params(ParamsAction::LedBrightnessChanged(v)) if (v - 1.0).abs() < f32::EPSILON));
+                assert!(matches!(*changed, PanelAction::Scrub(ValueRef::LedBrightness, ScrubPhase::Move(ScrubValue::Scalar(v))) if (v - 1.0).abs() < f32::EPSILON));
             }
             other => panic!("expected SliderReset, got {other:?}"),
         }
