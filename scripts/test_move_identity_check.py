@@ -66,6 +66,23 @@ the exit codes). Covers:
                                                            classify as
                                                            scaffold, not
                                                            residue)
+ 17. test-mod            → exit 0, residue 0, wiring>0   (D7a: a flat test mod
+     distribution                                         distributed into
+                                                           renamed, feature-
+                                                           gated per-module test
+                                                           mods; the header
+                                                           lines have no removed
+                                                           counterpart to
+                                                           move-pair against, so
+                                                           the D7a class must
+                                                           claim them as wiring)
+ 18. smuggled test-mod   → exit 1, residue > 0            (D7a: a `static` line
+     header                                               wedged inside a
+                                                           test-mod header is
+                                                           NOT header-shaped and
+                                                           must fall through to
+                                                           residue — the class
+                                                           is smuggle-proof)
 
 Run: python3 scripts/test_move_identity_check.py   (exit 0 = all pass)
 """
@@ -424,6 +441,80 @@ SCENE_MODULE = (
 )
 
 
+# D7a fixtures (Wave 2 P2-G): distributing one flat `#[cfg(test)] mod tests`
+# into per-module test mods. The added test mods are RENAMED and FEATURE-GATED
+# so their header lines (`#[cfg(all(test, feature = "…"))]`, `mod <name> {`)
+# have no identical removed counterpart and cannot be git-move-paired — they
+# fall to residue unless the D7a class claims them. This is exactly the
+# threshold-fragile shape the class exists for; a naive same-name/`#[cfg(test)]`
+# distribution git already pairs on its own and would not exercise the class.
+# The two test bodies are ≥3-line moves (git detects them), so only the header
+# wiring is left for the classifier to prove.
+GRAPH_TEST_MOD_FLAT = (
+    "// graph\n"
+    "#[cfg(test)]\n"
+    "mod tests {\n"
+    "    use super::*;\n"
+    "    #[test]\n"
+    "    fn alpha_undo_restores() {\n"
+    "        let a = 1;\n"
+    "        let b = 2;\n"
+    "        assert_eq!(a + b, 3);\n"
+    "    }\n"
+    "    #[test]\n"
+    "    fn beta_undo_restores() {\n"
+    "        let c = 10;\n"
+    "        let d = 20;\n"
+    "        assert_eq!(c + d, 30);\n"
+    "    }\n"
+    "}\n"
+)
+GRAPH_MOD_SKELETON = "// graph\nmod node_edit;\nmod groups;\n"
+NODE_EDIT_TEST_MOD = (
+    "// node_edit\n"
+    '#[cfg(all(test, feature = "graph_tests"))]\n'
+    "mod nodetests {\n"
+    "    use super::*;\n"
+    "    #[test]\n"
+    "    fn alpha_undo_restores() {\n"
+    "        let a = 1;\n"
+    "        let b = 2;\n"
+    "        assert_eq!(a + b, 3);\n"
+    "    }\n"
+    "}\n"
+)
+GROUPS_TEST_MOD = (
+    "// groups\n"
+    '#[cfg(all(test, feature = "graph_tests"))]\n'
+    "mod grouptests {\n"
+    "    use super::*;\n"
+    "    #[test]\n"
+    "    fn beta_undo_restores() {\n"
+    "        let c = 10;\n"
+    "        let d = 20;\n"
+    "        assert_eq!(c + d, 30);\n"
+    "    }\n"
+    "}\n"
+)
+# Smuggle: a real statement wedged inside the test-mod header, between the
+# `mod nodetests {` opener and the first test. The cfg attr + opener are wiring;
+# the `static` line is NOT header-shaped and must fall through to residue.
+NODE_EDIT_TEST_MOD_SMUGGLED = (
+    "// node_edit\n"
+    '#[cfg(all(test, feature = "graph_tests"))]\n'
+    "mod nodetests {\n"
+    "    static SMUGGLED: u32 = compute_evil();\n"
+    "    use super::*;\n"
+    "    #[test]\n"
+    "    fn alpha_undo_restores() {\n"
+    "        let a = 1;\n"
+    "        let b = 2;\n"
+    "        assert_eq!(a + b, 3);\n"
+    "    }\n"
+    "}\n"
+)
+
+
 def case_pure_move(repo: Path) -> tuple[bool, str]:
     commit_tree(repo, {"a.rs": HELPER + "// tail\n", "b.rs": "// b\n"}, "base")
     commit_tree(repo, {"a.rs": "// tail\n", "b.rs": "// b\n" + HELPER}, "move")
@@ -605,6 +696,34 @@ def case_router_collapse_bare_unhandled(repo: Path) -> tuple[bool, str]:
     return ok, f"exit={code} {out.splitlines()[0]}"
 
 
+def case_test_mod_distribution(repo: Path) -> tuple[bool, str]:
+    commit_tree(repo, {"graph.rs": GRAPH_TEST_MOD_FLAT}, "base")
+    commit_tree(
+        repo,
+        {"graph.rs": GRAPH_MOD_SKELETON,
+         "node_edit.rs": NODE_EDIT_TEST_MOD,
+         "groups.rs": GROUPS_TEST_MOD},
+        "distribute-tests",
+    )
+    code, out = run_checker(repo)
+    ok = code == 0 and field(out, "residue") == 0 and field(out, "wiring") > 0
+    return ok, f"exit={code} {out.splitlines()[0]}"
+
+
+def case_smuggled_test_mod_header(repo: Path) -> tuple[bool, str]:
+    commit_tree(repo, {"graph.rs": GRAPH_TEST_MOD_FLAT}, "base")
+    commit_tree(
+        repo,
+        {"graph.rs": GRAPH_MOD_SKELETON,
+         "node_edit.rs": NODE_EDIT_TEST_MOD_SMUGGLED,
+         "groups.rs": GROUPS_TEST_MOD},
+        "distribute-tests-with-smuggle",
+    )
+    code, out = run_checker(repo)
+    ok = code == 1 and field(out, "residue") > 0
+    return ok, f"exit={code} {out.splitlines()[0]}"
+
+
 CASES = [
     ("pure move -> exit 0", case_pure_move),
     ("smuggled edit -> exit 1", case_smuggled),
@@ -625,6 +744,9 @@ CASES = [
      case_drifted_preamble_moved_collision),
     ("router collapses to bare unhandled() tail -> exit 0 [S6b, PROVEN]",
      case_router_collapse_bare_unhandled),
+    ("test-mod distribution -> exit 0 [D7a, PROVEN]", case_test_mod_distribution),
+    ("smuggled test-mod header -> exit 1 [D7a, CAUGHT]",
+     case_smuggled_test_mod_header),
 ]
 
 

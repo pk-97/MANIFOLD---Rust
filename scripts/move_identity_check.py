@@ -5,7 +5,9 @@ A "pure move" commit relocates code without changing it. This script proves it
 mechanically: it runs `git diff --color-moved` with pinned colors and counts
 every added/removed line that git did NOT classify as moved. For a pure-move
 commit the non-moved residue must be ZERO after the allowlist (module wiring:
-`mod`/`use`/`pub use` lines, blank lines, module doc comments, diff headers).
+`mod`/`use`/`pub use` lines, blank lines, module doc comments, diff headers,
+and test-mod headers — `#[cfg(test)]` + `mod <name> {`/`}` — when tests are
+distributed across the new submodules, D7a).
 Exit code 0 = pure move proven; 1 = residue found (printed); 2 = usage.
 
 Why not `cargo public-api`: not installed, requires a lib target (manifold-app
@@ -104,6 +106,31 @@ _PATH_ITEM = rf"{_IDENT}(?:::{_IDENT})*(?:\s+as\s+{_IDENT})?"
 USE_ITEM = re.compile(
     rf"^(?:{_PATH_ITEM}(?:\s*,\s*{_PATH_ITEM})*,?\s*(?:\}}\s*;?)?|\}}\s*;?)$"
 )
+
+# Test-mod wiring class (D7a, Wave 2 P2-G): distributing one flat
+# `#[cfg(test)] mod tests { ... }` into ~7 per-module test mods multiplies the
+# header lines — the cfg-test attribute, the `mod <name> {` opener, and the
+# closing `}`. git's `--color-moved` USUALLY pairs each repeated header against
+# the single removed original, but that is threshold-fragile: when the new mod
+# is renamed or its cfg gate differs from the original (e.g. a feature-gated
+# `#[cfg(all(test, feature = "…"))]`), the added header line has no identical
+# removed counterpart and falls to residue even though it is pure wiring
+# (verified: a renamed/feature-gated distribution surfaces exactly the cfg-attr
+# and `mod {` opener lines as residue). This class ALLOWS them, SMUGGLE-PROOF:
+# the cfg attr is wiring only when the IMMEDIATELY-following same-sign line is a
+# `mod <name> {` opener (the attribute must be attached to a mod), and a bare
+# `}` is wiring only while a counted test-mod brace is open — any other line
+# under the class (a smuggled statement in a test-mod header) falls straight
+# through to residue. State + matching live in classify() (per-sign, reset at
+# every hunk/file/context boundary like the use-block trackers). The `}` depth
+# advance is deliberately confined to NON-moved lines: the distributed test
+# BODIES are git-detected moves and never reach it, so their internal braces
+# can't desync the counter.
+CFG_TEST_ATTR = re.compile(
+    r'^#\[cfg\((?:test|all\(\s*test\s*,\s*feature\s*=\s*"[^"]*"\s*\))\)\]$'
+)
+MOD_OPEN = re.compile(r"^(?:pub(?:\((?:crate|super)\))?\s+)?mod\s+\w+\s*\{$")
+BARE_CLOSE = re.compile(r"^\}$")
 
 # Dispatch-split scaffold (UI_FUNNEL_DECOMPOSITION P-B): the structural glue a
 # `dispatch_inspector` match-split adds that git cannot classify as a move
@@ -256,6 +283,12 @@ def classify(out: str) -> tuple[dict[str, int], list[str]]:
     # everywhere the other block trackers reset — a stray later `-");"`
     # elsewhere in the diff must never inherit an armed sequence.
     drifted_idx: int | None = None
+    # Test-mod wiring state (D7a): pending_test_attr[sign] is True for exactly
+    # the one line following a cfg-test attribute of that sign (only a `mod {`
+    # opener there is wiring); test_mod_depth[sign] counts open test-mod braces
+    # so a bare `}` closing one is wiring. Reset with the other trackers.
+    pending_test_attr = {"+": False, "-": False}
+    test_mod_depth = {"+": 0, "-": 0}
     for raw in out.splitlines():
         is_moved = bool(MOVED_RE.match(raw))
         plain = ANSI.sub("", raw)
@@ -266,6 +299,10 @@ def classify(out: str) -> tuple[dict[str, int], list[str]]:
             open_block["-"] = False
             context_block = False
             drifted_idx = None
+            pending_test_attr["+"] = False
+            pending_test_attr["-"] = False
+            test_mod_depth["+"] = 0
+            test_mod_depth["-"] = 0
             continue
         if not plain.startswith(("+", "-")):
             # Hunk header (`@@ ... @@`) or real unchanged context line. A
@@ -274,6 +311,10 @@ def classify(out: str) -> tuple[dict[str, int], list[str]]:
             open_block["+"] = False
             open_block["-"] = False
             drifted_idx = None
+            pending_test_attr["+"] = False
+            pending_test_attr["-"] = False
+            test_mod_depth["+"] = 0
+            test_mod_depth["-"] = 0
             if plain.startswith("@"):
                 # Hunk boundary: never content, and a context-opened block
                 # can't legitimately span one either — two unrelated use
@@ -355,6 +396,27 @@ def classify(out: str) -> tuple[dict[str, int], list[str]]:
                 drifted_idx = 1
         if is_moved:
             counts["moved"] += 1
+            continue
+        # Test-mod wiring (D7a): consume any pending cfg-test attr FIRST (only
+        # a `mod {` opener on this immediately-following line may use it), then
+        # classify the header shapes. Confined to non-moved lines — moved test
+        # bodies short-circuited above, so their internal braces never reach
+        # the depth counter. A non-header line under the class is NOT claimed
+        # here and falls through to residue (smuggle-proof).
+        was_test_attr = pending_test_attr[sign]
+        pending_test_attr[sign] = False
+        tm_body = plain[1:].strip()
+        if CFG_TEST_ATTR.match(tm_body):
+            counts["allowed"] += 1
+            pending_test_attr[sign] = True
+            continue
+        if was_test_attr and MOD_OPEN.match(tm_body):
+            counts["allowed"] += 1
+            test_mod_depth[sign] += 1
+            continue
+        if test_mod_depth[sign] > 0 and BARE_CLOSE.match(tm_body):
+            counts["allowed"] += 1
+            test_mod_depth[sign] -= 1
             continue
         if open_block[sign] or context_block:
             body = plain[1:].strip()
