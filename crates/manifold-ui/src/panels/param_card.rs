@@ -4741,6 +4741,34 @@ mod tests {
         assert!(panel.audio_btn_ids[3].is_some());
     }
 
+    /// `WIDGET_TREE_DESIGN.md` §5 dump-queryability: every converged card row
+    /// carries a param-id-derived automation name on its row-root and drivable
+    /// controls, so a `--script` flow can find and drive it directly. This is
+    /// the wire VD-035 needed — a modifier param row past its value cell is
+    /// unreachable by `under_text` (the nearest preceding texted sibling is the
+    /// value cell, not the label), so the row's OWN name must be its selector.
+    #[test]
+    fn param_rows_carry_queryable_names() {
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&effect_config_with_toggle_and_trigger());
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
+
+        // Slider row ("radius"): row-root + track + value cell + driver button.
+        let rc = panel.row_catcher_ids[0].expect("radius row has a row catcher");
+        assert_eq!(tree.name_of(rc), Some("param_row.radius"));
+        let slider = panel.slider_ids[0].expect("radius row has a slider");
+        assert_eq!(tree.name_of(slider.track), Some("param_row.radius.slider"));
+        assert_eq!(tree.name_of(slider.value_text), Some("param_row.radius.value"));
+        let drv = panel.driver_btn_ids[0].expect("radius row has a driver button");
+        assert_eq!(tree.name_of(drv), Some("param_row.radius.driver_btn"));
+
+        // Toggle row ("invert"): no separate row-catcher — its button IS the
+        // row's identity, so the row name lands there.
+        let toggle = panel.toggle_ids[2].as_ref().expect("invert row is a toggle");
+        assert_eq!(tree.name_of(toggle.button_id), Some("param_row.invert"));
+    }
+
     #[test]
     fn click_toggle_param_effect() {
         let mut tree = UITree::new();

@@ -51,6 +51,19 @@ pub enum AutomationAction {
         selector: AutomationTarget,
         check: AssertCheck,
     },
+    /// Scroll `target`'s enclosing scroll container (inspector or scene dock)
+    /// until `target` sits fully inside the container's visible band, so a
+    /// following `Pointer` step can act on a row that laid out far below the
+    /// fold. Reuses the production scroll path (the same
+    /// `try_inspector_scroll` / `ScenePanel::handle_scroll` the `Scroll`
+    /// gesture drives) — never a bespoke offset write — and converges by
+    /// observing the target's rect move each step (direction auto-detected, so
+    /// it works for either container regardless of wheel-sign convention).
+    /// Deep converged card rows (`WIDGET_TREE_DESIGN.md` §5/§6) are why this
+    /// exists: a fixed `Scroll { delta }` is fixture-fragile; this is not.
+    ScrollTo {
+        target: AutomationTarget,
+    },
 }
 
 /// §4 committed shape. `Surface`'s `surface` field is `&'static str` in the

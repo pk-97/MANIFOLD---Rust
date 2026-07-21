@@ -1,102 +1,32 @@
 [
-  {
-    "Pointer": {
-      "target": { "Query": { "text": "Scene" } },
-      "gesture": { "Click": { "modifiers": {} } }
-    }
-  },
+  { "Pointer": { "target": { "Query": { "text": "Scene" } }, "gesture": { "Click": { "modifiers": {} } } } },
   "Snapshot",
-  {
-    "Assert": { "selector": { "Query": { "text": "Objects" } }, "check": "Exists" }
-  },
-  {
-    "Assert": { "selector": { "Query": { "text": "+ Add Modifier" } }, "check": "Exists" }
-  },
-  {
-    "Assert": {
-      "selector": { "Query": { "name": "scene_setup.modifier.param1_value", "nth": 0 } },
-      "check": { "Count": 0 }
-    }
-  },
-  {
-    "Pointer": {
-      "target": { "Query": { "text": "+ Add Modifier" } },
-      "gesture": { "Click": { "modifiers": {} } }
-    }
-  },
+  { "Assert": { "selector": { "Query": { "text": "Objects" } }, "check": "Exists" } },
+  { "Assert": { "selector": { "Query": { "name": "param_row.15_angle.value" } }, "check": { "Count": 0 } } },
+  { "ScrollTo": { "target": { "Query": { "text": "+ Add Modifier" } } } },
+  { "Pointer": { "target": { "Query": { "text": "+ Add Modifier" } }, "gesture": { "Click": { "modifiers": {} } } } },
   "Snapshot",
-  {
-    "Assert": { "selector": { "Query": { "text": "Twist" } }, "check": "Exists" }
-  },
-  {
-    "Pointer": {
-      "target": { "Query": { "text": "Twist", "nth": 0 } },
-      "gesture": { "Click": { "modifiers": {} } }
-    }
-  },
+  { "Assert": { "selector": { "Query": { "text": "Twist" } }, "check": "Exists" } },
+  { "Pointer": { "target": { "Query": { "text": "Twist", "nth": 0 } }, "gesture": { "Click": { "modifiers": {} } } } },
   "Snapshot",
-  {
-    "Assert": {
-      "selector": { "Query": { "name": "scene_setup.modifier.param1_value", "nth": 0, "text": "1.00" } },
-      "check": "Exists"
-    }
-  },
-  {
-    "Pointer": {
-      "target": { "Query": { "text": "+ Add Modifier" } },
-      "gesture": { "Click": { "modifiers": {} } }
-    }
-  },
+  { "Assert": { "selector": { "Query": { "name": "param_row.15_angle.value", "nth": 0, "text": "1.00" } }, "check": "Exists" } },
+  { "ScrollTo": { "target": { "Query": { "text": "+ Add Modifier" } } } },
+  { "Pointer": { "target": { "Query": { "text": "+ Add Modifier" } }, "gesture": { "Click": { "modifiers": {} } } } },
   "Snapshot",
-  {
-    "Pointer": {
-      "target": { "Query": { "text": "Bend", "nth": 0 } },
-      "gesture": { "Click": { "modifiers": {} } }
-    }
-  },
+  { "Pointer": { "target": { "Query": { "text": "Bend", "nth": 0 } }, "gesture": { "Click": { "modifiers": {} } } } },
   "Snapshot",
-  {
-    "Assert": { "selector": { "Query": { "text": "Bend" } }, "check": "Exists" }
-  },
-  {
-    "Pointer": {
-      "target": { "Query": { "name": "scene_setup.modifier.param1_track", "nth": 0 } },
-      "gesture": {
-        "Drag": {
-          "to": { "Point": { "x": 1200.0, "y": 404.0 } },
-          "steps": 8
-        }
-      }
-    }
-  },
+  { "Assert": { "selector": { "Query": { "text": "Bend" } }, "check": "Exists" } },
+  { "ScrollTo": { "target": { "Query": { "name": "param_row.15_angle.slider", "nth": 0 } } } },
+  { "Pointer": { "target": { "Query": { "name": "param_row.15_angle.slider", "nth": 0 } }, "gesture": { "Drag": { "to": { "Point": { "x": 1400.0, "y": 600.0 } }, "steps": 8 } } } },
   "Snapshot",
-  {
-    "Assert": {
-      "selector": { "Query": { "name": "scene_setup.modifier.param1_driver_btn", "nth": 0 } },
-      "check": "Exists"
-    }
-  },
-  {
-    "Assert": { "selector": { "Query": { "text": "↑" } }, "check": { "Count": 2 } }
-  },
-  {
-    "Pointer": {
-      "target": { "Query": { "text": "↑", "nth": 1 } },
-      "gesture": { "Click": { "modifiers": {} } }
-    }
-  },
+  { "Assert": { "selector": { "Query": { "name": "param_row.15_angle.driver_btn", "nth": 0 } }, "check": "Exists" } },
+  { "Assert": { "selector": { "Query": { "text": "↑" } }, "check": { "Count": 2 } } },
+  { "ScrollTo": { "target": { "Query": { "text": "↑", "nth": 1 } } } },
+  { "Pointer": { "target": { "Query": { "text": "↑", "nth": 1 } }, "gesture": { "Click": { "modifiers": {} } } } },
   "Snapshot",
-  {
-    "Key": { "key": "Z", "modifiers": { "command": true } }
-  },
-  {
-    "Key": { "key": "Z", "modifiers": { "command": true } }
-  },
-  {
-    "Key": { "key": "Z", "modifiers": { "command": true } }
-  },
-  {
-    "Key": { "key": "Z", "modifiers": { "command": true } }
-  },
+  { "Key": { "key": "Z", "modifiers": { "command": true } } },
+  { "Key": { "key": "Z", "modifiers": { "command": true } } },
+  { "Key": { "key": "Z", "modifiers": { "command": true } } },
+  { "Key": { "key": "Z", "modifiers": { "command": true } } },
   "Snapshot"
 ]

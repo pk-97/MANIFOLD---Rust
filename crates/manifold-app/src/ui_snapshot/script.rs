@@ -576,6 +576,9 @@ impl Runner {
             AutomationAction::Assert { selector, check } => {
                 self.assert(ui, data, index, action_desc, selector, check, out_dir)
             }
+            AutomationAction::ScrollTo { target } => {
+                self.scroll_to(ui, data, zoom_ppb, index, action_desc, target, out_dir, render)
+            }
         };
         // BUG-198: whatever this step just sent over `content_tx` (via
         // `AppEditingHost`/`ui_bridge::dispatch`) has already been applied
@@ -698,46 +701,7 @@ impl Runner {
                 self.drain_and_dispatch(ui, data);
             }
             Gesture::Scroll { delta } => {
-                // Mirror `window_input.rs`'s real mouse-wheel dispatch: the
-                // inspector's scroll is a direct, synchronous call
-                // (`try_inspector_scroll` -> `try_scroll_in_place`, offsetting
-                // built content nodes in place), NOT routed through the
-                // generic `UIEvent::Scroll` -> `pending_events` ->
-                // `drain_and_dispatch` pipeline below (that pipeline is real
-                // for the dropdown/timeline, but a no-op for the inspector —
-                // found building `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md`'s
-                // BUG-060 gate scene: repeated `Gesture::Scroll`s at the
-                // inspector moved content a few px, clamped, and never
-                // reached it). Falls back to `handle_scroll_at` exactly as
-                // the real handler does when nothing is built yet. No pointer
-                // points stashed here (D9b names only `pointer_event`
-                // gestures; a scroll never calls it).
-                if ui.layout.inspector().contains(center) {
-                    if ui.try_inspector_scroll(delta.y, center.x) {
-                        scrolled_in_place = ui.inspector.take_scrolled_in_place();
-                    } else {
-                        ui.inspector.handle_scroll_at(delta.y, center.x);
-                    }
-                } else if ui.scene_setup_panel.is_open() && ui.layout.scene_setup().contains(center) {
-                    // BUG-294: the Scene Setup dock's own scroll-offset setter
-                    // (`ScenePanel::handle_scroll`, the same one
-                    // `ScenePanel::handle_event`'s `UIEvent::Scroll` arm calls
-                    // when the live app routes through the generic pipeline,
-                    // `window_input.rs`'s `primary_mouse_wheel`) — called
-                    // direct here rather than through the generic
-                    // `UIEvent::Scroll` pipeline because that pipeline alone
-                    // never forces the rebuild that bakes the new offset into
-                    // built node positions (BUG-223's exact gap, mirrored for
-                    // this harness): `window_input.rs` explicitly sets
-                    // `needs_rebuild` right after routing scene/audio-setup
-                    // scroll, so this does the same with
-                    // `needs_structural_sync`.
-                    ui.scene_setup_panel.handle_scroll(delta.y);
-                    self.needs_structural_sync = true;
-                } else {
-                    ui.input.process_scroll(center, *delta);
-                    self.drain_and_dispatch(ui, data);
-                }
+                scrolled_in_place = self.scroll_once(ui, data, center, *delta);
             }
             Gesture::Drag { to, steps } => {
                 let to_rect = match self.resolve(ui, data, to) {
@@ -765,6 +729,181 @@ impl Runner {
             status: "ok",
             detail: format!("acted at ({:.1},{:.1})", center.x, center.y),
             artifact: None,
+        }
+    }
+
+    /// One scroll step through the PRODUCTION path — the shared core of the
+    /// `Scroll` gesture and the `ScrollTo` action's loop, so both drive the same
+    /// dispatch the live mouse wheel does (`window_input.rs`). `center` picks the
+    /// container exactly as the real handler does: the inspector scrolls in place
+    /// (synchronous node-offset, returns whether it handled it so the caller can
+    /// set `scrolled_in_place`); the Scene dock sets its offset and forces the
+    /// rebuild that bakes it in (BUG-294); anything else routes the generic
+    /// pipeline. Returns whether the inspector handled the scroll in place.
+    fn scroll_once(&mut self, ui: &mut UIRoot, data: &mut SceneData, center: Vec2, delta: Vec2) -> bool {
+        if ui.layout.inspector().contains(center) {
+            if ui.try_inspector_scroll(delta.y, center.x) {
+                return ui.inspector.take_scrolled_in_place();
+            }
+            // Nothing built yet — the real handler's same fallback.
+            ui.inspector.handle_scroll_at(delta.y, center.x);
+        } else if ui.scene_setup_panel.is_open() && ui.layout.scene_setup().contains(center) {
+            // BUG-294: direct offset setter + forced structural sync, because the
+            // generic `UIEvent::Scroll` pipeline alone never rebuilds the Scene
+            // dock's built node positions (`window_input.rs` sets `needs_rebuild`
+            // right after routing scene-dock scroll; this mirrors it).
+            ui.scene_setup_panel.handle_scroll(delta.y);
+            self.needs_structural_sync = true;
+        } else {
+            ui.input.process_scroll(center, delta);
+            self.drain_and_dispatch(ui, data);
+        }
+        false
+    }
+
+    /// Scroll `target`'s enclosing container until it sits inside the visible
+    /// band, so a following `Pointer` step can act on a row that laid out far
+    /// below the fold (`WIDGET_TREE_DESIGN.md` §5/§6 converged card rows —
+    /// `Angle` at y≈7789 in the gltfscene fixture). Loops [`Self::scroll_once`]
+    /// and re-resolves each step, converging by OBSERVATION (it watches the
+    /// target's rect move) rather than a fixture-fragile fixed delta. Direction
+    /// is auto-detected on the first productive step, so it is correct for either
+    /// container regardless of that container's wheel-sign convention.
+    #[allow(clippy::too_many_arguments)]
+    fn scroll_to(
+        &mut self,
+        ui: &mut UIRoot,
+        data: &mut SceneData,
+        zoom_ppb: f32,
+        index: usize,
+        action_desc: String,
+        target: &AutomationTarget,
+        out_dir: &std::path::Path,
+        render: &mut RenderState,
+    ) -> StepResult {
+        // A chunky wheel notch: the Scene dock scales the raw delta by its own
+        // SCROLL_SPEED (~0.375 → ~900px/step), so the deepest rows reach well
+        // inside the cap. Success is judged on the target's CENTER (that is where
+        // a following gesture synthesizes its pointer / drag origin), not full
+        // containment — the last row of a maxed-out scroll can never clear a
+        // both-sides margin, yet its center is perfectly clickable. `MARGIN` just
+        // keeps the center off the very clipped edge.
+        const STEP: f32 = 2400.0;
+        const MAX_ITERS: usize = 40;
+        const MARGIN: f32 = 8.0;
+
+        // Resolve once to locate the target's COLUMN. Pick the container by X
+        // (scroll-invariant) — the target's Y is exactly what is off-screen, so a
+        // `contains(center)` test on it would mis-route.
+        let rect0 = match self.resolve(ui, data, target) {
+            Ok(r) => r,
+            Err(e) => return self.fail(index, action_desc, ui, data, out_dir, e),
+        };
+        let cx = rect0.x + rect0.width * 0.5;
+        let insp = ui.layout.inspector();
+        let scene = ui.layout.scene_setup();
+        let in_x = |r: Rect| r.width > 0.0 && cx >= r.x && cx < r.x + r.width;
+        let container_is_inspector = if in_x(insp) {
+            true
+        } else if ui.scene_setup_panel.is_open() && in_x(scene) {
+            false
+        } else {
+            return self.fail(
+                index,
+                action_desc,
+                ui,
+                data,
+                out_dir,
+                format!("ScrollTo: target column x={cx:.0} is in no open scroll container (inspector {insp:?}, scene {scene:?})"),
+            );
+        };
+        let container_rect = |ui: &UIRoot| {
+            if container_is_inspector {
+                ui.layout.inspector()
+            } else {
+                ui.layout.scene_setup()
+            }
+        };
+
+        // +1: a negative delta reveals lower content (target's Y decreases toward
+        // the band). Both containers share this convention today; detecting it on
+        // the first productive step keeps ScrollTo correct if one ever flips.
+        let mut sign = 1.0_f32;
+        let mut sign_locked = false;
+
+        for _ in 0..MAX_ITERS {
+            let rect = match self.resolve(ui, data, target) {
+                Ok(r) => r,
+                Err(e) => return self.fail(index, action_desc.clone(), ui, data, out_dir, e),
+            };
+            let vis = container_rect(ui);
+            let top = vis.y + MARGIN;
+            let bot = vis.y + vis.height - MARGIN;
+            let cy_target = rect.y + rect.height * 0.5;
+            if cy_target >= top && cy_target <= bot {
+                return StepResult {
+                    index,
+                    action: action_desc,
+                    status: "ok",
+                    detail: format!("scrolled target center to y={cy_target:.0}"),
+                    artifact: None,
+                };
+            }
+            // Below the band → want the row's Y to DECREASE (move up into view);
+            // above → INCREASE. `dir` encodes that; `sign` corrects the container's
+            // actual polarity.
+            let want_y_decrease = cy_target > bot;
+            let dir = if want_y_decrease { -1.0 } else { 1.0 };
+            let sc = Vec2::new(cx.clamp(vis.x + 1.0, vis.x + vis.width - 1.0), vis.y + vis.height * 0.5);
+            let prev_y = rect.y;
+            let sip = self.scroll_once(ui, data, sc, Vec2::new(0.0, dir * sign * STEP));
+            self.advance_frame(ui, data, zoom_ppb, render, sip);
+            let moved = match self.resolve(ui, data, target) {
+                Ok(r) => r.y - prev_y,
+                Err(_) => 0.0,
+            };
+            if moved.abs() <= 0.5 {
+                // Clamped at an edge and still not in the band — cannot reach it.
+                break;
+            }
+            if !sign_locked {
+                // If the row moved the WRONG way, our polarity guess was inverted.
+                let y_decreased = moved < 0.0;
+                if want_y_decrease != y_decreased {
+                    sign = -sign;
+                }
+                sign_locked = true;
+            }
+        }
+
+        match self.resolve(ui, data, target) {
+            Ok(rect) => {
+                let vis = container_rect(ui);
+                let cy_target = rect.y + rect.height * 0.5;
+                if cy_target >= vis.y + MARGIN && cy_target <= vis.y + vis.height - MARGIN {
+                    StepResult {
+                        index,
+                        action: action_desc,
+                        status: "ok",
+                        detail: format!("scrolled target center to y={cy_target:.0}"),
+                        artifact: None,
+                    }
+                } else {
+                    self.fail(
+                        index,
+                        action_desc,
+                        ui,
+                        data,
+                        out_dir,
+                        format!(
+                            "ScrollTo: exhausted {MAX_ITERS} steps, target center y={cy_target:.0} still outside band [{:.0},{:.0}]",
+                            vis.y + MARGIN,
+                            vis.y + vis.height - MARGIN
+                        ),
+                    )
+                }
+            }
+            Err(e) => self.fail(index, action_desc, ui, data, out_dir, e),
         }
     }
 

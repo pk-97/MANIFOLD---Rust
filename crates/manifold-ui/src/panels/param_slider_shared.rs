@@ -2530,6 +2530,13 @@ pub(crate) fn build_toggle_trigger_row(
         }
     }
 
+    // Automation naming pass (`WIDGET_TREE_DESIGN.md` §5) — mirror the slider row.
+    // A toggle/trigger row has no separate row-catcher; its button IS the row's
+    // identity and its sole drivable control, so the param-id-derived name lands
+    // there.
+    let pid: &str = &info.id;
+    tree.set_name(button_id, format!("param_row.{pid}"));
+
     ToggleTriggerRowIds {
         label_id: Some(label_id),
         button_id,
@@ -2869,6 +2876,24 @@ pub(crate) fn build_param_row(
         row_key_base,
         ROW_ROLE_AUDIO,
     );
+
+    // Automation naming pass (`WIDGET_TREE_DESIGN.md` §5, D8/§3): every converged
+    // card row carries a param-id-derived name on its row-root and its drivable
+    // controls, so a `--script` flow can find and drive the row directly. Unlike
+    // the mute/solo-chip idiom (one static name, `under_text` picks the row), a
+    // flat param row defeats `under_text`: the nearest preceding texted sibling of
+    // the driver button is the VALUE cell, not the label, so the row's own name
+    // must BE its selector. Names duplicate across surfaces that render the same
+    // param (e.g. the same modifier in the scene dock and the inspector) — flows
+    // disambiguate with `nth`, exactly as the resolver intends. Owned names die
+    // with the rebuild (see `UITree::set_name`) — no leak, no interner.
+    let pid: &str = &info.id;
+    tree.set_name(ids.row_catcher, format!("param_row.{pid}"));
+    if let Some(s) = ids.slider.as_ref() {
+        tree.set_name(s.track, format!("param_row.{pid}.slider"));
+        tree.set_name(s.value_text, format!("param_row.{pid}.value"));
+    }
+    tree.set_name(ids.driver_btn, format!("param_row.{pid}.driver_btn"));
 
     cy += ROW_HEIGHT + ROW_SPACING;
 
