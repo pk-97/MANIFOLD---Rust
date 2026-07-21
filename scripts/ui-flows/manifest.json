@@ -31,6 +31,7 @@
     "scene-setup-shadow-softness-dropdown": "gltfscene",
     "scene-setup-ux-p2-demo": "gltfscene",
     "select-and-inspect": "inspector",
+    "set-param-layer-opacity": "inspector",
     "toggle-lanes": "automation",
     "trim-clip-left": "timeline",
     "zoom-out": "timeline"
