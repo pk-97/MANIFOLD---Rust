@@ -1,0 +1,6 @@
+   1 pub const CURRENT_PROJECT_VERSION
+   1 pub enum EmbeddedOrigin
+   1 pub struct EmbeddedPreset
+   1 pub struct LoadReport
+   1 pub struct Project
+   1 pub struct PurgeResult
