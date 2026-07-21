@@ -13,3 +13,6 @@ Per-lane: quoted in each commit (clippy both flavors, nextest 1172-1173, rendere
 
 ## Stage note
 The inspector, the scene panel, and every card now run one shared machinery in small labeled files. The catalog means the test harness — and future agents — can ASK the app what's on screen instead of knowing by lore.
+
+## Push-time addendum
+Full sweep: `Summary [175.362s] 3852 tests run: 3852 passed (22 slow), 13 skipped`; clippy workspace clean; deny `bans ok`; flows **34/34 required, 7 xfail (all pre-existing known-red), 41/41 accounted**. Line-delta honesty (dispatcher's close report): repo-wide net **+287** — P-S was a SPLIT (structure + one shared host), not a deletion; the census's −500-800 projection applied only to the dedup half, which delivered (−280, scene twin dead).
