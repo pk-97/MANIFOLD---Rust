@@ -1517,7 +1517,7 @@ mod bug_133_import_probe_rejection_tests {
 
         let layer_id = manifold_core::LayerId::new("test-layer");
         let (video_clips, commands, failures) =
-            build_video_import_batch(&[fake_webm.clone()], 120.0, 0.0, &layer_id);
+            build_video_import_batch(std::slice::from_ref(&fake_webm), 120.0, 0.0, &layer_id);
 
         // Not a silent success: no clip, no library entry, no AddClipCommand.
         assert!(

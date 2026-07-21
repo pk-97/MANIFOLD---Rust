@@ -278,6 +278,18 @@ pub(crate) struct BoundNodeParamDrag {
     current_value: f32,
 }
 
+impl BoundNodeParamDrag {
+    /// Re-apply the in-flight card value after snapshot acceptance — the
+    /// same write the live scrub path uses (`with_preset_graph_mut` +
+    /// `set_base_param` on `outer_param_id`), mirroring
+    /// `ActiveInspectorDrag::apply`'s `Self::Param` arm (BUG-262 precedent).
+    pub(crate) fn apply(&self, project: &mut manifold_core::project::Project) {
+        project.with_preset_graph_mut(&self.target, |inst| {
+            inst.set_base_param(&self.outer_param_id, self.current_value);
+        });
+    }
+}
+
 impl Application {
     /// The mapping drawer's store target for the editor's watched graph —
     /// the [`manifold_core::GraphTarget`] the command then resolves to a
@@ -825,6 +837,13 @@ impl Application {
                         if let Some(ref drag) = self.active_inspector_drag {
                             drag.apply(&mut self.local_project);
                         }
+                        // Same for a bound-node-param card scrub (BUG-281):
+                        // its live writes go straight to `local_project`
+                        // every tick, so a snapshot swap mid-gesture must
+                        // restore it too, not just `active_inspector_drag`.
+                        if let Some(ref drag) = self.bound_node_param_drag {
+                            drag.apply(&mut self.local_project);
+                        }
                         // Clear suppression once we've accepted a post-load snapshot
                         self.suppress_snapshot_until = 0;
 
@@ -878,6 +897,10 @@ impl Application {
                     // Restore actively-dragged inspector field so modulation
                     // doesn't overwrite the value the user is manipulating.
                     if let Some(ref drag) = self.active_inspector_drag {
+                        drag.apply(&mut self.local_project);
+                    }
+                    // BUG-281: mirror for a bound-node-param card scrub.
+                    if let Some(ref drag) = self.bound_node_param_drag {
                         drag.apply(&mut self.local_project);
                     }
                 }
@@ -6184,5 +6207,84 @@ mod binding_reroute_tests {
         });
         assert!(node_param_is_wired(&def, &[], 1, "amount"));
         assert!(!node_param_is_wired(&def, &[], 1, "other_param"));
+    }
+}
+
+/// BUG-281 regression. A card-bound graph-node-face scrub live-writes
+/// `local_project` every tick via `bound_node_param_drag` (the reroute arm
+/// above, `with_preset_graph_mut` + `set_base_param` on `outer_param_id`),
+/// but the snapshot-acceptance restore path only re-applied
+/// `active_inspector_drag` — so a snapshot landing mid-gesture stomped the
+/// bound value back to `old_value` until the next tick (visible revert on
+/// the card slider). Mirrors the BUG-262 `mapping_undo_baseline` shape:
+/// given the guard a live drag installs, a stale pre-drag snapshot must come
+/// back carrying the dragged value.
+#[cfg(test)]
+mod bound_node_param_drag_tests {
+    use super::BoundNodeParamDrag;
+    use manifold_core::effect_graph_def::ParamSpecDef;
+    use manifold_core::effects::PresetInstance;
+    use manifold_core::macro_bank::MacroCurve;
+    use manifold_core::params::Param;
+    use manifold_core::project::Project;
+    use manifold_core::{GraphTarget, PresetTypeId};
+
+    /// One master effect carrying a single outer card param ("amount"),
+    /// default 0.0 — the write target `BoundNodeParamDrag::apply` reaches
+    /// via `with_preset_graph_mut` + `set_base_param`.
+    fn project_with_amount_param() -> (Project, GraphTarget) {
+        let mut project = Project::default();
+        let mut fx = PresetInstance::new(PresetTypeId::new("Test"));
+        let effect_id = fx.id.clone();
+        fx.params.push(Param::bundled(ParamSpecDef {
+            id: "amount".into(),
+            name: "Amount".into(),
+            min: 0.0,
+            max: 1.0,
+            default_value: 0.0,
+            whole_numbers: false,
+            is_toggle: false,
+            is_trigger: false,
+            value_labels: vec![],
+            format_string: None,
+            osc_suffix: String::new(),
+            curve: MacroCurve::Linear,
+            invert: false,
+            is_angle: false,
+            is_trigger_gate: false,
+            wraps: false,
+            section: None,
+        }));
+        project.settings.master_effects.push(fx);
+        (project, GraphTarget::Effect(effect_id))
+    }
+
+    #[test]
+    fn bound_node_param_drag_survives_snapshot_stomp() {
+        let (project, target) = project_with_amount_param();
+        let before = project.settings.master_effects[0].get_base_param("amount");
+        assert_eq!(before, 0.0, "fixture starts at the default value");
+
+        // The guard a live bound-node-param scrub installs (in-flight value
+        // 0.7, matching the live write at app_render.rs's
+        // `SetGraphNodeParam` reroute arm).
+        let guard = BoundNodeParamDrag {
+            target: target.clone(),
+            node_id: 1,
+            param_name: "inner".to_string(),
+            outer_param_id: "amount".to_string(),
+            old_value: 0.0,
+            current_value: 0.7,
+        };
+        // A full snapshot lands mid-drag carrying the stale pre-drag
+        // project; app_render restores the guarded drag onto it.
+        let mut stomped = project.clone();
+        guard.apply(&mut stomped);
+
+        let after = stomped.settings.master_effects[0].get_base_param("amount");
+        assert_eq!(
+            after, 0.7,
+            "bound-node-param stomp must be undone so the card doesn't revert mid-gesture"
+        );
     }
 }
