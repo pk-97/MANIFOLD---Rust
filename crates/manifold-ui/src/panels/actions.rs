@@ -10,7 +10,7 @@
 use super::PanelAction;
 use super::{
     AudioShapeParam, BandDivider, DriverConfigAction, GraphParamTarget, InspectorTab,
-    TrimKind, UiRelightField, UiRelightHeightFrom,
+    TrimKind, UiRelightHeightFrom,
 };
 use super::{browser_popup, picker_core};
 use crate::input::Modifiers;
@@ -361,16 +361,9 @@ pub enum ParamsAction {
     /// Toggle the "3D Shading" header icon (`docs/DEPTH_RELIGHT_DESIGN.md`
     /// D2/P5). Atomic like `ParamToggle` — a click, not a drag.
     RelightToggle(GraphParamTarget),
-    /// Press on a D3 relight knob's track — snapshot the pre-drag value for
-    /// undo (mirrors `ParamSnapshot`).
-    RelightParamSnapshot(GraphParamTarget, UiRelightField),
-    /// Live drag of a D3 relight knob (mirrors `ParamChanged`). Always
-    /// live even while the toggle is off — the row renders greyed, not
-    /// hidden, and must still take effect for when it's switched on.
-    RelightParamChanged(GraphParamTarget, UiRelightField, f32),
-    /// Release on a D3 relight knob's track — commits one undo entry
-    /// (mirrors `ParamCommit`).
-    RelightParamCommit(GraphParamTarget, UiRelightField),
+    // Relight-knob scrub trio migrated to `PanelAction::Scrub`
+    // (`ValueRef::RelightParam`, P-I / D4). Always-live behaviour (the knob
+    // takes effect even while the toggle is off) is preserved on the wire.
     /// D4 "Height From" enum row click (Auto / Luminance / Inverted
     /// Luminance) — atomic like `ParamToggle`.
     RelightHeightFromChanged(GraphParamTarget, UiRelightHeightFrom),

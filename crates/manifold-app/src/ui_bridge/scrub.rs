@@ -28,7 +28,7 @@ use manifold_core::audio_mod::{AudioModShape, TriggerAction};
 use manifold_core::effects::ParamId;
 use manifold_core::project::Project;
 use manifold_core::{GraphTarget, LayerId};
-use manifold_editing::commands::effects::ChangeGraphParamCommand;
+use manifold_editing::commands::effects::{ChangeGraphParamCommand, SetRelightParamCommand};
 use manifold_editing::commands::settings::{
     ChangeLayerOpacityCommand, ChangeLedBrightnessCommand, ChangeMacroCommand,
     ChangeMasterOpacityCommand,
@@ -122,6 +122,14 @@ pub enum ResolvedScrub {
         baseline: f32,
         live: f32,
     },
+    /// A "3D Shading" relight knob — `field` is the resolved core
+    /// [`manifold_core::effects::RelightField`] captured at Begin.
+    RelightParam {
+        target: GraphTarget,
+        field: manifold_core::effects::RelightField,
+        baseline: f32,
+        live: f32,
+    },
 }
 
 impl ResolvedScrub {
@@ -161,6 +169,13 @@ impl ResolvedScrub {
                 if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id) {
                     layer.audio_gain_db = *live;
                 }
+            }
+            ResolvedScrub::RelightParam {
+                target, field, live, ..
+            } => {
+                project.with_preset_graph_mut(target, |inst| {
+                    field.set(&mut inst.relight_params, *live);
+                });
             }
         }
     }
@@ -543,5 +558,97 @@ pub(crate) fn dispatch_scrub(
                 DispatchResult::handled()
             }
         },
+
+        ValueRef::RelightParam(gpt, field) => {
+            // Resolve the ui field to the core relight field once per phase, as
+            // the retired trio did.
+            let f = crate::ui_translate::relight_field_to_editing(*field);
+            match phase {
+                ScrubPhase::Begin => {
+                    if let Some(target) = resolve_graph_target(
+                        gpt,
+                        ctx.editor_target,
+                        effective_tab,
+                        active_layer,
+                        ctx.selection,
+                        ctx.project,
+                    ) {
+                        let baseline = ctx
+                            .project
+                            .with_preset_graph_mut(&target, |inst| f.get(&inst.relight_params));
+                        if let Some(baseline) = baseline {
+                            ctx.scrub.active = Some(ResolvedScrub::RelightParam {
+                                target,
+                                field: f,
+                                baseline,
+                                live: baseline,
+                            });
+                        }
+                    }
+                    DispatchResult::handled()
+                }
+                ScrubPhase::Move(sv) => {
+                    if let (Some(v), Some(target)) = (
+                        sv.scalar(),
+                        resolve_graph_target(
+                            gpt,
+                            ctx.editor_target,
+                            effective_tab,
+                            active_layer,
+                            ctx.selection,
+                            ctx.project,
+                        ),
+                    ) {
+                        if let Some(ResolvedScrub::RelightParam { live, .. }) = &mut ctx.scrub.active
+                        {
+                            *live = v;
+                        }
+                        // Live drag: float knobs are per-frame uniforms — no
+                        // structure-version bump (D8/P7).
+                        ctx.project.with_preset_graph_mut(&target, |inst| {
+                            f.set(&mut inst.relight_params, v);
+                        });
+                        let t = target.clone();
+                        ContentCommand::send(
+                            ctx.content_tx,
+                            ContentCommand::MutateProjectLive(Box::new(move |p| {
+                                p.with_preset_graph_mut(&t, |inst| {
+                                    f.set(&mut inst.relight_params, v);
+                                });
+                            })),
+                        );
+                    }
+                    DispatchResult::handled()
+                }
+                ScrubPhase::Commit => {
+                    let baseline = match &ctx.scrub.active {
+                        Some(ResolvedScrub::RelightParam { baseline, .. }) => Some(*baseline),
+                        _ => None,
+                    };
+                    if let Some(old_val) = baseline
+                        && let Some(target) = resolve_graph_target(
+                            gpt,
+                            ctx.editor_target,
+                            effective_tab,
+                            active_layer,
+                            ctx.selection,
+                            ctx.project,
+                        )
+                    {
+                        let new_val = ctx
+                            .project
+                            .with_preset_graph_mut(&target, |inst| f.get(&inst.relight_params));
+                        if let Some(new_val) = new_val
+                            && (old_val - new_val).abs() > f32::EPSILON
+                        {
+                            let cmd = SetRelightParamCommand::new(target, f, old_val, new_val);
+                            ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
+                        }
+                    }
+                    ctx.scrub.active = None;
+                    DispatchResult::handled()
+                }
+            }
+        }
     }
 }

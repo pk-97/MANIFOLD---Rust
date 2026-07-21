@@ -110,12 +110,8 @@ pub(crate) enum ActiveInspectorDrag {
         low_hz: f32,
         mid_hz: f32,
     },
-    /// A "3D Shading" knob drag (`RelightParam*` trio).
-    RelightParam {
-        target: manifold_core::GraphTarget,
-        field: manifold_core::effects::RelightField,
-        value: f32,
-    },
+    // RelightParam (3D-Shading knob trio) migrated to the unified scrub gesture
+    // (`ui_bridge::scrub::ResolvedScrub::RelightParam`, P-I / D4).
     /// An Ableton macro trim-bar drag (`AbletonMacroTrim*` trio).
     AbletonMacroTrim {
         slot_idx: usize,
@@ -298,15 +294,6 @@ impl ActiveInspectorDrag {
             Self::AudioCrossover { low_hz, mid_hz } => {
                 project.audio_setup.low_hz = *low_hz;
                 project.audio_setup.mid_hz = *mid_hz;
-            }
-            Self::RelightParam {
-                target,
-                field,
-                value,
-            } => {
-                project.with_preset_graph_mut(target, |inst| {
-                    field.set(&mut inst.relight_params, *value);
-                });
             }
             Self::AbletonMacroTrim { slot_idx, min, max } => {
                 if let Some(m) = project

@@ -21,7 +21,7 @@
 
 use manifold_foundation::{LayerId, ParamId};
 
-use super::GraphParamTarget;
+use super::{GraphParamTarget, UiRelightField};
 
 /// One edge of a scrub gesture — maps 1:1 onto the retired
 /// `*Snapshot`/`*Changed`/`*Commit` trio (D4). The scrubbed value rides
@@ -85,4 +85,7 @@ pub enum ValueRef {
     /// A layer's audio-input gain (layer header) — was `AudioGain{Snapshot,
     /// Changed,Commit}`. Keyed by the layer id.
     LayerAudioGain(LayerId),
+    /// A "3D Shading" relight knob on an effect/generator graph — was
+    /// `RelightParam{Snapshot,Changed,Commit}`.
+    RelightParam(GraphParamTarget, UiRelightField),
 }

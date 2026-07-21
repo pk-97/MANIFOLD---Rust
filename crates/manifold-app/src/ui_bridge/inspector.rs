@@ -1132,10 +1132,10 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 |h, p| {
-                    h.dispatch(&PanelAction::Params(ParamsAction::RelightParamSnapshot(gpt(), field)), p);
-                    h.dispatch(&PanelAction::Params(ParamsAction::RelightParamChanged(gpt(), field, after)), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::RelightParam(gpt(), field), ScrubPhase::Begin), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::RelightParam(gpt(), field), ScrubPhase::Move(ScrubValue::Scalar(after))), p);
                 },
-                |h, p| h.dispatch(&PanelAction::Params(ParamsAction::RelightParamCommit(gpt(), field)), p),
+                |h, p| h.dispatch(&PanelAction::Scrub(ValueRef::RelightParam(gpt(), field), ScrubPhase::Commit), p),
                 move |p| core_field.get(&gen_inst(p, &probe_lid).relight_params),
                 before,
                 after,

@@ -18,7 +18,7 @@ use manifold_editing::command::Command;
 use manifold_editing::commands::effect_target::EffectTarget;
 use manifold_editing::commands::effects::{
     ChangeGraphParamCommand, RemoveEffectCommand, ReorderEffectCommand, ReorderEffectGroupCommand,
-    SetRelightHeightFromCommand, SetRelightParamCommand, ToggleEffectCommand, ToggleRelightCommand,
+    SetRelightHeightFromCommand, ToggleEffectCommand, ToggleRelightCommand,
 };
 use manifold_editing::commands::settings::{ChangeMacroCommand, PasteGeneratorCommand};
 use manifold_ui::{InspectorTab, ParamsAction};
@@ -753,71 +753,8 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             }
             DispatchResult::structural()
         }
-        ParamsAction::RelightParamSnapshot(gpt, field) => {
-            if let Some(target) =
-                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
-            {
-                let f = crate::ui_translate::relight_field_to_editing(*field);
-                ctx.scrub.slider_snapshot =
-                    ctx.project.with_preset_graph_mut(&target, |inst| f.get(&inst.relight_params));
-                if let Some(value) = ctx.scrub.slider_snapshot {
-                    ctx.scrub.active_inspector_drag = Some(crate::app::ActiveInspectorDrag::RelightParam {
-                        target,
-                        field: f,
-                        value,
-                    });
-                }
-            }
-            DispatchResult::handled()
-        }
-        ParamsAction::RelightParamChanged(gpt, field, val) => {
-            if let Some(target) =
-                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
-            {
-                let f = crate::ui_translate::relight_field_to_editing(*field);
-                let v = *val;
-                if let Some(crate::app::ActiveInspectorDrag::RelightParam { value, .. }) =
-                    &mut ctx.scrub.active_inspector_drag
-                {
-                    *value = v;
-                }
-                // Live drag: update the UI-side project immediately so the
-                // slider follows the pointer, and mirror to the content thread
-                // via `MutateProjectLive`. No `bump_graph_structure_version`
-                // — float knobs are per-frame uniforms (D8/P7).
-                ctx.project.with_preset_graph_mut(&target, |inst| {
-                    f.set(&mut inst.relight_params, v);
-                });
-                let t = target.clone();
-                ContentCommand::send(
-                    ctx.content_tx,
-                    ContentCommand::MutateProjectLive(Box::new(move |p| {
-                        p.with_preset_graph_mut(&t, |inst| {
-                            f.set(&mut inst.relight_params, v);
-                        });
-                    })),
-                );
-            }
-            DispatchResult::handled()
-        }
-        ParamsAction::RelightParamCommit(gpt, field) => {
-            ctx.scrub.active_inspector_drag = None;
-            if let Some(old_val) = ctx.scrub.slider_snapshot.take()
-                && let Some(target) =
-                    resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
-            {
-                let f = crate::ui_translate::relight_field_to_editing(*field);
-                let new_val =
-                    ctx.project.with_preset_graph_mut(&target, |inst| f.get(&inst.relight_params));
-                if let Some(new_val) = new_val
-                    && (old_val - new_val).abs() > f32::EPSILON
-                {
-                    let cmd = SetRelightParamCommand::new(target, f, old_val, new_val);
-                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
-                }
-            }
-            DispatchResult::handled()
-        }
+        // Relight-knob scrub trio migrated to `PanelAction::Scrub`
+        // (`ValueRef::RelightParam`, P-I / D4).
         ParamsAction::RelightHeightFromChanged(gpt, height_from) => {
             if let Some(target) =
                 resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)

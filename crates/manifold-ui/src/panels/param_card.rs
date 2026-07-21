@@ -2952,9 +2952,9 @@ impl ParamCardPanel {
             let default_norm = BitmapSlider::value_to_normalized(spec.default, spec.min, spec.max);
             let value_text = format!("{value:.2}");
             let reset = PanelAction::slider_reset(
-                PanelAction::Params(ParamsAction::RelightParamSnapshot(target.clone(), spec.field)),
-                PanelAction::Params(ParamsAction::RelightParamChanged(target.clone(), spec.field, spec.default)),
-                PanelAction::Params(ParamsAction::RelightParamCommit(target.clone(), spec.field)),
+                PanelAction::Scrub(ValueRef::RelightParam(target.clone(), spec.field), ScrubPhase::Begin),
+                PanelAction::Scrub(ValueRef::RelightParam(target.clone(), spec.field), ScrubPhase::Move(ScrubValue::Scalar(spec.default))),
+                PanelAction::Scrub(ValueRef::RelightParam(target.clone(), spec.field), ScrubPhase::Commit),
             );
             let slider = BitmapSlider::build(
                 tree,
@@ -4171,8 +4171,8 @@ impl ParamCardPanel {
                     let norm = BitmapSlider::x_to_normalized(TrackSpan::of(tree.get_bounds(ids.track)), pos.x);
                     let val = BitmapSlider::normalized_to_value(norm, spec.min, spec.max);
                     return vec![
-                        PanelAction::Params(ParamsAction::RelightParamSnapshot(target.clone(), field)),
-                        PanelAction::Params(ParamsAction::RelightParamChanged(target, field, val)),
+                        PanelAction::Scrub(ValueRef::RelightParam(target.clone(), field), ScrubPhase::Begin),
+                        PanelAction::Scrub(ValueRef::RelightParam(target, field), ScrubPhase::Move(ScrubValue::Scalar(val))),
                     ];
                 }
             }
@@ -4425,7 +4425,7 @@ impl ParamCardPanel {
             let display_norm = BitmapSlider::value_to_normalized(val, spec.min, spec.max);
             self.relight.set_value(field, val);
             BitmapSlider::update_value(tree, ids, display_norm, &format!("{val:.2}"));
-            return vec![PanelAction::Params(ParamsAction::RelightParamChanged(self.param_target(), field, val))];
+            return vec![PanelAction::Scrub(ValueRef::RelightParam(self.param_target(), field), ScrubPhase::Move(ScrubValue::Scalar(val)))];
         }
 
         Vec::new()
@@ -4494,7 +4494,7 @@ impl ParamCardPanel {
                 }
             }
             Some(ParamDragTarget::Relight { field }) => {
-                vec![PanelAction::Params(ParamsAction::RelightParamCommit(self.param_target(), field))]
+                vec![PanelAction::Scrub(ValueRef::RelightParam(self.param_target(), field), ScrubPhase::Commit)]
             }
             None => Vec::new(),
         }
