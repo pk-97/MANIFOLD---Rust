@@ -31,7 +31,7 @@ Campaign origin: Peter, 2026-07-21 — *"I want god files gone, I want proper so
 | `manifold-ui/src/panels/param_slider_shared.rs` | 3,166 | 92 | same (P-S) |
 | `manifold-ui/src/panels/mod.rs` (`PanelAction`, 303 variants) | — | 131 | per-domain intent enums under one wire type |
 
-## Wave 2 — model/command layer (design doc: not yet authored)
+## Wave 2 — model/command layer (design: `docs/MODEL_COMMAND_DECOMPOSITION_DESIGN.md`)
 
 | File | Lines | Commits | Note |
 |---|---|---|---|
@@ -39,7 +39,7 @@ Campaign origin: Peter, 2026-07-21 — *"I want god files gone, I want proper so
 | `manifold-core/src/effects.rs` | 5,594 | 104 | Unity-port sediment concentration |
 | `manifold-core/src/project.rs` | 2,922 | 74 | assess at Wave 2 Phase 0 |
 
-## Wave 3 — renderer runtime (design doc: not yet authored; cohesion judgment per file)
+## Wave 3 — renderer runtime (design: `docs/RENDERER_RUNTIME_DECOMPOSITION_DESIGN.md`; cohesion verdicts recorded there)
 
 | File | Lines | Commits | Note |
 |---|---|---|---|

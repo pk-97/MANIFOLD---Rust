@@ -1,0 +1,7 @@
+# Wave 2 + Wave 3 designs — summary for Peter (2026-07-22, wave23-design session)
+
+- Both docs are LANDED on main as **PROPOSED — awaiting your review**, each adversarially reviewed by a fresh Fable agent with every finding folded (Wave 2: 2 HIGH/4 MED/4 LOW; Wave 3: 2 HIGH/4 MED/3 LOW; zero rejected).
+- **Wave 2** (`docs/MODEL_COMMAND_DECOMPOSITION_DESIGN.md`): pure-move splits of graph.rs (29 commands, 50% tests), effects.rs, project.rs into directory modules with facade re-exports — zero signature/serde changes; moves proven wire-format-invisible; LiveSchool round-trip + save-load-save oracle rides every landing (D-29).
+- Review catches worth your eye: a name-collision census blind spot (two `RenameGroupCommand`s → multiset census), a verifier gap for test-mod moves (D7a tooling commit), and `godfile_regrowth` — promised by Wave 1 D11 — was never actually built; Wave 2 P2-Z now builds it.
+- **Wave 3** (`docs/RENDERER_RUNTIME_DECOMPOSITION_DESIGN.md`): cohesion verdicts per your mandate — all three files are majority TEST corpus (51/53/64%). gltf_import code: cohesive, do-not-split (tests out only). codegen: one seam, standalone vs fused. PresetRuntime: aggregate stays whole, support/tests out. Byte-identical-WGSL snapshot gate + gpu-proofs at every freeze-touching landing.
+- Wave 3 execution stays fenced until you approve (D-28). Wave 2 execution is starting now per D-28/D-29/D-31: dispatcher teammate + lane/wave2-exec, P2-G first (queue: `.claude/orchestration/wave2-queue.md` on that lane).
