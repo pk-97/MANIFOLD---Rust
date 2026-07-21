@@ -1,7 +1,7 @@
 # Landing: UI_FUNNEL_DECOMPOSITION P-P — projection split + scratch rider
 
 **Date:** 2026-07-21 · **Wave:** god-file Wave 1, WS1 · **Branch:** `lane/ws1-projection` → main
-**Executor:** Opus seat (tmux, killed mid-session by a machine restart — work was committed and clean; Fable top session completed the landing review). **Design:** `docs/UI_FUNNEL_DECOMPOSITION_DESIGN.md` P-P.
+**Executor:** Opus seat (tmux window `ws1-projection`); landing review + merge: Fable top session. **Design:** `docs/UI_FUNNEL_DECOMPOSITION_DESIGN.md` P-P.
 
 ## What landed
 
