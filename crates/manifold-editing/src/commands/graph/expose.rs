@@ -743,3 +743,1323 @@ fn unmirror_effect_side(
     }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::super::*;
+    use super::super::test_support::*;
+    use manifold_core::EffectId;
+    use manifold_core::PresetTypeId;
+    use manifold_core::effects::PresetInstance;
+    use crate::command::Command;
+
+    #[test]
+    fn toggle_node_param_expose_against_generator_flips_graph_exposed_set() {
+        let (mut project, lid) = project_with_one_generator_layer();
+        let mut cmd = ToggleNodeParamExposeCommand::new(
+            GraphTarget::Generator(lid.clone()),
+            manifold_core::NodeId::new("uv_transform"),
+            1,
+            "uv_transform".to_string(),
+            "rotation".to_string(),
+            true,
+            mirror_catalog_default(),
+            "Rotation".to_string(),
+            -180.0,
+            180.0,
+            0.0,
+            manifold_core::effects::ParamConvert::Float,
+            false,
+            Vec::new(),
+        );
+
+        cmd.execute(&mut project);
+
+        let (_, layer) = project.timeline.find_layer_by_id(&lid).unwrap();
+        let def = layer.generator_graph().unwrap();
+        let node = def
+            .nodes
+            .iter()
+            .find(|n| n.handle.as_deref() == Some("uv_transform"))
+            .unwrap();
+        assert!(
+            node.exposed_params.contains("rotation"),
+            "expose flips the graph exposed_params set"
+        );
+
+        // Undo flips it back.
+        cmd.undo(&mut project);
+        let (_, layer) = project.timeline.find_layer_by_id(&lid).unwrap();
+        let def = layer.generator_graph().unwrap();
+        let node = def
+            .nodes
+            .iter()
+            .find(|n| n.handle.as_deref() == Some("uv_transform"))
+            .unwrap();
+        assert!(
+            !node.exposed_params.contains("rotation"),
+            "undo restores prior exposed_params state"
+        );
+    }
+
+    /// Regression (the on-node expose checkbox bug): exposing a param on a node
+    /// *nested inside a group* — addressed the way the canvas actually addresses
+    /// it, by `(scope_path, node_u32_id)` with an EMPTY stable `node_id` (bundled
+    /// nodes ship empty) — must flip `exposed_params` on that nested node, NOT a
+    /// top-level one. The old command scanned only the document root and matched
+    /// by the empty `node_id`, so it hit the wrong node (or none): the checkbox
+    /// never reflected the state and couldn't be unchecked. It must also mint the
+    /// card binding with `node_id` defaulted to the handle — the same convention
+    /// the runtime graph loader uses — so the slider actually drives the param.
+    #[test]
+    fn exposing_a_nested_node_param_targets_the_body_node_and_binds_by_handle() {
+        let (mut project, fx) = project_with_graph(mirror_catalog_default());
+
+        // Collapse `uv_transform` (doc id 1, empty stable node_id) into a group.
+        let mut group = GroupNodesCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            vec![1],
+            "g".to_string(),
+            (0.0, 0.0),
+            mirror_catalog_default(),
+        );
+        group.execute(&mut project);
+        let g_id = graph_of(&project, &fx)
+            .nodes
+            .iter()
+            .find(|n| n.handle.as_deref() == Some("g"))
+            .unwrap()
+            .id;
+
+        // Expose `rotation` exactly as the canvas would: empty stable node_id,
+        // located by u32 doc id 1 at scope [g_id].
+        let mut expose = ToggleNodeParamExposeCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            manifold_core::NodeId::default(),
+            1,
+            "uv_transform".to_string(),
+            "rotation".to_string(),
+            true,
+            mirror_catalog_default(),
+            "Rotation".to_string(),
+            -180.0,
+            180.0,
+            0.0,
+            manifold_core::effects::ParamConvert::Float,
+            false,
+            Vec::new(),
+        )
+        .with_scope(vec![g_id]);
+        expose.execute(&mut project);
+
+        // The NESTED node carries the exposure.
+        let body_has_rotation = |project: &Project| {
+            graph_of(project, &fx)
+                .nodes
+                .iter()
+                .find(|n| n.id == g_id)
+                .unwrap()
+                .group
+                .as_deref()
+                .unwrap()
+                .nodes
+                .iter()
+                .find(|n| n.handle.as_deref() == Some("uv_transform"))
+                .unwrap()
+                .exposed_params
+                .contains("rotation")
+        };
+        assert!(
+            body_has_rotation(&project),
+            "expose flipped the nested body node's exposed_params"
+        );
+        // No ROOT node absorbed it (the old empty-node_id top-level scan bug).
+        assert!(
+            graph_of(&project, &fx)
+                .nodes
+                .iter()
+                .all(|n| !n.exposed_params.contains("rotation")),
+            "no top-level node was wrongly exposed"
+        );
+
+        // The card binding targets the handle-defaulted id, so it resolves to
+        // the runtime node (`graph_loader` applies the same default) — not a
+        // dead empty-id binding.
+        let fx_inst = project.find_effect_by_id(&fx).unwrap();
+        let ub = fx_inst.user_param_bindings();
+        assert_eq!(ub.len(), 1, "one user binding minted");
+        assert_eq!(
+            ub[0].node_id, "uv_transform",
+            "binding node_id defaults to the handle"
+        );
+
+        // Undo clears the nested exposure.
+        expose.undo(&mut project);
+        assert!(
+            !body_has_rotation(&project),
+            "undo restored the nested node's exposed_params"
+        );
+    }
+
+    #[test]
+    fn exposing_inside_a_group_stamps_section_from_the_group_name() {
+        let (mut project, fx) = project_with_graph(mirror_catalog_default());
+
+        let mut group = GroupNodesCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            vec![1],
+            "g".to_string(),
+            (0.0, 0.0),
+            mirror_catalog_default(),
+        );
+        group.execute(&mut project);
+        let g_id = graph_of(&project, &fx)
+            .nodes
+            .iter()
+            .find(|n| n.handle.as_deref() == Some("g"))
+            .unwrap()
+            .id;
+
+        let mut expose = ToggleNodeParamExposeCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            manifold_core::NodeId::default(),
+            1,
+            "uv_transform".to_string(),
+            "rotation".to_string(),
+            true,
+            mirror_catalog_default(),
+            "Rotation".to_string(),
+            -180.0,
+            180.0,
+            0.0,
+            manifold_core::effects::ParamConvert::Float,
+            false,
+            Vec::new(),
+        )
+        .with_scope(vec![g_id]);
+        expose.execute(&mut project);
+
+        let fx_inst = project.find_effect_by_id(&fx).unwrap();
+        let ub = fx_inst.user_param_bindings();
+        assert_eq!(ub.len(), 1);
+        let entry = fx_inst.params.get(&ub[0].id).expect("manifest entry for the new binding");
+        assert_eq!(
+            entry.spec.section.as_deref(),
+            Some("g"),
+            "expose-time seeding stamps the innermost enclosing group's display name"
+        );
+
+        // Undo removes the whole binding (spec + section together) — no
+        // dangling manifest entry.
+        expose.undo(&mut project);
+        let fx_inst = project.find_effect_by_id(&fx).unwrap();
+        assert!(fx_inst.params.get(&ub[0].id).is_none(), "undo removed the manifest entry entirely");
+    }
+
+    #[test]
+    fn exposing_at_top_level_leaves_section_none() {
+        let (mut project, fx) = project_with_graph(mirror_catalog_default());
+
+        // No grouping — expose `rotation` directly at the document root
+        // (empty scope_path).
+        let mut expose = ToggleNodeParamExposeCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            manifold_core::NodeId::default(),
+            1,
+            "uv_transform".to_string(),
+            "rotation".to_string(),
+            true,
+            mirror_catalog_default(),
+            "Rotation".to_string(),
+            -180.0,
+            180.0,
+            0.0,
+            manifold_core::effects::ParamConvert::Float,
+            false,
+            Vec::new(),
+        );
+        expose.execute(&mut project);
+
+        let fx_inst = project.find_effect_by_id(&fx).unwrap();
+        let ub = fx_inst.user_param_bindings();
+        assert_eq!(ub.len(), 1);
+        let entry = fx_inst.params.get(&ub[0].id).unwrap();
+        assert_eq!(entry.spec.section, None, "a top-level expose gets no section");
+    }
+
+    #[test]
+    fn exposing_survives_json_round_trip_with_section() {
+        let (mut project, fx) = project_with_graph(mirror_catalog_default());
+        let mut group = GroupNodesCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            vec![1],
+            "g".to_string(),
+            (0.0, 0.0),
+            mirror_catalog_default(),
+        );
+        group.execute(&mut project);
+        let g_id = graph_of(&project, &fx)
+            .nodes
+            .iter()
+            .find(|n| n.handle.as_deref() == Some("g"))
+            .unwrap()
+            .id;
+        let mut expose = ToggleNodeParamExposeCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            manifold_core::NodeId::default(),
+            1,
+            "uv_transform".to_string(),
+            "rotation".to_string(),
+            true,
+            mirror_catalog_default(),
+            "Rotation".to_string(),
+            -180.0,
+            180.0,
+            0.0,
+            manifold_core::effects::ParamConvert::Float,
+            false,
+            Vec::new(),
+        )
+        .with_scope(vec![g_id]);
+        expose.execute(&mut project);
+
+        let fx_inst = project.find_effect_by_id(&fx).unwrap();
+        let ub_id = fx_inst.user_param_bindings()[0].id.clone();
+
+        // "save" — serialize the instance (this is what the project save
+        // path emits per effect; PARAM_STORAGE_BOUNDARIES_DESIGN D12 derives
+        // `graph.preset_metadata.params` from the live manifest here).
+        let json = serde_json::to_string(fx_inst).unwrap();
+        // "reload"
+        let back: manifold_core::effects::PresetInstance = serde_json::from_str(&json).unwrap();
+        let spec = back
+            .graph
+            .as_ref()
+            .unwrap()
+            .preset_metadata
+            .as_ref()
+            .unwrap()
+            .params
+            .iter()
+            .find(|p| p.id == ub_id)
+            .expect("the exposed param's spec survived the round trip");
+        assert_eq!(
+            spec.section.as_deref(),
+            Some("g"),
+            "the card row is still sectioned after save -> reload"
+        );
+    }
+
+    #[test]
+    fn exposing_a_non_preset_param_on_generator_appends_user_binding_and_grows_param_values() {
+        // Regression: clicking the expose checkbox on a generator's
+        // inner-node param that has NO preset binding (e.g.
+        // `node.draw_lines:animate` on the Wireframe preset) must
+        // synthesize a user-added BindingDef + ParamSpecDef in the
+        // graph's preset_metadata AND extend gp.param_values by one
+        // slot so the outer card has somewhere to render it.
+        use manifold_core::effect_graph_def::{
+            BindingDef, BindingTarget, EFFECT_GRAPH_VERSION_WITH_METADATA, ParamSpecDef,
+            PresetMetadata,
+        };
+        use manifold_core::effects::ParamConvert;
+        use manifold_core::preset_type_id::PresetTypeId;
+
+        // Wireframe-like preset: two bundled bindings ("shape" → render.shape,
+        // "scale" → render.scale) plus an inner node `render` whose
+        // `animate` param is NOT bound. param_values has two bundled
+        // slots.
+        let preset_def = || EffectGraphDef {
+            version: EFFECT_GRAPH_VERSION_WITH_METADATA,
+            name: Some("wireframe-like".into()),
+            description: None,
+            preset_metadata: Some(PresetMetadata {
+                id: PresetTypeId::new("test.wireframe"),
+                display_name: "Wireframe".into(),
+                category: "Procedural".into(),
+                osc_prefix: "wireframe".into(),
+                legacy_discriminant: None,
+                available: true,
+                is_line_based: false,
+                params: vec![
+                    ParamSpecDef {
+                        id: "shape".into(),
+                        name: "Shape".into(),
+                        min: 0.0,
+                        max: 4.0,
+                        default_value: 0.0,
+                        whole_numbers: true,
+                        is_toggle: false,
+                        is_trigger: false,
+                        value_labels: vec![],
+                        format_string: None,
+                        osc_suffix: String::new(),
+                        curve: Default::default(),
+                        invert: false,
+                        is_angle: false,
+                        is_trigger_gate: false,
+                        wraps: false,
+                        section: None,
+                    },
+                    ParamSpecDef {
+                        id: "scale".into(),
+                        name: "Scale".into(),
+                        min: 0.25,
+                        max: 3.0,
+                        default_value: 1.0,
+                        whole_numbers: false,
+                        is_toggle: false,
+                        is_trigger: false,
+                        value_labels: vec![],
+                        format_string: None,
+                        osc_suffix: String::new(),
+                        curve: Default::default(),
+                        is_angle: false,
+                        invert: false,
+                        is_trigger_gate: false,
+                        wraps: false,
+                        section: None,
+                    },
+                ],
+                bindings: vec![
+                    BindingDef {
+                        id: "shape".into(),
+                        label: "Shape".into(),
+                        default_value: 0.0,
+                        target: BindingTarget::Node {
+                            node_id: manifold_core::NodeId::new("render"),
+                            param: "shape".into(),
+                        },
+                        convert: ParamConvert::EnumRound,
+                        user_added: false,
+                        scale: 1.0,
+                        offset: 0.0,
+                    },
+                    BindingDef {
+                        id: "scale".into(),
+                        label: "Scale".into(),
+                        default_value: 1.0,
+                        target: BindingTarget::Node {
+                            node_id: manifold_core::NodeId::new("render"),
+                            param: "scale".into(),
+                        },
+                        convert: ParamConvert::Float,
+                        user_added: false,
+                        scale: 1.0,
+                        offset: 0.0,
+                    },
+                ],
+                skip_mode: Default::default(),
+                param_aliases: vec![],
+                value_aliases: vec![],
+                string_params: vec![],
+                string_bindings: vec![],
+            }),
+            nodes: vec![EffectGraphNode {
+                id: 0,
+                node_id: manifold_core::NodeId::new("render"),
+                type_id: "node.draw_lines".to_string(),
+                handle: Some("render".to_string()),
+                params: BTreeMap::new(),
+                exposed_params: Default::default(),
+                editor_pos: None,
+                wgsl_source: None,
+                title: None,
+                output_formats: BTreeMap::new(),
+                output_canvas_scales: BTreeMap::new(),
+                group: None,
+            }],
+            wires: vec![],
+        };
+
+        let (mut project, lid) = project_with_one_generator_layer();
+        {
+            let (_, layer) = project.timeline.find_layer_by_id_mut(&lid).unwrap();
+            layer.gen_params_or_init().graph = Some(preset_def());
+            // gen_params starts with the two bundled slot values.
+            let gp = layer.gen_params_or_init();
+            gp.init_defaults_for_type(PresetTypeId::from_string(
+                "test.wireframe".to_string(),
+            ));
+            // Override values after init — the registry doesn't know
+            // about our synthetic preset, so init may leave the vec
+            // empty. Force the bundled slot count to match the preset.
+            gp.params = manifold_core::params::ParamManifest::from_params(vec![
+                slot("shape", 0.0, true),
+                slot("scale", 1.0, true),
+            ]);
+            // slot() seeds base = value; mark base tracked (fork #16).
+            gp.base_tracked = true;
+        }
+
+        // Expose `render.animate` — has no preset binding, so the
+        // command must synthesize a user-added entry.
+        let mut expose = ToggleNodeParamExposeCommand::new(
+            GraphTarget::Generator(lid.clone()),
+            manifold_core::NodeId::new("render"),
+            0,
+            "render".to_string(),
+            "animate".to_string(),
+            true,
+            preset_def(),
+            "Animate".to_string(),
+            0.0,
+            1.0,
+            0.0,
+            ParamConvert::BoolThreshold,
+            false,
+            Vec::new(),
+        );
+        expose.execute(&mut project);
+
+        // Assert: preset_metadata grew by one entry in both lists,
+        // marked user_added=true.
+        let (_, layer) = project.timeline.find_layer_by_id(&lid).unwrap();
+        let def = layer.generator_graph().unwrap();
+        let meta = def.preset_metadata.as_ref().unwrap();
+        assert_eq!(
+            meta.params.len(),
+            3,
+            "preset_metadata.params grew by one user-added entry"
+        );
+        assert_eq!(
+            meta.bindings.len(),
+            3,
+            "preset_metadata.bindings grew by one user-added entry"
+        );
+        let new_binding = meta.bindings.last().unwrap();
+        assert!(
+            new_binding.user_added,
+            "newly appended binding is flagged user_added=true"
+        );
+        assert!(
+            matches!(
+                &new_binding.target,
+                BindingTarget::Node { node_id, param }
+                    if node_id == "render" && param == "animate"
+            ),
+            "new binding routes to render.animate"
+        );
+
+        // The id should be auto-generated; capture for later
+        // assertions on undo.
+        let user_param_id = new_binding.id.clone();
+        assert!(
+            user_param_id.starts_with("user.render.animate."),
+            "id follows the user.<handle>.<param>.<n> convention, got `{user_param_id}`"
+        );
+
+        // gp.params grew by one to match.
+        let gp = layer.gen_params().unwrap();
+        assert_eq!(
+            gp.params.len(),
+            3,
+            "params grew by one slot for the user-added binding"
+        );
+
+        // exposed_params on the render node now contains "animate".
+        let render_node = def
+            .nodes
+            .iter()
+            .find(|n| n.handle.as_deref() == Some("render"))
+            .unwrap();
+        assert!(
+            render_node.exposed_params.contains("animate"),
+            "render.animate is now in exposed_params"
+        );
+
+        // Undo restores everything.
+        expose.undo(&mut project);
+        let (_, layer) = project.timeline.find_layer_by_id(&lid).unwrap();
+        let def = layer.generator_graph().unwrap();
+        let meta = def.preset_metadata.as_ref().unwrap();
+        assert_eq!(meta.params.len(), 2, "undo removes the user-added param");
+        assert_eq!(
+            meta.bindings.len(),
+            2,
+            "undo removes the user-added binding"
+        );
+        let gp = layer.gen_params().unwrap();
+        assert_eq!(gp.params.len(), 2, "undo pops the user-added slot");
+        let render_node = def
+            .nodes
+            .iter()
+            .find(|n| n.handle.as_deref() == Some("render"))
+            .unwrap();
+        assert!(
+            !render_node.exposed_params.contains("animate"),
+            "undo restores exposed_params"
+        );
+
+        // Re-execute → state matches post-execute.
+        expose.execute(&mut project);
+        let (_, layer) = project.timeline.find_layer_by_id(&lid).unwrap();
+        let def = layer.generator_graph().unwrap();
+        let meta = def.preset_metadata.as_ref().unwrap();
+        assert_eq!(meta.bindings.len(), 3);
+        assert_eq!(meta.bindings.last().unwrap().id, user_param_id);
+
+        // user_added flag survives JSON round-trip.
+        let json = serde_json::to_string(def).unwrap();
+        let reloaded: EffectGraphDef = serde_json::from_str(&json).unwrap();
+        let reloaded_meta = reloaded.preset_metadata.as_ref().unwrap();
+        assert_eq!(reloaded_meta.bindings.len(), 3);
+        assert!(
+            reloaded_meta.bindings.last().unwrap().user_added,
+            "user_added=true survives serialization"
+        );
+        // Bundled bindings serialize without the field set; on
+        // deserialize the default `false` should kick in.
+        assert!(
+            !reloaded_meta.bindings[0].user_added,
+            "bundled binding stays user_added=false after round-trip"
+        );
+    }
+
+    #[test]
+    fn unexposing_a_user_added_generator_binding_removes_metadata_and_shrinks_param_values() {
+        // The inverse of the test above: unexpose a previously
+        // user-added binding. Removes the metadata + slot + any
+        // referencing automation (drivers / envelopes / Ableton),
+        // captures for undo.
+        use manifold_core::effect_graph_def::{
+            BindingDef, BindingTarget, EFFECT_GRAPH_VERSION_WITH_METADATA, ParamSpecDef,
+            PresetMetadata,
+        };
+        use manifold_core::effects::{ParamConvert, ParamEnvelope, ParameterDriver};
+        use manifold_core::preset_type_id::PresetTypeId;
+        use manifold_core::types::{BeatDivision, DriverWaveform};
+
+        // Preset already carries a user-added binding (simulates
+        // "user-added in a prior session, now loaded from a save
+        // file"). One bundled binding + one user-added binding.
+        let preset_def_with_user_added = || EffectGraphDef {
+            version: EFFECT_GRAPH_VERSION_WITH_METADATA,
+            name: Some("wireframe-like".into()),
+            description: None,
+            preset_metadata: Some(PresetMetadata {
+                id: PresetTypeId::new("test.wireframe"),
+                display_name: "Wireframe".into(),
+                category: "Procedural".into(),
+                osc_prefix: "wireframe".into(),
+                legacy_discriminant: None,
+                available: true,
+                is_line_based: false,
+                params: vec![
+                    ParamSpecDef {
+                        id: "shape".into(),
+                        name: "Shape".into(),
+                        min: 0.0,
+                        max: 4.0,
+                        default_value: 0.0,
+                        whole_numbers: true,
+                        is_toggle: false,
+                        is_trigger: false,
+                        value_labels: vec![],
+                        format_string: None,
+                        osc_suffix: String::new(),
+                        curve: Default::default(),
+                        invert: false,
+                        is_angle: false,
+                        is_trigger_gate: false,
+                        wraps: false,
+                        section: None,
+                    },
+                    ParamSpecDef {
+                        id: "user.render.animate.1".into(),
+                        name: "Animate".into(),
+                        min: 0.0,
+                        max: 1.0,
+                        default_value: 0.0,
+                        whole_numbers: false,
+                        is_toggle: true,
+                        is_trigger: false,
+                        value_labels: vec![],
+                        format_string: None,
+                        osc_suffix: String::new(),
+                        curve: Default::default(),
+                        invert: false,
+                        is_angle: false,
+                        is_trigger_gate: false,
+                        wraps: false,
+                        section: None,
+                    },
+                ],
+                bindings: vec![
+                    BindingDef {
+                        id: "shape".into(),
+                        label: "Shape".into(),
+                        default_value: 0.0,
+                        target: BindingTarget::Node {
+                            node_id: manifold_core::NodeId::new("render"),
+                            param: "shape".into(),
+                        },
+                        convert: ParamConvert::EnumRound,
+                        user_added: false,
+                        scale: 1.0,
+                        offset: 0.0,
+                    },
+                    BindingDef {
+                        id: "user.render.animate.1".into(),
+                        label: "Animate".into(),
+                        default_value: 0.0,
+                        target: BindingTarget::Node {
+                            node_id: manifold_core::NodeId::new("render"),
+                            param: "animate".into(),
+                        },
+                        convert: ParamConvert::BoolThreshold,
+                        user_added: true,
+                        scale: 1.0,
+                        offset: 0.0,
+                    },
+                ],
+                skip_mode: Default::default(),
+                param_aliases: vec![],
+                value_aliases: vec![],
+                string_params: vec![],
+                string_bindings: vec![],
+            }),
+            nodes: vec![EffectGraphNode {
+                id: 0,
+                node_id: manifold_core::NodeId::new("render"),
+                type_id: "node.draw_lines".to_string(),
+                handle: Some("render".to_string()),
+                params: BTreeMap::new(),
+                exposed_params: {
+                    let mut s = std::collections::BTreeSet::new();
+                    s.insert("animate".to_string());
+                    s
+                },
+                editor_pos: None,
+                wgsl_source: None,
+                title: None,
+                output_formats: BTreeMap::new(),
+                output_canvas_scales: BTreeMap::new(),
+                group: None,
+            }],
+            wires: vec![],
+        };
+
+        let (mut project, lid) = project_with_one_generator_layer();
+        {
+            let (_, layer) = project.timeline.find_layer_by_id_mut(&lid).unwrap();
+            layer.gen_params_or_init().graph = Some(preset_def_with_user_added());
+            let gp = layer.gen_params_or_init();
+            gp.init_defaults_for_type(PresetTypeId::from_string(
+                "test.wireframe".to_string(),
+            ));
+            gp.params = manifold_core::params::ParamManifest::from_params(vec![
+                slot("shape", 0.0, true),
+                slot("user.render.animate.1", 0.75, true),
+            ]); // bundled `shape` + user-added `animate`
+            gp.base_tracked = true;
+            // Attach a driver + envelope on the user-added id — they
+            // should get pruned on unexpose and restored on undo.
+            gp.drivers = Some(vec![ParameterDriver {
+                param_id: std::borrow::Cow::Owned("user.render.animate.1".to_string()),
+                beat_division: BeatDivision::Quarter,
+                waveform: DriverWaveform::Sine,
+                enabled: true,
+                phase: 0.0,
+                base_value: 0.5,
+                trim_min: 0.0,
+                trim_max: 1.0,
+                reversed: false,
+                free_period_beats: None,
+                legacy_param_index: None,
+                is_paused_by_user: false,
+            }]);
+            gp.envelopes = Some(vec![ParamEnvelope::new(std::borrow::Cow::Owned(
+                "user.render.animate.1".to_string(),
+            ))]);
+        }
+
+        let mut unexpose = ToggleNodeParamExposeCommand::new(
+            GraphTarget::Generator(lid.clone()),
+            manifold_core::NodeId::new("render"),
+            0,
+            "render".to_string(),
+            "animate".to_string(),
+            false,
+            preset_def_with_user_added(),
+            "Animate".to_string(),
+            0.0,
+            1.0,
+            0.0,
+            ParamConvert::BoolThreshold,
+            false,
+            Vec::new(),
+        );
+        unexpose.execute(&mut project);
+
+        let (_, layer) = project.timeline.find_layer_by_id(&lid).unwrap();
+        let def = layer.generator_graph().unwrap();
+        let meta = def.preset_metadata.as_ref().unwrap();
+        assert_eq!(meta.params.len(), 1, "user-added param removed");
+        assert_eq!(meta.bindings.len(), 1, "user-added binding removed");
+        assert_eq!(meta.bindings[0].id, "shape", "bundled binding survives");
+
+        let gp = layer.gen_params().unwrap();
+        assert_eq!(gp.params.len(), 1, "user-added slot removed");
+        assert_eq!(
+            gp.params.get("shape").unwrap().value,
+            0.0,
+            "bundled `shape` value intact"
+        );
+        assert!(
+            gp.drivers.is_none() || gp.drivers.as_ref().unwrap().is_empty(),
+            "driver referencing user-added id pruned"
+        );
+        assert!(
+            gp.envelopes.is_none() || gp.envelopes.as_ref().unwrap().is_empty(),
+            "envelope referencing user-added id pruned"
+        );
+
+        // Undo restores everything.
+        unexpose.undo(&mut project);
+        let (_, layer) = project.timeline.find_layer_by_id(&lid).unwrap();
+        let def = layer.generator_graph().unwrap();
+        let meta = def.preset_metadata.as_ref().unwrap();
+        assert_eq!(meta.params.len(), 2, "undo restores user-added param");
+        assert_eq!(meta.bindings.len(), 2, "undo restores user-added binding");
+        assert_eq!(meta.bindings[1].id, "user.render.animate.1");
+        assert!(meta.bindings[1].user_added);
+
+        let gp = layer.gen_params().unwrap();
+        assert_eq!(gp.params.len(), 2, "undo restores the slot");
+        assert!(
+            (gp.params.get("user.render.animate.1").unwrap().value - 0.75).abs() < f32::EPSILON,
+            "slot value (0.75) restored"
+        );
+        assert_eq!(
+            gp.drivers.as_ref().map(|d| d.len()).unwrap_or(0),
+            1,
+            "driver restored"
+        );
+        assert_eq!(
+            gp.envelopes.as_ref().map(|e| e.len()).unwrap_or(0),
+            1,
+            "envelope restored"
+        );
+    }
+
+    #[test]
+    fn unexposing_a_user_binding_prunes_and_restores_orphan_automation() {
+        // When the user un-checks a non-preset-bound exposure on an
+        // effect (i.e. it was previously exposed via a UserParamBinding),
+        // any drivers / Ableton mappings that referenced the binding's
+        // param_id would otherwise become orphans — still in the
+        // project file, never matched at resolve time. The unified
+        // command prunes them on unexpose and restores them on undo.
+        use manifold_core::ableton_mapping::{
+            AbletonDeviceIdentity, AbletonMacroAddress, AbletonMappingStatus,
+            AbletonParamMapping,
+        };
+        use manifold_core::effects::{ParamConvert, ParameterDriver};
+        use manifold_core::types::{BeatDivision, DriverWaveform};
+
+        // Set up an effect with one user-exposed inner param + driver
+        // + Ableton mapping that target its synthesised id.
+        let mut project = Project::default();
+        let effect_id = EffectId::new("orphan-cleanup-test");
+        let mut fx = PresetInstance::new(PresetTypeId::new("test.mirror"));
+        fx.id = effect_id.clone();
+        project.settings.master_effects.push(fx);
+
+        // Expose first.
+        let mut expose = ToggleNodeParamExposeCommand::new(
+            GraphTarget::Effect(effect_id.clone()),
+            manifold_core::NodeId::new("uv_transform"),
+            1,
+            "uv_transform".to_string(),
+            "rotation".to_string(),
+            true,
+            mirror_catalog_default(),
+            "Rotation".to_string(),
+            -180.0,
+            180.0,
+            0.0,
+            ParamConvert::Float,
+            false,
+            Vec::new(),
+        );
+        expose.execute(&mut project);
+
+        // Now attach a driver + ableton mapping to the synthesised
+        // user_param_id.
+        let user_param_id = {
+            let fx = project.find_effect_by_id(&effect_id).unwrap();
+            let ub = fx.user_param_bindings();
+            assert_eq!(ub.len(), 1);
+            ub[0].id.clone()
+        };
+        {
+            let fx = project.find_effect_by_id_mut(&effect_id).unwrap();
+            fx.drivers = Some(vec![ParameterDriver {
+                param_id: std::borrow::Cow::Owned(user_param_id.clone()),
+                beat_division: BeatDivision::Quarter,
+                waveform: DriverWaveform::Sine,
+                enabled: true,
+                phase: 0.0,
+                base_value: 0.5,
+                trim_min: 0.0,
+                trim_max: 1.0,
+                reversed: false,
+                free_period_beats: None,
+                legacy_param_index: None,
+                is_paused_by_user: false,
+            }]);
+            fx.ableton_mappings = Some(vec![AbletonParamMapping {
+                param_id: std::borrow::Cow::Owned(user_param_id.clone()),
+                address: AbletonMacroAddress {
+                    track_id: 0,
+                    device_id: 0,
+                    param_id: 0,
+                    device_identity: AbletonDeviceIdentity {
+                        device_class_name: "InstrumentGroupDevice".into(),
+                    },
+                    track_name: "Master".into(),
+                    device_name: "Manifold".into(),
+                    macro_name: "Macro 1".into(),
+                },
+                range_min: 0.0,
+                range_max: 1.0,
+                inverted: false,
+                legacy_param_index: None,
+                last_value: 0.0,
+                status: AbletonMappingStatus::Active,
+            }]);
+        }
+
+        // Unexpose. Drivers + Ableton mappings must be pruned.
+        let mut unexpose = ToggleNodeParamExposeCommand::new(
+            GraphTarget::Effect(effect_id.clone()),
+            manifold_core::NodeId::new("uv_transform"),
+            1,
+            "uv_transform".to_string(),
+            "rotation".to_string(),
+            false,
+            mirror_catalog_default(),
+            "Rotation".to_string(),
+            -180.0,
+            180.0,
+            0.0,
+            ParamConvert::Float,
+            false,
+            Vec::new(),
+        );
+        unexpose.execute(&mut project);
+
+        let fx = project.find_effect_by_id(&effect_id).unwrap();
+        assert!(
+            fx.drivers.is_none() || fx.drivers.as_ref().unwrap().is_empty(),
+            "drivers pruned on unexpose"
+        );
+        assert!(
+            fx.ableton_mappings.is_none()
+                || fx.ableton_mappings.as_ref().unwrap().is_empty(),
+            "ableton_mappings pruned on unexpose"
+        );
+
+        // Undo restores both.
+        unexpose.undo(&mut project);
+        let fx = project.find_effect_by_id(&effect_id).unwrap();
+        assert_eq!(fx.user_param_bindings().len(), 1, "binding restored");
+        assert_eq!(
+            fx.drivers.as_ref().map(|d| d.len()).unwrap_or(0),
+            1,
+            "driver restored"
+        );
+        assert_eq!(
+            fx.ableton_mappings.as_ref().map(|m| m.len()).unwrap_or(0),
+            1,
+            "ableton mapping restored"
+        );
+        assert_eq!(
+            fx.drivers.as_ref().unwrap()[0].param_id,
+            std::borrow::Cow::<'static, str>::Owned(user_param_id.clone()),
+        );
+    }
+
+    #[test]
+    fn unexposing_a_user_binding_on_layer_effect_prunes_and_restores_envelopes() {
+        // Same shape as the driver/Ableton orphan-cleanup test, for
+        // envelopes — which since envelope-home unification live on the
+        // effect instance. Unexpose prunes envelopes matching the
+        // binding's param_id (in the same borrow as drivers/Ableton) and
+        // restores them on undo.
+        use manifold_core::effects::{ParamConvert, ParamEnvelope};
+        use manifold_core::layer::Layer;
+        use manifold_core::types::LayerType;
+
+        let effect_type = PresetTypeId::new("test.mirror");
+        let effect_id = EffectId::new("envelope-cleanup-test");
+
+        let mut project = Project::default();
+        let mut layer = Layer::new("Test".to_string(), LayerType::Generator, 0);
+        let mut fx = PresetInstance::new(effect_type.clone());
+        fx.id = effect_id.clone();
+        layer.effects = Some(vec![fx]);
+        project.timeline.layers.push(layer);
+
+        // Expose first, attach an envelope to the synthesised id.
+        let mut expose = ToggleNodeParamExposeCommand::new(
+            GraphTarget::Effect(effect_id.clone()),
+            manifold_core::NodeId::new("uv_transform"),
+            1,
+            "uv_transform".to_string(),
+            "rotation".to_string(),
+            true,
+            mirror_catalog_default(),
+            "Rotation".to_string(),
+            -180.0,
+            180.0,
+            0.0,
+            ParamConvert::Float,
+            false,
+            Vec::new(),
+        );
+        expose.execute(&mut project);
+
+        let user_param_id = {
+            let fx = project.find_effect_by_id(&effect_id).unwrap();
+            fx.user_param_bindings()[0].id.clone()
+        };
+        {
+            let fx = project.find_effect_by_id_mut(&effect_id).unwrap();
+            fx.envelopes_mut().push(ParamEnvelope::new(user_param_id.clone()));
+            // Add an unrelated envelope that should NOT get pruned —
+            // different param_id.
+            fx.envelopes_mut().push(ParamEnvelope::new("unrelated.param".to_string()));
+        }
+
+        // Unexpose. The matching envelope must be pruned; the unrelated
+        // one must survive.
+        let mut unexpose = ToggleNodeParamExposeCommand::new(
+            GraphTarget::Effect(effect_id.clone()),
+            manifold_core::NodeId::new("uv_transform"),
+            1,
+            "uv_transform".to_string(),
+            "rotation".to_string(),
+            false,
+            mirror_catalog_default(),
+            "Rotation".to_string(),
+            -180.0,
+            180.0,
+            0.0,
+            ParamConvert::Float,
+            false,
+            Vec::new(),
+        );
+        unexpose.execute(&mut project);
+
+        let fx = project.find_effect_by_id(&effect_id).unwrap();
+        let envs = fx.envelopes.as_deref().unwrap_or(&[]);
+        assert_eq!(envs.len(), 1, "matching envelope pruned, unrelated kept");
+        assert_eq!(envs[0].param_id, "unrelated.param");
+
+        // Undo restores the pruned envelope alongside the binding.
+        unexpose.undo(&mut project);
+        let fx = project.find_effect_by_id(&effect_id).unwrap();
+        let envs = fx.envelopes.as_deref().unwrap_or(&[]);
+        assert_eq!(envs.len(), 2, "matching envelope restored");
+        assert!(
+            envs.iter().any(|e| e.param_id == user_param_id),
+            "restored envelope points back at the binding's id"
+        );
+    }
+
+    #[test]
+    fn unchecking_a_preset_bound_param_sticks_across_persistence() {
+        // Regression: when the user UNCHECKS a preset-bound param,
+        // the next snapshot must reflect the uncheck. Previously the
+        // `into_graph` binding backfill ran unconditionally and
+        // re-set the exposure, masking the user's intent.
+        use manifold_core::effect_graph_def::{
+            BindingDef, BindingTarget, ParamSpecDef, PresetMetadata,
+            EFFECT_GRAPH_VERSION_WITH_METADATA,
+        };
+        use manifold_core::effects::ParamConvert;
+
+        // Build a tiny preset def: one node (`gen` with a `pattern`
+        // param) with a single binding (outer "Pattern" → gen.pattern).
+        let preset_def_with_pattern_binding = || EffectGraphDef {
+            version: EFFECT_GRAPH_VERSION_WITH_METADATA,
+            name: Some("test-preset".into()),
+            description: None,
+            preset_metadata: Some(PresetMetadata {
+                id: PresetTypeId::new("test.plasma"),
+                display_name: "Test".into(),
+                category: "Procedural".into(),
+                osc_prefix: "test".into(),
+                legacy_discriminant: None,
+                available: true,
+                is_line_based: false,
+                params: vec![ParamSpecDef {
+                    id: "pattern".into(),
+                    name: "Pattern".into(),
+                    min: 0.0,
+                    max: 7.0,
+                    default_value: 0.0,
+                    whole_numbers: true,
+                    is_toggle: false,
+                    is_trigger: false,
+                    value_labels: vec![],
+                    format_string: None,
+                    osc_suffix: String::new(),
+                    curve: Default::default(),
+                    invert: false,
+                    is_angle: false,
+                    is_trigger_gate: false,
+                    wraps: false,
+                    section: None,
+                }],
+                bindings: vec![BindingDef {
+                    id: "pattern".into(),
+                    label: "Pattern".into(),
+                    default_value: 0.0,
+                    target: BindingTarget::Node {
+                        node_id: manifold_core::NodeId::new("gen"),
+                        param: "pattern".into(),
+                    },
+                    convert: ParamConvert::EnumRound,
+                    user_added: false,
+                    scale: 1.0,
+                    offset: 0.0,
+                }],
+                skip_mode: Default::default(),
+                param_aliases: vec![],
+                value_aliases: vec![],
+                string_params: vec![],
+                string_bindings: vec![],
+            }),
+            nodes: vec![EffectGraphNode {
+                id: 0,
+                node_id: manifold_core::NodeId::new("gen"),
+                type_id: "node.plasma_pattern_2d".to_string(),
+                handle: Some("gen".to_string()),
+                params: BTreeMap::new(),
+                exposed_params: Default::default(),
+                editor_pos: None,
+                wgsl_source: None,
+                title: None,
+                output_formats: BTreeMap::new(),
+                output_canvas_scales: BTreeMap::new(),
+                group: None,
+            }],
+            wires: vec![],
+        };
+
+        // Use a generator target so we don't drag in the effect-side
+        // mirror. Same exposure semantics apply for both.
+        let (mut project, lid) = project_with_one_generator_layer();
+
+        // Pre-populate the layer's override with the preset def
+        // (simulates "graph has been touched once already" — needed
+        // because `with_target_graph_mut` would otherwise clone the
+        // catalog_default, and we want a deterministic starting state).
+        project
+            .timeline
+            .find_layer_by_id_mut(&lid)
+            .unwrap()
+            .1
+            .gen_params_or_init().graph = Some(preset_def_with_pattern_binding());
+
+        // UNCHECK Pattern.
+        let mut cmd = ToggleNodeParamExposeCommand::new(
+            GraphTarget::Generator(lid.clone()),
+            manifold_core::NodeId::new("gen"),
+            0,
+            "gen".to_string(),
+            "pattern".to_string(),
+            false,
+            preset_def_with_pattern_binding(),
+            "Pattern".to_string(),
+            0.0,
+            7.0,
+            0.0,
+            ParamConvert::EnumRound,
+            false,
+            Vec::new(),
+        );
+        cmd.execute(&mut project);
+
+        // The def must NOT contain "pattern" in exposed_params for
+        // the "gen" node.
+        let (_, layer) = project.timeline.find_layer_by_id(&lid).unwrap();
+        let def = layer.generator_graph().unwrap();
+        let node = def
+            .nodes
+            .iter()
+            .find(|n| n.handle.as_deref() == Some("gen"))
+            .unwrap();
+        assert!(
+            !node.exposed_params.contains("pattern"),
+            "uncheck removes pattern from exposed_params"
+        );
+
+        // Now persist + reload: serde JSON round-trip simulating a
+        // save/reload cycle.
+        let json = serde_json::to_string(def).unwrap();
+        let reloaded: EffectGraphDef = serde_json::from_str(&json).unwrap();
+        // The reloaded def must STILL not have pattern exposed. The
+        // semantics: an empty exposed_params set on a node coexists
+        // with other nodes having non-empty sets, so the implicit
+        // backfill at `into_graph` time must respect explicit state.
+        let reloaded_node = reloaded
+            .nodes
+            .iter()
+            .find(|n| n.handle.as_deref() == Some("gen"))
+            .unwrap();
+        assert!(
+            !reloaded_node.exposed_params.contains("pattern"),
+            "uncheck survives serde round-trip"
+        );
+    }
+
+    #[test]
+    fn toggle_node_param_expose_against_effect_flips_both_graph_and_user_binding() {
+        // Project with one master effect using the catalog default.
+        let mut project = Project::default();
+        let effect_id = EffectId::new("test-mirror-instance");
+        let mut fx = PresetInstance::new(PresetTypeId::new("test.mirror"));
+        fx.id = effect_id.clone();
+        project.settings.master_effects.push(fx);
+
+        let mut cmd = ToggleNodeParamExposeCommand::new(
+            GraphTarget::Effect(effect_id.clone()),
+            manifold_core::NodeId::new("uv_transform"),
+            1,
+            "uv_transform".to_string(),
+            "rotation".to_string(),
+            true,
+            mirror_catalog_default(),
+            "Rotation".to_string(),
+            -180.0,
+            180.0,
+            0.0,
+            manifold_core::effects::ParamConvert::Float,
+            false,
+            Vec::new(),
+        );
+
+        cmd.execute(&mut project);
+
+        let fx = project.find_effect_by_id(&effect_id).unwrap();
+        // Graph side: exposed_params set carries the param.
+        let def = fx.graph.as_ref().expect("graph lifted on first edit");
+        let node = def
+            .nodes
+            .iter()
+            .find(|n| n.handle.as_deref() == Some("uv_transform"))
+            .unwrap();
+        assert!(node.exposed_params.contains("rotation"));
+        // Effect-side mirror: a user-added binding was appended to the
+        // graph metadata because the catalog default has no preset
+        // bindings for this param.
+        let ub = fx.user_param_bindings();
+        assert_eq!(ub.len(), 1);
+        assert_eq!(ub[0].node_id, "uv_transform");
+        assert_eq!(ub[0].inner_param, "rotation");
+
+        // Undo reverses both sides.
+        cmd.undo(&mut project);
+        let fx = project.find_effect_by_id(&effect_id).unwrap();
+        let def = fx.graph.as_ref().unwrap();
+        let node = def
+            .nodes
+            .iter()
+            .find(|n| n.handle.as_deref() == Some("uv_transform"))
+            .unwrap();
+        assert!(!node.exposed_params.contains("rotation"));
+        assert_eq!(fx.user_param_bindings().len(), 0);
+    }
+
+    /// `PARAM_TWO_WAY_BINDING_DESIGN.md` D9: unmapping a user-added binding
+    /// freezes the card's current effective value into the def slot the
+    /// binding stops governing, instead of leaving whatever stale value sat
+    /// there — so the render never visually snaps on unmap.
+    #[test]
+    fn unexpose_user_binding_freezes_effective_value_into_def_slot() {
+        let mut project = Project::default();
+        let effect_id = EffectId::new("test-mirror-instance-freeze");
+        let mut fx = PresetInstance::new(PresetTypeId::new("test.mirror"));
+        fx.id = effect_id.clone();
+        project.settings.master_effects.push(fx);
+
+        // Expose rotation (appends a user binding).
+        let mut expose_cmd = ToggleNodeParamExposeCommand::new(
+            GraphTarget::Effect(effect_id.clone()),
+            manifold_core::NodeId::new("uv_transform"),
+            1,
+            "uv_transform".to_string(),
+            "rotation".to_string(),
+            true,
+            mirror_catalog_default(),
+            "Rotation".to_string(),
+            -180.0,
+            180.0,
+            0.0,
+            manifold_core::effects::ParamConvert::Float,
+            false,
+            Vec::new(),
+        );
+        expose_cmd.execute(&mut project);
+
+        // Move the card away from default, as a performer would — through
+        // the same command the card's own slider drag commits via
+        // (`ChangeGraphParamCommand`, `commands/effects.rs`), not a raw
+        // manifest poke.
+        let binding_id = project
+            .find_effect_by_id(&effect_id)
+            .unwrap()
+            .user_param_bindings()[0]
+            .id
+            .clone();
+        let mut set_cmd = crate::commands::effects::ChangeGraphParamCommand::new(
+            GraphTarget::Effect(effect_id.clone()),
+            binding_id,
+            0.0,
+            77.0,
+        );
+        set_cmd.execute(&mut project);
+
+        // Unexpose — this removes the user binding and must freeze 77.0
+        // into the def's `rotation` slot before the binding goes away.
+        let mut unexpose_cmd = ToggleNodeParamExposeCommand::new(
+            GraphTarget::Effect(effect_id.clone()),
+            manifold_core::NodeId::new("uv_transform"),
+            1,
+            "uv_transform".to_string(),
+            "rotation".to_string(),
+            false,
+            mirror_catalog_default(),
+            "Rotation".to_string(),
+            -180.0,
+            180.0,
+            0.0,
+            manifold_core::effects::ParamConvert::Float,
+            false,
+            Vec::new(),
+        );
+        unexpose_cmd.execute(&mut project);
+
+        let fx = project.find_effect_by_id(&effect_id).unwrap();
+        assert_eq!(fx.user_param_bindings().len(), 0, "binding removed");
+        let def = fx.graph.as_ref().unwrap();
+        let node = def
+            .nodes
+            .iter()
+            .find(|n| n.handle.as_deref() == Some("uv_transform"))
+            .unwrap();
+        match node.params.get("rotation") {
+            Some(SerializedParamValue::Float { value }) => {
+                assert!((value - 77.0).abs() < 1e-6, "expected frozen 77.0, got {value}");
+            }
+            other => panic!("expected a frozen Float value, got {other:?}"),
+        }
+    }
+}

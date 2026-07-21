@@ -149,3 +149,89 @@ impl Command for PasteNodesCommand {
     }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::super::*;
+    use super::super::test_support::*;
+    use crate::command::Command;
+
+    #[test]
+    fn paste_node_clones_with_fresh_identity_and_undo_removes() {
+        let (mut project, fx) = project_with_graph(abc_graph());
+        let src = graph_of(&project, &fx)
+            .nodes
+            .iter()
+            .find(|n| n.handle.as_deref() == Some("b"))
+            .unwrap()
+            .clone();
+        let before = graph_of(&project, &fx).nodes.len();
+
+        let mut cmd = PasteNodesCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            vec![src.clone()],
+            vec![],
+            (30.0, 30.0),
+            mirror_catalog_default(),
+        );
+        cmd.execute(&mut project);
+
+        let def = graph_of(&project, &fx);
+        assert_eq!(def.nodes.len(), before + 1);
+        let copy = def
+            .nodes
+            .iter()
+            .find(|n| n.handle.as_deref() == Some("b_2"))
+            .expect("handle deduped to b_2");
+        assert_ne!(copy.id, src.id, "fresh runtime id");
+        assert_ne!(copy.node_id, src.node_id, "fresh stable node_id");
+        assert_eq!(copy.type_id, src.type_id, "same node type");
+
+        cmd.undo(&mut project);
+        let def = graph_of(&project, &fx);
+        assert_eq!(def.nodes.len(), before);
+        assert!(!def.nodes.iter().any(|n| n.handle.as_deref() == Some("b_2")));
+    }
+
+    #[test]
+    fn paste_remaps_internal_wires_to_the_new_node_ids() {
+        let (mut project, fx) = project_with_graph(abc_graph());
+        // Copy a (0) and b (1) plus the internal wire a -> b.
+        let def = graph_of(&project, &fx);
+        let a = def.nodes.iter().find(|n| n.id == 0).unwrap().clone();
+        let b = def.nodes.iter().find(|n| n.id == 1).unwrap().clone();
+        let wire_ab = def
+            .wires
+            .iter()
+            .find(|w| w.from_node == 0 && w.to_node == 1)
+            .unwrap()
+            .clone();
+        let wires_before = def.wires.len();
+
+        let mut cmd = PasteNodesCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            vec![a, b],
+            vec![wire_ab],
+            (30.0, 30.0),
+            mirror_catalog_default(),
+        );
+        cmd.execute(&mut project);
+
+        let def = graph_of(&project, &fx);
+        let a2 = def.nodes.iter().find(|n| n.handle.as_deref() == Some("a_2")).unwrap();
+        let b2 = def.nodes.iter().find(|n| n.handle.as_deref() == Some("b_2")).unwrap();
+        assert_eq!(def.wires.len(), wires_before + 1, "one internal wire pasted");
+        assert!(
+            def.wires
+                .iter()
+                .any(|w| w.from_node == a2.id && w.to_node == b2.id),
+            "the copied wire re-anchored to the new node ids"
+        );
+
+        cmd.undo(&mut project);
+        let def = graph_of(&project, &fx);
+        assert_eq!(def.wires.len(), wires_before, "pasted wire removed on undo");
+    }
+}
