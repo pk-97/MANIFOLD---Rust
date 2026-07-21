@@ -16,3 +16,6 @@ L1+L3. **VD-037:** the single-active-gesture invariant (cross-window overlap cas
 
 ## Stage note
 Every scrubbable control now shares one gesture engine: identical feel, exactly one undo entry per drag, everywhere — including type-in (which now also arms touch-to-select, an accepted behavior change). This is P-I's payoff for the instrument.
+
+## Push-time addendum
+Full sweep on final merged main: `Summary [176.314s] 3851 tests run: 3851 passed (21 slow), 13 skipped`; clippy workspace clean; deny `bans ok`; flows **34/34 required passed (incl. the new D8 `set-param-layer-opacity`), 7 xfail, 41/41 accounted**. One landing-time catch: the renderer swatch test still spelled the deleted MasterOpacity trio (the P-D third-crate lesson, missed by the P-I seat briefs) — ported to the wire in `18d…` fix commit; the seat-brief template gains "renderer test targets in gate scope" permanently.
