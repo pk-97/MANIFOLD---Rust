@@ -56,6 +56,13 @@ const NODE_ID_HOARD_ALLOWLIST: &[&str] = &[
     // mechanism (P2); they remain as widget-owned per-row storage (sync,
     // drag identification via direct field reads, not id-equality scans).
     "param_card.rs",
+    // `RowHost` (P-S2): the shared per-row id-bundle storage + `RowIndex` +
+    // `row_action` routing lifted out of `param_card.rs` so a scene card can
+    // BE one instead of hand-copying it (the P-S3 `SceneCardState` unification).
+    // Same widget-owned-storage rationale as `param_card.rs` above — the hoard
+    // is NOT the routing (that IS `RowHost::row_index`/`row_action`); it's the
+    // per-row storage those read.
+    "row_host.rs",
     // Clip chrome's own per-row audio-shaping controls — a different,
     // non-`ParamRow` surface (D9 scope fence).
     "clip_chrome.rs",

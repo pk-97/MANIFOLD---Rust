@@ -17,7 +17,7 @@
 //! `docs/LIVE_AUDIO_TRIGGERS_DESIGN.md` §8). Readers branch on
 //! [`ParamCardKind`] or ignore the field that doesn't apply to them.
 
-use crate::{MappingAction, ModulationAction, ParamsAction, RootAction};
+use crate::{ParamsAction, RootAction};
 use super::copy_to_clipboard_label::CopyToClipboardLabelState;
 use super::param_slider_shared::*;
 use super::{
@@ -3369,140 +3369,6 @@ impl ParamCardPanel {
 
     // ── Event handling ────────────────────────────────────────────
 
-    /// Point param `pi`'s config drawer at `tab` — used when arming a modulator
-    /// so its config comes forward. No-op if `pi` is out of range.
-    fn focus_mod_tab(&mut self, pi: usize, tab: ModTab) {
-        if let Some(slot) = self.mod_active_tab.get_mut(pi) {
-            *slot = tab;
-        }
-    }
-
-    /// BUG-250: map a `RowRole::Slider` value-cell hit (an enum row) to the shared
-    /// cycle-or-dropdown action set (`enum_value_cell_actions`). The cell
-    /// node id comes from the row's own slider ids (the dropdown anchors
-    /// under it); the current value is the synced base value, matching what
-    /// the cell displays.
-    fn enum_value_cell_action(
-        &self,
-        target: GraphParamTarget,
-        pi: usize,
-        clicked: NodeId,
-    ) -> Vec<PanelAction> {
-        let info = &self.rows[pi];
-        let labels = info.spec.value_labels.clone().unwrap_or_default();
-        let cell = self.row_host
-            .slider_ids
-            .get(pi)
-            .and_then(|s| s.as_ref())
-            .map(|s| s.value_text)
-            .unwrap_or(clicked);
-        let value = self.base_values.get(pi).copied().unwrap_or(info.spec.default);
-        enum_value_cell_actions(target, self.rows[pi].id.clone(), &labels, value, info.spec.min, cell)
-    }
-
-    /// The "A" audio-mod button action — always opens (arms) or closes
-    /// (disarms) this param's audio drawer, never the Audio Setup modal. With no
-    /// sends defined yet, arming auto-creates the project's first send and points
-    /// this param at it in one undo step, so the drawer opens populated and ready
-    /// (the user routes/renames sends in Audio Setup afterward). The drawer's own
-    /// "+" adds further sends.
-    fn audio_toggle_action(&self, target: GraphParamTarget, pi: usize) -> Vec<PanelAction> {
-        let ms = &self.state.mod_state;
-        if ms.audio_active.get(pi).copied().unwrap_or(false) {
-            // Already armed → disarm (closes the drawer), regardless of sends.
-            vec![PanelAction::Modulation(ModulationAction::AudioModToggle(target, self.rows[pi].id.clone()))]
-        } else if ms.audio_send_ids.is_empty() {
-            // Not armed, no send to point at → open Audio Setup so the user can
-            // create one. Sends are defined there, never from the drawer.
-            vec![PanelAction::Root(RootAction::OpenAudioSetup)]
-        } else {
-            // Not armed, sends exist → arm at the project's first send.
-            vec![PanelAction::Modulation(ModulationAction::AudioModToggle(target, self.rows[pi].id.clone()))]
-        }
-    }
-
-    /// Build an `AudioModSetSource` action for a param, combining the current
-    /// send + feature selection (from `mod_state`) with the one dimension the
-    /// click changed. Empty when no send resolves (nothing to point at).
-    /// Build an `AudioModSetSource` from the param's current selections, with one
-    /// axis optionally overridden (the clicked send / feature-kind / band).
-    fn audio_set_source_action(
-        &self,
-        target: GraphParamTarget,
-        pi: usize,
-        send_override: Option<usize>,
-        kind_override: Option<usize>,
-        band_override: Option<usize>,
-    ) -> Vec<PanelAction> {
-        use super::param_slider_shared::{audio_band_from_index, audio_kind_from_index};
-        let ms = &self.state.mod_state;
-        let send_k = send_override
-            .map(|k| k as i32)
-            .unwrap_or_else(|| ms.audio_send_idx.get(pi).copied().unwrap_or(-1));
-        let Some(send_id) = (send_k >= 0)
-            .then(|| ms.audio_send_ids.get(send_k as usize).cloned())
-            .flatten()
-        else {
-            return vec![];
-        };
-        let kind_idx =
-            kind_override.unwrap_or_else(|| ms.audio_kind_idx.get(pi).copied().unwrap_or(0) as usize);
-        let band_idx =
-            band_override.unwrap_or_else(|| ms.audio_band_idx.get(pi).copied().unwrap_or(0) as usize);
-        let feature = crate::types::AudioFeature::new(
-            audio_kind_from_index(kind_idx),
-            audio_band_from_index(band_idx),
-        );
-        vec![PanelAction::Modulation(ModulationAction::AudioModSetSource(target, self.rows[pi].id.clone(), send_id, feature))]
-    }
-
-    /// A click on a Listen-row chip — resolves the chip's `AudioFeature` to
-    /// (kind, band) indices and reuses the same set-source action a matrix
-    /// click would issue, one command carrying both axes.
-    fn audio_select_chip_action(
-        &self,
-        target: GraphParamTarget,
-        pi: usize,
-        chip: usize,
-    ) -> Vec<PanelAction> {
-        use super::param_slider_shared::{
-            audio_band_from_index, audio_kind_from_index, trigger_source_chips,
-        };
-        let ms = &self.state.mod_state;
-        let current = crate::types::AudioFeature::new(
-            audio_kind_from_index(ms.audio_kind_idx.get(pi).copied().unwrap_or(0) as usize),
-            audio_band_from_index(ms.audio_band_idx.get(pi).copied().unwrap_or(0) as usize),
-        );
-        let chips = trigger_source_chips(current);
-        let Some(chip) = chips.get(chip) else {
-            return vec![];
-        };
-        let kind_idx = crate::types::AudioFeatureKind::ALL
-            .iter()
-            .position(|&k| k == chip.feature.kind)
-            .unwrap_or(0);
-        let band_idx = crate::types::AudioBand::ALL
-            .iter()
-            .position(|&b| b == chip.feature.band)
-            .unwrap_or(0);
-        self.audio_set_source_action(target, pi, None, Some(kind_idx), Some(band_idx))
-    }
-
-    /// A click on an `is_trigger_gate` row's Mode row (§9 U3) — converts the
-    /// clicked button index to a `TriggerFireMode` at this dispatch boundary
-    /// (this crate mirrors core enums rather than depending on
-    /// `manifold-core` directly; see `ui_translate.rs`) and issues one
-    /// `AudioModSetTriggerMode`, the same command family every other
-    /// audio-mod drawer edit uses.
-    fn audio_set_trigger_mode_action(
-        &self,
-        target: GraphParamTarget,
-        pi: usize,
-        mode_idx: usize,
-    ) -> Vec<PanelAction> {
-        vec![PanelAction::Modulation(ModulationAction::AudioModSetTriggerMode(target, self.rows[pi].id.clone(), mode_idx))]
-    }
-
     pub fn handle_click(&mut self, node_id: NodeId, tree: &UITree) -> Vec<PanelAction> {
         let id = node_id;
 
@@ -3584,168 +3450,25 @@ impl ParamCardPanel {
         // element.
         let widget = tree.widget_of(id);
         if let Some((row, role)) = self.row_host.row_index.get(widget) {
-            return self.row_action(row, role, id);
+            let target = self.param_target();
+            return self.row_host.row_action(
+                target,
+                row,
+                role,
+                id,
+                &self.rows,
+                &self.base_values,
+                &self.osc_addresses,
+                &mut self.state.mod_state,
+                &mut self.mod_active_tab,
+                &mut self.copied_flash,
+                &mut self.section_folded,
+            );
         }
 
         Vec::new()
     }
 
-    /// Route a resolved `(row, role)` hit to the `PanelAction` the old
-    /// per-kind gauntlets emitted for that element — ONE match, both card
-    /// kinds (D5). Identity comes off `self.rows[row].id`; the wire target
-    /// off `self.param_target()` — the fork that used to live per-arm dies
-    /// with the twin bodies. Bundle roles (`DriverConfig`/`AbletonConfig`/
-    /// `AudioConfig`) delegate to the bundle's own `resolve` (the
-    /// widget-contract split: the bundle knows its own nodes, this function
-    /// only knows which row it belongs to).
-    fn row_action(&mut self, row: usize, role: RowRole, node: NodeId) -> Vec<PanelAction> {
-        let target = self.param_target();
-        match role {
-            RowRole::Slider => {
-                let Some(ids) = self.row_host.slider_ids[row] else {
-                    return Vec::new();
-                };
-                if ids.label == Some(node) {
-                    if self.osc_addresses.get(row).and_then(|a| a.as_ref()).is_none() {
-                        return Vec::new();
-                    }
-                    if let Some(label) = ids.label {
-                        self.copied_flash.trigger(label);
-                    }
-                    let addr = self.osc_addresses[row].clone().unwrap_or_default();
-                    return vec![PanelAction::Root(RootAction::CopyOscAddress(addr))];
-                }
-                if ids.value_text == node && self.rows[row].spec.value_labels.is_some() {
-                    return self.enum_value_cell_action(target, row, node);
-                }
-                // The track itself (drag start) and a plain numeric value cell
-                // (double-click type-in, a different dispatch path) emit no
-                // click action — matches the old gauntlet's fall-through.
-                Vec::new()
-            }
-            RowRole::RowCatcher => Vec::new(),
-            RowRole::Label => {
-                // Toggle/trigger row label → copy OSC address (mirrors the
-                // slider label path; toggle rows carry no slider bundle).
-                if let Some(addr) = self.osc_addresses.get(row).and_then(|a| a.clone()) {
-                    self.copied_flash.trigger(node);
-                    return vec![PanelAction::Root(RootAction::CopyOscAddress(addr))];
-                }
-                Vec::new()
-            }
-            RowRole::DriverBtn => {
-                self.focus_mod_tab(row, ModTab::Driver);
-                vec![PanelAction::Modulation(ModulationAction::DriverToggle(target, self.rows[row].id.clone()))]
-            }
-            RowRole::EnvelopeBtn => {
-                self.focus_mod_tab(row, ModTab::Envelope);
-                vec![PanelAction::Modulation(ModulationAction::EnvelopeToggle(target, self.rows[row].id.clone()))]
-            }
-            RowRole::AudioBtn => {
-                self.focus_mod_tab(row, ModTab::Audio);
-                self.audio_toggle_action(target, row)
-            }
-            RowRole::ToggleBtn => {
-                let is_trigger = self.rows.get(row).map(|i| i.spec.is_trigger).unwrap_or(false);
-                let pid = self.rows[row].id.clone();
-                if is_trigger {
-                    vec![PanelAction::Params(ParamsAction::ParamFire(target, pid))]
-                } else {
-                    vec![PanelAction::Params(ParamsAction::ParamToggle(target, pid))]
-                }
-            }
-            RowRole::DriverConfig => {
-                let Some(cfg) = &self.row_host.driver_config_ids[row] else {
-                    return Vec::new();
-                };
-                match cfg.resolve(node) {
-                    Some(action) => vec![PanelAction::Modulation(ModulationAction::DriverConfig(target, self.rows[row].id.clone(), action))],
-                    None => Vec::new(),
-                }
-            }
-            // The Decay slider's own click (drag start / value-cell type-in)
-            // carries no left-click action — matches the old gauntlet, which
-            // never checked envelope-config nodes in `handle_click`.
-            RowRole::EnvelopeConfig => Vec::new(),
-            RowRole::AudioConfig => {
-                let Some((dids, send_count)) = self.row_host.audio_configs[row].as_ref() else {
-                    return Vec::new();
-                };
-                let Some(click) =
-                    resolve_audio_config_click(dids, *send_count, &self.state.mod_state, &self.rows[row], row, node)
-                else {
-                    return Vec::new();
-                };
-                match click {
-                    AudioConfigClick::SelectSend(k) => {
-                        self.audio_set_source_action(target, row, Some(k), None, None)
-                    }
-                    AudioConfigClick::SelectChip(c) => self.audio_select_chip_action(target, row, c),
-                    AudioConfigClick::ToggleMatrix => {
-                        if let Some(open) = self.state.mod_state.audio_matrix_open.get_mut(row) {
-                            *open = !*open;
-                        }
-                        Vec::new()
-                    }
-                    AudioConfigClick::SelectKind(k) => {
-                        self.audio_set_source_action(target, row, None, Some(k), None)
-                    }
-                    AudioConfigClick::SelectBand(b) => {
-                        self.audio_set_source_action(target, row, None, None, Some(b))
-                    }
-                    AudioConfigClick::ToggleInvert => {
-                        vec![PanelAction::Modulation(ModulationAction::AudioModSetInvert(target, self.rows[row].id.clone()))]
-                    }
-                    AudioConfigClick::SelectTriggerMode(m) => self.audio_set_trigger_mode_action(target, row, m),
-                    AudioConfigClick::SelectAction(k) => {
-                        vec![PanelAction::Modulation(ModulationAction::AudioModSetActionKind(target, self.rows[row].id.clone(), k))]
-                    }
-                    AudioConfigClick::SelectWrap(w) => {
-                        vec![PanelAction::Modulation(ModulationAction::AudioModSetWrap(target, self.rows[row].id.clone(), w))]
-                    }
-                }
-            }
-            RowRole::AbletonConfig => {
-                let Some(cfg) = &self.row_host.ableton_config_ids[row] else {
-                    return Vec::new();
-                };
-                if cfg.resolve(node) {
-                    vec![PanelAction::Mapping(MappingAction::AbletonInvertToggle(target, self.rows[row].id.clone()))]
-                } else {
-                    Vec::new()
-                }
-            }
-            RowRole::ModTab => {
-                let Some(&(_, tab)) = self.row_host.mod_tab_ids[row].iter().find(|(n, _)| *n == node) else {
-                    return Vec::new();
-                };
-                if let Some(slot) = self.mod_active_tab.get_mut(row) {
-                    *slot = tab;
-                }
-                vec![PanelAction::Params(ParamsAction::ModConfigTabChanged)]
-            }
-            RowRole::MappingChevron => vec![PanelAction::Root(RootAction::OpenCardMapping(self.rows[row].id.clone()))],
-            RowRole::SectionHeader => {
-                let Some(name) = self.row_host
-                    .section_header_ids
-                    .iter()
-                    .find(|(hid, _)| *hid == node)
-                    .map(|(_, n)| n.clone())
-                else {
-                    return Vec::new();
-                };
-                let folded = self.section_folded.entry(name).or_insert(false);
-                *folded = !*folded;
-                vec![PanelAction::Params(ParamsAction::SectionFoldToggled)]
-            }
-            RowRole::RelightToggle | RowRole::RelightHeightBtn | RowRole::RelightSlider => {
-                // Never inserted into `row_index` (relight has no `self.rows`
-                // slot) — the top-of-`handle_click` checks own these. Kept
-                // here only for match exhaustiveness.
-                Vec::new()
-            }
-        }
-    }
 
     /// The trim-handle node ids for a modulator kind. The three kinds keep
     /// separate id vectors (they overlay the same track simultaneously), and
@@ -4434,6 +4157,9 @@ impl Default for ParamCardPanel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // `ModulationAction` is asserted against only in these tests now — the
+    // production references moved to `RowHost::row_action` (P-S2).
+    use crate::ModulationAction;
     use crate::param_surface::{RowMapping, RowSpec, RowValue};
     use crate::tree::UITree;
 
