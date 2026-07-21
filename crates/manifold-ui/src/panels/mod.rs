@@ -1,4 +1,5 @@
 pub mod ableton_picker;
+pub mod actions;
 pub mod audio_setup_panel;
 pub mod audio_trigger_section;
 pub mod browser_popup;
@@ -38,6 +39,14 @@ use crate::types::{
 use crate::view::UiGraphTarget;
 use manifold_foundation::{AudioSendId, Beats, ClipId, LayerId, ParamId};
 pub use viewport::HitRegion;
+
+// Per-domain intent enums (the FLAT sum decomposition of `PanelAction`, P-D /
+// D-D1). Re-exported at the `panels::` level so existing `panels::PanelAction`
+// call sites reach the domain enums by the same path.
+pub use actions::{
+    AudioSetupAction, BrowserAction, ClipAction, EditingAction, LayerAction, MappingAction,
+    MarkerAction, ModulationAction, ParamsAction, ProjectAction, RootAction, TransportAction,
+};
 
 /// A stable, distinct identity color for an audio send, derived from its id so
 /// it survives reorders without any stored field. Used by the Audio Setup row
