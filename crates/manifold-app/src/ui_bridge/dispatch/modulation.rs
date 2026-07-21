@@ -22,7 +22,7 @@ use manifold_editing::commands::audio_mod::{
 };
 use manifold_editing::commands::effect_target::DriverTarget;
 use manifold_editing::commands::envelopes::{AddEnvelopeCommand, ToggleEnvelopeEnabledCommand};
-use manifold_ui::{AudioShapeParam, DriverConfigAction, InspectorTab, ModulationAction};
+use manifold_ui::{DriverConfigAction, InspectorTab, ModulationAction};
 
 use super::super::DispatchResult;
 use super::resolve::{graph_audio_mod_dual_edit, resolve_mod_target};
@@ -243,93 +243,10 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
             DispatchResult::handled()
         }
 
-        ModulationAction::AudioModShapeSnapshot(gpt, param_id) => {
-            // Capture the pre-drag shape so the commit can record one undo step.
-            if let Some((target, param_id)) = resolve_mod_target(
-                ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
-                ctx.selection, false,
-            ) {
-                let param_id = &param_id;
-                ctx.scrub.audio_shape_snapshot = ctx.project
-                    .with_preset_graph_mut(&target, |inst| {
-                        inst.audio_mods
-                            .as_ref()
-                            .and_then(|ms| ms.iter().find(|a| a.param_id == *param_id))
-                            .map(|m| m.shape)
-                    })
-                    .flatten();
-                if let Some(shape) = ctx.scrub.audio_shape_snapshot {
-                    ctx.scrub.active_inspector_drag = Some(crate::app::ActiveInspectorDrag::AudioModShape {
-                        target,
-                        param_id: param_id.clone(),
-                        shape,
-                    });
-                }
-            }
-            DispatchResult::handled()
-        }
-        ModulationAction::AudioModShapeParamChanged(gpt, param_id, which, value) => {
-            // Live edit (no undo entry per frame) — the handle tracks the cursor.
-            if let Some((target, param_id)) = resolve_mod_target(
-                ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
-                ctx.selection, false,
-            ) {
-                let param_id = &param_id;
-                let which = *which;
-                let v = *value;
-                if let Some(crate::app::ActiveInspectorDrag::AudioModShape { shape, .. }) =
-                    &mut ctx.scrub.active_inspector_drag
-                {
-                    match which {
-                        AudioShapeParam::Sensitivity => shape.sensitivity = v,
-                        AudioShapeParam::Attack => shape.attack_ms = v,
-                        AudioShapeParam::Release => shape.release_ms = v,
-                    }
-                }
-                graph_audio_mod_dual_edit(ctx.project, ctx.content_tx, &target, param_id.clone(), move |m| {
-                    match which {
-                        AudioShapeParam::Sensitivity => m.shape.sensitivity = v,
-                        AudioShapeParam::Attack => m.shape.attack_ms = v,
-                        AudioShapeParam::Release => m.shape.release_ms = v,
-                    }
-                });
-            }
-            DispatchResult::handled()
-        }
-        ModulationAction::AudioModShapeCommit(gpt, param_id) => {
-            // One undo step: snapshot (old) → current shape (new) via the shape command.
-            ctx.scrub.active_inspector_drag = None;
-            if let Some(old_shape) = ctx.scrub.audio_shape_snapshot.take()
-                && let Some((target, param_id)) = resolve_mod_target(
-                    ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab,
-                    active_layer, ctx.selection, false,
-                )
-            {
-                let param_id = &param_id;
-                let new_shape = ctx.project
-                    .with_preset_graph_mut(&target, |inst| {
-                        inst.audio_mods
-                            .as_ref()
-                            .and_then(|ms| ms.iter().find(|a| a.param_id == *param_id))
-                            .map(|m| m.shape)
-                    })
-                    .flatten();
-                if let Some(new_shape) = new_shape
-                    && new_shape != old_shape
-                {
-                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                        Box::new(SetAudioModShapeCommand::new(
-                            DriverTarget::from(&target),
-                            param_id.clone(),
-                            old_shape,
-                            new_shape,
-                        ));
-                    boxed.execute(ctx.project);
-                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
-                }
-            }
-            DispatchResult::handled()
-        }
+        // Audio-mod shaping-slider scrub trio (sensitivity / attack / release)
+        // migrated to the unified `PanelAction::Scrub` wire
+        // (`ValueRef::AudioModShape`, P-I / D4): the `AudioShapeParam` rides the
+        // address, the whole shape is the restore payload.
 
         // §9 U3: a trigger-gate row's Mode button — set `trigger_mode` on the
         // SAME `ParameterAudioMod` every other drawer edit targets (no

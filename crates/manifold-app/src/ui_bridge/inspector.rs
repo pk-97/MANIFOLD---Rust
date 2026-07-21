@@ -958,18 +958,16 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 |h, p| {
-                    h.dispatch(&PanelAction::Modulation(ModulationAction::AudioModShapeSnapshot(gpt(), pid.clone())), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::AudioModShape(gpt(), pid.clone(), manifold_ui::panels::AudioShapeParam::Sensitivity), ScrubPhase::Begin), p);
                     h.dispatch(
-                        &PanelAction::Modulation(ModulationAction::AudioModShapeParamChanged(
-                            gpt(),
-                            pid.clone(),
-                            manifold_ui::panels::AudioShapeParam::Sensitivity,
-                            0.83,
-                        )),
+                        &PanelAction::Scrub(
+                            ValueRef::AudioModShape(gpt(), pid.clone(), manifold_ui::panels::AudioShapeParam::Sensitivity),
+                            ScrubPhase::Move(ScrubValue::Scalar(0.83)),
+                        ),
                         p,
                     );
                 },
-                |h, p| h.dispatch(&PanelAction::Modulation(ModulationAction::AudioModShapeCommit(gpt(), pid.clone())), p),
+                |h, p| h.dispatch(&PanelAction::Scrub(ValueRef::AudioModShape(gpt(), pid.clone(), manifold_ui::panels::AudioShapeParam::Sensitivity), ScrubPhase::Commit), p),
                 move |p| {
                     gen_inst(p, &probe_lid)
                         .find_audio_mod(probe_pid.as_ref())

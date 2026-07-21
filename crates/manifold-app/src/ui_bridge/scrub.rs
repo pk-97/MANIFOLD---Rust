@@ -38,7 +38,7 @@ use manifold_editing::commands::settings::{
     ChangeLayerOpacityCommand, ChangeLedBrightnessCommand, ChangeMacroCommand,
     ChangeMasterOpacityCommand,
 };
-use manifold_ui::{ScrubPhase, ValueRef};
+use manifold_ui::{AudioShapeParam, ScrubPhase, ValueRef};
 
 use super::dispatch::resolve::{
     ableton_mapping_target, graph_audio_mod_dual_edit, graph_driver_dual_edit, graph_env_dual_edit,
@@ -161,6 +161,17 @@ pub enum ResolvedScrub {
         param_id: ParamId,
         baseline: f32,
         live: f32,
+    },
+    /// An audio-mod drawer shaping slider — holds the WHOLE shape at both
+    /// `baseline` and `live` (the drag edits one scalar; the restore re-stamps
+    /// the whole shape so the other two hold, matching the retired
+    /// `ActiveInspectorDrag::AudioModShape`). `which` scalar is drag-local and
+    /// carried on the wire, not here.
+    AudioModShape {
+        target: GraphTarget,
+        param_id: ParamId,
+        baseline: AudioModShape,
+        live: AudioModShape,
     },
 }
 
@@ -287,6 +298,22 @@ impl ResolvedScrub {
                         .and_then(|es| es.iter_mut().find(|e| e.param_id == *param_id))
                     {
                         e.decay_beats = *live;
+                    }
+                });
+            }
+            ResolvedScrub::AudioModShape {
+                target,
+                param_id,
+                live,
+                ..
+            } => {
+                project.with_preset_graph_mut(target, |inst| {
+                    if let Some(m) = inst
+                        .audio_mods
+                        .as_mut()
+                        .and_then(|ms| ms.iter_mut().find(|a| a.param_id == *param_id))
+                    {
+                        m.shape = *live;
                     }
                 });
             }
@@ -1218,6 +1245,118 @@ pub(crate) fn dispatch_scrub(
                     }
                 }
                 ctx.scrub.active = None;
+                DispatchResult::handled()
+            }
+        },
+
+        ValueRef::AudioModShape(gpt, param_id, which) => match phase {
+            ScrubPhase::Begin => {
+                if let Some(target) = resolve_graph_target(
+                    gpt,
+                    ctx.editor_target,
+                    effective_tab,
+                    active_layer,
+                    ctx.selection,
+                    ctx.project,
+                ) {
+                    // Capture the WHOLE pre-drag shape as the undo baseline (the
+                    // restore path re-stamps all three scalars, so a stomp on a
+                    // one-scalar drag can't revert the others).
+                    let baseline = ctx
+                        .project
+                        .with_preset_graph_mut(&target, |inst| {
+                            inst.audio_mods
+                                .as_ref()
+                                .and_then(|ms| ms.iter().find(|a| a.param_id == *param_id))
+                                .map(|m| m.shape)
+                        })
+                        .flatten();
+                    if let Some(baseline) = baseline {
+                        ctx.scrub.active = Some(ResolvedScrub::AudioModShape {
+                            target,
+                            param_id: param_id.clone(),
+                            baseline,
+                            live: baseline,
+                        });
+                    }
+                }
+                DispatchResult::handled()
+            }
+            ScrubPhase::Move(sv) => {
+                if let (Some(v), Some(target)) = (
+                    sv.scalar(),
+                    resolve_graph_target(
+                        gpt,
+                        ctx.editor_target,
+                        effective_tab,
+                        active_layer,
+                        ctx.selection,
+                        ctx.project,
+                    ),
+                ) {
+                    let which = *which;
+                    if let Some(ResolvedScrub::AudioModShape { live, .. }) = &mut ctx.scrub.active {
+                        match which {
+                            AudioShapeParam::Sensitivity => live.sensitivity = v,
+                            AudioShapeParam::Attack => live.attack_ms = v,
+                            AudioShapeParam::Release => live.release_ms = v,
+                        }
+                    }
+                    graph_audio_mod_dual_edit(
+                        ctx.project,
+                        ctx.content_tx,
+                        &target,
+                        param_id.clone(),
+                        move |m| match which {
+                            AudioShapeParam::Sensitivity => m.shape.sensitivity = v,
+                            AudioShapeParam::Attack => m.shape.attack_ms = v,
+                            AudioShapeParam::Release => m.shape.release_ms = v,
+                        },
+                    );
+                }
+                DispatchResult::handled()
+            }
+            ScrubPhase::Commit => {
+                // One undo step: baseline (old) → current shape (new). Matches the
+                // retired trio, including the local `execute` on the UI project.
+                let old_shape = match &ctx.scrub.active {
+                    Some(ResolvedScrub::AudioModShape { baseline, .. }) => Some(*baseline),
+                    _ => None,
+                };
+                ctx.scrub.active = None;
+                if let Some(old_shape) = old_shape
+                    && let Some(target) = resolve_graph_target(
+                        gpt,
+                        ctx.editor_target,
+                        effective_tab,
+                        active_layer,
+                        ctx.selection,
+                        ctx.project,
+                    )
+                {
+                    let new_shape = ctx
+                        .project
+                        .with_preset_graph_mut(&target, |inst| {
+                            inst.audio_mods
+                                .as_ref()
+                                .and_then(|ms| ms.iter().find(|a| a.param_id == *param_id))
+                                .map(|m| m.shape)
+                        })
+                        .flatten();
+                    if let Some(new_shape) = new_shape
+                        && new_shape != old_shape
+                    {
+                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                            Box::new(SetAudioModShapeCommand::new(
+                                DriverTarget::from(&target),
+                                param_id.clone(),
+                                old_shape,
+                                new_shape,
+                            ));
+                        boxed.execute(ctx.project);
+                        ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
+                    }
+                }
                 DispatchResult::handled()
             }
         },

@@ -462,17 +462,8 @@ pub enum ModulationAction {
     /// strands: re-wire per AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md
     /// §7.2 item 2.
     AudioModSetRateOfChange(GraphParamTarget, ParamId),
-    /// Snapshot an audio mod's shape before a drawer-slider drag (undo start).
-    AudioModShapeSnapshot(GraphParamTarget, ParamId),
-    /// Live-edit one shape scalar during a drawer-slider drag (no undo entry).
-    AudioModShapeParamChanged(
-        GraphParamTarget,
-        ParamId,
-        AudioShapeParam,
-        f32,
-    ),
-    /// Commit a shape-slider drag as one undo step (drag end).
-    AudioModShapeCommit(GraphParamTarget, ParamId),
+    // Audio-mod shaping-slider scrub trio (sensitivity / attack / release)
+    // migrated to `PanelAction::Scrub` (`ValueRef::AudioModShape`, P-I / D4).
     /// Set a trigger-gate param's fire mode — index into `[ClipEdge,
     /// Transient, Both]` (§9 U3), converted to `TriggerFireMode` at the
     /// dispatch boundary (this crate mirrors core enums rather than

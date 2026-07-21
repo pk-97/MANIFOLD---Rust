@@ -61,13 +61,9 @@ pub(crate) enum ActiveInspectorDrag {
     // EnvelopeTarget (orange handle / `Target*` trio) and EnvelopeDecay
     // (`EnvDecay*` trio) migrated to the unified scrub gesture
     // (`ui_bridge::scrub::ResolvedScrub::{EnvelopeTarget,EnvDecay}`, P-I / D4).
-    /// An audio-mod drawer shape-slider drag (`AudioModShape*` trio) —
-    /// holds the whole shape so any of the three scalars restores.
-    AudioModShape {
-        target: manifold_core::GraphTarget,
-        param_id: manifold_core::effects::ParamId,
-        shape: manifold_core::audio_mod::AudioModShape,
-    },
+    // AudioModShape (drawer shaping-slider `AudioModShape*` trio) migrated to the
+    // unified scrub gesture (`ui_bridge::scrub::ResolvedScrub::AudioModShape`,
+    // P-I / D4) — whole-shape restore preserved.
     /// An audio-mod Step-amount drag (`AudioModStepAmount*` trio).
     AudioModStepAmount {
         target: manifold_core::GraphTarget,
@@ -138,21 +134,6 @@ impl ActiveInspectorDrag {
             // Every restore below writes through the SAME store the family's
             // live `*Changed` arm writes, so a mid-drag snapshot swap can't
             // revert the in-flight value (undo audit 2026-07-19, cluster C).
-            Self::AudioModShape {
-                target,
-                param_id,
-                shape,
-            } => {
-                project.with_preset_graph_mut(target, |inst| {
-                    if let Some(m) = inst
-                        .audio_mods
-                        .as_mut()
-                        .and_then(|ms| ms.iter_mut().find(|a| a.param_id == *param_id))
-                    {
-                        m.shape = *shape;
-                    }
-                });
-            }
             Self::AudioModStepAmount {
                 target,
                 param_id,

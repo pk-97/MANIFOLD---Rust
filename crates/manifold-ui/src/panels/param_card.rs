@@ -4027,8 +4027,8 @@ impl ParamCardPanel {
                                 self.drag.begin(ParamDragTarget::AudioShape { index: row, param: which }, pos);
                                 let pid = self.rows[row].id.clone();
                                 return vec![
-                                    PanelAction::Modulation(ModulationAction::AudioModShapeSnapshot(target.clone(), pid.clone())),
-                                    PanelAction::Modulation(ModulationAction::AudioModShapeParamChanged(target, pid, which, value)),
+                                    PanelAction::Scrub(ValueRef::AudioModShape(target.clone(), pid.clone(), which), ScrubPhase::Begin),
+                                    PanelAction::Scrub(ValueRef::AudioModShape(target, pid, which), ScrubPhase::Move(ScrubValue::Scalar(value))),
                                 ];
                             }
                         }
@@ -4275,18 +4275,14 @@ impl ParamCardPanel {
                 }
                 let pid = self.rows[pi].id.clone();
                 return match self.kind {
-                    ParamCardKind::Effect => vec![PanelAction::Modulation(ModulationAction::AudioModShapeParamChanged(
-                        GraphParamTarget::Effect(ei),
-                        pid,
-                        which,
-                        value,
-                    ))],
-                    ParamCardKind::Generator => vec![PanelAction::Modulation(ModulationAction::AudioModShapeParamChanged(
-                        GraphParamTarget::Generator,
-                        pid,
-                        which,
-                        value,
-                    ))],
+                    ParamCardKind::Effect => vec![PanelAction::Scrub(
+                        ValueRef::AudioModShape(GraphParamTarget::Effect(ei), pid, which),
+                        ScrubPhase::Move(ScrubValue::Scalar(value)),
+                    )],
+                    ParamCardKind::Generator => vec![PanelAction::Scrub(
+                        ValueRef::AudioModShape(GraphParamTarget::Generator, pid, which),
+                        ScrubPhase::Move(ScrubValue::Scalar(value)),
+                    )],
                 };
             }
         }
@@ -4451,12 +4447,12 @@ impl ParamCardPanel {
                     ParamCardKind::Generator => vec![PanelAction::Scrub(ValueRef::EnvDecay(GraphParamTarget::Generator, pid), ScrubPhase::Commit)],
                 }
             }
-            Some(ParamDragTarget::AudioShape { index: pi, .. }) => {
+            Some(ParamDragTarget::AudioShape { index: pi, param: which }) => {
                 let pid = self.rows[pi].id.clone();
                 match self.kind {
-                    ParamCardKind::Effect => vec![PanelAction::Modulation(ModulationAction::AudioModShapeCommit(GraphParamTarget::Effect(ei), pid))],
+                    ParamCardKind::Effect => vec![PanelAction::Scrub(ValueRef::AudioModShape(GraphParamTarget::Effect(ei), pid, which), ScrubPhase::Commit)],
                     ParamCardKind::Generator => {
-                        vec![PanelAction::Modulation(ModulationAction::AudioModShapeCommit(GraphParamTarget::Generator, pid))]
+                        vec![PanelAction::Scrub(ValueRef::AudioModShape(GraphParamTarget::Generator, pid, which), ScrubPhase::Commit)]
                     }
                 }
             }
@@ -5725,7 +5721,7 @@ mod tests {
         assert!(
             matches!(
                 down.as_slice(),
-                [PanelAction::Modulation(ModulationAction::AudioModShapeSnapshot(GraphParamTarget::Effect(0), pid1)), PanelAction::Modulation(ModulationAction::AudioModShapeParamChanged(GraphParamTarget::Effect(0), pid2, AudioShapeParam::Sensitivity, _))]
+                [PanelAction::Scrub(ValueRef::AudioModShape(GraphParamTarget::Effect(0), pid1, AudioShapeParam::Sensitivity), ScrubPhase::Begin), PanelAction::Scrub(ValueRef::AudioModShape(GraphParamTarget::Effect(0), pid2, AudioShapeParam::Sensitivity), ScrubPhase::Move(..))]
                 if pid1.as_ref() == "radius" && pid2.as_ref() == "radius"
             ),
             "begin emits snapshot + first shape value: {down:?}"
@@ -5735,13 +5731,13 @@ mod tests {
         let new_x = sens_rect.x + sens_rect.width * 0.7;
         let moved = panel.handle_drag(Vec2::new(new_x, sens_rect.y), &mut tree);
         assert!(
-            matches!(moved.as_slice(), [PanelAction::Modulation(ModulationAction::AudioModShapeParamChanged(GraphParamTarget::Effect(0), pid, AudioShapeParam::Sensitivity, _))] if pid.as_ref() == "radius"),
+            matches!(moved.as_slice(), [PanelAction::Scrub(ValueRef::AudioModShape(GraphParamTarget::Effect(0), pid, AudioShapeParam::Sensitivity), ScrubPhase::Move(..))] if pid.as_ref() == "radius"),
             "track emits the live shape value: {moved:?}"
         );
 
         let ended = panel.handle_drag_end(&mut tree);
         assert!(
-            matches!(ended.as_slice(), [PanelAction::Modulation(ModulationAction::AudioModShapeCommit(GraphParamTarget::Effect(0), pid))] if pid.as_ref() == "radius"),
+            matches!(ended.as_slice(), [PanelAction::Scrub(ValueRef::AudioModShape(GraphParamTarget::Effect(0), pid, _), ScrubPhase::Commit)] if pid.as_ref() == "radius"),
             "end emits exactly one shape commit: {ended:?}"
         );
         assert!(!panel.is_dragging());
@@ -6700,11 +6696,11 @@ mod tests {
             let track = dids.sliders[si].track;
             match reg.resolve(&tree, Some(track), crate::intent::Gesture::RightClick) {
                 Some(PanelAction::Root(RootAction::SliderReset { changed, .. })) => match *changed {
-                    PanelAction::Modulation(ModulationAction::AudioModShapeParamChanged(_, _, got_which, v)) => {
+                    PanelAction::Scrub(ValueRef::AudioModShape(_, _, got_which), ScrubPhase::Move(ScrubValue::Scalar(v))) => {
                         assert_eq!(got_which, which);
                         assert!((v - default).abs() < f32::EPSILON, "slider {si}: {v} != {default}");
                     }
-                    other => panic!("slider {si}: expected AudioModShapeParamChanged, got {other:?}"),
+                    other => panic!("slider {si}: expected AudioModShape scrub move, got {other:?}"),
                 },
                 other => panic!("slider {si}: expected SliderReset, got {other:?}"),
             }

@@ -21,7 +21,7 @@
 
 use manifold_foundation::{LayerId, ParamId};
 
-use super::{GraphParamTarget, TrimKind, UiRelightField};
+use super::{AudioShapeParam, GraphParamTarget, TrimKind, UiRelightField};
 
 /// One edge of a scrub gesture — maps 1:1 onto the retired
 /// `*Snapshot`/`*Changed`/`*Commit` trio (D4). The scrubbed value rides
@@ -110,4 +110,9 @@ pub enum ValueRef {
     /// An envelope decay slider (`decay_beats`) — was
     /// `EnvDecay{Snapshot,Changed,Commit}`.
     EnvDecay(GraphParamTarget, ParamId),
+    /// An audio-mod drawer shaping slider (sensitivity / attack / release) — was
+    /// `AudioModShape{Snapshot,ParamChanged,Commit}`. The `AudioShapeParam`
+    /// names which of the three scalars this gesture drags; the value rides
+    /// `ScrubValue::Scalar` on Move (the restore path re-stamps the whole shape).
+    AudioModShape(GraphParamTarget, ParamId, AudioShapeParam),
 }

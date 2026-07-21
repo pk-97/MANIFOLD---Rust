@@ -1948,9 +1948,12 @@ fn param_shape_reset(
     default: f32,
 ) -> PanelAction {
     PanelAction::slider_reset(
-        PanelAction::Modulation(ModulationAction::AudioModShapeSnapshot(gpt.clone(), pid.clone())),
-        PanelAction::Modulation(ModulationAction::AudioModShapeParamChanged(gpt.clone(), pid.clone(), which, default)),
-        PanelAction::Modulation(ModulationAction::AudioModShapeCommit(gpt, pid)),
+        PanelAction::Scrub(ValueRef::AudioModShape(gpt.clone(), pid.clone(), which), ScrubPhase::Begin),
+        PanelAction::Scrub(
+            ValueRef::AudioModShape(gpt.clone(), pid.clone(), which),
+            ScrubPhase::Move(ScrubValue::Scalar(default)),
+        ),
+        PanelAction::Scrub(ValueRef::AudioModShape(gpt, pid, which), ScrubPhase::Commit),
     )
 }
 
