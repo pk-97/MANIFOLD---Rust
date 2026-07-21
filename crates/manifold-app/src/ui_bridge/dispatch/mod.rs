@@ -5,6 +5,7 @@
 //! these modules — NO per-variant delegation arm table (a misroute would hide
 //! there). Bridge layer (D2): intent → `ContentCommand`/`EditingService`.
 
+pub(crate) mod audio_setup;
 pub(crate) mod browser;
 pub(crate) mod clip;
 pub(crate) mod mapping;
