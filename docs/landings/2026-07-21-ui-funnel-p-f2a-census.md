@@ -35,3 +35,11 @@ Commit order overlay → drag → dropdowns → events keeps every intermediate 
 ## No method resisted a clean move
 
 Every method fell into exactly one bucket. `should_stash_for_tracks`/`is_event_in_tracks_area` are event-pump-adjacent but read `drag_owner` and are covered by `drag_capture_tests`, so they ride with `drag.rs` (its test module's subjects stay together). `trace_worthy`/`trace_kind` are the one genuinely-shared pair — kept in `mod.rs` as ancestor-visible helpers rather than forced into one submodule.
+
+## Landing addendum (top session, at push)
+
+- Verified independently: all 5 refactor commits `move_identity_check` PROVEN (incl. D-15 wrapper class); scope fence `git diff --stat` vs app.rs/app_render.rs/ui_bridge = zero hunks.
+- Full gate (build-locked, warm main checkout): `Summary [ 173.617s] 3850 tests run: 3850 passed (16 slow), 13 skipped`; `cargo clippy --workspace --tests -- -D warnings` clean; `cargo deny check bans` → bans ok.
+- Flows: 3/3 spot-check green through the split event path — `select-and-inspect` (inspector), `drag-clip` (timeline), `scene-setup-add-object` (gltfscene). Full count-match gate arrives with the S8 flow manifest. Level: **L3 (subset)**.
+- Housekeepers cleared on lane: design-doc status line (P-F2a shipped), BUG-299 index row.
+- Carried: `.git-blame-ignore-revs` entries for the wave's pure-move commits — one batch entry at P-B landing.
