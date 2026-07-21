@@ -12,7 +12,11 @@ mod layer;
 mod marker;
 mod project;
 mod projection;
-mod scrub;
+// `pub(crate)` so the frame-resident gestures in `app_render` (graph-editor
+// mapping drags, graph-canvas node-param drags) can name `ResolvedScrub`
+// directly — they open the one `ScrubState.active` slot without going through
+// the `PanelAction::Scrub` wire (P-I, Fork-2).
+pub(crate) mod scrub;
 mod state_sync;
 mod transport;
 

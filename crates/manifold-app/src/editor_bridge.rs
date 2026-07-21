@@ -33,8 +33,9 @@ pub(crate) fn build_mapping_command(
 
 /// `Application::seed_def_for` minus the `&self` — the catalog/bundled
 /// default def a mapping edit seeds from when the instance hasn't diverged,
-/// resolvable from any `&Project` (the `ActiveInspectorDrag` mapping-drag
-/// restore in app.rs uses it, same as `preview_mapping` does here).
+/// resolvable from any `&Project` (the `ResolvedScrub::Mapping{Range,Affine}`
+/// mapping-drag restore in `ui_bridge::scrub` uses it, same as `preview_mapping`
+/// does here).
 pub(crate) fn seed_def_for_project(
     project: &manifold_core::project::Project,
     target: &manifold_core::GraphTarget,

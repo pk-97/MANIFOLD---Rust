@@ -159,10 +159,11 @@ mod scene_card_convergence_tests {
     /// Undo-race repro (param-feed regression, 2026-07-18): since
     /// `ac96c65c` the content thread ships a `ModulationSnapshot` EVERY
     /// tick and `app_render.rs` applies it to `local_project`
-    /// unconditionally (only overlay drags gate it). The restore guard
-    /// (`ActiveInspectorDrag`) has no Macro variant, so a stale snapshot
-    /// landing mid-drag stomps the in-flight value back to pre-drag; the
-    /// commit handler then sees old == new and emits NO undo command.
+    /// unconditionally (only overlay drags gate it). At the time the restore
+    /// guard had no Macro variant, so a stale snapshot landing mid-drag stomped
+    /// the in-flight value back to pre-drag and the commit handler saw
+    /// old == new and emitted NO undo command. The guard is now
+    /// `ScrubState.active` (`ResolvedScrub::Macro`); this proves it holds.
     #[test]
     fn macro_drag_survives_a_mid_gesture_modulation_snapshot() {
         let mut project = Project::default();
@@ -246,7 +247,6 @@ mod scene_card_convergence_tests {
                 baseline: (0.3, 0.9),
                 live: (0.3, 0.9),
             }),
-            ..Default::default()
         };
         let mut local = stale;
         scrub.restore_dragged(&mut local);
@@ -275,9 +275,10 @@ mod scene_card_convergence_tests {
     ///   (data_version bump from any concurrent command — playback, MIDI
     ///   phantom commit, another gesture), simulated exactly the way
     ///   app_render.rs ~808-817 applies it: replace the local project, then
-    ///   restore the guarded drag. Families without an `ActiveInspectorDrag`
-    ///   variant lose the in-flight value here — the commit then sees
-    ///   old == new and emits NO undo entry ("doesn't respond").
+    ///   restore the guarded drag (`ScrubState::restore_dragged`). A family
+    ///   whose gesture doesn't reach the `active` restore slot loses the
+    ///   in-flight value here — the commit then sees old == new and emits NO
+    ///   undo entry ("doesn't respond").
     mod undo_baseline {
         use super::*;
         use manifold_editing::service::EditingService;
@@ -2197,10 +2198,11 @@ mod scene_card_convergence_tests {
     /// the matrix above drives, so they can't ride `trio_cycle`. What made
     /// them lose undo entries was a mid-gesture full-snapshot *stomp*
     /// reverting the in-flight reshape before the commit read it back via
-    /// `watched_reshape` — the exact failure `ActiveInspectorDrag::apply` now
-    /// prevents. These prove the restore at that level: given the guard a live
-    /// drag installs, a stale pre-drag snapshot must come back carrying the
-    /// dragged value, so the commit sees new != old and records one undo.
+    /// `watched_reshape` — the exact failure the `ResolvedScrub::Mapping*`
+    /// restore now prevents. These prove the restore at that level: given the
+    /// guard a live drag installs, a stale pre-drag snapshot must come back
+    /// carrying the dragged value, so the commit sees new != old and records one
+    /// undo.
     mod mapping_undo_baseline {
         use super::*;
 
@@ -2257,17 +2259,21 @@ mod scene_card_convergence_tests {
             let (min0, max0, _, _) = reshape(&project, &binding_id);
             assert_eq!((min0, max0), (0.0, 1.0), "fixture starts at the default range");
 
-            // The guard a live range drag installs (in-flight range 0.2..0.8).
-            let guard = crate::app::ActiveInspectorDrag::MappingRange {
-                target,
-                param_id: binding_id.clone(),
-                min: 0.2,
-                max: 0.8,
+            // The guard a live range drag installs (in-flight range 0.2..0.8),
+            // now a `ResolvedScrub::MappingRange` in `ScrubState.active`.
+            let scrub = crate::ui_bridge::scrub::ScrubState {
+                active: Some(crate::ui_bridge::scrub::ResolvedScrub::MappingRange {
+                    target,
+                    param_id: binding_id.clone(),
+                    baseline: (0.2, 0.8),
+                    live: (0.2, 0.8),
+                }),
             };
             // A full snapshot lands mid-drag carrying the stale pre-drag
-            // project; app_render restores the guarded drag onto it.
+            // project; app_render restores the guarded drag onto it via the real
+            // restore path.
             let mut stomped = project.clone();
-            guard.apply(&mut stomped);
+            scrub.restore_dragged(&mut stomped);
 
             let (min, max, _, _) = reshape(&stomped, &binding_id);
             assert_eq!(
@@ -2283,14 +2289,16 @@ mod scene_card_convergence_tests {
             let (_, _, scale0, offset0) = reshape(&project, &binding_id);
             assert_eq!((scale0, offset0), (1.0, 0.0), "fixture starts at identity affine");
 
-            let guard = crate::app::ActiveInspectorDrag::MappingAffine {
-                target,
-                param_id: binding_id.clone(),
-                scale: 2.5,
-                offset: -0.5,
+            let scrub = crate::ui_bridge::scrub::ScrubState {
+                active: Some(crate::ui_bridge::scrub::ResolvedScrub::MappingAffine {
+                    target,
+                    param_id: binding_id.clone(),
+                    baseline: (2.5, -0.5),
+                    live: (2.5, -0.5),
+                }),
             };
             let mut stomped = project.clone();
-            guard.apply(&mut stomped);
+            scrub.restore_dragged(&mut stomped);
 
             let (_, _, scale, offset) = reshape(&stomped, &binding_id);
             assert_eq!(

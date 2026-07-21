@@ -725,6 +725,16 @@ pub enum RootAction {
     /// node id (the app resolves its screen rect at open time — same
     /// convention as `SceneSetupBeginNumericTextInput`).
     AudioSendGainBeginTextInput(AudioSendId, f32, crate::node::NodeId),
+    // ── Graph-editor mapping-sidebar drags (`EffectMappingRange*` /
+    // `EffectMappingAffine*`) are FRAME-RESIDENT (UI_FUNNEL_DECOMPOSITION P-I,
+    // Fork-2): they stay `RootAction` variants dispatched from `app_render`'s
+    // pending-actions loop, NOT `PanelAction::Scrub`. Reason: the commit reads
+    // the reshaped range/affine back via `watched_reshape`, which needs the
+    // app's graph-editor watch context — folding them onto the wire would force
+    // that context into `DispatchCtx` (a rejected cascade-redesign). Only their
+    // snapshot-stomp guard folded into `ScrubState.active` (a
+    // `ResolvedScrub::Mapping{Range,Affine}`); the wire variants below are
+    // unchanged.
     /// Snapshot the binding's `(min, max)` before a range drag begins.
     EffectMappingRangeSnapshot {
         binding_id: String,

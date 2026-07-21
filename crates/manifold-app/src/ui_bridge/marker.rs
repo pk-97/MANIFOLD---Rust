@@ -158,7 +158,6 @@ mod tests {
                 baseline: 0.0,
                 live: 5.0,
             }),
-            ..Default::default()
         };
 
         // A full snapshot lands mid-drag carrying the stale pre-drag project;

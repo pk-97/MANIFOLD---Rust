@@ -16,13 +16,15 @@
 //! value with only `&mut Project` — no dispatch context — which is why the
 //! resolved target is captured at Begin, not re-resolved.
 //!
-//! MIGRATION STATE (P-I in progress): the `Param` family rides the new
-//! `active` gesture; the remaining families still ride the interim per-gesture
-//! snapshot `Option`s + `ActiveInspectorDrag` below and port in batches. Both
-//! restore paths coexist until the batches complete, then the interim slots and
-//! `ActiveInspectorDrag` die.
+//! MIGRATION STATE (P-I complete for the restore slot): every scrubable family
+//! — panel-wired (`PanelAction::Scrub`) and frame-resident (the graph-editor
+//! mapping drags + graph-canvas node-param drags, driven from `app_render`'s
+//! pending-actions loop, not the wire) — now rides the single `active` slot.
+//! The interim per-gesture snapshot `Option`s and the `ActiveInspectorDrag`
+//! enum are gone; `ScrubState.active` is the one restore payload, and
+//! [`ScrubState::check_single_active_on_begin`] machine-checks that only one
+//! gesture is ever live (one pointer, one gesture).
 
-use crate::app::ActiveInspectorDrag;
 use crate::content_command::ContentCommand;
 use manifold_core::audio_mod::{AudioModShape, TriggerAction};
 use manifold_core::effects::ParamId;
@@ -49,30 +51,43 @@ use super::dispatch::resolve::{
 };
 use super::{DispatchCtx, DispatchResult};
 
-/// The in-flight scrub-gesture snapshots threaded through `dispatch`. Every
-/// interim field is the undo baseline captured on a drag's `…Snapshot`/
-/// `…DragBegin` and consumed on its `…Commit`; `None` when no such gesture is
-/// active. `active` is the P-I-ported gesture (baseline + resolved restore,
-/// unified — the shape every interim field collapses into).
+/// The single in-flight scrub gesture (P-I). `active` holds the undo baseline
+/// plus the resolved restore payload for whichever gesture is live —
+/// panel-wired or frame-resident — or `None` when none is. One pointer means one
+/// gesture, so one slot: [`Self::check_single_active_on_begin`] flags any Begin
+/// that finds the slot already occupied (a prior gesture that leaked it).
 #[derive(Default)]
 pub struct ScrubState {
-    /// Active inspector drag — prevents snapshot from overwriting dragged field.
-    pub active_inspector_drag: Option<ActiveInspectorDrag>,
-    /// The single P-I-ported gesture: undo baseline + resolved restore payload.
+    /// The single live gesture: undo baseline + resolved restore payload.
     pub active: Option<ResolvedScrub>,
 }
 
 impl ScrubState {
     /// Re-apply the in-flight scrub value after a mid-gesture content-thread
-    /// snapshot swap stomped `local_project` (the restore path). Handles both
-    /// the interim `active_inspector_drag` families and the P-I-ported `active`
-    /// gesture; at most one is live at a time.
+    /// snapshot swap stomped `local_project` (the restore path). One gesture is
+    /// live at a time; `active` is the whole picture.
     pub fn restore_dragged(&self, project: &mut Project) {
-        if let Some(drag) = &self.active_inspector_drag {
-            drag.apply(project);
-        }
         if let Some(active) = &self.active {
             active.restore(project);
+        }
+    }
+
+    /// Machine-check the single-active-gesture invariant (P-I): at a gesture's
+    /// Begin/open, `active` must be empty — one pointer can drive only one
+    /// gesture at a time. A non-empty slot means a prior gesture leaked without
+    /// committing; loud in debug (assert) and in release (warn), then the caller
+    /// overwrites (the pre-P-I behavior a leaked snapshot field also had). Called
+    /// at BOTH entry points: the dispatch wire ([`dispatch_scrub`]) and the
+    /// frame-resident gesture opens (mapping drags, node-param drags).
+    pub fn check_single_active_on_begin(&self, entry: &str) {
+        if self.active.is_some() {
+            debug_assert!(
+                false,
+                "single-active-gesture invariant violated: {entry} Begin while a scrub gesture is already active"
+            );
+            log::warn!(
+                "[scrub] single-active-gesture invariant: {entry} Begin while a gesture is already active — the prior gesture leaked its slot"
+            );
         }
     }
 }
@@ -80,9 +95,8 @@ impl ScrubState {
 /// A resolved, self-contained scrub gesture: the undo baseline plus the
 /// resolved write target and the latest live value, enough to restore the
 /// gesture after a snapshot stomp with only `&mut Project`. One variant per
-/// ported family — the surviving essence of `ActiveInspectorDrag`'s per-family
-/// write logic, unified with the undo baseline. Grows as P-I batches port; at
-/// completion it fully replaces `ActiveInspectorDrag`.
+/// scrubable family — panel-wired and frame-resident alike — the unified
+/// successor to the retired `ActiveInspectorDrag` per-family write logic (P-I).
 pub enum ResolvedScrub {
     /// An exposed card param on an effect/generator graph (was the
     /// `ParamSnapshot`/`ParamChanged`/`ParamCommit` trio +
@@ -227,6 +241,43 @@ pub enum ResolvedScrub {
         baseline: f32,
         live: f32,
     },
+    /// A graph-editor mapping-sidebar range drag (`EffectMappingRange*`,
+    /// BUG-262). NOT a `PanelAction::Scrub` family — dispatched from
+    /// `app_render`'s pending-actions loop (the commit reads the new range back
+    /// via `watched_reshape`, so it needs the app's editor context, not the
+    /// dispatch ctx). Only the snapshot-stomp guard lives here: `baseline`/`live`
+    /// are `(min, max)` pairs; the restore re-stamps the in-flight range through
+    /// the SAME `build_mapping_command` write `preview_mapping` lands each tick.
+    MappingRange {
+        target: GraphTarget,
+        param_id: String,
+        baseline: (f32, f32),
+        live: (f32, f32),
+    },
+    /// A graph-editor mapping-sidebar affine (scale/offset) drag
+    /// (`EffectMappingAffine*`, BUG-262). Same frame-resident story as
+    /// `MappingRange`; `baseline`/`live` are `(scale, offset)` pairs.
+    MappingAffine {
+        target: GraphTarget,
+        param_id: String,
+        baseline: (f32, f32),
+        live: (f32, f32),
+    },
+    /// A card-bound graph-node-face param scrub (`BoundNodeParamDrag`, BUG-281).
+    /// NOT a `PanelAction::Scrub` family — driven from the graph canvas's
+    /// `SetGraphNodeParam` reroute arm in `app_render`. The wrapped struct IS the
+    /// undo baseline + in-flight value + session identity; the restore re-applies
+    /// its in-flight card value (the same `set_base_param` write the live tick
+    /// uses), since the bound path writes `local_project` synchronously.
+    BoundNodeParam(Box<crate::app_render::BoundNodeParamDrag>),
+    /// An unbound graph-node-face param scrub (`UnboundNodeParamDrag`, BUG-282).
+    /// The mirror of `BoundNodeParam` for the un-rerouted path — but its live
+    /// writes go through `MutateProjectLive` only (never a synchronous
+    /// `local_project` write), so a snapshot stomp has nothing local to revert:
+    /// the restore is a deliberate no-op. Held here purely so the ONE
+    /// undo-worthy commit on `EndGraphNodeParamScrub` and the single-active
+    /// invariant see it.
+    UnboundNodeParam(Box<crate::app_render::UnboundNodeParamDrag>),
 }
 
 impl ResolvedScrub {
@@ -443,6 +494,50 @@ impl ResolvedScrub {
                 }
                 project.timeline.sort_markers();
             }
+            // The two mapping families restore through the SAME command
+            // `preview_mapping` executes each `*Changed` tick — build the reshape
+            // edit and run it on the project so a mid-drag snapshot swap can't
+            // revert the def value the commit reads back via `watched_reshape`
+            // (BUG-262).
+            ResolvedScrub::MappingRange {
+                target,
+                param_id,
+                live: (min, max),
+                ..
+            } => {
+                let seed = crate::app_render::seed_def_for_project(project, target);
+                let edit = manifold_editing::commands::effects::BindingMappingEdit {
+                    min: Some(*min),
+                    max: Some(*max),
+                    ..Default::default()
+                };
+                crate::app_render::build_mapping_command(target, param_id, edit, seed)
+                    .execute(project);
+            }
+            ResolvedScrub::MappingAffine {
+                target,
+                param_id,
+                live: (scale, offset),
+                ..
+            } => {
+                let seed = crate::app_render::seed_def_for_project(project, target);
+                let edit = manifold_editing::commands::effects::BindingMappingEdit {
+                    scale: Some(*scale),
+                    offset: Some(*offset),
+                    ..Default::default()
+                };
+                crate::app_render::build_mapping_command(target, param_id, edit, seed)
+                    .execute(project);
+            }
+            // Bound: re-apply the in-flight card value (the same `set_base_param`
+            // write the live tick uses), since the bound path writes
+            // `local_project` synchronously (BUG-281).
+            ResolvedScrub::BoundNodeParam(drag) => {
+                drag.apply(project);
+            }
+            // Unbound: live writes go through `MutateProjectLive` only, so a
+            // stomp has nothing local to revert — deliberate no-op (BUG-282).
+            ResolvedScrub::UnboundNodeParam(_) => {}
         }
     }
 }
@@ -466,6 +561,13 @@ pub(crate) fn dispatch_scrub(
         ctx.active_layer,
     );
     let active_layer = &effective_active_layer;
+
+    // Single-active-gesture invariant (P-I): every wire family's Begin writes
+    // `ctx.scrub.active` — one check here covers them all (the frame-resident
+    // gestures check at their own opens).
+    if matches!(phase, ScrubPhase::Begin) {
+        ctx.scrub.check_single_active_on_begin("wire");
+    }
 
     match value_ref {
         ValueRef::Param(gpt, param_id) => match phase {

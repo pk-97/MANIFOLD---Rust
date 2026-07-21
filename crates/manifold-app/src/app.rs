@@ -47,115 +47,11 @@ pub type SelectionState = UIState;
 // ClipDragMode, ClipDragSnapshot, ClipDragState — REMOVED.
 // All drag state now lives in InteractionOverlay (interaction_overlay.rs).
 
-/// Tracks which inspector field is actively being dragged by the user.
-/// After snapshot acceptance, the dragged value is restored to prevent overwrite.
-#[derive(Debug, Clone)]
-pub(crate) enum ActiveInspectorDrag {
-    // MasterOpacity/LedBrightness/LayerOpacity/Macro/Param migrated to the
-    // unified scrub gesture (`ui_bridge::scrub::ResolvedScrub`, P-I / D4).
-    // Trim (modulation trim-range handle trio, driver / audio-mod / Ableton,
-    // BUG-246) migrated to the unified scrub gesture
-    // (`ui_bridge::scrub::ResolvedScrub::Trim`, P-I / D4).
-    // AudioGain (layer-header audio-gain trio) migrated to the unified scrub
-    // gesture (`ui_bridge::scrub::ResolvedScrub::LayerAudioGain`, P-I / D4).
-    // EnvelopeTarget (orange handle / `Target*` trio) and EnvelopeDecay
-    // (`EnvDecay*` trio) migrated to the unified scrub gesture
-    // (`ui_bridge::scrub::ResolvedScrub::{EnvelopeTarget,EnvDecay}`, P-I / D4).
-    // AudioModShape (drawer shaping-slider `AudioModShape*` trio) migrated to the
-    // unified scrub gesture (`ui_bridge::scrub::ResolvedScrub::AudioModShape`,
-    // P-I / D4) — whole-shape restore preserved.
-    // AudioModStepAmount (drawer Step-amount slider `AudioModStepAmount*` trio)
-    // migrated to the unified scrub gesture
-    // (`ui_bridge::scrub::ResolvedScrub::AudioModStepAmount`, P-I / D4) — whole
-    // `TriggerAction` baseline, wrap-preserving restore.
-    // AudioTriggerShape (layer clip-trigger shaping-slider `AudioTriggerShape*`
-    // trio) migrated to the unified scrub gesture
-    // (`ui_bridge::scrub::ResolvedScrub::AudioTriggerShape`, P-I / D4) —
-    // whole-shape restore preserved.
-    // AudioSendGain (send-gain calibration-drag `AudioSendGainDrag*` trio)
-    // migrated to the unified scrub gesture
-    // (`ui_bridge::scrub::ResolvedScrub::AudioSendGain`, P-I / D4).
-    // AudioCrossover (band-divider `AudioCrossover*` trio) migrated to the
-    // unified scrub gesture (`ui_bridge::scrub::ResolvedScrub::AudioCrossover`,
-    // P-I / D4).
-    // RelightParam (3D-Shading knob trio) migrated to the unified scrub gesture
-    // (`ui_bridge::scrub::ResolvedScrub::RelightParam`, P-I / D4).
-    // AbletonMacroTrim (macro-bank trim-bar `AbletonMacroTrim*` trio) migrated to
-    // the unified scrub gesture (`ui_bridge::scrub::ResolvedScrub::AbletonMacroTrim`,
-    // P-I / D4) — whole `(min, max)` range restore preserved.
-    /// A graph-editor mapping-sidebar range drag (`EffectMappingRange*` trio,
-    /// BUG-262). Unlike the cluster-C families this one dispatches through
-    /// `app_render`'s `pending_actions` loop, not the inspector: the commit
-    /// reads the new range back via `watched_reshape`, so an unguarded
-    /// mid-drag snapshot swap reverts the def and the commit sees old == new —
-    /// no undo entry. Restores the in-flight range through the same
-    /// `build_mapping_command` write `preview_mapping` lands each tick.
-    MappingRange {
-        target: manifold_core::GraphTarget,
-        param_id: String,
-        min: f32,
-        max: f32,
-    },
-    /// A graph-editor mapping-sidebar affine (scale/offset) drag
-    /// (`EffectMappingAffine*` trio, BUG-262). Same restore path as
-    /// `MappingRange`, writing the binding's scale/offset.
-    MappingAffine {
-        target: manifold_core::GraphTarget,
-        param_id: String,
-        scale: f32,
-        offset: f32,
-    },
-    // Marker (timeline-marker drag guard, BUG-280) migrated to the unified scrub
-    // gesture (`ui_bridge::scrub::ResolvedScrub::Marker`, P-I / D4) — still a
-    // viewport-driven gesture, not a `PanelAction::Scrub` family, but its
-    // snapshot-stomp guard now shares the one `ScrubState.active` restore slot.
-}
-
-impl ActiveInspectorDrag {
-    /// Write the dragged value back into the project after snapshot acceptance.
-    pub(crate) fn apply(&self, project: &mut manifold_core::project::Project) {
-        match self {
-            // Every restore below writes through the SAME store the family's
-            // live `*Changed` arm writes, so a mid-drag snapshot swap can't
-            // revert the in-flight value (undo audit 2026-07-19, cluster C).
-            // The two mapping families restore through the SAME command
-            // `preview_mapping` executes each `*Changed` tick — build the
-            // reshape edit and run it on the project so a mid-drag snapshot
-            // swap can't revert the def value the commit reads back via
-            // `watched_reshape` (BUG-262, undo audit 2026-07-19 cluster C).
-            Self::MappingRange {
-                target,
-                param_id,
-                min,
-                max,
-            } => {
-                let seed = crate::app_render::seed_def_for_project(project, target);
-                let edit = manifold_editing::commands::effects::BindingMappingEdit {
-                    min: Some(*min),
-                    max: Some(*max),
-                    ..Default::default()
-                };
-                crate::app_render::build_mapping_command(target, param_id, edit, seed)
-                    .execute(project);
-            }
-            Self::MappingAffine {
-                target,
-                param_id,
-                scale,
-                offset,
-            } => {
-                let seed = crate::app_render::seed_def_for_project(project, target);
-                let edit = manifold_editing::commands::effects::BindingMappingEdit {
-                    scale: Some(*scale),
-                    offset: Some(*offset),
-                    ..Default::default()
-                };
-                crate::app_render::build_mapping_command(target, param_id, edit, seed)
-                    .execute(project);
-            }
-        }
-    }
-}
+// ActiveInspectorDrag — REMOVED (UI_FUNNEL_DECOMPOSITION P-I). Every scrubable
+// gesture's snapshot-stomp guard — panel-wired and frame-resident (the
+// graph-editor mapping drags, the graph-canvas node-param drags, the marker
+// drag) — now rides the single `ui_bridge::scrub::ScrubState.active` slot as a
+// `ResolvedScrub` variant. The restore path is `ScrubState::restore_dragged`.
 
 pub struct Application {
     // GPU
@@ -259,35 +155,15 @@ pub struct Application {
     // Selection
     pub(crate) selection: SelectionState,
     pub(crate) active_layer_id: Option<LayerId>,
-    /// In-flight scrub-gesture snapshots (eight slider/trim/audio snapshots +
-    /// `active_inspector_drag`), regrouped off the field list into one struct
-    /// (UI_FUNNEL_DECOMPOSITION P-B, D3; `ui_bridge::scrub::ScrubState`). Threaded
-    /// into `dispatch` as `ctx.scrub`. Interim shape — P-I replaces it with the
-    /// addressed gesture engine.
+    /// The single in-flight scrub gesture — panel-wired and frame-resident alike
+    /// (UI_FUNNEL_DECOMPOSITION P-I, D4; `ui_bridge::scrub::ScrubState`). Threaded
+    /// into `dispatch` as `ctx.scrub`; the graph-editor mapping drags and
+    /// graph-canvas node-param drags in `app_render` open it directly. The old
+    /// per-gesture snapshot fields (`mapping_range_snapshot`,
+    /// `mapping_affine_snapshot`, `bound_node_param_drag`,
+    /// `unbound_node_param_drag`, `active_inspector_drag`) folded into its one
+    /// `active` slot.
     pub(crate) scrub: crate::ui_bridge::ScrubState,
-    /// User param-binding mapping range drag snapshot `(min, max)` for
-    /// undo. Captured on `EffectMappingRangeSnapshot`, committed as one
-    /// `EditUserParamBindingCommand` on `EffectMappingRangeCommit`.
-    pub(crate) mapping_range_snapshot: Option<(f32, f32)>,
-    /// User param-binding scale/offset drag snapshot `(scale, offset)` for
-    /// undo. Captured on `EffectMappingAffineSnapshot`, committed as one
-    /// `EditUserParamBindingCommand` on `EffectMappingAffineCommit`.
-    pub(crate) mapping_affine_snapshot: Option<(f32, f32)>,
-
-    /// A node-face scrub session currently rerouted through a card binding's
-    /// write-back path (`PARAM_TWO_WAY_BINDING_DESIGN.md` D1). `None` when no
-    /// bound-param drag is in flight. Set at the first `SetGraphNodeParam` on
-    /// a bound `(node_id, param_name)`; cleared on the matching
-    /// `EndGraphNodeParamScrub` (one undo-worthy `ChangeGraphParamCommand`
-    /// per whole drag, not one per pointer-move).
-    pub(crate) bound_node_param_drag: Option<crate::app_render::BoundNodeParamDrag>,
-
-    /// BUG-282: an ordinary (unbound) node-face param/vec scrub session,
-    /// mirroring `bound_node_param_drag` for the un-rerouted path — set at
-    /// the first `SetGraphNodeParam`/`SetOuterParam`-family move, cleared on
-    /// the matching `EndGraphNodeParamScrub` (one undo-worthy
-    /// `SetGraphNodeParamCommand` per whole drag, not one per pointer-move).
-    pub(crate) unbound_node_param_drag: Option<crate::app_render::UnboundNodeParamDrag>,
 
     // Effect clipboard (Unity: static EffectClipboard singleton, Rust: instance)
     pub(crate) effect_clipboard: manifold_editing::clipboard::EffectClipboard,
@@ -701,10 +577,6 @@ impl Application {
             selection: UIState::new(),
             active_layer_id: None,
             scrub: crate::ui_bridge::ScrubState::default(),
-            mapping_range_snapshot: None,
-            mapping_affine_snapshot: None,
-            bound_node_param_drag: None,
-            unbound_node_param_drag: None,
             effect_clipboard: manifold_editing::clipboard::EffectClipboard::new(),
             #[cfg(target_os = "macos")]
             internal_clipboard_change_count: None,
