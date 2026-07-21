@@ -13,16 +13,23 @@ the exit codes). Covers:
   6. multi-line use move  → exit 0, residue 0            (D-18: brace-list moves)
   7. smuggled use-block   → exit 1, residue > 0          (D-18: code hidden in a
                                                            `use { ... }` block)
-  8. D-11 preamble move   → exit 0, residue 0, scaffold>0 (byte-exact 2-line
+  8. context-opened       → exit 0, residue 0            (D-20 i: opener/closer
+     use-block edit                                      unchanged, inner list
+                                                           line edited)
+  9. D-11 preamble move   → exit 0, residue 0, scaffold>0 (byte-exact 2-line
                                                            preamble recomputed atop
                                                            a moved dispatch_<d> fn)
-  9. D-11 deviated        → exit 1, residue > 0          (one token off the
+ 10. D-11 deviated        → exit 1, residue > 0          (one token off the
      preamble                                            byte-exact form — any
                                                            deviation = residue)
- 10. impl-wrapper move    → exit 0, residue 0            (D-15: a bare inherent-impl
+ 11. drifted preamble     → exit 0, residue 0            (D-20 iii: inspector.rs's
+     removed                                             actual drifted original
+                                                           deleted, canonical form
+                                                           recomputed elsewhere)
+ 12. impl-wrapper move    → exit 0, residue 0            (D-15: a bare inherent-impl
                                                            wrapper relocated into a
                                                            submodule is ALLOW wiring)
- 11. impl-wrapper body    → exit 1, residue > 0          (D-15: a body edit hiding
+ 13. impl-wrapper body    → exit 1, residue > 0          (D-15: a body edit hiding
      edit                                                 inside the moved wrapper)
 
 Run: python3 scripts/test_move_identity_check.py   (exit 0 = all pass)
@@ -176,6 +183,30 @@ SMUGGLED_USE_BLOCK = (
     "// placeholder\n"
 )
 
+# D-20(i) fixture: a multi-line `use { ... }` whose OPENER and CLOSER are
+# both UNCHANGED (context) lines — only an inner list line is edited (one
+# name removed, a different name added). Before the fix, block tracking never
+# armed (the opener never appears as a +/- line), so the inner +/- lines fell
+# to residue. `KeepGadget,` stays byte-identical in both versions so it
+# remains a genuine context line inside the block, proving the tracker
+# doesn't need every inner line touched to work.
+CONTEXT_USE_BASE = (
+    "use crate::gadgets::{\n"
+    "    OmicronGadget,\n"
+    "    KeepGadget,\n"
+    "};\n"
+    "\n"
+    "fn keep_fn() {}\n"
+)
+CONTEXT_USE_AFTER = (
+    "use crate::gadgets::{\n"
+    "    RhoGadget,\n"
+    "    KeepGadget,\n"
+    "};\n"
+    "\n"
+    "fn keep_fn() {}\n"
+)
+
 
 # D-11 fixtures: the byte-exact 2-line preamble a split-out `dispatch_<d>` fn
 # recomputes at its top (it can't inherit the outer fn's locals). Case 8 proves
@@ -215,6 +246,31 @@ PARAMS_MODULE = (
 PARAMS_MODULE_DEVIATED = (
     "pub fn dispatch_params(action: &PanelAction, ctx: &mut Ctx) -> DispatchResult {\n"
     + PREAMBLE_DEVIATED
+    + PARAMS_BODY
+    + "}\n"
+)
+
+# D-20(iii) fixture: the drifted preamble actually present in inspector.rs's
+# `dispatch_inspector` (verified against the source, not invented) — an
+# explicit `&*ctx.active_layer` reborrow, an explicit `&Option<LayerId>` type
+# annotation on the second `let`, and the call split across multiple lines.
+# Proves the drifted form's REMOVED lines (the `-` side, when the last
+# preamble-using domain moves out and the drifted original is deleted with
+# nothing left behind) are recognized as scaffold, not residue. The ADD side
+# uses the CANONICAL form (already proven by case_preamble_scaffold above) —
+# this fixture is specifically about the removal-side drifted entries.
+PREAMBLE_DRIFTED_INSPECTOR = (
+    "    let (effective_tab, effective_active_layer) = super::editor_dispatch_context(\n"
+    "        ctx.editor_target,\n"
+    "        &*ctx.project,\n"
+    "        ctx.ui.inspector.last_effect_tab(),\n"
+    "        &*ctx.active_layer,\n"
+    "    );\n"
+    "    let active_layer: &Option<LayerId> = &effective_active_layer;\n"
+)
+DISPATCH_PARAMS_BASE_DRIFTED = (
+    "pub fn dispatch_params(action: &PanelAction, ctx: &mut Ctx) -> DispatchResult {\n"
+    + PREAMBLE_DRIFTED_INSPECTOR
     + PARAMS_BODY
     + "}\n"
 )
@@ -317,6 +373,14 @@ def case_smuggled_use_block(repo: Path) -> tuple[bool, str]:
     return ok, f"exit={code} {out.splitlines()[0]}"
 
 
+def case_context_use_block(repo: Path) -> tuple[bool, str]:
+    commit_tree(repo, {"dispatch.rs": CONTEXT_USE_BASE}, "base")
+    commit_tree(repo, {"dispatch.rs": CONTEXT_USE_AFTER}, "context-use-edit")
+    code, out = run_checker(repo)
+    ok = code == 0 and field(out, "residue") == 0
+    return ok, f"exit={code} {out.splitlines()[0]}"
+
+
 def case_preamble_scaffold(repo: Path) -> tuple[bool, str]:
     commit_tree(repo, {"inspector.rs": DISPATCH_PARAMS_BASE + "// tail\n"}, "base")
     commit_tree(
@@ -338,6 +402,18 @@ def case_preamble_deviated(repo: Path) -> tuple[bool, str]:
     )
     code, out = run_checker(repo)
     ok = code == 1 and field(out, "residue") > 0
+    return ok, f"exit={code} {out.splitlines()[0]}"
+
+
+def case_drifted_preamble_removed(repo: Path) -> tuple[bool, str]:
+    commit_tree(repo, {"inspector.rs": DISPATCH_PARAMS_BASE_DRIFTED + "// tail\n"}, "base")
+    commit_tree(
+        repo,
+        {"inspector.rs": "// tail\n", "params.rs": PARAMS_MODULE},
+        "split-with-drifted-preamble-removed",
+    )
+    code, out = run_checker(repo)
+    ok = code == 0 and field(out, "residue") == 0
     return ok, f"exit={code} {out.splitlines()[0]}"
 
 
@@ -373,8 +449,10 @@ CASES = [
     ("scaffold over cap -> exit 1", case_over_cap),
     ("multi-line use move -> exit 0 [D-18]", case_multiline_use_move),
     ("smuggled use-block -> exit 1 [D-18]", case_smuggled_use_block),
+    ("context-opened use-block edit -> exit 0 [D-20 i]", case_context_use_block),
     ("D-11 preamble move -> exit 0, scaffold [PROVEN]", case_preamble_scaffold),
     ("D-11 deviated preamble -> exit 1 [CAUGHT]", case_preamble_deviated),
+    ("drifted preamble removed -> exit 0 [D-20 iii]", case_drifted_preamble_removed),
     ("impl-wrapper move -> exit 0 [D-15]", case_impl_wrapper_move),
     ("impl-wrapper body edit -> exit 1 [D-15]", case_impl_wrapper_body_edit),
 ]

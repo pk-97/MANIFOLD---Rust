@@ -82,8 +82,23 @@ VIS = re.compile(r"^(pub(\((crate|super)\))?\s+)")
 # — this is the smuggle-proofing: a real code statement hidden between the
 # `use x::{` opener and the `};` closer must still be caught. Per-sign state
 # resets on every non-content diff line (hunk/file header, context line) so a
-# stray unrelated line elsewhere in the diff can never inherit an open block.
+# stray unrelated line elsewhere in the diff can never inherit an open block —
+# UNLESS that context line is itself a `use ... {` opener (D-20 i, see below).
+#
+# Context-opened blocks (D-20 i): the above only ARMS on a SIGNED opening
+# line. An inner-line-only edit under an otherwise-UNCHANGED `use ... {` —
+# e.g. one name swapped in a pre-existing multi-line import, opener and
+# closer both untouched — never emits the opener as a +/- line, so per-sign
+# tracking never arms and the inner +/- lines fell to residue. Fixed with a
+# second, SHARED `context_block` flag in `classify()`: a context (unchanged)
+# line matching USE_OPEN arms it; while armed it governs BOTH +/- inner
+# lines (the opener applies to old and new file alike); a context line
+# matching the closer shape disarms it. USE_ITEM's shape check is untouched
+# and applies identically to context-armed and signed-armed blocks, so the
+# smuggle-proofing (a non-import statement inside an open block is still
+# residue) holds for both.
 USE_OPEN = re.compile(r"^(pub(\((crate|super)\))?\s+)?use\s.*\{\s*$")
+USE_CLOSE = re.compile(r"^\}\s*;?$")
 _IDENT = r"[A-Za-z_]\w*"
 _PATH_ITEM = rf"{_IDENT}(?:::{_IDENT})*(?:\s+as\s+{_IDENT})?"
 USE_ITEM = re.compile(
@@ -129,11 +144,35 @@ SCAFFOLD = re.compile(
 # residue: "any deviation from the byte-exact form = residue = investigate, never
 # adapt" (D-11). Encodes D-11's text as the truth, not whatever inspector.rs happens
 # to contain today.
+#
+# Drifted removal-side entries (D-20 iii): inspector.rs's ACTUAL in-source
+# preamble (still in `dispatch_inspector`, verified against the source at the
+# time of this fix) drifted from the canonical form above — an explicit
+# `&*ctx.active_layer` reborrow on the call's last arg, an explicit
+# `&Option<LayerId>` type annotation on the second `let`, and the call
+# formatted across multiple lines rather than one. Each drifted source LINE
+# is its own PREAMBLE_LINES entry (not one joined statement, unlike the
+# canonical form above) because matching is per DIFF LINE, and git emits each
+# physical source line of a multi-line statement as its own `-` line when the
+# whole statement is removed. These are REMOVAL-side only: when the LAST
+# preamble-using domain moves out, the drifted original is deleted with
+# nothing left behind to inherit it (the new location recomputes the
+# CANONICAL form, matched above) — so these only ever need to match `-` diff
+# lines, never `+`. Sanctioned as scaffold for the same reason as the
+# canonical form: zero behavior change, byte-exact match only.
 PREAMBLE_LINES = {
     "let (effective_tab, effective_active_layer) = super::editor_dispatch_context"
     "(ctx.editor_target, &*ctx.project, ctx.ui.inspector.last_effect_tab(), "
     "ctx.active_layer);",
     "let active_layer = &effective_active_layer;",
+    # Drifted form (D-20 iii), one entry per physical source line:
+    "let (effective_tab, effective_active_layer) = super::editor_dispatch_context(",
+    "ctx.editor_target,",
+    "&*ctx.project,",
+    "ctx.ui.inspector.last_effect_tab(),",
+    "&*ctx.active_layer,",
+    ");",
+    "let active_layer: &Option<LayerId> = &effective_active_layer;",
 }
 
 
@@ -186,31 +225,62 @@ def classify(out: str) -> tuple[dict[str, int], list[str]]:
     residue: list[str] = []
     counts = {"moved": 0, "allowed": 0, "comments": 0, "scaffold": 0}
     # Per-sign use-block state (D-18): True while a `-` (resp. `+`) multi-line
-    # `use { ... }` is open and hasn't hit its closing `};` yet.
+    # `use { ... }` opened by a SIGNED line is open and hasn't hit its
+    # closing `};` yet.
     open_block = {"+": False, "-": False}
+    # Context-opened use-block state (D-20 i): True while a multi-line
+    # `use { ... }` whose OPENER is an UNCHANGED (context) line is open. This
+    # is a single SHARED flag, not per-sign — the opener is unchanged so it
+    # applies to both the old and new file, and governs +/- inner lines of
+    # either sign until a context (unchanged) closer disarms it.
+    context_block = False
     for raw in out.splitlines():
         is_moved = bool(MOVED_RE.match(raw))
         plain = ANSI.sub("", raw)
-        if not plain.startswith(("+", "-")) or HEADER.match(plain):
-            # Non-content line (hunk/file header, unchanged context): a use
-            # block can never legitimately span one, so reset both signs.
+        if HEADER.match(plain):
+            # Diff file header (+++ / ---): never content, and a use block
+            # can never legitimately span one.
             open_block["+"] = False
             open_block["-"] = False
+            context_block = False
+            continue
+        if not plain.startswith(("+", "-")):
+            # Hunk header (`@@ ... @@`) or real unchanged context line. A
+            # signed block can't legitimately span either, so that state
+            # always resets here.
+            open_block["+"] = False
+            open_block["-"] = False
+            if plain.startswith("@"):
+                # Hunk boundary: never content, and a context-opened block
+                # can't legitimately span one either — two unrelated use
+                # blocks in different hunks must never be treated as one.
+                context_block = False
+                continue
+            # Real context line — it may be the opener or closer of a
+            # context-opened block (D-20 i), so check before dropping it.
+            body = plain[1:].strip() if plain else ""
+            if context_block:
+                if USE_CLOSE.match(body):
+                    context_block = False
+            elif USE_OPEN.match(body):
+                context_block = True
             continue
         sign = plain[0]
         if is_moved:
             counts["moved"] += 1
             continue
-        if open_block[sign]:
+        if open_block[sign] or context_block:
             body = plain[1:].strip()
             if USE_ITEM.match(body):
                 counts["allowed"] += 1
                 if "}" in body:
                     open_block[sign] = False
+                    context_block = False
                 continue
             # Not import-item-shaped: a real line was smuggled inside the
-            # open block. Leave the block "open" (a well-formed diff will
-            # still close it later) and fall through to residue below.
+            # open block (signed or context-opened alike). Leave the block
+            # "open" (a well-formed diff will still close it later) and fall
+            # through to residue below.
         if ALLOW.match(plain):
             counts["allowed"] += 1
             if USE_OPEN.match(plain[1:].strip()):
