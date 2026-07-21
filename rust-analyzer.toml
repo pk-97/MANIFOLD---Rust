@@ -1,0 +1,21 @@
+# BUG-297: every Claude Code session spawns a private rust-analyzer (~4GB
+# warm with default settings); four sessions + a workspace build jetsammed
+# the machine (2026-07-21). This file caps per-instance memory for every
+# instance, whichever session spawned it.
+
+# The dominant cost: pre-indexing all 16 crates at startup. Our LSP usage is
+# sparse on-demand queries (goToDefinition, findReferences), so build caches
+# lazily — idle instances stay at a few hundred MB instead of ~4GB.
+cachePriming.enable = false
+
+# Query-cache LRU (default 128). LSP-tool sessions revisit far fewer sites
+# than an interactive editor; keep the working set small.
+lru.capacity = 32
+
+# No flycheck: the harness never saves-to-check, and clippy runs in the gate.
+checkOnSave = false
+
+# Worktree copies of the repo live under .claude/worktrees — never index
+# them from the main root (each worktree's own analyzer has its own copy of
+# this file via git).
+files.exclude = [".claude"]
