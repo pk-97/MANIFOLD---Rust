@@ -106,10 +106,14 @@ Design-doc P-S headline amendment is drafted at phase close (my close report).
       invariant pair passing post-restructure is the proof. Lane's quoted gates green (accepted per D-38,
       no independent rebuild); free move_identity re-confirm matches team-lead's review.
 
-- [ ] **P-S5** `inspector.rs` host split (PURE MOVE · Sonnet lane · independent of P-S4)
-      `inspector/{render,routing,card_drag}.rs` per census §3. No MIGRATE (no bespoke row infra).
-      Sequential after P-S4 in slot-0 (one slot); files disjoint from param_card so no content conflict.
-      Gate: move_identity residue 0 + inspector drag/scroll/geometry suites (heavy) + swatch --no-run.
+- [x] **P-S5** DONE — commit `4a2aa2b5` (ran PARALLEL in slot-1/lane/ws1-surface-p5 per D-38, lock suspended).
+      inspector.rs → inspector/{mod(2772),render(637),routing(416),card_drag(459)}.rs. move_identity
+      residue 0 PURE MOVE PROVEN (12 visibility widenings = required wiring). Team-lead ACCEPTED on quoted
+      gates (both bucket-deviation judgment calls + single tests-block call sound). Touched ONLY inspector
+      files (verified — inspector not on row-infra allowlist, so no shared-file conflict with P-S4).
+      MERGED into lane/ws1-surface at `e68e254f` (--no-ff, disjoint → trivial, 4 files). slot-1 RELEASED.
+      POST-MERGE combined build GREEN: check=0, clippy=0, nextest=0 (1172 passed), swatch=0 — the one
+      place both parallel branches first compile together.
 
 - [ ] **P-S6** D9 `--catalog` dump + D10 macros/settings-sliders-onto-hosts (SEMANTIC · Opus lane)
       Catalog = enumeration view over EXISTING dump machinery (NO new protocol, widget-tree §5 rule).
