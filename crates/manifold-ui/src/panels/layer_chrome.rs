@@ -5,7 +5,9 @@
 //! is dropped into the recovered slot, byte-identical. Public interface unchanged,
 //! so the inspector composite is untouched.
 
-use crate::{ParamsAction, RootAction};
+use crate::ParamsAction;
+#[cfg(test)]
+use crate::RootAction;
 use super::PanelAction;
 use crate::chrome::{Align, ChromeHost, Pad, Sizing, SliderSpec, View};
 use crate::color;

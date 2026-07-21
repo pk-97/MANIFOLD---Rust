@@ -385,5 +385,15 @@ intercepted earlier in app_render / ui_root). All 35 verified present as real
 - every Root variant confirmed as a real `mod.rs` inline arm (arm-nowhere = 0)
 - method: `scratchpad/pd_derive.py` -- `#[cfg(test)]` blocks stripped, `//` comments stripped, references restricted to baseline variants.
 
+## D-D1 location (executor's call, recorded)
+The 12 per-domain intent enums + 12 `From<DomainAction> for PanelAction` impls live in
+`crates/manifold-ui/src/panels/actions.rs` (new file; `pub mod actions;` + re-exports at
+`panels::` AND `manifold_ui::` top level). `PanelAction` (in `panels/mod.rs`) is the thin
+12-arm sum. Root arms: handled INLINE as a nested `match a { RootAction::… }` under the
+router's `PanelAction::Root(a)` arm in `ui_bridge/mod.rs::dispatch` (no separate
+`dispatch_root` — SliderReset's recursion + `inspector_select_tab` + `ctx.ui.toggle_*`
+keep it in the router's scope). Inspector chain (`dispatch_inspector`) and its
+`dispatch_chain_completeness` test RETIRED in the same change per the flat-12 ruling.
+
 ## D-D3 (scrub-trio annotation) -- TODO, pre-derived while warm
 Snapshot/Changed/Commit trio membership per variant is P-I's kill list; annotate here in D-D3.

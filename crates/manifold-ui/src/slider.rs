@@ -1,3 +1,4 @@
+#[cfg(test)]
 use crate::{MappingAction, ParamsAction, RootAction};
 use crate::color;
 use crate::drag::DragController;

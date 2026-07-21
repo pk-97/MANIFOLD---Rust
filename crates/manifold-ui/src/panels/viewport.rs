@@ -1,3 +1,4 @@
+#[cfg(test)]
 use crate::{MarkerAction, TransportAction};
 use super::{Panel, PanelAction};
 use crate::bitmap_painter;

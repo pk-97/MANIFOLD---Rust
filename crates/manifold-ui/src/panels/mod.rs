@@ -28,16 +28,11 @@ pub mod toast;
 pub mod transport;
 pub mod viewport;
 
-use crate::input::{Modifiers, UIEvent};
+use crate::input::UIEvent;
 use crate::layout::ScreenLayout;
-use crate::node::{Color32, Rect};
+use crate::node::Color32;
 use crate::tree::UITree;
-use crate::types::{
-    AbletonMacroAddress, AudioDeviceRef, AudioFeature, MacroCurve, MidiTriggerMode,
-    PresetTypeId, TonemapCurve,
-};
-use crate::view::UiGraphTarget;
-use manifold_foundation::{AudioSendId, Beats, ClipId, LayerId, ParamId};
+use manifold_foundation::{AudioSendId, LayerId};
 pub use viewport::HitRegion;
 
 // Per-domain intent enums (the FLAT sum decomposition of `PanelAction`, P-D /

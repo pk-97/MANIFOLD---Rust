@@ -16,6 +16,7 @@
 //!
 //! See `docs/NODE_INTENT_DISPATCH.md` for the full design + migration plan.
 
+#[cfg(test)]
 use crate::{TransportAction};
 use crate::node::NodeId;
 use crate::panels::PanelAction;

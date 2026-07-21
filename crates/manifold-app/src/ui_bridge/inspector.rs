@@ -1690,7 +1690,7 @@ mod scene_card_convergence_tests {
             let mut active_layer = None;
             let mut prefs = crate::user_prefs::UserPrefs::for_test();
             crate::ui_bridge::editing::dispatch_editing(
-                &PanelAction::Editing(EditingAction::ContextDeleteClip(clip_id.to_string())),
+                &EditingAction::ContextDeleteClip(clip_id.to_string()),
                 &mut rig.project,
                 &rig.tx,
                 &rig.content_state,

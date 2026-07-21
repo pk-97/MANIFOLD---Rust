@@ -8,6 +8,7 @@
 //! [`layout`]: crate::chrome::layout
 //! [`diff`]: crate::chrome::diff
 
+#[cfg(test)]
 use crate::{TransportAction};
 use crate::node::{Color32, FontWeight, TextAlign, UINodeType, UIStyle};
 use crate::panels::PanelAction;

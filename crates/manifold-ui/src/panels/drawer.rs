@@ -16,6 +16,7 @@
 //!
 //! See `docs/AUDIO_MODULATION_DESIGN.md` §10.2.
 
+#[cfg(test)]
 use crate::{ParamsAction};
 use std::cell::Cell;
 

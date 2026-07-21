@@ -11,7 +11,9 @@
 //! slider drag never fight. The public interface is unchanged, so the inspector
 //! composite that drives this card is untouched. See `docs/CHROME_API_DESIGN.md`.
 
-use crate::{ParamsAction, RootAction};
+use crate::ParamsAction;
+#[cfg(test)]
+use crate::RootAction;
 use super::PanelAction;
 use crate::chrome::{Align, ChromeHost, Pad, Sizing, SliderSpec, View, components};
 use crate::color;

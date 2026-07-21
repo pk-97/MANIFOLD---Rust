@@ -18,6 +18,7 @@
 //!   and touches nothing; the app re-runs `build()` for the affected range, the
 //!   same way it already handles a collapse or drawer toggle.
 
+#[cfg(test)]
 use crate::{TransportAction};
 use crate::chrome::layout::{self, LaidNode};
 use crate::chrome::view::{validate, View};
