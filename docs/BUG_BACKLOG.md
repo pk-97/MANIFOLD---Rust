@@ -272,16 +272,6 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 
 **Fix shape:** Part A done via `SUPERFLUX_DELTA` (see Status). Part B needs a discriminator other than peak magnitude — the two constants swept this session are provably a dead end (see Root cause). A sustained-energy veto (the pad's ridge sits atop continuously-elevated Low-band energy, unlike a kick's transient rise from a quiet floor) or a birth-context gate (require the ridge's onset hop to itself be near a Low-band amplitude rise) are the remaining candidate shapes — neither implemented or swept this session; both are logic changes, out of this session's harness-gated-tuning-only scope.
 
-### BUG-246 (unguarded-inspector-gestures-race-full-snapshot-acceptance) — audio-gain / mod-config / trim-style drags aren't in `ActiveInspectorDrag`, so a full snapshot accepted mid-drag stomps the in-flight value — found 2026-07-18 while fixing the macro/scene undo regression (`30712691`)
-
-**Status:** FIXED 2026-07-21 — all four remaining families (audio-gain / mod-shape / step-amount / crossover) were wired by the 2026-07-19 cluster-C undo audit: each has an `ActiveInspectorDrag` set-site + `apply` arm restored at both snapshot-acceptance sites (app_render.rs ~909/~971) + a `_stomp` regression test (`audio_gain_stomp` / `audio_mod_shape_stomp` / `audio_mod_step_amount_stomp` / `audio_crossover_stomp`, all green in `ui_bridge::inspector::scene_card_convergence_tests::undo_baseline`). The trim family was already FIXED 2026-07-18. Backlog entry was stale.
-
-**Symptom:** while dragging an audio-gain / mod-shape / step-amount / crossover / trim slider, a full project snapshot acceptance (`app_render.rs` ~line 808) replaces `local_project`; the restore at ~817 only covers `ActiveInspectorDrag` variants (MasterOpacity, LedBrightness, LayerOpacity, Param, Macro, SceneParam). Unguarded drags visibly snap back mid-gesture, and the commit handler's re-read of `new_val` from `local_project` produces a wrong or skipped undo command (same mechanism the macro fix's red test proves).
-
-**Root cause:** the commit handlers derive `new_val` by re-reading a project that concurrent snapshot acceptance can rewrite; only guarded gesture kinds are restored.
-
-**Fix shape:** either add guard variants for the remaining gesture families (mechanical, follows the Macro/SceneParam precedent in `30712691`), or the class-level version: commit handlers carry the gesture's final value instead of re-reading `local_project`. The two new dispatch tests in `inspector.rs` (`macro_drag_survives_a_mid_gesture_modulation_snapshot`, `scene_row_drag_survives_a_full_snapshot_replacement`) are the template for proving each family.
-
 ### BUG-244 (graph-canvas-apply-live-values-skips-non-numeric-param-kinds) — the editor canvas's per-frame live-value overlay only updates scalar params; enum/color/vec/table on-face values stay frozen until a `graph_version` bump — found 2026-07-18, param-desync campaign lane B (K3 readers lane)
 
 **Status:** OPEN — LOW-MED (the value plane for non-numeric kinds silently falls back to structural-sync cadence; a driver or command writing an enum/color/vec param shows stale on the node face while the render is already using the new value).
@@ -1327,6 +1317,16 @@ clean).
 **Status:** OPEN
 
 ## Fixed
+
+### BUG-246 (unguarded-inspector-gestures-race-full-snapshot-acceptance) — audio-gain / mod-config / trim-style drags aren't in `ActiveInspectorDrag`, so a full snapshot accepted mid-drag stomps the in-flight value — found 2026-07-18 while fixing the macro/scene undo regression (`30712691`)
+
+**Status:** FIXED 2026-07-21 — all four remaining families (audio-gain / mod-shape / step-amount / crossover) were wired by the 2026-07-19 cluster-C undo audit: each has an `ActiveInspectorDrag` set-site + `apply` arm restored at both snapshot-acceptance sites (app_render.rs ~909/~971) + a `_stomp` regression test (`audio_gain_stomp` / `audio_mod_shape_stomp` / `audio_mod_step_amount_stomp` / `audio_crossover_stomp`, all green in `ui_bridge::inspector::scene_card_convergence_tests::undo_baseline`). The trim family was already FIXED 2026-07-18. Backlog entry was stale.
+
+**Symptom:** while dragging an audio-gain / mod-shape / step-amount / crossover / trim slider, a full project snapshot acceptance (`app_render.rs` ~line 808) replaces `local_project`; the restore at ~817 only covers `ActiveInspectorDrag` variants (MasterOpacity, LedBrightness, LayerOpacity, Param, Macro, SceneParam). Unguarded drags visibly snap back mid-gesture, and the commit handler's re-read of `new_val` from `local_project` produces a wrong or skipped undo command (same mechanism the macro fix's red test proves).
+
+**Root cause:** the commit handlers derive `new_val` by re-reading a project that concurrent snapshot acceptance can rewrite; only guarded gesture kinds are restored.
+
+**Fix shape:** either add guard variants for the remaining gesture families (mechanical, follows the Macro/SceneParam precedent in `30712691`), or the class-level version: commit handlers carry the gesture's final value instead of re-reading `local_project`. The two new dispatch tests in `inspector.rs` (`macro_drag_survives_a_mid_gesture_modulation_snapshot`, `scene_row_drag_survives_a_full_snapshot_replacement`) are the template for proving each family.
 
 ### BUG-282 (graph-canvas-unbound-param-scrub-floods-undo-stack) — dragging an unbound graph-node-face param scrub records one undo entry PER POINTER-MOVE TICK instead of batching to one per gesture
 **Status:** FIXED 2026-07-21 @ 7f48bdfb (workstream C lane 2) — fix (a) as scoped: a new `UnboundNodeParamDrag` session field on `Application` (plain field, mirrors `bound_node_param_drag`; no new shared state) opened on the first move, captures the true pre-drag value via `descend_level_ref`; every in-flight tick live-writes through `ContentCommand::MutateProjectLive` (`Command::execute` on the content-thread project, no undo entry); `EndGraphNodeParamScrub` commits ONE `Execute(SetGraphNodeParamCommand::new(...).with_previous(pre_drag_value))` so undo restores the true baseline. `VecScrub`'s release arm (previously an empty no-op) now emits `EndGraphNodeParamScrub` with the same moved-guard `ParamScrub` uses, so vec/channel scrubs coalesce too. Existing `with_previous`/`with_scope`/`new` seams only — no new API. Conviction test `n_tick_scrub_is_one_undo_entry_and_undo_restores_pre_drag_value`: a 5-tick scrub yields exactly one undo entry and undo restores the pre-drag value.
