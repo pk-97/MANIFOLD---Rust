@@ -58,6 +58,32 @@ COMMENT = re.compile(r"^[+-]\s*(//|///|//!)")
 # cannot change runtime behavior (it only widens who may call).
 VIS = re.compile(r"^(pub(\((crate|super)\))?\s+)")
 
+# Dispatch-split scaffold (UI_FUNNEL_DECOMPOSITION P-B): the structural glue a
+# `dispatch_inspector` match-split adds that git cannot classify as a move
+# because it is genuinely new text, not relocated — a sub-dispatcher signature,
+# its `match action {`, the `unhandled` sentinel, closing braces, and the
+# ordered first-non-unhandled CHAIN ROUTER lines (one delegation call + one
+# fall-through guard per domain module — bounded by module count, ~2 lines
+# each). Counted SEPARATELY and capped (SCAFFOLD_CAP): bulk semantics must
+# never hide here, so a commit exceeding the cap FAILS. Deliberately NARROW —
+# no delegation-arm or `PanelAction::` pattern of any kind, because a
+# hand-written variant→module arm is a routing decision (its correctness is
+# proven by variant-census equality, NOT waived here). The chain-router lines
+# are per-DOMAIN (~7 total), not per-variant, so they stay well under the cap
+# and cannot smuggle a misroute. See docs/UI_FUNNEL_DECOMPOSITION_DESIGN.md
+# D6 / INV-G1.
+SCAFFOLD_CAP = 25
+SCAFFOLD = re.compile(
+    r"^[+-]\s*(?:"
+    r"(?:pub(?:\((?:crate|super)\))?\s+)?fn dispatch_\w+\(.*"  # (1) sub-dispatcher signature (single line)
+    r"|match action \{"                                        # (2) the per-domain match head
+    r"|_ => DispatchResult::unhandled\(\),?"                   # (3) the fall-through sentinel
+    r"|let \w+ = [\w:]+::dispatch_\w+\(action, ctx\);"         # (5) chain-router delegation call
+    r"|if !(\w+)\.unhandled \{ return \1; \}"                  # (6) chain-router fall-through guard
+    r"|\}\)?,?;?"                                              # (4) a bare closing brace
+    r")\s*$"
+)
+
 
 def drop_visibility_pairs(residue: list[str]) -> tuple[list[str], int]:
     """Remove matched -old/+new pairs that are identical after stripping a
@@ -95,6 +121,34 @@ def drop_visibility_pairs(residue: list[str]) -> tuple[list[str], int]:
     return remaining, pairs
 
 
+def classify(out: str) -> tuple[dict[str, int], list[str]]:
+    """Bucket every +/- line of a `--color-moved` diff into moved / allowlisted
+    wiring / comment / dispatch-split scaffold, returning (counts, residue).
+    Split out of `main` so the self-test can feed synthetic colored diffs
+    without constructing a git repo."""
+    residue: list[str] = []
+    counts = {"moved": 0, "allowed": 0, "comments": 0, "scaffold": 0}
+    for raw in out.splitlines():
+        is_moved = bool(MOVED_RE.match(raw))
+        plain = ANSI.sub("", raw)
+        if not plain.startswith(("+", "-")) or HEADER.match(plain):
+            continue
+        if is_moved:
+            counts["moved"] += 1
+            continue
+        if ALLOW.match(plain):
+            counts["allowed"] += 1
+            continue
+        if COMMENT.match(plain):
+            counts["comments"] += 1
+            continue
+        if SCAFFOLD.match(plain):
+            counts["scaffold"] += 1
+            continue
+        residue.append(plain)
+    return counts, residue
+
+
 def main() -> int:
     args = [a for a in sys.argv[1:] if a != "--show-all"]
     show_all = "--show-all" in sys.argv
@@ -123,36 +177,23 @@ def main() -> int:
 
     out = subprocess.run(diff_args, capture_output=True, text=True, check=True).stdout
 
-    residue: list[str] = []
-    allowed = 0
-    moved = 0
-    comments = 0
-    for raw in out.splitlines():
-        is_moved = bool(MOVED_RE.match(raw))
-        plain = ANSI.sub("", raw)
-        if not plain.startswith(("+", "-")) or HEADER.match(plain):
-            continue
-        if is_moved:
-            moved += 1
-            continue
-        if ALLOW.match(plain):
-            allowed += 1
-            continue
-        if COMMENT.match(plain):
-            comments += 1
-            continue
-        residue.append(plain)
-
+    counts, residue = classify(out)
     residue, vis_pairs = drop_visibility_pairs(residue)
+    scaffold = counts["scaffold"]
 
     print(
-        f"moved lines: {moved}  allowlisted wiring: {allowed}  "
-        f"comment lines: {comments}  visibility pairs: {vis_pairs}  "
-        f"residue: {len(residue)}"
+        f"moved lines: {counts['moved']}  allowlisted wiring: {counts['allowed']}  "
+        f"comment lines: {counts['comments']}  scaffold: {scaffold}  "
+        f"visibility pairs: {vis_pairs}  residue: {len(residue)}"
     )
     if vis_pairs:
         print(f"  note: {vis_pairs} signature(s) widened visibility (fn -> pub(crate) fn "
               f"etc.) — required wiring when private items move across module walls.")
+    if scaffold > SCAFFOLD_CAP:
+        print(f"  scaffold {scaffold} EXCEEDS cap {SCAFFOLD_CAP}: a dispatch-split commit")
+        print("  may not carry this many structural lines — bulk semantics must not hide")
+        print("  in scaffold. Split into smaller slices (fewer domain modules per commit).")
+        return 1
     if residue:
         limit = len(residue) if show_all else 40
         for line in residue[:limit]:
@@ -162,7 +203,11 @@ def main() -> int:
         print("NOT a pure move. Residue lines are semantic changes or sub-threshold")
         print("(<3-line) moves — split the commit or justify each line in review.")
         return 1
-    print("PURE MOVE PROVEN: every non-wiring changed line is a detected move.")
+    if scaffold:
+        print(f"PURE MOVE PROVEN: every non-scaffold changed line is a detected move "
+              f"({scaffold} dispatch-split scaffold line(s), within cap {SCAFFOLD_CAP}).")
+    else:
+        print("PURE MOVE PROVEN: every non-wiring changed line is a detected move.")
     return 0
 
 
