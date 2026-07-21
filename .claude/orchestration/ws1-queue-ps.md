@@ -98,9 +98,13 @@ Design-doc P-S headline amendment is drafted at phase close (my close report).
       runner (`run_ui_flows.py scene-`). Plus clippy/nextest(ui,app)/swatch + scene undo/golden.
       REPORT to team-lead on completion (reviews before P-S4/5 run).
 
-- [ ] **P-S4** `param_card.rs` render/routing/state split (PURE MOVE · Sonnet lane · after P-S2)
-      `param_card/{render,routing,state}.rs` per census §1. Embeds the RowHost field from P-S2.
-      Gate: move_identity residue 0 + full card/golden/undo/geometry suites + swatch --no-run.
+- [x] **P-S4** DONE — commit `d19362a6`. param_card.rs → param_card/{mod(3292),render(1893),routing(783),
+      state(571)}.rs. Team-lead ACCEPTED as-is (D-38 economy, no split): move_identity residue = the
+      2-line `super::` depth fix (named D-9 wiring) + the 17-line `no_bespoke_row_infra.rs` `is_allowlisted`
+      restructure — a FORCED companion edit whose slash-guard (`.replace(MAIN_SEPARATOR,"/")`) stops
+      `param_card/mod.rs` from blanket-allowlisting other dir-modules' mod.rs; reviewed + correct. The
+      invariant pair passing post-restructure is the proof. Lane's quoted gates green (accepted per D-38,
+      no independent rebuild); free move_identity re-confirm matches team-lead's review.
 
 - [ ] **P-S5** `inspector.rs` host split (PURE MOVE · Sonnet lane · independent of P-S4)
       `inspector/{render,routing,card_drag}.rs` per census §3. No MIGRATE (no bespoke row infra).
