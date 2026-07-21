@@ -13,6 +13,12 @@ the exit codes). Covers:
   6. multi-line use move  → exit 0, residue 0            (D-18: brace-list moves)
   7. smuggled use-block   → exit 1, residue > 0          (D-18: code hidden in a
                                                            `use { ... }` block)
+  8. D-11 preamble move   → exit 0, residue 0, scaffold>0 (byte-exact 2-line
+                                                           preamble recomputed atop
+                                                           a moved dispatch_<d> fn)
+  9. D-11 deviated        → exit 1, residue > 0          (one token off the
+     preamble                                            byte-exact form — any
+                                                           deviation = residue)
 
 Run: python3 scripts/test_move_identity_check.py   (exit 0 = all pass)
 """
@@ -166,6 +172,49 @@ SMUGGLED_USE_BLOCK = (
 )
 
 
+# D-11 fixtures: the byte-exact 2-line preamble a split-out `dispatch_<d>` fn
+# recomputes at its top (it can't inherit the outer fn's locals). Case 8 proves
+# the canonical form is recognized as scaffold when a fn moves across a module
+# wall and gains it; case 9 proves one deviated token (smuggle-proofing, D-18
+# precedent) is NOT recognized — it must fall through to residue.
+PARAMS_BODY = (
+    "    let scaled = ctx.value * 2;\n"
+    "    let offset = scaled + 1;\n"
+    "    DispatchResult::from(offset)\n"
+)
+DISPATCH_PARAMS_BASE = (
+    "pub fn dispatch_params(action: &PanelAction, ctx: &mut Ctx) -> DispatchResult {\n"
+    + PARAMS_BODY
+    + "}\n"
+)
+PREAMBLE_CANONICAL = (
+    "    let (effective_tab, effective_active_layer) = super::editor_dispatch_context"
+    "(ctx.editor_target, &*ctx.project, ctx.ui.inspector.last_effect_tab(), "
+    "ctx.active_layer);\n"
+    "    let active_layer = &effective_active_layer;\n"
+)
+# One token deviated from the byte-exact form: the trailing arg is a different
+# field (`ctx.previous_layer` instead of `ctx.active_layer`).
+PREAMBLE_DEVIATED = (
+    "    let (effective_tab, effective_active_layer) = super::editor_dispatch_context"
+    "(ctx.editor_target, &*ctx.project, ctx.ui.inspector.last_effect_tab(), "
+    "ctx.previous_layer);\n"
+    "    let active_layer = &effective_active_layer;\n"
+)
+PARAMS_MODULE = (
+    "pub fn dispatch_params(action: &PanelAction, ctx: &mut Ctx) -> DispatchResult {\n"
+    + PREAMBLE_CANONICAL
+    + PARAMS_BODY
+    + "}\n"
+)
+PARAMS_MODULE_DEVIATED = (
+    "pub fn dispatch_params(action: &PanelAction, ctx: &mut Ctx) -> DispatchResult {\n"
+    + PREAMBLE_DEVIATED
+    + PARAMS_BODY
+    + "}\n"
+)
+
+
 def case_pure_move(repo: Path) -> tuple[bool, str]:
     commit_tree(repo, {"a.rs": HELPER + "// tail\n", "b.rs": "// b\n"}, "base")
     commit_tree(repo, {"a.rs": "// tail\n", "b.rs": "// b\n" + HELPER}, "move")
@@ -237,6 +286,30 @@ def case_smuggled_use_block(repo: Path) -> tuple[bool, str]:
     return ok, f"exit={code} {out.splitlines()[0]}"
 
 
+def case_preamble_scaffold(repo: Path) -> tuple[bool, str]:
+    commit_tree(repo, {"inspector.rs": DISPATCH_PARAMS_BASE + "// tail\n"}, "base")
+    commit_tree(
+        repo,
+        {"inspector.rs": "// tail\n", "params.rs": PARAMS_MODULE},
+        "split-with-preamble",
+    )
+    code, out = run_checker(repo)
+    ok = code == 0 and field(out, "residue") == 0 and field(out, "scaffold") >= 2
+    return ok, f"exit={code} {out.splitlines()[0]}"
+
+
+def case_preamble_deviated(repo: Path) -> tuple[bool, str]:
+    commit_tree(repo, {"inspector.rs": DISPATCH_PARAMS_BASE + "// tail\n"}, "base")
+    commit_tree(
+        repo,
+        {"inspector.rs": "// tail\n", "params.rs": PARAMS_MODULE_DEVIATED},
+        "split-with-deviated-preamble",
+    )
+    code, out = run_checker(repo)
+    ok = code == 1 and field(out, "residue") > 0
+    return ok, f"exit={code} {out.splitlines()[0]}"
+
+
 CASES = [
     ("pure move -> exit 0", case_pure_move),
     ("smuggled edit -> exit 1", case_smuggled),
@@ -245,6 +318,8 @@ CASES = [
     ("scaffold over cap -> exit 1", case_over_cap),
     ("multi-line use move -> exit 0 [D-18]", case_multiline_use_move),
     ("smuggled use-block -> exit 1 [D-18]", case_smuggled_use_block),
+    ("D-11 preamble move -> exit 0, scaffold [PROVEN]", case_preamble_scaffold),
+    ("D-11 deviated preamble -> exit 1 [CAUGHT]", case_preamble_deviated),
 ]
 
 

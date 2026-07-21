@@ -105,6 +105,31 @@ SCAFFOLD = re.compile(
     r")\s*$"
 )
 
+# D-11 preamble (UI_FUNNEL_DECOMPOSITION P-B, params/modulation/mapping domains): the
+# ONLY sanctioned preamble is byte-exact. When a domain is split into its own
+# `dispatch_<d>` fn, that fn can't inherit the outer fn's locals and must recompute
+# these two lines at its top; later slices delete the now-dead original from
+# inspector.rs. So these lines legitimately appear as `+` (new fn) and eventually `-`
+# (dead original) with zero behavior change — counted as SCAFFOLD (same SCAFFOLD_CAP),
+# never residue. Matched as EXACT-STRING literals, whitespace-normalized (leading
+# +/- marker stripped, internal whitespace collapsed to single spaces), deliberately
+# NARROW — NOT a general `let ... = super::...` shape. Any deviation (different arg,
+# renamed local, reordered call) is NOT in this set and falls straight through to
+# residue: "any deviation from the byte-exact form = residue = investigate, never
+# adapt" (D-11). Encodes D-11's text as the truth, not whatever inspector.rs happens
+# to contain today.
+PREAMBLE_LINES = {
+    "let (effective_tab, effective_active_layer) = super::editor_dispatch_context"
+    "(ctx.editor_target, &*ctx.project, ctx.ui.inspector.last_effect_tab(), "
+    "ctx.active_layer);",
+    "let active_layer = &effective_active_layer;",
+}
+
+
+def _normalize_ws(body: str) -> str:
+    """Collapse internal whitespace to single spaces for exact-string comparison."""
+    return " ".join(body.split())
+
 
 def drop_visibility_pairs(residue: list[str]) -> tuple[list[str], int]:
     """Remove matched -old/+new pairs that are identical after stripping a
@@ -182,6 +207,9 @@ def classify(out: str) -> tuple[dict[str, int], list[str]]:
             continue
         if COMMENT.match(plain):
             counts["comments"] += 1
+            continue
+        if _normalize_ws(plain[1:]) in PREAMBLE_LINES:
+            counts["scaffold"] += 1
             continue
         if SCAFFOLD.match(plain):
             counts["scaffold"] += 1
