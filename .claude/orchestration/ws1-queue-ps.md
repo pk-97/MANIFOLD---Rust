@@ -115,9 +115,22 @@ Design-doc P-S headline amendment is drafted at phase close (my close report).
       POST-MERGE combined build GREEN: check=0, clippy=0, nextest=0 (1172 passed), swatch=0 — the one
       place both parallel branches first compile together.
 
-- [ ] **P-S6** D9 `--catalog` dump + D10 macros/settings-sliders-onto-hosts (SEMANTIC · Opus lane)
-      Catalog = enumeration view over EXISTING dump machinery (NO new protocol, widget-tree §5 rule).
-      D10: macros/settings sliders flow through `param_surface` hosts (zero unsanctioned row paths).
-      Gate: `--catalog` self-test + flow suite. Draft the P-S headline amendment in close report.
+- [x] **P-S6** SPLIT by dispatcher: P-S6a (D9 catalog, DONE) + P-S6b (D10 chrome, RESOLVED per D-39).
+  - [x] **P-S6a** DONE — commit `4ae591f5`. D9 `--catalog` enumeration view over ParamSurface rows
+        (id + RowRole + named chrome) over EXISTING dump machinery (no new protocol). +41 lines to
+        param_surface.rs + dump wiring + self-test. Team-lead ACCEPTED. STRUCTURAL KILL WORKING AS DESIGNED:
+        the catalog found a real BUG-239-family nameless-row residue on its FIRST run → logged BUG-302 by
+        team-lead (fix batched with VERIFICATION_INFRA design item; no rider tonight — don't reopen surface
+        code post-verification). Did NOT touch chrome-slider fence.
+  - [x] **P-S6b** D10 macros/settings-sliders-onto-hosts — RESOLVED per D-39 (Peter overrule; the earlier
+        "invention" framing is RETRACTED). No migration NOW, but NOT dismissed: chrome sliders are hard-coded
+        only because no unified system existed when built — an accident of history; chrome/opacity may change.
+        CLOSE-REPORT + P-Z TOMBSTONE LANGUAGE (D-39): "D10 closes as deferred to a DESIGNED unification — a
+        new register item CHROME_PARAMS design (app-level built-in performance params — master opacity, layer
+        gain, crossovers — declared via a small static manifest and hosted on ParamSurface; exposure/
+        automation/perform-surface semantics are product calls requiring Peter in the room), with an owner,
+        NOT a revival trigger. no_bespoke_row_infra remains the machine guard for the interim." Register
+        addition (CHROME_PARAMS) is team-lead's to make at landing.
+      Close: draft the P-S headline amendment ("split-by-layer with ONE RowHost dedup") in close report.
 
 ## Reporting triggers (to team-lead): P-S2 done, P-S3 done, 3+ parks, cannot proceed, ~400K ctx rotation, full-queue close.
