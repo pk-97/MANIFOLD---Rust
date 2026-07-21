@@ -21,7 +21,7 @@
 
 use manifold_foundation::{AudioSendId, LayerId, ParamId};
 
-use super::{AudioShapeParam, GraphParamTarget, TrimKind, UiRelightField};
+use super::{AudioShapeParam, BandDivider, GraphParamTarget, TrimKind, UiRelightField};
 
 /// One edge of a scrub gesture — maps 1:1 onto the retired
 /// `*Snapshot`/`*Changed`/`*Commit` trio (D4). The scrubbed value rides
@@ -134,4 +134,12 @@ pub enum ValueRef {
     /// stepper's trim range and pushes a live, non-undo edit). The stepper,
     /// type-in, and floor drags are separate one-shot actions, not this gesture.
     AudioSendGain(AudioSendId),
+    /// An Audio Setup band-divider (crossover) drag — was
+    /// `AudioCrossover{DragBegin,Changed,Commit}`. Global (no key); the dragged
+    /// `BandDivider` (Low or Mid, fixed for the gesture) rides the address, and
+    /// that divider's raw Hz rides `ScrubValue::Scalar` on Move. The host clamps
+    /// the dragged line against the other and the band edges (`clamp_crossovers`,
+    /// core-only) and restores the whole `(low_hz, mid_hz)` pair — so the value
+    /// stays a single-band Scalar, not a Range (the panel can't run the clamp).
+    AudioCrossover(BandDivider),
 }

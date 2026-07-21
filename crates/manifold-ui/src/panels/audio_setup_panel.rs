@@ -1903,7 +1903,7 @@ impl AudioSetupPanel {
             UIEvent::PointerDown { node_id, pos, modifiers } => {
                 if let Some(band) = self.divider_at(*pos) {
                     self.drag.start(AudioSetupDrag::Band(band), *pos);
-                    (true, vec![PanelAction::AudioSetup(AudioSetupAction::AudioCrossoverDragBegin)])
+                    (true, vec![PanelAction::Scrub(ValueRef::AudioCrossover(band), ScrubPhase::Begin)])
                 } else if let Some((send, start_db)) = self.gain_drag_target(*node_id) {
                     self.drag.start(
                         AudioSetupDrag::Calibration(CalibrationDrag::Gain {
@@ -1930,7 +1930,7 @@ impl AudioSetupPanel {
             }
             UIEvent::Drag { pos, .. } => match self.drag.payload().cloned() {
                 Some(AudioSetupDrag::Band(band)) => match self.scope_y_to_hz(pos.y) {
-                    Some(hz) => (true, vec![PanelAction::AudioSetup(AudioSetupAction::AudioCrossoverChanged(band, hz))]),
+                    Some(hz) => (true, vec![PanelAction::Scrub(ValueRef::AudioCrossover(band), ScrubPhase::Move(ScrubValue::Scalar(hz)))]),
                     None => (true, Vec::new()),
                 },
                 // 1 px = 0.1 dB / 0.5% (D7, `docs/AUDIO_SENDS_UX_DESIGN.md`
@@ -1945,7 +1945,7 @@ impl AudioSetupPanel {
                 None => (false, Vec::new()),
             },
             UIEvent::DragEnd { .. } | UIEvent::PointerUp { .. } => match self.drag.release() {
-                Some(AudioSetupDrag::Band(_)) => (true, vec![PanelAction::AudioSetup(AudioSetupAction::AudioCrossoverCommit)]),
+                Some(AudioSetupDrag::Band(band)) => (true, vec![PanelAction::Scrub(ValueRef::AudioCrossover(band), ScrubPhase::Commit)]),
                 Some(AudioSetupDrag::Calibration(CalibrationDrag::Gain { send, .. })) => {
                     (true, vec![PanelAction::Scrub(ValueRef::AudioSendGain(send), ScrubPhase::Commit)])
                 }

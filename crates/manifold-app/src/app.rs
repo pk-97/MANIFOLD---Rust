@@ -75,11 +75,9 @@ pub(crate) enum ActiveInspectorDrag {
     // AudioSendGain (send-gain calibration-drag `AudioSendGainDrag*` trio)
     // migrated to the unified scrub gesture
     // (`ui_bridge::scrub::ResolvedScrub::AudioSendGain`, P-I / D4).
-    /// An Audio Setup band-divider drag (`AudioCrossover*` trio).
-    AudioCrossover {
-        low_hz: f32,
-        mid_hz: f32,
-    },
+    // AudioCrossover (band-divider `AudioCrossover*` trio) migrated to the
+    // unified scrub gesture (`ui_bridge::scrub::ResolvedScrub::AudioCrossover`,
+    // P-I / D4).
     // RelightParam (3D-Shading knob trio) migrated to the unified scrub gesture
     // (`ui_bridge::scrub::ResolvedScrub::RelightParam`, P-I / D4).
     /// An Ableton macro trim-bar drag (`AbletonMacroTrim*` trio).
@@ -128,10 +126,6 @@ impl ActiveInspectorDrag {
             // Every restore below writes through the SAME store the family's
             // live `*Changed` arm writes, so a mid-drag snapshot swap can't
             // revert the in-flight value (undo audit 2026-07-19, cluster C).
-            Self::AudioCrossover { low_hz, mid_hz } => {
-                project.audio_setup.low_hz = *low_hz;
-                project.audio_setup.mid_hz = *mid_hz;
-            }
             Self::AbletonMacroTrim { slot_idx, min, max } => {
                 if let Some(m) = project
                     .settings

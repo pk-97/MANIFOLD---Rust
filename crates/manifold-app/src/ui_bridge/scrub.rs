@@ -30,7 +30,7 @@ use manifold_core::project::Project;
 use manifold_core::{GraphTarget, LayerId};
 use manifold_editing::commands::ableton::ChangeAbletonTrimCommand;
 use manifold_editing::commands::audio_mod::{SetAudioModActionCommand, SetAudioModShapeCommand};
-use manifold_editing::commands::audio_setup::SetAudioSendGainCommand;
+use manifold_editing::commands::audio_setup::{SetAudioCrossoversCommand, SetAudioSendGainCommand};
 use manifold_editing::commands::drivers::ChangeTrimCommand;
 use manifold_editing::commands::effect_target::DriverTarget;
 use manifold_editing::commands::effects::{ChangeGraphParamCommand, SetRelightParamCommand};
@@ -61,8 +61,6 @@ pub struct ScrubState {
     pub slider_snapshot: Option<f32>,
     /// Trim drag snapshot (min, max) for undo.
     pub trim_snapshot: Option<(f32, f32)>,
-    /// Band-divider drag snapshot `(low_hz, mid_hz)` for undo.
-    pub audio_crossover_snapshot: Option<(f32, f32)>,
     /// Active inspector drag — prevents snapshot from overwriting dragged field.
     pub active_inspector_drag: Option<ActiveInspectorDrag>,
     /// The single P-I-ported gesture: undo baseline + resolved restore payload.
@@ -200,6 +198,15 @@ pub enum ResolvedScrub {
         send_id: manifold_core::AudioSendId,
         baseline: f32,
         live: f32,
+    },
+    /// An Audio Setup band-divider (crossover) drag. Global; `baseline`/`live`
+    /// are the whole `(low_hz, mid_hz)` pair the commit diffs against and the
+    /// restore re-stamps (the live edit clamps the dragged line — identified by
+    /// the `BandDivider` on the wire — and writes both). The dragged band lives
+    /// on the ValueRef address, not here (restore/commit act on the pair).
+    AudioCrossover {
+        baseline: (f32, f32),
+        live: (f32, f32),
     },
 }
 
@@ -386,6 +393,12 @@ impl ResolvedScrub {
                 if let Some(s) = project.audio_setup.find_send_mut(send_id) {
                     s.gain_db = *live;
                 }
+            }
+            ResolvedScrub::AudioCrossover {
+                live: (low, mid), ..
+            } => {
+                project.audio_setup.low_hz = *low;
+                project.audio_setup.mid_hz = *mid;
             }
         }
     }
@@ -1684,6 +1697,68 @@ pub(crate) fn dispatch_scrub(
                             ctx.project,
                             ctx.content_tx,
                             Box::new(SetAudioSendGainCommand::new(send_id.clone(), old, new)),
+                        );
+                    }
+                }
+                DispatchResult::handled()
+            }
+        },
+
+        ValueRef::AudioCrossover(band) => match phase {
+            ScrubPhase::Begin => {
+                // Snapshot the whole pre-drag crossover pair as the undo baseline
+                // (global gesture — no key).
+                let baseline = (ctx.project.audio_setup.low_hz, ctx.project.audio_setup.mid_hz);
+                ctx.scrub.active = Some(ResolvedScrub::AudioCrossover {
+                    baseline,
+                    live: baseline,
+                });
+                DispatchResult::handled()
+            }
+            ScrubPhase::Move(sv) => {
+                if let Some(hz) = sv.scalar() {
+                    // Clamp the dragged line against the other line and the band
+                    // edges (core-only `clamp_crossovers`), then write BOTH low
+                    // and mid locally + a live, non-undo content edit so the
+                    // divider and analysis bands track the cursor.
+                    let dragging_low = matches!(band, manifold_ui::BandDivider::Low);
+                    let (cur_low, cur_mid) =
+                        (ctx.project.audio_setup.low_hz, ctx.project.audio_setup.mid_hz);
+                    let (low, mid) = if dragging_low {
+                        manifold_core::audio_setup::AudioSetup::clamp_crossovers(hz, cur_mid, true)
+                    } else {
+                        manifold_core::audio_setup::AudioSetup::clamp_crossovers(cur_low, hz, false)
+                    };
+                    if let Some(ResolvedScrub::AudioCrossover { live, .. }) = &mut ctx.scrub.active {
+                        *live = (low, mid);
+                    }
+                    ctx.project.audio_setup.low_hz = low;
+                    ctx.project.audio_setup.mid_hz = mid;
+                    ContentCommand::send(
+                        ctx.content_tx,
+                        ContentCommand::MutateProjectLive(Box::new(move |p| {
+                            p.audio_setup.low_hz = low;
+                            p.audio_setup.mid_hz = mid;
+                        })),
+                    );
+                }
+                DispatchResult::handled()
+            }
+            ScrubPhase::Commit => {
+                // One undo step: baseline pair (old) → current pair (new), via
+                // `audio_setup_command` (structural — the panel rebuilds).
+                let baseline = match &ctx.scrub.active {
+                    Some(ResolvedScrub::AudioCrossover { baseline, .. }) => Some(*baseline),
+                    _ => None,
+                };
+                ctx.scrub.active = None;
+                if let Some(old) = baseline {
+                    let new = (ctx.project.audio_setup.low_hz, ctx.project.audio_setup.mid_hz);
+                    if new != old {
+                        return audio_setup_command(
+                            ctx.project,
+                            ctx.content_tx,
+                            Box::new(SetAudioCrossoversCommand::new(old, new)),
                         );
                     }
                 }

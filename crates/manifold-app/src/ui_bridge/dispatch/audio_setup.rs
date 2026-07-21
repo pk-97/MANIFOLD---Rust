@@ -12,7 +12,7 @@
 //!   layer` are never needed.
 
 use manifold_editing::commands::audio_setup::{
-    AddAudioSendCommand, RemoveAudioSendCommand, RenameAudioSendCommand, SetAudioCrossoversCommand,
+    AddAudioSendCommand, RemoveAudioSendCommand, RenameAudioSendCommand,
     SetAudioInputDeviceCommand, SetAudioSendChannelsCommand, SetAudioSendFloorCommand,
     SetAudioSendGainCommand,
 };
@@ -274,61 +274,11 @@ pub(crate) fn dispatch_audio_setup(action: &AudioSetupAction, ctx: &mut super::s
         // triggers are authored on the layer only (`LayerClipTrigger`, P2).
         // `AudioSendAddLayerClicked` (Inputs section "+ Layer") is deleted
         // with the section's authoring (§7.2 item 7, P8, 2026-07-11).
-        AudioSetupAction::AudioCrossoverDragBegin => {
-            // Snapshot the pre-drag crossovers so the commit records one undo step.
-            ctx.scrub.audio_crossover_snapshot =
-                Some((ctx.project.audio_setup.low_hz, ctx.project.audio_setup.mid_hz));
-            if let Some((low_hz, mid_hz)) = ctx.scrub.audio_crossover_snapshot {
-                ctx.scrub.active_inspector_drag = Some(crate::app::ActiveInspectorDrag::AudioCrossover {
-                    low_hz,
-                    mid_hz,
-                });
-            }
-            DispatchResult::handled()
-        }
-        AudioSetupAction::AudioCrossoverChanged(band, hz) => {
-            // Live edit (no per-frame undo): clamp the dragged line against the
-            // other and the band edges, then apply to the local project and the
-            // content thread so the divider + analysis bands track the cursor.
-            let dragging_low = matches!(band, manifold_ui::BandDivider::Low);
-            let (cur_low, cur_mid) = (ctx.project.audio_setup.low_hz, ctx.project.audio_setup.mid_hz);
-            let (low, mid) = if dragging_low {
-                manifold_core::audio_setup::AudioSetup::clamp_crossovers(*hz, cur_mid, true)
-            } else {
-                manifold_core::audio_setup::AudioSetup::clamp_crossovers(cur_low, *hz, false)
-            };
-            if let Some(crate::app::ActiveInspectorDrag::AudioCrossover { low_hz, mid_hz }) =
-                &mut ctx.scrub.active_inspector_drag
-            {
-                *low_hz = low;
-                *mid_hz = mid;
-            }
-            ctx.project.audio_setup.low_hz = low;
-            ctx.project.audio_setup.mid_hz = mid;
-            ContentCommand::send(
-                ctx.content_tx,
-                ContentCommand::MutateProjectLive(Box::new(move |p| {
-                    p.audio_setup.low_hz = low;
-                    p.audio_setup.mid_hz = mid;
-                })),
-            );
-            DispatchResult::handled()
-        }
-        AudioSetupAction::AudioCrossoverCommit => {
-            // One undo step: snapshot (old) → current crossovers (new).
-            ctx.scrub.active_inspector_drag = None;
-            if let Some(old) = ctx.scrub.audio_crossover_snapshot.take() {
-                let new = (ctx.project.audio_setup.low_hz, ctx.project.audio_setup.mid_hz);
-                if new != old {
-                    return audio_setup_command(
-                        ctx.project,
-                        ctx.content_tx,
-                        Box::new(SetAudioCrossoversCommand::new(old, new)),
-                    );
-                }
-            }
-            DispatchResult::handled()
-        }
+        // Band-divider (crossover) drag trio migrated to the unified
+        // `PanelAction::Scrub` wire (`ValueRef::AudioCrossover`, P-I / D4): the
+        // dragged `BandDivider` rides the address, that line's raw Hz rides
+        // `ScrubValue::Scalar` (Move clamps via `clamp_crossovers` + live-edits
+        // both lines), Commit emits `SetAudioCrossoversCommand`.
 
     }
 }

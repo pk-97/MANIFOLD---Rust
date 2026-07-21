@@ -8,9 +8,7 @@
 //! `.claude/orchestration/pd-partition.md`.
 
 use super::PanelAction;
-use super::{
-    BandDivider, DriverConfigAction, GraphParamTarget, InspectorTab, UiRelightHeightFrom,
-};
+use super::{DriverConfigAction, GraphParamTarget, InspectorTab, UiRelightHeightFrom};
 use super::{browser_popup, picker_core};
 use crate::input::Modifiers;
 use crate::node::Rect;
@@ -571,15 +569,10 @@ pub enum AudioSetupAction {
     /// Step the selected send's pre-analysis noise floor by a dB delta (the
     /// spectrogram's Floor −/＋). Off ⇄ engaged is handled host-side.
     AudioSendFloorStep(AudioSendId, f32),
-    /// Begin dragging a band-divider line on the spectrogram — snapshot the
-    /// current crossovers so the commit records one undo step.
-    AudioCrossoverDragBegin,
-    /// Live crossover change while dragging a divider: which line + its new Hz.
-    /// Applied immediately (no per-frame undo) so the line tracks the cursor and
-    /// the analysis bands retune live.
-    AudioCrossoverChanged(BandDivider, f32),
-    /// Commit the band-divider drag as one undo step.
-    AudioCrossoverCommit,
+    // Band-divider (crossover) drag trio migrated to `PanelAction::Scrub`
+    // (`ValueRef::AudioCrossover`, P-I / D4): the dragged `BandDivider` rides the
+    // address, its raw Hz rides `ScrubValue::Scalar` (host clamps + live-edits
+    // both lines on Move).
 }
 
 #[derive(Debug, Clone)]

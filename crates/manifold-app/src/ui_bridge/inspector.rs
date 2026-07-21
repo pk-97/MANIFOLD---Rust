@@ -1095,13 +1095,16 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 move |h, p| {
-                    h.dispatch(&PanelAction::AudioSetup(AudioSetupAction::AudioCrossoverDragBegin), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::AudioCrossover(manifold_ui::BandDivider::Mid), ScrubPhase::Begin), p);
                     h.dispatch(
-                        &PanelAction::AudioSetup(AudioSetupAction::AudioCrossoverChanged(manifold_ui::BandDivider::Mid, after.1)),
+                        &PanelAction::Scrub(
+                            ValueRef::AudioCrossover(manifold_ui::BandDivider::Mid),
+                            ScrubPhase::Move(ScrubValue::Scalar(after.1)),
+                        ),
                         p,
                     );
                 },
-                |h, p| h.dispatch(&PanelAction::AudioSetup(AudioSetupAction::AudioCrossoverCommit), p),
+                |h, p| h.dispatch(&PanelAction::Scrub(ValueRef::AudioCrossover(manifold_ui::BandDivider::Mid), ScrubPhase::Commit), p),
                 |p| (p.audio_setup.low_hz, p.audio_setup.mid_hz),
                 before,
                 after,
