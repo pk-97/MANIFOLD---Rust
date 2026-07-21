@@ -9,7 +9,6 @@
 
 #![cfg(target_os = "macos")]
 
-use manifold_ui::{ParamsAction};
 use std::ffi::c_void;
 use std::slice;
 
@@ -1293,6 +1292,7 @@ fn modulation_drawer_sheet() {
     use manifold_ui::node::Rect;
     use manifold_ui::panels::drawer::{self, ButtonWidth, DrawerButton, DrawerRow, DrawerSpec};
     use manifold_ui::panels::PanelAction;
+    use manifold_ui::{ScrubPhase, ScrubValue, ValueRef};
     use manifold_ui::slider::{BitmapSlider, SliderColors};
     use manifold_ui::{UIFlags, UITree, ZTier};
 
@@ -1300,9 +1300,9 @@ fn modulation_drawer_sheet() {
     // reset action serves as a placeholder for the now-required field/param.
     let placeholder_reset = || {
         PanelAction::slider_reset(
-            PanelAction::Params(ParamsAction::MasterOpacitySnapshot),
-            PanelAction::Params(ParamsAction::MasterOpacityChanged(1.0)),
-            PanelAction::Params(ParamsAction::MasterOpacityCommit),
+            PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Begin),
+            PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Move(ScrubValue::Scalar(1.0))),
+            PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Commit),
         )
     };
 
