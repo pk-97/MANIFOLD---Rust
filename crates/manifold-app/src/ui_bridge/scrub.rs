@@ -34,6 +34,7 @@ use manifold_editing::commands::drivers::ChangeTrimCommand;
 use manifold_editing::commands::effect_target::DriverTarget;
 use manifold_editing::commands::effects::{ChangeGraphParamCommand, SetRelightParamCommand};
 use manifold_editing::commands::envelopes::{ChangeEnvelopeDecayCommand, ChangeEnvelopeTargetCommand};
+use manifold_editing::commands::layer::SetLayerClipTriggerCommand;
 use manifold_editing::commands::settings::{
     ChangeLayerOpacityCommand, ChangeLedBrightnessCommand, ChangeMacroCommand,
     ChangeMasterOpacityCommand,
@@ -41,8 +42,8 @@ use manifold_editing::commands::settings::{
 use manifold_ui::{AudioShapeParam, ScrubPhase, ValueRef};
 
 use super::dispatch::resolve::{
-    ableton_mapping_target, graph_audio_mod_dual_edit, graph_driver_dual_edit, graph_env_dual_edit,
-    resolve_graph_target,
+    ableton_mapping_target, clip_trigger_shape_dual_edit, graph_audio_mod_dual_edit,
+    graph_driver_dual_edit, graph_env_dual_edit, resolve_graph_target,
 };
 use super::{DispatchCtx, DispatchResult};
 
@@ -58,8 +59,6 @@ pub struct ScrubState {
     pub slider_snapshot: Option<f32>,
     /// Trim drag snapshot (min, max) for undo.
     pub trim_snapshot: Option<(f32, f32)>,
-    /// Audio-mod shaping-slider drag snapshot (whole shape) for undo.
-    pub audio_shape_snapshot: Option<AudioModShape>,
     /// Band-divider drag snapshot `(low_hz, mid_hz)` for undo.
     pub audio_crossover_snapshot: Option<(f32, f32)>,
     /// Send-gain drag snapshot (old dB) for undo (D7).
@@ -182,6 +181,17 @@ pub enum ResolvedScrub {
         param_id: ParamId,
         baseline: TriggerAction,
         live_amount: f32,
+    },
+    /// A layer clip-trigger drawer shaping slider (AudioSetup-domain twin of
+    /// `AudioModShape`). Addressed by `(layer_id, index)` into `clip_triggers`;
+    /// holds the WHOLE shape at both `baseline` and `live` (the drag edits one
+    /// scalar; the restore re-stamps the whole shape so the other two hold). The
+    /// commit diffs the whole `ClipTrigger` via `SetLayerClipTriggerCommand`.
+    AudioTriggerShape {
+        layer_id: LayerId,
+        index: usize,
+        baseline: AudioModShape,
+        live: AudioModShape,
     },
 }
 
@@ -351,6 +361,18 @@ impl ResolvedScrub {
                         };
                     }
                 });
+            }
+            ResolvedScrub::AudioTriggerShape {
+                layer_id,
+                index,
+                live,
+                ..
+            } => {
+                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id)
+                    && let Some(t) = layer.clip_triggers.get_mut(*index)
+                {
+                    t.shape = *live;
+                }
             }
         }
     }
@@ -1500,6 +1522,83 @@ pub(crate) fn dispatch_scrub(
                                 old_action,
                                 new_action,
                             ));
+                        boxed.execute(ctx.project);
+                        ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
+                    }
+                }
+                DispatchResult::handled()
+            }
+        },
+
+        ValueRef::AudioTriggerShape(layer_id, index, which) => match phase {
+            ScrubPhase::Begin => {
+                // Addressed directly by `(layer_id, index)` — no
+                // `resolve_graph_target`. Capture the WHOLE pre-drag shape as the
+                // undo baseline (the restore path re-stamps all three scalars).
+                let baseline = ctx
+                    .project
+                    .timeline
+                    .find_layer_by_id_mut(layer_id)
+                    .and_then(|(_, l)| l.clip_triggers.get(*index))
+                    .map(|t| t.shape);
+                if let Some(baseline) = baseline {
+                    ctx.scrub.active = Some(ResolvedScrub::AudioTriggerShape {
+                        layer_id: layer_id.clone(),
+                        index: *index,
+                        baseline,
+                        live: baseline,
+                    });
+                }
+                DispatchResult::handled()
+            }
+            ScrubPhase::Move(sv) => {
+                if let Some(v) = sv.scalar() {
+                    let which = *which;
+                    if let Some(ResolvedScrub::AudioTriggerShape { live, .. }) = &mut ctx.scrub.active
+                    {
+                        match which {
+                            AudioShapeParam::Sensitivity => live.sensitivity = v,
+                            AudioShapeParam::Attack => live.attack_ms = v,
+                            AudioShapeParam::Release => live.release_ms = v,
+                        }
+                    }
+                    clip_trigger_shape_dual_edit(
+                        ctx.project,
+                        ctx.content_tx,
+                        layer_id,
+                        *index,
+                        move |shape| match which {
+                            AudioShapeParam::Sensitivity => shape.sensitivity = v,
+                            AudioShapeParam::Attack => shape.attack_ms = v,
+                            AudioShapeParam::Release => shape.release_ms = v,
+                        },
+                    );
+                }
+                DispatchResult::handled()
+            }
+            ScrubPhase::Commit => {
+                // One undo step: baseline shape (old) → current shape (new), via
+                // `SetLayerClipTriggerCommand` diffing the whole `ClipTrigger` —
+                // matches the retired trio.
+                let old_shape = match &ctx.scrub.active {
+                    Some(ResolvedScrub::AudioTriggerShape { baseline, .. }) => Some(*baseline),
+                    _ => None,
+                };
+                ctx.scrub.active = None;
+                if let Some(old_shape) = old_shape {
+                    let current = ctx
+                        .project
+                        .timeline
+                        .find_layer_by_id_mut(layer_id)
+                        .and_then(|(_, l)| l.clip_triggers.get(*index).cloned());
+                    if let Some(current) = current
+                        && current.shape != old_shape
+                    {
+                        let mut old = current.clone();
+                        old.shape = old_shape;
+                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(
+                            SetLayerClipTriggerCommand::new(layer_id.clone(), *index, old, current),
+                        );
                         boxed.execute(ctx.project);
                         ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
                     }

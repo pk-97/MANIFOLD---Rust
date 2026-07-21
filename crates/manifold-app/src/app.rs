@@ -68,12 +68,10 @@ pub(crate) enum ActiveInspectorDrag {
     // migrated to the unified scrub gesture
     // (`ui_bridge::scrub::ResolvedScrub::AudioModStepAmount`, P-I / D4) — whole
     // `TriggerAction` baseline, wrap-preserving restore.
-    /// A layer clip-trigger shape-slider drag (`AudioTriggerShape*` trio).
-    AudioTriggerShape {
-        layer_id: LayerId,
-        index: usize,
-        shape: manifold_core::audio_mod::AudioModShape,
-    },
+    // AudioTriggerShape (layer clip-trigger shaping-slider `AudioTriggerShape*`
+    // trio) migrated to the unified scrub gesture
+    // (`ui_bridge::scrub::ResolvedScrub::AudioTriggerShape`, P-I / D4) —
+    // whole-shape restore preserved.
     /// An Audio Setup send-gain label drag (`AudioSendGainDrag*` trio).
     AudioSendGain {
         send_id: manifold_core::AudioSendId,
@@ -132,17 +130,6 @@ impl ActiveInspectorDrag {
             // Every restore below writes through the SAME store the family's
             // live `*Changed` arm writes, so a mid-drag snapshot swap can't
             // revert the in-flight value (undo audit 2026-07-19, cluster C).
-            Self::AudioTriggerShape {
-                layer_id,
-                index,
-                shape,
-            } => {
-                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id)
-                    && let Some(t) = layer.clip_triggers.get_mut(*index)
-                {
-                    t.shape = *shape;
-                }
-            }
             Self::AudioSendGain { send_id, db } => {
                 if let Some(s) = project.audio_setup.find_send_mut(send_id) {
                     s.gain_db = *db;

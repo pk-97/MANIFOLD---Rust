@@ -19,10 +19,10 @@ use manifold_editing::commands::audio_setup::{
 use manifold_editing::commands::layer::{
     AddLayerClipTriggerCommand, RemoveLayerClipTriggerCommand, SetLayerClipTriggerCommand,
 };
-use manifold_ui::{AudioShapeParam, AudioSetupAction};
+use manifold_ui::AudioSetupAction;
 
 use super::super::DispatchResult;
-use super::resolve::{audio_setup_command, clip_trigger_shape_dual_edit};
+use super::resolve::audio_setup_command;
 
 /// Send gain trim range (dB) — shared by the stepper (`AudioSendGainStep`) and
 /// the D7 drag (`AudioSendGainDragChanged`/`Commit`).
@@ -125,68 +125,11 @@ pub(crate) fn dispatch_audio_setup(action: &AudioSetupAction, ctx: &mut super::s
             }
             DispatchResult::structural()
         }
-        AudioSetupAction::AudioTriggerShapeSnapshot(layer_id, index) => {
-            // Reuses `audio_shape_snapshot` (the param-mod shaping-slider
-            // slot) rather than a dedicated field: only one drawer slider
-            // can be mid-drag at a time (single-threaded UI dispatch), so
-            // the snapshot/commit pair for this target never overlaps a
-            // param-mod drag's own use of the same slot.
-            ctx.scrub.audio_shape_snapshot = ctx.project
-                .timeline
-                .find_layer_by_id_mut(layer_id)
-                .and_then(|(_, l)| l.clip_triggers.get(*index))
-                .map(|t| t.shape);
-            if let Some(shape) = ctx.scrub.audio_shape_snapshot {
-                ctx.scrub.active_inspector_drag = Some(crate::app::ActiveInspectorDrag::AudioTriggerShape {
-                    layer_id: layer_id.clone(),
-                    index: *index,
-                    shape,
-                });
-            }
-            DispatchResult::handled()
-        }
-        AudioSetupAction::AudioTriggerShapeParamChanged(layer_id, index, which, value) => {
-            let which = *which;
-            let v = *value;
-            if let Some(crate::app::ActiveInspectorDrag::AudioTriggerShape { shape, .. }) =
-                &mut ctx.scrub.active_inspector_drag
-            {
-                match which {
-                    AudioShapeParam::Sensitivity => shape.sensitivity = v,
-                    AudioShapeParam::Attack => shape.attack_ms = v,
-                    AudioShapeParam::Release => shape.release_ms = v,
-                }
-            }
-            clip_trigger_shape_dual_edit(ctx.project, ctx.content_tx, layer_id, *index, move |shape| {
-                match which {
-                    AudioShapeParam::Sensitivity => shape.sensitivity = v,
-                    AudioShapeParam::Attack => shape.attack_ms = v,
-                    AudioShapeParam::Release => shape.release_ms = v,
-                }
-            });
-            DispatchResult::handled()
-        }
-        AudioSetupAction::AudioTriggerShapeCommit(layer_id, index) => {
-            ctx.scrub.active_inspector_drag = None;
-            if let Some(old_shape) = ctx.scrub.audio_shape_snapshot.take() {
-                let current = ctx.project
-                    .timeline
-                    .find_layer_by_id_mut(layer_id)
-                    .and_then(|(_, l)| l.clip_triggers.get(*index).cloned());
-                if let Some(current) = current
-                    && current.shape != old_shape
-                {
-                    let mut old = current.clone();
-                    old.shape = old_shape;
-                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(
-                        SetLayerClipTriggerCommand::new(layer_id.clone(), *index, old, current),
-                    );
-                    boxed.execute(ctx.project);
-                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
-                }
-            }
-            DispatchResult::handled()
-        }
+        // Layer clip-trigger shaping-slider scrub trio migrated to the unified
+        // `PanelAction::Scrub` wire (`ValueRef::AudioTriggerShape`, P-I / D4):
+        // `(LayerId, index)` addresses the trigger, the `AudioShapeParam` rides
+        // the address, the whole shape is the restore payload, and Commit emits
+        // `SetLayerClipTriggerCommand`.
         AudioSetupAction::AudioTriggerSetLength(layer_id, index, beats) => {
             let old = ctx.project
                 .timeline

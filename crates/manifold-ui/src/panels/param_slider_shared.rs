@@ -5,7 +5,7 @@
 //! builders, and formatting helpers across both kinds. This module is the
 //! single source of truth for them.
 
-use crate::{AudioSetupAction, RootAction};
+use crate::RootAction;
 use super::DriverConfigAction;
 use super::TrimKind;
 use super::param_card::RowMod;
@@ -1966,9 +1966,12 @@ fn clip_trigger_shape_reset(
     default: f32,
 ) -> PanelAction {
     PanelAction::slider_reset(
-        PanelAction::AudioSetup(AudioSetupAction::AudioTriggerShapeSnapshot(layer_id.clone(), row)),
-        PanelAction::AudioSetup(AudioSetupAction::AudioTriggerShapeParamChanged(layer_id.clone(), row, which, default)),
-        PanelAction::AudioSetup(AudioSetupAction::AudioTriggerShapeCommit(layer_id.clone(), row)),
+        PanelAction::Scrub(ValueRef::AudioTriggerShape(layer_id.clone(), row, which), ScrubPhase::Begin),
+        PanelAction::Scrub(
+            ValueRef::AudioTriggerShape(layer_id.clone(), row, which),
+            ScrubPhase::Move(ScrubValue::Scalar(default)),
+        ),
+        PanelAction::Scrub(ValueRef::AudioTriggerShape(layer_id.clone(), row, which), ScrubPhase::Commit),
     )
 }
 

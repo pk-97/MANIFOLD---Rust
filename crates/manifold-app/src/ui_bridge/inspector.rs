@@ -1016,18 +1016,16 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 move |h, p| {
-                    h.dispatch(&PanelAction::AudioSetup(AudioSetupAction::AudioTriggerShapeSnapshot(lid.clone(), 0)), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::AudioTriggerShape(lid.clone(), 0, manifold_ui::panels::AudioShapeParam::Sensitivity), ScrubPhase::Begin), p);
                     h.dispatch(
-                        &PanelAction::AudioSetup(AudioSetupAction::AudioTriggerShapeParamChanged(
-                            lid.clone(),
-                            0,
-                            manifold_ui::panels::AudioShapeParam::Sensitivity,
-                            0.91,
-                        )),
+                        &PanelAction::Scrub(
+                            ValueRef::AudioTriggerShape(lid.clone(), 0, manifold_ui::panels::AudioShapeParam::Sensitivity),
+                            ScrubPhase::Move(ScrubValue::Scalar(0.91)),
+                        ),
                         p,
                     );
                 },
-                move |h, p| h.dispatch(&PanelAction::AudioSetup(AudioSetupAction::AudioTriggerShapeCommit(lid2.clone(), 0)), p),
+                move |h, p| h.dispatch(&PanelAction::Scrub(ValueRef::AudioTriggerShape(lid2.clone(), 0, manifold_ui::panels::AudioShapeParam::Sensitivity), ScrubPhase::Commit), p),
                 move |p| {
                     p.timeline
                         .find_layer_by_id(&lid3)

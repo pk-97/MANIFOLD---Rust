@@ -121,4 +121,11 @@ pub enum ValueRef {
     /// `TriggerAction::Step { amount, wrap }` (preserving the current wrap), and
     /// the undo baseline is the whole pre-drag `TriggerAction`.
     AudioModStepAmount(GraphParamTarget, ParamId),
+    /// A layer clip-trigger drawer shaping slider (sensitivity / attack /
+    /// release) — was `AudioTriggerShape{Snapshot,ParamChanged,Commit}` (the
+    /// AudioSetup-domain twin of `AudioModShape`). Addressed by `(LayerId,
+    /// index)` into the layer's `clip_triggers`; the `AudioShapeParam` names
+    /// which scalar this gesture drags (value rides `ScrubValue::Scalar` on
+    /// Move), and the restore path re-stamps the whole shape.
+    AudioTriggerShape(LayerId, usize, AudioShapeParam),
 }

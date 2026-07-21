@@ -9,8 +9,7 @@
 
 use super::PanelAction;
 use super::{
-    AudioShapeParam, BandDivider, DriverConfigAction, GraphParamTarget, InspectorTab,
-    UiRelightHeightFrom,
+    BandDivider, DriverConfigAction, GraphParamTarget, InspectorTab, UiRelightHeightFrom,
 };
 use super::{browser_popup, picker_core};
 use crate::input::Modifiers;
@@ -534,16 +533,10 @@ pub enum AudioSetupAction {
     /// `AudioModSetSource`). A chip click and a Source-row click both arrive
     /// as this one action, carrying the full cell.
     AudioTriggerSetSource(LayerId, usize, AudioSendId, AudioFeature),
-    /// Snapshot a clip trigger's shape before a drawer-slider drag (undo
-    /// start) — mirrors `AudioModShapeSnapshot`.
-    AudioTriggerShapeSnapshot(LayerId, usize),
-    /// Live-edit one shape scalar during a drawer-slider drag (no undo
-    /// entry) — mirrors `AudioModShapeParamChanged`. The clip-trigger drawer
-    /// only ever sends `AudioShapeParam::Sensitivity` (its only slider).
-    AudioTriggerShapeParamChanged(LayerId, usize, AudioShapeParam, f32),
-    /// Commit a shape-slider drag as one undo step — mirrors
-    /// `AudioModShapeCommit`.
-    AudioTriggerShapeCommit(LayerId, usize),
+    // Clip-trigger shaping-slider scrub trio migrated to `PanelAction::Scrub`
+    // (`ValueRef::AudioTriggerShape`, P-I / D4): `(LayerId, index)` addresses the
+    // trigger, the `AudioShapeParam` rides the address, the whole shape is the
+    // restore payload.
     /// Set the one-shot fire length (`one_shot_beats`) — the drawer's Length
     /// row (D4/D5), clip triggers only.
     AudioTriggerSetLength(LayerId, usize, f32),
