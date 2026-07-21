@@ -6,6 +6,7 @@
 //! there). Bridge layer (D2): intent → `ContentCommand`/`EditingService`.
 
 pub(crate) mod browser;
+pub(crate) mod clip;
 
 #[cfg(test)]
 mod chain_completeness {
