@@ -1,0 +1,34 @@
+# Wave 2 P2-G public-item MULTISET census baseline of graph.rs (S0a, D7 widened regex)
+# Command: rg -o '^pub(\((crate|super)\))? (struct|enum|trait|fn|const|type|static|mod|use) [A-Za-z_0-9]+' crates/manifold-editing/src/commands/graph.rs --no-filename | sort | uniq -c
+# TOTAL: 30 (29 command structs + 1 pub fn exposed_param_labels_for_node — mod.rs must re-export the fn, D3/L8)
+# After the split, run the same regex over the whole graph/ directory (--no-filename); multiset must be identical.
+   1 pub fn exposed_param_labels_for_node
+   1 pub struct AddGraphNodeCommand
+   1 pub struct AddObjectTransformCommand
+   1 pub struct AddSceneEnvironmentCommand
+   1 pub struct AddSceneFogCommand
+   1 pub struct AddSceneLightCommand
+   1 pub struct AddSceneObjectCommand
+   1 pub struct ConnectPortsCommand
+   1 pub struct DisconnectPortsCommand
+   1 pub struct DuplicateSceneObjectCommand
+   1 pub struct GroupNodesCommand
+   1 pub struct ImportModelIntoSceneCommand
+   1 pub struct InsertMeshModifierCommand
+   1 pub struct LayoutGraphNodesCommand
+   1 pub struct MoveGraphNodeCommand
+   1 pub struct MoveMeshModifierCommand
+   1 pub struct PasteNodesCommand
+   1 pub struct RemoveGraphNodeCommand
+   1 pub struct RemoveMeshModifierCommand
+   1 pub struct RemoveSceneLightCommand
+   1 pub struct RemoveSceneObjectCommand
+   1 pub struct RenameGroupCommand
+   1 pub struct RenameSceneObjectCommand
+   1 pub struct RevertEffectGraphCommand
+   1 pub struct SetGraphNodeParamCommand
+   1 pub struct SetGroupTintCommand
+   1 pub struct SetNodeHandleCommand
+   1 pub struct SetWgslSourceCommand
+   1 pub struct ToggleNodeParamExposeCommand
+   1 pub struct UngroupNodeCommand
