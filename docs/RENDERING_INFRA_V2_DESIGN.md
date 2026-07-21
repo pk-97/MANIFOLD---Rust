@@ -135,7 +135,9 @@ Shadow maps are hard-edged today. PCF/PCSS filtered penumbra: cheap, per-element
 half of what separates "rendered" from "real-time" to the eye. Small enough to ride
 along with any scene-pass phase; needs no new decision.
 
-## 9. Hybrid ray tracing (post-release)
+## 9. Hybrid ray tracing (post-release) — GRADUATED 2026-07-21 → `RAYTRACING_DESIGN.md`
+
+**This section graduated to [RAYTRACING_DESIGN.md](RAYTRACING_DESIGN.md) (PROPOSED, P0 prototype gate).** Text below kept as the original direction record; the design doc supersedes it where they differ.
 
 Realistic scope is *hybrid* — one or two RT terms, never path tracing: RT shadows
 or RT AO first (smallest surface, most realism per ray), RT reflections (the
