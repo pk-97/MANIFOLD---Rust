@@ -4,14 +4,19 @@
 //! mutations. The app layer calls `dispatch()` after collecting actions
 //! from all panels, and `push_state()` to sync engine state back to panels.
 
+mod context;
 mod editing;
 mod inspector;
 mod layer;
 mod marker;
 mod project;
 mod projection;
+mod scrub;
 mod state_sync;
 mod transport;
+
+pub(crate) use context::DispatchCtx;
+pub(crate) use scrub::ScrubState;
 
 /// Re-exported so `Application::handle_text_input_commit`'s
 /// `SceneObjectRename` arm (main-window text-input commit, not a
@@ -27,7 +32,6 @@ use manifold_ui::{InspectorTab, PanelAction};
 
 use crate::app::SelectionState;
 use crate::ui_root::UIRoot;
-use crate::user_prefs::UserPrefs;
 
 /// Result of dispatching a panel action.
 pub struct DispatchResult {
@@ -156,34 +160,7 @@ fn inspector_select_tab(
 
 /// Dispatch a panel action. Mutates local_project for immediate feedback;
 /// sends commands to the content thread for authoritative execution.
-pub fn dispatch(
-    action: &PanelAction,
-    project: &mut Project,
-    content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
-    content_state: &crate::content_state::ContentState,
-    ui: &mut UIRoot,
-    selection: &mut SelectionState,
-    active_layer: &mut Option<LayerId>,
-    drag_snapshot: &mut Option<f32>,
-    trim_snapshot: &mut Option<(f32, f32)>,
-    target_snapshot: &mut Option<f32>,
-    decay_snapshot: &mut Option<f32>,
-    audio_shape_snapshot: &mut Option<manifold_core::audio_mod::AudioModShape>,
-    // PARAM_STEP_ACTIONS D8: the Step-Amount drag's undo snapshot. `amount`
-    // lives on `TriggerAction::Step`, not `AudioModShape`, so it rides its
-    // own slot rather than `audio_shape_snapshot`'s.
-    audio_action_snapshot: &mut Option<manifold_core::audio_mod::TriggerAction>,
-    audio_crossover_snapshot: &mut Option<(f32, f32)>,
-    audio_send_gain_drag_snapshot: &mut Option<f32>,
-    user_prefs: &mut UserPrefs,
-    active_inspector_drag: &mut Option<crate::app::ActiveInspectorDrag>,
-    // `Some(GraphTarget)` when the graph editor dispatches one of its left-lane
-    // card actions: the edit targets that effect/generator by stable identity,
-    // regardless of the main window's active selection. `None` for the
-    // inspector / perform path, which resolves its own active context. Only
-    // consulted by `dispatch_inspector`.
-    editor_target: Option<&manifold_core::GraphTarget>,
-) -> DispatchResult {
+pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
     match action {
         // Right-click reset of a slider to its default, expressed as the
         // slider's own value-change trio (BUG-061). NOT delegated to a
@@ -194,66 +171,9 @@ pub fn dispatch(
         // that value, and there is no separate reset code path to keep in
         // sync with each slider's Snapshot/Changed/Commit handler.
         PanelAction::SliderReset { snapshot, changed, commit } => {
-            dispatch(
-                snapshot,
-                project,
-                content_tx,
-                content_state,
-                ui,
-                selection,
-                active_layer,
-                drag_snapshot,
-                trim_snapshot,
-                target_snapshot,
-                decay_snapshot,
-                audio_shape_snapshot,
-                audio_action_snapshot,
-                audio_crossover_snapshot,
-                audio_send_gain_drag_snapshot,
-                user_prefs,
-                active_inspector_drag,
-                editor_target,
-            );
-            dispatch(
-                changed,
-                project,
-                content_tx,
-                content_state,
-                ui,
-                selection,
-                active_layer,
-                drag_snapshot,
-                trim_snapshot,
-                target_snapshot,
-                decay_snapshot,
-                audio_shape_snapshot,
-                audio_action_snapshot,
-                audio_crossover_snapshot,
-                audio_send_gain_drag_snapshot,
-                user_prefs,
-                active_inspector_drag,
-                editor_target,
-            );
-            dispatch(
-                commit,
-                project,
-                content_tx,
-                content_state,
-                ui,
-                selection,
-                active_layer,
-                drag_snapshot,
-                trim_snapshot,
-                target_snapshot,
-                decay_snapshot,
-                audio_shape_snapshot,
-                audio_action_snapshot,
-                audio_crossover_snapshot,
-                audio_send_gain_drag_snapshot,
-                user_prefs,
-                active_inspector_drag,
-                editor_target,
-            )
+            dispatch(snapshot, ctx);
+            dispatch(changed, ctx);
+            dispatch(commit, ctx)
         }
 
         // ── Transport ──────────────────────────────────────────────
@@ -283,13 +203,20 @@ pub fn dispatch(
         | PanelAction::ToggleAutomationArm
         | PanelAction::AutomationBackToArrangement
         | PanelAction::ToggleAutomationMode => {
-            transport::dispatch_transport(action, project, content_tx, content_state, ui, selection)
+            transport::dispatch_transport(
+                action,
+                ctx.project,
+                ctx.content_tx,
+                ctx.content_state,
+                ctx.ui,
+                ctx.selection,
+            )
         }
 
         // Inspector tab strip — mirrors the timeline selection (needs
         // `active_layer`, which the transport handler doesn't carry).
         PanelAction::SelectInspectorTab(tab) => {
-            inspector_select_tab(*tab, project, selection, active_layer, ui);
+            inspector_select_tab(*tab, ctx.project, ctx.selection, ctx.active_layer, ctx.ui);
             DispatchResult::structural()
         }
 
@@ -356,13 +283,13 @@ pub fn dispatch(
         | PanelAction::AutomationLaneRightClicked(..)
         | PanelAction::DropdownSelected(_) => editing::dispatch_editing(
             action,
-            project,
-            content_tx,
-            content_state,
-            ui,
-            selection,
-            active_layer,
-            user_prefs,
+            ctx.project,
+            ctx.content_tx,
+            ctx.content_state,
+            ctx.ui,
+            ctx.selection,
+            ctx.active_layer,
+            ctx.user_prefs,
         ),
 
         // ── Inspector: chrome, effects, generators ────────────────
@@ -516,25 +443,7 @@ pub fn dispatch(
         | PanelAction::RelightParamSnapshot(..)
         | PanelAction::RelightParamChanged(..)
         | PanelAction::RelightParamCommit(..)
-        | PanelAction::RelightHeightFromChanged(..) => inspector::dispatch_inspector(
-            action,
-            project,
-            content_tx,
-            content_state,
-            ui,
-            selection,
-            active_layer,
-            drag_snapshot,
-            trim_snapshot,
-            target_snapshot,
-            decay_snapshot,
-            audio_shape_snapshot,
-            audio_action_snapshot,
-            audio_crossover_snapshot,
-            audio_send_gain_drag_snapshot,
-            active_inspector_drag,
-            editor_target,
-        ),
+        | PanelAction::RelightHeightFromChanged(..) => inspector::dispatch_inspector(action, ctx),
 
         // ── Layer operations ──────────────────────────────────────
         PanelAction::ToggleMute(_)
@@ -561,12 +470,12 @@ pub fn dispatch(
         | PanelAction::DeleteLayerClicked(_)
         | PanelAction::SetLayerAudioSend(..) => layer::dispatch_layer(
             action,
-            project,
-            content_tx,
-            content_state,
-            ui,
-            selection,
-            active_layer,
+            ctx.project,
+            ctx.content_tx,
+            ctx.content_state,
+            ctx.ui,
+            ctx.selection,
+            ctx.active_layer,
         ),
 
         // ── Timeline markers ─────────────────────────────────────────
@@ -579,12 +488,12 @@ pub fn dispatch(
         | PanelAction::DeleteSelectedMarkers => {
             marker::dispatch_marker(
                 action,
-                project,
-                content_tx,
-                ui,
-                selection,
-                drag_snapshot,
-                active_inspector_drag,
+                ctx.project,
+                ctx.content_tx,
+                ctx.ui,
+                ctx.selection,
+                &mut ctx.scrub.slider_snapshot,
+                &mut ctx.scrub.active_inspector_drag,
             )
         }
 
@@ -630,13 +539,13 @@ pub fn dispatch(
         | PanelAction::ContextClearAutomationLane(..)
         | PanelAction::ContextRemoveAutomationLane(..) => project::dispatch_project(
             action,
-            project,
-            content_tx,
-            content_state,
-            ui,
-            selection,
-            active_layer,
-            user_prefs,
+            ctx.project,
+            ctx.content_tx,
+            ctx.content_state,
+            ctx.ui,
+            ctx.selection,
+            ctx.active_layer,
+            ctx.user_prefs,
         ),
 
         // Handled in app_render.rs (Application-level intercept, never reaches dispatch)
@@ -682,14 +591,14 @@ pub fn dispatch(
         // UIRoot and both call it. Structural: it changes `audio_setup_width`,
         // so the tree must rebuild at the new geometry.
         PanelAction::OpenAudioSetup => {
-            ui.toggle_audio_dock();
+            ctx.ui.toggle_audio_dock();
             DispatchResult::structural()
         }
 
         // Scene Setup dock toggle — mirror of `OpenAudioSetup` above
         // (SCENE_SETUP_PANEL_DESIGN D2).
         PanelAction::OpenSceneSetup => {
-            ui.toggle_scene_dock();
+            ctx.ui.toggle_scene_dock();
             DispatchResult::structural()
         }
     }

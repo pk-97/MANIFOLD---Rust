@@ -1343,36 +1343,20 @@ mod cache_path_full_render {
         ui.pointer_event(pos, PointerAction::Up, clock);
         let actions = ui.process_events();
         let mut structural = false;
-        let mut drag_snapshot: Option<f32> = None;
-        let mut trim_snapshot: Option<(f32, f32)> = None;
-        let mut target_snapshot: Option<f32> = None;
-        let mut decay_snapshot: Option<f32> = None;
-        let mut audio_shape_snapshot: Option<manifold_core::audio_mod::AudioModShape> = None;
-        let mut audio_action_snapshot: Option<manifold_core::audio_mod::TriggerAction> = None;
-        let mut audio_crossover_snapshot: Option<(f32, f32)> = None;
-        let mut audio_send_gain_drag_snapshot: Option<f32> = None;
-        let mut active_inspector_drag: Option<crate::app::ActiveInspectorDrag> = None;
+        let mut scrub = crate::ui_bridge::ScrubState::default();
         for action in &actions {
-            let result = crate::ui_bridge::dispatch(
-                action,
-                &mut data.project,
+            let mut dctx = crate::ui_bridge::DispatchCtx {
+                project: &mut data.project,
                 content_tx,
                 content_state,
-                ui,
-                &mut data.selection,
-                active_layer,
-                &mut drag_snapshot,
-                &mut trim_snapshot,
-                &mut target_snapshot,
-                &mut decay_snapshot,
-                &mut audio_shape_snapshot,
-                &mut audio_action_snapshot,
-                &mut audio_crossover_snapshot,
-                &mut audio_send_gain_drag_snapshot,
-                user_prefs,
-                &mut active_inspector_drag,
-                None,
-            );
+                ui: &mut *ui,
+                selection: &mut data.selection,
+                active_layer: &mut *active_layer,
+                user_prefs: &mut *user_prefs,
+                editor_target: None,
+                scrub: &mut scrub,
+            };
+            let result = crate::ui_bridge::dispatch(action, &mut dctx);
             structural |= result.structural_change;
         }
         structural

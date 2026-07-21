@@ -89,7 +89,7 @@ impl UserPrefs {
     /// ui-snapshot driver's seam. Reads resolve to caller defaults (empty
     /// map, deterministic on any host); a stray `save()` from a dispatched
     /// action lands in the OS temp dir, not the user's prefs.
-    #[cfg(feature = "ui-snapshot")]
+    #[cfg(any(test, feature = "ui-snapshot"))]
     pub fn in_memory() -> Self {
         Self {
             data: HashMap::new(),

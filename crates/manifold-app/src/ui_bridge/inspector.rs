@@ -440,27 +440,12 @@ fn browser_mode_to_kind(
 
 pub(super) fn dispatch_inspector(
     action: &PanelAction,
-    project: &mut Project,
-    content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
-    content_state: &crate::content_state::ContentState,
-    ui: &mut UIRoot,
-    selection: &mut SelectionState,
-    active_layer: &mut Option<LayerId>,
-    drag_snapshot: &mut Option<f32>,
-    trim_snapshot: &mut Option<(f32, f32)>,
-    target_snapshot: &mut Option<f32>,
-    decay_snapshot: &mut Option<f32>,
-    audio_shape_snapshot: &mut Option<manifold_core::audio_mod::AudioModShape>,
-    audio_action_snapshot: &mut Option<manifold_core::audio_mod::TriggerAction>,
-    audio_crossover_snapshot: &mut Option<(f32, f32)>,
-    audio_send_gain_drag_snapshot: &mut Option<f32>,
-    active_inspector_drag: &mut Option<crate::app::ActiveInspectorDrag>,
-    editor_target: Option<&manifold_core::GraphTarget>,
+    ctx: &mut super::DispatchCtx,
 ) -> DispatchResult {
     use crate::content_command::ContentCommand;
 
     // The single-effect VALUE / expose / mapping arms address their instance by
-    // stable `EffectId` via `super::resolve_effect_id(editor_target, …)` and
+    // stable `EffectId` via `super::resolve_effect_id(ctx.editor_target, …)` and
     // ignore `effective_tab` / `active_layer` when the editor supplies an
     // identity. The MODULATION arms (drivers, layer-stored envelopes, trims,
     // envelope targets) still resolve positionally through `(tab, active_layer)`
@@ -468,23 +453,24 @@ pub(super) fn dispatch_inspector(
     // editor's WATCHED effect — not the main window's selection — when a card
     // action is dispatched from the editor. `editor_dispatch_context` expresses
     // the editor's identity in those positional terms (Master / its Layer /
-    // Clip), and is byte-identical to the inspector's own context on the
-    // perform path (`editor_target == None`).
+    // Clip), byte-identical to the inspector's own context on the perform path
+    // (`ctx.editor_target == None`). Arm bodies read `ctx` fields DIRECTLY (P-B
+    // D6): a mis-referenced field is visible at the use site, and the split
+    // moves each arm verbatim into its `(action, ctx)` sub-dispatcher.
     let (effective_tab, effective_active_layer) = super::editor_dispatch_context(
-        editor_target,
-        project,
-        ui.inspector.last_effect_tab(),
-        active_layer,
+        ctx.editor_target,
+        &*ctx.project,
+        ctx.ui.inspector.last_effect_tab(),
+        &*ctx.active_layer,
     );
-    // Shadow the &mut param: no arm in this function mutates `active_layer`, so an
-    // immutable shadow is sound and routes every downstream resolver through the
-    // effective layer.
+    // No arm mutates `active_layer`; the immutable shadow routes every
+    // downstream resolver through the effective layer.
     let active_layer: &Option<LayerId> = &effective_active_layer;
 
     match action {
         // ── Macros panel collapse ─────────────────────────────────
         PanelAction::MacrosCollapseToggle => {
-            ui.inspector.macros_panel_mut().toggle_collapsed();
+            ctx.ui.inspector.macros_panel_mut().toggle_collapsed();
             DispatchResult::structural()
         }
 
@@ -492,12 +478,12 @@ pub(super) fn dispatch_inspector(
         PanelAction::MacroSnapshot(idx) => {
             let idx = *idx;
             if idx < manifold_core::macro_bank::MACRO_COUNT {
-                let value = project.settings.macro_bank.slots[idx].value;
-                *drag_snapshot = Some(value);
+                let value = ctx.project.settings.macro_bank.slots[idx].value;
+                ctx.scrub.slider_snapshot = Some(value);
                 // Macros ride in every ModulationSnapshot block, so the drag
                 // must be guarded or the per-tick apply stomps it (undo-race
                 // regression, 2026-07-18).
-                *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::Macro { idx, value });
+                ctx.scrub.active_inspector_drag = Some(crate::app::ActiveInspectorDrag::Macro { idx, value });
             }
             DispatchResult::handled()
         }
@@ -505,14 +491,14 @@ pub(super) fn dispatch_inspector(
             let idx = *idx;
             let val = *val;
             if let Some(crate::app::ActiveInspectorDrag::Macro { idx: di, value }) =
-                active_inspector_drag
+                &mut ctx.scrub.active_inspector_drag
                 && *di == idx
             {
                 *value = val;
             }
-            manifold_core::macro_bank::MacroBank::apply_macro(project, idx, val);
+            manifold_core::macro_bank::MacroBank::apply_macro(ctx.project, idx, val);
             ContentCommand::send(
-                content_tx,
+                ctx.content_tx,
                 ContentCommand::MutateProjectLive(Box::new(move |p| {
                     manifold_core::macro_bank::MacroBank::apply_macro(p, idx, val);
                 })),
@@ -520,27 +506,27 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
         PanelAction::MacroCommit(idx) => {
-            if let Some(old_val) = drag_snapshot.take() {
+            if let Some(old_val) = ctx.scrub.slider_snapshot.take() {
                 let idx = *idx;
                 if idx < manifold_core::macro_bank::MACRO_COUNT {
-                    let new_val = project.settings.macro_bank.slots[idx].value;
+                    let new_val = ctx.project.settings.macro_bank.slots[idx].value;
                     if (old_val - new_val).abs() > f32::EPSILON {
                         let cmd = ChangeMacroCommand::new(idx, old_val, new_val);
-                        ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+                        ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
                     }
                 }
             }
-            *active_inspector_drag = None;
+            ctx.scrub.active_inspector_drag = None;
             DispatchResult::handled()
         }
         PanelAction::MacroReset(idx) => {
             let idx = *idx;
             if idx < manifold_core::macro_bank::MACRO_COUNT {
-                let old = project.settings.macro_bank.slots[idx].value;
+                let old = ctx.project.settings.macro_bank.slots[idx].value;
                 if old.abs() > f32::EPSILON {
-                    manifold_core::macro_bank::MacroBank::apply_macro(project, idx, 0.0);
+                    manifold_core::macro_bank::MacroBank::apply_macro(ctx.project, idx, 0.0);
                     let cmd = ChangeMacroCommand::new(idx, old, 0.0);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
                 }
             }
             DispatchResult::handled()
@@ -549,20 +535,20 @@ pub(super) fn dispatch_inspector(
 
         // ── Master chrome ──────────────────────────────────────────
         PanelAction::MasterOpacitySnapshot => {
-            *drag_snapshot = Some(project.settings.master_opacity);
-            *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::MasterOpacity(
-                project.settings.master_opacity,
+            ctx.scrub.slider_snapshot = Some(ctx.project.settings.master_opacity);
+            ctx.scrub.active_inspector_drag = Some(crate::app::ActiveInspectorDrag::MasterOpacity(
+                ctx.project.settings.master_opacity,
             ));
             DispatchResult::handled()
         }
         PanelAction::MasterOpacityChanged(val) => {
-            project.settings.master_opacity = *val;
-            if let Some(crate::app::ActiveInspectorDrag::MasterOpacity(v)) = active_inspector_drag {
+            ctx.project.settings.master_opacity = *val;
+            if let Some(crate::app::ActiveInspectorDrag::MasterOpacity(v)) = &mut ctx.scrub.active_inspector_drag {
                 *v = *val;
             }
             let v = *val;
             ContentCommand::send(
-                content_tx,
+                ctx.content_tx,
                 ContentCommand::MutateProjectLive(Box::new(move |p| {
                     p.settings.master_opacity = v;
                 })),
@@ -570,24 +556,24 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
         PanelAction::MasterOpacityCommit => {
-            if let Some(old_val) = drag_snapshot.take() {
-                let new_val = project.settings.master_opacity;
+            if let Some(old_val) = ctx.scrub.slider_snapshot.take() {
+                let new_val = ctx.project.settings.master_opacity;
                 if (old_val - new_val).abs() > f32::EPSILON {
                     let cmd = ChangeMasterOpacityCommand::new(old_val, new_val);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
                 }
             }
-            *active_inspector_drag = None;
+            ctx.scrub.active_inspector_drag = None;
             DispatchResult::handled()
         }
         // ── Audio-layer gain slider (layer header) ─────────────────
         PanelAction::AudioGainSnapshot(id) => {
-            *drag_snapshot = project
+            ctx.scrub.slider_snapshot = ctx.project
                 .timeline
                 .find_layer_by_id(id)
                 .map(|(_, l)| l.audio_gain_db);
-            if let Some(db) = *drag_snapshot {
-                *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::AudioGain {
+            if let Some(db) = ctx.scrub.slider_snapshot {
+                ctx.scrub.active_inspector_drag = Some(crate::app::ActiveInspectorDrag::AudioGain {
                     layer_id: id.clone(),
                     db,
                 });
@@ -597,15 +583,15 @@ pub(super) fn dispatch_inspector(
         PanelAction::AudioGainChanged(id, db) => {
             let db = *db;
             if let Some(crate::app::ActiveInspectorDrag::AudioGain { db: guard, .. }) =
-                active_inspector_drag
+                &mut ctx.scrub.active_inspector_drag
             {
                 *guard = db;
             }
-            if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(id) {
+            if let Some((_, layer)) = ctx.project.timeline.find_layer_by_id_mut(id) {
                 layer.audio_gain_db = db;
                 let id = id.clone();
                 ContentCommand::send(
-                    content_tx,
+                    ctx.content_tx,
                     ContentCommand::MutateProjectLive(Box::new(move |p| {
                         if let Some((_, l)) = p.timeline.find_layer_by_id_mut(&id) {
                             l.audio_gain_db = db;
@@ -616,9 +602,9 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
         PanelAction::AudioGainCommit(id) => {
-            *active_inspector_drag = None;
-            if let Some(old_db) = drag_snapshot.take()
-                && let Some((_, layer)) = project.timeline.find_layer_by_id(id)
+            ctx.scrub.active_inspector_drag = None;
+            if let Some(old_db) = ctx.scrub.slider_snapshot.take()
+                && let Some((_, layer)) = ctx.project.timeline.find_layer_by_id(id)
             {
                 let new_db = layer.audio_gain_db;
                 if (old_db - new_db).abs() > f32::EPSILON {
@@ -627,13 +613,13 @@ pub(super) fn dispatch_inspector(
                         old_db,
                         new_db,
                     );
-                    ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
                 }
             }
             DispatchResult::handled()
         }
         PanelAction::MasterCollapseToggle => {
-            ui.inspector.master_chrome_mut().toggle_collapsed();
+            ctx.ui.inspector.master_chrome_mut().toggle_collapsed();
             DispatchResult::structural()
         }
         PanelAction::MasterExitPathClicked => {
@@ -642,10 +628,10 @@ pub(super) fn dispatch_inspector(
         }
         PanelAction::SetLedExitIndex(idx) => {
             let idx = *idx;
-            project.settings.led_exit_index = idx;
+            ctx.project.settings.led_exit_index = idx;
             // Push to content thread so the LED pipeline picks it up
             ContentCommand::send(
-                content_tx,
+                ctx.content_tx,
                 ContentCommand::MutateProject(Box::new(move |p| {
                     p.settings.led_exit_index = idx;
                 })),
@@ -654,12 +640,12 @@ pub(super) fn dispatch_inspector(
         }
         // ── LED enabled toggle ───────────────────────────────────
         PanelAction::LedEnabledToggle => {
-            let new_enabled = !content_state.led_enabled;
+            let new_enabled = !ctx.content_state.led_enabled;
             // Persist the new ON/OFF state in project settings so the LED
             // pipeline auto-initialises on project load.
-            project.settings.led_enabled = new_enabled;
+            ctx.project.settings.led_enabled = new_enabled;
             ContentCommand::send(
-                content_tx,
+                ctx.content_tx,
                 ContentCommand::MutateProject(Box::new(move |p| {
                     p.settings.led_enabled = new_enabled;
                 })),
@@ -670,31 +656,31 @@ pub(super) fn dispatch_inspector(
                     ..Default::default()
                 };
                 ContentCommand::send(
-                    content_tx,
+                    ctx.content_tx,
                     ContentCommand::InitLedOutput(Box::new(settings)),
                 );
             } else {
-                ContentCommand::send(content_tx, ContentCommand::ShutdownLedOutput);
+                ContentCommand::send(ctx.content_tx, ContentCommand::ShutdownLedOutput);
             }
             DispatchResult::handled()
         }
 
         // ── LED brightness ───────────────────────────────────────
         PanelAction::LedBrightnessSnapshot => {
-            *drag_snapshot = Some(project.settings.led_brightness);
-            *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::LedBrightness(
-                project.settings.led_brightness,
+            ctx.scrub.slider_snapshot = Some(ctx.project.settings.led_brightness);
+            ctx.scrub.active_inspector_drag = Some(crate::app::ActiveInspectorDrag::LedBrightness(
+                ctx.project.settings.led_brightness,
             ));
             DispatchResult::handled()
         }
         PanelAction::LedBrightnessChanged(val) => {
-            project.settings.led_brightness = *val;
-            if let Some(crate::app::ActiveInspectorDrag::LedBrightness(v)) = active_inspector_drag {
+            ctx.project.settings.led_brightness = *val;
+            if let Some(crate::app::ActiveInspectorDrag::LedBrightness(v)) = &mut ctx.scrub.active_inspector_drag {
                 *v = *val;
             }
             let v = *val;
             ContentCommand::send(
-                content_tx,
+                ctx.content_tx,
                 ContentCommand::MutateProject(Box::new(move |p| {
                     p.settings.led_brightness = v;
                 })),
@@ -702,24 +688,24 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
         PanelAction::LedBrightnessCommit => {
-            if let Some(old_val) = drag_snapshot.take() {
-                let new_val = project.settings.led_brightness;
+            if let Some(old_val) = ctx.scrub.slider_snapshot.take() {
+                let new_val = ctx.project.settings.led_brightness;
                 if (old_val - new_val).abs() > f32::EPSILON {
                     let cmd = ChangeLedBrightnessCommand::new(old_val, new_val);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
                 }
             }
-            *active_inspector_drag = None;
+            ctx.scrub.active_inspector_drag = None;
             DispatchResult::handled()
         }
         // ── Layer chrome ───────────────────────────────────────────
         PanelAction::LayerOpacitySnapshot => {
-            let layer_idx = super::resolve_active_layer_index(active_layer, project);
+            let layer_idx = super::resolve_active_layer_index(active_layer, ctx.project);
             if let Some(idx) = layer_idx
-                && let Some(layer) = project.timeline.layers.get(idx)
+                && let Some(layer) = ctx.project.timeline.layers.get(idx)
             {
-                *drag_snapshot = Some(layer.opacity);
-                *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::LayerOpacity {
+                ctx.scrub.slider_snapshot = Some(layer.opacity);
+                ctx.scrub.active_inspector_drag = Some(crate::app::ActiveInspectorDrag::LayerOpacity {
                     layer_id: layer.layer_id.clone(),
                     value: layer.opacity,
                 });
@@ -727,20 +713,20 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
         PanelAction::LayerOpacityChanged(val) => {
-            let layer_idx = super::resolve_active_layer_index(active_layer, project);
+            let layer_idx = super::resolve_active_layer_index(active_layer, ctx.project);
             if let Some(idx) = layer_idx {
-                if let Some(layer) = project.timeline.layers.get_mut(idx) {
+                if let Some(layer) = ctx.project.timeline.layers.get_mut(idx) {
                     layer.opacity = *val;
                 }
                 if let Some(crate::app::ActiveInspectorDrag::LayerOpacity { value, .. }) =
-                    active_inspector_drag
+                    &mut ctx.scrub.active_inspector_drag
                 {
                     *value = *val;
                 }
                 let v = *val;
                 let layer_id = active_layer.clone().unwrap_or_default();
                 ContentCommand::send(
-                    content_tx,
+                    ctx.content_tx,
                     ContentCommand::MutateProjectLive(Box::new(move |p| {
                         if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id) {
                             layer.opacity = v;
@@ -751,28 +737,28 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
         PanelAction::LayerOpacityCommit => {
-            let layer_idx = super::resolve_active_layer_index(active_layer, project);
-            if let Some(old_val) = drag_snapshot.take()
+            let layer_idx = super::resolve_active_layer_index(active_layer, ctx.project);
+            if let Some(old_val) = ctx.scrub.slider_snapshot.take()
                 && let Some(idx) = layer_idx
-                && let Some(layer) = project.timeline.layers.get(idx)
+                && let Some(layer) = ctx.project.timeline.layers.get(idx)
             {
                 let layer_id = layer.layer_id.clone();
                 let new_val = layer.opacity;
                 if (old_val - new_val).abs() > f32::EPSILON {
                     let cmd = ChangeLayerOpacityCommand::new(layer_id, old_val, new_val);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
                 }
             }
-            *active_inspector_drag = None;
+            ctx.scrub.active_inspector_drag = None;
             DispatchResult::handled()
         }
         PanelAction::LayerChromeCollapseToggle => {
-            ui.inspector.layer_chrome_mut().toggle_collapsed();
+            ctx.ui.inspector.layer_chrome_mut().toggle_collapsed();
             DispatchResult::structural()
         }
         // ── Clip chrome ────────────────────────────────────────────
         PanelAction::ClipChromeCollapseToggle => {
-            ui.inspector.clip_chrome_mut().toggle_collapsed();
+            ctx.ui.inspector.clip_chrome_mut().toggle_collapsed();
             DispatchResult::structural()
         }
         PanelAction::ClipBpmClicked => DispatchResult::handled(),
@@ -780,17 +766,17 @@ pub(super) fn dispatch_inspector(
             // Audio warp toggle: off (recorded_bpm 0, native speed) ⇄ on (lock to
             // the project tempo as a sensible default). One BPM command, which
             // also rescales the clip's timeline length to hold the audio span.
-            if let Some(clip_id) = &selection.primary_selected_clip_id {
+            if let Some(clip_id) = &ctx.selection.primary_selected_clip_id {
                 let clip_id = clip_id.clone();
-                let project_bpm = project.settings.bpm.0;
-                if let Some(clip) = project.timeline.find_clip_by_id(&clip_id) {
+                let project_bpm = ctx.project.settings.bpm.0;
+                if let Some(clip) = ctx.project.timeline.find_clip_by_id(&clip_id) {
                     let old_bpm = clip.recorded_bpm;
                     let new_bpm = if old_bpm > 0.0 { 0.0 } else { project_bpm };
                     let cmd = ChangeClipRecordedBpmCommand::new(clip_id, old_bpm, new_bpm);
                     let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
                         Box::new(cmd);
-                    boxed.execute(project);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                    boxed.execute(ctx.project);
+                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
                 }
             }
             DispatchResult::structural()
@@ -799,15 +785,15 @@ pub(super) fn dispatch_inspector(
             // Per-clip detection: analyze the selected audio clip's file and place
             // its triggers. The orchestrator (content thread) does the work and the
             // result syncs back; status shows via the global percussion status.
-            if let Some(clip_id) = &selection.primary_selected_clip_id {
-                ContentCommand::send(content_tx, ContentCommand::DetectClip(clip_id.clone()));
+            if let Some(clip_id) = &ctx.selection.primary_selected_clip_id {
+                ContentCommand::send(ctx.content_tx, ContentCommand::DetectClip(clip_id.clone()));
             }
             DispatchResult::handled()
         }
         PanelAction::ClipClearTriggersClicked => {
-            if let Some(clip_id) = &selection.primary_selected_clip_id {
+            if let Some(clip_id) = &ctx.selection.primary_selected_clip_id {
                 ContentCommand::send(
-                    content_tx,
+                    ctx.content_tx,
                     ContentCommand::ClearClipTriggers(clip_id.clone()),
                 );
             }
@@ -823,14 +809,14 @@ pub(super) fn dispatch_inspector(
             // worse than none. Detection is never re-run here; it stays manual.
             use manifold_editing::command::{Command, CompositeCommand};
             use manifold_editing::commands::clip::{DeleteClipCommand, ReplaceAudioFileCommand};
-            if let Some(clip_id) = selection.primary_selected_clip_id.clone()
+            if let Some(clip_id) = ctx.selection.primary_selected_clip_id.clone()
                 && let Some(path) = rfd::FileDialog::new()
                     .add_filter(
                         "Audio",
                         &["wav", "mp3", "flac", "aif", "aiff", "ogg", "m4a", "aac"],
                     )
                     .pick_file()
-                && let Some(clip) = project.timeline.find_clip_by_id(&clip_id)
+                && let Some(clip) = ctx.project.timeline.find_clip_by_id(&clip_id)
             {
                 let new_path = path.to_string_lossy().into_owned();
                 let new_source_duration = crate::project_io::audio_source_duration(&new_path);
@@ -845,7 +831,7 @@ pub(super) fn dispatch_inspector(
                     clip.audio_detection.clone(),
                 );
                 let mut commands: Vec<Box<dyn Command>> = vec![Box::new(replace)];
-                for layer in project.timeline.layers.iter() {
+                for layer in ctx.project.timeline.layers.iter() {
                     let layer_id = layer.layer_id.clone();
                     for generated in layer
                         .clips
@@ -865,15 +851,15 @@ pub(super) fn dispatch_inspector(
                     commands,
                     "Replace Audio File".to_string(),
                 ));
-                cmd.execute(project);
-                ContentCommand::send(content_tx, ContentCommand::Execute(cmd));
+                cmd.execute(ctx.project);
+                ContentCommand::send(ctx.content_tx, ContentCommand::Execute(cmd));
             }
             DispatchResult::structural()
         }
         PanelAction::ClipDetectInstrumentToggled(idx) => {
             let idx = *idx;
-            if let Some(clip_id) = selection.primary_selected_clip_id.clone() {
-                apply_detection_edit(project, content_tx, &clip_id, |c| {
+            if let Some(clip_id) = ctx.selection.primary_selected_clip_id.clone() {
+                apply_detection_edit(ctx.project, ctx.content_tx, &clip_id, |c| {
                     if let Some(inst) = c.instruments.get_mut(idx) {
                         inst.enabled = !inst.enabled;
                     }
@@ -883,8 +869,8 @@ pub(super) fn dispatch_inspector(
         }
         PanelAction::ClipDetectSensitivityChanged(idx, value) => {
             let (idx, value) = (*idx, *value);
-            if let Some(clip_id) = selection.primary_selected_clip_id.clone() {
-                apply_detection_edit(project, content_tx, &clip_id, |c| {
+            if let Some(clip_id) = ctx.selection.primary_selected_clip_id.clone() {
+                apply_detection_edit(ctx.project, ctx.content_tx, &clip_id, |c| {
                     if let Some(inst) = c.instruments.get_mut(idx) {
                         inst.sensitivity = value.clamp(0.0, 1.0);
                     }
@@ -894,8 +880,8 @@ pub(super) fn dispatch_inspector(
         }
         PanelAction::ClipDetectOnsetChanged(ms) => {
             let secs = manifold_core::Seconds((*ms / 1000.0) as f64);
-            if let Some(clip_id) = selection.primary_selected_clip_id.clone() {
-                apply_detection_edit(project, content_tx, &clip_id, |c| {
+            if let Some(clip_id) = ctx.selection.primary_selected_clip_id.clone() {
+                apply_detection_edit(ctx.project, ctx.content_tx, &clip_id, |c| {
                     c.onset_compensation = secs;
                 });
             }
@@ -903,8 +889,8 @@ pub(super) fn dispatch_inspector(
         }
         PanelAction::ClipDetectSetQuantize(step) => {
             let step = *step;
-            if let Some(clip_id) = selection.primary_selected_clip_id.clone() {
-                apply_detection_edit(project, content_tx, &clip_id, |c| match step {
+            if let Some(clip_id) = ctx.selection.primary_selected_clip_id.clone() {
+                apply_detection_edit(ctx.project, ctx.content_tx, &clip_id, |c| match step {
                     Some(beats) => {
                         c.quantize_on = true;
                         c.quantize_step_beats = beats;
@@ -916,8 +902,8 @@ pub(super) fn dispatch_inspector(
         }
         PanelAction::ClipDetectSetLayer(idx, layer) => {
             let (idx, layer) = (*idx, layer.clone());
-            if let Some(clip_id) = selection.primary_selected_clip_id.clone() {
-                apply_detection_edit(project, content_tx, &clip_id, |c| {
+            if let Some(clip_id) = ctx.selection.primary_selected_clip_id.clone() {
+                apply_detection_edit(ctx.project, ctx.content_tx, &clip_id, |c| {
                     if let Some(inst) = c.instruments.get_mut(idx) {
                         inst.target_layer = layer;
                     }
@@ -931,9 +917,9 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
         PanelAction::ClipLoopToggle => {
-            if let Some(clip_id) = &selection.primary_selected_clip_id {
+            if let Some(clip_id) = &ctx.selection.primary_selected_clip_id {
                 let clip_id = clip_id.clone();
-                if let Some(clip) = project.timeline.find_clip_by_id(&clip_id) {
+                if let Some(clip) = ctx.project.timeline.find_clip_by_id(&clip_id) {
                     let old_loop = clip.is_looping;
                     let old_dur = clip.loop_duration_beats;
                     let cmd =
@@ -941,8 +927,8 @@ pub(super) fn dispatch_inspector(
                     {
                         let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
                             Box::new(cmd);
-                        boxed.execute(project);
-                        ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                        boxed.execute(ctx.project);
+                        ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
                     }
                 }
             }
@@ -959,7 +945,7 @@ pub(super) fn dispatch_inspector(
         // ── Effect operations ──────────────────────────────────────
         PanelAction::EffectToggle(fx_idx) => {
             let tab = effective_tab;
-            let selected = ui.inspector.get_selected_effect_indices();
+            let selected = ctx.ui.inspector.get_selected_effect_indices();
             // If clicked effect is part of multi-selection, apply to all selected
             let indices: Vec<usize> = if selected.len() > 1 && selected.contains(fx_idx) {
                 selected
@@ -968,14 +954,14 @@ pub(super) fn dispatch_inspector(
             };
             // New state = inverse of the clicked card, applied to every selected.
             let new_enabled = super::resolve_effect_id(
-                editor_target,
+                ctx.editor_target,
                 tab,
                 active_layer,
-                selection,
-                project,
+                ctx.selection,
+                ctx.project,
                 *fx_idx,
             )
-            .and_then(|eid| project.find_effect_by_id(&eid).map(|fx| !fx.enabled))
+            .and_then(|eid| ctx.project.find_effect_by_id(&eid).map(|fx| !fx.enabled))
             .unwrap_or(true);
             // Resolve every affected card to its stable id + current state. The
             // editor toggles its single watched effect (id wins over `idx`); the
@@ -984,14 +970,14 @@ pub(super) fn dispatch_inspector(
                 .iter()
                 .filter_map(|&idx| {
                     let eid = super::resolve_effect_id(
-                        editor_target,
+                        ctx.editor_target,
                         tab,
                         active_layer,
-                        selection,
-                        project,
+                        ctx.selection,
+                        ctx.project,
                         idx,
                     )?;
-                    let enabled = project.find_effect_by_id(&eid)?.enabled;
+                    let enabled = ctx.project.find_effect_by_id(&eid)?.enabled;
                     Some((eid, enabled))
                 })
                 .collect();
@@ -1007,13 +993,13 @@ pub(super) fn dispatch_inspector(
             }
             // Apply locally for immediate visual feedback.
             for (eid, _) in &targets {
-                if let Some(fx) = project.find_effect_by_id_mut(eid) {
+                if let Some(fx) = ctx.project.find_effect_by_id_mut(eid) {
                     fx.enabled = new_enabled;
                 }
             }
             if !commands.is_empty() {
                 ContentCommand::send(
-                    content_tx,
+                    ctx.content_tx,
                     ContentCommand::ExecuteBatch(commands, "Toggle effects".into()),
                 );
             }
@@ -1021,7 +1007,7 @@ pub(super) fn dispatch_inspector(
         }
         PanelAction::EffectCollapseToggle(fx_idx) => {
             let tab = effective_tab;
-            let selected = ui.inspector.get_selected_effect_indices();
+            let selected = ctx.ui.inspector.get_selected_effect_indices();
             // If clicked effect is part of multi-selection, apply to all selected
             let indices: Vec<usize> = if selected.len() > 1 && selected.contains(fx_idx) {
                 selected
@@ -1031,7 +1017,7 @@ pub(super) fn dispatch_inspector(
             let new_collapsed;
             {
                 let (effects_mut, _target) =
-                    resolve_effects_mut(tab, project, active_layer, selection);
+                    resolve_effects_mut(tab, ctx.project, active_layer, ctx.selection);
                 if let Some(effects) = effects_mut {
                     new_collapsed = effects.get(*fx_idx).map(|fx| !fx.collapsed).unwrap_or(true);
                     for &idx in &indices {
@@ -1044,10 +1030,10 @@ pub(super) fn dispatch_inspector(
                 }
             }
             // Send to content thread so snapshot sync doesn't overwrite
-            let target = super::resolve_effect_target(tab, active_layer, project);
+            let target = super::resolve_effect_target(tab, active_layer, ctx.project);
             let indices_owned = indices;
             ContentCommand::send(
-                content_tx,
+                ctx.content_tx,
                 ContentCommand::MutateProject(Box::new(move |p| {
                     let effects = match &target {
                         EffectTarget::Master => Some(&mut p.settings.master_effects),
@@ -1075,16 +1061,16 @@ pub(super) fn dispatch_inspector(
             let collapsed = *collapsed;
             {
                 let (effects_mut, _target) =
-                    resolve_effects_mut(tab, project, active_layer, selection);
+                    resolve_effects_mut(tab, ctx.project, active_layer, ctx.selection);
                 if let Some(effects) = effects_mut {
                     for fx in effects.iter_mut() {
                         fx.collapsed = collapsed;
                     }
                 }
             }
-            let target = super::resolve_effect_target(tab, active_layer, project);
+            let target = super::resolve_effect_target(tab, active_layer, ctx.project);
             ContentCommand::send(
-                content_tx,
+                ctx.content_tx,
                 ContentCommand::MutateProject(Box::new(move |p| {
                     let effects = match &target {
                         EffectTarget::Master => Some(&mut p.settings.master_effects),
@@ -1123,11 +1109,11 @@ pub(super) fn dispatch_inspector(
         }
         PanelAction::EffectCardClicked(_) => {
             // Deselect generator card when an effect card is clicked
-            if let Some(gp) = ui.inspector.gen_params_mut() {
-                gp.update_selection_visual(&mut ui.tree, false);
+            if let Some(gp) = ctx.ui.inspector.gen_params_mut() {
+                gp.update_selection_visual(&mut ctx.ui.tree, false);
             }
-            let tree = &mut ui.tree;
-            let inspector = &mut ui.inspector;
+            let tree = &mut ctx.ui.tree;
+            let inspector = &mut ctx.ui.inspector;
             inspector.apply_selection_visuals(tree);
             DispatchResult::handled()
         }
@@ -1143,9 +1129,9 @@ pub(super) fn dispatch_inspector(
         // remaining production caller.
         PanelAction::ParamSnapshot(gpt, param_id) => {
             if let Some(target) =
-                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
             {
-                let val = project
+                let val = ctx.project
                     .with_preset_graph_mut(&target, |inst| {
                         inst.params
                             .contains(param_id.as_ref())
@@ -1161,14 +1147,14 @@ pub(super) fn dispatch_inspector(
                     if effective_tab.is_layer_scope()
                         && let Some(layer_id) = active_layer.clone()
                     {
-                        selection.set_chosen_automation_param(
+                        ctx.selection.set_chosen_automation_param(
                             layer_id,
                             crate::editing_host::to_ui_graph_target(&target),
                             param_id.clone(),
                         );
                     }
-                    *drag_snapshot = Some(val);
-                    *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::Param {
+                    ctx.scrub.slider_snapshot = Some(val);
+                    ctx.scrub.active_inspector_drag = Some(crate::app::ActiveInspectorDrag::Param {
                         target,
                         param_id: param_id.clone(),
                         value: val,
@@ -1179,13 +1165,13 @@ pub(super) fn dispatch_inspector(
         }
         PanelAction::ParamChanged(gpt, param_id, val) => {
             if let Some(target) =
-                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
             {
-                project.with_preset_graph_mut(&target, |inst| {
+                ctx.project.with_preset_graph_mut(&target, |inst| {
                     inst.set_base_param(param_id.as_ref(), *val);
                 });
                 if let Some(crate::app::ActiveInspectorDrag::Param { value, .. }) =
-                    active_inspector_drag
+                    &mut ctx.scrub.active_inspector_drag
                 {
                     *value = *val;
                 }
@@ -1193,7 +1179,7 @@ pub(super) fn dispatch_inspector(
                 let v = *val;
                 let t = target.clone();
                 ContentCommand::send(
-                    content_tx,
+                    ctx.content_tx,
                     ContentCommand::MutateProjectLive(Box::new(move |p| {
                         p.with_preset_graph_mut(&t, |inst| {
                             inst.set_base_param(pid.as_ref(), v);
@@ -1207,11 +1193,11 @@ pub(super) fn dispatch_inspector(
             // Release commits ONE `ChangeGraphParamCommand` through the
             // undo-tracked `ContentCommand::Execute` path — one undo unit per
             // gesture, not per motion event.
-            if let Some(old_val) = drag_snapshot.take()
+            if let Some(old_val) = ctx.scrub.slider_snapshot.take()
                 && let Some(target) =
-                    resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+                    resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
             {
-                let new_val = project
+                let new_val = ctx.project
                     .with_preset_graph_mut(&target, |inst| {
                         inst.params
                             .contains(param_id.as_ref())
@@ -1227,10 +1213,10 @@ pub(super) fn dispatch_inspector(
                         old_val,
                         new_val,
                     );
-                    ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
                 }
             }
-            *active_inspector_drag = None;
+            ctx.scrub.active_inspector_drag = None;
             DispatchResult::handled()
         }
         // BUG-250: an enum dropdown pick — one atomic write, one undo unit,
@@ -1238,9 +1224,9 @@ pub(super) fn dispatch_inspector(
         // shape, exactly as `ParamChanged`/`ParamToggle` already do.
         PanelAction::ParamEnumSet(gpt, param_id, new_val) => {
             if let Some(target) =
-                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
             {
-                let old_val = project
+                let old_val = ctx.project
                     .with_preset_graph_mut(&target, |inst| {
                         inst.params
                             .contains(param_id.as_ref())
@@ -1250,11 +1236,11 @@ pub(super) fn dispatch_inspector(
                 if let Some(old_val) = old_val
                     && (old_val - *new_val).abs() > f32::EPSILON
                 {
-                    project.with_preset_graph_mut(&target, |inst| {
+                    ctx.project.with_preset_graph_mut(&target, |inst| {
                         inst.set_base_param(param_id.as_ref(), *new_val);
                     });
                     let cmd = ChangeGraphParamCommand::new(target, param_id.clone(), old_val, *new_val);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
                 }
             }
             DispatchResult::handled()
@@ -1266,8 +1252,8 @@ pub(super) fn dispatch_inspector(
             // (materializing the exposure on first arm) — see
             // `resolve_mod_target`. Non-scene ids resolve exactly as before.
             let Some((target, param_id)) = resolve_mod_target(
-                ui, project, content_tx, gpt, param_id, editor_target, effective_tab, active_layer,
-                selection, true,
+                ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
+                ctx.selection, true,
             ) else {
                 return DispatchResult::structural();
             };
@@ -1275,7 +1261,7 @@ pub(super) fn dispatch_inspector(
             // Read the driver state off the SAME instance the command targets,
             // by target — never an ambient row index — so an editor-card driver
             // edit can't split (command -> watched instance, di -> another).
-            let Some((existing, base_value)) = project.with_preset_graph_mut(&target, |inst| {
+            let Some((existing, base_value)) = ctx.project.with_preset_graph_mut(&target, |inst| {
                 let existing = inst
                     .drivers
                     .as_ref()
@@ -1307,20 +1293,20 @@ pub(super) fn dispatch_inspector(
                     };
                     Box::new(AddDriverCommand::new(driver_target, driver))
                 };
-            boxed.execute(project);
-            ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            boxed.execute(ctx.project);
+            ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
             DispatchResult::structural()
         }
         PanelAction::AudioModToggle(gpt, param_id) => {
             let Some((target, param_id)) = resolve_mod_target(
-                ui, project, content_tx, gpt, param_id, editor_target, effective_tab, active_layer,
-                selection, true,
+                ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
+                ctx.selection, true,
             ) else {
                 return DispatchResult::structural();
             };
             let param_id = &param_id;
             // Existing mod's enabled state, read off the resolved instance.
-            let existing = project
+            let existing = ctx.project
                 .with_preset_graph_mut(&target, |inst| {
                     inst.find_audio_mod(param_id.as_ref()).map(|a| a.enabled)
                 })
@@ -1337,7 +1323,7 @@ pub(super) fn dispatch_inspector(
                 } else {
                     // Arm: assign the project's first audio send. No sends → inert
                     // (the audio button stays a no-op until the Audio Setup defines one).
-                    let Some(send_id) = project.audio_setup.sends.first().map(|s| s.id.clone())
+                    let Some(send_id) = ctx.project.audio_setup.sends.first().map(|s| s.id.clone())
                     else {
                         return DispatchResult::structural();
                     };
@@ -1348,19 +1334,19 @@ pub(super) fn dispatch_inspector(
                     );
                     Box::new(AddAudioModCommand::new(driver_target, m))
                 };
-            boxed.execute(project);
-            ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            boxed.execute(ctx.project);
+            ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
             DispatchResult::structural()
         }
         PanelAction::AudioModSetSource(gpt, param_id, send_id, feature) => {
             let Some((target, param_id)) = resolve_mod_target(
-                ui, project, content_tx, gpt, param_id, editor_target, effective_tab, active_layer,
-                selection, true,
+                ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
+                ctx.selection, true,
             ) else {
                 return DispatchResult::structural();
             };
             let param_id = &param_id;
-            let old_source = project
+            let old_source = ctx.project
                 .with_preset_graph_mut(&target, |inst| {
                     inst.find_audio_mod(param_id.as_ref()).map(|a| a.source.clone())
                 })
@@ -1386,14 +1372,14 @@ pub(super) fn dispatch_inspector(
                     );
                     Box::new(AddAudioModCommand::new(driver_target, m))
                 };
-            boxed.execute(project);
-            ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            boxed.execute(ctx.project);
+            ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
             DispatchResult::structural()
         }
         PanelAction::AudioModRemove(gpt, param_id) => {
             let Some((target, param_id)) = resolve_mod_target(
-                ui, project, content_tx, gpt, param_id, editor_target, effective_tab, active_layer,
-                selection, false,
+                ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
+                ctx.selection, false,
             ) else {
                 return DispatchResult::structural();
             };
@@ -1401,19 +1387,19 @@ pub(super) fn dispatch_inspector(
             let driver_target = DriverTarget::from(&target);
             let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
                 Box::new(RemoveAudioModCommand::new(driver_target, param_id.clone()));
-            boxed.execute(project);
-            ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            boxed.execute(ctx.project);
+            ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
             DispatchResult::structural()
         }
         PanelAction::AudioModSetInvert(gpt, param_id) => {
             // Flip the mod's invert flag in one undo step. Reads the current
             // shape, flips `invert`, commits old→new via the shape command.
             if let Some((target, param_id)) = resolve_mod_target(
-                ui, project, content_tx, gpt, param_id, editor_target, effective_tab, active_layer,
-                selection, false,
+                ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
+                ctx.selection, false,
             ) {
                 let param_id = &param_id;
-                let old_shape = project
+                let old_shape = ctx.project
                     .with_preset_graph_mut(&target, |inst| {
                         inst.audio_mods
                             .as_ref()
@@ -1431,8 +1417,8 @@ pub(super) fn dispatch_inspector(
                             old_shape,
                             new_shape,
                         ));
-                    boxed.execute(project);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                    boxed.execute(ctx.project);
+                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
                 }
             }
             DispatchResult::handled()
@@ -1443,11 +1429,11 @@ pub(super) fn dispatch_inspector(
             // path as invert: read the current shape, flip `rate_of_change`,
             // commit old→new via the shape command.
             if let Some((target, param_id)) = resolve_mod_target(
-                ui, project, content_tx, gpt, param_id, editor_target, effective_tab, active_layer,
-                selection, false,
+                ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
+                ctx.selection, false,
             ) {
                 let param_id = &param_id;
-                let old_shape = project
+                let old_shape = ctx.project
                     .with_preset_graph_mut(&target, |inst| {
                         inst.audio_mods
                             .as_ref()
@@ -1465,8 +1451,8 @@ pub(super) fn dispatch_inspector(
                             old_shape,
                             new_shape,
                         ));
-                    boxed.execute(project);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                    boxed.execute(ctx.project);
+                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
                 }
             }
             DispatchResult::handled()
@@ -1475,11 +1461,11 @@ pub(super) fn dispatch_inspector(
         PanelAction::AudioModShapeSnapshot(gpt, param_id) => {
             // Capture the pre-drag shape so the commit can record one undo step.
             if let Some((target, param_id)) = resolve_mod_target(
-                ui, project, content_tx, gpt, param_id, editor_target, effective_tab, active_layer,
-                selection, false,
+                ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
+                ctx.selection, false,
             ) {
                 let param_id = &param_id;
-                *audio_shape_snapshot = project
+                ctx.scrub.audio_shape_snapshot = ctx.project
                     .with_preset_graph_mut(&target, |inst| {
                         inst.audio_mods
                             .as_ref()
@@ -1487,8 +1473,8 @@ pub(super) fn dispatch_inspector(
                             .map(|m| m.shape)
                     })
                     .flatten();
-                if let Some(shape) = *audio_shape_snapshot {
-                    *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::AudioModShape {
+                if let Some(shape) = ctx.scrub.audio_shape_snapshot {
+                    ctx.scrub.active_inspector_drag = Some(crate::app::ActiveInspectorDrag::AudioModShape {
                         target,
                         param_id: param_id.clone(),
                         shape,
@@ -1500,14 +1486,14 @@ pub(super) fn dispatch_inspector(
         PanelAction::AudioModShapeParamChanged(gpt, param_id, which, value) => {
             // Live edit (no undo entry per frame) — the handle tracks the cursor.
             if let Some((target, param_id)) = resolve_mod_target(
-                ui, project, content_tx, gpt, param_id, editor_target, effective_tab, active_layer,
-                selection, false,
+                ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
+                ctx.selection, false,
             ) {
                 let param_id = &param_id;
                 let which = *which;
                 let v = *value;
                 if let Some(crate::app::ActiveInspectorDrag::AudioModShape { shape, .. }) =
-                    active_inspector_drag
+                    &mut ctx.scrub.active_inspector_drag
                 {
                     match which {
                         AudioShapeParam::Sensitivity => shape.sensitivity = v,
@@ -1515,7 +1501,7 @@ pub(super) fn dispatch_inspector(
                         AudioShapeParam::Release => shape.release_ms = v,
                     }
                 }
-                graph_audio_mod_dual_edit(project, content_tx, &target, param_id.clone(), move |m| {
+                graph_audio_mod_dual_edit(ctx.project, ctx.content_tx, &target, param_id.clone(), move |m| {
                     match which {
                         AudioShapeParam::Sensitivity => m.shape.sensitivity = v,
                         AudioShapeParam::Attack => m.shape.attack_ms = v,
@@ -1527,15 +1513,15 @@ pub(super) fn dispatch_inspector(
         }
         PanelAction::AudioModShapeCommit(gpt, param_id) => {
             // One undo step: snapshot (old) → current shape (new) via the shape command.
-            *active_inspector_drag = None;
-            if let Some(old_shape) = audio_shape_snapshot.take()
+            ctx.scrub.active_inspector_drag = None;
+            if let Some(old_shape) = ctx.scrub.audio_shape_snapshot.take()
                 && let Some((target, param_id)) = resolve_mod_target(
-                    ui, project, content_tx, gpt, param_id, editor_target, effective_tab,
-                    active_layer, selection, false,
+                    ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab,
+                    active_layer, ctx.selection, false,
                 )
             {
                 let param_id = &param_id;
-                let new_shape = project
+                let new_shape = ctx.project
                     .with_preset_graph_mut(&target, |inst| {
                         inst.audio_mods
                             .as_ref()
@@ -1553,8 +1539,8 @@ pub(super) fn dispatch_inspector(
                             old_shape,
                             new_shape,
                         ));
-                    boxed.execute(project);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                    boxed.execute(ctx.project);
+                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
                 }
             }
             DispatchResult::handled()
@@ -1565,11 +1551,11 @@ pub(super) fn dispatch_inspector(
         // separate per-instance config, no separate command family).
         PanelAction::AudioModSetTriggerMode(gpt, param_id, mode_idx) => {
             if let Some((target, param_id)) = resolve_mod_target(
-                ui, project, content_tx, gpt, param_id, editor_target, effective_tab, active_layer,
-                selection, false,
+                ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
+                ctx.selection, false,
             ) {
                 let param_id = &param_id;
-                let old_mode = project
+                let old_mode = ctx.project
                     .with_preset_graph_mut(&target, |inst| {
                         inst.find_audio_mod(param_id.as_ref()).and_then(|m| m.trigger_mode)
                     })
@@ -1587,8 +1573,8 @@ pub(super) fn dispatch_inspector(
                             old_mode,
                             new_mode,
                         ));
-                    boxed.execute(project);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                    boxed.execute(ctx.project);
+                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
                 }
             }
             DispatchResult::structural()
@@ -1602,11 +1588,11 @@ pub(super) fn dispatch_inspector(
         // depend on which action is armed.
         PanelAction::AudioModSetActionKind(gpt, param_id, kind_idx) => {
             if let Some((target, param_id)) = resolve_mod_target(
-                ui, project, content_tx, gpt, param_id, editor_target, effective_tab, active_layer,
-                selection, false,
+                ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
+                ctx.selection, false,
             ) {
                 let param_id = &param_id;
-                let (old_action, min, max, whole_numbers) = project
+                let (old_action, min, max, whole_numbers) = ctx.project
                     .with_preset_graph_mut(&target, |inst| {
                         let action = inst.find_audio_mod(param_id.as_ref()).map(|m| m.action);
                         let spec = inst.params.get(param_id.as_ref());
@@ -1642,8 +1628,8 @@ pub(super) fn dispatch_inspector(
                                 old_action,
                                 new_action,
                             ));
-                        boxed.execute(project);
-                        ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                        boxed.execute(ctx.project);
+                        ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
                     }
                 }
             }
@@ -1653,21 +1639,21 @@ pub(super) fn dispatch_inspector(
         PanelAction::AudioModStepAmountSnapshot(gpt, param_id) => {
             // Capture the pre-drag action so the commit can record one undo step.
             if let Some((target, param_id)) = resolve_mod_target(
-                ui, project, content_tx, gpt, param_id, editor_target, effective_tab, active_layer,
-                selection, false,
+                ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
+                ctx.selection, false,
             ) {
                 let param_id = &param_id;
-                *audio_action_snapshot = project
+                ctx.scrub.audio_action_snapshot = ctx.project
                     .with_preset_graph_mut(&target, |inst| {
                         inst.find_audio_mod(param_id.as_ref()).map(|m| m.action)
                     })
                     .flatten();
-                let amount = match audio_action_snapshot.as_ref() {
+                let amount = match ctx.scrub.audio_action_snapshot.as_ref() {
                     Some(manifold_core::audio_mod::TriggerAction::Step { amount, .. }) => *amount,
                     _ => 0.0,
                 };
-                if audio_action_snapshot.is_some() {
-                    *active_inspector_drag =
+                if ctx.scrub.audio_action_snapshot.is_some() {
+                    ctx.scrub.active_inspector_drag =
                         Some(crate::app::ActiveInspectorDrag::AudioModStepAmount {
                             target,
                             param_id: param_id.clone(),
@@ -1680,18 +1666,18 @@ pub(super) fn dispatch_inspector(
         PanelAction::AudioModStepAmountChanged(gpt, param_id, value) => {
             // Live edit (no undo entry per frame) — the handle tracks the cursor.
             if let Some((target, param_id)) = resolve_mod_target(
-                ui, project, content_tx, gpt, param_id, editor_target, effective_tab, active_layer,
-                selection, false,
+                ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
+                ctx.selection, false,
             ) {
                 let param_id = &param_id;
                 let v = *value;
                 if let Some(crate::app::ActiveInspectorDrag::AudioModStepAmount {
                     amount, ..
-                }) = active_inspector_drag
+                }) = &mut ctx.scrub.active_inspector_drag
                 {
                     *amount = v;
                 }
-                graph_audio_mod_dual_edit(project, content_tx, &target, param_id.clone(), move |m| {
+                graph_audio_mod_dual_edit(ctx.project, ctx.content_tx, &target, param_id.clone(), move |m| {
                     let wrap = match m.action {
                         manifold_core::audio_mod::TriggerAction::Step { wrap, .. } => wrap,
                         _ => manifold_core::audio_mod::WrapMode::Wrap,
@@ -1703,15 +1689,15 @@ pub(super) fn dispatch_inspector(
         }
         PanelAction::AudioModStepAmountCommit(gpt, param_id) => {
             // One undo step: snapshot (old) → current action (new).
-            *active_inspector_drag = None;
-            if let Some(old_action) = audio_action_snapshot.take()
+            ctx.scrub.active_inspector_drag = None;
+            if let Some(old_action) = ctx.scrub.audio_action_snapshot.take()
                 && let Some((target, param_id)) = resolve_mod_target(
-                    ui, project, content_tx, gpt, param_id, editor_target, effective_tab,
-                    active_layer, selection, false,
+                    ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab,
+                    active_layer, ctx.selection, false,
                 )
             {
                 let param_id = &param_id;
-                let new_action = project
+                let new_action = ctx.project
                     .with_preset_graph_mut(&target, |inst| {
                         inst.find_audio_mod(param_id.as_ref()).map(|m| m.action)
                     })
@@ -1726,8 +1712,8 @@ pub(super) fn dispatch_inspector(
                             old_action,
                             new_action,
                         ));
-                    boxed.execute(project);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                    boxed.execute(ctx.project);
+                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
                 }
             }
             DispatchResult::handled()
@@ -1738,11 +1724,11 @@ pub(super) fn dispatch_inspector(
         // isn't built then) is a harmless no-op.
         PanelAction::AudioModSetWrap(gpt, param_id, wrap_idx) => {
             if let Some((target, param_id)) = resolve_mod_target(
-                ui, project, content_tx, gpt, param_id, editor_target, effective_tab, active_layer,
-                selection, false,
+                ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
+                ctx.selection, false,
             ) {
                 let param_id = &param_id;
-                let old_action = project
+                let old_action = ctx.project
                     .with_preset_graph_mut(&target, |inst| {
                         inst.find_audio_mod(param_id.as_ref()).map(|m| m.action)
                     })
@@ -1764,8 +1750,8 @@ pub(super) fn dispatch_inspector(
                                 old_action,
                                 new_action,
                             ));
-                        boxed.execute(project);
-                        ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                        boxed.execute(ctx.project);
+                        ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
                     }
                 }
             }
@@ -1780,11 +1766,11 @@ pub(super) fn dispatch_inspector(
         // Add/Remove/SetLayerClipTriggerCommand — whole-value-replace, same
         // shape as `SetAudioModTriggerModeCommand`.
         PanelAction::AudioTriggerSectionToggle => {
-            ui.inspector.audio_trigger_section_mut().toggle_collapsed();
+            ctx.ui.inspector.audio_trigger_section_mut().toggle_collapsed();
             DispatchResult::structural()
         }
         PanelAction::AudioTriggerRowExpandToggle(_layer_id, index) => {
-            ui.inspector.audio_trigger_section_mut().toggle_row_expanded(*index);
+            ctx.ui.inspector.audio_trigger_section_mut().toggle_row_expanded(*index);
             DispatchResult::structural()
         }
         PanelAction::AudioTriggerAdd(layer_id) => {
@@ -1794,7 +1780,7 @@ pub(super) fn dispatch_inspector(
             // 1b one-shot. The user hears it fire immediately and adjusts
             // from there. Inert until the Audio Setup dock defines a send
             // (mirrors `AudioModToggle`'s "arm" no-send case).
-            if let Some(send_id) = project.audio_setup.sends.first().map(|s| s.id.clone()) {
+            if let Some(send_id) = ctx.project.audio_setup.sends.first().map(|s| s.id.clone()) {
                 let mut trigger = manifold_core::audio_trigger::LayerClipTrigger::new(
                     manifold_core::audio_mod::AudioModSource {
                         send_id,
@@ -1805,18 +1791,18 @@ pub(super) fn dispatch_inspector(
                     },
                 );
                 trigger.enabled = true;
-                let new_index = project
+                let new_index = ctx.project
                     .timeline
                     .find_layer_by_id_mut(layer_id)
                     .map(|(_, l)| l.clip_triggers.len());
                 let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
                     Box::new(AddLayerClipTriggerCommand::new(layer_id.clone(), trigger));
-                boxed.execute(project);
-                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                boxed.execute(ctx.project);
+                ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
                 // Open the new row's drawer so its (now minimal) tuning is
                 // immediately visible.
                 if let Some(index) = new_index {
-                    ui.inspector.audio_trigger_section_mut().expand_row(index);
+                    ctx.ui.inspector.audio_trigger_section_mut().expand_row(index);
                 }
             }
             DispatchResult::structural()
@@ -1824,12 +1810,12 @@ pub(super) fn dispatch_inspector(
         PanelAction::AudioTriggerRemove(layer_id, index) => {
             let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
                 Box::new(RemoveLayerClipTriggerCommand::new(layer_id.clone(), *index));
-            boxed.execute(project);
-            ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            boxed.execute(ctx.project);
+            ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
             DispatchResult::structural()
         }
         PanelAction::AudioTriggerEnabledToggle(layer_id, index) => {
-            let old = project
+            let old = ctx.project
                 .timeline
                 .find_layer_by_id_mut(layer_id)
                 .and_then(|(_, l)| l.clip_triggers.get(*index).cloned());
@@ -1839,13 +1825,13 @@ pub(super) fn dispatch_inspector(
                 let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(
                     SetLayerClipTriggerCommand::new(layer_id.clone(), *index, old, new),
                 );
-                boxed.execute(project);
-                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                boxed.execute(ctx.project);
+                ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
             }
             DispatchResult::structural()
         }
         PanelAction::AudioTriggerSetSource(layer_id, index, send_id, feature) => {
-            let old = project
+            let old = ctx.project
                 .timeline
                 .find_layer_by_id_mut(layer_id)
                 .and_then(|(_, l)| l.clip_triggers.get(*index).cloned());
@@ -1858,8 +1844,8 @@ pub(super) fn dispatch_inspector(
                 let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(
                     SetLayerClipTriggerCommand::new(layer_id.clone(), *index, old, new),
                 );
-                boxed.execute(project);
-                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                boxed.execute(ctx.project);
+                ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
             }
             DispatchResult::structural()
         }
@@ -1869,13 +1855,13 @@ pub(super) fn dispatch_inspector(
             // can be mid-drag at a time (single-threaded UI dispatch), so
             // the snapshot/commit pair for this target never overlaps a
             // param-mod drag's own use of the same slot.
-            *audio_shape_snapshot = project
+            ctx.scrub.audio_shape_snapshot = ctx.project
                 .timeline
                 .find_layer_by_id_mut(layer_id)
                 .and_then(|(_, l)| l.clip_triggers.get(*index))
                 .map(|t| t.shape);
-            if let Some(shape) = *audio_shape_snapshot {
-                *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::AudioTriggerShape {
+            if let Some(shape) = ctx.scrub.audio_shape_snapshot {
+                ctx.scrub.active_inspector_drag = Some(crate::app::ActiveInspectorDrag::AudioTriggerShape {
                     layer_id: layer_id.clone(),
                     index: *index,
                     shape,
@@ -1887,7 +1873,7 @@ pub(super) fn dispatch_inspector(
             let which = *which;
             let v = *value;
             if let Some(crate::app::ActiveInspectorDrag::AudioTriggerShape { shape, .. }) =
-                active_inspector_drag
+                &mut ctx.scrub.active_inspector_drag
             {
                 match which {
                     AudioShapeParam::Sensitivity => shape.sensitivity = v,
@@ -1895,7 +1881,7 @@ pub(super) fn dispatch_inspector(
                     AudioShapeParam::Release => shape.release_ms = v,
                 }
             }
-            clip_trigger_shape_dual_edit(project, content_tx, layer_id, *index, move |shape| {
+            clip_trigger_shape_dual_edit(ctx.project, ctx.content_tx, layer_id, *index, move |shape| {
                 match which {
                     AudioShapeParam::Sensitivity => shape.sensitivity = v,
                     AudioShapeParam::Attack => shape.attack_ms = v,
@@ -1905,9 +1891,9 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
         PanelAction::AudioTriggerShapeCommit(layer_id, index) => {
-            *active_inspector_drag = None;
-            if let Some(old_shape) = audio_shape_snapshot.take() {
-                let current = project
+            ctx.scrub.active_inspector_drag = None;
+            if let Some(old_shape) = ctx.scrub.audio_shape_snapshot.take() {
+                let current = ctx.project
                     .timeline
                     .find_layer_by_id_mut(layer_id)
                     .and_then(|(_, l)| l.clip_triggers.get(*index).cloned());
@@ -1919,14 +1905,14 @@ pub(super) fn dispatch_inspector(
                     let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(
                         SetLayerClipTriggerCommand::new(layer_id.clone(), *index, old, current),
                     );
-                    boxed.execute(project);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                    boxed.execute(ctx.project);
+                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
                 }
             }
             DispatchResult::handled()
         }
         PanelAction::AudioTriggerSetLength(layer_id, index, beats) => {
-            let old = project
+            let old = ctx.project
                 .timeline
                 .find_layer_by_id_mut(layer_id)
                 .and_then(|(_, l)| l.clip_triggers.get(*index).cloned());
@@ -1937,8 +1923,8 @@ pub(super) fn dispatch_inspector(
                     let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(
                         SetLayerClipTriggerCommand::new(layer_id.clone(), *index, old, new),
                     );
-                    boxed.execute(project);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                    boxed.execute(ctx.project);
+                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
                 }
             }
             DispatchResult::structural()
@@ -1946,10 +1932,10 @@ pub(super) fn dispatch_inspector(
 
         // ── Audio Setup (project-level send routing) ──────────────
         PanelAction::AudioSetDevice(device) => {
-            let old = project.audio_setup.device.clone();
+            let old = ctx.project.audio_setup.device.clone();
             audio_setup_command(
-                project,
-                content_tx,
+                ctx.project,
+                ctx.content_tx,
                 Box::new(SetAudioInputDeviceCommand::new(
                     old,
                     device.as_ref().map(crate::ui_translate::audio_device_ref_to_core),
@@ -1959,36 +1945,36 @@ pub(super) fn dispatch_inspector(
         PanelAction::AudioAddSend => {
             let send = manifold_core::audio_setup::AudioSend::new(format!(
                 "Audio {}",
-                project.audio_setup.sends.len() + 1
+                ctx.project.audio_setup.sends.len() + 1
             ));
-            audio_setup_command(project, content_tx, Box::new(AddAudioSendCommand::new(send)))
+            audio_setup_command(ctx.project, ctx.content_tx, Box::new(AddAudioSendCommand::new(send)))
         }
         PanelAction::AudioRemoveSend(id) => audio_setup_command(
-            project,
-            content_tx,
+            ctx.project,
+            ctx.content_tx,
             Box::new(RemoveAudioSendCommand::new(id.clone())),
         ),
         PanelAction::AudioRenameSend(id, label) => {
-            let old = project
+            let old = ctx.project
                 .audio_setup
                 .find_send(id)
                 .map(|s| s.label.clone())
                 .unwrap_or_default();
             audio_setup_command(
-                project,
-                content_tx,
+                ctx.project,
+                ctx.content_tx,
                 Box::new(RenameAudioSendCommand::new(id.clone(), old, label.clone())),
             )
         }
         PanelAction::AudioSetSendChannels(id, ch) => {
-            let old = project
+            let old = ctx.project
                 .audio_setup
                 .find_send(id)
                 .map(|s| s.channels.clone())
                 .unwrap_or_default();
             audio_setup_command(
-                project,
-                content_tx,
+                ctx.project,
+                ctx.content_tx,
                 Box::new(SetAudioSendChannelsCommand::new(id.clone(), old, ch.clone())),
             )
         }
@@ -1999,7 +1985,7 @@ pub(super) fn dispatch_inspector(
             // The project is the source of truth: read current gain, apply the
             // delta, clamp to a sensible trim range, commit old→new. Capture
             // restart is avoided — the worker reads gain live (AudioModRuntime).
-            let old = project
+            let old = ctx.project
                 .audio_setup
                 .find_send(id)
                 .map(|s| s.gain_db)
@@ -2009,23 +1995,23 @@ pub(super) fn dispatch_inspector(
                 return DispatchResult::structural();
             }
             audio_setup_command(
-                project,
-                content_tx,
+                ctx.project,
+                ctx.content_tx,
                 Box::new(SetAudioSendGainCommand::new(id.clone(), old, new)),
             )
         }
         PanelAction::AudioSendGainDragBegin(id) => {
             // Snapshot the pre-drag gain so the commit records one undo step —
             // the `AudioCrossoverDragBegin` pattern, per-send (D7).
-            *audio_send_gain_drag_snapshot = Some(
-                project
+            ctx.scrub.audio_send_gain_drag_snapshot = Some(
+                ctx.project
                     .audio_setup
                     .find_send(id)
                     .map(|s| s.gain_db)
                     .unwrap_or(0.0),
             );
-            if let Some(db) = *audio_send_gain_drag_snapshot {
-                *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::AudioSendGain {
+            if let Some(db) = ctx.scrub.audio_send_gain_drag_snapshot {
+                ctx.scrub.active_inspector_drag = Some(crate::app::ActiveInspectorDrag::AudioSendGain {
                     send_id: id.clone(),
                     db,
                 });
@@ -2038,16 +2024,16 @@ pub(super) fn dispatch_inspector(
             // label + `GainBank` track the cursor — no capture restart.
             let clamped = db.clamp(AUDIO_SEND_GAIN_MIN_DB, AUDIO_SEND_GAIN_MAX_DB);
             if let Some(crate::app::ActiveInspectorDrag::AudioSendGain { db: guard, .. }) =
-                active_inspector_drag
+                &mut ctx.scrub.active_inspector_drag
             {
                 *guard = clamped;
             }
-            if let Some(s) = project.audio_setup.find_send_mut(id) {
+            if let Some(s) = ctx.project.audio_setup.find_send_mut(id) {
                 s.gain_db = clamped;
             }
             let id = id.clone();
             ContentCommand::send(
-                content_tx,
+                ctx.content_tx,
                 ContentCommand::MutateProjectLive(Box::new(move |p| {
                     if let Some(s) = p.audio_setup.find_send_mut(&id) {
                         s.gain_db = clamped;
@@ -2058,13 +2044,13 @@ pub(super) fn dispatch_inspector(
         }
         PanelAction::AudioSendGainDragCommit(id) => {
             // One undo step: snapshot (old) → current gain (new).
-            *active_inspector_drag = None;
-            if let Some(old) = audio_send_gain_drag_snapshot.take() {
-                let new = project.audio_setup.find_send(id).map(|s| s.gain_db).unwrap_or(old);
+            ctx.scrub.active_inspector_drag = None;
+            if let Some(old) = ctx.scrub.audio_send_gain_drag_snapshot.take() {
+                let new = ctx.project.audio_setup.find_send(id).map(|s| s.gain_db).unwrap_or(old);
                 if (new - old).abs() > f32::EPSILON {
                     return audio_setup_command(
-                        project,
-                        content_tx,
+                        ctx.project,
+                        ctx.content_tx,
                         Box::new(SetAudioSendGainCommand::new(id.clone(), old, new)),
                     );
                 }
@@ -2077,13 +2063,13 @@ pub(super) fn dispatch_inspector(
         // to exceed `AUDIO_SEND_GAIN_MIN_DB`/`MAX_DB` (PARAM_RANGE_CONTRACT
         // P1: those are the stepper's display travel, not a hard limit).
         PanelAction::AudioSendGainSetTyped(id, new_db) => {
-            let old = project.audio_setup.find_send(id).map(|s| s.gain_db).unwrap_or(0.0);
+            let old = ctx.project.audio_setup.find_send(id).map(|s| s.gain_db).unwrap_or(0.0);
             if (new_db - old).abs() < f32::EPSILON {
                 return DispatchResult::structural();
             }
             audio_setup_command(
-                project,
-                content_tx,
+                ctx.project,
+                ctx.content_tx,
                 Box::new(SetAudioSendGainCommand::new(id.clone(), old, *new_db)),
             )
         }
@@ -2094,7 +2080,7 @@ pub(super) fn dispatch_inspector(
             const FLOOR_MIN_DB: f32 = -100.0;
             const FLOOR_MAX_DB: f32 = -6.0;
             let off = manifold_core::audio_setup::FLOOR_DB_OFF;
-            let old = project
+            let old = ctx.project
                 .audio_setup
                 .find_send(id)
                 .map(|s| s.floor_db)
@@ -2109,8 +2095,8 @@ pub(super) fn dispatch_inspector(
                 return DispatchResult::structural();
             }
             audio_setup_command(
-                project,
-                content_tx,
+                ctx.project,
+                ctx.content_tx,
                 Box::new(SetAudioSendFloorCommand::new(id.clone(), old, new)),
             )
         }
@@ -2123,10 +2109,10 @@ pub(super) fn dispatch_inspector(
         // with the section's authoring (§7.2 item 7, P8, 2026-07-11).
         PanelAction::AudioCrossoverDragBegin => {
             // Snapshot the pre-drag crossovers so the commit records one undo step.
-            *audio_crossover_snapshot =
-                Some((project.audio_setup.low_hz, project.audio_setup.mid_hz));
-            if let Some((low_hz, mid_hz)) = *audio_crossover_snapshot {
-                *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::AudioCrossover {
+            ctx.scrub.audio_crossover_snapshot =
+                Some((ctx.project.audio_setup.low_hz, ctx.project.audio_setup.mid_hz));
+            if let Some((low_hz, mid_hz)) = ctx.scrub.audio_crossover_snapshot {
+                ctx.scrub.active_inspector_drag = Some(crate::app::ActiveInspectorDrag::AudioCrossover {
                     low_hz,
                     mid_hz,
                 });
@@ -2138,22 +2124,22 @@ pub(super) fn dispatch_inspector(
             // other and the band edges, then apply to the local project and the
             // content thread so the divider + analysis bands track the cursor.
             let dragging_low = matches!(band, manifold_ui::BandDivider::Low);
-            let (cur_low, cur_mid) = (project.audio_setup.low_hz, project.audio_setup.mid_hz);
+            let (cur_low, cur_mid) = (ctx.project.audio_setup.low_hz, ctx.project.audio_setup.mid_hz);
             let (low, mid) = if dragging_low {
                 manifold_core::audio_setup::AudioSetup::clamp_crossovers(*hz, cur_mid, true)
             } else {
                 manifold_core::audio_setup::AudioSetup::clamp_crossovers(cur_low, *hz, false)
             };
             if let Some(crate::app::ActiveInspectorDrag::AudioCrossover { low_hz, mid_hz }) =
-                active_inspector_drag
+                &mut ctx.scrub.active_inspector_drag
             {
                 *low_hz = low;
                 *mid_hz = mid;
             }
-            project.audio_setup.low_hz = low;
-            project.audio_setup.mid_hz = mid;
+            ctx.project.audio_setup.low_hz = low;
+            ctx.project.audio_setup.mid_hz = mid;
             ContentCommand::send(
-                content_tx,
+                ctx.content_tx,
                 ContentCommand::MutateProjectLive(Box::new(move |p| {
                     p.audio_setup.low_hz = low;
                     p.audio_setup.mid_hz = mid;
@@ -2163,13 +2149,13 @@ pub(super) fn dispatch_inspector(
         }
         PanelAction::AudioCrossoverCommit => {
             // One undo step: snapshot (old) → current crossovers (new).
-            *active_inspector_drag = None;
-            if let Some(old) = audio_crossover_snapshot.take() {
-                let new = (project.audio_setup.low_hz, project.audio_setup.mid_hz);
+            ctx.scrub.active_inspector_drag = None;
+            if let Some(old) = ctx.scrub.audio_crossover_snapshot.take() {
+                let new = (ctx.project.audio_setup.low_hz, ctx.project.audio_setup.mid_hz);
                 if new != old {
                     return audio_setup_command(
-                        project,
-                        content_tx,
+                        ctx.project,
+                        ctx.content_tx,
                         Box::new(SetAudioCrossoversCommand::new(old, new)),
                     );
                 }
@@ -2184,8 +2170,8 @@ pub(super) fn dispatch_inspector(
             // envelopes (master/clip have no trigger — the button is inert
             // there); generators are layer-scoped, always permitted.
             if let Some((target, param_id)) = resolve_mod_target(
-                ui, project, content_tx, gpt, param_id, editor_target, effective_tab, active_layer,
-                selection, true,
+                ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
+                ctx.selection, true,
             ) {
                 let param_id = &param_id;
                 let env_allowed = match &target {
@@ -2199,7 +2185,7 @@ pub(super) fn dispatch_inspector(
                     // siblings (was `MutateProject` — arming or flipping an
                     // envelope recorded NO undo entry): existing envelope →
                     // flip `enabled`; none → add a fresh enabled one.
-                    let existing = project
+                    let existing = ctx.project
                         .with_preset_graph_mut(&target, |inst| {
                             inst.envelopes
                                 .as_ref()
@@ -2224,16 +2210,16 @@ pub(super) fn dispatch_inspector(
                                 ParamEnvelope::new(param_id.clone()),
                             ))
                         };
-                    boxed.execute(project);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                    boxed.execute(ctx.project);
+                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
                 }
             }
             DispatchResult::structural()
         }
         PanelAction::DriverConfig(gpt, param_id, cfg) => {
             let Some((target, param_id)) = resolve_mod_target(
-                ui, project, content_tx, gpt, param_id, editor_target, effective_tab, active_layer,
-                selection, false,
+                ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
+                ctx.selection, false,
             ) else {
                 return DispatchResult::structural();
             };
@@ -2242,7 +2228,7 @@ pub(super) fn dispatch_inspector(
             // Read the driver's current config off the same instance the
             // command targets (by GraphTarget), so an editor-card edit can't
             // split command vs row index.
-            let info = project
+            let info = ctx.project
                 .with_preset_graph_mut(&target, |inst| {
                     inst.drivers
                         .as_ref()
@@ -2314,8 +2300,8 @@ pub(super) fn dispatch_inspector(
                     }
                 };
                 if let Some(mut boxed) = cmd {
-                    boxed.execute(project);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                    boxed.execute(ctx.project);
+                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
                 }
             }
             DispatchResult::structural()
@@ -2326,7 +2312,7 @@ pub(super) fn dispatch_inspector(
         // Ableton mapping local + content-sync).
         PanelAction::TrimChanged(kind, gpt, param_id, min, max) => {
             if let Some(target) =
-                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
             {
                 let mn = *min;
                 let mx = *max;
@@ -2335,10 +2321,10 @@ pub(super) fn dispatch_inspector(
                 // Ableton needs its resolved mapping target; driver/audio don't.
                 let ableton_target = matches!(kind, TrimKind::Ableton)
                     .then(|| {
-                        ableton_mapping_target(&target, effective_tab, active_layer, project, param_id)
+                        ableton_mapping_target(&target, effective_tab, active_layer, ctx.project, param_id)
                     })
                     .flatten();
-                *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::Trim {
+                ctx.scrub.active_inspector_drag = Some(crate::app::ActiveInspectorDrag::Trim {
                     kind: *kind,
                     target: target.clone(),
                     ableton_target,
@@ -2348,26 +2334,26 @@ pub(super) fn dispatch_inspector(
                 });
                 match kind {
                     TrimKind::Driver => {
-                        graph_driver_dual_edit(project, content_tx, &target, param_id.clone(), move |d| {
+                        graph_driver_dual_edit(ctx.project, ctx.content_tx, &target, param_id.clone(), move |d| {
                             d.trim_min = mn;
                             d.trim_max = mx;
                         });
                     }
                     TrimKind::Audio => {
-                        graph_audio_mod_dual_edit(project, content_tx, &target, param_id.clone(), move |m| {
+                        graph_audio_mod_dual_edit(ctx.project, ctx.content_tx, &target, param_id.clone(), move |m| {
                             m.shape.range_min = mn;
                             m.shape.range_max = mx;
                         });
                     }
                     TrimKind::Ableton => {
                         if let Some(mapping_target) =
-                            ableton_mapping_target(&target, effective_tab, active_layer, project, param_id)
+                            ableton_mapping_target(&target, effective_tab, active_layer, ctx.project, param_id)
                         {
                             // Local edit + content sync both route through the
                             // shared locate-fork, so they can't split (effects
                             // locate by effect_type — first match — on both
                             // sides now).
-                            if let Some(ms) = project
+                            if let Some(ms) = ctx.project
                                 .ableton_param_mappings_mut(&mapping_target)
                                 .and_then(|opt| opt.as_mut())
                                 && let Some(m) = ms.iter_mut().find(|m| m.param_id == *param_id)
@@ -2378,7 +2364,7 @@ pub(super) fn dispatch_inspector(
                             let mt = mapping_target.clone();
                             let pid = param_id.clone();
                             ContentCommand::send(
-                                content_tx,
+                                ctx.content_tx,
                                 ContentCommand::MutateProject(Box::new(move |p| {
                                     if let Some(ms) =
                                         p.ableton_param_mappings_mut(&mt).and_then(|opt| opt.as_mut())
@@ -2397,17 +2383,17 @@ pub(super) fn dispatch_inspector(
         }
         PanelAction::TargetChanged(gpt, param_id, norm) => {
             if let Some((target, param_id)) = resolve_mod_target(
-                ui, project, content_tx, gpt, param_id, editor_target, effective_tab, active_layer,
-                selection, false,
+                ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
+                ctx.selection, false,
             ) {
                 let param_id = &param_id;
                 let n = *norm;
                 if let Some(crate::app::ActiveInspectorDrag::EnvelopeTarget { value, .. }) =
-                    active_inspector_drag
+                    &mut ctx.scrub.active_inspector_drag
                 {
                     *value = n;
                 }
-                graph_env_dual_edit(project, content_tx, &target, param_id.clone(), move |env| {
+                graph_env_dual_edit(ctx.project, ctx.content_tx, &target, param_id.clone(), move |env| {
                     env.target_normalized = n;
                 });
             }
@@ -2415,17 +2401,17 @@ pub(super) fn dispatch_inspector(
         }
         PanelAction::EnvDecayChanged(gpt, param_id, decay) => {
             if let Some((target, param_id)) = resolve_mod_target(
-                ui, project, content_tx, gpt, param_id, editor_target, effective_tab, active_layer,
-                selection, false,
+                ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
+                ctx.selection, false,
             ) {
                 let param_id = &param_id;
                 let d = *decay;
                 if let Some(crate::app::ActiveInspectorDrag::EnvelopeDecay { value, .. }) =
-                    active_inspector_drag
+                    &mut ctx.scrub.active_inspector_drag
                 {
                     *value = d;
                 }
-                graph_env_dual_edit(project, content_tx, &target, param_id.clone(), move |env| {
+                graph_env_dual_edit(ctx.project, ctx.content_tx, &target, param_id.clone(), move |env| {
                     env.decay_beats = d;
                 });
             }
@@ -2437,10 +2423,10 @@ pub(super) fn dispatch_inspector(
         // Only one trim handle drags at a time, so one slot serves all kinds.
         PanelAction::TrimSnapshot(kind, gpt, param_id) => {
             if let Some(target) =
-                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
             {
                 let range = match kind {
-                    TrimKind::Driver => project
+                    TrimKind::Driver => ctx.project
                         .with_preset_graph_mut(&target, |inst| {
                             inst.drivers
                                 .as_ref()
@@ -2448,7 +2434,7 @@ pub(super) fn dispatch_inspector(
                                 .map(|d| (d.trim_min, d.trim_max))
                         })
                         .flatten(),
-                    TrimKind::Audio => project
+                    TrimKind::Audio => ctx.project
                         .with_preset_graph_mut(&target, |inst| {
                             inst.audio_mods
                                 .as_ref()
@@ -2457,9 +2443,9 @@ pub(super) fn dispatch_inspector(
                         })
                         .flatten(),
                     TrimKind::Ableton => {
-                        ableton_mapping_target(&target, effective_tab, active_layer, project, param_id)
+                        ableton_mapping_target(&target, effective_tab, active_layer, ctx.project, param_id)
                             .and_then(|mt| {
-                                project
+                                ctx.project
                                     .ableton_param_mappings(&mt)
                                     .and_then(|opt| opt.as_ref())
                                     .and_then(|ms| ms.iter().find(|m| m.param_id == *param_id))
@@ -2468,7 +2454,7 @@ pub(super) fn dispatch_inspector(
                     }
                 };
                 if let Some(range) = range {
-                    *trim_snapshot = Some(range);
+                    ctx.scrub.trim_snapshot = Some(range);
                 }
             }
             DispatchResult::handled()
@@ -2476,12 +2462,12 @@ pub(super) fn dispatch_inspector(
         PanelAction::TrimCommit(kind, gpt, param_id) => {
             match kind {
                 TrimKind::Driver => {
-                    if let Some((old_min, old_max)) = trim_snapshot.take()
+                    if let Some((old_min, old_max)) = ctx.scrub.trim_snapshot.take()
                         && let Some(target) = resolve_graph_target(
-                            gpt, editor_target, effective_tab, active_layer, selection, project,
+                            gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project,
                         )
                     {
-                        let info = project
+                        let info = ctx.project
                             .with_preset_graph_mut(&target, |inst| {
                                 inst.drivers
                                     .as_ref()
@@ -2504,17 +2490,17 @@ pub(super) fn dispatch_inspector(
                                 new_min,
                                 new_max,
                             );
-                            ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+                            ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
                         }
                     }
                 }
                 TrimKind::Audio => {
-                    if let Some((old_min, old_max)) = trim_snapshot.take()
+                    if let Some((old_min, old_max)) = ctx.scrub.trim_snapshot.take()
                         && let Some(target) = resolve_graph_target(
-                            gpt, editor_target, effective_tab, active_layer, selection, project,
+                            gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project,
                         )
                     {
-                        let new_shape = project
+                        let new_shape = ctx.project
                             .with_preset_graph_mut(&target, |inst| {
                                 inst.audio_mods
                                     .as_ref()
@@ -2535,7 +2521,7 @@ pub(super) fn dispatch_inspector(
                                 old_shape,
                                 new_shape,
                             );
-                            ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+                            ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
                         }
                     }
                 }
@@ -2544,15 +2530,15 @@ pub(super) fn dispatch_inspector(
                 // re-applies the same range and captures the pre-drag range for
                 // undo. One step per drag (snapshot on grab, commit on release).
                 TrimKind::Ableton => {
-                    if let Some((old_min, old_max)) = trim_snapshot.take()
+                    if let Some((old_min, old_max)) = ctx.scrub.trim_snapshot.take()
                         && let Some(target) = resolve_graph_target(
-                            gpt, editor_target, effective_tab, active_layer, selection, project,
+                            gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project,
                         )
                         && let Some(mt) = ableton_mapping_target(
-                            &target, effective_tab, active_layer, project, param_id,
+                            &target, effective_tab, active_layer, ctx.project, param_id,
                         )
                     {
-                        let new = project
+                        let new = ctx.project
                             .ableton_param_mappings(&mt)
                             .and_then(|opt| opt.as_ref())
                             .and_then(|ms| ms.iter().find(|m| m.param_id == *param_id))
@@ -2564,21 +2550,21 @@ pub(super) fn dispatch_inspector(
                             let cmd = ChangeAbletonTrimCommand::new(
                                 mt, old_min, old_max, new_min, new_max,
                             );
-                            ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+                            ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
                         }
                     }
                 }
             }
-            *active_inspector_drag = None;
+            ctx.scrub.active_inspector_drag = None;
             DispatchResult::handled()
         }
         PanelAction::TargetSnapshot(gpt, param_id) => {
             if let Some((target, param_id)) = resolve_mod_target(
-                ui, project, content_tx, gpt, param_id, editor_target, effective_tab, active_layer,
-                selection, false,
+                ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
+                ctx.selection, false,
             ) {
                 let param_id = &param_id;
-                let t = project
+                let t = ctx.project
                     .with_preset_graph_mut(&target, |inst| {
                         inst.envelopes
                             .as_ref()
@@ -2587,8 +2573,8 @@ pub(super) fn dispatch_inspector(
                     })
                     .flatten();
                 if let Some(t) = t {
-                    *target_snapshot = Some(t);
-                    *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::EnvelopeTarget {
+                    ctx.scrub.target_snapshot = Some(t);
+                    ctx.scrub.active_inspector_drag = Some(crate::app::ActiveInspectorDrag::EnvelopeTarget {
                         target,
                         param_id: param_id.clone(),
                         value: t,
@@ -2598,14 +2584,14 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
         PanelAction::TargetCommit(gpt, param_id) => {
-            if let Some(old_target) = target_snapshot.take()
+            if let Some(old_target) = ctx.scrub.target_snapshot.take()
                 && let Some((target, param_id)) = resolve_mod_target(
-                    ui, project, content_tx, gpt, param_id, editor_target, effective_tab,
-                    active_layer, selection, false,
+                    ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab,
+                    active_layer, ctx.selection, false,
                 )
             {
                 let param_id = &param_id;
-                let info = project
+                let info = ctx.project
                     .with_preset_graph_mut(&target, |inst| {
                         inst.envelopes
                             .as_ref()
@@ -2618,19 +2604,19 @@ pub(super) fn dispatch_inspector(
                 {
                     let cmd =
                         ChangeEnvelopeTargetCommand::new(target, env_idx, old_target, new_t);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
                 }
             }
-            *active_inspector_drag = None;
+            ctx.scrub.active_inspector_drag = None;
             DispatchResult::handled()
         }
         PanelAction::EnvDecaySnapshot(gpt, param_id) => {
             if let Some((target, param_id)) = resolve_mod_target(
-                ui, project, content_tx, gpt, param_id, editor_target, effective_tab, active_layer,
-                selection, false,
+                ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
+                ctx.selection, false,
             ) {
                 let param_id = &param_id;
-                let d = project
+                let d = ctx.project
                     .with_preset_graph_mut(&target, |inst| {
                         inst.envelopes
                             .as_ref()
@@ -2639,8 +2625,8 @@ pub(super) fn dispatch_inspector(
                     })
                     .flatten();
                 if let Some(d) = d {
-                    *decay_snapshot = Some(d);
-                    *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::EnvelopeDecay {
+                    ctx.scrub.decay_snapshot = Some(d);
+                    ctx.scrub.active_inspector_drag = Some(crate::app::ActiveInspectorDrag::EnvelopeDecay {
                         target,
                         param_id: param_id.clone(),
                         value: d,
@@ -2650,14 +2636,14 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
         PanelAction::EnvDecayCommit(gpt, param_id) => {
-            if let Some(old_decay) = decay_snapshot.take()
+            if let Some(old_decay) = ctx.scrub.decay_snapshot.take()
                 && let Some((target, param_id)) = resolve_mod_target(
-                    ui, project, content_tx, gpt, param_id, editor_target, effective_tab,
-                    active_layer, selection, false,
+                    ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab,
+                    active_layer, ctx.selection, false,
                 )
             {
                 let param_id = &param_id;
-                let info = project
+                let info = ctx.project
                     .with_preset_graph_mut(&target, |inst| {
                         inst.envelopes
                             .as_ref()
@@ -2670,10 +2656,10 @@ pub(super) fn dispatch_inspector(
                 {
                     let cmd =
                         ChangeEnvelopeDecayCommand::new(target, env_idx, old_decay, new_d);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
                 }
             }
-            *active_inspector_drag = None;
+            ctx.scrub.active_inspector_drag = None;
             DispatchResult::handled()
         }
 
@@ -2682,7 +2668,7 @@ pub(super) fn dispatch_inspector(
         PanelAction::BrowserSearchClicked => DispatchResult::handled(),
         PanelAction::RemoveEffect(fx_idx) => {
             let tab = effective_tab;
-            let (effects_ref, target) = resolve_effects_read(tab, project, active_layer, selection);
+            let (effects_ref, target) = resolve_effects_read(tab, ctx.project, active_layer, ctx.selection);
             if let Some(effects) = effects_ref
                 && let Some(fx) = effects.get(*fx_idx)
             {
@@ -2690,20 +2676,20 @@ pub(super) fn dispatch_inspector(
                 {
                     let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
                         Box::new(cmd);
-                    boxed.execute(project);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                    boxed.execute(ctx.project);
+                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
                 }
             }
             DispatchResult::structural()
         }
         PanelAction::EffectReorder(from_idx, to_idx) => {
             let tab = effective_tab;
-            let target = super::resolve_effect_target(tab, active_layer, project);
+            let target = super::resolve_effect_target(tab, active_layer, ctx.project);
             let cmd = ReorderEffectCommand::new(target, *from_idx, *to_idx);
             {
                 let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                boxed.execute(project);
-                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                boxed.execute(ctx.project);
+                ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
             }
             // Selection follows automatically (ID-based, no remapping needed)
             DispatchResult::structural()
@@ -2716,8 +2702,8 @@ pub(super) fn dispatch_inspector(
         PanelAction::EffectReorderGroup(source_indices, target_idx) => {
             // Multi-select reorder: move a group of effects to the target position.
             let tab = effective_tab;
-            let target = super::resolve_effect_target(tab, active_layer, project);
-            let (effects_mut, _target) = resolve_effects_mut(tab, project, active_layer, selection);
+            let target = super::resolve_effect_target(tab, active_layer, ctx.project);
+            let (effects_mut, _target) = resolve_effects_mut(tab, ctx.project, active_layer, ctx.selection);
             if let Some(effects) = effects_mut {
                 // Snapshot before
                 let old_effects = effects.clone();
@@ -2748,7 +2734,7 @@ pub(super) fn dispatch_inspector(
                 let cmd = ReorderEffectGroupCommand::new(target, old_effects, new_effects);
                 // State already applied — send for undo stack only (don't re-execute)
                 let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
             }
             // Selection follows automatically (ID-based, no remapping needed)
             DispatchResult::structural()
@@ -2762,9 +2748,9 @@ pub(super) fn dispatch_inspector(
         PanelAction::GenStringParamSelected(sp_idx, selected_value) => {
             // A dropdown string param was selected (e.g. font family).
             // Commit it as a SetClipStringParamCommand.
-            let layer_idx = super::resolve_active_layer_index(active_layer, project);
+            let layer_idx = super::resolve_active_layer_index(active_layer, ctx.project);
             if let Some(layer_idx) = layer_idx
-                && let Some(layer) = project.timeline.layers.get(layer_idx)
+                && let Some(layer) = ctx.project.timeline.layers.get(layer_idx)
             {
                 let gen_type = layer.generator_type();
                 if let Some(def) = manifold_core::preset_definition_registry::try_get(gen_type)
@@ -2778,7 +2764,7 @@ pub(super) fn dispatch_inspector(
                     };
 
                     // Find clip: selected clip on this layer, or first clip
-                    let clip = selection
+                    let clip = ctx.selection
                         .primary_selected_clip_id
                         .as_ref()
                         .and_then(|sel_id| layer.clips.iter().find(|c| c.id == *sel_id))
@@ -2792,7 +2778,7 @@ pub(super) fn dispatch_inspector(
                                     clip_id, key, old_value, new_value,
                                 );
                             ContentCommand::send(
-                                content_tx,
+                                ctx.content_tx,
                                 ContentCommand::Execute(Box::new(cmd)),
                             );
                         }
@@ -2802,7 +2788,7 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
         PanelAction::GenCollapseToggle => {
-            if let Some(gp) = ui.inspector.gen_params_mut() {
+            if let Some(gp) = ctx.ui.inspector.gen_params_mut() {
                 let new_val = !gp.is_collapsed();
                 gp.set_collapsed(new_val);
             }
@@ -2810,11 +2796,11 @@ pub(super) fn dispatch_inspector(
         }
         PanelAction::GenCardClicked => {
             // Select the generator card (blue highlight border), deselect effect cards
-            if let Some(gp) = ui.inspector.gen_params_mut() {
-                gp.update_selection_visual(&mut ui.tree, true);
+            if let Some(gp) = ctx.ui.inspector.gen_params_mut() {
+                gp.update_selection_visual(&mut ctx.ui.tree, true);
             }
             // Deselect all effect cards
-            ui.inspector.clear_effect_selection(&mut ui.tree);
+            ctx.ui.inspector.clear_effect_selection(&mut ctx.ui.tree);
             DispatchResult::handled()
         }
         PanelAction::CardRightClicked(_) => {
@@ -2823,20 +2809,20 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
         PanelAction::CopyGenerator => {
-            let layer_idx = super::resolve_active_layer_index(active_layer, project);
+            let layer_idx = super::resolve_active_layer_index(active_layer, ctx.project);
             if let Some(layer_idx) = layer_idx
-                && let Some(layer) = project.timeline.layers.get(layer_idx)
+                && let Some(layer) = ctx.project.timeline.layers.get(layer_idx)
                 && let Some(gp) = layer.gen_params()
             {
-                ui.gen_clipboard.copy_from(gp);
+                ctx.ui.gen_clipboard.copy_from(gp);
             }
             DispatchResult::handled()
         }
         PanelAction::PasteGenerator => {
-            if let Some(snapshot) = ui.gen_clipboard.get_paste_snapshot() {
-                let layer_idx = super::resolve_active_layer_index(active_layer, project);
+            if let Some(snapshot) = ctx.ui.gen_clipboard.get_paste_snapshot() {
+                let layer_idx = super::resolve_active_layer_index(active_layer, ctx.project);
                 if let Some(layer_idx) = layer_idx
-                    && let Some(layer) = project.timeline.layers.get(layer_idx)
+                    && let Some(layer) = ctx.project.timeline.layers.get(layer_idx)
                     && let Some(gp) = layer.gen_params()
                 {
                     let layer_id = layer.layer_id.clone();
@@ -2858,8 +2844,8 @@ pub(super) fn dispatch_inspector(
                     );
                     let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
                         Box::new(cmd);
-                    boxed.execute(project);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                    boxed.execute(ctx.project);
+                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
                 }
             }
             DispatchResult::structural()
@@ -2873,17 +2859,17 @@ pub(super) fn dispatch_inspector(
             use manifold_editing::commands::preset::ForkPresetCommand;
             if let Some(target) = resolve_graph_target(
                 gpt,
-                editor_target,
+                ctx.editor_target,
                 effective_tab,
                 active_layer,
-                selection,
-                project,
-            ) && let Some((source_def, _)) = preset_source_def(&target, project)
+                ctx.selection,
+                ctx.project,
+            ) && let Some((source_def, _)) = preset_source_def(&target, ctx.project)
             {
                 let cmd = ForkPresetCommand::new(target.clone(), target.preset_kind(), source_def);
                 let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                boxed.execute(project);
-                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                boxed.execute(ctx.project);
+                ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
             }
             DispatchResult::structural()
         }
@@ -2893,12 +2879,12 @@ pub(super) fn dispatch_inspector(
             // catalog canonical; the preset id is the filename stem.
             if let Some(target) = resolve_graph_target(
                 gpt,
-                editor_target,
+                ctx.editor_target,
                 effective_tab,
                 active_layer,
-                selection,
-                project,
-            ) && let Some((def, preset_id)) = preset_source_def(&target, project)
+                ctx.selection,
+                ctx.project,
+            ) && let Some((def, preset_id)) = preset_source_def(&target, ctx.project)
                 && let Some(path) = rfd::FileDialog::new()
                     .add_filter("MANIFOLD Preset", &["json"])
                     .set_file_name(format!("{}.json", preset_id.as_str()))
@@ -2916,11 +2902,11 @@ pub(super) fn dispatch_inspector(
             use manifold_editing::commands::preset::ForkPresetCommand;
             if let Some(target) = resolve_graph_target(
                 gpt,
-                editor_target,
+                ctx.editor_target,
                 effective_tab,
                 active_layer,
-                selection,
-                project,
+                ctx.selection,
+                ctx.project,
             ) && let Some(path) = rfd::FileDialog::new()
                 .add_filter("MANIFOLD Preset", &["json"])
                 .pick_file()
@@ -2931,8 +2917,8 @@ pub(super) fn dispatch_inspector(
                             ForkPresetCommand::importing(target.clone(), target.preset_kind(), def);
                         let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
                             Box::new(cmd);
-                        boxed.execute(project);
-                        ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                        boxed.execute(ctx.project);
+                        ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
                     }
                     Err(e) => log::error!("[preset] import failed: {e}"),
                 }
@@ -2950,12 +2936,12 @@ pub(super) fn dispatch_inspector(
             let mut result = DispatchResult::handled();
             if let Some(target) = resolve_graph_target(
                 gpt,
-                editor_target,
+                ctx.editor_target,
                 effective_tab,
                 active_layer,
-                selection,
-                project,
-            ) && let Some((def, _)) = preset_source_def(&target, project)
+                ctx.selection,
+                ctx.project,
+            ) && let Some((def, _)) = preset_source_def(&target, ctx.project)
             {
                 let destination = if matches!(action, PanelAction::SaveToLibrary(_)) {
                     crate::text_input::SavePresetDestination::Library
@@ -2981,19 +2967,19 @@ pub(super) fn dispatch_inspector(
             use manifold_editing::commands::preset::RevertToLibraryCommand;
             if let Some(target) = resolve_graph_target(
                 gpt,
-                editor_target,
+                ctx.editor_target,
                 effective_tab,
                 active_layer,
-                selection,
-                project,
-            ) && let Some(preset_id) = project.instance_preset_id(&target)
+                ctx.selection,
+                ctx.project,
+            ) && let Some(preset_id) = ctx.project.instance_preset_id(&target)
             {
                 let resolves = manifold_renderer::node_graph::loaded_preset_view_by_id(&preset_id)
                     .is_some();
                 let cmd = RevertToLibraryCommand::new(target, resolves);
                 let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                boxed.execute(project);
-                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                boxed.execute(ctx.project);
+                ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
             }
             DispatchResult::structural()
         }
@@ -3009,12 +2995,12 @@ pub(super) fn dispatch_inspector(
             let mut result = DispatchResult::handled();
             if let Some(target) = resolve_graph_target(
                 gpt,
-                editor_target,
+                ctx.editor_target,
                 effective_tab,
                 active_layer,
-                selection,
-                project,
-            ) && let Some((def, preset_id)) = preset_source_def(&target, project)
+                ctx.selection,
+                ctx.project,
+            ) && let Some((def, preset_id)) = preset_source_def(&target, ctx.project)
             {
                 let kind = target.preset_kind();
                 let lib = crate::user_library::UserLibrary::new();
@@ -3047,7 +3033,7 @@ pub(super) fn dispatch_inspector(
                         .find(|r| r.id.as_str() == type_id.as_str())
                         .map(|r| r.display_name.to_string())
                 }
-                Source::Project => project
+                Source::Project => ctx.project
                     .embedded_preset(&id)
                     .and_then(|ep| ep.def.preset_metadata.as_ref())
                     .map(|m| m.display_name.clone()),
@@ -3057,7 +3043,7 @@ pub(super) fn dispatch_inspector(
 
             let mut result = DispatchResult::handled();
             result.begin_rename_preset = Some((kind, id, *source, initial_name));
-            ui.browser_popup.close();
+            ctx.ui.browser_popup.close();
             result
         }
         PanelAction::BrowserDuplicatePresetClicked(mode, type_id) => {
@@ -3069,7 +3055,7 @@ pub(super) fn dispatch_inspector(
                 Ok(new_id) => log::info!("[preset] duplicated '{}' as '{}'", id.as_str(), new_id.as_str()),
                 Err(e) => log::error!("[preset] duplicate failed: {e}"),
             }
-            ui.browser_popup.close();
+            ctx.ui.browser_popup.close();
             DispatchResult::handled()
         }
         PanelAction::BrowserDeletePresetClicked(mode, type_id, source) => {
@@ -3095,15 +3081,15 @@ pub(super) fn dispatch_inspector(
                     if let Err(e) = lib.delete(kind, &id) {
                         log::error!("[preset] delete failed: {e}");
                     }
-                    ui.browser_popup.close();
+                    ctx.ui.browser_popup.close();
                     DispatchResult::handled()
                 }
                 Source::Project => {
                     let cmd = manifold_editing::commands::preset::DeleteEmbeddedPresetCommand::new(id);
                     let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                    boxed.execute(project);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
-                    ui.browser_popup.close();
+                    boxed.execute(ctx.project);
+                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
+                    ctx.ui.browser_popup.close();
                     DispatchResult::structural()
                 }
                 Source::Factory => unreachable!("returned above"),
@@ -3129,9 +3115,9 @@ pub(super) fn dispatch_inspector(
         // old value and writes the new one in the same arm.
         PanelAction::ParamToggle(gpt, param_id) => {
             if let Some(target) =
-                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
             {
-                let old_val = project
+                let old_val = ctx.project
                     .with_preset_graph_mut(&target, |inst| {
                         inst.params
                             .contains(param_id.as_ref())
@@ -3140,11 +3126,11 @@ pub(super) fn dispatch_inspector(
                     .flatten();
                 if let Some(old_val) = old_val {
                     let new_val = if old_val > 0.5 { 0.0 } else { 1.0 };
-                    project.with_preset_graph_mut(&target, |inst| {
+                    ctx.project.with_preset_graph_mut(&target, |inst| {
                         inst.set_base_param(param_id.as_ref(), new_val);
                     });
                     let cmd = ChangeGraphParamCommand::new(target, param_id.clone(), old_val, new_val);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
                 }
             }
             DispatchResult::handled()
@@ -3154,9 +3140,9 @@ pub(super) fn dispatch_inspector(
             // Mirrors ParamToggle's plumbing exactly except the value
             // transform is `+1` instead of `0↔1`.
             if let Some(target) =
-                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
             {
-                let old_val = project
+                let old_val = ctx.project
                     .with_preset_graph_mut(&target, |inst| {
                         inst.params
                             .contains(param_id.as_ref())
@@ -3165,11 +3151,11 @@ pub(super) fn dispatch_inspector(
                     .flatten();
                 if let Some(old_val) = old_val {
                     let new_val = old_val + 1.0;
-                    project.with_preset_graph_mut(&target, |inst| {
+                    ctx.project.with_preset_graph_mut(&target, |inst| {
                         inst.set_base_param(param_id.as_ref(), new_val);
                     });
                     let cmd = ChangeGraphParamCommand::new(target, param_id.clone(), old_val, new_val);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
                 }
             }
             DispatchResult::handled()
@@ -3182,24 +3168,24 @@ pub(super) fn dispatch_inspector(
         // `MutateProjectLive` and returns `handled()` — no chain rebuild.
         PanelAction::RelightToggle(gpt) => {
             if let Some(target) =
-                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
             {
-                let old = project.with_preset_graph_mut(&target, |inst| inst.relight).unwrap_or(false);
+                let old = ctx.project.with_preset_graph_mut(&target, |inst| inst.relight).unwrap_or(false);
                 let mut cmd = ToggleRelightCommand::new(target, old, !old);
-                cmd.execute(project);
-                ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+                cmd.execute(ctx.project);
+                ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
             }
             DispatchResult::structural()
         }
         PanelAction::RelightParamSnapshot(gpt, field) => {
             if let Some(target) =
-                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
             {
                 let f = crate::ui_translate::relight_field_to_editing(*field);
-                *drag_snapshot =
-                    project.with_preset_graph_mut(&target, |inst| f.get(&inst.relight_params));
-                if let Some(value) = *drag_snapshot {
-                    *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::RelightParam {
+                ctx.scrub.slider_snapshot =
+                    ctx.project.with_preset_graph_mut(&target, |inst| f.get(&inst.relight_params));
+                if let Some(value) = ctx.scrub.slider_snapshot {
+                    ctx.scrub.active_inspector_drag = Some(crate::app::ActiveInspectorDrag::RelightParam {
                         target,
                         field: f,
                         value,
@@ -3210,12 +3196,12 @@ pub(super) fn dispatch_inspector(
         }
         PanelAction::RelightParamChanged(gpt, field, val) => {
             if let Some(target) =
-                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
             {
                 let f = crate::ui_translate::relight_field_to_editing(*field);
                 let v = *val;
                 if let Some(crate::app::ActiveInspectorDrag::RelightParam { value, .. }) =
-                    active_inspector_drag
+                    &mut ctx.scrub.active_inspector_drag
                 {
                     *value = v;
                 }
@@ -3223,12 +3209,12 @@ pub(super) fn dispatch_inspector(
                 // slider follows the pointer, and mirror to the content thread
                 // via `MutateProjectLive`. No `bump_graph_structure_version`
                 // — float knobs are per-frame uniforms (D8/P7).
-                project.with_preset_graph_mut(&target, |inst| {
+                ctx.project.with_preset_graph_mut(&target, |inst| {
                     f.set(&mut inst.relight_params, v);
                 });
                 let t = target.clone();
                 ContentCommand::send(
-                    content_tx,
+                    ctx.content_tx,
                     ContentCommand::MutateProjectLive(Box::new(move |p| {
                         p.with_preset_graph_mut(&t, |inst| {
                             f.set(&mut inst.relight_params, v);
@@ -3239,34 +3225,34 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
         PanelAction::RelightParamCommit(gpt, field) => {
-            *active_inspector_drag = None;
-            if let Some(old_val) = drag_snapshot.take()
+            ctx.scrub.active_inspector_drag = None;
+            if let Some(old_val) = ctx.scrub.slider_snapshot.take()
                 && let Some(target) =
-                    resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+                    resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
             {
                 let f = crate::ui_translate::relight_field_to_editing(*field);
                 let new_val =
-                    project.with_preset_graph_mut(&target, |inst| f.get(&inst.relight_params));
+                    ctx.project.with_preset_graph_mut(&target, |inst| f.get(&inst.relight_params));
                 if let Some(new_val) = new_val
                     && (old_val - new_val).abs() > f32::EPSILON
                 {
                     let cmd = SetRelightParamCommand::new(target, f, old_val, new_val);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
                 }
             }
             DispatchResult::handled()
         }
         PanelAction::RelightHeightFromChanged(gpt, height_from) => {
             if let Some(target) =
-                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
             {
-                let old = project
+                let old = ctx.project
                     .with_preset_graph_mut(&target, |inst| inst.relight_params.height_from)
                     .unwrap_or_default();
                 let new = crate::ui_translate::relight_height_from_to_core(*height_from);
                 let mut cmd = SetRelightHeightFromCommand::new(target, old, new);
-                cmd.execute(project);
-                ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+                cmd.execute(ctx.project);
+                ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
             }
             DispatchResult::structural()
         }
@@ -3279,12 +3265,12 @@ pub(super) fn dispatch_inspector(
             let defaults = manifold_core::preset_definition_registry::get_defaults(&effect_type);
             let mut effect = PresetInstance::new(effect_type.clone());
             effect.params = manifold_core::params::ParamManifest::from_params(defaults);
-            let layer_idx = super::resolve_active_layer_index(active_layer, project);
+            let layer_idx = super::resolve_active_layer_index(active_layer, ctx.project);
             let target = match tab {
                 InspectorTab::Master => EffectTarget::Master,
                 InspectorTab::Layer | InspectorTab::Group => {
                     if let Some(idx) = layer_idx {
-                        let layer_id = project
+                        let layer_id = ctx.project
                             .timeline
                             .layers
                             .get(idx)
@@ -3301,8 +3287,8 @@ pub(super) fn dispatch_inspector(
                 }
             };
             let insert_idx = match &target {
-                EffectTarget::Master => project.settings.master_effects.len(),
-                EffectTarget::Layer { layer_id } => project
+                EffectTarget::Master => ctx.project.settings.master_effects.len(),
+                EffectTarget::Layer { layer_id } => ctx.project
                     .timeline
                     .layers
                     .iter()
@@ -3316,8 +3302,8 @@ pub(super) fn dispatch_inspector(
             );
             {
                 let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                boxed.execute(project);
-                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                boxed.execute(ctx.project);
+                ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
             }
             DispatchResult::structural()
         }
@@ -3334,12 +3320,12 @@ pub(super) fn dispatch_inspector(
             use manifold_core::{MacroCurve, MacroMapping};
             let macro_idx = *macro_idx;
             if let Some(target) =
-                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
                 && let Some(mapping_target) = macro_mapping_target(&target, param_id)
             {
                 // Graph-authority-first range so a generator's (or graph-backed
                 // effect's) true slider range isn't squashed to the registry's.
-                let (min, max) = project
+                let (min, max) = ctx.project
                     .with_preset_graph_mut(&target, |inst| resolve_param_range(inst, param_id.as_ref()))
                     .unwrap_or((0.0, 1.0));
                 let mapping = MacroMapping {
@@ -3350,12 +3336,12 @@ pub(super) fn dispatch_inspector(
                     legacy_param_index: None,
                     legacy_effect_addr: None,
                 };
-                project.settings.macro_bank.slots[macro_idx]
+                ctx.project.settings.macro_bank.slots[macro_idx]
                     .mappings
                     .push(mapping.clone());
                 let mi = macro_idx;
                 ContentCommand::send(
-                    content_tx,
+                    ctx.content_tx,
                     ContentCommand::MutateProject(Box::new(move |p| {
                         p.settings.macro_bank.slots[mi].mappings.push(mapping);
                     })),
@@ -3370,11 +3356,11 @@ pub(super) fn dispatch_inspector(
             let macro_idx = *macro_idx;
             let mapping_idx = *mapping_idx;
             if macro_idx < manifold_core::MACRO_COUNT {
-                let slot = &mut project.settings.macro_bank.slots[macro_idx];
+                let slot = &mut ctx.project.settings.macro_bank.slots[macro_idx];
                 if mapping_idx < slot.mappings.len() {
                     slot.mappings.remove(mapping_idx);
                     ContentCommand::send(
-                        content_tx,
+                        ctx.content_tx,
                         ContentCommand::MutateProject(Box::new(move |p| {
                             let slot = &mut p.settings.macro_bank.slots[macro_idx];
                             if mapping_idx < slot.mappings.len() {
@@ -3389,11 +3375,11 @@ pub(super) fn dispatch_inspector(
         PanelAction::ClearMacroMappings(macro_idx) => {
             let macro_idx = *macro_idx;
             if macro_idx < manifold_core::MACRO_COUNT {
-                project.settings.macro_bank.slots[macro_idx]
+                ctx.project.settings.macro_bank.slots[macro_idx]
                     .mappings
                     .clear();
                 ContentCommand::send(
-                    content_tx,
+                    ctx.content_tx,
                     ContentCommand::MutateProject(Box::new(move |p| {
                         p.settings.macro_bank.slots[macro_idx].mappings.clear();
                     })),
@@ -3411,12 +3397,12 @@ pub(super) fn dispatch_inspector(
         // only difference is AbletonMapParam (with address) vs AbletonUnmapParam.
         PanelAction::MapParamToAbleton(gpt, param_id, address) => {
             if let Some(target) =
-                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
                 && let Some(mapping_target) =
-                    ableton_mapping_target(&target, effective_tab, active_layer, project, param_id)
+                    ableton_mapping_target(&target, effective_tab, active_layer, ctx.project, param_id)
             {
                 ContentCommand::send(
-                    content_tx,
+                    ctx.content_tx,
                     ContentCommand::AbletonMapParam {
                         target: mapping_target,
                         address: crate::ui_translate::ableton_macro_address_to_core(address),
@@ -3427,12 +3413,12 @@ pub(super) fn dispatch_inspector(
         }
         PanelAction::UnmapParamAbleton(gpt, param_id) => {
             if let Some(target) =
-                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
                 && let Some(mapping_target) =
-                    ableton_mapping_target(&target, effective_tab, active_layer, project, param_id)
+                    ableton_mapping_target(&target, effective_tab, active_layer, ctx.project, param_id)
             {
                 ContentCommand::send(
-                    content_tx,
+                    ctx.content_tx,
                     ContentCommand::AbletonUnmapParam {
                         target: mapping_target,
                     },
@@ -3447,7 +3433,7 @@ pub(super) fn dispatch_inspector(
                 slot_index: *slot_idx,
             };
             ContentCommand::send(
-                content_tx,
+                ctx.content_tx,
                 ContentCommand::AbletonMapParam {
                     target,
                     address: crate::ui_translate::ableton_macro_address_to_core(address),
@@ -3460,7 +3446,7 @@ pub(super) fn dispatch_inspector(
             let target = AbletonMappingTarget::MacroSlot {
                 slot_index: *slot_idx,
             };
-            ContentCommand::send(content_tx, ContentCommand::AbletonUnmapParam { target });
+            ContentCommand::send(ctx.content_tx, ContentCommand::AbletonUnmapParam { target });
             DispatchResult::handled()
         }
         // Picker open is consumed by try_open_dropdown — never reaches dispatch.
@@ -3477,19 +3463,19 @@ pub(super) fn dispatch_inspector(
                 min: g_min,
                 max: g_max,
                 ..
-            }) = active_inspector_drag
+            }) = &mut ctx.scrub.active_inspector_drag
             {
                 *g_min = min;
                 *g_max = max;
             }
-            if let Some(slot) = project.settings.macro_bank.slots.get_mut(slot_idx)
+            if let Some(slot) = ctx.project.settings.macro_bank.slots.get_mut(slot_idx)
                 && let Some(m) = &mut slot.ableton_mapping
             {
                 m.range_min = min;
                 m.range_max = max;
             }
             ContentCommand::send(
-                content_tx,
+                ctx.content_tx,
                 ContentCommand::MutateProject(Box::new(move |p| {
                     if let Some(slot) = p.settings.macro_bank.slots.get_mut(slot_idx)
                         && let Some(m) = &mut slot.ableton_mapping
@@ -3502,7 +3488,7 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
         PanelAction::AbletonMacroTrimSnapshot(slot_idx) => {
-            if let Some(range) = project
+            if let Some(range) = ctx.project
                 .settings
                 .macro_bank
                 .slots
@@ -3510,8 +3496,8 @@ pub(super) fn dispatch_inspector(
                 .and_then(|s| s.ableton_mapping.as_ref())
                 .map(|m| (m.range_min, m.range_max))
             {
-                *trim_snapshot = Some(range);
-                *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::AbletonMacroTrim {
+                ctx.scrub.trim_snapshot = Some(range);
+                ctx.scrub.active_inspector_drag = Some(crate::app::ActiveInspectorDrag::AbletonMacroTrim {
                     slot_idx: *slot_idx,
                     min: range.0,
                     max: range.1,
@@ -3521,9 +3507,9 @@ pub(super) fn dispatch_inspector(
         }
         PanelAction::AbletonMacroTrimCommit(slot_idx) => {
             use manifold_core::ableton_mapping::AbletonMappingTarget;
-            *active_inspector_drag = None;
-            if let Some((old_min, old_max)) = trim_snapshot.take()
-                && let Some((new_min, new_max)) = project
+            ctx.scrub.active_inspector_drag = None;
+            if let Some((old_min, old_max)) = ctx.scrub.trim_snapshot.take()
+                && let Some((new_min, new_max)) = ctx.project
                     .settings
                     .macro_bank
                     .slots
@@ -3540,18 +3526,18 @@ pub(super) fn dispatch_inspector(
                     new_min,
                     new_max,
                 );
-                ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+                ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
             }
             DispatchResult::handled()
         }
 
         PanelAction::AbletonInvertToggle(gpt, param_id) => {
             if let Some(target) =
-                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
                 && let Some(mapping_target) =
-                    ableton_mapping_target(&target, effective_tab, active_layer, project, param_id)
+                    ableton_mapping_target(&target, effective_tab, active_layer, ctx.project, param_id)
             {
-                if let Some(ms) = project
+                if let Some(ms) = ctx.project
                     .ableton_param_mappings_mut(&mapping_target)
                     .and_then(|opt| opt.as_mut())
                     && let Some(m) = ms.iter_mut().find(|m| m.param_id == *param_id)
@@ -3561,7 +3547,7 @@ pub(super) fn dispatch_inspector(
                 let mt = mapping_target.clone();
                 let pid = param_id.clone();
                 ContentCommand::send(
-                    content_tx,
+                    ctx.content_tx,
                     ContentCommand::MutateProject(Box::new(move |p| {
                         if let Some(ms) =
                             p.ableton_param_mappings_mut(&mt).and_then(|opt| opt.as_mut())
@@ -3577,13 +3563,13 @@ pub(super) fn dispatch_inspector(
 
         PanelAction::AbletonMacroInvertToggle(slot_idx) => {
             let slot_idx = *slot_idx;
-            if let Some(slot) = project.settings.macro_bank.slots.get_mut(slot_idx)
+            if let Some(slot) = ctx.project.settings.macro_bank.slots.get_mut(slot_idx)
                 && let Some(m) = &mut slot.ableton_mapping
             {
                 m.inverted = !m.inverted;
             }
             ContentCommand::send(
-                content_tx,
+                ctx.content_tx,
                 ContentCommand::MutateProject(Box::new(move |p| {
                     if let Some(slot) = p.settings.macro_bank.slots.get_mut(slot_idx)
                         && let Some(m) = &mut slot.ableton_mapping
@@ -3660,15 +3646,10 @@ mod scene_card_convergence_tests {
         ui: UIRoot,
         selection: SelectionState,
         active_layer: Option<LayerId>,
-        drag_snapshot: Option<f32>,
-        trim_snapshot: Option<(f32, f32)>,
-        target_snapshot: Option<f32>,
-        decay_snapshot: Option<f32>,
-        audio_shape_snapshot: Option<manifold_core::audio_mod::AudioModShape>,
-        audio_action_snapshot: Option<manifold_core::audio_mod::TriggerAction>,
-        audio_crossover_snapshot: Option<(f32, f32)>,
-        audio_send_gain_drag_snapshot: Option<f32>,
-        active_inspector_drag: Option<crate::app::ActiveInspectorDrag>,
+        // `dispatch_inspector` ignores `user_prefs`, but `DispatchCtx` requires
+        // the field — supply an in-memory instance (wiring, not behavior).
+        user_prefs: crate::user_prefs::UserPrefs,
+        scrub: crate::ui_bridge::ScrubState,
     }
 
     impl Harness {
@@ -3681,38 +3662,24 @@ mod scene_card_convergence_tests {
                 ui: UIRoot::new(),
                 selection: manifold_ui::UIState::new(),
                 active_layer,
-                drag_snapshot: None,
-                trim_snapshot: None,
-                target_snapshot: None,
-                decay_snapshot: None,
-                audio_shape_snapshot: None,
-                audio_action_snapshot: None,
-                audio_crossover_snapshot: None,
-                audio_send_gain_drag_snapshot: None,
-                active_inspector_drag: None,
+                user_prefs: crate::user_prefs::UserPrefs::in_memory(),
+                scrub: crate::ui_bridge::ScrubState::default(),
             }
         }
 
         fn dispatch(&mut self, action: &PanelAction, project: &mut Project) -> DispatchResult {
-            dispatch_inspector(
-                action,
+            let mut ctx = crate::ui_bridge::DispatchCtx {
                 project,
-                &self.content_tx,
-                &self.content_state,
-                &mut self.ui,
-                &mut self.selection,
-                &mut self.active_layer,
-                &mut self.drag_snapshot,
-                &mut self.trim_snapshot,
-                &mut self.target_snapshot,
-                &mut self.decay_snapshot,
-                &mut self.audio_shape_snapshot,
-                &mut self.audio_action_snapshot,
-                &mut self.audio_crossover_snapshot,
-                &mut self.audio_send_gain_drag_snapshot,
-                &mut self.active_inspector_drag,
-                None,
-            )
+                content_tx: &self.content_tx,
+                content_state: &self.content_state,
+                ui: &mut self.ui,
+                selection: &mut self.selection,
+                active_layer: &mut self.active_layer,
+                user_prefs: &mut self.user_prefs,
+                editor_target: None,
+                scrub: &mut self.scrub,
+            };
+            dispatch_inspector(action, &mut ctx)
         }
 
         fn drain(&self) -> Vec<ContentCommand> {
@@ -3736,25 +3703,18 @@ mod scene_card_convergence_tests {
             project: &mut Project,
             editor_target: Option<&manifold_core::GraphTarget>,
         ) -> DispatchResult {
-            dispatch_inspector(
-                action,
+            let mut ctx = crate::ui_bridge::DispatchCtx {
                 project,
-                &self.content_tx,
-                &self.content_state,
-                &mut self.ui,
-                &mut self.selection,
-                &mut self.active_layer,
-                &mut self.drag_snapshot,
-                &mut self.trim_snapshot,
-                &mut self.target_snapshot,
-                &mut self.decay_snapshot,
-                &mut self.audio_shape_snapshot,
-                &mut self.audio_action_snapshot,
-                &mut self.audio_crossover_snapshot,
-                &mut self.audio_send_gain_drag_snapshot,
-                &mut self.active_inspector_drag,
+                content_tx: &self.content_tx,
+                content_state: &self.content_state,
+                ui: &mut self.ui,
+                selection: &mut self.selection,
+                active_layer: &mut self.active_layer,
+                user_prefs: &mut self.user_prefs,
                 editor_target,
-            )
+                scrub: &mut self.scrub,
+            };
+            dispatch_inspector(action, &mut ctx)
         }
     }
 
@@ -3782,7 +3742,7 @@ mod scene_card_convergence_tests {
         // What the UI frame drain now does every tick (app_render.rs ~line
         // 868): apply the snapshot, then restore only the guarded drag kinds.
         stale.apply(&mut project);
-        if let Some(ref drag) = h.active_inspector_drag {
+        if let Some(ref drag) = h.scrub.active_inspector_drag {
             drag.apply(&mut project);
         }
 
@@ -3967,7 +3927,7 @@ mod scene_card_convergence_tests {
         /// guarded drag (app_render.rs ~808-817).
         fn snapshot_stomp(h: &Harness, stale: &Project) -> Project {
             let mut p = stale.clone();
-            if let Some(ref drag) = h.active_inspector_drag {
+            if let Some(ref drag) = h.scrub.active_inspector_drag {
                 drag.apply(&mut p);
             }
             p
