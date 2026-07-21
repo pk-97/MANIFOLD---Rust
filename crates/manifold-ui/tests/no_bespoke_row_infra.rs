@@ -30,7 +30,8 @@ const BITMAP_SLIDER_ALLOWLIST: &[&str] = &[
     // The row model's shared per-row builders (`build_param_row`,
     // `build_driver_config`'s decay slider via `drawer::build`, the audio
     // shaping sliders) — THE sanctioned entry point for manifest-backed rows.
-    "param_slider_shared.rs",
+    // (`param_slider_shared/builders.rs` since the P-S1 directory-module split.)
+    "builders.rs",
     // The row model's card host — relight knobs (D9: out of `RowIndex`
     // scope, but still a manifest-backed per-instance control, built through
     // this file, not a new system).
