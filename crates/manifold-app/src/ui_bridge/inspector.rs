@@ -426,23 +426,17 @@ fn apply_detection_edit(
 /// `BrowserCellRightClicked`) for the Effect/Generator pickers, never the
 /// graph-editor's node picker — degrade to `Effect` rather than panic if that
 /// invariant is ever violated.
-fn browser_mode_to_kind(
-    mode: manifold_ui::panels::browser_popup::BrowserPopupMode,
-) -> manifold_core::preset_def::PresetKind {
-    use manifold_ui::panels::browser_popup::BrowserPopupMode;
-    match mode {
-        BrowserPopupMode::Effect | BrowserPopupMode::Node => {
-            manifold_core::preset_def::PresetKind::Effect
-        }
-        BrowserPopupMode::Generator => manifold_core::preset_def::PresetKind::Generator,
-    }
-}
-
 pub(super) fn dispatch_inspector(
     action: &PanelAction,
     ctx: &mut super::DispatchCtx,
 ) -> DispatchResult {
     use crate::content_command::ContentCommand;
+
+    // Ordered first-non-unhandled chain over the `dispatch/` handler modules
+    // (D6). Each `_ => unhandled()` fall-through advances to the next; the
+    // `dispatch_chain_completeness` invariant proves every module is chained.
+    let r = super::dispatch::browser::dispatch_browser(action, ctx);
+    if !r.unhandled { return r; }
 
     // The single-effect VALUE / expose / mapping arms address their instance by
     // stable `EffectId` via `super::resolve_effect_id(ctx.editor_target, …)` and
@@ -3020,91 +3014,6 @@ pub(super) fn dispatch_inspector(
         // `BrowserCellRightClicked` opens its menu entirely inside
         // `UIRoot::try_open_dropdown` — this arm only keeps the match
         // exhaustive (same pattern as `CardRightClicked` above).
-        PanelAction::BrowserCellRightClicked(..) => DispatchResult::handled(),
-        PanelAction::BrowserRenamePresetClicked(mode, type_id, source) => {
-            use manifold_ui::panels::picker_core::Source;
-
-            let kind = browser_mode_to_kind(*mode);
-            let id = manifold_core::PresetTypeId::from_string(type_id.clone());
-            let initial_name = match source {
-                Source::MyLibrary => {
-                    manifold_core::preset_type_registry::available_of_kind(kind)
-                        .iter()
-                        .find(|r| r.id.as_str() == type_id.as_str())
-                        .map(|r| r.display_name.to_string())
-                }
-                Source::Project => ctx.project
-                    .embedded_preset(&id)
-                    .and_then(|ep| ep.def.preset_metadata.as_ref())
-                    .map(|m| m.display_name.clone()),
-                Source::Factory => None, // unreachable — the menu never offers Rename for Factory
-            }
-            .unwrap_or_else(|| type_id.clone());
-
-            let mut result = DispatchResult::handled();
-            result.begin_rename_preset = Some((kind, id, *source, initial_name));
-            ctx.ui.browser_popup.close();
-            result
-        }
-        PanelAction::BrowserDuplicatePresetClicked(mode, type_id) => {
-            // My Library only — the menu never offers Duplicate for Project.
-            let kind = browser_mode_to_kind(*mode);
-            let id = manifold_core::PresetTypeId::from_string(type_id.clone());
-            let lib = crate::user_library::UserLibrary::new();
-            match lib.duplicate(kind, &id) {
-                Ok(new_id) => log::info!("[preset] duplicated '{}' as '{}'", id.as_str(), new_id.as_str()),
-                Err(e) => log::error!("[preset] duplicate failed: {e}"),
-            }
-            ctx.ui.browser_popup.close();
-            DispatchResult::handled()
-        }
-        PanelAction::BrowserDeletePresetClicked(mode, type_id, source) => {
-            use manifold_ui::panels::picker_core::Source;
-
-            let kind = browser_mode_to_kind(*mode);
-            let id = manifold_core::PresetTypeId::from_string(type_id.clone());
-            let (place, undo_note) = match source {
-                Source::MyLibrary => ("your library", "This can't be undone."),
-                Source::Project => ("this project", "Undo (\u{2318}Z) restores it."),
-                Source::Factory => return DispatchResult::handled(), // unreachable
-            };
-            let confirmed = crate::alerts::confirm(
-                "Delete preset",
-                &format!("Delete \"{type_id}\" from {place}?\n\n{undo_note}"),
-            );
-            if !confirmed {
-                return DispatchResult::handled();
-            }
-            match source {
-                Source::MyLibrary => {
-                    let lib = crate::user_library::UserLibrary::new();
-                    if let Err(e) = lib.delete(kind, &id) {
-                        log::error!("[preset] delete failed: {e}");
-                    }
-                    ctx.ui.browser_popup.close();
-                    DispatchResult::handled()
-                }
-                Source::Project => {
-                    let cmd = manifold_editing::commands::preset::DeleteEmbeddedPresetCommand::new(id);
-                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                    boxed.execute(ctx.project);
-                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
-                    ctx.ui.browser_popup.close();
-                    DispatchResult::structural()
-                }
-                Source::Factory => unreachable!("returned above"),
-            }
-        }
-        PanelAction::BrowserRevealPresetClicked(mode, type_id) => {
-            // My Library only — the menu never offers Reveal for Project
-            // (a project-embedded preset has no file to reveal). Doesn't
-            // close the popup: a read-only peek shouldn't interrupt browsing.
-            let kind = browser_mode_to_kind(*mode);
-            let id = manifold_core::PresetTypeId::from_string(type_id.clone());
-            crate::user_library::UserLibrary::new().reveal(kind, &id);
-            DispatchResult::handled()
-        }
-
         // ── Generator params ───────────────────────────────────────
         PanelAction::GenTypeClicked(_) => DispatchResult::handled(),
         // `ParamToggle`/`ParamFire` (§8.4 P3b): unified effect+generator via

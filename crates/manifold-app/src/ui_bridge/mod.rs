@@ -5,6 +5,7 @@
 //! from all panels, and `push_state()` to sync engine state back to panels.
 
 mod context;
+mod dispatch;
 mod editing;
 mod inspector;
 mod layer;
@@ -68,12 +69,11 @@ pub struct DispatchResult {
     /// every `DispatchResult` is built through the four constructors here, so it
     /// can never be set externally. The SOLE consumer is `dispatch_inspector`'s
     /// first-non-unhandled chain router; do NOT branch on it anywhere else
-    /// (UI_FUNNEL_DECOMPOSITION P-B, D6).
-    // Un-suppression trigger: the P-B split slice adds `dispatch_inspector`'s
-    // chain router, whose first read of this field removes this allow. Only the
-    // `#[cfg(test)]` sentinel test reads it until then.
-    #[allow(dead_code)]
-    unhandled: bool,
+    /// (UI_FUNNEL_DECOMPOSITION P-B, D6). `pub(crate)` so the router in
+    /// `inspector.rs` reads it; still unforgeable (built only via the four
+    /// constructors here — see the zero-struct-literal gate on the sentinel
+    /// commit).
+    pub(crate) unhandled: bool,
 }
 
 impl DispatchResult {
