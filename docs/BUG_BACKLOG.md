@@ -200,6 +200,14 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 
 ## Open
 
+### BUG-302 — E/A arm buttons nameless to the flow harness (driver_btn asymmetry, BUG-239 family)
+**Status:** OPEN · found 2026-07-22 by the D9 catalog's first run (the tool doing its job)
+Symptom: per-row EnvelopeBtn ("E") and AudioBtn ("A") carry no queryable name on any card, while the sibling DriverBtn is named `param_row.<id>.driver_btn` — flows can drive D by name but not E/A. Root cause: WS3 (lane/ws3-queryable-rows) named slider/value/driver_btn/row_catcher and missed the E/A pair — residue, not design. Fix shape: emit `param_row.<id>.envelope_btn` / `.audio_btn` at the same site driver_btn's name is emitted (~2 lines) + extend the D9 catalog self-test to assert the symmetry. Batch with the VERIFICATION_INFRA design item (same harness-affordance domain).
+
+### BUG-301 — three PanelAction variants dispatch to nothing (dead wire traffic or silently missing features)
+**Status:** OPEN · found 2026-07-22 (Wave-1 close audit)
+Symptom: `RootAction::AudioSetupDeviceClicked`, `AudioSendChannelClicked`, `OpenAbletonPickerForParam` are emitted by UI code but fall through to `unhandled()` — faithfully preserved through P-B/P-D/P-I because parity demanded it, never explained. Root cause: unknown — suspects: dead emit sites whose handlers were removed historically, or features that were never wired (a picker that should open and doesn't). Fix shape: trace each emit site's intent via git archaeology (`git log -S`); either delete the dead emits + variants, or wire the missing handler. Audit rider: re-examine the 12 "genuine non-trio partials" from pd-partition.md's kill list for disguised gestures while in the file.
+
 ### BUG-300 (ui-flow-asserts-drifted-from-fixtures) — five UI-flows red under their correct manifest scene: stale assertions / fixture drift since authoring — surfaced 2026-07-21 by S8's `run_ui_flows.py`
 **Status:** OPEN · found 2026-07-21 (WS2 S8 flow-manifest lane)
 Each flow was green at authoring (dates below) and fails now under its correct authoring scene; a whole-scene sweep (every built-in fixture) confirmed none pass under any scene, so this is assertion/fixture drift, not a scene-mapping error. All five are XFAIL'd in `scripts/ui-flows/manifest.json` (`expected_fail`, `bug: BUG-300`) so the S8 gate stays green and the runner flags any that turns green for promotion back into `flows`.
