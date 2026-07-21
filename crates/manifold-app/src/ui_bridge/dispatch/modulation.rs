@@ -21,15 +21,11 @@ use manifold_editing::commands::audio_mod::{
     SetAudioModSourceCommand, SetAudioModTriggerModeCommand, ToggleAudioModEnabledCommand,
 };
 use manifold_editing::commands::effect_target::DriverTarget;
-use manifold_editing::commands::envelopes::{
-    AddEnvelopeCommand, ChangeEnvelopeDecayCommand, ToggleEnvelopeEnabledCommand,
-};
+use manifold_editing::commands::envelopes::{AddEnvelopeCommand, ToggleEnvelopeEnabledCommand};
 use manifold_ui::{AudioShapeParam, DriverConfigAction, InspectorTab, ModulationAction};
 
 use super::super::DispatchResult;
-use super::resolve::{
-    graph_audio_mod_dual_edit, graph_env_dual_edit, resolve_mod_target,
-};
+use super::resolve::{graph_audio_mod_dual_edit, resolve_mod_target};
 use crate::content_command::ContentCommand;
 
 pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::super::DispatchCtx) -> DispatchResult {
@@ -695,80 +691,10 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
         // unified `PanelAction::Scrub` wire (`ValueRef::Trim`, P-I / D4).
         // Envelope-target scrub trio migrated to the unified `PanelAction::Scrub`
         // wire (`ValueRef::EnvelopeTarget`, P-I / D4).
-        ModulationAction::EnvDecayChanged(gpt, param_id, decay) => {
-            if let Some((target, param_id)) = resolve_mod_target(
-                ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
-                ctx.selection, false,
-            ) {
-                let param_id = &param_id;
-                let d = *decay;
-                if let Some(crate::app::ActiveInspectorDrag::EnvelopeDecay { value, .. }) =
-                    &mut ctx.scrub.active_inspector_drag
-                {
-                    *value = d;
-                }
-                graph_env_dual_edit(ctx.project, ctx.content_tx, &target, param_id.clone(), move |env| {
-                    env.decay_beats = d;
-                });
-            }
-            DispatchResult::handled()
-        }
-
         // ── Modulation undo: snapshot/commit ────────────────────────
-        // Trim-range and envelope-target snapshot/commit migrated to the unified
-        // `PanelAction::Scrub` wire (`ValueRef::Trim` / `ValueRef::EnvelopeTarget`,
-        // P-I / D4): Begin captures the undo baseline, Commit emits the undo command.
-        ModulationAction::EnvDecaySnapshot(gpt, param_id) => {
-            if let Some((target, param_id)) = resolve_mod_target(
-                ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
-                ctx.selection, false,
-            ) {
-                let param_id = &param_id;
-                let d = ctx.project
-                    .with_preset_graph_mut(&target, |inst| {
-                        inst.envelopes
-                            .as_ref()
-                            .and_then(|es| es.iter().find(|e| e.param_id == *param_id))
-                            .map(|e| e.decay_beats)
-                    })
-                    .flatten();
-                if let Some(d) = d {
-                    ctx.scrub.decay_snapshot = Some(d);
-                    ctx.scrub.active_inspector_drag = Some(crate::app::ActiveInspectorDrag::EnvelopeDecay {
-                        target,
-                        param_id: param_id.clone(),
-                        value: d,
-                    });
-                }
-            }
-            DispatchResult::handled()
-        }
-        ModulationAction::EnvDecayCommit(gpt, param_id) => {
-            if let Some(old_decay) = ctx.scrub.decay_snapshot.take()
-                && let Some((target, param_id)) = resolve_mod_target(
-                    ctx.ui, ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab,
-                    active_layer, ctx.selection, false,
-                )
-            {
-                let param_id = &param_id;
-                let info = ctx.project
-                    .with_preset_graph_mut(&target, |inst| {
-                        inst.envelopes
-                            .as_ref()
-                            .and_then(|es| es.iter().position(|e| e.param_id == *param_id))
-                            .map(|idx| (idx, inst.envelopes.as_ref().unwrap()[idx].decay_beats))
-                    })
-                    .flatten();
-                if let Some((env_idx, new_d)) = info
-                    && (old_decay - new_d).abs() > f32::EPSILON
-                {
-                    let cmd =
-                        ChangeEnvelopeDecayCommand::new(target, env_idx, old_decay, new_d);
-                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
-                }
-            }
-            ctx.scrub.active_inspector_drag = None;
-            DispatchResult::handled()
-        }
+        // Trim-range, envelope-target, and envelope-decay scrub trios migrated to
+        // the unified `PanelAction::Scrub` wire (`ValueRef::Trim` /
+        // `ValueRef::EnvelopeTarget` / `ValueRef::EnvDecay`, P-I / D4): Begin
+        // captures the undo baseline, Commit emits the undo command.
     }
 }

@@ -107,4 +107,7 @@ pub enum ValueRef {
     /// An envelope target handle (orange bar, `target_normalized`) — was
     /// `Target{Snapshot,Changed,Commit}`.
     EnvelopeTarget(GraphParamTarget, ParamId),
+    /// An envelope decay slider (`decay_beats`) — was
+    /// `EnvDecay{Snapshot,Changed,Commit}`.
+    EnvDecay(GraphParamTarget, ParamId),
 }

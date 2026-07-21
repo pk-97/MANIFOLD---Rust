@@ -4005,8 +4005,8 @@ impl ParamCardPanel {
                         let decay = norm.clamp(0.0, 1.0) * ENV_DECAY_MAX;
                         let pid = self.rows[row].id.clone();
                         return vec![
-                            PanelAction::Modulation(ModulationAction::EnvDecaySnapshot(target.clone(), pid.clone())),
-                            PanelAction::Modulation(ModulationAction::EnvDecayChanged(target, pid, decay)),
+                            PanelAction::Scrub(ValueRef::EnvDecay(target.clone(), pid.clone()), ScrubPhase::Begin),
+                            PanelAction::Scrub(ValueRef::EnvDecay(target, pid), ScrubPhase::Move(ScrubValue::Scalar(decay))),
                         ];
                     }
                     Vec::new()
@@ -4225,8 +4225,8 @@ impl ParamCardPanel {
             BitmapSlider::update_value(tree, &cfg.decay_slider, norm, &format!("{decay:.2}"));
             let pid = self.rows[pi].id.clone();
             return match self.kind {
-                ParamCardKind::Effect => vec![PanelAction::Modulation(ModulationAction::EnvDecayChanged(GraphParamTarget::Effect(ei), pid, decay))],
-                ParamCardKind::Generator => vec![PanelAction::Modulation(ModulationAction::EnvDecayChanged(GraphParamTarget::Generator, pid, decay))],
+                ParamCardKind::Effect => vec![PanelAction::Scrub(ValueRef::EnvDecay(GraphParamTarget::Effect(ei), pid), ScrubPhase::Move(ScrubValue::Scalar(decay)))],
+                ParamCardKind::Generator => vec![PanelAction::Scrub(ValueRef::EnvDecay(GraphParamTarget::Generator, pid), ScrubPhase::Move(ScrubValue::Scalar(decay)))],
             };
         }
 
@@ -4447,8 +4447,8 @@ impl ParamCardPanel {
             Some(ParamDragTarget::EnvDecay { index: pi }) => {
                 let pid = self.rows[pi].id.clone();
                 match self.kind {
-                    ParamCardKind::Effect => vec![PanelAction::Modulation(ModulationAction::EnvDecayCommit(GraphParamTarget::Effect(ei), pid))],
-                    ParamCardKind::Generator => vec![PanelAction::Modulation(ModulationAction::EnvDecayCommit(GraphParamTarget::Generator, pid))],
+                    ParamCardKind::Effect => vec![PanelAction::Scrub(ValueRef::EnvDecay(GraphParamTarget::Effect(ei), pid), ScrubPhase::Commit)],
+                    ParamCardKind::Generator => vec![PanelAction::Scrub(ValueRef::EnvDecay(GraphParamTarget::Generator, pid), ScrubPhase::Commit)],
                 }
             }
             Some(ParamDragTarget::AudioShape { index: pi, .. }) => {
@@ -5674,7 +5674,7 @@ mod tests {
         assert!(
             matches!(
                 down.as_slice(),
-                [PanelAction::Modulation(ModulationAction::EnvDecaySnapshot(GraphParamTarget::Effect(0), pid1)), PanelAction::Modulation(ModulationAction::EnvDecayChanged(GraphParamTarget::Effect(0), pid2, _))]
+                [PanelAction::Scrub(ValueRef::EnvDecay(GraphParamTarget::Effect(0), pid1), ScrubPhase::Begin), PanelAction::Scrub(ValueRef::EnvDecay(GraphParamTarget::Effect(0), pid2), ScrubPhase::Move(..))]
                 if pid1.as_ref() == "radius" && pid2.as_ref() == "radius"
             ),
             "begin emits snapshot + first decay value: {down:?}"
@@ -5684,13 +5684,13 @@ mod tests {
         let new_x = decay_rect.x + decay_rect.width * 0.6;
         let moved = panel.handle_drag(Vec2::new(new_x, decay_rect.y), &mut tree);
         assert!(
-            matches!(moved.as_slice(), [PanelAction::Modulation(ModulationAction::EnvDecayChanged(GraphParamTarget::Effect(0), pid, _))] if pid.as_ref() == "radius"),
+            matches!(moved.as_slice(), [PanelAction::Scrub(ValueRef::EnvDecay(GraphParamTarget::Effect(0), pid), ScrubPhase::Move(..))] if pid.as_ref() == "radius"),
             "track emits the live decay value: {moved:?}"
         );
 
         let ended = panel.handle_drag_end(&mut tree);
         assert!(
-            matches!(ended.as_slice(), [PanelAction::Modulation(ModulationAction::EnvDecayCommit(GraphParamTarget::Effect(0), pid))] if pid.as_ref() == "radius"),
+            matches!(ended.as_slice(), [PanelAction::Scrub(ValueRef::EnvDecay(GraphParamTarget::Effect(0), pid), ScrubPhase::Commit)] if pid.as_ref() == "radius"),
             "end emits exactly one decay commit: {ended:?}"
         );
         assert!(!panel.is_dragging());

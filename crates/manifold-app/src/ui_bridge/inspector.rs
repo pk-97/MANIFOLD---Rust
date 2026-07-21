@@ -900,10 +900,10 @@ mod scene_card_convergence_tests {
                 project,
                 &mut h,
                 |h, p| {
-                    h.dispatch(&PanelAction::Modulation(ModulationAction::EnvDecaySnapshot(gpt(), pid.clone())), p);
-                    h.dispatch(&PanelAction::Modulation(ModulationAction::EnvDecayChanged(gpt(), pid.clone(), 3.5)), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::EnvDecay(gpt(), pid.clone()), ScrubPhase::Begin), p);
+                    h.dispatch(&PanelAction::Scrub(ValueRef::EnvDecay(gpt(), pid.clone()), ScrubPhase::Move(ScrubValue::Scalar(3.5))), p);
                 },
-                |h, p| h.dispatch(&PanelAction::Modulation(ModulationAction::EnvDecayCommit(gpt(), pid.clone())), p),
+                |h, p| h.dispatch(&PanelAction::Scrub(ValueRef::EnvDecay(gpt(), pid.clone()), ScrubPhase::Commit), p),
                 move |p| gen_inst(p, &probe_lid).envelopes.as_ref().unwrap()[0].decay_beats,
                 1.0,
                 3.5,

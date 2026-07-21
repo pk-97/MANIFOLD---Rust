@@ -499,16 +499,9 @@ pub enum ModulationAction {
     /// Set a Step action's wrap mode — index into `[Wrap, Bounce, Clamp]`
     /// (D2) — the drawer's Wrap segmented row, shown only while Action=Step.
     AudioModSetWrap(GraphParamTarget, ParamId, usize),
-    // Trim-range scrub trio (driver / Ableton / audio sub-range handles)
-    // migrated to `PanelAction::Scrub` (`ValueRef::Trim`, P-I / D4).
-    // Envelope-target scrub trio (orange handle / `target_normalized`) migrated
-    // to `PanelAction::Scrub` (`ValueRef::EnvelopeTarget`, P-I / D4).
-    /// Envelope decay slider (`decay_beats`) changed.
-    EnvDecayChanged(GraphParamTarget, ParamId, f32),
-    /// Snapshot decay before drag (for undo).
-    EnvDecaySnapshot(GraphParamTarget, ParamId),
-    /// Commit decay drag (record undo command).
-    EnvDecayCommit(GraphParamTarget, ParamId),
+    // Trim-range, envelope-target, and envelope-decay scrub trios migrated to
+    // `PanelAction::Scrub` (`ValueRef::{Trim, EnvelopeTarget, EnvDecay}`,
+    // P-I / D4).
 }
 
 #[derive(Debug, Clone)]

@@ -33,7 +33,7 @@ use manifold_editing::commands::audio_mod::SetAudioModShapeCommand;
 use manifold_editing::commands::drivers::ChangeTrimCommand;
 use manifold_editing::commands::effect_target::DriverTarget;
 use manifold_editing::commands::effects::{ChangeGraphParamCommand, SetRelightParamCommand};
-use manifold_editing::commands::envelopes::ChangeEnvelopeTargetCommand;
+use manifold_editing::commands::envelopes::{ChangeEnvelopeDecayCommand, ChangeEnvelopeTargetCommand};
 use manifold_editing::commands::settings::{
     ChangeLayerOpacityCommand, ChangeLedBrightnessCommand, ChangeMacroCommand,
     ChangeMasterOpacityCommand,
@@ -58,8 +58,6 @@ pub struct ScrubState {
     pub slider_snapshot: Option<f32>,
     /// Trim drag snapshot (min, max) for undo.
     pub trim_snapshot: Option<(f32, f32)>,
-    /// Envelope decay-slider drag snapshot for undo.
-    pub decay_snapshot: Option<f32>,
     /// Audio-mod shaping-slider drag snapshot (whole shape) for undo.
     pub audio_shape_snapshot: Option<AudioModShape>,
     /// Step-Amount drag snapshot (PARAM_STEP_ACTIONS D8) for undo.
@@ -152,6 +150,13 @@ pub enum ResolvedScrub {
     /// An envelope target handle (`target_normalized`) — `target`/`param_id`
     /// resolved at Begin so the restore path can re-stamp without dispatch ctx.
     EnvelopeTarget {
+        target: GraphTarget,
+        param_id: ParamId,
+        baseline: f32,
+        live: f32,
+    },
+    /// An envelope decay slider (`decay_beats`) — resolved at Begin.
+    EnvDecay {
         target: GraphTarget,
         param_id: ParamId,
         baseline: f32,
@@ -266,6 +271,22 @@ impl ResolvedScrub {
                         .and_then(|es| es.iter_mut().find(|e| e.param_id == *param_id))
                     {
                         e.target_normalized = *live;
+                    }
+                });
+            }
+            ResolvedScrub::EnvDecay {
+                target,
+                param_id,
+                live,
+                ..
+            } => {
+                project.with_preset_graph_mut(target, |inst| {
+                    if let Some(e) = inst
+                        .envelopes
+                        .as_mut()
+                        .and_then(|es| es.iter_mut().find(|e| e.param_id == *param_id))
+                    {
+                        e.decay_beats = *live;
                     }
                 });
             }
@@ -1099,6 +1120,100 @@ pub(crate) fn dispatch_scrub(
                     {
                         let cmd =
                             ChangeEnvelopeTargetCommand::new(target, env_idx, old_target, new_t);
+                        ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
+                    }
+                }
+                ctx.scrub.active = None;
+                DispatchResult::handled()
+            }
+        },
+
+        ValueRef::EnvDecay(gpt, param_id) => match phase {
+            ScrubPhase::Begin => {
+                if let Some(target) = resolve_graph_target(
+                    gpt,
+                    ctx.editor_target,
+                    effective_tab,
+                    active_layer,
+                    ctx.selection,
+                    ctx.project,
+                ) {
+                    let baseline = ctx
+                        .project
+                        .with_preset_graph_mut(&target, |inst| {
+                            inst.envelopes
+                                .as_ref()
+                                .and_then(|es| es.iter().find(|e| e.param_id == *param_id))
+                                .map(|e| e.decay_beats)
+                        })
+                        .flatten();
+                    if let Some(baseline) = baseline {
+                        ctx.scrub.active = Some(ResolvedScrub::EnvDecay {
+                            target,
+                            param_id: param_id.clone(),
+                            baseline,
+                            live: baseline,
+                        });
+                    }
+                }
+                DispatchResult::handled()
+            }
+            ScrubPhase::Move(sv) => {
+                if let (Some(v), Some(target)) = (
+                    sv.scalar(),
+                    resolve_graph_target(
+                        gpt,
+                        ctx.editor_target,
+                        effective_tab,
+                        active_layer,
+                        ctx.selection,
+                        ctx.project,
+                    ),
+                ) {
+                    if let Some(ResolvedScrub::EnvDecay { live, .. }) = &mut ctx.scrub.active {
+                        *live = v;
+                    }
+                    graph_env_dual_edit(
+                        ctx.project,
+                        ctx.content_tx,
+                        &target,
+                        param_id.clone(),
+                        move |env| {
+                            env.decay_beats = v;
+                        },
+                    );
+                }
+                DispatchResult::handled()
+            }
+            ScrubPhase::Commit => {
+                let baseline = match &ctx.scrub.active {
+                    Some(ResolvedScrub::EnvDecay { baseline, .. }) => Some(*baseline),
+                    _ => None,
+                };
+                if let Some(old_decay) = baseline
+                    && let Some(target) = resolve_graph_target(
+                        gpt,
+                        ctx.editor_target,
+                        effective_tab,
+                        active_layer,
+                        ctx.selection,
+                        ctx.project,
+                    )
+                {
+                    let info = ctx
+                        .project
+                        .with_preset_graph_mut(&target, |inst| {
+                            inst.envelopes
+                                .as_ref()
+                                .and_then(|es| es.iter().position(|e| e.param_id == *param_id))
+                                .map(|idx| (idx, inst.envelopes.as_ref().unwrap()[idx].decay_beats))
+                        })
+                        .flatten();
+                    if let Some((env_idx, new_d)) = info
+                        && (old_decay - new_d).abs() > f32::EPSILON
+                    {
+                        let cmd =
+                            ChangeEnvelopeDecayCommand::new(target, env_idx, old_decay, new_d);
                         ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
                     }
                 }

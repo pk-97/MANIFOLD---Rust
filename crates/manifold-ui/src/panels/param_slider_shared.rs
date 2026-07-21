@@ -1271,12 +1271,15 @@ pub(crate) fn build_envelope_config(
         .unwrap_or(DEFAULT_ENV_DECAY);
     // BUG-070 follow-through: the envelope drawer never had a reset gesture
     // before (`DrawerRow::Slider::reset` is now required) — wired here using
-    // the same EnvDecay Snapshot/Changed/Commit trio the drag path already
-    // emits, reset to `DEFAULT_ENV_DECAY`.
+    // the same `EnvDecay` scrub gesture the drag path already emits, reset to
+    // `DEFAULT_ENV_DECAY`.
     let reset = PanelAction::slider_reset(
-        PanelAction::Modulation(ModulationAction::EnvDecaySnapshot(target.clone(), pid.clone())),
-        PanelAction::Modulation(ModulationAction::EnvDecayChanged(target.clone(), pid.clone(), DEFAULT_ENV_DECAY)),
-        PanelAction::Modulation(ModulationAction::EnvDecayCommit(target, pid)),
+        PanelAction::Scrub(ValueRef::EnvDecay(target.clone(), pid.clone()), ScrubPhase::Begin),
+        PanelAction::Scrub(
+            ValueRef::EnvDecay(target.clone(), pid.clone()),
+            ScrubPhase::Move(ScrubValue::Scalar(DEFAULT_ENV_DECAY)),
+        ),
+        PanelAction::Scrub(ValueRef::EnvDecay(target, pid), ScrubPhase::Commit),
     );
     let spec = DrawerSpec {
         rows: vec![DrawerRow::Slider {
