@@ -21,10 +21,10 @@
 //!   - `ui_snapshot/mod.rs` (2 calls): the BUG-097 traversal-semantics proof
 //!     (`overlay_fidelity_proof`), which needs raw calls to demonstrate the
 //!     root-scan-vs-flat-scan distinction the shared pass depends on.
-//! Everything else in `manifold-app/src/` is expected to have ZERO raw call
-//! sites. `manifold-renderer`'s `ui_cache_manager.rs`/`ui_renderer.rs` (the
-//! internal cache-render path and a renderer unit test) are a different
-//! crate and out of this guard's scope by design (D7).
+//!     Everything else in `manifold-app/src/` is expected to have ZERO raw call
+//!     sites. `manifold-renderer`'s `ui_cache_manager.rs`/`ui_renderer.rs` (the
+//!     internal cache-render path and a renderer unit test) are a different
+//!     crate and out of this guard's scope by design (D7).
 //!
 //! I2 (input-presence, never caller-identity) is folded in here too: the
 //! shared pass module must never reference `WorkspaceKind`/

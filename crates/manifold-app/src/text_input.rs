@@ -696,7 +696,10 @@ mod parse_tests {
     fn degrees_row_commit_converts_to_radians() {
         let parsed = parse_lenient_numeric("45").expect("\"45\" parses");
         let radians = scene_numeric_commit_value(parsed, true);
-        assert!((radians - 0.7853981).abs() < 1e-5, "got {radians}");
+        assert!(
+            (radians - std::f32::consts::FRAC_PI_4).abs() < 1e-5,
+            "got {radians}"
+        );
     }
 
     /// A non-degrees row's commit value is untouched by the conversion.
