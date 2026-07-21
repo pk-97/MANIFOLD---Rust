@@ -18,7 +18,7 @@
 set -euo pipefail
 
 MODEL="fable"; EFFORT="medium"; MODE="pane"; NAME=""; PROMPT_FILE=""
-DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 while getopts "m:e:wn:c:f:" opt; do
   case "$opt" in
