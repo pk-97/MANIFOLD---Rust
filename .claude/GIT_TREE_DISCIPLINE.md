@@ -114,7 +114,7 @@ origin main` (allow + reminder present); `merge <branch>` while on main
   merge), not of linearity.
 - **To land a workstream:** fetch → merge current `origin/main` into your
   branch → rerun the gate (touched-crate clippy + focused tests; the full
-  workspace sweep — workspace clippy + `cargo nextest run --workspace` +
+  workspace sweep — workspace clippy `--tests` + `cargo nextest run --workspace` +
   `cargo deny check bans` — at batched landings per §2c, or sooner when blast
   radius says so) → `git merge --no-ff` into main → push → if the push is
   rejected because someone landed first, repeat. New/renamed docs need
