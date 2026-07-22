@@ -3054,11 +3054,17 @@ impl EffectNode for RenderScene {
             {
                 self.ensure_opaque_scene_color(gpu.device, width, height, format);
             }
-            // RAYTRACING_DESIGN.md RT-D3/RT-P2: tracer + masks + params
-            // buffers + irradiance targets, ensured here for the same NLL
-            // borrow reason as above.
+            // BUG-310: the tracer's 3 raw-MSL pipeline compiles (~30ms)
+            // must land in the node's first-evaluate warmup window (the
+            // frame-0 JIT window every frame-time gate already exempts),
+            // NOT on the frame a performer flips `rt_enabled` mid-set —
+            // the BUG-037 prewarm rule. Guarded by `is_none()` inside, so
+            // per-frame cost after the first evaluate is one branch.
+            self.ensure_rt_tracer(gpu.device);
+            // RAYTRACING_DESIGN.md RT-D3/RT-P2: masks + params buffers +
+            // irradiance targets, ensured here for the same NLL borrow
+            // reason as above.
             if rt_enabled {
-                self.ensure_rt_tracer(gpu.device);
                 self.ensure_rt_masks(gpu.device, width, height);
                 self.ensure_rt_params_buffer(gpu.device);
                 let irr_reallocated = self.ensure_rt_irradiance(gpu.device, width, height);
