@@ -286,7 +286,7 @@ pub(super) struct EffectSlot {
 impl EffectSlot {
     /// Push the live relight knob values into the spliced graph. No-op if the
     /// card had relight off at build time (the template was never spliced).
-    fn apply_relight_params(&self, graph: &mut Graph, params: &RelightParams) {
+    pub(super) fn apply_relight_params(&self, graph: &mut Graph, params: &RelightParams) {
         for w in &self.relight_writes {
             w.apply(graph, params);
         }
