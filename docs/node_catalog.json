@@ -22583,14 +22583,14 @@
           "name": "Camera Tilt"
         },
         {
-          "default": "9",
+          "default": "26.205",
           "id": "camDistance",
           "max": "100",
           "min": "5",
           "name": "Camera Distance"
         },
         {
-          "default": "0.9",
+          "default": "0.8",
           "id": "1_fov_y",
           "max": "2.5",
           "min": "0.05",
@@ -22625,21 +22625,21 @@
           "name": "Far"
         },
         {
-          "default": "0.5",
+          "default": "0.95",
           "id": "2_fog_color_r",
           "max": "1",
           "min": "0",
           "name": "Fog Color R"
         },
         {
-          "default": "0.55",
+          "default": "0.75",
           "id": "2_fog_color_g",
           "max": "1",
           "min": "0",
           "name": "Fog Color G"
         },
         {
-          "default": "0.65",
+          "default": "0.58",
           "id": "2_fog_color_b",
           "max": "1",
           "min": "0",
@@ -22653,28 +22653,28 @@
           "name": "Fog Density"
         },
         {
-          "default": "0",
+          "default": "0.3",
           "id": "2_height_falloff",
           "max": "2",
           "min": "0",
           "name": "Height Falloff"
         },
         {
-          "default": "1",
+          "default": "1.05",
           "id": "2_ambient_tint_r",
           "max": "2",
           "min": "0",
           "name": "Ambient Tint R"
         },
         {
-          "default": "1",
+          "default": "0.98",
           "id": "2_ambient_tint_g",
           "max": "2",
           "min": "0",
           "name": "Ambient Tint G"
         },
         {
-          "default": "1",
+          "default": "0.92",
           "id": "2_ambient_tint_b",
           "max": "2",
           "min": "0",
@@ -22716,7 +22716,7 @@
           "name": "Position X"
         },
         {
-          "default": "30",
+          "default": "15.485",
           "id": "11_pos_y",
           "max": "100",
           "min": "-100",
@@ -22758,21 +22758,21 @@
           "name": "Colour R"
         },
         {
-          "default": "1",
+          "default": "0.96",
           "id": "11_color_g",
           "max": "1",
           "min": "0",
           "name": "Colour G"
         },
         {
-          "default": "1",
+          "default": "0.88",
           "id": "11_color_b",
           "max": "1",
           "min": "0",
           "name": "Colour B"
         },
         {
-          "default": "1",
+          "default": "3.2",
           "id": "11_intensity",
           "max": "10",
           "min": "0",
@@ -22800,7 +22800,7 @@
           "name": "Shadow Softness"
         },
         {
-          "default": "0.003",
+          "default": "0.002",
           "id": "11_shadow_bias",
           "max": "0.1",
           "min": "0",
@@ -22828,14 +22828,14 @@
           "name": "Axis"
         },
         {
-          "default": "0.5",
+          "default": "0",
           "id": "15_angle",
           "max": "1",
           "min": "0",
           "name": "Angle"
         },
         {
-          "default": "0",
+          "default": "-2.6559",
           "id": "15_center",
           "max": "100",
           "min": "-100",
@@ -22912,7 +22912,7 @@
           "name": "Opacity"
         },
         {
-          "default": "0.15",
+          "default": "0.22",
           "id": "17_ambient",
           "max": "1",
           "min": "0",
@@ -22989,21 +22989,21 @@
           "name": "Alpha Cutoff"
         },
         {
-          "default": "0",
+          "default": "-1.2315128",
           "id": "18_pos_x",
           "max": "100",
           "min": "-100",
           "name": "Position X"
         },
         {
-          "default": "0",
+          "default": "2.66",
           "id": "18_pos_y",
           "max": "100",
           "min": "-100",
           "name": "Position Y"
         },
         {
-          "default": "0",
+          "default": "3.1441932",
           "id": "18_pos_z",
           "max": "100",
           "min": "-100",
@@ -23059,14 +23059,14 @@
           "name": "Axis"
         },
         {
-          "default": "0.5",
+          "default": "0",
           "id": "80_angle",
           "max": "1",
           "min": "0",
           "name": "Angle"
         },
         {
-          "default": "0",
+          "default": "-2.6559",
           "id": "80_center",
           "max": "100",
           "min": "-100",
@@ -23080,7 +23080,7 @@
           "name": "Angle X"
         },
         {
-          "default": "0",
+          "default": "1.5707963",
           "id": "81_angle_y",
           "max": "6.2831855",
           "min": "-6.2831855",
@@ -23101,14 +23101,14 @@
           "name": "Axis"
         },
         {
-          "default": "0.5",
+          "default": "0",
           "id": "22_angle",
           "max": "1",
           "min": "0",
           "name": "Angle"
         },
         {
-          "default": "0",
+          "default": "-2.4948",
           "id": "22_center",
           "max": "100",
           "min": "-100",
@@ -23185,7 +23185,7 @@
           "name": "Opacity"
         },
         {
-          "default": "0.15",
+          "default": "0.22",
           "id": "24_ambient",
           "max": "1",
           "min": "0",
@@ -23262,21 +23262,21 @@
           "name": "Alpha Cutoff"
         },
         {
-          "default": "0",
+          "default": "-1.2315128",
           "id": "25_pos_x",
           "max": "100",
           "min": "-100",
           "name": "Position X"
         },
         {
-          "default": "0",
+          "default": "2.66",
           "id": "25_pos_y",
           "max": "100",
           "min": "-100",
           "name": "Position Y"
         },
         {
-          "default": "0",
+          "default": "3.1441932",
           "id": "25_pos_z",
           "max": "100",
           "min": "-100",
@@ -23332,14 +23332,14 @@
           "name": "Axis"
         },
         {
-          "default": "0.5",
+          "default": "0",
           "id": "82_angle",
           "max": "1",
           "min": "0",
           "name": "Angle"
         },
         {
-          "default": "0",
+          "default": "-2.4948",
           "id": "82_center",
           "max": "100",
           "min": "-100",
@@ -23353,7 +23353,7 @@
           "name": "Angle X"
         },
         {
-          "default": "0",
+          "default": "1.5707963",
           "id": "83_angle_y",
           "max": "6.2831855",
           "min": "-6.2831855",
@@ -23374,14 +23374,14 @@
           "name": "Axis"
         },
         {
-          "default": "0.5",
+          "default": "0",
           "id": "29_angle",
           "max": "1",
           "min": "0",
           "name": "Angle"
         },
         {
-          "default": "0",
+          "default": "-1.0324",
           "id": "29_center",
           "max": "100",
           "min": "-100",
@@ -23458,7 +23458,7 @@
           "name": "Opacity"
         },
         {
-          "default": "0.15",
+          "default": "0.22",
           "id": "31_ambient",
           "max": "1",
           "min": "0",
@@ -23535,21 +23535,21 @@
           "name": "Alpha Cutoff"
         },
         {
-          "default": "0",
+          "default": "-1.2315128",
           "id": "32_pos_x",
           "max": "100",
           "min": "-100",
           "name": "Position X"
         },
         {
-          "default": "0",
+          "default": "2.66",
           "id": "32_pos_y",
           "max": "100",
           "min": "-100",
           "name": "Position Y"
         },
         {
-          "default": "0",
+          "default": "3.1441932",
           "id": "32_pos_z",
           "max": "100",
           "min": "-100",
@@ -23605,14 +23605,14 @@
           "name": "Axis"
         },
         {
-          "default": "0.5",
+          "default": "0",
           "id": "84_angle",
           "max": "1",
           "min": "0",
           "name": "Angle"
         },
         {
-          "default": "0",
+          "default": "-1.0324",
           "id": "84_center",
           "max": "100",
           "min": "-100",
@@ -23626,7 +23626,7 @@
           "name": "Angle X"
         },
         {
-          "default": "0",
+          "default": "1.5707963",
           "id": "85_angle_y",
           "max": "6.2831855",
           "min": "-6.2831855",
@@ -24531,21 +24531,21 @@
           "name": "Camera FOV"
         },
         {
-          "default": "0.7",
+          "default": "1.5707964",
           "id": "37_orbit",
           "max": "6.2831855",
           "min": "-6.2831855",
           "name": "Orbit"
         },
         {
-          "default": "0.3",
+          "default": "0.2617994",
           "id": "37_tilt",
           "max": "6.2831855",
           "min": "-6.2831855",
           "name": "Tilt"
         },
         {
-          "default": "0.9",
+          "default": "0.87266463",
           "id": "37_fov_y",
           "max": "2.5",
           "min": "0.05",
@@ -24573,7 +24573,7 @@
           "name": "Near"
         },
         {
-          "default": "200",
+          "default": "500",
           "id": "37_far",
           "max": "10000",
           "min": "1",
@@ -25028,21 +25028,21 @@
           "name": "Pressure"
         },
         {
-          "default": "0.7",
+          "default": "0",
           "id": "2_orbit",
           "max": "6.2831855",
           "min": "-6.2831855",
           "name": "Orbit"
         },
         {
-          "default": "0.3",
+          "default": "0",
           "id": "2_tilt",
           "max": "6.2831855",
           "min": "-6.2831855",
           "name": "Tilt"
         },
         {
-          "default": "0.9",
+          "default": "1.0472",
           "id": "2_fov_y",
           "max": "2.5",
           "min": "0.05",
@@ -25611,14 +25611,14 @@
           "name": "Opacity"
         },
         {
-          "default": "0.05",
+          "default": "0",
           "id": "62_ambient",
           "max": "1",
           "min": "0",
           "name": "Ambient"
         },
         {
-          "default": "0",
+          "default": "1",
           "id": "62_metallic",
           "max": "1",
           "min": "0",
@@ -26192,21 +26192,21 @@
           "name": "Mode"
         },
         {
-          "default": "0",
+          "default": "-2",
           "id": "63_pos_x",
           "max": "100",
           "min": "-100",
           "name": "Position X"
         },
         {
-          "default": "30",
+          "default": "2",
           "id": "63_pos_y",
           "max": "100",
           "min": "-100",
           "name": "Position Y"
         },
         {
-          "default": "0",
+          "default": "5",
           "id": "63_pos_z",
           "max": "100",
           "min": "-100",
@@ -26262,7 +26262,7 @@
           "name": "Range"
         },
         {
-          "default": "1",
+          "default": "0",
           "id": "63_cast_shadows",
           "max": "1",
           "min": "0",
@@ -26297,14 +26297,14 @@
           "name": "Light Size"
         },
         {
-          "default": "256",
+          "default": "500",
           "id": "34_cols",
           "max": "4096",
           "min": "2",
           "name": "Columns"
         },
         {
-          "default": "256",
+          "default": "500",
           "id": "34_rows",
           "max": "4096",
           "min": "2",
@@ -26318,21 +26318,21 @@
           "name": "Height Bias"
         },
         {
-          "default": "0.7",
+          "default": "1.5707964",
           "id": "43_orbit",
           "max": "6.2831855",
           "min": "-6.2831855",
           "name": "Orbit"
         },
         {
-          "default": "0.3",
+          "default": "-0.1745",
           "id": "43_tilt",
           "max": "6.2831855",
           "min": "-6.2831855",
           "name": "Tilt"
         },
         {
-          "default": "0.9",
+          "default": "0.9425",
           "id": "43_fov_y",
           "max": "2.5",
           "min": "0.05",
@@ -26346,14 +26346,14 @@
           "name": "Roll"
         },
         {
-          "default": "0.05",
+          "default": "0.01",
           "id": "43_near",
           "max": "10",
           "min": "0.001",
           "name": "Near"
         },
         {
-          "default": "200",
+          "default": "50",
           "id": "43_far",
           "max": "10000",
           "min": "1",
@@ -26819,14 +26819,14 @@
           "name": "Orbit"
         },
         {
-          "default": "0.3",
+          "default": "0.35",
           "id": "1_tilt",
           "max": "6.2831855",
           "min": "-6.2831855",
           "name": "Tilt"
         },
         {
-          "default": "4",
+          "default": "5",
           "id": "1_distance",
           "max": "100",
           "min": "0.01",
@@ -26840,7 +26840,7 @@
           "name": "FOV Y"
         },
         {
-          "default": "0",
+          "default": "0.5",
           "id": "1_look_y",
           "max": "10",
           "min": "-10",
@@ -26889,14 +26889,14 @@
           "name": "Fog Color B"
         },
         {
-          "default": "0",
+          "default": "0.04",
           "id": "2_fog_density",
           "max": "1",
           "min": "0",
           "name": "Fog Density"
         },
         {
-          "default": "0",
+          "default": "0.3",
           "id": "2_height_falloff",
           "max": "2",
           "min": "0",
@@ -26980,7 +26980,7 @@
           "name": "Environment Intensity"
         },
         {
-          "default": "0",
+          "default": "1",
           "id": "3_mode",
           "max": "1",
           "min": "0",
@@ -27050,7 +27050,7 @@
           "name": "Sun Disc Size"
         },
         {
-          "default": "0",
+          "default": "0.3",
           "id": "3_fill",
           "max": "2",
           "min": "0",
@@ -27071,14 +27071,14 @@
           "name": "Position X"
         },
         {
-          "default": "30",
+          "default": "7",
           "id": "4_pos_y",
           "max": "100",
           "min": "-100",
           "name": "Position Y"
         },
         {
-          "default": "0",
+          "default": "7",
           "id": "4_pos_z",
           "max": "100",
           "min": "-100",
@@ -27176,28 +27176,28 @@
           "name": "Light Size"
         },
         {
-          "default": "0",
+          "default": "1",
           "id": "5_mode",
           "max": "1",
           "min": "0",
           "name": "Mode"
         },
         {
-          "default": "0",
+          "default": "-4",
           "id": "5_pos_x",
           "max": "100",
           "min": "-100",
           "name": "Position X"
         },
         {
-          "default": "30",
+          "default": "2",
           "id": "5_pos_y",
           "max": "100",
           "min": "-100",
           "name": "Position Y"
         },
         {
-          "default": "0",
+          "default": "-3",
           "id": "5_pos_z",
           "max": "100",
           "min": "-100",
@@ -27225,14 +27225,14 @@
           "name": "Aim Z"
         },
         {
-          "default": "1",
+          "default": "0.75",
           "id": "5_color_r",
           "max": "1",
           "min": "0",
           "name": "Colour R"
         },
         {
-          "default": "1",
+          "default": "0.82",
           "id": "5_color_g",
           "max": "1",
           "min": "0",
@@ -27246,7 +27246,7 @@
           "name": "Colour B"
         },
         {
-          "default": "1",
+          "default": "0.35",
           "id": "5_intensity",
           "max": "10",
           "min": "0",
@@ -27260,7 +27260,7 @@
           "name": "Range"
         },
         {
-          "default": "1",
+          "default": "0",
           "id": "5_cast_shadows",
           "max": "1",
           "min": "0",
@@ -27295,21 +27295,21 @@
           "name": "Light Size"
         },
         {
-          "default": "0.85",
+          "default": "0.55",
           "id": "12_color_r",
           "max": "1",
           "min": "0",
           "name": "Colour R"
         },
         {
-          "default": "0.88",
+          "default": "0.55",
           "id": "12_color_g",
           "max": "1",
           "min": "0",
           "name": "Colour G"
         },
         {
-          "default": "0.92",
+          "default": "0.6",
           "id": "12_color_b",
           "max": "1",
           "min": "0",
@@ -27323,7 +27323,7 @@
           "name": "Opacity"
         },
         {
-          "default": "0.15",
+          "default": "0.25",
           "id": "12_ambient",
           "max": "1",
           "min": "0",
@@ -27470,14 +27470,14 @@
           "name": "Colour R"
         },
         {
-          "default": "0.88",
+          "default": "0.35",
           "id": "22_color_g",
           "max": "1",
           "min": "0",
           "name": "Colour G"
         },
         {
-          "default": "0.92",
+          "default": "0.3",
           "id": "22_color_b",
           "max": "1",
           "min": "0",
@@ -27491,7 +27491,7 @@
           "name": "Opacity"
         },
         {
-          "default": "0.15",
+          "default": "0.22",
           "id": "22_ambient",
           "max": "1",
           "min": "0",
@@ -27575,7 +27575,7 @@
           "name": "Position X"
         },
         {
-          "default": "0",
+          "default": "0.6",
           "id": "23_pos_y",
           "max": "100",
           "min": "-100",
