@@ -80,6 +80,7 @@ fn add_whole_number_param(inst: &mut PresetInstance, id: &str, max: f32) {
         is_trigger_gate: false,
         wraps: false,
         section: None,
+        card_visible: true,
     }));
 }
 

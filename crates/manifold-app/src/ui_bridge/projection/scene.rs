@@ -77,6 +77,12 @@ pub(crate) fn sections_for_doc_ids(
         return Vec::new();
     }
 
+    // Deliberately does NOT filter by `spec.card_visible`: the scene panel
+    // keeps every P1-stamped param regardless of the CARD-curation flag (the
+    // Scene Setup dock's own hand-curated `SceneVm` row builders in
+    // `ui_bridge::projection::inspector`, not this section list, decide what
+    // the panel shows) — `card_visible` only gates the generator/effect
+    // outer CARD's row builder (`cards::param_surface`).
     let mut sections: Vec<String> = Vec::new();
     for spec in &meta.params {
         let Some(prefix_doc_id) = spec.id.split('_').next().and_then(|s| s.parse::<u32>().ok())

@@ -42,6 +42,7 @@ pub(super) fn card_param(
         is_trigger_gate: false,
         wraps: false,
         section: Some(section.to_string()),
+        card_visible: true,
     }
 }
 
@@ -112,6 +113,7 @@ pub(super) fn animation_card_params(
         is_trigger_gate: false,
         wraps: false,
         section: Some(section.to_string()),
+        card_visible: true,
     };
 
     card_params.push(ParamSpecDef {

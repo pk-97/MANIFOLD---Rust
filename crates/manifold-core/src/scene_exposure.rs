@@ -43,6 +43,46 @@ pub trait SceneExposureMetadataProvider: Send + Sync {
     fn metadata_for_type(&self, type_id: &str) -> Vec<SceneParamMetadata>;
 }
 
+/// Card-visibility curation for the P1 scene-vocabulary auto-stamping path
+/// (`docs/SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md` — card-visibility
+/// convergence follow-up). P1 stamps EVERY param on a scene-vocabulary node
+/// as a scene-panel exposure — the scene panel keeps all of them (its own
+/// section query never filters, `sections_for_doc_ids` in
+/// `manifold_app::ui_bridge::projection::scene`), but the generator's outer
+/// CARD only wants a curated performance subset. This is a pure lookup: the
+/// param stays a real, fully addressable exposure either way (OSC, Ableton,
+/// macros, drivers) — `card_visible` only gates the CARD row builder.
+///
+/// Visible iff explicitly listed here; every other vocab type/param is
+/// hidden from the card. Hand-curated explicit card params stamped OUTSIDE
+/// this path (env_mode, scene_ambient, the Animation section, a user-added
+/// graph-editor expose, …) never call this function, so they default `true`
+/// unaffected.
+pub fn card_visible_for(type_id: &str, param: &str) -> bool {
+    let visible: &[&str] = match type_id {
+        // `fov_y` lives on `node.orbit_camera` (not `node.camera_lens` —
+        // that primitive's real params are focus_distance/f_stop/
+        // shutter_angle/exposure_ev, all correctly hidden by the
+        // default-deny below).
+        "node.orbit_camera" => &["orbit", "tilt", "distance", "look_y", "fov_y"],
+        "node.light" => &[
+            "pos_x",
+            "pos_y",
+            "pos_z",
+            "intensity",
+            "color_r",
+            "color_g",
+            "color_b",
+            "cast_shadows",
+            "shadow_softness",
+        ],
+        "node.transform_3d" => &["pos_x", "pos_y", "pos_z", "rot_x", "rot_y", "rot_z"],
+        "node.bake_environment" => &["intensity", "fill"],
+        _ => &[],
+    };
+    visible.contains(&param)
+}
+
 /// Stamp card exposures for every param in `params_metadata` onto the node with
 /// document id `node_doc_id`, grouping them under `section`. Idempotent: a
 /// binding already targeting `(node_id, param)` is left untouched.
@@ -58,6 +98,7 @@ pub fn stamp_scene_node_exposures(
         return false;
     };
     let node_id = node.node_id.clone();
+    let type_id = node.type_id.clone();
     // Cloned rather than borrowed: `meta` below needs a mutable borrow of
     // `def.preset_metadata`, and the node's `params` map is small
     // (edit-time only, never on a hot path).
@@ -70,6 +111,7 @@ pub fn stamp_scene_node_exposures(
         &mut meta.bindings,
         node_doc_id,
         &node_id,
+        &type_id,
         section,
         params_metadata,
         &node_params,
@@ -110,11 +152,16 @@ fn empty_scene_preset_metadata() -> PresetMetadata {
 /// this is what keeps an importer-placed object's position/material/framing
 /// from being clobbered back to the generic primitive default at bind time
 /// (`apply_binding_defaults`, BUG-303).
+///
+/// `type_id` selects the stamped spec's `card_visible` flag via
+/// [`card_visible_for`] — the CARD-curation table, orthogonal to `node_id`
+/// (the exposure's addressing target) and `section` (its card grouping).
 pub fn stamp_scene_node_exposures_into(
     params: &mut Vec<ParamSpecDef>,
     bindings: &mut Vec<BindingDef>,
     node_doc_id: u32,
     node_id: &NodeId,
+    type_id: &str,
     section: &str,
     params_metadata: &[SceneParamMetadata],
     node_params: &BTreeMap<String, SerializedParamValue>,
@@ -177,6 +224,7 @@ pub fn stamp_scene_node_exposures_into(
             is_trigger_gate: false,
             wraps: false,
             section: Some(section.to_string()),
+            card_visible: card_visible_for(type_id, &meta.name),
         });
 
         bindings.push(BindingDef {
@@ -267,6 +315,7 @@ where
             &mut meta.bindings,
             *node_doc_id,
             node_id,
+            type_id,
             section,
             &metadata,
             node_params,
@@ -316,6 +365,40 @@ where
                 }
             }
             changed = true;
+        }
+    }
+
+    // Repair pass 2: a def stamped before the card-visibility curation
+    // (`card_visible_for`) landed carries auto exposures whose spec
+    // `card_visible` is stale — every param defaulted `true` regardless of
+    // vocabulary, so a param the curated table now hides (e.g. a transform's
+    // `scale_x`, any material param) still shows on the card. Unlike the
+    // default-value repair above, this doesn't need a stamped override on
+    // the node — `card_visible_for` is a pure function of `(type_id, param)`
+    // — so it applies to every auto exposure the vocab node has, whether or
+    // not its value diverges from the manifest default. Idempotent: a
+    // second run re-derives the same flag and writes nothing.
+    for (_, node_id, type_id, _, _) in &found {
+        let metadata = provider.metadata_for_type(type_id);
+        for meta_entry in &metadata {
+            let Some(binding) = meta.bindings.iter().find(|b| {
+                !b.user_added
+                    && matches!(
+                        &b.target,
+                        BindingTarget::Node { node_id: nid, param }
+                            if nid == node_id && param == &meta_entry.name
+                    )
+            }) else {
+                continue;
+            };
+            let binding_id = binding.id.clone();
+            let correct_visible = card_visible_for(type_id, &meta_entry.name);
+            if let Some(spec) = meta.params.iter_mut().find(|p| p.id == binding_id)
+                && spec.card_visible != correct_visible
+            {
+                spec.card_visible = correct_visible;
+                changed = true;
+            }
         }
     }
 
@@ -657,6 +740,7 @@ mod tests {
             is_trigger_gate: false,
             wraps: false,
             section: Some("Transform".to_string()),
+            card_visible: true,
         };
         let stale_binding = BindingDef {
             id: "7_pos_x".to_string(),
@@ -713,5 +797,180 @@ mod tests {
             "second migration run is a no-op once repaired"
         );
         assert_eq!(def, after_repair);
+    }
+
+    // ── Card-visibility curation (card_visible_for) ────────────────────
+
+    #[test]
+    fn card_visible_for_transform_shows_pos_and_rot_hides_scale() {
+        assert!(card_visible_for("node.transform_3d", "pos_x"));
+        assert!(card_visible_for("node.transform_3d", "pos_y"));
+        assert!(card_visible_for("node.transform_3d", "pos_z"));
+        assert!(card_visible_for("node.transform_3d", "rot_x"));
+        assert!(card_visible_for("node.transform_3d", "rot_y"));
+        assert!(card_visible_for("node.transform_3d", "rot_z"));
+        assert!(!card_visible_for("node.transform_3d", "scale_x"));
+        assert!(!card_visible_for("node.transform_3d", "scale_y"));
+        assert!(!card_visible_for("node.transform_3d", "scale_z"));
+    }
+
+    #[test]
+    fn card_visible_for_material_hides_everything() {
+        assert!(!card_visible_for("node.pbr_material", "color_r"));
+        assert!(!card_visible_for("node.pbr_material", "roughness"));
+        assert!(!card_visible_for("node.phong_material", "color_r"));
+    }
+
+    /// Stamping a transform node exposes `pos_x` (card-visible) and
+    /// `scale_x` (card-hidden) — both are real, fully addressable
+    /// exposures (the binding + spec both exist), `card_visible` only gates
+    /// which one becomes a CARD row.
+    #[test]
+    fn stamp_sets_card_visible_true_for_pos_false_for_scale() {
+        let mut def = EffectGraphDef {
+            version: 1,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            nodes: vec![make_node(7, "node.transform_3d")],
+            wires: vec![],
+        };
+
+        assert!(stamp_scene_node_exposures(
+            &mut def,
+            7,
+            "Transform",
+            &[float_meta("pos_x", "X"), float_meta("scale_x", "Scale X")],
+        ));
+
+        let meta = def.preset_metadata.as_ref().unwrap();
+        let pos_spec = meta.params.iter().find(|p| p.name == "X").unwrap();
+        assert!(pos_spec.card_visible, "pos_x stays visible on the card");
+        let scale_spec = meta.params.iter().find(|p| p.name == "Scale X").unwrap();
+        assert!(!scale_spec.card_visible, "scale_x is hidden from the card");
+
+        // Both are still real bindings — card_visible never affects addressing.
+        assert_eq!(meta.bindings.len(), 2);
+    }
+
+    /// Stamping a material node hides every param — `card_visible_for`
+    /// returns `false` for the entire vocab type.
+    #[test]
+    fn stamp_material_node_hides_all_params_from_card() {
+        let mut def = EffectGraphDef {
+            version: 1,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            nodes: vec![make_node(3, "node.pbr_material")],
+            wires: vec![],
+        };
+
+        assert!(stamp_scene_node_exposures(
+            &mut def,
+            3,
+            "Material",
+            &[float_meta("color_r", "Colour R"), float_meta("roughness", "Roughness")],
+        ));
+
+        let meta = def.preset_metadata.as_ref().unwrap();
+        assert!(meta.params.iter().all(|p| !p.card_visible), "no material param shows on the card");
+    }
+
+    /// Migration repair for `card_visible`: a def stamped before the
+    /// curation table landed carries every auto exposure at `card_visible:
+    /// true` (the universal pre-fix default) — including `scale_x`, which
+    /// the curated table now hides. `migrate_scene_exposures` must correct
+    /// it in place, independent of whether the node's stamped value
+    /// disagrees with the manifest default (unlike the BUG-303 default-
+    /// value repair, this one doesn't need a `node_params` entry). Second
+    /// run is a no-op.
+    #[test]
+    fn migrate_repairs_stale_card_visible_flag_and_is_idempotent() {
+        struct TestProvider;
+        impl SceneExposureMetadataProvider for TestProvider {
+            fn metadata_for_type(&self, type_id: &str) -> Vec<SceneParamMetadata> {
+                if type_id == "node.transform_3d" {
+                    vec![float_meta("pos_x", "X"), float_meta("scale_x", "Scale X")]
+                } else {
+                    Vec::new()
+                }
+            }
+        }
+
+        let node = make_node(7, "node.transform_3d");
+        let node_id = node.node_id.clone();
+
+        // Pre-fix def: both specs/bindings stamped `card_visible: true`
+        // (the only value that existed before this fix), even though
+        // `scale_x` should now read `false`.
+        let mut stale_pos = float_spec_default("7_pos_x", "X", "Transform");
+        stale_pos.card_visible = true;
+        let mut stale_scale = float_spec_default("7_scale_x", "Scale X", "Transform");
+        stale_scale.card_visible = true;
+
+        let stale_pos_binding = BindingDef {
+            id: "7_pos_x".to_string(),
+            label: "X".to_string(),
+            default_value: 0.5,
+            target: BindingTarget::Node { node_id: node_id.clone(), param: "pos_x".to_string() },
+            convert: ParamConvert::Float,
+            user_added: false,
+            scale: 1.0,
+            offset: 0.0,
+        };
+        let stale_scale_binding = BindingDef {
+            id: "7_scale_x".to_string(),
+            label: "Scale X".to_string(),
+            default_value: 0.5,
+            target: BindingTarget::Node { node_id: node_id.clone(), param: "scale_x".to_string() },
+            convert: ParamConvert::Float,
+            user_added: false,
+            scale: 1.0,
+            offset: 0.0,
+        };
+
+        let mut def = EffectGraphDef {
+            version: 1,
+            name: None,
+            description: None,
+            preset_metadata: Some(PresetMetadata {
+                params: vec![stale_pos, stale_scale],
+                bindings: vec![stale_pos_binding, stale_scale_binding],
+                ..empty_scene_preset_metadata()
+            }),
+            nodes: vec![node],
+            wires: vec![],
+        };
+
+        let vocab = ["node.transform_3d"];
+        assert!(migrate_scene_exposures(&mut def, &vocab, |_n| "Transform".to_string(), &TestProvider));
+
+        let meta = def.preset_metadata.as_ref().unwrap();
+        let pos_spec = meta.params.iter().find(|p| p.id == "7_pos_x").unwrap();
+        assert!(pos_spec.card_visible, "pos_x was already correct (true) and stays true");
+        let scale_spec = meta.params.iter().find(|p| p.id == "7_scale_x").unwrap();
+        assert!(!scale_spec.card_visible, "scale_x repaired from stale true to correct false");
+
+        let after_repair = def.clone();
+        assert!(
+            !migrate_scene_exposures(&mut def, &vocab, |_n| "Transform".to_string(), &TestProvider),
+            "second migration run is a no-op once repaired"
+        );
+        assert_eq!(def, after_repair);
+    }
+
+    /// Minimal `ParamSpecDef` builder for the card-visible repair test —
+    /// mirrors the shape of `stale_spec` above without repeating every field.
+    fn float_spec_default(id: &str, name: &str, section: &str) -> ParamSpecDef {
+        ParamSpecDef {
+            id: id.to_string(),
+            name: name.to_string(),
+            min: 0.0,
+            max: 1.0,
+            default_value: 0.5,
+            section: Some(section.to_string()),
+            ..Default::default()
+        }
     }
 }

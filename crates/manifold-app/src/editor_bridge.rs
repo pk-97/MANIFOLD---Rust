@@ -1975,6 +1975,7 @@ mod binding_reroute_tests {
                     is_trigger_gate: false,
                     wraps: false,
                     section: None,
+                    card_visible: true,
                 }],
                 bindings: vec![BindingDef {
                     id: "amount".into(),

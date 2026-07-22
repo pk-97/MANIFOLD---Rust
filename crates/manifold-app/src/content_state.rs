@@ -534,6 +534,7 @@ mod modulation_topology_guard_tests {
             is_trigger_gate: false,
             wraps: false,
             section: None,
+            card_visible: true,
         }
     }
 

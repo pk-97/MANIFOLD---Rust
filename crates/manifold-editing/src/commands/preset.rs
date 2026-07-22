@@ -445,6 +445,7 @@ mod tests {
             is_trigger_gate: false,
             wraps: false,
             section: None,
+            card_visible: true,
         });
         p.value = value;
         p.base = value;
@@ -483,6 +484,7 @@ mod tests {
                     is_trigger_gate: false,
                     wraps: false,
                     section: None,
+                    card_visible: true,
                 }],
                 bindings: Vec::new(),
                 skip_mode: Default::default(),

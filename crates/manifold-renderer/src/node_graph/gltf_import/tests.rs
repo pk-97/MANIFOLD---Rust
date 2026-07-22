@@ -1270,6 +1270,71 @@ fn bug303_stamped_transform_survives_preset_runtime_instantiation() {
     }
 }
 
+/// Card-visibility curation, importer level: an imported object's
+/// `transform_0.pos_x` exposure must show on the CARD (`card_visible: true`)
+/// while its `scale_x` sibling and every one of its `node.pbr_material`
+/// exposures are hidden (`card_visible: false`) — the scene panel still
+/// gets all of them (P1 stamps every param unconditionally), this only
+/// gates the generator card's row builder. Same single-material synthetic
+/// summary shape as the sibling BUG-303 test above.
+#[test]
+fn imported_object_card_visible_shows_pos_hides_scale_and_material() {
+    let summary = GltfImportSummary {
+        materials: vec![full_material(0, "Mat", 100)],
+        bbox_min: [-1.0, -1.0, -1.0],
+        bbox_max: [1.0, 1.0, 1.0],
+        camera_count: 0,
+        default_material_vertex_count: 0,
+        animations: Vec::new(),
+        animation_report_lines: Vec::new(),
+        extension_report_lines: Vec::new(),
+    };
+    let path = std::path::Path::new("/tmp/synthetic_card_visible_test.glb");
+    let (def, _report) = build_import_graph(&summary, path).expect("build import graph");
+    let meta = def.preset_metadata.as_ref().expect("import stamps preset_metadata");
+
+    let pos_x_binding = meta
+        .bindings
+        .iter()
+        .find(|b| matches!(
+            &b.target,
+            BindingTarget::Node { node_id, param } if node_id.as_str() == "transform_0" && param == "pos_x"
+        ))
+        .expect("a binding targets transform_0.pos_x");
+    let pos_x_spec = meta.params.iter().find(|p| p.id == pos_x_binding.id).unwrap();
+    assert!(pos_x_spec.card_visible, "transform pos_x must show on the card");
+
+    let scale_x_binding = meta
+        .bindings
+        .iter()
+        .find(|b| matches!(
+            &b.target,
+            BindingTarget::Node { node_id, param } if node_id.as_str() == "transform_0" && param == "scale_x"
+        ))
+        .expect("a binding targets transform_0.scale_x");
+    let scale_x_spec = meta.params.iter().find(|p| p.id == scale_x_binding.id).unwrap();
+    assert!(!scale_x_spec.card_visible, "transform scale_x must be hidden from the card");
+
+    // Excludes "ambient": the importer's shared "Ambient" fill knob is a
+    // hand-curated card_binding (object_group.rs) targeting mat_0.ambient
+    // directly — NOT a P1 auto-stamped exposure — so it's untouched by
+    // `card_visible_for` and correctly stays visible (brief's own example
+    // of a hand-curated exception).
+    let material_binding_ids: std::collections::HashSet<&str> = meta
+        .bindings
+        .iter()
+        .filter(|b| matches!(
+            &b.target,
+            BindingTarget::Node { node_id, param } if node_id.as_str() == "mat_0" && param != "ambient"
+        ))
+        .map(|b| b.id.as_str())
+        .collect();
+    assert!(!material_binding_ids.is_empty(), "the material node exposes at least one param");
+    for spec in meta.params.iter().filter(|p| material_binding_ids.contains(p.id.as_str())) {
+        assert!(!spec.card_visible, "material param '{}' must be hidden from the card", spec.name);
+    }
+}
+
 /// Regression for a duplicate-handle panic found via the IMPORT_ANYTHING_WAVE
 /// Lane W5 conformance sweep on `MetalRoughSpheresNoTextures.glb` (98
 /// materials authored `"mat_0".."mat_97"`): SCENE_OBJECT_AND_PANEL_V2's P3

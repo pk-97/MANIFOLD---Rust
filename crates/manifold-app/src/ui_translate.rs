@@ -462,6 +462,28 @@ pub fn with_param_slots<R>(params: &ParamManifest, f: impl FnOnce(&[UiParamSlot]
     })
 }
 
+/// [`with_param_slots`]'s card-value-sync sibling: skips any param whose
+/// spec is `card_visible: false` (scene-panel exposure convergence,
+/// card-visibility follow-up). `sync_card_values` (`ui_bridge::projection::
+/// cards`) is the ONLY caller — its structural card build
+/// (`cards::param_surface`) filters the SAME manifest the SAME way before
+/// turning it into rows, so this keeps the per-frame value push 1:1
+/// positional with the already-built card. The scene panel's own per-frame
+/// value sync (`sync_scene_row_values`) keeps calling the unfiltered
+/// [`with_param_slots`] — its structural build never filters either.
+pub fn with_visible_param_slots<R>(params: &ParamManifest, f: impl FnOnce(&[UiParamSlot]) -> R) -> R {
+    PARAM_SLOT_SCRATCH.with_borrow_mut(|scratch| {
+        scratch.clear();
+        scratch.extend(
+            params
+                .iter()
+                .filter(|p| p.spec.card_visible)
+                .map(param_slot_to_ui),
+        );
+        f(scratch)
+    })
+}
+
 // ── "3D Shading" relight (docs/DEPTH_RELIGHT_DESIGN.md P5b) ────────────────
 
 pub fn relight_height_from_to_ui(

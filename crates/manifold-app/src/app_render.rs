@@ -3624,6 +3624,7 @@ mod bound_node_param_drag_tests {
             is_trigger_gate: false,
             wraps: false,
             section: None,
+            card_visible: true,
         }));
         project.settings.master_effects.push(fx);
         (project, GraphTarget::Effect(effect_id))

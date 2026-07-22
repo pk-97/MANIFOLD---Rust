@@ -35,6 +35,7 @@ pub(super) fn slot(id: &str, value: f32, exposed: bool) -> manifold_core::params
         is_trigger_gate: false,
         wraps: false,
         section: None,
+        card_visible: true,
     });
     p.value = value;
     p.base = value;

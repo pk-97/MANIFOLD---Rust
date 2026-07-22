@@ -195,6 +195,7 @@ fn spec_from_binding(
         is_trigger_gate: false,
         wraps: false,
         section: None,
+        card_visible: true,
     }
 }
 
@@ -224,6 +225,7 @@ fn placeholder_spec(
         is_trigger_gate: false,
         wraps: false,
         section: None,
+        card_visible: true,
     }
 }
 

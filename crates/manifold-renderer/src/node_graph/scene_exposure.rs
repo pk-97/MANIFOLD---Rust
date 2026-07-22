@@ -222,6 +222,7 @@ mod tests {
             &mut bindings,
             1,
             &node_id,
+            "node.light",
             "Light 1",
             &light_metadata,
             &std::collections::BTreeMap::new(),

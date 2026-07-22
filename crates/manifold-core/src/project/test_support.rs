@@ -24,6 +24,7 @@ use super::*;
             is_trigger_gate: false,
             wraps: false,
             section: None,
+            card_visible: true,
         };
         let mut p = crate::params::Param::bundled(spec);
         p.value = value;
