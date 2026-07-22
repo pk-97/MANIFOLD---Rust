@@ -1,0 +1,68 @@
+# RT P0 prototype — standalone measurement binary. NOT a workspace member
+# (empty [workspace] table below opts this tree out of the repo workspace),
+# NOT product code. See BRIEF.md.
+[workspace]
+
+[package]
+name = "rt_prototype"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "rt_prototype"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 3
+
+[dependencies]
+gltf = { version = "1", features = ["import"] }
+glam = "0.29"
+png = "0.18"
+# Path dep, not a workspace member (see [workspace] above) — reused for
+# device/queue setup and the MetalFX spatial scaler (docs/AGENT_ROUTING.md-
+# style reuse-over-reimplementation). Raw MSL raytracing compile + the
+# acceleration-structure API have no manifold-gpu equivalent (WGSL-only,
+# no raytracing support), so those stay hand-rolled via objc2-metal below.
+manifold-gpu = { path = "../../crates/manifold-gpu" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+block2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSString", "NSURL", "NSError", "NSArray", "NSObjCRuntime"] }
+objc2-metal = { version = "0.3", features = [
+    "MTLDevice",
+    "MTLTexture",
+    "MTLBuffer",
+    "MTLCommandBuffer",
+    "MTLCommandQueue",
+    "MTLCommandEncoder",
+    "MTLComputeCommandEncoder",
+    "MTLRenderCommandEncoder",
+    "MTLBlitCommandEncoder",
+    "MTLComputePipeline",
+    "MTLRenderPipeline",
+    "MTLDepthStencil",
+    "MTLRenderPass",
+    "MTLSampler",
+    "MTLPixelFormat",
+    "MTLResource",
+    "MTLLibrary",
+    "MTLTypes",
+    "MTLVertexDescriptor",
+    "MTLStageInputOutputDescriptor",
+    "MTLArgument",
+    "MTLDataType",
+    "MTLAllocation",
+    "MTLCounters",
+    "MTLFence",
+    "MTLHeap",
+    "MTLAccelerationStructure",
+    "MTLAccelerationStructureCommandEncoder",
+    "MTLAccelerationStructureTypes",
+    "block2",
+] }
+objc2-metal-fx = { version = "0.3", features = [
+    "MTLFXSpatialScaler",
+] }

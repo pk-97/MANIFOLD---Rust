@@ -5,15 +5,17 @@
 using namespace metal;
 using namespace metal::raytracing;
 
-// Rust mirror: #[repr(C)], fields in this exact order. 16-byte aligned rows.
+// Rust mirror: #[repr(C)], fields in this exact order. packed_float3 is
+// mandatory: bare MSL float3 is sizeof 16 and would desync from repr(C)
+// [f32; 3] (96 B here vs 160 B unpacked — the GPU-hang bug).
 struct TraceParams {
-    float3 sun_dir;        // normalized, points FROM surface TOWARD sun
+    packed_float3 sun_dir; // normalized, points FROM surface TOWARD sun
     float  sun_cone;       // cone half-angle radians; 0.0 = hard shadows (mode A)
-    float3 sun_color;      // linear HDR
+    packed_float3 sun_color; // linear HDR
     float  ao_radius;      // world units
-    float3 env_zenith;     // linear env gradient, straight up
+    packed_float3 env_zenith; // linear env gradient, straight up
     uint   shadow_spp;
-    float3 env_horizon;
+    packed_float3 env_horizon;
     uint   ao_spp;
     uint   gi_spp;         // 0 = no GI (mode A): combine uses flat env ambient
     uint   frame_index;
@@ -23,8 +25,8 @@ struct TraceParams {
 };
 
 struct Material {          // one entry per material; indexed via mat_index[primitive_id]
-    float3 albedo;  float _p0;
-    float3 emissive; float _p1;   // linear HDR, premultiplied by intensity
+    packed_float3 albedo;  float _p0;
+    packed_float3 emissive; float _p1;   // linear HDR, premultiplied by intensity
 };
 
 // ---------- sampling helpers ----------
@@ -51,7 +53,7 @@ static float3 cone_sample(float3 dir, float half_angle, float2 u) {
     return normalize(t * (sin_t * cos(phi)) + b * (sin_t * sin(phi)) + dir * cos_t);
 }
 static float3 env_color(float3 d, constant TraceParams& p) {
-    return mix(p.env_horizon, p.env_zenith, saturate(d.y * 0.5 + 0.5));
+    return mix(float3(p.env_horizon), float3(p.env_zenith), saturate(d.y * 0.5 + 0.5));
 }
 
 // ---------- lighting trace ----------
@@ -129,7 +131,7 @@ kernel void trace_lighting(
             if (hit.type == intersection_type::none) {
                 irr += env_color(r.direction, p);
             } else {
-                irr += mats[mat_index[hit.primitive_id]].emissive;
+                irr += float3(mats[mat_index[hit.primitive_id]].emissive);
             }
         }
         irr /= float(p.gi_spp);   // cosine-weighted estimator: pdf cancels n·l and 1/pi
@@ -206,7 +208,7 @@ kernel void shade_combine(
     float  metallic = mr.r, rough = max(mr.g, 0.05);
     float2 vis_ao = sv.read(tid).rg;
     float3 irr = (p.gi_spp > 0) ? gi.read(tid).rgb
-                                : mix(p.env_horizon, p.env_zenith, 0.5) * 0.5;
+                                : mix(float3(p.env_horizon), float3(p.env_zenith), 0.5) * 0.5;
 
     float3 v = normalize(cam_pos - wp.xyz);
     float3 l = p.sun_dir;

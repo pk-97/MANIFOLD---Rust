@@ -22,9 +22,9 @@ rt_prototype --scan <path.glb> --out <dir> [--size 3840x2160] [--frames 120]
 ```
 
 Headless. For each mode (below): render `--frames` frames, write final frame as
-`<out>/mode_<x>.png` (tonemapped: ACES-approx + sRGB encode), print timing block.
-Also write `raster_only.png` (shadow_spp=0, ao_spp=0, gi_spp=0 → flat ambient) for
-context.
+`<out>/mode_<x>.png` (tonemapped: the app's actual curve, not an approximation — see
+§7 amendment below), print timing block. Also write `raster_only.png` (shadow_spp=0,
+ao_spp=0, gi_spp=0 → flat ambient) for context.
 
 ## Modes (TraceParams per mode)
 
@@ -57,8 +57,13 @@ smallest triangle count to emissive (6,2,1)×20 so D4 gets exercised. Log which.
    frame the scan bounding sphere (dist = 2.2×radius, 15° elevation, look-at center).
 4. **Compute passes** per .metal binding tables: trace_lighting → (mode B only)
    upsample_lighting → shade_combine. Threadgroups 8x8.
-5. **MetalFX spatial** (mode C): crib `crates/manifold-gpu/src/metal/metalfx.rs`
-   (copy the pattern into this crate; do NOT depend on manifold-gpu).
+5. **MetalFX spatial** (mode C): amendment (review) — DEPEND on manifold-gpu (path dep;
+   the prototype stays a standalone binary, own `[workspace]` table, no
+   manifold-renderer dependency) and reuse `manifold_gpu::GpuDevice` for device/queue
+   setup plus `manifold_gpu::metalfx::MetalFxSpatialScaler` directly, rather than
+   reimplementing either. Raw MSL raytracing compile and the acceleration-structure
+   API have no manifold-gpu equivalent, so those stay hand-rolled via objc2-metal
+   against `gpu.raw_device()`/`raw_queue()`.
 6. **Timing block** per mode, stdout, exactly:
    ```
    MODE <A|B|C> size=<WxH> trace=<WxH>
@@ -68,8 +73,13 @@ smallest triangle count to emissive (6,2,1)×20 so D4 gets exercised. Log which.
    ```
    GPU times from command-buffer GPUStartTime/GPUEndTime (one cmdbuf per pass for
    attribution), averaged over `--frames` after 10 warmup frames.
-7. **PNG writer**: `png` crate; ACES-approx tonemap + sRGB on CPU from an rgba16f
-   readback.
+7. **PNG writer**: `png` crate; on CPU from an rgba16f readback, apply the app's
+   actual tonemap curve — amendment (review): do NOT invent an ACES-approx curve,
+   replicate `aces_narkowicz_raw`/`tonemap_sdr`'s default branch from
+   `crates/manifold-renderer/src/effects/shaders/aces_tonemap_compute.wgsl` (cited
+   in `src/tonemap.rs`), then standard sRGB OETF (the app's own sRGB step happens
+   implicitly via an `_sRGB`-tagged swapchain texture, which this offline PNG
+   writer has no equivalent of — see `src/tonemap.rs` module doc for detail).
 
 ## Report back (final message)
 
