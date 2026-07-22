@@ -446,6 +446,16 @@ pub struct RenderScene {
     /// `None` = no history yet (same first-frame seeding rule as
     /// `prev_model`); reset on every `rebuild`.
     prev_view_proj: Option<[[f32; 4]; 4]>,
+    /// RAYTRACING_DESIGN.md §5.2 P4: monotonic per-node frame counter
+    /// driving the camera-jitter sequence
+    /// ([`crate::metalfx_temporal_upscaler::jitter_offset`]) when
+    /// `temporal_upscale` is on. Incremented every `evaluate()` regardless
+    /// of the param (cheap, and keeps the sequence phase stable if the
+    /// toggle flips mid-session rather than restarting from index 0).
+    /// NOT reset on `rebuild` — an object/light-count change doesn't
+    /// invalidate the jitter phase the way `prev_model`/`prev_view_proj`
+    /// history does.
+    jitter_frame_index: u32,
     dummy_texture: Option<manifold_gpu::GpuTexture>,
     sampler: Option<manifold_gpu::GpuSampler>,
     /// GLB_XFAIL_BURNDOWN_DESIGN.md D3: per-map-family material samplers
@@ -664,6 +674,7 @@ impl RenderScene {
             velocity_height: 0,
             prev_model: Vec::new(),
             prev_view_proj: None,
+            jitter_frame_index: 0,
             dummy_texture: None,
             sampler: None,
             material_samplers: AHashMap::default(),
@@ -788,6 +799,24 @@ impl RenderScene {
             ParamDef {
                 name: std::borrow::Cow::Borrowed("rt_enabled"),
                 label: "RT Enabled",
+                ty: ParamType::Bool,
+                default: ParamValue::Bool(false),
+                range: None,
+                enum_values: &[],
+            },
+            // RAYTRACING_DESIGN.md §5.2 P4: per-scene MetalFX Temporal
+            // quality-mode toggle. Default off — an untouched scene is
+            // byte-identical to before this param existed (no jitter
+            // applied to `view_proj`, `force_consumed_outputs` unaffected
+            // unless this is explicitly `true`). Wiring this into an
+            // actual reduced-res-render + upscale pass through
+            // `crate::metalfx_temporal_upscaler::MetalFxTemporalUpscaler`
+            // is follow-on work (this P4 lane builds the render-pass
+            // CONTRACT — jitter + forced G-buffer outputs — the same
+            // staged scope W0 used for `rt_enabled`).
+            ParamDef {
+                name: std::borrow::Cow::Borrowed("temporal_upscale"),
+                label: "Temporal Upscale",
                 ty: ParamType::Bool,
                 default: ParamValue::Bool(false),
                 range: None,
@@ -1990,11 +2019,19 @@ impl EffectNode for RenderScene {
     /// G-buffer. `false` (the default) returns empty, so an ordinary scene
     /// stays exactly on GBUFFER_DESIGN's lazy-by-wire rule (D1),
     /// byte-identical to before this param existed.
+    ///
+    /// §5.2 P4: `temporal_upscale == true` forces the SAME two outputs —
+    /// MetalFX Temporal consumes depth + motion vectors exactly like the
+    /// RT shadow-ray pass does, so a temporal-upscale scene needs the
+    /// stored G-buffer even when RT itself is off.
     fn force_consumed_outputs(
         &self,
         params: &crate::node_graph::effect_node::ParamValues,
     ) -> &[&'static str] {
-        if matches!(params.get("rt_enabled"), Some(ParamValue::Bool(true))) {
+        let rt_enabled = matches!(params.get("rt_enabled"), Some(ParamValue::Bool(true)));
+        let temporal_upscale =
+            matches!(params.get("temporal_upscale"), Some(ParamValue::Bool(true)));
+        if rt_enabled || temporal_upscale {
             &["depth", "velocity"]
         } else {
             &[]
@@ -2160,7 +2197,29 @@ impl EffectNode for RenderScene {
             return;
         }
         let aspect = width as f32 / height as f32;
-        let view_proj = cam.view_proj(aspect);
+        let mut view_proj = cam.view_proj(aspect);
+        // RAYTRACING_DESIGN.md §5.2 P4: subpixel camera jitter, applied
+        // only when `temporal_upscale` is on (default off = byte-identical
+        // to before this param existed). Standard TAA/MetalFX jitter
+        // technique: add `jitter * clip.w` to clip.x/clip.y so the offset
+        // survives the perspective divide as a CONSTANT NDC shift
+        // independent of a vertex's depth. Since every point has
+        // homogeneous `w = 1`, `clip.w`'s only nonzero contribution (for
+        // this camera's projection matrices — `perspective_rh`/`ortho_rh`
+        // in `camera.rs`) comes through the z-column, so it's enough to
+        // add `jitter_ndc * view_proj[2][3]` into `view_proj[2][{0,1}]`
+        // (column-major storage: `m[col][row]`, matching `mat4_mul_vec4`'s
+        // `out[row] = sum_col m[col][row] * v[col]`). `jitter_offset`
+        // returns PIXEL units at the render resolution; 1 pixel = `2.0 /
+        // dim` in NDC (NDC spans [-1, 1] across `dim` pixels).
+        self.jitter_frame_index = self.jitter_frame_index.wrapping_add(1);
+        if matches!(ctx.params.get("temporal_upscale"), Some(ParamValue::Bool(true))) {
+            let (jx_px, jy_px) =
+                crate::metalfx_temporal_upscaler::jitter_offset(self.jitter_frame_index, 8);
+            let wz = view_proj[2][3];
+            view_proj[2][0] += (jx_px * 2.0 / width as f32) * wz;
+            view_proj[2][1] += (jy_px * 2.0 / height as f32) * wz;
+        }
         // GBUFFER_DESIGN.md §2 D1: lazy — `velocity` costs nothing unless a
         // consumer actually wired it (checked once per frame, cheap: a
         // step-output lookup, not a texture allocation).
@@ -3643,12 +3702,14 @@ mod tests {
         assert!(!s.inputs().iter().any(|p| p.name == "object_2"));
         assert!(s.inputs().iter().any(|p| p.name == "light_0"));
         assert!(!s.inputs().iter().any(|p| p.name == "light_1"));
-        // Only `objects` + `lights` remain as params — per-object TRS moved
-        // to `node.scene_object`'s `transform` input
-        // (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2 D3); instances carries
-        // no per-object instance_count param either (REALTIME_3D_DESIGN.md
-        // §10 D11).
-        assert_eq!(s.parameters().len(), 2);
+        // `objects` + `lights` + `rt_enabled` (D14) + `temporal_upscale`
+        // (§5.2 P4) — per-object TRS moved to `node.scene_object`'s
+        // `transform` input (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2 D3);
+        // instances carries no per-object instance_count param either
+        // (REALTIME_3D_DESIGN.md §10 D11). Neither toggle grows with object
+        // count — this assertion is about object count, not the fixed
+        // scene-level toggle set.
+        assert_eq!(s.parameters().len(), 4);
         assert!(!s.parameters().iter().any(|p| p.name.contains("pos_x")));
     }
 
@@ -3661,7 +3722,7 @@ mod tests {
         assert!(!node.inputs().iter().any(|p| p.name == "object_5"));
         assert!(node.inputs().iter().any(|p| p.name == "light_2"));
         assert!(!node.inputs().iter().any(|p| p.name == "light_3"));
-        assert_eq!(node.parameters().len(), 2, "object count never grows the param list anymore");
+        assert_eq!(node.parameters().len(), 4, "object count never grows the fixed scene-level toggle set");
 
         node.reconfigure(&params_with(1.0, 0.0));
         assert!(!node.inputs().iter().any(|p| p.name == "object_1"));
@@ -3711,8 +3772,9 @@ mod tests {
         let node: &mut dyn EffectNode = &mut s;
         node.reconfigure(&params_with(32.0, 2.0));
         assert!(node.inputs().iter().any(|p| p.name == "object_31"));
-        // objects/lights only — object count never grows the param list.
-        assert_eq!(node.parameters().len(), 2);
+        // objects/lights + fixed scene-level toggles — object count never
+        // grows the param list.
+        assert_eq!(node.parameters().len(), 4);
     }
 
     #[test]
