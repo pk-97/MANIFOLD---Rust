@@ -372,6 +372,20 @@ pub(super) fn build_import_graph(
     let mut render_node = plain_node(render_id, "render", "node.render_scene", "render");
     render_node.params.insert("objects".to_string(), int(n as i32));
     render_node.params.insert("lights".to_string(), int(1));
+    // RAYTRACING_DESIGN.md D14/§5.2: stamp the root's curated RT subset
+    // (RENDER_SCENE_STAMPED_PARAMS) like every other vocab node above —
+    // without it a fresh import has no "Rendering" rows until a save/reload
+    // runs the load-time migration.
+    stamp_scene_node_exposures_into(
+        &mut card_params,
+        &mut card_bindings,
+        render_id,
+        &NodeId::new("render"),
+        "node.render_scene",
+        "Rendering",
+        &metadata_for_node_type("node.render_scene"),
+        &render_node.params.clone(),
+    );
 
     let mut string_bindings = Vec::new();
     let mut textures_wired = 0usize;
