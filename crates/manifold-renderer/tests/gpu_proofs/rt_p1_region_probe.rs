@@ -198,15 +198,15 @@ fn region_luma(bytes: &[u8], w: u32, h: u32, cx: f32, cy: f32, radius: i32) -> f
     sum / n as f64
 }
 
-// BUG-307 (docs/BUG_BACKLOG.md): this currently FAILS — RT-on and RT-off
+// BUG-308 (docs/BUG_BACKLOG.md): this currently FAILS — RT-on and RT-off
 // frames come out byte-identical (0.0% drop where >=30% is expected),
 // even though every CPU-side input (rt_enabled, the scene_params.w
 // shader flag, the E2a depth-snapshot draw, the RT dispatch's sun_dir/
 // depth_tex/BLAS-transforms) was verified correct via runtime prints.
 // The isolated kernel (`rt_p1_shadow.rs`) is proven correct against a
 // hand-built fixture — this is a full-scene INTEGRATION bug, root cause
-// unknown. Un-ignore once BUG-307 is fixed; that's the gate going green.
-#[ignore = "BUG-307: RT-on/RT-off render byte-identical, root cause unknown — see docs/BUG_BACKLOG.md"]
+// unknown. Un-ignore once BUG-308 is fixed; that's the gate going green.
+#[ignore = "BUG-308: RT-on/RT-off render byte-identical, root cause unknown — see docs/BUG_BACKLOG.md"]
 #[test]
 fn rt_shadow_darkens_occluded_region_and_leaves_lit_region_alone() {
     let (on_bytes, w, h) = render_readback(&scene_json(true));
