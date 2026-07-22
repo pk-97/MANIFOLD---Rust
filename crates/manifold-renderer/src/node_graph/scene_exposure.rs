@@ -39,7 +39,18 @@ const SCENE_VOCABULARY_TYPE_IDS: &[&str] = &[
     "node.push_mesh",
     "node.morph_mesh",
     "node.rotate_3d",
+    // RAYTRACING_DESIGN.md D14/§5.2: the scene-level RT toggles live on the
+    // `node.render_scene` root. Curated to the RT subset in
+    // `metadata_for_node_type` — the root node's other params (sun, env,
+    // counts) stay hand-curated exposures, never auto-stamped.
+    "node.render_scene",
 ];
+
+/// The curated `node.render_scene` auto-stamp subset (see the vocabulary
+/// entry above): the per-scene RT toggle (D14) and the MetalFX temporal
+/// quality toggle (P4). Everything else on the root node is deliberately
+/// NOT auto-stamped.
+const RENDER_SCENE_STAMPED_PARAMS: &[&str] = &["rt_enabled", "temporal_upscale"];
 
 /// Return the full param manifest for `type_id` from the primitive registry,
 /// converting `ParamDef` metadata into the crate-neutral `SceneParamMetadata`
@@ -50,6 +61,9 @@ pub fn metadata_for_node_type(type_id: &str) -> Vec<SceneParamMetadata> {
     };
     node.parameters()
         .iter()
+        .filter(|pd| {
+            type_id != "node.render_scene" || RENDER_SCENE_STAMPED_PARAMS.contains(&pd.name.as_ref())
+        })
         .map(|pd| {
             let (min, max) = pd.range.unwrap_or((0.0, 1.0));
             let default_value: manifold_core::effect_graph_def::SerializedParamValue =
@@ -121,6 +135,7 @@ fn section_name_for_node(node: &manifold_core::effect_graph_def::EffectGraphNode
         }
         "node.atmosphere" => "Atmosphere".to_string(),
         "node.bake_environment" => "Environment".to_string(),
+        "node.render_scene" => return "Rendering".to_string(),
         "node.scene_object" => "Object".to_string(),
         _ => {
             // Modifiers and anything else: use the type id suffix.
@@ -237,6 +252,60 @@ mod tests {
             vec!["Off".to_string(), "On".to_string()],
             "the stamped manifest ParamSpecDef carries the display labels"
         );
+    }
+
+    /// RAYTRACING_DESIGN.md D14/§5.2: the scene root's RT toggles surface on
+    /// the scene panel via the same vocabulary migration as every other
+    /// scene control — curated to EXACTLY the two toggles, so the root
+    /// node's dozens of other params never flood the panel.
+    #[test]
+    fn migrate_stamps_render_scene_rt_toggles_only_under_rendering_section() {
+        use std::collections::BTreeMap;
+
+        let def = EffectGraphDef {
+            version: 1,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            nodes: vec![manifold_core::effect_graph_def::EffectGraphNode {
+                id: 7,
+                node_id: NodeId::new("scene_root"),
+                type_id: "node.render_scene".to_string(),
+                handle: None,
+                params: BTreeMap::new(),
+                exposed_params: Default::default(),
+                editor_pos: None,
+                wgsl_source: None,
+                title: None,
+                output_formats: BTreeMap::new(),
+                output_canvas_scales: BTreeMap::new(),
+                group: None,
+            }],
+            wires: vec![],
+        };
+
+        let mut migrated = def.clone();
+        assert!(migrate_scene_exposures(&mut migrated));
+        let meta = migrated.preset_metadata.expect("metadata stamped");
+        let stamped: Vec<&str> = meta
+            .bindings
+            .iter()
+            .filter_map(|b| match &b.target {
+                manifold_core::effect_graph_def::BindingTarget::Node { param, .. } => {
+                    Some(param.as_str())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            stamped,
+            vec!["rt_enabled", "temporal_upscale"],
+            "exactly the two RT toggles, nothing else from the root node"
+        );
+        for spec in &meta.params {
+            assert_eq!(spec.section.as_deref(), Some("Rendering"));
+            assert!(spec.is_toggle, "{} must surface as a toggle row", spec.name);
+        }
     }
 
     #[test]
