@@ -7,7 +7,9 @@ every added/removed line that git did NOT classify as moved. For a pure-move
 commit the non-moved residue must be ZERO after the allowlist (module wiring:
 `mod`/`use`/`pub use` lines, blank lines, module doc comments, diff headers,
 and test-mod headers — `#[cfg(test)]` + `mod <name> {`/`}` — when tests are
-distributed across the new submodules, D7a).
+distributed across the new submodules (D7a, 1-old→N-new) or one inline
+`#[cfg(...)] mod X { … }` is converted to a `mod X;` declaration + sibling file
+(W3-D2, 1-to-1; the `#[path = "…"]` tests-out form included)).
 Exit code 0 = pure move proven; 1 = residue found (printed); 2 = usage.
 
 Why not `cargo public-api`: not installed, requires a lib target (manifold-app
@@ -336,6 +338,17 @@ def classify(out: str) -> tuple[dict[str, int], list[str]]:
     # applies to both the old and new file, and governs +/- inner lines of
     # either sign until a context (unchanged) closer disarms it.
     context_block = False
+    # Context-opened test-mod cfg state (W3-D4, the D-20(i) analog of
+    # pending_test_attr): a CONTEXT (unchanged) `#[cfg(test)]`/feature-gated cfg
+    # line arms the following signed `mod X {` opener as wiring. git keeps the
+    # cfg line as context (not a signed self-move) when a RUN of consecutive
+    # inline test mods is converted to `#[cfg] #[path="…"] mod X;` decls at once
+    # (P3-R's e09e078b, 11/11): git's minimal diff anchors the identical cfg
+    # lines as context and only diffs the mod lines, so pending_test_attr (which
+    # only arms off a SIGNED cfg line) never fires. Shared, not per-sign — the
+    # cfg is unchanged so it applies to both old and new. One-line lifetime: set
+    # by a context cfg line, consumed by the immediately-following signed line.
+    context_test_attr = False
     # Drifted-preamble removal-side sequence state (D-21): index of the NEXT
     # expected line in DRIFTED_PREAMBLE_SEQUENCE, or None while disarmed.
     # Removal-side only, so unlike open_block it is not per-sign. Reset
@@ -357,6 +370,7 @@ def classify(out: str) -> tuple[dict[str, int], list[str]]:
             open_block["+"] = False
             open_block["-"] = False
             context_block = False
+            context_test_attr = False
             drifted_idx = None
             pending_test_attr["+"] = False
             pending_test_attr["-"] = False
@@ -374,6 +388,7 @@ def classify(out: str) -> tuple[dict[str, int], list[str]]:
             pending_test_attr["-"] = False
             test_mod_depth["+"] = 0
             test_mod_depth["-"] = 0
+            context_test_attr = False
             if plain.startswith("@"):
                 # Hunk boundary: never content, and a context-opened block
                 # can't legitimately span one either — two unrelated use
@@ -388,6 +403,10 @@ def classify(out: str) -> tuple[dict[str, int], list[str]]:
                     context_block = False
             elif USE_OPEN.match(body):
                 context_block = True
+            # A context `#[cfg(test)]`/feature-gated cfg line arms the following
+            # signed `mod X {` opener (W3-D4); any other context line disarms it
+            # (one-line lifetime, mirroring the signed pending_test_attr arm).
+            context_test_attr = bool(CFG_TEST_ATTR.match(body))
             continue
         sign = plain[0]
         if sign == "+":
@@ -453,21 +472,63 @@ def classify(out: str) -> tuple[dict[str, int], list[str]]:
                 # opener — re-arm on it either way.
                 drifted_match = True
                 drifted_idx = 1
+        # Test-mod cfg-attr ARM — BEFORE the is_moved short-circuit (W3-D2, the
+        # same "advance ahead of is_moved" idiom the drifted-preamble tracker
+        # above uses, and for the same reason). D7a arms `pending_test_attr` off
+        # a `#[cfg(test)]`/feature-gated cfg attribute so the `mod X {` opener on
+        # the immediately-following same-sign line is recognized as wiring. In a
+        # 1-old→N-new test distribution the added cfg attrs have no removed
+        # counterpart, so they are non-moved and the old post-is_moved arming
+        # sufficed. But converting ONE inline `#[cfg(...)] mod X { … }` into a
+        # `mod X;` declaration + sibling file (W3-D2: P3-C's tests.rs/gpu_tests,
+        # P3-R's 11 #[path] tests-out decls) RE-ADDS the identical cfg line
+        # 1-to-1, and git's --color-moved pairs it as a self-move — so it would
+        # short-circuit as `moved` below before ever arming, and the following
+        # `-mod X {` opener would fall to false residue (P3-C range: exactly the
+        # two `-mod dispatch_contract_tests {` / `-mod gpu_tests {` lines).
+        # Arming here fixes the 1-to-1 case and is a no-op for the 1-to-N case.
+        # `was_test_attr` captures the PREVIOUS same-sign line's arm; the flag is
+        # then re-derived from whether THIS line is itself a cfg-test attr. A
+        # moved cfg line still arms the next line but is still bucketed as moved
+        # below (no double count); the arm survives only to the immediately-next
+        # same-sign line (any other line, moved or not, re-derives it) — so a
+        # non-`mod {` line after a cfg attr can never be smuggled in as wiring.
+        tm_body = plain[1:].strip()
+        # Consume either arm: a same-sign SIGNED cfg attr (pending_test_attr) or
+        # a shared CONTEXT cfg attr (context_test_attr, W3-D4). Both live only to
+        # this immediately-following signed line; clear the context arm now.
+        was_test_attr = pending_test_attr[sign] or context_test_attr
+        context_test_attr = False
+        pending_test_attr[sign] = bool(CFG_TEST_ATTR.match(tm_body))
+        # Use-block opener ARM — BEFORE the is_moved short-circuit (W3-D3, the
+        # use-block sibling of the test-mod fix above; same root cause). D-18
+        # arms `open_block[sign]` off a `use …::{` opener so the block's item
+        # continuation lines are recognized as wiring — but that arming lives in
+        # the ALLOW branch BELOW the is_moved short-circuit. When a directory
+        # split redistributes one combined multi-line `use path::{ … }` import
+        # across several sibling modules, the identical `use path::{` opener text
+        # recurs on both the removed (1×) and added (N×) sides, so git's
+        # --color-moved=plain flags every opener as a MOVE — it short-circuits as
+        # `moved` before ALLOW ever arms the block, and the RE-GROUPED item lines
+        # (regrouped across physical lines, so none move-pair) fall to false
+        # residue (P3-G: the manifold_core::effect_graph_def redistribution).
+        # Arming here, ahead of is_moved, opens the block regardless of the
+        # opener's moved-flag. Smuggle-proofing unchanged: only USE_ITEM-shaped
+        # lines inside an open block are waived (a real statement still falls to
+        # residue), and a hunk/context boundary still resets the block.
+        if USE_OPEN.match(tm_body):
+            open_block[sign] = True
         if is_moved:
             counts["moved"] += 1
             continue
-        # Test-mod wiring (D7a): consume any pending cfg-test attr FIRST (only
-        # a `mod {` opener on this immediately-following line may use it), then
-        # classify the header shapes. Confined to non-moved lines — moved test
-        # bodies short-circuited above, so their internal braces never reach
-        # the depth counter. A non-header line under the class is NOT claimed
-        # here and falls through to residue (smuggle-proof).
-        was_test_attr = pending_test_attr[sign]
-        pending_test_attr[sign] = False
-        tm_body = plain[1:].strip()
+        # Test-mod wiring header shapes (D7a; non-moved lines only — moved test
+        # bodies short-circuited above, so their internal braces never reach the
+        # depth counter). The cfg attr itself is wiring; a `mod X {` opener right
+        # after one opens a counted brace; a bare `}` closing a counted brace is
+        # wiring. Any other line under the class falls through to residue
+        # (smuggle-proof). `pending_test_attr` was already armed above.
         if CFG_TEST_ATTR.match(tm_body):
             counts["allowed"] += 1
-            pending_test_attr[sign] = True
             continue
         if was_test_attr and MOD_OPEN.match(tm_body):
             counts["allowed"] += 1
