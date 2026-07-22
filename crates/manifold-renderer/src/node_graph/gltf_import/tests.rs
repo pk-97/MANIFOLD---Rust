@@ -1199,6 +1199,77 @@ fn bug303_object_transform_exposure_default_matches_stamped_recenter_not_origin(
     );
 }
 
+/// BUG-303, runtime proof: the def-level test above shows the exposure
+/// DEFAULTS are seeded right; this one proves the stamped placement
+/// SURVIVES instantiation. `PresetRuntime::from_def` runs the exact code
+/// that caused the bug — `BoundGraph::new` → `apply_binding_defaults`
+/// plants every binding's `default_value` onto its target param at build —
+/// so if any exposure over a `transform_k` ever again carries a
+/// manifest-default 0.0, this assert catches the clobber at the live-graph
+/// level, where the def-level test cannot see it. Mock executor, no GPU.
+#[test]
+fn bug303_stamped_transform_survives_preset_runtime_instantiation() {
+    let mut big = full_material(0, "Big", 999); // k=0 after the largest-vertex-count-first sort
+    big.own_center = [5.0, 1.0, -0.5];
+    let mut small = full_material(1, "Small", 1); // k=1
+    small.own_center = [-3.0, 0.0, 0.0];
+
+    let summary = GltfImportSummary {
+        materials: vec![big, small],
+        bbox_min: [-4.0, -1.0, -2.0],
+        bbox_max: [8.0, 3.0, 1.0],
+        camera_count: 0,
+        default_material_vertex_count: 0,
+        animations: Vec::new(),
+        animation_report_lines: Vec::new(),
+        extension_report_lines: Vec::new(),
+    };
+    let center = [
+        (summary.bbox_min[0] + summary.bbox_max[0]) * 0.5,
+        (summary.bbox_min[1] + summary.bbox_max[1]) * 0.5,
+        (summary.bbox_min[2] + summary.bbox_max[2]) * 0.5,
+    ];
+    let expected = [
+        [5.0 - center[0], 1.0 - center[1], -0.5 - center[2]],
+        [-3.0 - center[0], 0.0 - center[1], 0.0 - center[2]],
+    ];
+    assert!(
+        expected.iter().flatten().any(|v| v.abs() > 1e-3),
+        "sanity: at least one expected component is genuinely non-origin"
+    );
+
+    let path = std::path::Path::new("/tmp/synthetic_bug303_runtime_test.glb");
+    let (def, _report) = build_import_graph(&summary, path).expect("build import graph");
+
+    let registry = PrimitiveRegistry::with_builtin();
+    let runtime =
+        PresetRuntime::from_def(def, &registry, None).expect("instantiate imported def");
+
+    for (k, exp) in expected.iter().enumerate() {
+        let node_id = manifold_core::NodeId::new(format!("transform_{k}"));
+        let inst = runtime
+            .graph
+            .instance_by_node_id(&node_id)
+            .unwrap_or_else(|| panic!("transform_{k} present in the live graph"));
+        for (axis, (param, want)) in ["pos_x", "pos_y", "pos_z"].iter().zip(exp).enumerate() {
+            let got = runtime
+                .graph
+                .get_node(inst)
+                .and_then(|n| n.params.get(*param).cloned())
+                .unwrap_or_else(|| panic!("transform_{k}.{param} readable post-build"));
+            let crate::node_graph::parameters::ParamValue::Float(got) = got else {
+                panic!("transform_{k}.{param} is a Float param, got {got:?}");
+            };
+            assert!(
+                (got - want).abs() < 1e-5,
+                "transform_{k}.{param} must survive instantiation at {want} \
+                 (own_center - center, axis {axis}); got {got} — 0.0 here means \
+                 apply_binding_defaults clobbered the stamped placement again (BUG-303)"
+            );
+        }
+    }
+}
+
 /// Regression for a duplicate-handle panic found via the IMPORT_ANYTHING_WAVE
 /// Lane W5 conformance sweep on `MetalRoughSpheresNoTextures.glb` (98
 /// materials authored `"mat_0".."mat_97"`): SCENE_OBJECT_AND_PANEL_V2's P3
