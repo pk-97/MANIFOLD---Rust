@@ -50,6 +50,8 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-305 | **gpu-render-tests-overwrite-tracked-goldens** | gpu-proofs gltf render tests write their rendered frames OVER the tracked golden PNGs (tests/fixtures/gltf/goldens/) — every gpu run dirties the tree; in a blank-render environment (BUG-304) they poison the goldens with black frames unless reset. Write to target/ and compare instead. Found at Wave-3 P3-Z. | OPEN |
+| BUG-304 | **gpu-proofs-gltf-renders-fail-preexisting** | 2 of 1829 gpu-proofs fail: skinned poses render ALL-BLACK (Fox/CesiumMan — blank headless render, not a skinning no-op) and bug221 layout diff 0.0157 > threshold. CONFIRMED pre-existing: identical failures on pre-Wave-3 code (eed0eaeb) in the same env; Wave-3 only pure-moved these tests. Suspects: headless GPU env (post-reboot?) or an older render regression these proofs never caught because full gpu-proofs runs are rare. | OPEN |
 | BUG-303 | **gltf-import-objects-all-at-origin** | Scene/glTF import places every object at 0,0,0 instead of authored transforms (Peter, in-app). Suspects: transform propagation in gltf_import/gltf_load or drop at scene instantiation. Fix in the graph/import path, never baked into meshes. | OPEN |
 | BUG-302 | **ea-arm-buttons-nameless-to-harness** | EnvelopeBtn/AudioBtn carry no queryable name while sibling DriverBtn does (WS3 residue, BUG-239 family); flows can't drive E/A arming. Found by the D9 catalog's first run. Fix ~2 lines + catalog self-test symmetry assert; batch with VERIFICATION_INFRA. | OPEN |
 | BUG-301 | **three-panelactions-dispatch-to-nothing** | AudioSetupDeviceClicked/AudioSendChannelClicked/OpenAbletonPickerForParam emit but fall through to unhandled() — dead wire traffic or silently missing features; parity-preserved through P-B/P-D/P-I, needs git archaeology then delete-or-wire. Rider: re-audit the 12 non-trio partials. | OPEN |
@@ -202,6 +204,20 @@ workflow journal at
 System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md).
 
 ## Open
+
+### BUG-305 — gpu-proofs gltf render tests overwrite tracked golden PNGs in place
+**Status:** OPEN (found 2026-07-22, Wave-3 P3-Z — the wave's single gpu-proofs run left 24 modified goldens in the worktree; reset, not committed).
+**Severity:** MEDIUM (test-infra hazard): any gpu-proofs run dirties the tree; combined with BUG-304's blank renders, an unnoticed commit would poison the goldens with black frames and make the render proofs self-consistent-but-wrong forever after.
+**Symptom:** after `cargo test -p manifold-renderer --features gpu-proofs`, `git status` shows `tests/fixtures/gltf/goldens/*.png` modified (fox_skin, cesiumman_skin, box_animated, morph goldens, …).
+**Root cause:** the render tests write the frame they rendered to the golden's own path (write-then-compare or refresh-on-run), instead of writing to `target/` and comparing read-only.
+**Fix shape:** goldens are read-only inputs — render to `target/mesh-snap/` (some tests already do), compare bytes/PNG-diff against the tracked golden, never write the fixture path; optional `UPDATE_GOLDENS=1` env gate for deliberate regeneration. One sweep over the gltf gpu test helpers.
+
+### BUG-304 — two gpu-proofs gltf render tests fail (pre-existing): skinned renders all-black; bug221 layout diff over threshold
+**Status:** OPEN (found 2026-07-22 at Wave-3 P3-Z — the wave's single gpu-proofs execution; the previous full gpu-proofs run predates these observations).
+**Severity:** MED-HIGH if the blank render reproduces in the app (skinned imports would show nothing on stage); LOW if it's a headless-env artifact — undetermined, needs an in-app look.
+**Symptom:** `skinned_characters_render_four_visibly_distinct_deformed_poses` — Fox.glb frames at progress 0 and 0.25 are byte-identical AND entirely zeros (blank render, not merely non-deforming); `bug221_layout_preserved_before_and_after_fix` — mean_abs_diff 0.015743 over threshold (artifacts in target/mesh-snap/). Suite otherwise 1827/1829.
+**Root cause:** unknown. CONFIRMED pre-existing by a controlled run on pre-Wave-3 code (eed0eaeb, fixtures md5-identical, same machine/session): identical failures — Wave 3 (pure moves + byte-gated changes + def-equivalence-gated tables) is exonerated by observation, not inference. Suspects: headless GPU environment (machine hard-crashed and rebooted earlier today — first suspect), or an older skinned-path/render regression that no one caught because full gpu-proofs runs are infrequent.
+**Fix shape:** first observe in-app (load Fox/CesiumMan import, look — L2); if the app renders fine, chase the headless path (device/surface init in the gpu test harness); if the app is also black, bisect main history with the two tests. Blocked-on-nothing; owner: next gpu session.
 
 ### BUG-303 — glTF/scene import places all objects at 0,0,0 instead of their authored locations
 **Status:** OPEN · reported by Peter 2026-07-22 (in-app observation)
