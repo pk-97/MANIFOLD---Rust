@@ -1,7 +1,7 @@
 use crate::node_graph::ports::PortType;
 
 use super::types::{is_texture_input, CodegenError};
-use super::{generate_standalone_buffer, generate_standalone_ext, generate_standalone_resolve};
+use super::standalone::{generate_standalone_buffer, generate_standalone_ext, generate_standalone_resolve};
 
 
 
