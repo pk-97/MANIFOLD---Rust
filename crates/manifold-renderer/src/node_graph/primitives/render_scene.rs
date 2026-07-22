@@ -169,9 +169,12 @@ const AO_SAMPLES_PER_PIXEL: u32 = 4;
 /// hero asset; Peter's morning gate tunes per scene.
 const AO_RADIUS_WORLD_UNITS: f32 = 0.5;
 /// RAYTRACING_DESIGN.md §5.2 P2: flat ambient/env color for the
-/// demodulated-irradiance term = `atmosphere.ambient_tint * this scale`.
-/// Committed range 0.05–0.5 (fraction of the tint's own [0,1] magnitude);
-/// Peter's morning gate tunes the exact ambient intensity.
+/// demodulated-irradiance term = `atmosphere.ambient_tint * this scale *
+/// scene material ambient` (the card's "Ambient" knob — Peter 2026-07-23:
+/// no separate RT ambient control; knob at 0 = true black with RT on).
+/// This constant is the knob-at-1 ceiling. Committed range 0.05–0.5
+/// (fraction of the tint's own [0,1] magnitude); Peter's morning gate
+/// tunes the exact ambient intensity.
 const AMBIENT_IRRADIANCE_SCALE: f32 = 0.15;
 /// RAYTRACING_DESIGN.md §5.2 P2/D3: temporal irradiance accumulation
 /// blend weight (fraction of THIS frame folded into history each frame —
@@ -3425,6 +3428,18 @@ impl EffectNode for RenderScene {
                 };
                 let half_w = width.div_ceil(2).max(1);
                 let half_h = height.div_ceil(2).max(1);
+                // The RT ambient floor rides the SAME material `ambient` the
+                // raster path shades with (`scene_params[1]`, fanned out to
+                // every material by the card's one "Ambient" knob) — knob at
+                // 0 must mean true black on BOTH paths, so a lights-out cue
+                // works with RT on. Max across draws: per-material divergence
+                // in the graph keeps a floor if ANY material asks for one;
+                // `AMBIENT_IRRADIANCE_SCALE` is the knob-at-1 ceiling, not a
+                // floor.
+                let scene_ambient = shadow_caster_draws
+                    .iter()
+                    .map(|d| d.uniforms.scene_params[1])
+                    .fold(0.0f32, f32::max);
                 let params = manifold_gpu::raytrace::ShadowRayParams::new(
                     sun_dir,
                     SOFT_SHADOW_CONE_RADIANS,
@@ -3437,9 +3452,9 @@ impl EffectNode for RenderScene {
                     GI_SAMPLES_PER_PIXEL,
                     [sun.color[0], sun.color[1], sun.color[2]],
                     [
-                        atmosphere.ambient_tint[0] * AMBIENT_IRRADIANCE_SCALE,
-                        atmosphere.ambient_tint[1] * AMBIENT_IRRADIANCE_SCALE,
-                        atmosphere.ambient_tint[2] * AMBIENT_IRRADIANCE_SCALE,
+                        atmosphere.ambient_tint[0] * AMBIENT_IRRADIANCE_SCALE * scene_ambient,
+                        atmosphere.ambient_tint[1] * AMBIENT_IRRADIANCE_SCALE * scene_ambient,
+                        atmosphere.ambient_tint[2] * AMBIENT_IRRADIANCE_SCALE * scene_ambient,
                     ],
                     inv_view_proj,
                 );
