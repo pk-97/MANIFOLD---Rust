@@ -49,6 +49,10 @@ use crate::node_graph::primitives::DEFAULT_NEAR as CAMERA_NEAR_DEFAULT;
 use crate::node_graph::primitives::gltf_anim_shared::LOOP_MODES;
 use crate::node_graph::primitives::render_scene::OBJECT_SAFETY_MAX;
 
+mod report;
+
+pub use report::ImportReport;
+
 /// Stable identity for the one outer-card text config every imported
 /// preset carries: the source `.glb`/`.gltf` path.
 const MODEL_FILE_PARAM_ID: &str = "model_file";
@@ -57,36 +61,6 @@ const MODEL_FILE_PARAM_ID: &str = "model_file";
 /// .glb's path). Empty by default; `node.hdri_source` reads an empty path
 /// as "nothing decoded" and clears its output to black.
 const HDRI_FILE_PARAM_ID: &str = "hdri_file";
-
-/// What the assembler did, for the caller (importer UI, tests) to report
-/// or warn on. Not part of the graph itself.
-#[derive(Debug, Clone)]
-pub struct ImportReport {
-    /// Distinct materials with geometry, as parsed. Import is 1:1
-    /// (GLB_CONFORMANCE_DESIGN.md D4) — always equal to `object_count`.
-    pub material_count: usize,
-    /// Objects wired into `node.render_scene` — always equal to
-    /// `material_count`; nothing is ever dropped for exceeding a count
-    /// (`assemble_import_graph` errors instead, see [`OBJECT_SAFETY_MAX`]).
-    pub object_count: usize,
-    /// How many objects got a `node.gltf_texture_source` → `base_color_map_N` wire.
-    pub textures_wired: usize,
-    /// Triangle-list vertices belonging to glTF's unassigned default
-    /// material — imported as a real object since BUG-171 (mirrors
-    /// [`gltf_load::GltfImportSummary::default_material_vertex_count`]).
-    pub default_material_vertex_count: u32,
-    /// Always `true` today — the assembler always synthesizes a framing
-    /// camera (the glb's own embedded cameras, if any, are not yet
-    /// consumed). Kept as a field so a future embedded-camera path has
-    /// somewhere to report `false`.
-    pub camera_synthesized: bool,
-    /// D9 doctrine ("every import produces a report") applied to the
-    /// per-material features F-P4 parses but cannot yet map: clearcoat
-    /// (Deferred #1), transmission (report-only until F-P5), and BLEND
-    /// materials downgraded to Mask cutout (the F-P5 stopgap). One line per
-    /// occurrence, naming the material. Never silently dropped.
-    pub report_lines: Vec<String>,
-}
 
 /// Build an [`EffectGraphNode`] with the given identity and every other
 /// field at its "ordinary node" default. `EffectGraphNode` doesn't derive
