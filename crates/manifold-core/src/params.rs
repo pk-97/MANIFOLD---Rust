@@ -106,6 +106,15 @@ impl Param {
     pub fn wraps(&self) -> bool {
         self.spec.wraps
     }
+
+    /// True when this param should appear on the outer CARD (scene-panel
+    /// exposure convergence). Reads straight off `spec.card_visible` (D1:
+    /// the spec is the single authority) — the scene panel's own section
+    /// query ignores this and always keeps every stamped param.
+    #[inline]
+    pub fn card_visible(&self) -> bool {
+        self.spec.card_visible
+    }
 }
 
 /// Constrain a modulation-computed value to a param's `[min, max]` range —
@@ -273,6 +282,7 @@ mod tests {
             is_trigger_gate: false,
             wraps: false,
             section: None,
+            card_visible: true,
         }
     }
 

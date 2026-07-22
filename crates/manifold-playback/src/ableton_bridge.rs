@@ -2809,6 +2809,7 @@ mod tests {
             is_trigger_gate: false,
             wraps: false,
             section: None,
+            card_visible: true,
         }
     }
 

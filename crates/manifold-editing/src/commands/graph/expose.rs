@@ -1103,6 +1103,7 @@ mod tests {
                         is_trigger_gate: false,
                         wraps: false,
                         section: None,
+                        card_visible: true,
                     },
                     ParamSpecDef {
                         id: "scale".into(),
@@ -1122,6 +1123,7 @@ mod tests {
                         is_trigger_gate: false,
                         wraps: false,
                         section: None,
+                        card_visible: true,
                     },
                 ],
                 bindings: vec![
@@ -1367,6 +1369,7 @@ mod tests {
                         is_trigger_gate: false,
                         wraps: false,
                         section: None,
+                        card_visible: true,
                     },
                     ParamSpecDef {
                         id: "user.render.animate.1".into(),
@@ -1386,6 +1389,7 @@ mod tests {
                         is_trigger_gate: false,
                         wraps: false,
                         section: None,
+                        card_visible: true,
                     },
                 ],
                 bindings: vec![
@@ -1816,6 +1820,7 @@ mod tests {
                     is_trigger_gate: false,
                     wraps: false,
                     section: None,
+                    card_visible: true,
                 }],
                 bindings: vec![BindingDef {
                     id: "pattern".into(),

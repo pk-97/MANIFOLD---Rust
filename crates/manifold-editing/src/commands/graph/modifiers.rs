@@ -328,6 +328,7 @@ impl Command for InsertMeshModifierCommand {
                 &mut meta.bindings,
                 new_id,
                 &new_node_id,
+                &type_id,
                 &section,
                 &self.modifier_metadata,
                 &BTreeMap::new(),

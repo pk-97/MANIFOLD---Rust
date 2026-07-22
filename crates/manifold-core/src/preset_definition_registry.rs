@@ -736,6 +736,7 @@ mod tests {
             is_trigger_gate: true,
             wraps: true,
             section: Some("Camera".to_string()),
+            card_visible: true,
         };
         let seeded = RegistryParamDef {
             spec: spec.clone(),
@@ -847,6 +848,7 @@ mod tests {
                 is_trigger_gate: false,
                 wraps: false,
                 section: None,
+                card_visible: true,
             }],
             bindings: vec![BindingDef {
                 id: "amount".to_string(),
@@ -941,6 +943,7 @@ mod tests {
                 is_trigger_gate: false,
                 wraps: false,
                 section: None,
+                card_visible: true,
             }],
             bindings: Vec::new(),
             skip_mode: SkipModeDef::default(),

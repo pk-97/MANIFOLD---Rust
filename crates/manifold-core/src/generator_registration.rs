@@ -189,6 +189,7 @@ impl ParamSpec {
                 is_angle: false,
                 wraps: false,
                 section: None,
+                card_visible: true,
             },
             // Same story for range contracts: this compile-time inventory
             // struct describes an outer card param, which never carries a

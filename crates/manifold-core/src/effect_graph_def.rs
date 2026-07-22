@@ -445,7 +445,7 @@ fn default_available() -> bool {
 /// Differs in using owned `String` for compatibility with serde
 /// deserialization (the renderer-side `ParamSpec` uses `&'static str`
 /// for compile-time inventory submissions).
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ParamSpecDef {
     pub id: String,
@@ -521,6 +521,55 @@ pub struct ParamSpecDef {
     /// (the `is_angle` precedent above).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub section: Option<String>,
+    /// Scene-panel exposure convergence: whether this param appears on the
+    /// generator/effect outer CARD. The scene panel's own section query
+    /// (`sections_for_doc_ids`) reads exposure metadata independently of this
+    /// flag and always keeps every stamped param — this only gates the CARD
+    /// row builder (`docs/SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md`).
+    /// `true` by default (every hand-curated card param stays visible);
+    /// scene-vocabulary stamping (`scene_exposure::card_visible_for`) is the
+    /// one place that sets this `false` for the params a card shouldn't
+    /// clutter with (scale, materials, atmosphere, …). Skipped on serialize
+    /// when `true` so every existing preset/project stays byte-identical.
+    #[serde(default = "default_card_visible", skip_serializing_if = "is_true")]
+    pub card_visible: bool,
+}
+
+fn default_card_visible() -> bool {
+    true
+}
+
+fn is_true(b: &bool) -> bool {
+    *b
+}
+
+/// Manual [`Default`] (not derived): every OTHER field's zero value is the
+/// right default, but `card_visible` must default `true` — a derived
+/// `bool::default()` would be `false`, silently hiding every hand-authored
+/// preset param that builds its spec via `..Default::default()`.
+impl Default for ParamSpecDef {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: String::new(),
+            min: 0.0,
+            max: 0.0,
+            default_value: 0.0,
+            whole_numbers: false,
+            is_toggle: false,
+            is_trigger: false,
+            value_labels: Vec::new(),
+            format_string: None,
+            osc_suffix: String::new(),
+            curve: crate::macro_bank::MacroCurve::default(),
+            invert: false,
+            is_angle: false,
+            is_trigger_gate: false,
+            wraps: false,
+            section: None,
+            card_visible: true,
+        }
+    }
 }
 
 /// JSON-wire shape mirroring `manifold_renderer::node_graph::ParamBinding`.
@@ -727,6 +776,7 @@ mod tests {
             is_trigger_gate: false,
             wraps: false,
             section: None,
+            card_visible: true,
         }
     }
 
@@ -737,6 +787,31 @@ mod tests {
         let json = serde_json::to_string(&sample_param_spec()).unwrap();
         assert!(!json.contains("curve"), "Linear curve must be skipped: {json}");
         assert!(!json.contains("invert"), "false invert must be skipped: {json}");
+    }
+
+    /// `card_visible` must be skipped when `true` (every existing preset's
+    /// JSON stays byte-identical) and must deserialize back to `true` on a
+    /// document written before the field existed.
+    #[test]
+    fn param_spec_card_visible_defaults_true_and_is_skipped_on_serialize() {
+        let json = serde_json::to_string(&sample_param_spec()).unwrap();
+        assert!(!json.contains("cardVisible"), "true cardVisible must be skipped: {json}");
+
+        // A pre-field JSON document (no `cardVisible` key at all) must still
+        // deserialize with `card_visible: true`.
+        let pre_field_json = r#"{"id":"speed","name":"Speed","min":0.1,"max":10.0,"defaultValue":1.0}"#;
+        let back: ParamSpecDef = serde_json::from_str(pre_field_json).unwrap();
+        assert!(back.card_visible, "missing cardVisible key must default to true");
+    }
+
+    #[test]
+    fn param_spec_card_visible_false_round_trips() {
+        let mut p = sample_param_spec();
+        p.card_visible = false;
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(json.contains("\"cardVisible\":false"), "{json}");
+        let back: ParamSpecDef = serde_json::from_str(&json).unwrap();
+        assert!(!back.card_visible);
     }
 
     #[test]
@@ -1067,6 +1142,7 @@ mod tests {
                 is_trigger_gate: false,
                 wraps: false,
                 section: None,
+                card_visible: true,
             }],
             bindings: vec![BindingDef {
                 id: "amount".to_string(),

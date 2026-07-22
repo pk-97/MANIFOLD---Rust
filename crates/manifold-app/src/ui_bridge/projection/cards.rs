@@ -41,7 +41,7 @@ pub fn sync_card_values(ui: &mut UIRoot, project: &Project, active_layer: Option
                 manifold_core::preset_type_registry::display_name(effect.effect_type()),
             );
             card.sync_enabled(tree, effect.enabled);
-            crate::ui_translate::with_param_slots(&effect.params, |slots| {
+            crate::ui_translate::with_visible_param_slots(&effect.params, |slots| {
                 card.sync_values(tree, slots)
             });
         }
@@ -59,7 +59,7 @@ pub fn sync_card_values(ui: &mut UIRoot, project: &Project, active_layer: Option
                     manifold_core::preset_type_registry::display_name(effect.effect_type()),
                 );
                 card.sync_enabled(tree, effect.enabled);
-                crate::ui_translate::with_param_slots(&effect.params, |slots| {
+                crate::ui_translate::with_visible_param_slots(&effect.params, |slots| {
                     card.sync_values(tree, slots)
                 });
             }
@@ -76,7 +76,7 @@ pub fn sync_card_values(ui: &mut UIRoot, project: &Project, active_layer: Option
             tree,
             manifold_core::preset_type_registry::display_name(gp_state.generator_type()),
         );
-        crate::ui_translate::with_param_slots(&gp_state.params, |slots| {
+        crate::ui_translate::with_visible_param_slots(&gp_state.params, |slots| {
             gp.sync_values(tree, slots)
         });
     }
@@ -219,11 +219,27 @@ fn param_surface(
     // result; it does not re-derive the authority chain or re-read a
     // per-instance graph override live (that override, `meta.params`, is a
     // save-time-derived shadow now — D12 — not a second live source).
-    let row_index_of: ahash::AHashMap<String, usize> =
-        inst.params.iter().enumerate().map(|(i, p)| (p.id().to_string(), i)).collect();
+    //
+    // `card_visible` filter (scene-panel exposure convergence, card-
+    // visibility follow-up): a scene-vocabulary auto-stamped param the
+    // curated table hides (`scene_exposure::card_visible_for`) is skipped
+    // here — it stays a real, fully addressable manifest entry (OSC,
+    // Ableton, macros, drivers all still resolve it by id), it just never
+    // becomes a CARD row. The scene panel's own row builder reads the
+    // manifest independently and never applies this filter. Filtering
+    // BEFORE building `row_index_of` keeps it 1:1 positional with `rows` —
+    // `sync_card_values`'s per-frame value push
+    // (`ui_translate::with_visible_param_slots`) applies the SAME filter to
+    // stay aligned; drifting the two would silently push the wrong param's
+    // value onto a row (`ParamCardPanel::sync_param_value` indexes `self.rows`
+    // by raw position, `.take(self.rows.len())`, no id check).
+    let visible_params: Vec<&manifold_core::params::Param> =
+        inst.params.iter().filter(|p| p.spec.card_visible).collect();
 
-    let mut rows: Vec<ParamRow> = inst
-        .params
+    let row_index_of: ahash::AHashMap<String, usize> =
+        visible_params.iter().enumerate().map(|(i, p)| (p.id().to_string(), i)).collect();
+
+    let mut rows: Vec<ParamRow> = visible_params
         .iter()
         .map(|p| {
             let id = p.id().to_string();
@@ -498,6 +514,7 @@ mod param_label_tests {
             is_trigger_gate: false,
             wraps: false,
             section: None,
+            card_visible: true,
         }
     }
 
@@ -561,6 +578,7 @@ mod sync_card_values_tests {
             is_trigger_gate: false,
             wraps: false,
             section: None,
+            card_visible: true,
         }
     }
 

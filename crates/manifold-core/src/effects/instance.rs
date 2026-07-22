@@ -809,6 +809,10 @@ impl PresetInstance {
             // by the expose command (`mirror_effect_side`) and carried on
             // the `UserParamBinding` this fn receives.
             section: binding.section.clone(),
+            // A user-added expose (the graph editor's checkbox) always shows
+            // on the card — `card_visible_for`'s curated hiding only applies
+            // to the P1 scene-vocabulary auto-stamping path.
+            card_visible: true,
         };
 
         // The per-instance graph is the single binding-storage list.
@@ -997,6 +1001,7 @@ impl PresetInstance {
             // misleading `None` sitting next to a real section value on the
             // manifest entry `self.params.insert_at` restores below.
             section: binding.section.clone(),
+            card_visible: true,
         });
 
         // Re-insert the manifest entry at its original display position among
@@ -1757,6 +1762,7 @@ mod tests {
                     is_trigger_gate: false,
                     wraps: false,
                     section: None,
+                    card_visible: true,
                 }],
                 bindings: vec![BindingDef {
                     id: "amount".to_string(),

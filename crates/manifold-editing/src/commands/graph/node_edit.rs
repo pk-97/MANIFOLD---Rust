@@ -1236,6 +1236,7 @@ mod tests {
                 is_trigger_gate: false,
                 wraps: false,
                 section: None,
+                card_visible: true,
             }],
             bindings: vec![BindingDef {
                 id: "amount".into(),
@@ -1370,6 +1371,7 @@ mod tests {
                 is_trigger_gate: false,
                 wraps: false,
                 section: None,
+                card_visible: true,
             }],
             // Bound to the NESTED node's id ("uv_transform"), not the group
             // container's id ("the_group") — this is the exact configuration
