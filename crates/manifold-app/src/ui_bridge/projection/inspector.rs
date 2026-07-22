@@ -751,6 +751,12 @@ pub fn sync_inspector_data(
                             let world_sections = {
                                 use manifold_renderer::node_graph::scene_vm::{AtmosphereVm, EnvironmentVm};
                                 let mut ids = Vec::new();
+                                // RAYTRACING_DESIGN.md D14/§5.2: the scene
+                                // root's stamped "Rendering" section (RT
+                                // Enabled / Temporal Upscale) surfaces under
+                                // World — scene-global toggles, and World is
+                                // the panel's scene-global item.
+                                ids.push(vm.scene_root_node_id);
                                 match &vm.environment {
                                     EnvironmentVm::Importer(e) => ids.push(e.bake_node_id),
                                     EnvironmentVm::Bare(e) => ids.push(e.node_doc_id),
