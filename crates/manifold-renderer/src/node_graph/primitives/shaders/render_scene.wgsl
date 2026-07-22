@@ -336,8 +336,37 @@ const PREFILTER_MAX_MIP: f32 = 5.0;
 // `textureLoad` at the exact fragment pixel (already native-res,
 // depth-aware-upsampled — no filtering) instead of the shadow-map path
 // when `u.scene_params.w > 0.5`. Always bound (ABI-stub discipline); a
-// 1x1 dummy when RT isn't active this frame.
+// 1x1 dummy when RT isn't active this frame. RAYTRACING_DESIGN.md §5.2
+// P2 widened the underlying GPU texture format (Rust-side) to carry a
+// SECOND channel: g = AO [0,1] — same binding, same texture, no WGSL
+// declaration change needed (an unwired/R32Float dummy simply reads 0.0
+// in .g, which `rt_ao_factor` below never samples since `scene_params.w`
+// gates it the same way `shadow_factor` gates .r).
 @group(0) @binding(41) var rt_shadow_mask: texture_2d<f32>;
+// RAYTRACING_DESIGN.md §5.2 P2/D3: full-res, temporally-accumulated
+// demodulated irradiance (no albedo folded in — sun*ndotl*vis +
+// ambient*ao), written by the SAME half-res dispatch's
+// `accumulate_irradiance` step. Always bound (ABI-stub discipline); a
+// 1x1 dummy when RT isn't active this frame.
+@group(0) @binding(42) var rt_irradiance_mask: texture_2d<f32>;
+
+// RAYTRACING_DESIGN.md §5.2 P2: RT ambient/AO term. Replaces the flat
+// `scene_params.y` ambient scalar with the ray-traced AO-occluded,
+// temporally-accumulated demodulated irradiance when RT is on — this IS
+// the structural replacement for a downstream `node.ssao_gtao` Multiply
+// node (RAYTRACING_DESIGN.md §5.2 P2's "GTAO term replaced, not
+// paralleled" deliverable): an RT-enabled `render_scene` never needs
+// (and should not be wired to) a separate GTAO node, since real
+// ray-traced occlusion is already folded in here. Falls back to the
+// original flat-ambient formula when RT is off — byte-identical to
+// before this function existed (I2/I5).
+fn rt_or_flat_ambient(albedo_rgb: vec3<f32>, frag_xy: vec2<f32>) -> vec3<f32> {
+    if u.scene_params.w > 0.5 {
+        let irr = textureLoad(rt_irradiance_mask, vec2<i32>(frag_xy), 0).rgb;
+        return albedo_rgb * irr;
+    }
+    return albedo_rgb * u.scene_params.y * u.ambient_tint.rgb;
+}
 
 // Decoded once per fragment (uniform per-draw-call data, cheap): bit i of
 // `pbr_specular_tint.w` = (specular_map, specular_color_map,
@@ -1117,7 +1146,7 @@ fn fs_phong(in: VsOut) -> @location(0) vec4<f32> {
         let vis = shadow_factor(in.world_pos, l_col.w, in.clip_pos.xy);
         lit = lit + (diffuse + spec) * l_col.rgb * l_dir.w * vis;
     }
-    let ambient = albedo.rgb * u.scene_params.y * u.ambient_tint.rgb;
+    let ambient = rt_or_flat_ambient(albedo.rgb, in.clip_pos.xy);
     // exp2(exposure_ev) — CAMERA_AND_LENS_DESIGN.md §2 D5, see fs_unlit.
     let rgb = apply_fog(lit + ambient + resolve_emissive(in.uv), in.world_pos) * exp2(u.scene_params.z);
     return vec4<f32>(rgb, albedo.a);
@@ -1556,7 +1585,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
 
     let ibl = specular_ibl + diffuse_ibl;
 
-    let ambient = albedo.rgb * u.scene_params.y * u.ambient_tint.rgb;
+    let ambient = rt_or_flat_ambient(albedo.rgb, in.clip_pos.xy);
 
     // GLB_CONFORMANCE_DESIGN.md G-P5/D5: clearcoat energy compensation.
     // Khronos KHR_materials_clearcoat's normative layering equation —
@@ -1656,7 +1685,7 @@ fn fs_cel(in: VsOut) -> @location(0) vec4<f32> {
         let vis = shadow_factor(in.world_pos, l_col.w, in.clip_pos.xy);
         lit = lit + albedo.rgb * level * l_col.rgb * l_dir.w * vis;
     }
-    let ambient = albedo.rgb * u.scene_params.y * u.ambient_tint.rgb;
+    let ambient = rt_or_flat_ambient(albedo.rgb, in.clip_pos.xy);
     // exp2(exposure_ev) — CAMERA_AND_LENS_DESIGN.md §2 D5, see fs_unlit.
     let rgb = apply_fog(lit + ambient + resolve_emissive(in.uv), in.world_pos) * exp2(u.scene_params.z);
     return vec4<f32>(rgb, albedo.a);

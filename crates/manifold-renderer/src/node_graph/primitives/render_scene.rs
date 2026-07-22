@@ -75,6 +75,7 @@ use crate::node_graph::camera::Camera;
 use crate::node_graph::effect_node::{
     EffectNode, EffectNodeContext, EffectNodeType, ParamValues,
 };
+use crate::node_graph::temporal_reset::TemporalResetDetector;
 use crate::node_graph::material::{AlphaMode, MapSamplerDesc, Material, MaterialKind};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
@@ -149,6 +150,37 @@ const FRAMES_IN_FLIGHT: usize = 3;
 /// (not a struct with a mat4 member) so the storage layout is unambiguous
 /// through SPIRV-Cross → MSL — same discipline as the light buffer.
 const CASTER_VEC4_STRIDE: usize = 5;
+
+/// RAYTRACING_DESIGN.md §5.2 P2: soft-shadow area-light cone half-angle,
+/// radians (`ShadowRayParams::sun_cone`). `0.0` was P1's hard-shadow
+/// value. Committed range 0.0–0.15 rad (~0–8.6°) is the physically-
+/// plausible area-light softness band for a sun-like source — the exact
+/// look inside that range is Peter's morning-gate tuning call, not this
+/// lane's (P2 brief: "denoiser/accumulation parameter choices land as
+/// named constants with documented ranges").
+const SOFT_SHADOW_CONE_RADIANS: f32 = 0.02;
+/// RAYTRACING_DESIGN.md §5.2 P2: AO rays per pixel in the half-res
+/// dispatch. Committed range 1–16 (higher = less noise, more GPU cost);
+/// Peter's morning gate tunes within it.
+const AO_SAMPLES_PER_PIXEL: u32 = 4;
+/// RAYTRACING_DESIGN.md §5.2 P2: AO ray max distance, world units.
+/// Committed range 0.1–2.0 at the P0/P1 fixture scale (the apricot scan
+/// and this file's synthetic test scenes) — scene-scale dependent per
+/// hero asset; Peter's morning gate tunes per scene.
+const AO_RADIUS_WORLD_UNITS: f32 = 0.5;
+/// RAYTRACING_DESIGN.md §5.2 P2: flat ambient/env color for the
+/// demodulated-irradiance term = `atmosphere.ambient_tint * this scale`.
+/// Committed range 0.05–0.5 (fraction of the tint's own [0,1] magnitude);
+/// Peter's morning gate tunes the exact ambient intensity.
+const AMBIENT_IRRADIANCE_SCALE: f32 = 0.15;
+/// RAYTRACING_DESIGN.md §5.2 P2/D3: temporal irradiance accumulation
+/// blend weight (fraction of THIS frame folded into history each frame —
+/// `AccumulateParams::alpha`). Committed range 0.05–0.3: lower = smoother/
+/// more history-heavy (more strobe lag, per D3's design intent), higher =
+/// more responsive (less history retained). Peter's morning gate tunes
+/// the exact look — this lane proves the RESET mechanism (cut vs strobe),
+/// not the aesthetic blend rate.
+const IRRADIANCE_ACCUM_ALPHA: f32 = 0.15;
 
 /// IMPORT_FIDELITY_DESIGN.md D2/F-P1: split-sum IBL. Prefiltered specular
 /// chain base resolution + mip count. `PREFILTER_MIP_COUNT` mips span
@@ -623,6 +655,38 @@ pub struct RenderScene {
     rt_mask_width: u32,
     rt_mask_height: u32,
     rt_params_buffer: Option<manifold_gpu::GpuBuffer>,
+    /// RAYTRACING_DESIGN.md §5.2 P2: half-res/full-res demodulated
+    /// irradiance (sun*ndotl*vis + ambient*ao, no albedo — D3) and its
+    /// full-res TEMPORAL HISTORY (persistent across frames, blended by
+    /// `accumulate_irradiance`; RESET, not resized-and-forgotten, when the
+    /// scene's output dims change — see `ensure_rt_irradiance` — since a
+    /// dimension change is itself as much a discontinuity as a cut).
+    /// `None` for RT-off scenes (unwired/RT-off costs zero bytes, same
+    /// lazy discipline as every other RT-only resource here).
+    rt_irr_half: Option<manifold_gpu::GpuTexture>,
+    rt_irr_full: Option<manifold_gpu::GpuTexture>,
+    rt_irr_history: Option<manifold_gpu::GpuTexture>,
+    rt_irr_width: u32,
+    rt_irr_height: u32,
+    /// Small dedicated upload buffer for `AccumulateParams` — kept
+    /// separate from `rt_params_buffer` (which carries the larger
+    /// `ShadowRayParams`) so `accumulate_irradiance`'s upload can't race
+    /// or clobber the shadow/AO dispatch's own params within the same
+    /// frame.
+    rt_accumulate_params_buffer: Option<manifold_gpu::GpuBuffer>,
+    /// RAYTRACING_DESIGN.md §5.2 P2/D3, RT-D2: the SHARED node-local
+    /// reset-detection path (`crate::node_graph::temporal_reset`) — the
+    /// ONLY call site that decides "discard temporal history this frame"
+    /// for this node's irradiance accumulator. Do not add a second one
+    /// (the P2 brief's negative-`rg` gate enforces this).
+    rt_reset_detector: TemporalResetDetector,
+    /// Set by `ensure_rt_irradiance` when it just (re)allocated the
+    /// history texture this frame (dimension change) — a fresh
+    /// allocation's content is undefined, so the accumulate step OR's
+    /// this into `rt_reset_detector`'s verdict rather than adding a
+    /// second reset-decision path (it's a input to the SAME single
+    /// decision, not an alternate one).
+    rt_irr_needs_reset: bool,
     /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P4 (R5): this object's port
     /// names, generated once in [`Self::rebuild`] instead of re-formatted
     /// every `evaluate()` call. §1's CPU row measured ~22 `format!`
@@ -748,6 +812,14 @@ impl RenderScene {
             rt_mask_width: 0,
             rt_mask_height: 0,
             rt_params_buffer: None,
+            rt_irr_half: None,
+            rt_irr_full: None,
+            rt_irr_history: None,
+            rt_irr_width: 0,
+            rt_irr_height: 0,
+            rt_accumulate_params_buffer: None,
+            rt_reset_detector: TemporalResetDetector::new(),
+            rt_irr_needs_reset: false,
             prefiltered_specular: None,
             irradiance_map: None,
             brdf_lut: None,
@@ -1281,7 +1353,9 @@ impl RenderScene {
 
     /// Half-res trace target + full-res upsampled mask, resized with the
     /// scene's own output resolution (RT-D3's mode-B half-res dispatch,
-    /// D11).
+    /// D11). RT-P2: widened from `R32Float` (vis only) to `Rg16Float`
+    /// (r = sun visibility, g = AO) — the SAME texture, extending the
+    /// SAME dispatch (D16's seam note), not a second mask.
     fn ensure_rt_masks(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
         if self.rt_mask_width == width && self.rt_mask_height == height && self.rt_mask_full.is_some() {
             return;
@@ -1293,7 +1367,7 @@ impl RenderScene {
                 width: w,
                 height: h,
                 depth: 1,
-                format: manifold_gpu::GpuTextureFormat::R32Float,
+                format: manifold_gpu::GpuTextureFormat::Rg16Float,
                 dimension: manifold_gpu::GpuTextureDimension::D2,
                 usage: manifold_gpu::GpuTextureUsage::SHADER_WRITE
                     | manifold_gpu::GpuTextureUsage::SHADER_READ,
@@ -1301,10 +1375,45 @@ impl RenderScene {
                 mip_levels: 1,
             })
         };
-        self.rt_mask_half = Some(make(half_w, half_h, "node.render_scene rt_mask_half (RT-D3)"));
-        self.rt_mask_full = Some(make(width, height, "node.render_scene rt_mask_full (RT-D3)"));
+        self.rt_mask_half = Some(make(half_w, half_h, "node.render_scene rt_mask_half (RT-D3/RT-P2 vis+ao)"));
+        self.rt_mask_full = Some(make(width, height, "node.render_scene rt_mask_full (RT-D3/RT-P2 vis+ao)"));
         self.rt_mask_width = width;
         self.rt_mask_height = height;
+    }
+
+    /// RAYTRACING_DESIGN.md §5.2 P2: half-res/full-res demodulated
+    /// irradiance targets + the persistent full-res TEMPORAL HISTORY
+    /// texture, resized with the scene's own output resolution (mirrors
+    /// `ensure_rt_masks`'s lifecycle). Returns `true` when the history
+    /// texture was freshly (re)allocated this call — its content is
+    /// undefined until the caller's next `accumulate_irradiance` call,
+    /// which MUST pass `reset: true` in that case (a dimension change is
+    /// itself a discontinuity, same as a cut).
+    fn ensure_rt_irradiance(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) -> bool {
+        if self.rt_irr_width == width && self.rt_irr_height == height && self.rt_irr_history.is_some() {
+            return false;
+        }
+        let half_w = width.div_ceil(2).max(1);
+        let half_h = height.div_ceil(2).max(1);
+        let make = |w: u32, h: u32, label: &'static str| {
+            device.create_texture(&manifold_gpu::GpuTextureDesc {
+                width: w,
+                height: h,
+                depth: 1,
+                format: manifold_gpu::GpuTextureFormat::Rgba16Float,
+                dimension: manifold_gpu::GpuTextureDimension::D2,
+                usage: manifold_gpu::GpuTextureUsage::SHADER_WRITE
+                    | manifold_gpu::GpuTextureUsage::SHADER_READ,
+                label,
+                mip_levels: 1,
+            })
+        };
+        self.rt_irr_half = Some(make(half_w, half_h, "node.render_scene rt_irr_half (RT-P2)"));
+        self.rt_irr_full = Some(make(width, height, "node.render_scene rt_irr_full (RT-P2)"));
+        self.rt_irr_history = Some(make(width, height, "node.render_scene rt_irr_history (RT-P2 temporal)"));
+        self.rt_irr_width = width;
+        self.rt_irr_height = height;
+        true
     }
 
     /// CPU-mapped `ShadowRayParams` upload buffer, allocated once and
@@ -1316,6 +1425,16 @@ impl RenderScene {
         if self.rt_params_buffer.is_none() {
             self.rt_params_buffer = Some(device.create_buffer_shared(
                 std::mem::size_of::<manifold_gpu::raytrace::ShadowRayParams>() as u64,
+            ));
+        }
+    }
+
+    /// RT-P2: CPU-mapped `AccumulateParams` upload buffer — separate from
+    /// `rt_params_buffer` (see the field's doc comment).
+    fn ensure_rt_accumulate_params_buffer(&mut self, device: &manifold_gpu::GpuDevice) {
+        if self.rt_accumulate_params_buffer.is_none() {
+            self.rt_accumulate_params_buffer = Some(device.create_buffer_shared(
+                std::mem::size_of::<manifold_gpu::raytrace::AccumulateParams>() as u64,
             ));
         }
     }
@@ -2884,12 +3003,16 @@ impl EffectNode for RenderScene {
             {
                 self.ensure_opaque_scene_color(gpu.device, width, height, format);
             }
-            // RAYTRACING_DESIGN.md RT-D3: tracer + masks + params buffer,
-            // ensured here for the same NLL borrow reason as above.
+            // RAYTRACING_DESIGN.md RT-D3/RT-P2: tracer + masks + params
+            // buffers + irradiance targets, ensured here for the same NLL
+            // borrow reason as above.
             if rt_enabled {
                 self.ensure_rt_tracer(gpu.device);
                 self.ensure_rt_masks(gpu.device, width, height);
                 self.ensure_rt_params_buffer(gpu.device);
+                let irr_reallocated = self.ensure_rt_irradiance(gpu.device, width, height);
+                self.ensure_rt_accumulate_params_buffer(gpu.device);
+                self.rt_irr_needs_reset = self.rt_irr_needs_reset || irr_reallocated;
             }
             // VOLUMETRIC_LIGHT_DESIGN.md D1/D3 (P2): the whole feature's
             // real GPU cost gate. `wants_shafts_now == false` (the default)
@@ -3180,6 +3303,12 @@ impl EffectNode for RenderScene {
             hasher.write_u64(ctx.rebuild_epoch);
             let accel_key = hasher.finish();
 
+            // RAYTRACING_DESIGN.md §5.2 P2/D3, RT-D2: captured BEFORE
+            // `ctx.gpu_encoder()` mutably borrows `ctx` below — both are
+            // `Copy` (`OwnerKey` is a `u64`, `FrameTime` derives `Copy`).
+            let owner_key = ctx.owner_key;
+            let frame_time = ctx.time;
+
             let gpu = ctx.gpu_encoder();
             // BUG-308/RT-D4: a key change (first RT frame, or topology/
             // transform change) must NOT enqueue `build_accel` this same
@@ -3231,11 +3360,19 @@ impl EffectNode for RenderScene {
                 let half_h = height.div_ceil(2).max(1);
                 let params = manifold_gpu::raytrace::ShadowRayParams::new(
                     sun_dir,
-                    0.0,
+                    SOFT_SHADOW_CONE_RADIANS,
                     1,
                     self.jitter_frame_index,
                     [half_w, half_h],
                     [width, height],
+                    AO_RADIUS_WORLD_UNITS,
+                    AO_SAMPLES_PER_PIXEL,
+                    [sun.color[0], sun.color[1], sun.color[2]],
+                    [
+                        atmosphere.ambient_tint[0] * AMBIENT_IRRADIANCE_SCALE,
+                        atmosphere.ambient_tint[1] * AMBIENT_IRRADIANCE_SCALE,
+                        atmosphere.ambient_tint[2] * AMBIENT_IRRADIANCE_SCALE,
+                    ],
                     inv_view_proj,
                 );
                 let tracer = self.rt_tracer.as_ref().expect("ensured above");
@@ -3244,6 +3381,9 @@ impl EffectNode for RenderScene {
                 let depth_tex = self.opaque_depth_snapshot.as_ref().expect("ensured above");
                 let mask_half = self.rt_mask_half.as_ref().expect("ensured above");
                 let mask_full = self.rt_mask_full.as_ref().expect("ensured above");
+                let irr_half = self.rt_irr_half.as_ref().expect("ensured above");
+                let irr_full = self.rt_irr_full.as_ref().expect("ensured above");
+                let irr_history = self.rt_irr_history.as_ref().expect("ensured above");
                 tracer.dispatch_shadow_rays(
                     gpu.native_enc,
                     accel,
@@ -3251,7 +3391,8 @@ impl EffectNode for RenderScene {
                     params_buffer,
                     depth_tex,
                     mask_half,
-                    "node.render_scene RT-D3 trace_shadow_rays",
+                    irr_half,
+                    "node.render_scene RT-D3/RT-P2 trace_shadow_rays",
                 );
                 tracer.upsample_shadow(
                     gpu.native_enc,
@@ -3259,7 +3400,33 @@ impl EffectNode for RenderScene {
                     depth_tex,
                     mask_half,
                     mask_full,
-                    "node.render_scene RT-D3 upsample_shadow",
+                    irr_half,
+                    irr_full,
+                    "node.render_scene RT-D3/RT-P2 upsample_shadow",
+                );
+                // RAYTRACING_DESIGN.md §5.2 P2/D3, RT-D2: the ONE call site
+                // deciding "discard temporal history this frame" for this
+                // node's irradiance accumulator — ORs in a just-allocated
+                // history texture (dimension change) rather than adding a
+                // second reset path. `detect_reset` must run exactly once
+                // per frame this accumulator advances (its own contract);
+                // this `if rt_ready` branch is that one call.
+                let reset = self.rt_reset_detector.detect_reset(owner_key, &frame_time)
+                    || std::mem::take(&mut self.rt_irr_needs_reset);
+                let accumulate_params = manifold_gpu::raytrace::AccumulateParams::new(
+                    [width, height],
+                    IRRADIANCE_ACCUM_ALPHA,
+                    reset,
+                );
+                let accumulate_params_buffer =
+                    self.rt_accumulate_params_buffer.as_ref().expect("ensured above");
+                tracer.accumulate_irradiance(
+                    gpu.native_enc,
+                    &accumulate_params,
+                    accumulate_params_buffer,
+                    irr_full,
+                    irr_history,
+                    "node.render_scene RT-P2 accumulate_irradiance",
                 );
             }
         }
@@ -3361,7 +3528,11 @@ impl EffectNode for RenderScene {
         // stub discipline every optional texture in this shader uses),
         // dummy when RT isn't active this frame.
         let rt_mask_tex = self.rt_mask_full.as_ref().unwrap_or(dummy);
-        let binding_sets: Vec<[GpuBinding; 42]> = draws
+        // RAYTRACING_DESIGN.md §5.2 P2: the temporally-accumulated
+        // demodulated-irradiance history (dummy when RT isn't active this
+        // frame — same ABI-stub discipline as `rt_mask_tex`).
+        let rt_irr_tex = self.rt_irr_history.as_ref().unwrap_or(dummy);
+        let binding_sets: Vec<[GpuBinding; 43]> = draws
             .iter()
             .map(|draw| {
                 [
@@ -3588,6 +3759,10 @@ impl EffectNode for RenderScene {
                     GpuBinding::Texture {
                         binding: 41,
                         texture: rt_mask_tex,
+                    },
+                    GpuBinding::Texture {
+                        binding: 42,
+                        texture: rt_irr_tex,
                     },
                 ]
             })
