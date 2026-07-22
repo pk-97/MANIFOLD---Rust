@@ -23652,6 +23652,20 @@
           "name": "Angle Z"
         },
         {
+          "default": "0",
+          "id": "35_rt_enabled",
+          "max": "1",
+          "min": "0",
+          "name": "RT Enabled"
+        },
+        {
+          "default": "0",
+          "id": "35_temporal_upscale",
+          "max": "1",
+          "min": "0",
+          "name": "Temporal Upscale"
+        },
+        {
           "default": "1",
           "id": "86_visible",
           "max": "1",
@@ -27641,6 +27655,20 @@
           "max": "10",
           "min": "0.01",
           "name": "Scale Z"
+        },
+        {
+          "default": "0",
+          "id": "30_rt_enabled",
+          "max": "1",
+          "min": "0",
+          "name": "RT Enabled"
+        },
+        {
+          "default": "0",
+          "id": "30_temporal_upscale",
+          "max": "1",
+          "min": "0",
+          "name": "Temporal Upscale"
         },
         {
           "default": "1",
