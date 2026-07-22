@@ -358,6 +358,16 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
     for w in graph.wires() {
         consumed_outputs.insert((w.from.0, std::borrow::Cow::Borrowed(w.from.1)));
     }
+    // RAYTRACING_DESIGN.md D14: fold each node's param-driven forced
+    // outputs (RT-enabled `render_scene`'s `depth`/`velocity`) into the
+    // same consumed set a real wire would populate — see
+    // `EffectNode::force_consumed_outputs`'s doc for why this is the
+    // whole mechanism (nothing downstream needs to know the difference).
+    for inst in graph.nodes() {
+        for &port in inst.node.force_consumed_outputs(&inst.params) {
+            consumed_outputs.insert((inst.id, std::borrow::Cow::Borrowed(port)));
+        }
+    }
 
     // Reverse of `wire_by_target`: every (producer node, producer output
     // port) → the wires reading it. Built for the D6(a) precision-aware

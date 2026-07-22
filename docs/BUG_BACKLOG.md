@@ -1268,6 +1268,27 @@ worktree. Status stays OPEN; not changed to FIXED. No code changes shipped this 
 temporary instrumentation and the scratch preset were removed before commit (`git status`
 clean).
 
+**RAYTRACING_DESIGN.md W0 oracle addendum (2026-07-22, Sonnet 5, `lane/rt-w0-gbuffer`) — velocity
+buffer PROVED correct under a real two-frame camera orbit; does not reopen the live-app suspects
+above.** W0's D14 gate requires a scripted two-frame-orbit oracle on `render_scene`'s stored
+`velocity` output: `rt_w0_forced_gbuffer_matches_orbit_oracle`
+(`crates/manifold-renderer/tests/gpu_proofs/rt_w0_gbuffer.rs`) orbits a real `node.orbit_camera`
+0.0 → 0.2 rad across two frames of one continuous `PresetRuntime` (`prev_view_proj` history
+intact) and samples the GPU `velocity` texture at four off-axis world points (on-axis points,
+including the origin, legitimately read ~zero — confirmed empirically, matches this bug's own
+2026-07-13 runtime-probe addendum's reading of the near-zero center texel). Measured: mean
+`|mv|` across the four points **exceeds 0.5px** and the worst-case per-point direction
+dot-product against the CPU `Camera::project_to_pixel` reprojection oracle **exceeds 0.9**
+(both assertions pass; see the test for live numbers). **Outcome: PROVED, not rerooted** — the
+G-buffer velocity computation itself (`render_scene.rs`'s `prev_view_proj`/`prev_model` diff,
+the vertex-shader NDC delta, the `Rg16Float` resolve) is numerically correct for camera-orbit
+motion, consistent with the 2026-07-13 addendum's own headless finding
+(`CinematicSceneProbe`, `view_proj_delta_sum`/`velocity_center_texel` readings). This closes the
+"is the velocity buffer itself broken" branch of BUG-136's suspect space with a second,
+independent scripted proof — it does NOT touch the two live-app-only suspects the 2026-07-13
+addendum left open (dragged-slider live-propagation gap; render-loop ticking cadence while
+scrubbing outside playback), which still require a live repro session. Status remains OPEN.
+
 ### BUG-096 (camera-rotate-sliders-jump-no-degrees) — FluidSim3D Rotate X/Y/Z sliders jump instead of rotating smoothly, no degrees readout — PARTIAL 2026-07-10 (legacy orbit phase + tilt sign restored in preset; degrees readout + jump investigation still open)
 **Status:** PARTIAL — legacy orbit phase + tilt sign restored in the preset 2026-07-10; the degrees readout and the slider-jump observation pass remain open.
 **Symptom:** dragging Rotate X/Y/Z on the Fluid Sim 3D card makes the view jump rather than turn continuously; values display as raw -1..1 floats (F2), not degrees. Reported by Peter 2026-07-10 (screenshot session).
