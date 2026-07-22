@@ -2,7 +2,12 @@
 
 /// What the assembler did, for the caller (importer UI, tests) to report
 /// or warn on. Not part of the graph itself.
-#[derive(Debug, Clone)]
+///
+/// `Serialize` (runtime-only type — never persisted into `.manifold`) backs
+/// the P3-D INV-R8 equivalence harness: `render-import --dump-def` serializes
+/// `(EffectGraphDef, ImportReport)` so a table-ization change can be proven
+/// byte-identical against a pre-change capture.
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct ImportReport {
     /// Distinct materials with geometry, as parsed. Import is 1:1
     /// (GLB_CONFORMANCE_DESIGN.md D4) — always equal to `object_count`.

@@ -129,7 +129,48 @@ fn parse_args() -> Result<Args, String> {
     Ok(args)
 }
 
+/// `--dump-def <glb-path> <out.json>` — P3-D INV-R8 harness mode. Assembles
+/// the import graph through the SAME production entry point (`assemble_import_graph`)
+/// and serializes the `(EffectGraphDef, ImportReport)` pair as pretty JSON to
+/// `out.json`. On an import ERROR (parse/build failure — NOT a missing file),
+/// writes a `{"import_error": "<Display>"}` sentinel instead and still exits 0,
+/// so a table-ization change that altered error behavior is caught by the diff
+/// too. Exit 2 only on argument/IO failure — the capture script owns the
+/// missing-fixture loud-fail (it checks the path exists before invoking).
+fn dump_def_mode(glb: &std::path::Path, out: &std::path::Path) -> ! {
+    let json = match assemble_import_graph(glb) {
+        Ok(pair) => serde_json::to_string_pretty(&pair)
+            .unwrap_or_else(|e| panic!("serialize import def for {}: {e}", glb.display())),
+        Err(e) => serde_json::to_string_pretty(&serde_json::json!({
+            "import_error": e.to_string(),
+        }))
+        .expect("serialize import_error sentinel"),
+    };
+    if let Some(parent) = out.parent() {
+        std::fs::create_dir_all(parent).expect("create dump output dir");
+    }
+    std::fs::write(out, json).unwrap_or_else(|e| panic!("write {}: {e}", out.display()));
+    std::process::exit(0);
+}
+
 fn main() {
+    // P3-D INV-R8 harness mode, resolved before the render arg parser: the
+    // capture script drives `render-import --dump-def <glb> <out.json>`.
+    {
+        let mut argv = std::env::args().skip(1);
+        if argv.next().as_deref() == Some("--dump-def") {
+            let glb = argv.next().unwrap_or_else(|| {
+                eprintln!("usage: render-import --dump-def <file.glb> <out.json>");
+                std::process::exit(2);
+            });
+            let out = argv.next().unwrap_or_else(|| {
+                eprintln!("usage: render-import --dump-def <file.glb> <out.json>");
+                std::process::exit(2);
+            });
+            dump_def_mode(std::path::Path::new(&glb), std::path::Path::new(&out));
+        }
+    }
+
     let args = match parse_args() {
         Ok(a) => a,
         Err(e) => {
