@@ -284,21 +284,18 @@ pub(super) fn merge_import_into_graph(
         }
     };
 
+    let mut import_ctx = ImportCtx {
+        render_id: render_scene_node_id,
+        path_str: &path_str,
+        center,
+        bbox_radius: incoming_radius,
+        node_anims_by_clip: &node_anims_by_clip,
+        used_group_names: &mut used_group_names,
+        fresh_id: &mut fresh_id,
+    };
     for (local_k, m) in materials.iter().enumerate() {
         let port_index = existing_objects as usize + local_k;
-        let mut out = build_object_group(
-            local_k,
-            port_index,
-            render_scene_node_id,
-            m,
-            &path_str,
-            center,
-            &node_anims_by_clip,
-            &mut used_group_names,
-            &mut fresh_id,
-            incoming_radius,
-            &anim_prefix,
-        );
+        let mut out = build_object_group(&mut import_ctx, local_k, port_index, m, &anim_prefix);
         // D5 scale sanity: seeded on THIS object's own transform_3d — an
         // ordinary, visible, undoable value, never hidden state. Every
         // object in one incoming asset shares the same normalize factor

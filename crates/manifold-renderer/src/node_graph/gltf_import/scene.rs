@@ -381,20 +381,17 @@ pub(super) fn build_import_graph(
     let node_anims_by_clip: Vec<std::collections::BTreeMap<usize, gltf_load::GltfNodeAnimation>> =
         summary.animations.iter().map(|a| a.nodes.iter().map(|n| (n.node_index, n.clone())).collect()).collect();
 
+    let mut import_ctx = ImportCtx {
+        render_id,
+        path_str: &path_str,
+        center,
+        bbox_radius: radius,
+        node_anims_by_clip: &node_anims_by_clip,
+        used_group_names: &mut used_group_names,
+        fresh_id: &mut fresh_id,
+    };
     for (k, m) in materials.iter().enumerate() {
-        let mut out = build_object_group(
-            k,
-            k,
-            render_id,
-            m,
-            &path_str,
-            center,
-            &node_anims_by_clip,
-            &mut used_group_names,
-            &mut fresh_id,
-            radius,
-            "anim",
-        );
+        let mut out = build_object_group(&mut import_ctx, k, k, m, "anim");
         nodes.push(out.group_node);
         wires.append(&mut out.wires_to_render);
         card_params.append(&mut out.card_params);

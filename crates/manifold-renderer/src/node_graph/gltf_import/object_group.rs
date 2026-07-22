@@ -45,6 +45,36 @@ pub(super) struct ObjectGroupOutput {
     pub(super) animated: bool,
 }
 
+/// Import-wide facts shared by every per-object [`build_object_group`] call
+/// within one import (or one merge). Constructed once by [`build_import_graph`]
+/// and [`merge_import_into_graph`] and passed by `&mut` through the per-object
+/// loop — the seven values that are one fact (this import), so the per-object
+/// helper reads five arguments instead of twelve (D9). The merge path maps its
+/// `incoming_*` names onto these fields (e.g. `incoming_radius` → `bbox_radius`).
+pub(super) struct ImportCtx<'a> {
+    /// The `render_scene` node id every object group wires its output into.
+    pub render_id: u32,
+    /// The glb file path, bound onto each source node's `path` param.
+    pub path_str: &'a str,
+    /// The whole-scene bbox center from this parse; each object recenters
+    /// about `own_center - center` (see the transform assembly below).
+    pub center: [f32; 3],
+    /// BUG-194/BUG-195: the whole-scene bbox radius from THIS parse
+    /// (`build_import_graph`'s `radius` / `merge_import_into_graph`'s
+    /// `incoming_radius`) — stamped onto every mesh-source node this call
+    /// creates as `source_bbox_radius`, so SceneVm's header and a future
+    /// merge's scale-sanity have a real per-node provenance fact to read
+    /// instead of BUG-195's orbit-camera proxy.
+    pub bbox_radius: f32,
+    /// Per-clip node-index → animation track lookup for this import.
+    pub node_anims_by_clip: &'a [BTreeMap<usize, gltf_load::GltfNodeAnimation>],
+    /// Group-name collision set, mutated across the per-object loop.
+    pub used_group_names: &'a mut std::collections::HashSet<String>,
+    /// Fresh numeric node-id source (a counter — importer output stays
+    /// deterministic), mutated across the per-object loop.
+    pub fresh_id: &'a mut dyn FnMut() -> u32,
+}
+
 /// Build ONE object's group (mesh source + material + optional skin/morph/
 /// animation + texture maps + transform, wrapped in a named `GroupDef`)
 /// and its top-level wiring into `render_scene`. `local_k` numbers this
@@ -56,29 +86,24 @@ pub(super) struct ObjectGroupOutput {
 /// this group wires into (`mesh_{port_index}` etc. on `render_scene`
 /// itself) — for a single import these are the same number; for a merge,
 /// `port_index` is offset by the target scene's existing `objects` count
-/// while `local_k` restarts at 0.
-#[allow(clippy::too_many_arguments)]
+/// while `local_k` restarts at 0. `anim_prefix` is the shared per-glb
+/// animation card id prefix (see `animation_card_params`) — "anim" for a
+/// fresh import; the merge path uniquifies against the target scene's
+/// existing card ids. The import-wide facts travel in `ctx`.
 pub(super) fn build_object_group(
+    ctx: &mut ImportCtx<'_>,
     local_k: usize,
     port_index: usize,
-    render_id: u32,
     m: &gltf_load::GltfMaterialInfo,
-    path_str: &str,
-    center: [f32; 3],
-    node_anims_by_clip: &[BTreeMap<usize, gltf_load::GltfNodeAnimation>],
-    used_group_names: &mut std::collections::HashSet<String>,
-    fresh_id: &mut impl FnMut() -> u32,
-    // BUG-194/BUG-195: the whole-scene bbox radius from THIS parse (build_import_graph's
-    // `radius` / merge_import_into_graph's `incoming_radius`) — stamped onto every
-    // mesh-source node this call creates as `source_bbox_radius`, so SceneVm's
-    // header and a future merge's scale-sanity have a real per-node provenance
-    // fact to read instead of BUG-195's orbit-camera proxy.
-    bbox_radius: f32,
-    // The shared per-glb animation card id prefix (see
-    // `animation_card_params`) — "anim" for a fresh import; the merge path
-    // uniquifies against the target scene's existing card ids.
     anim_prefix: &str,
 ) -> ObjectGroupOutput {
+    let render_id = ctx.render_id;
+    let path_str = ctx.path_str;
+    let center = ctx.center;
+    let bbox_radius = ctx.bbox_radius;
+    let node_anims_by_clip = ctx.node_anims_by_clip;
+    let used_group_names = &mut *ctx.used_group_names;
+    let fresh_id = &mut *ctx.fresh_id;
     let k = local_k;
     let mut animated = false;
     let mut card_params: Vec<ParamSpecDef> = Vec::new();
