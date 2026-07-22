@@ -66,10 +66,18 @@ objc2-metal = { version = "0.3", features = [
     "MTLCounters",
     "MTLComputePass",
     "MTLBlitPass",
+    # RAYTRACING_DESIGN.md P1 — Metal ray-query acceleration structures
+    # (`metal/raytrace.rs`). Feature set matches tools/rt_prototype's
+    # Cargo.toml exactly (the prototype this module ports from).
+    "MTLAccelerationStructure",
+    "MTLAccelerationStructureCommandEncoder",
+    "MTLAccelerationStructureTypes",
+    "MTLAllocation",
     "block2",
 ] }
 objc2-metal-fx = { version = "0.3", features = [
     "MTLFXSpatialScaler",
+    "MTLFXTemporalScaler",
 ] }
 objc2-metal-performance-shaders = { version = "0.3", features = [
     "MPSKernel",

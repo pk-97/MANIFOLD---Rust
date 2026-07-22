@@ -17,6 +17,7 @@ pub mod gpu_types;
 pub mod headless_readback;
 pub mod layer_bitmap_gpu;
 pub mod layer_compositor;
+pub mod metalfx_temporal_upscaler;
 pub mod metalfx_upscaler;
 #[cfg(target_os = "macos")]
 pub mod native_text;
