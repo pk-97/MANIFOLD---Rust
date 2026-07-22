@@ -618,12 +618,14 @@ fn assembles_azalea_into_two_object_render_scene_graph() {
             "unused card param id `{gone}` should not exist"
         );
     }
-    // Shadow type default comes from the primitive ParamDef (Soft = 1).
-    // The importer still seeds the node param to Hard (0) for the crisp
-    // dramatic look, but the card slider metadata follows ParamDef.
+    // BUG-303: the importer seeds the sun node's `shadow_softness` param to
+    // Hard (0) for the crisp dramatic look — the card slider's default must
+    // follow that stamped value, not the primitive ParamDef's generic Soft
+    // (1) default, or the exposure would clobber the import's own look at
+    // bind time (`apply_binding_defaults`).
     let sun_shadow_id = format!("{sun_id}_shadow_softness");
     let sun_shadow = meta.params.iter().find(|p| p.id == sun_shadow_id).unwrap();
-    assert_eq!(sun_shadow.default_value, 1.0, "shadow type ParamDef default is Soft");
+    assert_eq!(sun_shadow.default_value, 0.0, "shadow type default follows the node's stamped Hard value");
 }
 
 /// Structural gate (fast, no GPU): the assembled azalea graph must
@@ -1129,6 +1131,72 @@ fn bug221_object_transform_recenters_about_own_bbox_center_not_scene_center() {
     // concrete, non-tautological check on top of the formula asserts
     // above.
     assert!((pos[0] - 3.0).abs() < 1e-5 && (pos[1] - 0.0).abs() < 1e-5 && (pos[2] - 0.0).abs() < 1e-5);
+}
+
+/// BUG-303: the card slider that auto-exposes `transform_0.pos_x` must
+/// default to the SAME non-origin value BUG-221 stamps onto the node itself
+/// (`own_center - center`), not the `node.transform_3d` primitive's generic
+/// `0.0` manifest default. Before the fix, `apply_binding_defaults`
+/// (`param_binding.rs`) unconditionally wrote every binding's
+/// `default_value` back onto its target node at bind time — so an imported
+/// object's real placement was clobbered back to the origin the moment the
+/// preset instantiated, even though the DEF on disk carried the right
+/// `pos_x`. Same synthetic two-material summary as the sibling BUG-221
+/// value test above, so `own_center - center` is computable by hand.
+#[test]
+fn bug303_object_transform_exposure_default_matches_stamped_recenter_not_origin() {
+    let mut big = full_material(0, "Big", 999); // k=0 after the largest-vertex-count-first sort
+    big.own_center = [5.0, 1.0, -0.5];
+    let mut small = full_material(1, "Small", 1); // k=1
+    small.own_center = [-3.0, 0.0, 0.0];
+
+    let summary = GltfImportSummary {
+        materials: vec![big, small],
+        bbox_min: [-4.0, -1.0, -2.0],
+        bbox_max: [8.0, 3.0, 1.0],
+        camera_count: 0,
+        default_material_vertex_count: 0,
+        animations: Vec::new(),
+        animation_report_lines: Vec::new(),
+        extension_report_lines: Vec::new(),
+    };
+    let center = [
+        (summary.bbox_min[0] + summary.bbox_max[0]) * 0.5,
+        (summary.bbox_min[1] + summary.bbox_max[1]) * 0.5,
+        (summary.bbox_min[2] + summary.bbox_max[2]) * 0.5,
+    ];
+    let own_center = [5.0_f32, 1.0, -0.5];
+    let expected_pos_x = own_center[0] - center[0];
+    assert!((expected_pos_x - 0.0).abs() > 1e-3, "sanity: the expected default is genuinely non-origin");
+
+    let path = std::path::Path::new("/tmp/synthetic_bug303_test.glb");
+    let (def, _report) = build_import_graph(&summary, path).expect("build import graph");
+
+    let meta = def.preset_metadata.as_ref().expect("import stamps preset_metadata");
+    let binding = meta
+        .bindings
+        .iter()
+        .find(|b| matches!(
+            &b.target,
+            BindingTarget::Node { node_id, param } if node_id.as_str() == "transform_0" && param == "pos_x"
+        ))
+        .expect("a binding targets transform_0.pos_x");
+    assert!(
+        (binding.default_value - expected_pos_x).abs() < 1e-5,
+        "transform_0.pos_x exposure default should equal own_center.x - center.x ({expected_pos_x}), \
+         got {} — a 0.0 here means the BUG-303 clobber is back",
+        binding.default_value
+    );
+
+    let spec = meta
+        .params
+        .iter()
+        .find(|p| p.id == binding.id)
+        .expect("the binding's matching ParamSpecDef");
+    assert!(
+        (spec.default_value - expected_pos_x).abs() < 1e-5,
+        "the outer-card ParamSpecDef default must match the binding default"
+    );
 }
 
 /// Regression for a duplicate-handle panic found via the IMPORT_ANYTHING_WAVE

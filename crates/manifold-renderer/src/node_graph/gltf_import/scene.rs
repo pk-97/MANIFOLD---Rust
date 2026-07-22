@@ -217,6 +217,7 @@ pub(super) fn build_import_graph(
     envmap_node
         .params
         .insert("emitter_intensity".to_string(), float(IMPORT_STRIPS_DEFAULT));
+    let envmap_node_params = envmap_node.params.clone();
     nodes.push(envmap_node);
     // P1: expose every scene-vocabulary atom's params from the primitive registry.
     // Fan-out bindings that link a slider to more than one target are added below
@@ -228,6 +229,7 @@ pub(super) fn build_import_graph(
         &NodeId::new("envmap"),
         "Environment",
         &metadata_for_node_type("node.bake_environment"),
+        &envmap_node_params,
     );
 
     // GLB_CONFORMANCE_DESIGN.md D6 — `node.hdri_source` decodes a real-world
@@ -272,6 +274,7 @@ pub(super) fn build_import_graph(
     cam_node.params.insert("look_y".to_string(), float(0.0));
     // BUG-165/BUG-169 fix — see `near_clip` computation above.
     cam_node.params.insert("near".to_string(), float(near_clip));
+    let cam_node_params = cam_node.params.clone();
     nodes.push(cam_node);
     stamp_scene_node_exposures_into(
         &mut card_params,
@@ -280,6 +283,7 @@ pub(super) fn build_import_graph(
         &NodeId::new("camera"),
         "Camera",
         &metadata_for_node_type("node.orbit_camera"),
+        &cam_node_params,
     );
     // Orbit and tilt are full 360 rotations, not clamped ranges (Peter,
     // 2026-07-15). The primitive ParamDef does not carry `wraps`, so we
@@ -301,6 +305,7 @@ pub(super) fn build_import_graph(
     let mut lens_node = plain_node(lens_id, "lens", "node.camera_lens", "lens");
     lens_node.params.insert("focus_distance".to_string(), float(distance));
     lens_node.params.insert("f_stop".to_string(), float(32.0));
+    let lens_node_params = lens_node.params.clone();
     nodes.push(lens_node);
     stamp_scene_node_exposures_into(
         &mut card_params,
@@ -309,6 +314,7 @@ pub(super) fn build_import_graph(
         &NodeId::new("lens"),
         "Camera",
         &metadata_for_node_type("node.camera_lens"),
+        &lens_node_params,
     );
 
     let sun_id = fresh_id();
@@ -346,6 +352,7 @@ pub(super) fn build_import_graph(
     // user can still dial.
     sun_node.params.insert("range".to_string(), float((radius * 1.5).max(0.01)));
     sun_node.params.insert("shadow_resolution".to_string(), float(4096.0));
+    let sun_node_params = sun_node.params.clone();
     nodes.push(sun_node);
     stamp_scene_node_exposures_into(
         &mut card_params,
@@ -354,6 +361,7 @@ pub(super) fn build_import_graph(
         &NodeId::new("sun"),
         "Sun",
         &metadata_for_node_type("node.light"),
+        &sun_node_params,
     );
 
     let render_id = fresh_id();

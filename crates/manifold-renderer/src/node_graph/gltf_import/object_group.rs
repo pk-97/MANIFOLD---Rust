@@ -637,6 +637,7 @@ pub(super) fn build_object_group(
                 enum_val(filter_idx(s.min_filter)),
             );
         }
+        let mat_node_params = mat_node.params.clone();
         group_nodes.push(mat_node);
         // P1 scene-panel exposure convergence: expose ALL params of scene-
         // vocabulary atoms. The old metallic/roughness curation above is
@@ -648,6 +649,7 @@ pub(super) fn build_object_group(
             &NodeId::new(&mat_node_id),
             &format!("{group_name} — Material"),
             &metadata_for_node_type("node.pbr_material"),
+            &mat_node_params,
         );
 
         // No per-object Metallic/Roughness card sliders (Peter, 2026-07-15:
@@ -733,6 +735,7 @@ pub(super) fn build_object_group(
         transform_node.params.insert("pos_x".to_string(), float(transform_pos[0]));
         transform_node.params.insert("pos_y".to_string(), float(transform_pos[1]));
         transform_node.params.insert("pos_z".to_string(), float(transform_pos[2]));
+        let transform_node_params = transform_node.params.clone();
         group_nodes.push(transform_node);
         stamp_scene_node_exposures_into(
             &mut card_params,
@@ -741,6 +744,7 @@ pub(super) fn build_object_group(
             &NodeId::new(&transform_node_id),
             &format!("{group_name} — Transform"),
             &metadata_for_node_type("node.transform_3d"),
+            &transform_node_params,
         );
         group_wires.push(wire(transform_id, "transform", scene_object_id, "transform"));
 
@@ -933,7 +937,6 @@ pub(super) fn build_object_group(
             "node.scene_object",
             &group_name,
         );
-        group_nodes.push(scene_object_node);
         stamp_scene_node_exposures_into(
             &mut card_params,
             &mut card_bindings,
@@ -941,7 +944,9 @@ pub(super) fn build_object_group(
             &NodeId::new(format!("object_{k}_bind")),
             &group_name,
             &metadata_for_node_type("node.scene_object"),
+            &scene_object_node.params,
         );
+        group_nodes.push(scene_object_node);
 
         // `system.group_output` closes the body; its single `object` port is
         // the interface output name the scene_object's wire above targets. A
