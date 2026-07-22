@@ -1,6 +1,6 @@
 # Ray Tracing — hybrid RT lighting for hero scenes
 
-**Status:** IN PROGRESS — P0 prototype BUILT + visual gate passed 2026-07-22 (`tools/rt_prototype/`, branch `feat/rt-prototype-p0`); interim numbers in §5.1; the 120-frame 4K measurement run + §6 winning-mode decision with Peter still OPEN before P1+ briefs · 2026-07-21 · Fable
+**Status:** IN PROGRESS — P0 DONE (mode B locked by Peter 2026-07-22, D11; 120-frame 4K run WAIVED — interim numbers + visual gate sufficed). Next: single overnight wave post-Wave-3, infra §2 → P1 → P2+P3, P4 parallel (D12); P5 export + P6 frame-interp cut from wave (D13) · 2026-07-22 · Fable
 **Prerequisites:** none for P0. P1+ gated on P0 numbers and on RENDERING_INFRA_V2 §2 (G-buffer/motion vectors) for temporal pieces.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
@@ -34,6 +34,9 @@ Extend, don't redesign. Instruction to executor: RT is an **extension of the REA
 - **D8 — Min-OS.** Ray queries: no OS bump needed. Frame interpolation: Tahoe. Product floor decision is Peter's, deferred until D6's feature is built.
 - **D9 — Backend seam (inherited, RENDERING_INFRA_V2 §9):** RT + upscaling behind per-backend traits in `manifold-gpu`; Metal RT + MetalFX now, Vulkan ray queries + FSR/DLSS when Vulkan lands. No Apple types leak. Cross-platform rule holds on paper in v1, in code when Vulkan builds.
 - **D10 — Material scope is the shipped Khronos PBR model, frozen for v1.** Peter's scans are delit (calibration-cube captured, relight well) — asset ceiling confirmed OK. Plasticy look = audit roughness maps per hero asset, not renderer work.
+- **D11 — Mode B committed (Peter, 2026-07-22).** Native-res raster + half-res soft-shadow/AO/GI rays, depth-aware upsample of the lighting buffers (trivial pass — ray *count* is the cost lever; native-res rays = 4× and blows budget). 120-frame 4K run WAIVED by Peter: interim numbers + visual read decided it. Modes A/C dead.
+- **D12 — Single overnight wave, Fable→Opus→Sonnet (Peter, 2026-07-22).** Fable writes briefs (kernel signatures + required proofs) and reviews — writes no code; Opus dispatches; Sonnet lanes execute, porting the P0 prototype kernels rather than inventing. Spine: RENDERING_INFRA_V2 §2 (G-buffer/motion vectors; proves BUG-136) → P1 → P2+P3; P4 needs only infra §2, runs parallel. Staged lanes on one branch (everything touches the scene pass); only independent pieces fan out. Wave dispatches against post-Wave-3 layout. Denoiser look + final visual sign-off = Peter's morning gate.
+- **D13 — P5 export path cut from this wave (Peter, 2026-07-22).** D7's design stands; build later, own trigger. P6 frame interpolation stays Tahoe-deferred (D6/D8); hand-rolled interpolation rejected outright.
 
 ## 3. Expected wins (the stage translation)
 
@@ -67,7 +70,9 @@ Harness: `tools/rt_prototype/` (standalone crate, manifold-gpu path dep for devi
 - Kernel lesson (cost one GPU-hang debug): buffer-visible MSL structs MUST use `packed_float3` — bare `float3` is sizeof 16 and desyncs from `#[repr(C)] [f32;3]`. See `feedback_wgsl_vec3_alignment` memory (now covers both WGSL and MSL).
 - P0 self-emission gap: emissive surfaces light others but don't glow themselves (combine has no self-emission term) — add before judging emissive hero scenes.
 
-Phases expected after P0 (names only, not briefed): P1 vertical slice — one RT term (hard shadows) inside the real REALTIME_3D scene pass, output through the graph to pixels; P2 soft shadows + AO + denoiser with D3 trigger-aware resets; P3 emissive GI + volumetrics; P4 MetalFX temporal integration; P5 export-quality path; P6 frame-interpolation per-output option (Tahoe-gated).
+### 5.2 Wave plan (D12 — briefs to STANDARD before dispatch, against post-Wave-3 layout)
+
+Serial spine: **infra §2** (G-buffer/motion vectors, RENDERING_INFRA_V2 — proves BUG-136) → **P1** vertical slice (hard shadows in the real REALTIME_3D scene pass, mode-B layout, output through the graph) → **P2** soft shadows + AO + denoiser with D3 trigger-aware resets + **P3** emissive GI + volumetrics. Parallel to P2/P3: **P4** MetalFX temporal integration (needs only infra §2). One gpu-proofs run per stage. Cut from wave: P5 export (D13), P6 frame interp (D6/D8).
 
 ## 6. Decided — do not reopen
 
