@@ -44,18 +44,27 @@ struct Uniforms {
     camera_up: vec4<f32>,    // xyz, fov_y
     camera_fwd: vec4<f32>,   // xyz, aspect
     fog_shaft: vec4<f32>,    // fog_density, height_falloff, shaft_anisotropy(g), shaft_intensity
-    misc: vec4<f32>,         // steps(as f32), light_count(as f32), exposure_ev, 0
+    // steps(as f32), light_count(as f32), exposure_ev, rt_enabled(as f32,
+    // RAYTRACING_DESIGN.md §5.2 P3/D5 — was reserved/0 before P3).
+    misc: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var half_depth: texture_2d<f32>;
-// P3: every wired light (Sun AND Point), 3 vec4s per light:
+// P3 (VOLUMETRIC_LIGHT_DESIGN.md's own P3): every wired light (Sun AND
+// Point), 3 vec4s per light:
 //   [i*3+0] = Sun: dir-toward-light (.xyz, toward the light, matches
 //             `Light::light_dir_at`'s Sun case), .w = 0.0 (mode Sun)
 //           = Point: light world position (.xyz), .w = 1.0 (mode Point)
 //   [i*3+1] = premultiplied color.rgb, .w = this light's caster slot index
 //             (-1 = no shadow, unshadowed glow per D2)
 //   [i*3+2] = .x = attenuation range (Point only; ignored for Sun), rest 0
+// RAYTRACING_DESIGN.md §5.2 P3 (D5, "emissive-colored volumetric glow"):
+// `render_scene.rs` also appends one Point-mode entry per emissive object
+// (world-space centroid as `pos`, the object's emission factor as `color`,
+// slot -1 — unshadowed glow, same honest-cost convention as an unshadowed
+// Point light) when RT is enabled — a real, physically-motivated light
+// source in this SAME march, not a separate glow pass.
 @group(0) @binding(2) var<storage, read> shaft_lights: array<vec4<f32>>;
 @group(0) @binding(3) var<storage, read> casters: array<vec4<f32>>;
 @group(0) @binding(4) var shadow_map_0: texture_depth_2d;
@@ -64,6 +73,16 @@ struct Uniforms {
 @group(0) @binding(7) var shadow_map_3: texture_depth_2d;
 @group(0) @binding(8) var shadow_sampler: sampler_comparison;
 @group(0) @binding(9) var output_tex: texture_storage_2d<rgba16float, write>;
+// RAYTRACING_DESIGN.md §5.2 P3 (D5, "volumetric march sampling shadow-ray
+// visibility instead of shadow-map lookups"): the SAME full-res RT
+// sun-visibility mask the surface pass (RT-P1/P2's half-res dispatch +
+// upsample) already computed — reused here for the Sun light's march
+// visibility instead of a shadow-map lookup when `rt_enabled` (see
+// `shadow_vis`'s call site below). Always bound (ABI-stub discipline: a
+// 1x1 dummy when RT isn't active this frame, same texture render_scene.wgsl
+// itself falls back to via `rt_mask_tex`) — reading it when `rt_enabled ==
+// 0.0` never happens (the branch below gates on the flag first).
+@group(0) @binding(10) var rt_shadow_mask: texture_2d<f32>;
 
 fn sample_shadow(slot: i32, suv: vec2<f32>, ref_depth: f32) -> f32 {
     switch slot {
@@ -151,6 +170,28 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let steps = u32(u.misc.x + 0.5);
     let light_count = u32(u.misc.y + 0.5);
     let exposure_ev = u.misc.z;
+    let rt_enabled = u.misc.w > 0.5;
+
+    // RAYTRACING_DESIGN.md §5.2 P3 (D5): the Sun light's march visibility,
+    // resolved ONCE per pixel from the RT sun-visibility mask instead of a
+    // per-step, per-sample shadow-map lookup — reusing the RT visibility
+    // the surface pass already computed rather than re-testing occlusion
+    // at each march sample's world position `x`. This IS an approximation
+    // (the mask encodes the SURFACE hit's visibility, not this pixel's
+    // in-between volume points) — acceptable for a directional light: real
+    // sun occluders are large-scale geometry whose shadow boundary barely
+    // shifts between the surface depth and the handful of march samples in
+    // front of it, and it is the ONLY RT visibility data the shadow-ray
+    // pass produces (RT-P1/P2 traced the Sun only, never per-arbitrary-
+    // light volume rays). Point lights and the emissive pseudo-lights below
+    // are unaffected — they keep the existing per-step `shadow_vis` lookup
+    // (which already falls through to unshadowed glow at slot -1).
+    var rt_sun_vis = 1.0;
+    if rt_enabled {
+        let full_dims = vec2<f32>(textureDimensions(rt_shadow_mask));
+        let full_pix = vec2<i32>(min(uv * full_dims, full_dims - vec2<f32>(1.0, 1.0)));
+        rt_sun_vis = textureLoad(rt_shadow_mask, full_pix, 0).r;
+    }
 
     let fog_density = u.fog_shaft.x;
     let height_falloff = u.fog_shaft.y;
@@ -173,7 +214,11 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
             let pos_or_dir = shaft_lights[base];
             let color_slot = shaft_lights[base + 1u];
             let range_v = shaft_lights[base + 2u];
-            let vis = shadow_vis(color_slot.w, x);
+            // RAYTRACING_DESIGN.md §5.2 P3/D5: the Sun entry (mode 0)
+            // reuses the per-pixel RT visibility computed once above,
+            // in place of `shadow_vis`'s shadow-map lookup, when RT is on.
+            let is_sun = pos_or_dir.w < 0.5;
+            let vis = select(shadow_vis(color_slot.w, x), rt_sun_vis, rt_enabled && is_sun);
 
             // D2: Sun att = 1.0, fixed L (dir toward light). Point att =
             // 1/(1+d²/range²) (light.rs:261), L = normalize(pos - x)

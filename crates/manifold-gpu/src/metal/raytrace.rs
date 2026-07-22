@@ -1,11 +1,14 @@
-//! RAYTRACING_DESIGN.md P1 — Metal ray-query acceleration structures and
-//! the hard-shadow-ray dispatch kernel.
+//! RAYTRACING_DESIGN.md P1–P3 — Metal ray-query acceleration structures and
+//! the shadow/AO/GI-ray dispatch kernel.
 //!
 //! Ports `tools/rt_prototype/src/accel.rs` (acceleration-structure
-//! build/refit) and the shadow-only slice of
-//! `tools/rt_prototype/shaders/rt_trace.metal`'s `trace_lighting` +
-//! `upsample_lighting` kernels (AO/GI sampling is P2/P3 scope — dropped
-//! here, not ported). `ShadowRayTracer` is the D9 backend seam: all data
+//! build/refit) and `tools/rt_prototype/shaders/rt_trace.metal`'s
+//! `trace_lighting` + `upsample_lighting` kernels: P1 ported the shadow-only
+//! slice; P2 added the AO gather; P3 (§5.2, D4) adds the one-bounce GI
+//! gather (emissive-hit + sun-bounce, `gi_spp`/`GiMaterial` below) — the P0
+//! prototype's per-triangle `Material`/`mat_index` indirection is unneeded
+//! here since P1's per-object BLAS/TLAS layout already makes Metal's own
+//! `instance_id` the material index. `ShadowRayTracer` is the D9 backend seam: all data
 //! crosses it as manifold-gpu's own cross-backend types (`GpuDevice`,
 //! `GpuBuffer`, `GpuTexture`, `GpuEncoder`); Apple/objc2 types stay behind
 //! `MetalShadowRayTracer` and this module.
@@ -398,6 +401,10 @@ struct ShadowRayParams {
     uint2  gbuffer_size;     // full-res G-buffer / output resolution
     float  ao_radius;        // RT-P2: world-space AO ray max distance
     uint   ao_spp;           // RT-P2: AO rays/pixel; 0 = AO gather skipped
+    // RT-P3 (RAYTRACING_DESIGN.md §5.2 P3, D4): one-bounce GI gather rays
+    // per pixel — emissive-hit + sun-bounce (closes the §5.1 "no sun-bounce
+    // term" gap). 0 = GI gather skipped, matching the ao_spp==0 discipline.
+    uint   gi_spp;
     packed_float3 sun_color;     // RT-P2: premultiplied sun color*intensity
     packed_float3 ambient_color; // RT-P2: flat ambient/env color
     // RT-D3: ray origins come from the prepass DEPTH texture + this
@@ -405,6 +412,17 @@ struct ShadowRayParams {
     // P1. Column-major, matches `render_scene.rs`'s `mat4_inverse` output
     // and `render_scene.wgsl`'s `Uniforms.view_proj` convention.
     float4x4 inv_view_proj;
+};
+
+// RT-P3: one entry per RT object (SAME order as `RtObjectGeometry`'s
+// `objects` slice at accel-build time, which is also Metal's per-instance
+// `instance_id` order — the TLAS is built with `accelerationStructureIndex:
+// i` for `objects[i]`, so `hit.instance_id` indexes this array directly, no
+// separate per-primitive `mat_index` indirection like the P0 prototype
+// needed). `packed_float3` mandatory (P0 §5.1 kernel lesson).
+struct GiMaterial {
+    packed_float3 albedo;   float _p0;
+    packed_float3 emissive; float _p1;   // linear HDR, premultiplied by intensity
 };
 
 // RT-P2/D3: mirrors the Rust `AccumulateParams` below field-for-field —
@@ -474,11 +492,12 @@ static float3 world_pos_from_depth(uint2 pix, uint2 gbuffer_size, float raw_dept
 // ambient_color*ao — the D3 "accumulate lighting separated from albedo"
 // term, temporally accumulated downstream by `accumulate_irradiance`.
 kernel void trace_shadow_rays(
-    instance_acceleration_structure  accel     [[buffer(0)]],
-    constant ShadowRayParams&        p         [[buffer(1)]],
-    depth2d<float>                   depth_tex [[texture(0)]],
-    texture2d<float, access::write>  out_sv    [[texture(1)]],
-    texture2d<float, access::write>  out_irr   [[texture(2)]],
+    instance_acceleration_structure  accel        [[buffer(0)]],
+    constant ShadowRayParams&        p            [[buffer(1)]],
+    constant GiMaterial*             gi_materials [[buffer(2)]],
+    depth2d<float>                   depth_tex    [[texture(0)]],
+    texture2d<float, access::write>  out_sv       [[texture(1)]],
+    texture2d<float, access::write>  out_irr      [[texture(2)]],
     uint2 tid [[thread_position_in_grid]])
 {
     if (tid.x >= p.trace_size.x || tid.y >= p.trace_size.y) return;
@@ -594,14 +613,81 @@ kernel void trace_shadow_rays(
     }
     out_sv.write(float4(vis, ao, 0, 0), tid);
 
+    // RT-P3 (RAYTRACING_DESIGN.md §5.2 P3, D4): one-bounce GI gather —
+    // ported from the P0 prototype's `trace_lighting` GI block (ARC
+    // `rt_trace.metal`'s "one-bounce gather: emissive on hit, env on
+    // miss"), extended with the sun-bounce term the P0 §5.1 results
+    // explicitly flagged as missing ("P0's GI gathers env+emissive only,
+    // no sun-bounce term"). Reuses the SAME bias origin/normal the
+    // shadow+AO rays above already computed — one dispatch, not a
+    // parallel pass (D16's seam note). Demodulated (no local albedo
+    // multiply — same D3 discipline as the sun/AO terms above); env-miss
+    // contributes NOTHING here (not double-counted with `ambient_color *
+    // ao` above, which is this kernel's existing flat-env term — the P0
+    // prototype had no separate ambient/AO term to double against, ours
+    // does, so the gather's own job narrows to emissive + sun-bounce).
+    float3 gi = float3(0.0);
+    if (p.gi_spp > 0) {
+        intersector<triangle_data, instancing> gi_i;
+        gi_i.assume_geometry_type(geometry_type::triangle);
+        gi_i.force_opacity(forced_opacity::opaque);
+        ray gr;
+        gr.origin = origin;
+        gr.min_distance = bias_eps * 0.5;
+        gr.max_distance = INFINITY;
+        for (uint s = 0; s < p.gi_spp; s++) {
+            gr.direction = cosine_hemisphere(n, rand2(tid, p.frame_index, 300u + s));
+            auto hit = gi_i.intersect(gr, accel);
+            if (hit.type != intersection_type::none) {
+                uint oi = hit.instance_id;
+                float3 hit_emissive = float3(gi_materials[oi].emissive);
+                float3 hit_albedo = float3(gi_materials[oi].albedo);
+                // Sun-bounce: does sunlight reach the GI ray's hit point?
+                // One more any-hit ray, hit-point origin, same cone
+                // sampling as the primary shadow ray above. No hit-surface
+                // normal is available here (no per-object normal buffer is
+                // bound to this kernel — P1/P2 never needed one), so the
+                // bounce uses a flat average-cosine stand-in
+                // (SUN_BOUNCE_COS_APPROX) instead of a true hit n·l — a
+                // named, documented simplification, not invented physics;
+                // exact-normal bounce is a future refinement (would need a
+                // per-object vertex-normal buffer threaded through
+                // `RtObjectGeometry`, out of P3 scope).
+                float3 hit_pos = gr.origin + gr.direction * hit.distance;
+                ray sun_r;
+                sun_r.origin = hit_pos + p.sun_dir * bias_eps;
+                sun_r.direction = cone_sample(p.sun_dir, p.sun_cone, rand2(tid, p.frame_index, 400u + s));
+                sun_r.min_distance = bias_eps * 0.5;
+                sun_r.max_distance = INFINITY;
+                float hit_sun_vis = (shadow_i.intersect(sun_r, accel).type == intersection_type::none) ? 1.0 : 0.0;
+                // Named, documented, tunable (RAYTRACING_DESIGN.md §5.2 P2's
+                // "denoiser/accumulation parameters are named constants"
+                // rule, extended to P3): folds the missing hit-normal
+                // cosine term AND the diffuse BRDF's 1/pi energy
+                // normalization (this term skips both — no hit normal is
+                // available, and the RECEIVING point's own albedo divide
+                // happens once downstream in `render_scene.wgsl`, per D3's
+                // demodulated-irradiance discipline) into one scale factor.
+                // Peter's morning gate tunes the exact look; committed
+                // range 0.02-0.3 (single-bounce diffuse light is always
+                // dimmer than its source, never comparable to direct sun).
+                const float SUN_BOUNCE_INTENSITY_SCALE = 0.08;
+                float3 bounce = hit_albedo * float3(p.sun_color) * hit_sun_vis * SUN_BOUNCE_INTENSITY_SCALE;
+                gi += hit_emissive + bounce;
+            }
+        }
+        gi /= float(p.gi_spp);
+    }
+
     // RT-P2/D3: demodulated irradiance — sun contribution gated by n·l
-    // AND shadow visibility, plus AO-occluded flat ambient. No albedo
-    // multiply here (that happens once, downstream, in
-    // `render_scene.wgsl` — D3's "accumulate lighting separated from
-    // albedo" is what lets a same-clip light-intensity strobe keep
-    // temporal history instead of being treated as a cut).
+    // AND shadow visibility, plus AO-occluded flat ambient, plus RT-P3's
+    // gathered emissive/sun-bounce term. No albedo multiply here (that
+    // happens once, downstream, in `render_scene.wgsl` — D3's "accumulate
+    // lighting separated from albedo" is what lets a same-clip light-
+    // intensity strobe keep temporal history instead of being treated as
+    // a cut).
     float ndl = max(dot(n, p.sun_dir), 0.0);
-    float3 irradiance = float3(p.sun_color) * ndl * vis + float3(p.ambient_color) * ao;
+    float3 irradiance = float3(p.sun_color) * ndl * vis + float3(p.ambient_color) * ao + gi;
     out_irr.write(float4(irradiance, 0), tid);
 }
 
@@ -704,6 +790,9 @@ pub struct ShadowRayParams {
     pub ao_radius: f32,
     /// AO rays per pixel (RT-P2 half-res dispatch).
     pub ao_spp: u32,
+    /// RT-P3: one-bounce GI gather rays/pixel (emissive-hit + sun-bounce).
+    /// 0 skips the gather entirely (same discipline as `ao_spp == 0`).
+    pub gi_spp: u32,
     /// Sun light color, PREMULTIPLIED with intensity (linear HDR) — same
     /// convention as `render_scene.rs`'s `Light::color`.
     pub sun_color: [f32; 3],
@@ -712,15 +801,18 @@ pub struct ShadowRayParams {
     /// accumulation parameters are named constants" rule; the exact
     /// intensity is Peter's morning-gate tuning call, not baked in here).
     pub ambient_color: [f32; 3],
-    /// MSL's `float4x4` requires 16-byte alignment; the 72 bytes above it
-    /// need 8 more to reach the next 16-byte boundary (80). `#[repr(C)]`
-    /// does NOT know `[[f32; 4]; 4]` needs that (its natural alignment is
-    /// 4, from `f32`) — without this, the GPU reads `inv_view_proj`
-    /// starting early, same alignment-gotcha class as the `packed_float3`
-    /// lesson (P0 §5.1), just for a matrix instead of a vec3. Caught by
-    /// the offset assert below — don't remove this padding without
-    /// re-deriving the offset.
-    _pad_align_mat4: [u32; 2],
+    /// MSL's `float4x4` requires 16-byte alignment; the 76 bytes above it
+    /// need 4 more to reach the next 16-byte boundary (80) — RT-P3 added
+    /// `gi_spp` (4 bytes) to the prefix, shrinking this pad from 8 to 4
+    /// bytes; the total struct size (144) and `inv_view_proj`'s offset (80)
+    /// are UNCHANGED (see the offset/size asserts below). `#[repr(C)]`
+    /// does NOT know `[[f32; 4]; 4]` needs 16-byte alignment (its natural
+    /// alignment is 4, from `f32`) — without this pad, the GPU reads
+    /// `inv_view_proj` starting early, same alignment-gotcha class as the
+    /// `packed_float3` lesson (P0 §5.1), just for a matrix instead of a
+    /// vec3. Caught by the offset assert below — don't resize this padding
+    /// without re-deriving the offset.
+    _pad_align_mat4: [u32; 1],
     /// Column-major, matches `render_scene.rs`'s `mat4_inverse` output.
     pub inv_view_proj: [[f32; 4]; 4],
 }
@@ -738,6 +830,7 @@ impl ShadowRayParams {
         gbuffer_size: [u32; 2],
         ao_radius: f32,
         ao_spp: u32,
+        gi_spp: u32,
         sun_color: [f32; 3],
         ambient_color: [f32; 3],
         inv_view_proj: [[f32; 4]; 4],
@@ -751,10 +844,37 @@ impl ShadowRayParams {
             gbuffer_size,
             ao_radius,
             ao_spp,
+            gi_spp,
             sun_color,
             ambient_color,
-            _pad_align_mat4: [0; 2],
+            _pad_align_mat4: [0; 1],
             inv_view_proj,
+        }
+    }
+}
+
+/// CPU mirror of the MSL `GiMaterial` struct — RT-P3's per-instance
+/// emissive/albedo table for the GI gather's emissive-hit + sun-bounce
+/// terms. Field order and packing MUST match exactly (P0 §5.1 kernel
+/// lesson).
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct GiMaterial {
+    pub albedo: [f32; 3],
+    _pad0: f32,
+    pub emissive: [f32; 3],
+    _pad1: f32,
+}
+
+const _: () = assert!(std::mem::size_of::<GiMaterial>() == 32);
+
+impl GiMaterial {
+    pub fn new(albedo: [f32; 3], emissive: [f32; 3]) -> Self {
+        Self {
+            albedo,
+            _pad0: 0.0,
+            emissive,
+            _pad1: 0.0,
         }
     }
 }
@@ -871,11 +991,15 @@ pub trait ShadowRayTracer {
 
     /// Dispatch the half-res shadow/AO-ray pass (RT-D3; RT-P2 widens this
     /// SAME dispatch to add the AO gather + demodulated-irradiance term —
-    /// D16's seam note, not a parallel pass): ray origins + bias normal
-    /// reconstructed in-kernel from `depth_tex` (the full-res opaque-depth
-    /// prepass) + `params.inv_view_proj` — no world-pos/normal G-buffer
-    /// target. Writes (sun visibility, AO) to `out_sv` and demodulated
-    /// irradiance to `out_irr`, both at `params.trace_size`.
+    /// D16's seam note, not a parallel pass; RT-P3 widens it again with the
+    /// emissive/sun-bounce GI gather, reading `gi_materials` — one entry
+    /// per object, SAME order as the `objects` slice `build_accel` was
+    /// called with, so `instance_id` at a GI ray hit indexes it directly):
+    /// ray origins + bias normal reconstructed in-kernel from `depth_tex`
+    /// (the full-res opaque-depth prepass) + `params.inv_view_proj` — no
+    /// world-pos/normal G-buffer target. Writes (sun visibility, AO) to
+    /// `out_sv` and demodulated irradiance (now including the GI gather)
+    /// to `out_irr`, both at `params.trace_size`.
     #[allow(clippy::too_many_arguments)]
     fn dispatch_shadow_rays(
         &self,
@@ -883,6 +1007,7 @@ pub trait ShadowRayTracer {
         accel: &Self::Accel,
         params: &ShadowRayParams,
         params_buffer: &GpuBuffer,
+        gi_materials: &GpuBuffer,
         depth_tex: &GpuTexture,
         out_sv: &GpuTexture,
         out_irr: &GpuTexture,
@@ -958,6 +1083,7 @@ impl MetalShadowRayTracer {
             "trace_shadow_rays",
             identity_slot_map(&[
                 (1, SlotKind::Buffer),
+                (2, SlotKind::Buffer), // RT-P3: gi_materials, MSL [[buffer(2)]]
                 (0, SlotKind::Texture),
                 (1, SlotKind::Texture),
                 (2, SlotKind::Texture),
@@ -1012,6 +1138,7 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         accel: &Self::Accel,
         params: &ShadowRayParams,
         params_buffer: &GpuBuffer,
+        gi_materials: &GpuBuffer,
         depth_tex: &GpuTexture,
         out_sv: &GpuTexture,
         out_irr: &GpuTexture,
@@ -1027,6 +1154,11 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                 GpuBinding::Buffer {
                     binding: 1,
                     buffer: params_buffer,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: gi_materials,
                     offset: 0,
                 },
                 GpuBinding::Texture {

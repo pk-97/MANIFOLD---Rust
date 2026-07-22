@@ -181,6 +181,19 @@ const AMBIENT_IRRADIANCE_SCALE: f32 = 0.15;
 /// the exact look — this lane proves the RESET mechanism (cut vs strobe),
 /// not the aesthetic blend rate.
 const IRRADIANCE_ACCUM_ALPHA: f32 = 0.15;
+/// RAYTRACING_DESIGN.md §5.2 P3: one-bounce GI gather rays per pixel
+/// (emissive-hit + sun-bounce). Committed range 1–8 (higher = smoother
+/// emissive bounce, more GPU cost, on top of `AO_SAMPLES_PER_PIXEL`'s own
+/// rays in the SAME half-res dispatch); Peter's morning gate tunes within
+/// it.
+const GI_SAMPLES_PER_PIXEL: u32 = 2;
+/// RAYTRACING_DESIGN.md §5.2 P3: world-space glow falloff radius for an
+/// emissive object treated as a volumetric-march point light (the
+/// `shaft_lights`/D5 "emissive-colored volumetric glow" entry) — same
+/// `1/(1+d²/range²)` falloff every Point light already uses. Committed
+/// range 1.0–10.0 at the P0/P1 fixture scale; Peter's morning gate tunes
+/// per hero asset.
+const EMISSIVE_GLOW_RANGE_WORLD_UNITS: f32 = 3.0;
 
 /// IMPORT_FIDELITY_DESIGN.md D2/F-P1: split-sum IBL. Prefiltered specular
 /// chain base resolution + mip count. `PREFILTER_MIP_COUNT` mips span
@@ -655,6 +668,14 @@ pub struct RenderScene {
     rt_mask_width: u32,
     rt_mask_height: u32,
     rt_params_buffer: Option<manifold_gpu::GpuBuffer>,
+    /// RAYTRACING_DESIGN.md §5.2 P3: per-object `GiMaterial` (albedo,
+    /// emissive) table for the GI gather's emissive-hit + sun-bounce terms
+    /// — rebuilt (CPU-mapped, rewritten in place, no realloc unless the
+    /// object COUNT changes) every RT-enabled frame from the SAME
+    /// `shadow_caster_draws` order the accel structure's `objects` slice
+    /// uses, so a GI ray hit's `instance_id` indexes this directly.
+    rt_gi_materials: Option<manifold_gpu::GpuBuffer>,
+    rt_gi_materials_capacity: usize,
     /// RAYTRACING_DESIGN.md §5.2 P2: half-res/full-res demodulated
     /// irradiance (sun*ndotl*vis + ambient*ao, no albedo — D3) and its
     /// full-res TEMPORAL HISTORY (persistent across frames, blended by
@@ -724,6 +745,31 @@ fn shaft_step_count(quality: u32) -> u32 {
         0 => 16,
         1 => 24,
         _ => 32,
+    }
+}
+
+/// RAYTRACING_DESIGN.md §5.2 P3: (re)allocate the CPU-mapped `GiMaterial`
+/// table, resized only when the object count grows (same "grow, never
+/// shrink-then-reallocate every frame" idiom as this file's other lazy GPU
+/// resources) — a fresh/regrown allocation's stale tail entries are
+/// harmless (an RT-enabled frame always rewrites exactly `object_count`
+/// entries from index 0 before dispatch reads them). A free function, not
+/// a `&mut self` method: its call site sits inside a region where
+/// `identity_stub` already holds an immutable borrow of a DIFFERENT `self`
+/// field — a `&mut self` method call there would conflict (whole-struct
+/// borrow), while borrowing exactly these two fields by reference doesn't.
+fn ensure_rt_gi_materials(
+    slot: &mut Option<manifold_gpu::GpuBuffer>,
+    capacity: &mut usize,
+    device: &manifold_gpu::GpuDevice,
+    object_count: usize,
+) {
+    let needed = object_count.max(1);
+    if slot.is_none() || *capacity < needed {
+        *slot = Some(device.create_buffer_shared(
+            (needed * std::mem::size_of::<manifold_gpu::raytrace::GiMaterial>()) as u64,
+        ));
+        *capacity = needed;
     }
 }
 
@@ -812,6 +858,8 @@ impl RenderScene {
             rt_mask_width: 0,
             rt_mask_height: 0,
             rt_params_buffer: None,
+            rt_gi_materials: None,
+            rt_gi_materials_capacity: 0,
             rt_irr_half: None,
             rt_irr_full: None,
             rt_irr_history: None,
@@ -1428,6 +1476,7 @@ impl RenderScene {
             ));
         }
     }
+
 
     /// RT-P2: CPU-mapped `AccumulateParams` upload buffer — separate from
     /// `rt_params_buffer` (see the field's doc comment).
@@ -2427,13 +2476,15 @@ impl EffectNode for RenderScene {
         if light_data.is_empty() {
             light_data.extend([[0.0f32; 4]; 2]);
         }
-        // Same D4 always-bind discipline: the march's `shaft_lights`
-        // binding must be a valid (non-zero-length) buffer even at 0
-        // lights (`shaft_light_count` gates the shader's loop, not the
-        // binding's presence). 3 vec4s = one zeroed light-shaped stub.
-        if shaft_light_data.is_empty() {
-            shaft_light_data.extend([[0.0f32; 4]; 3]);
-        }
+        // Same D4 always-bind discipline for `shaft_lights` — the
+        // "still-empty, pad to one zeroed stub" pass moved to just before
+        // the march dispatch (RAYTRACING_DESIGN.md §5.2 P3 appends
+        // emissive pseudo-lights to `shaft_light_data` LATER in this
+        // function, after `shadow_caster_draws` is built; padding here,
+        // before those appends, would leave a stub 3-vec4 at index 0 that
+        // `shaft_light_count` (still 0 at THIS point) never accounts for,
+        // desyncing the shader's `li * LIGHT_STRIDE` indexing from the
+        // real appended entries).
 
         // Caster table (`@binding(9)`): `MAX_SHADOW_CASTING_LIGHTS` slots ×
         // `CASTER_VEC4_STRIDE` vec4, zeroed then filled per active caster.
@@ -3310,6 +3361,16 @@ impl EffectNode for RenderScene {
             let frame_time = ctx.time;
 
             let gpu = ctx.gpu_encoder();
+            // RAYTRACING_DESIGN.md §5.2 P3: sized to THIS frame's object
+            // count, same NLL-borrow reason the tracer/masks/params
+            // buffers above are ensured before `shadow_caster_draws`'
+            // long-lived immutable borrow starts.
+            ensure_rt_gi_materials(
+                &mut self.rt_gi_materials,
+                &mut self.rt_gi_materials_capacity,
+                gpu.device,
+                objects.len(),
+            );
             // BUG-308/RT-D4: a key change (first RT frame, or topology/
             // transform change) must NOT enqueue `build_accel` this same
             // frame — this frame's own mesh-generation GPU writes are
@@ -3367,6 +3428,7 @@ impl EffectNode for RenderScene {
                     [width, height],
                     AO_RADIUS_WORLD_UNITS,
                     AO_SAMPLES_PER_PIXEL,
+                    GI_SAMPLES_PER_PIXEL,
                     [sun.color[0], sun.color[1], sun.color[2]],
                     [
                         atmosphere.ambient_tint[0] * AMBIENT_IRRADIANCE_SCALE,
@@ -3375,6 +3437,51 @@ impl EffectNode for RenderScene {
                     ],
                     inv_view_proj,
                 );
+                // RAYTRACING_DESIGN.md §5.2 P3: rebuild the per-object
+                // material table from the SAME `shadow_caster_draws` order
+                // the accel's `objects` slice used above — `d.uniforms.
+                // base_color`/`d.uniforms.emission` are the resolved
+                // per-object factors `render_scene.wgsl`'s `resolve_albedo`/
+                // `resolve_emissive` already use for the raster combine, so
+                // the GI gather's emissive-hit/sun-bounce terms read the
+                // SAME material values the surface shading does.
+                let gi_materials_data: Vec<manifold_gpu::raytrace::GiMaterial> = shadow_caster_draws
+                    .iter()
+                    .map(|d| {
+                        manifold_gpu::raytrace::GiMaterial::new(
+                            [
+                                d.uniforms.base_color[0],
+                                d.uniforms.base_color[1],
+                                d.uniforms.base_color[2],
+                            ],
+                            [
+                                d.uniforms.emission[0],
+                                d.uniforms.emission[1],
+                                d.uniforms.emission[2],
+                            ],
+                        )
+                    })
+                    .collect();
+                let gi_materials_buffer = self.rt_gi_materials.as_ref().expect("ensured above");
+                {
+                    // `GiMaterial` is `#[repr(C)]`, all-POD (f32 fields
+                    // only) — same SAFETY discipline as manifold-gpu's own
+                    // `bytemuck_bytes` (bytemuck isn't a manifold-gpu
+                    // dependency, so this crate can't derive `Pod` on it;
+                    // a raw byte view is the same shape without adding one).
+                    let bytes: &[u8] = unsafe {
+                        std::slice::from_raw_parts(
+                            gi_materials_data.as_ptr() as *const u8,
+                            std::mem::size_of_val(gi_materials_data.as_slice()),
+                        )
+                    };
+                    let ptr = gi_materials_buffer
+                        .mapped_ptr()
+                        .expect("rt_gi_materials must be CPU-mapped (create_buffer_shared)");
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len());
+                    }
+                }
                 let tracer = self.rt_tracer.as_ref().expect("ensured above");
                 let accel = self.rt_accel.as_ref().expect("rt_ready implies rt_accel.is_some()");
                 let params_buffer = self.rt_params_buffer.as_ref().expect("ensured above");
@@ -3389,10 +3496,11 @@ impl EffectNode for RenderScene {
                     accel,
                     &params,
                     params_buffer,
+                    gi_materials_buffer,
                     depth_tex,
                     mask_half,
                     irr_half,
-                    "node.render_scene RT-D3/RT-P2 trace_shadow_rays",
+                    "node.render_scene RT-D3/RT-P2/RT-P3 trace_shadow_rays",
                 );
                 tracer.upsample_shadow(
                     gpu.native_enc,
@@ -3428,6 +3536,34 @@ impl EffectNode for RenderScene {
                     irr_history,
                     "node.render_scene RT-P2 accumulate_irradiance",
                 );
+
+                // RAYTRACING_DESIGN.md §5.2 P3 (D5, "emissive-colored
+                // volumetric glow"): every emissive object becomes an
+                // extra Point-mode entry in the SAME march light table
+                // every Sun/Point light already populates — a real,
+                // physically-motivated light source in the existing
+                // march, not a separate glow pass. Position = the
+                // object's model-matrix translation (same "translation as
+                // interior stand-in" convention this file's Blend-group
+                // depth sort already uses for a per-object world position
+                // with no full bounding-box tracked); slot -1 (unshadowed
+                // glow — this pseudo-light has no shadow-map caster, the
+                // same honest-cost fallback every Point light beyond
+                // `MAX_SHADOW_CASTING_LIGHTS` already uses). Gated on
+                // `rt_ready` (this `if` block) rather than `rt_enabled`
+                // alone: an RT-enabled scene whose accel isn't ready yet
+                // has no GI-gathered emissive term either, so gating the
+                // glow the same way keeps both RT-P3 additions consistent.
+                for d in &shadow_caster_draws {
+                    let emission = d.uniforms.emission;
+                    if emission[0] > 0.0 || emission[1] > 0.0 || emission[2] > 0.0 {
+                        let m = d.uniforms.model;
+                        shaft_light_data.push([m[3][0], m[3][1], m[3][2], 1.0]);
+                        shaft_light_data.push([emission[0], emission[1], emission[2], -1.0]);
+                        shaft_light_data.push([EMISSIVE_GLOW_RANGE_WORLD_UNITS, 0.0, 0.0, 0.0]);
+                        shaft_light_count += 1;
+                    }
+                }
             }
         }
 
@@ -3940,8 +4076,30 @@ impl EffectNode for RenderScene {
                     atmosphere.shaft_anisotropy,
                     atmosphere.shaft_intensity,
                 ],
-                misc: [steps, shaft_light_count as f32, cam.lens.exposure_ev, 0.0],
+                // RAYTRACING_DESIGN.md §5.2 P3/D5: `rt_shadow_mask` (below)
+                // is only meaningfully populated when RT is on AND its
+                // accel structure is ready (same `rt_ready` gate the
+                // surface pass uses) — a stale/never-written mask read with
+                // the flag on would corrupt the Sun term, so the flag
+                // mirrors that exact condition, not `rt_enabled` alone.
+                misc: [
+                    steps,
+                    shaft_light_count as f32,
+                    cam.lens.exposure_ev,
+                    if rt_enabled && rt_ready { 1.0 } else { 0.0 },
+                ],
             };
+            // D4 always-bind discipline: the march's `shaft_lights` binding
+            // must be a valid (non-zero-length) buffer even at 0 lights
+            // (`shaft_light_count` gates the shader's loop, not the
+            // binding's presence) — checked HERE, after every append
+            // (real lights above, RT-P3's emissive pseudo-lights in the RT
+            // block above) has already happened, so a stub only gets added
+            // when the buffer is genuinely still empty. 3 vec4s = one
+            // zeroed light-shaped stub.
+            if shaft_light_data.is_empty() {
+                shaft_light_data.extend([[0.0f32; 4]; 3]);
+            }
             let shaft_light_bytes: &[u8] = bytemuck::cast_slice(&shaft_light_data);
             {
                 let gpu = ctx.gpu_encoder();
@@ -3958,6 +4116,7 @@ impl EffectNode for RenderScene {
                         GpuBinding::Texture { binding: 7, texture: shadow_3 },
                         GpuBinding::Sampler { binding: 8, sampler: shadow_sampler },
                         GpuBinding::Texture { binding: 9, texture: inscatter },
+                        GpuBinding::Texture { binding: 10, texture: rt_mask_tex },
                     ],
                     [half_w.div_ceil(16), half_h.div_ceil(16), 1],
                     "node.render_scene shaft march",
