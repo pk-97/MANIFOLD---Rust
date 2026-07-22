@@ -475,10 +475,47 @@ kernel void trace_shadow_rays(
     if (!isfinite(n.x) || !isfinite(n.y) || !isfinite(n.z) || length_squared(n) < 1e-8) {
         n = float3(0, 1, 0);
     }
-    // Bias origin along the sun direction too (not just the normal) —
-    // guards the finite-difference normal's occasional near-degenerate
-    // case (e.g. a silhouette edge) from immediately self-shadowing.
-    float3 origin = wp + n * 1e-3 + p.sun_dir * 1e-3;
+    // BUG-309: a FIXED 1e-3 world-unit bias self-intersects almost
+    // everywhere at real scene scale (confirmed via a per-pixel hit-t
+    // dump: median false-hit distance ~1.8e-4, ~500x below even a
+    // generous 1e-2*scene-scale self-intersection threshold, while the
+    // OCCLUDER's real shadow hits land at ~1.0-1.5 — i.e. self-
+    // intersection, not a mislocated shadow). `texel_scale` is the
+    // world-space distance this SCREEN PIXEL step covers (the same
+    // `wpx`/`wpy` neighbor deltas already computed for `n`) — it grows
+    // with view distance and surface obliquity exactly the way the bias
+    // needs to (RT-D4 debug pass's brief: "constant epsilon that works up
+    // close fails at scene scale"), with no new per-frame CPU parameter.
+    // MAX, not MIN: taking the smaller neighbor delta sounded safer but a
+    // per-pixel dump showed EITHER axis (or both) can legitimately spike
+    // at grazing/near-horizon angles (a tiny screen-space step covering a
+    // huge world-space distance under perspective) — MIN just meant
+    // whichever axis happened to be small that pixel, still occasionally
+    // letting a huge bias through. MAX is the one that actually needs
+    // capping, not avoiding: `BIAS_EPS_CAP` below is a hard, ABSOLUTE
+    // ceiling (independent of scene scale, unlike the rest of this
+    // epsilon) that exists ONLY to catch the pathological case a per-
+    // pixel derivative can't rule out in-kernel — the 2x1 synthetic
+    // fixture (`rt_p1_shadow.rs`) is the sharpest example: one axis has
+    // zero resolution, so its neighbor delta is a full frustum-width
+    // jump, and an uncapped `texel_scale*2.0` (~2.0 world units, vs. the
+    // fixture's occluder ~0.7 units away) biased the ray clean past it.
+    const float BIAS_EPS_CAP = 0.02;
+    float texel_scale = max(length(wpx - wp), length(wpy - wp));
+    if (!isfinite(texel_scale) || texel_scale < 1e-6) {
+        texel_scale = 1e-3; // degenerate/singular reconstruction fallback
+    }
+    float bias_eps = min(texel_scale * 2.0, BIAS_EPS_CAP);
+    // BUG-309 follow-up: bias along `sun_dir` ONLY, not `n` — the
+    // finite-difference normal is reconstructed from two CLOSE depth
+    // samples (this scene's far=200 compresses raw depth into a narrow
+    // 0.9936-1.0 band, a real catastrophic-cancellation risk for a
+    // subtraction-based normal) and produced a visibly scattered, wide
+    // false-shadow footprint even after the epsilon-scale fix above —
+    // `sun_dir` is exact (a CPU-computed light direction, never
+    // reconstructed), so lifting along it alone is unaffected by that
+    // noise and still reliably clears a roughly-Y-up surface.
+    float3 origin = wp + p.sun_dir * bias_eps;
 
     intersector<triangle_data, instancing> shadow_i;
     shadow_i.assume_geometry_type(geometry_type::triangle);
@@ -487,7 +524,12 @@ kernel void trace_shadow_rays(
 
     ray r;
     r.origin = origin;
-    r.min_distance = 0.0;
+    // t_min: reject any hit closer than the bias itself outright — the
+    // in-kernel self-intersection filter (Fable's brief's "often the
+    // cleanest fix") on top of the scale-aware origin offset above, so a
+    // pathological normal/winding case that still lands inside its own
+    // triangle can't register as a false shadow.
+    r.min_distance = bias_eps * 0.5;
     r.max_distance = INFINITY;
 
     uint spp = max(p.shadow_spp, 1u);
