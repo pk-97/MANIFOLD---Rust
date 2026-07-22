@@ -1,7 +1,10 @@
 use crate::node_graph::ports::PortType;
 
 use super::types::{is_texture_input, CodegenError};
-use super::standalone::{generate_standalone_buffer, generate_standalone_ext, generate_standalone_resolve};
+use super::standalone::{
+    generate_standalone, generate_standalone_buffer, generate_standalone_resolve,
+    StandaloneKernelSpec,
+};
 
 
 
@@ -12,20 +15,22 @@ use super::standalone::{generate_standalone_buffer, generate_standalone_ext, gen
 pub fn standalone_for_spec<P: crate::node_graph::primitive::PrimitiveSpec>(
 ) -> Result<String, CodegenError> {
     let body = P::WGSL_BODY.ok_or(CodegenError::NoBody)?;
+    let spec = StandaloneKernelSpec {
+        fusion_kind: P::FUSION_KIND,
+        body,
+        inputs: P::INPUTS,
+        params: P::PARAMS,
+        input_access: P::INPUT_ACCESS,
+        derived_uniforms: P::DERIVED_UNIFORMS,
+        outputs: P::OUTPUTS,
+        stencil_fetch: P::STENCIL_FETCH,
+        includes: P::WGSL_INCLUDES,
+    };
     // Buffer atoms (Array output) route directly so they can carry
     // `DERIVED_UNIFORMS` (frame-derived non-param uniform fields). The texture
     // path's public `generate_standalone` signature stays untouched.
     if P::OUTPUTS.iter().any(|o| matches!(o.ty, PortType::Array(_))) {
-        return generate_standalone_buffer(
-            body,
-            P::INPUTS,
-            P::PARAMS,
-            P::INPUT_ACCESS,
-            P::DERIVED_UNIFORMS,
-            P::WGSL_INCLUDES,
-            P::OUTPUTS,
-            P::ATOMIC_OUTPUTS,
-        );
+        return generate_standalone_buffer(&spec, P::ATOMIC_OUTPUTS);
     }
     // BUFFER→TEXTURE resolve: an Array input with NO texture input, feeding a
     // texture output — the accumulator-to-density bridge
@@ -34,7 +39,7 @@ pub fn standalone_for_spec<P: crate::node_graph::primitive::PrimitiveSpec>(
     // distinct Array-input shape — a texture-domain atom that ALSO reads ≥1
     // texture input and tags its Array input `BufferIndex` (the `draw_*`
     // family) — which is NOT the resolve bridge and must fall through to
-    // `generate_standalone_ext` below (the codegen path that now handles
+    // `generate_standalone` below (the codegen path that now handles
     // `BufferIndex`). Gated on "no texture input" so this branch's scope
     // stays exactly what it always was for every existing resolve atom.
     if P::INPUTS.iter().any(|i| matches!(i.ty, PortType::Array(_)))
@@ -42,17 +47,7 @@ pub fn standalone_for_spec<P: crate::node_graph::primitive::PrimitiveSpec>(
     {
         return generate_standalone_resolve(body, P::INPUTS, P::PARAMS, P::OUTPUTS);
     }
-    generate_standalone_ext(
-        P::FUSION_KIND,
-        body,
-        P::INPUTS,
-        P::PARAMS,
-        P::INPUT_ACCESS,
-        P::DERIVED_UNIFORMS,
-        P::OUTPUTS,
-        P::STENCIL_FETCH,
-        P::WGSL_INCLUDES,
-    )
+    generate_standalone(&spec)
 }
 
 /// WGSL storage-texture format token for the formats a texture kernel can declare
@@ -123,30 +118,22 @@ pub fn standalone_for_node(
     node: &dyn crate::node_graph::effect_node::EffectNode,
 ) -> Result<String, CodegenError> {
     let body = node.wgsl_body().ok_or(CodegenError::NoBody)?;
+    let spec = StandaloneKernelSpec {
+        fusion_kind: node.fusion_kind(),
+        body,
+        inputs: node.inputs(),
+        params: node.parameters(),
+        input_access: node.input_access(),
+        derived_uniforms: node.derived_uniforms(),
+        outputs: node.outputs(),
+        stencil_fetch: node.stencil_fetch(),
+        includes: node.wgsl_includes(),
+    };
     if node.outputs().iter().any(|o| matches!(o.ty, PortType::Array(_))) {
-        return generate_standalone_buffer(
-            body,
-            node.inputs(),
-            node.parameters(),
-            node.input_access(),
-            node.derived_uniforms(),
-            node.wgsl_includes(),
-            node.outputs(),
-            node.atomic_outputs(),
-        );
+        return generate_standalone_buffer(&spec, node.atomic_outputs());
     }
     if node.inputs().iter().any(|i| matches!(i.ty, PortType::Array(_))) {
         return generate_standalone_resolve(body, node.inputs(), node.parameters(), node.outputs());
     }
-    generate_standalone_ext(
-        node.fusion_kind(),
-        body,
-        node.inputs(),
-        node.parameters(),
-        node.input_access(),
-        node.derived_uniforms(),
-        node.outputs(),
-        node.stencil_fetch(),
-        node.wgsl_includes(),
-    )
+    generate_standalone(&spec)
 }

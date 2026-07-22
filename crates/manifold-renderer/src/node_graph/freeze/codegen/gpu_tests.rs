@@ -2,7 +2,7 @@ use crate::node_graph::effect_node::NodeInstanceId;
 use crate::node_graph::freeze::markers::Marker;
 
 use super::fused::generate_fused;
-use super::standalone::{generate_standalone, generate_standalone_ext};
+use super::standalone::{generate_standalone, StandaloneKernelSpec};
 use super::types::{FusedVirtualChain, FusionRegion, InputSource, RegionNode, ENTRY};
 use crate::node_graph::effect_node::EffectNode;
 use crate::node_graph::freeze::TextureDiff;
@@ -142,8 +142,8 @@ fn dispatch_pointwise(
 fn generated_wgsl_is_deterministic() {
     let g = Gain::new();
     let body = g.wgsl_body().unwrap();
-    let a = generate_standalone(g.fusion_kind(), body, g.inputs(), g.parameters(), g.input_access(), g.derived_uniforms(), g.outputs()).unwrap();
-    let b = generate_standalone(g.fusion_kind(), body, g.inputs(), g.parameters(), g.input_access(), g.derived_uniforms(), g.outputs()).unwrap();
+    let a = generate_standalone(&StandaloneKernelSpec { fusion_kind: g.fusion_kind(), body, inputs: g.inputs(), params: g.parameters(), input_access: g.input_access(), derived_uniforms: g.derived_uniforms(), outputs: g.outputs(), stencil_fetch: false, includes: &[] }).unwrap();
+    let b = generate_standalone(&StandaloneKernelSpec { fusion_kind: g.fusion_kind(), body, inputs: g.inputs(), params: g.parameters(), input_access: g.input_access(), derived_uniforms: g.derived_uniforms(), outputs: g.outputs(), stencil_fetch: false, includes: &[] }).unwrap();
     assert_eq!(a, b, "codegen must be deterministic");
     assert!(a.contains("fn cs_main"), "must emit the cs_main entry");
     assert!(!a.contains("cs_main_"), "no symbol may have cs_main as a prefix");
@@ -723,15 +723,17 @@ fn generated_gain_matches_original() {
     let input = gradient(&device, w, h);
 
     let g = Gain::new();
-    let generated = generate_standalone(
-        g.fusion_kind(),
-        g.wgsl_body().unwrap(),
-        g.inputs(),
-        g.parameters(),
-        g.input_access(),
-        g.derived_uniforms(),
-        g.outputs(),
-    )
+    let generated = generate_standalone(&StandaloneKernelSpec {
+        fusion_kind: g.fusion_kind(),
+        body: g.wgsl_body().unwrap(),
+        inputs: g.inputs(),
+        params: g.parameters(),
+        input_access: g.input_access(),
+        derived_uniforms: g.derived_uniforms(),
+        outputs: g.outputs(),
+        stencil_fetch: false,
+        includes: &[],
+    })
     .expect("gain generates");
     let original = include_str!("../../primitives/shaders/gain.wgsl");
 
@@ -808,15 +810,17 @@ fn generated_pointwise_atoms_match_originals() {
     let differ = TextureDiff::new(&device);
     for (type_id, shader_file, params) in cases {
         let node = registry.construct(type_id).unwrap();
-        let generated = generate_standalone(
-            node.fusion_kind(),
-            node.wgsl_body().unwrap(),
-            node.inputs(),
-            node.parameters(),
-            node.input_access(),
-            node.derived_uniforms(),
-            node.outputs(),
-        )
+        let generated = generate_standalone(&StandaloneKernelSpec {
+            fusion_kind: node.fusion_kind(),
+            body: node.wgsl_body().unwrap(),
+            inputs: node.inputs(),
+            params: node.parameters(),
+            input_access: node.input_access(),
+            derived_uniforms: node.derived_uniforms(),
+            outputs: node.outputs(),
+            stencil_fetch: false,
+            includes: &[],
+        })
         .unwrap_or_else(|e| panic!("{type_id} generate: {e:?}"));
         let original = std::fs::read_to_string(format!("{shaders_dir}/{shader_file}"))
             .unwrap_or_else(|e| panic!("read {shader_file}: {e}"));
@@ -853,15 +857,17 @@ fn generated_mix_matches_original() {
 
     let m = crate::node_graph::primitives::Mix::new();
     let node: &dyn EffectNode = &m;
-    let generated = generate_standalone(
-        node.fusion_kind(),
-        node.wgsl_body().unwrap(),
-        node.inputs(),
-        node.parameters(),
-        node.input_access(),
-        node.derived_uniforms(),
-        node.outputs(),
-    )
+    let generated = generate_standalone(&StandaloneKernelSpec {
+        fusion_kind: node.fusion_kind(),
+        body: node.wgsl_body().unwrap(),
+        inputs: node.inputs(),
+        params: node.parameters(),
+        input_access: node.input_access(),
+        derived_uniforms: node.derived_uniforms(),
+        outputs: node.outputs(),
+        stencil_fetch: false,
+        includes: &[],
+    })
     .expect("mix generates");
     let original = include_str!("../../primitives/shaders/mix.wgsl");
 
@@ -899,15 +905,17 @@ fn generated_vignette_matches_original() {
 
     let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
     let node = registry.construct("node.vignette").unwrap();
-    let generated = generate_standalone(
-        node.fusion_kind(),
-        node.wgsl_body().unwrap(),
-        node.inputs(),
-        node.parameters(),
-        node.input_access(),
-        node.derived_uniforms(),
-        node.outputs(),
-    )
+    let generated = generate_standalone(&StandaloneKernelSpec {
+        fusion_kind: node.fusion_kind(),
+        body: node.wgsl_body().unwrap(),
+        inputs: node.inputs(),
+        params: node.parameters(),
+        input_access: node.input_access(),
+        derived_uniforms: node.derived_uniforms(),
+        outputs: node.outputs(),
+        stencil_fetch: false,
+        includes: &[],
+    })
     .expect("vignette generates");
     let original = include_str!("../../primitives/shaders/vignette.wgsl");
     let differ = TextureDiff::new(&device);
@@ -996,15 +1004,17 @@ fn generated_dither_matches_original() {
 
     let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
     let node = registry.construct("node.dither").unwrap();
-    let generated = generate_standalone(
-        node.fusion_kind(),
-        node.wgsl_body().unwrap(),
-        node.inputs(),
-        node.parameters(),
-        node.input_access(),
-        node.derived_uniforms(),
-        node.outputs(),
-    )
+    let generated = generate_standalone(&StandaloneKernelSpec {
+        fusion_kind: node.fusion_kind(),
+        body: node.wgsl_body().unwrap(),
+        inputs: node.inputs(),
+        params: node.parameters(),
+        input_access: node.input_access(),
+        derived_uniforms: node.derived_uniforms(),
+        outputs: node.outputs(),
+        stencil_fetch: false,
+        includes: &[],
+    })
     .expect("dither generates");
 
     // Structural: the all-texel atom binds NO sampler and reads both inputs
@@ -1102,15 +1112,17 @@ fn generated_coincident_atoms_match_originals() {
     ];
     for (type_id, shader_file, n_inputs, params) in cases {
         let node = registry.construct(type_id).unwrap();
-        let generated = generate_standalone(
-            node.fusion_kind(),
-            node.wgsl_body().unwrap(),
-            node.inputs(),
-            node.parameters(),
-            node.input_access(),
-            node.derived_uniforms(),
-            node.outputs(),
-        )
+        let generated = generate_standalone(&StandaloneKernelSpec {
+            fusion_kind: node.fusion_kind(),
+            body: node.wgsl_body().unwrap(),
+            inputs: node.inputs(),
+            params: node.parameters(),
+            input_access: node.input_access(),
+            derived_uniforms: node.derived_uniforms(),
+            outputs: node.outputs(),
+            stencil_fetch: false,
+            includes: &[],
+        })
         .unwrap_or_else(|e| panic!("{type_id} generate: {e:?}"));
         let original = std::fs::read_to_string(format!("{shaders_dir}/{shader_file}"))
             .unwrap_or_else(|e| panic!("read {shader_file}: {e}"));
@@ -1195,15 +1207,17 @@ fn generated_enum_pointwise_atoms_match_originals() {
     ];
     for (type_id, shader_file, bytes) in cases {
         let node = registry.construct(type_id).unwrap();
-        let generated = generate_standalone(
-            node.fusion_kind(),
-            node.wgsl_body().unwrap(),
-            node.inputs(),
-            node.parameters(),
-            node.input_access(),
-            node.derived_uniforms(),
-            node.outputs(),
-        )
+        let generated = generate_standalone(&StandaloneKernelSpec {
+            fusion_kind: node.fusion_kind(),
+            body: node.wgsl_body().unwrap(),
+            inputs: node.inputs(),
+            params: node.parameters(),
+            input_access: node.input_access(),
+            derived_uniforms: node.derived_uniforms(),
+            outputs: node.outputs(),
+            stencil_fetch: false,
+            includes: &[],
+        })
         .unwrap_or_else(|e| panic!("{type_id} generate: {e:?}"));
         let original = std::fs::read_to_string(format!("{shaders_dir}/{shader_file}"))
             .unwrap_or_else(|e| panic!("read {shader_file}: {e}"));
@@ -1261,15 +1275,17 @@ fn generated_paramless_atom_matches_original() {
     let input = gradient(&device, w, h);
     let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
     let node = registry.construct("node.absolute_value").unwrap();
-    let generated = generate_standalone(
-        node.fusion_kind(),
-        node.wgsl_body().unwrap(),
-        node.inputs(),
-        node.parameters(),
-        node.input_access(),
-        node.derived_uniforms(),
-        node.outputs(),
-    )
+    let generated = generate_standalone(&StandaloneKernelSpec {
+        fusion_kind: node.fusion_kind(),
+        body: node.wgsl_body().unwrap(),
+        inputs: node.inputs(),
+        params: node.parameters(),
+        input_access: node.input_access(),
+        derived_uniforms: node.derived_uniforms(),
+        outputs: node.outputs(),
+        stencil_fetch: false,
+        includes: &[],
+    })
     .expect("abs_texture generates");
 
     // Structural: no uniform, textures start at binding 0.
@@ -1318,15 +1334,17 @@ fn generated_remap_matches_original() {
 
     let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
     let node = registry.construct("node.remap").unwrap();
-    let generated = generate_standalone(
-        node.fusion_kind(),
-        node.wgsl_body().unwrap(),
-        node.inputs(),
-        node.parameters(),
-        node.input_access(),
-        node.derived_uniforms(),
-        node.outputs(),
-    )
+    let generated = generate_standalone(&StandaloneKernelSpec {
+        fusion_kind: node.fusion_kind(),
+        body: node.wgsl_body().unwrap(),
+        inputs: node.inputs(),
+        params: node.parameters(),
+        input_access: node.input_access(),
+        derived_uniforms: node.derived_uniforms(),
+        outputs: node.outputs(),
+        stencil_fetch: false,
+        includes: &[],
+    })
     .expect("remap generates");
 
     // Structural: gather `source` is NOT pre-read; textures then sampler.
@@ -1433,15 +1451,17 @@ fn generated_gather_atoms_match_originals() {
     ];
     for (type_id, shader_file, params) in cases {
         let node = registry.construct(type_id).unwrap();
-        let generated = generate_standalone(
-            node.fusion_kind(),
-            node.wgsl_body().unwrap(),
-            node.inputs(),
-            node.parameters(),
-            node.input_access(),
-            node.derived_uniforms(),
-            node.outputs(),
-        )
+        let generated = generate_standalone(&StandaloneKernelSpec {
+            fusion_kind: node.fusion_kind(),
+            body: node.wgsl_body().unwrap(),
+            inputs: node.inputs(),
+            params: node.parameters(),
+            input_access: node.input_access(),
+            derived_uniforms: node.derived_uniforms(),
+            outputs: node.outputs(),
+            stencil_fetch: false,
+            includes: &[],
+        })
         .unwrap_or_else(|e| panic!("{type_id} generate: {e:?}"));
         let original = std::fs::read_to_string(format!("{shaders_dir}/{shader_file}"))
             .unwrap_or_else(|e| panic!("read {shader_file}: {e}"));
@@ -1520,15 +1540,17 @@ fn generated_single_input_gather_atoms_match_originals() {
     ];
     for (type_id, shader_file, bytes) in cases {
         let node = registry.construct(type_id).unwrap();
-        let generated = generate_standalone(
-            node.fusion_kind(),
-            node.wgsl_body().unwrap(),
-            node.inputs(),
-            node.parameters(),
-            node.input_access(),
-            node.derived_uniforms(),
-            node.outputs(),
-        )
+        let generated = generate_standalone(&StandaloneKernelSpec {
+            fusion_kind: node.fusion_kind(),
+            body: node.wgsl_body().unwrap(),
+            inputs: node.inputs(),
+            params: node.parameters(),
+            input_access: node.input_access(),
+            derived_uniforms: node.derived_uniforms(),
+            outputs: node.outputs(),
+            stencil_fetch: false,
+            includes: &[],
+        })
         .unwrap_or_else(|e| panic!("{type_id} generate: {e:?}"));
         // Structural: the gather input is NOT pre-sampled into a register.
         assert!(
@@ -1574,17 +1596,17 @@ fn generated_separable_gaussian_matches_original() {
     let differ = TextureDiff::new(&device);
 
     let node = registry.construct("node.gaussian_blur").unwrap();
-    let generated = generate_standalone_ext(
-        node.fusion_kind(),
-        node.wgsl_body().unwrap(),
-        node.inputs(),
-        node.parameters(),
-        node.input_access(),
-        node.derived_uniforms(),
-        node.outputs(),
-        node.stencil_fetch(),
-        node.wgsl_includes(),
-    )
+    let generated = generate_standalone(&StandaloneKernelSpec {
+        fusion_kind: node.fusion_kind(),
+        body: node.wgsl_body().unwrap(),
+        inputs: node.inputs(),
+        params: node.parameters(),
+        input_access: node.input_access(),
+        derived_uniforms: node.derived_uniforms(),
+        outputs: node.outputs(),
+        stencil_fetch: node.stencil_fetch(),
+        includes: node.wgsl_includes(),
+    })
     .expect("gaussian_blur generates");
     assert!(
         !generated.contains("let c_in"),
@@ -1659,15 +1681,17 @@ fn generated_basic_shape_matches_original() {
     let differ = TextureDiff::new(&device);
 
     let node = registry.construct("node.basic_shape").unwrap();
-    let generated = generate_standalone(
-        node.fusion_kind(),
-        node.wgsl_body().unwrap(),
-        node.inputs(),
-        node.parameters(),
-        node.input_access(),
-        node.derived_uniforms(),
-        node.outputs(),
-    )
+    let generated = generate_standalone(&StandaloneKernelSpec {
+        fusion_kind: node.fusion_kind(),
+        body: node.wgsl_body().unwrap(),
+        inputs: node.inputs(),
+        params: node.parameters(),
+        input_access: node.input_access(),
+        derived_uniforms: node.derived_uniforms(),
+        outputs: node.outputs(),
+        stencil_fetch: false,
+        includes: &[],
+    })
     .expect("basic_shape generates");
     let original = include_str!("../../primitives/shaders/basic_shape.wgsl");
 
@@ -1741,15 +1765,17 @@ fn generated_gradient_ramp_matches_original() {
     let differ = TextureDiff::new(&device);
 
     let node = registry.construct("node.gradient").unwrap();
-    let generated = generate_standalone(
-        node.fusion_kind(),
-        node.wgsl_body().unwrap(),
-        node.inputs(),
-        node.parameters(),
-        node.input_access(),
-        node.derived_uniforms(),
-        node.outputs(),
-    )
+    let generated = generate_standalone(&StandaloneKernelSpec {
+        fusion_kind: node.fusion_kind(),
+        body: node.wgsl_body().unwrap(),
+        inputs: node.inputs(),
+        params: node.parameters(),
+        input_access: node.input_access(),
+        derived_uniforms: node.derived_uniforms(),
+        outputs: node.outputs(),
+        stencil_fetch: false,
+        includes: &[],
+    })
     .expect("gradient_ramp generates");
     // Structural: the Table param expands to a count word + a vec4 array.
     assert!(
@@ -1821,15 +1847,17 @@ fn generated_downsample_matches_original() {
     let differ = TextureDiff::new(&device);
 
     let node = registry.construct("node.downsample").unwrap();
-    let generated = generate_standalone(
-        node.fusion_kind(),
-        node.wgsl_body().unwrap(),
-        node.inputs(),
-        node.parameters(),
-        node.input_access(),
-        node.derived_uniforms(),
-        node.outputs(),
-    )
+    let generated = generate_standalone(&StandaloneKernelSpec {
+        fusion_kind: node.fusion_kind(),
+        body: node.wgsl_body().unwrap(),
+        inputs: node.inputs(),
+        params: node.parameters(),
+        input_access: node.input_access(),
+        derived_uniforms: node.derived_uniforms(),
+        outputs: node.outputs(),
+        stencil_fetch: false,
+        includes: &[],
+    })
     .expect("downsample generates");
     assert!(
         !generated.contains("let c_in"),
@@ -1893,17 +1921,17 @@ fn generated_gaussian_blur_variable_width_matches_original() {
     let differ = TextureDiff::new(&device);
 
     let node = registry.construct("node.variable_blur").unwrap();
-    let generated = generate_standalone_ext(
-        node.fusion_kind(),
-        node.wgsl_body().unwrap(),
-        node.inputs(),
-        node.parameters(),
-        node.input_access(),
-        node.derived_uniforms(),
-        node.outputs(),
-        node.stencil_fetch(),
-        node.wgsl_includes(),
-    )
+    let generated = generate_standalone(&StandaloneKernelSpec {
+        fusion_kind: node.fusion_kind(),
+        body: node.wgsl_body().unwrap(),
+        inputs: node.inputs(),
+        params: node.parameters(),
+        input_access: node.input_access(),
+        derived_uniforms: node.derived_uniforms(),
+        outputs: node.outputs(),
+        stencil_fetch: node.stencil_fetch(),
+        includes: node.wgsl_includes(),
+    })
     .expect("variable-width blur generates");
     assert!(
         !generated.contains("let c_in") && !generated.contains("let c_width"),
@@ -1985,15 +2013,17 @@ fn generated_blur_3d_separable_matches_original() {
     let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
 
     let node = registry.construct("node.blur_3d").unwrap();
-    let generated = generate_standalone(
-        node.fusion_kind(),
-        node.wgsl_body().unwrap(),
-        node.inputs(),
-        node.parameters(),
-        node.input_access(),
-        node.derived_uniforms(),
-        node.outputs(),
-    )
+    let generated = generate_standalone(&StandaloneKernelSpec {
+        fusion_kind: node.fusion_kind(),
+        body: node.wgsl_body().unwrap(),
+        inputs: node.inputs(),
+        params: node.parameters(),
+        input_access: node.input_access(),
+        derived_uniforms: node.derived_uniforms(),
+        outputs: node.outputs(),
+        stencil_fetch: false,
+        includes: &[],
+    })
     .expect("blur_3d generates");
     // Structural: 3D texture types + 3D dispatch.
     assert!(
@@ -2152,15 +2182,17 @@ fn generated_gradient_central_diff_3d_matches_original() {
     let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
 
     let node = registry.construct("node.edge_slope_3d").unwrap();
-    let generated = generate_standalone(
-        node.fusion_kind(),
-        node.wgsl_body().unwrap(),
-        node.inputs(),
-        node.parameters(),
-        node.input_access(),
-        node.derived_uniforms(),
-        node.outputs(),
-    )
+    let generated = generate_standalone(&StandaloneKernelSpec {
+        fusion_kind: node.fusion_kind(),
+        body: node.wgsl_body().unwrap(),
+        inputs: node.inputs(),
+        params: node.parameters(),
+        input_access: node.input_access(),
+        derived_uniforms: node.derived_uniforms(),
+        outputs: node.outputs(),
+        stencil_fetch: false,
+        includes: &[],
+    })
     .expect("gradient_central_diff_3d generates");
     assert!(
         !generated.contains("var samp: sampler"),
@@ -2234,15 +2266,17 @@ fn generated_curl_slope_force_3d_matches_original() {
     let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
 
     let node = registry.construct("node.swirl_force_3d").unwrap();
-    let generated = generate_standalone(
-        node.fusion_kind(),
-        node.wgsl_body().unwrap(),
-        node.inputs(),
-        node.parameters(),
-        node.input_access(),
-        node.derived_uniforms(),
-        node.outputs(),
-    )
+    let generated = generate_standalone(&StandaloneKernelSpec {
+        fusion_kind: node.fusion_kind(),
+        body: node.wgsl_body().unwrap(),
+        inputs: node.inputs(),
+        params: node.parameters(),
+        input_access: node.input_access(),
+        derived_uniforms: node.derived_uniforms(),
+        outputs: node.outputs(),
+        stencil_fetch: false,
+        includes: &[],
+    })
     .expect("curl_slope_force_3d generates");
     assert!(
         !generated.contains("var samp: sampler"),
@@ -2341,15 +2375,17 @@ fn generated_vector_op_atoms_match_originals() {
         ("node.normalize", "normalize_vec2.wgsl"),
     ] {
         let node = registry.construct(type_id).unwrap();
-        let generated = generate_standalone(
-            node.fusion_kind(),
-            node.wgsl_body().unwrap(),
-            node.inputs(),
-            node.parameters(),
-            node.input_access(),
-            node.derived_uniforms(),
-            node.outputs(),
-        )
+        let generated = generate_standalone(&StandaloneKernelSpec {
+            fusion_kind: node.fusion_kind(),
+            body: node.wgsl_body().unwrap(),
+            inputs: node.inputs(),
+            params: node.parameters(),
+            input_access: node.input_access(),
+            derived_uniforms: node.derived_uniforms(),
+            outputs: node.outputs(),
+            stencil_fetch: false,
+            includes: &[],
+        })
         .unwrap_or_else(|e| panic!("{type_id} generate: {e:?}"));
         let original = std::fs::read_to_string(format!("{shaders_dir}/{shader}"))
             .unwrap_or_else(|e| panic!("read {shader}: {e}"));
@@ -2371,15 +2407,17 @@ fn generated_vector_op_atoms_match_originals() {
 
     // rotate_vec2_by_angle: dual-packed (hand cos/sin vs generated angle).
     let node = registry.construct("node.rotate_vector").unwrap();
-    let generated = generate_standalone(
-        node.fusion_kind(),
-        node.wgsl_body().unwrap(),
-        node.inputs(),
-        node.parameters(),
-        node.input_access(),
-        node.derived_uniforms(),
-        node.outputs(),
-    )
+    let generated = generate_standalone(&StandaloneKernelSpec {
+        fusion_kind: node.fusion_kind(),
+        body: node.wgsl_body().unwrap(),
+        inputs: node.inputs(),
+        params: node.parameters(),
+        input_access: node.input_access(),
+        derived_uniforms: node.derived_uniforms(),
+        outputs: node.outputs(),
+        stencil_fetch: false,
+        includes: &[],
+    })
     .expect("rotate_vec2 generates");
     let original = std::fs::read_to_string(format!("{shaders_dir}/rotate_vec2_by_angle.wgsl"))
         .expect("read rotate_vec2_by_angle.wgsl");
@@ -2418,15 +2456,17 @@ fn generated_hash_field_by_seed_matches_original() {
     let differ = TextureDiff::new(&device);
 
     let node = registry.construct("node.hash_field_by_seed").unwrap();
-    let generated = generate_standalone(
-        node.fusion_kind(),
-        node.wgsl_body().unwrap(),
-        node.inputs(),
-        node.parameters(),
-        node.input_access(),
-        node.derived_uniforms(),
-        node.outputs(),
-    )
+    let generated = generate_standalone(&StandaloneKernelSpec {
+        fusion_kind: node.fusion_kind(),
+        body: node.wgsl_body().unwrap(),
+        inputs: node.inputs(),
+        params: node.parameters(),
+        input_access: node.input_access(),
+        derived_uniforms: node.derived_uniforms(),
+        outputs: node.outputs(),
+        stencil_fetch: false,
+        includes: &[],
+    })
     .expect("hash_field_by_seed generates");
     assert!(
         !generated.contains("var samp: sampler"),
@@ -2491,15 +2531,17 @@ fn generated_pack_channels_matches_original() {
     let differ = TextureDiff::new(&device);
 
     let node = registry.construct("node.pack_rgba").unwrap();
-    let generated = generate_standalone(
-        node.fusion_kind(),
-        node.wgsl_body().unwrap(),
-        node.inputs(),
-        node.parameters(),
-        node.input_access(),
-        node.derived_uniforms(),
-        node.outputs(),
-    )
+    let generated = generate_standalone(&StandaloneKernelSpec {
+        fusion_kind: node.fusion_kind(),
+        body: node.wgsl_body().unwrap(),
+        inputs: node.inputs(),
+        params: node.parameters(),
+        input_access: node.input_access(),
+        derived_uniforms: node.derived_uniforms(),
+        outputs: node.outputs(),
+        stencil_fetch: false,
+        includes: &[],
+    })
     .expect("pack_channels generates");
     assert!(
         generated.contains("use_r: u32"),
@@ -2561,15 +2603,17 @@ fn generated_trig_texture_matches_original() {
     let differ = TextureDiff::new(&device);
 
     let node = registry.construct("node.sine_cosine").unwrap();
-    let generated = generate_standalone(
-        node.fusion_kind(),
-        node.wgsl_body().unwrap(),
-        node.inputs(),
-        node.parameters(),
-        node.input_access(),
-        node.derived_uniforms(),
-        node.outputs(),
-    )
+    let generated = generate_standalone(&StandaloneKernelSpec {
+        fusion_kind: node.fusion_kind(),
+        body: node.wgsl_body().unwrap(),
+        inputs: node.inputs(),
+        params: node.parameters(),
+        input_access: node.input_access(),
+        derived_uniforms: node.derived_uniforms(),
+        outputs: node.outputs(),
+        stencil_fetch: false,
+        includes: &[],
+    })
     .expect("trig_texture generates");
     assert!(
         generated.contains("use_freq_tex: u32") && generated.contains("use_phase_tex: u32"),
@@ -2637,15 +2681,17 @@ fn generated_block_displace_field_matches_original() {
     let differ = TextureDiff::new(&device);
 
     let node = registry.construct("node.block_displace_field").unwrap();
-    let generated = generate_standalone(
-        node.fusion_kind(),
-        node.wgsl_body().unwrap(),
-        node.inputs(),
-        node.parameters(),
-        node.input_access(),
-        node.derived_uniforms(),
-        node.outputs(),
-    )
+    let generated = generate_standalone(&StandaloneKernelSpec {
+        fusion_kind: node.fusion_kind(),
+        body: node.wgsl_body().unwrap(),
+        inputs: node.inputs(),
+        params: node.parameters(),
+        input_access: node.input_access(),
+        derived_uniforms: node.derived_uniforms(),
+        outputs: node.outputs(),
+        stencil_fetch: false,
+        includes: &[],
+    })
     .expect("block_displace_field generates");
     assert!(
         generated.contains("struct BodyOutputs") && generated.contains("write_offset: u32"),
@@ -2695,15 +2741,17 @@ fn generated_lic_integrate_matches_original() {
     let differ = TextureDiff::new(&device);
 
     let node = registry.construct("node.flow_lines").unwrap();
-    let generated = generate_standalone(
-        node.fusion_kind(),
-        node.wgsl_body().unwrap(),
-        node.inputs(),
-        node.parameters(),
-        node.input_access(),
-        node.derived_uniforms(),
-        node.outputs(),
-    )
+    let generated = generate_standalone(&StandaloneKernelSpec {
+        fusion_kind: node.fusion_kind(),
+        body: node.wgsl_body().unwrap(),
+        inputs: node.inputs(),
+        params: node.parameters(),
+        input_access: node.input_access(),
+        derived_uniforms: node.derived_uniforms(),
+        outputs: node.outputs(),
+        stencil_fetch: false,
+        includes: &[],
+    })
     .expect("lic_integrate generates");
     let original = include_str!("../../primitives/shaders/lic_integrate.wgsl");
 
@@ -2741,15 +2789,17 @@ fn generated_sample_volume_2d_matches_original() {
     let differ = TextureDiff::new(&device);
 
     let node = registry.construct("node.slice_volume").unwrap();
-    let generated = generate_standalone(
-        node.fusion_kind(),
-        node.wgsl_body().unwrap(),
-        node.inputs(),
-        node.parameters(),
-        node.input_access(),
-        node.derived_uniforms(),
-        node.outputs(),
-    )
+    let generated = generate_standalone(&StandaloneKernelSpec {
+        fusion_kind: node.fusion_kind(),
+        body: node.wgsl_body().unwrap(),
+        inputs: node.inputs(),
+        params: node.parameters(),
+        input_access: node.input_access(),
+        derived_uniforms: node.derived_uniforms(),
+        outputs: node.outputs(),
+        stencil_fetch: false,
+        includes: &[],
+    })
     .expect("sample_volume_2d generates");
     assert!(
         generated.contains("var tex_in: texture_3d<f32>"),
@@ -2853,15 +2903,17 @@ fn generated_voronoi_2d_matches_original() {
     let differ = TextureDiff::new(&device);
 
     let node = registry.construct("node.voronoi_2d").unwrap();
-    let generated = generate_standalone(
-        node.fusion_kind(),
-        node.wgsl_body().unwrap(),
-        node.inputs(),
-        node.parameters(),
-        node.input_access(),
-        node.derived_uniforms(),
-        node.outputs(),
-    )
+    let generated = generate_standalone(&StandaloneKernelSpec {
+        fusion_kind: node.fusion_kind(),
+        body: node.wgsl_body().unwrap(),
+        inputs: node.inputs(),
+        params: node.parameters(),
+        input_access: node.input_access(),
+        derived_uniforms: node.derived_uniforms(),
+        outputs: node.outputs(),
+        stencil_fetch: false,
+        includes: &[],
+    })
     .expect("voronoi_2d generates");
     // Structural: two storage outputs, a struct return, and per-output gates.
     assert!(
@@ -3030,15 +3082,17 @@ fn generated_source_atoms_match_originals() {
     ];
     for (type_id, shader_file, bytes) in cases {
         let node = registry.construct(type_id).unwrap();
-        let generated = generate_standalone(
-            node.fusion_kind(),
-            node.wgsl_body().unwrap(),
-            node.inputs(),
-            node.parameters(),
-            node.input_access(),
-            node.derived_uniforms(),
-            node.outputs(),
-        )
+        let generated = generate_standalone(&StandaloneKernelSpec {
+            fusion_kind: node.fusion_kind(),
+            body: node.wgsl_body().unwrap(),
+            inputs: node.inputs(),
+            params: node.parameters(),
+            input_access: node.input_access(),
+            derived_uniforms: node.derived_uniforms(),
+            outputs: node.outputs(),
+            stencil_fetch: false,
+            includes: &[],
+        })
         .unwrap_or_else(|e| panic!("{type_id} generate: {e:?}"));
         let original = std::fs::read_to_string(format!("{shaders_dir}/{shader_file}"))
             .unwrap_or_else(|e| panic!("read {shader_file}: {e}"));

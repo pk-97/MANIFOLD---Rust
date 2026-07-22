@@ -140,9 +140,7 @@
         // ── Per-card build first: the segment cache is cold, the lookup goes
         // Pending (tests never enqueue the worker), and the chain splices
         // per-card — today's production path, our oracle. ──
-        let mut per_card = PresetRuntime::try_build(
-            &effects, &[], &primitives, &device, None, w, h, None, None,
-        )
+        let mut per_card = PresetRuntime::try_build(ChainBuildInputs { effects: &effects, groups: &[], primitives: &primitives, device: &device, pool: None, width: w, height: h, preview_effect: None }, None)
         .expect("per-card chain builds");
         assert_eq!(per_card.effect_nodes.len(), 2);
         assert!(
@@ -165,9 +163,7 @@
         freeze_install::seed_segment_cache_for_test(&cards, &primitives)
             .expect("two pointwise ColorGrades fuse across the seam");
 
-        let mut fused = PresetRuntime::try_build(
-            &effects, &[], &primitives, &device, None, w, h, None, None,
-        )
+        let mut fused = PresetRuntime::try_build(ChainBuildInputs { effects: &effects, groups: &[], primitives: &primitives, device: &device, pool: None, width: w, height: h, preview_effect: None }, None)
         .expect("fused-segment chain builds");
         assert_eq!(fused.effect_nodes.len(), 2, "one EffectSlot per card survives");
         assert!(!fused.pending_segments);
@@ -268,9 +264,7 @@
         freeze_install::seed_segment_cache_for_test(&cards, &primitives)
             .expect("two pointwise ColorGrades fuse across the seam");
 
-        let mut fused = PresetRuntime::try_build(
-            &effects, &[], &primitives, &device, None, w, h, None, None,
-        )
+        let mut fused = PresetRuntime::try_build(ChainBuildInputs { effects: &effects, groups: &[], primitives: &primitives, device: &device, pool: None, width: w, height: h, preview_effect: None }, None)
         .expect("fused-segment chain builds");
         assert!(!fused.pending_segments);
         let fused_kernels = fused
@@ -361,10 +355,7 @@
             set_param(&mut fx, "amount", 1.0);
             fx.relight = true;
 
-            let mut fused = PresetRuntime::try_build(
-                std::slice::from_ref(&fx), &[], &primitives, &device, None, w, h,
-                None, None,
-            )
+            let mut fused = PresetRuntime::try_build(ChainBuildInputs { effects: std::slice::from_ref(&fx), groups: &[], primitives: &primitives, device: &device, pool: None, width: w, height: h, preview_effect: None }, None)
             .expect("fused relight-on chain builds");
             assert!(!fused.pending_segments);
             let fused_kernel_count = fused
@@ -379,10 +370,7 @@
 
             // Force the unfused path by watching the card: `should_render_fused`
             // returns false, so the relight template splices per-atom.
-            let mut unfused = PresetRuntime::try_build(
-                std::slice::from_ref(&fx), &[], &primitives, &device, None, w, h,
-                Some(&fx.id), None,
-            )
+            let mut unfused = PresetRuntime::try_build(ChainBuildInputs { effects: std::slice::from_ref(&fx), groups: &[], primitives: &primitives, device: &device, pool: None, width: w, height: h, preview_effect: Some(&fx.id) }, None)
             .expect("unfused relight-on chain builds");
             let unfused_kernel_count = unfused
                 .graph
@@ -441,10 +429,7 @@
         fx.relight_params.relief = 0.6;
         fx.relight_params.gain = 1.8;
 
-        let mut cg = PresetRuntime::try_build(
-            std::slice::from_ref(&fx), &[], &primitives, &device, None, w, h,
-            None, None,
-        )
+        let mut cg = PresetRuntime::try_build(ChainBuildInputs { effects: std::slice::from_ref(&fx), groups: &[], primitives: &primitives, device: &device, pool: None, width: w, height: h, preview_effect: None }, None)
         .expect("fused relight-on chain builds");
         run_once(&mut cg, &device, &input, std::slice::from_ref(&fx), &pc);
         let before = snapshot_output(&cg, &device, w, h);
@@ -487,10 +472,7 @@
         fx.relight = true;
 
         // Prime the cache with default knobs.
-        let _ = PresetRuntime::try_build(
-            std::slice::from_ref(&fx), &[], &primitives, &device, None, 256, 256,
-            None, None,
-        )
+        let _ = PresetRuntime::try_build(ChainBuildInputs { effects: std::slice::from_ref(&fx), groups: &[], primitives: &primitives, device: &device, pool: None, width: 256, height: 256, preview_effect: None }, None)
         .expect("prime build");
         let cache_len_after_default =
             crate::node_graph::freeze::install::fused_effect_cache_len_for_test();
@@ -502,10 +484,7 @@
         fx.relight_params.ao_intensity += 0.5;
         fx.relight_params.shadow_softness += 0.2;
         fx.relight_params.gain += 0.5;
-        let _ = PresetRuntime::try_build(
-            std::slice::from_ref(&fx), &[], &primitives, &device, None, 256, 256,
-            None, None,
-        )
+        let _ = PresetRuntime::try_build(ChainBuildInputs { effects: std::slice::from_ref(&fx), groups: &[], primitives: &primitives, device: &device, pool: None, width: 256, height: 256, preview_effect: None }, None)
         .expect("knob-drag build");
         let cache_len_after_knobs =
             crate::node_graph::freeze::install::fused_effect_cache_len_for_test();
@@ -517,10 +496,7 @@
         // `height_from` changes template topology: this MAY mint a new entry.
         fx.relight_params.height_from =
             manifold_core::effects::RelightHeightFrom::InvertedLuminance;
-        let _ = PresetRuntime::try_build(
-            std::slice::from_ref(&fx), &[], &primitives, &device, None, 256, 256,
-            None, None,
-        )
+        let _ = PresetRuntime::try_build(ChainBuildInputs { effects: std::slice::from_ref(&fx), groups: &[], primitives: &primitives, device: &device, pool: None, width: 256, height: 256, preview_effect: None }, None)
         .expect("height-from build");
         let cache_len_after_height_from =
             crate::node_graph::freeze::install::fused_effect_cache_len_for_test();
@@ -563,9 +539,7 @@
         freeze_install::seed_segment_cache_for_test(&card_refs, &primitives)
             .expect("mixed ColorGrade segment fuses");
 
-        let cg = PresetRuntime::try_build(
-            &effects, &[], &primitives, &device, None, w, h, None, None,
-        )
+        let cg = PresetRuntime::try_build(ChainBuildInputs { effects: &effects, groups: &[], primitives: &primitives, device: &device, pool: None, width: w, height: h, preview_effect: None }, None)
         .expect("mixed relight segment chain builds");
         assert!(!cg.pending_segments, "mixed segment must be ready after seeding");
         assert_eq!(
@@ -625,9 +599,7 @@
         let effects = vec![fb, cg];
 
         let build = |prior: Option<&mut PresetRuntime>| {
-            PresetRuntime::try_build(
-                &effects, &[], &primitives, &device, None, w, h, None, prior,
-            )
+            PresetRuntime::try_build(ChainBuildInputs { effects: &effects, groups: &[], primitives: &primitives, device: &device, pool: None, width: w, height: h, preview_effect: None }, prior)
             .expect("chain builds")
         };
 
@@ -705,9 +677,7 @@
         set_param(&mut qm, "amount", 1.0);
         let effects = vec![ir, qm];
 
-        let mut per_card = PresetRuntime::try_build(
-            &effects, &[], &primitives, &device, None, w, h, None, None,
-        )
+        let mut per_card = PresetRuntime::try_build(ChainBuildInputs { effects: &effects, groups: &[], primitives: &primitives, device: &device, pool: None, width: w, height: h, preview_effect: None }, None)
         .expect("per-card chain builds");
 
         let view1 = loaded_preset_view_by_id(effects[0].effect_type()).unwrap();
@@ -721,9 +691,7 @@
             // No seam-spanning region — nothing fused, nothing to prove.
             return;
         }
-        let mut fused = PresetRuntime::try_build(
-            &effects, &[], &primitives, &device, None, w, h, None, None,
-        )
+        let mut fused = PresetRuntime::try_build(ChainBuildInputs { effects: &effects, groups: &[], primitives: &primitives, device: &device, pool: None, width: w, height: h, preview_effect: None }, None)
         .expect("fused chain builds");
 
         run_once(&mut per_card, &device, &input, &effects, &pc);
@@ -765,9 +733,7 @@
         set_param(&mut qm, "amount", 1.0);
         let effects = vec![ir, qm];
 
-        let mut per_card = PresetRuntime::try_build(
-            &effects, &[], &primitives, &device, None, w, h, None, None,
-        )
+        let mut per_card = PresetRuntime::try_build(ChainBuildInputs { effects: &effects, groups: &[], primitives: &primitives, device: &device, pool: None, width: w, height: h, preview_effect: None }, None)
         .expect("per-card chain builds");
 
         let view1 = loaded_preset_view_by_id(effects[0].effect_type()).unwrap();
@@ -780,9 +746,7 @@
         if seeded.is_none() {
             return;
         }
-        let mut fused = PresetRuntime::try_build(
-            &effects, &[], &primitives, &device, None, w, h, None, None,
-        )
+        let mut fused = PresetRuntime::try_build(ChainBuildInputs { effects: &effects, groups: &[], primitives: &primitives, device: &device, pool: None, width: w, height: h, preview_effect: None }, None)
         .expect("fused chain builds");
 
         run_once(&mut per_card, &device, &input, &effects, &pc);
@@ -908,9 +872,7 @@
                 vec![qm, ir]
             };
 
-            let mut per_card = PresetRuntime::try_build(
-                &effects, &[], &primitives, &device, None, w, h, None, None,
-            )
+            let mut per_card = PresetRuntime::try_build(ChainBuildInputs { effects: &effects, groups: &[], primitives: &primitives, device: &device, pool: None, width: w, height: h, preview_effect: None }, None)
             .expect("per-card chain builds");
 
             let view1 = loaded_preset_view_by_id(effects[0].effect_type()).unwrap();
@@ -922,9 +884,7 @@
             if freeze_install::seed_segment_cache_for_test(&cards, &primitives).is_none() {
                 continue;
             }
-            let mut fused = PresetRuntime::try_build(
-                &effects, &[], &primitives, &device, None, w, h, None, None,
-            )
+            let mut fused = PresetRuntime::try_build(ChainBuildInputs { effects: &effects, groups: &[], primitives: &primitives, device: &device, pool: None, width: w, height: h, preview_effect: None }, None)
             .expect("fused chain builds");
 
             // Several STABLE frames: static-param specialization compiles a
@@ -975,9 +935,7 @@
         let effects = vec![ir, qm];
 
         let build = |prior: Option<&mut PresetRuntime>| {
-            PresetRuntime::try_build(
-                &effects, &[], &primitives, &device, None, w, h, None, prior,
-            )
+            PresetRuntime::try_build(ChainBuildInputs { effects: &effects, groups: &[], primitives: &primitives, device: &device, pool: None, width: w, height: h, preview_effect: None }, prior)
             .expect("chain builds")
         };
 
@@ -1047,9 +1005,7 @@
         set_param(&mut qm, "amount", 1.0);
         let effects = vec![ir, es, qm];
 
-        let mut per_card = PresetRuntime::try_build(
-            &effects, &[], &primitives, &device, None, w, h, None, None,
-        )
+        let mut per_card = PresetRuntime::try_build(ChainBuildInputs { effects: &effects, groups: &[], primitives: &primitives, device: &device, pool: None, width: w, height: h, preview_effect: None }, None)
         .expect("per-card chain builds");
 
         let view1 = loaded_preset_view_by_id(effects[0].effect_type()).unwrap();
@@ -1061,9 +1017,7 @@
         if freeze_install::seed_segment_cache_for_test(&cards, &primitives).is_none() {
             return;
         }
-        let mut fused = PresetRuntime::try_build(
-            &effects, &[], &primitives, &device, None, w, h, None, None,
-        )
+        let mut fused = PresetRuntime::try_build(ChainBuildInputs { effects: &effects, groups: &[], primitives: &primitives, device: &device, pool: None, width: w, height: h, preview_effect: None }, None)
         .expect("fused chain builds");
 
         for _ in 0..4 {
@@ -1109,9 +1063,7 @@
         set_param(&mut qm, "amount", 1.0);
         let effects = vec![ir, qm];
 
-        let mut per_card = PresetRuntime::try_build(
-            &effects, &[], &primitives, &device, None, w, h, None, None,
-        )
+        let mut per_card = PresetRuntime::try_build(ChainBuildInputs { effects: &effects, groups: &[], primitives: &primitives, device: &device, pool: None, width: w, height: h, preview_effect: None }, None)
         .expect("per-card chain builds");
 
         let view1 = loaded_preset_view_by_id(effects[0].effect_type()).unwrap();
@@ -1123,9 +1075,7 @@
         if freeze_install::seed_segment_cache_for_test(&cards, &primitives).is_none() {
             return;
         }
-        let mut fused = PresetRuntime::try_build(
-            &effects, &[], &primitives, &device, None, w, h, None, None,
-        )
+        let mut fused = PresetRuntime::try_build(ChainBuildInputs { effects: &effects, groups: &[], primitives: &primitives, device: &device, pool: None, width: w, height: h, preview_effect: None }, None)
         .expect("fused chain builds");
 
         for _ in 0..4 {
@@ -1170,9 +1120,7 @@
         set_param(&mut ir, "palette", 6.0); // Arctic
         let effects = vec![ir];
 
-        let mut cg = PresetRuntime::try_build(
-            &effects, &[], &primitives, &device, None, w, h, None, None,
-        )
+        let mut cg = PresetRuntime::try_build(ChainBuildInputs { effects: &effects, groups: &[], primitives: &primitives, device: &device, pool: None, width: w, height: h, preview_effect: None }, None)
         .expect("chain builds");
 
         // Frame 0 — the "flash" that looks correct.
@@ -1222,9 +1170,7 @@
         let qm = make_default(PresetTypeId::QUAD_MIRROR);
         let effects = vec![ir, qm];
 
-        let mut cg = PresetRuntime::try_build(
-            &effects, &[], &primitives, &device, None, w, h, None, None,
-        )
+        let mut cg = PresetRuntime::try_build(ChainBuildInputs { effects: &effects, groups: &[], primitives: &primitives, device: &device, pool: None, width: w, height: h, preview_effect: None }, None)
         .expect("chain builds");
 
         run_once(&mut cg, &device, &input, &effects, &pc);
@@ -1274,9 +1220,7 @@
         let toggled = vec![fb.clone(), cg_off];
 
         let build = |effects: &[PresetInstance], prior: Option<&mut PresetRuntime>| {
-            PresetRuntime::try_build(
-                effects, &[], &primitives, &device, None, w, h, None, prior,
-            )
+            PresetRuntime::try_build(ChainBuildInputs { effects: effects, groups: &[], primitives: &primitives, device: &device, pool: None, width: w, height: h, preview_effect: None }, prior)
             .expect("chain builds")
         };
 
@@ -1331,9 +1275,7 @@
         let cg_first = vec![cg.clone(), fb.clone()];
 
         let build = |effects: &[PresetInstance], prior: Option<&mut PresetRuntime>| {
-            PresetRuntime::try_build(
-                effects, &[], &primitives, &device, None, w, h, None, prior,
-            )
+            PresetRuntime::try_build(ChainBuildInputs { effects: effects, groups: &[], primitives: &primitives, device: &device, pool: None, width: w, height: h, preview_effect: None }, prior)
             .expect("chain builds")
         };
 

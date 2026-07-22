@@ -101,7 +101,7 @@
         // affine node survives for inspection — region fusion would otherwise
         // fold it into a single kernel and the handle would vanish.
         let mut cg0 =
-            PresetRuntime::try_build(std::slice::from_ref(&control), &[], &primitives, &device, None, 256, 256, Some(&control.id), None)
+            PresetRuntime::try_build(ChainBuildInputs { effects: std::slice::from_ref(&control), groups: &[], primitives: &primitives, device: &device, pool: None, width: 256, height: 256, preview_effect: Some(&control.id) }, None)
                 .expect("control chain builds");
         apply(&mut cg0, &control.params);
         let slot0 = &cg0.effect_nodes[0];
@@ -123,7 +123,7 @@
         fx.graph_version = fx.graph_version.wrapping_add(1);
         fx.graph_structure_version = fx.graph_structure_version.wrapping_add(1);
         let mut cg =
-            PresetRuntime::try_build(std::slice::from_ref(&fx), &[], &primitives, &device, None, 256, 256, Some(&fx.id), None)
+            PresetRuntime::try_build(ChainBuildInputs { effects: std::slice::from_ref(&fx), groups: &[], primitives: &primitives, device: &device, pool: None, width: 256, height: 256, preview_effect: Some(&fx.id) }, None)
                 .expect("reshaped chain builds");
         apply(&mut cg, &fx.params);
         let slot = &cg.effect_nodes[0];
@@ -188,7 +188,7 @@
         let primitives = PrimitiveRegistry::with_builtin();
         let fx = stylized_with_translate_exposed(0.48);
 
-        let cg = PresetRuntime::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None, None)
+        let cg = PresetRuntime::try_build(ChainBuildInputs { effects: &[fx], groups: &[], primitives: &primitives, device: &device, pool: None, width: 256, height: 256, preview_effect: None }, None)
             .expect("StylizedFeedback chain with one user binding builds");
 
         let slot = cg
@@ -228,17 +228,7 @@
         let primitives = PrimitiveRegistry::with_builtin();
         let fx = stylized_with_translate_exposed(0.48);
 
-        let mut cg = PresetRuntime::try_build(
-            std::slice::from_ref(&fx),
-            &[],
-            &primitives,
-            &device,
-            None,
-            256,
-            256,
-            None,
-            None,
-        )
+        let mut cg = PresetRuntime::try_build(ChainBuildInputs { effects: std::slice::from_ref(&fx), groups: &[], primitives: &primitives, device: &device, pool: None, width: 256, height: 256, preview_effect: None }, None)
         .expect("StylizedFeedback chain with one user binding builds");
 
         // Mirror the per-frame apply that `run()` would execute:
@@ -312,7 +302,7 @@
         assert_eq!(fx.params.len(), 4);
         set_slot(&mut fx, "user.affine.translate_x.1", 0.42);
 
-        let cg = PresetRuntime::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None, None)
+        let cg = PresetRuntime::try_build(ChainBuildInputs { effects: &[fx], groups: &[], primitives: &primitives, device: &device, pool: None, width: 256, height: 256, preview_effect: None }, None)
             .expect("StylizedFeedback chain with one user binding builds");
         let slot = cg
             .effect_nodes

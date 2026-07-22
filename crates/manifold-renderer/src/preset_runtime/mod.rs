@@ -86,7 +86,7 @@ mod build;
 use build::{compute_topology_hash, close_mix_group, assign_texture2d_slots, OpenGroup};
 
 mod core;
-pub use core::PresetRuntime;
+pub use core::{ChainBuildInputs, FrameContextInputs, PresetRuntime};
 use core::{EffectSlot, PresetIo, chain_active_effects};
 #[cfg(test)]
 use core::assert_manifest_gate;

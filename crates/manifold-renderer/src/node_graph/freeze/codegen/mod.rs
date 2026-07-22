@@ -28,7 +28,7 @@ mod dispatch_contract_tests;
 pub use fused::generate_fused;
 pub(crate) use fused::rename_ident;
 
-pub use standalone::{generate_standalone, generate_standalone_ext};
+pub use standalone::{generate_standalone, StandaloneKernelSpec};
 
 pub use entry_points::{standalone_for_node, standalone_for_spec, standalone_for_spec_fmt, wgsl_storage_token};
 

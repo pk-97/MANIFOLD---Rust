@@ -24,7 +24,7 @@
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::preset_runtime::PresetRuntime;
+use crate::preset_runtime::{ChainBuildInputs, PresetRuntime};
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::PrimitiveRegistry;
 use crate::preset_context::PresetContext;
@@ -197,14 +197,16 @@ pub fn dispatch_chain<'a>(
         // rebuild instead of resetting (docs/CHAIN_FUSION_DESIGN.md §5).
         let mut prior = cache.take();
         *cache = PresetRuntime::try_build(
-            effects,
-            groups,
-            primitive_registry(),
-            gpu.device,
-            gpu.pool,
-            ctx.width,
-            ctx.height,
-            preview_effect,
+            ChainBuildInputs {
+                effects,
+                groups,
+                primitives: primitive_registry(),
+                device: gpu.device,
+                pool: gpu.pool,
+                width: ctx.width,
+                height: ctx.height,
+                preview_effect,
+            },
             prior.as_mut(),
         );
         CHAIN_REBUILD_COUNT.fetch_add(1, Ordering::Relaxed);

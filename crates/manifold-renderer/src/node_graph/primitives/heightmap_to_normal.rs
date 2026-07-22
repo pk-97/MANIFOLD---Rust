@@ -192,7 +192,7 @@ mod gpu_tests {
 
     use super::{HeightmapNormalUniforms, HeightmapToNormal};
     use crate::node_graph::freeze::classify::{FusionKind, InputAccess};
-    use crate::node_graph::freeze::codegen::{generate_standalone_ext, ENTRY};
+    use crate::node_graph::freeze::codegen::{generate_standalone, StandaloneKernelSpec, ENTRY};
     use crate::node_graph::primitive::PrimitiveSpec;
     use crate::render_target::RenderTarget;
 
@@ -312,7 +312,7 @@ fn body(tex_in: texture_2d<f32>, samp: sampler, uv: vec2<f32>, dims: vec2<f32>, 
     /// D6(a): the `Gather` (filtering-sampler) → `GatherTexel` (exact
     /// textureLoad) conversion must not change the output — every neighbour
     /// offset lands exactly on a texel center. Builds BOTH kernels from the
-    /// SAME wrapper (`generate_standalone_ext`, same inputs/params/outputs),
+    /// SAME generator (`generate_standalone`, same inputs/params/outputs),
     /// differing only in `input_access` + body text, and dispatches both
     /// against the same synthetic height field.
     #[test]
@@ -331,17 +331,17 @@ fn body(tex_in: texture_2d<f32>, samp: sampler, uv: vec2<f32>, dims: vec2<f32>, 
         };
         let bytes = bytemuck::bytes_of(&uniforms);
 
-        let old_wgsl = generate_standalone_ext(
-            FusionKind::Pointwise,
-            OLD_GATHER_SAMPLER_BODY,
-            HeightmapToNormal::INPUTS,
-            HeightmapToNormal::PARAMS,
-            &[InputAccess::Gather],
-            HeightmapToNormal::DERIVED_UNIFORMS,
-            HeightmapToNormal::OUTPUTS,
-            false,
-            &[],
-        )
+        let old_wgsl = generate_standalone(&StandaloneKernelSpec {
+            fusion_kind: FusionKind::Pointwise,
+            body: OLD_GATHER_SAMPLER_BODY,
+            inputs: HeightmapToNormal::INPUTS,
+            params: HeightmapToNormal::PARAMS,
+            input_access: &[InputAccess::Gather],
+            derived_uniforms: HeightmapToNormal::DERIVED_UNIFORMS,
+            outputs: HeightmapToNormal::OUTPUTS,
+            stencil_fetch: false,
+            includes: &[],
+        })
         .expect("old Gather-sampler standalone codegen");
         let old_pipeline = device.create_compute_pipeline(&old_wgsl, ENTRY, "surface-bumps-old");
         let old_out = RenderTarget::new(&device, w, h, GpuTextureFormat::Rgba16Float, "old-out");

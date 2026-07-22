@@ -18,7 +18,7 @@
 //! the 8 slots are wired.
 
 use manifold_renderer::node_graph::freeze::classify::{FusionKind, InputAccess};
-use manifold_renderer::node_graph::freeze::codegen::generate_standalone;
+use manifold_renderer::node_graph::freeze::codegen::{generate_standalone, StandaloneKernelSpec};
 use manifold_renderer::node_graph::{ParamDef, ParamType, ParamValue};
 use manifold_renderer::node_graph::ports::{NodeOutput, NodePort, PortKind, PortType};
 
@@ -93,15 +93,17 @@ fn eight_input_static_optional_coincident_codegen_succeeds() {
     let body = eight_input_sum_body();
     let access = vec![InputAccess::Coincident; MAX_INPUTS];
 
-    let generated = generate_standalone(
-        FusionKind::MultiInputCoincident,
-        &body,
-        &inputs,
-        &params(),
-        &access,
-        &[],
-        &outputs(),
-    )
+    let generated = generate_standalone(&StandaloneKernelSpec {
+        fusion_kind: FusionKind::MultiInputCoincident,
+        body: &body,
+        inputs: &inputs,
+        params: &params(),
+        input_access: &access,
+        derived_uniforms: &[],
+        outputs: &outputs(),
+        stencil_fetch: false,
+        includes: &[],
+    })
     .expect("codegen accepts 8 statically-declared optional Coincident texture inputs");
 
     // (3) Cost measurement: the wrapper pre-reads EVERY declared texture

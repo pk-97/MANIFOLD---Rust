@@ -24,7 +24,7 @@
         let primitives = PrimitiveRegistry::with_builtin();
         let fx = make_default(PresetTypeId::SOFT_FOCUS_GRAPH);
 
-        let cg = PresetRuntime::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None, None)
+        let cg = PresetRuntime::try_build(ChainBuildInputs { effects: &[fx], groups: &[], primitives: &primitives, device: &device, pool: None, width: 256, height: 256, preview_effect: None }, None)
             .expect("SoftFocus chain should build");
 
         let slot = cg

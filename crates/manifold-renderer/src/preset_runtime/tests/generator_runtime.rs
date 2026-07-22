@@ -719,7 +719,15 @@
         let mut preset = PresetRuntime::from_json_str(json, &PrimitiveRegistry::with_builtin())
             .expect("trivial generator preset must load");
         assert_eq!(preset.type_id().as_str(), "TestPassthrough");
-        preset.set_frame_context(1.5, 0.5, 1.78, 4.0, 0.25, 1920.0, 1080.0);
+        preset.set_frame_context(FrameContextInputs {
+            time: 1.5,
+            beat: 0.5,
+            aspect: 1.78,
+            trigger_count: 4.0,
+            anim_progress: 0.25,
+            output_width: 1920.0,
+            output_height: 1080.0,
+        });
         preset.execute_frame(frame_time());
     }
 
@@ -1275,7 +1283,15 @@
         let mut preset = PresetRuntime::from_json_str(json, &PrimitiveRegistry::with_builtin())
             .expect("bundled TrivialPassthrough must load");
         assert_eq!(preset.type_id().as_str(), "TrivialPassthrough");
-        preset.set_frame_context(0.0, 0.0, 1.78, 0.0, 0.0, 1920.0, 1080.0);
+        preset.set_frame_context(FrameContextInputs {
+            time: 0.0,
+            beat: 0.0,
+            aspect: 1.78,
+            trigger_count: 0.0,
+            anim_progress: 0.0,
+            output_width: 1920.0,
+            output_height: 1080.0,
+        });
         preset.execute_frame(frame_time());
     }
 

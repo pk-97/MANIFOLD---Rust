@@ -269,7 +269,7 @@ mod gpu_tests {
 
     use super::{GradientCentralDiff, GradientUniforms};
     use crate::node_graph::freeze::classify::{FusionKind, InputAccess};
-    use crate::node_graph::freeze::codegen::{generate_standalone_ext, ENTRY};
+    use crate::node_graph::freeze::codegen::{generate_standalone, StandaloneKernelSpec, ENTRY};
     use crate::node_graph::primitive::PrimitiveSpec;
     use crate::render_target::RenderTarget;
 
@@ -410,17 +410,17 @@ fn body(in_tex: texture_2d<f32>, samp: sampler, uv: vec2<f32>, dims: vec2<f32>, 
         let uniforms = GradientUniforms { channel: 0, scale_mode: 1, wrap_mode, _pad0: 0 };
         let bytes = bytemuck::bytes_of(&uniforms);
 
-        let old_wgsl = generate_standalone_ext(
-            FusionKind::Pointwise,
-            OLD_GATHER_SAMPLER_BODY,
-            GradientCentralDiff::INPUTS,
-            GradientCentralDiff::PARAMS,
-            &[InputAccess::Gather],
-            GradientCentralDiff::DERIVED_UNIFORMS,
-            GradientCentralDiff::OUTPUTS,
-            false,
-            &[],
-        )
+        let old_wgsl = generate_standalone(&StandaloneKernelSpec {
+            fusion_kind: FusionKind::Pointwise,
+            body: OLD_GATHER_SAMPLER_BODY,
+            inputs: GradientCentralDiff::INPUTS,
+            params: GradientCentralDiff::PARAMS,
+            input_access: &[InputAccess::Gather],
+            derived_uniforms: GradientCentralDiff::DERIVED_UNIFORMS,
+            outputs: GradientCentralDiff::OUTPUTS,
+            stencil_fetch: false,
+            includes: &[],
+        })
         .expect("old Gather-sampler standalone codegen");
         let old_pipeline = device.create_compute_pipeline(&old_wgsl, ENTRY, "edge-slope-old");
         let old_out = RenderTarget::new(&device, w, h, GpuTextureFormat::Rgba16Float, "old-out");

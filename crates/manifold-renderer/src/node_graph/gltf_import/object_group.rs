@@ -45,6 +45,36 @@ pub(super) struct ObjectGroupOutput {
     pub(super) animated: bool,
 }
 
+/// Import-wide facts shared by every per-object [`build_object_group`] call
+/// within one import (or one merge). Constructed once by [`build_import_graph`]
+/// and [`merge_import_into_graph`] and passed by `&mut` through the per-object
+/// loop — the seven values that are one fact (this import), so the per-object
+/// helper reads five arguments instead of twelve (D9). The merge path maps its
+/// `incoming_*` names onto these fields (e.g. `incoming_radius` → `bbox_radius`).
+pub(super) struct ImportCtx<'a> {
+    /// The `render_scene` node id every object group wires its output into.
+    pub render_id: u32,
+    /// The glb file path, bound onto each source node's `path` param.
+    pub path_str: &'a str,
+    /// The whole-scene bbox center from this parse; each object recenters
+    /// about `own_center - center` (see the transform assembly below).
+    pub center: [f32; 3],
+    /// BUG-194/BUG-195: the whole-scene bbox radius from THIS parse
+    /// (`build_import_graph`'s `radius` / `merge_import_into_graph`'s
+    /// `incoming_radius`) — stamped onto every mesh-source node this call
+    /// creates as `source_bbox_radius`, so SceneVm's header and a future
+    /// merge's scale-sanity have a real per-node provenance fact to read
+    /// instead of BUG-195's orbit-camera proxy.
+    pub bbox_radius: f32,
+    /// Per-clip node-index → animation track lookup for this import.
+    pub node_anims_by_clip: &'a [BTreeMap<usize, gltf_load::GltfNodeAnimation>],
+    /// Group-name collision set, mutated across the per-object loop.
+    pub used_group_names: &'a mut std::collections::HashSet<String>,
+    /// Fresh numeric node-id source (a counter — importer output stays
+    /// deterministic), mutated across the per-object loop.
+    pub fresh_id: &'a mut dyn FnMut() -> u32,
+}
+
 /// Build ONE object's group (mesh source + material + optional skin/morph/
 /// animation + texture maps + transform, wrapped in a named `GroupDef`)
 /// and its top-level wiring into `render_scene`. `local_k` numbers this
@@ -56,29 +86,24 @@ pub(super) struct ObjectGroupOutput {
 /// this group wires into (`mesh_{port_index}` etc. on `render_scene`
 /// itself) — for a single import these are the same number; for a merge,
 /// `port_index` is offset by the target scene's existing `objects` count
-/// while `local_k` restarts at 0.
-#[allow(clippy::too_many_arguments)]
+/// while `local_k` restarts at 0. `anim_prefix` is the shared per-glb
+/// animation card id prefix (see `animation_card_params`) — "anim" for a
+/// fresh import; the merge path uniquifies against the target scene's
+/// existing card ids. The import-wide facts travel in `ctx`.
 pub(super) fn build_object_group(
+    ctx: &mut ImportCtx<'_>,
     local_k: usize,
     port_index: usize,
-    render_id: u32,
     m: &gltf_load::GltfMaterialInfo,
-    path_str: &str,
-    center: [f32; 3],
-    node_anims_by_clip: &[BTreeMap<usize, gltf_load::GltfNodeAnimation>],
-    used_group_names: &mut std::collections::HashSet<String>,
-    fresh_id: &mut impl FnMut() -> u32,
-    // BUG-194/BUG-195: the whole-scene bbox radius from THIS parse (build_import_graph's
-    // `radius` / merge_import_into_graph's `incoming_radius`) — stamped onto every
-    // mesh-source node this call creates as `source_bbox_radius`, so SceneVm's
-    // header and a future merge's scale-sanity have a real per-node provenance
-    // fact to read instead of BUG-195's orbit-camera proxy.
-    bbox_radius: f32,
-    // The shared per-glb animation card id prefix (see
-    // `animation_card_params`) — "anim" for a fresh import; the merge path
-    // uniquifies against the target scene's existing card ids.
     anim_prefix: &str,
 ) -> ObjectGroupOutput {
+    let render_id = ctx.render_id;
+    let path_str = ctx.path_str;
+    let center = ctx.center;
+    let bbox_radius = ctx.bbox_radius;
+    let node_anims_by_clip = ctx.node_anims_by_clip;
+    let used_group_names = &mut *ctx.used_group_names;
+    let fresh_id = &mut *ctx.fresh_id;
     let k = local_k;
     let mut animated = false;
     let mut card_params: Vec<ParamSpecDef> = Vec::new();
@@ -514,22 +539,16 @@ pub(super) fn build_object_group(
         // when present, so the graph editor reads as "Leaf" / "Bark" rather
         // than the anonymous "mat_0" / "mat_1" handle.
         mat_node.title = m.name.clone();
-        mat_node
-            .params
-            .insert("color_r".to_string(), float(m.base_color_factor[0]));
-        mat_node
-            .params
-            .insert("color_g".to_string(), float(m.base_color_factor[1]));
-        mat_node
-            .params
-            .insert("color_b".to_string(), float(m.base_color_factor[2]));
+        // P3-D T2: the plain glTF-field -> param inserts are a catalog in
+        // materials.rs, walked once by write_material_params. The five
+        // COMPUTED params below are NOT rows
+        // (they read a local, clamp, gate, or select an enum), so they stay
+        // explicit adjacent to the walk.
+        write_material_params(&mut mat_node, m);
         // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2b: `effective_alpha` is now
         // exactly `base_color.a` (see its definition above for why the old
         // transmission-darkening formula was removed).
-        mat_node
-            .params
-            .insert("color_a".to_string(), float(effective_alpha));
-        mat_node.params.insert("metallic".to_string(), float(m.metallic));
+        mat_node.params.insert("color_a".to_string(), float(effective_alpha));
         mat_node
             .params
             .insert("roughness".to_string(), float(m.roughness.max(0.01)));
@@ -538,22 +557,11 @@ pub(super) fn build_object_group(
         // dramatic "lit only by scene lights" look. The shared Ambient card
         // (below) raises it across every material to restore fill.
         mat_node.params.insert("ambient".to_string(), float(0.0));
-        mat_node
-            .params
-            .insert("emission_r".to_string(), float(m.emissive[0]));
-        mat_node
-            .params
-            .insert("emission_g".to_string(), float(m.emissive[1]));
-        mat_node
-            .params
-            .insert("emission_b".to_string(), float(m.emissive[2]));
         // `emission_intensity` is the existing wired multiplier on
-        // `node.pbr_material` — `KHR_materials_emissive_strength` folds
-        // into it directly rather than growing a new param (D5: the
-        // strength extension IS a multiplier on the same quantity this
-        // param already controls). No extension present → factor 1.0, so
-        // an emissive material still needs SOME emissive factor to glow
-        // (matches the pre-F-P4 "any factor channel > 0" gate).
+        // `node.pbr_material` — `KHR_materials_emissive_strength` folds into
+        // it directly (D5). No extension present → factor 1.0; gated so a
+        // non-emissive material stays dark (matches the pre-F-P4 "any factor
+        // channel > 0" gate).
         let emissive_lit = m.emissive.iter().any(|&c| c > 0.0);
         mat_node.params.insert(
             "emission_intensity".to_string(),
@@ -569,102 +577,6 @@ pub(super) fn build_object_group(
                 0 // Opaque
             }),
         );
-        mat_node
-            .params
-            .insert("alpha_cutoff".to_string(), float(m.alpha_cutoff));
-        // GLB_CONFORMANCE_DESIGN.md G-P4/D5: KHR_materials_specular + ior
-        // → F0 scale (`fs_pbr`); KHR_texture_transform → base-color UV
-        // affine (`resolve_albedo`). Every field defaults to the neutral
-        // value verified in `gltf_load.rs` (ior=1.5, specular_factor=1.0,
-        // specular_color_factor=[1,1,1], identity uv transform), so a
-        // material without these extensions wires byte-identical params.
-        mat_node.params.insert("ior".to_string(), float(m.ior));
-        mat_node
-            .params
-            .insert("specular".to_string(), float(m.specular_factor));
-        mat_node
-            .params
-            .insert("specular_tint_r".to_string(), float(m.specular_color_factor[0]));
-        mat_node
-            .params
-            .insert("specular_tint_g".to_string(), float(m.specular_color_factor[1]));
-        mat_node
-            .params
-            .insert("specular_tint_b".to_string(), float(m.specular_color_factor[2]));
-        // GLB_CONFORMANCE_DESIGN.md G-P5/D5: KHR_materials_clearcoat
-        // factors → the second GGX lobe (`fs_pbr`). Defaults (0.0/0.0)
-        // reproduce byte-identical pre-G-P5 output — see `gltf_load.rs`.
-        mat_node
-            .params
-            .insert("clearcoat".to_string(), float(m.clearcoat_factor));
-        mat_node.params.insert(
-            "clearcoat_roughness".to_string(),
-            float(m.clearcoat_roughness_factor),
-        );
-        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1: sheen, iridescence,
-        // anisotropy, dispersion, transmission+volume factors → uniform
-        // slots on `node.pbr_material` (`render_scene.wgsl` declares the
-        // matching struct fields but reads none of them yet — E2-E6 wire
-        // the shading math). Every default reproduces glTF's own implicit
-        // default, so a material without these extensions wires
-        // byte-identical params to pre-E1.
-        mat_node
-            .params
-            .insert("sheen_color_r".to_string(), float(m.sheen_color_factor[0]));
-        mat_node
-            .params
-            .insert("sheen_color_g".to_string(), float(m.sheen_color_factor[1]));
-        mat_node
-            .params
-            .insert("sheen_color_b".to_string(), float(m.sheen_color_factor[2]));
-        mat_node
-            .params
-            .insert("sheen_roughness".to_string(), float(m.sheen_roughness_factor));
-        mat_node
-            .params
-            .insert("iridescence".to_string(), float(m.iridescence_factor));
-        mat_node
-            .params
-            .insert("iridescence_ior".to_string(), float(m.iridescence_ior));
-        mat_node.params.insert(
-            "iridescence_thickness_min".to_string(),
-            float(m.iridescence_thickness_minimum),
-        );
-        mat_node.params.insert(
-            "iridescence_thickness_max".to_string(),
-            float(m.iridescence_thickness_maximum),
-        );
-        mat_node
-            .params
-            .insert("anisotropy_strength".to_string(), float(m.anisotropy_strength));
-        mat_node
-            .params
-            .insert("anisotropy_rotation".to_string(), float(m.anisotropy_rotation));
-        mat_node
-            .params
-            .insert("dispersion".to_string(), float(m.dispersion));
-        mat_node
-            .params
-            .insert("transmission".to_string(), float(m.transmission_factor));
-        mat_node
-            .params
-            .insert("volume_thickness".to_string(), float(m.volume_thickness_factor));
-        mat_node.params.insert(
-            "volume_attenuation_distance".to_string(),
-            float(m.volume_attenuation_distance),
-        );
-        mat_node.params.insert(
-            "volume_attenuation_color_r".to_string(),
-            float(m.volume_attenuation_color[0]),
-        );
-        mat_node.params.insert(
-            "volume_attenuation_color_g".to_string(),
-            float(m.volume_attenuation_color[1]),
-        );
-        mat_node.params.insert(
-            "volume_attenuation_color_b".to_string(),
-            float(m.volume_attenuation_color[2]),
-        );
         // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3/E4/E5/E6 (D1 revised):
         // sheen, iridescence, anisotropy, and now (E6) clearcoat/specular/
         // transmission/volume-thickness textures are all sampled (see the
@@ -672,7 +584,6 @@ pub(super) fn build_object_group(
         // texture in this doc.
         // Per-map KHR_texture_transform affines (G-P4) — one 6-param set
         // per map family, identity when the extension is absent.
-        let parts = ["m00", "m01", "m10", "m11", "tx", "ty"];
         for (prefix, xf) in [
             ("uv_", &m.base_color_uv_transform),
             ("nrm_uv_", &m.normal_uv_transform),
@@ -680,7 +591,7 @@ pub(super) fn build_object_group(
             ("occ_uv_", &m.occlusion_uv_transform),
             ("em_uv_", &m.emissive_uv_transform),
         ] {
-            for (part, value) in parts.iter().zip(xf.iter()) {
+            for (part, value) in UV_TRANSFORM_PARTS.iter().zip(xf.iter()) {
                 mat_node
                     .params
                     .insert(format!("{prefix}{part}"), float(*value));
@@ -981,305 +892,33 @@ pub(super) fn build_object_group(
             textures_wired += 1;
         }
 
-        // D3/D5/D6 — normal / metallic-roughness / occlusion / emissive
-        // maps. `map_tex_cache` is scoped to THIS object and keyed by glTF
-        // `texture_index`: ORM-packed files (occlusion index == mr index,
-        // a common glTF convention) reuse the same `node.gltf_texture_source`
-        // for both ports instead of decoding the same physical image
-        // twice. Colour space per D6: normal/MR/occlusion decode linear
-        // (data maps — the raw bytes ARE the value), emissive decodes sRGB
-        // (a colour map, same as base-colour).
+        // D3/D5/D6 + the extension families (E3-E6) — normal /
+        // metallic-roughness / occlusion / emissive plus the sheen /
+        // iridescence / anisotropy / clearcoat / specular / transmission /
+        // volume-thickness maps, one row each in the `materials` map-family
+        // table walked by `wire_map_families`.
+        // `map_tex_cache` is scoped to THIS object and keyed by
+        // `(texture_index, color_space, channel_mode)`: ORM-packed files
+        // (occlusion index == mr index, a common glTF convention) reuse the
+        // same `node.gltf_texture_source` for both ports instead of decoding
+        // the same physical image twice. Colour space and channel mode per
+        // family live in the table; the base-colour map above is deliberately
+        // NOT a family (it alone increments `textures_wired` and pre-dates
+        // this cache).
         let mut map_tex_cache: std::collections::HashMap<(u32, u32, u32), (u32, String)> =
             std::collections::HashMap::new();
-        if let Some(tex_index) = m.normal_texture {
-            wire_map_texture(
-                tex_index,
-                1, // Linear
-                "normal_tex",
-                "normal_map",
+        {
+            let mut object_assembly = ObjectAssembly {
                 k,
                 path_str,
-                fresh_id,
-                &mut group_nodes,
-                &mut group_wires,
-                &mut string_bindings,
-                &mut map_tex_cache,
+                fresh_id: &mut *fresh_id,
+                group_nodes: &mut group_nodes,
+                group_wires: &mut group_wires,
+                string_bindings: &mut string_bindings,
+                tex_cache: &mut map_tex_cache,
                 scene_object_id,
-                0,
-            );
-        }
-        if let Some(tex_index) = m.mr_texture {
-            wire_map_texture(
-                tex_index,
-                1, // Linear
-                "mr_tex",
-                "mr_map",
-                k,
-                path_str,
-                fresh_id,
-                &mut group_nodes,
-                &mut group_wires,
-                &mut string_bindings,
-                &mut map_tex_cache,
-                scene_object_id,
-                // GLB_XFAIL_BURNDOWN_DESIGN.md D2: this is a spec-gloss
-                // specularGlossinessTexture standing in for mrMap — repack
-                // its alpha (gloss) into G=roughness/B=metallic at blit
-                // time so render_scene's mr_map read stays untouched.
-                if m.mr_texture_is_gloss_alpha { 1 } else { 0 },
-            );
-        }
-        if let Some(tex_index) = m.occlusion_texture {
-            wire_map_texture(
-                tex_index,
-                1, // Linear
-                "occlusion_tex",
-                "occlusion_map",
-                k,
-                path_str,
-                fresh_id,
-                &mut group_nodes,
-                &mut group_wires,
-                &mut string_bindings,
-                &mut map_tex_cache,
-                scene_object_id,
-                0,
-            );
-        }
-        if let Some(tex_index) = m.emissive_texture {
-            wire_map_texture(
-                tex_index,
-                0, // sRGB — a colour map, same convention as base-colour
-                "emissive_tex",
-                "emissive_map",
-                k,
-                path_str,
-                fresh_id,
-                &mut group_nodes,
-                &mut group_wires,
-                &mut string_bindings,
-                &mut map_tex_cache,
-                scene_object_id,
-                0,
-            );
-        }
-        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3/E4/E5 (D1 revised — full
-        // spec surface per family): sheen/iridescence/anisotropy extension
-        // textures, same `wire_map_texture` doctrine as the base five maps
-        // above. sheenColorTexture is a colour map (sRGB); every other
-        // extension texture here is a data map (linear) per its own spec
-        // section.
-        if let Some(tex_index) = m.sheen_color_texture {
-            wire_map_texture(
-                tex_index,
-                0, // sRGB — sheenColorTexture is a colour map
-                "sheen_color_tex",
-                "sheen_color_map",
-                k,
-                path_str,
-                fresh_id,
-                &mut group_nodes,
-                &mut group_wires,
-                &mut string_bindings,
-                &mut map_tex_cache,
-                scene_object_id,
-                0,
-            );
-        }
-        if let Some(tex_index) = m.sheen_roughness_texture {
-            wire_map_texture(
-                tex_index,
-                1, // Linear — data map (alpha channel)
-                "sheen_roughness_tex",
-                "sheen_roughness_map",
-                k,
-                path_str,
-                fresh_id,
-                &mut group_nodes,
-                &mut group_wires,
-                &mut string_bindings,
-                &mut map_tex_cache,
-                scene_object_id,
-                0,
-            );
-        }
-        if let Some(tex_index) = m.iridescence_texture {
-            wire_map_texture(
-                tex_index,
-                1, // Linear — data map (R channel = factor scale)
-                "iridescence_tex",
-                "iridescence_map",
-                k,
-                path_str,
-                fresh_id,
-                &mut group_nodes,
-                &mut group_wires,
-                &mut string_bindings,
-                &mut map_tex_cache,
-                scene_object_id,
-                0,
-            );
-        }
-        if let Some(tex_index) = m.iridescence_thickness_texture {
-            wire_map_texture(
-                tex_index,
-                1, // Linear — data map (G channel = thickness lerp)
-                "iridescence_thickness_tex",
-                "iridescence_thickness_map",
-                k,
-                path_str,
-                fresh_id,
-                &mut group_nodes,
-                &mut group_wires,
-                &mut string_bindings,
-                &mut map_tex_cache,
-                scene_object_id,
-                0,
-            );
-        }
-        if let Some(tex_index) = m.anisotropy_texture {
-            wire_map_texture(
-                tex_index,
-                1, // Linear — data map (RG = rotation, B = strength)
-                "anisotropy_tex",
-                "anisotropy_map",
-                k,
-                path_str,
-                fresh_id,
-                &mut group_nodes,
-                &mut group_wires,
-                &mut string_bindings,
-                &mut map_tex_cache,
-                scene_object_id,
-                0,
-            );
-        }
-        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised — full spec
-        // surface): the texture-completion sweep. Same `wire_map_texture`
-        // doctrine as the seven maps above — clearcoatTexture/
-        // clearcoatRoughnessTexture/clearcoatNormalTexture are data maps
-        // (R/G/RGB channels respectively, none are colour); specularTexture
-        // is a data map (alpha channel); specularColorTexture is a colour
-        // map (sRGB, tints an RGB factor); transmissionTexture and
-        // thicknessTexture are data maps (R/G channels).
-        if let Some(tex_index) = m.clearcoat_texture {
-            wire_map_texture(
-                tex_index,
-                1, // Linear — data map (R channel = clearcoatFactor scale)
-                "clearcoat_tex",
-                "clearcoat_map",
-                k,
-                path_str,
-                fresh_id,
-                &mut group_nodes,
-                &mut group_wires,
-                &mut string_bindings,
-                &mut map_tex_cache,
-                scene_object_id,
-                0,
-            );
-        }
-        if let Some(tex_index) = m.clearcoat_roughness_texture {
-            wire_map_texture(
-                tex_index,
-                1, // Linear — data map (G channel = clearcoatRoughnessFactor scale)
-                "clearcoat_roughness_tex",
-                "clearcoat_roughness_map",
-                k,
-                path_str,
-                fresh_id,
-                &mut group_nodes,
-                &mut group_wires,
-                &mut string_bindings,
-                &mut map_tex_cache,
-                scene_object_id,
-                0,
-            );
-        }
-        if let Some(tex_index) = m.clearcoat_normal_texture {
-            wire_map_texture(
-                tex_index,
-                1, // Linear — tangent-space normal map, same convention as normalMap
-                "clearcoat_normal_tex",
-                "clearcoat_normal_map",
-                k,
-                path_str,
-                fresh_id,
-                &mut group_nodes,
-                &mut group_wires,
-                &mut string_bindings,
-                &mut map_tex_cache,
-                scene_object_id,
-                0,
-            );
-        }
-        if let Some(tex_index) = m.specular_texture {
-            wire_map_texture(
-                tex_index,
-                1, // Linear — data map (ALPHA channel = specularFactor scale)
-                "specular_tex",
-                "specular_map",
-                k,
-                path_str,
-                fresh_id,
-                &mut group_nodes,
-                &mut group_wires,
-                &mut string_bindings,
-                &mut map_tex_cache,
-                scene_object_id,
-                0,
-            );
-        }
-        if let Some(tex_index) = m.specular_color_texture {
-            wire_map_texture(
-                tex_index,
-                0, // sRGB — specularColorTexture is a colour map
-                "specular_color_tex",
-                "specular_color_map",
-                k,
-                path_str,
-                fresh_id,
-                &mut group_nodes,
-                &mut group_wires,
-                &mut string_bindings,
-                &mut map_tex_cache,
-                scene_object_id,
-                0,
-            );
-        }
-        if let Some(tex_index) = m.transmission_texture {
-            wire_map_texture(
-                tex_index,
-                1, // Linear — data map (R channel = transmissionFactor scale)
-                "transmission_tex",
-                "transmission_map",
-                k,
-                path_str,
-                fresh_id,
-                &mut group_nodes,
-                &mut group_wires,
-                &mut string_bindings,
-                &mut map_tex_cache,
-                scene_object_id,
-                0,
-            );
-        }
-        if let Some(tex_index) = m.volume_thickness_texture {
-            wire_map_texture(
-                tex_index,
-                1, // Linear — data map (G channel = thicknessFactor scale)
-                "volume_thickness_tex",
-                "volume_thickness_map",
-                k,
-                path_str,
-                fresh_id,
-                &mut group_nodes,
-                &mut group_wires,
-                &mut string_bindings,
-                &mut map_tex_cache,
-                scene_object_id,
-                0,
-            );
+            };
+            wire_map_families(m, &mut object_assembly);
         }
 
         // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D1/D3: the `node.scene_object`

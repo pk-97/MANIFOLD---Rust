@@ -1319,16 +1319,18 @@ pub(crate) fn classify_node(
     let Some(body) = substituted_body(n.as_ref(), node) else {
         return NodeClass::Boundary;
     };
-    let standalone = crate::node_graph::freeze::codegen::generate_standalone_ext(
-        n.fusion_kind(),
-        &body,
-        n.inputs(),
-        n.parameters(),
-        n.input_access(),
-        n.derived_uniforms(),
-        n.outputs(),
-        n.stencil_fetch(),
-        n.wgsl_includes(),
+    let standalone = crate::node_graph::freeze::codegen::generate_standalone(
+        &crate::node_graph::freeze::codegen::StandaloneKernelSpec {
+            fusion_kind: n.fusion_kind(),
+            body: &body,
+            inputs: n.inputs(),
+            params: n.parameters(),
+            input_access: n.input_access(),
+            derived_uniforms: n.derived_uniforms(),
+            outputs: n.outputs(),
+            stencil_fetch: n.stencil_fetch(),
+            includes: n.wgsl_includes(),
+        },
     );
     match standalone {
         Ok(kernel) if naga::front::wgsl::parse_str(&kernel).is_ok() => NodeClass::Eligible,
@@ -3758,16 +3760,18 @@ mod audit {
         let Some(body) = substituted_body(n.as_ref(), node) else {
             return Some(RefusalFamily::Other);
         };
-        let standalone = crate::node_graph::freeze::codegen::generate_standalone_ext(
-            n.fusion_kind(),
-            &body,
-            n.inputs(),
-            n.parameters(),
-            n.input_access(),
-            n.derived_uniforms(),
-            n.outputs(),
-            n.stencil_fetch(),
-            n.wgsl_includes(),
+        let standalone = crate::node_graph::freeze::codegen::generate_standalone(
+            &crate::node_graph::freeze::codegen::StandaloneKernelSpec {
+                fusion_kind: n.fusion_kind(),
+                body: &body,
+                inputs: n.inputs(),
+                params: n.parameters(),
+                input_access: n.input_access(),
+                derived_uniforms: n.derived_uniforms(),
+                outputs: n.outputs(),
+                stencil_fetch: n.stencil_fetch(),
+                includes: n.wgsl_includes(),
+            },
         );
         match standalone {
             Ok(kernel) if naga::front::wgsl::parse_str(&kernel).is_ok() => None,

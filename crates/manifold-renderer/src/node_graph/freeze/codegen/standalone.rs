@@ -11,22 +11,53 @@ use super::types::{
 use super::uniforms::emit_buffer_struct;
 
 
-/// Generate the standalone `cs_main` kernel for one atom. `body` is the atom's
-/// `wgsl_body` fragment (defines `fn body(...)` plus any helpers, verbatim).
+/// The bundle of facts one standalone `cs_main` kernel is generated from — the
+/// atom's classification, its `wgsl_body` fragment, its ports/params, and the
+/// two ABI flags (`stencil_fetch`, shared `includes`) the fused side threads
+/// (D9). Travels as one argument instead of nine; every field is a `Copy`
+/// borrow, so [`generate_standalone`] and [`generate_standalone_buffer`]
+/// destructure it into locals and their bodies stay byte-identical.
+pub struct StandaloneKernelSpec<'a> {
+    /// Fusion classification (drives the texture-arity gate). Unused by the
+    /// buffer path.
+    pub fusion_kind: FusionKind,
+    /// The atom's `wgsl_body` fragment (defines `fn body(...)` plus any
+    /// helpers, verbatim).
+    pub body: &'a str,
+    /// Declared input ports, in binding order.
+    pub inputs: &'a [NodeInput],
+    /// Declared params (the `@binding(0)` uniform layout).
+    pub params: &'a [ParamDef],
+    /// Per-input access modes, aligned to `inputs` (texture then array).
+    pub input_access: &'a [InputAccess],
+    /// Frame-derived non-param uniform field names appended to the Params
+    /// struct.
+    pub derived_uniforms: &'a [&'a str],
+    /// Declared output ports.
+    pub outputs: &'a [NodeOutput],
+    /// STENCIL-FETCH body ABI flag: when true each sampler-`Gather` input is
+    /// read by the body through a `fetch_<port>(uv) -> vec4<f32>` function this
+    /// generator DEFINES as the real `textureSampleLevel` over the bound
+    /// texture — instead of passing `(texture, sampler)` body args. Compiles
+    /// to identical code (the fn inlines); the indirection is what lets the
+    /// FUSED codegen swap a recomputed virtual source in for the texture.
+    /// `false` keeps every existing atom's generated WGSL byte-identical.
+    /// Unused by the buffer path.
+    pub stencil_fetch: bool,
+    /// Shared WGSL library includes: deduped-by-caller, prepended verbatim
+    /// before the body so its helper calls resolve (same shape both paths).
+    pub includes: &'a [&'a str],
+}
+
+/// Generate the standalone `cs_main` kernel for one atom from its
+/// [`StandaloneKernelSpec`]. `spec.body` is the atom's `wgsl_body` fragment
+/// (defines `fn body(...)` plus any helpers, verbatim).
 ///
 /// Binding layout matches the hand-written atoms so the result is a drop-in:
 /// `@binding(0)` uniform params, `@binding(1..)` each texture input,
 /// `@binding(S)` sampler, `@binding(S+1)` output storage texture.
-pub fn generate_standalone(
-    fusion_kind: FusionKind,
-    body: &str,
-    inputs: &[NodeInput],
-    params: &[ParamDef],
-    input_access: &[InputAccess],
-    derived_uniforms: &[&str],
-    outputs: &[NodeOutput],
-) -> Result<String, CodegenError> {
-    generate_standalone_ext(
+pub fn generate_standalone(spec: &StandaloneKernelSpec<'_>) -> Result<String, CodegenError> {
+    let StandaloneKernelSpec {
         fusion_kind,
         body,
         inputs,
@@ -34,35 +65,9 @@ pub fn generate_standalone(
         input_access,
         derived_uniforms,
         outputs,
-        false,
-        &[],
-    )
-}
-
-/// [`generate_standalone`] with the STENCIL-FETCH body ABI flag and shared
-/// WGSL library includes. `includes` mirrors the buffer path's handling
-/// exactly: deduped-by-caller, prepended verbatim before the body so its
-/// helper calls resolve (same shape as `generate_standalone_buffer`'s
-/// identical block). When
-/// `stencil_fetch` is true, each sampler-`Gather` input is read by the body
-/// through a free `fetch_<port>(uv) -> vec4<f32>` function this wrapper
-/// DEFINES as the real `textureSampleLevel` over the bound texture — instead
-/// of passing `(texture, sampler)` body args. Compiles to identical code
-/// (the fn inlines); the indirection is what lets the FUSED codegen swap a
-/// recomputed virtual source in for the texture. `false` keeps every
-/// existing atom's generated WGSL byte-identical.
-#[allow(clippy::too_many_arguments)]
-pub fn generate_standalone_ext(
-    fusion_kind: FusionKind,
-    body: &str,
-    inputs: &[NodeInput],
-    params: &[ParamDef],
-    input_access: &[InputAccess],
-    derived_uniforms: &[&str],
-    outputs: &[NodeOutput],
-    stencil_fetch: bool,
-    includes: &[&str],
-) -> Result<String, CodegenError> {
+        stencil_fetch,
+        includes,
+    } = *spec;
     if body.is_empty() {
         return Err(CodegenError::NoBody);
     }
@@ -79,9 +84,7 @@ pub fn generate_standalone_ext(
         // through — a buffer atom reached via this generic entry point (e.g. the
         // classify final-gate parse-check in region.rs) still needs its derived
         // fields to generate the same Params layout its real dispatch will use.
-        return generate_standalone_buffer(
-            body, inputs, params, input_access, derived_uniforms, includes, outputs, &[],
-        );
+        return generate_standalone_buffer(spec, &[]);
     }
     let tex_inputs: Vec<&NodeInput> = inputs.iter().filter(|i| is_texture_input(i)).collect();
     // D3 (BUG-114): an Array input on an otherwise texture-domain atom (the
@@ -528,17 +531,20 @@ pub fn generate_standalone_ext(
 /// Binding layout: `@binding(0)` uniform, then each Array input `read`, then each
 /// Array output `read_write`. Deterministic (PARAMS / port order), so the
 /// generated text is a stable pipeline-cache key.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn generate_standalone_buffer(
-    body: &str,
-    inputs: &[NodeInput],
-    params: &[ParamDef],
-    input_access: &[InputAccess],
-    derived_uniforms: &[&str],
-    includes: &[&str],
-    outputs: &[NodeOutput],
+    spec: &StandaloneKernelSpec<'_>,
     atomic_outputs: &[&str],
 ) -> Result<String, CodegenError> {
+    let StandaloneKernelSpec {
+        body,
+        inputs,
+        params,
+        input_access,
+        derived_uniforms,
+        includes,
+        outputs,
+        ..
+    } = *spec;
     // Per-array-input access (aligned to array inputs in declaration order):
     //   - BufferGather → the body indexes the input array global `buf_<port>`
     //     itself (grid neighbours, random access). No pre-read, no element arg.
