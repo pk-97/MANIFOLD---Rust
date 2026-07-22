@@ -60,7 +60,7 @@ Only **P0 is briefed now**; P1+ briefs are written *after* P0, to STANDARD, beca
 - **Forbidden moves:** integrating into `manifold-renderer`; building a denoiser (P0 may be noisy — accumulation experiments only if time is free); any material system work.
 - **Exit:** numbers pasted into this doc's §6 (added then), winning mode chosen with Peter, P1+ briefed.
 
-### 5.1 P0 interim results (2026-07-22 — full 120-frame 4K run still pending)
+### 5.1 P0 results (2026-07-22 — the full 120-frame 4K run was WAIVED by Peter; these interim numbers + the visual gate decided mode B, D11)
 
 Harness: `tools/rt_prototype/` (standalone crate, manifold-gpu path dep for device+MetalFX; raw-MSL ray-query kernel `shaders/rt_trace.metal`). Asset: `cc0__japanese_apricot_prunus_mume.glb`, 1.43M tris. `--sun-only` flag zeroes the env for single-source looks. Comparison preset vs the current raster stack (matched camera/sun/albedo/AO/ACES; structural deltas documented in its description): `tools/rt_prototype/compare/RasterCompare.json` via `graph-tool render`.
 
