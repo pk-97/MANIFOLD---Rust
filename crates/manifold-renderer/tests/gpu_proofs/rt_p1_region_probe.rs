@@ -224,22 +224,40 @@ fn region_luma(bytes: &[u8], w: u32, h: u32, cx: f32, cy: f32, radius: i32) -> f
 // 58.3% RT-on vs RT-off (was exactly 0.0% before RT-D4) — comfortably
 // past this test's own >=30% bar.
 //
-// Still `#[ignore]`d for a NEW, separate reason — BUG-309: RT-D4 is the
-// first time this path ever produced a REAL rendered shadow, and doing so
-// revealed the shadow is not confined to the small occluder's footprint —
-// nearly the ENTIRE ground darkens by 25-83% RT-on vs RT-off at points
-// far from the occluder (empirically swept via `region_luma` at a grid of
-// world points, not eyeballed), which is what fails this test's <5%
-// lit-region bar. A quick, reverted experiment (negating the kernel's
-// finite-difference bias-normal winding in `trace_shadow_rays`,
-// `cross(wpx-wp, wpy-wp)` -> `cross(wpy-wp, wpx-wp)`) made the far-field
-// darkening disappear entirely but ALSO collapsed the real occluded-point
-// shadow to ~0% — so this isn't a simple sign flip, and guessing further
-// at the bias/winding math without a real GPU-value oracle would be
-// guess-and-patch. See BUG-309 for the follow-up investigation (mid-
-// pipeline `rt_mask_half` value dumps at the swept grid points, not just
-// the two named probes, to map exactly which term is wrong).
-#[ignore = "BUG-309: RT-D4 (BUG-308's fix) works — occluded region correctly darkens — but the shadow isn't confined to the occluder; near-universal ground self-shadowing/mislocated-shadow bug, separate from BUG-308, needs its own investigation"]
+// BUG-309 (docs/BUG_BACKLOG.md) — PARTIAL FIX, still `#[ignore]`d; see the
+// backlog entry for the full narrative. RT-D4 was the first time this path
+// ever produced a REAL rendered shadow, and doing so revealed the shadow
+// wasn't confined to the small occluder's footprint — nearly the ENTIRE
+// ground darkened by 25-83% RT-on vs RT-off at points far from the
+// occluder. That symptom is CONFIRMED FIXED: `trace_shadow_rays`'s bias
+// epsilon (`raytrace.rs`) is now derived from the screen-space neighbor
+// deltas already computed for the finite-difference normal (scales with
+// view distance/obliquity, capped against a synthetic-fixture pathology —
+// see the kernel's own comment) instead of a fixed 1e-3, with
+// `ray.min_distance` rejecting any self-intersection hit outright. The
+// rendered "on" scene no longer shows ground-wide darkening (verified via
+// `region_luma` at a swept grid of world points AND a rendered PNG look —
+// both clean, matching the "off" scene everywhere except one small,
+// localized dark mark). What's NOT yet fixed: the remaining mark isn't a
+// filled square matching the occluder's footprint — it's a thin,
+// partial/edge-like shape, and it doesn't line up with this test's
+// `occluded_world = (0,0,0)` probe point (a `project_to_pixel` sweep found
+// the actual mark's centroid nearer world ~(0.4, 0, 0.4)). Ruled out during
+// this pass: triangle-culling mode (`DisableTriangleCulling` — zero
+// effect), the bias formula's exact form (MIN vs MAX neighbor delta, with
+// vs without the reconstructed-normal contribution — all gave
+// near-identical hit counts/shape). A CRITICAL diagnostic-methodology
+// finding from this pass: Metal's `accept_any_intersection(true)` makes
+// `intersection_result.distance` UNRELIABLE (only `.type` is documented as
+// meaningful in that mode) — an early per-pixel hit-distance dump used
+// during localization was reading this unreliable field and gave
+// misleading clustering data; the trustworthy oracle is the rendered
+// `vis` output (or a real PNG look), never `.distance` under accept-any.
+// Needs a properly-scoped follow-up (a fresh, disciplined GPU-value pass
+// using the closest-hit intersector mode temporarily for trustworthy
+// per-pixel distances, NOT accept-any) to explain the residual thin-shape/
+// mislocation defect before both of this test's asserts can go green.
+#[ignore = "BUG-309 partial fix: ground-wide false darkening is gone (verified via PNG + region_luma sweep), but the real shadow renders as a thin/partial shape offset from this test's occluded_world probe point — needs a follow-up GPU-value pass with a non-accept-any intersector, see docs/BUG_BACKLOG.md"]
 #[test]
 fn rt_shadow_darkens_occluded_region_and_leaves_lit_region_alone() {
     let (on_bytes, w, h) = render_readback(&scene_json(true));
@@ -382,3 +400,4 @@ fn rt_enable_first_frame_never_stalls_past_20ms() {
         worst.1.as_secs_f64() * 1000.0
     );
 }
+
