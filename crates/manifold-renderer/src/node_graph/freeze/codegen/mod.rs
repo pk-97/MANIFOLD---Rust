@@ -27,6 +27,7 @@ mod uniforms;
 mod entry_points;
 mod standalone;
 mod fused;
+#[cfg(test)]
 mod tests;
 
 pub use fused::generate_fused;
