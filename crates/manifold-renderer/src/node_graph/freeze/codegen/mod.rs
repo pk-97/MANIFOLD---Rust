@@ -20,6 +20,7 @@ mod uniforms;
 mod entry_points;
 mod standalone;
 mod fused;
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests;
 #[cfg(test)]
 mod tests;
@@ -32,5 +33,5 @@ pub use standalone::{generate_standalone, generate_standalone_ext};
 pub use entry_points::{standalone_for_node, standalone_for_spec, standalone_for_spec_fmt, wgsl_storage_token};
 
 pub use types::{CodegenError, ENTRY, FusedVirtualChain, FusionRegion, GeneratedFusion, InputSource, RegionNode, VOLUME_WORKGROUP_3D};
-pub(crate) use types::{param_is_fusable, param_wgsl_type, param_word_count, wgsl_safe_field};
+pub(crate) use types::{param_is_fusable, param_wgsl_type, wgsl_safe_field};
 

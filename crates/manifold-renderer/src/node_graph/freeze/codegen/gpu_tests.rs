@@ -1,8 +1,7 @@
 use crate::node_graph::effect_node::NodeInstanceId;
-use crate::node_graph::freeze::classify::{FusionKind, InputAccess};
 use crate::node_graph::freeze::markers::Marker;
 
-use super::fused::{generate_fused, generate_fused_buffer};
+use super::fused::generate_fused;
 use super::standalone::{generate_standalone, generate_standalone_ext};
 use super::types::{FusedVirtualChain, FusionRegion, InputSource, RegionNode, ENTRY};
 use crate::node_graph::effect_node::EffectNode;
