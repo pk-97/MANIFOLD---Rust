@@ -85,7 +85,7 @@
         assert!(fx.enabled, "PresetInstance::new defaults enabled = true");
 
         let hash_on = compute_topology_hash(&[fx.clone()], &[], 256, 256, None);
-        let cg_on = PresetRuntime::try_build(&[fx.clone()], &[], &primitives, &device, None, 256, 256, None, None)
+        let cg_on = PresetRuntime::try_build(ChainBuildInputs { effects: &[fx.clone()], groups: &[], primitives: &primitives, device: &device, pool: None, width: 256, height: 256, preview_effect: None }, None)
             .expect("Mirror chain builds at enabled = true");
         assert_eq!(
             cg_on.effect_nodes.len(),
@@ -103,7 +103,7 @@
 
         // With this as the only effect, the chain should refuse to build
         // (no active effects → None) — equivalent to "the chain becomes empty".
-        let cg_off = PresetRuntime::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None, None);
+        let cg_off = PresetRuntime::try_build(ChainBuildInputs { effects: &[fx], groups: &[], primitives: &primitives, device: &device, pool: None, width: 256, height: 256, preview_effect: None }, None);
         assert!(
             cg_off.is_none(),
             "Disabled effect must be filtered out of active_effects — got a chain with effects when it should be empty",
@@ -136,7 +136,7 @@
 
         let mut fx = make_default(PresetTypeId::MIRROR);
         let hash_off = compute_topology_hash(&[fx.clone()], &[], 256, 256, None);
-        let cg_off = PresetRuntime::try_build(&[fx.clone()], &[], &primitives, &device, None, 256, 256, None, None)
+        let cg_off = PresetRuntime::try_build(ChainBuildInputs { effects: &[fx.clone()], groups: &[], primitives: &primitives, device: &device, pool: None, width: 256, height: 256, preview_effect: None }, None)
             .expect("Mirror chain builds with relight off");
         assert!(
             cg_off.graph.instance_by_node_id(&lambert_id).is_none(),
@@ -153,9 +153,7 @@
         // D8/P7: a relight-on card fuses, so `rl_lambert` lives inside the
         // fused kernel rather than as a standalone node. Force the unfused
         // (watched-editor) path to observe the spliced template node directly.
-        let cg_on_unfused = PresetRuntime::try_build(
-            &[fx.clone()], &[], &primitives, &device, None, 256, 256, Some(&fx.id), None
-        )
+        let cg_on_unfused = PresetRuntime::try_build(ChainBuildInputs { effects: &[fx.clone()], groups: &[], primitives: &primitives, device: &device, pool: None, width: 256, height: 256, preview_effect: Some(&fx.id) }, None)
         .expect("Mirror chain builds with relight on (watched / unfused)");
         assert!(
             cg_on_unfused.graph.instance_by_node_id(&lambert_id).is_some(),
@@ -166,7 +164,7 @@
         // proves this isn't a one-way sticky augmentation.
         fx.relight = false;
         let cg_off_again =
-            PresetRuntime::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None, None)
+            PresetRuntime::try_build(ChainBuildInputs { effects: &[fx], groups: &[], primitives: &primitives, device: &device, pool: None, width: 256, height: 256, preview_effect: None }, None)
                 .expect("Mirror chain builds with relight off again");
         assert!(
             cg_off_again.graph.instance_by_node_id(&lambert_id).is_none(),

@@ -63,7 +63,7 @@
         let primitives = PrimitiveRegistry::with_builtin();
         let fx = invert_with_generator_input();
 
-        let cg = PresetRuntime::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None, None)
+        let cg = PresetRuntime::try_build(ChainBuildInputs { effects: &[fx], groups: &[], primitives: &primitives, device: &device, pool: None, width: 256, height: 256, preview_effect: None }, None)
             .expect("chain builds with a divergent def including system.generator_input");
 
         let slot = cg
@@ -90,7 +90,7 @@
         // Canonical Invert preset has no system.generator_input.
         let fx = make_default(PresetTypeId::INVERT_COLORS);
 
-        let cg = PresetRuntime::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None, None)
+        let cg = PresetRuntime::try_build(ChainBuildInputs { effects: &[fx], groups: &[], primitives: &primitives, device: &device, pool: None, width: 256, height: 256, preview_effect: None }, None)
             .expect("Invert chain builds without divergent def");
 
         let slot = cg
@@ -121,7 +121,7 @@
         let fx = invert_with_generator_input();
 
         let mut cg =
-            PresetRuntime::try_build(std::slice::from_ref(&fx), &[], &primitives, &device, None, 256, 256, None, None)
+            PresetRuntime::try_build(ChainBuildInputs { effects: std::slice::from_ref(&fx), groups: &[], primitives: &primitives, device: &device, pool: None, width: 256, height: 256, preview_effect: None }, None)
                 .expect("chain builds");
 
         let gi_id = cg
@@ -197,7 +197,7 @@
         let fx = invert_with_generator_input();
 
         let mut cg =
-            PresetRuntime::try_build(std::slice::from_ref(&fx), &[], &primitives, &device, None, 256, 256, None, None)
+            PresetRuntime::try_build(ChainBuildInputs { effects: std::slice::from_ref(&fx), groups: &[], primitives: &primitives, device: &device, pool: None, width: 256, height: 256, preview_effect: None }, None)
                 .expect("chain builds");
 
         let gi_id = cg
@@ -280,17 +280,7 @@
                 panic!("Strobe must ship a clip_trigger card (§8 D6)");
             }
 
-            let mut cg = PresetRuntime::try_build(
-                std::slice::from_ref(&fx),
-                &[],
-                &primitives,
-                &device,
-                None,
-                64,
-                64,
-                None,
-                None,
-            )
+            let mut cg = PresetRuntime::try_build(ChainBuildInputs { effects: std::slice::from_ref(&fx), groups: &[], primitives: &primitives, device: &device, pool: None, width: 64, height: 64, preview_effect: None }, None)
             .expect("Strobe chain builds");
 
             let input = crate::render_target::RenderTarget::new(
@@ -389,17 +379,7 @@
         let primitives = PrimitiveRegistry::with_builtin();
         let fx = make_default(PresetTypeId::new("ColorGrade"));
 
-        let mut cg = PresetRuntime::try_build(
-            std::slice::from_ref(&fx),
-            &[],
-            &primitives,
-            &device,
-            None,
-            256,
-            256,
-            None,
-            None,
-        )
+        let mut cg = PresetRuntime::try_build(ChainBuildInputs { effects: std::slice::from_ref(&fx), groups: &[], primitives: &primitives, device: &device, pool: None, width: 256, height: 256, preview_effect: None }, None)
         .expect("ColorGrade chain builds");
 
         // Main-path proof: the fused kernel replaced the atom chain.

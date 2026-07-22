@@ -355,6 +355,53 @@ fn warn_provisional_manifest_once(id: &EffectId) {
     }
 }
 
+/// The inputs [`PresetRuntime::try_build`] reads to construct a chain graph —
+/// the effects/groups to build, the GPU device + pool to build against, and the
+/// output dimensions (D9). Bundled so the build call reads two arguments (these
+/// inputs + the optional `prior` runtime) instead of nine. Every field is a
+/// `Copy` borrow, so `try_build` destructures it and its body stays unchanged.
+pub struct ChainBuildInputs<'a> {
+    /// The effects to build into the chain, in chain order.
+    pub effects: &'a [PresetInstance],
+    /// Effect groups (wet/dry `Mix` sub-graphs).
+    pub groups: &'a [EffectGroup],
+    /// Registry the atoms are constructed from.
+    pub primitives: &'a PrimitiveRegistry,
+    /// GPU device the pipelines compile against.
+    pub device: &'a GpuDevice,
+    /// Optional texture pool for intermediate targets.
+    pub pool: Option<&'a TexturePool>,
+    /// Output width in pixels.
+    pub width: u32,
+    /// Output height in pixels.
+    pub height: u32,
+    /// The effect the graph editor is watching, if any — built unfused even
+    /// when the freeze toggle is on, so its intermediate node outputs exist
+    /// for the authoring-time preview. `None` leaves the freeze gate untouched.
+    pub preview_effect: Option<&'a EffectId>,
+}
+
+/// The per-frame timing/context [`PresetRuntime::set_frame_context`] pushes into
+/// the `system.generator_input` node — seven values that are one fact (this
+/// frame) (D9). `Copy`, so callers pass it by value.
+#[derive(Clone, Copy)]
+pub struct FrameContextInputs {
+    /// Player time in seconds.
+    pub time: f32,
+    /// Transport position in beats.
+    pub beat: f32,
+    /// Output aspect ratio (width / height).
+    pub aspect: f32,
+    /// Number of triggers fired this frame.
+    pub trigger_count: f32,
+    /// Animation-clip progress in [0, 1].
+    pub anim_progress: f32,
+    /// Output width in pixels.
+    pub output_width: f32,
+    /// Output height in pixels.
+    pub output_height: f32,
+}
+
 impl PresetRuntime {
     /// Construct a chain graph from `effects` + `groups`. Groups
     /// with `wet_dry < 1.0` become `Mix` sub-graphs (the
@@ -373,29 +420,25 @@ impl PresetRuntime {
     /// emits one Mix sub-graph per segment, all registered under
     /// the same `EffectGroupId` so per-frame `wet_dry` refresh
     /// applies uniformly to every segment.
-    pub fn try_build(
-        effects: &[PresetInstance],
-        groups: &[EffectGroup],
-        primitives: &PrimitiveRegistry,
-        device: &GpuDevice,
-        pool: Option<&TexturePool>,
-        width: u32,
-        height: u32,
-        // Effect the graph editor is watching, if any. Its chain is built
-        // unfused even when the freeze toggle is on, so its intermediate
-        // node outputs exist for the authoring-time preview to sample. `None`
-        // (no editor / not watching) leaves the freeze gate untouched — zero
-        // effect on the live render path.
-        preview_effect: Option<&EffectId>,
-        // The runtime this build replaces, when the dispatcher is rebuilding
-        // an existing chain. Cards whose content is unchanged harvest their
-        // node state (impl instances + StateStore buckets) from it, so a
-        // reorder / add / bypass / editor-close / fused-segment swap-in never
-        // resets a sim or a feedback trail — state identity is the card, not
-        // the chain position (docs/CHAIN_FUSION_DESIGN.md §5). `None` on
-        // first build; skipped automatically when dimensions changed.
-        prior: Option<&mut Self>,
-    ) -> Option<Self> {
+    ///
+    /// `prior` is the runtime this build replaces, when the dispatcher is
+    /// rebuilding an existing chain. Cards whose content is unchanged harvest
+    /// their node state (impl instances + StateStore buckets) from it, so a
+    /// reorder / add / bypass / editor-close / fused-segment swap-in never
+    /// resets a sim or a feedback trail — state identity is the card, not the
+    /// chain position (docs/CHAIN_FUSION_DESIGN.md §5). `None` on first build;
+    /// skipped automatically when dimensions changed.
+    pub fn try_build(inputs: ChainBuildInputs<'_>, prior: Option<&mut Self>) -> Option<Self> {
+        let ChainBuildInputs {
+            effects,
+            groups,
+            primitives,
+            device,
+            pool,
+            width,
+            height,
+            preview_effect,
+        } = inputs;
         // Indexed so we can capture each active effect's original
         // position in `effects` — used as a per-frame O(1) lookup key
         // (replaces the previous AHashMap<EffectId, &PresetInstance>
@@ -1768,17 +1811,16 @@ impl PresetRuntime {
 
     /// Update the `system.generator_input` node's per-frame context. No-op on
     /// an effect-chain runtime.
-    #[allow(clippy::too_many_arguments)]
-    pub fn set_frame_context(
-        &mut self,
-        time: f32,
-        beat: f32,
-        aspect: f32,
-        trigger_count: f32,
-        anim_progress: f32,
-        output_width: f32,
-        output_height: f32,
-    ) {
+    pub fn set_frame_context(&mut self, fc: FrameContextInputs) {
+        let FrameContextInputs {
+            time,
+            beat,
+            aspect,
+            trigger_count,
+            anim_progress,
+            output_width,
+            output_height,
+        } = fc;
         let PresetIo::Generate {
             generator_input_id, ..
         } = self.io
@@ -1889,15 +1931,15 @@ impl PresetRuntime {
         params: &ParamManifest,
     ) -> f32 {
         // 1. Push per-frame timing into the generator_input node's params.
-        self.set_frame_context(
-            ctx.time as f32,
-            ctx.beat as f32,
-            ctx.aspect,
-            ctx.trigger_count as f32,
-            ctx.anim_progress,
-            ctx.output_width as f32,
-            ctx.output_height as f32,
-        );
+        self.set_frame_context(FrameContextInputs {
+            time: ctx.time as f32,
+            beat: ctx.beat as f32,
+            aspect: ctx.aspect,
+            trigger_count: ctx.trigger_count as f32,
+            anim_progress: ctx.anim_progress,
+            output_width: ctx.output_width as f32,
+            output_height: ctx.output_height as f32,
+        });
 
         // 2. Push the host's outer-card slider values through the bindings.
         self.apply_param_values(params);

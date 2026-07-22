@@ -49,7 +49,7 @@
         };
 
         let result =
-            PresetRuntime::try_build(&[e1, e2, e3], &[g1], &primitives, &device, None, 256, 256, None, None);
+            PresetRuntime::try_build(ChainBuildInputs { effects: &[e1, e2, e3], groups: &[g1], primitives: &primitives, device: &device, pool: None, width: 256, height: 256, preview_effect: None }, None);
 
         let cg = result.expect(
             "PresetRuntime should build for a non-contiguous wet/dry group \
@@ -92,7 +92,7 @@
         };
 
         let result =
-            PresetRuntime::try_build(&[e1, e2, e3], &[g1], &primitives, &device, None, 256, 256, None, None);
+            PresetRuntime::try_build(ChainBuildInputs { effects: &[e1, e2, e3], groups: &[g1], primitives: &primitives, device: &device, pool: None, width: 256, height: 256, preview_effect: None }, None);
 
         let cg = result.expect("PresetRuntime should build for contiguous group");
         assert_eq!(cg.group_mix_nodes.len(), 1);
@@ -124,17 +124,7 @@
             parent_group_id: None,
         };
 
-        let result = PresetRuntime::try_build(
-            &[e1, e2, e3, e4, e5],
-            &[g1],
-            &primitives,
-            &device,
-            None,
-            256,
-            256,
-            None,
-            None,
-        );
+        let result = PresetRuntime::try_build(ChainBuildInputs { effects: &[e1, e2, e3, e4, e5], groups: &[g1], primitives: &primitives, device: &device, pool: None, width: 256, height: 256, preview_effect: None }, None);
 
         let cg = result.expect("PresetRuntime should build for three-segment group");
         assert_eq!(cg.group_mix_nodes.len(), 3);

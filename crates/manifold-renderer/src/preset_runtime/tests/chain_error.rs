@@ -48,7 +48,7 @@
             section: None,
         });
 
-        let cg = PresetRuntime::try_build(&[fx.clone()], &[], &primitives, &device, None, 256, 256, None, None)
+        let cg = PresetRuntime::try_build(ChainBuildInputs { effects: &[fx.clone()], groups: &[], primitives: &primitives, device: &device, pool: None, width: 256, height: 256, preview_effect: None }, None)
             .expect("Invert chain still builds; the binding just fails to resolve");
 
         let errors = cg.errors();
@@ -80,7 +80,7 @@
         let primitives = PrimitiveRegistry::with_builtin();
         let fx = make_default(PresetTypeId::INVERT_COLORS);
 
-        let cg = PresetRuntime::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None, None)
+        let cg = PresetRuntime::try_build(ChainBuildInputs { effects: &[fx], groups: &[], primitives: &primitives, device: &device, pool: None, width: 256, height: 256, preview_effect: None }, None)
             .expect("clean Invert chain builds");
 
         assert!(
