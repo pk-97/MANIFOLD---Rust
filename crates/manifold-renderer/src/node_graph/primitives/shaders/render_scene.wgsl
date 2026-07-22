@@ -330,6 +330,14 @@ const PREFILTER_MAX_MIP: f32 = 5.0;
 @group(0) @binding(38) var specular_color_map: texture_2d<f32>;
 @group(0) @binding(39) var transmission_map: texture_2d<f32>;
 @group(0) @binding(40) var volume_thickness_map: texture_2d<f32>;
+// RAYTRACING_DESIGN.md RT-D3: full-res RT shadow-visibility mask (r =
+// sun visibility [0,1]), written by manifold-gpu's `ShadowRayTracer`
+// half-res dispatch + upsample. `shadow_factor` below samples this via
+// `textureLoad` at the exact fragment pixel (already native-res,
+// depth-aware-upsampled — no filtering) instead of the shadow-map path
+// when `u.scene_params.w > 0.5`. Always bound (ABI-stub discipline); a
+// 1x1 dummy when RT isn't active this frame.
+@group(0) @binding(41) var rt_shadow_mask: texture_2d<f32>;
 
 // Decoded once per fragment (uniform per-draw-call data, cheap): bit i of
 // `pbr_specular_tint.w` = (specular_map, specular_color_map,
@@ -552,6 +560,15 @@ fn pcss_shadow_factor(slot: i32, suv: vec2<f32>, ref_depth: f32, z_r: f32, searc
 // caster's frustum read as lit (no shadow data there) rather than
 // clamped-dark.
 fn shadow_factor(world_pos: vec3<f32>, slot_f: f32, frag_xy: vec2<f32>) -> f32 {
+    // RAYTRACING_DESIGN.md RT-D3: single uniform-gated bool branch — RT
+    // scenes never touch the shadow-map path below (it isn't even
+    // rendered for them, render_scene.rs's `!rt_enabled` gate). Native-
+    // res `frag_xy` (`@builtin(position)`, already pixel coordinates)
+    // indexes `rt_shadow_mask` directly — it's already full-res and
+    // depth-aware-upsampled, no filtering needed.
+    if u.scene_params.w > 0.5 {
+        return textureLoad(rt_shadow_mask, vec2<i32>(frag_xy), 0).r;
+    }
     if slot_f < 0.0 {
         return 1.0;
     }

@@ -39,11 +39,12 @@ use objc2_foundation::NSArray;
 use objc2_foundation::NSString;
 use objc2_metal::{
     MTLAccelerationStructure, MTLAccelerationStructureCommandEncoder,
-    MTLAccelerationStructureGeometryDescriptor,
-    MTLAccelerationStructureTriangleGeometryDescriptor, MTLAccelerationStructureUsage,
-    MTLAttributeFormat, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue, MTLCompileOptions,
-    MTLComputePipelineState, MTLDevice, MTLIndexType, MTLLanguageVersion, MTLLibrary,
-    MTLPrimitiveAccelerationStructureDescriptor,
+    MTLAccelerationStructureGeometryDescriptor, MTLAccelerationStructureInstanceDescriptor,
+    MTLAccelerationStructureInstanceOptions, MTLAccelerationStructureTriangleGeometryDescriptor,
+    MTLAccelerationStructureUsage, MTLAttributeFormat, MTLCommandBuffer, MTLCommandEncoder,
+    MTLCommandQueue, MTLCompileOptions, MTLComputePipelineState, MTLDevice,
+    MTLInstanceAccelerationStructureDescriptor, MTLIndexType, MTLLanguageVersion, MTLLibrary,
+    MTLPackedFloat3, MTLPackedFloat4x3, MTLPrimitiveAccelerationStructureDescriptor,
 };
 
 use super::device::GpuDevice;
@@ -51,51 +52,182 @@ use super::types::{GpuBuffer, GpuComputePipeline, GpuTexture};
 use super::{GpuEncoder, Slot, SlotKind, SlotMap};
 use crate::types::GpuBinding;
 
-// ─── Acceleration structure (ports accel.rs) ───────────────────────────
+// ─── Acceleration structure: per-object BLAS + one instance TLAS ───────
+//
+// RT-D3/P1-part-2: render_scene's `objects` are independent meshes, each
+// with its own (possibly-animated) world transform — a single flat
+// acceleration structure over one combined vertex buffer would need a
+// per-frame CPU transform + re-upload of every object's geometry (a
+// GPU->CPU->GPU round trip render_scene's other passes never pay). Metal's
+// designed answer is a two-level structure: one bottom-level acceleration
+// structure (BLAS) per object's LOCAL-space geometry (built directly from
+// its existing GPU vertex/index buffers — no CPU involvement), instanced
+// into one top-level acceleration structure (TLAS) via a small per-object
+// transform-matrix buffer. Moving an object only touches the TLAS's
+// (cheap) instance transforms — refit, not rebuild; the BLAS themselves
+// are untouched unless a mesh's own vertex data deforms.
 
-/// A built acceleration structure over one triangle mesh, kept resident for
-/// the lifetime of an RT-enabled scene (built once at scene load — never
-/// mid-frame, RAYTRACING_DESIGN.md P1 performer-gesture gate).
-pub struct RtAccel {
-    pub(crate) structure: Retained<ProtocolObject<dyn MTLAccelerationStructure>>,
-    descriptor: Retained<MTLPrimitiveAccelerationStructureDescriptor>,
-    /// Scratch buffer for `refit`. The `build()` scratch buffer is only
-    /// read by the GPU during `build_accel`, which commits+waits, so it
-    /// does not need to outlive that call — only the refit scratch is
-    /// kept alive here (matches accel.rs).
-    refit_scratch: GpuBuffer,
+/// One object's LOCAL-space bottom-level acceleration structure. P1 never
+/// refits a BLAS (only the TLAS's instance transforms move — deforming-
+/// mesh per-BLAS refit is P2+ scope, un-suppression trigger for a
+/// `descriptor`/`refit_scratch` field re-add here), so only the built
+/// `structure` handle needs to survive — kept in `RtAccel.blas` for
+/// `object_count()`'s dirty-check guard below and so a future per-BLAS
+/// refit is a field access away instead of a rebuild from scratch.
+struct Blas {
+    structure: Retained<ProtocolObject<dyn MTLAccelerationStructure>>,
 }
 
-fn make_descriptor(
-    vertex_buffer: &GpuBuffer,
-    index_buffer: &GpuBuffer,
-    triangle_count: u32,
-) -> Retained<MTLPrimitiveAccelerationStructureDescriptor> {
+/// The resident RT scene: N per-object BLAS instanced into one TLAS via
+/// `transform`. Built once (scene load / topology change — dirty-checked
+/// by the caller, e.g. render_scene.rs's existing shadow-map cache-key
+/// idiom); kept resident across frames (RAYTRACING_DESIGN.md P1
+/// performer-gesture gate — never built mid-frame).
+pub struct RtAccel {
+    pub(crate) structure: Retained<ProtocolObject<dyn MTLAccelerationStructure>>,
+    descriptor: Retained<MTLInstanceAccelerationStructureDescriptor>,
+    refit_scratch: GpuBuffer,
+    /// Kept alive: the TLAS descriptor's `instancedAccelerationStructures`
+    /// array holds retained references to each BLAS regardless, but owning
+    /// them here too makes a future per-BLAS refit (deforming mesh) a
+    /// simple field access instead of an NSArray walk.
+    blas: Vec<Blas>,
+    /// CPU-writable instance-descriptor buffer (transform per object).
+    /// Retained here so `refit_accel` can rewrite transforms in place.
+    instance_buffer: GpuBuffer,
+}
+
+// Safety: matches every other manifold-gpu resource wrapper (`GpuTexture`,
+// `GpuBuffer`, `GpuComputePipeline`, ...) — Metal objects are safe to move
+// across threads; MANIFOLD's actual access pattern is single-threaded
+// (content thread owns the whole render_scene primitive that holds this).
+unsafe impl Send for RtAccel {}
+unsafe impl Sync for RtAccel {}
+
+/// One object's geometry + world transform for [`build_accel`]/
+/// [`ShadowRayTracer::build_accel`]. `transform` is manifold's own
+/// column-major `[[f32; 4]; 4]` convention (matches `render_scene.rs`'s
+/// `model_matrix`) — the same layout `render_scene.wgsl`'s `Uniforms.model`
+/// already uses. `vertex_buffer`/`vertex_stride`/`vertex_offset` read
+/// straight from an existing interleaved vertex buffer (e.g.
+/// `render_scene.rs`'s `MeshVertex`, stride 48, position at offset 0) —
+/// no position-only repack. `index_buffer: None` means a flat,
+/// non-indexed triangle list (every 3 consecutive vertices = 1 triangle
+/// — `render_scene.rs`'s own draw convention), matching Metal's
+/// triangle-geometry descriptor, which supports either.
+pub struct RtObjectGeometry<'a> {
+    pub vertex_buffer: &'a GpuBuffer,
+    pub vertex_stride: u32,
+    pub vertex_offset: u32,
+    pub index_buffer: Option<&'a GpuBuffer>,
+    pub triangle_count: u32,
+    pub transform: [[f32; 4]; 4],
+}
+
+fn build_blas(device: &GpuDevice, obj: &RtObjectGeometry) -> Blas {
     let tri_desc = MTLAccelerationStructureTriangleGeometryDescriptor::descriptor();
-    tri_desc.setVertexBuffer(Some(vertex_buffer.raw()));
+    tri_desc.setVertexBuffer(Some(obj.vertex_buffer.raw()));
     tri_desc.setVertexFormat(MTLAttributeFormat::Float3);
-    tri_desc.setVertexStride(12);
-    tri_desc.setIndexBuffer(Some(index_buffer.raw()));
-    tri_desc.setIndexType(MTLIndexType::UInt32);
-    tri_desc.setTriangleCount(triangle_count as usize);
+    tri_desc.setVertexStride(obj.vertex_stride as usize);
+    unsafe { tri_desc.setVertexBufferOffset(obj.vertex_offset as usize) };
+    if let Some(index_buffer) = obj.index_buffer {
+        tri_desc.setIndexBuffer(Some(index_buffer.raw()));
+        tri_desc.setIndexType(MTLIndexType::UInt32);
+    }
+    tri_desc.setTriangleCount(obj.triangle_count as usize);
     tri_desc.setOpaque(true);
     let geom: Retained<MTLAccelerationStructureGeometryDescriptor> = tri_desc.into_super();
     let array = NSArray::from_retained_slice(&[geom]);
-    let prim_desc = MTLPrimitiveAccelerationStructureDescriptor::descriptor();
-    prim_desc.setGeometryDescriptors(Some(&array));
-    prim_desc.setUsage(MTLAccelerationStructureUsage::Refit);
-    prim_desc
+    let descriptor = MTLPrimitiveAccelerationStructureDescriptor::descriptor();
+    descriptor.setGeometryDescriptors(Some(&array));
+    descriptor.setUsage(MTLAccelerationStructureUsage::Refit);
+
+    let raw_device = device.raw_device();
+    let sizes = raw_device.accelerationStructureSizesWithDescriptor(&descriptor);
+    let structure = raw_device
+        .newAccelerationStructureWithSize(sizes.accelerationStructureSize)
+        .expect("newAccelerationStructureWithSize failed");
+    let scratch = device.create_buffer(sizes.buildScratchBufferSize.max(16) as u64);
+
+    // One-off build at scene load — bypasses `GpuEncoder` (its
+    // `EncoderState` has no acceleration-structure variant; adding one for
+    // a scene-load-only call would be a new encoder mode for no per-frame
+    // benefit) and goes straight to the queue, exactly as `accel.rs` does.
+    let cb = device
+        .raw_queue()
+        .commandBuffer()
+        .expect("Failed to acquire command buffer for RT BLAS build");
+    let enc = cb
+        .accelerationStructureCommandEncoder()
+        .expect("accelerationStructureCommandEncoder failed");
+    enc.buildAccelerationStructure_descriptor_scratchBuffer_scratchBufferOffset(
+        &structure,
+        &descriptor,
+        scratch.raw(),
+        0,
+    );
+    enc.endEncoding();
+    cb.commit();
+    unsafe { cb.waitUntilCompleted() };
+
+    Blas { structure }
 }
 
-/// Build a fresh acceleration structure over `vertex_buffer`
-/// (`packed_float3`, stride 12) / `index_buffer` (u32 triples).
-pub(crate) fn build_accel(
-    device: &GpuDevice,
-    vertex_buffer: &GpuBuffer,
-    index_buffer: &GpuBuffer,
-    triangle_count: u32,
-) -> RtAccel {
-    let descriptor = make_descriptor(vertex_buffer, index_buffer, triangle_count);
+/// Column-major `[[f32; 4]; 4]` -> Metal's `MTLPackedFloat4x3` (4 columns,
+/// 3 rows — the implicit affine bottom row `[0,0,0,1]` is dropped, matching
+/// every transform `render_scene.rs` builds via `model_matrix`).
+fn to_packed_4x3(m: [[f32; 4]; 4]) -> MTLPackedFloat4x3 {
+    let col = |c: usize| MTLPackedFloat3 {
+        x: m[c][0],
+        y: m[c][1],
+        z: m[c][2],
+    };
+    MTLPackedFloat4x3 {
+        columns: [col(0), col(1), col(2), col(3)],
+    }
+}
+
+fn build_instance_buffer(device: &GpuDevice, objects: &[RtObjectGeometry]) -> GpuBuffer {
+    let stride = std::mem::size_of::<MTLAccelerationStructureInstanceDescriptor>();
+    let buf = device.create_buffer_shared((stride * objects.len().max(1)) as u64);
+    let ptr = buf
+        .mapped_ptr()
+        .expect("RT instance-descriptor buffer must be CPU-mapped");
+    for (i, obj) in objects.iter().enumerate() {
+        let desc = MTLAccelerationStructureInstanceDescriptor {
+            transformationMatrix: to_packed_4x3(obj.transform),
+            options: MTLAccelerationStructureInstanceOptions::None,
+            mask: 0xFF,
+            intersectionFunctionTableOffset: 0,
+            accelerationStructureIndex: i as u32,
+        };
+        unsafe {
+            std::ptr::write_unaligned(ptr.add(i * stride) as *mut _, desc);
+        }
+    }
+    buf
+}
+
+/// Build the resident two-level RT scene over `objects` — one BLAS per
+/// object (local-space geometry, no CPU transform) instanced into one
+/// TLAS via each object's world `transform`.
+pub(crate) fn build_accel(device: &GpuDevice, objects: &[RtObjectGeometry]) -> RtAccel {
+    let blas: Vec<Blas> = objects
+        .iter()
+        .map(|o| build_blas(device, o))
+        .collect();
+    let blas_structures: Vec<Retained<ProtocolObject<dyn MTLAccelerationStructure>>> =
+        blas.iter().map(|b| b.structure.clone()).collect();
+    let instance_buffer = build_instance_buffer(device, objects);
+
+    let descriptor = MTLInstanceAccelerationStructureDescriptor::descriptor();
+    descriptor.setInstanceCount(objects.len());
+    unsafe {
+        descriptor.setInstanceDescriptorBuffer(Some(instance_buffer.raw()));
+    }
+    descriptor.setInstancedAccelerationStructures(Some(&NSArray::from_retained_slice(&blas_structures)));
+    descriptor.setUsage(MTLAccelerationStructureUsage::Refit);
+
     let raw_device = device.raw_device();
     let sizes = raw_device.accelerationStructureSizesWithDescriptor(&descriptor);
     let structure = raw_device
@@ -104,15 +236,10 @@ pub(crate) fn build_accel(
     let scratch = device.create_buffer(sizes.buildScratchBufferSize.max(16) as u64);
     let refit_scratch = device.create_buffer(sizes.refitScratchBufferSize.max(16) as u64);
 
-    // One-off build pass at scene load — bypasses `GpuEncoder` (its
-    // `EncoderState` has no acceleration-structure variant; adding one for
-    // a scene-load-only, once-per-scene call would be a new encoder mode
-    // for no per-frame benefit) and goes straight to the queue, exactly as
-    // `accel.rs` does.
     let cb = device
         .raw_queue()
         .commandBuffer()
-        .expect("Failed to acquire command buffer for RT AS build");
+        .expect("Failed to acquire command buffer for RT TLAS build");
     let enc = cb
         .accelerationStructureCommandEncoder()
         .expect("accelerationStructureCommandEncoder failed");
@@ -130,17 +257,38 @@ pub(crate) fn build_accel(
         structure,
         descriptor,
         refit_scratch,
+        blas,
+        instance_buffer,
     }
 }
 
-/// Refit `accel` in place against an already GPU-side-modified vertex
-/// buffer (deforming meshes — P0 measured ~12-16ms/frame at 1.43M tris;
-/// static hero scenes never call this).
-pub(crate) fn refit_accel(device: &GpuDevice, accel: &RtAccel) {
+/// Refit `accel`'s TLAS in place — cheap (instance-transform-only) update,
+/// used when an object's transform changes but its topology/vertex count
+/// doesn't (so the BLAS list is unchanged). Rewrites the instance buffer's
+/// transforms from `objects` first, then refits.
+pub(crate) fn refit_accel(device: &GpuDevice, accel: &RtAccel, objects: &[RtObjectGeometry]) {
+    debug_assert_eq!(
+        objects.len(),
+        accel.blas.len(),
+        "refit_accel called with a different object COUNT than build_accel built — the BLAS \
+         list (and instance buffer) don't match; call build_accel again instead (topology change)"
+    );
+    let stride = std::mem::size_of::<MTLAccelerationStructureInstanceDescriptor>();
+    let ptr = accel
+        .instance_buffer
+        .mapped_ptr()
+        .expect("RT instance-descriptor buffer must be CPU-mapped");
+    for (i, obj) in objects.iter().enumerate() {
+        unsafe {
+            let field_ptr = ptr.add(i * stride) as *mut MTLPackedFloat4x3;
+            field_ptr.write_unaligned(to_packed_4x3(obj.transform));
+        }
+    }
+
     let cb = device
         .raw_queue()
         .commandBuffer()
-        .expect("Failed to acquire command buffer for RT AS refit");
+        .expect("Failed to acquire command buffer for RT TLAS refit");
     let enc = cb
         .accelerationStructureCommandEncoder()
         .expect("accelerationStructureCommandEncoder failed");
@@ -178,6 +326,11 @@ struct ShadowRayParams {
     uint   frame_index;
     uint2  trace_size;       // half-res (mode B, D11)
     uint2  gbuffer_size;     // full-res G-buffer / output resolution
+    // RT-D3: ray origins come from the prepass DEPTH texture + this
+    // inverse view-proj — no stored world-pos/normal G-buffer target in
+    // P1. Column-major, matches `render_scene.rs`'s `mat4_inverse` output
+    // and `render_scene.wgsl`'s `Uniforms.view_proj` convention.
+    float4x4 inv_view_proj;
 };
 
 static uint pcg(uint v) { v = v * 747796405u + 2891336453u; v = ((v >> ((v >> 28u) + 4u)) ^ v) * 277803737u; return (v >> 22u) ^ v; }
@@ -198,31 +351,66 @@ static float3 cone_sample(float3 dir, float half_angle, float2 u) {
     return normalize(t * (sin_t * cos(phi)) + b * (sin_t * sin(phi)) + dir * cos_t);
 }
 
-// Dispatch: trace_size grid. Inputs sampled at the matching full-res texel.
-// g_wpos: rgba32f, xyz = world pos, w = view dist (<=0 = void background).
-// g_nrm: rgba16f, xyz = world normal. Output (trace_size): r = sun
-// visibility [0,1].
+// RT-D3: reconstruct world position from a full-res depth texel + the
+// inverse view-proj matrix — the SAME NDC<->UV convention
+// `render_scene.wgsl`'s `project_to_shadow_uv` uses (`uv.y = -ndc.y*0.5 +
+// 0.5`), inverted. `raw_depth` is Metal's native [0,1] clip.z/clip.w
+// range (no linearization — `inv_view_proj` already undoes the whole
+// projection, linear or not). Returns false (void background — the
+// prepass never wrote this texel) via `out_valid` when `raw_depth >=
+// 1.0 - 1e-6` (the depth-clear value).
+static float3 world_pos_from_depth(uint2 pix, uint2 gbuffer_size, float raw_depth, constant float4x4& inv_view_proj, thread bool& out_valid) {
+    if (raw_depth >= 1.0 - 1e-6) { out_valid = false; return float3(0.0); }
+    out_valid = true;
+    float2 uv = (float2(pix) + 0.5) / float2(gbuffer_size);
+    float ndc_x = uv.x * 2.0 - 1.0;
+    float ndc_y = 1.0 - uv.y * 2.0;
+    float4 clip = float4(ndc_x, ndc_y, raw_depth, 1.0);
+    float4 wh = inv_view_proj * clip;
+    return wh.xyz / wh.w;
+}
+
+// Dispatch: trace_size (half-res, D11) grid. `depth_tex` is the full-res
+// opaque-depth prepass (RT-D3 — render_scene.rs's `opaque_depth_snapshot`,
+// forced on for RT-enabled scenes). Normal-for-bias is a screen-space
+// finite-difference of reconstructed world positions (RT-D3: same
+// technique as `ssao_gtao.rs`'s depth-only reconstruction — no new normal
+// G-buffer target in P1). Output (trace_size): r = sun visibility [0,1].
 kernel void trace_shadow_rays(
-    primitive_acceleration_structure accel   [[buffer(0)]],
-    constant ShadowRayParams&        p       [[buffer(1)]],
-    texture2d<float>                 g_wpos  [[texture(0)]],
-    texture2d<float>                 g_nrm   [[texture(1)]],
-    texture2d<float, access::write>  out_sv  [[texture(2)]],
+    instance_acceleration_structure  accel     [[buffer(0)]],
+    constant ShadowRayParams&        p         [[buffer(1)]],
+    depth2d<float>                   depth_tex [[texture(0)]],
+    texture2d<float, access::write>  out_sv    [[texture(1)]],
     uint2 tid [[thread_position_in_grid]])
 {
     if (tid.x >= p.trace_size.x || tid.y >= p.trace_size.y) return;
-    uint2 gpix = uint2((float2(tid) + 0.5) / float2(p.trace_size) * float2(p.gbuffer_size));
-    gpix = min(gpix, p.gbuffer_size - 1);
+    uint2 gpix = min(uint2((float2(tid) + 0.5) / float2(p.trace_size) * float2(p.gbuffer_size)), p.gbuffer_size - 1);
 
-    float4 wp = g_wpos.read(gpix);
-    if (wp.w <= 0.0) {
+    bool valid;
+    float3 wp = world_pos_from_depth(gpix, p.gbuffer_size, depth_tex.read(gpix, 0), p.inv_view_proj, valid);
+    if (!valid) {
         out_sv.write(float4(1, 0, 0, 0), tid);
         return;
     }
-    float3 n = normalize(g_nrm.read(gpix).xyz);
-    float3 origin = wp.xyz + n * 1e-3;
+    // Finite-difference normal from neighbor world positions (screen-space
+    // reconstruction, RT-D3). Falls back to the +x/+y neighbor's delta
+    // alone at the image edge (still a fine bias direction — this is a
+    // ray-origin epsilon offset, not a shaded normal).
+    uint2 gx = min(gpix + uint2(1, 0), p.gbuffer_size - 1);
+    uint2 gy = min(gpix + uint2(0, 1), p.gbuffer_size - 1);
+    bool vx, vy;
+    float3 wpx = world_pos_from_depth(gx, p.gbuffer_size, depth_tex.read(gx, 0), p.inv_view_proj, vx);
+    float3 wpy = world_pos_from_depth(gy, p.gbuffer_size, depth_tex.read(gy, 0), p.inv_view_proj, vy);
+    float3 n = (vx && vy) ? normalize(cross(wpx - wp, wpy - wp)) : float3(0, 1, 0);
+    if (!isfinite(n.x) || !isfinite(n.y) || !isfinite(n.z) || length_squared(n) < 1e-8) {
+        n = float3(0, 1, 0);
+    }
+    // Bias origin along the sun direction too (not just the normal) —
+    // guards the finite-difference normal's occasional near-degenerate
+    // case (e.g. a silhouette edge) from immediately self-shadowing.
+    float3 origin = wp + n * 1e-3 + p.sun_dir * 1e-3;
 
-    intersector<triangle_data> shadow_i;
+    intersector<triangle_data, instancing> shadow_i;
     shadow_i.assume_geometry_type(geometry_type::triangle);
     shadow_i.force_opacity(forced_opacity::opaque);
     shadow_i.accept_any_intersection(true);
@@ -242,24 +430,21 @@ kernel void trace_shadow_rays(
     out_sv.write(float4(vis, 0, 0, 0), tid);
 }
 
-// Depth-aware joint bilateral upsample: half-res sun-visibility -> full
-// res. Guides: full-res depth (g_wpos.w) + normal, resampled at each
-// low-res tap's mapped full-res texel (numerically identical to caching
-// trace-time depth in a spare channel, as the prototype's `upsample_
-// lighting` does via `lo_gi.a` — no `gi` buffer exists in the shadow-only
-// slice, so this resamples `g_wpos` directly instead).
+// Depth-aware bilateral upsample: half-res sun-visibility -> full res
+// (RT-D3's "D11 trivial pass"). Guide: full-res depth only (raw NDC z —
+// comparable directly without linearizing, since nearby screen pixels at
+// similar depth have proportionally similar raw-z regardless of the
+// projection's nonlinearity).
 kernel void upsample_shadow(
-    constant ShadowRayParams&       p      [[buffer(1)]],
-    texture2d<float>                g_wpos [[texture(0)]],
-    texture2d<float>                g_nrm  [[texture(1)]],
-    texture2d<float>                lo_sv  [[texture(2)]],
-    texture2d<float, access::write> hi_sv  [[texture(3)]],
+    constant ShadowRayParams&       p         [[buffer(1)]],
+    depth2d<float>                  depth_tex [[texture(0)]],
+    texture2d<float>                lo_sv     [[texture(1)]],
+    texture2d<float, access::write> hi_sv     [[texture(2)]],
     uint2 tid [[thread_position_in_grid]])
 {
     if (tid.x >= p.gbuffer_size.x || tid.y >= p.gbuffer_size.y) return;
-    float4 wp = g_wpos.read(tid);
-    if (wp.w <= 0.0) { hi_sv.write(float4(1, 0, 0, 0), tid); return; }
-    float3 n = normalize(g_nrm.read(tid).xyz);
+    float d = depth_tex.read(tid, 0);
+    if (d >= 1.0 - 1e-6) { hi_sv.write(float4(1, 0, 0, 0), tid); return; }
 
     float2 lo_uv = (float2(tid) + 0.5) / float2(p.gbuffer_size) * float2(p.trace_size);
     int2 lo_c = int2(lo_uv - 0.5);
@@ -268,12 +453,11 @@ kernel void upsample_shadow(
     for (int dx = 0; dx <= 1; dx++) {
         int2 q = clamp(lo_c + int2(dx, dy), int2(0), int2(p.trace_size) - 1);
         uint2 gq = min(uint2((float2(q) + 0.5) / float2(p.trace_size) * float2(p.gbuffer_size)), p.gbuffer_size - 1);
-        float4 qwp = g_wpos.read(gq);
+        float qd = depth_tex.read(gq, 0);
         float2 f = saturate(1.0 - fabs(lo_uv - 0.5 - float2(q)));
         float w_bilin = f.x * f.y;
-        float w_depth = exp(-fabs(qwp.w - wp.w) / max(wp.w * 0.02, 1e-4));
-        float w_nrm = pow(saturate(dot(n, normalize(g_nrm.read(gq).xyz))), 8.0);
-        float w = max(w_bilin * w_depth * w_nrm, 1e-5);
+        float w_depth = exp(-fabs(qd - d) / 0.001);
+        float w = max(w_bilin * w_depth, 1e-5);
         acc += lo_sv.read(uint2(q)).r * w;
         wsum += w;
     }
@@ -293,7 +477,52 @@ pub struct ShadowRayParams {
     pub frame_index: u32,
     pub trace_size: [u32; 2],
     pub gbuffer_size: [u32; 2],
+    /// MSL's `float4x4` requires 16-byte alignment; the 40 bytes above it
+    /// need 8 more to reach the next 16-byte boundary (48). `#[repr(C)]`
+    /// does NOT know `[[f32; 4]; 4]` needs that (its natural alignment is
+    /// 4, from `f32`) — without this, the GPU reads `inv_view_proj`
+    /// starting 8 bytes early, same alignment-gotcha class as the
+    /// `packed_float3` lesson (P0 §5.1), just for a matrix instead of a
+    /// vec3. Caught by `mat4x4_alignment_matches_msl_float4x4` below —
+    /// don't remove this padding without re-deriving the offset.
+    _pad_align_mat4: [u32; 2],
+    /// Column-major, matches `render_scene.rs`'s `mat4_inverse` output.
+    pub inv_view_proj: [[f32; 4]; 4],
 }
+
+impl ShadowRayParams {
+    /// Construct with the alignment padding zeroed — callers never set
+    /// `_pad_align_mat4` directly (it's not `pub`).
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        sun_dir: [f32; 3],
+        sun_cone: f32,
+        shadow_spp: u32,
+        frame_index: u32,
+        trace_size: [u32; 2],
+        gbuffer_size: [u32; 2],
+        inv_view_proj: [[f32; 4]; 4],
+    ) -> Self {
+        Self {
+            sun_dir,
+            sun_cone,
+            shadow_spp,
+            frame_index,
+            trace_size,
+            gbuffer_size,
+            _pad_align_mat4: [0; 2],
+            inv_view_proj,
+        }
+    }
+}
+
+// RT-D3 alignment gotcha (see `_pad_align_mat4`'s doc comment): this is
+// the regression guard a GPU test alone wouldn't localize as clearly —
+// if `inv_view_proj`'s offset ever drifts from 48 again (a field
+// reordered/resized above it), this fails at compile time instead of
+// silently reading garbage on the GPU.
+const _: () = assert!(std::mem::offset_of!(ShadowRayParams, inv_view_proj) == 48);
+const _: () = assert!(std::mem::size_of::<ShadowRayParams>() == 112);
 
 const SHADOW_WORKGROUP: [u32; 3] = [8, 8, 1];
 
@@ -354,24 +583,24 @@ pub trait ShadowRayTracer {
     /// Backend-specific resident acceleration structure handle.
     type Accel;
 
-    /// Build a fresh acceleration structure over a triangle mesh. Call
-    /// once at scene load for an RT-enabled scene; never mid-frame.
-    fn build_accel(
-        &self,
-        device: &GpuDevice,
-        vertex_buffer: &GpuBuffer,
-        index_buffer: &GpuBuffer,
-        triangle_count: u32,
-    ) -> Self::Accel;
+    /// Build the resident two-level RT scene (one BLAS per object,
+    /// instanced into one TLAS — see the module doc). Call once at scene
+    /// load / topology change for an RT-enabled scene; never mid-frame.
+    fn build_accel(&self, device: &GpuDevice, objects: &[RtObjectGeometry]) -> Self::Accel;
 
-    /// Refit `accel` in place against updated vertex data (deforming
-    /// meshes only — static hero scenes never call this).
-    fn refit_accel(&self, device: &GpuDevice, accel: &Self::Accel);
+    /// Refit `accel`'s instance transforms in place from `objects` — cheap
+    /// (TLAS-only update), used when objects move but the object SET and
+    /// each object's topology are unchanged (mirrors `objects.len()` and
+    /// vertex/index buffer identity against what `accel` was built from —
+    /// caller's dirty-check, e.g. render_scene.rs's shadow-map cache-key
+    /// idiom). A topology change calls `build_accel` again instead.
+    fn refit_accel(&self, device: &GpuDevice, accel: &Self::Accel, objects: &[RtObjectGeometry]);
 
-    /// Dispatch the half-res hard-shadow-ray pass: reads the full-res
-    /// world-position (`g_wpos`, rgba32f, w = view dist, <=0 = void) and
-    /// normal (`g_nrm`) G-buffer textures, writes sun-visibility to
-    /// `out_sv` at `params.trace_size`.
+    /// Dispatch the half-res hard-shadow-ray pass (RT-D3): ray origins +
+    /// bias normal reconstructed in-kernel from `depth_tex` (the full-res
+    /// opaque-depth prepass) + `params.inv_view_proj` — no world-pos/
+    /// normal G-buffer target. Writes sun-visibility to `out_sv` at
+    /// `params.trace_size`.
     #[allow(clippy::too_many_arguments)]
     fn dispatch_shadow_rays(
         &self,
@@ -379,21 +608,19 @@ pub trait ShadowRayTracer {
         accel: &Self::Accel,
         params: &ShadowRayParams,
         params_buffer: &GpuBuffer,
-        g_wpos: &GpuTexture,
-        g_nrm: &GpuTexture,
+        depth_tex: &GpuTexture,
         out_sv: &GpuTexture,
         label: &str,
     );
 
     /// Depth-aware bilateral upsample of the half-res `lo_sv` term to
-    /// full G-buffer resolution `hi_sv`.
+    /// full G-buffer resolution `hi_sv` (RT-D3's "D11 trivial pass").
     #[allow(clippy::too_many_arguments)]
     fn upsample_shadow(
         &self,
         encoder: &mut GpuEncoder,
         params_buffer: &GpuBuffer,
-        g_wpos: &GpuTexture,
-        g_nrm: &GpuTexture,
+        depth_tex: &GpuTexture,
         lo_sv: &GpuTexture,
         hi_sv: &GpuTexture,
         label: &str,
@@ -434,7 +661,6 @@ impl MetalShadowRayTracer {
                 (1, SlotKind::Buffer),
                 (0, SlotKind::Texture),
                 (1, SlotKind::Texture),
-                (2, SlotKind::Texture),
             ]),
         );
         let upsample_pipeline = compile_pipeline(
@@ -446,7 +672,6 @@ impl MetalShadowRayTracer {
                 (0, SlotKind::Texture),
                 (1, SlotKind::Texture),
                 (2, SlotKind::Texture),
-                (3, SlotKind::Texture),
             ]),
         );
 
@@ -460,18 +685,12 @@ impl MetalShadowRayTracer {
 impl ShadowRayTracer for MetalShadowRayTracer {
     type Accel = RtAccel;
 
-    fn build_accel(
-        &self,
-        device: &GpuDevice,
-        vertex_buffer: &GpuBuffer,
-        index_buffer: &GpuBuffer,
-        triangle_count: u32,
-    ) -> Self::Accel {
-        build_accel(device, vertex_buffer, index_buffer, triangle_count)
+    fn build_accel(&self, device: &GpuDevice, objects: &[RtObjectGeometry]) -> Self::Accel {
+        build_accel(device, objects)
     }
 
-    fn refit_accel(&self, device: &GpuDevice, accel: &Self::Accel) {
-        refit_accel(device, accel);
+    fn refit_accel(&self, device: &GpuDevice, accel: &Self::Accel, objects: &[RtObjectGeometry]) {
+        refit_accel(device, accel, objects);
     }
 
     fn dispatch_shadow_rays(
@@ -480,8 +699,7 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         accel: &Self::Accel,
         params: &ShadowRayParams,
         params_buffer: &GpuBuffer,
-        g_wpos: &GpuTexture,
-        g_nrm: &GpuTexture,
+        depth_tex: &GpuTexture,
         out_sv: &GpuTexture,
         label: &str,
     ) {
@@ -499,14 +717,10 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                 },
                 GpuBinding::Texture {
                     binding: 0,
-                    texture: g_wpos,
+                    texture: depth_tex,
                 },
                 GpuBinding::Texture {
                     binding: 1,
-                    texture: g_nrm,
-                },
-                GpuBinding::Texture {
-                    binding: 2,
                     texture: out_sv,
                 },
             ],
@@ -519,8 +733,7 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         &self,
         encoder: &mut GpuEncoder,
         params_buffer: &GpuBuffer,
-        g_wpos: &GpuTexture,
-        g_nrm: &GpuTexture,
+        depth_tex: &GpuTexture,
         lo_sv: &GpuTexture,
         hi_sv: &GpuTexture,
         label: &str,
@@ -542,18 +755,14 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                 },
                 GpuBinding::Texture {
                     binding: 0,
-                    texture: g_wpos,
+                    texture: depth_tex,
                 },
                 GpuBinding::Texture {
                     binding: 1,
-                    texture: g_nrm,
-                },
-                GpuBinding::Texture {
-                    binding: 2,
                     texture: lo_sv,
                 },
                 GpuBinding::Texture {
-                    binding: 3,
+                    binding: 2,
                     texture: hi_sv,
                 },
             ],

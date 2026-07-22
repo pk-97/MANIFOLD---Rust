@@ -67,6 +67,7 @@
 
 use ahash::AHashMap;
 use manifold_gpu::GpuBinding;
+use manifold_gpu::raytrace::ShadowRayTracer;
 
 use crate::generators::mesh_common::{InstanceTransform, MeshVertex};
 use crate::node_graph::atmosphere::Atmosphere;
@@ -589,6 +590,25 @@ pub struct RenderScene {
     opaque_depth_snapshot: Option<manifold_gpu::GpuTexture>,
     opaque_depth_snapshot_width: u32,
     opaque_depth_snapshot_height: u32,
+    /// RAYTRACING_DESIGN.md RT-D3 (P1-part-2): the resident RT scene
+    /// (one BLAS per object instanced into one TLAS) + its dirty-check
+    /// key (hash of every object's vertex-buffer identity + triangle
+    /// count + transform — matches this file's `shadow_cache_keys`
+    /// idiom). `None` until the first RT-enabled frame; rebuilt only
+    /// when the key changes (never mid-frame otherwise — the
+    /// performer-gesture gate).
+    rt_tracer: Option<manifold_gpu::raytrace::MetalShadowRayTracer>,
+    rt_accel: Option<manifold_gpu::raytrace::RtAccel>,
+    rt_accel_key: Option<u64>,
+    /// Half-res shadow-ray-trace target + full-res upsampled mask
+    /// (RT-D3's "D11 trivial pass"). Sized to the scene's own
+    /// `width`/`height`, ensured lazily like every other RT-only
+    /// resource here (unwired/RT-off scenes never allocate these).
+    rt_mask_half: Option<manifold_gpu::GpuTexture>,
+    rt_mask_full: Option<manifold_gpu::GpuTexture>,
+    rt_mask_width: u32,
+    rt_mask_height: u32,
+    rt_params_buffer: Option<manifold_gpu::GpuBuffer>,
     /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P4 (R5): this object's port
     /// names, generated once in [`Self::rebuild`] instead of re-formatted
     /// every `evaluate()` call. §1's CPU row measured ~22 `format!`
@@ -705,6 +725,14 @@ impl RenderScene {
             opaque_depth_snapshot: None,
             opaque_depth_snapshot_width: 0,
             opaque_depth_snapshot_height: 0,
+            rt_tracer: None,
+            rt_accel: None,
+            rt_accel_key: None,
+            rt_mask_half: None,
+            rt_mask_full: None,
+            rt_mask_width: 0,
+            rt_mask_height: 0,
+            rt_params_buffer: None,
             prefiltered_specular: None,
             irradiance_map: None,
             brdf_lut: None,
@@ -1212,12 +1240,69 @@ impl RenderScene {
             depth: 1,
             format: manifold_gpu::GpuTextureFormat::Depth32Float,
             dimension: manifold_gpu::GpuTextureDimension::D2,
-            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET,
-            label: "node.render_scene opaque depth snapshot (E2a)",
+            // RAYTRACING_DESIGN.md RT-D3: SHADER_READ added alongside the
+            // original RENDER_TARGET so the RT shadow-ray compute pass can
+            // `depth2d<float>.read()` this same snapshot (no second depth
+            // texture) — harmless for the E2a-only (non-RT) case, which
+            // never binds it to a compute pipeline.
+            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET
+                | manifold_gpu::GpuTextureUsage::SHADER_READ,
+            label: "node.render_scene opaque depth snapshot (E2a/RT-D3)",
             mip_levels: 1,
         }));
         self.opaque_depth_snapshot_width = width;
         self.opaque_depth_snapshot_height = height;
+    }
+
+    /// RAYTRACING_DESIGN.md RT-D3: lazily build the raw-MSL shadow-ray
+    /// pipelines once per device (kept resident — see
+    /// `MetalShadowRayTracer::new`'s doc for why this can't go through
+    /// the WGSL pipeline cache).
+    fn ensure_rt_tracer(&mut self, device: &manifold_gpu::GpuDevice) {
+        if self.rt_tracer.is_none() {
+            self.rt_tracer = Some(manifold_gpu::raytrace::MetalShadowRayTracer::new(device));
+        }
+    }
+
+    /// Half-res trace target + full-res upsampled mask, resized with the
+    /// scene's own output resolution (RT-D3's mode-B half-res dispatch,
+    /// D11).
+    fn ensure_rt_masks(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
+        if self.rt_mask_width == width && self.rt_mask_height == height && self.rt_mask_full.is_some() {
+            return;
+        }
+        let half_w = width.div_ceil(2).max(1);
+        let half_h = height.div_ceil(2).max(1);
+        let make = |w: u32, h: u32, label: &'static str| {
+            device.create_texture(&manifold_gpu::GpuTextureDesc {
+                width: w,
+                height: h,
+                depth: 1,
+                format: manifold_gpu::GpuTextureFormat::R32Float,
+                dimension: manifold_gpu::GpuTextureDimension::D2,
+                usage: manifold_gpu::GpuTextureUsage::SHADER_WRITE
+                    | manifold_gpu::GpuTextureUsage::SHADER_READ,
+                label,
+                mip_levels: 1,
+            })
+        };
+        self.rt_mask_half = Some(make(half_w, half_h, "node.render_scene rt_mask_half (RT-D3)"));
+        self.rt_mask_full = Some(make(width, height, "node.render_scene rt_mask_full (RT-D3)"));
+        self.rt_mask_width = width;
+        self.rt_mask_height = height;
+    }
+
+    /// CPU-mapped `ShadowRayParams` upload buffer, allocated once and
+    /// reused every frame (matches this file's `light_buffers` ring
+    /// pattern in spirit, minus the multi-frame rotation — the RT pass
+    /// runs synchronously within the same frame it's dispatched, unlike
+    /// the light data a later frame's draw call might still be reading).
+    fn ensure_rt_params_buffer(&mut self, device: &manifold_gpu::GpuDevice) {
+        if self.rt_params_buffer.is_none() {
+            self.rt_params_buffer = Some(device.create_buffer_shared(
+                std::mem::size_of::<manifold_gpu::raytrace::ShadowRayParams>() as u64,
+            ));
+        }
     }
 
     /// VOLUMETRIC_LIGHT_DESIGN.md D2/D3 (P2): ensure the three internal
@@ -1853,6 +1938,62 @@ fn uv_t(t: &[f32; 6]) -> [f32; 4] {
     [t[4], t[5], 0.0, 0.0]
 }
 
+/// Generic 4x4 matrix inverse (Gauss-Jordan elimination with partial
+/// pivoting), column-major `[[f32; 4]; 4]` — matches `view_proj`'s own
+/// convention throughout this file. RAYTRACING_DESIGN.md RT-D3: the RT
+/// shadow-ray pass reconstructs world position from the opaque-depth
+/// prepass + this inverse, so it must be exact — proven against a real
+/// camera's `view_proj` in `mat4_inverse_recovers_identity_for_a_real_
+/// camera` below, not eyeballed. `None` only for a genuinely singular
+/// `m` (a degenerate projection — no camera this file builds produces
+/// one).
+fn mat4_inverse(m: [[f32; 4]; 4]) -> Option<[[f32; 4]; 4]> {
+    // Row-major augmented working copy [A | I] for elimination;
+    // `m[col][row]` (column-major) -> `a[row][col]`.
+    let mut a = [[0f32; 8]; 4];
+    for (r, row) in a.iter_mut().enumerate() {
+        for (c, col) in m.iter().enumerate() {
+            row[c] = col[r];
+        }
+        row[4 + r] = 1.0;
+    }
+    for col in 0..4 {
+        let mut pivot = col;
+        for r in (col + 1)..4 {
+            if a[r][col].abs() > a[pivot][col].abs() {
+                pivot = r;
+            }
+        }
+        if a[pivot][col].abs() < 1e-12 {
+            return None;
+        }
+        a.swap(col, pivot);
+        let inv_p = 1.0 / a[col][col];
+        for v in &mut a[col] {
+            *v *= inv_p;
+        }
+        for r in 0..4 {
+            if r == col {
+                continue;
+            }
+            let factor = a[r][col];
+            if factor != 0.0 {
+                let pivot_row = a[col];
+                for c in 0..8 {
+                    a[r][c] -= factor * pivot_row[c];
+                }
+            }
+        }
+    }
+    let mut out = [[0f32; 4]; 4];
+    for (r, row) in a.iter().enumerate() {
+        for c in 0..4 {
+            out[c][r] = row[4 + c];
+        }
+    }
+    Some(out)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_uniforms(
     view_proj: [[f32; 4]; 4],
@@ -2220,6 +2361,11 @@ impl EffectNode for RenderScene {
             view_proj[2][0] += (jx_px * 2.0 / width as f32) * wz;
             view_proj[2][1] += (jy_px * 2.0 / height as f32) * wz;
         }
+        // RAYTRACING_DESIGN.md RT-D3 (P1-part-2): the scene-level toggle
+        // (W0's `rt_enabled` ParamDef). Read once here, after jitter is
+        // folded into `view_proj` — the RT pass's `inv_view_proj` must
+        // match the SAME `view_proj` the main draw uses this frame.
+        let rt_enabled = matches!(ctx.params.get("rt_enabled"), Some(ParamValue::Bool(true)));
         // GBUFFER_DESIGN.md §2 D1: lazy — `velocity` costs nothing unless a
         // consumer actually wired it (checked once per frame, cheap: a
         // step-output lookup, not a texture allocation).
@@ -2455,6 +2601,15 @@ impl EffectNode for RenderScene {
                 prev_view_proj,
                 prev_model_n,
             );
+            // RAYTRACING_DESIGN.md RT-D3 (P1-part-2): `scene_params.w` was
+            // a permanently-zero reserved slot (see the field's doc
+            // comment) — repurposed as the RT-active flag `shadow_factor`
+            // branches on, same reuse doctrine as `alpha_params.zw`
+            // (clearcoat) and `pbr_metallic_roughness.zw`
+            // (ior/specular_factor). `!casters.is_empty()` mirrors
+            // `has_casters` (declared later in this function, after this
+            // loop) — same underlying `casters` Vec, already populated.
+            uniforms.scene_params[3] = if rt_enabled && !casters.is_empty() { 1.0 } else { 0.0 };
             if base_color_map.is_some() {
                 uniforms.texture_flags[2] = 1.0; // z = base_color_map present (matches resolve_albedo's texture_flags.z gate)
             }
@@ -2669,30 +2824,44 @@ impl EffectNode for RenderScene {
             // in a scene with no casters. The shadow *pipeline* + per-caster
             // maps are created only when a caster exists (unwired = zero cost).
             self.ensure_shadow_binding_stubs(gpu.device);
-            if has_casters {
+            if has_casters && !rt_enabled {
                 self.ensure_shadow_pass(gpu.device);
                 for (slot, l) in casters.iter().enumerate() {
                     self.ensure_shadow_map(gpu.device, slot, l.shadow_resolution);
                 }
-            } else if has_transmission {
+            } else if has_transmission || rt_enabled {
                 // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: the transmissive
                 // opaque-depth prepass below reuses `shadow_pipeline` (a
                 // depth-only pipeline fed the camera's `view_proj` instead
                 // of a light's) even when there are zero shadow casters.
+                // RAYTRACING_DESIGN.md RT-D3 (P1-part-2): the RT shadow-ray
+                // pass reads the SAME prepass as its depth source, so an
+                // RT-enabled scene needs it too, independent of
+                // `has_transmission`.
                 self.ensure_shadow_pass(gpu.device);
             }
-            // E2a: allocate the Depth32Float snapshot Pass B depth-tests
-            // against, plus the opaque-scene-color snapshot itself. Both
-            // must happen HERE (this block's `{ let gpu = ... }` scope,
-            // before `identity_stub` and friends take long-lived immutable
+            // E2a/RT-D3: allocate the Depth32Float snapshot Pass B (E2a)
+            // and the RT shadow-ray pass (RT-D3) both read; the opaque-
+            // scene-color snapshot is E2a-only. Both must happen HERE
+            // (this block's `{ let gpu = ... }` scope, before
+            // `identity_stub` and friends take long-lived immutable
             // borrows of `self` below) — the same `&mut self` ensure calls
             // deferred to right before Pass 2 fetches `target` (the natural
             // place otherwise) would conflict with those borrows under NLL.
-            if has_transmission {
+            if has_transmission || rt_enabled {
                 self.ensure_opaque_depth_snapshot(gpu.device, width, height);
-                if let Some(format) = opaque_scene_color_target_format {
-                    self.ensure_opaque_scene_color(gpu.device, width, height, format);
-                }
+            }
+            if has_transmission
+                && let Some(format) = opaque_scene_color_target_format
+            {
+                self.ensure_opaque_scene_color(gpu.device, width, height, format);
+            }
+            // RAYTRACING_DESIGN.md RT-D3: tracer + masks + params buffer,
+            // ensured here for the same NLL borrow reason as above.
+            if rt_enabled {
+                self.ensure_rt_tracer(gpu.device);
+                self.ensure_rt_masks(gpu.device, width, height);
+                self.ensure_rt_params_buffer(gpu.device);
             }
             // VOLUMETRIC_LIGHT_DESIGN.md D1/D3 (P2): the whole feature's
             // real GPU cost gate. `wants_shafts_now == false` (the default)
@@ -2759,7 +2928,14 @@ impl EffectNode for RenderScene {
             .iter()
             .filter(|d| d.alpha_mode != AlphaMode::Blend)
             .collect();
-        if has_casters {
+        // RAYTRACING_DESIGN.md RT-D3: shadow maps STOP RENDERING for
+        // RT-enabled scenes — the RT shadow-ray pass below replaces this
+        // entire depth-only-per-caster loop, not runs alongside it (the
+        // ensure block above never allocates `shadow_maps` when
+        // `rt_enabled`, so this loop's `None` short-circuit would already
+        // no-op each caster; the explicit gate makes that invariant load-
+        // bearing instead of incidental).
+        if has_casters && !rt_enabled {
             let shadow_pipeline = self.shadow_pipeline.as_ref().expect("ensured").clone();
             let shadow_ds = self.shadow_depth_stencil.as_ref().expect("ensured");
             for (slot, l) in casters.iter().enumerate() {
@@ -2875,7 +3051,7 @@ impl EffectNode for RenderScene {
         // Skipped entirely when the scene has no transmissive object
         // (zero-transmission = zero extra passes, same lazy contract as the
         // shaft/velocity features above). ----
-        if has_transmission {
+        if has_transmission || rt_enabled {
             let opaque_depth_pipeline = self.shadow_pipeline.as_ref().expect("ensured above").clone();
             let opaque_depth_ds = self.shadow_depth_stencil.as_ref().expect("ensured above");
             let opaque_depth_snapshot = self.opaque_depth_snapshot.as_ref().expect("ensured above");
@@ -2928,6 +3104,105 @@ impl EffectNode for RenderScene {
                     &cam_draws,
                     "node.render_scene E2a opaque depth snapshot",
                 );
+        }
+
+        // ---- RAYTRACING_DESIGN.md RT-D3 (P1-part-2): half-res hard-
+        // shadow-ray dispatch + depth-aware upsample, reading the opaque-
+        // depth prepass above (built for this frame's `view_proj` whether
+        // or not `has_transmission` — the `|| rt_enabled` gates above).
+        // Runs only when there's a light to trace toward (`has_casters`);
+        // RT-enabled with zero casters degenerates to "nothing to
+        // replace", same as the raster path's shadow-map loop with zero
+        // casters. KNOWN LIMITATION: the accel structure below uses each
+        // object's single `model` transform — instanced objects
+        // (`instances_n` wired) get ONE ray-traced copy at that base
+        // transform, not one per instance (photoscanned-hero-object
+        // scenes, this design's whole framing, are not instanced; a
+        // scene that instances RT-shadowed geometry gets wrong per-
+        // instance shadow positions — escalate if this becomes load-
+        // bearing, per the P1 brief's own escalation line). ----
+        if rt_enabled && has_casters {
+            let vsize = std::mem::size_of::<MeshVertex>() as u32;
+            let objects: Vec<manifold_gpu::raytrace::RtObjectGeometry> = shadow_caster_draws
+                .iter()
+                .map(|d| manifold_gpu::raytrace::RtObjectGeometry {
+                    vertex_buffer: d.vertices,
+                    vertex_stride: vsize,
+                    vertex_offset: 0,
+                    index_buffer: None,
+                    triangle_count: vcount(d.vertices) / 3,
+                    transform: d.uniforms.model,
+                })
+                .collect();
+
+            // Dirty-check key: same hashing idiom as `shadow_cache_keys`
+            // above — any topology OR transform change triggers a full
+            // rebuild (accel structure build/refit — RAYTRACING_DESIGN.md
+            // P1 gate: built at scene load, kept resident, never built
+            // mid-frame for a STATIC scene, since the key then never
+            // changes after the first frame).
+            use std::hash::{Hash, Hasher};
+            let mut hasher = ahash::AHasher::default();
+            hasher.write_usize(objects.len());
+            for o in &objects {
+                o.vertex_buffer.identity_key().hash(&mut hasher);
+                hasher.write_u32(o.triangle_count);
+                hasher.write(bytemuck::bytes_of(&o.transform));
+            }
+            hasher.write_u64(ctx.rebuild_epoch);
+            let accel_key = hasher.finish();
+
+            let gpu = ctx.gpu_encoder();
+            if self.rt_accel_key != Some(accel_key) || self.rt_accel.is_none() {
+                let tracer = self.rt_tracer.as_ref().expect("ensured above");
+                self.rt_accel = Some(tracer.build_accel(gpu.device, &objects));
+                self.rt_accel_key = Some(accel_key);
+            }
+
+            let sun = &casters[0];
+            let sun_dir = [-sun.dir[0], -sun.dir[1], -sun.dir[2]];
+            let Some(inv_view_proj) = mat4_inverse(view_proj) else {
+                // A degenerate camera projection — no camera this file
+                // builds produces one; skip the RT pass rather than trace
+                // against garbage (leaves the mask at its previous
+                // content, harmless — `rt_enabled` scenes with a sane
+                // camera never hit this).
+                return;
+            };
+            let half_w = width.div_ceil(2).max(1);
+            let half_h = height.div_ceil(2).max(1);
+            let params = manifold_gpu::raytrace::ShadowRayParams::new(
+                sun_dir,
+                0.0,
+                1,
+                self.jitter_frame_index,
+                [half_w, half_h],
+                [width, height],
+                inv_view_proj,
+            );
+            let tracer = self.rt_tracer.as_ref().expect("ensured above");
+            let accel = self.rt_accel.as_ref().expect("just built above");
+            let params_buffer = self.rt_params_buffer.as_ref().expect("ensured above");
+            let depth_tex = self.opaque_depth_snapshot.as_ref().expect("ensured above");
+            let mask_half = self.rt_mask_half.as_ref().expect("ensured above");
+            let mask_full = self.rt_mask_full.as_ref().expect("ensured above");
+            tracer.dispatch_shadow_rays(
+                gpu.native_enc,
+                accel,
+                &params,
+                params_buffer,
+                depth_tex,
+                mask_half,
+                "node.render_scene RT-D3 trace_shadow_rays",
+            );
+            tracer.upsample_shadow(
+                gpu.native_enc,
+                params_buffer,
+                depth_tex,
+                mask_half,
+                mask_full,
+                "node.render_scene RT-D3 upsample_shadow",
+            );
         }
 
         // ---- Pass 2 (immutable phase): draw. Every object composites into
@@ -3021,7 +3296,13 @@ impl EffectNode for RenderScene {
         // is), but the option lets the same closure serve both cases
         // without a branch on `has_transmission` itself.
         let opaque_scene_color_snapshot = self.opaque_scene_color.as_ref();
-        let binding_sets: Vec<[GpuBinding; 41]> = draws
+        // RAYTRACING_DESIGN.md RT-D3: the full-res RT shadow-visibility
+        // mask, sampled by `shadow_factor` in place of the shadow-map
+        // sampler when `scene_params.w > 0.5` — always bound (the ABI-
+        // stub discipline every optional texture in this shader uses),
+        // dummy when RT isn't active this frame.
+        let rt_mask_tex = self.rt_mask_full.as_ref().unwrap_or(dummy);
+        let binding_sets: Vec<[GpuBinding; 42]> = draws
             .iter()
             .map(|draw| {
                 [
@@ -3244,6 +3525,10 @@ impl EffectNode for RenderScene {
                     GpuBinding::Texture {
                         binding: 40,
                         texture: draw.volume_thickness_map.unwrap_or(dummy),
+                    },
+                    GpuBinding::Texture {
+                        binding: 41,
+                        texture: rt_mask_tex,
                     },
                 ]
             })
@@ -3508,6 +3793,77 @@ mod tests {
             scene.shaft_inscatter.is_none(),
             "off -> no ensure_ call -> the shaft slot stays None"
         );
+    }
+
+    /// RAYTRACING_DESIGN.md RT-D3: `mat4_inverse` feeds the RT shadow-ray
+    /// pass's world-position reconstruction — proven, not eyeballed
+    /// (CLAUDE.md oracle discipline: "computable question -> write the
+    /// three-line script"). Two checks against a REAL camera's
+    /// `view_proj` (not an arbitrary matrix): (1) `inv * view_proj ==
+    /// identity` to tight tolerance; (2) round-tripping a known world
+    /// point through `view_proj` -> NDC -> `mat4_inverse` -> back to
+    /// world recovers the original point — the exact operation the RT
+    /// kernel performs per-pixel.
+    #[test]
+    #[allow(clippy::needless_range_loop)] // matrix row/col indices, clearer explicit than enumerate()
+    fn mat4_inverse_recovers_identity_for_a_real_camera() {
+        let cam = Camera {
+            pos: [1.5, 2.0, -3.0],
+            ..Camera::default_perspective()
+        };
+        let vp = cam.view_proj(16.0 / 9.0);
+        let inv = mat4_inverse(vp).expect("a real camera's view_proj must be invertible");
+
+        // (1) inv * vp == identity (column-major mat4 multiply).
+        let mut product = [[0f32; 4]; 4];
+        for c in 0..4 {
+            for r in 0..4 {
+                let mut sum = 0.0;
+                for k in 0..4 {
+                    sum += inv[k][r] * vp[c][k];
+                }
+                product[c][r] = sum;
+            }
+        }
+        for c in 0..4 {
+            for r in 0..4 {
+                let expected = if c == r { 1.0 } else { 0.0 };
+                assert!(
+                    (product[c][r] - expected).abs() < 1e-4,
+                    "inv*vp[{c}][{r}] = {}, expected {expected}",
+                    product[c][r]
+                );
+            }
+        }
+
+        // (2) world -> clip -> NDC -> (via inv) -> world round-trip, the
+        // RT kernel's exact `world_pos_from_depth` operation.
+        let world = [0.4, -0.6, 1.2, 1.0f32];
+        let mut clip = [0f32; 4];
+        for r in 0..4 {
+            let mut sum = 0.0;
+            for c in 0..4 {
+                sum += vp[c][r] * world[c];
+            }
+            clip[r] = sum;
+        }
+        let ndc = [clip[0] / clip[3], clip[1] / clip[3], clip[2] / clip[3], 1.0];
+        let mut back = [0f32; 4];
+        for r in 0..4 {
+            let mut sum = 0.0;
+            for c in 0..4 {
+                sum += inv[c][r] * ndc[c];
+            }
+            back[r] = sum;
+        }
+        for i in 0..3 {
+            assert!(
+                (back[i] / back[3] - world[i]).abs() < 1e-3,
+                "round-tripped world[{i}] = {}, expected {}",
+                back[i] / back[3],
+                world[i]
+            );
+        }
     }
 
     /// IMPORT_FIDELITY_DESIGN.md D2/F-P1 negative gate: the old flat lod-0

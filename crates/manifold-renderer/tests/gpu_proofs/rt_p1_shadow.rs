@@ -1,39 +1,49 @@
-//! `docs/RAYTRACING_DESIGN.md` §5.2 P1 — value-level proof for the
+//! `docs/RAYTRACING_DESIGN.md` §5.2 P1/RT-D3 — value-level proof for the
 //! `manifold-gpu` hard-shadow-ray trait/kernel
 //! (`manifold_gpu::raytrace::{ShadowRayTracer, MetalShadowRayTracer}`),
 //! ported from `tools/rt_prototype/src/accel.rs` +
-//! `tools/rt_prototype/shaders/rt_trace.metal`'s shadow-only slice.
+//! `tools/rt_prototype/shaders/rt_trace.metal`'s shadow-only slice, RT-D3
+//! integration: ray origins reconstructed in-kernel from a depth texture +
+//! `inv_view_proj` (no g_wpos/g_nrm G-buffer).
 //!
-//! Fixture (the P1 gate's literal "2-triangle occluder" fixture): one
-//! quad (2 triangles, `y = 1`, spanning `x,z in [-1, 1]`) as the sole
-//! occluder. Two shading points, `trace_size == gbuffer_size` (2x1, no
-//! upsample in this fixture — the gate asks for the shadow TERM, not the
-//! upsample pass):
+//! Fixture (the P1 gate's literal "2-triangle occluder" fixture), built
+//! with `inv_view_proj = IDENTITY` so pixel -> NDC -> world is exactly
+//! `world = (ndc_x, ndc_y, depth)` — lets this test control the exact
+//! reconstructed world position per texel via pixel coordinate + depth
+//! value alone, without needing a full camera:
 //!
-//! - texel 0: world pos `(0, 0, 0)`, normal `(0, 1, 0)` — directly under
-//!   the quad. A hard (`sun_cone = 0`, `shadow_spp = 1`, so the single ray
-//!   is exactly `sun_dir`, no RNG jitter) shadow ray straight up (`sun_dir
-//!   = (0, 1, 0)`) MUST hit the quad. CPU oracle: occluded, `vis == 0.0`
-//!   exactly.
-//! - texel 1: world pos `(5, 0, 0)`, same normal/sun_dir. The quad's `x`
-//!   extent is `[-1, 1]`, so the same straight-up ray passes outside the
-//!   quad entirely. CPU oracle: unoccluded, `vis == 1.0` exactly.
+//! - `gbuffer_size = (2, 1)`. Texel 0 (pixel (0,0)): `uv = (0.25, 0.5)` ->
+//!   `ndc = (-0.5, 0.0)`. Texel 1 (pixel (1,0)): `uv = (0.75, 0.5)` ->
+//!   `ndc = (0.5, 0.0)`. Both texels' depth = 0.3 (same, non-void: `< 1.0
+//!   - 1e-6`) -> world0 = (-0.5, 0, 0.3), world1 = (0.5, 0, 0.3).
+//! - Occluder: one quad (2 triangles) in the world XY-plane at `z = 1`,
+//!   spanning `x in [-1, 0]`, `y in [-1, 1]` — covers world0's `x = -0.5`,
+//!   excludes world1's `x = 0.5`.
+//! - `sun_dir = (0, 0, 1)` (hard, `sun_cone = 0`, `shadow_spp = 1` — no
+//!   RNG, exactly one deterministic ray-triangle intersection per texel).
+//!   world0's ray travels world.z: 0.3 -> +inf along constant x = -0.5 ->
+//!   crosses the quad's z = 1 plane at x = -0.5, inside `[-1, 0]` -> HIT
+//!   -> CPU oracle: `vis == 0.0` exactly. world1's ray at constant x =
+//!   0.5 crosses z = 1 at x = 0.5, outside `[-1, 0]` -> MISS -> CPU
+//!   oracle: `vis == 1.0` exactly.
 //!
-//! Both are exact (not merely "> threshold") because `shadow_spp = 1` and
-//! `sun_cone = 0` remove all sampling — the kernel evaluates one
-//! deterministic ray-triangle intersection per texel, matching a hand
-//! solved intersection exactly.
+//! `MTLAccelerationStructureTriangleGeometryDescriptor`'s vertex format
+//! needs Shared/CPU-writable storage for a depth-format texture upload —
+//! confirmed working on Apple Silicon's unified memory (this crate's only
+//! target); a discrete-GPU Vulkan backend would need a render pass here
+//! instead (not this test's concern — Metal-only proof).
 
 use std::ffi::c_void;
 use std::slice;
 
-use manifold_gpu::raytrace::{MetalShadowRayTracer, ShadowRayParams, ShadowRayTracer};
+use manifold_gpu::raytrace::{MetalShadowRayTracer, RtObjectGeometry, ShadowRayParams, ShadowRayTracer};
 use manifold_gpu::{GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
 
 use crate::harness;
 
-/// `packed_float3` stride-12 vertex layout — must match `raytrace.rs`'s
-/// `make_descriptor` (`setVertexFormat(Float3); setVertexStride(12)`).
+/// `packed_float3` stride-12 vertex layout for this fixture's occluder —
+/// `RtObjectGeometry::vertex_stride` need not match `MeshVertex`'s 48-byte
+/// production stride; the trait reads whatever stride/offset it's told.
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct PackedVertex {
@@ -76,16 +86,23 @@ fn upload_texture_f32(
     texture
 }
 
+const IDENTITY: [[f32; 4]; 4] = [
+    [1.0, 0.0, 0.0, 0.0],
+    [0.0, 1.0, 0.0, 0.0],
+    [0.0, 0.0, 1.0, 0.0],
+    [0.0, 0.0, 0.0, 1.0],
+];
+
 #[test]
 fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
     let h = harness::shared();
     let device = &h.device;
 
-    // ─── Occluder: one quad (2 triangles), y = 1, x,z in [-1, 1] ──────
+    // ─── Occluder: one quad (2 triangles) at z=1, x in [-1, 0], y in [-1, 1] ──
     let verts = [
-        PackedVertex { pos: [-1.0, 1.0, -1.0] },
-        PackedVertex { pos: [1.0, 1.0, -1.0] },
-        PackedVertex { pos: [1.0, 1.0, 1.0] },
+        PackedVertex { pos: [-1.0, -1.0, 1.0] },
+        PackedVertex { pos: [0.0, -1.0, 1.0] },
+        PackedVertex { pos: [0.0, 1.0, 1.0] },
         PackedVertex { pos: [-1.0, 1.0, 1.0] },
     ];
     let indices: [u32; 6] = [0, 1, 2, 0, 2, 3];
@@ -93,20 +110,20 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
     let index_buffer = write_shared_buffer(device, &indices);
 
     let tracer = MetalShadowRayTracer::new(device);
-    let accel = tracer.build_accel(device, &vertex_buffer, &index_buffer, 2);
+    let objects = [RtObjectGeometry {
+        vertex_buffer: &vertex_buffer,
+        vertex_stride: std::mem::size_of::<PackedVertex>() as u32,
+        vertex_offset: 0,
+        index_buffer: Some(&index_buffer),
+        triangle_count: 2,
+        // Vertices are already world-space — identity transform.
+        transform: IDENTITY,
+    }];
+    let accel = tracer.build_accel(device, &objects);
 
-    // ─── G-buffer fixture: 2x1, texel 0 occluded, texel 1 lit ─────────
-    // rgba32f: xyz = world pos, w = view dist (>0 = valid surface).
-    let g_wpos_px: [f32; 8] = [
-        0.0, 0.0, 0.0, 1.0, // texel 0: under the quad
-        5.0, 0.0, 0.0, 1.0, // texel 1: outside the quad's x extent
-    ];
-    let g_wpos = upload_texture_f32(device, 2, 1, GpuTextureFormat::Rgba32Float, &g_wpos_px, "rt-p1-g_wpos");
-    // rgba16f would halve precision unnecessarily for this fixture;
-    // Rgba32Float is a valid `texture2d<float>` read source for the
-    // kernel same as Rgba16Float — only the format tag differs.
-    let g_nrm_px: [f32; 8] = [0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0];
-    let g_nrm = upload_texture_f32(device, 2, 1, GpuTextureFormat::Rgba32Float, &g_nrm_px, "rt-p1-g_nrm");
+    // ─── Depth fixture: 2x1, both texels valid (depth=0.3, < 1.0 clear) ──
+    let depth_px: [f32; 2] = [0.3, 0.3];
+    let depth_tex = upload_texture_f32(device, 2, 1, GpuTextureFormat::Depth32Float, &depth_px, "rt-p1-depth");
 
     let out_sv = device.create_texture(&GpuTextureDesc {
         width: 2,
@@ -119,14 +136,7 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         mip_levels: 1,
     });
 
-    let params = ShadowRayParams {
-        sun_dir: [0.0, 1.0, 0.0],
-        sun_cone: 0.0,
-        shadow_spp: 1,
-        frame_index: 0,
-        trace_size: [2, 1],
-        gbuffer_size: [2, 1],
-    };
+    let params = ShadowRayParams::new([0.0, 0.0, 1.0], 0.0, 1, 0, [2, 1], [2, 1], IDENTITY);
     let params_buffer = device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
 
     let mut encoder = device.create_encoder("rt-p1-shadow-proof");
@@ -135,8 +145,7 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         &accel,
         &params,
         &params_buffer,
-        &g_wpos,
-        &g_nrm,
+        &depth_tex,
         &out_sv,
         "trace_shadow_rays-proof",
     );
@@ -153,17 +162,17 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
     let bytes: &[u8] = unsafe { slice::from_raw_parts(ptr.cast::<c_void>().cast::<u8>(), 32) };
     let floats: &[f32] = unsafe { slice::from_raw_parts(bytes.as_ptr().cast::<f32>(), 8) };
 
-    let vis_occluded = floats[0]; // texel 0's r channel
-    let vis_lit = floats[4]; // texel 1's r channel
+    let vis_occluded = floats[0]; // texel 0's r channel (world x=-0.5, inside occluder)
+    let vis_lit = floats[4]; // texel 1's r channel (world x=0.5, outside occluder)
 
     assert_eq!(
         vis_occluded, 0.0,
-        "texel 0 (under the 2-tri occluder) must be exactly shadowed (CPU oracle: ray straight \
-         up from (0,0,0) hits the quad at y=1, x,z in [-1,1]) — got {vis_occluded}"
+        "texel 0 (reconstructed world x=-0.5, inside the occluder's x in [-1,0]) must be exactly \
+         shadowed — got {vis_occluded}"
     );
     assert_eq!(
         vis_lit, 1.0,
-        "texel 1 (x=5, outside the quad's x in [-1,1] extent) must be exactly lit (CPU oracle: \
-         ray straight up misses the quad entirely) — got {vis_lit}"
+        "texel 1 (reconstructed world x=0.5, outside the occluder's x in [-1,0]) must be exactly \
+         lit — got {vis_lit}"
     );
 }

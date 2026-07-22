@@ -38,6 +38,7 @@ mod render_scene_object_visibility;
 mod render_scene_pcss;
 mod render_scene_shadow_cache;
 mod render_scene_shadows;
+mod rt_p1_region_probe;
 mod rt_p1_shadow;
 mod rt_p4_metalfx_temporal;
 mod rt_w0_gbuffer;
