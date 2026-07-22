@@ -83,6 +83,63 @@ the exit codes). Covers:
                                                            must fall through to
                                                            residue — the class
                                                            is smuggle-proof)
+ 19. include_str depth   → exit 0, residue 0, pairs>0     (D6: a test fn's
+     rewrite                                              relative include_str!
+                                                           path grows its leading
+                                                           `../` run when the mod
+                                                           moves deeper — a
+                                                           forced pure-move edit
+                                                           the class pairs off)
+ 20. include_str         → exit 1, residue > 0            (D6: the same move but
+     smuggled path tail                                   the path TAIL changes
+                                                           too (gain -> HACKED) —
+                                                           a real behavior change
+                                                           the class must catch)
+ 21. inline mod -> decl   → exit 0, residue 0             (W3-D2: one inline
+     conversion                                           `#[cfg] mod X { … }`
+                                                           becomes `mod X;` + a
+                                                           sibling file; git
+                                                           self-move-pairs the
+                                                           re-added cfg line, so
+                                                           the class must arm
+                                                           BEFORE is_moved or the
+                                                           `-mod X {` opener is
+                                                           false residue)
+ 22. inline mod ->        → exit 0, residue 0             (W3-D2 / W3-D1: the
+     #[path] decl                                         same conversion with a
+     conversion                                           `#[path = "…"]` decl,
+                                                           P3-R's tests-out form)
+ 23. inline mod           → exit 1, residue > 0           (W3-D2: a body line
+     conversion,                                          edited alongside the
+     smuggled body edit                                   conversion is caught —
+                                                           the class only waives
+                                                           header wiring)
+ 24. use-block            → exit 0, residue 0             (W3-D3: one combined
+     redistributed,                                       multi-line use list
+     moved openers                                        redistributed across
+                                                           sibling modules; the
+                                                           identical `use …{`
+                                                           openers are all git-
+                                                           moved, so open_block
+                                                           must arm before
+                                                           is_moved)
+ 25. use-block            → exit 1, residue > 0           (W3-D3: a real
+     redistributed,                                       statement smuggled
+     smuggled statement                                   inside a moved-opener
+                                                           block is caught)
+ 26. consecutive #[path]  → exit 0, residue 0             (W3-D4: a run of inline
+     mods, context cfg                                    test mods → #[path]
+                                                           decls; git keeps the
+                                                           `#[cfg]` line as
+                                                           CONTEXT, so a context
+                                                           cfg must arm the
+                                                           following signed
+                                                           `mod X {` opener)
+ 27. consecutive #[path]  → exit 1, residue > 0           (W3-D4: a body edit
+     mods, smuggled body                                  alongside the context-
+     edit                                                 cfg conversion is
+                                                           caught — header wiring
+                                                           only)
 
 Run: python3 scripts/test_move_identity_check.py   (exit 0 = all pass)
 """
@@ -515,6 +572,250 @@ NODE_EDIT_TEST_MOD_SMUGGLED = (
 )
 
 
+# D6 fixtures (Wave 3): a test fn carrying a relative `include_str!("../…")`
+# moves DEEPER (a.rs -> sub/b.rs), so its leading `../` run must grow by the
+# added nesting depth — the only content change a deeper test-mod relocation
+# forces onto a moved line. The include_str line is padded on both sides by
+# ≥3 identical lines so git move-detects those blocks, isolating the include_str
+# line as the sole non-moved change; the D6 class must pair it (depth rewrite
+# PROVEN). The smuggle case additionally alters the path TAIL (gain -> HACKED),
+# which changes the loaded shader — a real behavior change the class must CATCH.
+INCLUDE_STR_FN_SHALLOW = (
+    "fn load_kernel() -> &'static str {\n"
+    "    let a1 = 1;\n"
+    "    let a2 = 2;\n"
+    "    let a3 = 3;\n"
+    '    let original = include_str!("../primitives/shaders/gain.wgsl");\n'
+    "    let b1 = 4;\n"
+    "    let b2 = 5;\n"
+    "    let b3 = 6;\n"
+    "    original\n"
+    "}\n"
+)
+INCLUDE_STR_FN_DEEP = INCLUDE_STR_FN_SHALLOW.replace(
+    '"../primitives', '"../../primitives'
+)
+INCLUDE_STR_FN_DEEP_SMUGGLED = INCLUDE_STR_FN_DEEP.replace(
+    "gain.wgsl", "HACKED.wgsl"
+)
+
+
+# W3-D2 fixtures (Wave 3): converting ONE inline `#[cfg(...)] mod X { … }` into a
+# `mod X;` declaration + sibling file. git's `--color-moved=plain` pairs the
+# re-added identical cfg attribute as a self-move (plain mode has no minimum
+# block size), which short-circuits D7a's arming unless pending_test_attr is
+# armed BEFORE the is_moved check — otherwise the `-mod X {` opener has no `;`
+# counterpart to move-pair against and falls to false residue. This is the exact
+# shape of P3-C's range residue (`-mod dispatch_contract_tests {` /
+# `-mod gpu_tests {`). Verified against the pre-fix verifier (033e87f0): this
+# fixture gives residue 1 (`-mod inline_tests {`) before the arming fix, 0 after.
+#
+# The `#[cfg(test)]` line must genuinely RELOCATE for git to self-move-pair it
+# (the whole point of the bug) — so the inline test mod sits at the BOTTOM of
+# BASE (below a kept `fn keep`) and the decl is hoisted to the TOP in AFTER,
+# mirroring the real P3-C where the decl joins the mod declarations while the
+# inline block is removed from further down. The `fn keep` block stays common
+# context and separates the old cfg location from the new one. Case A: plain
+# `mod X;` conversion (P3-C tests.rs/gpu_tests). Case B: the `#[path = "…"]`
+# tests-out form (W3-D1 / P3-R's 11 decls). Case C: a body edit smuggled
+# alongside the conversion must still be caught.
+INLINE_TEST_MOD_BASE = (
+    "mod entry;\n"
+    "mod other;\n"
+    "\n"
+    "fn keep() {\n"
+    "    let x = 1;\n"
+    "    let y = 2;\n"
+    "    x + y\n"
+    "}\n"
+    "\n"
+    "#[cfg(test)]\n"
+    "mod inline_tests {\n"
+    "    use super::*;\n"
+    "    #[test]\n"
+    "    fn alpha_roundtrip() {\n"
+    "        let a = 1;\n"
+    "        let b = 2;\n"
+    "        assert_eq!(a + b, 3);\n"
+    "    }\n"
+    "}\n"
+)
+# The module body as it lands in the sibling file (the file IS the module, so the
+# contents are dedented one level; `--color-moved-ws=ignore-all-space` pairs the
+# re-indented block as a move).
+INLINE_TEST_MOD_BODY = (
+    "use super::*;\n"
+    "#[test]\n"
+    "fn alpha_roundtrip() {\n"
+    "    let a = 1;\n"
+    "    let b = 2;\n"
+    "    assert_eq!(a + b, 3);\n"
+    "}\n"
+)
+# One body line edited alongside the conversion (let b = 2 -> 99): a real
+# behavior change the class must CATCH.
+INLINE_TEST_MOD_BODY_SMUGGLED = INLINE_TEST_MOD_BODY.replace("let b = 2", "let b = 99")
+# After: the decl is hoisted above `fn keep` (so its cfg line relocates); the
+# body moved to the sibling file.
+INLINE_MOD_DECL_AFTER = (
+    "mod entry;\n"
+    "mod other;\n"
+    "#[cfg(test)]\n"
+    "mod inline_tests;\n"
+    "\n"
+    "fn keep() {\n"
+    "    let x = 1;\n"
+    "    let y = 2;\n"
+    "    x + y\n"
+    "}\n"
+)
+# The `#[path = "…"]` tests-out form (W3-D1 / P3-R): the decl gains a `#[path]`
+# attribute and the sibling file lives under tests/.
+INLINE_MOD_PATH_DECL_AFTER = (
+    "mod entry;\n"
+    "mod other;\n"
+    "#[cfg(test)]\n"
+    '#[path = "tests/inline_tests.rs"]\n'
+    "mod inline_tests;\n"
+    "\n"
+    "fn keep() {\n"
+    "    let x = 1;\n"
+    "    let y = 2;\n"
+    "    x + y\n"
+    "}\n"
+)
+
+
+# W3-D3 fixtures (Wave 3, P3-G): a directory split redistributes ONE combined
+# multi-line `use path::{ … }` import list across sibling modules. git's
+# --color-moved=plain flags every `use path::{` OPENER as moved (identical text
+# recurs on the removed 1× and added N× sides), so it short-circuits before the
+# ALLOW branch arms open_block — the D-18 tracker never opens and the item
+# continuation lines fall to residue UNLESS open_block is armed BEFORE is_moved.
+# The items are RE-GROUPED across physical lines (Alpha,Beta,Gamma / Delta,…
+# regrouped to Alpha,Beta / Gamma / …) so no removed line move-pairs a single
+# added line — exactly P3-G's manifold_core::effect_graph_def redistribution.
+# Function bodies are ≥3 lines so git move-detects them, isolating the imports.
+# Case A: PROVEN residue 0. Case B: a real statement smuggled inside a moved-
+# opener block is CAUGHT (USE_ITEM smuggle-proofing unchanged).
+USEBLOCK_REGROUP_BASE = (
+    "use foo::bar::{\n"
+    "    Alpha, Beta, Gamma,\n"
+    "    Delta, Epsilon, Zeta,\n"
+    "};\n"
+    "\n"
+    "fn part_one() {\n"
+    "    let _ = (Alpha, Beta, Gamma);\n"
+    "    let p = 1;\n"
+    "    let q = 2;\n"
+    "    let r = 3;\n"
+    "}\n"
+    "\n"
+    "fn part_two() {\n"
+    "    let _ = (Delta, Epsilon, Zeta);\n"
+    "    let s = 4;\n"
+    "    let t = 5;\n"
+    "    let u = 6;\n"
+    "}\n"
+)
+USEBLOCK_REGROUP_ONE = (
+    "use foo::bar::{\n"
+    "    Alpha, Beta,\n"
+    "    Gamma,\n"
+    "};\n"
+    "\n"
+    "fn part_one() {\n"
+    "    let _ = (Alpha, Beta, Gamma);\n"
+    "    let p = 1;\n"
+    "    let q = 2;\n"
+    "    let r = 3;\n"
+    "}\n"
+)
+USEBLOCK_REGROUP_TWO = (
+    "use foo::bar::{\n"
+    "    Delta, Epsilon,\n"
+    "    Zeta,\n"
+    "};\n"
+    "\n"
+    "fn part_two() {\n"
+    "    let _ = (Delta, Epsilon, Zeta);\n"
+    "    let s = 4;\n"
+    "    let t = 5;\n"
+    "    let u = 6;\n"
+    "}\n"
+)
+# A real statement wedged inside the moved-opener block in one.rs: not
+# USE_ITEM-shaped, must fall through to residue.
+USEBLOCK_REGROUP_ONE_SMUGGLED = USEBLOCK_REGROUP_ONE.replace(
+    "    Gamma,\n", "    Gamma,\n    let evil = compute();\n"
+)
+
+
+# W3-D4 fixtures (Wave 3, P3-R): a RUN of consecutive inline `#[cfg(test)] mod
+# X_tests { … }` test mods converted to `#[cfg(test)] #[path="tests/X.rs"] mod
+# X_tests;` decls + sibling files. git's minimal diff anchors the identical,
+# unchanged `#[cfg(test)]` lines as CONTEXT (not signed self-moves) and diffs
+# only the mod lines — so the signed-cfg arm (W3-D2) never fires and each
+# `-mod X_tests {` opener falls to residue unless a CONTEXT cfg line also arms
+# the following signed opener (verified against P3-R's real e09e078b: 11/11
+# openers preceded by a context cfg; residue 11 pre-fix, 0 for these post-fix).
+# Case A PROVEN residue 0; case B smuggles a body edit alongside the conversion
+# → CAUGHT (the context arm waives only the `mod X {` header, never body bytes).
+CTX_CFG_MODS_BASE = (
+    "mod real_code;\n"
+    "\n"
+    "#[cfg(test)]\n"
+    "mod alpha_tests {\n"
+    "    use super::*;\n"
+    "    #[test]\n"
+    "    fn a1() {\n"
+    "        let x = 1;\n"
+    "        assert_eq!(x, 1);\n"
+    "    }\n"
+    "}\n"
+    "\n"
+    "#[cfg(test)]\n"
+    "mod beta_tests {\n"
+    "    use super::*;\n"
+    "    #[test]\n"
+    "    fn b1() {\n"
+    "        let y = 2;\n"
+    "        assert_eq!(y, 2);\n"
+    "    }\n"
+    "}\n"
+)
+CTX_CFG_MODS_DECL_AFTER = (
+    "mod real_code;\n"
+    "\n"
+    "#[cfg(test)]\n"
+    '#[path = "tests/alpha_tests.rs"]\n'
+    "mod alpha_tests;\n"
+    "\n"
+    "#[cfg(test)]\n"
+    '#[path = "tests/beta_tests.rs"]\n'
+    "mod beta_tests;\n"
+)
+CTX_CFG_ALPHA_BODY = (
+    "use super::*;\n"
+    "#[test]\n"
+    "fn a1() {\n"
+    "    let x = 1;\n"
+    "    assert_eq!(x, 1);\n"
+    "}\n"
+)
+CTX_CFG_BETA_BODY = (
+    "use super::*;\n"
+    "#[test]\n"
+    "fn b1() {\n"
+    "    let y = 2;\n"
+    "    assert_eq!(y, 2);\n"
+    "}\n"
+)
+CTX_CFG_ALPHA_BODY_SMUGGLED = CTX_CFG_ALPHA_BODY.replace(
+    "assert_eq!(x, 1)", "assert_eq!(x, 99)"
+)
+
+
 def case_pure_move(repo: Path) -> tuple[bool, str]:
     commit_tree(repo, {"a.rs": HELPER + "// tail\n", "b.rs": "// b\n"}, "base")
     commit_tree(repo, {"a.rs": "// tail\n", "b.rs": "// b\n" + HELPER}, "move")
@@ -724,6 +1025,127 @@ def case_smuggled_test_mod_header(repo: Path) -> tuple[bool, str]:
     return ok, f"exit={code} {out.splitlines()[0]}"
 
 
+def case_include_str_depth_rewrite(repo: Path) -> tuple[bool, str]:
+    commit_tree(repo, {"a.rs": INCLUDE_STR_FN_SHALLOW, "sub/b.rs": "// b\n"}, "base")
+    commit_tree(
+        repo,
+        {"a.rs": "// a\n", "sub/b.rs": "// b\n" + INCLUDE_STR_FN_DEEP},
+        "move-deeper-with-include-str-depth-rewrite",
+    )
+    code, out = run_checker(repo)
+    ok = (
+        code == 0
+        and field(out, "residue") == 0
+        and field(out, "include_str pairs") > 0
+        and field(out, "moved lines") > 0
+    )
+    return ok, f"exit={code} {out.splitlines()[0]}"
+
+
+def case_include_str_smuggled_path(repo: Path) -> tuple[bool, str]:
+    commit_tree(repo, {"a.rs": INCLUDE_STR_FN_SHALLOW, "sub/b.rs": "// b\n"}, "base")
+    commit_tree(
+        repo,
+        {"a.rs": "// a\n", "sub/b.rs": "// b\n" + INCLUDE_STR_FN_DEEP_SMUGGLED},
+        "move-deeper-with-smuggled-path-tail",
+    )
+    code, out = run_checker(repo)
+    ok = code == 1 and field(out, "residue") > 0
+    return ok, f"exit={code} {out.splitlines()[0]}"
+
+
+def case_inline_mod_to_decl(repo: Path) -> tuple[bool, str]:
+    commit_tree(repo, {"mod.rs": INLINE_TEST_MOD_BASE}, "base")
+    commit_tree(
+        repo,
+        {"mod.rs": INLINE_MOD_DECL_AFTER, "inline_tests.rs": INLINE_TEST_MOD_BODY},
+        "convert-inline-mod-to-decl",
+    )
+    code, out = run_checker(repo)
+    ok = code == 0 and field(out, "residue") == 0 and field(out, "moved lines") > 0
+    return ok, f"exit={code} {out.splitlines()[0]}"
+
+
+def case_inline_mod_to_path_decl(repo: Path) -> tuple[bool, str]:
+    commit_tree(repo, {"mod.rs": INLINE_TEST_MOD_BASE}, "base")
+    commit_tree(
+        repo,
+        {"mod.rs": INLINE_MOD_PATH_DECL_AFTER,
+         "tests/inline_tests.rs": INLINE_TEST_MOD_BODY},
+        "convert-inline-mod-to-path-decl",
+    )
+    code, out = run_checker(repo)
+    ok = code == 0 and field(out, "residue") == 0 and field(out, "moved lines") > 0
+    return ok, f"exit={code} {out.splitlines()[0]}"
+
+
+def case_inline_mod_conversion_smuggled(repo: Path) -> tuple[bool, str]:
+    commit_tree(repo, {"mod.rs": INLINE_TEST_MOD_BASE}, "base")
+    commit_tree(
+        repo,
+        {"mod.rs": INLINE_MOD_DECL_AFTER,
+         "inline_tests.rs": INLINE_TEST_MOD_BODY_SMUGGLED},
+        "convert-inline-mod-with-smuggled-body-edit",
+    )
+    code, out = run_checker(repo)
+    ok = code == 1 and field(out, "residue") > 0
+    return ok, f"exit={code} {out.splitlines()[0]}"
+
+
+def case_useblock_moved_opener_regroup(repo: Path) -> tuple[bool, str]:
+    commit_tree(repo, {"src.rs": USEBLOCK_REGROUP_BASE}, "base")
+    commit_tree(
+        repo,
+        {"src.rs": "// src\n", "one.rs": USEBLOCK_REGROUP_ONE,
+         "two.rs": USEBLOCK_REGROUP_TWO},
+        "redistribute-imports-across-modules",
+    )
+    code, out = run_checker(repo)
+    ok = code == 0 and field(out, "residue") == 0 and field(out, "moved lines") > 0
+    return ok, f"exit={code} {out.splitlines()[0]}"
+
+
+def case_useblock_moved_opener_smuggled(repo: Path) -> tuple[bool, str]:
+    commit_tree(repo, {"src.rs": USEBLOCK_REGROUP_BASE}, "base")
+    commit_tree(
+        repo,
+        {"src.rs": "// src\n", "one.rs": USEBLOCK_REGROUP_ONE_SMUGGLED,
+         "two.rs": USEBLOCK_REGROUP_TWO},
+        "redistribute-imports-with-smuggle",
+    )
+    code, out = run_checker(repo)
+    ok = code == 1 and field(out, "residue") > 0
+    return ok, f"exit={code} {out.splitlines()[0]}"
+
+
+def case_ctx_cfg_consecutive_path_mods(repo: Path) -> tuple[bool, str]:
+    commit_tree(repo, {"src.rs": CTX_CFG_MODS_BASE}, "base")
+    commit_tree(
+        repo,
+        {"src.rs": CTX_CFG_MODS_DECL_AFTER,
+         "tests/alpha_tests.rs": CTX_CFG_ALPHA_BODY,
+         "tests/beta_tests.rs": CTX_CFG_BETA_BODY},
+        "convert-consecutive-path-mods",
+    )
+    code, out = run_checker(repo)
+    ok = code == 0 and field(out, "residue") == 0 and field(out, "moved lines") > 0
+    return ok, f"exit={code} {out.splitlines()[0]}"
+
+
+def case_ctx_cfg_conversion_smuggled(repo: Path) -> tuple[bool, str]:
+    commit_tree(repo, {"src.rs": CTX_CFG_MODS_BASE}, "base")
+    commit_tree(
+        repo,
+        {"src.rs": CTX_CFG_MODS_DECL_AFTER,
+         "tests/alpha_tests.rs": CTX_CFG_ALPHA_BODY_SMUGGLED,
+         "tests/beta_tests.rs": CTX_CFG_BETA_BODY},
+        "convert-consecutive-path-mods-with-smuggle",
+    )
+    code, out = run_checker(repo)
+    ok = code == 1 and field(out, "residue") > 0
+    return ok, f"exit={code} {out.splitlines()[0]}"
+
+
 CASES = [
     ("pure move -> exit 0", case_pure_move),
     ("smuggled edit -> exit 1", case_smuggled),
@@ -747,6 +1169,24 @@ CASES = [
     ("test-mod distribution -> exit 0 [D7a, PROVEN]", case_test_mod_distribution),
     ("smuggled test-mod header -> exit 1 [D7a, CAUGHT]",
      case_smuggled_test_mod_header),
+    ("include_str depth rewrite -> exit 0 [D6, PROVEN]",
+     case_include_str_depth_rewrite),
+    ("include_str smuggled path tail -> exit 1 [D6, CAUGHT]",
+     case_include_str_smuggled_path),
+    ("inline mod -> decl conversion -> exit 0 [W3-D2, PROVEN]",
+     case_inline_mod_to_decl),
+    ("inline mod -> #[path] decl conversion -> exit 0 [W3-D2, PROVEN]",
+     case_inline_mod_to_path_decl),
+    ("inline mod conversion, smuggled body edit -> exit 1 [W3-D2, CAUGHT]",
+     case_inline_mod_conversion_smuggled),
+    ("use-block redistributed, moved openers -> exit 0 [W3-D3, PROVEN]",
+     case_useblock_moved_opener_regroup),
+    ("use-block redistributed, smuggled statement -> exit 1 [W3-D3, CAUGHT]",
+     case_useblock_moved_opener_smuggled),
+    ("consecutive #[path] mods, context cfg -> exit 0 [W3-D4, PROVEN]",
+     case_ctx_cfg_consecutive_path_mods),
+    ("consecutive #[path] mods, smuggled body edit -> exit 1 [W3-D4, CAUGHT]",
+     case_ctx_cfg_conversion_smuggled),
 ]
 
 

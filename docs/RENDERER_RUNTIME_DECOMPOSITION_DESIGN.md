@@ -1,6 +1,6 @@
 # Renderer Runtime Decomposition — Wave 3 of the god-file campaign (v2)
 
-**Status: PROPOSED v2 — awaiting Peter's design review (execution fenced until his approval — D-28/D-44) · 2026-07-22 · Fable**
+**Status: IN PROGRESS — v2 APPROVED by Peter 2026-07-22 (bus D-46); batch 1 (P3-C/P3-R/P3-G) executing on lane/wave3-exec under the D-45 gate economy · 2026-07-22 · Fable**
 **Prerequisites:** none hard; Waves 1–2 landed the shared tooling (`move_identity_check.py` incl. D7a test-mod class, censuses, `godfile_regrowth`). Campaign register: `docs/ARCHITECTURE_DEBT.md`. Status for this wave lives ONLY on this doc's Status line.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase. v1 adversarially reviewed 2026-07-22 (2 HIGH + 4 MEDIUM + 3 LOW, all folded — carried below where they still bind). v2 revised per Peter's review pass 2 (`.claude/orchestration/wave3-review-pass2.md`, D-44), then adversarially reviewed by a second fresh Fable agent 2026-07-22: 2 HIGH + 7 MEDIUM + 3 LOW, ALL folded (marked "v2 review H1" etc.); the review independently re-verified the census, the module-map sums, the T4/env-cluster rejections, and INV-R8's determinism premise (BTreeMap params, counter node-ids, the two HashMaps lookup-only). Gate economy amended per Peter 2026-07-22 ("reduce testing time and overhead if it's not actually useful"): gpu-proofs 4+ runs → ONE at P3-Z; landings batch 6 → 3 full sweeps; rationale in D4.
 
