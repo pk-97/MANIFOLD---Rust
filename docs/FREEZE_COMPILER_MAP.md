@@ -56,7 +56,7 @@ make that impossible; the invariant list (§9) is what a review must attack.
 | `freeze/classify.rs` | `FusionKind` (Boundary/Pointwise/MultiInputCoincident/Source) + `InputAccess` (Coincident/CoincidentTexel/Gather/GatherTexel/BufferGather). Declared per atom via `primitive!`; default Boundary. | 210 |
 | `freeze/space.rs` | Element-space resolution (Canvas / Scaled(n,d) / Concrete(w,h)) — builds the UNFUSED graph + plan and reads `resource_dims`/`resource_canvas_scales`, so the executor's dim policy is the single authority. | 96 |
 | `freeze/region.rs` | The finder: classify → union-find growth over coincident same-space wires with convexity check → `build_region` (externals, outputs, spaces, q16 flags) → stencil virtual-chain absorption. Pure, no GPU. | 2838 |
-| `freeze/codegen.rs` | WGSL emission. Standalone single-atom kernels (texture / buffer / resolve paths — the single-source `run()` for ~150 converted atoms) + fused multi-atom kernels (texture + buffer). Deterministic text = pipeline-cache key. | 5498 |
+| `freeze/codegen/` (was codegen.rs — Wave 3 P3-C split, 2026-07-22) | WGSL emission. Standalone single-atom kernels (texture / buffer / resolve paths — the single-source `run()` for ~150 converted atoms) + fused multi-atom kernels (texture + buffer). Deterministic text = pipeline-cache key. Modules: mod (facade) 37 · types 486 · uniforms 92 · entry_points 152 · standalone 927 · fused 1488 · dispatch_contract_tests 194 · gpu_tests 3060 | 6436 total |
 | `freeze/install.rs` | The rewrite: def surgery (delete members, insert fused `node.wgsl_compute` nodes, rewire), binding retarget, control-wire re-anchor, derived-uniform wiring, in-place-loop detection, build check, all caches, the chain-fusion worker, `should_render_fused`. | 2333 |
 | `freeze/segment.rs` | Cross-card concat: N adjacent cards → one namespaced def (`c{i}.` prefixes), seam boundaries stitched out. + `def_is_segment_stateless` eligibility. | 296 |
 | `freeze/diff.rs` | GPU texture-diff reducer (max-abs + over-count verdicts) — the oracle's measuring device. | 305 |
@@ -66,7 +66,7 @@ make that impossible; the invariant list (§9) is what a review must attack.
 | `node_graph/execution_plan.rs` | `compile(graph)`: topo + liveness filter + resource dims/canvas-scale propagation + lifetimes (`free_after`) + persistent resources + late-capture steps + hoistable classification. | 1411 |
 | `node_graph/execution.rs` | The executor: per-frame liveness (mux short-circuit), memoized-dataflow skip (`is_pure`), empty-output skip, preview capture, dump/thumbnail pinning, the aliased-output stale guard, end-of-frame feedback texture swap. | 2923 |
 | `node_graph/graph_loader.rs` | `instantiate_def`: flatten groups → construct + configure primitives → wires; array output pre-allocation (`array_output_capacity`). | 1838 |
-| `preset_runtime.rs` | Effect-chain build: segmentation pass → per-card `fused_view_for` → splice. The live entry point for effect fusion. | — |
+| `preset_runtime/` (was preset_runtime.rs — Wave 3 P3-R split, 2026-07-22; core.rs holds the chain build) | Effect-chain build: segmentation pass → per-card `fused_view_for` → splice. The live entry point for effect fusion. | — |
 | `generators/registry.rs` | Generator entry point: `should_render_fused` → `fused_generator_def_for` → `from_def`. | — |
 | `chain_dispatch.rs` | Calls `pump_segment_results()` each dispatch (drains the chain-fusion worker). | — |
 
