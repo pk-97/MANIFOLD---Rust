@@ -1,0 +1,530 @@
+{
+  "version": 2,
+  "name": "RasterCompare",
+  "description": "P0 raster-vs-RT comparison preset (committed with the RT prototype harness): the apricot scan through the CURRENT raster stack (render_scene + PCSS Contact shadows @8K + GTAO group from CinematicScene + ACES tone_map) with every shareable parameter matched to tools/rt_prototype: camera (dist 2.2x bounding radius, elev 15deg, fov 45deg, azimuth rotated to the orbit convention), sun dir/color-ratios, WHITE albedo + roughness 1.0 (the GLB has no baseColorFactor -> factors default white; the RT prototype samples no textures), AO radius 3.8 = 0.3x scan radius, exact env gradient baked to compare/proto_env.hdr, same Narkowicz ACES SDR curve. Render: graph-tool render --kind generator --size 2048 --out <png> compare/RasterCompare.json. Structural deltas that CANNOT be matched (judge accordingly): BRDF normalization, AO composed as full-image multiply here vs ambient-only in RT, light-intensity units (exposure hand-calibrated), IBL sampling. History: 2026-07-22 session, P0 visual gate.",
+  "presetMetadata": {
+    "id": "RasterCompare",
+    "displayName": "Raster Compare",
+    "category": "Geometry",
+    "oscPrefix": "rastercompare",
+    "available": false,
+    "isLineBased": false,
+    "params": [],
+    "bindings": [],
+    "skipMode": {
+      "kind": "never"
+    },
+    "stringParams": [
+      {
+        "id": "modelPath",
+        "name": "Model File",
+        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/cc0__japanese_apricot_prunus_mume.glb",
+        "isFilePicker": true,
+        "useDropdown": false
+      },
+      {
+        "id": "envPath",
+        "name": "Env HDR",
+        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/tools/rt_prototype/compare/proto_env.hdr",
+        "isFilePicker": true,
+        "useDropdown": false
+      }
+    ],
+    "stringBindings": [
+      {
+        "id": "modelPath",
+        "label": "Model File",
+        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/cc0__japanese_apricot_prunus_mume.glb",
+        "target": {
+          "kind": "node",
+          "nodeId": "scan",
+          "param": "path"
+        }
+      },
+      {
+        "id": "envPath",
+        "label": "Env HDR",
+        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/tools/rt_prototype/compare/proto_env.hdr",
+        "target": {
+          "kind": "node",
+          "nodeId": "env",
+          "param": "path"
+        }
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": 0,
+      "nodeId": "input",
+      "typeId": "system.generator_input",
+      "handle": "input"
+    },
+    {
+      "id": 1,
+      "nodeId": "cam",
+      "typeId": "node.orbit_camera",
+      "handle": "cam",
+      "params": {
+        "distance": {
+          "type": "Float",
+          "value": 27.87
+        },
+        "fov_y": {
+          "type": "Float",
+          "value": 0.7854
+        },
+        "look_y": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "orbit": {
+          "type": "Float",
+          "value": 1.5708
+        },
+        "tilt": {
+          "type": "Float",
+          "value": 0.2618
+        }
+      },
+      "title": "Camera (matches rt_prototype build_camera)"
+    },
+    {
+      "id": 2,
+      "nodeId": "scan",
+      "typeId": "node.gltf_mesh_source",
+      "handle": "scan",
+      "params": {
+        "fit": {
+          "type": "Enum",
+          "value": 0
+        },
+        "material_index": {
+          "type": "Int",
+          "value": -1
+        },
+        "max_capacity": {
+          "type": "Int",
+          "value": 8000000
+        },
+        "mesh_index": {
+          "type": "Int",
+          "value": -1
+        },
+        "primitive_index": {
+          "type": "Int",
+          "value": -1
+        },
+        "recenter": {
+          "type": "Bool",
+          "value": true
+        }
+      },
+      "title": "Apricot Scan (whole)"
+    },
+    {
+      "id": 4,
+      "nodeId": "mat",
+      "typeId": "node.pbr_material",
+      "handle": "mat",
+      "params": {
+        "color_r": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "ambient": {
+          "type": "Float",
+          "value": 0.15
+        },
+        "metallic": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "roughness": {
+          "type": "Float",
+          "value": 1.0
+        }
+      },
+      "title": "Flat PBR (matches prototype shading scope)"
+    },
+    {
+      "id": 5,
+      "nodeId": "sun",
+      "typeId": "node.light",
+      "handle": "sun",
+      "params": {
+        "aim_x": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "aim_y": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "aim_z": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "cast_shadows": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 0.875
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 0.95
+        },
+        "color_r": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "intensity": {
+          "type": "Float",
+          "value": 40.0
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 0
+        },
+        "range": {
+          "type": "Float",
+          "value": 30.0
+        },
+        "pos_x": {
+          "type": "Float",
+          "value": -12.2
+        },
+        "pos_y": {
+          "type": "Float",
+          "value": 32.5
+        },
+        "pos_z": {
+          "type": "Float",
+          "value": 16.3
+        },
+        "shadow_softness": {
+          "type": "Enum",
+          "value": 3
+        },
+        "shadow_resolution": {
+          "type": "Int",
+          "value": 8192
+        },
+        "light_size": {
+          "type": "Float",
+          "value": 0.8
+        }
+      },
+      "title": "Sun (dir 0.4,0.8,0.3)"
+    },
+    {
+      "id": 7,
+      "nodeId": "scene",
+      "typeId": "node.render_scene",
+      "handle": "scene",
+      "params": {
+        "lights": {
+          "type": "Int",
+          "value": 1
+        },
+        "objects": {
+          "type": "Int",
+          "value": 1
+        }
+      },
+      "title": "Render Scene"
+    },
+    {
+      "id": 20,
+      "nodeId": "ao",
+      "typeId": "group",
+      "handle": "ao",
+      "title": "Ambient Occlusion",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "depth",
+              "portType": "Texture2D"
+            },
+            {
+              "name": "camera",
+              "portType": "Camera"
+            },
+            {
+              "name": "color",
+              "portType": "Texture2D"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "out",
+              "portType": "Texture2D"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 0,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 1,
+            "typeId": "node.ssao_gtao",
+            "handle": "ssao",
+            "params": {
+              "intensity": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "radius": {
+                "type": "Float",
+                "value": 3.8
+              }
+            },
+            "title": "SSAO (GTAO)"
+          },
+          {
+            "id": 2,
+            "typeId": "node.mix",
+            "handle": "ssao_mix",
+            "params": {
+              "amount": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "mode": {
+                "type": "Enum",
+                "value": 4
+              }
+            },
+            "title": "SSAO Multiply"
+          },
+          {
+            "id": 3,
+            "typeId": "system.group_output"
+          },
+          {
+            "id": 4,
+            "typeId": "node.bilateral_blur",
+            "handle": "bilat_h",
+            "params": {
+              "axis": {
+                "type": "Enum",
+                "value": 0
+              },
+              "depth_sigma": {
+                "type": "Float",
+                "value": 0.1
+              }
+            },
+            "title": "Bilateral Blur H"
+          },
+          {
+            "id": 5,
+            "typeId": "node.bilateral_blur",
+            "handle": "bilat_v",
+            "params": {
+              "axis": {
+                "type": "Enum",
+                "value": 1
+              },
+              "depth_sigma": {
+                "type": "Float",
+                "value": 0.1
+              }
+            },
+            "title": "Bilateral Blur V"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 0,
+            "fromPort": "depth",
+            "toNode": 1,
+            "toPort": "depth"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "camera",
+            "toNode": 1,
+            "toPort": "camera"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "color",
+            "toNode": 2,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "out",
+            "toNode": 4,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "depth",
+            "toNode": 4,
+            "toPort": "depth"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "camera",
+            "toNode": 4,
+            "toPort": "camera"
+          },
+          {
+            "fromNode": 4,
+            "fromPort": "out",
+            "toNode": 5,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "depth",
+            "toNode": 5,
+            "toPort": "depth"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "camera",
+            "toNode": 5,
+            "toPort": "camera"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "out",
+            "toNode": 2,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 2,
+            "fromPort": "out",
+            "toNode": 3,
+            "toPort": "out"
+          }
+        ]
+      }
+    },
+    {
+      "id": 99,
+      "nodeId": "out",
+      "typeId": "system.final_output",
+      "handle": "final_output"
+    },
+    {
+      "id": 100,
+      "nodeId": "obj0",
+      "typeId": "node.scene_object",
+      "handle": "Object 0"
+    },
+    {
+      "id": 6,
+      "nodeId": "env",
+      "typeId": "node.hdri_source",
+      "handle": "env",
+      "title": "Prototype Env Gradient"
+    },
+    {
+      "id": 30,
+      "nodeId": "tm",
+      "typeId": "node.tone_map",
+      "handle": "tm",
+      "params": {
+        "curve": {
+          "type": "Enum",
+          "value": 0
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 0
+        },
+        "exposure": {
+          "type": "Float",
+          "value": 3.0
+        }
+      },
+      "title": "ACES (app output transform)"
+    }
+  ],
+  "wires": [
+    {
+      "fromNode": 1,
+      "fromPort": "out",
+      "toNode": 7,
+      "toPort": "camera"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "vertices",
+      "toNode": 100,
+      "toPort": "vertices"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "out",
+      "toNode": 100,
+      "toPort": "material"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "out",
+      "toNode": 7,
+      "toPort": "light_0"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "out",
+      "toNode": 7,
+      "toPort": "envmap"
+    },
+    {
+      "fromNode": 100,
+      "fromPort": "object",
+      "toNode": 7,
+      "toPort": "object_0"
+    },
+    {
+      "fromNode": 7,
+      "fromPort": "color",
+      "toNode": 20,
+      "toPort": "color"
+    },
+    {
+      "fromNode": 7,
+      "fromPort": "depth",
+      "toNode": 20,
+      "toPort": "depth"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "out",
+      "toNode": 20,
+      "toPort": "camera"
+    },
+    {
+      "fromNode": 20,
+      "fromPort": "out",
+      "toNode": 30,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 30,
+      "fromPort": "out",
+      "toNode": 99,
+      "toPort": "in"
+    }
+  ]
+}

@@ -24,6 +24,7 @@ struct Args {
     width: u32,
     height: u32,
     frames: u32,
+    sun_only: bool,
 }
 
 fn parse_args() -> Args {
@@ -32,6 +33,7 @@ fn parse_args() -> Args {
     let mut width = 3840u32;
     let mut height = 2160u32;
     let mut frames = 120u32;
+    let mut sun_only = false;
 
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -45,6 +47,7 @@ fn parse_args() -> Args {
                 height = h.parse().expect("bad height");
             }
             "--frames" => frames = it.next().expect("--frames needs a number").parse().expect("bad frames"),
+            "--sun-only" => sun_only = true,
             other => panic!("unknown arg: {other}"),
         }
     }
@@ -54,6 +57,7 @@ fn parse_args() -> Args {
         width,
         height,
         frames,
+        sun_only,
     }
 }
 
@@ -158,9 +162,9 @@ fn main() {
         sun_cone: 0.0,
         sun_color: [8.0, 7.6, 7.0],
         ao_radius: 0.3 * scn.radius,
-        env_zenith: [0.35, 0.45, 0.7],
+        env_zenith: if args.sun_only { [0.0; 3] } else { [0.35, 0.45, 0.7] },
         shadow_spp: 0,
-        env_horizon: [0.12, 0.10, 0.09],
+        env_horizon: if args.sun_only { [0.0; 3] } else { [0.12, 0.10, 0.09] },
         ao_spp: 0,
         gi_spp: 0,
         frame_index: 0,

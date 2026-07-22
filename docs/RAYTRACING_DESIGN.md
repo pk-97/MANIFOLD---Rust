@@ -1,6 +1,6 @@
 # Ray Tracing — hybrid RT lighting for hero scenes
 
-**Status:** PROPOSED — direction agreed with Peter 2026-07-21 ("RT CHAT PHONE" session); P0 prototype must produce measured numbers before P1+ phases are briefed to STANDARD · 2026-07-21 · Fable
+**Status:** IN PROGRESS — P0 prototype BUILT + visual gate passed 2026-07-22 (`tools/rt_prototype/`, branch `feat/rt-prototype-p0`); interim numbers in §5.1; the 120-frame 4K measurement run + §6 winning-mode decision with Peter still OPEN before P1+ briefs · 2026-07-21 · Fable
 **Prerequisites:** none for P0. P1+ gated on P0 numbers and on RENDERING_INFRA_V2 §2 (G-buffer/motion vectors) for temporal pieces.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
@@ -56,6 +56,16 @@ Only **P0 is briefed now**; P1+ briefs are written *after* P0, to STANDARD, beca
 - **Gate (measured numbers, reported):** fps per mode at 4K output; BVH build time for the scan; refit time for a deforming mesh; visual side-by-side PNG per mode vs the current raster render of the same scene. No "works correctly" — numbers and images.
 - **Forbidden moves:** integrating into `manifold-renderer`; building a denoiser (P0 may be noisy — accumulation experiments only if time is free); any material system work.
 - **Exit:** numbers pasted into this doc's §6 (added then), winning mode chosen with Peter, P1+ briefed.
+
+### 5.1 P0 interim results (2026-07-22 — full 120-frame 4K run still pending)
+
+Harness: `tools/rt_prototype/` (standalone crate, manifold-gpu path dep for device+MetalFX; raw-MSL ray-query kernel `shaders/rt_trace.metal`). Asset: `cc0__japanese_apricot_prunus_mume.glb`, 1.43M tris. `--sun-only` flag zeroes the env for single-source looks. Comparison preset vs the current raster stack (matched camera/sun/albedo/AO/ACES; structural deltas documented in its description): `tools/rt_prototype/compare/RasterCompare.json` via `graph-tool render`.
+
+- BVH: build ~110–167ms one-time; **refit ~12–16ms/frame at this poly count** — the deforming-mesh line item is real; static heroes unaffected.
+- 4K single-frame (unvalidated, 1-frame avg — indicative only, mode C's trace_ms reading is implausible): A ~20ms, B ~25ms, C ~10.5ms. `combine` costs ~8ms flat in every mode — optimization headroom before P1.
+- Visual gate: side-by-sides rendered (raster max-quality vs A/B/C, full lighting + sun-only). Peter's read: RT clearly better with full lighting; sun-only near-parity is expected — P0's GI gathers env+emissive only, no sun-bounce term (that's P3).
+- Kernel lesson (cost one GPU-hang debug): buffer-visible MSL structs MUST use `packed_float3` — bare `float3` is sizeof 16 and desyncs from `#[repr(C)] [f32;3]`. See `feedback_wgsl_vec3_alignment` memory (now covers both WGSL and MSL).
+- P0 self-emission gap: emissive surfaces light others but don't glow themselves (combine has no self-emission term) — add before judging emissive hero scenes.
 
 Phases expected after P0 (names only, not briefed): P1 vertical slice — one RT term (hard shadows) inside the real REALTIME_3D scene pass, output through the graph to pixels; P2 soft shadows + AO + denoiser with D3 trigger-aware resets; P3 emissive GI + volumetrics; P4 MetalFX temporal integration; P5 export-quality path; P6 frame-interpolation per-output option (Tahoe-gated).
 
