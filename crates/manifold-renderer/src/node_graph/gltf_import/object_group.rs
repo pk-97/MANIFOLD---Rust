@@ -12,7 +12,6 @@ use manifold_core::effect_graph_def::{
 use manifold_core::scene_exposure::stamp_scene_node_exposures_into;
 
 use crate::node_graph::gltf_load;
-use crate::node_graph::gltf_load::GltfImportSummary;
 use crate::node_graph::scene_exposure::metadata_for_node_type;
 
 use super::MODEL_FILE_PARAM_ID;
@@ -30,20 +29,20 @@ use super::materials::*;
 pub(super) struct ObjectGroupOutput {
     /// The named, tinted group node (`GROUP_TYPE_ID`) — push directly onto
     /// the target level's `nodes`.
-    group_node: EffectGraphNode,
+    pub(super) group_node: EffectGraphNode,
     /// Top-level wires from this group's outputs to `render_scene`'s
     /// `mesh_{port_index}` / `material_{port_index}` / … ports — push
     /// directly onto the target level's `wires`.
-    wires_to_render: Vec<EffectGraphWire>,
-    card_params: Vec<ParamSpecDef>,
-    card_bindings: Vec<BindingDef>,
-    string_bindings: Vec<StringBindingDef>,
-    report_lines: Vec<String>,
-    textures_wired: usize,
+    pub(super) wires_to_render: Vec<EffectGraphWire>,
+    pub(super) card_params: Vec<ParamSpecDef>,
+    pub(super) card_bindings: Vec<BindingDef>,
+    pub(super) string_bindings: Vec<StringBindingDef>,
+    pub(super) report_lines: Vec<String>,
+    pub(super) textures_wired: usize,
     /// True when this object contributed animation-clock bindings against
     /// the caller's shared `anim_prefix` — the caller pushes the four
     /// per-glb card PARAMS (one "Animation" section) iff any object did.
-    animated: bool,
+    pub(super) animated: bool,
 }
 
 /// Build ONE object's group (mesh source + material + optional skin/morph/

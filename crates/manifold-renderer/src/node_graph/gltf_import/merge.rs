@@ -5,7 +5,7 @@
 use std::path::Path;
 
 use manifold_core::effect_graph_def::{
-    BindingDef, EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_TYPE_ID, ParamSpecDef,
+    BindingDef, EffectGraphDef, EffectGraphNode, EffectGraphWire, ParamSpecDef,
     SerializedParamValue, StringBindingDef,
 };
 
@@ -13,11 +13,9 @@ use crate::node_graph::gltf_load;
 use crate::node_graph::gltf_load::GltfImportSummary;
 use crate::node_graph::primitives::render_scene::OBJECT_SAFETY_MAX;
 
-use super::ImportReport;
 use super::assembly::*;
 use super::cards::*;
 use super::object_group::*;
-use super::scene::*;
 
 /// Recursively find the largest node `id` anywhere in `nodes`, including
 /// inside group bodies. Node ids only need to be unique WITHIN the level

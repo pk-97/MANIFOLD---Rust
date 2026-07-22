@@ -1,11 +1,14 @@
 use super::*;
 use super::assembly::*;
 use super::merge::*;
-use super::object_group::*;
 use super::scene::*;
 use crate::node_graph::PrimitiveRegistry;
+use crate::node_graph::boundary_nodes::{FINAL_OUTPUT_TYPE_ID, GENERATOR_INPUT_TYPE_ID};
+use crate::node_graph::gltf_load::GltfImportSummary;
+use crate::node_graph::primitives::render_scene::OBJECT_SAFETY_MAX;
 use crate::preset_runtime::PresetRuntime;
 use manifold_core::effect_graph_def::BindingTarget;
+use manifold_core::effect_graph_def::{EffectGraphNode, GROUP_TYPE_ID, SerializedParamValue};
 
 fn azalea_fixture_path() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -5037,6 +5040,7 @@ fn render_once(def: EffectGraphDef, w: u32, h: u32, label: &str) -> Vec<u8> {
 #[cfg(feature = "gpu-proofs")]
 #[test]
 fn duplicate_demo_pair_renders_original_then_original_plus_offset_copy() {
+    use manifold_core::effect_graph_def::EffectGraphWire;
     let path = rosetta_stone_fixture_path();
     if !path.exists() {
         eprintln!(
