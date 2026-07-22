@@ -488,9 +488,10 @@ static float3 world_pos_from_depth(uint2 pix, uint2 gbuffer_size, float raw_dept
 // G-buffer target in P1). Output (trace_size): out_sv.r = sun visibility
 // [0,1], out_sv.g = AO [0,1] (RT-P2: extends the SAME kernel/dispatch, not
 // a parallel pass — RAYTRACING_DESIGN.md §5.2 P2's D16 seam note). out_irr
-// (RT-P2): demodulated (no-albedo) irradiance = sun_color*ndotl*vis +
-// ambient_color*ao — the D3 "accumulate lighting separated from albedo"
-// term, temporally accumulated downstream by `accumulate_irradiance`.
+// (RT-P2): demodulated (no-albedo) irradiance = ambient_color*ao + gi —
+// the D3 "accumulate lighting separated from albedo" term, temporally
+// accumulated downstream by `accumulate_irradiance`. No direct-sun term:
+// the raster light loop owns the sun (see the write site's comment).
 kernel void trace_shadow_rays(
     instance_acceleration_structure  accel        [[buffer(0)]],
     constant ShadowRayParams&        p            [[buffer(1)]],
@@ -679,15 +680,18 @@ kernel void trace_shadow_rays(
         gi /= float(p.gi_spp);
     }
 
-    // RT-P2/D3: demodulated irradiance — sun contribution gated by n·l
-    // AND shadow visibility, plus AO-occluded flat ambient, plus RT-P3's
-    // gathered emissive/sun-bounce term. No albedo multiply here (that
-    // happens once, downstream, in `render_scene.wgsl` — D3's "accumulate
-    // lighting separated from albedo" is what lets a same-clip light-
-    // intensity strobe keep temporal history instead of being treated as
-    // a cut).
-    float ndl = max(dot(n, p.sun_dir), 0.0);
-    float3 irradiance = float3(p.sun_color) * ndl * vis + float3(p.ambient_color) * ao + gi;
+    // RT-P2/D3: demodulated irradiance — AO-occluded flat ambient plus
+    // RT-P3's gathered emissive/sun-bounce term. NO direct-sun term
+    // (Peter 2026-07-23): `render_scene.wgsl`'s raster light loop already
+    // shades the sun with the full material model (specular, clearcoat)
+    // using this dispatch's shadow mask for visibility, and it consumes
+    // this texture as its ambient slot on top — a sun*n·l*vis copy here
+    // was counted twice and blew every sunlit surface out. No albedo
+    // multiply here either (that happens once, downstream, in
+    // `render_scene.wgsl` — D3's "accumulate lighting separated from
+    // albedo" is what lets a same-clip light-intensity strobe keep
+    // temporal history instead of being treated as a cut).
+    float3 irradiance = float3(p.ambient_color) * ao + gi;
     out_irr.write(float4(irradiance, 0), tid);
 }
 

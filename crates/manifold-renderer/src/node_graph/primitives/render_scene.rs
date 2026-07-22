@@ -680,7 +680,7 @@ pub struct RenderScene {
     rt_gi_materials: Option<manifold_gpu::GpuBuffer>,
     rt_gi_materials_capacity: usize,
     /// RAYTRACING_DESIGN.md §5.2 P2: half-res/full-res demodulated
-    /// irradiance (sun*ndotl*vis + ambient*ao, no albedo — D3) and its
+    /// irradiance (ambient*ao + gi, no albedo, no direct sun — D3) and its
     /// full-res TEMPORAL HISTORY (persistent across frames, blended by
     /// `accumulate_irradiance`; RESET, not resized-and-forgotten, when the
     /// scene's output dims change — see `ensure_rt_irradiance` — since a
