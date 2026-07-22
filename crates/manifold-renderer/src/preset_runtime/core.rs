@@ -88,8 +88,8 @@ pub struct PresetRuntime {
     /// has no input — it renders *into* a host-provided target texture
     /// installed at the `final_output` source slot each frame.
     pub(super) io: PresetIo,
-    width: u32,
-    height: u32,
+    pub(super) width: u32,
+    pub(super) height: u32,
     /// Hash of the topology this graph was built for. Compared
     /// each frame to decide whether to rebuild.
     pub(super) topology_hash: u64,
