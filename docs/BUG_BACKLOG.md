@@ -1779,3 +1779,10 @@ when one is fixed).
 **Root cause:** the mapping drags dispatch through the `pending_actions` loop on the monolithic `Application` struct (`app_render.rs` ~1650–1830), reaching for `self.watched_reshape`, `self.mapping_target`, `self.commit_mapping_with_reverse`. No test can stand up enough of `Application` to drive that loop, and no mid-gesture `data_version` bump can be injected.
 **Fix shape:** an app-level harness — construct `Application` (or a factored mapping-drag slice of it) headless with a real `EditingService` + `Project`, feed the Snapshot/Changed/Commit action sequence with an injected mid-gesture snapshot acceptance, assert one undo entry. Cheaper now that the pattern (44+2 tests) exists in `ui_bridge/inspector.rs`. Justified when the next gesture-lifecycle bug lands in this area; until then the `apply` round-trip tests (BUG-262) cover the mechanism.
 
+### BUG-307 (card-param-range-remap-doesnt-stick) — remapping a card param's range doesn't take effect most of the time; setting the value appears to do nothing afterward
+**Status:** OPEN (logged 2026-07-22, Peter — no investigation yet).
+**Severity:** UNKNOWN — reported as unreliable ("doesn't work most of the time"), not a hard crash, but breaks a param-authoring workflow.
+**Symptom:** Peter remaps a card param's range; the new range doesn't seem to "stick" or have any effect after being set. Suspected an overwrite of some kind happening after the set, but unconfirmed.
+**Root cause:** unknown — not yet investigated. Suspects: something re-applying the old range after the remap commits (write-then-overwrite ordering), or the remap write landing on the wrong target/store (cf. BUG-260/BUG-292 class of stale-read/wrong-target bugs in param surfaces).
+**Fix shape:** TBD — first step is reproducing with printlns around the range-remap write path (which command/service call sets the range, and what runs after it) to find what's overwriting or failing to persist.
+
