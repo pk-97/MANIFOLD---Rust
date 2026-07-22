@@ -600,6 +600,20 @@ pub struct RenderScene {
     rt_tracer: Option<manifold_gpu::raytrace::MetalShadowRayTracer>,
     rt_accel: Option<manifold_gpu::raytrace::RtAccel>,
     rt_accel_key: Option<u64>,
+    /// BUG-308/RT-D4: the accel-structure build is async and must never
+    /// enqueue its command buffer before this frame's own mesh-generation
+    /// GPU writes (still encoded but uncommitted on the shared per-frame
+    /// `GpuEncoder`) have reached the queue — building here would race
+    /// them. `rt_accel_key` only changing to a NEW key this frame records
+    /// that key here and skips the actual build; the NEXT frame, once
+    /// this key recomputes identically, is guaranteed to run only after
+    /// the content thread's normal per-frame commit+wait for THIS frame
+    /// has already happened, so building then is race-free. `rt_accel`
+    /// stays whatever it was (`None` or a stale generation) until then —
+    /// `rt_accel.ready` (or its absence) is what gates using it, so the
+    /// raster shadow-map path serves this scene meanwhile (see the
+    /// `!rt_ready` gates below).
+    rt_accel_pending_key: Option<u64>,
     /// Half-res shadow-ray-trace target + full-res upsampled mask
     /// (RT-D3's "D11 trivial pass"). Sized to the scene's own
     /// `width`/`height`, ensured lazily like every other RT-only
@@ -728,6 +742,7 @@ impl RenderScene {
             rt_tracer: None,
             rt_accel: None,
             rt_accel_key: None,
+            rt_accel_pending_key: None,
             rt_mask_half: None,
             rt_mask_full: None,
             rt_mask_width: 0,
@@ -2366,6 +2381,19 @@ impl EffectNode for RenderScene {
         // folded into `view_proj` — the RT pass's `inv_view_proj` must
         // match the SAME `view_proj` the main draw uses this frame.
         let rt_enabled = matches!(ctx.params.get("rt_enabled"), Some(ParamValue::Bool(true)));
+        // BUG-308/RT-D4: `rt_accel`'s build/refit is async (raytrace.rs) —
+        // `false` whenever there's no resident accel yet, OR one is
+        // (re)building/refitting and hasn't completed. Every downstream
+        // "use RT shadows" decision (the raster shadow-map skip below, the
+        // WGSL `scene_params.w` RT-active flag, and the RT dispatch itself
+        // near the end of this fn) gates on `rt_enabled && rt_ready`, not
+        // `rt_enabled` alone — an RT-enabled scene with a not-yet-ready
+        // accel keeps rendering the raster shadow-map path (an explicit,
+        // logged transition below) until the async build/refit catches up.
+        let rt_ready = self
+            .rt_accel
+            .as_ref()
+            .is_some_and(|a| a.ready.load(std::sync::atomic::Ordering::Acquire));
         // GBUFFER_DESIGN.md §2 D1: lazy — `velocity` costs nothing unless a
         // consumer actually wired it (checked once per frame, cheap: a
         // step-output lookup, not a texture allocation).
@@ -2609,7 +2637,7 @@ impl EffectNode for RenderScene {
             // (ior/specular_factor). `!casters.is_empty()` mirrors
             // `has_casters` (declared later in this function, after this
             // loop) — same underlying `casters` Vec, already populated.
-            uniforms.scene_params[3] = if rt_enabled && !casters.is_empty() { 1.0 } else { 0.0 };
+            uniforms.scene_params[3] = if rt_enabled && rt_ready && !casters.is_empty() { 1.0 } else { 0.0 };
             if base_color_map.is_some() {
                 uniforms.texture_flags[2] = 1.0; // z = base_color_map present (matches resolve_albedo's texture_flags.z gate)
             }
@@ -2824,7 +2852,7 @@ impl EffectNode for RenderScene {
             // in a scene with no casters. The shadow *pipeline* + per-caster
             // maps are created only when a caster exists (unwired = zero cost).
             self.ensure_shadow_binding_stubs(gpu.device);
-            if has_casters && !rt_enabled {
+            if has_casters && !(rt_enabled && rt_ready) {
                 self.ensure_shadow_pass(gpu.device);
                 for (slot, l) in casters.iter().enumerate() {
                     self.ensure_shadow_map(gpu.device, slot, l.shadow_resolution);
@@ -2935,7 +2963,7 @@ impl EffectNode for RenderScene {
         // `rt_enabled`, so this loop's `None` short-circuit would already
         // no-op each caster; the explicit gate makes that invariant load-
         // bearing instead of incidental).
-        if has_casters && !rt_enabled {
+        if has_casters && !(rt_enabled && rt_ready) {
             let shadow_pipeline = self.shadow_pipeline.as_ref().expect("ensured").clone();
             let shadow_ds = self.shadow_depth_stencil.as_ref().expect("ensured");
             for (slot, l) in casters.iter().enumerate() {
@@ -3153,56 +3181,87 @@ impl EffectNode for RenderScene {
             let accel_key = hasher.finish();
 
             let gpu = ctx.gpu_encoder();
-            if self.rt_accel_key != Some(accel_key) || self.rt_accel.is_none() {
-                let tracer = self.rt_tracer.as_ref().expect("ensured above");
-                self.rt_accel = Some(tracer.build_accel(gpu.device, &objects));
-                self.rt_accel_key = Some(accel_key);
+            // BUG-308/RT-D4: a key change (first RT frame, or topology/
+            // transform change) must NOT enqueue `build_accel` this same
+            // frame — this frame's own mesh-generation GPU writes are
+            // still encoded but uncommitted on the shared `gpu.native_enc`
+            // buffer, and `build_accel`'s command buffer would race ahead
+            // of them on the same Metal queue (BUG-308's root cause).
+            // Recording the key here and building only once it recurs
+            // UNCHANGED next frame guarantees the PREVIOUS frame (whose
+            // mesh-gen work this key's vertex buffers depend on) has
+            // already committed+completed by the time the build actually
+            // enqueues — the per-frame content-thread cycle always
+            // commits+waits before the next frame's evaluate() runs.
+            if self.rt_accel_key != Some(accel_key) {
+                if self.rt_accel_pending_key == Some(accel_key) {
+                    let tracer = self.rt_tracer.as_ref().expect("ensured above");
+                    self.rt_accel = Some(tracer.build_accel(gpu.device, &objects));
+                    self.rt_accel_key = Some(accel_key);
+                    self.rt_accel_pending_key = None;
+                    log::info!(
+                        "node.render_scene: RT accel structure (re)build enqueued (async, key {accel_key:#x}) — raster shadow-map path serves this scene until it's ready"
+                    );
+                } else {
+                    self.rt_accel_pending_key = Some(accel_key);
+                    log::info!(
+                        "node.render_scene: RT accel structure build requested (key {accel_key:#x}); deferring one frame so it can't race this frame's mesh-generation GPU writes"
+                    );
+                }
             }
 
-            let sun = &casters[0];
-            let sun_dir = [-sun.dir[0], -sun.dir[1], -sun.dir[2]];
-            let Some(inv_view_proj) = mat4_inverse(view_proj) else {
-                // A degenerate camera projection — no camera this file
-                // builds produces one; skip the RT pass rather than trace
-                // against garbage (leaves the mask at its previous
-                // content, harmless — `rt_enabled` scenes with a sane
-                // camera never hit this).
-                return;
-            };
-            let half_w = width.div_ceil(2).max(1);
-            let half_h = height.div_ceil(2).max(1);
-            let params = manifold_gpu::raytrace::ShadowRayParams::new(
-                sun_dir,
-                0.0,
-                1,
-                self.jitter_frame_index,
-                [half_w, half_h],
-                [width, height],
-                inv_view_proj,
-            );
-            let tracer = self.rt_tracer.as_ref().expect("ensured above");
-            let accel = self.rt_accel.as_ref().expect("just built above");
-            let params_buffer = self.rt_params_buffer.as_ref().expect("ensured above");
-            let depth_tex = self.opaque_depth_snapshot.as_ref().expect("ensured above");
-            let mask_half = self.rt_mask_half.as_ref().expect("ensured above");
-            let mask_full = self.rt_mask_full.as_ref().expect("ensured above");
-            tracer.dispatch_shadow_rays(
-                gpu.native_enc,
-                accel,
-                &params,
-                params_buffer,
-                depth_tex,
-                mask_half,
-                "node.render_scene RT-D3 trace_shadow_rays",
-            );
-            tracer.upsample_shadow(
-                gpu.native_enc,
-                params_buffer,
-                depth_tex,
-                mask_half,
-                mask_full,
-                "node.render_scene RT-D3 upsample_shadow",
-            );
+            // `rt_ready` was captured at the top of `evaluate()` from
+            // `self.rt_accel`'s state BEFORE this block ran — correct
+            // either way: a build just enqueued above hasn't completed
+            // regardless, and an already-resident accel's readiness can't
+            // change mid-call (the completion handler runs on a separate
+            // Metal-owned thread, never synchronously inside evaluate()).
+            if rt_ready {
+                let sun = &casters[0];
+                let sun_dir = [-sun.dir[0], -sun.dir[1], -sun.dir[2]];
+                let Some(inv_view_proj) = mat4_inverse(view_proj) else {
+                    // A degenerate camera projection — no camera this file
+                    // builds produces one; skip the RT pass rather than trace
+                    // against garbage (leaves the mask at its previous
+                    // content, harmless — `rt_enabled` scenes with a sane
+                    // camera never hit this).
+                    return;
+                };
+                let half_w = width.div_ceil(2).max(1);
+                let half_h = height.div_ceil(2).max(1);
+                let params = manifold_gpu::raytrace::ShadowRayParams::new(
+                    sun_dir,
+                    0.0,
+                    1,
+                    self.jitter_frame_index,
+                    [half_w, half_h],
+                    [width, height],
+                    inv_view_proj,
+                );
+                let tracer = self.rt_tracer.as_ref().expect("ensured above");
+                let accel = self.rt_accel.as_ref().expect("rt_ready implies rt_accel.is_some()");
+                let params_buffer = self.rt_params_buffer.as_ref().expect("ensured above");
+                let depth_tex = self.opaque_depth_snapshot.as_ref().expect("ensured above");
+                let mask_half = self.rt_mask_half.as_ref().expect("ensured above");
+                let mask_full = self.rt_mask_full.as_ref().expect("ensured above");
+                tracer.dispatch_shadow_rays(
+                    gpu.native_enc,
+                    accel,
+                    &params,
+                    params_buffer,
+                    depth_tex,
+                    mask_half,
+                    "node.render_scene RT-D3 trace_shadow_rays",
+                );
+                tracer.upsample_shadow(
+                    gpu.native_enc,
+                    params_buffer,
+                    depth_tex,
+                    mask_half,
+                    mask_full,
+                    "node.render_scene RT-D3 upsample_shadow",
+                );
+            }
         }
 
         // ---- Pass 2 (immutable phase): draw. Every object composites into
