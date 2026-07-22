@@ -41,6 +41,7 @@ mod render_scene_shadows;
 mod rt_p1_region_probe;
 mod rt_p1_shadow;
 mod rt_p2_soft_ao_temporal;
+mod rt_p3_emissive_gi;
 mod rt_p4_metalfx_temporal;
 mod rt_w0_gbuffer;
 mod scene_object_migration_round_trip;

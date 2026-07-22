@@ -36,7 +36,9 @@
 use std::ffi::c_void;
 use std::slice;
 
-use manifold_gpu::raytrace::{MetalShadowRayTracer, RtObjectGeometry, ShadowRayParams, ShadowRayTracer};
+use manifold_gpu::raytrace::{
+    GiMaterial, MetalShadowRayTracer, RtObjectGeometry, ShadowRayParams, ShadowRayTracer,
+};
 use manifold_gpu::{GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
 
 use crate::harness;
@@ -163,11 +165,16 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         [2, 1],
         0.0,
         0,
+        0, // RT-P3: gi_spp — 0, GI gather skipped, this proof only asserts on out_sv
         [0.0, 0.0, 0.0],
         [0.0, 0.0, 0.0],
         IDENTITY,
     );
     let params_buffer = device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
+    // RT-P3: unread by this proof (gi_spp == 0 above), same ABI-stub
+    // discipline as `out_irr` — one zeroed entry.
+    let gi_materials_buffer =
+        device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
 
     let mut encoder = device.create_encoder("rt-p1-shadow-proof");
     tracer.dispatch_shadow_rays(
@@ -175,6 +182,7 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         &accel,
         &params,
         &params_buffer,
+        &gi_materials_buffer,
         &depth_tex,
         &out_sv,
         &out_irr,
@@ -309,11 +317,16 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
         [2, 1],
         0.0,
         0,
+        0, // RT-P3: gi_spp — 0, GI gather skipped, this proof only asserts on out_sv
         [0.0, 0.0, 0.0],
         [0.0, 0.0, 0.0],
         IDENTITY,
     );
     let params_buffer = device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
+    // RT-P3: unread by this proof (gi_spp == 0 above), same ABI-stub
+    // discipline as `out_irr` — one zeroed entry.
+    let gi_materials_buffer =
+        device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
 
     let mut encoder = device.create_encoder("rt-p1-2blas-shadow-proof");
     tracer.dispatch_shadow_rays(
@@ -321,6 +334,7 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
         &accel,
         &params,
         &params_buffer,
+        &gi_materials_buffer,
         &depth_tex,
         &out_sv,
         &out_irr,
