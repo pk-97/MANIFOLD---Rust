@@ -779,6 +779,20 @@ impl RenderScene {
                 range: Some((0.0, LIGHT_SLIDER_MAX as f32)),
                 enum_values: &[],
             },
+            // RAYTRACING_DESIGN.md D14 (W0): per-scene RT toggle. Default
+            // off — an untouched scene is byte-identical to before this
+            // param existed (`force_consumed_outputs` returns empty unless
+            // this is explicitly `true`). P1 wires the real scene-level
+            // toggle (EditingService + serialization) through to this same
+            // param; W0 only builds the render-pass side of the contract.
+            ParamDef {
+                name: std::borrow::Cow::Borrowed("rt_enabled"),
+                label: "RT Enabled",
+                ty: ParamType::Bool,
+                default: ParamValue::Bool(false),
+                range: None,
+                enum_values: &[],
+            },
         ];
         // Per-object TRS is no longer a param loop here — `transform_{i}`
         // (added above) carries it as a `Transform` port fed by a
@@ -1970,6 +1984,23 @@ impl EffectNode for RenderScene {
     /// not linearized: consumers linearize via the shared `depth.wgsl`
     /// helper, D4). `velocity` is `Rg16Float` (§2 D5 — NDC-space `(dx,
     /// dy)` per pixel). `color` uses the backend default.
+    /// RAYTRACING_DESIGN.md D14 (W0): `rt_enabled == true` forces `depth`
+    /// AND `velocity` into the plan's `consumed_outputs` regardless of
+    /// wiring — the per-scene RT toggle's whole effect on the stored
+    /// G-buffer. `false` (the default) returns empty, so an ordinary scene
+    /// stays exactly on GBUFFER_DESIGN's lazy-by-wire rule (D1),
+    /// byte-identical to before this param existed.
+    fn force_consumed_outputs(
+        &self,
+        params: &crate::node_graph::effect_node::ParamValues,
+    ) -> &[&'static str] {
+        if matches!(params.get("rt_enabled"), Some(ParamValue::Bool(true))) {
+            &["depth", "velocity"]
+        } else {
+            &[]
+        }
+    }
+
     fn output_format(&self, port: &str) -> Option<manifold_gpu::GpuTextureFormat> {
         match port {
             "depth" => Some(manifold_gpu::GpuTextureFormat::R32Float),

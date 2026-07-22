@@ -1310,6 +1310,26 @@ pub trait EffectNode: Send {
     /// whose downstream sampler upscales.
     fn set_output_canvas_scale(&mut self, _port: &str, _scale: (u32, u32)) {}
 
+    /// Output ports that must be treated as consumed (real resource
+    /// allocated, primitive's per-pass work runs) EVEN IF no wire reads
+    /// them, when this node's current params say so.
+    /// `docs/RAYTRACING_DESIGN.md` D14: a scene with RT enabled stores
+    /// depth + motion vectors to real textures regardless of whether
+    /// anything downstream happens to be wired to them yet (P1's shadow-
+    /// ray/denoise consumers land later); a non-RT scene keeps the
+    /// ordinary lazy-by-wire rule (`docs/GBUFFER_DESIGN.md` D1) —
+    /// `ExecutionPlan::compile` folds this into the same `consumed_outputs`
+    /// set a real wire would populate, so the rest of the lazy-allocation
+    /// machinery (resource creation, per-frame binding, primitive-side
+    /// `texture_2d(port).is_some()` gates) needs no separate RT-aware
+    /// branch anywhere else.
+    ///
+    /// Default: empty — every primitive except `node.render_scene` is
+    /// unaffected. Queried once per `compile()`, not per frame.
+    fn force_consumed_outputs(&self, _params: &ParamValues) -> &[&'static str] {
+        &[]
+    }
+
     /// How many items to pre-allocate for the named `Array<T>` output
     /// port. The chain build / JsonGraphGenerator pre-allocator calls
     /// this once after the node's params are set and all its input
