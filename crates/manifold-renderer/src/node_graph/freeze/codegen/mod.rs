@@ -23,7 +23,7 @@ mod fused;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests;
 #[cfg(test)]
-mod tests;
+mod dispatch_contract_tests;
 
 pub use fused::generate_fused;
 pub(crate) use fused::rename_ident;
