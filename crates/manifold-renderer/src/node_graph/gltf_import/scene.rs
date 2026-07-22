@@ -33,14 +33,14 @@ use super::object_group::*;
 /// constant. Tuned against the DamagedHelmet/AMG probe renders: enough
 /// broad radiance that metallic surfaces read their albedo, low enough
 /// that the black-void product look survives.
-const IMPORT_FILL_DEFAULT: f32 = 0.6;
+pub(super) const IMPORT_FILL_DEFAULT: f32 = 0.6;
 
 /// Default softbox strip intensity stamped on imported rigs (F-P7): half
 /// the primitive's own 6.0 default. With the fill dome supplying the broad
 /// radiance, full-strength strips dominate every curved reflection (the
 /// banded-visor look); 3.0 keeps the chrome-streak character as an accent.
 /// The Strip Lights card fader dials it live.
-const IMPORT_STRIPS_DEFAULT: f32 = 3.0;
+pub(super) const IMPORT_STRIPS_DEFAULT: f32 = 3.0;
 
 /// Assemble the generator graph from an already-parsed [`GltfImportSummary`].
 /// Split from [`assemble_import_graph`] (which owns the single file parse) so the

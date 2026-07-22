@@ -28,7 +28,7 @@ use super::scene::*;
 /// colliding with the TOP-LEVEL ids `render_scene`'s siblings use. Walking
 /// every nesting level anyway costs nothing and is the simplest thing that
 /// is obviously correct for every level at once.
-fn max_node_id_recursive(nodes: &[EffectGraphNode]) -> u32 {
+pub(super) fn max_node_id_recursive(nodes: &[EffectGraphNode]) -> u32 {
     nodes
         .iter()
         .map(|n| {
@@ -142,7 +142,7 @@ pub struct MergePlan {
 /// a scene with no known-radius mesh-source node at all (a hand-built scene
 /// with no glTF import in its history). No top-level `node.orbit_camera`
 /// either → normalization is skipped entirely (native units), never guessed.
-fn merge_import_into_graph(
+pub(super) fn merge_import_into_graph(
     def: &EffectGraphDef,
     summary: &GltfImportSummary,
     path: &Path,

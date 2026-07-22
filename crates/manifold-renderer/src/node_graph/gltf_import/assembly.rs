@@ -94,7 +94,7 @@ pub(super) fn sanitize_identifier(stem: &str) -> String {
 /// (handle `mat_{k}`) and the `node.scene_object`/group-output boundary
 /// (handle `group_name`) collide once flattened under the group's own
 /// handle — `graph.rs`'s `add_node_named` rejects the duplicate.
-fn collides_with_object_group_inner_handle(name: &str, k: usize) -> bool {
+pub(super) fn collides_with_object_group_inner_handle(name: &str, k: usize) -> bool {
     name == "output"
         || [
             "mesh", "mat", "pose", "skinmesh", "morphweights", "morphdeltas", "morphblend",
