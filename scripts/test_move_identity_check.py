@@ -83,6 +83,18 @@ the exit codes). Covers:
                                                            must fall through to
                                                            residue — the class
                                                            is smuggle-proof)
+ 19. include_str depth   → exit 0, residue 0, pairs>0     (D6: a test fn's
+     rewrite                                              relative include_str!
+                                                           path grows its leading
+                                                           `../` run when the mod
+                                                           moves deeper — a
+                                                           forced pure-move edit
+                                                           the class pairs off)
+ 20. include_str         → exit 1, residue > 0            (D6: the same move but
+     smuggled path tail                                   the path TAIL changes
+                                                           too (gain -> HACKED) —
+                                                           a real behavior change
+                                                           the class must catch)
 
 Run: python3 scripts/test_move_identity_check.py   (exit 0 = all pass)
 """
@@ -515,6 +527,34 @@ NODE_EDIT_TEST_MOD_SMUGGLED = (
 )
 
 
+# D6 fixtures (Wave 3): a test fn carrying a relative `include_str!("../…")`
+# moves DEEPER (a.rs -> sub/b.rs), so its leading `../` run must grow by the
+# added nesting depth — the only content change a deeper test-mod relocation
+# forces onto a moved line. The include_str line is padded on both sides by
+# ≥3 identical lines so git move-detects those blocks, isolating the include_str
+# line as the sole non-moved change; the D6 class must pair it (depth rewrite
+# PROVEN). The smuggle case additionally alters the path TAIL (gain -> HACKED),
+# which changes the loaded shader — a real behavior change the class must CATCH.
+INCLUDE_STR_FN_SHALLOW = (
+    "fn load_kernel() -> &'static str {\n"
+    "    let a1 = 1;\n"
+    "    let a2 = 2;\n"
+    "    let a3 = 3;\n"
+    '    let original = include_str!("../primitives/shaders/gain.wgsl");\n'
+    "    let b1 = 4;\n"
+    "    let b2 = 5;\n"
+    "    let b3 = 6;\n"
+    "    original\n"
+    "}\n"
+)
+INCLUDE_STR_FN_DEEP = INCLUDE_STR_FN_SHALLOW.replace(
+    '"../primitives', '"../../primitives'
+)
+INCLUDE_STR_FN_DEEP_SMUGGLED = INCLUDE_STR_FN_DEEP.replace(
+    "gain.wgsl", "HACKED.wgsl"
+)
+
+
 def case_pure_move(repo: Path) -> tuple[bool, str]:
     commit_tree(repo, {"a.rs": HELPER + "// tail\n", "b.rs": "// b\n"}, "base")
     commit_tree(repo, {"a.rs": "// tail\n", "b.rs": "// b\n" + HELPER}, "move")
@@ -724,6 +764,35 @@ def case_smuggled_test_mod_header(repo: Path) -> tuple[bool, str]:
     return ok, f"exit={code} {out.splitlines()[0]}"
 
 
+def case_include_str_depth_rewrite(repo: Path) -> tuple[bool, str]:
+    commit_tree(repo, {"a.rs": INCLUDE_STR_FN_SHALLOW, "sub/b.rs": "// b\n"}, "base")
+    commit_tree(
+        repo,
+        {"a.rs": "// a\n", "sub/b.rs": "// b\n" + INCLUDE_STR_FN_DEEP},
+        "move-deeper-with-include-str-depth-rewrite",
+    )
+    code, out = run_checker(repo)
+    ok = (
+        code == 0
+        and field(out, "residue") == 0
+        and field(out, "include_str pairs") > 0
+        and field(out, "moved lines") > 0
+    )
+    return ok, f"exit={code} {out.splitlines()[0]}"
+
+
+def case_include_str_smuggled_path(repo: Path) -> tuple[bool, str]:
+    commit_tree(repo, {"a.rs": INCLUDE_STR_FN_SHALLOW, "sub/b.rs": "// b\n"}, "base")
+    commit_tree(
+        repo,
+        {"a.rs": "// a\n", "sub/b.rs": "// b\n" + INCLUDE_STR_FN_DEEP_SMUGGLED},
+        "move-deeper-with-smuggled-path-tail",
+    )
+    code, out = run_checker(repo)
+    ok = code == 1 and field(out, "residue") > 0
+    return ok, f"exit={code} {out.splitlines()[0]}"
+
+
 CASES = [
     ("pure move -> exit 0", case_pure_move),
     ("smuggled edit -> exit 1", case_smuggled),
@@ -747,6 +816,10 @@ CASES = [
     ("test-mod distribution -> exit 0 [D7a, PROVEN]", case_test_mod_distribution),
     ("smuggled test-mod header -> exit 1 [D7a, CAUGHT]",
      case_smuggled_test_mod_header),
+    ("include_str depth rewrite -> exit 0 [D6, PROVEN]",
+     case_include_str_depth_rewrite),
+    ("include_str smuggled path tail -> exit 1 [D6, CAUGHT]",
+     case_include_str_smuggled_path),
 ]
 
 

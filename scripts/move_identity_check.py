@@ -260,6 +260,65 @@ def drop_visibility_pairs(residue: list[str]) -> tuple[list[str], int]:
     return remaining, pairs
 
 
+# include_str! path-depth prefix rewrite (D6, Wave 3): moving a test mod DEEPER
+# into a directory module (freeze/codegen.rs's `gpu_tests` -> freeze/codegen/
+# gpu_tests.rs, one level; preset_runtime.rs's test mods -> preset_runtime/
+# tests/*.rs, two levels) makes every relative `include_str!("../…")` argument
+# resolve from a deeper directory, so its leading `../` run must grow by exactly
+# the added nesting depth. That is the ONLY content change a test-mod relocation
+# legitimately forces onto a moved line — every other byte of the line is
+# preserved. This class pairs a removed line against an added line that are
+# identical after collapsing the LEADING `../` run of every `include_str!`
+# argument on the line (whitespace-insensitive); ANYTHING else different — the
+# path tail, the surrounding code, a second literal — breaks the pair and both
+# lines fall to residue. SMUGGLE-PROOF: a changed shader/asset path, or any code
+# edit sharing the line, changes the normalized key and is caught. Only lines
+# CONTAINING `include_str!` participate; every other residue line passes through
+# untouched, so the class can never mask an unrelated deletion. Leading run
+# only: a `../` appearing mid-path (not right after the opening quote) is part
+# of the tail and is NOT collapsed — changing it is caught.
+INCLUDE_STR_LEADING_DOTDOT = re.compile(r'(include_str!\s*\(\s*")(?:\.\./)+')
+
+
+def drop_include_str_prefix_pairs(residue: list[str]) -> tuple[list[str], int]:
+    """Remove matched -old/+new pairs of `include_str!` lines that are identical
+    after collapsing the leading `../` run of every include_str! argument on the
+    line (post +/- marker, whitespace-insensitive). Only lines containing
+    `include_str!` participate. Returns (remaining residue, pairs dropped)."""
+
+    def key(line: str) -> str:
+        body = INCLUDE_STR_LEADING_DOTDOT.sub(r"\1", line[1:])
+        return " ".join(body.split())
+
+    minus: dict[str, int] = {}
+    plus: dict[str, int] = {}
+    for line in residue:
+        if "include_str!" not in line:
+            continue
+        bucket = minus if line.startswith("-") else plus
+        bucket[key(line)] = bucket.get(key(line), 0) + 1
+    matched: dict[str, int] = {}
+    pairs = 0
+    for k in minus:
+        m = min(minus[k], plus.get(k, 0))
+        if m:
+            matched[k] = m
+            pairs += m
+    remaining: list[str] = []
+    spent: dict[tuple[str, str], int] = {}
+    for line in residue:
+        if "include_str!" not in line:
+            remaining.append(line)
+            continue
+        k = key(line)
+        side = "-" if line.startswith("-") else "+"
+        if matched.get(k, 0) > spent.get((k, side), 0):
+            spent[(k, side)] = spent.get((k, side), 0) + 1
+            continue
+        remaining.append(line)
+    return remaining, pairs
+
+
 def classify(out: str) -> tuple[dict[str, int], list[str]]:
     """Bucket every +/- line of a `--color-moved` diff into moved / allowlisted
     wiring / comment / dispatch-split scaffold, returning (counts, residue).
@@ -494,16 +553,21 @@ def main() -> int:
 
     counts, residue = classify(out)
     residue, vis_pairs = drop_visibility_pairs(residue)
+    residue, include_pairs = drop_include_str_prefix_pairs(residue)
     scaffold = counts["scaffold"]
 
     print(
         f"moved lines: {counts['moved']}  allowlisted wiring: {counts['allowed']}  "
         f"comment lines: {counts['comments']}  scaffold: {scaffold}  "
-        f"visibility pairs: {vis_pairs}  residue: {len(residue)}"
+        f"visibility pairs: {vis_pairs}  include_str pairs: {include_pairs}  "
+        f"residue: {len(residue)}"
     )
     if vis_pairs:
         print(f"  note: {vis_pairs} signature(s) widened visibility (fn -> pub(crate) fn "
               f"etc.) — required wiring when private items move across module walls.")
+    if include_pairs:
+        print(f"  note: {include_pairs} include_str! path(s) had their leading '../' depth "
+              f"rewritten — required wiring when a test mod moves deeper (D6).")
     if scaffold > SCAFFOLD_CAP:
         print(f"  scaffold {scaffold} EXCEEDS cap {SCAFFOLD_CAP}: a dispatch-split commit")
         print("  may not carry this many structural lines — bulk semantics must not hide")
