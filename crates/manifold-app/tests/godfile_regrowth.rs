@@ -45,6 +45,53 @@ const CEILINGS: &[(&str, usize)] = &[
     ("crates/manifold-core/src/project/queries.rs", 950),
     ("crates/manifold-core/src/project/validate.rs", 300),
     ("crates/manifold-core/src/project/test_support.rs", 150),
+    // Wave 3 — renderer runtime decomposition (P3-Z, landed 2026-07-22;
+    // RENDERER_RUNTIME_DECOMPOSITION_DESIGN.md). Ceilings = current wc -l +10%
+    // rounded up to 50s, EXCEPT the two D2/D3 named ceilings pinned at +5%:
+    // preset_runtime/core.rs (Peter-sanctioned ~2k) and codegen/fused.rs
+    // (buffer+texture fused emission share the region model, no sub-split).
+    // gltf_import/ (P3-G split + P3-D tables + P3-A ImportCtx/ObjectAssembly)
+    ("crates/manifold-renderer/src/node_graph/gltf_import/mod.rs", 100),
+    ("crates/manifold-renderer/src/node_graph/gltf_import/assembly.rs", 200),
+    ("crates/manifold-renderer/src/node_graph/gltf_import/animation.rs", 150),
+    ("crates/manifold-renderer/src/node_graph/gltf_import/materials.rs", 450),
+    ("crates/manifold-renderer/src/node_graph/gltf_import/cards.rs", 250),
+    ("crates/manifold-renderer/src/node_graph/gltf_import/object_group.rs", 1100),
+    ("crates/manifold-renderer/src/node_graph/gltf_import/scene.rs", 800),
+    ("crates/manifold-renderer/src/node_graph/gltf_import/merge.rs", 450),
+    ("crates/manifold-renderer/src/node_graph/gltf_import/report.rs", 50),
+    ("crates/manifold-renderer/src/node_graph/gltf_import/tests.rs", 6050),
+    // freeze/codegen/ (P3-C split + P3-A StandaloneKernelSpec)
+    ("crates/manifold-renderer/src/node_graph/freeze/codegen/mod.rs", 50),
+    ("crates/manifold-renderer/src/node_graph/freeze/codegen/types.rs", 550),
+    ("crates/manifold-renderer/src/node_graph/freeze/codegen/uniforms.rs", 150),
+    ("crates/manifold-renderer/src/node_graph/freeze/codegen/entry_points.rs", 200),
+    ("crates/manifold-renderer/src/node_graph/freeze/codegen/standalone.rs", 1050),
+    // D2 named ceiling (+5%): fused emission is one seam, no buffer/texture sub-split
+    ("crates/manifold-renderer/src/node_graph/freeze/codegen/fused.rs", 1600),
+    ("crates/manifold-renderer/src/node_graph/freeze/codegen/dispatch_contract_tests.rs", 250),
+    ("crates/manifold-renderer/src/node_graph/freeze/codegen/gpu_tests.rs", 3450),
+    // preset_runtime/ (P3-R split + P3-A ChainBuildInputs/FrameContextInputs)
+    ("crates/manifold-renderer/src/preset_runtime/mod.rs", 200),
+    // D3 named ceiling (+5%): PresetRuntime is one type; core ~2k is Peter-sanctioned
+    ("crates/manifold-renderer/src/preset_runtime/core.rs", 2200),
+    ("crates/manifold-renderer/src/preset_runtime/build.rs", 750),
+    ("crates/manifold-renderer/src/preset_runtime/errors.rs", 300),
+    ("crates/manifold-renderer/src/preset_runtime/segments.rs", 200),
+    ("crates/manifold-renderer/src/preset_runtime/bindings.rs", 200),
+    ("crates/manifold-renderer/src/preset_runtime/instrumentation.rs", 550),
+    // preset_runtime/tests/ (P3-R #[path] test modules — W3-D1)
+    ("crates/manifold-renderer/src/preset_runtime/tests/multi_segment.rs", 150),
+    ("crates/manifold-renderer/src/preset_runtime/tests/binding_seed.rs", 100),
+    ("crates/manifold-renderer/src/preset_runtime/tests/topology_hash.rs", 300),
+    ("crates/manifold-renderer/src/preset_runtime/tests/user_binding.rs", 400),
+    ("crates/manifold-renderer/src/preset_runtime/tests/bug080_manifest_gate.rs", 100),
+    ("crates/manifold-renderer/src/preset_runtime/tests/persistent_slot.rs", 150),
+    ("crates/manifold-renderer/src/preset_runtime/tests/generator_input.rs", 500),
+    ("crates/manifold-renderer/src/preset_runtime/tests/chain_error.rs", 150),
+    ("crates/manifold-renderer/src/preset_runtime/tests/generator_runtime.rs", 1550),
+    ("crates/manifold-renderer/src/preset_runtime/tests/chain_fusion.rs", 1450),
+    ("crates/manifold-renderer/src/preset_runtime/tests/segment_prewarm.rs", 50),
     // Wave 1 register files still open (interim ceilings = current + slack;
     // tighten at Wave 1 close — P-I kills scrub fields, P-S splits panels)
     ("crates/manifold-app/src/app.rs", 4200),
