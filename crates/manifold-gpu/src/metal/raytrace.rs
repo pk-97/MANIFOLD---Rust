@@ -396,11 +396,23 @@ struct ShadowRayParams {
     uint   frame_index;
     uint2  trace_size;       // half-res (mode B, D11)
     uint2  gbuffer_size;     // full-res G-buffer / output resolution
+    float  ao_radius;        // RT-P2: world-space AO ray max distance
+    uint   ao_spp;           // RT-P2: AO rays/pixel; 0 = AO gather skipped
+    packed_float3 sun_color;     // RT-P2: premultiplied sun color*intensity
+    packed_float3 ambient_color; // RT-P2: flat ambient/env color
     // RT-D3: ray origins come from the prepass DEPTH texture + this
     // inverse view-proj — no stored world-pos/normal G-buffer target in
     // P1. Column-major, matches `render_scene.rs`'s `mat4_inverse` output
     // and `render_scene.wgsl`'s `Uniforms.view_proj` convention.
     float4x4 inv_view_proj;
+};
+
+// RT-P2/D3: mirrors the Rust `AccumulateParams` below field-for-field —
+// plain POD, no matrix, no alignment surprises.
+struct AccumulateParams {
+    uint2 size;
+    float alpha;
+    uint  reset;
 };
 
 static uint pcg(uint v) { v = v * 747796405u + 2891336453u; v = ((v >> ((v >> 28u) + 4u)) ^ v) * 277803737u; return (v >> 22u) ^ v; }
@@ -419,6 +431,16 @@ static float3 cone_sample(float3 dir, float half_angle, float2 u) {
     float phi = 6.2831853 * u.y;
     float3 t = ortho_basis_x(dir), b = cross(dir, t);
     return normalize(t * (sin_t * cos(phi)) + b * (sin_t * sin(phi)) + dir * cos_t);
+}
+// RT-P2: cosine-weighted hemisphere sample around `n` — ported verbatim
+// from `tools/rt_prototype/shaders/rt_trace.metal`'s `cosine_hemisphere`
+// (the AO/GI gather this kernel's AO term reuses; GI/emissive gather
+// itself stays P3 scope, not ported here). Declared after `ortho_basis_x`
+// (which it calls).
+static float3 cosine_hemisphere(float3 n, float2 u) {
+    float3 t = ortho_basis_x(n), b = cross(n, t);
+    float r = sqrt(u.x), phi = 6.2831853 * u.y;
+    return normalize(t * (r * cos(phi)) + b * (r * sin(phi)) + n * sqrt(max(0.0, 1.0 - u.x)));
 }
 
 // RT-D3: reconstruct world position from a full-res depth texel + the
@@ -445,12 +467,18 @@ static float3 world_pos_from_depth(uint2 pix, uint2 gbuffer_size, float raw_dept
 // forced on for RT-enabled scenes). Normal-for-bias is a screen-space
 // finite-difference of reconstructed world positions (RT-D3: same
 // technique as `ssao_gtao.rs`'s depth-only reconstruction — no new normal
-// G-buffer target in P1). Output (trace_size): r = sun visibility [0,1].
+// G-buffer target in P1). Output (trace_size): out_sv.r = sun visibility
+// [0,1], out_sv.g = AO [0,1] (RT-P2: extends the SAME kernel/dispatch, not
+// a parallel pass — RAYTRACING_DESIGN.md §5.2 P2's D16 seam note). out_irr
+// (RT-P2): demodulated (no-albedo) irradiance = sun_color*ndotl*vis +
+// ambient_color*ao — the D3 "accumulate lighting separated from albedo"
+// term, temporally accumulated downstream by `accumulate_irradiance`.
 kernel void trace_shadow_rays(
     instance_acceleration_structure  accel     [[buffer(0)]],
     constant ShadowRayParams&        p         [[buffer(1)]],
     depth2d<float>                   depth_tex [[texture(0)]],
     texture2d<float, access::write>  out_sv    [[texture(1)]],
+    texture2d<float, access::write>  out_irr   [[texture(2)]],
     uint2 tid [[thread_position_in_grid]])
 {
     if (tid.x >= p.trace_size.x || tid.y >= p.trace_size.y) return;
@@ -459,7 +487,11 @@ kernel void trace_shadow_rays(
     bool valid;
     float3 wp = world_pos_from_depth(gpix, p.gbuffer_size, depth_tex.read(gpix, 0), p.inv_view_proj, valid);
     if (!valid) {
-        out_sv.write(float4(1, 0, 0, 0), tid);
+        // Void background: unoccluded either way (matches the prototype's
+        // `out_sv.write(float4(1,1,0,0), tid)` void case) — irradiance is
+        // ambient-only (no surface to shadow-test against).
+        out_sv.write(float4(1, 1, 0, 0), tid);
+        out_irr.write(float4(p.ambient_color, 0), tid);
         return;
     }
     // Finite-difference normal from neighbor world positions (screen-space
@@ -539,28 +571,67 @@ kernel void trace_shadow_rays(
         if (shadow_i.intersect(r, accel).type == intersection_type::none) vis += 1.0;
     }
     vis /= float(spp);
-    out_sv.write(float4(vis, 0, 0, 0), tid);
+
+    // RT-P2: AO gather — cosine-weighted hemisphere around the SAME bias
+    // normal/origin the shadow ray uses (ported from the prototype's
+    // `trace_lighting`'s `ao` block; the emissive/env one-bounce GI term
+    // that kernel also computes is P3 scope, not ported here). `ao_spp ==
+    // 0` skips the gather outright (ao stays 1.0 = no darkening),
+    // matching P1's shadow_spp==0-never-happens discipline but explicit
+    // here since AO is the new, optional term.
+    float ao = 1.0;
+    if (p.ao_spp > 0) {
+        ao = 0.0;
+        ray ao_r;
+        ao_r.origin = origin;
+        ao_r.min_distance = bias_eps * 0.5;
+        ao_r.max_distance = p.ao_radius;
+        for (uint s = 0; s < p.ao_spp; s++) {
+            ao_r.direction = cosine_hemisphere(n, rand2(tid, p.frame_index, 100u + s));
+            if (shadow_i.intersect(ao_r, accel).type == intersection_type::none) ao += 1.0;
+        }
+        ao /= float(p.ao_spp);
+    }
+    out_sv.write(float4(vis, ao, 0, 0), tid);
+
+    // RT-P2/D3: demodulated irradiance — sun contribution gated by n·l
+    // AND shadow visibility, plus AO-occluded flat ambient. No albedo
+    // multiply here (that happens once, downstream, in
+    // `render_scene.wgsl` — D3's "accumulate lighting separated from
+    // albedo" is what lets a same-clip light-intensity strobe keep
+    // temporal history instead of being treated as a cut).
+    float ndl = max(dot(n, p.sun_dir), 0.0);
+    float3 irradiance = float3(p.sun_color) * ndl * vis + float3(p.ambient_color) * ao;
+    out_irr.write(float4(irradiance, 0), tid);
 }
 
-// Depth-aware bilateral upsample: half-res sun-visibility -> full res
-// (RT-D3's "D11 trivial pass"). Guide: full-res depth only (raw NDC z —
-// comparable directly without linearizing, since nearby screen pixels at
-// similar depth have proportionally similar raw-z regardless of the
-// projection's nonlinearity).
+// Depth-aware bilateral upsample: half-res (sun-visibility, AO) + demod.
+// irradiance -> full res (RT-D3's "D11 trivial pass"; RT-P2 widens the
+// SAME kernel to also carry the AO channel + the irradiance texture — one
+// dispatch, one guide, not a second upsample pass). Guide: full-res depth
+// only (raw NDC z — comparable directly without linearizing, since nearby
+// screen pixels at similar depth have proportionally similar raw-z
+// regardless of the projection's nonlinearity).
 kernel void upsample_shadow(
     constant ShadowRayParams&       p         [[buffer(1)]],
     depth2d<float>                  depth_tex [[texture(0)]],
     texture2d<float>                lo_sv     [[texture(1)]],
     texture2d<float, access::write> hi_sv     [[texture(2)]],
+    texture2d<float>                lo_irr    [[texture(3)]],
+    texture2d<float, access::write> hi_irr    [[texture(4)]],
     uint2 tid [[thread_position_in_grid]])
 {
     if (tid.x >= p.gbuffer_size.x || tid.y >= p.gbuffer_size.y) return;
     float d = depth_tex.read(tid, 0);
-    if (d >= 1.0 - 1e-6) { hi_sv.write(float4(1, 0, 0, 0), tid); return; }
+    if (d >= 1.0 - 1e-6) {
+        hi_sv.write(float4(1, 1, 0, 0), tid);
+        hi_irr.write(float4(p.ambient_color, 0), tid);
+        return;
+    }
 
     float2 lo_uv = (float2(tid) + 0.5) / float2(p.gbuffer_size) * float2(p.trace_size);
     int2 lo_c = int2(lo_uv - 0.5);
-    float acc = 0.0; float wsum = 0.0;
+    float2 acc_sv = 0.0; float3 acc_irr = 0.0; float wsum = 0.0;
     for (int dy = 0; dy <= 1; dy++)
     for (int dx = 0; dx <= 1; dx++) {
         int2 q = clamp(lo_c + int2(dx, dy), int2(0), int2(p.trace_size) - 1);
@@ -570,16 +641,54 @@ kernel void upsample_shadow(
         float w_bilin = f.x * f.y;
         float w_depth = exp(-fabs(qd - d) / 0.001);
         float w = max(w_bilin * w_depth, 1e-5);
-        acc += lo_sv.read(uint2(q)).r * w;
+        acc_sv += lo_sv.read(uint2(q)).rg * w;
+        acc_irr += lo_irr.read(uint2(q)).rgb * w;
         wsum += w;
     }
-    hi_sv.write(float4(acc / wsum, 0, 0, 0), tid);
+    hi_sv.write(float4(acc_sv / wsum, 0, 0), tid);
+    hi_irr.write(float4(acc_irr / wsum, 0), tid);
+}
+
+// RT-P2/D3: temporal accumulation of the demodulated irradiance texture —
+// the next stage of the SAME lighting pass (not a parallel denoiser
+// system). `reset` (driven by the SHARED
+// `crate::node_graph::temporal_reset::TemporalResetDetector` — RT-D2; the
+// negative-rg gate enforces there is exactly one reset-detection call
+// site) discards history outright (cold start / post-cut); otherwise an
+// exponential moving average toward this frame's value at `alpha` keeps
+// history — this is the numeric mechanism that makes a same-clip light-
+// intensity strobe differ from a cold-start render (D3's "strobes are not
+// cuts"). `history` is read_write: read this frame's stale value, write
+// the blended (or copied) result in place.
+kernel void accumulate_irradiance(
+    constant AccumulateParams&           p       [[buffer(1)]],
+    texture2d<float>                     hi_irr  [[texture(0)]],
+    texture2d<float, access::read_write> history [[texture(1)]],
+    uint2 tid [[thread_position_in_grid]])
+{
+    if (tid.x >= p.size.x || tid.y >= p.size.y) return;
+    float4 cur = hi_irr.read(tid);
+    if (p.reset != 0u) {
+        history.write(cur, tid);
+        return;
+    }
+    float4 prev = history.read(tid);
+    history.write(mix(prev, cur, p.alpha), tid);
 }
 "#;
 
 /// CPU mirror of `ShadowRayParams` above — field order and packing MUST
 /// match exactly (P0 §5.1 kernel lesson: `packed_float3` in MSL == dense
 /// `[f32; 3]` here, no padding).
+///
+/// RAYTRACING_DESIGN.md §5.2 P2 extended this in place (same struct, same
+/// binding(1) slot, same single half-res dispatch — D11/D16's "P2 joins
+/// the SAME half-res dispatch and SAME upsample" seam, not a parallel
+/// pass): `ao_radius`/`ao_spp` drive the added AO-ray gather, `sun_color`/
+/// `ambient_color` are the demodulated-irradiance term's inputs (no
+/// albedo folded in here — that happens once, downstream, in
+/// `render_scene.wgsl`'s shading step, per D3's "accumulate lighting
+/// separated from albedo").
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct ShadowRayParams {
@@ -589,14 +698,28 @@ pub struct ShadowRayParams {
     pub frame_index: u32,
     pub trace_size: [u32; 2],
     pub gbuffer_size: [u32; 2],
-    /// MSL's `float4x4` requires 16-byte alignment; the 40 bytes above it
-    /// need 8 more to reach the next 16-byte boundary (48). `#[repr(C)]`
+    /// World-space max AO ray distance (RT-P2). 0 samples (`ao_spp == 0`)
+    /// skips the AO gather entirely, leaving `out_sv.g` at its cleared
+    /// value.
+    pub ao_radius: f32,
+    /// AO rays per pixel (RT-P2 half-res dispatch).
+    pub ao_spp: u32,
+    /// Sun light color, PREMULTIPLIED with intensity (linear HDR) — same
+    /// convention as `render_scene.rs`'s `Light::color`.
+    pub sun_color: [f32; 3],
+    /// Flat ambient/env color (scene `atmosphere.ambient_tint` scaled by
+    /// a named constant — RAYTRACING_DESIGN.md §5.2 P2's "denoiser/
+    /// accumulation parameters are named constants" rule; the exact
+    /// intensity is Peter's morning-gate tuning call, not baked in here).
+    pub ambient_color: [f32; 3],
+    /// MSL's `float4x4` requires 16-byte alignment; the 72 bytes above it
+    /// need 8 more to reach the next 16-byte boundary (80). `#[repr(C)]`
     /// does NOT know `[[f32; 4]; 4]` needs that (its natural alignment is
     /// 4, from `f32`) — without this, the GPU reads `inv_view_proj`
-    /// starting 8 bytes early, same alignment-gotcha class as the
-    /// `packed_float3` lesson (P0 §5.1), just for a matrix instead of a
-    /// vec3. Caught by `mat4x4_alignment_matches_msl_float4x4` below —
-    /// don't remove this padding without re-deriving the offset.
+    /// starting early, same alignment-gotcha class as the `packed_float3`
+    /// lesson (P0 §5.1), just for a matrix instead of a vec3. Caught by
+    /// the offset assert below — don't remove this padding without
+    /// re-deriving the offset.
     _pad_align_mat4: [u32; 2],
     /// Column-major, matches `render_scene.rs`'s `mat4_inverse` output.
     pub inv_view_proj: [[f32; 4]; 4],
@@ -613,6 +736,10 @@ impl ShadowRayParams {
         frame_index: u32,
         trace_size: [u32; 2],
         gbuffer_size: [u32; 2],
+        ao_radius: f32,
+        ao_spp: u32,
+        sun_color: [f32; 3],
+        ambient_color: [f32; 3],
         inv_view_proj: [[f32; 4]; 4],
     ) -> Self {
         Self {
@@ -622,19 +749,53 @@ impl ShadowRayParams {
             frame_index,
             trace_size,
             gbuffer_size,
+            ao_radius,
+            ao_spp,
+            sun_color,
+            ambient_color,
             _pad_align_mat4: [0; 2],
             inv_view_proj,
         }
     }
 }
 
-// RT-D3 alignment gotcha (see `_pad_align_mat4`'s doc comment): this is
-// the regression guard a GPU test alone wouldn't localize as clearly —
-// if `inv_view_proj`'s offset ever drifts from 48 again (a field
+// RT-D3/RT-P2 alignment gotcha (see `_pad_align_mat4`'s doc comment): this
+// is the regression guard a GPU test alone wouldn't localize as clearly —
+// if `inv_view_proj`'s offset ever drifts from 80 again (a field
 // reordered/resized above it), this fails at compile time instead of
 // silently reading garbage on the GPU.
-const _: () = assert!(std::mem::offset_of!(ShadowRayParams, inv_view_proj) == 48);
-const _: () = assert!(std::mem::size_of::<ShadowRayParams>() == 112);
+const _: () = assert!(std::mem::offset_of!(ShadowRayParams, inv_view_proj) == 80);
+const _: () = assert!(std::mem::size_of::<ShadowRayParams>() == 144);
+
+/// CPU mirror of the MSL `AccumulateParams` struct backing
+/// `accumulate_irradiance` — RAYTRACING_DESIGN.md §5.2 P2/D3's temporal-
+/// accumulation reset. Plain POD, no alignment surprises (no matrix
+/// field).
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct AccumulateParams {
+    pub size: [u32; 2],
+    pub alpha: f32,
+    /// Non-zero: this frame COPIES `current` into `history` (cold start /
+    /// post-cut — RT-D2's `TemporalResetDetector`), discarding whatever
+    /// history held. Zero: blend `history` toward `current` by `alpha`
+    /// (D3's "strobes are not cuts" case — a same-clip light-intensity
+    /// flip keeps the blend, which is exactly what makes the numeric
+    /// strobe-proof differ from a cold start).
+    pub reset: u32,
+}
+
+const _: () = assert!(std::mem::size_of::<AccumulateParams>() == 16);
+
+impl AccumulateParams {
+    pub fn new(size: [u32; 2], alpha: f32, reset: bool) -> Self {
+        Self {
+            size,
+            alpha,
+            reset: reset as u32,
+        }
+    }
+}
 
 const SHADOW_WORKGROUP: [u32; 3] = [8, 8, 1];
 
@@ -708,11 +869,13 @@ pub trait ShadowRayTracer {
     /// idiom). A topology change calls `build_accel` again instead.
     fn refit_accel(&self, device: &GpuDevice, accel: &Self::Accel, objects: &[RtObjectGeometry]);
 
-    /// Dispatch the half-res hard-shadow-ray pass (RT-D3): ray origins +
-    /// bias normal reconstructed in-kernel from `depth_tex` (the full-res
-    /// opaque-depth prepass) + `params.inv_view_proj` — no world-pos/
-    /// normal G-buffer target. Writes sun-visibility to `out_sv` at
-    /// `params.trace_size`.
+    /// Dispatch the half-res shadow/AO-ray pass (RT-D3; RT-P2 widens this
+    /// SAME dispatch to add the AO gather + demodulated-irradiance term —
+    /// D16's seam note, not a parallel pass): ray origins + bias normal
+    /// reconstructed in-kernel from `depth_tex` (the full-res opaque-depth
+    /// prepass) + `params.inv_view_proj` — no world-pos/normal G-buffer
+    /// target. Writes (sun visibility, AO) to `out_sv` and demodulated
+    /// irradiance to `out_irr`, both at `params.trace_size`.
     #[allow(clippy::too_many_arguments)]
     fn dispatch_shadow_rays(
         &self,
@@ -722,11 +885,14 @@ pub trait ShadowRayTracer {
         params_buffer: &GpuBuffer,
         depth_tex: &GpuTexture,
         out_sv: &GpuTexture,
+        out_irr: &GpuTexture,
         label: &str,
     );
 
-    /// Depth-aware bilateral upsample of the half-res `lo_sv` term to
-    /// full G-buffer resolution `hi_sv` (RT-D3's "D11 trivial pass").
+    /// Depth-aware bilateral upsample of the half-res `lo_sv`/`lo_irr`
+    /// terms to full G-buffer resolution `hi_sv`/`hi_irr` (RT-D3's "D11
+    /// trivial pass"; RT-P2 widens the SAME upsample to also carry
+    /// irradiance).
     #[allow(clippy::too_many_arguments)]
     fn upsample_shadow(
         &self,
@@ -735,6 +901,26 @@ pub trait ShadowRayTracer {
         depth_tex: &GpuTexture,
         lo_sv: &GpuTexture,
         hi_sv: &GpuTexture,
+        lo_irr: &GpuTexture,
+        hi_irr: &GpuTexture,
+        label: &str,
+    );
+
+    /// RT-P2/D3: temporal-accumulate `hi_irr` (this frame's raw
+    /// demodulated irradiance) into `history` in place — `params.reset`
+    /// discards history (cold start / post-cut, driven by the SHARED
+    /// `TemporalResetDetector` — RT-D2), else blends toward `hi_irr` at
+    /// `params.alpha`. `history`'s CURRENT content is read back
+    /// in-kernel, so it must already hold either a prior frame's result
+    /// or be freshly allocated (any content — the very first call after
+    /// allocation should pass `reset: true`, which never reads it).
+    fn accumulate_irradiance(
+        &self,
+        encoder: &mut GpuEncoder,
+        params: &AccumulateParams,
+        params_buffer: &GpuBuffer,
+        hi_irr: &GpuTexture,
+        history: &GpuTexture,
         label: &str,
     );
 }
@@ -745,6 +931,7 @@ pub trait ShadowRayTracer {
 pub struct MetalShadowRayTracer {
     trace_pipeline: GpuComputePipeline,
     upsample_pipeline: GpuComputePipeline,
+    accumulate_pipeline: GpuComputePipeline,
 }
 
 impl MetalShadowRayTracer {
@@ -773,6 +960,7 @@ impl MetalShadowRayTracer {
                 (1, SlotKind::Buffer),
                 (0, SlotKind::Texture),
                 (1, SlotKind::Texture),
+                (2, SlotKind::Texture),
             ]),
         );
         let upsample_pipeline = compile_pipeline(
@@ -784,12 +972,25 @@ impl MetalShadowRayTracer {
                 (0, SlotKind::Texture),
                 (1, SlotKind::Texture),
                 (2, SlotKind::Texture),
+                (3, SlotKind::Texture),
+                (4, SlotKind::Texture),
+            ]),
+        );
+        let accumulate_pipeline = compile_pipeline(
+            device,
+            &library,
+            "accumulate_irradiance",
+            identity_slot_map(&[
+                (1, SlotKind::Buffer),
+                (0, SlotKind::Texture),
+                (1, SlotKind::Texture),
             ]),
         );
 
         Self {
             trace_pipeline,
             upsample_pipeline,
+            accumulate_pipeline,
         }
     }
 }
@@ -813,6 +1014,7 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         params_buffer: &GpuBuffer,
         depth_tex: &GpuTexture,
         out_sv: &GpuTexture,
+        out_irr: &GpuTexture,
         label: &str,
     ) {
         params_buffer.upload(bytemuck_bytes(params));
@@ -835,6 +1037,10 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                     binding: 1,
                     texture: out_sv,
                 },
+                GpuBinding::Texture {
+                    binding: 2,
+                    texture: out_irr,
+                },
             ],
             groups,
             label,
@@ -848,6 +1054,8 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         depth_tex: &GpuTexture,
         lo_sv: &GpuTexture,
         hi_sv: &GpuTexture,
+        lo_irr: &GpuTexture,
+        hi_irr: &GpuTexture,
         label: &str,
     ) {
         // `params.gbuffer_size` (already uploaded by `dispatch_shadow_rays`
@@ -876,6 +1084,47 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                 GpuBinding::Texture {
                     binding: 2,
                     texture: hi_sv,
+                },
+                GpuBinding::Texture {
+                    binding: 3,
+                    texture: lo_irr,
+                },
+                GpuBinding::Texture {
+                    binding: 4,
+                    texture: hi_irr,
+                },
+            ],
+            groups,
+            label,
+        );
+    }
+
+    fn accumulate_irradiance(
+        &self,
+        encoder: &mut GpuEncoder,
+        params: &AccumulateParams,
+        params_buffer: &GpuBuffer,
+        hi_irr: &GpuTexture,
+        history: &GpuTexture,
+        label: &str,
+    ) {
+        params_buffer.upload(accumulate_params_bytes(params));
+        let groups = dispatch_groups_2d(params.size, SHADOW_WORKGROUP);
+        encoder.dispatch_compute(
+            &self.accumulate_pipeline,
+            &[
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: params_buffer,
+                    offset: 0,
+                },
+                GpuBinding::Texture {
+                    binding: 0,
+                    texture: hi_irr,
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: history,
                 },
             ],
             groups,
@@ -906,6 +1155,18 @@ fn bytemuck_bytes(params: &ShadowRayParams) -> &[u8] {
         std::slice::from_raw_parts(
             (params as *const ShadowRayParams) as *const u8,
             std::mem::size_of::<ShadowRayParams>(),
+        )
+    }
+}
+
+fn accumulate_params_bytes(params: &AccumulateParams) -> &[u8] {
+    // SAFETY: `AccumulateParams` is `#[repr(C)]`, all-POD (u32/f32 fields
+    // only), no padding, no interior pointers — same discipline as
+    // `bytemuck_bytes` above.
+    unsafe {
+        std::slice::from_raw_parts(
+            (params as *const AccumulateParams) as *const u8,
+            std::mem::size_of::<AccumulateParams>(),
         )
     }
 }

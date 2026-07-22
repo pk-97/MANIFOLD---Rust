@@ -135,8 +135,38 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         label: "rt-p1-out_sv",
         mip_levels: 1,
     });
+    // RAYTRACING_DESIGN.md §5.2 P2 widened `trace_shadow_rays` to also
+    // write demodulated irradiance — this P1 proof only asserts on
+    // `out_sv` (shadow visibility), so `out_irr` is an unread write
+    // target, same ABI-stub discipline as every other unused-but-required
+    // binding in this codebase.
+    let out_irr = device.create_texture(&GpuTextureDesc {
+        width: 2,
+        height: 1,
+        depth: 1,
+        format: GpuTextureFormat::Rgba16Float,
+        dimension: GpuTextureDimension::D2,
+        usage: GpuTextureUsage::SHADER_WRITE,
+        label: "rt-p1-out_irr-stub",
+        mip_levels: 1,
+    });
 
-    let params = ShadowRayParams::new([0.0, 0.0, 1.0], 0.0, 1, 0, [2, 1], [2, 1], IDENTITY);
+    // ao_spp: 0 (AO gather skipped — P1 fixture only proves hard shadows);
+    // sun_color/ambient_color: unused by this test's assertions (out_irr
+    // is never read here).
+    let params = ShadowRayParams::new(
+        [0.0, 0.0, 1.0],
+        0.0,
+        1,
+        0,
+        [2, 1],
+        [2, 1],
+        0.0,
+        0,
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0],
+        IDENTITY,
+    );
     let params_buffer = device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
 
     let mut encoder = device.create_encoder("rt-p1-shadow-proof");
@@ -147,6 +177,7 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         &params_buffer,
         &depth_tex,
         &out_sv,
+        &out_irr,
         "trace_shadow_rays-proof",
     );
     encoder.commit_and_wait_completed();
@@ -257,8 +288,31 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
         label: "rt-p1-2blas-out_sv",
         mip_levels: 1,
     });
+    // See the single-BLAS proof above for why this stub exists.
+    let out_irr = device.create_texture(&GpuTextureDesc {
+        width: 2,
+        height: 1,
+        depth: 1,
+        format: GpuTextureFormat::Rgba16Float,
+        dimension: GpuTextureDimension::D2,
+        usage: GpuTextureUsage::SHADER_WRITE,
+        label: "rt-p1-2blas-out_irr-stub",
+        mip_levels: 1,
+    });
 
-    let params = ShadowRayParams::new([0.0, 0.0, 1.0], 0.0, 1, 0, [2, 1], [2, 1], IDENTITY);
+    let params = ShadowRayParams::new(
+        [0.0, 0.0, 1.0],
+        0.0,
+        1,
+        0,
+        [2, 1],
+        [2, 1],
+        0.0,
+        0,
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0],
+        IDENTITY,
+    );
     let params_buffer = device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
 
     let mut encoder = device.create_encoder("rt-p1-2blas-shadow-proof");
@@ -269,6 +323,7 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
         &params_buffer,
         &depth_tex,
         &out_sv,
+        &out_irr,
         "trace_shadow_rays-2blas-proof",
     );
     encoder.commit_and_wait_completed();
