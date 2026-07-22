@@ -201,7 +201,13 @@ brief is not executable — that's the definition.
   escape: consumer rows rendered as bare text, the only interactive rows in
   the panel with no chrome; the worker's self-report was factually accurate
   and still missed it). Orchestrator PNG review checks affordances, not just
-  presence. A phase with no observable surface
+  presence. **No PNG oracles for agents (Peter, 2026-07-22):** models are
+  unreliable at reading images — no agent (lane, reviewer, orchestrator) may
+  gate on judging an image. Every agent-run gate is a computed number or exit
+  code (value tests vs CPU-computed expected, scripted pixel-diffs with stated
+  thresholds, region-mean probes at named coordinates). PNG artifacts are still
+  produced, but the reviewer who *looks* at them is Peter; L2 means "an artifact
+  Peter looks at". A phase with no observable surface
   states `Demo: none — L1` explicitly. The demo is what forces the vertical path
   (model → command → UI → pixels) to be exercised at least once before landing;
   horizontal slices each passing their own gate while the seam between them never
