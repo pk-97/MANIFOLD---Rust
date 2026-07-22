@@ -42,6 +42,7 @@ fn slot(id: &str, value: f32) -> Param {
         whole_numbers: false,
         is_toggle: false,
         is_trigger: false,
+        card_visible: true,
         value_labels: vec![],
         format_string: None,
         osc_suffix: String::new(),
