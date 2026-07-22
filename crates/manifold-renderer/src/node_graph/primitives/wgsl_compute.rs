@@ -1907,13 +1907,17 @@ impl FusionFragment {
             required: false,
         }];
         crate::node_graph::freeze::codegen::generate_standalone(
-            self.kind,
-            &self.body,
-            &self.inputs,
-            &self.params,
-            &[],
-            &[],
-            OUT,
+            &crate::node_graph::freeze::codegen::StandaloneKernelSpec {
+                fusion_kind: self.kind,
+                body: &self.body,
+                inputs: &self.inputs,
+                params: &self.params,
+                input_access: &[],
+                derived_uniforms: &[],
+                outputs: OUT,
+                stencil_fetch: false,
+                includes: &[],
+            },
         )
         .map_err(|e| format!("{e:?}"))
     }

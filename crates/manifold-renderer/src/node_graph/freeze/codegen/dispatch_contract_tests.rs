@@ -2,7 +2,7 @@ use crate::node_graph::freeze::classify::FusionKind;
 use crate::node_graph::parameters::{ParamDef, ParamType};
 use crate::node_graph::ports::{NodeInput, NodeOutput, PortType};
 
-use super::standalone::generate_standalone_ext;
+use super::standalone::{generate_standalone, StandaloneKernelSpec};
 use super::types::{dim_forms, TexDim, VOLUME_WORKGROUP_3D};
 
 /// Pins the `dim_forms` D3 workgroup string to [`VOLUME_WORKGROUP_3D`], the
@@ -55,17 +55,17 @@ fn generate_standalone_ext_threads_derived_uniforms_after_params() {
     // fields...>. `foo` (bare name) → f32; `cam_pos:vec3` → vec3<f32>.
     let body = "fn body(uv: vec2<f32>, dims: vec2<f32>, gain: f32, foo: f32, cam_pos: vec3<f32>) -> vec4<f32> {\n    return vec4<f32>(gain + foo + cam_pos.x, cam_pos.y, cam_pos.z, 1.0);\n}";
 
-    let generated = generate_standalone_ext(
-        FusionKind::Source,
+    let generated = generate_standalone(&StandaloneKernelSpec {
+        fusion_kind: FusionKind::Source,
         body,
-        &[],
-        &params,
-        &[],
-        &["foo", "cam_pos:vec3"],
-        &outputs,
-        false,
-        &[],
-    )
+        inputs: &[],
+        params: &params,
+        input_access: &[],
+        derived_uniforms: &["foo", "cam_pos:vec3"],
+        outputs: &outputs,
+        stencil_fetch: false,
+        includes: &[],
+    })
     .expect("synthetic source atom with derived uniforms generates");
 
     assert!(
@@ -150,17 +150,17 @@ fn generate_standalone_ext_expands_color_param_to_vec4() {
     ];
     let body = "fn body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, intensity: f32, tint: vec4<f32>) -> vec4<f32> {\n    return c * intensity * tint;\n}";
 
-    let generated = generate_standalone_ext(
-        FusionKind::Pointwise,
+    let generated = generate_standalone(&StandaloneKernelSpec {
+        fusion_kind: FusionKind::Pointwise,
         body,
-        &inputs,
-        &params,
-        &[],
-        &[],
-        &outputs,
-        false,
-        &[],
-    )
+        inputs: &inputs,
+        params: &params,
+        input_access: &[],
+        derived_uniforms: &[],
+        outputs: &outputs,
+        stencil_fetch: false,
+        includes: &[],
+    })
     .expect("color-param atom must generate");
 
     assert!(
