@@ -12,13 +12,13 @@
 
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{
-    BindingTarget, EffectGraphNode, EffectGraphWire, StringBindingDef,
+    BindingTarget, EffectGraphNode, EffectGraphWire, SerializedParamValue, StringBindingDef,
 };
 
 use crate::node_graph::gltf_load::GltfMaterialInfo;
 
 use super::MODEL_FILE_PARAM_ID;
-use super::assembly::{enum_val, int, plain_node, wire};
+use super::assembly::{enum_val, float, int, plain_node, wire};
 
 /// The per-object accumulators a map-family wire threads through: the running
 /// node/wire/string-binding vectors, the id source, the object's index and
@@ -275,4 +275,91 @@ fn wire_map_family(family: &MapFamily, m: &GltfMaterialInfo, asm: &mut ObjectAss
 
     asm.group_wires
         .push(wire(node_numeric_id, "out", asm.scene_object_id, family.port));
+}
+
+/// The six components of a `KHR_texture_transform` affine, in the order the
+/// per-map UV-transform params are named (`{prefix}m00` … `{prefix}ty`). Used
+/// by the per-map UV-transform loop in `object_group.rs`, which pairs each
+/// component name with the matching value off a borrowed `&m.<map>_uv_transform`
+/// (so the loop's `(prefix, transform)` pairs cannot themselves be const).
+pub(super) const UV_TRANSFORM_PARTS: [&str; 6] = ["m00", "m01", "m10", "m11", "tx", "ty"];
+
+/// One plain glTF-field → `node.pbr_material` param: a name and the extractor
+/// that reads its value straight off `GltfMaterialInfo`. The five COMPUTED
+/// params (color_a from `effective_alpha`, the roughness clamp, the const
+/// ambient floor, the gated emission_intensity, and the alpha_mode enum) are
+/// NOT rows — they stay explicit code adjacent to [`write_material_params`]'s
+/// call site in `object_group.rs` (RENDERER_RUNTIME_DECOMPOSITION_DESIGN.md
+/// D8: a closure-captured local smuggled into a "const" table is the tell
+/// that a row isn't a fact).
+struct MaterialParam {
+    name: &'static str,
+    value: fn(&GltfMaterialInfo) -> SerializedParamValue,
+}
+
+/// The plain field → param catalog. Extension factor defaults reproduce
+/// glTF's own implicit defaults (ior=1.5, specular=1.0, clearcoat=0.0, …), so
+/// a material without an extension writes byte-identical params — see
+/// `gltf_load.rs` and GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1 / GLB_CONFORMANCE
+/// _DESIGN.md G-P4/G-P5. Insertion order is irrelevant: `node.params` is a
+/// `BTreeMap`, so output is key-sorted regardless of walk order.
+const MATERIAL_PARAMS: &[MaterialParam] = &[
+    MaterialParam { name: "color_r", value: |m| float(m.base_color_factor[0]) },
+    MaterialParam { name: "color_g", value: |m| float(m.base_color_factor[1]) },
+    MaterialParam { name: "color_b", value: |m| float(m.base_color_factor[2]) },
+    MaterialParam { name: "metallic", value: |m| float(m.metallic) },
+    MaterialParam { name: "emission_r", value: |m| float(m.emissive[0]) },
+    MaterialParam { name: "emission_g", value: |m| float(m.emissive[1]) },
+    MaterialParam { name: "emission_b", value: |m| float(m.emissive[2]) },
+    MaterialParam { name: "alpha_cutoff", value: |m| float(m.alpha_cutoff) },
+    MaterialParam { name: "ior", value: |m| float(m.ior) },
+    MaterialParam { name: "specular", value: |m| float(m.specular_factor) },
+    MaterialParam { name: "specular_tint_r", value: |m| float(m.specular_color_factor[0]) },
+    MaterialParam { name: "specular_tint_g", value: |m| float(m.specular_color_factor[1]) },
+    MaterialParam { name: "specular_tint_b", value: |m| float(m.specular_color_factor[2]) },
+    MaterialParam { name: "clearcoat", value: |m| float(m.clearcoat_factor) },
+    MaterialParam { name: "clearcoat_roughness", value: |m| float(m.clearcoat_roughness_factor) },
+    MaterialParam { name: "sheen_color_r", value: |m| float(m.sheen_color_factor[0]) },
+    MaterialParam { name: "sheen_color_g", value: |m| float(m.sheen_color_factor[1]) },
+    MaterialParam { name: "sheen_color_b", value: |m| float(m.sheen_color_factor[2]) },
+    MaterialParam { name: "sheen_roughness", value: |m| float(m.sheen_roughness_factor) },
+    MaterialParam { name: "iridescence", value: |m| float(m.iridescence_factor) },
+    MaterialParam { name: "iridescence_ior", value: |m| float(m.iridescence_ior) },
+    MaterialParam {
+        name: "iridescence_thickness_min",
+        value: |m| float(m.iridescence_thickness_minimum),
+    },
+    MaterialParam {
+        name: "iridescence_thickness_max",
+        value: |m| float(m.iridescence_thickness_maximum),
+    },
+    MaterialParam { name: "anisotropy_strength", value: |m| float(m.anisotropy_strength) },
+    MaterialParam { name: "anisotropy_rotation", value: |m| float(m.anisotropy_rotation) },
+    MaterialParam { name: "dispersion", value: |m| float(m.dispersion) },
+    MaterialParam { name: "transmission", value: |m| float(m.transmission_factor) },
+    MaterialParam { name: "volume_thickness", value: |m| float(m.volume_thickness_factor) },
+    MaterialParam {
+        name: "volume_attenuation_distance",
+        value: |m| float(m.volume_attenuation_distance),
+    },
+    MaterialParam {
+        name: "volume_attenuation_color_r",
+        value: |m| float(m.volume_attenuation_color[0]),
+    },
+    MaterialParam {
+        name: "volume_attenuation_color_g",
+        value: |m| float(m.volume_attenuation_color[1]),
+    },
+    MaterialParam {
+        name: "volume_attenuation_color_b",
+        value: |m| float(m.volume_attenuation_color[2]),
+    },
+];
+
+/// Write the plain [`MATERIAL_PARAMS`] catalog onto a `node.pbr_material`
+/// node. The five computed params stay explicit at the call site.
+pub(super) fn write_material_params(mat_node: &mut EffectGraphNode, m: &GltfMaterialInfo) {
+    for param in MATERIAL_PARAMS {
+        mat_node.params.insert(param.name.to_string(), (param.value)(m));
+    }
 }

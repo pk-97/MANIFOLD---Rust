@@ -514,22 +514,16 @@ pub(super) fn build_object_group(
         // when present, so the graph editor reads as "Leaf" / "Bark" rather
         // than the anonymous "mat_0" / "mat_1" handle.
         mat_node.title = m.name.clone();
-        mat_node
-            .params
-            .insert("color_r".to_string(), float(m.base_color_factor[0]));
-        mat_node
-            .params
-            .insert("color_g".to_string(), float(m.base_color_factor[1]));
-        mat_node
-            .params
-            .insert("color_b".to_string(), float(m.base_color_factor[2]));
+        // P3-D T2: the plain glTF-field -> param inserts are a catalog in
+        // materials.rs, walked once by write_material_params. The five
+        // COMPUTED params below are NOT rows
+        // (they read a local, clamp, gate, or select an enum), so they stay
+        // explicit adjacent to the walk.
+        write_material_params(&mut mat_node, m);
         // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2b: `effective_alpha` is now
         // exactly `base_color.a` (see its definition above for why the old
         // transmission-darkening formula was removed).
-        mat_node
-            .params
-            .insert("color_a".to_string(), float(effective_alpha));
-        mat_node.params.insert("metallic".to_string(), float(m.metallic));
+        mat_node.params.insert("color_a".to_string(), float(effective_alpha));
         mat_node
             .params
             .insert("roughness".to_string(), float(m.roughness.max(0.01)));
@@ -538,22 +532,11 @@ pub(super) fn build_object_group(
         // dramatic "lit only by scene lights" look. The shared Ambient card
         // (below) raises it across every material to restore fill.
         mat_node.params.insert("ambient".to_string(), float(0.0));
-        mat_node
-            .params
-            .insert("emission_r".to_string(), float(m.emissive[0]));
-        mat_node
-            .params
-            .insert("emission_g".to_string(), float(m.emissive[1]));
-        mat_node
-            .params
-            .insert("emission_b".to_string(), float(m.emissive[2]));
         // `emission_intensity` is the existing wired multiplier on
-        // `node.pbr_material` — `KHR_materials_emissive_strength` folds
-        // into it directly rather than growing a new param (D5: the
-        // strength extension IS a multiplier on the same quantity this
-        // param already controls). No extension present → factor 1.0, so
-        // an emissive material still needs SOME emissive factor to glow
-        // (matches the pre-F-P4 "any factor channel > 0" gate).
+        // `node.pbr_material` — `KHR_materials_emissive_strength` folds into
+        // it directly (D5). No extension present → factor 1.0; gated so a
+        // non-emissive material stays dark (matches the pre-F-P4 "any factor
+        // channel > 0" gate).
         let emissive_lit = m.emissive.iter().any(|&c| c > 0.0);
         mat_node.params.insert(
             "emission_intensity".to_string(),
@@ -569,102 +552,6 @@ pub(super) fn build_object_group(
                 0 // Opaque
             }),
         );
-        mat_node
-            .params
-            .insert("alpha_cutoff".to_string(), float(m.alpha_cutoff));
-        // GLB_CONFORMANCE_DESIGN.md G-P4/D5: KHR_materials_specular + ior
-        // → F0 scale (`fs_pbr`); KHR_texture_transform → base-color UV
-        // affine (`resolve_albedo`). Every field defaults to the neutral
-        // value verified in `gltf_load.rs` (ior=1.5, specular_factor=1.0,
-        // specular_color_factor=[1,1,1], identity uv transform), so a
-        // material without these extensions wires byte-identical params.
-        mat_node.params.insert("ior".to_string(), float(m.ior));
-        mat_node
-            .params
-            .insert("specular".to_string(), float(m.specular_factor));
-        mat_node
-            .params
-            .insert("specular_tint_r".to_string(), float(m.specular_color_factor[0]));
-        mat_node
-            .params
-            .insert("specular_tint_g".to_string(), float(m.specular_color_factor[1]));
-        mat_node
-            .params
-            .insert("specular_tint_b".to_string(), float(m.specular_color_factor[2]));
-        // GLB_CONFORMANCE_DESIGN.md G-P5/D5: KHR_materials_clearcoat
-        // factors → the second GGX lobe (`fs_pbr`). Defaults (0.0/0.0)
-        // reproduce byte-identical pre-G-P5 output — see `gltf_load.rs`.
-        mat_node
-            .params
-            .insert("clearcoat".to_string(), float(m.clearcoat_factor));
-        mat_node.params.insert(
-            "clearcoat_roughness".to_string(),
-            float(m.clearcoat_roughness_factor),
-        );
-        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1: sheen, iridescence,
-        // anisotropy, dispersion, transmission+volume factors → uniform
-        // slots on `node.pbr_material` (`render_scene.wgsl` declares the
-        // matching struct fields but reads none of them yet — E2-E6 wire
-        // the shading math). Every default reproduces glTF's own implicit
-        // default, so a material without these extensions wires
-        // byte-identical params to pre-E1.
-        mat_node
-            .params
-            .insert("sheen_color_r".to_string(), float(m.sheen_color_factor[0]));
-        mat_node
-            .params
-            .insert("sheen_color_g".to_string(), float(m.sheen_color_factor[1]));
-        mat_node
-            .params
-            .insert("sheen_color_b".to_string(), float(m.sheen_color_factor[2]));
-        mat_node
-            .params
-            .insert("sheen_roughness".to_string(), float(m.sheen_roughness_factor));
-        mat_node
-            .params
-            .insert("iridescence".to_string(), float(m.iridescence_factor));
-        mat_node
-            .params
-            .insert("iridescence_ior".to_string(), float(m.iridescence_ior));
-        mat_node.params.insert(
-            "iridescence_thickness_min".to_string(),
-            float(m.iridescence_thickness_minimum),
-        );
-        mat_node.params.insert(
-            "iridescence_thickness_max".to_string(),
-            float(m.iridescence_thickness_maximum),
-        );
-        mat_node
-            .params
-            .insert("anisotropy_strength".to_string(), float(m.anisotropy_strength));
-        mat_node
-            .params
-            .insert("anisotropy_rotation".to_string(), float(m.anisotropy_rotation));
-        mat_node
-            .params
-            .insert("dispersion".to_string(), float(m.dispersion));
-        mat_node
-            .params
-            .insert("transmission".to_string(), float(m.transmission_factor));
-        mat_node
-            .params
-            .insert("volume_thickness".to_string(), float(m.volume_thickness_factor));
-        mat_node.params.insert(
-            "volume_attenuation_distance".to_string(),
-            float(m.volume_attenuation_distance),
-        );
-        mat_node.params.insert(
-            "volume_attenuation_color_r".to_string(),
-            float(m.volume_attenuation_color[0]),
-        );
-        mat_node.params.insert(
-            "volume_attenuation_color_g".to_string(),
-            float(m.volume_attenuation_color[1]),
-        );
-        mat_node.params.insert(
-            "volume_attenuation_color_b".to_string(),
-            float(m.volume_attenuation_color[2]),
-        );
         // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3/E4/E5/E6 (D1 revised):
         // sheen, iridescence, anisotropy, and now (E6) clearcoat/specular/
         // transmission/volume-thickness textures are all sampled (see the
@@ -672,7 +559,6 @@ pub(super) fn build_object_group(
         // texture in this doc.
         // Per-map KHR_texture_transform affines (G-P4) — one 6-param set
         // per map family, identity when the extension is absent.
-        let parts = ["m00", "m01", "m10", "m11", "tx", "ty"];
         for (prefix, xf) in [
             ("uv_", &m.base_color_uv_transform),
             ("nrm_uv_", &m.normal_uv_transform),
@@ -680,7 +566,7 @@ pub(super) fn build_object_group(
             ("occ_uv_", &m.occlusion_uv_transform),
             ("em_uv_", &m.emissive_uv_transform),
         ] {
-            for (part, value) in parts.iter().zip(xf.iter()) {
+            for (part, value) in UV_TRANSFORM_PARTS.iter().zip(xf.iter()) {
                 mat_node
                     .params
                     .insert(format!("{prefix}{part}"), float(*value));
