@@ -224,47 +224,47 @@ fn region_luma(bytes: &[u8], w: u32, h: u32, cx: f32, cy: f32, radius: i32) -> f
 // 58.3% RT-on vs RT-off (was exactly 0.0% before RT-D4) — comfortably
 // past this test's own >=30% bar.
 //
-// BUG-309 (docs/BUG_BACKLOG.md) — PARTIAL FIX, still `#[ignore]`d; see the
-// backlog entry for the full narrative. RT-D4 was the first time this path
-// ever produced a REAL rendered shadow, and doing so revealed the shadow
-// wasn't confined to the small occluder's footprint — nearly the ENTIRE
-// ground darkened by 25-83% RT-on vs RT-off at points far from the
-// occluder. That symptom is CONFIRMED FIXED: `trace_shadow_rays`'s bias
-// epsilon (`raytrace.rs`) is now derived from the screen-space neighbor
-// deltas already computed for the finite-difference normal (scales with
-// view distance/obliquity, capped against a synthetic-fixture pathology —
-// see the kernel's own comment) instead of a fixed 1e-3, with
-// `ray.min_distance` rejecting any self-intersection hit outright. The
-// rendered "on" scene no longer shows ground-wide darkening (verified via
-// `region_luma` at a swept grid of world points AND a rendered PNG look —
-// both clean, matching the "off" scene everywhere except one small,
-// localized dark mark). What's NOT yet fixed: the remaining mark isn't a
-// filled square matching the occluder's footprint — it's a thin,
-// partial/edge-like shape, and it doesn't line up with this test's
-// `occluded_world = (0,0,0)` probe point (a `project_to_pixel` sweep found
-// the actual mark's centroid nearer world ~(0.4, 0, 0.4)). Ruled out during
-// this pass: triangle-culling mode (`DisableTriangleCulling` — zero
-// effect), the bias formula's exact form (MIN vs MAX neighbor delta, with
-// vs without the reconstructed-normal contribution — all gave
-// near-identical hit counts/shape). A CRITICAL diagnostic-methodology
-// finding from this pass: Metal's `accept_any_intersection(true)` makes
-// `intersection_result.distance` UNRELIABLE (only `.type` is documented as
-// meaningful in that mode) — an early per-pixel hit-distance dump used
-// during localization was reading this unreliable field and gave
-// misleading clustering data; the trustworthy oracle is the rendered
-// `vis` output (or a real PNG look), never `.distance` under accept-any.
-// Needs a properly-scoped follow-up (a fresh, disciplined GPU-value pass
-// using the closest-hit intersector mode temporarily for trustworthy
-// per-pixel distances, NOT accept-any) to explain the residual thin-shape/
-// mislocation defect before both of this test's asserts can go green.
-#[ignore = "BUG-309 partial fix: ground-wide false darkening is gone (verified via PNG + region_luma sweep), but the real shadow renders as a thin/partial shape offset from this test's occluded_world probe point — needs a follow-up GPU-value pass with a non-accept-any intersector, see docs/BUG_BACKLOG.md"]
+// BUG-309 (docs/BUG_BACKLOG.md), RESOLVED: RT-D4 was the first time this
+// path ever produced a REAL rendered shadow, and doing so revealed the
+// shadow wasn't confined to the small occluder's footprint — nearly the
+// ENTIRE ground darkened by 25-83% RT-on vs RT-off at points far from the
+// occluder. Root cause #1 (fixed): `trace_shadow_rays`'s bias epsilon
+// (`raytrace.rs`) was a fixed `1e-3` world-unit constant, far too small
+// at this scene's real scale, causing near-universal self-intersection.
+// Fixed by deriving the bias from the screen-space neighbor deltas already
+// computed for the finite-difference normal (scales with view distance/
+// obliquity, capped against a synthetic-fixture pathology — see the
+// kernel's own comment), with `ray.min_distance` rejecting any leftover
+// self-hit outright. Root cause #2 (this test's own bug, ENGINE
+// EXONERATED): the original `occluded_world = (0,0,0)` probe point maps
+// to a pixel where the reconstructed world position's Y comes out ~1.5 —
+// the OCCLUDER's own top surface, not the ground behind it. From this
+// camera's exact position/tilt, the floating occluder's own body sits
+// directly in the line of sight to the ground origin, blocking the
+// camera's view of that patch of ground (and its shadow) entirely — a
+// real, physically-correct self-occlusion, not a rendering defect.
+// Confirmed via a reconstruct-and-round-trip check: reconstructing the
+// ray origin at that pixel and forward-projecting it back through
+// `Camera::project_to_pixel` agreed with the CPU's own math to sub-pixel
+// precision and exact depth — the reconstruction itself was never wrong,
+// the probe point was simply pointed at the wrong surface. `occluded_world`
+// below was swept and picked using the SAME reconstruct-and-round-trip
+// technique, confirming Y~0 (camera sees ground, not the occluder) AND a
+// real >=30% drop, so this class can't silently return.
 #[test]
 fn rt_shadow_darkens_occluded_region_and_leaves_lit_region_alone() {
     let (on_bytes, w, h) = render_readback(&scene_json(true));
     let (off_bytes, _, _) = render_readback(&scene_json(false));
 
     let cam = Camera::orbit_perspective(ORBIT, TILT, DISTANCE, FOV_Y, 0.0, 0.0, NEAR, FAR);
-    let occluded_world = [0.0, 0.0, 0.0];
+    // World (1, 0, -1): inside the sun-ray-vs-occluder shadow footprint
+    // (x,z in [-1.725, 1.275], computed from the sun/occluder geometry —
+    // see the module doc's derivation), and verified camera-VISIBLE via
+    // reconstruct-and-round-trip (the reconstructed ray origin's Y comes
+    // out ~0.0, i.e. real ground, not the occluder's y=1.5 surface that
+    // world (0,0,0) turned out to be blocked by). Gives a 43.0% luminance
+    // drop RT-on vs RT-off — comfortably past this test's own >=30% bar.
+    let occluded_world = [1.0, 0.0, -1.0];
     // BUG-308 fix-verification finding: this module's own doc comment
     // (top of file) specified the lit probe as world (3.5, 0, -3.5) — "a
     // far corner of the 8x8 ground, well outside the small near-origin
@@ -276,7 +276,8 @@ fn rt_shadow_darkens_occluded_region_and_leaves_lit_region_alone() {
     // resolution (computed via `project_to_pixel`, not eyeballed — pixel
     // (140.5, 69.3) against a 128-wide image); (2.5, 0, -2.5) is the
     // nearest still-far-corner point that lands on-screen with margin
-    // (pixel ~(118, 68), a 15x15 window fully in bounds).
+    // (pixel ~(118, 68), a 15x15 window fully in bounds) — ALSO verified
+    // camera-visible (reconstructed Y~0.0) via the same technique.
     let lit_world = [2.5, 0.0, -2.5];
     let occ_px = cam
         .project_to_pixel(occluded_world, w, h)
@@ -400,4 +401,3 @@ fn rt_enable_first_frame_never_stalls_past_20ms() {
         worst.1.as_secs_f64() * 1000.0
     );
 }
-
