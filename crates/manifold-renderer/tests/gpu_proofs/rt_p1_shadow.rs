@@ -176,3 +176,126 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
          lit — got {vis_lit}"
     );
 }
+
+/// BUG-309 follow-up (docs/BUG_BACKLOG.md) — the SAME fixture as
+/// `shadow_rays_2tri_occluder_matches_cpu_oracle` above, but with a SECOND
+/// BLAS added (a large ground quad at `z = 0`, instance index 0) ahead of
+/// the occluder (now instance index 1) — mirroring `render_scene.rs`'s
+/// real two-object TLAS (ground first, occluder second) exactly, which
+/// the single-BLAS proof above never exercised. This is the permanent
+/// gatekeeper for the whole "multi-BLAS instance/transform wiring" class:
+/// BUG-309's remaining defect (the real scene's shadow only covering
+/// roughly half its computed-correct footprint) was suspected to be a
+/// multi-BLAS-specific bug, and this is the minimal rig to catch it if it
+/// is one, kept green regardless of whether it reproduces the defect
+/// (the isolated single-BLAS-only proof is HOW this bug class escaped).
+///
+/// The ground quad sits BEHIND both texels' rays (rays travel `+z` from
+/// `z=0.3+bias`, away from `z=0`) — it must never register a hit itself,
+/// and its mere presence in the TLAS must not change the occluder-hit
+/// outcome for either texel.
+#[test]
+fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
+    let h = harness::shared();
+    let device = &h.device;
+
+    // ─── Object 0: ground quad at z=0, spanning x,y in [-10,10] ──
+    let ground_verts = [
+        PackedVertex { pos: [-10.0, -10.0, 0.0] },
+        PackedVertex { pos: [10.0, -10.0, 0.0] },
+        PackedVertex { pos: [10.0, 10.0, 0.0] },
+        PackedVertex { pos: [-10.0, 10.0, 0.0] },
+    ];
+    let ground_indices: [u32; 6] = [0, 1, 2, 0, 2, 3];
+    let ground_vertex_buffer = write_shared_buffer(device, &ground_verts);
+    let ground_index_buffer = write_shared_buffer(device, &ground_indices);
+
+    // ─── Object 1: occluder quad at z=1, x in [-1, 0], y in [-1, 1] ──
+    // (byte-identical to the single-BLAS proof's occluder above.)
+    let occ_verts = [
+        PackedVertex { pos: [-1.0, -1.0, 1.0] },
+        PackedVertex { pos: [0.0, -1.0, 1.0] },
+        PackedVertex { pos: [0.0, 1.0, 1.0] },
+        PackedVertex { pos: [-1.0, 1.0, 1.0] },
+    ];
+    let occ_indices: [u32; 6] = [0, 1, 2, 0, 2, 3];
+    let occ_vertex_buffer = write_shared_buffer(device, &occ_verts);
+    let occ_index_buffer = write_shared_buffer(device, &occ_indices);
+
+    let tracer = MetalShadowRayTracer::new(device);
+    let objects = [
+        RtObjectGeometry {
+            vertex_buffer: &ground_vertex_buffer,
+            vertex_stride: std::mem::size_of::<PackedVertex>() as u32,
+            vertex_offset: 0,
+            index_buffer: Some(&ground_index_buffer),
+            triangle_count: 2,
+            transform: IDENTITY,
+        },
+        RtObjectGeometry {
+            vertex_buffer: &occ_vertex_buffer,
+            vertex_stride: std::mem::size_of::<PackedVertex>() as u32,
+            vertex_offset: 0,
+            index_buffer: Some(&occ_index_buffer),
+            triangle_count: 2,
+            transform: IDENTITY,
+        },
+    ];
+    let accel = tracer.build_accel(device, &objects);
+
+    // ─── Depth fixture: identical to the single-BLAS proof ──
+    let depth_px: [f32; 2] = [0.3, 0.3];
+    let depth_tex = upload_texture_f32(device, 2, 1, GpuTextureFormat::Depth32Float, &depth_px, "rt-p1-2blas-depth");
+
+    let out_sv = device.create_texture(&GpuTextureDesc {
+        width: 2,
+        height: 1,
+        depth: 1,
+        format: GpuTextureFormat::Rgba32Float,
+        dimension: GpuTextureDimension::D2,
+        usage: GpuTextureUsage::SHADER_WRITE | GpuTextureUsage::COPY_SRC,
+        label: "rt-p1-2blas-out_sv",
+        mip_levels: 1,
+    });
+
+    let params = ShadowRayParams::new([0.0, 0.0, 1.0], 0.0, 1, 0, [2, 1], [2, 1], IDENTITY);
+    let params_buffer = device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
+
+    let mut encoder = device.create_encoder("rt-p1-2blas-shadow-proof");
+    tracer.dispatch_shadow_rays(
+        &mut encoder,
+        &accel,
+        &params,
+        &params_buffer,
+        &depth_tex,
+        &out_sv,
+        "trace_shadow_rays-2blas-proof",
+    );
+    encoder.commit_and_wait_completed();
+
+    let readback_buf = device.create_buffer_shared(2 * 4 * 4);
+    let mut enc2 = device.create_encoder("rt-p1-2blas-readback");
+    enc2.copy_texture_to_buffer(&out_sv, &readback_buf, 2, 1, 2 * 4 * 4);
+    enc2.commit_and_wait_completed();
+    let ptr = readback_buf
+        .mapped_ptr()
+        .expect("shared readback buffer must expose mapped pointer");
+    let bytes: &[u8] = unsafe { slice::from_raw_parts(ptr.cast::<c_void>().cast::<u8>(), 32) };
+    let floats: &[f32] = unsafe { slice::from_raw_parts(bytes.as_ptr().cast::<f32>(), 8) };
+
+    let vis_occluded = floats[0];
+    let vis_lit = floats[4];
+
+    assert_eq!(
+        vis_occluded, 0.0,
+        "two-BLAS fixture: texel 0 (world x=-0.5, inside the occluder's x in [-1,0]) must be \
+         exactly shadowed — got {vis_occluded}. The ground BLAS at instance index 0 must not \
+         change this outcome from the single-BLAS proof."
+    );
+    assert_eq!(
+        vis_lit, 1.0,
+        "two-BLAS fixture: texel 1 (world x=0.5, outside the occluder's x in [-1,0]) must be \
+         exactly lit — got {vis_lit}. If this reads 0.0, the ray is self-intersecting the ground \
+         BLAS (or the ground is wrongly shadowing) — the multi-BLAS wiring class BUG-309 suspected."
+    );
+}
