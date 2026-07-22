@@ -78,6 +78,12 @@ pub fn card_visible_for(type_id: &str, param: &str) -> bool {
         ],
         "node.transform_3d" => &["pos_x", "pos_y", "pos_z", "rot_x", "rot_y", "rot_z"],
         "node.bake_environment" => &["intensity", "fill"],
+        // RAYTRACING_DESIGN.md D14/§5.2: the auto-stamp already curates the
+        // root to exactly these two (RENDER_SCENE_STAMPED_PARAMS), and the
+        // Scene Setup panel's World "Rendering" section renders through the
+        // card-filtered surface — hidden here means the section shows zero
+        // rows anywhere.
+        "node.render_scene" => &["rt_enabled", "temporal_upscale"],
         _ => &[],
     };
     visible.contains(&param)
