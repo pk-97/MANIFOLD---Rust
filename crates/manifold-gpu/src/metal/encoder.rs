@@ -507,6 +507,124 @@ impl GpuEncoder {
         }
     }
 
+    /// Dispatch a compute shader that also binds a Metal acceleration
+    /// structure (RAYTRACING_DESIGN.md P1). `dispatch_compute`'s
+    /// `GpuBinding` set has no acceleration-structure variant — Metal
+    /// ray tracing binds it via a distinct `setAccelerationStructure:
+    /// atBufferIndex:` call, not `setBuffer:`. `accel_binding` is the
+    /// pipeline's WGSL-style @binding(N) for the accel structure (looked
+    /// up through the same `SlotMap` as every other binding); `bindings`
+    /// covers the rest exactly like `dispatch_compute`. Not part of the
+    /// per-slot resource cache (`ComputeBindCache`) that `dispatch_compute`
+    /// uses — this dispatches once or twice per frame (the shadow-ray
+    /// pass), not the many-dispatches-per-frame case the cache exists for.
+    pub fn dispatch_compute_with_accel(
+        &mut self,
+        pipeline: &GpuComputePipeline,
+        accel_binding: u32,
+        accel: &super::raytrace::RtAccel,
+        bindings: &[GpuBinding],
+        workgroups: [u32; 3],
+        label: &str,
+    ) {
+        let enc = if self.profile.is_some() {
+            self.begin_profiled_compute(label)
+        } else {
+            self.ensure_compute()
+        };
+        unsafe {
+            enc.pushDebugGroup(&NSString::from_str(label));
+            enc.setComputePipelineState(&pipeline.state);
+            if let Some(slot) = pipeline.slot_map.get(accel_binding) {
+                enc.setAccelerationStructure_atBufferIndex(
+                    Some(&accel.structure),
+                    slot.metal_index as usize,
+                );
+            }
+        }
+        for binding in bindings {
+            match binding {
+                GpuBinding::Buffer {
+                    binding: b,
+                    buffer,
+                    offset,
+                } => {
+                    let Some(slot) = pipeline.slot_map.get(*b) else {
+                        continue;
+                    };
+                    unsafe {
+                        enc.setBuffer_offset_atIndex(
+                            Some(&buffer.raw),
+                            *offset as usize,
+                            slot.metal_index as usize,
+                        );
+                    }
+                }
+                GpuBinding::Texture {
+                    binding: b,
+                    texture,
+                } => {
+                    let Some(slot) = pipeline.slot_map.get(*b) else {
+                        continue;
+                    };
+                    unsafe {
+                        enc.setTexture_atIndex(Some(&texture.raw), slot.metal_index as usize);
+                    }
+                }
+                GpuBinding::Sampler {
+                    binding: b,
+                    sampler,
+                } => {
+                    let Some(slot) = pipeline.slot_map.get(*b) else {
+                        continue;
+                    };
+                    unsafe {
+                        enc.setSamplerState_atIndex(
+                            Some(&sampler.raw),
+                            slot.metal_index as usize,
+                        );
+                    }
+                }
+                GpuBinding::Bytes { binding: b, data } => {
+                    let Some(slot) = pipeline.slot_map.get(*b) else {
+                        continue;
+                    };
+                    unsafe {
+                        enc.setBytes_length_atIndex(
+                            NonNull::new(data.as_ptr() as *mut c_void).unwrap(),
+                            data.len(),
+                            slot.metal_index as usize,
+                        );
+                    }
+                }
+            }
+        }
+        let wg = pipeline.workgroup_size;
+        unsafe {
+            enc.dispatchThreadgroups_threadsPerThreadgroup(
+                MTLSize {
+                    width: workgroups[0] as usize,
+                    height: workgroups[1] as usize,
+                    depth: workgroups[2] as usize,
+                },
+                MTLSize {
+                    width: wg[0] as usize,
+                    height: wg[1] as usize,
+                    depth: wg[2] as usize,
+                },
+            );
+            enc.popDebugGroup();
+        }
+        // Cross-dispatch cache invalidation: this path doesn't populate
+        // `compute_cache`, but a subsequent `dispatch_compute` call in the
+        // same encoder must not skip a `setBuffer`/`setTexture` because
+        // the cache still thinks a slot holds what it held before this
+        // accel-structure dispatch touched it. Clear the cache wholesale
+        // — cheap (one dispatch/frame) and correct, vs. tracking exactly
+        // which slots this call touched.
+        self.compute_cache.clear();
+    }
+
     /// Insert a buffer-scope memory barrier on the active compute encoder.
     /// Required when a subsequent dispatch in the same encoder must observe
     /// the writes (storage buffers, atomics) from a preceding dispatch.

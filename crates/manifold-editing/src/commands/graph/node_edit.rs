@@ -1736,6 +1736,100 @@ mod tests {
         assert!(def.nodes.iter().any(|n| n.type_id == "node.blur"));
     }
 
+    /// RAYTRACING_DESIGN.md P1: the scene-level `rt_enabled` toggle wires
+    /// onto `node.render_scene`'s existing W0 `ParamDef` (RT W0 commit
+    /// f76253f5) through this SAME generic path every other node param
+    /// already uses — no bespoke command, no bespoke serialization.
+    /// `SetGraphNodeParamCommand` writes into `EffectGraphNode::params:
+    /// BTreeMap<String, SerializedParamValue>`, a plain serde map with no
+    /// per-param field to add; this proves both halves of the P1
+    /// deliverable ("through the existing scene def + EditingService
+    /// path... serialized — round-trip gate applies") against a
+    /// `node.render_scene`-typed node, mirroring
+    /// `graph_edits_survive_json_round_trip`'s save/reload shape.
+    #[test]
+    fn rt_enabled_toggle_survives_editing_service_and_json_round_trip() {
+        let (mut project, id) = project_with_one_master_effect();
+        let mut def = mirror_catalog_default();
+        // Registry-less at this layer (per `SetGraphNodeParamCommand`'s
+        // doc) — a plain fixture node with `node.render_scene`'s type_id
+        // is enough to prove the generic param-set + serialize path; the
+        // real `ParamDef`/default (W0) lives in `manifold-renderer`, which
+        // `manifold-editing` doesn't depend on.
+        def.nodes.push(EffectGraphNode {
+            id: 99,
+            node_id: manifold_core::NodeId::new("scene"),
+            type_id: "node.render_scene".to_string(),
+            handle: Some("scene".to_string()),
+            params: BTreeMap::new(),
+            exposed_params: Default::default(),
+            editor_pos: None,
+            wgsl_source: None,
+            title: None,
+            output_formats: BTreeMap::new(),
+            output_canvas_scales: BTreeMap::new(),
+            group: None,
+        });
+        project.find_effect_by_id_mut(&id).unwrap().graph = Some(def.clone());
+
+        let mut cmd = SetGraphNodeParamCommand::new(
+            GraphTarget::Effect(id.clone()),
+            99,
+            "rt_enabled".to_string(),
+            SerializedParamValue::Bool { value: true },
+            def,
+        );
+        cmd.execute(&mut project);
+
+        let fx = project.find_effect_by_id(&id).unwrap();
+        let node = fx
+            .graph
+            .as_ref()
+            .unwrap()
+            .nodes
+            .iter()
+            .find(|n| n.id == 99)
+            .unwrap();
+        assert_eq!(
+            node.params.get("rt_enabled"),
+            Some(&SerializedParamValue::Bool { value: true }),
+            "EditingService write lands on the scene node's rt_enabled param"
+        );
+
+        // Save/reload — the P1 gate's round-trip probe.
+        let json = serde_json::to_string(fx).unwrap();
+        let back: manifold_core::effects::PresetInstance = serde_json::from_str(&json).unwrap();
+        let node = back
+            .graph
+            .as_ref()
+            .unwrap()
+            .nodes
+            .iter()
+            .find(|n| n.id == 99)
+            .unwrap();
+        assert_eq!(
+            node.params.get("rt_enabled"),
+            Some(&SerializedParamValue::Bool { value: true }),
+            "rt_enabled survives save/reload"
+        );
+
+        // Undo removes it — same contract as every other graph-node param.
+        cmd.undo(&mut project);
+        let fx = project.find_effect_by_id(&id).unwrap();
+        let node = fx
+            .graph
+            .as_ref()
+            .unwrap()
+            .nodes
+            .iter()
+            .find(|n| n.id == 99)
+            .unwrap();
+        assert!(
+            !node.params.contains_key("rt_enabled"),
+            "undo restores the pre-toggle (absent = ParamDef default false) state"
+        );
+    }
+
     #[test]
     fn add_graph_node_against_generator_target_lifts_layer_generator_graph() {
         let (mut project, lid) = project_with_one_generator_layer();

@@ -20,6 +20,7 @@ mod format;
 mod frame_fence;
 mod msl_cache;
 mod profiling;
+pub mod raytrace;
 mod shader_compiler;
 pub mod surface;
 mod texture_pool;
