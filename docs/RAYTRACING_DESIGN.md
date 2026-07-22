@@ -1,6 +1,6 @@
 # Ray Tracing — hybrid RT lighting for hero scenes
 
-**Status:** RT v1 WAVE LANDED on main 2026-07-23 (overnight run, D12; wave tip merged `519d01ee`+C4 `bff0fa15`, full gate green: nextest 3879, clippy+deny clean, gpu-proofs 77/77). SHIPPED: W0 stored G-buffer (D14, BUG-136 velocity math proved correct), P1 hard shadow rays (D16 forward integration; BUG-308 accel race + BUG-309 bias epsilon fixed en route, D17; BUG-310 tracer prewarm fixed at landing), P2 soft shadows + AO + demodulated temporal accumulation with D3/RT-D2 node-local resets, P3 emissive GI + sun-bounce + RT volumetrics (D4/D5), P4 MetalFX temporal SEAM-ONLY (scaler + shared TemporalResetDetector + jitter + toggle landed; the live reduced-res-render→upscale path into scene output is NOT wired — follow-on). OPEN: Peter's look pass (denoiser/accumulation constants are named tunables in render_scene.rs/raytrace.rs); P5 export (D13, own trigger); P6 frame interp (Tahoe, D6/D8). · 2026-07-23 · Fable
+**Status:** RT v1 WAVE LANDED on main 2026-07-23 (overnight run, D12; wave tip merged `519d01ee`+C4 `bff0fa15`, full gate green: nextest 3879, clippy+deny clean, gpu-proofs 77/77). SHIPPED: W0 stored G-buffer (D14, BUG-136 velocity math proved correct), P1 hard shadow rays (D16 forward integration; BUG-308 accel race + BUG-309 bias epsilon fixed en route, D17; BUG-310 tracer prewarm fixed at landing), P2 soft shadows + AO + demodulated temporal accumulation with D3/RT-D2 node-local resets, P3 emissive GI + sun-bounce + RT volumetrics (D4/D5), P4 MetalFX temporal SEAM-ONLY (scaler + shared TemporalResetDetector + jitter + toggle landed; the live reduced-res-render→upscale path into scene output is NOT wired — follow-on). 2026-07-23 Peter's first look: three integration bugs found+fixed same day (toggle visibility `6e44894e`, ambient-knob wiring `7b3d8dd2`, sun double-count `818a06b0`); verdict = v1 is a landed skeleton, not stage-ready — ghosting (BUG-311) + noise (BUG-312) + depth-derived normals are structural gaps. OPEN: §8 v2 roadmap (Tier 1 = reprojection + real normals + denoiser, one amendment) is the next RT work; Peter's constant-tuning pass only meaningful after Tier 1; P5 export (D13, own trigger); P6 frame interp (Tahoe, D6/D8). · 2026-07-23 · Fable
 **Prerequisites:** none for P0. P1+ gated on P0 numbers and on RENDERING_INFRA_V2 §2 (G-buffer/motion vectors) for temporal pieces.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
@@ -137,3 +137,47 @@ Cut from wave: P5 export (D13), P6 frame interp (D6/D8). Escalation lines (misfi
 - **Two concurrent RT scenes (crossfade)** — budget for 2× or design non-overlapping transitions; decide with P0 numbers in hand.
 - **Frame-budget sharing measurement** — P0 measures RT solo; a real-project run (RT scene + layers + effects + UI + encode) is the phase-2 measurement before any "60fps" claim about shows.
 - **Min-OS floor for the product** — Peter decides when D6's feature exists.
+
+## 8. v2 roadmap — from landed skeleton to stage-ready (captured 2026-07-23, Peter's first real look)
+
+Peter's first in-app session with RT v1 (apricot scene) found three integration bugs — all
+fixed same-day — and established that the remaining gaps are structural, not tuning. This
+section is the durable brief for the next RT session.
+
+**Fixed 2026-07-23 (context for the roadmap, not open work):**
+- RT toggles invisible everywhere — `card_visible_for` had no `node.render_scene` arm (`6e44894e`).
+- RT ambient floor unremovable — now rides the scene Ambient knob; knob 0 = true black (`7b3d8dd2`).
+- Sun counted twice — the irradiance kernel carried its own sun*n·l*vis copy on top of the
+  raster light loop's; irradiance is now ambient*ao + gi only (`818a06b0`). Post-fix probe:
+  occluded region drop 45.5%, lit region change 2.7% (`rt_p1_region_probe`, 18/18 rt proofs green).
+
+**Tier 1 — one amendment, shared infrastructure, do first (unblocks everything):**
+1. **Motion-reprojected, validity-tested accumulation** (BUG-311, HIGH). `accumulate_irradiance`
+   blends same-texel history — lighting ghosts behind ANY movement. Reproject through motion
+   vectors (`prev_view_proj` + per-object `prev_model` already exist for MetalFX), reject on
+   depth/normal mismatch, fall back to current at disocclusions. SVGF-style.
+2. **Real surface normals in the kernel.** Rays currently use depth-buffer finite-difference
+   normals — camera-facing, wrong at silhouettes/thin geometry (i.e. at every petal). Thread a
+   per-object vertex-normal buffer through `RtObjectGeometry` (the same G-buffer plumbing the
+   reprojection validity test needs). Also upgrades the GI bounce from its flat-cosine stand-in.
+3. **Variance-guided denoiser** (BUG-312, blocked on 1). Replace the depth-only bilateral
+   upsample with an SVGF-class spatial+temporal filter; only after that, re-judge the ray
+   budgets (the committed constants in render_scene.rs are placeholders for accumulated input).
+
+**Tier 2 — correctness + cost, after Tier 1:**
+4. **Alpha-aware rays.** Intersectors `force_opacity(opaque)` — cutout foliage shadows wrong.
+5. **Live MetalFX wiring.** The P4 seam exists (scaler, jitter, toggle); the reduced-res-render →
+   upscale path into scene output is still unwired. Same motion vectors as Tier-1 item 1.
+
+**Tier 3 — the SOTA features, pick by show need (all depend on Tier 1's stack):**
+6. **Many-light sampling (ReSTIR).** RT shadows are sun-only today; every other light is still a
+   shadow map. For MANIFOLD's emissive/strobe-heavy scene class this is the highest-value one.
+7. **RT reflections** (specular rays) — the most visible missing RT feature.
+8. **Multi-bounce GI** (path-traced or probe-cached) — v1 is one bounce, flat approximation.
+9. **RT translucency / volumetric interaction** — light through petals, rays through haze;
+   furthest out, closest to the Latent Space aesthetic.
+
+Verification instrument for all of it: `rt_p1_region_probe` (numeric region-luminance A/B through
+the real node path) + Peter's in-app look (L2). Motion artifacts need a MOVING oracle — a
+scripted-orbit capture diffing consecutive frames, to be built with Tier 1; a green still-frame
+probe cannot see BUG-311's class.
