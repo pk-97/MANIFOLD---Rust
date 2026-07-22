@@ -37,6 +37,7 @@ Extend, don't redesign. Instruction to executor: RT is an **extension of the REA
 - **D11 — Mode B committed (Peter, 2026-07-22).** Native-res raster + half-res soft-shadow/AO/GI rays, depth-aware upsample of the lighting buffers (trivial pass — ray *count* is the cost lever; native-res rays = 4× and blows budget). 120-frame 4K run WAIVED by Peter: interim numbers + visual read decided it. Modes A/C dead.
 - **D12 — Single overnight wave, Fable→Opus→Sonnet (Peter, 2026-07-22).** Fable writes briefs (kernel signatures + required proofs) and reviews — writes no code; Opus dispatches; Sonnet lanes execute, porting the P0 prototype kernels rather than inventing. Spine: RENDERING_INFRA_V2 §2 (G-buffer/motion vectors; proves BUG-136) → P1 → P2+P3; P4 needs only infra §2, runs parallel. Staged lanes on one branch (everything touches the scene pass); only independent pieces fan out. Wave dispatches against post-Wave-3 layout. Denoiser look + final visual sign-off = Peter's morning gate.
 - **D13 — P5 export path cut from this wave (Peter, 2026-07-22).** D7's design stands; build later, own trigger. P6 frame interpolation stays Tahoe-deferred (D6/D8); hand-rolled interpolation rejected outright.
+- **D14 — Stored G-buffer is per-scene, tied to the RT toggle.** RENDERING_INFRA_V2 §2's open decision (always-store vs opt-in vs tier-gated) is answered narrowly for this wave: a scene with RT enabled stores depth + motion vectors to real textures; a non-RT scene keeps today's memoryless path and pays zero bandwidth. Widening to always-store (DoF/motion-blur/SSR for raster scenes) stays RENDERING_INFRA_V2's measured decision, untouched. Amendable by Peter without reopening this doc's phases.
 
 ## 3. Expected wins (the stage translation)
 
@@ -70,9 +71,47 @@ Harness: `tools/rt_prototype/` (standalone crate, manifold-gpu path dep for devi
 - Kernel lesson (cost one GPU-hang debug): buffer-visible MSL structs MUST use `packed_float3` — bare `float3` is sizeof 16 and desyncs from `#[repr(C)] [f32;3]`. See `feedback_wgsl_vec3_alignment` memory (now covers both WGSL and MSL).
 - P0 self-emission gap: emissive surfaces light others but don't glow themselves (combine has no self-emission term) — add before judging emissive hero scenes.
 
-### 5.2 Wave plan (D12 — briefs to STANDARD before dispatch, against post-Wave-3 layout)
+### 5.2 Wave briefs (D12 — single overnight wave; Fable reviews per stage, Sonnet executes, Opus dispatches)
 
-Serial spine: **infra §2** (G-buffer/motion vectors, RENDERING_INFRA_V2 — proves BUG-136) → **P1** vertical slice (hard shadows in the real REALTIME_3D scene pass, mode-B layout, output through the graph) → **P2** soft shadows + AO + denoiser with D3 trigger-aware resets + **P3** emissive GI + volumetrics. Parallel to P2/P3: **P4** MetalFX temporal integration (needs only infra §2). One gpu-proofs run per stage. Cut from wave: P5 export (D13), P6 frame interp (D6/D8).
+Spine W0 → P1 → P2 + P3; P4 parallel after W0. Staged lanes on one wave branch — every stage touches the scene pass. Lanes port `tools/rt_prototype/` kernels (`shaders/rt_trace.metal`, `shaders/gbuffer.metal`, `src/accel.rs`, `src/trace.rs`), they do not invent. One gpu-proofs run per stage gate; the full workspace sweep once, at landing, in the warm main checkout. Every stage: clippy `-p` touched crates; forbidden everywhere — new `Arc<Mutex>`, Apple types above `manifold-gpu`, parallel old paths kept alive, scope-widening into raster code the brief doesn't name. Peter's morning gate closes the wave: denoiser look + final side-by-sides.
+
+**W0 — stored G-buffer, per-scene (D14; executes RENDERING_INFRA_V2 §2 narrowly).**
+- *Entry:* main post-Wave-3; `rg -n "memoryless" crates/manifold-renderer/src/node_graph/primitives/render_scene.rs` (re-verify the depth-is-tile-memory claim before touching it).
+- *Read-back:* RENDERING_INFRA_V2 §2 whole; REALTIME_3D §10 (why memoryless was chosen); `render_scene.rs` + `render_scene.wgsl`; BUG-136 backlog entry.
+- *Deliverables:* RT-enabled scenes write depth + per-pixel motion vectors to real textures (camera-derived analytic vectors: previous-frame view-proj reprojection; graph-deformed geometry vectors DEFERRED — camera motion dominates Peter's scenes); non-RT scenes byte-identical to today.
+- *Gate:* value test — motion vectors for a known camera delta vs CPU reprojection, exact math; BUG-136 oracle — two-frame orbit render, motion-vector visualization PNG, nonzero and direction-correct (this proves or reroots the bug — record outcome in the backlog); negative `rg`: no stored-G-buffer write on the non-RT path; `MANIFOLD_RENDER_TRACE=1` run, no frame >20ms.
+- *Demo:* motion-vector false-color PNG next to the beauty frame — L2.
+
+**P1 — hard shadow rays in the real scene pass (mode-B layout).**
+- *Entry:* W0 landed on the wave branch; `tools/rt_prototype/` builds and runs (`cargo run --manifest-path tools/rt_prototype/Cargo.toml -- --help`).
+- *Read-back:* D1/D9/D11/D14; `MANIFOLD_GPU_ARCHITECTURE.md`; prototype `accel.rs` + `rt_trace.metal`; `metalfx.rs` (the trait-seam precedent to copy).
+- *Deliverables:* `manifold-gpu` RT trait (accel-structure build/refit + shadow-ray dispatch; Metal impl only, trait shaped so Vulkan ray queries fit — D9); accel structure built at scene load for RT-enabled scenes, kept resident (toggling RT live never builds mid-frame); half-res shadow-ray pass + depth-aware upsample + combine term replacing the shadow-map contribution when RT is on; scene-level `rt_enabled` through the existing scene def + EditingService path (serialized — round-trip gate applies).
+- *Gate:* side-by-side PNG, raster PCSS vs RT hard shadows, apricot scan, matched camera/sun; round-trip — save/reload an RT-enabled project, RT still renders; negative `rg`: `objc2|MTL` zero hits outside `manifold-gpu`; no new id/addressing scheme in the diff (§4); gpu-proofs run.
+- *Performer gesture:* toggle RT on a playing scene mid-set — no hitch, no rebuild stall.
+- *Demo:* the side-by-side pair — L2 (flow-driver toggle flow if reachable — then L3).
+
+**P2 — soft shadows + AO + temporal accumulation with D3 resets.**
+- *Entry:* P1 landed on wave branch.
+- *Read-back:* D3 verbatim; prototype `trace.rs` (AO/GI gather); `ssao_gtao.rs` (the term being replaced); CORE_ENGINE_MAP trigger plumbing (where clip triggers surface to the renderer).
+- *Deliverables:* soft-shadow (area-light cone) + AO rays in the half-res pass; temporal accumulation buffer with explicit reset on clip-trigger cut; demodulated irradiance accumulation (strobe ≠ cut); GTAO term replaced (not paralleled) when RT on.
+- *Gate:* cut-reset proof — the §4 invariant's machine check: scripted cut over an RT scene, pixel-diff at cut+1 shows no ghost (VERIFY-AT-IMPL resolved here); strobe proof — light intensity flip, accumulation history retained (diff vs cold-start frame differs); negative `rg`: GTAO dispatch absent from the RT-on path; gpu-proofs run. Denoiser *parameter* choices land as named constants with ranges — tuning is Peter's morning gate, not the lane's.
+- *Demo:* three PNGs — steady / cut+1 / strobe+1 — L2.
+
+**P3 — emissive GI + RT volumetrics.**
+- *Entry:* P2 landed on wave branch.
+- *Read-back:* D4/D5; §5.1 self-emission gap note; prototype GI gather; VOLUMETRIC_LIGHT_DESIGN.md P1 findings (fog state of play, BUG-118 context — DEFERRED, do not touch).
+- *Deliverables:* emissive gather incl. sun-bounce term (the §5.1 gap: P0 had env+emissive only) + self-emission in combine (emissives glow themselves); volumetric march sampling shadow-ray visibility instead of shadow maps when RT on (D5); emissive-colored volumetric glow.
+- *Gate:* emissive proof PNG — emissive hero object lights a neighbor AND glows itself; god-ray PNG through canopy geometry; value test on the combine term (CPU-computed expected for a 2-triangle emissive fixture); gpu-proofs run.
+- *Demo:* emissive + god-ray PNGs — L2.
+
+**P4 — MetalFX temporal upscaling (parallel lane; needs W0 only, not P1).**
+- *Entry:* W0 landed on wave branch.
+- *Read-back:* `metalfx.rs` whole (spatial variant is the template); D9; W0's motion-vector formats.
+- *Deliverables:* temporal-variant behind the same `manifold-gpu` upscaler seam as spatial; camera jitter sequence in the scene pass when temporal upscaling is on; history reset wired to the same D3 trigger signal as P2's accumulator (shared plumbing, built once — whoever lands second wires to the first's signal, dispatcher sequences this); per-scene quality mode: native vs temporal-upscaled.
+- *Gate:* upscaled-vs-native PNG pair at matched params (reviewer judges softness/ghosting); cut-reset proof same as P2's oracle; negative `rg`: no second trigger-reset plumbing path; gpu-proofs run.
+- *Demo:* the PNG pair — L2.
+
+Cut from wave: P5 export (D13), P6 frame interp (D6/D8). Escalation lines (misfit = stop and park, dispatcher charter applies): RT trait shape that Vulkan ray queries can't satisfy; motion vectors for graph-deformed geometry (deferred, but a lane that finds it load-bearing stops); anything wanting a new `Arc<Mutex>`.
 
 ## 6. Decided — do not reopen
 
