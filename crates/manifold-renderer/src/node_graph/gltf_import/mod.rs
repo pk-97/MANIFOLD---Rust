@@ -28,26 +28,11 @@
 //! installs the result on a new generator layer via
 //! `manifold_editing::commands::layer::ImportModelLayerCommand`.
 
-use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use crate::node_graph::scene_exposure::metadata_for_node_type;
-use manifold_core::scene_exposure::stamp_scene_node_exposures_into;
-use manifold_core::NodeId;
-use manifold_core::PresetTypeId;
-use manifold_core::effect_graph_def::{
-    BindingDef, BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_INPUT_TYPE_ID,
-    GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, GroupDef, GroupInterface, InterfacePortDef, ParamSpecDef,
-    PresetMetadata, SerializedParamValue, SkipModeDef, StringBindingDef, StringParamSpecDef,
-};
+use manifold_core::effect_graph_def::EffectGraphDef;
 
-use super::boundary_nodes::{FINAL_OUTPUT_TYPE_ID, GENERATOR_INPUT_TYPE_ID};
 use super::gltf_load;
-use super::gltf_load::GltfImportSummary;
-
-use crate::node_graph::primitives::DEFAULT_NEAR as CAMERA_NEAR_DEFAULT;
-use crate::node_graph::primitives::gltf_anim_shared::LOOP_MODES;
-use crate::node_graph::primitives::render_scene::OBJECT_SAFETY_MAX;
 
 mod animation;
 mod assembly;
