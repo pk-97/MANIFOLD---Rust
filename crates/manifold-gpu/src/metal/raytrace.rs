@@ -32,6 +32,9 @@
 //! equivalent) needs a new `GpuEncoder` method,
 //! `dispatch_compute_with_accel` in `encoder.rs`.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use objc2::AnyThread;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -95,6 +98,18 @@ pub struct RtAccel {
     /// CPU-writable instance-descriptor buffer (transform per object).
     /// Retained here so `refit_accel` can rewrite transforms in place.
     instance_buffer: GpuBuffer,
+    /// BUG-308/RT-D4: `build_accel`/`refit_accel` are async (a single
+    /// command buffer is `commit()`-ed, never `waitUntilCompleted()`-ed,
+    /// mid-frame) — set `true` by that buffer's completion handler once
+    /// the GPU has actually finished building/refitting. `render_scene.rs`
+    /// must not read this structure via `dispatch_shadow_rays` until this
+    /// is `true` (falls back to the raster shadow-map path meanwhile);
+    /// starts `false` the instant a fresh build is enqueued, including
+    /// across a refit (briefly not-ready while the refit's async build
+    /// runs — the OLD instance transforms stay valid to read until then,
+    /// this flag exists so the caller can choose to wait for the FRESH
+    /// ones instead of racing the read against the in-flight refit).
+    pub ready: Arc<AtomicBool>,
 }
 
 // Safety: matches every other manifold-gpu resource wrapper (`GpuTexture`,
@@ -124,7 +139,18 @@ pub struct RtObjectGeometry<'a> {
     pub transform: [[f32; 4]; 4],
 }
 
-fn build_blas(device: &GpuDevice, obj: &RtObjectGeometry) -> Blas {
+/// Encode this object's BLAS build onto an ALREADY-OPEN acceleration-
+/// structure encoder (BUG-308/RT-D4 — see `build_accel`'s doc comment for
+/// why this is no longer its own command buffer). Returns the built
+/// `Blas` handle (valid to reference immediately — Metal resolves the
+/// GPU-side build asynchronously) plus the scratch buffer, which the
+/// caller must keep alive until the ENCLOSING command buffer's completion
+/// handler fires (the GPU reads it for the duration of the build).
+fn encode_blas_build(
+    device: &GpuDevice,
+    enc: &ProtocolObject<dyn MTLAccelerationStructureCommandEncoder>,
+    obj: &RtObjectGeometry,
+) -> (Blas, GpuBuffer) {
     let tri_desc = MTLAccelerationStructureTriangleGeometryDescriptor::descriptor();
     tri_desc.setVertexBuffer(Some(obj.vertex_buffer.raw()));
     tri_desc.setVertexFormat(MTLAttributeFormat::Float3);
@@ -149,28 +175,14 @@ fn build_blas(device: &GpuDevice, obj: &RtObjectGeometry) -> Blas {
         .expect("newAccelerationStructureWithSize failed");
     let scratch = device.create_buffer(sizes.buildScratchBufferSize.max(16) as u64);
 
-    // One-off build at scene load — bypasses `GpuEncoder` (its
-    // `EncoderState` has no acceleration-structure variant; adding one for
-    // a scene-load-only call would be a new encoder mode for no per-frame
-    // benefit) and goes straight to the queue, exactly as `accel.rs` does.
-    let cb = device
-        .raw_queue()
-        .commandBuffer()
-        .expect("Failed to acquire command buffer for RT BLAS build");
-    let enc = cb
-        .accelerationStructureCommandEncoder()
-        .expect("accelerationStructureCommandEncoder failed");
     enc.buildAccelerationStructure_descriptor_scratchBuffer_scratchBufferOffset(
         &structure,
         &descriptor,
         scratch.raw(),
         0,
     );
-    enc.endEncoding();
-    cb.commit();
-    unsafe { cb.waitUntilCompleted() };
 
-    Blas { structure }
+    (Blas { structure }, scratch)
 }
 
 /// Column-major `[[f32; 4]; 4]` -> Metal's `MTLPackedFloat4x3` (4 columns,
@@ -211,11 +223,40 @@ fn build_instance_buffer(device: &GpuDevice, objects: &[RtObjectGeometry]) -> Gp
 /// Build the resident two-level RT scene over `objects` — one BLAS per
 /// object (local-space geometry, no CPU transform) instanced into one
 /// TLAS via each object's world `transform`.
+///
+/// BUG-308/RT-D4: every BLAS build + the TLAS build are encoded onto ONE
+/// acceleration-structure command buffer, `commit()`-ed WITHOUT
+/// `waitUntilCompleted()` — no synchronous mid-frame stall (RAYTRACING_
+/// DESIGN.md P1's no-hitch performer gate: a synchronous wait here cost
+/// 110-167ms, a guaranteed dropped-frame class). The caller
+/// (`render_scene.rs`) must not use the returned `RtAccel` for a shadow-
+/// ray dispatch until `accel.ready` flips `true` (falls back to the
+/// raster shadow-map path meanwhile — see BUG-308's backlog entry for the
+/// full root-cause history: this ALSO fixes the actual bug, since this
+/// same command buffer is committed to the queue strictly after whatever
+/// this frame's shared per-frame `GpuEncoder` has already committed by
+/// the time this fn runs — `render_scene.rs` only calls this on the frame
+/// AFTER a topology/transform change is first observed, once the
+/// PREVIOUS frame's mesh-generation writes are guaranteed complete (the
+/// per-frame content-thread cycle commits+waits before the next frame's
+/// evaluate() ever runs) — never racing this frame's own still-encoding,
+/// uncommitted mesh-gen work).
 pub(crate) fn build_accel(device: &GpuDevice, objects: &[RtObjectGeometry]) -> RtAccel {
-    let blas: Vec<Blas> = objects
-        .iter()
-        .map(|o| build_blas(device, o))
-        .collect();
+    let cb = device
+        .raw_queue()
+        .commandBuffer()
+        .expect("Failed to acquire command buffer for RT accel build");
+    let enc = cb
+        .accelerationStructureCommandEncoder()
+        .expect("accelerationStructureCommandEncoder failed");
+
+    let mut blas = Vec::with_capacity(objects.len());
+    let mut blas_scratch = Vec::with_capacity(objects.len());
+    for o in objects {
+        let (b, scratch) = encode_blas_build(device, &enc, o);
+        blas.push(b);
+        blas_scratch.push(scratch);
+    }
     let blas_structures: Vec<Retained<ProtocolObject<dyn MTLAccelerationStructure>>> =
         blas.iter().map(|b| b.structure.clone()).collect();
     let instance_buffer = build_instance_buffer(device, objects);
@@ -233,25 +274,20 @@ pub(crate) fn build_accel(device: &GpuDevice, objects: &[RtObjectGeometry]) -> R
     let structure = raw_device
         .newAccelerationStructureWithSize(sizes.accelerationStructureSize)
         .expect("newAccelerationStructureWithSize failed");
-    let scratch = device.create_buffer(sizes.buildScratchBufferSize.max(16) as u64);
+    let build_scratch = device.create_buffer(sizes.buildScratchBufferSize.max(16) as u64);
     let refit_scratch = device.create_buffer(sizes.refitScratchBufferSize.max(16) as u64);
 
-    let cb = device
-        .raw_queue()
-        .commandBuffer()
-        .expect("Failed to acquire command buffer for RT TLAS build");
-    let enc = cb
-        .accelerationStructureCommandEncoder()
-        .expect("accelerationStructureCommandEncoder failed");
     enc.buildAccelerationStructure_descriptor_scratchBuffer_scratchBufferOffset(
         &structure,
         &descriptor,
-        scratch.raw(),
+        build_scratch.raw(),
         0,
     );
     enc.endEncoding();
+
+    let ready = Arc::new(AtomicBool::new(false));
+    add_ready_completion_handler(&cb, Arc::clone(&ready), (blas_scratch, build_scratch));
     cb.commit();
-    unsafe { cb.waitUntilCompleted() };
 
     RtAccel {
         structure,
@@ -259,6 +295,28 @@ pub(crate) fn build_accel(device: &GpuDevice, objects: &[RtObjectGeometry]) -> R
         refit_scratch,
         blas,
         instance_buffer,
+        ready,
+    }
+}
+
+/// Register a completion handler on `cb` that flips `ready` once the GPU
+/// finishes, keeping `keep_alive` (the build's scratch buffers) referenced
+/// until then — they're read by the GPU for the build's whole async
+/// duration, so dropping them any earlier (e.g. right after `commit()`
+/// returns, as their local-variable scope would otherwise do) would free
+/// memory the GPU is still using.
+fn add_ready_completion_handler<T: Send + 'static>(
+    cb: &ProtocolObject<dyn MTLCommandBuffer>,
+    ready: Arc<AtomicBool>,
+    keep_alive: T,
+) {
+    use block2::RcBlock;
+    let block = RcBlock::new(move |_buf: std::ptr::NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
+        let _keep_alive = &keep_alive;
+        ready.store(true, Ordering::Release);
+    });
+    unsafe {
+        cb.addCompletedHandler(RcBlock::as_ptr(&block));
     }
 }
 
@@ -285,6 +343,18 @@ pub(crate) fn refit_accel(device: &GpuDevice, accel: &RtAccel, objects: &[RtObje
         }
     }
 
+    // BUG-308/RT-D4: async, same as `build_accel` — no mid-frame
+    // `waitUntilCompleted()`. Unlike a topology-changing rebuild, refit
+    // touches only this ALREADY-BUILT, ALREADY-resident structure's
+    // instance transforms (CPU-authored above, no upstream GPU write to
+    // race against) — safe to enqueue in the SAME frame the transform
+    // changed, no one-frame defer needed (that's `render_scene.rs`'s
+    // concern for `build_accel`, not this fn's). `ready` flips false for
+    // the refit's async duration so a caller that wants the FRESH
+    // transform can wait for it; the OLD transform is still valid to
+    // read from `accel.structure` in the meantime (Metal doesn't mutate
+    // it destructively until the refit command actually runs).
+    accel.ready.store(false, Ordering::Release);
     let cb = device
         .raw_queue()
         .commandBuffer()
@@ -302,8 +372,8 @@ pub(crate) fn refit_accel(device: &GpuDevice, accel: &RtAccel, objects: &[RtObje
         );
     }
     enc.endEncoding();
+    add_ready_completion_handler(&cb, Arc::clone(&accel.ready), ());
     cb.commit();
-    unsafe { cb.waitUntilCompleted() };
 }
 
 // ─── Raw MSL kernels (shadow-only slice of rt_trace.metal) ────────────
