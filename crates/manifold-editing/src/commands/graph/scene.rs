@@ -120,7 +120,7 @@ impl Command for AddSceneObjectCommand {
             // the P1 exposure stamping below touches `def.preset_metadata` —
             // same "metadata vs. nodes/wires never overlap" discipline
             // `ImportModelIntoSceneCommand` documents.
-            let (mat_id, mat_node_id, transform_id, transform_node_id, scene_object_id, scene_object_node_id, handle, prev) = {
+            let (mat_id, mat_node_id, mat_node_params, transform_id, transform_node_id, scene_object_id, scene_object_node_id, handle, prev) = {
                 let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
                 let prev = (nodes.clone(), wires.clone());
 
@@ -157,6 +157,7 @@ impl Command for AddSceneObjectCommand {
                 let mesh_node = scene_build_node(mesh_id, "node.cube_mesh", Some(format!("mesh_{k}")), BTreeMap::new());
                 let mat_node = scene_build_node(mat_id, "node.phong_material", Some(format!("mat_{k}")), mat_params);
                 let mat_node_id = mat_node.node_id.clone();
+                let mat_node_params = mat_node.params.clone();
                 let transform_node = scene_build_node(
                     transform_id,
                     "node.transform_3d",
@@ -205,6 +206,7 @@ impl Command for AddSceneObjectCommand {
                 (
                     mat_id,
                     mat_node_id,
+                    mat_node_params,
                     transform_id,
                     transform_node_id,
                     scene_object_id,
@@ -241,6 +243,7 @@ impl Command for AddSceneObjectCommand {
                 &mat_node_id,
                 &format!("{handle} — Material"),
                 &self.material_metadata,
+                &mat_node_params,
             );
             stamp_scene_node_exposures_into(
                 &mut meta.params,
@@ -249,6 +252,7 @@ impl Command for AddSceneObjectCommand {
                 &transform_node_id,
                 &format!("{handle} — Transform"),
                 &self.transform_metadata,
+                &BTreeMap::new(),
             );
             stamp_scene_node_exposures_into(
                 &mut meta.params,
@@ -257,6 +261,7 @@ impl Command for AddSceneObjectCommand {
                 &scene_object_node_id,
                 &handle,
                 &self.scene_object_metadata,
+                &BTreeMap::new(),
             );
 
             Some((prev, prev_metadata))
@@ -344,7 +349,7 @@ impl Command for AddSceneLightCommand {
         let result = with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
             let prev_metadata = def.preset_metadata.clone();
 
-            let (light_id, light_node_id, prev) = {
+            let (light_id, light_node_id, light_node_params, prev) = {
                 let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
                 let prev = (nodes.clone(), wires.clone());
 
@@ -388,10 +393,11 @@ impl Command for AddSceneLightCommand {
                 );
                 light_node.editor_pos = Some(pos);
                 let light_node_id = light_node.node_id.clone();
+                let light_node_params = light_node.params.clone();
                 nodes.push(light_node);
                 wires.push(scene_build_wire(light_id, "out", render_id, &format!("light_{k}")));
 
-                (light_id, light_node_id, prev)
+                (light_id, light_node_id, light_node_params, prev)
             };
 
             // P1: expose every param of the freshly minted light node, into
@@ -423,6 +429,7 @@ impl Command for AddSceneLightCommand {
                 &light_node_id,
                 &section,
                 &self.light_metadata,
+                &light_node_params,
             );
 
             Some((prev, prev_metadata))
@@ -1038,7 +1045,7 @@ impl Command for AddSceneEnvironmentCommand {
         let result = with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
             let prev_metadata = def.preset_metadata.clone();
 
-            let (env_id, env_node_id, prev) = {
+            let (env_id, env_node_id, env_node_params, prev) = {
                 let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
                 let prev = (nodes.clone(), wires.clone());
 
@@ -1061,10 +1068,11 @@ impl Command for AddSceneEnvironmentCommand {
                 );
                 env_node.editor_pos = Some(pos);
                 let env_node_id = env_node.node_id.clone();
+                let env_node_params = env_node.params.clone();
                 nodes.push(env_node);
                 wires.push(scene_build_wire(env_id, "envmap", render_id, "envmap"));
 
-                (env_id, env_node_id, prev)
+                (env_id, env_node_id, env_node_params, prev)
             };
 
             // R1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): expose every
@@ -1097,6 +1105,7 @@ impl Command for AddSceneEnvironmentCommand {
                 &env_node_id,
                 "Environment",
                 &self.env_metadata,
+                &env_node_params,
             );
 
             Some((prev, prev_metadata))
@@ -1229,6 +1238,7 @@ impl Command for AddSceneFogCommand {
                 &fog_node_id,
                 "Atmosphere",
                 &self.fog_metadata,
+                &BTreeMap::new(),
             );
 
             Some((prev, prev_metadata))

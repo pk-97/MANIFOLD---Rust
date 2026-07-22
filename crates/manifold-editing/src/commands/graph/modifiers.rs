@@ -330,6 +330,7 @@ impl Command for InsertMeshModifierCommand {
                 &new_node_id,
                 &section,
                 &self.modifier_metadata,
+                &BTreeMap::new(),
             );
 
             Some((prev, prev_metadata))

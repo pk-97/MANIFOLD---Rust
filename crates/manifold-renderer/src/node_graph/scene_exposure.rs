@@ -217,7 +217,15 @@ mod tests {
         let light_metadata = metadata_for_node_type("node.light");
         let mut params = Vec::new();
         let mut bindings = Vec::new();
-        stamp_scene_node_exposures_into(&mut params, &mut bindings, 1, &node_id, "Light 1", &light_metadata);
+        stamp_scene_node_exposures_into(
+            &mut params,
+            &mut bindings,
+            1,
+            &node_id,
+            "Light 1",
+            &light_metadata,
+            &std::collections::BTreeMap::new(),
+        );
 
         let cast_shadows_spec = params
             .iter()
