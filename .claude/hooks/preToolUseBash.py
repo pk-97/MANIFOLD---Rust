@@ -824,6 +824,38 @@ def rg_replace_lint(cmd):
         return None
 
 
+def workspace_sweep_lint(cmd):
+    """Warn (never deny) on any workspace-wide cargo run — Peter 2026-07-23,
+    after the RT panel-toggle change burned a full sweep on a 15-line edit:
+    '90% of the time a full workspace test is not required and just wastes
+    time and tokens.' Fires on `--workspace`/`--all` attached to cargo
+    test/nextest/clippy/check/build in any segment. Never raises."""
+    try:
+        for toks in _shlex_segments(cmd):
+            toks = _strip_leading_keywords(toks)
+            # unwrap the build-lock wrapper: `bash .../with-build-lock.sh cargo ...`
+            if len(toks) >= 2 and toks[0] == "bash" and toks[1].endswith("with-build-lock.sh"):
+                toks = toks[2:]
+            if not toks or toks[0] != "cargo":
+                continue
+            sub = next((t for t in toks[1:] if not t.startswith("-")), "")
+            if sub not in ("test", "nextest", "clippy", "check", "build", "bench"):
+                continue
+            if any(t in ("--workspace", "--all") for t in toks):
+                return (
+                    "Workspace-wide cargo run detected. Peter's standing rule "
+                    "(2026-07-23): ~90% of full sweeps are waste — scope to the "
+                    "touched crates instead (`-p <crate>`, focused nextest "
+                    "filter). A full workspace sweep is justified ONLY at a "
+                    "multi-crate landing or when the blast radius genuinely "
+                    "crosses crates — if that's now, say so in one line and "
+                    "proceed; otherwise re-run scoped."
+                )
+        return None
+    except Exception:
+        return None
+
+
 _TEST_RUNNER_RE = re.compile(r"^(?:cargo\s+(?:test|bench)\b|pytest\b|npm\s+(?:test|run)\b|go\s+test\b|swift\s+test\b)")
 _FILTER_HEADS = {"rg", "grep", "egrep", "fgrep", "head", "tail"}
 
@@ -1022,30 +1054,44 @@ def main() -> int:
     rg_warning = rg_replace_lint(cmd)
     masked_exit_warning = masked_exit_status_lint(cmd)
     comment_swallow_warning = trailing_comment_swallow_lint(cmd)
+    workspace_sweep_warning = workspace_sweep_lint(cmd)
 
     # 1. Pre-approved? Allow outright, pipes and loops included.
     if is_preapproved_command(cmd):
         combined = "\n\n".join(c for c in (
             shared_checkout_context, landing_context,
             rg_warning, masked_exit_warning, comment_swallow_warning,
+            workspace_sweep_warning,
         ) if c) or None
         json.dump(build_allow(combined), sys.stdout)
         return 0
 
     # 2. Not pre-approved: enforce the no-pipe / no-cd-prefix rewrite policy —
     # prompt hygiene only, so skipped in modes where Bash never prompts.
-    if data.get("permission_mode") in NON_PROMPTING_MODES:
-        return 0
+    if data.get("permission_mode") not in NON_PROMPTING_MODES:
+        structural = sanitize(cmd)[0]
+        reasons: list[str] = []
+        if has_shell_pipe(structural):
+            reasons.append(PIPE_REASON)
+        if has_cd_prefix(cmd):
+            reasons.append(CD_REASON)
 
-    structural = sanitize(cmd)[0]
-    reasons: list[str] = []
-    if has_shell_pipe(structural):
-        reasons.append(PIPE_REASON)
-    if has_cd_prefix(cmd):
-        reasons.append(CD_REASON)
+        if reasons:
+            json.dump(build_deny(reasons), sys.stdout)
+            return 0
 
-    if reasons:
-        json.dump(build_deny(reasons), sys.stdout)
+    # Workspace-sweep lint must reach the model even on NON-preapproved
+    # commands (with-build-lock-wrapped cargo isn't preapproved) and in
+    # non-prompting modes (overnight lanes are where the waste happens):
+    # emit additionalContext WITHOUT a permissionDecision so the normal
+    # permission flow still decides.
+    if workspace_sweep_warning:
+        json.dump({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "additionalContext": workspace_sweep_warning,
+            }
+        }, sys.stdout)
 
     return 0
 
