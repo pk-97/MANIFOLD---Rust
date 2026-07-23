@@ -114,6 +114,21 @@ impl ParamCardPanel {
         self.string_param_info = config.string_params.clone();
 
         let n = config.rows.len();
+        // BUG-313: rebuild the id→row-index join map from the same rows being
+        // rendered, so the per-frame value sync joins by id (never position).
+        // Duplicate ids would silently corrupt the join (last-wins) — a built
+        // manifest is dup-free, but assert it here where the map is formed.
+        self.row_id_index.clear();
+        self.row_id_index.reserve(n);
+        for (i, row) in config.rows.iter().enumerate() {
+            let prev = self.row_id_index.insert(row.id.to_string(), i);
+            debug_assert!(
+                prev.is_none(),
+                "BUG-313: duplicate param id {:?} in card rows — the id-join map would corrupt",
+                row.id,
+            );
+        }
+        self.row_value_synced = vec![false; n];
         self.state = ParamCardState::new(n);
         self.state.has_drv = config.has_drv();
         self.state.has_env = config.has_env();
@@ -1610,10 +1625,77 @@ impl ParamCardPanel {
         self.node_count = tree.count() - self.first_node;
     }
 
-    pub fn sync_values(&mut self, tree: &mut UITree, values: &[crate::view::UiParamSlot]) {
+    /// Per-frame value sync from the manifest's id-keyed slot channel
+    /// (`ui_translate::with_param_slots`). JOINS each slot onto the built row
+    /// carrying the same id (BUG-313) — never by position, so no second filter
+    /// can drift out of alignment with the structural build. A manifest id with
+    /// no row (a `card_visible: false` param the curated card skipped) simply
+    /// misses the join and is ignored.
+    pub fn sync_values(
+        &mut self,
+        tree: &mut UITree,
+        slots: &mut dyn Iterator<Item = (&str, crate::view::UiParamSlot)>,
+    ) {
         match self.kind {
-            ParamCardKind::Effect => self.sync_values_effect(tree, values),
-            ParamCardKind::Generator => self.sync_values_generator(tree, values),
+            ParamCardKind::Effect => self.sync_values_effect(tree, slots),
+            ParamCardKind::Generator => self.sync_values_generator(tree, slots),
+        }
+    }
+
+    /// Test-only positional adapter: pair each slot with its row's id in order,
+    /// then feed the real id-keyed [`sync_values`](Self::sync_values). Unit
+    /// tests build a known config where row order == the manifest channel
+    /// order, so this preserves their intent; the id-join itself is proven by
+    /// the projection test (a hidden param interleaved among visible ones).
+    #[cfg(test)]
+    pub(crate) fn sync_values_positional(
+        &mut self,
+        tree: &mut UITree,
+        values: &[crate::view::UiParamSlot],
+    ) {
+        let pairs: Vec<(String, crate::view::UiParamSlot)> = self
+            .rows
+            .iter()
+            .zip(values.iter().copied())
+            .map(|(r, v)| (r.id.to_string(), v))
+            .collect();
+        let mut it = pairs.iter().map(|(id, v)| (id.as_str(), *v));
+        self.sync_values(tree, &mut it);
+    }
+
+    /// The shared id-join value push (both card kinds). Iterates the manifest
+    /// slot channel, resolves each id to its row via `row_id_index`, and pushes
+    /// the value; tracks coverage so a built row that lost its manifest entry
+    /// (INV-6) is caught loudly instead of freezing silently. No positional
+    /// coupling anywhere — the join key is the id.
+    fn sync_row_values_by_id(
+        &mut self,
+        tree: &mut UITree,
+        slots: &mut dyn Iterator<Item = (&str, crate::view::UiParamSlot)>,
+    ) {
+        self.row_value_synced.clear();
+        self.row_value_synced.resize(self.rows.len(), false);
+        for (id, slot) in slots {
+            let Some(&i) = self.row_id_index.get(id) else {
+                continue;
+            };
+            if let Some(b) = self.base_values.get_mut(i) {
+                *b = slot.base;
+            }
+            self.sync_param_value(tree, i, slot.value);
+            if let Some(c) = self.row_value_synced.get_mut(i) {
+                *c = true;
+            }
+        }
+        for (i, synced) in self.row_value_synced.iter().enumerate() {
+            if !*synced {
+                debug_assert!(
+                    false,
+                    "BUG-313/INV-6: built card row {} (id {:?}) has no live manifest entry",
+                    i, self.rows[i].id,
+                );
+                crate::panels::param_slider_shared::warn_join_gap_once(self.rows[i].id.as_ref());
+            }
         }
     }
 
@@ -1667,7 +1749,7 @@ impl ParamCardPanel {
     fn sync_values_effect(
         &mut self,
         tree: &mut UITree,
-        values: &[crate::view::UiParamSlot],
+        slots: &mut dyn Iterator<Item = (&str, crate::view::UiParamSlot)>,
     ) {
         // Shared lookup (checks both slider AND toggle/trigger row labels —
         // effect cards can copy-flash either kind now, same as generator's).
@@ -1721,19 +1803,15 @@ impl ParamCardPanel {
             self.reposition_effect_badges(tree);
         }
 
-        // Skip slider sync if collapsed
+        // Skip slider sync if collapsed (no rows built → nothing to join, and
+        // the coverage check would misfire on the un-synced rows).
         if self.is_collapsed {
             return;
         }
 
-        // Per-param slider/toggle/trigger values + label — shared with
-        // `sync_values_generator` (`sync_param_value`).
-        for (i, slot) in values.iter().enumerate().take(self.rows.len()) {
-            if let Some(b) = self.base_values.get_mut(i) {
-                *b = slot.base;
-            }
-            self.sync_param_value(tree, i, slot.value);
-        }
+        // Per-param slider/toggle/trigger values + label — id-joined, shared
+        // with `sync_values_generator`.
+        self.sync_row_values_by_id(tree, slots);
     }
 
     /// Per-parameter value/label sync shared by both card kinds. Slider rows
@@ -1782,38 +1860,29 @@ impl ParamCardPanel {
                 flash.fire(color::MOTION_SLOW_MS);
             }
             self.param_cache[i] = val;
-            if let Some(ref ids) = self.row_host.slider_ids[i] {
-                let norm = BitmapSlider::value_to_normalized(val, info.spec.min, info.spec.max);
-                let text = format_param_value(
-                    val,
-                    info.spec.min,
-                    info.spec.whole_numbers,
-                    info.spec.is_angle,
-                    info.spec.value_labels.as_deref(),
-                );
-                // P2 value snap-back (D15): a reset just retargeted this
-                // row's `value_snapback` (`begin_value_snapback`, same
-                // frame, before this poll) — draw the fill at its
-                // just-`snap()`ped starting point instead of jumping
-                // straight to `norm`; `tick_value_flash` eases it forward
-                // every frame after. Any other value change (drag commit,
-                // automation, undo) has no animating snapback here and
-                // draws `norm` exactly as before.
-                let display_norm = self
-                    .value_snapback
-                    .get(i)
-                    .filter(|a| a.is_animating())
-                    .map(|a| a.value())
-                    .unwrap_or(norm);
-                BitmapSlider::update_value(tree, ids, display_norm, &text);
-            }
+            // P2 value snap-back (D15): a reset just retargeted this row's
+            // `value_snapback` (`begin_value_snapback`, same frame, before this
+            // poll) — draw the FILL at its just-`snap()`ped starting point
+            // instead of jumping straight to the value's normalized position;
+            // `tick_value_flash` eases it forward every frame after. Any other
+            // value change (drag commit, automation, undo) has no animating
+            // snapback here, so the override is `None` and the fill draws the
+            // value exactly as before. The normalize→format→update math itself
+            // is the shared §5.6 push both cards use (`RowHost::push_slider_value`).
+            let display_norm_override = self
+                .value_snapback
+                .get(i)
+                .filter(|a| a.is_animating())
+                .map(|a| a.value());
+            self.row_host
+                .push_slider_value(tree, i, val, &info.spec, display_norm_override);
         }
     }
 
     fn sync_values_generator(
         &mut self,
         tree: &mut UITree,
-        values: &[crate::view::UiParamSlot],
+        slots: &mut dyn Iterator<Item = (&str, crate::view::UiParamSlot)>,
     ) {
         let copied_label = self
             .copied_flash
@@ -1822,12 +1891,7 @@ impl ParamCardPanel {
             .unwrap_or_default();
         self.copied_flash.sync(tree, FONT_SIZE, &copied_label);
 
-        for (i, slot) in values.iter().enumerate().take(self.rows.len()) {
-            if let Some(b) = self.base_values.get_mut(i) {
-                *b = slot.base;
-            }
-            self.sync_param_value(tree, i, slot.value);
-        }
+        self.sync_row_values_by_id(tree, slots);
     }
 
     /// Find the original param name for a label node ID (slider or toggle).

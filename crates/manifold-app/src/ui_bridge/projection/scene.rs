@@ -28,12 +28,13 @@ pub fn sync_scene_row_values(ui: &mut UIRoot, project: &Project) {
     let gen_inst = layer.gen_params();
 
     // The unified properties card's per-frame value push — real exposed
-    // params, resolved the SAME way `sync_card_values` resolves the main
-    // generator inspector card's values (`ui_translate::with_param_slots`),
-    // just against the SCENE PANEL's own bound layer (`live_layer_id`)
-    // rather than the app's `active_layer` (a scene row always lives on the
-    // layer its panel is docked to, which can differ from the app's active
-    // layer — BUG-292).
+    // params, resolved the SAME id-keyed way `sync_card_values` resolves the
+    // main generator inspector card's values (`ui_translate::with_param_slots`),
+    // just against the SCENE PANEL's own bound layer (`live_layer_id`) rather
+    // than the app's `active_layer` (a scene row always lives on the layer its
+    // panel is docked to, which can differ from the app's active layer —
+    // BUG-292). The panel JOINS by id (BUG-313): a manifest param the current
+    // outliner selection isn't showing simply misses the join and is ignored.
     if let Some(gp) = gen_inst {
         crate::ui_translate::with_param_slots(&gp.params, |slots| {
             ui.scene_setup_panel.sync_properties_values(&mut ui.tree, slots)

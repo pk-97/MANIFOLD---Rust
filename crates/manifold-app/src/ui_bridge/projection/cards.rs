@@ -20,6 +20,23 @@ pub(crate) enum OscScope<'a> {
     Layer(&'a str),
 }
 
+/// Which manifest params [`param_surface`] turns into rows. No default — every
+/// call states its intent, because the two surfaces this projection feeds want
+/// opposite things (BUG-313's regression was a single hard-coded filter serving
+/// both).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SurfaceVisibility {
+    /// The curated outer effect/generator CARD: hide any `card_visible: false`
+    /// param. It stays a fully addressable manifest entry (OSC, Ableton,
+    /// macros, drivers all still resolve it by id) — it just never becomes a
+    /// card row.
+    CuratedCard,
+    /// Every manifest param becomes a row. The Scene Setup dock's full
+    /// generator surface uses this so scale/material rows reach the panel; the
+    /// panel then filters by SECTION, not by `card_visible`.
+    All,
+}
+
 /// Push per-frame card VALUES (slider fill + readout, enabled toggle, card
 /// name) from `project` into the already-configured inspector cards of any
 /// window's `ui` — master effects, active layer's effects, generator params.
@@ -41,7 +58,7 @@ pub fn sync_card_values(ui: &mut UIRoot, project: &Project, active_layer: Option
                 manifold_core::preset_type_registry::display_name(effect.effect_type()),
             );
             card.sync_enabled(tree, effect.enabled);
-            crate::ui_translate::with_visible_param_slots(&effect.params, |slots| {
+            crate::ui_translate::with_param_slots(&effect.params, |slots| {
                 card.sync_values(tree, slots)
             });
         }
@@ -59,7 +76,7 @@ pub fn sync_card_values(ui: &mut UIRoot, project: &Project, active_layer: Option
                     manifold_core::preset_type_registry::display_name(effect.effect_type()),
                 );
                 card.sync_enabled(tree, effect.enabled);
-                crate::ui_translate::with_visible_param_slots(&effect.params, |slots| {
+                crate::ui_translate::with_param_slots(&effect.params, |slots| {
                     card.sync_values(tree, slots)
                 });
             }
@@ -76,7 +93,7 @@ pub fn sync_card_values(ui: &mut UIRoot, project: &Project, active_layer: Option
             tree,
             manifold_core::preset_type_registry::display_name(gp_state.generator_type()),
         );
-        crate::ui_translate::with_visible_param_slots(&gp_state.params, |slots| {
+        crate::ui_translate::with_param_slots(&gp_state.params, |slots| {
             gp.sync_values(tree, slots)
         });
     }
@@ -116,6 +133,8 @@ pub(crate) fn effects_to_surfaces(
                 osc_scope,
                 None,
                 automation_latched,
+                // Effects are always the curated outer card.
+                SurfaceVisibility::CuratedCard,
             )
         })
         .collect()
@@ -178,6 +197,7 @@ fn param_surface(
     osc_scope: OscScope<'_>,
     clip_string_params: Option<&std::collections::BTreeMap<String, String>>,
     automation_latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
+    visibility: SurfaceVisibility,
 ) -> Option<ParamSurface> {
     use manifold_core::preset_def::PresetKind;
     let preset_type = inst.effect_type();
@@ -220,21 +240,23 @@ fn param_surface(
     // per-instance graph override live (that override, `meta.params`, is a
     // save-time-derived shadow now — D12 — not a second live source).
     //
-    // `card_visible` filter (scene-panel exposure convergence, card-
-    // visibility follow-up): a scene-vocabulary auto-stamped param the
-    // curated table hides (`scene_exposure::card_visible_for`) is skipped
-    // here — it stays a real, fully addressable manifest entry (OSC,
-    // Ableton, macros, drivers all still resolve it by id), it just never
-    // becomes a CARD row. The scene panel's own row builder reads the
-    // manifest independently and never applies this filter. Filtering
-    // BEFORE building `row_index_of` keeps it 1:1 positional with `rows` —
-    // `sync_card_values`'s per-frame value push
-    // (`ui_translate::with_visible_param_slots`) applies the SAME filter to
-    // stay aligned; drifting the two would silently push the wrong param's
-    // value onto a row (`ParamCardPanel::sync_param_value` indexes `self.rows`
-    // by raw position, `.take(self.rows.len())`, no id check).
-    let visible_params: Vec<&manifold_core::params::Param> =
-        inst.params.iter().filter(|p| p.spec.card_visible).collect();
+    // Which params become rows is the caller's explicit `visibility` choice
+    // (scene-panel exposure convergence, card-visibility follow-up).
+    // `CuratedCard` hides a scene-vocabulary auto-stamped param the curated
+    // table marks `card_visible: false` (`scene_exposure::card_visible_for`) —
+    // it stays a real, fully addressable manifest entry (OSC, Ableton, macros,
+    // drivers all still resolve it by id), it just never becomes a CARD row.
+    // `All` keeps every param (the Scene Setup dock's full generator surface).
+    // The per-frame value push no longer mirrors this filter: `sync_card_values`
+    // hands the FULL manifest as an id-keyed channel and the card JOINS by id
+    // (BUG-313), so a hidden param simply finds no row — there is no second
+    // filter to drift out of alignment.
+    let visible_params: Vec<&manifold_core::params::Param> = match visibility {
+        SurfaceVisibility::CuratedCard => {
+            inst.params.iter().filter(|p| p.spec.card_visible).collect()
+        }
+        SurfaceVisibility::All => inst.params.iter().collect(),
+    };
 
     let row_index_of: ahash::AHashMap<String, usize> =
         visible_params.iter().enumerate().map(|(i, p)| (p.id().to_string(), i)).collect();
@@ -406,6 +428,7 @@ pub(crate) fn gen_params_to_surface(
     layer_id: &str,
     clip_string_params: Option<&std::collections::BTreeMap<String, String>>,
     automation_latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
+    visibility: SurfaceVisibility,
 ) -> ParamSurface {
     param_surface(
         gp,
@@ -414,6 +437,7 @@ pub(crate) fn gen_params_to_surface(
         OscScope::Layer(layer_id),
         clip_string_params,
         automation_latched,
+        visibility,
     )
     .expect("generator param_surface always yields a config")
 }

@@ -585,6 +585,18 @@ struct SceneCardState {
     /// `configure_from_filtered`, kept fresh every frame by
     /// `ScenePanel::sync_properties_values`.
     current_values: Vec<f32>,
+    /// BUG-313: param id → local row index, rebuilt in `configure_from_filtered`
+    /// from the retained rows. The JOIN KEY for the per-frame value sync —
+    /// `sync_properties_values` iterates the layer's full generator manifest
+    /// (id-keyed) and pushes each slot onto the row this map resolves. A
+    /// manifest param the current outliner selection isn't showing simply
+    /// misses the map and is skipped; no positional retained-index list, so
+    /// nothing can drift (the class BUG-313 removed).
+    row_id_index: ahash::AHashMap<String, usize>,
+    /// Per-frame reused coverage scratch for the id-join miss invariant
+    /// (INV-6): `true` for each row that received a value this sync. A row left
+    /// `false` is a built scene row whose id has no live manifest entry.
+    row_value_synced: Vec<bool>,
     /// Always `None` — no OSC address surface on scene rows this phase. Kept
     /// panel-side (like `ParamCardPanel::osc_addresses`) and passed by ref to
     /// `RowHost::row_action`, which reads it to gate the label-copy path.
@@ -613,6 +625,8 @@ impl SceneCardState {
             rows: Vec::new(),
             mod_state: ParamModState::allocate(0),
             current_values: Vec::new(),
+            row_id_index: ahash::AHashMap::new(),
+            row_value_synced: Vec::new(),
             osc_addresses: Vec::new(),
             mod_active_tab: Vec::new(),
             drag_sliders: Vec::new(),
@@ -637,6 +651,7 @@ impl SceneCardState {
         self.rows.resize(n, placeholder_param_info());
         self.mod_state = ParamModState::allocate(n);
         self.current_values.resize(n, 0.0);
+        self.row_value_synced.resize(n, false);
         self.osc_addresses.resize(n, None);
         while self.mod_active_tab.len() < n {
             self.mod_active_tab.push(ModTab::Driver);
@@ -685,6 +700,21 @@ impl SceneCardState {
         self.resize(n);
         self.rows = retained.iter().map(|&i| config.rows[i].clone()).collect();
         self.current_values = retained.iter().map(|&i| config.rows[i].value.base).collect();
+
+        // BUG-313: rebuild the id→local-row-index join map from the retained
+        // rows. The per-frame value sync joins the full manifest against this
+        // by id — no positional retained-index list. A duplicate id would
+        // silently corrupt the join (last-wins); assert against it here.
+        self.row_id_index.clear();
+        self.row_id_index.reserve(n);
+        for (i, row) in self.rows.iter().enumerate() {
+            let prev = self.row_id_index.insert(row.id.to_string(), i);
+            debug_assert!(
+                prev.is_none(),
+                "BUG-313: duplicate param id {:?} in scene properties rows",
+                row.id,
+            );
+        }
 
         let mods: Vec<RowMod> = retained.iter().map(|&i| config.rows[i].modulation.clone()).collect();
         self.mod_state.sync_from_config(n, &mods);
@@ -767,12 +797,6 @@ pub struct ScenePanel {
     /// properties body filters this down to the selected item's sections at
     /// build time.
     full_params: Option<ParamSurface>,
-    /// P2 slice 2a: the retained-index list the LAST `build_filtered_properties`
-    /// pass filtered `full_params.params` down to — `properties_card`'s
-    /// local index `i` corresponds to `full_params.params[properties_retained[i]]`.
-    /// Reused by `sync_properties_values` (called every frame, no rebuild)
-    /// so the per-frame value push doesn't need to re-filter by section.
-    properties_retained: Vec<usize>,
     add_object_id: Option<NodeId>,
     add_light_id: Option<NodeId>,
     /// "Import Model…" (P4) — dispatches `SceneSetupImportModelClicked`,
@@ -863,7 +887,6 @@ impl Default for ScenePanel {
             open_graph_editor_id: None,
             properties_card: SceneCardState::new(),
             full_params: None,
-            properties_retained: Vec::new(),
             add_object_id: None,
             add_light_id: None,
             import_model_id: None,
@@ -948,33 +971,46 @@ impl ScenePanel {
         }
     }
 
-    /// Per-frame VALUE sync (sibling of `ui_bridge::sync_card_values`): the
-    /// unified properties card's rows, without a structural rebuild. A real
-    /// exposed param's current value is already index-aligned with
-    /// `full_params.rows`/`properties_card.rows` by construction. `slots` is
-    /// `ui_translate::with_param_slots(&gp.params, …)`'s slice for the SAME layer
-    /// `full_params` was built from — the exact per-param index space
-    /// `properties_card`'s filter selected from.
-    pub fn sync_properties_values(&mut self, tree: &mut UITree, slots: &[crate::view::UiParamSlot]) {
+    /// Per-frame VALUE sync (sibling of `ui_bridge::sync_card_values`): push
+    /// the unified properties card's row values from the layer's full generator
+    /// manifest, without a structural rebuild. `slots` is the id-keyed channel
+    /// `ui_translate::with_param_slots(&gp.params, …)` hands out for the SAME
+    /// layer `full_params` was built from. Each slot JOINS onto the built row
+    /// carrying the same id (BUG-313) via `row_id_index` — never by position,
+    /// so no retained-index list can drift. A manifest param the current
+    /// outliner selection isn't showing (not in this section's rows) simply
+    /// misses the join and is ignored; a built row with no manifest entry is
+    /// caught by the INV-6 coverage check.
+    pub fn sync_properties_values(
+        &mut self,
+        tree: &mut UITree,
+        slots: &mut dyn Iterator<Item = (&str, crate::view::UiParamSlot)>,
+    ) {
         if !self.open {
             return;
         }
         let card = &mut self.properties_card;
-        for (local_i, retained_i) in self.properties_retained.iter().enumerate() {
-            let Some(slot) = slots.get(*retained_i) else { continue };
-            card.current_values[local_i] = slot.value;
-            let Some(ids) = card.row_host.slider_ids.get(local_i).and_then(|s| s.as_ref()) else { continue };
-            let info = &card.rows[local_i];
-            let norm =
-                crate::slider::BitmapSlider::value_to_normalized(slot.value, info.spec.min, info.spec.max);
-            let text = super::param_slider_shared::format_param_value(
-                slot.value,
-                info.spec.min,
-                info.spec.whole_numbers,
-                info.spec.is_angle,
-                info.spec.value_labels.as_deref(),
-            );
-            crate::slider::BitmapSlider::update_value(tree, ids, norm, &text);
+        card.row_value_synced.clear();
+        card.row_value_synced.resize(card.rows.len(), false);
+        for (id, slot) in slots {
+            let Some(&i) = card.row_id_index.get(id) else {
+                continue;
+            };
+            card.current_values[i] = slot.value;
+            card.row_host.push_slider_value(tree, i, slot.value, &card.rows[i].spec, None);
+            if let Some(c) = card.row_value_synced.get_mut(i) {
+                *c = true;
+            }
+        }
+        for (i, synced) in card.row_value_synced.iter().enumerate() {
+            if !*synced {
+                debug_assert!(
+                    false,
+                    "BUG-313/INV-6: built scene row {} (id {:?}) has no live manifest entry",
+                    i, card.rows[i].id,
+                );
+                crate::panels::param_slider_shared::warn_join_gap_once(card.rows[i].id.as_ref());
+            }
         }
     }
 
@@ -1454,10 +1490,10 @@ impl ScenePanel {
     /// the filtered slice (real param ids, real modulation state, no
     /// synthesis), and renders every retained row through the shared
     /// `build_param_row`/`RowIndex`/`row_action` core `ParamCardPanel` uses
-    /// (§5.6: one row component, no per-panel forks). Stores the
-    /// retained-index list on `self.properties_retained`
-    /// so the per-frame value sync (`sync_properties_values`) doesn't need
-    /// to re-filter. Renders nothing when there's no config or no section
+    /// (§5.6: one row component, no per-panel forks). `configure_from_filtered`
+    /// builds the id→row-index join map the per-frame value sync
+    /// (`sync_properties_values`) resolves against — no retained-index list
+    /// (BUG-313). Renders nothing when there's no config or no section
     /// matches — callers render their own honest empty/custom messaging.
     fn build_filtered_properties(
         &mut self,
@@ -1469,7 +1505,6 @@ impl ScenePanel {
     ) -> f32 {
         let Some(config) = self.full_params.clone() else {
             self.properties_card.resize(0);
-            self.properties_retained.clear();
             return cy;
         };
         // BUG-292: every row this pass builds must dispatch to the panel's
@@ -1481,7 +1516,6 @@ impl ScenePanel {
         // mirroring the `full_params` guard above.
         let Some(target) = self.live_layer_id().cloned().map(GraphParamTarget::GeneratorOf) else {
             self.properties_card.resize(0);
-            self.properties_retained.clear();
             return cy;
         };
         let mut retained: Vec<usize> = Vec::new();
@@ -1493,7 +1527,6 @@ impl ScenePanel {
             }
         }
         self.properties_card.configure_from_filtered(&config, &retained);
-        self.properties_retained = retained.clone();
 
         if retained.is_empty() {
             return cy;
