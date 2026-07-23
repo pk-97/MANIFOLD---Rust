@@ -262,10 +262,12 @@ External prices re-verified against the live web 2026-07-24 (Fable session). Rat
 | Seat | Plan | USD/mo | AUD/mo |
 |---|---|---:|---:|
 | Lead — Kimi K3 | Kimi **Allegro** (upgrade from Allegretto $39) | $99 | ~$142 |
-| Dispatcher — GLM 5.2 | z.ai Coding Plan **Pro** | $72 | ~$103 |
+| Dispatcher — Qwen (qwen3-coder-next first) | **Alibaba Model Studio Coding Plan Pro** | $50 | ~$72 |
 | Workers — DeepSeek V4 Flash | **opencode Go** ($5 first month) | $10 | ~$14 |
 | Anthropic Max 20x | **CANCELLED — removed entirely** | — | — |
-| **Total** | | **$181** | **~$259** (budget: $350 AUD) |
+| **Total** | | **$159** | **~$228** (budget: $350 AUD) |
+
+**Dispatcher revision (Peter, 2026-07-24, same day):** z.ai Pro DROPPED before purchase — GLM 5.2's 2–3x quota multiplier makes the plan burn fast (corroborated by user reports), and GLM 5.2 never won the seat on merit. Ruling: three DIFFERENT providers across the tiers (Moonshot / Alibaba / DeepSeek) so review blind spots don't correlate — the dispatcher seat is deliberately "dumb": pop queue, brief, gate, review Flash diffs, escalate. Qwen Coding Plan Pro meters in REQUESTS (90K/mo, 45K/wk, 6K/5h — context size irrelevant, the right currency for this workload) and bundles glm-5, kimi-k2.5, MiniMax-M2.5, qwen3-max, qwen3-coder-next/plus behind one key (verified on the purchase page 2026-07-24) — model fallback without vendor switch. Purchase: Alibaba Cloud international console (Singapore), Coding Plan page (NOT the credits-metered "Token Plan"), one-time first month, dedicated Coding-Plan API key. Benchmarks: qwen3-coder-next 70–74% SWE-bench Verified; qwen3-max ≈ GLM-5.2 (near-ties); floor-clearing evidence only — the first wave's outcome metrics decide the seat. Named fallback if Qwen review quality disappoints across its bundle: MiniMax M3 Plus $20 (verify how cached tokens count against its quota first).
 
 - **Go is the trial route for Flash, DeepSeek's direct API the named fallback** — switch if the $12/5h throttle stalls a wave or the mix turns cache-hit-heavy. Direct: prepaid balance (natural hard cap), cache hits $0.0028/MTok — 10x cheaper than through opencode, netting ~1.7x after Go's 6x quota subsidy; miss-heavy favours Go, hit-heavy favours direct.
 - **Ollama Cloud** — not rejected on the K3 gap (K3 rides the Kimi sub; their cloud hosts GLM-5.2 and Flash). Declined because GPU-time metering charges the prefill (this workload's expensive dimension) with unpublished ceilings, and Pro caps at 3 concurrent — wrong shape for worker fan-out. Optional $20 consolidation experiment later.
