@@ -1,151 +1,151 @@
 [
-  {
-    "Pointer": {
-      "target": {
-        "Query": {
-          "text": "Scene"
-        }
-      },
-      "gesture": {
-        "Click": {
-          "modifiers": {}
-        }
+ {
+  "Pointer": {
+   "target": {
+    "Query": {
+     "text": "Scene"
+    }
+   },
+   "gesture": {
+    "Click": {
+     "modifiers": {}
+    }
+   }
+  }
+ },
+ "Snapshot",
+ {
+  "Assert": {
+   "selector": {
+    "Query": {
+     "text": "Objects"
+    }
+   },
+   "check": "Exists"
+  }
+ },
+ {
+  "Pointer": {
+   "target": {
+    "Query": {
+     "text": "\ud83c\udf0d World"
+    }
+   },
+   "gesture": {
+    "Click": {
+     "modifiers": {}
+    }
+   }
+  }
+ },
+ "Snapshot",
+ {
+  "Assert": {
+   "selector": {
+    "Query": {
+     "text": "Environment"
+    }
+   },
+   "check": "Exists"
+  }
+ },
+ {
+  "Assert": {
+   "selector": {
+    "Query": {
+     "text": "+ Add Fog"
+    }
+   },
+   "check": "Exists"
+  }
+ },
+ {
+  "Pointer": {
+   "target": {
+    "Query": {
+     "text": "+ Add Fog"
+    }
+   },
+   "gesture": {
+    "Scroll": {
+     "delta": {
+      "x": 0.0,
+      "y": 300.0
+     }
+    }
+   }
+  }
+ },
+ "Snapshot",
+ {
+  "Pointer": {
+   "target": {
+    "Query": {
+     "text": "+ Add Fog"
+    }
+   },
+   "gesture": {
+    "Click": {
+     "modifiers": {}
+    }
+   }
+  }
+ },
+ "Snapshot",
+ {
+  "Assert": {
+   "selector": {
+    "Query": {
+     "text": "Fog Density",
+     "nth": 0
+    }
+   },
+   "check": "Exists"
+  }
+ },
+ {
+  "Pointer": {
+   "target": {
+    "Point": {
+     "x": 700.0,
+     "y": 1154.0
+    }
+   },
+   "gesture": {
+    "Drag": {
+     "to": {
+      "Point": {
+       "x": 1034.0,
+       "y": 1154.0
       }
+     },
+     "steps": 8
     }
-  },
-  "Snapshot",
-  {
-    "Assert": {
-      "selector": {
-        "Query": {
-          "text": "Objects"
-        }
-      },
-      "check": "Exists"
+   }
+  }
+ },
+ "Snapshot",
+ {
+  "Assert": {
+   "selector": {
+    "Query": {
+     "text": "0.00",
+     "under_text": "Fog Density",
+     "nth": 0
     }
-  },
-  {
-    "Pointer": {
-      "target": {
-        "Query": {
-          "text": "🌍 World"
-        }
-      },
-      "gesture": {
-        "Click": {
-          "modifiers": {}
-        }
-      }
-    }
-  },
-  "Snapshot",
-  {
-    "Assert": {
-      "selector": {
-        "Query": {
-          "text": "Environment"
-        }
-      },
-      "check": "Exists"
-    }
-  },
-  {
-    "Assert": {
-      "selector": {
-        "Query": {
-          "text": "+ Add Fog"
-        }
-      },
-      "check": "Exists"
-    }
-  },
-  {
-    "Pointer": {
-      "target": {
-        "Query": {
-          "text": "+ Add Fog"
-        }
-      },
-      "gesture": {
-        "Scroll": {
-          "delta": {
-            "x": 0.0,
-            "y": 300.0
-          }
-        }
-      }
-    }
-  },
-  "Snapshot",
-  {
-    "Pointer": {
-      "target": {
-        "Query": {
-          "text": "+ Add Fog"
-        }
-      },
-      "gesture": {
-        "Click": {
-          "modifiers": {}
-        }
-      }
-    }
-  },
-  "Snapshot",
-  {
-    "Assert": {
-      "selector": {
-        "Query": {
-          "text": "Fog Density",
-          "nth": 0
-        }
-      },
-      "check": "Exists"
-    }
-  },
-  {
-    "Pointer": {
-      "target": {
-        "Point": {
-          "x": 722.2,
-          "y": 1070.0
-        }
-      },
-      "gesture": {
-        "Drag": {
-          "to": {
-            "Point": {
-              "x": 1034.0,
-              "y": 1070.0
-            }
-          },
-          "steps": 8
-        }
-      }
-    }
-  },
-  "Snapshot",
-  {
-    "Assert": {
-      "selector": {
-        "Query": {
-          "text": "0.00",
-          "under_text": "Fog Density",
-          "nth": 0
-        }
-      },
-      "check": {
-        "Count": 0
-      }
-    }
-  },
-  {
-    "Key": {
-      "key": "Z",
-      "modifiers": {
-        "command": true
-      }
-    }
-  },
-  "Snapshot"
+   },
+   "check": {
+    "Count": 0
+   }
+  }
+ },
+ {
+  "Key": {
+   "key": "Z",
+   "modifiers": {
+    "command": true
+   }
+  }
+ },
+ "Snapshot"
 ]

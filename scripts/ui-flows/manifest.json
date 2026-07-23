@@ -1,17 +1,75 @@
 {
-  "_comment": "Flow -> headless scene map for the UI-flow gate (UI_FUNNEL_DECOMPOSITION S8). Each flow runs as `cargo xtask ui-snap <scene> --script scripts/ui-flows/<flow>.json`; the scene builds a fixture (crates/manifold-app/src/ui_snapshot/fixtures.rs) whose tree carries the flow's selectors. Scenes derived from selectors vs fixtures.rs + the fixed rules (select-and-inspect=inspector; scene-setup-*=gltfscene except empty-states=timeline; drag-clip=timeline) and VERIFIED by scripts/run_ui_flows.py: every 'flows' entry PASSes; every 'expected_fail' entry is a known-red flow (mapped to its correct authoring scene, red for a tracked/pending reason, NOT a mapping error — the whole-scene sweep confirmed none pass under any built-in fixture). Validate/regenerate: python3 scripts/run_ui_flows.py.",
+  "_comment": "Flow -> headless scene map for the UI-flow gate (UI_FUNNEL_DECOMPOSITION S8). Each flow runs as `cargo xtask ui-snap <scene> --script scripts/ui-flows/<flow>.json`; the scene builds a fixture (crates/manifold-app/src/ui_snapshot/fixtures.rs) whose tree carries the flow's selectors. Scenes derived from selectors vs fixtures.rs + the fixed rules (select-and-inspect=inspector; scene-setup-*=gltfscene except empty-states=timeline; drag-clip=timeline) and VERIFIED by scripts/run_ui_flows.py: every 'flows' entry PASSes; every 'expected_fail' entry is a known-red flow (mapped to its correct authoring scene, red for a tracked/pending reason, NOT a mapping error \u2014 the whole-scene sweep confirmed none pass under any built-in fixture). Validate/regenerate: python3 scripts/run_ui_flows.py.",
   "_path_triggers_comment": "Landing flow gate (BUG-313 postmortem): `python3 scripts/run_ui_flows.py --touched <git-range>` diffs the range, matches each touched path against these prefixes, and runs the union of the mapped flow-name filters (same substring semantics as positional filters). A touched scripts/ui-flows/<flow>.json always runs that flow. No prefix match = exit 0, nothing run. Keep prefixes on the UI value-path surfaces flows actually exercise; a new panel/projection file with flow coverage gets a row here in the same commit.",
   "path_triggers": {
-    "crates/manifold-ui/src/panels/scene_setup_panel.rs": ["scene-setup", "scene-card", "scene-panel"],
-    "crates/manifold-app/src/ui_bridge/projection/scene.rs": ["scene-setup", "scene-card", "scene-panel"],
-    "crates/manifold-app/src/ui_bridge/projection/cards.rs": ["scene-setup", "scene-card", "scene-panel", "inspector", "set-param", "envelope-modulation", "calibrated-param"],
-    "crates/manifold-app/src/ui_bridge/projection/inspector.rs": ["inspector", "select-and-inspect", "set-param", "calibrated-param"],
-    "crates/manifold-app/src/ui_bridge/state_sync.rs": ["scene-setup", "scene-card", "scene-panel", "inspector", "set-param"],
-    "crates/manifold-app/src/ui_translate.rs": ["scene-setup", "scene-card", "scene-panel", "inspector", "set-param", "envelope-modulation"],
-    "crates/manifold-ui/src/panels/param_card/": ["inspector", "set-param", "envelope-modulation", "scene-card", "calibrated-param", "param-step"],
-    "crates/manifold-ui/src/panels/param_slider_shared/": ["inspector", "set-param", "envelope-modulation", "scene-setup", "scene-card", "calibrated-param", "param-step"],
-    "crates/manifold-app/src/ui_bridge/projection/timeline.rs": ["drag-clip", "trim-clip", "ruler-scrub", "zoom-out", "toggle-lanes", "automation"],
-    "crates/manifold-ui/src/panels/audio_setup_panel.rs": ["audio-setup"]
+    "crates/manifold-ui/src/panels/scene_setup_panel.rs": [
+      "scene-setup",
+      "scene-card",
+      "scene-panel"
+    ],
+    "crates/manifold-app/src/ui_bridge/projection/scene.rs": [
+      "scene-setup",
+      "scene-card",
+      "scene-panel"
+    ],
+    "crates/manifold-app/src/ui_bridge/projection/cards.rs": [
+      "scene-setup",
+      "scene-card",
+      "scene-panel",
+      "inspector",
+      "set-param",
+      "envelope-modulation",
+      "calibrated-param"
+    ],
+    "crates/manifold-app/src/ui_bridge/projection/inspector.rs": [
+      "inspector",
+      "select-and-inspect",
+      "set-param",
+      "calibrated-param"
+    ],
+    "crates/manifold-app/src/ui_bridge/state_sync.rs": [
+      "scene-setup",
+      "scene-card",
+      "scene-panel",
+      "inspector",
+      "set-param"
+    ],
+    "crates/manifold-app/src/ui_translate.rs": [
+      "scene-setup",
+      "scene-card",
+      "scene-panel",
+      "inspector",
+      "set-param",
+      "envelope-modulation"
+    ],
+    "crates/manifold-ui/src/panels/param_card/": [
+      "inspector",
+      "set-param",
+      "envelope-modulation",
+      "scene-card",
+      "calibrated-param",
+      "param-step"
+    ],
+    "crates/manifold-ui/src/panels/param_slider_shared/": [
+      "inspector",
+      "set-param",
+      "envelope-modulation",
+      "scene-setup",
+      "scene-card",
+      "calibrated-param",
+      "param-step"
+    ],
+    "crates/manifold-app/src/ui_bridge/projection/timeline.rs": [
+      "drag-clip",
+      "trim-clip",
+      "ruler-scrub",
+      "zoom-out",
+      "toggle-lanes",
+      "automation"
+    ],
+    "crates/manifold-ui/src/panels/audio_setup_panel.rs": [
+      "audio-setup"
+    ]
   },
   "flows": {
     "audio-setup-hygiene": "audiosends",
@@ -27,7 +85,6 @@
     "inspector-scroll": "inspector",
     "ruler-scrub": "timeline",
     "scene-card-convergence-c-p1d-light-scrub-drawer": "gltfscene",
-    "scene-card-convergence-c-p1d-roughness-scrub-drawer-undo": "gltfscene",
     "scene-setup-add-fog-drag": "gltfscene",
     "scene-setup-add-object": "gltfscene",
     "scene-setup-close-button": "gltfscene",
@@ -42,7 +99,6 @@
     "scene-setup-numeric-typein-box": "gltfscene",
     "scene-setup-select-updates": "gltfscene",
     "scene-setup-shadow-softness-dropdown": "gltfscene",
-    "scene-setup-ux-p2-demo": "gltfscene",
     "select-and-inspect": "inspector",
     "set-param-layer-opacity": "inspector",
     "toggle-lanes": "automation",
@@ -63,7 +119,7 @@
     "audio-clip-trigger-add": {
       "scene": "inspector",
       "bug": "BUG-300",
-      "reason": "authored 14/14 green on the GLOW inspector (2026-07-10 audio-dock-p3b); now 3 'Snare' buttons match where the flow needs exactly 1 — inspector fixture gained trigger drawers since authoring. Untracked before S8."
+      "reason": "authored 14/14 green on the GLOW inspector (2026-07-10 audio-dock-p3b); now 3 'Snare' buttons match where the flow needs exactly 1 \u2014 inspector fixture gained trigger drawers since authoring. Untracked before S8."
     },
     "audio-dock-toggle": {
       "scene": "inspector",
@@ -73,7 +129,7 @@
     "audio-dock-scroll": {
       "scene": "audiosends",
       "bug": "BUG-300",
-      "reason": "reaches the consumer-row scroll assert; 'EXTRA 23 • Bloom • Amount' lands at y~1405 vs expected 1132 (~273px). Suspect stale expected rect after the BUG-251/294 dock-scroll fixes. Untracked before S8."
+      "reason": "reaches the consumer-row scroll assert; 'EXTRA 23 \u2022 Bloom \u2022 Amount' lands at y~1405 vs expected 1132 (~273px). Suspect stale expected rect after the BUG-251/294 dock-scroll fixes. Untracked before S8."
     },
     "calibrated-param-card-reads-manifest": {
       "scene": "inspector",
@@ -84,6 +140,16 @@
       "scene": "timeline",
       "bug": "BUG-300",
       "reason": "authored 12/12 green on timeline (2026-07-08 drag-capture-p1); now asserts a 'Video 3' clip the timeline fixture no longer builds. Untracked before S8."
+    },
+    "scene-setup-ux-p2-demo": {
+      "scene": "gltfscene",
+      "bug": "BUG-315",
+      "reason": "step 2 asserts 3 'Roughness' matches (nth=2); 5363e97c's curated card intentionally hides material params from the generator CARD, leaving 1. Stale flow vs intended curation, NOT a value-sync bug (BUG-313's id-join landed green). Re-author against the scene panel's restored material rows \u2014 BUG-315."
+    },
+    "scene-card-convergence-c-p1d-roughness-scrub-drawer-undo": {
+      "scene": "gltfscene",
+      "bug": "BUG-315",
+      "reason": "step 2 asserts 3 'Roughness' matches (nth=2); 5363e97c's curated card intentionally hides material params from the generator CARD, leaving 1. Stale flow vs intended curation, NOT a value-sync bug (BUG-313's id-join landed green). Re-author against the scene panel's restored material rows \u2014 BUG-315."
     }
   },
   "unresolved": {}
