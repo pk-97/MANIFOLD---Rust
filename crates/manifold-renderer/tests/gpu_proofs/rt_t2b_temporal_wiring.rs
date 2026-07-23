@@ -146,7 +146,7 @@ fn render_frame(runtime: &mut PresetRuntime, h: &harness::ParityHarness, target:
     enc.commit_and_wait_completed();
 }
 
-fn readback_rgba_f32(device: &manifold_gpu::GpuDevice, texture: &manifold_gpu::GpuTexture) -> Vec<f32> {
+pub(crate) fn readback_rgba_f32(device: &manifold_gpu::GpuDevice, texture: &manifold_gpu::GpuTexture) -> Vec<f32> {
     use half::f16;
     let bytes_per_row = texture.width * 8; // Rgba16Float = 8 bytes/px
     let total_bytes = u64::from(texture.height * bytes_per_row);
@@ -498,5 +498,120 @@ fn live_temporal_upscale_toggle_recompiles_plan_and_does_not_panic() {
     assert!(
         diff < UPSCALE_COARSE_EPSILON,
         "live-toggled upscale output diverges from native render: mean abs diff {diff} >= {UPSCALE_COARSE_EPSILON} — the recompiled plan is not rendering the scene"
+    );
+}
+
+/// BUG-318 smoke test — NOT the regression pin: this synthetic hand-wired
+/// scene does NOT reproduce the break even pre-fix (recorded honestly; the
+/// discriminating repro is `rt_bug318_import_toggle`, which goes through the
+/// real `assemble_import_graph` path in the shrink direction). Kept as cheap
+/// coverage of the same toggle flow on a
+/// `node.scene_object`-fed scene (the path his gltf scenes use — the
+/// SceneObject VALUE carries its mesh as a backend `Slot` handle) with a
+/// STATIC mesh subgraph, `dump_all` OFF (dumping changes the executor's
+/// output-holding behavior, which is exactly why the BUG-317 pin missed
+/// this). Toggle `rt_enabled` live: BUG-317's plan recompile swaps the
+/// plan under the executor, and pre-fix the memo-CLEAN static mesh steps
+/// kept serving held slots recorded under the OLD plan — the SceneObject's
+/// `vertices` slot dangled and every object magenta-cleared. Post-fix the
+/// recompile invalidates the memoized dataflow, everything re-executes
+/// once, and the frame still renders the scene (asserted: output matches a
+/// fresh rt-off render of the same scene within the coarse epsilon, and is
+/// not the magenta fallback).
+#[test]
+fn live_rt_toggle_with_scene_object_does_not_dangle_mesh_slots() {
+    let h = harness::shared();
+    let registry = PrimitiveRegistry::with_builtin();
+    let json = r#"{"version":2,"name":"RtBug318","nodes":[
+        {"id":0,"typeId":"system.generator_input","nodeId":"input"},
+        {"id":1,"typeId":"node.grid_mesh","nodeId":"grid","params":{
+            "max_capacity":{"type":"Int","value":16},
+            "resolution_x":{"type":"Int","value":2},
+            "resolution_y":{"type":"Int","value":2},
+            "size_x":{"type":"Float","value":1.6},
+            "size_y":{"type":"Float","value":1.6}}},
+        {"id":2,"typeId":"node.make_triangles","nodeId":"tris","params":{
+            "src_cols":{"type":"Int","value":2},
+            "src_rows":{"type":"Int","value":2}}},
+        {"id":3,"typeId":"node.orbit_camera","nodeId":"cam","params":{
+            "orbit":{"type":"Float","value":0.0},
+            "tilt":{"type":"Float","value":0.0},
+            "distance":{"type":"Float","value":4.0},
+            "fov_y":{"type":"Float","value":0.9}}},
+        {"id":4,"typeId":"node.unlit_material","nodeId":"mat","params":{
+            "color_r":{"type":"Float","value":0.8},
+            "color_g":{"type":"Float","value":0.4},
+            "color_b":{"type":"Float","value":0.2},
+            "color_a":{"type":"Float","value":1.0}}},
+        {"id":5,"typeId":"node.transform_3d","nodeId":"xf0","params":{
+            "rot_z":{"type":"Float","value":1.5707963267948966}}},
+        {"id":6,"typeId":"node.scene_object","nodeId":"obj0"},
+        {"id":20,"typeId":"node.render_scene","nodeId":"scene","params":{
+            "objects":{"type":"Int","value":1},
+            "lights":{"type":"Int","value":0}}},
+        {"id":99,"typeId":"system.final_output","nodeId":"out"}
+        ],"wires":[
+        {"fromNode":1,"fromPort":"vertices","toNode":2,"toPort":"in"},
+        {"fromNode":2,"fromPort":"out","toNode":6,"toPort":"vertices"},
+        {"fromNode":4,"fromPort":"out","toNode":6,"toPort":"material"},
+        {"fromNode":5,"fromPort":"transform","toNode":6,"toPort":"transform"},
+        {"fromNode":3,"fromPort":"out","toNode":20,"toPort":"camera"},
+        {"fromNode":6,"fromPort":"object","toNode":20,"toPort":"object_0"},
+        {"fromNode":20,"fromPort":"color","toNode":99,"toPort":"in"}
+        ]}"#;
+    let build = |label: &str| {
+        PresetRuntime::from_json_str_with_device(
+            json,
+            &registry,
+            std::sync::Arc::clone(&h.device),
+            NATIVE_W,
+            NATIVE_H,
+            GpuTextureFormat::Rgba16Float,
+            None,
+        )
+        .unwrap_or_else(|e| panic!("bug318 graph must build ({label}): {e}"))
+        // deliberately NO set_dump_all — see the doc comment
+    };
+
+    let mut runtime = build("toggled");
+    let target = h.make_target("rt-bug318-toggle");
+    // Several steady frames so the static mesh subgraph goes memo-CLEAN.
+    for f in 0..4 {
+        render_frame(&mut runtime, h, &target.texture, 1, f);
+    }
+    let scene_node = runtime
+        .graph
+        .nodes()
+        .find(|n| n.params.get("rt_enabled").is_some())
+        .map(|n| n.id)
+        .expect("scene graph contains the node.render_scene instance");
+    runtime
+        .graph
+        .set_param(
+            scene_node,
+            "rt_enabled",
+            manifold_renderer::node_graph::ParamValue::Bool(true),
+        )
+        .expect("rt_enabled param exists");
+    for f in 4..7 {
+        render_frame(&mut runtime, h, &target.texture, 1, f);
+    }
+    let toggled = readback_rgba_f32(&h.device, &target.texture);
+
+    let mut reference = build("reference");
+    let ref_target = h.make_target("rt-bug318-ref");
+    for f in 0..4 {
+        render_frame(&mut reference, h, &ref_target.texture, 1, f);
+    }
+    let reference_px = readback_rgba_f32(&h.device, &ref_target.texture);
+
+    // Magenta fallback detector: the error path clears to (1,0,1). A
+    // healthy toggled frame must stay close to the rt-off reference (RT
+    // adds lighting terms; with zero lights the delta stays small) and
+    // must NOT be the fallback clear.
+    let diff = mean_abs_diff_rgb(&toggled, &reference_px);
+    assert!(
+        diff < UPSCALE_COARSE_EPSILON,
+        "live rt_enabled toggle broke the scene: mean abs diff vs rt-off reference {diff} >= {UPSCALE_COARSE_EPSILON} (magenta fallback / dangling mesh slots — BUG-318)"
     );
 }

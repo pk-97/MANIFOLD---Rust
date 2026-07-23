@@ -1918,6 +1918,11 @@ impl PresetRuntime {
                     "[preset-runtime] forced-outputs change (epoch {epoch}) — execution plan recompiled"
                 );
                 self.plan = p;
+                // BUG-318: memo-clean steps hold backend slots recorded
+                // under the old plan — force a full re-execute next frame
+                // so every value (SceneObject mesh slots included) is
+                // re-produced against the new plan's bindings.
+                self.executor.invalidate_memoized_dataflow();
             }
             Err(e) => {
                 log::error!(
