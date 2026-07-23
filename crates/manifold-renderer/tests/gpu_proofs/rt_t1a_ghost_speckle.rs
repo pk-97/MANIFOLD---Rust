@@ -23,6 +23,45 @@
 //! ghost metric isolates the accumulation artifact from ordinary "different
 //! geometry passes through a fixed screen window as the camera orbits"
 //! parallax, which would otherwise swamp the signal.
+//!
+//! **BUG-315 / D19 / D20 status (2026-07-23): the ORBIT oracle below is
+//! `#[ignore]`d, not deleted, and BUG-311 is NOT certified by any numeric
+//! oracle in this file.** History:
+//! - D19 diagnosed the original consecutive-frame-diff metric as confounded
+//!   by real camera parallax, not ghosting.
+//! - The revised metric here (accumulated-final-pose vs a fresh cold-start
+//!   runtime rendered at the identical final pose, mean abs luma diff in
+//!   the shadow-boundary gradient region) was built and tuned across
+//!   several ramp/rate/hold configurations (gentle ~3-5 deg/frame sweeps,
+//!   then D20's ~10 deg/frame "crank the stimulus" sweep). In every
+//!   configuration tried, pre-fix (`10359365`) and post-fix (`f9bc2b30`,
+//!   T1-C) numbers came out statistically indistinguishable — e.g. the D20
+//!   configuration (`ORBIT_RATE`=10deg, `RAMP_FRAMES`=3, `HOLD_FRAMES`=1,
+//!   landing mid the real ~0.5-1.15 rad shadow-boundary transition,
+//!   verified via an orbit scan against `rt_p1_shadow.rs`'s documented
+//!   43-47% RT-on-vs-off drop at this same world point) gave pre-fix
+//!   mean_abs_diff=0.0267 vs post-fix=0.0262 — both trip the same 0.02
+//!   threshold, no daylight between them.
+//! - D20 Stage 2: temporary atomic-counter instrumentation inside
+//!   `accumulate_irradiance` (removed before this commit — see git history
+//!   of this investigation if it needs re-adding) measured, at post-fix
+//!   during the real camera-motion frames of this exact ramp: ~95-98% of
+//!   attempted texels reprojected to a DIFFERENT texel than same-texel
+//!   (`shifted`), and ~97-98% of those were ACCEPTED by the depth/normal
+//!   validity test (`valid`), only ~2-3% rejected. T1-C's reprojection
+//!   mechanism is UNAMBIGUOUSLY ACTIVE and engaging correctly under this
+//!   exact motion — the fix is not inert. The oracle is simply blind to
+//!   it: this metric can't isolate "residual smear from imperfect
+//!   reprojection" from "expected temporal-accumulation lag relative to an
+//!   instantaneous cold reference" (alpha=0.15 blending intentionally
+//!   trails a few frames behind any real scene change, fixed or not —
+//!   a cold single-pose render will never exactly match a mid-transition
+//!   accumulator, independent of ghosting).
+//! - Per D20: BUG-311 is accepted FIXED on this bisection evidence (the
+//!   mechanism engaging as designed) + Peter's in-app look, NOT on a
+//!   passing numeric gate here. A future wave (T1-D, SVGF-class denoiser)
+//!   is the natural point to revisit a numeric ghost oracle, once the
+//!   variance-guided filter gives a cleaner signal to isolate against.
 
 use half::f16;
 use manifold_gpu::GpuTextureFormat;
@@ -31,6 +70,7 @@ use manifold_renderer::node_graph::camera::Camera;
 use manifold_renderer::node_graph::PrimitiveRegistry;
 use manifold_renderer::preset_context::PresetContext;
 use manifold_renderer::preset_runtime::PresetRuntime;
+use manifold_renderer::render_target::RenderTarget;
 
 use crate::harness;
 
@@ -52,8 +92,12 @@ const RT_WARMUP_FRAMES: i64 = 16;
 /// gate). `orbit` is port-shadowed by a `system.generator_input.time` ->
 /// Multiply(rate) -> Add(base) chain instead of a static param, so
 /// `PresetContext.time` alone drives the camera without touching any
-/// other frame state.
-fn scene_json(orbit_rate: f32) -> String {
+/// other frame state. `orbit_base` is parameterized (not hardcoded to
+/// `ORBIT_BASE`) so a COLD reference runtime can be built fixed at any
+/// static orbit angle — e.g. the exact final pose of an orbit sweep on a
+/// different (accumulated) runtime — by passing `orbit_rate=0.0` and
+/// `orbit_base=<that angle>`.
+fn scene_json(orbit_rate: f32, orbit_base: f32) -> String {
     format!(
         r#"{{"version":2,"name":"RtT1AGhostSpeckle","nodes":[
         {{"id":0,"typeId":"system.generator_input","nodeId":"input"}},
@@ -83,10 +127,10 @@ fn scene_json(orbit_rate: f32) -> String {
             "op":{{"type":"Enum","value":2}}}}}},
         {{"id":41,"typeId":"node.math","nodeId":"orbit_add_base","params":{{
             "a":{{"type":"Float","value":0.0}},
-            "b":{{"type":"Float","value":{ORBIT_BASE}}},
+            "b":{{"type":"Float","value":{orbit_base}}},
             "op":{{"type":"Enum","value":0}}}}}},
         {{"id":3,"typeId":"node.orbit_camera","nodeId":"cam","params":{{
-            "orbit":{{"type":"Float","value":{ORBIT_BASE}}},
+            "orbit":{{"type":"Float","value":{orbit_base}}},
             "tilt":{{"type":"Float","value":{TILT}}},
             "distance":{{"type":"Float","value":{DISTANCE}}},
             "fov_y":{{"type":"Float","value":{FOV_Y}}}}}}},
@@ -132,10 +176,22 @@ fn scene_json(orbit_rate: f32) -> String {
 }
 
 fn make_ctx(h: &harness::ParityHarness, time: f64, frame_count: i64) -> PresetContext {
+    make_ctx_with_dt(h, time, frame_count, 1.0 / 60.0)
+}
+
+/// `dt` must match the ACTUAL elapsed `time` between consecutive calls, or
+/// `TemporalResetDetector::detect_reset`'s discontinuity test
+/// (`node_graph/temporal_reset.rs`: `|actual_delta - expected_delta| > 1.5 *
+/// expected_delta`, where `expected_delta` is this `dt`) fires a false
+/// reset every frame — silently discarding the very irradiance history
+/// this test exists to accumulate and inspect. The orbit-sweep loop below
+/// steps `time` by `GHOST_TIME_STEP` per frame, so it must pass
+/// `GHOST_TIME_STEP` as `dt` here, not a fixed 1/60.
+fn make_ctx_with_dt(h: &harness::ParityHarness, time: f64, frame_count: i64, dt: f32) -> PresetContext {
     PresetContext {
         time,
         beat: time * 0.5,
-        dt: 1.0 / 60.0,
+        dt,
         width: h.width,
         height: h.height,
         output_width: h.width,
@@ -185,41 +241,75 @@ fn variance(v: &[f64]) -> f64 {
     v.iter().map(|x| (x - m).powi(2)).sum::<f64>() / v.len() as f64
 }
 
-/// ORBIT/GHOST oracle. Threshold picked from the observed pre-fix number
-/// (see the `#[ignore]` note below) with generous headroom above zero —
-/// a correctly motion-reprojected accumulator tracking a WORLD point under
-/// a fixed sun should show near-zero frame-to-frame luminance change here
-/// (Lambertian diffuse shading is view-angle-independent), so any real
-/// margin above ~0 is the ghost signal, not noise.
+/// ORBIT/GHOST oracle (revised per D19 — BUG-315: the original consecutive-
+/// frame-diff metric was confounded by real camera parallax at the shadow-
+/// boundary probe point, not ghosting, and couldn't certify BUG-311).
+///
+/// Metric: run a camera orbit sweep on a PERSISTENT runtime (accumulating
+/// irradiance history frame-to-frame, exactly as a live performance would),
+/// then compare the ACCUMULATED render at the sweep's FINAL pose against a
+/// COLD reference — a FRESH runtime built with the camera fixed at that
+/// exact final pose from frame zero, so its irradiance history only ever
+/// sees ONE pose (no motion to reproject, no smear possible). That cold
+/// render is the ground truth for "what should this pose look like",
+/// independent of the accumulator's motion-handling correctness.
+///
+/// Pre-fix (same-texel blend, no reprojection): the accumulated-final frame
+/// still carries irradiance contributions from EARLIER, DIFFERENT camera
+/// poses blended into the same screen texels — those don't correspond to
+/// the same world content as the cold reference at the final pose, so the
+/// diff is large. Post-fix (T1-C's `prev_view_proj` reprojection + depth/
+/// normal-mismatch rejection): history is carried forward relative to
+/// camera motion, so the accumulated-final frame converges toward the same
+/// answer as a cold render at that pose — the diff collapses.
 const GHOST_MEAN_ABS_DIFF_THRESHOLD: f64 = 0.02;
 
-/// Small per-frame orbit sweep (rad per time-unit) — enough motion to
-/// expose same-texel history drift without walking the tracked world
-/// point off-screen across the sweep.
-const ORBIT_RATE: f32 = 0.03;
-const GHOST_FRAMES: usize = 12;
+/// Per-frame orbit sweep (rad per time-unit) during the RAMP phase — fast
+/// enough that the tracked world point's screen texel sweeps across the
+/// shadow boundary within `RAMP_FRAMES`, so same-texel blending (pre-fix)
+/// mixes irradiance from genuinely different world content into one texel.
+/// D20: ~10 deg/frame — at `IRRADIANCE_ACCUM_ALPHA` 0.15 the effective
+/// history window spans ~6 frames; large per-frame steps make same-texel
+/// ghosting look like averaging together wildly different world content
+/// (a strong, visible defect), while gentle per-frame steps make it look
+/// like reprojection resample blur (near-invisible either way) — the
+/// earlier gentle sweep (~3-5 deg/frame) is why pre/post-fix didn't
+/// discriminate.
+const ORBIT_RATE: f32 = 0.174_533; // 10 degrees
+/// Ramp frames (camera moving) + hold frames (camera FROZEN at the final
+/// pose — `time` stops advancing, so `orbit` stops changing too). The hold
+/// is short on purpose: `IRRADIANCE_ACCUM_ALPHA` (0.15) means a broken
+/// same-texel accumulator needs many held frames to blend its way back to
+/// the correct value even once motion stops — reading back after only a
+/// couple of held frames catches that residual smear before it converges
+/// away. A correctly reprojected accumulator has no smear to converge
+/// away from — its held-frame value already matches a cold render.
+const RAMP_FRAMES: usize = 3;
+const HOLD_FRAMES: usize = 1;
+const GHOST_FRAMES: usize = RAMP_FRAMES + HOLD_FRAMES;
 const GHOST_TIME_STEP: f64 = 1.0;
 
-/// PRE-FIX BASELINE (recorded 2026-07-23, `accumulate_irradiance` same-
-/// texel blend, no reprojection): mean abs consecutive-frame luminance
-/// diff at the shadow-boundary world point, orbiting at `ORBIT_RATE` for
-/// `GHOST_FRAMES` frames = 0.0444 (>> the 0.02 threshold this test
-/// asserts; the flat far-corner probe `rt_p1_region_probe` uses for its
-/// own lit-region gate reads <0.002 here — its irradiance is too spatially
-/// uniform to expose the same-texel artifact, which is why this oracle
-/// tracks the shadow boundary instead).
-///
 /// FIXED by T1-C (RAYTRACING_DESIGN.md §8 Tier-1 item 1, BUG-311):
 /// `accumulate_irradiance` now reprojects history through `prev_view_proj`
-/// before blending and rejects a depth/normal mismatch — this oracle is
-/// flipped live (no longer `#[ignore]`d) and now asserts the metric is
-/// BELOW threshold, the inverse of the pre-fix assertion above.
+/// before blending and rejects a depth/normal mismatch. See the doc comment
+/// above for the pre-fix vs post-fix numbers recorded for this revised
+/// metric (2026-07-23, BUG-315 remediation).
 #[test]
-fn rt_ghost_orbit_consecutive_frame_luma_diff_exceeds_threshold() {
+#[ignore = "BUG-315/D20: this metric does not discriminate pre-fix from post-fix \
+            (pre 0.0267 vs post 0.0262, both > threshold) — the module doc comment \
+            has the full history. BUG-311 is accepted FIXED on D20 Stage 2 bisection \
+            evidence (reprojection instrumentation showed ~95-98% of texels shifting \
+            to a different history texel and ~97%+ validity-accepted under this exact \
+            motion, i.e. the mechanism is active, not inert) + Peter's in-app look, \
+            not on this gate. Kept live-code, ignored, as a numeric record for T1-D."]
+fn rt_ghost_orbit_accumulated_vs_cold_start_luma_diff_exceeds_threshold() {
     let h = harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
+
+    // --- ACCUMULATED: persistent runtime, full orbit sweep, read back the
+    // final pose's accumulated irradiance (built up across the whole sweep).
     let mut runtime = PresetRuntime::from_json_str_with_device(
-        &scene_json(ORBIT_RATE),
+        &scene_json(ORBIT_RATE, ORBIT_BASE),
         &registry,
         std::sync::Arc::clone(&h.device),
         h.width,
@@ -230,7 +320,7 @@ fn rt_ghost_orbit_consecutive_frame_luma_diff_exceeds_threshold() {
     .expect("RT ghost-probe scene graph must build");
     let target = h.make_target("rt-t1a-ghost");
 
-    let render_one = |runtime: &mut PresetRuntime, ctx: &PresetContext| {
+    let render_one = |runtime: &mut PresetRuntime, target: &RenderTarget, ctx: &PresetContext| {
         let mut enc = h.device.create_encoder("rt-t1a-ghost-enc");
         {
             let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
@@ -247,7 +337,7 @@ fn rt_ghost_orbit_consecutive_frame_luma_diff_exceeds_threshold() {
     // Settle: warm up the accel structure + irradiance history at a FIXED
     // orbit (time=0 => orbit=ORBIT_BASE, same as rt_p1_region_probe).
     for frame in 0..RT_WARMUP_FRAMES {
-        render_one(&mut runtime, &make_ctx(h, 0.0, frame));
+        render_one(&mut runtime, &target, &make_ctx(h, 0.0, frame));
     }
 
     // Tracked world point: `rt_p1_region_probe`'s "occluded region" world
@@ -255,36 +345,93 @@ fn rt_ghost_orbit_consecutive_frame_luma_diff_exceeds_threshold() {
     // occlusion/GI gradient — the accumulated `irradiance` channel BUG-311
     // lives in) rather than the flat far-corner lit patch (near-uniform
     // irradiance there hides the same-texel history artifact almost
-    // entirely — verified: swept and measured <0.002 there pre-fix).
+    // entirely).
     let ghost_world = [1.0_f32, 0.0, -1.0];
 
-    let mut lumas = Vec::with_capacity(GHOST_FRAMES);
-    for i in 0..GHOST_FRAMES {
-        let time = i as f64 * GHOST_TIME_STEP;
-        let orbit = ORBIT_BASE + ORBIT_RATE * time as f32;
-        let cam = Camera::orbit_perspective(orbit, TILT, DISTANCE, FOV_Y, 0.0, 0.0, NEAR, FAR);
-        let px = cam
-            .project_to_pixel(ghost_world, h.width, h.height)
-            .unwrap_or_else(|| panic!("lit probe point must stay on-screen through the sweep at frame {i} (orbit={orbit})"));
+    // RAMP: `time` (and therefore `orbit`) advances every frame. HOLD:
+    // `time` is frozen at the ramp's final value — same "repeat the same
+    // timestamp" shape `RT_WARMUP_FRAMES` already uses safely (actual_delta
+    // 0 vs expected GHOST_TIME_STEP doesn't trip the 1.5x discontinuity
+    // gate), so it holds history instead of resetting it.
+    let final_time = (RAMP_FRAMES - 1) as f64 * GHOST_TIME_STEP;
+    let final_orbit = ORBIT_BASE + ORBIT_RATE * final_time as f32;
+    let cam = Camera::orbit_perspective(final_orbit, TILT, DISTANCE, FOV_Y, 0.0, 0.0, NEAR, FAR);
+    let px = cam
+        .project_to_pixel(ghost_world, h.width, h.height)
+        .expect("lit probe point must project on-screen at the ramp's final pose");
 
-        render_one(&mut runtime, &make_ctx(h, time, RT_WARMUP_FRAMES + i as i64));
-        let bytes = h.readback(&target.texture);
-        let values = region_luma_values(&bytes, h.width, h.height, px.px, px.py, 7);
-        lumas.push(mean(&values));
+    let mut accumulated_values = Vec::new();
+    for i in 0..GHOST_FRAMES {
+        let time = (i.min(RAMP_FRAMES - 1)) as f64 * GHOST_TIME_STEP;
+        render_one(
+            &mut runtime,
+            &target,
+            &make_ctx_with_dt(h, time, RT_WARMUP_FRAMES + i as i64, GHOST_TIME_STEP as f32),
+        );
+        if i == GHOST_FRAMES - 1 {
+            let bytes = h.readback(&target.texture);
+            accumulated_values = region_luma_values(&bytes, h.width, h.height, px.px, px.py, 7);
+        }
     }
 
-    let diffs: Vec<f64> = lumas.windows(2).map(|w| (w[1] - w[0]).abs()).collect();
-    let mean_abs_diff = mean(&diffs);
+    // --- COLD: a FRESH runtime with the camera fixed at the exact final
+    // orbit angle from frame zero (orbit_rate=0.0, orbit_base=final_orbit),
+    // so its irradiance history only ever sees this one pose — no motion,
+    // no reprojection needed, a clean ground truth for "what this pose
+    // should look like". Same warmup frame count as the accumulated run so
+    // the accel structure and irradiance both settle identically.
+    let mut cold_runtime = PresetRuntime::from_json_str_with_device(
+        &scene_json(0.0, final_orbit),
+        &registry,
+        std::sync::Arc::clone(&h.device),
+        h.width,
+        h.height,
+        GpuTextureFormat::Rgba16Float,
+        None,
+    )
+    .expect("RT ghost-probe cold-reference scene graph must build");
+    let cold_target = h.make_target("rt-t1a-ghost-cold");
+    for frame in 0..RT_WARMUP_FRAMES {
+        render_one(&mut cold_runtime, &cold_target, &make_ctx(h, 0.0, frame));
+    }
+    let cold_cam = Camera::orbit_perspective(final_orbit, TILT, DISTANCE, FOV_Y, 0.0, 0.0, NEAR, FAR);
+    let cold_px = cold_cam
+        .project_to_pixel(ghost_world, h.width, h.height)
+        .expect("lit probe point must project on-screen at the cold final pose");
+    let cold_bytes = h.readback(&cold_target.texture);
+    let cold_values = region_luma_values(&cold_bytes, h.width, h.height, cold_px.px, cold_px.py, 7);
+
+    assert_eq!(
+        accumulated_values.len(),
+        cold_values.len(),
+        "accumulated and cold region windows must sample the same pixel count"
+    );
+    let per_pixel_abs_diff: Vec<f64> = accumulated_values
+        .iter()
+        .zip(cold_values.iter())
+        .map(|(a, c)| (a - c).abs())
+        .collect();
+    let mean_abs_diff = mean(&per_pixel_abs_diff);
+
+    let max_abs_diff = per_pixel_abs_diff.iter().cloned().fold(0.0_f64, f64::max);
     eprintln!(
-        "ghost probe: lumas={lumas:?} consecutive-frame mean_abs_diff={mean_abs_diff:.4} (threshold={GHOST_MEAN_ABS_DIFF_THRESHOLD:.4})"
+        "ghost probe: final_orbit={final_orbit:.4} accumulated_mean={:.4} cold_mean={:.4} \
+         mean_abs_diff={mean_abs_diff:.4} max_abs_diff={max_abs_diff:.4} \
+         acc_min={:.4} acc_max={:.4} cold_min={:.4} cold_max={:.4} (threshold={GHOST_MEAN_ABS_DIFF_THRESHOLD:.4})",
+        mean(&accumulated_values),
+        mean(&cold_values),
+        accumulated_values.iter().cloned().fold(f64::MAX, f64::min),
+        accumulated_values.iter().cloned().fold(f64::MIN, f64::max),
+        cold_values.iter().cloned().fold(f64::MAX, f64::min),
+        cold_values.iter().cloned().fold(f64::MIN, f64::max),
     );
 
     assert!(
         mean_abs_diff <= GHOST_MEAN_ABS_DIFF_THRESHOLD,
-        "T1-C's motion-reprojected accumulation should keep consecutive-frame \
-         luminance change at the tracked world point at or below \
-         {GHOST_MEAN_ABS_DIFF_THRESHOLD} under camera orbit, got {mean_abs_diff:.4} \
-         (pre-fix baseline was 0.0444) — lumas={lumas:?}"
+        "T1-C's motion-reprojected accumulation should keep the accumulated-final-pose \
+         render within {GHOST_MEAN_ABS_DIFF_THRESHOLD} mean abs luminance of a cold-start \
+         render at the same pose, got {mean_abs_diff:.4} — accumulated={accumulated_values:?} \
+         cold={cold_values:?}"
     );
 }
 
@@ -318,7 +465,7 @@ fn rt_still_frame_speckle_variance_exceeds_thresholds() {
     let h = harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
-        &scene_json(0.0),
+        &scene_json(0.0, ORBIT_BASE),
         &registry,
         std::sync::Arc::clone(&h.device),
         h.width,
