@@ -1,6 +1,6 @@
 # Token Economics — measured spend, provider options, routing rules
 
-**Status:** MEASURED BASELINE 2026-07-23 (Fable session, final night of the Claude roster). Every number below came from local Claude Code transcripts, not from estimates — regenerate with `python3 .claude/scripts/token_report.py`. Companion to `docs/AGENT_ROUTING.md` §0 (R5 window economy, R6 executor shape, R7 CLAUDE.md size, R8 LiteLLM proxy). **Read this before making any purchasing or routing decision.**
+**Status:** MEASURED BASELINE 2026-07-23 (Fable session, final night of the Claude roster). Every number below came from local Claude Code transcripts, not from estimates — regenerate with `python3 scripts/token_report.py`. Companion to `docs/AGENT_ROUTING.md` §0 (R5 window economy, R6 executor shape, R7 CLAUDE.md size, R8 LiteLLM proxy). **Read this before making any purchasing or routing decision.**
 
 Written the night before the K3/GLM5.2/DeepSeek roster change, so the baseline is the *old* roster at full tilt. That is the point: it is the control group.
 
@@ -9,11 +9,11 @@ Written the night before the K3/GLM5.2/DeepSeek roster change, so the baseline i
 ## 1. How to reproduce
 
 ```
-python3 .claude/scripts/token_report.py            # 30-day totals by model
-python3 .claude/scripts/token_report.py --days 2   # recent window
-python3 .claude/scripts/token_report.py --daily    # per-day trend
-python3 .claude/scripts/token_report.py --sessions # concentration + context growth
-python3 .claude/scripts/token_report.py --tools    # tool mix by seat type
+python3 scripts/token_report.py            # 30-day totals by model
+python3 scripts/token_report.py --days 2   # recent window
+python3 scripts/token_report.py --daily    # per-day trend
+python3 scripts/token_report.py --sessions # concentration + context growth
+python3 scripts/token_report.py --tools    # tool mix by seat type
 ```
 
 Source: `~/.claude/projects/**/*.jsonl`, the per-message `usage` block Claude Code writes locally. Deduped by `message.id`. **Never quote a number from this doc without re-running** — it ages the moment the roster changes, which is the whole reason it exists.
