@@ -420,6 +420,25 @@ impl Executor {
         }
     }
 
+    /// BUG-318: drop all memoized-dataflow state so the next frame
+    /// re-executes every step. MUST be called whenever the host swaps
+    /// `ExecutionPlan` under a live executor (BUG-317's forced-outputs
+    /// recompile): a memo-CLEAN step serves consumers from *held* backend
+    /// slots recorded under the old plan — after a swap those handles can
+    /// dangle (observed: a static gltf mesh subgraph stayed "clean" across
+    /// an `rt_enabled` toggle, its held `vertices` array slot went stale,
+    /// and every object rendered magenta-clear). Setting `memo_steps_len`
+    /// to `None` routes the next `execute_frame_*` through the existing
+    /// rebuild branch, which clears `step_memo` / `resource_epoch` /
+    /// `alias_propagation_state` together. Persistent resources
+    /// (`initialized_persistent`) are deliberately kept: their ResourceIds
+    /// are topo-stable across a same-structure recompile and their contents
+    /// (temporal history) remain valid — a toggle must not cause a history
+    /// reset that D15 didn't decide.
+    pub fn invalidate_memoized_dataflow(&mut self) {
+        self.memo_steps_len = None;
+    }
+
     /// Enable per-step attribution profiling (CPU encode cost + GPU span
     /// tags). Pair with [`manifold_gpu::GpuEncoder::enable_dispatch_profiling`]
     /// on the frame's encoder; read results via [`Self::take_step_profiles`].
