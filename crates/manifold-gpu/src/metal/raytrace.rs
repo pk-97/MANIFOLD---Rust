@@ -1263,10 +1263,36 @@ kernel void accumulate_irradiance(
         float4 clip = float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, cur_depth, 1.0);
         float4 wh = p.inv_view_proj * clip;
         float3 wp = wh.xyz / wh.w;
+        // BUG-322: carry BOTH the position and the NORMAL into the
+        // previous frame's object space. T2-C rotated only the position;
+        // `normal_history` stores world-space normals, so on a ROTATING
+        // object the stored normal is in last frame's orientation while
+        // `cur_normal` is in this frame's. Comparing them raw makes the
+        // validity test below fail by exactly the object's rotation —
+        // history rejected every frame, back to raw 2-6 spp, i.e. the
+        // shimmer. Curvature amplifies it (a rotating curved surface
+        // shows a different normal per pixel per frame), which is why
+        // Peter's DamagedHelmet shimmered while flat flowers did not,
+        // and why an earlier TRANSLATION-only oracle saw nothing wrong:
+        // translation leaves normals untouched.
+        float3 cur_normal_prev = cur_normal;
         if (cur_n4.w >= 0.0) {
             uint oid = uint(cur_n4.w + 0.5);
             if (oid < p.obj_count) {
-                wp = (obj_motion[oid] * float4(wp, 1.0)).xyz;
+                float4x4 m = obj_motion[oid];
+                wp = (m * float4(wp, 1.0)).xyz;
+                // Rotation/scale block only — a normal is a direction, so
+                // the translation column must not apply. Non-uniform
+                // scale would strictly want the inverse-transpose, but
+                // this matrix is `prev_model * inverse(model)`: for the
+                // rigid and uniformly-scaled transforms scene objects
+                // carry it is already a similarity, where the plain 3x3
+                // preserves direction exactly. Normalized below, so any
+                // uniform scale factor drops out.
+                float3x3 r = float3x3(m[0].xyz, m[1].xyz, m[2].xyz);
+                float3 n = r * cur_normal;
+                float len = length(n);
+                cur_normal_prev = len > 1e-6 ? n / len : cur_normal;
             }
         }
 
@@ -1287,14 +1313,17 @@ kernel void accumulate_irradiance(
                 // noise across a single frame of camera motion.
                 const float DEPTH_REJECT_THRESHOLD = 5e-3;
                 // NORMAL_REJECT_COS_THRESHOLD: cosine of the angle between
-                // this frame's and the reprojected history's normal — 0.9
-                // (~26 degrees) rejects a silhouette/edge texel whose
-                // reprojection lands on a different face while tolerating
-                // the same surface's normal drifting slightly under one
-                // frame of camera motion or animation.
+                // the reprojected history's normal and THIS frame's normal
+                // carried back into that frame's object orientation
+                // (`cur_normal_prev`, BUG-322) — 0.9 (~26 degrees) rejects
+                // a silhouette/edge texel whose reprojection lands on a
+                // different face while tolerating the same surface's normal
+                // drifting slightly under one frame of motion. Comparing in
+                // ONE consistent orientation is what makes the threshold
+                // mean "different surface" rather than "the object turned".
                 const float NORMAL_REJECT_COS_THRESHOLD = 0.9;
                 bool depth_ok = fabs(stored_depth - prev_ndc.z) < DEPTH_REJECT_THRESHOLD;
-                bool normal_ok = dot(normalize(stored_normal), cur_normal) > NORMAL_REJECT_COS_THRESHOLD;
+                bool normal_ok = dot(normalize(stored_normal), cur_normal_prev) > NORMAL_REJECT_COS_THRESHOLD;
                 if (depth_ok && normal_ok) {
                     float4 hist = history_read.read(prev_tid);
                     blended = mix(hist.xyz, cur.xyz, p.alpha);
