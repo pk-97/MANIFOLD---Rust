@@ -633,6 +633,13 @@ struct AccumulateParams {
     uint2 size;
     float alpha;
     uint  reset;
+    // RT-T2-C (object motion): number of entries in the `obj_motion`
+    // buffer; a per-pixel object id at or beyond this count reprojects
+    // camera-only (identity object motion). Explicit pad keeps the
+    // float4x4s at the same 16-byte-aligned offsets the CPU mirror
+    // asserts.
+    uint  obj_count;
+    uint  pad0; uint pad1; uint pad2;
     float4x4 inv_view_proj;
     float4x4 prev_view_proj;
 };
@@ -747,10 +754,11 @@ kernel void trace_shadow_rays(
     if (!valid) {
         // Void background: unoccluded either way (matches the prototype's
         // `out_sv.write(float4(1,1,0,0), tid)` void case) — irradiance is
-        // ambient-only (no surface to shadow-test against).
+        // ambient-only (no surface to shadow-test against). `.w = -1`:
+        // no object (RT-T2-C).
         out_sv.write(float4(1, 1, 0, 0), tid);
         out_irr.write(float4(p.ambient_color, 0), tid);
-        out_n.write(float4(0, 1, 0, 0), tid);
+        out_n.write(float4(0, 1, 0, -1.0), tid);
         return;
     }
     // Neighbor world positions (screen-space reconstruction, RT-D3) — kept
@@ -773,6 +781,15 @@ kernel void trace_shadow_rays(
     // itself came from this same accel's geometry via the depth prepass,
     // but a grazing-angle/epsilon edge case shouldn't crash the kernel).
     float3 n = float3(0, 1, 0);
+    // RT-T2-C (object motion): this pixel's primary-hit instance id, or
+    // -1 when unknown (no primary ray cast, or it missed). Rides in
+    // `out_n.w` — free channel, already threaded through the upsample and
+    // à-trous stages — so `accumulate_irradiance` can reproject a MOVING
+    // object's pixels through that object's own prev-frame transform
+    // instead of discarding their history as disocclusion (the motion-
+    // shimmer BUG-320 left behind). Stored as float: instance counts are
+    // far below f32's 2^24 exact-integer range.
+    float obj_id = -1.0;
     if (p.ao_spp > 0u || p.gi_spp > 0u) {
         float3 to_surface = wp - float3(p.camera_pos);
         float dist = length(to_surface);
@@ -785,7 +802,9 @@ kernel void trace_shadow_rays(
             intersection_query<triangle_data, instancing> primary_q;
             primary_q.reset(pr, accel);
             if (walk_with_alpha_test(primary_q, normal_sources, alpha_textures, false)) {
-                n = fetch_interpolated_normal(normal_sources, primary_q.get_committed_instance_id(), primary_q.get_committed_primitive_id(), primary_q.get_committed_triangle_barycentric_coord());
+                uint primary_iid = primary_q.get_committed_instance_id();
+                n = fetch_interpolated_normal(normal_sources, primary_iid, primary_q.get_committed_primitive_id(), primary_q.get_committed_triangle_barycentric_coord());
+                obj_id = float(primary_iid);
             }
         }
     }
@@ -880,7 +899,8 @@ kernel void trace_shadow_rays(
     // (`n`) already computed above for AO/GI cosine sampling, so
     // `accumulate_irradiance`'s reprojection validity test can compare a
     // real surface normal instead of reconstructing one from depth.
-    out_n.write(float4(n, 0), tid);
+    // RT-T2-C: `.w` carries the primary-hit object id (see `obj_id` above).
+    out_n.write(float4(n, obj_id), tid);
 
     // RT-P3 (RAYTRACING_DESIGN.md §5.2 P3, D4): one-bounce GI gather —
     // ported from the P0 prototype's `trace_lighting` GI block (ARC
@@ -1005,7 +1025,7 @@ kernel void upsample_shadow(
     if (d >= 1.0 - 1e-6) {
         hi_sv.write(float4(1, 1, 0, 0), tid);
         hi_irr.write(float4(p.ambient_color, 0), tid);
-        hi_n.write(float4(0, 1, 0, 0), tid);
+        hi_n.write(float4(0, 1, 0, -1.0), tid);
         return;
     }
 
@@ -1015,7 +1035,8 @@ kernel void upsample_shadow(
     // nearest the destination texel (round, not floor/ceil, so it's
     // whichever of the 2x2 gather's four taps this pixel is closest to).
     int2 nearest_lo = clamp(int2(round(lo_uv - 0.5)), int2(0), int2(p.trace_size) - 1);
-    float3 ref_n = lo_n.read(uint2(nearest_lo)).xyz;
+    float4 ref_n4 = lo_n.read(uint2(nearest_lo));
+    float3 ref_n = ref_n4.xyz;
     // UPSAMPLE_NORMAL_POWER: cosine power on the tap-vs-reference normal
     // dot product — named per the P2 constants rule. Range 8-64: lower
     // tolerates more silhouette blur across the 2x2 gather, higher rejects
@@ -1044,7 +1065,9 @@ kernel void upsample_shadow(
     hi_irr.write(float4(acc_irr / wsum, 0), tid);
     float3 n_avg = acc_n / wsum;
     float n_len = length(n_avg);
-    hi_n.write(float4(n_len > 1e-4 ? n_avg / n_len : float3(0, 1, 0), 0), tid);
+    // RT-T2-C: object ids never blend — carry the nearest tap's id (the
+    // same tap already trusted as the edge-stop reference normal).
+    hi_n.write(float4(n_len > 1e-4 ? n_avg / n_len : float3(0, 1, 0), ref_n4.w), tid);
 }
 
 // RT-T1-D (RAYTRACING_DESIGN.md §8 Tier-1 item 3, BUG-312): CPU mirror
@@ -1103,7 +1126,8 @@ kernel void atrous_filter(
         dst_n.write(src_n.read(tid), tid);
         return;
     }
-    float3 center_n = src_n.read(tid).xyz;
+    float4 center_n4 = src_n.read(tid);
+    float3 center_n = center_n4.xyz;
     float3 center_irr = src_irr.read(tid).rgb;
     float center_luma = luma(center_irr);
     float center_var = 0.0;
@@ -1156,7 +1180,8 @@ kernel void atrous_filter(
     }
     dst_irr.write(float4(acc_irr / wsum, 0), tid);
     dst_sv.write(float4(acc_sv / wsum, 0, 0), tid);
-    dst_n.write(float4(center_n, 0), tid);
+    // RT-T2-C: `.w` = object id, passed through untouched (never blended).
+    dst_n.write(float4(center_n, center_n4.w), tid);
 }
 
 // RT-P2/D3, extended RT-T1-C (BUG-311): temporal accumulation of the
@@ -1180,6 +1205,10 @@ kernel void atrous_filter(
 // ordering guarantee between compute threads.
 kernel void accumulate_irradiance(
     constant AccumulateParams&           p                    [[buffer(1)]],
+    // RT-T2-C (object motion): per-object world→prev-world delta
+    // (`prev_model * inverse(model)`), indexed by the primary-hit object
+    // id carried in `hi_normal.w`. Identity for a static object.
+    constant float4x4*                   obj_motion           [[buffer(2)]],
     texture2d<float>                     hi_irr               [[texture(0)]],
     depth2d<float>                       depth_tex            [[texture(1)]],
     texture2d<float>                     hi_normal            [[texture(2)]],
@@ -1204,7 +1233,8 @@ kernel void accumulate_irradiance(
     if (tid.x >= p.size.x || tid.y >= p.size.y) return;
     float4 cur = hi_irr.read(tid);
     float  cur_depth = depth_tex.read(tid, 0);
-    float3 cur_normal = hi_normal.read(tid).xyz;
+    float4 cur_n4 = hi_normal.read(tid);
+    float3 cur_normal = cur_n4.xyz;
     float  cur_luma = luma(cur.xyz);
 
     if (p.reset != 0u) {
@@ -1215,14 +1245,15 @@ kernel void accumulate_irradiance(
         return;
     }
 
-    // Camera motion only: `wp` is reprojected as a static world-space
-    // point (no per-object `prev_model` term — this screen-space pass has
-    // no per-pixel object id to look one up with). Exact for a static
-    // scene under camera motion (the ORBIT oracle's case); for an
-    // animated object's own pixels the depth/normal test below simply
-    // fails and falls back to current-frame-only, same as any other
-    // disocclusion — no ghosting, just less temporal amortization on that
-    // object until reprojection re-agrees.
+    // RT-T2-C: camera motion AND object motion. `wp` (this frame, world
+    // space) is first carried back to where this OBJECT placed that
+    // surface point last frame via `obj_motion` (world→prev-world,
+    // identity for static objects; camera-only when the pixel has no
+    // object id — void, or a shadow-only frame that cast no primary
+    // ray), then reprojected through the previous camera. Without the
+    // object term, a moving object's pixels failed the depth/normal test
+    // below every frame and lost ALL temporal amortization mid-gesture —
+    // visible shimmer until motion stopped (the residual BUG-320 left).
     bool valid = false;
     float3 blended = cur.xyz;
     float moment1 = cur_luma;
@@ -1232,6 +1263,12 @@ kernel void accumulate_irradiance(
         float4 clip = float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, cur_depth, 1.0);
         float4 wh = p.inv_view_proj * clip;
         float3 wp = wh.xyz / wh.w;
+        if (cur_n4.w >= 0.0) {
+            uint oid = uint(cur_n4.w + 0.5);
+            if (oid < p.obj_count) {
+                wp = (obj_motion[oid] * float4(wp, 1.0)).xyz;
+            }
+        }
 
         float4 prev_clip = p.prev_view_proj * float4(wp, 1.0);
         if (prev_clip.w > 1e-6) {
@@ -1583,6 +1620,14 @@ pub struct AccumulateParams {
     /// flip keeps the blend, which is exactly what makes the numeric
     /// strobe-proof differ from a cold start).
     pub reset: u32,
+    /// RT-T2-C (object motion): entry count of the `obj_motion` buffer
+    /// bound alongside — a per-pixel object id at or beyond this count
+    /// (stale texture content across a topology change) reprojects
+    /// camera-only instead of reading out of bounds.
+    pub obj_count: u32,
+    /// Explicit pad — keeps the two `float4x4`s below on the 16-byte
+    /// offsets the MSL struct's own padding puts them at (asserted below).
+    pub _pad: [u32; 3],
     /// RT-T1-C (BUG-311): current-frame inverse view-proj, for
     /// reconstructing this texel's world position from `depth_tex` — SAME
     /// matrix `ShadowRayParams::inv_view_proj` already carries this frame.
@@ -1594,20 +1639,21 @@ pub struct AccumulateParams {
     pub prev_view_proj: [[f32; 4]; 4],
 }
 
-// `size`(8) + `alpha`(4) + `reset`(4) = 16 bytes — already a multiple of
-// 16, so both `float4x4` columns that follow land on a 16-byte boundary
-// with no explicit padding needed (unlike `ShadowRayParams`'s
-// `inv_view_proj`, which needed one). Asserted directly rather than
-// re-derived, same discipline as the `ShadowRayParams` guard above.
-const _: () = assert!(std::mem::offset_of!(AccumulateParams, inv_view_proj) == 16);
-const _: () = assert!(std::mem::offset_of!(AccumulateParams, prev_view_proj) == 80);
-const _: () = assert!(std::mem::size_of::<AccumulateParams>() == 144);
+// `size`(8) + `alpha`(4) + `reset`(4) + `obj_count`(4) + pad(12) = 32
+// bytes — a multiple of 16, so both `float4x4`s that follow land on a
+// 16-byte boundary (RT-T2-C widened the pre-matrix block from 16 to 32).
+// Asserted directly rather than re-derived, same discipline as the
+// `ShadowRayParams` guard above.
+const _: () = assert!(std::mem::offset_of!(AccumulateParams, inv_view_proj) == 32);
+const _: () = assert!(std::mem::offset_of!(AccumulateParams, prev_view_proj) == 96);
+const _: () = assert!(std::mem::size_of::<AccumulateParams>() == 160);
 
 impl AccumulateParams {
     pub fn new(
         size: [u32; 2],
         alpha: f32,
         reset: bool,
+        obj_count: u32,
         inv_view_proj: [[f32; 4]; 4],
         prev_view_proj: [[f32; 4]; 4],
     ) -> Self {
@@ -1615,6 +1661,8 @@ impl AccumulateParams {
             size,
             alpha,
             reset: reset as u32,
+            obj_count,
+            _pad: [0; 3],
             inv_view_proj,
             prev_view_proj,
         }
@@ -1851,6 +1899,9 @@ pub trait ShadowRayTracer {
         encoder: &mut GpuEncoder,
         params: &AccumulateParams,
         params_buffer: &GpuBuffer,
+        // RT-T2-C: per-object world→prev-world motion matrices
+        // (`params.obj_count` entries of column-major `[[f32; 4]; 4]`).
+        obj_motion: &GpuBuffer,
         hi_irr: &GpuTexture,
         depth_tex: &GpuTexture,
         hi_normal: &GpuTexture,
@@ -1968,6 +2019,7 @@ impl MetalShadowRayTracer {
             "accumulate_irradiance",
             identity_slot_map(&[
                 (1, SlotKind::Buffer),
+                (2, SlotKind::Buffer), // RT-T2-C: obj_motion, MSL [[buffer(2)]]
                 (0, SlotKind::Texture), // RT-T1-C: hi_irr
                 (1, SlotKind::Texture), // RT-T1-C: depth_tex
                 (2, SlotKind::Texture), // RT-T1-C: hi_normal
@@ -2278,6 +2330,9 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         encoder: &mut GpuEncoder,
         params: &AccumulateParams,
         params_buffer: &GpuBuffer,
+        // RT-T2-C: per-object world→prev-world motion matrices
+        // (`params.obj_count` entries of column-major `[[f32; 4]; 4]`).
+        obj_motion: &GpuBuffer,
         hi_irr: &GpuTexture,
         depth_tex: &GpuTexture,
         hi_normal: &GpuTexture,
@@ -2299,6 +2354,11 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                 GpuBinding::Buffer {
                     binding: 1,
                     buffer: params_buffer,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: obj_motion,
                     offset: 0,
                 },
                 GpuBinding::Texture {
