@@ -46,6 +46,7 @@ mod rt_p4_metalfx_temporal;
 mod rt_t1a_ghost_speckle;
 mod rt_t1b_vertex_normals;
 mod rt_t2a_alpha_mask;
+mod rt_t2b_temporal_wiring;
 mod rt_w0_gbuffer;
 mod scene_object_migration_round_trip;
 mod scene_viewport_navigate;
