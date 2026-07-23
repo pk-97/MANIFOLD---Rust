@@ -2800,7 +2800,23 @@ impl EffectNode for RenderScene {
         // is the point". `native_width`/`native_height` are kept for the
         // two things that must stay at the TRUE canvas size: the
         // upscaler's dst dims and the final blit destination.
-        let temporal_upscale = matches!(ctx.params.get("temporal_upscale"), Some(ParamValue::Bool(true)));
+        let temporal_upscale_param = matches!(ctx.params.get("temporal_upscale"), Some(ParamValue::Bool(true)));
+        // BUG-319: the reduced-res path is only viable when the compiled
+        // plan actually carries the stored depth/velocity targets MetalFX
+        // needs. A LIVE toggle can't change the plan (the in-place
+        // recompile is retracted — see PresetRuntime::refresh_plan_if_
+        // forced_outputs_changed), so a param=true / targets-absent frame
+        // renders natively — correct image, loud log, zero corruption —
+        // until the runtime rebuilds with the param baked in.
+        let temporal_upscale = temporal_upscale_param
+            && ctx.outputs.texture_2d("depth").is_some()
+            && ctx.outputs.texture_2d("velocity").is_some();
+        if temporal_upscale_param && !temporal_upscale && !self.rt_temporal_unavailable_logged {
+            self.rt_temporal_unavailable_logged = true;
+            log::warn!(
+                "node.render_scene: temporal_upscale is on but this runtime's plan has no stored depth/velocity targets (live toggle — BUG-319); rendering natively until the scene runtime rebuilds"
+            );
+        }
         let native_width = width;
         let native_height = height;
         let width = if temporal_upscale {

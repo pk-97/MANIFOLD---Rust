@@ -152,3 +152,71 @@ fn live_rt_toggle_on_imported_glb_scene_never_magenta_clears() {
         "BUG-318: post-toggle frames are the magenta error fallback (fraction {frac}) — dangling mesh/vertices bindings after plan recompile"
     );
 }
+
+
+/// BUG-319 — Peter's ACTUAL break, with the ACTUAL asset (held-out fixture;
+/// skip if absent): fresh import of the apricot GLB, render, live rt_enabled
+/// toggle ON. Distinct from the mixamo case above: the apricot's meshes are
+/// STATIC installed vertex buffers (pre-allocated at build via
+/// `pre_allocate_resources`), not per-frame-written arrays — the plan
+/// recompile must re-run the pre-allocation pipeline or those buffers
+/// dangle and every object magenta-clears.
+#[test]
+fn live_rt_toggle_on_apricot_static_buffers_never_magenta_clears() {
+    let glb = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/gltf/cc0__japanese_apricot_prunus_mume.glb");
+    if !glb.exists() {
+        eprintln!("[bug319] held-out fixture absent, skipping: {glb:?}");
+        return;
+    }
+    let h = harness::shared();
+    let (def, report) = assemble_import_graph(&glb).expect("apricot import must succeed");
+    eprintln!("[bug319] import report: {report:?}");
+
+    let registry = PrimitiveRegistry::with_builtin();
+    let mut runtime = PresetRuntime::from_def_with_device(
+        def,
+        &registry,
+        std::sync::Arc::clone(&h.device),
+        W,
+        H,
+        GpuTextureFormat::Rgba16Float,
+        None,
+    )
+    .expect("apricot def must build a runtime");
+
+    let target = h.make_target("bug319-apricot");
+    for f in 0..4 {
+        frame(&mut runtime, h, &target.texture, f);
+    }
+    let before = crate::rt_t2b_temporal_wiring::readback_rgba_f32(&h.device, &target.texture);
+    assert!(
+        magenta_fraction(&before) < 0.5,
+        "apricot must render sanely BEFORE the toggle (magenta fraction {})",
+        magenta_fraction(&before)
+    );
+
+    let scene_node = runtime
+        .graph
+        .nodes()
+        .find(|n| n.params.get("rt_enabled").is_some())
+        .map(|n| n.id)
+        .expect("imported scene contains node.render_scene");
+    runtime
+        .graph
+        .set_param(
+            scene_node,
+            "rt_enabled",
+            manifold_renderer::node_graph::ParamValue::Bool(true),
+        )
+        .expect("rt_enabled exists");
+    for f in 4..10 {
+        frame(&mut runtime, h, &target.texture, f);
+    }
+    let after = crate::rt_t2b_temporal_wiring::readback_rgba_f32(&h.device, &target.texture);
+    let frac = magenta_fraction(&after);
+    assert!(
+        frac < 0.5,
+        "BUG-319: post-toggle frames are the magenta error fallback (fraction {frac}) — static pre-allocated buffers dangling after plan recompile"
+    );
+}

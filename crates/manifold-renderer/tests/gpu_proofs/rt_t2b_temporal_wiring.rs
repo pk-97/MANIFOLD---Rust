@@ -460,7 +460,7 @@ fn dump_side_by_side_pngs_for_peter() {
 /// upscaled output still matches a native render within the coarse epsilon
 /// (proves the recompiled path actually upscales the scene, not garbage).
 #[test]
-fn live_temporal_upscale_toggle_recompiles_plan_and_does_not_panic() {
+fn live_temporal_upscale_toggle_is_inert_and_does_not_panic() {
     let h = harness::shared();
 
     let mut runtime = build_runtime(h, false);
