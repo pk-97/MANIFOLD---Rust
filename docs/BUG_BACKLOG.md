@@ -50,7 +50,7 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
-| BUG-313 | **scene-panel-filtered-vs-unfiltered-index-mismatch** | Scene panel builds rows from the `card_visible`-filtered surface (`properties_retained` = indices into it) but `sync_properties_values` resolves those indices against the unfiltered `with_param_slots` slice — every readout/handle shows a DIFFERENT param's value; scale + material rows missing. Fix IN PROGRESS on `lane/bug313-id-keyed-sync`. | OPEN |
+| ~~BUG-313~~ FIXED | **scene-panel-filtered-vs-unfiltered-index-mismatch** | FIXED @ `bbba95f1` (landed `d34407a0`, same day) — positional cross-boundary join class removed: id-keyed value channel (borrowed ids, zero alloc), required `SurfaceVisibility` on the structural builder, sync side visibility-agnostic by construction, `with_visible_param_slots` + `properties_retained` deleted, INV-6 miss/duplicate asserts real. Flow `scene-setup-light-intensity-drag` green again. | RESOLVED |
 | BUG-314 | **sync-card-values-positional-effect-join** | `sync_card_values` joins card slot i ↔ effect index i positionally — an effect-list reorder between structural syncs pushes values onto the wrong CARD. Same positional-cross-boundary-join class as BUG-313, one level up. Fix after BUG-313 lands. | OPEN |
 | BUG-311 | **rt-accum-no-reprojection-ghosts-on-motion** | `accumulate_irradiance` blends history at the same texel (alpha 0.15) with no motion reprojection and no depth/normal validity test — RT lighting trails ~15–20 frames behind ANY movement. Fix: SVGF-style reproject + reject (motion vectors already exist for MetalFX); needs a RAYTRACING_DESIGN.md amendment first. | OPEN |
 | BUG-312 | **rt-ray-noise-speckle** | 4 AO + 2 GI rays half-res is raw-noise territory without working accumulation; white speckle on lit surfaces. Blocked on BUG-311 — re-judge budgets only after reprojection lands. | OPEN |
@@ -214,7 +214,7 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 ## Open
 
 ### BUG-313 — scene panel per-frame value sync reads unfiltered manifest with filtered-surface indices
-**Status:** OPEN · fix IN PROGRESS on `lane/bug313-id-keyed-sync` (2026-07-23)
+**Status:** FIXED @ `bbba95f1`, landed on main via `d34407a0` (2026-07-23, same day). Verified: new id-join test `sync_values_joins_by_id_not_position_with_a_hidden_param_interleaved`, scoped nextest 1174 green, flow `scene-setup-light-intensity-drag` PASS (was failing at step 8).
 **Severity:** HIGH (instrument lies): panel drags land on the correct param but every readout/handle shows a DIFFERENT param's value; scale + material rows missing from the panel entirely.
 **Symptom:** dragging a slider in the scene panel writes the correct param but the on-screen value/handle shown belongs to a different param; scale and material rows don't appear in the panel at all.
 **Found:** 2026-07-23 via cross-model review (Opus diagnosis, Fable verification).
