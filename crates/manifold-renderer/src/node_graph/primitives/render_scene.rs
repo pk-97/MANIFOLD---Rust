@@ -696,7 +696,24 @@ pub struct RenderScene {
     /// lazy discipline as every other RT-only resource here).
     rt_irr_half: Option<manifold_gpu::GpuTexture>,
     rt_irr_full: Option<manifold_gpu::GpuTexture>,
-    rt_irr_history: Option<manifold_gpu::GpuTexture>,
+    /// RT-T1-C (RAYTRACING_DESIGN.md §8 Tier-1 item 1, BUG-311): the
+    /// temporally-accumulated demodulated irradiance, its per-pixel depth,
+    /// and its per-pixel normal history, each a PING-PONG PAIR —
+    /// `accumulate_irradiance`'s reprojection reads the PREVIOUS frame's
+    /// write target as this frame's read source (a single read_write
+    /// texture would race across threads within one dispatch — see the
+    /// kernel's own doc comment). `rt_history_ping` selects which slot is
+    /// currently the read side; flipped after every `accumulate_irradiance`
+    /// call, reset or not.
+    rt_irr_history: [Option<manifold_gpu::GpuTexture>; 2],
+    rt_depth_history: [Option<manifold_gpu::GpuTexture>; 2],
+    rt_normal_history: [Option<manifold_gpu::GpuTexture>; 2],
+    rt_history_ping: usize,
+    /// RT-T1-C: current-frame half-res/full-res primary-hit vertex normal
+    /// (same half/full lifecycle as `rt_irr_half`/`rt_irr_full` — produced
+    /// fresh every RT-ready frame, not persistent history).
+    rt_normal_half: Option<manifold_gpu::GpuTexture>,
+    rt_normal_full: Option<manifold_gpu::GpuTexture>,
     rt_irr_width: u32,
     rt_irr_height: u32,
     /// Small dedicated upload buffer for `AccumulateParams` — kept
@@ -874,7 +891,12 @@ impl RenderScene {
             rt_normal_sources_capacity: 0,
             rt_irr_half: None,
             rt_irr_full: None,
-            rt_irr_history: None,
+            rt_irr_history: [None, None],
+            rt_depth_history: [None, None],
+            rt_normal_history: [None, None],
+            rt_history_ping: 0,
+            rt_normal_half: None,
+            rt_normal_full: None,
             rt_irr_width: 0,
             rt_irr_height: 0,
             rt_accumulate_params_buffer: None,
@@ -1450,17 +1472,17 @@ impl RenderScene {
     /// which MUST pass `reset: true` in that case (a dimension change is
     /// itself a discontinuity, same as a cut).
     fn ensure_rt_irradiance(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) -> bool {
-        if self.rt_irr_width == width && self.rt_irr_height == height && self.rt_irr_history.is_some() {
+        if self.rt_irr_width == width && self.rt_irr_height == height && self.rt_irr_history[0].is_some() {
             return false;
         }
         let half_w = width.div_ceil(2).max(1);
         let half_h = height.div_ceil(2).max(1);
-        let make = |w: u32, h: u32, label: &'static str| {
+        let make = |w: u32, h: u32, format: manifold_gpu::GpuTextureFormat, label: &'static str| {
             device.create_texture(&manifold_gpu::GpuTextureDesc {
                 width: w,
                 height: h,
                 depth: 1,
-                format: manifold_gpu::GpuTextureFormat::Rgba16Float,
+                format,
                 dimension: manifold_gpu::GpuTextureDimension::D2,
                 usage: manifold_gpu::GpuTextureUsage::SHADER_WRITE
                     | manifold_gpu::GpuTextureUsage::SHADER_READ,
@@ -1468,9 +1490,31 @@ impl RenderScene {
                 mip_levels: 1,
             })
         };
-        self.rt_irr_half = Some(make(half_w, half_h, "node.render_scene rt_irr_half (RT-P2)"));
-        self.rt_irr_full = Some(make(width, height, "node.render_scene rt_irr_full (RT-P2)"));
-        self.rt_irr_history = Some(make(width, height, "node.render_scene rt_irr_history (RT-P2 temporal)"));
+        let rgba16 = manifold_gpu::GpuTextureFormat::Rgba16Float;
+        self.rt_irr_half = Some(make(half_w, half_h, rgba16, "node.render_scene rt_irr_half (RT-P2)"));
+        self.rt_irr_full = Some(make(width, height, rgba16, "node.render_scene rt_irr_full (RT-P2)"));
+        // RT-T1-C: current-frame primary-hit normal, same half/full
+        // lifecycle as irradiance above (not persistent history).
+        self.rt_normal_half = Some(make(half_w, half_h, rgba16, "node.render_scene rt_normal_half (RT-T1-C)"));
+        self.rt_normal_full = Some(make(width, height, rgba16, "node.render_scene rt_normal_full (RT-T1-C)"));
+        // RT-T1-C: ping-pong history pairs (irradiance, depth, normal) —
+        // see this struct's field doc comment for why two textures each.
+        self.rt_irr_history = [
+            make(width, height, rgba16, "node.render_scene rt_irr_history_a (RT-T1-C)"),
+            make(width, height, rgba16, "node.render_scene rt_irr_history_b (RT-T1-C)"),
+        ]
+        .map(Some);
+        self.rt_depth_history = [
+            make(width, height, manifold_gpu::GpuTextureFormat::R32Float, "node.render_scene rt_depth_history_a (RT-T1-C)"),
+            make(width, height, manifold_gpu::GpuTextureFormat::R32Float, "node.render_scene rt_depth_history_b (RT-T1-C)"),
+        ]
+        .map(Some);
+        self.rt_normal_history = [
+            make(width, height, rgba16, "node.render_scene rt_normal_history_a (RT-T1-C)"),
+            make(width, height, rgba16, "node.render_scene rt_normal_history_b (RT-T1-C)"),
+        ]
+        .map(Some);
+        self.rt_history_ping = 0;
         self.rt_irr_width = width;
         self.rt_irr_height = height;
         true
@@ -3540,7 +3584,8 @@ impl EffectNode for RenderScene {
                 let mask_full = self.rt_mask_full.as_ref().expect("ensured above");
                 let irr_half = self.rt_irr_half.as_ref().expect("ensured above");
                 let irr_full = self.rt_irr_full.as_ref().expect("ensured above");
-                let irr_history = self.rt_irr_history.as_ref().expect("ensured above");
+                let normal_half = self.rt_normal_half.as_ref().expect("ensured above");
+                let normal_full = self.rt_normal_full.as_ref().expect("ensured above");
                 tracer.dispatch_shadow_rays(
                     gpu.native_enc,
                     accel,
@@ -3551,6 +3596,7 @@ impl EffectNode for RenderScene {
                     depth_tex,
                     mask_half,
                     irr_half,
+                    normal_half,
                     "node.render_scene RT-D3/RT-P2/RT-P3 trace_shadow_rays",
                 );
                 tracer.upsample_shadow(
@@ -3561,6 +3607,8 @@ impl EffectNode for RenderScene {
                     mask_full,
                     irr_half,
                     irr_full,
+                    normal_half,
+                    normal_full,
                     "node.render_scene RT-D3/RT-P2 upsample_shadow",
                 );
                 // RAYTRACING_DESIGN.md §5.2 P2/D3, RT-D2: the ONE call site
@@ -3572,21 +3620,47 @@ impl EffectNode for RenderScene {
                 // this `if rt_ready` branch is that one call.
                 let reset = self.rt_reset_detector.detect_reset(owner_key, &frame_time)
                     || std::mem::take(&mut self.rt_irr_needs_reset);
+                // RT-T1-C: `prev_view_proj` is the SAME local captured
+                // above (BUG-311) before `self.prev_view_proj` was
+                // overwritten to this frame's `view_proj` — exactly what
+                // MetalFX's own velocity pass reprojects with.
                 let accumulate_params = manifold_gpu::raytrace::AccumulateParams::new(
                     [width, height],
                     IRRADIANCE_ACCUM_ALPHA,
                     reset,
+                    inv_view_proj,
+                    prev_view_proj,
                 );
                 let accumulate_params_buffer =
                     self.rt_accumulate_params_buffer.as_ref().expect("ensured above");
+                // RT-T1-C: ping-pong — read last frame's write slot, write
+                // the OTHER (stale-from-two-frames-ago, about to be fully
+                // overwritten) slot, then flip so next frame reads what was
+                // just written.
+                let read_idx = self.rt_history_ping;
+                let write_idx = 1 - read_idx;
+                let irr_history_read = self.rt_irr_history[read_idx].as_ref().expect("ensured above");
+                let irr_history_write = self.rt_irr_history[write_idx].as_ref().expect("ensured above");
+                let depth_history_read = self.rt_depth_history[read_idx].as_ref().expect("ensured above");
+                let depth_history_write = self.rt_depth_history[write_idx].as_ref().expect("ensured above");
+                let normal_history_read = self.rt_normal_history[read_idx].as_ref().expect("ensured above");
+                let normal_history_write = self.rt_normal_history[write_idx].as_ref().expect("ensured above");
                 tracer.accumulate_irradiance(
                     gpu.native_enc,
                     &accumulate_params,
                     accumulate_params_buffer,
                     irr_full,
-                    irr_history,
-                    "node.render_scene RT-P2 accumulate_irradiance",
+                    depth_tex,
+                    normal_full,
+                    irr_history_read,
+                    irr_history_write,
+                    depth_history_read,
+                    depth_history_write,
+                    normal_history_read,
+                    normal_history_write,
+                    "node.render_scene RT-P2/RT-T1-C accumulate_irradiance",
                 );
+                self.rt_history_ping = write_idx;
 
                 // RAYTRACING_DESIGN.md §5.2 P3 (D5, "emissive-colored
                 // volumetric glow"): every emissive object becomes an
@@ -3715,10 +3789,12 @@ impl EffectNode for RenderScene {
         // stub discipline every optional texture in this shader uses),
         // dummy when RT isn't active this frame.
         let rt_mask_tex = self.rt_mask_full.as_ref().unwrap_or(dummy);
-        // RAYTRACING_DESIGN.md §5.2 P2: the temporally-accumulated
-        // demodulated-irradiance history (dummy when RT isn't active this
+        // RAYTRACING_DESIGN.md §5.2 P2, extended RT-T1-C: the temporally-
+        // accumulated demodulated-irradiance history — `rt_history_ping`
+        // always indexes whichever ping-pong slot `accumulate_irradiance`
+        // most recently WROTE this frame (dummy when RT isn't active this
         // frame — same ABI-stub discipline as `rt_mask_tex`).
-        let rt_irr_tex = self.rt_irr_history.as_ref().unwrap_or(dummy);
+        let rt_irr_tex = self.rt_irr_history[self.rt_history_ping].as_ref().unwrap_or(dummy);
         let binding_sets: Vec<[GpuBinding; 43]> = draws
             .iter()
             .map(|draw| {

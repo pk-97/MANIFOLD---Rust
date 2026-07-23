@@ -156,6 +156,19 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         label: "rt-p1-out_irr-stub",
         mip_levels: 1,
     });
+    // RT-T1-C: `trace_shadow_rays` now also writes the primary-hit vertex
+    // normal — same unread-stub discipline as `out_irr` above (this P1
+    // proof only asserts on `out_sv`).
+    let out_n = device.create_texture(&GpuTextureDesc {
+        width: 2,
+        height: 1,
+        depth: 1,
+        format: GpuTextureFormat::Rgba16Float,
+        dimension: GpuTextureDimension::D2,
+        usage: GpuTextureUsage::SHADER_WRITE,
+        label: "rt-p1-out_n-stub",
+        mip_levels: 1,
+    });
 
     // ao_spp: 0 (AO gather skipped — P1 fixture only proves hard shadows);
     // sun_color/ambient_color: unused by this test's assertions (out_irr
@@ -196,6 +209,7 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         &depth_tex,
         &out_sv,
         &out_irr,
+        &out_n,
         "trace_shadow_rays-proof",
     );
     encoder.commit_and_wait_completed();
@@ -323,6 +337,17 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
         label: "rt-p1-2blas-out_irr-stub",
         mip_levels: 1,
     });
+    // RT-T1-C: see the single-BLAS proof above for why this stub exists.
+    let out_n = device.create_texture(&GpuTextureDesc {
+        width: 2,
+        height: 1,
+        depth: 1,
+        format: GpuTextureFormat::Rgba16Float,
+        dimension: GpuTextureDimension::D2,
+        usage: GpuTextureUsage::SHADER_WRITE,
+        label: "rt-p1-2blas-out_n-stub",
+        mip_levels: 1,
+    });
 
     let params = ShadowRayParams::new(
         [0.0, 0.0, 1.0],
@@ -360,6 +385,7 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
         &depth_tex,
         &out_sv,
         &out_irr,
+        &out_n,
         "trace_shadow_rays-2blas-proof",
     );
     encoder.commit_and_wait_completed();

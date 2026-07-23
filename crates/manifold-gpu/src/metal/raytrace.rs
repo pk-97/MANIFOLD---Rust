@@ -491,12 +491,18 @@ static float3 fetch_interpolated_normal(constant RtNormalSource* normal_sources,
     return n * rsqrt(len2);
 }
 
-// RT-P2/D3: mirrors the Rust `AccumulateParams` below field-for-field —
-// plain POD, no matrix, no alignment surprises.
+// RT-P2/D3 (extended RT-T1-C, BUG-311): mirrors the Rust `AccumulateParams`
+// below field-for-field. `inv_view_proj` (current frame) reconstructs this
+// texel's world position from `depth_tex`; `prev_view_proj` reprojects that
+// world position into the PREVIOUS frame to locate the history sample to
+// validate/blend — both matrices already exist on `RenderScene` for MetalFX
+// (RAYTRACING_DESIGN.md §8 Tier-1 item 1), no new CPU-side computation.
 struct AccumulateParams {
     uint2 size;
     float alpha;
     uint  reset;
+    float4x4 inv_view_proj;
+    float4x4 prev_view_proj;
 };
 
 static uint pcg(uint v) { v = v * 747796405u + 2891336453u; v = ((v >> ((v >> 28u) + 4u)) ^ v) * 277803737u; return (v >> 22u) ^ v; }
@@ -567,6 +573,7 @@ kernel void trace_shadow_rays(
     depth2d<float>                   depth_tex      [[texture(0)]],
     texture2d<float, access::write>  out_sv         [[texture(1)]],
     texture2d<float, access::write>  out_irr        [[texture(2)]],
+    texture2d<float, access::write>  out_n          [[texture(3)]],
     uint2 tid [[thread_position_in_grid]])
 {
     if (tid.x >= p.trace_size.x || tid.y >= p.trace_size.y) return;
@@ -580,6 +587,7 @@ kernel void trace_shadow_rays(
         // ambient-only (no surface to shadow-test against).
         out_sv.write(float4(1, 1, 0, 0), tid);
         out_irr.write(float4(p.ambient_color, 0), tid);
+        out_n.write(float4(0, 1, 0, 0), tid);
         return;
     }
     // Neighbor world positions (screen-space reconstruction, RT-D3) — kept
@@ -707,6 +715,11 @@ kernel void trace_shadow_rays(
         ao /= float(p.ao_spp);
     }
     out_sv.write(float4(vis, ao, 0, 0), tid);
+    // RT-T1-C (BUG-311): expose the SAME real interpolated vertex normal
+    // (`n`) already computed above for AO/GI cosine sampling, so
+    // `accumulate_irradiance`'s reprojection validity test can compare a
+    // real surface normal instead of reconstructing one from depth.
+    out_n.write(float4(n, 0), tid);
 
     // RT-P3 (RAYTRACING_DESIGN.md §5.2 P3, D4): one-bounce GI gather —
     // ported from the P0 prototype's `trace_lighting` GI block (ARC
@@ -803,6 +816,13 @@ kernel void upsample_shadow(
     texture2d<float, access::write> hi_sv     [[texture(2)]],
     texture2d<float>                lo_irr    [[texture(3)]],
     texture2d<float, access::write> hi_irr    [[texture(4)]],
+    // RT-T1-C (BUG-311): the SAME bilateral upsample widened once more (D16's
+    // seam note) to carry the primary-hit vertex normal `trace_shadow_rays`
+    // now writes to `out_n` — `accumulate_irradiance`'s reprojection
+    // validity test needs a full-res CURRENT-frame normal, same as it
+    // already needed full-res CURRENT irradiance.
+    texture2d<float>                lo_n      [[texture(5)]],
+    texture2d<float, access::write> hi_n      [[texture(6)]],
     uint2 tid [[thread_position_in_grid]])
 {
     if (tid.x >= p.gbuffer_size.x || tid.y >= p.gbuffer_size.y) return;
@@ -810,12 +830,13 @@ kernel void upsample_shadow(
     if (d >= 1.0 - 1e-6) {
         hi_sv.write(float4(1, 1, 0, 0), tid);
         hi_irr.write(float4(p.ambient_color, 0), tid);
+        hi_n.write(float4(0, 1, 0, 0), tid);
         return;
     }
 
     float2 lo_uv = (float2(tid) + 0.5) / float2(p.gbuffer_size) * float2(p.trace_size);
     int2 lo_c = int2(lo_uv - 0.5);
-    float2 acc_sv = 0.0; float3 acc_irr = 0.0; float wsum = 0.0;
+    float2 acc_sv = 0.0; float3 acc_irr = 0.0; float3 acc_n = 0.0; float wsum = 0.0;
     for (int dy = 0; dy <= 1; dy++)
     for (int dx = 0; dx <= 1; dx++) {
         int2 q = clamp(lo_c + int2(dx, dy), int2(0), int2(p.trace_size) - 1);
@@ -827,37 +848,112 @@ kernel void upsample_shadow(
         float w = max(w_bilin * w_depth, 1e-5);
         acc_sv += lo_sv.read(uint2(q)).rg * w;
         acc_irr += lo_irr.read(uint2(q)).rgb * w;
+        acc_n += lo_n.read(uint2(q)).xyz * w;
         wsum += w;
     }
     hi_sv.write(float4(acc_sv / wsum, 0, 0), tid);
     hi_irr.write(float4(acc_irr / wsum, 0), tid);
+    float3 n_avg = acc_n / wsum;
+    float n_len = length(n_avg);
+    hi_n.write(float4(n_len > 1e-4 ? n_avg / n_len : float3(0, 1, 0), 0), tid);
 }
 
-// RT-P2/D3: temporal accumulation of the demodulated irradiance texture —
-// the next stage of the SAME lighting pass (not a parallel denoiser
-// system). `reset` (driven by the SHARED
+// RT-P2/D3, extended RT-T1-C (BUG-311): temporal accumulation of the
+// demodulated irradiance texture — the next stage of the SAME lighting pass
+// (not a parallel denoiser system). `reset` (driven by the SHARED
 // `crate::node_graph::temporal_reset::TemporalResetDetector` — RT-D2; the
 // negative-rg gate enforces there is exactly one reset-detection call
-// site) discards history outright (cold start / post-cut); otherwise an
-// exponential moving average toward this frame's value at `alpha` keeps
-// history — this is the numeric mechanism that makes a same-clip light-
-// intensity strobe differ from a cold-start render (D3's "strobes are not
-// cuts"). `history` is read_write: read this frame's stale value, write
-// the blended (or copied) result in place.
+// site) discards history outright (cold start / post-cut). Otherwise this
+// texel's world position (reconstructed from `depth_tex` + `p.inv_view_proj`)
+// is reprojected into the PREVIOUS frame via `p.prev_view_proj` to find
+// where this surface point was last frame — same-texel blending (the P2
+// baseline) ghosts behind ANY motion because it never asks "is this still
+// the same surface point"; reprojection is the fix. The reprojected sample
+// is REJECTED (falls back to this frame's raw value, no history blend) on
+// a depth or normal mismatch against `*_history_read` (an off-screen
+// reprojection also rejects) — SVGF's standard disocclusion test. Every
+// history channel is PING-PONGED (`*_read`/`*_write` are two distinct
+// textures, swapped by the caller each frame): a single read_write texture
+// would race, since one thread's write destination (`tid`) can be another
+// thread's read source (`prev_tid`) within the same dispatch, with no
+// ordering guarantee between compute threads.
 kernel void accumulate_irradiance(
-    constant AccumulateParams&           p       [[buffer(1)]],
-    texture2d<float>                     hi_irr  [[texture(0)]],
-    texture2d<float, access::read_write> history [[texture(1)]],
+    constant AccumulateParams&           p                    [[buffer(1)]],
+    texture2d<float>                     hi_irr               [[texture(0)]],
+    depth2d<float>                       depth_tex            [[texture(1)]],
+    texture2d<float>                     hi_normal            [[texture(2)]],
+    texture2d<float>                     history_read         [[texture(3)]],
+    texture2d<float, access::write>      history_write        [[texture(4)]],
+    texture2d<float>                     depth_history_read   [[texture(5)]],
+    texture2d<float, access::write>      depth_history_write  [[texture(6)]],
+    texture2d<float>                     normal_history_read  [[texture(7)]],
+    texture2d<float, access::write>      normal_history_write [[texture(8)]],
     uint2 tid [[thread_position_in_grid]])
 {
     if (tid.x >= p.size.x || tid.y >= p.size.y) return;
     float4 cur = hi_irr.read(tid);
+    float  cur_depth = depth_tex.read(tid, 0);
+    float3 cur_normal = hi_normal.read(tid).xyz;
+
     if (p.reset != 0u) {
-        history.write(cur, tid);
+        history_write.write(cur, tid);
+        depth_history_write.write(float4(cur_depth, 0, 0, 0), tid);
+        normal_history_write.write(float4(cur_normal, 0), tid);
         return;
     }
-    float4 prev = history.read(tid);
-    history.write(mix(prev, cur, p.alpha), tid);
+
+    // Camera motion only: `wp` is reprojected as a static world-space
+    // point (no per-object `prev_model` term — this screen-space pass has
+    // no per-pixel object id to look one up with). Exact for a static
+    // scene under camera motion (the ORBIT oracle's case); for an
+    // animated object's own pixels the depth/normal test below simply
+    // fails and falls back to current-frame-only, same as any other
+    // disocclusion — no ghosting, just less temporal amortization on that
+    // object until reprojection re-agrees.
+    bool valid = false;
+    float3 blended = cur.xyz;
+    if (cur_depth < 1.0 - 1e-6) {
+        float2 uv = (float2(tid) + 0.5) / float2(p.size);
+        float4 clip = float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, cur_depth, 1.0);
+        float4 wh = p.inv_view_proj * clip;
+        float3 wp = wh.xyz / wh.w;
+
+        float4 prev_clip = p.prev_view_proj * float4(wp, 1.0);
+        if (prev_clip.w > 1e-6) {
+            float3 prev_ndc = prev_clip.xyz / prev_clip.w;
+            float2 prev_uv = float2(prev_ndc.x * 0.5 + 0.5, 0.5 - prev_ndc.y * 0.5);
+            if (all(prev_uv >= 0.0) && all(prev_uv <= 1.0) && prev_ndc.z >= 0.0 && prev_ndc.z <= 1.0) {
+                int2 pt = clamp(int2(prev_uv * float2(p.size)), int2(0), int2(p.size) - 1);
+                uint2 prev_tid = uint2(pt);
+                float  stored_depth  = depth_history_read.read(prev_tid).r;
+                float3 stored_normal = normal_history_read.read(prev_tid).xyz;
+                // DEPTH_REJECT_THRESHOLD: raw NDC-z units — directly
+                // comparable without linearizing (same discipline
+                // `upsample_shadow`'s depth guide already uses). 5e-3
+                // rejects a genuinely different surface/depth layer while
+                // tolerating one shared surface's own NDC-z precision
+                // noise across a single frame of camera motion.
+                const float DEPTH_REJECT_THRESHOLD = 5e-3;
+                // NORMAL_REJECT_COS_THRESHOLD: cosine of the angle between
+                // this frame's and the reprojected history's normal — 0.9
+                // (~26 degrees) rejects a silhouette/edge texel whose
+                // reprojection lands on a different face while tolerating
+                // the same surface's normal drifting slightly under one
+                // frame of camera motion or animation.
+                const float NORMAL_REJECT_COS_THRESHOLD = 0.9;
+                bool depth_ok = fabs(stored_depth - prev_ndc.z) < DEPTH_REJECT_THRESHOLD;
+                bool normal_ok = dot(normalize(stored_normal), cur_normal) > NORMAL_REJECT_COS_THRESHOLD;
+                if (depth_ok && normal_ok) {
+                    float4 hist = history_read.read(prev_tid);
+                    blended = mix(hist.xyz, cur.xyz, p.alpha);
+                    valid = true;
+                }
+            }
+        }
+    }
+    history_write.write(valid ? float4(blended, 0) : cur, tid);
+    depth_history_write.write(float4(cur_depth, 0, 0, 0), tid);
+    normal_history_write.write(float4(cur_normal, 0), tid);
 }
 
 // RT-T1-B value-level test surface ONLY (`docs/RAYTRACING_DESIGN.md` §8
@@ -1120,16 +1216,40 @@ pub struct AccumulateParams {
     /// flip keeps the blend, which is exactly what makes the numeric
     /// strobe-proof differ from a cold start).
     pub reset: u32,
+    /// RT-T1-C (BUG-311): current-frame inverse view-proj, for
+    /// reconstructing this texel's world position from `depth_tex` — SAME
+    /// matrix `ShadowRayParams::inv_view_proj` already carries this frame.
+    pub inv_view_proj: [[f32; 4]; 4],
+    /// RT-T1-C (BUG-311): PREVIOUS frame's view-proj, for reprojecting the
+    /// reconstructed world position to locate/validate the history sample.
+    /// Already threaded through `RenderScene` for MetalFX
+    /// (RAYTRACING_DESIGN.md §8 Tier-1 item 1); no new CPU-side matrix.
+    pub prev_view_proj: [[f32; 4]; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<AccumulateParams>() == 16);
+// `size`(8) + `alpha`(4) + `reset`(4) = 16 bytes — already a multiple of
+// 16, so both `float4x4` columns that follow land on a 16-byte boundary
+// with no explicit padding needed (unlike `ShadowRayParams`'s
+// `inv_view_proj`, which needed one). Asserted directly rather than
+// re-derived, same discipline as the `ShadowRayParams` guard above.
+const _: () = assert!(std::mem::offset_of!(AccumulateParams, inv_view_proj) == 16);
+const _: () = assert!(std::mem::offset_of!(AccumulateParams, prev_view_proj) == 80);
+const _: () = assert!(std::mem::size_of::<AccumulateParams>() == 144);
 
 impl AccumulateParams {
-    pub fn new(size: [u32; 2], alpha: f32, reset: bool) -> Self {
+    pub fn new(
+        size: [u32; 2],
+        alpha: f32,
+        reset: bool,
+        inv_view_proj: [[f32; 4]; 4],
+        prev_view_proj: [[f32; 4]; 4],
+    ) -> Self {
         Self {
             size,
             alpha,
             reset: reset as u32,
+            inv_view_proj,
+            prev_view_proj,
         }
     }
 }
@@ -1233,13 +1353,16 @@ pub trait ShadowRayTracer {
         depth_tex: &GpuTexture,
         out_sv: &GpuTexture,
         out_irr: &GpuTexture,
+        out_n: &GpuTexture,
         label: &str,
     );
 
-    /// Depth-aware bilateral upsample of the half-res `lo_sv`/`lo_irr`
-    /// terms to full G-buffer resolution `hi_sv`/`hi_irr` (RT-D3's "D11
-    /// trivial pass"; RT-P2 widens the SAME upsample to also carry
-    /// irradiance).
+    /// Depth-aware bilateral upsample of the half-res `lo_sv`/`lo_irr`/
+    /// `lo_n` terms to full G-buffer resolution `hi_sv`/`hi_irr`/`hi_n`
+    /// (RT-D3's "D11 trivial pass"; RT-P2 widened the SAME upsample to
+    /// also carry irradiance; RT-T1-C widens it once more to carry the
+    /// primary-hit vertex normal `accumulate_irradiance`'s reprojection
+    /// validity test needs).
     #[allow(clippy::too_many_arguments)]
     fn upsample_shadow(
         &self,
@@ -1250,24 +1373,37 @@ pub trait ShadowRayTracer {
         hi_sv: &GpuTexture,
         lo_irr: &GpuTexture,
         hi_irr: &GpuTexture,
+        lo_n: &GpuTexture,
+        hi_n: &GpuTexture,
         label: &str,
     );
 
-    /// RT-P2/D3: temporal-accumulate `hi_irr` (this frame's raw
-    /// demodulated irradiance) into `history` in place — `params.reset`
-    /// discards history (cold start / post-cut, driven by the SHARED
-    /// `TemporalResetDetector` — RT-D2), else blends toward `hi_irr` at
-    /// `params.alpha`. `history`'s CURRENT content is read back
-    /// in-kernel, so it must already hold either a prior frame's result
-    /// or be freshly allocated (any content — the very first call after
-    /// allocation should pass `reset: true`, which never reads it).
+    /// RT-P2/D3, extended RT-T1-C (BUG-311): temporal-accumulate `hi_irr`
+    /// (this frame's raw demodulated irradiance) into `history_write`,
+    /// reprojecting `history_read` through `params.prev_view_proj` and
+    /// validating against `depth_history_read`/`normal_history_read`
+    /// before trusting it (falls back to `hi_irr` alone on mismatch or
+    /// disocclusion) — `params.reset` discards history outright (cold
+    /// start / post-cut, driven by the SHARED `TemporalResetDetector` —
+    /// RT-D2). Every history channel is a `(read, write)` PING-PONG PAIR:
+    /// the caller must pass last frame's write-target as this frame's
+    /// read-target and swap after the call — a single read_write texture
+    /// would race (see the kernel's own doc comment).
+    #[allow(clippy::too_many_arguments)]
     fn accumulate_irradiance(
         &self,
         encoder: &mut GpuEncoder,
         params: &AccumulateParams,
         params_buffer: &GpuBuffer,
         hi_irr: &GpuTexture,
-        history: &GpuTexture,
+        depth_tex: &GpuTexture,
+        hi_normal: &GpuTexture,
+        history_read: &GpuTexture,
+        history_write: &GpuTexture,
+        depth_history_read: &GpuTexture,
+        depth_history_write: &GpuTexture,
+        normal_history_read: &GpuTexture,
+        normal_history_write: &GpuTexture,
         label: &str,
     );
 }
@@ -1315,6 +1451,7 @@ impl MetalShadowRayTracer {
                 (0, SlotKind::Texture),
                 (1, SlotKind::Texture),
                 (2, SlotKind::Texture),
+                (3, SlotKind::Texture), // RT-T1-C: out_n, MSL [[texture(3)]]
             ]),
         );
         let upsample_pipeline = compile_pipeline(
@@ -1328,6 +1465,8 @@ impl MetalShadowRayTracer {
                 (2, SlotKind::Texture),
                 (3, SlotKind::Texture),
                 (4, SlotKind::Texture),
+                (5, SlotKind::Texture), // RT-T1-C: lo_n
+                (6, SlotKind::Texture), // RT-T1-C: hi_n
             ]),
         );
         let accumulate_pipeline = compile_pipeline(
@@ -1337,7 +1476,14 @@ impl MetalShadowRayTracer {
             identity_slot_map(&[
                 (1, SlotKind::Buffer),
                 (0, SlotKind::Texture),
-                (1, SlotKind::Texture),
+                (1, SlotKind::Texture), // RT-T1-C: depth_tex
+                (2, SlotKind::Texture), // RT-T1-C: hi_normal
+                (3, SlotKind::Texture), // RT-T1-C: history_read
+                (4, SlotKind::Texture), // RT-T1-C: history_write
+                (5, SlotKind::Texture), // RT-T1-C: depth_history_read
+                (6, SlotKind::Texture), // RT-T1-C: depth_history_write
+                (7, SlotKind::Texture), // RT-T1-C: normal_history_read
+                (8, SlotKind::Texture), // RT-T1-C: normal_history_write
             ]),
         );
         let debug_fetch_normal_pipeline = compile_pipeline(
@@ -1449,6 +1595,7 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         depth_tex: &GpuTexture,
         out_sv: &GpuTexture,
         out_irr: &GpuTexture,
+        out_n: &GpuTexture,
         label: &str,
     ) {
         params_buffer.upload(bytemuck_bytes(params));
@@ -1485,6 +1632,10 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                     binding: 2,
                     texture: out_irr,
                 },
+                GpuBinding::Texture {
+                    binding: 3,
+                    texture: out_n,
+                },
             ],
             groups,
             label,
@@ -1500,6 +1651,8 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         hi_sv: &GpuTexture,
         lo_irr: &GpuTexture,
         hi_irr: &GpuTexture,
+        lo_n: &GpuTexture,
+        hi_n: &GpuTexture,
         label: &str,
     ) {
         // `params.gbuffer_size` (already uploaded by `dispatch_shadow_rays`
@@ -1537,6 +1690,14 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                     binding: 4,
                     texture: hi_irr,
                 },
+                GpuBinding::Texture {
+                    binding: 5,
+                    texture: lo_n,
+                },
+                GpuBinding::Texture {
+                    binding: 6,
+                    texture: hi_n,
+                },
             ],
             groups,
             label,
@@ -1549,7 +1710,14 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         params: &AccumulateParams,
         params_buffer: &GpuBuffer,
         hi_irr: &GpuTexture,
-        history: &GpuTexture,
+        depth_tex: &GpuTexture,
+        hi_normal: &GpuTexture,
+        history_read: &GpuTexture,
+        history_write: &GpuTexture,
+        depth_history_read: &GpuTexture,
+        depth_history_write: &GpuTexture,
+        normal_history_read: &GpuTexture,
+        normal_history_write: &GpuTexture,
         label: &str,
     ) {
         params_buffer.upload(accumulate_params_bytes(params));
@@ -1568,7 +1736,35 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                 },
                 GpuBinding::Texture {
                     binding: 1,
-                    texture: history,
+                    texture: depth_tex,
+                },
+                GpuBinding::Texture {
+                    binding: 2,
+                    texture: hi_normal,
+                },
+                GpuBinding::Texture {
+                    binding: 3,
+                    texture: history_read,
+                },
+                GpuBinding::Texture {
+                    binding: 4,
+                    texture: history_write,
+                },
+                GpuBinding::Texture {
+                    binding: 5,
+                    texture: depth_history_read,
+                },
+                GpuBinding::Texture {
+                    binding: 6,
+                    texture: depth_history_write,
+                },
+                GpuBinding::Texture {
+                    binding: 7,
+                    texture: normal_history_read,
+                },
+                GpuBinding::Texture {
+                    binding: 8,
+                    texture: normal_history_write,
                 },
             ],
             groups,

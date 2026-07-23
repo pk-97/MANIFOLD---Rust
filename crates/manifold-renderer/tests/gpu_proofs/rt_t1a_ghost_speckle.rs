@@ -200,18 +200,21 @@ const ORBIT_RATE: f32 = 0.03;
 const GHOST_FRAMES: usize = 12;
 const GHOST_TIME_STEP: f64 = 1.0;
 
-/// PRE-FIX BASELINE (recorded 2026-07-23, current `main`/`accumulate_irradiance`
-/// same-texel blend, no reprojection): mean abs consecutive-frame luminance
+/// PRE-FIX BASELINE (recorded 2026-07-23, `accumulate_irradiance` same-
+/// texel blend, no reprojection): mean abs consecutive-frame luminance
 /// diff at the shadow-boundary world point, orbiting at `ORBIT_RATE` for
 /// `GHOST_FRAMES` frames = 0.0444 (>> the 0.02 threshold this test
 /// asserts; the flat far-corner probe `rt_p1_region_probe` uses for its
 /// own lit-region gate reads <0.002 here — its irradiance is too spatially
 /// uniform to expose the same-texel artifact, which is why this oracle
-/// tracks the shadow boundary instead). Run without `#[ignore]` to
-/// reproduce; T1-C (motion-reprojected accumulation) is the fix this
-/// gates.
+/// tracks the shadow boundary instead).
+///
+/// FIXED by T1-C (RAYTRACING_DESIGN.md §8 Tier-1 item 1, BUG-311):
+/// `accumulate_irradiance` now reprojects history through `prev_view_proj`
+/// before blending and rejects a depth/normal mismatch — this oracle is
+/// flipped live (no longer `#[ignore]`d) and now asserts the metric is
+/// BELOW threshold, the inverse of the pre-fix assertion above.
 #[test]
-#[ignore = "BUG-311 pre-fix baseline — trips until T1-C lands motion-reprojected accumulation; see this test's doc comment for the recorded number"]
 fn rt_ghost_orbit_consecutive_frame_luma_diff_exceeds_threshold() {
     let h = harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
@@ -277,10 +280,11 @@ fn rt_ghost_orbit_consecutive_frame_luma_diff_exceeds_threshold() {
     );
 
     assert!(
-        mean_abs_diff > GHOST_MEAN_ABS_DIFF_THRESHOLD,
-        "expected the pre-fix same-texel accumulation to show visible ghosting \
-         (mean_abs_diff > {GHOST_MEAN_ABS_DIFF_THRESHOLD}) at the tracked lit world \
-         point under camera orbit, got {mean_abs_diff:.4} — lumas={lumas:?}"
+        mean_abs_diff <= GHOST_MEAN_ABS_DIFF_THRESHOLD,
+        "T1-C's motion-reprojected accumulation should keep consecutive-frame \
+         luminance change at the tracked world point at or below \
+         {GHOST_MEAN_ABS_DIFF_THRESHOLD} under camera orbit, got {mean_abs_diff:.4} \
+         (pre-fix baseline was 0.0444) — lumas={lumas:?}"
     );
 }
 
