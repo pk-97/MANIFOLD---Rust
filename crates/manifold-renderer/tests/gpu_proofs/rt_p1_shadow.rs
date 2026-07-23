@@ -124,6 +124,11 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         // consumers of the fetched normal — so this fixture's position-only
         // `PackedVertex` (no normal field) never has it read.
         normal_offset: 0,
+        // RT-T2-A: no UV data in this fixture, alpha_mask stays false.
+        uv_offset: 0,
+        alpha_mask: false,
+        alpha_cutoff: 0.5,
+        base_color_texture: None,
     }];
     let accel = tracer.build_accel(device, &objects);
 
@@ -206,6 +211,7 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         &params_buffer,
         &gi_materials_buffer,
         &normal_sources_buffer,
+        &[], // RT-T2-A: no alpha-masked objects in this fixture
         &depth_tex,
         &out_sv,
         &out_irr,
@@ -299,6 +305,10 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
             // position-only `PackedVertex` (no normal field) never has it
             // read.
             normal_offset: 0,
+            uv_offset: 0,
+            alpha_mask: false,
+            alpha_cutoff: 0.5,
+            base_color_texture: None,
         },
         RtObjectGeometry {
             vertex_buffer: &occ_vertex_buffer,
@@ -308,6 +318,10 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
             triangle_count: 2,
             transform: IDENTITY,
             normal_offset: 0,
+            uv_offset: 0,
+            alpha_mask: false,
+            alpha_cutoff: 0.5,
+            base_color_texture: None,
         },
     ];
     let accel = tracer.build_accel(device, &objects);
@@ -382,6 +396,7 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
         &params_buffer,
         &gi_materials_buffer,
         &normal_sources_buffer,
+        &[], // RT-T2-A: no alpha-masked objects in this fixture
         &depth_tex,
         &out_sv,
         &out_irr,

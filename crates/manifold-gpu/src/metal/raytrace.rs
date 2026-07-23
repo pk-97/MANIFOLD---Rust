@@ -57,7 +57,7 @@ use objc2_metal::{
 use super::device::GpuDevice;
 use super::types::{GpuBuffer, GpuComputePipeline, GpuTexture};
 use super::{GpuEncoder, Slot, SlotKind, SlotMap};
-use crate::types::GpuBinding;
+use crate::types::{GpuBinding, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
 
 // ─── Acceleration structure: per-object BLAS + one instance TLAS ───────
 //
@@ -155,6 +155,30 @@ pub struct RtObjectGeometry<'a> {
     /// `ao_spp`/`gi_spp` stay 0 — the only two consumers of the fetched
     /// normal.
     pub normal_offset: u32,
+    /// RT-T2-A (RAYTRACING_DESIGN.md §8.2 Tier-2 item 4): byte offset of the
+    /// per-vertex UV field within one `vertex_stride`-sized vertex record —
+    /// same "name where it lives, no separate allocation" convention as
+    /// `normal_offset`. Only read when `alpha_mask` is set; a fixture with
+    /// no UV data may set this to any value as long as `alpha_mask` stays
+    /// `false`.
+    pub uv_offset: u32,
+    /// RT-T2-A: this object's material is `AlphaMode::Mask` (cutout) —
+    /// intersections against it run the per-candidate alpha test (a UV
+    /// fetch and `base_color_texture` sample against `alpha_cutoff`)
+    /// instead of the opaque fast path. `false` keeps the BLAS geometry
+    /// `setOpaque(true)` (see `encode_blas_build`) and every ray against
+    /// this object short-circuits at the hardware level, same cost as
+    /// before this feature.
+    pub alpha_mask: bool,
+    /// RT-T2-A: cutout threshold in `[0, 1]` — mirrors `Material::
+    /// alpha_cutoff`. Unused when `alpha_mask` is `false`.
+    pub alpha_cutoff: f32,
+    /// RT-T2-A: this object's base-color texture, sampled (alpha channel
+    /// only) at the candidate hit's interpolated UV when `alpha_mask` is
+    /// set. `None` degrades to "always pass" (documented at
+    /// `ensure_normal_sources`'s call site) — an alpha-masked object with no
+    /// texture wired is a material-authoring gap, not a crash.
+    pub base_color_texture: Option<&'a GpuTexture>,
 }
 
 /// Encode this object's BLAS build onto an ALREADY-OPEN acceleration-
@@ -179,7 +203,13 @@ fn encode_blas_build(
         tri_desc.setIndexType(MTLIndexType::UInt32);
     }
     tri_desc.setTriangleCount(obj.triangle_count as usize);
-    tri_desc.setOpaque(true);
+    // RT-T2-A (RAYTRACING_DESIGN.md §8.2 Tier-2 item 4): alpha-masked
+    // objects must NOT be geometry-opaque — the hardware traversal would
+    // auto-accept every candidate without giving the kernel's
+    // `walk_with_alpha_test` a chance to reject a below-cutoff texel.
+    // Non-alpha-masked objects stay `setOpaque(true)`, preserving the exact
+    // fast-path cost they had before this feature.
+    tri_desc.setOpaque(!obj.alpha_mask);
     let geom: Retained<MTLAccelerationStructureGeometryDescriptor> = tri_desc.into_super();
     let array = NSArray::from_retained_slice(&[geom]);
     let descriptor = MTLPrimitiveAccelerationStructureDescriptor::descriptor();
@@ -450,6 +480,17 @@ struct GiMaterial {
 // address (`MTLBuffer::gpuAddress()`, CPU-computed once per rebuild);
 // `normal_matrix_colN` are the object's world-space normal-transform
 // columns (uniform-scale assumption, see the Rust struct's doc comment).
+// RT-T2-A (RAYTRACING_DESIGN.md §8.2 Tier-2 item 4): fixed texture-argument-
+// table slot count for alpha-masked base-color textures, bound individually
+// via `setTexture:atIndex:` (no argument buffer/bindless addressing) — a
+// scene needing more than this many DISTINCT alpha-masked base-color
+// textures live at once is this constant's un-suppression trigger (grow it,
+// or add real bindless texture addressing). Must match manifold-gpu's Rust
+// `MAX_RT_ALPHA_TEXTURES` (no compiler-enforced link between an embedded
+// MSL string constant and a Rust const — same manual-sync discipline this
+// file already uses for `RtNormalSource`'s field-for-field CPU/GPU mirror).
+#define MAX_RT_ALPHA_TEXTURES 4
+
 struct RtNormalSource {
     ulong  vertex_base_addr;
     uint   vertex_stride;
@@ -457,6 +498,16 @@ struct RtNormalSource {
     packed_float3 normal_matrix_col0;
     packed_float3 normal_matrix_col1;
     packed_float3 normal_matrix_col2;
+    // RT-T2-A additions below — extends this SAME per-object bindless
+    // table rather than introducing a parallel one (RAYTRACING_DESIGN.md
+    // §8.2 D21's "extends the T1-B bindless per-object table" brief).
+    uint   uv_offset;
+    uint   alpha_mask;
+    float  alpha_cutoff;
+    // Index into `alpha_textures` (the kernel's fixed texture-array param);
+    // `MAX_RT_ALPHA_TEXTURES` or above means "no texture bound" (degrades
+    // to always-pass in `sample_candidate_alpha`).
+    uint   alpha_tex_index;
 };
 
 // RT-T1-B: fetch this object's (`src`) vertex `vi`'s LOCAL-space normal via
@@ -489,6 +540,87 @@ static float3 fetch_interpolated_normal(constant RtNormalSource* normal_sources,
     float len2 = length_squared(n);
     if (!isfinite(len2) || len2 < 1e-12) return float3(0, 1, 0);
     return n * rsqrt(len2);
+}
+
+// RT-T2-A: fetch vertex `vi`'s LOCAL-space UV via the SAME bindless address
+// `fetch_world_normal` uses (no transform — UV isn't a spatial quantity).
+static float2 fetch_uv(constant RtNormalSource& src, uint vi) {
+    device const uchar* base = (device const uchar*)src.vertex_base_addr;
+    device const packed_float2* uv_ptr =
+        (device const packed_float2*)(base + (ulong)vi * (ulong)src.vertex_stride + (ulong)src.uv_offset);
+    return float2(*uv_ptr);
+}
+
+// RT-T2-A: barycentric-interpolate triangle `primitive_id`'s UV (same flat,
+// non-indexed convention as `fetch_interpolated_normal`).
+static float2 fetch_interpolated_uv(constant RtNormalSource* normal_sources, uint instance_id, uint primitive_id, float2 bary) {
+    constant RtNormalSource& src = normal_sources[instance_id];
+    uint v0 = primitive_id * 3u, v1 = v0 + 1u, v2 = v0 + 2u;
+    float2 uv0 = fetch_uv(src, v0);
+    float2 uv1 = fetch_uv(src, v1);
+    float2 uv2 = fetch_uv(src, v2);
+    float w0 = 1.0 - bary.x - bary.y;
+    return uv0 * w0 + uv1 * bary.x + uv2 * bary.y;
+}
+
+// RT-T2-A: sample this candidate triangle's base-color alpha at its
+// interpolated UV. NEAREST + `address::repeat`: exact-match discipline for
+// the value-level gate's checkerboard fixture, `repeat` matching every
+// other UV-wrap convention this codebase's base-color sampling already
+// uses.
+static float sample_candidate_alpha(
+    constant RtNormalSource& src,
+    constant RtNormalSource* normal_sources,
+    array<texture2d<float>, MAX_RT_ALPHA_TEXTURES> alpha_textures,
+    uint instance_id, uint primitive_id, float2 bary)
+{
+    if (src.alpha_tex_index >= MAX_RT_ALPHA_TEXTURES) return 1.0; // no texture bound: degrade to always-pass
+    float2 uv = fetch_interpolated_uv(normal_sources, instance_id, primitive_id, bary);
+    constexpr sampler alpha_sampler(coord::normalized, address::repeat, filter::nearest);
+    return alpha_textures[src.alpha_tex_index].sample(alpha_sampler, uv).a;
+}
+
+// RT-T2-A (RAYTRACING_DESIGN.md §8.2 D21): shared candidate walk for ALL of
+// this kernel's ray casts (primary visibility, shadow, AO, GI + its
+// sun-bounce) — ONE alpha-test mechanism, not a per-ray-class copy (the
+// gate's "one mechanism, not three copies" requirement). Per-object BLAS
+// opacity (`encode_blas_build`'s `setOpaque(!alpha_mask)`) already gives
+// OPAQUE objects the hardware early-termination fast path; this manual walk
+// only pays a per-candidate texture sample for objects actually flagged
+// `alpha_mask` (a non-alpha-masked candidate's `pass` is unconditionally
+// true, no texture touch). `any_hit`: true stops at the first accepted
+// candidate (shadow/AO/GI occlusion tests only need existence — the
+// original `accept_any_intersection(true)` semantics); false walks every
+// candidate so the query commits its true CLOSEST accepted hit (primary
+// visibility + the GI ray's own hit need real shading data, not just
+// "something's there").
+static bool walk_with_alpha_test(
+    thread intersection_query<triangle_data, instancing>& q,
+    constant RtNormalSource* normal_sources,
+    array<texture2d<float>, MAX_RT_ALPHA_TEXTURES> alpha_textures,
+    bool any_hit)
+{
+    while (q.next()) {
+        if (q.get_candidate_intersection_type() != intersection_type::triangle) continue;
+        uint iid = q.get_candidate_instance_id();
+        constant RtNormalSource& src = normal_sources[iid];
+        bool pass = true;
+        if (src.alpha_mask != 0u) {
+            float alpha = sample_candidate_alpha(
+                src, normal_sources, alpha_textures,
+                iid, q.get_candidate_primitive_id(), q.get_candidate_triangle_barycentric_coord());
+            pass = alpha >= src.alpha_cutoff;
+        }
+        if (pass) {
+            // `commit_triangle_intersection()`, not `accept_intersection()`
+            // (the intersector convenience API's name, which does not exist
+            // on `intersection_query` — confirmed by the real Metal
+            // compiler rejecting the latter).
+            q.commit_triangle_intersection();
+            if (any_hit) return true;
+        }
+    }
+    return q.get_committed_intersection_type() != intersection_type::none;
 }
 
 // RT-P2/D3 (extended RT-T1-C, BUG-311): mirrors the Rust `AccumulateParams`
@@ -602,6 +734,9 @@ kernel void trace_shadow_rays(
     texture2d<float, access::write>  out_sv         [[texture(1)]],
     texture2d<float, access::write>  out_irr        [[texture(2)]],
     texture2d<float, access::write>  out_n          [[texture(3)]],
+    // RT-T2-A: fixed slots for alpha-masked objects' base-color textures —
+    // see `MAX_RT_ALPHA_TEXTURES`'s doc comment.
+    array<texture2d<float>, MAX_RT_ALPHA_TEXTURES> alpha_textures [[texture(4)]],
     uint2 tid [[thread_position_in_grid]])
 {
     if (tid.x >= p.trace_size.x || tid.y >= p.trace_size.y) return;
@@ -642,17 +777,15 @@ kernel void trace_shadow_rays(
         float3 to_surface = wp - float3(p.camera_pos);
         float dist = length(to_surface);
         if (dist > 1e-6) {
-            intersector<triangle_data, instancing> primary_i;
-            primary_i.assume_geometry_type(geometry_type::triangle);
-            primary_i.force_opacity(forced_opacity::opaque);
             ray pr;
             pr.origin = float3(p.camera_pos);
             pr.direction = to_surface / dist;
             pr.min_distance = 0.0;
             pr.max_distance = dist + dist * 1e-3 + 1e-4;
-            auto phit = primary_i.intersect(pr, accel);
-            if (phit.type != intersection_type::none) {
-                n = fetch_interpolated_normal(normal_sources, phit.instance_id, phit.primitive_id, phit.triangle_barycentric_coord);
+            intersection_query<triangle_data, instancing> primary_q;
+            primary_q.reset(pr, accel);
+            if (walk_with_alpha_test(primary_q, normal_sources, alpha_textures, false)) {
+                n = fetch_interpolated_normal(normal_sources, primary_q.get_committed_instance_id(), primary_q.get_committed_primitive_id(), primary_q.get_committed_triangle_barycentric_coord());
             }
         }
     }
@@ -699,11 +832,6 @@ kernel void trace_shadow_rays(
     // brief is normals, not shadow-bias direction).
     float3 origin = wp + p.sun_dir * bias_eps;
 
-    intersector<triangle_data, instancing> shadow_i;
-    shadow_i.assume_geometry_type(geometry_type::triangle);
-    shadow_i.force_opacity(forced_opacity::opaque);
-    shadow_i.accept_any_intersection(true);
-
     ray r;
     r.origin = origin;
     // t_min: reject any hit closer than the bias itself outright — the
@@ -718,7 +846,10 @@ kernel void trace_shadow_rays(
     float vis = 0.0;
     for (uint s = 0; s < spp; s++) {
         r.direction = cone_sample(p.sun_dir, p.sun_cone, rand2(tid, p.frame_index, s));
-        if (shadow_i.intersect(r, accel).type == intersection_type::none) vis += 1.0;
+        intersection_query<triangle_data, instancing> shadow_q;
+        shadow_q.reset(r, accel);
+        bool blocked = walk_with_alpha_test(shadow_q, normal_sources, alpha_textures, true);
+        if (!blocked) vis += 1.0;
     }
     vis /= float(spp);
 
@@ -738,7 +869,9 @@ kernel void trace_shadow_rays(
         ao_r.max_distance = p.ao_radius;
         for (uint s = 0; s < p.ao_spp; s++) {
             ao_r.direction = cosine_hemisphere(n, blue_noise_sample(tid, p.frame_index, s, p.ao_spp));
-            if (shadow_i.intersect(ao_r, accel).type == intersection_type::none) ao += 1.0;
+            intersection_query<triangle_data, instancing> ao_q;
+            ao_q.reset(ao_r, accel);
+            if (!walk_with_alpha_test(ao_q, normal_sources, alpha_textures, true)) ao += 1.0;
         }
         ao /= float(p.ao_spp);
     }
@@ -764,18 +897,20 @@ kernel void trace_shadow_rays(
     // does, so the gather's own job narrows to emissive + sun-bounce).
     float3 gi = float3(0.0);
     if (p.gi_spp > 0) {
-        intersector<triangle_data, instancing> gi_i;
-        gi_i.assume_geometry_type(geometry_type::triangle);
-        gi_i.force_opacity(forced_opacity::opaque);
         ray gr;
         gr.origin = origin;
         gr.min_distance = bias_eps * 0.5;
         gr.max_distance = INFINITY;
         for (uint s = 0; s < p.gi_spp; s++) {
             gr.direction = cosine_hemisphere(n, blue_noise_sample(tid, p.frame_index, s, p.gi_spp));
-            auto hit = gi_i.intersect(gr, accel);
-            if (hit.type != intersection_type::none) {
-                uint oi = hit.instance_id;
+            intersection_query<triangle_data, instancing> gi_q;
+            gi_q.reset(gr, accel);
+            bool gi_hit = walk_with_alpha_test(gi_q, normal_sources, alpha_textures, false);
+            if (gi_hit) {
+                uint oi = gi_q.get_committed_instance_id();
+                uint gi_pid = gi_q.get_committed_primitive_id();
+                float2 gi_bary = gi_q.get_committed_triangle_barycentric_coord();
+                float gi_dist = gi_q.get_committed_distance();
                 float3 hit_emissive = float3(gi_materials[oi].emissive);
                 float3 hit_albedo = float3(gi_materials[oi].albedo);
                 // Sun-bounce: does sunlight reach the GI ray's hit point?
@@ -786,14 +921,16 @@ kernel void trace_shadow_rays(
                 // trace needed), replacing the flat average-cosine
                 // stand-in this bounce used before a per-object
                 // vertex-normal buffer existed.
-                float3 hit_pos = gr.origin + gr.direction * hit.distance;
-                float3 hit_n = fetch_interpolated_normal(normal_sources, hit.instance_id, hit.primitive_id, hit.triangle_barycentric_coord);
+                float3 hit_pos = gr.origin + gr.direction * gi_dist;
+                float3 hit_n = fetch_interpolated_normal(normal_sources, oi, gi_pid, gi_bary);
                 ray sun_r;
                 sun_r.origin = hit_pos + p.sun_dir * bias_eps;
                 sun_r.direction = cone_sample(p.sun_dir, p.sun_cone, rand2(tid, p.frame_index, 400u + s));
                 sun_r.min_distance = bias_eps * 0.5;
                 sun_r.max_distance = INFINITY;
-                float hit_sun_vis = (shadow_i.intersect(sun_r, accel).type == intersection_type::none) ? 1.0 : 0.0;
+                intersection_query<triangle_data, instancing> sun_q;
+                sun_q.reset(sun_r, accel);
+                float hit_sun_vis = walk_with_alpha_test(sun_q, normal_sources, alpha_textures, true) ? 0.0 : 1.0;
                 float hit_ndotl = max(dot(hit_n, p.sun_dir), 0.0);
                 // Named, documented, tunable (RAYTRACING_DESIGN.md §5.2 P2's
                 // "denoiser/accumulation parameters are named constants"
@@ -1332,9 +1469,30 @@ pub struct RtNormalSource {
     pub vertex_stride: u32,
     pub normal_offset: u32,
     pub normal_matrix: [[f32; 3]; 3],
+    /// RT-T2-A (RAYTRACING_DESIGN.md §8.2 Tier-2 item 4): extends this SAME
+    /// bindless table (D21's brief) rather than a parallel one — see the
+    /// MSL mirror's doc comment for the field-by-field extension.
+    pub uv_offset: u32,
+    pub alpha_mask: u32,
+    pub alpha_cutoff: f32,
+    /// Index into `trace_shadow_rays`'s fixed `alpha_textures` array;
+    /// `>= MAX_RT_ALPHA_TEXTURES` means "no texture bound" (degrades to
+    /// always-pass — see `ensure_normal_sources`).
+    pub alpha_tex_index: u32,
 }
 
-const _: () = assert!(std::mem::size_of::<RtNormalSource>() == 56);
+const _: () = assert!(std::mem::size_of::<RtNormalSource>() == 72);
+
+/// RT-T2-A: fixed texture-argument-table slot count for alpha-masked
+/// base-color textures — MUST match the embedded MSL's
+/// `#define MAX_RT_ALPHA_TEXTURES` (manual-sync discipline, same as every
+/// other CPU/GPU struct mirror in this file). A scene needing more than
+/// this many DISTINCT alpha-masked base-color textures live at once is
+/// this constant's un-suppression trigger.
+pub const MAX_RT_ALPHA_TEXTURES: usize = 4;
+/// Sentinel `alpha_tex_index` meaning "no base-color texture bound" —
+/// `sample_candidate_alpha` (MSL) degrades this to always-pass.
+pub const RT_ALPHA_TEX_INDEX_NONE: u32 = u32::MAX;
 
 /// Column-major `[[f32; 4]; 4]` model matrix -> its upper-left 3x3 (see
 /// [`RtNormalSource`]'s doc comment for the uniform-scale assumption).
@@ -1354,12 +1512,22 @@ fn normal_matrix_from_model(m: [[f32; 4]; 4]) -> [[f32; 3]; 3] {
 /// same cadence as that file's `gi_materials_data` rebuild). Never requires
 /// a GPU readback of the actual vertex data itself — the bindless address
 /// does that lookup on the GPU, at ray-hit time.
-pub fn ensure_normal_sources(
+///
+/// RT-T2-A: also assigns each alpha-masked object a slot in the returned
+/// texture list — `objects[i].base_color_texture` becomes `alpha_textures[k]`
+/// where `k` is that object's position among alpha-masked objects with a
+/// texture wired, in `objects` order, capped at [`MAX_RT_ALPHA_TEXTURES`].
+/// An alpha-masked object beyond the cap, or with no `base_color_texture`
+/// wired, gets [`RT_ALPHA_TEX_INDEX_NONE`] — degrades to "always pass" in
+/// the kernel (a material-authoring/scale gap, not a crash). The caller
+/// (`render_scene.rs`) passes the returned list straight through to
+/// [`ShadowRayTracer::dispatch_shadow_rays`]'s `alpha_textures` parameter.
+pub fn ensure_normal_sources<'a>(
     slot: &mut Option<GpuBuffer>,
     capacity: &mut usize,
     device: &GpuDevice,
-    objects: &[RtObjectGeometry],
-) {
+    objects: &[RtObjectGeometry<'a>],
+) -> Vec<&'a GpuTexture> {
     let needed = objects.len().max(1);
     if slot.is_none() || *capacity < needed {
         *slot = Some(device.create_buffer_shared((needed * std::mem::size_of::<RtNormalSource>()) as u64));
@@ -1369,17 +1537,34 @@ pub fn ensure_normal_sources(
     let ptr = buf
         .mapped_ptr()
         .expect("RT normal-source buffer must be CPU-mapped");
+    let mut alpha_textures: Vec<&'a GpuTexture> = Vec::new();
     for (i, obj) in objects.iter().enumerate() {
+        let alpha_tex_index = if obj.alpha_mask {
+            match obj.base_color_texture {
+                Some(tex) if alpha_textures.len() < MAX_RT_ALPHA_TEXTURES => {
+                    alpha_textures.push(tex);
+                    (alpha_textures.len() - 1) as u32
+                }
+                _ => RT_ALPHA_TEX_INDEX_NONE,
+            }
+        } else {
+            RT_ALPHA_TEX_INDEX_NONE
+        };
         let src = RtNormalSource {
             vertex_base_addr: obj.vertex_buffer.gpu_address() + obj.vertex_offset as u64,
             vertex_stride: obj.vertex_stride,
             normal_offset: obj.normal_offset,
             normal_matrix: normal_matrix_from_model(obj.transform),
+            uv_offset: obj.uv_offset,
+            alpha_mask: obj.alpha_mask as u32,
+            alpha_cutoff: obj.alpha_cutoff,
+            alpha_tex_index,
         };
         unsafe {
             std::ptr::write_unaligned(ptr.add(i * std::mem::size_of::<RtNormalSource>()) as *mut _, src);
         }
     }
+    alpha_textures
 }
 
 /// CPU mirror of the MSL `AccumulateParams` struct backing
@@ -1474,6 +1659,27 @@ fn atrous_params_bytes(params: &AtrousParams) -> &[u8] {
     }
 }
 
+// RT-T2-A: a 1x1 fully-opaque (alpha=1.0) texture — bound into every
+// `alpha_textures` slot a frame's `dispatch_shadow_rays` call doesn't fill
+// with a real base-color texture. Fully opaque so an accidental sample
+// (should never happen: only reached via a `RtNormalSource::alpha_tex_index`
+// that names a real, populated slot) degrades safely to "not cutout" rather
+// than an unpredictable un-initialized read.
+fn create_dummy_alpha_texture(device: &GpuDevice) -> GpuTexture {
+    let tex = device.create_texture(&GpuTextureDesc {
+        width: 1,
+        height: 1,
+        depth: 1,
+        format: GpuTextureFormat::Rgba8Unorm,
+        dimension: GpuTextureDimension::D2,
+        usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ,
+        label: "rt-t2a-dummy-alpha",
+        mip_levels: 1,
+    });
+    device.upload_texture(&tex, &[255u8, 255, 255, 255]);
+    tex
+}
+
 const SHADOW_WORKGROUP: [u32; 3] = [8, 8, 1];
 
 fn dispatch_groups_2d(size: [u32; 2], workgroup: [u32; 3]) -> [u32; 3] {
@@ -1560,7 +1766,11 @@ pub trait ShadowRayTracer {
     /// is the per-object [`RtNormalSource`] bindless table (built via
     /// [`build_normal_sources`] from the SAME `objects` slice `accel` was
     /// built from) — feeds the primary-ray-cast real vertex normal AO/GI
-    /// sample against, and the GI bounce's hit-point normal.
+    /// sample against, and the GI bounce's hit-point normal. RT-T2-A:
+    /// `alpha_textures` is the ordered list [`ensure_normal_sources`]
+    /// returns — every alpha-masked object's base-color texture, indexed by
+    /// `RtNormalSource::alpha_tex_index`; missing/extra slots up to
+    /// [`MAX_RT_ALPHA_TEXTURES`] are padded with a 1x1 opaque dummy.
     #[allow(clippy::too_many_arguments)]
     fn dispatch_shadow_rays(
         &self,
@@ -1570,6 +1780,7 @@ pub trait ShadowRayTracer {
         params_buffer: &GpuBuffer,
         gi_materials: &GpuBuffer,
         normal_sources: &GpuBuffer,
+        alpha_textures: &[&GpuTexture],
         depth_tex: &GpuTexture,
         out_sv: &GpuTexture,
         out_irr: &GpuTexture,
@@ -1672,6 +1883,13 @@ pub struct MetalShadowRayTracer {
     /// doc comment. Always compiled (tiny kernel, negligible cost); never
     /// dispatched by the production `render_scene.rs` path.
     debug_fetch_normal_pipeline: GpuComputePipeline,
+    /// RT-T2-A: 1x1 fully-opaque texture bound into every one of
+    /// `trace_shadow_rays`'s `alpha_textures` slots that this frame's
+    /// `dispatch_shadow_rays` call doesn't supply a real texture for —
+    /// Metal requires a valid resource bound at every argument-table index
+    /// a compiled kernel references, even one `sample_candidate_alpha`
+    /// (MSL) never actually indexes at runtime.
+    dummy_alpha_tex: GpuTexture,
 }
 
 impl MetalShadowRayTracer {
@@ -1704,6 +1922,13 @@ impl MetalShadowRayTracer {
                 (1, SlotKind::Texture),
                 (2, SlotKind::Texture),
                 (3, SlotKind::Texture), // RT-T1-C: out_n, MSL [[texture(3)]]
+                // RT-T2-A: alpha_textures[MAX_RT_ALPHA_TEXTURES], MSL
+                // [[texture(4)]] — occupies MAX_RT_ALPHA_TEXTURES
+                // consecutive argument-table slots starting at 4.
+                (4, SlotKind::Texture),
+                (5, SlotKind::Texture),
+                (6, SlotKind::Texture),
+                (7, SlotKind::Texture),
             ]),
         );
         let upsample_pipeline = compile_pipeline(
@@ -1767,12 +1992,15 @@ impl MetalShadowRayTracer {
             ]),
         );
 
+        let dummy_alpha_tex = create_dummy_alpha_texture(device);
+
         Self {
             trace_pipeline,
             upsample_pipeline,
             atrous_pipeline,
             accumulate_pipeline,
             debug_fetch_normal_pipeline,
+            dummy_alpha_tex,
         }
     }
 
@@ -1863,6 +2091,7 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         params_buffer: &GpuBuffer,
         gi_materials: &GpuBuffer,
         normal_sources: &GpuBuffer,
+        alpha_textures: &[&GpuTexture],
         depth_tex: &GpuTexture,
         out_sv: &GpuTexture,
         out_irr: &GpuTexture,
@@ -1871,46 +2100,52 @@ impl ShadowRayTracer for MetalShadowRayTracer {
     ) {
         params_buffer.upload(bytemuck_bytes(params));
         let groups = dispatch_groups_2d(params.trace_size, SHADOW_WORKGROUP);
-        encoder.dispatch_compute_with_accel(
-            &self.trace_pipeline,
-            0,
-            accel,
-            &[
-                GpuBinding::Buffer {
-                    binding: 1,
-                    buffer: params_buffer,
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
-                    binding: 2,
-                    buffer: gi_materials,
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
-                    binding: 3,
-                    buffer: normal_sources,
-                    offset: 0,
-                },
-                GpuBinding::Texture {
-                    binding: 0,
-                    texture: depth_tex,
-                },
-                GpuBinding::Texture {
-                    binding: 1,
-                    texture: out_sv,
-                },
-                GpuBinding::Texture {
-                    binding: 2,
-                    texture: out_irr,
-                },
-                GpuBinding::Texture {
-                    binding: 3,
-                    texture: out_n,
-                },
-            ],
-            groups,
-            label,
-        );
+        let mut bindings = vec![
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: params_buffer,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: gi_materials,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: normal_sources,
+                offset: 0,
+            },
+            GpuBinding::Texture {
+                binding: 0,
+                texture: depth_tex,
+            },
+            GpuBinding::Texture {
+                binding: 1,
+                texture: out_sv,
+            },
+            GpuBinding::Texture {
+                binding: 2,
+                texture: out_irr,
+            },
+            GpuBinding::Texture {
+                binding: 3,
+                texture: out_n,
+            },
+        ];
+        // RT-T2-A: fill all MAX_RT_ALPHA_TEXTURES argument-table slots —
+        // real textures first (caller-supplied order matches
+        // `RtNormalSource::alpha_tex_index`), the 1x1 dummy for the rest
+        // (Metal requires every slot a compiled kernel references bound to
+        // a valid resource).
+        for i in 0..MAX_RT_ALPHA_TEXTURES {
+            let tex = alpha_textures.get(i).copied().unwrap_or(&self.dummy_alpha_tex);
+            bindings.push(GpuBinding::Texture {
+                binding: 4 + i as u32,
+                texture: tex,
+            });
+        }
+        encoder.dispatch_compute_with_accel(&self.trace_pipeline, 0, accel, &bindings, groups, label);
     }
 
     fn upsample_shadow(

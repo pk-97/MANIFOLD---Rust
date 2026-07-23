@@ -190,6 +190,26 @@ const IRRADIANCE_ACCUM_ALPHA: f32 = 0.15;
 /// rays in the SAME half-res dispatch); Peter's morning gate tunes within
 /// it.
 const GI_SAMPLES_PER_PIXEL: u32 = 2;
+/// RAYTRACING_DESIGN.md §8.2 D22: reduced render resolution `temporal_upscale`
+/// draws color/depth/velocity at, relative to the scene's native (canvas)
+/// resolution — `render_dim = native_dim * NUM / DEN` (1/1.5 linear, D22
+/// point 1; Peter-amendable, not a lane knob). Kept as an exact integer
+/// fraction, not a `f32` scale, and applied with the SAME truncating
+/// `u64` arithmetic `output_canvas_scale`'s `(num, den)` declaration resolves
+/// through (`execution.rs::resolve_dims`) — the graph runtime sizes the
+/// `depth`/`velocity` outputs from that declaration, and this evaluate()-side
+/// computation must land on the IDENTICAL width/height or MetalFX Temporal's
+/// color/depth/motion inputs arrive at mismatched dims.
+const RT_TEMPORAL_RENDER_SCALE_NUM: u32 = 2;
+const RT_TEMPORAL_RENDER_SCALE_DEN: u32 = 3;
+
+/// `execution.rs::resolve_dims`'s exact truncating formula, factored out so
+/// `output_canvas_scale` (which only declares the `(num, den)` fraction) and
+/// `evaluate()` (which needs the concrete pixel dims NOW, this frame) can
+/// never drift apart — see `RT_TEMPORAL_RENDER_SCALE_NUM`'s doc comment.
+fn scale_dim(native: u32, num: u32, den: u32) -> u32 {
+    (u64::from(native) * u64::from(num) / u64::from(den)).max(1) as u32
+}
 /// RAYTRACING_DESIGN.md §5.2 P3: world-space glow falloff radius for an
 /// emissive object treated as a volumetric-march point light (the
 /// `shaft_lights`/D5 "emissive-colored volumetric glow" entry) — same
@@ -482,6 +502,33 @@ pub struct RenderScene {
     velocity_msaa: Option<manifold_gpu::GpuTexture>,
     velocity_width: u32,
     velocity_height: u32,
+    /// RAYTRACING_DESIGN.md §8.2 D22: single-sample `Rgba16Float` scratch
+    /// color target — the SAME format `msaa_color` always resolves as —
+    /// that Pass A resolves into (instead of the graph's native-res `color`
+    /// output) when `temporal_upscale` is on. Sized to render res
+    /// (`RT_TEMPORAL_RENDER_SCALE`× the native canvas), same
+    /// `Option<GpuTexture>` + width/height idiom every other scratch target
+    /// in this file uses (`opaque_scene_color`, `shaft_inscatter`, ...) — D22
+    /// forbids a new render-target abstraction. `depth`/`velocity` need no
+    /// scratch twin: `output_canvas_scale` sizes THOSE graph outputs to
+    /// render res directly when `temporal_upscale` is on (D22 point 2), so
+    /// `ctx.outputs.texture_2d("depth"/"velocity")` are already the right
+    /// size.
+    rt_temporal_color_scratch: Option<manifold_gpu::GpuTexture>,
+    rt_temporal_color_scratch_width: u32,
+    rt_temporal_color_scratch_height: u32,
+    /// D22: the live MetalFX Temporal scaler — created lazily on this
+    /// node's first `temporal_upscale` frame, resized on dimension change
+    /// (same lifecycle contract as `crate::metalfx_temporal_upscaler`'s own
+    /// doc comment specifies). `None` on a device where MetalFX Temporal is
+    /// unavailable — that frame's `temporal_upscale` request degrades to a
+    /// native direct render (logged once), never a silent black/garbage
+    /// output.
+    rt_temporal_upscaler: Option<crate::metalfx_temporal_upscaler::MetalFxTemporalUpscaler>,
+    /// Set once this node has already logged the "MetalFX Temporal
+    /// unavailable" degradation, so a performer leaving `temporal_upscale`
+    /// on on unsupported hardware doesn't spam the log every frame.
+    rt_temporal_unavailable_logged: bool,
     /// Per-object-slot previous-frame `model` matrix (GBUFFER_DESIGN.md §2
     /// D5, P2), indexed by object slot `n`. `None` at a slot means "no
     /// history yet" — the frame that finds `None` there seeds
@@ -870,6 +917,11 @@ impl RenderScene {
             velocity_msaa: None,
             velocity_width: 0,
             velocity_height: 0,
+            rt_temporal_color_scratch: None,
+            rt_temporal_color_scratch_width: 0,
+            rt_temporal_color_scratch_height: 0,
+            rt_temporal_upscaler: None,
+            rt_temporal_unavailable_logged: false,
             prev_model: Vec::new(),
             prev_view_proj: None,
             jitter_frame_index: 0,
@@ -1034,16 +1086,17 @@ impl RenderScene {
                 range: None,
                 enum_values: &[],
             },
-            // RAYTRACING_DESIGN.md §5.2 P4: per-scene MetalFX Temporal
-            // quality-mode toggle. Default off — an untouched scene is
-            // byte-identical to before this param existed (no jitter
-            // applied to `view_proj`, `force_consumed_outputs` unaffected
-            // unless this is explicitly `true`). Wiring this into an
-            // actual reduced-res-render + upscale pass through
-            // `crate::metalfx_temporal_upscaler::MetalFxTemporalUpscaler`
-            // is follow-on work (this P4 lane builds the render-pass
-            // CONTRACT — jitter + forced G-buffer outputs — the same
-            // staged scope W0 used for `rt_enabled`).
+            // RAYTRACING_DESIGN.md §5.2 P4 / §8.2 D22 (T2-B): per-scene
+            // MetalFX Temporal quality-mode toggle. Default off — an
+            // untouched scene is byte-identical to before this param existed
+            // (no jitter applied to `view_proj`, `force_consumed_outputs`
+            // unaffected unless this is explicitly `true`). `true` drives the
+            // real reduced-res-render + upscale path (D22): Pass A/B/shafts
+            // render into `rt_temporal_color_scratch` at
+            // `RT_TEMPORAL_RENDER_SCALE`× native res, then
+            // `rt_temporal_upscaler` upscales that scratch color (+ the
+            // render-res `depth`/`velocity` graph outputs) to native res as
+            // this node's `color` output.
             ParamDef {
                 name: std::borrow::Cow::Borrowed("temporal_upscale"),
                 label: "Temporal Upscale",
@@ -1422,6 +1475,85 @@ impl RenderScene {
         self.opaque_scene_color_width = width;
         self.opaque_scene_color_height = height;
         self.opaque_scene_color_format = format;
+    }
+
+    /// RAYTRACING_DESIGN.md §8.2 D22: (re)allocate the render-res scratch
+    /// color target Pass A/B/shaft-composite resolve into when
+    /// `temporal_upscale` is on, instead of the graph's native-res `color`
+    /// output. Same fixed `Rgba16Float` format `msaa_color` always resolves
+    /// as (so it stays a valid MSAA resolve destination), `RENDER_TARGET`
+    /// (the resolve write) + `SHADER_READ` (MetalFX Temporal samples it as
+    /// the `color` input) usage — same idiom as every other scratch target
+    /// in this file (`ensure_opaque_scene_color` above).
+    fn ensure_rt_temporal_color_scratch(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
+        if self.rt_temporal_color_scratch_width == width
+            && self.rt_temporal_color_scratch_height == height
+            && self.rt_temporal_color_scratch.is_some()
+        {
+            return;
+        }
+        self.rt_temporal_color_scratch = Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
+            width,
+            height,
+            depth: 1,
+            format: manifold_gpu::GpuTextureFormat::Rgba16Float,
+            dimension: manifold_gpu::GpuTextureDimension::D2,
+            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET | manifold_gpu::GpuTextureUsage::SHADER_READ,
+            label: "node.render_scene RT temporal-upscale render-res color scratch (D22)",
+            mip_levels: 1,
+        }));
+        self.rt_temporal_color_scratch_width = width;
+        self.rt_temporal_color_scratch_height = height;
+    }
+
+    /// D22: (re)create the live `MetalFxTemporalUpscaler` when the
+    /// (render, native) dimension pair changes, or lazily on first use.
+    /// Returns `false` (leaves `rt_temporal_upscaler` untouched, i.e. `None`
+    /// on first use) when MetalFX Temporal is unavailable on this device —
+    /// logged once, not every frame — so a `temporal_upscale`-on scene on
+    /// unsupported hardware degrades to "keep whatever `color` last held"
+    /// rather than crashing; the caller must check `is_some()` before
+    /// encoding an upscale this frame.
+    fn ensure_rt_temporal_upscaler(
+        &mut self,
+        device: &manifold_gpu::GpuDevice,
+        render_w: u32,
+        render_h: u32,
+        native_w: u32,
+        native_h: u32,
+    ) -> bool {
+        if let Some(u) = self.rt_temporal_upscaler.as_ref()
+            && u.src_w == render_w
+            && u.src_h == render_h
+            && u.dst_w == native_w
+            && u.dst_h == native_h
+        {
+            return true;
+        }
+        if let Some(u) = self.rt_temporal_upscaler.as_mut() {
+            if u.resize(device, render_w, render_h, native_w, native_h) {
+                return true;
+            }
+            self.rt_temporal_upscaler = None;
+        }
+        match crate::metalfx_temporal_upscaler::MetalFxTemporalUpscaler::new(
+            device, render_w, render_h, native_w, native_h,
+        ) {
+            Some(u) => {
+                self.rt_temporal_upscaler = Some(u);
+                self.rt_temporal_unavailable_logged = false;
+                true
+            }
+            None => {
+                if !self.rt_temporal_unavailable_logged {
+                    log::warn!(
+                        "node.render_scene: temporal_upscale is on but MetalFX Temporal is unavailable on this device — rendering natively this frame instead (logged once)"
+                    );
+                    self.rt_temporal_unavailable_logged = true;
+                }
+                false
+            }
+        }
     }
 
     /// E2a: (re)allocate the real single-sample `Depth32Float` opaque-depth
@@ -2442,12 +2574,26 @@ impl EffectNode for RenderScene {
     /// this declaration the plan's max-of-input-dims default sized `color`
     /// to the envmap's fixed 1024², so the scene rendered square and was
     /// stretched to canvas by the next node (BUG-140).
+    ///
+    /// RAYTRACING_DESIGN.md §8.2 D22 point 2: when `temporal_upscale` is on,
+    /// `depth`/`velocity` are the exception — they stay at RENDER res (the
+    /// same fraction `evaluate()`'s `scale_dim` computes this frame),
+    /// because MetalFX Temporal upscales COLOR only and building a bespoke
+    /// depth/velocity upscaler is FORBIDDEN. `color` (and every other/
+    /// default port) stays canvas-sized: MetalFX's own upscale is what lands
+    /// `color` back at native res, inside `evaluate()`, not this
+    /// declaration.
     fn output_canvas_scale(
         &self,
-        _port: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        port: &str,
+        params: &crate::node_graph::effect_node::ParamValues,
     ) -> Option<(u32, u32)> {
-        Some((1, 1))
+        let temporal_upscale = matches!(params.get("temporal_upscale"), Some(ParamValue::Bool(true)));
+        if temporal_upscale && (port == "depth" || port == "velocity") {
+            Some((RT_TEMPORAL_RENDER_SCALE_NUM, RT_TEMPORAL_RENDER_SCALE_DEN))
+        } else {
+            Some((1, 1))
+        }
     }
 
     /// `depth` is `R32Float` (GBUFFER_DESIGN.md §2 D2 — raw device depth,
@@ -2640,6 +2786,33 @@ impl EffectNode for RenderScene {
             return;
         }
         let aspect = width as f32 / height as f32;
+        // RAYTRACING_DESIGN.md §8.2 D22 point 1/3 (T2-B): the per-scene
+        // MetalFX Temporal toggle. When on, the WHOLE render (Pass A/B,
+        // shafts, the RT half-res ray pass) draws at RENDER res —
+        // `native_dim * RT_TEMPORAL_RENDER_SCALE_NUM / _DEN` — into
+        // `rt_temporal_color_scratch`, and MetalFX Temporal upscales that
+        // scratch color to native res as this node's `color` output at the
+        // very end of this fn. `width`/`height` (and everything downstream
+        // that reads them — MSAA/velocity/RT-mask/shadow-snapshot sizing,
+        // the jitter NDC conversion below, half-res RT dispatch dims) are
+        // shadowed to render res for exactly this reason: D22 point 3, "the
+        // RT half-res ray pass now keys off render res... that compounding
+        // is the point". `native_width`/`native_height` are kept for the
+        // two things that must stay at the TRUE canvas size: the
+        // upscaler's dst dims and the final blit destination.
+        let temporal_upscale = matches!(ctx.params.get("temporal_upscale"), Some(ParamValue::Bool(true)));
+        let native_width = width;
+        let native_height = height;
+        let width = if temporal_upscale {
+            scale_dim(native_width, RT_TEMPORAL_RENDER_SCALE_NUM, RT_TEMPORAL_RENDER_SCALE_DEN)
+        } else {
+            width
+        };
+        let height = if temporal_upscale {
+            scale_dim(native_height, RT_TEMPORAL_RENDER_SCALE_NUM, RT_TEMPORAL_RENDER_SCALE_DEN)
+        } else {
+            height
+        };
         let mut view_proj = cam.view_proj(aspect);
         // RAYTRACING_DESIGN.md §5.2 P4: subpixel camera jitter, applied
         // only when `temporal_upscale` is on (default off = byte-identical
@@ -2653,12 +2826,20 @@ impl EffectNode for RenderScene {
         // add `jitter_ndc * view_proj[2][3]` into `view_proj[2][{0,1}]`
         // (column-major storage: `m[col][row]`, matching `mat4_mul_vec4`'s
         // `out[row] = sum_col m[col][row] * v[col]`). `jitter_offset`
-        // returns PIXEL units at the render resolution; 1 pixel = `2.0 /
-        // dim` in NDC (NDC spans [-1, 1] across `dim` pixels).
+        // returns PIXEL units at the render resolution (now `width`/
+        // `height` above, D22); 1 pixel = `2.0 / dim` in NDC (NDC spans
+        // [-1, 1] across `dim` pixels).
         self.jitter_frame_index = self.jitter_frame_index.wrapping_add(1);
-        if matches!(ctx.params.get("temporal_upscale"), Some(ParamValue::Bool(true))) {
+        // T2-B: hoisted out of the `if` below so the final MetalFX upscale
+        // call (end of this fn) can reuse the SAME jitter this frame's
+        // color/depth/velocity were rendered with — MetalFX's `reset`
+        // contract requires the jitter passed to `upscale()` match what was
+        // baked into the frame it's upscaling.
+        let mut jitter_px: (f32, f32) = (0.0, 0.0);
+        if temporal_upscale {
             let (jx_px, jy_px) =
                 crate::metalfx_temporal_upscaler::jitter_offset(self.jitter_frame_index, 8);
+            jitter_px = (jx_px, jy_px);
             let wz = view_proj[2][3];
             view_proj[2][0] += (jx_px * 2.0 / width as f32) * wz;
             view_proj[2][1] += (jy_px * 2.0 / height as f32) * wz;
@@ -2681,6 +2862,31 @@ impl EffectNode for RenderScene {
             .rt_accel
             .as_ref()
             .is_some_and(|a| a.ready.load(std::sync::atomic::Ordering::Acquire));
+        // RAYTRACING_DESIGN.md §5.2 P2/D3, RT-D2, §8.2 D22 (T2-B): the ONE
+        // call site deciding "discard temporal history this frame" for
+        // EITHER of this node's two temporal consumers — the RT irradiance
+        // accumulator (`will_rt_accumulate_this_frame`, mirroring the exact
+        // `rt_enabled && has_casters && rt_ready` gate the accumulate call
+        // site below already used) and MetalFX Temporal's `reset`
+        // (`temporal_upscale`). Mutually-exclusive-by-construction: when RT
+        // will accumulate this frame, that's the one call and the temporal-
+        // upscale-only branch below is skipped; never both — the shared
+        // detector's own contract (`detect_reset` exactly once per frame a
+        // consumer advances) stays intact, and there is still only ONE call
+        // site in the whole node (negative-`rg` gate: no second reset path).
+        let will_rt_accumulate_this_frame = rt_enabled && !casters.is_empty() && rt_ready;
+        let reset_decision: Option<bool> = if will_rt_accumulate_this_frame || temporal_upscale {
+            Some(self.rt_reset_detector.detect_reset(ctx.owner_key, &ctx.time))
+        } else {
+            None
+        };
+        // D22: whether the scratch/upscaler are actually live this frame —
+        // `temporal_upscale` folded with hardware availability, assigned
+        // inside the "Ensure cached GPU resources" block below (the first
+        // point a `&GpuDevice` is available). Declared here so Pass 2 and
+        // this fn's tail (after that block's mutable borrow of `ctx` ends)
+        // can both read the final decision.
+        let mut temporal_upscale_active = false;
         // GBUFFER_DESIGN.md §2 D1: lazy — `velocity` costs nothing unless a
         // consumer actually wired it (checked once per frame, cheap: a
         // step-output lookup, not a texture allocation).
@@ -3114,6 +3320,27 @@ impl EffectNode for RenderScene {
             if velocity_wired {
                 self.ensure_velocity_msaa_target(gpu.device, width, height);
             }
+            // RAYTRACING_DESIGN.md §8.2 D22 (T2-B): the render-res color
+            // scratch Pass A resolves into, ensured whenever the raw
+            // `temporal_upscale` param is on — `width`/`height` are ALREADY
+            // shadowed to render res above regardless of hardware
+            // availability (so they stay in lockstep with
+            // `output_canvas_scale`'s D22 branch for `depth`/`velocity`,
+            // which has no per-frame device to query), so Pass 2 always
+            // needs a render-res target to resolve into. `ensure_rt_
+            // temporal_upscaler`'s return folds in hardware availability —
+            // `temporal_upscale_active` (declared before this block,
+            // assigned here) is `false` on a device without MetalFX
+            // Temporal, and ONLY gates the final upscale+blit at this fn's
+            // tail: Pass 2 still renders correctly into the scratch either
+            // way, it just never reaches `native_color` that frame (logged
+            // once by the ensure call) rather than crashing on a dims
+            // mismatch.
+            if temporal_upscale {
+                self.ensure_rt_temporal_color_scratch(gpu.device, width, height);
+                temporal_upscale_active =
+                    self.ensure_rt_temporal_upscaler(gpu.device, width, height, native_width, native_height);
+            }
             self.ensure_sampler(gpu.device);
             // GLB_XFAIL_BURNDOWN_DESIGN.md D3: ensure every distinct
             // per-map-family sampler this frame's draws need. Runs before
@@ -3462,6 +3689,13 @@ impl EffectNode for RenderScene {
                     // 12 bytes incl. pad + this) — see `mesh_common.rs`'s
                     // `MeshVertex` layout.
                     normal_offset: 16,
+                    // RT-T2-A (RAYTRACING_DESIGN.md §8.2 Tier-2 item 4):
+                    // `MeshVertex`'s UV field offset (position 16 + normal
+                    // 16 = 32).
+                    uv_offset: 32,
+                    alpha_mask: d.alpha_mode == AlphaMode::Mask,
+                    alpha_cutoff: d.uniforms.alpha_params[1],
+                    base_color_texture: d.base_color_map,
                 })
                 .collect();
 
@@ -3482,12 +3716,6 @@ impl EffectNode for RenderScene {
             hasher.write_u64(ctx.rebuild_epoch);
             let accel_key = hasher.finish();
 
-            // RAYTRACING_DESIGN.md §5.2 P2/D3, RT-D2: captured BEFORE
-            // `ctx.gpu_encoder()` mutably borrows `ctx` below — both are
-            // `Copy` (`OwnerKey` is a `u64`, `FrameTime` derives `Copy`).
-            let owner_key = ctx.owner_key;
-            let frame_time = ctx.time;
-
             let gpu = ctx.gpu_encoder();
             // RAYTRACING_DESIGN.md §5.2 P3: sized to THIS frame's object
             // count, same NLL-borrow reason the tracer/masks/params
@@ -3503,7 +3731,11 @@ impl EffectNode for RenderScene {
             // the SAME `objects` slice every RT-ready frame (below), not
             // gated on the accel-rebuild key (an object's `transform` alone
             // changing, e.g. animation, must refresh its normal_matrix too).
-            manifold_gpu::raytrace::ensure_normal_sources(
+            // RT-T2-A: also returns the ordered alpha-masked-object base-
+            // color-texture list, threaded straight to `dispatch_shadow_
+            // rays` below (same per-frame cadence — this list can change
+            // even when topology/transform don't, e.g. a material swap).
+            let alpha_textures: Vec<&manifold_gpu::GpuTexture> = manifold_gpu::raytrace::ensure_normal_sources(
                 &mut self.rt_normal_sources,
                 &mut self.rt_normal_sources_capacity,
                 gpu.device,
@@ -3655,6 +3887,7 @@ impl EffectNode for RenderScene {
                     params_buffer,
                     gi_materials_buffer,
                     normal_sources_buffer,
+                    &alpha_textures,
                     depth_tex,
                     mask_half,
                     irr_half,
@@ -3732,8 +3965,12 @@ impl EffectNode for RenderScene {
                 // history texture (dimension change) rather than adding a
                 // second reset path. `detect_reset` must run exactly once
                 // per frame this accumulator advances (its own contract);
-                // this `if rt_ready` branch is that one call.
-                let reset = self.rt_reset_detector.detect_reset(owner_key, &frame_time)
+                // §8.2 D22 (T2-B) hoisted the actual call to
+                // `reset_decision` above `will_rt_accumulate_this_frame`
+                // gates identically to this `if rt_ready` branch (nested in
+                // the same `rt_enabled && has_casters` block), so it's
+                // `Some` here.
+                let reset = reset_decision.expect("will_rt_accumulate_this_frame implies Some")
                     || std::mem::take(&mut self.rt_irr_needs_reset);
                 // RT-T1-C: `prev_view_proj` is the SAME local captured
                 // above (BUG-311) before `self.prev_view_proj` was
@@ -3814,8 +4051,26 @@ impl EffectNode for RenderScene {
         // ONE 4x-MSAA color+depth pass (cleared once); the shared depth
         // buffer resolves inter-object occlusion, and the pass resolves out
         // to the single-sample `target` at the end.
-        let Some(target) = ctx.outputs.texture_2d("color") else {
+        let Some(native_color) = ctx.outputs.texture_2d("color") else {
             return;
+        };
+        // RAYTRACING_DESIGN.md §8.2 D22 (T2-B): when `temporal_upscale` is
+        // on, Pass A/B/shaft-composite below resolve into the render-res
+        // scratch instead of the graph's native-res `color` output —
+        // `target` (unchanged variable name; every downstream use in Pass 2
+        // is untouched) is that redirect point. Keyed on the raw param, NOT
+        // `temporal_upscale_active`: `width`/`height` are already
+        // render-res whenever the param is on regardless of hardware
+        // availability (see the ensure-block comment above), so the MSAA
+        // resolve MUST land in a render-res target either way — the
+        // hardware-availability question only decides whether the tail
+        // below can actually upscale that scratch into `native_color`. The
+        // real `native_color` texture is only touched again at this fn's
+        // very end.
+        let target: &manifold_gpu::GpuTexture = if temporal_upscale {
+            self.rt_temporal_color_scratch.as_ref().expect("ensured above")
+        } else {
+            native_color
         };
         // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: `opaque_scene_color` was
         // already (re)allocated above, sized to this exact `target`'s
@@ -4388,6 +4643,45 @@ impl EffectNode for RenderScene {
                 1,
                 manifold_gpu::GpuLoadAction::Load,
                 "node.render_scene shaft composite",
+            );
+        }
+
+        // RAYTRACING_DESIGN.md §8.2 D22 (T2-B): everything above (Pass A/B,
+        // shafts) has now resolved into `target` — the render-res color
+        // scratch when `temporal_upscale_active`. MetalFX Temporal upscales
+        // it to native res using this SAME frame's jitter + the render-res
+        // `depth`/`velocity` graph outputs (forced-consumed whenever
+        // `temporal_upscale` is on — `force_consumed_outputs`; sized to
+        // render res by `output_canvas_scale`'s D22 branch, so they already
+        // match `target`'s dims with no extra scratch needed), then the
+        // upscaled result becomes this node's real `color` output via a
+        // same-format, same-size blit into `native_color` — the ONLY way
+        // `native_color` is written this frame in upscaled mode (Pass 2
+        // above wrote into the scratch, never into it directly).
+        if temporal_upscale_active {
+            let upscaler = self
+                .rt_temporal_upscaler
+                .as_ref()
+                .expect("ensured above: temporal_upscale_active implies Some");
+            let depth_src = depth_resolve_target.expect(
+                "force_consumed_outputs forces `depth` into consumed_outputs whenever temporal_upscale is on",
+            );
+            let velocity_src = velocity_resolve_target.expect(
+                "force_consumed_outputs forces `velocity` into consumed_outputs whenever temporal_upscale is on",
+            );
+            // D22/RT-D2: the SAME shared reset decision computed once near
+            // the top of this fn (`reset_decision`) — `temporal_upscale`
+            // being true is one of the two conditions that guarantees it's
+            // `Some` there.
+            let reset = reset_decision.unwrap_or(false);
+            let gpu = ctx.gpu_encoder();
+            upscaler.upscale(gpu, target, depth_src, velocity_src, jitter_px.0, jitter_px.1, reset);
+            gpu.native_enc.copy_texture_to_texture(
+                &upscaler.output.texture,
+                native_color,
+                native_width,
+                native_height,
+                1,
             );
         }
     }
