@@ -50,6 +50,8 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-313 | **scene-panel-filtered-vs-unfiltered-index-mismatch** | Scene panel builds rows from the `card_visible`-filtered surface (`properties_retained` = indices into it) but `sync_properties_values` resolves those indices against the unfiltered `with_param_slots` slice — every readout/handle shows a DIFFERENT param's value; scale + material rows missing. Fix IN PROGRESS on `lane/bug313-id-keyed-sync`. | OPEN |
+| BUG-314 | **sync-card-values-positional-effect-join** | `sync_card_values` joins card slot i ↔ effect index i positionally — an effect-list reorder between structural syncs pushes values onto the wrong CARD. Same positional-cross-boundary-join class as BUG-313, one level up. Fix after BUG-313 lands. | OPEN |
 | BUG-311 | **rt-accum-no-reprojection-ghosts-on-motion** | `accumulate_irradiance` blends history at the same texel (alpha 0.15) with no motion reprojection and no depth/normal validity test — RT lighting trails ~15–20 frames behind ANY movement. Fix: SVGF-style reproject + reject (motion vectors already exist for MetalFX); needs a RAYTRACING_DESIGN.md amendment first. | OPEN |
 | BUG-312 | **rt-ray-noise-speckle** | 4 AO + 2 GI rays half-res is raw-noise territory without working accumulation; white speckle on lit surfaces. Blocked on BUG-311 — re-judge budgets only after reprojection lands. | OPEN |
 | ~~BUG-308~~ FIXED | **rt-p1-integrated-scene-shows-no-shadow-effect** | FIXED by RT-D4: `build_accel`/`refit_accel` (`raytrace.rs`) raced this frame's own uncommitted mesh-gen GPU writes via a synchronously-`waitUntilCompleted()`-ed separate command buffer on the same queue, permanently building the accel from pre-generation vertex data. Fixed: async build (one command buffer, `commit()` with no wait, `Arc<AtomicBool>` ready flag via completion handler) + a one-frame-deferred enqueue in `render_scene.rs`. Occluded-region drop now 58.3% (was 0.0%); first-enable frame trace shows no frame >20ms. | RESOLVED |
@@ -210,6 +212,22 @@ workflow journal at
 System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md).
 
 ## Open
+
+### BUG-313 — scene panel per-frame value sync reads unfiltered manifest with filtered-surface indices
+**Status:** OPEN · fix IN PROGRESS on `lane/bug313-id-keyed-sync` (2026-07-23)
+**Severity:** HIGH (instrument lies): panel drags land on the correct param but every readout/handle shows a DIFFERENT param's value; scale + material rows missing from the panel entirely.
+**Symptom:** dragging a slider in the scene panel writes the correct param but the on-screen value/handle shown belongs to a different param; scale and material rows don't appear in the panel at all.
+**Found:** 2026-07-23 via cross-model review (Opus diagnosis, Fable verification).
+**Root cause:** commit 5363e97c added a `card_visible` filter inside the shared surface builder `param_surface` (`crates/manifold-app/src/ui_bridge/projection/cards.rs:237`); the scene panel builds rows from the filtered surface (`properties_retained` = indices into it) but `sync_properties_values` (`crates/manifold-ui/src/panels/scene_setup_panel.rs:958`) resolves those indices against the unfiltered `with_param_slots` slice — two index spaces coupled only by comments. The flow-harness test `scene-setup-light-intensity-drag` catches it (fails at step 8) but is outside the nextest gate, so the regression shipped unrecorded.
+**Fix shape:** id-keyed value channel (borrowed ids, zero alloc), required visibility policy on the structural builder, per-frame sync has zero visibility awareness, delete `with_visible_param_slots` + `properties_retained`, INV-6 miss/duplicate asserts made real.
+
+### BUG-314 — `sync_card_values` joins card slot ↔ effect index positionally
+**Status:** OPEN
+**Severity:** MED
+**Symptom:** an effect-list reorder between structural syncs pushes a card's displayed value onto the wrong card.
+**Found:** 2026-07-23 by adversarial design review of the BUG-313 fix — same positional-cross-boundary-join class one level up (card↔effect instead of row↔param).
+**Root cause:** `sync_card_values` (`crates/manifold-app/src/ui_bridge/projection/cards.rs:37-66`, the `master_effect_mut(i)` shape) joins card slot `i` to effect index `i` positionally with no identity check.
+**Fix shape:** join cards to effects by effect id, same pattern as the BUG-313 fix; do after BUG-313 lands so the id-join helpers exist.
 
 ### BUG-311 — RT temporal accumulation has no motion reprojection/validation: lighting ghosts behind ANY movement
 **Status:** OPEN · found 2026-07-23 by Peter in-app (first real look at RT v1 on the apricot scene)
