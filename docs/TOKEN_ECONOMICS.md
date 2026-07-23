@@ -124,7 +124,7 @@ Recent-window run rate is higher: **~$17,600/month**.
 | Claude Haiku 4.5 | $1.00 | $5.00 | $0.10 |
 | GLM 5.2 | $1.40 | $4.40 | $0.26 |
 | DeepSeek V4 Pro | $1.74 | $3.48 | $0.145 |
-| **DeepSeek V4 Flash** | **$0.14** | **$0.28** | **$0.028** |
+| **DeepSeek V4 Flash** | **$0.14** | **$0.28** | **$0.028** via opencode Zen; **$0.0028 direct API** (verified 2026-07-24 — 10x gap between sellers, see §12) |
 | Qwen3.7 Max | $2.50 | $7.50 | $0.50 |
 | MiniMax M3 | $0.30 | $1.20 | $0.06 |
 | Kimi K3 | — | — | **~$0.80** (measured 2026-07-18) |
@@ -181,6 +181,8 @@ Go's quota is dollar-denominated, so **oversized requests exhaust it long before
 | overflow | opencode Zen credits | as used |
 
 **~$82/month added.** Start at zAI Pro, not Max: the roster is unproven and R6 should move volume down to Flash. Upgrade only on a real cap-out.
+
+**SUPERSEDED 2026-07-24 — Peter decided a different stack after live-pricing verification: see §12.**
 
 **Watch item:** z.ai sizes a prompt at 15–20 model invocations. Measured here: **32.6**. Treat effective capacity as roughly half the headline — Pro's 2,000/week may behave like ~1,000. Also unverified: whether z.ai's terms carry a context-length or fair-use clause that bites at 217K-token turns, and whether proxying a subscription endpoint through LiteLLM is permitted by Kimi's and z.ai's terms.
 
@@ -250,3 +252,23 @@ Your own tier-spawn guard records why this section exists: the rule "was policy,
 - The §8 optimised figure is a **target, not a result.** Re-run `token_report.py` after the first full wave on the new roster and record the actual against it here.
 - Pair spend with an outcome number before optimising on cost alone (R8): landed diffs that survived, lanes rejected at review, bugs that returned. The most expensive line will be the lead's review pass, and that pass is what prevents the failure the steering model exists to stop. Cost-only optimisation points straight at cutting it.
 - Currency: AUD display, USD enforcement, rate + date stamped on every figure (R8). Applies to the metered tier only; Kimi and z.ai are subscriptions where notional dollars are a within-endpoint usage proxy, not money.
+
+---
+
+## 12. DECIDED — the purchased stack (Peter, 2026-07-24)
+
+External prices re-verified against the live web 2026-07-24 (Fable session). Rate: 1 USD ≈ 1.43 AUD (22 Jul 2026).
+
+| Seat | Plan | USD/mo | AUD/mo |
+|---|---|---:|---:|
+| Lead — Kimi K3 | Kimi **Allegro** (upgrade from Allegretto $39) | $99 | ~$142 |
+| Dispatcher — GLM 5.2 | z.ai Coding Plan **Pro** | $72 | ~$103 |
+| Workers — DeepSeek V4 Flash | **opencode Go** ($5 first month) | $10 | ~$14 |
+| Anthropic Max 20x | **CANCELLED — removed entirely** | — | — |
+| **Total** | | **$181** | **~$259** (budget: $350 AUD) |
+
+- **Go is the trial route for Flash, DeepSeek's direct API the named fallback** — switch if the $12/5h throttle stalls a wave or the mix turns cache-hit-heavy. Direct: prepaid balance (natural hard cap), cache hits $0.0028/MTok — 10x cheaper than through opencode, netting ~1.7x after Go's 6x quota subsidy; miss-heavy favours Go, hit-heavy favours direct.
+- **Ollama Cloud** — not rejected on the K3 gap (K3 rides the Kimi sub; their cloud hosts GLM-5.2 and Flash). Declined because GPU-time metering charges the prefill (this workload's expensive dimension) with unpublished ceilings, and Pro caps at 3 concurrent — wrong shape for worker fan-out. Optional $20 consolidation experiment later.
+- **Verified corrections to §5/§7:** Kimi tiers are Moderato $19 / Allegretto $39 / Allegro $99 / Vivace $199; absolute Kimi quotas unpublished (7-day + 5-hour window, `/usage` in Kimi Code is the oracle, paid boosters are the overflow). z.ai: GLM-5.2 consumes plan quota at 3x peak (16:00–20:00 Sydney) / 2x off-peak (promo 1x to Sept) — overnight Sydney waves run off-peak; treat Pro's 2,000/wk as 500–1,000 effective.
+- **Effort policy (Peter, 2026-07-24): every seat defaults to LOW reasoning effort; DeepSeek runs with reasoning OFF (non-reasoning Flash mode). Raising effort is a deliberate per-task call, never the default.** Mirrored in AGENT_ROUTING.md §Reasoning effort.
+- **K3 quality concern CLOSED (Peter's direct observation): K3 has caught many errors Fable and Opus missed.** The remaining first-wave unknown is the GLM dispatcher seat — judge it on §11's outcome metrics, not cost.

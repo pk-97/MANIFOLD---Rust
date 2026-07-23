@@ -35,6 +35,8 @@ Open items for K3:
   - **Cost is not value — pair the metric before optimising on it.** The single most expensive line item will be K3's review pass, and that pass is precisely what prevents the failure that killed the overnight waves (§steering model). A cost-only metric points straight at cutting it, and "cheaper and quieter" will read as "better." Any optimisation K3 does off this data must pair spend with an outcome number — landed diffs that survived, lanes rejected at review, bugs that returned. Peter's stated goal is K3 optimising the team and repo against real metrics for the first time; this is the guardrail on that, not an objection to it.
   - **Unverified, resolve before relying on it:** LiteLLM counts only what flows through the proxy. cc-fleet points each provider at its own base URL, so seats must be repointed via `cc-fleet add --base-url <proxy>` for their spend to appear. That looks straightforward from the CLI surface but was NOT tested; the Anthropic-side session is not covered either way. Also unbuilt: nothing here exists yet — this is a proposal with the capability check done, not a working setup.
 
+**2026-07-24 (Peter, purchasing decision — resolves the money half of R1; keys/config still to do):** Anthropic sub removed entirely; Kimi upgraded to Allegro; z.ai Coding Pro bought for the GLM 5.2 dispatcher; opencode Go bought for DeepSeek Flash workers with DeepSeek's direct API as the named fallback. Every seat defaults to LOW effort, DeepSeek reasoning OFF. K3 lead quality concern CLOSED on Peter's direct observation (K3 caught many errors Fable and Opus missed). Full record + verified prices: `docs/TOKEN_ECONOMICS.md` §12.
+
 Everything below is proven doctrine under the old roster. Read it as seat descriptions, not model assignments.
 
 ## The steering model (2026-07-20 — supersedes review-at-landing-only)
@@ -84,7 +86,7 @@ Task shapes that route to the executor seat (DeepSeek V4 Flash from 2026-07-24; 
 
 Never to mechanical agents: graph semantics, GPU/kernel work, undo/lifecycle, design judgment, anything where the fix shape isn't already decided.
 
-**Reasoning effort (2026-07-20):** mechanical lanes run at LOW effort — a fully-decided brief leaves nothing to deliberate, and overthinking is how executors "improve" the brief into parallel infra. Not zero: conflicts and gate failures still need a little reasoning. Investigation/consult work keeps normal effort.
+**Reasoning effort (2026-07-20; extended by Peter 2026-07-24):** under the open roster EVERY seat defaults to LOW effort — lead, dispatcher, and workers — and DeepSeek runs with reasoning OFF (non-reasoning Flash mode). Rationale unchanged from the lane rule: a fully-decided brief leaves nothing to deliberate, and overthinking is how executors "improve" the brief into parallel infra. Raising effort is a deliberate per-task call for a named hard problem (design fork, ambiguous gate failure), never the default. Decision record: docs/TOKEN_ECONOMICS.md §12.
 
 ## The brief contract (where the tokens are saved)
 
