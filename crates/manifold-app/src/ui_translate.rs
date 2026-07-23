@@ -440,48 +440,27 @@ pub fn param_slot_to_ui(p: &Param) -> UiParamSlot {
     }
 }
 
-thread_local! {
-    /// UI-thread scratch for [`with_param_slots`], reused across the several
-    /// per-frame card-value syncs so projecting a manifest into the positional
-    /// slot view never allocates on the hot path (D10,
-    /// `docs/UI_FUNNEL_DECOMPOSITION_DESIGN.md`; INV-W4).
-    static PARAM_SLOT_SCRATCH: std::cell::RefCell<Vec<UiParamSlot>> =
-        const { std::cell::RefCell::new(Vec::new()) };
-}
-
-/// Project a manifest into the UI's positional slot view (card order) using a
-/// reused thread-local scratch buffer, handing the filled slice to `f`. The
-/// per-frame-alloc-free form of the former `param_slots_to_ui` (D10):
-/// `sync_card_values` calls this several times per frame per window, so a fresh
-/// `Vec` per call was a hot-path allocation.
-pub fn with_param_slots<R>(params: &ParamManifest, f: impl FnOnce(&[UiParamSlot]) -> R) -> R {
-    PARAM_SLOT_SCRATCH.with_borrow_mut(|scratch| {
-        scratch.clear();
-        scratch.extend(params.iter().map(param_slot_to_ui));
-        f(scratch)
-    })
-}
-
-/// [`with_param_slots`]'s card-value-sync sibling: skips any param whose
-/// spec is `card_visible: false` (scene-panel exposure convergence,
-/// card-visibility follow-up). `sync_card_values` (`ui_bridge::projection::
-/// cards`) is the ONLY caller — its structural card build
-/// (`cards::param_surface`) filters the SAME manifest the SAME way before
-/// turning it into rows, so this keeps the per-frame value push 1:1
-/// positional with the already-built card. The scene panel's own per-frame
-/// value sync (`sync_scene_row_values`) keeps calling the unfiltered
-/// [`with_param_slots`] — its structural build never filters either.
-pub fn with_visible_param_slots<R>(params: &ParamManifest, f: impl FnOnce(&[UiParamSlot]) -> R) -> R {
-    PARAM_SLOT_SCRATCH.with_borrow_mut(|scratch| {
-        scratch.clear();
-        scratch.extend(
-            params
-                .iter()
-                .filter(|p| p.spec.card_visible)
-                .map(param_slot_to_ui),
-        );
-        f(scratch)
-    })
+/// Hand the closure a borrowed-id value channel over `params`: an iterator of
+/// `(&str id, UiParamSlot)`, in manifest order. The per-frame value syncs JOIN
+/// each slot onto the built row carrying the same id (BUG-313 — no positional
+/// cross-boundary coupling, so no second filter can drift out of alignment
+/// with the structural build). Iterator form, so it allocates nothing: the id
+/// borrows the manifest inside the closure's scope, and nothing is cloned (the
+/// former thread-local slot scratch existed only to hand out a `&[UiParamSlot]`
+/// slice; an iterator makes even that unnecessary).
+///
+/// No visibility filter lives here on purpose: the sync side is visibility-
+/// agnostic by construction. A manifest id with no matching built row (a
+/// `card_visible: false` param the curated card skipped, or a scene section
+/// the panel isn't showing) simply finds no row in the join and is ignored —
+/// there is no filter to keep mirrored, so none can drift (the class BUG-313
+/// removed).
+pub fn with_param_slots<'p, R>(
+    params: &'p ParamManifest,
+    f: impl FnOnce(&mut dyn Iterator<Item = (&'p str, UiParamSlot)>) -> R,
+) -> R {
+    let mut it = params.iter().map(|p| (p.id(), param_slot_to_ui(p)));
+    f(&mut it)
 }
 
 // ── "3D Shading" relight (docs/DEPTH_RELIGHT_DESIGN.md P5b) ────────────────

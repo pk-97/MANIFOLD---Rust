@@ -375,6 +375,21 @@ pub struct ParamCardPanel {
     /// `collapse_anim` mechanism (`begin_delete_collapse` retargets it to 0).
     delete_fade: Option<Transient>,
 
+    /// BUG-313: param id → local row index, rebuilt each `configure` from the
+    /// same rows being rendered. The JOIN KEY for the per-frame value sync —
+    /// `sync_values` iterates the manifest's id-keyed slot channel and pushes
+    /// each slot onto the row this map resolves, never by position. A manifest
+    /// id with no row (a hidden param) simply misses the map and is skipped;
+    /// there is no positional coupling and no second filter to drift.
+    row_id_index: ahash::AHashMap<String, usize>,
+    /// Per-frame reused coverage scratch for the id-join miss invariant
+    /// (INV-6): `true` for each row that received a value this sync. Sized to
+    /// the row count in `configure`, cleared+refilled every `sync_values` (no
+    /// per-frame allocation after warmup). A row left `false` is a built row
+    /// with no live manifest entry — `debug_assert!` in dev, `warn_join_gap_once`
+    /// in release.
+    row_value_synced: Vec<bool>,
+
     // Node range
     first_node: usize,
     node_count: usize,
@@ -450,6 +465,8 @@ impl ParamCardPanel {
             value_snapback: Vec::new(),
             spawn_scale: AnimF32::new(1.0, color::MOTION_MED_MS),
             delete_fade: None,
+            row_id_index: ahash::AHashMap::new(),
+            row_value_synced: Vec::new(),
             first_node: 0,
             node_count: 0,
         }
@@ -1767,11 +1784,49 @@ mod tests {
 
         tree.clear_dirty();
         use crate::view::UiParamSlot as ParamSlot;
-        panel.sync_values(
+        panel.sync_values_positional(
             &mut tree,
             &[ParamSlot::exposed(50.0), ParamSlot::exposed(0.8)],
         );
         assert!(tree.has_dirty());
+    }
+
+    /// BUG-313: the per-frame value channel JOINS each slot onto the row that
+    /// carries the same id — never by position. A manifest param with no built
+    /// row (a `card_visible: false` param the curated card skipped), interleaved
+    /// BETWEEN the two real rows, sits exactly where a positional
+    /// `.take(rows.len())` join would land the SECOND row's value — so if the
+    /// join were still positional, "strength" would show the hidden param's
+    /// 999. It must show its own value, keyed by id.
+    #[test]
+    fn sync_values_joins_by_id_not_position_with_a_hidden_param_interleaved() {
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&effect_config()); // rows: "radius" (0..100, whole), "strength" (0..1)
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
+
+        use crate::view::UiParamSlot as ParamSlot;
+        // Manifest order: radius, <hidden>, strength — the hidden id has no row.
+        let mut it = [
+            ("radius", ParamSlot::exposed(80.0)),
+            ("hidden_scene_param", ParamSlot::exposed(999.0)),
+            ("strength", ParamSlot::exposed(0.25)),
+        ]
+        .into_iter();
+        panel.sync_values(&mut tree, &mut it);
+
+        let radius_val = panel.row_host.slider_ids[0].as_ref().unwrap().value_text;
+        let strength_val = panel.row_host.slider_ids[1].as_ref().unwrap().value_text;
+        assert_eq!(
+            tree.get_node(radius_val).unwrap().text.as_deref(),
+            Some("80"),
+            "radius joins by id to its own value"
+        );
+        assert_eq!(
+            tree.get_node(strength_val).unwrap().text.as_deref(),
+            Some("0.25"),
+            "strength must show its own value — NOT the hidden param's 999 a positional join would have shifted onto it"
+        );
     }
 
     #[test]
@@ -1786,13 +1841,13 @@ mod tests {
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
 
         use crate::view::UiParamSlot as ParamSlot;
-        panel.sync_values(&mut tree, &[ParamSlot::exposed(50.0), ParamSlot::exposed(0.8)]);
+        panel.sync_values_positional(&mut tree, &[ParamSlot::exposed(50.0), ParamSlot::exposed(0.8)]);
         assert!(
             panel.value_flash[0].progress().is_none(),
             "the post-configure resync must not flash"
         );
 
-        panel.sync_values(&mut tree, &[ParamSlot::exposed(75.0), ParamSlot::exposed(0.8)]);
+        panel.sync_values_positional(&mut tree, &[ParamSlot::exposed(75.0), ParamSlot::exposed(0.8)]);
         assert!(
             panel.value_flash[0].progress().is_some(),
             "a genuine value change fires the flash"
@@ -1833,7 +1888,7 @@ mod tests {
 
         use crate::view::UiParamSlot as ParamSlot;
         // Row 0 is "radius", min 0 / max 100 / default 10.
-        panel.sync_values(&mut tree, &[ParamSlot::exposed(50.0), ParamSlot::exposed(0.8)]);
+        panel.sync_values_positional(&mut tree, &[ParamSlot::exposed(50.0), ParamSlot::exposed(0.8)]);
         let fill_id = panel.row_host.slider_ids[0].as_ref().unwrap().fill;
         let width_at_50 = tree.get_bounds(fill_id).width;
 
@@ -1843,7 +1898,7 @@ mod tests {
         assert!(panel.value_snapback[0].is_animating(), "reset starts the row's own tween");
 
         // The next poll sees the model already at the new default (10.0).
-        panel.sync_values(&mut tree, &[ParamSlot::exposed(10.0), ParamSlot::exposed(0.8)]);
+        panel.sync_values_positional(&mut tree, &[ParamSlot::exposed(10.0), ParamSlot::exposed(0.8)]);
         let width_just_after = tree.get_bounds(fill_id).width;
         assert!(
             (width_just_after - width_at_50).abs() < 0.5,
@@ -1881,10 +1936,10 @@ mod tests {
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
 
         use crate::view::UiParamSlot as ParamSlot;
-        panel.sync_values(&mut tree, &[ParamSlot::exposed(50.0), ParamSlot::exposed(0.8)]);
+        panel.sync_values_positional(&mut tree, &[ParamSlot::exposed(50.0), ParamSlot::exposed(0.8)]);
 
         panel.drag.begin(ParamDragTarget::Param { index: 0 }, Vec2::ZERO);
-        panel.sync_values(&mut tree, &[ParamSlot::exposed(75.0), ParamSlot::exposed(0.8)]);
+        panel.sync_values_positional(&mut tree, &[ParamSlot::exposed(75.0), ParamSlot::exposed(0.8)]);
         assert!(
             panel.value_flash[0].progress().is_none(),
             "no flash while this card is mid-drag"
@@ -3001,7 +3056,7 @@ mod tests {
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
 
         tree.clear_dirty();
-        panel.sync_values(
+        panel.sync_values_positional(
             &mut tree,
             &[
                 crate::view::UiParamSlot::exposed(5.0),

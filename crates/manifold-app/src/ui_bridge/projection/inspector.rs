@@ -13,7 +13,9 @@ use manifold_ui::param_surface::ParamSurface;
 use crate::app::SelectionState;
 use crate::ui_root::UIRoot;
 
-use super::cards::{OscScope, attach_audio_sends, effects_to_surfaces, gen_params_to_surface};
+use super::cards::{
+    OscScope, SurfaceVisibility, attach_audio_sends, effects_to_surfaces, gen_params_to_surface,
+};
 use super::scene::sections_for_doc_ids;
 
 /// Sync inspector content for the active selection.
@@ -889,8 +891,17 @@ pub fn sync_inspector_data(
                             // the main inspector's generator card uses (see
                             // `ScenePanel::configure_params`'s doc comment for
                             // why THIS layer, never `active_layer`).
+                            // `All`: the panel filters by SECTION, so it must
+                            // see every param — including `card_visible: false`
+                            // scale/material rows the curated card hides.
                             full_params = gen_inst.map(|gp| {
-                                gen_params_to_surface(gp, layer_id.as_str(), None, automation_latched)
+                                gen_params_to_surface(
+                                    gp,
+                                    layer_id.as_str(),
+                                    None,
+                                    automation_latched,
+                                    SurfaceVisibility::All,
+                                )
                             });
                             SceneSetupState::Live(Box::new(SceneSetupVm {
                                 layer_id,
@@ -1054,6 +1065,8 @@ pub fn sync_inspector_data(
                         lid,
                         clip_string_params,
                         automation_latched,
+                        // The main inspector's generator CARD is curated.
+                        SurfaceVisibility::CuratedCard,
                     )
                 });
             if let Some(c) = gen_config.as_mut() {

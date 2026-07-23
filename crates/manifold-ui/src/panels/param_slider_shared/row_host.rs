@@ -19,8 +19,27 @@
 
 use super::*;
 use crate::panels::copy_to_clipboard_label::CopyToClipboardLabelState;
-use crate::param_surface::{RowIndex, RowRole};
+use crate::param_surface::{RowIndex, RowRole, RowSpec};
 use crate::{MappingAction, ModulationAction, ParamsAction};
+
+/// Release-mode once-per-id loud signal for the id-join miss invariant (INV-6):
+/// a built row whose id has NO live manifest entry this frame. `debug_assert!`
+/// already panics in dev; this keeps the release path from freezing a row
+/// silently. Reachable only if a manifest mutation skipped the structural
+/// reconfigure that rebuilds the rows — an upstream bug, surfaced here rather
+/// than swallowed.
+pub(crate) fn warn_join_gap_once(id: &str) {
+    use std::sync::{Mutex, OnceLock};
+    static WARNED: OnceLock<Mutex<std::collections::HashSet<String>>> = OnceLock::new();
+    let warned = WARNED.get_or_init(|| Mutex::new(std::collections::HashSet::new()));
+    let mut warned = warned.lock().unwrap_or_else(|e| e.into_inner());
+    if warned.insert(id.to_string()) {
+        eprintln!(
+            "param value sync: built row id {id:?} has no live manifest entry — a manifest \
+             mutation skipped its structural reconfigure; row frozen this frame (INV-6)"
+        );
+    }
+}
 
 /// Per-row widget-id bundles + the reverse `WidgetId → (row, role)` index for
 /// one parameter card. Every field is row-parallel (indexed by param row),
@@ -197,6 +216,36 @@ impl RowHost {
         for &(node, _tab) in &self.mod_tab_ids[i] {
             self.row_index.insert(tree.widget_of(node), i, RowRole::ModTab);
         }
+    }
+
+    /// §5.6 shared per-row value push: normalize → format → update row `i`'s
+    /// slider fill + readout. The ONE place both parameter cards write a
+    /// slider value (`ParamCardPanel::sync_param_value` and
+    /// `ScenePanel::sync_properties_values`), so the fill/readout math can't
+    /// drift apart. `display_norm_override` draws the FILL at an in-flight
+    /// snapback position while the readout still shows the true `value`; `None`
+    /// draws `value`'s own normalized position. No-op for a row with no slider
+    /// bundle (a toggle/trigger row, or an out-of-range index).
+    pub(crate) fn push_slider_value(
+        &self,
+        tree: &mut UITree,
+        i: usize,
+        value: f32,
+        spec: &RowSpec,
+        display_norm_override: Option<f32>,
+    ) {
+        let Some(ids) = self.slider_ids.get(i).and_then(|s| s.as_ref()) else {
+            return;
+        };
+        let norm = crate::slider::BitmapSlider::value_to_normalized(value, spec.min, spec.max);
+        let text = format_param_value(
+            value,
+            spec.min,
+            spec.whole_numbers,
+            spec.is_angle,
+            spec.value_labels.as_deref(),
+        );
+        crate::slider::BitmapSlider::update_value(tree, ids, display_norm_override.unwrap_or(norm), &text);
     }
 
     /// Replay every materialised slider's `Track + RightClick → reset` intent —

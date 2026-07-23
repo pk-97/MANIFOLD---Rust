@@ -123,6 +123,14 @@ pub struct UiParamSlot {
     pub exposed: bool,
 }
 
+/// One entry of the per-frame value channel: a param's borrowed manifest id
+/// paired with its slot. The per-frame value syncs iterate these and JOIN each
+/// slot onto the built row that carries the same id (BUG-313) — never by
+/// position. The `&str` borrows the manifest for the duration of the sync; it
+/// is never cloned (the manifest ids are `Cow::Owned` for scene-stamped
+/// params, so a clone per param per frame per window is a hot-path violation).
+pub type ParamSlotEntry<'a> = (&'a str, UiParamSlot);
+
 impl UiParamSlot {
     /// An exposed slot with the given value (base seeded to the same value).
     #[inline]

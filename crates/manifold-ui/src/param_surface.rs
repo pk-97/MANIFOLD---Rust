@@ -52,8 +52,9 @@ pub struct RowSpec {
 }
 
 /// Value state at projection time. Per-frame effective values keep riding
-/// the `sync_values` slot stream (positional over the manifest order,
-/// length-asserted — INV-6); these fields are the structural-sync snapshot.
+/// the `sync_values` slot stream, JOINED onto rows by param id (BUG-313 —
+/// never by position; INV-6 is now the id-join coverage check, not a length
+/// assert); these fields are the structural-sync snapshot.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RowValue {
     /// User-intended base (pre-modulation).
