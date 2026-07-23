@@ -120,6 +120,10 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         triangle_count: 2,
         // Vertices are already world-space — identity transform.
         transform: IDENTITY,
+        // ao_spp/gi_spp are 0 in this proof's params — the only two
+        // consumers of the fetched normal — so this fixture's position-only
+        // `PackedVertex` (no normal field) never has it read.
+        normal_offset: 0,
     }];
     let accel = tracer.build_accel(device, &objects);
 
@@ -168,6 +172,7 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         0, // RT-P3: gi_spp — 0, GI gather skipped, this proof only asserts on out_sv
         [0.0, 0.0, 0.0],
         [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0], // RT-T1-B: camera_pos — unused, ao_spp/gi_spp both 0 above
         IDENTITY,
     );
     let params_buffer = device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
@@ -175,6 +180,10 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
     // discipline as `out_irr` — one zeroed entry.
     let gi_materials_buffer =
         device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
+    // RT-T1-B: unread by this proof (ao_spp == 0 && gi_spp == 0 above),
+    // same ABI-stub discipline as `gi_materials_buffer`.
+    let normal_sources_buffer =
+        device.create_buffer_shared(std::mem::size_of::<manifold_gpu::raytrace::RtNormalSource>() as u64);
 
     let mut encoder = device.create_encoder("rt-p1-shadow-proof");
     tracer.dispatch_shadow_rays(
@@ -183,6 +192,7 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         &params,
         &params_buffer,
         &gi_materials_buffer,
+        &normal_sources_buffer,
         &depth_tex,
         &out_sv,
         &out_irr,
@@ -270,6 +280,11 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
             index_buffer: Some(&ground_index_buffer),
             triangle_count: 2,
             transform: IDENTITY,
+            // ao_spp/gi_spp are 0 in this proof's params — the only two
+            // consumers of the fetched normal — so this fixture's
+            // position-only `PackedVertex` (no normal field) never has it
+            // read.
+            normal_offset: 0,
         },
         RtObjectGeometry {
             vertex_buffer: &occ_vertex_buffer,
@@ -278,6 +293,7 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
             index_buffer: Some(&occ_index_buffer),
             triangle_count: 2,
             transform: IDENTITY,
+            normal_offset: 0,
         },
     ];
     let accel = tracer.build_accel(device, &objects);
@@ -320,6 +336,7 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
         0, // RT-P3: gi_spp — 0, GI gather skipped, this proof only asserts on out_sv
         [0.0, 0.0, 0.0],
         [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0], // RT-T1-B: camera_pos — unused, ao_spp/gi_spp both 0 above
         IDENTITY,
     );
     let params_buffer = device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
@@ -327,6 +344,10 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
     // discipline as `out_irr` — one zeroed entry.
     let gi_materials_buffer =
         device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
+    // RT-T1-B: unread by this proof (ao_spp == 0 && gi_spp == 0 above),
+    // same ABI-stub discipline as `gi_materials_buffer`.
+    let normal_sources_buffer =
+        device.create_buffer_shared(std::mem::size_of::<manifold_gpu::raytrace::RtNormalSource>() as u64);
 
     let mut encoder = device.create_encoder("rt-p1-2blas-shadow-proof");
     tracer.dispatch_shadow_rays(
@@ -335,6 +356,7 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
         &params,
         &params_buffer,
         &gi_materials_buffer,
+        &normal_sources_buffer,
         &depth_tex,
         &out_sv,
         &out_irr,

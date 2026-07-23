@@ -44,6 +44,7 @@ mod rt_p2_soft_ao_temporal;
 mod rt_p3_emissive_gi;
 mod rt_p4_metalfx_temporal;
 mod rt_t1a_ghost_speckle;
+mod rt_t1b_vertex_normals;
 mod rt_w0_gbuffer;
 mod scene_object_migration_round_trip;
 mod scene_viewport_navigate;

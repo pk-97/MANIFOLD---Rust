@@ -230,6 +230,20 @@ impl GpuBuffer {
     pub fn size(&self) -> u64 {
         self.size
     }
+
+    /// RT-T1-B: this buffer's GPU virtual address (`MTLBuffer::gpuAddress`)
+    /// — the bindless-read mechanism the RT trace kernel uses to fetch a
+    /// per-object vertex-normal buffer at ray-hit time, indexed by
+    /// `hit.instance_id` (see `raytrace::RtNormalSource`). Valid to read
+    /// from a kernel WITHOUT a separate `useResource` call as long as the
+    /// SAME command encoder also binds an acceleration structure this
+    /// buffer's geometry feeds (`setAccelerationStructure_atBufferIndex`
+    /// transitively makes every BLAS's referenced vertex/index buffers
+    /// resident) — true for every `dispatch_shadow_rays` call, the only
+    /// caller of this today.
+    pub fn gpu_address(&self) -> u64 {
+        self.raw.gpuAddress()
+    }
 }
 
 // ─── GpuSampler ───────────────────────────────────────────────────────

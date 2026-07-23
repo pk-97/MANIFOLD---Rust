@@ -679,6 +679,13 @@ pub struct RenderScene {
     /// uses, so a GI ray hit's `instance_id` indexes this directly.
     rt_gi_materials: Option<manifold_gpu::GpuBuffer>,
     rt_gi_materials_capacity: usize,
+    /// RT-T1-B (RAYTRACING_DESIGN.md §8 Tier-1 item 2): per-object
+    /// [`manifold_gpu::raytrace::RtNormalSource`] bindless indirection table
+    /// for real vertex-normal interpolation in the trace kernel — same
+    /// rebuild cadence/discipline as `rt_gi_materials` above (rebuilt every
+    /// RT-ready frame from the SAME `objects`/`shadow_caster_draws` order).
+    rt_normal_sources: Option<manifold_gpu::GpuBuffer>,
+    rt_normal_sources_capacity: usize,
     /// RAYTRACING_DESIGN.md §5.2 P2: half-res/full-res demodulated
     /// irradiance (ambient*ao + gi, no albedo, no direct sun — D3) and its
     /// full-res TEMPORAL HISTORY (persistent across frames, blended by
@@ -863,6 +870,8 @@ impl RenderScene {
             rt_params_buffer: None,
             rt_gi_materials: None,
             rt_gi_materials_capacity: 0,
+            rt_normal_sources: None,
+            rt_normal_sources_capacity: 0,
             rt_irr_half: None,
             rt_irr_full: None,
             rt_irr_history: None,
@@ -3343,6 +3352,10 @@ impl EffectNode for RenderScene {
                     index_buffer: None,
                     triangle_count: vcount(d.vertices) / 3,
                     transform: d.uniforms.model,
+                    // RT-T1-B: `MeshVertex`'s normal field offset (position
+                    // 12 bytes incl. pad + this) — see `mesh_common.rs`'s
+                    // `MeshVertex` layout.
+                    normal_offset: 16,
                 })
                 .collect();
 
@@ -3379,6 +3392,16 @@ impl EffectNode for RenderScene {
                 &mut self.rt_gi_materials_capacity,
                 gpu.device,
                 objects.len(),
+            );
+            // RT-T1-B: same cadence as `gi_materials` above — rebuilt from
+            // the SAME `objects` slice every RT-ready frame (below), not
+            // gated on the accel-rebuild key (an object's `transform` alone
+            // changing, e.g. animation, must refresh its normal_matrix too).
+            manifold_gpu::raytrace::ensure_normal_sources(
+                &mut self.rt_normal_sources,
+                &mut self.rt_normal_sources_capacity,
+                gpu.device,
+                &objects,
             );
             // BUG-308/RT-D4: a key change (first RT frame, or topology/
             // transform change) must NOT enqueue `build_accel` this same
@@ -3456,6 +3479,11 @@ impl EffectNode for RenderScene {
                         atmosphere.ambient_tint[1] * AMBIENT_IRRADIANCE_SCALE * scene_ambient,
                         atmosphere.ambient_tint[2] * AMBIENT_IRRADIANCE_SCALE * scene_ambient,
                     ],
+                    // RT-T1-B: the primary-visibility-ray origin for the
+                    // real interpolated-vertex-normal fetch (AO/GI cosine
+                    // sampling) — the SAME camera eye `render_scene.wgsl`'s
+                    // raster pass shades from.
+                    cam.pos,
                     inv_view_proj,
                 );
                 // RAYTRACING_DESIGN.md §5.2 P3: rebuild the per-object
@@ -3506,6 +3534,7 @@ impl EffectNode for RenderScene {
                 let tracer = self.rt_tracer.as_ref().expect("ensured above");
                 let accel = self.rt_accel.as_ref().expect("rt_ready implies rt_accel.is_some()");
                 let params_buffer = self.rt_params_buffer.as_ref().expect("ensured above");
+                let normal_sources_buffer = self.rt_normal_sources.as_ref().expect("ensured above");
                 let depth_tex = self.opaque_depth_snapshot.as_ref().expect("ensured above");
                 let mask_half = self.rt_mask_half.as_ref().expect("ensured above");
                 let mask_full = self.rt_mask_full.as_ref().expect("ensured above");
@@ -3518,6 +3547,7 @@ impl EffectNode for RenderScene {
                     &params,
                     params_buffer,
                     gi_materials_buffer,
+                    normal_sources_buffer,
                     depth_tex,
                     mask_half,
                     irr_half,
