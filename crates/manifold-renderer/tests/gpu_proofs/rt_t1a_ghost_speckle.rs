@@ -446,21 +446,54 @@ const SPECKLE_TEMPORAL_VARIANCE_THRESHOLD: f64 = 1e-5;
 const SPECKLE_SPATIAL_VARIANCE_THRESHOLD: f64 = 7e-5;
 const SPECKLE_FRAMES: usize = 8;
 
-/// PRE-FIX BASELINE (recorded 2026-07-23, current `main`, depth-only
+/// PARTIALLY ADDRESSED by T1-D (RAYTRACING_DESIGN.md §8 Tier-1 item 3,
+/// BUG-312): per-texel moment/variance tracking in `accumulate_irradiance`,
+/// a depth/normal/variance-guided à-trous spatial filter (REPLACING the
+/// old depth-only bilateral upsample), and blue-noise (R2 sequence) AO/GI
+/// ray directions.
+///
+/// PRE-FIX BASELINE (recorded 2026-07-23, then-current `main`, depth-only
 /// bilateral upsample + finite-difference normals, no SVGF filter, no
-/// blue-noise ray sampling): temporal_variance = 1.1e-8 (well UNDER the
-/// 1e-5 threshold — this scene/build has no per-frame ray-direction
-/// jitter yet, so a static camera is already bit-stable frame-to-frame;
-/// this metric is forward-looking for when T1-D adds blue-noise sampling
-/// and needs a temporal filter to keep it converged). spatial_variance on
-/// the last frame = 1.076e-4 (>> the 7e-5 threshold — the metric that
-/// actually trips today: per-pixel AO/GI noise across a nominally flat lit
-/// patch). The assertion is an OR across both metrics, so either one
-/// tripping demonstrates the bug. Run without `#[ignore]` to reproduce;
-/// T1-D (variance-guided SVGF-class spatial+temporal filter) is the fix
-/// this gates.
+/// blue-noise ray sampling): temporal_variance = 1.1e-8. spatial_variance
+/// on the last frame = 1.076e-4 (>> the 7e-5 threshold).
+///
+/// POST-T1-D: spatial_variance measured ~8.6e-5 — reduced from the
+/// pre-fix 1.076e-4 (the filter + blue noise DO measurably suppress real
+/// per-frame AO/GI shot noise) but still above the 7e-5 threshold, and
+/// this residual does NOT respond to more filtering or more samples —
+/// diagnosed (2026-07-23, T1-D lane) via two isolating experiments.
+/// First: forcing the à-trous kernel's edge-stop weight to a constant
+/// 1.0 (pure box blur, no denoising benefit at all) left spatial_variance
+/// unchanged (~8.6e-5). Second: raising `AO_SAMPLES_PER_PIXEL`/
+/// `GI_SAMPLES_PER_PIXEL` 16x (4->64, 2->32, diagnostic-only, NOT
+/// committed — budgets are out of this lane's scope per the brief) also
+/// left it unchanged (~8.5e-5). Both experiments reverted before commit.
+/// A raw dump of the last frame's per-pixel luma values in this window is
+/// a smooth, monotonic, single-directional gradient (~1.015 to ~1.056
+/// across the probed 15x15 window) — a genuine deterministic spatial
+/// gradient in the demodulated ambient/GI term (visibility of nearby
+/// geometry within the GI hemisphere gather genuinely varies smoothly
+/// with screen position, even at this small scale), NOT zero-mean random
+/// noise. Spatial/temporal denoising and additional Monte Carlo samples
+/// only reduce noise variance around a local mean; they cannot flatten a
+/// real, smooth gradient (averaging a linear ramp over a symmetric
+/// window returns ~its own center value, unchanged). Per this lane's
+/// brief ("Do NOT tune the threshold to force a pass... if it can't,
+/// STOP and report"): kept `#[ignore]`d rather than weakening
+/// `SPECKLE_SPATIAL_VARIANCE_THRESHOLD`, mirroring the ORBIT oracle's
+/// precedent above. The assertion below is written for the FIXED
+/// (post-T1-D) expectation, not the pre-fix "should trip" form — flip
+/// this test live once either the underlying gradient is addressed (a
+/// different, unscoped question: is ~8e-5 of real GI-visibility gradient
+/// across a few world units expected/acceptable, Peter's call) or the
+/// probe point/threshold is re-judged with that context in hand.
 #[test]
-#[ignore = "BUG-312 pre-fix baseline — trips until T1-D lands the SVGF-class denoiser; see this test's doc comment for the recorded numbers"]
+#[ignore = "T1-D (BUG-312): filter + blue noise measurably cut real noise \
+            (1.076e-4 -> ~8.6e-5) but the residual is a genuine smooth GI-\
+            visibility gradient, not noise — confirmed via a forced-weight=1 \
+            filter test and a 16x SPP test, neither changed the number. See \
+            this test's doc comment for the full diagnostic and the re-judge \
+            this needs from Peter/Fable."]
 fn rt_still_frame_speckle_variance_exceeds_thresholds() {
     let h = harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
@@ -531,9 +564,10 @@ fn rt_still_frame_speckle_variance_exceeds_thresholds() {
     );
 
     assert!(
-        temporal_variance > SPECKLE_TEMPORAL_VARIANCE_THRESHOLD
-            || spatial_variance > SPECKLE_SPATIAL_VARIANCE_THRESHOLD,
-        "expected pre-fix speckle to trip at least one metric: \
+        temporal_variance <= SPECKLE_TEMPORAL_VARIANCE_THRESHOLD
+            && spatial_variance <= SPECKLE_SPATIAL_VARIANCE_THRESHOLD,
+        "T1-D's à-trous filter + blue-noise sampling should keep both speckle metrics \
+         under threshold on a static, settled shot: \
          temporal_variance={temporal_variance:.6} (threshold={SPECKLE_TEMPORAL_VARIANCE_THRESHOLD}), \
          spatial_variance={spatial_variance:.6} (threshold={SPECKLE_SPATIAL_VARIANCE_THRESHOLD})"
     );

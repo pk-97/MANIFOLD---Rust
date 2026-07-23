@@ -176,6 +176,10 @@ struct HistorySet {
     irr: [GpuTexture; 2],
     depth: [GpuTexture; 2],
     normal: [GpuTexture; 2],
+    /// RT-T1-D (BUG-312): luminance-moments ping-pong pair — this test
+    /// doesn't assert on variance, just needs valid bindings for
+    /// `accumulate_irradiance`'s widened signature.
+    moments: [GpuTexture; 2],
     ping: usize,
 }
 
@@ -193,6 +197,10 @@ impl HistorySet {
             normal: [
                 make_history_side_channel(device, GpuTextureFormat::Rgba16Float, &format!("{label}-normal-a")),
                 make_history_side_channel(device, GpuTextureFormat::Rgba16Float, &format!("{label}-normal-b")),
+            ],
+            moments: [
+                make_history_side_channel(device, GpuTextureFormat::Rg32Float, &format!("{label}-moments-a")),
+                make_history_side_channel(device, GpuTextureFormat::Rg32Float, &format!("{label}-moments-b")),
             ],
             ping: 0,
         }
@@ -214,6 +222,12 @@ impl HistorySet {
     }
     fn write_normal(&self) -> &GpuTexture {
         &self.normal[1 - self.ping]
+    }
+    fn read_moments(&self) -> &GpuTexture {
+        &self.moments[self.ping]
+    }
+    fn write_moments(&self) -> &GpuTexture {
+        &self.moments[1 - self.ping]
     }
     fn advance(&mut self) {
         self.ping = 1 - self.ping;
@@ -284,6 +298,8 @@ fn run_accumulate(
             history.write_depth(),
             history.read_normal(),
             history.write_normal(),
+            history.read_moments(),
+            history.write_moments(),
             label,
         );
     }
