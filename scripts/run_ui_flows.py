@@ -25,6 +25,12 @@ unexpectedly PASSed, and every flow file on disk is accounted for
   .claude/scripts/with-build-lock.sh python3 scripts/run_ui_flows.py
 Filter to a subset with flow-name substrings:
   python3 scripts/run_ui_flows.py scene-setup audio
+Landing flow gate (BUG-313 postmortem — the drag flow that caught the bug was
+red on main and nothing ran it): derive the filters from a git range via the
+manifest's `path_triggers` (path prefix -> filter list; a touched
+scripts/ui-flows/<flow>.json always runs that flow):
+  python3 scripts/run_ui_flows.py --touched origin/main...HEAD
+No trigger matches the diff -> exits 0 without building anything.
 """
 import json
 import os
@@ -46,10 +52,60 @@ def run_flow(name, scene):
     return r.returncode, tail
 
 
+def filters_for_touched(range_spec, manifest):
+    """Map a git diff range to flow-name filters via manifest `path_triggers`.
+    Returns (filters, hits) — hits is {touched_path: [matched prefixes/flows]}
+    for the gate's own output. A touched flow file runs itself (exact-name
+    filter). Raises SystemExit(2) if the diff itself fails."""
+    r = subprocess.run(
+        ["git", "diff", "--name-only", range_spec],
+        cwd=ROOT, capture_output=True, text=True,
+    )
+    if r.returncode != 0:
+        print(f"flow gate: `git diff --name-only {range_spec}` failed: "
+              f"{r.stderr.strip()}", file=sys.stderr)
+        raise SystemExit(2)
+    triggers = manifest.get("path_triggers", {})
+    filters, hits = set(), {}
+    for path in r.stdout.splitlines():
+        path = path.strip()
+        if not path:
+            continue
+        if path.startswith("scripts/ui-flows/") and path.endswith(".json") \
+                and os.path.basename(path) != "manifest.json":
+            name = os.path.splitext(os.path.basename(path))[0]
+            filters.add(name)
+            hits.setdefault(path, []).append(name)
+        for prefix, flist in triggers.items():
+            if path.startswith(prefix):
+                filters.update(flist)
+                hits.setdefault(path, []).append(prefix)
+    return sorted(filters), hits
+
+
 def main():
-    filters = sys.argv[1:]
+    args = sys.argv[1:]
+    touched_range = None
+    if "--touched" in args:
+        i = args.index("--touched")
+        if i + 1 >= len(args):
+            print("usage: run_ui_flows.py [--touched <git-range>] [filter ...]",
+                  file=sys.stderr)
+            return 2
+        touched_range = args[i + 1]
+        del args[i:i + 2]
+    filters = args
     with open(MANIFEST) as f:
         manifest = json.load(f)
+    if touched_range is not None:
+        gate_filters, hits = filters_for_touched(touched_range, manifest)
+        if not gate_filters:
+            print(f"flow gate: no flow-mapped paths touched in {touched_range} "
+                  "— nothing to run")
+            return 0
+        print(f"flow gate: {touched_range} → {len(hits)} flow-mapped file(s) "
+              f"→ filters {gate_filters}")
+        filters = filters + gate_filters if filters else gate_filters
     flows = manifest["flows"]
     xfail = manifest.get("expected_fail", {})
     unresolved = manifest.get("unresolved", {})
