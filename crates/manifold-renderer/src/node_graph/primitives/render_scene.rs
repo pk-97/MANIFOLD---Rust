@@ -753,6 +753,14 @@ pub struct RenderScene {
     /// uses, so a GI ray hit's `instance_id` indexes this directly.
     rt_gi_materials: Option<manifold_gpu::GpuBuffer>,
     rt_gi_materials_capacity: usize,
+    /// RT-T2-C (object motion): per-object world→prev-world delta
+    /// matrices (`prev_model * inverse(model)`, both straight off the
+    /// draw uniforms) for `accumulate_irradiance`'s object-aware
+    /// reprojection. Same grow-never-shrink CPU-mapped discipline and
+    /// per-RT-frame rebuild cadence as `rt_gi_materials` above; deltas
+    /// are written straight into the mapped buffer (hot-path no-alloc).
+    rt_obj_motion: Option<manifold_gpu::GpuBuffer>,
+    rt_obj_motion_capacity: usize,
     /// RT-T1-B (RAYTRACING_DESIGN.md §8 Tier-1 item 2): per-object
     /// [`manifold_gpu::raytrace::RtNormalSource`] bindless indirection table
     /// for real vertex-normal interpolation in the trace kernel — same
@@ -901,6 +909,25 @@ fn ensure_rt_gi_materials(
     }
 }
 
+/// RT-T2-C: the per-object motion-matrix buffer for
+/// `accumulate_irradiance` — same grow-never-shrink contract as
+/// `ensure_rt_gi_materials` above, one column-major `[[f32; 4]; 4]` per
+/// object.
+fn ensure_rt_obj_motion(
+    slot: &mut Option<manifold_gpu::GpuBuffer>,
+    capacity: &mut usize,
+    device: &manifold_gpu::GpuDevice,
+    object_count: usize,
+) {
+    let needed = object_count.max(1);
+    if slot.is_none() || *capacity < needed {
+        *slot = Some(
+            device.create_buffer_shared((needed * std::mem::size_of::<[[f32; 4]; 4]>()) as u64),
+        );
+        *capacity = needed;
+    }
+}
+
 /// Half-res march uniforms (VOLUMETRIC_LIGHT_DESIGN.md D2). Mirrors
 /// `shaft_march.wgsl`'s `Uniforms` struct field-for-field — four vec4s of
 /// camera basis (each carrying one derived scalar in `.w`), then fog/shaft
@@ -995,6 +1022,8 @@ impl RenderScene {
             rt_params_buffer: None,
             rt_gi_materials: None,
             rt_gi_materials_capacity: 0,
+            rt_obj_motion: None,
+            rt_obj_motion_capacity: 0,
             rt_normal_sources: None,
             rt_normal_sources_capacity: 0,
             rt_irr_half: None,
@@ -2408,6 +2437,22 @@ fn uv_t(t: &[f32; 6]) -> [f32; 4] {
 /// camera` below, not eyeballed. `None` only for a genuinely singular
 /// `m` (a degenerate projection — no camera this file builds produces
 /// one).
+/// Column-major 4×4 product `a * b` — same `m[col][row]` storage as
+/// `mat4_inverse` below and every matrix this file builds.
+fn mat4_mul(a: [[f32; 4]; 4], b: [[f32; 4]; 4]) -> [[f32; 4]; 4] {
+    let mut out = [[0f32; 4]; 4];
+    for c in 0..4 {
+        for r in 0..4 {
+            let mut s = 0.0;
+            for k in 0..4 {
+                s += a[k][r] * b[c][k];
+            }
+            out[c][r] = s;
+        }
+    }
+    out
+}
+
 fn mat4_inverse(m: [[f32; 4]; 4]) -> Option<[[f32; 4]; 4]> {
     // Row-major augmented working copy [A | I] for elimination;
     // `m[col][row]` (column-major) -> `a[row][col]`.
@@ -3786,6 +3831,14 @@ impl EffectNode for RenderScene {
                 gpu.device,
                 objects.len(),
             );
+            // RT-T2-C: same NLL-motivated ensure-before-the-long-borrow
+            // placement as `ensure_rt_gi_materials` above.
+            ensure_rt_obj_motion(
+                &mut self.rt_obj_motion,
+                &mut self.rt_obj_motion_capacity,
+                gpu.device,
+                objects.len(),
+            );
             // RT-T1-B: same cadence as `gi_materials` above — rebuilt from
             // the SAME `objects` slice every RT-ready frame (below), not
             // gated on the accel-rebuild key (an object's `transform` alone
@@ -3957,6 +4010,39 @@ impl EffectNode for RenderScene {
                         std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len());
                     }
                 }
+                // RT-T2-C: per-object world→prev-world motion delta
+                // (`prev_model * inverse(model)`, both straight off the
+                // draw uniforms MetalFX's velocity pass already
+                // maintains) for `accumulate_irradiance`'s object-aware
+                // reprojection. Identity fallback: a singular model
+                // matrix (degenerate zero scale) reprojects camera-only
+                // that frame. Written straight into the CPU-mapped
+                // buffer — no per-frame Vec.
+                let obj_motion_buffer = self.rt_obj_motion.as_ref().expect("ensured above");
+                {
+                    const M4_SIZE: usize = std::mem::size_of::<[[f32; 4]; 4]>();
+                    const IDENTITY_M4: [[f32; 4]; 4] = [
+                        [1.0, 0.0, 0.0, 0.0],
+                        [0.0, 1.0, 0.0, 0.0],
+                        [0.0, 0.0, 1.0, 0.0],
+                        [0.0, 0.0, 0.0, 1.0],
+                    ];
+                    let ptr = obj_motion_buffer
+                        .mapped_ptr()
+                        .expect("rt_obj_motion must be CPU-mapped (create_buffer_shared)");
+                    for (i, d) in shadow_caster_draws.iter().enumerate() {
+                        let delta = mat4_inverse(d.uniforms.model)
+                            .map(|inv| mat4_mul(d.uniforms.prev_model, inv))
+                            .unwrap_or(IDENTITY_M4);
+                        unsafe {
+                            std::ptr::copy_nonoverlapping(
+                                delta.as_ptr() as *const u8,
+                                ptr.add(i * M4_SIZE),
+                                M4_SIZE,
+                            );
+                        }
+                    }
+                }
                 let tracer = self.rt_tracer.as_ref().expect("ensured above");
                 let accel = self.rt_accel.as_ref().expect("rt_ready implies rt_accel.is_some()");
                 let params_buffer = self.rt_params_buffer.as_ref().expect("ensured above");
@@ -4068,6 +4154,7 @@ impl EffectNode for RenderScene {
                     [width, height],
                     IRRADIANCE_ACCUM_ALPHA,
                     reset,
+                    shadow_caster_draws.len() as u32,
                     inv_view_proj,
                     prev_view_proj,
                 );
@@ -4089,6 +4176,7 @@ impl EffectNode for RenderScene {
                     gpu.native_enc,
                     &accumulate_params,
                     accumulate_params_buffer,
+                    obj_motion_buffer,
                     irr_full,
                     depth_tex,
                     normal_full,
@@ -4846,17 +4934,10 @@ mod tests {
         let vp = cam.view_proj(16.0 / 9.0);
         let inv = mat4_inverse(vp).expect("a real camera's view_proj must be invertible");
 
-        // (1) inv * vp == identity (column-major mat4 multiply).
-        let mut product = [[0f32; 4]; 4];
-        for c in 0..4 {
-            for r in 0..4 {
-                let mut sum = 0.0;
-                for k in 0..4 {
-                    sum += inv[k][r] * vp[c][k];
-                }
-                product[c][r] = sum;
-            }
-        }
+        // (1) inv * vp == identity (column-major mat4 multiply) — also the
+        // ground-truth check on `mat4_mul` itself (identity is an oracle
+        // independent of the helper, not a mirror of it).
+        let product = mat4_mul(inv, vp);
         for c in 0..4 {
             for r in 0..4 {
                 let expected = if c == r { 1.0 } else { 0.0 };
@@ -4896,6 +4977,41 @@ mod tests {
                 world[i]
             );
         }
+    }
+
+    /// RT-T2-C: `mat4_mul(a, b)` must apply `b` FIRST — the operand order
+    /// `prev_model * inverse(model)` depends on (a swapped order is still
+    /// a valid matrix, so only a non-commuting fixture catches it). Two
+    /// distinct translations don't commute with a scale between them, so
+    /// scale-then-translate vs translate-then-scale disagree measurably.
+    #[test]
+    fn mat4_mul_applies_the_right_operand_first() {
+        // Column-major: `m[col][row]`, translation lives in column 3.
+        let translate = [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [1.0, 2.0, 3.0, 1.0f32],
+        ];
+        let scale = [
+            [2.0, 0.0, 0.0, 0.0],
+            [0.0, 2.0, 0.0, 0.0],
+            [0.0, 0.0, 2.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0f32],
+        ];
+        let p = [1.0, 1.0, 1.0, 1.0f32];
+        let apply = |m: [[f32; 4]; 4], v: [f32; 4]| {
+            let mut out = [0.0f32; 3];
+            for (row, slot) in out.iter_mut().enumerate() {
+                *slot = m[0][row] * v[0] + m[1][row] * v[1] + m[2][row] * v[2] + m[3][row] * v[3];
+            }
+            out
+        };
+
+        // scale * translate: translate first, then scale => 2*(1+t)
+        assert_eq!(apply(mat4_mul(scale, translate), p), [4.0, 6.0, 8.0]);
+        // translate * scale: scale first, then translate => 2*1 + t
+        assert_eq!(apply(mat4_mul(translate, scale), p), [3.0, 4.0, 5.0]);
     }
 
     /// IMPORT_FIDELITY_DESIGN.md D2/F-P1 negative gate: the old flat lod-0

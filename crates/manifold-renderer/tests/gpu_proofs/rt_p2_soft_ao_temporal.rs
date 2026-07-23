@@ -117,6 +117,12 @@ fn make_history(device: &GpuDevice, label: &str) -> GpuTexture {
 /// the validity test pass unconditionally, same as this proof's pre-
 /// reprojection same-texel assumption.
 fn make_constant_depth(device: &GpuDevice, label: &str) -> GpuTexture {
+    make_depth_at(device, 0.5, label)
+}
+
+/// RT-T2-C: same constant-depth fixture at a caller-chosen NDC z — the
+/// object-motion proof encodes an object's motion as a depth change.
+fn make_depth_at(device: &GpuDevice, z: f32, label: &str) -> GpuTexture {
     let texture = device.create_texture(&GpuTextureDesc {
         width: W,
         height: H,
@@ -127,7 +133,7 @@ fn make_constant_depth(device: &GpuDevice, label: &str) -> GpuTexture {
         label,
         mip_levels: 1,
     });
-    let pixels = vec![0.5f32; (W * H) as usize];
+    let pixels = vec![z; (W * H) as usize];
     let bytes: &[u8] = unsafe { std::slice::from_raw_parts(pixels.as_ptr().cast::<u8>(), std::mem::size_of_val(&pixels[..])) };
     device.upload_texture(&texture, bytes);
     texture
@@ -279,9 +285,47 @@ fn run_accumulate(
     reset: bool,
     label: &str,
 ) {
+    // RT-T2-C: zero objects — every pixel reprojects camera-only, exactly
+    // the pre-object-motion behavior this test's expectations encode.
+    run_accumulate_with_motion(
+        device, tracer, hi_irr, depth_tex, hi_normal, history, alpha, reset, 0, IDENTITY, label,
+    );
+}
+
+/// RT-T2-C: `run_accumulate` with an explicit object-motion table — one
+/// delta matrix, `obj_count` objects (0 = camera-only reprojection for
+/// every pixel regardless of the id channel's content).
+#[allow(clippy::too_many_arguments)] // un-suppress: collapse into a params struct if this harness gains a 12th knob
+fn run_accumulate_with_motion(
+    device: &GpuDevice,
+    tracer: &MetalShadowRayTracer,
+    hi_irr: &GpuTexture,
+    depth_tex: &GpuTexture,
+    hi_normal: &GpuTexture,
+    history: &mut HistorySet,
+    alpha: f32,
+    reset: bool,
+    obj_count: u32,
+    obj_motion: [[f32; 4]; 4],
+    label: &str,
+) {
     let params_buffer =
         device.create_buffer_shared(std::mem::size_of::<AccumulateParams>() as u64);
-    let params = AccumulateParams::new([W, H], alpha, reset, IDENTITY, IDENTITY);
+    let params = AccumulateParams::new([W, H], alpha, reset, obj_count, IDENTITY, IDENTITY);
+    let obj_motion_buffer =
+        device.create_buffer_shared(std::mem::size_of::<[[f32; 4]; 4]>() as u64);
+    {
+        let ptr = obj_motion_buffer
+            .mapped_ptr()
+            .expect("obj-motion buffer must be CPU-mapped (create_buffer_shared)");
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                obj_motion.as_ptr() as *const u8,
+                ptr,
+                std::mem::size_of::<[[f32; 4]; 4]>(),
+            );
+        }
+    }
     let mut enc = device.create_encoder(label);
     {
         let gpu = RendererGpuEncoder::new(&mut enc, device);
@@ -289,6 +333,7 @@ fn run_accumulate(
             gpu.native_enc,
             &params,
             &params_buffer,
+            &obj_motion_buffer,
             hi_irr,
             depth_tex,
             hi_normal,
@@ -402,5 +447,84 @@ fn strobe_retains_history_exceeds_epsilon() {
     assert!(
         diff > STROBE_RETAIN_EPSILON,
         "strobe+1 frame matches a cold start too closely (mean abs diff {diff} <= {STROBE_RETAIN_EPSILON}) — history was NOT retained; a light-intensity flip is being treated as a cut"
+    );
+}
+
+/// RT-T2-C (object motion): the per-object reprojection keeps a MOVING
+/// object's history where camera-only reprojection rejects it.
+///
+/// Fixture: identity camera both frames; the "object" (id 0, the value
+/// `make_constant_normal`'s `.w` already carries) sits at NDC z 0.7 on the
+/// history frame, then moves to z 0.5. `obj_motion[0]` is the matching
+/// world→prev-world delta (translate z by +0.2).
+///
+/// - WITH the motion table (`obj_count = 1`): the reprojected history
+///   depth (0.5 + 0.2 = 0.7) matches the stored 0.7 exactly → validity
+///   passes → output is `mix(history, current, alpha)`. CPU-expected red
+///   channel: `(1 - alpha) * 1.0`.
+/// - WITHOUT it (`obj_count = 0`, camera-only — the pre-T2-C behavior):
+///   0.5 vs stored 0.7 fails the 5e-3 depth reject → history discarded →
+///   output is the current frame alone (red 0.0). This control leg is what
+///   makes the first leg a proof of the OBJECT term specifically, not of
+///   accumulation in general.
+#[test]
+fn object_motion_reprojection_retains_history_where_camera_only_rejects() {
+    let h = shared();
+    let tracer = MetalShadowRayTracer::new(&h.device);
+
+    let irr_a = upload_irr(&h.device, 1.0, 0.0, 0.0, "t2c-irr-a");
+    let irr_b = upload_irr(&h.device, 0.0, 0.0, 0.0, "t2c-irr-b");
+    let depth_far = make_depth_at(&h.device, 0.7, "t2c-depth-far");
+    let depth_near = make_depth_at(&h.device, 0.5, "t2c-depth-near");
+    let hi_normal = make_constant_normal(&h.device, "t2c-normal");
+
+    // Column-major translate-z(+0.2): world→prev-world for an object that
+    // moved 0.2 TOWARD the camera this frame.
+    let delta_z = [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.2, 1.0],
+    ];
+
+    // Leg 1: object motion supplied — history must survive the move.
+    let mut history = HistorySet::new(&h.device, "t2c-history");
+    run_accumulate_with_motion(
+        &h.device, &tracer, &irr_a, &depth_far, &hi_normal, &mut history, TEST_ALPHA, true, 1,
+        IDENTITY, "t2c-warm",
+    );
+    run_accumulate_with_motion(
+        &h.device, &tracer, &irr_b, &depth_near, &hi_normal, &mut history, TEST_ALPHA, false, 1,
+        delta_z, "t2c-moved",
+    );
+    let with_motion = readback_rgba_f32(history.current_irr());
+
+    // Leg 2 (control): identical frames, motion table absent — the depth
+    // mismatch must reject history (pre-T2-C behavior).
+    let mut control = HistorySet::new(&h.device, "t2c-control-history");
+    run_accumulate_with_motion(
+        &h.device, &tracer, &irr_a, &depth_far, &hi_normal, &mut control, TEST_ALPHA, true, 0,
+        IDENTITY, "t2c-control-warm",
+    );
+    run_accumulate_with_motion(
+        &h.device, &tracer, &irr_b, &depth_near, &hi_normal, &mut control, TEST_ALPHA, false, 0,
+        IDENTITY, "t2c-control-moved",
+    );
+    let camera_only = readback_rgba_f32(control.current_irr());
+
+    let expected_retained = 1.0 - TEST_ALPHA;
+    let mean_r = |px: &[f32]| {
+        px.iter().step_by(4).sum::<f32>() / (px.len() / 4) as f32
+    };
+    let with_r = mean_r(&with_motion);
+    let control_r = mean_r(&camera_only);
+    eprintln!("[T2-C] with-motion mean r = {with_r} (expect ~{expected_retained}), camera-only mean r = {control_r} (expect ~0.0)");
+    assert!(
+        (with_r - expected_retained).abs() < RESET_EPSILON,
+        "object-motion reprojection did NOT retain the moved object's history (mean r {with_r}, expected {expected_retained})"
+    );
+    assert!(
+        control_r < RESET_EPSILON,
+        "camera-only control leg unexpectedly retained history across the depth move (mean r {control_r}) — the depth reject stopped discriminating and this proof can't isolate the object term"
     );
 }
