@@ -97,6 +97,12 @@ fn fetch_interpolated_normal_2tri_matches_cpu_oracle() {
         triangle_count: 2,
         transform: IDENTITY,
         normal_offset: std::mem::size_of::<[f32; 3]>() as u32, // 12: normal follows position
+        // RT-T2-A: no UV data in this fixture, alpha_mask stays false —
+        // uv_offset is never read.
+        uv_offset: 0,
+        alpha_mask: false,
+        alpha_cutoff: 0.5,
+        base_color_texture: None,
     }];
 
     let mut normal_sources_slot = None;

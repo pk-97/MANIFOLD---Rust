@@ -3462,6 +3462,13 @@ impl EffectNode for RenderScene {
                     // 12 bytes incl. pad + this) — see `mesh_common.rs`'s
                     // `MeshVertex` layout.
                     normal_offset: 16,
+                    // RT-T2-A (RAYTRACING_DESIGN.md §8.2 Tier-2 item 4):
+                    // `MeshVertex`'s UV field offset (position 16 + normal
+                    // 16 = 32).
+                    uv_offset: 32,
+                    alpha_mask: d.alpha_mode == AlphaMode::Mask,
+                    alpha_cutoff: d.uniforms.alpha_params[1],
+                    base_color_texture: d.base_color_map,
                 })
                 .collect();
 
@@ -3503,7 +3510,11 @@ impl EffectNode for RenderScene {
             // the SAME `objects` slice every RT-ready frame (below), not
             // gated on the accel-rebuild key (an object's `transform` alone
             // changing, e.g. animation, must refresh its normal_matrix too).
-            manifold_gpu::raytrace::ensure_normal_sources(
+            // RT-T2-A: also returns the ordered alpha-masked-object base-
+            // color-texture list, threaded straight to `dispatch_shadow_
+            // rays` below (same per-frame cadence — this list can change
+            // even when topology/transform don't, e.g. a material swap).
+            let alpha_textures: Vec<&manifold_gpu::GpuTexture> = manifold_gpu::raytrace::ensure_normal_sources(
                 &mut self.rt_normal_sources,
                 &mut self.rt_normal_sources_capacity,
                 gpu.device,
@@ -3655,6 +3666,7 @@ impl EffectNode for RenderScene {
                     params_buffer,
                     gi_materials_buffer,
                     normal_sources_buffer,
+                    &alpha_textures,
                     depth_tex,
                     mask_half,
                     irr_half,
