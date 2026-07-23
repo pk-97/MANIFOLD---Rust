@@ -156,6 +156,25 @@ fn make_constant_normal(device: &GpuDevice, label: &str) -> GpuTexture {
     texture
 }
 
+/// BUG-322: a constant normal texture carrying an arbitrary direction (and
+/// object id 0 in `.w`, which `flat_rgba_f16` writes as alpha 0.0) — the
+/// rotating-object proof needs two different orientations of the same
+/// surface.
+fn make_object_normal(device: &GpuDevice, n: [f32; 3], label: &str) -> GpuTexture {
+    let texture = device.create_texture(&GpuTextureDesc {
+        width: W,
+        height: H,
+        depth: 1,
+        format: GpuTextureFormat::Rgba16Float,
+        dimension: GpuTextureDimension::D2,
+        usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ,
+        label,
+        mip_levels: 1,
+    });
+    device.upload_texture(&texture, as_bytes(&flat_rgba_f16(W, H, n[0], n[1], n[2])));
+    texture
+}
+
 /// RT-T1-C: a depth/normal HISTORY channel, read_write-capable but always
 /// used as a strict ping-pong pair — `SHADER_READ` when it's this frame's
 /// read source, `SHADER_WRITE` when it's this frame's write target, never
@@ -526,5 +545,105 @@ fn object_motion_reprojection_retains_history_where_camera_only_rejects() {
     assert!(
         control_r < RESET_EPSILON,
         "camera-only control leg unexpectedly retained history across the depth move (mean r {control_r}) — the depth reject stopped discriminating and this proof can't isolate the object term"
+    );
+}
+
+/// BUG-322: a ROTATING object must keep its temporal history.
+///
+/// T2-C carried the reprojected world position through the object's motion
+/// but compared normals raw. `normal_history` holds WORLD-space normals, so
+/// on a rotating object the stored normal is in last frame's orientation
+/// and `cur_normal` is in this frame's — they disagree by exactly the
+/// rotation, the validity test rejects, and the surface falls back to raw
+/// per-frame sample counts for the whole gesture. That is the shimmer Peter
+/// saw on the DamagedHelmet (curved + normal-mapped, so the disagreement is
+/// large per pixel) while flat flowers looked fine. A translation-only
+/// oracle cannot see this: translation leaves normals untouched.
+///
+/// Fixture: the object rotates 35 degrees about +Z between frames. Depth is
+/// held constant and `obj_motion`'s translation is identity, so the depth
+/// half of the validity test passes either way and the normal term alone
+/// decides the outcome.
+///
+/// - Correct (normals carried into one orientation): the two normals are
+///   identical, `dot` = 1.0, validity passes — CPU-expected red `1 - alpha`.
+/// - Pre-fix (raw comparison): the normals sit exactly the rotation apart,
+///   `dot` = `cos(35 deg)` = 0.819, below the 0.9 threshold — history
+///   discarded, red 0.0.
+///
+/// **Honest scope of this fixture.** 35 degrees is chosen because the pure
+/// rotation term only crosses the 0.9 (~26 degree) threshold above that, so
+/// a smaller angle would pass pre-fix and prove nothing. Rotation alone is
+/// therefore not the whole story for the helmet at ordinary drag speeds —
+/// what makes it bite far sooner there is that a rotating CURVED,
+/// normal-mapped surface also lands each reprojection on a different
+/// surface point whose normal differs by much more than the object's own
+/// rotation angle, on top of this systematic orientation error. This test
+/// pins the invariant that is unambiguously wrong and fixable: the two
+/// normals must be compared in ONE orientation.
+#[test]
+fn rotating_object_retains_history_when_normals_are_compared_in_one_orientation() {
+    let h = shared();
+    let tracer = MetalShadowRayTracer::new(&h.device);
+
+    const ROT: f32 = std::f32::consts::PI * 35.0 / 180.0;
+    // Column-major rotation about +Z by ROT — the object's world->prev-world
+    // delta (it rotated by -ROT this frame, so carrying a current normal
+    // back to the previous frame rotates it by +ROT).
+    let (s, c) = ROT.sin_cos();
+    let rot_z = [
+        [c, s, 0.0, 0.0],
+        [-s, c, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ];
+
+    // History frame: surface normal is +Y (what `make_constant_normal`
+    // writes), object id 0 in `.w`.
+    let irr_a = upload_irr(&h.device, 1.0, 0.0, 0.0, "t322-irr-a");
+    let irr_b = upload_irr(&h.device, 0.0, 0.0, 0.0, "t322-irr-b");
+    let depth = make_constant_depth(&h.device, "t322-depth");
+    let normal_prev = make_object_normal(&h.device, [0.0, 1.0, 0.0], "t322-n-prev");
+    // This frame the object has rotated by -ROT about Z, so the SAME
+    // surface point's world normal is +Y rotated by -ROT.
+    let cur_n = [ROT.sin(), ROT.cos(), 0.0];
+    let normal_cur = make_object_normal(&h.device, cur_n, "t322-n-cur");
+
+    let mut history = HistorySet::new(&h.device, "t322-history");
+    run_accumulate_with_motion(
+        &h.device, &tracer, &irr_a, &depth, &normal_prev, &mut history, TEST_ALPHA, true, 1,
+        IDENTITY, "t322-warm",
+    );
+    run_accumulate_with_motion(
+        &h.device, &tracer, &irr_b, &depth, &normal_cur, &mut history, TEST_ALPHA, false, 1,
+        rot_z, "t322-rotated",
+    );
+    let out = readback_rgba_f32(history.current_irr());
+
+    // Interior only. `obj_motion` rotates world POSITIONS about the origin
+    // too, so texels near the border reproject off-screen and are correctly
+    // rejected as disocclusion — real behavior, not the defect under test.
+    // The invariant here ("same surface point, same orientation => history
+    // retained") is only defined where the reprojection lands on-screen, so
+    // the measurement is the central half rather than a loosened threshold.
+    let expected = 1.0 - TEST_ALPHA;
+    let (lo, hi) = (W / 4, W - W / 4);
+    let mut acc = 0.0f32;
+    let mut n = 0u32;
+    for y in lo..hi {
+        for x in lo..hi {
+            acc += out[((y * W + x) * 4) as usize];
+            n += 1;
+        }
+    }
+    let mean_r = acc / n as f32;
+    eprintln!("[BUG-322] rotating-object mean r = {mean_r} (expect ~{expected} = history retained)");
+    assert!(
+        (mean_r - expected).abs() < RESET_EPSILON,
+        "BUG-322: a rotating object lost its temporal history (mean r {mean_r}, expected \
+         {expected}). The normal validity test is comparing a stored world-space normal from the \
+         previous orientation against this frame's normal without carrying one into the other's \
+         frame, so it rejects by exactly the object's rotation — raw sample counts for the whole \
+         gesture, i.e. the helmet shimmer."
     );
 }
