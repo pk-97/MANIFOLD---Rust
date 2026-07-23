@@ -1,6 +1,29 @@
 # Agent Routing — task shape → model, profile, gate
 
-**Status:** ACTIVE 2026-07-19 · steering model added 2026-07-20 (Peter's directive after the overnight-wave autopsy; plan: `docs/SYSTEM_UPGRADE_2026_07_PLAN.md`) · Opus middle-orchestrator added 2026-07-21 (Peter's directive: Fable window economy). Authoritative staffing/routing policy. CLAUDE.md §Agents and the `agent-model-staffing-preferences` memory are pointers here.
+**Status:** ACTIVE 2026-07-19 · steering model added 2026-07-20 (Peter's directive after the overnight-wave autopsy; plan: `docs/SYSTEM_UPGRADE_2026_07_PLAN.md`) · Opus middle-orchestrator added 2026-07-21 (Peter's directive: Fable window economy) · **roster change 2026-07-24: K3 lead / GLM5.2 dispatcher / DeepSeek V4 Flash lanes — §0 items PENDING K3 REVIEW, not yet proven.** Authoritative staffing/routing policy. CLAUDE.md §Agents and the `agent-model-staffing-preferences` memory are pointers here.
+
+## §0 — K3 lead-in review queue (PENDING, written 2026-07-23 by the outgoing Fable session)
+
+Peter is switching the roster: **Kimi K3 = top session / lead, GLM5.2 = middle dispatcher seat, DeepSeek V4 Flash = lane workers.** The seat *structure* below is empirically proven and carries over unchanged; what is unproven is this roster in those seats. K3 reviews the harness and this doc before running the first wave, and resolves each item here — then deletes it from §0 and folds the answer into the body.
+
+**The seat mapping (structural — the body text names whichever model held the seat when the observation was made):**
+
+| Seat | Was (through 2026-07-23) | Is (from 2026-07-24) |
+|---|---|---|
+| Lead / top session | Fable | **Kimi K3** |
+| Dispatcher / middle orchestrator | Opus | **GLM5.2** |
+| Lane executor | Sonnet 5 / K2.7 | **DeepSeek V4 Flash** |
+| Consult peer | Kimi K3 | *vacant — K3 to decide (see R4)* |
+
+Open items for K3:
+
+- **R1 — Provider config is missing for two of three seats (BLOCKING, needs Peter's API keys).** `cc-fleet list --json` on 2026-07-23 showed exactly one provider: `kimi-code` (default + strong = `k3`, fast = `kimi-for-coding`). The lead seat is ready; the other two do not exist on this machine. DeepSeek needs `cc-fleet add deepseek` + key — its seeded default is already `deepseek-v4-flash`, so no `--model` override. GLM has two mutually-exclusive presets with separate sites and separate keys — `glm` (bigmodel.cn) vs `zai` (z.ai international); the seeded default is `glm-4.6`, so 5.2 needs an explicit id **confirmed against `cc-fleet models <provider> --json` after a refresh, never assumed**.
+- **R2 — The tier guards go blind under this roster (the highest-risk item).** `agent-tier-spawn-guard.py` denies sub-spawns by regex-matching `claude-(sonnet|haiku)` against the caller's transcript `message.model`; `agent-model-guard.py` gates the Agent tool's `model` param on `sonnet`/`opus`/`fable`. Both are Claude-string-specific, both fail open on an unrecognized model, and both only cover the in-session Agent tool. If DeepSeek lanes run as cc-fleet subagents, the prediction is that **neither hook fires — DeepSeek-over-DeepSeek is unguarded**, which is precisely the failure that killed the overnight waves and caused those hooks to be written (§steering model, 2026-07-20). This is a prediction, not a measurement. Oracle: one throwaway cc-fleet subagent that attempts an Agent spawn; read whether the guard denies. Resolve before the first wave, not during it — either extend `DENY_TIERS` to the new executor ids (verifying the payload actually carries them) or route lane spawns so a bash-level guard covers them.
+- **R3 — Executor capability drop.** DeepSeek V4 Flash is a substantial step down from Sonnet 5 at the lane tier, and cc-fleet's own provider notes warn that weak provider models skip tool calls on weak-imperative prompts under *any* profile. The brief template and much of the body below use phrasing like "check X" / "survey Y" — rewrite lane briefs to prescriptive imperatives ("Run `cargo clippy -p manifold-ui -- -D warnings`", "Use the Read tool on `path:line`"). Before any wave: run ONE smoke lane on a real-but-trivial task through the **entire** ceremony — acquire a slot from the ring, edit, focused clippy, pathspec commit, stop-and-report — and confirm it clears this repo's gates (`-D warnings`, no bare `#[allow(dead_code)]`, pathspec-only commits, slot ring). Assume it trips something.
+- **R4 — Is there still a consult seat?** The old roster had K3 as the expensive consult peer above Sonnet lanes. With K3 *as* the lead, §"When K3 is consulted" is moot and the consult seat is vacant. K3 decides whether it wants a peer for the two named triggers (design fork, pre-dispatch sanity check) and from where, or whether it drops the seat. Until K3 rules, §"When K3 is consulted" is dead text.
+- **R5 — Does the window economy still hold?** The Opus-dispatcher and 50-min-heartbeat rules exist because Fable tokens were extremely expensive. K3 is Fable-priced (§Provider facts), so minimal-lead-posture survives — but GLM5.2 and DeepSeek Flash are far cheaper than Opus and Sonnet were, which may make the dispatcher seat cheap enough to run hotter, or (opposite direction) too weak to hold the clerical seat's two load-bearing duties in §17(2). K3 rules after observing one wave; do not rewrite the economy rules pre-emptively.
+
+Everything below is proven doctrine under the old roster. Read it as seat descriptions, not model assignments.
 
 ## The steering model (2026-07-20 — supersedes review-at-landing-only)
 
@@ -14,7 +37,7 @@ The overnight waves failed because Sonnet orchestrated Sonnet and let 100% of gr
 - **Review is the throttle.** Up to 8 lanes, but diffs queue for orchestrator review; landing never outpaces review.
 - **Per-wave adversarial pass.** Before a wave spawns, a Fable fork attacks the brief set (wrong fix shapes, non-disjoint lanes, over-deletion risk).
 - **Resume-note in every brief.** If the top session dies: lane state = branch + findings doc, recoverable by the next session.
-- **Opus middle-orchestrator for multi-stage waves (2026-07-21, Peter; PROVEN same day across 3 rotations, workstreams A/B/C):** Fable usage is extremely expensive. Mechanical work is ALWAYS a Sonnet agent. When the work has multiple stages or waves to sequence, Fable spawns ONE Opus orchestration agent to manage the Sonnet workers and reports up; Fable keeps final authority — approvals, escalations, doctrine, and post-landing spot-checks. Single-stage mechanical work needs no middle-man: one Sonnet agent direct. This is an orchestration seat, not a lane — "no Opus lanes" stands unchanged. The proven contract:
+- **Middle-orchestrator seat for multi-stage waves (2026-07-21, Peter; PROVEN same day across 3 rotations, workstreams A/B/C — held by Opus then, by GLM5.2 from 2026-07-24; read "Fable"→lead, "Opus"→dispatcher, "Sonnet"→lane per §0):** Fable usage is extremely expensive. Mechanical work is ALWAYS a Sonnet agent. When the work has multiple stages or waves to sequence, Fable spawns ONE Opus orchestration agent to manage the Sonnet workers and reports up; Fable keeps final authority — approvals, escalations, doctrine, and post-landing spot-checks. Single-stage mechanical work needs no middle-man: one Sonnet agent direct. This is an orchestration seat, not a lane — "no Opus lanes" stands unchanged. The proven contract:
   - **The Opus seat owns the landing ceremony** (GIT_TREE_DISCIPLINE §2 end-to-end, including the full-workspace gate, bug_status reflow in the worktree, and push). It sends Fable a POST-landing summary quoting the gate lines. It never force-pushes or `branch -f`s. Fable spot-checks landings after the fact (`git log` + ancestry), not before.
   - **Escalate-only-on:** non-trivial merge conflicts, red gates it can't attribute, product/UX judgment, anything wanting new shared state or a new public API. Everything else it handles.
   - **Rotate per WORKSTREAM, not per token count.** One Opus orchestrator per workstream; at the boundary it writes a handoff file (scratchpad) — state, anchors, briefs-in-flight, doctrine observations — and stands down; Fable spawns the successor seeded with the file. A compacted orchestrator reviews worst exactly when it matters most (the landing).
@@ -27,17 +50,16 @@ The overnight waves failed because Sonnet orchestrated Sonnet and let 100% of gr
 
 ## The tiering
 
-| Seat | Model | Role |
+| Seat | Model (from 2026-07-24) | Role |
 |---|---|---|
-| Lead intelligence | **Fable** | Design, judgment, review, verification, landing. Owns every decision and every landed diff. |
-| Consult peer | **Kimi K3** (via cc-fleet) | Second strong opinion at named moments only. Expensive — never a lane worker, never routine. |
-| Mechanical executor | **Sonnet 5 / K2.7** (`kimi-for-coding-highspeed`) | Bulk implementation on fully-decided briefs. Never asked to design or judge. |
+| Lead intelligence | **Kimi K3** (top session) | Design, judgment, review, verification, landing. Owns every decision and every landed diff. |
+| Dispatcher / middle orchestrator | **GLM5.2** | Clerical seat for multi-stage waves: pop the queue, brief a lane, run exit-code gates, accept/reject, land. Contract in §17. |
+| Mechanical executor | **DeepSeek V4 Flash** (`deepseek`) | Bulk implementation on fully-decided briefs. Never asked to design or judge. Prescriptive-imperative briefs only — R3. |
+| Consult peer | *vacant* | K3 to rule — R4. |
 
-K3 is a Fable-level model priced like one. The earlier "K3 = default lane agent" routing is dead; so is "K3 orchestrates Sonnet lanes" as a standing configuration — when Fable is the session, Fable leads and K3 is consulted, not staffed.
+**K3 leads by default here** — it is the top-level session, not a consulted peer. It designs, implements, verifies, and LANDS its own work under the landing protocol and the verification bar this doc sets (§Verification: adversarial pass, citations checked, gate rerun on the merged tree). What it does not do is spawn K3 lane workers under itself: lanes are DeepSeek Flash executors, orchestration below the lead is the GLM5.2 seat. (Peter's directive 2026-07-19, carried forward through the 2026-07-24 roster change.)
 
-**When K3 IS the top-level session** (Peter opened the session on K3 as the main orchestration agent — no Fable above it), the consult-only rule doesn't apply: K3 leads by default. It designs, implements, verifies, and LANDS its own work under the same landing protocol and the same verification bar this doc sets for Fable (§Verification: adversarial pass, citations checked, gate rerun on the merged tree). What it still doesn't do is spawn K3 lane workers under itself — lanes under a K3 session are Sonnet/K2.7 mechanical executors. (Peter's directive 2026-07-19, same session as this doc.)
-
-## When K3 is consulted (the only two triggers)
+## When K3 is consulted (DEAD TEXT pending R4 — written for the old roster where K3 sat above Fable's lanes)
 
 1. **Design fork** — during design, when Fable has a genuine fork the audit can't kill (the §5 alternative-killing step in DESIGN_AUTHORING.md). One focused question, not an open-ended review.
 2. **Pre-dispatch sanity check** — before sending a *large* mechanical wave (multi-agent bulk work), K3 reviews the brief set for wrong fix shapes, missed blast radius, scope creep. Ordinary single lanes skip this.
@@ -46,7 +68,7 @@ Consult output is advice; Fable integrates and owns the call. Spawn: `cc-fleet s
 
 ## What mechanical agents get
 
-Task shapes that route to Sonnet/K2.7: mechanical sweeps, clippy/format fixes, test runs + log reading, doc regeneration, read-only surveys with named targets, implementation where the fix shape is already written down in the brief.
+Task shapes that route to the executor seat (DeepSeek V4 Flash from 2026-07-24; Sonnet 5/K2.7 historically): mechanical sweeps, clippy/format fixes, test runs + log reading, doc regeneration, read-only surveys with named targets, implementation where the fix shape is already written down in the brief.
 
 Never to mechanical agents: graph semantics, GPU/kernel work, undo/lifecycle, design judgment, anything where the fix shape isn't already decided.
 
@@ -65,17 +87,19 @@ Slow flows and bug residue come from agents re-deriving what the lead already kn
 
 One strong verify pass per lane before landing: adversarial review ("refute this diff against the brief and the gate"), citations checked, gate rerun by the lead. Two weak passes don't sum to a strong one — cheap-agent-reviews-cheap-agent is how plausible-looking drift lands. Small lanes, frequent landing: 2–3 commits per phase beats one hours-long wave.
 
-## Provider facts (cc-fleet / Kimi)
+## Provider facts (cc-fleet)
 
-Spawn: `cc-fleet subagent kimi-code --prompt-file <brief> [--profile slim-ro] --background`; resume with `--resume <session-id>` (keep profile constant across turns). Provider `kimi-code`, endpoint `api.kimi.com/coding/`, flat Allegretto membership window. Gotcha: `kimi-for-coding` on the endpoint is K2.7, NOT K3. Cost reality (measured 2026-07-18): Kimi bills cache reads ~$0.80/MTok and cache reads are ~90% of lane volume, so K3 is only "cheap" against the flat window — per-token it costs more than Sonnet list. That's the pricing basis for K3-as-consult.
+**Kimi (lead seat — configured and verified 2026-07-23).** Spawn: `cc-fleet subagent kimi-code --prompt-file <brief> [--profile slim-ro] --background`; resume with `--resume <session-id>` (keep profile constant across turns). Provider `kimi-code`, endpoint `api.kimi.com/coding/`, flat Allegretto membership window; slots are `default`/`strong` = `k3`, `fast` = `kimi-for-coding`. Gotcha: `kimi-for-coding` on the endpoint is K2.7, NOT K3. Cost reality (measured 2026-07-18): Kimi bills cache reads ~$0.80/MTok and cache reads are ~90% of lane volume, so K3 is only "cheap" against the flat window — per-token it costs more than Sonnet list. That was the pricing basis for K3-as-consult; under the new roster it is the basis for keeping the lead seat's window economy (R5).
 
-No Opus lanes anywhere (overthinks, rabbit-holes — Peter's settled call). All agents obey every rule in CLAUDE.md — worktree slots, pathspec commits, the landing protocol.
+**GLM5.2 and DeepSeek V4 Flash — NOT YET CONFIGURED (R1).** Neither provider exists in `cc-fleet list` as of 2026-07-23. Both need `cc-fleet add` plus a key from Peter; GLM requires choosing `glm` (bigmodel.cn) or `zai` (z.ai) first, and its model id must be confirmed against `cc-fleet models <provider> --json` rather than assumed from the seed. Seeded defaults are suggestions only.
+
+No judgment-tier lanes anywhere — the lead and dispatcher are seats, never lane workers (Opus lanes overthink and rabbit-hole; Peter's settled call, and the reasoning is about tier, not vendor). All agents obey every rule in CLAUDE.md — worktree slots, pathspec commits, the landing protocol.
 
 Related: `agent-execution-playbook` memory (hazards), `docs/DESIGN_AUTHORING.md` (upstream of routing — how work gets shaped), `opus-prompt-pack` memory (paste-ready prompts).
 
 ## Overnight orchestration pattern (added 2026-07-21, god-file wave — Peter's directives)
 
-Proven shape for unattended multi-slice runs; use it whenever a phase's judgment is DONE and only mechanical bulk remains.
+Proven shape for unattended multi-slice runs; use it whenever a phase's judgment is DONE and only mechanical bulk remains. Model names below are the seats that held them during the proving run — apply the §0 mapping (Fable→K3 lead, Opus→GLM5.2 dispatcher, Sonnet→DeepSeek Flash lane). R2 and R3 are unresolved for this pattern specifically: it is the highest-leverage, least-supervised use of the executor tier.
 
 - **Three tiers, strict:** Fable top session = judgment + landings only, alive on ~50-min wakeups. ONE Opus dispatcher seat = clerical: pop the slice queue, brief a Sonnet lane from the template, run the exit-code gates, accept/reject, next. It holds no code in context, implements nothing, decides nothing, never lands. Sonnet lanes (LOW effort, foreground) = all code, one slice = one lane = one commit.
 - **Every seat and lane is an Agent-tool TEAMMATE (Peter, 2026-07-22 — hard rule, verbatim "YOU MUST ALWAYS USE TEAMS"):** named agents spawned via the Agent tool, visible in the team panel, messaging the top session via SendMessage. Never claude-pane/tmux sessions for seats — tmux panes exist only when Peter explicitly asks for a watchable one. Teammate messages wake the top session directly; flag files remain the durable record per the decisions-are-files rule.
