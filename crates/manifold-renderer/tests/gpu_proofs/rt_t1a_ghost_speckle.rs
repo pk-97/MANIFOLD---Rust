@@ -24,7 +24,7 @@
 //! geometry passes through a fixed screen window as the camera orbits"
 //! parallax, which would otherwise swamp the signal.
 //!
-//! **BUG-315 / D19 / D20 status (2026-07-23): the ORBIT oracle below is
+//! **BUG-316 / D19 / D20 status (2026-07-23): the ORBIT oracle below is
 //! `#[ignore]`d, not deleted, and BUG-311 is NOT certified by any numeric
 //! oracle in this file.** History:
 //! - D19 diagnosed the original consecutive-frame-diff metric as confounded
@@ -241,7 +241,7 @@ fn variance(v: &[f64]) -> f64 {
     v.iter().map(|x| (x - m).powi(2)).sum::<f64>() / v.len() as f64
 }
 
-/// ORBIT/GHOST oracle (revised per D19 — BUG-315: the original consecutive-
+/// ORBIT/GHOST oracle (revised per D19 — BUG-316: the original consecutive-
 /// frame-diff metric was confounded by real camera parallax at the shadow-
 /// boundary probe point, not ghosting, and couldn't certify BUG-311).
 ///
@@ -293,9 +293,9 @@ const GHOST_TIME_STEP: f64 = 1.0;
 /// `accumulate_irradiance` now reprojects history through `prev_view_proj`
 /// before blending and rejects a depth/normal mismatch. See the doc comment
 /// above for the pre-fix vs post-fix numbers recorded for this revised
-/// metric (2026-07-23, BUG-315 remediation).
+/// metric (2026-07-23, BUG-316 remediation).
 #[test]
-#[ignore = "BUG-315/D20: this metric does not discriminate pre-fix from post-fix \
+#[ignore = "BUG-316/D20: this metric does not discriminate pre-fix from post-fix \
             (pre 0.0267 vs post 0.0262, both > threshold) — the module doc comment \
             has the full history. BUG-311 is accepted FIXED on D20 Stage 2 bisection \
             evidence (reprojection instrumentation showed ~95-98% of texels shifting \
