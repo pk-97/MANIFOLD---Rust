@@ -23,8 +23,13 @@ Mechanism (deterministic, no model calls): the payload carries `transcript_path`
 IS the current context size (cache_read + cache_creation + input). Warn at
 WARN_TOKENS, deny at DENY_TOKENS with instructions to hand off.
 
-Denial is not data loss: the seat writes a handoff file and a successor resumes
-from it, which is the rotation protocol AGENT_ROUTING.md already specifies.
+Denial is not data loss: past DENY_TOKENS a WRAP-UP LANE stays open -- git
+commands (commit clean work), Write/Edit to scratchpad / .claude/orchestration
+/ handoff files, and SendMessage (report up). Everything else is denied. The
+seat exits cleanly under its own power instead of stranding mid-task and
+forcing the lead to spend tokens re-spinning it (Peter's concern, 2026-07-24).
+A successor resumes from the handoff, which is the rotation protocol
+AGENT_ROUTING.md already specifies.
 
 Fails open on any error (missing/unreadable transcript, format drift): a guard
 hook must never be able to block a session. Escape hatch for a genuinely
@@ -34,9 +39,25 @@ import json
 import os
 import sys
 
-WARN_TOKENS = 200_000
-DENY_TOKENS = 320_000
+WARN_TOKENS = 150_000
+DENY_TOKENS = 200_000
 TAIL_BYTES = 512 * 1024
+
+# Wrap-up lane: tools still allowed past DENY_TOKENS so the seat can land
+# clean work, write its handoff, and report up -- nothing else.
+WRAPUP_PATH_MARKERS = ("/scratchpad", "/.claude/orchestration/", "handoff")
+
+
+def is_wrapup_call(tool_name: str, tool_input: dict) -> bool:
+    if tool_name == "SendMessage":
+        return True
+    if tool_name == "Bash":
+        cmd = (tool_input.get("command") or "").strip()
+        return cmd.startswith("git ")
+    if tool_name in ("Write", "Edit"):
+        path = (tool_input.get("file_path") or "").lower()
+        return any(m in path for m in WRAPUP_PATH_MARKERS)
+    return False
 
 
 def current_context(transcript_path: str) -> int:
@@ -88,14 +109,24 @@ def main() -> None:
 
         size = current_context(path)
         if size >= DENY_TOKENS:
+            tool_name = payload.get("tool_name") or ""
+            tool_input = payload.get("tool_input") or {}
+            if is_wrapup_call(tool_name, tool_input if isinstance(tool_input, dict) else {}):
+                emit("allow", (
+                    f"Wrap-up lane (context ~{size//1000}K, past the {DENY_TOKENS//1000}K "
+                    "ceiling): this call is allowed only to land clean work / write the "
+                    "handoff / report up. Finish the rotation, then stop."
+                ))
+                sys.exit(0)
             emit("deny", (
                 f"Context ceiling: this seat is at ~{size//1000}K tokens, past the "
                 f"{DENY_TOKENS//1000}K hard limit. Every further call costs ~{size//1000}K "
                 "cache-read for the same work (measured 41x penalty on long sessions -- "
-                "docs/TOKEN_ECONOMICS.md §3c). STOP and rotate: commit clean work, write a "
-                "handoff file naming state/anchors/next step, and report that the seat needs "
-                "a successor. Do not continue in this session. Override only if genuinely "
-                "unavoidable: MANIFOLD_CONTEXT_CEILING=off."
+                "docs/TOKEN_ECONOMICS.md §3c). STOP and rotate. Still allowed (wrap-up lane): "
+                "git commands to commit clean work, Write/Edit of a handoff file in the "
+                "scratchpad or .claude/orchestration/, SendMessage to report up. Write the "
+                "handoff naming state/anchors/next step, then stop. Override only if "
+                "genuinely unavoidable: MANIFOLD_CONTEXT_CEILING=off."
             ))
         elif size >= WARN_TOKENS:
             emit("allow", (
