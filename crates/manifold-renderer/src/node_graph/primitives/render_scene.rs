@@ -694,21 +694,48 @@ pub struct RenderScene {
     /// performer-gesture gate).
     rt_tracer: Option<manifold_gpu::raytrace::MetalShadowRayTracer>,
     rt_accel: Option<manifold_gpu::raytrace::RtAccel>,
+    /// BUG-320: full accel key — topology (`rt_accel_topo_key`'s inputs)
+    /// plus every object transform. Tracks what the resident accel's
+    /// instance buffer currently holds; a full-key change under an
+    /// UNCHANGED topo key is a transform-only change and takes the
+    /// `refit_accel` path (same-frame, cheap), never a rebuild.
     rt_accel_key: Option<u64>,
+    /// BUG-320: topology-only accel key — object count, vertex-buffer
+    /// identities, triangle counts, `rebuild_epoch`. Transforms
+    /// deliberately excluded: a moving object must NOT read as a new
+    /// topology (pre-BUG-320 it did — continuous motion changed the one
+    /// combined key every frame, so the BUG-308 recur-unchanged defer
+    /// never fired, the accel stayed permanently stale mid-gesture, and
+    /// every pause in motion triggered a full rebuild that dropped RT to
+    /// the raster fallback: the motion flicker). Only a topo-key change
+    /// triggers `build_accel`.
+    rt_accel_topo_key: Option<u64>,
     /// BUG-308/RT-D4: the accel-structure build is async and must never
     /// enqueue its command buffer before this frame's own mesh-generation
     /// GPU writes (still encoded but uncommitted on the shared per-frame
     /// `GpuEncoder`) have reached the queue — building here would race
-    /// them. `rt_accel_key` only changing to a NEW key this frame records
+    /// them. The topo key only changing to a NEW key this frame records
     /// that key here and skips the actual build; the NEXT frame, once
     /// this key recomputes identically, is guaranteed to run only after
     /// the content thread's normal per-frame commit+wait for THIS frame
     /// has already happened, so building then is race-free. `rt_accel`
     /// stays whatever it was (`None` or a stale generation) until then —
-    /// `rt_accel.ready` (or its absence) is what gates using it, so the
-    /// raster shadow-map path serves this scene meanwhile (see the
-    /// `!rt_ready` gates below).
+    /// `rt_accel_built` is what gates using it, so the raster shadow-map
+    /// path serves this scene meanwhile (see the `!rt_ready` gates
+    /// below). Holds a TOPO key (BUG-320) — transform churn while a
+    /// topology build is pending must not starve the build forever.
     rt_accel_pending_key: Option<u64>,
+    /// BUG-320: latched true the first frame `rt_accel.ready` is observed
+    /// true after a (re)build; reset false when a rebuild replaces the
+    /// accel. This — not raw `ready` — is the "can we trace" gate:
+    /// `refit_accel` flips `ready` false for its async duration, but the
+    /// structure stays valid to trace with its OLD transforms meanwhile
+    /// (raytrace.rs's documented refit contract), so an in-flight refit
+    /// must NOT bounce the scene to the raster shadow path and back —
+    /// that path swap under motion is exactly BUG-320's flicker. Raw
+    /// `ready` still gates ENQUEUING the next refit (never rewrite the
+    /// CPU-mapped instance buffer while a refit/build is in flight).
+    rt_accel_built: bool,
     /// Half-res shadow-ray-trace target + full-res upsampled mask
     /// (RT-D3's "D11 trivial pass"). Sized to the scene's own
     /// `width`/`height`, ensured lazily like every other RT-only
@@ -958,7 +985,9 @@ impl RenderScene {
             rt_tracer: None,
             rt_accel: None,
             rt_accel_key: None,
+            rt_accel_topo_key: None,
             rt_accel_pending_key: None,
+            rt_accel_built: false,
             rt_mask_half: None,
             rt_mask_full: None,
             rt_mask_width: 0,
@@ -2865,19 +2894,28 @@ impl EffectNode for RenderScene {
         // folded into `view_proj` — the RT pass's `inv_view_proj` must
         // match the SAME `view_proj` the main draw uses this frame.
         let rt_enabled = matches!(ctx.params.get("rt_enabled"), Some(ParamValue::Bool(true)));
-        // BUG-308/RT-D4: `rt_accel`'s build/refit is async (raytrace.rs) —
-        // `false` whenever there's no resident accel yet, OR one is
-        // (re)building/refitting and hasn't completed. Every downstream
-        // "use RT shadows" decision (the raster shadow-map skip below, the
-        // WGSL `scene_params.w` RT-active flag, and the RT dispatch itself
+        // BUG-308/RT-D4: `rt_accel`'s build is async (raytrace.rs) —
+        // `false` whenever there's no resident accel yet, OR a topology
+        // (re)build hasn't completed. Every downstream "use RT shadows"
+        // decision (the raster shadow-map skip below, the WGSL
+        // `scene_params.w` RT-active flag, and the RT dispatch itself
         // near the end of this fn) gates on `rt_enabled && rt_ready`, not
-        // `rt_enabled` alone — an RT-enabled scene with a not-yet-ready
+        // `rt_enabled` alone — an RT-enabled scene with a not-yet-built
         // accel keeps rendering the raster shadow-map path (an explicit,
-        // logged transition below) until the async build/refit catches up.
-        let rt_ready = self
-            .rt_accel
-            .as_ref()
-            .is_some_and(|a| a.ready.load(std::sync::atomic::Ordering::Acquire));
+        // logged transition below) until the async build catches up.
+        // BUG-320: `rt_ready` is the LATCHED built flag, not raw
+        // `accel.ready` — a transform-only `refit_accel` in flight keeps
+        // `ready` false for a few frames, but the structure stays valid
+        // to trace with its old transforms (raytrace.rs refit contract);
+        // gating on raw `ready` here is what ping-ponged RT ↔ raster
+        // under motion.
+        if !self.rt_accel_built {
+            self.rt_accel_built = self
+                .rt_accel
+                .as_ref()
+                .is_some_and(|a| a.ready.load(std::sync::atomic::Ordering::Acquire));
+        }
+        let rt_ready = self.rt_accel_built;
         // RAYTRACING_DESIGN.md §5.2 P2/D3, RT-D2, §8.2 D22 (T2-B): the ONE
         // call site deciding "discard temporal history this frame" for
         // EITHER of this node's two temporal consumers — the RT irradiance
@@ -3715,21 +3753,26 @@ impl EffectNode for RenderScene {
                 })
                 .collect();
 
-            // Dirty-check key: same hashing idiom as `shadow_cache_keys`
-            // above — any topology OR transform change triggers a full
-            // rebuild (accel structure build/refit — RAYTRACING_DESIGN.md
-            // P1 gate: built at scene load, kept resident, never built
-            // mid-frame for a STATIC scene, since the key then never
-            // changes after the first frame).
+            // Dirty-check keys, same hashing idiom as `shadow_cache_keys`
+            // above, split in two (BUG-320): the TOPO key (buffers,
+            // counts, epoch) decides rebuild-vs-not; folding transforms
+            // on top yields the FULL key, whose change under a stable
+            // topo key is a transform-only refit (RAYTRACING_DESIGN.md
+            // P1 gate: built at scene load, kept resident, never rebuilt
+            // mid-frame for a static scene; refit — not rebuild — is the
+            // designed path for a performer moving an object).
             use std::hash::{Hash, Hasher};
             let mut hasher = ahash::AHasher::default();
             hasher.write_usize(objects.len());
             for o in &objects {
                 o.vertex_buffer.identity_key().hash(&mut hasher);
                 hasher.write_u32(o.triangle_count);
-                hasher.write(bytemuck::bytes_of(&o.transform));
             }
             hasher.write_u64(ctx.rebuild_epoch);
+            let topo_key = hasher.finish();
+            for o in &objects {
+                hasher.write(bytemuck::bytes_of(&o.transform));
+            }
             let accel_key = hasher.finish();
 
             let gpu = ctx.gpu_encoder();
@@ -3769,29 +3812,58 @@ impl EffectNode for RenderScene {
             // already committed+completed by the time the build actually
             // enqueues — the per-frame content-thread cycle always
             // commits+waits before the next frame's evaluate() runs.
-            if self.rt_accel_key != Some(accel_key) {
-                if self.rt_accel_pending_key == Some(accel_key) {
+            if self.rt_accel_topo_key != Some(topo_key) {
+                // Topology change (or first RT frame): full rebuild, with
+                // BUG-308's one-frame recur-unchanged defer.
+                if self.rt_accel_pending_key == Some(topo_key) {
                     let tracer = self.rt_tracer.as_ref().expect("ensured above");
                     self.rt_accel = Some(tracer.build_accel(gpu.device, &objects));
+                    self.rt_accel_topo_key = Some(topo_key);
                     self.rt_accel_key = Some(accel_key);
                     self.rt_accel_pending_key = None;
+                    // BUG-320: the fresh build must be observed ready
+                    // before tracing resumes — the old accel is gone.
+                    self.rt_accel_built = false;
                     log::info!(
-                        "node.render_scene: RT accel structure (re)build enqueued (async, key {accel_key:#x}) — raster shadow-map path serves this scene until it's ready"
+                        "node.render_scene: RT accel structure (re)build enqueued (async, topo key {topo_key:#x}) — raster shadow-map path serves this scene until it's ready"
                     );
                 } else {
-                    self.rt_accel_pending_key = Some(accel_key);
+                    self.rt_accel_pending_key = Some(topo_key);
                     log::info!(
-                        "node.render_scene: RT accel structure build requested (key {accel_key:#x}); deferring one frame so it can't race this frame's mesh-generation GPU writes"
+                        "node.render_scene: RT accel structure build requested (topo key {topo_key:#x}); deferring one frame so it can't race this frame's mesh-generation GPU writes"
                     );
+                }
+            } else if self.rt_accel_key != Some(accel_key) {
+                // BUG-320: same topology, moved transforms — refit the
+                // TLAS in place. Safe same-frame (transforms are
+                // CPU-authored; no upstream GPU write to race — the
+                // BUG-308 defer is a build_accel concern only). Enqueue
+                // only when the accel is idle (`ready`): rewriting the
+                // CPU-mapped instance buffer under an in-flight
+                // refit/build would tear; when busy, skip and catch up
+                // next frame with the then-current transforms. Tracing
+                // continues against the old transforms throughout
+                // (`rt_accel_built` gate above) — one frame of accel
+                // latency on a moving mesh is invisible, the RT↔raster
+                // path swap it replaces was not.
+                if let Some(accel) = self.rt_accel.as_ref()
+                    && accel.ready.load(std::sync::atomic::Ordering::Acquire)
+                {
+                    let tracer = self.rt_tracer.as_ref().expect("ensured above");
+                    tracer.refit_accel(gpu.device, accel, &objects);
+                    self.rt_accel_key = Some(accel_key);
                 }
             }
 
-            // `rt_ready` was captured at the top of `evaluate()` from
-            // `self.rt_accel`'s state BEFORE this block ran — correct
-            // either way: a build just enqueued above hasn't completed
-            // regardless, and an already-resident accel's readiness can't
-            // change mid-call (the completion handler runs on a separate
-            // Metal-owned thread, never synchronously inside evaluate()).
+            // `rt_ready` was captured at the top of `evaluate()` from the
+            // latched `rt_accel_built` flag BEFORE this block ran —
+            // correct either way: a rebuild just enqueued above commits
+            // its build command buffer ahead of this frame's shared
+            // encoder (same queue, so the trace below is GPU-ordered
+            // after it), a refit likewise, and an already-resident
+            // accel's readiness can't change mid-call (the completion
+            // handler runs on a separate Metal-owned thread, never
+            // synchronously inside evaluate()).
             if rt_ready {
                 let sun = &casters[0];
                 let sun_dir = [-sun.dir[0], -sun.dir[1], -sun.dir[2]];
