@@ -447,3 +447,56 @@ fn dump_side_by_side_pngs_for_peter() {
         eprintln!("[T2-B] wrote {path:?}");
     }
 }
+
+/// BUG-317 regression pin — Peter's live crash, reproduced through the real
+/// runtime path: build with `temporal_upscale=false` (so the compiled plan's
+/// `consumed_outputs` fold has no forced `depth`/`velocity`), then flip the
+/// param LIVE via `Graph::set_param` (the same funnel every host write uses)
+/// and render again. Pre-fix: the stale plan had no velocity target and the
+/// first upscaled frame panicked ("force_consumed_outputs forces `velocity`
+/// into consumed_outputs whenever temporal_upscale is on"). Post-fix:
+/// `Graph::forced_outputs_epoch` moves on the write and `PresetRuntime`
+/// recompiles the plan before the frame executes — no panic, and the
+/// upscaled output still matches a native render within the coarse epsilon
+/// (proves the recompiled path actually upscales the scene, not garbage).
+#[test]
+fn live_temporal_upscale_toggle_recompiles_plan_and_does_not_panic() {
+    let h = harness::shared();
+
+    let mut runtime = build_runtime(h, false);
+    let target = h.make_target("rt-t2b-live-toggle");
+    render_frame(&mut runtime, h, &target.texture, 1, 0);
+
+    let scene_node = runtime
+        .graph
+        .nodes()
+        .find(|n| n.params.get("temporal_upscale").is_some())
+        .map(|n| n.id)
+        .expect("scene graph contains the node.render_scene instance");
+    runtime
+        .graph
+        .set_param(
+            scene_node,
+            "temporal_upscale",
+            manifold_renderer::node_graph::ParamValue::Bool(true),
+        )
+        .expect("temporal_upscale param exists");
+
+    // Pre-fix this frame aborted the process. Two frames: the toggle frame
+    // (plan recompile + first upscale) and one steady frame after it.
+    render_frame(&mut runtime, h, &target.texture, 1, 1);
+    render_frame(&mut runtime, h, &target.texture, 1, 2);
+    let toggled = readback_rgba_f32(&h.device, &target.texture);
+
+    let mut native_runtime = build_runtime(h, false);
+    let native_target = h.make_target("rt-t2b-live-toggle-native");
+    render_frame(&mut native_runtime, h, &native_target.texture, 1, 0);
+    render_frame(&mut native_runtime, h, &native_target.texture, 1, 1);
+    let native = readback_rgba_f32(&h.device, &native_target.texture);
+
+    let diff = mean_abs_diff_rgb(&toggled, &native);
+    assert!(
+        diff < UPSCALE_COARSE_EPSILON,
+        "live-toggled upscale output diverges from native render: mean abs diff {diff} >= {UPSCALE_COARSE_EPSILON} — the recompiled plan is not rendering the scene"
+    );
+}

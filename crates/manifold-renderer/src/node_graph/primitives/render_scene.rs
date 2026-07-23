@@ -4663,12 +4663,24 @@ impl EffectNode for RenderScene {
                 .rt_temporal_upscaler
                 .as_ref()
                 .expect("ensured above: temporal_upscale_active implies Some");
-            let depth_src = depth_resolve_target.expect(
-                "force_consumed_outputs forces `depth` into consumed_outputs whenever temporal_upscale is on",
-            );
-            let velocity_src = velocity_resolve_target.expect(
-                "force_consumed_outputs forces `velocity` into consumed_outputs whenever temporal_upscale is on",
-            );
+            // BUG-317 belt-and-braces: `force_consumed_outputs` puts
+            // `depth`/`velocity` in the plan's consumed set whenever
+            // `temporal_upscale` is on, and PresetRuntime recompiles the
+            // plan on a live toggle before the frame executes — so these
+            // are Some on every reachable path. If a future param path
+            // bypasses that seam, a live set must degrade (skip the
+            // upscale, log loudly), never abort mid-show.
+            let (Some(depth_src), Some(velocity_src)) =
+                (depth_resolve_target, velocity_resolve_target)
+            else {
+                if !self.rt_temporal_unavailable_logged {
+                    self.rt_temporal_unavailable_logged = true;
+                    log::error!(
+                        "node.render_scene: temporal_upscale is on but the execution plan has no depth/velocity target (stale consumed_outputs — BUG-317 class); skipping upscale this frame"
+                    );
+                }
+                return;
+            };
             // D22/RT-D2: the SAME shared reset decision computed once near
             // the top of this fn (`reset_decision`) — `temporal_upscale`
             // being true is one of the two conditions that guarantees it's

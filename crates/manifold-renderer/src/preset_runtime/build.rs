@@ -586,9 +586,11 @@ impl PresetRuntime {
             relight_writes: Vec::new(),
         };
 
+        let seeded_forced_epoch = graph.forced_outputs_epoch();
         let mut g = Self {
             graph,
             plan,
+            last_forced_outputs_epoch: seeded_forced_epoch,
             executor: Executor::with_mock(),
             effect_nodes: vec![segment],
             group_mix_nodes: Vec::new(),
