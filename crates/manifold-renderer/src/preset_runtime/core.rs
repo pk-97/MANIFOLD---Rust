@@ -1898,38 +1898,29 @@ impl PresetRuntime {
         }
     }
 
-    /// BUG-317: recompile the plan when a live param write changed some
-    /// node's forced-output set (see [`Graph::forced_outputs_epoch`]).
-    /// Called after each frame's param refresh, before the executor runs —
-    /// so a frame never executes against a plan whose `consumed_outputs`
-    /// fold disagrees with the params the nodes will read. On compile
-    /// failure the old plan is kept and the error logged (the graph is
-    /// structurally unchanged, so failure here would indicate a bug, not
-    /// bad user input — never panic on the live path).
+    /// BUG-317/318/319: a live param write changed some node's
+    /// forced-output set (see [`Graph::forced_outputs_epoch`]). The
+    /// in-place plan-recompile answer (BUG-317, then BUG-318's executor
+    /// invalidation on top) is RETRACTED: swapping `ExecutionPlan` under a
+    /// live executor broke the real in-app import scene twice in one night
+    /// (persistent magenta, "vertices unwired") in a way no headless repro
+    /// — synthetic, real-GLB `from_def`, real-GLB with the actual apricot
+    /// asset — reproduces; the executor's own doc states plans never swap
+    /// under a live executor, and it means it. Until the designed fix
+    /// (treat a forced-outputs change as the topology change it is: full
+    /// runtime rebuild through the host path), a live toggle is INERT and
+    /// says so loudly — `render_scene` renders natively when the stored
+    /// G-buffer targets are absent (its own guard), and nothing crashes.
+    /// The stale-but-consistent plan keeps rendering exactly what it did.
     fn refresh_plan_if_forced_outputs_changed(&mut self) {
         let epoch = self.graph.forced_outputs_epoch();
         if epoch == self.last_forced_outputs_epoch {
             return;
         }
         self.last_forced_outputs_epoch = epoch;
-        match compile(&self.graph) {
-            Ok(p) => {
-                log::info!(
-                    "[preset-runtime] forced-outputs change (epoch {epoch}) — execution plan recompiled"
-                );
-                self.plan = p;
-                // BUG-318: memo-clean steps hold backend slots recorded
-                // under the old plan — force a full re-execute next frame
-                // so every value (SceneObject mesh slots included) is
-                // re-produced against the new plan's bindings.
-                self.executor.invalidate_memoized_dataflow();
-            }
-            Err(e) => {
-                log::error!(
-                    "[preset-runtime] forced-outputs change (epoch {epoch}) but plan recompile failed: {e:?} — keeping previous plan"
-                );
-            }
-        }
+        log::warn!(
+            "[preset-runtime] forced-outputs param changed live (epoch {epoch}) — the running plan cannot honor it; the toggle takes effect after this scene's runtime rebuilds (project reload / layer rebuild). BUG-319."
+        );
     }
 
     /// Run one frame against the configured executor (mock-backend test path).
