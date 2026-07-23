@@ -38,6 +38,7 @@ mod render_scene_object_visibility;
 mod render_scene_pcss;
 mod render_scene_shadow_cache;
 mod render_scene_shadows;
+mod rt_object_motion_shadow;
 mod rt_p1_region_probe;
 mod rt_p1_shadow;
 mod rt_p2_soft_ao_temporal;
