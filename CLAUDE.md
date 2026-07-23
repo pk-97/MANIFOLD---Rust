@@ -121,7 +121,7 @@ Above tool choice: verify one level closer to the stage than where you changed t
 
 Write code directly in the main context by default; spawn agents only for genuinely large isolated tasks, and say so.
 
-**Routing + steering policy: [docs/AGENT_ROUTING.md](docs/AGENT_ROUTING.md) is authoritative.** The shape: a judgment-tier model (Fable, or K3 as top session) orchestrates — never Sonnet-over-Sonnet. The orchestrator steers: briefs name the reuse target and conviction test; lanes make ONE commit then stop for review; lanes never land (only the top session merges); decisions flow up; review is the throttle on lane count; per-wave adversarial brief pass. Sonnet/K2.7 execute mechanical bulk only, at low reasoning effort. No Opus lanes. All agents obey every rule in this file.
+**Routing + steering policy: [docs/AGENT_ROUTING.md](docs/AGENT_ROUTING.md) is authoritative — read §0 first, the roster changed 2026-07-24.** Three seats: a judgment-tier **lead** (Kimi K3 as top session) orchestrates and is the only seat that lands; an optional **dispatcher** (GLM5.2) runs multi-stage waves clerically; **lane executors** (DeepSeek V4 Flash) do mechanical bulk only, at low reasoning effort. Never executor-over-executor, at any depth. The orchestrator steers: briefs name the reuse target and conviction test; lanes make ONE commit then stop for review; lanes never land; decisions flow up; review is the throttle on lane count; per-wave adversarial brief pass. No judgment-tier lanes. All agents obey every rule in this file. §0 carries five items (R1–R5) for K3 to resolve before the first wave — provider config, tier-guard coverage, executor capability, the consult seat, the window economy.
 
 Active upgrade plan: `docs/SYSTEM_UPGRADE_2026_07_PLAN.md`.
 
