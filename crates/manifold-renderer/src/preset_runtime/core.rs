@@ -70,6 +70,16 @@ fn output_resource(
 pub struct PresetRuntime {
     pub graph: Graph,
     pub plan: ExecutionPlan,
+    /// Last seen [`Graph::forced_outputs_epoch`]. When a live param write
+    /// changes a node's forced-output set (BUG-317: `render_scene`'s
+    /// `rt_enabled`/`temporal_upscale`), the compiled plan's
+    /// `consumed_outputs` fold is stale — [`Self::refresh_plan_if_forced_outputs_changed`]
+    /// recompiles before the frame executes. ResourceIds are assigned to
+    /// EVERY output port in deterministic topo order regardless of
+    /// consumption, so a recompile of the structurally-identical graph
+    /// yields identical ids — pre-bound io slots and persistent-resource
+    /// pins stay valid across the swap.
+    pub(super) last_forced_outputs_epoch: u64,
     pub(super) executor: Executor,
     /// One slot per effect node in the chain graph, in chain order.
     /// Same length as the active subset of effects at build time.
@@ -1264,9 +1274,11 @@ impl PresetRuntime {
 
         let topology_hash = compute_topology_hash(effects, groups, width, height, preview_effect);
 
+        let seeded_forced_epoch = graph.forced_outputs_epoch();
         let mut runtime = Self {
             graph,
             plan,
+            last_forced_outputs_epoch: seeded_forced_epoch,
             executor: Executor::new(Box::new(backend)),
             effect_nodes,
             group_mix_nodes,
@@ -1741,6 +1753,7 @@ impl PresetRuntime {
         // StateStore API — get the StateStore + owner_key they need.
         // The `with_gpu` variant passes `state: None, owner_key: 0`,
         // which makes those primitives panic.
+        self.refresh_plan_if_forced_outputs_changed();
         self.executor.execute_frame_with_state(
             &mut self.graph,
             &self.plan,
@@ -1885,8 +1898,38 @@ impl PresetRuntime {
         }
     }
 
+    /// BUG-317: recompile the plan when a live param write changed some
+    /// node's forced-output set (see [`Graph::forced_outputs_epoch`]).
+    /// Called after each frame's param refresh, before the executor runs —
+    /// so a frame never executes against a plan whose `consumed_outputs`
+    /// fold disagrees with the params the nodes will read. On compile
+    /// failure the old plan is kept and the error logged (the graph is
+    /// structurally unchanged, so failure here would indicate a bug, not
+    /// bad user input — never panic on the live path).
+    fn refresh_plan_if_forced_outputs_changed(&mut self) {
+        let epoch = self.graph.forced_outputs_epoch();
+        if epoch == self.last_forced_outputs_epoch {
+            return;
+        }
+        self.last_forced_outputs_epoch = epoch;
+        match compile(&self.graph) {
+            Ok(p) => {
+                log::info!(
+                    "[preset-runtime] forced-outputs change (epoch {epoch}) — execution plan recompiled"
+                );
+                self.plan = p;
+            }
+            Err(e) => {
+                log::error!(
+                    "[preset-runtime] forced-outputs change (epoch {epoch}) but plan recompile failed: {e:?} — keeping previous plan"
+                );
+            }
+        }
+    }
+
     /// Run one frame against the configured executor (mock-backend test path).
     pub fn execute_frame(&mut self, time: FrameTime) {
+        self.refresh_plan_if_forced_outputs_changed();
         self.executor
             .execute_frame(&mut self.graph, &self.plan, time);
     }
@@ -1954,6 +1997,7 @@ impl PresetRuntime {
             delta: Seconds(ctx.dt as f64),
             frame_count: 0,
         };
+        self.refresh_plan_if_forced_outputs_changed();
         self.executor.execute_frame_with_state(
             &mut self.graph,
             &self.plan,

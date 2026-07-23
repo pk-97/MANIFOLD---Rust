@@ -93,6 +93,15 @@ pub struct Graph {
     /// disk store the same string and look up the live id at apply
     /// time. See `docs/EFFECT_RUNTIME_UNIFICATION.md` §7.
     handles: AHashMap<&'static str, NodeInstanceId>,
+    /// Bumped when a param write changes some node's
+    /// [`EffectNode::force_consumed_outputs`] result (e.g. `render_scene`'s
+    /// `rt_enabled`/`temporal_upscale` toggles). The compiled
+    /// `ExecutionPlan` folds forced outputs into `consumed_outputs` at
+    /// compile time (RAYTRACING_DESIGN.md D14), so a live toggle makes the
+    /// plan stale — `PresetRuntime` watches this epoch and recompiles
+    /// before the next frame executes (BUG-317: the stale plan had no
+    /// `velocity` target, and the first temporal-upscale frame panicked).
+    forced_outputs_epoch: u64,
 }
 
 impl Graph {
@@ -102,7 +111,15 @@ impl Graph {
             wires: Vec::new(),
             next_id: 0,
             handles: AHashMap::default(),
+            forced_outputs_epoch: 0,
         }
+    }
+
+    /// Current forced-outputs epoch — see the field doc. Consumers compare
+    /// against a remembered value and recompile their `ExecutionPlan` when
+    /// it moves.
+    pub fn forced_outputs_epoch(&self) -> u64 {
+        self.forced_outputs_epoch
     }
 
     /// Add a node, return its assigned [`NodeInstanceId`].
@@ -279,11 +296,21 @@ impl Graph {
         if inst.params.get(key.as_ref()) == Some(&value) {
             return Ok(());
         }
-        inst.params.insert(key, value);
-        inst.param_epoch += 1;
+        // Forced-outputs watch (BUG-317): snapshot the node's forced set
+        // before the write, compare after. Default impl returns `&[]` —
+        // two cheap virtual calls on the rare actually-changed write.
+        let forced_changed = {
+            let forced_before = inst.node.force_consumed_outputs(&inst.params);
+            inst.params.insert(key, value);
+            inst.param_epoch += 1;
+            inst.node.force_consumed_outputs(&inst.params) != forced_before
+        };
         // Variadic nodes rebuild their port lists when a count-style param
         // changes. Disjoint field borrows (`node` mut, `params` shared).
         inst.node.reconfigure(&inst.params);
+        if forced_changed {
+            self.forced_outputs_epoch += 1;
+        }
         Ok(())
     }
 
@@ -407,8 +434,16 @@ impl Graph {
             if inst.params.get(name) == Some(&value) {
                 return;
             }
-            inst.params.insert(std::borrow::Cow::Borrowed(name), value);
-            inst.param_epoch += 1;
+            // Forced-outputs watch (BUG-317) — same contract as `set_param`.
+            let forced_changed = {
+                let forced_before = inst.node.force_consumed_outputs(&inst.params);
+                inst.params.insert(std::borrow::Cow::Borrowed(name), value);
+                inst.param_epoch += 1;
+                inst.node.force_consumed_outputs(&inst.params) != forced_before
+            };
+            if forced_changed {
+                self.forced_outputs_epoch += 1;
+            }
         }
     }
 
