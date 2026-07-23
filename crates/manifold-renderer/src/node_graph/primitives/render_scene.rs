@@ -679,6 +679,13 @@ pub struct RenderScene {
     /// uses, so a GI ray hit's `instance_id` indexes this directly.
     rt_gi_materials: Option<manifold_gpu::GpuBuffer>,
     rt_gi_materials_capacity: usize,
+    /// RT-T1-B (RAYTRACING_DESIGN.md §8 Tier-1 item 2): per-object
+    /// [`manifold_gpu::raytrace::RtNormalSource`] bindless indirection table
+    /// for real vertex-normal interpolation in the trace kernel — same
+    /// rebuild cadence/discipline as `rt_gi_materials` above (rebuilt every
+    /// RT-ready frame from the SAME `objects`/`shadow_caster_draws` order).
+    rt_normal_sources: Option<manifold_gpu::GpuBuffer>,
+    rt_normal_sources_capacity: usize,
     /// RAYTRACING_DESIGN.md §5.2 P2: half-res/full-res demodulated
     /// irradiance (ambient*ao + gi, no albedo, no direct sun — D3) and its
     /// full-res TEMPORAL HISTORY (persistent across frames, blended by
@@ -689,7 +696,51 @@ pub struct RenderScene {
     /// lazy discipline as every other RT-only resource here).
     rt_irr_half: Option<manifold_gpu::GpuTexture>,
     rt_irr_full: Option<manifold_gpu::GpuTexture>,
-    rt_irr_history: Option<manifold_gpu::GpuTexture>,
+    /// RT-T1-C (RAYTRACING_DESIGN.md §8 Tier-1 item 1, BUG-311): the
+    /// temporally-accumulated demodulated irradiance, its per-pixel depth,
+    /// and its per-pixel normal history, each a PING-PONG PAIR —
+    /// `accumulate_irradiance`'s reprojection reads the PREVIOUS frame's
+    /// write target as this frame's read source (a single read_write
+    /// texture would race across threads within one dispatch — see the
+    /// kernel's own doc comment). `rt_history_ping` selects which slot is
+    /// currently the read side; flipped after every `accumulate_irradiance`
+    /// call, reset or not.
+    rt_irr_history: [Option<manifold_gpu::GpuTexture>; 2],
+    rt_depth_history: [Option<manifold_gpu::GpuTexture>; 2],
+    rt_normal_history: [Option<manifold_gpu::GpuTexture>; 2],
+    /// RT-T1-D (BUG-312): per-texel luminance moments (mean, mean-of-
+    /// squares) — the SAME ping-pong-history discipline as the three
+    /// pairs above, indexed by the SAME `rt_history_ping`. Feeds
+    /// `atrous_filter`'s variance-adaptive luma sigma.
+    rt_moments_history: [Option<manifold_gpu::GpuTexture>; 2],
+    /// Set once `accumulate_irradiance` has run at least once against the
+    /// CURRENT `rt_moments_history` allocation — false right after
+    /// `ensure_rt_irradiance` (re)allocates (fresh texture content is
+    /// undefined), so `atrous_pass` knows not to read it that one frame.
+    /// Independent of `rt_reset_detector`'s cut/strobe decision (a
+    /// different question: "has this texture ever been written", not
+    /// "should color history be discarded this frame").
+    rt_moments_valid: bool,
+    rt_history_ping: usize,
+    /// RT-T1-C: current-frame half-res/full-res primary-hit vertex normal
+    /// (same half/full lifecycle as `rt_irr_half`/`rt_irr_full` — produced
+    /// fresh every RT-ready frame, not persistent history).
+    rt_normal_half: Option<manifold_gpu::GpuTexture>,
+    rt_normal_full: Option<manifold_gpu::GpuTexture>,
+    /// RT-T1-D: second full-res scratch set for the à-trous filter's
+    /// ping-pong between `upsample_shadow`'s output and each dilated
+    /// `atrous_pass` — an EVEN number of dilated passes always lands the
+    /// final result back in `rt_mask_full`/`rt_irr_full`/`rt_normal_full`
+    /// (what `accumulate_irradiance` already reads), so that call site
+    /// needs no changes for which buffer it reads.
+    rt_mask_full_b: Option<manifold_gpu::GpuTexture>,
+    rt_irr_full_b: Option<manifold_gpu::GpuTexture>,
+    rt_normal_full_b: Option<manifold_gpu::GpuTexture>,
+    /// Dedicated CPU-mapped upload buffer for `AtrousParams` (tiny: two
+    /// `u32`s) — separate from `rt_params_buffer`/
+    /// `rt_accumulate_params_buffer` for the same non-clobbering reason
+    /// those two are already split.
+    rt_atrous_params_buffer: Option<manifold_gpu::GpuBuffer>,
     rt_irr_width: u32,
     rt_irr_height: u32,
     /// Small dedicated upload buffer for `AccumulateParams` — kept
@@ -863,9 +914,22 @@ impl RenderScene {
             rt_params_buffer: None,
             rt_gi_materials: None,
             rt_gi_materials_capacity: 0,
+            rt_normal_sources: None,
+            rt_normal_sources_capacity: 0,
             rt_irr_half: None,
             rt_irr_full: None,
-            rt_irr_history: None,
+            rt_irr_history: [None, None],
+            rt_depth_history: [None, None],
+            rt_normal_history: [None, None],
+            rt_moments_history: [None, None],
+            rt_moments_valid: false,
+            rt_history_ping: 0,
+            rt_normal_half: None,
+            rt_normal_full: None,
+            rt_mask_full_b: None,
+            rt_irr_full_b: None,
+            rt_normal_full_b: None,
+            rt_atrous_params_buffer: None,
             rt_irr_width: 0,
             rt_irr_height: 0,
             rt_accumulate_params_buffer: None,
@@ -1428,6 +1492,8 @@ impl RenderScene {
         };
         self.rt_mask_half = Some(make(half_w, half_h, "node.render_scene rt_mask_half (RT-D3/RT-P2 vis+ao)"));
         self.rt_mask_full = Some(make(width, height, "node.render_scene rt_mask_full (RT-D3/RT-P2 vis+ao)"));
+        // RT-T1-D: à-trous ping-pong scratch — see the field's doc comment.
+        self.rt_mask_full_b = Some(make(width, height, "node.render_scene rt_mask_full_b (RT-T1-D atrous)"));
         self.rt_mask_width = width;
         self.rt_mask_height = height;
     }
@@ -1441,17 +1507,17 @@ impl RenderScene {
     /// which MUST pass `reset: true` in that case (a dimension change is
     /// itself a discontinuity, same as a cut).
     fn ensure_rt_irradiance(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) -> bool {
-        if self.rt_irr_width == width && self.rt_irr_height == height && self.rt_irr_history.is_some() {
+        if self.rt_irr_width == width && self.rt_irr_height == height && self.rt_irr_history[0].is_some() {
             return false;
         }
         let half_w = width.div_ceil(2).max(1);
         let half_h = height.div_ceil(2).max(1);
-        let make = |w: u32, h: u32, label: &'static str| {
+        let make = |w: u32, h: u32, format: manifold_gpu::GpuTextureFormat, label: &'static str| {
             device.create_texture(&manifold_gpu::GpuTextureDesc {
                 width: w,
                 height: h,
                 depth: 1,
-                format: manifold_gpu::GpuTextureFormat::Rgba16Float,
+                format,
                 dimension: manifold_gpu::GpuTextureDimension::D2,
                 usage: manifold_gpu::GpuTextureUsage::SHADER_WRITE
                     | manifold_gpu::GpuTextureUsage::SHADER_READ,
@@ -1459,9 +1525,47 @@ impl RenderScene {
                 mip_levels: 1,
             })
         };
-        self.rt_irr_half = Some(make(half_w, half_h, "node.render_scene rt_irr_half (RT-P2)"));
-        self.rt_irr_full = Some(make(width, height, "node.render_scene rt_irr_full (RT-P2)"));
-        self.rt_irr_history = Some(make(width, height, "node.render_scene rt_irr_history (RT-P2 temporal)"));
+        let rgba16 = manifold_gpu::GpuTextureFormat::Rgba16Float;
+        self.rt_irr_half = Some(make(half_w, half_h, rgba16, "node.render_scene rt_irr_half (RT-P2)"));
+        self.rt_irr_full = Some(make(width, height, rgba16, "node.render_scene rt_irr_full (RT-P2)"));
+        // RT-T1-C: current-frame primary-hit normal, same half/full
+        // lifecycle as irradiance above (not persistent history).
+        self.rt_normal_half = Some(make(half_w, half_h, rgba16, "node.render_scene rt_normal_half (RT-T1-C)"));
+        self.rt_normal_full = Some(make(width, height, rgba16, "node.render_scene rt_normal_full (RT-T1-C)"));
+        // RT-T1-D: second full-res scratch set for the à-trous filter's
+        // ping-pong (same lifecycle as irradiance/normal above — not
+        // persistent history, rewritten fresh every RT-ready frame).
+        self.rt_irr_full_b = Some(make(width, height, rgba16, "node.render_scene rt_irr_full_b (RT-T1-D atrous)"));
+        self.rt_normal_full_b = Some(make(width, height, rgba16, "node.render_scene rt_normal_full_b (RT-T1-D atrous)"));
+        // RT-T1-C: ping-pong history pairs (irradiance, depth, normal) —
+        // see this struct's field doc comment for why two textures each.
+        self.rt_irr_history = [
+            make(width, height, rgba16, "node.render_scene rt_irr_history_a (RT-T1-C)"),
+            make(width, height, rgba16, "node.render_scene rt_irr_history_b (RT-T1-C)"),
+        ]
+        .map(Some);
+        self.rt_depth_history = [
+            make(width, height, manifold_gpu::GpuTextureFormat::R32Float, "node.render_scene rt_depth_history_a (RT-T1-C)"),
+            make(width, height, manifold_gpu::GpuTextureFormat::R32Float, "node.render_scene rt_depth_history_b (RT-T1-C)"),
+        ]
+        .map(Some);
+        self.rt_normal_history = [
+            make(width, height, rgba16, "node.render_scene rt_normal_history_a (RT-T1-C)"),
+            make(width, height, rgba16, "node.render_scene rt_normal_history_b (RT-T1-C)"),
+        ]
+        .map(Some);
+        // RT-T1-D (BUG-312): luminance-moments ping-pong history — `Rg32Float`
+        // (not `Rg16Float`) so `moment2 - moment1*moment1` doesn't collapse to
+        // noise under half-float's ~3-decimal-digit precision at the 1e-4 to
+        // 1e-5 variance scale this filter needs (see the MSL kernel's doc
+        // comment for the full cancellation argument).
+        self.rt_moments_history = [
+            make(width, height, manifold_gpu::GpuTextureFormat::Rg32Float, "node.render_scene rt_moments_history_a (RT-T1-D)"),
+            make(width, height, manifold_gpu::GpuTextureFormat::Rg32Float, "node.render_scene rt_moments_history_b (RT-T1-D)"),
+        ]
+        .map(Some);
+        self.rt_moments_valid = false;
+        self.rt_history_ping = 0;
         self.rt_irr_width = width;
         self.rt_irr_height = height;
         true
@@ -1487,6 +1591,16 @@ impl RenderScene {
         if self.rt_accumulate_params_buffer.is_none() {
             self.rt_accumulate_params_buffer = Some(device.create_buffer_shared(
                 std::mem::size_of::<manifold_gpu::raytrace::AccumulateParams>() as u64,
+            ));
+        }
+    }
+
+    /// RT-T1-D: CPU-mapped `AtrousParams` upload buffer — separate from
+    /// the other two params buffers above (same non-clobbering reason).
+    fn ensure_rt_atrous_params_buffer(&mut self, device: &manifold_gpu::GpuDevice) {
+        if self.rt_atrous_params_buffer.is_none() {
+            self.rt_atrous_params_buffer = Some(device.create_buffer_shared(
+                std::mem::size_of::<manifold_gpu::raytrace::AtrousParams>() as u64,
             ));
         }
     }
@@ -3072,6 +3186,7 @@ impl EffectNode for RenderScene {
                 self.ensure_rt_params_buffer(gpu.device);
                 let irr_reallocated = self.ensure_rt_irradiance(gpu.device, width, height);
                 self.ensure_rt_accumulate_params_buffer(gpu.device);
+                self.ensure_rt_atrous_params_buffer(gpu.device);
                 self.rt_irr_needs_reset = self.rt_irr_needs_reset || irr_reallocated;
             }
             // VOLUMETRIC_LIGHT_DESIGN.md D1/D3 (P2): the whole feature's
@@ -3343,6 +3458,10 @@ impl EffectNode for RenderScene {
                     index_buffer: None,
                     triangle_count: vcount(d.vertices) / 3,
                     transform: d.uniforms.model,
+                    // RT-T1-B: `MeshVertex`'s normal field offset (position
+                    // 12 bytes incl. pad + this) — see `mesh_common.rs`'s
+                    // `MeshVertex` layout.
+                    normal_offset: 16,
                 })
                 .collect();
 
@@ -3379,6 +3498,16 @@ impl EffectNode for RenderScene {
                 &mut self.rt_gi_materials_capacity,
                 gpu.device,
                 objects.len(),
+            );
+            // RT-T1-B: same cadence as `gi_materials` above — rebuilt from
+            // the SAME `objects` slice every RT-ready frame (below), not
+            // gated on the accel-rebuild key (an object's `transform` alone
+            // changing, e.g. animation, must refresh its normal_matrix too).
+            manifold_gpu::raytrace::ensure_normal_sources(
+                &mut self.rt_normal_sources,
+                &mut self.rt_normal_sources_capacity,
+                gpu.device,
+                &objects,
             );
             // BUG-308/RT-D4: a key change (first RT frame, or topology/
             // transform change) must NOT enqueue `build_accel` this same
@@ -3456,6 +3585,11 @@ impl EffectNode for RenderScene {
                         atmosphere.ambient_tint[1] * AMBIENT_IRRADIANCE_SCALE * scene_ambient,
                         atmosphere.ambient_tint[2] * AMBIENT_IRRADIANCE_SCALE * scene_ambient,
                     ],
+                    // RT-T1-B: the primary-visibility-ray origin for the
+                    // real interpolated-vertex-normal fetch (AO/GI cosine
+                    // sampling) — the SAME camera eye `render_scene.wgsl`'s
+                    // raster pass shades from.
+                    cam.pos,
                     inv_view_proj,
                 );
                 // RAYTRACING_DESIGN.md §5.2 P3: rebuild the per-object
@@ -3506,21 +3640,25 @@ impl EffectNode for RenderScene {
                 let tracer = self.rt_tracer.as_ref().expect("ensured above");
                 let accel = self.rt_accel.as_ref().expect("rt_ready implies rt_accel.is_some()");
                 let params_buffer = self.rt_params_buffer.as_ref().expect("ensured above");
+                let normal_sources_buffer = self.rt_normal_sources.as_ref().expect("ensured above");
                 let depth_tex = self.opaque_depth_snapshot.as_ref().expect("ensured above");
                 let mask_half = self.rt_mask_half.as_ref().expect("ensured above");
                 let mask_full = self.rt_mask_full.as_ref().expect("ensured above");
                 let irr_half = self.rt_irr_half.as_ref().expect("ensured above");
                 let irr_full = self.rt_irr_full.as_ref().expect("ensured above");
-                let irr_history = self.rt_irr_history.as_ref().expect("ensured above");
+                let normal_half = self.rt_normal_half.as_ref().expect("ensured above");
+                let normal_full = self.rt_normal_full.as_ref().expect("ensured above");
                 tracer.dispatch_shadow_rays(
                     gpu.native_enc,
                     accel,
                     &params,
                     params_buffer,
                     gi_materials_buffer,
+                    normal_sources_buffer,
                     depth_tex,
                     mask_half,
                     irr_half,
+                    normal_half,
                     "node.render_scene RT-D3/RT-P2/RT-P3 trace_shadow_rays",
                 );
                 tracer.upsample_shadow(
@@ -3531,8 +3669,63 @@ impl EffectNode for RenderScene {
                     mask_full,
                     irr_half,
                     irr_full,
+                    normal_half,
+                    normal_full,
                     "node.render_scene RT-D3/RT-P2 upsample_shadow",
                 );
+
+                // RT-T1-D (RAYTRACING_DESIGN.md §8 Tier-1 item 3, BUG-312):
+                // ATROUS_ITERATIONS total spatial-filter passes on the RT
+                // lighting signal — `upsample_shadow` above is pass 1 (the
+                // half->full resample, now also normal-weighted); the two
+                // dilated `atrous_pass` calls below are passes 2-3, steps
+                // 1 then 2 (brief's committed range: 2-3 total). An EVEN
+                // count of dilated passes (2 here) lands the final result
+                // back in `mask_full`/`irr_full`/`normal_full` — the
+                // buffers `accumulate_irradiance` below already reads — via
+                // the `_full_b` scratch set, so no downstream rebinding is
+                // needed.
+                const ATROUS_ITERATIONS: u32 = 3;
+                let read_idx = self.rt_history_ping;
+                let write_idx = 1 - read_idx;
+                let moments_read = self.rt_moments_history[read_idx].as_ref().expect("ensured above");
+                let atrous_params_buffer = self.rt_atrous_params_buffer.as_ref().expect("ensured above");
+                let mask_full_b = self.rt_mask_full_b.as_ref().expect("ensured above");
+                let irr_full_b = self.rt_irr_full_b.as_ref().expect("ensured above");
+                let normal_full_b = self.rt_normal_full_b.as_ref().expect("ensured above");
+                let history_valid = self.rt_moments_valid;
+                for pass in 0..(ATROUS_ITERATIONS - 1) {
+                    // T1-D: dilation starts at 2, not 1 — the AO/GI trace
+                    // dispatch is HALF-res (D11), so every 2x2 block of
+                    // full-res texels shares the identical raw noise
+                    // sample; a step=1 tap frequently lands in the SAME
+                    // block (an exact duplicate, not an independent noisy
+                    // sample) and does nothing to reduce variance. step=2
+                    // is the smallest offset guaranteed to cross into an
+                    // adjacent (independently-sampled) half-res block.
+                    let step = 2u32 << pass;
+                    let (src_sv, src_irr, src_n, dst_sv, dst_irr, dst_n) = if pass % 2 == 0 {
+                        (mask_full, irr_full, normal_full, mask_full_b, irr_full_b, normal_full_b)
+                    } else {
+                        (mask_full_b, irr_full_b, normal_full_b, mask_full, irr_full, normal_full)
+                    };
+                    let atrous_params = manifold_gpu::raytrace::AtrousParams::new([width, height], step, history_valid);
+                    tracer.atrous_pass(
+                        gpu.native_enc,
+                        &atrous_params,
+                        atrous_params_buffer,
+                        depth_tex,
+                        moments_read,
+                        src_sv,
+                        dst_sv,
+                        src_irr,
+                        dst_irr,
+                        src_n,
+                        dst_n,
+                        "node.render_scene RT-T1-D atrous_pass",
+                    );
+                }
+
                 // RAYTRACING_DESIGN.md §5.2 P2/D3, RT-D2: the ONE call site
                 // deciding "discard temporal history this frame" for this
                 // node's irradiance accumulator — ORs in a just-allocated
@@ -3542,21 +3735,50 @@ impl EffectNode for RenderScene {
                 // this `if rt_ready` branch is that one call.
                 let reset = self.rt_reset_detector.detect_reset(owner_key, &frame_time)
                     || std::mem::take(&mut self.rt_irr_needs_reset);
+                // RT-T1-C: `prev_view_proj` is the SAME local captured
+                // above (BUG-311) before `self.prev_view_proj` was
+                // overwritten to this frame's `view_proj` — exactly what
+                // MetalFX's own velocity pass reprojects with.
                 let accumulate_params = manifold_gpu::raytrace::AccumulateParams::new(
                     [width, height],
                     IRRADIANCE_ACCUM_ALPHA,
                     reset,
+                    inv_view_proj,
+                    prev_view_proj,
                 );
                 let accumulate_params_buffer =
                     self.rt_accumulate_params_buffer.as_ref().expect("ensured above");
+                // RT-T1-C: ping-pong — read last frame's write slot (same
+                // `read_idx`/`write_idx` the à-trous pass above already
+                // used for `moments_read`), write the OTHER (stale-from-
+                // two-frames-ago, about to be fully overwritten) slot, then
+                // flip so next frame reads what was just written.
+                let irr_history_read = self.rt_irr_history[read_idx].as_ref().expect("ensured above");
+                let irr_history_write = self.rt_irr_history[write_idx].as_ref().expect("ensured above");
+                let depth_history_read = self.rt_depth_history[read_idx].as_ref().expect("ensured above");
+                let depth_history_write = self.rt_depth_history[write_idx].as_ref().expect("ensured above");
+                let normal_history_read = self.rt_normal_history[read_idx].as_ref().expect("ensured above");
+                let normal_history_write = self.rt_normal_history[write_idx].as_ref().expect("ensured above");
+                let moments_write = self.rt_moments_history[write_idx].as_ref().expect("ensured above");
                 tracer.accumulate_irradiance(
                     gpu.native_enc,
                     &accumulate_params,
                     accumulate_params_buffer,
                     irr_full,
-                    irr_history,
-                    "node.render_scene RT-P2 accumulate_irradiance",
+                    depth_tex,
+                    normal_full,
+                    irr_history_read,
+                    irr_history_write,
+                    depth_history_read,
+                    depth_history_write,
+                    normal_history_read,
+                    normal_history_write,
+                    moments_read,
+                    moments_write,
+                    "node.render_scene RT-P2/RT-T1-C/RT-T1-D accumulate_irradiance",
                 );
+                self.rt_history_ping = write_idx;
+                self.rt_moments_valid = true;
 
                 // RAYTRACING_DESIGN.md §5.2 P3 (D5, "emissive-colored
                 // volumetric glow"): every emissive object becomes an
@@ -3685,10 +3907,12 @@ impl EffectNode for RenderScene {
         // stub discipline every optional texture in this shader uses),
         // dummy when RT isn't active this frame.
         let rt_mask_tex = self.rt_mask_full.as_ref().unwrap_or(dummy);
-        // RAYTRACING_DESIGN.md §5.2 P2: the temporally-accumulated
-        // demodulated-irradiance history (dummy when RT isn't active this
+        // RAYTRACING_DESIGN.md §5.2 P2, extended RT-T1-C: the temporally-
+        // accumulated demodulated-irradiance history — `rt_history_ping`
+        // always indexes whichever ping-pong slot `accumulate_irradiance`
+        // most recently WROTE this frame (dummy when RT isn't active this
         // frame — same ABI-stub discipline as `rt_mask_tex`).
-        let rt_irr_tex = self.rt_irr_history.as_ref().unwrap_or(dummy);
+        let rt_irr_tex = self.rt_irr_history[self.rt_history_ping].as_ref().unwrap_or(dummy);
         let binding_sets: Vec<[GpuBinding; 43]> = draws
             .iter()
             .map(|draw| {

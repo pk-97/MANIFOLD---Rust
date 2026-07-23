@@ -48,9 +48,10 @@ use objc2_metal::{
     MTLAccelerationStructureGeometryDescriptor, MTLAccelerationStructureInstanceDescriptor,
     MTLAccelerationStructureInstanceOptions, MTLAccelerationStructureTriangleGeometryDescriptor,
     MTLAccelerationStructureUsage, MTLAttributeFormat, MTLCommandBuffer, MTLCommandEncoder,
-    MTLCommandQueue, MTLCompileOptions, MTLComputePipelineState, MTLDevice,
-    MTLInstanceAccelerationStructureDescriptor, MTLIndexType, MTLLanguageVersion, MTLLibrary,
-    MTLPackedFloat3, MTLPackedFloat4x3, MTLPrimitiveAccelerationStructureDescriptor,
+    MTLCommandQueue, MTLCompileOptions, MTLComputeCommandEncoder, MTLComputePipelineState,
+    MTLDevice, MTLInstanceAccelerationStructureDescriptor, MTLIndexType, MTLLanguageVersion,
+    MTLLibrary, MTLPackedFloat3, MTLPackedFloat4x3, MTLPrimitiveAccelerationStructureDescriptor,
+    MTLSize,
 };
 
 use super::device::GpuDevice;
@@ -140,6 +141,20 @@ pub struct RtObjectGeometry<'a> {
     pub index_buffer: Option<&'a GpuBuffer>,
     pub triangle_count: u32,
     pub transform: [[f32; 4]; 4],
+    /// RT-T1-B: byte offset of the per-vertex NORMAL field within one
+    /// `vertex_stride`-sized vertex record in `vertex_buffer` — no separate
+    /// normal allocation; `MeshVertex` (render_scene.rs's production vertex
+    /// layout) already interleaves position/normal/uv, so this just names
+    /// where the normal lives (offset 16 for `MeshVertex`). Consumed by
+    /// [`build_normal_sources`] to build the per-object bindless indirection
+    /// table `trace_shadow_rays` reads at ray-hit time (real interpolated
+    /// vertex normals, replacing the depth finite-difference reconstruction
+    /// — RAYTRACING_DESIGN.md §8 Tier-1 item 2). A fixture whose geometry
+    /// carries no normal data at all (e.g. `rt_p1_shadow.rs`'s
+    /// position-only `PackedVertex`) may set this to any value AS LONG AS
+    /// `ao_spp`/`gi_spp` stay 0 — the only two consumers of the fetched
+    /// normal.
+    pub normal_offset: u32,
 }
 
 /// Encode this object's BLAS build onto an ALREADY-OPEN acceleration-
@@ -407,6 +422,10 @@ struct ShadowRayParams {
     uint   gi_spp;
     packed_float3 sun_color;     // RT-P2: premultiplied sun color*intensity
     packed_float3 ambient_color; // RT-P2: flat ambient/env color
+    // RT-T1-B: world-space camera eye — origin of the primary visibility
+    // ray cast to find the real hit triangle at this pixel (see
+    // `fetch_interpolated_normal` below). Unused when ao_spp==0 && gi_spp==0.
+    packed_float3 camera_pos;
     // RT-D3: ray origins come from the prepass DEPTH texture + this
     // inverse view-proj — no stored world-pos/normal G-buffer target in
     // P1. Column-major, matches `render_scene.rs`'s `mat4_inverse` output
@@ -425,12 +444,65 @@ struct GiMaterial {
     packed_float3 emissive; float _p1;   // linear HDR, premultiplied by intensity
 };
 
-// RT-P2/D3: mirrors the Rust `AccumulateParams` below field-for-field —
-// plain POD, no matrix, no alignment surprises.
+// RT-T1-B (RAYTRACING_DESIGN.md §8 Tier-1 item 2): per-object bindless
+// vertex-normal indirection — mirrors the Rust `RtNormalSource` field-for-
+// field (P0 §5.1 kernel lesson). `vertex_base_addr` is a raw GPU virtual
+// address (`MTLBuffer::gpuAddress()`, CPU-computed once per rebuild);
+// `normal_matrix_colN` are the object's world-space normal-transform
+// columns (uniform-scale assumption, see the Rust struct's doc comment).
+struct RtNormalSource {
+    ulong  vertex_base_addr;
+    uint   vertex_stride;
+    uint   normal_offset;
+    packed_float3 normal_matrix_col0;
+    packed_float3 normal_matrix_col1;
+    packed_float3 normal_matrix_col2;
+};
+
+// RT-T1-B: fetch this object's (`src`) vertex `vi`'s LOCAL-space normal via
+// its bindless GPU address, then transform to world space with `src`'s
+// normal matrix. `vi` is a flat, non-indexed triangle-list vertex index
+// (`primitive_id*3 + which_vertex` — render_scene.rs's ONLY RT-caster
+// convention today; an indexed RT-caster would need its own index-buffer
+// GPU address threaded too — un-suppression trigger if that ever shows up).
+static float3 fetch_world_normal(constant RtNormalSource& src, uint vi) {
+    device const uchar* base = (device const uchar*)src.vertex_base_addr;
+    device const packed_float3* n_ptr =
+        (device const packed_float3*)(base + (ulong)vi * (ulong)src.vertex_stride + (ulong)src.normal_offset);
+    float3 n_local = float3(*n_ptr);
+    float3x3 m = float3x3(float3(src.normal_matrix_col0), float3(src.normal_matrix_col1), float3(src.normal_matrix_col2));
+    return m * n_local;
+}
+
+// RT-T1-B: barycentric-interpolate the three vertices of triangle
+// `primitive_id` (flat, non-indexed layout) in `normal_sources[instance_id]`
+// and return the NORMALIZED world-space normal. Metal's ray-tracing
+// barycentric convention: hit = (1-u-v)*v0 + u*v1 + v*v2.
+static float3 fetch_interpolated_normal(constant RtNormalSource* normal_sources, uint instance_id, uint primitive_id, float2 bary) {
+    constant RtNormalSource& src = normal_sources[instance_id];
+    uint v0 = primitive_id * 3u, v1 = v0 + 1u, v2 = v0 + 2u;
+    float3 n0 = fetch_world_normal(src, v0);
+    float3 n1 = fetch_world_normal(src, v1);
+    float3 n2 = fetch_world_normal(src, v2);
+    float w0 = 1.0 - bary.x - bary.y;
+    float3 n = n0 * w0 + n1 * bary.x + n2 * bary.y;
+    float len2 = length_squared(n);
+    if (!isfinite(len2) || len2 < 1e-12) return float3(0, 1, 0);
+    return n * rsqrt(len2);
+}
+
+// RT-P2/D3 (extended RT-T1-C, BUG-311): mirrors the Rust `AccumulateParams`
+// below field-for-field. `inv_view_proj` (current frame) reconstructs this
+// texel's world position from `depth_tex`; `prev_view_proj` reprojects that
+// world position into the PREVIOUS frame to locate the history sample to
+// validate/blend — both matrices already exist on `RenderScene` for MetalFX
+// (RAYTRACING_DESIGN.md §8 Tier-1 item 1), no new CPU-side computation.
 struct AccumulateParams {
     uint2 size;
     float alpha;
     uint  reset;
+    float4x4 inv_view_proj;
+    float4x4 prev_view_proj;
 };
 
 static uint pcg(uint v) { v = v * 747796405u + 2891336453u; v = ((v >> ((v >> 28u) + 4u)) ^ v) * 277803737u; return (v >> 22u) ^ v; }
@@ -461,6 +533,34 @@ static float3 cosine_hemisphere(float3 n, float2 u) {
     return normalize(t * (r * cos(phi)) + b * (r * sin(phi)) + n * sqrt(max(0.0, 1.0 - u.x)));
 }
 
+// RT-T1-D (RAYTRACING_DESIGN.md §8 Tier-1 item 3, BUG-312): low-discrepancy
+// sample for AO/GI hemisphere directions ONLY (shadow rays keep `rand2`+
+// `cone_sample` — T1-D's brief scopes blue noise to AO/GI). R2 (Roberts
+// 2018) additive-recurrence sequence via the plastic-constant irrationals
+// — points 0..N of this sequence are far more evenly spread than N
+// independent white-noise draws, which is exactly what `AO_SAMPLES_PER_
+// PIXEL`=4 / `GI_SAMPLES_PER_PIXEL`=2 need (too few samples for white
+// noise's clustering/gaps not to show up as salt-and-pepper speckle,
+// BUG-312's symptom). Cranley-Patterson-rotated per pixel (a `pcg` hash of
+// the pixel as a fractional offset, wrapped with `fract`) so neighboring
+// pixels get DECORRELATED sample sets — without the rotation every pixel
+// would sample the identical directions, producing banding instead of
+// noise-like (but low-discrepancy) dithering.
+static float2 r2_sequence(uint index) {
+    const float a1 = 0.754877666246692760049508896358532874940835564978200; // 1/g
+    const float a2 = 0.569840290998053265911429807193052839282807640205691; // 1/g^2
+    float2 v = float2(a1 * float(index), a2 * float(index));
+    return v - floor(v);
+}
+static float2 blue_noise_sample(uint2 p, uint frame, uint ray, uint spp) {
+    uint index = frame * spp + ray;
+    float2 base = r2_sequence(index);
+    uint h = pcg(p.x ^ pcg(p.y));
+    float2 offset = float2((h & 0xFFFFu) / 65536.0, ((h >> 16u) & 0xFFFFu) / 65536.0);
+    float2 u = base + offset;
+    return u - floor(u);
+}
+
 // RT-D3: reconstruct world position from a full-res depth texel + the
 // inverse view-proj matrix — the SAME NDC<->UV convention
 // `render_scene.wgsl`'s `project_to_shadow_uv` uses (`uv.y = -ndc.y*0.5 +
@@ -482,10 +582,11 @@ static float3 world_pos_from_depth(uint2 pix, uint2 gbuffer_size, float raw_dept
 
 // Dispatch: trace_size (half-res, D11) grid. `depth_tex` is the full-res
 // opaque-depth prepass (RT-D3 — render_scene.rs's `opaque_depth_snapshot`,
-// forced on for RT-enabled scenes). Normal-for-bias is a screen-space
-// finite-difference of reconstructed world positions (RT-D3: same
-// technique as `ssao_gtao.rs`'s depth-only reconstruction — no new normal
-// G-buffer target in P1). Output (trace_size): out_sv.r = sun visibility
+// forced on for RT-enabled scenes). RT-T1-B: the AO/GI cosine-sampling
+// normal is a REAL interpolated vertex normal, fetched via a PRIMARY
+// visibility ray + [`RtNormalSource`]'s bindless per-object indirection —
+// replacing the P1-era screen-space depth finite-difference reconstruction
+// (camera-facing, wrong at silhouettes/thin geometry). Output (trace_size): out_sv.r = sun visibility
 // [0,1], out_sv.g = AO [0,1] (RT-P2: extends the SAME kernel/dispatch, not
 // a parallel pass — RAYTRACING_DESIGN.md §5.2 P2's D16 seam note). out_irr
 // (RT-P2): demodulated (no-albedo) irradiance = ambient_color*ao + gi —
@@ -493,12 +594,14 @@ static float3 world_pos_from_depth(uint2 pix, uint2 gbuffer_size, float raw_dept
 // accumulated downstream by `accumulate_irradiance`. No direct-sun term:
 // the raster light loop owns the sun (see the write site's comment).
 kernel void trace_shadow_rays(
-    instance_acceleration_structure  accel        [[buffer(0)]],
-    constant ShadowRayParams&        p            [[buffer(1)]],
-    constant GiMaterial*             gi_materials [[buffer(2)]],
-    depth2d<float>                   depth_tex    [[texture(0)]],
-    texture2d<float, access::write>  out_sv       [[texture(1)]],
-    texture2d<float, access::write>  out_irr      [[texture(2)]],
+    instance_acceleration_structure  accel          [[buffer(0)]],
+    constant ShadowRayParams&        p              [[buffer(1)]],
+    constant GiMaterial*             gi_materials   [[buffer(2)]],
+    constant RtNormalSource*         normal_sources [[buffer(3)]],
+    depth2d<float>                   depth_tex      [[texture(0)]],
+    texture2d<float, access::write>  out_sv         [[texture(1)]],
+    texture2d<float, access::write>  out_irr        [[texture(2)]],
+    texture2d<float, access::write>  out_n          [[texture(3)]],
     uint2 tid [[thread_position_in_grid]])
 {
     if (tid.x >= p.trace_size.x || tid.y >= p.trace_size.y) return;
@@ -512,20 +615,46 @@ kernel void trace_shadow_rays(
         // ambient-only (no surface to shadow-test against).
         out_sv.write(float4(1, 1, 0, 0), tid);
         out_irr.write(float4(p.ambient_color, 0), tid);
+        out_n.write(float4(0, 1, 0, 0), tid);
         return;
     }
-    // Finite-difference normal from neighbor world positions (screen-space
-    // reconstruction, RT-D3). Falls back to the +x/+y neighbor's delta
-    // alone at the image edge (still a fine bias direction — this is a
-    // ray-origin epsilon offset, not a shaded normal).
+    // Neighbor world positions (screen-space reconstruction, RT-D3) — kept
+    // ONLY for `texel_scale` below (the bias epsilon's scale-awareness);
+    // RT-T1-B moved normal reconstruction off this finite difference (see
+    // the primary-ray cast below). Falls back to the +x/+y neighbor's delta
+    // alone at the image edge.
     uint2 gx = min(gpix + uint2(1, 0), p.gbuffer_size - 1);
     uint2 gy = min(gpix + uint2(0, 1), p.gbuffer_size - 1);
     bool vx, vy;
     float3 wpx = world_pos_from_depth(gx, p.gbuffer_size, depth_tex.read(gx, 0), p.inv_view_proj, vx);
     float3 wpy = world_pos_from_depth(gy, p.gbuffer_size, depth_tex.read(gy, 0), p.inv_view_proj, vy);
-    float3 n = (vx && vy) ? normalize(cross(wpx - wp, wpy - wp)) : float3(0, 1, 0);
-    if (!isfinite(n.x) || !isfinite(n.y) || !isfinite(n.z) || length_squared(n) < 1e-8) {
-        n = float3(0, 1, 0);
+
+    // RT-T1-B (RAYTRACING_DESIGN.md §8 Tier-1 item 2): real interpolated
+    // vertex normal via a PRIMARY visibility ray from the camera through
+    // `wp` — only cast when a consumer needs it (AO/GI cosine-hemisphere
+    // sampling below; the shadow ray itself biases along `sun_dir`, not
+    // `n` — BUG-309 follow-up, further down). Falls back to a default
+    // up-normal if the primary ray somehow misses (should not happen: `wp`
+    // itself came from this same accel's geometry via the depth prepass,
+    // but a grazing-angle/epsilon edge case shouldn't crash the kernel).
+    float3 n = float3(0, 1, 0);
+    if (p.ao_spp > 0u || p.gi_spp > 0u) {
+        float3 to_surface = wp - float3(p.camera_pos);
+        float dist = length(to_surface);
+        if (dist > 1e-6) {
+            intersector<triangle_data, instancing> primary_i;
+            primary_i.assume_geometry_type(geometry_type::triangle);
+            primary_i.force_opacity(forced_opacity::opaque);
+            ray pr;
+            pr.origin = float3(p.camera_pos);
+            pr.direction = to_surface / dist;
+            pr.min_distance = 0.0;
+            pr.max_distance = dist + dist * 1e-3 + 1e-4;
+            auto phit = primary_i.intersect(pr, accel);
+            if (phit.type != intersection_type::none) {
+                n = fetch_interpolated_normal(normal_sources, phit.instance_id, phit.primitive_id, phit.triangle_barycentric_coord);
+            }
+        }
     }
     // BUG-309: a FIXED 1e-3 world-unit bias self-intersects almost
     // everywhere at real scene scale (confirmed via a per-pixel hit-t
@@ -558,15 +687,16 @@ kernel void trace_shadow_rays(
         texel_scale = 1e-3; // degenerate/singular reconstruction fallback
     }
     float bias_eps = min(texel_scale * 2.0, BIAS_EPS_CAP);
-    // BUG-309 follow-up: bias along `sun_dir` ONLY, not `n` — the
-    // finite-difference normal is reconstructed from two CLOSE depth
-    // samples (this scene's far=200 compresses raw depth into a narrow
-    // 0.9936-1.0 band, a real catastrophic-cancellation risk for a
-    // subtraction-based normal) and produced a visibly scattered, wide
-    // false-shadow footprint even after the epsilon-scale fix above —
-    // `sun_dir` is exact (a CPU-computed light direction, never
-    // reconstructed), so lifting along it alone is unaffected by that
-    // noise and still reliably clears a roughly-Y-up surface.
+    // BUG-309 follow-up: bias along `sun_dir` ONLY, not `n` — originally
+    // because the (now-removed) depth finite-difference normal was noisy
+    // at this scene's depth-precision scale and produced a visibly
+    // scattered, wide false-shadow footprint even after the epsilon-scale
+    // fix above. RT-T1-B's `n` is a real interpolated vertex normal now
+    // (no longer noisy), but `sun_dir` stays the bias direction anyway —
+    // it's exact (a CPU-computed light direction, never reconstructed) and
+    // this bias is a shadow-ray-only concern unrelated to AO/GI's `n`
+    // consumers; changing it is a separate, unscoped decision (T1-B's
+    // brief is normals, not shadow-bias direction).
     float3 origin = wp + p.sun_dir * bias_eps;
 
     intersector<triangle_data, instancing> shadow_i;
@@ -607,12 +737,17 @@ kernel void trace_shadow_rays(
         ao_r.min_distance = bias_eps * 0.5;
         ao_r.max_distance = p.ao_radius;
         for (uint s = 0; s < p.ao_spp; s++) {
-            ao_r.direction = cosine_hemisphere(n, rand2(tid, p.frame_index, 100u + s));
+            ao_r.direction = cosine_hemisphere(n, blue_noise_sample(tid, p.frame_index, s, p.ao_spp));
             if (shadow_i.intersect(ao_r, accel).type == intersection_type::none) ao += 1.0;
         }
         ao /= float(p.ao_spp);
     }
     out_sv.write(float4(vis, ao, 0, 0), tid);
+    // RT-T1-C (BUG-311): expose the SAME real interpolated vertex normal
+    // (`n`) already computed above for AO/GI cosine sampling, so
+    // `accumulate_irradiance`'s reprojection validity test can compare a
+    // real surface normal instead of reconstructing one from depth.
+    out_n.write(float4(n, 0), tid);
 
     // RT-P3 (RAYTRACING_DESIGN.md §5.2 P3, D4): one-bounce GI gather —
     // ported from the P0 prototype's `trace_lighting` GI block (ARC
@@ -637,7 +772,7 @@ kernel void trace_shadow_rays(
         gr.min_distance = bias_eps * 0.5;
         gr.max_distance = INFINITY;
         for (uint s = 0; s < p.gi_spp; s++) {
-            gr.direction = cosine_hemisphere(n, rand2(tid, p.frame_index, 300u + s));
+            gr.direction = cosine_hemisphere(n, blue_noise_sample(tid, p.frame_index, s, p.gi_spp));
             auto hit = gi_i.intersect(gr, accel);
             if (hit.type != intersection_type::none) {
                 uint oi = hit.instance_id;
@@ -645,35 +780,35 @@ kernel void trace_shadow_rays(
                 float3 hit_albedo = float3(gi_materials[oi].albedo);
                 // Sun-bounce: does sunlight reach the GI ray's hit point?
                 // One more any-hit ray, hit-point origin, same cone
-                // sampling as the primary shadow ray above. No hit-surface
-                // normal is available here (no per-object normal buffer is
-                // bound to this kernel — P1/P2 never needed one), so the
-                // bounce uses a flat average-cosine stand-in
-                // (SUN_BOUNCE_COS_APPROX) instead of a true hit n·l — a
-                // named, documented simplification, not invented physics;
-                // exact-normal bounce is a future refinement (would need a
-                // per-object vertex-normal buffer threaded through
-                // `RtObjectGeometry`, out of P3 scope).
+                // sampling as the primary shadow ray above. RT-T1-B: the
+                // hit-surface normal is now REAL (interpolated via
+                // [`RtNormalSource`], same GI ray's own hit — no extra
+                // trace needed), replacing the flat average-cosine
+                // stand-in this bounce used before a per-object
+                // vertex-normal buffer existed.
                 float3 hit_pos = gr.origin + gr.direction * hit.distance;
+                float3 hit_n = fetch_interpolated_normal(normal_sources, hit.instance_id, hit.primitive_id, hit.triangle_barycentric_coord);
                 ray sun_r;
                 sun_r.origin = hit_pos + p.sun_dir * bias_eps;
                 sun_r.direction = cone_sample(p.sun_dir, p.sun_cone, rand2(tid, p.frame_index, 400u + s));
                 sun_r.min_distance = bias_eps * 0.5;
                 sun_r.max_distance = INFINITY;
                 float hit_sun_vis = (shadow_i.intersect(sun_r, accel).type == intersection_type::none) ? 1.0 : 0.0;
+                float hit_ndotl = max(dot(hit_n, p.sun_dir), 0.0);
                 // Named, documented, tunable (RAYTRACING_DESIGN.md §5.2 P2's
                 // "denoiser/accumulation parameters are named constants"
-                // rule, extended to P3): folds the missing hit-normal
-                // cosine term AND the diffuse BRDF's 1/pi energy
-                // normalization (this term skips both — no hit normal is
-                // available, and the RECEIVING point's own albedo divide
-                // happens once downstream in `render_scene.wgsl`, per D3's
-                // demodulated-irradiance discipline) into one scale factor.
-                // Peter's morning gate tunes the exact look; committed
-                // range 0.02-0.3 (single-bounce diffuse light is always
-                // dimmer than its source, never comparable to direct sun).
+                // rule, extended to P3/T1-B): folds the diffuse BRDF's 1/pi
+                // energy normalization into one scale factor (the RECEIVING
+                // point's own albedo divide happens once downstream in
+                // `render_scene.wgsl`, per D3's demodulated-irradiance
+                // discipline) — `hit_ndotl` above now supplies the real
+                // cosine term this scale used to approximate outright.
+                // Peter's morning gate tuned this range against the OLD
+                // flat-cosine stand-in; `hit_ndotl` only ever makes the
+                // bounce dimmer or equal (never brighter) than that
+                // baseline, so the committed 0.02-0.3 range still holds.
                 const float SUN_BOUNCE_INTENSITY_SCALE = 0.08;
-                float3 bounce = hit_albedo * float3(p.sun_color) * hit_sun_vis * SUN_BOUNCE_INTENSITY_SCALE;
+                float3 bounce = hit_albedo * float3(p.sun_color) * hit_sun_vis * hit_ndotl * SUN_BOUNCE_INTENSITY_SCALE;
                 gi += hit_emissive + bounce;
             }
         }
@@ -695,13 +830,23 @@ kernel void trace_shadow_rays(
     out_irr.write(float4(irradiance, 0), tid);
 }
 
-// Depth-aware bilateral upsample: half-res (sun-visibility, AO) + demod.
-// irradiance -> full res (RT-D3's "D11 trivial pass"; RT-P2 widens the
-// SAME kernel to also carry the AO channel + the irradiance texture — one
-// dispatch, one guide, not a second upsample pass). Guide: full-res depth
-// only (raw NDC z — comparable directly without linearizing, since nearby
-// screen pixels at similar depth have proportionally similar raw-z
-// regardless of the projection's nonlinearity).
+// RT-T1-D shared luminance weighting (Rec.709) — used by both the
+// upsample gather below and `atrous_filter`'s edge-stopping function.
+static float luma(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
+
+// Depth+normal-aware bilateral upsample: half-res (sun-visibility, AO) +
+// demod. irradiance -> full res (RT-D3's "D11 trivial pass"; RT-P2 widened
+// the SAME kernel to also carry the AO channel + the irradiance texture —
+// one dispatch, one guide, not a second upsample pass; RT-T1-D adds a
+// normal-dot weight on top of the existing depth+bilinear gather — the
+// half-res `lo_n` primary-hit vertex normal T1-C already produces is
+// available here for free). Guide: full-res depth (raw NDC z — comparable
+// directly without linearizing) + the tap nearest the destination texel's
+// own normal as the edge-stop reference. VARIANCE guiding is applied in
+// the dilated `atrous_filter` passes that follow this stage (T1-D's
+// deliverable 2) — this initial half->full gather only ever has ONE
+// frame's raw (unaccumulated) signal to compare against, no temporal
+// variance estimate yet at this point in the pipeline.
 kernel void upsample_shadow(
     constant ShadowRayParams&       p         [[buffer(1)]],
     depth2d<float>                  depth_tex [[texture(0)]],
@@ -709,6 +854,13 @@ kernel void upsample_shadow(
     texture2d<float, access::write> hi_sv     [[texture(2)]],
     texture2d<float>                lo_irr    [[texture(3)]],
     texture2d<float, access::write> hi_irr    [[texture(4)]],
+    // RT-T1-C (BUG-311): the SAME bilateral upsample widened once more (D16's
+    // seam note) to carry the primary-hit vertex normal `trace_shadow_rays`
+    // now writes to `out_n` — `accumulate_irradiance`'s reprojection
+    // validity test needs a full-res CURRENT-frame normal, same as it
+    // already needed full-res CURRENT irradiance.
+    texture2d<float>                lo_n      [[texture(5)]],
+    texture2d<float, access::write> hi_n      [[texture(6)]],
     uint2 tid [[thread_position_in_grid]])
 {
     if (tid.x >= p.gbuffer_size.x || tid.y >= p.gbuffer_size.y) return;
@@ -716,54 +868,300 @@ kernel void upsample_shadow(
     if (d >= 1.0 - 1e-6) {
         hi_sv.write(float4(1, 1, 0, 0), tid);
         hi_irr.write(float4(p.ambient_color, 0), tid);
+        hi_n.write(float4(0, 1, 0, 0), tid);
         return;
     }
 
     float2 lo_uv = (float2(tid) + 0.5) / float2(p.gbuffer_size) * float2(p.trace_size);
     int2 lo_c = int2(lo_uv - 0.5);
-    float2 acc_sv = 0.0; float3 acc_irr = 0.0; float wsum = 0.0;
+    // RT-T1-D: reference normal for the edge-stop weight below — the tap
+    // nearest the destination texel (round, not floor/ceil, so it's
+    // whichever of the 2x2 gather's four taps this pixel is closest to).
+    int2 nearest_lo = clamp(int2(round(lo_uv - 0.5)), int2(0), int2(p.trace_size) - 1);
+    float3 ref_n = lo_n.read(uint2(nearest_lo)).xyz;
+    // UPSAMPLE_NORMAL_POWER: cosine power on the tap-vs-reference normal
+    // dot product — named per the P2 constants rule. Range 8-64: lower
+    // tolerates more silhouette blur across the 2x2 gather, higher rejects
+    // a differing-surface tap more sharply; 32 rejects a >~10 degree
+    // normal divergence to near-zero weight while still full-weighting a
+    // shared flat surface's own precision noise.
+    const float UPSAMPLE_NORMAL_POWER = 32.0;
+    float2 acc_sv = 0.0; float3 acc_irr = 0.0; float3 acc_n = 0.0; float wsum = 0.0;
     for (int dy = 0; dy <= 1; dy++)
     for (int dx = 0; dx <= 1; dx++) {
         int2 q = clamp(lo_c + int2(dx, dy), int2(0), int2(p.trace_size) - 1);
         uint2 gq = min(uint2((float2(q) + 0.5) / float2(p.trace_size) * float2(p.gbuffer_size)), p.gbuffer_size - 1);
         float qd = depth_tex.read(gq, 0);
+        float3 qn = lo_n.read(uint2(q)).xyz;
         float2 f = saturate(1.0 - fabs(lo_uv - 0.5 - float2(q)));
         float w_bilin = f.x * f.y;
         float w_depth = exp(-fabs(qd - d) / 0.001);
-        float w = max(w_bilin * w_depth, 1e-5);
+        float w_normal = pow(max(dot(ref_n, qn), 0.0), UPSAMPLE_NORMAL_POWER);
+        float w = max(w_bilin * w_depth * w_normal, 1e-5);
         acc_sv += lo_sv.read(uint2(q)).rg * w;
         acc_irr += lo_irr.read(uint2(q)).rgb * w;
+        acc_n += qn * w;
         wsum += w;
     }
     hi_sv.write(float4(acc_sv / wsum, 0, 0), tid);
     hi_irr.write(float4(acc_irr / wsum, 0), tid);
+    float3 n_avg = acc_n / wsum;
+    float n_len = length(n_avg);
+    hi_n.write(float4(n_len > 1e-4 ? n_avg / n_len : float3(0, 1, 0), 0), tid);
 }
 
-// RT-P2/D3: temporal accumulation of the demodulated irradiance texture —
-// the next stage of the SAME lighting pass (not a parallel denoiser
-// system). `reset` (driven by the SHARED
+// RT-T1-D (RAYTRACING_DESIGN.md §8 Tier-1 item 3, BUG-312): CPU mirror
+// below is `AtrousParams`. `history_valid` is 0 only on the very first
+// RT-ready frame of a fresh (or just-resized) irradiance history — before
+// `accumulate_irradiance` has ever written a moments texture, reading it
+// would be garbage, so the filter falls back to a fixed (non-variance)
+// luma sigma that frame (still depth+normal edge-stopped, just not yet
+// variance-adaptive).
+struct AtrousParams {
+    uint2 size;
+    uint  step;
+    uint  history_valid;
+};
+
+// RT-T1-D: edge-aware À-TROUS spatial filter — dilated by `p.step`
+// (Dammertz et al. 2010's "a-trous", French for "with holes": each
+// dispatch samples the SAME 4-tap cross pattern but at `step`-texel
+// spacing, so successive calls with step=1,2,4... cover an exponentially
+// widening support without extra taps per pass). REPLACES the old
+// depth-only bilateral upsample as the sole full-res spatial filter
+// (`upsample_shadow` above still does the half->full RESAMPLE with its
+// own depth+normal weights; this kernel is the denoiser proper, run
+// `ATROUS_ITERATIONS`-1 times full-res-to-full-res after it — see
+// `render_scene.rs`'s dispatch sequence). Edge-stopping weights:
+// - DEPTH: raw NDC-z, same discipline as `upsample_shadow`'s guide.
+// - NORMAL: cosine power against the center texel's own normal.
+// - LUMA/VARIANCE: SVGF's key trick — the luma edge-stop's sigma SCALES
+//   with sqrt(this texel's temporally-accumulated variance) (read from
+//   `moments_read`, RT-T1-D's moment-tracking addition to
+//   `accumulate_irradiance`, ONE FRAME LAGGED — same ping-pong-history
+//   lag convention `depth_history_read`/`normal_history_read` already
+//   use): a converged (low-variance) texel trusts its own signal and
+//   rejects a differing tap sharply (preserves detail); a noisy
+//   (high-variance) texel tolerates more difference before rejecting
+//   (blurs harder specifically where the noise is, not uniformly).
+kernel void atrous_filter(
+    constant AtrousParams&           p            [[buffer(1)]],
+    depth2d<float>                   depth_tex    [[texture(0)]],
+    texture2d<float>                 moments_read [[texture(1)]],
+    texture2d<float>                 src_sv       [[texture(2)]],
+    texture2d<float, access::write>  dst_sv       [[texture(3)]],
+    texture2d<float>                 src_irr      [[texture(4)]],
+    texture2d<float, access::write>  dst_irr      [[texture(5)]],
+    texture2d<float>                 src_n        [[texture(6)]],
+    texture2d<float, access::write>  dst_n        [[texture(7)]],
+    uint2 tid [[thread_position_in_grid]])
+{
+    if (tid.x >= p.size.x || tid.y >= p.size.y) return;
+    float center_depth = depth_tex.read(tid, 0);
+    if (center_depth >= 1.0 - 1e-6) {
+        // Void background: pass through unfiltered (nothing to edge-stop
+        // against; matches every other stage's void-background handling).
+        dst_sv.write(src_sv.read(tid), tid);
+        dst_irr.write(src_irr.read(tid), tid);
+        dst_n.write(src_n.read(tid), tid);
+        return;
+    }
+    float3 center_n = src_n.read(tid).xyz;
+    float3 center_irr = src_irr.read(tid).rgb;
+    float center_luma = luma(center_irr);
+    float center_var = 0.0;
+    if (p.history_valid != 0u) {
+        float2 mo = moments_read.read(tid).rg;
+        center_var = max(mo.g - mo.r * mo.r, 0.0);
+    }
+    // ATROUS_DEPTH_SIGMA: raw NDC-z units, same scale `upsample_shadow`'s
+    // 0.001 depth guide uses. ATROUS_NORMAL_POWER: same range/rationale as
+    // `upsample_shadow`'s `UPSAMPLE_NORMAL_POWER` above. ATROUS_LUMA_
+    // SIGMA_FLOOR/SCALE: range 4-16 for the scale (lower = more aggressive
+    // blur at a given variance; the SVGF paper's reference is ~4, we start
+    // conservative at 8) — the floor (0.05) keeps `history_valid==0`'s
+    // first frame and any genuinely zero-variance texel from collapsing
+    // to a near-infinitely-sharp (effectively unfiltered) luma weight.
+    const float ATROUS_DEPTH_SIGMA = 3e-3;
+    const float ATROUS_NORMAL_POWER = 16.0;
+    const float ATROUS_LUMA_SIGMA_SCALE = 8.0;
+    const float ATROUS_LUMA_SIGMA_FLOOR = 0.15;
+    float luma_sigma = max(ATROUS_LUMA_SIGMA_SCALE * sqrt(center_var), ATROUS_LUMA_SIGMA_FLOOR);
+    // Full 3x3 neighborhood (8 taps, diagonals included) rather than a
+    // 4-tap cross: with only `ATROUS_ITERATIONS`=3 total passes budgeted
+    // (T1-D's 2-3 range), each pass needs to average enough independent
+    // noisy AO/GI samples on its own — a cross-only kernel left visible
+    // residual speckle at this scene's sample counts even after 2 dilated
+    // passes; the diagonal taps roughly double the averaged sample count
+    // per pass for the same dilation radius.
+    const int2 offsets[8] = {
+        int2(1, 0), int2(-1, 0), int2(0, 1), int2(0, -1),
+        int2(1, 1), int2(1, -1), int2(-1, 1), int2(-1, -1)
+    };
+    float3 acc_irr = center_irr;
+    float2 acc_sv = src_sv.read(tid).rg;
+    float wsum = 1.0;
+    for (int i = 0; i < 8; i++) {
+        int2 q = int2(tid) + offsets[i] * int(p.step);
+        if (q.x < 0 || q.y < 0 || q.x >= int(p.size.x) || q.y >= int(p.size.y)) continue;
+        uint2 uq = uint2(q);
+        float qd = depth_tex.read(uq, 0);
+        if (qd >= 1.0 - 1e-6) continue;
+        float3 qn = src_n.read(uq).xyz;
+        float3 qirr = src_irr.read(uq).rgb;
+        float w_depth = exp(-fabs(qd - center_depth) / ATROUS_DEPTH_SIGMA);
+        float w_normal = pow(max(dot(center_n, qn), 0.0), ATROUS_NORMAL_POWER);
+        float w_luma = exp(-fabs(luma(qirr) - center_luma) / luma_sigma);
+        float w = w_depth * w_normal * w_luma;
+        acc_irr += qirr * w;
+        acc_sv += src_sv.read(uq).rg * w;
+        wsum += w;
+    }
+    dst_irr.write(float4(acc_irr / wsum, 0), tid);
+    dst_sv.write(float4(acc_sv / wsum, 0, 0), tid);
+    dst_n.write(float4(center_n, 0), tid);
+}
+
+// RT-P2/D3, extended RT-T1-C (BUG-311): temporal accumulation of the
+// demodulated irradiance texture — the next stage of the SAME lighting pass
+// (not a parallel denoiser system). `reset` (driven by the SHARED
 // `crate::node_graph::temporal_reset::TemporalResetDetector` — RT-D2; the
 // negative-rg gate enforces there is exactly one reset-detection call
-// site) discards history outright (cold start / post-cut); otherwise an
-// exponential moving average toward this frame's value at `alpha` keeps
-// history — this is the numeric mechanism that makes a same-clip light-
-// intensity strobe differ from a cold-start render (D3's "strobes are not
-// cuts"). `history` is read_write: read this frame's stale value, write
-// the blended (or copied) result in place.
+// site) discards history outright (cold start / post-cut). Otherwise this
+// texel's world position (reconstructed from `depth_tex` + `p.inv_view_proj`)
+// is reprojected into the PREVIOUS frame via `p.prev_view_proj` to find
+// where this surface point was last frame — same-texel blending (the P2
+// baseline) ghosts behind ANY motion because it never asks "is this still
+// the same surface point"; reprojection is the fix. The reprojected sample
+// is REJECTED (falls back to this frame's raw value, no history blend) on
+// a depth or normal mismatch against `*_history_read` (an off-screen
+// reprojection also rejects) — SVGF's standard disocclusion test. Every
+// history channel is PING-PONGED (`*_read`/`*_write` are two distinct
+// textures, swapped by the caller each frame): a single read_write texture
+// would race, since one thread's write destination (`tid`) can be another
+// thread's read source (`prev_tid`) within the same dispatch, with no
+// ordering guarantee between compute threads.
 kernel void accumulate_irradiance(
-    constant AccumulateParams&           p       [[buffer(1)]],
-    texture2d<float>                     hi_irr  [[texture(0)]],
-    texture2d<float, access::read_write> history [[texture(1)]],
+    constant AccumulateParams&           p                    [[buffer(1)]],
+    texture2d<float>                     hi_irr               [[texture(0)]],
+    depth2d<float>                       depth_tex            [[texture(1)]],
+    texture2d<float>                     hi_normal            [[texture(2)]],
+    texture2d<float>                     history_read         [[texture(3)]],
+    texture2d<float, access::write>      history_write        [[texture(4)]],
+    texture2d<float>                     depth_history_read   [[texture(5)]],
+    texture2d<float, access::write>      depth_history_write  [[texture(6)]],
+    texture2d<float>                     normal_history_read  [[texture(7)]],
+    texture2d<float, access::write>      normal_history_write [[texture(8)]],
+    // RT-T1-D (BUG-312): per-texel luminance moments (r=mean, g=mean-of-
+    // squares) — the SAME ping-pong-history discipline as the depth/
+    // normal pairs above, feeding `atrous_filter`'s variance-adaptive luma
+    // sigma (one-frame-lagged, like every other history read here).
+    // `Rg32Float` (not `Rg16Float`): `moment2 - moment1*moment1` is a
+    // difference of two close, similarly-scaled numbers — half-float's
+    // ~3-decimal-digit precision would swallow variances at the 1e-4 to
+    // 1e-5 scale this filter needs to resolve (catastrophic cancellation).
+    texture2d<float>                     moments_read         [[texture(9)]],
+    texture2d<float, access::write>      moments_write        [[texture(10)]],
     uint2 tid [[thread_position_in_grid]])
 {
     if (tid.x >= p.size.x || tid.y >= p.size.y) return;
     float4 cur = hi_irr.read(tid);
+    float  cur_depth = depth_tex.read(tid, 0);
+    float3 cur_normal = hi_normal.read(tid).xyz;
+    float  cur_luma = luma(cur.xyz);
+
     if (p.reset != 0u) {
-        history.write(cur, tid);
+        history_write.write(cur, tid);
+        depth_history_write.write(float4(cur_depth, 0, 0, 0), tid);
+        normal_history_write.write(float4(cur_normal, 0), tid);
+        moments_write.write(float4(cur_luma, cur_luma * cur_luma, 0, 0), tid);
         return;
     }
-    float4 prev = history.read(tid);
-    history.write(mix(prev, cur, p.alpha), tid);
+
+    // Camera motion only: `wp` is reprojected as a static world-space
+    // point (no per-object `prev_model` term — this screen-space pass has
+    // no per-pixel object id to look one up with). Exact for a static
+    // scene under camera motion (the ORBIT oracle's case); for an
+    // animated object's own pixels the depth/normal test below simply
+    // fails and falls back to current-frame-only, same as any other
+    // disocclusion — no ghosting, just less temporal amortization on that
+    // object until reprojection re-agrees.
+    bool valid = false;
+    float3 blended = cur.xyz;
+    float moment1 = cur_luma;
+    float moment2 = cur_luma * cur_luma;
+    if (cur_depth < 1.0 - 1e-6) {
+        float2 uv = (float2(tid) + 0.5) / float2(p.size);
+        float4 clip = float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, cur_depth, 1.0);
+        float4 wh = p.inv_view_proj * clip;
+        float3 wp = wh.xyz / wh.w;
+
+        float4 prev_clip = p.prev_view_proj * float4(wp, 1.0);
+        if (prev_clip.w > 1e-6) {
+            float3 prev_ndc = prev_clip.xyz / prev_clip.w;
+            float2 prev_uv = float2(prev_ndc.x * 0.5 + 0.5, 0.5 - prev_ndc.y * 0.5);
+            if (all(prev_uv >= 0.0) && all(prev_uv <= 1.0) && prev_ndc.z >= 0.0 && prev_ndc.z <= 1.0) {
+                int2 pt = clamp(int2(prev_uv * float2(p.size)), int2(0), int2(p.size) - 1);
+                uint2 prev_tid = uint2(pt);
+                float  stored_depth  = depth_history_read.read(prev_tid).r;
+                float3 stored_normal = normal_history_read.read(prev_tid).xyz;
+                // DEPTH_REJECT_THRESHOLD: raw NDC-z units — directly
+                // comparable without linearizing (same discipline
+                // `upsample_shadow`'s depth guide already uses). 5e-3
+                // rejects a genuinely different surface/depth layer while
+                // tolerating one shared surface's own NDC-z precision
+                // noise across a single frame of camera motion.
+                const float DEPTH_REJECT_THRESHOLD = 5e-3;
+                // NORMAL_REJECT_COS_THRESHOLD: cosine of the angle between
+                // this frame's and the reprojected history's normal — 0.9
+                // (~26 degrees) rejects a silhouette/edge texel whose
+                // reprojection lands on a different face while tolerating
+                // the same surface's normal drifting slightly under one
+                // frame of camera motion or animation.
+                const float NORMAL_REJECT_COS_THRESHOLD = 0.9;
+                bool depth_ok = fabs(stored_depth - prev_ndc.z) < DEPTH_REJECT_THRESHOLD;
+                bool normal_ok = dot(normalize(stored_normal), cur_normal) > NORMAL_REJECT_COS_THRESHOLD;
+                if (depth_ok && normal_ok) {
+                    float4 hist = history_read.read(prev_tid);
+                    blended = mix(hist.xyz, cur.xyz, p.alpha);
+                    valid = true;
+                    float2 stored_moments = moments_read.read(prev_tid).rg;
+                    moment1 = mix(stored_moments.r, cur_luma, p.alpha);
+                    moment2 = mix(stored_moments.g, cur_luma * cur_luma, p.alpha);
+                }
+            }
+        }
+    }
+    history_write.write(valid ? float4(blended, 0) : cur, tid);
+    depth_history_write.write(float4(cur_depth, 0, 0, 0), tid);
+    normal_history_write.write(float4(cur_normal, 0), tid);
+    moments_write.write(float4(moment1, moment2, 0, 0), tid);
+}
+
+// RT-T1-B value-level test surface ONLY (`docs/RAYTRACING_DESIGN.md` §8
+// Tier-1 item 2's gate: "kernel-visible normal for a known 2-triangle
+// fixture matches CPU expected"). Exercises the EXACT SAME
+// `fetch_interpolated_normal` helper `trace_shadow_rays` calls internally,
+// against caller-supplied instance/primitive/barycentric inputs — no ray
+// tracing or RNG involved, so the interpolation math alone is under test,
+// deterministically. Not part of the production dispatch path (never
+// called by `render_scene.rs`) — see `manifold_gpu::raytrace::
+// debug_fetch_interpolated_normal`, its only caller.
+struct DebugFetchNormalParams {
+    uint instance_id;
+    uint primitive_id;
+    packed_float2 bary;
+};
+
+kernel void debug_fetch_interpolated_normal(
+    constant RtNormalSource*         normal_sources [[buffer(0)]],
+    constant DebugFetchNormalParams& p              [[buffer(1)]],
+    device packed_float3*            out_normal     [[buffer(2)]],
+    uint tid [[thread_position_in_grid]])
+{
+    if (tid != 0u) return;
+    float3 n = fetch_interpolated_normal(normal_sources, p.instance_id, p.primitive_id, float2(p.bary));
+    out_normal[0] = packed_float3(n);
 }
 "#;
 
@@ -805,18 +1203,27 @@ pub struct ShadowRayParams {
     /// accumulation parameters are named constants" rule; the exact
     /// intensity is Peter's morning-gate tuning call, not baked in here).
     pub ambient_color: [f32; 3],
-    /// MSL's `float4x4` requires 16-byte alignment; the 76 bytes above it
-    /// need 4 more to reach the next 16-byte boundary (80) — RT-P3 added
-    /// `gi_spp` (4 bytes) to the prefix, shrinking this pad from 8 to 4
-    /// bytes; the total struct size (144) and `inv_view_proj`'s offset (80)
-    /// are UNCHANGED (see the offset/size asserts below). `#[repr(C)]`
-    /// does NOT know `[[f32; 4]; 4]` needs 16-byte alignment (its natural
-    /// alignment is 4, from `f32`) — without this pad, the GPU reads
-    /// `inv_view_proj` starting early, same alignment-gotcha class as the
-    /// `packed_float3` lesson (P0 §5.1), just for a matrix instead of a
-    /// vec3. Caught by the offset assert below — don't resize this padding
-    /// without re-deriving the offset.
-    _pad_align_mat4: [u32; 1],
+    /// RT-T1-B: world-space camera eye position — the origin of the
+    /// PRIMARY visibility ray `trace_shadow_rays` now casts (closest-hit,
+    /// toward the depth-reconstructed `wp`) to find which triangle/instance
+    /// is actually visible at this pixel, so the AO/GI cosine-hemisphere
+    /// sampling normal can be a REAL interpolated vertex normal (via
+    /// [`RtNormalSource`]) instead of a depth finite-difference
+    /// reconstruction. Unused (may be left zeroed) when `ao_spp == 0 &&
+    /// gi_spp == 0` — the only two consumers of that normal.
+    pub camera_pos: [f32; 3],
+    /// MSL's `float4x4` requires 16-byte alignment; the 88 bytes above it
+    /// need 8 more to reach the next 16-byte boundary (96) — RT-T1-B added
+    /// `camera_pos` (12 bytes) to the prefix, shrinking this pad from 4 to
+    /// 2 `u32`s; the total struct size (160) and `inv_view_proj`'s offset
+    /// (96) are UNCHANGED from what they'd otherwise be (see the offset/
+    /// size asserts below). `#[repr(C)]` does NOT know `[[f32; 4]; 4]`
+    /// needs 16-byte alignment (its natural alignment is 4, from `f32`) —
+    /// without this pad, the GPU reads `inv_view_proj` starting early, same
+    /// alignment-gotcha class as the `packed_float3` lesson (P0 §5.1), just
+    /// for a matrix instead of a vec3. Caught by the offset assert below —
+    /// don't resize this padding without re-deriving the offset.
+    _pad_align_mat4: [u32; 2],
     /// Column-major, matches `render_scene.rs`'s `mat4_inverse` output.
     pub inv_view_proj: [[f32; 4]; 4],
 }
@@ -837,6 +1244,7 @@ impl ShadowRayParams {
         gi_spp: u32,
         sun_color: [f32; 3],
         ambient_color: [f32; 3],
+        camera_pos: [f32; 3],
         inv_view_proj: [[f32; 4]; 4],
     ) -> Self {
         Self {
@@ -851,7 +1259,8 @@ impl ShadowRayParams {
             gi_spp,
             sun_color,
             ambient_color,
-            _pad_align_mat4: [0; 1],
+            camera_pos,
+            _pad_align_mat4: [0; 2],
             inv_view_proj,
         }
     }
@@ -885,11 +1294,93 @@ impl GiMaterial {
 
 // RT-D3/RT-P2 alignment gotcha (see `_pad_align_mat4`'s doc comment): this
 // is the regression guard a GPU test alone wouldn't localize as clearly —
-// if `inv_view_proj`'s offset ever drifts from 80 again (a field
+// if `inv_view_proj`'s offset ever drifts from 96 again (a field
 // reordered/resized above it), this fails at compile time instead of
 // silently reading garbage on the GPU.
-const _: () = assert!(std::mem::offset_of!(ShadowRayParams, inv_view_proj) == 80);
-const _: () = assert!(std::mem::size_of::<ShadowRayParams>() == 144);
+const _: () = assert!(std::mem::offset_of!(ShadowRayParams, inv_view_proj) == 96);
+const _: () = assert!(std::mem::size_of::<ShadowRayParams>() == 160);
+
+/// RT-T1-B (RAYTRACING_DESIGN.md §8 Tier-1 item 2): per-object bindless
+/// indirection for real vertex-normal interpolation in the RT trace kernel
+/// — one entry per object, SAME order as the `objects` slice `build_accel`
+/// was called with (so `hit.instance_id` at any ray hit indexes this
+/// directly, identical convention to [`GiMaterial`]). `vertex_base_addr` is
+/// `MTLBuffer::gpuAddress()` (via [`GpuBuffer::gpu_address`]) PLUS the
+/// object's `vertex_offset` already folded in — the kernel reads
+/// `vertex_base_addr + vertex_index * vertex_stride + normal_offset` as a
+/// raw `packed_float3`. Reading an arbitrary object's vertex buffer this
+/// way needs no separate `useResource` call: the SAME buffers are already
+/// referenced by the bound acceleration structure (`build_accel`'s BLAS
+/// geometry descriptors), and Metal makes every resource an acceleration
+/// structure transitively references resident when the structure itself is
+/// bound (`setAccelerationStructure_atBufferIndex`) — confirmed by this
+/// exact kernel already ray-tracing against these same buffers for the
+/// hardware intersection test.
+///
+/// `normal_matrix` is the object's WORLD-space transform for normals — RT-
+/// T1-B takes the model matrix's upper-left 3x3 directly (a NAMED,
+/// documented simplification: correct for uniform scale, wrong for
+/// non-uniform scale, which needs the inverse-transpose instead — same
+/// "named, documented simplification, not invented physics" discipline as
+/// `SUN_BOUNCE_INTENSITY_SCALE` above; un-suppression trigger: a real
+/// RT-caster scene using non-uniform scale on an RT-shadowed object).
+/// Column-major, 3 `packed_float3` columns in MSL.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct RtNormalSource {
+    pub vertex_base_addr: u64,
+    pub vertex_stride: u32,
+    pub normal_offset: u32,
+    pub normal_matrix: [[f32; 3]; 3],
+}
+
+const _: () = assert!(std::mem::size_of::<RtNormalSource>() == 56);
+
+/// Column-major `[[f32; 4]; 4]` model matrix -> its upper-left 3x3 (see
+/// [`RtNormalSource`]'s doc comment for the uniform-scale assumption).
+fn normal_matrix_from_model(m: [[f32; 4]; 4]) -> [[f32; 3]; 3] {
+    [
+        [m[0][0], m[0][1], m[0][2]],
+        [m[1][0], m[1][1], m[1][2]],
+        [m[2][0], m[2][1], m[2][2]],
+    ]
+}
+
+/// (Re)allocate-if-needed + rewrite in place the per-object
+/// [`RtNormalSource`] indirection table from the SAME `objects` slice
+/// `build_accel`/`refit_accel` use — same "grow, never shrink-then-
+/// reallocate every frame" idiom as `render_scene.rs`'s `ensure_rt_gi_
+/// materials`; rewritten every RT-ready frame (cheap: N small POD structs,
+/// same cadence as that file's `gi_materials_data` rebuild). Never requires
+/// a GPU readback of the actual vertex data itself — the bindless address
+/// does that lookup on the GPU, at ray-hit time.
+pub fn ensure_normal_sources(
+    slot: &mut Option<GpuBuffer>,
+    capacity: &mut usize,
+    device: &GpuDevice,
+    objects: &[RtObjectGeometry],
+) {
+    let needed = objects.len().max(1);
+    if slot.is_none() || *capacity < needed {
+        *slot = Some(device.create_buffer_shared((needed * std::mem::size_of::<RtNormalSource>()) as u64));
+        *capacity = needed;
+    }
+    let buf = slot.as_ref().expect("just ensured above");
+    let ptr = buf
+        .mapped_ptr()
+        .expect("RT normal-source buffer must be CPU-mapped");
+    for (i, obj) in objects.iter().enumerate() {
+        let src = RtNormalSource {
+            vertex_base_addr: obj.vertex_buffer.gpu_address() + obj.vertex_offset as u64,
+            vertex_stride: obj.vertex_stride,
+            normal_offset: obj.normal_offset,
+            normal_matrix: normal_matrix_from_model(obj.transform),
+        };
+        unsafe {
+            std::ptr::write_unaligned(ptr.add(i * std::mem::size_of::<RtNormalSource>()) as *mut _, src);
+        }
+    }
+}
 
 /// CPU mirror of the MSL `AccumulateParams` struct backing
 /// `accumulate_irradiance` — RAYTRACING_DESIGN.md §5.2 P2/D3's temporal-
@@ -907,17 +1398,79 @@ pub struct AccumulateParams {
     /// flip keeps the blend, which is exactly what makes the numeric
     /// strobe-proof differ from a cold start).
     pub reset: u32,
+    /// RT-T1-C (BUG-311): current-frame inverse view-proj, for
+    /// reconstructing this texel's world position from `depth_tex` — SAME
+    /// matrix `ShadowRayParams::inv_view_proj` already carries this frame.
+    pub inv_view_proj: [[f32; 4]; 4],
+    /// RT-T1-C (BUG-311): PREVIOUS frame's view-proj, for reprojecting the
+    /// reconstructed world position to locate/validate the history sample.
+    /// Already threaded through `RenderScene` for MetalFX
+    /// (RAYTRACING_DESIGN.md §8 Tier-1 item 1); no new CPU-side matrix.
+    pub prev_view_proj: [[f32; 4]; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<AccumulateParams>() == 16);
+// `size`(8) + `alpha`(4) + `reset`(4) = 16 bytes — already a multiple of
+// 16, so both `float4x4` columns that follow land on a 16-byte boundary
+// with no explicit padding needed (unlike `ShadowRayParams`'s
+// `inv_view_proj`, which needed one). Asserted directly rather than
+// re-derived, same discipline as the `ShadowRayParams` guard above.
+const _: () = assert!(std::mem::offset_of!(AccumulateParams, inv_view_proj) == 16);
+const _: () = assert!(std::mem::offset_of!(AccumulateParams, prev_view_proj) == 80);
+const _: () = assert!(std::mem::size_of::<AccumulateParams>() == 144);
 
 impl AccumulateParams {
-    pub fn new(size: [u32; 2], alpha: f32, reset: bool) -> Self {
+    pub fn new(
+        size: [u32; 2],
+        alpha: f32,
+        reset: bool,
+        inv_view_proj: [[f32; 4]; 4],
+        prev_view_proj: [[f32; 4]; 4],
+    ) -> Self {
         Self {
             size,
             alpha,
             reset: reset as u32,
+            inv_view_proj,
+            prev_view_proj,
         }
+    }
+}
+
+/// CPU mirror of the MSL `AtrousParams` struct backing `atrous_filter`
+/// (RT-T1-D, BUG-312). Plain POD, all `u32`, no alignment surprises.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct AtrousParams {
+    pub size: [u32; 2],
+    /// Dilation step in texels (1, 2, 4, ... — see the kernel doc comment).
+    pub step: u32,
+    /// 0 on the first RT-ready frame of a fresh/resized irradiance
+    /// history (before `accumulate_irradiance` has ever written a moments
+    /// texture) — the kernel falls back to a fixed luma sigma that frame.
+    pub history_valid: u32,
+}
+
+const _: () = assert!(std::mem::size_of::<AtrousParams>() == 16);
+
+impl AtrousParams {
+    pub fn new(size: [u32; 2], step: u32, history_valid: bool) -> Self {
+        Self {
+            size,
+            step,
+            history_valid: history_valid as u32,
+        }
+    }
+}
+
+fn atrous_params_bytes(params: &AtrousParams) -> &[u8] {
+    // SAFETY: `AtrousParams` is `#[repr(C)]`, all-POD (u32 fields only),
+    // no padding, no interior pointers — same discipline as
+    // `bytemuck_bytes`/`accumulate_params_bytes`.
+    unsafe {
+        std::slice::from_raw_parts(
+            (params as *const AtrousParams) as *const u8,
+            std::mem::size_of::<AtrousParams>(),
+        )
     }
 }
 
@@ -1003,7 +1556,11 @@ pub trait ShadowRayTracer {
     /// (the full-res opaque-depth prepass) + `params.inv_view_proj` — no
     /// world-pos/normal G-buffer target. Writes (sun visibility, AO) to
     /// `out_sv` and demodulated irradiance (now including the GI gather)
-    /// to `out_irr`, both at `params.trace_size`.
+    /// to `out_irr`, both at `params.trace_size`. RT-T1-B: `normal_sources`
+    /// is the per-object [`RtNormalSource`] bindless table (built via
+    /// [`build_normal_sources`] from the SAME `objects` slice `accel` was
+    /// built from) — feeds the primary-ray-cast real vertex normal AO/GI
+    /// sample against, and the GI bounce's hit-point normal.
     #[allow(clippy::too_many_arguments)]
     fn dispatch_shadow_rays(
         &self,
@@ -1012,16 +1569,20 @@ pub trait ShadowRayTracer {
         params: &ShadowRayParams,
         params_buffer: &GpuBuffer,
         gi_materials: &GpuBuffer,
+        normal_sources: &GpuBuffer,
         depth_tex: &GpuTexture,
         out_sv: &GpuTexture,
         out_irr: &GpuTexture,
+        out_n: &GpuTexture,
         label: &str,
     );
 
-    /// Depth-aware bilateral upsample of the half-res `lo_sv`/`lo_irr`
-    /// terms to full G-buffer resolution `hi_sv`/`hi_irr` (RT-D3's "D11
-    /// trivial pass"; RT-P2 widens the SAME upsample to also carry
-    /// irradiance).
+    /// Depth-aware bilateral upsample of the half-res `lo_sv`/`lo_irr`/
+    /// `lo_n` terms to full G-buffer resolution `hi_sv`/`hi_irr`/`hi_n`
+    /// (RT-D3's "D11 trivial pass"; RT-P2 widened the SAME upsample to
+    /// also carry irradiance; RT-T1-C widens it once more to carry the
+    /// primary-hit vertex normal `accumulate_irradiance`'s reprojection
+    /// validity test needs).
     #[allow(clippy::too_many_arguments)]
     fn upsample_shadow(
         &self,
@@ -1032,24 +1593,67 @@ pub trait ShadowRayTracer {
         hi_sv: &GpuTexture,
         lo_irr: &GpuTexture,
         hi_irr: &GpuTexture,
+        lo_n: &GpuTexture,
+        hi_n: &GpuTexture,
         label: &str,
     );
 
-    /// RT-P2/D3: temporal-accumulate `hi_irr` (this frame's raw
-    /// demodulated irradiance) into `history` in place — `params.reset`
-    /// discards history (cold start / post-cut, driven by the SHARED
-    /// `TemporalResetDetector` — RT-D2), else blends toward `hi_irr` at
-    /// `params.alpha`. `history`'s CURRENT content is read back
-    /// in-kernel, so it must already hold either a prior frame's result
-    /// or be freshly allocated (any content — the very first call after
-    /// allocation should pass `reset: true`, which never reads it).
+    /// RT-T1-D (RAYTRACING_DESIGN.md §8 Tier-1 item 3, BUG-312): one
+    /// dilated edge-aware à-trous pass, full-res to full-res, guided by
+    /// `depth_tex` + `src_n`'s own normal + `moments_read`'s variance
+    /// (one-frame-lagged, from the LAST `accumulate_irradiance` call —
+    /// same lag convention as the depth/normal history reads). Called
+    /// `ATROUS_ITERATIONS`-1 times by the caller with an increasing
+    /// `step` (1, 2, ...), after `upsample_shadow` has already produced
+    /// the initial full-res `src_*` set.
+    #[allow(clippy::too_many_arguments)]
+    fn atrous_pass(
+        &self,
+        encoder: &mut GpuEncoder,
+        params: &AtrousParams,
+        params_buffer: &GpuBuffer,
+        depth_tex: &GpuTexture,
+        moments_read: &GpuTexture,
+        src_sv: &GpuTexture,
+        dst_sv: &GpuTexture,
+        src_irr: &GpuTexture,
+        dst_irr: &GpuTexture,
+        src_n: &GpuTexture,
+        dst_n: &GpuTexture,
+        label: &str,
+    );
+
+    /// RT-P2/D3, extended RT-T1-C (BUG-311): temporal-accumulate `hi_irr`
+    /// (this frame's raw demodulated irradiance) into `history_write`,
+    /// reprojecting `history_read` through `params.prev_view_proj` and
+    /// validating against `depth_history_read`/`normal_history_read`
+    /// before trusting it (falls back to `hi_irr` alone on mismatch or
+    /// disocclusion) — `params.reset` discards history outright (cold
+    /// start / post-cut, driven by the SHARED `TemporalResetDetector` —
+    /// RT-D2). Every history channel is a `(read, write)` PING-PONG PAIR:
+    /// the caller must pass last frame's write-target as this frame's
+    /// read-target and swap after the call — a single read_write texture
+    /// would race (see the kernel's own doc comment).
+    #[allow(clippy::too_many_arguments)]
     fn accumulate_irradiance(
         &self,
         encoder: &mut GpuEncoder,
         params: &AccumulateParams,
         params_buffer: &GpuBuffer,
         hi_irr: &GpuTexture,
-        history: &GpuTexture,
+        depth_tex: &GpuTexture,
+        hi_normal: &GpuTexture,
+        history_read: &GpuTexture,
+        history_write: &GpuTexture,
+        depth_history_read: &GpuTexture,
+        depth_history_write: &GpuTexture,
+        normal_history_read: &GpuTexture,
+        normal_history_write: &GpuTexture,
+        // RT-T1-D (BUG-312): per-texel luminance moments ping-pong pair —
+        // see the `atrous_filter`/`accumulate_irradiance` MSL kernel doc
+        // comments.
+        moments_read: &GpuTexture,
+        moments_write: &GpuTexture,
         label: &str,
     );
 }
@@ -1060,7 +1664,14 @@ pub trait ShadowRayTracer {
 pub struct MetalShadowRayTracer {
     trace_pipeline: GpuComputePipeline,
     upsample_pipeline: GpuComputePipeline,
+    /// RT-T1-D (BUG-312): the dilated edge-aware à-trous filter pipeline.
+    atrous_pipeline: GpuComputePipeline,
     accumulate_pipeline: GpuComputePipeline,
+    /// RT-T1-B value-test-only surface (`debug_fetch_interpolated_normal`'s
+    /// only caller) — see the MSL `debug_fetch_interpolated_normal` kernel's
+    /// doc comment. Always compiled (tiny kernel, negligible cost); never
+    /// dispatched by the production `render_scene.rs` path.
+    debug_fetch_normal_pipeline: GpuComputePipeline,
 }
 
 impl MetalShadowRayTracer {
@@ -1088,9 +1699,11 @@ impl MetalShadowRayTracer {
             identity_slot_map(&[
                 (1, SlotKind::Buffer),
                 (2, SlotKind::Buffer), // RT-P3: gi_materials, MSL [[buffer(2)]]
+                (3, SlotKind::Buffer), // RT-T1-B: normal_sources, MSL [[buffer(3)]]
                 (0, SlotKind::Texture),
                 (1, SlotKind::Texture),
                 (2, SlotKind::Texture),
+                (3, SlotKind::Texture), // RT-T1-C: out_n, MSL [[texture(3)]]
             ]),
         );
         let upsample_pipeline = compile_pipeline(
@@ -1104,6 +1717,24 @@ impl MetalShadowRayTracer {
                 (2, SlotKind::Texture),
                 (3, SlotKind::Texture),
                 (4, SlotKind::Texture),
+                (5, SlotKind::Texture), // RT-T1-C: lo_n
+                (6, SlotKind::Texture), // RT-T1-C: hi_n
+            ]),
+        );
+        let atrous_pipeline = compile_pipeline(
+            device,
+            &library,
+            "atrous_filter",
+            identity_slot_map(&[
+                (1, SlotKind::Buffer),
+                (0, SlotKind::Texture), // depth_tex
+                (1, SlotKind::Texture), // moments_read
+                (2, SlotKind::Texture), // src_sv
+                (3, SlotKind::Texture), // dst_sv
+                (4, SlotKind::Texture), // src_irr
+                (5, SlotKind::Texture), // dst_irr
+                (6, SlotKind::Texture), // src_n
+                (7, SlotKind::Texture), // dst_n
             ]),
         );
         let accumulate_pipeline = compile_pipeline(
@@ -1112,16 +1743,104 @@ impl MetalShadowRayTracer {
             "accumulate_irradiance",
             identity_slot_map(&[
                 (1, SlotKind::Buffer),
-                (0, SlotKind::Texture),
-                (1, SlotKind::Texture),
+                (0, SlotKind::Texture), // RT-T1-C: hi_irr
+                (1, SlotKind::Texture), // RT-T1-C: depth_tex
+                (2, SlotKind::Texture), // RT-T1-C: hi_normal
+                (3, SlotKind::Texture), // RT-T1-C: history_read
+                (4, SlotKind::Texture), // RT-T1-C: history_write
+                (5, SlotKind::Texture), // RT-T1-C: depth_history_read
+                (6, SlotKind::Texture), // RT-T1-C: depth_history_write
+                (7, SlotKind::Texture), // RT-T1-C: normal_history_read
+                (8, SlotKind::Texture), // RT-T1-C: normal_history_write
+                (9, SlotKind::Texture),  // RT-T1-D: moments_read
+                (10, SlotKind::Texture), // RT-T1-D: moments_write
+            ]),
+        );
+        let debug_fetch_normal_pipeline = compile_pipeline(
+            device,
+            &library,
+            "debug_fetch_interpolated_normal",
+            identity_slot_map(&[
+                (0, SlotKind::Buffer),
+                (1, SlotKind::Buffer),
+                (2, SlotKind::Buffer),
             ]),
         );
 
         Self {
             trace_pipeline,
             upsample_pipeline,
+            atrous_pipeline,
             accumulate_pipeline,
+            debug_fetch_normal_pipeline,
         }
+    }
+
+    /// RT-T1-B value-test-only entry point (`docs/RAYTRACING_DESIGN.md` §8
+    /// Tier-1 item 2's gate) — dispatches the SAME `fetch_interpolated_normal`
+    /// MSL helper `trace_shadow_rays` uses internally, against caller-
+    /// supplied `(instance_id, primitive_id, barycentric)` inputs, no ray
+    /// tracing/RNG involved. Synchronous (commits and waits) — test-only
+    /// call pattern, never used on a hot path.
+    pub fn debug_fetch_interpolated_normal(
+        &self,
+        device: &GpuDevice,
+        normal_sources: &GpuBuffer,
+        instance_id: u32,
+        primitive_id: u32,
+        bary: [f32; 2],
+    ) -> [f32; 3] {
+        #[repr(C)]
+        #[derive(Clone, Copy)]
+        struct DebugFetchNormalParams {
+            instance_id: u32,
+            primitive_id: u32,
+            bary: [f32; 2],
+        }
+        let params = DebugFetchNormalParams {
+            instance_id,
+            primitive_id,
+            bary,
+        };
+        let params_buffer = device.create_buffer_shared(std::mem::size_of::<DebugFetchNormalParams>() as u64);
+        let params_ptr = params_buffer
+            .mapped_ptr()
+            .expect("debug params buffer must be CPU-mapped");
+        unsafe {
+            std::ptr::write_unaligned(params_ptr as *mut DebugFetchNormalParams, params);
+        }
+        let out_buffer = device.create_buffer_shared(16); // packed_float3, rounded up
+        out_buffer.zero_fill();
+
+        let cb = device
+            .raw_queue()
+            .commandBuffer()
+            .expect("Failed to acquire command buffer for RT-T1-B debug dispatch");
+        let enc: Retained<ProtocolObject<dyn MTLComputeCommandEncoder>> = cb
+            .computeCommandEncoder()
+            .expect("computeCommandEncoder failed");
+        unsafe {
+            enc.setComputePipelineState(&self.debug_fetch_normal_pipeline.state);
+            enc.setBuffer_offset_atIndex(Some(normal_sources.raw()), 0, 0);
+            enc.setBuffer_offset_atIndex(Some(params_buffer.raw()), 0, 1);
+            enc.setBuffer_offset_atIndex(Some(out_buffer.raw()), 0, 2);
+            enc.dispatchThreadgroups_threadsPerThreadgroup(
+                MTLSize { width: 1, height: 1, depth: 1 },
+                MTLSize { width: 1, height: 1, depth: 1 },
+            );
+        }
+        enc.endEncoding();
+        cb.commit();
+        unsafe { cb.waitUntilCompleted() };
+
+        let out_ptr = out_buffer
+            .mapped_ptr()
+            .expect("debug output buffer must be CPU-mapped");
+        let mut result = [0.0f32; 3];
+        unsafe {
+            std::ptr::copy_nonoverlapping(out_ptr as *const f32, result.as_mut_ptr(), 3);
+        }
+        result
     }
 }
 
@@ -1143,9 +1862,11 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         params: &ShadowRayParams,
         params_buffer: &GpuBuffer,
         gi_materials: &GpuBuffer,
+        normal_sources: &GpuBuffer,
         depth_tex: &GpuTexture,
         out_sv: &GpuTexture,
         out_irr: &GpuTexture,
+        out_n: &GpuTexture,
         label: &str,
     ) {
         params_buffer.upload(bytemuck_bytes(params));
@@ -1165,6 +1886,11 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                     buffer: gi_materials,
                     offset: 0,
                 },
+                GpuBinding::Buffer {
+                    binding: 3,
+                    buffer: normal_sources,
+                    offset: 0,
+                },
                 GpuBinding::Texture {
                     binding: 0,
                     texture: depth_tex,
@@ -1176,6 +1902,10 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                 GpuBinding::Texture {
                     binding: 2,
                     texture: out_irr,
+                },
+                GpuBinding::Texture {
+                    binding: 3,
+                    texture: out_n,
                 },
             ],
             groups,
@@ -1192,6 +1922,8 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         hi_sv: &GpuTexture,
         lo_irr: &GpuTexture,
         hi_irr: &GpuTexture,
+        lo_n: &GpuTexture,
+        hi_n: &GpuTexture,
         label: &str,
     ) {
         // `params.gbuffer_size` (already uploaded by `dispatch_shadow_rays`
@@ -1229,6 +1961,77 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                     binding: 4,
                     texture: hi_irr,
                 },
+                GpuBinding::Texture {
+                    binding: 5,
+                    texture: lo_n,
+                },
+                GpuBinding::Texture {
+                    binding: 6,
+                    texture: hi_n,
+                },
+            ],
+            groups,
+            label,
+        );
+    }
+
+    fn atrous_pass(
+        &self,
+        encoder: &mut GpuEncoder,
+        params: &AtrousParams,
+        params_buffer: &GpuBuffer,
+        depth_tex: &GpuTexture,
+        moments_read: &GpuTexture,
+        src_sv: &GpuTexture,
+        dst_sv: &GpuTexture,
+        src_irr: &GpuTexture,
+        dst_irr: &GpuTexture,
+        src_n: &GpuTexture,
+        dst_n: &GpuTexture,
+        label: &str,
+    ) {
+        params_buffer.upload(atrous_params_bytes(params));
+        let groups = dispatch_groups_2d(params.size, SHADOW_WORKGROUP);
+        encoder.dispatch_compute(
+            &self.atrous_pipeline,
+            &[
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: params_buffer,
+                    offset: 0,
+                },
+                GpuBinding::Texture {
+                    binding: 0,
+                    texture: depth_tex,
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: moments_read,
+                },
+                GpuBinding::Texture {
+                    binding: 2,
+                    texture: src_sv,
+                },
+                GpuBinding::Texture {
+                    binding: 3,
+                    texture: dst_sv,
+                },
+                GpuBinding::Texture {
+                    binding: 4,
+                    texture: src_irr,
+                },
+                GpuBinding::Texture {
+                    binding: 5,
+                    texture: dst_irr,
+                },
+                GpuBinding::Texture {
+                    binding: 6,
+                    texture: src_n,
+                },
+                GpuBinding::Texture {
+                    binding: 7,
+                    texture: dst_n,
+                },
             ],
             groups,
             label,
@@ -1241,7 +2044,16 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         params: &AccumulateParams,
         params_buffer: &GpuBuffer,
         hi_irr: &GpuTexture,
-        history: &GpuTexture,
+        depth_tex: &GpuTexture,
+        hi_normal: &GpuTexture,
+        history_read: &GpuTexture,
+        history_write: &GpuTexture,
+        depth_history_read: &GpuTexture,
+        depth_history_write: &GpuTexture,
+        normal_history_read: &GpuTexture,
+        normal_history_write: &GpuTexture,
+        moments_read: &GpuTexture,
+        moments_write: &GpuTexture,
         label: &str,
     ) {
         params_buffer.upload(accumulate_params_bytes(params));
@@ -1260,7 +2072,43 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                 },
                 GpuBinding::Texture {
                     binding: 1,
-                    texture: history,
+                    texture: depth_tex,
+                },
+                GpuBinding::Texture {
+                    binding: 2,
+                    texture: hi_normal,
+                },
+                GpuBinding::Texture {
+                    binding: 3,
+                    texture: history_read,
+                },
+                GpuBinding::Texture {
+                    binding: 4,
+                    texture: history_write,
+                },
+                GpuBinding::Texture {
+                    binding: 5,
+                    texture: depth_history_read,
+                },
+                GpuBinding::Texture {
+                    binding: 6,
+                    texture: depth_history_write,
+                },
+                GpuBinding::Texture {
+                    binding: 7,
+                    texture: normal_history_read,
+                },
+                GpuBinding::Texture {
+                    binding: 8,
+                    texture: normal_history_write,
+                },
+                GpuBinding::Texture {
+                    binding: 9,
+                    texture: moments_read,
+                },
+                GpuBinding::Texture {
+                    binding: 10,
+                    texture: moments_write,
                 },
             ],
             groups,

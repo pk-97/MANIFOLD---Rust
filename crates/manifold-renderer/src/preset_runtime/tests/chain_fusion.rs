@@ -1220,7 +1220,7 @@
         let toggled = vec![fb.clone(), cg_off];
 
         let build = |effects: &[PresetInstance], prior: Option<&mut PresetRuntime>| {
-            PresetRuntime::try_build(ChainBuildInputs { effects: effects, groups: &[], primitives: &primitives, device: &device, pool: None, width: w, height: h, preview_effect: None }, prior)
+            PresetRuntime::try_build(ChainBuildInputs { effects, groups: &[], primitives: &primitives, device: &device, pool: None, width: w, height: h, preview_effect: None }, prior)
             .expect("chain builds")
         };
 
@@ -1275,7 +1275,7 @@
         let cg_first = vec![cg.clone(), fb.clone()];
 
         let build = |effects: &[PresetInstance], prior: Option<&mut PresetRuntime>| {
-            PresetRuntime::try_build(ChainBuildInputs { effects: effects, groups: &[], primitives: &primitives, device: &device, pool: None, width: w, height: h, preview_effect: None }, prior)
+            PresetRuntime::try_build(ChainBuildInputs { effects, groups: &[], primitives: &primitives, device: &device, pool: None, width: w, height: h, preview_effect: None }, prior)
             .expect("chain builds")
         };
 
