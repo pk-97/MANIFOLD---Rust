@@ -631,7 +631,11 @@ LANDING_PROTOCOL_REMINDER = (
     "repeat. Twin-killers: never cherry-pick/re-commit content that already "
     "exists as commits on a live branch (merge it instead, so SHAs stay "
     "shared); never delete a branch until `git merge-base --is-ancestor <tip> "
-    "origin/main` confirms its commits are on main."
+    "origin/main` confirms its commits are on main. The gate includes the UI "
+    "flow gate: `python3 scripts/run_ui_flows.py --touched origin/main...HEAD` "
+    "(path-scoped via the flow manifest's path_triggers; exits 0 immediately "
+    "when no flow-mapped path is touched — BUG-313 shipped because nobody ran "
+    "the flows)."
 )
 
 

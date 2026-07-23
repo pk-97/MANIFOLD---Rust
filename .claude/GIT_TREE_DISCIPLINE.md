@@ -116,7 +116,11 @@ origin main` (allow + reminder present); `merge <branch>` while on main
   branch → rerun the gate (touched-crate clippy + focused tests; the full
   workspace sweep — workspace clippy `--tests` + `cargo nextest run --workspace` +
   `cargo deny check bans` — at batched landings per §2c, or sooner when blast
-  radius says so) → `git merge --no-ff` into main → push → if the push is
+  radius says so; plus the UI flow gate — `python3 scripts/run_ui_flows.py
+  --touched origin/main...HEAD` — path-scoped via the flow manifest's
+  `path_triggers`, exits 0 immediately when no flow-mapped path is touched;
+  added after BUG-313 shipped with its catching flow red and unrun) →
+  `git merge --no-ff` into main → push → if the push is
   rejected because someone landed first, repeat. New/renamed docs need
   `python3 scripts/gen_docs_index.py` before the sweep — a freshness test
   enforces it. The gate also owns status housekeeping: in the worktree, run
