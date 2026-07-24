@@ -136,6 +136,95 @@ PATCHES = [
             "            # Flash lanes. Dropping yields plain text/tool_use — the\n"
             "            # non-thinking shape the haiku slot expects. Reasoning tokens are\n"
             "            # billed upstream regardless; the drop only strips them off the wire.\n"
+            "            # NOTE: the pre-translation strip in streaming_iterator.py is the\n"
+            "            # primary guard (empty text_deltas on tool_use blocks); this site\n"
+            "            # is defense in depth for paths that bypass the iterator.\n"
+        ),
+    },
+    # --- reasoning strip pre-translation (2026-07-24, glm-4.7 lead, second
+    # round): the transformation.py drop above still emits an EMPTY text_delta
+    # for each pure-reasoning chunk, and DeepSeek streams reasoning AFTER tool
+    # call deltas — so the empty text_delta lands on the open tool_use block
+    # and the harness errors "Content block is not a text block" on every
+    # tool-using turn (confirmed by SSE capture). Fix at the iterator: strip
+    # reasoning_content from each chunk BEFORE translation and skip chunks
+    # that carry nothing else (finish_reason/usage chunks always pass).
+    {
+        "file": "litellm/llms/anthropic/experimental_pass_through/adapters/streaming_iterator.py",
+        # anchor = the module-level import just above the insertion point
+        # (insert lands between it and the TYPE_CHECKING block / first class).
+        "anchor": "from litellm.types.utils import AdapterCompletionStreamWrapper\n",
+        "insert": (
+            "\n\ndef _manifold_reasoning_only_chunk(chunk) -> bool:\n"
+            "    # MANIFOLD local patch: strip upstream reasoning deltas BEFORE\n"
+            "    # translation. opencode deepseek-v4-flash reasons unconditionally and\n"
+            "    # streams reasoning AFTER tool-call deltas; translated to empty\n"
+            "    # text_delta events those land on the open tool_use block and the CC\n"
+            "    # harness parser errors \"Content block is not a text block\" (every\n"
+            "    # tool-using turn, 2026-07-24). Returns True when the chunk carries\n"
+            "    # ONLY reasoning (skip it); reasoning is also stripped in place from\n"
+            "    # chunks that must pass (finish_reason / usage / content / tool_calls).\n"
+            "    if not getattr(chunk, \"choices\", None):\n"
+            "        return False\n"
+            "    reasoning_only = True\n"
+            "    for _choice in chunk.choices:\n"
+            "        if getattr(_choice, \"finish_reason\", None):\n"
+            "            reasoning_only = False\n"
+            "        _delta = getattr(_choice, \"delta\", None)\n"
+            "        if _delta is None:\n"
+            "            continue\n"
+            "        if getattr(_delta, \"reasoning_content\", None):\n"
+            "            try:\n"
+            "                _delta.reasoning_content = None\n"
+            "            except Exception:\n"
+            "                pass\n"
+            "        if getattr(_delta, \"content\", None):\n"
+            "            reasoning_only = False\n"
+            "        if getattr(_delta, \"tool_calls\", None):\n"
+            "            reasoning_only = False\n"
+            "    return reasoning_only\n"
+            "\n\n"
+        ),
+    },
+    {
+        "file": "litellm/llms/anthropic/experimental_pass_through/adapters/streaming_iterator.py",
+        "regex": (
+            r"(                if chunk == \"None\" or chunk is None:\n"
+            r"                    raise Exception\n)"
+            r"(?!                # MANIFOLD local patch: skip pure-reasoning)"
+        ),
+        "replace": (
+            "\\1"
+            "                # MANIFOLD local patch: skip pure-reasoning chunks (see\n"
+            "                # _manifold_reasoning_only_chunk above).\n"
+            "                if _manifold_reasoning_only_chunk(chunk):\n"
+            "                    continue\n"
+        ),
+    },
+    {
+        # Round 3 (2026-07-24): the residual stray delta. opencode emits
+        # empty-choices chunks with NO usage field (`x-opencode-type:
+        # inference-cost` carrying `normalizedUsage`, plus a trailing
+        # `{"choices":[],"cost":"0"}` after [DONE]) — these never enter the
+        # usage-merge path (which keys on chunk.usage), so they hit the D-48
+        # keepalive translation and emit an empty text_delta against whatever
+        # block is current: after a tool call, the CLOSED tool_use block →
+        # harness "Content block is not a text block" on every tool turn.
+        # Skip empty-choices chunks unless they carry a usage to merge.
+        "file": "litellm/llms/anthropic/experimental_pass_through/adapters/streaming_iterator.py",
+        "regex": (
+            r"    if not getattr\(chunk, \"choices\", None\):\n"
+            r"        return False\n"
+        ),
+        "replace": (
+            "    if not getattr(chunk, \"choices\", None):\n"
+            "        # MANIFOLD local patch: empty-choices keepalive/cost chunks with\n"
+            "        # no usage to merge (opencode inference-cost / post-[DONE] noise)\n"
+            "        # translate to an empty text_delta on the CURRENT block — after a\n"
+            "        # tool call that is a closed tool_use block, a protocol violation\n"
+            "        # the CC harness rejects. Skip them; usage-carrying chunks pass\n"
+            "        # through to the merge path.\n"
+            "        return getattr(chunk, \"usage\", None) is None\n"
         ),
     },
 ]
