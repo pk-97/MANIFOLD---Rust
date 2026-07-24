@@ -456,6 +456,13 @@ struct ShadowRayParams {
     // ray cast to find the real hit triangle at this pixel (see
     // `fetch_interpolated_normal` below). Unused when ao_spp==0 && gi_spp==0.
     packed_float3 camera_pos;
+    // RT-R1 (§9.3): reflection-ray config — mirrors the Rust fields
+    // field-for-field (refl_spp / refl_max_roughness / refl_rough_band /
+    // _pad_refl). Inert in T3 (kernel reads these in T5).
+    uint   refl_spp;
+    float  refl_max_roughness;
+    float  refl_rough_band;
+    uint   _pad_refl;
     // RT-D3: ray origins come from the prepass DEPTH texture + this
     // inverse view-proj — no stored world-pos/normal G-buffer target in
     // P1. Column-major, matches `render_scene.rs`'s `mat4_inverse` output
@@ -1416,17 +1423,26 @@ pub struct ShadowRayParams {
     /// reconstruction. Unused (may be left zeroed) when `ao_spp == 0 &&
     /// gi_spp == 0` — the only two consumers of that normal.
     pub camera_pos: [f32; 3],
-    /// MSL's `float4x4` requires 16-byte alignment; the 88 bytes above it
-    /// need 8 more to reach the next 16-byte boundary (96) — RT-T1-B added
-    /// `camera_pos` (12 bytes) to the prefix, shrinking this pad from 4 to
-    /// 2 `u32`s; the total struct size (160) and `inv_view_proj`'s offset
-    /// (96) are UNCHANGED from what they'd otherwise be (see the offset/
-    /// size asserts below). `#[repr(C)]` does NOT know `[[f32; 4]; 4]`
-    /// needs 16-byte alignment (its natural alignment is 4, from `f32`) —
-    /// without this pad, the GPU reads `inv_view_proj` starting early, same
-    /// alignment-gotcha class as the `packed_float3` lesson (P0 §5.1), just
-    /// for a matrix instead of a vec3. Caught by the offset assert below —
-    /// don't resize this padding without re-deriving the offset.
+    /// RT-R1 (RAYTRACING §9.3, RD7/RD8): reflection-ray config. `refl_spp`
+    /// = reflection rays/pixel (1 in v1; 0 disables the branch — inert in
+    /// T3, the kernel reads these in T5). `refl_max_roughness` =
+    /// RT_REFLECTION_MAX_ROUGHNESS (0.6 starting, RD7 BRDF-domain split);
+    /// `refl_rough_band` = the blend-band width. `_pad_refl` makes the
+    /// block a clean 16B so `_pad_align_mat4` still lands `inv_view_proj`
+    /// on its 16-byte boundary (now 112, was 96).
+    pub refl_spp: u32,
+    pub refl_max_roughness: f32,
+    pub refl_rough_band: f32,
+    _pad_refl: u32,
+    /// MSL's `float4x4` requires 16-byte alignment; the 104 bytes above it
+    /// (88 through `camera_pos` + 16 for RT-R1's `refl_*` block) need 8
+    /// more to reach the next 16-byte boundary (112) — so this 8B pad
+    /// (`[u32; 2]`) lands `inv_view_proj` at 112. `#[repr(C)]` does NOT
+    /// know `[[f32; 4]; 4]` needs 16-byte alignment (natural alignment 4,
+    /// from `f32`) — without this pad the GPU reads `inv_view_proj` early,
+    /// the same alignment-gotcha class as the `packed_float3` lesson
+    /// (P0 §5.1) for a matrix. Caught by the offset assert below — don't
+    /// resize this padding without re-deriving the offset.
     _pad_align_mat4: [u32; 2],
     /// Column-major, matches `render_scene.rs`'s `mat4_inverse` output.
     pub inv_view_proj: [[f32; 4]; 4],
@@ -1450,6 +1466,9 @@ impl ShadowRayParams {
         ambient_color: [f32; 3],
         camera_pos: [f32; 3],
         inv_view_proj: [[f32; 4]; 4],
+        refl_spp: u32,
+        refl_max_roughness: f32,
+        refl_rough_band: f32,
     ) -> Self {
         Self {
             sun_dir,
@@ -1464,6 +1483,10 @@ impl ShadowRayParams {
             sun_color,
             ambient_color,
             camera_pos,
+            refl_spp,
+            refl_max_roughness,
+            refl_rough_band,
+            _pad_refl: 0,
             _pad_align_mat4: [0; 2],
             inv_view_proj,
         }
@@ -1506,8 +1529,8 @@ impl GiMaterial {
 // if `inv_view_proj`'s offset ever drifts from 96 again (a field
 // reordered/resized above it), this fails at compile time instead of
 // silently reading garbage on the GPU.
-const _: () = assert!(std::mem::offset_of!(ShadowRayParams, inv_view_proj) == 96);
-const _: () = assert!(std::mem::size_of::<ShadowRayParams>() == 160);
+const _: () = assert!(std::mem::offset_of!(ShadowRayParams, inv_view_proj) == 112);
+const _: () = assert!(std::mem::size_of::<ShadowRayParams>() == 176);
 
 /// RT-T1-B (RAYTRACING_DESIGN.md §8 Tier-1 item 2): per-object bindless
 /// indirection for real vertex-normal interpolation in the RT trace kernel

@@ -3964,6 +3964,14 @@ impl EffectNode for RenderScene {
                     // raster pass shades from.
                     cam.pos,
                     inv_view_proj,
+                    // RT-R1 (§9.3): reflection config — inert in T3 (the
+                    // kernel has no reflection branch yet). refl_spp=0
+                    // keeps the (T5) reflection branch off until it exists;
+                    // 0.6/0.1 are the RD7 starting constants. T5 wires
+                    // refl_spp to the rt_reflections scene param (T4).
+                    0,
+                    0.6,
+                    0.1,
                 );
                 // RAYTRACING_DESIGN.md §5.2 P3: rebuild the per-object
                 // material table from the SAME `shadow_caster_draws` order
