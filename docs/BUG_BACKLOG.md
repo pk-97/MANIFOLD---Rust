@@ -12,21 +12,7 @@ or human can read it, and it needs no external tool.
   from commits, tests, and memory. (One historical exception: 2026-07-09 a duplicate `BUG-031`
   was split; the unreferenced audio-blip half became `BUG-081`.)
 - **Status lives in one place: a `**Status:` line directly under each `### BUG-NNN` heading.**
-  This is the single source of truth — the `## Open` / `### BUG-324 (bug221-layout-test-mean-abs-diff-pre-existing) — the BUG-221 layout regression test fails on main with mean_abs_diff=0.054500 between pre-fix and post-fix renders
-**Status:** OPEN (found 2026-07-24, RT-R1 full gpu-proofs run; reproduced on the main checkout with the IDENTICAL value, so pre-existing — not caused by the wave).
-**Severity:** LOW (test-only; no user symptom reported). But it is a red test in the default gpu-proofs suite, which masks real regressions behind expected-failure noise.
-**Symptom:** `cargo test -p manifold-renderer --features gpu-proofs --lib gltf_import::tests::bug221_layout_preserved_before_and_after_fix` panics: "BUG-221's fix must not change net world placement ... got mean_abs_diff=0.054500". Snapshot written under target/mesh-snap/.
-**Root cause:** UNKNOWN. Suspects: drift in a shared dependency of the pre/post fixture renders (camera defaults, exposure, IBL precompute) since the test last passed, or an environment-dependent render difference this machine has always had (the test may never have been run on this checkout's exact toolchain).
-**Fix shape:** bisect when the value last was 0 (`git log -S` the test's threshold + a bisect harness around the two fixture renders), or if the test has never passed on this machine, re-baseline the snapshot with a named justification.
-
-### BUG-325 (box-animated-test-renders-all-zero-frames) — the four-phase box animation test renders all-zero frames on main, and rewrites its goldens while failing
-**Status:** OPEN (found 2026-07-24, RT-R1 full gpu-proofs run; reproduced on the main checkout, so pre-existing — not caused by the wave).
-**Severity:** LOW (test-only), PLUS a fixture-poisoning hazard: the failing run MODIFIES the four `tests/fixtures/gltf/goldens/box_animated_p0*.png` files (all-zero frames written over real goldens) — anyone committing after a test run without checking `git status` lands corrupted goldens. Restored with `git checkout --` when found.
-**Symptom:** `box_animated_four_phase_pngs_are_visibly_distinct` panics: "progress 0.25 and progress 0.5 rendered byte-identical frames — the clip isn't animating"; both frames are all-zero (nothing rendered at all, not a static render).
-**Root cause:** UNKNOWN. Suspects: (a) the animation decode produces no keyframes in this environment (codec/FFmpeg path), leaving an empty scene; (b) same all-zero headless-render class as BUG-323 (core data never reaching the node) — UNVERIFIED whether box_animated's geometry arrives inline or via a binding.
-**Fix shape:** first establish whether the all-zero output is empty-scene (nothing drawn) vs black-scene (drawn, no light) via a depth/normal readback in the test's own harness, then follow the split (empty → geometry/decode path; black → lighting/env path). Fix the golden-rewrite side effect regardless: the test should write goldens only on an explicit flag.
-
-## Fixed` section and the index table
+  This is the single source of truth — the `## Open` / `## Fixed` section and the index table
   are *derived* from it, not authored in parallel (three copies of one fact is how this file
   drifted). Values: `OPEN` · `FIXED @ <sha>` · `PARTIAL` · `PARKED` · `DEFERRED` · `REOPENED` ·
   `SUPERSEDED`. `FIXED`/`SUPERSEDED` belong under `## Fixed`; everything else stays under
@@ -1440,6 +1426,20 @@ scrubbing outside playback), which still require a live repro session. Status re
 **Symptom:** `graph_tool render <preset>.json --kind generator` writes a valid all-zero (black) PNG for any preset whose mesh/texture paths live in `presetMetadata.stringBindings` rather than the node's own params. Example: `tools/rt_prototype/compare/RasterCompare.json` (the apricot scan) — node "scan"/`gltf_mesh_source` has no `path` param; the path comes only from the `modelPath` stringBinding, which the thumbnail path never injects. Verified: pre-change default, post-change default, and post-change `--linear` renders are byte-identical AND all-black (sha256 bc16ea98…, max pixel 0).
 **Root cause:** `crates/manifold-renderer/src/preset_thumbnail.rs`'s `render_preset_thumbnail` renders at declared defaults with an EMPTY `ParamManifest` ("no card overrides" by design — the thumbnail path), so `presetMetadata.stringBindings` defaults are never injected into the targeted node params. Asset-backed presets depend on those bindings for their core data (mesh/env paths).
 **Fix shape:** `graph_tool render` gains a `--binding name=value` repeat flag (and/or reads `presetMetadata.stringBindings` defaults directly) so the look-probe verb renders asset-backed presets the way the app (which applies cards) does. Scope (CLI flag vs auto-apply defaults) is a design call — lead to size later.
+
+### BUG-324 (bug221-layout-test-mean-abs-diff-pre-existing) — the BUG-221 layout regression test fails on main with mean_abs_diff=0.054500 between pre-fix and post-fix renders
+**Status:** OPEN (found 2026-07-24, RT-R1 full gpu-proofs run; reproduced on the main checkout with the IDENTICAL value, so pre-existing — not caused by the wave).
+**Severity:** LOW (test-only; no user symptom reported). But it is a red test in the default gpu-proofs suite, which masks real regressions behind expected-failure noise.
+**Symptom:** `cargo test -p manifold-renderer --features gpu-proofs --lib gltf_import::tests::bug221_layout_preserved_before_and_after_fix` panics: "BUG-221's fix must not change net world placement ... got mean_abs_diff=0.054500". Snapshot written under target/mesh-snap/.
+**Root cause:** UNKNOWN. Suspects: drift in a shared dependency of the pre/post fixture renders (camera defaults, exposure, IBL precompute) since the test last passed, or an environment-dependent render difference this machine has always had (the test may never have been run on this checkout's exact toolchain).
+**Fix shape:** bisect when the value last was 0 (`git log -S` the test's threshold + a bisect harness around the two fixture renders), or if the test has never passed on this machine, re-baseline the snapshot with a named justification.
+
+### BUG-325 (box-animated-test-renders-all-zero-frames) — the four-phase box animation test renders all-zero frames on main, and rewrites its goldens while failing
+**Status:** OPEN (found 2026-07-24, RT-R1 full gpu-proofs run; reproduced on the main checkout, so pre-existing — not caused by the wave).
+**Severity:** LOW (test-only), PLUS a fixture-poisoning hazard: the failing run MODIFIES the four `tests/fixtures/gltf/goldens/box_animated_p0*.png` files (all-zero frames written over real goldens) — anyone committing after a test run without checking `git status` lands corrupted goldens. Restored with `git checkout --` when found.
+**Symptom:** `box_animated_four_phase_pngs_are_visibly_distinct` panics: "progress 0.25 and progress 0.5 rendered byte-identical frames — the clip isn't animating"; both frames are all-zero (nothing rendered at all, not a static render).
+**Root cause:** UNKNOWN. Suspects: (a) the animation decode produces no keyframes in this environment (codec/FFmpeg path), leaving an empty scene; (b) same all-zero headless-render class as BUG-323 (core data never reaching the node) — UNVERIFIED whether box_animated's geometry arrives inline or via a binding.
+**Fix shape:** first establish whether the all-zero output is empty-scene (nothing drawn) vs black-scene (drawn, no light) via a depth/normal readback in the test's own harness, then follow the split (empty → geometry/decode path; black → lighting/env path). Fix the golden-rewrite side effect regardless: the test should write goldens only on an explicit flag.
 
 ## Fixed
 
