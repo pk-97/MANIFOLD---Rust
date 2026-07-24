@@ -10,14 +10,21 @@ model ids), but the written record does. This hook injects the true
 identity as session context, machine-derived from the same source the
 statusline uses.
 
-Mechanism: match the session's model env (ANTHROPIC_DEFAULT_OPUS_MODEL —
-cc-fleet writes it into every generated profile, so it survives cc-fleet's
-profile regeneration, unlike hand-added env) against providers.toml
-default_model. base_url matching is only a fallback — ambiguous since the
-litellm proxy unified seat URLs (2026-07-24: K3 lead sessions first-matched
-glm/dispatcher). Provider -> seat maps per docs/AGENT_ROUTING.md (the
-tiering). Anthropic sessions (no/api.anthropic.com base URL) get nothing —
-their system prompt is already correct.
+Mechanism (rekeyed 2026-07-24, D-48 slot map): slots no longer identify
+seats — the kimi seat's slots now carry LANE tiers (opus=glm-5.2,
+sonnet=glm-4.7, haiku=deepseek-v4-flash), so matching slot env against
+default_model is wrong (it labelled the K3 lead as glm/dispatcher once
+already). Seat resolution order:
+  1. ANTHROPIC_MODEL — the session's OWN model, injected inline by the
+     tmux launch binding (survives profile regeneration; k3 -> kimi-code).
+  2. ANTHROPIC_DEFAULT_OPUS_MODEL matched against each provider's
+     EFFECTIVE STRONG SLOT (strong_model, else default_model). Unique per
+     seat by invariant: no two seats may share a strong slot.
+  3. base_url — last resort, ambiguous post-proxy (several seats share
+     127.0.0.1:4000).
+Provider -> seat maps per docs/AGENT_ROUTING.md (the tiering). Anthropic
+sessions (no/api.anthropic.com base URL) get nothing — their system prompt
+is already correct.
 
 Fails silent on any error: identity context is a nice-to-have; a hook must
 never block a session.
@@ -77,24 +84,29 @@ def main() -> None:
             sys.exit(0)  # real Anthropic session — system prompt already correct
 
         providers = parse_providers(PROVIDERS_TOML)
-        # Seat key: session model env -> providers.toml default_model.
         # (-upstream entries are disabled key-holders — never a seat.)
-        model_env = (
-            os.environ.get("ANTHROPIC_DEFAULT_OPUS_MODEL")
-            or os.environ.get("ANTHROPIC_DEFAULT_SONNET_MODEL")
-            or ""
-        )
         name = ""
-        if model_env:
-            name = next(
-                (
-                    n
-                    for n, p in providers.items()
-                    if not n.endswith("-upstream")
-                    and p.get("default_model") == model_env
-                ),
-                "",
-            )
+        # 1. Explicit session model (lead binding injects ANTHROPIC_MODEL=k3).
+        session_model = os.environ.get("ANTHROPIC_MODEL", "")
+        EXPLICIT_SEAT = {"k3": "kimi-code", "kimi-for-coding": "kimi-code"}
+        if session_model in EXPLICIT_SEAT:
+            name = EXPLICIT_SEAT[session_model]
+        # 2. Effective strong slot (strong_model, else default_model) —
+        #    unique per seat by invariant; slots below strong are lane tiers.
+        if not name:
+            opus_env = os.environ.get("ANTHROPIC_DEFAULT_OPUS_MODEL", "")
+            if opus_env:
+                name = next(
+                    (
+                        n
+                        for n, p in providers.items()
+                        if not n.endswith("-upstream")
+                        and (p.get("strong_model") or p.get("default_model"))
+                        == opus_env
+                    ),
+                    "",
+                )
+        # 3. base_url — last resort, ambiguous post-proxy.
         if not name:
             name = next(
                 (n for n, p in providers.items() if p.get("base_url") == base_url), ""
@@ -102,11 +114,7 @@ def main() -> None:
         if not name:
             sys.exit(0)
 
-        model = (
-            os.environ.get("ANTHROPIC_MODEL")
-            or providers[name].get("default_model")
-            or name
-        )
+        model = session_model or providers[name].get("default_model") or name
         seat, charge = SEATS.get(name, ("UNMAPPED", "Seat not in the tiering table — "
                                         "check docs/AGENT_ROUTING.md before acting."))
         context = (
