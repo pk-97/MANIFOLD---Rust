@@ -27,7 +27,9 @@ worktree) unless --force — same guard as bug_status.py --write.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import re
+import subprocess
 import sys
 from datetime import date
 from pathlib import Path
@@ -40,8 +42,12 @@ sys.path.insert(0, str(HOOKS_DIR))
 import bug_status  # noqa: E402
 
 
-def next_id(head_lines: list[str], entries: list["bug_status.Entry"]) -> str:
-    nums = set()
+def scan_max(head_lines: list[str], entries: list["bug_status.Entry"]) -> int:
+    """Largest BUG-NNN number visible in THIS checkout — index rows, live
+    entries, and the closed archive. The floor for id allocation; on its own it
+    is NOT collision-safe across concurrent worktrees (two branches both see the
+    same max and both mint max+1). ``mint_id`` layers a shared counter on top."""
+    nums = {0}
     for bug_id in bug_status.index_ids(head_lines):
         m = re.match(r"BUG-(\d+)$", bug_id)
         if m:
@@ -54,7 +60,61 @@ def next_id(head_lines: list[str], entries: list["bug_status.Entry"]) -> str:
         m = re.match(r"BUG-(\d+)$", bug_id)
         if m:
             nums.add(int(m.group(1)))
-    return f"BUG-{(max(nums) + 1) if nums else 1}"
+    return max(nums)
+
+
+def git_common_dir(repo: Path) -> Path | None:
+    """The repo's git *common* dir — one directory shared by the main checkout
+    AND every `git worktree`. Returns None (→ scan-only fallback) on any error."""
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "--git-common-dir"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if out.returncode != 0:
+            return None
+        p = Path(out.stdout.strip())
+        if not p.is_absolute():
+            p = (repo / p).resolve()
+        return p
+    except Exception:
+        return None
+
+
+def bump_counter(seq: Path, lock: Path, floor: int) -> int:
+    """Atomically hand out the next id, serialized against every other caller on
+    this machine via an exclusive `flock` on a single shared lockfile. Read the
+    persisted counter, take it past both itself and the caller's scan floor
+    (`max` self-heals when a merge imports higher ids), persist, return. Because
+    the lock and counter live on ONE inode in the git common dir, two concurrent
+    worktrees physically cannot leave with the same number."""
+    with open(lock, "w") as lf:
+        fcntl.flock(lf, fcntl.LOCK_EX)
+        try:
+            cur = 0
+            if seq.exists():
+                try:
+                    cur = int(seq.read_text().strip() or 0)
+                except ValueError:
+                    cur = 0
+            nxt = max(cur, floor) + 1
+            seq.write_text(f"{nxt}\n")
+            return nxt
+        finally:
+            fcntl.flock(lf, fcntl.LOCK_UN)
+
+
+def mint_id(floor: int, repo: Path) -> str:
+    """Allocate a globally-unique BUG number across all concurrent worktrees.
+    Falls back to plain scan (`floor + 1`) only if the git common dir is
+    unreachable — logged so a silent regression to per-checkout ids is visible."""
+    common = git_common_dir(repo)
+    if common is None:
+        print("warning: git common dir unreachable — id NOT collision-guarded "
+              "across worktrees (using scan-only fallback)", file=sys.stderr)
+        return f"BUG-{floor + 1}"
+    n = bump_counter(common / "manifold-bug-id.seq", common / "manifold-bug-id.lock", floor)
+    return f"BUG-{n}"
 
 
 def build_entry(bug_id: str, args) -> list[str]:
@@ -131,7 +191,14 @@ def main() -> int:
 
     text = BACKLOG.read_text()
     head, entries, _, _, _ = bug_status.parse(text)
-    bug_id = args.bug_id or next_id(head, entries)
+    floor = scan_max(head, entries)
+    if args.bug_id:
+        bug_id = args.bug_id
+    elif args.dry_run:
+        # Preview only — must NOT consume a number from the shared counter.
+        bug_id = f"BUG-{floor + 1}"
+    else:
+        bug_id = mint_id(floor, REPO)
     if any(e.id == bug_id for e in entries) or bug_id in bug_status.index_ids(head):
         raise SystemExit(f"{bug_id} already exists — pick a different --id or omit it to auto-assign")
 
