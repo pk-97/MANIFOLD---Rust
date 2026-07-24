@@ -2207,6 +2207,14 @@ impl MetalShadowRayTracer {
                 (5, SlotKind::Texture),
                 (6, SlotKind::Texture),
                 (7, SlotKind::Texture),
+                // RT-R1 (§9.3): out_refl, MSL [[texture(8)]]. MISSED by the
+                // T3 plumbing (slot maps weren't extended with the kernel
+                // signatures) — the reflection block's writes went nowhere
+                // and the chain read zeros; caught by the R1 mirror probe.
+                (8, SlotKind::Texture),
+                // RT-R1: prefiltered_env, MSL [[texture(9)]] — miss-branch
+                // radiance source.
+                (9, SlotKind::Texture),
             ]),
         );
         let upsample_pipeline = compile_pipeline(
@@ -2222,6 +2230,10 @@ impl MetalShadowRayTracer {
                 (4, SlotKind::Texture),
                 (5, SlotKind::Texture), // RT-T1-C: lo_n
                 (6, SlotKind::Texture), // RT-T1-C: hi_n
+                // RT-R1 (§9.3): lo_refl / hi_refl — see the trace pipeline's
+                // slot-map note (T3 missed these too).
+                (7, SlotKind::Texture),
+                (8, SlotKind::Texture),
             ]),
         );
         let atrous_pipeline = compile_pipeline(
@@ -2238,6 +2250,10 @@ impl MetalShadowRayTracer {
                 (5, SlotKind::Texture), // dst_irr
                 (6, SlotKind::Texture), // src_n
                 (7, SlotKind::Texture), // dst_n
+                // RT-R1 (§9.3): src_refl / dst_refl — see the trace
+                // pipeline's slot-map note (T3 missed these too).
+                (8, SlotKind::Texture),
+                (9, SlotKind::Texture),
             ]),
         );
         let accumulate_pipeline = compile_pipeline(

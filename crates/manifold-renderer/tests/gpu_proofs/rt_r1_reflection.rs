@@ -44,7 +44,52 @@ const EMISSIVE_Z: f32 = 2.0;
 /// single fixture builder — only the Bool param differs between the two
 /// render calls.
 fn scene_json(rt_reflections: bool) -> String {
+    scene_json_full(rt_reflections, true, 0.0)
+}
+
+/// `env_intensity` > 0 is the DEBUG/I-R1 discriminator: with a non-black env
+/// the OFF leg's specular IBL is the env everywhere, and ON-minus-OFF
+/// isolates exactly what the traced substitution changes.
+/// `with_emitter` = the mirror probe (gate a); `!with_emitter` = the I-R1
+/// empty-scene fixture (no occluder — every reflection ray misses, so ON
+/// must equal OFF: the miss branch IS the env fetch, RD4/RD1).
+fn scene_json_full(rt_reflections: bool, with_emitter: bool, env_intensity: f32) -> String {
     let rt_v = if rt_reflections { "true" } else { "false" };
+    let (objects, emitter_nodes, emitter_wires) = if with_emitter {
+        (
+            2,
+            r#",{"id":5,"typeId":"node.grid_mesh","nodeId":"quad_grid","params":{
+                "max_capacity":{"type":"Int","value":8192},
+                "resolution_x":{"type":"Int","value":4},
+                "resolution_y":{"type":"Int","value":4},
+                "size_x":{"type":"Float","value":1.0},
+                "size_y":{"type":"Float","value":1.0}}},
+            {"id":6,"typeId":"node.make_triangles","nodeId":"quad_tris","params":{
+                "src_cols":{"type":"Int","value":4},
+                "src_rows":{"type":"Int","value":4}}},
+            {"id":7,"typeId":"node.transform_3d","nodeId":"quad_xform","params":{
+                "pos_x":{"type":"Float","value":0.0},
+                "pos_y":{"type":"Float","value":0.8},
+                "pos_z":{"type":"Float","value":2.0}}},
+            {"id":8,"typeId":"node.pbr_material","nodeId":"quad_mat","params":{
+                "color_r":{"type":"Float","value":0.5},
+                "color_g":{"type":"Float","value":0.5},
+                "color_b":{"type":"Float","value":0.5},
+                "ambient":{"type":"Float","value":0.0},
+                "metallic":{"type":"Float","value":0.0},
+                "roughness":{"type":"Float","value":0.5},
+                "emission_r":{"type":"Float","value":1.0},
+                "emission_g":{"type":"Float","value":0.2},
+                "emission_b":{"type":"Float","value":0.1},
+                "emission_intensity":{"type":"Float","value":10.0}}}"#,
+            r#",{"fromNode":5,"fromPort":"vertices","toNode":6,"toPort":"in"},
+            {"fromNode":6,"fromPort":"out","toNode":20,"toPort":"mesh_1"},
+            {"fromNode":7,"fromPort":"transform","toNode":20,"toPort":"transform_1"},
+            {"fromNode":8,"fromPort":"out","toNode":20,"toPort":"material_1"}"#,
+        )
+    } else {
+        (1, "", "")
+    };
     format!(
         r#"{{"version":2,"name":"RtR1ReflectionProbe","nodes":[
         {{"id":0,"typeId":"system.generator_input","nodeId":"input"}},
@@ -57,19 +102,6 @@ fn scene_json(rt_reflections: bool) -> String {
         {{"id":2,"typeId":"node.make_triangles","nodeId":"ground_tris","params":{{
             "src_cols":{{"type":"Int","value":20}},
             "src_rows":{{"type":"Int","value":20}}}}}},
-        {{"id":5,"typeId":"node.grid_mesh","nodeId":"quad_grid","params":{{
-            "max_capacity":{{"type":"Int","value":8192}},
-            "resolution_x":{{"type":"Int","value":4}},
-            "resolution_y":{{"type":"Int","value":4}},
-            "size_x":{{"type":"Float","value":1.0}},
-            "size_y":{{"type":"Float","value":1.0}}}}}},
-        {{"id":6,"typeId":"node.make_triangles","nodeId":"quad_tris","params":{{
-            "src_cols":{{"type":"Int","value":4}},
-            "src_rows":{{"type":"Int","value":4}}}}}},
-        {{"id":7,"typeId":"node.transform_3d","nodeId":"quad_xform","params":{{
-            "pos_x":{{"type":"Float","value":{EMISSIVE_X}}},
-            "pos_y":{{"type":"Float","value":{EMISSIVE_Y}}},
-            "pos_z":{{"type":"Float","value":{EMISSIVE_Z}}}}}}},
         {{"id":3,"typeId":"node.orbit_camera","nodeId":"cam","params":{{
             "orbit":{{"type":"Float","value":{ORBIT}}},
             "tilt":{{"type":"Float","value":{TILT}}},
@@ -95,40 +127,25 @@ fn scene_json(rt_reflections: bool) -> String {
             "ambient":{{"type":"Float","value":0.0}},
             "metallic":{{"type":"Float","value":1.0}},
             "roughness":{{"type":"Float","value":0.01}}}}}},
-        {{"id":8,"typeId":"node.pbr_material","nodeId":"quad_mat","params":{{
-            "color_r":{{"type":"Float","value":0.5}},
-            "color_g":{{"type":"Float","value":0.5}},
-            "color_b":{{"type":"Float","value":0.5}},
-            "ambient":{{"type":"Float","value":0.0}},
-            "metallic":{{"type":"Float","value":0.0}},
-            "roughness":{{"type":"Float","value":0.5}},
-            "emission_r":{{"type":"Float","value":1.0}},
-            "emission_g":{{"type":"Float","value":0.2}},
-            "emission_b":{{"type":"Float","value":0.1}},
-            "emission_intensity":{{"type":"Float","value":10.0}}}}}},
         {{"id":10,"typeId":"node.bake_environment","nodeId":"env","params":{{
             "width":{{"type":"Int","value":16}},
             "height":{{"type":"Int","value":8}},
-            "intensity":{{"type":"Float","value":0.0}}}}}},
+            "intensity":{{"type":"Float","value":{env_intensity}}}}}}},
         {{"id":20,"typeId":"node.render_scene","nodeId":"scene","params":{{
-            "objects":{{"type":"Int","value":2}},
+            "objects":{{"type":"Int","value":{objects}}},
             "lights":{{"type":"Int","value":1}},
             "rt_enabled":{{"type":"Bool","value":true}},
             "rt_reflections":{{"type":"Bool","value":{rt_v}}}}}}},
         {{"id":99,"typeId":"system.final_output","nodeId":"out"}}
-        ],"wires":[
+        {emitter_nodes}],"wires":[
         {{"fromNode":1,"fromPort":"vertices","toNode":2,"toPort":"in"}},
         {{"fromNode":2,"fromPort":"out","toNode":20,"toPort":"mesh_0"}},
-        {{"fromNode":5,"fromPort":"vertices","toNode":6,"toPort":"in"}},
-        {{"fromNode":6,"fromPort":"out","toNode":20,"toPort":"mesh_1"}},
-        {{"fromNode":7,"fromPort":"transform","toNode":20,"toPort":"transform_1"}},
         {{"fromNode":3,"fromPort":"out","toNode":20,"toPort":"camera"}},
         {{"fromNode":4,"fromPort":"out","toNode":20,"toPort":"material_0"}},
-        {{"fromNode":8,"fromPort":"out","toNode":20,"toPort":"material_1"}},
         {{"fromNode":30,"fromPort":"out","toNode":20,"toPort":"light_0"}},
         {{"fromNode":10,"fromPort":"envmap","toNode":20,"toPort":"envmap"}},
         {{"fromNode":20,"fromPort":"color","toNode":99,"toPort":"in"}}
-        ]}}"#
+        {emitter_wires}]}}"#
     )
 }
 
@@ -218,17 +235,15 @@ fn region_luma(bytes: &[u8], w: u32, h: u32, cx: f32, cy: f32, radius: i32) -> f
 /// emissive quad above it. The emissive quad's mirror image (reflected across
 /// y=0) appears on the ground at a computed world point. With RT reflections
 /// ON the traced ray hits the emitter and returns bright; with OFF the dummy
-/// envmap yields near-zero luminance.
+/// envmap yields near-zero specular IBL and only the direct shading remains.
 ///
-/// LEAD: expectation math — fill in:
-/// - `reflection_world`: the ground-plane intersection point of the line from
-///   the camera position through the virtual image `(EMISSIVE_X, -EMISSIVE_Y,
-///   EMISSIVE_Z)`. Solve `camera_pos + t * (virtual_image - camera_pos)` at
-///   y=0.
-/// - `threshold_on`: minimum mean luminance in the 15x15 probe window when
-///   `rt_reflections` is true (the traced reflection of the emissive quad).
-/// - `ceiling_off`: maximum mean luminance when `rt_reflections` is false
-///   (the dummy envmap + ambient base).
+/// Expectations (lead-pinned 2026-07-25 from measured values): the mirror
+/// point is computed from the camera's own public state (virtual image of
+/// the emitter across y=0, intersected with the plane); thresholds are
+/// derived from the measured on=2.15 / off=0.82 and documented at the
+/// assertions.
+
+
 #[test]
 fn mirror_reflection_of_emissive_quad_appears_only_when_rt_reflections_enabled() {
     let (refl_bytes, w, h) = render_readback(&scene_json(true));
@@ -258,29 +273,89 @@ fn mirror_reflection_of_emissive_quad_appears_only_when_rt_reflections_enabled()
     let luma_on = region_luma(&refl_bytes, w, h, rfl_px.px, rfl_px.py, RADIUS);
     let luma_off = region_luma(&ctrl_bytes, w, h, rfl_px.px, rfl_px.py, RADIUS);
 
-    // LEAD: expectation math — fill in these thresholds
-    let threshold_on = 0.1;  // LEAD: minimum luminance with RT reflections ON
-    let ceiling_off = 0.01;  // LEAD: maximum luminance with RT reflections OFF
+    // Expectation values (lead, pinned 2026-07-25 from measured output):
+    // on=2.1514, off=0.8225 at the computed mirror pixel. The OFF leg is
+    // NOT near-black — the mirror plane's direct-sun GGX highlight shades
+    // that spot at ~0.82 luma, so the control leg can't use a near-zero
+    // floor. What proves the substitution is the DELTA: reflections ON
+    // adds the emitter's traced emission (~1.33 luma) on top of the
+    // unchanged shading. off <= 1.2 documents the shading baseline — a
+    // scene change that brightens the base toward the emitter's
+    // contribution invalidates the probe rather than passing vacuously.
+    let threshold_on = 1.5;
+    let min_delta = 0.8;
+    let ceiling_off = 1.2;
 
     eprintln!(
         "reflection region (pixel ({:.0},{:.0})): on={luma_on:.4} off={luma_off:.4} | \
-         threshold_on={threshold_on} ceiling_off={ceiling_off}",
+         threshold_on={threshold_on} min_delta={min_delta} ceiling_off={ceiling_off}",
         rfl_px.px, rfl_px.py,
     );
 
     assert!(
         luma_on >= threshold_on,
         "reflection region (pixel ({:.0},{:.0})) must be >={threshold_on} with \
-         RT reflections ON: got {luma_on:.4}",
+         RT reflections ON: got {luma_on:.4} — the traced substitution is \
+         not reaching fs_pbr",
         rfl_px.px,
         rfl_px.py,
     );
     assert!(
+        luma_on - luma_off >= min_delta,
+        "reflection delta (on {luma_on:.4} - off {luma_off:.4}) must be \
+         >={min_delta} — the ON brightness must come from the toggle, not \
+         from scene shading"
+    );
+    assert!(
         luma_off <= ceiling_off,
-        "reflection region (pixel ({:.0},{:.0})) must be <={ceiling_off} with \
-         RT reflections OFF: got {luma_off:.4}",
-        rfl_px.px,
-        rfl_px.py,
+        "control leg: reflections OFF must stay at the shading baseline \
+         (<={ceiling_off}): got {luma_off:.4} — the scene changed; \
+         re-derive this probe's expectations instead of passing vacuously"
+    );
+}
+
+/// I-R1 — exactly one environment-specular contribution per pixel: with NO
+/// occluder in the scene, every reflection ray misses and the traced value
+/// must equal the raster's own env fetch (RD4's miss branch) — so
+/// reflections-ON equals reflections-OFF within epsilon on a real
+/// (intensity 0.5) envmap. Fails loudly if the term is ADDED on top of
+/// `specular_ibl` instead of substituted (the 818a06b0 double-count class),
+/// or if the kernel's equirect mapping/mip selection drifts from the
+/// raster's (I-R1's second job).
+#[test]
+fn reflection_of_empty_scene_equals_env_only() {
+    let (on_bytes, w, h) = render_readback(&scene_json_full(true, false, 0.5));
+    let (off_bytes, _, _) = render_readback(&scene_json_full(false, false, 0.5));
+
+    let cam = Camera::orbit_perspective(ORBIT, TILT, DISTANCE, FOV_Y, 0.0, 0.0, NEAR, FAR);
+    let c = cam.pos;
+    let virtual_image = [EMISSIVE_X, -EMISSIVE_Y, EMISSIVE_Z];
+    let t = c[1] / (c[1] - virtual_image[1]);
+    let probe = [
+        c[0] + t * (virtual_image[0] - c[0]),
+        0.0,
+        c[2] + t * (virtual_image[2] - c[2]),
+    ];
+    let px = cam
+        .project_to_pixel(probe, w, h)
+        .expect("probe point must project on screen");
+    let on_mean = region_luma(&on_bytes, w, h, px.px, px.py, 7);
+    let off_mean = region_luma(&off_bytes, w, h, px.px, px.py, 7);
+    eprintln!("empty_scene: on_mean={on_mean:.6} off_mean={off_mean:.6}");
+
+    assert!(
+        (on_mean - off_mean).abs() < 0.05,
+        "I-R1: empty-scene ON ({on_mean:.4}) must equal OFF ({off_mean:.4}) — \
+         the reflection term is being ADDED, not substituted (or the kernel's \
+         miss-branch env fetch drifts from the raster's)"
+    );
+    // Sanity: the env really contributes at the probe point (a black render
+    // would also "pass" equality — vacuous-proofing, same discipline as the
+    // P1 probe's round-trip check).
+    assert!(
+        off_mean > 0.05,
+        "sanity: no env contribution at the probe point (OFF mean {off_mean:.4}) \
+         — the equality check above is vacuous"
     );
 }
 
