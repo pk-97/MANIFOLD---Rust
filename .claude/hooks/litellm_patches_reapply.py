@@ -227,6 +227,36 @@ PATCHES = [
             "        return getattr(chunk, \"usage\", None) is None\n"
         ),
     },
+    # --- json_schema downgrade (2026-07-25, k3 lead): Claude Code's haiku-slot
+    # session-title call sends output_config.format = json_schema; this adapter
+    # translates it to OpenAI-style response_format json_schema, which the
+    # opencode "Console Go" upstream 400s on — bisected field-by-field from a
+    # captured live request (sidecar on :4055): stream/effort/max_tokens all
+    # tolerated, json_schema the sole trigger, json_object passes WITH
+    # streaming. Result was one failed Flash call per user prompt (18 in 6h)
+    # and no session titles. Every CC structured-output prompt carries its own
+    # "Return JSON..." instruction, so enforcement-only json_object loses
+    # nothing — the schema was never honored upstream anyway.
+    {
+        "file": "litellm/llms/anthropic/experimental_pass_through/adapters/transformation.py",
+        "regex": (
+            r"        # Convert to OpenAI response_format structure\n"
+            r"        return \{\n"
+            r"            \"type\": \"json_schema\",\n"
+            r"            \"json_schema\": \{\n"
+            r"                \"name\": \"structured_output\",\n"
+            r"                \"schema\": schema,\n"
+            r"                \"strict\": True,\n"
+            r"            \},\n"
+            r"        \}\n"
+        ),
+        "replace": (
+            "        # MANIFOLD local patch: downgrade json_schema -> json_object\n"
+            "        # (opencode upstream 400s on json_schema response_format;\n"
+            "        # full rationale in litellm_patches_reapply.py).\n"
+            "        return {\"type\": \"json_object\"}\n"
+        ),
+    },
 ]
 
 
