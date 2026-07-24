@@ -752,6 +752,7 @@ kernel void trace_shadow_rays(
     // RT-T2-A: fixed slots for alpha-masked objects' base-color textures —
     // see `MAX_RT_ALPHA_TEXTURES`'s doc comment.
     array<texture2d<float>, MAX_RT_ALPHA_TEXTURES> alpha_textures [[texture(4)]],
+    texture2d<float, access::write> out_refl [[texture(8)]],   // RT-R1: inert (kernel writes nothing until T5)
     uint2 tid [[thread_position_in_grid]])
 {
     if (tid.x >= p.trace_size.x || tid.y >= p.trace_size.y) return;
@@ -1891,6 +1892,7 @@ pub trait ShadowRayTracer {
         out_sv: &GpuTexture,
         out_irr: &GpuTexture,
         out_n: &GpuTexture,
+        out_refl: &GpuTexture,
         label: &str,
     );
 
@@ -2206,6 +2208,7 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         out_sv: &GpuTexture,
         out_irr: &GpuTexture,
         out_n: &GpuTexture,
+        out_refl: &GpuTexture,
         label: &str,
     ) {
         params_buffer.upload(bytemuck_bytes(params));
@@ -2255,6 +2258,12 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                 texture: tex,
             });
         }
+        // RT-R1 (§9.3): out_refl at [[texture(8)]] — free (alpha_textures
+        // occupy 4..8). Bind-only; the kernel writes nothing here until T5.
+        bindings.push(GpuBinding::Texture {
+            binding: 8,
+            texture: out_refl,
+        });
         encoder.dispatch_compute_with_accel(&self.trace_pipeline, 0, accel, &bindings, groups, label);
     }
 

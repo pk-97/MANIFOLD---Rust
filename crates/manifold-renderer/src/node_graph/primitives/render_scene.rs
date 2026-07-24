@@ -778,6 +778,10 @@ pub struct RenderScene {
     /// lazy discipline as every other RT-only resource here).
     rt_irr_half: Option<manifold_gpu::GpuTexture>,
     rt_irr_full: Option<manifold_gpu::GpuTexture>,
+    /// RT-R1 (§9.3): half-res reflection-radiance output target (`out_refl`),
+    /// the mirror of `rt_irr_half`. Inert until T5's reflection kernel —
+    /// allocated + reset by `ensure_rt_irradiance` alongside irradiance.
+    rt_refl_half: Option<manifold_gpu::GpuTexture>,
     /// RT-T1-C (RAYTRACING_DESIGN.md §8 Tier-1 item 1, BUG-311): the
     /// temporally-accumulated demodulated irradiance, its per-pixel depth,
     /// and its per-pixel normal history, each a PING-PONG PAIR —
@@ -1028,6 +1032,7 @@ impl RenderScene {
             rt_normal_sources_capacity: 0,
             rt_irr_half: None,
             rt_irr_full: None,
+            rt_refl_half: None,
             rt_irr_history: [None, None],
             rt_depth_history: [None, None],
             rt_normal_history: [None, None],
@@ -1718,6 +1723,10 @@ impl RenderScene {
         let rgba16 = manifold_gpu::GpuTextureFormat::Rgba16Float;
         self.rt_irr_half = Some(make(half_w, half_h, rgba16, "node.render_scene rt_irr_half (RT-P2)"));
         self.rt_irr_full = Some(make(width, height, rgba16, "node.render_scene rt_irr_full (RT-P2)"));
+        // RT-R1 (§9.3): half-res reflection-radiance output — same lifecycle
+        // as `rt_irr_half` (the dispatch writes it; T5's kernel is the writer;
+        // inert/bind-only until then).
+        self.rt_refl_half = Some(make(half_w, half_h, rgba16, "node.render_scene rt_refl_half (RT-R1)"));
         // RT-T1-C: current-frame primary-hit normal, same half/full
         // lifecycle as irradiance above (not persistent history).
         self.rt_normal_half = Some(make(half_w, half_h, rgba16, "node.render_scene rt_normal_half (RT-T1-C)"));
@@ -4071,6 +4080,7 @@ impl EffectNode for RenderScene {
                 let irr_full = self.rt_irr_full.as_ref().expect("ensured above");
                 let normal_half = self.rt_normal_half.as_ref().expect("ensured above");
                 let normal_full = self.rt_normal_full.as_ref().expect("ensured above");
+                let refl_half = self.rt_refl_half.as_ref().expect("ensured above");
                 tracer.dispatch_shadow_rays(
                     gpu.native_enc,
                     accel,
@@ -4083,6 +4093,7 @@ impl EffectNode for RenderScene {
                     mask_half,
                     irr_half,
                     normal_half,
+                    refl_half,
                     "node.render_scene RT-D3/RT-P2/RT-P3 trace_shadow_rays",
                 );
                 tracer.upsample_shadow(
