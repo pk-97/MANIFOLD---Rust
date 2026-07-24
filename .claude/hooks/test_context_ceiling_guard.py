@@ -31,12 +31,19 @@ def check(name: str, cond: bool) -> None:
 
 
 def run_main(size: int | None, model: str, tool_name: str = "Read",
-             tool_input: dict | None = None, env_off: bool = False) -> str:
+             tool_input: dict | None = None, env_off: bool = False,
+             human: bool = False, filler_bytes: int = 0) -> str:
     payload = {"tool_name": tool_name, "tool_input": tool_input or {}}
     if size is not None:
         tf = tempfile.NamedTemporaryFile(
             "w", suffix=".jsonl", delete=False, encoding="utf-8"
         )
+        if human:
+            tf.write(json.dumps({"type": "user", "origin": {"kind": "human"},
+                                 "promptSource": "sdk"}) + "\n")
+        if filler_bytes:
+            pad = json.dumps({"type": "system", "pad": "x" * 900}) + "\n"
+            tf.write(pad * (filler_bytes // len(pad) + 1))
         entry = {"message": {"model": model,
                              "usage": {"cache_read_input_tokens": size,
                                        "cache_creation_input_tokens": 0,
@@ -82,6 +89,40 @@ check("worker wrap-up lane: handoff write allowed", '"allow"' in out)
 
 # --- Unidentifiable model: fail-strict on tier (worker rules) ---------------
 check("no model at 250K: denied", '"deny"' in run_main(250_000, ""))
+
+# --- Human-seat exemption (Peter 2026-07-25) --------------------------------
+check("opus conversation seat at 250K: silent",
+      run_main(250_000, "claude-opus-5", human=True).strip() == "")
+check("worker-model seat Peter types into at 250K: silent",
+      run_main(250_000, "glm-4.7", human=True).strip() == "")
+check("human turn far from the tail still exempts (whole-file scan)",
+      run_main(250_000, "glm-4.7", human=True, filler_bytes=3_000_000).strip() == "")
+check("no human turn at 250K: still denied",
+      '"deny"' in run_main(250_000, "glm-4.7", human=False))
+
+# --- Against real transcripts: conversation seats vs lane seats -------------
+PROJ = Path.home() / ".claude/projects/-Users-peterkiemann-MANIFOLD---Rust"
+if PROJ.is_dir():
+    real = sorted(PROJ.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)[:40]
+    seats = {p: hook.is_conversation_seat(str(p)) for p in real}
+    # A lane transcript's user turns are promptSource sdk/none with no human origin;
+    # classify independently here so the assertion is not the hook grading itself.
+    def typed_by_human(p: Path) -> bool:
+        for line in p.open(errors="replace"):
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            o = e.get("origin")
+            if isinstance(o, dict) and o.get("kind") == "human":
+                return True
+        return False
+    mismatches = [p.name for p in real if seats[p] != typed_by_human(p)]
+    check(f"real transcripts classified correctly ({len(real)} files)", not mismatches)
+    n_conv = sum(seats.values())
+    check("real corpus has both classes", 0 < n_conv < len(real))
+else:
+    print("SKIP real-transcript check (project dir not found)")
 
 # --- Fail-open plumbing ------------------------------------------------------
 check("missing transcript: silent", run_main(None, "glm-4.7").strip() == "")

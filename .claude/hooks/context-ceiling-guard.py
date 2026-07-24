@@ -30,6 +30,23 @@ warn, no deny; auto-compaction is the backstop. For every other seat,
 including unidentifiable ones, a ceiling hit is a defect signal and behavior
 is unchanged.
 
+HUMAN-SEAT EXEMPTION (Peter's ruling, 2026-07-25): a seat Peter is talking to
+is never rotated out from under him -- the deny was killing useful live
+conversations. The discriminator is in the transcript, not the model: Claude
+Code stamps `"origin": {"kind": "human"}` on every user turn that a human
+actually typed. Measured over 40 real transcripts in this project, that marker
+appears in exactly the seats Peter types into (cli and claude-vscode alike, k3
+/ fable / opus / glm alike) and in NONE of the lane transcripts -- headless
+sdk-cli lanes, native Agent-tool subagents (which inherit the parent
+entrypoint, so entrypoint alone cannot separate them), and prompt-launched
+tmux pane lanes all have zero human-origin turns. Any transcript with at least
+one human turn anywhere in it is a conversation seat and is fully exempt; a
+lane that Peter starts typing into himself becomes exempt from that turn on,
+which is the intended semantics.
+
+Detection is a raw substring scan of the whole file (no JSON parse, no line
+splitting) so it stays cheap on multi-megabyte transcripts.
+
 Denial is not data loss: past DENY_TOKENS a WRAP-UP LANE stays open -- git
 commands (commit clean work), Write/Edit to scratchpad / .claude/orchestration
 / handoff files, and SendMessage (report up). Everything else is denied. The
@@ -55,6 +72,11 @@ TAIL_BYTES = 512 * 1024
 # Lead = fable/k3 ONLY (Peter: Opus is not lead tier).
 LEAD_TIER = re.compile(r"fable|\bk3\b", re.IGNORECASE)
 
+# A human-typed turn stamps origin.kind=human. Tolerant of whitespace drift in
+# the JSONL encoding; matched against raw bytes so no line parsing is needed.
+HUMAN_ORIGIN = re.compile(rb'"origin"\s*:\s*\{\s*"kind"\s*:\s*"human"')
+SCAN_CHUNK = 1 << 20
+
 # Wrap-up lane: tools still allowed past DENY_TOKENS so the seat can land
 # clean work, write its handoff, and report up -- nothing else.
 WRAPUP_PATH_MARKERS = ("/scratchpad", "/.claude/orchestration/", "handoff")
@@ -70,6 +92,24 @@ def is_wrapup_call(tool_name: str, tool_input: dict) -> bool:
         path = (tool_input.get("file_path") or "").lower()
         return any(m in path for m in WRAPUP_PATH_MARKERS)
     return False
+
+
+def is_conversation_seat(transcript_path: str) -> bool:
+    """True if a human has typed into this session at any point.
+
+    Whole-file chunked byte scan with an overlap so a marker straddling a chunk
+    boundary is still found.
+    """
+    overlap = 64
+    tail = b""
+    with open(transcript_path, "rb") as f:
+        while True:
+            chunk = f.read(SCAN_CHUNK)
+            if not chunk:
+                return False
+            if HUMAN_ORIGIN.search(tail + chunk):
+                return True
+            tail = chunk[-overlap:]
 
 
 def current_context(transcript_path: str) -> tuple[int, str]:
@@ -123,6 +163,9 @@ def main() -> None:
         path = payload.get("transcript_path") or ""
         if not path or not os.path.isfile(path):
             sys.exit(0)  # fail open -- can't measure
+
+        if is_conversation_seat(path):
+            sys.exit(0)  # Peter is talking to this seat -- never rotate it out
 
         size, model = current_context(path)
         if LEAD_TIER.search(model):
