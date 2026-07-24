@@ -31,10 +31,14 @@ def check(name: str, cond: bool) -> None:
 
 # --- decide(): tier rules -------------------------------------------------
 
-# Executor tier: every spawn verb denied.
-for verb in ("subagent", "spawn", "run", "workflow"):
+# Executor tier: every spawn verb denied ("spawn" via the dead-path rule).
+for verb in ("subagent", "run", "workflow"):
     r = hook.decide(f"cc-fleet {verb} opencode --prompt hi", "deepseek-v4-flash")
     check(f"executor denied: {verb}", bool(r) and "executor" in r)
+check(
+    "executor denied: spawn (dead path)",
+    bool(hook.decide("cc-fleet spawn opencode --prompt hi", "deepseek-v4-flash")),
+)
 check(
     "executor denied: kimi-k2.7",
     bool(hook.decide("cc-fleet subagent opencode -p x", "kimi-k2.7-code")),
@@ -76,6 +80,12 @@ for model in ("claude-fable-5", "claude-opus-4-8", "k3"):
         f"lead allowed: {model}",
         hook.decide("cc-fleet subagent opencode -p x", model) == "",
     )
+
+# D-48: `cc-fleet spawn` is a dead path — denied for every tier, lead
+# included, even with no identifiable caller model.
+for model in ("claude-fable-5", "k3", "glm-4.7", "deepseek-v4-flash", ""):
+    r = hook.decide("cc-fleet spawn glm --as w1 --team t --json", model)
+    check(f"spawn dead-path denied: {model or '(no model)'}", bool(r) and "dead" in r)
 
 # Non-spawn cc-fleet commands: never denied for anyone.
 for cmd in ("cc-fleet list --json", "cc-fleet models opencode --json",
