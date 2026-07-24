@@ -46,10 +46,11 @@ pub fn render_preset_thumbnail(
     kind: PresetKind,
     def: &EffectGraphDef,
     size: u32,
+    linear: bool,
 ) -> Result<Vec<u8>, String> {
     match kind {
-        PresetKind::Generator => render_generator(device, def, size),
-        PresetKind::Effect => render_effect(device, def, size),
+        PresetKind::Generator => render_generator(device, def, size, linear),
+        PresetKind::Effect => render_effect(device, def, size, linear),
     }
 }
 
@@ -63,7 +64,22 @@ pub fn render_preset_thumbnail_to_file(
     size: u32,
     out_path: &Path,
 ) -> Result<(), String> {
-    let bytes = render_preset_thumbnail(device, kind, def, size)?;
+    let bytes = render_preset_thumbnail(device, kind, def, size, false)?;
+    std::fs::write(out_path, bytes)
+        .map_err(|e| format!("failed writing {}: {e}", out_path.display()))
+}
+
+/// BUG-327 sibling of [`render_preset_thumbnail_to_file`]: linear→sRGB readback
+/// (no Reinhard) for graphs that tonemap in-graph. Used by `graph-tool render
+/// --linear`. Default path (`render_preset_thumbnail_to_file`) is unaffected.
+pub fn render_preset_thumbnail_to_file_linear(
+    device: &std::sync::Arc<GpuDevice>,
+    kind: PresetKind,
+    def: &EffectGraphDef,
+    size: u32,
+    out_path: &Path,
+) -> Result<(), String> {
+    let bytes = render_preset_thumbnail(device, kind, def, size, true)?;
     std::fs::write(out_path, bytes)
         .map_err(|e| format!("failed writing {}: {e}", out_path.display()))
 }
@@ -121,6 +137,7 @@ fn render_generator(
     device: &std::sync::Arc<GpuDevice>,
     def: &EffectGraphDef,
     size: u32,
+    linear: bool,
 ) -> Result<Vec<u8>, String> {
     let registry = PrimitiveRegistry::with_builtin();
     let format = GpuTextureFormat::Rgba16Float;
@@ -185,12 +202,12 @@ fn render_generator(
         enc.commit_and_wait_completed();
     }
 
-    Ok(crate::headless_readback::readback_to_srgb_png(
-        device,
-        &target.texture,
-        size,
-        size,
-    ))
+    let png = if linear {
+        crate::headless_readback::readback_to_srgb_png_linear(device, &target.texture, size, size)
+    } else {
+        crate::headless_readback::readback_to_srgb_png(device, &target.texture, size, size)
+    };
+    Ok(png)
 }
 
 // ---------------------------------------------------------------------------
@@ -253,6 +270,7 @@ fn render_effect(
     device: &std::sync::Arc<GpuDevice>,
     def: &EffectGraphDef,
     size: u32,
+    linear: bool,
 ) -> Result<Vec<u8>, String> {
     let registry = PrimitiveRegistry::with_builtin();
     let format = GpuTextureFormat::Rgba16Float;
@@ -327,7 +345,12 @@ fn render_effect(
         .backend()
         .texture_2d(output_slot)
         .ok_or_else(|| "output texture missing after execute".to_string())?;
-    Ok(crate::headless_readback::readback_to_srgb_png(device, tex, size, size))
+    let png = if linear {
+        crate::headless_readback::readback_to_srgb_png_linear(device, tex, size, size)
+    } else {
+        crate::headless_readback::readback_to_srgb_png(device, tex, size, size)
+    };
+    Ok(png)
 }
 
 // ---------------------------------------------------------------------------
@@ -387,7 +410,7 @@ mod tests {
     fn render_effect_thumbnail_produces_non_trivial_png() {
         let device = crate::test_device();
         let def = bloom_def();
-        let png = render_preset_thumbnail(&device.arc(), PresetKind::Effect, &def, 64)
+        let png = render_preset_thumbnail(&device.arc(), PresetKind::Effect, &def, 64, false)
             .expect("effect thumbnail render");
         assert!(!png.is_empty(), "PNG bytes must be non-empty");
 
@@ -411,7 +434,7 @@ mod tests {
     fn render_generator_thumbnail_produces_non_trivial_png() {
         let device = crate::test_device();
         let def = blackhole_def();
-        let png = render_preset_thumbnail(&device.arc(), PresetKind::Generator, &def, 64)
+        let png = render_preset_thumbnail(&device.arc(), PresetKind::Generator, &def, 64, false)
             .expect("generator thumbnail render");
         assert!(!png.is_empty());
         let decoded = image::load_from_memory(&png).expect("decode produced PNG").to_rgba8();

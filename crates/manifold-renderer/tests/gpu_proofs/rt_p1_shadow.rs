@@ -174,6 +174,29 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         label: "rt-p1-out_n-stub",
         mip_levels: 1,
     });
+    // RT-R1: reflection output — stub for this fixture (refl_spp == 0, never read)
+    let out_refl = device.create_texture(&GpuTextureDesc {
+        width: 2,
+        height: 1,
+        depth: 1,
+        format: GpuTextureFormat::Rgba16Float,
+        dimension: GpuTextureDimension::D2,
+        usage: GpuTextureUsage::SHADER_WRITE | GpuTextureUsage::SHADER_READ,
+        label: "rt-p1-out_refl-stub",
+        mip_levels: 1,
+    });
+    // RT-R1 (§9.3 RD4): prefiltered env for reflection miss branch — 1x1 dummy
+    // for this fixture (no reflection assertions, refl_spp == 0)
+    let prefiltered_env = device.create_texture(&GpuTextureDesc {
+        width: 1,
+        height: 1,
+        depth: 1,
+        format: GpuTextureFormat::Rgba16Float,
+        dimension: GpuTextureDimension::D2,
+        usage: GpuTextureUsage::SHADER_READ,
+        label: "rt-p1-prefiltered-env-dummy",
+        mip_levels: 1,
+    });
 
     // ao_spp: 0 (AO gather skipped — P1 fixture only proves hard shadows);
     // sun_color/ambient_color: unused by this test's assertions (out_irr
@@ -192,6 +215,9 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         [0.0, 0.0, 0.0],
         [0.0, 0.0, 0.0], // RT-T1-B: camera_pos — unused, ao_spp/gi_spp both 0 above
         IDENTITY,
+        0,           // refl_spp — 0, reflections skipped in this fixture
+        0.6,         // refl_max_roughness — RT_REFLECTION_MAX_ROUGHNESS
+        0.1,         // refl_rough_band — blend band width
     );
     let params_buffer = device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
     // RT-P3: unread by this proof (gi_spp == 0 above), same ABI-stub
@@ -216,6 +242,8 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         &out_sv,
         &out_irr,
         &out_n,
+        &out_refl,
+        &prefiltered_env,
         "trace_shadow_rays-proof",
     );
     encoder.commit_and_wait_completed();
@@ -362,6 +390,28 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
         label: "rt-p1-2blas-out_n-stub",
         mip_levels: 1,
     });
+    // RT-R1: reflection output — stub for this fixture (refl_spp == 0, never read)
+    let out_refl = device.create_texture(&GpuTextureDesc {
+        width: 2,
+        height: 1,
+        depth: 1,
+        format: GpuTextureFormat::Rgba16Float,
+        dimension: GpuTextureDimension::D2,
+        usage: GpuTextureUsage::SHADER_WRITE | GpuTextureUsage::SHADER_READ,
+        label: "rt-p1-2blas-out_refl-stub",
+        mip_levels: 1,
+    });
+    // RT-R1 (§9.3 RD4): prefiltered env for reflection miss branch — 1x1 dummy
+    let prefiltered_env = device.create_texture(&GpuTextureDesc {
+        width: 1,
+        height: 1,
+        depth: 1,
+        format: GpuTextureFormat::Rgba16Float,
+        dimension: GpuTextureDimension::D2,
+        usage: GpuTextureUsage::SHADER_READ,
+        label: "rt-p1-2blas-prefiltered-env-dummy",
+        mip_levels: 1,
+    });
 
     let params = ShadowRayParams::new(
         [0.0, 0.0, 1.0],
@@ -377,6 +427,9 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
         [0.0, 0.0, 0.0],
         [0.0, 0.0, 0.0], // RT-T1-B: camera_pos — unused, ao_spp/gi_spp both 0 above
         IDENTITY,
+        0,           // refl_spp — 0, reflections skipped in this fixture
+        0.6,         // refl_max_roughness — RT_REFLECTION_MAX_ROUGHNESS
+        0.1,         // refl_rough_band — blend band width
     );
     let params_buffer = device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
     // RT-P3: unread by this proof (gi_spp == 0 above), same ABI-stub
@@ -401,6 +454,8 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
         &out_sv,
         &out_irr,
         &out_n,
+        &out_refl,
+        &prefiltered_env,
         "trace_shadow_rays-2blas-proof",
     );
     encoder.commit_and_wait_completed();

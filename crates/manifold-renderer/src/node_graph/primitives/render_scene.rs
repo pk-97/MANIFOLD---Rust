@@ -437,6 +437,13 @@ struct RenderSceneUniforms {
     /// `KHR_materials_volume`'s `attenuationColor` (`xyz`, default
     /// `[1,1,1]` — neutral). `w` reserved.
     volume_attenuation_color: [f32; 4],
+    /// RAYTRACING_DESIGN.md §9 RD9/RD1: RT feature flags the FRAGMENT
+    /// shader needs (scene_params.w only says "RT active", not "the
+    /// reflection texture holds traced data this frame"). `x` =
+    /// rt_reflections active (rt_enabled && rt_ready && rt_reflections &&
+    /// non-empty casters — written alongside `scene_params[3]`). `yzw`
+    /// reserved (R2's specular-accumulation flags).
+    rt_flags: [f32; 4],
 }
 
 // 736 = 46 × 16 → the naga 16-byte uniform-size rule holds. Was 480 before
@@ -445,13 +452,14 @@ struct RenderSceneUniforms {
 // `ior`/`specular_factor` rode existing reserved slots on
 // `pbr_metallic_roughness` instead of growing the struct). Still 656 after
 // G-P5/D5: `clearcoat`/`clearcoat_roughness` rode `alpha_params`'s two
-// reserved slots — no struct growth. Now 736 after
+// reserved slots — no struct growth. Was 736 after
 // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1/D2: five new vec4s
 // (`sheen_params`/`iridescence_params`/`anisotropy_dispersion_params`/
 // `transmission_volume_params`/`volume_attenuation_color`, +80 bytes) —
 // ONE migration sized for all five families this doc's phases add, per
-// D2 (never grown again per-family).
-const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 736);
+// D2 (never grown again per-family). Now 752 after RAYTRACING_DESIGN.md §9
+// RD9: `rt_flags` (+16) — an RT feature flag word, not a glTF family.
+const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 752);
 
 /// Per-(caster, object) uniform for the shadow depth pass
 /// (`shaders/shadow_depth.wgsl`). The vertex shader composes
@@ -778,6 +786,17 @@ pub struct RenderScene {
     /// lazy discipline as every other RT-only resource here).
     rt_irr_half: Option<manifold_gpu::GpuTexture>,
     rt_irr_full: Option<manifold_gpu::GpuTexture>,
+    /// RT-R1 (§9.3): half-res reflection-radiance output target (`out_refl`),
+    /// the mirror of `rt_irr_half`. Inert until T5's reflection kernel —
+    /// allocated + reset by `ensure_rt_irradiance` alongside irradiance.
+    rt_refl_half: Option<manifold_gpu::GpuTexture>,
+    /// RT-R1 (§9.3): full-res reflection-radiance output — the upsample
+    /// target for `rt_refl_half` (mirrors `rt_irr_full`). Inert until T5's
+    /// reflection kernel writes it; bind-only for upsample/atrous in R1.
+    rt_refl_full: Option<manifold_gpu::GpuTexture>,
+    /// RT-R1 (§9.3): full-res reflection scratch for à-trous ping-pong
+    /// (mirrors `rt_irr_full_b`). Inert/bind-only until T5.
+    rt_refl_full_b: Option<manifold_gpu::GpuTexture>,
     /// RT-T1-C (RAYTRACING_DESIGN.md §8 Tier-1 item 1, BUG-311): the
     /// temporally-accumulated demodulated irradiance, its per-pixel depth,
     /// and its per-pixel normal history, each a PING-PONG PAIR —
@@ -1028,6 +1047,9 @@ impl RenderScene {
             rt_normal_sources_capacity: 0,
             rt_irr_half: None,
             rt_irr_full: None,
+            rt_refl_half: None,
+            rt_refl_full: None,
+            rt_refl_full_b: None,
             rt_irr_history: [None, None],
             rt_depth_history: [None, None],
             rt_normal_history: [None, None],
@@ -1160,6 +1182,17 @@ impl RenderScene {
                 label: "Temporal Upscale",
                 ty: ParamType::Bool,
                 default: ParamValue::Bool(false),
+                range: None,
+                enum_values: &[],
+            },
+            // RAYTRACING_DESIGN.md §9 RD9 (T4): per-scene reflection toggle.
+            // Default ON (Q3). Inert when `rt_enabled` false — no reflection
+            // rays are dispatched unless the RT pipeline is active.
+            ParamDef {
+                name: std::borrow::Cow::Borrowed("rt_reflections"),
+                label: "RT Reflections",
+                ty: ParamType::Bool,
+                default: ParamValue::Bool(true),
                 range: None,
                 enum_values: &[],
             },
@@ -1718,6 +1751,14 @@ impl RenderScene {
         let rgba16 = manifold_gpu::GpuTextureFormat::Rgba16Float;
         self.rt_irr_half = Some(make(half_w, half_h, rgba16, "node.render_scene rt_irr_half (RT-P2)"));
         self.rt_irr_full = Some(make(width, height, rgba16, "node.render_scene rt_irr_full (RT-P2)"));
+        // RT-R1 (§9.3): half-res reflection-radiance output — same lifecycle
+        // as `rt_irr_half` (the dispatch writes it; T5's kernel is the writer;
+        // inert/bind-only until then).
+        self.rt_refl_half = Some(make(half_w, half_h, rgba16, "node.render_scene rt_refl_half (RT-R1)"));
+        // RT-R1 (§9.3): full-res reflection-radiance output target & atrous
+        // scratch (mirror `rt_irr_full`/`rt_irr_full_b`). Inert until T5.
+        self.rt_refl_full = Some(make(width, height, rgba16, "node.render_scene rt_refl_full (RT-R1)"));
+        self.rt_refl_full_b = Some(make(width, height, rgba16, "node.render_scene rt_refl_full_b (RT-R1 atrous)"));
         // RT-T1-C: current-frame primary-hit normal, same half/full
         // lifecycle as irradiance above (not persistent history).
         self.rt_normal_half = Some(make(half_w, half_h, rgba16, "node.render_scene rt_normal_half (RT-T1-C)"));
@@ -2619,6 +2660,9 @@ fn build_uniforms(
             material.volume_attenuation_color[2],
             0.0,
         ],
+        // Overwritten per-object right after the build (rt_reflections
+        // gate, §9 RD9) — default 0 = substitution OFF.
+        rt_flags: [0.0; 4],
     }
 }
 
@@ -2939,6 +2983,11 @@ impl EffectNode for RenderScene {
         // folded into `view_proj` — the RT pass's `inv_view_proj` must
         // match the SAME `view_proj` the main draw uses this frame.
         let rt_enabled = matches!(ctx.params.get("rt_enabled"), Some(ParamValue::Bool(true)));
+        // RAYTRACING_DESIGN.md §9 RD9 (T4): per-scene reflection toggle,
+        // gated on rt_enabled — inert when RT is off entirely. Default ON
+        // (Q3). T5 fine-tunes the spp/roughness-band constants.
+        let rt_reflections = rt_enabled
+            && matches!(ctx.params.get("rt_reflections"), Some(ParamValue::Bool(true)));
         // BUG-308/RT-D4: `rt_accel`'s build is async (raytrace.rs) —
         // `false` whenever there's no resident accel yet, OR a topology
         // (re)build hasn't completed. Every downstream "use RT shadows"
@@ -3230,6 +3279,13 @@ impl EffectNode for RenderScene {
             // `has_casters` (declared later in this function, after this
             // loop) — same underlying `casters` Vec, already populated.
             uniforms.scene_params[3] = if rt_enabled && rt_ready && !casters.is_empty() { 1.0 } else { 0.0 };
+            // RAYTRACING_DESIGN.md §9 RD9/RD1: the reflection-substitution
+            // gate — stricter than scene_params.w: the raster may only
+            // read `rt_reflection` (binding 43) when the trace dispatch
+            // actually ran WITH refl_spp > 0 this frame, i.e. the
+            // rt_reflections param is also on. Same per-object write
+            // (scene-wide value, like scene_params.w).
+            uniforms.rt_flags[0] = if rt_reflections && rt_ready && !casters.is_empty() { 1.0 } else { 0.0 };
             if base_color_map.is_some() {
                 uniforms.texture_flags[2] = 1.0; // z = base_color_map present (matches resolve_albedo's texture_flags.z gate)
             }
@@ -3964,6 +4020,13 @@ impl EffectNode for RenderScene {
                     // raster pass shades from.
                     cam.pos,
                     inv_view_proj,
+                    // RT-R1 (§9.3): reflection config — T4 wires refl_spp to
+                    // the rt_reflections scene param, gated on rt_enabled;
+                    // T5 tunes the spp/roughness-band constants. 0.6/0.1 are
+                    // the RD7 starting constants.
+                    if rt_reflections { 1 } else { 0 },
+                    0.6,
+                    0.1,
                 );
                 // RAYTRACING_DESIGN.md §5.2 P3: rebuild the per-object
                 // material table from the SAME `shadow_caster_draws` order
@@ -3986,6 +4049,15 @@ impl EffectNode for RenderScene {
                                 d.uniforms.emission[0],
                                 d.uniforms.emission[1],
                                 d.uniforms.emission[2],
+                            ],
+                            // RT-R1: the SAME resolved metallic/roughness
+                            // fs_pbr shades with (render_scene.rs:332); z/w
+                            // reserved (ior/specular stay on the raster side).
+                            [
+                                d.uniforms.pbr_metallic_roughness[0],
+                                d.uniforms.pbr_metallic_roughness[1],
+                                0.0,
+                                0.0,
                             ],
                         )
                     })
@@ -4054,6 +4126,9 @@ impl EffectNode for RenderScene {
                 let irr_full = self.rt_irr_full.as_ref().expect("ensured above");
                 let normal_half = self.rt_normal_half.as_ref().expect("ensured above");
                 let normal_full = self.rt_normal_full.as_ref().expect("ensured above");
+                let refl_half = self.rt_refl_half.as_ref().expect("ensured above");
+                let refl_full = self.rt_refl_full.as_ref().expect("ensured above");
+                let _refl_full_b = self.rt_refl_full_b.as_ref().expect("ensured above");
                 tracer.dispatch_shadow_rays(
                     gpu.native_enc,
                     accel,
@@ -4066,6 +4141,15 @@ impl EffectNode for RenderScene {
                     mask_half,
                     irr_half,
                     normal_half,
+                    refl_half,
+                    // RT-R1 (§9.3 RD4): the env mip chain the reflection
+                    // miss branch samples — dummy when the scene has no
+                    // IBL chain (the miss then reads the same nothing the
+                    // raster IBL would). dummy_texture is ensured upstream
+                    // of evaluate's RT block (3491).
+                    self.prefiltered_specular.as_ref().unwrap_or(
+                        self.dummy_texture.as_ref().expect("ensured at 3491"),
+                    ),
                     "node.render_scene RT-D3/RT-P2/RT-P3 trace_shadow_rays",
                 );
                 tracer.upsample_shadow(
@@ -4078,6 +4162,8 @@ impl EffectNode for RenderScene {
                     irr_full,
                     normal_half,
                     normal_full,
+                    refl_half,
+                    refl_full,
                     "node.render_scene RT-D3/RT-P2 upsample_shadow",
                 );
 
@@ -4100,6 +4186,7 @@ impl EffectNode for RenderScene {
                 let mask_full_b = self.rt_mask_full_b.as_ref().expect("ensured above");
                 let irr_full_b = self.rt_irr_full_b.as_ref().expect("ensured above");
                 let normal_full_b = self.rt_normal_full_b.as_ref().expect("ensured above");
+                let refl_full_b = self.rt_refl_full_b.as_ref().expect("ensured above");
                 let history_valid = self.rt_moments_valid;
                 for pass in 0..(ATROUS_ITERATIONS - 1) {
                     // T1-D: dilation starts at 2, not 1 — the AO/GI trace
@@ -4111,10 +4198,10 @@ impl EffectNode for RenderScene {
                     // is the smallest offset guaranteed to cross into an
                     // adjacent (independently-sampled) half-res block.
                     let step = 2u32 << pass;
-                    let (src_sv, src_irr, src_n, dst_sv, dst_irr, dst_n) = if pass % 2 == 0 {
-                        (mask_full, irr_full, normal_full, mask_full_b, irr_full_b, normal_full_b)
+                    let (src_sv, src_irr, src_n, src_refl, dst_sv, dst_irr, dst_n, dst_refl) = if pass % 2 == 0 {
+                        (mask_full, irr_full, normal_full, refl_full, mask_full_b, irr_full_b, normal_full_b, refl_full_b)
                     } else {
-                        (mask_full_b, irr_full_b, normal_full_b, mask_full, irr_full, normal_full)
+                        (mask_full_b, irr_full_b, normal_full_b, refl_full_b, mask_full, irr_full, normal_full, refl_full)
                     };
                     let atrous_params = manifold_gpu::raytrace::AtrousParams::new([width, height], step, history_valid);
                     tracer.atrous_pass(
@@ -4129,6 +4216,8 @@ impl EffectNode for RenderScene {
                         dst_irr,
                         src_n,
                         dst_n,
+                        src_refl,
+                        dst_refl,
                         "node.render_scene RT-T1-D atrous_pass",
                     );
                 }
@@ -4344,7 +4433,14 @@ impl EffectNode for RenderScene {
         // most recently WROTE this frame (dummy when RT isn't active this
         // frame — same ABI-stub discipline as `rt_mask_tex`).
         let rt_irr_tex = self.rt_irr_history[self.rt_history_ping].as_ref().unwrap_or(dummy);
-        let binding_sets: Vec<[GpuBinding; 43]> = draws
+        // RAYTRACING_DESIGN.md §9 RD1: the full-res traced-reflection
+        // texture fs_pbr SUBSTITUTES for its prefiltered-env fetch when
+        // `rt_flags.x > 0.5` — always bound (ABI-stub discipline), dummy
+        // whenever the substitution is gated off (the textureLoad is
+        // unreachable then). `rt_refl_full` is where the EVEN atrous pass
+        // count lands the final signal (same layout as `mask_full`).
+        let rt_refl_tex = self.rt_refl_full.as_ref().unwrap_or(dummy);
+        let binding_sets: Vec<[GpuBinding; 44]> = draws
             .iter()
             .map(|draw| {
                 [
@@ -4575,6 +4671,10 @@ impl EffectNode for RenderScene {
                     GpuBinding::Texture {
                         binding: 42,
                         texture: rt_irr_tex,
+                    },
+                    GpuBinding::Texture {
+                        binding: 43,
+                        texture: rt_refl_tex,
                     },
                 ]
             })
@@ -5207,13 +5307,13 @@ mod tests {
         assert!(s.inputs().iter().any(|p| p.name == "light_0"));
         assert!(!s.inputs().iter().any(|p| p.name == "light_1"));
         // `objects` + `lights` + `rt_enabled` (D14) + `temporal_upscale`
-        // (§5.2 P4) — per-object TRS moved to `node.scene_object`'s
+        // (§5.2 P4) + `rt_reflections` (§9 RD9) — per-object TRS moved to `node.scene_object`'s
         // `transform` input (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2 D3);
         // instances carries no per-object instance_count param either
         // (REALTIME_3D_DESIGN.md §10 D11). Neither toggle grows with object
         // count — this assertion is about object count, not the fixed
         // scene-level toggle set.
-        assert_eq!(s.parameters().len(), 4);
+        assert_eq!(s.parameters().len(), 5);
         assert!(!s.parameters().iter().any(|p| p.name.contains("pos_x")));
     }
 
@@ -5226,7 +5326,7 @@ mod tests {
         assert!(!node.inputs().iter().any(|p| p.name == "object_5"));
         assert!(node.inputs().iter().any(|p| p.name == "light_2"));
         assert!(!node.inputs().iter().any(|p| p.name == "light_3"));
-        assert_eq!(node.parameters().len(), 4, "object count never grows the fixed scene-level toggle set");
+        assert_eq!(node.parameters().len(), 5, "object count never grows the fixed scene-level toggle set");
 
         node.reconfigure(&params_with(1.0, 0.0));
         assert!(!node.inputs().iter().any(|p| p.name == "object_1"));
@@ -5278,7 +5378,7 @@ mod tests {
         assert!(node.inputs().iter().any(|p| p.name == "object_31"));
         // objects/lights + fixed scene-level toggles — object count never
         // grows the param list.
-        assert_eq!(node.parameters().len(), 4);
+        assert_eq!(node.parameters().len(), 5);
     }
 
     #[test]

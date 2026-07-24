@@ -456,6 +456,13 @@ struct ShadowRayParams {
     // ray cast to find the real hit triangle at this pixel (see
     // `fetch_interpolated_normal` below). Unused when ao_spp==0 && gi_spp==0.
     packed_float3 camera_pos;
+    // RT-R1 (§9.3): reflection-ray config — mirrors the Rust fields
+    // field-for-field (refl_spp / refl_max_roughness / refl_rough_band /
+    // _pad_refl). Inert in T3 (kernel reads these in T5).
+    uint   refl_spp;
+    float  refl_max_roughness;
+    float  refl_rough_band;
+    uint   _pad_refl;
     // RT-D3: ray origins come from the prepass DEPTH texture + this
     // inverse view-proj — no stored world-pos/normal G-buffer target in
     // P1. Column-major, matches `render_scene.rs`'s `mat4_inverse` output
@@ -472,6 +479,7 @@ struct ShadowRayParams {
 struct GiMaterial {
     packed_float3 albedo;   float _p0;
     packed_float3 emissive; float _p1;   // linear HDR, premultiplied by intensity
+    float4 metallic_roughness;   // RT-R1: x=metallic, y=roughness (z/w reserved)
 };
 
 // RT-T1-B (RAYTRACING_DESIGN.md §8 Tier-1 item 2): per-object bindless
@@ -672,6 +680,41 @@ static float3 cosine_hemisphere(float3 n, float2 u) {
     return normalize(t * (r * cos(phi)) + b * (r * sin(phi)) + n * sqrt(max(0.0, 1.0 - u.x)));
 }
 
+// RT-R1 (RAYTRACING_DESIGN.md §9.3 kernel flow step 2): GGX-importance-
+// sampled reflection direction — a half-vector drawn from the GGX NDF at
+// the surface roughness (same tangent-frame construction
+// `cosine_hemisphere` uses), then the view vector mirrored about it. A
+// NEW sampling FUNCTION riding the SAME `blue_noise_sample` sequence as
+// AO/GI, per the design — not a new sampling system. roughness == 0
+// skips this entirely (the caller keeps the exact mirror direction).
+static float3 ggx_reflection_dir(float3 n, float3 v, float roughness, float2 u) {
+    float a = roughness * roughness;
+    float a2 = a * a;
+    float phi = 6.2831853 * u.x;
+    float cos_theta = sqrt((1.0 - u.y) / (1.0 + (a2 - 1.0) * u.y));
+    float sin_theta = sqrt(max(0.0, 1.0 - cos_theta * cos_theta));
+    float3 t = ortho_basis_x(n), b = cross(n, t);
+    float3 h = normalize(t * (sin_theta * cos(phi)) + b * (sin_theta * sin(phi)) + n * cos_theta);
+    return reflect(-v, h);
+}
+
+// RT-R1 (§9.3 RD4): the SAME equirect mapping + roughness mip selection
+// `render_scene.wgsl`'s split-sum IBL applies to `prefiltered_specular`
+// (lines 1506-1510) — miss radiance and the RD7 cutoff/band env value
+// MUST equal what the raster would have fetched, or the substitution
+// changes pixels the ray never wanted to (I-R1's empty-scene equality
+// gate). RT_REFL_PREFILTER_MAX_MIP mirrors WGSL's `PREFILTER_MAX_MIP`
+// (= PREFILTER_MIP_COUNT - 1) — keep in sync (same cross-mirror
+// discipline as the WGSL constant's own comment).
+constant float RT_REFL_PREFILTER_MAX_MIP = 5.0;
+static float3 refl_env_sample(texture2d<float> env, float3 dir, float roughness) {
+    constexpr sampler env_sampler(coord::normalized, address::repeat, filter::linear, mip_filter::linear);
+    float azimuth = atan2(dir.z, dir.x);
+    float elevation = asin(clamp(dir.y, -1.0, 1.0));
+    float2 uv = float2(azimuth / 6.2831853 + 0.5, elevation / 3.14159265 + 0.5);
+    return env.sample(env_sampler, uv, level(roughness * RT_REFL_PREFILTER_MAX_MIP)).rgb;
+}
+
 // RT-T1-D (RAYTRACING_DESIGN.md §8 Tier-1 item 3, BUG-312): low-discrepancy
 // sample for AO/GI hemisphere directions ONLY (shadow rays keep `rand2`+
 // `cone_sample` — T1-D's brief scopes blue noise to AO/GI). R2 (Roberts
@@ -744,6 +787,14 @@ kernel void trace_shadow_rays(
     // RT-T2-A: fixed slots for alpha-masked objects' base-color textures —
     // see `MAX_RT_ALPHA_TEXTURES`'s doc comment.
     array<texture2d<float>, MAX_RT_ALPHA_TEXTURES> alpha_textures [[texture(4)]],
+    texture2d<float, access::write> out_refl [[texture(8)]],   // RT-R1 (§9.3): .rgb = incident radiance along R, .a = hit distance
+    // RT-R1 (§9.3 RD4): the node's prefiltered-specular env mip chain —
+    // the reflection ray's MISS radiance, sampled at the ray's roughness
+    // mip with the SAME equirect mapping `render_scene.wgsl`'s split-sum
+    // IBL uses (one wire away, §9.1). Always bound (dummy when the scene
+    // has no env chain — the miss branch then reads the same nothing the
+    // raster IBL would).
+    texture2d<float>               prefiltered_env [[texture(9)]],
     uint2 tid [[thread_position_in_grid]])
 {
     if (tid.x >= p.trace_size.x || tid.y >= p.trace_size.y) return;
@@ -759,6 +810,9 @@ kernel void trace_shadow_rays(
         out_sv.write(float4(1, 1, 0, 0), tid);
         out_irr.write(float4(p.ambient_color, 0), tid);
         out_n.write(float4(0, 1, 0, -1.0), tid);
+        // RT-R1: void background reflects nothing (no fragment shades there
+        // either — the raster never reads this texel).
+        out_refl.write(float4(0, 0, 0, 0), tid);
         return;
     }
     // Neighbor world positions (screen-space reconstruction, RT-D3) — kept
@@ -790,7 +844,10 @@ kernel void trace_shadow_rays(
     // shimmer BUG-320 left behind). Stored as float: instance counts are
     // far below f32's 2^24 exact-integer range.
     float obj_id = -1.0;
-    if (p.ao_spp > 0u || p.gi_spp > 0u) {
+    // RT-R1: the primary ray is also the reflection block's source of `n`
+    // and `obj_id` (RD3 — vertex normal, not shading normal), so it must
+    // cast whenever reflections are on too.
+    if (p.ao_spp > 0u || p.gi_spp > 0u || p.refl_spp > 0u) {
         float3 to_surface = wp - float3(p.camera_pos);
         float dist = length(to_surface);
         if (dist > 1e-6) {
@@ -915,6 +972,9 @@ kernel void trace_shadow_rays(
     // ao` above, which is this kernel's existing flat-env term — the P0
     // prototype had no separate ambient/AO term to double against, ours
     // does, so the gather's own job narrows to emissive + sun-bounce).
+    // Hoisted to kernel scope by RT-R1 (§9.3 RD4): the reflection block's
+    // hit shading reuses the GI gather's lines including this scale.
+    const float SUN_BOUNCE_INTENSITY_SCALE = 0.08;
     float3 gi = float3(0.0);
     if (p.gi_spp > 0) {
         ray gr;
@@ -964,12 +1024,95 @@ kernel void trace_shadow_rays(
                 // flat-cosine stand-in; `hit_ndotl` only ever makes the
                 // bounce dimmer or equal (never brighter) than that
                 // baseline, so the committed 0.02-0.3 range still holds.
-                const float SUN_BOUNCE_INTENSITY_SCALE = 0.08;
+                // (Declaration hoisted to kernel scope for RT-R1 — see the
+                // GI block's head.)
                 float3 bounce = hit_albedo * float3(p.sun_color) * hit_sun_vis * hit_ndotl * SUN_BOUNCE_INTENSITY_SCALE;
                 gi += hit_emissive + bounce;
             }
         }
         gi /= float(p.gi_spp);
+    }
+
+    // RT-R1 (RAYTRACING_DESIGN.md §9.3 kernel flow): traced specular for
+    // the PBR base lobe, inside the SAME thread/dispatch as shadow/AO/GI
+    // (RD2 — D16's seam, no reflection pass). Reuses their `origin`, `n`,
+    // `bias_eps`, `obj_id`. `.rgb` = incident radiance along R
+    // (SUBSTITUTES the raster's prefiltered-env fetch in fs_pbr — RD1);
+    // `.a` = hit distance for R2's virtual-hit-point reprojection (RD6),
+    // RT_REFL_MISS_HIT_DIST on miss/cutoff so R2's reprojection
+    // degenerates to plain surface reprojection.
+    //
+    // `origin` biases along `sun_dir` (the shadow ray's bias — the design
+    // says reuse it): the t_min rejection below is what protects the
+    // reflection ray from self-intersection, same as the shadow ray's.
+    const float RT_REFL_MISS_HIT_DIST = 0.0;
+    if (p.refl_spp > 0u && obj_id >= 0.0) {
+        uint roi = uint(obj_id);
+        float4 mr = gi_materials[roi].metallic_roughness;
+        float roughness = mr.y;
+        float3 V = normalize(float3(p.camera_pos) - wp);
+        float3 R = reflect(-V, n);
+        // RD7's env value: direction R at this pixel's roughness mip —
+        // byte-equal to what fs_pbr would have fetched (I-R1).
+        float3 env = refl_env_sample(prefiltered_env, R, roughness);
+        if (roughness > p.refl_max_roughness + p.refl_rough_band) {
+            // RD7: above the cutoff+band the prefiltered env IS the
+            // approximation — no ray cast.
+            out_refl.write(float4(env, RT_REFL_MISS_HIT_DIST), tid);
+        } else {
+            float3 rdir = R;
+            if (roughness > 0.0) {
+                rdir = ggx_reflection_dir(n, V, roughness, blue_noise_sample(tid, p.frame_index, 0u, p.refl_spp));
+            }
+            ray rr;
+            rr.origin = origin;
+            rr.direction = rdir;
+            rr.min_distance = bias_eps * 0.5;
+            rr.max_distance = INFINITY;
+            intersection_query<triangle_data, instancing> refl_q;
+            refl_q.reset(rr, accel);
+            float3 traced;
+            float hit_dist = RT_REFL_MISS_HIT_DIST;
+            if (walk_with_alpha_test(refl_q, normal_sources, alpha_textures, false)) {
+                // RD4: hit shading IS the GI gather's lines (emissive +
+                // sun-bounce with the SAME scale constant) — one shading
+                // path for all secondary rays, no reflection-specific
+                // material model in v1.
+                uint hoi = refl_q.get_committed_instance_id();
+                uint hpid = refl_q.get_committed_primitive_id();
+                float2 hbary = refl_q.get_committed_triangle_barycentric_coord();
+                hit_dist = refl_q.get_committed_distance();
+                float3 hit_emissive = float3(gi_materials[hoi].emissive);
+                float3 hit_albedo = float3(gi_materials[hoi].albedo);
+                float3 hit_pos = rr.origin + rr.direction * hit_dist;
+                float3 hit_n = fetch_interpolated_normal(normal_sources, hoi, hpid, hbary);
+                ray sun_r;
+                sun_r.origin = hit_pos + p.sun_dir * bias_eps;
+                sun_r.direction = cone_sample(p.sun_dir, p.sun_cone, rand2(tid, p.frame_index, 500u));
+                sun_r.min_distance = bias_eps * 0.5;
+                sun_r.max_distance = INFINITY;
+                intersection_query<triangle_data, instancing> sun_q;
+                sun_q.reset(sun_r, accel);
+                float hit_sun_vis = walk_with_alpha_test(sun_q, normal_sources, alpha_textures, true) ? 0.0 : 1.0;
+                float hit_ndotl = max(dot(hit_n, p.sun_dir), 0.0);
+                traced = hit_emissive + hit_albedo * float3(p.sun_color) * hit_sun_vis * hit_ndotl * SUN_BOUNCE_INTENSITY_SCALE;
+            } else {
+                // RD4: miss returns the env at the ray's actual (possibly
+                // GGX-perturbed) direction, roughness mip.
+                traced = refl_env_sample(prefiltered_env, rdir, roughness);
+            }
+            // RD7's band: blend traced -> env across [max_roughness,
+            // max_roughness + band] so the cutoff is continuous, not a
+            // visible edge (Q2's approved BRDF-domain split).
+            float band_t = saturate((roughness - p.refl_max_roughness) / max(p.refl_rough_band, 1e-4));
+            out_refl.write(float4(mix(traced, env, band_t), hit_dist), tid);
+        }
+    } else {
+        // Reflections off this frame (or the primary ray missed — no
+        // material to read): zero. The raster only reads this texture
+        // when `rt_flags.x > 0.5`, which requires this dispatch to have
+        // run with refl_spp > 0.
+        out_refl.write(float4(0, 0, 0, 0), tid);
     }
 
     // RT-P2/D3: demodulated irradiance — AO-occluded flat ambient plus
@@ -1018,6 +1161,11 @@ kernel void upsample_shadow(
     // already needed full-res CURRENT irradiance.
     texture2d<float>                lo_n      [[texture(5)]],
     texture2d<float, access::write> hi_n      [[texture(6)]],
+    // RT-R1 (§9.3): reflection-radiance textures — upsampled with the
+    // SAME depth+normal edge-stopped weights (R2 adds roughness-aware
+    // filtering; v1 rides the shared chain).
+    texture2d<float>                lo_refl   [[texture(7)]],
+    texture2d<float, access::write> hi_refl   [[texture(8)]],
     uint2 tid [[thread_position_in_grid]])
 {
     if (tid.x >= p.gbuffer_size.x || tid.y >= p.gbuffer_size.y) return;
@@ -1026,6 +1174,7 @@ kernel void upsample_shadow(
         hi_sv.write(float4(1, 1, 0, 0), tid);
         hi_irr.write(float4(p.ambient_color, 0), tid);
         hi_n.write(float4(0, 1, 0, -1.0), tid);
+        hi_refl.write(float4(0, 0, 0, 0), tid);
         return;
     }
 
@@ -1044,7 +1193,7 @@ kernel void upsample_shadow(
     // normal divergence to near-zero weight while still full-weighting a
     // shared flat surface's own precision noise.
     const float UPSAMPLE_NORMAL_POWER = 32.0;
-    float2 acc_sv = 0.0; float3 acc_irr = 0.0; float3 acc_n = 0.0; float wsum = 0.0;
+    float2 acc_sv = 0.0; float3 acc_irr = 0.0; float3 acc_n = 0.0; float3 acc_refl = 0.0; float wsum = 0.0;
     for (int dy = 0; dy <= 1; dy++)
     for (int dx = 0; dx <= 1; dx++) {
         int2 q = clamp(lo_c + int2(dx, dy), int2(0), int2(p.trace_size) - 1);
@@ -1059,6 +1208,7 @@ kernel void upsample_shadow(
         acc_sv += lo_sv.read(uint2(q)).rg * w;
         acc_irr += lo_irr.read(uint2(q)).rgb * w;
         acc_n += qn * w;
+        acc_refl += lo_refl.read(uint2(q)).rgb * w;
         wsum += w;
     }
     hi_sv.write(float4(acc_sv / wsum, 0, 0), tid);
@@ -1068,6 +1218,11 @@ kernel void upsample_shadow(
     // RT-T2-C: object ids never blend — carry the nearest tap's id (the
     // same tap already trusted as the edge-stop reference normal).
     hi_n.write(float4(n_len > 1e-4 ? n_avg / n_len : float3(0, 1, 0), ref_n4.w), tid);
+    // RT-R1: reflection radiance blends like irradiance; the hit distance
+    // in `.a` never blends (R2's reprojection needs ONE surface's
+    // distance) — carry the nearest tap's, same discipline as the object
+    // id above.
+    hi_refl.write(float4(acc_refl / wsum, lo_refl.read(uint2(nearest_lo)).a), tid);
 }
 
 // RT-T1-D (RAYTRACING_DESIGN.md §8 Tier-1 item 3, BUG-312): CPU mirror
@@ -1114,6 +1269,12 @@ kernel void atrous_filter(
     texture2d<float, access::write>  dst_irr      [[texture(5)]],
     texture2d<float>                 src_n        [[texture(6)]],
     texture2d<float, access::write>  dst_n        [[texture(7)]],
+    // RT-R1 (§9.3): reflection-radiance textures — filtered with the SAME
+    // depth+normal+luma edge-stopped weights as the irradiance channel
+    // (R2 narrows the luma stop with roughness; v1 rides the shared
+    // filter).
+    texture2d<float>                 src_refl     [[texture(8)]],
+    texture2d<float, access::write>  dst_refl     [[texture(9)]],
     uint2 tid [[thread_position_in_grid]])
 {
     if (tid.x >= p.size.x || tid.y >= p.size.y) return;
@@ -1124,6 +1285,7 @@ kernel void atrous_filter(
         dst_sv.write(src_sv.read(tid), tid);
         dst_irr.write(src_irr.read(tid), tid);
         dst_n.write(src_n.read(tid), tid);
+        dst_refl.write(src_refl.read(tid), tid);
         return;
     }
     float4 center_n4 = src_n.read(tid);
@@ -1161,6 +1323,7 @@ kernel void atrous_filter(
     };
     float3 acc_irr = center_irr;
     float2 acc_sv = src_sv.read(tid).rg;
+    float3 acc_refl = src_refl.read(tid).rgb;
     float wsum = 1.0;
     for (int i = 0; i < 8; i++) {
         int2 q = int2(tid) + offsets[i] * int(p.step);
@@ -1176,12 +1339,17 @@ kernel void atrous_filter(
         float w = w_depth * w_normal * w_luma;
         acc_irr += qirr * w;
         acc_sv += src_sv.read(uq).rg * w;
+        acc_refl += src_refl.read(uq).rgb * w;
         wsum += w;
     }
     dst_irr.write(float4(acc_irr / wsum, 0), tid);
     dst_sv.write(float4(acc_sv / wsum, 0, 0), tid);
     // RT-T2-C: `.w` = object id, passed through untouched (never blended).
     dst_n.write(float4(center_n, center_n4.w), tid);
+    // RT-R1: reflection radiance filters with the shared weights; hit
+    // distance in `.a` passes through untouched (never blended — R2's
+    // reprojection needs one surface's distance).
+    dst_refl.write(float4(acc_refl / wsum, src_refl.read(tid).a), tid);
 }
 
 // RT-P2/D3, extended RT-T1-C (BUG-311): temporal accumulation of the
@@ -1415,17 +1583,26 @@ pub struct ShadowRayParams {
     /// reconstruction. Unused (may be left zeroed) when `ao_spp == 0 &&
     /// gi_spp == 0` — the only two consumers of that normal.
     pub camera_pos: [f32; 3],
-    /// MSL's `float4x4` requires 16-byte alignment; the 88 bytes above it
-    /// need 8 more to reach the next 16-byte boundary (96) — RT-T1-B added
-    /// `camera_pos` (12 bytes) to the prefix, shrinking this pad from 4 to
-    /// 2 `u32`s; the total struct size (160) and `inv_view_proj`'s offset
-    /// (96) are UNCHANGED from what they'd otherwise be (see the offset/
-    /// size asserts below). `#[repr(C)]` does NOT know `[[f32; 4]; 4]`
-    /// needs 16-byte alignment (its natural alignment is 4, from `f32`) —
-    /// without this pad, the GPU reads `inv_view_proj` starting early, same
-    /// alignment-gotcha class as the `packed_float3` lesson (P0 §5.1), just
-    /// for a matrix instead of a vec3. Caught by the offset assert below —
-    /// don't resize this padding without re-deriving the offset.
+    /// RT-R1 (RAYTRACING §9.3, RD7/RD8): reflection-ray config. `refl_spp`
+    /// = reflection rays/pixel (1 in v1; 0 disables the branch — inert in
+    /// T3, the kernel reads these in T5). `refl_max_roughness` =
+    /// RT_REFLECTION_MAX_ROUGHNESS (0.6 starting, RD7 BRDF-domain split);
+    /// `refl_rough_band` = the blend-band width. `_pad_refl` makes the
+    /// block a clean 16B so `_pad_align_mat4` still lands `inv_view_proj`
+    /// on its 16-byte boundary (now 112, was 96).
+    pub refl_spp: u32,
+    pub refl_max_roughness: f32,
+    pub refl_rough_band: f32,
+    _pad_refl: u32,
+    /// MSL's `float4x4` requires 16-byte alignment; the 104 bytes above it
+    /// (88 through `camera_pos` + 16 for RT-R1's `refl_*` block) need 8
+    /// more to reach the next 16-byte boundary (112) — so this 8B pad
+    /// (`[u32; 2]`) lands `inv_view_proj` at 112. `#[repr(C)]` does NOT
+    /// know `[[f32; 4]; 4]` needs 16-byte alignment (natural alignment 4,
+    /// from `f32`) — without this pad the GPU reads `inv_view_proj` early,
+    /// the same alignment-gotcha class as the `packed_float3` lesson
+    /// (P0 §5.1) for a matrix. Caught by the offset assert below — don't
+    /// resize this padding without re-deriving the offset.
     _pad_align_mat4: [u32; 2],
     /// Column-major, matches `render_scene.rs`'s `mat4_inverse` output.
     pub inv_view_proj: [[f32; 4]; 4],
@@ -1449,6 +1626,9 @@ impl ShadowRayParams {
         ambient_color: [f32; 3],
         camera_pos: [f32; 3],
         inv_view_proj: [[f32; 4]; 4],
+        refl_spp: u32,
+        refl_max_roughness: f32,
+        refl_rough_band: f32,
     ) -> Self {
         Self {
             sun_dir,
@@ -1463,6 +1643,10 @@ impl ShadowRayParams {
             sun_color,
             ambient_color,
             camera_pos,
+            refl_spp,
+            refl_max_roughness,
+            refl_rough_band,
+            _pad_refl: 0,
             _pad_align_mat4: [0; 2],
             inv_view_proj,
         }
@@ -1480,17 +1664,22 @@ pub struct GiMaterial {
     _pad0: f32,
     pub emissive: [f32; 3],
     _pad1: f32,
+    /// RT-R1: x = metallic, y = roughness — read straight off
+    /// `d.uniforms.pbr_metallic_roughness` (render_scene.rs:332), the SAME
+    /// resolved factors `fs_pbr` shades with. z/w reserved.
+    pub metallic_roughness: [f32; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<GiMaterial>() == 32);
+const _: () = assert!(std::mem::size_of::<GiMaterial>() == 48);
 
 impl GiMaterial {
-    pub fn new(albedo: [f32; 3], emissive: [f32; 3]) -> Self {
+    pub fn new(albedo: [f32; 3], emissive: [f32; 3], metallic_roughness: [f32; 4]) -> Self {
         Self {
             albedo,
             _pad0: 0.0,
             emissive,
             _pad1: 0.0,
+            metallic_roughness,
         }
     }
 }
@@ -1500,8 +1689,8 @@ impl GiMaterial {
 // if `inv_view_proj`'s offset ever drifts from 96 again (a field
 // reordered/resized above it), this fails at compile time instead of
 // silently reading garbage on the GPU.
-const _: () = assert!(std::mem::offset_of!(ShadowRayParams, inv_view_proj) == 96);
-const _: () = assert!(std::mem::size_of::<ShadowRayParams>() == 160);
+const _: () = assert!(std::mem::offset_of!(ShadowRayParams, inv_view_proj) == 112);
+const _: () = assert!(std::mem::size_of::<ShadowRayParams>() == 176);
 
 /// RT-T1-B (RAYTRACING_DESIGN.md §8 Tier-1 item 2): per-object bindless
 /// indirection for real vertex-normal interpolation in the RT trace kernel
@@ -1862,6 +2051,11 @@ pub trait ShadowRayTracer {
         out_sv: &GpuTexture,
         out_irr: &GpuTexture,
         out_n: &GpuTexture,
+        out_refl: &GpuTexture,
+        // RT-R1 (§9.3 RD4): prefiltered-specular env mip chain — the
+        // reflection ray's miss radiance. Always bound (dummy when the
+        // scene has no env chain).
+        prefiltered_env: &GpuTexture,
         label: &str,
     );
 
@@ -1883,6 +2077,8 @@ pub trait ShadowRayTracer {
         hi_irr: &GpuTexture,
         lo_n: &GpuTexture,
         hi_n: &GpuTexture,
+        lo_refl: &GpuTexture,
+        hi_refl: &GpuTexture,
         label: &str,
     );
 
@@ -1908,6 +2104,8 @@ pub trait ShadowRayTracer {
         dst_irr: &GpuTexture,
         src_n: &GpuTexture,
         dst_n: &GpuTexture,
+        src_refl: &GpuTexture,
+        dst_refl: &GpuTexture,
         label: &str,
     );
 
@@ -2009,6 +2207,14 @@ impl MetalShadowRayTracer {
                 (5, SlotKind::Texture),
                 (6, SlotKind::Texture),
                 (7, SlotKind::Texture),
+                // RT-R1 (§9.3): out_refl, MSL [[texture(8)]]. MISSED by the
+                // T3 plumbing (slot maps weren't extended with the kernel
+                // signatures) — the reflection block's writes went nowhere
+                // and the chain read zeros; caught by the R1 mirror probe.
+                (8, SlotKind::Texture),
+                // RT-R1: prefiltered_env, MSL [[texture(9)]] — miss-branch
+                // radiance source.
+                (9, SlotKind::Texture),
             ]),
         );
         let upsample_pipeline = compile_pipeline(
@@ -2024,6 +2230,10 @@ impl MetalShadowRayTracer {
                 (4, SlotKind::Texture),
                 (5, SlotKind::Texture), // RT-T1-C: lo_n
                 (6, SlotKind::Texture), // RT-T1-C: hi_n
+                // RT-R1 (§9.3): lo_refl / hi_refl — see the trace pipeline's
+                // slot-map note (T3 missed these too).
+                (7, SlotKind::Texture),
+                (8, SlotKind::Texture),
             ]),
         );
         let atrous_pipeline = compile_pipeline(
@@ -2040,6 +2250,10 @@ impl MetalShadowRayTracer {
                 (5, SlotKind::Texture), // dst_irr
                 (6, SlotKind::Texture), // src_n
                 (7, SlotKind::Texture), // dst_n
+                // RT-R1 (§9.3): src_refl / dst_refl — see the trace
+                // pipeline's slot-map note (T3 missed these too).
+                (8, SlotKind::Texture),
+                (9, SlotKind::Texture),
             ]),
         );
         let accumulate_pipeline = compile_pipeline(
@@ -2177,6 +2391,8 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         out_sv: &GpuTexture,
         out_irr: &GpuTexture,
         out_n: &GpuTexture,
+        out_refl: &GpuTexture,
+        prefiltered_env: &GpuTexture,
         label: &str,
     ) {
         params_buffer.upload(bytemuck_bytes(params));
@@ -2226,6 +2442,18 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                 texture: tex,
             });
         }
+        // RT-R1 (§9.3): out_refl at [[texture(8)]] — free (alpha_textures
+        // occupy 4..8).
+        bindings.push(GpuBinding::Texture {
+            binding: 8,
+            texture: out_refl,
+        });
+        // RT-R1 (§9.3 RD4): prefiltered env chain at [[texture(9)]] — the
+        // reflection miss branch's radiance source.
+        bindings.push(GpuBinding::Texture {
+            binding: 9,
+            texture: prefiltered_env,
+        });
         encoder.dispatch_compute_with_accel(&self.trace_pipeline, 0, accel, &bindings, groups, label);
     }
 
@@ -2240,6 +2468,8 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         hi_irr: &GpuTexture,
         lo_n: &GpuTexture,
         hi_n: &GpuTexture,
+        lo_refl: &GpuTexture,
+        hi_refl: &GpuTexture,
         label: &str,
     ) {
         // `params.gbuffer_size` (already uploaded by `dispatch_shadow_rays`
@@ -2285,6 +2515,15 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                     binding: 6,
                     texture: hi_n,
                 },
+                // RT-R1 (§9.3): reflection-radiance textures — bind-only, inert until T5.
+                GpuBinding::Texture {
+                    binding: 7,
+                    texture: lo_refl,
+                },
+                GpuBinding::Texture {
+                    binding: 8,
+                    texture: hi_refl,
+                },
             ],
             groups,
             label,
@@ -2304,6 +2543,8 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         dst_irr: &GpuTexture,
         src_n: &GpuTexture,
         dst_n: &GpuTexture,
+        src_refl: &GpuTexture,
+        dst_refl: &GpuTexture,
         label: &str,
     ) {
         params_buffer.upload(atrous_params_bytes(params));
@@ -2347,6 +2588,15 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                 GpuBinding::Texture {
                     binding: 7,
                     texture: dst_n,
+                },
+                // RT-R1 (§9.3): reflection-radiance textures — bind-only, inert until T5.
+                GpuBinding::Texture {
+                    binding: 8,
+                    texture: src_refl,
+                },
+                GpuBinding::Texture {
+                    binding: 9,
+                    texture: dst_refl,
                 },
             ],
             groups,
