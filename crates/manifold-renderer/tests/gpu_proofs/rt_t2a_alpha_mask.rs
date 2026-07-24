@@ -188,6 +188,17 @@ fn run_fixture(alpha_mask: bool) -> [f32; 2] {
         label: "rt-t2a-out_refl-stub",
         mip_levels: 1,
     });
+    // RT-R1 (§9.3 RD4): prefiltered env for reflection miss branch — 1x1 dummy
+    let prefiltered_env = device.create_texture(&GpuTextureDesc {
+        width: 1,
+        height: 1,
+        depth: 1,
+        format: GpuTextureFormat::Rgba16Float,
+        dimension: GpuTextureDimension::D2,
+        usage: GpuTextureUsage::SHADER_READ,
+        label: "rt-t2a-prefiltered-env-dummy",
+        mip_levels: 1,
+    });
 
     let params = ShadowRayParams::new(
         [0.0, 0.0, 1.0],
@@ -224,6 +235,7 @@ fn run_fixture(alpha_mask: bool) -> [f32; 2] {
         &out_irr,
         &out_n,
         &out_refl,
+        &prefiltered_env,
         "trace_shadow_rays-t2a-proof",
     );
     encoder.commit_and_wait_completed();

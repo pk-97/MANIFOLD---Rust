@@ -185,6 +185,18 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         label: "rt-p1-out_refl-stub",
         mip_levels: 1,
     });
+    // RT-R1 (§9.3 RD4): prefiltered env for reflection miss branch — 1x1 dummy
+    // for this fixture (no reflection assertions, refl_spp == 0)
+    let prefiltered_env = device.create_texture(&GpuTextureDesc {
+        width: 1,
+        height: 1,
+        depth: 1,
+        format: GpuTextureFormat::Rgba16Float,
+        dimension: GpuTextureDimension::D2,
+        usage: GpuTextureUsage::SHADER_READ,
+        label: "rt-p1-prefiltered-env-dummy",
+        mip_levels: 1,
+    });
 
     // ao_spp: 0 (AO gather skipped — P1 fixture only proves hard shadows);
     // sun_color/ambient_color: unused by this test's assertions (out_irr
@@ -231,6 +243,7 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         &out_irr,
         &out_n,
         &out_refl,
+        &prefiltered_env,
         "trace_shadow_rays-proof",
     );
     encoder.commit_and_wait_completed();
@@ -388,6 +401,17 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
         label: "rt-p1-2blas-out_refl-stub",
         mip_levels: 1,
     });
+    // RT-R1 (§9.3 RD4): prefiltered env for reflection miss branch — 1x1 dummy
+    let prefiltered_env = device.create_texture(&GpuTextureDesc {
+        width: 1,
+        height: 1,
+        depth: 1,
+        format: GpuTextureFormat::Rgba16Float,
+        dimension: GpuTextureDimension::D2,
+        usage: GpuTextureUsage::SHADER_READ,
+        label: "rt-p1-2blas-prefiltered-env-dummy",
+        mip_levels: 1,
+    });
 
     let params = ShadowRayParams::new(
         [0.0, 0.0, 1.0],
@@ -431,6 +455,7 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
         &out_irr,
         &out_n,
         &out_refl,
+        &prefiltered_env,
         "trace_shadow_rays-2blas-proof",
     );
     encoder.commit_and_wait_completed();
