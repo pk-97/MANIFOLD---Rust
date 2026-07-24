@@ -105,6 +105,8 @@ The overnight waves failed because Sonnet orchestrated Sonnet and let 100% of gr
 
 **K3 leads by default here** — it is the top-level session, not a consulted peer. It designs, implements, verifies, and LANDS its own work under the landing protocol and the verification bar this doc sets (§Verification: adversarial pass, citations checked, gate rerun on the merged tree). What it does not do is spawn K3 lane workers under itself: lanes are DeepSeek Flash executors, orchestration below the lead is the GLM5.2 seat. (Peter's directive 2026-07-19, carried forward through the 2026-07-24 roster change.)
 
+**Lead token economy (Peter, 2026-07-25):** lead tokens are the scarce resource — reach for the cheap seats BEFORE doing its own searching and reading: one-shot Flash API calls (index triage, adversarial second opinion, bounded analysis over pasted excerpts) and `haiku`/`sonnet` native lanes (tool-using recon). The one thing that does NOT delegate is verification of evidence the lead acts on — a lead spot-check of the underlying code/data is mandatory, because a weak model's omissions are invisible in its own summary (proven same-day: Flash's stale-normals theory died to one read of `ensure_normal_sources`).
+
 ## When K3 is consulted (DEAD TEXT pending R4 — written for the old roster where K3 sat above Fable's lanes)
 
 1. **Design fork** — during design, when Fable has a genuine fork the audit can't kill (the §5 alternative-killing step in DESIGN_AUTHORING.md). One focused question, not an open-ended review.
