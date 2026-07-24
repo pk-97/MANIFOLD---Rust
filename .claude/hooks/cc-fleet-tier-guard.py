@@ -11,11 +11,14 @@ executor-over-executor failure that killed the overnight waves.
 Tier rules (model strings measured from real transcripts 2026-07-24:
 `deepseek-v4-flash`, `glm-4.7`, `k3`, `claude-*`):
 
+- `cc-fleet spawn` (tmux teammates): denied for EVERY tier incl. lead —
+  dead path on CC >= 2.1.218 (D-48; native Agent-tool lanes instead).
 - Executor tier (deepseek*, kimi-k2*, kimi-for-coding, claude-sonnet/haiku):
   ALL cc-fleet spawn verbs denied. Executors execute; decisions flow up.
 - Dispatcher tier (glm*): may drive the executor provider only
-  (EXECUTOR_PROVIDERS). Anything else — spawning glm/kimi seats, workflows,
-  unparseable targets — is denied with an escalate-up pointer.
+  (EXECUTOR_PROVIDERS) via `cc-fleet subagent`. Anything else — spawning
+  glm/kimi seats, workflows, unparseable targets — is denied with an
+  escalate-up pointer.
 - Lead tier (fable/opus/k3 — anything not matched above): passes through.
 
 Fails open on any error — a guard hook must never block a session.
@@ -25,7 +28,15 @@ import os
 import re
 import sys
 
-SPAWN_CMD = re.compile(r"\bcc-fleet\s+(subagent|spawn|run|workflow)(?![\w-])(?:\s+(\S+))?")
+# Command-position match only: `cc-fleet` at the start of the command or
+# right after a shell separator (&&, ||, ;, |, $(, backtick, newline),
+# optionally behind env-var assignments. A quoted mention — an rg pattern,
+# a commit message — is prose, not an invocation (two real false positives
+# on 2026-07-24: a pathspec commit and a read-only rg sweep).
+SPAWN_CMD = re.compile(
+    r"(?:^|&&|\|\||;|\||\$\(|`|\n)\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)*"
+    r"(?:\S*/)?cc-fleet\s+(subagent|spawn|run|workflow)(?![\w-])(?:\s+(\S+))?"
+)
 EXECUTOR_TIER = re.compile(
     r"claude-(sonnet|haiku)|deepseek|kimi-k2|kimi-for-coding", re.IGNORECASE
 )
@@ -73,9 +84,27 @@ def deny(reason: str) -> None:
 def decide(command: str, model: str) -> str:
     """Return a deny reason, or '' to allow."""
     m = SPAWN_CMD.search(command)
-    if not m or not model:
+    if not m:
         return ""
     verb, target = m.group(1), (m.group(2) or "")
+    # D-48 (2026-07-24): `cc-fleet spawn` (tmux teammates) is a DEAD PATH on
+    # Claude Code >= 2.1.218 — TeamCreate is retired, teams are implicit, and
+    # the harness cannot address externally-registered teammates. Denied for
+    # EVERY tier, lead included. Provider lanes are native Agent-tool
+    # subagents via the slot map (docs/AGENT_ROUTING.md §Native provider
+    # lanes). `cc-fleet subagent` one-shots remain available per tier below.
+    if verb == "spawn":
+        return (
+            "cc-fleet spawn denied for every tier: the tmux-teammate path is "
+            "dead on this harness (TeamCreate retired; teammates unreachable "
+            "via SendMessage — D-48, .claude/orchestration/decisions.md). "
+            "Spawn provider lanes as native Agent-tool subagents instead: "
+            "model \"haiku\"=DeepSeek Flash, \"sonnet\"=GLM-4.7, "
+            "\"opus\"=GLM-5.2, \"fable\"=k3 on the K3 seat "
+            "(docs/AGENT_ROUTING.md §Native provider lanes)."
+        )
+    if not model:
+        return ""
     if EXECUTOR_TIER.search(model):
         return (
             f"cc-fleet {verb} denied: this session runs {model} — an executor "

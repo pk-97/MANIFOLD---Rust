@@ -11,8 +11,8 @@ Peter is switching the roster: **Kimi K3 = top session / lead, GLM5.2 = middle d
 | Seat | Was (through 2026-07-23) | Is (from 2026-07-24) |
 |---|---|---|
 | Lead / top session | Fable | **Kimi K3** |
-| Dispatcher / middle orchestrator | Opus | **GLM-4.7** (z.ai Coding Plan Pro; 5.2 off-peak A/B only — TOKEN_ECONOMICS §12 FINAL) |
-| Lane executor | Sonnet 5 / K2.7 | **DeepSeek V4 Flash** (opencode Go) — driven per R6, NOT as a full-ceremony lane |
+| Dispatcher / middle orchestrator | Opus | **GLM-5.2** (native `opus` lane per D-48 — supersedes the GLM-4.7/off-peak call; quota caution kept in §Native provider lanes) |
+| Lane executor | Sonnet 5 / K2.7 | **DeepSeek V4 Flash** (native `haiku` lane per D-48) |
 | Consult peer | Kimi K3 | *vacant — K3 to decide (see R4)* |
 
 Open items for K3:
@@ -39,6 +39,37 @@ Open items for K3:
 
 Everything below is proven doctrine under the old roster. Read it as seat descriptions, not model assignments.
 
+## Native provider lanes — the D-48 slot map (2026-07-24; supersedes ALL tmux-teammate mechanics)
+
+**The mechanism.** Provider lanes are ordinary **native Agent-tool subagents**. The seat's env routes every API call through the litellm proxy (127.0.0.1:4000), and the harness's four model slots are remapped per seat — so `model: "haiku"` on the Agent tool *is* a DeepSeek Flash lane, natively named, steerable via SendMessage, visible in the team panel, and itemized in the litellm ledger. No cc-fleet teammates, no tmux panes, no file bus for lane traffic. Full mechanics + upgrade hazards: `litellm-seat-proxy` memory, D-48 in `.claude/orchestration/decisions.md`.
+
+**The K3 seat slot map (launch: `M-t` — the tmux binding pins the lead to k3 and injects `ANTHROPIC_MODEL=k3`; the lead's model can never be changed by slot config):**
+
+| Agent-tool `model:` | Actual model | Tier |
+|---|---|---|
+| `"fable"` | Kimi K3 | judgment lane (rare — lead-tier work the lead delegates whole) |
+| `"opus"` | GLM-5.2 | dispatcher seat for multi-stage waves |
+| `"sonnet"` | GLM-4.7 | mid lane (capable single-stage work) |
+| `"haiku"` | DeepSeek V4 Flash | mechanical executor — the bulk tier |
+
+Quota caution: TOKEN_ECONOMICS §12 rated GLM-5.2 off-peak-A/B on the z.ai plan; Peter's D-48 map puts it on the dispatcher slot anyway — if plan-window pressure shows up, the dispatcher slot is the first place to look.
+
+**Dead path — hook-enforced:** `cc-fleet spawn` (tmux teammates) is denied for EVERY tier including the lead (`cc-fleet-tier-guard.py`): TeamCreate was retired in Claude Code ≥2.1.218, teams are implicit per-session, and the harness cannot address externally-registered teammates. `cc-fleet subagent` one-shots remain available per tier. `cc-fleet run` (interactive seat panes) remains the lead's launcher.
+
+**Executor self-gating + thin middle (2026-07-24, Peter + lead, D-52 — from the RT-R1 wave's cost data):** the middle seat's real cost is not thinking but a long-lived session re-reading its whole context every turn (measured: dispatcher 10M tokens for two clerical tasks vs Flash's 1.67M for the actual edits). Rules now: (1) **Flash lanes run their own gates** — the brief carries the gate commands, the lane iterates on failures up to a hard cap of TWO per gate, then stops and reports verbatim (observed basis: T1/T2 cleared first-invocation; the cap bounds the compiler-loop failure mode the no-loops rule was written against). (2) **The dispatcher's diff check is scope-only** (touched files vs the brief's named set + real exit codes) — the lead's single review pass is the correctness read; double review on prescriptive mechanical tasks is redundant. (3) **Prefer one-shot/short-lived middle sessions** over one long dispatcher — state lives in the queue file, not in context. (4) Never relocate the clerical loop to the lead seat — the lead window is the scarcest resource (Peter, same day). Dispatcher seat rotates GLM-5.2 → GLM-4.7 under plan-window pressure (D-51); GLM-4.7 is the default dispatcher model from this date.
+
+**Spawn hierarchy — hook-enforced** (`agent-tier-spawn-guard.py`, caller tier from transcript `message.model`):
+
+| Caller | May spawn |
+|---|---|
+| Lead (k3 / fable / opus) | anything |
+| Dispatcher (glm-*) | `model: "haiku"` ONLY — executors, never peers or tiers above |
+| Executor (deepseek* / kimi-for-coding / claude-sonnet/haiku) | nothing — stop and report up |
+
+**Lead terseness rule (Peter, 2026-07-24, measured):** K3 serves at ~31–54 tok/s (ledger-measured; Anthropic tiers run 2–3x faster) — a single verbose planning turn costs Peter a minute of wall clock. The lead plans tersely: no narration before spawning, no restating work back to itself; briefs, verdicts, and decisions only. The 4-minute pre-spawn stall that prompted this rule was ~4,500 tokens of self-narration at 35 tok/s, with caching confirmed working — the cost is generation, so the fix is brevity, not config. Machine-injected into the LEAD seat charge by `seat-identity.py`.
+
+Subagent nesting is harness-possible (verified 2026-07-24), so this table is enforced by machinery, not hoped-for behavior. Seat identity is machine-injected (`seat-identity.py`, rekeyed for this map: seat = `ANTHROPIC_MODEL`, else the provider's effective strong slot — invariant: **no two seats share a strong slot**). Lane self-reports about their own identity are theater; the litellm log/spend DB is the oracle for which model actually served a request.
+
 ## The steering model (2026-07-20 — supersedes review-at-landing-only)
 
 The overnight waves failed because Sonnet orchestrated Sonnet and let 100% of green through. Rules now:
@@ -64,11 +95,12 @@ The overnight waves failed because Sonnet orchestrated Sonnet and let 100% of gr
 
 ## The tiering
 
-| Seat | Model (from 2026-07-24) | Role |
+| Seat | Model (D-48 map, 2026-07-24) | Role |
 |---|---|---|
-| Lead intelligence | **Kimi K3** (top session) | Design, judgment, review, verification, landing. Owns every decision and every landed diff. |
-| Dispatcher / middle orchestrator | **GLM-4.7** (provider `glm`) | Clerical seat for multi-stage waves: pop the queue, brief a lane, run exit-code gates, accept/reject, land. Contract in §17. |
-| Mechanical executor | **DeepSeek V4 Flash** (provider `opencode`) | Bulk implementation on fully-decided briefs. Never asked to design or judge. Prescriptive-imperative briefs only — R3. |
+| Lead intelligence | **Kimi K3** (top session, binding-pinned) | Design, judgment, review, verification, landing. Owns every decision and every landed diff. |
+| Dispatcher / middle orchestrator | **GLM-5.2** (native lane, `model: "opus"`) | Clerical seat for multi-stage waves: pop the queue, brief a lane, run exit-code gates, accept/reject, report up. Contract in §17. |
+| Mid lane | **GLM-4.7** (native lane, `model: "sonnet"`) | Capable single-stage work above Flash's weight class. No spawns. |
+| Mechanical executor | **DeepSeek V4 Flash** (native lane, `model: "haiku"`) | Bulk implementation on fully-decided briefs. Never asked to design or judge. Prescriptive-imperative briefs only — R3. |
 | Consult peer | *vacant* | K3 to rule — R4. |
 
 **K3 leads by default here** — it is the top-level session, not a consulted peer. It designs, implements, verifies, and LANDS its own work under the landing protocol and the verification bar this doc sets (§Verification: adversarial pass, citations checked, gate rerun on the merged tree). What it does not do is spawn K3 lane workers under itself: lanes are DeepSeek Flash executors, orchestration below the lead is the GLM5.2 seat. (Peter's directive 2026-07-19, carried forward through the 2026-07-24 roster change.)
