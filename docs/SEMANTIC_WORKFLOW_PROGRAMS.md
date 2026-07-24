@@ -121,7 +121,7 @@ Not novel as a concept — workflow engines and CI pipelines are old. What is ne
 
 ## 9. Open questions / next steps
 
-- **R2 as the pitch.** The machine's next run decides whether this is converging or permanently tax-paying (§6).
+- **R2 as the pitch.** The machine's next run decides whether this is converging or permanently tax-paying (§6). **The operational pre-flight checklist lives in `.claude/orchestration/rt-reflections-r2-queue.md`** (blocking items + the workflow upgrades below, scoped to that wave — 2026-07-25).
 - **Hook migration list.** From §3's soft rows: retry-cap enforcement (count gate invocations per lane session), one-commit-then-stop (deny a second commit from executor-tier transcripts). Build deliberately, not reactively.
 - **Verdict rationale field.** The IR has no representation for *why* a judgment was made; Verdict wants a mandatory one-line rationale, appended to the decisions file by the runtime, not by model goodwill.
 - **Driver script.** Peter's call, per the handoff's standing note.
