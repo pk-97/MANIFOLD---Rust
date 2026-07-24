@@ -96,6 +96,14 @@ def main() -> None:
         EXPLICIT_SEAT = {"k3": "kimi-code", "kimi-for-coding": "kimi-code"}
         if session_model in EXPLICIT_SEAT:
             name = EXPLICIT_SEAT[session_model]
+        # 1b. Fable-slot pin (D-48 tmux binding sets FABLE=k3 alongside
+        #     ANTHROPIC_MODEL; panes started before that binding update carry
+        #     ONLY the fable pin — without this branch they fall through to
+        #     base_url and get misidentified (glm-4.7 lead, 2026-07-24).
+        if not name:
+            if os.environ.get("ANTHROPIC_DEFAULT_FABLE_MODEL", "") == "k3":
+                name = "kimi-code"
+                session_model = "k3"
         # 2. Effective strong slot (strong_model, else default_model) —
         #    unique per seat by invariant; slots below strong are lane tiers.
         if not name:
