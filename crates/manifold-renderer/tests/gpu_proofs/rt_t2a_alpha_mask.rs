@@ -177,6 +177,17 @@ fn run_fixture(alpha_mask: bool) -> [f32; 2] {
         label: "rt-t2a-out_n-stub",
         mip_levels: 1,
     });
+    // RT-R1: reflection output — stub for this fixture (refl_spp == 0, never read)
+    let out_refl = device.create_texture(&GpuTextureDesc {
+        width: 2,
+        height: 1,
+        depth: 1,
+        format: GpuTextureFormat::Rgba16Float,
+        dimension: GpuTextureDimension::D2,
+        usage: GpuTextureUsage::SHADER_WRITE | GpuTextureUsage::SHADER_READ,
+        label: "rt-t2a-out_refl-stub",
+        mip_levels: 1,
+    });
 
     let params = ShadowRayParams::new(
         [0.0, 0.0, 1.0],
@@ -192,6 +203,9 @@ fn run_fixture(alpha_mask: bool) -> [f32; 2] {
         [0.0, 0.0, 0.0],
         [0.0, 0.0, 0.0],
         IDENTITY,
+        0,           // refl_spp — 0, reflections skipped in this fixture
+        0.6,         // refl_max_roughness — RT_REFLECTION_MAX_ROUGHNESS
+        0.1,         // refl_rough_band — blend band width
     );
     let params_buffer = device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
     let gi_materials_buffer = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
@@ -209,6 +223,7 @@ fn run_fixture(alpha_mask: bool) -> [f32; 2] {
         &out_sv,
         &out_irr,
         &out_n,
+        &out_refl,
         "trace_shadow_rays-t2a-proof",
     );
     encoder.commit_and_wait_completed();
