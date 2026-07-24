@@ -1177,6 +1177,17 @@ impl RenderScene {
                 range: None,
                 enum_values: &[],
             },
+            // RAYTRACING_DESIGN.md §9 RD9 (T4): per-scene reflection toggle.
+            // Default ON (Q3). Inert when `rt_enabled` false — no reflection
+            // rays are dispatched unless the RT pipeline is active.
+            ParamDef {
+                name: std::borrow::Cow::Borrowed("rt_reflections"),
+                label: "RT Reflections",
+                ty: ParamType::Bool,
+                default: ParamValue::Bool(true),
+                range: None,
+                enum_values: &[],
+            },
         ];
         // Per-object TRS is no longer a param loop here — `transform_{i}`
         // (added above) carries it as a `Transform` port fed by a
@@ -2961,6 +2972,11 @@ impl EffectNode for RenderScene {
         // folded into `view_proj` — the RT pass's `inv_view_proj` must
         // match the SAME `view_proj` the main draw uses this frame.
         let rt_enabled = matches!(ctx.params.get("rt_enabled"), Some(ParamValue::Bool(true)));
+        // RAYTRACING_DESIGN.md §9 RD9 (T4): per-scene reflection toggle,
+        // gated on rt_enabled — inert when RT is off entirely. Default ON
+        // (Q3). T5 fine-tunes the spp/roughness-band constants.
+        let rt_reflections = rt_enabled
+            && matches!(ctx.params.get("rt_reflections"), Some(ParamValue::Bool(true)));
         // BUG-308/RT-D4: `rt_accel`'s build is async (raytrace.rs) —
         // `false` whenever there's no resident accel yet, OR a topology
         // (re)build hasn't completed. Every downstream "use RT shadows"
@@ -3986,12 +4002,11 @@ impl EffectNode for RenderScene {
                     // raster pass shades from.
                     cam.pos,
                     inv_view_proj,
-                    // RT-R1 (§9.3): reflection config — inert in T3 (the
-                    // kernel has no reflection branch yet). refl_spp=0
-                    // keeps the (T5) reflection branch off until it exists;
-                    // 0.6/0.1 are the RD7 starting constants. T5 wires
-                    // refl_spp to the rt_reflections scene param (T4).
-                    0,
+                    // RT-R1 (§9.3): reflection config — T4 wires refl_spp to
+                    // the rt_reflections scene param, gated on rt_enabled;
+                    // T5 tunes the spp/roughness-band constants. 0.6/0.1 are
+                    // the RD7 starting constants.
+                    if rt_reflections { 1 } else { 0 },
                     0.6,
                     0.1,
                 );
@@ -5255,13 +5270,13 @@ mod tests {
         assert!(s.inputs().iter().any(|p| p.name == "light_0"));
         assert!(!s.inputs().iter().any(|p| p.name == "light_1"));
         // `objects` + `lights` + `rt_enabled` (D14) + `temporal_upscale`
-        // (§5.2 P4) — per-object TRS moved to `node.scene_object`'s
+        // (§5.2 P4) + `rt_reflections` (§9 RD9) — per-object TRS moved to `node.scene_object`'s
         // `transform` input (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2 D3);
         // instances carries no per-object instance_count param either
         // (REALTIME_3D_DESIGN.md §10 D11). Neither toggle grows with object
         // count — this assertion is about object count, not the fixed
         // scene-level toggle set.
-        assert_eq!(s.parameters().len(), 4);
+        assert_eq!(s.parameters().len(), 5);
         assert!(!s.parameters().iter().any(|p| p.name.contains("pos_x")));
     }
 
@@ -5274,7 +5289,7 @@ mod tests {
         assert!(!node.inputs().iter().any(|p| p.name == "object_5"));
         assert!(node.inputs().iter().any(|p| p.name == "light_2"));
         assert!(!node.inputs().iter().any(|p| p.name == "light_3"));
-        assert_eq!(node.parameters().len(), 4, "object count never grows the fixed scene-level toggle set");
+        assert_eq!(node.parameters().len(), 5, "object count never grows the fixed scene-level toggle set");
 
         node.reconfigure(&params_with(1.0, 0.0));
         assert!(!node.inputs().iter().any(|p| p.name == "object_1"));
@@ -5326,7 +5341,7 @@ mod tests {
         assert!(node.inputs().iter().any(|p| p.name == "object_31"));
         // objects/lights + fixed scene-level toggles — object count never
         // grows the param list.
-        assert_eq!(node.parameters().len(), 4);
+        assert_eq!(node.parameters().len(), 5);
     }
 
     #[test]

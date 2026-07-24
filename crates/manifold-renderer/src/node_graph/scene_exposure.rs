@@ -47,10 +47,10 @@ const SCENE_VOCABULARY_TYPE_IDS: &[&str] = &[
 ];
 
 /// The curated `node.render_scene` auto-stamp subset (see the vocabulary
-/// entry above): the per-scene RT toggle (D14) and the MetalFX temporal
-/// quality toggle (P4). Everything else on the root node is deliberately
-/// NOT auto-stamped.
-const RENDER_SCENE_STAMPED_PARAMS: &[&str] = &["rt_enabled", "temporal_upscale"];
+/// entry above): the per-scene RT toggle (D14), the MetalFX temporal
+/// quality toggle (P4), and the per-scene reflection toggle (§9 RD9).
+/// Everything else on the root node is deliberately NOT auto-stamped.
+const RENDER_SCENE_STAMPED_PARAMS: &[&str] = &["rt_enabled", "temporal_upscale", "rt_reflections"];
 
 /// Return the full param manifest for `type_id` from the primitive registry,
 /// converting `ParamDef` metadata into the crate-neutral `SceneParamMetadata`
@@ -254,9 +254,9 @@ mod tests {
         );
     }
 
-    /// RAYTRACING_DESIGN.md D14/§5.2: the scene root's RT toggles surface on
+    /// RAYTRACING_DESIGN.md D14/§5.2/§9 RD9: the scene root's RT toggles surface on
     /// the scene panel via the same vocabulary migration as every other
-    /// scene control — curated to EXACTLY the two toggles, so the root
+    /// scene control — curated to EXACTLY the three toggles, so the root
     /// node's dozens of other params never flood the panel.
     #[test]
     fn migrate_stamps_render_scene_rt_toggles_only_under_rendering_section() {
@@ -299,8 +299,8 @@ mod tests {
             .collect();
         assert_eq!(
             stamped,
-            vec!["rt_enabled", "temporal_upscale"],
-            "exactly the two RT toggles, nothing else from the root node"
+            vec!["rt_enabled", "temporal_upscale", "rt_reflections"],
+            "exactly the three RT toggles, nothing else from the root node"
         );
         for spec in &meta.params {
             assert_eq!(spec.section.as_deref(), Some("Rendering"));

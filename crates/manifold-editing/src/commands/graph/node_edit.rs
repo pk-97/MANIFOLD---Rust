@@ -1830,6 +1830,88 @@ mod tests {
         );
     }
 
+    /// RAYTRACING_DESIGN.md §9 RD9 / T4: the scene-level `rt_reflections`
+    /// toggle follows the EXACT same generic-param path that `rt_enabled`'s
+    /// P1 test proved — no bespoke command, no bespoke serialization.
+    /// Proves both the write and the save/reload round-trip.
+    #[test]
+    fn rt_reflections_toggle_survives_editing_service_and_json_round_trip() {
+        let (mut project, id) = project_with_one_master_effect();
+        let mut def = mirror_catalog_default();
+        def.nodes.push(EffectGraphNode {
+            id: 99,
+            node_id: manifold_core::NodeId::new("scene"),
+            type_id: "node.render_scene".to_string(),
+            handle: Some("scene".to_string()),
+            params: BTreeMap::new(),
+            exposed_params: Default::default(),
+            editor_pos: None,
+            wgsl_source: None,
+            title: None,
+            output_formats: BTreeMap::new(),
+            output_canvas_scales: BTreeMap::new(),
+            group: None,
+        });
+        project.find_effect_by_id_mut(&id).unwrap().graph = Some(def.clone());
+
+        let mut cmd = SetGraphNodeParamCommand::new(
+            GraphTarget::Effect(id.clone()),
+            99,
+            "rt_reflections".to_string(),
+            SerializedParamValue::Bool { value: true },
+            def,
+        );
+        cmd.execute(&mut project);
+
+        let fx = project.find_effect_by_id(&id).unwrap();
+        let node = fx
+            .graph
+            .as_ref()
+            .unwrap()
+            .nodes
+            .iter()
+            .find(|n| n.id == 99)
+            .unwrap();
+        assert_eq!(
+            node.params.get("rt_reflections"),
+            Some(&SerializedParamValue::Bool { value: true }),
+            "EditingService write lands on the scene node's rt_reflections param"
+        );
+
+        // Save/reload round-trip.
+        let json = serde_json::to_string(fx).unwrap();
+        let back: manifold_core::effects::PresetInstance = serde_json::from_str(&json).unwrap();
+        let node = back
+            .graph
+            .as_ref()
+            .unwrap()
+            .nodes
+            .iter()
+            .find(|n| n.id == 99)
+            .unwrap();
+        assert_eq!(
+            node.params.get("rt_reflections"),
+            Some(&SerializedParamValue::Bool { value: true }),
+            "rt_reflections survives save/reload"
+        );
+
+        // Undo removes it.
+        cmd.undo(&mut project);
+        let fx = project.find_effect_by_id(&id).unwrap();
+        let node = fx
+            .graph
+            .as_ref()
+            .unwrap()
+            .nodes
+            .iter()
+            .find(|n| n.id == 99)
+            .unwrap();
+        assert!(
+            !node.params.contains_key("rt_reflections"),
+            "undo restores the pre-toggle state"
+        );
+    }
+
     #[test]
     fn add_graph_node_against_generator_target_lifts_layer_generator_graph() {
         let (mut project, lid) = project_with_one_generator_layer();
