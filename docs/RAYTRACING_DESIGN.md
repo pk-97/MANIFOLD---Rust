@@ -1,6 +1,6 @@
 # Ray Tracing — hybrid RT lighting for hero scenes
 
-**Status:** RT v1 WAVE LANDED on main 2026-07-23 (overnight run, D12; wave tip merged `519d01ee`+C4 `bff0fa15`, full gate green: nextest 3879, clippy+deny clean, gpu-proofs 77/77). SHIPPED: W0 stored G-buffer (D14, BUG-136 velocity math proved correct), P1 hard shadow rays (D16 forward integration; BUG-308 accel race + BUG-309 bias epsilon fixed en route, D17; BUG-310 tracer prewarm fixed at landing), P2 soft shadows + AO + demodulated temporal accumulation with D3/RT-D2 node-local resets, P3 emissive GI + sun-bounce + RT volumetrics (D4/D5), P4 MetalFX temporal SEAM-ONLY (scaler + shared TemporalResetDetector + jitter + toggle landed; the live reduced-res-render→upscale path into scene output is NOT wired — follow-on). 2026-07-23 Peter's first look: three integration bugs found+fixed same day (toggle visibility `6e44894e`, ambient-knob wiring `7b3d8dd2`, sun double-count `818a06b0`); verdict = v1 is a landed skeleton, not stage-ready — ghosting (BUG-311) + noise (BUG-312) + depth-derived normals are structural gaps. Tier 1 BUILT + LANDED 2026-07-23 (§8.1 D18–D20, overnight wave: real vertex normals, reprojected validity-tested accumulation, variance-guided à-trous + blue-noise; BUG-311/312 FIXED, BUG-316 resolved-as-oracle-confound (id 315 ceded to main at merge)). Tier 2 BUILT + LANDED 2026-07-23 (§8.2 D21/D22: alpha-aware rays via shared alpha-test walk; live MetalFX temporal at 2/3 render scale, native mode machine-diff-identical). 2026-07-23 Peter's motion look: RT was static-tableau-only — moving a mesh flickered (BUG-320: accel key hashed transforms, so a moving object never refit and every motion pause rebuilt+dropped to raster) and then shimmered (T2-C §8.3: accumulation had no per-object motion term, so a moving object lost all history mid-gesture). Motion class CLOSED 2026-07-23: BUG-320 (accel refit), BUG-321 (per-object motion reprojection) and BUG-322 (normal history compared across object orientations — the actual cause of the helmet shimmer, `d68e07bb`) all fixed, the last CONFIRMED by Peter in-app on `RT Testing.manifold`. **RT is now usable under model motion.** §8.3 records the diagnosis and the method lesson. 2026-07-24 Peter's L2 look: RT PASSED ("looks good") — Tier 1+2 motion/still/upscale verdict is IN. Ray-budget re-judge and all perf profiling DEFERRED by Peter until the full RT pipeline is built (no profiling on unfinished features). REFLECTIONS (Tier 3 item 7) APPROVED + IN PROGRESS 2026-07-24 — folded into §9 (draft RT_REFLECTIONS_DESIGN.md deleted); K3 review rulings Q1–Q5 + Q1 settling test executed (vertex normals stand — normal-map breakup is sparkle, not shape). Execution: 3 phases (R1–R3), team wave via GLM dispatcher + Flash executors. OPEN: R1–R3 build; Tier 3 items 6/8/9 per §8 (many-light next after reflections); P5 export (D13); P6 frame interp (Tahoe, D6/D8). · 2026-07-24 · K3
+**Status:** RT v1 WAVE LANDED on main 2026-07-23 (overnight run, D12; wave tip merged `519d01ee`+C4 `bff0fa15`, full gate green: nextest 3879, clippy+deny clean, gpu-proofs 77/77). SHIPPED: W0 stored G-buffer (D14, BUG-136 velocity math proved correct), P1 hard shadow rays (D16 forward integration; BUG-308 accel race + BUG-309 bias epsilon fixed en route, D17; BUG-310 tracer prewarm fixed at landing), P2 soft shadows + AO + demodulated temporal accumulation with D3/RT-D2 node-local resets, P3 emissive GI + sun-bounce + RT volumetrics (D4/D5), P4 MetalFX temporal SEAM-ONLY (scaler + shared TemporalResetDetector + jitter + toggle landed; the live reduced-res-render→upscale path into scene output is NOT wired — follow-on). 2026-07-23 Peter's first look: three integration bugs found+fixed same day (toggle visibility `6e44894e`, ambient-knob wiring `7b3d8dd2`, sun double-count `818a06b0`); verdict = v1 is a landed skeleton, not stage-ready — ghosting (BUG-311) + noise (BUG-312) + depth-derived normals are structural gaps. Tier 1 BUILT + LANDED 2026-07-23 (§8.1 D18–D20, overnight wave: real vertex normals, reprojected validity-tested accumulation, variance-guided à-trous + blue-noise; BUG-311/312 FIXED, BUG-316 resolved-as-oracle-confound (id 315 ceded to main at merge)). Tier 2 BUILT + LANDED 2026-07-23 (§8.2 D21/D22: alpha-aware rays via shared alpha-test walk; live MetalFX temporal at 2/3 render scale, native mode machine-diff-identical). 2026-07-23 Peter's motion look: RT was static-tableau-only — moving a mesh flickered (BUG-320: accel key hashed transforms, so a moving object never refit and every motion pause rebuilt+dropped to raster) and then shimmered (T2-C §8.3: accumulation had no per-object motion term, so a moving object lost all history mid-gesture). Motion class CLOSED 2026-07-23: BUG-320 (accel refit), BUG-321 (per-object motion reprojection) and BUG-322 (normal history compared across object orientations — the actual cause of the helmet shimmer, `d68e07bb`) all fixed, the last CONFIRMED by Peter in-app on `RT Testing.manifold`. **RT is now usable under model motion.** §8.3 records the diagnosis and the method lesson. 2026-07-24 Peter's L2 look: RT PASSED ("looks good") — Tier 1+2 motion/still/upscale verdict is IN. Ray-budget re-judge and all perf profiling DEFERRED by Peter until the full RT pipeline is built (no profiling on unfinished features). REFLECTIONS (Tier 3 item 7) APPROVED + IN PROGRESS 2026-07-24 — folded into §9 (draft RT_REFLECTIONS_DESIGN.md deleted); K3 review rulings Q1–Q5 + Q1 settling test executed (vertex normals stand — normal-map breakup is sparkle, not shape). Execution: 4 phases (§9.6), team wave via GLM dispatcher + Flash executors. Base traced reflections (R1) LANDED 2026-07-25 (`163ed86f`). 2026-07-25 Peter's AMG GT3 look: reflections ON renders a metallic textured hero asset black + textureless — RD4's hit shading (emissive + flat albedo × sun-bounce, no env, no maps) substitutes for the prefiltered env that WAS the car's look; confirmed in code + headless `render-import` PNGs same day (K3). Response: phases renamed name-primary (R-numbers survive only attached to names, Peter directive) and **Raster-parity reflections** inserted between R1 and R2 (env + textured shading at the hit point). OPEN: Raster-parity reflections build (next); Stable reflections (R2); Textured roughness (R3); rotation-artifact look (one-frame accel refit latency under continuous model rotation, `render_scene.rs:3945` — suspected R2-reprojection territory, needs a real multi-frame repro, 2026-07-25); Tier 3 items 6/8/9 per §8 (many-light next after reflections); P5 export (D13); P6 frame interp (Tahoe, D6/D8). · 2026-07-24 · K3
 **Prerequisites:** none for P0. P1+ gated on P0 numbers and on RENDERING_INFRA_V2 §2 (G-buffer/motion vectors) for temporal pieces.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
@@ -241,13 +241,13 @@ K3 (lead) 2026-07-24: every §1 code anchor re-verified against main (`render_sc
 substitution site, binding 43 free, `GiMaterial` 32 B at `raytrace.rs:1478`, kernel helpers at the
 named lines). **Review rulings (Q1–Q5 from the draft's §0):**
 
-- **Q1 — vertex normals in R1, shading-normal prepass is the RD3 escalation, not a planned path.**
+- **Q1 — vertex normals in Base traced reflections (R1), shading-normal prepass is the RD3 escalation, not a planned path.**
   The draft's cheap settling test was RUN before approval (K3, 2026-07-24): DamagedHelmet (the
   canonical heavily-normal-mapped asset — a harder case than Peter's scans), metallic 1.0 /
   roughness 0.1 / sharp point light, headless render with the normal map wired vs unwired, numeric
   region diff. Result: highlight **shape and position identical**; normal-map contribution is sparse
   sparkle — ~1% of specular-region pixels shift by >20/255, whole-object mean diff 0.7/255.
-  Vertex-normal reflections stand; RD3's trigger (Peter's look reports the mismatch at R1's demo)
+  Vertex-normal reflections stand; RD3's trigger (Peter's look reports the mismatch at Base traced reflections' (R1) demo)
   remains the escalation. Test caveat recorded for future probe authors: the headless readback
   double-tonemaps (graph ACES + readback Reinhard, `headless_readback.rs:58`), pinning PNGs at
   127 — BUG-327.
@@ -255,7 +255,7 @@ named lines). **Review rulings (Q1–Q5 from the draft's §0):**
   env IS the correct approximation; named constant, continuous band, visible in code. Not a silent
   fallback.
 - **Q3 — `rt_reflections` default ON for RT-enabled scenes (Peter, 2026-07-24).**
-- **Q4 — R3 (per-texel metallic-roughness) is IN this design.** D10 pins "plasticy" on roughness
+- **Q4 — Textured roughness (R3, per-texel metallic-roughness) is IN this design.** D10 pins "plasticy" on roughness
   maps; factor-only reflections would be wrong on exactly Peter's assets.
 - **Q5 — reflections before ReSTIR (Peter, 2026-07-24).** Recorded dissent (draft author + this
   doc's §8 "highest-value" note favor many-light first) stands as dissent; build order is a
@@ -272,13 +272,13 @@ double-tonemap found by the settling test.
 | Piece | Where | State |
 |---|---|---|
 | Split-sum specular IBL, base lobe | `render_scene.wgsl:1506-1518` | The single substitution site. Only `fs_pbr` has it. |
-| Anisotropic / clearcoat / sheen / transmission lobes | `render_scene.wgsl:1537/1550/1568/1647` | Out of v1 scope (RD5); anisotropic branch OVERWRITES `specular_ibl` — R1 must substitute inside it too. |
+| Anisotropic / clearcoat / sheen / transmission lobes | `render_scene.wgsl:1537/1550/1568/1647` | Out of v1 scope (RD5); anisotropic branch OVERWRITES `specular_ibl` — Base traced reflections (R1) must substitute inside it too. |
 | Prefiltered env mip chain + BRDF LUT + irradiance map | `render_scene.rs:645/647`, `run_ibl_convolution` :1985 | Node-owned at the RT dispatch site — one wire away for ray misses. |
 | RT trace kernel (shadow+AO+GI, ONE dispatch) | `raytrace.rs:735` `trace_shadow_rays`; trait `ShadowRayTracer` :1815 | D16's seam: new ray classes join this dispatch. Primary ray already casts for the T1-B normal — reflection origin+normal already computed. |
 | Hit shading for a secondary ray | `raytrace.rs:940-975` (GI gather) | A reflection ray's hit shading is these lines; RD4 reuses them. |
 | Per-object bindless table | `RtNormalSource` (`raytrace.rs:1533`, 72 B) | Extended twice already (T1-B, T2-A) — the precedent for material fields. |
 | Per-object material table | `GiMaterial` (`raytrace.rs:1478`, 32 B) | Built at `render_scene.rs:3976`; `pbr_metallic_roughness` (`render_scene.rs:332`) is in the same uniforms struct, unread. |
-| Bindless texture slots | `MAX_RT_ALPHA_TEXTURES = 4` (`raytrace.rs:1558`) | R3 grows it into a general material-texture cap. |
+| Bindless texture slots | `MAX_RT_ALPHA_TEXTURES = 4` (`raytrace.rs:1558`) | Raster-parity reflections widens it into a general material-texture cap; Textured roughness (R3) consumes it. |
 | Half-res trace → upsample → à-trous → accumulate chain | `render_scene.rs:4057/4071/4120/4175` | Reflection radiance rides the same chain. |
 | Temporal reset | one shared `TemporalResetDetector` (`render_scene.rs:839`) | A second reset path is forbidden (D15/RT-D2). |
 | Motion reprojection incl. per-object | `accumulate_irradiance` (`raytrace.rs:1206`) + `obj_motion` (§8.3) | Reflections add one term (virtual hit point, RD6), not a mechanism. |
@@ -287,7 +287,7 @@ double-tonemap found by the settling test.
 
 **Binding constraints:** hot path (ray budget is the cost argument); persistence (one serialized
 scene param — round-trip gate applies); performance surface (`rt_reflections` is a card param from
-R1, not later). Thread residency and time model untouched — entirely inside `render_scene`'s
+Base traced reflections (R1), not later). Thread residency and time model untouched — entirely inside `render_scene`'s
 evaluate.
 
 ### 9.2 Decisions
@@ -303,14 +303,14 @@ evaluate.
   the zero-new-systems test allows zero).
 - **RD3 — v1 traces along `reflect(-V, n_vertex)`** — the interpolated vertex normal the kernel
   already fetches — NOT the normal-mapped shading normal. Settled empirically (Q1 ruling above).
-  Named trigger for the R2 escalation (shading-normal prepass target): Peter's look reports the
+  Named trigger for the Stable reflections (R2) escalation (shading-normal prepass target): Peter's look reports the
   reflection sitting on a different surface than the highlight.
 - **RD4 — hit returns the GI gather's shading; miss returns prefiltered env at the ray's roughness
   mip.** The miss branch makes RD1 safe: no reflective occluders ⇒ render identical to raster. No
   recursive specular (one bounce, D1); a chrome ball in a mirror reads matte.
 - **RD5 — v1 substitutes the BASE lobe of `fs_pbr` only.** Other lobes and non-PBR paths untouched.
   Consequence accepted: clearcoat-heavy assets show a traced base reflection under an env-only coat.
-  The anisotropic branch (`:1537`) OVERWRITES `specular_ibl` — R1 must substitute inside it too; the
+  The anisotropic branch (`:1537`) OVERWRITES `specular_ibl` — Base traced reflections (R1) must substitute inside it too; the
   single easiest thing to get wrong.
 - **RD6 — specular gets its OWN history, reprojected through the virtual hit point, in the SAME
   `accumulate_irradiance` kernel.** Trace writes hit distance in `out_refl.a`; accumulate reprojects
@@ -323,7 +323,7 @@ evaluate.
   (Q2).
 - **RD8 — 1 reflection ray per pixel at the existing trace resolution** (half-res of render res; ~1/3
   native under T2-B temporal mode). No separate resolution knob; a mirror from a 1/3-res signal is
-  the design's most likely disappointment — measured answer from R1's `trace_ms` delta + Peter's
+  the design's most likely disappointment — measured answer from Base traced reflections' (R1) `trace_ms` delta + Peter's
   look, reflection-specific resolution Deferred (§9.5).
 - **RD9 — one new scene param `rt_reflections: Bool`, serialized alongside `rt_enabled`, inert when
   `rt_enabled` false.** Shaped exactly like `rt_enabled`'s path (P1 precedent). Default ON (Q3).
@@ -435,10 +435,15 @@ needing blending — parallel-old-path by name). Reflections as a graph node/ato
 
 ### 9.6 Phases
 
-Three phases, each one session, each committable. **R1 is the vertical slice** — model param →
+Four phases, each one session, each committable. **Phases are NAMED (Peter 2026-07-25): the
+historical R-numbers survive only attached to names, because kernel comments cite them — never
+bare.** **Base traced reflections (R1) is the vertical slice** — model param →
 serialized → dispatch → kernel → WGSL → pixels, exercised end to end before anything is refined.
+Execution order: Base traced reflections (R1) → Raster-parity reflections → Stable reflections
+(R2) → Textured roughness (R3). Raster-parity runs BEFORE Stable: denoising a signal that shades
+wrong is wasted work, and the black-car defect is what makes reflections unusable on real assets.
 
-#### R1 — traced base-lobe reflection, factors only, no accumulation
+#### Base traced reflections (R1) — traced base-lobe reflection, factors only, no accumulation — LANDED 2026-07-25 (`163ed86f`)
 
 - *Entry:* Tier 2 on main (`git merge-base --is-ancestor` on the T2-B tip); re-verify
   `raytrace.rs:1478` (`GiMaterial` still 32 B) and `render_scene.wgsl:1518` (`specular_ibl` still
@@ -464,7 +469,7 @@ serialized → dispatch → kernel → WGSL → pixels, exercised end to end bef
   across the toggle (pipeline already resident; nothing rebuilds).
 - *Forbidden moves:* adding to `specular_ibl` instead of substituting (RD1 — the `818a06b0` trap);
   a second dispatch or reflection-specific upsampler; touching clearcoat/sheen/transmission lobes;
-  a second `TemporalResetDetector`; widening `MAX_RT_ALPHA_TEXTURES` (R3's); "temporarily"
+  a second `TemporalResetDetector`; widening `MAX_RT_ALPHA_TEXTURES` (Raster-parity reflections'); "temporarily"
   hard-coding roughness; claiming native-mode-unchanged from a code-diff argument instead of a
   machine diff.
 - *Demo (Peter only):* reflections-on vs off PNG pair on a mirror-plane scene and on a real hero
@@ -472,9 +477,48 @@ serialized → dispatch → kernel → WGSL → pixels, exercised end to end bef
   is not optional.
 - *Test scope:* `-p manifold-renderer -p manifold-gpu` + the gpu-proofs run. Clippy `-p` both.
 
-#### R2 — specular temporal accumulation + roughness-aware filtering
+#### Raster-parity reflections — environment + textured material shading at the hit point
 
-- *Entry:* R1 landed; R1's `trace_ms` delta and Peter's L2 verdict recorded in the phase report.
+- *Entry:* Base traced reflections (R1) landed; Peter's black-car look report recorded (AMG GT3
+  GLB, 2026-07-25, in-app + headless `render-import` PNGs: with `rt_reflections` on, a metallic
+  textured hero asset renders black and textureless — RD4's hit shading returns
+  `emissive + flat per-object albedo × sun-bounce`, no environment term, no maps, so the
+  substitution (RD1) replaces the prefiltered env that WAS the car's look with a near-black
+  signal). Diagnosis confirmed in code + renders same day (K3).
+- *Read-back:* RD4/RD7; the kernel reflection block (`raytrace.rs:1040-1116`); the fs_pbr
+  substitution (`render_scene.wgsl:1513-1541`); `gi_materials` population (`render_scene.rs:3976`);
+  T2-A's bindless-texture extension (commit `62244989`, whole — the field pattern this phase
+  generalizes).
+- *Deliverables:* environment shading at the reflection hit point (the hit surface's own IBL
+  contribution — the same physical quantity the raster would add at that surface; I-R1 preserved:
+  exactly one environment-specular contribution per lobe per pixel, the hit point's env is the
+  VIRTUAL surface's contribution, not a second one at the primary pixel); textured base-color
+  albedo at hits via the bindless table (`alpha_tex_index`'s field pattern generalized to material
+  textures — `MAX_RT_ALPHA_TEXTURES` widened HERE into a general material-texture cap with a
+  stated new value and un-suppression trigger; Textured roughness (R3) CONSUMES this cap for MR
+  maps, it does not re-widen); factors stay the fallback when no map is bound; the shading-normal
+  prepass target is absorbed HERE if Peter's look fires RD3's mismatch trigger on a real asset,
+  otherwise it stays deferred (§9.7).
+- *Gate:* (a) computed-pixel value test on the region-probe harness: textured metallic plane +
+  known env — CPU computes the expected reflected radiance INCLUDING the hit-point env term;
+  region mean within a stated tolerance; **control leg, mandatory:** the pre-parity shading
+  (no env at hit) must read below a stated floor. (b) I-R1's empty-scene equality test still
+  passes. (c) held-out input: the AMG GT3 GLB
+  (`tests/fixtures/gltf/mercedes-amg_gt3__www.vecarz.com.glb`) rendered headlessly via
+  `render-import`, reflections on vs off PNG pair — **the parity verdict is Peter's look**
+  (D19/D20 standing lesson), never an agent's. (d) `cargo test -p manifold-renderer
+  --features gpu-proofs` (`cargo test`, never nextest).
+- *Performer gesture:* load any textured GLB, toggle `rt_reflections` mid-set — the model keeps
+  its paint and textures; reflections add to the model's look, never replace it.
+- *Forbidden moves:* a second reflection dispatch (RD2 stands); re-tuning ray budgets (Peter's
+  profiling deferral stands); touching clearcoat/sheen/aniso/transmission lobes (RD5 stands);
+  claiming parity from a code-diff argument instead of Peter's look on the PNG pair; widening the
+  texture cap without stating the new limit's trigger.
+
+#### Stable reflections (R2) — specular temporal accumulation + roughness-aware filtering
+
+- *Entry:* Raster-parity reflections landed; Base traced reflections' (R1) `trace_ms` delta and
+  Peter's L2 verdict recorded in the phase report.
 - *Read-back:* RD6; `accumulate_irradiance` (`raytrace.rs:1206`) and `atrous_filter` (:1107) whole;
   §8.3 (per-object motion) and D19/D20 (why numeric motion oracles failed).
 - *Deliverables:* specular history ping-pong set alongside the irradiance set, wired to the SAME
@@ -483,7 +527,7 @@ serialized → dispatch → kernel → WGSL → pixels, exercised end to end bef
   with ranges, untuned — tuning is Peter's look.
 - *Gate:* **control-leg value test** (§8.3 shape) — camera moves, reflected geometry does not:
   WITH virtual-hit reprojection the accumulated value matches the CPU-computed `1 - alpha` blend;
-  WITHOUT it (R1 behaviour) the history is rejected and the value collapses. Two legs, one file.
+  WITHOUT it (pre-accumulation behaviour) the history is rejected and the value collapses. Two legs, one file.
   Plus the P2 cut-reset numeric oracle on the specular history; plus I-R2's negative `rg`; plus
   gpu-proofs.
 - *Performer gesture:* fast camera sweep across a mirror mid-clip — the gate captures the frame
@@ -495,14 +539,15 @@ serialized → dispatch → kernel → WGSL → pixels, exercised end to end bef
 - *Forbidden moves:* reusing diffuse history for specular; a second reset path; a third motion
   oracle; re-tuning ray budgets.
 
-#### R3 — per-texel metallic-roughness in the kernel
+#### Textured roughness (R3) — per-texel metallic-roughness in the kernel
 
-- *Entry:* R2 landed.
+- *Entry:* Stable reflections (R2) landed.
 - *Read-back:* T2-A's commit `62244989` (bindless-texture extension precedent, whole);
   `RtNormalSource` + `ensure_normal_sources` (`raytrace.rs:1533/1591`); D10.
 - *Deliverables:* `RtNormalSource` grows an MR-texture index (same field pattern as
-  `alpha_tex_index`); `MAX_RT_ALPHA_TEXTURES` becomes a general bindless material-texture cap with a
-  stated new value and un-suppression trigger; the kernel samples metallic/roughness per texel at
+  `alpha_tex_index`), riding the general material-texture cap Raster-parity reflections already
+  widened (stated limit + trigger live there — this phase does NOT re-widen); the kernel samples
+  metallic/roughness per texel at
   the primary hit's interpolated UV (`fetch_interpolated_uv`, `raytrace.rs:556` — already exists),
   factors when no map bound.
 - *Gate:* value test — plane with two-region roughness map (0.0/1.0) + one emissive quad: sharp
@@ -512,17 +557,22 @@ serialized → dispatch → kernel → WGSL → pixels, exercised end to end bef
 - *Forbidden moves:* growing the cap without stating the new limit's trigger; sampling MR maps for
   secondary (GI/AO) rays in the same phase.
 
-**Phasing-completeness check:** every §9 commitment appears exactly once — toggle (R1), traced base
-lobe (R1), roughness cutoff (R1), accumulation/denoising (R2), per-texel roughness (R3); the four
+**Phasing-completeness check:** every §9 commitment appears exactly once — toggle (Base traced
+reflections, R1), traced base lobe (R1), roughness cutoff (R1), raster-parity hit shading
+(Raster-parity reflections), accumulation/denoising (Stable reflections, R2), per-texel roughness
+(Textured roughness, R3); the four
 other lobes, reflection-specific resolution, multi-bounce, shading-normal prepass — §9.7 with
-triggers.
+triggers (the shading-normal prepass is conditionally absorbed by Raster-parity reflections on
+RD3's trigger).
 
 ### 9.7 Deferred (with revival triggers)
 
-- **Shading-normal prepass target** — trigger: RD3's mismatch in R1's demo or Peter's look.
+- **Shading-normal prepass target** — trigger: RD3's mismatch in Base traced reflections' (R1)
+  demo or Peter's look; when the trigger fires it is absorbed by Raster-parity reflections (§9.6).
 - **Clearcoat / sheen / anisotropic / transmission traced lobes** — trigger: a show asset dominated
   by a coat reflection, plus spare measured ray budget.
-- **Reflection-specific trace resolution** — trigger: R1's `trace_ms` delta shows headroom, or
+- **Reflection-specific trace resolution** — trigger: Base traced reflections' (R1) `trace_ms`
+  delta shows headroom, or
   Peter reports mirror reflections reading soft at 1/3-res reconstruction.
 - **Multi-bounce / recursive specular** — trigger: none before Tier 3 item 8.
 - **Reflections on non-PBR fragment paths** — trigger: a scene needing a reflective cel/phong
