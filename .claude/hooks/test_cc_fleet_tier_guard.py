@@ -101,6 +101,27 @@ check(
 # Empty model (unidentifiable caller): fail open.
 check("no model -> allow", hook.decide("cc-fleet subagent opencode -p x", "") == "")
 
+# Prose mentions (not command position) never match — the 2026-07-24 false
+# positives: commit messages and rg patterns quoting the phrase.
+for cmd in (
+    "git commit -m 'guard: cc-fleet spawn denied for every tier' -- docs/x.md",
+    "rg -l -i 'cc-fleet spawn|tmux teammate' docs/",
+    "echo about cc-fleet spawn",
+):
+    check(f"prose mention allowed: {cmd[:40]}...",
+          hook.decide(cmd, "claude-fable-5") == "" and
+          hook.decide(cmd, "deepseek-v4-flash") == "")
+
+# Command-position variants still caught.
+for cmd in (
+    "cc-fleet spawn glm --as w --team t",
+    "git status && cc-fleet spawn glm --as w",
+    "FOO=1 cc-fleet spawn glm",
+    "/Users/x/.local/bin/cc-fleet spawn glm",
+):
+    check(f"command position caught: {cmd[:40]}...",
+          bool(hook.decide(cmd, "claude-fable-5")))
+
 # --- main(): end-to-end with synthetic transcript --------------------------
 
 def run_main(command: str, model_line: str | None) -> str:

@@ -28,7 +28,15 @@ import os
 import re
 import sys
 
-SPAWN_CMD = re.compile(r"\bcc-fleet\s+(subagent|spawn|run|workflow)(?![\w-])(?:\s+(\S+))?")
+# Command-position match only: `cc-fleet` at the start of the command or
+# right after a shell separator (&&, ||, ;, |, $(, backtick, newline),
+# optionally behind env-var assignments. A quoted mention — an rg pattern,
+# a commit message — is prose, not an invocation (two real false positives
+# on 2026-07-24: a pathspec commit and a read-only rg sweep).
+SPAWN_CMD = re.compile(
+    r"(?:^|&&|\|\||;|\||\$\(|`|\n)\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)*"
+    r"(?:\S*/)?cc-fleet\s+(subagent|spawn|run|workflow)(?![\w-])(?:\s+(\S+))?"
+)
 EXECUTOR_TIER = re.compile(
     r"claude-(sonnet|haiku)|deepseek|kimi-k2|kimi-for-coding", re.IGNORECASE
 )
