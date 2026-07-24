@@ -16,13 +16,23 @@ Judgment tiers (fable/opus/kimi) pass through untouched.
 Fails open on any error (missing/unreadable transcript, format drift): a
 guard hook must never be able to block a session. `agent-model-guard.py`
 independently covers the explicit-model requirement for allowed spawns.
+
+2026-07-24 (R2, AGENT_ROUTING.md §0): extended to the open roster. Provider
+sessions carry their provider model id in `message.model` (measured:
+`deepseek-v4-flash`, `glm-4.7`) — executor tier (deepseek*, kimi-k2*,
+kimi-for-coding) and the GLM dispatcher tier are denied Agent spawns: the
+dispatcher drives executors via `cc-fleet` bash calls (guarded by
+cc-fleet-tier-guard.py), never the Agent tool. Lead tiers (fable/opus/k3)
+pass through.
 """
 import json
 import os
 import re
 import sys
 
-DENY_TIERS = re.compile(r"claude-(sonnet|haiku)", re.IGNORECASE)
+DENY_TIERS = re.compile(
+    r"claude-(sonnet|haiku)|deepseek|\bglm-|kimi-k2|kimi-for-coding", re.IGNORECASE
+)
 TAIL_BYTES = 256 * 1024  # models appear on every assistant entry; tail is plenty
 
 
