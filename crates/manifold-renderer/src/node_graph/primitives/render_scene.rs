@@ -782,6 +782,13 @@ pub struct RenderScene {
     /// the mirror of `rt_irr_half`. Inert until T5's reflection kernel —
     /// allocated + reset by `ensure_rt_irradiance` alongside irradiance.
     rt_refl_half: Option<manifold_gpu::GpuTexture>,
+    /// RT-R1 (§9.3): full-res reflection-radiance output — the upsample
+    /// target for `rt_refl_half` (mirrors `rt_irr_full`). Inert until T5's
+    /// reflection kernel writes it; bind-only for upsample/atrous in R1.
+    rt_refl_full: Option<manifold_gpu::GpuTexture>,
+    /// RT-R1 (§9.3): full-res reflection scratch for à-trous ping-pong
+    /// (mirrors `rt_irr_full_b`). Inert/bind-only until T5.
+    rt_refl_full_b: Option<manifold_gpu::GpuTexture>,
     /// RT-T1-C (RAYTRACING_DESIGN.md §8 Tier-1 item 1, BUG-311): the
     /// temporally-accumulated demodulated irradiance, its per-pixel depth,
     /// and its per-pixel normal history, each a PING-PONG PAIR —
@@ -1033,6 +1040,8 @@ impl RenderScene {
             rt_irr_half: None,
             rt_irr_full: None,
             rt_refl_half: None,
+            rt_refl_full: None,
+            rt_refl_full_b: None,
             rt_irr_history: [None, None],
             rt_depth_history: [None, None],
             rt_normal_history: [None, None],
@@ -1727,6 +1736,10 @@ impl RenderScene {
         // as `rt_irr_half` (the dispatch writes it; T5's kernel is the writer;
         // inert/bind-only until then).
         self.rt_refl_half = Some(make(half_w, half_h, rgba16, "node.render_scene rt_refl_half (RT-R1)"));
+        // RT-R1 (§9.3): full-res reflection-radiance output target & atrous
+        // scratch (mirror `rt_irr_full`/`rt_irr_full_b`). Inert until T5.
+        self.rt_refl_full = Some(make(width, height, rgba16, "node.render_scene rt_refl_full (RT-R1)"));
+        self.rt_refl_full_b = Some(make(width, height, rgba16, "node.render_scene rt_refl_full_b (RT-R1 atrous)"));
         // RT-T1-C: current-frame primary-hit normal, same half/full
         // lifecycle as irradiance above (not persistent history).
         self.rt_normal_half = Some(make(half_w, half_h, rgba16, "node.render_scene rt_normal_half (RT-T1-C)"));
@@ -4081,6 +4094,8 @@ impl EffectNode for RenderScene {
                 let normal_half = self.rt_normal_half.as_ref().expect("ensured above");
                 let normal_full = self.rt_normal_full.as_ref().expect("ensured above");
                 let refl_half = self.rt_refl_half.as_ref().expect("ensured above");
+                let refl_full = self.rt_refl_full.as_ref().expect("ensured above");
+                let _refl_full_b = self.rt_refl_full_b.as_ref().expect("ensured above");
                 tracer.dispatch_shadow_rays(
                     gpu.native_enc,
                     accel,
@@ -4106,6 +4121,8 @@ impl EffectNode for RenderScene {
                     irr_full,
                     normal_half,
                     normal_full,
+                    refl_half,
+                    refl_full,
                     "node.render_scene RT-D3/RT-P2 upsample_shadow",
                 );
 
@@ -4128,6 +4145,7 @@ impl EffectNode for RenderScene {
                 let mask_full_b = self.rt_mask_full_b.as_ref().expect("ensured above");
                 let irr_full_b = self.rt_irr_full_b.as_ref().expect("ensured above");
                 let normal_full_b = self.rt_normal_full_b.as_ref().expect("ensured above");
+                let refl_full_b = self.rt_refl_full_b.as_ref().expect("ensured above");
                 let history_valid = self.rt_moments_valid;
                 for pass in 0..(ATROUS_ITERATIONS - 1) {
                     // T1-D: dilation starts at 2, not 1 — the AO/GI trace
@@ -4139,10 +4157,10 @@ impl EffectNode for RenderScene {
                     // is the smallest offset guaranteed to cross into an
                     // adjacent (independently-sampled) half-res block.
                     let step = 2u32 << pass;
-                    let (src_sv, src_irr, src_n, dst_sv, dst_irr, dst_n) = if pass % 2 == 0 {
-                        (mask_full, irr_full, normal_full, mask_full_b, irr_full_b, normal_full_b)
+                    let (src_sv, src_irr, src_n, src_refl, dst_sv, dst_irr, dst_n, dst_refl) = if pass % 2 == 0 {
+                        (mask_full, irr_full, normal_full, refl_full, mask_full_b, irr_full_b, normal_full_b, refl_full_b)
                     } else {
-                        (mask_full_b, irr_full_b, normal_full_b, mask_full, irr_full, normal_full)
+                        (mask_full_b, irr_full_b, normal_full_b, refl_full_b, mask_full, irr_full, normal_full, refl_full)
                     };
                     let atrous_params = manifold_gpu::raytrace::AtrousParams::new([width, height], step, history_valid);
                     tracer.atrous_pass(
@@ -4157,6 +4175,8 @@ impl EffectNode for RenderScene {
                         dst_irr,
                         src_n,
                         dst_n,
+                        src_refl,
+                        dst_refl,
                         "node.render_scene RT-T1-D atrous_pass",
                     );
                 }

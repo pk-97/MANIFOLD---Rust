@@ -1027,6 +1027,9 @@ kernel void upsample_shadow(
     // already needed full-res CURRENT irradiance.
     texture2d<float>                lo_n      [[texture(5)]],
     texture2d<float, access::write> hi_n      [[texture(6)]],
+    // RT-R1 (§9.3): reflection-radiance textures — bind-only, inert until T5.
+    texture2d<float>                lo_refl   [[texture(7)]],
+    texture2d<float, access::write> hi_refl   [[texture(8)]],
     uint2 tid [[thread_position_in_grid]])
 {
     if (tid.x >= p.gbuffer_size.x || tid.y >= p.gbuffer_size.y) return;
@@ -1123,6 +1126,9 @@ kernel void atrous_filter(
     texture2d<float, access::write>  dst_irr      [[texture(5)]],
     texture2d<float>                 src_n        [[texture(6)]],
     texture2d<float, access::write>  dst_n        [[texture(7)]],
+    // RT-R1 (§9.3): reflection-radiance textures — bind-only, inert until T5.
+    texture2d<float>                 src_refl     [[texture(8)]],
+    texture2d<float, access::write>  dst_refl     [[texture(9)]],
     uint2 tid [[thread_position_in_grid]])
 {
     if (tid.x >= p.size.x || tid.y >= p.size.y) return;
@@ -1914,6 +1920,8 @@ pub trait ShadowRayTracer {
         hi_irr: &GpuTexture,
         lo_n: &GpuTexture,
         hi_n: &GpuTexture,
+        lo_refl: &GpuTexture,
+        hi_refl: &GpuTexture,
         label: &str,
     );
 
@@ -1939,6 +1947,8 @@ pub trait ShadowRayTracer {
         dst_irr: &GpuTexture,
         src_n: &GpuTexture,
         dst_n: &GpuTexture,
+        src_refl: &GpuTexture,
+        dst_refl: &GpuTexture,
         label: &str,
     );
 
@@ -2278,6 +2288,8 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         hi_irr: &GpuTexture,
         lo_n: &GpuTexture,
         hi_n: &GpuTexture,
+        lo_refl: &GpuTexture,
+        hi_refl: &GpuTexture,
         label: &str,
     ) {
         // `params.gbuffer_size` (already uploaded by `dispatch_shadow_rays`
@@ -2323,6 +2335,15 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                     binding: 6,
                     texture: hi_n,
                 },
+                // RT-R1 (§9.3): reflection-radiance textures — bind-only, inert until T5.
+                GpuBinding::Texture {
+                    binding: 7,
+                    texture: lo_refl,
+                },
+                GpuBinding::Texture {
+                    binding: 8,
+                    texture: hi_refl,
+                },
             ],
             groups,
             label,
@@ -2342,6 +2363,8 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         dst_irr: &GpuTexture,
         src_n: &GpuTexture,
         dst_n: &GpuTexture,
+        src_refl: &GpuTexture,
+        dst_refl: &GpuTexture,
         label: &str,
     ) {
         params_buffer.upload(atrous_params_bytes(params));
@@ -2385,6 +2408,15 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                 GpuBinding::Texture {
                     binding: 7,
                     texture: dst_n,
+                },
+                // RT-R1 (§9.3): reflection-radiance textures — bind-only, inert until T5.
+                GpuBinding::Texture {
+                    binding: 8,
+                    texture: src_refl,
+                },
+                GpuBinding::Texture {
+                    binding: 9,
+                    texture: dst_refl,
                 },
             ],
             groups,
