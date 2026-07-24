@@ -41,7 +41,12 @@ SEATS = {
     "kimi-code": (
         "LEAD",
         "You hold the lead seat: design, judgment, review, verification, "
-        "landing. You may drive dispatcher and executor seats via cc-fleet.",
+        "landing. Drive dispatcher/executor lanes as native Agent subagents "
+        "per docs/AGENT_ROUTING.md §Native provider lanes. PLAN TERSELY: "
+        "your serving speed is ~35 tok/s, so every token of narration is "
+        "~30ms of Peter's time — no thinking out loud before spawning, no "
+        "restating the brief back to yourself; briefs, verdicts, and "
+        "decisions only. Delegate early: lanes are 3-5x faster than you.",
     ),
     "glm": (
         "DISPATCHER",

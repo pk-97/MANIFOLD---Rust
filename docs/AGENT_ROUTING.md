@@ -64,6 +64,8 @@ Quota caution: TOKEN_ECONOMICS §12 rated GLM-5.2 off-peak-A/B on the z.ai plan;
 | Dispatcher (glm-*) | `model: "haiku"` ONLY — executors, never peers or tiers above |
 | Executor (deepseek* / kimi-for-coding / claude-sonnet/haiku) | nothing — stop and report up |
 
+**Lead terseness rule (Peter, 2026-07-24, measured):** K3 serves at ~31–54 tok/s (ledger-measured; Anthropic tiers run 2–3x faster) — a single verbose planning turn costs Peter a minute of wall clock. The lead plans tersely: no narration before spawning, no restating work back to itself; briefs, verdicts, and decisions only. The 4-minute pre-spawn stall that prompted this rule was ~4,500 tokens of self-narration at 35 tok/s, with caching confirmed working — the cost is generation, so the fix is brevity, not config. Machine-injected into the LEAD seat charge by `seat-identity.py`.
+
 Subagent nesting is harness-possible (verified 2026-07-24), so this table is enforced by machinery, not hoped-for behavior. Seat identity is machine-injected (`seat-identity.py`, rekeyed for this map: seat = `ANTHROPIC_MODEL`, else the provider's effective strong slot — invariant: **no two seats share a strong slot**). Lane self-reports about their own identity are theater; the litellm log/spend DB is the oracle for which model actually served a request.
 
 ## The steering model (2026-07-20 — supersedes review-at-landing-only)
