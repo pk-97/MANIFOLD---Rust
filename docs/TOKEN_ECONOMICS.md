@@ -93,7 +93,7 @@ Call 600 costs **6x** what call 20 cost, for identical work. Session totals:
 
 **12% of sessions burn 50% of all tokens.**
 
-> **The existing doctrine threshold is wrong.** `AGENT_ROUTING.md` §Overnight says seats rotate at "~500K observed as the sensible ceiling." At 500K every subsequent call costs half a megatoken. **Rotate at ~200K (around call 150).** This is the single largest lever in this document and it is a one-line change.
+> **The existing doctrine threshold is wrong.** `AGENT_ROUTING.md` §Overnight says seats rotate at "~500K observed as the sensible ceiling." At 500K every subsequent call costs half a megatoken. **Rotate at ~200K (around call 150).** This is the single largest lever in this document and it is a one-line change. (Workers/dispatchers only — the lead seat is exempt from the hook ceiling, Peter 2026-07-24.)
 
 ---
 
@@ -238,7 +238,7 @@ Your own tier-spawn guard records why this section exists: the rule "was policy,
 
 | Rule | Class | Mechanism |
 |---|---|---|
-| Rotate seats at ~200K context | **Mechanical** | `.claude/hooks/context-ceiling-guard.py` — reads `transcript_path` (same trick as `agent-tier-spawn-guard.py`), sums recent `cache_read_input_tokens`, warns then denies past the ceiling |
+| Rotate seats at ~200K context | **Mechanical** | `.claude/hooks/context-ceiling-guard.py` — reads `transcript_path` (same trick as `agent-tier-spawn-guard.py`), sums recent `cache_read_input_tokens`, warns then denies past the ceiling. Workers/dispatchers only — the lead seat (fable/k3) is exempt (Peter 2026-07-24) |
 | Worker keys cannot reach expensive models | **Mechanical** | LiteLLM virtual key `models` allow-list (R8) — strictly harder than R2's regex, which fails open on unrecognised ids |
 | Per-seat spend/rate caps | **Mechanical** | LiteLLM `max_budget`, `rpm_limit`, `max_parallel_requests` (R8) |
 | Briefs name a gate, a scope, a reuse target | **Structural** | generate lane briefs from a script that refuses to emit one missing them |

@@ -23,6 +23,13 @@ Mechanism (deterministic, no model calls): the payload carries `transcript_path`
 IS the current context size (cache_read + cache_creation + input). Warn at
 WARN_TOKENS, deny at DENY_TOKENS with instructions to hand off.
 
+TIER SPLIT (Peter's ruling, 2026-07-24): the ceiling applies to workers and
+dispatchers ONLY. The lead seat (model matches fable|k3 -- NOT opus; same
+transcript-model detection as cc-fleet-tier-guard.py) is fully exempt: no
+warn, no deny; auto-compaction is the backstop. For every other seat,
+including unidentifiable ones, a ceiling hit is a defect signal and behavior
+is unchanged.
+
 Denial is not data loss: past DENY_TOKENS a WRAP-UP LANE stays open -- git
 commands (commit clean work), Write/Edit to scratchpad / .claude/orchestration
 / handoff files, and SendMessage (report up). Everything else is denied. The
@@ -37,11 +44,16 @@ unavoidable long seat: MANIFOLD_CONTEXT_CEILING=off in the environment.
 """
 import json
 import os
+import re
 import sys
 
 WARN_TOKENS = 150_000
 DENY_TOKENS = 200_000
 TAIL_BYTES = 512 * 1024
+
+# Lead tier is exempt (Peter 2026-07-24): rotation ceilings are for workers.
+# Lead = fable/k3 ONLY (Peter: Opus is not lead tier).
+LEAD_TIER = re.compile(r"fable|\bk3\b", re.IGNORECASE)
 
 # Wrap-up lane: tools still allowed past DENY_TOKENS so the seat can land
 # clean work, write its handoff, and report up -- nothing else.
@@ -60,8 +72,8 @@ def is_wrapup_call(tool_name: str, tool_input: dict) -> bool:
     return False
 
 
-def current_context(transcript_path: str) -> int:
-    """Context size of the most recent assistant turn, in tokens."""
+def current_context(transcript_path: str) -> tuple[int, str]:
+    """(context size of the most recent assistant turn, caller model)."""
     with open(transcript_path, "rb") as f:
         try:
             f.seek(-TAIL_BYTES, os.SEEK_END)
@@ -69,14 +81,19 @@ def current_context(transcript_path: str) -> int:
             f.seek(0)
         tail = f.read().decode("utf-8", errors="replace")
     size = 0
+    model = ""
     for line in tail.splitlines():
-        if '"usage"' not in line:
+        if '"usage"' not in line and '"model"' not in line:
             continue
         try:
             entry = json.loads(line)
         except ValueError:
             continue
-        usage = (entry.get("message") or {}).get("usage")
+        message = entry.get("message") or {}
+        m = message.get("model") or entry.get("model") or ""
+        if isinstance(m, str) and m:
+            model = m  # keep the LAST one seen
+        usage = message.get("usage")
         if not isinstance(usage, dict):
             continue
         total = ((usage.get("cache_read_input_tokens") or 0)
@@ -84,7 +101,7 @@ def current_context(transcript_path: str) -> int:
                  + (usage.get("input_tokens") or 0))
         if total:
             size = total  # keep the LAST one seen
-    return size
+    return size, model
 
 
 def emit(decision: str, reason: str) -> None:
@@ -107,7 +124,9 @@ def main() -> None:
         if not path or not os.path.isfile(path):
             sys.exit(0)  # fail open -- can't measure
 
-        size = current_context(path)
+        size, model = current_context(path)
+        if LEAD_TIER.search(model):
+            sys.exit(0)  # lead seat is exempt -- workers only
         if size >= DENY_TOKENS:
             tool_name = payload.get("tool_name") or ""
             tool_input = payload.get("tool_input") or {}
