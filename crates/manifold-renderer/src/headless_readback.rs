@@ -31,6 +31,19 @@ pub fn readback_to_srgb_png(
     encode_rgba8_png(&rgba, width, height)
 }
 
+/// BUG-327 sibling of [`readback_to_srgb_png`]: skips the Reinhard tonemap and
+/// does linear→sRGB display encode only — for graphs that tonemap in-graph
+/// (e.g. ACES via `tone_map`). Reuses [`encode_rgba8_png`].
+pub fn readback_to_srgb_png_linear(
+    device: &GpuDevice,
+    texture: &GpuTexture,
+    width: u32,
+    height: u32,
+) -> Vec<u8> {
+    let rgba = readback_srgb_rgba8(device, texture, width, height);
+    encode_rgba8_png(&rgba, width, height)
+}
+
 /// Read back an `Rgba16Float` target and Reinhard-tonemap to raw RGBA8 bytes
 /// (not yet PNG-encoded) — same convention `mesh_snapshot.rs`'s headless PNG
 /// dumps use (this crate's established "linear HDR graph output → a PNG a
@@ -72,6 +85,57 @@ pub fn readback_tonemapped_rgba8(
         out.push(tonemap(r * a));
         out.push(tonemap(g * a));
         out.push(tonemap(b * a));
+        out.push(255);
+    }
+    out
+}
+
+/// Linear→sRGB8 display encode (IEC 61966-2-1 transfer function). BUG-327:
+/// `readback_tonemapped_rgba8`'s Reinhard double-tonemaps graphs that tonemap
+/// in-graph; the `--linear` readback uses THIS instead. Input is clamped to
+/// [0,1] first — HDR values >1 clip to white (correct: the in-graph tonemap
+/// already brought values into display range, so anything >1 is a highlight).
+pub fn linear_to_srgb8(v: f32) -> u8 {
+    let c = v.clamp(0.0, 1.0);
+    let s = if c <= 0.0031308 {
+        12.92 * c
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
+    };
+    (s * 255.0).round().clamp(0.0, 255.0) as u8
+}
+
+/// Read back an `Rgba16Float` target and linear→sRGB encode to raw RGBA8 bytes
+/// — the BUG-327 sibling of [`readback_tonemapped_rgba8`]: SAME GPU readback and
+/// SAME alpha-composite-over-black, but the tonemap closure is replaced by
+/// [`linear_to_srgb8`] (no Reinhard).
+pub fn readback_srgb_rgba8(
+    device: &GpuDevice,
+    tex: &GpuTexture,
+    w: u32,
+    h: u32,
+) -> Vec<u8> {
+    let bytes_per_row = w * 8; // Rgba16Float = 8 bytes/pixel
+    let total = u64::from(h * bytes_per_row);
+    let buf = device.create_buffer_shared(total);
+    let mut enc = device.create_encoder("headless-readback-srgb");
+    enc.copy_texture_to_buffer(tex, &buf, w, h, bytes_per_row);
+    enc.commit_and_wait_completed();
+
+    let ptr = buf.mapped_ptr().expect("shared readback buffer must expose mapped pointer");
+    let halves: &[u16] = unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
+
+    let mut out = Vec::with_capacity((w * h * 4) as usize);
+    for px in halves.chunks_exact(4) {
+        let r = f16::from_bits(px[0]).to_f32();
+        let g = f16::from_bits(px[1]).to_f32();
+        let b = f16::from_bits(px[2]).to_f32();
+        // Same composite-over-opaque-black as `readback_tonemapped_rgba8`
+        // (straight-alpha producers: visible colour is rgb*a over black).
+        let a = f16::from_bits(px[3]).to_f32().clamp(0.0, 1.0);
+        out.push(linear_to_srgb8(r * a));
+        out.push(linear_to_srgb8(g * a));
+        out.push(linear_to_srgb8(b * a));
         out.push(255);
     }
     out

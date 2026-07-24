@@ -68,7 +68,7 @@ fn print_usage() {
         "usage: graph_tool validate <file.json> --kind effect|generator [--json]\n\
          \x20\x20\x20\x20\x20\x20\x20graph_tool fusion <file.json> [--json]\n\
          \x20\x20\x20\x20\x20\x20\x20graph_tool migrate <file.json> [--in-place]\n\
-         \x20\x20\x20\x20\x20\x20\x20graph_tool render <file.json> --kind effect|generator [--size N] [--out out.png] [--relight]\n\
+         \x20\x20\x20\x20\x20\x20\x20graph_tool render <file.json> --kind effect|generator [--size N] [--out out.png] [--relight] [--linear]\n\
          \n\
          validate: runs a graph document JSON file through the same load +\n\
          compile pipeline the runtime loader takes. Exit codes: 0 valid,\n\
@@ -184,12 +184,17 @@ fn run_render(args: &[String]) -> ExitCode {
     let mut size: u32 = 512;
     let mut out: Option<PathBuf> = None;
     let mut relight = false;
+    let mut linear = false;
 
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--relight" => {
                 relight = true;
+                i += 1;
+            }
+            "--linear" => {
+                linear = true;
                 i += 1;
             }
             "--kind" => {
@@ -268,9 +273,16 @@ fn run_render(args: &[String]) -> ExitCode {
     };
 
     let device = std::sync::Arc::new(GpuDevice::new());
-    match manifold_renderer::preset_thumbnail::render_preset_thumbnail_to_file(
-        &device, kind, &def, size, &out,
-    ) {
+    let result = if linear {
+        manifold_renderer::preset_thumbnail::render_preset_thumbnail_to_file_linear(
+            &device, kind, &def, size, &out,
+        )
+    } else {
+        manifold_renderer::preset_thumbnail::render_preset_thumbnail_to_file(
+            &device, kind, &def, size, &out,
+        )
+    };
+    match result {
         Ok(()) => {
             println!("rendered {} -> {}", file.display(), out.display());
             ExitCode::SUCCESS
