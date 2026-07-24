@@ -18,10 +18,10 @@ Denies when the target file resolves INSIDE the main checkout, EXCEPT:
   - unmerged (conflicted) files while .git/MERGE_HEAD exists — landing-protocol
     merges happen in the main checkout, so conflict resolution edits exactly
     those files there. See merge_conflict_paths() for scope and failure story;
-  - quick docs: docs/**/*.md EXCEPT *_DESIGN.md (approved by Peter 2026-07-20 —
-    the worktree ceremony is overkill for non-breaking doc edits like findings,
-    backlog entries, tombstones). Design docs stay on the worktree path: they
-    carry supersession-sweep obligations that deserve a deliberate landing.
+  - quick docs: docs/**/*.md — ALL docs, including *_DESIGN.md (approved by
+    Peter 2026-07-20; widened to design docs by Peter 2026-07-24 — the
+    worktree ceremony is overkill for non-breaking doc edits like findings,
+    backlog entries, tombstones, status lines).
     Adding/renaming a doc still requires gen_docs_index.py in the same commit
     or the freshness meta-test goes red.
 
@@ -78,10 +78,10 @@ _DOCS_DIR = _PROJECT_DIR / "docs"
 
 
 def is_doc_fast_path(resolved):
-    """docs/**/*.md except *_DESIGN.md — see module docstring."""
+    """docs/**/*.md — all docs, including *_DESIGN.md (widened by Peter
+    2026-07-24: the exclusion was too conservative; doc edits don't break the
+    build, and status lines must stay cheap to keep true)."""
     if resolved.suffix != ".md":
-        return False
-    if resolved.name.endswith("_DESIGN.md"):
         return False
     return resolved == _DOCS_DIR or _DOCS_DIR in resolved.parents
 

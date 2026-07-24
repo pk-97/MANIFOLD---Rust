@@ -75,9 +75,9 @@ def test_docs_deny():
     check("docs/BUG_BACKLOG.md -> allow (doc fast path, 2026-07-20)", r is None, r)
 
 
-def test_docs_design_doc_still_denies():
+def test_docs_design_doc_now_allowed():
     r = run_hook(edit(str(PROJ / "docs/VULKAN_BACKEND_DESIGN.md")))
-    check("docs/*_DESIGN.md -> deny (stays on worktree path)", r is not None, r)
+    check("docs/*_DESIGN.md -> allow (fast path widened, 2026-07-24)", r is None, r)
 
 
 def test_docs_non_md_still_denies():
@@ -195,7 +195,7 @@ def main():
         test_main_source_absolute_denies,
         test_main_source_relative_denies,
         test_docs_deny,
-        test_docs_design_doc_still_denies,
+        test_docs_design_doc_now_allowed,
         test_docs_non_md_still_denies,
         test_cargo_toml_denies,
         test_tooling_hook_allowed,

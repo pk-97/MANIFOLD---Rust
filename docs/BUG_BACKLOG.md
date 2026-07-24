@@ -2008,3 +2008,11 @@ when one is fixed).
 **Root cause:** unknown — not yet investigated. Suspects: something re-applying the old range after the remap commits (write-then-overwrite ordering), or the remap write landing on the wrong target/store (cf. BUG-260/BUG-292 class of stale-read/wrong-target bugs in param surfaces).
 **Fix shape:** TBD — first step is reproducing with printlns around the range-remap write path (which command/service call sets the range, and what runs after it) to find what's overwriting or failing to persist.
 
+
+### BUG-327 (headless-readback-double-tonemap) — `readback_tonemapped_rgba8` always applies its own Reinhard on top of graphs that already end in a tone_map node, double-compressing every probe PNG (pins at 127)
+**Status:** OPEN (found 2026-07-24, K3, during the RT reflections §9 Q1 settling test).
+**Severity:** LOW-MED — every headless probe/look PNG through `graph_tool render` / `preset_thumbnail` is double-tonemapped when the graph contains `node.tone_map` (all scene graphs do): highlights compress and clip at 127/255, making amplitude judgments from probe numbers misleading (a 100× light-intensity change moved mean luminance by only 20%).
+**Symptom:** PNG max pixel value never exceeds 127 for any content whose graph-side tone map outputs ≥1.0; 512 borderline pixels pinned at 127 even in a near-black render.
+**Root cause:** `crates/manifold-renderer/src/headless_readback.rs:58` applies `v/(1+v)` Reinhard unconditionally. The graph pipeline (`graph_tool render` → `preset_thumbnail` → `render_preset_thumbnail_to_file`) runs the graph's own tone_map node first (`tone_map.rs` — ACES/AgX/etc. with exposure), then the readback Reinhard-tonemaps a second time. The readback's "linear HDR graph output" assumption is false for scene graphs; it holds only for raw linear graphs.
+**Fix shape:** caller states whether the graph already tonemapped — add a skip-the-Reinhard path (linear→sRGB8 conversion only) selected by a `--linear` flag on `graph_tool render` (default unchanged for thumbnails, which expect the legacy look). Deliberately NOT graph-sniffing (fragile); the caller knows. All RT §9 probe gates then render with `--linear`.
+**Next free id:** BUG-328.
