@@ -472,6 +472,7 @@ struct ShadowRayParams {
 struct GiMaterial {
     packed_float3 albedo;   float _p0;
     packed_float3 emissive; float _p1;   // linear HDR, premultiplied by intensity
+    float4 metallic_roughness;   // RT-R1: x=metallic, y=roughness (z/w reserved)
 };
 
 // RT-T1-B (RAYTRACING_DESIGN.md §8 Tier-1 item 2): per-object bindless
@@ -1480,17 +1481,22 @@ pub struct GiMaterial {
     _pad0: f32,
     pub emissive: [f32; 3],
     _pad1: f32,
+    /// RT-R1: x = metallic, y = roughness — read straight off
+    /// `d.uniforms.pbr_metallic_roughness` (render_scene.rs:332), the SAME
+    /// resolved factors `fs_pbr` shades with. z/w reserved.
+    pub metallic_roughness: [f32; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<GiMaterial>() == 32);
+const _: () = assert!(std::mem::size_of::<GiMaterial>() == 48);
 
 impl GiMaterial {
-    pub fn new(albedo: [f32; 3], emissive: [f32; 3]) -> Self {
+    pub fn new(albedo: [f32; 3], emissive: [f32; 3], metallic_roughness: [f32; 4]) -> Self {
         Self {
             albedo,
             _pad0: 0.0,
             emissive,
             _pad1: 0.0,
+            metallic_roughness,
         }
     }
 }

@@ -3987,6 +3987,15 @@ impl EffectNode for RenderScene {
                                 d.uniforms.emission[1],
                                 d.uniforms.emission[2],
                             ],
+                            // RT-R1: the SAME resolved metallic/roughness
+                            // fs_pbr shades with (render_scene.rs:332); z/w
+                            // reserved (ior/specular stay on the raster side).
+                            [
+                                d.uniforms.pbr_metallic_roughness[0],
+                                d.uniforms.pbr_metallic_roughness[1],
+                                0.0,
+                                0.0,
+                            ],
                         )
                     })
                     .collect();
