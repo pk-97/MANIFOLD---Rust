@@ -10,11 +10,13 @@ model ids), but the written record does. This hook injects the true
 identity as session context, machine-derived from the same source the
 statusline uses.
 
-Mechanism: cc-fleet profiles export ANTHROPIC_BASE_URL; match it against
-~/.config/cc-fleet/providers.toml to resolve the provider, then map
-provider -> seat per docs/AGENT_ROUTING.md (the tiering). Anthropic
-sessions (no/api.anthropic.com base URL) get nothing — their system prompt
-is already correct.
+Mechanism: cc-fleet profiles export MANIFOLD_PROVIDER (the explicit seat
+key) — trust it first. Fallback: match ANTHROPIC_BASE_URL against
+~/.config/cc-fleet/providers.toml. The fallback is unreliable post-litellm
+proxy (2026-07-24): several seats share 127.0.0.1:4000 and first-match
+misidentified K3 lead sessions as glm/dispatcher. Provider -> seat maps per
+docs/AGENT_ROUTING.md (the tiering). Anthropic sessions (no/api.anthropic.com
+base URL) get nothing — their system prompt is already correct.
 
 Fails silent on any error: identity context is a nice-to-have; a hook must
 never block a session.
@@ -74,9 +76,15 @@ def main() -> None:
             sys.exit(0)  # real Anthropic session — system prompt already correct
 
         providers = parse_providers(PROVIDERS_TOML)
-        name = next(
-            (n for n, p in providers.items() if p.get("base_url") == base_url), ""
-        )
+        # Explicit seat key from the profile wins; base_url is only a
+        # fallback (ambiguous since the proxy unified seat URLs).
+        name = os.environ.get("MANIFOLD_PROVIDER", "")
+        if name and name not in providers:
+            name = ""
+        if not name:
+            name = next(
+                (n for n, p in providers.items() if p.get("base_url") == base_url), ""
+            )
         if not name:
             sys.exit(0)
 
