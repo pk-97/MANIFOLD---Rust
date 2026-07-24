@@ -437,6 +437,13 @@ struct RenderSceneUniforms {
     /// `KHR_materials_volume`'s `attenuationColor` (`xyz`, default
     /// `[1,1,1]` — neutral). `w` reserved.
     volume_attenuation_color: [f32; 4],
+    /// RAYTRACING_DESIGN.md §9 RD9/RD1: RT feature flags the FRAGMENT
+    /// shader needs (scene_params.w only says "RT active", not "the
+    /// reflection texture holds traced data this frame"). `x` =
+    /// rt_reflections active (rt_enabled && rt_ready && rt_reflections &&
+    /// non-empty casters — written alongside `scene_params[3]`). `yzw`
+    /// reserved (R2's specular-accumulation flags).
+    rt_flags: [f32; 4],
 }
 
 // 736 = 46 × 16 → the naga 16-byte uniform-size rule holds. Was 480 before
@@ -445,13 +452,14 @@ struct RenderSceneUniforms {
 // `ior`/`specular_factor` rode existing reserved slots on
 // `pbr_metallic_roughness` instead of growing the struct). Still 656 after
 // G-P5/D5: `clearcoat`/`clearcoat_roughness` rode `alpha_params`'s two
-// reserved slots — no struct growth. Now 736 after
+// reserved slots — no struct growth. Was 736 after
 // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1/D2: five new vec4s
 // (`sheen_params`/`iridescence_params`/`anisotropy_dispersion_params`/
 // `transmission_volume_params`/`volume_attenuation_color`, +80 bytes) —
 // ONE migration sized for all five families this doc's phases add, per
-// D2 (never grown again per-family).
-const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 736);
+// D2 (never grown again per-family). Now 752 after RAYTRACING_DESIGN.md §9
+// RD9: `rt_flags` (+16) — an RT feature flag word, not a glTF family.
+const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 752);
 
 /// Per-(caster, object) uniform for the shadow depth pass
 /// (`shaders/shadow_depth.wgsl`). The vertex shader composes
@@ -2652,6 +2660,9 @@ fn build_uniforms(
             material.volume_attenuation_color[2],
             0.0,
         ],
+        // Overwritten per-object right after the build (rt_reflections
+        // gate, §9 RD9) — default 0 = substitution OFF.
+        rt_flags: [0.0; 4],
     }
 }
 
@@ -3268,6 +3279,13 @@ impl EffectNode for RenderScene {
             // `has_casters` (declared later in this function, after this
             // loop) — same underlying `casters` Vec, already populated.
             uniforms.scene_params[3] = if rt_enabled && rt_ready && !casters.is_empty() { 1.0 } else { 0.0 };
+            // RAYTRACING_DESIGN.md §9 RD9/RD1: the reflection-substitution
+            // gate — stricter than scene_params.w: the raster may only
+            // read `rt_reflection` (binding 43) when the trace dispatch
+            // actually ran WITH refl_spp > 0 this frame, i.e. the
+            // rt_reflections param is also on. Same per-object write
+            // (scene-wide value, like scene_params.w).
+            uniforms.rt_flags[0] = if rt_reflections && rt_ready && !casters.is_empty() { 1.0 } else { 0.0 };
             if base_color_map.is_some() {
                 uniforms.texture_flags[2] = 1.0; // z = base_color_map present (matches resolve_albedo's texture_flags.z gate)
             }
@@ -4124,6 +4142,14 @@ impl EffectNode for RenderScene {
                     irr_half,
                     normal_half,
                     refl_half,
+                    // RT-R1 (§9.3 RD4): the env mip chain the reflection
+                    // miss branch samples — dummy when the scene has no
+                    // IBL chain (the miss then reads the same nothing the
+                    // raster IBL would). dummy_texture is ensured upstream
+                    // of evaluate's RT block (3491).
+                    self.prefiltered_specular.as_ref().unwrap_or(
+                        self.dummy_texture.as_ref().expect("ensured at 3491"),
+                    ),
                     "node.render_scene RT-D3/RT-P2/RT-P3 trace_shadow_rays",
                 );
                 tracer.upsample_shadow(
@@ -4407,7 +4433,14 @@ impl EffectNode for RenderScene {
         // most recently WROTE this frame (dummy when RT isn't active this
         // frame — same ABI-stub discipline as `rt_mask_tex`).
         let rt_irr_tex = self.rt_irr_history[self.rt_history_ping].as_ref().unwrap_or(dummy);
-        let binding_sets: Vec<[GpuBinding; 43]> = draws
+        // RAYTRACING_DESIGN.md §9 RD1: the full-res traced-reflection
+        // texture fs_pbr SUBSTITUTES for its prefiltered-env fetch when
+        // `rt_flags.x > 0.5` — always bound (ABI-stub discipline), dummy
+        // whenever the substitution is gated off (the textureLoad is
+        // unreachable then). `rt_refl_full` is where the EVEN atrous pass
+        // count lands the final signal (same layout as `mask_full`).
+        let rt_refl_tex = self.rt_refl_full.as_ref().unwrap_or(dummy);
+        let binding_sets: Vec<[GpuBinding; 44]> = draws
             .iter()
             .map(|draw| {
                 [
@@ -4638,6 +4671,10 @@ impl EffectNode for RenderScene {
                     GpuBinding::Texture {
                         binding: 42,
                         texture: rt_irr_tex,
+                    },
+                    GpuBinding::Texture {
+                        binding: 43,
+                        texture: rt_refl_tex,
                     },
                 ]
             })

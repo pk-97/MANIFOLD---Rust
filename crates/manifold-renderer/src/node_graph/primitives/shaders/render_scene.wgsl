@@ -192,6 +192,11 @@ struct Uniforms {
     // clearcoat_family_flags()) — bit0=clearcoat_map, bit1=
     // clearcoat_roughness_map, bit2=clearcoat_normal_map present.
     volume_attenuation_color: vec4<f32>,
+    // RAYTRACING_DESIGN.md §9 RD9/RD1: RT feature flags. x =
+    // rt_reflections active this frame (rt_enabled && rt_ready &&
+    // rt_reflections && non-empty casters — the trace dispatch ran with
+    // refl_spp > 0, so binding 43 holds traced data). yzw reserved.
+    rt_flags: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -350,6 +355,13 @@ const PREFILTER_MAX_MIP: f32 = 5.0;
 // `accumulate_irradiance` step. Always bound (ABI-stub discipline); a
 // 1x1 dummy when RT isn't active this frame.
 @group(0) @binding(42) var rt_irradiance_mask: texture_2d<f32>;
+// RAYTRACING_DESIGN.md §9 RD1: full-res traced reflection radiance,
+// SUBSTITUTED for the `prefiltered` env fetch in fs_pbr when
+// `scene_params.w > 0.5 && rt_flags.x > 0.5` — never added on top
+// (the 818a06b0 double-count trap). Always bound (ABI-stub discipline —
+// a 1x1 dummy when RT reflections are off this frame), exactly like
+// rt_irradiance_mask above. Consumed in exactly ONE place (I-R3).
+@group(0) @binding(43) var rt_reflection: texture_2d<f32>;
 
 // RAYTRACING_DESIGN.md §5.2 P2: RT ambient/AO term. Replaces the flat
 // `scene_params.y` ambient scalar with the ray-traced AO-occluded,
@@ -1507,7 +1519,18 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let r_azimuth = atan2(R.z, R.x);
     let r_elevation = asin(clamp(R.y, -1.0, 1.0));
     let r_uv = vec2<f32>(r_azimuth / (2.0 * PI) + 0.5, r_elevation / PI + 0.5);
-    let prefiltered = textureSampleLevel(prefiltered_specular, envmap_sampler, r_uv, roughness * PREFILTER_MAX_MIP).rgb;
+    var prefiltered = textureSampleLevel(prefiltered_specular, envmap_sampler, r_uv, roughness * PREFILTER_MAX_MIP).rgb;
+    // RAYTRACING_DESIGN.md §9 RD1: traced reflection radiance SUBSTITUTES
+    // for the prefiltered env sample (never adds — same physical
+    // quantity; the `(F0 * env_brdf.x + env_brdf.y)` weighting below is
+    // untouched, so energy conservation and the roughness LUT are
+    // unchanged). rt_flags.x gates harder than scene_params.w: the
+    // texture only holds traced data when the dispatch ran with
+    // refl_spp > 0 this frame. Off-path is byte-identical (the same
+    // fetch as before, no mix).
+    if u.scene_params.w > 0.5 && u.rt_flags.x > 0.5 {
+        prefiltered = textureLoad(rt_reflection, vec2<i32>(in.clip_pos.xy), 0).rgb;
+    }
 
     let n_azimuth = atan2(N.z, N.x);
     let n_elevation = asin(clamp(N.y, -1.0, 1.0));
@@ -1539,7 +1562,16 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
         let r_aniso_elevation = asin(clamp(r_aniso.y, -1.0, 1.0));
         let r_aniso_uv = vec2<f32>(r_aniso_azimuth / (2.0 * PI) + 0.5, r_aniso_elevation / PI + 0.5);
         let prefiltered_aniso = textureSampleLevel(prefiltered_specular, envmap_sampler, r_aniso_uv, roughness * PREFILTER_MAX_MIP).rgb;
-        specular_ibl = prefiltered_aniso * (F0 * env_brdf.x + env_brdf.y);
+        // RAYTRACING_DESIGN.md §9 RD5: this branch OVERWRITES specular_ibl,
+        // so the traced substitution must apply here too — when
+        // reflections are on, consume the SAME substituted value (the
+        // single textureLoad above, I-R3), not the bent-normal env fetch.
+        // Off-path byte-identical (aniso_spec = prefiltered_aniso).
+        var aniso_spec = prefiltered_aniso;
+        if u.scene_params.w > 0.5 && u.rt_flags.x > 0.5 {
+            aniso_spec = prefiltered;
+        }
+        specular_ibl = aniso_spec * (F0 * env_brdf.x + env_brdf.y);
     }
 
     // GLB_CONFORMANCE_DESIGN.md G-P5/D5: coat IBL — same split-sum
