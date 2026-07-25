@@ -3928,6 +3928,14 @@ impl EffectNode for RenderScene {
                 gpu.device,
                 &objects,
             );
+            // BUG-326 conviction experiment: force a rebuild every ~2 frames
+            // when the env var is set (proves whether the async load race is the
+            // root cause of the zero-geometry BLAS). Resetting topo_key causes
+            // the existing defer logic to rebuild on the next frame.
+            if std::env::var_os("MANIFOLD_BUG326_FORCE_REBUILD").is_some() {
+                self.rt_accel_topo_key = None;
+                self.rt_accel_pending_key = None;
+            }
             // BUG-308/RT-D4: a key change (first RT frame, or topology/
             // transform change) must NOT enqueue `build_accel` this same
             // frame — this frame's own mesh-generation GPU writes are
@@ -3967,7 +3975,7 @@ impl EffectNode for RenderScene {
                             }
                             let m = &obj.transform;
                             let mut mn = false;
-                            for c in 0..4 { for r in 0..4 { if !m[c][r].is_finite() { mn = true; } } }
+                            for col in m { for &v in col { if !v.is_finite() { mn = true; } } }
                             if mn { eprintln!("BUG326_PROBE: model obj[{}] NaN", oi); }
                         }
                     }
