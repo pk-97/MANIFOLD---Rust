@@ -49,6 +49,7 @@ mod rt_t1b_vertex_normals;
 mod rt_t2a_alpha_mask;
 mod rt_bug318_import_toggle;
 mod rt_bug326_fix_gate;
+mod rt_bug88m_blend_specular_gate;
 mod rt_r1_reflection;
 mod rt_t2b_temporal_wiring;
 mod rt_w0_gbuffer;

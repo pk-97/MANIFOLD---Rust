@@ -796,7 +796,7 @@ kernel void trace_shadow_rays(
     // textures (alpha-mask + base-color; roughness/metallic/normals consume
     // this same cap) — see `MAX_RT_MATERIAL_TEXTURES`'s doc comment.
     array<texture2d<float>, MAX_RT_MATERIAL_TEXTURES> material_textures [[texture(4)]],
-    texture2d<float, access::write> out_refl [[texture(68)]],   // RT-R1 (§9.3): .rgb = incident radiance along R, .a = hit distance
+    texture2d<float, access::write> out_refl [[texture(68)]],   // RT-R1 (§9.3): .rgb = incident radiance along R, .a = hit distance (>0), env-miss (0), no-value (-1, BUG-88m)
     // RT-R1 (§9.3 RD4): the node's prefiltered-specular env mip chain —
     // the reflection ray's MISS radiance, sampled at the ray's roughness
     // mip with the SAME equirect mapping `render_scene.wgsl`'s split-sum
@@ -819,9 +819,13 @@ kernel void trace_shadow_rays(
         out_sv.write(float4(1, 1, 0, 0), tid);
         out_irr.write(float4(p.ambient_color, 0), tid);
         out_n.write(float4(0, 1, 0, -1.0), tid);
-        // RT-R1: void background reflects nothing (no fragment shades there
-        // either — the raster never reads this texel).
-        out_refl.write(float4(0, 0, 0, 0), tid);
+        // BUG-88m: `.a = -1` = "no traced value at this texel". Blend
+        // fragments DO shade here (the depth prepass excludes them, so
+        // they read as void) and must keep their prefiltered-env IBL —
+        // `render_scene.wgsl` gates the rt_reflection substitution on
+        // `.a >= 0`. Alpha semantics: >0 hit distance, 0 env-miss
+        // (RT_REFL_MISS_HIT_DIST), -1 no valid value.
+        out_refl.write(float4(0, 0, 0, -1.0), tid);
         return;
     }
     // Neighbor world positions (screen-space reconstruction, RT-D3) — kept
@@ -1049,7 +1053,9 @@ kernel void trace_shadow_rays(
     // (SUBSTITUTES the raster's prefiltered-env fetch in fs_pbr — RD1);
     // `.a` = hit distance for R2's virtual-hit-point reprojection (RD6),
     // RT_REFL_MISS_HIT_DIST on miss/cutoff so R2's reprojection
-    // degenerates to plain surface reprojection.
+    // degenerates to plain surface reprojection. `-1` marks "no traced
+    // value" (BUG-88m) for fs_pbr's substitution gate — R2 must treat
+    // `.a < 0` as invalid too when it lands.
     //
     // `origin` biases along `sun_dir` (the shadow ray's bias — the design
     // says reuse it): the t_min rejection below is what protects the
@@ -1146,10 +1152,11 @@ kernel void trace_shadow_rays(
         }
     } else {
         // Reflections off this frame (or the primary ray missed — no
-        // material to read): zero. The raster only reads this texture
-        // when `rt_flags.x > 0.5`, which requires this dispatch to have
-        // run with refl_spp > 0.
-        out_refl.write(float4(0, 0, 0, 0), tid);
+        // material to read): no valid value. `.a = -1` (BUG-88m) so the
+        // raster keeps its prefiltered-env IBL at these texels (the
+        // primary-miss case covers Mask holes: the depth prepass writes
+        // depth where the RT primary ray alpha-tests the triangle away).
+        out_refl.write(float4(0, 0, 0, -1.0), tid);
     }
 
     // RT-P2/D3: demodulated irradiance — AO-occluded flat ambient plus
@@ -1211,7 +1218,10 @@ kernel void upsample_shadow(
         hi_sv.write(float4(1, 1, 0, 0), tid);
         hi_irr.write(float4(p.ambient_color, 0), tid);
         hi_n.write(float4(0, 1, 0, -1.0), tid);
-        hi_refl.write(float4(0, 0, 0, 0), tid);
+        // BUG-88m: `.a = -1` must survive the half->full chain — Blend
+        // fragments shade at these "void" texels and fs_pbr's
+        // substitution gate falls back to prefiltered env only on < 0.
+        hi_refl.write(float4(0, 0, 0, -1.0), tid);
         return;
     }
 

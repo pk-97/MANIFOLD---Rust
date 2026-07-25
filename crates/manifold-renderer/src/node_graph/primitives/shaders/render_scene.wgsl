@@ -1529,7 +1529,19 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     // refl_spp > 0 this frame. Off-path is byte-identical (the same
     // fetch as before, no mix).
     if u.scene_params.w > 0.5 && u.rt_flags.x > 0.5 {
-        prefiltered = textureLoad(rt_reflection, vec2<i32>(in.clip_pos.xy), 0).rgb;
+        let rt_refl = textureLoad(rt_reflection, vec2<i32>(in.clip_pos.xy), 0);
+        // BUG-88m: substitute only where the kernel wrote a valid value
+        // (`.a >= 0`: hit distance, or RT_REFL_MISS_HIT_DIST on an env
+        // miss). `.a < 0` = no traced value — Blend fragments (absent
+        // from the depth prepass/accel) and Mask holes — so the
+        // prefiltered-env IBL stands there. Post-atrous the gate is
+        // crisp for Blend (void texels pass through unfiltered) and soft
+        // at Mask/silhouette edges (edge-stopped filter mixes alpha;
+        // either outcome is plausible radiance, never the black-hole
+        // rgb=0 substitution).
+        if rt_refl.a >= 0.0 {
+            prefiltered = rt_refl.rgb;
+        }
     }
 
     let n_azimuth = atan2(N.z, N.x);
