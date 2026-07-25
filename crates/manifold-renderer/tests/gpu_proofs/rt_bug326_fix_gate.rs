@@ -7,7 +7,11 @@
 //! `vertices_generation` (mesh slot write-generation) into the accel topo
 //! key, so a mesh content change triggers the full rebuild-with-defer path.
 //!
-//! This test FAILS on pre-fix code and PASSES with the fix.
+//! NOTE: this test may not reproduce the exact async-load race at 128x128
+//! with back-to-back frames (the mesh decode completes before the accel
+//! builds in this harness). It serves as a structural import-path sanity
+//! check. The definitive verification is the render-import binary matrix:
+//!   cargo run -p manifold-renderer --release --bin render-import ...
 
 use manifold_gpu::GpuTextureFormat;
 use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
@@ -18,8 +22,8 @@ use manifold_renderer::preset_runtime::PresetRuntime;
 
 use crate::harness;
 
-const W: u32 = 512;
-const H: u32 = 512;
+const W: u32 = harness::PARITY_WIDTH;
+const H: u32 = harness::PARITY_HEIGHT;
 
 fn ctx(frame_count: i64) -> PresetContext {
     PresetContext {
