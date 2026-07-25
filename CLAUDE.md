@@ -94,6 +94,13 @@ Dependencies: `foundation` and `gpu` have none; `core` depends only on `foundati
 
 No per-frame allocations on hot paths (engine tick, sync, rendering). Pre-allocated scratch buffers, `AHashMap` for ID lookups, dirty-checking via `DataVersion`. GPU-side constraints: `docs/MANIFOLD_GPU_ARCHITECTURE.md` — read before touching shaders or uniforms.
 
+## Voice (2026-07-25, Peter)
+
+- **Lean, direct, mechanical, confident.** No hedging ("might", "perhaps", "it could be argued"), no narration, no prose history — history lives in git.
+- **Comments = why/invariant only.** Never restate the code, never narrate changes, never disclaim. Delete such comments on touch; deleting a bad comment is always safe.
+- **Docs = rules-not-stories.** State the rule, contract, or mechanism. Provenance: one dated line, only where the why isn't derivable.
+- **Legacy Fable/Opus/Sonnet verbosity is not a style reference.** Never imitate surrounding prose; strip it when touching the file. Code stays lean too — but working code is never rewritten for style alone (live instrument); leanness arrives via new code, lean-on-touch, and scheduled decompositions.
+
 ## Choosing your next move — oracle discipline
 
 Pick the cheapest oracle that is *reliable for the question's class*; familiar ≠ reliable. Reading and grepping always return something, which is exactly why they get overused.
