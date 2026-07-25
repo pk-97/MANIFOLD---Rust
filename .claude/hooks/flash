@@ -85,6 +85,15 @@ def main() -> int:
         try:
             resp = json.load(urllib.request.urlopen(req, timeout=600))
         except Exception as e:  # transport/HTTP — surface and stop
+            # Quota exhaustion on the default seat → one retry on the
+            # kimi fast tier (verified working one-shot path 2026-07-25 —
+            # reasons a little but EMITS; most window headroom of any seat).
+            # DeepSeek is NOT a fallback: unconditional reasoning is the
+            # wall this tool routes around (D-54).
+            if model == "glm-4.7":
+                print(f"flash: {model} failed ({e}) — falling back to kimi-for-coding", file=sys.stderr)
+                model = "kimi-for-coding"
+                continue
             print(f"flash: request failed: {e}", file=sys.stderr)
             return 2
         choice = resp["choices"][0]
