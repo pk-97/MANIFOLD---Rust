@@ -3944,6 +3944,33 @@ impl EffectNode for RenderScene {
                 // Topology change (or first RT frame): full rebuild, with
                 // BUG-308's one-frame recur-unchanged defer.
                 if self.rt_accel_pending_key == Some(topo_key) {
+                    // BUG-326 probe A: dump vertex buffer contents for first 4 objects.
+                    if std::env::var_os("MANIFOLD_BUG326_PROBE").is_some() {
+                        for (oi, obj) in objects.iter().enumerate().take(4) {
+                            let n_tri = obj.triangle_count;
+                            let vsize = obj.vertex_stride as u64;
+                            if let Some(ptr) = obj.vertex_buffer.mapped_ptr() {
+                                let pos_ptr = ptr as *const f32;
+                                let mut has_nan = false;
+                                for vi in 0..3.min(n_tri * 3) {
+                                    let off = (vi as u64 * vsize) / 4;
+                                    let x = unsafe { *pos_ptr.add(off as usize) };
+                                    let y = unsafe { *pos_ptr.add(off as usize + 1) };
+                                    let z = unsafe { *pos_ptr.add(off as usize + 2) };
+                                    if !x.is_finite() || !y.is_finite() || !z.is_finite() { has_nan = true; }
+                                    if vi == 0 {
+                                        eprintln!("BUG326_PROBE: vertex obj[{}] tri={} stride={} v0=({:.4},{:.4},{:.4})",
+                                            oi, n_tri, obj.vertex_stride, x, y, z);
+                                    }
+                                }
+                                eprintln!("BUG326_PROBE: vertex obj[{}] has_nan={} ptr={:p}", oi, has_nan, ptr);
+                            }
+                            let m = &obj.transform;
+                            let mut mn = false;
+                            for c in 0..4 { for r in 0..4 { if !m[c][r].is_finite() { mn = true; } } }
+                            if mn { eprintln!("BUG326_PROBE: model obj[{}] NaN", oi); }
+                        }
+                    }
                     let tracer = self.rt_tracer.as_ref().expect("ensured above");
                     self.rt_accel = Some(tracer.build_accel(gpu.device, &objects));
                     self.rt_accel_topo_key = Some(topo_key);
@@ -4008,7 +4035,7 @@ impl EffectNode for RenderScene {
                         let cnt_ptr = cnt_buf.mapped_ptr()
                             .expect("BUG326_PROBE: counter buffer must have mapped ptr");
                         let counters: &[u32] = unsafe {
-                            std::slice::from_raw_parts(cnt_ptr.cast::<u32>(), 6)
+                            std::slice::from_raw_parts(cnt_ptr.cast::<u32>(), 9)
                         };
                         let total_wp = counters[0].max(1); // avoid div-by-zero
                         eprintln!("BUG326_PROBE: counters=[{}] valid_wp={} candidates={} ({:.1}%) discards={} ({:.1}%) hits={} ({:.1}%) refl_miss={} refl_hit={} shadow_cand={} shadow_disc={} shadow_visible={}",
