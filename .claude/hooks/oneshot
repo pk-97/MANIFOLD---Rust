@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
-"""flash — one-shot API tool (AGENT_ROUTING R6-B "one-shot API tool").
+"""oneshot — one-shot API tool (AGENT_ROUTING R6-B). Mechanical non-reasoning tasks ONLY (index triage, raw-completion chores) — adversarial review goes to a tool-using lane; one-shots fabricate code citations (Peter, 2026-07-26). Renamed from `flash` same day.
 
 Usage:
-  flash "prompt text"                  # inline prompt
-  flash -f prompt.txt                  # prompt from file
-  cat file | flash                     # prompt from stdin
-  flash --max-tokens 16000 "..."       # starting budget (default 8192)
-  flash --model glm-4.7                # default; any proxy model id works
-  flash --system "you are..." "..."    # optional system message
+  oneshot "prompt text"                  # inline prompt
+  oneshot -f prompt.txt                  # prompt from file
+  cat file | oneshot                     # prompt from stdin
+  oneshot --max-tokens 16000 "..."       # starting budget (default 8192)
+  oneshot --model glm-4.7                # default deepseek-v4-flash; any proxy model id works
+  oneshot --system "you are..." "..."    # optional system message
 
 Prints the model's content to stdout; usage/cost line to stderr.
 Exit 0 = content returned. Exit 3 = empty content after budget escalations.
 Exit 2 = request/transport error.
 
-DEFAULT = glm-4.7 (Peter, 2026-07-25): DeepSeek V4 Flash AND Pro lack the
-context to complete one-shot tool calls — they reason unconditionally
-(D-54, reasoning-off ignored upstream) and can burn the ENTIRE completion
-budget on reasoning, returning empty content. glm-4.7 has no reasoning
-overhead and is 1x on the z.ai plan, so it is the one-shot seat. The
-escalation below remains for any DeepSeek call passed via --model.
+DEFAULT = deepseek-v4-flash (Peter, 2026-07-26 — re-reverses the 2026-07-25
+glm-4.7 default): under the mechanical-non-reasoning scope the DeepSeek
+reasoning-exhaustion wall (D-54 — unconditional reasoning can burn the whole
+budget on code tasks, returning empty) does not apply; Flash is the free
+tier (Go plan). glm-4.7 remains available via --model (z.ai quota). The
+budget-escalation below handles the empty-content case.
 
 Key: `cc-fleet keyget kimi-code` (k3-lead virtual key allows all proxy models;
 lane spend bills under the spawning seat, itemized per-model). Never put the
@@ -34,7 +34,7 @@ PROXY = "http://127.0.0.1:4000/v1/chat/completions"
 
 def main() -> int:
     args = sys.argv[1:]
-    model = "glm-4.7"
+    model = "deepseek-v4-flash"
     max_tokens = 8192
     cap = 32768
     system = None
@@ -88,20 +88,18 @@ def main() -> int:
             # Quota exhaustion on the default seat → one retry on the
             # kimi fast tier (verified working one-shot path 2026-07-25 —
             # reasons a little but EMITS; most window headroom of any seat).
-            # DeepSeek is NOT a fallback: unconditional reasoning is the
-            # wall this tool routes around (D-54).
-            if model == "glm-4.7":
-                print(f"flash: {model} failed ({e}) — falling back to kimi-for-coding", file=sys.stderr)
+            if model == "deepseek-v4-flash":
+                print(f"oneshot: {model} failed ({e}) — falling back to kimi-for-coding", file=sys.stderr)
                 model = "kimi-for-coding"
                 continue
-            print(f"flash: request failed: {e}", file=sys.stderr)
+            print(f"oneshot: request failed: {e}", file=sys.stderr)
             return 2
         choice = resp["choices"][0]
         content = (choice["message"].get("content") or "").strip()
         usage = resp.get("usage", {})
         details = usage.get("completion_tokens_details") or {}
         reasoning = details.get("reasoning_tokens", 0)
-        print(f"flash: usage={usage}", file=sys.stderr)
+        print(f"oneshot: usage={usage}", file=sys.stderr)
         if content:
             print(content)
             return 0
@@ -110,9 +108,9 @@ def main() -> int:
         # 'length'). Anything else is a real empty answer — retrying won't help.
         if reasoning >= usage.get("completion_tokens", 0) and budget < cap:
             budget = min(budget * 2, cap)
-            print(f"flash: empty content (reasoning exhausted budget) — retrying at {budget}", file=sys.stderr)
+            print(f"oneshot: empty content (reasoning exhausted budget) — retrying at {budget}", file=sys.stderr)
             continue
-        print(f"flash: empty content (finish_reason={choice.get('finish_reason')}, reasoning_tokens={reasoning})", file=sys.stderr)
+        print(f"oneshot: empty content (finish_reason={choice.get('finish_reason')}, reasoning_tokens={reasoning})", file=sys.stderr)
         return 3
 
 
