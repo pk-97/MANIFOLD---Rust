@@ -194,6 +194,61 @@ echo "$OUT" | grep -q "I3:" && ok "I3: error message mentions I3" || fail "I3: m
 rm -f "$BRIEF_NOGATE"
 echo ""
 
+# ===== P2: pre-wave checks =====
+
+echo "--- P2 Test 1: pre-wave against live fleet ---"
+OUT=$("$GATE_RUNNER" pre-wave 2>&1) && RC=$? || RC=$?
+if [ "$RC" -eq 0 ]; then ok "pre-wave exit 0"; else fail "pre-wave exit $RC (expected 0): $(echo "$OUT" | tail -3)"; fi
+# Must print five check lines
+CHECK_COUNT=$(echo "$OUT" | grep -cE '^\s+\[(PASS|FAIL|WARN)\]' || true)
+if [ "$CHECK_COUNT" -eq 5 ]; then ok "pre-wave prints 5 check lines"; else fail "pre-wave prints $CHECK_COUNT check lines (expected 5)"; fi
+echo "$OUT" | grep -qE 'pre-wave: [0-9]+/5 checks passed' && ok "pre-wave summary line" || fail "pre-wave missing summary line"
+echo ""
+
+# Clean up the pre-wave verdict from live run so induced-failure test starts clean
+PREWAVE_JSONL="$VERDICTS_DIR/pre-wave.jsonl"
+[ -f "$PREWAVE_JSONL" ] && rm -f "$PREWAVE_JSONL"
+
+echo "--- P2 Test 2: induced failure via bad LITELLM_URL ---"
+OUT=$(LITELLM_URL="http://127.0.0.1:9/" "$GATE_RUNNER" pre-wave 2>&1) && RC=$? || RC=$?
+if [ "$RC" -eq 1 ]; then ok "pre-wave exit 1 with bad litellm URL"; else fail "pre-wave exit $RC (expected 1): $(echo "$OUT" | tail -3)"; fi
+echo "$OUT" | grep -q "FAIL" && ok "pre-wave output contains FAIL" || fail "pre-wave output missing FAIL"
+echo "$OUT" | grep -q "liveliness" && ok "pre-wave names liveliness as failing check" || fail "pre-wave missing liveliness"
+echo ""
+
+echo "--- P2 Test 3: pre-wave verdict validates ---"
+# The bad-URL run wrote a verdict; validate it via json.tool
+if [ -f "$PREWAVE_JSONL" ]; then
+    ok "pre-wave verdict file exists"
+    PREWAVE_LINES=$(wc -l < "$PREWAVE_JSONL" | tr -d ' ')
+    # Validate each line as JSON
+    while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        if echo "$line" | python3 -m json.tool > /dev/null 2>&1; then
+            ok "pre-wave verdict line is valid JSON"
+        else
+            fail "pre-wave verdict line is NOT valid JSON: $line"
+        fi
+        # Verify schema fields
+        echo "$line" | python3 -c "
+import sys, json
+v = json.loads(sys.stdin.readline())
+assert v['schema'] == 1, 'schema != 1'
+assert v['phase'] == 'pre-wave', 'phase != pre-wave'
+assert v['kind'] == 'gate', 'kind != gate'
+assert 'preflight' in v['runner'], 'runner missing preflight'
+assert len(v['gates']) == 5, f'expected 5 gates, got {len(v[\"gates\"])}'
+# At least one gate must be failure (the liveliness one)
+assert not v['pass'], 'verdict should not pass with bad liveliness'
+print('schema validation: OK')
+" && ok "pre-wave verdict schema valid" || fail "pre-wave verdict schema invalid"
+    done < "$PREWAVE_JSONL"
+else
+    fail "pre-wave verdict file missing"
+fi
+rm -f "$PREWAVE_JSONL"
+echo ""
+
 # ===== Summary =====
 echo "=== Results: $PASSED passed, $FAILED failed ==="
 if [ "$FAILED" -gt 0 ]; then
