@@ -744,11 +744,12 @@ pub struct RenderScene {
     /// `ready` still gates ENQUEUING the next refit (never rewrite the
     /// CPU-mapped instance buffer while a refit/build is in flight).
     rt_accel_built: bool,
-    /// BUG-326: sum of vertex generations at the time the current accel was
-    /// built. If the sum increases without a topo key change (async load wrote
-    /// real vertices into the zero-filled pre-load buffer), force one rebuild.
-    /// `None` = no accel built yet.
-    rt_accel_gen_sum: Option<u64>,
+    /// BUG-326: set true when a rerun is needed (first build after topo
+    /// change); fires once on the first ready acquisition. Set false when
+    /// the rerun fires. `rt_accel_rerun_done` prevents re-arming after the
+    /// rerun — exactly 2 builds per topology change.
+    rt_accel_rerun_armed: bool,
+    rt_accel_rerun_done: bool,
     /// Half-res shadow-ray-trace target + full-res upsampled mask
     /// (RT-D3's "D11 trivial pass"). Sized to the scene's own
     /// `width`/`height`, ensured lazily like every other RT-only
@@ -1039,7 +1040,8 @@ impl RenderScene {
             rt_accel_topo_key: None,
             rt_accel_pending_key: None,
             rt_accel_built: false,
-            rt_accel_gen_sum: None,
+            rt_accel_rerun_armed: false,
+            rt_accel_rerun_done: false,
             rt_mask_half: None,
             rt_mask_full: None,
             rt_mask_width: 0,
@@ -3016,6 +3018,24 @@ impl EffectNode for RenderScene {
                 .is_some_and(|a| a.ready.load(std::sync::atomic::Ordering::Acquire));
         }
         let rt_ready = self.rt_accel_built;
+        // BUG-326: rebuild-on-first-ready. The first accel build after a
+        // topology change is NOT provably ordered against async mesh-loading
+        // GPU work (the staging copy and the BLAS build are on separate command
+        // buffers). Arm `rt_accel_rerun_armed` on the first topo sighting;
+        // when that build becomes ready, invalidate keys to trigger exactly one
+        // extra build. Bounded: armed only once per topo change, never by the
+        // rerun itself — exactly 2 builds per topology change.
+        // The second build is the first provably ordered after every prior
+        // frame's GPU work (the per-frame cycle commits+waits before evaluate).
+        if self.rt_accel_rerun_armed && rt_ready {
+            log::info!(
+                "node.render_scene: BUG-326 first accel ready — triggering one extra rerun so async-loaded mesh data is visible"
+            );
+            self.rt_accel_rerun_armed = false;
+            self.rt_accel_topo_key = None;
+            self.rt_accel_pending_key = None;
+            self.rt_accel_built = false;
+        }
         // RAYTRACING_DESIGN.md §5.2 P2/D3, RT-D2, §8.2 D22 (T2-B): the ONE
         // call site deciding "discard temporal history this frame" for
         // EITHER of this node's two temporal consumers — the RT irradiance
@@ -3860,17 +3880,6 @@ impl EffectNode for RenderScene {
                 })
                 .collect();
 
-            // BUG-326: compute the generation sum for async-load detection
-            // before hashing the topo key (the sum doesn't go INTO the key;
-            // it's compared AFTER to detect a content change that leaves
-            // buffer-identity/triangle_count untouched — the async glb load
-            // bug exactly: pre-load zero buffer gets real vertices, topo key
-            // never changes, frozen empty BVH).
-            let gen_sum: u64 = shadow_caster_draws
-                .iter()
-                .filter_map(|d| d.vertices_generation)
-                .sum();
-
             // Dirty-check keys, same hashing idiom as `shadow_cache_keys`
             // above, split in two (BUG-320): the TOPO key (buffers,
             // counts, epoch) decides rebuild-vs-not; folding transforms
@@ -3888,24 +3897,6 @@ impl EffectNode for RenderScene {
             }
             hasher.write_u64(ctx.rebuild_epoch);
             let topo_key = hasher.finish();
-            // BUG-326: one-shot rebuild trigger. If the accel was built over
-            // pre-load zero buffers (all vertex generations were 0), and now
-            // at least one generation advanced past 0 (async load completed)
-            // without a topo key change, invalidate it to force a rebuild.
-            // After the rebuild the gen_sum is > 0 and this branch never
-            // fires again — hand-authored generators have generations > 0 at
-            // first build so `prev_sum == 0` is false for them.
-            if self.rt_accel_gen_sum == Some(0)
-                && gen_sum > 0
-                && self.rt_accel_topo_key == Some(topo_key)
-            {
-                log::info!(
-                    "node.render_scene: BUG-326 async load detected (generation 0 -> {gen_sum}); forcing accel rebuild"
-                );
-                self.rt_accel_topo_key = None;
-                self.rt_accel_pending_key = None;
-                self.rt_accel_built = false;
-            }
             for o in &objects {
                 hasher.write(bytemuck::bytes_of(&o.transform));
             }
@@ -3968,10 +3959,15 @@ impl EffectNode for RenderScene {
                     // BUG-320: the fresh build must be observed ready
                     // before tracing resumes — the old accel is gone.
                     self.rt_accel_built = false;
-                    // BUG-326: record the generation sum at build time, so
-                    // the next-frame gen_sum > prev_sum check can detect the
-                    // async load (pre-load zero buffer populated by late write).
-                    self.rt_accel_gen_sum = Some(gen_sum);
+                    // BUG-326: the async mesh loader's GPU copy may not have
+                    // completed when this build enqueues (same queue, separate
+                    // command buffer). Force exactly one extra rebuild once
+                    // this build becomes ready. Gated on !rt_accel_rerun_done
+                    // so the rerun build itself does not re-arm (the rerun
+                    // sets done=true after firing).
+                    if !self.rt_accel_rerun_done {
+                        self.rt_accel_rerun_armed = true;
+                    }
                     log::info!(
                         "node.render_scene: RT accel structure (re)build enqueued (async, topo key {topo_key:#x}) — raster shadow-map path serves this scene until it's ready"
                     );
