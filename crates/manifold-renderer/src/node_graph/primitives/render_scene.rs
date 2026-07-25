@@ -4283,6 +4283,7 @@ impl EffectNode for RenderScene {
                     IRRADIANCE_ACCUM_ALPHA,
                     reset,
                     shadow_caster_draws.len() as u32,
+                    cam.pos,
                     inv_view_proj,
                     prev_view_proj,
                 );
@@ -4481,13 +4482,14 @@ impl EffectNode for RenderScene {
         // most recently WROTE this frame (dummy when RT isn't active this
         // frame — same ABI-stub discipline as `rt_mask_tex`).
         let rt_irr_tex = self.rt_irr_history[self.rt_history_ping].as_ref().unwrap_or(dummy);
-        // RAYTRACING_DESIGN.md §9 RD1: the full-res traced-reflection
+        // RAYTRACING_DESIGN.md §9 RD1: the accumulated specular history
         // texture fs_pbr SUBSTITUTES for its prefiltered-env fetch when
         // `rt_flags.x > 0.5` — always bound (ABI-stub discipline), dummy
         // whenever the substitution is gated off (the textureLoad is
-        // unreachable then). `rt_refl_full` is where the EVEN atrous pass
-        // count lands the final signal (same layout as `mask_full`).
-        let rt_refl_tex = self.rt_refl_full.as_ref().unwrap_or(dummy);
+        // unreachable then). `rt_history_ping` indexes the most recent
+        // write from `accumulate_irradiance` (RT-R2: swapped every frame
+        // by the same ping-pong clock as `rt_irr_history`).
+        let rt_refl_tex = self.rt_refl_history[self.rt_history_ping].as_ref().unwrap_or(dummy);
         let binding_sets: Vec<[GpuBinding; 44]> = draws
             .iter()
             .map(|draw| {

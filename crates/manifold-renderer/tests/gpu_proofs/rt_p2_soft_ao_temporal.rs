@@ -347,7 +347,7 @@ fn run_accumulate_with_motion(
 ) {
     let params_buffer =
         device.create_buffer_shared(std::mem::size_of::<AccumulateParams>() as u64);
-    let params = AccumulateParams::new([W, H], alpha, reset, obj_count, IDENTITY, IDENTITY);
+    let params = AccumulateParams::new([W, H], alpha, reset, obj_count, [0.0; 3], IDENTITY, IDENTITY);
     let obj_motion_buffer =
         device.create_buffer_shared(std::mem::size_of::<[[f32; 4]; 4]>() as u64);
     {
