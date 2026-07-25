@@ -580,7 +580,7 @@ beyond the struct emit is off-brief — stop and escalate.
   `docs/landings/`, status line updated per §8.9.
 - Landing batches: P1+P2 (the model flip is atomic — never land P2 without P1 or vice
   versa), P3, P4+P5. One worktree slot for the workstream
-  (`python3 scripts/agent-worktree.py acquire scene-object-v2 wave/scene-object-v2`).
+  (`scripts/agent-worktree.py acquire scene-object-v2 wave/scene-object-v2`).
 - Escalations that PAUSE a phase: any need for a second `Object` consumer/producer, any
   migration topology D5's rule can't express, any command with no v1 precedent shape, any
   render_scene draw-path change beyond D4's read-through, anything touching `layer.rs` /
@@ -589,7 +589,7 @@ beyond the struct emit is off-brief — stop and escalate.
   v1 doc header gains "object model + layout superseded by SCENE_OBJECT_AND_PANEL_V2 (D1/D7)";
   BUG-193 Status → fixed-by pointer; BUG_BACKLOG lines for 194/195 gain "still open under
   v2" notes if touched; `rg -n "group.*identity\|mesh_k\|mesh_0" docs/ memory/` and fix or
-  tombstone every hit asserting the old model; `python3 scripts/gen_docs_index.py`.
+  tombstone every hit asserting the old model; `scripts/gen_docs_index.py`.
 
 ## 9. Deferred (explicitly not v1, each with its revival trigger)
 

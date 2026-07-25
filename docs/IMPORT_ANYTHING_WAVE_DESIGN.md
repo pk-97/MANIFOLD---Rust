@@ -8,7 +8,7 @@
 
 ## 0. Orchestration contract
 
-- One lane per session. Worktrees from the slot ring ONLY (`python3 scripts/agent-worktree.py acquire <lane> <branch> --tip HEAD`); verify base = `origin/main` tip (step-0 guard); release the slot at session end.
+- One lane per session. Worktrees from the slot ring ONLY (`scripts/agent-worktree.py acquire <lane> <branch> --tip HEAD`); verify base = `origin/main` tip (step-0 guard); release the slot at session end.
 - Landing per `.claude/GIT_TREE_DISCIPLINE.md` §2: fetch, merge `origin/main` into your branch, rerun the gate, `merge --no-ff` into main from the MAIN checkout, push; repeat if rejected.
 - Every fixed bug: flip its row + `**Status:**` line in `docs/BUG_BACKLOG.md` in the same landing.
 - Gates common to every code lane: `cargo test -p manifold-renderer --lib` green; `cargo clippy -p manifold-renderer --features gpu-proofs --tests -- -D warnings` clean; `cargo nextest run --workspace` green; gpu-proofs hostile sweep green (`cargo test -p manifold-renderer --lib --features gpu-proofs hostile`); the 3-minute conformance sweep (`cargo test -p manifold-renderer --features gpu-proofs --test glb_conformance`) green — it passes at this doc's tip; leaving it red is never acceptable.
@@ -58,7 +58,7 @@
 
 ## Lane W6 — extension coverage roadmap + xfail reclassification (ANALYSIS — no code)
 
-Read `docs/GLB_CONFORMANCE_STATUS.md`, `tests/fixtures/gltf/khronos/manifest.json` (every xfail + note), and the gltf crate's feature list. Produce `docs/GLTF_EXTENSION_ROADMAP.md`: one table — every ratified KHR/EXT extension (the crate's feature list + the xfail notes enumerate the relevant set; no web access needed), current MANIFOLD status (rendered / loads-with-report / vetoed / untested), whether a store asset plausibly carries it (Sketchfab/Fab/Mixamo classes), and a priority tier. Reclassify the 92→(current) xfails: each becomes either (a) roadmap-tier work, (b) torture-test-never-ship (stays xfail with an honest note), or (c) actually-fixed-already (promote to expect_pass and prove it in the same session). Update `docs/BUG_BACKLOG.md` with one new entry per tier-1 gap that lacks one. Regenerate the docs index (`python3 scripts/gen_docs_index.py`) since a doc is added. This lane's output is the intake for the next design wave — per `discuss-before-capturing-to-doc`, mark every priority as PROPOSED for Peter's review, not decided.
+Read `docs/GLB_CONFORMANCE_STATUS.md`, `tests/fixtures/gltf/khronos/manifest.json` (every xfail + note), and the gltf crate's feature list. Produce `docs/GLTF_EXTENSION_ROADMAP.md`: one table — every ratified KHR/EXT extension (the crate's feature list + the xfail notes enumerate the relevant set; no web access needed), current MANIFOLD status (rendered / loads-with-report / vetoed / untested), whether a store asset plausibly carries it (Sketchfab/Fab/Mixamo classes), and a priority tier. Reclassify the 92→(current) xfails: each becomes either (a) roadmap-tier work, (b) torture-test-never-ship (stays xfail with an honest note), or (c) actually-fixed-already (promote to expect_pass and prove it in the same session). Update `docs/BUG_BACKLOG.md` with one new entry per tier-1 gap that lacks one. Regenerate the docs index (`scripts/gen_docs_index.py`) since a doc is added. This lane's output is the intake for the next design wave — per `discuss-before-capturing-to-doc`, mark every priority as PROPOSED for Peter's review, not decided.
 
 ## Explicitly OUT of this wave
 

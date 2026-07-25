@@ -4,7 +4,7 @@
 //! every active doc in `docs/` (top level; `docs/archive/` is the historical
 //! bin and is intentionally not indexed). This test fails the suite if the two
 //! fall out of sync — a doc added, removed, or renamed without regenerating the
-//! index. The fix is always: `python3 scripts/gen_docs_index.py` and commit.
+//! index. The fix is always: `scripts/gen_docs_index.py` and commit.
 //!
 //! It guards *structure* (which docs are listed), not summary wording — summary
 //! text lives in each doc and can be improved freely.
@@ -65,7 +65,7 @@ fn docs_index_is_in_sync_with_docs_dir() {
     assert!(
         missing.is_empty() && stale.is_empty(),
         "docs/README.md is out of sync with docs/.\n  \
-         Missing from the index (run `python3 scripts/gen_docs_index.py`): {missing:?}\n  \
+         Missing from the index (run `scripts/gen_docs_index.py`): {missing:?}\n  \
          Listed in the index but not on disk (renamed/removed?): {stale:?}",
     );
 }

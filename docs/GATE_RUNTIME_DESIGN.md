@@ -75,7 +75,7 @@ Each phase is one session, Flash-executable: the seams are decided above; phases
 
 ### P1 — gate_runner core + verdict trail
 
-- **Entry state:** main contains `scripts/seat_tool.py` (e692762c) and `.claude/orchestration/` exists. Verify: `python3 scripts/seat_tool.py show` exits 0.
+- **Entry state:** main contains `scripts/seat_tool.py` (e692762c) and `.claude/orchestration/` exists. Verify: `scripts/seat_tool.py show` exits 0.
 - **Read-back:** this doc's D1–D5, I1–I4; the workflow-gate two-tier pattern at `.claude/hooks/workflow-gate.py` (shape precedent).
 - **Deliverables:** `scripts/gate_runner.py` with subcommands `per-lane --task --brief --branch --commit` (runs the brief's declared gates, appends verdict), `no-gate --task --reason`, `show --task`; verdicts dir + I2's Edit|Write guard clause in the guard hook; a `tests/` -style self-check script `scripts/gate_runner_selftest.sh`.
 - **Gate:** selftest runs a known-pass gate (exit 0) and a known-fail gate (exit 1): jsonl validates against schema, `pass` fields correct, exit codes propagate, second appends don't rewrite line 1. `python3 -m json.tool` on each line. Negative gate: direct `Edit` of a verdicts file is denied by the I2 clause (probe with a scratch verdict).

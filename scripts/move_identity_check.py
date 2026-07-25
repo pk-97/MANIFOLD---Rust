@@ -17,10 +17,10 @@ is bin-only — most of Wave 1 is invisible to it), and moving a pub item across
 modules legitimately changes its path. This script sees every line instead.
 
 Usage:
-  python3 scripts/move_identity_check.py <commit>            # one commit vs its parent
-  python3 scripts/move_identity_check.py <base>..<head>      # a range
-  python3 scripts/move_identity_check.py --cached            # staged changes
-  python3 scripts/move_identity_check.py <ref> --show-all    # print all residue lines
+  scripts/move_identity_check.py <commit>            # one commit vs its parent
+  scripts/move_identity_check.py <base>..<head>      # a range
+  scripts/move_identity_check.py --cached            # staged changes
+  scripts/move_identity_check.py <ref> --show-all    # print all residue lines
 
 The moved-line detection uses `--color-moved=plain` with `--color-moved-ws=
 ignore-all-space` so re-indented relocations still count as moves, and pins the
