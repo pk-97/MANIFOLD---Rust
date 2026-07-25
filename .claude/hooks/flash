@@ -1,23 +1,24 @@
 #!/usr/bin/env python3
-"""flash — one-shot DeepSeek Flash API tool (AGENT_ROUTING R6-B "one-shot Flash API tool").
+"""flash — one-shot API tool (AGENT_ROUTING R6-B "one-shot API tool").
 
 Usage:
   flash "prompt text"                  # inline prompt
   flash -f prompt.txt                  # prompt from file
   cat file | flash                     # prompt from stdin
   flash --max-tokens 16000 "..."       # starting budget (default 8192)
-  flash --model deepseek-v4-flash      # default; any proxy model id works
+  flash --model glm-4.7                # default; any proxy model id works
   flash --system "you are..." "..."    # optional system message
 
 Prints the model's content to stdout; usage/cost line to stderr.
 Exit 0 = content returned. Exit 3 = empty content after budget escalations.
 Exit 2 = request/transport error.
 
-Reasoning exhaustion is handled HERE: opencode's deepseek-v4-flash reasons
-unconditionally (reasoning-off params ignored upstream, probe-verified
-2026-07-24, D-54) and can burn the ENTIRE completion budget on reasoning,
-returning empty content. On that shape (empty content + all tokens reasoning)
-flash retries with 2x budget, up to --max-tokens-cap (default 32768).
+DEFAULT = glm-4.7 (Peter, 2026-07-25): DeepSeek V4 Flash AND Pro lack the
+context to complete one-shot tool calls — they reason unconditionally
+(D-54, reasoning-off ignored upstream) and can burn the ENTIRE completion
+budget on reasoning, returning empty content. glm-4.7 has no reasoning
+overhead and is 1x on the z.ai plan, so it is the one-shot seat. The
+escalation below remains for any DeepSeek call passed via --model.
 
 Key: `cc-fleet keyget kimi-code` (k3-lead virtual key allows all proxy models;
 lane spend bills under the spawning seat, itemized per-model). Never put the
@@ -33,7 +34,7 @@ PROXY = "http://127.0.0.1:4000/v1/chat/completions"
 
 def main() -> int:
     args = sys.argv[1:]
-    model = "deepseek-v4-flash"
+    model = "glm-4.7"
     max_tokens = 8192
     cap = 32768
     system = None
