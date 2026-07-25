@@ -398,6 +398,30 @@ echo ""
 rm -f "$VERDICTS_DIR/BUG-report-test.jsonl"
 echo ""
 
+# ===== P5: SubagentStop gate hook smoke test =====
+
+echo "=== P5 SubagentStop gate smoke test ==="
+echo ""
+echo "--- P5 Test 1: hook file exists ---"
+HOOK_FILE="$REPO_DIR/.claude/hooks/subagent-stop-gate.py"
+HOOK_TEST="$REPO_DIR/.claude/hooks/test_subagent_stop_gate.py"
+if [ -f "$HOOK_FILE" ]; then
+    ok "subagent-stop-gate.py exists"
+else
+    fail "subagent-stop-gate.py not found at $HOOK_FILE"
+fi
+echo ""
+
+echo "--- P5 Test 2: hook self-tests pass ---"
+OUT=$(python3 "$HOOK_TEST" 2>&1) && RC=$? || RC=$?
+if [ "$RC" -eq 0 ]; then
+    ok "hook self-tests exit 0"
+else
+    fail "hook self-tests exit $RC"
+fi
+echo "$OUT" | grep -q "13 passed" && ok "13/13 tests pass" || fail "test count mismatch"
+echo ""
+
 # ===== Summary =====
 echo "=== Results: $PASSED passed, $FAILED failed ==="
 if [ "$FAILED" -gt 0 ]; then
