@@ -12,7 +12,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 GATE_RUNNER="$SCRIPT_DIR/gate_runner.py"
-VERDICTS_DIR="$REPO_DIR/.claude/orchestration/verdicts"
+VERDICTS_DIR="$(mktemp -d)/verdicts"
+export GATE_RUNNER_VERDICTS_DIR="$VERDICTS_DIR"
 
 TASK_PASS="selftest-pass-$$"
 TASK_FAIL="selftest-fail-$$"
@@ -247,6 +248,126 @@ else
     fail "pre-wave verdict file missing"
 fi
 rm -f "$PREWAVE_JSONL"
+echo ""
+
+# ===== P3: pre-dispatch brief linter =====
+
+echo "=== P3 pre-dispatch tests ==="
+echo ""
+
+# --- P3 Test 1: synthetic broken brief ---
+echo "--- P3 Test 1: broken brief fails all 4 checks ---"
+BRIEF_BROKEN=$(mktemp /tmp/gate_selftest_broken.XXXXXX.md)
+cat > "$BRIEF_BROKEN" << 'EOF'
+# Broken brief for pre-dispatch lint
+
+An anchor to a non-existent file: crates/nonexistent/src/lib.rs:42
+
+A lane named glm47-bogus-slot appears here.
+
+No Gate section, so gate check fails (I3).
+No BUG id anywhere in this file.
+EOF
+OUT=$("$GATE_RUNNER" pre-dispatch --brief "$BRIEF_BROKEN" 2>&1) && RC=$? || RC=$?
+if [ "$RC" -eq 1 ]; then ok "broken brief exit 1"; else fail "broken brief exit $RC (expected 1)"; fi
+echo "$OUT" | grep -q "FAIL.*anchor" && ok "broken brief names anchor FAIL" || fail "broken brief missing anchor FAIL"
+echo "$OUT" | grep -q "FAIL.*gate" && ok "broken brief names gate FAIL" || fail "broken brief missing gate FAIL"
+echo "$OUT" | grep -q "FAIL.*slot" && ok "broken brief names slot FAIL" || fail "broken brief missing slot FAIL"
+echo "$OUT" | grep -q "FAIL.*bead" && ok "broken brief names bead FAIL" || fail "broken brief missing bead FAIL"
+# Verify the slot failure mentions glm47 or the VALID_SLOTS list
+echo "$OUT" | grep -qE "glm47|VALID_SLOTS" && ok "broken brief names the bogus slot" || fail "broken brief missing bogus slot detail"
+echo "$OUT" | grep -q "I3" && ok "broken brief gate failure mentions I3" || fail "broken brief missing I3 mention"
+rm -f "$BRIEF_BROKEN"
+echo ""
+
+# --- P3 Test 2: synthetic good brief ---
+echo "--- P3 Test 2: good brief passes all 4 checks ---"
+# Create a real temp file as an anchor target
+BRIEF_GOOD=$(mktemp /tmp/gate_selftest_good.XXXXXX.md)
+TMP_RS=$(mktemp /tmp/gate_selftest_target.XXXXXX.rs)
+echo "fn main() {}" > "$TMP_RS"
+LINE_COUNT=$(wc -l < "$TMP_RS" | tr -d ' ')
+cat > "$BRIEF_GOOD" << EOF
+# Good brief for pre-dispatch lint
+
+An anchor to a real file: ${TMP_RS}:${LINE_COUNT}
+
+**Gate:** A parseable gate command.
+\`true\`
+
+BUG-lint-good
+EOF
+OUT=$("$GATE_RUNNER" pre-dispatch --brief "$BRIEF_GOOD" 2>&1) && RC=$? || RC=$?
+if [ "$RC" -eq 0 ]; then ok "good brief exit 0"; else fail "good brief exit $RC (expected 0): $(echo "$OUT" | tail -3)"; fi
+echo "$OUT" | grep -q "PASS.*anchor" && ok "good brief anchor PASS" || fail "good brief missing anchor PASS"
+echo "$OUT" | grep -q "PASS.*gate" && ok "good brief gate PASS" || fail "good brief missing gate PASS"
+echo "$OUT" | grep -q "PASS.*slot" && ok "good brief slot PASS" || fail "good brief missing slot PASS"
+echo "$OUT" | grep -q "PASS.*bead" && ok "good brief bead PASS" || fail "good brief missing bead PASS"
+echo "$OUT" | grep -q "BUG-lint" && ok "good brief output mentions detected BUG id" || fail "good brief missing BUG id in output"
+rm -f "$BRIEF_GOOD" "$TMP_RS"
+echo ""
+
+# --- P3 Test 3: fenced-block gate extraction ---
+echo "--- P3 Test 3: fenced-block gate extraction ---"
+BRIEF_FENCE=$(mktemp /tmp/gate_selftest_fence.XXXXXX.md)
+cat > "$BRIEF_FENCE" << 'EOF'
+# Fenced-block gate test
+
+**Gate:** Gates in a fenced code block.
+
+```bash
+true
+echo hello
+```
+
+BUG-fence-test
+EOF
+OUT=$("$GATE_RUNNER" pre-dispatch --brief "$BRIEF_FENCE" 2>&1) && RC=$? || RC=$?
+if [ "$RC" -eq 0 ]; then ok "fenced-block brief exit 0"; else fail "fenced-block brief exit $RC (expected 0): $(echo "$OUT" | tail -3)"; fi
+echo "$OUT" | grep -q "2 gates" && ok "fenced-block brief detects 2 gates" || { echo "  DEBUG: $OUT"; fail "fenced-block brief detects 2 gates"; }
+rm -f "$BRIEF_FENCE"
+echo ""
+
+# --- P3 Test 4: verdict file written ---
+echo "--- P3 Test 4: pre-dispatch verdict validates ---"
+PRE_DISPATCH_JSONL="$VERDICTS_DIR/pre-dispatch.jsonl"
+if [ -f "$PRE_DISPATCH_JSONL" ]; then
+    ok "pre-dispatch.jsonl exists"
+    LINE_NUM=0
+    while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        LINE_NUM=$((LINE_NUM + 1))
+        if echo "$line" | python3 -m json.tool > /dev/null 2>&1; then
+            ok "pre-dispatch line $LINE_NUM is valid JSON"
+        else
+            fail "pre-dispatch line $LINE_NUM is NOT valid JSON"
+        fi
+        # Schema validation — first line (broken brief) should not pass,
+        # subsequent lines (good brief, fenced block) should pass
+        if [ "$LINE_NUM" -eq 1 ]; then
+            EXPECT_PASS="false"
+        else
+            EXPECT_PASS="true"
+        fi
+        echo "$line" | python3 -c "
+import sys, json
+v = json.loads(sys.stdin.readline())
+assert v['schema'] == 1, f'schema != 1: {v[\"schema\"]}'
+assert v['phase'] == 'pre-dispatch', f'phase != pre-dispatch: {v[\"phase\"]}'
+assert v['kind'] == 'gate', f'kind != gate: {v[\"kind\"]}'
+assert 'lint' in v['runner'], f'runner missing lint: {v[\"runner\"]}'
+" && ok "pre-dispatch line $LINE_NUM schema valid" || fail "pre-dispatch line $LINE_NUM schema invalid"
+    done < "$PRE_DISPATCH_JSONL"
+    if [ "$LINE_NUM" -eq 3 ]; then
+        ok "pre-dispatch.jsonl has 3 verdict lines"
+    else
+        fail "pre-dispatch.jsonl has $LINE_NUM lines (expected 3)"
+    fi
+else
+    fail "pre-dispatch.jsonl missing"
+fi
+# Clean up the verdict file
+rm -f "$PRE_DISPATCH_JSONL"
 echo ""
 
 # ===== Summary =====
