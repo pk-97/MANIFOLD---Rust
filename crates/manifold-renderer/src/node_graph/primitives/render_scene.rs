@@ -881,11 +881,6 @@ pub struct RenderScene {
     object_port_names: Vec<Box<str>>,
     /// Same treatment for `light_{i}` port names.
     light_port_names: Vec<Box<str>>,
-    // BUG-326 probe fields
-    bug326_depth_readback: Option<manifold_gpu::GpuBuffer>,
-    bug326_probe_pixels: Vec<(u32, u32)>,
-    /// BUG-326 probe: debug counter buffer for primary-ray counters (6 atomic u32s).
-    bug326_counter_buffer: Option<manifold_gpu::GpuBuffer>,
 }
 
 /// VOLUMETRIC_LIGHT_DESIGN.md D1/V1: the sole CPU gate for the whole
@@ -1082,9 +1077,6 @@ impl RenderScene {
             ibl_brdf_lut_pipeline: None,
             object_port_names: Vec::new(),
             light_port_names: Vec::new(),
-            bug326_depth_readback: None,
-            bug326_probe_pixels: Vec::new(),
-            bug326_counter_buffer: None,
         };
         s.rebuild(DEFAULT_OBJECTS, DEFAULT_LIGHTS);
         s
@@ -2502,16 +2494,6 @@ fn mat4_mul(a: [[f32; 4]; 4], b: [[f32; 4]; 4]) -> [[f32; 4]; 4] {
     out
 }
 
-/// Column-major 4x4 `m * v` product. `m[col][row]` storage; same convention
-/// as `view_proj` throughout this file.
-fn mat4_mul_vec4(m: [[f32; 4]; 4], v: [f32; 4]) -> [f32; 4] {
-    let mut out = [0.0f32; 4];
-    for row in 0..4 {
-        out[row] = m[0][row] * v[0] + m[1][row] * v[1] + m[2][row] * v[2] + m[3][row] * v[3];
-    }
-    out
-}
-
 fn mat4_inverse(m: [[f32; 4]; 4]) -> Option<[[f32; 4]; 4]> {
     // Row-major augmented working copy [A | I] for elimination;
     // `m[col][row]` (column-major) -> `a[row][col]`.
@@ -3851,25 +3833,24 @@ impl EffectNode for RenderScene {
             let vsize = std::mem::size_of::<MeshVertex>() as u32;
             let objects: Vec<manifold_gpu::raytrace::RtObjectGeometry> = shadow_caster_draws
                 .iter()
-                .map(|d| {
-                    if std::env::var_os("MANIFOLD_BUG326_PROBE").is_some() {
-                        eprintln!("BUG326_PROBE: accel_obj buf_size={} vcount={} tri_count={}",
-                            d.vertices.size, vcount(d.vertices), vcount(d.vertices) / 3);
-                    }
-                    let tri_count = vcount(d.vertices) / 3;
-                    manifold_gpu::raytrace::RtObjectGeometry {
-                        vertex_buffer: d.vertices,
-                        vertex_stride: vsize,
-                        vertex_offset: 0,
-                        index_buffer: None,
-                        triangle_count: tri_count,
-                        transform: d.uniforms.model,
-                        normal_offset: 16,
-                        uv_offset: 32,
-                        alpha_mask: d.alpha_mode == AlphaMode::Mask,
-                        alpha_cutoff: d.uniforms.alpha_params[1],
-                        base_color_texture: d.base_color_map,
-                    }
+                .map(|d| manifold_gpu::raytrace::RtObjectGeometry {
+                    vertex_buffer: d.vertices,
+                    vertex_stride: vsize,
+                    vertex_offset: 0,
+                    index_buffer: None,
+                    triangle_count: vcount(d.vertices) / 3,
+                    transform: d.uniforms.model,
+                    // RT-T1-B: `MeshVertex`'s normal field offset (position
+                    // 12 bytes incl. pad + this) — see `mesh_common.rs`'s
+                    // `MeshVertex` layout.
+                    normal_offset: 16,
+                    // RT-T2-A (RAYTRACING_DESIGN.md §8.2 Tier-2 item 4):
+                    // `MeshVertex`'s UV field offset (position 16 + normal
+                    // 16 = 32).
+                    uv_offset: 32,
+                    alpha_mask: d.alpha_mode == AlphaMode::Mask,
+                    alpha_cutoff: d.uniforms.alpha_params[1],
+                    base_color_texture: d.base_color_map,
                 })
                 .collect();
 
@@ -3887,6 +3868,21 @@ impl EffectNode for RenderScene {
             for o in &objects {
                 o.vertex_buffer.identity_key().hash(&mut hasher);
                 hasher.write_u32(o.triangle_count);
+            }
+            // BUG-326 fix: mesh CONTENT changes (async load after build, animated
+            // mesh-gen) must trigger a full accel rebuild. `vertices_generation`
+            // is the slot write-generation of each object's mesh Array channel —
+            // already maintained for the shadow-map cache key exactly because
+            // vertex content can change under a fixed buffer identity (the
+            // async glb load bug: the BLAS was built over a zero-filled buffer,
+            // the loader wrote real vertices later, the topo key never changed,
+            // and every subsequent ray found an empty BVH). Folding the per-draw
+            // generation into the topo key catches any mesh content change.
+            // Cost: animated mesh-gen regenerating vertices every frame now
+            // rebuilds the accel per change — a refit-only fast path for vertex
+            // content is a named follow-up, not this commit.
+            for d in &shadow_caster_draws {
+                d.vertices_generation.hash(&mut hasher);
             }
             hasher.write_u64(ctx.rebuild_epoch);
             let topo_key = hasher.finish();
@@ -3928,14 +3924,6 @@ impl EffectNode for RenderScene {
                 gpu.device,
                 &objects,
             );
-            // BUG-326 conviction experiment: force a rebuild every ~2 frames
-            // when the env var is set (proves whether the async load race is the
-            // root cause of the zero-geometry BLAS). Resetting topo_key causes
-            // the existing defer logic to rebuild on the next frame.
-            if std::env::var_os("MANIFOLD_BUG326_FORCE_REBUILD").is_some() {
-                self.rt_accel_topo_key = None;
-                self.rt_accel_pending_key = None;
-            }
             // BUG-308/RT-D4: a key change (first RT frame, or topology/
             // transform change) must NOT enqueue `build_accel` this same
             // frame — this frame's own mesh-generation GPU writes are
@@ -3952,33 +3940,6 @@ impl EffectNode for RenderScene {
                 // Topology change (or first RT frame): full rebuild, with
                 // BUG-308's one-frame recur-unchanged defer.
                 if self.rt_accel_pending_key == Some(topo_key) {
-                    // BUG-326 probe A: dump vertex buffer contents for first 4 objects.
-                    if std::env::var_os("MANIFOLD_BUG326_PROBE").is_some() {
-                        for (oi, obj) in objects.iter().enumerate().take(4) {
-                            let n_tri = obj.triangle_count;
-                            let vsize = obj.vertex_stride as u64;
-                            if let Some(ptr) = obj.vertex_buffer.mapped_ptr() {
-                                let pos_ptr = ptr as *const f32;
-                                let mut has_nan = false;
-                                for vi in 0..3.min(n_tri * 3) {
-                                    let off = (vi as u64 * vsize) / 4;
-                                    let x = unsafe { *pos_ptr.add(off as usize) };
-                                    let y = unsafe { *pos_ptr.add(off as usize + 1) };
-                                    let z = unsafe { *pos_ptr.add(off as usize + 2) };
-                                    if !x.is_finite() || !y.is_finite() || !z.is_finite() { has_nan = true; }
-                                    if vi == 0 {
-                                        eprintln!("BUG326_PROBE: vertex obj[{}] tri={} stride={} v0=({:.4},{:.4},{:.4})",
-                                            oi, n_tri, obj.vertex_stride, x, y, z);
-                                    }
-                                }
-                                eprintln!("BUG326_PROBE: vertex obj[{}] has_nan={} ptr={:p}", oi, has_nan, ptr);
-                            }
-                            let m = &obj.transform;
-                            let mut mn = false;
-                            for col in m { for &v in col { if !v.is_finite() { mn = true; } } }
-                            if mn { eprintln!("BUG326_PROBE: model obj[{}] NaN", oi); }
-                        }
-                    }
                     let tracer = self.rt_tracer.as_ref().expect("ensured above");
                     self.rt_accel = Some(tracer.build_accel(gpu.device, &objects));
                     self.rt_accel_topo_key = Some(topo_key);
@@ -4028,82 +3989,6 @@ impl EffectNode for RenderScene {
             // handler runs on a separate Metal-owned thread, never
             // synchronously inside evaluate()).
             if rt_ready {
-                // BUG-326 probe: env-gated CPU-vs-GPU depth comparison.
-                // Hoisted FIRST so the printed `cam` values are this frame's,
-                // uncontaminated by any local mutations below.
-                let bug326_probe = std::env::var_os("MANIFOLD_BUG326_PROBE").is_some();
-                if bug326_probe {
-                    // GPU readback from PREVIOUS frame's copy (static scene —
-                    // identical content, the buffer was populated by the
-                    // `copy_texture_to_buffer` issued after
-                    // `dispatch_shadow_rays` last frame).
-                    // BUG-326 probe: read primary-ray debug counters from
-                    // PREVIOUS frame's dispatch (one-frame latency, static scene).
-                    if let Some(ref cnt_buf) = self.bug326_counter_buffer {
-                        let cnt_ptr = cnt_buf.mapped_ptr()
-                            .expect("BUG326_PROBE: counter buffer must have mapped ptr");
-                        let counters: &[u32] = unsafe {
-                            std::slice::from_raw_parts(cnt_ptr.cast::<u32>(), 9)
-                        };
-                        let total_wp = counters[0].max(1); // avoid div-by-zero
-                        eprintln!("BUG326_PROBE: counters=[{}] valid_wp={} candidates={} ({:.1}%) discards={} ({:.1}%) hits={} ({:.1}%) refl_miss={} refl_hit={} shadow_cand={} shadow_disc={} shadow_visible={}",
-                            counters.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(","),
-                            counters[0], counters[1], 100.0 * counters[1] as f64 / total_wp as f64,
-                            counters[2], 100.0 * counters[2] as f64 / total_wp as f64,
-                            counters[3], 100.0 * counters[3] as f64 / total_wp as f64,
-                            counters[4], counters[5], counters[6], counters[7], counters[8]);
-                    }
-                    if let Some(ref buf) = self.bug326_depth_readback {
-                        let ptr = buf.mapped_ptr()
-                            .expect("BUG326_PROBE: shared buffer must have mapped ptr");
-                        let depths: &[f32] = unsafe {
-                            std::slice::from_raw_parts(
-                                ptr.cast::<f32>(),
-                                (width * height) as usize,
-                            )
-                        };
-                        let mut min_val = f32::MAX;
-                        let mut max_val = f32::MIN;
-                        let mut sum = 0.0f64;
-                        let mut nz = 0u32;
-                        for &d in depths.iter() {
-                            min_val = min_val.min(d);
-                            max_val = max_val.max(d);
-                            sum += d as f64;
-                            if d > 0.001 { nz += 1; }
-                        }
-                        let mean = sum / (width * height) as f64;
-                        eprintln!("BUG326_PROBE: GPU readback — min={:.6} max={:.6} mean={:.6} non_near_zero={}", min_val, max_val, mean, nz);
-                        for &(px, py) in &self.bug326_probe_pixels {
-                            let idx = (py * width + px) as usize;
-                            if idx < depths.len() {
-                                eprintln!("BUG326_PROBE: GPU depth at pixel ({},{} / [u32]={:?}) = {:.6}",
-                                    px, py, (px, py), depths[idx]);
-                            }
-                        }
-                    }
-                    // CPU-side projection: dump camera + view_proj, then project
-                    // first 5 objects' origins through view_proj.
-                    eprintln!("BUG326_PROBE: cam.pos=({:.4},{:.4},{:.4}) near={} far={} aspect={}",
-                        cam.pos[0], cam.pos[1], cam.pos[2], cam.near, cam.far, aspect);
-                    eprintln!("BUG326_PROBE: view_proj[2]={:?} view_proj[3]={:?}",
-                        view_proj[2], view_proj[3]);
-                    let mut projected_pixels = Vec::with_capacity(5);
-                    for (i, d) in shadow_caster_draws.iter().enumerate().take(5) {
-                        let model = d.uniforms.model;
-                        let world = [model[3][0], model[3][1], model[3][2], model[3][3]];
-                        let clip = mat4_mul_vec4(view_proj, mat4_mul_vec4(model, [0.0, 0.0, 0.0, 1.0]));
-                        let ndc_z = clip[2] / clip[3];
-                        let ndc_x = clip[0] / clip[3];
-                        let ndc_y = clip[1] / clip[3];
-                        let pixel_x = ((ndc_x * 0.5 + 0.5) * width as f32).min((width - 1) as f32) as u32;
-                        let pixel_y = ((0.5 - ndc_y * 0.5) * height as f32).min((height - 1) as f32) as u32;
-                        projected_pixels.push((pixel_x, pixel_y));
-                        eprintln!("BUG326_PROBE: draw[{}] model_trans={:?} clip={:?} expected_depth={:.6} ndc=({:.4},{:.4}) pixel=({},{})",
-                            i, world, clip, ndc_z, ndc_x, ndc_y, pixel_x, pixel_y);
-                    }
-                    self.bug326_probe_pixels = projected_pixels;
-                }
                 let sun = &casters[0];
                 let sun_dir = [-sun.dir[0], -sun.dir[1], -sun.dir[2]];
                 let Some(inv_view_proj) = mat4_inverse(view_proj) else {
@@ -4157,7 +4042,6 @@ impl EffectNode for RenderScene {
                     if rt_reflections { 1 } else { 0 },
                     0.6,
                     0.1,
-                    if bug326_probe { 1 } else { 0 },
                 );
                 // RAYTRACING_DESIGN.md §5.2 P3: rebuild the per-object
                 // material table from the SAME `shadow_caster_draws` order
@@ -4260,16 +4144,6 @@ impl EffectNode for RenderScene {
                 let refl_half = self.rt_refl_half.as_ref().expect("ensured above");
                 let refl_full = self.rt_refl_full.as_ref().expect("ensured above");
                 let _refl_full_b = self.rt_refl_full_b.as_ref().expect("ensured above");
-                // BUG-326 probe: ensure a 64-byte shared counter buffer.
-                if self.bug326_counter_buffer.is_none() {
-                    self.bug326_counter_buffer = Some(gpu.device.create_buffer_shared(64));
-                }
-                let counters_buffer = self.bug326_counter_buffer.as_ref().expect("just ensured");
-                if bug326_probe {
-                    // Zero the counter buffer before dispatch.
-                    let ptr = counters_buffer.mapped_ptr().expect("counter buffer must be shared");
-                    unsafe { std::ptr::write_bytes(ptr, 0, 64); }
-                }
                 tracer.dispatch_shadow_rays(
                     gpu.native_enc,
                     accel,
@@ -4291,25 +4165,8 @@ impl EffectNode for RenderScene {
                     self.prefiltered_specular.as_ref().unwrap_or(
                         self.dummy_texture.as_ref().expect("ensured at 3491"),
                     ),
-                    counters_buffer,
                     "node.render_scene RT-D3/RT-P2/RT-P3 trace_shadow_rays",
                 );
-                // BUG-326 probe: copy opaque_depth_snapshot to a CPU-mappable
-                // buffer so next frame's probe eprintln can read exact floats.
-                if bug326_probe {
-                    let depth_bpp = 4u32; // Depth32Float
-                    let depth_bytes_per_row = width * depth_bpp;
-                    let depth_total = u64::from(depth_bytes_per_row * height);
-                    if self.bug326_depth_readback.is_none()
-                        || self.bug326_depth_readback.as_ref().unwrap().size() < depth_total
-                    {
-                        self.bug326_depth_readback = Some(gpu.device.create_buffer_shared(depth_total));
-                    }
-                    let buf = self.bug326_depth_readback.as_ref().expect("just ensured");
-                    gpu.native_enc.copy_texture_to_buffer(
-                        depth_tex, buf, width, height, depth_bytes_per_row,
-                    );
-                }
                 tracer.upsample_shadow(
                     gpu.native_enc,
                     params_buffer,
