@@ -128,7 +128,72 @@ Each phase is one session, Flash-executable: the seams are decided above; phases
 6. REVIEW rationale is lead discipline, not machinery (D8).
 7. The driver script is not in this design (forbidden turn #1) — Peter's call, separately.
 
-## 6. Deferred
+## 6. Diagrams (added 2026-07-25, post-ship — Peter's request)
+
+### The machine and its trust boundaries
+
+```mermaid
+flowchart LR
+    subgraph JUDGMENT["Judgment seats (models)"]
+        LEAD["Lead (k3)<br/>COMPILE_WAVE · REVIEW · LAND"]
+        DISP["Dispatcher (glm-5.2)<br/>BRIEF · SCOPE_CHECK"]
+        LANE["Executor lanes (Flash)<br/>EXECUTE: Brief → Diff"]
+    end
+
+    subgraph MACHINE["The machine (zero model)"]
+        PW["pre-wave pack<br/>seat drift · liveliness · quota · goldens · base"]
+        PD["pre-dispatch pack<br/>anchors · gates parse · slots · bead"]
+        GR["gate_runner<br/>executes gates, writes verdicts"]
+        SS["SubagentStop hook<br/>fires GR on lane stop"]
+        PL["pre-land clause<br/>(preToolUseBash)"]
+        VT[("verdict trail<br/>verdicts/*.jsonl<br/>append-only")]
+        RPT["report<br/>(read-only query)"]
+    end
+
+    LEAD -->|"briefs (files)"| PD
+    PW -->|"wave step 0"| VT
+    PD -->|"lint pass/fail"| VT
+    DISP --> LANE
+    LANE -->|"one commit, stops"| SS
+    SS -->|"runs brief's gates"| GR
+    GR -->|"the ONLY writer (I2)"| VT
+    PL -->|"coverage check"| VT
+    LEAD -->|"git merge --no-ff"| PL
+    RPT -->|"reads"| VT
+
+    style VT fill:#1a3a1a,stroke:#4a4
+    style LANE fill:#3a1a1a,stroke:#a44
+```
+
+The red zone never touches the green zone: **lanes produce diffs, never verdicts** (D2). The trail is written by exactly one process (gate_runner, I2 — Edit-guarded) and read by the merge clause, the report, and review.
+
+### Wave lifecycle — the state machine
+
+```mermaid
+stateDiagram-v2
+    [*] --> Preflight: pre-wave pack
+    Preflight --> WaveHalted: any FAIL (seat drift, dead proxy,<br/>dirty goldens, base unmerged)
+    Preflight --> Briefed: all PASS/WARN
+
+    Briefed --> LintRejected: pre-dispatch FAIL<br/>(dead anchor, unparseable gate,<br/>bad slot, no bead)
+    Briefed --> Dispatched: lint PASS
+
+    Dispatched --> LaneRuns: worktree from ring<br/>(skips live sessions)
+    LaneRuns --> GateFires: lane stops (SubagentStop)
+    GateFires --> LaneRuns: gates RED → stop blocked,<br/>feedback to lane (max 3)
+    GateFires --> Review: gates GREEN →<br/>per-lane verdict appended
+
+    Review --> LaneRuns: REJECT (lead reads diff,<br/>sends back with reason)
+    Review --> Landed: ACCEPT → lead merges
+    Landed --> [*]: pre-land clause verifies<br/>verdict coverage (I1) —<br/>no verdict, no merge
+
+    WaveHalted --> [*]: surface to Peter
+    LintRejected --> [*]: fix brief, re-lint
+```
+
+Every transition into a green state is machine-checked; every transition out of `Review` is lead judgment with the machine's evidence in hand. The two terminal escapes (`WaveHalted`, `LintRejected`) are loud by construction — silence is the bug this design exists to kill.
+
+## 7. Deferred
 
 - **Driver script** — revive only via Peter, per the standing note (SEMANTIC_WORKFLOW_PROGRAMS §7).
 - **fleet_doctor full drift audit** (profiles↔toml, docs index↔docs, board↔headers, memory pointers↔reality) — separate bead; P2's preflight is the wave-scoped subset, not the audit.
