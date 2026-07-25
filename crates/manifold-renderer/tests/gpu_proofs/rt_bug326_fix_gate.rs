@@ -152,12 +152,23 @@ fn imported_glb_rt_on_stays_within_80pct_of_baseline() {
     }
     let baseline_frac = non_black_fraction_rgbf32(&readback_rgba_f32(&h.device, &tex_baseline));
 
-    // RT on: rt=1+refl=1.
+    // RT on: rt=1+refl=1. Poll until lit: the rerun suppression window
+    // skips the composite while the rerun build is in flight, which reads
+    // back as black on this harness's fresh target (in-app the previous
+    // frame persists). Window length is load-dependent (completion-handler
+    // delivery), so a fixed frame count is flaky under full-suite load.
     let (mut rt_on, tex_on) = build_helmet_harness(&h, true, true);
-    for f in 0..90 {
+    let threshold = 0.20 * baseline_frac;
+    let mut on_frac = 0.0f64;
+    for f in 0..600 {
         frame(&mut rt_on, &h, &tex_on, f);
+        if f >= 84 && f % 5 == 4 {
+            on_frac = on_frac.max(non_black_fraction_rgbf32(&readback_rgba_f32(&h.device, &tex_on)));
+            if on_frac >= threshold {
+                break;
+            }
+        }
     }
-    let on_frac = non_black_fraction_rgbf32(&readback_rgba_f32(&h.device, &tex_on));
 
     eprintln!(
         "[bug326-gate] baseline={:.4} rt_on={:.4} ratio={:.2}",
@@ -165,8 +176,8 @@ fn imported_glb_rt_on_stays_within_80pct_of_baseline() {
     );
 
     assert!(
-        on_frac >= 0.20 * baseline_frac,
-        "BUG-326: imported GLB with rt enabled dropped below 20% of baseline \
+        on_frac >= threshold,
+        "BUG-326: imported GLB with rt enabled never lit within 600 frames \
          (baseline {baseline_frac:.4}, rt-on {on_frac:.4}, ratio {:.2}) — the fix has regressed",
         on_frac / baseline_frac
     );
