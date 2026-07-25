@@ -497,7 +497,11 @@ struct GiMaterial {
 // `MAX_RT_ALPHA_TEXTURES` (no compiler-enforced link between an embedded
 // MSL string constant and a Rust const — same manual-sync discipline this
 // file already uses for `RtNormalSource`'s field-for-field CPU/GPU mirror).
-#define MAX_RT_ALPHA_TEXTURES 4
+// MAX_RT_MATERIAL_TEXTURES: bindless table for per-object material textures
+// (alpha-mask + base-color; roughness/metallic/normals consume this same cap).
+// Raise when a hero scene's RT-caster set needs more; cost is one more
+// fixed texture-array binding (4 bytes/table-entry GPU, negligible CPU).
+#define MAX_RT_MATERIAL_TEXTURES 64
 
 struct RtNormalSource {
     ulong  vertex_base_addr;
@@ -512,10 +516,14 @@ struct RtNormalSource {
     uint   uv_offset;
     uint   alpha_mask;
     float  alpha_cutoff;
-    // Index into `alpha_textures` (the kernel's fixed texture-array param);
-    // `MAX_RT_ALPHA_TEXTURES` or above means "no texture bound" (degrades
+    // Index into `material_textures` (the kernel's fixed texture-array param);
+    // `MAX_RT_MATERIAL_TEXTURES` or above means "no texture bound" (degrades
     // to always-pass in `sample_candidate_alpha`).
     uint   alpha_tex_index;
+    // Raster-parity reflections (RAYTRACING_DESIGN.md §9.6): base-color texture
+    // index for hit-point material sampling; `MAX_RT_MATERIAL_TEXTURES` or above
+    // means "no texture bound" (flat gi_materials albedo is the fallback).
+    uint   base_color_tex_index;
 };
 
 // RT-T1-B: fetch this object's (`src`) vertex `vi`'s LOCAL-space normal via
@@ -579,13 +587,13 @@ static float2 fetch_interpolated_uv(constant RtNormalSource* normal_sources, uin
 static float sample_candidate_alpha(
     constant RtNormalSource& src,
     constant RtNormalSource* normal_sources,
-    array<texture2d<float>, MAX_RT_ALPHA_TEXTURES> alpha_textures,
+    array<texture2d<float>, MAX_RT_MATERIAL_TEXTURES> material_textures,
     uint instance_id, uint primitive_id, float2 bary)
 {
-    if (src.alpha_tex_index >= MAX_RT_ALPHA_TEXTURES) return 1.0; // no texture bound: degrade to always-pass
+    if (src.alpha_tex_index >= MAX_RT_MATERIAL_TEXTURES) return 1.0; // no texture bound: degrade to always-pass
     float2 uv = fetch_interpolated_uv(normal_sources, instance_id, primitive_id, bary);
     constexpr sampler alpha_sampler(coord::normalized, address::repeat, filter::nearest);
-    return alpha_textures[src.alpha_tex_index].sample(alpha_sampler, uv).a;
+    return material_textures[src.alpha_tex_index].sample(alpha_sampler, uv).a;
 }
 
 // RT-T2-A (RAYTRACING_DESIGN.md §8.2 D21): shared candidate walk for ALL of
@@ -605,7 +613,7 @@ static float sample_candidate_alpha(
 static bool walk_with_alpha_test(
     thread intersection_query<triangle_data, instancing>& q,
     constant RtNormalSource* normal_sources,
-    array<texture2d<float>, MAX_RT_ALPHA_TEXTURES> alpha_textures,
+    array<texture2d<float>, MAX_RT_MATERIAL_TEXTURES> material_textures,
     bool any_hit)
 {
     while (q.next()) {
@@ -615,7 +623,7 @@ static bool walk_with_alpha_test(
         bool pass = true;
         if (src.alpha_mask != 0u) {
             float alpha = sample_candidate_alpha(
-                src, normal_sources, alpha_textures,
+                src, normal_sources, material_textures,
                 iid, q.get_candidate_primitive_id(), q.get_candidate_triangle_barycentric_coord());
             pass = alpha >= src.alpha_cutoff;
         }
@@ -784,17 +792,18 @@ kernel void trace_shadow_rays(
     texture2d<float, access::write>  out_sv         [[texture(1)]],
     texture2d<float, access::write>  out_irr        [[texture(2)]],
     texture2d<float, access::write>  out_n          [[texture(3)]],
-    // RT-T2-A: fixed slots for alpha-masked objects' base-color textures —
-    // see `MAX_RT_ALPHA_TEXTURES`'s doc comment.
-    array<texture2d<float>, MAX_RT_ALPHA_TEXTURES> alpha_textures [[texture(4)]],
-    texture2d<float, access::write> out_refl [[texture(8)]],   // RT-R1 (§9.3): .rgb = incident radiance along R, .a = hit distance
+    // RT-T2-A / Raster-parity reflections: fixed slots for per-object material
+    // textures (alpha-mask + base-color; roughness/metallic/normals consume
+    // this same cap) — see `MAX_RT_MATERIAL_TEXTURES`'s doc comment.
+    array<texture2d<float>, MAX_RT_MATERIAL_TEXTURES> material_textures [[texture(4)]],
+    texture2d<float, access::write> out_refl [[texture(68)]],   // RT-R1 (§9.3): .rgb = incident radiance along R, .a = hit distance
     // RT-R1 (§9.3 RD4): the node's prefiltered-specular env mip chain —
     // the reflection ray's MISS radiance, sampled at the ray's roughness
     // mip with the SAME equirect mapping `render_scene.wgsl`'s split-sum
     // IBL uses (one wire away, §9.1). Always bound (dummy when the scene
     // has no env chain — the miss branch then reads the same nothing the
     // raster IBL would).
-    texture2d<float>               prefiltered_env [[texture(9)]],
+    texture2d<float>               prefiltered_env [[texture(69)]],
     uint2 tid [[thread_position_in_grid]])
 {
     if (tid.x >= p.trace_size.x || tid.y >= p.trace_size.y) return;
@@ -858,7 +867,7 @@ kernel void trace_shadow_rays(
             pr.max_distance = dist + dist * 1e-3 + 1e-4;
             intersection_query<triangle_data, instancing> primary_q;
             primary_q.reset(pr, accel);
-            if (walk_with_alpha_test(primary_q, normal_sources, alpha_textures, false)) {
+            if (walk_with_alpha_test(primary_q, normal_sources, material_textures, false)) {
                 uint primary_iid = primary_q.get_committed_instance_id();
                 n = fetch_interpolated_normal(normal_sources, primary_iid, primary_q.get_committed_primitive_id(), primary_q.get_committed_triangle_barycentric_coord());
                 obj_id = float(primary_iid);
@@ -924,7 +933,7 @@ kernel void trace_shadow_rays(
         r.direction = cone_sample(p.sun_dir, p.sun_cone, rand2(tid, p.frame_index, s));
         intersection_query<triangle_data, instancing> shadow_q;
         shadow_q.reset(r, accel);
-        bool blocked = walk_with_alpha_test(shadow_q, normal_sources, alpha_textures, true);
+        bool blocked = walk_with_alpha_test(shadow_q, normal_sources, material_textures, true);
         if (!blocked) vis += 1.0;
     }
     vis /= float(spp);
@@ -947,7 +956,7 @@ kernel void trace_shadow_rays(
             ao_r.direction = cosine_hemisphere(n, blue_noise_sample(tid, p.frame_index, s, p.ao_spp));
             intersection_query<triangle_data, instancing> ao_q;
             ao_q.reset(ao_r, accel);
-            if (!walk_with_alpha_test(ao_q, normal_sources, alpha_textures, true)) ao += 1.0;
+            if (!walk_with_alpha_test(ao_q, normal_sources, material_textures, true)) ao += 1.0;
         }
         ao /= float(p.ao_spp);
     }
@@ -985,7 +994,7 @@ kernel void trace_shadow_rays(
             gr.direction = cosine_hemisphere(n, blue_noise_sample(tid, p.frame_index, s, p.gi_spp));
             intersection_query<triangle_data, instancing> gi_q;
             gi_q.reset(gr, accel);
-            bool gi_hit = walk_with_alpha_test(gi_q, normal_sources, alpha_textures, false);
+            bool gi_hit = walk_with_alpha_test(gi_q, normal_sources, material_textures, false);
             if (gi_hit) {
                 uint oi = gi_q.get_committed_instance_id();
                 uint gi_pid = gi_q.get_committed_primitive_id();
@@ -1010,7 +1019,7 @@ kernel void trace_shadow_rays(
                 sun_r.max_distance = INFINITY;
                 intersection_query<triangle_data, instancing> sun_q;
                 sun_q.reset(sun_r, accel);
-                float hit_sun_vis = walk_with_alpha_test(sun_q, normal_sources, alpha_textures, true) ? 0.0 : 1.0;
+                float hit_sun_vis = walk_with_alpha_test(sun_q, normal_sources, material_textures, true) ? 0.0 : 1.0;
                 float hit_ndotl = max(dot(hit_n, p.sun_dir), 0.0);
                 // Named, documented, tunable (RAYTRACING_DESIGN.md §5.2 P2's
                 // "denoiser/accumulation parameters are named constants"
@@ -1073,19 +1082,45 @@ kernel void trace_shadow_rays(
             refl_q.reset(rr, accel);
             float3 traced;
             float hit_dist = RT_REFL_MISS_HIT_DIST;
-            if (walk_with_alpha_test(refl_q, normal_sources, alpha_textures, false)) {
-                // RD4: hit shading IS the GI gather's lines (emissive +
-                // sun-bounce with the SAME scale constant) — one shading
-                // path for all secondary rays, no reflection-specific
-                // material model in v1.
+            if (walk_with_alpha_test(refl_q, normal_sources, material_textures, false)) {
+                // Raster-parity reflections (RAYTRACING_DESIGN.md §9.6): hit
+                // shading now includes the hit surface's own environment
+                // contribution (diffuse irradiance + one-bounce specular), so
+                // the traced reflection matches what the raster would shade at
+                // that virtual surface point — I-R1 preserved (one env-specular
+                // per lobe per pixel; the hit-point env is the VIRTUAL surface's
+                // contribution, not a second env at the primary pixel).
                 uint hoi = refl_q.get_committed_instance_id();
                 uint hpid = refl_q.get_committed_primitive_id();
                 float2 hbary = refl_q.get_committed_triangle_barycentric_coord();
                 hit_dist = refl_q.get_committed_distance();
                 float3 hit_emissive = float3(gi_materials[hoi].emissive);
+                // Sample base-color texture if bound (RtNormalSource.base_color_tex_index),
+                // otherwise flat gi_materials albedo is the fallback.
                 float3 hit_albedo = float3(gi_materials[hoi].albedo);
+                constant RtNormalSource& hsrc = normal_sources[hoi];
+                if (hsrc.base_color_tex_index < MAX_RT_MATERIAL_TEXTURES) {
+                    float2 hit_uv = fetch_interpolated_uv(normal_sources, hoi, hpid, hbary);
+                    constexpr sampler bc_sampler(coord::normalized, address::repeat, filter::linear);
+                    hit_albedo = material_textures[hsrc.base_color_tex_index].sample(bc_sampler, hit_uv).rgb;
+                }
+                float4 mr = gi_materials[hoi].metallic_roughness;
+                float hit_metallic = mr.x;
+                float hit_roughness = mr.y;
                 float3 hit_pos = rr.origin + rr.direction * hit_dist;
                 float3 hit_n = fetch_interpolated_normal(normal_sources, hoi, hpid, hbary);
+                // Raster-parity diffuse term (irradiance approximation): sample
+                // roughest mip for near-isotropic diffuse contribution.
+                const float RT_REFL_HIT_ENV_DIFFUSE_ROUGHNESS = 1.0;
+                float3 hit_diffuse_env = refl_env_sample(prefiltered_env, hit_n, RT_REFL_HIT_ENV_DIFFUSE_ROUGHNESS);
+                // Compute F0 for the hit surface (Schlick approximation: 0.04 dielectric base).
+                const float RT_REFL_HIT_DIELECTRIC_F0 = 0.04;
+                float3 hit_f0 = mix(float3(RT_REFL_HIT_DIELECTRIC_F0), hit_albedo, hit_metallic);
+                // Raster-parity specular term: one-bounce specular continuation along
+                // the reflection direction, at the hit surface's roughness.
+                float3 refl_dir = reflect(-normalize(hit_pos - float3(p.camera_pos)), hit_n);
+                float3 hit_specular_env = refl_env_sample(prefiltered_env, refl_dir, hit_roughness);
+                // Sun-bounce term (unchanged from R1).
                 ray sun_r;
                 sun_r.origin = hit_pos + p.sun_dir * bias_eps;
                 sun_r.direction = cone_sample(p.sun_dir, p.sun_cone, rand2(tid, p.frame_index, 500u));
@@ -1093,9 +1128,11 @@ kernel void trace_shadow_rays(
                 sun_r.max_distance = INFINITY;
                 intersection_query<triangle_data, instancing> sun_q;
                 sun_q.reset(sun_r, accel);
-                float hit_sun_vis = walk_with_alpha_test(sun_q, normal_sources, alpha_textures, true) ? 0.0 : 1.0;
+                float hit_sun_vis = walk_with_alpha_test(sun_q, normal_sources, material_textures, true) ? 0.0 : 1.0;
                 float hit_ndotl = max(dot(hit_n, p.sun_dir), 0.0);
-                traced = hit_emissive + hit_albedo * float3(p.sun_color) * hit_sun_vis * hit_ndotl * SUN_BOUNCE_INTENSITY_SCALE;
+                float3 sun_bounce_term = hit_albedo * float3(p.sun_color) * hit_sun_vis * hit_ndotl * SUN_BOUNCE_INTENSITY_SCALE;
+                // Full raster-parity shading: emissive + diffuse-env + specular-env + sun-bounce.
+                traced = hit_emissive + hit_albedo * hit_diffuse_env + hit_f0 * hit_specular_env + sun_bounce_term;
             } else {
                 // RD4: miss returns the env at the ray's actual (possibly
                 // GGX-perturbed) direction, roughness mip.
@@ -1730,24 +1767,29 @@ pub struct RtNormalSource {
     pub uv_offset: u32,
     pub alpha_mask: u32,
     pub alpha_cutoff: f32,
-    /// Index into `trace_shadow_rays`'s fixed `alpha_textures` array;
-    /// `>= MAX_RT_ALPHA_TEXTURES` means "no texture bound" (degrades to
+    /// Index into `trace_shadow_rays`'s fixed `material_textures` array;
+    /// `>= MAX_RT_MATERIAL_TEXTURES` means "no texture bound" (degrades to
     /// always-pass — see `ensure_normal_sources`).
     pub alpha_tex_index: u32,
+    /// Raster-parity reflections (RAYTRACING_DESIGN.md §9.6): base-color texture
+    /// index for hit-point material sampling; `>= MAX_RT_MATERIAL_TEXTURES` means
+    /// "no texture bound" (flat gi_materials albedo is the fallback).
+    pub base_color_tex_index: u32,
 }
 
 const _: () = assert!(std::mem::size_of::<RtNormalSource>() == 72);
 
-/// RT-T2-A: fixed texture-argument-table slot count for alpha-masked
-/// base-color textures — MUST match the embedded MSL's
-/// `#define MAX_RT_ALPHA_TEXTURES` (manual-sync discipline, same as every
-/// other CPU/GPU struct mirror in this file). A scene needing more than
-/// this many DISTINCT alpha-masked base-color textures live at once is
-/// this constant's un-suppression trigger.
-pub const MAX_RT_ALPHA_TEXTURES: usize = 4;
-/// Sentinel `alpha_tex_index` meaning "no base-color texture bound" —
-/// `sample_candidate_alpha` (MSL) degrades this to always-pass.
-pub const RT_ALPHA_TEX_INDEX_NONE: u32 = u32::MAX;
+/// Fixed texture-argument-table slot count for per-object material textures
+/// (alpha-mask + base-color; roughness/metallic/normals consume this same cap) —
+/// MUST match the embedded MSL's `#define MAX_RT_MATERIAL_TEXTURES` (manual-sync
+/// discipline, same as every other CPU/GPU struct mirror in this file).
+/// Raster-parity reflections raised this from 4 to 64 to headroom the AMG GT3
+/// hero asset (39 unique textures wired across all materials; this cap covers
+/// that plus growth). Raise when a hero scene's RT-caster set needs more; cost
+/// is one more fixed texture-array binding (4 bytes/table-entry GPU, negligible CPU).
+pub const MAX_RT_MATERIAL_TEXTURES: usize = 64;
+/// Sentinel tex_index meaning "no texture bound" — degrades to factor fallback.
+pub const RT_MATERIAL_TEX_INDEX_NONE: u32 = u32::MAX;
 
 /// Column-major `[[f32; 4]; 4]` model matrix -> its upper-left 3x3 (see
 /// [`RtNormalSource`]'s doc comment for the uniform-scale assumption).
@@ -1792,18 +1834,45 @@ pub fn ensure_normal_sources<'a>(
     let ptr = buf
         .mapped_ptr()
         .expect("RT normal-source buffer must be CPU-mapped");
-    let mut alpha_textures: Vec<&'a GpuTexture> = Vec::new();
+    let mut material_textures: Vec<&'a GpuTexture> = Vec::new();
     for (i, obj) in objects.iter().enumerate() {
         let alpha_tex_index = if obj.alpha_mask {
             match obj.base_color_texture {
-                Some(tex) if alpha_textures.len() < MAX_RT_ALPHA_TEXTURES => {
-                    alpha_textures.push(tex);
-                    (alpha_textures.len() - 1) as u32
+                Some(tex) if material_textures.len() < MAX_RT_MATERIAL_TEXTURES => {
+                    // Check if this texture is already bound
+                    let idx = material_textures.iter().position(|&t| std::ptr::eq(t, tex))
+                        .unwrap_or_else(|| {
+                            material_textures.push(tex);
+                            material_textures.len() - 1
+                        });
+                    idx as u32
                 }
-                _ => RT_ALPHA_TEX_INDEX_NONE,
+                Some(_) => {
+                    log::warn!("RT alpha-mask texture table full ({} bound, {} cap) — object {} degraded to always-pass",
+                        material_textures.len(), MAX_RT_MATERIAL_TEXTURES, i);
+                    RT_MATERIAL_TEX_INDEX_NONE
+                }
+                None => RT_MATERIAL_TEX_INDEX_NONE,
             }
         } else {
-            RT_ALPHA_TEX_INDEX_NONE
+            RT_MATERIAL_TEX_INDEX_NONE
+        };
+        let base_color_tex_index = match obj.base_color_texture {
+            Some(tex) if material_textures.len() < MAX_RT_MATERIAL_TEXTURES => {
+                // Check if this texture is already bound (deduplicate)
+                let idx = material_textures.iter().position(|&t| std::ptr::eq(t, tex))
+                    .unwrap_or_else(|| {
+                        material_textures.push(tex);
+                        material_textures.len() - 1
+                    });
+                idx as u32
+            }
+            Some(_) => {
+                log::warn!("RT material-texture table full ({} bound, {} cap) — object {} base-color degraded to flat albedo",
+                    material_textures.len(), MAX_RT_MATERIAL_TEXTURES, i);
+                RT_MATERIAL_TEX_INDEX_NONE
+            }
+            None => RT_MATERIAL_TEX_INDEX_NONE,
         };
         let src = RtNormalSource {
             vertex_base_addr: obj.vertex_buffer.gpu_address() + obj.vertex_offset as u64,
@@ -1814,12 +1883,13 @@ pub fn ensure_normal_sources<'a>(
             alpha_mask: obj.alpha_mask as u32,
             alpha_cutoff: obj.alpha_cutoff,
             alpha_tex_index,
+            base_color_tex_index,
         };
         unsafe {
             std::ptr::write_unaligned(ptr.add(i * std::mem::size_of::<RtNormalSource>()) as *mut _, src);
         }
     }
-    alpha_textures
+    material_textures
 }
 
 /// CPU mirror of the MSL `AccumulateParams` struct backing
@@ -2430,20 +2500,20 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                 texture: out_n,
             },
         ];
-        // RT-T2-A: fill all MAX_RT_ALPHA_TEXTURES argument-table slots —
-        // real textures first (caller-supplied order matches
-        // `RtNormalSource::alpha_tex_index`), the 1x1 dummy for the rest
-        // (Metal requires every slot a compiled kernel references bound to
-        // a valid resource).
-        for i in 0..MAX_RT_ALPHA_TEXTURES {
+        // RT-T2-A / Raster-parity reflections: fill all MAX_RT_MATERIAL_TEXTURES
+        // argument-table slots — real textures first (caller-supplied order matches
+        // `RtNormalSource::alpha_tex_index`/`base_color_tex_index`), the 1x1 dummy
+        // for the rest (Metal requires every slot a compiled kernel references
+        // bound to a valid resource).
+        for i in 0..MAX_RT_MATERIAL_TEXTURES {
             let tex = alpha_textures.get(i).copied().unwrap_or(&self.dummy_alpha_tex);
             bindings.push(GpuBinding::Texture {
                 binding: 4 + i as u32,
                 texture: tex,
             });
         }
-        // RT-R1 (§9.3): out_refl at [[texture(8)]] — free (alpha_textures
-        // occupy 4..8).
+        // RT-R1 (§9.3): out_refl at [[texture(68)]] — free (material_textures
+        // occupy 4..68, i.e. 4 + 64).
         bindings.push(GpuBinding::Texture {
             binding: 8,
             texture: out_refl,
