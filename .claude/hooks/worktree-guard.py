@@ -114,6 +114,22 @@ def merge_conflict_paths():
         return set()
 
 
+def is_verdicts_path(resolved):
+    """True if resolved path is under ANY `.claude/orchestration/verdicts/`
+    directory, covering both the main checkout and worktree locations (I2).
+
+    gate_runner is the only writer of verdict files; direct Edit/Write/MultiEdit
+    to the trail is always the wrong path — even for gate_runner itself, which
+    appends via Python `open()`.
+    """
+    parts = resolved.parts
+    for i, part in enumerate(parts):
+        if part == ".claude" and i + 2 < len(parts):
+            if parts[i + 1] == "orchestration" and parts[i + 2] == "verdicts":
+                return True
+    return False
+
+
 def deny_reason(resolved):
     try:
         rel = resolved.relative_to(_PROJECT_DIR)
@@ -149,6 +165,23 @@ def main():
     resolved = resolve_target(tool_input.get("file_path") or "", data.get("cwd") or "")
     if resolved is None:
         return 0
+
+    # I2: verdicts are written only by gate_runner, never via Edit|Write|MultiEdit.
+    if is_verdicts_path(resolved):
+        print(json.dumps({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": (
+                    "Blocked: verdicts are written only by gate_runner — direct "
+                    "Edit/Write/MultiEdit to the verdicts trail is never correct. "
+                    "gate_runner appends via Python `open()`, not through the Edit "
+                    "tool. Path: " + str(resolved)
+                ),
+            }
+        }))
+        return 0
+
     if not in_main_checkout(resolved):
         return 0
     if is_tooling(resolved):
