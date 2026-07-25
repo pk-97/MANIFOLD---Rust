@@ -1,0 +1,106 @@
+#!/usr/bin/env python3
+"""probe-loop-guard.py — PreToolUse hook enforcing the review-before-bisect
+rule (Peter 2026-07-25): the lead must not run long instrument-probe loops
+(debug-hack a kernel, render, stare, repeat) without first writing the
+evidence table and reviewing the seam.
+
+Why: the 2026-07-25 BUG-326 hunt found the mechanism (depth snapshot wrong on
+imported glb scenes) but burned ~2h of lead context on serial theory loops.
+The repo's seam bugs come from eras of weak briefs; review-first is cheaper
+than probe-first. Doctrine: docs/AGENT_ROUTING.md §Lead token economy.
+
+Mechanism: counts probe-loop actions per session —
+  - Edit/Write/MultiEdit touching RT/GPU kernel or shader files
+    (manifold-gpu/metal/**, render_scene.rs, *.wgsl under crates/)
+  - Bash running render-import or gpu-proofs tests
+At 3: warning (additionalContext). At 6+: DENY until the session writes
+/tmp/manifold_seam_review.md (>=200 chars — the evidence table), which
+resets the counter. Fails OPEN on any error.
+"""
+import json
+import os
+import re
+import sys
+import time
+
+REVIEW_FILE = "/tmp/manifold_seam_review.md"
+WARN_AT = 3
+DENY_AT = 6
+
+KERNEL_PATH = re.compile(r"crates/manifold-gpu/src/metal/|render_scene\.rs$|\.wgsl$")
+PROBE_CMD = re.compile(r"render-import|gpu-proofs|gpu_proofs")
+
+
+def counter_path(session: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9_-]", "_", session)[:64] or "unknown"
+    return f"/tmp/manifold_probe_loop_{safe}.json"
+
+
+def main() -> None:
+    try:
+        payload = json.load(sys.stdin)
+        tool = payload.get("tool_name", "")
+        ti = payload.get("tool_input", {}) or {}
+        session = payload.get("session_id", "unknown")
+
+        is_probe = False
+        if tool in ("Edit", "Write", "MultiEdit"):
+            path = ti.get("file_path", "")
+            is_probe = bool(KERNEL_PATH.search(path))
+        elif tool == "Bash":
+            is_probe = bool(PROBE_CMD.search(ti.get("command", "")))
+        if not is_probe:
+            return
+
+        cp = counter_path(session)
+        state = {"count": 0}
+        if os.path.exists(cp):
+            try:
+                state = json.load(open(cp))
+            except Exception:
+                pass
+        state["count"] = int(state.get("count", 0)) + 1
+        json.dump(state, open(cp, "w"))
+        n = state["count"]
+
+        # The written review resets the loop (and is newer than the counter).
+        if os.path.exists(REVIEW_FILE):
+            try:
+                if os.path.getsize(REVIEW_FILE) >= 200 and os.path.getmtime(REVIEW_FILE) > os.path.getmtime(cp) - 1:
+                    os.remove(cp)
+                    return
+            except Exception:
+                pass
+
+        msg = (
+            f"PROBE-LOOP GUARD ({n} probe actions this session) — lead escalation ladder "
+            "(Peter 2026-07-25): (1) LEAD semantic code review of the seam first — "
+            "'does this look correct?' is the fastest, cheapest oracle; (2) STUCK? ask "
+            "GLM-5.2/4.7 for review or adversarial thoughts (one-shot .claude/hooks/flash "
+            "--model glm-5.2, or a lane); (3) instrument probes are the LAST RESORT, for "
+            "when nothing makes sense and you need a new direction — and they are DELEGATED "
+            "(DeepSeek lane), not lead-run. Write the evidence table to "
+            "/tmp/manifold_seam_review.md (>=200 chars) to reset this guard."
+        )
+        if n >= DENY_AT:
+            print(json.dumps({
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": msg,
+                }
+            }))
+        elif n == WARN_AT:
+            print(json.dumps({
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "additionalContext": msg,
+                }
+            }))
+    except Exception:
+        # fail open — never block a session on a guard bug
+        return
+
+
+if __name__ == "__main__":
+    main()
