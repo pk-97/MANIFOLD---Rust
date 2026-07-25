@@ -15,6 +15,7 @@ import json
 import os
 import sys
 import tempfile
+import unittest.mock
 from pathlib import Path
 
 HOOK_PATH = Path(__file__).resolve().parent / "preToolUseBash.py"
@@ -44,6 +45,18 @@ def with_verdicts_dir(fn):
             fn(Path(td))
         finally:
             hook._VERDICTS_DIR = orig
+
+
+def with_orch_verdicts_dir(fn):
+    """Run `fn(orch_verdicts_dir)` with hook._ORCH_VERDICTS_DIR patched to a
+    scratch temp dir, restoring it afterward regardless of outcome."""
+    orig = hook._ORCH_VERDICTS_DIR
+    with tempfile.TemporaryDirectory() as td:
+        hook._ORCH_VERDICTS_DIR = Path(td)
+        try:
+            fn(Path(td))
+        finally:
+            hook._ORCH_VERDICTS_DIR = orig
 
 
 def make_pidfile(verdicts_dir, session_id, pid_text):
@@ -293,6 +306,166 @@ def test_worktree_read_and_remove_unaffected():
         check(f"`{cmd}` -> not denied", '"deny"' not in out, out)
 
 
+# ---------------------------------------------------------------------------
+# Pre-land verdict-coverage guard (I1) — merge_verdict_guard
+# ---------------------------------------------------------------------------
+
+def _make_verdict(task_id, kind="gate", pass_value=True):
+    """Create a schema-1 verdict dict for testing."""
+    return {
+        "schema": 1, "task": task_id, "phase": "per-lane", "brief": "",
+        "branch": "lane/test", "commit": "abc123",
+        "gates": [] if kind == "no-gate" else [{"cmd": "true", "exit": 0, "duration_s": 0.1, "tail": ""}],
+        "scope": {"files_changed": [], "in_scope": True},
+        "pass": pass_value, "kind": kind, "reason": None if kind == "gate" else "test bypass",
+        "runner": "gate_runner.py@lead", "ts": "2026-07-25T12:00:00Z",
+    }
+
+
+def _setup_mock_run(diff_output="crates/foo/src/lib.rs\n", log_output="feat\n\nBUG-abc123\n"):
+    """Create a configured subprocess.run mock returning specific diff/log."""
+    mock_run = unittest.mock.MagicMock()
+
+    def side_effect(cmd, *args, **kwargs):
+        result = unittest.mock.MagicMock()
+        result.returncode = 0
+        cmd_str = " ".join(cmd) if isinstance(cmd, list) else cmd
+        if "diff" in cmd_str:
+            result.stdout = diff_output
+        elif "log" in cmd_str:
+            result.stdout = log_output
+        else:
+            result.stdout = ""
+        return result
+
+    mock_run.side_effect = side_effect
+    return mock_run
+
+
+def test_merge_denied_missing_verdict():
+    """Merge blocked when source branch BUG- ids lack passing verdicts."""
+    def run(orch_vd):
+        mock_run = _setup_mock_run(
+            diff_output="crates/foo/src/lib.rs\n",
+            log_output="feat: add X\n\nBUG-abc123\n",
+        )
+        orig_branch = hook._current_branch
+        hook._current_branch = lambda cwd: "main"
+        mock_patcher = unittest.mock.patch.object(hook.subprocess, 'run', mock_run)
+        mock_patcher.start()
+        try:
+            reason, context = hook.merge_verdict_guard(
+                "git merge --no-ff lane/feat-x", MAIN_CWD
+            )
+            check("merge denied when verdict missing", reason is not None, reason)
+            check("deny names missing task", reason and "BUG-abc123" in reason, reason)
+            check("deny mentions gate_runner no-gate", reason and "no-gate" in reason, reason)
+        finally:
+            mock_patcher.stop()
+            hook._current_branch = orig_branch
+    with_orch_verdicts_dir(run)
+
+
+def test_merge_passes_with_gate_verdict():
+    """Merge passes when a passing gate verdict exists in the trail."""
+    def run(orch_vd):
+        # Write a passing gate verdict
+        vpath = orch_vd / "BUG-abc123.jsonl"
+        vpath.write_text(json.dumps(_make_verdict("BUG-abc123", "gate", True)) + "\n")
+
+        mock_run = _setup_mock_run(
+            diff_output="crates/foo/src/lib.rs\n",
+            log_output="feat: add X\n\nBUG-abc123\n",
+        )
+        orig_branch = hook._current_branch
+        hook._current_branch = lambda cwd: "main"
+        mock_patcher = unittest.mock.patch.object(hook.subprocess, 'run', mock_run)
+        mock_patcher.start()
+        try:
+            reason, context = hook.merge_verdict_guard(
+                "git merge --no-ff lane/feat-x", MAIN_CWD
+            )
+            check("merge passes with gate verdict", reason is None, reason)
+            check("context confirms passing", context and "passing" in context, context)
+        finally:
+            mock_patcher.stop()
+            hook._current_branch = orig_branch
+    with_orch_verdicts_dir(run)
+
+
+def test_merge_passes_with_no_gate_verdict():
+    """Merge passes when a no-gate verdict exists in the trail."""
+    def run(orch_vd):
+        # Write a no-gate verdict
+        vpath = orch_vd / "BUG-abc123.jsonl"
+        vpath.write_text(json.dumps(_make_verdict("BUG-abc123", "no-gate", True)) + "\n")
+
+        mock_run = _setup_mock_run(
+            diff_output="crates/foo/src/lib.rs\n",
+            log_output="feat: add X\n\nBUG-abc123\n",
+        )
+        orig_branch = hook._current_branch
+        hook._current_branch = lambda cwd: "main"
+        mock_patcher = unittest.mock.patch.object(hook.subprocess, 'run', mock_run)
+        mock_patcher.start()
+        try:
+            reason, context = hook.merge_verdict_guard(
+                "git merge --no-ff lane/feat-x", MAIN_CWD
+            )
+            check("merge passes with no-gate verdict", reason is None, reason)
+            check("context confirms passing", context and "passing" in context, context)
+        finally:
+            mock_patcher.stop()
+            hook._current_branch = orig_branch
+    with_orch_verdicts_dir(run)
+
+
+def test_merge_passes_no_bug_ids():
+    """Merge passes when merged branch has no BUG- ids in log."""
+    def run(orch_vd):
+        mock_run = _setup_mock_run(
+            diff_output="crates/foo/src/lib.rs\n",
+            log_output="feat: add X\n\nNo bug ids here.\n",
+        )
+        orig_branch = hook._current_branch
+        hook._current_branch = lambda cwd: "main"
+        mock_patcher = unittest.mock.patch.object(hook.subprocess, 'run', mock_run)
+        mock_patcher.start()
+        try:
+            reason, context = hook.merge_verdict_guard(
+                "git merge --no-ff lane/infra-fix", MAIN_CWD
+            )
+            check("merge passes with no BUG- ids", reason is None, reason)
+            check("context mentions pre-trail", context and "pre-trail" in context, context)
+        finally:
+            mock_patcher.stop()
+            hook._current_branch = orig_branch
+    with_orch_verdicts_dir(run)
+
+
+def test_merge_passes_docs_only():
+    """Docs-only merge passes without verdict check."""
+    def run(orch_vd):
+        mock_run = _setup_mock_run(
+            diff_output="docs/GATE_RUNTIME_DESIGN.md\n",
+            log_output="",  # never reached
+        )
+        orig_branch = hook._current_branch
+        hook._current_branch = lambda cwd: "main"
+        mock_patcher = unittest.mock.patch.object(hook.subprocess, 'run', mock_run)
+        mock_patcher.start()
+        try:
+            reason, context = hook.merge_verdict_guard(
+                "git merge --no-ff lane/doc-fix", MAIN_CWD
+            )
+            check("docs-only merge passes", reason is None, reason)
+            check("context names docs-only", context and "Docs-only" in context, context)
+        finally:
+            mock_patcher.stop()
+            hook._current_branch = orig_branch
+    with_orch_verdicts_dir(run)
+
+
 PIPEY_CMD = "python3 scripts/frob.py | tee /Users/peterkiemann/out.txt"
 
 
@@ -533,6 +706,12 @@ def main():
     test_worktree_add_denied_all_modes()
     test_worktree_add_in_compound_denied()
     test_worktree_read_and_remove_unaffected()
+
+    test_merge_denied_missing_verdict()
+    test_merge_passes_with_gate_verdict()
+    test_merge_passes_with_no_gate_verdict()
+    test_merge_passes_no_bug_ids()
+    test_merge_passes_docs_only()
 
     for name in PASS:
         print(f"PASS: {name}")

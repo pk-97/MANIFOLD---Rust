@@ -370,6 +370,34 @@ fi
 rm -f "$PRE_DISPATCH_JSONL"
 echo ""
 
+# ===== P4: report subcommand smoke test =====
+
+echo "=== P4 report smoke test ==="
+echo ""
+
+# Create a sample verdict so the report has something to count
+echo '{"schema": 1, "task": "BUG-report-test", "phase": "per-lane", "brief": "", "branch": "lane/test", "commit": "abc123", "gates": [{"cmd": "true", "exit": 0, "duration_s": 0.1, "tail": ""}], "scope": {"files_changed": [], "in_scope": true}, "pass": true, "kind": "gate", "reason": null, "runner": "gate_runner.py@lead", "ts": "2026-07-25T12:00:00Z"}' >> "$VERDICTS_DIR/BUG-report-test.jsonl"
+
+echo "--- P4 Test 1: report outputs expected sections ---"
+OUT=$("$GATE_RUNNER" report 2>&1) && RC=$? || RC=$?
+if [ "$RC" -eq 0 ]; then ok "report exit 0"; else fail "report exit $RC (expected 0): $OUT"; fi
+echo "$OUT" | grep -q "Wave report" && ok "report shows Wave report header" || fail "report missing header"
+echo "$OUT" | grep -q "Verdicts:" && ok "report shows Verdicts section" || fail "report missing Verdicts"
+echo "$OUT" | grep -q "Beads closed:" && ok "report shows Beads closed" || fail "report missing Beads closed"
+echo "$OUT" | grep -q "Decisions.md entries:" && ok "report shows Decisions.md entries" || fail "report missing Decisions.md"
+# Should show the sample verdict we created
+echo "$OUT" | grep -q "per-lane" && ok "report lists per-lane phase" || fail "report missing per-lane phase"
+echo ""
+
+echo "--- P4 Test 2: report --since ref works ---"
+OUT=$("$GATE_RUNNER" report --since HEAD 2>&1) && RC=$? || RC=$?
+if [ "$RC" -eq 0 ]; then ok "report --since HEAD exit 0"; else fail "report --since HEAD exit $RC (expected 0): $OUT"; fi
+echo "$OUT" | grep -q "Verdicts:" && ok "report --since shows Verdicts section" || fail "report --since missing Verdicts"
+echo ""
+
+rm -f "$VERDICTS_DIR/BUG-report-test.jsonl"
+echo ""
+
 # ===== Summary =====
 echo "=== Results: $PASSED passed, $FAILED failed ==="
 if [ "$FAILED" -gt 0 ]; then

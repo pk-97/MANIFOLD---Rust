@@ -745,6 +745,179 @@ def cmd_pre_dispatch(args):
     sys.exit(0 if all_pass else 1)
 
 
+# ---------------------------------------------------------------------------
+# Report subcommand (P4 / D7)
+# ---------------------------------------------------------------------------
+
+_DECISIONS_ENTRY_RE = re.compile(r"^- \*\*[A-Z0-9]+-D?\d+[\s\)\*]", re.MULTILINE)
+_DECISIONS_PATH = MAIN_CHECKOUT / ".claude" / "orchestration" / "decisions.md"
+_BEADS_CMD = ["bd", "list", "--status", "closed", "--json", "--flat"]
+
+
+def _resolve_since(since):
+    """Convert --since to a datetime, or None on failure.
+
+    Tries git-ref resolution first (rev-parse), then ISO date parsing."""
+    if not since:
+        return None
+    try:
+        r = subprocess.run(
+            ["git", "-C", str(MAIN_CHECKOUT), "log", "-1", "--format=%cI", since],
+            capture_output=True, text=True, timeout=10,
+        )
+        if r.returncode == 0 and r.stdout.strip():
+            return datetime.fromisoformat(r.stdout.strip())
+    except Exception:
+        pass
+    try:
+        return datetime.fromisoformat(since)
+    except (ValueError, TypeError):
+        die(f"cannot resolve --since={since!r}: not a git ref or ISO date")
+
+
+def _count_verdicts_by_phase(since_dt):
+    """Read all verdicts from the trail and count pass/fail by phase.
+
+    Returns dict: {phase: {"pass": N, "fail": M, "total": T}}."""
+    if not VERDICTS_DIR.is_dir():
+        return {}
+    counts = {}
+    for p in sorted(VERDICTS_DIR.glob("*.jsonl")):
+        with open(p) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    v = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if since_dt:
+                    try:
+                        v_ts = datetime.fromisoformat(v.get("ts", ""))
+                        if v_ts < since_dt:
+                            continue
+                    except (ValueError, TypeError):
+                        pass
+                phase = v.get("phase", "unknown")
+                passed = v.get("pass", False)
+                if phase not in counts:
+                    counts[phase] = {"pass": 0, "fail": 0, "total": 0}
+                counts[phase]["total"] += 1
+                if passed:
+                    counts[phase]["pass"] += 1
+                else:
+                    counts[phase]["fail"] += 1
+    return counts
+
+
+def _count_beads_closed(since_dt):
+    """Count closed beads since the given datetime.
+
+    Returns (count, error_or_None)."""
+    try:
+        r = subprocess.run(_BEADS_CMD, capture_output=True, text=True, timeout=15)
+        if r.returncode != 0:
+            return 0, f"bd exited {r.returncode}"
+        try:
+            beads = json.loads(r.stdout)
+        except json.JSONDecodeError:
+            return 0, "bd output not valid JSON"
+        if since_dt is None:
+            return len(beads), None
+        count = 0
+        for b in beads:
+            ca = b.get("closed_at")
+            if not ca:
+                continue
+            try:
+                closed_dt = datetime.fromisoformat(ca)
+                if closed_dt >= since_dt:
+                    count += 1
+            except (ValueError, TypeError):
+                pass
+        return count, None
+    except Exception as e:
+        return 0, str(e)
+
+
+def _count_decisions_entries(since_dt):
+    """Count decisions.md entries in the main checkout.
+
+    Counts lines matching the entry pattern (^- **<prefix>-<N>**)."""
+    path = _DECISIONS_PATH
+    if not path.exists():
+        return 0, None
+    text = path.read_text()
+    total = len(_DECISIONS_ENTRY_RE.findall(text))
+
+    if since_dt is None:
+        return total, None
+
+    # Count added entries since the ref using git diff
+    try:
+        since_iso = since_dt.strftime("%Y-%m-%dT%H:%M:%S%z")
+        # Use git log to find added entry lines since the ref
+        r = subprocess.run(
+            ["git", "-C", str(MAIN_CHECKOUT), "diff", "--unified=0",
+             f"@{since_iso}", "--",
+             str(_DECISIONS_PATH.relative_to(MAIN_CHECKOUT))],
+            capture_output=True, text=True, timeout=15,
+        )
+        added = 0
+        if r.returncode == 0:
+            for line in r.stdout.split("\n"):
+                if line.startswith("+") and not line.startswith("+++") \
+                        and _DECISIONS_ENTRY_RE.match(line[1:]):
+                    added += 1
+        return added if added else total, None
+    except Exception:
+        return total, None
+
+
+def cmd_report(args):
+    """Print a wave-activity report since the given ref/date.
+
+    Counts trail verdicts, beads closes, and decisions.md entries.
+    Read-only — no verdict appended (D7)."""
+    since_dt = _resolve_since(args.since)
+
+    verdict_counts = _count_verdicts_by_phase(since_dt)
+    n_beads, beads_err = _count_beads_closed(since_dt)
+    n_decisions, dec_err = _count_decisions_entries(since_dt)
+
+    since_str = since_dt.strftime("%Y-%m-%d %H:%M:%S %z") if since_dt else "all time"
+    print(f"=== Wave report since {since_str} ===\n")
+
+    print("Verdicts:")
+    if verdict_counts:
+        print(f"  {'Phase':<20} {'Pass':>6} {'Fail':>6} {'Total':>6}")
+        print(f"  {'-'*20} {'-'*6} {'-'*6} {'-'*6}")
+        total_pass = total_fail = 0
+        for phase in sorted(verdict_counts.keys()):
+            pc = verdict_counts[phase]
+            print(f"  {phase:<20} {pc['pass']:>6} {pc['fail']:>6} {pc['total']:>6}")
+            total_pass += pc["pass"]
+            total_fail += pc["fail"]
+        print(f"  {'-'*20} {'-'*6} {'-'*6} {'-'*6}")
+        print(f"  {'TOTAL':<20} {total_pass:>6} {total_fail:>6} {total_pass + total_fail:>6}")
+    else:
+        print("  (no verdicts)")
+
+    beads_str = str(n_beads)
+    if beads_err:
+        beads_str += f" (error: {beads_err})"
+    print(f"Beads closed: {beads_str}")
+
+    dec_str = str(n_decisions)
+    if dec_err:
+        dec_str += f" (error: {dec_err})"
+    print(f"Decisions.md entries: {dec_str}")
+
+    print()
+    sys.exit(0)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Gate Runtime — verdicts the machine writes",
@@ -775,6 +948,11 @@ def main():
     pd = sub.add_parser("pre-dispatch", help="Run pre-dispatch brief lint (P3)")
     pd.add_argument("--brief", required=True, help="Path to brief markdown file")
     pd.set_defaults(func=cmd_pre_dispatch)
+
+    rp = sub.add_parser("report", help="Wave-activity report (P4 / D7)")
+    rp.add_argument("--since", default=None,
+                    help="Git ref or ISO date to report since (default: all time)")
+    rp.set_defaults(func=cmd_report)
 
     args = parser.parse_args()
     ensure_verdicts_dir()
