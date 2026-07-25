@@ -493,7 +493,7 @@ const SPECKLE_FRAMES: usize = 8;
             visibility gradient, not noise — confirmed via a forced-weight=1 \
             filter test and a 16x SPP test, neither changed the number. See \
             this test's doc comment for the full diagnostic and the re-judge \
-            this needs from Peter/Fable."]
+            this needs a human judgment call."]
 fn rt_still_frame_speckle_variance_exceeds_thresholds() {
     let h = harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
