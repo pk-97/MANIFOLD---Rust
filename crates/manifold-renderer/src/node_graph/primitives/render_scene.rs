@@ -3851,24 +3851,25 @@ impl EffectNode for RenderScene {
             let vsize = std::mem::size_of::<MeshVertex>() as u32;
             let objects: Vec<manifold_gpu::raytrace::RtObjectGeometry> = shadow_caster_draws
                 .iter()
-                .map(|d| manifold_gpu::raytrace::RtObjectGeometry {
-                    vertex_buffer: d.vertices,
-                    vertex_stride: vsize,
-                    vertex_offset: 0,
-                    index_buffer: None,
-                    triangle_count: vcount(d.vertices) / 3,
-                    transform: d.uniforms.model,
-                    // RT-T1-B: `MeshVertex`'s normal field offset (position
-                    // 12 bytes incl. pad + this) — see `mesh_common.rs`'s
-                    // `MeshVertex` layout.
-                    normal_offset: 16,
-                    // RT-T2-A (RAYTRACING_DESIGN.md §8.2 Tier-2 item 4):
-                    // `MeshVertex`'s UV field offset (position 16 + normal
-                    // 16 = 32).
-                    uv_offset: 32,
-                    alpha_mask: d.alpha_mode == AlphaMode::Mask,
-                    alpha_cutoff: d.uniforms.alpha_params[1],
-                    base_color_texture: d.base_color_map,
+                .map(|d| {
+                    if std::env::var_os("MANIFOLD_BUG326_PROBE").is_some() {
+                        eprintln!("BUG326_PROBE: accel_obj buf_size={} vcount={} tri_count={}",
+                            d.vertices.size, vcount(d.vertices), vcount(d.vertices) / 3);
+                    }
+                    let tri_count = vcount(d.vertices) / 3;
+                    manifold_gpu::raytrace::RtObjectGeometry {
+                        vertex_buffer: d.vertices,
+                        vertex_stride: vsize,
+                        vertex_offset: 0,
+                        index_buffer: None,
+                        triangle_count: tri_count,
+                        transform: d.uniforms.model,
+                        normal_offset: 16,
+                        uv_offset: 32,
+                        alpha_mask: d.alpha_mode == AlphaMode::Mask,
+                        alpha_cutoff: d.uniforms.alpha_params[1],
+                        base_color_texture: d.base_color_map,
+                    }
                 })
                 .collect();
 
@@ -4010,12 +4011,12 @@ impl EffectNode for RenderScene {
                             std::slice::from_raw_parts(cnt_ptr.cast::<u32>(), 6)
                         };
                         let total_wp = counters[0].max(1); // avoid div-by-zero
-                        eprintln!("BUG326_PROBE: counters=[{}] valid_wp={} candidates={} ({:.1}%) discards={} ({:.1}%) hits={} ({:.1}%) refl_miss={} refl_hit={}",
+                        eprintln!("BUG326_PROBE: counters=[{}] valid_wp={} candidates={} ({:.1}%) discards={} ({:.1}%) hits={} ({:.1}%) refl_miss={} refl_hit={} shadow_cand={} shadow_disc={} shadow_visible={}",
                             counters.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(","),
                             counters[0], counters[1], 100.0 * counters[1] as f64 / total_wp as f64,
                             counters[2], 100.0 * counters[2] as f64 / total_wp as f64,
                             counters[3], 100.0 * counters[3] as f64 / total_wp as f64,
-                            counters[4], counters[5]);
+                            counters[4], counters[5], counters[6], counters[7], counters[8]);
                     }
                     if let Some(ref buf) = self.bug326_depth_readback {
                         let ptr = buf.mapped_ptr()

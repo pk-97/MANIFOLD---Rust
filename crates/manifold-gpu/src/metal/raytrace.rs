@@ -960,8 +960,15 @@ kernel void trace_shadow_rays(
         r.direction = cone_sample(p.sun_dir, p.sun_cone, rand2(tid, p.frame_index, s));
         intersection_query<triangle_data, instancing> shadow_q;
         shadow_q.reset(r, accel);
-        bool blocked = walk_with_alpha_test(shadow_q, normal_sources, material_textures, true, (thread uint*)0, (thread uint*)0);
+        uint s_candidates = 0;
+        uint s_discards = 0;
+        bool blocked = walk_with_alpha_test(shadow_q, normal_sources, material_textures, true, &s_candidates, &s_discards);
         if (!blocked) vis += 1.0;
+        if (p.debug_counters > 0u && s == 0u) {
+            atomic_fetch_add_explicit(&debug_counters[6], s_candidates, memory_order_relaxed);
+            atomic_fetch_add_explicit(&debug_counters[7], s_discards, memory_order_relaxed);
+            if (!blocked) atomic_fetch_add_explicit(&debug_counters[8], 1u, memory_order_relaxed);
+        }
     }
     vis /= float(spp);
 
