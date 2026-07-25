@@ -1,6 +1,6 @@
 # Gate Runtime — verdicts the machine writes, not claims the lanes make
 
-**Status:** IN PROGRESS — P1–P4 SHIPPED 2026-07-25 (P1 `35364b0a` core; P2 `47bad87b` pre-wave; P3 `2a64247a` linter; P4 `da0085e7` pre-land clause + wave report — I1 verdict coverage is now hook-enforced on merges to main); P5 open · 2026-07-25 · k3 (lead) · approved in discussion same day ("This probably needs a design doc and then we can build it with Flash")
+**Status:** SHIPPED 2026-07-25 (L1) — P1 `35364b0a` core · P2 `47bad87b` pre-wave · P3 `2a64247a` linter · P4 `da0085e7` pre-land clause + report (I1 hook-enforced) · P5 `39a24dab` SubagentStop firing (confidence-gated; live-fire = first executor lane in a new session — payload log at `/tmp/manifold_subagent_stop_payloads.jsonl` is the verification trail) · follow-ups landed same day: worktree anchoring (BUG-luo2), probe-guard deadlock (BUG-jotx), scope fields + report date fix (BUG-aayj) · 2026-07-25 · k3 (lead) · approved in discussion same day ("This probably needs a design doc and then we can build it with Flash")
 **Prerequisites:** none. Self-hosts from P1 onward (P2+ land under their own verdicts).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
