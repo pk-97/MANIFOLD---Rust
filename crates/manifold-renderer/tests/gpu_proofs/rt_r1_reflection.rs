@@ -314,6 +314,67 @@ fn mirror_reflection_of_emissive_quad_appears_only_when_rt_reflections_enabled()
     );
 }
 
+/// Raster-parity reflections gate (§9.6, 2026-07-25): the env-at-hit term
+/// must ADD environment radiance at reflection hits. Same mirror fixture,
+/// reflections ON in both legs; the ONLY difference is the baked env's
+/// intensity (0.0 vs 4.0 — high so the delta swamps the region's partial
+/// mirror coverage). At the mirror probe point the traced hit shading is:
+///   env=0: hit_emissive + sun_bounce                      (pre-parity)
+///   env=4: hit_emissive + sun_bounce
+///          + hit_albedo * env_diffuse + hit_f0 * env_spec (parity term)
+/// so luma(env4) - luma(env0) > 0 iff the term fires. A ~zero delta means
+/// the env-at-hit path is dead (binding/plumbing class). This test is the
+/// black-car bisector: the AMG GT3 stays dark with reflections on even
+/// after the parity build landed (2026-07-25: fraction 0.024 vs baseline
+/// 0.096), so the first question is whether the term fires AT ALL in a
+/// fully-known scene.
+#[test]
+fn raster_parity_env_at_hit_adds_env_term() {
+    let (env0_bytes, w, h) = render_readback(&scene_json_full(true, true, 0.0));
+    let (env4_bytes, _, _) = render_readback(&scene_json_full(true, true, 4.0));
+
+    // Same probe point as the mirror probe above (virtual image of the
+    // emitter across y=0, intersected with the plane).
+    let cam = Camera::orbit_perspective(ORBIT, TILT, DISTANCE, FOV_Y, 0.0, 0.0, NEAR, FAR);
+    let c = cam.pos;
+    let virtual_image = [EMISSIVE_X, -EMISSIVE_Y, EMISSIVE_Z];
+    let t = c[1] / (c[1] - virtual_image[1]);
+    let reflection_world = [
+        c[0] + t * (virtual_image[0] - c[0]),
+        0.0,
+        c[2] + t * (virtual_image[2] - c[2]),
+    ];
+    let rfl_px = cam
+        .project_to_pixel(reflection_world, w, h)
+        .expect("reflection probe point must project in front of the camera");
+
+    const RADIUS: i32 = 7;
+    let luma_env0 = region_luma(&env0_bytes, w, h, rfl_px.px, rfl_px.py, RADIUS);
+    let luma_env4 = region_luma(&env4_bytes, w, h, rfl_px.px, rfl_px.py, RADIUS);
+
+    // Expectation pinned from measured values (lead, 2026-07-25 — see the
+    // eprintln). The floor is deliberately loose: the mirror image covers
+    // the region only partially, so the hit term arrives diluted, and
+    // miss-path pixels in the region legitimately brighten too (both are
+    // the env reaching the substituted value — what this bisector asks).
+    let min_delta = 0.02;
+    eprintln!(
+        "env-at-hit region (pixel ({:.0},{:.0})): env0={luma_env0:.4} env4={luma_env4:.4} \
+         delta={:.4} | min_delta={min_delta}",
+        rfl_px.px,
+        rfl_px.py,
+        luma_env4 - luma_env0,
+    );
+    assert!(
+        luma_env4 - luma_env0 >= min_delta,
+        "env-at-hit term did not fire: luma delta {} < {min_delta} between \
+         env-intensity 4.0 and 0.0 at the reflection region — the parity \
+         env path (hit_diffuse_env / hit_specular_env in the trace kernel) \
+         is not contributing",
+        luma_env4 - luma_env0,
+    );
+}
+
 /// I-R1 — exactly one environment-specular contribution per pixel: with NO
 /// occluder in the scene, every reflection ray misses and the traced value
 /// must equal the raster's own env fetch (RD4's miss branch) — so
