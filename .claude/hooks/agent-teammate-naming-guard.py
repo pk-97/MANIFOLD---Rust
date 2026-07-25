@@ -10,7 +10,7 @@ opaque task labels (T1, D-52) were already a standing Peter rule
 
 The convention (mirrors the model slot map, docs/AGENT_ROUTING.md):
   name = "<slot>-<descriptive-task>"
-  slot <- model arg:  haiku->flash  sonnet->glm47  opus->glm52  fable->k3
+  slot <- model arg:  haiku->flash  sonnet->flash  opus->glm52  fable->k3
   kebab-case; the task part must be descriptive — at least two alphabetic
   words; opaque label segments (T1, D52, W3, P2-G style) are denied.
 
@@ -37,7 +37,7 @@ import sys
 
 SLOT_FOR_MODEL = {
     "haiku": "flash",
-    "sonnet": "glm47",
+    "sonnet": "flash",  # sonnet slot repointed to deepseek-v4-flash 2026-07-25 (classifier speed + GLM-outage resilience; GLM-4.7 mid tier retired as a slot)
     "opus": "glm52",
     "fable": "k3",
 }
@@ -99,7 +99,7 @@ def main() -> None:
         if slot not in VALID_SLOTS:
             deny(
                 f"Teammate name '{name}' must start with its model slot: "
-                f"one of {', '.join(VALID_SLOTS)}- (haiku->flash, sonnet->glm47, "
+                f"one of {', '.join(VALID_SLOTS)}- (haiku->flash, sonnet->flash, "
                 f"opus->glm52, fable->k3). Rename, e.g. "
                 f"'{expected_slot or 'flash'}-{name}'."
             )

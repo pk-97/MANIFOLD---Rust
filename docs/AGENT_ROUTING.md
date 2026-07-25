@@ -49,7 +49,7 @@ Everything below is proven doctrine under the old roster. Read it as seat descri
 |---|---|---|
 | `"fable"` | Kimi K3 | judgment lane (rare — lead-tier work the lead delegates whole) |
 | `"opus"` | GLM-5.2 | dispatcher seat for multi-stage waves |
-| `"sonnet"` | GLM-4.7 | mid lane (capable single-stage work) |
+| `"sonnet"` | DeepSeek V4 Flash | second Flash slot — and the harness auto-mode permission classifier runs on this slot (repointed from GLM-4.7 on 2026-07-25: classifier speed + GLM-outage resilience; GLM-4.7 mid tier retired as a slot, GLM-5.2 keeps the judgment/consult role. Peter evaluating Alibaba Cloud sub to replace GLM entirely) |
 | `"haiku"` | DeepSeek V4 Flash | mechanical executor — the bulk tier |
 
 Quota caution: TOKEN_ECONOMICS §12 rated GLM-5.2 off-peak-A/B on the z.ai plan; Peter's slot-map decision puts it on the dispatcher slot anyway — if plan-window pressure shows up, the dispatcher slot is the first place to look.
