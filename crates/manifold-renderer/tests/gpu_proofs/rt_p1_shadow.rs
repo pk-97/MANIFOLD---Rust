@@ -217,8 +217,7 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         IDENTITY,
         0,           // refl_spp — 0, reflections skipped in this fixture
         0.6,         // refl_max_roughness — RT_REFLECTION_MAX_ROUGHNESS
-        0.1,         // refl_rough_band
-        0,           // debug_counters
+        0.1,         // refl_rough_band — blend band width
     );
     let params_buffer = device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
     // RT-P3: unread by this proof (gi_spp == 0 above), same ABI-stub
@@ -229,8 +228,6 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
     // same ABI-stub discipline as `gi_materials_buffer`.
     let normal_sources_buffer =
         device.create_buffer_shared(std::mem::size_of::<manifold_gpu::raytrace::RtNormalSource>() as u64);
-    // BUG-326 probe: stub counter buffer (64 bytes, never gated on env var in tests).
-    let _counter_stub = device.create_buffer_shared(64);
 
     let mut encoder = device.create_encoder("rt-p1-shadow-proof");
     tracer.dispatch_shadow_rays(
@@ -247,7 +244,6 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         &out_n,
         &out_refl,
         &prefiltered_env,
-        &_counter_stub,
         "trace_shadow_rays-proof",
     );
     encoder.commit_and_wait_completed();
@@ -433,8 +429,7 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
         IDENTITY,
         0,           // refl_spp — 0, reflections skipped in this fixture
         0.6,         // refl_max_roughness — RT_REFLECTION_MAX_ROUGHNESS
-        0.1,         // refl_rough_band
-        0,           // debug_counters
+        0.1,         // refl_rough_band — blend band width
     );
     let params_buffer = device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
     // RT-P3: unread by this proof (gi_spp == 0 above), same ABI-stub
@@ -445,8 +440,6 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
     // same ABI-stub discipline as `gi_materials_buffer`.
     let normal_sources_buffer =
         device.create_buffer_shared(std::mem::size_of::<manifold_gpu::raytrace::RtNormalSource>() as u64);
-    // BUG-326 probe: stub counter buffer (64 bytes, never gated on env var in tests).
-    let counter_stub_2 = device.create_buffer_shared(64);
 
     let mut encoder = device.create_encoder("rt-p1-2blas-shadow-proof");
     tracer.dispatch_shadow_rays(
@@ -463,7 +456,6 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
         &out_n,
         &out_refl,
         &prefiltered_env,
-        &counter_stub_2,
         "trace_shadow_rays-2blas-proof",
     );
     encoder.commit_and_wait_completed();
