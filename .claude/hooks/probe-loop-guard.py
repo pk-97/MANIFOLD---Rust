@@ -53,6 +53,11 @@ def main() -> None:
             return
 
         cp = counter_path(session)
+        # Anchor the reset check BEFORE rewriting the counter: the review must
+        # be newer than the last probe action, not newer than right now
+        # (rewriting first made the window ~1s — physically unmeetable, the
+        # 2026-07-25 deadlock).
+        prev_mtime = os.path.getmtime(cp) if os.path.exists(cp) else 0.0
         state = {"count": 0}
         if os.path.exists(cp):
             try:
@@ -63,10 +68,10 @@ def main() -> None:
         json.dump(state, open(cp, "w"))
         n = state["count"]
 
-        # The written review resets the loop (and is newer than the counter).
+        # The written review resets the loop (newer than the previous action).
         if os.path.exists(REVIEW_FILE):
             try:
-                if os.path.getsize(REVIEW_FILE) >= 200 and os.path.getmtime(REVIEW_FILE) > os.path.getmtime(cp) - 1:
+                if os.path.getsize(REVIEW_FILE) >= 200 and os.path.getmtime(REVIEW_FILE) > prev_mtime:
                     os.remove(cp)
                     return
             except Exception:
