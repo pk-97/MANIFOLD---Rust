@@ -25,6 +25,7 @@ Verdict schema v1 (D5):
 """
 
 import argparse
+import importlib.util
 import json
 import os
 import re
@@ -41,12 +42,23 @@ GATE_TIMEOUT_S = 300
 TAIL_LINES = 20
 
 REPO = Path(__file__).resolve().parent.parent
-VERDICTS_DIR = REPO / ".claude" / "orchestration" / "verdicts"
+VERDICTS_DIR = Path(
+    os.environ.get("GATE_RUNNER_VERDICTS_DIR")
+    or REPO / ".claude" / "orchestration" / "verdicts"
+)
 
 # Pre-wave checks: the main checkout is the canonical repo root
 # (worktrees are isolated but goldens/wave-base checks need the main checkout).
 MAIN_CHECKOUT = Path("/Users/peterkiemann/MANIFOLD - Rust")
 DEFAULT_LITELLM_URL = "http://127.0.0.1:4000/health/liveliness"
+
+# Load slot-to-model mapping from the naming guard (single source of truth)
+_GUARD_PATH = REPO / ".claude" / "hooks" / "agent-teammate-naming-guard.py"
+_guard_spec = importlib.util.spec_from_file_location("_naming_guard", str(_GUARD_PATH))
+_guard_mod = importlib.util.module_from_spec(_guard_spec)
+_guard_spec.loader.exec_module(_guard_mod)
+SLOT_FOR_MODEL = _guard_mod.SLOT_FOR_MODEL
+VALID_SLOTS = sorted(set(SLOT_FOR_MODEL.values()))
 
 SECTION_LABEL = re.compile(r"^\s*-?\s*\*\*[A-Z][A-Za-z/-]+\**\s*:")
 GATE_HEADING = re.compile(r"^\s*-?\s*\*{0,2}Gate\*{0,2}\s*:")
@@ -162,7 +174,8 @@ def extract_gates(brief_path):
     """Extract gate commands from a markdown brief's Gate section (I3).
 
     Finds **Gate:** or - **Gate:** marker, then collects from the section
-    body: backtick-quoted inline commands and indented code-block lines.
+    body: backtick-quoted inline commands, indented code-block lines, and
+    triple-backtick fenced code blocks (BUG-aayj item 2).
 
     Returns a list of command strings (deduplicated, order-preserved).
     """
@@ -187,16 +200,30 @@ def extract_gates(brief_path):
     body = "\n".join(body_lines)
     commands = []
 
-    for m in re.finditer(r"`([^`]+)`", body):
+    # Backtick-quoted inline commands (newline-delimited: triple-backtick
+    # fenced blocks are handled separately; this pattern must not match
+    # across lines to avoid capturing fence body as inline code).
+    for m in re.finditer(r"`([^`\n]+)`", body):
         cmd = m.group(1).strip()
         if cmd:
             commands.append(cmd)
 
+    # Indented code blocks (4+ spaces or tab)
     for line in body_lines:
         if re.match(r"^ {4,}", line) or line.startswith("\t"):
             cmd = line.strip()
             if cmd:
                 commands.append(cmd)
+
+    # Fenced code blocks (triple backticks)
+    in_fence = False
+    for line in body_lines:
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence and stripped:
+            commands.append(stripped)
 
     seen = set()
     unique = []
@@ -543,6 +570,181 @@ def cmd_pre_wave(args):
     sys.exit(0 if all_pass else 1)
 
 
+# ---------------------------------------------------------------------------
+# Pre-dispatch checks (P3)
+# ---------------------------------------------------------------------------
+
+ANCHOR_RE = re.compile(r"([\w./-]+\.[a-zA-Z]+):(\d+)")
+SLOT_SCAN_RE = re.compile(r"\b(flash|glm47|glm52|k3|pro)-")
+
+
+def _check_anchors(text, repo_root, brief_dir):
+    """Check a: every file:line anchor resolves (file exists, line in range).
+
+    `file (symbol)` form is allowed to pass unchecked.
+    Returns (exit_code, detail).
+    """
+    fails = []
+    for m in ANCHOR_RE.finditer(text):
+        path_str, line_str = m.group(1), m.group(2)
+        line_num = int(line_str)
+
+        # Skip URL-looking things
+        if path_str.startswith(("http://", "https://", "ftp://")):
+            continue
+
+        found = False
+        for base in [repo_root, brief_dir]:
+            candidate = base / path_str
+            try:
+                if candidate.is_file():
+                    file_line_count = len(candidate.read_text().splitlines())
+                    if 1 <= line_num <= file_line_count:
+                        found = True
+                        break
+                    else:
+                        fails.append(
+                            f"{path_str}:{line_num} (line {line_num} out of range, "
+                            f"file has {file_line_count} lines)"
+                        )
+                        found = True  # file found but line bad
+                        break
+            except Exception:
+                pass
+
+        if not found:
+            fails.append(f"{path_str}:{line_num} (file not found)")
+
+    for f in fails:
+        print(f"  [FAIL] anchor: {f}")
+    if not fails:
+        print("  [PASS] anchors — all file:line references resolve")
+    return (1 if fails else 0, "; ".join(fails) if fails else "all resolve")
+
+
+def _check_gates_parse(brief_path):
+    """Check b: gate commands from the brief shell-parse (bash -n).
+
+    I3: a brief with no Gate section FAILs. Fenced blocks supported.
+    Returns (exit_code, detail).
+    """
+    gates = extract_gates(str(brief_path))
+    if not gates:
+        print("  [FAIL] gates — no Gate section found in brief (I3)")
+        return (1, "no Gate section (I3)")
+
+    parse_fails = []
+    for cmd in gates:
+        r = subprocess.run(
+            ["bash", "-n"], input=cmd,
+            capture_output=True, text=True, timeout=5,
+        )
+        if r.returncode != 0:
+            stderr = r.stderr.strip()
+            parse_fails.append(f"command {cmd!r}: {stderr}")
+
+    if parse_fails:
+        for f in parse_fails:
+            print(f"  [FAIL] gate parse: {f}")
+        return (1, "; ".join(parse_fails[:5]))
+    else:
+        plural = "s" if len(gates) != 1 else ""
+        print(f"  [PASS] gates — {len(gates)} gate{plural} shell-parse successfully")
+        return (0, f"{len(gates)} gates parse")
+
+
+def _check_slots(text):
+    """Check c: every named lane slot prefix is a valid SLOT_FOR_MODEL value.
+
+    Scans for tokens matching slot-prefix pattern, validates each against
+    VALID_SLOTS (from agent-teammate-naming-guard.py).
+    Returns (exit_code, detail).
+    """
+    fails = []
+    for m in SLOT_SCAN_RE.finditer(text):
+        slot = m.group(1)
+        if slot not in VALID_SLOTS:
+            fails.append(
+                f"slot {slot!r} (from {m.group(0)!r}) is not in "
+                f"VALID_SLOTS={VALID_SLOTS}"
+            )
+
+    if fails:
+        for f in fails:
+            print(f"  [FAIL] slot: {f}")
+        return (1, "; ".join(fails))
+    else:
+        print("  [PASS] slots — all lane slot names are valid")
+        return (0, "all slots valid")
+
+
+def _check_bead(text):
+    """Check d: brief must contain a task id matching BUG-\\w+."""
+    m = re.search(r"BUG-\w+", text)
+    if m:
+        print(f"  [PASS] bead — task ID {m.group(0)!r} found")
+        return (0, f"bug id {m.group(0)} present")
+    else:
+        print("  [FAIL] bead — no BUG-... task ID in brief")
+        return (1, "missing bug id")
+
+
+def cmd_pre_dispatch(args):
+    """Run the four P3 pre-dispatch brief lint checks.
+
+    Appends one schema-1 verdict to pre-dispatch.jsonl. Exits 0 iff no FAIL.
+    """
+    brief_path = Path(args.brief)
+    if not brief_path.exists():
+        die(f"brief not found: {brief_path}")
+
+    text = brief_path.read_text()
+    repo_root = Path(__file__).resolve().parent.parent
+    brief_dir = brief_path.resolve().parent
+
+    checks = [
+        ("anchors", *_check_anchors(text, repo_root, brief_dir)),
+        ("gates_parse", *_check_gates_parse(brief_path)),
+        ("slots", *_check_slots(text)),
+        ("bead", *_check_bead(text)),
+    ]
+
+    verdict_gates = [
+        {"cmd": f"{name} check", "exit": exit_code, "duration_s": 0.0, "tail": detail}
+        for name, exit_code, detail in checks
+    ]
+    all_pass = all(exit_code == 0 for _, exit_code, _ in checks)
+
+    bead_match = re.search(r"BUG-\w+", text)
+    task_id = bead_match.group(0) if bead_match else "pre-dispatch"
+
+    verdict = {
+        "schema": SCHEMA_VERSION,
+        "task": task_id,
+        "phase": "pre-dispatch",
+        "brief": str(brief_path),
+        "branch": "unknown",
+        "commit": None,
+        "gates": verdict_gates,
+        "scope": {"files_changed": [], "in_scope": True},
+        "pass": all_pass,
+        "kind": "gate",
+        "reason": None,
+        "runner": "gate_runner.py@lint",
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }
+
+    ensure_verdicts_dir()
+    verdict_path = VERDICTS_DIR / "pre-dispatch.jsonl"
+    with open(verdict_path, "a") as f:
+        f.write(json.dumps(verdict, sort_keys=True) + "\n")
+
+    n_passed = sum(1 for _, ec, _ in checks if ec == 0)
+    total = len(checks)
+    print(f"\npre-dispatch lint: {n_passed}/{total} checks passed")
+    sys.exit(0 if all_pass else 1)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Gate Runtime — verdicts the machine writes",
@@ -569,6 +771,10 @@ def main():
     pw.add_argument("--litellm-url", default=None, help="Override litellm health URL (default: env LITELLM_URL or built-in)")
     pw.add_argument("--base", default=None, help="Wave base SHA to verify is ancestor of origin/main")
     pw.set_defaults(func=cmd_pre_wave)
+
+    pd = sub.add_parser("pre-dispatch", help="Run pre-dispatch brief lint (P3)")
+    pd.add_argument("--brief", required=True, help="Path to brief markdown file")
+    pd.set_defaults(func=cmd_pre_dispatch)
 
     args = parser.parse_args()
     ensure_verdicts_dir()
