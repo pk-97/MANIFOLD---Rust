@@ -257,6 +257,41 @@ def run_gate(cmd, timeout=GATE_TIMEOUT_S):
         return -2, str(e), round(duration, 1)
 
 
+def scope_from_git(commit, brief_text):
+    """Populate verdict scope from the real diff (BUG-aayj).
+
+    files_changed = git diff --name-only merge-base(origin/main, commit)..commit.
+    in_scope: every changed file path must appear in the brief text; a brief
+    naming no repo paths has nothing to check against (in_scope=True). Any
+    git failure = empty scope, never a crash (scope is evidence, not a gate).
+    """
+    empty = {"files_changed": [], "in_scope": True}
+    if not commit:
+        return empty
+    try:
+        mb = subprocess.run(
+            ["git", "merge-base", "origin/main", commit],
+            capture_output=True, text=True, timeout=15, cwd=str(REPO),
+        )
+        if mb.returncode != 0:
+            return empty
+        base = mb.stdout.strip()
+        d = subprocess.run(
+            ["git", "diff", "--name-only", f"{base}..{commit}"],
+            capture_output=True, text=True, timeout=15, cwd=str(REPO),
+        )
+        if d.returncode != 0:
+            return empty
+        changed = [l.strip() for l in d.stdout.splitlines() if l.strip()]
+        named_paths = re.findall(r"[\w.-]+(?:/[\w.-]+)+", brief_text)
+        if not named_paths:
+            return {"files_changed": changed, "in_scope": True}
+        in_scope = all(any(f in n or n in f for n in named_paths) for f in changed)
+        return {"files_changed": changed, "in_scope": in_scope}
+    except Exception:
+        return empty
+
+
 def cmd_per_lane(args):
     """Run gate commands from the brief and append a per-lane verdict."""
     brief_path = Path(args.brief)
@@ -281,6 +316,10 @@ def cmd_per_lane(args):
             "tail": tail,
         })
 
+    # Scope is evidence for the reviewer (SCOPE_CHECK is the dispatcher's
+    # opcode, IR §2), never a pass/fail input here.
+    scope = scope_from_git(args.commit, brief_path.read_text())
+
     verdict = {
         "schema": SCHEMA_VERSION,
         "task": args.task,
@@ -289,7 +328,7 @@ def cmd_per_lane(args):
         "branch": args.branch or "unknown",
         "commit": args.commit or None,
         "gates": results,
-        "scope": {"files_changed": [], "in_scope": True},
+        "scope": scope,
         "pass": all_pass,
         "kind": "gate",
         "reason": None,
@@ -831,10 +870,11 @@ def _count_beads_closed(since_dt):
             if not ca:
                 continue
             try:
-                closed_dt = datetime.fromisoformat(ca)
+                closed_dt = datetime.fromisoformat(
+                    ca.replace("Z", "+00:00")).replace(tzinfo=None)
                 if closed_dt >= since_dt:
                     count += 1
-            except (ValueError, TypeError):
+            except (ValueError, TypeError, AttributeError):
                 pass
         return count, None
     except Exception as e:

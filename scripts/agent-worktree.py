@@ -59,7 +59,21 @@ import sys
 import time
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent.parent
+def _main_checkout():
+    """Anchor to the MAIN checkout even when this script's copy runs inside a
+    worktree — __file__-relative anchoring made a nested pool under the
+    caller's worktree (BUG-luo2, 2026-07-25: slot-6/.claude/worktrees/slot-0).
+    --git-common-dir points at the main repo's .git from any worktree."""
+    out = subprocess.run(
+        ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+        capture_output=True, text=True, cwd=Path(__file__).parent,
+    )
+    if out.returncode != 0:
+        sys.exit(f"agent-worktree: cannot resolve main checkout: " + out.stderr)
+    return Path(out.stdout.strip()).parent
+
+
+REPO = _main_checkout()
 POOL = REPO / ".claude" / "worktrees"
 LEASE_NAME = ".worktree-lease.json"  # gitignored; mtime is the staleness clock
 LEASE_TTL_HOURS = 8
@@ -213,6 +227,30 @@ def ensure_spotlight_exclusion():
         marker.write_text("")
 
 
+def slot_has_live_session(wt):
+    """True if any claude/shell process has its cwd inside this slot.
+
+    The ring's idle test (clean + landed + lease-free) can't see a session
+    that inherited its worktree outside the ring — reusing such a slot
+    branch-switches a live session (BUG-luo2: the lead's own slot-6 was
+    handed to a lane mid-session 2026-07-25). Best-effort: any error = not
+    live (fail open; the lease remains the primary mechanism)."""
+    try:
+        ps = subprocess.run(["ps", "-axo", "pid=,comm="],
+                            capture_output=True, text=True, timeout=10)
+        pids = [ln.split(None, 1)[0] for ln in ps.stdout.splitlines()
+                if any(k in ln for k in ("claude", "zsh", "bash", "tmux"))]
+        for pid in pids:
+            lsof = subprocess.run(["lsof", "-a", "-p", pid, "-d", "cwd", "-Fn"],
+                                  capture_output=True, text=True, timeout=5)
+            for line in lsof.stdout.splitlines():
+                if line.startswith("n") and str(wt) in line[1:]:
+                    return True
+    except Exception:
+        pass
+    return False
+
+
 def cmd_acquire(args):
     ensure_spotlight_exclusion()
     git(REPO, "fetch", "origin", "main")
@@ -220,6 +258,13 @@ def cmd_acquire(args):
     slots = pool_slots()
 
     idle = [wt for wt in slots if idle_state(wt)[0]]
+    live = [wt for wt in idle if slot_has_live_session(wt)]
+    if live:
+        idle = [wt for wt in idle if wt not in live]
+        for wt in live:
+            print(f"SKIP {wt.name}: a live session is cd'd inside it "
+                  "(reusing it would switch that session's branch mid-flight — "
+                  "BUG-luo2)", file=sys.stderr)
     if idle:
         wt = max(idle, key=target_bytes)  # warmest target = best build reuse
         enforce_target_cap(wt)
