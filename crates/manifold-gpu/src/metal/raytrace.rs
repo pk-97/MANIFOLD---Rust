@@ -920,8 +920,8 @@ kernel void trace_shadow_rays(
     ray r;
     r.origin = origin;
     // t_min: reject any hit closer than the bias itself outright — the
-    // in-kernel self-intersection filter (Fable's brief's "often the
-    // cleanest fix") on top of the scale-aware origin offset above, so a
+    // in-kernel self-intersection filter (described as "often the
+    // cleanest fix" for this class of issue) on top of the scale-aware origin offset above, so a
     // pathological normal/winding case that still lands inside its own
     // triangle can't register as a false shadow.
     r.min_distance = bias_eps * 0.5;

@@ -1,4 +1,4 @@
-// RT P0 prototype — lighting trace kernels. Fable-authored core; harness must
+// RT P0 prototype — lighting trace kernels. Harness must
 // match the binding tables in BRIEF.md exactly. Not product code.
 #include <metal_stdlib>
 #include <metal_raytracing>
