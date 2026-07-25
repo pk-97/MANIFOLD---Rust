@@ -210,6 +210,12 @@ The standard requires each design to forbid its tempting wrong architecture *by 
    here, and most generalize beyond their original incident.
 4. **Check what bit last time.** If this design resembles a past migration or feature
    wave, its incident reports name the failure mode that recurs.
+5. **Ask what arrives late — and whether your invalidation key names it.** Any async
+   producer (loader, decoder, network, GPU staging) can deliver content after the
+   consumer's one-shot derivation has run. If the consumer caches on a key, the key
+   must hash a signal that flips when the late content lands, or the derivation must
+   re-run once at first-ready. A key over size/transform is blind to content arrival
+   (BUG-326: BLAS built over pre-load zero buffers, never rebuilt).
 
 The tell that you've found the right one: **it's the thing you yourself were tempted
 to do in §4 before the kill-pass.** Your own first instinct is the best predictor of
@@ -323,7 +329,13 @@ Opus inherits — bug hunts and complex tasks run the same skeleton, cheaper:
   actually do, what did it do when it last worked (`git log -S` is a debugger).
   Then name the level the cause lives at — symptom, mechanism, or design — and fix
   at that level. Kill-pass the diagnosis before fixing: what *else* would produce
-  exactly these symptoms? Gate = the repro passes and a regression test pins it.
+  exactly these symptoms? Read debug values through a RAW oracle, never through the
+  shading pipeline — a shaded probe answer is the pipeline's interpretation of the
+  value, and the pipeline is the suspect (BUG-326: v0=(0,0,0) read as "sane" for
+  weeks because it was observed through lit output). Gate = the repro passes and a
+  regression test pins it — and the gate MUST fail on pre-fix code; a gate that
+  never saw red proves nothing (if the harness can't reproduce the race, say so in
+  the test and assert the structural invariant instead of moving the threshold).
   The honest-edges sections of the authoritative maps (CORE_ENGINE_MAP §13) are
   pre-computed hunt lenses; start there.
 - **Complex tasks**: same intake (name the binding constraint first), same finish
