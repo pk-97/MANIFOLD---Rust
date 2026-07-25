@@ -831,10 +831,11 @@ def _count_beads_closed(since_dt):
             if not ca:
                 continue
             try:
-                closed_dt = datetime.fromisoformat(ca)
+                closed_dt = datetime.fromisoformat(
+                    ca.replace("Z", "+00:00")).replace(tzinfo=None)
                 if closed_dt >= since_dt:
                     count += 1
-            except (ValueError, TypeError):
+            except (ValueError, TypeError, AttributeError):
                 pass
         return count, None
     except Exception as e:
