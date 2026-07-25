@@ -2258,34 +2258,38 @@ impl MetalShadowRayTracer {
                 )
             });
 
+        // Raster-parity reflections: the material-texture table is
+        // MAX_RT_MATERIAL_TEXTURES wide, so the slot list is built, not a
+        // literal — the R1 incident below happened TWICE (T3's original
+        // miss, then the 64-wide table move left out_refl/prefiltered_env
+        // at the OLD indices 8/9 while the MSL moved to 68/69 — writes went
+        // to a dummy, the mirror probe read zeros). Computed from the cap
+        // so a future cap change can't strand them again.
+        let mut trace_slots: Vec<(u32, SlotKind)> = vec![
+            (1, SlotKind::Buffer),
+            (2, SlotKind::Buffer), // RT-P3: gi_materials, MSL [[buffer(2)]]
+            (3, SlotKind::Buffer), // RT-T1-B: normal_sources, MSL [[buffer(3)]]
+            (0, SlotKind::Texture),
+            (1, SlotKind::Texture),
+            (2, SlotKind::Texture),
+            (3, SlotKind::Texture), // RT-T1-C: out_n, MSL [[texture(3)]]
+        ];
+        // material_textures[MAX_RT_MATERIAL_TEXTURES], MSL [[texture(4)]] —
+        // occupies MAX_RT_MATERIAL_TEXTURES consecutive slots starting at 4.
+        trace_slots.extend((4..4 + MAX_RT_MATERIAL_TEXTURES as u32).map(|i| (i, SlotKind::Texture)));
+        // RT-R1 (§9.3): out_refl, MSL [[texture(68)]]. MISSED by the
+        // T3 plumbing (slot maps weren't extended with the kernel
+        // signatures) — the reflection block's writes went nowhere
+        // and the chain read zeros; caught by the R1 mirror probe.
+        trace_slots.push((4 + MAX_RT_MATERIAL_TEXTURES as u32, SlotKind::Texture));
+        // RT-R1: prefiltered_env, MSL [[texture(69)]] — miss-branch
+        // radiance source.
+        trace_slots.push((5 + MAX_RT_MATERIAL_TEXTURES as u32, SlotKind::Texture));
         let trace_pipeline = compile_pipeline(
             device,
             &library,
             "trace_shadow_rays",
-            identity_slot_map(&[
-                (1, SlotKind::Buffer),
-                (2, SlotKind::Buffer), // RT-P3: gi_materials, MSL [[buffer(2)]]
-                (3, SlotKind::Buffer), // RT-T1-B: normal_sources, MSL [[buffer(3)]]
-                (0, SlotKind::Texture),
-                (1, SlotKind::Texture),
-                (2, SlotKind::Texture),
-                (3, SlotKind::Texture), // RT-T1-C: out_n, MSL [[texture(3)]]
-                // RT-T2-A: alpha_textures[MAX_RT_ALPHA_TEXTURES], MSL
-                // [[texture(4)]] — occupies MAX_RT_ALPHA_TEXTURES
-                // consecutive argument-table slots starting at 4.
-                (4, SlotKind::Texture),
-                (5, SlotKind::Texture),
-                (6, SlotKind::Texture),
-                (7, SlotKind::Texture),
-                // RT-R1 (§9.3): out_refl, MSL [[texture(8)]]. MISSED by the
-                // T3 plumbing (slot maps weren't extended with the kernel
-                // signatures) — the reflection block's writes went nowhere
-                // and the chain read zeros; caught by the R1 mirror probe.
-                (8, SlotKind::Texture),
-                // RT-R1: prefiltered_env, MSL [[texture(9)]] — miss-branch
-                // radiance source.
-                (9, SlotKind::Texture),
-            ]),
+            identity_slot_map(&trace_slots),
         );
         let upsample_pipeline = compile_pipeline(
             device,
@@ -2513,15 +2517,16 @@ impl ShadowRayTracer for MetalShadowRayTracer {
             });
         }
         // RT-R1 (§9.3): out_refl at [[texture(68)]] — free (material_textures
-        // occupy 4..68, i.e. 4 + 64).
+        // occupy 4..68, i.e. 4 + 64). Computed from the cap (see the slot-map
+        // note in `new` — hard-coded 8/9 here was the second slot-map miss).
         bindings.push(GpuBinding::Texture {
-            binding: 8,
+            binding: 4 + MAX_RT_MATERIAL_TEXTURES as u32,
             texture: out_refl,
         });
-        // RT-R1 (§9.3 RD4): prefiltered env chain at [[texture(9)]] — the
+        // RT-R1 (§9.3 RD4): prefiltered env chain at [[texture(69)]] — the
         // reflection miss branch's radiance source.
         bindings.push(GpuBinding::Texture {
-            binding: 9,
+            binding: 5 + MAX_RT_MATERIAL_TEXTURES as u32,
             texture: prefiltered_env,
         });
         encoder.dispatch_compute_with_accel(&self.trace_pipeline, 0, accel, &bindings, groups, label);
