@@ -29,11 +29,14 @@
 //! and callers who know their scene is meant to be dark opt out explicitly.
 //!
 //! ANIMATION MODE (`--anim-param`): temporal repro of RT/reflection artifacts
-//! in one process by rendering a param-interpolated frame sequence. Warmup
-//! converges first at the start value, then N consecutive frames render with
-//! the param advancing linearly to end. Frames are tiled horizontally into
-//! one PNG. Temporal continuity (frame count never resets) exercises
-//! acceleration structure refit paths that separate invocations miss.
+//! in one process by rendering a param-interpolated frame sequence. Accepts
+//! either a specific param ID (e.g. `13_rot_y`) or ONE wildcard form — an ID
+//! starting with `*` (e.g. `*_rot_y`) matches EVERY numeric card param whose ID
+//! ends with that suffix. Wildcard mode sweeps ALL matched params together,
+//! which is how model-transform changes exercise the acceleration structure
+//! refit path (camera motion does not). Warmup converges first at the start
+//! value(s), then N consecutive frames render with the param(s) advancing linearly
+//! to end. Frames are tiled horizontally into one PNG.
 //!
 //! Exit codes: 0 = PNG written after convergence; 2 = never converged
 //! (prints the last non-black fraction); 3 = import error (parse/build
@@ -316,6 +319,14 @@ fn main() {
         }
     };
 
+    // Check for wildcard mode (ID starts with '*').
+    let is_wildcard = anim_param_id.starts_with('*');
+    let anim_suffix = if is_wildcard {
+        anim_param_id.strip_prefix('*').unwrap_or(&anim_param_id)
+    } else {
+        &anim_param_id
+    };
+
     // Animation mode: warmup convergence first at anim start value.
     // Resolve overrides ONCE into base params, then clone per frame.
     let base_params: Vec<Param> = def_clone
@@ -341,15 +352,35 @@ fn main() {
         runtime.apply_string_params(Some(&string_overrides));
     }
 
-    // Clone base params, set anim param to start value, rebuild manifest for warmup.
+    // Resolve wildcard matches ONCE.
+    let anim_param_ids: Vec<String> = if is_wildcard {
+        let suffix = anim_suffix;
+        base_params
+            .iter()
+            .filter(|p| p.id().ends_with(suffix))
+            .map(|p| p.id().to_string())
+            .collect()
+    } else {
+        vec![anim_param_id.clone()]
+    };
+
+    if anim_param_ids.is_empty() {
+        eprintln!("error: wildcard '{}' matched zero params", anim_param_id);
+        std::process::exit(2);
+    }
+    println!("anim: wildcard '{}' matched {} param(s)", anim_param_id, anim_param_ids.len());
+
+    // Clone base params, set anim param(s) to start value, rebuild manifest for warmup.
     let mut warmup_params = base_params.clone();
     for (id, v) in &args.overrides {
         if !string_param_ids.contains(id) && let Some(p) = warmup_params.iter_mut().find(|p| p.id() == id) {
             p.value = v.parse().unwrap_or_else(|e| panic!("bad value for numeric param '{id}': {e}"));
         }
     }
-    if let Some(p) = warmup_params.iter_mut().find(|p| p.id() == anim_param_id) {
-        p.value = anim_start;
+    for id in &anim_param_ids {
+        if let Some(p) = warmup_params.iter_mut().find(|p| p.id() == id) {
+            p.value = anim_start;
+        }
     }
 
     let warmup_manifest = ParamManifest::from_params(warmup_params);
@@ -370,10 +401,12 @@ fn main() {
         let param_value = anim_start + (anim_end - anim_start) * (i as f32) / (anim_frames as f32 - 1.0).max(1.0);
         let frame_count = (warmup_end_frame + i) as i64;
 
-        // Clone base params (already has user overrides), set anim param value.
+        // Clone base params (already has user overrides), set anim param(s) value.
         let mut seq_params = base_params.clone();
-        if let Some(p) = seq_params.iter_mut().find(|p| p.id() == anim_param_id) {
-            p.value = param_value;
+        for id in &anim_param_ids {
+            if let Some(p) = seq_params.iter_mut().find(|p| p.id() == id) {
+                p.value = param_value;
+            }
         }
 
         let seq_manifest = ParamManifest::from_params(seq_params);
