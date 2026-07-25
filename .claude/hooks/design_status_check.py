@@ -121,30 +121,7 @@ def main() -> int:
               "update the doc's **Status line IN A WORKTREE and land as a follow-up "
               "merge (main edits are guard-denied).\n", file=sys.stderr)
 
-    bug_backlog_check()
     return 0
-
-
-def bug_backlog_check() -> None:
-    """Same honesty check for the bug tracker: the ``**Status:`` line is the truth, and a
-    bug whose named fix-design has SHIPPED (the hole that let BUG-058/059 sit 'open' after
-    DRAG_CAPTURE shipped) or that's filed under the wrong section gets a nudge. Print-only,
-    whole-file — stays quiet while the backlog is clean. Run: bug_status.py --check."""
-    try:
-        sys.path.insert(0, str(HOOKS_DIR))
-        import bug_status
-        problems = bug_status.check(bug_status.BACKLOG.read_text())
-    except Exception:
-        return
-    if not problems:
-        return
-    print("\n⚠  bug-backlog housekeeper — status drift (bug_status.py):", file=sys.stderr)
-    for p in problems:
-        print(f"  · {p}", file=sys.stderr)
-    print("  Backstop only — reflow belongs on the branch pre-landing. If it slipped: "
-          "run the WORKTREE's copy (python3 .claude/worktrees/<name>/.claude/hooks/"
-          "bug_status.py --write) and land as a follow-up merge; --write refuses in main.\n",
-          file=sys.stderr)
 
 
 if __name__ == "__main__":

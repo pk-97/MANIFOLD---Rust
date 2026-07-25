@@ -24,7 +24,7 @@
 //! design, not an extension. A single N-ary node with a uniform-bounded
 //! loop (rather than N chained single-target apply nodes) keeps graph
 //! topology independent of the imported asset's target count — a
-//! Fable-advisory rejection recorded in the A3 phase brief.
+
 
 use std::borrow::Cow;
 

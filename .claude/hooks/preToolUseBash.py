@@ -68,6 +68,7 @@ import re
 import shlex
 import subprocess
 import sys
+import traceback
 from pathlib import Path
 
 
@@ -406,6 +407,21 @@ def is_preapproved_command(raw: str, _depth: int = 0) -> bool:
 _PROJECT_DIR = Path(__file__).resolve().parents[2]
 _WORKTREES_DIR = _PROJECT_DIR / ".claude" / "worktrees"
 _VERDICTS_DIR = _PROJECT_DIR / ".claude" / "daemon" / "verdicts"
+
+
+def _main_checkout_path():
+    """Return the main repo checkout path, even from within a worktree.
+
+    Worktrees live at <main>/.claude/worktrees/<slot>/. _PROJECT_DIR resolves
+    to the worktree root; climbing to the grandparent of the worktrees dir
+    yields the main checkout."""
+    p = _PROJECT_DIR.resolve()
+    if p.parent.name == "worktrees":
+        return p.parent.parent.parent
+    return p
+
+
+_ORCH_VERDICTS_DIR = _main_checkout_path() / ".claude" / "orchestration" / "verdicts"
 
 
 def find_live_foreign_session(own_session_id):
@@ -791,6 +807,153 @@ def worktree_add_guard(cmd, cwd):
 
 
 # ---------------------------------------------------------------------------
+# Pre-land verdict-coverage guard (I1)
+#
+# When a `git merge` lands on main (current branch = main in the main
+# checkout), every BUG- task id named on the merged branch's commits since
+# origin/main must have a passing verdict (gate or no-gate) in the main
+# checkout's verdict trail at .claude/orchestration/verdicts/<task>.jsonl.
+#
+# - Docs-only branches (all changed files under docs/) pass with a note.
+# - Branches with no BUG- ids in the log pass (D6: pre-trail landings).
+# - Violations deny with the missing tasks and the exact fix command.
+# - Fails open: any error prints loudly and yields None (no guard).
+# ---------------------------------------------------------------------------
+
+_MERGE_OPT_VALUE = frozenset({
+    "-m", "--message", "-F", "--file", "-e", "--edit", "--log", "--signoff",
+    "-s", "--strategy", "-X", "--strategy-option",
+})
+
+
+def _get_merge_source_branch(rest_toks):
+    """Extract the branch being merged from post-subcommand git merge tokens.
+
+    Skips option-argument pairs so `-m "msg" branch` yields `branch`.
+    Returns None if no positional remains."""
+    skip_next = False
+    positional = []
+    for t in rest_toks:
+        if skip_next:
+            skip_next = False
+            continue
+        if t in _MERGE_OPT_VALUE:
+            skip_next = True
+            continue
+        if t.startswith("-"):
+            continue
+        positional.append(t)
+    return positional[0] if positional else None
+
+
+def merge_verdict_guard(cmd, cwd):
+    """Return (deny_reason, allow_context) for a git merge targeting main.
+
+    I1: every BUG- task on the merged branch must have a passing verdict.
+    Fails open on error — prints loudly, returns None."""
+    try:
+        for toks in _shlex_segments(cmd):
+            toks = _strip_leading_keywords(toks)
+            if not toks or toks[0] != "git":
+                continue
+            target_dir, sub, rest = _git_checkout_dir(toks, cwd)
+            if target_dir is None or not _in_main_checkout(target_dir):
+                continue
+            if sub != "merge":
+                continue
+            if _current_branch(target_dir) != "main":
+                continue
+
+            # Git merge while on main — extract source branch
+            source_branch = _get_merge_source_branch(rest)
+            if source_branch is None:
+                continue  # can't determine branch; skip guard
+
+            # --- Docs-only check ---
+            diff_r = subprocess.run(
+                ["git", "-C", str(target_dir), "diff", "--name-only",
+                 "origin/main", source_branch],
+                capture_output=True, text=True, timeout=15,
+            )
+            if diff_r.returncode == 0:
+                changed = [l.strip()
+                           for l in diff_r.stdout.strip().split("\n") if l.strip()]
+                if changed and all(f.startswith("docs/") for f in changed):
+                    return (None,
+                            "Docs-only merge: no verdict coverage required (D6).")
+
+            # --- Extract BUG- ids from branch commits ---
+            log_r = subprocess.run(
+                ["git", "-C", str(target_dir), "log", "--format=%B",
+                 f"origin/main..{source_branch}"],
+                capture_output=True, text=True, timeout=15,
+            )
+            if log_r.returncode != 0:
+                print(
+                    f"merge_verdict_guard: git log failed "
+                    f"(exit {log_r.returncode}): {log_r.stderr.strip()}",
+                    file=sys.stderr,
+                )
+                return (None, None)
+
+            bug_ids = re.findall(r"BUG-\w+", log_r.stdout)
+            if not bug_ids:
+                return (None,
+                        "No BUG- task ids in merged branch commits. "
+                        "Verdict coverage not required (D6: pre-trail landings).")
+
+            # --- Check verdicts in MAIN checkout trail ---
+            missing = []
+            for bid in sorted(set(bug_ids)):
+                vpath = _ORCH_VERDICTS_DIR / f"{bid}.jsonl"
+                has_passing = False
+                if vpath.exists():
+                    with open(vpath) as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            try:
+                                v = json.loads(line)
+                            except json.JSONDecodeError:
+                                continue
+                            if (v.get("schema") == 1
+                                    and v.get("pass") is True
+                                    and v.get("kind") in ("gate", "no-gate")):
+                                has_passing = True
+                                break
+                if not has_passing:
+                    missing.append(bid)
+
+            if missing:
+                fixes = "\n".join(
+                    f'  gate_runner no-gate --task {m} '
+                    f'--reason "<why-safe-without-gates>"'
+                    for m in missing
+                )
+                return (
+                    f"Merge blocked by I1: {len(missing)} task(s) lack passing "
+                    f"verdicts:\n  {', '.join(missing)}\n\n"
+                    f"Add no-gate verdicts:\n{fixes}\n\n"
+                    f"Or run the design's declared gates (gate_runner per-lane) "
+                    f"and retry the merge. (I1: every BUG- task on the merged "
+                    f"branch needs verdict coverage.)",
+                    None,
+                )
+
+            return (None,
+                    "All BUG- tasks have passing verdicts. Merge permitted.")
+
+    except Exception as e:
+        print(f"merge_verdict_guard FAILED OPEN: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        return (None, None)
+
+    return (None, None)  # no merge-to-main segment found
+
+
+# ---------------------------------------------------------------------------
 # Warning-only lints (never deny, never ask) — additionalContext on allow
 #
 # TICKETS.md T4/T5/T8: three independent shell-shape mistakes that have each
@@ -1052,6 +1215,14 @@ def main() -> int:
         json.dump(build_deny([compound_deny_reason]), sys.stdout)
         return 0
 
+    # 0e. Pre-land verdict-coverage guard (I1): a merge into main requires
+    # verdict coverage for every BUG- task on the merged branch. Denies with
+    # the missing tasks and fix commands; passes with a note otherwise.
+    merge_deny, merge_context = merge_verdict_guard(cmd, cwd)
+    if merge_deny:
+        json.dump(build_deny([merge_deny]), sys.stdout)
+        return 0
+
     # T4/T5/T8: warning-only lints, computed unconditionally so they land as
     # additionalContext on a pre-approved allow alongside the shared-checkout
     # / landing-protocol context. Never affect the allow/ask/deny decision.
@@ -1063,7 +1234,7 @@ def main() -> int:
     # 1. Pre-approved? Allow outright, pipes and loops included.
     if is_preapproved_command(cmd):
         combined = "\n\n".join(c for c in (
-            shared_checkout_context, landing_context,
+            shared_checkout_context, landing_context, merge_context,
             rg_warning, masked_exit_warning, comment_swallow_warning,
             workspace_sweep_warning,
         ) if c) or None
