@@ -744,10 +744,10 @@ pub struct RenderScene {
     /// `ready` still gates ENQUEUING the next refit (never rewrite the
     /// CPU-mapped instance buffer while a refit/build is in flight).
     rt_accel_built: bool,
-    /// BUG-326: set true when a rerun is needed (first build after topo
-    /// change); fires once on the first ready acquisition. Set false when
-    /// the rerun fires. `rt_accel_rerun_done` prevents re-arming after the
-    /// rerun — exactly 2 builds per topology change.
+    /// BUG-326: set true in the first-sighting else branch (before the
+    /// one-frame defer), consumed by the rerun block above — exactly one
+    /// extra `build_accel` per topology change. `rt_accel_rerun_done`
+    /// prevents the else-branch from re-arming after the rerun fires.
     rt_accel_rerun_armed: bool,
     rt_accel_rerun_done: bool,
     /// Half-res shadow-ray-trace target + full-res upsampled mask
@@ -3017,25 +3017,7 @@ impl EffectNode for RenderScene {
                 .as_ref()
                 .is_some_and(|a| a.ready.load(std::sync::atomic::Ordering::Acquire));
         }
-        let rt_ready = self.rt_accel_built;
-        // BUG-326: rebuild-on-first-ready. The first accel build after a
-        // topology change is NOT provably ordered against async mesh-loading
-        // GPU work (the staging copy and the BLAS build are on separate command
-        // buffers). Arm `rt_accel_rerun_armed` on the first topo sighting;
-        // when that build becomes ready, invalidate keys to trigger exactly one
-        // extra build. Bounded: armed only once per topo change, never by the
-        // rerun itself — exactly 2 builds per topology change.
-        // The second build is the first provably ordered after every prior
-        // frame's GPU work (the per-frame cycle commits+waits before evaluate).
-        if self.rt_accel_rerun_armed && rt_ready {
-            log::info!(
-                "node.render_scene: BUG-326 first accel ready — triggering one extra rerun so async-loaded mesh data is visible"
-            );
-            self.rt_accel_rerun_armed = false;
-            self.rt_accel_topo_key = None;
-            self.rt_accel_pending_key = None;
-            self.rt_accel_built = false;
-        }
+        let mut rt_ready = self.rt_accel_built;
         // RAYTRACING_DESIGN.md §5.2 P2/D3, RT-D2, §8.2 D22 (T2-B): the ONE
         // call site deciding "discard temporal history this frame" for
         // EITHER of this node's two temporal consumers — the RT irradiance
@@ -3935,6 +3917,23 @@ impl EffectNode for RenderScene {
                 gpu.device,
                 &objects,
             );
+            // BUG-326: the first accel build after a topology change can
+            // be blind to just-arrived mesh content (async glb load's GPU
+            // staging copy and the BLAS build are on separate command
+            // buffers; the BLAS races ahead). Once that build is observed
+            // ready, replace the accel immediately with a fresh build that
+            // runs after the mesh copy has landed. `rt_accel_rerun_done` is
+            // permanent — one rerun per RenderScene lifetime.
+            if self.rt_accel_rerun_armed && rt_ready {
+                self.rt_accel_rerun_armed = false;
+                self.rt_accel_rerun_done = true;
+                let tracer = self.rt_tracer.as_ref().expect("ensured above");
+                self.rt_accel = Some(tracer.build_accel(gpu.device, &objects));
+                self.rt_accel_built = false;
+                // Suppress RT dispatch this frame (the new accel isn't
+                // ready yet — next frame latches fresh from `ready` flag).
+                rt_ready = false;
+            }
             // BUG-308/RT-D4: a key change (first RT frame, or topology/
             // transform change) must NOT enqueue `build_accel` this same
             // frame — this frame's own mesh-generation GPU writes are
@@ -3959,19 +3958,17 @@ impl EffectNode for RenderScene {
                     // BUG-320: the fresh build must be observed ready
                     // before tracing resumes — the old accel is gone.
                     self.rt_accel_built = false;
-                    // BUG-326: the async mesh loader's GPU copy may not have
-                    // completed when this build enqueues (same queue, separate
-                    // command buffer). Force exactly one extra rebuild once
-                    // this build becomes ready. Gated on !rt_accel_rerun_done
-                    // so the rerun build itself does not re-arm (the rerun
-                    // sets done=true after firing).
-                    if !self.rt_accel_rerun_done {
-                        self.rt_accel_rerun_armed = true;
-                    }
                     log::info!(
                         "node.render_scene: RT accel structure (re)build enqueued (async, topo key {topo_key:#x}) — raster shadow-map path serves this scene until it's ready"
                     );
                 } else {
+                    // BUG-326: arm the one-shot rerun for the build this
+                    // new-topology sighting will produce. Gated on
+                    // `!rt_accel_rerun_done` so the rerun's own re-entry
+                    // (from topo-key invalidation) cannot re-arm.
+                    if !self.rt_accel_rerun_done {
+                        self.rt_accel_rerun_armed = true;
+                    }
                     self.rt_accel_pending_key = Some(topo_key);
                     log::info!(
                         "node.render_scene: RT accel structure build requested (topo key {topo_key:#x}); deferring one frame so it can't race this frame's mesh-generation GPU writes"
