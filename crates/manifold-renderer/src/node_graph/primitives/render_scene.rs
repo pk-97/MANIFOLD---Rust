@@ -4242,11 +4242,15 @@ impl EffectNode for RenderScene {
                     } else {
                         (mask_full_b, irr_full_b, normal_full_b, refl_full_b, mask_full, irr_full, normal_full, refl_full)
                     };
-                    let atrous_params = manifold_gpu::raytrace::AtrousParams::new([width, height], step, history_valid);
+                    let atrous_params = manifold_gpu::raytrace::AtrousParams::new(
+                        [width, height], step, history_valid,
+                        shadow_caster_draws.len() as u32,
+                    );
                     tracer.atrous_pass(
                         gpu.native_enc,
                         &atrous_params,
                         atrous_params_buffer,
+                        gi_materials_buffer,
                         depth_tex,
                         moments_read,
                         src_sv,

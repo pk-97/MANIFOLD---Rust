@@ -1292,6 +1292,7 @@ struct AtrousParams {
     uint2 size;
     uint  step;
     uint  history_valid;
+    uint  obj_count;
 };
 
 // RT-T1-D: edge-aware À-TROUS spatial filter — dilated by `p.step`
@@ -1304,19 +1305,24 @@ struct AtrousParams {
 // own depth+normal weights; this kernel is the denoiser proper, run
 // `ATROUS_ITERATIONS`-1 times full-res-to-full-res after it — see
 // `render_scene.rs`'s dispatch sequence). Edge-stopping weights:
-// - DEPTH: raw NDC-z, same discipline as `upsample_shadow`'s guide.
-// - NORMAL: cosine power against the center texel's own normal.
-// - LUMA/VARIANCE: SVGF's key trick — the luma edge-stop's sigma SCALES
-//   with sqrt(this texel's temporally-accumulated variance) (read from
-//   `moments_read`, RT-T1-D's moment-tracking addition to
-//   `accumulate_irradiance`, ONE FRAME LAGGED — same ping-pong-history
-//   lag convention `depth_history_read`/`normal_history_read` already
-//   use): a converged (low-variance) texel trusts its own signal and
-//   rejects a differing tap sharply (preserves detail); a noisy
-//   (high-variance) texel tolerates more difference before rejecting
-//   (blurs harder specifically where the noise is, not uniformly).
+// - DEPTH: raw NDC-z, same discipline as `upsample_shadow`'s guide
+//   (shared across all channels: surface continuity is surface-based).
+// - NORMAL: cosine power against the center texel's own normal (shared).
+// - LUMA/VARIANCE (irradiance/mask): SVGF's key trick — the luma edge-
+//   stop's sigma SCALES with sqrt(this texel's temporally-accumulated
+//   variance) (read from `moments_read`, RT-T1-D's moment-tracking
+//   addition to `accumulate_irradiance`...): a converged texel rejects
+//   differing taps sharply; a noisy texel tolerates more difference.
+// - LUMA (reflection channel): its OWN roughness-narrowed luma stop —
+//   the refl channel's luma is guided by `gi_materials[oid].metallic_
+//   roughness.y`, not the AO/GI variance. Shiny (low roughness) = narrow
+//   sigma = crisp mirror image; rough = wide sigma = heavy blur (its
+//   reflections are already lobe-diffuse). Irradiance/mask channels are
+//   unchanged by this weight (the shared `w` governs them; the refl
+//   channel has its own `w_refl`).
 kernel void atrous_filter(
     constant AtrousParams&           p            [[buffer(1)]],
+    constant GiMaterial*            gi_materials [[buffer(2)]],
     depth2d<float>                   depth_tex    [[texture(0)]],
     texture2d<float>                 moments_read [[texture(1)]],
     texture2d<float>                 src_sv       [[texture(2)]],
@@ -1325,10 +1331,10 @@ kernel void atrous_filter(
     texture2d<float, access::write>  dst_irr      [[texture(5)]],
     texture2d<float>                 src_n        [[texture(6)]],
     texture2d<float, access::write>  dst_n        [[texture(7)]],
-    // RT-R1 (§9.3): reflection-radiance textures — filtered with the SAME
-    // depth+normal+luma edge-stopped weights as the irradiance channel
-    // (R2 narrows the luma stop with roughness; v1 rides the shared
-    // filter).
+    // RT-R2: reflection-radiance textures — filtered with the same depth
+    // and normal edge-stops as the AO/GI channels, but its OWN
+    // roughness-narrowed luma stop (rough surface = wide sigma = blur
+    // harder; shiny surface = narrow sigma = preserve crisp mirror image).
     texture2d<float>                 src_refl     [[texture(8)]],
     texture2d<float, access::write>  dst_refl     [[texture(9)]],
     uint2 tid [[thread_position_in_grid]])
@@ -1365,7 +1371,27 @@ kernel void atrous_filter(
     const float ATROUS_NORMAL_POWER = 16.0;
     const float ATROUS_LUMA_SIGMA_SCALE = 8.0;
     const float ATROUS_LUMA_SIGMA_FLOOR = 0.15;
+    // RT-R2: reflection-channel luma edge-stop — narrows as roughness
+    // falls: shiny surfaces reject differing taps sharply (the mirror
+    // image stays crisp), rough surfaces blur wide (their reflections
+    // are already lobe-diffuse). Range 0.02-0.5 for both, untuned —
+    // tuning is Peter's look.
+    const float ATROUS_REFL_LUMA_SIGMA_SHINY = 0.05;
+    const float ATROUS_REFL_LUMA_SIGMA_ROUGH = 0.3;
+    // Roughness at which the refl sigma reaches its wide end. Range 0.3-0.7.
+    const float ATROUS_REFL_SIGMA_ROUGHNESS_REF = 0.5;
     float luma_sigma = max(ATROUS_LUMA_SIGMA_SCALE * sqrt(center_var), ATROUS_LUMA_SIGMA_FLOOR);
+    // RT-R2: center-texel roughness from the material table, via the
+    // object id in `src_n.w` (same convention accumulate_irradiance uses).
+    float center_rough = 1.0;
+    if (center_n4.w >= 0.0) {
+        uint oid = uint(center_n4.w + 0.5);
+        if (oid < p.obj_count) { center_rough = gi_materials[oid].metallic_roughness.y; }
+    }
+    float refl_luma_sigma = mix(ATROUS_REFL_LUMA_SIGMA_SHINY, ATROUS_REFL_LUMA_SIGMA_ROUGH,
+                                clamp(center_rough / ATROUS_REFL_SIGMA_ROUGHNESS_REF, 0.0, 1.0));
+    float center_refl_luma = luma(src_refl.read(tid).rgb);
+    float wsum_refl = 1.0; // center tap weight 1, same convention as wsum
     // Full 3x3 neighborhood (8 taps, diagonals included) rather than a
     // 4-tap cross: with only `ATROUS_ITERATIONS`=3 total passes budgeted
     // (T1-D's 2-3 range), each pass needs to average enough independent
@@ -1395,17 +1421,23 @@ kernel void atrous_filter(
         float w = w_depth * w_normal * w_luma;
         acc_irr += qirr * w;
         acc_sv += src_sv.read(uq).rg * w;
-        acc_refl += src_refl.read(uq).rgb * w;
+        // RT-R2: the refl channel's own weight — shared depth/normal stops,
+        // its own roughness-narrowed luma stop on the REFLECTION signal.
+        float3 qrefl = src_refl.read(uq).rgb;
+        float w_refl = w_depth * w_normal * exp(-fabs(luma(qrefl) - center_refl_luma) / refl_luma_sigma);
+        acc_refl += qrefl * w_refl;
+        wsum_refl += w_refl;
         wsum += w;
     }
     dst_irr.write(float4(acc_irr / wsum, 0), tid);
     dst_sv.write(float4(acc_sv / wsum, 0, 0), tid);
     // RT-T2-C: `.w` = object id, passed through untouched (never blended).
     dst_n.write(float4(center_n, center_n4.w), tid);
-    // RT-R1: reflection radiance filters with the shared weights; hit
-    // distance in `.a` passes through untouched (never blended — R2's
-    // reprojection needs one surface's distance).
-    dst_refl.write(float4(acc_refl / wsum, src_refl.read(tid).a), tid);
+    // RT-R2: reflection radiance filters with roughness-narrowed luma
+    // stop (its own `wsum_refl`); hit distance in `.a` passes through
+    // untouched (never blended — R2's reprojection needs one surface's
+    // distance).
+    dst_refl.write(float4(acc_refl / wsum_refl, src_refl.read(tid).a), tid);
 }
 
 // RT-P2/D3, extended RT-T1-C (BUG-311): temporal accumulation of the
@@ -2036,16 +2068,21 @@ pub struct AtrousParams {
     /// history (before `accumulate_irradiance` has ever written a moments
     /// texture) — the kernel falls back to a fixed luma sigma that frame.
     pub history_valid: u32,
+    /// RT-R2: number of objects in the `gi_materials` table — used by the
+    /// kernel to bounds-check the roughness lookup for the refl-channel
+    /// luma edge-stop.
+    pub obj_count: u32,
 }
 
-const _: () = assert!(std::mem::size_of::<AtrousParams>() == 16);
+const _: () = assert!(std::mem::size_of::<AtrousParams>() == 20);
 
 impl AtrousParams {
-    pub fn new(size: [u32; 2], step: u32, history_valid: bool) -> Self {
+    pub fn new(size: [u32; 2], step: u32, history_valid: bool, obj_count: u32) -> Self {
         Self {
             size,
             step,
             history_valid: history_valid as u32,
+            obj_count,
         }
     }
 }
@@ -2233,6 +2270,7 @@ pub trait ShadowRayTracer {
         encoder: &mut GpuEncoder,
         params: &AtrousParams,
         params_buffer: &GpuBuffer,
+        gi_materials: &GpuBuffer,
         depth_tex: &GpuTexture,
         moments_read: &GpuTexture,
         src_sv: &GpuTexture,
@@ -2402,6 +2440,10 @@ impl MetalShadowRayTracer {
                 // pipeline's slot-map note (T3 missed these too).
                 (8, SlotKind::Texture),
                 (9, SlotKind::Texture),
+                // RT-R2: gi_materials — roughness source for the refl luma
+                // stop. Signatures and slot maps change together (R1 incident
+                // class).
+                (2, SlotKind::Buffer),
             ]),
         );
         let accumulate_pipeline = compile_pipeline(
@@ -2691,6 +2733,7 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         encoder: &mut GpuEncoder,
         params: &AtrousParams,
         params_buffer: &GpuBuffer,
+        gi_materials: &GpuBuffer,
         depth_tex: &GpuTexture,
         moments_read: &GpuTexture,
         src_sv: &GpuTexture,
@@ -2711,6 +2754,11 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                 GpuBinding::Buffer {
                     binding: 1,
                     buffer: params_buffer,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: gi_materials,
                     offset: 0,
                 },
                 GpuBinding::Texture {
