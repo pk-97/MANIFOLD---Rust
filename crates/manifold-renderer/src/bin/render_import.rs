@@ -311,21 +311,19 @@ fn main() {
                 &manifest,
                 &args,
                 args.time,
-                0, // frame_count starts at 0
             );
             return;
         }
     };
 
     // Animation mode: warmup convergence first at anim start value.
-    // Clone params, set anim param to start value, rebuild manifest for warmup.
-    let mut warmup_params: Vec<Param> = def_clone
+    // Resolve overrides ONCE into base params, then clone per frame.
+    let base_params: Vec<Param> = def_clone
         .preset_metadata
         .as_ref()
         .map(|m| m.params.iter().map(|s| Param::bundled(s.clone())).collect())
         .unwrap_or_default();
 
-    // Apply user overrides to warmup params too.
     let string_param_ids: std::collections::BTreeSet<String> = def_clone
         .preset_metadata
         .as_ref()
@@ -337,20 +335,24 @@ fn main() {
             string_overrides.insert(id.clone(), v.clone());
             continue;
         }
-        if let Some(p) = warmup_params.iter_mut().find(|p| p.id() == id) {
+    }
+    // Apply string overrides ONCE, not per frame.
+    if !string_overrides.is_empty() {
+        runtime.apply_string_params(Some(&string_overrides));
+    }
+
+    // Clone base params, set anim param to start value, rebuild manifest for warmup.
+    let mut warmup_params = base_params.clone();
+    for (id, v) in &args.overrides {
+        if !string_param_ids.contains(id) && let Some(p) = warmup_params.iter_mut().find(|p| p.id() == id) {
             p.value = v.parse().unwrap_or_else(|e| panic!("bad value for numeric param '{id}': {e}"));
         }
     }
-
-    // Set the anim param to start value.
     if let Some(p) = warmup_params.iter_mut().find(|p| p.id() == anim_param_id) {
         p.value = anim_start;
     }
 
     let warmup_manifest = ParamManifest::from_params(warmup_params);
-    if !string_overrides.is_empty() {
-        runtime.apply_string_params(Some(&string_overrides));
-    }
 
     render_single_frame(
         &device,
@@ -359,49 +361,22 @@ fn main() {
         &warmup_manifest,
         &args,
         args.time,
-        0, // warmup frame_count starts at 0
     );
 
     // Sequence phase: render N consecutive frames with param advancing.
     let mut filmstrip_frames = Vec::with_capacity(anim_frames as usize);
-    let start_frame = args.frames_max; // continue frame_count from warmup
+    let warmup_end_frame = args.frames_max; // Warmup converges by frames_max (300), not exact.
     for i in 0..anim_frames {
         let param_value = anim_start + (anim_end - anim_start) * (i as f32) / (anim_frames as f32 - 1.0).max(1.0);
-        let frame_count = (start_frame + i) as i64;
+        let frame_count = (warmup_end_frame + i) as i64;
 
-        // Clone params, update the anim param value, rebuild manifest.
-        let mut seq_params: Vec<Param> = def_clone
-            .preset_metadata
-            .as_ref()
-            .map(|m| m.params.iter().map(|s| Param::bundled(s.clone())).collect())
-            .unwrap_or_default();
-
-        // Apply user overrides first (same as warmup).
-        let string_param_ids: std::collections::BTreeSet<String> = def_clone
-            .preset_metadata
-            .as_ref()
-            .map(|m| m.string_params.iter().map(|s| s.id.clone()).collect())
-            .unwrap_or_default();
-        let mut string_overrides: std::collections::BTreeMap<String, String> = Default::default();
-        for (id, v) in &args.overrides {
-            if string_param_ids.contains(id) {
-                string_overrides.insert(id.clone(), v.clone());
-                continue;
-            }
-            if let Some(p) = seq_params.iter_mut().find(|p| p.id() == id) {
-                p.value = v.parse().unwrap_or_else(|e| panic!("bad value for numeric param '{id}': {e}"));
-            }
-        }
-
-        // Set the anim param value.
+        // Clone base params (already has user overrides), set anim param value.
+        let mut seq_params = base_params.clone();
         if let Some(p) = seq_params.iter_mut().find(|p| p.id() == anim_param_id) {
             p.value = param_value;
         }
 
         let seq_manifest = ParamManifest::from_params(seq_params);
-        if !string_overrides.is_empty() {
-            runtime.apply_string_params(Some(&string_overrides));
-        }
 
         // Render the frame (no convergence check, no sleep).
         let time = args.time;
@@ -463,7 +438,6 @@ fn render_single_frame(
     manifest: &ParamManifest,
     args: &Args,
     time: f64,
-    frame_offset: i64,
 ) {
     const DT: f32 = 1.0 / 60.0;
     const STABLE_STREAK: u32 = 3;
@@ -472,6 +446,31 @@ fn render_single_frame(
     let mut converged = false;
     let mut last_fraction = 0.0f64;
     let mut final_rgba = Vec::new();
+
+    // Same convergence-poll pattern as
+    // `damaged_helmet_imports_wires_all_maps_and_renders_non_degenerate`
+    // (BUG-100/BUG-117): background texture decodes (base-color/normal/mr/
+    // occlusion/emissive, each its own `node.gltf_texture_source` thread)
+    // emit solid black every frame until their decode lands, so a frame
+    // where every wired source is STILL mid-decode is byte-stable too — a
+    // fixed frame count alone can't tell "converged" from "stuck at black".
+    // Require byte-stability AND a non-black floor together.
+    //
+    // The `std::thread::sleep` below is NOT cosmetic — omitting it (an
+    // earlier version of this loop did) is a real bug, found empirically
+    // this session: with zero pacing, the GPU render loop can spin through
+    // `STABLE_STREAK` frames in under a millisecond, faster than a
+    // multi-texture background decode can swap even one map in, so 3
+    // "stable" frames can land entirely inside a decode thread's dead time
+    // — a genuine partial-load state (e.g. the normal map still solid-
+    // default while base-color has already landed) reads as fully
+    // converged. Reproduced on `DamagedHelmet.glb`: without the sleep,
+    // 2 of 3 runs converged on a visibly wrong frame (a monochrome
+    // "zebra-striped" partial load) at a DIFFERENT fraction than the
+    // correct render. The DamagedHelmet gpu test this pattern is ported
+    // from paces its polls at 50ms for exactly this reason; this loop
+    // renders every frame (unlike that test's real-time poll), so the
+    // sleep goes between frames instead of around the whole attempt.
 
     for frame in 0..args.frames_max {
         let ctx = PresetContext {
@@ -485,7 +484,7 @@ fn render_single_frame(
             aspect: args.width as f32 / args.height as f32,
             owner_key: 0,
             is_clip_level: false,
-            frame_count: frame_offset + frame as i64,
+            frame_count: frame as i64,
             anim_progress: 1.0,
             trigger_count: 0,
         };
@@ -496,6 +495,14 @@ fn render_single_frame(
         }
         enc.commit_and_wait_completed();
 
+        // G-P6 gate-review fix: byte-stability alone can't see a decode
+        // that hasn't LANDED yet — a 74 MB 4k EXR decodes for seconds while
+        // `node.hdri_source` emits stable black, and the helmet (sun-lit,
+        // emissive) clears the non-black floor without any environment at
+        // all, so the loop declared convergence on frame 5 with the sky
+        // still missing. `PresetRuntime::io_pending` surfaces the IoBridge
+        // sources' in-flight decodes (`EffectNode::io_pending`); while any
+        // decode is pending, stable frames don't count.
         let io_pending = runtime.io_pending();
         let raw = readback_raw_halves(device, &target.texture, args.width, args.height);
         let byte_stable = prev_raw.as_deref() == Some(raw.as_slice());
@@ -506,6 +513,14 @@ fn render_single_frame(
             stable_count = 0;
         }
 
+        // D7 diagnosis instrument (BUG-165/BUG-169): print the non-black
+        // fraction and io_pending EVERY frame, not only after a stable
+        // streak — `last_fraction` below is only updated once a streak
+        // lands, so without this a reported 0.0000 is ambiguous between
+        // "renders black" and "never went stable" (render_import.rs
+        // pre-trace). Default off (`--trace`) since it's a per-frame
+        // readback+tonemap on top of the one the convergence check already
+        // does — real cost, only worth paying while bisecting.
         if args.trace {
             let frame_rgba = readback_tonemapped_rgba8(device, &target.texture, args.width, args.height);
             let frame_fraction = non_black_fraction(&frame_rgba);
