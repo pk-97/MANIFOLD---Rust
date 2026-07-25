@@ -1,6 +1,6 @@
 # Gate Runtime — verdicts the machine writes, not claims the lanes make
 
-**Status:** IN PROGRESS — P1 SHIPPED 2026-07-25 (`35364b0a`: gate_runner core, 22/22 selftest, I2 clause in worktree-guard.py); P2–P5 open · 2026-07-25 · k3 (lead) · approved in discussion same day ("This probably needs a design doc and then we can build it with Flash")
+**Status:** IN PROGRESS — P1+P2 SHIPPED 2026-07-25 (P1 `35364b0a` gate_runner core; P2 `47bad87b` pre-wave pack, live-verified incl. induced-failure exit 1); P3–P5 open · 2026-07-25 · k3 (lead) · approved in discussion same day ("This probably needs a design doc and then we can build it with Flash")
 **Prerequisites:** none. Self-hosts from P1 onward (P2+ land under their own verdicts).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
