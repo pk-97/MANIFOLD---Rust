@@ -80,9 +80,13 @@ _DOCS_DIR = _PROJECT_DIR / "docs"
 def is_doc_fast_path(resolved):
     """docs/**/*.md — all docs, including *_DESIGN.md (widened by Peter
     2026-07-24: the exclusion was too conservative; doc edits don't break the
-    build, and status lines must stay cheap to keep true)."""
+    build, and status lines must stay cheap to keep true). Root CLAUDE.md is
+    also fast-path (Peter 2026-07-25: "you don't need a worktree for doc
+    updates anymore")."""
     if resolved.suffix != ".md":
         return False
+    if resolved == _PROJECT_DIR / "CLAUDE.md":
+        return True
     return resolved == _DOCS_DIR or _DOCS_DIR in resolved.parents
 
 
