@@ -26,7 +26,7 @@
 //! `rg` facts checked at review time, not expressed as a test in this file.
 
 use half::f16;
-use manifold_gpu::raytrace::{AccumulateParams, MetalShadowRayTracer, ShadowRayTracer};
+use manifold_gpu::raytrace::{AccumulateParams, GiMaterial, MetalShadowRayTracer, ShadowRayTracer};
 use manifold_gpu::{
     GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
@@ -205,6 +205,9 @@ struct HistorySet {
     /// doesn't assert on variance, just needs valid bindings for
     /// `accumulate_irradiance`'s widened signature.
     moments: [GpuTexture; 2],
+    /// RT-R2 (RD6): specular history ping-pong pair — same lifecycle as
+    /// irr history pair above (inert pass-through at this step).
+    refl: [GpuTexture; 2],
     ping: usize,
 }
 
@@ -226,6 +229,12 @@ impl HistorySet {
             moments: [
                 make_history_side_channel(device, GpuTextureFormat::Rg32Float, &format!("{label}-moments-a")),
                 make_history_side_channel(device, GpuTextureFormat::Rg32Float, &format!("{label}-moments-b")),
+            ],
+            // RT-R2 (RD6): inert pass-through refl history pair — same
+            // Rgba16Float format as irr history.
+            refl: [
+                make_history(device, &format!("{label}-refl-a")),
+                make_history(device, &format!("{label}-refl-b")),
             ],
             ping: 0,
         }
@@ -253,6 +262,14 @@ impl HistorySet {
     }
     fn write_moments(&self) -> &GpuTexture {
         &self.moments[1 - self.ping]
+    }
+    // RT-R2 (RD6): specular history read/write — inert pass-through
+    // at this step, same ping clock as all other history channels.
+    fn read_refl(&self) -> &GpuTexture {
+        &self.refl[self.ping]
+    }
+    fn write_refl(&self) -> &GpuTexture {
+        &self.refl[1 - self.ping]
     }
     fn advance(&mut self) {
         self.ping = 1 - self.ping;
@@ -345,6 +362,11 @@ fn run_accumulate_with_motion(
             );
         }
     }
+    // RT-R2 (RD6): inert pass-through — dummy zero refl texture and a
+    // single-element gi_materials buffer (kernel binds but does not read
+    // in this plumbing step).
+    let hi_refl_dummy = upload_irr(device, 0.0, 0.0, 0.0, "p2-hi-refl-dummy");
+    let gi_materials_buf = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
     let mut enc = device.create_encoder(label);
     {
         let gpu = RendererGpuEncoder::new(&mut enc, device);
@@ -364,6 +386,10 @@ fn run_accumulate_with_motion(
             history.write_normal(),
             history.read_moments(),
             history.write_moments(),
+            &hi_refl_dummy,
+            history.read_refl(),
+            history.write_refl(),
+            &gi_materials_buf,
             label,
         );
     }

@@ -815,6 +815,9 @@ pub struct RenderScene {
     /// currently the read side; flipped after every `accumulate_irradiance`
     /// call, reset or not.
     rt_irr_history: [Option<manifold_gpu::GpuTexture>; 2],
+    // RT-R2 (RD6): specular history ping-pong pair — same lifecycle +
+    // same ping clock as rt_irr_history (I-R2: one reset path, one flip).
+    rt_refl_history: [Option<manifold_gpu::GpuTexture>; 2],
     rt_depth_history: [Option<manifold_gpu::GpuTexture>; 2],
     rt_normal_history: [Option<manifold_gpu::GpuTexture>; 2],
     /// RT-T1-D (BUG-312): per-texel luminance moments (mean, mean-of-
@@ -1060,6 +1063,7 @@ impl RenderScene {
             rt_refl_full: None,
             rt_refl_full_b: None,
             rt_irr_history: [None, None],
+            rt_refl_history: [None, None],
             rt_depth_history: [None, None],
             rt_normal_history: [None, None],
             rt_moments_history: [None, None],
@@ -1782,6 +1786,13 @@ impl RenderScene {
         self.rt_irr_history = [
             make(width, height, rgba16, "node.render_scene rt_irr_history_a (RT-T1-C)"),
             make(width, height, rgba16, "node.render_scene rt_irr_history_b (RT-T1-C)"),
+        ]
+        .map(Some);
+        // RT-R2 (RD6): specular history ping-pong pair — same lifecycle +
+        // same reset rule as rt_irr_history (I-R2: one reset path, one flip).
+        self.rt_refl_history = [
+            make(width, height, rgba16, "node.render_scene rt_refl_history_a (RT-R2)"),
+            make(width, height, rgba16, "node.render_scene rt_refl_history_b (RT-R2)"),
         ]
         .map(Some);
         self.rt_depth_history = [
@@ -4289,6 +4300,11 @@ impl EffectNode for RenderScene {
                 let normal_history_read = self.rt_normal_history[read_idx].as_ref().expect("ensured above");
                 let normal_history_write = self.rt_normal_history[write_idx].as_ref().expect("ensured above");
                 let moments_write = self.rt_moments_history[write_idx].as_ref().expect("ensured above");
+                // RT-R2 (RD6): reflection history ping-pong — same read/write
+                // indexing as the irradiance/depth/normal pairs above, sharing
+                // the same `rt_history_ping` flip (I-R2: no second flip clock).
+                let refl_history_read = self.rt_refl_history[read_idx].as_ref().expect("ensured above");
+                let refl_history_write = self.rt_refl_history[write_idx].as_ref().expect("ensured above");
                 tracer.accumulate_irradiance(
                     gpu.native_enc,
                     &accumulate_params,
@@ -4305,7 +4321,11 @@ impl EffectNode for RenderScene {
                     normal_history_write,
                     moments_read,
                     moments_write,
-                    "node.render_scene RT-P2/RT-T1-C/RT-T1-D accumulate_irradiance",
+                    refl_full,
+                    refl_history_read,
+                    refl_history_write,
+                    gi_materials_buffer,
+                    "node.render_scene RT-P2/RT-T1-C/RT-T1-D/RT-R2 accumulate_irradiance",
                 );
                 self.rt_history_ping = write_idx;
                 self.rt_moments_valid = true;

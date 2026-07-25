@@ -1443,6 +1443,13 @@ kernel void accumulate_irradiance(
     // 1e-5 scale this filter needs to resolve (catastrophic cancellation).
     texture2d<float>                     moments_read         [[texture(9)]],
     texture2d<float, access::write>      moments_write        [[texture(10)]],
+    // RT-R2 (RD6): reflection channel — current-frame filtered reflections
+    // (`.a` = hit distance), specular history ping-pong, and the material
+    // table (roughness source for the reprojection blend, Step 2).
+    texture2d<float>                     hi_refl             [[texture(11)]],
+    texture2d<float>                     refl_history_read   [[texture(12)]],
+    texture2d<float, access::write>      refl_history_write  [[texture(13)]],
+    constant GiMaterial*                 gi_materials        [[buffer(3)]],
     uint2 tid [[thread_position_in_grid]])
 {
     if (tid.x >= p.size.x || tid.y >= p.size.y) return;
@@ -1457,6 +1464,7 @@ kernel void accumulate_irradiance(
         depth_history_write.write(float4(cur_depth, 0, 0, 0), tid);
         normal_history_write.write(float4(cur_normal, 0), tid);
         moments_write.write(float4(cur_luma, cur_luma * cur_luma, 0, 0), tid);
+        refl_history_write.write(hi_refl.read(tid), tid);
         return;
     }
 
@@ -1554,6 +1562,7 @@ kernel void accumulate_irradiance(
     depth_history_write.write(float4(cur_depth, 0, 0, 0), tid);
     normal_history_write.write(float4(cur_normal, 0), tid);
     moments_write.write(float4(moment1, moment2, 0, 0), tid);
+    refl_history_write.write(hi_refl.read(tid), tid);
 }
 
 // RT-T1-B value-level test surface ONLY (`docs/RAYTRACING_DESIGN.md` §8
@@ -2223,6 +2232,13 @@ pub trait ShadowRayTracer {
         // comments.
         moments_read: &GpuTexture,
         moments_write: &GpuTexture,
+        // RT-R2 (RD6): reflection channel — current-frame filtered reflections
+        // (`.a` = hit distance), specular history ping-pong, and the material
+        // table (roughness source for the reprojection blend, Step 2).
+        hi_refl: &GpuTexture,
+        refl_history_read: &GpuTexture,
+        refl_history_write: &GpuTexture,
+        gi_materials: &GpuBuffer,
         label: &str,
     );
 }
@@ -2358,6 +2374,13 @@ impl MetalShadowRayTracer {
                 (8, SlotKind::Texture), // RT-T1-C: normal_history_write
                 (9, SlotKind::Texture),  // RT-T1-D: moments_read
                 (10, SlotKind::Texture), // RT-T1-D: moments_write
+                // RT-R2 (RD6): hi_refl / refl history pair / gi_materials —
+                // the R1 slot-map incident class; signatures and slot maps
+                // change together.
+                (11, SlotKind::Texture),
+                (12, SlotKind::Texture),
+                (13, SlotKind::Texture),
+                (3, SlotKind::Buffer),
             ]),
         );
         let debug_fetch_normal_pipeline = compile_pipeline(
@@ -2708,6 +2731,13 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         normal_history_write: &GpuTexture,
         moments_read: &GpuTexture,
         moments_write: &GpuTexture,
+        // RT-R2 (RD6): reflection channel — current-frame filtered reflections
+        // (`.a` = hit distance), specular history ping-pong, and the material
+        // table (roughness source for the reprojection blend, Step 2).
+        hi_refl: &GpuTexture,
+        refl_history_read: &GpuTexture,
+        refl_history_write: &GpuTexture,
+        gi_materials: &GpuBuffer,
         label: &str,
     ) {
         params_buffer.upload(accumulate_params_bytes(params));
@@ -2768,6 +2798,26 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                 GpuBinding::Texture {
                     binding: 10,
                     texture: moments_write,
+                },
+                // RT-R2 (RD6): hi_refl / refl history pair / gi_materials —
+                // the R1 slot-map incident class; signatures and slot maps
+                // change together.
+                GpuBinding::Texture {
+                    binding: 11,
+                    texture: hi_refl,
+                },
+                GpuBinding::Texture {
+                    binding: 12,
+                    texture: refl_history_read,
+                },
+                GpuBinding::Texture {
+                    binding: 13,
+                    texture: refl_history_write,
+                },
+                GpuBinding::Buffer {
+                    binding: 3,
+                    buffer: gi_materials,
+                    offset: 0,
                 },
             ],
             groups,
