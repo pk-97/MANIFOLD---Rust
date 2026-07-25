@@ -9,7 +9,7 @@ Do not hand-edit docs/README.md. Run this script to refresh it. A drift-guard
 test (crates/manifold-core/tests/docs_index_sync.rs) fails the suite if the
 committed index falls out of structural sync with docs/.
 
-Usage: python3 scripts/gen_docs_index.py
+Usage: scripts/gen_docs_index.py
 """
 from __future__ import annotations
 import re

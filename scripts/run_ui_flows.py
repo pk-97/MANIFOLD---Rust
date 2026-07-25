@@ -22,14 +22,14 @@ Harness exit codes (crates/manifold-app/src/ui_snapshot/script.rs):
 Runner exit: 0 iff every `flows` entry PASSed, no `expected_fail` entry
 unexpectedly PASSed, and every flow file on disk is accounted for
 (flows | expected_fail | unresolved). Run under the build lock:
-  .claude/scripts/with-build-lock.sh python3 scripts/run_ui_flows.py
+  .claude/scripts/with-build-lock.sh scripts/run_ui_flows.py
 Filter to a subset with flow-name substrings:
-  python3 scripts/run_ui_flows.py scene-setup audio
+  scripts/run_ui_flows.py scene-setup audio
 Landing flow gate (BUG-313 postmortem — the drag flow that caught the bug was
 red on main and nothing ran it): derive the filters from a git range via the
 manifest's `path_triggers` (path prefix -> filter list; a touched
 scripts/ui-flows/<flow>.json always runs that flow):
-  python3 scripts/run_ui_flows.py --touched origin/main...HEAD
+  scripts/run_ui_flows.py --touched origin/main...HEAD
 No trigger matches the diff -> exits 0 without building anything.
 """
 import json

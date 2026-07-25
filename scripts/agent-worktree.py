@@ -17,9 +17,9 @@ gitignored (they never dirty `git status`), and the cap bounds whatever
 bug comes next.
 
 Usage:
-  python3 scripts/agent-worktree.py list
-  python3 scripts/agent-worktree.py acquire <task-label> <branch> [--tip REF] [--owner TEXT]
-  python3 scripts/agent-worktree.py release <slot>
+  scripts/agent-worktree.py list
+  scripts/agent-worktree.py acquire <task-label> <branch> [--tip REF] [--owner TEXT]
+  scripts/agent-worktree.py release <slot>
 
 `acquire` prints the slot path plus the step-0 base-verification line
 (`git log --oneline -1`). The CALLER must confirm that line matches the
@@ -185,7 +185,7 @@ def verify_and_report(wt):
     head_line = git(wt, "log", "--oneline", "-1").stdout.strip()
     branch = git(wt, "branch", "--show-current").stdout.strip()
     print(f"WORKTREE: {wt}")
-    print(f"SLOT:     {wt.name}  (release with: python3 scripts/agent-worktree.py "
+    print(f"SLOT:     {wt.name}  (release with: scripts/agent-worktree.py "
           f"release {wt.name})")
     print(f"BRANCH:   {branch}")
     print(f"HEAD:     {head_line}")

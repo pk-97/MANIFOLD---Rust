@@ -140,7 +140,7 @@ def deny_reason(resolved):
         f"clean and runnable — agents edit in a git worktree, never directly on "
         f"main (CLAUDE.md, GIT_TREE_DISCIPLINE.md). Acquire a slot from the ring "
         f"and redo the edit there:\n\n"
-        f"  python3 scripts/agent-worktree.py acquire <task-label> "
+        f"  scripts/agent-worktree.py acquire <task-label> "
         f"<wave|lane|feat>/<name> --tip HEAD\n\n"
         f"then edit under the printed slot path and land back with a --no-ff "
         f"merge. Verify the base is the intended tip first (the acquire output's "

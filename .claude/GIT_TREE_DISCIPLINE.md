@@ -116,13 +116,13 @@ origin main` (allow + reminder present); `merge <branch>` while on main
   branch → rerun the gate (touched-crate clippy + focused tests; the full
   workspace sweep — workspace clippy `--tests` + `cargo nextest run --workspace` +
   `cargo deny check bans` — at batched landings per §2c, or sooner when blast
-  radius says so; plus the UI flow gate — `python3 scripts/run_ui_flows.py
+  radius says so; plus the UI flow gate — `scripts/run_ui_flows.py
   --touched origin/main...HEAD` — path-scoped via the flow manifest's
   `path_triggers`, exits 0 immediately when no flow-mapped path is touched;
   added after BUG-313 shipped with its catching flow red and unrun) →
   `git merge --no-ff` into main → push → if the push is
   rejected because someone landed first, repeat. New/renamed docs need
-  `python3 scripts/gen_docs_index.py` before the sweep — a freshness test
+  `scripts/gen_docs_index.py` before the sweep — a freshness test
   enforces it. The gate also owns status housekeeping: in the worktree, run
   its copies of `bug_status.py --check` (fix drift with `--write` there — it
   refuses in main) and `design_status_check.py origin/main HEAD`, so backlog
@@ -181,7 +181,7 @@ Measured basis: ~80% of a phase's wall-clock is cargo compile/test (playbook,
 
 1. **Reuse warm slots — the pool is a capped ring (reworked 2026-07-15
    after 19 per-task worktrees × 15–60 GB targets = 455 GB filled the
-   disk).** `python3 scripts/agent-worktree.py acquire <task-label> <branch>
+   disk).** `scripts/agent-worktree.py acquire <task-label> <branch>
    [--tip REF] [--owner TEXT]` re-points the warmest idle slot with
    `checkout -B`; slots are anonymous (`slot-0`…`slot-9`, task label lives
    in the lease), capped at 10 with no override (raised from 6 on

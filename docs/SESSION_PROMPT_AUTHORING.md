@@ -174,7 +174,7 @@ in the blanks rather than re-deriving the rules.
   a NEW file gets one targeted `git add <path>` first). Land per §2: fetch → merge
   → `merge --no-ff` → push.
 - **Mode B — code.** ONE warm worktree per workstream (never per phase), acquired
-  via `python3 scripts/agent-worktree.py acquire <name> <branch> [--tip REF]` — it
+  via `scripts/agent-worktree.py acquire <name> <branch> [--tip REF]` — it
   reuses the warmest idle pool dir, copies gitignored fixtures, and prints the
   step-0 line (still confirm the tip; a reused dir keeps its old name). NEVER the
   Agent tool's `isolation: "worktree"` (bases off the default branch); raw

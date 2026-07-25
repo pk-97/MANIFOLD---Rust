@@ -37,7 +37,7 @@ def main() -> int:
                 "WORKTREE POOL OVER BUDGET: " + " and ".join(problems) + ". "
                 "This should be structurally impossible (slot ring + git "
                 "worktree add deny) — something bypassed the ring. Tell "
-                "Peter NOW, run `python3 scripts/agent-worktree.py list`, "
+                "Peter NOW, run `scripts/agent-worktree.py list`, "
                 "and clean up idle slots with `git worktree remove` before "
                 "other work. Incident precedent: 2026-07-15, 455 GB."
             )

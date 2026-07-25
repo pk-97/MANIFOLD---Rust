@@ -238,7 +238,7 @@ Extend, don't redesign: every fix below is an existing in-repo pattern (`brdf_lu
   `.claude/GIT_TREE_DISCIPLINE.md`, batch per 2–3 phases.
 - **D10 — Phases land serially in one worktree, one workstream slot.** P1–P4 all touch
   `render_scene.rs` or its immediate collaborators; parallel executors would conflict in-file.
-  `python3 scripts/agent-worktree.py acquire render-scene-perf feat/render-scene-perf` once, all
+  `scripts/agent-worktree.py acquire render-scene-perf feat/render-scene-perf` once, all
   phases in it, release at end. Rejected: a slot per phase (the 2026-07-15 incident class; also
   pointless — the phases are sequential by data dependency R1→R2→R3).
 
@@ -499,7 +499,7 @@ on BrainStem, numbers into BUG-189's and BUG-190's backlog Status lines (BUG-189
 with the new floor; BUG-190: fixed / re-diagnosed with P0+P4 evidence); (2) supersession sweep per
 CLAUDE.md: `rg` for "BUG-189", "10ms floor", "import graph floor", "R0"–"R6" across `docs/` and
 the memory directory — fix or tombstone every stale assertion; this doc's Status header updated to
-SHIPPED-with-numbers; (3) `python3 scripts/gen_docs_index.py` if any doc was added/renamed;
+SHIPPED-with-numbers; (3) `scripts/gen_docs_index.py` if any doc was added/renamed;
 (4) a Deferred-item note: R4's revival trigger now carries the measured residual main-pass share
 (the number D2's trigger needs).
 Gate — positive: both backlog Status lines updated; `rg -n 'BUG-189' docs/` shows no line
