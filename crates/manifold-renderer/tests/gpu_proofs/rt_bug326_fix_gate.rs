@@ -7,7 +7,7 @@
 //! This test fails on pre-fix code: rt=1+refl=1 produces ~0.146 non-black
 //! fraction (Helmet, >2/255) vs ~0.238 baseline, which is < 80%.
 
-use manifold_gpu::GpuTextureFormat;
+use manifold_gpu::{GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
 use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_renderer::node_graph::gltf_import::assemble_import_graph;
 use manifold_renderer::node_graph::PrimitiveRegistry;
@@ -16,8 +16,8 @@ use manifold_renderer::preset_runtime::PresetRuntime;
 
 use crate::harness;
 
-const W: u32 = harness::PARITY_WIDTH;
-const H: u32 = harness::PARITY_HEIGHT;
+const W: u32 = 512;
+const H: u32 = 512;
 
 fn ctx(frame_count: i64) -> PresetContext {
     PresetContext {
@@ -85,6 +85,19 @@ fn readback_rgba_f32(device: &manifold_gpu::GpuDevice, texture: &manifold_gpu::G
     out
 }
 
+fn make_512_target(device: &GpuDevice, label: &str) -> manifold_gpu::GpuTexture {
+    device.create_texture(&GpuTextureDesc {
+        width: W,
+        height: H,
+        depth: 1,
+        format: GpuTextureFormat::Rgba16Float,
+        dimension: GpuTextureDimension::D2,
+        usage: GpuTextureUsage::RENDER_TARGET_FULL,
+        label,
+        mip_levels: 1,
+    })
+}
+
 fn build_helmet_harness(
     h: &harness::ParityHarness,
     rt_enabled: bool,
@@ -121,8 +134,8 @@ fn build_helmet_harness(
     )
     .expect("imported def must build a runtime");
 
-    let target = h.make_target("bug326-gate-target");
-    (runtime, target.texture)
+    let target = make_512_target(&h.device, "bug326-gate-target");
+    (runtime, target)
 }
 
 /// Render an imported Helmet with RT on, then compare its non-black fraction
@@ -151,8 +164,8 @@ fn imported_glb_rt_on_stays_within_80pct_of_baseline() {
     );
 
     assert!(
-        on_frac >= 0.40 * baseline_frac,
-        "BUG-326: imported GLB with rt enabled dropped below 40% of baseline \
+        on_frac >= 0.80 * baseline_frac,
+        "BUG-326: imported GLB with rt enabled dropped below 80% of baseline \
          (baseline {baseline_frac:.4}, rt-on {on_frac:.4}, ratio {:.2}) — the fix has regressed",
         on_frac / baseline_frac
     );

@@ -744,12 +744,14 @@ pub struct RenderScene {
     /// `ready` still gates ENQUEUING the next refit (never rewrite the
     /// CPU-mapped instance buffer while a refit/build is in flight).
     rt_accel_built: bool,
-    /// BUG-326: set true in the first-sighting else branch (before the
+    /// BUG-326: armed in the first-sighting else branch (before the
     /// one-frame defer), consumed by the rerun block above — exactly one
-    /// extra `build_accel` per topology change. `rt_accel_rerun_done`
-    /// prevents the else-branch from re-arming after the rerun fires.
+    /// extra `build_accel` per topology change. Re-armed by every genuinely
+    /// new topo sighting, so a mid-set object add whose mesh is still
+    /// streaming in gets the same protection as the initial project load.
+    /// Needs no done-flag: the rerun block never invalidates the topo keys,
+    /// so it can never re-arm itself.
     rt_accel_rerun_armed: bool,
-    rt_accel_rerun_done: bool,
     /// Half-res shadow-ray-trace target + full-res upsampled mask
     /// (RT-D3's "D11 trivial pass"). Sized to the scene's own
     /// `width`/`height`, ensured lazily like every other RT-only
@@ -1041,7 +1043,6 @@ impl RenderScene {
             rt_accel_pending_key: None,
             rt_accel_built: false,
             rt_accel_rerun_armed: false,
-            rt_accel_rerun_done: false,
             rt_mask_half: None,
             rt_mask_full: None,
             rt_mask_width: 0,
@@ -3922,11 +3923,10 @@ impl EffectNode for RenderScene {
             // staging copy and the BLAS build are on separate command
             // buffers; the BLAS races ahead). Once that build is observed
             // ready, replace the accel immediately with a fresh build that
-            // runs after the mesh copy has landed. `rt_accel_rerun_done` is
-            // permanent — one rerun per RenderScene lifetime.
+            // runs after the mesh copy has landed. One rerun per topology
+            // change; re-armed by the next genuine topo sighting.
             if self.rt_accel_rerun_armed && rt_ready {
                 self.rt_accel_rerun_armed = false;
-                self.rt_accel_rerun_done = true;
                 let tracer = self.rt_tracer.as_ref().expect("ensured above");
                 self.rt_accel = Some(tracer.build_accel(gpu.device, &objects));
                 self.rt_accel_built = false;
@@ -3963,12 +3963,8 @@ impl EffectNode for RenderScene {
                     );
                 } else {
                     // BUG-326: arm the one-shot rerun for the build this
-                    // new-topology sighting will produce. Gated on
-                    // `!rt_accel_rerun_done` so the rerun's own re-entry
-                    // (from topo-key invalidation) cannot re-arm.
-                    if !self.rt_accel_rerun_done {
-                        self.rt_accel_rerun_armed = true;
-                    }
+                    // new-topology sighting will produce.
+                    self.rt_accel_rerun_armed = true;
                     self.rt_accel_pending_key = Some(topo_key);
                     log::info!(
                         "node.render_scene: RT accel structure build requested (topo key {topo_key:#x}); deferring one frame so it can't race this frame's mesh-generation GPU writes"
