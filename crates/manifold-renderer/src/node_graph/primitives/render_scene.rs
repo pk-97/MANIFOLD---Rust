@@ -744,6 +744,11 @@ pub struct RenderScene {
     /// `ready` still gates ENQUEUING the next refit (never rewrite the
     /// CPU-mapped instance buffer while a refit/build is in flight).
     rt_accel_built: bool,
+    /// BUG-326: sum of vertex generations at the time the current accel was
+    /// built. If the sum increases without a topo key change (async load wrote
+    /// real vertices into the zero-filled pre-load buffer), force one rebuild.
+    /// `None` = no accel built yet.
+    rt_accel_gen_sum: Option<u64>,
     /// Half-res shadow-ray-trace target + full-res upsampled mask
     /// (RT-D3's "D11 trivial pass"). Sized to the scene's own
     /// `width`/`height`, ensured lazily like every other RT-only
@@ -1034,6 +1039,7 @@ impl RenderScene {
             rt_accel_topo_key: None,
             rt_accel_pending_key: None,
             rt_accel_built: false,
+            rt_accel_gen_sum: None,
             rt_mask_half: None,
             rt_mask_full: None,
             rt_mask_width: 0,
@@ -3854,6 +3860,17 @@ impl EffectNode for RenderScene {
                 })
                 .collect();
 
+            // BUG-326: compute the generation sum for async-load detection
+            // before hashing the topo key (the sum doesn't go INTO the key;
+            // it's compared AFTER to detect a content change that leaves
+            // buffer-identity/triangle_count untouched — the async glb load
+            // bug exactly: pre-load zero buffer gets real vertices, topo key
+            // never changes, frozen empty BVH).
+            let gen_sum: u64 = shadow_caster_draws
+                .iter()
+                .filter_map(|d| d.vertices_generation)
+                .sum();
+
             // Dirty-check keys, same hashing idiom as `shadow_cache_keys`
             // above, split in two (BUG-320): the TOPO key (buffers,
             // counts, epoch) decides rebuild-vs-not; folding transforms
@@ -3869,23 +3886,26 @@ impl EffectNode for RenderScene {
                 o.vertex_buffer.identity_key().hash(&mut hasher);
                 hasher.write_u32(o.triangle_count);
             }
-            // BUG-326 fix: mesh CONTENT changes (async load after build, animated
-            // mesh-gen) must trigger a full accel rebuild. `vertices_generation`
-            // is the slot write-generation of each object's mesh Array channel —
-            // already maintained for the shadow-map cache key exactly because
-            // vertex content can change under a fixed buffer identity (the
-            // async glb load bug: the BLAS was built over a zero-filled buffer,
-            // the loader wrote real vertices later, the topo key never changed,
-            // and every subsequent ray found an empty BVH). Folding the per-draw
-            // generation into the topo key catches any mesh content change.
-            // Cost: animated mesh-gen regenerating vertices every frame now
-            // rebuilds the accel per change — a refit-only fast path for vertex
-            // content is a named follow-up, not this commit.
-            for d in &shadow_caster_draws {
-                d.vertices_generation.hash(&mut hasher);
-            }
             hasher.write_u64(ctx.rebuild_epoch);
             let topo_key = hasher.finish();
+            // BUG-326: one-shot rebuild trigger. If the accel was built over
+            // pre-load zero buffers (all vertex generations were 0), and now
+            // at least one generation advanced past 0 (async load completed)
+            // without a topo key change, invalidate it to force a rebuild.
+            // After the rebuild the gen_sum is > 0 and this branch never
+            // fires again — hand-authored generators have generations > 0 at
+            // first build so `prev_sum == 0` is false for them.
+            if self.rt_accel_gen_sum == Some(0)
+                && gen_sum > 0
+                && self.rt_accel_topo_key == Some(topo_key)
+            {
+                log::info!(
+                    "node.render_scene: BUG-326 async load detected (generation 0 -> {gen_sum}); forcing accel rebuild"
+                );
+                self.rt_accel_topo_key = None;
+                self.rt_accel_pending_key = None;
+                self.rt_accel_built = false;
+            }
             for o in &objects {
                 hasher.write(bytemuck::bytes_of(&o.transform));
             }
@@ -3948,6 +3968,10 @@ impl EffectNode for RenderScene {
                     // BUG-320: the fresh build must be observed ready
                     // before tracing resumes — the old accel is gone.
                     self.rt_accel_built = false;
+                    // BUG-326: record the generation sum at build time, so
+                    // the next-frame gen_sum > prev_sum check can detect the
+                    // async load (pre-load zero buffer populated by late write).
+                    self.rt_accel_gen_sum = Some(gen_sum);
                     log::info!(
                         "node.render_scene: RT accel structure (re)build enqueued (async, topo key {topo_key:#x}) — raster shadow-map path serves this scene until it's ready"
                     );
