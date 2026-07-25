@@ -1,3 +1,5 @@
+**FROZEN 2026-07-25 — superseded by beads (`bd`).** This file is read-only history. Open bugs were migrated into the beads DB with their `BUG-NNN` ids preserved in `external_ref` (find one: `bd list --title BUG-NNN --json --flat`). New bugs: `bd create -t bug`. Never edit this file again; the closed-bug archive at docs/archive/BUG_BACKLOG_CLOSED.md is likewise frozen.
+
 # Bug Backlog
 
 <!-- index: Live, human-and-agent-facing tracker for known bugs not yet fixed. Each entry has a stable ID, a root-cause location, the user-visible symptom, a fix shape, and (when one exists) an #[ignore]'d test that goes green when fixed. -->
