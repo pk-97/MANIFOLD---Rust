@@ -468,6 +468,9 @@ struct ShadowRayParams {
     // P1. Column-major, matches `render_scene.rs`'s `mat4_inverse` output
     // and `render_scene.wgsl`'s `Uniforms.view_proj` convention.
     float4x4 inv_view_proj;
+    // BUG-326 probe (env-gated): 0 = no kernel debug counters; 1 = count
+    // primary-ray candidates/alpha-discards/hits/out_refl writes.
+    uint debug_counters;
 };
 
 // RT-P3: one entry per RT object (SAME order as `RtObjectGeometry`'s
@@ -614,9 +617,12 @@ static bool walk_with_alpha_test(
     thread intersection_query<triangle_data, instancing>& q,
     constant RtNormalSource* normal_sources,
     array<texture2d<float>, MAX_RT_MATERIAL_TEXTURES> material_textures,
-    bool any_hit)
+    bool any_hit,
+    thread uint* num_candidates,
+    thread uint* num_discards)
 {
     while (q.next()) {
+        if (num_candidates) *num_candidates += 1;
         if (q.get_candidate_intersection_type() != intersection_type::triangle) continue;
         uint iid = q.get_candidate_instance_id();
         constant RtNormalSource& src = normal_sources[iid];
@@ -626,6 +632,7 @@ static bool walk_with_alpha_test(
                 src, normal_sources, material_textures,
                 iid, q.get_candidate_primitive_id(), q.get_candidate_triangle_barycentric_coord());
             pass = alpha >= src.alpha_cutoff;
+            if (!pass && num_discards) *num_discards += 1;
         }
         if (pass) {
             // `commit_triangle_intersection()`, not `accept_intersection()`
@@ -788,6 +795,8 @@ kernel void trace_shadow_rays(
     constant ShadowRayParams&        p              [[buffer(1)]],
     constant GiMaterial*             gi_materials   [[buffer(2)]],
     constant RtNormalSource*         normal_sources [[buffer(3)]],
+    // BUG-326 probe: debug counter buffer (6 atomic u32s gated on p.debug_counters)
+    device atomic_uint*              debug_counters [[buffer(4)]],
     depth2d<float>                   depth_tex      [[texture(0)]],
     texture2d<float, access::write>  out_sv         [[texture(1)]],
     texture2d<float, access::write>  out_irr        [[texture(2)]],
@@ -824,6 +833,10 @@ kernel void trace_shadow_rays(
         out_refl.write(float4(0, 0, 0, 0), tid);
         return;
     }
+    // BUG-326 probe: count threads with valid world position.
+    if (p.debug_counters > 0u) {
+        atomic_fetch_add_explicit(&debug_counters[0], 1u, memory_order_relaxed);
+    }
     // Neighbor world positions (screen-space reconstruction, RT-D3) — kept
     // ONLY for `texel_scale` below (the bias epsilon's scale-awareness);
     // RT-T1-B moved normal reconstruction off this finite difference (see
@@ -856,6 +869,9 @@ kernel void trace_shadow_rays(
     // RT-R1: the primary ray is also the reflection block's source of `n`
     // and `obj_id` (RD3 — vertex normal, not shading normal), so it must
     // cast whenever reflections are on too.
+    // BUG-326 probe counters for the primary visibility ray.
+    uint primary_num_candidates = 0;
+    uint primary_num_discards = 0;
     if (p.ao_spp > 0u || p.gi_spp > 0u || p.refl_spp > 0u) {
         float3 to_surface = wp - float3(p.camera_pos);
         float dist = length(to_surface);
@@ -867,11 +883,22 @@ kernel void trace_shadow_rays(
             pr.max_distance = dist + dist * 1e-3 + 1e-4;
             intersection_query<triangle_data, instancing> primary_q;
             primary_q.reset(pr, accel);
-            if (walk_with_alpha_test(primary_q, normal_sources, material_textures, false)) {
+            if (walk_with_alpha_test(primary_q, normal_sources, material_textures, false, &primary_num_candidates, &primary_num_discards)) {
                 uint primary_iid = primary_q.get_committed_instance_id();
                 n = fetch_interpolated_normal(normal_sources, primary_iid, primary_q.get_committed_primitive_id(), primary_q.get_committed_triangle_barycentric_coord());
                 obj_id = float(primary_iid);
             }
+        }
+    }
+    // BUG-326 probe: accumulate primary-ray counters (when env-gated).
+    if (p.debug_counters > 0u) {
+        // [1] primary-ray candidates seen (total from walk_with_alpha_test)
+        atomic_fetch_add_explicit(&debug_counters[1], primary_num_candidates, memory_order_relaxed);
+        // [2] primary-ray candidates discarded by alpha test
+        atomic_fetch_add_explicit(&debug_counters[2], primary_num_discards, memory_order_relaxed);
+        // [3] committed hits (obj_id >= 0)
+        if (obj_id >= 0.0) {
+            atomic_fetch_add_explicit(&debug_counters[3], 1u, memory_order_relaxed);
         }
     }
     // BUG-309: a FIXED 1e-3 world-unit bias self-intersects almost
@@ -933,7 +960,7 @@ kernel void trace_shadow_rays(
         r.direction = cone_sample(p.sun_dir, p.sun_cone, rand2(tid, p.frame_index, s));
         intersection_query<triangle_data, instancing> shadow_q;
         shadow_q.reset(r, accel);
-        bool blocked = walk_with_alpha_test(shadow_q, normal_sources, material_textures, true);
+        bool blocked = walk_with_alpha_test(shadow_q, normal_sources, material_textures, true, (thread uint*)0, (thread uint*)0);
         if (!blocked) vis += 1.0;
     }
     vis /= float(spp);
@@ -956,7 +983,7 @@ kernel void trace_shadow_rays(
             ao_r.direction = cosine_hemisphere(n, blue_noise_sample(tid, p.frame_index, s, p.ao_spp));
             intersection_query<triangle_data, instancing> ao_q;
             ao_q.reset(ao_r, accel);
-            if (!walk_with_alpha_test(ao_q, normal_sources, material_textures, true)) ao += 1.0;
+            if (!walk_with_alpha_test(ao_q, normal_sources, material_textures, true, (thread uint*)0, (thread uint*)0)) ao += 1.0;
         }
         ao /= float(p.ao_spp);
     }
@@ -994,7 +1021,7 @@ kernel void trace_shadow_rays(
             gr.direction = cosine_hemisphere(n, blue_noise_sample(tid, p.frame_index, s, p.gi_spp));
             intersection_query<triangle_data, instancing> gi_q;
             gi_q.reset(gr, accel);
-            bool gi_hit = walk_with_alpha_test(gi_q, normal_sources, material_textures, false);
+            bool gi_hit = walk_with_alpha_test(gi_q, normal_sources, material_textures, false, (thread uint*)0, (thread uint*)0);
             if (gi_hit) {
                 uint oi = gi_q.get_committed_instance_id();
                 uint gi_pid = gi_q.get_committed_primitive_id();
@@ -1019,7 +1046,7 @@ kernel void trace_shadow_rays(
                 sun_r.max_distance = INFINITY;
                 intersection_query<triangle_data, instancing> sun_q;
                 sun_q.reset(sun_r, accel);
-                float hit_sun_vis = walk_with_alpha_test(sun_q, normal_sources, material_textures, true) ? 0.0 : 1.0;
+                float hit_sun_vis = walk_with_alpha_test(sun_q, normal_sources, material_textures, true, (thread uint*)0, (thread uint*)0) ? 0.0 : 1.0;
                 float hit_ndotl = max(dot(hit_n, p.sun_dir), 0.0);
                 // Named, documented, tunable (RAYTRACING_DESIGN.md §5.2 P2's
                 // "denoiser/accumulation parameters are named constants"
@@ -1055,6 +1082,10 @@ kernel void trace_shadow_rays(
     // says reuse it): the t_min rejection below is what protects the
     // reflection ray from self-intersection, same as the shadow ray's.
     const float RT_REFL_MISS_HIT_DIST = 0.0;
+    if (p.debug_counters > 0u && p.refl_spp > 0u && obj_id < 0.0) {
+        // No valid primary ray for reflection — out_refl stays at cleared 0
+        atomic_fetch_add_explicit(&debug_counters[4], 1u, memory_order_relaxed);
+    }
     if (p.refl_spp > 0u && obj_id >= 0.0) {
         uint roi = uint(obj_id);
         float4 mr = gi_materials[roi].metallic_roughness;
@@ -1068,6 +1099,8 @@ kernel void trace_shadow_rays(
             // RD7: above the cutoff+band the prefiltered env IS the
             // approximation — no ray cast.
             out_refl.write(float4(env, RT_REFL_MISS_HIT_DIST), tid);
+            // BUG-326 probe: env-only (no ray) miss path.
+            if (p.debug_counters > 0u) atomic_fetch_add_explicit(&debug_counters[4], 1u, memory_order_relaxed);
         } else {
             float3 rdir = R;
             if (roughness > 0.0) {
@@ -1082,7 +1115,7 @@ kernel void trace_shadow_rays(
             refl_q.reset(rr, accel);
             float3 traced;
             float hit_dist = RT_REFL_MISS_HIT_DIST;
-            if (walk_with_alpha_test(refl_q, normal_sources, material_textures, false)) {
+            if (walk_with_alpha_test(refl_q, normal_sources, material_textures, false, (thread uint*)0, (thread uint*)0)) {
                 // Raster-parity reflections (RAYTRACING_DESIGN.md §9.6): hit
                 // shading now includes the hit surface's own environment
                 // contribution (diffuse irradiance + one-bounce specular), so
@@ -1128,7 +1161,7 @@ kernel void trace_shadow_rays(
                 sun_r.max_distance = INFINITY;
                 intersection_query<triangle_data, instancing> sun_q;
                 sun_q.reset(sun_r, accel);
-                float hit_sun_vis = walk_with_alpha_test(sun_q, normal_sources, material_textures, true) ? 0.0 : 1.0;
+                float hit_sun_vis = walk_with_alpha_test(sun_q, normal_sources, material_textures, true, (thread uint*)0, (thread uint*)0) ? 0.0 : 1.0;
                 float hit_ndotl = max(dot(hit_n, p.sun_dir), 0.0);
                 float3 sun_bounce_term = hit_albedo * float3(p.sun_color) * hit_sun_vis * hit_ndotl * SUN_BOUNCE_INTENSITY_SCALE;
                 // Full raster-parity shading: emissive + diffuse-env + specular-env + sun-bounce.
@@ -1143,6 +1176,8 @@ kernel void trace_shadow_rays(
             // visible edge (Q2's approved BRDF-domain split).
             float band_t = saturate((roughness - p.refl_max_roughness) / max(p.refl_rough_band, 1e-4));
             out_refl.write(float4(mix(traced, env, band_t), hit_dist), tid);
+            // BUG-326 probe: hit (traced) path.
+            if (p.debug_counters > 0u) atomic_fetch_add_explicit(&debug_counters[5], 1u, memory_order_relaxed);
         }
     } else {
         // Reflections off this frame (or the primary ray missed — no
@@ -1643,6 +1678,8 @@ pub struct ShadowRayParams {
     _pad_align_mat4: [u32; 2],
     /// Column-major, matches `render_scene.rs`'s `mat4_inverse` output.
     pub inv_view_proj: [[f32; 4]; 4],
+    /// BUG-326 probe: 0 = no kernel debug counters; 1 = count primary/candidate/hit/refl.
+    pub debug_counters: u32,
 }
 
 impl ShadowRayParams {
@@ -1666,6 +1703,7 @@ impl ShadowRayParams {
         refl_spp: u32,
         refl_max_roughness: f32,
         refl_rough_band: f32,
+        debug_counters: u32,
     ) -> Self {
         Self {
             sun_dir,
@@ -1686,6 +1724,7 @@ impl ShadowRayParams {
             _pad_refl: 0,
             _pad_align_mat4: [0; 2],
             inv_view_proj,
+            debug_counters,
         }
     }
 }
@@ -1727,7 +1766,7 @@ impl GiMaterial {
 // reordered/resized above it), this fails at compile time instead of
 // silently reading garbage on the GPU.
 const _: () = assert!(std::mem::offset_of!(ShadowRayParams, inv_view_proj) == 112);
-const _: () = assert!(std::mem::size_of::<ShadowRayParams>() == 176);
+const _: () = assert!(std::mem::size_of::<ShadowRayParams>() == 180);
 
 /// RT-T1-B (RAYTRACING_DESIGN.md §8 Tier-1 item 2): per-object bindless
 /// indirection for real vertex-normal interpolation in the RT trace kernel
@@ -2126,6 +2165,10 @@ pub trait ShadowRayTracer {
         // reflection ray's miss radiance. Always bound (dummy when the
         // scene has no env chain).
         prefiltered_env: &GpuTexture,
+        // BUG-326 probe: debug counter buffer (6 atomic u32s at [[buffer(4)]]).
+        // Always bound — a dummy 64B buffer when the env gate is off (kernel
+        // writes nothing when p.debug_counters == 0).
+        counters_buffer: &GpuBuffer,
         label: &str,
     );
 
@@ -2269,6 +2312,7 @@ impl MetalShadowRayTracer {
             (1, SlotKind::Buffer),
             (2, SlotKind::Buffer), // RT-P3: gi_materials, MSL [[buffer(2)]]
             (3, SlotKind::Buffer), // RT-T1-B: normal_sources, MSL [[buffer(3)]]
+            (4, SlotKind::Buffer), // BUG-326 probe: debug counter buffer
             (0, SlotKind::Texture),
             (1, SlotKind::Texture),
             (2, SlotKind::Texture),
@@ -2467,6 +2511,7 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         out_n: &GpuTexture,
         out_refl: &GpuTexture,
         prefiltered_env: &GpuTexture,
+        counters_buffer: &GpuBuffer,
         label: &str,
     ) {
         params_buffer.upload(bytemuck_bytes(params));
@@ -2485,6 +2530,12 @@ impl ShadowRayTracer for MetalShadowRayTracer {
             GpuBinding::Buffer {
                 binding: 3,
                 buffer: normal_sources,
+                offset: 0,
+            },
+            // BUG-326 probe: debug counter buffer at [[buffer(4)]].
+            GpuBinding::Buffer {
+                binding: 4,
+                buffer: counters_buffer,
                 offset: 0,
             },
             GpuBinding::Texture {

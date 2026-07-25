@@ -884,6 +884,8 @@ pub struct RenderScene {
     // BUG-326 probe fields
     bug326_depth_readback: Option<manifold_gpu::GpuBuffer>,
     bug326_probe_pixels: Vec<(u32, u32)>,
+    /// BUG-326 probe: debug counter buffer for primary-ray counters (6 atomic u32s).
+    bug326_counter_buffer: Option<manifold_gpu::GpuBuffer>,
 }
 
 /// VOLUMETRIC_LIGHT_DESIGN.md D1/V1: the sole CPU gate for the whole
@@ -1082,6 +1084,7 @@ impl RenderScene {
             light_port_names: Vec::new(),
             bug326_depth_readback: None,
             bug326_probe_pixels: Vec::new(),
+            bug326_counter_buffer: None,
         };
         s.rebuild(DEFAULT_OBJECTS, DEFAULT_LIGHTS);
         s
@@ -3998,6 +4001,22 @@ impl EffectNode for RenderScene {
                     // identical content, the buffer was populated by the
                     // `copy_texture_to_buffer` issued after
                     // `dispatch_shadow_rays` last frame).
+                    // BUG-326 probe: read primary-ray debug counters from
+                    // PREVIOUS frame's dispatch (one-frame latency, static scene).
+                    if let Some(ref cnt_buf) = self.bug326_counter_buffer {
+                        let cnt_ptr = cnt_buf.mapped_ptr()
+                            .expect("BUG326_PROBE: counter buffer must have mapped ptr");
+                        let counters: &[u32] = unsafe {
+                            std::slice::from_raw_parts(cnt_ptr.cast::<u32>(), 6)
+                        };
+                        let total_wp = counters[0].max(1); // avoid div-by-zero
+                        eprintln!("BUG326_PROBE: counters=[{}] valid_wp={} candidates={} ({:.1}%) discards={} ({:.1}%) hits={} ({:.1}%) refl_miss={} refl_hit={}",
+                            counters.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(","),
+                            counters[0], counters[1], 100.0 * counters[1] as f64 / total_wp as f64,
+                            counters[2], 100.0 * counters[2] as f64 / total_wp as f64,
+                            counters[3], 100.0 * counters[3] as f64 / total_wp as f64,
+                            counters[4], counters[5]);
+                    }
                     if let Some(ref buf) = self.bug326_depth_readback {
                         let ptr = buf.mapped_ptr()
                             .expect("BUG326_PROBE: shared buffer must have mapped ptr");
@@ -4102,6 +4121,7 @@ impl EffectNode for RenderScene {
                     if rt_reflections { 1 } else { 0 },
                     0.6,
                     0.1,
+                    if bug326_probe { 1 } else { 0 },
                 );
                 // RAYTRACING_DESIGN.md §5.2 P3: rebuild the per-object
                 // material table from the SAME `shadow_caster_draws` order
@@ -4204,6 +4224,16 @@ impl EffectNode for RenderScene {
                 let refl_half = self.rt_refl_half.as_ref().expect("ensured above");
                 let refl_full = self.rt_refl_full.as_ref().expect("ensured above");
                 let _refl_full_b = self.rt_refl_full_b.as_ref().expect("ensured above");
+                // BUG-326 probe: ensure a 64-byte shared counter buffer.
+                if self.bug326_counter_buffer.is_none() {
+                    self.bug326_counter_buffer = Some(gpu.device.create_buffer_shared(64));
+                }
+                let counters_buffer = self.bug326_counter_buffer.as_ref().expect("just ensured");
+                if bug326_probe {
+                    // Zero the counter buffer before dispatch.
+                    let ptr = counters_buffer.mapped_ptr().expect("counter buffer must be shared");
+                    unsafe { std::ptr::write_bytes(ptr, 0, 64); }
+                }
                 tracer.dispatch_shadow_rays(
                     gpu.native_enc,
                     accel,
@@ -4225,6 +4255,7 @@ impl EffectNode for RenderScene {
                     self.prefiltered_specular.as_ref().unwrap_or(
                         self.dummy_texture.as_ref().expect("ensured at 3491"),
                     ),
+                    counters_buffer,
                     "node.render_scene RT-D3/RT-P2/RT-P3 trace_shadow_rays",
                 );
                 // BUG-326 probe: copy opaque_depth_snapshot to a CPU-mappable
