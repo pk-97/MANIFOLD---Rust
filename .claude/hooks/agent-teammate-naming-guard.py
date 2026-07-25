@@ -8,7 +8,7 @@ background agent within a minute of its first lane task this session, and
 opaque task labels (T1, D-52) were already a standing Peter rule
 (memory: no-opaque-task-labels) with no machinery behind it.
 
-The convention (mirrors the D-48 slot map, docs/AGENT_ROUTING.md):
+The convention (mirrors the model slot map, docs/AGENT_ROUTING.md):
   name = "<slot>-<descriptive-task>"
   slot <- model arg:  haiku->flash  sonnet->glm47  opus->glm52  fable->k3
   kebab-case; the task part must be descriptive — at least two alphabetic
