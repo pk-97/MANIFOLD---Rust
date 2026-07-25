@@ -67,3 +67,9 @@ tests/fixtures/gltf/kloppenheim_07_puresky_4k.exr
 tests/fixtures/gltf/*.glb
 tests/fixtures/gltf/*.fbx
 tests/fixtures/gltf/drogon__game_of_thrones_dragon/
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+.beads/proxieddb/
