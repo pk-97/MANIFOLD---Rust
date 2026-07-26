@@ -127,3 +127,21 @@ Not novel as a concept — workflow engines and CI pipelines are old. What is ne
 - **Driver script.** Peter's call, per the handoff's standing note.
 - **Plan-template library.** After R2, name the repeated shapes and pre-adversarial them.
 - **The general claim stays parked.** Universal semantic IR between humans, models, and workflows — overshoot until oracle coverage exists outside code (§4.9).
+
+## 10. CANDIDATE: DEBUG_INVESTIGATION — a program shape from the RT static-death hunt (2026-07-26, proposed, not adopted)
+
+The RT static-death hunt (BUG-jddy) ran one full day: ~5 hours of theory-building that reading could not settle, resolved in the end by a cure-test (forced refit) that was simultaneously the stopgap and the bisect. Retrospective: every wasted hour traces to a judgment failure of a kind a fixed opcode sequence would have prevented, and every win came from a step that *was* in the discipline but executed late. A bug investigation is a recurring shape with the same skeleton — it is a plan-template candidate (§9).
+
+**The measured failures and their opcodes:**
+
+1. **Keyword-vocabulary negative claim (~1h lost).** "The project has no modulator" — searched `modulator`/`lfo`; the data was under `drivers`/`waveform`. Opcode: **SCHEMA_SEARCH before any negative claim about a data file** — enumerate keys/structure; keyword search may confirm presence, never absence.
+2. **Trigger overfitting (~2h lost).** First repro was transport pause; two theories built on pause; Peter corrected twice ("not JUST the pause"). Opcode: **GENERALIZE_TRIGGER after the first repro** — write the trigger's class in one sentence ("what did this repro change about the system's inputs?"), design the next test against the class. Operator reports of the symptom outside the repro's conditions are data about the class, not noise.
+3. **Reading past the stall point (~2h lost).** Two hours of kernel/executor reading after the correlation "alive ⟺ refit this frame" was established. Opcode: **CURE_TEST once a perfect action-correlation exists and two read rounds have not cracked the mechanism** — force the smallest version of the correlated action (marked STOPGAP). Never wasted: works → rig safe + cause localized to the action's parts; fails → suspect eliminated. Then DECOMPOSE: test each part of the action alone; the survivor is the mechanism.
+4. **Unbudgeted delegate (~200K tokens lost).** An adversarial review agent with a read-only brief wandered for an hour and ignored two stop messages. Opcode: **BUDGET every review/consult brief** — hard token/time cap, mandatory partial-report checkpoint ("report at N, incomplete is fine"), named deliverable shape; orchestrator polices at half the budget.
+5. **Delayed-failure `cd` (near-miss).** A persistent-cwd slip nearly produced a merge into the wrong checkout an hour later. Not an opcode — a reinforcement that shell-state errors surface *delayed*; the no-`cd` rule's cost model is this incident, not tidiness.
+
+**The skeleton the opcodes hang on:** REPRODUCE_HEADLESS_FIRST (build/borrow the instrument before reading — this one we got right, and it was the session's spine) → SCHEMA_SEARCH → REPRO → GENERALIZE_TRIGGER → SPLIT_CASE (what does NOT show the symptom — existing discipline, fired early, worked) → two read rounds max → CURE_TEST → DECOMPOSE → LAND the stopgap marked, root cause in beads.
+
+**Honest bound (same shape as §8's):** the program controls the mechanical fraction of debugging — the elimination sequence — not the judgment fraction. It would not have found the GPU-command-layer mechanism; nothing would have short of the evidence. What it buys is arrival at the corner in half the tokens, with the rig protected and the session's judgment budget spent on the one step that needed it. The mechanism hunt itself stays in the ESCALATE seat.
+
+**Adoption test:** next wrong-and-not-obvious bug, run the skeleton as a checklist (no runtime needed). If it changes the order of operations even once, it has paid for the ink.
