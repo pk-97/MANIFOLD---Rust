@@ -96,7 +96,7 @@ mod perf_soak;
 mod perf_soak_import;
 // ── RT washout probe (temporary, env-gated) ─────────────────────
 #[cfg(all(feature = "perf-soak", target_os = "macos"))]
-mod rt_washout_probe;
+mod rt_capture;
 mod project_io;
 #[cfg(target_os = "macos")]
 mod shared_texture;
@@ -151,13 +151,13 @@ fn main() {
         }
     }
 
-    // --- `rt-washout` (temporary, env-gated probe) ---
-    // MANIFOLD_RT_PROBE=1 cargo run --features perf-soak --bin manifold -- manifold rt-washout <project>
+    // --- `rt-capture` (headless RT channel verification) ---
+    // cargo run --features perf-soak --bin manifold -- manifold rt-capture <project> [--frames N]
     #[cfg(all(feature = "perf-soak", target_os = "macos"))]
     {
         let args: Vec<String> = std::env::args().collect();
-        if args.get(1).map(String::as_str) == Some("rt-washout") {
-            crate::rt_washout_probe::run(&args[1..]);
+        if args.get(1).map(String::as_str) == Some("rt-capture") {
+            crate::rt_capture::run(&args[1..]);
         }
     }
     // --- `--resume <breadcrumb-path>` (GIG_RESILIENCE_DESIGN §5.2) ---

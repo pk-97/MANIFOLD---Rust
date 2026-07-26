@@ -81,23 +81,35 @@ use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
 use crate::node_graph::primitive::PrimitiveDescription;
 
-// ── RT washout capture statics (env-gated, temporary, probe-branch only) ──
+// ── RT capture harness: headless RT channel verification ────────
+// The `rt-capture` subcommand (manifold-app, behind perf-soak feature) sets
+// these flags to snapshot internal RT textures from render_scene::evaluate.
+// Captured textures are read back by the harness after commit_and_wait.
+// Purpose: verify RT channel health (hit-fraction, luma, contrast) across
+// motion→still transitions without a GUI session.
+//
+// Architecture:
+//   RT_CAPTURE_ARM / RT_CAPTURE_ARM_COMPOSITE = set by harness before a tick.
+//   RT_CAPTURE_QUEUE = render_scene pushes cloned MTLTexture refs + metadata.
+//   Harness drains queue after commit_and_wait, reads back via
+//   headless_readback::readback_raw_halves, computes stats, writes PNG.
+//   COPY_SRC on ensure_rt_irradiance textures makes GPU readback possible.
 use std::sync::Mutex;
-pub struct WashoutCap {
+pub struct RtCaptureSlot {
     pub label: String,
     pub tex: manifold_gpu::GpuTexture,
     pub frame: u32,
     pub w: u32,
     pub h: u32,
 }
-pub static WASHOUT_CAPTURE_NOW: std::sync::atomic::AtomicBool =
+pub static RT_CAPTURE_ARM: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 /// Set by harness to capture composited output at end of evaluate.
-pub static WASHOUT_CAPTURE_COMPOSITE: std::sync::atomic::AtomicBool =
+pub static RT_CAPTURE_ARM_COMPOSITE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
-pub static WASHOUT_QUEUE: std::sync::LazyLock<Mutex<Vec<WashoutCap>>> =
+pub static RT_CAPTURE_QUEUE: std::sync::LazyLock<Mutex<Vec<RtCaptureSlot>>> =
     std::sync::LazyLock::new(|| Mutex::new(Vec::new()));
-// ── end probe ──────────────────────────────────────────────────
+// ── end capture harness ─────────────────────────────────────────
 
 pub const RENDER_SCENE_TYPE_ID: &str = "node.render_scene";
 
@@ -4397,23 +4409,23 @@ impl EffectNode for RenderScene {
                     }
                 }
                 // ── RT washout probe: capture textures when flagged ──
-                if WASHOUT_CAPTURE_NOW.swap(false, std::sync::atomic::Ordering::Relaxed) {
-                    let mut q = WASHOUT_QUEUE.lock().unwrap();
+                if RT_CAPTURE_ARM.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                    let mut q = RT_CAPTURE_QUEUE.lock().unwrap();
                     let refl_write = self.rt_history_ping;
                     let refl_read = 1 - refl_write;
-                    if let Some(ref t) = self.rt_refl_full { q.push(WashoutCap {
+                    if let Some(ref t) = self.rt_refl_full { q.push(RtCaptureSlot {
                         label: "refl_raw".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
                     });}
-                    if let Some(ref t) = self.rt_refl_history[refl_write] { q.push(WashoutCap {
+                    if let Some(ref t) = self.rt_refl_history[refl_write] { q.push(RtCaptureSlot {
                         label: "refl_history_write".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
                     });}
-                    if let Some(ref t) = self.rt_refl_history[refl_read] { q.push(WashoutCap {
+                    if let Some(ref t) = self.rt_refl_history[refl_read] { q.push(RtCaptureSlot {
                         label: "refl_history_read".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
                     });}
-                    if let Some(ref t) = self.rt_irr_full { q.push(WashoutCap {
+                    if let Some(ref t) = self.rt_irr_full { q.push(RtCaptureSlot {
                         label: "irr_full".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
                     });}
-                    if let Some(ref t) = self.rt_moments_history[refl_write] { q.push(WashoutCap {
+                    if let Some(ref t) = self.rt_moments_history[refl_write] { q.push(RtCaptureSlot {
                         label: "moments".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
                     });}
                 }
@@ -5081,10 +5093,11 @@ impl EffectNode for RenderScene {
                 1,
             );
         }
-        // ── RT washout probe: capture composited output ──
-        if WASHOUT_CAPTURE_COMPOSITE.swap(false, std::sync::atomic::Ordering::Relaxed) {
-            if let Some(nc) = ctx.outputs.texture_2d("color") {
-                WASHOUT_QUEUE.lock().unwrap().push(WashoutCap {
+        // ── RT capture: composited output snapshot ──
+        if RT_CAPTURE_ARM_COMPOSITE.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            let nc = ctx.outputs.texture_2d("color");
+            if let Some(nc) = nc {
+                RT_CAPTURE_QUEUE.lock().unwrap().push(RtCaptureSlot {
                     label: "composite".into(),
                     tex: nc.clone(),
                     frame: 0,
