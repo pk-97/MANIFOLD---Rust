@@ -583,3 +583,49 @@ RD3's trigger).
   material (those shaders have no Fresnel term to weight against).
 - **ReSTIR many-light before or after this** — Peter ruled reflections first (2026-07-24);
   recorded so it is not silently re-decided by build order.
+
+## 10. RT output & transition contract — derivation over side effects (2026-07-26, K3 + Peter)
+
+Provenance: Peter's `RtNoiseTesting.manifold` repro — RT reflections fade to raster a few
+seconds after pause; after save+reload RT never engages (toggles display ON, buttons inert);
+re-importing the GLB into the same project restores RT. One mechanism, two triggers: the
+"raster look" is what the frame shows whenever the RT pass produces no output. These rules
+are the agreed contract the fixes are reviewed against.
+
+- **The graph is the source of truth; the RT scene is a derived cache.** RT scene =
+  f(graph content, asset payloads), keyed by content/asset version stamps — same family as
+  the freeze compiler and the effect-chain state caches. Built by derivation, never as a
+  command side effect. Import, project load, duplicate, paste, undo then converge for free.
+  Bug class this kills: accel registration fired only by the GLB import path, so a loaded
+  project has RT-on params and no RT machinery (the reload bug).
+- **Lifecycle derives from content change, never transport.** Build, rebuild, and history
+  invalidation trigger on graph structure / params / assets / camera changes only.
+  Transport's only role is whether time-varying params evaluate. Pause is a non-event:
+  dispatch keeps running, history holds, and a paused static scene CONVERGES. Bug class this
+  kills: trace dispatch gated on transport/time-advance → accumulator starves and decays to
+  raster (the pause fade).
+- **Absent RT output is a bug state, never a rendering mode.** No silent raster fallback —
+  fallback is what made the reload bug invisible for a whole session. The ONE sanctioned
+  raster-presenting window is D17's bounded, logged accel-build transition; anything else
+  that starves the RT pass is a bug to fix, not a state to render gracefully.
+- **Never crossfade between lighting models.** Raster↔RT blends over time are banned — the
+  in-between frames match neither world and read as broken. Legitimate transitions:
+  commanded toggle-off (instant, one frame — the user asked), D17's bounded build window,
+  and invalidation (next rule). The only blend inside RT is temporal accumulation
+  (history ↔ new sample) — noise averaging within ONE lighting model, not engine-switching.
+- **On invalidation: seed, don't clear.** First frame after history invalidation shows raw
+  1spp and converges in place; clearing history to zero (the pause→resume black beat) is
+  banned. Converging noise is honest and stage-forgivable; a morph through a world that
+  never existed is not.
+- **Speckle under motion is not a contract violation.** At 24 FPS with history rejected
+  under motion the image sits near raw 1spp — the accumulator honestly reporting its limits.
+  Improving it is Textured roughness (R3)-era tuning (reprojection quality, motion-aware
+  blend weights, sample budget), not a transition fix.
+
+**Conviction test (Peter's repro project):** reload → RT engages without re-import;
+pause → converges clean, no fade; resume → no black beat; rotating → unchanged (speckle
+expected, tuning scope). Status: contract agreed, fixes NOT yet built — seam review next
+(import-vs-load accel registration; trace dispatch gate; accumulator clear-on-resume).
+Open suspects: `render_scene.rs` `rt_accel_rerun_armed` (BUG-326's per-topology rerun —
+does the project-load path sight topology?), the trace dispatch condition, D15's
+time-discontinuity reset firing across pause/resume.
