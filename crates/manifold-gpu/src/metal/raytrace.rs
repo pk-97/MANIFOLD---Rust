@@ -379,15 +379,22 @@ pub(crate) fn refit_accel(device: &GpuDevice, accel: &RtAccel, objects: &[RtObje
         "refit_accel called with a different object COUNT than build_accel built — the BLAS \
          list (and instance buffer) don't match; call build_accel again instead (topology change)"
     );
+    // PROBE (BUG-jddy bisect, 2026-07-27): skip the CPU instance write so
+    // the forced per-frame refit exercises only the GPU command + ready
+    // flag. Cures static-death → mechanism is GPU-timeline; dies → the
+    // write itself is load-bearing. Remove with the root fix.
+    const SKIP_INSTANCE_WRITE: bool = true;
     let stride = std::mem::size_of::<MTLAccelerationStructureInstanceDescriptor>();
     let ptr = accel
         .instance_buffer
         .mapped_ptr()
         .expect("RT instance-descriptor buffer must be CPU-mapped");
-    for (i, obj) in objects.iter().enumerate() {
-        unsafe {
-            let field_ptr = ptr.add(i * stride) as *mut MTLPackedFloat4x3;
-            field_ptr.write_unaligned(to_packed_4x3(obj.transform));
+    if !SKIP_INSTANCE_WRITE {
+        for (i, obj) in objects.iter().enumerate() {
+            unsafe {
+                let field_ptr = ptr.add(i * stride) as *mut MTLPackedFloat4x3;
+                field_ptr.write_unaligned(to_packed_4x3(obj.transform));
+            }
         }
     }
 

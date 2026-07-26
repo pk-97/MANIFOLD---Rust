@@ -4049,6 +4049,18 @@ impl EffectNode for RenderScene {
                 }
             }
 
+            // PROBE (BUG-jddy bisect, 2026-07-27): force a refit every
+            // frame — with raytrace.rs's SKIP_INSTANCE_WRITE this is the
+            // GPU-command-only arm of the refit decomposition. Remove
+            // with the root fix.
+            if self.rt_accel_built
+                && let Some(accel) = self.rt_accel.as_ref()
+                && accel.ready.load(std::sync::atomic::Ordering::Acquire)
+            {
+                let tracer = self.rt_tracer.as_ref().expect("ensured above");
+                tracer.refit_accel(gpu.device, accel, &objects);
+            }
+
             // `rt_ready` was captured at the top of `evaluate()` from the
             // latched `rt_accel_built` flag BEFORE this block ran —
             // correct either way: a rebuild just enqueued above commits
