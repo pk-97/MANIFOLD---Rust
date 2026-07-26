@@ -15,12 +15,12 @@ mod breadcrumb;
 mod clip_atlas;
 mod clip_filmstrip;
 mod clip_thumb_cache;
-mod content_command;
+pub(crate) mod content_command;
 mod content_commands;
 mod content_export;
 mod content_pipeline;
-mod content_state;
-mod content_thread;
+pub(crate) mod content_state;
+pub(crate) mod content_thread;
 mod dialog_path_memory;
 #[cfg(target_os = "macos")]
 mod display_link;
@@ -46,7 +46,7 @@ mod graph_dump;
 // under `cfg(test)`, matching where its own callers (`journey_proof.rs`,
 // `bug035_verify.rs`, `bug037_verify.rs`) actually live.
 #[cfg(all(target_os = "macos", any(feature = "perf-soak", all(feature = "journey-proofs", test))))]
-mod headless_harness;
+pub(crate) mod headless_harness;
 mod import_responsiveness_verify;
 mod import_worker;
 mod import_worker_drain_verify;
@@ -84,6 +84,9 @@ mod bug037_verify;
 #[cfg(all(feature = "journey-proofs", target_os = "macos"))]
 mod bug219_verify;
 mod perform_mode;
+// ── RT app-path probe (temporary, disposable) ────────────────
+#[cfg(all(feature = "perf-soak", target_os = "macos"))]
+mod rt_app_probe;
 // `cargo xtask perf-soak <project> --seconds N [--start <beats>]
 // [--update-baseline]` — PERF_BUDGET_GATE_DESIGN.md P1: headless, real-time
 // paced content-thread soak of a real project + baseline gate. macOS-only
@@ -145,6 +148,16 @@ fn main() {
         let args: Vec<String> = std::env::args().collect();
         if args.get(1).map(String::as_str) == Some("perf-soak") {
             crate::perf_soak::run(&args[1..]);
+        }
+    }
+
+    // --- `rt-app-probe` (temporary, disposable) ---
+    // cargo run --features perf-soak -- manifold rt-app-probe <project.manifold>
+    #[cfg(all(feature = "perf-soak", target_os = "macos"))]
+    {
+        let args: Vec<String> = std::env::args().collect();
+        if args.get(1).map(String::as_str) == Some("rt-app-probe") {
+            crate::rt_app_probe::run(&args[1..]);
         }
     }
 
