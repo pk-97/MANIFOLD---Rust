@@ -1,0 +1,117 @@
+# Provider Operations — seats, upstreams, fallbacks, key rotation
+
+Operational runbook for changing anything in the fleet's model supply chain.
+Roster doctrine (who sits in which seat and why) lives in
+`docs/AGENT_ROUTING.md`; spend analysis in `docs/TOKEN_ECONOMICS.md`;
+classifier mechanics in `docs/PERMISSION_BOUNDARY.md`. This doc owns the
+*how* — config layers, procedures, verification.
+
+## Architecture
+
+```
+CC pane → cc-fleet profile env (ANTHROPIC_DEFAULT_*_MODEL)
+        → litellm proxy 127.0.0.1:4000 (launchd com.manifold.litellm-proxy)
+        → upstream provider (z.ai / opencode Zen / kimi)
+```
+
+The proxy is the single choke point: every seat's traffic, the permission
+classifier, and the one-shot tool all cross it. A proxy restart blips every
+pane; a bad `config.yaml` fails boot and freezes everything until fixed.
+
+## Config layers — what is source of truth for what
+
+| Layer | File | Owns |
+|---|---|---|
+| Seat slot map | `~/.config/cc-fleet/providers.toml` | which model fills each slot (haiku/sonnet/opus) per profile |
+| Upstreams + routing | `~/.config/litellm/config.yaml` | model_list (api_base, key env, pricing), router_settings (retries, fallbacks) |
+| Virtual keys | `~/.config/litellm/key-*.json` | per-key model allow-lists (e.g. k3-lead) |
+| Upstream API keys | cc-fleet secret backend | fetched by `start-proxy.sh` via `cc-fleet keyget <name>`; never on disk |
+| Proxy runtime | `~/.local/litellm-venv/` + `start-proxy.sh` + plist | process, port, DB, log (`~/.config/litellm/proxy.log`) |
+
+None of this is in the repo. The config files carry their own rationale
+comments; this doc is the procedure layer.
+
+**Hand-editing cc-fleet profile JSON is reverted silently by `cc-fleet
+repair`** (2026-07-25 drift incident). `providers.toml` is the durable
+source; edit it only via `scripts/seat_tool.py`.
+
+**A new model is invisible to a seat until it is in that key's allow-list**
+(BUG-lng). The model_list entry alone is not enough.
+
+## Procedures
+
+### Swap which model fills a seat slot
+
+`scripts/seat_tool.py assign <slot> <model>` — edits providers.toml, runs
+repair, verifies the profile, updates the naming-guard map, warns on
+litellm/tier-guard gaps. Never hand-edit profiles. `seat_tool.py show` is
+the read oracle.
+
+Slots are semantic, not provider-shaped: `sonnet` = default work model,
+`haiku` = fast/classifier-adjacent, `opus` = strong consult. The auto-mode
+classifier resolves off these slots (PERMISSION_BOUNDARY.md §2), so a slot
+swap changes what gates every permission decision — say so in the commit.
+
+### Add or repoint an upstream
+
+1. `config.yaml` model_list: copy the nearest sibling entry; set `api_base`,
+   `api_key: os.environ/<KEY>`, list-rate pricing, `supports_reasoning` if
+   the model reasons.
+2. If the key env var is new: add it to the cc-fleet secret backend
+   (`cc-fleet keyget` namespace) and to `start-proxy.sh`.
+3. Add the model to every virtual key's allow-list that should reach it.
+4. `launchctl kickstart -k gui/501/com.manifold.litellm-proxy`.
+5. Verify: startup log lists the model under "Set models"; a
+   `/v1/chat/completions` call returns 200; SpendLogs shows the deployment
+   (`model` column = the deployment that actually served, not the request).
+
+### Add or change a fallback
+
+`router_settings.fallbacks: [{<group>: [<fallback-group>]}]`. One direction
+per line; primaries stay primaries. Fallbacks fire on timeout/connection/
+429/5xx and absorb upstream capacity waves that would otherwise freeze
+seats (the classifier fails closed — an unavailable classifier blocks every
+unreviewed action).
+
+Verify by forced failure, never by assumption: point the primary's
+`api_base` at a dead port, restart, fire a test call, confirm SpendLogs
+shows the *fallback* deployment serving it, restore, restart, confirm the
+primary serves again. Two restart blips; do it when no wave is mid-land.
+
+### Rotate an upstream API key
+
+Update the cc-fleet secret backend entry, then restart the proxy —
+`start-proxy.sh` re-fetches on boot. No config edit.
+
+### Update pricing
+
+Subscription seats log notional list-rate spend. On any provider price
+change: `input/output_cost_per_token` (+ cache rates) in config.yaml, the
+plan-cost variables on the fleet-value Grafana dashboard, and the `RATES`
+table in `scripts/claude_usage_export.py` for the Anthropic path.
+
+## Verification oracles
+
+- **Which deployment served a call:** SpendLogs `model` column
+  (`psql postgresql://litellm:litellm-local@localhost:5432/litellm`).
+  Requested-flash-but-served-`anthropic/glm-4.7` = a live fallback reroute.
+- **Upstream health:** `proxy.log` — "Error from provider" strings name the
+  upstream's own failure, distinguishing provider wobble from proxy trouble.
+- **Fleet rates/errors/latency:** Grafana `manifold-fleet` dashboard
+  (Prometheus, from 2026-07-25 only); SpendLogs is all-time ground truth.
+
+## Hazards
+
+- **litellm upgrades wipe the venv patches** — reapply
+  `.claude/hooks/litellm_patches_reapply.py` after any upgrade (and re-pip
+  `prometheus-client` into the venv).
+- **Classifier coupling:** the classifier is a session-sticky resolution
+  off the slot map (PERMISSION_BOUNDARY.md §2). A demoted pane never
+  recovers — restart it, don't debug it.
+- **Fallback legs are load-bearing subscriptions.** As of 2026-07-26 the
+  z.ai/GLM plan is the fallback for both deepseek groups; cancelling it
+  re-exposes every seat to Zen waves. When evaluating provider value,
+  price the fallback duty, not just seat traffic.
+- **Proxy boot takes ~15–20 s**; test calls fired immediately after
+  kickstart race the bind (connection refused ≠ config broken — check the
+  startup log first).
