@@ -379,11 +379,12 @@ pub(crate) fn refit_accel(device: &GpuDevice, accel: &RtAccel, objects: &[RtObje
         "refit_accel called with a different object COUNT than build_accel built — the BLAS \
          list (and instance buffer) don't match; call build_accel again instead (topology change)"
     );
-    // PROBE (BUG-jddy bisect, 2026-07-27): skip the CPU instance write so
-    // the forced per-frame refit exercises only the GPU command + ready
-    // flag. Cures static-death → mechanism is GPU-timeline; dies → the
-    // write itself is load-bearing. Remove with the root fix.
-    const SKIP_INSTANCE_WRITE: bool = true;
+    // PROBE (BUG-jddy bisect, 2026-07-27), arm 2: write-only. Arm 1
+    // (GPU command + flag, no write) = RT dead immediately, so the CPU
+    // write is the load-bearing action; this arm confirms it cures
+    // alone. Remove with the root fix.
+    const SKIP_INSTANCE_WRITE: bool = false;
+    const SKIP_GPU_COMMAND: bool = true;
     let stride = std::mem::size_of::<MTLAccelerationStructureInstanceDescriptor>();
     let ptr = accel
         .instance_buffer
@@ -409,6 +410,9 @@ pub(crate) fn refit_accel(device: &GpuDevice, accel: &RtAccel, objects: &[RtObje
     // transform can wait for it; the OLD transform is still valid to
     // read from `accel.structure` in the meantime (Metal doesn't mutate
     // it destructively until the refit command actually runs).
+    if SKIP_GPU_COMMAND {
+        return;
+    }
     accel.ready.store(false, Ordering::Release);
     let cb = device
         .raw_queue()
