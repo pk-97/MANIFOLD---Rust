@@ -771,10 +771,6 @@ pub struct RenderScene {
     /// `ready` still gates ENQUEUING the next refit (never rewrite the
     /// CPU-mapped instance buffer while a refit/build is in flight).
     rt_accel_built: bool,
-    /// STOPGAP — symptom test, not a fix (RT static-death, 2026-07-26).
-    /// Frames since the last accel build/refit; a forced refit fires at
-    /// 1. Remove with the root fix.
-    rt_frames_since_refit: u32,
     /// Half-res shadow-ray-trace target + full-res upsampled mask
     /// (RT-D3's "D11 trivial pass"). Sized to the scene's own
     /// `width`/`height`, ensured lazily like every other RT-only
@@ -1070,7 +1066,6 @@ impl RenderScene {
             rt_accel_content_key: None,
             rt_accel_content_pending_key: None,
             rt_accel_built: false,
-            rt_frames_since_refit: 0,
             rt_mask_half: None,
             rt_mask_full: None,
             rt_mask_width: 0,
@@ -4051,25 +4046,7 @@ impl EffectNode for RenderScene {
                     let tracer = self.rt_tracer.as_ref().expect("ensured above");
                     tracer.refit_accel(gpu.device, accel, &objects);
                     self.rt_accel_key = Some(accel_key);
-                    self.rt_frames_since_refit = 0;
                 }
-            }
-
-            // STOPGAP — symptom test, not a fix (RT static-death,
-            // 2026-07-26): GI+reflections die ~5 frames after the last
-            // accel refit while shadow/AO survive. Force a refit every
-            // frame the natural rebuild/refit didn't fire — matching the
-            // always-moving case exactly — to test whether the refit
-            // stream itself is load-bearing. Remove with the root fix.
-            self.rt_frames_since_refit += 1;
-            if self.rt_frames_since_refit >= 1
-                && self.rt_accel_built
-                && let Some(accel) = self.rt_accel.as_ref()
-                && accel.ready.load(std::sync::atomic::Ordering::Acquire)
-            {
-                let tracer = self.rt_tracer.as_ref().expect("ensured above");
-                tracer.refit_accel(gpu.device, accel, &objects);
-                self.rt_frames_since_refit = 0;
             }
 
             // `rt_ready` was captured at the top of `evaluate()` from the
