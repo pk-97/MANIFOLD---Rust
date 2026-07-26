@@ -81,6 +81,37 @@ use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
 use crate::node_graph::primitive::PrimitiveDescription;
 
+// ── RT load-pause probe statics (temporary diagnostic) ────────────
+// Set env var MANIFOLD_RT_PROBE=1 to enable. Delete after bug is fixed.
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+pub static RT_PROBE_ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// Latched rt_ready per frame (read by probe after each render call).
+pub static RT_PROBE_RT_READY: AtomicBool = AtomicBool::new(false);
+/// has_casters (non-empty caster list) per frame.
+pub static RT_PROBE_HAS_CASTERS: AtomicBool = AtomicBool::new(false);
+/// rt_accel_built (the struct field) after the one-shot latch at top of evaluate.
+pub static RT_PROBE_ACCEL_BUILT: AtomicBool = AtomicBool::new(false);
+/// Value of scene_params[3] (RT-active flag) written this frame.
+pub static RT_PROBE_UNIFORM_SCENE_W: AtomicU64 = AtomicU64::new(0);
+/// Value of rt_flags[0] (reflection-active flag) written this frame.
+pub static RT_PROBE_UNIFORM_RT_FLAGS: AtomicU64 = AtomicU64::new(0);
+/// Monotonic counter: how many frames entered the `rt_enabled && has_casters` block.
+pub static RT_PROBE_ENTERED_RT_BLOCK: AtomicU64 = AtomicU64::new(0);
+/// Monotonic counter: how many frames dispatch_shadow_rays was called.
+pub static RT_PROBE_DISPATCH_COUNT: AtomicU64 = AtomicU64::new(0);
+/// Monotonic counter: how many times build_accel was enqueued.
+pub static RT_PROBE_BUILD_COUNT: AtomicU64 = AtomicU64::new(0);
+/// Bool: one-shot, set true when the ack "enqueued" log event fired.
+pub static RT_PROBE_BUILD_ENQUEUED: AtomicBool = AtomicBool::new(false);
+/// Bool: one-shot, set true when dispatch_shadow_rays has executed at least once.
+pub static RT_PROBE_DISPATCH_FIRED: AtomicBool = AtomicBool::new(false);
+/// The topo key at last build.
+pub static RT_PROBE_TOPO_KEY: AtomicU64 = AtomicU64::new(0);
+/// The rt_accel_pending_key value.
+pub static RT_PROBE_PENDING_KEY: AtomicU64 = AtomicU64::new(u64::MAX);
+// ── end probe statics ─────────────────────────────────────────────
+
 pub const RENDER_SCENE_TYPE_ID: &str = "node.render_scene";
 
 /// 4x MSAA for the scene pass. On Apple Silicon TBDR the multisample
@@ -3030,6 +3061,11 @@ impl EffectNode for RenderScene {
                 .is_some_and(|a| a.ready.load(std::sync::atomic::Ordering::Acquire));
         }
         let mut rt_ready = self.rt_accel_built;
+        // ── RT probe snapshots (temporary diagnostic) ──
+        if RT_PROBE_ENABLED.load(Ordering::Relaxed) {
+            RT_PROBE_ACCEL_BUILT.store(self.rt_accel_built, Ordering::Relaxed);
+            RT_PROBE_RT_READY.store(rt_ready, Ordering::Relaxed);
+        }
         // RAYTRACING_DESIGN.md §5.2 P2/D3, RT-D2, §8.2 D22 (T2-B): the ONE
         // call site deciding "discard temporal history this frame" for
         // EITHER of this node's two temporal consumers — the RT irradiance
@@ -3306,6 +3342,11 @@ impl EffectNode for RenderScene {
             // rt_reflections param is also on. Same per-object write
             // (scene-wide value, like scene_params.w).
             uniforms.rt_flags[0] = if rt_reflections && rt_ready && !casters.is_empty() { 1.0 } else { 0.0 };
+            // ── RT probe uniform snapshots (temporary) ──
+            if RT_PROBE_ENABLED.load(Ordering::Relaxed) {
+                RT_PROBE_UNIFORM_SCENE_W.store(if rt_enabled && rt_ready && !casters.is_empty() { 1 } else { 0 }, Ordering::Relaxed);
+                RT_PROBE_UNIFORM_RT_FLAGS.store(if rt_reflections && rt_ready && !casters.is_empty() { 1 } else { 0 }, Ordering::Relaxed);
+            }
             if base_color_map.is_some() {
                 uniforms.texture_flags[2] = 1.0; // z = base_color_map present (matches resolve_albedo's texture_flags.z gate)
             }
@@ -3467,6 +3508,9 @@ impl EffectNode for RenderScene {
 
         // ---- Ensure cached GPU resources (mutable phase). ----
         let has_casters = !casters.is_empty();
+        if RT_PROBE_ENABLED.load(Ordering::Relaxed) {
+            RT_PROBE_HAS_CASTERS.store(has_casters, Ordering::Relaxed);
+        }
         {
             let gpu = ctx.gpu_encoder();
             if self.depth_stencil.is_none() {
@@ -3850,6 +3894,10 @@ impl EffectNode for RenderScene {
         // instance shadow positions — escalate if this becomes load-
         // bearing, per the P1 brief's own escalation line). ----
         if rt_enabled && has_casters {
+            // ── RT probe (temporary diagnostic) ──
+            if RT_PROBE_ENABLED.load(Ordering::Relaxed) {
+                RT_PROBE_ENTERED_RT_BLOCK.fetch_add(1, Ordering::Relaxed);
+            }
             let vsize = std::mem::size_of::<MeshVertex>() as u32;
             let objects: Vec<manifold_gpu::raytrace::RtObjectGeometry> = shadow_caster_draws
                 .iter()
@@ -3941,6 +3989,11 @@ impl EffectNode for RenderScene {
                 let tracer = self.rt_tracer.as_ref().expect("ensured above");
                 self.rt_accel = Some(tracer.build_accel(gpu.device, &objects));
                 self.rt_accel_built = false;
+                // ── RT probe: build count (temporary) ──
+                if RT_PROBE_ENABLED.load(Ordering::Relaxed) {
+                    RT_PROBE_BUILD_COUNT.fetch_add(1, Ordering::Relaxed);
+                    RT_PROBE_TOPO_KEY.store(topo_key, Ordering::Relaxed);
+                }
                 // Suppress RT dispatch this frame (the new accel isn't
                 // ready yet — next frame latches fresh from `ready` flag).
                 rt_ready = false;
@@ -3969,6 +4022,12 @@ impl EffectNode for RenderScene {
                     // BUG-320: the fresh build must be observed ready
                     // before tracing resumes — the old accel is gone.
                     self.rt_accel_built = false;
+                    // ── RT probe (temporary) ──
+                    if RT_PROBE_ENABLED.load(Ordering::Relaxed) {
+                        RT_PROBE_BUILD_COUNT.fetch_add(1, Ordering::Relaxed);
+                        RT_PROBE_TOPO_KEY.store(topo_key, Ordering::Relaxed);
+                        RT_PROBE_BUILD_ENQUEUED.store(true, Ordering::Relaxed);
+                    }
                     log::info!(
                         "node.render_scene: RT accel structure (re)build enqueued (async, topo key {topo_key:#x}) — raster shadow-map path serves this scene until it's ready"
                     );
@@ -3977,6 +4036,10 @@ impl EffectNode for RenderScene {
                     // new-topology sighting will produce.
                     self.rt_accel_rerun_armed = true;
                     self.rt_accel_pending_key = Some(topo_key);
+                    // ── RT probe (temporary) ──
+                    if RT_PROBE_ENABLED.load(Ordering::Relaxed) {
+                        RT_PROBE_PENDING_KEY.store(topo_key, Ordering::Relaxed);
+                    }
                     log::info!(
                         "node.render_scene: RT accel structure build requested (topo key {topo_key:#x}); deferring one frame so it can't race this frame's mesh-generation GPU writes"
                     );
@@ -4168,6 +4231,11 @@ impl EffectNode for RenderScene {
                 let refl_half = self.rt_refl_half.as_ref().expect("ensured above");
                 let refl_full = self.rt_refl_full.as_ref().expect("ensured above");
                 let _refl_full_b = self.rt_refl_full_b.as_ref().expect("ensured above");
+                // ── RT probe (temporary diagnostic) ──
+                if RT_PROBE_ENABLED.load(Ordering::Relaxed) {
+                    RT_PROBE_DISPATCH_COUNT.fetch_add(1, Ordering::Relaxed);
+                    RT_PROBE_DISPATCH_FIRED.store(true, Ordering::Relaxed);
+                }
                 tracer.dispatch_shadow_rays(
                     gpu.native_enc,
                     accel,
