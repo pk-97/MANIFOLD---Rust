@@ -110,6 +110,16 @@ pub static RT_PROBE_DISPATCH_FIRED: AtomicBool = AtomicBool::new(false);
 pub static RT_PROBE_TOPO_KEY: AtomicU64 = AtomicU64::new(0);
 /// The rt_accel_pending_key value.
 pub static RT_PROBE_PENDING_KEY: AtomicU64 = AtomicU64::new(u64::MAX);
+/// Frame counter for per-frame diagnostic throttling.
+static RT_PROBE_EVAL_FRAME: AtomicU64 = AtomicU64::new(0);
+/// Last-seen rt_ready for change detection.
+static RT_PROBE_PREV_RT_READY: AtomicBool = AtomicBool::new(false);
+/// One-shot: true once the accel-ready latch has been printed.
+static RT_PROBE_READY_LATCH_PRINTED: AtomicBool = AtomicBool::new(false);
+/// Previous dispatch_fired value for first-firing detection.
+static RT_PROBE_PREV_DISPATCH_FIRED: AtomicBool = AtomicBool::new(false);
+/// Tracks whether build_enqueued was ever printed for throttle suppression.
+static RT_PROBE_BUILD_ENQUEUED_PRINTED: AtomicBool = AtomicBool::new(false);
 // ── end probe statics ─────────────────────────────────────────────
 
 pub const RENDER_SCENE_TYPE_ID: &str = "node.render_scene";
@@ -2825,6 +2835,10 @@ impl EffectNode for RenderScene {
     fn evaluate<'ctx, 'gpu>(&mut self, ctx: &mut EffectNodeContext<'ctx, 'gpu>) {
         let objects = self.num_objects as usize;
         let lights_n = self.num_lights as usize;
+        // ── RT probe: frame counter (temporary env-gated print at end) ──
+        if RT_PROBE_ENABLED.load(Ordering::Relaxed) {
+            RT_PROBE_EVAL_FRAME.fetch_add(1, Ordering::Relaxed);
+        }
 
         // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P4 (R5): built ONCE per
         // frame from this frame's wired ports (`bindings.rs`'s
@@ -3059,6 +3073,15 @@ impl EffectNode for RenderScene {
                 .rt_accel
                 .as_ref()
                 .is_some_and(|a| a.ready.load(std::sync::atomic::Ordering::Acquire));
+            // ── RT probe: first-time-ready latch print (temporary) ──
+            if RT_PROBE_ENABLED.load(Ordering::Relaxed)
+                && self.rt_accel_built
+                && !RT_PROBE_READY_LATCH_PRINTED.swap(true, Ordering::Relaxed)
+            {
+                eprintln!(
+                    "[RT-PROBE] render_scene: rt_accel.ready first observed true — rt_accel_built latched, tracing enabled"
+                );
+            }
         }
         let mut rt_ready = self.rt_accel_built;
         // ── RT probe snapshots (temporary diagnostic) ──
@@ -3989,8 +4012,9 @@ impl EffectNode for RenderScene {
                 let tracer = self.rt_tracer.as_ref().expect("ensured above");
                 self.rt_accel = Some(tracer.build_accel(gpu.device, &objects));
                 self.rt_accel_built = false;
-                // ── RT probe: build count (temporary) ──
+                // ── RT probe: build count + latch reset (temporary) ──
                 if RT_PROBE_ENABLED.load(Ordering::Relaxed) {
+                    RT_PROBE_READY_LATCH_PRINTED.store(false, Ordering::Relaxed);
                     RT_PROBE_BUILD_COUNT.fetch_add(1, Ordering::Relaxed);
                     RT_PROBE_TOPO_KEY.store(topo_key, Ordering::Relaxed);
                 }
@@ -4024,6 +4048,7 @@ impl EffectNode for RenderScene {
                     self.rt_accel_built = false;
                     // ── RT probe (temporary) ──
                     if RT_PROBE_ENABLED.load(Ordering::Relaxed) {
+                        RT_PROBE_READY_LATCH_PRINTED.store(false, Ordering::Relaxed);
                         RT_PROBE_BUILD_COUNT.fetch_add(1, Ordering::Relaxed);
                         RT_PROBE_TOPO_KEY.store(topo_key, Ordering::Relaxed);
                         RT_PROBE_BUILD_ENQUEUED.store(true, Ordering::Relaxed);
@@ -5093,6 +5118,39 @@ impl EffectNode for RenderScene {
                 native_height,
                 1,
             );
+        }
+        // ── RT probe: per-frame diagnostic print (temporary, env-gated) ──
+        if RT_PROBE_ENABLED.load(Ordering::Relaxed) {
+            let frame = RT_PROBE_EVAL_FRAME.load(Ordering::Relaxed);
+            let rt_ready_val = RT_PROBE_RT_READY.load(Ordering::Relaxed);
+            let accel_built_val = RT_PROBE_ACCEL_BUILT.load(Ordering::Relaxed);
+            let has_casters_val = RT_PROBE_HAS_CASTERS.load(Ordering::Relaxed);
+            let scene_w = RT_PROBE_UNIFORM_SCENE_W.load(Ordering::Relaxed);
+            let rt_flags_x = RT_PROBE_UNIFORM_RT_FLAGS.load(Ordering::Relaxed);
+            let entered_rt = RT_PROBE_ENTERED_RT_BLOCK.load(Ordering::Relaxed);
+            let dispatch_count = RT_PROBE_DISPATCH_COUNT.load(Ordering::Relaxed);
+            let build_count = RT_PROBE_BUILD_COUNT.load(Ordering::Relaxed);
+            let dispatch_fired = RT_PROBE_DISPATCH_FIRED.load(Ordering::Relaxed);
+            let build_enqueued = RT_PROBE_BUILD_ENQUEUED.load(Ordering::Relaxed);
+            let prev_rt_ready = RT_PROBE_PREV_RT_READY.load(Ordering::Relaxed);
+            let prev_dispatch_fired = RT_PROBE_PREV_DISPATCH_FIRED.load(Ordering::Relaxed);
+            let changed = rt_ready_val != prev_rt_ready
+                || (dispatch_fired && !prev_dispatch_fired);
+            let build_enqueued_new = build_enqueued && !RT_PROBE_BUILD_ENQUEUED_PRINTED.load(Ordering::Relaxed);
+            // Track previous values for change detection across frames.
+            RT_PROBE_PREV_RT_READY.store(rt_ready_val, Ordering::Relaxed);
+            RT_PROBE_PREV_DISPATCH_FIRED.store(dispatch_fired, Ordering::Relaxed);
+            if build_enqueued_new {
+                RT_PROBE_BUILD_ENQUEUED_PRINTED.store(true, Ordering::Relaxed);
+            }
+            // Print every 30th frame, OR on any state change (ready flip, first dispatch, build enqueued).
+            if changed || build_enqueued_new || frame % 30 == 0 {
+                eprintln!(
+                    "[RT-PROBE] frame={frame} rt={rt_ready_val} accel={accel_built_val} casters={has_casters_val} \
+                     scene_w={scene_w} rt_flags={rt_flags_x} entered={entered_rt} dsp={dispatch_count} \
+                     builds={build_count} enqueued={build_enqueued} fired={dispatch_fired}"
+                );
+            }
         }
     }
 }
