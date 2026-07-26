@@ -4408,7 +4408,7 @@ impl EffectNode for RenderScene {
                         shaft_light_count += 1;
                     }
                 }
-                // ── RT washout probe: capture textures when flagged ──
+                // ── RT capture: channel snapshots when armed ──
                 if RT_CAPTURE_ARM.swap(false, std::sync::atomic::Ordering::Relaxed) {
                     let mut q = RT_CAPTURE_QUEUE.lock().unwrap();
                     let refl_write = self.rt_history_ping;
