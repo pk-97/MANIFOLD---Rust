@@ -414,3 +414,221 @@ fn specular_history_blends_without_cut_and_resets_on_cut() {
          If ≈1.1, cut path dead (gate-must-fail).",
     );
 }
+
+// =========================================================================
+// Peter's R2 motion-quality artifact (D-61): the mirror scene under a fast
+// camera sweep, specular accumulation active.
+// =========================================================================
+
+/// Warmup time — constant for all warmup frames.
+const SWEEP_WARMUP_TIME: f64 = 0.1;
+
+/// Number of warmup frames (convergence + acceleration).
+const SWEEP_WARMUP_FRAMES: i64 = 16;
+
+/// Number of sweep frames.
+const SWEEP_FRAMES: i64 = 24;
+
+/// Scene: mirror plane (roughness 0.01 mirror) at y=0, emissive quad at
+/// (0, 0.8, 2.0), sun, dummy env, rt_enabled + rt_reflections.
+/// Camera orbit is time-driven via two node.math nodes wired from
+/// system.generator_input.time: orbit = 0.7 + time * 0.6.
+fn sweep_scene_json() -> String {
+    format!(
+        r#"{{"version":2,"name":"RtR2SweepDump","nodes":[
+        {{"id":0,"typeId":"system.generator_input","nodeId":"input"}},
+        {{"id":1,"typeId":"node.grid_mesh","nodeId":"ground_grid","params":{{
+            "max_capacity":{{"type":"Int","value":8192}},
+            "resolution_x":{{"type":"Int","value":20}},
+            "resolution_y":{{"type":"Int","value":20}},
+            "size_x":{{"type":"Float","value":8.0}},
+            "size_y":{{"type":"Float","value":8.0}}}}}},
+        {{"id":2,"typeId":"node.make_triangles","nodeId":"ground_tris","params":{{
+            "src_cols":{{"type":"Int","value":20}},
+            "src_rows":{{"type":"Int","value":20}}}}}},
+        {{"id":5,"typeId":"node.grid_mesh","nodeId":"quad_grid","params":{{
+            "max_capacity":{{"type":"Int","value":8192}},
+            "resolution_x":{{"type":"Int","value":4}},
+            "resolution_y":{{"type":"Int","value":4}},
+            "size_x":{{"type":"Float","value":1.0}},
+            "size_y":{{"type":"Float","value":1.0}}}}}},
+        {{"id":6,"typeId":"node.make_triangles","nodeId":"quad_tris","params":{{
+            "src_cols":{{"type":"Int","value":4}},
+            "src_rows":{{"type":"Int","value":4}}}}}},
+        {{"id":7,"typeId":"node.transform_3d","nodeId":"quad_xform","params":{{
+            "pos_x":{{"type":"Float","value":0.0}},
+            "pos_y":{{"type":"Float","value":0.8}},
+            "pos_z":{{"type":"Float","value":2.0}}}}}},
+        {{"id":8,"typeId":"node.pbr_material","nodeId":"quad_mat","params":{{
+            "color_r":{{"type":"Float","value":0.5}},
+            "color_g":{{"type":"Float","value":0.5}},
+            "color_b":{{"type":"Float","value":0.5}},
+            "ambient":{{"type":"Float","value":0.0}},
+            "metallic":{{"type":"Float","value":0.0}},
+            "roughness":{{"type":"Float","value":0.5}},
+            "emission_r":{{"type":"Float","value":1.0}},
+            "emission_g":{{"type":"Float","value":0.2}},
+            "emission_b":{{"type":"Float","value":0.1}},
+            "emission_intensity":{{"type":"Float","value":10.0}}}}}},
+        {{"id":3,"typeId":"node.orbit_camera","nodeId":"cam","params":{{
+            "orbit":{{"type":"Float","value":0.7}},
+            "tilt":{{"type":"Float","value":0.95}},
+            "distance":{{"type":"Float","value":10.0}},
+            "fov_y":{{"type":"Float","value":0.8}}}}}},
+        {{"id":30,"typeId":"node.light","nodeId":"sun","params":{{
+            "mode":{{"type":"Enum","value":0}},
+            "pos_x":{{"type":"Float","value":3.0}},
+            "pos_y":{{"type":"Float","value":20.0}},
+            "pos_z":{{"type":"Float","value":3.0}},
+            "aim_x":{{"type":"Float","value":0.0}},
+            "aim_y":{{"type":"Float","value":0.0}},
+            "aim_z":{{"type":"Float","value":0.0}},
+            "color_r":{{"type":"Float","value":1.0}},
+            "color_g":{{"type":"Float","value":1.0}},
+            "color_b":{{"type":"Float","value":1.0}},
+            "intensity":{{"type":"Float","value":1.0}},
+            "cast_shadows":{{"type":"Float","value":1.0}}}}}},
+        {{"id":4,"typeId":"node.pbr_material","nodeId":"ground_mat","params":{{
+            "color_r":{{"type":"Float","value":0.8}},
+            "color_g":{{"type":"Float","value":0.8}},
+            "color_b":{{"type":"Float","value":0.8}},
+            "ambient":{{"type":"Float","value":0.0}},
+            "metallic":{{"type":"Float","value":1.0}},
+            "roughness":{{"type":"Float","value":0.01}}}}}},
+        {{"id":10,"typeId":"node.bake_environment","nodeId":"env","params":{{
+            "width":{{"type":"Int","value":16}},
+            "height":{{"type":"Int","value":8}},
+            "intensity":{{"type":"Float","value":0.0}}}}}},
+        {{"id":40,"typeId":"node.math","nodeId":"orbit_rate","params":{{
+            "a":{{"type":"Float","value":0.0}},
+            "b":{{"type":"Float","value":0.6}},
+            "op":{{"type":"Enum","value":2}}}}}},
+        {{"id":41,"typeId":"node.math","nodeId":"orbit_base","params":{{
+            "a":{{"type":"Float","value":0.0}},
+            "b":{{"type":"Float","value":0.7}},
+            "op":{{"type":"Enum","value":0}}}}}},
+        {{"id":20,"typeId":"node.render_scene","nodeId":"scene","params":{{
+            "objects":{{"type":"Int","value":2}},
+            "lights":{{"type":"Int","value":1}},
+            "rt_enabled":{{"type":"Bool","value":true}},
+            "rt_reflections":{{"type":"Bool","value":true}}}}}},
+        {{"id":99,"typeId":"system.final_output","nodeId":"out"}}
+        ],"wires":[
+        {{"fromNode":1,"fromPort":"vertices","toNode":2,"toPort":"in"}},
+        {{"fromNode":2,"fromPort":"out","toNode":20,"toPort":"mesh_0"}},
+        {{"fromNode":5,"fromPort":"vertices","toNode":6,"toPort":"in"}},
+        {{"fromNode":6,"fromPort":"out","toNode":20,"toPort":"mesh_1"}},
+        {{"fromNode":7,"fromPort":"transform","toNode":20,"toPort":"transform_1"}},
+        {{"fromNode":8,"fromPort":"out","toNode":20,"toPort":"material_1"}},
+        {{"fromNode":0,"fromPort":"time","toNode":40,"toPort":"a"}},
+        {{"fromNode":40,"fromPort":"out","toNode":41,"toPort":"a"}},
+        {{"fromNode":41,"fromPort":"out","toNode":3,"toPort":"orbit"}},
+        {{"fromNode":3,"fromPort":"out","toNode":20,"toPort":"camera"}},
+        {{"fromNode":4,"fromPort":"out","toNode":20,"toPort":"material_0"}},
+        {{"fromNode":30,"fromPort":"out","toNode":20,"toPort":"light_0"}},
+        {{"fromNode":10,"fromPort":"envmap","toNode":20,"toPort":"envmap"}},
+        {{"fromNode":20,"fromPort":"color","toNode":99,"toPort":"in"}}
+        ]}}"#
+    )
+}
+
+/// Peter's R2 motion-quality artifact (D-61): the mirror scene under a fast
+/// camera sweep, specular accumulation active. Ignored — run deliberately:
+/// cargo test -p manifold-renderer --features gpu-proofs --test gpu_proofs rt_r2_sweep_dump -- --ignored --nocapture
+#[test]
+#[ignore = "demo dump for Peter, not a gate"]
+fn rt_r2_sweep_dump() {
+    let h = crate::harness::shared();
+    let json = sweep_scene_json();
+    let registry = PrimitiveRegistry::with_builtin();
+    let mut runtime = PresetRuntime::from_json_str_with_device(
+        &json,
+        &registry,
+        std::sync::Arc::clone(&h.device),
+        h.width,
+        h.height,
+        GpuTextureFormat::Rgba16Float,
+        None,
+    )
+    .expect("R2 sweep dump scene must build");
+
+    let target = h.make_target("rt-r2-sweep-dump");
+
+    // 16 warmup frames at time 0.1 (accel + convergence).
+    for frame in 0..SWEEP_WARMUP_FRAMES {
+        let ctx = PresetContext {
+            time: SWEEP_WARMUP_TIME,
+            beat: SWEEP_WARMUP_TIME * 2.0,
+            dt: 1.0 / 60.0,
+            width: h.width,
+            height: h.height,
+            output_width: h.width,
+            output_height: h.height,
+            aspect: h.width as f32 / h.height as f32,
+            owner_key: 0,
+            is_clip_level: false,
+            frame_count: frame,
+            anim_progress: 0.0,
+            trigger_count: 0,
+        };
+        let mut enc = h.device.create_encoder("rt-r2-sweep-warmup");
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
+            runtime.render(
+                &mut gpu,
+                &target.texture,
+                &ctx,
+                &ParamManifest::default(),
+            );
+        }
+        enc.commit_and_wait_completed();
+    }
+
+    // 24 sweep frames advancing time by 1/60 each.
+    for frame in 0..SWEEP_FRAMES {
+        let t = SWEEP_WARMUP_TIME + (frame as f64 + 1.0) / 60.0;
+        let ctx = PresetContext {
+            time: t,
+            beat: t * 2.0,
+            dt: 1.0 / 60.0,
+            width: h.width,
+            height: h.height,
+            output_width: h.width,
+            output_height: h.height,
+            aspect: h.width as f32 / h.height as f32,
+            owner_key: 0,
+            is_clip_level: false,
+            frame_count: SWEEP_WARMUP_FRAMES + frame,
+            anim_progress: 0.0,
+            trigger_count: 0,
+        };
+        let mut enc = h.device.create_encoder("rt-r2-sweep-frame");
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
+            runtime.render(
+                &mut gpu,
+                &target.texture,
+                &ctx,
+                &ParamManifest::default(),
+            );
+        }
+        enc.commit_and_wait_completed();
+
+        // Readback, tonemap, encode PNG, write.
+        let rgba = manifold_renderer::headless_readback::readback_tonemapped_rgba8(
+            &h.device,
+            &target.texture,
+            h.width,
+            h.height,
+        );
+        let png = manifold_renderer::headless_readback::encode_rgba8_png(
+            &rgba,
+            h.width,
+            h.height,
+        );
+        let path = format!("/tmp/r2_sweep_frame_{:02}.png", frame);
+        std::fs::write(&path, &png)
+            .unwrap_or_else(|e| panic!("write {path}: {e}"));
+        eprintln!("Wrote {path}");
+    }
+}
