@@ -3892,15 +3892,22 @@ impl EffectNode for RenderScene {
             }
             hasher.write_u64(ctx.rebuild_epoch);
             let topo_key = hasher.finish();
-            // Content key: topo-key inputs plus every draw's slot generation.
-            for d in shadow_caster_draws.iter() {
-                d.vertices_generation.hash(&mut hasher);
-            }
-            let content_key = hasher.finish();
             for o in &objects {
                 hasher.write(bytemuck::bytes_of(&o.transform));
             }
             let accel_key = hasher.finish();
+            // Content key: topo key plus every draw's slot generation, on a
+            // fresh hasher so generation stays OUT of `accel_key` — a
+            // generation bump must not read as a refit trigger (refits only
+            // rewrite instance transforms; a content change needs a full
+            // rebuild via the settle path, and a deforming producer would
+            // otherwise force a refit every frame).
+            let mut content_hasher = ahash::AHasher::default();
+            topo_key.hash(&mut content_hasher);
+            for d in shadow_caster_draws.iter() {
+                d.vertices_generation.hash(&mut content_hasher);
+            }
+            let content_key = content_hasher.finish();
 
             let gpu = ctx.gpu_encoder();
             // RAYTRACING_DESIGN.md §5.2 P3: sized to THIS frame's object
