@@ -1991,7 +1991,7 @@ impl PresetRuntime {
             beats: Beats(ctx.beat),
             seconds: Seconds(ctx.time),
             delta: Seconds(ctx.dt as f64),
-            frame_count: 0,
+            frame_count: ctx.frame_count,
         };
         self.refresh_plan_if_forced_outputs_changed();
         self.executor.execute_frame_with_state(
@@ -2000,7 +2000,10 @@ impl PresetRuntime {
             frame_time,
             gpu,
             &mut self.state_store,
-            /* owner_key */ 0,
+            // Mirrors `run`'s passthrough: without it the RT reset
+            // detector never sees owner changes on this path (cut-reset
+            // dead — found by the R2 accumulation gate, D-62).
+            ctx.owner_key,
         );
 
         ctx.anim_progress

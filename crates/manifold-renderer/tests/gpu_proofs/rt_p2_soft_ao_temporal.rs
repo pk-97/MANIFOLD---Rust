@@ -26,7 +26,7 @@
 //! `rg` facts checked at review time, not expressed as a test in this file.
 
 use half::f16;
-use manifold_gpu::raytrace::{AccumulateParams, MetalShadowRayTracer, ShadowRayTracer};
+use manifold_gpu::raytrace::{AccumulateParams, GiMaterial, MetalShadowRayTracer, ShadowRayTracer};
 use manifold_gpu::{
     GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
@@ -64,6 +64,17 @@ const RESET_EPSILON: f32 = 0.01;
 /// smaller than `(1.0 - TEST_ALPHA) * |A - B|` for the fixture colors
 /// below, so the assertion has real margin, not a coin flip.
 const STROBE_RETAIN_EPSILON: f32 = 0.1;
+
+fn flat_rgba_f16_with_a(w: u32, h: u32, r: f32, g: f32, b: f32, a: f32) -> Vec<f16> {
+    let mut out = Vec::with_capacity((w * h * 4) as usize);
+    for _ in 0..(w * h) {
+        out.push(f16::from_f32(r));
+        out.push(f16::from_f32(g));
+        out.push(f16::from_f32(b));
+        out.push(f16::from_f32(a));
+    }
+    out
+}
 
 fn flat_rgba_f16(w: u32, h: u32, r: f32, g: f32, b: f32) -> Vec<f16> {
     let mut out = Vec::with_capacity((w * h * 4) as usize);
@@ -205,6 +216,9 @@ struct HistorySet {
     /// doesn't assert on variance, just needs valid bindings for
     /// `accumulate_irradiance`'s widened signature.
     moments: [GpuTexture; 2],
+    /// RT-R2 (RD6): specular history ping-pong pair — same lifecycle as
+    /// irr history pair above (inert pass-through at this step).
+    refl: [GpuTexture; 2],
     ping: usize,
 }
 
@@ -226,6 +240,12 @@ impl HistorySet {
             moments: [
                 make_history_side_channel(device, GpuTextureFormat::Rg32Float, &format!("{label}-moments-a")),
                 make_history_side_channel(device, GpuTextureFormat::Rg32Float, &format!("{label}-moments-b")),
+            ],
+            // RT-R2 (RD6): inert pass-through refl history pair — same
+            // Rgba16Float format as irr history.
+            refl: [
+                make_history(device, &format!("{label}-refl-a")),
+                make_history(device, &format!("{label}-refl-b")),
             ],
             ping: 0,
         }
@@ -253,6 +273,14 @@ impl HistorySet {
     }
     fn write_moments(&self) -> &GpuTexture {
         &self.moments[1 - self.ping]
+    }
+    // RT-R2 (RD6): specular history read/write — inert pass-through
+    // at this step, same ping clock as all other history channels.
+    fn read_refl(&self) -> &GpuTexture {
+        &self.refl[self.ping]
+    }
+    fn write_refl(&self) -> &GpuTexture {
+        &self.refl[1 - self.ping]
     }
     fn advance(&mut self) {
         self.ping = 1 - self.ping;
@@ -330,7 +358,7 @@ fn run_accumulate_with_motion(
 ) {
     let params_buffer =
         device.create_buffer_shared(std::mem::size_of::<AccumulateParams>() as u64);
-    let params = AccumulateParams::new([W, H], alpha, reset, obj_count, IDENTITY, IDENTITY);
+    let params = AccumulateParams::new([W, H], alpha, reset, obj_count, [0.0; 3], IDENTITY, IDENTITY);
     let obj_motion_buffer =
         device.create_buffer_shared(std::mem::size_of::<[[f32; 4]; 4]>() as u64);
     {
@@ -345,6 +373,11 @@ fn run_accumulate_with_motion(
             );
         }
     }
+    // RT-R2 (RD6): inert pass-through — dummy zero refl texture and a
+    // single-element gi_materials buffer (kernel binds but does not read
+    // in this plumbing step).
+    let hi_refl_dummy = upload_irr(device, 0.0, 0.0, 0.0, "p2-hi-refl-dummy");
+    let gi_materials_buf = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
     let mut enc = device.create_encoder(label);
     {
         let gpu = RendererGpuEncoder::new(&mut enc, device);
@@ -364,6 +397,10 @@ fn run_accumulate_with_motion(
             history.write_normal(),
             history.read_moments(),
             history.write_moments(),
+            &hi_refl_dummy,
+            history.read_refl(),
+            history.write_refl(),
+            &gi_materials_buf,
             label,
         );
     }
@@ -548,6 +585,194 @@ fn object_motion_reprojection_retains_history_where_camera_only_rejects() {
     );
 }
 
+/// Upload helper for Rgba16Float with caller-controlled alpha — same
+/// `CPU_UPLOAD | SHADER_READ` usage as `upload_irr` but preserving the
+/// `.a` channel (irr alpha is unused so `upload_irr` writes 0.0; refl's
+/// `.a` carries hit distance).
+fn make_upload_rgba_f16(device: &GpuDevice, r: f32, g: f32, b: f32, a: f32, label: &str) -> GpuTexture {
+    let texture = device.create_texture(&GpuTextureDesc {
+        width: W,
+        height: H,
+        depth: 1,
+        format: GpuTextureFormat::Rgba16Float,
+        dimension: GpuTextureDimension::D2,
+        usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ,
+        label,
+        mip_levels: 1,
+    });
+    device.upload_texture(&texture, as_bytes(&flat_rgba_f16_with_a(W, H, r, g, b, a)));
+    texture
+}
+
+/// Upload helper for a single-channel R32Float texture (depth side channel).
+fn make_upload_r32(device: &GpuDevice, v: f32, label: &str) -> GpuTexture {
+    let texture = device.create_texture(&GpuTextureDesc {
+        width: W,
+        height: H,
+        depth: 1,
+        format: GpuTextureFormat::R32Float,
+        dimension: GpuTextureDimension::D2,
+        usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ,
+        label,
+        mip_levels: 1,
+    });
+    let pixels = vec![v; (W * H) as usize];
+    device.upload_texture(&texture, as_bytes(&pixels));
+    texture
+}
+
+/// RT-R2 bisection instrument (lead-requested): does the refl channel's
+/// accumulate kernel block blend at all? Seeds a known refl history H,
+/// drives hi_refl at C, and measures the output at reset=false (must
+/// blend H toward C) and reset=true (must equal C exactly). The lead reads
+/// the raw numbers — no diagnosis from this file.
+///
+/// Normal history and depth history are seeded to match the current frame's
+/// values (both constant), and reprojection uses identity matrices, so every
+/// pixel's reprojection validity test passes unconditionally. If the refl
+/// blend still reads as raw current frame on reset=false, the defect is
+/// inside the MSL kernel block, not in the scene plumbing.
+#[test]
+fn refl_channel_blends_history_and_current() {
+    let h = shared();
+    let device = &h.device;
+    let tracer = MetalShadowRayTracer::new(device);
+
+    // ── Shared per-frame textures ─────────────────────────────────────
+    let depth_tex = make_constant_depth(device, "bisect-depth");
+    let hi_normal = make_constant_normal(device, "bisect-normal");
+    let hi_irr = upload_irr(device, 0.0, 0.0, 0.0, "bisect-hi-irr");
+
+    // Depth history seeded at the same 0.5 as depth_tex — identity
+    // reprojection preserves depth exactly, passes the validity gate.
+    let depth_history = make_upload_r32(device, 0.5, "bisect-depth-history");
+    let depth_output =
+        make_history_side_channel(device, GpuTextureFormat::R32Float, "bisect-depth-output");
+
+    // Normal history seeded at +Y — matches hi_normal dot > 0.9.
+    let normal_history = make_upload_rgba_f16(device, 0.0, 1.0, 0.0, 0.0, "bisect-normal-history");
+    let normal_output =
+        make_history_side_channel(device, GpuTextureFormat::Rgba16Float, "bisect-normal-output");
+
+    // Irradiance channel — valid bindings only.
+    let irr_history = make_history(device, "bisect-irr-history");
+    let irr_output = make_history(device, "bisect-irr-output");
+
+    // Moments channel — valid bindings only.
+    let moments_history =
+        make_history_side_channel(device, GpuTextureFormat::Rg32Float, "bisect-moments-history");
+    let moments_output =
+        make_history_side_channel(device, GpuTextureFormat::Rg32Float, "bisect-moments-output");
+
+    // ── Reflection channel ────────────────────────────────────────────
+    // H = (1.0, 0.0, 0.0, 5.0): history seed, .a = 5.0 is a valid hit distance.
+    let refl_history = make_upload_rgba_f16(device, 1.0, 0.0, 0.0, 5.0, "bisect-refl-history");
+    // C = (3.0, 0.0, 0.0, 5.0): current frame value, different RGB.
+    let hi_refl = make_upload_rgba_f16(device, 3.0, 0.0, 0.0, 5.0, "bisect-hi-refl");
+    let refl_output = make_history(device, "bisect-refl-output");
+
+    // ── Buffers ───────────────────────────────────────────────────────
+    let params_buffer =
+        device.create_buffer_shared(std::mem::size_of::<AccumulateParams>() as u64);
+    let obj_motion_buffer =
+        device.create_buffer_shared(std::mem::size_of::<[[f32; 4]; 4]>() as u64);
+    let gi_materials_buf = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
+
+    // ── Leg 1: reset = false — history must blend toward current ──────
+    let blend_params = AccumulateParams::new([W, H], 0.1, false, 0, [0.0; 3], IDENTITY, IDENTITY);
+    {
+        let mut enc = device.create_encoder("bisect-blend");
+        let gpu = RendererGpuEncoder::new(&mut enc, device);
+        tracer.accumulate_irradiance(
+            gpu.native_enc,
+            &blend_params,
+            &params_buffer,
+            &obj_motion_buffer,
+            &hi_irr,
+            &depth_tex,
+            &hi_normal,
+            &irr_history,
+            &irr_output,
+            &depth_history,
+            &depth_output,
+            &normal_history,
+            &normal_output,
+            &moments_history,
+            &moments_output,
+            &hi_refl,
+            &refl_history,
+            &refl_output,
+            &gi_materials_buf,
+            "bisect-blend",
+        );
+        enc.commit_and_wait_completed();
+    }
+    let blend = readback_rgba_f32(&refl_output);
+    let blend_r = blend[0];
+    let blend_g = blend[1];
+    let blend_b = blend[2];
+    let blend_a = blend[3];
+    // mix(H, C, 0.1) = (1.0*0.9 + 3.0*0.1, 0, 0, 5.0) = (1.2, 0, 0, 5.0)
+    let expected_r = 1.0 * 0.9 + 3.0 * 0.1;
+    eprintln!(
+        "[bisect] refl blend leg (reset=false): \
+         r={blend_r} (expect ~{expected_r} = mix((1,0,0,5), (3,0,0,5), 0.1)), \
+         g={blend_g}, b={blend_b}, a={blend_a}"
+    );
+
+    assert!(
+        (blend_r - expected_r).abs() < 0.01,
+        "refl channel with reset=false did NOT blend: r={blend_r}, expected ~{expected_r} \
+         (kernel defect: the refl blend term never reads seeded history)"
+    );
+
+    // ── Leg 2: reset = true — output must equal C exactly ─────────────
+    let refl_output_reset = make_history(device, "bisect-refl-output-reset");
+    let reset_params = AccumulateParams::new([W, H], 0.1, true, 0, [0.0; 3], IDENTITY, IDENTITY);
+    {
+        let mut enc = device.create_encoder("bisect-reset");
+        let gpu = RendererGpuEncoder::new(&mut enc, device);
+        tracer.accumulate_irradiance(
+            gpu.native_enc,
+            &reset_params,
+            &params_buffer,
+            &obj_motion_buffer,
+            &hi_irr,
+            &depth_tex,
+            &hi_normal,
+            &irr_history,
+            &irr_output,
+            &depth_history,
+            &depth_output,
+            &normal_history,
+            &normal_output,
+            &moments_history,
+            &moments_output,
+            &hi_refl,
+            &refl_history,
+            &refl_output_reset,
+            &gi_materials_buf,
+            "bisect-reset",
+        );
+        enc.commit_and_wait_completed();
+    }
+    let reset = readback_rgba_f32(&refl_output_reset);
+    let reset_r = reset[0];
+    let reset_g = reset[1];
+    let reset_b = reset[2];
+    let reset_a = reset[3];
+    eprintln!(
+        "[bisect] refl reset leg (reset=true): \
+         r={reset_r} (expect 3.0 = raw C=\\(3,0,0,5\\) first channel), \
+         g={reset_g}, b={reset_b}, a={reset_a}"
+    );
+
+    assert!(
+        (reset_r - 3.0).abs() < 0.01,
+        "refl channel with reset=true did NOT write current frame directly: \
+         r={reset_r}, expected 3.0"
+    );
+}
 /// BUG-322: a ROTATING object must keep its temporal history.
 ///
 /// T2-C carried the reprojected world position through the object's motion

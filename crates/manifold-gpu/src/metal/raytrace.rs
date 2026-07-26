@@ -503,6 +503,14 @@ struct GiMaterial {
 // fixed texture-array binding (4 bytes/table-entry GPU, negligible CPU).
 #define MAX_RT_MATERIAL_TEXTURES 64
 
+// RT-R2 (RD6): specular accumulation blend — range 0.05–0.3, untuned
+// (tuning is Peter's look). Smaller = more temporal amortization.
+constant float RT_REFL_ACCUM_ALPHA = 0.1;
+// RT-R2 (RD6): roughness at/above which reprojection is plain surface
+// reprojection (the GGX-perturbed ray ≈ the surface lobe there).
+// Range 0.3–0.7, untuned.
+constant float RT_REFL_VIRTUAL_REPROJ_ROUGHNESS_BLEND = 0.5;
+
 struct RtNormalSource {
     ulong  vertex_base_addr;
     uint   vertex_stride;
@@ -651,11 +659,12 @@ struct AccumulateParams {
     uint  reset;
     // RT-T2-C (object motion): number of entries in the `obj_motion`
     // buffer; a per-pixel object id at or beyond this count reprojects
-    // camera-only (identity object motion). Explicit pad keeps the
-    // float4x4s at the same 16-byte-aligned offsets the CPU mirror
-    // asserts.
+    // camera-only (identity object motion).
     uint  obj_count;
-    uint  pad0; uint pad1; uint pad2;
+    // RT-R2 (RD6): camera world position for the virtual-hit-point
+    // reprojection — replaces the three-pad layout at the same byte
+    // offset so the float4x4s below stay 16-byte aligned.
+    packed_float3 camera_pos;
     float4x4 inv_view_proj;
     float4x4 prev_view_proj;
 };
@@ -1283,6 +1292,7 @@ struct AtrousParams {
     uint2 size;
     uint  step;
     uint  history_valid;
+    uint  obj_count;
 };
 
 // RT-T1-D: edge-aware À-TROUS spatial filter — dilated by `p.step`
@@ -1295,19 +1305,24 @@ struct AtrousParams {
 // own depth+normal weights; this kernel is the denoiser proper, run
 // `ATROUS_ITERATIONS`-1 times full-res-to-full-res after it — see
 // `render_scene.rs`'s dispatch sequence). Edge-stopping weights:
-// - DEPTH: raw NDC-z, same discipline as `upsample_shadow`'s guide.
-// - NORMAL: cosine power against the center texel's own normal.
-// - LUMA/VARIANCE: SVGF's key trick — the luma edge-stop's sigma SCALES
-//   with sqrt(this texel's temporally-accumulated variance) (read from
-//   `moments_read`, RT-T1-D's moment-tracking addition to
-//   `accumulate_irradiance`, ONE FRAME LAGGED — same ping-pong-history
-//   lag convention `depth_history_read`/`normal_history_read` already
-//   use): a converged (low-variance) texel trusts its own signal and
-//   rejects a differing tap sharply (preserves detail); a noisy
-//   (high-variance) texel tolerates more difference before rejecting
-//   (blurs harder specifically where the noise is, not uniformly).
+// - DEPTH: raw NDC-z, same discipline as `upsample_shadow`'s guide
+//   (shared across all channels: surface continuity is surface-based).
+// - NORMAL: cosine power against the center texel's own normal (shared).
+// - LUMA/VARIANCE (irradiance/mask): SVGF's key trick — the luma edge-
+//   stop's sigma SCALES with sqrt(this texel's temporally-accumulated
+//   variance) (read from `moments_read`, RT-T1-D's moment-tracking
+//   addition to `accumulate_irradiance`...): a converged texel rejects
+//   differing taps sharply; a noisy texel tolerates more difference.
+// - LUMA (reflection channel): its OWN roughness-narrowed luma stop —
+//   the refl channel's luma is guided by `gi_materials[oid].metallic_
+//   roughness.y`, not the AO/GI variance. Shiny (low roughness) = narrow
+//   sigma = crisp mirror image; rough = wide sigma = heavy blur (its
+//   reflections are already lobe-diffuse). Irradiance/mask channels are
+//   unchanged by this weight (the shared `w` governs them; the refl
+//   channel has its own `w_refl`).
 kernel void atrous_filter(
     constant AtrousParams&           p            [[buffer(1)]],
+    constant GiMaterial*            gi_materials [[buffer(2)]],
     depth2d<float>                   depth_tex    [[texture(0)]],
     texture2d<float>                 moments_read [[texture(1)]],
     texture2d<float>                 src_sv       [[texture(2)]],
@@ -1316,10 +1331,10 @@ kernel void atrous_filter(
     texture2d<float, access::write>  dst_irr      [[texture(5)]],
     texture2d<float>                 src_n        [[texture(6)]],
     texture2d<float, access::write>  dst_n        [[texture(7)]],
-    // RT-R1 (§9.3): reflection-radiance textures — filtered with the SAME
-    // depth+normal+luma edge-stopped weights as the irradiance channel
-    // (R2 narrows the luma stop with roughness; v1 rides the shared
-    // filter).
+    // RT-R2: reflection-radiance textures — filtered with the same depth
+    // and normal edge-stops as the AO/GI channels, but its OWN
+    // roughness-narrowed luma stop (rough surface = wide sigma = blur
+    // harder; shiny surface = narrow sigma = preserve crisp mirror image).
     texture2d<float>                 src_refl     [[texture(8)]],
     texture2d<float, access::write>  dst_refl     [[texture(9)]],
     uint2 tid [[thread_position_in_grid]])
@@ -1356,7 +1371,27 @@ kernel void atrous_filter(
     const float ATROUS_NORMAL_POWER = 16.0;
     const float ATROUS_LUMA_SIGMA_SCALE = 8.0;
     const float ATROUS_LUMA_SIGMA_FLOOR = 0.15;
+    // RT-R2: reflection-channel luma edge-stop — narrows as roughness
+    // falls: shiny surfaces reject differing taps sharply (the mirror
+    // image stays crisp), rough surfaces blur wide (their reflections
+    // are already lobe-diffuse). Range 0.02-0.5 for both, untuned —
+    // tuning is Peter's look.
+    const float ATROUS_REFL_LUMA_SIGMA_SHINY = 0.05;
+    const float ATROUS_REFL_LUMA_SIGMA_ROUGH = 0.3;
+    // Roughness at which the refl sigma reaches its wide end. Range 0.3-0.7.
+    const float ATROUS_REFL_SIGMA_ROUGHNESS_REF = 0.5;
     float luma_sigma = max(ATROUS_LUMA_SIGMA_SCALE * sqrt(center_var), ATROUS_LUMA_SIGMA_FLOOR);
+    // RT-R2: center-texel roughness from the material table, via the
+    // object id in `src_n.w` (same convention accumulate_irradiance uses).
+    float center_rough = 1.0;
+    if (center_n4.w >= 0.0) {
+        uint oid = uint(center_n4.w + 0.5);
+        if (oid < p.obj_count) { center_rough = gi_materials[oid].metallic_roughness.y; }
+    }
+    float refl_luma_sigma = mix(ATROUS_REFL_LUMA_SIGMA_SHINY, ATROUS_REFL_LUMA_SIGMA_ROUGH,
+                                clamp(center_rough / ATROUS_REFL_SIGMA_ROUGHNESS_REF, 0.0, 1.0));
+    float center_refl_luma = luma(src_refl.read(tid).rgb);
+    float wsum_refl = 1.0; // center tap weight 1, same convention as wsum
     // Full 3x3 neighborhood (8 taps, diagonals included) rather than a
     // 4-tap cross: with only `ATROUS_ITERATIONS`=3 total passes budgeted
     // (T1-D's 2-3 range), each pass needs to average enough independent
@@ -1386,17 +1421,23 @@ kernel void atrous_filter(
         float w = w_depth * w_normal * w_luma;
         acc_irr += qirr * w;
         acc_sv += src_sv.read(uq).rg * w;
-        acc_refl += src_refl.read(uq).rgb * w;
+        // RT-R2: the refl channel's own weight — shared depth/normal stops,
+        // its own roughness-narrowed luma stop on the REFLECTION signal.
+        float3 qrefl = src_refl.read(uq).rgb;
+        float w_refl = w_depth * w_normal * exp(-fabs(luma(qrefl) - center_refl_luma) / refl_luma_sigma);
+        acc_refl += qrefl * w_refl;
+        wsum_refl += w_refl;
         wsum += w;
     }
     dst_irr.write(float4(acc_irr / wsum, 0), tid);
     dst_sv.write(float4(acc_sv / wsum, 0, 0), tid);
     // RT-T2-C: `.w` = object id, passed through untouched (never blended).
     dst_n.write(float4(center_n, center_n4.w), tid);
-    // RT-R1: reflection radiance filters with the shared weights; hit
-    // distance in `.a` passes through untouched (never blended — R2's
-    // reprojection needs one surface's distance).
-    dst_refl.write(float4(acc_refl / wsum, src_refl.read(tid).a), tid);
+    // RT-R2: reflection radiance filters with roughness-narrowed luma
+    // stop (its own `wsum_refl`); hit distance in `.a` passes through
+    // untouched (never blended — R2's reprojection needs one surface's
+    // distance).
+    dst_refl.write(float4(acc_refl / wsum_refl, src_refl.read(tid).a), tid);
 }
 
 // RT-P2/D3, extended RT-T1-C (BUG-311): temporal accumulation of the
@@ -1443,6 +1484,13 @@ kernel void accumulate_irradiance(
     // 1e-5 scale this filter needs to resolve (catastrophic cancellation).
     texture2d<float>                     moments_read         [[texture(9)]],
     texture2d<float, access::write>      moments_write        [[texture(10)]],
+    // RT-R2 (RD6): reflection channel — current-frame filtered reflections
+    // (`.a` = hit distance), specular history ping-pong, and the material
+    // table (roughness source for the reprojection blend, Step 2).
+    texture2d<float>                     hi_refl             [[texture(11)]],
+    texture2d<float>                     refl_history_read   [[texture(12)]],
+    texture2d<float, access::write>      refl_history_write  [[texture(13)]],
+    constant GiMaterial*                 gi_materials        [[buffer(3)]],
     uint2 tid [[thread_position_in_grid]])
 {
     if (tid.x >= p.size.x || tid.y >= p.size.y) return;
@@ -1457,6 +1505,7 @@ kernel void accumulate_irradiance(
         depth_history_write.write(float4(cur_depth, 0, 0, 0), tid);
         normal_history_write.write(float4(cur_normal, 0), tid);
         moments_write.write(float4(cur_luma, cur_luma * cur_luma, 0, 0), tid);
+        refl_history_write.write(hi_refl.read(tid), tid);
         return;
     }
 
@@ -1473,29 +1522,41 @@ kernel void accumulate_irradiance(
     float3 blended = cur.xyz;
     float moment1 = cur_luma;
     float moment2 = cur_luma * cur_luma;
+    // NORMAL_REJECT_COS_THRESHOLD: cosine of the angle between
+    // the reprojected history's normal and THIS frame's normal
+    // carried back into that frame's object orientation
+    // (`cur_normal_prev`, BUG-322) — 0.9 (~26 degrees) rejects
+    // a silhouette/edge texel whose reprojection lands on a
+    // different face while tolerating the same surface's normal
+    // drifting slightly under one frame of motion. Comparing in
+    // ONE consistent orientation is what makes the threshold
+    // mean "different surface" rather than "the object turned".
+    // Hoisted to function scope: used by both the irradiance
+    // validity test and the reflection reprojection block (RT-R2).
+    const float NORMAL_REJECT_COS_THRESHOLD = 0.9;
+    // RT-R2 (RD6): hoisted declarations for the virtual-hit-point
+    // reprojection — visible to both the irradiance validity block
+    // and the reflection block that follows.
+    float3 wp = float3(0.0); bool have_wp = false;
+    // BUG-322: the normal must be carried into the previous frame's
+    // object orientation before comparing against `normal_history`
+    // (which stores world-space normals). Comparing raw fails the
+    // validity test by exactly the object's rotation — history rejected
+    // every frame, all temporal amortization lost (the helmet shimmer).
+    float3 cur_normal_prev = cur_normal;
+    bool oid_ok = false; float4x4 obj_m = float4x4(0); uint oid = 0;
     if (cur_depth < 1.0 - 1e-6) {
         float2 uv = (float2(tid) + 0.5) / float2(p.size);
         float4 clip = float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, cur_depth, 1.0);
         float4 wh = p.inv_view_proj * clip;
-        float3 wp = wh.xyz / wh.w;
-        // BUG-322: carry BOTH the position and the NORMAL into the
-        // previous frame's object space. T2-C rotated only the position;
-        // `normal_history` stores world-space normals, so on a ROTATING
-        // object the stored normal is in last frame's orientation while
-        // `cur_normal` is in this frame's. Comparing them raw makes the
-        // validity test below fail by exactly the object's rotation —
-        // history rejected every frame, back to raw 2-6 spp, i.e. the
-        // shimmer. Curvature amplifies it (a rotating curved surface
-        // shows a different normal per pixel per frame), which is why
-        // Peter's DamagedHelmet shimmered while flat flowers did not,
-        // and why an earlier TRANSLATION-only oracle saw nothing wrong:
-        // translation leaves normals untouched.
-        float3 cur_normal_prev = cur_normal;
+        wp = wh.xyz / wh.w;
+        have_wp = true;
         if (cur_n4.w >= 0.0) {
-            uint oid = uint(cur_n4.w + 0.5);
+            oid = uint(cur_n4.w + 0.5);
             if (oid < p.obj_count) {
-                float4x4 m = obj_motion[oid];
-                wp = (m * float4(wp, 1.0)).xyz;
+                obj_m = obj_motion[oid];
+                oid_ok = true;
+                wp = (obj_m * float4(wp, 1.0)).xyz;
                 // Rotation/scale block only — a normal is a direction, so
                 // the translation column must not apply. Non-uniform
                 // scale would strictly want the inverse-transpose, but
@@ -1504,7 +1565,7 @@ kernel void accumulate_irradiance(
                 // carry it is already a similarity, where the plain 3x3
                 // preserves direction exactly. Normalized below, so any
                 // uniform scale factor drops out.
-                float3x3 r = float3x3(m[0].xyz, m[1].xyz, m[2].xyz);
+                float3x3 r = float3x3(obj_m[0].xyz, obj_m[1].xyz, obj_m[2].xyz);
                 float3 n = r * cur_normal;
                 float len = length(n);
                 cur_normal_prev = len > 1e-6 ? n / len : cur_normal;
@@ -1527,16 +1588,6 @@ kernel void accumulate_irradiance(
                 // tolerating one shared surface's own NDC-z precision
                 // noise across a single frame of camera motion.
                 const float DEPTH_REJECT_THRESHOLD = 5e-3;
-                // NORMAL_REJECT_COS_THRESHOLD: cosine of the angle between
-                // the reprojected history's normal and THIS frame's normal
-                // carried back into that frame's object orientation
-                // (`cur_normal_prev`, BUG-322) — 0.9 (~26 degrees) rejects
-                // a silhouette/edge texel whose reprojection lands on a
-                // different face while tolerating the same surface's normal
-                // drifting slightly under one frame of motion. Comparing in
-                // ONE consistent orientation is what makes the threshold
-                // mean "different surface" rather than "the object turned".
-                const float NORMAL_REJECT_COS_THRESHOLD = 0.9;
                 bool depth_ok = fabs(stored_depth - prev_ndc.z) < DEPTH_REJECT_THRESHOLD;
                 bool normal_ok = dot(normalize(stored_normal), cur_normal_prev) > NORMAL_REJECT_COS_THRESHOLD;
                 if (depth_ok && normal_ok) {
@@ -1554,6 +1605,48 @@ kernel void accumulate_irradiance(
     depth_history_write.write(float4(cur_depth, 0, 0, 0), tid);
     normal_history_write.write(float4(cur_normal, 0), tid);
     moments_write.write(float4(moment1, moment2, 0, 0), tid);
+    // RT-R2 (RD6): specular history through the virtual hit point.
+    // No depth test — the virtual image's depth never equals the surface
+    // depth stored in history; a depth test rejects all mirror history by
+    // construction. Validity = validity-alpha + the shared normal test;
+    // disocclusion ghosting is bounded by 1/RT_REFL_ACCUM_ALPHA (Peter's
+    // look owns that verdict, D19/D20). The SURFACE object's motion
+    // carries the virtual point — reflected-object motion is an accepted
+    // v1 residual.
+    float4 cur_refl = hi_refl.read(tid);
+    float3 refl_write = cur_refl.rgb;
+    if (cur_refl.a >= 0.0 && have_wp) {
+        float rough = 1.0;
+        if (oid_ok) { rough = gi_materials[oid].metallic_roughness.y; }
+        float3 V = normalize(p.camera_pos - wp);
+        // The virtual image is wp − hit_dist·V, NOT wp + hit_dist·R:
+        // mirroring the hit point q across the tangent plane gives
+        // q' = wp + d·R − 2d(R·n)n, and R = −V + 2(V·n)n collapses it to
+        // q' = wp − d·V (exact for planar mirrors; the roughness lerp
+        // covers the GGX-perturbed breakdown). wp + d·R is the REAL hit
+        // point — reprojecting that only works against a scene-color
+        // history; with our own refl history it reads the hit surface's
+        // reflection channel (wrong content) and lands off-screen in
+        // practice (no blend ever — found by the R2 scene gate, D-62).
+        float3 vwp = cur_refl.a > 0.0 ? wp - cur_refl.a * V : wp;
+        float bt = clamp(rough / RT_REFL_VIRTUAL_REPROJ_ROUGHNESS_BLEND, 0.0, 1.0);
+        float3 rp = mix(vwp, wp, bt);
+        if (oid_ok) { rp = (obj_m * float4(rp, 1.0)).xyz; }
+        float4 rclip = p.prev_view_proj * float4(rp, 1.0);
+        if (rclip.w > 1e-6) {
+            float3 rndc = rclip.xyz / rclip.w;
+            float2 ruv = float2(rndc.x * 0.5 + 0.5, 0.5 - rndc.y * 0.5);
+            if (all(ruv >= 0.0) && all(ruv <= 1.0) && rndc.z >= 0.0 && rndc.z <= 1.0) {
+                int2 rpt = clamp(int2(ruv * float2(p.size)), int2(0), int2(p.size) - 1);
+                uint2 refl_tid = uint2(rpt);
+                float3 stored_normal = normal_history_read.read(refl_tid).xyz;
+                if (dot(normalize(stored_normal), cur_normal_prev) > NORMAL_REJECT_COS_THRESHOLD) {
+                    refl_write = mix(refl_history_read.read(refl_tid).rgb, cur_refl.rgb, RT_REFL_ACCUM_ALPHA);
+                }
+            }
+        }
+    }
+    refl_history_write.write(float4(refl_write, cur_refl.a), tid);
 }
 
 // RT-T1-B value-level test surface ONLY (`docs/RAYTRACING_DESIGN.md` §8
@@ -1918,14 +2011,15 @@ pub struct AccumulateParams {
     /// flip keeps the blend, which is exactly what makes the numeric
     /// strobe-proof differ from a cold start).
     pub reset: u32,
-    /// RT-T2-C (object motion): entry count of the `obj_motion` buffer
-    /// bound alongside — a per-pixel object id at or beyond this count
-    /// (stale texture content across a topology change) reprojects
-    /// camera-only instead of reading out of bounds.
+    /// RT-T2-C (object motion): number of entries in the `obj_motion`
+    /// buffer; a per-pixel object id at or beyond this count reprojects
+    /// camera-only (identity object motion).
     pub obj_count: u32,
-    /// Explicit pad — keeps the two `float4x4`s below on the 16-byte
-    /// offsets the MSL struct's own padding puts them at (asserted below).
-    pub _pad: [u32; 3],
+    /// RT-R2 (RD6): camera world position for the virtual-hit-point
+    /// reprojection (12 bytes, same layout as the three `u32` pads it
+    /// replaces — keeps `inv_view_proj`/`prev_view_proj` at the same
+    /// 16-byte-aligned offsets).
+    pub camera_pos: [f32; 3],
     /// RT-T1-C (BUG-311): current-frame inverse view-proj, for
     /// reconstructing this texel's world position from `depth_tex` — SAME
     /// matrix `ShadowRayParams::inv_view_proj` already carries this frame.
@@ -1937,11 +2031,13 @@ pub struct AccumulateParams {
     pub prev_view_proj: [[f32; 4]; 4],
 }
 
-// `size`(8) + `alpha`(4) + `reset`(4) + `obj_count`(4) + pad(12) = 32
-// bytes — a multiple of 16, so both `float4x4`s that follow land on a
-// 16-byte boundary (RT-T2-C widened the pre-matrix block from 16 to 32).
+// `size`(8) + `alpha`(4) + `reset`(4) + `obj_count`(4) + camera_pos(12)
+// = 32 bytes — a multiple of 16, so both `float4x4`s that follow land on
+// a 16-byte boundary (RT-R2's camera_pos replaces the old u32 pads at
+// the same offset).
 // Asserted directly rather than re-derived, same discipline as the
 // `ShadowRayParams` guard above.
+const _: () = assert!(std::mem::offset_of!(AccumulateParams, camera_pos) == 20);
 const _: () = assert!(std::mem::offset_of!(AccumulateParams, inv_view_proj) == 32);
 const _: () = assert!(std::mem::offset_of!(AccumulateParams, prev_view_proj) == 96);
 const _: () = assert!(std::mem::size_of::<AccumulateParams>() == 160);
@@ -1952,6 +2048,7 @@ impl AccumulateParams {
         alpha: f32,
         reset: bool,
         obj_count: u32,
+        camera_pos: [f32; 3],
         inv_view_proj: [[f32; 4]; 4],
         prev_view_proj: [[f32; 4]; 4],
     ) -> Self {
@@ -1960,7 +2057,7 @@ impl AccumulateParams {
             alpha,
             reset: reset as u32,
             obj_count,
-            _pad: [0; 3],
+            camera_pos,
             inv_view_proj,
             prev_view_proj,
         }
@@ -1979,16 +2076,21 @@ pub struct AtrousParams {
     /// history (before `accumulate_irradiance` has ever written a moments
     /// texture) — the kernel falls back to a fixed luma sigma that frame.
     pub history_valid: u32,
+    /// RT-R2: number of objects in the `gi_materials` table — used by the
+    /// kernel to bounds-check the roughness lookup for the refl-channel
+    /// luma edge-stop.
+    pub obj_count: u32,
 }
 
-const _: () = assert!(std::mem::size_of::<AtrousParams>() == 16);
+const _: () = assert!(std::mem::size_of::<AtrousParams>() == 20);
 
 impl AtrousParams {
-    pub fn new(size: [u32; 2], step: u32, history_valid: bool) -> Self {
+    pub fn new(size: [u32; 2], step: u32, history_valid: bool, obj_count: u32) -> Self {
         Self {
             size,
             step,
             history_valid: history_valid as u32,
+            obj_count,
         }
     }
 }
@@ -2176,6 +2278,7 @@ pub trait ShadowRayTracer {
         encoder: &mut GpuEncoder,
         params: &AtrousParams,
         params_buffer: &GpuBuffer,
+        gi_materials: &GpuBuffer,
         depth_tex: &GpuTexture,
         moments_read: &GpuTexture,
         src_sv: &GpuTexture,
@@ -2223,6 +2326,13 @@ pub trait ShadowRayTracer {
         // comments.
         moments_read: &GpuTexture,
         moments_write: &GpuTexture,
+        // RT-R2 (RD6): reflection channel — current-frame filtered reflections
+        // (`.a` = hit distance), specular history ping-pong, and the material
+        // table (roughness source for the reprojection blend, Step 2).
+        hi_refl: &GpuTexture,
+        refl_history_read: &GpuTexture,
+        refl_history_write: &GpuTexture,
+        gi_materials: &GpuBuffer,
         label: &str,
     );
 }
@@ -2338,6 +2448,10 @@ impl MetalShadowRayTracer {
                 // pipeline's slot-map note (T3 missed these too).
                 (8, SlotKind::Texture),
                 (9, SlotKind::Texture),
+                // RT-R2: gi_materials — roughness source for the refl luma
+                // stop. Signatures and slot maps change together (R1 incident
+                // class).
+                (2, SlotKind::Buffer),
             ]),
         );
         let accumulate_pipeline = compile_pipeline(
@@ -2358,6 +2472,13 @@ impl MetalShadowRayTracer {
                 (8, SlotKind::Texture), // RT-T1-C: normal_history_write
                 (9, SlotKind::Texture),  // RT-T1-D: moments_read
                 (10, SlotKind::Texture), // RT-T1-D: moments_write
+                // RT-R2 (RD6): hi_refl / refl history pair / gi_materials —
+                // the R1 slot-map incident class; signatures and slot maps
+                // change together.
+                (11, SlotKind::Texture),
+                (12, SlotKind::Texture),
+                (13, SlotKind::Texture),
+                (3, SlotKind::Buffer),
             ]),
         );
         let debug_fetch_normal_pipeline = compile_pipeline(
@@ -2620,6 +2741,7 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         encoder: &mut GpuEncoder,
         params: &AtrousParams,
         params_buffer: &GpuBuffer,
+        gi_materials: &GpuBuffer,
         depth_tex: &GpuTexture,
         moments_read: &GpuTexture,
         src_sv: &GpuTexture,
@@ -2640,6 +2762,11 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                 GpuBinding::Buffer {
                     binding: 1,
                     buffer: params_buffer,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: gi_materials,
                     offset: 0,
                 },
                 GpuBinding::Texture {
@@ -2708,6 +2835,13 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         normal_history_write: &GpuTexture,
         moments_read: &GpuTexture,
         moments_write: &GpuTexture,
+        // RT-R2 (RD6): reflection channel — current-frame filtered reflections
+        // (`.a` = hit distance), specular history ping-pong, and the material
+        // table (roughness source for the reprojection blend, Step 2).
+        hi_refl: &GpuTexture,
+        refl_history_read: &GpuTexture,
+        refl_history_write: &GpuTexture,
+        gi_materials: &GpuBuffer,
         label: &str,
     ) {
         params_buffer.upload(accumulate_params_bytes(params));
@@ -2768,6 +2902,26 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                 GpuBinding::Texture {
                     binding: 10,
                     texture: moments_write,
+                },
+                // RT-R2 (RD6): hi_refl / refl history pair / gi_materials —
+                // the R1 slot-map incident class; signatures and slot maps
+                // change together.
+                GpuBinding::Texture {
+                    binding: 11,
+                    texture: hi_refl,
+                },
+                GpuBinding::Texture {
+                    binding: 12,
+                    texture: refl_history_read,
+                },
+                GpuBinding::Texture {
+                    binding: 13,
+                    texture: refl_history_write,
+                },
+                GpuBinding::Buffer {
+                    binding: 3,
+                    buffer: gi_materials,
+                    offset: 0,
                 },
             ],
             groups,
