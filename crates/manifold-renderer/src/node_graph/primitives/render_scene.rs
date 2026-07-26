@@ -4050,15 +4050,24 @@ impl EffectNode for RenderScene {
             }
 
             // PROBE (BUG-jddy bisect, 2026-07-27): force a refit every
-            // frame — with raytrace.rs's SKIP_INSTANCE_WRITE this is the
-            // GPU-command-only arm of the refit decomposition. Remove
-            // with the root fix.
+            // frame, arm-controlled via raytrace::refit_accel_probe so
+            // NATURAL refits keep write+command (arms 1-2 froze the
+            // TLAS during motion — confounded). Arm 3: command-only.
+            // Alive → the GPU refit command alone is the cure and the
+            // CPU write is irrelevant. Remove with the root fix.
+            const PROBE_WRITE: bool = false;
+            const PROBE_COMMAND: bool = true;
             if self.rt_accel_built
                 && let Some(accel) = self.rt_accel.as_ref()
                 && accel.ready.load(std::sync::atomic::Ordering::Acquire)
             {
-                let tracer = self.rt_tracer.as_ref().expect("ensured above");
-                tracer.refit_accel(gpu.device, accel, &objects);
+                manifold_gpu::raytrace::refit_accel_probe(
+                    gpu.device,
+                    accel,
+                    &objects,
+                    PROBE_WRITE,
+                    PROBE_COMMAND,
+                );
             }
 
             // `rt_ready` was captured at the top of `evaluate()` from the

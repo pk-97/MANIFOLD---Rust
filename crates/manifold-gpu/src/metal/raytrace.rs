@@ -373,24 +373,33 @@ fn add_ready_completion_handler<T: Send + 'static>(
 /// doesn't (so the BLAS list is unchanged). Rewrites the instance buffer's
 /// transforms from `objects` first, then refits.
 pub(crate) fn refit_accel(device: &GpuDevice, accel: &RtAccel, objects: &[RtObjectGeometry]) {
+    refit_accel_probe(device, accel, objects, true, true);
+}
+
+/// PROBE (BUG-jddy bisect, 2026-07-27): refit with the CPU write and/or
+/// GPU command independently skippable, so render_scene's forced
+/// per-frame refit can run each arm while NATURAL refits stay intact
+/// (arms 1-2 skipped inside natural refits too, freezing the TLAS at
+/// build pose during motion — confounded). Remove with the root fix.
+pub fn refit_accel_probe(
+    device: &GpuDevice,
+    accel: &RtAccel,
+    objects: &[RtObjectGeometry],
+    write: bool,
+    command: bool,
+) {
     debug_assert_eq!(
         objects.len(),
         accel.blas.len(),
         "refit_accel called with a different object COUNT than build_accel built — the BLAS \
          list (and instance buffer) don't match; call build_accel again instead (topology change)"
     );
-    // PROBE (BUG-jddy bisect, 2026-07-27), arm 2: write-only. Arm 1
-    // (GPU command + flag, no write) = RT dead immediately, so the CPU
-    // write is the load-bearing action; this arm confirms it cures
-    // alone. Remove with the root fix.
-    const SKIP_INSTANCE_WRITE: bool = false;
-    const SKIP_GPU_COMMAND: bool = true;
     let stride = std::mem::size_of::<MTLAccelerationStructureInstanceDescriptor>();
     let ptr = accel
         .instance_buffer
         .mapped_ptr()
         .expect("RT instance-descriptor buffer must be CPU-mapped");
-    if !SKIP_INSTANCE_WRITE {
+    if write {
         for (i, obj) in objects.iter().enumerate() {
             unsafe {
                 let field_ptr = ptr.add(i * stride) as *mut MTLPackedFloat4x3;
@@ -410,7 +419,7 @@ pub(crate) fn refit_accel(device: &GpuDevice, accel: &RtAccel, objects: &[RtObje
     // transform can wait for it; the OLD transform is still valid to
     // read from `accel.structure` in the meantime (Metal doesn't mutate
     // it destructively until the refit command actually runs).
-    if SKIP_GPU_COMMAND {
+    if !command {
         return;
     }
     accel.ready.store(false, Ordering::Release);
