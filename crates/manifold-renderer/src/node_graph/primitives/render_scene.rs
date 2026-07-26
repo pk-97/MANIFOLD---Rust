@@ -4049,17 +4049,15 @@ impl EffectNode for RenderScene {
                 }
             }
 
-            // PROBE (BUG-jddy bisect, 2026-07-27): force a refit every
-            // frame, arm-controlled via raytrace::refit_accel_probe so
-            // NATURAL refits keep write+command (arms 1-2 froze the
-            // TLAS during motion — confounded). Arm 3 (command-only)
-            // CURED — the GPU command is load-bearing, the write is
-            // not. Arm 4: empty committed CB + completion handler, no
-            // refit encoded — alive => commit cadence is the cure;
-            // dead => the refit op itself is required (TLAS decays).
-            // Remove with the root fix.
+            // PROBE (BUG-jddy bisect, 2026-07-27): arms 1-4 proved the
+            // refit OPERATION is the cure (write/commit/handler all
+            // exonerated). Arm 5: no forced refit; instead encoder.rs
+            // now useResource-covers the TLAS, every BLAS, and the
+            // instance buffer at trace dispatch. Alive => driver was
+            // reclaiming unreferenced accel resources and that block is
+            // the root fix; dead => the TLAS must be rewritten per frame.
             const PROBE_WRITE: bool = false;
-            const PROBE_COMMIT: bool = true;
+            const PROBE_COMMIT: bool = false;
             const PROBE_ENCODE: bool = false;
             if self.rt_accel_built
                 && let Some(accel) = self.rt_accel.as_ref()

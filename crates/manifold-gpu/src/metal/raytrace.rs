@@ -81,8 +81,8 @@ use crate::types::{GpuBinding, GpuTextureDesc, GpuTextureDimension, GpuTextureFo
 /// `structure` handle needs to survive — kept in `RtAccel.blas` for
 /// `object_count()`'s dirty-check guard below and so a future per-BLAS
 /// refit is a field access away instead of a rebuild from scratch.
-struct Blas {
-    structure: Retained<ProtocolObject<dyn MTLAccelerationStructure>>,
+pub(crate) struct Blas {
+    pub(crate) structure: Retained<ProtocolObject<dyn MTLAccelerationStructure>>,
 }
 
 /// The resident RT scene: N per-object BLAS instanced into one TLAS via
@@ -97,11 +97,14 @@ pub struct RtAccel {
     /// Kept alive: the TLAS descriptor's `instancedAccelerationStructures`
     /// array holds retained references to each BLAS regardless, but owning
     /// them here too makes a future per-BLAS refit (deforming mesh) a
-    /// simple field access instead of an NSArray walk.
-    blas: Vec<Blas>,
+    /// simple field access instead of an NSArray walk. pub(crate):
+    /// encoder.rs's dispatch useResource coverage (BUG-jddy arm 5).
+    pub(crate) blas: Vec<Blas>,
     /// CPU-writable instance-descriptor buffer (transform per object).
     /// Retained here so `refit_accel` can rewrite transforms in place.
-    instance_buffer: GpuBuffer,
+    /// pub(crate): encoder.rs's dispatch useResource coverage (BUG-jddy
+    /// arm 5) declares both BLASes and this buffer.
+    pub(crate) instance_buffer: GpuBuffer,
     /// BUG-308/RT-D4: `build_accel`/`refit_accel` are async (a single
     /// command buffer is `commit()`-ed, never `waitUntilCompleted()`-ed,
     /// mid-frame) — set `true` by that buffer's completion handler once

@@ -619,14 +619,23 @@ impl GpuEncoder {
                 }
             }
         }
-        // Declare resource usage so the Metal driver can manage coherence
-        // on discrete-GPU paths (Apple Silicon's unified memory reads
-        // `device`-address-space data coherently without this, but explicit
-        // `useResource:` is the correct Metal API contract). RT-D4, BUG-jddy:
-        // the address-space fix (`constant`→`device` for `gi_materials`/
-        // `normal_sources`) was the root fix; this is belt-and-suspenders.
-        // `Read` for buffers (all inputs), `ReadWrite` for textures (mix of
-        // read/write; the broader usage is always correct).
+        // BUG-jddy arm 5: declare usage for every resource the TLAS
+        // reaches only indirectly — the per-frame refit op (the proven
+        // static-death cure) re-references all of these in a submitted
+        // command; if this useResource coverage cures WITHOUT a refit,
+        // the driver was reclaiming unreferenced accel resources and
+        // this block is the root fix.
+        unsafe {
+            let () = msg_send![&enc, useResource: &*accel.structure, usage: MTLResourceUsage::Read];
+            for blas in &accel.blas {
+                let () = msg_send![&enc, useResource: &*blas.structure, usage: MTLResourceUsage::Read];
+            }
+            let () = msg_send![&enc, useResource: &*accel.instance_buffer.raw(), usage: MTLResourceUsage::Read];
+        }
+        // BUG-jddy: the 2026-07-26 constant→device change was NOT the
+        // root fix (disproven by the refit-arm bisect); these binding
+        // useResource calls stay as API-correct coverage. `Read` for
+        // buffers (all inputs), `ReadWrite` would be broader than needed.
         for binding in bindings {
             match binding {
                 GpuBinding::Buffer { buffer, .. } => {
