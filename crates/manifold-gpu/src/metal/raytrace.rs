@@ -1619,8 +1619,16 @@ kernel void accumulate_irradiance(
         float rough = 1.0;
         if (oid_ok) { rough = gi_materials[oid].metallic_roughness.y; }
         float3 V = normalize(p.camera_pos - wp);
-        float3 R = reflect(-V, cur_normal);
-        float3 vwp = cur_refl.a > 0.0 ? wp + cur_refl.a * R : wp;
+        // The virtual image is wp − hit_dist·V, NOT wp + hit_dist·R:
+        // mirroring the hit point q across the tangent plane gives
+        // q' = wp + d·R − 2d(R·n)n, and R = −V + 2(V·n)n collapses it to
+        // q' = wp − d·V (exact for planar mirrors; the roughness lerp
+        // covers the GGX-perturbed breakdown). wp + d·R is the REAL hit
+        // point — reprojecting that only works against a scene-color
+        // history; with our own refl history it reads the hit surface's
+        // reflection channel (wrong content) and lands off-screen in
+        // practice (no blend ever — found by the R2 scene gate, D-62).
+        float3 vwp = cur_refl.a > 0.0 ? wp - cur_refl.a * V : wp;
         float bt = clamp(rough / RT_REFL_VIRTUAL_REPROJ_ROUGHNESS_BLEND, 0.0, 1.0);
         float3 rp = mix(vwp, wp, bt);
         if (oid_ok) { rp = (obj_m * float4(rp, 1.0)).xyz; }
