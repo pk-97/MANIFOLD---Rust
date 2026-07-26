@@ -1,0 +1,335 @@
+{
+  "uid": "manifold-value",
+  "title": "MANIFOLD fleet — subscription value",
+  "description": "What the subscriptions are worth against what they cost. Every figure is notional: each provider's traffic priced at that provider's OWN published list rate, never billed. Invoices are ground truth. Anthropic rows come from Claude Code transcripts via scripts/claude_usage_export.py; every other provider comes from litellm SpendLogs.",
+  "tags": ["manifold", "fleet", "cost"],
+  "timezone": "Australia/Sydney",
+  "editable": true,
+  "schemaVersion": 39,
+  "refresh": "5m",
+  "time": { "from": "now-7d", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "plan_anthropic",
+        "label": "Claude Max $/mo",
+        "type": "textbox",
+        "query": "200",
+        "current": { "text": "200", "value": "200" }
+      },
+      {
+        "name": "plan_kimi",
+        "label": "Kimi $/mo",
+        "type": "textbox",
+        "query": "20",
+        "current": { "text": "20", "value": "20" }
+      },
+      {
+        "name": "plan_zai",
+        "label": "Z.AI $/mo",
+        "type": "textbox",
+        "query": "20",
+        "current": { "text": "20", "value": "20" }
+      },
+      {
+        "name": "plan_opencode",
+        "label": "OpenCode $/mo",
+        "type": "textbox",
+        "query": "20",
+        "current": { "text": "20", "value": "20" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "row",
+      "title": "Is the subscription paying for itself?",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 1,
+      "type": "bargauge",
+      "title": "Leverage — list-rate value earned per dollar of plan cost",
+      "description": "Above 1.0x the plan is ahead. Plan cost is prorated to the dashboard time range from the monthly figures at the top of the page.",
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "manifold-litellm-pg" },
+      "gridPos": { "h": 8, "w": 14, "x": 0, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 1,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 1 },
+              { "color": "green", "value": 3 }
+            ]
+          },
+          "custom": { "displayMode": "gradient" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "valueMode": "color",
+        "showUnfilled": true,
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": true }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT u.provider AS \"Provider\",\n       sum(u.cost) / NULLIF(p.monthly * EXTRACT(EPOCH FROM ($__timeTo()::timestamptz - $__timeFrom()::timestamptz)) / 2592000.0, 0) AS \"leverage\"\nFROM manifold_fleet_usage u\nJOIN (VALUES\n        ('Anthropic', ${plan_anthropic}::numeric),\n        ('Kimi',      ${plan_kimi}::numeric),\n        ('Z.AI',      ${plan_zai}::numeric),\n        ('OpenCode',  ${plan_opencode}::numeric)\n     ) AS p(provider, monthly) ON p.provider = u.provider\nWHERE $__timeFilter(u.ts)\nGROUP BY u.provider, p.monthly\nORDER BY \"leverage\" DESC"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Window totals",
+      "description": "Notional list-rate value of everything the fleet did in this window, against the prorated cost of the four plans.",
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "manifold-litellm-pg" },
+      "gridPos": { "h": 8, "w": 10, "x": 14, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 0,
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "text", "value": null }] }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Net benefit" },
+            "properties": [
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    { "color": "red", "value": null },
+                    { "color": "green", "value": 0 }
+                  ]
+                }
+              },
+              { "id": "color", "value": { "mode": "thresholds" } }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH v AS (\n  SELECT sum(cost) AS notional FROM manifold_fleet_usage WHERE $__timeFilter(ts)\n), c AS (\n  SELECT (${plan_anthropic} + ${plan_kimi} + ${plan_zai} + ${plan_opencode})::numeric\n         * EXTRACT(EPOCH FROM ($__timeTo()::timestamptz - $__timeFrom()::timestamptz)) / 2592000.0 AS plan\n)\nSELECT v.notional AS \"List-rate value\",\n       c.plan     AS \"Plan cost\",\n       v.notional - c.plan AS \"Net benefit\"\nFROM v, c"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Cumulative list-rate value vs cumulative plan cost",
+      "description": "The dashed line is what the four plans cost over this window. Where a provider's curve crosses it, that provider alone has paid for the whole fleet.",
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "manifold-litellm-pg" },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 9 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "custom": { "lineWidth": 2, "fillOpacity": 8, "showPoints": "never", "spanNulls": true }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Plan cost (all four)" },
+            "properties": [
+              { "id": "custom.lineStyle", "value": { "dash": [10, 10], "fill": "dash" } },
+              { "id": "custom.fillOpacity", "value": 0 },
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "text" } }
+            ]
+          }
+        ]
+      },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["lastNotNull"] } },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT date_trunc('hour', ts) AS time,\n       provider AS metric,\n       sum(sum(cost)) OVER (PARTITION BY provider ORDER BY date_trunc('hour', ts)) AS value\nFROM manifold_fleet_usage\nWHERE $__timeFilter(ts)\nGROUP BY 1, provider\nORDER BY 1"
+        },
+        {
+          "refId": "B",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT g AS time,\n       'Plan cost (all four)' AS metric,\n       (${plan_anthropic} + ${plan_kimi} + ${plan_zai} + ${plan_opencode})::numeric\n         * EXTRACT(EPOCH FROM (g - $__timeFrom()::timestamptz)) / 2592000.0 AS value\nFROM generate_series($__timeFrom()::timestamptz, $__timeTo()::timestamptz, '1 hour') g\nORDER BY 1"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Which models are worth the money, and what are they doing?",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 19 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 4,
+      "type": "table",
+      "title": "Cost per completed agent turn",
+      "description": "An agent turn is a call that wrote 100+ output tokens — real work, not a permission verdict or a session title. This measures cost and throughput only; whether the turn was any GOOD is not in this database.",
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "manifold-litellm-pg" },
+      "gridPos": { "h": 10, "w": 14, "x": 0, "y": 20 },
+      "fieldConfig": {
+        "defaults": { "custom": { "align": "right", "cellOptions": { "type": "auto" } } },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "$/turn" },
+            "properties": [
+              { "id": "unit", "value": "currencyUSD" },
+              { "id": "decimals", "value": 4 },
+              { "id": "custom.cellOptions", "value": { "type": "color-background", "mode": "gradient" } },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    { "color": "green", "value": null },
+                    { "color": "yellow", "value": 0.02 },
+                    { "color": "orange", "value": 0.08 }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Spend" },
+            "properties": [{ "id": "unit", "value": "currencyUSD" }, { "id": "decimals", "value": 2 }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Avg turn" },
+            "properties": [{ "id": "unit", "value": "s" }, { "id": "decimals", "value": 0 }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Provider" },
+            "properties": [{ "id": "custom.align", "value": "left" }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Model" },
+            "properties": [{ "id": "custom.align", "value": "left" }]
+          }
+        ]
+      },
+      "options": { "sortBy": [{ "displayName": "$/turn", "desc": false }] },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT provider AS \"Provider\",\n       model    AS \"Model\",\n       count(*) FILTER (WHERE work_class = 'agent-turn') AS \"Turns\",\n       sum(cost) AS \"Spend\",\n       sum(cost) / NULLIF(count(*) FILTER (WHERE work_class = 'agent-turn'), 0) AS \"$/turn\",\n       avg(request_duration_ms) FILTER (WHERE work_class = 'agent-turn') / 1000.0 AS \"Avg turn\"\nFROM manifold_fleet_work\nWHERE $__timeFilter(ts) AND status <> 'failure'\nGROUP BY provider, model\nHAVING count(*) FILTER (WHERE work_class = 'agent-turn') > 0\nORDER BY \"$/turn\""
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "barchart",
+      "title": "Where the money actually goes",
+      "description": "Spend split by inferred work class. A large permission-classifier slice is overhead, not work — it is the auto-mode gate paying to say 'no' on every tool call.",
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "manifold-litellm-pg" },
+      "gridPos": { "h": 10, "w": 10, "x": 14, "y": 20 },
+      "fieldConfig": {
+        "defaults": { "unit": "currencyUSD", "custom": { "fillOpacity": 85, "stacking": { "mode": "percent" } } },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "xTickLabelRotation": 0,
+        "stacking": "percent",
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT provider AS \"Provider\",\n       sum(cost) FILTER (WHERE work_class = 'agent-turn')            AS \"Agent turns\",\n       sum(cost) FILTER (WHERE work_class = 'short-reply')           AS \"Short replies\",\n       sum(cost) FILTER (WHERE work_class = 'permission-classifier') AS \"Permission classifier\",\n       sum(cost) FILTER (WHERE work_class = 'tiny-util')             AS \"Tiny utility\"\nFROM manifold_fleet_work\nWHERE $__timeFilter(ts) AND status <> 'failure'\nGROUP BY provider\nORDER BY sum(cost) DESC"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Cache reads as a share of prompt tokens",
+      "description": "Cache reads bill at a tenth of fresh input, so a high share means the fleet is cheap per unit of context. A sudden drop means something is invalidating the prompt prefix and every call just got ~10x more expensive.",
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "manifold-litellm-pg" },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 30 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 70 },
+              { "color": "green", "value": 90 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area",
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": true }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT provider AS \"Provider\",\n       100.0 * sum(cache_read) / NULLIF(sum(prompt_tokens), 0) AS \"cache share\"\nFROM manifold_fleet_usage\nWHERE $__timeFilter(ts)\nGROUP BY provider\nORDER BY 2 DESC"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Daily list-rate value by provider",
+      "description": "Flat-lining on a provider means that seat is idle — a plan you are paying for and not using.",
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "manifold-litellm-pg" },
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 30 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "custom": { "lineWidth": 1, "fillOpacity": 25, "stacking": { "mode": "normal" }, "showPoints": "never", "spanNulls": true }
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT date_trunc('day', ts) AS time,\n       provider AS metric,\n       sum(cost) AS value\nFROM manifold_fleet_usage\nWHERE $__timeFilter(ts)\nGROUP BY 1, provider\nORDER BY 1"
+        }
+      ]
+    }
+  ]
+}
