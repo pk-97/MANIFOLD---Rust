@@ -4052,11 +4052,15 @@ impl EffectNode for RenderScene {
             // PROBE (BUG-jddy bisect, 2026-07-27): force a refit every
             // frame, arm-controlled via raytrace::refit_accel_probe so
             // NATURAL refits keep write+command (arms 1-2 froze the
-            // TLAS during motion — confounded). Arm 3: command-only.
-            // Alive → the GPU refit command alone is the cure and the
-            // CPU write is irrelevant. Remove with the root fix.
+            // TLAS during motion — confounded). Arm 3 (command-only)
+            // CURED — the GPU command is load-bearing, the write is
+            // not. Arm 4: empty committed CB + completion handler, no
+            // refit encoded — alive => commit cadence is the cure;
+            // dead => the refit op itself is required (TLAS decays).
+            // Remove with the root fix.
             const PROBE_WRITE: bool = false;
-            const PROBE_COMMAND: bool = true;
+            const PROBE_COMMIT: bool = true;
+            const PROBE_ENCODE: bool = false;
             if self.rt_accel_built
                 && let Some(accel) = self.rt_accel.as_ref()
                 && accel.ready.load(std::sync::atomic::Ordering::Acquire)
@@ -4066,7 +4070,8 @@ impl EffectNode for RenderScene {
                     accel,
                     &objects,
                     PROBE_WRITE,
-                    PROBE_COMMAND,
+                    PROBE_COMMIT,
+                    PROBE_ENCODE,
                 );
             }
 

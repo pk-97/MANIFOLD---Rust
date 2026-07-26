@@ -373,7 +373,7 @@ fn add_ready_completion_handler<T: Send + 'static>(
 /// doesn't (so the BLAS list is unchanged). Rewrites the instance buffer's
 /// transforms from `objects` first, then refits.
 pub(crate) fn refit_accel(device: &GpuDevice, accel: &RtAccel, objects: &[RtObjectGeometry]) {
-    refit_accel_probe(device, accel, objects, true, true);
+    refit_accel_probe(device, accel, objects, true, true, true);
 }
 
 /// PROBE (BUG-jddy bisect, 2026-07-27): refit with the CPU write and/or
@@ -386,7 +386,8 @@ pub fn refit_accel_probe(
     accel: &RtAccel,
     objects: &[RtObjectGeometry],
     write: bool,
-    command: bool,
+    commit: bool,
+    encode: bool,
 ) {
     debug_assert_eq!(
         objects.len(),
@@ -419,7 +420,7 @@ pub fn refit_accel_probe(
     // transform can wait for it; the OLD transform is still valid to
     // read from `accel.structure` in the meantime (Metal doesn't mutate
     // it destructively until the refit command actually runs).
-    if !command {
+    if !commit {
         return;
     }
     accel.ready.store(false, Ordering::Release);
@@ -427,19 +428,21 @@ pub fn refit_accel_probe(
         .raw_queue()
         .commandBuffer()
         .expect("Failed to acquire command buffer for RT TLAS refit");
-    let enc = cb
-        .accelerationStructureCommandEncoder()
-        .expect("accelerationStructureCommandEncoder failed");
-    unsafe {
-        enc.refitAccelerationStructure_descriptor_destination_scratchBuffer_scratchBufferOffset(
-            &accel.structure,
-            &accel.descriptor,
-            Some(&accel.structure),
-            Some(accel.refit_scratch.raw()),
-            0,
-        );
+    if encode {
+        let enc = cb
+            .accelerationStructureCommandEncoder()
+            .expect("accelerationStructureCommandEncoder failed");
+        unsafe {
+            enc.refitAccelerationStructure_descriptor_destination_scratchBuffer_scratchBufferOffset(
+                &accel.structure,
+                &accel.descriptor,
+                Some(&accel.structure),
+                Some(accel.refit_scratch.raw()),
+                0,
+            );
+        }
+        enc.endEncoding();
     }
-    enc.endEncoding();
     add_ready_completion_handler(&cb, Arc::clone(&accel.ready), ());
     cb.commit();
 }
