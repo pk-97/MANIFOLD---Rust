@@ -17,6 +17,7 @@
 //!
 //! Usage:
 //!   cargo run --features perf-soak --bin manifold -- manifold rt-capture <project.manifold>
+//!   cargo run ... manifold rt-capture --paused <project>   # Play 60 → Pause 300
 //!
 //! MANIFOLD_RT_PROBE is NOT required — the subcommand arms the capture
 //! flags directly.
@@ -100,10 +101,13 @@ fn arm_capture() {
 }
 
 pub fn run(args: &[String]) -> ! {
-    let project_path = match args.get(1) {
-        Some(p) if !p.starts_with("--") => PathBuf::from(p),
-        _ => { eprintln!("usage: manifold rt-capture <project.manifold> [--frames N]"); std::process::exit(2); }
-    };
+    let paused_mode = args.iter().any(|a| a == "--paused");
+
+    // Resolve project path: skip the subcommand name (args[0]), then first non-flag arg.
+    let project_path = args.iter().skip(1)
+        .find(|a| !a.starts_with("--"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| { eprintln!("usage: manifold rt-capture [--paused] <project.manifold> [--frames N]"); std::process::exit(2); });
     if !project_path.exists() { eprintln!("not found: {}", project_path.display()); std::process::exit(1); }
 
     // Parse optional --frames flag; default 360.
@@ -112,7 +116,7 @@ pub fn run(args: &[String]) -> ! {
         .and_then(|w| w[1].parse().ok())
         .unwrap_or(360);
 
-    println!("=== RT CAPTURE ===");
+    println!("=== RT CAPTURE {}", if paused_mode { "(PAUSED MODE)" } else { "" });
     println!("path: {} frames={}", project_path.display(), total_frames);
 
     let real_project = manifold_io::loader::load_project_with(&project_path, crate::project_io::install_embedded_presets)
@@ -134,18 +138,31 @@ pub fn run(args: &[String]) -> ! {
         .spawn(move || while state_rx.recv().is_ok() {})
         .expect("spawn drain");
 
-    // Capture at fixed frames: mid-rotation (30), end of rotation (59),
-    // early still (70, 90), late still (150, 359, last frame).
+    // Phase 1: Play N frames (rotation, beat advancing).
     ct.handle_command(ContentCommand::Play);
-    for frame in 0..total_frames {
-        if frame == 30 || frame == 59 || frame == 70 || frame == 90
-            || frame == 150 || frame == total_frames.saturating_sub(1)
-        {
+    let rotation_frames = if paused_mode { 60 } else { total_frames };
+    for frame in 0..rotation_frames {
+        if frame == 30 || frame == 59 {
             arm_capture();
         }
         ct.timer.wait_for_deadline();
         ct.tick_frame(&state_tx);
         if let Some(dev) = ct.content_pipeline.native_device() { drain_captures(dev, frame); }
+    }
+
+    // Phase 2 (paused mode only): Pause, keep calling tick_frame.
+    if paused_mode {
+        println!("=== PAUSED phase ===");
+        ct.handle_command(ContentCommand::Pause);
+        for f in 0..(total_frames - rotation_frames) {
+            let host = rotation_frames + f;
+            if f == 10 || f == 30 || f == 90 || f == (total_frames - rotation_frames - 1) {
+                arm_capture();
+            }
+            ct.timer.wait_for_deadline();
+            ct.tick_frame(&state_tx);
+            if let Some(dev) = ct.content_pipeline.native_device() { drain_captures(dev, host); }
+        }
     }
 
     // Final flush.
