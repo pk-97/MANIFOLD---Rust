@@ -619,23 +619,22 @@ impl GpuEncoder {
                 }
             }
         }
-        // BUG-jddy arm 5: declare usage for every resource the TLAS
-        // reaches only indirectly — the per-frame refit op (the proven
-        // static-death cure) re-references all of these in a submitted
-        // command; if this useResource coverage cures WITHOUT a refit,
-        // the driver was reclaiming unreferenced accel resources and
-        // this block is the root fix.
+        // BUG-jddy root fix: declare usage for every resource the trace
+        // kernel reaches only INDIRECTLY — the TLAS's referenced BLASes
+        // and the instance buffer the TLAS was built from. Resources no
+        // submitted command declares usage on get reclaimed by the
+        // driver; when the scene went static (no refits re-referencing
+        // them), GI/reflection ray paths read reclaimed memory ~5 frames
+        // later while shadow/AO survived (geometry traversal is
+        // self-contained in the TLAS — the split case).
         unsafe {
             let () = msg_send![&enc, useResource: &*accel.structure, usage: MTLResourceUsage::Read];
             for blas in &accel.blas {
                 let () = msg_send![&enc, useResource: &*blas.structure, usage: MTLResourceUsage::Read];
             }
-            let () = msg_send![&enc, useResource: &*accel.instance_buffer.raw(), usage: MTLResourceUsage::Read];
+            let () = msg_send![&enc, useResource: accel.instance_buffer.raw(), usage: MTLResourceUsage::Read];
         }
-        // BUG-jddy: the 2026-07-26 constant→device change was NOT the
-        // root fix (disproven by the refit-arm bisect); these binding
-        // useResource calls stay as API-correct coverage. `Read` for
-        // buffers (all inputs), `ReadWrite` would be broader than needed.
+        // Same contract for the direct bindings.
         for binding in bindings {
             match binding {
                 GpuBinding::Buffer { buffer, .. } => {

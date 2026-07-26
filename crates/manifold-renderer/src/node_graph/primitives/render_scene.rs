@@ -4049,30 +4049,6 @@ impl EffectNode for RenderScene {
                 }
             }
 
-            // PROBE (BUG-jddy bisect, 2026-07-27): arms 1-4 proved the
-            // refit OPERATION is the cure (write/commit/handler all
-            // exonerated). Arm 5: no forced refit; instead encoder.rs
-            // now useResource-covers the TLAS, every BLAS, and the
-            // instance buffer at trace dispatch. Alive => driver was
-            // reclaiming unreferenced accel resources and that block is
-            // the root fix; dead => the TLAS must be rewritten per frame.
-            const PROBE_WRITE: bool = false;
-            const PROBE_COMMIT: bool = false;
-            const PROBE_ENCODE: bool = false;
-            if self.rt_accel_built
-                && let Some(accel) = self.rt_accel.as_ref()
-                && accel.ready.load(std::sync::atomic::Ordering::Acquire)
-            {
-                manifold_gpu::raytrace::refit_accel_probe(
-                    gpu.device,
-                    accel,
-                    &objects,
-                    PROBE_WRITE,
-                    PROBE_COMMIT,
-                    PROBE_ENCODE,
-                );
-            }
-
             // `rt_ready` was captured at the top of `evaluate()` from the
             // latched `rt_accel_built` flag BEFORE this block ran —
             // correct either way: a rebuild just enqueued above commits

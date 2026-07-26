@@ -376,22 +376,6 @@ fn add_ready_completion_handler<T: Send + 'static>(
 /// doesn't (so the BLAS list is unchanged). Rewrites the instance buffer's
 /// transforms from `objects` first, then refits.
 pub(crate) fn refit_accel(device: &GpuDevice, accel: &RtAccel, objects: &[RtObjectGeometry]) {
-    refit_accel_probe(device, accel, objects, true, true, true);
-}
-
-/// PROBE (BUG-jddy bisect, 2026-07-27): refit with the CPU write and/or
-/// GPU command independently skippable, so render_scene's forced
-/// per-frame refit can run each arm while NATURAL refits stay intact
-/// (arms 1-2 skipped inside natural refits too, freezing the TLAS at
-/// build pose during motion — confounded). Remove with the root fix.
-pub fn refit_accel_probe(
-    device: &GpuDevice,
-    accel: &RtAccel,
-    objects: &[RtObjectGeometry],
-    write: bool,
-    commit: bool,
-    encode: bool,
-) {
     debug_assert_eq!(
         objects.len(),
         accel.blas.len(),
@@ -403,12 +387,10 @@ pub fn refit_accel_probe(
         .instance_buffer
         .mapped_ptr()
         .expect("RT instance-descriptor buffer must be CPU-mapped");
-    if write {
-        for (i, obj) in objects.iter().enumerate() {
-            unsafe {
-                let field_ptr = ptr.add(i * stride) as *mut MTLPackedFloat4x3;
-                field_ptr.write_unaligned(to_packed_4x3(obj.transform));
-            }
+    for (i, obj) in objects.iter().enumerate() {
+        unsafe {
+            let field_ptr = ptr.add(i * stride) as *mut MTLPackedFloat4x3;
+            field_ptr.write_unaligned(to_packed_4x3(obj.transform));
         }
     }
 
@@ -423,29 +405,24 @@ pub fn refit_accel_probe(
     // transform can wait for it; the OLD transform is still valid to
     // read from `accel.structure` in the meantime (Metal doesn't mutate
     // it destructively until the refit command actually runs).
-    if !commit {
-        return;
-    }
     accel.ready.store(false, Ordering::Release);
     let cb = device
         .raw_queue()
         .commandBuffer()
         .expect("Failed to acquire command buffer for RT TLAS refit");
-    if encode {
-        let enc = cb
-            .accelerationStructureCommandEncoder()
-            .expect("accelerationStructureCommandEncoder failed");
-        unsafe {
-            enc.refitAccelerationStructure_descriptor_destination_scratchBuffer_scratchBufferOffset(
-                &accel.structure,
-                &accel.descriptor,
-                Some(&accel.structure),
-                Some(accel.refit_scratch.raw()),
-                0,
-            );
-        }
-        enc.endEncoding();
+    let enc = cb
+        .accelerationStructureCommandEncoder()
+        .expect("accelerationStructureCommandEncoder failed");
+    unsafe {
+        enc.refitAccelerationStructure_descriptor_destination_scratchBuffer_scratchBufferOffset(
+            &accel.structure,
+            &accel.descriptor,
+            Some(&accel.structure),
+            Some(accel.refit_scratch.raw()),
+            0,
+        );
     }
+    enc.endEncoding();
     add_ready_completion_handler(&cb, Arc::clone(&accel.ready), ());
     cb.commit();
 }
@@ -1866,14 +1843,12 @@ const _: () = assert!(std::mem::size_of::<ShadowRayParams>() == 176);
 /// `MTLBuffer::gpuAddress()` (via [`GpuBuffer::gpu_address`]) PLUS the
 /// object's `vertex_offset` already folded in — the kernel reads
 /// `vertex_base_addr + vertex_index * vertex_stride + normal_offset` as a
-/// raw `packed_float3`. Reading an arbitrary object's vertex buffer this
-/// way needs no separate `useResource` call: the SAME buffers are already
-/// referenced by the bound acceleration structure (`build_accel`'s BLAS
-/// geometry descriptors), and Metal makes every resource an acceleration
-/// structure transitively references resident when the structure itself is
-/// bound (`setAccelerationStructure_atBufferIndex`) — confirmed by this
-/// exact kernel already ray-tracing against these same buffers for the
-/// hardware intersection test.
+/// raw `packed_float3`. Metal documents that binding an acceleration
+/// structure makes its transitively-referenced resources resident — but
+/// BUG-jddy proved that insufficient in practice: static scenes lost
+/// GI/reflections until `dispatch_compute_with_accel` explicitly
+/// `useResource`-declared the TLAS, every BLAS, and the instance buffer.
+/// Treat that explicit declaration as the contract, not the doc claim.
 ///
 /// `normal_matrix` is the object's WORLD-space transform for normals — RT-
 /// T1-B takes the model matrix's upper-left 3x3 directly (a NAMED,
