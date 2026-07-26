@@ -4428,6 +4428,9 @@ impl EffectNode for RenderScene {
                     if let Some(ref t) = self.rt_moments_history[refl_write] { q.push(RtCaptureSlot {
                         label: "moments".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
                     });}
+                    if let Some(ref t) = self.rt_mask_full { q.push(RtCaptureSlot {
+                        label: "mask".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
+                    });}
                 }
             }
         }
