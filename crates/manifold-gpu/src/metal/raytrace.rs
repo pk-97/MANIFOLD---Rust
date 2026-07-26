@@ -81,8 +81,8 @@ use crate::types::{GpuBinding, GpuTextureDesc, GpuTextureDimension, GpuTextureFo
 /// `structure` handle needs to survive — kept in `RtAccel.blas` for
 /// `object_count()`'s dirty-check guard below and so a future per-BLAS
 /// refit is a field access away instead of a rebuild from scratch.
-struct Blas {
-    structure: Retained<ProtocolObject<dyn MTLAccelerationStructure>>,
+pub(crate) struct Blas {
+    pub(crate) structure: Retained<ProtocolObject<dyn MTLAccelerationStructure>>,
 }
 
 /// The resident RT scene: N per-object BLAS instanced into one TLAS via
@@ -97,11 +97,14 @@ pub struct RtAccel {
     /// Kept alive: the TLAS descriptor's `instancedAccelerationStructures`
     /// array holds retained references to each BLAS regardless, but owning
     /// them here too makes a future per-BLAS refit (deforming mesh) a
-    /// simple field access instead of an NSArray walk.
-    blas: Vec<Blas>,
+    /// simple field access instead of an NSArray walk. pub(crate):
+    /// encoder.rs's dispatch useResource coverage (BUG-jddy arm 5).
+    pub(crate) blas: Vec<Blas>,
     /// CPU-writable instance-descriptor buffer (transform per object).
     /// Retained here so `refit_accel` can rewrite transforms in place.
-    instance_buffer: GpuBuffer,
+    /// pub(crate): encoder.rs's dispatch useResource coverage (BUG-jddy
+    /// arm 5) declares both BLASes and this buffer.
+    pub(crate) instance_buffer: GpuBuffer,
     /// BUG-308/RT-D4: `build_accel`/`refit_accel` are async (a single
     /// command buffer is `commit()`-ed, never `waitUntilCompleted()`-ed,
     /// mid-frame) — set `true` by that buffer's completion handler once
@@ -1840,14 +1843,12 @@ const _: () = assert!(std::mem::size_of::<ShadowRayParams>() == 176);
 /// `MTLBuffer::gpuAddress()` (via [`GpuBuffer::gpu_address`]) PLUS the
 /// object's `vertex_offset` already folded in — the kernel reads
 /// `vertex_base_addr + vertex_index * vertex_stride + normal_offset` as a
-/// raw `packed_float3`. Reading an arbitrary object's vertex buffer this
-/// way needs no separate `useResource` call: the SAME buffers are already
-/// referenced by the bound acceleration structure (`build_accel`'s BLAS
-/// geometry descriptors), and Metal makes every resource an acceleration
-/// structure transitively references resident when the structure itself is
-/// bound (`setAccelerationStructure_atBufferIndex`) — confirmed by this
-/// exact kernel already ray-tracing against these same buffers for the
-/// hardware intersection test.
+/// raw `packed_float3`. Metal documents that binding an acceleration
+/// structure makes its transitively-referenced resources resident — but
+/// BUG-jddy proved that insufficient in practice: static scenes lost
+/// GI/reflections until `dispatch_compute_with_accel` explicitly
+/// `useResource`-declared the TLAS, every BLAS, and the instance buffer.
+/// Treat that explicit declaration as the contract, not the doc claim.
 ///
 /// `normal_matrix` is the object's WORLD-space transform for normals — RT-
 /// T1-B takes the model matrix's upper-left 3x3 directly (a NAMED,

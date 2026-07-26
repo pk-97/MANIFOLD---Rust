@@ -619,14 +619,22 @@ impl GpuEncoder {
                 }
             }
         }
-        // Declare resource usage so the Metal driver can manage coherence
-        // on discrete-GPU paths (Apple Silicon's unified memory reads
-        // `device`-address-space data coherently without this, but explicit
-        // `useResource:` is the correct Metal API contract). RT-D4, BUG-jddy:
-        // the address-space fix (`constant`→`device` for `gi_materials`/
-        // `normal_sources`) was the root fix; this is belt-and-suspenders.
-        // `Read` for buffers (all inputs), `ReadWrite` for textures (mix of
-        // read/write; the broader usage is always correct).
+        // BUG-jddy root fix: declare usage for every resource the trace
+        // kernel reaches only INDIRECTLY — the TLAS's referenced BLASes
+        // and the instance buffer the TLAS was built from. Resources no
+        // submitted command declares usage on get reclaimed by the
+        // driver; when the scene went static (no refits re-referencing
+        // them), GI/reflection ray paths read reclaimed memory ~5 frames
+        // later while shadow/AO survived (geometry traversal is
+        // self-contained in the TLAS — the split case).
+        unsafe {
+            let () = msg_send![&enc, useResource: &*accel.structure, usage: MTLResourceUsage::Read];
+            for blas in &accel.blas {
+                let () = msg_send![&enc, useResource: &*blas.structure, usage: MTLResourceUsage::Read];
+            }
+            let () = msg_send![&enc, useResource: accel.instance_buffer.raw(), usage: MTLResourceUsage::Read];
+        }
+        // Same contract for the direct bindings.
         for binding in bindings {
             match binding {
                 GpuBinding::Buffer { buffer, .. } => {
