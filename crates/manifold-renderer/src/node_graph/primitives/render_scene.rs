@@ -4396,13 +4396,21 @@ impl EffectNode for RenderScene {
                 // ── RT washout probe: capture textures when flagged ──
                 if WASHOUT_CAPTURE_NOW.swap(false, std::sync::atomic::Ordering::Relaxed) {
                     let mut q = WASHOUT_QUEUE.lock().unwrap();
+                    let refl_write = self.rt_history_ping;
+                    let refl_read = 1 - refl_write;
                     if let Some(ref t) = self.rt_refl_full { q.push(WashoutCap {
-                        label: "refl_full".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
+                        label: "refl_raw".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
+                    });}
+                    if let Some(ref t) = self.rt_refl_history[refl_write] { q.push(WashoutCap {
+                        label: "refl_history_write".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
+                    });}
+                    if let Some(ref t) = self.rt_refl_history[refl_read] { q.push(WashoutCap {
+                        label: "refl_history_read".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
                     });}
                     if let Some(ref t) = self.rt_irr_full { q.push(WashoutCap {
                         label: "irr_full".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
                     });}
-                    if let Some(ref t) = self.rt_moments_history[self.rt_history_ping] { q.push(WashoutCap {
+                    if let Some(ref t) = self.rt_moments_history[refl_write] { q.push(WashoutCap {
                         label: "moments".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
                     });}
                 }
