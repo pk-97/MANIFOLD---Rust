@@ -3574,6 +3574,122 @@ fn imported_azalea_renders_through_create_with_override_to_png() {
     println!("create_with_override proof: wrote {out_path} (fraction {fraction:.4})");
 }
 
+/// Override an inner node param on an assembled def the way the runtime will
+/// actually see it. Card bindings SHADOW node params — `apply_binding_defaults`
+/// stamps every binding's `default_value` onto its target param at build time —
+/// so writing `node.params` alone is silently reverted for any exposed param,
+/// and the test renders the untouched scene while looking like it configured
+/// one. Addressed by `node_id`/param, never by binding id: ids are
+/// `{node_doc_id}_{param}` and are reassigned whenever exposure stamping
+/// changes. Panics on a missing node, a missing param, or a card response that
+/// is not pass-through, so a stale address fails loudly.
+#[cfg(feature = "gpu-proofs")]
+fn set_bound_param(def: &mut EffectGraphDef, node_id: &str, param: &str, value: f32) {
+    fn set_node_param(
+        nodes: &mut [EffectGraphNode],
+        node_id: &str,
+        param: &str,
+        value: f32,
+    ) -> bool {
+        let mut found = false;
+        for node in nodes.iter_mut() {
+            if node.node_id.as_str() == node_id {
+                assert!(
+                    node.params.contains_key(param)
+                        || crate::node_graph::scene_exposure::metadata_for_node_type(&node.type_id)
+                            .iter()
+                            .any(|m| m.name == param),
+                    "node `{node_id}` ({}) has no param `{param}`",
+                    node.type_id
+                );
+                node.params.insert(param.to_string(), float(value));
+                found = true;
+            }
+            if let Some(body) = node.group.as_mut() {
+                found |= set_node_param(&mut body.nodes, node_id, param, value);
+            }
+        }
+        found
+    }
+    assert!(
+        set_node_param(&mut def.nodes, node_id, param, value),
+        "assembled def has no node with node_id `{node_id}`"
+    );
+
+    let Some(meta) = def.preset_metadata.as_mut() else { return };
+    let manifold_core::effect_graph_def::PresetMetadata { params, bindings, .. } = meta;
+    for binding in bindings.iter_mut() {
+        let BindingTarget::Node { node_id: target_node, param: target_param } = &binding.target
+        else {
+            continue;
+        };
+        if target_node.as_str() != node_id || target_param != param {
+            continue;
+        }
+        let pass_through = (binding.scale - 1.0).abs() < 1e-6
+            && binding.offset.abs() < 1e-6
+            && params.iter().find(|p| p.id == binding.id).is_none_or(|p| {
+                !p.invert && p.curve == manifold_core::macro_bank::MacroCurve::Linear
+            });
+        assert!(
+            pass_through,
+            "binding `{}` remaps its target — set_bound_param only handles pass-through cards",
+            binding.id
+        );
+        binding.default_value = value;
+    }
+}
+
+/// Snapshot a phase sequence and assert its frames are pairwise distinct.
+///
+/// Frames always land in `MESH_SNAP_OUT_DIR` (default `target/mesh-snap`,
+/// gitignored) so every run is inspectable. The committed
+/// `tests/fixtures/gltf/goldens/` copies are refreshed only under
+/// `MANIFOLD_REBASELINE_GOLDENS=1`, and only once the assertions pass — a
+/// failing run must never overwrite the goldens it just contradicted.
+#[cfg(feature = "gpu-proofs")]
+fn assert_phase_sequence_distinct(
+    stem: &str,
+    subject: &str,
+    phases: &[f32],
+    frames: &[Vec<u8>],
+    w: u32,
+    h: u32,
+) {
+    let name = |p: f32| format!("{stem}_p{:03}.png", (p * 100.0).round() as u32);
+    let write_into = |dir: &std::path::Path| {
+        std::fs::create_dir_all(dir).unwrap_or_else(|e| panic!("create {}: {e}", dir.display()));
+        for (p, rgba) in phases.iter().zip(frames) {
+            let out = dir.join(name(*p));
+            image::save_buffer(&out, rgba, w, h, image::ExtendedColorType::Rgba8)
+                .unwrap_or_else(|e| panic!("save {}: {e}", out.display()));
+        }
+    };
+
+    let snap_dir = std::path::PathBuf::from(
+        std::env::var("MESH_SNAP_OUT_DIR").unwrap_or_else(|_| "target/mesh-snap".to_string()),
+    );
+    write_into(&snap_dir);
+    eprintln!("{subject}: wrote {} phase frames to {}", frames.len(), snap_dir.display());
+
+    for i in 0..frames.len() {
+        for j in (i + 1)..frames.len() {
+            assert_ne!(
+                frames[i], frames[j],
+                "{subject}: progress {} and progress {} rendered byte-identical frames",
+                phases[i], phases[j]
+            );
+        }
+    }
+
+    if std::env::var("MANIFOLD_REBASELINE_GOLDENS").is_ok() {
+        let goldens = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/goldens");
+        write_into(&goldens);
+        eprintln!("{subject}: re-baselined {} goldens in {}", frames.len(), goldens.display());
+    }
+}
+
 #[cfg(feature = "gpu-proofs")]
 fn box_animated_fixture_path() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -3597,39 +3713,19 @@ fn box_animated_duration_s() -> f32 {
         .duration_s
 }
 
-/// Render-and-look finding (this session, verified with a throwaway
-/// probe test before writing this): `BoxAnimated.glb`'s "inner_box"
-/// (the only animated object) sits almost entirely INSIDE the
-/// stationary "outer_box" shell — under the importer's DEFAULT
-/// synthesized camera (a ~17-degree-above-horizon orbit shot tuned
-/// for typical hero objects) the inner box is visible only as a
-/// sliver of color peeking through a gap at the very top rim. Once
-/// its translation lifts it more than ~0.4 world units (well before
-/// progress=0.25 in this clip), it moves entirely out of that sliver
-/// and the rendered frame goes back to "no visible inner box" —
-/// IDENTICAL to every other progress where it's equally absent from
-/// the sliver. A default-camera four-phase test would (and, before
-/// this fix, DID) come back pixel-identical for 3 of the 4 phases —
-/// not a wiring bug, a camera-framing fact about this specific asset
-/// discovered by rendering and looking, not assumed. This override
-/// re-points the SAME synthesized camera near-vertical (looking down
-/// through the shell's open top — confirmed with the probe render:
-/// the inner box's full motion and rotation are clearly visible from
-/// here) via its own card bindings (`cam_tilt`/`cam_dist` — NOT the
-/// raw node params, which the binding evaluation overwrites every
-/// frame with its own default_value regardless of what the node
-/// param says). Test-only instrumentation — never a change to the
-/// production import default.
+/// `BoxAnimated.glb`'s "inner_box" (the only animated object) sits almost
+/// entirely INSIDE the stationary "outer_box" shell. Under the importer's
+/// default synthesized camera (~17-degree-above-horizon orbit) it is visible
+/// only as a sliver through a gap at the top rim, and once its translation
+/// lifts it past ~0.4 world units — well before progress=0.25 — it leaves that
+/// sliver and every later phase renders identically. That is a framing fact
+/// about this asset, not a wiring bug, so the four-phase gate re-points the
+/// same synthesized camera near-vertical, down through the shell's open top.
+/// Test-only instrumentation — never a change to the production import default.
 #[cfg(feature = "gpu-proofs")]
 fn point_camera_down_to_see_inner_box(def: &mut manifold_core::effect_graph_def::EffectGraphDef) {
-    let meta = def.preset_metadata.as_mut().expect("import graph carries v2 metadata");
-    for b in meta.bindings.iter_mut() {
-        match b.id.as_str() {
-            "cam_tilt" => b.default_value = 1.4,
-            "cam_dist" => b.default_value = 6.0,
-            _ => {}
-        }
-    }
+    set_bound_param(def, "camera", "tilt", 1.4);
+    set_bound_param(def, "camera", "distance", 6.0);
 }
 
 /// Render the assembled `def` at a chosen `progress` (via the
@@ -3768,24 +3864,14 @@ fn box_animated_four_phase_pngs_are_visibly_distinct() {
         frames.push(render_box_animated_at_progress(def, w, h, p, duration_s));
     }
 
-    let out_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/gltf/goldens");
-    std::fs::create_dir_all(&out_dir).expect("create goldens dir");
-    for (p, rgba) in phases.iter().zip(frames.iter()) {
-        let out_path = out_dir.join(format!("box_animated_p{:03}.png", (p * 100.0).round() as u32));
-        image::save_buffer(&out_path, rgba, w, h, image::ExtendedColorType::Rgba8)
-            .unwrap_or_else(|e| panic!("save {}: {e}", out_path.display()));
-    }
-
-    for i in 0..frames.len() {
-        for j in (i + 1)..frames.len() {
-            assert_ne!(
-                frames[i], frames[j],
-                "progress {} and progress {} rendered byte-identical frames — the clip isn't animating",
-                phases[i], phases[j]
-            );
-        }
-    }
+    assert_phase_sequence_distinct(
+        "box_animated",
+        "BoxAnimated.glb rigid clip",
+        &phases,
+        &frames,
+        w,
+        h,
+    );
 }
 
 /// A1 gate item 2 (round-trip): build the import graph, serialize it
@@ -4004,9 +4090,6 @@ fn render_skinned_import_at_progress(
 #[test]
 fn skinned_characters_render_four_visibly_distinct_deformed_poses() {
     let (w, h) = (256u32, 256u32);
-    let out_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/gltf/goldens");
-    std::fs::create_dir_all(&out_dir).expect("create goldens dir");
 
     for asset in ["CesiumMan.glb", "Fox.glb"] {
         let path = khronos_fixture_path(asset);
@@ -4028,24 +4111,15 @@ fn skinned_characters_render_four_visibly_distinct_deformed_poses() {
             frames.push(render_skinned_import_at_progress(def, w, h, p, duration_s));
         }
 
-        let stem = asset.trim_end_matches(".glb").to_lowercase();
-        for (p, rgba) in phases.iter().zip(frames.iter()) {
-            let out_path =
-                out_dir.join(format!("{stem}_skin_p{:03}.png", (p * 100.0).round() as u32));
-            image::save_buffer(&out_path, rgba, w, h, image::ExtendedColorType::Rgba8)
-                .unwrap_or_else(|e| panic!("save {}: {e}", out_path.display()));
-        }
-
-        for i in 0..frames.len() {
-            for j in (i + 1)..frames.len() {
-                assert_ne!(
-                    frames[i], frames[j],
-                    "{asset}: progress {} and progress {} rendered byte-identical frames — \
-                     the skin isn't deforming",
-                    phases[i], phases[j]
-                );
-            }
-        }
+        let stem = format!("{}_skin", asset.trim_end_matches(".glb").to_lowercase());
+        assert_phase_sequence_distinct(
+            &stem,
+            &format!("{asset} skin deformation"),
+            &phases,
+            &frames,
+            w,
+            h,
+        );
     }
 }
 
@@ -4072,10 +4146,6 @@ fn skinned_characters_render_four_visibly_distinct_deformed_poses() {
 #[test]
 fn rigid_multi_node_held_out_fixture_renders_four_distinct_poses() {
     let (w, h) = (256u32, 256u32);
-    let out_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/gltf/goldens");
-    std::fs::create_dir_all(&out_dir).expect("create goldens dir");
-
     let asset = "CesiumMilkTruck.glb";
     let path = khronos_fixture_path(asset);
     if !path.exists() {
@@ -4104,23 +4174,14 @@ fn rigid_multi_node_held_out_fixture_renders_four_distinct_poses() {
         frames.push(render_skinned_import_at_progress(def, w, h, p, duration_s));
     }
 
-    for (p, rgba) in phases.iter().zip(frames.iter()) {
-        let out_path =
-            out_dir.join(format!("cesium_milk_truck_rigid_p{:03}.png", (p * 100.0).round() as u32));
-        image::save_buffer(&out_path, rgba, w, h, image::ExtendedColorType::Rgba8)
-            .unwrap_or_else(|e| panic!("save {}: {e}", out_path.display()));
-    }
-
-    for i in 0..frames.len() {
-        for j in (i + 1)..frames.len() {
-            assert_ne!(
-                frames[i], frames[j],
-                "{asset}: progress {} and progress {} rendered byte-identical frames — the \
-                 node-slot palette isn't animating",
-                phases[i], phases[j]
-            );
-        }
-    }
+    assert_phase_sequence_distinct(
+        "cesium_milk_truck_rigid",
+        &format!("{asset} node-slot palette"),
+        &phases,
+        &frames,
+        w,
+        h,
+    );
 }
 
 /// A2 gate: hot-path check (CLAUDE.md content-thread discipline;
@@ -4383,10 +4444,6 @@ fn render_morph_import_at_progress(
 #[test]
 fn morph_targets_render_four_visibly_distinct_poses() {
     let (w, h) = (256u32, 256u32);
-    let out_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/gltf/goldens");
-    std::fs::create_dir_all(&out_dir).expect("create goldens dir");
-
     let assets: [(&str, [f32; 4]); 2] = [
         ("AnimatedMorphCube.glb", [0.0, 0.25, 0.5, 0.75]),
         // Target 0/2/4/6 peak weight-1.0 progress values (see doc
@@ -4414,24 +4471,15 @@ fn morph_targets_render_four_visibly_distinct_poses() {
             frames.push(render_morph_import_at_progress(def, w, h, p, duration_s));
         }
 
-        let stem = asset.trim_end_matches(".glb").to_lowercase();
-        for (p, rgba) in phases.iter().zip(frames.iter()) {
-            let out_path =
-                out_dir.join(format!("{stem}_morph_p{:03}.png", (p * 100.0).round() as u32));
-            image::save_buffer(&out_path, rgba, w, h, image::ExtendedColorType::Rgba8)
-                .unwrap_or_else(|e| panic!("save {}: {e}", out_path.display()));
-        }
-
-        for i in 0..frames.len() {
-            for j in (i + 1)..frames.len() {
-                assert_ne!(
-                    frames[i], frames[j],
-                    "{asset}: progress {} and progress {} rendered byte-identical frames — \
-                     the morph targets aren't blending",
-                    phases[i], phases[j]
-                );
-            }
-        }
+        let stem = format!("{}_morph", asset.trim_end_matches(".glb").to_lowercase());
+        assert_phase_sequence_distinct(
+            &stem,
+            &format!("{asset} morph blending"),
+            &phases,
+            &frames,
+            w,
+            h,
+        );
     }
 }
 
@@ -5485,41 +5533,47 @@ fn emissive_strength_test_fixture_path() -> std::path::PathBuf {
 /// above this function for why this reconstruction is faithful.
 #[cfg(feature = "gpu-proofs")]
 fn reconstruct_pre_bug221_fix(def: &EffectGraphDef) -> EffectGraphDef {
+    const AXES: [(&str, &str); 3] =
+        [("translate_x", "pos_x"), ("translate_y", "pos_y"), ("translate_z", "pos_z")];
+    fn float_of(node: &EffectGraphNode, param: &str) -> f32 {
+        match node.params.get(param) {
+            Some(SerializedParamValue::Float { value }) => *value,
+            _ => 0.0,
+        }
+    }
+
     let mut out = def.clone();
-    for node in &mut out.nodes {
-        let Some(body) = node.group.as_mut() else { continue };
-        let mesh_handles: Vec<String> = body
-            .nodes
-            .iter()
-            .filter_map(|n| n.handle.clone())
-            .filter(|h| h.starts_with("mesh_"))
-            .collect();
-        for mesh_handle in mesh_handles {
-            let k = &mesh_handle["mesh_".len()..];
+    // Collected first, then written through `set_bound_param` — `transform_3d`
+    // params carry card bindings that re-stamp their `default_value` over any
+    // direct node-param write.
+    let mut moves: Vec<(String, String, [f32; 3])> = Vec::new();
+    for node in &out.nodes {
+        let Some(body) = node.group.as_ref() else { continue };
+        for mesh in &body.nodes {
+            let Some(k) = mesh.handle.as_deref().and_then(|h| h.strip_prefix("mesh_")) else {
+                continue;
+            };
             let transform_handle = format!("transform_{k}");
-            let Some(mi) = body.nodes.iter().position(|n| n.handle.as_deref() == Some(mesh_handle.as_str()))
+            let Some(transform) =
+                body.nodes.iter().find(|n| n.handle.as_deref() == Some(transform_handle.as_str()))
             else {
                 continue;
             };
-            let Some(ti) =
-                body.nodes.iter().position(|n| n.handle.as_deref() == Some(transform_handle.as_str()))
-            else {
-                continue;
-            };
-            for (mesh_param, transform_param) in
-                [("translate_x", "pos_x"), ("translate_y", "pos_y"), ("translate_z", "pos_z")]
-            {
-                let t = match body.nodes[mi].params.get(mesh_param) {
-                    Some(SerializedParamValue::Float { value }) => *value,
-                    _ => 0.0,
-                };
-                let p = match body.nodes[ti].params.get(transform_param) {
-                    Some(SerializedParamValue::Float { value }) => *value,
-                    _ => 0.0,
-                };
-                body.nodes[mi].params.insert(mesh_param.to_string(), float(0.0));
-                body.nodes[ti].params.insert(transform_param.to_string(), float(t + p));
+            let mut summed = [0.0f32; 3];
+            for (i, (mesh_param, transform_param)) in AXES.iter().enumerate() {
+                summed[i] = float_of(mesh, mesh_param) + float_of(transform, transform_param);
             }
+            moves.push((
+                mesh.node_id.as_str().to_string(),
+                transform.node_id.as_str().to_string(),
+                summed,
+            ));
+        }
+    }
+    for (mesh_id, transform_id, summed) in moves {
+        for (i, (mesh_param, transform_param)) in AXES.iter().enumerate() {
+            set_bound_param(&mut out, &mesh_id, mesh_param, 0.0);
+            set_bound_param(&mut out, &transform_id, transform_param, summed[i]);
         }
     }
     out
@@ -5643,14 +5697,20 @@ fn bug221_pivot_spins_in_place_after_fix_but_not_before() {
 
     fn rotate_one_object_y(mut def: EffectGraphDef, k: usize, radians: f32) -> EffectGraphDef {
         let target_handle = format!("transform_{k}");
-        for node in &mut def.nodes {
-            let Some(body) = node.group.as_mut() else { continue };
-            for n in &mut body.nodes {
-                if n.type_id == "node.transform_3d" && n.handle.as_deref() == Some(target_handle.as_str()) {
-                    n.params.insert("rot_y".to_string(), float(radians));
-                }
-            }
-        }
+        let node_id = def
+            .nodes
+            .iter()
+            .filter_map(|n| n.group.as_ref())
+            .flat_map(|body| &body.nodes)
+            .find(|n| {
+                n.type_id == "node.transform_3d"
+                    && n.handle.as_deref() == Some(target_handle.as_str())
+            })
+            .unwrap_or_else(|| panic!("assembled def has no {target_handle}"))
+            .node_id
+            .as_str()
+            .to_string();
+        set_bound_param(&mut def, &node_id, "rot_y", radians);
         def
     }
 
