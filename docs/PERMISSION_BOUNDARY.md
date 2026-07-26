@@ -73,10 +73,36 @@ An ignored rule still works for permission *prompts* in other modes — it just
 never skips the classifier. It fails silently either way, so it reads as
 working.
 
+**The exclusion does not cover compound interpreter forms.** Empirical,
+2.1.219, 2026-07-26: `Bash(python3 -c ' *)` was NOT excluded — `python3 -c
+'pass'` executed with no classifier call while the classifier was down
+(fail-closed blocks everything unapproved, so silent execution convicts).
+Treat the exclusion list above as applying only to the exact shapes listed;
+any interpreter invocation with flags between the binary and the payload
+must be assumed to skip the classifier. BUG-lu32 tracks re-deriving the full
+exclusion semantics from the binary.
+
+**`awk` and `find` are not in the exclusion list at all**, and both are
+execution-capable: awk has `system()`, in-program `print > path` writes, and
+`-f <file>`; find has `-exec` and `-delete`. Wildcard rules on either skip
+the classifier. Convicted live 2026-07-26 (`awk 'BEGIN{system("true")}'`).
+Both rules removed from `settings.json` the same day; awk also removed from
+`preToolUseBash.py`'s READ_ONLY set, which had the same hole at the hook
+layer.
+
 Consequence: `python3 scripts/x.py …` can never skip the classifier. Direct
 invocation (`scripts/x.py …`, shebang + exec bit) can. That is why the repo's
 scripts are executable and every call site was rewritten (2026-07-26,
 `7533149f`).
+
+### The matcher is redirect-aware
+
+Empirical, 2026-07-26: a trailing-`*` rule (`echo *`) does NOT wave a
+redirect to an arbitrary path through — `echo x > ~/file` escalated to the
+classifier instead of matching the rule. Redirects to `/tmp` are approved
+(repo hook policy). So "read-only" wildcard rules are not writable via
+shell redirection; the breakout class to worry about is commands with their
+own write/exec flags (awk/find/tee above), not the shell.
 
 ## 4. The bar for adding an allow rule
 
@@ -100,21 +126,143 @@ them as security-relevant in review.
 
 ## 5. Current allow list
 
-`.claude/settings.local.json` is **gitignored** — the live list is not in the
-repo, so it is recorded here for review. Re-sync this section when it changes.
+Three sources: user-global `~/.claude/settings.json`, committed
+`.claude/settings.json`, and `.claude/settings.local.json` (**gitignored** —
+this section is its only reviewable copy). The fenced block below is
+machine-checked: `.claude/hooks/permissions_sync_check.py` diffs it against
+the live files and exits 1 on drift. Run it after any rule change; the block
+must list every rule, one per line, exactly as written in the JSON.
 
-Read-only shell (user settings, global): `grep rg find head tail wc ls cat stat
-which echo sort awk jq fd ast-grep sg`, `Read(//**)`.
+```permissions
+# --- user-global ~/.claude/settings.json ---
+Read(//**)
+Bash(grep *)
+Bash(rg *)
+Bash(head *)
+Bash(tail *)
+Bash(wc *)
+Bash(ls *)
+Bash(cat *)
+Bash(stat *)
+Bash(which *)
+Bash(echo *)
+Bash(sort *)
+Bash(jq *)
+Bash(fd *)
+Bash(ast-grep *)
+Bash(sg *)
+# --- committed .claude/settings.json ---
+Bash(git commit -m *)
+Bash(cargo metadata *)
+Bash(cargo xtask install *)
+Bash(cargo xtask bundle *)
+Bash(cargo xtask install)
+Bash(cargo xtask bundle)
+Bash(grep *)
+Bash(rg *)
+Bash(head *)
+Bash(tail *)
+Bash(wc *)
+Bash(ls *)
+Bash(cat *)
+Bash(stat *)
+Bash(which *)
+Bash(echo *)
+Bash(sort *)
+Bash(jq *)
+Bash(cargo build)
+Bash(cargo build *)
+Bash(cargo check)
+Bash(cargo check *)
+Bash(cargo clippy)
+Bash(cargo clippy *)
+Bash(cargo test)
+Bash(cargo test *)
+Bash(cargo run -p manifold-renderer --bin check-presets)
+Bash(cargo run -p manifold-renderer --bin check-presets *)
+Bash(unzip -p *)
+Bash(unzip -l *)
+# --- gitignored .claude/settings.local.json ---
+Bash(cargo check *)
+Bash(cargo build *)
+Bash(cargo clippy *)
+Bash(cargo test *)
+Bash(cargo run *)
+Bash(cargo tree *)
+Bash(cargo search *)
+Bash(cargo update *)
+Bash(cargo fmt *)
+Bash(cargo nextest run *)
+Bash(git add *)
+Bash(git commit *)
+Bash(git push *)
+Bash(git checkout *)
+Bash(git revert *)
+Bash(git rm *)
+Bash(git log *)
+Bash(git diff *)
+Bash(git status *)
+Bash(git show *)
+Bash(git lfs *)
+Bash(git -C *)
+Bash(git check-ignore *)
+Bash(git fetch *)
+Bash(git rev-parse *)
+Bash(git merge-base *)
+Bash(gh pr view *)
+Bash(gh pr list *)
+Bash(gh pr status *)
+Bash(gh pr checks *)
+Bash(gh pr diff *)
+Bash(gh run view *)
+Bash(gh run list *)
+Bash(gh run watch *)
+Bash(bd *)
+Bash(sleep *)
+Bash(sed -n *)
+Bash(cc-fleet status *)
+Bash(cc-fleet spawn *)
+Bash(cc-fleet teardown *)
+Bash(cc-fleet update *)
+Bash(.claude/hooks/flash *)
+Bash(pkill -f rust-analyzer)
+Bash(pkill -f "zola.*serve")
+Bash(memory_pressure -Q)
+Bash(./scripts/build-analyzer-vst-plugin.sh)
+Bash(./plugins/scripts/build-analyzer-vst-plugin.sh)
+Bash(bash scripts/build-analyzer-vst-plugin.sh)
+Bash(bash "/Users/peterkiemann/MANIFOLD - Rust/plugins/scripts/build-analyzer-vst-plugin.sh")
+Bash(plugins/scripts/build-analyzer-vst-plugin.sh)
+Bash(zola --root "/Users/peterkiemann/latent-space-site" build)
+Bash(zola --root "/Users/peterkiemann/latent-space-site" serve --interface 127.0.0.1 --port 1111)
+Bash(scripts/agent-worktree.py list)
+Bash(scripts/agent-worktree.py acquire *)
+Bash(scripts/gen_docs_index.py)
+Bash(scripts/seat_tool.py show)
+Bash(scripts/gate_runner.py show *)
+Bash(scripts/gate_runner.py report *)
+Bash(scripts/token_report.py *)
+Bash(scripts/run_ui_flows.py *)
+Bash(scripts/move_identity_check.py *)
+Bash(scripts/gen_glb_conformance_status.py)
+Bash(scripts/test_move_identity_check.py)
+WebSearch
+WebFetch(domain:www.latentspacemusic.com)
+Read(//Users/peterkiemann/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-app-kit-0.2.2/src/**)
+Read(//Users/peterkiemann/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-app-kit-0.2.2/**)
+Read(//Users/peterkiemann/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-0.5.2/src/**)
+Read(//Users/peterkiemann/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-foundation-0.2.2/src/**)
+Bash(unzip -o '/Users/peterkiemann/Library/CloudStorage/Dropbox/Videos/LATENT SPACE - Marketing Content/MANIFOLD Projects/Interim/Album Art Animation.manifold' -d /private/tmp/claude-501/-Users-peterkiemann-MANIFOLD---Rust/15bacc9b-646a-4bea-bfbd-006916506835/scratchpad/albumart)
+Bash(git -C "/Users/peterkiemann/.claude" mv commands/brief.md commands/tldr.md 2>/dev/null || mv "/Users/peterkiemann/.claude/commands/brief.md" "/Users/peterkiemann/.claude/commands/tldr.md")
+Bash(cp ~/Library/Logs/DiagnosticReports/manifold-2026-06-27-161935.ips /private/tmp/claude-501/-Users-peterkiemann-MANIFOLD---Rust/e3756d30-0ebe-48c4-8b3c-95225affbb28/scratchpad/crash.ips; wc -l /private/tmp/claude-501/-Users-peterkiemann-MANIFOLD---Rust/e3756d30-0ebe-48c4-8b3c-95225affbb28/scratchpad/crash.ips)
+Bash(psql postgresql://litellm:litellm-local@localhost:5432/litellm -c "select \\"startTime\\", model, \\"model_group\\", api_key, total_tokens from \\"LiteLLM_SpendLogs\\" order by \\"startTime\\" desc limit 15;")
+```
 
-Project (`.claude/settings.json`): cargo `build/check/clippy/test/metadata`,
-`cargo xtask install|bundle`, `git commit -m *`, `unzip -p|-l`, `check-presets`.
+Removed in the 2026-07-26 audit (see §3 for why): `Bash(python3 -c ' *)`,
+`Bash(python3 -)`, `Bash(awk *)` (both files), `Bash(find *)` (both files),
+`Bash(git worktree *)` — arbitrary execution or unreviewed destruction.
 
-Project-local (`.claude/settings.local.json`): cargo
-`check/build/clippy/test/run/tree/search/update/fmt/nextest run`; git
-`add/commit/push/checkout/revert/rm/log/diff/status/show/worktree/lfs/-C/
-check-ignore/fetch/rev-parse/merge-base`; `gh pr|run`; `bd *`; `sleep *`;
-`sed -n *`; `cc-fleet status|spawn|teardown|update`; `.claude/hooks/flash *`;
-zola build/serve; and these scripts:
+Rationale for the script rules (unchanged from the original audit):
 
 | Rule | Why it is safe |
 |---|---|
@@ -122,17 +270,19 @@ zola build/serve; and these scripts:
 | `scripts/agent-worktree.py acquire *` | bounded by the slot ring cap |
 | `scripts/gen_docs_index.py` | no arguments |
 | `scripts/seat_tool.py show` | read-only |
-| `scripts/gate_runner.py show *` / `report *` | read-only |
+| `scripts/gate_runner.py show *` / `report *` | fixed read-only subprocesses; note `show` runs `cc-fleet keyget`, which prints an API key into the transcript |
 | `scripts/token_report.py *` | reads transcripts, flags only |
-| `scripts/run_ui_flows.py *` | bounded by `scripts/ui-flows/manifest.json` |
+| `scripts/run_ui_flows.py *` | bounded by `scripts/ui-flows/manifest.json` — which is agent-editable, so this is a §4 residual-risk rule |
 | `scripts/move_identity_check.py *` | git refs only |
 | `scripts/gen_glb_conformance_status.py` | no arguments |
-| `scripts/test_move_identity_check.py` | no arguments |
+| `scripts/test_move_identity_check.py` | no arguments — but it is an editable file executed directly; §4 residual risk |
 
-Deliberately NOT allowlisted, keep classified: `psql` (arbitrary SQL), `curl` /
-`wget` (network egress), `rm`, `gate_runner.py per-lane` (executes commands
-extracted from a brief file), `agent-worktree.py release` (deletes a worktree
-and any uncommitted work in it), `seat_tool.py assign` (rewrites model routing).
+Deliberately NOT allowlisted, keep classified: `psql` in wildcard form (one
+literal read-only query IS allowlisted — see block; the wildcard never),
+`curl` / `wget` (network egress), `rm`, `gate_runner.py per-lane` (executes
+commands extracted from a brief file), `agent-worktree.py release` (deletes a
+worktree and any uncommitted work in it), `seat_tool.py assign` (rewrites
+model routing).
 
 ## 6. Incident — 2026-07-26
 

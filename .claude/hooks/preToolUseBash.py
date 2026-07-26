@@ -87,7 +87,11 @@ READ_ONLY = {
     "ls", "tree", "pwd", "dirname", "basename", "realpath", "readlink",
     # text processing (read-only). `tee` is deliberately excluded — it
     # writes to its file argument, which the redirect guard doesn't cover.
-    "sort", "uniq", "cut", "tr", "awk", "jq", "column", "paste", "comm",
+    # `awk` is likewise excluded — system(), in-program `print > path`
+    # writes, and `-f <file>` make it an interpreter, not a filter
+    # (2026-07-26 audit: `awk 'BEGIN{system(...)}'` sailed through both
+    # this list and the old `awk *` allow rules).
+    "sort", "uniq", "cut", "tr", "jq", "column", "paste", "comm",
     "diff", "cmp", "fold", "expand", "unexpand", "seq",
     # code-shape
     "ast-grep", "sg",
@@ -778,7 +782,11 @@ def detect_unverified_compound_landing_merge(cmd, cwd):
 # is denied, in EVERY permission mode (in auto/bypass modes there is no
 # prompt to catch it otherwise). The script itself runs git as a
 # subprocess, outside this hook's reach, so it is unaffected. `git
-# worktree remove/prune/list` stay allowed — cleanup shrinks the pool.
+# worktree remove` is denied too — `remove --force` destroys uncommitted
+# work, and raw removes bypass the slot ring's bookkeeping; releases go
+# through the script (2026-07-26 audit: the old `git worktree *` allow
+# rule made raw remove the zero-review path). prune/list stay allowed —
+# cleanup shrinks the pool.
 # ---------------------------------------------------------------------------
 
 WORKTREE_ADD_REASON = (
@@ -789,18 +797,89 @@ WORKTREE_ADD_REASON = (
     "POOL FULL, surface that to Peter instead of working around it."
 )
 
+WORKTREE_REMOVE_REASON = (
+    "`git worktree remove` is denied — releases go through the slot ring: "
+    "`scripts/agent-worktree.py release <slot>`. Raw remove bypasses the "
+    "ring's bookkeeping, and `--force` destroys uncommitted work."
+)
+
 
 def worktree_add_guard(cmd, cwd):
-    """Return a deny reason if any segment is a `git worktree add`, else
-    None. Never raises — any failure yields None (normal flow)."""
+    """Return a deny reason if any segment is a `git worktree add` or
+    `git worktree remove`, else None. Never raises — any failure yields
+    None (normal flow)."""
     try:
         for toks in _shlex_segments(cmd):
             toks = _strip_leading_keywords(toks)
             if not toks or toks[0] != "git":
                 continue
             _target_dir, sub, rest = _git_checkout_dir(toks, cwd)
-            if sub == "worktree" and rest and rest[0] == "add":
-                return WORKTREE_ADD_REASON
+            if sub == "worktree" and rest:
+                if rest[0] == "add":
+                    return WORKTREE_ADD_REASON
+                if rest[0] == "remove":
+                    return WORKTREE_REMOVE_REASON
+        return None
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Destructive outward-action guard (2026-07-26 permission audit)
+#
+# Settings allow rules skip the classifier, so any destructive action
+# reachable through one needs a hook-level ask that fires regardless.
+# Covers what the audit convicted: force-push to ANY ref (the landing
+# guard only catches force-to-main; a force-push to a lane branch drops
+# landed work the same way), remote branch deletion, `gh pr merge`
+# (lands on origin outside the landing protocol — the verdict guards
+# parse `git merge` syntax, not gh), and `bd delete` (permanently drops
+# tracker state). Ask, not deny: legitimate cases exist, a human
+# confirms them.
+# ---------------------------------------------------------------------------
+
+
+def destructive_outward_guard(cmd, cwd):
+    """Return an ask reason for a force-push, remote branch deletion,
+    `gh pr merge`, or `bd delete` in any segment; else None. Never
+    raises."""
+    try:
+        for toks in _shlex_segments(cmd):
+            toks = _strip_leading_keywords(toks)
+            if not toks:
+                continue
+            if toks[0] == "git":
+                _target_dir, sub, rest = _git_checkout_dir(toks, cwd)
+                if sub == "push":
+                    if _push_has_force_flag(rest):
+                        return (
+                            "Force-push. A force-push to any branch can drop "
+                            "commits another session landed — the merge-trunk "
+                            "model never rewrites published history "
+                            "(.claude/GIT_TREE_DISCIPLINE.md §2)."
+                        )
+                    positional = [t for t in rest if not t.startswith("-")]
+                    if "--delete" in rest or any(
+                        t.startswith(":") for t in positional[1:]
+                    ):
+                        return (
+                            "Remote branch deletion drops a shared branch and "
+                            "its review context for every session — confirm "
+                            "with Peter first."
+                        )
+            elif toks[0] == "gh" and len(toks) >= 3:
+                if toks[1] == "pr" and toks[2] == "merge":
+                    return (
+                        "`gh pr merge` lands on origin outside the landing "
+                        "protocol — verdict coverage and the merge-trunk "
+                        "gate only run on local `git merge`. Land locally "
+                        "per .claude/GIT_TREE_DISCIPLINE.md §2."
+                    )
+            elif toks[0] == "bd" and len(toks) >= 2 and toks[1] == "delete":
+                return (
+                    "`bd delete` permanently drops tracker state. `bd close` "
+                    "keeps the record; delete is for mistakes only."
+                )
         return None
     except Exception:
         return None
@@ -1221,6 +1300,15 @@ def main() -> int:
     merge_deny, merge_context = merge_verdict_guard(cmd, cwd)
     if merge_deny:
         json.dump(build_deny([merge_deny]), sys.stdout)
+        return 0
+
+    # 0f. Destructive outward actions (force-push to any ref, remote branch
+    # deletion, `gh pr merge`, `bd delete`) ASK in every mode — settings
+    # allow rules would otherwise skip the classifier for them. Must run
+    # before the pre-approved allow below.
+    outward_ask = destructive_outward_guard(cmd, cwd)
+    if outward_ask:
+        json.dump(build_ask(outward_ask), sys.stdout)
         return 0
 
     # T4/T5/T8: warning-only lints, computed unconditionally so they land as
