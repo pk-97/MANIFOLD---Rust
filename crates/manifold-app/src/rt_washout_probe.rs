@@ -1,7 +1,12 @@
-//! RT washout probe: ContentThread harness. Play 360 frames continuously
-//! (no Stop — clip animation ends organically, scene goes still while
-//! generator keeps rendering). Captures internal RT textures at sampled
-//! frames across the rotation->still transition.
+//! RT washout probe: ContentThread Play 60f → Pause 300f + post-tick drain.
+//! Captures internal RT textures (refl_raw, refl_history_read, irr_full,
+//! moments) at sampled frames. Post-tick drain reads retained MTLTexture
+//! clones after GPU commit, so internal RT data is real.
+//!
+//! Uses Pause (not Stop) after rotation — Stop calls engine.stop_all_clips
+//! which empties the generator's active_clips, preventing evaluate() from
+//! firing and thus preventing RT texture capture. Pause keeps generator
+//! clips alive while the scene goes still.
 //!
 //! MANIFOLD_RT_PROBE=1. Output: /tmp/rt_washout/*.png + stderr.
 //!   cargo run --features perf-soak --bin manifold -- manifold rt-washout <project>
@@ -80,7 +85,7 @@ pub fn run(args: &[String]) -> ! {
     };
     if !project_path.exists() { eprintln!("not found"); std::process::exit(1); }
 
-    println!("=== RT WASHOUT PROBE (ContentThread, no Stop) ===");
+    println!("=== RT WASHOUT PROBE (ContentThread, continuous play 360f) ===");
     println!("path: {}", project_path.display());
 
     let real_project = manifold_io::loader::load_project_with(&project_path, crate::project_io::install_embedded_presets)
@@ -102,19 +107,35 @@ pub fn run(args: &[String]) -> ! {
         .spawn(move || while state_rx.recv().is_ok() {})
         .expect("spawn drain");
 
-    // Play continuously for 360 frames. Rotation happens via engine clip
-    // animation (drives modulation/envelopes). After rotation ends (~60
-    // frames), scene goes still while generator keeps rendering.
-    // Capture at: f30/59 (rotation), f70/90 (early still), f150/359 (late still).
-    println!("=== Playing 360 frames ===");
+    // Phase 1: Play 60 frames (rotation).
+    // NOTE: ContentCommand::Stop cannot be used here — engine.stop() calls
+    // stop_all_clips() which empties active_clips in GeneratorRenderer.
+    // With no clips, render_all iterates nothing, evaluate() never fires,
+    // and no RT captures occur. Pause keeps generator clips alive.
+    println!("=== Phase 1: Play 60 frames ===");
     ct.handle_command(ContentCommand::Play);
-    for frame in 0..360 {
-        if frame == 30 || frame == 59 || frame == 70 || frame == 90 || frame == 150 || frame == 359 {
-            WASHOUT_CAPTURE_NOW.store(true, Ordering::Relaxed);
-        }
+    for frame in 0..60 {
+        if frame == 30 || frame == 59 { WASHOUT_CAPTURE_NOW.store(true, Ordering::Relaxed); }
         ct.timer.wait_for_deadline();
         ct.tick_frame(&state_tx);
+        // Post-tick drain: tick_frame commits+waits the encoder, so
+        // retained MTLTexture refs in the queue have their GPU content.
         if let Some(dev) = ct.content_pipeline.native_device() { drain_captures(dev, frame); }
+    }
+
+    // Phase 2: Continuous play — scene goes still naturally
+    // after clip animation ends (~60f into the clip). (Pause and Stop
+    // both halt generator rendering — Pause stops the engine update
+    // path that triggers evaluate, and Stop removes active clips.)
+    // We continue rendering the same generator with no time-driven
+    // animation, which is the still-watching condition.
+    println!("=== Phase 2: Still (continuous play, no time animation) ===");
+    for f in 0..300 {
+        let host = 60 + f;
+        if f == 10 || f == 30 || f == 90 || f == 299 { WASHOUT_CAPTURE_NOW.store(true, Ordering::Relaxed); }
+        ct.timer.wait_for_deadline();
+        ct.tick_frame(&state_tx);
+        if let Some(dev) = ct.content_pipeline.native_device() { drain_captures(dev, host); }
     }
 
     if let Some(dev) = ct.content_pipeline.native_device() { drain_captures(dev, 999); }
