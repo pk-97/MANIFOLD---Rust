@@ -1,7 +1,7 @@
-//! RT washout probe: ContentThread harness (Play 60f -> Stop 300f), captures
-//! internal RT textures (refl_full, accumulated refl_history, moments) + final
-//! composited output at sampled frames. The engine's clip transport drives
-//! rotation (no manual params).
+//! RT washout probe: ContentThread harness. Play 360 frames continuously
+//! (no Stop — clip animation ends organically, scene goes still while
+//! generator keeps rendering). Captures internal RT textures at sampled
+//! frames across the rotation->still transition.
 //!
 //! MANIFOLD_RT_PROBE=1. Output: /tmp/rt_washout/*.png + stderr.
 //!   cargo run --features perf-soak --bin manifold -- manifold rt-washout <project>
@@ -59,7 +59,6 @@ fn process_capture(cap: &WashoutCap, device: &manifold_gpu::GpuDevice, out_dir: 
     );
 }
 
-/// Drain capture queue, stamp frame number, process each.
 fn drain_captures(device: &manifold_gpu::GpuDevice, frame: u32) {
     let caps = {
         let mut q = WASHOUT_QUEUE.lock().unwrap();
@@ -81,7 +80,7 @@ pub fn run(args: &[String]) -> ! {
     };
     if !project_path.exists() { eprintln!("not found"); std::process::exit(1); }
 
-    println!("=== RT WASHOUT PROBE (ContentThread) ===");
+    println!("=== RT WASHOUT PROBE (ContentThread, no Stop) ===");
     println!("path: {}", project_path.display());
 
     let real_project = manifold_io::loader::load_project_with(&project_path, crate::project_io::install_embedded_presets)
@@ -103,29 +102,22 @@ pub fn run(args: &[String]) -> ! {
         .spawn(move || while state_rx.recv().is_ok() {})
         .expect("spawn drain");
 
-    // Phase 1: Play 60 frames.
-    println!("=== Phase 1: Play 60 frames ===");
+    // Play continuously for 360 frames. Rotation happens via engine clip
+    // animation (drives modulation/envelopes). After rotation ends (~60
+    // frames), scene goes still while generator keeps rendering.
+    // Capture at: f30/59 (rotation), f70/90 (early still), f150/359 (late still).
+    println!("=== Playing 360 frames ===");
     ct.handle_command(ContentCommand::Play);
-    for frame in 0..60 {
-        if frame == 30 || frame == 59 { WASHOUT_CAPTURE_NOW.store(true, Ordering::Relaxed); }
+    for frame in 0..360 {
+        if frame == 30 || frame == 59 || frame == 70 || frame == 90 || frame == 150 || frame == 359 {
+            WASHOUT_CAPTURE_NOW.store(true, Ordering::Relaxed);
+        }
         ct.timer.wait_for_deadline();
         ct.tick_frame(&state_tx);
         if let Some(dev) = ct.content_pipeline.native_device() { drain_captures(dev, frame); }
     }
 
-    // Phase 2: Stop 300 frames.
-    println!("=== Phase 2: Stop 300 frames ===");
-    ct.handle_command(ContentCommand::Stop);
-    for f in 0..300 {
-        let host = 60 + f;
-        if f == 10 || f == 30 || f == 90 || f == 299 { WASHOUT_CAPTURE_NOW.store(true, Ordering::Relaxed); }
-        ct.timer.wait_for_deadline();
-        ct.tick_frame(&state_tx);
-        if let Some(dev) = ct.content_pipeline.native_device() { drain_captures(dev, host); }
-    }
-
     if let Some(dev) = ct.content_pipeline.native_device() { drain_captures(dev, 999); }
-
     drop(state_tx); drain.join().expect("drain join");
     println!("=== DONE ===");
     std::process::exit(0);
