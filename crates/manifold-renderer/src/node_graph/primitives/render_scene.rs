@@ -81,6 +81,35 @@ use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
 use crate::node_graph::primitive::PrimitiveDescription;
 
+// ── RT washout probe capture queue (env-gated, temporary) ──────
+// Set MANIFOLD_RT_PROBE=1 to enable. Captures RT textures at sampled
+// frames into a queue the harness reads back after each tick_frame.
+use std::sync::Mutex;
+use std::sync::LazyLock;
+
+/// One capture slot: label, texture handle, frame number, width, height.
+pub struct WashoutCapture {
+    pub label: String,
+    pub tex: manifold_gpu::GpuTexture,
+    pub frame: u32,
+    pub w: u32,
+    pub h: u32,
+}
+
+/// Global capture queue — pushed by evaluate, drained by the harness.
+pub static WASHOUT_CAPTURE_QUEUE: LazyLock<Mutex<Vec<WashoutCapture>>> =
+    LazyLock::new(|| Mutex::new(Vec::new()));
+
+/// Frame counter incremented each evaluate (capture trigger source).
+pub static WASHOUT_FRAME: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+const _: () = assert!(std::mem::size_of::<manifold_gpu::GpuTexture>() > 0);
+
+/// Frames at which to capture RT textures (populated by harness before run).
+pub static WASHOUT_CAPTURE_FRAMES: LazyLock<Mutex<Vec<u32>>> =
+    LazyLock::new(|| Mutex::new(Vec::new()));
+// ── end probe metal ────────────────────────────────────────────
+
 pub const RENDER_SCENE_TYPE_ID: &str = "node.render_scene";
 
 /// 4x MSAA for the scene pass. On Apple Silicon TBDR the multisample
@@ -2784,6 +2813,8 @@ impl EffectNode for RenderScene {
     fn evaluate<'ctx, 'gpu>(&mut self, ctx: &mut EffectNodeContext<'ctx, 'gpu>) {
         let objects = self.num_objects as usize;
         let lights_n = self.num_lights as usize;
+        // ── RT washout probe: frame counter (temporary, env-gated) ──
+        let frame = WASHOUT_FRAME.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P4 (R5): built ONCE per
         // frame from this frame's wired ports (`bindings.rs`'s
@@ -4374,6 +4405,44 @@ impl EffectNode for RenderScene {
                         shaft_light_data.push([emission[0], emission[1], emission[2], -1.0]);
                         shaft_light_data.push([EMISSIVE_GLOW_RANGE_WORLD_UNITS, 0.0, 0.0, 0.0]);
                         shaft_light_count += 1;
+                    }
+                }
+            }
+            // ── RT washout probe: capture textures at sampled frames ──
+            if std::env::var_os("MANIFOLD_RT_PROBE").is_some() {
+                let frames = WASHOUT_CAPTURE_FRAMES.lock().unwrap();
+                if frames.contains(&frame)
+                    && let Some(ref refl) = self.rt_refl_full
+                    && let Some(ref irr) = self.rt_irr_full
+                {
+                    let refl_w = refl.width;
+                    let refl_h = refl.height;
+                    let irr_w = irr.width;
+                    let irr_h = irr.height;
+                    drop(frames);
+                    let mut q = WASHOUT_CAPTURE_QUEUE.lock().unwrap();
+                    q.push(WashoutCapture {
+                        label: "refl_full".to_string(),
+                        tex: refl.clone(),
+                        frame,
+                        w: refl_w,
+                        h: refl_h,
+                    });
+                    q.push(WashoutCapture {
+                        label: "irr_full".to_string(),
+                        tex: irr.clone(),
+                        frame,
+                        w: irr_w,
+                        h: irr_h,
+                    });
+                    if let Some(ref moments) = self.rt_moments_history[self.rt_history_ping] {
+                        q.push(WashoutCapture {
+                            label: "moments".to_string(),
+                            tex: moments.clone(),
+                            frame,
+                            w: moments.width,
+                            h: moments.height,
+                        });
                     }
                 }
             }

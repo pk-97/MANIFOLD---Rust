@@ -94,6 +94,9 @@ mod perf_soak;
 // P2b. Same feature gate as `perf_soak` (dispatched from inside its `run()`).
 #[cfg(all(feature = "perf-soak", target_os = "macos"))]
 mod perf_soak_import;
+// ── RT washout probe (temporary, env-gated) ─────────────────────
+#[cfg(all(feature = "perf-soak", target_os = "macos"))]
+mod rt_washout_probe;
 mod project_io;
 #[cfg(target_os = "macos")]
 mod shared_texture;
@@ -148,8 +151,15 @@ fn main() {
         }
     }
 
-    // --- `rt-app-probe` (temporary, disposable) ---
-    // cargo run --features perf-soak -- manifold rt-app-probe <project.manifold>
+    // --- `rt-washout` (temporary, env-gated probe) ---
+    // MANIFOLD_RT_PROBE=1 cargo run --features perf-soak --bin manifold -- manifold rt-washout <project>
+    #[cfg(all(feature = "perf-soak", target_os = "macos"))]
+    {
+        let args: Vec<String> = std::env::args().collect();
+        if args.get(1).map(String::as_str) == Some("rt-washout") {
+            crate::rt_washout_probe::run(&args[1..]);
+        }
+    }
     // --- `--resume <breadcrumb-path>` (GIG_RESILIENCE_DESIGN §5.2) ---
     // The crash-recovery relaunch path: `manifold --resume <path>` skips
     // everything that isn't pixels. Parsed here (no other CLI arg parsing
