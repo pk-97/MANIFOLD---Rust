@@ -790,6 +790,42 @@ impl ContentThread {
         );
         let _render_work_ms = render_work_start.elapsed().as_secs_f64() * 1000.0;
 
+        // ── Live RT capture (env MANIFOLD_RT_CAPTURE, requires perf-soak) ──
+        // Arms RT_CAPTURE_ARM flags before render, drains queue + logs stats after.
+        #[cfg(all(feature = "perf-soak", target_os = "macos"))]
+        if std::env::var_os("MANIFOLD_RT_CAPTURE").is_some() && self.frame_count > 30 {
+            let sample_tick = self.frame_count.is_multiple_of(30);
+            let png_dump_tick = self.frame_count.is_multiple_of(300);
+            if sample_tick || png_dump_tick {
+                crate::rt_capture::arm_capture();
+            }
+            // Drain and log after render.
+            if let Some(dev) = self.content_pipeline.native_device() {
+                let stats = crate::rt_capture::drain_capture_stats(dev);
+                if !stats.is_empty() {
+                    let beat = self.engine.current_beat_f64();
+                    let playing = self.engine.is_playing();
+                    let log_dir = std::path::PathBuf::from("/tmp/rt_live");
+                    let _ = std::fs::create_dir_all(&log_dir);
+                    // Write stats log.
+                    use std::io::Write;
+                    let mut line = format!(
+                        "tick={} play={} beat={:.3}", self.frame_count, playing, beat,
+                    );
+                    for (label, (hit, luma, sd)) in &stats {
+                        line.push_str(&format!(" {}=({:.6},{:.6},{:.6})", label, hit, luma, sd));
+                    }
+                    line.push('\n');
+                    if let Ok(mut f) = std::fs::OpenOptions::new()
+                        .create(true).append(true).open(log_dir.join("stats.log"))
+                    {
+                        let _ = f.write_all(line.as_bytes());
+                    }
+                    log::info!("[rt-capture] tick={} stats logged", self.frame_count);
+                }
+            }
+        }
+
         // Submit a pending still-frame readback now that the frame the user sees
         // is fully rendered. Read back next tick (see poll_still_export above).
         #[cfg(target_os = "macos")]
