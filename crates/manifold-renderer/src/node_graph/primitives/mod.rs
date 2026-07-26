@@ -424,7 +424,6 @@ pub use render_3d_mesh::Render3DMesh;
 pub use render_instanced_3d_mesh::RenderInstanced3DMesh;
 pub use render_scene::RenderScene;
 // ── RT washout probe re-exports (temporary) ──
-pub use render_scene::{WashoutCapture, WASHOUT_CAPTURE_FRAMES, WASHOUT_CAPTURE_QUEUE, WASHOUT_FRAME};
 pub use render_filled_rects::RenderFilledRects;
 pub use render_lines::RenderLines;
 pub use render_text::RenderText;

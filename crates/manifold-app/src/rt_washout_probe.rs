@@ -1,211 +1,116 @@
-//! RT washout probe: load project, drive play then pause, capture RT textures
-//! at sampled frames to find where traced reflection hits die after stillness.
+//! RT washout probe: drive generator directly via PresetRuntime, capture the
+//! composited render target at sampled frames, and report hit-fraction time
+//! series to diagnose where traced reflection content dies after stillness.
 //!
-//! MANIFOLD_RT_PROBE=1 to enable. Writes PNGs + stats to /tmp/rt_washout/.
+//! MANIFOLD_RT_PROBE=1 to enable. Output: /tmp/rt_washout/*.png + stderr.
 //!
 //!   cargo run --features perf-soak --bin manifold -- manifold rt-washout <project>
 
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
+use manifold_core::params::ParamManifest;
+use manifold_gpu::{GpuDevice, GpuTextureFormat};
+use manifold_renderer::generators::registry::GeneratorRegistry;
+use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_renderer::headless_readback::{
     encode_rgba8_png, linear_to_srgb8, readback_raw_halves,
 };
-use manifold_renderer::node_graph::primitives::{
-    WashoutCapture, WASHOUT_CAPTURE_FRAMES, WASHOUT_CAPTURE_QUEUE, WASHOUT_FRAME,
-};
-use crate::content_command::ContentCommand;
-use crate::headless_harness::headless_content_thread;
+use manifold_renderer::preset_context::PresetContext;
+use manifold_renderer::render_target::RenderTarget;
 
-/// Read back a captured texture from GPU and write analysis.
-fn process_capture(cap: &WashoutCapture, device: &manifold_gpu::GpuDevice, out_dir: &std::path::Path) {
-    let raw = readback_raw_halves(device, &cap.tex, cap.w, cap.h);
-    let pixel_count = (cap.w * cap.h) as usize;
-    let mut rgba_f32 = vec![0.0f32; pixel_count * 4];
+const W: u32 = 1920;
+const H: u32 = 1080;
 
-    // Decode pairs of f16 bytes → f32 RGBA.
+fn capture_and_report(device: &GpuDevice, target: &manifold_gpu::GpuTexture, frame: u32) {
+    let raw = readback_raw_halves(device, target, W, H);
+    let pixel_count = (W * H) as usize;
+    let mut n_hits = 0usize;
+    let mut sum_luma = 0.0f64; let mut sum_luma_sq = 0.0f64;
     for i in 0..pixel_count {
         let base = i * 8;
-        let r = half::f16::from_bits(u16::from_le_bytes([raw[base], raw[base + 1]])).to_f32();
-        let g = half::f16::from_bits(u16::from_le_bytes([raw[base + 2], raw[base + 3]])).to_f32();
-        let b = half::f16::from_bits(u16::from_le_bytes([raw[base + 4], raw[base + 5]])).to_f32();
-        let a = half::f16::from_bits(u16::from_le_bytes([raw[base + 6], raw[base + 7]])).to_f32();
-        rgba_f32[i * 4] = r;
-        rgba_f32[i * 4 + 1] = g;
-        rgba_f32[i * 4 + 2] = b;
-        rgba_f32[i * 4 + 3] = a;
+        let r = half::f16::from_bits(u16::from_le_bytes([raw[base], raw[base+1]])).to_f32();
+        let g = half::f16::from_bits(u16::from_le_bytes([raw[base+2], raw[base+3]])).to_f32();
+        let b = half::f16::from_bits(u16::from_le_bytes([raw[base+4], raw[base+5]])).to_f32();
+        let _a = half::f16::from_bits(u16::from_le_bytes([raw[base+6], raw[base+7]])).to_f32();
+        if r > 0.03 || g > 0.03 || b > 0.03 { n_hits += 1; }
+        let luma = 0.2126 * r.max(0.0) + 0.7152 * g.max(0.0) + 0.0722 * b.max(0.0);
+        sum_luma += luma as f64; sum_luma_sq += (luma * luma) as f64;
     }
+    let hit_frac = n_hits as f64 / pixel_count as f64;
+    let mean_luma = sum_luma / pixel_count as f64;
+    let var_luma = (sum_luma_sq / pixel_count as f64) - (mean_luma * mean_luma);
 
-    // Hit-fraction: alpha channel is hit distance for refl/irr textures.
-    let mut n_hits = 0usize;
-    let mut n_total = 0usize;
-    let mut sum_luma = 0.0f64;
-    let mut sum_luma_sq = 0.0f64;
-    for px in rgba_f32.chunks_exact(4) {
-        n_total += 1;
-        let hit_dist = px[3];
-        if hit_dist > 0.0 && hit_dist < 1e6 && !hit_dist.is_nan() {
-            n_hits += 1;
-        }
-        let r = px[0].max(0.0);
-        let g = px[1].max(0.0);
-        let b = px[2].max(0.0);
-        let luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-        sum_luma += luma as f64;
-        sum_luma_sq += (luma * luma) as f64;
-    }
-    let hit_frac = if n_total > 0 { n_hits as f64 / n_total as f64 } else { 0.0 };
-    let mean_luma = if n_total > 0 { sum_luma / n_total as f64 } else { 0.0 };
-    let var_luma = if n_total > 0 {
-        (sum_luma_sq / n_total as f64) - (mean_luma * mean_luma)
-    } else {
-        0.0
-    };
-
-    // Tonemap for PNG: encode to srgb-like 8-bit.
+    // Tonemap and write PNG.
     let mut rgba8 = Vec::with_capacity(pixel_count * 4);
-    for px in rgba_f32.chunks_exact(4) {
-        let tone = |v: f32| linear_to_srgb8(v.max(0.0));
-        rgba8.push(tone(px[0]));
-        rgba8.push(tone(px[1]));
-        rgba8.push(tone(px[2]));
-        // Alpha channel as hit-distance visualization: scale 0..1 → 0..255.
-        let a_vis = (px[3].clamp(0.0, 1.0) * 255.0) as u8;
-        rgba8.push(a_vis);
+    for i in 0..pixel_count {
+        let base = i * 8;
+        let r = half::f16::from_bits(u16::from_le_bytes([raw[base], raw[base+1]])).to_f32();
+        let g = half::f16::from_bits(u16::from_le_bytes([raw[base+2], raw[base+3]])).to_f32();
+        let b = half::f16::from_bits(u16::from_le_bytes([raw[base+4], raw[base+5]])).to_f32();
+        rgba8.push(linear_to_srgb8(r.max(0.0)));
+        rgba8.push(linear_to_srgb8(g.max(0.0)));
+        rgba8.push(linear_to_srgb8(b.max(0.0)));
+        rgba8.push(255u8);
     }
-
-    // Write PNG.
-    let png_path = out_dir.join(format!("f{:04}_{}.png", cap.frame, cap.label));
-    let png_bytes = encode_rgba8_png(&rgba8, cap.w, cap.h);
-    std::fs::write(&png_path, &png_bytes).unwrap_or_else(|e| {
-        eprintln!("[WASHOUT] failed to write {}: {e}", png_path.display());
-    });
-
+    let dir = PathBuf::from("/tmp/rt_washout");
+    let _ = std::fs::create_dir_all(&dir);
+    let png_path = dir.join(format!("composite_f{:04}.png", frame));
+    std::fs::write(&png_path, encode_rgba8_png(&rgba8, W, H))
+        .unwrap_or_else(|e| eprintln!("[WASHOUT] write {}: {e}", png_path.display()));
     eprintln!(
-        "[WASHOUT] {} frame={} dims={}x{} hit_frac={:.6} mean_luma={:.6} var_luma={:.6} png={}",
-        cap.label, cap.frame, cap.w, cap.h, hit_frac, mean_luma, var_luma, png_path.display(),
+        "[WASHOUT] composite f={frame:04} hit={hit_frac:.6} luma={mean_luma:.6} var={var_luma:.6} {}",
+        png_path.display(),
     );
 }
 
-/// Drain capture queue, reading back every pending capture.
-fn drain_captures(device: &manifold_gpu::GpuDevice) {
-    let caps = {
-        let mut q = WASHOUT_CAPTURE_QUEUE.lock().unwrap();
-        std::mem::take(&mut *q)
-    };
-    if caps.is_empty() {
-        return;
-    }
-    let out_dir = PathBuf::from("/tmp/rt_washout");
-    let _ = std::fs::create_dir_all(&out_dir);
-    for cap in &caps {
-        process_capture(cap, device, &out_dir);
-    }
-}
-
-/// Set capture frames relative to the current WASHOUT_FRAME baseline.
-fn set_capture_frames(relative_frames: &[u32]) {
-    let baseline = WASHOUT_FRAME.load(Ordering::Relaxed);
-    let mut frames = WASHOUT_CAPTURE_FRAMES.lock().unwrap();
-    frames.clear();
-    for rf in relative_frames {
-        frames.push(baseline + rf);
-    }
-    eprintln!(
-        "[WASHOUT] capture frames set: {:?} -> {:?}",
-        relative_frames,
-        *frames,
-    );
-}
-
-/// Entry.
 pub fn run(args: &[String]) -> ! {
-    // SAFETY: disposable probe — safe single-threaded access at startup.
     unsafe { std::env::set_var("MANIFOLD_RT_PROBE", "1"); }
 
     let project_path = match args.get(1) {
         Some(p) => PathBuf::from(p),
-        None => {
-            eprintln!("usage: manifold rt-washout <project.manifold>");
-            std::process::exit(2);
-        }
+        None => { eprintln!("usage: manifold rt-washout <project>"); std::process::exit(2); }
     };
-    if !project_path.exists() {
-        eprintln!("project not found: {}", project_path.display());
-        std::process::exit(1);
-    }
+    let project = manifold_io::loader::load_project_with(&project_path, crate::project_io::install_embedded_presets)
+        .unwrap_or_else(|e| { eprintln!("FAILED: {e}"); std::process::exit(1); });
 
+    let layer = project.timeline.layers.iter().find(|l| {
+        l.gen_params().is_some_and(|gp| gp.params.get("8_rt_enabled").is_some())
+    }).unwrap_or_else(|| { eprintln!("No layer with RT params"); std::process::exit(1); });
+    let gp = layer.gen_params().unwrap();
+    let manifest = &gp.params;
     println!("=== RT WASHOUT PROBE ===");
-    println!("path: {}", project_path.display());
+    println!("type={} layers=3", gp.generator_type().as_str());
 
-    // Load project.
-    let real_project = match manifold_io::loader::load_project_with(
-        &project_path,
-        crate::project_io::install_embedded_presets,
-    ) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("FAILED to load project: {e}");
-            std::process::exit(1);
-        }
-    };
-    let frame_rate = real_project.settings.frame_rate as f64;
-    let w = real_project.settings.output_width.max(1) as u32;
-    let h = real_project.settings.output_height.max(1) as u32;
-    println!("output={w}x{h} fps={frame_rate}");
+    let device = Arc::new(GpuDevice::new());
+    let format = GpuTextureFormat::Rgba16Float;
+    let registry = GeneratorRegistry::new(format);
+    let mut runtime = registry.create_with_override(
+        Arc::clone(&device), gp.generator_type(), gp.graph_def().as_ref(),
+        W, H, false, Some(manifest), None,
+    ).unwrap_or_else(|| { eprintln!("build failed"); std::process::exit(1); });
 
-    for (i, layer) in real_project.timeline.layers.iter().enumerate() {
-        println!("  layer[{i}] type={:?}", layer.gen_params().map(|g| g.generator_type().clone().as_str().to_string()));
-    }
+    let target = RenderTarget::new(&device, W, H, format, "washout-target");
+    let pm = ParamManifest::from_params(manifest.iter().cloned().collect());
 
-    // Build ContentThread and load project.
-    let empty_project = manifold_core::project::Project::default();
-    let mut ct = headless_content_thread(empty_project, w, h);
-    ct.timer.set_target_fps(frame_rate);
-    crate::content_thread::apply_realtime_thread_policy(frame_rate);
-    ct.handle_command(ContentCommand::LoadProject(Box::new(real_project)));
+    println!("=== Rendering 360 frames ===");
+    for frame in 0..360 {
+        let ctx = PresetContext {
+            time: frame as f64 / 60.0, beat: 0.0, dt: 1.0 / 60.0,
+            width: W, height: H, output_width: W, output_height: H,
+            aspect: W as f32 / H as f32,
+            owner_key: 0, is_clip_level: false,
+            frame_count: frame as i64, anim_progress: 1.0, trigger_count: 0,
+        };
+        let mut enc = device.create_encoder("washout-frame");
+        { let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
+          runtime.render(&mut gpu, &target.texture, &ctx, &pm); }
+        enc.commit_and_wait_completed();
 
-    let (state_tx, state_rx) = crossbeam_channel::unbounded::<crate::content_state::ContentState>();
-    let drain = std::thread::Builder::new()
-        .name("washout-drain".into())
-        .spawn(move || while state_rx.recv().is_ok() {})
-        .expect("spawn drain");
-
-    // ── Phase 1: Rotating (play) ──
-    println!("=== Phase 1: Rotating (60 frames) ===");
-    ct.handle_command(ContentCommand::Play);
-    // Capture mid-rotation (frame 30) and end-of-rotation (frame 59).
-    set_capture_frames(&[30, 59]);
-
-    for _ in 0..60 {
-        ct.timer.wait_for_deadline();
-        ct.tick_frame(&state_tx);
-        if let Some(dev) = ct.content_pipeline.native_device() {
-            drain_captures(dev);
+        if frame == 30 || frame == 59 || frame == 70 || frame == 90 || frame == 150 || frame == 359 {
+            capture_and_report(&device, &target.texture, frame);
         }
     }
-
-    // ── Phase 2: Still (paused) ──
-    println!("=== Phase 2: Paused (300 frames) ===");
-    ct.handle_command(ContentCommand::Stop);
-    // Capture at +10, +30, +90, +299 frames post-pause.
-    set_capture_frames(&[10, 30, 90, 299]);
-
-    for _ in 0..300 {
-        ct.timer.wait_for_deadline();
-        ct.tick_frame(&state_tx);
-        if let Some(dev) = ct.content_pipeline.native_device() {
-            drain_captures(dev);
-        }
-    }
-
-    // Final flush.
-    if let Some(dev) = ct.content_pipeline.native_device() {
-        drain_captures(dev);
-    }
-
-    drop(state_tx);
-    drain.join().expect("drain join");
     println!("=== DONE ===");
     std::process::exit(0);
 }
