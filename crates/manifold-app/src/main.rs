@@ -15,12 +15,12 @@ mod breadcrumb;
 mod clip_atlas;
 mod clip_filmstrip;
 mod clip_thumb_cache;
-mod content_command;
+pub(crate) mod content_command;
 mod content_commands;
 mod content_export;
 mod content_pipeline;
-mod content_state;
-mod content_thread;
+pub(crate) mod content_state;
+pub(crate) mod content_thread;
 mod dialog_path_memory;
 #[cfg(target_os = "macos")]
 mod display_link;
@@ -46,7 +46,7 @@ mod graph_dump;
 // under `cfg(test)`, matching where its own callers (`journey_proof.rs`,
 // `bug035_verify.rs`, `bug037_verify.rs`) actually live.
 #[cfg(all(target_os = "macos", any(feature = "perf-soak", all(feature = "journey-proofs", test))))]
-mod headless_harness;
+pub(crate) mod headless_harness;
 mod import_responsiveness_verify;
 mod import_worker;
 mod import_worker_drain_verify;
@@ -148,6 +148,8 @@ fn main() {
         }
     }
 
+    // --- `rt-app-probe` (temporary, disposable) ---
+    // cargo run --features perf-soak -- manifold rt-app-probe <project.manifold>
     // --- `--resume <breadcrumb-path>` (GIG_RESILIENCE_DESIGN §5.2) ---
     // The crash-recovery relaunch path: `manifold --resume <path>` skips
     // everything that isn't pixels. Parsed here (no other CLI arg parsing

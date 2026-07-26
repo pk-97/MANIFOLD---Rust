@@ -712,27 +712,24 @@ pub struct RenderScene {
     /// identities, triangle counts, `rebuild_epoch`. Transforms
     /// deliberately excluded: a moving object must NOT read as a new
     /// topology (pre-BUG-320 it did — continuous motion changed the one
-    /// combined key every frame, so the BUG-308 recur-unchanged defer
-    /// never fired, the accel stayed permanently stale mid-gesture, and
-    /// every pause in motion triggered a full rebuild that dropped RT to
-    /// the raster fallback: the motion flicker). Only a topo-key change
-    /// triggers `build_accel`.
+    /// combined key every frame). Only a topo-key change triggers
+    /// `build_accel`.
     rt_accel_topo_key: Option<u64>,
-    /// BUG-308/RT-D4: the accel-structure build is async and must never
-    /// enqueue its command buffer before this frame's own mesh-generation
-    /// GPU writes (still encoded but uncommitted on the shared per-frame
-    /// `GpuEncoder`) have reached the queue — building here would race
-    /// them. The topo key only changing to a NEW key this frame records
-    /// that key here and skips the actual build; the NEXT frame, once
-    /// this key recomputes identically, is guaranteed to run only after
-    /// the content thread's normal per-frame commit+wait for THIS frame
-    /// has already happened, so building then is race-free. `rt_accel`
-    /// stays whatever it was (`None` or a stale generation) until then —
-    /// `rt_accel_built` is what gates using it, so the raster shadow-map
-    /// path serves this scene meanwhile (see the `!rt_ready` gates
-    /// below). Holds a TOPO key (BUG-320) — transform churn while a
-    /// topology build is pending must not starve the build forever.
+    /// BUG-308/RT-D4 one-frame-defer pending key for topo changes.
     rt_accel_pending_key: Option<u64>,
+    /// Content-settle key — topo_key plus every caster draw's
+    /// `vertices_generation` (mesh slot write generation). When async
+    /// mesh content (gltf_mesh_source decode + staging copy) lands after
+    /// the initial accel build, the generation bumps, changing the
+    /// content key and triggering a deferred rebuild through the same
+    /// one-frame-recur discipline as the topo path. Separate from the
+    /// topo key so a never-settling (deforming) producer changes this
+    /// key every frame and never triggers a rebuild — the content key
+    /// must settle for one frame before a build fires. `None` until the
+    /// first RT-enabled frame.
+    rt_accel_content_key: Option<u64>,
+    /// One-frame-defer pending key for content-settle changes.
+    rt_accel_content_pending_key: Option<u64>,
     /// BUG-320: latched true the first frame `rt_accel.ready` is observed
     /// true after a (re)build; reset false when a rebuild replaces the
     /// accel. This — not raw `ready` — is the "can we trace" gate:
@@ -744,14 +741,6 @@ pub struct RenderScene {
     /// `ready` still gates ENQUEUING the next refit (never rewrite the
     /// CPU-mapped instance buffer while a refit/build is in flight).
     rt_accel_built: bool,
-    /// BUG-326: armed in the first-sighting else branch (before the
-    /// one-frame defer), consumed by the rerun block above — exactly one
-    /// extra `build_accel` per topology change. Re-armed by every genuinely
-    /// new topo sighting, so a mid-set object add whose mesh is still
-    /// streaming in gets the same protection as the initial project load.
-    /// Needs no done-flag: the rerun block never invalidates the topo keys,
-    /// so it can never re-arm itself.
-    rt_accel_rerun_armed: bool,
     /// Half-res shadow-ray-trace target + full-res upsampled mask
     /// (RT-D3's "D11 trivial pass"). Sized to the scene's own
     /// `width`/`height`, ensured lazily like every other RT-only
@@ -1044,8 +1033,9 @@ impl RenderScene {
             rt_accel_key: None,
             rt_accel_topo_key: None,
             rt_accel_pending_key: None,
+            rt_accel_content_key: None,
+            rt_accel_content_pending_key: None,
             rt_accel_built: false,
-            rt_accel_rerun_armed: false,
             rt_mask_half: None,
             rt_mask_full: None,
             rt_mask_width: 0,
@@ -3029,7 +3019,7 @@ impl EffectNode for RenderScene {
                 .as_ref()
                 .is_some_and(|a| a.ready.load(std::sync::atomic::Ordering::Acquire));
         }
-        let mut rt_ready = self.rt_accel_built;
+        let rt_ready = self.rt_accel_built;
         // RAYTRACING_DESIGN.md §5.2 P2/D3, RT-D2, §8.2 D22 (T2-B): the ONE
         // call site deciding "discard temporal history this frame" for
         // EITHER of this node's two temporal consumers — the RT irradiance
@@ -3874,14 +3864,25 @@ impl EffectNode for RenderScene {
                 })
                 .collect();
 
-            // Dirty-check keys, same hashing idiom as `shadow_cache_keys`
-            // above, split in two (BUG-320): the TOPO key (buffers,
-            // counts, epoch) decides rebuild-vs-not; folding transforms
-            // on top yields the FULL key, whose change under a stable
-            // topo key is a transform-only refit (RAYTRACING_DESIGN.md
-            // P1 gate: built at scene load, kept resident, never rebuilt
-            // mid-frame for a static scene; refit — not rebuild — is the
-            // designed path for a performer moving an object).
+            // Dirty-check keys, three tiers (in priority order):
+            //
+            // TOPO key (identity + count + epoch, no generation) — drives
+            // first build and genuine topology changes (buffer swap, object
+            // count change). Deliberately excludes transforms: a moving
+            // object must NOT read as a new topology (BUG-320).
+            //
+            // CONTENT key (topo + per-draw vertices_generation) — separates
+            // async mesh content arrival (gltf_mesh_source decode + staging
+            // copy lands after initial build) from the topo path. The
+            // generation bumps when new content lands, triggering a deferred
+            // rebuild once the generation settles (stable one frame). A
+            // never-settling (deforming) producer changes generation every
+            // frame, so this key never settles — no rebuild, preserving
+            // pre-fix behavior (D17 documented caveat).
+            //
+            // ACCEL key (topo + transforms) — the refit path. Only checked
+            // when both topo and content are settled; a content rebuild
+            // subsumes any pending refit (both fire → rebuild wins).
             use std::hash::{Hash, Hasher};
             let mut hasher = ahash::AHasher::default();
             hasher.write_usize(objects.len());
@@ -3895,6 +3896,18 @@ impl EffectNode for RenderScene {
                 hasher.write(bytemuck::bytes_of(&o.transform));
             }
             let accel_key = hasher.finish();
+            // Content key: topo key plus every draw's slot generation, on a
+            // fresh hasher so generation stays OUT of `accel_key` — a
+            // generation bump must not read as a refit trigger (refits only
+            // rewrite instance transforms; a content change needs a full
+            // rebuild via the settle path, and a deforming producer would
+            // otherwise force a refit every frame).
+            let mut content_hasher = ahash::AHasher::default();
+            topo_key.hash(&mut content_hasher);
+            for d in shadow_caster_draws.iter() {
+                d.vertices_generation.hash(&mut content_hasher);
+            }
+            let content_key = content_hasher.finish();
 
             let gpu = ctx.gpu_encoder();
             // RAYTRACING_DESIGN.md §5.2 P3: sized to THIS frame's object
@@ -3929,58 +3942,59 @@ impl EffectNode for RenderScene {
                 gpu.device,
                 &objects,
             );
-            // BUG-326: the first accel build after a topology change can
-            // be blind to just-arrived mesh content (async glb load's GPU
-            // staging copy and the BLAS build are on separate command
-            // buffers; the BLAS races ahead). Once that build is observed
-            // ready, replace the accel immediately with a fresh build that
-            // runs after the mesh copy has landed. One rerun per topology
-            // change; re-armed by the next genuine topo sighting.
-            if self.rt_accel_rerun_armed && rt_ready {
-                self.rt_accel_rerun_armed = false;
+            // Rebuild-or-refit decision with BUG-308's one-frame defer.
+            //
+            // Two triggers share the same build call site:
+            // 1. Topo trigger (identity + count + epoch) — fires on first
+            //    RT frame or a genuine topology change. Key must recur
+            //    unchanged one frame before build enqueues (BUG-308).
+            // 2. Content-settle trigger (topo + per-draw generation) —
+            //    fires when async mesh content lands and settles. Only
+            //    evaluated when the topo key is stable, so both never
+            //    fight. A never-settling producer (deforming mesh, every-
+            //    frame generation bump) never satisfies the recur check
+            //    — no rebuild, preserving pre-fix D17 behavior.
+            //
+            // When either trigger fires, BOTH topo and content keys are
+            // recorded at build time. The refit path (full accel_key
+            // changes under an UNCHANGED topo key) fires only when
+            // neither trigger has work to do — a content rebuild
+            // subsumes any pending refit.
+            let mut build_this_frame = false;
+
+            // ── Topo trigger ──
+            if self.rt_accel_topo_key != Some(topo_key) {
+                if self.rt_accel_pending_key == Some(topo_key) {
+                    build_this_frame = true;
+                } else {
+                    self.rt_accel_pending_key = Some(topo_key);
+                }
+            }
+            // ── Content-settle trigger (only when topo is stable) ──
+            if self.rt_accel_topo_key == Some(topo_key)
+                && self.rt_accel_content_key != Some(content_key)
+            {
+                if self.rt_accel_content_pending_key == Some(content_key) {
+                    build_this_frame = true;
+                } else {
+                    self.rt_accel_content_pending_key = Some(content_key);
+                }
+            }
+
+            if build_this_frame {
                 let tracer = self.rt_tracer.as_ref().expect("ensured above");
                 self.rt_accel = Some(tracer.build_accel(gpu.device, &objects));
+                self.rt_accel_topo_key = Some(topo_key);
+                self.rt_accel_content_key = Some(content_key);
+                self.rt_accel_key = Some(accel_key);
+                self.rt_accel_pending_key = None;
+                self.rt_accel_content_pending_key = None;
+                // BUG-320: the fresh build must be observed ready
+                // before tracing resumes — the old accel is gone.
                 self.rt_accel_built = false;
-                // Suppress RT dispatch this frame (the new accel isn't
-                // ready yet — next frame latches fresh from `ready` flag).
-                rt_ready = false;
-            }
-            // BUG-308/RT-D4: a key change (first RT frame, or topology/
-            // transform change) must NOT enqueue `build_accel` this same
-            // frame — this frame's own mesh-generation GPU writes are
-            // still encoded but uncommitted on the shared `gpu.native_enc`
-            // buffer, and `build_accel`'s command buffer would race ahead
-            // of them on the same Metal queue (BUG-308's root cause).
-            // Recording the key here and building only once it recurs
-            // UNCHANGED next frame guarantees the PREVIOUS frame (whose
-            // mesh-gen work this key's vertex buffers depend on) has
-            // already committed+completed by the time the build actually
-            // enqueues — the per-frame content-thread cycle always
-            // commits+waits before the next frame's evaluate() runs.
-            if self.rt_accel_topo_key != Some(topo_key) {
-                // Topology change (or first RT frame): full rebuild, with
-                // BUG-308's one-frame recur-unchanged defer.
-                if self.rt_accel_pending_key == Some(topo_key) {
-                    let tracer = self.rt_tracer.as_ref().expect("ensured above");
-                    self.rt_accel = Some(tracer.build_accel(gpu.device, &objects));
-                    self.rt_accel_topo_key = Some(topo_key);
-                    self.rt_accel_key = Some(accel_key);
-                    self.rt_accel_pending_key = None;
-                    // BUG-320: the fresh build must be observed ready
-                    // before tracing resumes — the old accel is gone.
-                    self.rt_accel_built = false;
-                    log::info!(
-                        "node.render_scene: RT accel structure (re)build enqueued (async, topo key {topo_key:#x}) — raster shadow-map path serves this scene until it's ready"
-                    );
-                } else {
-                    // BUG-326: arm the one-shot rerun for the build this
-                    // new-topology sighting will produce.
-                    self.rt_accel_rerun_armed = true;
-                    self.rt_accel_pending_key = Some(topo_key);
-                    log::info!(
-                        "node.render_scene: RT accel structure build requested (topo key {topo_key:#x}); deferring one frame so it can't race this frame's mesh-generation GPU writes"
-                    );
-                }
+                log::info!(
+                    "node.render_scene: RT accel structure (re)build enqueued (async, topo key {topo_key:#x}, content key {content_key:#x}) — raster shadow-map path serves this scene until it's ready"
+                );
             } else if self.rt_accel_key != Some(accel_key) {
                 // BUG-320: same topology, moved transforms — refit the
                 // TLAS in place. Safe same-frame (transforms are
