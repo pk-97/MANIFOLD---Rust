@@ -8,10 +8,6 @@ publish = false
 name = "manifold"
 path = "src/main.rs"
 
-[[bin]]
-name = "rt-load-probe"
-path = "src/bin/rt_load_probe.rs"
-
 [dependencies]
 manifold-core = { path = "../manifold-core" }
 manifold-editing = { path = "../manifold-editing" }

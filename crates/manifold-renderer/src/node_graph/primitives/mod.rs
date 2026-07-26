@@ -423,14 +423,6 @@ pub use remove_drift_3d::RemoveDrift3D;
 pub use render_3d_mesh::Render3DMesh;
 pub use render_instanced_3d_mesh::RenderInstanced3DMesh;
 pub use render_scene::RenderScene;
-// ── RT load-pause probe statics re-export (temporary diagnostic) ──
-pub use render_scene::{
-    RT_PROBE_ACCEL_BUILT, RT_PROBE_BUILD_COUNT, RT_PROBE_BUILD_ENQUEUED,
-    RT_PROBE_DISPATCH_COUNT, RT_PROBE_DISPATCH_FIRED, RT_PROBE_ENABLED,
-    RT_PROBE_ENTERED_RT_BLOCK, RT_PROBE_HAS_CASTERS, RT_PROBE_PENDING_KEY,
-    RT_PROBE_RT_READY, RT_PROBE_TOPO_KEY, RT_PROBE_UNIFORM_RT_FLAGS,
-    RT_PROBE_UNIFORM_SCENE_W,
-};
 pub use render_filled_rects::RenderFilledRects;
 pub use render_lines::RenderLines;
 pub use render_text::RenderText;

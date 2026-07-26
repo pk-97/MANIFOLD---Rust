@@ -578,19 +578,6 @@ pub fn apply_bindings(
             .get(binding.source_id.as_ref())
             .map(|p| p.value)
             .unwrap_or(binding.default_value);
-        // ── RT load-pause probe (temporary, env-gated) ──
-        if binding.source_id.as_ref() == "8_rt_enabled"
-            && std::env::var_os("MANIFOLD_RT_PROBE").is_some()
-        {
-            let skip = matches!(
-                last_applied.entries[i],
-                BindingCacheEntry::Applied(prev) if prev == value
-            );
-            eprintln!(
-                "[RT-PROBE] apply_bindings: source_id=8_rt_enabled value={} skip={skip}",
-                value
-            );
-        }
         match last_applied.entries[i] {
             BindingCacheEntry::Applied(prev) if prev == value => {
                 continue;

@@ -84,9 +84,6 @@ mod bug037_verify;
 #[cfg(all(feature = "journey-proofs", target_os = "macos"))]
 mod bug219_verify;
 mod perform_mode;
-// ── RT app-path probe (temporary, disposable) ────────────────
-#[cfg(all(feature = "perf-soak", target_os = "macos"))]
-mod rt_app_probe;
 // `cargo xtask perf-soak <project> --seconds N [--start <beats>]
 // [--update-baseline]` — PERF_BUDGET_GATE_DESIGN.md P1: headless, real-time
 // paced content-thread soak of a real project + baseline gate. macOS-only
@@ -129,14 +126,6 @@ fn main() {
     // flipping this back to `true` restores it. See `manifold_ui::anim`.
     manifold_ui::anim::set_motion_enabled(false);
 
-    // Temporary RT probe (MANIFOLD_RT_PROBE=1): arm render_scene's statics
-    // in the app build too — only the probe bins set this themselves.
-    // Delete with the rest of the probe instrumentation.
-    if std::env::var_os("MANIFOLD_RT_PROBE").is_some() {
-        manifold_renderer::node_graph::primitives::RT_PROBE_ENABLED
-            .store(true, std::sync::atomic::Ordering::Relaxed);
-    }
-
     // Headless UI snapshot subcommand (feature `ui-snapshot`): render the real
     // UI tree to a PNG + tree dump with no window, then exit before winit.
     #[cfg(feature = "ui-snapshot")]
@@ -161,14 +150,6 @@ fn main() {
 
     // --- `rt-app-probe` (temporary, disposable) ---
     // cargo run --features perf-soak -- manifold rt-app-probe <project.manifold>
-    #[cfg(all(feature = "perf-soak", target_os = "macos"))]
-    {
-        let args: Vec<String> = std::env::args().collect();
-        if args.get(1).map(String::as_str) == Some("rt-app-probe") {
-            crate::rt_app_probe::run(&args[1..]);
-        }
-    }
-
     // --- `--resume <breadcrumb-path>` (GIG_RESILIENCE_DESIGN §5.2) ---
     // The crash-recovery relaunch path: `manifold --resume <path>` skips
     // everything that isn't pixels. Parsed here (no other CLI arg parsing

@@ -795,19 +795,6 @@ impl GeneratorRenderer {
                 // by source_id; empty when the layer has no generator instance.
                 let empty = ParamManifest::default();
                 let params = layer.gen_params().map(|gp| &gp.params).unwrap_or(&empty);
-                // ── RT load-pause probe (temporary, env-gated) ──
-                if std::env::var_os("MANIFOLD_RT_PROBE").is_some() {
-                    let rt_enabled = params.get("8_rt_enabled").map(|p| p.value);
-                    let rt_reflections = params.get("8_rt_reflections").map(|p| p.value);
-                    let temporal_upscale = params.get("8_temporal_upscale").map(|p| p.value);
-                    eprintln!(
-                        "[RT-PROBE] generator_renderer::render: layer={:?} clip={:?} frame_count={} \
-                         rt_enabled={:?} rt_reflections={:?} temporal_upscale={:?} params_len={}",
-                        active.layer_id, id, ctx.frame_count,
-                        rt_enabled, rt_reflections, temporal_upscale,
-                        params.len(),
-                    );
-                }
                 let relight_params = layer
                     .gen_params()
                     .map(|gp| gp.relight_params)
