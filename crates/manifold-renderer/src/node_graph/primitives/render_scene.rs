@@ -81,6 +81,21 @@ use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
 use crate::node_graph::primitive::PrimitiveDescription;
 
+// ── RT washout capture statics (env-gated, temporary, probe-branch only) ──
+use std::sync::Mutex;
+pub struct WashoutCap {
+    pub label: String,
+    pub tex: manifold_gpu::GpuTexture,
+    pub frame: u32,
+    pub w: u32,
+    pub h: u32,
+}
+pub static WASHOUT_CAPTURE_NOW: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+pub static WASHOUT_QUEUE: std::sync::LazyLock<Mutex<Vec<WashoutCap>>> =
+    std::sync::LazyLock::new(|| Mutex::new(Vec::new()));
+// ── end probe ──────────────────────────────────────────────────
+
 pub const RENDER_SCENE_TYPE_ID: &str = "node.render_scene";
 
 /// 4x MSAA for the scene pass. On Apple Silicon TBDR the multisample
@@ -4377,6 +4392,19 @@ impl EffectNode for RenderScene {
                         shaft_light_data.push([EMISSIVE_GLOW_RANGE_WORLD_UNITS, 0.0, 0.0, 0.0]);
                         shaft_light_count += 1;
                     }
+                }
+                // ── RT washout probe: capture textures when flagged ──
+                if WASHOUT_CAPTURE_NOW.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                    let mut q = WASHOUT_QUEUE.lock().unwrap();
+                    if let Some(ref t) = self.rt_refl_full { q.push(WashoutCap {
+                        label: "refl_full".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
+                    });}
+                    if let Some(ref t) = self.rt_irr_full { q.push(WashoutCap {
+                        label: "irr_full".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
+                    });}
+                    if let Some(ref t) = self.rt_moments_history[self.rt_history_ping] { q.push(WashoutCap {
+                        label: "moments".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
+                    });}
                 }
             }
         }
