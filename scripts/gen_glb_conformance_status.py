@@ -5,7 +5,7 @@ G-P7 certification record (asset x status x gap). Pure formatting: this
 script asserts nothing about renderability, it only reflects what the
 manifest already says. Re-run after any manifest classification change.
 
-Run: python3 scripts/gen_glb_conformance_status.py
+Run: scripts/gen_glb_conformance_status.py
 """
 import json
 import os

@@ -648,7 +648,7 @@ LANDING_PROTOCOL_REMINDER = (
     "exists as commits on a live branch (merge it instead, so SHAs stay "
     "shared); never delete a branch until `git merge-base --is-ancestor <tip> "
     "origin/main` confirms its commits are on main. The gate includes the UI "
-    "flow gate: `python3 scripts/run_ui_flows.py --touched origin/main...HEAD` "
+    "flow gate: `scripts/run_ui_flows.py --touched origin/main...HEAD` "
     "(path-scoped via the flow manifest's path_triggers; exits 0 immediately "
     "when no flow-mapped path is touched — BUG-313 shipped because nobody ran "
     "the flows)."
@@ -783,7 +783,7 @@ def detect_unverified_compound_landing_merge(cmd, cwd):
 
 WORKTREE_ADD_REASON = (
     "`git worktree add` is denied — worktrees come ONLY from the slot ring: "
-    "`python3 scripts/agent-worktree.py acquire <task-label> <branch> "
+    "`scripts/agent-worktree.py acquire <task-label> <branch> "
     "[--tip REF]`. The ring caps the pool at 6 slots because hand-rolled "
     "worktrees filled the disk once (455 GB, 2026-07-15). If acquire says "
     "POOL FULL, surface that to Peter instead of working around it."

@@ -6,7 +6,7 @@ This is a directive pack, not an exploratory design: each lane states a verified
 
 ## 0. Orchestration contract
 
-- One worktree slot per lane via `python3 scripts/agent-worktree.py acquire <lane> <branch>` (never per phase; `POOL FULL` = stop and surface). Step-0 guard: `git log --oneline -1` must match the intended tip.
+- One worktree slot per lane via `scripts/agent-worktree.py acquire <lane> <branch>` (never per phase; `POOL FULL` = stop and surface). Step-0 guard: `git log --oneline -1` must match the intended tip.
 - Lanes 1–5 are independent — run in parallel. Lane 6 is diagnosis-only and can run anytime.
 - Land in batches of 2–3 lanes per the landing protocol (`.claude/GIT_TREE_DISCIPLINE.md` §2): fetch, merge `origin/main` into the lane branch, rerun the lane gate, `merge --no-ff` to main, full `cargo clippy --workspace -- -D warnings` + `cargo nextest run --workspace` + `cargo deny check bans` in the warm main checkout, push.
 - Every fixed bug: flip its `**Status:**` line in `docs/BUG_BACKLOG.md` (and the summary-table row) in the same landing. That's the supersession sweep for this wave.

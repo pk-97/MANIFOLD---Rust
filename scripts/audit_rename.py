@@ -17,9 +17,9 @@ After all renames apply, the script:
   2. Runs `cargo test --workspace --lib` to gate the diff.
 
 Usage:
-  python3 scripts/audit_rename.py             # apply
-  python3 scripts/audit_rename.py --dry-run   # show what would change
-  python3 scripts/audit_rename.py --no-regen  # skip preset regen + tests
+  scripts/audit_rename.py             # apply
+  scripts/audit_rename.py --dry-run   # show what would change
+  scripts/audit_rename.py --no-regen  # skip preset regen + tests
 """
 
 from __future__ import annotations

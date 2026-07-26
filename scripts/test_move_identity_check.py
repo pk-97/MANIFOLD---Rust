@@ -141,7 +141,7 @@ the exit codes). Covers:
                                                            caught — header wiring
                                                            only)
 
-Run: python3 scripts/test_move_identity_check.py   (exit 0 = all pass)
+Run: scripts/test_move_identity_check.py   (exit 0 = all pass)
 """
 
 import re

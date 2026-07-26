@@ -29,7 +29,7 @@ def main() -> int:
                 "Agent isolation: \"worktree\" is denied — it bases the "
                 "worktree off the default branch (not your tip) and bypasses "
                 "the slot ring's 6-slot cap (455 GB incident, 2026-07-15). "
-                "Acquire a worktree via `python3 scripts/agent-worktree.py "
+                "Acquire a worktree via `scripts/agent-worktree.py "
                 "acquire <task-label> <branch> [--tip REF]` and point the "
                 "agent at the printed slot path instead. Remote isolation "
                 "and plain agents are unaffected."

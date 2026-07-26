@@ -81,7 +81,7 @@ def main() -> None:
             f"PROBE-LOOP GUARD ({n} probe actions this session) — lead escalation ladder "
             "(Peter 2026-07-25): (1) LEAD semantic code review of the seam first — "
             "'does this look correct?' is the fastest, cheapest oracle; (2) STUCK? ask "
-            "GLM-5.2/4.7 for review or adversarial thoughts (one-shot .claude/hooks/flash "
+            "a tool-using GLM review lane for adversarial review (one-shots fabricate code citations, Peter 2026-07-26 — .claude/hooks/oneshot is mechanical-tasks-only) "
             "--model glm-5.2, or a lane); (3) instrument probes are the LAST RESORT, for "
             "when nothing makes sense and you need a new direction — and they are DELEGATED "
             "(DeepSeek lane), not lead-run. Write the evidence table to "
