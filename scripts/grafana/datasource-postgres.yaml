@@ -1,0 +1,15 @@
+apiVersion: 1
+datasources:
+  - name: LiteLLM Postgres
+    uid: manifold-litellm-pg
+    type: postgres
+    access: proxy
+    url: localhost:5432
+    database: litellm
+    user: litellm
+    secureJsonData:
+      password: litellm-local
+    jsonData:
+      sslmode: disable
+      postgresVersion: 1600
+      timescaledb: false
