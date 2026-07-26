@@ -4,14 +4,15 @@ use std::ffi::c_void;
 use std::ptr::NonNull;
 
 use objc2::rc::Retained;
+use objc2::msg_send;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
 use objc2_metal::{
     MTLBlitCommandEncoder, MTLBlitOption, MTLBlitPassDescriptor, MTLCommandBuffer,
     MTLCommandEncoder, MTLComputeCommandEncoder, MTLComputePassDescriptor, MTLIndexType,
     MTLLoadAction, MTLMultisampleDepthResolveFilter, MTLOrigin, MTLPrimitiveType,
-    MTLRenderCommandEncoder, MTLRenderPassDescriptor, MTLScissorRect, MTLSize, MTLStoreAction,
-    MTLTexture, MTLTextureUsage, MTLViewport,
+    MTLRenderCommandEncoder, MTLRenderPassDescriptor, MTLResourceUsage, MTLScissorRect, MTLSize,
+    MTLStoreAction, MTLTexture, MTLTextureUsage, MTLViewport,
 };
 
 use super::profiling::{self, ProfileState};
@@ -465,6 +466,25 @@ impl GpuEncoder {
             }
         }
 
+        // Declare resource usage for Metal driver coherence (belt-and-
+        // suspenders on top of the `constant`→`device` address-space fix
+        // in raytrace.rs; BUG-jddy).
+        for binding in bindings {
+            match binding {
+                GpuBinding::Buffer { buffer, .. } => {
+                    unsafe {
+                        let () = msg_send![&enc, useResource: &*buffer.raw, usage: MTLResourceUsage::Read];
+                    }
+                }
+                GpuBinding::Texture { texture, .. } => {
+                    unsafe {
+                        let () = msg_send![&enc, useResource: &*texture.raw, usage: MTLResourceUsage::Read];
+                    }
+                }
+                GpuBinding::Bytes { .. } | GpuBinding::Sampler { .. } => {} // not MTLResource
+            }
+        }
+
         if pipeline.needs_sizes_buffer {
             let slot_idx = pipeline
                 .slot_map
@@ -597,6 +617,30 @@ impl GpuEncoder {
                         );
                     }
                 }
+            }
+        }
+        // Declare resource usage so the Metal driver can manage coherence
+        // on discrete-GPU paths (Apple Silicon's unified memory reads
+        // `device`-address-space data coherently without this, but explicit
+        // `useResource:` is the correct Metal API contract). RT-D4, BUG-jddy:
+        // the address-space fix (`constant`→`device` for `gi_materials`/
+        // `normal_sources`) was the root fix; this is belt-and-suspenders.
+        // `Read` for buffers (all inputs), `ReadWrite` for textures (mix of
+        // read/write; the broader usage is always correct).
+        for binding in bindings {
+            match binding {
+                GpuBinding::Buffer { buffer, .. } => {
+                    unsafe {
+                        let () = msg_send![&enc, useResource: &*buffer.raw, usage: MTLResourceUsage::Read];
+                    }
+                }
+                GpuBinding::Texture { texture, .. } => {
+                    unsafe {
+                        let () = msg_send![&enc, useResource: &*texture.raw, usage: MTLResourceUsage::Read];
+                    }
+                }
+                GpuBinding::Bytes { .. } => {} // inline data, no resource
+                GpuBinding::Sampler { .. } => {} // samplers aren't MTLResource
             }
         }
         let wg = pipeline.workgroup_size;

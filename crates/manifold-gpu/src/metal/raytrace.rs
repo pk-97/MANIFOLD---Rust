@@ -540,7 +540,7 @@ struct RtNormalSource {
 // (`primitive_id*3 + which_vertex` — render_scene.rs's ONLY RT-caster
 // convention today; an indexed RT-caster would need its own index-buffer
 // GPU address threaded too — un-suppression trigger if that ever shows up).
-static float3 fetch_world_normal(constant RtNormalSource& src, uint vi) {
+static float3 fetch_world_normal(device RtNormalSource& src, uint vi) {
     device const uchar* base = (device const uchar*)src.vertex_base_addr;
     device const packed_float3* n_ptr =
         (device const packed_float3*)(base + (ulong)vi * (ulong)src.vertex_stride + (ulong)src.normal_offset);
@@ -553,8 +553,8 @@ static float3 fetch_world_normal(constant RtNormalSource& src, uint vi) {
 // `primitive_id` (flat, non-indexed layout) in `normal_sources[instance_id]`
 // and return the NORMALIZED world-space normal. Metal's ray-tracing
 // barycentric convention: hit = (1-u-v)*v0 + u*v1 + v*v2.
-static float3 fetch_interpolated_normal(constant RtNormalSource* normal_sources, uint instance_id, uint primitive_id, float2 bary) {
-    constant RtNormalSource& src = normal_sources[instance_id];
+static float3 fetch_interpolated_normal(device RtNormalSource* normal_sources, uint instance_id, uint primitive_id, float2 bary) {
+    device RtNormalSource& src = normal_sources[instance_id];
     uint v0 = primitive_id * 3u, v1 = v0 + 1u, v2 = v0 + 2u;
     float3 n0 = fetch_world_normal(src, v0);
     float3 n1 = fetch_world_normal(src, v1);
@@ -568,7 +568,7 @@ static float3 fetch_interpolated_normal(constant RtNormalSource* normal_sources,
 
 // RT-T2-A: fetch vertex `vi`'s LOCAL-space UV via the SAME bindless address
 // `fetch_world_normal` uses (no transform — UV isn't a spatial quantity).
-static float2 fetch_uv(constant RtNormalSource& src, uint vi) {
+static float2 fetch_uv(device RtNormalSource& src, uint vi) {
     device const uchar* base = (device const uchar*)src.vertex_base_addr;
     device const packed_float2* uv_ptr =
         (device const packed_float2*)(base + (ulong)vi * (ulong)src.vertex_stride + (ulong)src.uv_offset);
@@ -577,8 +577,8 @@ static float2 fetch_uv(constant RtNormalSource& src, uint vi) {
 
 // RT-T2-A: barycentric-interpolate triangle `primitive_id`'s UV (same flat,
 // non-indexed convention as `fetch_interpolated_normal`).
-static float2 fetch_interpolated_uv(constant RtNormalSource* normal_sources, uint instance_id, uint primitive_id, float2 bary) {
-    constant RtNormalSource& src = normal_sources[instance_id];
+static float2 fetch_interpolated_uv(device RtNormalSource* normal_sources, uint instance_id, uint primitive_id, float2 bary) {
+    device RtNormalSource& src = normal_sources[instance_id];
     uint v0 = primitive_id * 3u, v1 = v0 + 1u, v2 = v0 + 2u;
     float2 uv0 = fetch_uv(src, v0);
     float2 uv1 = fetch_uv(src, v1);
@@ -593,8 +593,8 @@ static float2 fetch_interpolated_uv(constant RtNormalSource* normal_sources, uin
 // other UV-wrap convention this codebase's base-color sampling already
 // uses.
 static float sample_candidate_alpha(
-    constant RtNormalSource& src,
-    constant RtNormalSource* normal_sources,
+    device RtNormalSource& src,
+    device RtNormalSource* normal_sources,
     array<texture2d<float>, MAX_RT_MATERIAL_TEXTURES> material_textures,
     uint instance_id, uint primitive_id, float2 bary)
 {
@@ -620,14 +620,14 @@ static float sample_candidate_alpha(
 // "something's there").
 static bool walk_with_alpha_test(
     thread intersection_query<triangle_data, instancing>& q,
-    constant RtNormalSource* normal_sources,
+    device RtNormalSource* normal_sources,
     array<texture2d<float>, MAX_RT_MATERIAL_TEXTURES> material_textures,
     bool any_hit)
 {
     while (q.next()) {
         if (q.get_candidate_intersection_type() != intersection_type::triangle) continue;
         uint iid = q.get_candidate_instance_id();
-        constant RtNormalSource& src = normal_sources[iid];
+        device RtNormalSource& src = normal_sources[iid];
         bool pass = true;
         if (src.alpha_mask != 0u) {
             float alpha = sample_candidate_alpha(
@@ -795,8 +795,8 @@ static float3 world_pos_from_depth(uint2 pix, uint2 gbuffer_size, float raw_dept
 kernel void trace_shadow_rays(
     instance_acceleration_structure  accel          [[buffer(0)]],
     constant ShadowRayParams&        p              [[buffer(1)]],
-    constant GiMaterial*             gi_materials   [[buffer(2)]],
-    constant RtNormalSource*         normal_sources [[buffer(3)]],
+    device GiMaterial*             gi_materials   [[buffer(2)]],
+    device RtNormalSource*         normal_sources [[buffer(3)]],
     depth2d<float>                   depth_tex      [[texture(0)]],
     texture2d<float, access::write>  out_sv         [[texture(1)]],
     texture2d<float, access::write>  out_irr        [[texture(2)]],
@@ -1113,7 +1113,7 @@ kernel void trace_shadow_rays(
                 // Sample base-color texture if bound (RtNormalSource.base_color_tex_index),
                 // otherwise flat gi_materials albedo is the fallback.
                 float3 hit_albedo = float3(gi_materials[hoi].albedo);
-                constant RtNormalSource& hsrc = normal_sources[hoi];
+                device RtNormalSource& hsrc = normal_sources[hoi];
                 if (hsrc.base_color_tex_index < MAX_RT_MATERIAL_TEXTURES) {
                     float2 hit_uv = fetch_interpolated_uv(normal_sources, hoi, hpid, hbary);
                     constexpr sampler bc_sampler(coord::normalized, address::repeat, filter::linear);
@@ -1322,7 +1322,7 @@ struct AtrousParams {
 //   channel has its own `w_refl`).
 kernel void atrous_filter(
     constant AtrousParams&           p            [[buffer(1)]],
-    constant GiMaterial*            gi_materials [[buffer(2)]],
+    device GiMaterial*            gi_materials [[buffer(2)]],
     depth2d<float>                   depth_tex    [[texture(0)]],
     texture2d<float>                 moments_read [[texture(1)]],
     texture2d<float>                 src_sv       [[texture(2)]],
@@ -1490,7 +1490,7 @@ kernel void accumulate_irradiance(
     texture2d<float>                     hi_refl             [[texture(11)]],
     texture2d<float>                     refl_history_read   [[texture(12)]],
     texture2d<float, access::write>      refl_history_write  [[texture(13)]],
-    constant GiMaterial*                 gi_materials        [[buffer(3)]],
+    device GiMaterial*                 gi_materials        [[buffer(3)]],
     uint2 tid [[thread_position_in_grid]])
 {
     if (tid.x >= p.size.x || tid.y >= p.size.y) return;
@@ -1665,7 +1665,7 @@ struct DebugFetchNormalParams {
 };
 
 kernel void debug_fetch_interpolated_normal(
-    constant RtNormalSource*         normal_sources [[buffer(0)]],
+    device RtNormalSource*         normal_sources [[buffer(0)]],
     constant DebugFetchNormalParams& p              [[buffer(1)]],
     device packed_float3*            out_normal     [[buffer(2)]],
     uint tid [[thread_position_in_grid]])
