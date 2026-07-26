@@ -234,7 +234,7 @@ Three things future RT work should take from how this was found:
 2. **Match the oracle's stimulus to the user's gesture.** The synthetic object-motion probe built for this bug TRANSLATED its occluder and passed honestly while the defect sat in ROTATION — translation leaves normals untouched, so the oracle was structurally blind. It is now `rt_object_motion_shadow.rs` and still useful (it proved accel refit correct), but it could never have found this.
 3. **A green value-level proof of a reasoned mechanism is not evidence that the mechanism was the cause.** BUG-320 and BUG-321 were both real defects, both proven fixed at value level, and neither moved the symptom. Two "fixed" reports were wrong before an in-app observation entered the loop. On this surface, close a motion-quality bug on Peter's look, never on a passing gate.
 
-## 9. RT Reflections — traced specular for the PBR base lobe (Tier 3 item 7; APPROVED 2026-07-24 · **R1 LANDED 2026-07-25** — probe: mirror on 2.15 vs off 0.82 (delta 1.33); empty-scene equality 0.305 ≈ 0.308; worst frame 9.82 ms; native byte-diff identical. R2/R3 not started; queue `.claude/orchestration/rt-reflections-r2-queue.md`)
+## 9. RT Reflections — traced specular for the PBR base lobe (Tier 3 item 7; APPROVED 2026-07-24 · **R1 LANDED 2026-07-25** — probe: mirror on 2.15 vs off 0.82 (delta 1.33); empty-scene equality 0.305 ≈ 0.308; worst frame 9.82 ms; native byte-diff identical. R2 LANDED 2026-07-26 (`74563a4c`); R3 not started)
 
 Folded in from `RT_REFLECTIONS_DESIGN.md` (draft deleted on fold, per its own header). Reviewed by
 K3 (lead) 2026-07-24: every §1 code anchor re-verified against main (`render_scene.wgsl:1518`
@@ -519,7 +519,7 @@ wrong is wasted work, and the black-car defect is what makes reflections unusabl
   claiming parity from a code-diff argument instead of Peter's look on the PNG pair; widening the
   texture cap without stating the new limit's trigger.
 
-#### Stable reflections (R2) — specular temporal accumulation + roughness-aware filtering
+#### Stable reflections (R2) — specular temporal accumulation + roughness-aware filtering · **LANDED 2026-07-26 (`74563a4c`)** — gate: scene control-leg blend/cut + kernel-level proof, both green; D-61 (gate shape), D-62 (two root causes fixed en route)
 
 - *Entry:* Raster-parity reflections landed; Base traced reflections' (R1) `trace_ms` delta and
   Peter's L2 verdict recorded in the phase report.
