@@ -423,7 +423,7 @@ pub use remove_drift_3d::RemoveDrift3D;
 pub use render_3d_mesh::Render3DMesh;
 pub use render_instanced_3d_mesh::RenderInstanced3DMesh;
 pub use render_scene::RenderScene;
-pub use render_scene::{WashoutCap, WASHOUT_CAPTURE_NOW, WASHOUT_QUEUE};// ── RT washout probe re-exports (temporary) ──
+pub use render_scene::{WashoutCap, WASHOUT_CAPTURE_COMPOSITE, WASHOUT_CAPTURE_NOW, WASHOUT_QUEUE};// ── RT washout probe re-exports (temporary) ──
 pub use render_filled_rects::RenderFilledRects;
 pub use render_lines::RenderLines;
 pub use render_text::RenderText;

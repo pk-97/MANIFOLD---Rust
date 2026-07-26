@@ -18,7 +18,7 @@ use manifold_renderer::headless_readback::{
     encode_rgba8_png, linear_to_srgb8, readback_raw_halves,
 };
 use manifold_renderer::node_graph::primitives::{
-    WashoutCap, WASHOUT_CAPTURE_NOW, WASHOUT_QUEUE,
+    WashoutCap, WASHOUT_CAPTURE_COMPOSITE, WASHOUT_CAPTURE_NOW, WASHOUT_QUEUE,
 };
 use crate::content_command::ContentCommand;
 use crate::headless_harness::headless_content_thread;
@@ -62,6 +62,12 @@ fn process_capture(cap: &WashoutCap, device: &manifold_gpu::GpuDevice, out_dir: 
         "[WASHOUT] {} f={:04} dim={}x{} hit={:.6} luma={:.6} sd={:.6} {}",
         cap.label, cap.frame, cap.w, cap.h, hit_frac, mn, sd, png_path.display(),
     );
+}
+
+/// Set both capture flags (RT internals + composited output).
+fn arm_capture() {
+    WASHOUT_CAPTURE_NOW.store(true, Ordering::Relaxed);
+    WASHOUT_CAPTURE_COMPOSITE.store(true, Ordering::Relaxed);
 }
 
 fn drain_captures(device: &manifold_gpu::GpuDevice, frame: u32) {
@@ -115,7 +121,7 @@ pub fn run(args: &[String]) -> ! {
     println!("=== Phase 1: Play 60 frames ===");
     ct.handle_command(ContentCommand::Play);
     for frame in 0..60 {
-        if frame == 30 || frame == 59 { WASHOUT_CAPTURE_NOW.store(true, Ordering::Relaxed); }
+        if frame == 30 || frame == 59 { arm_capture(); }
         ct.timer.wait_for_deadline();
         ct.tick_frame(&state_tx);
         // Post-tick drain: tick_frame commits+waits the encoder, so
@@ -132,7 +138,7 @@ pub fn run(args: &[String]) -> ! {
     println!("=== Phase 2: Still (continuous play, no time animation) ===");
     for f in 0..300 {
         let host = 60 + f;
-        if f == 10 || f == 30 || f == 90 || f == 299 { WASHOUT_CAPTURE_NOW.store(true, Ordering::Relaxed); }
+        if f == 10 || f == 30 || f == 90 || f == 299 { arm_capture(); }
         ct.timer.wait_for_deadline();
         ct.tick_frame(&state_tx);
         if let Some(dev) = ct.content_pipeline.native_device() { drain_captures(dev, host); }

@@ -92,6 +92,9 @@ pub struct WashoutCap {
 }
 pub static WASHOUT_CAPTURE_NOW: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
+/// Set by harness to capture composited output at end of evaluate.
+pub static WASHOUT_CAPTURE_COMPOSITE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 pub static WASHOUT_QUEUE: std::sync::LazyLock<Mutex<Vec<WashoutCap>>> =
     std::sync::LazyLock::new(|| Mutex::new(Vec::new()));
 // ── end probe ──────────────────────────────────────────────────
@@ -5077,6 +5080,18 @@ impl EffectNode for RenderScene {
                 native_height,
                 1,
             );
+        }
+        // ── RT washout probe: capture composited output ──
+        if WASHOUT_CAPTURE_COMPOSITE.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            if let Some(nc) = ctx.outputs.texture_2d("color") {
+                WASHOUT_QUEUE.lock().unwrap().push(WashoutCap {
+                    label: "composite".into(),
+                    tex: nc.clone(),
+                    frame: 0,
+                    w: nc.width,
+                    h: nc.height,
+                });
+            }
         }
     }
 }
