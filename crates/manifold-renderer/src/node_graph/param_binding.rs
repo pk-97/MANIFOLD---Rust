@@ -582,10 +582,10 @@ pub fn apply_bindings(
         if binding.source_id.as_ref() == "8_rt_enabled"
             && std::env::var_os("MANIFOLD_RT_PROBE").is_some()
         {
-            let skip = match last_applied.entries[i] {
-                BindingCacheEntry::Applied(prev) if prev == value => true,
-                _ => false,
-            };
+            let skip = matches!(
+                last_applied.entries[i],
+                BindingCacheEntry::Applied(prev) if prev == value
+            );
             eprintln!(
                 "[RT-PROBE] apply_bindings: source_id=8_rt_enabled value={} skip={skip}",
                 value

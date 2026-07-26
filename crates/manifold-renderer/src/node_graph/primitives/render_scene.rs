@@ -785,14 +785,6 @@ pub struct RenderScene {
     /// `ready` still gates ENQUEUING the next refit (never rewrite the
     /// CPU-mapped instance buffer while a refit/build is in flight).
     rt_accel_built: bool,
-    /// BUG-326: armed in the first-sighting else branch (before the
-    /// one-frame defer), consumed by the rerun block above — exactly one
-    /// extra `build_accel` per topology change. Re-armed by every genuinely
-    /// new topo sighting, so a mid-set object add whose mesh is still
-    /// streaming in gets the same protection as the initial project load.
-    /// Needs no done-flag: the rerun block never invalidates the topo keys,
-    /// so it can never re-arm itself.
-    rt_accel_rerun_armed: bool,
     /// Half-res shadow-ray-trace target + full-res upsampled mask
     /// (RT-D3's "D11 trivial pass"). Sized to the scene's own
     /// `width`/`height`, ensured lazily like every other RT-only
@@ -1086,7 +1078,6 @@ impl RenderScene {
             rt_accel_topo_key: None,
             rt_accel_pending_key: None,
             rt_accel_built: false,
-            rt_accel_rerun_armed: false,
             rt_mask_half: None,
             rt_mask_full: None,
             rt_mask_width: 0,
@@ -3083,7 +3074,7 @@ impl EffectNode for RenderScene {
                 );
             }
         }
-        let mut rt_ready = self.rt_accel_built;
+        let rt_ready = self.rt_accel_built;
         // ── RT probe snapshots (temporary diagnostic) ──
         if RT_PROBE_ENABLED.load(Ordering::Relaxed) {
             RT_PROBE_ACCEL_BUILT.store(self.rt_accel_built, Ordering::Relaxed);
@@ -3947,18 +3938,27 @@ impl EffectNode for RenderScene {
 
             // Dirty-check keys, same hashing idiom as `shadow_cache_keys`
             // above, split in two (BUG-320): the TOPO key (buffers,
-            // counts, epoch) decides rebuild-vs-not; folding transforms
-            // on top yields the FULL key, whose change under a stable
-            // topo key is a transform-only refit (RAYTRACING_DESIGN.md
-            // P1 gate: built at scene load, kept resident, never rebuilt
-            // mid-frame for a static scene; refit — not rebuild — is the
-            // designed path for a performer moving an object).
+            // counts, generation, epoch) decides rebuild-vs-not; folding
+            // transforms on top yields the FULL key, whose change under a
+            // stable topo key is a transform-only refit
+            // (RAYTRACING_DESIGN.md P1 gate).
+            //
+            // `vertices_generation` term: each caster draw carries the
+            // mesh input slot's write generation (see
+            // `ShadowCasterDraw::vertices_generation`). When async mesh
+            // content (gltf_mesh_source's background decode + staging
+            // copy) lands after the initial accel build, the generation
+            // bumps — the topology key changes, triggering a proper
+            // deferred rebuild through BUG-308's one-frame-recur path.
+            // This deterministic signal replaces the BUG-326 one-shot
+            // rerun heuristic (deleted 2026-07-26).
             use std::hash::{Hash, Hasher};
             let mut hasher = ahash::AHasher::default();
             hasher.write_usize(objects.len());
-            for o in &objects {
+            for (o, d) in objects.iter().zip(shadow_caster_draws.iter()) {
                 o.vertex_buffer.identity_key().hash(&mut hasher);
                 hasher.write_u32(o.triangle_count);
+                d.vertices_generation.hash(&mut hasher);
             }
             hasher.write_u64(ctx.rebuild_epoch);
             let topo_key = hasher.finish();
@@ -4000,28 +4000,6 @@ impl EffectNode for RenderScene {
                 gpu.device,
                 &objects,
             );
-            // BUG-326: the first accel build after a topology change can
-            // be blind to just-arrived mesh content (async glb load's GPU
-            // staging copy and the BLAS build are on separate command
-            // buffers; the BLAS races ahead). Once that build is observed
-            // ready, replace the accel immediately with a fresh build that
-            // runs after the mesh copy has landed. One rerun per topology
-            // change; re-armed by the next genuine topo sighting.
-            if self.rt_accel_rerun_armed && rt_ready {
-                self.rt_accel_rerun_armed = false;
-                let tracer = self.rt_tracer.as_ref().expect("ensured above");
-                self.rt_accel = Some(tracer.build_accel(gpu.device, &objects));
-                self.rt_accel_built = false;
-                // ── RT probe: build count + latch reset (temporary) ──
-                if RT_PROBE_ENABLED.load(Ordering::Relaxed) {
-                    RT_PROBE_READY_LATCH_PRINTED.store(false, Ordering::Relaxed);
-                    RT_PROBE_BUILD_COUNT.fetch_add(1, Ordering::Relaxed);
-                    RT_PROBE_TOPO_KEY.store(topo_key, Ordering::Relaxed);
-                }
-                // Suppress RT dispatch this frame (the new accel isn't
-                // ready yet — next frame latches fresh from `ready` flag).
-                rt_ready = false;
-            }
             // BUG-308/RT-D4: a key change (first RT frame, or topology/
             // transform change) must NOT enqueue `build_accel` this same
             // frame — this frame's own mesh-generation GPU writes are
@@ -4057,9 +4035,6 @@ impl EffectNode for RenderScene {
                         "node.render_scene: RT accel structure (re)build enqueued (async, topo key {topo_key:#x}) — raster shadow-map path serves this scene until it's ready"
                     );
                 } else {
-                    // BUG-326: arm the one-shot rerun for the build this
-                    // new-topology sighting will produce.
-                    self.rt_accel_rerun_armed = true;
                     self.rt_accel_pending_key = Some(topo_key);
                     // ── RT probe (temporary) ──
                     if RT_PROBE_ENABLED.load(Ordering::Relaxed) {
@@ -5144,7 +5119,7 @@ impl EffectNode for RenderScene {
                 RT_PROBE_BUILD_ENQUEUED_PRINTED.store(true, Ordering::Relaxed);
             }
             // Print every 30th frame, OR on any state change (ready flip, first dispatch, build enqueued).
-            if changed || build_enqueued_new || frame % 30 == 0 {
+            if changed || build_enqueued_new || frame.is_multiple_of(30) {
                 eprintln!(
                     "[RT-PROBE] frame={frame} rt={rt_ready_val} accel={accel_built_val} casters={has_casters_val} \
                      scene_w={scene_w} rt_flags={rt_flags_x} entered={entered_rt} dsp={dispatch_count} \
