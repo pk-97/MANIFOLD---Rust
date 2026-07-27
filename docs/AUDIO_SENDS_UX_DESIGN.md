@@ -21,7 +21,7 @@ Companion docs: `AUDIO_MODULATION_DESIGN.md` (the feature this UX fronts), `AUDI
 | Layer→send routing (audio layer picks the send it feeds) | `crates/manifold-ui/src/panels/layer_header.rs:654-658`, `PanelAction::AudioSendClicked` | Shipped — the ONLY place layer feeds are edited |
 | Per-send analyzers on the **content thread**, one `StreamingSendAnalyzer` per send | `crates/manifold-app/src/audio_mod_runtime.rs:127-129`, loop at `:258` | Shipped. Capture gate is **global** (any mod ∨ any enabled trigger ∨ scope open, `:231`); once up, **every send** is analyzed every tick |
 | Measured cost (release, M-series, probe 2026-07-04) | — | 16 sends ≈ **0.96 ms mean / 1.27 ms worst per tick** (~60 µs/send) against the 16.6 ms tick; `MAX_SENDS = 16` hard cap (`analysis.rs:56`) |
-| Live no-glitch param banks (gain, crossovers) | `analysis.rs:72` (`GainBank`), crossover drag via `MutateProjectLive` + commit command (`AUDIO_MODULATION_DESIGN.md` section 10.0.1) | Shipped — the precedent for all Phase 3 drags |
+| Live no-glitch param banks (gain, crossovers) | `analysis.rs:72` (`GainBank`), crossover drag via `MutateProjectLive` + commit command (`AUDIO_MODULATION_DESIGN.md` section 10.0 (Spectrogram feature overlays + draggable bands)) | Shipped — the precedent for all Phase 3 drags |
 | Drawer builder (declarative `DrawerSpec` → rows) | `crates/manifold-ui/src/panels/drawer.rs` | Shipped — sole builder for all four drawers |
 
 Extend, don't redesign. No new crates, no new threads, no new shared state anywhere in this doc.

@@ -36,7 +36,7 @@ MANIFOLD currently has **two parallel runtimes** for effect work:
 
 The chain runtime cannot host:
 
-- Cross-effect dispatch fusion (the `NODE_GRAPH_SYSTEM.md` section 5.1 promise — adjacent pixel-local primitives compile to one compute shader).
+- Cross-effect dispatch fusion (the `NODE_GRAPH_SYSTEM.md` section 8 (Shader Fusion (Graph Compiler)) promise — adjacent pixel-local primitives compile to one compute shader).
 - Static elision (disabled effects, identity transforms, zero-amount nodes drop out at compile time).
 - Branching topology (the wet/dry "snapshot + lerp" dance is imperative).
 - Independent branches on parallel queues.

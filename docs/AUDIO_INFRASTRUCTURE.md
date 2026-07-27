@@ -159,7 +159,7 @@ Discipline to keep it there:
 
 - Never move analysis back to the worker thread to "save" content-thread time — that's the mix-before-analyze property gone, not a perf win (section 3.2, D4 rationale).
 - Never widen the gate to "analyze if any mod exists anywhere" — it must be keyed per-send (`analysis_consumed_sends`), or one bound param anywhere in the project pays for all 16 sends again, which is the exact regression D4 fixes.
-- `MAX_SENDS = 16` (`analysis.rs`) stands; the gate is the scaling answer, not a bigger cap (`AUDIO_SENDS_UX_DESIGN.md` section 5.2).
+- `MAX_SENDS = 16` (`analysis.rs`) stands; the gate is the scaling answer, not a bigger cap (`AUDIO_SENDS_UX_DESIGN.md` section 5 (Decided — do not reopen)).
 - Don't run the downmix worker with zero sends / no device — it currently idle-wakes ~500×/sec regardless ([analysis.rs run loop](../crates/manifold-audio/src/analysis.rs)). Gate its existence on "device open AND ≥1 send" (capture-level gate, separate from and upstream of the per-send analysis gate).
 - Cap channel count sanely: the capture ring is `2s × SR × channels`; a 64-ch aggregate at 96kHz is ~49MB. One-time alloc, but an exotic device shouldn't surprise us.
 
