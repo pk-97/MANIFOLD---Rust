@@ -82,7 +82,7 @@ No per-frame allocations on hot paths (engine tick, sync, rendering). Pre-alloca
 
 ## Voice
 
-Write like a person talking: short plain sentences, everyday words, technical terms explained once, never invented labels or acronyms. Lead with the outcome. No hedging, no narration, no prose history — history lives in git. Comments state a why or an invariant only; delete comments that restate the code. Docs state rules and contracts, not stories; provenance is one dated line only where the why isn't derivable. Never imitate legacy verbose prose when touching a file — strip it. Working code is never rewritten for style alone (live instrument); leanness arrives through new code and lean-on-touch.
+Write like a person talking: short plain sentences, everyday words, technical terms explained once, never invented labels or acronyms. Lead with the outcome. No hedging, no narration, no prose history — history lives in git. Comments state a why or an invariant only; delete comments that restate the code. Docs state rules and contracts, not stories; provenance is one dated line only where the why isn't derivable. Never imitate legacy verbose prose when touching a file — strip it.
 
 ## Choosing your next move — oracle discipline
 
