@@ -8,18 +8,28 @@
     },
     {
       "topic": "ui-invariants",
-      "globs": ["*crates/manifold-ui/*", "*ui_bridge/*", "*app_render.rs", "*graph_canvas.rs"],
+      "globs": ["*crates/manifold-ui/*", "*ui_bridge/*", "*app_render.rs"],
       "snippet": "ui-invariants.md"
     },
     {
       "topic": "effect-runtime",
-      "globs": ["*effect_chain*", "*preset_runtime*", "*content_pipeline.rs", "*node_graph/execution*", "*node_graph/freeze/*"],
+      "globs": ["*chain_dispatch*", "*chain_spec*", "*preset_runtime*", "*content_pipeline.rs", "*node_graph/execution*", "*node_graph/freeze/*"],
       "snippet": "effect-runtime-invariants.md"
     },
     {
       "topic": "graph-authoring",
       "globs": ["*node_graph/primitives/*", "*presets/*.json", "*composites/*"],
       "snippet": "graph-authoring-rules.md"
+    },
+    {
+      "topic": "landing",
+      "command_globs": ["*git merge*", "*git push*origin main*"],
+      "snippet": "landing-protocol.md"
+    },
+    {
+      "topic": "workspace-test",
+      "command_globs": ["*cargo*--workspace*", "*cargo test --all*"],
+      "snippet": "test-scope.md"
     }
   ]
 }

@@ -24,10 +24,15 @@ def main() -> int:
     except Exception:
         return 0
 
-    if data.get("tool_name") not in ("Edit", "Write", "MultiEdit"):
+    tool = data.get("tool_name")
+    tin = data.get("tool_input") or {}
+    if tool in ("Edit", "Write", "MultiEdit"):
+        match_text, glob_key = tin.get("file_path") or "", "globs"
+    elif tool == "Bash":
+        match_text, glob_key = tin.get("command") or "", "command_globs"
+    else:
         return 0
-    file_path = (data.get("tool_input") or {}).get("file_path") or ""
-    if not file_path:
+    if not match_text:
         return 0
 
     try:
@@ -49,7 +54,7 @@ def main() -> int:
     parts = []
     for entry in table:
         topic = entry.get("topic")
-        if not any(fnmatch.fnmatch(file_path, g) for g in entry.get("globs", [])):
+        if not any(fnmatch.fnmatch(match_text, g) for g in entry.get(glob_key, [])):
             continue
         if topic in state and state[topic] < REFIRE_AFTER:
             state[topic] += 1
