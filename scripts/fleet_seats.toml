@@ -1,0 +1,38 @@
+# MANIFOLD fleet seat manifest — source of truth for seat NAMES and consumers.
+#
+# A seat = one subscription ACCOUNT (never a model). providers.toml rows,
+# secret files, key env vars, statusline columns, and guard tables all derive
+# their seat tokens from here. `scripts/seat_tool.py check` enforces it;
+# `scripts/seat_tool.py rename` migrates every consumer in one transaction.
+# Model rotation within a seat stays `seat_tool.py assign` and never touches
+# names.
+
+version = 1
+
+# The seat the `k3m` shell alias (~/.zshrc) launches as the lead session.
+lead_seat = "kimi"
+
+# Old seat names. `check` fails on any live bare-token reference to these in
+# mechanism files (configs + hooks). Model-name prefixes (glm-4.7) are never
+# seat tokens and are not matched.
+retired_names = ["glm", "kimi-code"]
+
+[seat.kimi]
+account = "Kimi"          # statusline display name
+env_key = "KIMI_KEY"      # start-proxy.sh export + config.yaml os.environ/<env_key>
+hue = "95"                # ANSI color in the statusline provider hue map
+role = "lead"
+
+[seat.zai]
+account = "Z.AI"
+env_key = "ZAI_KEY"
+hue = "38;5;208"
+role = "dispatch"
+
+# Row name = account name. "Zen" is only OpenCode's API endpoint and "Go" its
+# plan tier — neither is the account, so neither names the seat.
+[seat.opencode]
+account = "OpenCode"
+env_key = "OPENCODE_KEY"
+hue = "96"
+role = "executor"
