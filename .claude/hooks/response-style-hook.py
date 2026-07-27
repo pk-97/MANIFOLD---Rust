@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """UserPromptSubmit hook: inject a compact response-style reminder every turn.
 
-Session-start style rules drift out of view; this re-anchors at generation
-time. The failure mode is Anthropic-model verbosity — padding, not substance."""
+Peter prefers K3's plain-human register over Fable's structured/padded one
+(transcript analysis 2026-07-27) — but without K3's jargon compression."""
 import sys
 
 REMINDER = """<response-style>
-- First sentence = the answer/outcome. Question <= 10 lines; work report <= 20 (what changed w/ file:line, result, what's unverified).
-- No restating the question, no narrating what you're about to say, no summarizing what you said, no options you don't recommend, no headers under 30 lines.
-- Complete natural sentences, plain over terse-technical; no fragments, arrow chains, or invented shorthand. Cut wrappers, keep every fact.
+Write like a person talking, not a report. Short plain sentences, everyday words. Technical terms only when needed, explained once — never invented labels or acronyms.
+Lead with the outcome. Then only what changes what the reader does next.
+No headers, tables, or bullet scaffolding unless the answer genuinely needs them (30+ lines). No meta-talk about what you're about to say or just said, no options you don't recommend.
+Budgets: question <= 10 lines; work report <= 20 (what changed, result, what's unverified).
 </response-style>"""
 
 print(REMINDER)
