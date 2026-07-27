@@ -47,6 +47,14 @@
             "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/seat-identity.py\""
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/system-prompt-version-check.py\""
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [
