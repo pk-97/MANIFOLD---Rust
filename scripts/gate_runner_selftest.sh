@@ -256,7 +256,7 @@ echo "=== P3 pre-dispatch tests ==="
 echo ""
 
 # --- P3 Test 1: synthetic broken brief ---
-echo "--- P3 Test 1: broken brief fails all 4 checks ---"
+echo "--- P3 Test 1: broken brief fails all lint checks ---"
 BRIEF_BROKEN=$(mktemp /tmp/gate_selftest_broken.XXXXXX.md)
 cat > "$BRIEF_BROKEN" << 'EOF'
 # Broken brief for pre-dispatch lint
@@ -281,7 +281,7 @@ rm -f "$BRIEF_BROKEN"
 echo ""
 
 # --- P3 Test 2: synthetic good brief ---
-echo "--- P3 Test 2: good brief passes all 4 checks ---"
+echo "--- P3 Test 2: good brief passes all lint checks ---"
 # Create a real temp file as an anchor target
 BRIEF_GOOD=$(mktemp /tmp/gate_selftest_good.XXXXXX.md)
 TMP_RS=$(mktemp /tmp/gate_selftest_target.XXXXXX.rs)

@@ -18,7 +18,7 @@
     {"transition": "verdicts written only by gate_runner (I2 edit guard)", "enforcement": "hook", "file": ".claude/hooks/worktree-guard.py"},
     {"transition": "cc-fleet subagents at declared tiers only", "enforcement": "hook", "file": ".claude/hooks/cc-fleet-tier-guard.py"},
     {"transition": "GATE: brief gate commands executed verbatim, verdict to trail; gaming scan (D9)", "enforcement": "exit-code", "file": "scripts/gate_runner.py"},
-    {"transition": "pre-dispatch brief lint: anchors resolve, gates parse, slots valid, bead named", "enforcement": "exit-code", "file": "scripts/gate_runner.py"},
+    {"transition": "pre-dispatch brief lint: anchors resolve, gates parse, slots valid, bead named, predecessors green (--requires phase ordering)", "enforcement": "exit-code", "file": "scripts/gate_runner.py"},
     {"transition": "UI flow gate on touched paths at landing", "enforcement": "exit-code", "file": "scripts/run_ui_flows.py"},
     {"transition": "docs index freshness on doc add/rename", "enforcement": "exit-code", "file": "scripts/gen_docs_index.py"},
     {"transition": "pure-move / dispatch-split proofs on decomposition commits", "enforcement": "exit-code", "file": "scripts/move_identity_check.py"},

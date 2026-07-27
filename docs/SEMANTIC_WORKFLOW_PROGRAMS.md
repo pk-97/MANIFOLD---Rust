@@ -70,7 +70,7 @@ The soft transitions are the known failure surface. The table turns "make agents
 3. **Typed artifacts validate shape, not truth.** A schema-perfect Brief can name a nonexistent reuse target or a non-discriminating conviction test. Only a reading mind catches that.
 4. **REVIEW is the only opcode whose oracle is a model — and it is load-bearing.** Everything else has a cheap external check. The entire cost structure (lead window economy, parallelism = review bandwidth) is downstream of this one fact.
 5. **Benchmarking won't have the n.** A wave is 5–10 lanes; per-opcode model comparisons are inside binomial noise for months. Model selection stays anecdote-driven.
-6. **Replay is an audit log, not a debugger.** Executor output is sampled; same input hash, different diff. Traceability yes, reproduction no.
+6. **Replay is an audit log, not a debugger.** Executor output is sampled; same input hash, different diff. Traceability yes, reproduction no. External confirmation (Compiled AI, arXiv 2604.05150): non-determinism survives temperature 0 — up to 15% accuracy variance across identical runs from MoE routing alone. Corollary: a lane rerun is a new sample, not a retry; one pass + one fail on the same gate means "unstable," never "flaky infra."
 7. **Model-independent but harness-dependent.** The transition table lives in Claude Code hooks + this repo's conventions. The IR would port; the machine wouldn't.
 8. **The target moves.** The roster changed three times in a week; a frozen IR lags doctrine and starts lying.
 9. **Generalization fails without oracles.** All hard gates exist because this is a Rust repo (clippy, tests, exit codes). Domains without a compiler have no GATE opcode. This is an architecture *for oracled work*, not a universal one.
