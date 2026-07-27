@@ -276,6 +276,99 @@ def has_cd_prefix(cmd: str) -> bool:
         r"""\s*cd\s+(?:"[^"]*"|'[^']*'|(?:\\.|\S)+)\s*(&&|;)""", cmd))
 
 
+def _top_level_segments(cmd: str):
+    """Split `cmd` into top-level command segments (quote/escape/paren-aware).
+
+    Yields (segment_text, paren_depth_at_start). Segments split on `;`, `&&`,
+    `||`, `|`, and newlines at any depth, but the depth lets the caller treat
+    subshell segments differently (a `(cd X && ...)` cwd change dies with the
+    subshell)."""
+    seg_start, depth, seg_depth = 0, 0, 0
+    i, n = 0, len(cmd)
+    quote = None
+    while i < n:
+        c = cmd[i]
+        if quote:
+            if c == "\\" and quote == '"':
+                i += 2
+                continue
+            if c == quote:
+                quote = None
+            i += 1
+            continue
+        if c == "\\":
+            i += 2
+            continue
+        if c in ("'", '"'):
+            quote = c
+            i += 1
+            continue
+        if c == "(":
+            depth += 1
+            i += 1
+            continue
+        if c == ")":
+            depth = max(0, depth - 1)
+            i += 1
+            continue
+        if c in (";", "\n") or (c in ("&", "|") and i + 1 < n and cmd[i + 1] == c) or c == "|":
+            yield cmd[seg_start:i], seg_depth
+            i += 2 if (c in ("&", "|") and i + 1 < n and cmd[i + 1] == c) else 1
+            seg_start = i
+            seg_depth = depth
+            continue
+        i += 1
+    yield cmd[seg_start:], seg_depth
+
+
+def persistent_cd_guard(cmd: str, cwd: str):
+    """0g. Deny a top-level `cd` that parks the persistent shell cwd anywhere
+    but a checkout root. cwd persists across Bash calls, so a stray `cd`
+    surfaces as a DELAYED failure: the near-miss merge in
+    SEMANTIC_WORKFLOW_PROGRAMS §10.5, then the real thing on 2026-07-27 — a
+    no-op `cd` left the shell in a worktree and the landing merge silently
+    merged a branch into itself. Correctness guard: runs in EVERY mode.
+
+    Allowed targets (the recovery moves): the main checkout root, or a slot
+    ring worktree root (`.claude/worktrees/<slot>`) — a lane returning to its
+    own base. Subshell `(cd X && ...)` doesn't persist and is exempt.
+    Everything else: use `git -C`, `--manifest-path`, or absolute paths.
+    """
+    if "cd" not in cmd:
+        return None
+    root = os.path.realpath(str(_PROJECT_DIR))
+    worktrees = os.path.realpath(str(_WORKTREES_DIR))
+    for seg, depth in _top_level_segments(cmd):
+        seg = seg.strip()
+        if depth > 0 or not re.match(r"cd(\s|$)", seg):
+            continue
+        rest = seg[2:].strip()
+        try:
+            toks = shlex.split(rest)
+        except ValueError:
+            toks = rest.split()
+        target = next((t for t in toks if not re.match(r"^(-P|-L|-e|@?[0-9]*>>?|<)", t)), "")
+        if target == "-":
+            resolved = "<previous dir, unknowable statically>"
+        elif not target:
+            resolved = os.path.expanduser("~")
+        else:
+            resolved = os.path.realpath(
+                os.path.join(cwd, os.path.expanduser(target)))
+        if resolved == root:
+            continue
+        if os.path.dirname(resolved) == worktrees:
+            continue
+        return (
+            f"Persistent `cd` to {resolved!r} denied: the shell cwd persists "
+            "across Bash calls and a stray cd surfaces as a delayed failure "
+            "(2026-07-27: a leftover cd made a landing merge silently no-op). "
+            "Use `git -C <dir>`, `--manifest-path`, or absolute paths; `cd` "
+            "back to the project root or your worktree slot root is allowed."
+        )
+    return None
+
+
 def has_write_redirect(structural: str) -> bool:
     """
     True if `structural` contains an output redirect (`>`/`>>`) to anything
@@ -1191,6 +1284,13 @@ def main() -> int:
     worktree_deny = worktree_add_guard(cmd, cwd)
     if worktree_deny:
         json.dump(build_deny([worktree_deny]), sys.stdout)
+        return 0
+
+    # 0g. Persistent-cwd guard: top-level `cd` off a checkout root is denied
+    # in every mode — delayed-failure class, not prompt hygiene.
+    cd_deny = persistent_cd_guard(cmd, cwd)
+    if cd_deny:
+        json.dump(build_deny([cd_deny]), sys.stdout)
         return 0
 
     # 0c. Unverified compound landing-merge guard (T6): denies a compound

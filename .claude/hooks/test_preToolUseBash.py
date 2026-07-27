@@ -531,7 +531,36 @@ def test_compound_landing_merge_worktree_unaffected():
         hook._current_branch = orig
 
 
+def test_cd_guard():
+    g = hook.persistent_cd_guard
+    slot = str(hook._WORKTREES_DIR / "slot-1")
+
+    # The 2026-07-27 incident shape: no-op cd into a worktree
+    check("cd worktree + true -> deny",
+          g(f'cd "{slot}/scripts" 2>/dev/null; true', MAIN_CWD) is not None)
+    # Bare cd (lands in $HOME) -> deny
+    check("bare cd -> deny", g("cd", MAIN_CWD) is not None)
+    check("cd /tmp -> deny", g("cd /tmp && ls", MAIN_CWD) is not None)
+    check("cd - -> deny", g("cd -", MAIN_CWD) is not None)
+    # Recovery moves allowed
+    check("cd project root -> allowed",
+          g(f'cd "{MAIN_CWD}" && pwd', MAIN_CWD) is None)
+    check("cd slot root -> allowed", g(f'cd "{slot}"', MAIN_CWD) is None)
+    # Non-persistent forms exempt
+    check("subshell cd -> exempt", g("(cd /tmp && make)", MAIN_CWD) is None)
+    check("substitution cd -> exempt",
+          g('echo "$(cd /tmp && pwd)"', MAIN_CWD) is None)
+    # cd as text, not command
+    check("quoted cd text -> exempt",
+          g("git commit -m 'retire cd /tmp habit' -- a.rs", MAIN_CWD) is None)
+    check("plain command -> exempt", g("git status", MAIN_CWD) is None)
+    # Mid-chain cd
+    check("chain-tail cd -> deny",
+          g("git fetch && cd /tmp", MAIN_CWD) is not None)
+
+
 def main():
+    test_cd_guard()
     test_branch_force_main_asks()
     test_branch_force_main_worktree_unaffected()
     test_branch_force_non_main_unaffected()

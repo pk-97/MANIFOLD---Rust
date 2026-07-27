@@ -85,7 +85,12 @@ def main() -> None:
             "--model glm-5.2, or a lane); (3) instrument probes are the LAST RESORT, for "
             "when nothing makes sense and you need a new direction — and they are DELEGATED "
             "(DeepSeek lane), not lead-run. Write the evidence table to "
-            "/tmp/manifold_seam_review.md (>=200 chars) to reset this guard."
+            "/tmp/manifold_seam_review.md (>=200 chars) to reset this guard. "
+            "Before the next probe, run the DEBUG_INVESTIGATION skeleton as a "
+            "checklist (SEMANTIC_WORKFLOW_PROGRAMS.md §10): SCHEMA_SEARCH before "
+            "any negative claim; GENERALIZE_TRIGGER after the first repro; "
+            "CURE_TEST once a perfect action-correlation exists and two read "
+            "rounds haven't cracked the mechanism."
         )
         if n >= DENY_AT:
             print(json.dumps({
