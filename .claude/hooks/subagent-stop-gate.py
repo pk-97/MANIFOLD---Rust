@@ -12,8 +12,12 @@ to /tmp/manifold_subagent_stop_payloads.jsonl for empirical documentation.
 
 Blocking mechanism (precedent: lane-report-enforcer.py): exit 2 with
 stderr message blocks the stop and sends the message as feedback to the
-subagent. MAX_BLOCKS (3) consecutive blocks per agent_id then allows
-through with a loud systemMessage.
+subagent. The block counter IS the verdict trail (2026-07-27, replacing a
+private /tmp state file): the task's trailing streak of red per-lane
+verdicts — which gate_runner just appended to — decides. Streak past
+FAIL_STREAK_LIMIT allows through with a loud systemMessage, so the trail
+is the single fact both this hook and gate_runner's stop-retrying
+directive read; two counters can no longer drift.
 
 Payload schema (empirically verified 2026-07-25, claude CLI 2.1.219):
   hook_event_name: "SubagentStop"
@@ -34,12 +38,47 @@ import re
 import subprocess
 import sys
 
-MAX_BLOCKS = 3
 PAYLOAD_LOG = "/tmp/manifold_subagent_stop_payloads.jsonl"
-STATE_FILE = "/tmp/subagent_stop_gate_state.json"
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 GATE_RUNNER = os.path.join(REPO, "scripts", "gate_runner.py")
+
+
+def fail_streak(task_id):
+    """Trailing consecutive red per-lane verdicts for a task, read from the
+    trail gate_runner just appended to. Mirrors gate_runner._fail_streak but
+    stays subprocess-clean (importing gate_runner executes its module-level
+    guard loading). Unreadable trail → 0 (fail open)."""
+    verdicts_dir = os.environ.get("GATE_RUNNER_VERDICTS_DIR") or os.path.join(
+        REPO, ".claude", "orchestration", "verdicts")
+    path = os.path.join(verdicts_dir, f"{task_id}.jsonl")
+    streak = 0
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                v = json.loads(line)
+                if v.get("phase") != "per-lane" or v.get("kind") != "gate":
+                    continue
+                streak = 0 if v.get("pass") else streak + 1
+    except Exception:
+        return 0
+    return streak
+
+
+def fail_streak_limit():
+    """Read FAIL_STREAK_LIMIT from gate_runner's source so the two callers
+    of the trail share one constant. Falls back to 3."""
+    try:
+        with open(GATE_RUNNER) as f:
+            m = re.search(r"^FAIL_STREAK_LIMIT\s*=\s*(\d+)", f.read(), re.MULTILINE)
+        if m:
+            return int(m.group(1))
+    except Exception:
+        pass
+    return 3
 
 # Executor tier regex — mirrors agent-tier-spawn-guard.py exactly
 EXECUTOR_TIERS = re.compile(
@@ -47,14 +86,6 @@ EXECUTOR_TIERS = re.compile(
 )
 
 BUG_RE = re.compile(r"BUG-\w+")
-
-
-def load_json(path, default):
-    try:
-        with open(path) as f:
-            return json.load(f)
-    except Exception:
-        return default
 
 
 def find_task_and_brief(payload, log_fp):
@@ -224,42 +255,29 @@ def main():
     if r.returncode == 0:
         return 0
 
-    # ---- Gate failed — check block limit ----
-    state = load_json(STATE_FILE, {})
-    blocks = int(state.get(agent_id, 0))
+    # ---- Gate failed — the verdict trail is the block counter ----
+    streak = fail_streak(task_id)
+    limit = fail_streak_limit()
 
-    if blocks >= MAX_BLOCKS:
+    if streak > limit:
         # Allow through with a loud systemMessage (precedent: lane-report-enforcer)
         print(json.dumps({
             "systemMessage": (
-                f"subagent-stop-gate: agent '{agent_id}' ({agent_type}) "
-                f"blocked {MAX_BLOCKS}x for red gates on {task_id} — "
-                "allowed through; check the gate output and lane discipline."
+                f"subagent-stop-gate: task {task_id} has {streak} consecutive "
+                f"red per-lane verdicts (limit {limit}) — agent '{agent_id}' "
+                f"({agent_type}) allowed through; the lane owes a blocked "
+                "report, and the trail has the gate output."
             )
         }))
-        state[agent_id] = 0
-        try:
-            with open(STATE_FILE, "w") as f:
-                json.dump(state, f)
-        except Exception:
-            pass
         return 0
 
     # ---- Block the stop: exit 2 with gate failure output as feedback ----
-    state[agent_id] = blocks + 1
-    try:
-        with open(STATE_FILE, "w") as f:
-            json.dump(state, f)
-    except Exception:
-        pass
-
-    # Build feedback: brief summary of what failed
     summary_lines = []
     for line in r.stdout.split("\n"):
         if "FAIL" in line or "failed" in line.lower():
             summary_lines.append(line.strip())
     feedback = (
-        f"subagent-stop-gate: gate FAILED for {task_id} (block {blocks + 1}/{MAX_BLOCKS}). "
+        f"subagent-stop-gate: gate FAILED for {task_id} (red run {streak}/{limit}). "
         f"Gate runner exit {r.returncode}. "
         + ("; ".join(summary_lines[:5]) if summary_lines else r.stdout.strip()[-500:])
     )

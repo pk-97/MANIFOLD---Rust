@@ -173,5 +173,13 @@ make_slot(slots_root, "slot-3", "BUG-aaaa")  # second claimant
 check("ambiguous slots resolve to none",
       gate_runner._resolve_lane_commit("BUG-aaaa") is None)
 
+# --- hook liveness checks run green against the real repo ---
+
+entry = gate_runner._check_hooks_registered()
+check("hooks registered in settings.json", entry["exit"] == 0, entry["tail"])
+
+entry = gate_runner._check_hooks_fire()
+check("worktree-guard denies the canary", entry["exit"] == 0, entry["tail"])
+
 print(f"\n{PASSED} passed, {FAILED} failed")
 sys.exit(0 if FAILED == 0 else 1)
