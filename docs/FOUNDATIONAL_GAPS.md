@@ -20,7 +20,7 @@ Entries are ranked by stage risk — what it costs mid-set — not by churn coun
 
 ### A1. UI↔content state sync: projection layer with no enforcement (stage risk: HIGH) — **KILL-TEST RAN 2026-07-09: layer KILLED, enforcement SHIPPED**
 
-**Outcome (Fable, 2026-07-09).** The kill-test below fired, one level deeper than the field
+**Outcome.** The kill-test below fired, one level deeper than the field
 survey: the mirror fields' emit half was already compiler-enforced (exhaustive literal) and
 their consume half is bespoke display logic no table can generate — the declarative layer
 would have been escape hatches all the way down. The orphan-field rot was a *suppressed

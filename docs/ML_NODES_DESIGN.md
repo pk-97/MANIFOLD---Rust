@@ -1,9 +1,9 @@
 # ML Nodes — Perception Runtime, Node Roster, Point Arrays
 
 Status: **APPROVED** (Peter, 2026-07-02). Designed on Fable; implementation is Sonnet work, phased in section 12.
-Companions: NODE_CATALOG.md (roster lands there), CHANNEL_TYPE_SYSTEM.md (point arrays ride section 5 (Effect presets)-section 6 machinery), MULTI_DISPLAY_DESIGN.md section 12 (auto-calibration shares this runtime).
+Companions: NODE_CATALOG.md (roster lands there), CHANNEL_TYPE_SYSTEM.md (point arrays ride section 5 (Effect presets)-section 6 (Generators) machinery), MULTI_DISPLAY_DESIGN.md section 12 (auto-calibration shares this runtime).
 Prerequisites: none for the Vision/CoreML tier; the ONNX tier needs VULKAN_BACKEND_DESIGN shipped. Sequencing: `docs/DESIGN_BUILD_ORDER.md` wave 3.
-Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 and section 8 before starting any phase. Conformance-hardened: run the section 8.3 pre-flight before each phase — node ids here predate the vocab-audit apply; check the migration table for any node this design references.
+Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before starting any phase. Conformance-hardened: run the section 8.3 pre-flight before each phase — node ids here predate the vocab-audit apply; check the migration table for any node this design references.
 
 ## 1. Goal
 

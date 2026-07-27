@@ -2,7 +2,7 @@
 
 **Status:** P1–P3 SHIPPED 2026-07-07 (same-session build, Fable) · P4 landing complete except the L4 live checklist (section 6 P4 demo — Peter-owned, the real acceptance gate)
 **Prerequisites:** none
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
 **Build deviations (2026-07-07, recorded at landing):**
 1. **D5 widened:** the clock-plane gate also holds CLK *transport* relay (not
@@ -69,7 +69,7 @@ separate cleanup, deferred below). MANIFOLD→Ableton *control* of Live
 parameters is explicitly out of scope: *"Don't need to drive Ableton controls
 from Manifold yet."*
 
-Companion docs: `CORE_ENGINE_MAP.md` section 7 (External sync — who is allowed to move the playhead)/section 13 (the authoritative sync-stack map;
+Companion docs: `CORE_ENGINE_MAP.md` section 7 (External sync — who is allowed to move the playhead)/section 13 (Honest edges (the bug hunt starts here)) (the authoritative sync-stack map;
 its findings 11/12/14 are fixed by this design — update it at landing);
 `AUDIO_INFRASTRUCTURE.md` (unrelated audio capture; shares no code).
 
@@ -391,7 +391,7 @@ Demo: none — L1 (pure logic; behavior demos land in P2/P4).
 Forbidden: any I/O in the module; any engine type imported; widening ε or
 retry caps beyond section 3 without a doc edit.
 
-### P2 — FakeAbleton harness + failure-catalog scenarios (Sonnet)
+### P2 — FakeAbleton harness + failure-catalog scenarios
 
 Entry: P1 merged; `cargo test -p manifold-playback --lib transport_sync` green.
 Read-back: section 2 (the catalog), section 4 transition table, T-row test names from P1.

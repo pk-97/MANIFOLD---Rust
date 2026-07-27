@@ -6,7 +6,7 @@ must not spend its frame budget on invisible air. v2 replaces it with the island
 model. Execution is a Sonnet apply pass — every decision needed is in here; don't
 reopen section 11.
 **Prerequisites: none. P1–P3 unblock PROJECTION_MAPPING and LED_STRIPS P2 (`docs/DESIGN_BUILD_ORDER.md`).**
-**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 and section 8 before starting any phase.**
+**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before starting any phase.**
 
 The driving use case: two vertical LED totems on stage, meters apart. Content chases
 between them, bounces off them, crosses the gap — the physical setup is part of the

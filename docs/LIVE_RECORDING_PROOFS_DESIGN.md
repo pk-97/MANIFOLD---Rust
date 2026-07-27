@@ -2,7 +2,7 @@
 
 **Status:** SHIPPED (P1+P2) 2026-07-10 — the recorder proof suite is built and on main. P1 @ `ef12c14b` (clock/audio injection seams; Tier-1 proof harness: tests 1–4,6, ffprobe oracle, 26-block pattern). P2 @ `091290e3` (`recording-soak` bin unpaced+realtime with a decoded-index PASS gate; kill-durability test 5; `docs/DEVELOPMENT_REFERENCE.md` runbook). **P3 (in-app record smoke) DEFERRED 2026-07-10 (Peter):** its intended vehicle does not exist — `cargo xtask ui-snap` renders the UI tree only, with no live content thread or compositor (a scripted record click emits `ContentCommand::StartLiveRecording` into a channel `ui_snapshot/script.rs:19` holds and never drains), so it cannot exercise the compositor-frame capture block. Building a real headless record smoke is a new content-thread+compositor integration harness (BUG-054 (renderer-device-ptr-dangles)-adjacent), not the "one scripted flow" the phase assumed; see section 8 Deferred for the revival trigger. The button→command→capture-block glue is L4-verified by live use every show (VD-023). Two other debts carried: full-scale 4K60 20-min soak is Peter's pre-gig ritual (VD-022a); BUG-086 (recording-audio-track-under-covers-duration-on-l…) silent audio-drop fix (VD-022b, show severity LOW after `--realtime` gave full audio). Release-gating per STRUCTURAL_AUDIT_VERDICTS (owns BUG-053) · design 2026-07-07 · Fable · approved 2026-07-09 Peter
 **Prerequisites:** none
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
 Peter, 2026-07-07: *"The last time I used it it failed multiple times and we eventually
 moved to a fix that work, but I want a proper end to end headless test or something for
@@ -343,7 +343,7 @@ this is the instrument-check that catches the next one before it costs a show.
 
 ## 6. Phasing
 
-### P1 — Seams + oracle + proof suite (one session) — ✅ SHIPPED 2026-07-10 @ `ef12c14b`
+### P1 — Seams + oracle + proof suite (one session) — ✅ SHIPPED 2026-07-10
 
 - **Entry state:** clean main; `cargo test -p manifold-recording` passes (trivially —
   zero tests); ffprobe present (`which ffprobe`). Re-verify anchors:
@@ -383,7 +383,7 @@ this is the instrument-check that catches the next one before it costs a show.
   `-p manifold-app --lib`); no workspace sweep (blast radius is one crate + one
   signature-stable caller).
 
-### P2 — Kill test + soak bin + runbook (one session) — ✅ SHIPPED 2026-07-10 @ `091290e3`
+### P2 — Kill test + soak bin + runbook (one session) — ✅ SHIPPED 2026-07-10
 
 - **Entry state:** P1 landed; its gates re-run green.
 - **Read-back:** this doc section 4 item 5 + section 5; P1's phase report.

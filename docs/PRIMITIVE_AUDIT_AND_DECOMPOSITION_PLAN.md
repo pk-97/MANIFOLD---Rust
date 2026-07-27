@@ -50,8 +50,6 @@ Each row: the bundled primitive, the operations it internalizes, the atoms it sh
 
 ### 1.2 Legacy effects with wrapped Rust pipelines
 
-> **CLOSED except Wireframe Depth (2026-05-30).** Every row below is decomposed and its bundle deleted (`auto_gain`, `blob_track`, `depth_of_field`, `infrared`, `quad_mirror`) — only **Wireframe Depth** still wraps a legacy `PostProcessEffect` (`WireframeDepthGraph.json` decomp in flight). The original analysis is preserved below for history.
-
 Each effect's `node.*` primitive currently wraps a legacy `PostProcessEffect`. Decomposing produces a graph of single-purpose primitives; the DNN / FFI / CPU work stays at primitive granularity but the fused outer kernel is deleted.
 
 | Effect | Decomposes into |
@@ -64,8 +62,6 @@ Each effect's `node.*` primitive currently wraps a legacy `PostProcessEffect`. D
 | `node.quad_mirror` | Single-pass shader — **UV-warp family: gated on the missing `remap` atom (section 1.6).** Decomposes into axis-fold coordinate math → `remap` → blend. |
 
 ### 1.3 Composite effect presets still wrapping monolithic effect nodes
-
-> **CLOSED (2026-05-30).** Every effect in the table below is now a decomposed atom-graph preset and its fused `node.*` bundle is **deleted** (Bloom, Watercolor, Glitch, Kaleidoscope, Color Grade, Chromatic Aberration, Dither, Edge Stretch, Highlight Boost, Strobe, Voronoi Prism; Halation deleted; Transform was always the legit `affine_transform` exception). The original analysis is preserved below for history.
 
 Most of the thin-wrap effect presets in `assets/effect-presets/` were once single-node graphs around a composite `node.*` primitive. Atomization candidates beyond the legacy-Rust six above:
 
@@ -104,7 +100,7 @@ Registered primitives with zero current uses that are decomposition targets, not
 
 ### 1.5 Deletion candidates (genuinely superseded)
 
-> **RESOLVED (2026-05-30).** The three `node.wgsl_compute_*tex` variants + `node.mip_chain` + `node.blend` + `node.sample` are **deleted**. `node.tone_map` was reviewed and **KEPT** (NOT a duplicate of `reinhard_tone_map` — it's the richer HDR node with ACES/AgX/Khronos curves + SDR/PQ/EDR output). The no-op stubs `node.threshold` / `node.color_ramp` / `node.brightness` were **implemented** in prior sessions (no longer stubs). `node.wet_dry` / `node.color_lut` / `node.channel_mix` retained (in active use). The original analysis is preserved below.
+> **RESOLVED.** The three `node.wgsl_compute_*tex` variants + `node.mip_chain` + `node.blend` + `node.sample` are **deleted**. `node.tone_map` was reviewed and **KEPT** (NOT a duplicate of `reinhard_tone_map` — it's the richer HDR node with ACES/AgX/Khronos curves + SDR/PQ/EDR output). The no-op stubs `node.threshold` / `node.color_ramp` / `node.brightness` were **implemented** in prior sessions (no longer stubs). `node.wet_dry` / `node.color_lut` / `node.channel_mix` retained (in active use). The original analysis is preserved below.
 
 These appear unused because they've been displaced by better primitives. Confirm-and-delete pass:
 
@@ -122,7 +118,7 @@ These appear unused because they've been displaced by better primitives. Confirm
 
 ### 1.6 The missing `remap` atom — the UV-warp family blocker (identified 2026-05-29)
 
-> **RESOLVED (2026-05-29/30).** `node.remap` was built (with an `Absolute`/`Relative` mode enum) and the entire UV-warp family decomposed onto it: Kaleidoscope (`radial_fold_uv`), Quad Mirror (`centered_uv → abs → scale_offset`), Edge Stretch (`uv_strip_clamp`), Chromatic Aberration (`radial_offset_field → chromatic_displace`), Mirror (`mirror_fold_uv`), Glitch displace (`block_displace_field` + `scanline_jitter_field`). All the legacy bundles named below are **deleted**. The original gap analysis is preserved below.
+> **RESOLVED.** `node.remap` was built (with an `Absolute`/`Relative` mode enum) and the entire UV-warp family decomposed onto it: Kaleidoscope (`radial_fold_uv`), Quad Mirror (`centered_uv → abs → scale_offset`), Edge Stretch (`uv_strip_clamp`), Chromatic Aberration (`radial_offset_field → chromatic_displace`), Mirror (`mirror_fold_uv`), Glitch displace (`block_displace_field` + `scanline_jitter_field`). All the legacy bundles named below are **deleted**. The original gap analysis is preserved below.
 
 The audit of `kaleido_fold` surfaced a structural gap: **there is no generic "sample the input at an arbitrary UV field" primitive** — the equivalent of TouchDesigner's *Remap TOP*, Unreal's *Texture Sample* fed by computed UVs, or Blender's *Mapping → Image Texture* split. The existing samplers only do *relative* displacement (`texture_advect`: `sample(uv − velocity·dt/dims)`; `uv_displace_by_flow`: `sample(uv + flow)`) or a *fixed* affine (`affine_transform`). Nothing does `out(uv) = sample(input, uvfield(uv).rg)` for an absolute UV map. (`node.sample` and `color_sample` are single-pixel reads, not a per-pixel resample.)
 
@@ -218,8 +214,6 @@ Cheapest-first: **Strobe** (`beat_gate` + `gain`), **Highlight Boost** (`thresho
 - **Phase-3 status:** the cleanly-decomposable effects are DONE — Bloom, Infrared, Dither (+ the Phase-2 UV-warps + Chromatic). **Remaining are each meaty sub-projects:** `ColorGrade` (needs a luma-saturation atom + a colorize/tint atom; gain/hue_saturation/levels-as-contrast exist), `HighlightBoost` (curated tone op — soft-knee `threshold` now exists, but the EV-boost + colour-ratio rescale is bespoke), `Strobe` (square-wave + 10-entry note-rate table + 3 composite modes — temporal), `Glitch` (block-hash-displace + scanline + `chromatic_displace` + per-block invert — needs a block-hash-displace atom), `Watercolor` (7-pass feedback sim), `Voronoi Prism` (needs the per-cell-hash atom), `Plasma` (bespoke `wgsl_compute`). Each needs a design decision or a new atom — no more mechanical wins.
 - **Visual-check queue (current):** MetallicGlass, QuadMirror, Kaleidoscope, Edge Stretch, Chromatic Aberration, Infrared, **Bloom**, **Dither**, **HighlightBoost** (HdrBoost). (Kaleidoscope/EdgeStretch/QuadMirror now render — the remap fix un-broke them.) Legacy bundles for all of these stay registered until Peter's pass.
 
-**2026-05-29 (session 3, continued) — RESUME HERE:**
-
 - **HighlightBoost (HdrBoost) DECOMPOSED + runtime-verified** — `source → node.threshold (soft-knee bright pass) → node.gain (× the EV boost factor) → node.mix(Add, amount)`, boosted highlights pushed into HDR (no clamp). Added an **`Exp2` unary op to `node.math`** (index 13) so the EV `gain` knob stays faithful: `ev_exp = 2^gain`, `ev_minus1 = −1`, fed into `node.gain`'s scalar port. Same family, not bit-exact (shared threshold curve + colour scaled directly vs legacy excess/lum ramp). Legacy `node.highlight_boost` left registered. (This corrected a second wrong "leave it curated" call — it's threshold+gain+add, per Peter.)
 - **PETER'S DIRECTIVE (2026-05-29):** migrate **everything** first, THEN he does one visual check and we fix in stages as he reviews. So: **do NOT recommend a mid-way checkpoint** — keep decomposing the remaining effects until the migration is complete. The visual checkpoint + bundle deletions happen at the end.
 - **✅ MIGRATION COMPLETE (2026-05-29, session 3):** all 6 remaining effects decomposed (ColorGrade, Strobe, Glitch, Watercolor, Voronoi Prism, Plasma) + the prior Phase-2 UV-warps/Chromatic/Bloom/Infrared/Dither/HighlightBoost. Every fused bundle now has a graph/wgsl_compute decomposition; all legacy bundles stay registered pending Peter's visual pass.
@@ -244,8 +238,6 @@ Cheapest-first: **Strobe** (`beat_gate` + `gain`), **Highlight Boost** (`thresho
 - **All legacy bundles stay registered** until Peter's end-of-migration visual pass; bundle deletion is the last, batched, irreversible step. Pre-existing non-mine test failures (palette Driver-list stale assertion, DepthOfField prewarm gap, WireframeDepthGraph blit) — flagged, not fixed.
 - **Visual-check queue (full, after session 3):** MetallicGlass, QuadMirror, Kaleidoscope, Edge Stretch, Chromatic Aberration, Infrared, Bloom, Dither, HighlightBoost, ColorGrade, Strobe, Glitch, Watercolor, **Voronoi Prism, Plasma**. Legacy bundles for all stay registered until the pass.
 - **New atoms shipped this session (11) + 2 extensions:** `node.saturation`, `node.contrast`, `node.colorize` (ColorGrade); `node.flash` (Strobe); `node.glitch_displace` (Glitch, 2-output); `node.film_grain`, `node.slope_displace` (Watercolor); `node.voronoi_cell_id`, `node.hash_field_by_seed`, `node.beat_ramp` (Voronoi Prism); plus `Exp2` math op + an `amount` scalar input port on `node.mix`. Plasma uses `node.wgsl_compute` (no new compiled atom). All registered as palette Atoms/Drivers with full purpose/composition_notes.
-
-**2026-05-30 — DECOMPOSITION-COMPLETION + DELETION PASS (the deferred irreversible step, now done). Peter authorized deleting the legacy bundles now and tuning the decomposed effects live as he uses them, collapsing the per-effect visual-checkpoint gate.**
 
 - **Last three effect presets rewired off their embedded monoliths**, so no preset references a fused effect-monolith node anymore:
   - **Mirror** — new atom **`node.mirror_fold_uv`** (the mirror/fold half of the deleted `node.transform`, as a coordinate generator; the affine half stays `node.affine_transform`) → `node.remap` → `node.mix`. Verbatim port of the legacy fold math.

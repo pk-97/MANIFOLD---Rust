@@ -38,7 +38,7 @@ add-light). Landing: `docs/landings/2026-07-10-scene-build-p5.md`. **Wave comple
 P1–P2 must land **before this doc's P3 only** (the card phase reads specs straight off
 the manifest; building it against the pre-boundaries dual-source card path would wire it
 to code P2 deletes). P1/P2/P4/P5 here have no dependency on the boundaries wave.
-**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 and section 8 before starting
+**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before starting
 any phase.
 
 Peter's directives (2026-07-06, verbatim — these opened the design): `render_scene` is

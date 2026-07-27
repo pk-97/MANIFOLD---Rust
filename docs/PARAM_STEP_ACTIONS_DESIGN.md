@@ -2,7 +2,7 @@
 
 **Status:** P1–P3 SHIPPED 2026-07-08 (`43a7f508`/`d9b46422`/`fd3f767e`); P4 (Plasma re-author) DEFERRED — Peter's call this session, not started, no code written. The full feature (Continuous/Step/Random on any param, audio- and clip-fired, drawer UI) is live and usable on every preset without P4; P4 is cleanup on one preset's leftover graph wiring. See `docs/landings/2026-07-08-param-step-actions.md` for gate output and the click-script.
 **Prerequisites:** LIVE_AUDIO_TRIGGERS section 9 unification (SHIPPED 2026-07-07 @ `14e0a90a`) — this design extends the unified `ParameterAudioMod`, which must exist as landed.
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
 The governing insight: the section 8/section 9 trigger work built a general event system (edge
 detection, fire modes, pulse plumbing, drawer UI) whose only response so far is
@@ -27,7 +27,7 @@ Two of Peter's calls decide the shape (both 2026-07-07, this session):
   a sibling response to the same events, not a replacement for event-consuming
   graphs (D10; forbidden move F6).
 
-Companions: `LIVE_AUDIO_TRIGGERS_DESIGN.md` section 8 (Param triggers — audio fires the Trigger controls (designed 2026-07-07, NOT BUILT))–section 9 (the event system this rides
+Companions: `LIVE_AUDIO_TRIGGERS_DESIGN.md` section 8 (Param triggers — audio fires the Trigger controls (designed 2026-07-07, NOT BUILT))–section 9 (Unification — the trigger IS an audio mod (Peter, 2026-07-07: "reuse the existing detectors so we don't have this stupid and dangerous split")) (the event system this rides
 on — read section 9 before any phase); `AUDIO_MODULATION_DESIGN.md` section 10 (UI — the drawer) (drawer
 mechanics); `AUTOMATION_LANES_DESIGN.md` section 4 (Override latch (the precedence rule)) (the base-writer contract steps
 shadow).
@@ -236,7 +236,7 @@ channel, no new thread, no shared state.
 
 ## 4. Phasing
 
-### P1 — Core action model + audio-fired steps (one session) — SHIPPED 2026-07-08 @ `43a7f508` (hotfix `2682f9f4`)
+### P1 — Core action model + audio-fired steps (one session) — SHIPPED 2026-07-08 (hotfix `2682f9f4`)
 - **Entry:** `14e0a90a` or later on main; re-verify the section 1 anchors for
   `audio_mod.rs:344-381` and `modulation.rs:390-462`.
 - **Read-back:** this doc section 1–section 3; LIVE_AUDIO_TRIGGERS section 9.1 (U1–U6); restate D1,
@@ -265,7 +265,7 @@ channel, no new thread, no shared state.
 - **Demo:** none — L1 (no UI surface yet; the vertical slice lands in P3).
 - **Forbidden moves:** F1–F4 (section 6).
 
-### P2 — Engine clip edge + mode gating (one session) — SHIPPED 2026-07-08 @ `d9b46422`. Content-thread `MANIFOLD_RENDER_TRACE` gate reasoned not measured, same wall as VD-014 — see VD-016.
+### P2 — Engine clip edge + mode gating (one session) — SHIPPED 2026-07-08. Content-thread `MANIFOLD_RENDER_TRACE` gate reasoned not measured, same wall as VD-014 — see VD-016.
 - **Entry:** P1 merged; re-verify `engine.rs` tick structure and
   `generator_renderer.rs:350-360` (the semantics being mirrored).
 - **Read-back:** D3, D5 (including the divergence consequence — do NOT sync to
@@ -286,7 +286,7 @@ channel, no new thread, no shared state.
 - **Demo:** none — L1 (surface still P3).
 - **Forbidden moves:** F5, F1.
 
-### P3 — Drawer UI + vertical slice (one session) — SHIPPED 2026-07-08 @ `fd3f767e`. Performer gesture (Kick → BasicShapes variant, Step/Wrap, 4-bar loop) is Peter's L4 feel-pass, owed — see VD-017.
+### P3 — Drawer UI + vertical slice (one session) — SHIPPED 2026-07-08. Performer gesture (Kick → BasicShapes variant, Step/Wrap, 4-bar loop) is Peter's L4 feel-pass, owed — see VD-017.
 - **Entry:** P1+P2 merged. Re-verify `build_toggle_trigger_row` /
   `build_audio_mod_drawer` shapes (section 9.2 U-P2 moved them recently).
 - **Read-back:** D8; AUDIO_MODULATION_DESIGN section 10.2; the section 9.2 U-P2 account of

@@ -1,6 +1,6 @@
 # Effect Runtime Unification
 
-**Status:** Closed. Phases 1–4 shipped through the May 2026 migration sweep. The legacy `EffectChain` runtime was deleted; the graph runtime is the sole dispatcher. The bindings unification (separately tracked in [BINDINGS_UNIFICATION_PLAN.md](BINDINGS_UNIFICATION_PLAN.md)) and the JSON-authoritative preset migration both ride on top of the unified runtime documented here. The section 0 "true goal" framing remains the canonical north star — the primitive library *is* the product.
+**Status:** Closed. Phases 1–4 shipped through the May 2026 migration sweep. The legacy `EffectChain` runtime was deleted; the graph runtime is the sole dispatcher. The bindings unification (separately tracked in [BINDINGS_UNIFICATION_PLAN.md](BINDINGS_UNIFICATION_PLAN.md)) and the JSON-authoritative preset migration both ride on top of the unified runtime documented here. The section 0 (Motivation) "true goal" framing remains the canonical north star — the primitive library *is* the product.
 
 > **Supersession note (2026-07-22, UI_FUNNEL P-Z):** references below to `dispatch_inspector` / `ActiveInspectorDrag` / `PanelAction` trio variants describe the PRE-decomposition architecture. Current state: 12 flat domain enums + exhaustive router (P-D), one Scrub gesture wire with `ScrubState.active` (P-I, `ActiveInspectorDrag` extinct), per-domain `dispatch/` handlers (P-B). Anchors here are historical.
 

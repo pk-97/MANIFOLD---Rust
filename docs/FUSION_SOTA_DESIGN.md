@@ -33,7 +33,7 @@ now shipped; the design is closed.
 BUG-115 (mux-multiblend-dynamic-arity-blocks-codegen-conv…) spike, content-key normalization, tolerance/comment hygiene) is SEPARATE work with existing
 specs — it does not depend on this doc and this doc does not depend on it, except where a phase
 below names it.
-**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 before starting any phase.
+**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
 Peter, 2026-07-14, on the whole backlog of compiler gaps: *"I would like ALL of this work to be
 implemented and fixed"*, *"I never made a call about post release. No need to defer this fusion
@@ -50,7 +50,7 @@ design removes the silent-slowness classes (hung worker, unfusable overlay HUDs,
 that never got a second look) and hardens the one silent-WRONG-output class that exists (marker
 drift) so it cannot recur.
 
-Companion docs: `FREEZE_COMPILER_MAP.md` (authoritative current-state map — section 4 (The cut rules — when fusion says no) cut rules, section 5
+Companion docs: `FREEZE_COMPILER_MAP.md` (authoritative current-state map — section 4 (The cut rules — when fusion says no) cut rules, section 5 (The marker ABI)
 marker ABI, section 11 honest edges are this doc's inputs); `ADDING_PRIMITIVES.md` (the conversion recipe
 P4 reuses); `docs/BUG_BACKLOG.md` BUG-114 (the `draw_*` gap this doc's P4 closes).
 

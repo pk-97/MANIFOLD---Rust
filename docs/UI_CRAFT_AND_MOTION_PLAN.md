@@ -2,7 +2,7 @@
 
 **Status:** APPROVED design, not built · 2026-07-03 · Fable 5
 **Prerequisites:** none (independent of Wave 1 designs; touches manifold-ui + bundled preset JSONs only)
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
 The governing insight: **the design language is right and settled; what separates MANIFOLD
 from Ableton-grade is finish, not style.** This doc converts a Fable art-director audit

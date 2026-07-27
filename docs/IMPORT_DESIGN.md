@@ -7,7 +7,7 @@
 imports colourless and foliage renders as opaque cards; see section 8 addendum). P3 pairs with
 MEDIA_BACKEND streaming discipline. P4 needs only MATERIAL. P5 needs SESSION_MODE +
 MEDIA_BACKEND P2 (DXV). P6 needs VOCAB apply; its agent half needs MCP_INTERFACE.**
-**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 and section 8 before starting
+**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before starting
 any phase.**
 **Ordering note (2026-07-15): `docs/IMPORT_FIDELITY_DESIGN.md` (full PBR map set,
 split-sum IBL, softbox default look) outranks this doc's P1-remaining in build order —
@@ -37,7 +37,7 @@ precedent: we already parse another app's format — .als — for interop).
 | PBR texture inputs | `MATERIAL_SYSTEM_DESIGN.md` section 5 (Renderer integration) | `base_color_map/normal_map/roughness_map/metallic_map/envmap` — exactly the community-texture-set shape |
 | DXV/HAP native decode | `MEDIA_BACKEND_DESIGN.md` section 4 (TextureCodec backend — HAP and DXV) | A Resolume user's library plays natively |
 | Session grid | `SESSION_MODE_DESIGN.md` | Layer × scene ≅ Resolume layer × column |
-| Cross-tool alias dictionary | `archive/NODE_VOCABULARY_AUDIT.md` section 8b | TD/Resolume/AE names per atom — seeds the op-mapping tables |
+| Cross-tool alias dictionary | `archive/NODE_VOCABULARY_AUDIT.md` section 8b (Two cheap wins (added after review with Peter)) | TD/Resolume/AE names per atom — seeds the op-mapping tables |
 | .als interop parsing | `ABLETON_SHOW_SYNC_DESIGN.md` | The in-house precedent for parsing user-owned third-party files |
 | Beat atoms | `beat_ramp` etc. | The retimed-playhead drivers |
 

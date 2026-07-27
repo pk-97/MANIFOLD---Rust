@@ -4,7 +4,7 @@
 build order; re-derive inventories at execution) · 2026-07-06 · Fable
 **Prerequisites:** AUDIO_OBJECT_TRACKING_DESIGN.md P0–P2 (the core this reuses), plus
 **P1 here is blocked on Peter** (labeled clips — see Phasing).
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
 The audio-clip → timeline-clip auto-generation currently rates, in Peter's words,
 *"a 5/10 at the moment"* (2026-07-06). This doc governs how the object tracker built

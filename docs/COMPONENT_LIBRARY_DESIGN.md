@@ -4,7 +4,7 @@
 **Decided:** 2026-07-02. Decided questions in section 12 — do not reopen them.
 **Companions:** `NODE_GROUPS_DESIGN.md` (the substrate), `GROUPING_GRAPHS.md`, `MCP_INTERFACE_DESIGN.md` (the main consumer), `NODE_CATALOG.md`.
 **Prerequisites:** NODE_VOCABULARY_AUDIT apply pass (components are named in the post-rename vocabulary — building them on old ids doubles the migration). Sequencing: `docs/DESIGN_BUILD_ORDER.md` wave 3.
-**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 and section 8 before starting any phase. Conformance-hardened: run the section 8.3 pre-flight before each phase — node-groups backend and catalog will have moved by execution time.
+**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before starting any phase. Conformance-hardened: run the section 8.3 pre-flight before each phase — node-groups backend and catalog will have moved by execution time.
 
 ---
 

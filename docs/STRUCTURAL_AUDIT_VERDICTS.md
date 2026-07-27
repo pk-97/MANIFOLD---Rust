@@ -125,7 +125,7 @@ Sonnet waves (no design needed, briefs can cite this doc + the backlog fix shape
 5. BUG-069: excluded from architecture verdicts (see section 2 table).
 6. Not assumed copy-paste; comparison step is first in the A5 Sonnet brief (section 3).
 
-## 5 Re-audit amendment (Opus, 2026-07-09)
+## 5 Re-audit amendment
 
 Row-by-row re-audit of the dossier section 2 table against all 82 backlog entries — the pass section 0 deferred.
 **The table holds:** fix-status correct 82/82 (the 48-open / 20-struct / 14-patch totals reconcile
@@ -170,7 +170,7 @@ BUG-084 (recording-drop-counter-never-surfaced) recording drops); (c) the A1 bug
 A2/cache — 015 OPEN, 060 REOPENED; 026 animation poll; 036 load ordering) — zero corpus bugs
 in the class a declarative table would govern; (d) drag suppression already exists generically
 (`ActiveInspectorDrag`). Full evidence chain and the reviving trigger:
-UI_PROJECTION_LAYER_DESIGN.md section 1.1 (The enforcement inventory that flips the verdict (each claim observed, not derived))/section 2. The "every field hand-threaded" churn is real but lives
+UI_PROJECTION_LAYER_DESIGN.md section 1.1 (The enforcement inventory that flips the verdict (each claim observed, not derived))/section 2. (The verdict, priced) The "every field hand-threaded" churn is real but lives
 in view-model/display code no table can generate — it stays covered by the ui_translate
 boundary and UI_HARNESS_UNIFICATION's verification half. Headline unchanged: the codebase's
 disease is unenforced right designs — this amendment is that thesis applying to the audit's

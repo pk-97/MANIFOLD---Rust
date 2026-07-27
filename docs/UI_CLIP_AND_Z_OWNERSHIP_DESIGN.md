@@ -2,7 +2,7 @@
 
 **Status:** P1 SHIPPED 2026-07-08 (region mechanism + main-window migration + D4 enforcement; BUG-060 stopgap removed — landing report: `docs/landings/2026-07-08-ui-clip-z-p1.md`). P2 (editor window + perform) and P3 (enforcement closure + sweep) OPEN. One carried gap: D2 tier-ordering is enforced on the `traverse()` render path (headless snapshots + editor window) but NOT on the live main-window cache path (`panel_cache_info`, array-ordered), where D1 containment alone carries BUG-060 — see VERIFICATION_DEBT VD-018, close in P2. · design 2026-07-07 · Fable
 **Prerequisites:** none (UI_ARCHITECTURE_OVERHAUL phases 0–8 shipped 2026-06-23; this builds on that substrate)
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
 The governing insight: the architecture overhaul gave panels a clean way to
 **compose**, but nothing makes their **bounds** binding. Pixel clipping is

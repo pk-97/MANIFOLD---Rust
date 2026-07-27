@@ -3,7 +3,7 @@
 **Status:** Tranches **M1–M6 ALL SHIPPED** (M1–M5 verified in-repo 2026-07-04: `material.rs` + all four atoms + renderer integration + MetallicGlass/NestedCubes migrated — see section 11 for the as-built record and where it deviates from section 5; **M6 verified in-repo 2026-07-05 in the baseline review**: `AlphaMode`/`alpha_cutoff` + `base_color_map`/`metallic_map` present across all four material atoms — the status previously still read "APPROVED, not built"). Design accepted 2026-05-27; un-held 2026-07-03 by `docs/REALTIME_3D_DESIGN.md`, which consumes this contract unchanged.
 
 **Companion docs:** [`NODE_CATALOG.md`](NODE_CATALOG.md), [`DECOMPOSING_GENERATORS.md`](DECOMPOSING_GENERATORS.md), [`ADDING_PRIMITIVES.md`](ADDING_PRIMITIVES.md).
-**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 and section 8 before starting any phase. Conformance-hardened: written 2026-05-27, the oldest active design — `render_3d_mesh`/`render_instanced_3d_mesh` are renamed to `node.render_mesh`/`node.render_copies` by the vocab-audit apply; run the section 8.3 pre-flight and read the migration table before touching any node id in this doc.
+**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before starting any phase. Conformance-hardened: written 2026-05-27, the oldest active design — `render_3d_mesh`/`render_instanced_3d_mesh` are renamed to `node.render_mesh`/`node.render_copies` by the vocab-audit apply; run the section 8.3 pre-flight and read the migration table before touching any node id in this doc.
 
 ---
 

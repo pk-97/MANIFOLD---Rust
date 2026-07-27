@@ -112,9 +112,9 @@ Every primitive ships a tiny working example graph, openable from the node brows
 |---|---|---|
 | S1 mapping | **New design doc — queue #11, next Fable session** | Fable design → Sonnet phases |
 | S2 perform surface builder | **DONE — docs/PERFORM_SURFACE_DESIGN.md** (widget substrate P1; builder itself = deferred layer) | Small-medium |
-| S3 cue/preview bus | Spec'd enough here; PERFORM_SURFACE_DESIGN section 7.3 widget | Small (Sonnet) |
-| S4 clip transitions | Session mode backlog, spec'd enough here | Small (Sonnet) |
-| S5 follow actions | Session mode v2 backlog | Small (Sonnet) |
-| S6 Link + Link Audio | manifold-audio + clock; **gated on licence (Peter requesting)** | Medium (Sonnet) |
-| S7 ISF import | Corpus experiment first, then importer; MCP fallback regardless | Medium (Sonnet) |
+| S3 cue/preview bus | Spec'd enough here; PERFORM_SURFACE_DESIGN section 7.3 widget | Small |
+| S4 clip transitions | Session mode backlog, spec'd enough here | Small |
+| S5 follow actions | Session mode v2 backlog | Small |
+| S6 Link + Link Audio | manifold-audio + clock; **gated on licence (Peter requesting)** | Medium |
+| S7 ISF import | Corpus experiment first, then importer; MCP fallback regardless | Medium |
 | S8 node examples | Node-descriptor UX + MCP few-shots | Content (any model) |

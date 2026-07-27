@@ -2,7 +2,7 @@
 
 **Status:** SHIPPED · P1 (`22530ac1`) + P2 (`de193e01`) landed 2026-07-12, main · designed 2026-07-12 · Fable 5
 **Prerequisites:** none (REALTIME_3D P1–P3 shipped; camera atoms shipped)
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 **Companions:** [GBUFFER_DESIGN.md](GBUFFER_DESIGN.md) (stored depth this doc's lens consumers read) · [CINEMATIC_POST_DESIGN.md](CINEMATIC_POST_DESIGN.md) (DoF/motion-blur atoms that consume `LensParams`) · [RENDERING_INFRA_V2_DESIGN.md](RENDERING_INFRA_V2_DESIGN.md) (direction doc this graduates from, section 6 (Deferred)) · [REALTIME_3D_DESIGN.md](REALTIME_3D_DESIGN.md) (the scene pass; its Camera port is the convention's anchor)
 
 The governing insight: MANIFOLD already has a canonical camera — the `Camera`

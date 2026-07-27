@@ -2,7 +2,7 @@
 
 **Status:** P1 SHIPPED 2026-07-14 (bug-wave lane B) · Sonnet 5 (Peter approved the direction same day: "I want to also ensure these bugs are fixed at the root and fundamental level … remove bug classes where possible and sensible") · `manifest_provisional()` (`crates/manifold-core/src/effects.rs`), the two seam asserts + throttled warns (`crates/manifold-renderer/src/preset_runtime.rs`'s `assert_manifest_gate`, `crates/manifold-app/src/ui_bridge/state_sync.rs`'s `rows_from_manifest`), the D3 meta-test (`crates/manifold-core/tests/bug080_project_deserialize_single_door.rs`), and the two INV-1 tests all landed; gate green (1721/1721, `-p manifold-core -p manifold-renderer -p manifold-io`).
 **Prerequisites:** PARAM_STORAGE_BOUNDARIES_DESIGN.md P1 (SHIPPED — the reconcile stage this design hardens)
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 before starting the phase. Executes inside the 2026-07-14 bug-wave **lane B** session.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting the phase. Executes inside the 2026-07-14 bug-wave **lane B** session.
 
 The governing insight: BUG-080's "partially built manifest is an observable state" does
 not need a new construction pipeline — PARAM_STORAGE_BOUNDARIES D1 already built the

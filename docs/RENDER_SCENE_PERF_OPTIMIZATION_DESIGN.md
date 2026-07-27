@@ -18,7 +18,7 @@ yourself unadvised").
 **Prerequisites:** PERF_BUDGET_GATE_DESIGN.md P1+P2+P2b SHIPPED (`7afcb059`/`49f5a066`) — perf-soak
 is this design's sole measurement oracle. GLTF_ANIMATION_DESIGN.md A1–A3 SHIPPED. Nothing here
 waits on A4 or on SCENE_SETUP_PANEL_DESIGN.md (see D9).
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 **P3 amendment (2026-07-17, post-P3):** the mechanism landed exactly as specified and every
 phase-local correctness gate passes (I2 animated-envmap parity, I4 static bit-identity, per-producer
 gpu-proofs tests on `bake_equirect_envmap`/`hdri_source`/`render_scene`, all on real GPU hardware) —

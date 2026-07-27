@@ -3,7 +3,7 @@
 **Status: APPROVED 2026-07-09 (Peter) — design ready, awaiting build (Sonnet, P1–P4); differentiator, not release-gating; box3d MIT license confirmed 2026-07-09 · design 2026-07-07 · Fable**
 **Prerequisites: none for P1–P3 (renders through the shipped `node.render_copies`).
 P4 (content colliders) wants the depth-estimate primitive, already shipped.**
-**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 and section 8 before starting
+**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before starting
 any phase.**
 
 Peter's directives (2026-07-07): box3d over alternatives — "box3d is very appealing

@@ -4,7 +4,7 @@
 P1 @ `648f07e3` · P2 landing report: `docs/landings/2026-07-07-kick-sweep-p2.md`. The live `reduce_send` reproduces the prototype's reference fire counts on all 10 mix/drums fixtures (post-P5: bit-exact outside the stream fade-in region); masked-novelty deleted. P5 reference: `--family ridge-one --drop 10 --win 6 --absfloor 0.005 --ridge-only`.
 Scope lane @ `b6aed008` (rode the ScopeColumn typed-overlay refactor) · landing report: `docs/landings/2026-07-07-kick-scope-lane.md`.
 **Prerequisites:** none (the prototype and the 73-label corpus both exist).
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
 **The governing insight:** on a bass-heavy full mix the Low band's onset detector goes
 near-deaf on kicks — the bassline owns the band's flux baseline and the kick can't
@@ -174,14 +174,14 @@ pre-allocated scratch above (hot-path discipline; the content thread runs this v
 
 ## 5. Phasing
 
-### P1 — Label-graded prototype. **SHIPPED 2026-07-07 @ `648f07e3`.**
+### P1 — Label-graded prototype. **SHIPPED 2026-07-07.**
 Deliverables met: `Mask::RidgeTrack` + `--family ridge`/`ridge-final` in `hpss_proto.rs`;
 harness re-graded against the 73 labels in seconds (mix vs `mix_time_s`, drums vs
 `drums_time_s`) with the bass-false-fire metric. Gate met: replica validation still exact;
 all six fire-gated guards green (`k8`); recall 41/61 proven (section 2). Demo artifact: the section 2 table
 (`cargo run --release -p manifold-audio --example hpss_proto -- --family ridge-final`). L1.
 
-### P2 — Runtime integration. **SHIPPED 2026-07-07 (Opus).**
+### P2 — Runtime integration. **SHIPPED 2026-07-07.**
 Landed: `KickRidges`/`KickTrack` on `SendState`, driving the Low band in `reduce_send`
 via one OR'd criterion under the shared refractory; masked-novelty and all its state
 deleted (22 sites, zero remain). Gate met: `mod_harness` reproduces `--family
@@ -228,7 +228,7 @@ catch the kicks; does it strobe on the bass; is the ~50–65 ms latency (D7) acc
 Performer gesture: the first thing a VJ does — a hard on-the-kick strobe. `win` is the knob if
 latency reads late. Not headless-verifiable; never let a worker decide it.
 
-### P4 — Split Kick out of Transients (no-fallback detector). **SHIPPED 2026-07-07 (Opus).**
+### P4 — Split Kick out of Transients (no-fallback detector). **SHIPPED 2026-07-07.**
 P2 folded the ridge into `Transients@Low` (flux **OR** ridge). Peter's call: fallbacks are why
 these detectors feel twitchy, so make the kick its own thing. `Transients@Low` reverts to a
 plain SuperFlux onset (identical to every other band); `Kick` is a new `AudioFeatureKind`,

@@ -162,7 +162,7 @@ Live-edit sequence (reorder / insert / delete / bypass / skip flip / editor open
    `needs_rebuild` adds `cg.has_pending_segments() && generation_advanced`. The next
    dispatch rebuilds, hits the cache, splices fused.
 
-**Status: BUILT (2026-06-11), and broader than first scoped — the harvest runs on EVERY
+**Status: BUILT, and broader than first scoped — the harvest runs on EVERY
 chain rebuild, not just the swap-in.** Reordering, adding, removing, or bypassing a card
 no longer resets the other cards' sims and trails at all (the pre-existing wipe-on-rebuild
 wart is gone, per Peter's direction while dialing in chains). Three pieces, because state

@@ -14,7 +14,7 @@ SCENE_BUILD_AND_GROUP_PARAMS P2 and GAUSSIAN_SPLATS P4 also edit `render_scene.r
 design's *output* gates this one — but the three must be **sequenced, never concurrent**
 (`docs/DESIGN_BUILD_ORDER.md` section 2 (Hard dependency edges) recommends this phase first, smallest). Whichever of the
 three lands later re-derives this doc's `render_scene.rs`/`.wgsl` line anchors before editing.
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 before starting the phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting the phase.
 
 `render_scene`'s object count is already uncapped (the old cap was a naming artifact);
 light count is still hard-capped at 4 because the light data is baked into a fixed-size

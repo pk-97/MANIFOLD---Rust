@@ -6,7 +6,7 @@ note at P5 below) + BUG-045 (gap-ring-down-chase); P6 dead, superseded by KICK_S
 truth-fixed 2026-07-10 (coherence audit F11) — was previously stated "APPROVED design,
 not built," which under-reported a mostly-shipped design and made the status board wrong.
 **Prerequisites:** none (the mod_harness eval loop shipped 2026-07-06 @ `ca9eb490`)
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
 This is **step 7 of [AUDIO_MODULATION_DESIGN.md](AUDIO_MODULATION_DESIGN.md)** — the
 "v2 intelligence" its feature seam was cut for. That doc's section 6 commitments (log-space
@@ -277,7 +277,7 @@ bad_guy recovery bar guard-green; per the phase gate, NOT integrated:
    tears 8→12/25 — but bad_guy 0→8/45, because the floored kick candidates
    are simply small (31/39 under 160 units; instrumented per-kick).
    **SHIPPED 2026-07-06 late (Peter: "might as well use it and set that as
-   the baseline") @ `61c2b0fd`** as the masked-novelty third criterion in
+   the baseline")** as the masked-novelty third criterion in
    `reduce_send` (constants `MASKED_ONSET_MARGIN_DB 3.0` / `MASKED_ONSET_DELTA
    80.0` / `SUSTAIN_MEDIAN_HOPS 16`; delta plateau-swept 40–200, guards hold
    70–200, cliff at 60). Integration reproduced the prototype's 25-fixture

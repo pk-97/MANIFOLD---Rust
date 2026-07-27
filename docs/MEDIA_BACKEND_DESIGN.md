@@ -3,7 +3,7 @@
 **Status: APPROVED design · section 3a hardening addendum resolved 2026-07-06 (decoder trait re-committed against the shipped async protocol; the original section 3 decoder trait is superseded) — P1 is RE-ISSUABLE. · 2026-07-02 · Fable queue (media backend)**
 **Prerequisites: none for Metal-era P1–P3. The Vulkan-era handoff (section 6) pairs with
 `docs/VULKAN_BACKEND_DESIGN.md` section 8 (Tier 2 — platform coupling beyond the GPU (inventory, one page)) — this is the biggest single port item after the GPU.**
-**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 and section 8 before starting any phase.**
+**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before starting any phase.**
 
 Peter's directive: "move all of that stuff behind a proper GPU API like everything
 else." Plus (2026-07-02): **"HAP and DXV are important"** and stills "seem to have a

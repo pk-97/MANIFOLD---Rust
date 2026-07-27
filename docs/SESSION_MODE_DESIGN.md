@@ -5,7 +5,7 @@ Ableton-style scene/clip launching as a second performance surface. Users who ne
 Status: IN PROGRESS — P1 (`4f072100`) + P2 (`f852d2bc`) + P3 (`9a069aa4`) built + merged into `feat/timeline-ui-redesign` (2026-07-03), since landed on main; P4 (UI) + P5 (recording) not implemented. **P4 is a UI phase — hand it to Peter for feel review, not auto-gated.** Written 2026-07-02 against `feat/timeline-ui-redesign`.
 **Baseline review 2026-07-05:** zero unlabeled forks; P4/P5 briefs are one-line rows — acceptable while P4 stays Peter's hands-on phase, but **expand to a full section 5 brief before delegating either to an agent**. P4 plumbing note: `ContentState` carries NO session play-state yet (verified — P2 added the command variants only), so the snapshot fields in section 9 are greenfield P4 work. P4's PNG gate = L2; use the UI-automation flow library for launch-interaction coverage (L3) once that wave lands.
 Prerequisites: none. Unblocks PERFORM_SURFACE_DESIGN P2 (`docs/DESIGN_BUILD_ORDER.md`).
-Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 and section 8 before starting any phase.
+Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before starting any phase.
 
 Companion: `docs/PERFORM_SURFACE_DESIGN.md` — **session perform** (this grid at stage
 scale, launch gestures as `ContentCommand`s) ships as that design's P2 together with

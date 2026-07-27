@@ -45,7 +45,7 @@ import sys
 from pathlib import Path
 
 ID_RE = re.compile(r"\bBUG-[a-z0-9]{2,5}\b")
-SECREF_RE = re.compile(r"\bsection\s+[\w.]+")
+SECREF_RE = re.compile(r"\bsection\s+\d[\w.]*")  # digit-led: "section 5b"; word refs self-name
 SYMBOL_RE = re.compile(r"§")
 FENCE_RE = re.compile(r"^\s*(```|~~~)")
 BD_CMD_RE = re.compile(r"\bbd\s+(create|show|update|close|list|ready|dep)\b")

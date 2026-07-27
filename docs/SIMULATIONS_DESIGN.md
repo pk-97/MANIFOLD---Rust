@@ -5,7 +5,7 @@
 (`node.render_scene`) for scene composition — cloth can smoke-test through
 `node.render_mesh` before it. Vocab-audit apply first (post-rename ids used
 throughout).**
-**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 and section 8 before starting
+**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before starting
 any phase.**
 
 Peter's directives (2026-07-03): realtime simulations "like Nuke and Houdini";

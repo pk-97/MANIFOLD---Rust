@@ -52,7 +52,7 @@ This replaces today's side-by-side **Master | Layer** two-column inspector (`Ins
 
 Each phase ships working on its own.
 
-### Phase A — Layout reshape  ✅ DONE (2026-06-23)
+### Phase A — Layout reshape  ✅ DONE
 
 Pure geometry, no behavior change. All in the `ScreenLayout` single source of truth ([crates/manifold-ui/src/layout.rs](../crates/manifold-ui/src/layout.rs)) plus the resize-handle in [crates/manifold-app/src/ui_root.rs](../crates/manifold-app/src/ui_root.rs):
 
@@ -67,7 +67,7 @@ Pure geometry, no behavior change. All in the `ScreenLayout` single source of tr
 
 The two-column `InspectorCompositePanel` relocates to the top-right as-is (it reads `layout.inspector()`), just shorter — its scroll containers absorb the reduced height. Phase B then collapses the two columns into the tabbed single column.
 
-### Phase B — Tabbed inspector + Group + mirror  ✅ DONE (2026-06-23)
+### Phase B — Tabbed inspector + Group + mirror  ✅ DONE
 
 1. **One `InspectorScope` as the single source of truth**, derived from selection: clip → `Clip`; else layer → `Layer`; else `Master`. The only new state is a small `master_scope_active: bool` on the existing `UISelectionState` (set when the Master tab is clicked, cleared on any clip/layer selection). The active tab is otherwise pure-derived — this is what makes "always mirror" true with one authority.
 2. **Tab click = navigate the hierarchy** (changes selection, never forks from it): Layer tab → select the clip's layer; Group tab → select the parent `Group` layer; Clip tab → select the clip; Master → set the flag, deselect.

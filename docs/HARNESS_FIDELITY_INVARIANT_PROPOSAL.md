@@ -1,6 +1,6 @@
 # Harness Fidelity Invariant
 
-**Status: APPROVED — 2026-07-10.** Opus (1M) authored, from the UI_HARNESS_UNIFICATION P0–P3 wave; raised by Peter after two same-class defects surfaced in one session. Fable reviewed and returned **ADOPT the invariant and build section 4 step 2**, with three amendments — now folded in below (section 3's caller test, section 4 step 2's seam scope, section 5's essential-duplication carve-out) — and the section 6 open questions resolved. Folds into `UI_HARNESS_UNIFICATION_DESIGN.md` (harden D3) + `DESIGN_AUTHORING.md` (the lesson in section 4 (The shared seam (committed signatures))). **BUG-097 is closed by construction as part of section 4 step 2 — never as a point fix** (see section 4).
+**Status: APPROVED — 2026-07-10.** Opus (1M) authored, from the UI_HARNESS_UNIFICATION P0–P3 wave; raised by Peter after two same-class defects surfaced in one session. Fable reviewed and returned **ADOPT the invariant and build section 4 step 2**, with three amendments — now folded in below (section 3's caller test, section 4 step 2's seam scope, section 5's essential-duplication carve-out) — and the section 6 open questions resolved. Folds into `UI_HARNESS_UNIFICATION_DESIGN.md` (harden D3) + `DESIGN_AUTHORING.md` (the lesson in section 4 (The shared seam (committed signatures))). **BUG-097 is closed by construction as part of section 4 (The shared seam (committed signatures)) step 2 — never as a point fix** (see section 4 (The shared seam (committed signatures))).
 
 ## 1. The finding
 
@@ -65,7 +65,7 @@ Scope note (per `dont-cascade-redesign`): this is bounded — one seam extractio
 
 Diagnosis first: ask *does this duplication carry information the other copy doesn't?* No → extract (case 1). Yes → automate the equivalence (case 2). Either way, the manual match-audit is the thing being retired.
 
-## 6. Resolved (Fable, 2026-07-10)
+## 6. Resolved
 
 - **Input vs. code boundary — resolved by the caller test (section 3, amendment 1).** "No parallel render-pass assembly" needed the sharper line, and it's now the input-presence-vs-caller-identity test folded into section 3. The thumbnail substitution is clean: a labeled test input, consumed by shared render code.
 - **Does the single seam conflict with the winit-side split? No — verified against current code.** Every live immediate pass (clips ~4063, names ~4353, lanes ~4368, overlays ~4488–4496 in `app_render.rs`) draws into the offscreen *before* the drawable is acquired (~4719). The seam ends at the offscreen, unchanged from P1's boundary; the fast path, `next_drawable`, the offscreen→drawable blit, and `present_drawable` stay in `present_all_windows`. Only the immediate passes move in.

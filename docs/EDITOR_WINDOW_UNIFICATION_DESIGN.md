@@ -2,7 +2,7 @@
 
 **Status:** SHIPPED 2026-07-14 — all phases landed on `origin/main`. P1 (shared `tree_passes.rs::render_tree_overlay_passes`, D1/D2/D4, BUG-151 (graph-editor-node-browser-container-fill-not-dra…) FIXED) @ `c8584b8d`. P2 (D6 redraw-keepalive aggregate + perf-HUD-in-editor demo) + P3 (D7 structural guard `tree_render_call_sites_are_allowlisted` + I2 fold-in + supersession sweep) landed together @ `9ea241dc`. Fable 5 (with Peter in the room) · Sonnet-executable
 **Prerequisites:** the popup professional pass and the BUG-150 (mute-chip-press-motion-teleports-hit-bounds-afte…) fix (both LANDED on main by `e310c592`, verified 2026-07-14). BUG-151 was fixed by P1 of this design (see docs/BUG_BACKLOG.md) — the standalone BUG-151 hunt prompt (prompt 3 of the `popup-professional-pass-prompt` memory) is SUPERSEDED; do not run it.
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
 Peter's mandate, verbatim (2026-07-14): make "these types of bugs and bug classes outright impossible by design and architecture", and — on scope — "This is everything? I don't want to have to do another unification session on the editor page." The bug class in question: BUG-151, where the graph editor's node browser renders its cells but not its popup container, because the editor window's compositor never got an overlay pass. The class is *a cross-cutting UI mechanism that exists in the main window's frame composition but must be re-plumbed by hand in every other window; forgetting one is a silent, partial failure.*
 

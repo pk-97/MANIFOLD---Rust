@@ -6,7 +6,7 @@
 **Status:** APPROVED 2026-07-09 (Peter) — Syphon (BSD, clean) + NDI (royalty-free SDK license, cleared 2026-07-09; conditions in section 0) · design 2026-07-07 · Fable
 **Prerequisites:** none for P1–P2 (SharedTextureBridge, stage/venue model, and the
 source-atom slot all exist). P3–P4 need the NDI SDK decision (section D8, VERIFY-AT-IMPL).
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
 ## 0. License clearance (verified 2026-07-09, Opus — full NDI SDK License Agreement, Nov 2024, read)
 

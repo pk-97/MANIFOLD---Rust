@@ -674,7 +674,7 @@ state still also changes fill/icon.
 
 ## 16. Enforcing the system — the systemic root ⚙️
 
-**Status:** BUILT (2026-06-25, Phase 2). **Highest-leverage item in this whole doc.**
+**Status:** BUILT. **Highest-leverage item in this whole doc.**
 
 Tokens exist (section 4) and still drift (section 14, section 15) because **nothing stops a raw literal.** That's why
 the cleanup sections have to exist — and why they re-drift in weeks without a guard. A design
@@ -738,7 +738,7 @@ elements only; in-panel grouping stays fill-level.
 
 ## 18. Apply the component kit everywhere 🧩
 
-**Status:** chrome bars DONE (2026-06-26); popups + dialogs remain. Added **`state_button`** — the
+**Status:** chrome bars DONE; popups + dialogs remain. Added **`state_button`** — the
 standalone latching/momentary button (on = filled semantic hue + lighten(30)/darken(20) hover/press;
 off = neutral `BUTTON_DIM` chip), the generalisation of `toggle` (the accent special-case). The
 button mechanic had been copy-pasted six times across the chrome (transport `button_style`, the
