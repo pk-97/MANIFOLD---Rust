@@ -52,13 +52,14 @@ VERDICTS_DIR = Path(
 MAIN_CHECKOUT = Path("/Users/peterkiemann/MANIFOLD - Rust")
 DEFAULT_LITELLM_URL = "http://127.0.0.1:4000/health/liveliness"
 
-# Load slot-to-model mapping from the naming guard (single source of truth)
+# Slot labels from the naming guard (single source of truth) — the guard
+# derives them from the session env, so gate_runner sees the same map the
+# spawn-time hook will enforce.
 _GUARD_PATH = REPO / ".claude" / "hooks" / "agent-teammate-naming-guard.py"
 _guard_spec = importlib.util.spec_from_file_location("_naming_guard", str(_GUARD_PATH))
 _guard_mod = importlib.util.module_from_spec(_guard_spec)
 _guard_spec.loader.exec_module(_guard_mod)
-SLOT_FOR_MODEL = _guard_mod.SLOT_FOR_MODEL
-VALID_SLOTS = sorted(set(SLOT_FOR_MODEL.values()))
+VALID_SLOTS = sorted({label for _b, label in _guard_mod.slot_map().values()})
 
 SECTION_LABEL = re.compile(r"^\s*-?\s*\*\*[A-Z][A-Za-z/-]+\**\s*:")
 GATE_HEADING = re.compile(r"^\s*-?\s*\*{0,2}Gate\*{0,2}\s*:")
@@ -693,7 +694,7 @@ def _check_gates_parse(brief_path):
 
 
 def _check_slots(text):
-    """Check c: every named lane slot prefix is a valid SLOT_FOR_MODEL value.
+    """Check c: every named lane slot prefix is a valid slot label.
 
     Scans for tokens matching slot-prefix pattern, validates each against
     VALID_SLOTS (from agent-teammate-naming-guard.py).
