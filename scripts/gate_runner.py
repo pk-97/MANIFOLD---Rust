@@ -1074,8 +1074,36 @@ def _check_bead(text):
         return (1, "missing bug id")
 
 
+def _check_predecessors(requires):
+    """Check e: phase ordering — every named predecessor task has a passing
+    per-lane (or no-gate) verdict in the trail.
+
+    The deterministic-control-plane pattern (arXiv 2606.26924): starting
+    phase n fails unless phase n−1 recorded its end. Queue authors put
+    `--requires BUG-aaa,BUG-bbb` on step n's dispatch line; without it,
+    sequential queues are ordered by lead attention only (a soft row).
+    Returns (exit_code, detail)."""
+    if not requires:
+        print("  [PASS] predecessors — none declared")
+        return (0, "none declared")
+    fails = []
+    for task_id in [t.strip() for t in requires.split(",") if t.strip()]:
+        verdicts = [v for v in read_verdicts(task_id)
+                    if v.get("phase") == "per-lane"]
+        if not verdicts:
+            fails.append(f"{task_id}: no per-lane verdict in trail")
+        elif not verdicts[-1].get("pass"):
+            fails.append(f"{task_id}: latest verdict is FAIL")
+    if fails:
+        for f in fails:
+            print(f"  [FAIL] predecessor: {f}")
+        return (1, "; ".join(fails))
+    print("  [PASS] predecessors — all prior steps have passing verdicts")
+    return (0, "all predecessors green")
+
+
 def cmd_pre_dispatch(args):
-    """Run the four P3 pre-dispatch brief lint checks.
+    """Run the P3 pre-dispatch brief lint checks (+ phase ordering).
 
     Appends one schema-1 verdict to pre-dispatch.jsonl. Exits 0 iff no FAIL.
     """
@@ -1092,6 +1120,7 @@ def cmd_pre_dispatch(args):
         ("gates_parse", *_check_gates_parse(brief_path)),
         ("slots", *_check_slots(text)),
         ("bead", *_check_bead(text)),
+        ("predecessors", *_check_predecessors(getattr(args, "requires", None))),
     ]
 
     verdict_gates = [
@@ -1357,6 +1386,9 @@ def main():
 
     pd = sub.add_parser("pre-dispatch", help="Run pre-dispatch brief lint (P3)")
     pd.add_argument("--brief", required=True, help="Path to brief markdown file")
+    pd.add_argument("--requires", default=None,
+                    help="Comma-separated predecessor task IDs that must have "
+                         "passing verdicts (phase ordering)")
     pd.set_defaults(func=cmd_pre_dispatch)
 
     rv = sub.add_parser("review", help="Record a REVIEW verdict rationale in decisions.md")

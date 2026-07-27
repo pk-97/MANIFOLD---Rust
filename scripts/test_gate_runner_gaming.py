@@ -186,6 +186,21 @@ check("enforcement manifest matches reality", entry["exit"] == 0, entry["tail"])
 check("manifest reports soft surface", "prompt-enforced" in entry["tail"],
       entry["tail"])
 
+# --- phase-ordering: _check_predecessors against the trail ---
+
+with open(Path(_TMP) / "BUG-red.jsonl", "w") as f:
+    f.write(json.dumps({**verdict(False), "task": "BUG-red"}) + "\n")
+
+check("no requires -> pass", gate_runner._check_predecessors(None)[0] == 0)
+check("green predecessor -> pass",
+      gate_runner._check_predecessors("BUG-test")[0] == 0)  # trail ends green
+check("red predecessor -> fail",
+      gate_runner._check_predecessors("BUG-red")[0] == 1)
+check("missing predecessor -> fail",
+      gate_runner._check_predecessors("BUG-ghost")[0] == 1)
+check("mixed list -> fail",
+      gate_runner._check_predecessors("BUG-test, BUG-red")[0] == 1)
+
 # review subcommand refuses token rationales (die() → SystemExit)
 import argparse
 ns = argparse.Namespace(task="BUG-t", verdict="accept", subject="x",
