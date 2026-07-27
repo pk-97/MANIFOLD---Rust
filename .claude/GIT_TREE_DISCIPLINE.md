@@ -1,8 +1,9 @@
 # Git tree discipline — build spec
 
-Status: §1 shared-checkout guard BUILT 2026-07-04 (`6737cfe6`); §1b
-landing-protocol guard IN PROGRESS 2026-07-04 (this session); §2 ff-only
-model RETIRED 2026-07-04, replaced by the merge-trunk landing protocol below.
+Status: §1 shared-checkout guard RETIRED 2026-07-27 (pidfile signal retired
+with the daemon, 2026-07-18); §1b landing-protocol guard IN PROGRESS
+2026-07-04; §2 ff-only model RETIRED 2026-07-04, replaced by the merge-trunk
+landing protocol below.
 
 ## Incident 1 (§1's origin)
 
@@ -37,38 +38,20 @@ Root cause: a single-integrator model applied to a multi-integrator reality.
 Full diagnosis + the P4 cleanup brief: the `git-landing-protocol` memory.
 Decided with Peter 2026-07-04, replacing §2 below.
 
-## §1. Shared-checkout guard (built, `6737cfe6`)
+## §1. Shared-checkout guard (RETIRED 2026-07-27)
 
-File: `.claude/hooks/preToolUseBash.py`. `git checkout`, `switch`, and `merge`
-are normally auto-allowed as workflow writes. **Downgraded 2026-07-04 evening
-(Peter): ask → allow + warning.** Originally these fell through to a permission
-prompt, but that paused every automated orchestration mid-landing (the guard's
-"another session live" condition is always true under fleets). Now, when BOTH
-of these hold, the command is still auto-allowed and a warning naming the other
-live session is attached as additionalContext (proceed only if intended, prefer
-a worktree, re-read branch state from command output):
+Detected a concurrent session's live daemon pidfile
+(`.claude/daemon/verdicts/*.pid`) and warned on a main-checkout branch
+switch. Retired because the daemon — the only pidfile writer — was retired
+2026-07-18; the guard had been inert since (no pidfile source). Removed:
+`_VERDICTS_DIR` / `find_live_foreign_session` / `shared_checkout_guard` in
+`preToolUseBash.py` + the matching tests in `test_preToolUseBash.py`.
 
-- The command targets the MAIN checkout. Bare `git ...` counts (cd-prefixes
-  are already banned, so bare = main tree). `git -C <path> ...` counts only
-  if `<path>` resolves inside the main checkout and not under
-  `.claude/worktrees/`. Commands into worktrees stay auto-allowed unchanged.
-- Another session is live: any `.claude/daemon/verdicts/*.pid` whose pid
-  passes a signal-0 check and whose session id differs from this hook
-  invocation's `session_id` (hook stdin JSON). The observer idle-exits after
-  10 minutes, so a session with no live daemon has been quiet that long and
-  is safe to treat as absent. No lock files, nothing to go stale.
-
-Semantics: never deny, never ask; the point is the agent is TOLD instead of the
-switch happening silently — discipline (worktrees, read-state-off-output) does
-the protecting. Solo (no other live daemon) behavior is unchanged.
-Branch-switch detection includes `checkout <branch>`, `checkout -b/-B`,
-`switch`, `merge`, and bare `checkout` with no `--`-separated paths; plain
-`git checkout -- <paths>` (file restore) is destructive-to-worktree, not a
-branch switch — left alone.
-
-Failure posture: any exception inside the check falls back to the hook's
-existing behavior for that command (fail toward status quo, never toward
-blocking everything).
+The Incident-1 hazard (two sessions sharing one HEAD — a branch switch
+moves the tree under the other) is NOT retired. It stays mitigated by the
+worktree slot ring (`scripts/agent-worktree.py` — branch work lives in
+worktrees, not the shared checkout) and the merge-trunk landing protocol
+(§2) plus `detect_unverified_compound_landing_merge`.
 
 ## §1b. Landing-protocol guard (spec — implementing this session)
 

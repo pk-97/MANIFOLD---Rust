@@ -1,16 +1,6 @@
 #!/usr/bin/env python3
 """
-PreToolUse hook for Bash. Four jobs, evaluated in this order:
-
-  0. WARN (allow + additionalContext, never an ask — Peter 2026-07-04,
-     so automated orchestrations don't pause) on a branch-switch git
-     command (checkout/switch/merge) that targets the MAIN checkout while
-     another session's daemon pidfile (.claude/daemon/verdicts/*.pid) is
-     live — see `shared_checkout_guard` and GIT_TREE_DISCIPLINE.md §1.
-     Solo sessions and worktree-targeted commands (`git -C
-     .claude/worktrees/...`) are unaffected; `checkout -- <paths>` (file
-     restore, not a branch switch) is unaffected. Any failure in this
-     check falls back to no-guard.
+PreToolUse hook for Bash. Three jobs, evaluated in this order:
 
   0b. Landing-protocol guard (§1b): main is a merge-based trunk now, not a
      fast-forward pointer (GIT_TREE_DISCIPLINE.md §2 — the ff-only model
@@ -395,22 +385,8 @@ def is_preapproved_command(raw: str, _depth: int = 0) -> bool:
     return all(segment_is_allowed(seg) for seg in segments)
 
 
-# ---------------------------------------------------------------------------
-# Shared-checkout guard (.claude/GIT_TREE_DISCIPLINE.md §1)
-#
-# Two live sessions, one main-checkout HEAD: a branch switch/merge in the main
-# tree while another session's daemon is alive can silently move the tree out
-# from under it (incident: commit 88257631 — a fast-forward merge resurrected
-# a moved file's old path mid-rename). This guard does not add a new deny; it
-# turns a branch-switch command that targets the main checkout, while another
-# session's daemon pidfile is alive, into an "ask" so Peter is prompted by
-# name instead of the switch happening silently. Any exception anywhere in
-# this section falls back to no-guard (today's behavior) — never to blocking.
-# ---------------------------------------------------------------------------
-
 _PROJECT_DIR = Path(__file__).resolve().parents[2]
 _WORKTREES_DIR = _PROJECT_DIR / ".claude" / "worktrees"
-_VERDICTS_DIR = _PROJECT_DIR / ".claude" / "daemon" / "verdicts"
 
 
 def _main_checkout_path():
@@ -426,31 +402,6 @@ def _main_checkout_path():
 
 
 _ORCH_VERDICTS_DIR = _main_checkout_path() / ".claude" / "orchestration" / "verdicts"
-
-
-def find_live_foreign_session(own_session_id):
-    """First session id under verdicts/*.pid that isn't `own_session_id` and
-    whose pid passes a signal-0 liveness check. Malformed/dead pidfiles are
-    skipped (read as absent), never treated as an error."""
-    try:
-        if not _VERDICTS_DIR.is_dir():
-            return None
-        for pid_file in sorted(_VERDICTS_DIR.glob("*.pid")):
-            sid = pid_file.stem
-            if sid == own_session_id:
-                continue
-            try:
-                pid = int(pid_file.read_text().strip())
-            except (OSError, ValueError):
-                continue  # malformed pidfile -> treat as absent
-            try:
-                os.kill(pid, 0)
-            except OSError:
-                continue  # dead pid -> treat as absent
-            return sid
-    except Exception:
-        return None
-    return None
 
 
 def _git_checkout_dir(toks, cwd):
@@ -528,44 +479,6 @@ def _shlex_segments(cmd):
     if current:
         segments.append(current)
     return segments
-
-
-def shared_checkout_guard(cmd, session_id, cwd):
-    """Return a warning string if `cmd` contains a branch-switch git
-    command targeting the main checkout while another session's daemon is
-    live; otherwise None. Delivered as additionalContext on an allow —
-    NOT an ask — so automated orchestrations never pause on it (Peter,
-    2026-07-04). Never raises — any failure yields None (no guard)."""
-    try:
-        for toks in _shlex_segments(cmd):
-            toks = _strip_leading_keywords(toks)
-            if not toks or toks[0] != "git":
-                continue
-            target_dir, sub, rest = _git_checkout_dir(toks, cwd)
-            if target_dir is None or not _is_branch_switch_sub(sub, rest):
-                continue
-            try:
-                resolved = target_dir.resolve()
-            except OSError:
-                continue
-            in_main = resolved == _PROJECT_DIR or _PROJECT_DIR in resolved.parents
-            in_worktrees = resolved == _WORKTREES_DIR or _WORKTREES_DIR in resolved.parents
-            if not in_main or in_worktrees:
-                continue
-            foreign = find_live_foreign_session(session_id)
-            if foreign:
-                return (
-                    f"Heads-up: branch-switch in the shared main checkout "
-                    f"(`{' '.join(toks)}`) while session {foreign}'s daemon "
-                    f"is live. This moves the tree under that session — "
-                    f"proceed only if intended, prefer a worktree for branch "
-                    f"work, and re-read branch state from command output "
-                    f"afterwards (incident 88257631 / "
-                    f"GIT_TREE_DISCIPLINE.md §1)."
-                )
-        return None
-    except Exception:
-        return None
 
 
 # ---------------------------------------------------------------------------
@@ -661,8 +574,8 @@ LANDING_PROTOCOL_REMINDER = (
 
 def landing_protocol_guard(cmd, cwd):
     """Return (ask_reason, allow_context) for a git command in `cmd`.
-    `ask_reason` is set — unconditionally, no foreign-session check, unlike
-    `shared_checkout_guard` — for a force-rewrite of main (branch -f main,
+    `ask_reason` is set — unconditionally, for a force-rewrite of main
+    (branch -f main,
     or a force-push landing on main): wrong under the merge-trunk model
     regardless of concurrency. `allow_context` is a landing-protocol
     reminder for an otherwise-normal non-force push/merge that lands on
@@ -1265,11 +1178,6 @@ def main() -> int:
 
     cwd = data.get("cwd") or os.getcwd()
 
-    # 0. Shared-checkout guard: a branch switch in the main tree while
-    # another session's daemon is live gets a warning attached as context —
-    # never an ask, so orchestrations don't pause (Peter, 2026-07-04).
-    shared_checkout_context = shared_checkout_guard(cmd, data.get("session_id"), cwd)
-
     # 0b. Landing-protocol guard: a force-rewrite of main asks unconditionally;
     # a normal push/merge landing on main gets an allow + reminder below.
     landing_ask, landing_context = landing_protocol_guard(cmd, cwd)
@@ -1312,8 +1220,8 @@ def main() -> int:
         return 0
 
     # T4/T5/T8: warning-only lints, computed unconditionally so they land as
-    # additionalContext on a pre-approved allow alongside the shared-checkout
-    # / landing-protocol context. Never affect the allow/ask/deny decision.
+    # additionalContext on a pre-approved allow alongside the landing-protocol
+    # context. Never affect the allow/ask/deny decision.
     rg_warning = rg_replace_lint(cmd)
     masked_exit_warning = masked_exit_status_lint(cmd)
     comment_swallow_warning = trailing_comment_swallow_lint(cmd)
@@ -1322,7 +1230,7 @@ def main() -> int:
     # 1. Pre-approved? Allow outright, pipes and loops included.
     if is_preapproved_command(cmd):
         combined = "\n\n".join(c for c in (
-            shared_checkout_context, landing_context, merge_context,
+            landing_context, merge_context,
             rg_warning, masked_exit_warning, comment_swallow_warning,
             workspace_sweep_warning,
         ) if c) or None
