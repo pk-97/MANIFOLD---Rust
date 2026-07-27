@@ -26,7 +26,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 DOCS = REPO / "docs"
-TRIM = 140  # max chars of the status line shown in grouped view
+TRIM = 100  # max chars of the status line shown in grouped view
 
 # Buckets in display order. First matching predicate wins, so order matters:
 # check the "partial / in progress" signals before the plain "shipped" signal,
@@ -119,6 +119,10 @@ def build_board(raw: bool = False) -> str:
             continue
         out.append(f"\n{label}")
         for _, name, date, status in group:
+            if b == 3:
+                # SHIPPED: the fact IS the status; the story lives in the doc.
+                out.append(f"  {name:<{width}}  {date}")
+                continue
             text = status or "(no **Status line in doc)"
             if len(text) > TRIM:
                 # Status lines append their NEWEST facts at the END (2026-07-11:
