@@ -135,5 +135,43 @@ check("streak resets on pass", gate_runner._fail_streak("BUG-test") == 0)
 
 check("no trail = streak 0", gate_runner._fail_streak("BUG-none") == 0)
 
+# --- _resolve_lane_commit against fake worktree slots ---
+
+import subprocess
+
+
+def git(cwd, *args):
+    r = subprocess.run(["git", "-C", str(cwd), *args],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, f"git {args} failed: {r.stderr}"
+    return r.stdout.strip()
+
+
+def make_slot(root, name, task_in_msg):
+    slot = Path(root) / name
+    slot.mkdir(parents=True)
+    git(slot, "init", "-q")
+    git(slot, "commit", "--allow-empty", "-q", "-m", "base")
+    base = git(slot, "rev-parse", "HEAD")
+    git(slot, "update-ref", "refs/remotes/origin/main", base)
+    if task_in_msg:
+        git(slot, "commit", "--allow-empty", "-q", "-m", f"fix thing\n\n{task_in_msg}")
+    return git(slot, "rev-parse", "HEAD")
+
+
+slots_root = Path(tempfile.mkdtemp(prefix="gate_slots_test_"))
+tip_a = make_slot(slots_root, "slot-1", "BUG-aaaa")
+make_slot(slots_root, "slot-2", None)  # slot with nothing unlanded
+gate_runner.WORKTREES_DIR = slots_root
+
+check("slot resolves by task id",
+      gate_runner._resolve_lane_commit("BUG-aaaa") == tip_a)
+check("unknown task resolves to none",
+      gate_runner._resolve_lane_commit("BUG-zzzz") is None)
+
+make_slot(slots_root, "slot-3", "BUG-aaaa")  # second claimant
+check("ambiguous slots resolve to none",
+      gate_runner._resolve_lane_commit("BUG-aaaa") is None)
+
 print(f"\n{PASSED} passed, {FAILED} failed")
 sys.exit(0 if FAILED == 0 else 1)
