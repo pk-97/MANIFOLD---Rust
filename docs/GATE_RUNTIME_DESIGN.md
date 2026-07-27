@@ -94,8 +94,8 @@ Each phase is one session, Flash-executable: the seams are decided above; phases
 ### P3 — pre-dispatch pack (brief linter)
 
 - **Entry state:** P1 landed.
-- **Read-back:** D1, I3; `.claude/hooks/agent-teammate-naming-guard.py` `SLOT_FOR_MODEL` (the valid-slot source); DESIGN_DOC_STANDARD §3 (anchor rules).
-- **Deliverables:** `gate_runner pre-dispatch --brief <path>`: every `file:line` anchor in the brief resolves (file exists, line in range); every gate command in the brief's Gates section shell-parses (`bash -n` equivalent); every named seat/slot is in SLOT_FOR_MODEL; the brief names a bead task matching `BUG-\w+`. Appends a `pre-dispatch` verdict per brief.
+- **Read-back:** D1, I3; `.claude/hooks/agent-teammate-naming-guard.py` `slot_map()` (the valid-slot source, derived from session env); DESIGN_DOC_STANDARD §3 (anchor rules).
+- **Deliverables:** `gate_runner pre-dispatch --brief <path>`: every `file:line` anchor in the brief resolves (file exists, line in range); every gate command in the brief's Gates section shell-parses (`bash -n` equivalent); every named seat/slot is a valid slot label from the naming guard's `slot_map()`; the brief names a bead task matching `BUG-\w+`. Appends a `pre-dispatch` verdict per brief.
 - **Gate:** lint `.claude/orchestration/rt-reflections-r2-queue.md` — a real, dense brief set; must PASS after any genuinely-stale anchor is reported to the lead (stale anchors in R2's queue are findings, not lint bugs). Synthetic broken brief (dead anchor, unparseable gate, bogus slot, no bead) must FAIL naming all four.
 - **Demo:** none — L1.
 - **Forbidden moves:** semantic lint (judging whether a conviction test discriminates — that's REVIEW, a model's job, IR §4.3); hookifying the linter (deferred — needs a brief-file convention first); auto-fixing anchors.

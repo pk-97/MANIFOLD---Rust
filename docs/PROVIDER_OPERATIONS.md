@@ -43,9 +43,10 @@ source; edit it only via `scripts/seat_tool.py`.
 ### Swap which model fills a seat slot
 
 `scripts/seat_tool.py assign <slot> <model>` — edits providers.toml, runs
-repair, verifies the profile, updates the naming-guard map, warns on
-litellm/tier-guard gaps. Never hand-edit profiles. `seat_tool.py show` is
-the read oracle.
+repair, verifies the profile, warns on litellm/tier-guard/SHORT_LABEL gaps.
+The teammate naming guard needs no sync: it derives the slot map from the
+session env (`ANTHROPIC_DEFAULT_<TIER>_MODEL`) at spawn time. Never
+hand-edit profiles. `seat_tool.py show` is the read oracle.
 
 Slots are semantic, not provider-shaped: `sonnet` = default work model,
 `haiku` = fast/classifier-adjacent, `opus` = strong consult. The auto-mode
