@@ -63,7 +63,10 @@ def bead_titles():
                    REPO / "docs/archive/BUG_BACKLOG_CLOSED.md"):
         if not ledger.exists():
             continue
-        for num, name in re.findall(r"(BUG-\d{3}) \(([^)]+)\)", ledger.read_text()):
+        text = ledger.read_text()
+        for num, name in re.findall(r"(BUG-\d{3})[~]{0,2} (?:FIXED )?\(([^)]+)\)", text):
+            titles.setdefault(num, short(name))
+        for num, name in re.findall(r"~~(BUG-\d{3})~~[^|\n]*\|\s*\*\*([^*]+)\*\*", text):
             titles.setdefault(num, short(name))
     return titles
 

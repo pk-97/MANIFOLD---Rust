@@ -4,7 +4,7 @@
 **Decided:** 2026-07-02. Decided questions in section 12 — do not reopen them.
 **Companions:** `NODE_GROUPS_DESIGN.md` (the substrate), `GROUPING_GRAPHS.md`, `MCP_INTERFACE_DESIGN.md` (the main consumer), `NODE_CATALOG.md`.
 **Prerequisites:** NODE_VOCABULARY_AUDIT apply pass (components are named in the post-rename vocabulary — building them on old ids doubles the migration). Sequencing: `docs/DESIGN_BUILD_ORDER.md` wave 3.
-**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before starting any phase. Conformance-hardened: run the section 8.3 pre-flight before each phase — node-groups backend and catalog will have moved by execution time.
+**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before starting any phase. Conformance-hardened: run the section 8 (Execution protocol (how a phase is run)) pre-flight before each phase — node-groups backend and catalog will have moved by execution time.
 
 ---
 
@@ -59,7 +59,7 @@ Components are **kind-agnostic**: a component is a subgraph, not an effect or a 
 
 `GroupParamDef` exists but is phase-1 thin: single inner target, no display metadata, and it is a **load-time override**, not a live control. Components need real macros — the rack-knob experience. All changes are additive.
 
-> **F14 reconciliation (2026-07-10):** `SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` says "Phase D / `GroupParamDef` stays dropped" — that kills a **live group-param runtime**, not this type. Component macros are `GroupParamDef` **declarations** that lower onto ordinary card `BindingDef`s at expose (section 4b), so no live group-param runtime is introduced; the two designs compose. Note the orthogonality: SCENE_BUILD's card **sections** (`ParamSpecDef.section`, which bundle a card's rows) are a separate axis from component **macros** (which fan one knob out to inner targets) — a component's exposed macros land as card bindings that sections can then group, but neither mechanism is the other.
+> **F14 reconciliation (2026-07-10):** `SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` says "Phase D / `GroupParamDef` stays dropped" — that kills a **live group-param runtime**, not this type. Component macros are `GroupParamDef` **declarations** that lower onto ordinary card `BindingDef`s at expose (section 4 (What it buys on stage)), so no live group-param runtime is introduced; the two designs compose. Note the orthogonality: SCENE_BUILD's card **sections** (`ParamSpecDef.section`, which bundle a card's rows) are a separate axis from component **macros** (which fan one knob out to inner targets) — a component's exposed macros land as card bindings that sections can then group, but neither mechanism is the other.
 
 ### 4a. Schema extensions (`manifold-core`)
 

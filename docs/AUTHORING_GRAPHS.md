@@ -191,6 +191,6 @@ before committing defaults.
 | Graph runtime architecture | [NODE_GRAPH_SYSTEM.md](NODE_GRAPH_SYSTEM.md) |
 | Organizing a graph into groups | [GROUPING_GRAPHS.md](GROUPING_GRAPHS.md) / [NODE_GROUPS_DESIGN.md](NODE_GROUPS_DESIGN.md) |
 | Why bindings target nodeId | [NODE_ID_TARGETING.md](NODE_ID_TARGETING.md) |
-| Writing a new primitive | [ADDING_PRIMITIVES.md](ADDING_PRIMITIVES.md) (section 2.5 audit first) |
+| Writing a new primitive | [ADDING_PRIMITIVES.md](ADDING_PRIMITIVES.md) (audit-precondition section first) |
 | Array/channel wire types | [CHANNEL_TYPE_SYSTEM.md](CHANNEL_TYPE_SYSTEM.md) |
 | Authoritative metadata structs | `crates/manifold-core/src/effects.rs` |

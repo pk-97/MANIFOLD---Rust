@@ -6,7 +6,7 @@
 
 **How to read a piece:** *Intent* is the stage sentence. *Audit* says what ships today, what gets extended, what is genuinely new. *Graph* gives the top-level groups (GROUPING_GRAPHS.md discipline: spine visible, 6–12 boxes, control plumbing gathered). *New atoms* carry full port/param signatures and the one-dispatch statement each must satisfy. *Card* is the performer surface — ≤12 outer params, prime modulation targets marked **(mod)**. *Verify* names the gate.
 
-**Tiers.** **A** — buildable now against the shipped registry. **B** — rides vocabulary committed in approved designs (GAUSSIAN_SPLATS_DESIGN.md section 3 (The atoms (all new — section 1 (Audit — what exists (verified 2026-07-05)) audit)), BOX3D_PHYSICS_DESIGN.md section 2 (Decisions)–section 3 (The atoms (all new — section 1 audit))). **C** — rides waves whose atom vocabulary is not yet committed (XPBD sims, multi-display, Realtime-3D P2 shadows); atom names there are PROPOSED and the wave design may rename them.
+**Tiers.** **A** — buildable now against the shipped registry. **B** — rides vocabulary committed in approved designs (GAUSSIAN_SPLATS_DESIGN.md section 3 (The atoms (all new — section 1 (Audit — what exists (verified 2026-07-05)) audit)), BOX3D_PHYSICS_DESIGN.md section 2 (Decisions)–section 3 (The atoms (all new — section 1 (Audit — what exists (verified 2026-07-05)) audit))). **C** — rides waves whose atom vocabulary is not yet committed (XPBD sims, multi-display, Realtime-3D P2 shadows); atom names there are PROPOSED and the wave design may rename them.
 
 ## Pick-list summary
 
