@@ -1,6 +1,6 @@
 # Cinematic wave batch 1 — CAMERA_AND_LENS P1+P2 — landed 2026-07-12 @ TBD-MERGE-SHA
 
-**Branch:** feat/cinematic-wave → main · **Level reached:** L1 / target L1 (§10 — this cluster's
+**Branch:** feat/cinematic-wave → main · **Level reached:** L1 / target L1 (section 10 — this cluster's
 no-PNG rule, Peter 2026-07-12, overrides the standard's L2-demo minimum; acceptance is the
 numeric gates, not an observed artifact)
 **Doc status line (quoted verbatim):** `**Status:** SHIPPED · P1 (`22530ac1`) + P2 (`de193e01`)
@@ -15,7 +15,7 @@ branch) and I3's original gate wording (existing parity test passes with a liter
 buffer breaks. Escalated to Peter, then to Fable (the doc's author) for a ruling rather than
 guessed through. Fable confirmed the conflict, ruled that the 0-line-diff clause was a proxy for
 "legacy math untouched" rather than a literal freeze, and gave an exact repacking spec. Doc
-amended in the worktree (§3 I3 row + a dated amendment block after P1's Gate section) before the
+amended in the worktree (section 3 I3 row + a dated amendment block after P1's Gate section) before the
 worker resumed. Full detail in the amendment text itself, `docs/CAMERA_AND_LENS_DESIGN.md`.
 
 ## Gate results (verbatim, orchestrator-run — not the workers' self-reports)

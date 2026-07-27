@@ -111,7 +111,7 @@ inspector. Spell labels out at expanded width: `CH`→`Channel`, `DEV`→`Device
   Resolve/Premiere way of doing Ableton clip-colour when you also have thumbnails. Optional future:
   a subtle layer-colour wash over the thumbnail if Peter wants it stronger.
 - **Selected clip** = crisp border + lift (rises above neighbours).
-- Clip thumbnails already exist (§24 5c snapshot-on-play atlas work).
+- Clip thumbnails already exist (section 24 5c snapshot-on-play atlas work).
 
 ---
 
@@ -126,7 +126,7 @@ thumbnail is "1 bar wide", so its shape is a slave to zoom — at 2px/beat a bar
 - short clip → clamp/crop, then fall back to a colour block when there is no room.
 - Show **output aspect** (what the audience sees), not source aspect.
 
-Not in the mockup yet. Layers onto the clip cards from §E.
+Not in the mockup yet. Layers onto the clip cards from section E.
 
 ---
 
@@ -159,13 +159,13 @@ in the timeline are the identity colours (headers + clips).
 ## I. Grid, playhead, depth
 
 - Grid lines subtle, drawn **behind opaque clip cards** so they never bleed through content. (The
-  "grid through clips" Claude first saw was actually the 1-bar thumbnail tiling — the §F
+  "grid through clips" Claude first saw was actually the 1-bar thumbnail tiling — the section F
   aspect-window fix removes it.)
 - Playhead red, on top of everything; selected clip lifts above neighbours.
 
 ---
 
-## Implementation plan (filled after the code audit — see §J)
+## Implementation plan (filled after the code audit — see section J)
 
 Split every item above into one of three buckets:
 
@@ -180,7 +180,7 @@ Build + `clippy` + focused tests after each step; full workspace test on the tok
 shared-render change. Verify visually by rendering the native UI headless → PNG → read it
 (see `reference_ui_headless_png_verification`).
 
-## §J. Code audit — manifold-ui rendering architecture
+## J. Code audit — manifold-ui rendering architecture
 
 **Can we build it: YES.** Everything in the mockup maps to existing capabilities. Much is already
 built; the work is targeted restyle + a real selection treatment + a token tune, not a rewrite.
@@ -192,11 +192,11 @@ built; the work is targeted restyle + a real selection treatment + a token tune,
 **`UIStyle` capabilities** (`node.rs`): `bg_color`, `hover/pressed_bg_color`, `text_color`,
 `border_color`, `border_width`, `corner_radius`, `font_size`, `font_weight`, `text_align`.
 → selection ring, clip-card border, chip hairline all = `border_*` on a node. **No box-shadow** in
-UIStyle (clip lift-shadow is GPU-side, §24 5b) — fine, the ring carries selection.
+UIStyle (clip lift-shadow is GPU-side, section 24 5b) — fine, the ring carries selection.
 
 **Tokens** (`color.rs`): `Color32` consts, one documented source of truth, with a **deliberate
 dark-stage philosophy**: "high contrast = distinct LEVELS, not a bright UI; a bright UI is fatiguing
-on stage and glows in a dark room." Grey ramp `BG_0..BG_3` = 13/22/31/42 (already a §15 spread).
+on stage and glows in a dark room." Grey ramp `BG_0..BG_3` = 13/22/31/42 (already a section 15 spread).
 → Phase A is a **TUNE** (wider spread, brighter text `txt-dim/faint`, distinct selection, neutral
 `chip`), NOT a wholesale swap to the mockup's bright hexes. Keep it dark; validate by eye. Guarded by
 `tests/design_tokens.rs` + the ramp PNG in `manifold-renderer/tests/ui_color_swatches.rs`.
@@ -207,9 +207,9 @@ Blend/Separator/Info/Folder/PathLabel/NewClip/Midi*/Ch*/Dev*/AddGenClip/Gain/Sen
 layout (`compute_layer_row`), build (`build_layer_row`), and hit-test from one descriptor list.
 Already true to the mockup:
 - **Headers are already solid layer-coloured** — `bg_style()` sets `bg_color = layer.color`.
-- **Type badges exist** (§24 5d, `TypeBadge` + `badge_icon()`).
+- **Type badges exist** (section 24 5d, `TypeBadge` + `badge_icon()`).
 - **Group nesting partly exists** — `AccentBar` + `Connector` + `BottomBorder` + `CHILD_INDENT`(20)
-  already draw the indent/spine. §G is mostly styling, not net-new.
+  already draw the indent/spine. section G is mostly styling, not net-new.
 - Controls already use neutral-ish surfaces (`state_button_style`, `field_style`=`LAYER_ROW_BG`).
 Gaps to fix:
 - **Selection = `lighten(layer_color, 30)`** (`bg_style`) — THIS is the "muted on muted"
@@ -222,11 +222,11 @@ Gaps to fix:
 
 **Heights** (`coordinate_mapper.rs`): `TrackHeight::{Collapsed 48, Normal 140, Tall 200}`. `Tall`
 defined but never selected. Two functional tiers exist today (collapsed = identity+mix; normal =
-full). §B three-tier maps onto these; wire `Tall` for the roomy expanded state if wanted.
+full). section B three-tier maps onto these; wire `Tall` for the roomy expanded state if wanted.
 
 **Clips:** currently **neutral grey** (`CLIP_NORMAL` 173,168,163), NOT layer-coloured. Rendered
-GPU-side as SDF rounded rects (§24 5b: body gradient + border + lift; luminance-aware label). So
-§E "clips match layer colour" = feed `layer.color` into the clip body (real change, GPU/viewport
+GPU-side as SDF rounded rects (section 24 5b: body gradient + border + lift; luminance-aware label). So
+section E "clips match layer colour" = feed `layer.color` into the clip body (real change, GPU/viewport
 side); title-position + selection border live there too.
 
 **Headless render → PNG → compare loop** (the verification the redesign rides on):
@@ -246,9 +246,9 @@ E clips → F aspect window. Render→PNG→compare against the mockup after eac
 focused tests each step; full workspace on the token change + shared-render changes.
 
 ### Progress log
-- **§H shipped** (commit 69253f5): selection = bright `SELECTED_LAYER_RING` ring + small lift,
+- **section H shipped** (commit 69253f5): selection = bright `SELECTED_LAYER_RING` ring + small lift,
   replacing `lighten(30)`. Render-confirmed; the ring reads clearly on any header hue.
-- **§C shipped** (commit bb6be36): dropped `Info` (clip count) + `NewClip` + `AddGenClip` from
+- **section C shipped** (commit bb6be36): dropped `Info` (clip count) + `NewClip` + `AddGenClip` from
   `compute_layer_row` **and** its `oracle_row` equivalence gate (kept rect-equal), widened the folder
   path label, removed the dead width consts. `layout_matches_frozen_oracle` + 426 lib tests pass.
 - **Render harness**: `cargo test -p manifold-renderer --test timeline_header_preview` →
@@ -256,12 +256,12 @@ focused tests each step; full workspace on the token change + shared-render chan
   and a 256×1100 texture to crop to the bottom-anchored layer-controls panel. `Read` the PNG to
   compare against `timeline-mockup.html`.
 
-### §E status (clips — mostly already done)
+### E status (clips — mostly already done)
 Clips render GPU-side via `manifold-renderer/src/clip_draw.rs` (`ClipBody` → SDF rounded rect: body
-gradient + border + lift, §24 5b), built by the viewport panel. **Audit correction:** clips are
+gradient + border + lift, section 24 5b), built by the viewport panel. **Audit correction:** clips are
 ALREADY layer-coloured — `get_clip_color` (`bitmap_painter.rs`) returns the layer colour for a normal
 clip; selected = `lighten(30)` **plus** a blue `CLIP_BORDER_SELECTED` outline (a distinct signal, so
-clip selection is fine). `CLIP_NORMAL` grey is just a fallback. So §E "layer-coloured clips" needs no
+clip selection is fine). `CLIP_NORMAL` grey is just a fallback. So section E "layer-coloured clips" needs no
 work.
 
 Remaining delta: **title position.** `emit_clip_names` currently CENTRES the label
@@ -273,11 +273,11 @@ names (`ClipId`, `Beats`, `Arc<str>` name, `waveform: None`, the audio fields). 
 check on the running app before shipping the title move. Optionally re-style clip selection to match
 the new layer focus-ring. Tuning knobs: `CLIP_*` / `CLIP_LABEL_*` in color.rs.
 
-### §F implementation findings (aspect-locked thumbnail — the one remaining net-new)
+### F implementation findings (aspect-locked thumbnail — the one remaining net-new)
 The thumbnail tiler `manifold-renderer/src/clip_thumb_gpu.rs` already supports
 per-cell quads: `ThumbQuad { rect, body_rect, radius, uv_min, uv_max }` where `rect`
 is "one bar of the clip" and a single still passes `rect == body_rect`. So filmstrip
-tiling exists — the cells are just **bar-width** today. §F = make cell width =
+tiling exists — the cells are just **bar-width** today. section F = make cell width =
 `lane_height × project_aspect` instead of bar-width, and tile across the clip.
 
 It's two-sided and content-coordinated, which is why it can't ship headless:
@@ -293,17 +293,17 @@ Scope this as its own focused session with the app running.
 ### Net assessment
 The native UI already implements most of the mockup (solid layer-coloured headers, type badges,
 layer-coloured clips, group indent/spine, resizable track heights). The mockup was largely a
-reproduction of existing behaviour plus the two real gaps that are now **shipped** (§H distinct
-selection, §C declutter). What remains: title-bottom (verify-then-ship), the routing-form relayout
-(§D, coupled with the §B tall tier), the UI-wide contrast/text tune (§A — needs Peter's eye on the
-running app), and the genuinely net-new aspect-locked thumbnail window (§F).
+reproduction of existing behaviour plus the two real gaps that are now **shipped** (section H distinct
+selection, section C declutter). What remains: title-bottom (verify-then-ship), the routing-form relayout
+(section D, coupled with the section B tall tier), the UI-wide contrast/text tune (section A — needs Peter's eye on the
+running app), and the genuinely net-new aspect-locked thumbnail window (section F).
 
 ### Known issues (pre-existing, not from this work)
 - `tests/design_tokens.rs` guard is at **133** vs baseline **132** — an untokenized `Color32::new`
   drifted in on the `feat/multi-selection-ux` base this branch forked from. Find + tokenize it (or
   bump the baseline if legitimate) as a separate cleanup; it is inherited, not introduced here.
 
-## §K. Per-property delta table — derived from the headless dump vs mockup CSS (2026-06-28)
+## K. Per-property delta table — derived from the headless dump vs mockup CSS (2026-06-28)
 
 Derived by diffing `cargo xtask ui-snap timeline --dump` (real `UITree` node values) against
 `crates/manifold-app/assets/timeline-mockup.html`. App values are the dump; targets are the mockup
@@ -364,7 +364,7 @@ list; status is updated as each lands.
   the viewport/GPU lane pass, a separate surface. The header treatment already makes selection
   unmissable, so the lane-edge is reinforcement, deferred to the viewport.
 
-## §L. Live-feedback refinements on the running app (2026-06-28)
+## L. Live-feedback refinements on the running app (2026-06-28)
 
 Peter ran the build with real thumbnails and flagged the clip rendering. Fixes (commit on
 `feat/timeline-ui-redesign`):
@@ -381,7 +381,7 @@ Peter ran the build with real thumbnails and flagged the clip rendering. Fixes (
   tiles aspect-locked windows; on varied footage each window is a distinct captured frame. A LOOPing
   clip captures near-identical frames, so its filmstrip repeats — inherent, accepted. The harness
   `--thumbs` now mirrors the app: reserves the strip + tiles a varied filmstrip (distinct cells).
-- **Identity-colour clip frame (§E)** — a normal clip's border is now the LAYER's identity colour
+- **Identity-colour clip frame (section E)** — a normal clip's border is now the LAYER's identity colour
   (`c.base_color`), not the dark hairline, so the full-bleed thumbnail + strip read as that layer's
   card. Selected keeps the bright ring; locked keeps the dim neutral edge.
 - **Dropdown caret glyph** — `▾` (U+25BE) isn't in the bitmap Inter and rasterised as tofu; switched
@@ -389,12 +389,12 @@ Peter ran the build with real thumbnails and flagged the clip rendering. Fixes (
 
 **Still open (own scope, needs the running app):** the collapsed-lane filmstrip is dense (many small
 windows = `preview_height × aspect`); if Peter wants it calmer, cap the window count or show one window
-+ colour fill on short clips (the §F "zoomed out → one window + layer colour" rule). The varied-frame
++ colour fill on short clips (the section F "zoomed out → one window + layer colour" rule). The varied-frame
 filmstrip on real footage + the loop-repeat case both need Peter's eye on actual video.
 
-## §M. Chrome-refinement pass — "polish and pretty" (2026-06-28)
+## M. Chrome-refinement pass — "polish and pretty" (2026-06-28)
 
-Peter, after the §L pass: *"mostly at a polish and pretty stage. The HTML has lots of nice polish that
+Peter, after the section L pass: *"mostly at a polish and pretty stage. The HTML has lots of nice polish that
 native doesn't — buttons, text, boxes, inputs all look much more refined."* Comparing the headless dump
 to the mockup CSS, the chip **boxes** already match at the token level (chip bg `#1b1b21`, white-`.16`
 hairline, r4 — exactly `--chip`/`--chip-line`). The refinement gap is the chips' **internals**: a single
@@ -427,7 +427,7 @@ rgba(0,0,0,.35)` shadow. Implemented (subtle per-clip `draw_shadow`) then revert
 near-black lanes a black drop-shadow doesn't read (crop confirmed black-on-black), so it was pure
 per-frame GPU cost. Clip depth comes from the inset card + identity border, not a shadow.
 
-**Still deferred from §K (documented, not dropped):** header-column cross-panel elevation, lane-edge
+**Still deferred from section K (documented, not dropped):** header-column cross-panel elevation, lane-edge
 selection brightening, letter-spacing (hot CoreText path), tabular-nums, transport active-mode
 highlight. Candidate next polish (Peter's eye): value-chip font 9→10.5px (mockup size, risks overflow in
 the dense 230px column), `.sel:hover` border-brighten, solo-on dark-text-on-green detail.

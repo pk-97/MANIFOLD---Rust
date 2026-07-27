@@ -257,7 +257,7 @@ Bash(cp ~/Library/Logs/DiagnosticReports/manifold-2026-06-27-161935.ips /private
 Bash(psql postgresql://litellm:litellm-local@localhost:5432/litellm -c "select \\"startTime\\", model, \\"model_group\\", api_key, total_tokens from \\"LiteLLM_SpendLogs\\" order by \\"startTime\\" desc limit 15;")
 ```
 
-Removed in the 2026-07-26 audit (see §3 for why): `Bash(python3 -c ' *)`,
+Removed in the 2026-07-26 audit (see section 3 for why): `Bash(python3 -c ' *)`,
 `Bash(python3 -)`, `Bash(awk *)` (both files), `Bash(find *)` (both files),
 `Bash(git worktree *)` — arbitrary execution or unreviewed destruction.
 
@@ -271,10 +271,10 @@ Rationale for the script rules (unchanged from the original audit):
 | `scripts/seat_tool.py show` | read-only |
 | `scripts/gate_runner.py show *` / `report *` | read-only (verdicts trail / subprocess-free report); `cc-fleet keyget` runs under `pre-wave`, which is NOT allowlisted |
 | `scripts/token_report.py *` | reads transcripts, flags only |
-| `scripts/run_ui_flows.py *` | bounded by `scripts/ui-flows/manifest.json` — which is agent-editable, so this is a §4 residual-risk rule |
+| `scripts/run_ui_flows.py *` | bounded by `scripts/ui-flows/manifest.json` — which is agent-editable, so this is a section 4 residual-risk rule |
 | `scripts/move_identity_check.py *` | git refs only |
 | `scripts/gen_glb_conformance_status.py` | no arguments |
-| `scripts/test_move_identity_check.py` | no arguments — but it is an editable file executed directly; §4 residual risk |
+| `scripts/test_move_identity_check.py` | no arguments — but it is an editable file executed directly; section 4 residual risk |
 
 Deliberately NOT allowlisted, keep classified: `psql` in wildcard form (one
 literal read-only query IS allowlisted — see block; the wildcard never),

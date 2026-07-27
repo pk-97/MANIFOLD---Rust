@@ -33,7 +33,7 @@ now shipped; the design is closed.
 BUG-115 (mux-multiblend-dynamic-arity-blocks-codegen-conv…) spike, content-key normalization, tolerance/comment hygiene) is SEPARATE work with existing
 specs — it does not depend on this doc and this doc does not depend on it, except where a phase
 below names it.
-**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5 (Phase briefs)–§6 before starting any phase.
+**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 before starting any phase.
 
 Peter, 2026-07-14, on the whole backlog of compiler gaps: *"I would like ALL of this work to be
 implemented and fixed"*, *"I never made a call about post release. No need to defer this fusion
@@ -50,8 +50,8 @@ design removes the silent-slowness classes (hung worker, unfusable overlay HUDs,
 that never got a second look) and hardens the one silent-WRONG-output class that exists (marker
 drift) so it cannot recur.
 
-Companion docs: `FREEZE_COMPILER_MAP.md` (authoritative current-state map — §4 (The cut rules — when fusion says no) cut rules, §5
-marker ABI, §11 honest edges are this doc's inputs); `ADDING_PRIMITIVES.md` (the conversion recipe
+Companion docs: `FREEZE_COMPILER_MAP.md` (authoritative current-state map — section 4 (The cut rules — when fusion says no) cut rules, section 5
+marker ABI, section 11 honest edges are this doc's inputs); `ADDING_PRIMITIVES.md` (the conversion recipe
 P4 reuses); `docs/BUG_BACKLOG.md` BUG-114 (the `draw_*` gap this doc's P4 closes).
 
 ---
@@ -80,7 +80,7 @@ adds a thread, a lock, or shared state; nothing changes the fuse decision model
 ## 2. Decisions
 
 **D1 — One markers module owns the marker ABI; both ends compile against it.**
-New `freeze/markers.rs`: a `Marker` enum with one variant per marker (§5 of the map), each
+New `freeze/markers.rs`: a `Marker` enum with one variant per marker (section 5 of the map), each
 carrying its typed payload (e.g. `DispatchCountParam { field: String }`,
 `DerivedUniformMember { first_field: String, words: u32, type_id: String, camera_port: Option<String> }`),
 with `emit(&self) -> String` and `parse(line: &str) -> Option<Marker>` as the ONLY implementations
@@ -122,7 +122,7 @@ A texture-domain fusable atom may tag an `Array`/`Channels` input `BufferIndex`.
 body reads elements of the input array global `buf_<port>` by indices it computes — exactly
 `BufferGather`'s convention (`codegen.rs:728,802`), hosted in a texture-domain kernel.
 - **Classify** (`classify_node`): a wire into a `BufferIndex`-tagged input does not cut (narrowing
-  cut rule 9, same shape as the Camera exemption at map §4.9).
+  cut rule 9, same shape as the Camera exemption at map section 4.9).
 - **Region** (`partition_regions`): the array producer NEVER unions into the texture region
   (cross-domain, exactly like a gather-consumed wire) — it stays an external; `build_region`
   records it as a buffer external.
@@ -169,7 +169,7 @@ decisions, revisable only by census numbers:
   cuts from this family, it lands anyway as capability (palette vocabulary: voronoi's cell+distance
   outputs) but LAST in the wave order.
 - **Buffer fan-out regions (`region.rs:1532`): DEFER.** Lifting means N fresh-dst arrays per fused
-  buffer kernel with per-output alias reasoning against §9.7's in-place-loop model — the riskiest
+  buffer kernel with per-output alias reasoning against section 9.7's in-place-loop model — the riskiest
   interior in the compiler for a family the census must first show actually cuts anything. Trigger:
   census ≥3 refusals across shipped content, or a user graph demonstrably paying it.
 - **Nested stencils / `MAX_VIRTUAL_CHAIN=1` (`region.rs:368`): CORRECT AS-IS.** The cap is a cost
@@ -231,8 +231,8 @@ gpu-proofs <module>` (never nextest); every phase runs the freeze suite
 per GIT_TREE_DISCIPLINE.
 
 - **P1 — `freeze/markers.rs` (D1). SHIPPED `3dac02c7`.** Deliverables: the module (enum + emit/parse + roundtrip
-  test), all emit/parse sites rewritten through it (inventory in §1 — re-derive with
-  `rg '"// @' crates/manifold-renderer/src` at execution; if counts differ from §1, stop and list),
+  test), all emit/parse sites rewritten through it (inventory in section 1 — re-derive with
+  `rg '"// @' crates/manifold-renderer/src` at execution; if counts differ from section 1, stop and list),
   `marker_literals_live_in_one_module`, `fused_wgsl_snapshot_unchanged`. Gate: freeze suite green;
   snapshot test proves byte-identical emission; negative gate zero stray literals. Demo: none — L1
   (pure refactor proven by snapshot).
@@ -342,13 +342,13 @@ per GIT_TREE_DISCIPLINE.
   gained one more member each). Census: multi-output family 3→0 refusals.
 - **P7 — cache ownership (D5).** Deliverables: Arc-valued caches, owned view interiors, LRU
   eviction, the `freeze_has_no_leaks` negative gate, eviction unit test. Seam brief applies
-  (standard §6): re-derive the consumer inventory with
+  (standard section 6): re-derive the consumer inventory with
   `rg "&'static LoadedPresetView|&'static SegmentView|&'static EffectGraphDef" crates/manifold-renderer/src`
   at execution time; compiler-driven migration (change the type, follow the errors); misfit sites
   escalate, never adapt. Gate: freeze suite + full `-p manifold-renderer --lib`; negative gate.
   Demo: none — L1 (behavior-identical by construction; the observable is the negative gate).
 
-Phase-completeness: every §2 decision lands in exactly one phase (D1→P1, D2→P2, D4→P3+P5+P6 with
+Phase-completeness: every section 2 decision lands in exactly one phase (D1→P1, D2→P2, D4→P3+P5+P6 with
 DEFER verdicts recorded in Deferred below, D3→P4, D5→P7). No design-body affordance exists outside
 this list.
 

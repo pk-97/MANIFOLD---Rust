@@ -1,6 +1,6 @@
 # Chrome API — declarative widget/layout for panels
 
-Status: **SHIPPED — Phases 2a AND 2b complete 2026-06-22** (see the "Phase 2b COMPLETE" summary at the end of `docs/UI_ARCHITECTURE_OVERHAUL.md` §13 (Phase checklist (the cross-chat tracker)): every panel's chrome is declarative on the Chrome API — footer, header, transport, master_chrome, layer_chrome, macros_panel, clip_chrome, param_card, layer_header, audio_setup_panel, inspector). Header corrected 2026-07-16 — the 2026-07-05 baseline review wrote "2b in progress" without checking the overhaul doc, where 2b had already been complete for two weeks. Sub-design-doc for the UI Architecture Overhaul Phase 2.
+Status: **SHIPPED — Phases 2a AND 2b complete 2026-06-22** (see the "Phase 2b COMPLETE" summary at the end of `docs/UI_ARCHITECTURE_OVERHAUL.md` section 13 (Phase checklist (the cross-chat tracker)): every panel's chrome is declarative on the Chrome API — footer, header, transport, master_chrome, layer_chrome, macros_panel, clip_chrome, param_card, layer_header, audio_setup_panel, inspector). Header corrected 2026-07-16 — the 2026-07-05 baseline review wrote "2b in progress" without checking the overhaul doc, where 2b had already been complete for two weeks. Sub-design-doc for the UI Architecture Overhaul Phase 2.
 
 ## Why
 

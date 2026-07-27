@@ -19,7 +19,7 @@ briefs.
 
 **Companion:** this standard governs the artifact. The method that produces its
 content — the audit, the alternative-killing, how to find the plausible-wrong
-architecture §4 requires you to name — is [DESIGN_AUTHORING.md](DESIGN_AUTHORING.md).
+architecture section 4 requires you to name — is [DESIGN_AUTHORING.md](DESIGN_AUTHORING.md).
 Authors read both; executors only need this one.
 
 ---
@@ -29,7 +29,7 @@ Authors read both; executors only need this one.
 - **Design contract** — a feature/system design approved for later implementation
   (`*_DESIGN.md`, most of the corpus). Governed by ALL of this standard.
 - **Working guide** — how-to-think docs (`DECOMPOSING_GENERATORS.md`,
-  `GROUPING_GRAPHS.md`). Governed by §2 (skeleton where it fits) and §7 (style); no
+  `GROUPING_GRAPHS.md`). Governed by section 2 (skeleton where it fits) and section 7 (style); no
   phase briefs.
 - **Historical record** — shipped or closed work kept for archaeology. Move to
   `docs/archive/` when no active doc references it as a contract. A record never
@@ -47,7 +47,7 @@ your first: `GIG_RESILIENCE_DESIGN.md` (failure-audit shape),
 
 **Status:** APPROVED design, not built · <date> · <author-model>
 **Prerequisites:** <other designs/phases that must land first, or "none">
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5–section 6 before starting any phase.
 
 <Intro: the governing insight in one paragraph. Peter's directives verbatim-quoted
  where a decision came from him — quotes are load-bearing; they stop re-litigation.>
@@ -56,10 +56,10 @@ your first: `GIG_RESILIENCE_DESIGN.md` (failure-audit shape),
 ## 1. Audit — what exists (verified <date>)
 ## 2. Decisions            (D-numbered, rationale, rejected alternatives)
 ## 3..n Design body        (data model, seams, architecture — committed, not sketched)
-## §. Invariants & enforcement   (each invariant + the machine check that fails when it breaks)
-## §. Phasing              (one brief per phase, per §5)
-## §. Decided — do not reopen   (numbered, terse)
-## §. Deferred             (explicitly not v1, with the trigger that would revive each)
+## section. Invariants & enforcement   (each invariant + the machine check that fails when it breaks)
+## section. Phasing              (one brief per phase, per section 5)
+## section. Decided — do not reopen   (numbered, terse)
+## section. Deferred             (explicitly not v1, with the trigger that would revive each)
 ```
 
 Section-by-section requirements:
@@ -77,14 +77,14 @@ Section-by-section requirements:
   whose status went stale; install it as a `post-merge` git hook to run it on merge.)
 - **Audit** — a table of what exists: piece / where (file:line) / state, and the
   instruction *extend, don't redesign*. Every claim about existing code is anchored
-  (§3). The audit is a dated snapshot and says so.
+  (section 3). The audit is a dated snapshot and says so.
 - **Decisions** — `D1..Dn`. Each carries: the decision, the rationale, and — when an
   obvious alternative exists — the rejected alternative with the reason, stated as
   "Rejected: X, because Y". Naming the rejected path is what stops the executor
   reinventing it. Peter's words go in quotes when the decision was his call.
-- **Design body** — committed signatures for load-bearing types (§4), seams specified
+- **Design body** — committed signatures for load-bearing types (section 4), seams specified
   precisely, interiors left free. Honest-cost paragraphs where a decision has real
-  downsides ("Consequences, stated honestly:" — see MULTI_DISPLAY §6.1).
+  downsides ("Consequences, stated honestly:" — see MULTI_DISPLAY section 6.1).
 - **Invariants & enforcement (added 2026-07-09, from the structural audit)** — every
   invariant the design introduces or leans on, each paired with its enforcement: the
   named machine check that fails when the invariant is violated — a test by name, a
@@ -124,7 +124,7 @@ Docs rot; the executing agent can't tell. Rules:
   `⚠ VERIFY-AT-IMPL: <what to check> — <the exact command or file to read>`.
   "Verify" always means running a command or reading a file, never recalling.
 - **Anchors are re-verified at execution time, not trusted.** Each phase brief's
-  entry-state check (§5) includes re-running the anchors that phase depends on. A
+  entry-state check (section 5) includes re-running the anchors that phase depends on. A
   moved or missing anchor is an escalation, not a guess-and-continue.
 
 ## 4. Architecture: the doc decides, the executor transcribes
@@ -176,7 +176,7 @@ brief is not executable — that's the definition.
 - **Read-back (mandatory first step)** — the files/sections the executor must read,
   then *restate*: the decisions binding this phase, the forbidden moves, and what the
   entry-state checks found. Code before read-back is a protocol violation. (This is
-  the §2.5-audit pattern — the one anti-shortcut mechanism proven on this codebase.)
+  the section 2.5-audit pattern — the one anti-shortcut mechanism proven on this codebase.)
 - **Deliverables** — files, types, tests, by name.
 - **Gate** — commands with expected results. Two kinds, use both:
   - *Positive:* named tests that must pass, PNG parity diffs, packet-byte captures,
@@ -188,10 +188,10 @@ brief is not executable — that's the definition.
     is deleted, not paralleled; proving no `unwrap()` landed on a fallible path;
     proving no new `Arc<Mutex>`.
   "Works correctly" is banned as a gate. Self-reported success is not a gate result;
-  gates are run by Peter, CI, or the orchestrating session (§8).
+  gates are run by Peter, CI, or the orchestrating session (section 8).
 - **Acceptance demo (added 2026-07-05)** — the observable artifact proving the
   phase's behavior end-to-end: the exact command(s) that produce it, and the
-  verification level it reaches (§10). Mandatory for any phase with a user-visible
+  verification level it reaches (section 10). Mandatory for any phase with a user-visible
   surface (UI, rendering, import, playback, export), gated at **L2 minimum** — an
   artifact a reviewer *looks at*, not a green test. "The buttons exist" is not a
   demo; the lane visibly rendering in the PNG is. **Affordance legibility
@@ -238,14 +238,14 @@ brief is not executable — that's the definition.
   with it, and the gate exercises that gesture. The observed gap: rotation params
   shipped range-clamped — correct to every test, unusable with the first thing a VJ
   does (saw LFO for a full spin, BUG-039 (saw-rotation-wrap)). The gesture line is the phase-scale
-  version of DESIGN_AUTHORING §3's instrument test.
+  version of DESIGN_AUTHORING section 3's instrument test.
 - **Phasing-completeness check (added 2026-07-07, from the dead-LANES escape).**
   Before a Phasing section is done, walk every affordance/behavior the design body
-  COMMITS to (each §-section's "the user can X" claims) and confirm each appears in
+  COMMITS to (each section-section's "the user can X" claims) and confirm each appears in
   exactly one place: a phase's deliverable list, or the Deferred section with its
   revival trigger. An affordance in neither is invisible to execution: the observed
-  escape — AUTOMATION_LANES §7 specified the param-chooser + "+" (the only way a
-  first lane can be born by drawing), §10's P4 list never named it, the orchestrator
+  escape — AUTOMATION_LANES section 7 specified the param-chooser + "+" (the only way a
+  first lane can be born by drawing), section 10's P4 list never named it, the orchestrator
   built the list faithfully, one worker noticed and wrote "a later phase" into a
   draw-fn comment no one re-reads, and the doc's status honestly said "SHIPPED
   P1–P4" while the feature was unreachable in every un-recorded project. The status
@@ -319,7 +319,7 @@ Written here once so docs don't repeat it; every doc's header points here.
 
 1. **Fresh session per phase.** Paste the phase brief; the doc is the context, not
    the chat history.
-2. **Read-back first** (§5). No code before it.
+2. **Read-back first** (section 5). No code before it.
 3. **Pre-flight for stale docs:** docs deep in the build order carry re-derivation
    commands instead of baked inventories (their snapshots WILL be stale — a stale
    inventory trusted is worse than none). Run the pre-flight, write the fresh
@@ -334,14 +334,14 @@ Written here once so docs don't repeat it; every doc's header points here.
 7. **Reports confess (added 2026-07-05).** Every phase report carries two mandatory
    fields: `Shortcuts taken:` — every stub, hard-code, assumption, and
    approximation, or the explicit word "none" — and `Demo artifact:` — the path, or
-   `none — L1` per §5. A confessed shortcut is a one-line fix; a hunted one is a
+   `none — L1` per section 5. A confessed shortcut is a one-line fix; a hunted one is a
    debugging session — the field exists to make confession cheaper than concealment.
    An omitted field means the report is incomplete, not that there was nothing to
    confess.
 8. **Landing runs the demo (added 2026-07-05).** Before merging to main, the
    orchestrating session runs the acceptance-demo command itself in the main
    checkout (worktrees lack the gitignored fixtures) and reads the artifact. The
-   landing report states the level reached (§10), ends with a ≤2-minute
+   landing report states the level reached (section 10), ends with a ≤2-minute
    click-script for Peter (numbered steps, expected observation per step), and
    appends one line per unclosed gap to `docs/VERIFICATION_DEBT.md`.
 9. **Landing updates the doc (added 2026-07-05 — Peter's rule).** A landing that
@@ -354,13 +354,13 @@ Written here once so docs don't repeat it; every doc's header points here.
    Status truth is part of the definition of landed, not follow-up hygiene.
 10. **The landing report is a committed file (added 2026-07-05).** Everything
     rules 8–9 require the landing report to carry — gate output verbatim, the
-    §10 level reached, the click-script, deviations from the brief, the quoted
+    section 10 level reached, the click-script, deviations from the brief, the quoted
     status line, VD entries opened or carried — goes in
     `docs/landings/YYYY-MM-DD-<slug>.md`, committed in the same push as the
     landing. The chat message becomes a summary plus a pointer to that file.
     Rationale: the ledger cross-references landing reports (VD IDs, `Escaped:`
     lines), and until now those references pointed into chat transcripts that
-    evaporate with the session — the same decay path §10's ledger was built to
+    evaporate with the session — the same decay path section 10's ledger was built to
     close, one level up. The click-scripts are the acute loss: VD-002's
     burn-down *is* a click-script, and every one written before this rule is
     gone. Template: `docs/landings/README.md`.

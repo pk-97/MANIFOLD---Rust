@@ -12,7 +12,7 @@ EditingService, real state sync): hit-test geometry as pure math, click→comman
 display-value resolution (BUG-260 (scene-panel-bound-rows-display-stale-def-value-n…) conviction test and the undo baseline `1bdb69a9` are the only
 permitted patterns — replicate, never invent harness). Headless PNG render stays as an on-demand
 look oracle for humans/Fable, out of the automated gate. See
-`docs/SYSTEM_UPGRADE_2026_07_PLAN.md` §Testing (doctrine (agreed 2026-07-20; governs Wave 2 and all UI work)) doctrine.
+`docs/SYSTEM_UPGRADE_2026_07_PLAN.md` section Testing (doctrine (agreed 2026-07-20; governs Wave 2 and all UI work)) doctrine.
 
 **Usage:**
 ```
@@ -42,14 +42,14 @@ cargo xtask ui-snap crop timeline.png --crop "0,0,200,140" # standalone: crop an
 never silently ignored; use standalone `probe`/`crop` on a specific file for those.
 `--probe`/`--crop` coordinates are PNG pixel space, which today
 is 1:1 with the tree dump's `rect` values (`SCALE = 1.0` in `ui_snapshot/mod.rs` — the harness
-renders at the fixture's logical size, not Retina/2x; §6 below is stale on this point). If `SCALE`
+renders at the fixture's logical size, not Retina/2x; section 6 below is stale on this point). If `SCALE`
 is ever raised for a Retina capture, `rect` values and PNG pixels would diverge and this note (and
 `probe`/`crop`, which do no rescaling) would need to change with it.
 
 Output goes to `target/ui-snapshots/<scene>/`. Verified end-to-end: real `UIRoot`/`state_sync`
 path, the tree dump with real node values, a real-input-host `select:` that flips the selection-
 ring node in the dump and the PNG, the 6-state matrix, the mockup composite, and atlas injection
-through the real `ClipThumbGpu`. **Next step:** the §F aspect-locked multi-window tiling layers
+through the real `ClipThumbGpu`. **Next step:** the section F aspect-locked multi-window tiling layers
 onto the same `ThumbQuad`/atlas inputs (`clip_filmstrip::aspect_windows`); the `--thumbs` cut
 currently injects one full-body window per clip. Golden-image diffing remains deferred by design.
 
@@ -76,7 +76,7 @@ one.
 | `all` | Renders `timeline`, `states`, `inspector`, `graph` (default preset), and `editor` (default preset) in one process. | A full-app sweep for eyeballing everything after a change. |
 
 **Preset ids for `--preset`:** any shipping effect or generator id — e.g. `Mirror`, `Bloom`,
-`Tesseract`. The catalog lives in `docs/NODE_CATALOG.md` (§5 (Effect presets)/§6.1) and
+`Tesseract`. The catalog lives in `docs/NODE_CATALOG.md` (section 5 (Effect presets)/section 6.1) and
 `assets/effect-presets/` + `assets/generator-presets/`. An unknown id exits 2 with a message.
 
 **Provenance:** the `feat/timeline-ui-redesign` review found the redesign rode three
@@ -185,7 +185,7 @@ Inter font, animation seeded to t=0 — reproducible run to run.
   stdout summary.
 - **Input driver** — feed events through the real input host, then re-build + re-render + re-dump.
 - **Atlas injection** — a seam to populate the clip thumbnail atlas with fixed test images
-  without the content thread, so clip previews and the §F aspect-locked "Resolve window" render
+  without the content thread, so clip previews and the section F aspect-locked "Resolve window" render
   headless.
 - **Mockup renderer** — shell out to headless Brave to PNG; compose side-by-side.
 

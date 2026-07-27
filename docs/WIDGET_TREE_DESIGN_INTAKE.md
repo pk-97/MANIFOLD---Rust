@@ -4,14 +4,14 @@
 
 ## Mission
 
-Design the queryable widget/param layer at the UI↔engine boundary — the structural fix that deletes the hand-written transcription code in the god files (`param_card.rs`, `inspector.rs`, `state_sync.rs`, `scene_setup_panel.rs`). This is the load-bearing piece of `docs/SYSTEM_UPGRADE_2026_07_PLAN.md` (§Ongoing, non-delegable). It is explicitly NOT laneable: a lane briefed with it recreates the scene panel at 10× scale. You design it yourself, whole.
+Design the queryable widget/param layer at the UI↔engine boundary — the structural fix that deletes the hand-written transcription code in the god files (`param_card.rs`, `inspector.rs`, `state_sync.rs`, `scene_setup_panel.rs`). This is the load-bearing piece of `docs/SYSTEM_UPGRADE_2026_07_PLAN.md` (section Ongoing, non-delegable). It is explicitly NOT laneable: a lane briefed with it recreates the scene panel at 10× scale. You design it yourself, whole.
 
 ## Ground rules for the design session
 
 - Method: `docs/DESIGN_AUTHORING.md` first, whole; deliverable conforms to `docs/DESIGN_DOC_STANDARD.md`.
 - Design only — no implementation, no lanes, until Peter approves the doc. Decomposition of the god files FOLLOWS this design; splitting before killing the duplication spreads the mess.
-- The testing doctrine (plan doc §Testing doctrine) is a hard constraint: the layer must make state-level testing (hit-test geometry as math, click→command dispatch, display-value resolution) the natural default. Pixels are for looking, not asserting.
-- K3 consult is available at a genuine design fork (AGENT_ROUTING.md §consult triggers).
+- The testing doctrine (plan doc section Testing doctrine) is a hard constraint: the layer must make state-level testing (hit-test geometry as math, click→command dispatch, display-value resolution) the natural default. Pixels are for looking, not asserting.
+- K3 consult is available at a genuine design fork (AGENT_ROUTING.md section consult triggers).
 
 ## Must-reads, in order
 

@@ -24,7 +24,7 @@ Systematic taste lives HERE, once — a veto on any rule edits one line and prop
 ## Vocabulary
 
 Row format: `Param — tier · feature · mode · envelope · engage`. Omitted envelope = H10 default for the tier; omitted engage = always.
-**Features:** `kick` `trans` (transient) — events, shipped · `Low/Mid/High/energy` — band-send envelopes (user-configured bands), shipped · `riser~` — sweep/riser event (in flight) · `dens~` — onset density · `beatN` — beat_ramp over N beats · `lfoN` — beat-synced LFO, N-beat period · `pad` — clip/MIDI trigger, performer-owned · `§step†` — section-boundary step · `§class†` — section class · `pitch†` — pitch/chroma.
+**Features:** `kick` `trans` (transient) — events, shipped · `Low/Mid/High/energy` — band-send envelopes (user-configured bands), shipped · `riser~` — sweep/riser event (in flight) · `dens~` — onset density · `beatN` — beat_ramp over N beats · `lfoN` — beat-synced LFO, N-beat period · `pad` — clip/MIDI trigger, performer-owned · `section step†` — section-boundary step · `section class†` — section class · `pitch†` — pitch/chroma.
 **Modes:** `cont` (continuous) · `ride` (follows a ramp, resolution stated) · `step` · `random` · `impulse` (H1) · `trigger`.
 **Env:** `aN/dN` ms attack/decay for impulses; `aN/rN` for continuous.
 **Hands:** deliberately unmapped (H5 or restraint) — auto-populate must not roll these.
@@ -44,7 +44,7 @@ Row format: `Param — tier · feature · mode · envelope · engage`. Omitted e
 ### Strange Attractor (Sim) — draft-unjudged
 *Signature: **Chaos rides the build** — order unravels as the riser climbs; at the drop, Attractor Type steps: a new world, not more of the old one.*
 - Chaos — phrase · riser~ · ride · snap-release at drop · build
-- Attractor Type — section · §step† (today: pad) · step
+- Attractor Type — section · section step† (today: pad) · step
 - Diffusion — phrase · inv-energy · cont (quiet = soft nebula; loud = etched)
 - Speed — bar · energy · cont
 - Tilt — phrase · lfo64 · cont
@@ -62,7 +62,7 @@ Row format: `Param — tier · feature · mode · envelope · engage`. Omitted e
 ### Fluid Sim 3D (Sim) — draft-unjudged
 *Signature: as Fluid 2D, plus **Flatten as the section move** — the volume collapses to a plane when the arrangement empties out.*
 - Force — beat · kick · impulse · a5/d600 · groove+drop
-- Flatten — section · §class† (today: pad) · step (quiet = flat, drop = full volume)
+- Flatten — section · section class† (today: pad) · step (quiet = flat, drop = full volume)
 - Anti-Clump — phrase · inv-energy · cont
 - Turbulence — texture · dens~ · cont
 - Rotate Y — phrase · lfo64 · cont (H8)
@@ -80,10 +80,10 @@ Row format: `Param — tier · feature · mode · envelope · engage`. Omitted e
 ### Black Hole (Sim) — draft-unjudged
 *Signature: **the build falls toward the horizon** — Cam Dist rides the riser inward; Freefall is the drop, held for the section, not the hit.*
 - Cam Dist — phrase · riser~ · ride (approach) · snap-out at drop · build
-- Freefall — section · §class† (today: pad) · step · drop
+- Freefall — section · section class† (today: pad) · step · drop
 - Disk Glow — bar · Low · cont (the disk burns with the sub)
 - Turbulence — texture · dens~ · cont
-- Spin — section · §step† · step
+- Spin — section · section step† · step
 - Hands: Steps, Scale, Tilt, Rotate, Stars, Disk Inner/Outer, Particles, Cam Velocity (H8/H5).
 
 ### Nested Cubes (Geometry) — draft-unjudged
@@ -91,12 +91,12 @@ Row format: `Param — tier · feature · mode · envelope · engage`. Omitted e
 - Scatter — beat · kick · impulse · a5/d500 · groove+drop
 - Filter — bar · energy · cont
 - Speed — bar · energy · cont · a250/r1500
-- Mode — section · §step† · step
+- Mode — section · section step† · step
 - Hands: Scale. Pad: Clip Trigger.
 
 ### Lissajous (Geometry) — draft-unjudged
 *Signature: **frequency ratios step like chord changes** — whole-ratio figures walk a curated table at phrase boundaries; between changes the figure holds, it doesn't wander.*
-- Freq X/Y Rate — phrase · §step† (today: pad via Clip Trigger) · step through curated ratio table
+- Freq X/Y Rate — phrase · section step† (today: pad via Clip Trigger) · step through curated ratio table
 - Vertex Size — beat · kick · impulse · a5/d400 · groove+drop
 - Phase Rate — bar · energy · cont
 - Window — phrase · lfo32 · cont
@@ -113,7 +113,7 @@ Row format: `Param — tier · feature · mode · envelope · engage`. Omitted e
 *Signature: as Duocylinder — kick lights the vertices; the shape itself only changes when the arrangement does.*
 - Vertex Size — beat · kick · impulse · a5/d400 · groove+drop
 - Rotate X/Y Speed — bar · energy · cont
-- Shape — section · §step† (today: pad) · step
+- Shape — section · section step† (today: pad) · step
 - Hands: Line, Scale, Rotate Z.
 
 ### Metallic Glass (Sim) — draft-unjudged
@@ -130,7 +130,7 @@ Row format: `Param — tier · feature · mode · envelope · engage`. Omitted e
 - Velocity Displace — beat · kick · impulse · a5/d400 · groove+drop
 - Relief — bar · Low · cont
 - Contrast — bar · energy · cont
-- Hue — section · §step† · step
+- Hue — section · section step† · step
 - Hands: Speed, Feedback, Noise, Velocity Damp, Curl, Color Displace, Saturation, Brightness, Mode.
 
 ### Digital Plants (Geometry) — draft-unjudged
@@ -144,7 +144,7 @@ Row format: `Param — tier · feature · mode · envelope · engage`. Omitted e
 ### Plasma (Pattern) — draft-unjudged
 *Signature: **Complexity folds tighter into the drop** — the field knots itself as tension rises.*
 - Complexity — phrase · riser~ · ride · release at drop · build
-- Pattern — section · §step† · step
+- Pattern — section · section step† · step
 - Speed — bar · energy · cont
 - Contrast — bar · energy · cont (fan with Speed = one voice)
 - Hands: Scale. Pad: Clip Trigger.
@@ -161,12 +161,12 @@ Row format: `Param — tier · feature · mode · envelope · engage`. Omitted e
 - Clip Trigger — beat · kick · trigger (ring birth via Trigger Mode)
 - Ring Spacing — bar · Low · cont
 - Rate — roll · BPM-locked beat division
-- Hands: Line, Shape (section: §step† candidate).
+- Hands: Line, Shape (section: section step† candidate).
 
 ### Basic Shapes (Pattern) — draft-unjudged
 *Signature: **the shape snaps solid on the kick** — Fill steps on the hit; the figure is the pulse.*
 - Fill — beat · kick · step (cycle fill states)
-- Clip Trigger — section · §step† (today: pad) · step (shape change)
+- Clip Trigger — section · section step† (today: pad) · step (shape change)
 - Hands: Line, Scale.
 
 ### MRI Volume (Text & Media) — draft-unjudged
@@ -174,7 +174,7 @@ Row format: `Param — tier · feature · mode · envelope · engage`. Omitted e
 - Position — phrase · beat32 · ride (loop per phrase)
 - Sharpen — texture · High · cont
 - Width — bar · inv-energy · cont (drops cut the slab thin and definite)
-- Invert — section · §step† · step
+- Invert — section · section step† · step
 - Folder — roll · per-section body region
 - Hands: Center, Scale.
 
@@ -206,7 +206,7 @@ Effects are spice: most earn one wire or none, and every mapped effect row spend
 *Signature: **the color drop** — Saturation drains through the build and slams back at the drop. Hue turns only with the section (H4).*
 - Saturation — phrase · riser~ · ride (drain) · snap-back at drop · build
 - Contrast — bar · energy · cont
-- Hue — section · §step† · step
+- Hue — section · section step† · step
 - Hands: Amount, Gain, Colorize, Tint Hue/Saturation/Focus.
 
 ### Strobe (Stylize) — draft-unjudged
@@ -228,7 +228,7 @@ Effects are spice: most earn one wire or none, and every mapped effect row spend
 
 ### Depth of Field (Filmic) — draft-unjudged
 *Signature: **rack focus at the boundary** — focus steps when the section does; the blur lives in quiet sections.*
-- Focus — section · §step† · step
+- Focus — section · section step† · step
 - Width — phrase · inv-energy · cont
 - Engage: quiet+build (Amount hands elsewhere)
 - Hands: Amount, Mode, Focus X, Blur, Angle, Quality.
@@ -252,44 +252,44 @@ Effects are spice: most earn one wire or none, and every mapped effect row spend
 ### Dither (Color) — draft-unjudged
 *Signature: lo-fi texture that blooms in breakdowns and vanishes when the track fills.*
 - Amount — phrase · inv-energy · cont · engage quiet
-- Pattern — section · §step† · step
+- Pattern — section · section step† · step
 - Hands: —.
 
 ### Digital Drift (Filmic) — draft-unjudged
 *Signature: **transients kick the signal loose** — RGB tears on hits over a drift that tracks the energy.*
 - RGB Shift — beat · trans · impulse · a0/d200 · build+drop
 - Drift — bar · energy · cont
-- Bands — section · §step† · step
+- Bands — section · section step† · step
 - Hands: Speed.
 
 ### Kaleidoscope (Spatial) — draft-unjudged
 *Signature: symmetry is section-weight (H2) — Segments steps at boundaries, never on the kick.*
-- Segments — section · §step† (today: pad) · step
+- Segments — section · section step† (today: pad) · step
 - Hands: Amount.
 
 ### Voronoi Prism (Stylize) — draft-unjudged
 *Signature: the shatter tightens into the drop — cell count steps up each phrase of the build.*
-- Cells — phrase · §step†/riser~ · step per phrase · build
+- Cells — phrase · section step†/riser~ · step per phrase · build
 - Amount — phrase · riser~ · ride · build
 - Hands: Cell Size.
 
 ### Infrared (Color) — draft-unjudged
 *Signature: a whole-section look — heat palette steps with the arrangement, not the beat.*
-- Palette — section · §step† · step
+- Palette — section · section step† · step
 - Contrast — bar · energy · cont
 - Hands: Amount (section engage).
 
 ### Invert (Color) — draft-unjudged
 *Signature: **the frame flash** — full invert on the drop downbeat, one beat long, then gone (H9). Rare by design.*
-- Amount — beat · §bound†-downbeat (today: pad) · step-flash, ≤1 beat · drop only
+- Amount — beat · section bound†-downbeat (today: pad) · step-flash, ≤1 beat · drop only
 - Hands: —.
 
 ### Mirror (Spatial) — draft-unjudged
-- Mode — section · §step† (today: pad) · step
+- Mode — section · section step† (today: pad) · step
 - Hands: Amount.
 
 ### Quad Mirror (Spatial) — draft-unjudged
-- Amount — section · §step† (today: pad) · step
+- Amount — section · section step† (today: pad) · step
 - Hands: —.
 
 ### Stylized Feedback (Stylize) — draft-unjudged
@@ -301,7 +301,7 @@ Effects are spice: most earn one wire or none, and every mapped effect row spend
 ### Wireframe Depth (Diagnostic) — draft-unjudged
 *Signature: the depth mesh pumps with the sub while density holds phrase-steady.*
 - Z Scale — bar · Low · cont
-- Density — phrase · §step† · step
+- Density — phrase · section step† · step
 - Hands: Amount, Width, Smooth, Subject, Blend, Edge Follow.
 
 ### Edge Detect (Diagnostic) — draft-unjudged
@@ -333,8 +333,8 @@ Cards for unbuilt pieces — the mod intents come from the drafts themselves; th
 - Cohesion — phrase · riser~ · ride (compress) · snap-release at drop · build
 - Regroup — phrase · inv-energy · cont · a500/r2000
 - Speed — bar · Low · cont
-- Trail — section · §class† · step (quiet long, drop short)
-- Palette — section · §step† · step
+- Trail — section · section class† · step (quiet long, drop short)
+- Palette — section · section step† · step
 - Hands: Alignment, Separation, Sight (H5 — flock character). Roll: Birds.
 
 ### A2 Cymatics — draft-unjudged
@@ -342,7 +342,7 @@ Cards for unbuilt pieces — the mod intents come from the drafts themselves; th
 - Mode X / Mode Y — phrase · pitch†/band (today: pad) · step through curated (n,m) table
 - Settle — phrase · inv-energy · cont (drops shake the plate loose)
 - Jiggle — texture · dens~ · cont
-- Palette — section · §step† · step
+- Palette — section · section step† · step
 - Hands: Symmetry, Trail. Roll: Sand. Pad: Cycle Modes.
 
 ### A3 Reaction–Diffusion — draft-unjudged
@@ -358,7 +358,7 @@ Cards for unbuilt pieces — the mod intents come from the drafts themselves; th
 - Depth — bar · Low · cont · a100/r800
 - Dispersion — texture · High · cont
 - Sharpness — phrase · inv-energy · cont
-- Sun Angle — section · §step† · step (slow)
+- Sun Angle — section · section step† · step (slow)
 - Hands: Scale, Speed.
 
 ### A5 Film Master Chain — draft-unjudged
@@ -368,7 +368,7 @@ Cards for unbuilt pieces — the mod intents come from the drafts themselves; th
 ### A6 Print Misregistration — draft-unjudged
 *Signature: **the plates drift apart as the track leans in — and snap back into register on the drop.***
 - Register — bar · energy · cont (drift apart)
-- Snap — beat · §bound†-downbeat (today: pad) · step-flash · drop (plates realign)
+- Snap — beat · section bound†-downbeat (today: pad) · step-flash · drop (plates realign)
 - Angle Jitter — texture · dens~ · cont
 - Hands: Dot Size, Ink, Paper, Drift Speed.
 
@@ -379,20 +379,20 @@ Cards for unbuilt pieces — the mod intents come from the drafts themselves; th
 
 ### A8 Mask → Explode — draft-unjudged
 *Signature: **the subject detonates on the drop marker** — one trigger, pre-armed, always loaded.*
-- Explode — section · §bound† (today: pad/drop marker) · trigger · drop
+- Explode — section · section bound† (today: pad/drop marker) · trigger · drop
 - Hands: Force, Turbulence, Gravity, Fade, Palette. Auto: Re-arm.
 
 ### A9 Slit-Scan / Time Displacement — draft-unjudged
 *Signature: **riding Delay pumps time itself** — a hand fader first; inverse energy makes quiet sections smear long.*
 - Delay — phrase · hands or inv-energy · cont
 - Smear — phrase · inv-energy · cont · engage quiet
-- Map — section · §step† · step
+- Map — section · section step† · step
 - Hands: Direction, Resolution (roll).
 
 ### A10 Growth — grow, then explode — draft-unjudged
 *Signature: **the piece IS the Grow fader** — the structure climbs the tower over the 8-bar build; Explode detonates it at the drop.*
 - Grow — phrase · beat32 (or riser~ ride) · ride 0→1 across the build · build
-- Explode — section · §bound† (today: pad/drop marker) · trigger · drop
+- Explode — section · section bound† (today: pad/drop marker) · trigger · drop
 - Glow — bar · energy · cont
 - Seed — roll · re-roll per section (a new tree per drop)
 - Hands: Shape, Density, Twist, Burst, Palette.
@@ -408,7 +408,7 @@ Cards for unbuilt pieces — the mod intents come from the drafts themselves; th
 *Signature: **Drift is quiet-section dramaturgy in one knob** — ride it by hand; Cadence locks re-description to the grid.*
 - Drift — phrase · hands (or inv-energy) · cont · engage quiet
 - Cadence — roll · beat/bar lock
-- Reset — section · §bound† (today: pad) · trigger (flush Memory to source)
+- Reset — section · section bound† (today: pad) · trigger (flush Memory to source)
 - Hands: Palette, Detail, Bands.
 
 ### A13 Glossolalia — draft-unjudged
@@ -426,16 +426,16 @@ Cards for unbuilt pieces — the mod intents come from the drafts themselves; th
 
 ### A16 Schematic — draft-unjudged
 *Signature: **Scale steps beat-quantized from 4 elements to thousands** — zoom-out as arrangement; Become hands the drawing to the flock at the drop.*
-- Scale — phrase · §step†/pad · beat-quantized steps
+- Scale — phrase · section step†/pad · beat-quantized steps
 - Pulse Rate — texture · dens~ · cont
-- Become — section · §bound† (today: pad) · trigger · drop
+- Become — section · section bound† (today: pad) · trigger · drop
 - Hands: Layers, Sparsity. (Flock rows inherit A1's card.)
 
 ### A14 Fork / A17 I Will Not Remember This / B3 Physics-as-Clip — no cards
 *A14 is a routing pattern; A17 is timeline-authored text cues (H5 — message layer); B3 is conventions. Nothing to map.*
 
 ### B-tier compositions — draft-unjudged (sketch level)
-- **B1 Monolith Collapse:** Collapse — trigger · §bound†/pad · drop. Camera — phrase (H8). Rest hands until the XPBD wave lands.
+- **B1 Monolith Collapse:** Collapse — trigger · section bound†/pad · drop. Camera — phrase (H8). Rest hands until the XPBD wave lands.
 - **B2 Video-Textured Rubble:** Shatter — trigger · drop. Persist — roll per section. Pad: Freeze Frame.
 - **B4 Render Fader:** the fader — phrase · hands or riser~ ride (wireframe→lit render as the build resolves).
 - **B5 Splats Through Slit-Scan:** inherits A9's card whole.
@@ -445,7 +445,7 @@ Cards for unbuilt pieces — the mod intents come from the drafts themselves; th
 - **C1 Towers as Elements:** Wind — bar · Low · cont. Fill — phrase · energy-integral · ride (the build literally accumulates). Tear — trigger · drop. Slosh — bar · Low · cont.
 - **C2 Lightning Between Towers:** inherits A11 (Strike on snare-band).
 - **C3 Wind Made Visible:** Gust — bar · Low · cont (stated). Sway — phrase · lfo32 · cont. Hands: Height, Density, Palette, Sun Angle.
-- **C4 Shadow as Subject / Gallery After Dark:** Light Orbit — roll · beat-bound (stated). Dissolve — trigger · §bound†/pad · drop. Rake — phrase · §step† · step. Palette: Bone default, §step†.
+- **C4 Shadow as Subject / Gallery After Dark:** Light Orbit — roll · beat-bound (stated). Dissolve — trigger · section bound†/pad · drop. Rake — phrase · section step† · step. Palette: Bone default, section step†.
 
 ---
 

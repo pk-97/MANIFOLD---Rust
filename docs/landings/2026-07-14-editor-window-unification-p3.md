@@ -1,6 +1,6 @@
 # EDITOR_WINDOW_UNIFICATION P3 — committed on `feat/editor-window-unification` 2026-07-14 (not yet merged to main)
 
-**Branch:** feat/editor-window-unification · **Level reached:** L1 / target L1 (§10 — "this phase's surface is the test itself")
+**Branch:** feat/editor-window-unification · **Level reached:** L1 / target L1 (section 10 — "this phase's surface is the test itself")
 **Doc status line (quoted verbatim, as updated by this phase):** `**Status:** SHIPPED 2026-07-14 — all phases complete on feat/editor-window-unification, pending orchestrator merge to origin/main. P1 (shared tree_passes.rs::render_tree_overlay_passes, D1/D2/D4, BUG-151 FIXED) already LANDED on main @ c8584b8d. P2 (D6 redraw-keepalive aggregate + perf-HUD-in-editor demo) committed @ 9be53956, not yet merged. P3 (D7 structural guard tree_render_call_sites_are_allowlisted + I2 fold-in + this supersession sweep) committed this phase, not yet merged.`
 
 ## Read-back (D7, restated)

@@ -6,8 +6,8 @@
 
 This document is the implementation contract for a Sonnet-class agent. Every judgment call is already made — the tables below say what to build, in what order, and what the oracle is at each step. Where the doc says DECIDED, do not re-litigate; where it says VERIFY, the parity suite is the referee.
 
-**Prerequisites:** none (Phase 0 scaffold shipped). Background track in `docs/DESIGN_BUILD_ORDER.md` — nothing in waves 0–3 waits on this; its dependents (ML ONNX tier, MEDIA_BACKEND §6) are explicitly later.
-**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5 (Phase briefs)–§6 and §8 before starting any phase. Conformance-hardened: the `manifold-gpu` inventory here is a 2026-07-02 snapshot and this is the deepest doc in the build order — run the §8.3 pre-flight (re-derive the API-surface inventory) at the start of every phase.
+**Prerequisites:** none (Phase 0 scaffold shipped). Background track in `docs/DESIGN_BUILD_ORDER.md` — nothing in waves 0–3 waits on this; its dependents (ML ONNX tier, MEDIA_BACKEND section 6) are explicitly later.
+**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 and section 8 before starting any phase. Conformance-hardened: the `manifold-gpu` inventory here is a 2026-07-02 snapshot and this is the deepest doc in the build order — run the section 8.3 pre-flight (re-derive the API-surface inventory) at the start of every phase.
 
 ---
 
@@ -21,12 +21,12 @@ The port is further along than "add a Vulkan backend" suggests. Already true on 
 | Shader pipeline | DONE — WGSL → naga → SPIR-V → spirv-opt is backend-neutral and always compiled; only the final "SPIR-V → X" step diverges | `src/shader_common.rs` |
 | Vulkan scaffold | DONE — `SlotMap`, `compile_wgsl_to_spirv_{compute,render}`, `build_slot_map`, type shells | `src/vulkan/` (commit 0c5dde17) |
 | `ash` dependency | DONE — pinned 0.38, optional, feature-gated | `Cargo.toml` |
-| Barrier seam | API EXISTS — `GpuEncoder::pipeline_barrier(reads, writes)` is a documented no-op on Metal with Vulkan semantics spelled out in its doc comment. **No call sites exist yet** — see §4 for why that's fine | `src/metal/encoder.rs:1516` |
+| Barrier seam | API EXISTS — `GpuEncoder::pipeline_barrier(reads, writes)` is a documented no-op on Metal with Vulkan semantics spelled out in its doc comment. **No call sites exist yet** — see section 4 for why that's fine | `src/metal/encoder.rs:1516` |
 | Metal type leakage outside the crate | NONE — no `metal::`/`objc2` types escape `manifold-gpu` except the cfg(macos) escape hatches (`raw_device_ptr` for DNN FFI, IOSurface fns) which are already platform-gated at their call sites | verified by sweep |
 | Specialized pipelines | ALREADY PORTABLE — "specialization" is WGSL source string substitution before compile (`device.rs:504`), not Metal function constants. Works identically on Vulkan | `src/metal/device.rs:502-534` |
 | Headless testing | ALREADY TRUE — parity harness and gpu_tests call `GpuDevice::new()` with no window. The whole oracle runs headless | `tests/parity/harness.rs` |
 
-**What remains is exactly three files of real work** — `vulkan/device.rs`, `vulkan/encoder.rs`, `vulkan/types.rs` — plus presentation (Phase 3, mostly `manifold-app`) and the platform-services inventory (§8, separate designs).
+**What remains is exactly three files of real work** — `vulkan/device.rs`, `vulkan/encoder.rs`, `vulkan/types.rs` — plus presentation (Phase 3, mostly `manifold-app`) and the platform-services inventory (section 8, separate designs).
 
 **Not ported, ever** (zero consumers outside the crate, verified by sweep):
 - `metal/mps.rs` (7 MPS kernels) — dead API, kept Metal-side for future use
@@ -46,7 +46,7 @@ The port is further along than "add a Vulkan backend" suggests. Already true on 
 | D3 | Memory | `gpu-allocator` crate (Rust VMA equivalent, MIT/Apache, production use in Bevy et al) | Sub-allocation, dedicated-allocation heuristics, and leak reporting for free; hand-rolling VkDeviceMemory management is the classic self-inflicted wound |
 | D4 | Descriptors | **Push descriptors** (`vkCmdPushDescriptorSetKHR`), single set 0 | Maps 1:1 onto the per-dispatch `&[GpuBinding]` model — no pools, no free-list lifetime bugs. naga already emits `(set=0, binding=N)` matching WGSL `@binding(N)` |
 | D5 | `GpuBinding::Bytes` | Host-visible **uniform ring buffer** per encoder (bump allocator, 256-byte aligned, ~4 MB, grow-with-warn on overflow) | Metal's `set_bytes` has no Vulkan twin; push constants would require shader changes (WGSL declares these as uniform buffers). Ring is the standard answer |
-| D6 | Synchronization | **Automatic hazard + layout tracking inside `GpuEncoder`** (§4). `pipeline_barrier` stays a public no-op hint on both backends | The single most important decision in this doc — rationale in §4 |
+| D6 | Synchronization | **Automatic hazard + layout tracking inside `GpuEncoder`** (section 4). `pipeline_barrier` stays a public no-op hint on both backends | The single most important decision in this doc — rationale in section 4 |
 | D7 | Queues | One graphics+compute queue family. Content and UI each get a `VkQueue` if the family has ≥2, else one queue behind a mutex. Submission always mutex-serialized | Metal's "async compute" (Phase 9) is parallel *recording*, single-queue submission — same shape. Multi-queue is a future optimization, not part of the port |
 | D8 | Command pools | Pool-per-encoder from a free-list on `GpuDevice`; pool is reset and recycled when its fence/timeline value retires | Vulkan pools aren't thread-safe and encoders record on arbitrary threads (compositor async compute, LED readback) |
 | D9 | `GpuEvent` | **Timeline semaphore** | 1:1 with `MTLSharedEvent`: `signal_event_value` → timeline signal, `wait_event` → timeline wait, CPU-side counter → `vkGetSemaphoreCounterValue` |
@@ -66,7 +66,7 @@ The port is further along than "add a Vulkan backend" suggests. Already true on 
 
 ## 3. API contract
 
-The Vulkan module must export **exactly** the backend-neutral surface of `metal/mod.rs:28-37` minus the Metal-only islands (§1). Anything in shared code that touches a Metal-only API must fail to compile under `--features vulkan` — that compile error is the enforcement mechanism, and CI builds both features (§7).
+The Vulkan module must export **exactly** the backend-neutral surface of `metal/mod.rs:28-37` minus the Metal-only islands (section 1). Anything in shared code that touches a Metal-only API must fail to compile under `--features vulkan` — that compile error is the enforcement mechanism, and CI builds both features (section 7).
 
 ### 3.1 `GpuDevice` (from `metal/device.rs`)
 
@@ -74,7 +74,7 @@ The Vulkan module must export **exactly** the backend-neutral surface of `metal/
 |---|---|---|
 | `new()` | Instance (portability enumeration flag for MoltenVK) → pick discrete-then-integrated physical device → device with D2's features → queue(s) → `gpu-allocator` → linear sampler. Process-global `Arc` core per D18 | P1 |
 | `device_name()` | `VkPhysicalDeviceProperties::deviceName` | P1 |
-| `create_texture(desc)` | `VkImage` + `VkImageView` via allocator; usage flags from `GpuTextureUsage` (RENDER_TARGET→COLOR_ATTACHMENT, SHADER_READ→SAMPLED, SHADER_WRITE→STORAGE, COPY_SRC/DST→TRANSFER_SRC/DST; CPU_UPLOAD→staging path per §5). Initial layout UNDEFINED; tracker owns it from there | P1 |
+| `create_texture(desc)` | `VkImage` + `VkImageView` via allocator; usage flags from `GpuTextureUsage` (RENDER_TARGET→COLOR_ATTACHMENT, SHADER_READ→SAMPLED, SHADER_WRITE→STORAGE, COPY_SRC/DST→TRANSFER_SRC/DST; CPU_UPLOAD→staging path per section 5). Initial layout UNDEFINED; tracker owns it from there | P1 |
 | `create_buffer(size)` / `create_buffer_shared(size)` | Device-local / host-visible+coherent persistently mapped (`mapped_ptr` already stubbed in `vulkan/types.rs`) | P1 |
 | `create_sampler(desc)` | `VkSampler`; `ClampToZero` → `CLAMP_TO_BORDER` with transparent-black border; `compare` → `compareEnable` + op | P1 |
 | `upload_texture(tex, data)` | Staging buffer → one-shot command buffer → copy → wait. (Metal's `replaceRegion` is synchronous; match that) | P1 |
@@ -92,7 +92,7 @@ The Vulkan module must export **exactly** the backend-neutral surface of `metal/
 
 ### 3.2 `GpuEncoder` (from `metal/encoder.rs`)
 
-Metal's encoder juggles compute/render/blit sub-encoders (`end_current`/`ensure_compute`); Vulkan records everything into **one `VkCommandBuffer`** — the sub-encoder machinery disappears, replaced by the hazard tracker (§4) at each command.
+Metal's encoder juggles compute/render/blit sub-encoders (`end_current`/`ensure_compute`); Vulkan records everything into **one `VkCommandBuffer`** — the sub-encoder machinery disappears, replaced by the hazard tracker (section 4) at each command.
 
 | Method | Vulkan implementation | Phase |
 |---|---|---|
@@ -108,7 +108,7 @@ Metal's encoder juggles compute/render/blit sub-encoders (`end_current`/`ensure_
 | `commit`, `commit_and_wait_scheduled`, `commit_and_wait_completed[_timed]` | End CB → mutex-guarded `vkQueueSubmit2` with device timeline signal (D10) → optional `vkWaitSemaphores`. `_timed` uses begin/end timestamp queries | P1 |
 | `add_completed_handler[_with_status]`, `add_gpu_time_handler` | Registered on the waiter thread against this submit's timeline value (D10) | P1 |
 | `enable_dispatch_profiling`, `set_profile_tag`, `commit_and_wait_profiled` | Timestamp query pool spans (D19) | P2 |
-| `pipeline_barrier(reads, writes)` | Keep as no-op hint (§4). Optionally use it to pre-warm tracker state — never required for correctness | P1 |
+| `pipeline_barrier(reads, writes)` | Keep as no-op hint (section 4). Optionally use it to pre-warm tracker state — never required for correctness | P1 |
 | `raw_cmd_buf` | Not exported on Vulkan | — |
 
 ---
@@ -153,7 +153,7 @@ Mechanics:
 **P3 — presentation + app bring-up (mostly `manifold-app`).** `GpuSurface` on swapchain (D17), shared-device restructure of the IOSurface triple-buffer bridges (D18), frame pacing port: `mach_wait_until` + 2 ms spin → `clock_nanosleep(TIMER_ABSTIME)` + spin on Linux, high-resolution waitable timers + spin on Windows; CVDisplayLink → swapchain-present-driven cadence (`VK_GOOGLE_display_timing`/`VK_EXT_present_timing` where exposed, plain FIFO pacing otherwise).
 *Oracle:* app boots, plays the canonical Liveschool fixture, frame-pacing telemetry matches the Metal profile shape.
 
-**P4 — platform services.** Each row of §8 is its own design/implementation unit gated on P3. None block the GPU port.
+**P4 — platform services.** Each row of section 8 is its own design/implementation unit gated on P3. None block the GPU port.
 
 **CI matrix from P1 onward:** macOS-Metal (existing) · macOS-MoltenVK (parity on real Apple GPU) · Linux with lavapipe (Mesa software Vulkan 1.3 — CI-only; expect a small tolerance profile for software rasterization, kept separate from GPU tolerances) · Windows when hardware runners exist.
 
@@ -171,7 +171,7 @@ Mechanics:
 - **No silent fallbacks** (per `no-silent-fallbacks-or-interim-stopgaps`): a missing D2 requirement is a boot error naming the feature. The only sanctioned capability adaptations are the documented ones: Memoryless→device-local (D16), f16→f32 (D12), MAILBOX→FIFO (D17) — each logs once at boot.
 - **Public surface stays identical.** A change to any shared signature must compile under both features and be called out in the PR.
 - **cfg discipline:** the `vulkan` cargo feature is the only backend selector. No `#[cfg(target_os)]` backend forks in shared crates.
-- **Both-features build in CI:** `cargo clippy -p manifold-gpu` and `cargo clippy -p manifold-gpu --features vulkan` (plus dependents) both gate — the compile error when shared code touches a Metal-only API is the enforcement mechanism for §3's "not exported" rows.
+- **Both-features build in CI:** `cargo clippy -p manifold-gpu` and `cargo clippy -p manifold-gpu --features vulkan` (plus dependents) both gate — the compile error when shared code touches a Metal-only API is the enforcement mechanism for section 3's "not exported" rows.
 - **Commit cadence:** per phase or finer; parity suite green before each push (workspace sweep rules per CLAUDE.md apply — this is infrastructure, so full sweeps are warranted at phase boundaries).
 
 ---
@@ -186,7 +186,7 @@ Verified by sweep 2026-07-02. Each row is a separate future design; none block P
 | Encode / export / recording | VideoToolbox (`manifold-media/src/metal_encoder.rs`, `manifold-recording`) | FFmpeg encode: NVENC/AMF/QSV hardware paths, x264 fallback | Large — same design doc as decode |
 | Text rendering | CoreText (`manifold-renderer/src/text_rasterizer.rs`, `native_text.rs`, `render_text` primitive; `manifold-ui/src/text.rs`) | **cosmic-text** (fontdb + rustybuzz + swash) — pure Rust, shaping + fallback + rasterization, the current SOTA Rust text stack | Medium |
 | Audio capture | cpal input devices (portable already) + CoreAudio process/system taps (`manifold-audio`, macOS 14.4+) | Taps: WASAPI loopback (Windows — easier than the macOS version was), PipeWire monitor sources (Linux). cpal input path needs nothing | Medium |
-| Frame pacing / display link | `mach_wait_until`, CVDisplayLink (`manifold-app/src/display_link.rs`, `frame_timer.rs`) | §6 P3 | In P3 |
+| Frame pacing / display link | `mach_wait_until`, CVDisplayLink (`manifold-app/src/display_link.rs`, `frame_timer.rs`) | section 6 P3 | In P3 |
 | Screen capture source | ScreenCaptureKit (tv-led-mirror path) | Windows.Graphics.Capture / PipeWire screencast | Small-medium |
 | DNN plugins | Vision/CoreML via FFI (`manifold-native`, `raw_device_ptr` interop) | ONNX Runtime backend — **already designed**, ML nodes design P6 | Designed |
 | Camera | AVFoundation | Media Foundation (Windows) / V4L2 (Linux) — evaluate `nokhwa` first | Small-medium |
@@ -207,4 +207,4 @@ Verified by sweep 2026-07-02. Each row is a separate future design; none block P
 7. Dynamic rendering only; negative-viewport Y-flip; SPIR-V byte-identical across backends.
 8. `arrayLength` via native `OpArrayLength` — no sizes buffer on Vulkan.
 9. MPS / MPSGraph FFT / MetalFX / GpuHeap / capture scopes: not ported (no consumers or already-portable alternatives exist).
-10. Platform services (§8) are separate designs gated behind P3, ONNX excepted (already designed).
+10. Platform services (section 8) are separate designs gated behind P3, ONNX excepted (already designed).

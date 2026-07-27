@@ -1,56 +1,56 @@
 # Live Audio Triggers — Design & Phase Tracker
 
 Status: **SHIPPED — phases 0–7 done, fires + renders end-to-end (verified live
-2026-06-19 per §0).** The only outstanding item is Peter's live feel-check on real
+2026-06-19 per section 0).** The only outstanding item is Peter's live feel-check on real
 stems (an L4 check). Header corrected 2026-07-05 (it still read "IN PROGRESS").
 Branch `live-audio-triggers` (off `audio-clip-detection`). Created 2026-06-18.
 
-**§8 addendum (2026-07-07): Param triggers — audio fires the Trigger controls.
+**section 8 addendum (2026-07-07): Param triggers — audio fires the Trigger controls.
 P1+P2+P3a LANDED on main 2026-07-07 @ `3089e0a3`** (merged from
 `wave/param-triggers`, full workspace + gpu-proofs + clippy gate green pre- and
 post-merge): the engine fires, the renderer feeds generators AND effect chains,
 Strobe proves the effect-side reachability at L1. **P3b (the UI drawer to
-configure it) is SCOPED, not built** — see §8.4 P3b for why it's bigger than the
+configure it) is SCOPED, not built** — see section 8.4 P3b for why it's bigger than the
 original brief and what a follow-up session needs to read first. Same evaluator
 machinery, new target: instead of firing one-shot clips, a transient pulses a
 playing generator's trigger response (and `is_trigger` cards on effects).
 Peter's ask, verbatim: *"if Trigger is enabled we can choose if we want rising
 clip edge (default) OR the transient trigger OR both."*
 
-> **This doc is the cross-compaction tracker.** A fresh session reads §0 first, works
-> the §Phase checklist, ticks boxes + commits as it goes, and updates §0 at the end.
+> **This doc is the cross-compaction tracker.** A fresh session reads section 0 first, works
+> the section Phase checklist, ticks boxes + commits as it goes, and updates section 0 at the end.
 
 ## 0. CURRENT POSITION (read first, update last)
 
-- **§9 unification U-P1 + U-P2 SHIPPED 2026-07-07** (worktree
+- **section 9 unification U-P1 + U-P2 SHIPPED 2026-07-07** (worktree
   `.claude/worktrees/unified-trigger-mods`): the trigger IS an audio mod now, top
   to bottom. `AudioTriggerMod`/`PresetInstance.audio_trigger` are gone; a
   trigger-gate card's config is a `ParameterAudioMod` with `trigger_mode:
   Option<TriggerFireMode>`, reachable through the exact same "A" drawer every
-  other audio mod uses, plus one trailing Mode row. See §9.2 for the full
+  other audio mod uses, plus one trailing Mode row. See section 9.2 for the full
   file-by-file account. **Owed:** Peter's live L4 feel-pass (carries over from
-  §8, unchanged by this refactor since the DSP path is identical) — headless
+  section 8, unchanged by this refactor since the DSP path is identical) — headless
   PNG proof only goes to L1.
-- **§8 feel-pass round 1 (2026-07-07, same evening): Peter's first live pass found two
+- **section 8 feel-pass round 1 (2026-07-07, same evening): Peter's first live pass found two
   real engine bugs, both root-fixed the same night.** (1) A config left DISARMED from
   the drawer kept its mode, and the `acquire_clip` clip-edge gate read
   `mode.wants_clip_edge()` without checking `enabled` — a disarmed Transient config
   silently killed clip-launch triggering for its layer, surviving save/reload with no
   badge (the badge correctly hides when disarmed; the engine didn't apply the same
   rule). Fixed @ `62a75cee`: disabled-means-absent now has one owner,
-  `AudioTriggerMod::clip_edge_enabled()`. (2) The audio-analysis gate was blind to §8
+  `AudioTriggerMod::clip_edge_enabled()`. (2) The audio-analysis gate was blind to section 8
   configs: `has_active_audio_mods` (capture on/off) and `analysis_consumed_sends` (D4
-  per-send gate) counted per-param audio mods and §1–§7 send routes but not
+  per-send gate) counted per-param audio mods and section 1–section 7 send routes but not
   `PresetInstance.audio_trigger` — so a project whose only audio consumer is an armed
   trigger drawer never captured, and even with capture running the trigger's send was
   skipped: armed audio triggers never fired. Fixed this landing: single owner
   `PresetInstance::active_audio_trigger()`, wired into both gates plus
   `audio_send_usage_count` (delete-send warning) and `audio_mod_consumers` (Consumers
-  section, listed as "… • Trigger"). Lesson for future §-additions: a new audio
+  section, listed as "… • Trigger"). Lesson for future section-additions: a new audio
   consumer type must register with the ANALYSIS GATE walkers in `project.rs`, not just
   the evaluator — the evaluator can be perfect and never see a single sample.
-- **§8 P3b BUILT 2026-07-07 (follow-up session, two PRs on `wave/param-triggers-p3b`) —
-  the whole §8 feature is now UI-reachable.** PR1: effect cards gained the toggle/trigger
+- **section 8 P3b BUILT 2026-07-07 (follow-up session, two PRs on `wave/param-triggers-p3b`) —
+  the whole section 8 feature is now UI-reachable.** PR1: effect cards gained the toggle/trigger
   row branch they never had (root cause was deeper than the missing branch —
   `state_sync.rs::preset_to_config` hardcoded `is_toggle/is_trigger: false` for every
   effect param, so Strobe's P3a card rendered as a raw slider; fixed at the registry-read
@@ -60,12 +60,12 @@ clip edge (default) OR the transient trigger OR both."*
   (no mode row). PR2: the D6 `AudioTriggerMod` drawer (Dropdown send · Segmented band ·
   Slider sensitivity · Segmented mode) on `isTriggerGate` cards, new
   `SetAudioTriggerModCommand` (whole-field capture, undoable), PanelAction dispatch +
-  state_sync card view, and the collapsed-row mode badge (§8.2 consequences). Second
+  state_sync card view, and the collapsed-row mode badge (section 8.2 consequences). Second
   root fix en route: `is_trigger_gate` lived only on graph-metadata `ParamSpecDef`,
   unreachable for stock (never-forked) instances — added to registry `ParamDef` and
   threaded through both resolution paths. Verified headless to PNG on both a generator
-  (Plasma) and Strobe. Still owed: Peter's live L4 feel-pass (whole §8 + §1–§7 debt).
-- **§8 execution note (2026-07-07, P1+P2 session): one interpretive call made mid-flight,
+  (Plasma) and Strobe. Still owed: Peter's live L4 feel-pass (whole section 8 + section 1–section 7 debt).
+- **section 8 execution note (2026-07-07, P1+P2 session): one interpretive call made mid-flight,
   flagged for Peter's review.** D1 says "per layer the renderer keeps `clip_count`... and
   `audio_count`" (singular, per-layer) while D2 says the `audio_trigger` config is
   per-INSTANCE (any generator or effect on that layer). The doc doesn't spell out what
@@ -83,16 +83,16 @@ clip edge (default) OR the transient trigger OR both."*
   against every possible multi-instance interaction — flag if the live feel-pass finds
   this wrong.
 - **Status: FIRES + RENDERS end-to-end (verified live 2026-06-19).** Phases 0–6 done. The
-  render bug is fixed (see the §3.4 note + `[[live-audio-triggers]]` memory): a one-shot now
+  render bug is fixed (see the section 3.4 note + `[[live-audio-triggers]]` memory): a one-shot now
   snaps on the **beat clock** (`beat_stamp = current_beat`, `event_absolute_tick = -1`), not
   `get_current_absolute_tick()` — that returns a frame counter with no external MIDI clock, so
   the slot's window looked long-expired and `start_clip` never ran (black viewport). Regression
   test `fire_oneshot_starts_at_playhead_when_abs_tick_is_frame_based`.
-- **Phase 7 (legibility & tuning upgrades, §7) — DONE 2026-06-19.** All four shipped: per-row
+- **Phase 7 (legibility & tuning upgrades, section 7) — DONE 2026-06-19.** All four shipped: per-row
   firing flash + level/threshold meter (7.1–7.3), per-send dB input floor/squelch (7.4), per-route
   one-shot length + Whole grouping + dropped arrow (7.5). The panel now reads as an instrument:
   you can see triggers fire, tune by watching the level cross the line, and squelch quiet bleed.
-  Floor control is a dB stepper (the freq-axis line in the first sketch was wrong — see §7 U3).
+  Floor control is a dB stepper (the freq-axis line in the first sketch was wrong — see section 7 U3).
   Remaining: Peter's live feel check (flash latency, floor sweep, length range).
 - **Detector upgraded to SuperFlux 2026-06-19.** The shared transient detector (`reduce_send`/
   `band_reduce`) was energy-over-running-mean, which fired on amplitude wobble in busy mixes
@@ -102,7 +102,7 @@ clip edge (default) OR the transient trigger OR both."*
   (SuperFlux's built-in ~32 ms refractory covers it). PENDING Peter's A/B on real stems. Full
   rationale + rejected-approach history: `[[audio-onset-detector]]`.
 - **Deferred (documented, not blocking):** stopped-transport live triggering (v1 fires in
-  `tick_playing`). Per-route one-shot length is now IN scope (§7 upgrade 4).
+  `tick_playing`). Per-route one-shot length is now IN scope (section 7 upgrade 4).
 
 ## 1. What this is
 
@@ -344,11 +344,11 @@ Drop the decorative `→` between sensitivity and target.
       (`AudioTriggerLengthStep`, musical halve/double 1/4..16); faint group divider after the
       Whole row; dropped the `→`.
 - [x] **7.6 Ship.** Builds + clippy clean; core/io/ui/audio/editing tests green; floor
-      serde round-trip + analyzer gate tests; committed + pushed; §0 + memory updated.
+      serde round-trip + analyzer gate tests; committed + pushed; section 0 + memory updated.
 
 ## 8. Param triggers — audio fires the Trigger controls (designed 2026-07-07, NOT BUILT)
 
-§1–§7 fire **clips**. This section makes transients fire the **trigger response of an
+section 1–section 7 fire **clips**. This section makes transients fire the **trigger response of an
 already-playing generator or effect chain** (plus `is_trigger` cards) — the kick pulses the
 burst/reset/jump the generator already performs on clip retrigger, without touching clip
 scheduling. On stage: point the Kick send at a playing FluidSim and every kick injects;
@@ -406,7 +406,7 @@ evaluation arm, the count-combination seam, and ~15 lines of drawer spec.
   instance like the `clip_trigger` toggle it sits beside.
 - **D3 — Fires are immediate.** No launch-quantize: a visual transient quantized to the
   grid reads as latency on stage. Latency = detector latency + ≤1 content frame — same
-  as §1–§7 routes with quantize Off. (Clip-launch TriggerRoutes keep honoring the
+  as section 1–section 7 routes with quantize Off. (Clip-launch TriggerRoutes keep honoring the
   project quantize mode; that behavior is correct for *launches* and unchanged.)
 - **D4 — Reuse the edge detector, refactored not copied.** Extract the sensitivity→
   threshold mapping (already pure in `TriggerRoute::threshold`) into a shared helper in
@@ -443,7 +443,7 @@ evaluation arm, the count-combination seam, and ~15 lines of drawer spec.
   get the same drawer minus the mode row (D5b). **Reachability rule (dead-LANES
   lesson):** an effect's instance-level config needs a gate card to host the drawer, so
   P3 upgrades ONE effect preset — Strobe — with a `clip_trigger` toggle card and a
-  minimal trigger→flash response (executor does the §2.5-style read of Strobe's graph
+  minimal trigger→flash response (executor does the section 2.5-style read of Strobe's graph
   first; wiring is theirs, the card + behavior is committed here). Without this the
   effect half ships UI-unreachable. All edits through `EditingService` commands like
   every other audio-mod edit.
@@ -451,7 +451,7 @@ evaluation arm, the count-combination seam, and ~15 lines of drawer spec.
 Consequences, stated honestly:
 - Fires arrive at analysis-block rate on the content tick — a transient between blocks
   lands on the next one. Identical to the shipped clip-trigger routes; nobody has felt
-  it, but Peter's L4 feel-pass on §1–§7 is still owed and covers both.
+  it, but Peter's L4 feel-pass on section 1–section 7 is still owed and covers both.
 - `Transient` mode silently ignores clip launches for that generator's trigger response.
   That is the point, but it's a mode a user can forget — the drawer must show the mode
   on the collapsed card row (the toggle card already shows its state).
@@ -461,15 +461,15 @@ Consequences, stated honestly:
   count has always meant "times this layer was triggered".
 
 Rejected (do not re-propose):
-- **R1 — Fire a one-shot clip on the same layer** (works today via §1–§7 and does
+- **R1 — Fire a one-shot clip on the same layer** (works today via section 1–section 7 and does
   increment `trigger_count`): churns clip state, interrupts the playing clip, and the
   one-shot length is meaningless for a pulse. Clip routes stay for firing *clips*.
 - **R2 — Continuous audio mod on the `clip_trigger` toggle** (BoolThreshold flapping):
   gates the response on/off instead of firing it; no refractory; wrong semantics.
 - **R3 — An audio-transient node inside the graph**: audio stays on the perform
-  surface, not graph nodes (`[[audio-stays-on-perform-surface]]`, §6).
+  surface, not graph nodes (`[[audio-stays-on-perform-surface]]`, section 6).
 - **R4 — A routing table in the Audio Setup modal**: splits a param's audio config
-  across two surfaces; per-param drawers are where mod config lives (§10 of
+  across two surfaces; per-param drawers are where mod config lives (section 10 of
   AUDIO_MODULATION_DESIGN). The Audio Setup table stays clip-routing only.
 
 ### 8.3 Architecture (by crate)
@@ -486,7 +486,7 @@ renderer  effect chains: set_frame_context feeds the layer's           EXTEND (D
           effective count into generator_input.trigger_count
           (currently pinned 0.0); master chains: clip part = 0
 editing   SetAudioTriggerModCommand (mirrors audio-mod commands)       NEW
-ui        drawer rows on trigger cards (DrawerSpec — §10.2 of          NEW (small)
+ui        drawer rows on trigger cards (DrawerSpec — section 10.2 of          NEW (small)
           AUDIO_MODULATION_DESIGN did the hard part)
 app       PanelAction + dispatch + state_sync card view                WIRE
 ```
@@ -503,8 +503,8 @@ app       PanelAction + dispatch + state_sync card view                WIRE
       (`evaluate_all_param_triggers` → `Vec<TriggerPulse>`, drained via
       `PlaybackEngine::take_trigger_pulses`, P2 plumbs it into the renderer); BUG-051
       fixed — `engine.stop()` now calls `live_trigger_state.clear()` +
-      `modulation::clear_all_trigger_edges` (covers both the §1-7 route edges and the
-      new §8 holders). Gate: 6 new core tests (`audio_trigger::tests`) + 6 new playback
+      `modulation::clear_all_trigger_edges` (covers both the section 1-7 route edges and the
+      new section 8 holders). Gate: 6 new core tests (`audio_trigger::tests`) + 6 new playback
       tests (`modulation::tests::param_trigger_*`, `clear_all_trigger_edges_*`,
       `is_trigger_audio_mod_*`) all green; full existing suites green (core 309+9,
       playback 158+6 incl. the 5 `live_trigger` refactor-proof tests, editing 97+67,
@@ -543,13 +543,13 @@ app       PanelAction + dispatch + state_sync card view                WIRE
       visibly fires a playing FluidSim burst) could not be run in this headless
       session — no audio device, no interactive GPU output to observe. Verified
       only to L1 (tests green) for this phase; Peter's live feel-pass must cover
-      this alongside the existing §7 feel-pass debt. The effect-side look lands
+      this alongside the existing section 7 feel-pass debt. The effect-side look lands
       with P3's Strobe card, also L4-owed.
 - [x] **P3a — Model + Strobe reachability (SHIPPED).** `is_trigger_gate` flag
       (`ParamSpecDef.is_trigger_gate`) + all 11 generator preset edits
       (`isTriggerGate: true` on each `clip_trigger` card) + Strobe upgraded with a
       `clip_trigger` toggle card wired to a minimal trigger→flash response
-      (D6 reachability rule; §2.5 audit of Strobe's graph done first — composed
+      (D6 reachability rule; section 2.5 audit of Strobe's graph done first — composed
       entirely from existing primitives: `system.generator_input` →
       `node.trigger_gate` (enabled by the toggle) → `node.envelope_decay` (the same
       atom FluidSim2D's clip-trigger state machine uses) → `node.math` (Max) combined
@@ -563,7 +563,7 @@ app       PanelAction + dispatch + state_sync card view                WIRE
       primitives). Full gpu-proofs suite (1245) + default workspace sweep + clippy
       all green.
 - [x] **P3b — UI drawer + dispatch (BUILT 2026-07-07, follow-up session, two PRs:
-      `b333d855` reachability + `b71c7dc8` drawer — see §0 for the two root-cause
+      `b333d855` reachability + `b71c7dc8` drawer — see section 0 for the two root-cause
       fixes found en route; scoping notes below kept for the record).**
       Investigation found this is substantially
       bigger than the original phase brief implied — a genuinely new UI feature, not
@@ -587,7 +587,7 @@ app       PanelAction + dispatch + state_sync card view                WIRE
         `DrawerIds`/config struct, and the `EditingService` command (new
         `SetAudioTriggerModCommand`, mirroring `SetAudioSendTriggersCommand`'s
         whole-field-capture shape, not the per-param audio-mod command) are all new,
-        not reused. The `DrawerSpec`/`drawer::build` MECHANISM (§10.2 of
+        not reused. The `DrawerSpec`/`drawer::build` MECHANISM (section 10.2 of
         AUDIO_MODULATION_DESIGN) is reusable — only the model binding and the extra
         mode row are new.
       - **Collapsed-row mode indicator** (show the mode on the collapsed card row
@@ -596,7 +596,7 @@ app       PanelAction + dispatch + state_sync card view                WIRE
       Brief for the follow-up session: read `param_slider_shared.rs`'s
       `check_row_click` (~1830-1924) and `param_card.rs`'s `build_param_row` +
       `compute_height_effect`/`compute_height_generator` end to end first (the
-      §2.5-style read this phase skipped due to running out of session budget);
+      section 2.5-style read this phase skipped due to running out of session budget);
       then split into two PRs — (1) `is_trigger` reachability on the existing
       drawer (small, mechanical once the layout branch is understood), (2) the new
       `AudioTriggerMod` drawer + command + dispatch + state_sync + collapsed-row
@@ -619,11 +619,11 @@ app       PanelAction + dispatch + state_sync card view                WIRE
 
 ## 9. Unification — the trigger IS an audio mod (Peter, 2026-07-07: "reuse the existing detectors so we don't have this stupid and dangerous split")
 
-Decided in-session after feel-pass round 1. The §8 D2 shape (`AudioTriggerMod`, a
+Decided in-session after feel-pass round 1. The section 8 D2 shape (`AudioTriggerMod`, a
 second per-instance config beside `audio_mods`) was a design mistake: the DSP was
 always shared, but the parallel CONFIG type forced every gate, walker, drawer, and
 command to know about two things, and the same night it shipped, two real bugs came
-from plumbing that knew about only one (§0). The §8.2 D2/D6 decisions are SUPERSEDED
+from plumbing that knew about only one (section 0). The section 8.2 D2/D6 decisions are SUPERSEDED
 by this section; D1 (two counters, event-time gating), D3 (immediate fires), D5
 (effect chains get the count) stand unchanged.
 
@@ -645,12 +645,12 @@ by this section; D1 (two counters, event-time gating), D3 (immediate fires), D5
 - **U3 — Mode lives on the mod.** `ParameterAudioMod.trigger_mode:
   Option<TriggerFireMode>` (serde skip-none; `None` on non-gate targets). Arm-time
   default **Both** (adding audio to a trigger must not silently kill clip launches —
-  the §8 ClipEdge default made arming a no-op, bad instrument feel). The clip-edge
+  the section 8 ClipEdge default made arming a no-op, bad instrument feel). The clip-edge
   gate helper becomes `PresetInstance::clip_edge_enabled()`: no enabled gate mod →
   true; else its mode's `wants_clip_edge()`. Disabled-means-absent (today's
   regression semantics) carries over verbatim.
 - **U4 — Walkers shrink back.** `PresetInstance::active_audio_trigger()` and the
-  four §0 walker arms are DELETED — a fire-mode mod is just an audio mod, so
+  four section 0 walker arms are DELETED — a fire-mode mod is just an audio mod, so
   `has_active_audio_mods`/`analysis_consumed_sends`/usage/consumers cover it with
   zero trigger-specific code. This deletes the "walker forgets the second config
   type" bug class by deleting the second config type.
@@ -670,7 +670,7 @@ by this section; D1 (two counters, event-time gating), D3 (immediate fires), D5
 - [x] **U-P1 (core+playback+renderer+io):** model change + migration + evaluator
       merge + `clip_edge_enabled()` move + walker-arm removal + BUG-051 clear path
       covers `trigger_mode` mods' edges (already does — same `trigger_edge` field).
-      Tests: port today's two §0 regression tests to the unified shape (disarmed
+      Tests: port today's two section 0 regression tests to the unified shape (disarmed
       gate mod → clip edge on + gates off; armed fire mod → gates on, send claimed,
       pulse emitted on threshold crossing; mode row gates clip/audio at event time);
       migration round-trip from a legacy `audioTrigger` JSON blob.

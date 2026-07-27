@@ -57,7 +57,7 @@ bans ok
 ## Deviations from brief
 
 1. **D2's `SceneObject` struct grew from 9 to 21 resource fields mid-P2.**
-   The design's §1 audit undercounted `render_scene.rs`'s real per-object
+   The design's section 1 audit undercounted `render_scene.rs`'s real per-object
    port surface — it named 9 legacy port families
    (mesh/transform/material/4 PBR maps/instances) but the actual
    `ObjectPortNames` struct carried 21: 12 more came from

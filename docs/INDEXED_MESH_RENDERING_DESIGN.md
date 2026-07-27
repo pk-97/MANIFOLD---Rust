@@ -14,10 +14,10 @@ attribute. The P0 branch is kept for reference; recommend NOT landing (0.8ms is 
 permanent draw-path complexity + D1's rebuild-the-discarded-index debt).
 
 _Original approved framing, kept for the record:_ APPROVED 2026-07-18. Supersedes the deferred R4
-stub in `RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md` §Deferred (which framed R4 as a graph-wide
+stub in `RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md` section Deferred (which framed R4 as a graph-wide
 re-index; this design rejected that — see D1). P0 was a proof-of-concept STOP gate; it did its job.
 
-**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5 (Phase briefs)–§6 before any phase.
+**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 before any phase.
 
 ## 1. Intake — what this does on stage
 
@@ -29,7 +29,7 @@ measurement: 4K and 1440p render the same). The instrument goal: a heavy importe
 without the performer hand-decimating meshes before every gig — the geometry cost stops being the
 thing that decides whether a look is usable live.
 
-**Binding constraints (per DESIGN_AUTHORING §1):**
+**Binding constraints (per DESIGN_AUTHORING section 1):**
 - **Hot path** — this is the per-frame render. Correctness of the shipped shadow/IBL caching and
   the freeze/executor invariants must not regress. No per-frame allocation.
 - **GPU backend** — native Metal (`manifold-gpu`), hand-written; adds one draw variant.

@@ -25,7 +25,7 @@ scoped out, noted in `apply_driven_state`'s doc comment).
 
 **P1 execution note (2026-07-14, Sonnet):** shipped the inverse machinery
 (D2/D3), the dispatch-layer reroute (D1), D4's effective-value display, and
-D9's freeze-on-unmap. One judgment call, not pre-approved in this doc: §3's
+D9's freeze-on-unmap. One judgment call, not pre-approved in this doc: section 3's
 "emit the ParamSnapshot/ParamChanged/ParamCommit lifecycle" assumed a
 gesture-boundary signal that doesn't exist on the wire for a plain node-face
 `SetGraphNodeParam`/`ParamScrub` (only card-slider drags and group-face
@@ -53,7 +53,7 @@ plus `card_reshape_roundtrips` / `macro_curve_inverse_roundtrips`
 (manifold-editing) for D9. The full vertical path (a real node-face drag
 moving both the card and the render) has not been driven end-to-end by an
 automated test — flagged for whoever picks up P2 or does the look-pass.
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5 (Phase briefs)–§6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 before starting any phase.
 
 Closes **BUG-158** (mapped-param-edits-snap-back-no-two-way-binding). The governing
 insight: a card binding makes the outer card param the *sole authority* the render
@@ -218,7 +218,7 @@ The reroute is a dispatch-layer concern where both vocabularies already meet.
 **Entry state:** `rg -n "fn apply_card_reshape" crates/manifold-core/src/effects.rs`
 hits `:489`; `rg -n "SetGraphNodeParam" crates/manifold-app/src/app_render.rs` hits
 the `:2480` arm; re-verify both anchors.
-**Read-back:** this doc §2–§4 whole; restate D1, D2's signature, the two forbidden
+**Read-back:** this doc section 2–section 4 whole; restate D1, D2's signature, the two forbidden
 architectures, and what the entry checks found — before any code.
 **Deliverables:** `MacroCurve::inverse` (macro_bank.rs) + `invert_card_reshape`
 (effects.rs) with the two roundtrip tests; the dispatch-arm reroute with resolved-at-
@@ -239,7 +239,7 @@ changes continuously; release, Cmd-Z, both ends return together.
 **Demo:** `ui-snap` editor scene variant with a bound param at a non-default value —
 node row and card slider visibly agree (L2). **Test scope:** focused crates above;
 workspace sweep at landing.
-**Forbidden moves:** the two named wrong architectures (§3); TODO-as-deferral for D9;
+**Forbidden moves:** the two named wrong architectures (section 3); TODO-as-deferral for D9;
 touching `scalar_or_param`.
 
 ### P2 — Driven treatment + input-layer prevention (one session)
@@ -247,7 +247,7 @@ touching `scalar_or_param`.
 **Read-back:** D5–D7, D10; the existing driven-dim block in `render.rs`.
 **Deliverables:** driven readout row per D5 (dimmed track + live fill + input-jack
 glyph + hover source + click-highlights-wire); input-layer scrub prevention with its
-unit test (Invariants §4); D6's driven-wins ordering including the visible binding
+unit test (Invariants section 4); D6's driven-wins ordering including the visible binding
 badge; D7's badge tooltip naming the outer param.
 **Gate (positive):** gesture-layer test green; `cargo test -p manifold-ui --lib`;
 **acceptance demo (L2, mandatory):** headless editor PNG with one wire-driven param
@@ -263,7 +263,7 @@ grabs, the row visibly says why, and clicking it lights the wire to the LFO.
 row rendering); hiding the binding badge under the driven state (D6 keeps it).
 
 ## 6. Decided — do not reopen
-1. Reroute at dispatch; no dual-write; no binding-skip flags (D1, §3).
+1. Reroute at dispatch; no dual-write; no binding-skip flags (D1, section 3).
 2. Inverse lives beside forward in `effects.rs`; curve inverse on `MacroCurve` (D2, D3).
 3. All four curves invertible — no read-only fallback for curves in v1 (D3).
 4. Node face shows effective value for bound params (D4).

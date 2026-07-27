@@ -2,7 +2,7 @@
 
 **Status:** SHIPPED — P0–P6 fully landed 2026-07-04/05 (last `4c860cad`). Open verification debt: the interactive GUI matrix (drag-drop, search-clear, management matrix, thumbnail display) is VD-002 in `docs/VERIFICATION_DEBT.md` — blocked on UI_AUTOMATION for scripted coverage. · designed 2026-07-04 · Fable
 **Prerequisites:** none for P0–P4 (P0 is re-rankable first — it fixes live bugs); P5 (browser) has a hard edge on OVERLAY_SESSIONS_AND_PICKER P2; P6 (thumbnails) is verify-at-impl gated.
-**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5 (Phase briefs)–§6 before starting any phase.
+**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 before starting any phase.
 
 Peter, 2026-07-04: **"I want to rethink these categories from the ground up. The
 current model we use isn't easy to follow or intuite"** — the categories being
@@ -106,7 +106,7 @@ effective defs).
   renders a 256px PNG (headless harness; generators render bare, effects over the
   parity harness's standard input) stored as `<Name>.png` beside the JSON. Factory
   thumbnails come from a one-shot dev bin committed to assets. Browse time never
-  renders. Own phase, verify-at-impl gated (§1 last row).
+  renders. Own phase, verify-at-impl gated (section 1 last row).
 - **D8 — `effect_type` survives as the based-on id.** It's the serialization
   anchor (type ids are forever), the Ableton addressing key
   (`find_preset_instance_mut`), and the provenance link. It stops implying "the
@@ -217,7 +217,7 @@ overlay install (`project_io.rs:33` → `set_project_presets` → `apply_reload`
   canvas of 2026-07-04 is not fully root-caused; the snapshot path is proven
   good — `GraphSnapshot::from_def` on the assembled def yields 12 nodes/10
   wires — so observe where the entry path loses the target and write it down).
-- **Read-back:** D1, D9, §4 forbidden-by-name; `gltf_import.rs`
+- **Read-back:** D1, D9, section 4 forbidden-by-name; `gltf_import.rs`
   `assemble_import_graph` (metadata block near the end);
   `ImportModelLayerCommand` (`commands/layer.rs:100`); `import_model_file`
   (`app_lifecycle.rs:506`); `refresh_preset_overlay_if_changed`
@@ -262,7 +262,7 @@ overlay install (`project_io.rs:33` → `set_project_presets` → `apply_reload`
 ### P1 — One rule: delete the dead fork machinery, humanize explicit forks
 
 - **Entry state:** re-run the inventory: `rg -n "count_preset_uses|EditPresetParamCommand" crates/` → definition + tests only (if production callers appeared since 2026-07-04, STOP and list them); `rg -n "split_once\('#'\)" crates/manifold-app/src/ui_bridge/state_sync.rs` → 1 hit.
-- **Read-back:** this doc §2 D1/D2, §4 forbidden-by-name; `preset.rs` whole file; `state_sync.rs` `card_preset_name`.
+- **Read-back:** this doc section 2 D1/D2, section 4 forbidden-by-name; `preset.rs` whole file; `state_sync.rs` `card_preset_name`.
 - **Deliverables:** delete `count_preset_uses` + `EditPresetParamCommand` (+ their tests); `ForkPresetCommand` mints display-based ids ("Bloom 2" — reuse `mint_embedded_preset_id` with a `" {n}"` probe instead of `#{n}`, keep the `'#'`-tolerant loader behavior for legacy ids); embedded `display_name` set to the minted name; delete `card_preset_name`'s `'#'` split (embedded presets render their `display_name`); load-time cosmetic pass: legacy `#N` embedded presets get `display_name = "Base (variant)"` if unset.
 - **Gate (positive):** `cargo clippy --workspace -- -D warnings`; full `cargo test --workspace`; Liveschool fixture round-trip green; manual: Make Unique on a shared effect → card shows "Bloom 2", other instances unaffected.
 - **Gate (negative):** `rg -n "count_preset_uses|EditPresetParamCommand" crates/` → 0 hits; `rg -n "split_once\('#'\)" crates/manifold-app/src` → 0 hits.
@@ -270,7 +270,7 @@ overlay install (`project_io.rs:33` → `set_project_presets` → `apply_reload`
 
 ### P2 — Self-contained saves (snapshot-on-save)
 
-- **Entry state:** P1 merged. Run the §1 VERIFY-AT-IMPL for missing-id load behavior; write the observed failure into the phase notes (it becomes this phase's before/after proof).
+- **Entry state:** P1 merged. Run the section 1 VERIFY-AT-IMPL for missing-id load behavior; write the observed failure into the phase notes (it becomes this phase's before/after proof).
 - **Read-back:** D5; `project_io` load path where `set_project_presets` is installed; `preset_loader.rs` `build_catalog` merge order.
 - **Deliverables:** `EmbeddedOrigin` field (serde default `Saved`); save path collects referenced ids from tracking instances (effects, clip effects, master, generators) and upserts `Snapshot` defs + prunes stale ones; catalog merge treats `Snapshot` entries as below disk tiers, `Saved` entries on top (today's order); io round-trip tests for both origins.
 - **Gate (positive):** full workspace sweep + Liveschool golden; new io test: save project referencing a user preset → delete the user file → reload → instance renders from snapshot with a loud log line; report Liveschool `.manifold` file size before/after (expect small growth; escalate if >5MB delta).
@@ -280,8 +280,8 @@ overlay install (`project_io.rs:33` → `set_project_presets` → `apply_reload`
 ### P3 — Library doors + the file-ops service
 
 - **Entry state:** P1 merged (P2 independent). ⚠ VERIFY-AT-IMPL: new-file freshness — drop a JSON into the user dir while running; confirm the Add browser lists it without restart (the 2026-06 memory claims a stale `OnceLock` picker path; the registry is arc-swap now — observe, don't recall). If stale, fixing that staleness joins this phase's deliverables.
-- **Read-back:** D4; §4 `UserLibrary`; `preset_file.rs`; the ExportPreset dispatch arm (`inspector.rs:2371`).
-- **Deliverables:** `UserLibrary` service per §4; `SaveToLibrary` + `SaveToProject` panel actions on the card menu and graph editor (name prompt via existing text-input session, owned per OVERLAY_SESSIONS D2); Save to Project upserts `origin: Saved`.
+- **Read-back:** D4; section 4 `UserLibrary`; `preset_file.rs`; the ExportPreset dispatch arm (`inspector.rs:2371`).
+- **Deliverables:** `UserLibrary` service per section 4; `SaveToLibrary` + `SaveToProject` panel actions on the card menu and graph editor (name prompt via existing text-input session, owned per OVERLAY_SESSIONS D2); Save to Project upserts `origin: Saved`.
 - **Gate (positive):** focused `-p manifold-app` + `-p manifold-io` tests; manual: save a tweaked Bloom to Library → appears in browser (both kinds tested); save to Project → travels through save/reload; clippy.
 - **Gate (negative):** `rg -n "rfd::FileDialog" crates/manifold-app/src/ui_bridge/inspector.rs` → hits only in Export/Import arms (library saves never open a dialog).
 - **Forbidden moves:** writing library files from `manifold-ui` or `manifold-core` · silent overwrite on name collision (disambiguate) · deleting factory files.
@@ -289,22 +289,22 @@ overlay install (`project_io.rs:33` → `set_project_presets` → `apply_reload`
 ### P4 — Divergence made visible (badge · Revert · Push)
 
 - **Entry state:** P3 merged (Push needs `UserLibrary`).
-- **Read-back:** D3; card config build in `state_sync.rs`; `RevertToLibraryCommand` shape in §4.
-- **Deliverables:** modified badge on card + editor header when `graph.is_some()`; `RevertToLibraryCommand` (undoable, fails loud per §4); Push to Library action (user-library entries; factory offers save-as-new); context-menu wording states the blast radius ("updates N tracking instances" is NOT computed — it says "updates instances tracking this preset").
+- **Read-back:** D3; card config build in `state_sync.rs`; `RevertToLibraryCommand` shape in section 4.
+- **Deliverables:** modified badge on card + editor header when `graph.is_some()`; `RevertToLibraryCommand` (undoable, fails loud per section 4); Push to Library action (user-library entries; factory offers save-as-new); context-menu wording states the blast radius ("updates N tracking instances" is NOT computed — it says "updates instances tracking this preset").
 - **Gate (positive):** focused app/ui tests + manual: edit a graph → badge appears; Revert → badge gone, pixels match library (visual check); Push → a second tracking instance updates live.
-- **Forbidden moves:** any use-count computation (§4 forbidden-by-name) · hash-based modified detection.
+- **Forbidden moves:** any use-count computation (section 4 forbidden-by-name) · hash-based modified detection.
 
 ### P5 — Browser: sources, badges, management (hard edge: OVERLAY_SESSIONS P2)
 
 - **Entry state:** OVERLAY_SESSIONS P2 merged (`PickerItem` exists — re-verify: `rg -n "struct PickerItem" crates/manifold-ui/src`).
-- **Read-back:** D6; §3; `ui_root.rs:1420-1490` open sites; PickerCore API.
+- **Read-back:** D6; section 3; `ui_root.rs:1420-1490` open sites; PickerCore API.
 - **Deliverables:** source filter row (All · Factory · My Library · This Project) as picker state above category chips; `PickerItem.badge` populated from origin; right-click management menu on user/project cells (rename → text session, duplicate, delete with confirm, reveal); `Snapshot` entries listed only when their id is missing from disk, badged "missing from library".
 - **Gate (positive):** manual matrix: each source filter × search × category; rename/duplicate/delete round-trip visible in the browser without restart; focused ui tests; clippy.
 - **Forbidden moves:** a separate library-manager window · folder trees · touching dropdown/ableton_picker.
 
 ### P6 — Thumbnails (conformance level — verify-at-impl heavy)
 
-- **Entry state:** P3 + P5 merged. Pre-flight (§1 last row): confirm or refute a static-image draw path in the popup UI; if absent, **escalate with the finding** — the options (extend the node-preview blit vs a small image-cell node type) are an architecture choice Peter signs off, not an executor call.
+- **Entry state:** P3 + P5 merged. Pre-flight (section 1 last row): confirm or refute a static-image draw path in the popup UI; if absent, **escalate with the finding** — the options (extend the node-preview blit vs a small image-cell node type) are an architecture choice Peter signs off, not an executor call.
 - **Deliverables (shape, pinned after pre-flight):** save-time 256px PNG render via the headless harness (generators bare; effects over the parity standard input); `<Name>.png` beside the JSON; factory-thumbnail one-shot bin; browser cells render the image with text fallback.
 - **Gate (positive):** browser shows images for entries that have them, clean fallback for those that don't; save-to-library produces a PNG that Read-the-file confirms is the look; clippy + focused tests.
 - **Forbidden moves:** browse-time rendering · per-frame texture uploads for static cells.
@@ -338,4 +338,4 @@ overlay install (`project_io.rs:33` → `set_project_presets` → `apply_reload`
   browsing becomes a real session activity (Peter's call).
 - **Hover-preview on program output** (Resolume-style preview bus) — trigger:
   post-thumbnails, if stills prove insufficient on stage.
-- **TextInputState session collapse** — tracked in OVERLAY_SESSIONS §7.
+- **TextInputState session collapse** — tracked in OVERLAY_SESSIONS section 7.

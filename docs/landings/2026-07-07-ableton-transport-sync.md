@@ -1,7 +1,7 @@
 # wave/ableton-transport-sync (P1–P3 + P4 docs) — landed 2026-07-07 @ bea00685
 
 **Branch:** wave/ableton-transport-sync · **Level reached:** L1 / target L2 (P3) + L4 (P4, Peter-owned)
-**Doc status line (quoted verbatim):** "**Status:** P1–P3 SHIPPED 2026-07-07 (same-session build, Fable) · P4 landing complete except the L4 live checklist (§6 P4 demo — Peter-owned, the real acceptance gate)"
+**Doc status line (quoted verbatim):** "**Status:** P1–P3 SHIPPED 2026-07-07 (same-session build, Fable) · P4 landing complete except the L4 live checklist (section 6 P4 demo — Peter-owned, the real acceptance gate)"
 
 Design: `docs/ABLETON_TRANSPORT_SYNC_DESIGN.md` (written, approved, and built in
 the same session — Peter: "this is a Fable level problem that gets solved here
@@ -37,12 +37,12 @@ rg 'suppress_next_transport' crates/manifold-playback/src/ableton_bridge.rs → 
 
 ## Deviations from brief
 1. D5 gate widened to hold CLK *transport* relay while pending (pause-flap
-   during in-flight play-from-cursor). Design doc deviations §1.
+   during in-flight play-from-cursor). Design doc deviations section 1.
 2. Relay drain gates on drain-time CLK liveness, not frame-start authority
    (from-idle Ableton play would have been discarded — found by attacking the
-   integration story mid-build). Design doc deviations §2.
+   integration story mid-build). Design doc deviations section 2.
 3. P3 negative-gate rg pattern scoped to AbletonOSC-path files (pattern also
-   matched untouched M4L legacy). Design doc deviations §3.
+   matched untouched M4L legacy). Design doc deviations section 3.
 4. P3's L2 no-peer degrade log trace not produced (needs the windowed app) —
    VD-013; the sequence is L1-proven by T7/T8 + f7.
 

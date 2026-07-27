@@ -1,6 +1,6 @@
 # AUDIO_SETUP_DOCK Wave 2, batch 1 (P5+P6) — landed 2026-07-11 @ `2c12fc99`
 
-**Branch:** `wave/audio-dock-wave2` · **Level reached:** L1 (unit tests) + L2 (synthetic-level PNG) for P5's plumbing; L1 for P6. **Target for P5 was explicitly NOT L4** — the brief forbids claiming the live crossing from this session (§7.1's own overclaim lesson); L4 is VD-025, owed to Peter.
+**Branch:** `wave/audio-dock-wave2` · **Level reached:** L1 (unit tests) + L2 (synthetic-level PNG) for P5's plumbing; L1 for P6. **Target for P5 was explicitly NOT L4** — the brief forbids claiming the live crossing from this session (section 7.1's own overclaim lesson); L4 is VD-025, owed to Peter.
 **Doc status line (quoted verbatim):** `**Status:** **IN PROGRESS — WAVE 2 (P5+P6 SHIPPED 2026-07-11, P7–P8 not built)**`
 
 ## What shipped
@@ -27,7 +27,7 @@ performer tunes a trigger at soundcheck. Fixed:
   edge reads; hold/decay is display-only).
 - Fixed the stale `tick_audio_triggers` doc comment (claimed "called after modulation";
   actually runs at step 3b, before `sync_clips_to_time`, before modulation) — the root cause
-  of the original bug. Updated `CORE_ENGINE_MAP.md` §3/§6 to match.
+  of the original bug. Updated `CORE_ENGINE_MAP.md` section 3/section 6 to match.
 
 **P6 — drawer cleanup: Sensitivity, Delta removal, Invert.**
 - Display label "Amount" → "Sensitivity" on the shared audio-mod drawer (internal name

@@ -10,7 +10,7 @@ runs are bit-identical in extracted frames. P3 shipped as the standing
 gpu-proofs; needs ffmpeg/ffprobe on PATH). L4 (Peter exports a real track and
 sees the pump) = VD-016. Landing report:
 `docs/landings/2026-07-07-offline-audio-reactive-export.md`.**
-**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5 (Phase briefs)–§6 + §8 first.
+**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 + section 8 first.
 Anchors are a 2026-07-04 snapshot — re-verify before each phase.**
 
 ## The problem
@@ -76,7 +76,7 @@ The live path is untouched by this design.
   the per-frame work is slice + push + snapshot write. (Export is not the live
   hot path, but there is no reason to churn.)
 
-## Seam brief (old → new), per DESIGN_DOC_STANDARD §6
+## Seam brief (old → new), per DESIGN_DOC_STANDARD section 6
 
 `audio_mixdown.rs` currently renders straight to a WAV:
 

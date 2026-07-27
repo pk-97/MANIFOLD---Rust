@@ -3,7 +3,7 @@
 Status: AUTHORITATIVE current-state map, 2026-07-07, from a full read of
 `manifold-io` (all 11 source files) plus the app-side seams (`project_io.rs`,
 `autosave.rs`, `app_lifecycle.rs`). Sibling of CORE_ENGINE_MAP.md /
-FREEZE_COMPILER_MAP.md. §9 (Executor contracts fusion leans on) honest edges is the payload — each is a latent-bug
+FREEZE_COMPILER_MAP.md. section 9 (Executor contracts fusion leans on) honest edges is the payload — each is a latent-bug
 lens; the top ones are logged as BUG-062 (no-forward-version-guard)..065 in `docs/BUG_BACKLOG.md`.
 
 The stakes here are singular: the `.manifold` file is the one unrecoverable
@@ -34,7 +34,7 @@ renderer catalog (embedded-preset snapshotting) deliberately lives app-side in
 - **V1 (legacy)**: plain JSON text file. Detected by ZIP-open failure —
   there is no magic-byte check; any non-ZIP bytes are treated as V1 JSON.
 - Standalone files: preset JSON (`preset_file.rs`), venue/stage JSON
-  (`venue_file.rs`). Neither is versioned with a migration chain (§9 E8).
+  (`venue_file.rs`). Neither is versioned with a migration chain (section 9 E8).
 - Snapshot identity and save dedup both key on **the first 6 hex chars (24
   bits) of SHA-256** of the pretty-printed project JSON (`compute_hash`,
   archive.rs:289).
@@ -61,31 +61,31 @@ original archive is untouched.
 
 `ProjectIOService::save_project` (project_io.rs:428) is the ported Unity path,
 currently `#[allow(dead_code)]` — the live saves route through the two paths
-above. Three save-shaped functions exist for one behavior (§9 E5).
+above. Three save-shaped functions exist for one behavior (section 9 E5).
 
 ## 4. Load pipeline (in order)
 
 `load_project_with` (loader.rs:49):
 
 1. Read file → try ZIP (`project.json` entry) → else V1 plain JSON.
-2. `migrate::migrate_if_needed` — the JSON-level version chain (§5).
+2. `migrate::migrate_if_needed` — the JSON-level version chain (section 5).
 3. **Embedded-presets pre-pass**: parse just `embeddedPresets` and hand them
    to the app's installer BEFORE the typed deserialize — the V1.4 param
    loader resolves params against the preset registry *during* `Project`
    deserialization (BUG-036 (param-manifest-construction-not-a-unified-safe-g…) root cause). Pre-pass failure is a WARN, not an
-   error (§9 E6).
+   error (section 9 E6).
 4. Typed `serde_json` deserialize into `Project`.
 5. `strip_unknown_effects` — unrecognized effect types silently deleted.
 6. `on_after_deserialize` — rebuild caches; BPM synced from tempo-map beat 0,
    clamped 20–300.
 7. V1 only: `migrate_duration_modes` (all layers forced to NoteOff).
-8. `PathResolver::resolve_all` (§6).
+8. `PathResolver::resolve_all` (section 6).
 9. Post-load validation (loader.rs:204): `validate` (WARN only),
    `validate_clips` (missing files, WARN only), `purge_orphaned_references`,
    stamp `clip.layer_id` from structural ownership, reconcile desynced
    generator identity, backfill legacy fork display names, and
    **`repair_overlapping_clips` — deletes the shorter clip of every
-   overlapping pair**, logged at WARN (§9 E4).
+   overlapping pair**, logged at WARN (section 9 E4).
 
 App-side wrapper (`open_project_from_path`, project_io.rs:341) additionally:
 snapshots the preset overlay before the pre-pass hook mutates it and **rolls
@@ -124,7 +124,7 @@ silently dropped by `filter_map` (a hypothetical `"1.4.0-beta"` parses as
 
 **There is no upper-bound check.** A file whose version is *newer* than the
 build runs zero migrations and deserializes on serde's ignore-unknown-fields
-default (§9 E1 — the worst edge in the crate).
+default (section 9 E1 — the worst edge in the crate).
 
 ## 6. Path resolution
 
@@ -136,7 +136,7 @@ name match only if file size matches the stored `file_size` (size check
 skipped when stored size < 0, and entirely absent for directories).
 Unresolved paths are counted and logged, never surfaced to the UI. On save,
 `store_relative_paths` refreshes the relative forms. Audio clip paths and
-other path-bearing fields are NOT visited (§9 E7).
+other path-bearing fields are NOT visited (section 9 E7).
 
 ## 7. History / recovery surface
 
@@ -144,7 +144,7 @@ other path-bearing fields are NOT visited (§9 E7).
   `history/` (gzip). Restore = `load_project_snapshot(archive, hash)` → full
   load pipeline → revert menu (`refresh_history_menu` after each autosave).
 - Cap: 50 newest autosaves. Manual saves are never pruned — a
-  manual-save-heavy project's archive grows monotonically (§9 E10).
+  manual-save-heavy project's archive grows monotonically (section 9 E10).
 - Dedup means "Save with no changes" is a no-op: no history entry, no
   timestamp bump.
 
@@ -158,7 +158,7 @@ never-shadow-Saved, Liveschool size gate.
 
 Dark: the Liveschool fixture is gitignored — `load_liveschool_live_show_v6`
 and the size gate **silently pass when the fixture is absent**, so only
-Peter's machine actually runs the real-scale proof (§9 E9). No test constructs
+Peter's machine actually runs the real-scale proof (section 9 E9). No test constructs
 a future-version file, a corrupted ZIP, a truncated write, or a hash
 collision. `save_project_v1` and preset/venue files have no roundtrip tests in
 this crate.

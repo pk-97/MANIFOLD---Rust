@@ -2,13 +2,13 @@
 
 **Status:** APPROVED 2026-07-17 (Peter: "prepare what's needed for the mechanical Sonnet orchestration session") · directives authored by Fable 5, every root cause verified in-session against tip `9a7a7fa2` · execution: Sonnet orchestrator, overnight wave, one worktree slot per lane · Covers BUG-183 (fusion-coverage-baseline-slipped)/184/190/191/192/193/194/195/196/198/199 + VD-029. BUG-187 (meshoptcubetest-khr-mesh-quantization-unsupporte…)-dup renumber and the PERF_BUDGET_GATE status header were fixed at this doc's own landing, not in the wave.
 
-This is a directive pack, not an exploratory design: each lane states a verified root cause, the decided fix, the files, and the gates. Executors implement exactly what's written; anything off-script is an ESCALATE (log to the backlog, report in the landing note, do not improvise). The §2.5 audit rule doesn't apply — no lane proposes new primitives.
+This is a directive pack, not an exploratory design: each lane states a verified root cause, the decided fix, the files, and the gates. Executors implement exactly what's written; anything off-script is an ESCALATE (log to the backlog, report in the landing note, do not improvise). The section 2.5 audit rule doesn't apply — no lane proposes new primitives.
 
 ## 0. Orchestration contract
 
 - One worktree slot per lane via `scripts/agent-worktree.py acquire <lane> <branch>` (never per phase; `POOL FULL` = stop and surface). Step-0 guard: `git log --oneline -1` must match the intended tip.
 - Lanes 1–5 are independent — run in parallel. Lane 6 is diagnosis-only and can run anytime.
-- Land in batches of 2–3 lanes per the landing protocol (`.claude/GIT_TREE_DISCIPLINE.md` §2 (Landing protocol (replaces the retired ff-only convention))): fetch, merge `origin/main` into the lane branch, rerun the lane gate, `merge --no-ff` to main, full `cargo clippy --workspace -- -D warnings` + `cargo nextest run --workspace` + `cargo deny check bans` in the warm main checkout, push.
+- Land in batches of 2–3 lanes per the landing protocol (`.claude/GIT_TREE_DISCIPLINE.md` section 2 (Landing protocol (replaces the retired ff-only convention))): fetch, merge `origin/main` into the lane branch, rerun the lane gate, `merge --no-ff` to main, full `cargo clippy --workspace -- -D warnings` + `cargo nextest run --workspace` + `cargo deny check bans` in the warm main checkout, push.
 - Every fixed bug: flip its `**Status:**` line in `docs/BUG_BACKLOG.md` (and the summary-table row) in the same landing. That's the supersession sweep for this wave.
 - Undo proofs are COMMAND-LEVEL (`execute()` + `undo()` + byte-equal graph assert) — never a headless `Key Z` step (that's BUG-198, fixed in Lane 4; until it lands, `Key Z` in a flow proves nothing).
 
@@ -38,7 +38,7 @@ This makes the real app and the headless harness share one path. Do NOT add insp
 
 **BUG-184 (verified):** `ClearLaneCommand` (`crates/manifold-editing/src/commands/automation.rs:306`) and `RemoveLaneCommand` (`:197`) have zero UI references. Right-clicks on the automation lane strip are explicitly unhandled today (`crates/manifold-ui/src/interaction_overlay.rs:740` — "Right-clicks are left alone").
 
-**Fix:** right-click on an automation lane opens a two-item context menu — "Clear Automation" → `ClearLaneCommand`, "Remove Lane" → `RemoveLaneCommand` — using the existing layer context-menu infrastructure (`host.on_track_right_click` → ShowLayerContextMenu precedent at `interaction_overlay.rs:756`; lane-header affordance conventions in `docs/AUTOMATION_LANES_DESIGN.md` §7 (UI / UX (decided: copy Ableton's model — Peter, 2026-07-02))).
+**Fix:** right-click on an automation lane opens a two-item context menu — "Clear Automation" → `ClearLaneCommand`, "Remove Lane" → `RemoveLaneCommand` — using the existing layer context-menu infrastructure (`host.on_track_right_click` → ShowLayerContextMenu precedent at `interaction_overlay.rs:756`; lane-header affordance conventions in `docs/AUTOMATION_LANES_DESIGN.md` section 7 (UI / UX (decided: copy Ableton's model — Peter, 2026-07-02))).
 
 **Gates:** command-level unit tests for all four paths (execute + undo byte-equal; remove-middle-object renumbering; remove-only-light; clear-then-undo restores points). A headless flow proving remove-object updates the panel. Focused clippy + `cargo nextest run -p manifold-editing -p manifold-ui -p manifold-app`.
 

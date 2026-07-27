@@ -10,13 +10,13 @@ Generators were originally one Rust file per algorithm. The JSON-graph form lets
 - **Users drill into a generator** in the graph editor and read the wiring — the Max-for-Live analogue.
 - **The renderer stays auditable.** A graph plus a primitive set is far easier to test, port, and tune than 20 monolithic Rust generators with private state.
 
-Don't decompose for its own sake — see DECOMPOSING_GENERATORS §1 for the "monolithic Rust is sometimes correct" rule and §5 for what irreducible looks like.
+Don't decompose for its own sake — see DECOMPOSING_GENERATORS section 1 for the "monolithic Rust is sometimes correct" rule and section 5 for what irreducible looks like.
 
 ---
 
 ## State of play
 
-- **JSON-defined generators:** 20 (full list in [NODE_CATALOG.md §6.1 (JSON-defined)](NODE_CATALOG.md)). Cover the procedural-texture, parametric-curve, mux'd-variant, particle-sim, screen-space PBR, 3D-mesh PBR-IBL, 3D / 4D wireframe, instanced-mesh, 2D/3D fluid-sim, volumetric-scrubbing, relativistic-lensing, CPU-rasterized-text, and text-baked-into-force-field families.
+- **JSON-defined generators:** 20 (full list in [NODE_CATALOG.md section 6.1 (JSON-defined)](NODE_CATALOG.md)). Cover the procedural-texture, parametric-curve, mux'd-variant, particle-sim, screen-space PBR, 3D-mesh PBR-IBL, 3D / 4D wireframe, instanced-mesh, 2D/3D fluid-sim, volumetric-scrubbing, relativistic-lensing, CPU-rasterized-text, and text-baked-into-force-field families.
 - **Rust-defined generators:** 0 remaining. Every shipping generator now lives in [`assets/generator-presets/`](../crates/manifold-renderer/assets/generator-presets/) as a JSON graph composition.
 - **Primitive vocabulary:** ~135 shipped — see NODE_CATALOG.md for the full inventory.
 - **Infra:** all the foundation work has shipped — `system.generator_input` boundary node, variadic mux primitives, per-slot texture format declaration on the backend, the JSON loader (`JsonGraphGenerator`), `paramAliases` migration support, and StateStore plumbing for stateful primitives inside generators.
@@ -25,13 +25,13 @@ Don't decompose for its own sake — see DECOMPOSING_GENERATORS §1 for the "mon
 
 ## 1. The audit precondition
 
-**Before starting any generator decomposition, run the audit-by-analogy step from [DECOMPOSING_GENERATORS.md §2.5 (Precondition: audit by analogy before workflow step 1)](DECOMPOSING_GENERATORS.md).** Identify the nearest shipped JSON preset, read it end-to-end, and reconcile your sketch against the existing primitive vocabulary. If you can't identify which shipped preset most closely resembles the shape you're decomposing into, you're not ready to start.
+**Before starting any generator decomposition, run the audit-by-analogy step from [DECOMPOSING_GENERATORS.md section 2.5 (Precondition: audit by analogy before workflow step 1)](DECOMPOSING_GENERATORS.md).** Identify the nearest shipped JSON preset, read it end-to-end, and reconcile your sketch against the existing primitive vocabulary. If you can't identify which shipped preset most closely resembles the shape you're decomposing into, you're not ready to start.
 
 ---
 
 ## 2. Shipped JSON-defined generators
 
-See [NODE_CATALOG.md §6.1 (JSON-defined)](NODE_CATALOG.md) for the topology shape of each. Each one is a reference graph for at least one decomposition pattern; future generators that fit the same pattern should follow the corresponding preset.
+See [NODE_CATALOG.md section 6.1 (JSON-defined)](NODE_CATALOG.md) for the topology shape of each. Each one is a reference graph for at least one decomposition pattern; future generators that fit the same pattern should follow the corresponding preset.
 
 | Generator | Decomposition pattern it demonstrates |
 |---|---|
@@ -67,11 +67,11 @@ All migration targets have shipped. The remaining Rust files under [`crates/mani
 
 ## 4. Workflow per migration
 
-Follow [DECOMPOSING_GENERATORS.md §3 (The workflow)](DECOMPOSING_GENERATORS.md) start-to-finish for every migration. Key reminders:
+Follow [DECOMPOSING_GENERATORS.md section 3 (The workflow)](DECOMPOSING_GENERATORS.md) start-to-finish for every migration. Key reminders:
 
-- **Audit first** (§2.5 of the guide) — no proposed primitives until you've surveyed what exists and read the nearest reference preset end-to-end.
-- **New primitives ship in their own commit before the preset.** Each with parity test against legacy math (GPU `gpu_tests` module against constant tables or computed reference, not CPU mirror — see DECOMPOSING_GENERATORS §9).
-- **Parity test the whole graph** (§3 step 6). Bit-exact for Tier 1/2-shaped generators; numerically bounded with documented justification for RNG-seeded particle sims.
+- **Audit first** (section 2.5 of the guide) — no proposed primitives until you've surveyed what exists and read the nearest reference preset end-to-end.
+- **New primitives ship in their own commit before the preset.** Each with parity test against legacy math (GPU `gpu_tests` module against constant tables or computed reference, not CPU mirror — see DECOMPOSING_GENERATORS section 9).
+- **Parity test the whole graph** (section 3 step 6). Bit-exact for Tier 1/2-shaped generators; numerically bounded with documented justification for RNG-seeded particle sims.
 - **Delete the legacy Rust file in the same commit as the preset.** Don't leave shadowed dead code.
 - **`paramAliases` + `GeneratorAliasMetadata`** for renamed outer params so old projects load unchanged.
 

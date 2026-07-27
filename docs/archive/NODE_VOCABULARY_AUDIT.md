@@ -1,9 +1,9 @@
 # Node Vocabulary Audit — type_id Renames, Fills, Conventions
 
-**Status:** SHIPPED — apply pass P1–P7 complete and merged into `feat/timeline-ui-redesign` (2026-07-03). All ~110 renames (102 §4 atoms + 2 §7 legacy folds + 8 §6 presets) live in `manifold-core/src/type_id_migration.rs`; examples auto-population, cross-tool aliases, and the §8c completeness gate are wired. This doc is now the historical record + the migration-table reference. Original approval: Peter, 2026-07-02, including the six §10 label changes.
+**Status:** SHIPPED — apply pass P1–P7 complete and merged into `feat/timeline-ui-redesign` (2026-07-03). All ~110 renames (102 section 4 atoms + 2 section 7 legacy folds + 8 section 6 presets) live in `manifold-core/src/type_id_migration.rs`; examples auto-population, cross-tool aliases, and the section 8c completeness gate are wired. This doc is now the historical record + the migration-table reference. Original approval: Peter, 2026-07-02, including the six section 10 label changes.
 **Decided:** 2026-07-02. Companion: `NODE_CATALOG.md` (generated index), `MCP_INTERFACE_DESIGN.md` (the catalog's main future consumer).
 **Prerequisites:** none — this is the FIRST item in `docs/DESIGN_BUILD_ORDER.md` (renames get dearer with every preset/binding written on old ids).
-**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any phase.
+**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5–section 6 and section 8 before starting any phase.
 
 ## 1. Verdict
 
@@ -11,10 +11,10 @@ The descriptor layer is in better shape than expected: 212 nodes, most with disp
 
 The debt is exactly four things:
 
-1. **~75 stale type_ids** that no longer match their display labels (`node.gain` shows as "Exposure", `node.radial_fold_uv` as "Kaleidoscope", `node.uv_strip_clamp` as "Edge Stretch"). §4.
-2. **13 unfilled stragglers** — missing labels, 5 fully uncategorized nodes, 3 empty alias sets. §5.
-3. **8 stale preset ids** + a muddled generator category scheme. §6.
-4. **3 legacy nodes** needing a fold-or-hide decision. §7.
+1. **~75 stale type_ids** that no longer match their display labels (`node.gain` shows as "Exposure", `node.radial_fold_uv` as "Kaleidoscope", `node.uv_strip_clamp` as "Edge Stretch"). section 4.
+2. **13 unfilled stragglers** — missing labels, 5 fully uncategorized nodes, 3 empty alias sets. section 5.
+3. **8 stale preset ids** + a muddled generator category scheme. section 6.
+4. **3 legacy nodes** needing a fold-or-hide decision. section 7.
 
 ## 2. Conventions (pinned)
 
@@ -28,7 +28,7 @@ The debt is exactly four things:
 
 ## 3. Migration infrastructure (build first)
 
-- **`crates/manifold-core/src/type_id_migration.rs`** *(new)*: one static table `&[(old, new)]` + `pub fn migrate_type_id(&str) -> &str` (identity for unknown ids). A second small table supports **param-seeding folds**: `(old_id, new_id, seed_params: &[(name, value)])` for legacy nodes folded into a parameterized successor (§7).
+- **`crates/manifold-core/src/type_id_migration.rs`** *(new)*: one static table `&[(old, new)]` + `pub fn migrate_type_id(&str) -> &str` (identity for unknown ids). A second small table supports **param-seeding folds**: `(old_id, new_id, seed_params: &[(name, value)])` for legacy nodes folded into a parameterized successor (section 7).
 - **One choke point per document kind:** applied immediately after deserialization — `EffectGraphDef` nodes (all loaders route through `instantiate_def`; migrate before flatten), and `PresetTypeId` on clips (`generator_type`) + effect instances at project load. The runtime, registry, editor, and catalog only ever see new ids.
 - **Not affected:** `BindingTarget` (targets `NodeId`, not type_id), OSC (`osc_prefix` is its own field), WGSL sources, param names.
 - **In-repo rewrites (not migration):** bundled preset JSONs, parity/gpu tests, `hand_descriptor!` entries, `primitive!` registrations — all mechanically renamed to new ids in the same commit.
@@ -218,12 +218,12 @@ Same migration table (PresetTypeId choke point). `osc_prefix` unchanged, so OSC/
 
 ## 8. Purpose (technical register) — spot-audit result
 
-Sampled purposes are genuinely good ("Per-pixel abs(input.rgb). Alpha passes through…"). Rule pinned in §2.6; the apply pass does a linear read of all 212 purposes and upgrades any that fail the "states the math" bar — expected to be a minority. No structural work.
+Sampled purposes are genuinely good ("Per-pixel abs(input.rgb). Alpha passes through…"). Rule pinned in section 2.6; the apply pass does a linear read of all 212 purposes and upgrades any that fail the "states the math" bar — expected to be a minority. No structural work.
 
 ## 8b. Two cheap wins (added after review with Peter)
 
 1. **Auto-populate `examples` — approved.** The descriptor's `examples` field ("which presets use this node") is empty across all 212 nodes — yet it's the few-shot pointer humans and agents need most. Generated, never hand-written: the catalog build scans the 45 bundled preset graphs for node usage and emits the field. Because it's derived at generation time, it cannot go stale.
-2. **Cross-tool alias pass — approved.** Aliases cover TouchDesigner well (Blur TOP, Math CHOP) but nothing else. One pass adding **Resolume, Blender, and After Effects** equivalents to matching nodes. One-time work — §8c's completeness gate keeps future nodes from shipping alias-less.
+2. **Cross-tool alias pass — approved.** Aliases cover TouchDesigner well (Blur TOP, Math CHOP) but nothing else. One pass adding **Resolume, Blender, and After Effects** equivalents to matching nodes. One-time work — section 8c's completeness gate keeps future nodes from shipping alias-less.
 
 ## 8c. Anti-staleness architecture (how this system stays honest)
 
@@ -233,51 +233,51 @@ Principle: **one source of truth (code-side descriptors, co-located with the nod
 |---|---|---|
 | **Existence** — node ships, catalog doesn't know | Generated index fails `cargo test` on unregenerated registry change | Already built |
 | **Emptiness** — node ships with blank vocabulary (how the 5 uncategorized nodes happened) | **Completeness gate**: extend the drift test so any palette-visible node with empty label / summary / category / aliases fails the build. Vocabulary becomes a merge requirement paid by the node's author, when context is richest. Hidden/legacy/`system.*` nodes exempt. | Build in apply pass |
-| **Derived data** — examples, node_catalog.json, doc tables | Never hand-write anything derivable. `examples` generated from preset scan; MCP serves the live registry at runtime (per `MCP_INTERFACE_DESIGN.md` §5) — both stale-proof by construction. | Build in apply pass |
+| **Derived data** — examples, node_catalog.json, doc tables | Never hand-write anything derivable. `examples` generated from preset scan; MCP serves the live registry at runtime (per `MCP_INTERFACE_DESIGN.md` section 5) — both stale-proof by construction. | Build in apply pass |
 | **Truth** — kernel changes, description now lies | No full automation exists. Mitigations: purpose lives in the same file as the node (macro field — on screen during edits); rule added to `ADDING_PRIMITIVES.md`: *touch the kernel, re-read the purpose*; parity tests flag behavior changes in the same PR, which is the natural re-read prompt. | Convention + doc line |
 
 ## 9. Apply-pass phases (Sonnet)
 
-**Pre-flight (before phase 1 — the §4/§6 tables are a 2026-07-02 snapshot):**
+**Pre-flight (before phase 1 — the section 4/section 6 tables are a 2026-07-02 snapshot):**
 regenerate the catalog (`cargo run -p manifold-renderer --bin gen_node_catalog`),
-then for every OLD id in §4: `rg -c '"<old_id>"' crates/manifold-renderer/src/node_graph/primitives/`
+then for every OLD id in section 4: `rg -c '"<old_id>"' crates/manifold-renderer/src/node_graph/primitives/`
 must hit — an old id that no longer exists means the node was renamed/deleted since
 this doc was written: **stop and list it, don't guess**. Also scan the catalog for
-nodes added since 2026-07-02 whose ids violate §2 conventions — list them for Peter
+nodes added since 2026-07-02 whose ids violate section 2 conventions — list them for Peter
 as table additions before starting; don't silently rename unlisted nodes.
 
 **Forbidden moves, all phases:** no partial application (an id renamed in
 registration but not presets/tests is a broken build — good, the compiler is the
 checklist; a rename skipped entirely is the failure); no renaming anything not in
-§4/§6; no "improving" labels/summaries beyond what §4/§5/§10 specify; old ids never
-reused (§2.5).
+section 4/section 6; no "improving" labels/summaries beyond what section 4/section 5/section 10 specify; old ids never
+reused (section 2.5).
 
-- **P1 — Migration infra (§3), landed alone.** Deliverables:
+- **P1 — Migration infra (section 3), landed alone.** Deliverables:
   `type_id_migration.rs` (both tables + `migrate_type_id`), choke-point wiring
-  (`instantiate_def` pre-flatten; `PresetTypeId` at project load), the four §3
+  (`instantiate_def` pre-flatten; `PresetTypeId` at project load), the four section 3
   tests. Gate: `cargo test -p manifold-core --lib`, fixture tests green, Liveschool
   fixture green. Table is EMPTY at this point except a test entry — infra first,
   content later.
-- **P2 — Atom renames (§4).** Compiler-driven per category group: change the
+- **P2 — Atom renames (section 4).** Compiler-driven per category group: change the
   `primitive!` registration id first, then fix every red site (descriptors, bundled
   preset JSONs, parity/gpu tests), add the migration entry, commit per group. Gate
   per group: compile + lib `bundled_presets` tests only (rescoped 2026-07-03,
   Peter: an id rename can't change pixels — no parity runs, no per-phase workspace
   sweeps; the single workspace sweep lives in P7). **Negative gate at end of P2:**
-  for every old id in §4, `rg -n '"<old_id>"' crates/ assets/` hits ONLY
+  for every old id in section 4, `rg -n '"<old_id>"' crates/ assets/` hits ONLY
   `type_id_migration.rs` (loop the table; zero exceptions), plus the bare-word
   prose sweep `rg -n '\bnode\.<old_tail>\b' crates/ assets/ -g '!*.wgsl'` (preset
   JSON descriptions mention ids in prose — found in apply, groups 1–5).
-- **P3 — Preset renames + `NodeGraphTest` hide (§6).** Same technique, same
+- **P3 — Preset renames + `NodeGraphTest` hide (section 6).** Same technique, same
   negative gate for the 8 preset ids. OSC prefixes must be byte-identical before/
   after (`rg 'osc_prefix'` diff).
-- **P4 — Fills (§5) + legacy folds (§7).** Each §7 item has a verify step — run it,
+- **P4 — Fills (section 5) + legacy folds (section 7).** Each section 7 item has a verify step — run it,
   record the result in the commit message; a failed verify (ports don't match) is
   an escalation, not an adaptation.
-- **P5 — Generator recategorization (§6).** The grouping is DECIDED (Peter,
-  2026-07-02 — the §6 table, including the two † verify-at-apply rows). Run the two
+- **P5 — Generator recategorization (section 6).** The grouping is DECIDED (Peter,
+  2026-07-02 — the section 6 table, including the two † verify-at-apply rows). Run the two
   † checks; swap per the stated rule if they come out opposite.
-- **P6 — §8b/§8c:** examples auto-population, cross-tool alias pass, completeness
+- **P6 — section 8b/section 8c:** examples auto-population, cross-tool alias pass, completeness
   gate wired into the drift test, `ADDING_PRIMITIVES.md` touch-rule line. Gate: the
   completeness gate itself fails the build when any palette-visible node has empty
   label/summary/category/aliases — prove it with a deliberate temporary violation,
@@ -288,4 +288,4 @@ reused (§2.5).
 
 ## 10. Review checklist for Peter
 
-**APPROVED 2026-07-02.** The **bolded rows** in §4 change the label too, not just the id: Variable Blur, Transform, Array Math, Vector Length, Rotate Coordinates, Slice Volume — Peter said yes to all six. ("Array" as the user word and the generator category regrouping: both decided by Peter 2026-07-02 — §2.4, §6.) Everything else is mechanical alignment — id catches up to the label you already approved by shipping it. Nothing in this doc awaits review.
+**APPROVED 2026-07-02.** The **bolded rows** in section 4 change the label too, not just the id: Variable Blur, Transform, Array Math, Vector Length, Rotate Coordinates, Slice Volume — Peter said yes to all six. ("Array" as the user word and the generator category regrouping: both decided by Peter 2026-07-02 — section 2.4, section 6.) Everything else is mechanical alignment — id catches up to the label you already approved by shipping it. Nothing in this doc awaits review.

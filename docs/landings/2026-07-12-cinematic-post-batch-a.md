@@ -1,6 +1,6 @@
 # Cinematic post batch A — P0 (D7/I6), both layers — landed 2026-07-12
 
-**Branch:** feat/cinematic-post → main · **Level reached:** L1 / target L1 (§10 — this cluster's
+**Branch:** feat/cinematic-post → main · **Level reached:** L1 / target L1 (section 10 — this cluster's
 no-PNG rule, Peter 2026-07-12, overrides the standard's L2-demo minimum; a compiler phase has no
 observable surface anyway — the proofs are the demo)
 **Doc status line (quoted verbatim):** `**Status:** IN PROGRESS · 2026-07-12 · Fable 5 · **P0
@@ -29,7 +29,7 @@ layer and calling P0 done was explicitly rejected, so they land together:
   recomputes every member's derived-uniform values itself, every frame
   (`wgsl_compute::evaluate()`), from frame context and/or a routed `Camera` external. Two new WGSL
   markers carry this (`@camera_external`, `@derived_uniform_member` — see
-  `FREEZE_COMPILER_MAP.md` §5). The time-family (`dt_scaled`/`frame_count`/`time*`) migrated onto
+  `FREEZE_COMPILER_MAP.md` section 5). The time-family (`dt_scaled`/`frame_count`/`time*`) migrated onto
   the same mechanism, so the old per-name install code is gone entirely — any future derived
   uniform (fov, near/far, a `Light`) needs zero compiler changes, just a registered recompute.
   The `region.rs` classify exemption (a `Camera` wire no longer forces `Boundary` when the member
@@ -75,7 +75,7 @@ migrated time-family buffer atom's `gpu_tests` (project_3d, the particle-sim fam
 `morph_mesh`, `push_along_normals`, `extrude_curve`, `flatten_to_camera_plane`,
 `scatter_particles_camera`) all pass inside that same sweep — zero failures anywhere.
 
-**Pre-existing failures check (FREEZE_COMPILER_MAP.md §10):** the DepthOfField-prewarm and
+**Pre-existing failures check (FREEZE_COMPILER_MAP.md section 10):** the DepthOfField-prewarm and
 Liveschool FluidSimulation Ableton param-id fixtures named as known pre-existing failures were
 searched for; the Liveschool one lives in `manifold-app`, outside this landing's crate scope
 entirely, and no DepthOfField-prewarm test exists in `manifold-renderer`. Neither is touched by
@@ -94,8 +94,8 @@ this diff; the full sweep is 0 failures either way.
 
 ## Shortcuts confessed (rolled up from phase reports)
 
-None on the core mechanism (both phases reported "none"). `FREEZE_COMPILER_MAP.md` §4/§5/§9 (+ a
-§7 cross-reference) and `CINEMATIC_POST_DESIGN.md`'s status line were left for this landing to
+None on the core mechanism (both phases reported "none"). `FREEZE_COMPILER_MAP.md` section 4/section 5/section 9 (+ a
+section 7 cross-reference) and `CINEMATIC_POST_DESIGN.md`'s status line were left for this landing to
 update, per the doc's own P0 brief — done in this landing, not carried as debt.
 
 ## Verification debt

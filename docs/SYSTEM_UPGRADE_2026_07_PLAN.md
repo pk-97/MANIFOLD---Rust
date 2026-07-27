@@ -56,7 +56,7 @@ Pixels are for looking, not asserting. Nearly every UI bug of 2026-07 was a stat
 ## Ongoing, non-delegable
 
 - **Fable:** widget-tree / queryable-UI-layer design doc (the load-bearing structural fix; explicitly NOT laneable — a Sonnet lane here recreates the scene panel at 10× scale). Rides on UI_HARNESS_UNIFICATION groundwork.
-- **Peter:** in-app acceptance pass on the undo fixes (`573b50ea` — never user-verified); scene-panel §5 decisions.
+- **Peter:** in-app acceptance pass on the undo fixes (`573b50ea` — never user-verified); scene-panel section 5 decisions.
 
 ## Later (blocked/queued)
 

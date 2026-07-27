@@ -11,7 +11,7 @@ The last parallel trigger system is gone from the model. A clip trigger is now t
 - **Data model (`manifold-core`)** — `LayerClipTrigger { enabled, source, shape, one_shot_beats }` (`audio_trigger.rs:207`); `Layer.clip_triggers: Vec<LayerClipTrigger>` (`layer.rs:167`, `#[serde(default, skip_serializing_if=Vec::is_empty)]`), beside the MIDI clip-launch block. Runtime edge/follower state is NOT on the struct — it lives in the evaluator keyed `(LayerId, usize)`.
 - **Legacy field + migration** — `AudioSend.triggers` is now `#[serde(default, skip_serializing)]` (deserialize-only, never written back). `Project::migrate_legacy_clip_triggers` (`project.rs:268`), called from `on_after_deserialize` (`project.rs:190`) — the project-level post-deserialize seam where both sends and layers are resolvable. Per legacy route: resolve `target_layer`, else auto-route by send-label name match; push a `LayerClipTrigger` (Transients feature, route band, sensitivity→Amount U5-verbatim, `one_shot_beats`+`enabled` preserved); drain the send. Unresolvable → counted `eprintln` per route + a `log::warn` summary (never silent).
 - **Evaluator (`manifold-playback`)** — `LiveTriggerState::evaluate` (`live_trigger.rs:76`) walks layers with non-empty `clip_triggers`; `FireRequest.target_layer: LayerId` (the `send_label` auto-route is deleted — the target IS the owning layer). Per-analysis-block, no new allocation class.
-- **Analysis-gating arm (§3.4)** — `Project::has_active_clip_triggers` + `analysis_consumed_sends` layer walk (`project.rs:333`/`:1297`); re-pointed readers `audio_mod_runtime.rs:266`/`:564`, `engine.rs:1699`. A project whose only audio consumer is a clip trigger now starts capture.
+- **Analysis-gating arm (section 3.4)** — `Project::has_active_clip_triggers` + `analysis_consumed_sends` layer walk (`project.rs:333`/`:1297`); re-pointed readers `audio_mod_runtime.rs:266`/`:564`, `engine.rs:1699`. A project whose only audio consumer is a clip trigger now starts capture.
 - **EditingService commands** — `AddLayerClipTriggerCommand` / `RemoveLayerClipTriggerCommand` / `SetLayerClipTriggerCommand` (`commands/layer.rs`), `LayerId`-addressed, whole-value-replace (mirrors `SetAudioModTriggerModeCommand`).
 
 ## Two worker judgment calls — both verified correct by the orchestrator
@@ -35,7 +35,7 @@ The last parallel trigger system is gone from the model. A clip trigger is now t
 
 - Sensitivity→Amount migration is a direct copy (`shape.sensitivity = route.sensitivity`), U5-verbatim; exact-feel fidelity explicitly not owed (feature is weeks old, Peter's projects only).
 - No workspace sweep (per phase scope — that's P4, the wave's last code phase).
-- The §3.4 count I briefed (42) was miscounted with `\b`; the command I pasted (no `\b`) yields 47 — the 5-count gap is `.triggers_with_route` matrix calls (P3-doomed), not a missed gating arm. My briefing inconsistency; the worker reconciled it correctly and proceeded. No action.
+- The section 3.4 count I briefed (42) was miscounted with `\b`; the command I pasted (no `\b`) yields 47 — the 5-count gap is `.triggers_with_route` matrix calls (P3-doomed), not a missed gating arm. My briefing inconsistency; the worker reconciled it correctly and proceeded. No action.
 - No new bug found; `BUG_BACKLOG.md` untouched.
 
 ## Owed to P3

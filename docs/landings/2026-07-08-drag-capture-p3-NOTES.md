@@ -2,7 +2,7 @@
 
 Base verified: `1fdf15e0` (P2 landing report + status + VD-017/018).
 
-## Read-back — D6 + §3.4
+## Read-back — D6 + section 3.4
 
 **D6 restated.** Precision surfaces — controls whose entire job is sub-4px
 adjustment — can opt out of the global `DRAG_THRESHOLD_PX = 4.0` click-vs-drag
@@ -66,7 +66,7 @@ handling of *this* event, not a static property of the widget.
 
 `route_overlay_event` returns `bool` only (consumed or not), not which
 overlay consumed — so there's no direct handle to the "the overlay that just
-armed a divider grab" for the wiring in §3.4 to query.
+armed a divider grab" for the wiring in section 3.4 to query.
 
 **Resolved via the doc's Preferred approach — no escalation needed.** After a
 `PointerDown`'s `route_overlay_event` call returns `true`, poll every OPEN

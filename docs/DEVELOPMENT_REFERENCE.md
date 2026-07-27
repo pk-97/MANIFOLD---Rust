@@ -103,7 +103,7 @@ Useful flags:
 - `--output <path>` — write somewhere other than a temp path.
 - `--hdr` — refuses immediately; HDR live recording is BUG-053 (structurally broken today).
 
-See `docs/LIVE_RECORDING_PROOFS_DESIGN.md` §5 (The pre-gig soak (Tier 2)) for the full design and gate semantics, and
+See `docs/LIVE_RECORDING_PROOFS_DESIGN.md` section 5 (The pre-gig soak (Tier 2)) for the full design and gate semantics, and
 `docs/BUG_BACKLOG.md` BUG-085 (same silent-drop class rule: no path may return…)/BUG-086 (recording-audio-track-under-covers-duration-on-l…) for two accounting caveats found building this suite
 (Rust's own frame/sample counters can be optimistic under real backpressure — the soak's PASS
 decision is anchored to what ffprobe actually decodes out of the file, not to those counters).

@@ -4,7 +4,7 @@
 **Model of record:** phases built by Sonnet workers in isolated worktrees; gates re-judged and landed by the orchestrator.
 
 Release-gating proof suite for the live show recorder (owns BUG-053; ranked #2 in
-DESIGN_BUILD_ORDER §3 item 13h). Three phases: P1 seams + Tier-1 proof harness · P2 kill
+DESIGN_BUILD_ORDER section 3 item 13h). Three phases: P1 seams + Tier-1 proof harness · P2 kill
 test + soak bin + runbook · P3 in-app record smoke (L3).
 
 ---
@@ -123,7 +123,7 @@ BUG-086 disambiguation `9b996af9` + pre-land merge of `origin/main` `38a84415`).
 
 ### What landed (file anchors)
 - **`crates/manifold-recording/src/bin/recording_soak.rs`** (739 lines) + `[[bin]]` wiring
-  (`required-features = ["recording-proofs"]`). Hand-rolled arg parser, no new deps. CLI per §5.
+  (`required-features = ["recording-proofs"]`). Hand-rolled arg parser, no new deps. CLI per section 5.
   PASS decision for unpaced mode is anchored to the **decoded** file via `find_first_gap()`
   (`recording_soak.rs:645`) — asserts `frame_indices == [0..N)`, so a BUG-085 async append drop
   shows as an index gap even when Rust reports 0 drops. `--realtime` gates file-validity only
@@ -133,7 +133,7 @@ BUG-086 disambiguation `9b996af9` + pre-land merge of `origin/main` `38a84415`).
 - **Test 5 `kill_mid_take_leaves_recoverable_file`** (`tests/recording_proofs.rs`) — spawns the
   soak bin as a real child, polls to >30 MB, SIGKILLs, probes that ≥1 frame survives with
   strictly-increasing PTS (fragmented-MOV durability, failure class 1).
-- **Runbook** — "Recorder soundcheck" section in `docs/DEVELOPMENT_REFERENCE.md:55` with the §5
+- **Runbook** — "Recorder soundcheck" section in `docs/DEVELOPMENT_REFERENCE.md:55` with the section 5
   ritual command verbatim.
 
 ### Gate output (orchestrator-run in the worktree)
@@ -181,12 +181,12 @@ removing (BUG-085's sibling). Peter's full-scale run remains the confirming data
 
 ### Shortcuts taken (worker report, orchestrator-reviewed)
 Audio-coverage gate is a coarse 50% floor + non-gating >2% stderr warning naming BUG-086, not a
-tight tolerance — consistent with the design (§5's stated soak gate is video: "0 drops, full
+tight tolerance — consistent with the design (section 5's stated soak gate is video: "0 drops, full
 index sequence"; the PASS line reports audio but never gated it tightly), and honest given
 BUG-086's unknown-until-now magnitude. Accepted. No hidden stubs.
 
 ### Verification debt — VD-022 (see `docs/VERIFICATION_DEBT.md`)
-- **Full-scale 4K60 20-minute soak unexecuted** — by design (§6 P2): its first run is Peter's
+- **Full-scale 4K60 20-minute soak unexecuted** — by design (section 6 P2): its first run is Peter's
   pre-gig ritual on the rig. The short 1080p/2-min soak is the wave's proxy. **L2 reached /
   full-scale L4 carried.**
 - **BUG-086 silent audio-drop fix** — deferred; show-relevance now assessed LOW after the
@@ -202,7 +202,7 @@ BUG-086's unknown-until-now magnitude. Accepted. No hidden stubs.
 ## P3 — In-app record smoke (L3) — ⏸ DEFERRED 2026-07-10 (Peter), not built
 
 **Outcome: dropped from this wave before any worker was spawned.** The orchestrator ran P3's
-mandatory entry-state pre-flight (design §6 P3) and found check (a) fails: the design assumed
+mandatory entry-state pre-flight (design section 6 P3) and found check (a) fails: the design assumed
 `cargo xtask ui-snap` scenes run the real content thread + compositor frame, so a scripted
 "click record" flow would drive the whole button→command→capture-block path. It does not.
 
@@ -221,7 +221,7 @@ vehicle doesn't exist: escalate to Peter"), the orchestrator escalated rather th
 new harness mid-wave. **Peter chose to defer** (drop from the 2026-07-10 wave). The correct
 vehicle — a headless content-thread + compositor smoke that drives the real record command and
 probes the file — is a new integration harness (BUG-054-adjacent), not the "one scripted flow"
-the phase assumed; it is now recorded in the design's §8 Deferred with a revival trigger.
+the phase assumed; it is now recorded in the design's section 8 Deferred with a revival trigger.
 
 **Residual coverage gap → VD-023.** The recorder itself is fully fenced by P1+P2; the only
 untested piece is the in-app button-to-recorder glue, verified today at **L4 by Peter pressing
@@ -237,7 +237,7 @@ isolated worktree, each gate re-judged by the orchestrator (tests re-run, negati
 soak run, `.mov` frames opened) before a `--no-ff` landing. Final `origin/main` after the P2
 landing docs: `6a1eb42c`; this P3-drop doc update lands on top.
 
-**Deferred:** P3 (design §8, VD-023). **Bugs found + logged this wave:** BUG-085 (video
+**Deferred:** P3 (design section 8, VD-023). **Bugs found + logged this wave:** BUG-085 (video
 `frames_recorded` overstates async-append drops), BUG-086 (unpaced-soak audio shortfall,
 disambiguated as an unpaced-stress-mode artifact via a `--realtime` run giving full audio — show
 severity LOW). **Verification debts carried:** VD-022 (full-scale 20-min soak = Peter's ritual;
@@ -245,7 +245,7 @@ BUG-086 fix), VD-023 (P3 record-glue L4-by-use). **Design status:** SHIPPED (P1+
 
 ## Peter checklist (accumulated across phases)
 
-1. **Pre-gig recorder soundcheck (the ritual, per design §5/§6 P2).** On the rig, the day before a
+1. **Pre-gig recorder soundcheck (the ritual, per design section 5/section 6 P2).** On the rig, the day before a
    gig, run:
    `cargo run --release -p manifold-recording --features recording-proofs --bin recording-soak`
    Expect a single `SOAK PASS:` line and exit 0. This is the first full-scale 4K60 20-minute soak —

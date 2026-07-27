@@ -40,7 +40,7 @@ Crate (`crates/manifold-media/src/`, ~6.9k lines; all GPU/native modules are
 | `audio_muxer.rs` | Blocking ffmpeg subprocess: video stream-copied, audio always re-encoded AAC 256k, `-shortest`, `+faststart`. `resolve_ffmpeg()`: `FFMPEG_PATH` env → bundled runtime paths → Homebrew/system. |
 | `still_exporter.rs` | CPU PNG/JPEG encode + `linear_f16_rgba_to_srgb8` (true piecewise sRGB OETF, optional tanh highlight rolloff above 0.8 for EDR). Well unit-tested. |
 | `decoder.rs` / `decoder_ffi.rs` | `DecoderPool` (shared MTLDevice + NV12→RGBA pipeline + texture cache) and per-file `DecoderHandle` (AVAssetReader; seek = reader re-create). |
-| `decode_scheduler.rs` | 4 worker threads, jobs routed by clip-id hash affinity so a clip's handle lives on exactly one worker. Content thread submits jobs / drains results, never blocks (except `flush`, §3). |
+| `decode_scheduler.rs` | 4 worker threads, jobs routed by clip-id hash affinity so a clip's handle lives on exactly one worker. Content thread submits jobs / drains results, never blocks (except `flush`, section 3). |
 | `video_renderer.rs` | `ClipRenderer` impl for video clips: per-clip render targets from a pool, decode pacing by accumulated dt vs. source fps, seek coalescing, poster/filmstrip one-shot decodes for parked clips (isolated `\u{1}poster\u{1}` key namespace). |
 | `image_renderer.rs` | `ClipRenderer` impl for still images: background-thread decode + aspect-fit + premultiply, upload via `upload_texture`. Caches the full-res decode so resizes re-fit from memory. |
 | `metadata.rs` | `probe_video_metadata` (fast AVAsset probe) + `SUPPORTED_EXTENSIONS` (`.mp4 .mov .webm .avi`). |
@@ -116,12 +116,12 @@ submit/poll ordering is enforced by call-site placement in `content_thread.rs`.
   switches to a `Seek` (decoder catch-up by reader re-create). Seeks arriving while a
   decode is pending are coalesced to the latest target.
 - **EOF:** looping clips seek to 0.0 (the *file* start, not the clip in-point — the
-  engine's drift correction may re-seek afterwards; unverified, see §12); non-looping
+  engine's drift correction may re-seek afterwards; unverified, see section 12); non-looping
   clips stop.
 - **Prewarm:** engine lookahead candidates open+prepare decoders keyed by
   `video_clip_id` into a per-worker `warm` map. Warm handles are only ever evicted at
   shutdown, and a warm-open failure is logged but sends no result.
-- **Posters/filmstrips (§24 5c):** parked clips get one-shot decodes under a prefixed
+- **Posters/filmstrips (section 24 5c):** parked clips get one-shot decodes under a prefixed
   key (`\u{1}poster\u{1}<id>`) with an isolated decoder and render target, so a poster
   can never write into a live clip's texture. Filmstrips walk one decoder across bar
   times; eviction (`evict_posters`) closes decoders and returns targets to the pool.
@@ -194,7 +194,7 @@ quality is hardcoded (JPEG 95).
 - **Dark:** no test exercises the decode/playback path (scheduler, VideoRenderer state
   machine, poster lifecycle) at any level; `gpu-proofs` is compositor-only and touches
   neither export nor decode; recording proofs live in the other crate. The
-  decode-scheduler invariant (§5) is enforced by convention only.
+  decode-scheduler invariant (section 5) is enforced by convention only.
 
 ## 11. Boundaries with neighbouring systems
 
@@ -219,7 +219,7 @@ open items):
    frame) blocks on `recv_results_blocking` until it clears. Failed-open file + one seek
    = wedged export, stalled clip in live playback. Fixed: missing-handle arms now reply
    `DecodeResultStatus::Error`, plus a bounded-wait backstop in `flush_pending_decodes`.
-2. **BUG-128 — FIXED — SDR export gamma ≠ display/still gamma** (§7).
+2. **BUG-128 — FIXED — SDR export gamma ≠ display/still gamma** (section 7).
 3. **BUG-129 — FIXED — fractional fps silently rounds** to integer CMTime (23.976/29.97 exports
    got wrong frame timing and drifted against the muxed audio). Fixed: exact rational
    timebase end-to-end, including the `AVAssetWriter` track `mediaTimeScale`.
@@ -241,7 +241,7 @@ open items):
    import with a visible codec-not-supported message via the existing import-error dialog.
 8. No cancel-export UI (self-documented dead `CancelExport` variant) — a multi-minute
    render is uninterruptible; UX gap, release-relevant.
-9. Loop restart seeks to file time 0.0, not the clip in-point (§5) — masked if engine
+9. Loop restart seeks to file time 0.0, not the clip in-point (section 5) — masked if engine
    drift-correction re-seeks; needs a runtime check with a trimmed looping clip.
 10. `MetalEncoder_EndSession` returns OK if the 30 s finalize semaphore *times out*
     while the writer is still finishing — a very long finalize could report success

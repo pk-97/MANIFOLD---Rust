@@ -34,11 +34,11 @@ Corollary lanes nobody in the VJ scene owns: **print** (halftone misregistration
 - **Slit-Scan / Time Displacement** — per-pixel time travel (vertical scan, or depth-map = near-now/far-past).
 - **Growth: grow-then-explode** — space colonization climbs the tower through the quiet; the drop detonates it via spawn_from_mesh.
 - **Lightning** — midpoint-displacement bolts, snare-quantized, afterglow.
-- **What Survives** / **Glossolalia** — the self-portraits, §5.
+- **What Survives** / **Glossolalia** — the self-portraits, section 5.
 - Levers: **log tonemap curve** (gap verified: density pipeline is Reinhard-only), **curated palette atom**.
 
 ### Future-wave (Tier B — splats/Box3D vocabulary is committed)
-- **Monolith Collapse** (Peter's idea, §4) — splat dissolve variant + Box3D masonry variant.
+- **Monolith Collapse** (Peter's idea, section 4) — splat dissolve variant + Box3D masonry variant.
 - **Video-Textured Rubble** — segmented object tiles into physics blocks carrying its pixels (inverse of Box3D P4's footage-as-terrain).
 - **Physics-as-Clip** — bake a collapse, then scrub / reverse / quantize it like audio. Sims become clips; determinism stops being a live risk.
 - **Render Fader** — one master card fans (binding fan-out) across splat_scale / displace / palette / wireframe mix: a continuous photoreal→machine-vocabulary slide. THE analog→digital knob.

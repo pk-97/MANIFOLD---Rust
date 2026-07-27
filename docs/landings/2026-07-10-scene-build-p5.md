@@ -39,6 +39,6 @@ The editor scene's preview pane is content-thread-bound and can't render headles
 3. Click **"+ Light"** once → a bare "Light" node appears beside Render Scene, wired to the new slot; preview visibly re-lights.
 4. Undo twice → both gestures fully reverse (boxes/wires/counts restore).
 
-## REALTIME_3D §8 cross-refs (verified still true at wave close)
+## REALTIME_3D section 8 cross-refs (verified still true at wave close)
 
-The SCENE_BUILD §8 amendments to REALTIME_3D hold: object port group = `mesh_n`+`material_n`+`base_color_map_n`+`transform_n: Transform` (P2 built it); gizmos-write-`transform_3d`-params / gizmo-target-follows-`transform_n`-wire is still the accurate P6 promise; REALTIME_3D P6's entry (SCENE_BUILD P2 landed) is satisfied. P3/P4/P5 did not touch the transform model.
+The SCENE_BUILD section 8 amendments to REALTIME_3D hold: object port group = `mesh_n`+`material_n`+`base_color_map_n`+`transform_n: Transform` (P2 built it); gizmos-write-`transform_3d`-params / gizmo-target-follows-`transform_n`-wire is still the accurate P6 promise; REALTIME_3D P6's entry (SCENE_BUILD P2 landed) is satisfied. P3/P4/P5 did not touch the transform model.

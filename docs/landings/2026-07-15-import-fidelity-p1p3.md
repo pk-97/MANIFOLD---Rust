@@ -1,7 +1,7 @@
 # IMPORT_FIDELITY F-P1 + F-P3 — landed 2026-07-15 @ `234ce6f6` (pushed to origin/main, `c41acc61..234ce6f6`)
 
-**Branch:** `feat/import-fidelity-fp1` (F-P1, `cddc618f`) + `feat/import-fidelity-fp3` (F-P3, `9e4b0b7f` + fix `c0df7921`), merged into `main` as one batch per `.claude/GIT_TREE_DISCIPLINE.md` §2c.
-**Level reached:** L1 (numeric gpu-proofs gates, run by the orchestrator, all green) / target L4 (§10) — L4 is Peter's click-script below; not yet run by him.
+**Branch:** `feat/import-fidelity-fp1` (F-P1, `cddc618f`) + `feat/import-fidelity-fp3` (F-P3, `9e4b0b7f` + fix `c0df7921`), merged into `main` as one batch per `.claude/GIT_TREE_DISCIPLINE.md` section 2c.
+**Level reached:** L1 (numeric gpu-proofs gates, run by the orchestrator, all green) / target L4 (section 10) — L4 is Peter's click-script below; not yet run by him.
 **Doc status line (quoted verbatim):** `IN PROGRESS · F-P1 + F-P3 SHIPPED 2026-07-15 (orchestrator session 1 of 3, landing report `docs/landings/2026-07-15-import-fidelity-p1p3.md`) · approved by Peter 2026-07-15 ("Approved") · authored 2026-07-15 · Fable 5 (his product calls are quoted in the intro, D7, and D8; glass/F-P5, pure-black base, and sun coherence added same day at his direction). Execution: 3 orchestrator sessions — (1) F-P1 ∥ F-P3 DONE, (2) F-P2 → F-P4 next, (3) F-P5.`
 
 ## Gate results (verbatim)

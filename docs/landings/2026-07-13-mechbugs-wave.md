@@ -1,6 +1,6 @@
 # mechbugs wave (7 backlog bugs) — landed 2026-07-13 @ `9dd7c8be` (batch 1), `84efb321` (batch 2)
 
-**Branch:** feat/mech-bugs-0712 (worktree `.claude/worktrees/mechbugs`) · **Level reached:** L1 across the wave, L2 for BUG-111 and BUG-037 (below) / target L1–L2 per bug (§10)
+**Branch:** feat/mech-bugs-0712 (worktree `.claude/worktrees/mechbugs`) · **Level reached:** L1 across the wave, L2 for BUG-111 and BUG-037 (below) / target L1–L2 per bug (section 10)
 **Doc status line (quoted verbatim):** not applicable — this wave closes `docs/BUG_BACKLOG.md` entries, not a phased design doc. Backlog Status lines quoted per-bug below.
 
 Seven bugs from `docs/BUG_BACKLOG.md`: BUG-123, BUG-111, BUG-076, BUG-037, BUG-079, BUG-038, BUG-054. Four workers (Sonnet, model-tagged per the Agent tool's launch requirement), 2–3 bugs each, all edits in one shared worktree, orchestrator (this session) ran every gate itself — independently re-executed, not just read from worker reports, per the session's own verify-claim discipline (see Deviations).

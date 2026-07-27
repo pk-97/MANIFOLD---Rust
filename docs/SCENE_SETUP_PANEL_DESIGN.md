@@ -2,11 +2,11 @@
 
 > **SUPERSEDED for the param mechanism (2026-07-21) → [`docs/SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md`](SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md) is the current authority.** This doc's curated projection + synthesized `scene.{doc}.{param}` id system + resolution funnels are gone: the panel now renders exposed-param manifest rows through the card path (P1/P2 LANDED), and `scene_vm.rs` is slimmed to item-discovery only (P3 LANDED `7ee0a887`). The outliner / selection / structural verbs described here still stand; the per-param addressing, hand metadata tables, and dual write path do not.
 
-**Status: SHIPPED (all phases P1–P5) 2026-07-17. P1 (column + discovery + Environment/Fog) + P2 (Objects section) + P3 (Lights + Camera sections) + P4 (Import Model merge, held-out warehouse+skull gate passed) + P5 (modifier stack: 3 splice commands + panel UI) all landed. Sonnet-executable, orchestrated overnight. BUG-193 (no object/light remove command), BUG-194 (vertex count not computable from def), BUG-195 (merge scale-sanity has no stored object radius, defaulted proxy), BUG-198 (headless `Key Z` doesn't reach Undo — found during P5, pre-existing harness gap) opened as honest escalations, not blocking. · 2026-07-16 · Fable 5 (design session with Peter) · **REVISED 2026-07-17:** the object-identity mechanism (D3's group trace), the §4 "no new port types" invariant, the D4 panel layout, and the §9 per-object-visibility deferral are superseded by `docs/SCENE_OBJECT_AND_PANEL_V2_DESIGN.md` (APPROVED — `node.scene_object` + `Object` wire, outliner + properties layout, numeric value-cell contract). D1/D5/D6/D7/D8 doctrine carries forward unchanged.**
+**Status: SHIPPED (all phases P1–P5) 2026-07-17. P1 (column + discovery + Environment/Fog) + P2 (Objects section) + P3 (Lights + Camera sections) + P4 (Import Model merge, held-out warehouse+skull gate passed) + P5 (modifier stack: 3 splice commands + panel UI) all landed. Sonnet-executable, orchestrated overnight. BUG-193 (no object/light remove command), BUG-194 (vertex count not computable from def), BUG-195 (merge scale-sanity has no stored object radius, defaulted proxy), BUG-198 (headless `Key Z` doesn't reach Undo — found during P5, pre-existing harness gap) opened as honest escalations, not blocking. · 2026-07-16 · Fable 5 (design session with Peter) · **REVISED 2026-07-17:** the object-identity mechanism (D3's group trace), the section 4 "no new port types" invariant, the D4 panel layout, and the section 9 per-object-visibility deferral are superseded by `docs/SCENE_OBJECT_AND_PANEL_V2_DESIGN.md` (APPROVED — `node.scene_object` + `Object` wire, outliner + properties layout, numeric value-cell contract). D1/D5/D6/D7/D8 doctrine carries forward unchanged.**
 **Prerequisites:** none — every substrate this design consumes is SHIPPED and verified in-tree
 (SCENE_BUILD_AND_GROUP_PARAMS P1–P5, REALTIME_3D P1–P4/P8/P9, MATERIAL M1–M6, IMPORT_FIDELITY
 F-P1–F-P7, GLB_CONFORMANCE, the audio-dock `ScreenLayout` column, `ChangeGraphParamCommand`).
-**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5 (Phase briefs)–§6 and §8 before starting any
+**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 and section 8 before starting any
 phase. Executor: Sonnet, orchestrated overnight. The orchestrator may consult ONE Fable
 advisor agent, only on a critical blocking problem the doc does not foresee.
 
@@ -44,7 +44,7 @@ state and zero new mutation paths**: the panel is a fourth surface over the same
 dock), plus three genuinely new pieces: the dock column itself, a merge-import path
 ("drop a second GLB into this scene"), and the per-object **modifier stack** gesture.
 
-Binding constraints (DESIGN_AUTHORING §1): **performance surface** (every panel control is a
+Binding constraints (DESIGN_AUTHORING section 1): **performance surface** (every panel control is a
 live, bindable graph param — MIDI/OSC/audio-mod reach them through the existing expose
 machinery, nothing new owed); **persistence** (all edits land in the graph def / params that
 already serialize — one round-trip gate per phase, no migration needed anywhere);
@@ -53,14 +53,14 @@ thread render is byte-identical with the panel open or closed. Thread residency:
 unchanged (`state_sync` view-models in, commands out).
 
 **Supersessions (applied to the other docs in this landing):**
-- SCENE_BUILD_AND_GROUP_PARAMS_DESIGN §7 item 7 ("Scene-object list panel: killed … a panel
+- SCENE_BUILD_AND_GROUP_PARAMS_DESIGN section 7 item 7 ("Scene-object list panel: killed … a panel
   would be a second authoring model") is **superseded** by Peter's 2026-07-16 directive. The
   ground has shifted since that kill: the panel is NOT a second authoring model — it emits
   the identical commands the card/group-face emit (the same defense that doc's own D6 used
   to add the *third* surface). REALTIME_3D decided-#1 ("no scene-document format, no second
   authoring model") is **upheld**, not reopened: there is still no scene document; the graph
   stays the only model.
-- REALTIME_3D_DESIGN §8's "Hierarchy panel … revisit only with strong user pull" — the pull
+- REALTIME_3D_DESIGN section 8's "Hierarchy panel … revisit only with strong user pull" — the pull
   arrived, from Peter. Its **P7 (scene starter preset)** is absorbed here as P1's
   `Scene Starter.json` deliverable; REALTIME_3D's status line gains a pointer at landing.
 
@@ -71,7 +71,7 @@ here), `AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` (the dock column pre
 copies), `IMPORT_FIDELITY_DESIGN.md` + `GLB_CONFORMANCE_DESIGN.md` (the import look and the
 importer this extends), `MESH_DEFORM_AND_CURVE_GEOMETRY_DESIGN.md` (the modifier atoms),
 `GLTF_ANIMATION_DESIGN.md` (animation nodes appear in scenes; panel shows them as custom
-rows in v1 — §9 Deferred).
+rows in v1 — section 9 Deferred).
 
 ---
 
@@ -85,7 +85,7 @@ moved line is fine, a missing symbol is an escalation.
 | Scene ownership is per-layer already | `crates/manifold-core/src/layer.rs:131` — `gen_params: Option<PresetInstance>` (graph override on the instance, accessor `Layer::generator_graph`) | SHIPPED. "One scene per layer" needs no model change |
 | Clips are thin (timing + source refs), carry no param state | `crates/manifold-core/src/clip.rs:10-90` | Confirms: clips gate WHEN the layer's generator shows; the scene itself is layer-owned |
 | Dock column pattern | `crates/manifold-ui/src/layout.rs:26` (`audio_setup_width`), `:110` (`content_area` subtraction), `:187` (`audio_setup()` rect), `AnimF32` tween `:51`, `DEFAULT_AUDIO_SETUP_WIDTH` in `color` | SHIPPED (audio dock P1). The exact precedent — copy the field/rect/handle/snap-back/Escape wiring |
-| `state_sync` as the panel's sole data boundary | audio dock design §5 item 8; `manifold-app/src/ui_bridge/state_sync.rs` (AudioSendRow builder precedent) | SHIPPED rule. The scene panel gets `SceneVm` rows the same way |
+| `state_sync` as the panel's sole data boundary | audio dock design section 5 item 8; `manifold-app/src/ui_bridge/state_sync.rs` (AudioSendRow builder precedent) | SHIPPED rule. The scene panel gets `SceneVm` rows the same way |
 | Graph param edit command, shared by card + group face | `ChangeGraphParamCommand` path (SCENE_BUILD P3/P4 — "one value, three surfaces"); command family carries `.with_scope(scope_path)` (`manifold-editing/src/commands/graph.rs:145-176` et al.) | SHIPPED. The panel is the fourth surface, same command |
 | Per-object identity: named/tinted groups; transform atom inside; stable inner `node_id`s | `gltf_import.rs:487-501` (`build_import_graph` doc), SCENE_BUILD D9; flatten at load (`manifold_core::flatten::flatten_groups`) | SHIPPED |
 | One-click add gestures | `AddSceneObjectCommand` + `AddSceneLightCommand` (+ node-face buttons), SCENE_BUILD P5 | SHIPPED — the panel's "+ Object"/"+ Light" buttons dispatch THESE, not new commands |
@@ -98,16 +98,16 @@ moved line is fine, a missing symbol is an escalation.
 | Mesh-modifier atoms (mesh → mesh) | `node.bend_mesh`, `node.twist_mesh`, `node.taper_mesh`, `node.push_along_normals`, `node.push_mesh` (texture displacement — type_id is `node.push_mesh`, file `displace_mesh.rs`), `node.morph_mesh`, `node.rotate_3d` | SHIPPED — the modifier-stack vocabulary. Re-derive at P5 entry: `rg -l "Array<MeshVertex>" crates/manifold-renderer/src/node_graph/primitives/` and keep only single-mesh-in/mesh-out atoms |
 | Import assembler is a pure function | `gltf_import.rs:482` `assemble_import_graph(path) -> (EffectGraphDef, ImportReport)`; split `build_import_graph(&summary, path)` testable on synthetic summaries; node ids allocated by a local `fresh_id` counter from 0 | SHIPPED. The merge path (D5) reuses `gltf_load::gltf_import_summary` + a new merge assembler; id-offsetting is required |
 | App-side import entry | `Application::import_model_file` (manifold-app file-drop handler; `gltf_import.rs:26` doc) | SHIPPED — P4 adds a second entry that targets an existing scene |
-| Mesh sources reference the .glb by path param | `gltf_import.rs:57-63` — `model_file` card binding → source node `path` string; `hdri_file` likewise | SHIPPED. Assets do NOT embed in the project file (§9 Deferred — real, known cost) |
+| Mesh sources reference the .glb by path param | `gltf_import.rs:57-63` — `model_file` card binding → source node `path` string; `hdri_file` likewise | SHIPPED. Assets do NOT embed in the project file (section 9 Deferred — real, known cost) |
 | Held-out fixtures on disk | `tests/fixtures/gltf/abandoned_warehouse_-_interior_scene.glb`, `skull_salazar_downloadable.glb`, `the_rosetta_stone.glb` (untracked, gitignored-class fixtures) | Present in the main checkout — P4's held-out merge gate uses two of them |
 | Selected-layer scoping for inspector surfaces | inspector panels scope to the selected layer via `state_sync` today (AUDIO TRIGGERS section precedent, audio dock P3b) | SHIPPED pattern. ⚠ VERIFY-AT-IMPL (P1): the exact selection accessor `state_sync` uses — `rg -n "selected_layer" crates/manifold-app/src/ui_bridge/state_sync.rs` — transcribe, don't invent |
 | Generator assignment to a layer (for "New 3D Scene") | the generator picker's command path | ⚠ VERIFY-AT-IMPL (P1): `rg -n "SetGenerator\|AssignGenerator\|gen_params" crates/manifold-editing/src/commands/ -l` then read the command the picker dispatches — the empty-state button dispatches THAT command with the starter preset's type id |
 | Bundled preset loader + `graph_tool` | `crates/manifold-renderer/assets/generator-presets/`; `graph_tool validate --kind generator` / `fusion` | SHIPPED — the starter preset ships and validates through these |
 
 Negative claims, searches run 2026-07-16: no scene/dock panel exists (`rg -l "scene_setup" crates/` → 0);
-no per-object visibility mechanism exists on `render_scene` (no `visible_k` port/param — §9);
+no per-object visibility mechanism exists on `render_scene` (no `visible_k` port/param — section 9);
 no insert-node-into-wire composite command exists in `manifold-editing` (P5 builds one);
-no per-scene frame-cost attribution exists (§9).
+no per-scene frame-cost attribution exists (section 9).
 
 ## 2. Decisions
 
@@ -119,7 +119,7 @@ from the same `Arc<Project>` snapshot everything else reads, and writes by dispa
 same `EditingService` command the perform card emits for that param. Peter, verbatim: "it's a
 view. I only want a single source of truth." Rejected: a `Scene` struct on `Layer` mirroring
 the graph (two homes for one fact — the exact rot Peter banned); panel-local staging with an
-apply button (staleness by construction). This supersedes SCENE_BUILD §7 item 7 (see header)
+apply button (staleness by construction). This supersedes SCENE_BUILD section 7 item 7 (see header)
 and upholds REALTIME_3D decided-#1.
 
 **D2 — The panel is a `ScreenLayout` column, cloned from the audio dock.** New field
@@ -143,7 +143,7 @@ unit-testable on synthetic defs — no GPU, no registry lookups beyond type_ids)
 - **Scene root** = the first `node.render_scene` in the def whose output reaches the graph
   output (walk wires backward from the output node; the liveness notion the canvas already
   computes). More than one live `render_scene` → target the first by doc id and show a
-  static header chip "2 scenes in this graph — showing the first" (no picker in v1, §9).
+  static header chip "2 scenes in this graph — showing the first" (no picker in v1, section 9).
   None → no scene (empty state per D7).
 - **Objects**: for `k in 0..objects`, trace `mesh_k`'s wire to its producer. Producer is a
   group output → the object row is that group: name/tint from the group, mesh source = the
@@ -229,7 +229,7 @@ Rejected: merging by re-running `assemble_import_graph` and splicing defs wholes
 vocabulary.** "Add modifier" on an object row opens a fixed list (display name → type_id):
 Bend (`node.bend_mesh`), Twist (`node.twist_mesh`), Taper (`node.taper_mesh`), Inflate
 (`node.push_along_normals`), Displace by Texture (`node.push_mesh`), Morph (`node.morph_mesh`),
-Rotate (`node.rotate_3d`) — re-derived and confirmed at P5 entry (§1 command). Three new
+Rotate (`node.rotate_3d`) — re-derived and confirmed at P5 entry (section 1 command). Three new
 composite commands in `manifold-editing/commands/graph.rs`, each one undo unit, shaped like
 `AddSceneObjectCommand`:
 - `InsertMeshModifierCommand { scene addr, object k, type_id, position }` — create the node
@@ -251,7 +251,7 @@ Selected layer is a generator layer with a live scene → the full panel. Genera
 `render_scene` in the graph → "This generator has no 3D scene" + an **Open Graph Editor**
 button (the existing open-editor action). Generator layer with NO generator, or an empty
 slot → two buttons: **New 3D Scene** (assigns the bundled `Scene Starter` generator preset
-via the existing generator-assignment command — §1 VERIFY marker) and **Import Model…** (the
+via the existing generator-assignment command — section 1 VERIFY marker) and **Import Model…** (the
 existing file-drop import path, targeted at this layer). Video/audio/group layer or nothing
 selected → one sentence naming what to select. The panel column itself never conditionally
 vanishes while open (`feedback_no_conditionally_visible_ui`).
@@ -303,16 +303,16 @@ new widget kinds · new port types · touching `render_scene`'s runtime/shader �
 gizmos, physics, splats, animation · keeping any "old path" alive when a phase replaces one
 (none should exist — this design is additive) · `Arc<Mutex>` anywhere.
 
-Landing: per `.claude/GIT_TREE_DISCIPLINE.md` §2 (Landing protocol (replaces the retired ff-only convention)) — one warm worktree for the workstream,
+Landing: per `.claude/GIT_TREE_DISCIPLINE.md` section 2 (Landing protocol (replaces the retired ff-only convention)) — one warm worktree for the workstream,
 batch landings per 2–3 phases (P1+P2, P3+P4, P5), full workspace sweep + clippy at each
-landing in the main checkout, landing reports per DESIGN_DOC_STANDARD §8.10.
+landing in the main checkout, landing reports per DESIGN_DOC_STANDARD section 8.10.
 
 ### P1 — The column + discovery + Environment/Fog live (the vertical slice)
 
-- **Entry state:** clean worktree off current `origin/main`; §1 anchors re-run (notably
+- **Entry state:** clean worktree off current `origin/main`; section 1 anchors re-run (notably
   `layout.rs` audio-dock trio, `ChangeGraphParamCommand`, the two VERIFY markers: selection
   accessor + generator-assignment command — resolve BOTH and restate before code).
-- **Read-back:** this doc §2 D1–D4/D7, §4; audio dock design D1 + §3.5 (the column recipe);
+- **Read-back:** this doc section 2 D1–D4/D7, section 4; audio dock design D1 + section 3.5 (the column recipe);
   SCENE_BUILD D5/D6 (sections, the card-identical-command rule); `layout.rs` whole;
   `gltf_import.rs:604-700` (the chrome shapes D3 traces).
 - **Deliverables:** `scene_setup_width`/`scene_setup()`/`content_area()` subtraction/handle/
@@ -329,9 +329,9 @@ landing in the main checkout, landing reports per DESIGN_DOC_STANDARD §8.10.
   header button on a layer holding the imported-scene fixture, drag Fog density, assert the
   param value changed and undo restores it; round-trip: edit env intensity → save → reload →
   value persists AND the panel re-shows it (create+reload, per the standard). *Negative:*
-  §4's rg gates; show-render byte-identity diff (panel open vs closed). **Demo (L3 + PNGs):**
+  section 4's rg gates; show-render byte-identity diff (panel open vs closed). **Demo (L3 + PNGs):**
   the flow above + headless PNGs of every D7 empty state and the full panel on a real
-  imported scene — affordance check per standard §5 (buttons read as buttons).
+  imported scene — affordance check per standard section 5 (buttons read as buttons).
 - **Performer gesture:** select the layer mid-prep, ride Fog density with the mouse, watch
   the preview haze move — no graph editor open.
 - **Forbidden:** starting Objects/Lights UI (P2/P3); a generic param-tree renderer (D3's
@@ -353,7 +353,7 @@ landing in the main checkout, landing reports per DESIGN_DOC_STANDARD §8.10.
 - **Gate.** *Positive:* Vm + panel unit tests (rows for the azalea-shaped synthetic def;
   rename emits the sweep command; add-object button emits `AddSceneObjectCommand`); L3 flow:
   click "+ Object", assert a new object row appears AND the preview shows the placeholder
-  cube (PNG pair); undo restores both. *Negative:* §4 gates. **Demo (L2):** PNG of the panel
+  cube (PNG pair); undo restores both. *Negative:* section 4 gates. **Demo (L2):** PNG of the panel
   on the real warehouse import — named object rows with transforms, read by the orchestrator.
 - **Performer gesture:** rename "Material.001" to "Skull", drag its Y position — the object
   lifts in the preview and the card section follows the rename.
@@ -373,7 +373,7 @@ landing in the main checkout, landing reports per DESIGN_DOC_STANDARD §8.10.
   trace; custom rows for anything else.
 - **Gate.** *Positive:* Vm tests (each camera atom shape; light row param addresses); L3
   flow: drag a light's intensity, assert value + undo; PNG pair proving a `cast_shadows`
-  toggle visibly changes the preview shadow. *Negative:* §4 gates; a scene with >4 casters
+  toggle visibly changes the preview shadow. *Negative:* section 4 gates; a scene with >4 casters
   still renders every light lit (no panel-side cap enforcement — the cap is the renderer's,
   the panel only reports the count).
 - **Performer gesture:** two-finger the sun's elevation and watch the long shadows come up —
@@ -413,11 +413,11 @@ landing in the main checkout, landing reports per DESIGN_DOC_STANDARD §8.10.
 
 ### P5 — Modifier stack (closes the wave)
 
-- **Entry state:** P2 landed; modifier vocabulary re-derived (§1 command) and reconciled
+- **Entry state:** P2 landed; modifier vocabulary re-derived (section 1 command) and reconciled
   against D6's list — a missing atom is a list edit, a signature surprise is an escalation.
 - **Read-back:** D6 whole; `AddSceneObjectCommand`'s composite/undo shape; the wire-splice
   topology rules in `NODE_GROUPS_DESIGN.md` (inner wires + group boundary constraints);
-  DECOMPOSING_GENERATORS §2.5 (confirm: zero new primitives here — the stack is pure reuse).
+  DECOMPOSING_GENERATORS section 2.5 (confirm: zero new primitives here — the stack is pure reuse).
 - **Deliverables:** the three splice commands (insert/remove/move, each one undo unit, each
   with inverse-pair unit tests incl. nested-group placement and first/last positions); panel
   modifier UI on each object row (stack list, per-modifier param rows, add popover with the
@@ -426,7 +426,7 @@ landing in the main checkout, landing reports per DESIGN_DOC_STANDARD §8.10.
   wire order after every operation); L3 flow: add Twist to the starter cube, drag amount,
   assert param + visible PNG change, reorder two modifiers, undo ×N restores the original
   def byte-identically (def-equality assert); `graph_tool validate` on the post-splice def.
-  *Negative:* §4 gates; `rg -n "modifier" crates/manifold-core/` → no stored stack anywhere
+  *Negative:* section 4 gates; `rg -n "modifier" crates/manifold-core/` → no stored stack anywhere
   (the wire chain is the only home). **Demo (L3 + PNG):** the flow + a before/after PNG pair
   of Bend on the rosetta-stone fixture. **Full workspace sweep + `cargo clippy --workspace
   -- -D warnings` + `cargo deny check bans`** (wave close), plus the focused GPU run ONLY if
@@ -441,8 +441,8 @@ landing in the main checkout, landing reports per DESIGN_DOC_STANDARD §8.10.
 Scene + Open Graph (P1) · Objects rows/rename/transform/material/remove/counts (P2) ·
 + Object/+ Light buttons (P2) · Lights rows (P3) · Camera rows incl. lens trace (P3) ·
 Import Model merge + normalize + safety bound (P4) · modifier stack UI + 3 commands (P5) ·
-every other §2 commitment is in §9 Deferred with a trigger. The §6 skeleton's "scene name
-editable", multi-scene picker, visibility toggles: §9, by name.
+every other section 2 commitment is in section 9 Deferred with a trigger. The section 6 skeleton's "scene name
+editable", multi-scene picker, visibility toggles: section 9, by name.
 
 ## 6. Performance (stated honestly)
 
@@ -470,15 +470,15 @@ finds itself adding content-thread work, that is a brief violation — stop and 
 7. Modifier stack = the wire chain inside the object's group. No stored list anywhere.
 8. The D8 fence stands; additions must displace an existing control or justify a basic
    user's need.
-9. SCENE_BUILD §7 item 7 is superseded (this doc's header); REALTIME_3D decided-#1 stands.
-10. Landing discipline per `.claude/GIT_TREE_DISCIPLINE.md` §2 (Landing protocol (replaces the retired ff-only convention)) — merge-trunk, batched
+9. SCENE_BUILD section 7 item 7 is superseded (this doc's header); REALTIME_3D decided-#1 stands.
+10. Landing discipline per `.claude/GIT_TREE_DISCIPLINE.md` section 2 (Landing protocol (replaces the retired ff-only convention)) — merge-trunk, batched
     landings, sweep at landing.
 
 ## 8. Execution notes for the orchestrator
 
-- Fresh session per phase; phase brief + this doc are the context (standard §8).
+- Fresh session per phase; phase brief + this doc are the context (standard section 8).
 - Gates are run by the orchestrating session, never solely the worker; PNGs are read, not
-  assumed. Landing reports per §8.10 in `docs/landings/`, status line updated per §8.9.
+  assumed. Landing reports per section 8.10 in `docs/landings/`, status line updated per section 8.9.
 - The single Fable advisor (Peter's allowance, 2026-07-16) is for CRITICAL blockers only —
   a moved anchor is not critical (re-derive); a missing symbol, a contradicted decision, or
   a design gap that forces an unlisted choice is. One advisor session, total, for the night;

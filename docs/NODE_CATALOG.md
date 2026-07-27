@@ -12,7 +12,7 @@ For *how* to compose these into a generator decomposition, see [DECOMPOSING_GENE
 - **All primitives share one `Primitive` trait.** "Atom" vs "Effect" is how the palette groups them, not a structural split.
 - **Port-shadows-param:** any scalar input port whose name matches a primitive `ParamDef` uses the wire when present and the param as the fallback. Standard for `gain`, `amount`, `rotation`, `wet_dry`, control-rate modulation everywhere.
 - **Effects are JSON presets composed of atoms** (decomposed graphs in `effect-presets/`), drillable in the editor — not monolithic palette nodes. The fused effect-monolith bundles were deleted 2026-05-30; the lone surviving legacy `PostProcessEffect` wrapper is `node.wireframe_depth` (decomposition in flight). Preset names stay stable across implementation swaps so save files don't break.
-- **Array port wires carry a Channels signature.** The macro syntax in this catalog uses `Array(T)` for typed families that have a `KnownItem` impl (`Particle`, `MeshVertex`, `EdgePair`, etc.) — equivalent to `Channels<T>`, both expand to an `ArrayType::of_known::<T>()` whose `specs` field carries the canonical channel list. For ad-hoc shapes, the inline form is `Channels[name: Type, ...]`. See [CHANNEL_TYPE_SYSTEM.md](CHANNEL_TYPE_SYSTEM.md) §4.1 (Concrete types) for the type contract and §7 for the `well_known` channel-name registry that the canonical names resolve through.
+- **Array port wires carry a Channels signature.** The macro syntax in this catalog uses `Array(T)` for typed families that have a `KnownItem` impl (`Particle`, `MeshVertex`, `EdgePair`, etc.) — equivalent to `Channels<T>`, both expand to an `ArrayType::of_known::<T>()` whose `specs` field carries the canonical channel list. For ad-hoc shapes, the inline form is `Channels[name: Type, ...]`. See [CHANNEL_TYPE_SYSTEM.md](CHANNEL_TYPE_SYSTEM.md) section 4.1 (Concrete types) for the type contract and section 7 for the `well_known` channel-name registry that the canonical names resolve through.
 - **`Array<T>` / `Channels<T>` outputs declare capacity** via `EffectNode::array_output_capacity`; the CI sweep test enforces this on the registry. Outputs also declare a non-empty Channels signature (either through `KnownItem::SPECS` or inline `Channels[...]`); the `every_conventional_array_port_declares_a_channels_signature` invariant gates that.
 - **Stateful primitives declare** `state_lifecycle` + `state_capture_input_ports` so the StateStore knows where to break cycles. Per-port, not per-node.
 
@@ -34,7 +34,7 @@ Channels signatures reference `crate::node_graph::channel_names::well_known::*` 
 
 ## Registered node index (generated — authoritative)
 
-This block is **generated from the node registry** by `gen_node_catalog` (`cargo run -p manifold-renderer --bin gen_node_catalog`) and is the drift-guarded source of truth for *what exists* — a registry change that isn't reflected here fails `cargo test`. The hand-curated "Atoms by intent" grouping below (§3) adds human structure and prose; once `category` / `role` are filled across the library, that grouping regenerates from those fields too. The full machine artifact — ports, params, complete descriptions, for the AI composition surface — is [`node_catalog.json`](node_catalog.json).
+This block is **generated from the node registry** by `gen_node_catalog` (`cargo run -p manifold-renderer --bin gen_node_catalog`) and is the drift-guarded source of truth for *what exists* — a registry change that isn't reflected here fails `cargo test`. The hand-curated "Atoms by intent" grouping below (section 3) adds human structure and prose; once `category` / `role` are filled across the library, that grouping regenerates from those fields too. The full machine artifact — ports, params, complete descriptions, for the AI composition surface — is [`node_catalog.json`](node_catalog.json).
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
@@ -536,7 +536,6 @@ Compose these for arbitrary procedural fields.
 
 ### 3.6 Image transforms
 
-The UV-warp family below is `coordinate-field → node.remap → node.mix` (TouchDesigner's Remap-TOP shape): a coordinate generator emits per-pixel sample UVs, `node.remap` resamples the source at them, `node.mix` crossfades. This visible graph replaced the fused whole-effect kernels — `radial_fold_uv` ⇐ Kaleidoscope, `mirror_fold_uv` ⇐ Mirror / QuadMirror, `uv_strip_clamp` ⇐ Edge Stretch, `radial_offset_field` + `chromatic_displace` ⇐ Chromatic Aberration. The affine half (translate/scale/rotate) stays in `node.affine_transform`.
 
 | Display Name | Type ID | Purpose |
 |---|---|---|
@@ -595,7 +594,7 @@ State lives in the primitive via `extra_fields:` + `state_lifecycle`. StateStore
 | Feedback | `node.temporal` (id `node.feedback`) | Previous-frame texture accumulation with `amount`, `zoom`, `rotation`, mode |
 | Array Feedback | `node.array_feedback` | One-frame delay for `Array<Particle>` — closes per-frame loops without graph cycles |
 | Smoothing (scalar) | `node.smoothing` | Listed under control-rate; also valid stateful temporal |
-| Envelope Follower / Decay / Sample & Hold | (see §3.1) | Scalar-side temporal state |
+| Envelope Follower / Decay / Sample & Hold | (see section 3.1) | Scalar-side temporal state |
 
 ### 3.10 Texture → scalar bridges
 
@@ -758,7 +757,7 @@ These wrap native plugins, CPU work, or background workers as primitives.
 
 ### 3.19 WGSL escape hatch
 
-Reserved for genuinely irreducible kernels (see DECOMPOSING_GENERATORS §5 before reaching).
+Reserved for genuinely irreducible kernels (see DECOMPOSING_GENERATORS section 5 before reaching).
 
 | Display Name | Type ID | Purpose |
 |---|---|---|
@@ -768,11 +767,10 @@ Reserved for genuinely irreducible kernels (see DECOMPOSING_GENERATORS §5 befor
 
 ## 4. Effects — named visual looks
 
-**Effects are JSON presets, not palette nodes.** Every effect now ships as a decomposed atom graph in [`assets/effect-presets/`](../crates/manifold-renderer/assets/effect-presets/), runs `system.source → atoms → system.final_output`, and is drillable in the graph editor (open the effect, see its atoms, rewire them). The pre-migration model — effects as monolithic `shader` / `composite` / `bundle` nodes in the palette — is gone: the fused legacy effect-monolith bundles were **deleted on 2026-05-30**, and the named-look kernels (Kaleidoscope, Quad Mirror, Edge Stretch, Chromatic Aberration, Color Grade, Infrared, Plasma, Bloom, Strobe, …) were replaced by composable atoms (the §3.6 UV-warp family, the §3.5 colour atoms, etc.).
 
 **One legacy wrapper remains: Wireframe Depth** (`node.wireframe_depth`, `WIREFRAME_DEPTH_TYPE_ID`) still wraps the legacy `WireframeDepthFX: PostProcessEffect` Rust impl. It is the lone remaining fused effect node and an active decomposition target — its 48-node `WireframeDepthGraph.json` atom-graph replacement is in flight (depth + person-segment DNN atoms + edge_detect + wireframe primitives). Until that lands, `WireframeDepth.json` is a thin wrap of the legacy node and `WireframeDepthGraph.json` is the parallel atom-graph build-out.
 
-The effect presets are listed in §5.
+The effect presets are listed in section 5.
 
 ---
 
@@ -849,7 +847,7 @@ Empty. The migration completed in May 2026 — see [GENERATOR_DECOMPOSITION_PLAN
 
 ## 7. Keeping this catalog honest
 
-- After adding a new primitive: add a row to §3 under the right family and bump nothing else; the AI agent reads §3 to know what's available.
-- After adding a new preset: add a row to §5 or §6.1 with the topology shape; downstream readers learn the analogue from this entry.
+- After adding a new primitive: add a row to section 3 under the right family and bump nothing else; the AI agent reads section 3 to know what's available.
+- After adding a new preset: add a row to section 5 or section 6.1 with the topology shape; downstream readers learn the analogue from this entry.
 - After deleting a primitive: remove the row; don't leave it as "deprecated."
 - Validate by running `cargo run -p manifold-renderer --bin check-presets` (loads + compiles every preset, sub-second, no GPU); a green run means every primitive referenced by every preset is registered.

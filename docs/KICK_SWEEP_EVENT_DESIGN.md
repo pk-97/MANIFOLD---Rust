@@ -1,10 +1,10 @@
 # Kick Sweep-Event Detector — motion-based kick detection for the bass-heavy Low band
 
-**Status:** IN PROGRESS · P1 (prototype) + P2 (runtime) + P4 (Kick split from Transients, ridge-only) + P5 (latency retune: d10/w6 + abs floor, median fire offset +31→+9 ms, §P5) SHIPPED 2026-07-07 · scope kick lane (magenta bottom tick lane on the Audio Setup scope, P3's tuning monitor) SHIPPED 2026-07-07 · P3 (feel-pass, now binds the Kick feature) owed to Peter · 2026-07-07 · Opus 4.8 + Fable
+**Status:** IN PROGRESS · P1 (prototype) + P2 (runtime) + P4 (Kick split from Transients, ridge-only) + P5 (latency retune: d10/w6 + abs floor, median fire offset +31→+9 ms, section P5) SHIPPED 2026-07-07 · scope kick lane (magenta bottom tick lane on the Audio Setup scope, P3's tuning monitor) SHIPPED 2026-07-07 · P3 (feel-pass, now binds the Kick feature) owed to Peter · 2026-07-07 · Opus 4.8 + Fable
 P1 @ `648f07e3` · P2 landing report: `docs/landings/2026-07-07-kick-sweep-p2.md`. The live `reduce_send` reproduces the prototype's reference fire counts on all 10 mix/drums fixtures (post-P5: bit-exact outside the stream fade-in region); masked-novelty deleted. P5 reference: `--family ridge-one --drop 10 --win 6 --absfloor 0.005 --ridge-only`.
 Scope lane @ `b6aed008` (rode the ScopeColumn typed-overlay refactor) · landing report: `docs/landings/2026-07-07-kick-scope-lane.md`.
 **Prerequisites:** none (the prototype and the 73-label corpus both exist).
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5 (Phase briefs)–§6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 before starting any phase.
 
 **The governing insight:** on a bass-heavy full mix the Low band's onset detector goes
 near-deaf on kicks — the bassline owns the band's flux baseline and the kick can't
@@ -119,7 +119,7 @@ is Peter's feel-pass (P3/L4), not a harness number.
      flux already works. The synth-kicks guard went 15 → 8 the moment this landed.
 
 - **D4 — Replace masked-novelty; do not stack.** Delete the BUG-046 masked-novelty criterion
-  and all its state (§1 inventory). The ridge beats it on recall (41/61 vs 21/38) at equal
+  and all its state (section 1 inventory). The ridge beats it on recall (41/61 vs 21/38) at equal
   bass cost and is what fixes the very deafness masked-novelty was a workaround for. *Rejected:
   keep masked-novelty for non-bass tracks* — the ridge equals or beats it everywhere, and the
   plain-flux base already carries clean tracks; keeping both is a forbidden parallel path and
@@ -178,7 +178,7 @@ pre-allocated scratch above (hot-path discipline; the content thread runs this v
 Deliverables met: `Mask::RidgeTrack` + `--family ridge`/`ridge-final` in `hpss_proto.rs`;
 harness re-graded against the 73 labels in seconds (mix vs `mix_time_s`, drums vs
 `drums_time_s`) with the bass-false-fire metric. Gate met: replica validation still exact;
-all six fire-gated guards green (`k8`); recall 41/61 proven (§2). Demo artifact: the §2 table
+all six fire-gated guards green (`k8`); recall 41/61 proven (section 2). Demo artifact: the section 2 table
 (`cargo run --release -p manifold-audio --example hpss_proto -- --family ridge-final`). L1.
 
 ### P2 — Runtime integration. **SHIPPED 2026-07-07 (Opus).**
@@ -196,11 +196,11 @@ smoke list. Original brief:
 **Entry state:** `git log --oneline -1` on the branch shows `648f07e3` or a descendant; re-run
 `--family ridge-final` and confirm the reference Low-band mix counts (apricots 19, bad_guy 45,
 feel 27, inhale 38, tears 43) before touching `analysis.rs`.
-**Read-back (first step):** this doc §1/§3/§4, the ridge block in `hpss_proto.rs`, and
+**Read-back (first step):** this doc section 1/section 3/section 4, the ridge block in `hpss_proto.rs`, and
 `reduce_send` (analysis.rs:1639–1806). Restate: D4 (replace, don't stack), D5 (the exact
 constants), the no-per-hop-alloc rule, the shared refractory.
 **Deliverables:** `KickRidges` in `SendState` driving the Low band in `reduce_send`; the
-masked-novelty criterion and all 22 of its use sites deleted (§1); label grading ported into
+masked-novelty criterion and all 22 of its use sites deleted (section 1); label grading ported into
 `mod_harness` (the integrated detector graded, not the prototype).
 **Seam brief (masked-novelty deletion):** compiler-driven — delete `superflux_masked`,
 `MASKED_NOVELTY_FACTOR`, `MASKED_ONSET_DELTA`, and the `col_hist`/`sustain_med`/`masked_odf_hist`
@@ -323,7 +323,7 @@ kicks 8, busymix 7, densemix 8(≥6), riser **0**, growl 0.
 
 - **Precision past the harness floor** — reviving trigger: Peter's ambiguous-808/bass-note
   hand-labeled corpus lands. The 73 labels are clean kicks only; the residual bass false-fires
-  (§2) can't be graded without labels that call the ambiguous events.
+  (section 2) can't be graded without labels that call the ambiguous events.
 - **The bad_guy time-base caveat** — reviving trigger: Peter re-exports bad_guy's stems
   *warped* (currently 15.0 s unwarped vs the 13.241 s warped mix). Removes the ×0.8828 scaling
   and lets bad_guy grade at ±35, not just ±70.

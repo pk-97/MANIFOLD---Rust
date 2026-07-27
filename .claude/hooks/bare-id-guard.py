@@ -21,10 +21,13 @@ Deterministic contract (this docstring is the spec):
           anywhere in the touched text (Edit: old_string or new_string)
           legitimises every other mention of that ID.
 
-  RULE 2  A cross-doc section ref — `§...` preceded on its line by a `.md`
-          filename — must be followed by `(...)` containing a letter:
-              docs/WIDGET_TREE_DESIGN.md §5b (param-surface recipe)
-          Same-doc §refs stay bare; the heading in the same file names them.
+  RULE 2  A cross-doc section ref — `section N` preceded on its line by a
+          `.md` filename — must be followed by `(...)` containing a letter:
+              docs/WIDGET_TREE_DESIGN.md section 5b (param-surface recipe)
+          Same-doc refs stay bare; the heading in the same file names them.
+
+  RULE 3  The `§` symbol is banned in prose outright (Peter 2026-07-28) —
+          write `section N`, never the symbol.
 
   EXEMPT  Fenced code blocks; lines whose first non-space char is `$`; lines
           invoking `bd` (create/show/update/close/list/ready/dep); lines
@@ -42,7 +45,8 @@ import sys
 from pathlib import Path
 
 ID_RE = re.compile(r"\bBUG-[a-z0-9]{2,5}\b")
-SECREF_RE = re.compile(r"§[\w.]+")
+SECREF_RE = re.compile(r"\bsection\s+[\w.]+")
+SYMBOL_RE = re.compile(r"§")
 FENCE_RE = re.compile(r"^\s*(```|~~~)")
 BD_CMD_RE = re.compile(r"\bbd\s+(create|show|update|close|list|ready|dep)\b")
 NAME_PAREN_RE = re.compile(r"`?\s*\([^)]*[A-Za-z][^)]*\)")
@@ -52,7 +56,7 @@ REASON = (
     "IDs carry names (CLAUDE.md readability rule; spec: bare-id-guard.py "
     "docstring). This write adds {what} without its human name. Cite as "
     "`BUG-xxxx (short name)` / `BUG-xxxx — short name` (title from `bd show`), "
-    "and cross-doc section refs as `FILE.md §N (section name)`. One naming per "
+    "and cross-doc section refs as `FILE.md section N (section name)`. One naming per "
     "touched text is enough; command lines and code blocks are exempt."
 )
 
@@ -123,8 +127,8 @@ def audit():
             total_ids += len(ids)
             total_refs += len(refs)
             print(f"{f}: {len(ids)} unnamed IDs ({', '.join(ids)})"
-                  f"{f'; {len(refs)} bare cross-doc §refs' if refs else ''}")
-    print(f"total: {total_ids} unnamed IDs, {total_refs} bare cross-doc §refs")
+                  f"{f'; {len(refs)} bare cross-doc section refs' if refs else ''}")
+    print(f"total: {total_ids} unnamed IDs, {total_refs} bare cross-doc section refs")
     return 0
 
 
@@ -157,10 +161,20 @@ def main() -> int:
         ids, refs = violations(tool_input.get("content", ""))
 
     what = []
+    symbol_hit = tool_name == "Write" and any(
+        SYMBOL_RE.search(l) for l in prose_lines(tool_input.get("content", "")))
+    if tool_name == "Edit":
+        new_l = list(prose_lines(tool_input.get("new_string", "")))
+        old_l = list(prose_lines(tool_input.get("old_string", "")))
+        symbol_hit = sum("§" in l for l in new_l) > sum("§" in l for l in old_l)
+    if symbol_hit:
+        what_sym = "the banned § symbol (write `section N` instead)"
     if ids:
         what.append("a bare bead ID (" + ", ".join(ids) + ")")
     if refs:
         what.append("a bare cross-doc section ref (" + ", ".join(refs) + ")")
+    if symbol_hit:
+        what.append(what_sym)
     if not what:
         return 0
 

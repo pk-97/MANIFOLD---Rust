@@ -9,7 +9,7 @@ ancestors of `8b306de0`. Unblocked: UI_CRAFT_AND_MOTION_PLAN and
 TIMELINE_INTERACTION_P1 (which now sits on the single Y source this delivered).
 Original approval (Peter, 2026-07-04): "layer heads and layers must fundamentally
 not split apart."**
-**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 + §8 first. Anchors
+**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5–section 6 + section 8 first. Anchors
 below are a 2026-07-04 snapshot — re-verify before each phase.**
 
 ## Symptom (Peter, in-app)

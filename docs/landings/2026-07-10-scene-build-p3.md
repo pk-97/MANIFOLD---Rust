@@ -33,4 +33,4 @@ Re-ran the worker's `gltfscene` scene + `scripts/ui-flows/gltf-import-card-secti
 ## Shortcuts / owed
 
 - BUG-102 (mapping-popover section text field not wired — label editing was already deferred for the same reason) logged, command-side write is real + tested.
-- Fold-state persistence across restart: Deferred per §9, unchanged.
+- Fold-state persistence across restart: Deferred per section 9, unchanged.

@@ -3,8 +3,8 @@
 **Status: APPROVED design, not built · 2026-07-03 · Fable (from the live-rig discussions)**
 **Prerequisites: none for P1 (patch generalization works against today's path). P2 (strip
 island) rides the island model from `docs/MULTI_DISPLAY_DESIGN.md` P1–P3.**
-**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5 (Phase briefs)–§6 and §8 before starting any
-phase. Conformance-hardened: §1 is a 2026-07-03 snapshot — run the §8.3 pre-flight
+**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 and section 8 before starting any
+phase. Conformance-hardened: section 1 is a 2026-07-03 snapshot — run the section 8.3 pre-flight
 (re-verify `manifold-led` anchors, e.g. `rg -n 'LedSettings' crates/manifold-led/`)
 before each phase; P2 runs after multi-display lands, so expect drift.**
 
@@ -75,7 +75,7 @@ strip array, not per-strip 1D.
   preset rendered at island resolution, placed in a trigger clip, fired from a pad/cue like
   everything else. Ship a bundled **LED preset pack** (chase, scan, pulse, strobe, sparkle,
   fill) tuned for tiny resolutions. Compose from existing primitives; if an atom seems
-  missing at implementation, the §2.5 audit rule applies (expect none — these are gradients,
+  missing at implementation, the section 2.5 audit rule applies (expect none — these are gradients,
   steps, and noise).
 - **D4 — Edge-extend becomes a clip.** The current always-on stage sampling turns into an
   "ambient" generator choice the performer can place like any clip. Same shader, demoted
@@ -138,12 +138,12 @@ addresses the island, the venue profile knows the copper.
 
 ## 5a. UX home addendum (2026-07-06, Peter-ruled)
 
-The fixture patch surface lives on the unified Stage surface (MULTI_DISPLAY §5a):
+The fixture patch surface lives on the unified Stage surface (MULTI_DISPLAY section 5a):
 fixtures are objects on the same venue canvas as displays and projectors. Selecting
 a fixture shows patch summary + test controls in the side flap; deep patch detail
 (universe/channel routing, per-fixture test patterns) opens as the focused per-object
 mode with breadcrumb back. The Project Settings ▸ LED page stays a summary + entry
-link (APP_SHELL §6.2). Data model, protocols, and phasing below are untouched.
+link (APP_SHELL section 6.2). Data model, protocols, and phasing below are untouched.
 
 ## 6. Decided — do not reopen
 

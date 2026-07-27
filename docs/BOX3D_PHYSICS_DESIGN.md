@@ -3,7 +3,7 @@
 **Status: APPROVED 2026-07-09 (Peter) — design ready, awaiting build (Sonnet, P1–P4); differentiator, not release-gating; box3d MIT license confirmed 2026-07-09 · design 2026-07-07 · Fable**
 **Prerequisites: none for P1–P3 (renders through the shipped `node.render_copies`).
 P4 (content colliders) wants the depth-estimate primitive, already shipped.**
-**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5 (Phase briefs)–§6 and §8 before starting
+**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 and section 8 before starting
 any phase.**
 
 Peter's directives (2026-07-07): box3d over alternatives — "box3d is very appealing
@@ -22,7 +22,7 @@ not physics existing (TouchDesigner has Bullet, Notch has rigid bodies); it is p
 as a **musical citizen** — impulses quantized to beats, gravity on a fader, and bodies
 colliding with the *content* via depth-estimated heightfields.
 
-Companions: `SIMULATIONS_DESIGN.md` (XPBD lane — this doc supersedes its §8 (Deferred (with triggers))
+Companions: `SIMULATIONS_DESIGN.md` (XPBD lane — this doc supersedes its section 8 (Deferred (with triggers))
 "GPU rigid bodies" deferral; coupling stays deferred there), `REALTIME_3D_DESIGN.md`
 (the scene bodies will eventually join via `instances_n`), `MATERIAL_SYSTEM_DESIGN.md`
 (bodies get materials for free through the existing renderers).
@@ -36,13 +36,13 @@ Companions: `SIMULATIONS_DESIGN.md` (XPBD lane — this doc supersedes its §8 (
 | Instanced renderer: `Array(MeshVertex)` × `Array(InstanceTransform)` → lit, materialed copies | `primitives/render_instanced_3d_mesh.rs:62` (`node.render_copies`) | **The output surface, shipped.** Physics needs zero new rendering |
 | `InstanceTransform` = pos+scale vec4, euler-XYZ+pad vec4, 32 bytes, const-asserted | `generators/mesh_common.rs:93`, euler consumed at `shaders/render_instanced_3d_mesh.wgsl:108–142` | Poses are absolute per frame → quat→euler at the boundary is safe (no cross-frame interpolation) |
 | CPU-struct port pattern (Camera / Light / Material) | `node_graph/ports.rs:36–53` | **The precedent for BodySet / ColliderSet ports.** Material M1 is the plumbing pattern-copy |
-| Stateful FFI primitive: persistent worker + state in `extra_fields`, CPU→GPU upload via tiny compute pass | `primitives/blob_detect_ffi.rs` (state :77, upload :398–426) | The upload path physics copies verbatim. The *async worker* half is the named wrong move (§D2) |
+| Stateful FFI primitive: persistent worker + state in `extra_fields`, CPU→GPU upload via tiny compute pass | `primitives/blob_detect_ffi.rs` (state :77, upload :398–426) | The upload path physics copies verbatim. The *async worker* half is the named wrong move (section D2) |
 | Async texture readback at analysis res (staging + cadence + `ReadbackRequest`) | `blob_detect_ffi.rs:314–374`, `gpu_readback.rs` | **Exact precedent for P4 heightfield colliders** — lag-tolerant by design |
 | Edge-gated trigger input (recompute on integer edge) | `seed_particles_from_texture.rs:139` (`reset_trigger`) | The impulse/reset trigger pattern; bar-quantization rides existing trigger machinery |
 | Dynamic port groups via `reconfigure` | `node.mux_texture`; `render_scene` (REALTIME_3D D2) | The multi-body-set mechanism (P3) |
 | Vendored-native build precedent (`build.rs` + build-deps) | `manifold-media/build.rs`, `manifold-playback/build.rs` | House pattern for compiling non-Rust code in-tree |
 | Depth estimation from any frame | `primitives/depth_estimate_midas.rs` | P4's height source, shipped |
-| Rigid bodies previously deferred | `SIMULATIONS_DESIGN.md` §8 ("GPU rigid bodies … XPBD shape-matching is the cheap version") | **Superseded by this doc** — Peter's 2026-07-07 call |
+| Rigid bodies previously deferred | `SIMULATIONS_DESIGN.md` section 8 ("GPU rigid bodies … XPBD shape-matching is the cheap version") | **Superseded by this doc** — Peter's 2026-07-07 call |
 
 box3d itself (v0.1.0, released 2026-06-30, MIT, C17): `b3CreateWorld/b3World_Step
 (worldId, timeStep, subStepCount)`, body create/destroy with `b3Quat` poses, shapes
@@ -86,7 +86,7 @@ new**; everything else is **wiring into shipped surfaces**.
   **async background-worker stepping** — you will be tempted to copy the blob
   worker whole; don't. Blob results may lag frames invisibly; body poses lagging
   the render is jitter on every beat hit, and async stepping kills determinism.
-  The step is cheap (§6); it runs inline.
+  The step is cheap (section 6); it runs inline.
 - **D3 — Inputs are CPU-struct description ports:** `body_set: BodySet` (from
   `node.body_set`) and `colliders: ColliderSet optional` (from `node.collider_set`,
   P3). Same lifetime model as Camera/Light/Material (`ports.rs:36`); plumbing is a
@@ -131,11 +131,11 @@ new**; everything else is **wiring into shipped surfaces**.
   header; recreate-per-refresh is the acceptable fallback.`
   On stage: bodies rolling off the video content itself — the footage becomes
   terrain. Nobody has this live.
-- **D8 — Supersedes SIMULATIONS_DESIGN §8's "GPU rigid bodies" deferral** (Peter,
+- **D8 — Supersedes SIMULATIONS_DESIGN section 8's "GPU rigid bodies" deferral** (Peter,
   2026-07-07). XPBD stays the plan for cloth/liquids/grains; rigid contact/stacking
   is box3d's job. Two-way coupling (cloth ↔ rigid) remains deferred in SIMULATIONS
-  §8. The XPBD lane's `node.collide_shapes` and this doc's `node.collider_set` get
-  reconciled at that lane's §2.5 audit — do not pre-unify the types here.
+  section 8. The XPBD lane's `node.collide_shapes` and this doc's `node.collider_set` get
+  reconciled at that lane's section 2.5 audit — do not pre-unify the types here.
 
 ## 3. Data model (committed)
 
@@ -201,7 +201,7 @@ anywhere · new modulation machinery (D6).
   `ground_plane` on), bundled **Falling Bricks** preset through `node.render_copies`.
   Update the CLAUDE.md crate table + docs index in the landing.
   Read-back: this doc; `blob_detect_ffi.rs` end-to-end; `material.rs` M1 port
-  plumbing; DECOMPOSING_GENERATORS §2.5 (audit statement in the phase notes).
+  plumbing; DECOMPOSING_GENERATORS section 2.5 (audit statement in the phase notes).
   Gate (positive): wrapper unit tests — world create/step/destroy, poses land
   inside expected bounds after N steps, **determinism: two identical runs, byte-
   identical pose streams**; headless PNG at t=0 and t≈3 s shows bricks fallen and
@@ -257,7 +257,7 @@ never async stepping.
 4. Fixed substeps; worker_count 1 until a perf phase re-gates determinism (D5).
 5. Beat surface = port-shadowed params + edge-gated triggers; nothing new (D6).
 6. Content-as-collider via async heightfield readback; pose path never waits (D7).
-7. SIMULATIONS §8 rigid-body deferral superseded; XPBD lane otherwise untouched (D8).
+7. SIMULATIONS section 8 rigid-body deferral superseded; XPBD lane otherwise untouched (D8).
 
 ## 8. Deferred (with triggers)
 
@@ -275,7 +275,7 @@ never async stepping.
   shares the readback need above; reconcile with SIMULATIONS' scene-SDF deferral
   when either revives.
 - **`render_scene` `instances_n` input** (bodies inside the lit scene with shadows):
-  already REALTIME_3D §8's deferred huge-scenes lever; physics just becomes another
+  already REALTIME_3D section 8's deferred huge-scenes lever; physics just becomes another
   `Array(InstanceTransform)` producer when it lands.
 - **worker_count > 1** (perf): trigger is a measured step over budget at a body
   count a show actually needs; re-gate determinism.

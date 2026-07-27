@@ -2,7 +2,7 @@
 
 **Status: CLOSED (decisions pinned) · 2026-07-02 · Fable queue #10**
 
-A walkthrough of the live-visuals field — Resolume Arena/Avenue, TouchDesigner, Notch, VDMX, Smode, MadMapper, Millumin, Modul8, EboSuite, grandVJ, Synesthesia — asking one question per feature: *is this worth stealing for MANIFOLD?* Verdicts are **steal** (S1–S8), **reject** (R1–R4, decision-log material — don't re-propose), or **already covered** (§1).
+A walkthrough of the live-visuals field — Resolume Arena/Avenue, TouchDesigner, Notch, VDMX, Smode, MadMapper, Millumin, Modul8, EboSuite, grandVJ, Synesthesia — asking one question per feature: *is this worth stealing for MANIFOLD?* Verdicts are **steal** (S1–S8), **reject** (R1–R4, decision-log material — don't re-propose), or **already covered** (section 1).
 
 This is a survey-and-verdict doc, not a design doc. Each steal gets a rough shape and a home; the two big ones (S1, S2) get their own design sessions.
 
@@ -112,7 +112,7 @@ Every primitive ships a tiny working example graph, openable from the node brows
 |---|---|---|
 | S1 mapping | **New design doc — queue #11, next Fable session** | Fable design → Sonnet phases |
 | S2 perform surface builder | **DONE — docs/PERFORM_SURFACE_DESIGN.md** (widget substrate P1; builder itself = deferred layer) | Small-medium |
-| S3 cue/preview bus | Spec'd enough here; PERFORM_SURFACE_DESIGN §7.3 widget | Small (Sonnet) |
+| S3 cue/preview bus | Spec'd enough here; PERFORM_SURFACE_DESIGN section 7.3 widget | Small (Sonnet) |
 | S4 clip transitions | Session mode backlog, spec'd enough here | Small (Sonnet) |
 | S5 follow actions | Session mode v2 backlog | Small (Sonnet) |
 | S6 Link + Link Audio | manifold-audio + clock; **gated on licence (Peter requesting)** | Medium (Sonnet) |

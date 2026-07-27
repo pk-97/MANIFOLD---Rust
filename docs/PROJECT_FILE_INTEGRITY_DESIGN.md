@@ -2,7 +2,7 @@
 
 **Status:** SHIPPED — P1–P3 all landed 2026-07-09 (Opus-orchestrated Sonnet/medium wave; closes BUG-062 (no-forward-version-guard)/063/064/065). Durability (P1 fsync) ships at L1 — verified by code inspection + negative gate, not fault injection (VERIFICATION_DEBT). · 2026-07-09 · Opus (1M) · Peter in the room
 **Prerequisites:** none (touches `manifold-core` version constant + `manifold-io` load/save; no design depends on this landing first)
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5 (Phase briefs)–§6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 before starting any phase.
 
 The instrument this protects is the `.manifold` file itself. Today three paths can silently
 cost you work: **(BUG-062)** an older build opens a file written by a newer build, drops the
@@ -70,7 +70,7 @@ becomes a single `pub const CURRENT_PROJECT_VERSION: &str` in `manifold-core`, r
 and add another for the guard* — two copies of the schema version is the drift class this file
 exists to kill (mirrors the BUG_BACKLOG `**Status:` single-source fix). **The migrate chain
 does NOT read the const** — every rung (intermediate *and* final) keeps its own fixed literal
-target, because wiring the const into the final rung is a version-bump footgun (see §3.1). The
+target, because wiring the const into the final rung is a version-bump footgun (see section 3.1). The
 const's tie to the ladder is enforced by a test (ladder-top == `CURRENT_PROJECT_VERSION`), not
 by sharing the literal. So the migrate.rs:86 final-target literal *stays* `"1.11.0"`; only the
 project.rs:1508 default literal is replaced by the const.
@@ -264,7 +264,7 @@ anchors: `rg -n 'first 3 bytes' crates/manifold-io/src/archive.rs` (hash site pr
 `rg -n '"1.11.0"' crates/manifold-core/src/project.rs crates/manifold-io/src/migrate.rs`
 (both literals present), `rg -n 'zip.finish\(\)' crates/manifold-io/src/archive.rs`.
 
-**Read-back (first step, mandatory):** read §3.1, §3.4, §3.5 and D3/D6/D7; restate the
+**Read-back (first step, mandatory):** read section 3.1, section 3.4, section 3.5 and D3/D6/D7; restate the
 `CURRENT_PROJECT_VERSION` placement, the fsync capture, the hash width, and the forbidden
 moves below. No code before this.
 
@@ -305,7 +305,7 @@ parent-dir fsync; adding a third copy of the version string anywhere.
 **Entry state:** P1 landed (const exists) — prove: `rg -n 'CURRENT_PROJECT_VERSION' crates/manifold-core/src`.
 Prove the guard site is untouched: `rg -n 'migrate_if_needed' crates/manifold-io/src/loader.rs`.
 
-**Read-back (first step):** read §3.2, §3.3, D1/D2/D4/D5; restate where the two guard sites
+**Read-back (first step):** read section 3.2, section 3.3, D1/D2/D4/D5; restate where the two guard sites
 are, why the JSON guard runs before migrate, the exact `TooNew` message (D4), and that no app
 change is needed.
 
@@ -313,10 +313,10 @@ change is needed.
 - `LoadError::TooNew { file_version, this_version }` + its `Display` (the D4 message).
 - `is_version_less_than` → `pub(crate)`.
 - `CURRENT_ARCHIVE_FORMAT_VERSION: i32 = 2` const in `manifold-io`.
-- JSON-level guard at the top of `load_project_from_json_with` (§3.3 site 1).
-- Archive-level guard in `load_project_with` V2 branch (§3.3 site 2).
+- JSON-level guard at the top of `load_project_from_json_with` (section 3.3 site 1).
+- Archive-level guard in `load_project_with` V2 branch (section 3.3 site 2).
 - Tests in `manifold-io`:
-  - **Round-trip gate (mandatory, §5 of the standard):** take a real fixture (or a
+  - **Round-trip gate (mandatory, section 5 of the standard):** take a real fixture (or a
     `Project::default()` saved to a temp `.manifold`), rewrite its `projectVersion` to
     `"1.99.0"`, attempt `load_project` → assert `Err(LoadError::TooNew{..})` and that the
     message names `1.99` and `1.11`. Then rewrite to exactly `CURRENT_PROJECT_VERSION` →
@@ -348,7 +348,7 @@ version field; touching the app layer (the message surfaces through the existing
 
 ### P3 — Surface silent load-repairs (BUG-063)
 
-Authorized by Peter ("implement in full"). The data model + seams are committed in **§3.6** —
+Authorized by Peter ("implement in full"). The data model + seams are committed in **section 3.6** —
 this phase transcribes them. **No new mutation path is added: this phase only *reports* what
 the existing repairs already do.**
 
@@ -357,12 +357,12 @@ the existing repairs already do.**
 `strip_unknown_effects` at [loader.rs:179](../crates/manifold-io/src/loader.rs#L179). Prove
 the counts are already computed: `rg -n 'total_removed|timeline_clips_removed|missing_files' crates/manifold-io/src/loader.rs`.
 
-**Read-back (first step):** read §3.6 and this phase; restate the single-owner rule (the
+**Read-back (first step):** read section 3.6 and this phase; restate the single-owner rule (the
 report is a `#[serde(skip)]` field on `Project`, written by both load sites), why the notice
 routes through `ProjectIOAction.notice` and not a direct `alerts` call, and the forbidden move
 (change no repair's behavior).
 
-**Deliverables (transcribe §3.6):**
+**Deliverables (transcribe section 3.6):**
 - `LoadReport` struct + `is_empty()` + `human_lines()` in `manifold-core`; `#[serde(skip)] pub
   load_report: LoadReport` field on `Project`.
 - `strip_unknown_effects` returns its removed-count; `repair_overlapping_clips` returns
@@ -386,7 +386,7 @@ path, an L3 flow that opens a repairing fixture and asserts the toast.
 
 **Forbidden moves:** changing any repair's behavior (delete-shorter-clip, strip-unknown stay
 exactly as they are — visibility only); a blocking modal for the notice (non-blocking toast,
-per §3.6's rejected-alternative); serializing `load_report` (it is transient — `#[serde(skip)]`);
+per section 3.6's rejected-alternative); serializing `load_report` (it is transient — `#[serde(skip)]`);
 scope-creep into "let the user undo the repair" (Deferred).
 
 ## 5. Decided — do not reopen
@@ -399,7 +399,7 @@ scope-creep into "let the user undo the repair" (Deferred).
 6. Guard runs **before** migrate. (D5.)
 7. fsync the temp file's contents before rename; keep the parent-dir fsync. (D6.)
 8. Hash → 64 bits, backward-compatible with 24-bit history entries. (D7.)
-9. BUG-063 (surface repairs) is P3 and gated on Peter's go; it changes no repair behavior. (§4 P3.)
+9. BUG-063 (surface repairs) is P3 and gated on Peter's go; it changes no repair behavior. (section 4 P3.)
 
 ## 6. Deferred — not v1 (with revival trigger)
 

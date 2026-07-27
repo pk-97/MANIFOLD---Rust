@@ -81,7 +81,7 @@ The `convert` field on each binding tells the runtime how to map the card-slider
 - **`EnumRound`** — round-to-int into an enum index (same wire shape, separate variant for typed clarity).
 - **`BoolThreshold`** — `value >= 0.5 → 1`, else `0`.
 
-Static (registry) and user (per-instance exposed) bindings both run through the same enum — see §7.11 of [EFFECT_RUNTIME_UNIFICATION.md](EFFECT_RUNTIME_UNIFICATION.md).
+Static (registry) and user (per-instance exposed) bindings both run through the same enum — see section 7.11 of [EFFECT_RUNTIME_UNIFICATION.md](EFFECT_RUNTIME_UNIFICATION.md).
 
 ### Validation
 
@@ -188,6 +188,6 @@ Generators will eventually follow effects onto a JSON-authoritative workflow und
 - [NODE_GRAPH_SYSTEM.md](NODE_GRAPH_SYSTEM.md) — graph runtime and preset architecture
 - [ADDING_PRIMITIVES.md](ADDING_PRIMITIVES.md) — authoring a new primitive (the atoms JSON presets reference)
 - [PRIMITIVE_LIBRARY_DESIGN.md](PRIMITIVE_LIBRARY_DESIGN.md) — primitive catalog, decomposition recipes
-- [EFFECT_RUNTIME_UNIFICATION.md](EFFECT_RUNTIME_UNIFICATION.md) §7.11 (Bindings unification (Phases 1–4, May 2026)) — bindings unification (one ResolvedBinding, one ParamConvert)
+- [EFFECT_RUNTIME_UNIFICATION.md](EFFECT_RUNTIME_UNIFICATION.md) section 7.11 (Bindings unification (Phases 1–4, May 2026)) — bindings unification (one ResolvedBinding, one ParamConvert)
 - `crates/manifold-renderer/src/preset_loader.rs` — disk scan, catalog build, fail-loud rules, hot-reload watcher
 - `crates/manifold-renderer/src/node_graph/bundled_presets.rs` — thin lookup over the disk-loaded catalog + the `every_bundled_preset_loads_validates_and_compiles` test

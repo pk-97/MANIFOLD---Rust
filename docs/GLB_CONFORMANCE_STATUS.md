@@ -184,7 +184,7 @@ Certification record for GLB_CONFORMANCE_DESIGN.md G-P7 (burn-down and certifica
 
 ### `xfail:diffuse-transmission-deferred` — 4 asset(s)
 
-**Gap:** KHR_materials_diffuse_transmission full BTDF (and, for ScatteringSkull, KHR_materials_volume_scatter) explicitly deferred per GLTF_MATERIAL_EXTENSIONS_DESIGN.md §5 (Deferred) — renders as a plain opaque material, no crash
+**Gap:** KHR_materials_diffuse_transmission full BTDF (and, for ScatteringSkull, KHR_materials_volume_scatter) explicitly deferred per GLTF_MATERIAL_EXTENSIONS_DESIGN.md section 5 (Deferred) — renders as a plain opaque material, no crash
 
 - `DiffuseTransmissionPlant.glb`
 - `DiffuseTransmissionTeacup.glb`

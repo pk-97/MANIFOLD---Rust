@@ -1,6 +1,6 @@
 # DRAG_CAPTURE P2 — landed 2026-07-08 @ `12683746`
 
-**Branch:** `wave/drag-capture-p2` (feat `c22f26fe`, merge `12683746`) · **Level reached:** L1 / target L2 (§10 — gap tracked as VD-017)
+**Branch:** `wave/drag-capture-p2` (feat `c22f26fe`, merge `12683746`) · **Level reached:** L1 / target L2 (section 10 — gap tracked as VD-017)
 **Doc status line (quoted verbatim):** `**Status:** IN PROGRESS — **P1 LANDED 2026-07-08 @ `9bb8ca86`** (ownership D1–D4 + D9, L3); **P2 LANDED 2026-07-08 @ `12683746`** (z-aware seams D5 + `swallow_drag` retired, L1; VD-017/018); P3 pending · design 2026-07-07 (approved same day by Peter) · Fable`
 
 ## What landed
@@ -12,7 +12,7 @@ inspector-edge press interceptors in `window_input::primary_mouse_input`
 (`window_input.rs:289,331`) each gain `&& !overlay_contains_point(cursor_pos)`, so a seam
 visually under a floating overlay (the Audio Setup panel docked over the timeline, BUG-059)
 no longer steals the press — it falls through to normal routing and the overlay gets it. The
-handles are NOT converted to widget routing (Deferred §7); `split_dragging`/
+handles are NOT converted to widget routing (Deferred section 7); `split_dragging`/
 `inspector_resize_dragging` stay put. The audio panel implements the P1-defaulted trait hooks:
 `claims_drag(origin) = armed || point_in_panel(origin)` and `gesture_ended()` clearing
 `dragging_band`/`calibration_drag`. `swallow_drag` (field, arms, two tests, all comments) is

@@ -1,9 +1,9 @@
 # ML Nodes — Perception Runtime, Node Roster, Point Arrays
 
-Status: **APPROVED** (Peter, 2026-07-02). Designed on Fable; implementation is Sonnet work, phased in §12.
-Companions: NODE_CATALOG.md (roster lands there), CHANNEL_TYPE_SYSTEM.md (point arrays ride §5 (Effect presets)-§6 machinery), MULTI_DISPLAY_DESIGN.md §12 (auto-calibration shares this runtime).
+Status: **APPROVED** (Peter, 2026-07-02). Designed on Fable; implementation is Sonnet work, phased in section 12.
+Companions: NODE_CATALOG.md (roster lands there), CHANNEL_TYPE_SYSTEM.md (point arrays ride section 5 (Effect presets)-section 6 machinery), MULTI_DISPLAY_DESIGN.md section 12 (auto-calibration shares this runtime).
 Prerequisites: none for the Vision/CoreML tier; the ONNX tier needs VULKAN_BACKEND_DESIGN shipped. Sequencing: `docs/DESIGN_BUILD_ORDER.md` wave 3.
-Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5 (Phase briefs)–§6 and §8 before starting any phase. Conformance-hardened: run the §8.3 pre-flight before each phase — node ids here predate the vocab-audit apply; check the migration table for any node this design references.
+Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 and section 8 before starting any phase. Conformance-hardened: run the section 8.3 pre-flight before each phase — node ids here predate the vocab-audit apply; check the migration table for any node this design references.
 
 ## 1. Goal
 
@@ -50,7 +50,7 @@ A platform factory picks the implementation. Nodes and workers speak traits; the
 
 ### 3.3 Generic backend (later, gated)
 
-ONNX Runtime (`ort` crate) behind a cargo feature, one impl per task trait, open-licensed models (§5 table). Built when Linux/Windows (Vulkan port, queue #5) becomes real — not before. Numeric differences vs the Apple path are accepted (Peter, 2026-07-02); cross-backend tests are tolerance-based, never bit-exact.
+ONNX Runtime (`ort` crate) behind a cargo feature, one impl per task trait, open-licensed models (section 5 table). Built when Linux/Windows (Vulkan port, queue #5) becomes real — not before. Numeric differences vs the Apple path are accepted (Peter, 2026-07-02); cross-backend tests are tolerance-based, never bit-exact.
 
 ### 3.4 Workers and the model cache
 
@@ -115,7 +115,7 @@ One struct for all three tasks; `joint` namespaces differ (body ~17–19, hand 2
 
 ### 6.4 Coordinate space
 
-Keypoints are in source-frame UV. Mapping camera space → stage space (multi-display) is calibration's job (MULTI_DISPLAY_DESIGN.md §12 (Open (deferred, not blocking))), not the pose node's.
+Keypoints are in source-frame UV. Mapping camera space → stage space (multi-display) is calibration's job (MULTI_DISPLAY_DESIGN.md section 12 (Open (deferred, not blocking))), not the pose node's.
 
 ## 7. Export determinism
 
@@ -169,7 +169,7 @@ Full workspace sweep gates P1 (runtime infrastructure). P2–P5 are per-node sco
 3. Async contract unchanged: worker at own Hz, node reads latest, never blocks the tick.
 4. Export mode = synchronous inference, frame-count cadence. Live = latest-result.
 5. Reset = generation counter discarding stale in-flight results.
-6. Keypoints = `Keypoint2D` Channels-typed array (§6.1), UV space, monotonic never-reused person IDs, worker-owned tracking.
+6. Keypoints = `Keypoint2D` Channels-typed array (section 6.1), UV space, monotonic never-reused person IDs, worker-owned tracking.
 7. License gate: Apache/MIT/BSD ship; GPL/AGPL/CC-BY-NC banned. Audit at every model pick.
 8. Curated nodes only — generic ONNX-loader node rejected permanently.
 9. Person tracking via pose IDs supersedes the parked blob tracker; blob detection itself stays parked.
@@ -180,11 +180,11 @@ Full workspace sweep gates P1 (runtime infrastructure). P2–P5 are per-node sco
 ## 14. Deferred / rejected
 
 - **Real-time diffusion img2img** — approved direction, needs its own design pass (model management, prompt-as-param, seed/latent interpolation, thermal budget). Separate doc; the async contract here is its foundation.
-- MetalFX upscaling — separate perf item (§10).
+- MetalFX upscaling — separate perf item (section 10).
 - NDI / Syphon / ScreenCaptureKit sources — same source-node slot, later. NDI/Syphon
   ownership moved to `VIDEO_IO_DESIGN.md` (approved 2026-07-09 — audit F15, 2026-07-10);
   ScreenCaptureKit is still this doc's.
-- Same-input inference dedup — deferred optimization (§10).
+- Same-input inference dedup — deferred optimization (section 10).
 - Per-instance mask outputs on `node.segment_anything` — v1 is single mask.
 - Generic ONNX loader node — **rejected**, not deferred.
 - Audio ML (stem separation etc.) — off the graph, per standing doctrine; different design if ever.

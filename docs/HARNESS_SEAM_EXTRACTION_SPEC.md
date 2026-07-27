@@ -1,4 +1,4 @@
-# `render_main_ui_passes` — extraction spec (HARNESS_FIDELITY_INVARIANT §4 step 2)
+# `render_main_ui_passes` — extraction spec (HARNESS_FIDELITY_INVARIANT section 4 step 2)
 
 **Status: BUILD SPEC · 2026-07-10 · Opus (1M).** The executable design for the
 seam that folds the main-window immediate-pass assembly into shared code, so the
@@ -6,7 +6,7 @@ live app (`app_render.rs::present_all_windows`) and the headless harness
 (`ui_snapshot/render.rs::render_ui_to_png` + `script.rs`'s `Runner`) run the
 **identical** pass sequence and per-pass render-call choices. Deletes
 `draw_immediate_passes` and the harness overlay pass; closes BUG-097 (ui-snap-render-overlay-pass-uses-wrong-traversal) by
-construction. Read `HARNESS_FIDELITY_INVARIANT_PROPOSAL.md` §3 (Proposed invariant)–§4 first — this is
+construction. Read `HARNESS_FIDELITY_INVARIANT_PROPOSAL.md` section 3 (Proposed invariant)–section 4 first — this is
 its build sheet.
 
 ## The one owner rule
@@ -19,7 +19,7 @@ harness chose `render_tree_range` where the live app chose `render_sub_region`).
 After this change the assembly has **one owner**: `render_main_ui_passes` in
 `crates/manifold-app/src/ui_frame.rs`. Both callers call it. Nothing re-sequences.
 
-**What stays caller-side (input *resolution*, per §3's caller test):** building the
+**What stays caller-side (input *resolution*, per section 3's caller test):** building the
 `Vec<ClipBody>` from live drag state, resolving thumbnail quads from the
 content-thread atlas layout, resolving automation lanes from latched params. These
 are *inputs*, resolved rich live / simple headless, and handed to the seam as plain
@@ -49,7 +49,7 @@ Both callers do: `composite_main_ui_frame(...)` then `render_main_ui_passes(...)
 /// single owner of pass order + per-pass render-call choice, called by the live
 /// app and the harness. Inputs resolved by the caller (rich live / simple
 /// headless); the seam branches only on input presence, never caller identity
-/// (HARNESS_FIDELITY_INVARIANT §3).
+/// (HARNESS_FIDELITY_INVARIANT section 3).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn render_main_ui_passes(
     device: &GpuDevice,
@@ -63,7 +63,7 @@ pub(crate) fn render_main_ui_passes(
 );
 
 /// Caller-resolved per-pass data. Every `Option`/empty field is a legitimate
-/// "input absent" (§3): the live app fills what it has this frame; the harness
+/// "input absent" (section 3): the live app fills what it has this frame; the harness
 /// fills the subset it can resolve headless and leaves the rest None/empty. A
 /// pass whose input is absent skips itself — the live app skips the same pass on
 /// a frame whose input is absent (no open modal → no overlay pass, etc.).
@@ -109,11 +109,11 @@ pub(crate) struct MainUiPassInputs<'a> {
 ## Pass-by-pass move map (old `app_render.rs` line → new seam)
 
 Each pass moves VERBATIM (behavior-preserving), rewriting `self.ws.ui_root.X` →
-`ui_root.X`, `self.clip_body_scratch` → `inputs.clip_bodies`, etc. The **§3
+`ui_root.X`, `self.clip_body_scratch` → `inputs.clip_bodies`, etc. The **section 3
 classification** column says why each caller-provided input is input-presence, not
 caller-identity.
 
-| Pass | Old lines | Renderer / input | §3 note |
+| Pass | Old lines | Renderer / input | section 3 note |
 |---|---|---|---|
 | 4a grid bitmaps | ~3932–3945 | `inputs.layer_bitmap_gpu` + `viewport.layer_bitmap_rects()` | absent headless (no bitmap gpu) |
 | 4b clip bodies | ~4057–4067 (emit only) | `ui_renderer` + `inputs.clip_bodies` | bodies resolved caller-side (drag) |

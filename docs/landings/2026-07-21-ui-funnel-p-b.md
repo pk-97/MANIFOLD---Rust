@@ -1,7 +1,7 @@
 # Landing: UI_FUNNEL_DECOMPOSITION P-B — DispatchCtx + chain-router dispatch split
 
 **Date:** 2026-07-21 · **Wave:** god-file Wave 1, WS1 · **Branch:** `lane/ws1-bridge` → main
-**Executors:** 01BALc8 dispatcher loop (Sonnet lanes per slice, per `docs/AGENT_ROUTING.md` §Overnight) after the ws1-projection Opus seat's opening arc (ctx struct, sentinel, browser pilot). Landing review + merge: 012PAn top session. **Design:** `docs/UI_FUNNEL_DECOMPOSITION_DESIGN.md` P-B (D6 as amended: chain router, no delegation arms).
+**Executors:** 01BALc8 dispatcher loop (Sonnet lanes per slice, per `docs/AGENT_ROUTING.md` section Overnight) after the ws1-projection Opus seat's opening arc (ctx struct, sentinel, browser pilot). Landing review + merge: 012PAn top session. **Design:** `docs/UI_FUNNEL_DECOMPOSITION_DESIGN.md` P-B (D6 as amended: chain router, no delegation arms).
 
 ## What landed
 

@@ -12,9 +12,9 @@ zero-light plane renders finite with no validation error (D4). Original design �
 SCENE_BUILD_AND_GROUP_PARAMS P2 and GAUSSIAN_SPLATS P4 also edit `render_scene.rs`'s
 `rebuild`/`evaluate`. Independent of everything in flight in the sense that no other
 design's *output* gates this one — but the three must be **sequenced, never concurrent**
-(`docs/DESIGN_BUILD_ORDER.md` §2 (Hard dependency edges) recommends this phase first, smallest). Whichever of the
+(`docs/DESIGN_BUILD_ORDER.md` section 2 (Hard dependency edges) recommends this phase first, smallest). Whichever of the
 three lands later re-derives this doc's `render_scene.rs`/`.wgsl` line anchors before editing.
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5 (Phase briefs)–§6 before starting the phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 before starting the phase.
 
 `render_scene`'s object count is already uncapped (the old cap was a naming artifact);
 light count is still hard-capped at 4 because the light data is baked into a fixed-size
@@ -143,7 +143,7 @@ renumbering in this shader must keep the slot map and the `bindings` array in st
 **P1 (one session): the whole change.**
 - **Entry state:** clean main; re-verify the audit anchors (`rg -n "MAX_LIGHTS" render_scene.rs`,
   the :115 assert, wgsl :86/:183/:229/:285). A moved anchor = re-audit, not guess.
-- **Read-back:** this doc §2–§3; restate D1, D4, D7 and the three forbidden turns
+- **Read-back:** this doc section 2–section 3; restate D1, D4, D7 and the three forbidden turns
   before writing code.
 - **Order:** shader + binding change FIRST, run the D7 probe (below), then the Rust
   cap/naming deletions, then tests.
@@ -160,7 +160,7 @@ renumbering in this shader must keep the slot map and the `bindings` array in st
      the actual feature proof.
   4. `cargo test -p manifold-renderer --features gpu-proofs --test gpu_proofs`
      (alpha sweep + generator smoke) and `cargo clippy --workspace -- -D warnings`.
-- **Exit:** committed on a `feat/` branch, landed per GIT_TREE_DISCIPLINE §2;
+- **Exit:** committed on a `feat/` branch, landed per GIT_TREE_DISCIPLINE section 2;
   NODE_CATALOG regenerated if it records the lights range.
 
 ## 5. Decided — do not reopen

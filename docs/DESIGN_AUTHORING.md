@@ -1,6 +1,6 @@
 # Design Authoring — how to think before the doc exists
 
-**Status: NORMATIVE working guide (per DESIGN_DOC_STANDARD §1) · 2026-07-05 · Fable.**
+**Status: NORMATIVE working guide (per DESIGN_DOC_STANDARD section 1) · 2026-07-05 · Fable.**
 **Audience: the model authoring designs with Peter in the room — Opus, after Fable.**
 
 [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md) is the contract for the artifact: what
@@ -64,7 +64,7 @@ from past waves: one or two escalations per *design*, not per phase.
 No design thought until you have inventoried what exists. Not as ritual — because the
 single most expensive authoring failure observed here is designing against a remembered
 codebase: proposing infrastructure that already ships under another name, or a
-mechanism that contradicts how the real one works. The §2.5 audit rule for primitives
+mechanism that contradicts how the real one works. The section 2.5 audit rule for primitives
 is the special case; this is the general one, and it's normative for every design
 (`feedback_audit_before_proposing_primitives`, `feedback_dont_cascade_redesign`).
 
@@ -75,7 +75,7 @@ Method, in order:
 - **Structure sweep** — LSP (`goToDefinition`, `findReferences`, `incomingCalls`) on
   the load-bearing symbols. Text search lies about trait dispatch; the LSP doesn't.
 - **Read the nearest existing feature end-to-end.** Whatever you're designing, some
-  shipped feature is its closest relative. Read it whole — the way §2.5 makes you open
+  shipped feature is its closest relative. Read it whole — the way section 2.5 makes you open
   the reference preset and follow every wire. Skimming its API and inferring the rest
   is exactly the "argue from snippets" failure.
 - **Ask the history.** `git log -S` on the central symbols. The shape you're tempted
@@ -83,7 +83,7 @@ Method, in order:
   keeps the design from re-fighting an old war.
 - **Classify every finding**: *exists* / *one wire away from existing* / *genuinely
   new*. Write the classification into the doc's Audit section as you go — you are
-  already writing the doc; the audit is not prep, it's §1 of the artifact.
+  already writing the doc; the audit is not prep, it's section 1 of the artifact.
 
 Anchor every claim `file:line` at the moment you verify it, and date the audit.
 Negative claims ("there is no X") get the search that would find X run before they're
@@ -105,14 +105,14 @@ or answered against the grain of the house model.
 Decide **at the seam, free in the interior**. Pin what you'd be angry to get wrong at
 review: trait signatures, channel message types, crate dependency direction, ownership,
 thread residency, serialized names. Leave function bodies and private structure to the
-executor. The standard (§4) demands this of the doc; the authoring skill is knowing
+executor. The standard (section 4) demands this of the doc; the authoring skill is knowing
 where the seam is — and the test is: *would two reasonable implementations diverge
 observably here?* If yes, it's a seam; decide it. If no, deciding it is noise.
 
 **Extend, don't redesign — and name the precedent.** Every new piece should be
 "shaped like X at file:line". If you cannot find a precedent, treat that as evidence
 your audit missed something, and only after re-checking believe you're first. House
-patterns exist for nearly everything (the standard §4 lists them). The corollary is
+patterns exist for nearly everything (the standard section 4 lists them). The corollary is
 the scope rule: fix at the root, sized by inventory. "Fundamental" means the design
 removes the whole problem class — but scoped by what the audit found, not by ambition
 (`feedback_fix_at_the_root_not_the_symptom` + `feedback_dont_cascade_redesign` are one
@@ -139,9 +139,9 @@ to build the layer: the layer is where the next five bugs will live, because eve
 value now has two homes that must be kept in agreement by hand. The reference failure
 is the scene panel's synthesized `scene.{doc}.{param}` ids + per-frame id map +
 `resolve_scene_param`/`resolve_mod_target` funnels (SCENE_PANEL_EXPOSURE_CONVERGENCE
-§3a, 2026-07-19) — a whole addressing universe built to avoid reusing the exposure
+section 3a, 2026-07-19) — a whole addressing universe built to avoid reusing the exposure
 system that already did the job, and the home of BUG-237 (scene-setup-camera-world-light-param-scrub-does-…)/249/250/260 in one week.
-This test composes with §4: when your second candidate architecture deletes a
+This test composes with section 4: when your second candidate architecture deletes a
 translation layer instead of adding one, that is strong evidence it is the right one.
 
 ## 4. Alternatives — generate two, price both, kill your favorite
@@ -196,13 +196,13 @@ design's phase gate reads "verify it matches," stop and pick the real net.
 ## 5. Foreseeing the plausible-wrong turn
 
 The standard requires each design to forbid its tempting wrong architecture *by name*
-(§4). This looks like clairvoyance; it's a checklist:
+(section 4). This looks like clairvoyance; it's a checklist:
 
 1. **Ask what a competent-but-hurried implementer reaches for first.** The generic,
    Stack-Overflow-shaped answer to this problem — a mutex, a flag, a wrapper, a fused
    kernel — is usually it. It's "plausible-wrong" precisely because it's the obvious
    move.
-2. **Scan the observed failure catalog** (standard §5 forbidden-moves list:
+2. **Scan the observed failure catalog** (standard section 5 forbidden-moves list:
    fuse-for-parity, silent fallback, parallel old path, TODO-as-deferral, temporary
    flags, adapter shims, synthesized code, invented infra, scope widening) and ask
    which of them this design specifically invites.
@@ -218,15 +218,15 @@ The standard requires each design to forbid its tempting wrong architecture *by 
    (BUG-326 (rt-depth-snapshot-wrong-on-imported-glb-scenes): BLAS built over pre-load zero buffers, never rebuilt).
 
 The tell that you've found the right one: **it's the thing you yourself were tempted
-to do in §4 before the kill-pass.** Your own first instinct is the best predictor of
+to do in section 4 before the kill-pass.** Your own first instinct is the best predictor of
 the executor's — you're a model too; use that.
 
 ## 6. Honest costs
 
 Every real decision has a downside. Write it in place, in the doc, under the decision
 it belongs to — the house phrase is "**Consequences, stated honestly:**"
-(MULTI_DISPLAY §6.1 is the model). If you cannot name a decision's downside, you do
-not understand the decision yet; go back to §4.
+(MULTI_DISPLAY section 6.1 is the model). If you cannot name a decision's downside, you do
+not understand the decision yet; go back to section 4.
 
 This is not politeness. The doc is the record Peter approves *as the person who
 performs on the result* — a hidden cost robs his approval of meaning, and hidden costs
@@ -252,15 +252,15 @@ Phasing is part of the design, not packaging. The rules that matter:
   decided design; reaching for "works correctly" means a decision is missing —
   go back. Importers and parsers get a held-out input the builder never sees.
 - **Choose the acceptance demo when you write the phase**, with its target L-level
-  (standard §10). Since UI_AUTOMATION landed, anything the flow driver can reach
+  (standard section 10). Since UI_AUTOMATION landed, anything the flow driver can reach
   targets L3 — a scripted flow, not a PNG someone promises to look at.
-- **The phase list must cover the design** (standard §5, phasing-completeness
+- **The phase list must cover the design** (standard section 5, phasing-completeness
   check). Executors build the phase list, not the design body — an affordance the
   body commits to but no phase names simply never gets built, and the status line
   ("SHIPPED P1–P4") stays honest while the design ships incomplete. Walk every
   "the user can X" claim; each lands in a phase's deliverables or in Deferred
-  with a trigger. The dead-LANES escape (AUTOMATION_LANES §7 chooser, 2026-07-07)
-  is the proof case: the UX section's centerpiece affordance was absent from §10,
+  with a trigger. The dead-LANES escape (AUTOMATION_LANES section 7 chooser, 2026-07-07)
+  is the proof case: the UX section's centerpiece affordance was absent from section 10,
   so four faithful phases shipped an unreachable feature.
 - **Never phase by family.** If the phase plan repeats the same integration once
   per item/family ("convert World, then Object, then Light, then Modifier"), the
@@ -288,13 +288,13 @@ Phasing is part of the design, not packaging. The rules that matter:
 The finish test for a design doc: **re-read it as the executor** — a capable but
 literal model, alone, at a random phase. Anywhere *you* would have to think, the doc
 owes a decision, a default-with-trigger, or a named blocking escalation (the
-no-unlabeled-forks rule, standard §2). When that pass finds nothing, the design is
+no-unlabeled-forks rule, standard section 2). When that pass finds nothing, the design is
 done — stop. Surveying the territory further *feels* productive and is the main way
 authoring effort is wasted; a short doc that decides everything beats a long doc that
 surveys everything, and the baseline review found the corpus's real disease was
 status rot and lying prose, not missing prose.
 
-The doc is done deciding; it is never done being true. Landing rules (standard §8.9)
+The doc is done deciding; it is never done being true. Landing rules (standard section 8.9)
 keep the status line honest afterward — but the author sets up that maintenance by
 keeping decisions terse and scannable enough that updating them is cheap.
 
@@ -336,7 +336,7 @@ Opus inherits — bug hunts and complex tasks run the same skeleton, cheaper:
   regression test pins it — and the gate MUST fail on pre-fix code; a gate that
   never saw red proves nothing (if the harness can't reproduce the race, say so in
   the test and assert the structural invariant instead of moving the threshold).
-  The honest-edges sections of the authoritative maps (CORE_ENGINE_MAP §13) are
+  The honest-edges sections of the authoritative maps (CORE_ENGINE_MAP section 13) are
   pre-computed hunt lenses; start there.
 - **Complex tasks**: same intake (name the binding constraint first), same finish
   discipline (state the observable end condition before starting), same kill-pass

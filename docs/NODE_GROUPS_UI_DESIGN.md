@@ -7,7 +7,7 @@ corrected 2026-06-13). Phases A–C (snapshot nesting, read-only navigation +
 breadcrumb, marquee select + collapse/ungroup) are built. **Phase D (interface
 editing) is dropped** — groups are organisation-only, exposure stays direct-to-card
 (Peter, 2026-06-13). Phase E (naming + color) is scoped in
-`docs/GRAPH_EDITOR_UX_BUILD_BRIEF.md` §4. (— Groups: naming + color) Builds on the backend in
+`docs/GRAPH_EDITOR_UX_BUILD_BRIEF.md` section 4. (— Groups: naming + color) Builds on the backend in
 `NODE_GROUPS_DESIGN.md` (schema + `flatten_groups`). Companion: `NODE_GRAPH_SYSTEM.md`,
 `CARD_TARGET_UNIFICATION.md`.
 
@@ -27,7 +27,7 @@ naming. All for groups embedded in a single effect/generator document.
 
 **Out of scope (later layers, unchanged by this):** recipes — saving a group to its own file, a
 recipe browser, linked-vs-local instances, versioning. Those sit on top; this spec stays
-embedded-only. Where a choice here would wall recipes off, §11 flags it.
+embedded-only. Where a choice here would wall recipes off, section 11 flags it.
 
 ---
 
@@ -89,7 +89,7 @@ Today the canvas is single-select (`selected: Option<u32>`). Collapse needs a se
 
 ### 4.2 Collapse to group — `Ctrl+G`
 The headline gesture. With ≥1 node selected:
-1. Compute the interface by **inference** (§6): wires crossing the selection boundary become input
+1. Compute the interface by **inference** (section 6): wires crossing the selection boundary become input
    / output ports; inner nodes' currently-exposed params carry over as the group's interface params
    (so card exposure survives collapse).
 2. Replace the selection with a single **group node** placed at the selection's centroid; the
@@ -104,7 +104,7 @@ The headline gesture. With ≥1 node selected:
 - **Breadcrumb** bar across the canvas top: `Bloom ▸ soft_focus ▸ inner`. Click any segment to jump
   to that depth. The leaf segment is inline-editable (rename the current group).
 - **Exit**: `Esc` / `Tab` / click the parent breadcrumb / an explicit *up* affordance → scope pops.
-- Navigation is **UI-local and instant** — no content-thread round-trip (§8). A performer/author
+- Navigation is **UI-local and instant** — no content-thread round-trip (section 8). A performer/author
   flicking in and out of groups must feel zero lag.
 - A faint tint or depth indicator on the canvas while inside a group (TD-style) so you always know
   you're not at the root.
@@ -137,7 +137,7 @@ When the scope is inside a group, the body shows two special boundary nodes (Ble
 ### 4.6 Ungroup / dissolve — `Ctrl+Alt+G`
 Inverse of collapse: with a group node selected, inline its body into the parent scope and re-anchor
 the boundary wires to what they connected to inside. Inner handles lose the group prefix; positions
-restore around where the group sat. One-step undoable. `group` then `ungroup` is identity (§9 test).
+restore around where the group sat. One-step undoable. `group` then `ungroup` is identity (section 9 test).
 
 ### 4.7 Naming, colour, framing
 - **Name**: inline-edit on the breadcrumb leaf or the node header. Validated unique + `/`-free;
@@ -193,7 +193,7 @@ per-frame.
   `UngroupNodeCommand { scope_path, group_node_id }`, `RenameGroupCommand`,
   `AddInterfacePortCommand` / `RenameInterfacePortCommand`. Each is reversible for undo (store the
   pre-image needed to invert — for group/ungroup, that's the affected sub-graph slice).
-- The heavy logic lives in pure-core helpers (§6), so the commands are thin wrappers that locate the
+- The heavy logic lives in pure-core helpers (section 6), so the commands are thin wrappers that locate the
   sub-graph and call them.
 
 ---
@@ -260,7 +260,7 @@ flattener as the cross-check.
 
 ## 7. Reference-grade details that separate "works" from "professional"
 
-- **Inference must feel right or nobody groups.** Prototype §6 first (the spike Peter flagged):
+- **Inference must feel right or nobody groups.** Prototype section 6 first (the spike Peter flagged):
   collapse a real 6–8-node selection and eyeball the inferred ports. Wrong-feeling ports kill the
   feature. Verify before committing to the command surface.
 - **Instant navigation.** Enter/exit is UI-local; never block on the content thread. Cache the
@@ -327,7 +327,7 @@ Each phase is independently shippable and gated.
   `Esc`), collapsed-face macro summary, depth tint. Gate: visual; the full workspace sweep (this
   touches the shared snapshot + editing commands → infrastructure).
 
-The spike (§7) precedes Phase C: prove inference feels right before building the command surface
+The spike (section 7) precedes Phase C: prove inference feels right before building the command surface
 around it.
 
 ---
@@ -352,7 +352,7 @@ around it.
 
 ## 12. Risks & open questions
 
-- **Inference ergonomics** — the make-or-break (§7). Spike first. Open: port *ordering* (source
+- **Inference ergonomics** — the make-or-break (section 7). Spike first. Open: port *ordering* (source
   order? spatial top-to-bottom?) and whether to merge an external source feeding two inner sinks
   into one input port (v1: keep separate — simpler, predictable).
 - **Undo of group/ungroup** — must invert cleanly. Storing the affected sub-graph slice as the

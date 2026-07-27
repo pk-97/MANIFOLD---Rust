@@ -6,7 +6,7 @@
 
 The reframed P0 (see the design doc's "Reframe 2026-07-10" block): a headless test that renders the **whole main window through the real `UICacheManager` + `UIRenderer` + atlas** — the same code the live app runs — and saves inspectable artifacts. Not a differential, not a regression gate; a faithful-render-and-look tool.
 
-- New test module `cache_path_full_render` (`crates/manifold-app/src/ui_snapshot/mod.rs`), feature `ui-snapshot`. Constructs a real `UICacheManager` (`set_scale_factor(1.0)` + `ensure_atlas` at the fixture's logical size 1536×1216), drives the §5 gesture sequence (scroll · drawer tween · tab swap) through the real input paths, and saves a full-app PNG + a drawer-tween filmstrip contact sheet (D9a). Smoke check only: readback non-empty and not a uniform clear colour.
+- New test module `cache_path_full_render` (`crates/manifold-app/src/ui_snapshot/mod.rs`), feature `ui-snapshot`. Constructs a real `UICacheManager` (`set_scale_factor(1.0)` + `ensure_atlas` at the fixture's logical size 1536×1216), drives the section 5 gesture sequence (scroll · drawer tween · tab swap) through the real input paths, and saves a full-app PNG + a drawer-tween filmstrip contact sheet (D9a). Smoke check only: readback non-empty and not a uniform clear colour.
 - Heavy synthetic fixture `bug060heavy` (Plasma generator + 3× Color Compass + Color Grade + Depth of Field, audio/LFO modulation). No BUG-060-specific tuning; a realistically heavy scene for general coverage.
 - **BUG-071 dump fix** (D9c): `dump.rs` serializes the live `tree.parent_of(n.id)`, not the mint-time `parent_id`. Backlog entry closed.
 - Retired the old differential entirely — deleted the `cache_path_footer_differential` and `incremental_path_modulation_differential` byte-equality tests (D2/D4a retired by the reframe).
@@ -33,4 +33,4 @@ The reframed P0 (see the design doc's "Reframe 2026-07-10" block): a headless te
 
 ## What's owed
 
-P1 (seam extraction, byte-identical gate, live-app L4 click-script — pause for Peter), P2 (repoint the script Runner at the seam + pointer stamps + richer filmstrip), P3 (editor window). Anchor caution: the 2026-07-10 class-kill refactored the renderer flush machinery — P1–P3 re-derive their §Audit/§3/§4 anchors against current main.
+P1 (seam extraction, byte-identical gate, live-app L4 click-script — pause for Peter), P2 (repoint the script Runner at the seam + pointer stamps + richer filmstrip), P3 (editor window). Anchor caution: the 2026-07-10 class-kill refactored the renderer flush machinery — P1–P3 re-derive their section Audit/section 3/section 4 anchors against current main.

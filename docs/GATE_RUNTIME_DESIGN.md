@@ -2,11 +2,11 @@
 
 **Status:** SHIPPED 2026-07-25 (L1) — P1 `35364b0a` core · P2 `47bad87b` pre-wave · P3 `2a64247a` linter · P4 `da0085e7` pre-land clause + report (I1 hook-enforced) · P5 `39a24dab` SubagentStop firing (confidence-gated; live-fire = first executor lane in a new session — payload log at `/tmp/manifold_subagent_stop_payloads.jsonl` is the verification trail) · follow-ups landed same day: worktree anchoring (BUG-luo2 (agent-worktree.py: anchor to main checkout…)), probe-guard deadlock (BUG-jotx (probe-loop-guard reset deadlock — unmeetable 1s…)), scope fields + report date fix (BUG-aayj (gate_runner: populate scope.files_changed…)) · 2026-07-25 · k3 (lead) · approved in discussion same day ("This probably needs a design doc and then we can build it with Flash") · AMENDED 2026-07-27: D9 gaming scan + fail-streak directive, D10 trail-as-counter + hook-liveness pre-wave checks (Peter + Fable)
 **Prerequisites:** none. Self-hosts from P1 onward (P2+ land under their own verdicts).
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5 (Phase briefs)–§6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 before starting any phase.
 
-The wave IR (`docs/SEMANTIC_WORKFLOW_PROGRAMS.md` §2 (The wave IR — the concrete instance we already run)) already names the missing piece: `GATE : Diff -> exit codes [runtime — zero model]`. Today that opcode doesn't exist as machinery — a lane's "green" is a prose claim, and the lead's only verification is re-running the gate or trusting the claim. This design builds GATE as a runtime: one script that executes gates itself, writes typed verdicts to an append-only trail, and fires at four lifecycle points. It is the first component where **the machine, not an agent, says what happened** — the proof of concept for the semantic instruction set. The six proposals from the 2026-07-25 discussion (gate runner, seat preflight, brief linter, verdict-before-merge, wave report, beads queue) are one mechanism with four packs plus a query, not six tools. Beads queue shipped same day.
+The wave IR (`docs/SEMANTIC_WORKFLOW_PROGRAMS.md` section 2 (The wave IR — the concrete instance we already run)) already names the missing piece: `GATE : Diff -> exit codes [runtime — zero model]`. Today that opcode doesn't exist as machinery — a lane's "green" is a prose claim, and the lead's only verification is re-running the gate or trusting the claim. This design builds GATE as a runtime: one script that executes gates itself, writes typed verdicts to an append-only trail, and fires at four lifecycle points. It is the first component where **the machine, not an agent, says what happened** — the proof of concept for the semantic instruction set. The six proposals from the 2026-07-25 discussion (gate runner, seat preflight, brief linter, verdict-before-merge, wave report, beads queue) are one mechanism with four packs plus a query, not six tools. Beads queue shipped same day.
 
-Companion docs: `docs/SEMANTIC_WORKFLOW_PROGRAMS.md` (the IR this implements — GATE, plus the soft→hook migration program of §3 (The enforcement table — the key analytical tool)/§9) · `docs/AGENT_ROUTING.md` (the running roster this serves) · `.claude/orchestration/rt-reflections-r2-queue.md` (R2's pre-flight already carries two items this design subsumes mechanically: verdict rationale, gate discipline).
+Companion docs: `docs/SEMANTIC_WORKFLOW_PROGRAMS.md` (the IR this implements — GATE, plus the soft→hook migration program of section 3 (The enforcement table — the key analytical tool)/section 9) · `docs/AGENT_ROUTING.md` (the running roster this serves) · `.claude/orchestration/rt-reflections-r2-queue.md` (R2's pre-flight already carries two items this design subsumes mechanically: verdict rationale, gate discipline).
 
 ## 1. Audit — what exists (verified 2026-07-25, main @ e692762c)
 
@@ -32,7 +32,7 @@ Extend, don't redesign: every firing point is an existing hook; the only new sys
 
 **D2 — The trust boundary: lanes never write verdicts.** gate_runner *executes* the gate command itself (subprocess, timeout, captured exit + output tail) and writes the verdict. Lane prose, lane-run "gate output", and lane-written JSON are all ignored. Rejected: lanes emit verdict JSON the lead validates — that is self-report in a typed costume, the exact bug being killed.
 
-**D3 — Trace identity = the bead id.** Task, branch, verdict filename, and commit trailer all carry the existing `BUG-xxx`. Rejected: a new trace-id scheme — DESIGN_AUTHORING §3's zero-new-systems test; beads is the identity system we already migrated to (2026-07-25). A lane task with no bead gets one created at brief time; that's already the single-writer discipline.
+**D3 — Trace identity = the bead id.** Task, branch, verdict filename, and commit trailer all carry the existing `BUG-xxx`. Rejected: a new trace-id scheme — DESIGN_AUTHORING section 3's zero-new-systems test; beads is the identity system we already migrated to (2026-07-25). A lane task with no bead gets one created at brief time; that's already the single-writer discipline.
 
 **D4 — Firing points, and what fires them.** `per-lane`: SubagentStop hook (P5) — binary-verified present; until P5 lands, the lead runs `gate_runner per-lane` at review (the current manual path, formalized). `pre-land`: one clause in `preToolUseBash.py`. `pre-wave`/`pre-dispatch`: explicit wave step-0 commands — NOT SessionStart hooks, because preflight is wave-scoped and a session may host zero or two waves.
 
@@ -61,7 +61,7 @@ Extend, don't redesign: every firing point is an existing hook; the only new sys
 
 The plausible-wrong turns, forbidden by name:
 
-1. **You will want to build the driver script.** No. The standing note (SEMANTIC_WORKFLOW_PROGRAMS §7, R1 handoff): "Do not build the driver without Peter." This design is the verdict layer only. The driver is a separate, Peter-gated decision.
+1. **You will want to build the driver script.** No. The standing note (SEMANTIC_WORKFLOW_PROGRAMS section 7, R1 handoff): "Do not build the driver without Peter." This design is the verdict layer only. The driver is a separate, Peter-gated decision.
 2. **You will want lanes to emit verdict JSON.** No — D2. Self-report in a typed costume is still self-report.
 3. **You will want a verdict database/dashboard.** No — JSONL + `rg` + the report query is the whole read path. A store is a second home for truth.
 4. **You will want to retrofit verdicts onto R1 and older waves.** No — forward-only. Retrofitting manufactures data the waves never produced.
@@ -98,11 +98,11 @@ Each phase is one session, Flash-executable: the seams are decided above; phases
 ### P3 — pre-dispatch pack (brief linter)
 
 - **Entry state:** P1 landed.
-- **Read-back:** D1, I3; `.claude/hooks/agent-teammate-naming-guard.py` `slot_map()` (the valid-slot source, derived from session env); DESIGN_DOC_STANDARD §3 (anchor rules).
+- **Read-back:** D1, I3; `.claude/hooks/agent-teammate-naming-guard.py` `slot_map()` (the valid-slot source, derived from session env); DESIGN_DOC_STANDARD section 3 (anchor rules).
 - **Deliverables:** `gate_runner pre-dispatch --brief <path>`: every `file:line` anchor in the brief resolves (file exists, line in range); every gate command in the brief's Gates section shell-parses (`bash -n` equivalent); every named seat/slot is a valid slot label from the naming guard's `slot_map()`; the brief names a bead task matching `BUG-\w+`. Appends a `pre-dispatch` verdict per brief.
 - **Gate:** lint `.claude/orchestration/rt-reflections-r2-queue.md` — a real, dense brief set; must PASS after any genuinely-stale anchor is reported to the lead (stale anchors in R2's queue are findings, not lint bugs). Synthetic broken brief (dead anchor, unparseable gate, bogus slot, no bead) must FAIL naming all four.
 - **Demo:** none — L1.
-- **Forbidden moves:** semantic lint (judging whether a conviction test discriminates — that's REVIEW, a model's job, IR §4.3); hookifying the linter (deferred — needs a brief-file convention first); auto-fixing anchors.
+- **Forbidden moves:** semantic lint (judging whether a conviction test discriminates — that's REVIEW, a model's job, IR section 4.3); hookifying the linter (deferred — needs a brief-file convention first); auto-fixing anchors.
 
 ### P4 — pre-land pack (merge clause) + wave report
 
@@ -199,10 +199,10 @@ Every transition into a green state is machine-checked; every transition out of 
 
 ## 7. Deferred
 
-- **Driver script** — revive only via Peter, per the standing note (SEMANTIC_WORKFLOW_PROGRAMS §7).
+- **Driver script** — revive only via Peter, per the standing note (SEMANTIC_WORKFLOW_PROGRAMS section 7).
 - **fleet_doctor full drift audit** (profiles↔toml, docs index↔docs, board↔headers, memory pointers↔reality) — separate bead; P2's preflight is the wave-scoped subset, not the audit.
 - **agent-worktree.py cwd anchoring** (nested-worktree bug observed 2026-07-25) — separate bead, small fix.
 - **Hookified brief lint** (PreToolUse Agent deny) — revive when briefs are files by convention, not paste-into-prompt.
-- **Hook migration list** (retry-cap, one-commit-then-stop) — already queued in R2's pre-flight; build deliberately per SEMANTIC_WORKFLOW_PROGRAMS §9.
-- **Plan-template library** — post-R2, per SEMANTIC_WORKFLOW_PROGRAMS §7.
+- **Hook migration list** (retry-cap, one-commit-then-stop) — already queued in R2's pre-flight; build deliberately per SEMANTIC_WORKFLOW_PROGRAMS section 9.
+- **Plan-template library** — post-R2, per SEMANTIC_WORKFLOW_PROGRAMS section 7.
 - **Lane metrics to Prometheus** (gate pass rates next to spend) — revive if the Grafana stack proves useful for spend; verdicts jsonl is the source.

@@ -51,7 +51,7 @@ hand-edit profiles. `seat_tool.py show` is the read oracle.
 
 Slots are semantic, not provider-shaped: `sonnet` = default work model,
 `haiku` = fast/classifier-adjacent, `opus` = strong consult. The auto-mode
-classifier resolves off these slots (PERMISSION_BOUNDARY.md §2 (Which model runs it)), so a slot
+classifier resolves off these slots (PERMISSION_BOUNDARY.md section 2 (Which model runs it)), so a slot
 swap changes what gates every permission decision — say so in the commit.
 
 ### Add or repoint an upstream
@@ -108,7 +108,7 @@ table in `scripts/claude_usage_export.py` for the Anthropic path.
   `.claude/hooks/litellm_patches_reapply.py` after any upgrade (and re-pip
   `prometheus-client` into the venv).
 - **Classifier coupling:** the classifier is a session-sticky resolution
-  off the slot map (PERMISSION_BOUNDARY.md §2 (Which model runs it)). A demoted pane never
+  off the slot map (PERMISSION_BOUNDARY.md section 2 (Which model runs it)). A demoted pane never
   recovers — restart it, don't debug it.
 - **Fallback legs are load-bearing subscriptions.** As of 2026-07-26 the
   z.ai/GLM plan is the fallback for both deepseek groups; cancelling it

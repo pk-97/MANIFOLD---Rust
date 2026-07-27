@@ -2,7 +2,7 @@
 
 **Status:** All 5 phases shipped 2026-05-17 (`1decd1a4` → `9073daa9`).
 This document is now the historical record of the work. See
-`docs/EFFECT_RUNTIME_UNIFICATION.md` §7.11 for the closure summary
+`docs/EFFECT_RUNTIME_UNIFICATION.md` section 7.11 for the closure summary
 and `MEMORY.md → project_bindings_unified_2026_05.md` for the
 agent-readable invariants future contributors should preserve.
 
@@ -494,7 +494,7 @@ No behaviour change.
   `EffectSlot.bindings`)
 - `crates/manifold-ui/src/panels/mod.rs` (doc on `PanelAction` per-param
   variants: `ParamId` is the wire format, not `usize`)
-- `docs/EFFECT_RUNTIME_UNIFICATION.md` (update §7 to reflect the unified
+- `docs/EFFECT_RUNTIME_UNIFICATION.md` (update section 7 to reflect the unified
   model — runtime AND UI wire format)
 - This file (mark phases completed)
 
@@ -522,7 +522,7 @@ No behaviour change.
    > indices on the wire would re-introduce the Phase 2 bug class (a
    > registry-only lookup returning `None` for user-tail params).
 
-4. Update `docs/EFFECT_RUNTIME_UNIFICATION.md` §7 (the original spec for the
+4. Update `docs/EFFECT_RUNTIME_UNIFICATION.md` section 7 (the original spec for the
    binding system) to describe the unified runtime model AND the
    `ParamId`-keyed wire format. Note the source tier distinction (registry
    vs project file) is preserved but the runtime is one list and the wire

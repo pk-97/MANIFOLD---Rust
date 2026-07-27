@@ -57,7 +57,7 @@ All keys are **camelCase** (`#[serde(rename_all = "camelCase")]` throughout).
 - `id: u32` — document-local wire address. Wires reference it. Not stable identity.
 - `nodeId: string` — **stable identity, what bindings target.** Minted once, survives
   grouping/ungrouping/flattening. See [NODE_ID_TARGETING.md](NODE_ID_TARGETING.md).
-- `typeId: string` — the primitive, e.g. `"node.bend_mesh"`, or `"group"` (§4), or a
+- `typeId: string` — the primitive, e.g. `"node.bend_mesh"`, or `"group"` (section 4), or a
   `system.*` boundary node.
 - `handle: string?` — display/search name ONLY. Never an addressing key.
 - `params: { <name>: {"type": "Float"|"Int"|"Enum"|..., "value": ...} }` — static
@@ -120,8 +120,8 @@ legibility per [GROUPING_GRAPHS.md](GROUPING_GRAPHS.md), not granularity.
 
 ## 5. The authoring loop
 
-1. **Vocabulary first**: [NODE_CATALOG.md](NODE_CATALOG.md) §atoms + §presets; find
-   the nearest shipped preset and read it end-to-end (§2.5 discipline). No new
+1. **Vocabulary first**: [NODE_CATALOG.md](NODE_CATALOG.md) section atoms + section presets; find
+   the nearest shipped preset and read it end-to-end (section 2.5 discipline). No new
    primitives without the audit.
 2. **Edit the JSON.** Python surgery beats hand-editing for wire renumbering.
 3. **Validate**: `cargo test -p manifold-renderer --lib preset` (~0.4s) — parse,
@@ -191,6 +191,6 @@ before committing defaults.
 | Graph runtime architecture | [NODE_GRAPH_SYSTEM.md](NODE_GRAPH_SYSTEM.md) |
 | Organizing a graph into groups | [GROUPING_GRAPHS.md](GROUPING_GRAPHS.md) / [NODE_GROUPS_DESIGN.md](NODE_GROUPS_DESIGN.md) |
 | Why bindings target nodeId | [NODE_ID_TARGETING.md](NODE_ID_TARGETING.md) |
-| Writing a new primitive | [ADDING_PRIMITIVES.md](ADDING_PRIMITIVES.md) (§2.5 audit first) |
+| Writing a new primitive | [ADDING_PRIMITIVES.md](ADDING_PRIMITIVES.md) (section 2.5 audit first) |
 | Array/channel wire types | [CHANNEL_TYPE_SYSTEM.md](CHANNEL_TYPE_SYSTEM.md) |
 | Authoritative metadata structs | `crates/manifold-core/src/effects.rs` |

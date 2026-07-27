@@ -11,7 +11,7 @@ Method: two lenses. **Part A** mines the patch trail — fix-commit churn,
 `docs/BUG_BACKLOG.md` clusters, and the invariant-memory corpus; these are
 bugs already paid for. **Part B** mines map coverage — subsystems no
 authoritative current-state read has ever visited; these are the bugs not yet
-met (CORE_ENGINE_MAP §13 → 43-item findings queue is the proof of yield).
+met (CORE_ENGINE_MAP section 13 → 43-item findings queue is the proof of yield).
 Entries are ranked by stage risk — what it costs mid-set — not by churn count.
 
 ---
@@ -99,7 +99,7 @@ two consumers today.
 **Evidence.** Distinct "external thing drives a param" families that each ship
 their own config, carry-rules, and UI: drivers/LFOs, envelopes, automation
 lanes, `ableton_mappings`, `audio_mods` (now also trigger mode, per
-LIVE_AUDIO_TRIGGERS §9), macros, control wires, param step-actions (proposed).
+LIVE_AUDIO_TRIGGERS section 9), macros, control wires, param step-actions (proposed).
 `PresetInstance::duplicated()` (`2e3dc4f3`) had to hand-write a carry-rule per
 family — that's the tell. Bugs from the seams: BUG-004 (effect-paste-carries-ableton-automation-bindings…) (paste carries some
 bindings, drops others), BUG-005 (macro addressing), BUG-036 (LFO dead on
@@ -109,7 +109,7 @@ reload), BUG-039 (angle wrap vs. modulation).
 `BINDING_UNIFICATION` and `CARD_TARGET_UNIFICATION` exist and shipped pieces
 (B+/B++/C remain). The gap is finishing: one binding substrate with per-family
 behavior, so carry-on-duplicate, serialization, reload-rebind, and UI listing
-are written once. LIVE_AUDIO_TRIGGERS §9 (trigger = audio mod in fire mode,
+are written once. LIVE_AUDIO_TRIGGERS section 9 (trigger = audio mod in fire mode,
 Peter's call) is the precedent: unify onto an existing family rather than add
 a parallel type — never re-propose a parallel config type.
 

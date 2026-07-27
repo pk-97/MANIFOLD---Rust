@@ -2,7 +2,7 @@
 
 **Status:** CLOSED 2026-07-05 — the design was written and approved:
 `docs/PARAM_STORAGE_DESIGN.md` (id-keyed per-instance param manifest; goes
-further than §7's sketch — registry demoted to a template, one-time migration
+further than section 7's sketch — registry demoted to a template, one-time migration
 deletes the positional arms). Execute from the design doc, not from this brief;
 this stays as the grounded census behind it.
 
@@ -67,7 +67,7 @@ The fragile core is the addressing convention
 **`param_values = [static registry prefix | user-added tail]`**, with tail slot
 `= static_count + user_position`. That arithmetic appears in at least seven
 places in `effects.rs` and is mirrored in the renderer and editing commands (see
-§5).
+section 5).
 
 ---
 
@@ -152,7 +152,7 @@ id-keying as long as the encode/decode agree (ideally re-key them):
   (`content_state.rs:283-401`), gated on `param_values.len() == len`.
 - Clipboard copy/paste snapshot (`clipboard.rs:79-90`).
 - Card `param_info` ↔ slot zip (`param_card.rs:2556, 2627`).
-- The `generator_renderer` → `PresetContext.params` staging array (§4).
+- The `generator_renderer` → `PresetContext.params` staging array (section 4).
 
 **(c) The one genuinely fragile derivation** — the static/user split. This is
 what an id-keyed redesign *deletes*:
@@ -201,12 +201,12 @@ Single source of truth: store param values **keyed by id** (e.g.
 a stable enumeration order gets one for free). Then:
 
 - Deleting a param is removing one entry. Nothing renumbers. Drivers keyed by id
-  just resolve. The static/user split (§5c) is *deleted*, not fixed.
+  just resolve. The static/user split (section 5c) is *deleted*, not fixed.
 - The registry keeps its real job — the *catalog template* (what params a preset
   type has by default, their ranges, defaults, aliases) — but stops being
   consulted to *place* per-instance values by index.
 - Positional layout is computed **only** at the two boundaries that want it
-  (the transport snapshots in §5b and the render staging array in §4), as a pure
+  (the transport snapshots in section 5b and the render staging array in section 4), as a pure
   function of the id-keyed store — the same discipline as the graph flattener
   (`docs/NODE_GROUPS_DESIGN.md`): derive the positional view, never store it as
   identity.
@@ -221,7 +221,7 @@ lives, not at each call site that reads it
 
 ## 8. Constraints & invariants the redesign MUST preserve
 
-- **Disk backward compat** — already free (§3), but old positional files must
+- **Disk backward compat** — already free (section 3), but old positional files must
   still load and unknown-id drop policy must stay.
 - **Per-frame hot-path cost** — modulation runs every frame over every driven
   param. Today it does an id→index resolve (a scan or map lookup) *then* indexes
@@ -250,10 +250,10 @@ lives, not at each call site that reads it
 2. Should `source_index` become a `ParamId`, or should bindings resolve
    id→value once per rebuild into a positional scratch (keeping the apply loop
    index-based but the *identity* id-based)?
-3. Do the transport snapshots (§5b) get re-keyed to id, or kept positional with
+3. Do the transport snapshots (section 5b) get re-keyed to id, or kept positional with
    a stronger "order-out = order-in" guarantee? Re-keying is safer but touches
    the content-thread protocol.
-4. Fold Ableton/OSC (§6) onto the unified id resolver as part of this, or
+4. Fold Ableton/OSC (section 6) onto the unified id resolver as part of this, or
    sequence them after? They're the same disease.
 5. Is `align_to_definition`'s load-time realign still needed at all once storage
    is id-keyed, or does it collapse into "backfill missing defaults, drop

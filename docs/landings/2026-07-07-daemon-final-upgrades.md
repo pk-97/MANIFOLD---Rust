@@ -9,8 +9,8 @@ observation tested against real layouts)` (.claude/daemon/DESIGN.md)
 
 ## What landed
 Fable-authored: three new mechanical moves (ungrounded-chat-claim,
-unverified-done-claim, landing-doc-reflex — catalog 31→34), DESIGN.md §2h
-build contract + §2h.6 late-fire forensics, MOVE_AUTHORING.md (the authoring
+unverified-done-claim, landing-doc-reflex — catalog 31→34), DESIGN.md section 2h
+build contract + section 2h.6 late-fire forensics, MOVE_AUTHORING.md (the authoring
 method for the Opus handover), PASS2_AGENDA.md (consolidated pass-2
 checklist), RUNBOOK pointer. Sonnet-built: chat-tier + done-claim detection at
 the Stop valve; snapshot-race defect fix in the catch-up wait (double-stat,
@@ -47,13 +47,13 @@ already covered (price-the-fork + ask-gate) — not re-authored.
 ## Shortcuts confessed (rolled up)
 Worker Stop events reuse data["transcript_path"] as-is — inherited, unverified
 assumption (probe owed). python3-anything counts as script-run verification
-(§2f table crudeness) — possible FN source for unverified-done-claim.
+(section 2f table crudeness) — possible FN source for unverified-done-claim.
 Stop-tier mechanical moves get per-turn stopblock dedup, not a true 20-event
 cooldown (pre-existing pattern, inherited by the two new Stop moves).
 
 ## Verification debt
 Workflow-agent DELIVERY unproven (observation tested; the live 1-agent probe
-workflow needs Peter's explicit go — recorded in DESIGN.md §2h.3 and
+workflow needs Peter's explicit go — recorded in DESIGN.md section 2h.3 and
 PASS2_AGENDA). Live observers pick up observer.py changes only on natural
 idle-exit revive (cross-session SIGTERM is permission-gated); Stop-hook
 changes are live immediately per-call once on main. In-turn delivery split

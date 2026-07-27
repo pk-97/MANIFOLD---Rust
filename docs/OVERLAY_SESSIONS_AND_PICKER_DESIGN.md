@@ -2,7 +2,7 @@
 
 **Status:** SHIPPED — P1–P2 landed 2026-07-04/05 (`PickerCore`, `BrowserSession`, owned text sessions all live in-tree) · designed 2026-07-04 · Fable
 **Prerequisites:** none (extends the SHIPPED overlay driver, `docs/OVERLAY_SYSTEM_DESIGN.md`)
-**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5 (Phase briefs)–§6 before starting any phase.
+**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 before starting any phase.
 
 The governing insight: the overlay driver (shipped 2026-06-16) unified *hosting* —
 build, draw, input routing, z-order — but left each overlay's *contents and state
@@ -101,7 +101,7 @@ pub struct BrowserSession {
     pub mode: BrowserPopupMode,
     pub tab: InspectorTab,
     pub layer_id: Option<LayerId>,
-    pub picker: PickerCore,          // items, filter, chips, nav, scroll — §4
+    pub picker: PickerCore,          // items, filter, chips, nav, scroll — section 4
     pub pending_spawn_graph_pos: Option<(f32, f32)>,
     pub paste_count: usize,
     // layout output (rects, cell/chip NodeIds) — rebuilt every build_at
@@ -206,10 +206,10 @@ highlighted cell) and stays in `browser_popup.rs` untouched in structure.
 
 ### P1 — Reproduce, then land the session contract + owned text sessions
 
-- **Entry state:** clean clippy on the branch tip; `rg -n "session" crates/manifold-ui/src/panels/browser_popup.rs` shows no session struct yet; anchors in §1 re-verified (`browser_popup.rs` open/close line numbers may drift — re-run `rg -n "pub fn open|pub fn close" crates/manifold-ui/src/panels/browser_popup.rs`).
-- **Read-back:** this doc §2–§3; `OVERLAY_SYSTEM_DESIGN.md` "Refinements" + "Status"; `text_input.rs` header comment. Restate: the layering rule (ui crate never sees TextInputState), the no-close-hook rule, and the three begin sites found by the entry check.
+- **Entry state:** clean clippy on the branch tip; `rg -n "session" crates/manifold-ui/src/panels/browser_popup.rs` shows no session struct yet; anchors in section 1 re-verified (`browser_popup.rs` open/close line numbers may drift — re-run `rg -n "pub fn open|pub fn close" crates/manifold-ui/src/panels/browser_popup.rs`).
+- **Read-back:** this doc section 2–section 3; `OVERLAY_SYSTEM_DESIGN.md` "Refinements" + "Status"; `text_input.rs` header comment. Restate: the layering rule (ui crate never sees TextInputState), the no-close-hook rule, and the three begin sites found by the entry check.
 - **First step, before any fix:** reproduce Peter's symptom in the running app (open browser, search, pick / dismiss, observe the leftover text + the extra click). Write down the exact repro in the phase notes — the fix must be verified against the observed failure, not the inferred one. If the repro shows a *different* mechanism than the orphaned SearchFilter session, escalate with the observation before coding.
-- **Deliverables:** `BrowserSession` split per §3 (all three modes); `TextSessionOwner` + `begin_owned` + `cancel_if_owned_by`; `take_closed_overlays()` on `UIRoot` + the app pump for both windows; the three SearchFilter sites converted.
+- **Deliverables:** `BrowserSession` split per section 3 (all three modes); `TextSessionOwner` + `begin_owned` + `cancel_if_owned_by`; `take_closed_overlays()` on `UIRoot` + the app pump for both windows; the three SearchFilter sites converted.
 - **Gate (positive):** manual repro from step 1 now clean — search text gone on close, no extra click needed, in BOTH windows (main-window effect browser, editor node picker); `cargo clippy --workspace -- -D warnings`; `cargo test -p manifold-ui --lib`.
 - **Gate (negative):** `rg -n "\.clear\(\)" crates/manifold-ui/src/panels/browser_popup.rs` → 0 hits inside `close()` (close is one assignment); `rg -n "begin\(\s*crate::text_input::TextInputField::SearchFilter" crates/manifold-app/src` → 0 hits (all owned).
 - **Forbidden moves:** keeping `close()`'s field clears "just in case" alongside the session drop (parallel old path) · giving the Overlay trait a close hook · clearing the text session from inside `manifold-ui` · widening into dropdown/ableton_picker (D4).
@@ -218,8 +218,8 @@ highlighted cell) and stays in `browser_popup.rs` untouched in structure.
 ### P2 — Extract PickerCore; browser popup rides it; keyboard nav lands
 
 - **Entry state:** P1 merged; `rg -n "struct BrowserSession" crates/manifold-ui/src/panels/browser_popup.rs` → 1 hit.
-- **Read-back:** §4; `browser_popup.rs` `rebuild_filtered_list` + `handle_click`; the three open sites (`ui_root.rs:1420-1490`, `app_render.rs:1950-1998` — re-verify lines).
-- **Deliverables:** `picker_core.rs` per §4 with unit tests (filter, category, nav wrap, type-and-enter); `BrowserSession.picker: PickerCore`; `BrowserPopupRequest` carries `Vec<PickerItem>` (D5) — the three open sites converted; arrow/Enter nav wired in both windows' key paths.
+- **Read-back:** section 4; `browser_popup.rs` `rebuild_filtered_list` + `handle_click`; the three open sites (`ui_root.rs:1420-1490`, `app_render.rs:1950-1998` — re-verify lines).
+- **Deliverables:** `picker_core.rs` per section 4 with unit tests (filter, category, nav wrap, type-and-enter); `BrowserSession.picker: PickerCore`; `BrowserPopupRequest` carries `Vec<PickerItem>` (D5) — the three open sites converted; arrow/Enter nav wired in both windows' key paths.
 - **Gate (positive):** manual pass per mode (Effect / Generator / Node): open → type → chip → arrow-select → Enter places the right item; Escape dismisses; paste button unaffected. `cargo test -p manifold-ui --lib` (including the new picker_core tests); clippy.
 - **Gate (negative):** `rg -n "to_lowercase" crates/manifold-ui/src/panels/browser_popup.rs` → 0 hits (filtering lives in picker_core only); `rg -n "item_names|item_type_ids|item_categories" crates/manifold-ui/src crates/manifold-app/src` → 0 hits (PickerItem replaced the parallel vecs).
 - **Forbidden moves:** leaving the old filter code as a fallback · making PickerCore render anything · migrating dropdown/ableton_picker (D4) · changing grid visuals (this phase is behavior-neutral except the new keyboard nav).

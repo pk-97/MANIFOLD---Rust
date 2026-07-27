@@ -1,8 +1,8 @@
 # Live Recording Proofs — headless end-to-end tests for the show recorder
 
-**Status:** SHIPPED (P1+P2) 2026-07-10 — the recorder proof suite is built and on main. P1 @ `ef12c14b` (clock/audio injection seams; Tier-1 proof harness: tests 1–4,6, ffprobe oracle, 26-block pattern). P2 @ `091290e3` (`recording-soak` bin unpaced+realtime with a decoded-index PASS gate; kill-durability test 5; `docs/DEVELOPMENT_REFERENCE.md` runbook). **P3 (in-app record smoke) DEFERRED 2026-07-10 (Peter):** its intended vehicle does not exist — `cargo xtask ui-snap` renders the UI tree only, with no live content thread or compositor (a scripted record click emits `ContentCommand::StartLiveRecording` into a channel `ui_snapshot/script.rs:19` holds and never drains), so it cannot exercise the compositor-frame capture block. Building a real headless record smoke is a new content-thread+compositor integration harness (BUG-054 (renderer-device-ptr-dangles)-adjacent), not the "one scripted flow" the phase assumed; see §8 Deferred for the revival trigger. The button→command→capture-block glue is L4-verified by live use every show (VD-023). Two other debts carried: full-scale 4K60 20-min soak is Peter's pre-gig ritual (VD-022a); BUG-086 (recording-audio-track-under-covers-duration-on-l…) silent audio-drop fix (VD-022b, show severity LOW after `--realtime` gave full audio). Release-gating per STRUCTURAL_AUDIT_VERDICTS (owns BUG-053) · design 2026-07-07 · Fable · approved 2026-07-09 Peter
+**Status:** SHIPPED (P1+P2) 2026-07-10 — the recorder proof suite is built and on main. P1 @ `ef12c14b` (clock/audio injection seams; Tier-1 proof harness: tests 1–4,6, ffprobe oracle, 26-block pattern). P2 @ `091290e3` (`recording-soak` bin unpaced+realtime with a decoded-index PASS gate; kill-durability test 5; `docs/DEVELOPMENT_REFERENCE.md` runbook). **P3 (in-app record smoke) DEFERRED 2026-07-10 (Peter):** its intended vehicle does not exist — `cargo xtask ui-snap` renders the UI tree only, with no live content thread or compositor (a scripted record click emits `ContentCommand::StartLiveRecording` into a channel `ui_snapshot/script.rs:19` holds and never drains), so it cannot exercise the compositor-frame capture block. Building a real headless record smoke is a new content-thread+compositor integration harness (BUG-054 (renderer-device-ptr-dangles)-adjacent), not the "one scripted flow" the phase assumed; see section 8 Deferred for the revival trigger. The button→command→capture-block glue is L4-verified by live use every show (VD-023). Two other debts carried: full-scale 4K60 20-min soak is Peter's pre-gig ritual (VD-022a); BUG-086 (recording-audio-track-under-covers-duration-on-l…) silent audio-drop fix (VD-022b, show severity LOW after `--realtime` gave full audio). Release-gating per STRUCTURAL_AUDIT_VERDICTS (owns BUG-053) · design 2026-07-07 · Fable · approved 2026-07-09 Peter
 **Prerequisites:** none
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5 (Phase briefs)–§6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 before starting any phase.
 
 Peter, 2026-07-07: *"The last time I used it it failed multiple times and we eventually
 moved to a fix that work, but I want a proper end to end headless test or something for
@@ -42,7 +42,7 @@ Two tiers fall out:
   like line-checking the LEDs. It is the only tier that can catch class-2 failures
   (real hardware encoder, real cumulative gigabytes).
 
-Binding constraints (per DESIGN_AUTHORING §1): the capture block is per-frame on the
+Binding constraints (per DESIGN_AUTHORING section 1): the capture block is per-frame on the
 content thread ([content_pipeline.rs:2543-2572](../crates/manifold-app/src/content_pipeline.rs)),
 so the injection seams this design adds must be zero-cost to the production path — they
 are (one delegating call, one enum match at construction). Thread residency is settled
@@ -119,7 +119,7 @@ Rejected: `manifold-media`'s decoder as the oracle — a same-vendor blind spot;
 decoder tolerating our encoder proves nothing about what an NLE will accept.
 
 **D4 — Frame identity is proven by a block-code pattern run through the real
-conversion shader.** Each frame's index is baked into its pixels (spec in §4), the
+conversion shader.** Each frame's index is baked into its pixels (spec in section 4), the
 frame is written into an `Rgba16Float` source texture, and the harness then runs the
 **production** `encode_format_conversion` into the pool texture — so the real WGSL
 conversion, the real pool, the real fence path, and the real FFI encode are all in the
@@ -160,7 +160,7 @@ encoder *harder* than a show does (no idle time between frames), which is the ri
 direction for a stress fence, but it means Tier 1 does not measure real-time keep-up —
 that's the soak's `--realtime` flag and the render-trace gate's territory.
 
-## 3. Seam brief — the two injection points (per DESIGN_DOC_STANDARD §6)
+## 3. Seam brief — the two injection points (per DESIGN_DOC_STANDARD section 6)
 
 ### 3.1 Clock seam
 
@@ -323,7 +323,7 @@ true dress rehearsal. Output defaults to a temp path and is deleted on PASS unle
 `--keep`. Pre-flight: check free disk ≥ 1.5× the estimated file size; abort loudly if
 not. `--hdr` exits immediately with `blocked by BUG-053` (D7).
 
-End of run: full probe (§4 oracle, including index decode) and exactly one line —
+End of run: full probe (section 4 oracle, including index decode) and exactly one line —
 
 ```
 SOAK PASS: 72000 frames, 0 dropped, PTS monotonic, gap-free indices, 17.4 GB, audio 1200.0s
@@ -348,17 +348,17 @@ this is the instrument-check that catches the next one before it costs a show.
 - **Entry state:** clean main; `cargo test -p manifold-recording` passes (trivially —
   zero tests); ffprobe present (`which ffprobe`). Re-verify anchors:
   [session.rs:214](../crates/manifold-recording/src/session.rs#L214) still stamps
-  `Instant::now()`; the §3.1 call-site inventory count still holds.
-- **Read-back:** this doc §2–§4 whole; [format_converter.rs](../crates/manifold-recording/src/format_converter.rs)
+  `Instant::now()`; the section 3.1 call-site inventory count still holds.
+- **Read-back:** this doc section 2–section 4 whole; [format_converter.rs](../crates/manifold-recording/src/format_converter.rs)
   end-to-end; [content_pipeline.rs:2543-2621](../crates/manifold-app/src/content_pipeline.rs#L2543);
   the `gpu-proofs` wiring in [manifold-renderer/Cargo.toml:56-69](../crates/manifold-renderer/Cargo.toml#L56).
   Restate the binding decisions (D1–D5, D8), the forbidden moves, and the entry-check
   results before writing code.
-- **Deliverables:** §3 seams exactly as committed (`submit_frame_at`, `AudioFeed`,
+- **Deliverables:** section 3 seams exactly as committed (`submit_frame_at`, `AudioFeed`,
   `new_with_audio_feed`, `RecordingFrame.elapsed`); `recording-proofs` feature +
   optional `serde_json`; `src/proofs.rs` (pattern writer + `probe`);
   `src/shaders/test_pattern.wgsl`; `tests/recording_proofs.rs` with tests 1–4 and 6
-  from §4 (test 5 is P2's); fix the stale "MP4" doc comment on `RecordingResult`
+  from section 4 (test 5 is P2's); fix the stale "MP4" doc comment on `RecordingResult`
   ([config.rs:49-51](../crates/manifold-recording/src/config.rs#L49)) — listed here so
   the scope fence licenses it; BUG-053 backlog entry cross-linked to test 6.
 - **Gate (positive):** `cargo test -p manifold-recording --features recording-proofs`
@@ -386,10 +386,10 @@ this is the instrument-check that catches the next one before it costs a show.
 ### P2 — Kill test + soak bin + runbook (one session) — ✅ SHIPPED 2026-07-10 @ `091290e3`
 
 - **Entry state:** P1 landed; its gates re-run green.
-- **Read-back:** this doc §4 item 5 + §5; P1's phase report.
-- **Deliverables:** `src/bin/recording_soak.rs` per §5; test 5
+- **Read-back:** this doc section 4 item 5 + section 5; P1's phase report.
+- **Deliverables:** `src/bin/recording_soak.rs` per section 5; test 5
   (`kill_mid_take_leaves_recoverable_file`); a "Recorder soundcheck" section in
-  `docs/DEVELOPMENT_REFERENCE.md` with the §5 ritual command verbatim.
+  `docs/DEVELOPMENT_REFERENCE.md` with the section 5 ritual command verbatim.
 - **Gate (positive):** full proof suite green twice; one short soak executed by the
   landing session — `recording-soak --width 1920 --height 1080 --minutes 2 --keep` —
   exits 0, `SOAK PASS` line pasted verbatim, and the landing session opens the kept
@@ -419,14 +419,14 @@ this is the instrument-check that catches the next one before it costs a show.
 > click produces `ContentCommand::StartLiveRecording` that goes nowhere: nothing records, the
 > compositor-frame capture block at `content_pipeline.rs:2547` never runs. **The phase's vehicle
 > does not exist.** Per this phase's own entry-state instruction, escalated to Peter, who chose
-> to defer (drop from the 2026-07-10 wave). Not built. See §8 Deferred for the revival trigger;
+> to defer (drop from the 2026-07-10 wave). Not built. See section 8 Deferred for the revival trigger;
 > the residual coverage gap is logged as VD-023.
 
 The tiers above start at the `LiveRecordingSession` API; the remaining unexercised
 glue is the capture block inside the real compositor frame and the start/stop command
 path. The design assumed one scripted `ui-snap` flow could close it — the pre-flight above
 found that assumption false (ui-snap has no live compositor). The brief below is retained for
-the record and as the starting point for whoever revives this per §8.
+the record and as the starting point for whoever revives this per section 8.
 
 - **Entry state:** P2 landed. ⚠ VERIFY-AT-IMPL, both before briefing: (a) `cargo
   xtask ui-snap` scenes run the real content thread + compositor frame (read the
@@ -437,9 +437,9 @@ the record and as the starting point for whoever revives this per §8.
   by the flow driver's name/text resolution (if unnamed, adding the name is in scope —
   UI_AUTOMATION P1's name storage is the precedent).
 - **Read-back:** `scripts/ui-flows/select-and-inspect.json` + the flow-driver docs;
-  this doc §1's app-integration anchors.
+  this doc section 1's app-integration anchors.
 - **Deliverables:** `scripts/ui-flows/record-smoke.json` — click record, let ~120
-  frames pass, click stop; a wrapper (xtask step or script) that then runs the §4
+  frames pass, click stop; a wrapper (xtask step or script) that then runs the section 4
   `probe` on the produced file and asserts ≥100 frames, PTS monotonic, prores codec.
 - **Gate:** the flow passes from a clean checkout twice consecutively; probe
   assertions green; the produced .mov path printed.
@@ -451,8 +451,8 @@ the record and as the starting point for whoever revives this per §8.
   recording-proofs`; final phase of the design → one full
   `cargo clippy --workspace -- -D warnings` + default `cargo test --workspace`.
 
-Phasing-completeness check (standard §5): every §4 test and the §5 bin appear in
-exactly one phase; the §5 ritual doc lands in P2; the HDR twin of test 1 is Deferred
+Phasing-completeness check (standard section 5): every section 4 test and the section 5 bin appear in
+exactly one phase; the section 5 ritual doc lands in P2; the HDR twin of test 1 is Deferred
 (BUG-053), not a phase; the full-scale soak's first execution is explicitly Peter's
 ritual with a VD entry — no body-committed affordance is unowned.
 
@@ -482,7 +482,7 @@ ritual with a VD entry — no body-committed affordance is unowned.
   a genuine headless integration harness that boots a real content thread + `ContentPipeline` +
   compositor, drives `StartLiveRecording` through the real command channel, runs enough frames
   that the `content_pipeline.rs:2547` capture block submits to the recorder, stops, and probes
-  the file with the §4 oracle. **Revival trigger:** either such a harness already exists (the
+  the file with the section 4 oracle. **Revival trigger:** either such a harness already exists (the
   `run_export`/`journey_proof` headless path is the closest precedent, but it drives the export
   render path, not the live capture block), or a regression in the record-button→command→capture
   wiring is observed that P1/P2's API-level tests can't catch. Any revival MUST handle BUG-054
@@ -498,5 +498,5 @@ ritual with a VD entry — no body-committed affordance is unowned.
   Tier 1 in CI.
 - **Backpressure/starvation shaping beyond test 4** (e.g. scripted encoder-stall
   injection via the FFI) — revive if a real take ever fails in a way tests 1–5 and
-  the soak all miss; the escape analysis (standard §10) would name the missing
+  the soak all miss; the escape analysis (standard section 10) would name the missing
   stage.

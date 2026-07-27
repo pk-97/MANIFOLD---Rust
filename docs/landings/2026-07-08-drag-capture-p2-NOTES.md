@@ -14,10 +14,10 @@ only, and gating both press branches on `!overlay_contains_point(pos)` — if a 
 overlay visually occupies the press point, the seam yields and the press falls through to
 normal routing (which reaches the overlay via the existing gauntlet).
 
-**Forbidden moves for this phase (§3.5, D5 note, §6.5/6.8, P2 "Forbidden moves"):**
+**Forbidden moves for this phase (section 3.5, D5 note, section 6.5/6.8, P2 "Forbidden moves"):**
 - Do NOT convert the split/inspector handles to widget-intent routing — they keep their
   `window_input`-side state (`split_dragging`/`inspector_resize_dragging`); D5 only adds a
-  z-check in front of the existing raw-position branches. Full conversion is Deferred §7.
+  z-check in front of the existing raw-position branches. Full conversion is Deferred section 7.
 - Do NOT keep `swallow_drag` "for safety" alongside `claims_drag`/`gesture_ended` — it dies
   entirely this phase, negative gate is zero `rg` hits anywhere in `crates/`.
 - Do NOT widen this into a general audit of every hover/cursor call site that uses the
