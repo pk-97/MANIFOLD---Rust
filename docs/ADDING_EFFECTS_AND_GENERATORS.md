@@ -1,6 +1,6 @@
 # Adding Effects and Generators
 
-Effects and generators ship through the same path: a JSON preset file. Both went through the JSON migration (generators are fully migrated — zero Rust generators remain), and both load from disk at startup, not from the compiled binary.
+Effects and generators ship through the same path: a JSON preset file, loaded from disk at startup, not from the compiled binary.
 
 ---
 
@@ -92,7 +92,7 @@ The loader does structural checks only — every file must parse and carry a `ve
 - Every `wires` endpoint references a valid `(node, port)` pair with matching types.
 - The graph is a DAG (no cycles).
 
-The test `every_bundled_preset_loads_validates_and_compiles` in `bundled_presets.rs` runs all bundled presets through `validate(&graph)` and the Metal pipeline build — if you add a preset that's structurally broken, that test catches it before any user sees it.
+The test `every_bundled_preset_loads_validates_and_compiles` in `bundled_presets.rs` runs all bundled presets through `validate(&graph)` and the Metal pipeline build.
 
 ### Tests
 

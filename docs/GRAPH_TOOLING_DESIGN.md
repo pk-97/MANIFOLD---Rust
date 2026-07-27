@@ -32,7 +32,7 @@ Companion docs: `MCP_INTERFACE_DESIGN.md` (the server this front-runs; its §6 (
 
 Classification: the catalog and the validator **exist**; the CLI verbs and the fusion catalog field are **one wire away**; the only genuinely new pieces are the `BoundaryReason` declaration mechanism, its meta-test, and the importer hook.
 
-*Extend, don't redesign.* The audit shrank this design from "build an agent graph-composition tool" to "extract one function, add two bin verbs, one macro field, one test, one hook, one lint pass, one authored guide."
+*Extend, don't redesign.*
 
 ## 2. Decisions
 

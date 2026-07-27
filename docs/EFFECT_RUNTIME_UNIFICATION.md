@@ -656,7 +656,7 @@ not need it. Phases 1–4 of `docs/BINDINGS_UNIFICATION_PLAN.md`
 collapsed every parallel-tier path. The end-state matters for anyone
 extending the binding system later, so it's captured here.
 
-**Runtime (Phase 1, `1decd1a4`).** One `ResolvedBinding` type per
+**Runtime.** One `ResolvedBinding` type per
 effect slot — a `Vec<ResolvedBinding>` of length `n_static + n_user`,
 with `bindings[0..n_static]` hydrated from `ChainSpec.bindings` via
 `ResolvedBinding::from_static` and `bindings[n_static..]` hydrated
@@ -670,7 +670,7 @@ resolved-target enum has only `Node | Composite | Custom` —
 Acceptance: the `&[]` second-slice bug class is unrepresentable
 because there is no second slice.
 
-**UI ↔ bridge wire format (Phase 2, `dfbeb1f1`).** Per-param
+**UI ↔ bridge wire format.** Per-param
 `PanelAction` variants carry `manifold_core::effects::ParamId`, not
 positional `pi: usize`. `EffectParamInfo` / `GenParamInfo` carry
 `param_id` populated at `state_sync.rs`. `AbletonPickerContext::*Param`
@@ -686,7 +686,7 @@ the wire format gives the bridge a `ParamId` directly. A future
 handler can't reintroduce the bug — there's no positional index
 step to misroute.
 
-**Outer routing source tag (Phase 3, `6070031e`).** The snapshot's
+**Outer routing source tag.** The snapshot's
 `OuterParamRouting` carries `source: OuterParamSource`
 (`Static | User`). `outer_routings_from_bindings` (runtime walk
 over `Vec<ResolvedBinding>`) translates the binding's tier source
@@ -696,7 +696,7 @@ to the snapshot's tier marker. The registry walk in
 consumers no longer re-derive the static-vs-user split from
 external context.
 
-**Convert enum merge (Phase 4, `9073daa9`).** The renderer-side
+**Convert enum merge.** The renderer-side
 `ParamConvert` and core-side `UserParamConvert` were two enums with
 overlapping shape. The Phase 4 collapse: deleted the renderer-
 exclusive `EnumRemap(Cow<'static, [u32]>)` and `FloatTransform(fn)`
@@ -783,9 +783,9 @@ Complete. Findings synthesized here. Gates:
 
 **Goal:** Runtime infrastructure for the parameter binding work. Some already shipped during Phase 0/StylizedFeedback POC.
 
-1. ✅ **manifold-gpu: pipeline barrier API** *(shipped: c62432ca)*. No-op stub for Metal; signature ready for Vulkan.
+1. ✅ **manifold-gpu: pipeline barrier API.** No-op stub for Metal; signature ready for Vulkan.
 2. **manifold-gpu: feature-gate Metal-only modules.** `mps`, `metalfx`, `fft` behind `metal` feature. Audit caller sites.
-3. ✅ **node_graph: StateStore API + tests** *(shipped: 9d5b6489)*. Plumbed through `EffectNodeContext`.
+3. ✅ **node_graph: StateStore API + tests.** Plumbed through `EffectNodeContext`.
 4. **node_graph: edit-driven plan caching.** `Graph::topology_version` + `CachedPlan` pattern. Tests confirming param changes don't invalidate, structural changes do.
 
 **Gate to Phase 2:** plan caching works against the StylizedFeedback graph and any other graph-backed effect.

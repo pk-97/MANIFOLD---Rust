@@ -163,12 +163,9 @@ If live topology editing during playback ships, this becomes load-bearing: compi
 
 ---
 
-## 11. Migration (Done)
+## 11. Migration
 
-The May 2026 migration ran in two coordinated arcs:
-
-- **§11 Preset migration** (blocks 4–9): every shipping effect moved from `inventory::submit! { EffectMetadata, EffectFactory }` to `assets/effect-presets/<TypeId>.json` + `build.rs` codegen. `EffectRegistry`, `EffectFactory`, `metadata_by_id`, `effect_category_registry`, and 21 orphan `.rs` files were deleted. The graph runtime is the only dispatcher.
-- **Bindings unification** (Phases 1–5): static + user binding paths collapsed onto one `ResolvedBinding` walk, one cache, one `ParamConvert` enum, `ParamId` on the wire.
+Every shipping effect is an `assets/effect-presets/<TypeId>.json` preset (`build.rs` codegen); the graph runtime is the only dispatcher; static + user binding paths share one `ResolvedBinding` walk, one cache, one `ParamConvert` enum, `ParamId` on the wire.
 
 Projects from before the migration load unchanged. The legacy `PostProcessEffect` and `Generator` traits are gone — there is no coexistence period any longer; the trait-wrapped path was always a migration scaffold.
 
