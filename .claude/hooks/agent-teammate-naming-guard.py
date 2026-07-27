@@ -37,7 +37,7 @@ import sys
 
 SLOT_FOR_MODEL = {
     "haiku": "flash",
-    "sonnet": "flash",  # sonnet slot repointed to deepseek-v4-flash 2026-07-25 (classifier speed + GLM-outage resilience; GLM-4.7 mid tier retired as a slot)
+    "sonnet": "glm47",  # sonnet slot repointed to glm-4.7 2026-07-27 (classifier fails closed; flash kept dropping approvals — 62478391)
     "opus": "glm52",
     "fable": "k3",
 }
