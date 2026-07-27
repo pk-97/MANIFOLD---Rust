@@ -22,6 +22,7 @@ pane; a bad `config.yaml` fails boot and freezes everything until fixed.
 
 | Layer | File | Owns |
 |---|---|---|
+| Seat names + consumer registry | `scripts/fleet_seats.toml` (repo) | seat = subscription account (`kimi`/`zai`/`opencode`, never a model name); every file that carries a seat token. `seat_tool check` is the drift gate; `seat_tool rename` migrates all consumers + secret files in one transaction |
 | Seat slot map | `~/.config/cc-fleet/providers.toml` | which model fills each slot (haiku/sonnet/opus) per profile |
 | Upstreams + routing | `~/.config/litellm/config.yaml` | model_list (api_base, key env, pricing), router_settings (retries, fallbacks) |
 | Virtual keys | `~/.config/litellm/key-*.json` | per-key model allow-lists (e.g. k3-lead) |

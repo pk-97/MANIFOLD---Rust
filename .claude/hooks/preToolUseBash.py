@@ -119,7 +119,7 @@ CARGO_READ_SUB = {
 # cc-fleet subcommands safe to auto-allow: read-only inspection plus the
 # durably-authorized K3 lane workflow (spawning/polling headless subagents —
 # Peter's 2026-07-18 routing directive, approved in-session: K3-low via the
-# `kimi-code` provider is the default lane agent, and prompt friction
+# `kimi` provider is the default lane agent, and prompt friction
 # defeats the policy; spend is bounded by the Kimi membership plan).
 # Provider mutation (add/edit/remove/import/default), key material (keyget),
 # interactive/tmux modes (run/spawn/teardown/hide/show), and

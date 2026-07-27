@@ -58,12 +58,12 @@ check(
     hook.decide("cc-fleet subagent deepseek -p x", "glm-4.7") == "",
 )
 check(
-    "dispatcher denied: subagent glm (self-tier)",
-    bool(hook.decide("cc-fleet subagent glm -p x", "glm-4.7")),
+    "dispatcher denied: subagent zai (self-tier)",
+    bool(hook.decide("cc-fleet subagent zai -p x", "glm-4.7")),
 )
 check(
-    "dispatcher denied: subagent kimi-code (lead seat)",
-    bool(hook.decide("cc-fleet subagent kimi-code -p x", "glm-5.2")),
+    "dispatcher denied: subagent kimi (lead seat)",
+    bool(hook.decide("cc-fleet subagent kimi -p x", "glm-5.2")),
 )
 check(
     "dispatcher denied: workflow",
@@ -84,7 +84,7 @@ for model in ("claude-fable-5", "claude-opus-4-8", "k3"):
 # D-48: `cc-fleet spawn` is a dead path — denied for every tier, lead
 # included, even with no identifiable caller model.
 for model in ("claude-fable-5", "k3", "glm-4.7", "deepseek-v4-flash", ""):
-    r = hook.decide("cc-fleet spawn glm --as w1 --team t --json", model)
+    r = hook.decide("cc-fleet spawn zai --as w1 --team t --json", model)
     check(f"spawn dead-path denied: {model or '(no model)'}", bool(r) and "dead" in r)
 
 # Non-spawn cc-fleet commands: never denied for anyone.
@@ -114,10 +114,10 @@ for cmd in (
 
 # Command-position variants still caught.
 for cmd in (
-    "cc-fleet spawn glm --as w --team t",
-    "git status && cc-fleet spawn glm --as w",
-    "FOO=1 cc-fleet spawn glm",
-    "/Users/x/.local/bin/cc-fleet spawn glm",
+    "cc-fleet spawn zai --as w --team t",
+    "git status && cc-fleet spawn zai --as w",
+    "FOO=1 cc-fleet spawn zai",
+    "/Users/x/.local/bin/cc-fleet spawn zai",
 ):
     check(f"command position caught: {cmd[:40]}...",
           bool(hook.decide(cmd, "claude-fable-5")))

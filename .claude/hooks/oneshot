@@ -20,7 +20,7 @@ budget on code tasks, returning empty) does not apply; Flash is the free
 tier (Go plan). glm-4.7 remains available via --model (z.ai quota). The
 budget-escalation below handles the empty-content case.
 
-Key: `cc-fleet keyget kimi-code` (k3-lead virtual key allows all proxy models;
+Key: `cc-fleet keyget kimi` (k3-lead virtual key allows all proxy models;
 lane spend bills under the spawning seat, itemized per-model). Never put the
 key in env or argv — read it subprocess-side only.
 """
@@ -68,7 +68,7 @@ def main() -> int:
         return 2
 
     key = subprocess.run(
-        ["cc-fleet", "keyget", "kimi-code"], capture_output=True, text=True, check=True
+        ["cc-fleet", "keyget", "kimi"], capture_output=True, text=True, check=True
     ).stdout.strip()
 
     messages = ([{"role": "system", "content": system}] if system else []) + [

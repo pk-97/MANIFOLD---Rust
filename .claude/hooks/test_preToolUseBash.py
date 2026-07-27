@@ -355,7 +355,7 @@ def test_cc_fleet_lane_workflow_preapproved():
     check(
         "cc-fleet subagent spawn is pre-approved",
         hook.is_preapproved_command(
-            "cc-fleet subagent kimi-code --prompt-file /tmp/b.md --background"
+            "cc-fleet subagent kimi --prompt-file /tmp/b.md --background"
         ),
     )
     check(
@@ -369,7 +369,7 @@ def test_cc_fleet_lane_workflow_preapproved():
     )
     check(
         "cc-fleet keyget is NOT pre-approved",
-        not hook.is_preapproved_command("cc-fleet keyget kimi-code"),
+        not hook.is_preapproved_command("cc-fleet keyget kimi"),
     )
 
 
