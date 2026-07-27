@@ -41,6 +41,11 @@ SCHEMA_VERSION = 1
 GATE_TIMEOUT_S = 300
 TAIL_LINES = 20
 
+# After this many consecutive red per-lane runs on a task, the lane's job
+# flips from "fix it" to "report blocked": a clear blocked report is a
+# successful lane outcome; retrying past this point breeds gate-gaming.
+FAIL_STREAK_LIMIT = 3
+
 REPO = Path(__file__).resolve().parent.parent
 VERDICTS_DIR = Path(
     os.environ.get("GATE_RUNNER_VERDICTS_DIR")
@@ -293,6 +298,135 @@ def scope_from_git(commit, brief_text):
         return empty
 
 
+# ---------------------------------------------------------------------------
+# Gaming scan — green earned by weakening the gate is not green
+# ---------------------------------------------------------------------------
+
+_ASSERT_RE = re.compile(r"\b(?:debug_)?assert(?:_eq|_ne|_matches)?!\s*[(\[]")
+_TEST_ATTR_RE = re.compile(r"#\[\s*(?:tokio::)?test\s*[\](]")
+_ALLOW_RE = re.compile(r"#!?\[\s*(?:cfg_attr\s*\([^,]+,\s*)?allow\s*\(")
+_IGNORE_RE = re.compile(r"#\[\s*ignore\b")
+
+
+def scan_gaming(diff_text):
+    """Scan a unified diff for gate-gaming signals. Returns gate entries.
+
+    A flash-tier lane under a red gate will make it green the cheap way
+    without malice: delete the failing assertion, #[ignore] the test, add an
+    #[allow] to silence clippy. Each signal below turns the verdict red so
+    the lane stops and reports instead. Legitimate cases exist (refactors,
+    justified suppressions) — they go through the lead with a reason, which
+    is exactly the review the signal exists to force.
+
+      removed-asserts  net loss of assert!/assert_eq!/... lines
+      removed-tests    net loss of #[test] attributes
+      added-allow      any added #[allow(/#![allow( lint suppression
+      added-ignore     any added #[ignore] attribute
+    """
+    counts = {
+        "removed-asserts": [0, 0],  # [removed, added]
+        "removed-tests": [0, 0],
+        "added-allow": [0, 0],
+        "added-ignore": [0, 0],
+    }
+    in_rust = False
+    for line in diff_text.split("\n"):
+        if line.startswith("+++"):
+            # All four signals are Rust constructs; scanning non-Rust hunks
+            # trips on pattern text quoted in scripts/docs (self-reference).
+            in_rust = line.rstrip().endswith(".rs")
+            continue
+        if line.startswith("---"):
+            continue
+        if not in_rust:
+            continue
+        if line.startswith("+"):
+            idx = 1
+        elif line.startswith("-"):
+            idx = 0
+        else:
+            continue
+        body = line[1:]
+        if _ASSERT_RE.search(body):
+            counts["removed-asserts"][idx] += 1
+        if _TEST_ATTR_RE.search(body):
+            counts["removed-tests"][idx] += 1
+        if _ALLOW_RE.search(body):
+            counts["added-allow"][idx] += 1
+        if _IGNORE_RE.search(body):
+            counts["added-ignore"][idx] += 1
+
+    entries = []
+    checks = [
+        ("removed-asserts",
+         counts["removed-asserts"][0] > counts["removed-asserts"][1],
+         f"{counts['removed-asserts'][0]} assert lines removed, "
+         f"{counts['removed-asserts'][1]} added"),
+        ("removed-tests",
+         counts["removed-tests"][0] > counts["removed-tests"][1],
+         f"{counts['removed-tests'][0]} #[test] removed, "
+         f"{counts['removed-tests'][1]} added"),
+        ("added-allow",
+         counts["added-allow"][1] > 0,
+         f"{counts['added-allow'][1]} lint suppression(s) added"),
+        ("added-ignore",
+         counts["added-ignore"][1] > 0,
+         f"{counts['added-ignore'][1]} #[ignore] added"),
+    ]
+    for name, tripped, detail in checks:
+        if tripped:
+            entries.append({
+                "cmd": f"gaming: {name}",
+                "exit": 1,
+                "duration_s": 0.0,
+                "tail": f"{detail} — stop and report; the lead reviews this "
+                        "with your reason, the gate does not accept it silently",
+            })
+    if not entries:
+        entries.append({
+            "cmd": "gaming: scan",
+            "exit": 0,
+            "duration_s": 0.0,
+            "tail": "no gaming signals in diff",
+        })
+    return entries
+
+
+def _diff_for_commit(commit):
+    """Unified diff merge-base(origin/main, commit)..commit, or None.
+
+    Worktrees share the object store, so lane commits resolve from here.
+    No commit or any git failure → None (scan skipped, like empty scope)."""
+    if not commit:
+        return None
+    try:
+        mb = subprocess.run(
+            ["git", "merge-base", "origin/main", commit],
+            capture_output=True, text=True, timeout=15, cwd=str(REPO),
+        )
+        if mb.returncode != 0:
+            return None
+        d = subprocess.run(
+            ["git", "diff", f"{mb.stdout.strip()}..{commit}"],
+            capture_output=True, text=True, timeout=30, cwd=str(REPO),
+        )
+        return d.stdout if d.returncode == 0 else None
+    except Exception:
+        return None
+
+
+def _fail_streak(task_id):
+    """Count trailing consecutive failed per-lane gate verdicts for a task."""
+    streak = 0
+    for v in reversed(read_verdicts(task_id)):
+        if v.get("phase") != "per-lane" or v.get("kind") != "gate":
+            continue
+        if v.get("pass"):
+            break
+        streak += 1
+    return streak
+
+
 def cmd_per_lane(args):
     """Run gate commands from the brief and append a per-lane verdict."""
     brief_path = Path(args.brief)
@@ -317,6 +451,26 @@ def cmd_per_lane(args):
             "tail": tail,
         })
 
+    # Gaming scan: unlike scope, this IS a pass/fail input — a diff that
+    # weakened the gate to go green is a red verdict, not evidence.
+    commit = args.commit
+    if not commit:
+        ref = args.branch or "HEAD"
+        try:
+            rp = subprocess.run(
+                ["git", "rev-parse", ref],
+                capture_output=True, text=True, timeout=15,
+            )
+            commit = rp.stdout.strip() if rp.returncode == 0 else None
+        except Exception:
+            commit = None
+    diff_text = _diff_for_commit(commit)
+    if diff_text is not None:
+        for entry in scan_gaming(diff_text):
+            if entry["exit"] != 0:
+                all_pass = False
+            results.append(entry)
+
     # Scope is evidence for the reviewer (SCOPE_CHECK is the dispatcher's
     # opcode, IR §2), never a pass/fail input here.
     scope = scope_from_git(args.commit, brief_path.read_text())
@@ -337,6 +491,7 @@ def cmd_per_lane(args):
         "ts": datetime.now(timezone.utc).isoformat(),
     }
 
+    streak_before = _fail_streak(args.task)
     append_verdict(args.task, verdict)
 
     total = len(results)
@@ -345,6 +500,17 @@ def cmd_per_lane(args):
     for r in results:
         status = "PASS" if r["exit"] == 0 else f"FAIL (exit {r['exit']})"
         print(f"  [{status}] {r['cmd']} ({r['duration_s']}s)")
+
+    if not all_pass and streak_before + 1 >= FAIL_STREAK_LIMIT:
+        # One line so SubagentStop feedback (which selects FAIL lines)
+        # carries it back to the lane intact.
+        print(
+            f"FAIL streak {streak_before + 1} for {args.task}: stop retrying. "
+            "Your job is now a blocked report — what fails, the exact error, "
+            "what you tried, your best root-cause suspects — sent to team-lead, "
+            "then stop. A clear blocked report is a successful lane outcome; "
+            "weakening the gate to go green is not."
+        )
 
     sys.exit(0 if all_pass else 1)
 
