@@ -193,8 +193,6 @@ probe cannot see BUG-311's class.
 
 Staging: T1-A ∥ T1-B, then T1-C → T1-D, all on `wave/rt-t1`. Pre-allocated BUG range: 315–318. Out of scope (escalate, don't build): MetalFX live wiring, alpha-aware rays, any Tier-3 feature, new `Arc<Mutex>`. Lane briefs: `.claude/orchestration/rt-t1-queue.md` (gitignored process state).
 
-**Executed 2026-07-23 (same night).** Commits: T1-A `124dbbb5` (oracles, both tripping pre-fix) → T1-B `10359365` (bindless per-object vertex-normal table, barycentric interpolation, depth-derivative path deleted) → T1-C `f9bc2b30` (reprojection + depth/normal validity + ping-pong history; camera-motion-only — no per-pixel object id for `prev_model`, animated objects fail validity and fall back to current-frame; **that limitation is CLOSED by T2-C, section 8.3 / BUG-321**) → `dadcfb68` (oracle revision) → T1-D `06340e17` (moments in `Rg32Float` ping-pong, 3-pass à-trous incl. normal-weighted upsample, R2 blue-noise for AO/GI rays).
-
 - **D19/D20 — motion-ghost oracle rulings (Fable, mid-wave).** The T1-A ORBIT oracle was confounded (BUG-316, né 315 — id collision with main's stale-roughness bug: tracked point on the shadow boundary measures real parallax); rewritten to accumulated-vs-cold-start at same pose (D19), still non-discriminating even at ~10°/frame stimulus (D20). Terminator: one-shot instrumentation inside `accumulate_irradiance` proved the reprojection ACTIVE (95–98% of texels reproject to a shifted history texel, 97%+ pass validity) — BUG-311 accepted FIXED on that evidence; both motion oracles kept `#[ignore]`d with full investigation recorded in their doc comments. **Standing lesson: numeric pose/frame-diff metrics cannot isolate ghosting from legitimate accumulation lag at these alphas — motion-quality judgment on this surface is Peter's L2 look until someone designs a genuinely discriminating instrument (no third redesign inside a wave).**
 - **T1-D honest residual:** STILL oracle improved 1.076e-4 → 8.6e-5 (threshold 7e-5) but the residual is proven scene structure (box-blur + 16× samples both no-ops), not speckle — kept `#[ignore]`d, threshold untouched. Ray budgets unchanged pending Peter's look.
 - Lane-surfaced gotchas for future RT test authors: orbit tests must step `dt` with `time` or `TemporalResetDetector` hard-resets every frame; async accel builds need per-frame commit (batching warmup frames into one encoder breaks the RT-D4 state machine).
@@ -242,7 +240,7 @@ substitution site, binding 43 free, `GiMaterial` 32 B at `raytrace.rs:1478`, ker
 named lines). **Review rulings (Q1–Q5 from the draft's section 0):**
 
 - **Q1 — vertex normals in Base traced reflections (R1), shading-normal prepass is the RD3 escalation, not a planned path.**
-  The draft's cheap settling test was RUN before approval (K3, 2026-07-24): DamagedHelmet (the
+  The draft's cheap settling test was RUN before approval: DamagedHelmet (the
   canonical heavily-normal-mapped asset — a harder case than Peter's scans), metallic 1.0 /
   roughness 0.1 / sharp point light, headless render with the normal map wired vs unwired, numeric
   region diff. Result: highlight **shape and position identical**; normal-map contribution is sparse
@@ -488,7 +486,7 @@ wrong is wasted work, and the black-car defect is what makes reflections unusabl
   textured hero asset renders black and textureless — RD4's hit shading returns
   `emissive + flat per-object albedo × sun-bounce`, no environment term, no maps, so the
   substitution (RD1) replaces the prefiltered env that WAS the car's look with a near-black
-  signal). Diagnosis confirmed in code + renders same day (K3).
+  signal). Diagnosis confirmed in code + renders same day.
 - *Read-back:* RD4/RD7; the kernel reflection block (`raytrace.rs:1040-1116`); the fs_pbr
   substitution (`render_scene.wgsl:1513-1541`); `gi_materials` population (`render_scene.rs:3976`);
   T2-A's bindless-texture extension (commit `62244989`, whole — the field pattern this phase

@@ -267,7 +267,7 @@ dragging, until you let go — no matter where your hand travels.**
 
 ## 5. Phasing
 
-### P1 — Ownership + terminal broadcast (the vertical slice) — ✅ LANDED 2026-07-08 @ `9bb8ca86` (L3; report `docs/landings/2026-07-08-drag-capture-p1.md`)
+### P1 — Ownership + terminal broadcast (the vertical slice) — ✅ LANDED 2026-07-08 (L3; report `docs/landings/2026-07-08-drag-capture-p1.md`)
 
 - **Entry state:** tip contains `556578c3` (instrumentation + stopgap):
   `git log --oneline -5` shows it; `rg -n "overlay_drag_active" crates/manifold-app/src/ui_root.rs`
@@ -320,7 +320,7 @@ dragging, until you let go — no matter where your hand travels.**
 - **Test scope:** focused (`-p manifold-ui --lib`, ui_root tests); workspace sweep
   deferred to P3 (final phase of the pass).
 
-### P2 — Z-aware window seams + stopgap retirement — ✅ LANDED 2026-07-08 @ `12683746` (L1; VD-017/018; report `docs/landings/2026-07-08-drag-capture-p2.md`)
+### P2 — Z-aware window seams + stopgap retirement — ✅ LANDED 2026-07-08 (L1; VD-017/018; report `docs/landings/2026-07-08-drag-capture-p2.md`)
 
 - **Entry state:** P1 landed (`rg "drag_owner" crates/manifold-app/src/ui_root.rs`
   non-empty, `overlay_drag_active` zero).
@@ -346,7 +346,7 @@ dragging, until you let go — no matter where your hand travels.**
   (Deferred, section 7); keeping `swallow_drag` "for safety".
 - **Test scope:** focused.
 
-### P3 — Immediate-drag threshold for precision surfaces — ✅ LANDED 2026-07-08 @ `f23fa1f1` (L1; VD-019 = L4 feel pass; report `docs/landings/2026-07-08-drag-capture-p3.md`)
+### P3 — Immediate-drag threshold for precision surfaces — ✅ LANDED 2026-07-08 (L1; VD-019 = L4 feel pass; report `docs/landings/2026-07-08-drag-capture-p3.md`)
 
 - **Entry state:** P1+P2 landed.
 - **Read-back:** D6 + section 3.4; restate the click-forfeiture consequence.

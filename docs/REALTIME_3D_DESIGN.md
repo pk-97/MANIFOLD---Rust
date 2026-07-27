@@ -358,7 +358,7 @@ every value — instances vanish behind ridges, drop shadows on the terrain, sit
 the fog. This is also the "huge scenes" lever: 64 objects × hundreds of instances
 each at a bounded draw-call count.
 
-### Audit (verified 2026-07-11 @ `8bdc4a70`)
+### Audit (verified 2026-07-11)
 
 | Piece | Where | State |
 |---|---|---|

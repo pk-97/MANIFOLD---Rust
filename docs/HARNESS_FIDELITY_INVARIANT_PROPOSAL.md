@@ -65,7 +65,7 @@ Scope note (per `dont-cascade-redesign`): this is bounded — one seam extractio
 
 Diagnosis first: ask *does this duplication carry information the other copy doesn't?* No → extract (case 1). Yes → automate the equivalence (case 2). Either way, the manual match-audit is the thing being retired.
 
-## 6. Resolved (Fable, 2026-07-10)
+## 6. Resolved
 
 - **Input vs. code boundary — resolved by the caller test (section 3, amendment 1).** "No parallel render-pass assembly" needed the sharper line, and it's now the input-presence-vs-caller-identity test folded into section 3. The thumbnail substitution is clean: a labeled test input, consumed by shared render code.
 - **Does the single seam conflict with the winit-side split? No — verified against current code.** Every live immediate pass (clips ~4063, names ~4353, lanes ~4368, overlays ~4488–4496 in `app_render.rs`) draws into the offscreen *before* the drawable is acquired (~4719). The seam ends at the offscreen, unchanged from P1's boundary; the fast path, `next_drawable`, the offscreen→drawable blit, and `present_drawable` stay in `present_all_windows`. Only the immediate passes move in.

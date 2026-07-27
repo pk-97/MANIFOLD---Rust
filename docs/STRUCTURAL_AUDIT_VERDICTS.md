@@ -125,7 +125,7 @@ Sonnet waves (no design needed, briefs can cite this doc + the backlog fix shape
 5. BUG-069: excluded from architecture verdicts (see section 2 table).
 6. Not assumed copy-paste; comparison step is first in the A5 Sonnet brief (section 3).
 
-## 5 Re-audit amendment (Opus, 2026-07-09)
+## 5 Re-audit amendment
 
 Row-by-row re-audit of the dossier section 2 table against all 82 backlog entries — the pass section 0 deferred.
 **The table holds:** fix-status correct 82/82 (the 48-open / 20-struct / 14-patch totals reconcile

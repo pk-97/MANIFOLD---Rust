@@ -6,7 +6,7 @@ stems (an L4 check). Header corrected 2026-07-05 (it still read "IN PROGRESS").
 Branch `live-audio-triggers` (off `audio-clip-detection`). Created 2026-06-18.
 
 **section 8 addendum (2026-07-07): Param triggers — audio fires the Trigger controls.
-P1+P2+P3a LANDED on main 2026-07-07 @ `3089e0a3`** (merged from
+P1+P2+P3a LANDED on main 2026-07-07** (merged from
 `wave/param-triggers`, full workspace + gpu-proofs + clippy gate green pre- and
 post-merge): the engine fires, the renderer feeds generators AND effect chains,
 Strobe proves the effect-side reachability at L1. **P3b (the UI drawer to
@@ -37,7 +37,7 @@ clip edge (default) OR the transient trigger OR both."*
   `mode.wants_clip_edge()` without checking `enabled` — a disarmed Transient config
   silently killed clip-launch triggering for its layer, surviving save/reload with no
   badge (the badge correctly hides when disarmed; the engine didn't apply the same
-  rule). Fixed @ `62a75cee`: disabled-means-absent now has one owner,
+  rule). Fixed: disabled-means-absent now has one owner,
   `AudioTriggerMod::clip_edge_enabled()`. (2) The audio-analysis gate was blind to section 8
   configs: `has_active_audio_mods` (capture on/off) and `analysis_consumed_sends` (D4
   per-send gate) counted per-param audio mods and section 1–section 7 send routes but not
@@ -608,9 +608,9 @@ app       PanelAction + dispatch + state_sync card view                WIRE
       once more in the main checkout after merging a concurrent BUG-052 (sample-rate-dependent-detection) landing
       (`216549e2`/`6e0e8988`) that arrived while this was landing — both green
       (workspace suite, `manifold-core` 318, `gpu-proofs` 1245, workspace clippy).
-      Merged `--no-ff` into `main` @ `3089e0a3`, pushed, rejected once (someone
+      Merged `--no-ff` into `main`, pushed, rejected once (someone
       else landed first — the sample-rate-invariance fix), re-fetched/merged/
-      re-gated/pushed successfully @ `a8993dbc`. `wave/param-triggers` confirmed
+      re-gated/pushed successfully. `wave/param-triggers` confirmed
       an ancestor of `origin/main` before deleting the branch + worktree.
       **Explicitly owed, logged, not done here:** Peter's live feel-pass (L4) on
       the whole feature — no audio device, no interactive GPU output in this

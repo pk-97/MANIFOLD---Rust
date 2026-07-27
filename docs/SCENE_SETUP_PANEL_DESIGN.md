@@ -75,8 +75,6 @@ rows in v1 — section 9 Deferred).
 
 ---
 
-## 1. Audit — what exists (verified 2026-07-16, this session, tip `6fb1714d`)
-
 Instruction to executors: **extend, don't redesign.** Re-verify anchors at phase entry; a
 moved line is fine, a missing symbol is an escalation.
 

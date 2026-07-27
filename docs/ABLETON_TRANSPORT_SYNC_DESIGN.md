@@ -391,7 +391,7 @@ Demo: none — L1 (pure logic; behavior demos land in P2/P4).
 Forbidden: any I/O in the module; any engine type imported; widening ε or
 retry caps beyond section 3 without a doc edit.
 
-### P2 — FakeAbleton harness + failure-catalog scenarios (Sonnet)
+### P2 — FakeAbleton harness + failure-catalog scenarios
 
 Entry: P1 merged; `cargo test -p manifold-playback --lib transport_sync` green.
 Read-back: section 2 (the catalog), section 4 transition table, T-row test names from P1.

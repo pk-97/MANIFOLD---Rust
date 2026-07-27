@@ -343,7 +343,7 @@ this is the instrument-check that catches the next one before it costs a show.
 
 ## 6. Phasing
 
-### P1 — Seams + oracle + proof suite (one session) — ✅ SHIPPED 2026-07-10 @ `ef12c14b`
+### P1 — Seams + oracle + proof suite (one session) — ✅ SHIPPED 2026-07-10
 
 - **Entry state:** clean main; `cargo test -p manifold-recording` passes (trivially —
   zero tests); ffprobe present (`which ffprobe`). Re-verify anchors:
@@ -383,7 +383,7 @@ this is the instrument-check that catches the next one before it costs a show.
   `-p manifold-app --lib`); no workspace sweep (blast radius is one crate + one
   signature-stable caller).
 
-### P2 — Kill test + soak bin + runbook (one session) — ✅ SHIPPED 2026-07-10 @ `091290e3`
+### P2 — Kill test + soak bin + runbook (one session) — ✅ SHIPPED 2026-07-10
 
 - **Entry state:** P1 landed; its gates re-run green.
 - **Read-back:** this doc section 4 item 5 + section 5; P1's phase report.

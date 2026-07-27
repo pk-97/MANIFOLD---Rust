@@ -289,7 +289,7 @@ Each commit: primitive code + WGSL + preset graph replacing the effect + parity 
 
 ### 6.3 Multi-pass primitives + effects (4 commits)
 
-**Update 2026-05-11:** the original recipes assumed Bloom, Halation, and Watercolor could decompose into separable-Gaussian + mip-chain primitives. Auditing the legacy shaders showed:
+the original recipes assumed Bloom, Halation, and Watercolor could decompose into separable-Gaussian + mip-chain primitives. Auditing the legacy shaders showed:
 
 - **Bloom** uses Unity-style Blur9 tent + Blur13 filmic kernels with a ping-ponging dual mip chain — no separable-Gaussian path.
 - **Halation** fuses threshold-tint INTO the H Gaussian (per-tap, not as a pre-pass). Splitting it would store an fp16 intermediate texture and lose bit-exact parity (same reason Glitch was fused in section 6.1).
@@ -958,8 +958,6 @@ That's the wedge nobody else is building. Convergence with TouchDesigner on the 
 
 ## 11. Unified authoring registry — pre-implementation research (2026-05-18)
 
-> **Status: complete, 2026-05-18.** Landed across 14 commits over two sessions. Chain runtime, editor snapshot, and primitive registry are all single-path; ~4500 lines of legacy deleted; every shipping effect's metadata + canonical graph lives in `assets/effect-presets/*.json` with `presetMetadata` populated. Adding a new effect is now a JSON drop. Manual UI walkthrough (picker, MIDI mapping on Liveschool fixture) is the one remaining check.
-
 Before starting the JSON-authoritative migration sketched at the end of section 10, this section captures an audit of the existing registries and consumers, with refinements to the original plan. The architectural target stays the same — *one source of truth per category, no hand-maintained lists* — but the migration is more nuanced than first stated.
 
 ### 11.1 What "registry" currently means — three overlapping systems
@@ -1125,7 +1123,6 @@ After this migration the system has *one source of truth per category*:
 - **Plugin warmup** — `inventory::submit!(PluginPrewarm)` from the 3 plugin-using primitives, period.
 
 No hand-maintained lists. No drift tests. No "did you remember to update X." Adding a primitive = drop 2 files + 1 `mod` line. Adding a preset = drop 1 JSON file. Same shape whether it's authored by Peter, Claude, an AI agent, or eventually a user via the graph editor's "Save Preset" affordance.
-
 
 ## 12. Node-type taxonomy (2026-05-18)
 

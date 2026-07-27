@@ -8,7 +8,7 @@ Peter's directive (2026-07-16): *"let's get a design doc for all of the bug fixe
 
 Instrument frame: these are the "why won't this load" and "why is it black" moments during content-making week. The user-visible contract after this doc ships: **a spec-legal static glb either renders correctly or fails with a named, actionable reason — never silently black, never rejected for something we support.**
 
-## 1. Audit — what exists (verified 2026-07-16, `origin/main` @ `8d9a57b8`)
+## 1. Audit — what exists (verified 2026-07-16, `origin/main`)
 
 | Piece | Where | State |
 |---|---|---|

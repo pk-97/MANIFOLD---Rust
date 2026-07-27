@@ -132,7 +132,7 @@ flows are its observability net. Third bite → fold the pattern into `ui-state-
 
 ## 4. Phasing
 
-- **P0 — orphan purge + un-suppression. SHIPPED 2026-07-09 (Fable).** Deleted: all 10 orphan
+- **P0 — orphan purge + un-suppression. SHIPPED 2026-07-09.** Deleted: all 10 orphan
   fields, their emit writes, and the write-only `cached_osc_timecode` cache the deletion
   orphaned in turn (field, maintenance block, two initializers); `send_export_progress`
   demoted to a documented transport keep-alive; stale FIXME and struct-level

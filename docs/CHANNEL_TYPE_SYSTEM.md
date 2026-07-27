@@ -6,8 +6,6 @@
 
 **Established:** 2026-05-27. Sign-off pass on 2026-05-27 added a Phase 0 (end-to-end smoke test on one typed family before Phase 1 hardens the foundation) and baked in five revisions to the original design: sample count rides on the wire's runtime interface; pad fields use an explicit per-field marker instead of a `_pad*` name-prefix heuristic; one canonical macro form per typed family enforced by lint; the `well_known` registry + collision test are emitted from a single source list via macro; the Permissive allow-list is a `pub const` in the validator that the test enumerates against. section 13 resolutions and the relevant sections (section 3.1, section 7.5, section 8.2, section 8.6, section 9.5, section 10, section 11.4, section 12.1) reflect these decisions. The pad-marker mechanism — originally walked-back to a `_pad*` heuristic during Phase 4a — landed as designed in Phase 4b.7 via the `// @channel_skip` preprocessor (section 8.2, section 14.9).
 
-**Implementation log (2026-05-27 → 2026-05-28):**
-
 - **Phase 0 shipped** — commit `c59427e4`. Throwaway smoke test on `EdgePair` validated the design end-to-end before Phase 1 hardened anything.
 - **Phase 1 shipped** — commit `6a7a469c`. Core types (`ChannelName`, `ChannelElementType`, `ChannelSpec`, reshaped `ArrayType`, `MatchMode`, std430 calculators, `well_known_channels!` macro + registry, `channels_compatible` predicate, `GraphError::ChannelMismatch(Box<ChannelMismatchInfo>)`). Channel-name registry + collision test emit from a single source list per section 7.5 resolution.
 - **Phase 2 shipped** — commit `05463952`. `primitive!` macro extended with `Channels[name: Type, ...]` inline syntax and `Channels[permissive]` modifier. TT-muncher `__channels_specs!` handles mixed `well_known::*` ident and inline string literal names. Four smoke primitives + six tests exercise the syntax end-to-end through the validator.
@@ -24,8 +22,6 @@
 **Phase 5 remains — workspace test gate + canonical-fixture visual sanity check.** Peter did informal eyeball verification on the three migration-affected presets during Phase 4b.1 sign-off; the formal `cargo test --workspace` + workspace clippy + GPU frame-time baseline check on `Liveschool Live Show V6 LEDS.manifold` still wants doing. Saved for whenever the next end-to-end testing session happens.
 
 **section 17 (Texture2D channel signatures) — Phase 17.A shipped 2026-05-28.** Extends the Channel type system to decorate Texture2D ports with a four-slot RGBA channel signature. Same well_known registry, same FNV-1a-64 const-hash interning, same compile-time decidable match. Untyped Texture2D stays the back-compat default. Validator surfaces a structured `TextureChannelMismatch` carrying the first diverging slot index. Macro: `Texture2D[R: Name, G: Name, B: Name, A: Name]`. Migrated `node.optical_flow_estimate` to declare the Watercolor `(R: FLOW_X, G: CONFIDENCE, B: FLOW_Y, A: VALID)` convention; downstream consumer migrations (the bug-fix that motivated this) live in a follow-up commit. See section 17 for the full surface.
-
-**Scheduled follow-up:** ~~Build the explicit-marker (`// @channel_skip`) preprocessor for `wgsl_compute` pad-field handling.~~ Shipped 2026-05-28 in commits 4b.6 + dd6889e3. See section 8.2 and the section 14.9 historical note for the final form.
 
 **Acceptance criteria after Phase 6:** 862/862 manifold-renderer lib tests passing; clippy clean; `check-presets` reports 49/49 OK; three affected presets (BlackHole, ComputeStrangeAttractor, ParticleText) visually verified; manifold-app binary builds; companion docs reference CHANNEL_TYPE_SYSTEM.md as the type-system source of truth.
 
@@ -1332,8 +1328,6 @@ A `tx` channel might carry "this is normalized [0, 1]" or "this is in pixels" or
 ### 14.8 Channel-channel arithmetic shortcut
 
 A future `node.channel_math_pairwise` that takes two Channels arrays and applies an op channel-wise (Channels A's `x` + Channels B's `x`, A's `y` + B's `y`, etc.). Currently expressible via repeated `select_channel` + `array_math` + `pack_channels`. Worth a single-atom shortcut when the pattern shows up enough to be visible.
-
-### 14.9 Explicit-marker preprocessor for `wgsl_compute` pad-field handling — **shipped 2026-05-28**
 
 Historical note. The Phase 4a `wgsl_compute` naga walk shipped a `_pad[0-9]*` name-prefix heuristic for skipping padding fields, walked back from the sign-off's "explicit per-field marker" decision. Phase 4b.6 (`extract_channel_skip` preprocessor) and Phase 4b.7 (integration + heuristic deletion) finished the work on 2026-05-28. See section 8.2 for the current contract.
 

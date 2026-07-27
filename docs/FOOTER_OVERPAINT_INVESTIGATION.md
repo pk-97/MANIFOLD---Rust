@@ -14,7 +14,7 @@
 > this doc. Anything in this file keyed to the "dark" reading (section 4.2, section 4.4's brightness numbers, section 5's
 > (A)/(B) fork, section 7's ruled-out list) must be re-derived once the atlas readback itself is validated.
 
-**UPDATE 2026-07-08 (Fable): fork section 5 resolved — it's (B).** A patched trace
+**UPDATE 2026-07-08: fork section 5 resolved — it's (B).** A patched trace
 (commits `28d74981`, `6332df8f`: footer-pass draws included, clip early-outs
 logged) plus one live repro proved all 8 footer nodes draw with correct bounds,
 `scissor=None`, on every clear frame. The footer is innocent; something
@@ -30,7 +30,7 @@ still wanted. This branch's binary is the verification rig for P1.
 
 **Status: UNSOLVED.** Two shipped "fixes" did not fix it. This document is the full
 history, evidence, reasoning, and the current impasse. It is written to let a fresh
-reasoner (Fable) pick up without re-deriving. Author: Opus, 2026-07-08 session.
+reasoner pick up without re-deriving. Author: Opus, 2026-07-08 session.
 
 Instrumentation lives on branch `fix/bug-060-footer-leak-trace` (worktree
 `.claude/worktrees/footer-leak`). **None of the debug code is on `main`.** The two

@@ -277,7 +277,7 @@ bad_guy recovery bar guard-green; per the phase gate, NOT integrated:
    tears 8→12/25 — but bad_guy 0→8/45, because the floored kick candidates
    are simply small (31/39 under 160 units; instrumented per-kick).
    **SHIPPED 2026-07-06 late (Peter: "might as well use it and set that as
-   the baseline") @ `61c2b0fd`** as the masked-novelty third criterion in
+   the baseline")** as the masked-novelty third criterion in
    `reduce_send` (constants `MASKED_ONSET_MARGIN_DB 3.0` / `MASKED_ONSET_DELTA
    80.0` / `SUSTAIN_MEDIAN_HOPS 16`; delta plateau-swept 40–200, guards hold
    70–200, cliff at 60). Integration reproduced the prototype's 25-fixture

@@ -26,7 +26,7 @@
 **Fixture:** no BUG-060-worst-case fixture is needed. A realistically heavy scene for general coverage suffices; the existing `project:<abs-path>` real-project load (the Liveschool fixture) provides it. The D7 "which generator, how many effects" question is closed — not asked.
 
 Phasing is unchanged in shape (P0 beachhead → P1 seam extraction → P2 repoint the runner + captures → P3 editor window); only P0's deliverable and gate change, restated in the P0 phase block below. Where the sections further down still speak of the red bracket, the differential-as-gate, or BUG-060 as the target, **this block wins.**
-**Prerequisites:** none unbuilt. Builds on UI_AUTOMATION P1–P2 (shipped: the `--script` driver + `AutomationAction`) and UI_CLIP_AND_Z P1 (shipped: per-panel `begin_region` wrap). Relates to BUG-060 (CLOSED 2026-07-10 @ `cc4eeb37`); fixes BUG-071 in P0 (D9c).
+**Prerequisites:** none unbuilt. Builds on UI_AUTOMATION P1–P2 (shipped: the `--script` driver + `AutomationAction`) and UI_CLIP_AND_Z P1 (shipped: per-panel `begin_region` wrap). Relates to BUG-060 (CLOSED 2026-07-10); fixes BUG-071 in P0 (D9c).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
 **The governing insight: the app renders its main-window UI through a stateful GPU atlas cache (`UICacheManager`), and *not one test touches that code.* Both existing headless harnesses reimplement a lookalike of it — one renders the whole tree fresh every frame on the GPU (`render_ui_to_png`), the other walks node bounds in pure CPU with no pixels (`footer_leak_probe`). A stale-pixel bug lives only in the cache's incremental update, so both lookalikes are structurally blind to it. That blindness is why BUG-060 has been "fixed" and reopened ~4 times: every fix was proven green in a path the performer never runs.** This design makes the app's real render path callable, drives it from a single headless harness that also feeds real input, and proves the harness faithful by making it fail on a known-broken commit before it's trusted.
@@ -227,10 +227,6 @@ The main window is the only one with the stale-pixel class, so it is the only on
 
 ## Phasing
 
-> **Anchor note (2026-07-10 class-kill).** The BUG-060 fix (`39836352`, landed `cc4eeb37`) refactored the UI renderer's flush machinery: clip+depth are now bound per command at enqueue and all flush-time scissor inference was deleted (invariant in `docs/DEVELOPMENT_REFERENCE.md`, "UI Renderer Invariant"). So the section Audit/section 3/section 4 anchors into `app_render.rs` and the renderer must be re-derived against current `main` before each phase. P0's worker did this and confirmed no drift; **P1–P3 must repeat it for their own anchors.** (Historical detail — P0 built-unlanded on the pre-fix renderer, the old differential's mis-placed bands, and the BUG-060 hunt — is in git history and the BUG-060 backlog entry; it is not re-litigated here.)
-
-### P0 — Faithful full-app headless render + inspectable captures (zero live-code change) — SHIPPED 2026-07-10
-
 The vertical slice: real fixture → real cache → real pixels → a saved full-app PNG + a drawer-tween filmstrip a reviewer looks at. No extraction yet; the driver calls the public `UICacheManager` API directly in the app's order.
 
 - **Entry state:** `rg -n "fn render_dirty_panels|fn atlas_texture|fn invalidate_inspector|fn invalidate_all|fn ensure_atlas" crates/manifold-renderer/src/ui_cache_manager.rs` matches the audit lines (175/163/126/101/131); `rg "fn panel_cache_info" crates/manifold-app/src/ui_root.rs` exists; `footer_leak_probe` compiles under `--features ui-snapshot`.
@@ -256,8 +252,6 @@ The vertical slice: real fixture → real cache → real pixels → a saved full
 - **Forbidden moves:** widening the extraction into content-drain / playback / perform-mode (scope fence — the seam is exactly the two blocks) · changing behavior "while I'm in here" · adding a flag to toggle old vs new path · leaving `present_all_windows`'s inline composite alive in parallel · crossing a crate boundary (all of this is App-internal).
 - **Test scope:** `manifold-app` + `manifold-renderer --features gpu-proofs` focused; workspace sweep at end of phase.
 
-### P2 — Repoint the input driver and headless harness at the seam (kill the drift) — SHIPPED 2026-07-10
-
 - **Entry state:** P1 landed; `apply_ui_frame_invalidations` + `composite_main_ui_frame` exist and the app calls them.
 - **Read-back:** read `script.rs:150–260` (Runner + step), `:403` and `:542` (its rebuild), `:651` (its render call). Restate D3, D9 (filmstrip + stamp constraints), and the forbidden-moves list.
 - **Deliverables:** the P0 differential driver and `script.rs`'s `Runner` both drive frames through `apply_ui_frame_invalidations` + `composite_main_ui_frame`. The Runner's parallel `rebuild()` invalidation logic is **deleted**, not wrapped. `render_ui_to_png`'s fake whole-tree *panel* pass is replaced by the seam; its genuinely-separate immediate-mode passes (clips, thumbs, automation lanes, overlays — the live app draws these as immediate passes too, `app_render` 4b/5) are kept only after confirming they match the live app's passes. `⚠ VERIFY-AT-IMPL (P2): diff render_ui_to_png's clip/thumb/lane/overlay passes against the live immediate-mode passes; a pass that doesn't match is an escalation, not a silent keep.` Plus the two agent-legibility captures (D9): **filmstrip mode** — save the composited frame after every stepped frame between two script actions (the `Step` clock, script.rs:225; fixed 60 fps DT, :55–56) and assemble a contact sheet (one PNG, N tiles); **pointer stamp** — a crosshair at the Runner's synthesized gesture points (script.rs:343–398), drawn CPU-side on the readback bytes after that frame's assertions have run.
@@ -265,8 +259,6 @@ The vertical slice: real fixture → real cache → real pixels → a saved full
 - **Acceptance demo:** both ui-flows green through the shared seam, plus a contact-sheet PNG of the inspector drawer tween (8–12 tiles) read by the reviewer. **L3** (scripted flows drive the real input path — the target level since UI_AUTOMATION landed).
 - **Forbidden moves:** keeping the Runner's `rebuild` "just for scripts" (adapter/parallel-path — forbidden by name) · silently keeping a `render_ui_to_png` panel pass that diverges from the live passes · drawing stamps or any annotation into a texture an assertion reads — overlays are CPU-side on the readback copy only (D9b) · widening scope to refactor the flow format.
 - **Test scope:** `manifold-app --features ui-snapshot` + the ui-flows; workspace sweep at end.
-
-### P3 — Generalize the scaffolding to the editor window (and stub the monitor path) — SHIPPED 2026-07-10 (expanded: the editor scene was a lookalike; extracted `editor_frame.rs` seam to fix it, per Peter's option-A call)
 
 - **Entry state:** P2 landed; the shared driver + readback + fixtures are the single harness framework.
 - **Read-back:** read `present_graph_editor_window` (3206–3400), `fixtures::generator_editor_fixture`, and D5. Restate that the editor is cacheless and gets its OWN invariants, not the atlas differential.

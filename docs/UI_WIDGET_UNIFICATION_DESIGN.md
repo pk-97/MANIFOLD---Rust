@@ -522,7 +522,7 @@ none of its gestures through `IntentRegistry` — full P1-style `register_intent
 derivation would be a panel-wide dispatch migration, left as a follow-up.
 
 **P3 — full derivation for the slider's remaining gestures (re-briefed 2026-07-13; D13–D15 govern).**
-History: **NOT ATTEMPTED 2026-07-13 (Sonnet)** — "heterogeneous, non-uniform
+History: **NOT ATTEMPTED 2026-07-13** — "heterogeneous, non-uniform
 label-mapping/value-cell-edit logic… comparable in scope to P1." The design-pass audit
 confirmed the deferral was hiding real design gaps, not just budget (section 1b): the
 committed ValueCell row was wrong, EditValue can't ride the registry, and label

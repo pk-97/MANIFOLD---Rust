@@ -236,7 +236,7 @@ channel, no new thread, no shared state.
 
 ## 4. Phasing
 
-### P1 — Core action model + audio-fired steps (one session) — SHIPPED 2026-07-08 @ `43a7f508` (hotfix `2682f9f4`)
+### P1 — Core action model + audio-fired steps (one session) — SHIPPED 2026-07-08 (hotfix `2682f9f4`)
 - **Entry:** `14e0a90a` or later on main; re-verify the section 1 anchors for
   `audio_mod.rs:344-381` and `modulation.rs:390-462`.
 - **Read-back:** this doc section 1–section 3; LIVE_AUDIO_TRIGGERS section 9.1 (U1–U6); restate D1,
@@ -265,7 +265,7 @@ channel, no new thread, no shared state.
 - **Demo:** none — L1 (no UI surface yet; the vertical slice lands in P3).
 - **Forbidden moves:** F1–F4 (section 6).
 
-### P2 — Engine clip edge + mode gating (one session) — SHIPPED 2026-07-08 @ `d9b46422`. Content-thread `MANIFOLD_RENDER_TRACE` gate reasoned not measured, same wall as VD-014 — see VD-016.
+### P2 — Engine clip edge + mode gating (one session) — SHIPPED 2026-07-08. Content-thread `MANIFOLD_RENDER_TRACE` gate reasoned not measured, same wall as VD-014 — see VD-016.
 - **Entry:** P1 merged; re-verify `engine.rs` tick structure and
   `generator_renderer.rs:350-360` (the semantics being mirrored).
 - **Read-back:** D3, D5 (including the divergence consequence — do NOT sync to
@@ -286,7 +286,7 @@ channel, no new thread, no shared state.
 - **Demo:** none — L1 (surface still P3).
 - **Forbidden moves:** F5, F1.
 
-### P3 — Drawer UI + vertical slice (one session) — SHIPPED 2026-07-08 @ `fd3f767e`. Performer gesture (Kick → BasicShapes variant, Step/Wrap, 4-bar loop) is Peter's L4 feel-pass, owed — see VD-017.
+### P3 — Drawer UI + vertical slice (one session) — SHIPPED 2026-07-08. Performer gesture (Kick → BasicShapes variant, Step/Wrap, 4-bar loop) is Peter's L4 feel-pass, owed — see VD-017.
 - **Entry:** P1+P2 merged. Re-verify `build_toggle_trigger_row` /
   `build_audio_mod_drawer` shapes (section 9.2 U-P2 moved them recently).
 - **Read-back:** D8; AUDIO_MODULATION_DESIGN section 10.2; the section 9.2 U-P2 account of

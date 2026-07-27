@@ -302,7 +302,7 @@ thread).
   fix is a new fixture + `schema.rs` update — the failure mode is a loud
   version error, never a wrong import.
 
-## 8 Phasing (Sonnet)
+## 8 Phasing
 
 - **P1 — Parse.** Fixtures (section 3.1), `als/` module, `NormalizedSet`, version
   pinning. Tests: golden normalized output per fixture; tempo/warp math unit
