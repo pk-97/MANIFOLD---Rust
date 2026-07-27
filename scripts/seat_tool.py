@@ -9,10 +9,13 @@ so profiles are never edited directly.
   seat_tool assign <slot> <model>    rotate haiku|sonnet|opus to <model>
 
 assign updates providers.toml, runs `cc-fleet repair`, verifies the
-regenerated profile, updates the naming-guard slot map, then prints the
-remaining manual follow-ups (AGENT_ROUTING table, seat-proxy memory) — prose
-docs stay human-edited by design.
+regenerated profile, then prints the remaining manual follow-ups
+(AGENT_ROUTING table, seat-proxy memory) — prose docs stay human-edited by
+design. The teammate naming guard needs NO sync step: it derives the slot
+map from the session env at spawn time; only its SHORT_LABEL table is
+checked here for lane-label coverage.
 """
+import importlib.util
 import json
 import re
 import subprocess
@@ -32,16 +35,12 @@ SLOT_TO_ENV = {
     "sonnet": "ANTHROPIC_DEFAULT_SONNET_MODEL",
     "opus": "ANTHROPIC_DEFAULT_OPUS_MODEL",
 }
-# Lane-name labels for the naming guard. Fallback: last dash segment — ugly;
-# extend this map when onboarding a model.
-SHORT_LABEL = {
-    "deepseek-v4-flash": "flash",
-    "deepseek-v4-pro": "pro",
-    "glm-4.7": "glm47",
-    "glm-5.2": "glm52",
-    "k3": "k3",
-    "kimi-for-coding": "k27",
-}
+def load_naming_guard():
+    """The guard owns SHORT_LABEL and the env-derived slot resolution."""
+    spec = importlib.util.spec_from_file_location("naming_guard", NAMING_GUARD)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def die(msg):
@@ -85,22 +84,13 @@ def assign(slot, model):
         die(f"profile verify failed: {SLOT_TO_ENV[slot]} = {actual!r}, expected {model!r}")
     print(f"profile verified: {SLOT_TO_ENV[slot]} = {model}")
 
-    # 3. naming-guard slot map
-    label = SHORT_LABEL.get(model)
-    if not label:
-        label = re.sub(r"[^a-z0-9]", "", model.split("-")[-1].lower())
-        print(f"WARNING: no short label for {model!r}; using {label!r} — extend SHORT_LABEL")
-    guard = NAMING_GUARD.read_text()
-    new_guard, n = re.subn(
-        rf'("{slot}":\s*")[^"]+(")',
-        rf"\g<1>{label}\g<2>",
-        guard,
-        count=1,
-    )
-    if n != 1:
-        die(f"SLOT_FOR_MODEL[{slot!r}] not found in {NAMING_GUARD}")
-    NAMING_GUARD.write_text(new_guard)
-    print(f"naming-guard SLOT_FOR_MODEL[{slot!r}] = {label!r}")
+    # 3. naming-guard lane label (guard resolves the slot map from env itself)
+    guard = load_naming_guard()
+    _, label = guard.backend_for_slot(slot, {SLOT_TO_ENV[slot]: model})
+    if model not in guard.SHORT_LABEL and not model.startswith("claude-"):
+        print(f"WARNING: no SHORT_LABEL for {model!r} in {NAMING_GUARD.name}; "
+              f"lanes will be named {label!r} — extend the guard's map")
+    print(f"naming-guard lane label for {slot!r} = {label!r} (derived from env at spawn time)")
 
     # 4. warnings: litellm must serve it; tier guard must classify it
     if f"model_name: {model}" not in LITELLM_CONFIG.read_text():
@@ -122,14 +112,13 @@ done. Manual follow-ups (prose stays human-edited):
 
 def show():
     env = json.loads(PROFILE.read_text())["env"]
-    guard = NAMING_GUARD.read_text()
+    guard = load_naming_guard()
     served = LITELLM_CONFIG.read_text()
     print(f"{'slot':8} {'providers.toml':22} {'profile env':22} {'lane label':10} served?")
     for slot in SLOT_TO_TOML_KEY:
         toml_val = read_slot_from_providers(slot) or "—"
         env_val = env.get(SLOT_TO_ENV[slot], "—")
-        m = re.search(rf'"{slot}":\s*"([^"]+)"', guard)
-        label = m.group(1) if m else "—"
+        _, label = guard.backend_for_slot(slot, env)
         yes = "yes" if f"model_name: {toml_val}" in served else "NO"
         flag = "" if toml_val == env_val else "  <- DRIFT"
         print(f"{slot:8} {toml_val:22} {env_val:22} {label:10} {yes}{flag}")
