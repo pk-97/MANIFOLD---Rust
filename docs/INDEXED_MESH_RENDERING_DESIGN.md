@@ -17,13 +17,13 @@ _Original approved framing, kept for the record:_ APPROVED 2026-07-18. Supersede
 stub in `RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md` §Deferred (which framed R4 as a graph-wide
 re-index; this design rejected that — see D1). P0 was a proof-of-concept STOP gate; it did its job.
 
-**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5–§6 before any phase.
+**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5 (Phase briefs)–§6 before any phase.
 
 ## 1. Intake — what this does on stage
 
 Peter's multi-scene photoscan shows (e.g. `MeshAudio.manifold`: three CC0 flower scans, 0.6–1.4M
 tris each, composited live at 3840×2160@60) drop below 60fps and dip under 40. The measured
-residual after AO-strip and the shipped shadow/IBL caching (BUG-189/197) is ~100% `render_scene`'s
+residual after AO-strip and the shipped shadow/IBL caching (BUG-189 (import-graph-10ms-resolution-independent-gpu-flo…)/197) is ~100% `render_scene`'s
 main geometry pass, and it is **vertex-bound** on these assets (resolution-insensitive in
 measurement: 4K and 1440p render the same). The instrument goal: a heavy imported scene holds 60fps
 without the performer hand-decimating meshes before every gig — the geometry cost stops being the

@@ -4,19 +4,19 @@
 
 **Product bar (Peter, verbatim intent):** a model the user bought or downloaded imports on drag-and-drop with no side trips into other software. Where an extension isn't rendered yet, the model still loads and looks good, with a report line — never wrong, never silent. Industry-standard extensions get covered on a roadmap (Lane W6 produces it), not left as permanent xfails.
 
-**What today already proved (context for every lane):** BUG-204→208 + BUG-211 all came from seams between separately-landed phases and inputs the Khronos suite never exercises. The countermeasure that worked is the hostile shelf: `tests/fixtures/gltf/hostile/` — every glb there runs import→validate→build (CPU, always-on) and render+framing invariants (gpu-proofs) via `hostile_fixtures_*` in `crates/manifold-renderer/src/node_graph/gltf_import.rs`. This wave extends that: `tests/fixtures/gltf/pending/` holds each lane's gate fixture; **a lane is DONE when it moves its fixture from `pending/` to `hostile/` and the full sweep stays green.** Never move a fixture you didn't fix; never delete one.
+**What today already proved (context for every lane):** BUG-204 (animated-glb-import-rejected-by-retrigger-card-l…)→208 + BUG-211 (conformance-harness-advancing-clock-cant-converg…) all came from seams between separately-landed phases and inputs the Khronos suite never exercises. The countermeasure that worked is the hostile shelf: `tests/fixtures/gltf/hostile/` — every glb there runs import→validate→build (CPU, always-on) and render+framing invariants (gpu-proofs) via `hostile_fixtures_*` in `crates/manifold-renderer/src/node_graph/gltf_import.rs`. This wave extends that: `tests/fixtures/gltf/pending/` holds each lane's gate fixture; **a lane is DONE when it moves its fixture from `pending/` to `hostile/` and the full sweep stays green.** Never move a fixture you didn't fix; never delete one.
 
 ## 0. Orchestration contract
 
 - One lane per session. Worktrees from the slot ring ONLY (`scripts/agent-worktree.py acquire <lane> <branch> --tip HEAD`); verify base = `origin/main` tip (step-0 guard); release the slot at session end.
-- Landing per `.claude/GIT_TREE_DISCIPLINE.md` §2: fetch, merge `origin/main` into your branch, rerun the gate, `merge --no-ff` into main from the MAIN checkout, push; repeat if rejected.
+- Landing per `.claude/GIT_TREE_DISCIPLINE.md` §2 (Landing protocol (replaces the retired ff-only convention)): fetch, merge `origin/main` into your branch, rerun the gate, `merge --no-ff` into main from the MAIN checkout, push; repeat if rejected.
 - Every fixed bug: flip its row + `**Status:**` line in `docs/BUG_BACKLOG.md` in the same landing.
 - Gates common to every code lane: `cargo test -p manifold-renderer --lib` green; `cargo clippy -p manifold-renderer --features gpu-proofs --tests -- -D warnings` clean; `cargo nextest run --workspace` green; gpu-proofs hostile sweep green (`cargo test -p manifold-renderer --lib --features gpu-proofs hostile`); the 3-minute conformance sweep (`cargo test -p manifold-renderer --features gpu-proofs --test glb_conformance`) green — it passes at this doc's tip; leaving it red is never acceptable.
 - **Sequencing:** W1 → W2 are BOTH heavy in `gltf_load.rs` — run them sequentially (same session or session-chained), W1 first. W3, W5, W6 are parallel-safe. W4 is parallel-safe (touches dependency pinning, not gltf_load logic).
 - **Stuck → Fable advisor BEFORE stopping (Peter's directive, 2026-07-17).** When you hit a wall — a STOP clause, a gate that won't go green after two genuinely different attempts, or a mechanism that contradicts this doc — spawn ONE advisor via the Agent tool with `model: "fable"` before surfacing anything to Peter. The advisor's contract, verbatim in your prompt to it: *"You are a read-only advisor for a stuck lane of docs/IMPORT_ANYTHING_WAVE_DESIGN.md. You may read anything (files, git history, run read-only commands and tests) but you MUST NOT edit any file or land anything — your output is a diagnosis and a concrete unblock direction for the Sonnet lane to apply itself. If you conclude the lane genuinely cannot proceed, say so plainly and say why."* Give it: your lane id, the exact blocker (error text, failing test, the diff so far — paste, don't summarize), and what you tried. One advisor per distinct blocker; continue it with SendMessage rather than spawning a second for the same problem. Apply its direction yourself — advisor findings do not skip your gates. Only after the advisor either fails to unblock you or confirms the wall is real do you invoke the STOP clause and report for Peter, including the advisor's diagnosis in the report.
 - **Stop conditions are real.** Each lane has a STOP clause. Stopping and reporting with findings appended to the backlog entry (advisor consult included) is a successful outcome; improvising past a STOP is not.
 
-## Lane W1 — WebP textures (`EXT_texture_webp`) — closes BUG-186's real half
+## Lane W1 — WebP textures (`EXT_texture_webp`) — closes BUG-186 (sheenwoodleathersofa-webp-error-message-misattri…)'s real half
 
 **Reality (verified in-session):** the `image` crate ships with `webp` ENABLED (`crates/manifold-renderer/Cargo.toml:26`) — there is a decoder; nothing new to write. The rejection is MANIFOLD's own `extensionsRequired` veto: `MANIFOLD_SUPPORTED_EXTENSIONS` in `crates/manifold-renderer/src/node_graph/gltf_load.rs` (~line 32) doesn't list `EXT_texture_webp`, and the veto fires before any decode.
 
@@ -44,13 +44,13 @@
 
 **Gate:** unit test for the discovery order (fake paths); env-gated `#[ignore]` integration test that runs a REAL conversion + import when Blender exists (it does on this machine — assert the imported def has a `gltf_skeleton_pose` when fed a rigged FBX; generate the input by running `scripts/blender/make_hostile_rig.py` in the test's setup, temp dir, never committed). Plus the standard gates. **STOP if:** the app-side import path turns out to be structured so the conversion needs UI-thread work beyond one function seam — report the actual seam, land the discovery + subprocess helper as a library fn with tests, leave the UI wiring described precisely.
 
-## Lane W4 — the five `missing field 'node'` parse failures (BUG-170)
+## Lane W4 — the five `missing field 'node'` parse failures (BUG-170 (gltf-crate-missing-field-node-parse-failure))
 
 **Reality:** five Khronos assets die inside `gltf::import()` itself (crate-level serde shape gap, BUG-170 backlog entry names them). Our code never runs.
 
 **Fix shape:** reproduce against one named asset; identify the JSON shape the crate chokes on (run serde with the error's path pointer); check whether gltf crate main/newer has fixed it (`cargo update -p gltf --dry-run`, changelogs in the vendored registry copy); if a newer 1.x fixes it, bump the pin and rerun the FULL conformance sweep (a crate bump can shift many assets — treat any new failure as a stop). If no released fix: vendor-patch via `[patch.crates-io]` pointing at a minimal fork ONLY if the fix is a serde `#[serde(default)]`-class one-liner. **STOP if:** the fix needs structural crate surgery — write the upstream issue text (exact JSON, exact error, minimal repro) into the backlog entry and stop. That's a successful lane outcome.
 
-## Lane W5 — .exr HDRIs through `node.hdri_source` (BUG-182)
+## Lane W5 — .exr HDRIs through `node.hdri_source` (BUG-182 (hdri-exr-files-fail-or-fail-silently))
 
 **Reality:** `image` crate has `exr` enabled (Cargo.toml:26), the atom claims .exr support, Peter's real files fail (BUG-182, root cause unknown). Two committed test files: `tests/fixtures/hdri/hdri_float32.exr` and `hdri_half16.exr` (256×128 HDR ramps, R up to ~4.1, G up to ~8.1, authored via Blender this session).
 
@@ -62,7 +62,7 @@ Read `docs/GLB_CONFORMANCE_STATUS.md`, `tests/fixtures/gltf/khronos/manifest.jso
 
 ## Explicitly OUT of this wave
 
-- **Huge-file OOM streaming (BUG-180):** incremental texture upload is architecture, not a lane. Needs a design doc (Opus/Fable seat). Roadmap it in W6's doc as its own line.
+- **Huge-file OOM streaming (BUG-180 (large-glb-import-oom-risk)):** incremental texture upload is architecture, not a lane. Needs a design doc (Opus/Fable seat). Roadmap it in W6's doc as its own line.
 - **BUG-209 (animated ancestor root motion):** design work on the pose primitive's table schema; parked until a real asset exhibits it.
 - **Re-litigating Blender-in-Rust:** decided no (GPL derivation + edge-case surface). See decision log.
 

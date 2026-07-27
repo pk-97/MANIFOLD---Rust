@@ -1041,7 +1041,7 @@ pass (see §0).
 > - **Not in scope (deferred follow-ons):** Phase 6 (generic `IntentRegistry`)
 >   and Phase 7 (one shared editor-window input owner) are independent and
 >   untouched here. The `u32`-vs-`NodeId` identity split and the render/hit
->   row-geometry duplication noted in `CANVAS_API_DESIGN.md` §4 are likewise
+>   row-geometry duplication noted in `CANVAS_API_DESIGN.md` §4 (Invariants this must not break) are likewise
 >   unchanged — Phase 8 is the *relocation*, not a canvas rewrite.
 
 ### Deferred (§10.2) — intentionally NOT on this checklist

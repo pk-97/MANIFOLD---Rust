@@ -64,7 +64,7 @@ App periphery (`crates/manifold-app/src/`):
    `export_hdr`) + `Timeline::export_in/out_beat` → `ContentCommand::StartExport`.
 2. **Content thread enters export mode** — `run_export` *replaces* the normal per-frame
    loop until done. UI keeps rendering; it receives `ContentState` snapshots with
-   `export_progress`/`export_status` every 10 frames (the BUG-083 fields).
+   `export_progress`/`export_status` every 10 frames (the BUG-083 (video-export-has-no-progress-display) fields).
 3. **Range & audio:** beat range falls back to the content range when unset, errors if
    start ≥ end. Audio mixdown is rendered up front to a temp WAV via
    `manifold_playback::audio_mixdown::render_export_audio` — the `audio_path` in the
@@ -179,7 +179,7 @@ quality is hardcoded (JPEG 95).
 - Ad-hoc threads: image decode (`std::thread::spawn` per request), still-export encode
   (named, detached), video import probe (background).
 - Both renderers cache `device_ptr: *const GpuDevice` re-pointed by
-  `ContentThread::run()` — the exact BUG-054 / FOUNDATIONAL_GAPS A6 pattern, twice.
+  `ContentThread::run()` — the exact BUG-054 (renderer-device-ptr-dangles) / FOUNDATIONAL_GAPS A6 pattern, twice.
 - ffmpeg mux: blocking subprocess **on the content thread** at finalize (acceptable
   offline; export mode has already suspended live rendering).
 
@@ -199,7 +199,7 @@ quality is hardcoded (JPEG 95).
 ## 11. Boundaries with neighbouring systems
 
 - **Recording:** `manifold-recording` crate; per-frame GPU capture inline with the live
-  loop; known-broken HDR (BUG-053); see LIVE_RECORDING_PROOFS_DESIGN.md.
+  loop; known-broken HDR (BUG-053 (hdr-live-recording-structural)); see LIVE_RECORDING_PROOFS_DESIGN.md.
 - **Audio for export:** rendered by `manifold_playback::audio_mixdown`, not this crate;
   this crate only muxes the resulting WAV.
 - **Future shape:** MEDIA_BACKEND_DESIGN.md (neutral traits, non-macOS encoders — the

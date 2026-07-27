@@ -4,12 +4,12 @@
 P1 @ `648f07e3` · P2 landing report: `docs/landings/2026-07-07-kick-sweep-p2.md`. The live `reduce_send` reproduces the prototype's reference fire counts on all 10 mix/drums fixtures (post-P5: bit-exact outside the stream fade-in region); masked-novelty deleted. P5 reference: `--family ridge-one --drop 10 --win 6 --absfloor 0.005 --ridge-only`.
 Scope lane @ `b6aed008` (rode the ScopeColumn typed-overlay refactor) · landing report: `docs/landings/2026-07-07-kick-scope-lane.md`.
 **Prerequisites:** none (the prototype and the 73-label corpus both exist).
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5 (Phase briefs)–§6 before starting any phase.
 
 **The governing insight:** on a bass-heavy full mix the Low band's onset detector goes
 near-deaf on kicks — the bassline owns the band's flux baseline and the kick can't
 out-shout it in its own 45–120 Hz range. The masked-novelty workaround shipped as the
-BUG-046 partial (`61c2b0fd`) traded that deafness for the opposite fault: it fires on
+BUG-046 (low-band-kick-deafness-on-mixes) partial (`61c2b0fd`) traded that deafness for the opposite fault: it fires on
 bass-note attacks too, so a kick-bound visual strobes on the bassline (Peter, live,
 confirmed). Both faults are the same root — **flux cannot tell a kick from a bass note
 in the Low band.** But the kick leaves one signature the bass usually does not: a fast,
@@ -36,9 +36,9 @@ authoritative harness `mod_harness` P2 extends); `tests/fixtures/audio_labels/RE
 
 | Piece | Where | State |
 |---|---|---|
-| The fire path | `reduce_send` (analysis.rs:1639) | Three OR'd criteria per band under one shared refractory: plain-flux median (BUG-041) + novelty (BUG-044) at :1784, **masked-novelty (BUG-046) at :1767–1785**. Fires set `bf.transients=1.0` and `transient_refractory[bi]`. Extend, don't redesign. |
+| The fire path | `reduce_send` (analysis.rs:1639) | Three OR'd criteria per band under one shared refractory: plain-flux median (BUG-041 (superflux-glide-fire)) + novelty (BUG-044 (mix-trigger-deafness)) at :1784, **masked-novelty (BUG-046) at :1767–1785**. Fires set `bf.transients=1.0` and `transient_refractory[bi]`. Extend, don't redesign. |
 | Masked-novelty state | `SendState` (analysis.rs:258): `col_hist`/`col_hist_len`/`col_hist_pos` (:286), `sustain_med` (:293), `masked_odf_hist` (:298); consts `MASKED_NOVELTY_FACTOR`/`MASKED_ONSET_DELTA`; `superflux_masked` reduction | **22 use sites, all in analysis.rs.** This is what P2 deletes — it is replaced, not paralleled. |
-| Pitch `RidgeTracker` | analysis.rs:937, `trackers: [RidgeTracker; 4]` in SendState (:315) | The **single-object sustained-pitch** follower (BUG-042/043/D5): holds on dropout, settle streaks, challenger ratios. Architecturally OPPOSITE a transient kick detector — **not reused** (D6). |
+| Pitch `RidgeTracker` | analysis.rs:937, `trackers: [RidgeTracker; 4]` in SendState (:315) | The **single-object sustained-pitch** follower (BUG-042 (onset-settle-grab)/043/D5): holds on dropout, settle streaks, challenger ratios. Architecturally OPPOSITE a transient kick detector — **not reused** (D6). |
 | Peak-pick helpers | `local_peaks` (analysis.rs:854), `strongest_peak` (:876), `salience_into` (:768) | Reusable. The kick tracker peak-picks Low-band local maxima; `local_peaks`-shaped, on the raw tilted column (D3). |
 | Shared constants | `ONSET_REFRACTORY_HOPS`, `ODF_MEDIAN_HOPS`, `SUPERFLUX_*` | Unchanged; the ridge shares `ONSET_REFRACTORY_HOPS` and the band-fire refractory. |
 | CQT resolution | `SpectrogramConfig::default` (manifold-spectral/src/lib.rs:74): bpo=24, fmin=10, n_fft=4096, hop=256 | Load-bearing for every rate constant. 24 bins/octave; the Low band (≤250 Hz) is bins 1–111; the kick sweep spans bins ~52–86 (45–120 Hz), fully inside it. |
@@ -188,7 +188,7 @@ deleted (22 sites, zero remain). Gate met: `mod_harness` reproduces `--family
 ridge-final`'s per-band fire counts EXACTLY on all 10 mix/drums fixtures (mix
 19/45/27/38/43, drums 26/71/46/35/31); the six fire-gated selftest guards stay green
 (kicks low 8 — double-fire fix holds); 46 analysis unit tests pass incl. three new
-`KickRidges` tests; clippy clean. The one selftest FAIL is the pre-existing BUG-045
+`KickRidges` tests; clippy clean. The one selftest FAIL is the pre-existing BUG-045 (gap-ring-down-chase)
 notes-accuracy line (non-gating). Full report: `docs/landings/2026-07-07-kick-sweep-p2.md`.
 The `MANIFOLD_RENDER_TRACE` content-thread check is reasoned-not-measured (the added
 per-hop work is bounded, allocation-free, dwarfed by the CQT) — on Peter's running-app
@@ -287,7 +287,7 @@ unchanged). Corrected-grid numbers, 73 labels:
   d8/w7 (54/69 @ +11/+44, sp158) or d8/w6 (52/67 @ +5/+31, sp165).
 
 **Two harness bugs found by the gate, both fixed:**
-1. `hpss_proto` lacked the BUG-052 rate-invariant grid (`with_time_grid_for`) — the reference
+1. `hpss_proto` lacked the BUG-052 (sample-rate-dependent-detection) rate-invariant grid (`with_time_grid_for`) — the reference
    instrument hopped 256 native samples (5.8 ms at the 44.1k stems) vs the runtime's 5.33 ms.
 2. `mod_harness` built its OWN unscaled `SpectrogramConfig` for the feed/time base — records
    were sampled at the wrong cadence on 44.1k files (fires missed/duplicated in counts, CSV

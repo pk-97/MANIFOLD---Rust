@@ -137,7 +137,7 @@ Inside the graph editor, every inner-node param row has an expose checkbox. Chec
 
 **Status:** Architecturally committed, implementation deferred.
 
-[PRIMITIVE_LIBRARY_DESIGN.md §12.5](PRIMITIVE_LIBRARY_DESIGN.md) commits the stance: *decompose at authoring time, fuse at compile time.* The editor sees small primitives; the GPU runs fused dispatches for per-pixel chains.
+[PRIMITIVE_LIBRARY_DESIGN.md §12.5 (Decomposition + fusion-on-compile)](PRIMITIVE_LIBRARY_DESIGN.md) commits the stance: *decompose at authoring time, fuse at compile time.* The editor sees small primitives; the GPU runs fused dispatches for per-pixel chains.
 
 The fusion classification (pixel-local / UV-rewriting / neighborhood / reduction / multi-pass / stateful), partition algorithm, and `naga_oil`-based toolchain are designed in detail at §8.2–§8.4 of this doc's predecessor and still apply.
 
@@ -163,12 +163,9 @@ If live topology editing during playback ships, this becomes load-bearing: compi
 
 ---
 
-## 11. Migration (Done)
+## 11. Migration
 
-The May 2026 migration ran in two coordinated arcs:
-
-- **§11 Preset migration** (blocks 4–9): every shipping effect moved from `inventory::submit! { EffectMetadata, EffectFactory }` to `assets/effect-presets/<TypeId>.json` + `build.rs` codegen. `EffectRegistry`, `EffectFactory`, `metadata_by_id`, `effect_category_registry`, and 21 orphan `.rs` files were deleted. The graph runtime is the only dispatcher.
-- **Bindings unification** (Phases 1–5): static + user binding paths collapsed onto one `ResolvedBinding` walk, one cache, one `ParamConvert` enum, `ParamId` on the wire.
+Every shipping effect is an `assets/effect-presets/<TypeId>.json` preset (`build.rs` codegen); the graph runtime is the only dispatcher; static + user binding paths share one `ResolvedBinding` walk, one cache, one `ParamConvert` enum, `ParamId` on the wire.
 
 Projects from before the migration load unchanged. The legacy `PostProcessEffect` and `Generator` traits are gone — there is no coexistence period any longer; the trait-wrapped path was always a migration scaffold.
 

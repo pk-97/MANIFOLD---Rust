@@ -2,7 +2,7 @@
 
 **Status:** P1–P3 SHIPPED 2026-07-07 (same-session build, Fable) · P4 landing complete except the L4 live checklist (§6 P4 demo — Peter-owned, the real acceptance gate)
 **Prerequisites:** none
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5 (Phase briefs)–§6 before starting any phase.
 
 **Build deviations (2026-07-07, recorded at landing):**
 1. **D5 widened:** the clock-plane gate also holds CLK *transport* relay (not
@@ -22,7 +22,7 @@
    driving the windowed app; the same sequence is asserted by
    `f7_slow_scheduler_400ms_still_converges` + T7/T8 at L1. Entry in
    `docs/VERIFICATION_DEBT.md`; Peter's checklist (§6 P4) closes it at L4.
-5. **Moving-anchor amendment (2026-07-07, from the first L4 run — BUG-050).**
+5. **Moving-anchor amendment (2026-07-07, from the first L4 run — BUG-050 (ableton-anchor-yankback)).**
    Peter's checklist step 1 failed on the real rig: Ableton repeatedly
    snapped back to the gesture position, then MANIFOLD got clock-dragged
    after retries exhausted. Root defect in the §4 semantics as first built:
@@ -69,7 +69,7 @@ separate cleanup, deferred below). MANIFOLD→Ableton *control* of Live
 parameters is explicitly out of scope: *"Don't need to drive Ableton controls
 from Manifold yet."*
 
-Companion docs: `CORE_ENGINE_MAP.md` §7/§13 (the authoritative sync-stack map;
+Companion docs: `CORE_ENGINE_MAP.md` §7 (External sync — who is allowed to move the playhead)/§13 (the authoritative sync-stack map;
 its findings 11/12/14 are fixed by this design — update it at landing);
 `AUDIO_INFRASTRUCTURE.md` (unrelated audio capture; shares no code).
 

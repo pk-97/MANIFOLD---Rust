@@ -41,7 +41,7 @@ Corollary (2026-07-10, sibling of BUG-060): a tree node's **text/icon clip is th
 
 ## Effect Pipeline
 
-Effects run through the node graph: every preset is a `ChainGraph` of typed primitives, walked by an `ExecutionPlan` once per frame. The graph runtime is the sole dispatcher; the legacy linear chain dispatcher was deleted in the May 2026 migration.
+Effects run through the node graph: every preset is a `ChainGraph` of typed primitives, walked by an `ExecutionPlan` once per frame. The graph runtime is the sole dispatcher.
 
 Primitives use compute dispatches via the `Primitive` trait (each primitive's `run` method binds inputs/outputs/params and submits its work to a `GpuEncoder`). The legacy `ComputeBlitHelper` (single source) and `ComputeDualBlitHelper` (dual source) helpers still back the 6 retained legacy effect impls. Render passes (`draw_fullscreen`) are only for non-effect paths: output presenter blit, UI atlas blit, line/dot rendering.
 
@@ -54,7 +54,7 @@ Primitives use compute dispatches via the `Primitive` trait (each primitive's `r
 
 ## Resolution Scaling
 
-All generators render at full output resolution. The per-generator `internal_resolution_scale()` trait method and the `UpscaleMode` enum were removed (the infrastructure was wired but the default `Native` mode disabled it, so it was dead code in practice). If a specific generator needs internal downscaling for performance, it allocates its own reduced-resolution intermediate inside `render()` and stretches to the output — same pattern Bloom uses for its mip chain.
+All generators render at full output resolution. If a specific generator needs internal downscaling for performance, it allocates its own reduced-resolution intermediate inside `render()` and stretches to the output — same pattern Bloom uses for its mip chain.
 
 The pipeline-wide `render_scale` setting (FSR / MetalFX full-frame upscaling) is separate and still active.
 
@@ -103,7 +103,7 @@ Useful flags:
 - `--output <path>` — write somewhere other than a temp path.
 - `--hdr` — refuses immediately; HDR live recording is BUG-053 (structurally broken today).
 
-See `docs/LIVE_RECORDING_PROOFS_DESIGN.md` §5 for the full design and gate semantics, and
-`docs/BUG_BACKLOG.md` BUG-085/BUG-086 for two accounting caveats found building this suite
+See `docs/LIVE_RECORDING_PROOFS_DESIGN.md` §5 (The pre-gig soak (Tier 2)) for the full design and gate semantics, and
+`docs/BUG_BACKLOG.md` BUG-085 (same silent-drop class rule: no path may return…)/BUG-086 (recording-audio-track-under-covers-duration-on-l…) for two accounting caveats found building this suite
 (Rust's own frame/sample counters can be optimistic under real backpressure — the soak's PASS
 decision is anchored to what ffprobe actually decodes out of the file, not to those counters).

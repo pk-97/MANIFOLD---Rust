@@ -1,8 +1,8 @@
 # Drag Capture — one owner per pointer gesture, from press to release
 
 **Status:** SHIPPED 2026-07-08 (all phases) — **P1 @ `9bb8ca86`** (ownership D1–D4 + D9, L3); **P2 @ `12683746`** (z-aware seams D5 + `swallow_drag` retired, L1; VD-017/018); **P3 @ `f23fa1f1`** (immediate-drag threshold D6, L1; VD-019 = Peter's crossover-nudge feel pass) · design 2026-07-07 (approved same day by Peter) · Fable
-**Prerequisites:** none (BUG-058 instrumentation + BUG-059 stopgap landed 2026-07-07 @ `fb2bdc07`; P2 deletes the stopgap)
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
+**Prerequisites:** none (BUG-058 (drag-end-consumable) instrumentation + BUG-059 (band-line-grab-falls-through) stopgap landed 2026-07-07 @ `fb2bdc07`; P2 deletes the stopgap)
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5 (Phase briefs)–§6 before starting any phase.
 
 The governing insight: MANIFOLD has no single notion of who owns an in-flight drag.
 Four uncoordinated layers each re-decide per event — raw-position interceptors in
@@ -126,7 +126,7 @@ between surfaces changes.
   change this design" was falsified within hours — Peter's first-click-dead trace
   produced D9. Corrected rule: a trace finding inside the drag pipeline amends
   this design; only a finding outside it — e.g. winit-macOS losing the Release at
-  the OS seam, BUG-028 precedent — becomes a separate bug entry.)
+  the OS seam, BUG-028 (file-drop-targeting-cant-read-live-pointer-durin…) precedent — becomes a separate bug entry.)
 
 ## 3. Design body
 

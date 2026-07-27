@@ -19,7 +19,7 @@
 - **Phase 4b.4 shipped** — commit `52b7f732`. `pub enum ItemKind`, `KnownItem::ITEM_KIND` const, `ArrayType::item_kind` field all deleted. `port_types_compatible` simplifies to "exact equality OR matching empty-specs Array sizes." Nine primitive test files drop their `assert_eq!(layout.item_kind, ItemKind::X)` assertions; the `every_conventional_array_port_declares_a_kind` invariant renames + tightens to require non-empty `specs` on every non-carve-out Array port.
 - **Phase 4b.6 shipped** — commit `72fd83af`. `extract_channel_skip(source)` preprocessor lands as a pure transformation with 17 unit tests covering every edge case from the original design: marker variations, multi-line struct decls, mixed `//` / `/* */` comments, per-struct isolation, attribute prefixes, stacked-markers idempotence, same-line markers rejected, orphan markers warn-only. No integration yet — function lands isolated so the integration commit reads cleanly.
 - **Phase 4b.7 + Phase 6.1 shipped** — commit `dd6889e3`. Skip set threads through `introspect` → `element_to_array_type` → `struct_members_to_specs`; the storage-struct `_pad[0-9]*` name-prefix heuristic retires entirely (no current core-dev shader exercised it — every `_pad*` field in the five wgsl_compute presets lives in *uniform* structs, which keep their separate `parse_uniform` `_pad*` filter). Three integration tests exercise the marker end-to-end + the post-heuristic behaviour + per-struct isolation through naga. **Bundled with the runtime debug-name registry** (`channel_names::register_runtime_name` + a `OnceLock<RwLock<AHashMap>>` overflow map; `wgsl_compute::struct_members_to_specs` registers each WGSL field name) so editor tooltips and validator errors recover "position" / "_pad0" / etc. instead of the raw hex hash. **And the snapshot extension:** `PortKindSnapshot::Array` reshapes to a struct variant carrying `channels: Vec<ChannelSnapshot>`, `match_mode`, `item_size`, `item_align`; `ChannelSnapshot { name: String, ty: String }` is the editor-facing shape. `graph_canvas::PortView::from_kind` migrates to borrow `&PortKindSnapshot`.
-- **Phase 6.2 shipped** — commit `<this>`. Companion doc sweep: NODE_CATALOG.md adds §1.1 with the `well_known` overview + a one-line note that `Array(T)` macro syntax expands to a Channels-typed wire; ADDING_PRIMITIVES.md's macro reference enumerates all four Array/Channels port-type forms; BUFFER_PORT_PLAN.md, DECOMPOSING_GENERATORS.md, PRIMITIVE_LIBRARY_DESIGN.md each get a top-of-doc note declaring their Array-port type-system sections superseded by this doc (topology references stay accurate; just read `Array<T>` as `Channels<T>`). Memory entry `feedback_named_channels_canonical.md` written for future sessions.
+- **Phase 6.2 shipped** — commit `<this>`. Companion doc sweep: NODE_CATALOG.md adds §1.1 (Well-known channel-name registry (one-line overview)) with the `well_known` overview + a one-line note that `Array(T)` macro syntax expands to a Channels-typed wire; ADDING_PRIMITIVES.md's macro reference enumerates all four Array/Channels port-type forms; BUFFER_PORT_PLAN.md, DECOMPOSING_GENERATORS.md, PRIMITIVE_LIBRARY_DESIGN.md each get a top-of-doc note declaring their Array-port type-system sections superseded by this doc (topology references stay accurate; just read `Array<T>` as `Channels<T>`). Memory entry `feedback_named_channels_canonical.md` written for future sessions.
 
 **Phase 5 remains — workspace test gate + canonical-fixture visual sanity check.** Peter did informal eyeball verification on the three migration-affected presets during Phase 4b.1 sign-off; the formal `cargo test --workspace` + workspace clippy + GPU frame-time baseline check on `Liveschool Live Show V6 LEDS.manifold` still wants doing. Saved for whenever the next end-to-end testing session happens.
 
@@ -854,7 +854,7 @@ This is **desired behavior** — the wgsl_compute author has changed the data's 
 
 ### 8.6 The `wgsl_compute_*` variants
 
-The three legacy variants (`wgsl_compute_0in_1tex`, `wgsl_compute_1tex_1tex`, `wgsl_compute_2tex_1tex`) are listed as deletion candidates in [PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md §1.5](PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md).
+The three legacy variants (`wgsl_compute_0in_1tex`, `wgsl_compute_1tex_1tex`, `wgsl_compute_2tex_1tex`) are listed as deletion candidates in [PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md §1.5 (Deletion candidates (genuinely superseded))](PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md).
 
 **Decision:** Phase 4 deletes them outright. They are texture-only variants that pre-date the generic `node.wgsl_compute` and don't touch the Channels migration's storage-array surface (no `var<storage>` bindings — only texture I/O). They are superseded by `node.wgsl_compute` for any consumer that needs the full surface. If the deletion audit during Phase 4 surfaces a shipping preset that still depends on one of the legacy variants, the preset migrates to `node.wgsl_compute` in the same change; no new naga-typed-signature work is needed because there are no storage-array ports on these variants to migrate.
 
@@ -932,7 +932,7 @@ The most important integration test. After Phase 3 (typed family migration) and 
 2. Compile to an `ExecutionPlan` without validator errors.
 3. Render its first frame on the canonical fixture (`Liveschool Live Show V6 LEDS.manifold`) without visual regression.
 
-The first two are gated by `cargo run -p manifold-renderer --bin check-presets`. The third is the manual canonical-fixture sanity check pattern established in [PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md §3](PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md).
+The first two are gated by `cargo run -p manifold-renderer --bin check-presets`. The third is the manual canonical-fixture sanity check pattern established in [PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md §3 (Parity-test strategy)](PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md).
 
 This is the test that catches naming-inconsistency landmines. If `pack_curve_xy` declares its output as `Channels[x, y]` but `render_lines` declares its input as `Channels[posx, posy]`, every Lissajous-shape preset breaks. The round-trip surfaces it immediately.
 
@@ -1440,8 +1440,8 @@ If you're an agent extending the Channel type system (adding a new element type,
 
 1. Read §4 (current contract) and §5 (validator semantics) — understand what exists.
 2. Read this section (§16) — understand what cannot change without breaking fusion.
-3. Read [GRAPH_COMPILER.md §4](GRAPH_COMPILER.md) — understand the fusion compiler's implementation model.
-4. Read [GRAPH_COMPILER.md §6](GRAPH_COMPILER.md) — understand the per-atom inline gates and what makes an atom fusable.
+3. Read [GRAPH_COMPILER.md §4 (Two unlocks, one engine)](GRAPH_COMPILER.md) — understand the fusion compiler's implementation model.
+4. Read [GRAPH_COMPILER.md §6 (What this defers)](GRAPH_COMPILER.md) — understand the per-atom inline gates and what makes an atom fusable.
 5. Draft your amendment, then check it against C1-C8 in §16.4 above.
 
 If your amendment violates a constraint, the resolution is one of: (a) redesign the amendment to be compile-time, (b) confine the new feature to non-fusable atoms only (lives outside the fusable subgraph), or (c) escalate to a design discussion that updates §16 with the new constraint structure. Don't merge an amendment that silently breaks fusion compatibility.

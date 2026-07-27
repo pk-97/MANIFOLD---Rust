@@ -5,8 +5,8 @@ seam that folds the main-window immediate-pass assembly into shared code, so the
 live app (`app_render.rs::present_all_windows`) and the headless harness
 (`ui_snapshot/render.rs::render_ui_to_png` + `script.rs`'s `Runner`) run the
 **identical** pass sequence and per-pass render-call choices. Deletes
-`draw_immediate_passes` and the harness overlay pass; closes BUG-097 by
-construction. Read `HARNESS_FIDELITY_INVARIANT_PROPOSAL.md` §3–§4 first — this is
+`draw_immediate_passes` and the harness overlay pass; closes BUG-097 (ui-snap-render-overlay-pass-uses-wrong-traversal) by
+construction. Read `HARNESS_FIDELITY_INVARIANT_PROPOSAL.md` §3 (Proposed invariant)–§4 first — this is
 its build sheet.
 
 ## The one owner rule

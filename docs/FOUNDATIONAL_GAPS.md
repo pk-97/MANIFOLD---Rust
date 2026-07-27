@@ -26,7 +26,7 @@ their consume half is bespoke display logic no table can generate — the declar
 would have been escape hatches all the way down. The orphan-field rot was a *suppressed
 compiler lint* (`#[allow(dead_code)]` on `ContentState`; manifold-app is a bin crate):
 un-suppressed and purged as UI_PROJECTION_LAYER_DESIGN P0 (10 dead fields — the purge exposed
-BUG-083/084, export-progress and recording-drop displays that never existed). Verdict record,
+BUG-083 (video-export-has-no-progress-display)/084, export-progress and recording-drop displays that never existed). Verdict record,
 rejected shapes, and the reviving trigger: `UI_PROJECTION_LAYER_DESIGN.md`. Original entry
 kept below for the evidence trail.
 
@@ -67,8 +67,8 @@ BUG-060) and **stacking is insertion order** (`draw_order = self.count`,
 tree.rs:247 — overlays have a z registry, base panels don't).
 
 **Evidence.** The post-overhaul bug family: BUG-060 (inspector over footer),
-BUG-047 (panel overflow), BUG-027 (editor-window preview z), BUG-025 (row
-bleed). The kill-test split the original six: BUG-049 is row *arithmetic* and
+BUG-047 (panel overflow), BUG-027 (editor-window preview z), BUG-025 (no-slug) (row
+bleed). The kill-test split the original six: BUG-049 (child-row-right-indent) is row *arithmetic* and
 BUG-015 is *state-sync* (A1) — different mechanisms, removed from this entry.
 
 **The system — designed, not built:** `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md`
@@ -78,9 +78,9 @@ test, both windows + perform surface. P1–P3, Sonnet-ready.
 
 ### A3. Input ownership beyond the pointer (stage risk: MED — pointer half already designed)
 
-**Evidence.** BUG-058/059 (stuck drags, grabs leaking under modals) produced
+**Evidence.** BUG-058 (drag-end-consumable)/059 (stuck drags, grabs leaking under modals) produced
 `DRAG_CAPTURE_DESIGN.md` (approved 2026-07-07) — the proof this class exists.
-Uncovered remainder: focus and keyboard routing (BUG-022: Escape leaves popup
+Uncovered remainder: focus and keyboard routing (BUG-022 (main-window-browser-popup-escape-while-search-fi…): Escape leaves popup
 open), modal ownership, and whatever an end-to-end read of the event path
 finds (see B3). `archive/INPUT_IDENTITY_UNIFICATION.md` (shipped) covers widget
 identity, not routing.
@@ -101,7 +101,7 @@ their own config, carry-rules, and UI: drivers/LFOs, envelopes, automation
 lanes, `ableton_mappings`, `audio_mods` (now also trigger mode, per
 LIVE_AUDIO_TRIGGERS §9), macros, control wires, param step-actions (proposed).
 `PresetInstance::duplicated()` (`2e3dc4f3`) had to hand-write a carry-rule per
-family — that's the tell. Bugs from the seams: BUG-004 (paste carries some
+family — that's the tell. Bugs from the seams: BUG-004 (effect-paste-carries-ableton-automation-bindings…) (paste carries some
 bindings, drops others), BUG-005 (macro addressing), BUG-036 (LFO dead on
 reload), BUG-039 (angle wrap vs. modulation).
 
@@ -120,7 +120,7 @@ carry/reload unification — check their scope first.
 
 ### A5. Identity on clone/duplicate: single home, no fence (stage risk: LOW-MED)
 
-**Evidence.** BUG-001..004 fixed as a class by `duplicated()` (`2e3dc4f3`,
+**Evidence.** BUG-001 (pasting-effect-shares-sources-effectid)..004 fixed as a class by `duplicated()` (`2e3dc4f3`,
 "one home for the fresh-copy carry-rule"); BUG-005 by EffectId addressing
 (`9f43f183`). Remaining: the home is convention — a new clone path can bypass
 it silently; BUG-031 (context-menu/rename still positional) shows positional
@@ -139,7 +139,7 @@ LOW) since June. Kill if a grep shows all clone paths route through
 
 ### A6. Device/resource lifecycle for embedded consumers (stage risk: LOW today, blocks headless growth)
 
-**Evidence.** BUG-054: renderers cache raw `*const GpuDevice` that only
+**Evidence.** BUG-054 (renderer-device-ptr-dangles): renderers cache raw `*const GpuDevice` that only
 `ContentThread::run()` repoints — every new headless/embedded consumer hits
 it. The headless proof harnesses (ui-snapshot, journey-proofs, gpu-proofs) are
 exactly that growing consumer set.
@@ -156,7 +156,7 @@ second real runtime (plugin host, remote render) arrives.
 ### A7. Feature-matrix build rot (stage risk: LOW, cheap to kill)
 
 **Evidence.** BUG-029 (`profiling` rotted), BUG-033 (`ui-snapshot` broken),
-BUG-056/057 (clippy debt behind features). Non-default features rot because no
+BUG-056 (audio-mixdown-clippy-debt)/057 (clippy debt behind features). Non-default features rot because no
 gate builds them.
 
 **The missing system.** Not a system — a CI/gate matrix: the pre-push or
@@ -174,7 +174,7 @@ current-state map and harvest its honest-edges section
 
 | Subsystem | Map status | Stage risk of the dark | Next move |
 |---|---|---|---|
-| Project IO / migration chain (`manifold-io`) | **`docs/PROJECT_IO_MAP.md` — written 2026-07-07 (this pass)** | A migration bug eats a show file silently; BUG-040 proved the chain can drop data | Work the map's honest-edges list |
+| Project IO / migration chain (`manifold-io`) | **`docs/PROJECT_IO_MAP.md` — written 2026-07-07 (this pass)** | A migration bug eats a show file silently; BUG-040 (v13-import-migration-drop) proved the chain can drop data | Work the map's honest-edges list |
 | Media/export pipeline as-built (`manifold-media`) | NO current-state map — `MEDIA_BACKEND_DESIGN.md` and the export designs are forward-looking contracts | Export failures surface days before a release deadline; recording seams covered by LIVE_RECORDING_PROOFS (proposed), decode/thumbnail/export paths are dark | Map next (Opus prompt pack candidate) |
 | Input event path end-to-end (`manifold-app` input_host → panels) | Slices only (INPUT_IDENTITY shipped, DRAG_CAPTURE approved) | Stuck/leaked input mid-set = BUG-058/059 class | Map feeds A3's design |
 | UI bridge / state sync | Mapped — `archive/UI_ARCHITECTURE_AUDIT.md` (2026-06-18) | n/a | Gap is enforcement (A1), not knowledge |

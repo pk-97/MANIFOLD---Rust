@@ -1,8 +1,8 @@
 # Rendering Infra v2 — the cinematic baseline
 
 **Status:** DIRECTION captured 2026-07-11 · Fable + Peter discussion · not designed to STANDARD, not built. Full per-piece designs graduate from this doc after the scene-ladder intake (Scenes 1–3, in flight) and PERF_BUDGET_GATE numbers; Peter directed capture-now so the discussion survives ("Better to have them laid out with all of the ideas etc now than forget this entire discussion").
-**Graduated 2026-07-12 (Fable, Peter's picks):** §2 → [GBUFFER_DESIGN.md](GBUFFER_DESIGN.md) · §6 → [CAMERA_AND_LENS_DESIGN.md](CAMERA_AND_LENS_DESIGN.md) + [CINEMATIC_POST_DESIGN.md](CINEMATIC_POST_DESIGN.md) (DoF/SSAO/motion blur) · §8 → REALTIME_3D §11 (PCSS, P9). **§5 export quality tiers DROPPED by Peter 2026-07-12** ("Ignore the explicit per-scene export quality please" — quality knobs are ordinary explicit scene config; no tier mechanism). §3 materials v2 DEPRIORITIZED by Peter 2026-07-12 (his assets are game models/photoscans; black-background hero scenes) — stays captured here, not designed. **§4 volumetrics → [VOLUMETRIC_LIGHT_DESIGN.md](VOLUMETRIC_LIGHT_DESIGN.md) (graduated 2026-07-13, Fable + Peter — god rays for the Interim EP; froxels stay deferred there).** §7 HDR, §9 RT, §10 animated glTF remain here awaiting their turn.
-**Companion docs:** [REALTIME_3D_DESIGN.md](REALTIME_3D_DESIGN.md) (the base scene pass this extends; its §10 documents the memoryless-depth constraint), [MATERIAL_SYSTEM_DESIGN.md](MATERIAL_SYSTEM_DESIGN.md) (v1 contract this extends), [PERF_BUDGET_GATE_DESIGN.md](PERF_BUDGET_GATE_DESIGN.md) (the measuring instrument), [VULKAN_BACKEND_DESIGN.md](VULKAN_BACKEND_DESIGN.md) (the non-Apple hardware path).
+**Graduated 2026-07-12 (Fable, Peter's picks):** §2 → [GBUFFER_DESIGN.md](GBUFFER_DESIGN.md) · §6 (Deferred) → [CAMERA_AND_LENS_DESIGN.md](CAMERA_AND_LENS_DESIGN.md) + [CINEMATIC_POST_DESIGN.md](CINEMATIC_POST_DESIGN.md) (DoF/SSAO/motion blur) · §8 → REALTIME_3D §11 (PCSS, P9). **§5 export quality tiers DROPPED by Peter 2026-07-12** ("Ignore the explicit per-scene export quality please" — quality knobs are ordinary explicit scene config; no tier mechanism). §3 materials v2 DEPRIORITIZED by Peter 2026-07-12 (his assets are game models/photoscans; black-background hero scenes) — stays captured here, not designed. **§4 volumetrics → [VOLUMETRIC_LIGHT_DESIGN.md](VOLUMETRIC_LIGHT_DESIGN.md) (graduated 2026-07-13, Fable + Peter — god rays for the Interim EP; froxels stay deferred there).** §7 HDR, §9 RT, §10 animated glTF remain here awaiting their turn.
+**Companion docs:** [REALTIME_3D_DESIGN.md](REALTIME_3D_DESIGN.md) (the base scene pass this extends; its §10 (Addendum 2026-07-11 — D11 + P8: per-object instancing in `render_scene`) documents the memoryless-depth constraint), [MATERIAL_SYSTEM_DESIGN.md](MATERIAL_SYSTEM_DESIGN.md) (v1 contract this extends), [PERF_BUDGET_GATE_DESIGN.md](PERF_BUDGET_GATE_DESIGN.md) (the measuring instrument), [VULKAN_BACKEND_DESIGN.md](VULKAN_BACKEND_DESIGN.md) (the non-Apple hardware path).
 
 ## The claim
 
@@ -31,7 +31,7 @@ not for the current chip.
 
 - **Scene ladder first** (running, other agent): Scenes 1–3 are the intake evidence —
   what a lit scene here actually lacks is the requirements list for §3. First
-  finding already in: BUG-118 fog-washout, fog pulled from Scene 1 (`0d65db3d`).
+  finding already in: BUG-118 (render-scene-fog-washes-out-instead-of-depth-gra…) fog-washout, fog pulled from Scene 1 (`0d65db3d`).
 - **PERF_BUDGET_GATE builds in PARALLEL** (approved, Sonnet-executable). Every
   decision below is a milliseconds question; the instrument precedes the measured
   decisions, not the capture of direction.
@@ -176,7 +176,7 @@ no material work substitutes for. Trigger: the first scene that wants one.
 ## Consciously parked behind this cluster (must not die)
 
 Codegen conversion sweep (standing rule, non-blocking) · UI_WIDGET_UNIFICATION ·
-**AUDIO_ANALYSIS_ACCURACY — BUG-069 licensing gates commercialization; it stays
+**AUDIO_ANALYSIS_ACCURACY — BUG-069 (shipping-license-audit) licensing gates commercialization; it stays
 next in line, not behind everything.**
 
 ## Owed

@@ -4,7 +4,7 @@
 **Prerequisites:** none hard — `node.render_scene` P1 is shipped (`render_scene.rs`,
 commit `8daa89fc`), which is all the scene-composite phase (P4) consumes. P1–P3 and
 P5–P6 depend on nothing unbuilt.
-**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before
+**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5 (Phase briefs)–§6 and §8 before
 starting any phase.
 
 Peter's directive (2026-07-04 phone brainstorm): Gaussian splats "will definitely be

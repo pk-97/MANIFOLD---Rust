@@ -1,6 +1,6 @@
 # Adding Effects and Generators
 
-Effects and generators ship through the same path: a JSON preset file. Both went through the JSON migration (generators are fully migrated — zero Rust generators remain), and both load from disk at startup, not from the compiled binary.
+Effects and generators ship through the same path: a JSON preset file, loaded from disk at startup, not from the compiled binary.
 
 ---
 
@@ -92,7 +92,7 @@ The loader does structural checks only — every file must parse and carry a `ve
 - Every `wires` endpoint references a valid `(node, port)` pair with matching types.
 - The graph is a DAG (no cycles).
 
-The test `every_bundled_preset_loads_validates_and_compiles` in `bundled_presets.rs` runs all bundled presets through `validate(&graph)` and the Metal pipeline build — if you add a preset that's structurally broken, that test catches it before any user sees it.
+The test `every_bundled_preset_loads_validates_and_compiles` in `bundled_presets.rs` runs all bundled presets through `validate(&graph)` and the Metal pipeline build.
 
 ### Tests
 
@@ -188,6 +188,6 @@ Generators will eventually follow effects onto a JSON-authoritative workflow und
 - [NODE_GRAPH_SYSTEM.md](NODE_GRAPH_SYSTEM.md) — graph runtime and preset architecture
 - [ADDING_PRIMITIVES.md](ADDING_PRIMITIVES.md) — authoring a new primitive (the atoms JSON presets reference)
 - [PRIMITIVE_LIBRARY_DESIGN.md](PRIMITIVE_LIBRARY_DESIGN.md) — primitive catalog, decomposition recipes
-- [EFFECT_RUNTIME_UNIFICATION.md](EFFECT_RUNTIME_UNIFICATION.md) §7.11 — bindings unification (one ResolvedBinding, one ParamConvert)
+- [EFFECT_RUNTIME_UNIFICATION.md](EFFECT_RUNTIME_UNIFICATION.md) §7.11 (Bindings unification (Phases 1–4, May 2026)) — bindings unification (one ResolvedBinding, one ParamConvert)
 - `crates/manifold-renderer/src/preset_loader.rs` — disk scan, catalog build, fail-loud rules, hot-reload watcher
 - `crates/manifold-renderer/src/node_graph/bundled_presets.rs` — thin lookup over the disk-loaded catalog + the `every_bundled_preset_loads_validates_and_compiles` test

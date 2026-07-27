@@ -2,7 +2,7 @@
 
 **Status: COMPLETE — all phases shipped: P-P/P-B 2026-07-21, P-D/P-I/P-S 2026-07-22, P-Z closed 2026-07-22. Landing reports in docs/landings/2026-07-2{1,2}-ui-funnel-*. Follow-on design items on the register: CHROME_PARAMS, GESTURE_ENTRY, ROW_MODEL_EDGES, VERIFICATION_INFRA (priority one). · Fable**
 **Prerequisites:** WIDGET_TREE (COMPLETE 2026-07-21), SCENE_PANEL_EXPOSURE_CONVERGENCE (COMPLETE 2026-07-21). Campaign register: `docs/ARCHITECTURE_DEBT.md` (inventory + wave map; status for this wave lives ONLY on this doc's Status line).
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase. Pure-move commits gate on `scripts/move_identity_check.py` (built + self-tested 2026-07-21).
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5 (Phase briefs)–§6 before starting any phase. Pure-move commits gate on `scripts/move_identity_check.py` (built + self-tested 2026-07-21).
 
 **The governing insight: the funnel files are not big because the UI is big — they are big because four concerns (projecting state, describing surfaces, routing gestures, translating to commands) each live a slice in every domain's file instead of each owning a thin layer.** Every UI change funnels through `dispatch` (18 args, 303-variant match), `dispatch_inspector` (one 3,160-line function), `sync_inspector_data`/`push_state`, and `tick_and_render` (one 3,270-line frame function). The end state is the matrix: **layers are the hard boundaries, domains are small files within each layer.** Payoff test, honest form: adding a new panel touches nothing outside its own domain plus one registration line per registry.
 
@@ -12,7 +12,7 @@ Stage translation: none of this changes pixels. It changes how fast and how safe
 
 **Binding constraints** (DESIGN_AUTHORING §1): *Hot path* — `push_state`/`sync_card_values` run per-frame; the split must not move structural work onto the per-frame path (INV-W4). *Thread residency* — untouched: UI thread owns everything here; mutations stay `PanelAction` → dispatch → `ContentCommand`. *Time model* — untouched. *Persistence* — none of the moved types serialize; the fixture round-trip gate is a belt-and-braces net. *Performance surface* — every dispatch path IS the live-control path; the flow suite + `undo_baseline` family are the behavior oracle.
 
-Companion docs: `WIDGET_TREE_DESIGN.md` (the layer vocabulary this extends; its §10 Deferred is absorbed and closed by this doc), `docs/ARCHITECTURE_DEBT.md` (campaign register), `AGENT_ROUTING.md` (orchestration), `.claude/GIT_TREE_DISCIPLINE.md` (landing mechanics).
+Companion docs: `WIDGET_TREE_DESIGN.md` (the layer vocabulary this extends; its §10 (Deferred — TOMBSTONE (closed 2026-07-22; absorbed by UI_FUNNEL_DECOMPOSITION per Peter's no-deferred-with-triggers directive)) Deferred is absorbed and closed by this doc), `docs/ARCHITECTURE_DEBT.md` (campaign register), `AGENT_ROUTING.md` (orchestration), `.claude/GIT_TREE_DISCIPLINE.md` (landing mechanics).
 
 ---
 
@@ -34,7 +34,7 @@ Companion docs: `WIDGET_TREE_DESIGN.md` (the layer vocabulary this extends; its 
 | `param_card.rs` | 6,946 lines: `ParamCardPanel` impl :743–4583 (build/render/route/drag in one impl), `ParamCardState`, relight config, row geometry | MIGRATE-THEN-SPLIT (P-S): renderer vs routing vs runtime state; bespoke remainder migrates into `param_surface` machinery |
 | `scene_setup_panel.rs` + `panels/inspector.rs` + `param_slider_shared.rs` | 3,584 / 4,231 / 3,166 — VM types, outliner builders, column layout, shared slider builders | P-S consumers; split along the same layer lines |
 | Widget-tree layer | `param_surface.rs` (ParamSurface/ParamRow/RowIndex/row_action), INV-1..8, `no_bespoke_row_infra` | EXISTS — the vocabulary and enforcement this wave extends |
-| Flow suite | 40 flows `scripts/ui-flows/`, selector-state asserts (no pixels) | EXISTS — behavior oracle; coverage enumerated per phase (BUG-252 count-match rule) |
+| Flow suite | 40 flows `scripts/ui-flows/`, selector-state asserts (no pixels) | EXISTS — behavior oracle; coverage enumerated per phase (BUG-252 (eight-scene-flow-scripts-dead-at-step-2-on-stale…) count-match rule) |
 | Move-identity verifier | `scripts/move_identity_check.py` — pinned-color `--color-moved` parse, zero-residue gate; self-tested (pure move → 0, smuggled edit → 1) | BUILT this session |
 | `cargo public-api` | not installed; `manifold-app` has no lib target | REJECTED as gate (adversarial review HIGH-1) |
 
@@ -101,7 +101,7 @@ pub struct ScrubState { /* interior free: active ValueRef + captured baseline */
 
 **D8 — Direct-set flow verbs ride the scrub wire (WIDGET_TREE §10 item 6, designed in).** A flow verb `SetParam { selector/value-ref, value }` that emits `Scrub(Begin) → Scrub(Move, v) → Scrub(Commit)` through the REAL dispatch path — fast setup, no bypass, undo-correct by construction. Ships with P-I (it is three lines once the wire exists) + one flow using it as its own acceptance test.
 
-**D9 — Widget catalog rides the surface layer (WIDGET_TREE §10 item 7, designed in).** The catalog is the declarations: a `--catalog` dump mode enumerating, per panel, every `ParamSurface` row id + `RowRole` + named chrome (the dump already serializes durable ids; this adds the enumeration view). No new protocol (widget-tree §5's rule). Ships with P-S. Kills the BUG-239 class structurally: a row without a queryable name cannot exist on the sanctioned path.
+**D9 — Widget catalog rides the surface layer (WIDGET_TREE §10 item 7, designed in).** The catalog is the declarations: a `--catalog` dump mode enumerating, per panel, every `ParamSurface` row id + `RowRole` + named chrome (the dump already serializes durable ids; this adds the enumeration view). No new protocol (widget-tree §5's rule). Ships with P-S. Kills the BUG-239 (headless-script-harness-shows-stale-value-after-…) class structurally: a row without a queryable name cannot exist on the sanctioned path.
 
 **D10 — Remaining WIDGET_TREE §10 items, dispositioned:** macros/settings sliders → P-S flows them through `param_surface` hosts (they are small; the point is zero unsanctioned row paths remain). `param_slots_to_ui` scratch buffer → P-P does it while touching `push_state` (pre-allocated scratch, INV-W4's no-new-per-frame-alloc rule makes it free to prove). With D4/D8/D9 this closes §10 entirely — supersession sweep at the final landing flips WIDGET_TREE's Deferred section to a tombstone pointing here.
 
@@ -149,7 +149,7 @@ Phasing-completeness check: every §2 commitment lands in exactly one phase (D1/
 **Forbidden moves, wave-wide:** a "temporary" second dispatch entry point · keeping any old path alive behind a flag · reshaping variant bodies during P-D · a data-binding/subscription system anywhere · new `Arc<Mutex>` · adapters around a misfit call site (escalate: the seam has a gap) · improving adjacent code mid-move (notes file for Peter instead) · landing with a red gate.
 
 
-**P-S — RE-HEADLINED at execution (2026-07-22, census + Peter rulings):** the original "migration into param_surface machinery" thesis was STALE (WIDGET_TREE completed that migration before P-S ran). As executed: split-by-layer directory modules (param_slider_shared, param_card, panels/inspector) + ONE real dedup — shared `RowHost` extracted from ParamCardPanel, SceneCardState collapsed onto it (the scene panel's hand-copied twin deleted, net −292 lines) + the D9 `--catalog` enumeration (structural BUG-239 kill; found BUG-302 on first run). D10 macros/settings: resolved per D-39 — deferred to the CHROME_PARAMS designed unification (register); the chrome category is an accident of history, guarded meanwhile by `no_bespoke_row_infra`.
+**P-S — RE-HEADLINED at execution (2026-07-22, census + Peter rulings):** the original "migration into param_surface machinery" thesis was STALE (WIDGET_TREE completed that migration before P-S ran). As executed: split-by-layer directory modules (param_slider_shared, param_card, panels/inspector) + ONE real dedup — shared `RowHost` extracted from ParamCardPanel, SceneCardState collapsed onto it (the scene panel's hand-copied twin deleted, net −292 lines) + the D9 `--catalog` enumeration (structural BUG-239 kill; found BUG-302 (E/A arm buttons nameless to the flow harness…) on first run). D10 macros/settings: resolved per D-39 — deferred to the CHROME_PARAMS designed unification (register); the chrome category is an accident of history, guarded meanwhile by `no_bespoke_row_infra`.
 
 ## 5. Decided — do not reopen
 

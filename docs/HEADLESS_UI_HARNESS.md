@@ -9,10 +9,10 @@ scene (see **Scenes** below).
 2026-07 was a state/wiring bug with a visual symptom — PNG assertions are slow, GPU-bound, and
 green while click paths are dead. The gate tests state on the REAL dispatch path (real
 EditingService, real state sync): hit-test geometry as pure math, click→command dispatch,
-display-value resolution (BUG-260 conviction test and the undo baseline `1bdb69a9` are the only
+display-value resolution (BUG-260 (scene-panel-bound-rows-display-stale-def-value-n…) conviction test and the undo baseline `1bdb69a9` are the only
 permitted patterns — replicate, never invent harness). Headless PNG render stays as an on-demand
 look oracle for humans/Fable, out of the automated gate. See
-`docs/SYSTEM_UPGRADE_2026_07_PLAN.md` §Testing doctrine.
+`docs/SYSTEM_UPGRADE_2026_07_PLAN.md` §Testing (doctrine (agreed 2026-07-20; governs Wave 2 and all UI work)) doctrine.
 
 **Usage:**
 ```
@@ -76,7 +76,7 @@ one.
 | `all` | Renders `timeline`, `states`, `inspector`, `graph` (default preset), and `editor` (default preset) in one process. | A full-app sweep for eyeballing everything after a change. |
 
 **Preset ids for `--preset`:** any shipping effect or generator id — e.g. `Mirror`, `Bloom`,
-`Tesseract`. The catalog lives in `docs/NODE_CATALOG.md` (§5/§6.1) and
+`Tesseract`. The catalog lives in `docs/NODE_CATALOG.md` (§5 (Effect presets)/§6.1) and
 `assets/effect-presets/` + `assets/generator-presets/`. An unknown id exits 2 with a message.
 
 **Provenance:** the `feat/timeline-ui-redesign` review found the redesign rode three

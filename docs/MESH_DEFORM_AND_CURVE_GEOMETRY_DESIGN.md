@@ -2,7 +2,7 @@
 
 **Status:** SHIPPED 2026-07-11 (`feat/mesh-deform`) — all four phases landed. P1 growth core (`mesh_ramp`, `push_along_normals`, `facet_normals`) + P2 shape deformers (`bend/twist/taper/morph_mesh`) on the freeze codegen path (decided #10); P3 curve→mesh builders (`revolve/extrude/tube`) + P4 `scatter_on_mesh` (multi-pass, hand-authored per the #10 scope boundary) + `gltf_mesh_source` fit/recenter extension. Demos Breathe/TwistColumn/Vine/Lathe/Garden all L2. · 2026-07-10 · Fable (with Peter in the room)
 **Prerequisites:** none hard — `node.render_scene` (REALTIME_3D P1) and SCENE_BUILD P1–P3 are shipped; every anchor below re-verifies at phase entry.
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5 (Phase briefs)–§6 before starting any phase.
 
 Peter, 2026-07-10, the ask this design serves: *"using a 3D scanned set of flowers
 (CC0) and animating them growing or unfolding or morphing into particles and digital
@@ -167,7 +167,7 @@ enum/bool params are not. `composition_notes` on every atom states when an agent
 reaches for it and its normal-policy caveat (D4). Names follow §6.6 — plain words,
 implementation detail stays in the source. **Angle/rotation params are UNBOUNDED
 (range `None`)** — a saw LFO doing full revolutions is the first thing a performer
-tries (the BUG-039 lesson); clamping them is a forbidden move.
+tries (the BUG-039 (saw-rotation-wrap) lesson); clamping them is a forbidden move.
 
 Deform family — all `in: Array(MeshVertex) required`, `weights: Array(F32) optional`,
 `out: Array(MeshVertex)`, capacity inherited, one dispatch, one thread/vertex.
@@ -285,7 +285,7 @@ at the END of P4 only. Demo renders use the `render-generator-preset` harness
   `gltf_mesh_source` path param at the rig — the doc does not bundle third-party
   scans. *Gate:* determinism test green; **round trip** — save a project using
   `Garden` with edited outer params → reload → params intact and modulation still
-  moves them (BUG-036 rule); `check-presets`; Garden PNG read (instances visibly
+  moves them (BUG-036 (param-manifest-construction-not-a-unified-safe-g…) rule); `check-presets`; Garden PNG read (instances visibly
   ON the terrain surface, aligned when `align_to_normal`); canonical fixture
   (`Liveschool Live Show V6 LEDS.manifold`) loads clean; **full workspace sweep +
   workspace clippy (the design's single sweep)**. *Demo:* Garden PNG — L2; ≤2-min

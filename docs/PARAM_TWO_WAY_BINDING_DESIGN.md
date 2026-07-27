@@ -21,7 +21,7 @@ collapses a wired node's step, the tap soft-fails to the stale param map —
 degraded display, never a crash. Group-face mirror rows get the dim/jack
 treatment but not the `driven by` source label (needs inner-level node list;
 scoped out, noted in `apply_driven_state`'s doc comment).
-**Prerequisites:** none (BUG-158's investigation + Fable design consult are folded in; all code anchors re-verified 2026-07-14)
+**Prerequisites:** none (BUG-158 (mapped-param-edits-snap-back-no-two-way-binding)'s investigation + Fable design consult are folded in; all code anchors re-verified 2026-07-14)
 
 **P1 execution note (2026-07-14, Sonnet):** shipped the inverse machinery
 (D2/D3), the dispatch-layer reroute (D1), D4's effective-value display, and
@@ -53,7 +53,7 @@ plus `card_reshape_roundtrips` / `macro_curve_inverse_roundtrips`
 (manifold-editing) for D9. The full vertical path (a real node-face drag
 moving both the card and the render) has not been driven end-to-end by an
 automated test — flagged for whoever picks up P2 or does the look-pass.
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5 (Phase briefs)–§6 before starting any phase.
 
 Closes **BUG-158** (mapped-param-edits-snap-back-no-two-way-binding). The governing
 insight: a card binding makes the outer card param the *sole authority* the render

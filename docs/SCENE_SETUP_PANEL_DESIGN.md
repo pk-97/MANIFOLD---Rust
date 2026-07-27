@@ -6,7 +6,7 @@
 **Prerequisites:** none — every substrate this design consumes is SHIPPED and verified in-tree
 (SCENE_BUILD_AND_GROUP_PARAMS P1–P5, REALTIME_3D P1–P4/P8/P9, MATERIAL M1–M6, IMPORT_FIDELITY
 F-P1–F-P7, GLB_CONFORMANCE, the audio-dock `ScreenLayout` column, `ChangeGraphParamCommand`).
-**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any
+**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5 (Phase briefs)–§6 and §8 before starting any
 phase. Executor: Sonnet, orchestrated overnight. The orchestrator may consult ONE Fable
 advisor agent, only on a critical blocking problem the doc does not foresee.
 
@@ -303,7 +303,7 @@ new widget kinds · new port types · touching `render_scene`'s runtime/shader �
 gizmos, physics, splats, animation · keeping any "old path" alive when a phase replaces one
 (none should exist — this design is additive) · `Arc<Mutex>` anywhere.
 
-Landing: per `.claude/GIT_TREE_DISCIPLINE.md` §2 — one warm worktree for the workstream,
+Landing: per `.claude/GIT_TREE_DISCIPLINE.md` §2 (Landing protocol (replaces the retired ff-only convention)) — one warm worktree for the workstream,
 batch landings per 2–3 phases (P1+P2, P3+P4, P5), full workspace sweep + clippy at each
 landing in the main checkout, landing reports per DESIGN_DOC_STANDARD §8.10.
 
@@ -471,7 +471,7 @@ finds itself adding content-thread work, that is a brief violation — stop and 
 8. The D8 fence stands; additions must displace an existing control or justify a basic
    user's need.
 9. SCENE_BUILD §7 item 7 is superseded (this doc's header); REALTIME_3D decided-#1 stands.
-10. Landing discipline per `.claude/GIT_TREE_DISCIPLINE.md` §2 — merge-trunk, batched
+10. Landing discipline per `.claude/GIT_TREE_DISCIPLINE.md` §2 (Landing protocol (replaces the retired ff-only convention)) — merge-trunk, batched
     landings, sweep at landing.
 
 ## 8. Execution notes for the orchestrator

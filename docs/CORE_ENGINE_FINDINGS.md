@@ -1,6 +1,6 @@
 # Core Engine Findings — Work Queue
 
-<!-- index: Actionable work queue derived from CORE_ENGINE_MAP.md §13 (2026-07-03). Every finding from the core-engine read as a concrete work item: what's broken, what it means on stage, the fix, how to verify, effort. P0 = broken features (SMPTE receive unwired, MIDI launch quantize inert), P1 = correctness/trust, P2 = performance at project scale, P3 = decisions + hygiene. Status column is the tracker. -->
+<!-- index: Actionable work queue derived from CORE_ENGINE_MAP.md §13 (Honest edges (the bug hunt starts here)) (2026-07-03). Every finding from the core-engine read as a concrete work item: what's broken, what it means on stage, the fix, how to verify, effort. P0 = broken features (SMPTE receive unwired, MIDI launch quantize inert), P1 = correctness/trust, P2 = performance at project scale, P3 = decisions + hygiene. Status column is the tracker. -->
 
 **Status: OPEN work queue, created 2026-07-03 from the full core-engine read.**
 Source of truth for *how the engine works* is `CORE_ENGINE_MAP.md`; this doc is
@@ -54,7 +54,7 @@ orchestrator against the worktree manifest before landing.
   `apply_launch_quantize: bool` through the shared trigger path). The worker also fixed
   a pre-existing bug where the `beat_stamp` branch quantized audio one-shots off-grid.
   Tests in `tests/live_clip.rs` (incl. a non-120-BPM case). The dead MIDI tick-queue
-  subsystem was left for a dedicated removal pass (**BUG-089**).
+  subsystem was left for a dedicated removal pass (**BUG-089 (live-clip-pending-tick-queue-dead-on-all-live-pa…)**).
 - **F3 `e4f51459`**: 35 tests for the external-sync stack (arbiter matrix, `MidiClockState`
   pack/unpack + BPM estimator + SPP reset, CLK/OSC nudge-vs-seek, drop-frame *pattern*,
   OSC round-trip, engine drift/loop integration). Per the guard it pinned only
@@ -97,7 +97,7 @@ orchestrator against the worktree manifest before landing.
   from this trace.
 - **Live-hardware checks owed (not verifiable headless):** F1 — a real Ableton/LiveMTC
   timecode lock on the rig; F2 — pad-launch tightness feel. Both are Peter's rig pass.
-- **BUG-087** — timecode `is_receiving_timecode` can read a false positive in the first
+- **BUG-087 (osc-timecode-receiving-flag-false-positive-at-st…)** — timecode `is_receiving_timecode` can read a false positive in the first
   0.5s of a session (startup epoch). Logged, unfixed.
 
 ---

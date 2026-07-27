@@ -1,9 +1,9 @@
 # Param Storage Boundaries — load reconcile, card single-source, migration self-containment
 
 **Status:** SHIPPED — P1 (`0438b60e`) + P2 (`254792c0`) + P3 (`eec807cd`) all landed on main 2026-07-09 (Opus-orchestrated Sonnet wave; design 2026-07-06 · Fable). Load reconcile stage, card single-source + derive-on-save, and the BUG-040 migration are all live. Follow-up: three `meta.params` shadow-readers flagged in §P2 (renderer-side, non-data-loss); BUG-040 closed; unrelated trunk-red BUG-077 (UI test fixtures) found during the P3 sweep.
-**Prerequisites:** PARAM_STORAGE_DESIGN.md P1–P5 (all SHIPPED 2026-07-05) + the BUG-036
+**Prerequisites:** PARAM_STORAGE_DESIGN.md P1–P5 (all SHIPPED 2026-07-05) + the BUG-036 (param-manifest-construction-not-a-unified-safe-g…)
 fix wave (`b2f78725`, `0434da5e`, 2026-07-06). Nothing else.
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5 (Phase briefs)–§6 before starting any phase.
 **Executor sizing:** written for Sonnet at medium effort — every phase is mechanical
 transcription plus compiler-driven migration; no architectural choices remain open.
 

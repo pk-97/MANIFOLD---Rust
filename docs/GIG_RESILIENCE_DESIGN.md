@@ -2,9 +2,9 @@
 
 **Status: IN PROGRESS — P1 (`3dffe29a` P2 merge) and P2 built + merged into `feat/timeline-ui-redesign` (2026-07-03); P3–P4 not implemented. Sonnet-executable. Phases in §9.**
 **D8 status (updated 2026-07-10 — F8):** P2 shipped D8's breadcrumb-beat fallback (autonomous, plays immediately). The 2026-07-03 caveat said the "rejoin to live Ableton position" branch could not be built because the bridge had no inbound song-position field — **that is now false.** `ABLETON_TRANSPORT_SYNC` (P1–P3, landed 2026-07-07) added the inbound listener: `ableton_bridge.rs` parses `/live/song/get/current_song_time` into `PendingTransportState::song_time` (`:242`, `:891`). **Peter's decision (2026-07-10): build the `--resume` Ableton-position rejoin now.** It is remaining work here (wiring `--resume`'s D8 rejoin to the shipped `song_time` listener — a P3/P4-adjacent task; see §5.2 and §9 P4). The old "deferred to ABLETON_SHOW_SYNC, decision pending Peter" pointer is retired — transport landed in ABLETON_TRANSPORT_SYNC, and the rejoin consumes it from here.
-**Prerequisites: none for P1–P2. P3 after PERFORM_SURFACE_DESIGN P1 (`docs/DESIGN_BUILD_ORDER.md` §2).**
+**Prerequisites: none for P1–P2. P3 after PERFORM_SURFACE_DESIGN P1 (`docs/DESIGN_BUILD_ORDER.md` §2 (Hard dependency edges)).**
 **P4 priority (Peter, 2026-07-13): CRITICAL — but do NOT start yet; Peter calls the timing.** P4 (peripheral resilience, GPU-fault surfacing, thermal glyph, quarantine, D7 hardening, and the `--resume` Ableton-position rejoin) is show-critical and outranks the rest of the approved-not-built queue when scheduling resumes. P4 has no dependency on P3 and may run before the understudy.
-**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any phase.**
+**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5 (Phase briefs)–§6 and §8 before starting any phase.**
 
 MANIFOLD is a live instrument. This doc is the operational failure audit of the
 whole gig — pre-show, mid-show, recovery — and the design that makes failure
@@ -18,7 +18,7 @@ Companion designs: `docs/ABLETON_SHOW_SYNC_DESIGN.md` (the score that makes
 rejoin exact), `docs/SESSION_MODE_DESIGN.md` (the second performance surface),
 `docs/PERFORM_SURFACE_DESIGN.md` (perform mode becomes chrome-hosted — P3's
 visible arming indicators are widgets on that surface; sequencing in
-`docs/DESIGN_BUILD_ORDER.md` §2).
+`docs/DESIGN_BUILD_ORDER.md` §2 (Hard dependency edges)).
 
 ---
 
@@ -292,7 +292,7 @@ mode's enter/exit lifecycle (`perform_mode/mod.rs` `pending_enter` /
 `PERFORM_SURFACE_DESIGN` P1 unchanged. The *visible* pieces — hold-progress
 indicator, understudy status strip, thermal glyph (§8) — are chrome widgets
 on the perform surface, not hand-drawn HUD. Build P3 after PERFORM_SURFACE
-P1 (`docs/DESIGN_BUILD_ORDER.md` §2) so they're built once.
+P1 (`docs/DESIGN_BUILD_ORDER.md` §2 (Hard dependency edges)) so they're built once.
 
 ## 8. Peripheral resilience (the degraders)
 
@@ -305,7 +305,7 @@ forever → seamless re-attach. Result-hardened per D7.
 - **Audio capture (G7):** stream error callback sets a failed flag → owner
   rebuilds the stream next tick; follow default-device changes for the
   default-input path; output taps revalidate on CoreAudio device-list change
-  (`docs/AUDIO_INFRASTRUCTURE.md` §11). Analysis worker already tolerates
+  (`docs/AUDIO_INFRASTRUCTURE.md` §11 (Output taps — system & per-app capture)). Analysis worker already tolerates
   silence; the fix is reattachment, not analysis.
 - **GPU faults (G9):** wire `add_completed_handler_with_status` on every
   submitted command buffer in the content pipeline (label = pass name). On
@@ -420,7 +420,7 @@ soundcheck — if you haven't drilled it, you don't have it.
 - Auto-degradation on thermal/perf pressure (drop resolution before dropping
   frames) — needs the perf-gate work; telemetry first.
 - Understudy on Windows/Linux — protocol is ready; lands with the Vulkan
-  platform work (`docs/VULKAN_BACKEND_DESIGN.md` §8).
+  platform work (`docs/VULKAN_BACKEND_DESIGN.md` §8 (Tier 2 — platform coupling beyond the GPU (inventory, one page))).
 - Quarantine beyond the two heuristics (bisection, beat-window inference).
 - A/B dual-machine failover (two laptops, one show) — different tier of rig;
   the understudy protocol is deliberately not designed for it.

@@ -41,24 +41,24 @@ prerequisites aren't shipped, stop.
 | SIMULATIONS_DESIGN | REALTIME_3D P1 ✅ | full |
 | IMPORT_FIDELITY_DESIGN (added 2026-07-15) | none — all prereqs in-tree (MATERIAL M1–M6, REALTIME_3D P1–P3/P8/P9, shipped glTF assembler); **outranks IMPORT_DESIGN P1-remaining** (Peter: "really critical infra"); PROPOSED — Peter's read pending | full |
 | IMPORT_DESIGN | **P1: scope re-cut first per coherence audit F5** (reality note understates the shipped `build_import_graph` scene importer); **P1-remaining now orders AFTER IMPORT_FIDELITY (2026-07-15), whose F-P4 absorbs §8's normal-map report scope**; P1–P3 prereqs (REALTIME_3D P1 + MATERIAL M6) ✅; P5 needs SESSION_MODE + MEDIA_BACKEND P2; P6 agent half needs MCP | full |
-| COMMERCIALIZATION_DESIGN | none hard; P4 telemetry rides GIG_RESILIENCE P1–P2 ✅; AUDIO_ANALYSIS_ACCURACY P2+P6 (BUG-069) before launch | conformance |
+| COMMERCIALIZATION_DESIGN | none hard; P4 telemetry rides GIG_RESILIENCE P1–P2 ✅; AUDIO_ANALYSIS_ACCURACY P2+P6 (BUG-069 (shipping-license-audit)) before launch | conformance |
 | DJ_PERFORMANCE_DESIGN | ABLETON_SHOW_SYNC; PERFORM_SURFACE P1; MEDIA_BACKEND P1 | conformance |
 | PRO_DJ_LINK_DESIGN | PERFORM_SURFACE P1; sync-source seam (re-derive anchors — ABLETON_TRANSPORT_SYNC landed 2026-07-07) | conformance |
 | UI_AUTOMATION_DESIGN (P1–P2 ✅; P3–P4 remain) | none; UI_HARNESS P2 rewrites the shipped Runner — re-derive anchors (audit F18) | full (P1–P2) / conformance (P3–P4) |
-| TIMELINE_INGEST_DESIGN (P3–P5 ✅) | P1/P2 PARKED on BUG-028 | full |
+| TIMELINE_INGEST_DESIGN (P3–P5 ✅) | P1/P2 PARKED on BUG-028 (file-drop-targeting-cant-read-live-pointer-durin…) | full |
 | GAUSSIAN_SPLATS_DESIGN | none hard (P4 consumes shipped `render_scene`); D10 re-anchor owed before P3 (audit F4) | full |
 | SCENE_BUILD_AND_GROUP_PARAMS_DESIGN ✅ **WAVE COMPLETE 2026-07-10** (P1–P5 all shipped: Transform port+atom, render_scene port swap+v1.12.0 migration+importer, card sections, group-face rows, add-object/light+ribbons) — Peter L4 feel-pass on P5 gestures owed | (satisfied) REALTIME_3D P6 now unblocked (its P2 dep landed) | full |
 | APP_SHELL_DESIGN | none for P1–P3; its §8 slots bind their own waves | full (P1–P3) / conformance (§8 slots) |
 | VIDEO_IO_DESIGN (added 2026-07-09) | none for P1–P2; P3–P4 need the NDI SDK verify (D8; Peter if ambiguous) | full |
 | UI_HARNESS_UNIFICATION_DESIGN (added 2026-07-09) | none unbuilt (UI_AUTOMATION P1–P2 + UI_CLIP_AND_Z P1 shipped) | full |
 | PERF_BUDGET_GATE_DESIGN (added 2026-07-09) | none (UI_HARNESS P0 improves the numbers, doesn't block) | conformance |
-| LIVE_RECORDING_PROOFS_DESIGN (added 2026-07-09; **release-gating**, owns BUG-053) | none | full |
+| LIVE_RECORDING_PROOFS_DESIGN (added 2026-07-09; **release-gating**, owns BUG-053 (hdr-live-recording-structural)) | none | full |
 | BOX3D_PHYSICS_DESIGN (added 2026-07-09) | none for P1–P3; P4 wants depth-estimate (shipped) | full |
 | AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN (added 2026-07-09) | none | full |
 | AUDIO_ANALYSIS_ACCURACY_DESIGN (added 2026-07-08; = §3 item 13g) | none; P2+P6 gate COMMERCIALIZATION (BUG-069) | full |
 | MESH_DEFORM_AND_CURVE_GEOMETRY_DESIGN (added 2026-07-10) | none hard (`render_scene` + SCENE_BUILD P1–P3 ✅, `triangulate_grid` shipped); release-content authoring (scanned-flowers pieces); glTF *animation* explicitly deferred to its own future design | full |
 | RENDER_SCENE_UNBOUNDED_LIGHTS_DESIGN (✅ BUILT + LANDED 2026-07-10; single phase) | none — see the §2 render_scene same-file note; anchors now MOVED, re-derive before SCENE_BUILD P2 / GAUSSIAN P4 | full |
-| AUDIO_OBJECT_TRACKING_DESIGN (P1–P4 ✅ 2026-07-06; **P5 scope overlay + BUG-045 remain**) | none; P5 re-derives scope anchors (ScopeColumn typed-overlay refactor landed 2026-07-07) | full |
+| AUDIO_OBJECT_TRACKING_DESIGN (P1–P4 ✅ 2026-07-06; **P5 scope overlay + BUG-045 (gap-ring-down-chase) remain**) | none; P5 re-derives scope anchors (ScopeColumn typed-overlay refactor landed 2026-07-07) | full |
 | AUDIO_OBJECT_INGEST_DESIGN | OBJECT_TRACKING P0–P2 ✅; P1 blocked on Peter (labeled clips) **and on the F10 reconciliation with ANALYSIS_ACCURACY's eval harness** | conformance |
 | KICK_SWEEP_EVENT_DESIGN (P1/P2/P4/P5 ✅) | P3 feel-pass = Peter-owned (L4, not agent-executable) | full |
 | CAMERA_AND_LENS_DESIGN (added 2026-07-12) | none (REALTIME_3D P1–P3 ✅); its P1 oracle gates GBUFFER P1's conformance test | full |
@@ -121,7 +121,7 @@ rewritten as widgets one phase later. Order them; don't build twice.
 
 ## 3. Recommended order (re-rankable)
 
-**Version map (Peter, 2026-07-03 — see BUSINESS_PLAN.md §2):**
+**Version map (Peter, 2026-07-03 — see BUSINESS_PLAN.md §2 (The releases and what they mean for money)):**
 **v1.0 = waves 0–3 complete + the launch gate below** — core feature-complete,
 "just works out of the box." **v1.x** = small flexes (staged ML Vision tasks,
 preset/component packs) + the **import funnels as campaigns** — IMPORT P5
@@ -164,7 +164,7 @@ Grouped in waves; within a wave, items are independent and order is free.
     release-content push; OVERLAY P1 also fixes a live stale-search bug, so it is
     re-rankable arbitrarily early — nothing depends on it and it depends on nothing.
     **PRESET_LIBRARY P0 (added 2026-07-04 evening) fixes the live glTF-import
-    black-box bugs (BUG-016) and depends on nothing — run it FIRST, ahead of any
+    black-box bugs (BUG-016 (imported-glb-layers-are-black-boxes-no-card)) and depends on nothing — run it FIRST, ahead of any
     wave, next Sonnet session.**
 13c. TIMELINE_INTERACTION_P1_SPEC P1.0–P1.6 (added 2026-07-04, Peter-driven: five
     in-app interaction bugs, one authority-duplication disease). Sequel to the
@@ -214,12 +214,12 @@ Grouped in waves; within a wave, items are independent and order is free.
 13h. **2026-07-09 approvals (added by the 2026-07-10 audit; all zero-hard-edge —
     RANKED by Peter 2026-07-10):**
     1. UI_HARNESS_UNIFICATION P0–P3 (first — build starting 2026-07-10; P0 = the
-       BUG-060 red bracket; dev infra whose value compounds like UI_AUTOMATION's).
+       BUG-060 (VD-019: BUG-060 L3 scroll to true bottom) red bracket; dev infra whose value compounds like UI_AUTOMATION's).
     2. LIVE_RECORDING_PROOFS P1–P3 (**release-gating** — must land inside v1.0;
        no dependency on the harness — different crates — so it may run in
        parallel with it in a separate worktree).
     3. AUDIO_SETUP_DOCK P1–P4 (calibration loop + trigger unification; serves
-       set-prep directly). ✅ **WAVE COMPLETE 2026-07-10** — P1–P4 all shipped (`36a96791`, `e4aa01bf`, `47f2a112`, `5c4fbcca`, `12fbc37d`, `a649f62a`); closed BUG-047/070/082. Peter L4 feel-pass + Cap+N/St/Mo tooltips (Deferred) owed.
+       set-prep directly). ✅ **WAVE COMPLETE 2026-07-10** — P1–P4 all shipped (`36a96791`, `e4aa01bf`, `47f2a112`, `5c4fbcca`, `12fbc37d`, `a649f62a`); closed BUG-047 (setup-panel-overflow)/070/082. Peter L4 feel-pass + Cap+N/St/Mo tooltips (Deferred) owed.
     4. BOX3D_PHYSICS P1–P4 (differentiator, not release-gating; Peter: opens new
        visuals).
     Parked at the back (Peter 2026-07-10): VIDEO_IO P1–P4 (join-existing-rigs

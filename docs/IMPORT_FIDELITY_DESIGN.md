@@ -2,7 +2,7 @@
 
 **Status: SHIPPED · F-P1 + F-P3 SHIPPED 2026-07-15 (orchestrator session 1 of 3, landing report `docs/landings/2026-07-15-import-fidelity-p1p3.md`) · F-P2 + F-P4 SHIPPED 2026-07-15 (orchestrator session 2 of 3, landing report `docs/landings/2026-07-15-import-fidelity-p2p4.md`) · F-P5 SHIPPED 2026-07-15 (orchestrator session 3 of 3, landing report `docs/landings/2026-07-15-import-fidelity-p5.md`) · approved by Peter 2026-07-15 ("Approved") · authored 2026-07-15 · Fable 5 (his product calls are quoted in the intro, D7, and D8; glass/F-P5, pure-black base, and sun coherence added same day at his direction). Execution: 3 orchestrator sessions — (1) F-P1 ∥ F-P3 DONE, (2) F-P2 + F-P4 DONE, (3) F-P5 DONE — all phases shipped. · F-P6 (material-map mip pipeline) + F-P7 (softbox dome fill + rig defaults) SHIPPED 2026-07-15 (session 4, same-day fix after Peter's helmet/AMG renders exposed LOD-0 map aliasing and the metals-in-a-black-void failure; his fill/strip look pass was waived 2026-07-16 in the verification-debt burn-down — look issues from here are BUG_BACKLOG entries).**
 **Prerequisites: none — MATERIAL M1–M6, REALTIME_3D P1–P3/P8/P9, SCENE_BUILD P1–P5 and the shipped glTF assembler are all in-tree. IMPORT_DESIGN P1-remaining (lights/cameras/report surface) is independent and this doc outranks it in build order (Peter, 2026-07-15: "really critical infra").**
-**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any phase.**
+**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5 (Phase briefs)–§6 and §8 before starting any phase.**
 
 Peter's directives (2026-07-15, comparing an imported Mercedes-AMG GT3 .glb against
 its store-page preview): "this sounds like really critical infra that should be
@@ -20,14 +20,14 @@ conflict: `render_scene` uses the envmap for lighting only, never as background
 mostly-black environment with bright emitter strips: dramatic light streaks on dark
 metal, void stays void.
 
-Companions: `IMPORT_DESIGN.md` (owns the import funnels; its §8 tangent-space skip
+Companions: `IMPORT_DESIGN.md` (owns the import funnels; its §8 (Addendum 2026-07-04 — material-mapping corrections + fixtures (pre-execution)) tangent-space skip
 is superseded here), `MATERIAL_SYSTEM_DESIGN.md` (M6-D5's revival trigger fired —
 this doc is the "own designed slice" it called for), `REALTIME_3D_DESIGN.md` (owns
 `render_scene`; this doc grows its per-object surface the way §10/P8 did),
 `RENDER_SCENE_UNBOUNDED_LIGHTS_DESIGN.md` (precedent for a single-aspect
 render_scene doc). The pending void-haze design (bounded haze volume, Peter's go
 pending) is orthogonal and complementary — haze adds atmosphere; this doc makes the
-subject itself read correctly. Neither touches BUG-118 (fog wash — Peter: "I don't
+subject itself read correctly. Neither touches BUG-118 (render-scene-fog-washes-out-instead-of-depth-gra…) (fog wash — Peter: "I don't
 want bug-118 worked on").
 
 ---
@@ -173,7 +173,7 @@ split-sum IBL and the softbox bake mode are *genuinely new*; everything else is
   the void stays void. The Environment macro card keeps its 0–4 range and now
   defaults to 1.0. *Consequences, stated honestly:* existing presets are untouched
   (mode defaults to `gradient`, intensity semantics unchanged), but freshly imported
-  cards look different from pre-design imports, and — as with BUG-149's fog scaling —
+  cards look different from pre-design imports, and — as with BUG-149 (glb-import-fog-slider-per-world-unit-cliff)'s fog scaling —
   **already-imported projects need a re-import to pick up the new defaults.**
 - **D8 (added 2026-07-15, Peter: "I think it makes sense to add it") — Transparency
   v1 is a sorted per-object blend pass in `render_scene`, not order-independent
@@ -325,7 +325,7 @@ instead of reading it (`feedback_synthesis_drift`).
   look check (L4, his call, not any agent's). Gate (negative):
   report enumerates every unmapped feature of an over-featured fixture; existing
   assembler tests green; `check-presets` clean. Round-trip gate: save an imported
-  project, reload, maps still bound (BUG-036 rule). Demo: the ≤2-minute
+  project, reload, maps still bound (BUG-036 (param-manifest-construction-not-a-unified-safe-g…) rule). Demo: the ≤2-minute
   click-script for Peter — import the AMG, confirm chrome + void + glow.
 
 - **F-P5 — SHIPPED 2026-07-15, `61400029`.** Glass (sorted blend pass). D8 whole: `AlphaMode::Blend` variant +

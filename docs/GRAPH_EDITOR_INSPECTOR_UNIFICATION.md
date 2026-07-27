@@ -4,7 +4,7 @@
 
 > **Supersession note (2026-07-22, UI_FUNNEL P-Z):** references below to `dispatch_inspector` / `ActiveInspectorDrag` / `PanelAction` trio variants describe the PRE-decomposition architecture. Current state: 12 flat domain enums + exhaustive router (P-D), one Scrub gesture wire with `ScrubState.active` (P-I, `ActiveInspectorDrag` extinct), per-domain `dispatch/` handlers (P-B). Anchors here are historical.
 (full inspector column in the editor) SHIPPED with EDITOR_WINDOW_UNIFICATION P1–P3
-(2026-07-14). Change 4 (layout invariance, closes BUG-160): P2 (tick parity, D4)
+(2026-07-14). Change 4 (layout invariance, closes BUG-160 (editor-window-unification-inspector-card-layout-…)): P2 (tick parity, D4)
 SHIPPED 2026-07-15 (`d85ab207`); P1 PARTIAL — D1/D2/D7 shipped in the same
 landing, D3 (fit-at-every-width: elide/chip-wrap) and the width-sweep
 containment test still owed — see the section at the end of this doc.
@@ -329,7 +329,7 @@ that card. Same underlying retarget call, two entry points.
 
 ## Change 4 — Layout invariance (closes BUG-160) · P2 SHIPPED 2026-07-15 (`d85ab207`); P1 PARTIAL (D1/D2/D7 shipped, D3 + width-sweep test owed) · Fable design, Sonnet execution
 
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5 (Phase briefs)–§6 before starting any phase.
 
 Peter's directive, verbatim (2026-07-14): "The cards and inspector in the graph
 editor should be IDENTICAL to the main window inspector with only the mapping
@@ -371,11 +371,11 @@ mechanism table, read from code:
 
 | Piece | Where | Fact |
 |---|---|---|
-| Context flag | `crates/manifold-ui/src/panels/param_card.rs:89` `CardContext { Perform, Author }`; set for the editor at `crates/manifold-app/src/workspace.rs:92` (BUG-121 fix) | Author = editor cards. |
+| Context flag | `crates/manifold-ui/src/panels/param_card.rs:89` `CardContext { Perform, Author }`; set for the editor at `crates/manifold-app/src/workspace.rs:92` (BUG-121 (graph-editor-effect-card-missing-mapping-drawer-…) fix) | Author = editor cards. |
 | **Geometry forks on context** | `param_card.rs:2469` and `:2702` — `chevron_lane = if author { MAP_CHEVRON_W + DE_BUTTON_GAP } else { 0.0 }`, subtracted from `slider_w` | The SAME card lays out differently per window. This is the structural violation of "identical". Two row builders duplicate the lane math — they can drift from each other too. |
 | Label column | `param_card.rs:2477` `label_width_for_row(w - PADDING*2)` | Label width ignores the chevron lane; at the editor's 340px lane (Dock::editor() right_range default) long labels collide/clip. |
 | **Motion forks on context** | `param_card.rs:830` (`eases = context != Author`), `:1080-1090` ("Author context which nothing ticks") | Author cards SNAP drawer heights because the editor's `UIRoot` is never ticked — a workaround for the missing tick, not a design. |
-| Missing tick | `crates/manifold-app/src/ui_root.rs:2994` `update()` early-returns on `!built`; editor root is permanently `!built`; `app_render.rs:3146` ticks only `self.ws.ui_root`; `update_fire_meters` (`:3198`) also main-only | Same mechanism BUG-157 documented. Inspector drawer tweens/value-flash/dying-card collapse never advance in the editor; fire meters never move there. |
+| Missing tick | `crates/manifold-app/src/ui_root.rs:2994` `update()` early-returns on `!built`; editor root is permanently `!built`; `app_render.rs:3146` ticks only `self.ws.ui_root`; `update_fire_meters` (`:3198`) also main-only | Same mechanism BUG-157 (editor-perf-hud-never-ticked-shows-dashes-foreve…) documented. Inspector drawer tweens/value-flash/dying-card collapse never advance in the editor; fire meters never move there. |
 | Shared build path (already unified — do not touch) | `inspector.rs:2070` `build_in_rect` (both windows), `sync_inspector_data` mirrored to the editor instance at `app_render.rs:2943-2957` | Build + sync are already single-path; Change 4 closes the two remaining forks (geometry, tick) and pins the invariant with machine checks. |
 
 ### Decisions

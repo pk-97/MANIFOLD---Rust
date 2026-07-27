@@ -226,7 +226,7 @@ shaped `condition()` signal into `engine.fire_meters` (D6 fire meter), keyed
 without ever advancing the fire edge or emitting a `FireRequest` — a
 performer tuning a trigger at soundcheck (transport stopped, track through
 the tap) still sees the meter move, but nothing can fire while stopped
-(BUG-109, fixed by AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md §7 P5).
+(BUG-109 (fire-meter-dead-in-all-transport-states), fixed by AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md §7 P5).
 `fire_meters` itself resets exactly ONCE per tick, at the top of
 `engine.tick`, before either branch's evaluators run — a prior per-branch
 reset placed after the playing branch's own step-3b push silently wiped it

@@ -395,8 +395,8 @@ invariant a fused def must respect:
 
 **Update 2026-07-03: the hunt ran** (40-agent adversarial workflow; 10 lenses, 2 skeptics
 per finding). Outcome: 7 confirmed + 2 split-verdict findings, all documented as
-**BUG-006 … BUG-014 in [BUG_BACKLOG.md](BUG_BACKLOG.md)** — including a likely mechanism
-for edge #2 below (unchecked Metal command-buffer status, BUG-013). The completeness
+**BUG-006 (param-edits-undo-fused-away-nodes-silently-no) … BUG-014 (parked) in [BUG_BACKLOG.md](BUG_BACKLOG.md)** — including a likely mechanism
+for edge #2 below (unchecked Metal command-buffer status, BUG-013 (commit-wait-completed-never-checks-command-buffe…)). The completeness
 critic's round-2 lens list (what got shallow coverage): the executor itself
 (`execution.rs`/`execution_plan.rs`, esp. the §9.9 specialization-vs-memoizer question),
 `classify.rs`'s gates independent of its stale comments, `space.rs`'s mixed-input canvas
@@ -404,7 +404,7 @@ fallback, `diff.rs` (can the oracle itself false-pass?), `reference.rs` golden-u
 discipline, `graph_loader.rs`'s consumption of fused defs, the segment Pending-hang path,
 and edges #3/#7 below, which no lens engaged.
 
-1. FIXED (2026-07-14, FUSION_SOTA_DESIGN.md P1): the **marker ABI** (§5) now has
+1. FIXED (2026-07-14, FUSION_SOTA_DESIGN.md P1): the **marker ABI** (§5 (Decided — do not reopen)) now has
    type-level enforcement — `freeze/markers.rs`'s `Marker` enum with `emit`/`parse`
    as the sole wire-format implementation, both codegen/install (producer) and
    `wgsl_compute::introspect` (consumer) compile against it. Negative gate

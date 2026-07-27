@@ -2,7 +2,7 @@
 
 **Status:** SHIPPED — P0–P6 fully landed 2026-07-04/05 (last `4c860cad`). Open verification debt: the interactive GUI matrix (drag-drop, search-clear, management matrix, thumbnail display) is VD-002 in `docs/VERIFICATION_DEBT.md` — blocked on UI_AUTOMATION for scripted coverage. · designed 2026-07-04 · Fable
 **Prerequisites:** none for P0–P4 (P0 is re-rankable first — it fixes live bugs); P5 (browser) has a hard edge on OVERLAY_SESSIONS_AND_PICKER P2; P6 (thumbnails) is verify-at-impl gated.
-**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5–§6 before starting any phase.
+**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5 (Phase briefs)–§6 before starting any phase.
 
 Peter, 2026-07-04: **"I want to rethink these categories from the ground up. The
 current model we use isn't easy to follow or intuite"** — the categories being
@@ -122,7 +122,7 @@ effective defs).
   params invisible (`inspector.rs:2251` reads the registry only), editor
   catalog-default `None` (which also gates several edit dispatch arms into
   silent no-ops, e.g. `app.rs:1356`). Fixing the consumers one by one is the
-  forbidden move; catalog citizenship fixes them as a class. Backlog: BUG-016.
+  forbidden move; catalog citizenship fixes them as a class. Backlog: BUG-016 (imported-glb-layers-are-black-boxes-no-card).
 
 Consequences, stated honestly: **a tracking instance changes when its library file
 changes.** That's the deliberate cost of keeping the authoring loop live — a stock

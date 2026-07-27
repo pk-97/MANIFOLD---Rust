@@ -2,7 +2,7 @@
 
 Drive any effect-card slider from live audio. A new modulation source that sits beside the existing envelope and driver (beat-synced LFO) sources on every parameter — same drawer pattern, same per-param binding model. The instrument goal: route a bassline into Manifold and have its **pitch movement** push a visual parameter, so wobbles, glides, pitch-shifts and risers map straight onto the visuals — not just "the music got louder."
 
-Status: **v1 SHIPPED 2026-06-17** (§11 steps 1–5 ✅: modulation plumbing, drawer UI, feature×band matrix, spectrogram overlays). Step 6 (onset) shipped as the SuperFlux per-band transients detector. **Step 7 (pitch/ridge tracking) is now designed: [AUDIO_OBJECT_TRACKING_DESIGN.md](AUDIO_OBJECT_TRACKING_DESIGN.md) (2026-07-06)** — it inherits §6's commitments; note its D2 supersedes §6's synchrosqueezing choice (harmonic-sum salience on the shared VQT column instead, synchro kept as a named precision fallback). Known stale labeled question: the §12 device-selection default was due "before step 2 ships" — step 2 shipped without closing it in-doc.
+Status: **v1 SHIPPED 2026-06-17** (§11 steps 1–5 ✅: modulation plumbing, drawer UI, feature×band matrix, spectrogram overlays). Step 6 (onset) shipped as the SuperFlux per-band transients detector. **Step 7 (pitch/ridge tracking) is now designed: [AUDIO_OBJECT_TRACKING_DESIGN.md](AUDIO_OBJECT_TRACKING_DESIGN.md) (2026-07-06)** — it inherits §6 (Plausible-wrong architectures, forbidden by name)'s commitments; note its D2 supersedes §6's synchrosqueezing choice (harmonic-sum salience on the shared VQT column instead, synchro kept as a named precision fallback). Known stale labeled question: the §12 device-selection default was due "before step 2 ships" — step 2 shipped without closing it in-doc.
 
 ---
 
@@ -210,7 +210,7 @@ The drawer parallels the existing envelope/driver drawers built on `param_slider
   - **Band** — Full / Low / Mid / High. Feature × Band = the cell that drives the slider.
   - **Invert** toggle (loud→low). **As-built note (2026-07-11):** the Delta
     (drive-on-rate-of-change) toggle shown here was removed from the drawer —
-    `AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` §7.2 item 2, Peter's
+    `AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` §7.2 (Decisions (Peter, 2026-07-11) — do not reopen) item 2, Peter's
     call: "not very useful and adds a lot of clutter." The runtime
     `AudioModShape::rate_of_change` field and the `condition()` arm that
     reads it stay compiled — dormant, not deleted — for a possible future

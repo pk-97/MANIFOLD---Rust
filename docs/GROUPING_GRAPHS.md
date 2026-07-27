@@ -15,7 +15,7 @@ result, but the author following this guide is the agent.
 Read alongside:
 - [NODE_GROUPS_DESIGN.md](NODE_GROUPS_DESIGN.md) — the flattener mechanics + JSON schema (the
   authoritative spec for *what a group is*; this guide assumes it).
-- [DECOMPOSING_GENERATORS.md](DECOMPOSING_GENERATORS.md) §6.6 — naming nodes for what they do.
+- [DECOMPOSING_GENERATORS.md](DECOMPOSING_GENERATORS.md) §6.6 (Name nodes for what they do, not how they're built) — naming nodes for what they do.
 
 ---
 
