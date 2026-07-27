@@ -128,7 +128,7 @@ Not novel as a concept — workflow engines and CI pipelines are old. What is ne
 - **Verdict rationale field.** BUILT 2026-07-27: `gate_runner review --task --verdict --subject --rationale` appends the line to decisions.md and refuses token rationales; the trail stays gate-only per GATE_RUNTIME_DESIGN D8.
 - **Driver script.** Peter 2026-07-27: likely unnecessary — the lead IS the driver; the queue, hooks, and gate_runner are the mechanism. A standalone driver only ever buys unattended multi-day runs; unbuilt unless that need arrives, and still Peter's call.
 - **Plan-template library.** After R2, name the repeated shapes and pre-adversarial them.
-- **The general claim stays parked.** Universal semantic IR between humans, models, and workflows — overshoot until oracle coverage exists outside code (§4.9).
+- **The general claim stays parked — but sharpened (Peter + Fable, 2026-07-27).** Universal semantic IR between humans, models, and workflows — overshoot until oracle coverage exists outside code (§4.9). The sharpened form worth keeping: *the instruction set is the model.* A program library is a learned artifact — trained on incidents instead of gradients, one-shot per failure, no forgetting, human-reviewed updates, auditable and portable across models in a way weights aren't. Generalizing = learning program shapes across many repos and validating them against oracles; agents then compile problems into proven programs instead of improvising control flow (Agentless already proved the primitive case on SWE-bench). A training problem wearing a systems costume. R2 is the n=1 eval; still parked until it reads out.
 
 ## 10. CANDIDATE: DEBUG_INVESTIGATION — a program shape from the RT static-death hunt (2026-07-26, proposed, not adopted)
 
