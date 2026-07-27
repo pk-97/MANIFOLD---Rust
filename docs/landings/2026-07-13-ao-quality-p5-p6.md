@@ -1,7 +1,7 @@
 # CINEMATIC_POST P6 (bilateral_blur AO denoise) + P5 (ssao_gtao) — landed 2026-07-13 @ `3e774a36`
 
-**Branch:** `feat/ao-denoise-gtao` · **Level reached:** L2 (amended §4 demo rule — numeric gates + a looked-at PNG; Peter's own look-pass still owed, see VD-020) / target L2
-**Doc status line (quoted verbatim):** "IN PROGRESS — P0–P6 SHIPPED · Sonnet 5 · ... **P6 SHIPPED 2026-07-13 (Sonnet 5, AO-quality lane, `feat/ao-denoise-gtao`)** ... **P5 SHIPPED 2026-07-13 (Sonnet 5, same lane)** ... **Peter's own look-pass on both P5 and P6 (§4's demo rule) is still owed** — orchestrator-level PNG review found no defects, but that is not a substitute for his verdict."
+**Branch:** `feat/ao-denoise-gtao` · **Level reached:** L2 (amended section 4 demo rule — numeric gates + a looked-at PNG; Peter's own look-pass still owed, see VD-020) / target L2
+**Doc status line (quoted verbatim):** "IN PROGRESS — P0–P6 SHIPPED · Sonnet 5 · ... **P6 SHIPPED 2026-07-13 (Sonnet 5, AO-quality lane, `feat/ao-denoise-gtao`)** ... **P5 SHIPPED 2026-07-13 (Sonnet 5, same lane)** ... **Peter's own look-pass on both P5 and P6 (section 4's demo rule) is still owed** — orchestrator-level PNG review found no defects, but that is not a substitute for his verdict."
 
 ## Summary
 
@@ -74,7 +74,7 @@ Full crate gpu-proofs sweep (`cargo test -p manifold-renderer --features gpu-pro
 
 ## Verification debt
 
-VD-020 opened — Peter's look-pass on the P5/P6 PNG pairs (§4's amended demo rule) is the real exit and hasn't run yet. Nothing else carried; both phases' numeric gates are complete and green.
+VD-020 opened — Peter's look-pass on the P5/P6 PNG pairs (section 4's amended demo rule) is the real exit and hasn't run yet. Nothing else carried; both phases' numeric gates are complete and green.
 
 ## Tool feedback (first-live-test telemetry, both workers + orchestrator independently hit this)
 

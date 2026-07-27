@@ -43,10 +43,10 @@ Negative gates:
 ```
 
 ## Deviations from brief
-One, disclosed and corrected: P1 (following doc §3.1 as originally written) wired
+One, disclosed and corrected: P1 (following doc section 3.1 as originally written) wired
 `CURRENT_PROJECT_VERSION` into the final migration rung. The orchestrator caught this as a
 version-bump footgun (the then-intermediate rung would stamp the newer version → the new rung's
-gate skips → a migration silently never runs) and fixed it at `9668329e`; doc §3.1/D3 corrected to
+gate skips → a migration silently never runs) and fixed it at `9668329e`; doc section 3.1/D3 corrected to
 match. P1 also regenerated `docs/README.md` (the design-doc commit had left the docs index out of
 sync) — mechanical, via `scripts/gen_docs_index.py`.
 
@@ -62,7 +62,7 @@ fault-injection-proven; consciously carried. No other VD opened; none closed.
 ## Scope-honesty note for Peter
 BUG-063's original backlog fix shape asked for a *blocking* acknowledge dialog **and** journaling
 the pre-repair `project.json` into `history/` as a rescue snapshot. P3 shipped the lighter,
-non-blocking toast (design §3.6 decision) and deferred the rescue path (design Deferred §6). So the
+non-blocking toast (design section 3.6 decision) and deferred the rescue path (design Deferred section 6). So the
 *silent* half is closed; a one-restore-away rescue of pre-repair data is not built. Flagging in case
 you want the rescue-journaling as a fast follow.
 

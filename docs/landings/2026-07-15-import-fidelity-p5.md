@@ -1,7 +1,7 @@
 # IMPORT_FIDELITY F-P5 — landed 2026-07-15 @ `61400029` (pending push to origin/main)
 
 **Branch:** `feat/import-fidelity-fp5`, orchestrator session 3 of 3 (execution ran in-session, no separate worker/orchestrator split for this phase).
-**Level reached:** L1 (numeric gpu-proofs + unit gates, all green) / target L4 (§10) — L4 is Peter's click-script below, not yet run by him.
+**Level reached:** L1 (numeric gpu-proofs + unit gates, all green) / target L4 (section 10) — L4 is Peter's click-script below, not yet run by him.
 **Doc status line (quoted verbatim):** `SHIPPED · F-P1 + F-P3 SHIPPED 2026-07-15 (orchestrator session 1 of 3, landing report \`docs/landings/2026-07-15-import-fidelity-p1p3.md\`) · F-P2 + F-P4 SHIPPED 2026-07-15 (orchestrator session 2 of 3, landing report \`docs/landings/2026-07-15-import-fidelity-p2p4.md\`) · F-P5 SHIPPED 2026-07-15 (orchestrator session 3 of 3, landing report \`docs/landings/2026-07-15-import-fidelity-p5.md\`) · approved by Peter 2026-07-15 ("Approved") · authored 2026-07-15 · Fable 5 (his product calls are quoted in the intro, D7, and D8; glass/F-P5, pure-black base, and sun coherence added same day at his direction). Execution: 3 orchestrator sessions — (1) F-P1 ∥ F-P3 DONE, (2) F-P2 + F-P4 DONE, (3) F-P5 DONE — all phases shipped.`
 
 ## Gate results (verbatim)

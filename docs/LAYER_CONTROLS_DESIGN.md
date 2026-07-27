@@ -4,7 +4,7 @@
 
 Status: **SHIPPED** (verified in-tree 2026-07-05 baseline review: the `LayerControl`
 descriptor engine, Gain/Send widgets, and the Analysis toggle + routing split are live
-in `layer_header.rs` — this doc previously still said "design, not yet built"; its §5.3
+in `layer_header.rs` — this doc previously still said "design, not yet built"; its section 5.3
 "still to build" claims are also stale). Authored 2026-06-18 as prereq for the Audio
 Layer card (`docs/AUDIO_LAYER_DESIGN.md`). Owns the timeline layer-header control surface;
 the graph/node UI lives in `docs/UI_UX_SYSTEM_DESIGN.md`, which this does not touch.
@@ -96,7 +96,7 @@ Audio omits Led (LED output is unrelated), Blend (no compositing), Folder /
 NewClip (files arrive by drag-drop), GenType, and all MIDI (no note triggering).
 Decisions confirmed with Peter 2026-06-18: cut "+ new clip" and the third
 (Led) button; Mute/Solo are the same shared buttons as other layers. The
-**Analysis** toggle (output state, §5.3) was added 2026-06-19.
+**Analysis** toggle (output state, section 5.3) was added 2026-06-19.
 
 ## 5. Audio's new controls
 
@@ -129,7 +129,7 @@ ships — see AUDIO_LAYER_DESIGN.)
 **Locked with Peter 2026-06-19.** Every audio lane has **three output states**,
 driven by **two independent toggles** on the header — **Mute** (the existing
 shared button) and a new **Analysis** toggle. Stem lanes from Detect and Group
-([AUDIO_CLIP_DETECTION_DESIGN §8](AUDIO_CLIP_DETECTION_DESIGN.md)) default to
+([AUDIO_CLIP_DETECTION_DESIGN section 8](AUDIO_CLIP_DETECTION_DESIGN.md)) default to
 **Analysis**.
 
 | State | Toggles | → master | → send | Meaning |
@@ -142,7 +142,7 @@ shared button) and a new **Analysis** toggle. Stem lanes from Detect and Group
   and the shipped mute path zeroes the sub-track volume
   ([audio_layer_playback.rs:226](../crates/manifold-playback/src/audio_layer_playback.rs#L226)),
   so **mute already kills the send.** "Silent to master but hot to its send" is
-  therefore a distinct routing, not a fader move — see AUDIO_LAYER_DESIGN §5 for
+  therefore a distinct routing, not a fader move — see AUDIO_LAYER_DESIGN section 5 for
   the routing split. **Status:** Mute/Solo/Gain/Send shipped; the **Analysis
   toggle + its routing split are the part still to build.**
 - **Visual.** Analysis-only reads as an **ear / scope glyph + a dimmed
@@ -152,7 +152,7 @@ shared button) and a new **Analysis** toggle. Stem lanes from Detect and Group
   regardless of Analysis.)
 
 > ✓ **Settled by the shipped code** (was flagged as a reversal). An early draft
-> of AUDIO_LAYER_DESIGN §5 wanted mute to keep feeding the send. The shipped
+> of AUDIO_LAYER_DESIGN section 5 wanted mute to keep feeding the send. The shipped
 > infra does the opposite — the post-fader tap zeroes on mute, so **mute is
 > already the "fully off" state.** The 3-state model matches what shipped; no
 > decision is owed. Analysis-only is purely the additive middle state.

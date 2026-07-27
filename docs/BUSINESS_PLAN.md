@@ -140,7 +140,7 @@ assumes hiring.
 ## 10. Locked decisions / still open
 
 **Locked** (don't re-litigate per release): the wedge positioning and four
-pillars · recovery-demo marketing, never no-crash claims · the version map in §2
+pillars · recovery-demo marketing, never no-crash claims · the version map in section 2
 · perpetual + update pass · watermark trial · offline licensing · merchant of
 record · five free lifetime cohort seats · one flex per release.
 

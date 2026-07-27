@@ -35,7 +35,7 @@ crossing silently killed the *entire* motion stream (Peter's live "first band-li
 click is always dead" trace). Ownership routing, not node identity, now decides
 delivery.
 
-## Forbidden moves (§3.5) — respected
+## Forbidden moves (section 3.5) — respected
 
 1. Did not add the newly-relevant overlay to the existing unconditional
    inspector/layer-headers second-loop pattern as a "fix" — the whole point of this
@@ -51,7 +51,7 @@ delivery.
 `rg -n "overlay_drag_active" crates/manifold-app/src/ui_root.rs` returned **7**
 sites at start (`336, 461, 1461, 1464, 1472, 1483, 2493`), not the doc's baked 5.
 Per the orchestrator's pre-approved resolution: the two extras (`1472`, `1483`)
-were `eprintln!` reads inside the stash-gate's trace block, which §3.2's rewrite
+were `eprintln!` reads inside the stash-gate's trace block, which section 3.2's rewrite
 deletes wholesale — they went with it. The `MANIFOLD_INPUT_TRACE` tap itself stayed
 alive, retargeted to print `drag_owner` instead of the old latch (see the retargeted
 `eprintln!` in `process_events`'s stash decision).
@@ -108,7 +108,7 @@ Classified by how each site was handled:
   match first.
 - `crates/manifold-app/src/ui_root.rs`'s own `route_inspector_events` (editor
   window) — same `try_begin_card_drag` call, mechanically adapted; per the design's
-  §7 Deferred note this window doesn't get its own `DragOwner` registry in P1, only
+  section 7 Deferred note this window doesn't get its own `DragOwner` registry in P1, only
   the shared D9/D3 fixes (which it inherits for free, same types).
 
 No misfit site required escalation — every consumer fell cleanly into one of the

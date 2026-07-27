@@ -1,11 +1,11 @@
 # Git tree discipline — build spec
 
-Status: §1 shared-checkout guard RETIRED 2026-07-27 (pidfile signal retired
-with the daemon, 2026-07-18); §1b landing-protocol guard IN PROGRESS
-2026-07-04; §2 ff-only model RETIRED 2026-07-04, replaced by the merge-trunk
+Status: section 1 shared-checkout guard RETIRED 2026-07-27 (pidfile signal retired
+with the daemon, 2026-07-18); section 1b landing-protocol guard IN PROGRESS
+2026-07-04; section 2 ff-only model RETIRED 2026-07-04, replaced by the merge-trunk
 landing protocol below.
 
-## Incident 1 (§1's origin)
+## Incident 1 (section 1's origin)
 
 Two live sessions shared the main checkout; one switched branches and
 fast-forward merged while the other had uncommitted file moves in flight. The
@@ -13,12 +13,12 @@ merge resurrected the moved files' old paths and the second session's commit
 landed on a branch it never chose. Full incident: `88257631` commit message +
 the hazards section of the `agent-execution-playbook` memory.
 
-Root cause: N concurrent sessions, one HEAD. The fix (§1) makes main-checkout
+Root cause: N concurrent sessions, one HEAD. The fix (section 1) makes main-checkout
 branch state owned and enforced, not remembered.
 
-## Incident 2 (§2's origin — the ff-only model itself was unsatisfiable)
+## Incident 2 (section 2's origin — the ff-only model itself was unsatisfiable)
 
-The original §2 said main is fast-forward-only: a workstream lands with
+The original section 2 said main is fast-forward-only: a workstream lands with
 `git branch -f main <tip> && git push origin <tip>:main`. That assumed one
 integrator lands at a time. It broke under N orchestrator sessions finishing
 at different times (plus daemon/docs commits landing on main directly between
@@ -36,9 +36,9 @@ again, under different SHAs.
 
 Root cause: a single-integrator model applied to a multi-integrator reality.
 Full diagnosis + the P4 cleanup brief: the `git-landing-protocol` memory.
-Decided with Peter 2026-07-04, replacing §2 below.
+Decided with Peter 2026-07-04, replacing section 2 below.
 
-## §1. Shared-checkout guard (RETIRED 2026-07-27)
+## 1. Shared-checkout guard (RETIRED 2026-07-27)
 
 Detected a concurrent session's live daemon pidfile
 (`.claude/daemon/verdicts/*.pid`) and warned on a main-checkout branch
@@ -51,12 +51,12 @@ The Incident-1 hazard (two sessions sharing one HEAD — a branch switch
 moves the tree under the other) is NOT retired. It stays mitigated by the
 worktree slot ring (`scripts/agent-worktree.py` — branch work lives in
 worktrees, not the shared checkout) and the merge-trunk landing protocol
-(§2) plus `detect_unverified_compound_landing_merge`.
+(section 2) plus `detect_unverified_compound_landing_merge`.
 
-## §1b. Landing-protocol guard (spec — implementing this session)
+## 1b. Landing-protocol guard (spec — implementing this session)
 
 File: `.claude/hooks/preToolUseBash.py`. Two new behaviors, both scoped to
-the MAIN checkout only (same `in_main` resolution as §1; worktree-targeted
+the MAIN checkout only (same `in_main` resolution as section 1; worktree-targeted
 commands are unaffected):
 
 1. **Always ask** (regardless of foreign-session liveness — this is now
@@ -75,9 +75,9 @@ commands are unaffected):
    detection as above, minus the force-flag requirement) gets the normal
    allow plus a short `additionalContext` reminder of the landing-protocol
    loop (fetch → merge origin/main → gate → merge --no-ff → push → retry on
-   rejection) and the two twin-killers (§2 below).
+   rejection) and the two twin-killers (section 2 below).
 
-Failure posture: same as §1 — any exception falls back to today's behavior
+Failure posture: same as section 1 — any exception falls back to today's behavior
 for that command.
 
 Tests: extend the hook's existing test setup. Cases: `branch -f main <tip>`
@@ -88,7 +88,7 @@ origin main` (allow + reminder present); `merge <branch>` while on main
 (allow + reminder); same commands with target dir under
 `.claude/worktrees/` (unaffected, no reminder, no ask).
 
-## §2. Landing protocol (replaces the retired ff-only convention)
+## 2. Landing protocol (replaces the retired ff-only convention)
 
 - **Main is the merge-based trunk.** No separate integration branch — the
   branch that accidentally became one (`feat/timeline-ui-redesign`) is
@@ -98,7 +98,7 @@ origin main` (allow + reminder present); `merge <branch>` while on main
 - **To land a workstream:** fetch → merge current `origin/main` into your
   branch → rerun the gate (touched-crate clippy + focused tests; the full
   workspace sweep — workspace clippy `--tests` + `cargo nextest run --workspace` +
-  `cargo deny check bans` — at batched landings per §2c, or sooner when blast
+  `cargo deny check bans` — at batched landings per section 2c, or sooner when blast
   radius says so; plus the UI flow gate — `scripts/run_ui_flows.py
   --touched origin/main...HEAD` — path-scoped via the flow manifest's
   `path_triggers`, exits 0 immediately when no flow-mapped path is touched;
@@ -136,12 +136,12 @@ origin main` (allow + reminder present); `merge <branch>` while on main
 - **Twin-killer 2:** never delete a branch until `git merge-base
   --is-ancestor <tip> origin/main` confirms its commits are on main.
 - `git branch -f main <tip>` and force-pushes to main are anti-patterns now
-  (§1b asks before either).
+  (section 1b asks before either).
 - A session doing sustained code work still gets a LONG-LIVED worktree slot
   for the workstream, acquired off a verified tip (the playbook's step-0
   base-verification guard) with gitignored fixtures copied in; per-session
   worktrees pay the cargo cold-build tax and are not the pattern. Acquire
-  through `scripts/agent-worktree.py` (§2c) — the ONLY sanctioned source
+  through `scripts/agent-worktree.py` (section 2c) — the ONLY sanctioned source
   (raw `git worktree add` is hook-denied since the 2026-07-15 455 GB
   incident). It reuses an idle warm slot before it ever creates a cold one.
 - The main checkout is the only place merges to main happen. Sessions in
@@ -156,7 +156,7 @@ origin main` (allow + reminder present); `merge <branch>` while on main
   (`preToolUseBash.py`). Worktrees come from `scripts/agent-worktree.py
   acquire` only, with the step-0 base-verification guard in the brief.
 
-## §2c. Build-speed rules (added 2026-07-10 — orchestration wall-clock pass)
+## 2c. Build-speed rules (added 2026-07-10 — orchestration wall-clock pass)
 
 Measured basis: ~80% of a phase's wall-clock is cargo compile/test (playbook,
 2026-07-03); by 2026-07-10 ten live worktrees carried 5–41 GB of cold-built
@@ -206,7 +206,7 @@ Measured basis: ~80% of a phase's wall-clock is cargo compile/test (playbook,
    sweep as of 2026-07-11 — `deny.toml` is the actual enforcement of the
    wgpu/metal dependency bans.
 
-## §2b. Pending cleanup (2026-07-04 twin-commit remediation)
+## 2b. Pending cleanup (2026-07-04 twin-commit remediation)
 
 1. **Land automation P4** — the only content genuinely missing from main.
    Cherry-pick the six P4 commits from `feat/timeline-ui-redesign` (`f03c8a31`,
@@ -216,7 +216,7 @@ Measured basis: ~80% of a phase's wall-clock is cargo compile/test (playbook,
    copies. Conflicts against main's motion twins (`bfc1ebd4`/`18b82ab4`) are
    expected and bounded. Full workspace sweep (P4 touches manifold-ui +
    renderer broadly), then merge to main, push. This is twin-killer 1's
-   sanctioned exception (see §2) — feat is being retired right after.
+   sanctioned exception (see section 2) — feat is being retired right after.
 2. **Prune retired branches** — after `is-ancestor` confirms content is on
    main: delete `feat/timeline-ui-redesign`, `lane/automation-lanes`,
    `lane/timeline-p0`, `lane/ui-motion` (local + remote + their
@@ -229,14 +229,14 @@ Measured basis: ~80% of a phase's wall-clock is cargo compile/test (playbook,
    `wave/*`) look stale relative to current main. Verify each with
    `is-ancestor` before deleting — don't assume from the name.
 
-## §3. Already in force (no work)
+## 3. Already in force (no work)
 
 Commit fast — never sit on uncommitted renames/deletions while other sessions
 or agents run; read the branch off the commit OUTPUT, not session start; diff
 resurrected files against their new-path versions before deleting (a merge,
 not an agent, may have restored them).
 
-## §3b. Shared-checkout commit mechanics (added 2026-07-07 — four sessions hit these in one day)
+## 3b. Shared-checkout commit mechanics (added 2026-07-07 — four sessions hit these in one day)
 
 - **Untracked-file exception to the pathspec-commit rule.** `git commit -m …
   -- <path>` fails with "pathspec did not match" for a NEW file — git cannot
@@ -270,7 +270,7 @@ not an agent, may have restored them).
 
 ## Acceptance
 
-§1 test cases (unchanged) pass. §1b: `branch -f main` and force-push-to-main
+section 1 test cases (unchanged) pass. section 1b: `branch -f main` and force-push-to-main
 ask unconditionally in the main tree, are unaffected in a worktree; a
 non-force push/merge landing on main carries the reminder; all cases fail
 open on exception. Clippy-clean is N/A (hook is Python). Commit by path and

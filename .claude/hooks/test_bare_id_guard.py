@@ -88,15 +88,24 @@ cases = [
     ("bare cross-doc secref denied", {
         "tool_name": "Write",
         "tool_input": {"file_path": f"{DOCS}/A.md",
-                       "content": "See docs/WIDGET_TREE_DESIGN.md §5b for the recipe."}}, True),
+                       "content": "See docs/WIDGET_TREE_DESIGN.md section 5b for the recipe."}}, True),
     ("named cross-doc secref allowed", {
         "tool_name": "Write",
         "tool_input": {"file_path": f"{DOCS}/A.md",
-                       "content": "See docs/WIDGET_TREE_DESIGN.md §5b (param-surface recipe)."}}, False),
+                       "content": "See docs/WIDGET_TREE_DESIGN.md section 5b (param-surface recipe)."}}, False),
     ("same-doc secref stays bare", {
         "tool_name": "Write",
         "tool_input": {"file_path": f"{DOCS}/A.md",
-                       "content": "Details in §5b below."}}, False),
+                       "content": "Details in section 5b below."}}, False),
+    ("banned section symbol denied", {
+        "tool_name": "Write",
+        "tool_input": {"file_path": f"{DOCS}/A.md",
+                       "content": "See \u00a75b for the recipe."}}, True),
+    ("symbol carried forward in edit allowed", {
+        "tool_name": "Edit",
+        "tool_input": {"file_path": f"{DOCS}/A.md",
+                       "old_string": "see \u00a72 here",
+                       "new_string": "see \u00a72 there"}}, False),
     ("CLAUDE.md in scope", {
         "tool_name": "Write",
         "tool_input": {"file_path": "/Users/x/Proj/CLAUDE.md",

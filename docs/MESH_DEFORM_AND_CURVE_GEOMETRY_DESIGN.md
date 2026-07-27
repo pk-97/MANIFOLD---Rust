@@ -2,7 +2,7 @@
 
 **Status:** SHIPPED 2026-07-11 (`feat/mesh-deform`) — all four phases landed. P1 growth core (`mesh_ramp`, `push_along_normals`, `facet_normals`) + P2 shape deformers (`bend/twist/taper/morph_mesh`) on the freeze codegen path (decided #10); P3 curve→mesh builders (`revolve/extrude/tube`) + P4 `scatter_on_mesh` (multi-pass, hand-authored per the #10 scope boundary) + `gltf_mesh_source` fit/recenter extension. Demos Breathe/TwistColumn/Vine/Lathe/Garden all L2. · 2026-07-10 · Fable (with Peter in the room)
 **Prerequisites:** none hard — `node.render_scene` (REALTIME_3D P1) and SCENE_BUILD P1–P3 are shipped; every anchor below re-verifies at phase entry.
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5 (Phase briefs)–§6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 before starting any phase.
 
 Peter, 2026-07-10, the ask this design serves: *"using a 3D scanned set of flowers
 (CC0) and animating them growing or unfolding or morphing into particles and digital
@@ -30,15 +30,15 @@ Procedural vines and lathed forms come from the same curve atoms that already dr
 Lissajous figures. Every scalar named in this paragraph is port-shadowed and therefore
 bindable — this is performance surface, not authoring convenience.
 
-**Binding constraints** (per DESIGN_AUTHORING §1): hot path — every atom here runs
+**Binding constraints** (per DESIGN_AUTHORING section 1): hot path — every atom here runs
 per-frame on the content thread's graph walk, so all deformation is GPU dispatches,
 zero CPU per-vertex loops, zero per-frame allocation; no new state — every atom is
 stateless (scratch lives in `extra_fields`, reset-free); no persistence — atoms
 serialize as ordinary graph nodes, nothing new; performance surface — every numeric
-scalar param ships port-shadowed (DECOMPOSING §6.2 authoring rule).
+scalar param ships port-shadowed (DECOMPOSING section 6.2 authoring rule).
 
 Companion docs: [DECOMPOSING_GENERATORS.md](DECOMPOSING_GENERATORS.md) (the governing
-working guide — §2.5 audit, §6.6 naming, §7 invariants), [ADDING_PRIMITIVES.md](ADDING_PRIMITIVES.md)
+working guide — section 2.5 audit, section 6.6 naming, section 7 invariants), [ADDING_PRIMITIVES.md](ADDING_PRIMITIVES.md)
 (the `primitive!` + `gpu_tests` mechanics every phase follows),
 [NODE_CATALOG.md](NODE_CATALOG.md) (registry truth), [REALTIME_3D_DESIGN.md](REALTIME_3D_DESIGN.md)
 + [SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md](SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md)
@@ -67,9 +67,9 @@ existing wires. No new port types, no new channel families, no renderer changes.
 | 2D curve family | `CurvePoint` = origin-centred pre-aspect xy, 8 B (`mesh_common.rs:136`); producers `pack_curve_xy`, `generate_lissajous`, `project_3d`/`project_4d`; consumer `node.draw_lines` (+`EdgePair` topology, `mesh_common.rs:168`) | alive but **dead-ends in 2D line drawing — no curve→mesh bridge exists** |
 | Parametric scalar plumbing | `generate_range` (linspace), `array_math` (elementwise op enum), `pack_curve_xy` | the producers that feed `tube_from_path`'s path + lift inputs (D6) |
 | Per-vertex scalar weights wire | `Channels<f32>` (`KnownItem for f32`, `ports.rs:150`) | exists — `mesh_ramp` emits it, every deformer consumes it (D2) |
-| Same-frame GPU→CPU readback | forbidden — DECOMPOSING §7 "Shared MTLBuffer" bullet | why `fit` is a parse-time extension, not a GPU atom (D7) |
+| Same-frame GPU→CPU readback | forbidden — DECOMPOSING section 7 "Shared MTLBuffer" bullet | why `fit` is a parse-time extension, not a GPU atom (D7) |
 
-Nearest reference presets (per §2.5 step b, read end-to-end 2026-07-10):
+Nearest reference presets (per section 2.5 step b, read end-to-end 2026-07-10):
 **WireframeZoo** (`rotate_3d → project_3d → draw_lines` — the transform-stage shape
 deformers slot into), **Duocylinder** (grid-uv parametric surface — the grid-emitting
 shape the curve builders follow), **MetallicGlass-shaped graphs** (`grid_mesh →
@@ -103,8 +103,8 @@ this design.
   audio-band-per-region weights producer plugs into the same port).
 - **D3 — Single-purpose atoms, not a `deform_mesh` mode-enum family.** Bend, twist,
   taper, and push have disjoint param surfaces; a mode enum would leave params
-  wired-but-inert per mode — precisely DECOMPOSING §7's dead-state-param violation.
-  §6.3's family test fails: nobody thinks "bend/twist/taper" is one knob.
+  wired-but-inert per mode — precisely DECOMPOSING section 7's dead-state-param violation.
+  section 6.3's family test fails: nobody thinks "bend/twist/taper" is one knob.
 - **D4 — Normal policy, stated honestly.** `bend_mesh` and `twist_mesh` rotate
   normals by the same local rotation they apply to positions — exact. `taper_mesh`
   applies the inverse-transpose scale in the taper plane and renormalizes —
@@ -142,8 +142,8 @@ this design.
   and origin; `unit_box` makes deformer defaults and `mesh_ramp` bounds (0..1)
   meaningful. Rejected: a `normalize_mesh` GPU atom — bounds reduction is a
   GPU-write→CPU-read in the same frame, forbidden by the shared-buffer rule
-  (DECOMPOSING §7); a two-frame-latency normalize would breathe on the first frames.
-  This is §6.2 extend-before-build, verbatim.
+  (DECOMPOSING section 7); a two-frame-latency normalize would breathe on the first frames.
+  This is section 6.2 extend-before-build, verbatim.
 - **D8 — `scatter_on_mesh` emits `Array<InstanceTransform>`, deterministic by seed.**
   Same 3-pass area-weighted sampling as `spawn_from_mesh` surface mode (the committed
   precedent), but the place pass writes instance transforms: position on surface,
@@ -162,9 +162,9 @@ this design.
 ## 3. Atom specifications (committed)
 
 Common to all: authored via `primitive!` per ADDING_PRIMITIVES; every numeric scalar
-param is port-shadowed via `EffectNodeContext::scalar_or_param` (DECOMPOSING §7);
+param is port-shadowed via `EffectNodeContext::scalar_or_param` (DECOMPOSING section 7);
 enum/bool params are not. `composition_notes` on every atom states when an agent
-reaches for it and its normal-policy caveat (D4). Names follow §6.6 — plain words,
+reaches for it and its normal-policy caveat (D4). Names follow section 6.6 — plain words,
 implementation detail stays in the source. **Angle/rotation params are UNBOUNDED
 (range `None`)** — a saw LFO doing full revolutions is the first thing a performer
 tries (the BUG-039 (saw-rotation-wrap) lesson); clamping them is a forbidden move.
@@ -198,7 +198,7 @@ the demo presets are the worked examples). Capacity: computed override
 | `node.tube_from_path` — label "Tube From Path" (aliases: vine, ribbon, sweep) | `path: Array(CurvePoint) required` (XZ plane); `lift: Array(F32) optional` (per-point +Y); `radius_scale: Array(F32) optional` (per-point, composable with a ramp for tapered vines); `radius` (f32); `sides` (int, default 8) | centerline `c_k = (x_k, lift_k or 0, y_k)`; frame per point: tangent from neighbours, reference-up = +Y (**degenerate when tangent ∥ Y — documented limit, Deferred #4 carries parallel transport**); ring of `sides+1` verts (seam dup) per path point; uv = (around, along) |
 | `node.scatter_on_mesh` — label "Scatter On Mesh" | `in: Array(MeshVertex) required`; `count`, `seed` (int, port-shadowed); `scale_min`, `scale_max` (f32); `align_to_normal` (bool); `reset_trigger: ScalarF32 optional` (recompute gate, same contract as `spawn_from_mesh`) → `instances: Array(InstanceTransform)` | 3-pass area/scan/place per the `spawn_from_mesh` precedent; place writes `pos_scale = (surface point, scale by hash)`, `rot_pad` euler = random yaw (+ pitch/roll from triangle normal when aligned). Deterministic for fixed (seed, mesh) |
 
-Extension (§6.2, not a new atom): `node.gltf_mesh_source` grows `fit` (enum
+Extension (section 6.2, not a new atom): `node.gltf_mesh_source` grows `fit` (enum
 `none`/`unit_box`, default `none`) + `recenter` (bool, default true) — applied in the
 background parse before caching (D7). Old presets unaffected (`none` default).
 
@@ -209,7 +209,7 @@ background parse before caching (D7). Old presets unaffected (`none` default).
 | Deformers preserve count, order, and uv | per-atom `gpu_tests`: assert output count == input count and uv bytes identical on a fixture grid |
 | Short/absent weights degrade to 1.0, never 0 | `gpu_tests` case: weights buffer of length 2 against a 12-vert mesh → verts 2..12 deform at full weight |
 | bend/twist rotate normals exactly | `gpu_tests`: analytic expected normals compared element-wise (1e-5) |
-| Grid builders emit triangulate_grid-compatible grids | chain `gpu_tests` (per DECOMPOSING §9 chain rule): revolve → triangulate_grid on a 3-point profile, assert triangle count and a hand-computed vertex |
+| Grid builders emit triangulate_grid-compatible grids | chain `gpu_tests` (per DECOMPOSING section 9 chain rule): revolve → triangulate_grid on a 3-point profile, assert triangle count and a hand-computed vertex |
 | Every new Array producer declares capacity | existing CI sweep `every_array_output_declares_a_valid_capacity_source` (effect_node.rs:442) — runs in the default suite |
 | Angle params unbounded | `gpu_tests` param-decl assert: `range == None` for `angle`/`sweep` (the BUG-039 regression pin) |
 | Demo presets compile | `cargo run -p manifold-renderer --bin check-presets` in every phase gate |
@@ -219,7 +219,7 @@ background parse before caching (D7). Old presets unaffected (`none` default).
 
 Common: Git Mode B (ONE warm worktree for the whole workstream via
 `agent-worktree.py acquire`; orchestrator lands, batched per 2–3 phases —
-GIT_TREE_DISCIPLINE §2c); test scope per phase is
+GIT_TREE_DISCIPLINE section 2c); test scope per phase is
 focused — `cargo test -p manifold-renderer --lib <module>::gpu_tests --features
 gpu-proofs` for new kernels (deliberate GPU runs — these are shader atoms),
 `check-presets` after any JSON, crate-scoped clippy; the single workspace sweep runs
@@ -229,8 +229,8 @@ at the END of P4 only. Demo renders use the `render-generator-preset` harness
 
 - **P1 — Growth core: `mesh_ramp` + `push_along_normals` + `facet_normals`. ✅ SHIPPED 2026-07-11 (`baf1380a`→`1f55a3fb`, codegen path).**
   *Entry:* repo tip; anchors `mesh_common.rs:34`, `displace_mesh.rs`,
-  `spawn_from_mesh.rs` re-verified. *Read-back:* this doc §2–§4, DECOMPOSING §6.2/§7,
-  ADDING_PRIMITIVES whole. *Deliverables:* three atoms + `gpu_tests` per the §4
+  `spawn_from_mesh.rs` re-verified. *Read-back:* this doc section 2–section 4, DECOMPOSING section 6.2/section 7,
+  ADDING_PRIMITIVES whole. *Deliverables:* three atoms + `gpu_tests` per the section 4
   table; demo generator preset `Breathe.json` (bundled): `cube_mesh` (or
   `grid_mesh→…` if cube reads too rigid) → `mesh_ramp` → `push_along_normals`
   (LFO on amount) → `facet_normals` → `render_scene`, outer cards for
@@ -246,8 +246,8 @@ at the END of P4 only. Demo renders use the `render-generator-preset` harness
   non-grid meshes (it's grid-only — that's why `facet_normals` exists); starting
   bend/twist early.
 - **P2 — Shape deformers: `bend_mesh` + `twist_mesh` + `taper_mesh` + `morph_mesh`. ✅ SHIPPED 2026-07-11 (`b0ad33f2`, codegen path).**
-  *Entry:* P1 landed (weights-read pattern exists to copy). *Read-back:* §2 D3/D4,
-  §3 table rows, P1's landed weight-read code. *Deliverables:* four atoms +
+  *Entry:* P1 landed (weights-read pattern exists to copy). *Read-back:* section 2 D3/D4,
+  section 3 table rows, P1's landed weight-read code. *Deliverables:* four atoms +
   `gpu_tests` incl. the exact-normals and unbounded-angle asserts; demo preset
   `TwistColumn.json`: `grid_mesh` → `triangulate_grid` → `twist_mesh` ← `mesh_ramp`,
   saw LFO on angle. *Gate:* named tests green (gpu-proofs); PNG triptych at three
@@ -259,9 +259,9 @@ at the END of P4 only. Demo renders use the `render-generator-preset` harness
   weight-read helper if extracted.
 - **P3 — Curve→mesh: `revolve_curve` + `extrude_curve` + `tube_from_path`. ✅ SHIPPED 2026-07-11 (`41553f15`, codegen path, BufferGather like triangulate_grid).**
   *Entry:* P1–P2 landed; anchors `mesh_common.rs:136` (CurvePoint convention),
-  `triangulate_grid.rs` re-verified. *Read-back:* §2 D5/D6, the Duocylinder preset
+  `triangulate_grid.rs` re-verified. *Read-back:* section 2 D5/D6, the Duocylinder preset
   end-to-end (the grid-family precedent), `pack_curve_xy.rs`. *Deliverables:* three
-  atoms + `gpu_tests` incl. the chain test (§4); demo preset `Vine.json`:
+  atoms + `gpu_tests` incl. the chain test (section 4); demo preset `Vine.json`:
   `generate_range` + `array_math` circle/spiral path + linear lift →
   `tube_from_path` (`radius_scale` ← `mesh_ramp`-shaped taper via `array_math`) →
   `triangulate_grid` → `twist_mesh` → `render_scene`; beat ramp on ramp phase =
@@ -274,8 +274,8 @@ at the END of P4 only. Demo renders use the `render-generator-preset` harness
   documented); end caps (Deferred #3).
 - **P4 — Placement + import polish: `scatter_on_mesh` + `gltf_mesh_source` fit. ✅ SHIPPED 2026-07-11 (`4615e75c`; scatter multi-pass hand-authored per #10 scope boundary; fit/recenter parse-time).**
   *Entry:* P1–P3 landed; `spawn_from_mesh.rs` 3-pass shape + `gltf_mesh_source.rs`
-  param block re-verified. *Read-back:* §2 D7/D8, spawn_from_mesh's scan/place
-  kernels, DESIGN_DOC_STANDARD §5 round-trip gate. *Deliverables:* `scatter_on_mesh`
+  param block re-verified. *Read-back:* section 2 D7/D8, spawn_from_mesh's scan/place
+  kernels, DESIGN_DOC_STANDARD section 5 round-trip gate. *Deliverables:* `scatter_on_mesh`
   + `gpu_tests` (determinism: same seed+mesh → identical buffer, two runs);
   `fit`/`recenter` params on `gltf_mesh_source` (parse-thread, old-preset default
   `none`); demo preset `Garden.json`: `grid_mesh` terrain → `push_mesh` (noise) →
@@ -292,12 +292,12 @@ at the END of P4 only. Demo renders use the `render-generator-preset` harness
   click-script for Peter: drop his flowers `.glb` into `gltf_mesh_source`, set
   `fit=unit_box`, wire through P1's Breathe chain. *Forbidden:* skinning/animation
   scope creep (D9); a scatter that reads GPU-computed areas back to CPU same-frame
-  (§7 shared-buffer rule — the scan stays on-GPU like the precedent).
+  (section 7 shared-buffer rule — the scan stays on-GPU like the precedent).
 
-Phasing-completeness check (2026-07-10): every §2/§3 commitment maps — ramp/push/
+Phasing-completeness check (2026-07-10): every section 2/section 3 commitment maps — ramp/push/
 facet → P1; bend/twist/taper/morph → P2; revolve/extrude/tube → P3; scatter/fit +
 round-trip + sweep → P4; animation/smooth-normals/caps/3D-paths → Deferred #1–#4.
-Every §0 stage claim (breathe, grow, unfold, morph, dissolve, vines, field of
+Every section 0 stage claim (breathe, grow, unfold, morph, dissolve, vines, field of
 flowers) is exercised by a phase demo except "dissolve" (ships today via
 `spawn_from_mesh` — no phase needed).
 
@@ -344,7 +344,7 @@ flowers) is exercised by a phase demo except "dissolve" (ships today via
    The `weights` port is already the seam. *Trigger:* first ask for "only the petals
    react".
 6. **Depth-correct multi-pass 3D compositing** — **DESIGNED 2026-07-11:
-   `REALTIME_3D_DESIGN.md` §10 (D11 + P8)** — the trigger fired and Peter approved.
+   `REALTIME_3D_DESIGN.md` section 10 (D11 + P8)** — the trigger fired and Peter approved.
    The design takes the instancing-port shape (`instances_n` on `render_scene`
    object groups, instances drawn inside the scene pass sharing depth, shadows, and
    fog); the shared-depth compositor alternative is rejected there by name. P8

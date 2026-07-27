@@ -1,6 +1,6 @@
 # Editor UI caps at ~80fps during playback — present serializes behind the content GPU render
 
-**Status:** diagnosed, not fixed (decision: leave it — see §6). 2026-06-29.
+**Status:** diagnosed, not fixed (decision: leave it — see section 6). 2026-06-29.
 
 **One line:** the editor window can't hold 120fps *while a project plays* because the
 UI's present command buffer serializes behind the content thread's per-frame GPU
@@ -99,4 +99,4 @@ content render buffer. Expectation: it ≈ the `next_drawable` block. Not yet ru
 3. **Leave it (chosen)** — the editor runs ~80fps *only while a project plays*;
    the projected output is unaffected. Zero risk, zero work.
 
-If revisited, start by confirming §6, then prefer option 2 over option 1.
+If revisited, start by confirming section 6, then prefer option 2 over option 1.

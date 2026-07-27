@@ -1,6 +1,6 @@
 # Cinematic wave batch 2 — GBUFFER P1+P2 — landed 2026-07-12
 
-**Branch:** feat/cinematic-wave → main · **Level reached:** L1 / target L1 (§10 — this cluster's
+**Branch:** feat/cinematic-wave → main · **Level reached:** L1 / target L1 (section 10 — this cluster's
 no-PNG rule, Peter 2026-07-12, overrides the standard's L2-demo minimum; acceptance is the
 numeric gates, not an observed artifact)
 **Doc status line (quoted verbatim):** `**Status:** SHIPPED · P1 (`560c59fd`) + P2 (`390d58dc`)

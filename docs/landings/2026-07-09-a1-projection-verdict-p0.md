@@ -1,8 +1,8 @@
 # Landing — A1 projection verdict + P0 orphan purge (2026-07-09, Fable)
 
 **Branch:** `feat/a1-projection-verdict-p0` · **Docs:** UI_PROJECTION_LAYER_DESIGN.md rewritten
-with the kill verdict; STRUCTURAL_AUDIT_VERDICTS §2/§3 amended + §5 confirmed + §6 added;
-FOUNDATIONAL_GAPS A1 outcome; KICK_SWEEP §6.6/§4 truth-fixes; BUG-083/084 filed.
+with the kill verdict; STRUCTURAL_AUDIT_VERDICTS section 2/section 3 amended + section 5 confirmed + section 6 added;
+FOUNDATIONAL_GAPS A1 outcome; KICK_SWEEP section 6.6/section 4 truth-fixes; BUG-083/084 filed.
 
 **Status line (quoted):** `SHIPPED (P0, the only surviving phase) · 2026-07-09 · Fable.`
 
@@ -17,7 +17,7 @@ removed). `cargo test -p manifold-app` → 163+10+1+3 pass, 0 fail. `docs_index_
 Negative `rg` for the 10 field names in `manifold-app/src` → zero hits.
 
 **Level reached:** L1 (deletion of never-read fields has no observable surface; the
-pre-deletion observation was the lint firing — §1.1 proof command in the design doc).
+pre-deletion observation was the lint firing — section 1.1 proof command in the design doc).
 
 **Verification debt:** none opened — no behavior changed; export/recording behavior was
 already feedback-less (that's BUG-083/084, pre-existing, now tracked).
@@ -32,4 +32,4 @@ already feedback-less (that's BUG-083/084, pre-existing, now tracked).
 
 **Deviation from the draft:** the pre-Fable draft recommended C-then-A; this landing ships C
 (as a lint un-suppression, not a new test) and KILLS A — evidence chain in the design doc
-§1.1/§2. Peter may override; the reviving trigger is named there.
+section 1.1/section 2. Peter may override; the reviving trigger is named there.

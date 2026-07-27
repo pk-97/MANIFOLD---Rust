@@ -3,9 +3,9 @@
 Ableton-style scene/clip launching as a second performance surface. Users who never touch the timeline can drop content into a grid (layers × scenes) and launch slots/scenes quantized to the beat. Timeline users can slice arrangement sections into scenes and back.
 
 Status: IN PROGRESS — P1 (`4f072100`) + P2 (`f852d2bc`) + P3 (`9a069aa4`) built + merged into `feat/timeline-ui-redesign` (2026-07-03), since landed on main; P4 (UI) + P5 (recording) not implemented. **P4 is a UI phase — hand it to Peter for feel review, not auto-gated.** Written 2026-07-02 against `feat/timeline-ui-redesign`.
-**Baseline review 2026-07-05:** zero unlabeled forks; P4/P5 briefs are one-line rows — acceptable while P4 stays Peter's hands-on phase, but **expand to a full §5 brief before delegating either to an agent**. P4 plumbing note: `ContentState` carries NO session play-state yet (verified — P2 added the command variants only), so the snapshot fields in §9 are greenfield P4 work. P4's PNG gate = L2; use the UI-automation flow library for launch-interaction coverage (L3) once that wave lands.
+**Baseline review 2026-07-05:** zero unlabeled forks; P4/P5 briefs are one-line rows — acceptable while P4 stays Peter's hands-on phase, but **expand to a full section 5 brief before delegating either to an agent**. P4 plumbing note: `ContentState` carries NO session play-state yet (verified — P2 added the command variants only), so the snapshot fields in section 9 are greenfield P4 work. P4's PNG gate = L2; use the UI-automation flow library for launch-interaction coverage (L3) once that wave lands.
 Prerequisites: none. Unblocks PERFORM_SURFACE_DESIGN P2 (`docs/DESIGN_BUILD_ORDER.md`).
-Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5 (Phase briefs)–§6 and §8 before starting any phase.
+Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 and section 8 before starting any phase.
 
 Companion: `docs/PERFORM_SURFACE_DESIGN.md` — **session perform** (this grid at stage
 scale, launch gestures as `ContentCommand`s) ships as that design's P2 together with
@@ -40,7 +40,7 @@ There is no "trigger clip" type. In Ableton, notes and instrument are separate; 
 - Audio layers in slots (export mixdown assumes timeline; defer).
 - Group layers (`parent_layer_id`) get no slots; leaf layers only.
 - Automation envelopes inside sequences (leave a serde-optional field slot for the automation-lanes feature to fill later; do NOT design it now).
-- Session recording UI polish — but the commit path must land in v1 (§7), it's the cheapest killer feature.
+- Session recording UI polish — but the commit path must land in v1 (section 7), it's the cheapest killer feature.
 
 ## 3. Data model (`manifold-core`)
 
@@ -98,7 +98,7 @@ Session playback state is **runtime-only, never serialized, never in undo**. New
 pub struct SessionRuntime {
     playing: AHashMap<LayerId, PlayingSlot>,      // at most one per layer
     pending: Vec<PendingSlotLaunch>,              // launches waiting for quantize boundary
-    session_override: AHashSet<LayerId>,          // layers detached from arrangement (§6)
+    session_override: AHashSet<LayerId>,          // layers detached from arrangement (section 6)
     quantize_beats: Beats,                        // global launch quantize, default 4.0 (1 bar)
 }
 
@@ -218,11 +218,11 @@ Entry state, every phase: re-verify this doc's line anchors before relying on th
 2026-07-02; a moved anchor is a re-check, a missing one is an escalation).
 
 Forbidden moves, all phases: a second playback authority (`sync_clips_to_time` gains
-an input, never a sibling — §9) · branching on clip content kind anywhere in
-session/grid/launch/resolution code (§11 guard) · shared `ClipId`s between grid and
-timeline (always `duplicated()`, both directions — §7) · serializing or undo-wrapping
-`SessionRuntime` (§4) · per-tick allocation in resolution (§9) · a parallel recorder
-if phantom-commit reuse resists (cut recording from v1 and file it — §7).
+an input, never a sibling — section 9) · branching on clip content kind anywhere in
+session/grid/launch/resolution code (section 11 guard) · shared `ClipId`s between grid and
+timeline (always `duplicated()`, both directions — section 7) · serializing or undo-wrapping
+`SessionRuntime` (section 4) · per-tick allocation in resolution (section 9) · a parallel recorder
+if phantom-commit reuse resists (cut recording from v1 and file it — section 7).
 
 | Phase | Scope | Test gate |
 |---|---|---|
@@ -232,7 +232,7 @@ if phantom-commit reuse resists (cut recording from v1 and file it — §7).
 | P4 | Grid panel + `ContentState` plumbing | headless PNG verification (`reference_ui_headless_png_verification`) |
 | P5 | Session recording via phantom-commit reuse | record a launched sequence, verify arrangement clips match resolution math |
 
-P2 is the risk concentration: the wrap-restart rule (§4) and suppression interaction with solo/mute. Everything else is mechanical.
+P2 is the risk concentration: the wrap-restart rule (section 4) and suppression interaction with solo/mute. Everything else is mechanical.
 
 Full `cargo test --workspace` gates P2 (engine/scheduler are infrastructure per the testing-scope rule); P1/P3/P4 use focused crate tests.
 

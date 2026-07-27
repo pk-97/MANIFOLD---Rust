@@ -1,6 +1,6 @@
 # FUSION_SOTA batch 1 (P1-P3) — landed 2026-07-14 @ ce6dcba8
 
-**Branch:** feat/fusion-sota · **Level reached:** L1 / target L1 (§10 — all three phases are
+**Branch:** feat/fusion-sota · **Level reached:** L1 / target L1 (section 10 — all three phases are
 pure-refactor / fault-path / instrumentation phases with no user-visible surface; each phase
 brief explicitly states `Demo: none — L1`)
 
@@ -40,7 +40,7 @@ run --workspace`: 3325 tests run, 3325 passed, 12 skipped. `cargo deny check ban
 
 ## Deviations from brief
 
-- P1: the design doc's §1 audit phrase "(7 markers)" undercounts the map's own §5 table (9
+- P1: the design doc's section 1 audit phrase "(7 markers)" undercounts the map's own section 5 table (9
   marker forms); the worker built all 9 variants per the map, the authoritative source. Not a
   deviation from D1's intent, a reconciliation of an internal doc inconsistency.
 - P3: added `manifold-io` as a `manifold-renderer` dev-dependency (test-only) to load the
@@ -63,7 +63,7 @@ run --workspace`: 3325 tests run, 3325 passed, 12 skipped. `cargo deny check ban
 None opened. All three phases hit their stated target level (L1) with hard gates green;
 nothing partial was landed.
 
-## Escalations from P3's census (per FUSION_SOTA_DESIGN.md §4's phase brief)
+## Escalations from P3's census (per FUSION_SOTA_DESIGN.md section 4's phase brief)
 
 Census numbers (full table in `docs/fusion_census.md`): buffer-fan-out refusals = 0 (D4
 trigger: ≥3 — not crossed). Resample refusals = 4 structural instances, but D4's trigger is

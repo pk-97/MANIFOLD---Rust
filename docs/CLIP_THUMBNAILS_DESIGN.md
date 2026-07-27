@@ -1,4 +1,4 @@
-# Clip Thumbnails (SOTA §24 5c) — Design
+# Clip Thumbnails (SOTA section 24 5c) — Design
 
 **Status:** base system ALL PHASES SHIPPED (per the in-body status section); the
 appended Filmstrip evolution is PARTIAL — only the P5 box-downsample landed, display/
@@ -214,7 +214,7 @@ parked poster). Remaining items are *polish*, not gaps:
 
 ---
 
-# Filmstrip evolution (§24 5c-2) — design
+# Filmstrip evolution (section 24 5c-2) — design
 
 The shipped system above puts **one** thumbnail cell per clip and stretches it across
 the whole clip body, and (for playing generators) re-snapshots it on a ~1.5 s timer.

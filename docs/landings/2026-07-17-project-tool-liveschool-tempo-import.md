@@ -1,6 +1,6 @@
 # project_tool CLI + Liveschool tempo-map import — landed 2026-07-17 @ e8bebc8d (+ ffd48102 CLAUDE.md pointer)
 
-**Branch:** lane/project-tool · **Level reached:** end-to-end on the real show file (no design doc — single-session tool lane, no §10 target set)
+**Branch:** lane/project-tool · **Level reached:** end-to-end on the real show file (no design doc — single-session tool lane, no section 10 target set)
 **Doc status line (quoted verbatim):** none — no design doc; discoverability line added to CLAUDE.md Tooling in the same landing.
 
 ## What landed

@@ -142,7 +142,7 @@ Three paths rebuild a layer's generator. **All three preserve `trigger_count`.**
 | Project release / new clip after `release_all` | [generator_renderer.rs:619-633](../crates/manifold-renderer/src/generator_renderer.rs#L619-L633) | ✗ — resets to 0, intentional (whole project reload) |
 
 **🟠 Per-generator state that is NOT preserved across rebuild:**
-- `ClipTriggerCycle` last-emission state (see §2 — known acceptable risk).
+- `ClipTriggerCycle` last-emission state (see section 2 — known acceptable risk).
 - `RenderLines::anim_progress` extra-field. On generator rebuild the animation jumps back to start. For a power-user authoring action this is cosmetic; for a per-frame override-graph update (unlikely path but possible) it'd be jarring.
 - `LayerGeneratorState::layer_string_defaults` and `merged_string_params` — preserved correctly through `update_active_types_for_layer` (line 510-515) but **lost** in `acquire_clip`'s rebuild path (no preservation; new state inits empty maps at line 213-215). Cross-check: in practice the next `start_clip` rescans every clip and refills the defaults, so the gap closes within one clip cycle. ✓ but the inconsistency between the two rebuild paths is fragile.
 
@@ -285,10 +285,10 @@ Either: graft `preset_metadata` in `JsonGraphGenerator::from_def`, or class-test
 
 **🟡 `from_def` validation gaps.** [JsonGraphGenerator::from_def](../crates/manifold-renderer/src/generators/json_graph_generator.rs#L172-L324):
 - Checks boundary-node presence ✓
-- Does NOT check that any `StateStore`-requiring primitive is absent (see §6).
+- Does NOT check that any `StateStore`-requiring primitive is absent (see section 6).
 - Does NOT check that every binding's `id` matches a `params[].id` — the sweep test `every_bundled_preset_binding_resolves_to_an_outer_param` catches this at CI time only. A user's per-layer override could in principle violate this and the binding would silently log + drop at construction.
 
-**🟠 `pre_allocate_array_buffers` skips zero-byte allocations** [json_graph_generator.rs:434-443](../crates/manifold-renderer/src/generators/json_graph_generator.rs#L434-L443) with a warn. Downstream primitives then see no buffer and silently return (for 22 of 25 — see §3). The warn is correct but the symptom chain is still "black frame, one log line."
+**🟠 `pre_allocate_array_buffers` skips zero-byte allocations** [json_graph_generator.rs:434-443](../crates/manifold-renderer/src/generators/json_graph_generator.rs#L434-L443) with a warn. Downstream primitives then see no buffer and silently return (for 22 of 25 — see section 3). The warn is correct but the symptom chain is still "black frame, one log line."
 
 **🟢 `RenderTargetPool` recycling.** The pool is keyed by `(PortType, format)` so chains with mixed `Rgba16Float`/`Rgba32Float` outputs don't collide. ✓
 
@@ -299,25 +299,25 @@ Either: graft `preset_metadata` in `JsonGraphGenerator::from_def`, or class-test
 ## Severity rollup
 
 **🔴 Live-show bug class still in tree:**
-- §2 `fluid_simulation_3d`, `fluid_sim_core`, `wireframe_zoo` use raw `% N` without `ClipTriggerCycle` — same exposure as the Lissajous bug Peter just hit.
-- §3 22 of 25 Array<T> producers still silently return on missing pre-bound buffer.
-- §6 JSON generator path will panic on any stateful primitive (Smoothing/Feedback/ArrayFeedback/etc.) — no friendly load-time check.
-- §5 `JsonGraphGenerator::reset_state` is no-op; export warmup re-seek doesn't reset generator state for graph generators.
-- §9 `from_def` doesn't graft preset_metadata, so a metadata-stripped override silently loses every binding.
+- section 2 `fluid_simulation_3d`, `fluid_sim_core`, `wireframe_zoo` use raw `% N` without `ClipTriggerCycle` — same exposure as the Lissajous bug Peter just hit.
+- section 3 22 of 25 Array<T> producers still silently return on missing pre-bound buffer.
+- section 6 JSON generator path will panic on any stateful primitive (Smoothing/Feedback/ArrayFeedback/etc.) — no friendly load-time check.
+- section 5 `JsonGraphGenerator::reset_state` is no-op; export warmup re-seek doesn't reset generator state for graph generators.
+- section 9 `from_def` doesn't graft preset_metadata, so a metadata-stripped override silently loses every binding.
 
 **🟠 Fragility / future-proofing:**
-- §1 per-construction `Box::leak` of binding param names is unbounded growth (small but non-zero).
-- §2 graph-defined `ClipTriggerCycle` resets on graph-editor edit, with 1/N chance of same-pattern flash.
-- §6 paused-layer GPU state isn't evicted until project structural change.
-- §8 `max_capacity` is a string-match convention, not an enforced port property.
-- §8 `read_scalar` duplicated across 8 primitives with subtle variations.
+- section 1 per-construction `Box::leak` of binding param names is unbounded growth (small but non-zero).
+- section 2 graph-defined `ClipTriggerCycle` resets on graph-editor edit, with 1/N chance of same-pattern flash.
+- section 6 paused-layer GPU state isn't evicted until project structural change.
+- section 8 `max_capacity` is a string-match convention, not an enforced port property.
+- section 8 `read_scalar` duplicated across 8 primitives with subtle variations.
 
 **🟡 Hygiene:**
-- §1 `HashMap` instead of `AHashMap` in construction-only paths.
-- §4 alias surface has four different names for the same concept.
-- §7 `plasma.rs` is compiled but never called.
-- §8 `composition_notes` not yet consumed by anything but the primitive's own tests.
-- §9 editor snapshot reparses bundled JSON every content tick when editor canvas is open.
+- section 1 `HashMap` instead of `AHashMap` in construction-only paths.
+- section 4 alias surface has four different names for the same concept.
+- section 7 `plasma.rs` is compiled but never called.
+- section 8 `composition_notes` not yet consumed by anything but the primitive's own tests.
+- section 9 editor snapshot reparses bundled JSON every content tick when editor canvas is open.
 
 **🟢 Working as designed (calling out for the record):**
 - Hot path has no per-frame allocations after construction.
@@ -335,23 +335,23 @@ All 🔴 and 🟠 items closed. Mapping from finding → fix:
 
 | Finding | Fix |
 |---|---|
-| §2 — `fluid_simulation_3d`, `fluid_sim_core`, `wireframe_zoo` use raw `% N` | `ClipTriggerCycle` dropped into all three sites; raw `trigger_count % PATTERN_COUNT` (or `SHAPE_COUNT`) replaced with `cycle.step(trigger_count, N)`. |
-| §3 — 22 of 25 Array<T> producers silently return on missing pre-bound buffer | Architecturally closed by §8: the pre-allocator now always finds a capacity via [`EffectNode::array_output_capacity`](../crates/manifold-renderer/src/node_graph/effect_node.rs) (no string-match miss possible) and a CI sweep test prevents new primitives from regressing the invariant. Per-frame draw-site warns would be redundant noise. |
-| §5 — `JsonGraphGenerator::reset_state` was no-op | Implemented: walks every node calling `clear_state`, then `state_store.cleanup_all()`. Export warmup re-seek now correctly clears `anim_progress`, `ArrayFeedback` prev buffers, `ClipTriggerCycle.last_emitted`, `Feedback` prev-frame textures, `EnvelopeFollower` accumulators. |
-| §6 — JSON generator path used `execute_frame_with_gpu`, would panic on any stateful primitive | `JsonGraphGenerator` now owns a `StateStore` field and dispatches through `execute_frame_with_state`. Generator presets can now compose `Feedback`, `ArrayFeedback`, `Smoothing`, `EnvelopeFollowerAr`, `Temporal::*` without per-frame panics. State is keyed by `(NodeInstanceId, owner_key=0)` because the JsonGraphGenerator is itself per-layer. |
-| §7 — `plasma.rs` shadowed dead code | Deleted, along with its `shaders/plasma_compute.wgsl` kernel. The JSON `Plasma.json` preset is now the only path. |
-| §8 — `max_capacity` was a string-match convention | Promoted to a port-level method on `EffectNode`: [`array_output_capacity(port, params, input_capacities) -> Option<u32>`](../crates/manifold-renderer/src/node_graph/effect_node.rs). Default reads `params["max_capacity"]` for producer primitives. Transform primitives (`integrate_particles`, `rotate_3d`, `project_4d`, `displace_mesh`, etc.) override to inherit capacity from the matching input port. Computed-capacity primitives (`scatter_particles`, `scatter_particles_3d`, `fluid_project_scatter_2d`, `triangulate_grid`) override to multiply their dimension params. CI test [`every_array_output_declares_a_valid_capacity_source`](../crates/manifold-renderer/src/node_graph/primitives/mod.rs) walks the registry and asserts every Array output resolves with default params + assumed inputs. |
-| §8 — `read_scalar` duplicated 8 times | Centralized as [`EffectNodeContext::scalar_or_param(name, default)`](../crates/manifold-renderer/src/node_graph/effect_node.rs). All 8 local copies deleted. |
-| §9 — `from_def` didn't graft `preset_metadata` | New public helper [`graft_preset_metadata_from_bundle`](../crates/manifold-renderer/src/generators/registry.rs) called both by `GeneratorRegistry::create_with_override` (runtime path) and by `ContentThread::active_generator_graph_snapshot` (editor canvas path). Bindings now resolve identically on both surfaces; an override with `preset_metadata = None` can no longer silently strand every binding on its default. |
-| §9 — editor snapshot re-parsed bundled JSON every tick | New cache field [`cached_generator_graph_snapshot`](../crates/manifold-app/src/content_thread.rs) on `ContentThread`, keyed by `(LayerId, generator_graph_version)`. Snapshot returned as `Arc<GraphSnapshot>`. Rebuild only fires on layer switch or graph-edit landing. |
-| §1 — `Box::leak` per binding per generator construction | `Graph::set_param` (and `set_param_exposed`) now accept `&str` instead of `&'static str`; the canonical `&'static str` key is sourced from the primitive's `parameters()` list during the validation lookup. `BindingResolution` stores `target_param: String` — no leak, no interning structure required. |
-| §1 — `HashMap` vs `AHashMap` in construction paths | `outer_param_index` and `handle_map` in `JsonGraphGenerator::from_def` switched to `ahash::AHashMap`. |
-| §10 — `from_def` validation gaps (no `StateStore`-requires check) | Closed by §6: with `StateStore` plumbed, the executor's entry-point `assert!` is unreachable for any stateful primitive a preset author wires in. |
-| §2 — graph-defined `ClipTriggerCycle` reset on graph-editor rebuild | Accepted as documented limit per memory `feedback_graph_editor_is_authoring_not_perform`. `trigger_count` preservation guarantees visual continuity at the modulo level; only a 1/N "same pattern across an authoring-time rebuild" possibility remains, and graph-edits aren't performance-time actions. |
-| §6 — paused-layer GPU state eviction | Left as-is per user direction. Snap-back-on-resume preserves the live-show contract; bounded RAM cost is acceptable. |
+| section 2 — `fluid_simulation_3d`, `fluid_sim_core`, `wireframe_zoo` use raw `% N` | `ClipTriggerCycle` dropped into all three sites; raw `trigger_count % PATTERN_COUNT` (or `SHAPE_COUNT`) replaced with `cycle.step(trigger_count, N)`. |
+| section 3 — 22 of 25 Array<T> producers silently return on missing pre-bound buffer | Architecturally closed by section 8: the pre-allocator now always finds a capacity via [`EffectNode::array_output_capacity`](../crates/manifold-renderer/src/node_graph/effect_node.rs) (no string-match miss possible) and a CI sweep test prevents new primitives from regressing the invariant. Per-frame draw-site warns would be redundant noise. |
+| section 5 — `JsonGraphGenerator::reset_state` was no-op | Implemented: walks every node calling `clear_state`, then `state_store.cleanup_all()`. Export warmup re-seek now correctly clears `anim_progress`, `ArrayFeedback` prev buffers, `ClipTriggerCycle.last_emitted`, `Feedback` prev-frame textures, `EnvelopeFollower` accumulators. |
+| section 6 — JSON generator path used `execute_frame_with_gpu`, would panic on any stateful primitive | `JsonGraphGenerator` now owns a `StateStore` field and dispatches through `execute_frame_with_state`. Generator presets can now compose `Feedback`, `ArrayFeedback`, `Smoothing`, `EnvelopeFollowerAr`, `Temporal::*` without per-frame panics. State is keyed by `(NodeInstanceId, owner_key=0)` because the JsonGraphGenerator is itself per-layer. |
+| section 7 — `plasma.rs` shadowed dead code | Deleted, along with its `shaders/plasma_compute.wgsl` kernel. The JSON `Plasma.json` preset is now the only path. |
+| section 8 — `max_capacity` was a string-match convention | Promoted to a port-level method on `EffectNode`: [`array_output_capacity(port, params, input_capacities) -> Option<u32>`](../crates/manifold-renderer/src/node_graph/effect_node.rs). Default reads `params["max_capacity"]` for producer primitives. Transform primitives (`integrate_particles`, `rotate_3d`, `project_4d`, `displace_mesh`, etc.) override to inherit capacity from the matching input port. Computed-capacity primitives (`scatter_particles`, `scatter_particles_3d`, `fluid_project_scatter_2d`, `triangulate_grid`) override to multiply their dimension params. CI test [`every_array_output_declares_a_valid_capacity_source`](../crates/manifold-renderer/src/node_graph/primitives/mod.rs) walks the registry and asserts every Array output resolves with default params + assumed inputs. |
+| section 8 — `read_scalar` duplicated 8 times | Centralized as [`EffectNodeContext::scalar_or_param(name, default)`](../crates/manifold-renderer/src/node_graph/effect_node.rs). All 8 local copies deleted. |
+| section 9 — `from_def` didn't graft `preset_metadata` | New public helper [`graft_preset_metadata_from_bundle`](../crates/manifold-renderer/src/generators/registry.rs) called both by `GeneratorRegistry::create_with_override` (runtime path) and by `ContentThread::active_generator_graph_snapshot` (editor canvas path). Bindings now resolve identically on both surfaces; an override with `preset_metadata = None` can no longer silently strand every binding on its default. |
+| section 9 — editor snapshot re-parsed bundled JSON every tick | New cache field [`cached_generator_graph_snapshot`](../crates/manifold-app/src/content_thread.rs) on `ContentThread`, keyed by `(LayerId, generator_graph_version)`. Snapshot returned as `Arc<GraphSnapshot>`. Rebuild only fires on layer switch or graph-edit landing. |
+| section 1 — `Box::leak` per binding per generator construction | `Graph::set_param` (and `set_param_exposed`) now accept `&str` instead of `&'static str`; the canonical `&'static str` key is sourced from the primitive's `parameters()` list during the validation lookup. `BindingResolution` stores `target_param: String` — no leak, no interning structure required. |
+| section 1 — `HashMap` vs `AHashMap` in construction paths | `outer_param_index` and `handle_map` in `JsonGraphGenerator::from_def` switched to `ahash::AHashMap`. |
+| section 10 — `from_def` validation gaps (no `StateStore`-requires check) | Closed by section 6: with `StateStore` plumbed, the executor's entry-point `assert!` is unreachable for any stateful primitive a preset author wires in. |
+| section 2 — graph-defined `ClipTriggerCycle` reset on graph-editor rebuild | Accepted as documented limit per memory `feedback_graph_editor_is_authoring_not_perform`. `trigger_count` preservation guarantees visual continuity at the modulo level; only a 1/N "same pattern across an authoring-time rebuild" possibility remains, and graph-edits aren't performance-time actions. |
+| section 6 — paused-layer GPU state eviction | Left as-is per user direction. Snap-back-on-resume preserves the live-show contract; bounded RAM cost is acceptable. |
 
 Deferred (out of scope this pass):
-- §4 alias-surface naming churn (`legacy_param_aliases` / `param_aliases` / `paramAliases` / `GeneratorAliasMetadata` rename).
-- §8 `composition_notes` AI-surface wiring (the `PrimitiveSpec::description()` shape exists; the consumer doesn't).
+- section 4 alias-surface naming churn (`legacy_param_aliases` / `param_aliases` / `paramAliases` / `GeneratorAliasMetadata` rename).
+- section 8 `composition_notes` AI-surface wiring (the `PrimitiveSpec::description()` shape exists; the consumer doesn't).
 
 Tests: `cargo clippy --workspace -- -D warnings` clean. `cargo test --workspace` — all crates green, including the new `every_array_output_declares_a_valid_capacity_source` registry sweep.

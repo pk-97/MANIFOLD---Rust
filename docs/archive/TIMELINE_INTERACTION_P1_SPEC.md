@@ -2,12 +2,12 @@
 
 # Timeline Interaction P1 — one geometry, one selection, previews that tell the truth
 
-**Status: SHIPPED 2026-07-05 @ `62a0f01e` (merge of `wave/timeline-fixes`: TimelineSelection enum, S5 overlap-enforcement root fix, edge autoscroll/snap, keyboard layer). Landing-flash RE-HOOKED 2026-07-07 (timeline-ux pass): fires at the Move-commit drag end, unit-tested; keep/kill/timing rides Peter's feel-pass list (`docs/TIMELINE_UX_AUDIT_2026-07-07.md` §3.1) with the rest of the still-owed running-app feel-pass. S1 multi-select chrome re-verified headless 2026-07-07 (driven render: per-clip borders, no region band). Approved Peter 2026-07-04 — scope confirmed: structural fixes as
+**Status: SHIPPED 2026-07-05 @ `62a0f01e` (merge of `wave/timeline-fixes`: TimelineSelection enum, S5 overlap-enforcement root fix, edge autoscroll/snap, keyboard layer). Landing-flash RE-HOOKED 2026-07-07 (timeline-ux pass): fires at the Move-commit drag end, unit-tested; keep/kill/timing rides Peter's feel-pass list (`docs/TIMELINE_UX_AUDIT_2026-07-07.md` section 3.1) with the rest of the still-owed running-app feel-pass. S1 multi-select chrome re-verified headless 2026-07-07 (driven render: per-clip borders, no region band). Approved Peter 2026-07-04 — scope confirmed: structural fixes as
 must-ship, behavior contract as the checklist; "Nice let's build that doc".**
 **Prerequisites: TIMELINE_LAYOUT_P0 (shipped 2026-07-04 — single Y source).
 Blocks: UI_CRAFT_AND_MOTION_PLAN (same files; motion must not animate lying
 previews or misaligned chrome).**
-**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 + §8 first.
+**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5–section 6 + section 8 first.
 Anchors below are a 2026-07-04 snapshot — re-verify before each phase.**
 
 The governing insight: P0 killed the header/lane detach class by deleting the
@@ -57,7 +57,7 @@ Extend, don't redesign. Every piece below is live code; the design reuses it.
 | Escape during timeline drag | `crates/manifold-app/src/window_input.rs:1061-1552` (all Escape sites are popovers/pickers/output-window) | **Absent** |
 | Drag threshold | `crates/manifold-ui/src/drag.rs` (`DragController` — lifecycle only, no threshold), overlay begin paths | **Absent** (⚠ VERIFY-AT-IMPL: `rg -n "threshold" crates/manifold-ui/src crates/manifold-app/src/window_input.rs` — re-check before building P1.4) |
 | Edge autoscroll during drag | no hits for drag-edge scroll in `viewport.rs` / `interaction_overlay.rs` (playhead follow exists separately) | **Absent** |
-| Undo selection restore | `crates/manifold-editing/src/undo.rs` — zero selection hits | **Absent** (deferred, §8) |
+| Undo selection restore | `crates/manifold-editing/src/undo.rs` — zero selection hits | **Absent** (deferred, section 8) |
 | Alt-drag duplicate seam | `crates/manifold-ui/src/timeline_editing_host.rs:213-214`, `crates/manifold-app/src/editing_host.rs:526-531` | Exists; one undo entry with the move — keep |
 | One-undo-per-gesture | `interaction_overlay.rs:562` commits the engine batch at drag end | Exists — protect with a test, don't rebuild |
 
@@ -174,7 +174,7 @@ below that it's a click on release. Kills accidental micro-moves of clips.
 
 ## 4. Behavior contract
 
-Each row is small once §3 lands; each names its phase. This table is the
+Each row is small once section 3 lands; each names its phase. This table is the
 "general user expectations" half of the doc — DAW-standard behaviors Peter
 called for on 2026-07-04.
 
@@ -208,7 +208,7 @@ old path alive alongside the new one.
 - **Entry state:** clean main; `docs/HEADLESS_UI_HARNESS.md` read;
   `cargo run --bin ui-snap -- --help` (or the harness's current entry — read
   the doc, don't guess) works.
-- **Read-back first:** this doc §1–§3; P0 spec's P0.0 phase (the pattern);
+- **Read-back first:** this doc section 1–section 3; P0 spec's P0.0 phase (the pattern);
   restate the five symptoms and which authority-pair each maps to.
 - **Deliverables:** (a) headless PNG before-set: shift-click range on 4 clips,
   cmd-click multi-select, region overlay + clip selection together (S1);

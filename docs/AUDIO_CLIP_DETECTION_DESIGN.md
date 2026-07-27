@@ -1,8 +1,8 @@
-<!-- index: Moves percussion detection from a global, fire-once import wizard to a per-audio-clip property. Select an audio clip on an audio layer → the inspector shows its detection settings (separation, quantize, per-instrument sensitivity + target layer) and a Detect button. Each audio clip owns its own detection state and the trigger clips it generated; re-detecting one clip only touches its own triggers. The detection backend (htdemucs+ADTOF Python pipeline, orchestrator, parser/planner/import-service) is reused as-is — the work is the ownership model, clip-anchored planning (warp-aware), the inspector UI, and deleting the global singleton path. Decisions locked 2026-06-18: existing backend now (DrumSep later), manual Detect (no auto-on-drop), one sensitivity slider per instrument, no migration of old global percussion state (start fresh). §8 (UX locked 2026-06-19): Detect grows into "Detect and Group" — consumes the demucs stems into analysis-only audio lanes, wraps source + stems + triggers in a named group (expanded, contained), and auto-creates one per-stem send (reused by source). The set is keyed to the source lane, not the clip: re-detecting other clips on the same lane reuses its lanes/sends. -->
+<!-- index: Moves percussion detection from a global, fire-once import wizard to a per-audio-clip property. Select an audio clip on an audio layer → the inspector shows its detection settings (separation, quantize, per-instrument sensitivity + target layer) and a Detect button. Each audio clip owns its own detection state and the trigger clips it generated; re-detecting one clip only touches its own triggers. The detection backend (htdemucs+ADTOF Python pipeline, orchestrator, parser/planner/import-service) is reused as-is — the work is the ownership model, clip-anchored planning (warp-aware), the inspector UI, and deleting the global singleton path. Decisions locked 2026-06-18: existing backend now (DrumSep later), manual Detect (no auto-on-drop), one sensitivity slider per instrument, no migration of old global percussion state (start fresh). section 8 (UX locked 2026-06-19): Detect grows into "Detect and Group" — consumes the demucs stems into analysis-only audio lanes, wraps source + stems + triggers in a named group (expanded, contained), and auto-creates one per-stem send (reused by source). The set is keyed to the source lane, not the clip: re-detecting other clips on the same lane reuses its lanes/sends. -->
 
 # Audio Clip Detection — Design Doc
 
-Status: **P0 model SHIPPED** (verified in-tree 2026-07-05 baseline review: `AudioClipDetection` + `DetectionConfig` live in `manifold-core/src/audio_clip_detection.rs`, and `Project.percussion_import` is deleted from core — this doc previously said "design only"); P1+ pending. **Open fork flagged for Peter (baseline review):** §10's "a Detect on clip B while A is running queues or rejects" has no decided default.
+Status: **P0 model SHIPPED** (verified in-tree 2026-07-05 baseline review: `AudioClipDetection` + `DetectionConfig` live in `manifold-core/src/audio_clip_detection.rs`, and `Project.percussion_import` is deleted from core — this doc previously said "design only"); P1+ pending. **Open fork flagged for Peter (baseline review):** section 10's "a Detect on clip B while A is running queues or rejects" has no decided default.
 
 Detection becomes a property of the audio clip. Drop an audio file → it's an audio clip on an audio layer (already true). Select it → the inspector shows how it's heard and where its triggers go. Tweak, hit **Detect**, the trigger clips appear on their target layers. This is the studio half of the percussion pipeline: the clip owns its analysis, the way an Ableton clip owns its warp/quantize.
 
@@ -60,7 +60,7 @@ pub struct InstrumentDetect {
 }
 ```
 
-`PercussionAnalysisData` is already serializable. Caching it is the key UX lever — see §3.
+`PercussionAnalysisData` is already serializable. Caching it is the key UX lever — see section 3.
 
 ### 2.2 On each generated trigger clip
 
@@ -74,8 +74,8 @@ This is what makes "each clip owns the triggers it made" hold. Re-detecting clip
 ### 2.3 Deleted
 
 - `Project.percussion_import` + its lazy-init helpers ([project.rs:1113–1143](../crates/manifold-core/src/project.rs#L1113)).
-- `ContentCommand::PercussionImport(String)` (the file-dialog wizard entry) — replaced by clip-scoped commands (§5).
-- The orchestrator's writes into the global state; alignment/nudge/calibrate re-homed per-clip (§6).
+- `ContentCommand::PercussionImport(String)` (the file-dialog wizard entry) — replaced by clip-scoped commands (section 5).
+- The orchestrator's writes into the global state; alignment/nudge/calibrate re-homed per-clip (section 6).
 
 ## 3. Two actions, one slow — the cached-analysis win
 
@@ -135,25 +135,25 @@ Joins the audio clip's `build_audio_section` ([clip_chrome.rs:386](../crates/man
 ```
 
 - **Detect** runs Python (slow, progress shown via the orchestrator's existing status surface).
-- Slider / quantize / routing edits → instant re-plan (§3).
+- Slider / quantize / routing edits → instant re-plan (section 3).
 - Each instrument row: on/off · one sensitivity slider · target-layer dropdown.
 - Status line reuses the orchestrator's `status_message` / `status_progress01`.
 
 Machine config (demucs device/model, backend paths, BPM min/max) stays in global settings — not in the clip inspector.
 
-Once §8 ships, the button reads **Detect and Group** and produces the full set; the mock's `[Detect]` is the pre-grouping label.
+Once section 8 ships, the button reads **Detect and Group** and produces the full set; the mock's `[Detect]` is the pre-grouping label.
 
 ## 8. Detect and Group — stems become lanes, the lane becomes a set
 
-**UX/UI locked with Peter 2026-06-19.** Infra in flux — see §8.6. The plain per-clip **Detect** (§7) grows into **Detect and Group**: one press turns an analyzed audio clip into a self-contained *set* on the timeline — the source, its stems, its triggers, and the modulation sends that listen to each stem. The mental model: drop a song → hit Detect → get a song folder, the way dragging a multitrack into Ableton gives you a track group.
+**UX/UI locked with Peter 2026-06-19.** Infra in flux — see section 8.6. The plain per-clip **Detect** (section 7) grows into **Detect and Group**: one press turns an analyzed audio clip into a self-contained *set* on the timeline — the source, its stems, its triggers, and the modulation sends that listen to each stem. The mental model: drop a song → hit Detect → get a song folder, the way dragging a multitrack into Ableton gives you a track group.
 
 The demucs pass already produces 4 stems (drums / bass / vocals / other); the per-clip path **discarded** them ([percussion_orchestrator.rs](../crates/manifold-playback/src/percussion_orchestrator.rs) caches `stem_paths` only on the legacy wizard path). Detect and Group **consumes** them.
 
 ### 8.1 What one press produces
 
-- **4 stem audio lanes**, one per stem file, each in the new **analysis-only** output state — silent to master, still feeding its send. See [LAYER_CONTROLS_DESIGN §5](LAYER_CONTROLS_DESIGN.md).
+- **4 stem audio lanes**, one per stem file, each in the new **analysis-only** output state — silent to master, still feeding its send. See [LAYER_CONTROLS_DESIGN section 5](LAYER_CONTROLS_DESIGN.md).
 - **Trigger lanes** with the detected hits placed (Kick / Snare / …), as today.
-- **One send per stem** in Audio Setup. Create with `AddAudioSendCommand`, then route the stem lane to it with `SetLayerAudioSendCommand` (the layer→send route the layer-header Send dropdown already drives — a layer feeds **at most one** send). The send reads the stem lane's **realtime post-fader tap** (the shipped model — §8.6). **Reused by source**, so re-detect never piles up duplicates.
+- **One send per stem** in Audio Setup. Create with `AddAudioSendCommand`, then route the stem lane to it with `SetLayerAudioSendCommand` (the layer→send route the layer-header Send dropdown already drives — a layer feeds **at most one** send). The send reads the stem lane's **realtime post-fader tap** (the shipped model — section 8.6). **Reused by source**, so re-detect never piles up duplicates.
 - **A group** wrapping source + stems + triggers, named after the song.
 
 ```
@@ -184,7 +184,7 @@ The "intelligent, just-works" rule. The set is keyed to the **source audio lane*
 - **First Detect** on a lane builds the set (stem lanes, trigger lanes, sends).
 - **Detect another clip on the same lane** → **reuses** the set. New stem clips and trigger clips drop onto the *existing* lanes at the new clip's position. No second folder, no duplicate lanes, no duplicate sends.
 - **Re-detect one clip** → replaces only that clip's own contributions (its `detection_source` clips); the rest is untouched.
-- **Two different songs on one lane** → they **share one set** (the lane is always the unit). A "Drums" stem lane then holds drums clips from both songs. Accepted edge case — the drop affordance (AUDIO_LAYER §6) nudges toward one song per lane anyway.
+- **Two different songs on one lane** → they **share one set** (the lane is always the unit). A "Drums" stem lane then holds drums clips from both songs. Accepted edge case — the drop affordance (AUDIO_LAYER section 6) nudges toward one song per lane anyway.
 
 ```
 Detect clip ①          Detect clip ② (same lane)     Re-detect clip ①
@@ -198,11 +198,11 @@ builds the set         REUSES the set                replaces only ①
  Kick  : ▌① ▌①          ▌① ▌①     ▌② ▌②               ▌①' ▌①'   ▌② ▌②
 ```
 
-Implementation note: this extends §2.2's `detection_source` provenance from trigger clips to the generated **stem** clips too, so reuse/replace is the same clear-by-source logic on both. The stem/trigger **lanes** persist across detects (keyed by source lane); only the **clips** on them are added or replaced.
+Implementation note: this extends section 2.2's `detection_source` provenance from trigger clips to the generated **stem** clips too, so reuse/replace is the same clear-by-source logic on both. The stem/trigger **lanes** persist across detects (keyed by source lane); only the **clips** on them are added or replaced.
 
 ### 8.4 Where it lives & how it feels
 
-- **In the clip inspector**, alongside the offline detection controls (§7). The §7 **Detect** button becomes **Detect and Group**.
+- **In the clip inspector**, alongside the offline detection controls (section 7). The section 7 **Detect** button becomes **Detect and Group**.
 - **Async, non-blocking.** Stem separation is slow. Progress shows **inline on the source clip** (phase label + bar), not only in a global status line. You keep working while it runs.
 
 ### 8.5 Sends — naming & legibility
@@ -214,9 +214,9 @@ Implementation note: this extends §2.2's `detection_source` provenance from tri
 
 The audio/send rework landed. Two primitives this feature needs — one shipped, one didn't.
 
-**Shipped — layer-fed sends (the realtime tap model, AUDIO_LAYER §3R).** A send's source sums capture channels **and** audio layers: `AudioSend.source = AudioSendSource { layers: Vec<LayerId> }` ([audio_setup.rs:29](../crates/manifold-core/src/audio_setup.rs#L29)), with `is_layer_fed()` / `feeds_from_layer()` / `layers()` helpers. Each audio layer owns a kira sub-track with a **post-fader `LayerTap`**; a layer-fed send drains it live ([audio_layer_playback.rs](../crates/manifold-playback/src/audio_layer_playback.rs)). Wiring is one undoable command — `SetLayerAudioSendCommand` — already driven by the layer-header **Send** dropdown (`LayerControl::Send`, shipped). This is **not** the old "precomputed curve" of §0/§3 — it's a realtime tap, so a stem lane must *play into its tap* for the send to see signal.
+**Shipped — layer-fed sends (the realtime tap model, AUDIO_LAYER section 3R).** A send's source sums capture channels **and** audio layers: `AudioSend.source = AudioSendSource { layers: Vec<LayerId> }` ([audio_setup.rs:29](../crates/manifold-core/src/audio_setup.rs#L29)), with `is_layer_fed()` / `feeds_from_layer()` / `layers()` helpers. Each audio layer owns a kira sub-track with a **post-fader `LayerTap`**; a layer-fed send drains it live ([audio_layer_playback.rs](../crates/manifold-playback/src/audio_layer_playback.rs)). Wiring is one undoable command — `SetLayerAudioSendCommand` — already driven by the layer-header **Send** dropdown (`LayerControl::Send`, shipped). This is **not** the old "precomputed curve" of section 0/section 3 — it's a realtime tap, so a stem lane must *play into its tap* for the send to see signal.
 
-**Not shipped — the analysis-only output state.** No field, no toggle, no routing. And because the tap is **post-fader**, the shipped mute path zeroes the sub-track volume, so **mute already kills the send** ([audio_layer_playback.rs:226](../crates/manifold-playback/src/audio_layer_playback.rs#L226)). "Silent to master but hot to its tap" therefore needs the routing split in AUDIO_LAYER §5 / LAYER_CONTROLS §5.3 — it can't be a fader move. **This is the one primitive P6 still has to build before stem lanes can be silent-but-listening.** Everything else in §8 sits on shipped infra.
+**Not shipped — the analysis-only output state.** No field, no toggle, no routing. And because the tap is **post-fader**, the shipped mute path zeroes the sub-track volume, so **mute already kills the send** ([audio_layer_playback.rs:226](../crates/manifold-playback/src/audio_layer_playback.rs#L226)). "Silent to master but hot to its tap" therefore needs the routing split in AUDIO_LAYER section 5 / LAYER_CONTROLS section 5.3 — it can't be a fader move. **This is the one primitive P6 still has to build before stem lanes can be silent-but-listening.** Everything else in section 8 sits on shipped infra.
 
 ## 9. Phased plan
 
@@ -224,11 +224,11 @@ Each phase compiles and is testable. Branch off current HEAD.
 
 - **P0 — Model.** `AudioClipDetection` + `DetectionConfig` on the audio clip; `detection_source` on trigger clips; delete `Project.percussion_import` + helpers. `SetClipDetectionConfigCommand`. Serialize/roundtrip + undo tests. *(core, editing, io)*
 - **P1 — Orchestrator rework.** Per-clip `detect(clip)` writing cached analysis onto the clip; provenance tagging on created triggers; clear-only-`detection_source`. Delete global-state writes. *(playback)*
-- **P2 — Clip-anchored warp-aware planning** (§4). The real risk; prototype first. Extend the planner/reprojection to anchor on clip `start_beat`/`in_point` + `warp_ratio`. *(core, playback)*
-- **P3 — Cached re-plan path** (§3). `ReplanClip` from cached events, no Python. Sliders feel live. *(playback, app)*
-- **P4 — Inspector UI** (§7). *(ui, app)*
-- **P5 — Re-home nudge/calibrate per-clip** (§6); delete the dead global command surface. *(playback, app)*
-- **P6 — Detect and Group** (§8). Consume the demucs stems into analysis-only lanes; build the lane-keyed set (group + stem lanes + trigger lanes + per-stem sends); extend `detection_source` to stem clips; rename the inspector action to **Detect and Group**; inline progress on the source clip. Depends on the audio-infra rework (§8.6) landing the analysis-only output state + layer-sourced sends. *(core, playback, ui, app)*
+- **P2 — Clip-anchored warp-aware planning** (section 4). The real risk; prototype first. Extend the planner/reprojection to anchor on clip `start_beat`/`in_point` + `warp_ratio`. *(core, playback)*
+- **P3 — Cached re-plan path** (section 3). `ReplanClip` from cached events, no Python. Sliders feel live. *(playback, app)*
+- **P4 — Inspector UI** (section 7). *(ui, app)*
+- **P5 — Re-home nudge/calibrate per-clip** (section 6); delete the dead global command surface. *(playback, app)*
+- **P6 — Detect and Group** (section 8). Consume the demucs stems into analysis-only lanes; build the lane-keyed set (group + stem lanes + trigger lanes + per-stem sends); extend `detection_source` to stem clips; rename the inspector action to **Detect and Group**; inline progress on the source clip. Depends on the audio-infra rework (section 8.6) landing the analysis-only output state + layer-sourced sends. *(core, playback, ui, app)*
 
 **Checkpoint:** end of P3 = detection works per-clip with instant slider feedback (no UI yet). End of P4 = per-clip detect is the feature. End of P6 = Detect and Group — the full set.
 
@@ -237,5 +237,5 @@ Each phase compiles and is testable. Branch off current HEAD.
 - **Concurrency — DECIDED (Peter, 2026-07-05, baseline review):** the orchestrator runs one detection at a time, and a Detect on clip B while A is running **blocks/rejects** — the button disabled with a visible "detection busy" state. Peter: "It should probably block for safety and UX so the user knows they can't auto-populate multiple audio files at once." Rejected: queueing the second job (silently auto-populating multiple clips hides what the system is doing). No parallel demucs.
 - **Target-layer auto-create vs explicit** — when `target_layer == None`, fall back to the current by-name auto-create (Kick → "Kick" layer). Explicit routing overrides.
 - **Hash/stem cache** — `compute_audio_hash` reads the whole file on the content thread (pre-existing). Per-clip detection calls it more often; consider hashing off-thread or by path+mtime. Pre-existing issue, flagged not fixed.
-- **Group container UI** (§8.2) — "expanded, stays open" is only viable if the layer group renders as a visually contained, collapsible, drag-as-one object with mute-all / solo-all on the header. If the group UI can't carry those, revisit the reveal decision. This is a dependency, not an afterthought.
-- **Mute vs send — settled by the shipped code (was an open reversal).** The shipped post-fader tap zeroes on mute, so **mute already kills the send** ([audio_layer_playback.rs:226](../crates/manifold-playback/src/audio_layer_playback.rs#L226)). The 3-state model's "mute = fully off" matches what shipped — no decision owed. Analysis-only is purely the additive missing state (§8.6).
+- **Group container UI** (section 8.2) — "expanded, stays open" is only viable if the layer group renders as a visually contained, collapsible, drag-as-one object with mute-all / solo-all on the header. If the group UI can't carry those, revisit the reveal decision. This is a dependency, not an afterthought.
+- **Mute vs send — settled by the shipped code (was an open reversal).** The shipped post-fader tap zeroes on mute, so **mute already kills the send** ([audio_layer_playback.rs:226](../crates/manifold-playback/src/audio_layer_playback.rs#L226)). The 3-state model's "mute = fully off" matches what shipped — no decision owed. Analysis-only is purely the additive missing state (section 8.6).

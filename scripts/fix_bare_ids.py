@@ -127,7 +127,7 @@ def fix_file(path: Path, titles, write):
             tpath = (path.parent / Path(target).name)
             if not tpath.exists():
                 tpath = REPO / target.removeprefix("./")
-            title = heading_title(tpath, sm.group()[1:])
+            title = heading_title(tpath, sm.group().split()[-1])
             if not title:
                 unresolved.append(f"{path.name}:{i+1} {target} {sm.group()} (no heading match)")
                 continue

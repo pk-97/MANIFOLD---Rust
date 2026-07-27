@@ -1,10 +1,10 @@
 # Component Library — Design
 
 **Status:** Approved design, not implemented. Sonnet-executable.
-**Decided:** 2026-07-02. Decided questions in §12 — do not reopen them.
+**Decided:** 2026-07-02. Decided questions in section 12 — do not reopen them.
 **Companions:** `NODE_GROUPS_DESIGN.md` (the substrate), `GROUPING_GRAPHS.md`, `MCP_INTERFACE_DESIGN.md` (the main consumer), `NODE_CATALOG.md`.
 **Prerequisites:** NODE_VOCABULARY_AUDIT apply pass (components are named in the post-rename vocabulary — building them on old ids doubles the migration). Sequencing: `docs/DESIGN_BUILD_ORDER.md` wave 3.
-**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5 (Phase briefs)–§6 and §8 before starting any phase. Conformance-hardened: run the §8.3 pre-flight before each phase — node-groups backend and catalog will have moved by execution time.
+**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 and section 8 before starting any phase. Conformance-hardened: run the section 8.3 pre-flight before each phase — node-groups backend and catalog will have moved by execution time.
 
 ---
 
@@ -46,7 +46,7 @@ pub struct ComponentDef {
     pub description: String,        // usage notes: when to use, what the macros do
     #[serde(default)]
     pub tags: Vec<String>,
-    pub class: ComponentClass,      // Bundled | User | Agent (§7)
+    pub class: ComponentClass,      // Bundled | User | Agent (section 7)
     #[serde(default = "one_u32")]
     pub version: u32,               // informational; bumped on bundled edits
     pub group: GroupDef,            // the entire body — interface, nodes, wires
@@ -59,7 +59,7 @@ Components are **kind-agnostic**: a component is a subgraph, not an effect or a 
 
 `GroupParamDef` exists but is phase-1 thin: single inner target, no display metadata, and it is a **load-time override**, not a live control. Components need real macros — the rack-knob experience. All changes are additive.
 
-> **F14 reconciliation (2026-07-10):** `SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` says "Phase D / `GroupParamDef` stays dropped" — that kills a **live group-param runtime**, not this type. Component macros are `GroupParamDef` **declarations** that lower onto ordinary card `BindingDef`s at expose (§4b), so no live group-param runtime is introduced; the two designs compose. Note the orthogonality: SCENE_BUILD's card **sections** (`ParamSpecDef.section`, which bundle a card's rows) are a separate axis from component **macros** (which fan one knob out to inner targets) — a component's exposed macros land as card bindings that sections can then group, but neither mechanism is the other.
+> **F14 reconciliation (2026-07-10):** `SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` says "Phase D / `GroupParamDef` stays dropped" — that kills a **live group-param runtime**, not this type. Component macros are `GroupParamDef` **declarations** that lower onto ordinary card `BindingDef`s at expose (section 4b), so no live group-param runtime is introduced; the two designs compose. Note the orthogonality: SCENE_BUILD's card **sections** (`ParamSpecDef.section`, which bundle a card's rows) are a separate axis from component **macros** (which fan one knob out to inner targets) — a component's exposed macros land as card bindings that sections can then group, but neither mechanism is the other.
 
 ### 4a. Schema extensions (`manifold-core`)
 
@@ -136,7 +136,7 @@ The junk-drawer guard: forty near-identical agent-made "glow chains" can exist w
 
 ## 8. MCP integration
 
-Amends `MCP_INTERFACE_DESIGN.md` §5 (noted there):
+Amends `MCP_INTERFACE_DESIGN.md` section 5 (noted there):
 
 - `list_nodes` gains `tier: "atom" | "component"`; component entries carry purpose + macro summary. Agents are instructed to **compose components first, atoms to glue, raw WGSL last**.
 - `get_node_docs` accepts component ids and serves the full interface: ports, macros (label/range/default), purpose, description.
@@ -168,10 +168,10 @@ Process per candidate: extract → author as `ComponentDef` → verify with the 
 ## 11. Phasing
 
 - **C1 — Schema + registry.** `ComponentDef`, `ComponentClass`, `GroupDef.source`, component registry, bundled-dir loading. *Gate:* `cargo test -p manifold-core --lib`; a fixture component loads, round-trips byte-identically, and inserts (in-memory) into a host def that then flattens clean.
-- **C2 — Macro layer.** §4a schema extensions; §4b lowering incl. `BindingDef.extra_targets` + write-boundary fan-out. *Gate:* old grouped/preset JSON byte-identical on re-serialize; a fan-out macro drives two inner params through the card path in a lib test; clippy clean.
+- **C2 — Macro layer.** section 4a schema extensions; section 4b lowering incl. `BindingDef.extra_targets` + write-boundary fan-out. *Gate:* old grouped/preset JSON byte-identical on re-serialize; a fan-out macro drives two inner params through the card path in a lib test; clippy clean.
 - **C3 — Editor flow.** Component picker + insert (after node-groups canvas lands); save-selection-as-component. *Gate:* insert two instances of one component → distinct handles/NodeIds, independent macros; expose a macro → turn it from the card.
-- **C4 — Mining pass.** Read all 45 presets against §9 criteria; author the v1 bundled set (~10–15); parity-verify each. *Gate:* every bundled component passes `check-presets`-equivalent load + the grouped-vs-flat structural parity test; Peter approves the set by eye.
-- **C5 — MCP tier.** §8, riding the MCP build (its P1/P4 phases). *Gate:* an agent lists components, reads docs, composes a graph from two components + glue atoms, saves as class Agent.
+- **C4 — Mining pass.** Read all 45 presets against section 9 criteria; author the v1 bundled set (~10–15); parity-verify each. *Gate:* every bundled component passes `check-presets`-equivalent load + the grouped-vs-flat structural parity test; Peter approves the set by eye.
+- **C5 — MCP tier.** section 8, riding the MCP build (its P1/P4 phases). *Gate:* an agent lists components, reads docs, composes a graph from two components + glue atoms, saves as class Agent.
 
 C1/C2 are independent of the MCP build and of the canvas work — they can land first and alone.
 

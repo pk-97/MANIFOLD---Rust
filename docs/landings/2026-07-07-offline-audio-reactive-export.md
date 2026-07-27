@@ -16,7 +16,7 @@ L4 (Peter exports a real track and sees the pump) = VD-016. Landing report:
 Exported video no longer freezes every audio-bound parameter. The export loop now renders
 the timeline audio once (`render_export_audio`), feeds it per frame through the same
 `SendAnalyzer` DSP the live rig uses (`OfflineAudioModDriver`), and writes the feature
-snapshot the engine already consumes — so param modulation, param triggers (§8 wave), and
+snapshot the engine already consumes — so param modulation, param triggers (section 8 wave), and
 transient-fired clip triggers all move in the deliverable, deterministically. The release
 workflow (master in → compose → export) now carries the show's most expressive layer into
 the rendered file. Capture-fed sends hear the timeline mix as the front-of-house substitute,

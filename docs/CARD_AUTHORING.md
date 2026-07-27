@@ -1,6 +1,6 @@
 # Card Authoring — semantic intent → idiom, for the outer effect/generator card
 
-**Status:** working guide (DESIGN_DOC_STANDARD §1) · 2026-07-13 · Sonnet (GRAPH_TOOLING_DESIGN P4, D9)
+**Status:** working guide (DESIGN_DOC_STANDARD section 1) · 2026-07-13 · Sonnet (GRAPH_TOOLING_DESIGN P4, D9)
 **Prerequisites:** `docs/GRAPH_TOOLING_DESIGN.md` D8–D9 decided every row and every lint below; this doc transcribes and formats — it adds none.
 
 The "card" is the outer-facing surface of an effect or generator preset: the
@@ -42,7 +42,7 @@ warning-level lint).
 A mux (`node.switch_value` / `node.switch_array`) only executes the selected
 branch — the executor's per-frame liveness check skips the dead branch
 entirely (`node_graph/execution.rs`, see `FREEZE_COMPILER_MAP.md`
-§"execution"). A blend/mix node (`node.mix`, `node.masked_mix`,
+section"execution"). A blend/mix node (`node.mix`, `node.masked_mix`,
 `node.wet_dry`, `node.hdr_mix`, …) renders **both** inputs every frame and
 crossfades the result — even at `amount = 0` or `amount = 1`, where the
 "unused" branch's GPU cost is still paid. Wiring a discrete toggle or a

@@ -6,14 +6,14 @@ note at P5 below) + BUG-045 (gap-ring-down-chase); P6 dead, superseded by KICK_S
 truth-fixed 2026-07-10 (coherence audit F11) — was previously stated "APPROVED design,
 not built," which under-reported a mostly-shipped design and made the status board wrong.
 **Prerequisites:** none (the mod_harness eval loop shipped 2026-07-06 @ `ca9eb490`)
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5 (Phase briefs)–§6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 before starting any phase.
 
 This is **step 7 of [AUDIO_MODULATION_DESIGN.md](AUDIO_MODULATION_DESIGN.md)** — the
-"v2 intelligence" its feature seam was cut for. That doc's §6 commitments (log-space
+"v2 intelligence" its feature seam was cut for. That doc's section 6 commitments (log-space
 tracking, onset = segmentation, energy = confidence, per-send extraction) are inherited
 here as binding; this doc turns them into mechanics. Its companion,
 [AUDIO_OBJECT_INGEST_DESIGN.md](AUDIO_OBJECT_INGEST_DESIGN.md), applies the same core
-offline; the relation contract is §8 below.
+offline; the relation contract is section 8 below.
 
 **The governing insight.** The existing features are instantaneous statistics of a
 frequency *band* of the whole mix; a human hears a tracked *object*. Peter (2026-07-06):
@@ -40,11 +40,11 @@ exports them; they refine tuning, they don't gate phases.
 | Piece | Where | State |
 |---|---|---|
 | VQT column per send, tilted + floored, shared with scope | `crates/manifold-audio/src/analysis.rs` (`form_tilted_column`, `StreamingSendAnalyzer::push`) | Ships. THE input to salience — the tracker must read this exact column, nothing else. |
-| Per-band reductions + SuperFlux onsets | `analysis.rs` (`reduce_send`, `band_reduce`) | Ships. Onset per-band fire is the tracker's re-acquire signal (§4). |
+| Per-band reductions + SuperFlux onsets | `analysis.rs` (`reduce_send`, `band_reduce`) | Ships. Onset per-band fire is the tracker's re-acquire signal (section 4). |
 | Feature seam: reserved pitch fields | `crates/manifold-core/src/audio_features.rs:45-49` (`pitch_hz`, `pitch_delta_st`, `pitch_confidence`) | Reserved for exactly this since `b186134c` (2026-06-15): "the synchro ridge tracker", confidence gating "so they go still on non-tonal input". Never built, never removed — this design is the planned v2, not a re-proposal. |
-| Feature matrix + drawer | `crates/manifold-core/src/audio_mod.rs` (`AudioFeatureKind`, `AudioFeature{kind,band}`), drawer per AUDIO_MODULATION §10.2 (`DrawerSpec`) | Ships. New kinds slot into the existing enum + drawer rows. |
+| Feature matrix + drawer | `crates/manifold-core/src/audio_mod.rs` (`AudioFeatureKind`, `AudioFeature{kind,band}`), drawer per AUDIO_MODULATION section 10.2 (`DrawerSpec`) | Ships. New kinds slot into the existing enum + drawer rows. |
 | Legacy serde migration | `audio_mod.rs:160-189` (`LegacyAudioFeature::Pitch/PitchDelta` → `(Amplitude, Full)`) | Safety migration for variants that were never selectable in UI; no real project stores them. Retargeted in P4. |
-| Per-send opt-in config | `crates/manifold-core/src/audio_setup.rs:60` (`SendAnalysisConfig.pitch`, serde default false) | Ships, unused. Becomes part of the activation gate (§5). |
+| Per-send opt-in config | `crates/manifold-core/src/audio_setup.rs:60` (`SendAnalysisConfig.pitch`, serde default false) | Ships, unused. Becomes part of the activation gate (section 5). |
 | Scope overlay transport | `analysis.rs` (`SCOPE_SCALAR_STRIDE = 7`), `crates/manifold-spectral/src/shaders/spectrogram.wgsl` (`col_scalars`, `centroid_line`) | Ships. Pitch trace extends this stride; precedent is the centroid trace. |
 | Output shaper | `audio_mod.rs:276` (`AudioModShape::apply`, incl. `rate_of_change`) | Ships. `rate_of_change` on a log-mapped pitch **is** pitch-delta — see D3. |
 | Eval harness | `crates/manifold-audio/examples/mod_harness.rs` | Ships (2026-07-06). Causal replay of the live path, PNG + jitter index; selftest scenarios know their own ground truth. |
@@ -89,15 +89,15 @@ function is deliberately ONE pure function so a learned replacement can slot in
 without touching tracker/features/UI; that seam is the standing answer to "should
 this be ML" — re-survey before reopening D1, don't re-litigate from memory.
 
-**D2 — No synchrosqueezing in v1; named revival trigger.** AUDIO_MODULATION §6 called
+**D2 — No synchrosqueezing in v1; named revival trigger.** AUDIO_MODULATION section 6 called
 for a synchrosqueeze port. The audit says its cost buys the wrong thing: synchro
 sharpens *frequency precision*, but the failure mode is *which peak is the object* —
 that's salience + continuity, which synchro doesn't provide. At bpo 24 with parabolic
 interpolation the position estimate is ~0.1–0.2 st — below what a slider mapping makes
 visible. **Revival trigger:** if P2's dive gate fails on precision (visible
 stair-stepping on slow glides that interpolation can't fix), port `process_complex` +
-`synchrosqueeze_into` (anchors in §1) into `manifold-spectral` as a drop-in refinement
-of *peak position only* — salience and tracker unchanged. AUDIO_MODULATION §6's status
+`synchrosqueeze_into` (anchors in section 1) into `manifold-spectral` as a drop-in refinement
+of *peak position only* — salience and tracker unchanged. AUDIO_MODULATION section 6's status
 note should then be updated, not this section rewritten.
 
 **D3 — The drawer gains `Pitch` and `Presence` kinds; delta comes free.** `AudioFeatureKind`
@@ -106,7 +106,7 @@ log-frequency position mapped 0..1 across the selected band's bin window — the
 mapping brightness/centroid already use, so the trace and the feature agree with the
 picture. `Presence` = tracker confidence 0..1 (D6). **There is no `PitchDelta` kind:**
 `AudioModShape.rate_of_change` (`audio_mod.rs:276`) differentiates any feature over
-real time, and on a log-mapped pitch that derivative is semitone-proportional — the §6
+real time, and on a log-mapped pitch that derivative is semitone-proportional — the section 6
 "semitones/sec" commitment is satisfied by composition. Legacy serde:
 `LegacyAudioFeature::Pitch` → `(Pitch, Full)`, `PitchDelta` → `(Pitch, Full)` (the
 delta-ness is a shape flag the legacy form never carried; no real project stores these
@@ -136,10 +136,10 @@ per hop, state = `{ pos: f32 (fractional bin), presence: f32, hold: u8, challeng
 3. **Takeover:** a stronger peak elsewhere must out-salience the continuation by
    `CHALLENGE_RATIO` for `CHALLENGE_HOPS` consecutive hops before the tracker jumps
    (kills one-hop flicker to a passing element without adding lag to real motion).
-4. **Onset re-acquire (AUDIO_MODULATION §6.2):** the band's SuperFlux fire bypasses
+4. **Onset re-acquire (AUDIO_MODULATION section 6.2):** the band's SuperFlux fire bypasses
    hysteresis for that hop — a new note may legitimately teleport. `prev_raw` in any
    bound shaper sees the jump once; `rate_of_change` users get one spike, which the
-   §6.2 segmentation semantics accept (a new note IS an event).
+   section 6.2 segmentation semantics accept (a new note IS an event).
 5. **Dropout:** no acceptable peak → `pos` HOLDS (pitch is a position; it never snaps
    to zero), `presence` decays with `PRESENCE_RELEASE`; a peak reappearing near `pos`
    within `HOLD_HOPS` resumes silently. Presence rises with `PRESENCE_ATTACK` while
@@ -309,7 +309,7 @@ assumed.
 percussive → ODF) — the textbook shape, and the plausible-wrong turn here. It
 breaks byte-identity for all five features, silently re-opens the
 BUG-042/043/044 calibrations, and buys nothing for BUG-046 itself. Harmonic →
-tracker is *deferred with a revival trigger* (§10), not dead.
+tracker is *deferred with a revival trigger* (section 10), not dead.
 **Rejected: sub-band thresholding** — kick and bass share the same bins; a
 threshold can't separate co-located energy (backlog entry, measured).
 **Rejected: Full-band as the kick binding** — fires on hats and spams kick
@@ -532,7 +532,7 @@ escalation happens.)
 *Gate:* dive — 0 transient fires after warm-up; kicks — exactly 8; busymix — ≥ 7 of 8
 kicks fire in Low.
 *Demo:* dive + kicks PNGs — L2. *Forbidden:* per-scenario constants; gating the
-detector on tracker state (coupling direction is tracker←onset per §6.2, never both
+detector on tracker state (coupling direction is tracker←onset per section 6.2, never both
 ways in v1).
 
 **P4 — Modulation surface + serde. ✅ SHIPPED 2026-07-06 (`586d2bac`; drawer
@@ -555,9 +555,9 @@ blocks headless UI); runtime activation needs one running-app smoke with a
 bound Pitch mod driving a param. Original brief follows.
 
 **P4 — Modulation surface + serde.** `Pitch`/`Presence` kinds, drawer rows (two more
-entries in the existing feature `DrawerSpec` — precedent §10.2), legacy migration
+entries in the existing feature `DrawerSpec` — precedent section 10.2), legacy migration
 retarget (D3), activation set runtime wiring if P2 deferred it.
-*Gate:* round-trip (STANDARD §5): save a project with a `Pitch × Low` mod → reload →
+*Gate:* round-trip (STANDARD section 5): save a project with a `Pitch × Low` mod → reload →
 feature still drives (assert modulated effective value changes over a synthetic feed)
 — as an integration test, not a claim; serde name test (`"pitch"`/`"presence"`
 round-trip + legacy `{"pitch":...}` migration); negative — `rg 'PitchDelta'` in
@@ -576,7 +576,7 @@ trusting the 7→11 plan below; the stride bump itself is still load-bearing. St
 through the whole path (analyzer buffers, runtime
 drain, `ContentState`, shader storage buffer, `pitch_line` in `spectrogram.wgsl`),
 naga parse/validate test updated (precedent: the centroid-overlay WGSL guard,
-AUDIO_MODULATION §10.0.3).
+AUDIO_MODULATION section 10.0.3).
 *Gate:* naga test green; harness and scope draw the same scalars (harness PNG is the
 reference); workspace sweep (final phase).
 *Demo:* app scope showing the pitch trace riding a played bassline — L4 (Peter, live;
@@ -636,7 +636,7 @@ built against this doc's invariants.
   (isolated bass channel) measurably out-demands the salience path; slots into the
   salience seam, LGPL-3.0 linking implications assessed at that point.
 - **Per-send analysis toggles in the Audio Setup panel** (the deferred v1 polish item,
-  AUDIO_MODULATION §11.5) — revive with P4 if trivial, else stays panel backlog.
+  AUDIO_MODULATION section 11.5) — revive with P4 if trivial, else stays panel backlog.
 - **Real-clip eval fixtures** — when Peter exports them; they extend the CSV/PNG set,
   gates stay synthetic.
 - **Harmonic component → salience/tracker** (D9's other half) — revive only if

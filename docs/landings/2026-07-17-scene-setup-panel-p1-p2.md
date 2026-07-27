@@ -1,11 +1,11 @@
 # SCENE_SETUP_PANEL_DESIGN.md P1+P2 — landed 2026-07-17 @ 40d31dd0
 
-**Branch:** wave/scene-setup-panel · **Level reached:** L3 (scripted UI-flow interaction, run and read by the orchestrating session in both the worktree and the main checkout) / target L3 (§10)
+**Branch:** wave/scene-setup-panel · **Level reached:** L3 (scripted UI-flow interaction, run and read by the orchestrating session in both the worktree and the main checkout) / target L3 (section 10)
 **Doc status line (quoted verbatim):** IN PROGRESS — P1 (column + discovery + Environment/Fog) + P2 (Objects section) SHIPPED 2026-07-17; P3–P5 not implemented. Sonnet-executable, orchestrated overnight. BUG-193 (no object/light remove command) and BUG-194 (vertex count not computable from def) opened as honest escalations, not blocking. · 2026-07-16 · Fable 5 (design session with Peter)
 
 ## Gate results (verbatim)
 
-All gates below were re-run independently by the orchestrating session, not taken on the executing workers' self-report (per DESIGN_DOC_STANDARD §8.5). Two apparent compile-error IDE diagnostics surfaced mid-session against files that had already been committed clean; verified stale (a mid-edit snapshot) by rebuilding directly both times — see Deviations.
+All gates below were re-run independently by the orchestrating session, not taken on the executing workers' self-report (per DESIGN_DOC_STANDARD section 8.5). Two apparent compile-error IDE diagnostics surfaced mid-session against files that had already been committed clean; verified stale (a mid-edit snapshot) by rebuilding directly both times — see Deviations.
 
 `cargo build --workspace` (main checkout, post-merge): clean, `Finished` in 27.06s.
 
@@ -17,7 +17,7 @@ All gates below were re-run independently by the orchestrating session, not take
 
 `cargo run -p manifold-renderer --bin check-presets`: `53 presets: 53 ok, 0 failed` (includes the new `SceneStarter.json`).
 
-Negative gates (§4): `rg "MutateProject|Arc<Mutex|Arc<RwLock" crates/manifold-ui/src/panels/scene_setup_panel.rs` → 0 hits; `rg "Project\b" crates/manifold-renderer/src/node_graph/scene_vm.rs` → 0 hits; `layer.rs` and `ports.rs` untouched across the wave.
+Negative gates (section 4): `rg "MutateProject|Arc<Mutex|Arc<RwLock" crates/manifold-ui/src/panels/scene_setup_panel.rs` → 0 hits; `rg "Project\b" crates/manifold-renderer/src/node_graph/scene_vm.rs` → 0 hits; `layer.rs` and `ports.rs` untouched across the wave.
 
 Round-trip: `scene_setup_fog_edit_survives_save_reload_and_scene_vm_re_shows_it` (manifold-renderer) — fog density 0.37 survives V1 JSON save/reload and `SceneVm::from_def` re-shows it. Pass.
 
@@ -41,7 +41,7 @@ PNGs read by the orchestrator (affordance check — do controls read as clickabl
 
 ## Verification debt
 
-None opened. The one deferred item that could look like debt — Remove object/light control, header vertex count — are tracked as BUG-193/BUG-194 (genuine escalations per the doc's own §8 contract: "any panel control with no existing command to dispatch" pauses rather than improvises), not silent gaps.
+None opened. The one deferred item that could look like debt — Remove object/light control, header vertex count — are tracked as BUG-193/BUG-194 (genuine escalations per the doc's own section 8 contract: "any panel control with no existing command to dispatch" pauses rather than improvises), not silent gaps.
 
 ## Click-script for Peter (≤2 minutes)
 

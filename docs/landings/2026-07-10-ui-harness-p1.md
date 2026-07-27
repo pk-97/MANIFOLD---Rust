@@ -10,7 +10,7 @@ The two seam functions (D3) extracted into a new App-internal module `crates/man
 - `composite_main_ui_frame(...)` — owns dirty-panel atlas render + clear + full-atlas blit + optional video-band blit. Moved out of `present_all_windows`, replaced by one call at `app_render.rs:4023`. The fast path, drawable acquire/present stay in `present_all_windows`.
 - The P0 harness (`cache_path_full_render`) now renders its frame by calling `composite_main_ui_frame` — same code as the live app.
 
-Five forced signature deviations from the §4 sketch, all documented in the `ui_frame.rs` module doc and the design doc's §4 AS-BUILT note, each argued behavior-preserving: `Option<&mut cache>` (pre-GPU-init), `&mut ui_root` (real mutations), the App-owned pipelines/samplers/scale/video-dims threaded as params (hot-path discipline — not recreated per frame), one-shot `scrolled_in_place` clear, and `render_dirty_panels` moving to the non-fast-path branch.
+Five forced signature deviations from the section 4 sketch, all documented in the `ui_frame.rs` module doc and the design doc's section 4 AS-BUILT note, each argued behavior-preserving: `Option<&mut cache>` (pre-GPU-init), `&mut ui_root` (real mutations), the App-owned pipelines/samplers/scale/video-dims threaded as params (hot-path discipline — not recreated per frame), one-shot `scrolled_in_place` clear, and `render_dirty_panels` moving to the non-fast-path branch.
 
 ## Gates (verbatim)
 

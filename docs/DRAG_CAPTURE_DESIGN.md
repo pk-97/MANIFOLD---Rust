@@ -2,7 +2,7 @@
 
 **Status:** SHIPPED 2026-07-08 (all phases) — **P1 @ `9bb8ca86`** (ownership D1–D4 + D9, L3); **P2 @ `12683746`** (z-aware seams D5 + `swallow_drag` retired, L1; VD-017/018); **P3 @ `f23fa1f1`** (immediate-drag threshold D6, L1; VD-019 = Peter's crossover-nudge feel pass) · design 2026-07-07 (approved same day by Peter) · Fable
 **Prerequisites:** none (BUG-058 (drag-end-consumable) instrumentation + BUG-059 (band-line-grab-falls-through) stopgap landed 2026-07-07 @ `fb2bdc07`; P2 deletes the stopgap)
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5 (Phase briefs)–§6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 before starting any phase.
 
 The governing insight: MANIFOLD has no single notion of who owns an in-flight drag.
 Four uncoordinated layers each re-decide per event — raw-position interceptors in
@@ -42,7 +42,7 @@ gates use); `docs/OVERLAY_SYSTEM_DESIGN.md` (the overlay driver being extended).
 | Window-seam interceptors | `crates/manifold-app/src/window_input.rs:236` `primary_mouse_input` | Dropdown-dismiss, split-handle (6px full-width band), inspector-edge (±4px full window height) intercept presses on raw position BEFORE any hit-testing — straight through overlays floating above them. Both handles already have tree nodes (built in `UIRoot::build`), but input ignores them. |
 | Per-panel drag flags | inspector `pressed_target`/card-drag; layer_headers `is_dragging`/gain; audio panel `dragging_band`/`calibration_drag`/`swallow_drag` ([audio_setup_panel.rs:439](../crates/manifold-ui/src/panels/audio_setup_panel.rs)) | Each panel privately re-answers "is this my drag". `swallow_drag` is the 2026-07-07 stopgap this design supersedes (P2 deletes it). |
 | Diagnostic tap | `MANIFOLD_INPUT_TRACE=1`, six seams (landed `556578c3`) | Prints per-transition routing lines. Keep — it verifies this design's phases too. |
-| Graph-editor canvas | `crates/manifold-ui/src/graph_canvas/interaction.rs` | Does its own internal capture inside one panel; sound, out of scope (scope fence §6). |
+| Graph-editor canvas | `crates/manifold-ui/src/graph_canvas/interaction.rs` | Does its own internal capture inside one panel; sound, out of scope (scope fence section 6). |
 
 Instruction: **extend, don't redesign.** The input layer is correct; the overlay
 driver keeps its shape; `InteractionOverlay` keeps `DragMode`. Only the arbitration
@@ -51,7 +51,7 @@ between surfaces changes.
 ## 2. Decisions
 
 - **D1 — Ownership is resolved once, at `DragBegin`, and recorded on `UIRoot`.**
-  The first `DragBegin` after a press runs one resolution pass (§3.2); the winner is
+  The first `DragBegin` after a press runs one resolution pass (section 3.2); the winner is
   stored in `UIRoot::drag_owner`. Every subsequent `Drag`/`DragEnd` of that gesture
   routes to the owner by identity. Rationale: today five mechanisms re-answer
   ownership per event and drift; one recorded answer cannot drift.
@@ -84,7 +84,7 @@ between surfaces changes.
   Rejected: *fully converting the handles to widget-intent routing* — they have
   nodes already, but their drag loops live in `window_input` state
   (`split_dragging`) and work; converting is a bigger refactor with no additional
-  safety beyond the z-check. Deferred (§7) with trigger.
+  safety beyond the z-check. Deferred (section 7) with trigger.
 - **D6 — Precision surfaces can opt out of the 4px drag threshold.** A `PointerDown`
   consumer may arm immediate drag (`UIInputSystem::request_immediate_drag`), making
   the next Move emit `DragBegin` at distance 0. The audio panel's band dividers use
@@ -138,7 +138,7 @@ between surfaces changes.
 /// `UIRoot::resolve_drag_owner`, cleared by the terminal broadcast (D2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DragOwner {
-    /// An open overlay claimed it (modal, or origin inside its rect — §3.2).
+    /// An open overlay claimed it (modal, or origin inside its rect — section 3.2).
     Overlay(OverlayId),
     /// The timeline tracks surface → stashed to `InteractionOverlay`.
     TimelineTracks,
@@ -272,14 +272,14 @@ dragging, until you let go — no matter where your hand travels.**
 - **Entry state:** tip contains `556578c3` (instrumentation + stopgap):
   `git log --oneline -5` shows it; `rg -n "overlay_drag_active" crates/manifold-app/src/ui_root.rs`
   returns the 5 current sites (re-derive; if the count differs, stop and list).
-- **Read-back:** this doc §2–§3 + `ui_root.rs` `process_events` end-to-end +
+- **Read-back:** this doc section 2–section 3 + `ui_root.rs` `process_events` end-to-end +
   `dropdown.rs` `on_event` + BUG-058 backlog entry. Restate D1–D4, D9, the
-  forbidden moves (§3.5), and the entry-check counts before any code.
+  forbidden moves (section 3.5), and the entry-check counts before any code.
 - **Deliverables:** `DragOwner` + `UIRoot::drag_owner` + `resolve_drag_owner` +
   `broadcast_gesture_end`; `claims_drag`/`gesture_ended` trait hooks (defaults);
   dropdown eat-arm deleted per D3; stash gate's Drag/DragEnd/latch arms deleted;
   second loop's inspector/layer_headers calls gated on ownership; the
-  `PointerDown` stale-owner self-heal (§3.3 failure story); **D9: `DragBegin`/
+  `PointerDown` stale-owner self-heal (section 3.3 failure story); **D9: `DragBegin`/
   `Drag` emission made unconditional in `input.rs` `process_pointer` — their
   `node_id` becomes `Option<NodeId>`, same contract as `DragEnd`**; unit tests in
   `ui_root` (or the panel crates where state lives) covering: owner resolution
@@ -316,7 +316,7 @@ dragging, until you let go — no matter where your hand travels.**
 - **Acceptance demo:** the new flow's `result.json` + PNG, L3.
 - **Performer gesture:** trim a clip, release over the inspector, immediately grab
   and move a second clip — both behave.
-- **Forbidden moves:** §3.5 all four; plus keeping any latch "temporarily".
+- **Forbidden moves:** section 3.5 all four; plus keeping any latch "temporarily".
 - **Test scope:** focused (`-p manifold-ui --lib`, ui_root tests); workspace sweep
   deferred to P3 (final phase of the pass).
 
@@ -343,13 +343,13 @@ dragging, until you let go — no matter where your hand travels.**
 - **Performer gesture:** grab a crossover line positioned over the timeline-split
   zone; the line moves, the panels don't resize.
 - **Forbidden moves:** widening into full widget-intent conversion of the handles
-  (Deferred, §7); keeping `swallow_drag` "for safety".
+  (Deferred, section 7); keeping `swallow_drag` "for safety".
 - **Test scope:** focused.
 
 ### P3 — Immediate-drag threshold for precision surfaces — ✅ LANDED 2026-07-08 @ `f23fa1f1` (L1; VD-019 = L4 feel pass; report `docs/landings/2026-07-08-drag-capture-p3.md`)
 
 - **Entry state:** P1+P2 landed.
-- **Read-back:** D6 + §3.4; restate the click-forfeiture consequence.
+- **Read-back:** D6 + section 3.4; restate the click-forfeiture consequence.
 - **Deliverables:** `request_immediate_drag` on `UIInputSystem` (threshold override
   for the current press, cleared on Up); `wants_immediate_drag` overlay hook;
   audio panel returns true on divider arm; unit test: Down on a divider + 1px Move
@@ -365,7 +365,7 @@ dragging, until you let go — no matter where your hand travels.**
   flags instead of the per-press hook.
 - **Test scope:** full workspace sweep + clippy (this is the pass's final phase).
 
-Phasing-completeness check (§5 of the standard): every §3 commitment maps — 3.1/3.2/3.3 → P1;
+Phasing-completeness check (section 5 of the standard): every section 3 commitment maps — 3.1/3.2/3.3 → P1;
 D5 + stopgap retirement → P2; 3.4/D6 → P3; D7's variant → P1 (with its
 VERIFY-AT-IMPL); D9 unconditional emission → P1; handle widget-conversion →
 Deferred. No affordance is phase-less.
@@ -373,7 +373,7 @@ Deferred. No affordance is phase-less.
 ## 6. Decided — do not reopen
 
 1. One `Option<DragOwner>` on `UIRoot`; no distributed owner flags.
-2. Resolution at first `DragBegin`, fixed order §3.2, first claim wins.
+2. Resolution at first `DragBegin`, fixed order section 3.2, first claim wins.
 3. Terminal events broadcast after owner delivery; broadcast runs unconditionally.
    A stale owner is cleared by the next `PointerDown` (which also broadcasts) —
    no timeout, no poll; the user's next press is the recovery path.

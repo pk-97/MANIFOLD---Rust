@@ -1,6 +1,6 @@
 # EDITOR_WINDOW_UNIFICATION P2+P3 — landed 2026-07-14 @ 9ea241dc
 
-**Branch:** feat/editor-window-unification · **Level reached:** P2 L2 / P3 L1 (both at target, §10)
+**Branch:** feat/editor-window-unification · **Level reached:** P2 L2 / P3 L1 (both at target, section 10)
 **Doc status line (quoted verbatim):** `**Status:** APPROVED design · SHIPPED 2026-07-14 — P1 (D1/D2/D4, BUG-151 fixed), P2 (D6 redraw-keepalive aggregate), P3 (D7 structural guard) all landed · Fable 5 (with Peter in the room) · Sonnet-executable`
 
 ## Gate results (verbatim)
@@ -19,7 +19,7 @@ test tree_render_call_sites_are_allowlisted ... ok
 test result: ok. 3 passed; 0 failed
 ```
 
-Red-then-green probe, executed by the orchestrator directly (a claimed-but-unverified guard is a hope, not a gate — per §5's own rule): inserted a duplicate `ui_renderer.render_tree_range(&ui_root.tree, 0, ui_root.overlay_region_start);` into `editor_frame.rs`, re-ran the guard test:
+Red-then-green probe, executed by the orchestrator directly (a claimed-but-unverified guard is a hope, not a gate — per section 5's own rule): inserted a duplicate `ui_renderer.render_tree_range(&ui_root.tree, 0, ui_root.overlay_region_start);` into `editor_frame.rs`, re-ran the guard test:
 ```
 thread 'tree_render_call_sites_are_allowlisted' panicked:
 Structural guard (EDITOR_WINDOW_UNIFICATION_DESIGN.md D7) tripped:
@@ -39,7 +39,7 @@ cargo deny check bans → bans ok
 
 **P2 membership re-derivation diverged from the design doc's guess.** D6's prose speculated the redraw-keepalive survivor set would be "toast timers and any remaining overlay tween." The re-derivation (`rg "is_animating|tick\(" crates/manifold-ui/src/panels/`) found the popup professional pass had already deleted every popup's entrance tween — `browser_popup`/`ableton_picker`/`settings_popup` all hardcode `is_animating() -> false` with comments saying so. Only `ToastPanel` is actually live; the worker correctly did not include the three dead stubs in the aggregate (the brief's own "unit test per member ⇒ animating flips true" requirement is unsatisfiable for a predicate that can never observe `true`).
 
-**P3's call-site inventory diverged from D7's design-time baked list**, because P1 (which ran before P3, in the same wave) already did more of the seam extraction than D7 assumed would happen at P3-impl time. D7's doc text expected `ui_frame.rs:702,710` to still need extracting at P3; P1 had already moved them into `tree_passes.rs`. Re-derived inventory: 3 files need allowlist entries (`tree_passes.rs`, `editor_frame.rs`, `ui_snapshot/mod.rs`), not 4 — `ui_frame.rs` needs zero. This is the intended behavior of the "re-derive, don't trust the baked inventory" rule (DESIGN_DOC_STANDARD §8.3), not a defect.
+**P3's call-site inventory diverged from D7's design-time baked list**, because P1 (which ran before P3, in the same wave) already did more of the seam extraction than D7 assumed would happen at P3-impl time. D7's doc text expected `ui_frame.rs:702,710` to still need extracting at P3; P1 had already moved them into `tree_passes.rs`. Re-derived inventory: 3 files need allowlist entries (`tree_passes.rs`, `editor_frame.rs`, `ui_snapshot/mod.rs`), not 4 — `ui_frame.rs` needs zero. This is the intended behavior of the "re-derive, don't trust the baked inventory" rule (DESIGN_DOC_STANDARD section 8.3), not a defect.
 
 **Landing-time discovery, not part of either phase's brief:** a concurrent session's fusion-sota wave landed on `origin/main` twice while P2/P3 were being built and gated, and independently claimed bug ID `BUG-154` for an unrelated bug (`removing-group-with-slider-bound-nodes-leaves-stale-effect-card`) at the same time P2's worker claimed `BUG-154` for the editor-perf-hud finding. The orchestrator resolved the resulting merge conflict by renumbering this design's bug to `BUG-157` (the next free ID after the incoming session's 154–156) rather than overwriting theirs — same duplicate-ID class BUG-148 already documents, caught here before it landed instead of after.
 

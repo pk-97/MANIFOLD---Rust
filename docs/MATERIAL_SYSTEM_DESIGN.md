@@ -1,9 +1,9 @@
 # Material System — Design Doc
 
-**Status:** Tranches **M1–M6 ALL SHIPPED** (M1–M5 verified in-repo 2026-07-04: `material.rs` + all four atoms + renderer integration + MetallicGlass/NestedCubes migrated — see §11 for the as-built record and where it deviates from §5; **M6 verified in-repo 2026-07-05 in the baseline review**: `AlphaMode`/`alpha_cutoff` + `base_color_map`/`metallic_map` present across all four material atoms — the status previously still read "APPROVED, not built"). Design accepted 2026-05-27; un-held 2026-07-03 by `docs/REALTIME_3D_DESIGN.md`, which consumes this contract unchanged.
+**Status:** Tranches **M1–M6 ALL SHIPPED** (M1–M5 verified in-repo 2026-07-04: `material.rs` + all four atoms + renderer integration + MetallicGlass/NestedCubes migrated — see section 11 for the as-built record and where it deviates from section 5; **M6 verified in-repo 2026-07-05 in the baseline review**: `AlphaMode`/`alpha_cutoff` + `base_color_map`/`metallic_map` present across all four material atoms — the status previously still read "APPROVED, not built"). Design accepted 2026-05-27; un-held 2026-07-03 by `docs/REALTIME_3D_DESIGN.md`, which consumes this contract unchanged.
 
 **Companion docs:** [`NODE_CATALOG.md`](NODE_CATALOG.md), [`DECOMPOSING_GENERATORS.md`](DECOMPOSING_GENERATORS.md), [`ADDING_PRIMITIVES.md`](ADDING_PRIMITIVES.md).
-**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5 (Phase briefs)–§6 and §8 before starting any phase. Conformance-hardened: written 2026-05-27, the oldest active design — `render_3d_mesh`/`render_instanced_3d_mesh` are renamed to `node.render_mesh`/`node.render_copies` by the vocab-audit apply; run the §8.3 pre-flight and read the migration table before touching any node id in this doc.
+**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 and section 8 before starting any phase. Conformance-hardened: written 2026-05-27, the oldest active design — `render_3d_mesh`/`render_instanced_3d_mesh` are renamed to `node.render_mesh`/`node.render_copies` by the vocab-audit apply; run the section 8.3 pre-flight and read the migration table before touching any node id in this doc.
 
 ---
 
@@ -202,7 +202,7 @@ inputs: {
 }
 ```
 
-**Removed inputs/params:** `light_x/y/z`, `light_intensity`, `ambient`, `color_r/g/b`. These are deleted entirely. Existing presets that use them must migrate (see §6).
+**Removed inputs/params:** `light_x/y/z`, `light_intensity`, `ambient`, `color_r/g/b`. These are deleted entirely. Existing presets that use them must migrate (see section 6).
 
 ### Conditional requirements (validated at preset-load + runtime)
 
@@ -421,7 +421,7 @@ Subsequent tranches (shadow infrastructure, DigitalPlants migration) build on th
 
 ## 9. Test discipline
 
-Per [`feedback_prefer_focused_tests`](../.claude/projects/-Users-peterkiemann-MANIFOLD---Rust/memory/feedback_prefer_focused_tests.md) and [`DECOMPOSING_GENERATORS.md`](DECOMPOSING_GENERATORS.md) §4.1:
+Per [`feedback_prefer_focused_tests`](../.claude/projects/-Users-peterkiemann-MANIFOLD---Rust/memory/feedback_prefer_focused_tests.md) and [`DECOMPOSING_GENERATORS.md`](DECOMPOSING_GENERATORS.md) section 4.1:
 
 **Per tranche:**
 - `cargo check -p manifold-renderer --lib --tests`
@@ -448,7 +448,7 @@ Per [`feedback_prefer_focused_tests`](../.claude/projects/-Users-peterkiemann-MA
 
 ## 10. Naming convention
 
-Atoms ship as `node.{kind}_material` — `node.unlit_material`, `node.phong_material`, `node.pbr_material`, `node.cel_material`. Suffix grouping sorts them adjacent in any reasonable alphabetical palette ordering, and "what it produces" matches §6.6 of [`DECOMPOSING_GENERATORS.md`](DECOMPOSING_GENERATORS.md).
+Atoms ship as `node.{kind}_material` — `node.unlit_material`, `node.phong_material`, `node.pbr_material`, `node.cel_material`. Suffix grouping sorts them adjacent in any reasonable alphabetical palette ordering, and "what it produces" matches section 6.6 of [`DECOMPOSING_GENERATORS.md`](DECOMPOSING_GENERATORS.md).
 
 The `Material` port type is `node_graph::Material` (struct) + `PortType::Material` (variant). Material kinds are `MaterialKind::Unlit / Phong / Pbr / Cel`.
 
@@ -464,9 +464,9 @@ without alpha cutout renders as opaque rectangles).
 
 ### 11.1 As-built record (verified 2026-07-04)
 
-Where the shipped implementation deviates from §5, the repo is authoritative:
+Where the shipped implementation deviates from section 5, the repo is authoritative:
 
-| §5 said | As-built | Anchor |
+| section 5 said | As-built | Anchor |
 |---|---|---|
 | Four shader files `material_{kind}.wgsl` | ONE file with per-kind fragment entry points `fs_unlit` / `fs_phong` / `fs_pbr` / `fs_cel` (+ `fs_world_pos` / `fs_world_normal`), pipeline-per-kind selects the entry point | `primitives/shaders/render_3d_mesh.wgsl:150,157,174,232,250,256` |
 | Renderer texture inputs incl. `base_color_map`, `metallic_map` | Shipped WITHOUT them. Inputs are: `envmap`, `normal_map`, `roughness_map` only | `primitives/render_3d_mesh.rs:67–75` |
@@ -492,7 +492,7 @@ Post-vocab ids in play: `node.render_mesh`, `node.render_copies`,
   `manifold-media` (`image_renderer.rs`) before choosing sample-time conversion.
 - **M6-D2 — Alpha cutout is a Material property, not a renderer param.** The
   `Material` struct (`node_graph/material.rs`) gains `alpha_mode: AlphaMode`
-  (`Opaque | Mask`) + `alpha_cutoff: f32` (default 0.5) — the §7 "new fields,
+  (`Opaque | Mask`) + `alpha_cutoff: f32` (default 0.5) — the section 7 "new fields,
   defaulted, no version-break" seam, exercised as designed. All four material atoms
   gain the two outer-card params (enum + float, port-shadowed). Every fragment entry
   point applies: `if alpha_mode == Mask && resolved_alpha < alpha_cutoff { discard; }`.
@@ -514,7 +514,7 @@ Post-vocab ids in play: `node.render_mesh`, `node.render_copies`,
   now — it would be a no-op flag on top of an engine that can't cull; flags that
   defer decisions are a named anti-pattern.
 - **M6-D5 — Tangent-space normal maps stay out.** `MeshVertex` carries no tangents
-  and the as-built `normal_map` contract is world-space (§11.1). glTF import P1
+  and the as-built `normal_map` contract is world-space (section 11.1). glTF import P1
   skips tangent-space normal maps and lists each skip in the import report.
   Trigger: a hero import that visibly needs them → tangent generation at import
   time + a `normal_space` mode on the renderer, as its own designed slice.
@@ -528,7 +528,7 @@ Post-vocab ids in play: `node.render_mesh`, `node.render_copies`,
 - **Entry state:** M1–M5 anchors above re-verified (`rg -n 'type_id' primitives/pbr_material.rs`
   → `node.pbr_material`; `rg -n 'fn fs_' primitives/shaders/render_3d_mesh.wgsl` → six
   entry points; `rg -in cull crates/manifold-gpu/src` → zero hits).
-- **Read-back:** this addendum whole, §5 + §7 of this doc,
+- **Read-back:** this addendum whole, section 5 + section 7 of this doc,
   `docs/MANIFOLD_GPU_ARCHITECTURE.md` uniform-alignment rules (the uniform block
   grows: `alpha_cutoff: f32` + an `alpha_mode: u32` — mind 16-byte alignment),
   `render_3d_mesh.rs` + its wgsl end-to-end, the alpha-standardisation memory

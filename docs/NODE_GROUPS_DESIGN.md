@@ -29,7 +29,7 @@ This spec covers **only the model + flattening foundation**. Everything that mak
 - The editor UX: box-select → collapse-to-group, double-click-to-enter, breadcrumbs, the
   "update available" nudge.
 - `from_graph` reconstruction of groups (round-tripping a *mutated* grouped graph back to nested
-  JSON). See §9 — the hooks are designed in, the work is deferred.
+  JSON). See section 9 — the hooks are designed in, the work is deferred.
 
 The decided policy from the design conversation, recorded so it isn't relitigated: groups
 **flatten at compile**, the runtime never sees them; a group's frozen-vs-live update behavior is a
@@ -119,7 +119,7 @@ pub struct InterfacePortDef {
 
 /// One exposed param on the group's interface. Phase-1: a single inner target.
 /// (Fan-out to multiple inner params is deferred to match how `BindingDef` fans
-/// out; see §10.)
+/// out; see section 10.)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GroupParamDef {
@@ -163,7 +163,7 @@ pub struct GroupDef {
 Inside a group body, `system.group_input` and `system.group_output` are plain
 `EffectGraphNode`s (no params). The flattener treats them as fold points; their port *names* are
 defined by `interface.inputs` / `interface.outputs`. (They become real registered runtime nodes
-only in Phase 2, for standalone group editing — see §10. Phase 1 never instantiates them; they are
+only in Phase 2, for standalone group editing — see section 10. Phase 1 never instantiates them; they are
 folded at the def level, exactly like `system.source`/`system.final_output` in the splice path.)
 
 The version constant does **not** need to bump: groups ride inside the existing `nodes` array of a
@@ -291,7 +291,7 @@ After `flatten_groups` (renumbered; the runtime sees exactly this):
 //   (102.out -> 103.in)    // group.out resolved to mix.out
 ```
 
-Identical to what you'd get hand-wiring Blur+Mix. That equivalence is the headline test (§7).
+Identical to what you'd get hand-wiring Blur+Mix. That equivalence is the headline test (section 7).
 
 ---
 
@@ -331,7 +331,7 @@ State this plainly so the build session doesn't go looking for work that isn't t
 - **Executor / execution plan / resource binding / state store** — unchanged.
 - **`chain_spec` splice + `SpliceResult`** — unchanged (effect boundary, separate layer).
 - **`persistence::from_graph`** — unchanged. It serializes a flat live graph to a flat def. (This
-  is the round-trip caveat — see §9.)
+  is the round-trip caveat — see section 9.)
 - **Performance surface** (`EffectInstance.param_values`, `user_param_bindings`, drivers/Ableton)
   — unchanged. Bindings target prefixed handles that exist post-flatten.
 - **`validate` / `validate_connection`** — unchanged; they run post-flatten and cover groups.
@@ -345,7 +345,7 @@ pure CPU (fast, run constantly); the grouped-fixture render/parity test is GPU a
 gates; the Liveschool load is the regression backstop.
 
 **Unit (manifold-core, `flatten.rs` `#[cfg(test)]`) — pure, no GPU:**
-- `flattens_single_group_to_expected_flat_def` — the §4 worked example, asserting exact
+- `flattens_single_group_to_expected_flat_def` — the section 4 worked example, asserting exact
   nodes/wires/handles/params.
 - `fans_out_group_input_to_all_inner_consumers` — the `source → {blur, mix.a}` fan-out.
 - `resolves_group_output_to_inner_producer`.
@@ -360,7 +360,7 @@ gates; the Liveschool load is the regression backstop.
 
 **Parity (the headline — manifold-renderer):**
 - `grouped_equals_handwired` — build one effect two ways: a hand-flat `Blur+Mix` def, and the
-  grouped def from §4. Assert the flattened grouped def is topologically identical to the hand-flat
+  grouped def from section 4. Assert the flattened grouped def is topologically identical to the hand-flat
   def (same node type_ids, same wire connectivity after handle-normalization). This is the proof
   that grouping is purely cosmetic at runtime. Pure CPU if compared at the def level — no GPU
   needed, so it can live in core or in renderer's lib tests.
@@ -387,12 +387,12 @@ Each phase is independently committable and test-gated.
   the Liveschool load test green *before* any change. Confirm `from_graph(into_graph(preset))` is a
   topological identity on one existing flat preset (it should be). This establishes the
   before-picture the parity test compares against.
-- **Phase 1 — schema.** Add the types in §3 to `effect_graph_def.rs`; add the `group` field to
+- **Phase 1 — schema.** Add the types in section 3 to `effect_graph_def.rs`; add the `group` field to
   `EffectGraphNode`; serde round-trip tests (grouped doc → JSON → doc equality; old flat doc
   unchanged). No behavior yet. Gate: `cargo test -p manifold-core --lib`.
-- **Phase 2 — flattener.** Implement `flatten.rs` + all §7 unit tests. Pure, fast, no GPU. Gate:
+- **Phase 2 — flattener.** Implement `flatten.rs` + all section 7 unit tests. Pure, fast, no GPU. Gate:
   `cargo test -p manifold-core --lib flatten`.
-- **Phase 3 — integrate.** Wire `flatten_groups` into `instantiate_def` (§5) + the `GraphBuildError`
+- **Phase 3 — integrate.** Wire `flatten_groups` into `instantiate_def` (section 5) + the `GraphBuildError`
   variant. Gate: the grouped-fixture integration test + `check-presets`.
 - **Phase 4 — parity & regression.** The `grouped_equals_handwired` parity test; extend
   `bundled_presets`; run the Liveschool regression. Gate: those tests + `cargo clippy --workspace
@@ -434,7 +434,7 @@ These shape Phase-1 choices so the deferred work is additive, nothing more:
 - **Reference groups / recipes.** Replace the embedded `group: Box<GroupDef>` with a
   `ref: String` resolved against a recipe store. The flattener takes a resolver
   `Fn(&str) -> Option<GroupDef>`; Phase 1 passes an embedded-only resolver. The expand/splice logic
-  is identical once the body is in hand — recipes are "resolve a ref, then run §4." The
+  is identical once the body is in hand — recipes are "resolve a ref, then run section 4." The
   `GroupCycle` guard already exists for this.
 - **Standalone group editing.** `system.group_input`/`system.group_output` become real registered
   runtime nodes (trivial, like `boundary_nodes.rs`) with **dynamic ports** built from the interface
@@ -473,10 +473,10 @@ These shape Phase-1 choices so the deferred work is additive, nothing more:
 - `crates/manifold-core/src/effect_graph_def.rs` — add `InterfacePortDef`, `GroupParamDef`,
   `GroupInterface`, `GroupDef`, the three `*_TYPE_ID` constants, and the `group` field on
   `EffectGraphNode`. Serde round-trip tests.
-- `crates/manifold-core/src/flatten.rs` *(new)* — `flatten_groups`, `FlattenError`, the full §7
-  unit suite, and the `group_path`/`/`-split note from §9.
+- `crates/manifold-core/src/flatten.rs` *(new)* — `flatten_groups`, `FlattenError`, the full section 7
+  unit suite, and the `group_path`/`/`-split note from section 9.
 - `crates/manifold-core/src/lib.rs` — `pub mod flatten;`.
-- `crates/manifold-renderer/src/node_graph/graph_loader.rs` — the §5 insertion + the
+- `crates/manifold-renderer/src/node_graph/graph_loader.rs` — the section 5 insertion + the
   `GraphBuildError::Flatten` variant + its `Display`/mapping.
 - `crates/manifold-renderer/tests/` (or lib) — `grouped_equals_handwired` parity test; grouped
   entry in the `bundled_presets` integration test.

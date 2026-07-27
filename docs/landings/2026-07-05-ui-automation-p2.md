@@ -1,12 +1,12 @@
 # UI_AUTOMATION P2 (script driver) — landed 2026-07-05
 
 **Branch:** `wave/ui-automation-p2` (P2 content @ `f4ccfbca`, landed via the `--no-ff`
-merge that commits this report) · **Level reached:** L2 / target L2 (§10)
+merge that commits this report) · **Level reached:** L2 / target L2 (section 10)
 **Doc status line (quoted verbatim):**
-> **Status:** IN PROGRESS · **P1 SHIPPED 2026-07-05 @ `3294eb9d`** (selector surface). · **P2 SHIPPED 2026-07-05** (script driver: `AutomationAction` core + selector resolver + real gesture synthesis incl. a genuine synthesized clip drag through the production input path + `--script` runner + `interact.rs` miss-fallback deleted; gate green, L2 reached — the drag-clip flow moved a clip 230→314px in the before/after PNGs — see §9 P2). **L3 verification is now available repo-wide** via `scripts/ui-flows/` (see `DESIGN_DOC_STANDARD.md` §10). P3 (live door) + P4 (flow library) not built. · 2026-07-03 · Fable · baseline-reviewed 2026-07-05 …
+> **Status:** IN PROGRESS · **P1 SHIPPED 2026-07-05 @ `3294eb9d`** (selector surface). · **P2 SHIPPED 2026-07-05** (script driver: `AutomationAction` core + selector resolver + real gesture synthesis incl. a genuine synthesized clip drag through the production input path + `--script` runner + `interact.rs` miss-fallback deleted; gate green, L2 reached — the drag-clip flow moved a clip 230→314px in the before/after PNGs — see section 9 P2). **L3 verification is now available repo-wide** via `scripts/ui-flows/` (see `DESIGN_DOC_STANDARD.md` section 10). P3 (live door) + P4 (flow library) not built. · 2026-07-03 · Fable · baseline-reviewed 2026-07-05 …
 
 Wave context: this is the second of two phases landed 2026-07-05. P1 (selector surface)
-landed first @ `3294eb9d` (predates the §8.10 committed-report rule, so it has no own
+landed first @ `3294eb9d` (predates the section 8.10 committed-report rule, so it has no own
 file; its gate + demo are summarized in the P1 chat report and VD-005, now closed).
 
 ## Gate results (verbatim)
@@ -53,12 +53,12 @@ after frame. A real, visible clip move through `process_pointer` → `process_ev
 ## Deviations from brief
 
 - **`manifold-ui` gained a `serde` dependency** (workspace) + `serde_json` dev-dep. The
-  §4 enum lives in `manifold-ui` and §6 mandates JSON `--script` files, so Deserialize
+  section 4 enum lives in `manifold-ui` and section 6 mandates JSON `--script` files, so Deserialize
   on the enum is a logical necessity; putting it in `manifold-app` is doc-forbidden.
   serde is the repo-ubiquitous crate, not a novel one. Accepted as an operational call
   (crosses the "adding a dependency" escalation line, but within evident doc intent).
 - **`custom_surfaces` dump shape (inherited from P1):** enumeration is a sibling
-  top-level key, not the per-node `targets` field §3's prose implies — no `UITree` node
+  top-level key, not the per-node `targets` field section 3's prose implies — no `UITree` node
   owns those surfaces. Strictly additive; the P2 resolver keys off `surface_id`.
 - **`AutomationTarget` uses a manual `Deserialize`** that leaks the parsed `surface`
   string via `Box::leak` to preserve the doc's committed `surface: &'static str` type.

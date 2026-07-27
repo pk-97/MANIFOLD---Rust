@@ -1,6 +1,6 @@
 # VOLUMETRIC_LIGHT_DESIGN P1–P3 — landed 2026-07-13 @ `e1721268` (pending push to main)
 
-**Branch:** `feat/volumetric-light` · **Level reached:** L2 (demo PNGs rendered and read by the orchestrator) / target L2 (§10) — **but the L2 evidence is a negative result, see below**
+**Branch:** `feat/volumetric-light` · **Level reached:** L2 (demo PNGs rendered and read by the orchestrator) / target L2 (section 10) — **but the L2 evidence is a negative result, see below**
 **Doc status line (quoted verbatim):** "SHIPPED (P1–P3, 2026-07-13) — mechanically complete: every invariant (V1–V6), the CPU-vs-GPU parity proof, the monotonic performer faders, and the content-thread perf gate all pass, across Sun and Point lights. But NOT show-ready: across both look-critical demos (P2's Sun-only vertical slice and P3's night-garden multi-light shot), the rendered output does not read as 'a black void filled with haze with beams of light shining through' — it reads as an ordinary dim scene with a faint shadow patch (P2) or a soft ambient glow next to unlit silhouettes (P3), with no legible directional beam in either. This is the numerically-green/looks-wrong pattern D6 exists to catch; see the landing report for the full look-pass writeup and next-step recommendation. Pending Peter's look-pass — do not present this as 'god rays are done' until he's seen it."
 
 This lane is the first live test of the machine-check gates (graph-tool validate/fusion, catalog

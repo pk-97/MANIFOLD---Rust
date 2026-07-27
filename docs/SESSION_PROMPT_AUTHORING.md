@@ -81,13 +81,13 @@ Order matters less than presence. A prompt missing one of these is not done.
    Opus (high) orchestrating Sonnet workers; Peter is reachable at forks" changes
    every downstream decision about escalation and verification.
 
-2. **The opening brief instruction** (§1). Verbatim requirement, first action —
+2. **The opening brief instruction** (section 1). Verbatim requirement, first action —
    including the property line (the invariant the change must hold) and the forks
    line (undecided choices surfaced, not picked quietly). A brief that lists only
    the steps is the BUG-061 hole.
 
 3. **Read-first list.** The design doc WHOLE (never sections — the traps live in the
-   parts that look skippable), its contract header, `DESIGN_DOC_STANDARD.md` §5 (Phase briefs)–§6,
+   parts that look skippable), its contract header, `DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6,
    the context docs the design names, and the **binding memories by exact name** so
    the session can pull them. Naming a memory is how judgment crosses the context
    boundary — "audio-stays-on-perform-surface" in the prompt is worth a paragraph of
@@ -97,19 +97,19 @@ Order matters less than presence. A prompt missing one of these is not done.
    if the session dies after it (a live defect, a hot-path cost, a stale doc), it
    goes first and the prompt says why. Otherwise the doc's order stands.
 
-5. **Traps — the judgment section.** 2–3 named hazards specific to THIS work. See §3
+5. **Traps — the judgment section.** 2–3 named hazards specific to THIS work. See section 3
    for where to find them. **If you cannot name any, you have not read enough to cut
    the prompt.** Generic hazards (clippy, don't break main) don't count.
 
-6. **Verification gates, matched to the work type.** See §4. The prompt states the
+6. **Verification gates, matched to the work type.** See section 4. The prompt states the
    gate per phase, not "test appropriately".
 
-7. **Git mode, explicit.** Mode A or Mode B (§5) with the concrete names filled in:
+7. **Git mode, explicit.** Mode A or Mode B (section 5) with the concrete names filled in:
    branch name, worktree path, which crates the focused gate runs. Never "use good
    git hygiene".
 
 8. **Deliverables checklist.** What "done" means: code landed (or doc committed),
-   the design doc's status line updated **same session** (DESIGN_DOC_STANDARD §8.9 —
+   the design doc's status line updated **same session** (DESIGN_DOC_STANDARD section 8.9 —
    landings update their docs), the project memory updated, `BUG_BACKLOG.md` entries
    for anything found-not-fixed, and the feel-pass list if anything needs live human
    judgment.
@@ -130,7 +130,7 @@ knowing where trap knowledge is stored, not by intuition. Check all five, every 
 3. **`guide_common_mistakes` + `docs/BUG_BACKLOG.md`** filtered to the touched area.
    An open bug adjacent to the work is either in scope (say so) or a hazard to not
    trip (say that).
-4. **The hot-path and thread-residency questions** (DESIGN_AUTHORING §1's binding
+4. **The hot-path and thread-residency questions** (DESIGN_AUTHORING section 1's binding
    constraints). If any phase touches per-frame code or crosses the two-thread
    boundary, the prompt says so and names the discipline that applies.
 5. **The class of work itself.** Decomposition work → fuse-for-parity is the known
@@ -160,18 +160,18 @@ device serializer, and nextest's process-per-test model would defeat it); batch 
 phase's edits and verify ONCE at the end. The full workspace sweep (workspace clippy + `cargo nextest run --workspace`
 + `cargo deny check bans`) runs ONCE per workstream, at landing time, in the warm
 main checkout — never in a worktree, where it is a second cold build
-(`feedback_prefer_focused_tests`, `.claude/GIT_TREE_DISCIPLINE.md` §2c (Build-speed rules (added 2026-07-10 — orchestration wall-clock pass))).
+(`feedback_prefer_focused_tests`, `.claude/GIT_TREE_DISCIPLINE.md` section 2c (Build-speed rules (added 2026-07-10 — orchestration wall-clock pass))).
 
 ## 5. Git modes — reference, don't restate
 
-The spec is `.claude/GIT_TREE_DISCIPLINE.md` §2 (Landing protocol (replaces the retired ff-only convention)); the prompt names the mode and fills
+The spec is `.claude/GIT_TREE_DISCIPLINE.md` section 2 (Landing protocol (replaces the retired ff-only convention)); the prompt names the mode and fills
 in the blanks rather than re-deriving the rules.
 
 - **Mode A — docs-only.** The worktree-guard hook (2026-07-08) denies agent edits
   in the main checkout, docs included — docs edits go through a worktree too (any
   idle one; no warm cargo target needed). Worktrees have a private index; in the
   MAIN checkout commit ONLY with explicit pathspec (`git commit -m '…' -- docs/…`;
-  a NEW file gets one targeted `git add <path>` first). Land per §2: fetch → merge
+  a NEW file gets one targeted `git add <path>` first). Land per section 2: fetch → merge
   → `merge --no-ff` → push.
 - **Mode B — code.** ONE warm worktree per workstream (never per phase), acquired
   via `scripts/agent-worktree.py acquire <name> <branch> [--tip REF]` — it
@@ -204,12 +204,12 @@ in the blanks rather than re-deriving the rules.
 ## 7. Self-test — the prompt is done when
 
 - [ ] A fresh session could run it with no conversation history and no follow-ups.
-- [ ] It opens with the §1 brief-and-pause instruction — property line and forks
+- [ ] It opens with the section 1 brief-and-pause instruction — property line and forks
       line included, not just "the work, in order".
-- [ ] All eight §2 blocks present; traps are specific, not generic.
+- [ ] All eight section 2 blocks present; traps are specific, not generic.
 - [ ] Every doc and memory it cites exists under that exact name (run the check —
       a mis-cited memory silently loads nothing).
-- [ ] Verification gates are stated per phase and match §4.
+- [ ] Verification gates are stated per phase and match section 4.
 - [ ] Git mode named with concrete branch/worktree/gate values.
-- [ ] Deliverables include the §8.9 doc-status update and the memory update.
+- [ ] Deliverables include the section 8.9 doc-status update and the memory update.
 - [ ] Reading it, you can tell what Peter gets on stage — not just what the repo gets.

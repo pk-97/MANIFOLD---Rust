@@ -6,7 +6,7 @@ Scope for the next UI/UX pass on the graph editor. The compiler/runtime is stabl
 and fast; the editor surface has fallen behind and reads as a dev build. This brief
 is the durable, code-verified scope. Every claim below was checked against the
 source on 2026-06-13 (file refs inline) — where an earlier design doc disagrees,
-this brief is current and that doc is flagged stale in §7.
+this brief is current and that doc is flagged stale in section 7.
 
 Supersedes the status/plan sections of `UI_UX_SYSTEM_DESIGN.md` (which still says
 "nothing built yet" — false now) and `NODE_GROUPS_UI_DESIGN.md` ("planned, not
@@ -54,7 +54,7 @@ discrete features:
   (`ToggleNodeParamExposeCommand`, `commands/graph.rs` L949) — invariant under
   grouping. **Groups are organisation-only; no group interface params.**
 - **Per-node thumbnails everywhere = yes.** Editor perf loss is acceptable (it's
-  authoring, never the performance path). It's also cheap — see §3.
+  authoring, never the performance path). It's also cheap — see section 3.
 - **Group naming + color = yes.**
 - Card **mapping drawer already exists** for effects — extend it to generators, not
   rebuild.
@@ -106,7 +106,7 @@ or the param name) to pick color-picker vs vector-editor vs XY-pad for the same
   color arrives via a Material port, not a `Color` param. **No material panel needed.**
 - `wgsl_compute` source is a dedicated `source: String` field edited via
   `wgsl_source()` / `set_wgsl_source()` (`wgsl_compute.rs` L95, L1745–1760), **not** a
-  `ParamType::String` param — so its code editor is a node-family special (§5), not a
+  `ParamType::String` param — so its code editor is a node-family special (section 5), not a
   registry widget.
 - `lut1d` consumes a `lut: Texture2D` input (L29); `linear_gradient`/`colorize` are
   `Float`-only. **None need a gradient editor** — only `gradient_ramp` does.
@@ -130,7 +130,7 @@ downsample what's there, they don't re-render.
   pool recycles it.
 - **Control nodes → sparklines**, drawn CPU-side from the scalar I/O the tap already
   produces (`preview_scalar_io`). Nearly free, and it's the other half of fixing
-  frozen values (§1).
+  frozen values (section 1).
 
 ## 4 — Groups: naming + color
 
@@ -182,7 +182,7 @@ All groups render one fixed `GROUP_HEADER_BG`.
   (`CARD_TARGET_UNIFICATION.md`) — out of scope here.
 - **Save authored graph as a reusable preset / recipe** — gated on the disk-load work
   (`project_bundled_presets_swap_deferred`).
-- **Pinned previews** (TD-style) — natural once §3 lands.
+- **Pinned previews** (TD-style) — natural once section 3 lands.
 
 ## Stale docs/comments to reconcile (cleanup as we build)
 
@@ -190,7 +190,7 @@ All groups render one fixed `GROUP_HEADER_BG`.
   controls, collapse, in-place edit, single-node preview, groups nav, popup palette,
   window behaviour all shipped). Fix the status, keep the rationale.
 - `NODE_GROUPS_UI_DESIGN.md` — "planned, not started" is false (Phases A–C shipped);
-  Phase D is explicitly dropped (no interface params); Phase E (naming/color) is §4 here.
+  Phase D is explicitly dropped (no interface params); Phase E (naming/color) is section 4 here.
 - `archive/EDITOR_REORG_BUILD_BRIEF.md` — historical progress doc; mark superseded by this one
   for the editor's current state.
 - Comment sweep: as each area is touched, reconcile in-code comments that describe the
@@ -200,7 +200,7 @@ All groups render one fixed `GROUP_HEADER_BG`.
 ## Suggested order
 
 1. Foundation A (live values) — smallest change, biggest "it's alive" payoff, unblocks
-   §3.
+   section 3.
 2. Color picker (establishes Foundation B's registry).
 3. Per-node previews/sparklines (build on A).
 4. Jump-to-node + group naming/color (cheap, high-value).
@@ -233,7 +233,7 @@ All groups render one fixed `GROUP_HEADER_BG`.
   value. Node face shows a hex / component readout. Still not single-slot card-exposable
   (correct — a macro slot is one `f32`). Tested (2 panel tests).
 - **Phase 3 — Sparklines SHIPPED; per-node image atlas DEFERRED.** Control-node
-  legibility (the design's §6 "even the invisible math nodes become legible") ships as a
+  legibility (the design's section 6 "even the invisible math nodes become legible") ships as a
   per-node sparkline: `GraphCanvas::spark_history` rings the primary param's normalized
   value from the live tap and `draw_sparkline` traces it on the collapsed node face (only
   when it actually moves). Tested (3 canvas tests). **Deferred:** the full multi-node
@@ -344,7 +344,7 @@ graphs (no fork — `feedback_graph_editor_unified_surface`). New unit tests cov
 `SetWgslSourceCommand` round-trip and the panel's Table/String cell emits; focused suites and
 the standard clippy gate are green.
 
-### Per-node image-thumbnail atlas (§3) — SHIPPED (8a749247), visual QA pending
+### Per-node image-thumbnail atlas (section 3) — SHIPPED (8a749247), visual QA pending
 
 Built after all. The feasibility trace turned up a simpler path than the earlier plan
 assumed: the executor already has a **dump mode** (`set_dump_request` / `dump_textures`, the

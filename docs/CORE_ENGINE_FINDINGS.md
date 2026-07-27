@@ -1,11 +1,11 @@
 # Core Engine Findings — Work Queue
 
-<!-- index: Actionable work queue derived from CORE_ENGINE_MAP.md §13 (Honest edges (the bug hunt starts here)) (2026-07-03). Every finding from the core-engine read as a concrete work item: what's broken, what it means on stage, the fix, how to verify, effort. P0 = broken features (SMPTE receive unwired, MIDI launch quantize inert), P1 = correctness/trust, P2 = performance at project scale, P3 = decisions + hygiene. Status column is the tracker. -->
+<!-- index: Actionable work queue derived from CORE_ENGINE_MAP.md section 13 (Honest edges (the bug hunt starts here)) (2026-07-03). Every finding from the core-engine read as a concrete work item: what's broken, what it means on stage, the fix, how to verify, effort. P0 = broken features (SMPTE receive unwired, MIDI launch quantize inert), P1 = correctness/trust, P2 = performance at project scale, P3 = decisions + hygiene. Status column is the tracker. -->
 
 **Status: OPEN work queue, created 2026-07-03 from the full core-engine read.**
 Source of truth for *how the engine works* is `CORE_ENGINE_MAP.md`; this doc is
-the *to-do list* derived from its §13, expanded so any future session can pick
-up an item and execute it without re-deriving the analysis. Map §-references
+the *to-do list* derived from its section 13, expanded so any future session can pick
+up an item and execute it without re-deriving the analysis. Map section-references
 point at the mechanism; file:line anchors are as of `ec547c85`.
 
 Update the Status column as items land. When an item ships, add the commit
@@ -69,7 +69,7 @@ orchestrator against the worktree manifest before landing.
   AbletonOSC mode, `content_thread.rs:644-645`), and F3 pins the arbiter setter contract
   the fix depends on (`sync.rs:298`). The only residue is the retired M4L
   `OscPositionSender` — deferred with that sender's eventual deletion
-  (ABLETON_TRANSPORT_SYNC_DESIGN §8). No content-thread test harness exists and building
+  (ABLETON_TRANSPORT_SYNC_DESIGN section 8). No content-thread test harness exists and building
   one for a dead path is unwarranted.
 
 ### VERIFY-WITH-PETER (nothing below is pinned as correct)
@@ -89,7 +89,7 @@ orchestrator against the worktree manifest before landing.
   is called ONLY when Link has active peers (`content_thread.rs:1481`) or CLK is receiving
   (`:1515`), and the frame's authority auto-detect (`:1460-1468`) promotes Link/CLK to
   authority under exactly those same conditions — so live external tempo being set implies
-  authority is NOT Internal through the normal path. The map's §13.5 wording ("even under
+  authority is NOT Internal through the normal path. The map's section 13.5 wording ("even under
   Internal authority") appears contradicted by the code. Unresolved: whether a manual
   authority override or the F5 one-frame-overwrite window opens a real Internal-with-live-tempo
   gap. This was DERIVED by reading, not observed on a running instance — do not decide (either
@@ -104,7 +104,7 @@ orchestrator against the worktree manifest before landing.
 
 ## P0 — broken features (they exist in the UI/design, they do nothing)
 
-### F1 · Wire the SMPTE/OSC timecode receive path (map §13.1)
+### F1 · Wire the SMPTE/OSC timecode receive path (map section 13.1)
 
 **What's broken:** `OscSyncController::on_timecode_received` has zero callers,
 and `enable_osc` never registers a subscription on the `OscReceiver` (the TODO
@@ -134,7 +134,7 @@ seeks/plays. Then a real LiveMTC round trip with Ableton.
 
 **Effort:** small (a day including tests). No design questions.
 
-### F2 · Make MIDI launch quantization real (map §13.2)
+### F2 · Make MIDI launch quantization real (map section 13.2)
 
 **What's broken:** launch *positions* never quantize. Chain of causes:
 1. midir events always carry `absolute_tick = −1` (`midi_input.rs:495`), so
@@ -174,7 +174,7 @@ should match Ableton: forward (ceil).
 
 ## P1 — correctness and trust
 
-### F3 · Test the external-sync stack (map §12)
+### F3 · Test the external-sync stack (map section 12)
 
 **What's missing:** zero tests on `SyncArbiter` (the authority gating matrix),
 `midi_clock_sync` (packed `AtomicU64` state, BPM estimator, nudge-vs-hard-seek
@@ -198,7 +198,7 @@ playback time; custom loop boundary wraps.
 **Effort:** medium (a focused session). Highest trust-per-hour item here —
 it's also the safety net for F1/F2/F5/F6.
 
-### F4 · Wrong-clock-epoch calls inside `sync_clips_to_time` (map §13.3)
+### F4 · Wrong-clock-epoch calls inside `sync_clips_to_time` (map section 13.3)
 
 **What's broken:** `sync_clips_to_time` starts clips with
 `start_clip(clip, Seconds::ZERO, …)` (`engine.rs`, start loop) even though
@@ -222,7 +222,7 @@ it on the same tick).
 
 **Effort:** small. Root-cause class fix, not a patch.
 
-### F5 · Serialized settings mutated per-frame outside EditingService (map §13.4) — DECISION NEEDED
+### F5 · Serialized settings mutated per-frame outside EditingService (map section 13.4) — DECISION NEEDED
 
 **What's happening:** two writes on every tick bypass the mutation gateway and
 land in *serialized* fields: `tick_sync_controllers` writes
@@ -245,7 +245,7 @@ stale authority.
 **Effort:** medium (touches save/load semantics — check the Liveschool fixture
 round-trips).
 
-### F6 · `suppress_next_transport` staleness (map §13.12)
+### F6 · `suppress_next_transport` staleness (map section 13.12)
 
 **What's broken:** the arbiter sets the flag on *any* gated play/pause; only
 the OSC/Ableton senders consume it, and the Play/Pause command handlers clear
@@ -265,7 +265,7 @@ is enabled at the point the arbiter would set it.
 
 ## P2 — performance at project scale (53 layers / 2928 clips is the baseline)
 
-### F7 · Hot-path allocations + linear scans in the tick (map §13.7)
+### F7 · Hot-path allocations + linear scans in the tick (map section 13.7)
 
 **What's there:** per-frame (playing) the engine clones `(ClipId, usize)` Vecs
 in `update_active_clip_playback_rates`, and per-call in `correct_video_drift`,
@@ -288,7 +288,7 @@ profiler before/after on the Liveschool fixture.
 
 **Effort:** medium, mechanical.
 
-### F8 · `ActiveTimelineClipWindow` — wire or delete (map §13.8) — DECISION NEEDED
+### F8 · `ActiveTimelineClipWindow` — wire or delete (map section 13.8) — DECISION NEEDED
 
 **What's there:** 680 lines + 7 tests of an incremental boundary-cursor
 active-clip query, built for exactly the big-project case — never
@@ -303,7 +303,7 @@ no-illusions rule).
 
 **Effort:** small to measure; medium to wire.
 
-### F9 · Tempo-map walks are linear and per-frame (map §13.9)
+### F9 · Tempo-map walks are linear and per-frame (map section 13.9)
 
 **What's there:** `seconds_to_beat_f64` runs on every `advance_time` and walks
 all points; recording writes a point every 0.125 beats, so a long
@@ -321,7 +321,7 @@ against the linear reference over random maps).
 
 **Effort:** small-medium.
 
-### F10 · Live prewarm is a stub (map §13.10)
+### F10 · Live prewarm is a stub (map section 13.10)
 
 **What's there:** `LiveClipManager::append_live_prewarm_candidates` has a TODO
 and only returns already-active slots; `LIVE_PREWARM_MAX_UNIQUE_CLIPS`,
@@ -347,7 +347,7 @@ hit.
 
 ## P3 — decisions, hygiene, hardening
 
-### F11 · AbletonOSC inbound transport relay disabled (map §13.11)
+### F11 · AbletonOSC inbound transport relay disabled (map section 13.11)
 
 The relay was disabled because `is_playing` listener echoes caused play/pause
 oscillation (`content_thread.rs`, commented block + TODO). Today AbletonOSC
@@ -356,7 +356,7 @@ suppression (the bridge already has the 0.5s echo window used outbound; the
 inbound path needs a matching sent-state token, not a bare timeout).
 Re-enable behind the F3 test net.
 
-### F12 · f32 seams in the beat plumbing (map §13.6)
+### F12 · f32 seams in the beat plumbing (map section 13.6)
 
 The accumulator is f64 but CLK beats arrive via `Beats::from_f32`, beat-stamps
 are f32, audio-trigger expiry and TempoRecorder track f32 beats. At ~25k beats
@@ -365,7 +365,7 @@ eroding them. Sweep the seams to f64 (`current_clock_beat` can return f64
 trivially; beat_stamp → f64; recorder fields → f64). Mechanical; do alongside
 F3 so the estimator tests pin behavior.
 
-### F13 · Live external tempo ignores authority (map §13.5) — DECISION NEEDED
+### F13 · Live external tempo ignores authority (map section 13.5) — DECISION NEEDED
 
 Link-with-peers (or CLK receiving) feeds `get_bpm_at_beat` and therefore
 **video playback rates** even when authority is Internal. Deliberate for the
@@ -374,7 +374,7 @@ rate tempo (display always live, rates only under matching authority), or
 bless the current behavior in the decision log. On stage today: enabling Link
 to "just see" a DJ's tempo silently retimes BPM-stretched video.
 
-### F14 · Round-trip windows are guesses (map §13.14)
+### F14 · Round-trip windows are guesses (map section 13.14)
 
 `SEEK_COOLDOWN` 0.3s and `OWNERSHIP_GRACE_PERIOD` 0.5s encode a healthy
 localhost Ableton round trip. A loaded machine or networked DAW that exceeds
@@ -384,7 +384,7 @@ hardening: measure the actual OSC→CLK round trip when MANIFOLD initiates play
 the observed p95. Log when a round trip exceeds the window so it's visible at
 soundcheck instead of mid-set.
 
-### F15 · Session P2 seams (map §13.15)
+### F15 · Session P2 seams (map section 13.15)
 
 Two fresh-code interactions to pin down:
 (a) `session_launch_slot` from stopped transport calls `play()` (full sync —
@@ -397,7 +397,7 @@ plays over the session slot by merge order. Decide the rule (lean: live
 phantom wins while held — it's the performer's hands — and the session slot
 resumes on commit), then test it in `tests/session_mode.rs`.
 
-### F16 · MIDI device identity is positional (map §13.16)
+### F16 · MIDI device identity is positional (map section 13.16)
 
 `device_id` = midir port index and CLK source selection is by index; a
 replug mid-show reorders ports, so held-note NoteOff tracking and the CLK
@@ -405,7 +405,7 @@ source can attach to the wrong hardware. Fix: key by port *name* (stable on
 macOS for the same device), fall back to index; rebind registered devices on
 the existing 2s device scan when names move.
 
-### F17 · `subscribe_keyed` is a trap (map §13.13)
+### F17 · `subscribe_keyed` is a trap (map section 13.13)
 
 `OscReceiver::unsubscribe_keyed` uses `swap_remove`, which invalidates other
 keys for the same address. Unused today (only `unsubscribe_all` is called).
@@ -424,6 +424,6 @@ until a real second subscriber exists.
 5. **F7 → F10** — performance block, profiled on the Liveschool fixture.
 6. **F8, F11, F12, F14–F17** — as they slot in.
 
-A Fable bug hunt over the map's §13 (the freeze-map phase-2 pattern) can run
+A Fable bug hunt over the map's section 13 (the freeze-map phase-2 pattern) can run
 independently of this queue — this doc is the *known* work; the hunt looks for
 what the read missed.

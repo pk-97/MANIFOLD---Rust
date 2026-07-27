@@ -4,9 +4,9 @@
 
 ## What landed
 
-`ParamCardConfig` and `ParamInfo` are **deleted**. The card model is now `manifold_ui::param_surface::{ParamSurface, ParamRow, RowSpec, RowValue, RowMapping}` — id-keyed rows, derived badge aggregates (`has_drv()`/`has_env()`/`has_abl()` — three stored mirrors gone), `target()` derived from kind+index. One projection, `state_sync::param_surface()`, replaces `preset_to_config` + `rows_from_manifest`/`SpecRow`: a single manifest walk builds identity+spec+value+mapping per row; `build_card_modulation`/`build_audio_card_state` zip in unchanged. `id_to_index` is gone (local `row_index_of` closure inside the projection only). The §5b agent recipe ships as the module doc of `param_surface.rs`.
+`ParamCardConfig` and `ParamInfo` are **deleted**. The card model is now `manifold_ui::param_surface::{ParamSurface, ParamRow, RowSpec, RowValue, RowMapping}` — id-keyed rows, derived badge aggregates (`has_drv()`/`has_env()`/`has_abl()` — three stored mirrors gone), `target()` derived from kind+index. One projection, `state_sync::param_surface()`, replaces `preset_to_config` + `rows_from_manifest`/`SpecRow`: a single manifest walk builds identity+spec+value+mapping per row; `build_card_modulation`/`build_audio_card_state` zip in unchanged. `id_to_index` is gone (local `row_index_of` closure inside the projection only). The section 5b agent recipe ships as the module doc of `param_surface.rs`.
 
-As-built deviations from the design §3 sketch (committed code is authoritative): no stored `target` field (method), `audio` remains `AudioCardState` on the surface (rows inside it, P1a shape) rather than absorbed per-row — interior-partitioning freedom the doc grants. `driven` is `false` outside the editor for now (wired when a caller knows).
+As-built deviations from the design section 3 sketch (committed code is authoritative): no stored `target` field (method), `audio` remains `AudioCardState` on the surface (rows inside it, P1a shape) rather than absorbed per-row — interior-partitioning freedom the doc grants. `driven` is `false` outside the editor for now (wired when a caller knows).
 
 ## Gates (run by orchestrator)
 

@@ -3,7 +3,7 @@
 Miner: Sonnet (background job), 2026-07-09. Read-only mining; classification below is a
 **suggestion**, not a verdict — a later high-tier session issues verdicts per subsystem.
 
-## §1 Method + inputs
+## 1 Method + inputs
 
 Sources: `docs/BUG_BACKLOG.md` (2898 lines, BUG-001–082, full read, no gaps), `docs/FOUNDATIONAL_GAPS.md`
 (clusters A1–A7 + Part B), `docs/CORE_ENGINE_FINDINGS.md` (findings F1–F17, all `manifold-playback`),
@@ -13,16 +13,16 @@ files. Extraction of raw bug fields and git mining were delegated to three paral
 the taxonomy classification, cluster cross-referencing, subsystem rollup, and suggested verdicts
 below are mine, done against that raw material. The "Checked and safe" section (line 2866) contains
 **zero** numbered bugs — it lists 4 audited-and-found-correct duplication paths, confirmed by direct
-read; no bug in §2 below carries `checked-safe` status as a result. Cross-reference `rg` over the
+read; no bug in section 2 below carries `checked-safe` status as a result. Cross-reference `rg` over the
 full backlog for `FOUNDATIONAL_GAPS|CORE_ENGINE_FINDINGS|\bF1[0-7]?\b|\bA[1-7]\b` found **zero**
 hits — the backlog never names either doc's clusters by id; all cluster mappings below are mine,
 inferred from subsystem + mechanism match, not doc-stated.
 
-## §2 Per-bug table (all 82)
+## 2 Per-bug table (all 82)
 
 Columns: ID | Subsystem | Class | Fix | Enforcement | Evidence | Cluster. Fix: `struct`=fixed-structural,
 `patch`=fixed-patch, `open`=open (parenthetical = doc's own status note). Cluster: `none` = no fit found
-in FOUNDATIONAL_GAPS/CORE_ENGINE_FINDINGS (candidate for §5).
+in FOUNDATIONAL_GAPS/CORE_ENGINE_FINDINGS (candidate for section 5).
 
 | ID | Subsystem | Class | Fix | Enforcement | Evidence | Cluster |
 |---|---|---|---|---|---|---|
@@ -113,10 +113,10 @@ Class totals (n=82): missing-invariant-enforcement 20 · structural-design-flaw 
 process-failure 11 · stale-state/projection 8 · convention-mismatch 7 · resource-lifecycle 5 ·
 identity-minting-on-duplicate 3 · other 1.
 
-Fix-type totals: fixed-structural 20 · fixed-patch 14 · open 48 · checked-safe 0 (confirmed §1).
+Fix-type totals: fixed-structural 20 · fixed-patch 14 · open 48 · checked-safe 0 (confirmed section 1).
 **48/82 (59%) are still open** — the corpus is not a closed record, it's a live backlog.
 
-## §3 Per-subsystem rollup (SUGGESTED verdicts — miner opinion, pending review)
+## 3 Per-subsystem rollup (SUGGESTED verdicts — miner opinion, pending review)
 
 | Subsystem | n | Open | Class histogram (top) | Enforcement | Suggested verdict |
 |---|---|---|---|---|---|
@@ -158,7 +158,7 @@ Notes on the three flagged **structurally-wrong**:
    structural-audit language agree, which is why this reads as structurally-wrong rather than merely
    under-tested.
 
-## §4 Patch-density findings from git history
+## 4 Patch-density findings from git history
 
 `git log --grep='fix' -i` over current-branch history: **1672 commits**, ~1.1% noise
 (fixture/prefix/suffix false-positives). Top of the density map (fix-labeled commits touching path):
@@ -203,7 +203,7 @@ full Unity-port stabilization, the wgpu→native-Metal migration, the TexturePoo
 has **zero backlog coverage**. Any structural/symptom judgment for that period rests on commit
 messages and diffs alone, not on the same documentation discipline the post-06-23 corpus has.
 
-## §5 Deltas vs FOUNDATIONAL_GAPS/CORE_ENGINE_FINDINGS (candidate new clusters)
+## 5 Deltas vs FOUNDATIONAL_GAPS/CORE_ENGINE_FINDINGS (candidate new clusters)
 
 1. **Freeze/fusion compiler correctness (BUG-006–012, 014)** — the single largest delta. No A-cluster
    or F-finding covers it; `FREEZE_COMPILER_MAP.md` exists as a map but names no enforcement gap of
@@ -223,14 +223,14 @@ messages and diffs alone, not on the same documentation discipline the post-06-2
    map-coverage gap, a dependency/legal risk. It's already tracked in agent memory
    (`audio-analysis-accuracy`) but not in either structural doc; flag as intentionally out-of-scope
    for a code-structure verdict rather than a missed cluster.
-5. **Pre-backlog git history (§4)** — the TexturePool abandon-and-retry and the multi-cause vsync
+5. **Pre-backlog git history (section 4)** — the TexturePool abandon-and-retry and the multi-cause vsync
    saga are real structural incidents with zero BUG_BACKLOG.md trace. Not a "cluster" in the
    A1–A7/F1–F17 sense, but a corpus-completeness gap worth naming for the verdict pass: verdicts
    drawn only from the backlog undercount manifold-app's/manifold-gpu's actual historical churn.
 
-## §6 Open questions for the verdict pass
+## 6 Open questions for the verdict pass
 
-1. Should freeze/fusion-compiler (§5.1) become a formal FOUNDATIONAL_GAPS cluster (A8), given it's
+1. Should freeze/fusion-compiler (section 5.1) become a formal FOUNDATIONAL_GAPS cluster (A8), given it's
    the largest uncovered delta and already has a live tracking doc (FREEZE_COMPILER_MAP.md) to anchor
    it to?
 2. Is BUG-080 (param-manifest two-phase construction) the same underlying shape as F5
@@ -241,7 +241,7 @@ messages and diffs alone, not on the same documentation discipline the post-06-2
    Is this bandwidth (nobody's gotten to it) or does sync/timing complexity structurally resist the
    fix patterns that worked elsewhere (`manifold-io`'s guard+test pattern, `manifold-audio`'s
    accuracy-gate pattern)? The verdict pass should say which, since the fix shape differs either way.
-4. Given §4's surprise (zero backlog coverage before 2026-06-23), should the verdict pass treat
+4. Given section 4's surprise (zero backlog coverage before 2026-06-23), should the verdict pass treat
    pre-backlog git history as first-class evidence, or explicitly scope verdicts to the
    backlog-covered period and flag the gap as a caveat?
 5. BUG-069 (licensing) — does a "structural" verdict pass even have a bucket for it, or should it be

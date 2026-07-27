@@ -4,7 +4,7 @@
 > UI collapse this doc designed shipped under `docs/PRESET_UNIFICATION_PLAN.md`
 > Phase 7: `EffectCardPanel` + `GenParamPanel` are now one kind-tagged
 > `ParamCardPanel` in `manifold-ui/src/panels/param_card.rs`. The **storage
-> fork** this doc's §1–§3 hinges on (effect `user_param_bindings` on the
+> fork** this doc's section 1–section 3 hinges on (effect `user_param_bindings` on the
 > instance vs generators having none) is NOT yet closed — that is the
 > deliberately-deferred "Phase 1b effect-fold-in," and the generator-side
 > user-tier binding + tier-aware lookup described below remains unbuilt. Read
@@ -102,7 +102,7 @@ Step 8 remaining work (as scoped by this audit, not as worded in a7fd4698's comm
 7. Tests: round-trip serialization with user bindings; `ToggleNodeParamExposeCommand` Generator-target undo/redo with envelope cleanup; integration test that loads a project, toggles `node.render_lines:animate`, asserts card config grew, drives the new slider, asserts the JsonGraphGenerator's inner node sees the value, save+reload preserves the binding.
 8. The `// Generator params are static-tier only today` comment at [state_sync.rs:1471-1473](../crates/manifold-app/src/ui_bridge/state_sync.rs#L1471) gets deleted.
 
-**Not** part of Step 8: removing `EffectInstance.user_param_bindings` or `ParamSlot.exposed`. Those stay — see §1 above on why the commit body's framing of "migrate entirely into the graph" was too aggressive.
+**Not** part of Step 8: removing `EffectInstance.user_param_bindings` or `ParamSlot.exposed`. Those stay — see section 1 above on why the commit body's framing of "migrate entirely into the graph" was too aggressive.
 
 ## Open questions
 

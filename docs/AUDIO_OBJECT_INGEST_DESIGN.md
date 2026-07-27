@@ -1,10 +1,10 @@
 # Audio Object Ingest — the tracker applied offline, for timeline clip generation
 
-**Status:** APPROVED direction, conformance treatment (STANDARD §9 — deeper in the
+**Status:** APPROVED direction, conformance treatment (STANDARD section 9 — deeper in the
 build order; re-derive inventories at execution) · 2026-07-06 · Fable
 **Prerequisites:** AUDIO_OBJECT_TRACKING_DESIGN.md P0–P2 (the core this reuses), plus
 **P1 here is blocked on Peter** (labeled clips — see Phasing).
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5 (Phase briefs)–§6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 before starting any phase.
 
 The audio-clip → timeline-clip auto-generation currently rates, in Peter's words,
 *"a 5/10 at the moment"* (2026-07-06). This doc governs how the object tracker built
@@ -12,7 +12,7 @@ in [AUDIO_OBJECT_TRACKING_DESIGN.md](AUDIO_OBJECT_TRACKING_DESIGN.md) is applied
 that pipeline — and, first, how the 5/10 becomes a measurement so we replace the part
 that is actually failing.
 
-**The relation contract (binding, mirrored in the realtime doc §8): one core, two
+**The relation contract (binding, mirrored in the realtime doc section 8): one core, two
 regimes.** The salience function and ridge tracker have exactly one implementation, in
 `manifold-audio`. Offline runs it non-causally: the same causal forward pass, then
 passes the live path cannot afford — backward smoothing, whole-clip segment extraction
@@ -31,7 +31,7 @@ the point.
 | Drum transcription | `adtof_detection.py` (ADTOF, ML, per-class thresholds) | Ships. NOT suspected weak — kicks/snares/hats are events, the model's home turf. Measure before touching (P1). |
 | Melodic transcription | `basic_pitch_detection.py` (Spotify Basic Pitch; bass/synth/pad "migrated to Basic Pitch" per `gestures.py` header) | Ships. **Prime suspect** for the 5/10 on Peter's material: it transcribes *notes*; a supersaw dive is a continuous glide (stair-step fragments), growls are inharmonic (fragmentation/octave errors). A suspicion, not a finding — P1 measures it. |
 | Vocal gestures | `gestures.py` (madmom onsets on the vocal stem) | Ships. |
-| Rust ingest side | `percussion_parser.rs` / `percussion_planner.rs` / `percussion_orchestrator.rs` (manifold-playback), `audio_clip_detection.rs` (manifold-core: per-clip `DetectionConfig`, cached events, re-plan without re-analysis) | Ships. The orchestrator already receives `stemPaths` from the pipeline JSON — the stems are on disk and addressable from Rust (§8 detect-and-group). |
+| Rust ingest side | `percussion_parser.rs` / `percussion_planner.rs` / `percussion_orchestrator.rs` (manifold-playback), `audio_clip_detection.rs` (manifold-core: per-clip `DetectionConfig`, cached events, re-plan without re-analysis) | Ships. The orchestrator already receives `stemPaths` from the pipeline JSON — the stems are on disk and addressable from Rust (section 8 detect-and-group). |
 | Event model | `percussion_analysis.rs` (`PercussionEvent { trigger_type, time_seconds, confidence, duration_seconds }`) | Ships. Carries no curve/gesture payload — extending it is P3 schema work, `⚠ VERIFY-AT-IMPL: re-read the struct + its serde before extending`. |
 | Offline decode + analysis core | `audio_decoder.rs` (symphonia, any format → PCM), `StreamingSendAnalyzer` + harness | Ships. The harness already IS the offline runner shape: decode → causal pass → artifacts. |
 
@@ -107,11 +107,11 @@ questions — ANALYSIS_ACCURACY runs a *tuning-and-baseline* loop (tuned `dev` s
 weak on Peter's material?") using `eval/`'s `metrics.py` with Peter's labeled clips as a
 **measurement-only fixture tier** — never a tuning set (consistent with ANALYSIS_ACCURACY
 Deferred #5, "Peter material is never the tuned sets"). **Chord-emitter seam:**
-ANALYSIS_ACCURACY §4.3 clusters Basic Pitch notes on the synth/pad stem into `Chord`
-events. If D4 drops Basic Pitch from those stems, §4.3's chord clustering must re-point to
+ANALYSIS_ACCURACY section 4.3 clusters Basic Pitch notes on the synth/pad stem into `Chord`
+events. If D4 drops Basic Pitch from those stems, section 4.3's chord clustering must re-point to
 the object segmenter's output (or the two coexist — segmenter for sustained-object gestures,
-§4.3 chords as a separate emitter). Name and preserve this seam in the P3 brief; do not
-silently break §4.3.
+section 4.3 chords as a separate emitter). Name and preserve this seam in the P3 brief; do not
+silently break section 4.3.
 
 ## 3. Phasing (briefs at conformance level; full briefs written when P0–P2 of the realtime doc land)
 
@@ -120,7 +120,7 @@ Peter's labeled clips added as a measurement-only fixture tier in
 `AUDIO_ANALYSIS_ACCURACY`'s `eval/` harness (D5 — **not** a bespoke script), a
 per-instrument component-measurement run through `eval/`'s `metrics.py` (tolerance
 ±30 ms events / ±100 ms boundaries), per-instrument P/R table committed to this doc's
-§1. Gate: the table exists and names the weak rows; no new harness, no code changed in the
+section 1. Gate: the table exists and names the weak rows; no new harness, no code changed in the
 detectors. *Entry note: if `eval/` has not landed yet (ANALYSIS_ACCURACY P1), this phase
 waits on it rather than forking a parallel scorer.*
 Demo: the table — L2.
@@ -135,7 +135,7 @@ PNGs — L2.
 
 **P3 — Pipeline integration.** Rust segmenter on the stems the orchestrator already
 has (D3), `PercussionEvent` extension for gesture payload (schema + serde + parser
-round-trip gate per STANDARD §5), per-instrument replacement per D4, re-run the P1
+round-trip gate per STANDARD section 5), per-instrument replacement per D4, re-run the P1
 scoring — **the gate is the measured number moving on the weak rows** (target set at
 brief time from the P1 baseline), with held-out clips the builder didn't tune against.
 Demo: detect-and-group on a labeled clip, before/after timelines — L2 minimum, L4
@@ -151,7 +151,7 @@ Demo: detect-and-group on a labeled clip, before/after timelines — L2 minimum,
   shipped flows — no. Comparison lives in P1/P3 scoring runs; shipped rows have one
   detector each (D4).
 - **You will want to shape the segmenter around the labeled clips** — the P3 gate
-  uses held-out material (STANDARD §5 fixture-overfitting rule).
+  uses held-out material (STANDARD section 5 fixture-overfitting rule).
 - **You will want to write "a quick scoring script beside the pipeline"** — no. That is
   the second harness F10 killed; measurement runs through `AUDIO_ANALYSIS_ACCURACY`'s
   `eval/` (D5). One harness, one set of frozen metrics.

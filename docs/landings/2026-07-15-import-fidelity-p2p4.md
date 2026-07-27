@@ -1,7 +1,7 @@
 # IMPORT_FIDELITY F-P2 + F-P4 — landed 2026-07-15 @ `9b96fd82` (pending push to origin/main)
 
-**Branch:** `feat/import-fidelity-fp2` (F-P2, `c778dbe3`) + `feat/import-fidelity-fp4` (F-P4, `9e5c5432` + fix `a96e8167`, branched off F-P2's tip since F-P4 wires the ports F-P2 built), merged into `main` as one batch per `.claude/GIT_TREE_DISCIPLINE.md` §2c.
-**Level reached:** L1 (numeric gpu-proofs + unit gates, run independently by both the worker and the orchestrator, all green) / target L4 (§10) — L4 is Peter's click-script below, not yet run by him.
+**Branch:** `feat/import-fidelity-fp2` (F-P2, `c778dbe3`) + `feat/import-fidelity-fp4` (F-P4, `9e5c5432` + fix `a96e8167`, branched off F-P2's tip since F-P4 wires the ports F-P2 built), merged into `main` as one batch per `.claude/GIT_TREE_DISCIPLINE.md` section 2c.
+**Level reached:** L1 (numeric gpu-proofs + unit gates, run independently by both the worker and the orchestrator, all green) / target L4 (section 10) — L4 is Peter's click-script below, not yet run by him.
 **Doc status line (quoted verbatim):** `IN PROGRESS · F-P1 + F-P3 SHIPPED 2026-07-15 (orchestrator session 1 of 3, landing report \`docs/landings/2026-07-15-import-fidelity-p1p3.md\`) · F-P2 + F-P4 SHIPPED 2026-07-15 (orchestrator session 2 of 3, landing report \`docs/landings/2026-07-15-import-fidelity-p2p4.md\`) · approved by Peter 2026-07-15 ("Approved") · authored 2026-07-15 · Fable 5 (his product calls are quoted in the intro, D7, and D8; glass/F-P5, pure-black base, and sun coherence added same day at his direction). Execution: 3 orchestrator sessions — (1) F-P1 ∥ F-P3 DONE, (2) F-P2 + F-P4 DONE, (3) F-P5 next.`
 
 ## Gate results (verbatim)

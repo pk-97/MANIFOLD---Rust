@@ -1,38 +1,38 @@
 # Video IO — live texture interchange (Syphon / NDI, both directions)
 
-<!-- index: Live video interchange with Resolume/TD/OBS — Syphon+NDI, sends as stage virtual outputs, inputs as source atoms; P1–P4 phased, supersedes CAPABILITY_ROADMAP §3 -->
+<!-- index: Live video interchange with Resolume/TD/OBS — Syphon+NDI, sends as stage virtual outputs, inputs as source atoms; P1–P4 phased, supersedes CAPABILITY_ROADMAP section 3 -->
 
 
-**Status:** APPROVED 2026-07-09 (Peter) — Syphon (BSD, clean) + NDI (royalty-free SDK license, cleared 2026-07-09; conditions in §0) · design 2026-07-07 · Fable
+**Status:** APPROVED 2026-07-09 (Peter) — Syphon (BSD, clean) + NDI (royalty-free SDK license, cleared 2026-07-09; conditions in section 0) · design 2026-07-07 · Fable
 **Prerequisites:** none for P1–P2 (SharedTextureBridge, stage/venue model, and the
-source-atom slot all exist). P3–P4 need the NDI SDK decision (§D8, VERIFY-AT-IMPL).
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5 (Phase briefs)–§6 before starting any phase.
+source-atom slot all exist). P3–P4 need the NDI SDK decision (section D8, VERIFY-AT-IMPL).
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 before starting any phase.
 
-## §0. License clearance (verified 2026-07-09, Opus — full NDI SDK License Agreement, Nov 2024, read)
+## 0. License clearance (verified 2026-07-09, Opus — full NDI SDK License Agreement, Nov 2024, read)
 
 Both mechanisms are cleared for commercial closed-source use. **Syphon:** BSD framework, no
-conditions. **NDI:** MANIFOLD qualifies as a royalty-free licensed "Product" (§1b — desktop
-software on general-purpose Macs interoperating with video products; the §1b exclusions are
+conditions. **NDI:** MANIFOLD qualifies as a royalty-free licensed "Product" (section 1b — desktop
+software on general-purpose Macs interoperating with video products; the section 1b exclusions are
 *hardware / fixed-purpose appliances / embedded devices* only, which we are not — this resolves
 the "commercial use now requires…" community concern, which was about the hardware tightening).
-The runtime is redistributable inside our own installer (§2a; §2d — ship only the files the SDK
+The runtime is redistributable inside our own installer (section 2a; section 2d — ship only the files the SDK
 docs identify as redistributable).
 
 **Build-time obligations the executor must satisfy (P1 for the sends UI, P3 for NDI itself):**
-1. MANIFOLD's EULA carries the §3d flow-down clauses: prohibit modifying / reverse-engineering the
+1. MANIFOLD's EULA carries the section 3d flow-down clauses: prohibit modifying / reverse-engineering the
    SDK or its protocols, disclaim NDI warranty + liability, include an "NDI, Inc." copyright notice,
    and require third-party devs building on our product to comply with the NDI SDK terms.
 2. NDI trademark used ONLY as "NDI compatible" with a clear trademark notation, never implying NDI
-   sponsorship, never inside the product name/packaging (§3f); NDI copyright notices where the SDK
-   is incorporated (§3g).
-3. Ship against an SDK version < 30 days old at release if one exists (§2b); keep the bundled
+   sponsorship, never inside the product name/packaging (section 3f); NDI copyright notices where the SDK
+   is incorporated (section 3g).
+3. Ship against an SDK version < 30 days old at release if one exists (section 2b); keep the bundled
    runtime current.
-4. Never re-derive the NDI protocol (§3i) — already committed in D9.
+4. Never re-derive the NDI protocol (section 3i) — already committed in D9.
 
 **Caveat (not a blocker):** the read was the Nov 2024 agreement; a 6.2.1 (2025) SDK-terms update
 exists that NDI's own docs describe as remaining royalty-free. Re-confirm against the agreement
-that ships with the exact SDK version pulled at build time — this is already the §D8
-VERIFY-AT-IMPL. Governing law is Sweden (§10); a launch-time legal glance over the EULA clauses is
+that ships with the exact SDK version pulled at build time — this is already the section D8
+VERIFY-AT-IMPL. Governing law is Sweden (section 10); a launch-time legal glance over the EULA clauses is
 prudent for a commercial release but does not gate the build.
 
 MANIFOLD joins existing rigs before it replaces them. Syphon-out makes MANIFOLD a
@@ -41,11 +41,11 @@ depth/segment/particle stack on someone else's live output; NDI does both across
 machines. Peter, 2026-07-07, asked which tiers v1 needs: **all three** — "MANIFOLD
 feeds Resolume/TD (Syphon-out) + Resolume/TD/cameras feed MANIFOLD (Syphon-in) +
 cross-machine feeds (NDI, either direction)". This doc supersedes
-CAPABILITY_ROADMAP.md §3 (the 2026-06-17 sketch) where they differ — notably the
+CAPABILITY_ROADMAP.md section 3 (the 2026-06-17 sketch) where they differ — notably the
 send-as-graph-node idea, rejected in D2.
 
-Companions: `MULTI_DISPLAY_DESIGN.md` (output model this extends; its §10 (Phasing (Sonnet-executable)) P6 listed
-"NDI/Syphon outputs" as deferred — this doc is that item), `ML_NODES_DESIGN.md` §4 (Sources)
+Companions: `MULTI_DISPLAY_DESIGN.md` (output model this extends; its section 10 (Phasing (Sonnet-executable)) P6 listed
+"NDI/Syphon outputs" as deferred — this doc is that item), `ML_NODES_DESIGN.md` section 4 (Sources)
 (the source-atom slot the input side fills), `GIG_RESILIENCE_DESIGN.md` (failure
 doctrine), `MEDIA_BACKEND_DESIGN.md` (deferred NDI/Syphon here).
 
@@ -62,8 +62,8 @@ Extend, don't redesign. Every piece below was verified at the cited anchor today
 | Content-thread output surface (direct present path) | `crates/manifold-app/src/content_pipeline.rs:622` (`output_surface`) | Exists — the render-side seam where textures are real |
 | Source atom + generator-preset wrapping precedent | `crates/manifold-renderer/src/node_graph/primitives/gltf_texture_source.rs`; `crates/manifold-renderer/assets/generator-presets/Text.json` wraps `node.render_text` | Exists — the input side copies this shape |
 | Background FFI worker handing the graph its latest result | `manifold-native` (`DepthEstimator`) | Exists — the async contract live inputs inherit |
-| `node.camera` (AVCapture source atom) | `ML_NODES_DESIGN.md` §4 (Sources) | **Designed, not built.** NDI/Syphon-in were already named there as "same slot later" — this doc is that later |
-| Fixture source routing `Master \| layer/group` ("routing = bus") | `MULTI_DISPLAY_DESIGN.md` §7.3 (Lighting: fixtures as placements, consoles as peers) | Designed, not built — D3 mirrors it. ⚠ VERIFY-AT-IMPL: if the fixture-routing enum has landed by execution time, reuse the type; command: `rg -n 'enum.*Source' crates/manifold-core/src/stage.rs` |
+| `node.camera` (AVCapture source atom) | `ML_NODES_DESIGN.md` section 4 (Sources) | **Designed, not built.** NDI/Syphon-in were already named there as "same slot later" — this doc is that later |
+| Fixture source routing `Master \| layer/group` ("routing = bus") | `MULTI_DISPLAY_DESIGN.md` section 7.3 (Lighting: fixtures as placements, consoles as peers) | Designed, not built — D3 mirrors it. ⚠ VERIFY-AT-IMPL: if the fixture-routing enum has landed by execution time, reuse the type; command: `rg -n 'enum.*Source' crates/manifold-core/src/stage.rs` |
 
 Classification: **genuinely new** = the Syphon/NDI FFI surfaces and the send blit.
 Everything else is one wire away from existing.
@@ -78,19 +78,19 @@ atom shape regardless of mechanism. No per-mechanism special cases in the model.
 **D2 — Sends are virtual outputs in the stage/venue model, not graph nodes.**
 A send is one more output object — like a display or an LED fixture — that samples
 the composition and publishes it. Rejected: the roadmap's passthrough "send node"
-dropped mid-chain (CAPABILITY_ROADMAP §3), because Peter's console-round doctrine is
-"**routing = bus, never a graph node**" (MULTI_DISPLAY §7.3) and multi-display
+dropped mid-chain (CAPABILITY_ROADMAP section 3), because Peter's console-round doctrine is
+"**routing = bus, never a graph node**" (MULTI_DISPLAY section 7.3) and multi-display
 already models every output as "a mapping: region of the render" (`MULTI_DISPLAY_
 DESIGN.md:58`). Consequences, stated honestly: mid-chain taps (publish between two
 effects inside one chain) are not possible; the granularity you get is the D3 source
 enum. If a real show needs a mid-chain feed, the workaround is splitting the chain
-across a layer + group — and if that recurs, that's the trigger to revisit (§Deferred).
+across a layer + group — and if that recurs, that's the trigger to revisit (section Deferred).
 
 **D3 — Send source = the fixture-routing selector: `Master | Layer(id) | Group(id)`.**
 Same bus the LED/fixture design selects from. A send on a layer samples that layer's
 post-chain output; Master samples the composite the LED controller already samples
 (`controller.rs:78`). v1 sends sample at the legacy single-island composite; island-
-aware region sends are deferred with their trigger (§Deferred).
+aware region sends are deferred with their trigger (section Deferred).
 
 **D4 — Publish happens on the content thread, render side, after composite.**
 The send owns a private triple-buffered IOSurface pool (shape: `SharedTextureBridge`,
@@ -108,7 +108,7 @@ the blit; never synthesize it (`rg -n 'srgb|gamma|tonemap' crates/manifold-app/s
 crates/manifold-app/src/edr_surface.rs`). 16f/HDR pass-through publishing is
 deferred (trigger: a receiving app that actually consumes it).
 
-**D6 — Inputs are source atoms in the ML_NODES §4 slot: `node.syphon_in`,
+**D6 — Inputs are source atoms in the ML_NODES section 4 slot: `node.syphon_in`,
 `node.ndi_in`.** Each wrapped by a thin bundled generator preset (precedent:
 `Text.json` wraps `node.render_text`) so a live feed works both as "this layer IS
 the feed" and as a texture input inside any effect graph (depth/segment on a live
@@ -118,11 +118,11 @@ reads the newest complete frame; **the beat clock never waits for an input**.
 
 **D7 — Failure behavior (the show-safe contract).** A dead or stalled input
 **holds its last frame** and raises a staleness flag surfaced on the perform
-surface (chrome-widget slot per GIG_RESILIENCE §7/§8) — never hard-cut to black,
+surface (chrome-widget slot per GIG_RESILIENCE section 7/section 8) — never hard-cut to black,
 never swap in a placeholder mid-show. A send that fails to publish logs, shows
 status, and **never** stalls or errors the render loop — publishing is
 fire-and-forget from the render's point of view. Input reappearing under the same
-name silently reattaches (same doctrine as display hot-replug, MULTI_DISPLAY §11.14).
+name silently reattaches (same doctrine as display hot-replug, MULTI_DISPLAY section 11.14).
 
 **D8 — NDI is a background worker fed by async readback.** Shape: one worker
 thread per NDI send; content thread submits readback (`readback.rs` pattern),
@@ -211,8 +211,8 @@ tests as the mechanical gate.
 
 ### P1 — Syphon-out vertical slice (one session)
 
-- **Entry:** anchors in §1 re-verified (run the audit table's commands).
-- **Read-back:** this doc §2 D2/D4/D5/D9, GIT discipline, forbidden moves above.
+- **Entry:** anchors in section 1 re-verified (run the audit table's commands).
+- **Read-back:** this doc section 2 D2/D4/D5/D9, GIT discipline, forbidden moves above.
 - **Deliverables:** `VideoSendDef` + commands (add/remove/enable, venue-persisted);
   Syphon framework FFI in `manifold-native`; content-side publisher (pool + sRGB
   blit); one default send "Program" (Master); minimal sends list UI in the
@@ -292,7 +292,7 @@ tests as the mechanical gate.
   until then sends sample the legacy composite (D3).
 - **HDR / 16f publishing** — trigger: a receiving app that consumes it (D5).
 - **Spout (Windows)** — arrives with the Vulkan/Windows backend, same role as
-  Syphon, not separate work (roadmap §3 stands).
-- **ScreenCaptureKit input** — same source slot, per ML_NODES §14; unchanged.
+  Syphon, not separate work (roadmap section 3 stands).
+- **ScreenCaptureKit input** — same source slot, per ML_NODES section 14; unchanged.
 - **Recording taps** (send → disk) — MEDIA_BACKEND owns export; a send is not a
   recorder.

@@ -3,12 +3,12 @@
 **Status: APPROVED design, not built · 2026-07-03 · Fable queue (perform surface builder, steal-pass S2)**
 **Prerequisites: none for P1. P2 (session perform) requires `docs/SESSION_MODE_DESIGN.md` to be built.
 P4 (editor workspaces) gets its own design pass when scheduled — this doc only pins its direction.**
-**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5 (Phase briefs)–§6 and §8 before starting any phase.**
+**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 and section 8 before starting any phase.**
 
 Peter's scope (2026-07-03): **"let's just keep it simple for now, doesn't need to be complex at
 all to start"** — plus two extensions: **"the timeline mode should also reuse the UI widget
 system"** and **"it would be nice to allow users to custom build and modify their editor and
-workflow setups"** (the workspaces layer, §8).
+workflow setups"** (the workspaces layer, section 8).
 
 ---
 
@@ -60,7 +60,7 @@ workflow setups"** (the workspaces layer, §8).
 - **D5 — Coarse grid.** Cells on a 12×8 grid, widgets span whole cells. No freeform pixels,
   no docking, no overlap. Push-style.
 - **D6 — v1 widget set = exactly today's HUD, wrapped:** SyncStatus, CueHud, MacroColumn,
-  ExitButton — plus SessionGrid in P2. Deferred (§7): param cards on the surface, stage-scale
+  ExitButton — plus SessionGrid in P2. Deferred (section 7): param cards on the surface, stage-scale
   knob/fader/pad, XY pad, next-clip preview (S3), output viewport, audio meters, pages.
 - **D7 — Bindings address existing stable identities only** (`param_id` slots, macro index,
   `LayerId`, scene index). Widgets are a presentation layer over the same slots MIDI/OSC/
@@ -91,7 +91,7 @@ pub enum WidgetKind { SyncStatus, CueHud, MacroColumn, ExitButton, SessionGrid }
 ```
 
 - **Registry:** one descriptor per `WidgetKind` — display name, min/max span, whether it needs
-  a target. Same shape as the primitive registry / spec sheets; this is the §10.2
+  a target. Same shape as the primitive registry / spec sheets; this is the section 10.2
   "widget catalog" deferred item landing with its first real customer. Because surfaces are
   data with a catalog, they become MCP/agent-authorable for free once the builder exists.
 - **Grid solve is trivial:** cell → rect math inside the surface panel; chrome flexbox lays
@@ -107,14 +107,14 @@ pub enum WidgetKind { SyncStatus, CueHud, MacroColumn, ExitButton, SessionGrid }
   filters today; the triple-exit ladder is unchanged (exit button becomes a widget but its
   three redundant detection paths stay).
 - Session-grid gestures are **`ContentCommand` launches, not undoable `Command`s** — per
-  SESSION_MODE_DESIGN §"launch semantics" (performance gestures, like MIDI triggers). Surface
+  SESSION_MODE_DESIGN section"launch semantics" (performance gestures, like MIDI triggers). Surface
   *editing* (builder phase) is the opposite: undoable `EditingService` commands.
 
 ## 5. What this deliberately is not (v1)
 
 No builder UI. No pages. No XY pads or stage-scale control chrome. No per-project surface
 persistence. No output/preview viewport. No editor workspaces. No touch/tablet story. Each is
-listed in §7 with its trigger; none of them changes the v1 data model except additively.
+listed in section 7 with its trigger; none of them changes the v1 data model except additively.
 
 ## 6. Theming
 
@@ -128,7 +128,7 @@ drawer does today. Zero new styling infra.
    hold-progress indicator and understudy status strip (later the thermal glyph) as
    widgets on this surface. Its state hooks ride the perform enter/exit lifecycle and
    don't touch this design; the widgets land right after P1 (sequencing:
-   `docs/DESIGN_BUILD_ORDER.md` §2 (Hard dependency edges)).
+   `docs/DESIGN_BUILD_ORDER.md` section 2 (Hard dependency edges)).
 1. **Builder v1** — arrange/resize/add/remove widgets on the grid, per-project persistence,
    undoable commands, `WidgetTarget` for param/macro/layer widgets. Trigger: after session
    perform has proven the widget set.
@@ -144,7 +144,7 @@ drawer does today. Zero new styling infra.
 
 ## 8. Phasing (Sonnet-executable)
 
-Entry state, every phase: re-verify the §1 anchors (`perform_mode/render.rs`,
+Entry state, every phase: re-verify the section 1 anchors (`perform_mode/render.rs`,
 `state.rs`, `macros.rs`/`cue.rs`/`tracks.rs` snapshot structs, `panels/mod.rs:777` —
 audited 2026-07-03).
 
@@ -154,7 +154,7 @@ audited 2026-07-03).
   `timeline-perform-default` def; **delete the hand-drawn path in `render.rs` in the same
   phase.** Forbidden: keeping the hand-drawn path behind a flag "just in case" (the named
   wrong turn — no parallel render paths, D2); widgets importing `manifold-core` (D3
-  boundary); touching the content thread from perform UI (safety rules, §1). Gate:
+  boundary); touching the content thread from perform UI (safety rules, section 1). Gate:
   headless PNG comparison against the current HUD (visual parity within layout
   tolerance — see `reference_ui_headless_png_verification`); all three exit paths
   verified; **negative gate:** `rg -c 'draw_sync_indicators|draw_cue_hud|draw_macros_column' crates/manifold-app/`
@@ -165,7 +165,7 @@ audited 2026-07-03).
   routing (D1, amended per F7 — menu item, not a chrome button). Gate: launch quantization
   behavior matches session-mode spec; grid readable at stage distance.
 - **P3 — Builder v1** (deferred item 1 above) — only after P2 has been performed with.
-- **P4 — Editor workspaces** — separate design doc first (§7.5).
+- **P4 — Editor workspaces** — separate design doc first (section 7.5).
 
 ## 9. Decided — do not reopen
 
@@ -176,9 +176,9 @@ audited 2026-07-03).
    foundation-boundary rules apply (`ui_translate.rs` is the only converter).
 4. Surfaces are serde defs; defaults ship as bundled defs, not code.
 5. Coarse 12×8 grid, whole-cell spans; no freeform, no docking on the perform surface.
-6. v1 = today's HUD wrapped + session grid; everything else is §7 deferred, additive-only.
+6. v1 = today's HUD wrapped + session grid; everything else is section 7 deferred, additive-only.
 7. Widget bindings address existing stable identities; `param_values` stays the live surface.
 8. R1 split: DIY UI toolkit stays rejected; workspace arrangement of purpose-built panels is
-   the future layer (§7.5), fixed editor remains the default.
+   the future layer (section 7.5), fixed editor remains the default.
 9. Launches are `ContentCommand` gestures (never undoable); surface edits are undoable
    `EditingService` commands (builder phase).

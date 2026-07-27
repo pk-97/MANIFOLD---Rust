@@ -1,11 +1,11 @@
 # RT Tier 3 — scoping pass for the remaining items
 
-**Type: scoping pass, NOT a design contract** (DESIGN_DOC_STANDARD §1 — this is neither a design nor
+**Type: scoping pass, NOT a design contract** (DESIGN_DOC_STANDARD section 1 — this is neither a design nor
 a working guide; it is the intake that decides *which designs get written*). No phase here is
-executable. Each item graduates to its own design — or into `RAYTRACING_DESIGN.md` §9 (RT Reflections — traced specular for the PBR base lobe (Tier 3 item 7; APPROVED 2026-07-24 · **R1 LANDED 2026-07-25** — probe: mirror on 2.15 vs off 0.82 (delta 1.33); empty-scene equality 0.305 ≈ 0.308; worst frame 9.82 ms; native byte-diff identical. R2 LANDED 2026-07-26 (`74563a4c`); R3 not started))+ — when a team
-leader picks it up, and this doc's per-item section is that design's §0/§1 already done.
+executable. Each item graduates to its own design — or into `RAYTRACING_DESIGN.md` section 9 (RT Reflections — traced specular for the PBR base lobe (Tier 3 item 7; APPROVED 2026-07-24 · **R1 LANDED 2026-07-25** — probe: mirror on 2.15 vs off 0.82 (delta 1.33); empty-scene equality 0.305 ≈ 0.308; worst frame 9.82 ms; native byte-diff identical. R2 LANDED 2026-07-26 (`74563a4c`); R3 not started))+ — when a team
+leader picks it up, and this doc's per-item section is that design's section 0/section 1 already done.
 **Author:** Opus 4.8 · 2026-07-23 · audit anchors verified that day.
-**Purpose:** `RAYTRACING_DESIGN.md` §8 (v2 roadmap — from landed skeleton to stage-ready (captured 2026-07-23, Peter's first real look)) Tier 3 is four one-line bullets. This pass turns them into
+**Purpose:** `RAYTRACING_DESIGN.md` section 8 (v2 roadmap — from landed skeleton to stage-ready (captured 2026-07-23, Peter's first real look)) Tier 3 is four one-line bullets. This pass turns them into
 scoped work with the legwork spent: what already exists, what the item actually *is* once you look at
 this codebase rather than the literature, what it costs, and what a reviewer must rule on. Reflections
 (item 7) got the full treatment in `RT_REFLECTIONS_DESIGN.md`; the other three are here.
@@ -13,7 +13,7 @@ this codebase rather than the literature, what it costs, and what a reviewer mus
 **Two audit findings reshape the tier before any sequencing argument.** They are the reason this doc
 exists rather than four briefs.
 
-**Finding 1 — "many lights" is the wrong frame for this renderer.** `RAYTRACING_DESIGN.md` §8 (v2 roadmap — from landed skeleton to stage-ready (captured 2026-07-23, Peter's first real look)) item 6
+**Finding 1 — "many lights" is the wrong frame for this renderer.** `RAYTRACING_DESIGN.md` section 8 (v2 roadmap — from landed skeleton to stage-ready (captured 2026-07-23, Peter's first real look)) item 6
 proposes ReSTIR, the standard answer to sampling hundreds of lights. This scene system does not have
 hundreds of lights. It has: a `lights` storage buffer packed as **direction + premultiplied colour
 only** (`render_scene.rs:2792-2794`; WGSL layout comment at `shaders/render_scene.wgsl:234-235`) —
@@ -33,7 +33,7 @@ because every ray class was one bounce deep and returned a scalar or a demodulat
 (multi-bounce) is the first item that needs recursion**, and adding it as a fifth block means a
 hand-unrolled second bounce inside a kernel that already reads as a monolith. The refactor —
 one shared `gather_radiance(ray, depth) -> radiance` the term blocks call — should be a **precondition
-of T3-8 and of nothing before it** (recommended in §5). Refactoring earlier is speculative: there is
+of T3-8 and of nothing before it** (recommended in section 5). Refactoring earlier is speculative: there is
 no second recursive consumer until multi-bounce exists.
 
 ---
@@ -176,7 +176,7 @@ already made, none are Tier 3, and each has an owner-less status today:
   since it is what puts RT frames in a released video rather than only on a stage.
 - **P6 frame interpolation** (D6/D8) — Tahoe-gated, per-output, default off for beat-reactive outputs.
   Blocked on a min-OS product decision that is Peter's and deliberately deferred.
-- **Deforming-mesh BVH refit** (§3 line item + D17's caveat) — P0 measured refit at **12-16 ms/frame**
+- **Deforming-mesh BVH refit** (section 3 line item + D17's caveat) — P0 measured refit at **12-16 ms/frame**
   on a 1.43M-tri asset, and D17 records a known one-frame-stale-accel case for a mesh whose vertices
   change without a key change. Any sim/deform work that meets RT trips this. It is the only item on
   this page with a *known* correctness gap rather than a missing feature.
@@ -184,7 +184,7 @@ already made, none are Tier 3, and each has an owner-less status today:
 ---
 
 **Confidence and its limits.** Findings 1 and 2 are code-anchored and I am confident in them. The
-sequencing in §5 is a judgment call about what Peter will value on stage, made without seeing Tier
+sequencing in section 5 is a judgment call about what Peter will value on stage, made without seeing Tier
 1+2 running — a team leader who has seen it should overrule me freely. Nothing here is costed in
 milliseconds: no item in this tier has a measured ray cost, and the pool they draw from has not been
 re-judged since T2-B changed the render scale. Every code claim was verified by reading the file at

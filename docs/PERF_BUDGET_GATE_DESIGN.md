@@ -2,21 +2,21 @@
 
 **Status:** SHIPPED (all phases P1, P2, P2b, P3) 2026-07-16/17 — P1 `cargo xtask perf-soak` headless frame-budget gate (`30b21e29`), P2 profiled GPU attribution with scoped multi-executor tags (`efddffce`), P2b bare-glb import-graph mode (`19ae42fd`, BUG-189 its first customer), P3 landing-protocol + pre-gig-checklist wiring (`ae7b3db6`, cfg-gate fix `2bef5ce4`); D8 per-label `passes` breakdown amendment landed 2026-07-17 during RENDER_SCENE_PERF P0. Known tool gaps, tracked as bugs not phases: BUG-191 (`--start` seek-frame spike), continuously-animated imports never satisfy the byte-stable warmup gate (noted in BUG-190 (brainstem-24-skinned-objects-370ms-per-frame)). Original approval trail: APPROVED 2026-07-09 (Peter) · design 2026-07-09 · Fable · amended 2026-07-14 (Fable + Peter): D5/D6 added — per-node GPU attribution pass (P2) + real-time pacing with `--start` targeting; protocol wiring renumbered to P3 · amended 2026-07-16 (Fable + Peter): D7/P2b added — bare-glb import-graph mode (BUG-189 (import-graph-10ms-resolution-independent-gpu-flo…) is the first customer); all D7 decisions closed, zero executor discretion · amended 2026-07-16 (Fable + Peter, mid-P2): D6 corrected — a real project frame is multi-executor / multi-command-buffer (every layer's chain + every generator is its own `Executor`, `composite_parallel` gives each layer its own command buffer), so the bare `"s{idx}"` step tag collides across executors; scoped tags (`"{scope}:s{idx}"`) adopted as the join key, profiled mode forces `composite_serial`, untagged spans reported explicitly. P2 brief updated accordingly; all decisions closed, zero executor discretion.
 **Prerequisites:** none (extends existing harness + trace infra; UI_HARNESS_UNIFICATION P0 makes the numbers more representative but is not a blocker)
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5 (Phase briefs)–§6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 before starting any phase.
 
 Hot-path discipline is currently prose (CLAUDE.md) plus one *per-phase* gate (the
-content-thread work gate, DESIGN_DOC_STANDARD §5) that only fires when a brief remembers to
+content-thread work gate, DESIGN_DOC_STANDARD section 5) that only fires when a brief remembers to
 include it. Nothing watches the trend: multi-display, 3D scenes, and new screens each add
 per-frame work a few percent at a time, and on a 53-layer / 2928-clip show file the bleed
 becomes a dropped frame on stage before any single phase was individually guilty. This gate
 makes the frame budget an enforced invariant instead of a value we argue from code.
-Hardening level (§9): conformance treatment — anchors carry re-derivation commands.
+Hardening level (section 9): conformance treatment — anchors carry re-derivation commands.
 
 ## 1. Audit — what exists (verified 2026-07-09, breadth-first; re-derive at P1)
 
 | Piece | Where | State |
 |---|---|---|
-| Spike-triggered frame trace | `MANIFOLD_RENDER_TRACE=1` (env-gated section breakdown; >20ms fail line already canon in DESIGN_DOC_STANDARD §5) | exists |
+| Spike-triggered frame trace | `MANIFOLD_RENDER_TRACE=1` (env-gated section breakdown; >20ms fail line already canon in DESIGN_DOC_STANDARD section 5) | exists |
 | Headless real-project load | harness `project:<abs-path>` scene — ⚠ VERIFY-AT-IMPL: `rg -n 'project:' crates/ -g 'fixtures.rs'` (UI_HARNESS_UNIFICATION_DESIGN.md cites fixtures.rs:68) | exists per doc |
 | Canonical heavy fixture | `Liveschool Live Show V6 LEDS.manifold` (load-bearing migration fixture; ~53 layers / 2928 clips) | exists |
 | Profiler crate | `manifold-profiler` — ⚠ VERIFY-AT-IMPL: what it already counts per frame before adding any collector | exists |
@@ -41,7 +41,7 @@ measurement system.
   companion). Rejected: per-commit CI — wall-time cost and contention flake would rot the
   gate into being ignored.
 - **D3 — Two thresholds, one absolute and one relative.** Hard fail: any frame >20 ms
-  (the line DESIGN_DOC_STANDARD §5 already canonizes). Regression fail: p95 frame time
+  (the line DESIGN_DOC_STANDARD section 5 already canonizes). Regression fail: p95 frame time
   >15% above the checked-in baseline. Rejected: absolute-only — it never catches the bleed
   until the cliff; relative-only — it lets a slow baseline ratchet quietly.
 - **D4 — Baseline is a checked-in JSON, updated deliberately.** `docs/perf-baselines/…json`
@@ -140,13 +140,13 @@ measurement system.
   always exits 0 on threshold checks (it reports, it doesn't judge). Enforcement: flag
   exclusivity in the xtask + a `rg`-provable guard (P2 negative gate).
 
-## §. Phasing
+## . Phasing
 
 **P1 — soak mode + comparison (one session, Sonnet).**
 Entry: harness loads the Liveschool fixture headlessly (re-verify the fixtures.rs anchor);
 `MANIFOLD_RENDER_TRACE` produces per-frame numbers (read its implementation first — reuse
 its section timers as the collector; inventory `manifold-profiler` before adding any new
-counter). Read-back: this doc + DESIGN_DOC_STANDARD §5 content-thread gate + the
+counter). Read-back: this doc + DESIGN_DOC_STANDARD section 5 content-thread gate + the
 `hot-paths` constraints in CLAUDE.md. Deliverables: an xtask (working name
 `cargo xtask perf-soak <project> --seconds N [--start <beats>] [--update-baseline]`)
 emitting a stats JSON (min/p50/p95/max, worst-frame section breakdown) and a
@@ -219,7 +219,7 @@ orchestrator already runs), pre-gig soak step in GIG_RESILIENCE's checklist, and
 VERIFICATION_DEBT.md line if either integration is deferred. Gate: `rg` proves both docs
 name the command. Demo: none — L1.
 
-## §. Decided — do not reopen
+## . Decided — do not reopen
 1. Show-level measurement, not micro-benchmarks (D1).
 2. Deliberate-run posture, gpu-proofs-style (D2).
 3. 20 ms absolute + 15% relative, both enforced (D3).
@@ -229,7 +229,7 @@ name the command. Demo: none — L1.
 7. Bare-glb mode is a sibling frame loop — shared emitters/sampler, no wrapper project,
    report-only, unpaced measured window, D7's exact flag matrix (D7).
 
-## §. Deferred
+## . Deferred
 - Per-section budgets (compositor vs sync vs UI bridge) — revive when a whole-frame
   regression fires and the breakdown proves too coarse to assign blame.
 - Windowed/live-app soak variant — revive with GIG_RESILIENCE P3–P4 (rehearsal soak),

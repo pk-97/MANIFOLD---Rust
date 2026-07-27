@@ -1,6 +1,6 @@
 # MESH_DEFORM P3 (curve→mesh) + P4 (scatter + glTF fit) — landed 2026-07-11 (feat/mesh-deform → main)
 
-**Branch:** feat/mesh-deform · **Level reached:** L2 / target L2 (§10)
+**Branch:** feat/mesh-deform · **Level reached:** L2 / target L2 (section 10)
 **Doc status line (quoted verbatim):** SHIPPED 2026-07-11 (`feat/mesh-deform`) — all four phases landed. P1 growth core (`mesh_ramp`, `push_along_normals`, `facet_normals`) + P2 shape deformers (`bend/twist/taper/morph_mesh`) on the freeze codegen path (decided #10); P3 curve→mesh builders (`revolve/extrude/tube`) + P4 `scatter_on_mesh` (multi-pass, hand-authored per the #10 scope boundary) + `gltf_mesh_source` fit/recenter extension. Demos Breathe/TwistColumn/Vine/Lathe/Garden all L2. · 2026-07-10 · Fable (with Peter in the room)
 
 This is the final landing of the design — all four phases now on main. With batch 1

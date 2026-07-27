@@ -329,7 +329,7 @@ that card. Same underlying retarget call, two entry points.
 
 ## Change 4 — Layout invariance (closes BUG-160) · P2 SHIPPED 2026-07-15 (`d85ab207`); P1 PARTIAL (D1/D2/D7 shipped, D3 + width-sweep test owed) · Fable design, Sonnet execution
 
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5 (Phase briefs)–§6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 before starting any phase.
 
 Peter's directive, verbatim (2026-07-14): "The cards and inspector in the graph
 editor should be IDENTICAL to the main window inspector with only the mapping

@@ -23,14 +23,14 @@ Rationale and incident history live in `.claude/GIT_TREE_DISCIPLINE.md`, the poi
 - **Shell: no `cd` prefix.** The cwd is the project root; `cd ... &&` bypasses the Bash allowlist. Different cargo target → `--manifest-path`.
 - **Shell: `preToolUseBash.py` decides what prompts.** Read it, don't re-derive it. Read-only compounds and normal git/cargo workflow writes auto-allow; destructive git, writes inside chains, and redirects to repo paths prompt (`/tmp/*` and `/dev/null` are fine). Spec: `.claude/GIT_TREE_DISCIPLINE.md`.
 - **Commit messages:** backticks and `$()` inside `-m "..."` are live substitution — single-quote or use a heredoc.
-- **Never add or widen a `permissions.allow` rule without `docs/PERMISSION_BOUNDARY.md` §4.** The bar: can any argument the rule permits run code or destroy state the reviewer never sees in the command text? Auto mode silently ignores interpreter-prefixed rules (§3) — invoke repo scripts directly (`scripts/x.py`), never via `python3`.
+- **Never add or widen a `permissions.allow` rule without `docs/PERMISSION_BOUNDARY.md` section 4.** The bar: can any argument the rule permits run code or destroy state the reviewer never sees in the command text? Auto mode silently ignores interpreter-prefixed rules (section 3) — invoke repo scripts directly (`scripts/x.py`), never via `python3`.
 - **No bare `#[allow(dead_code)]`.** Every suppression names what un-suppresses it, or the code gets deleted. Hook-enforced.
 - **All GPU through `manifold-gpu`.** Cross-platform is a product requirement: native Metal today, native Vulkan approved but not built (`docs/VULKAN_BACKEND_DESIGN.md`). Never describe the app as Metal-only by design.
 - **No new shared state.** No new `Arc<Mutex<>>`/`Arc<RwLock<>>` without approval. The content thread owns `Project`; the UI gets `Arc<Project>` snapshots.
 - **All mutations through `EditingService`** via `ContentCommand::Execute` / `MutateProject`. No direct model writes from the UI.
 - **Generator or effect work → read `docs/DECOMPOSING_GENERATORS.md` first, whole.** Working from an existing primitive as a template is not a substitute.
-- **Never build bespoke row/slider/drawer infrastructure for manifest-backed param surfaces.** Entry points, the recipe, and the machine enforcement are in `docs/WIDGET_TREE_DESIGN.md` §5b and the module doc of `crates/manifold-ui/src/param_surface.rs`.
-- **Before proposing any new primitive, complete the audit in `docs/DECOMPOSING_GENERATORS.md` §2.5:** survey existing primitives (`rg 'purpose: "' crates/manifold-renderer/src/node_graph/primitives/ -g "*.rs"`), read the nearest reference preset from `docs/NODE_CATALOG.md` end to end, and state findings (exists / one wire away / genuinely new). Read-only audits stay in the main context — no agents.
+- **Never build bespoke row/slider/drawer infrastructure for manifest-backed param surfaces.** Entry points, the recipe, and the machine enforcement are in `docs/WIDGET_TREE_DESIGN.md` section 5b and the module doc of `crates/manifold-ui/src/param_surface.rs`.
+- **Before proposing any new primitive, complete the audit in `docs/DECOMPOSING_GENERATORS.md` section 2.5:** survey existing primitives (`rg 'purpose: "' crates/manifold-renderer/src/node_graph/primitives/ -g "*.rs"`), read the nearest reference preset from `docs/NODE_CATALOG.md` end to end, and state findings (exists / one wire away / genuinely new). Read-only audits stay in the main context — no agents.
 - **No fused single-effect or single-generator monolith nodes.** A primitive does one composable thing — one GPU dispatch, one DNN inference, one FFI call, one CPU op. Bundle-vs-atom criterion: `docs/DECOMPOSING_GENERATORS.md`.
 - **Every barrier-free per-element GPU atom ships on the freeze codegen path (fusable):** `wgsl_body` + `fusion_kind`/`input_access` in the `primitive!`, pipeline from `standalone_for_spec::<Self>()`, and a value-level `gpu_tests` proof against CPU-computed expected output — never `create_compute_pipeline(include_str!(…))` as the runtime kernel. Fused-vs-unfused proofs are mandatory. Scope test and exemption list: `docs/ADDING_PRIMITIVES.md`. "Passes the test but codegen can't express it" means BLOCKED and tracked, never a quiet exemption.
 - **Debug escalation ladder (hook-enforced by `probe-loop-guard.py`).** Wrong and not obvious: (1) lead semantic review of the seam first; (2) still stuck → K3 consult seat, read-and-discuss only; (3) probe loops last, delegated to lanes, never lead-run. Thresholds, budgets, and the full doctrine: `docs/AGENT_ROUTING.md`.
@@ -38,10 +38,10 @@ Rationale and incident history live in `.claude/GIT_TREE_DISCIPLINE.md`, the poi
 - **Commit and push when work is clean.** Durably authorized; don't ask.
 - **Bug found but not fixed this session → log it in beads before session end:** `bd create -t bug -p <1|2|3> -l <severity>,open -d '<symptom; root cause or "unknown" + suspects; fix shape>'`. Old numeric BUG-NNN ids live in `external_ref`.
 - **Shipping = supersession sweep, same session.** Update the design doc status header and close the bead, then `rg` the design name and its stage labels across `docs/` and the memory directory; fix or tombstone every stale hit. Status lives in one place per fact.
-- **IDs carry names — hook-enforced (`bare-id-guard.py`, its docstring is the spec).** In docs, CLAUDE.md, and memory prose, a bead ID or cross-doc section ref never appears without its human name: `BUG-xxxx (short name)`, `FILE.md §N (section name)`. Once per touched text is enough; commands and code blocks exempt. Migration is on-touch only — backlog visible via `--audit`.
+- **IDs carry names — hook-enforced (`bare-id-guard.py`, its docstring is the spec).** In docs, CLAUDE.md, and memory prose, a bead ID or cross-doc section ref never appears without its human name: `BUG-xxxx (short name)`, `FILE.md section N (section name)`. Once per touched text is enough; commands and code blocks exempt. Migration is on-touch only — backlog visible via `--audit`.
 - **Memory is rules, not history — hook-enforced (`memory-history-guard.py`).** No commit hashes or landed/shipped/closed stamps in memory files; status goes to beads or the board, history stays in git (the memory directory is its own git repo). Closed handoffs and shipped-work stories are deleted, not archived. Index lines are name + hook only.
-- **Shared checkout: commit with a pathspec, never the index.** `git commit -m '…' -- <paths>`, always. New files get `git add -- <exact paths>` first. Never `add -A`, never `add .`. Mechanics: `.claude/GIT_TREE_DISCIPLINE.md` §3b.
-- **`main` is the merge-based trunk.** Work on `wave/`/`lane/`/`feat/` branches. Land by fetch, merge `origin/main` into the branch, rerun the gate, `git merge --no-ff` to main, push. Never cherry-pick or re-commit content that exists on a live branch; never delete a branch until `git merge-base --is-ancestor <tip> origin/main` passes. `branch -f main` and force-push to main are anti-patterns (hook asks). Full protocol: `.claude/GIT_TREE_DISCIPLINE.md` §2.
+- **Shared checkout: commit with a pathspec, never the index.** `git commit -m '…' -- <paths>`, always. New files get `git add -- <exact paths>` first. Never `add -A`, never `add .`. Mechanics: `.claude/GIT_TREE_DISCIPLINE.md` section 3b.
+- **`main` is the merge-based trunk.** Work on `wave/`/`lane/`/`feat/` branches. Land by fetch, merge `origin/main` into the branch, rerun the gate, `git merge --no-ff` to main, push. Never cherry-pick or re-commit content that exists on a live branch; never delete a branch until `git merge-base --is-ancestor <tip> origin/main` passes. `branch -f main` and force-push to main are anti-patterns (hook asks). Full protocol: `.claude/GIT_TREE_DISCIPLINE.md` section 2.
 - **Agent worktrees come from the slot ring only — hook-enforced.** `scripts/agent-worktree.py acquire <task-label> <branch> [--tip REF]`, one per workstream. `POOL FULL` is a loud stop. Verify the base tip before working (a reused slot can sit behind main); release the slot at session end. Main-checkout edit exemptions and everything denied: `worktree-guard.py` docstring is the source of truth.
 
 ## Two-thread model
@@ -63,7 +63,7 @@ The content thread owns `PlaybackEngine`, `EditingService`, `ContentPipeline`, a
 | `manifold-native` | Native plugin FFI (`DepthEstimator`, `BlobDetector`) |
 | `manifold-profiler` | Profiling and instrumentation |
 | `manifold-led` | DMX/Art-Net LED output |
-| `manifold-audio` | Audio capture behind one `CaptureBackend` trait → lock-free ring + off-RT analysis worker (`docs/AUDIO_INFRASTRUCTURE.md` §11, `docs/AUDIO_MODULATION_DESIGN.md`) |
+| `manifold-audio` | Audio capture behind one `CaptureBackend` trait → lock-free ring + off-RT analysis worker (`docs/AUDIO_INFRASTRUCTURE.md` section 11, `docs/AUDIO_MODULATION_DESIGN.md`) |
 | `manifold-app` | winit entry, Application, ContentThread, ContentPipeline |
 
 Dependencies: `foundation` and `gpu` have none; `core` depends only on `foundation`. `editing`/`playback`/`io` depend on `core`. **`ui` depends only on `foundation`, not `core`** — UI-reachable shared types go in `foundation`. `renderer` depends on `core`+`gpu`+`native`+`playback`+`ui`; `media` on `core`+`playback`+`gpu`; `led` on `gpu`; `app` on all.
@@ -122,14 +122,14 @@ Write code directly in the main context by default; spawn agents only for genuin
 
 | Doc | When to read |
 |---|---|
-| `docs/DESIGN_AUTHORING.md` | Before any design session; §10 for bug hunts |
-| `docs/DESIGN_DOC_STANDARD.md` | Contract for design docs — §5–§6 before executing a phase, whole before authoring |
+| `docs/DESIGN_AUTHORING.md` | Before any design session; section 10 for bug hunts |
+| `docs/DESIGN_DOC_STANDARD.md` | Contract for design docs — section 5–section 6 before executing a phase, whole before authoring |
 | `docs/MANIFOLD_GPU_ARCHITECTURE.md` | GPU, effects, generators, textures, compute, uniform layout |
 | `docs/VSYNC_AND_FRAME_PACING.md` | Frame pacing, display links, presentation |
 | `docs/ADDING_EFFECTS_AND_GENERATORS.md` | Adding effects or generators |
 | `docs/DEVELOPMENT_REFERENCE.md` | Texture formats, math gotchas, module layout |
 | `docs/NODE_GRAPH_SYSTEM.md` | Node-graph architecture |
-| `docs/NODE_CATALOG.md` | Source of truth for what nodes exist; first read for the §2.5 audit |
+| `docs/NODE_CATALOG.md` | Source of truth for what nodes exist; first read for the section 2.5 audit |
 | `docs/DECOMPOSING_GENERATORS.md` | Any decomposition work — mandatory first read |
 | `docs/GROUPING_GRAPHS.md` | Before grouping any preset |
 | `docs/NODE_GROUPS_DESIGN.md` | Node-group mechanics + JSON schema |

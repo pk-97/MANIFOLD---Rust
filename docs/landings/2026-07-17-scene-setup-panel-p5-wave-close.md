@@ -1,6 +1,6 @@
 # SCENE_SETUP_PANEL_DESIGN.md P5 — landed 2026-07-17 @ 624be19a (wave close)
 
-**Branch:** wave/scene-setup-panel · **Level reached:** L3 (scripted UI-flow interaction, real held-out asset merge in P4, direct testing of a shared-infra bug found while re-verifying this landing) / target L3 (§10)
+**Branch:** wave/scene-setup-panel · **Level reached:** L3 (scripted UI-flow interaction, real held-out asset merge in P4, direct testing of a shared-infra bug found while re-verifying this landing) / target L3 (section 10)
 **Doc status line (quoted verbatim):** SHIPPED (all phases P1–P5) 2026-07-17. P1 (column + discovery + Environment/Fog) + P2 (Objects section) + P3 (Lights + Camera sections) + P4 (Import Model merge, held-out warehouse+skull gate passed) + P5 (modifier stack: 3 splice commands + panel UI) all landed. Sonnet-executable, orchestrated overnight. BUG-193 (no object/light remove command), BUG-194 (vertex count not computable from def), BUG-195 (merge scale-sanity has no stored object radius, defaulted proxy), BUG-198 (headless `Key Z` doesn't reach Undo — found during P5, pre-existing harness gap) opened as honest escalations, not blocking.
 
 ## Gate results (verbatim)
@@ -15,7 +15,7 @@
 
 Command inverse-pair tests (9, `manifold-editing/src/commands/graph.rs`): insert at end/position-0/nested-group/refused-on-unparseable, remove middle/first/last, move-to-front/move-to-end — verified to genuinely exist and pass, all asserting byte-equal `def` after undo.
 
-Negative gates (§4): `rg "MutateProject|Arc<Mutex|Arc<RwLock" crates/manifold-ui/src/panels/scene_setup_panel.rs` → 0 hits; `rg "modifier" crates/manifold-core/` → only pre-existing beat-modifier vocabulary, 0 scene-modifier storage hits (the wire chain is the only home for the stack, confirmed); `layer.rs`/`ports.rs` untouched since P4's landing tip; no shader/runtime files touched across P5's diff.
+Negative gates (section 4): `rg "MutateProject|Arc<Mutex|Arc<RwLock" crates/manifold-ui/src/panels/scene_setup_panel.rs` → 0 hits; `rg "modifier" crates/manifold-core/` → only pre-existing beat-modifier vocabulary, 0 scene-modifier storage hits (the wire chain is the only home for the stack, confirmed); `layer.rs`/`ports.rs` untouched since P4's landing tip; no shader/runtime files touched across P5's diff.
 
 `graph_tool validate`/`fusion` on a post-splice def (`SceneStarter.json` + a Twist modifier): `OK`, `node.twist_mesh` correctly classified `pointwise` (fusable).
 

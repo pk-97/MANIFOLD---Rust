@@ -2,10 +2,10 @@
 
 **Status:** SHIPPED · P1 (`560c59fd`) + P2 (`390d58dc`) landed 2026-07-12, main · designed 2026-07-12 · Fable 5
 **Prerequisites:** none for P1 (render_scene P1–P3 shipped). P2 needs P1.
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5 (Phase briefs)–§6 before starting any phase.
-**Companions:** [RENDERING_INFRA_V2_DESIGN.md](RENDERING_INFRA_V2_DESIGN.md) §2 (the keystone framing this graduates) · [REALTIME_3D_DESIGN.md](REALTIME_3D_DESIGN.md) (§3 (Data model (committed)) already commits lazy `depth`/`world_normal` outputs; §10 records the memoryless rationale) · [CAMERA_AND_LENS_DESIGN.md](CAMERA_AND_LENS_DESIGN.md) (the oracle + lens the consumers read) · [CINEMATIC_POST_DESIGN.md](CINEMATIC_POST_DESIGN.md) (the consumers) · [PERF_BUDGET_GATE_DESIGN.md](PERF_BUDGET_GATE_DESIGN.md) (owns the bandwidth measurement)
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 before starting any phase.
+**Companions:** [RENDERING_INFRA_V2_DESIGN.md](RENDERING_INFRA_V2_DESIGN.md) section 2 (the keystone framing this graduates) · [REALTIME_3D_DESIGN.md](REALTIME_3D_DESIGN.md) (section 3 (Data model (committed)) already commits lazy `depth`/`world_normal` outputs; section 10 records the memoryless rationale) · [CAMERA_AND_LENS_DESIGN.md](CAMERA_AND_LENS_DESIGN.md) (the oracle + lens the consumers read) · [CINEMATIC_POST_DESIGN.md](CINEMATIC_POST_DESIGN.md) (the consumers) · [PERF_BUDGET_GATE_DESIGN.md](PERF_BUDGET_GATE_DESIGN.md) (owns the bandwidth measurement)
 
-The keystone decision of the cinematic cluster (RENDERING_INFRA_V2 §2): scene
+The keystone decision of the cinematic cluster (RENDERING_INFRA_V2 section 2): scene
 depth today is memoryless MSAA tile memory that never reaches RAM — one line,
 `depth.setStoreAction(MTLStoreAction::DontCare)` at
 `crates/manifold-gpu/src/metal/encoder.rs:764`. Storing it unlocks depth of
@@ -18,7 +18,7 @@ lighting and effects on them"* — hero-object scenes where per-pixel depth
 feeds focus pulls and contact shading.
 
 **What this does NOT reopen:** the depth-aware two-pass compositor, rejected
-by name in REALTIME_3D §10 and re-rejected in RENDERING_INFRA_V2. Storing
+by name in REALTIME_3D section 10 and re-rejected in RENDERING_INFRA_V2. Storing
 depth ≠ compositing renderers: the outputs designed here are post-process
 inputs for ONE `render_scene`'s image, not a cross-renderer depth exchange.
 
@@ -33,7 +33,7 @@ look at them"*).
 | Piece | Where | State |
 |---|---|---|
 | Memoryless MSAA color+depth, resolve-out color only | `render_scene.rs:384-408` (`ensure_msaa_targets`, `create_texture_msaa_memoryless`), `encoder.rs:733-804` (`draw_instanced_depth_msaa_batch`: color `MultisampleResolve`, depth `DontCare`) | The seam. Extend, don't redesign |
-| Lazy G-buffer outputs precedent: `render_mesh` `world_pos`/`world_normal` — output rendered ONLY when wired (`ctx.outputs.texture_2d(..)` is `None` unwired) | `render_3d_mesh.rs:87,358-361,568-591` | The lazy rule, already named by REALTIME_3D §3 for render_scene |
+| Lazy G-buffer outputs precedent: `render_mesh` `world_pos`/`world_normal` — output rendered ONLY when wired (`ctx.outputs.texture_2d(..)` is `None` unwired) | `render_3d_mesh.rs:87,358-361,568-591` | The lazy rule, already named by REALTIME_3D section 3 for render_scene |
 | Per-output texture format override | `EffectNode::output_format`, `effect_node.rs:840`; pool keyed `(PortType, format)` `metal_backend.rs:78`; plan carries `resource_format` `execution_plan.rs:177` | Depth output declares `R32Float` with zero new infra |
 | Per-object model matrices composed CPU-side each frame | `render_scene.rs:879-899` | Previous-frame matrices = a `Vec` kept on the node (velocity, P2) |
 | Function constants in manifold-gpu | `docs/MANIFOLD_GPU_ARCHITECTURE.md` (function-constant pipeline specialization); `manifold-gpu-architecture` memory | Pipeline variant control for velocity (P2) |
@@ -41,7 +41,7 @@ look at them"*).
 | MSAA depth resolve API | nowhere in manifold-gpu | Genuinely new: depth resolve attachment + filter (P1); MRT color attachment (P2) |
 
 Binding constraints: hot path — this is per-frame GPU bandwidth, THE cost
-(§2 honest-cost); thread — none (all content-thread GPU encoding);
+(section 2 honest-cost); thread — none (all content-thread GPU encoding);
 persistence — none (outputs are wire textures; wiring serializes as ordinary
 graph JSON); performance surface — indirect (the consumers are the
 performable part, CINEMATIC_POST).
@@ -50,7 +50,7 @@ performable part, CINEMATIC_POST).
 
 **D1 — Lazy, not always-store.** `render_scene` grows output ports `depth`
 (P1) and `velocity` (P2), *rendered only when wired* — the `render_mesh`
-lazy rule, which REALTIME_3D §3 already commits for render_scene
+lazy rule, which REALTIME_3D section 3 already commits for render_scene
 (*"Outputs: color, plus lazy depth / world_normal … same lazy rule as
 render_mesh"*). An unwired scene must not pay one byte of new bandwidth
 (invariant I1). Rejected: always-store with a global toggle — pays the
@@ -132,7 +132,7 @@ plain node state (first frame: prev = current → zero velocity, correct).
 atoms write positions per frame) contribute NO per-vertex motion — a
 deforming surface blurs only by its rigid transform + camera. Fixing that
 requires previous-frame vertex positions (deform runs twice or caches
-output — RENDERING_INFRA_V2 §2 names the unmeasured cost); it is Deferred
+output — RENDERING_INFRA_V2 section 2 names the unmeasured cost); it is Deferred
 with its trigger, not silently absorbed. Pipeline variants: velocity write
 is a **function constant** (`EMIT_VELOCITY`), cache key grows to
 `(MaterialKind, velocity_on)` — 8 entries max, no shader-file fork.
@@ -175,7 +175,7 @@ scene. Velocity's rigid-only honesty is D5's.
 **Entry state:** tip carries CAMERA_AND_LENS P1 (`Camera::project_to_pixel`
 exists — the gate needs it). Re-verify anchors: `encoder.rs:733` batch fn,
 `render_scene.rs:384` msaa targets, `effect_node.rs:840` `output_format`.
-**Read-back:** this doc §2 D1–D4; REALTIME_3D §10 (why memoryless — restate
+**Read-back:** this doc section 2 D1–D4; REALTIME_3D section 10 (why memoryless — restate
 why this design doesn't reopen the compositor); `render_3d_mesh.rs:358-361`
 lazy-output shape; `encoder.rs:721-804` end-to-end.
 **Deliverables:**
@@ -203,7 +203,7 @@ an extra geometry pass · touching `render_mesh`'s private G-buffer path.
 
 **Entry state:** P1 landed. Re-verify: pipeline cache keying in
 `render_scene.rs` (`pipelines: AHashMap<MaterialKind, _>` at :206), function
-constants exist in manifold-gpu (`MANIFOLD_GPU_ARCHITECTURE.md` §function
+constants exist in manifold-gpu (`MANIFOLD_GPU_ARCHITECTURE.md` section function
 constants — re-read, don't recall).
 **Read-back:** this doc D5; `render_scene.wgsl` `vs_main` whole;
 FREEZE_COMPILER_MAP is NOT in scope (render nodes are compiler-exempt IO —
@@ -232,7 +232,7 @@ attempting deform-atom velocity (Deferred, trigger below).
 4. Near/far reach consumers on the Camera wire; one shared linearize
    helper (D4).
 5. Velocity = camera + rigid motion v1, function-constant variant (D5).
-6. Depth-aware cross-renderer compositing stays rejected (REALTIME_3D §10).
+6. Depth-aware cross-renderer compositing stays rejected (REALTIME_3D section 10).
 
 ## 6. Deferred
 
@@ -242,7 +242,7 @@ attempting deform-atom velocity (Deferred, trigger below).
 - **`world_normal` MRT output** — trigger: SSR design, or SSAO quality
   escalation after Peter sees reconstructed-normal AO on a real scene.
 - **MetalFX temporal upscaling / RT denoise inputs** — post-release
-  (RENDERING_INFRA_V2 §9); they consume exactly the depth+velocity ABI this
+  (RENDERING_INFRA_V2 section 9); they consume exactly the depth+velocity ABI this
   doc ships, which is why the formats are committed now.
 - **render_mesh depth output parity** — trigger: anyone wiring DoF onto the
   single-object renderer; same D2/D3 recipe, separate small phase.

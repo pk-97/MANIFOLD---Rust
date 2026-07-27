@@ -1,12 +1,12 @@
 # Multi-Display / Totem Canvas Model
 
-**Status: IN PROGRESS — P1 built + merged (2026-07-03, commit `0cb5114f`). §6.1a hardening addendum resolved 2026-07-06 (per-island state seam committed: isolation by chain-runtime instance, seam brief in §6.1a) — P2 is RE-ISSUABLE. P3–P5 not implemented.** Written 2026-07-02 (Fable). **v2, same
+**Status: IN PROGRESS — P1 built + merged (2026-07-03, commit `0cb5114f`). section 6.1a hardening addendum resolved 2026-07-06 (per-island state seam committed: isolation by chain-runtime instance, seam brief in section 6.1a) — P2 is RE-ISSUABLE. P3–P5 not implemented.** Written 2026-07-02 (Fable). **v2, same
 day:** the v1 "render the gaps" pixel canvas was rejected by Peter — a super-wide stage
 must not spend its frame budget on invisible air. v2 replaces it with the island atlas
 model. Execution is a Sonnet apply pass — every decision needed is in here; don't
-reopen §11.
+reopen section 11.
 **Prerequisites: none. P1–P3 unblock PROJECTION_MAPPING and LED_STRIPS P2 (`docs/DESIGN_BUILD_ORDER.md`).**
-**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5 (Phase briefs)–§6 and §8 before starting any phase.**
+**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 and section 8 before starting any phase.**
 
 The driving use case: two vertical LED totems on stage, meters apart. Content chases
 between them, bounces off them, crosses the gap — the physical setup is part of the
@@ -77,7 +77,7 @@ So:
   pass structure, containing only display pixels plus small gutters (16px) between
   regions. Gaps between islands are never allocated and never rendered.
 - **The stage is a coordinate frame, not pixels.** Physical positions exist as data
-  (mm, in the layout uniform §7) — content computes with them; nothing rasterizes air.
+  (mm, in the layout uniform section 7) — content computes with them; nothing rasterizes air.
 
 Rejected alternatives, for the record:
 
@@ -92,8 +92,8 @@ Rejected alternatives, for the record:
 
 ### D3 — Everything is derived, never authored
 
-From the stage layout (§5) the engine derives: island clustering, per-island pixel
-density (native density of its densest display, optionally capped per island §9),
+From the stage layout (section 5) the engine derives: island clustering, per-island pixel
+density (native density of its densest display, optionally capped per island section 9),
 atlas packing (region rects + gutters), each output's source region, and the layout
 uniform. The user never sees the atlas, px/mm, crops, or packing. Move a totem →
 everything re-derives. Re-derivation is per-action (may reallocate render targets),
@@ -120,7 +120,7 @@ a per-layer toggle with two values:
 
 On a single island the two are identical, so single-display users never see the
 concept. Effects on a layer follow the layer's domain trivially because effects always
-run island-locally (§6.1).
+run island-locally (section 6.1).
 
 This is a `Layer` field + UI toggle, mutated through `EditingService` like everything
 else.
@@ -139,7 +139,7 @@ The mental model is **macOS display arrangement, on a stage plan, in real units*
   (subtle shared outline). The gap you leave between islands is the *real* gap — enter
   it numerically or drag until the readout matches the stage measurement.
 - Rotation per placement: 0/90/180/270. Vertical totems are usually landscape panels
-  rotated; rotation applies in the output blit (§6.2), not in content.
+  rotated; rotation applies in the output blit (section 6.2), not in content.
 - Live readout: total rendered pixels (sum of islands — dragging displays *apart*
   never changes it) + per-island resolutions.
 - **Test patterns + Identify (v1, non-negotiable):** per-output grid, focus chart,
@@ -168,7 +168,7 @@ one venue profile. Committed interaction pattern:
   dock panels (splits one physical stage across three UIs).
 - Scope: this amends the *surface home* only. PROJECTION_MAPPING's and LED_STRIPS'
   data models, math, and phasing are untouched; those docs carry matching addenda.
-  APP_SHELL §8's slot rows are updated to match.
+  APP_SHELL section 8's slot rows are updated to match.
 
 ### Data model
 
@@ -247,12 +247,12 @@ Consequences, stated honestly:
   islands (6+ totem stages) will want the pointwise-fusion path to collapse per-island
   loops into single atlas-wide dispatches for pointwise nodes; that's the existing
   fusion-compiler direction, noted as the optimization escape hatch, not v1.
-- **Stateful effect state is isolated per island** — mechanism committed in §6.1a
+- **Stateful effect state is isolated per island** — mechanism committed in section 6.1a
   (2026-07-06): per-`(layer, island)` chain-runtime instances, NOT a StateStore key
   change. Per-island feedback/trails are semantically correct (physically separate
   surfaces). Reset paths must walk both caches per the existing two-cache rule — now
   across all of a layer's island entries.
-- Layer domain (§4) enters as the content coordinate mapping per island: Stage domain
+- Layer domain (section 4) enters as the content coordinate mapping per island: Stage domain
   = island's stage window drives generator coordinates / clip placement; Every-display
   domain = island-local 0–1. Pointwise/compositing behavior is identical either way.
 
@@ -319,7 +319,7 @@ the atlas. P2 does not touch `led_main`, `led_master_ec`, `led_group_*`, or
 `LED_MASTER_OWNER_KEY`. Single-island projects (including every current LED project)
 stay byte-identical under the existing P2 gate. The combination *multi-island stage
 layout + LED output* is *out of contract until P6* (LED strips become placements,
-§10 P6): P2 emits one loud `log::warn` at stage-activation when both are present —
+section 10 P6): P2 emits one loud `log::warn` at stage-activation when both are present —
 announced, not silent, not per-frame. This matches the doc's own phasing; pulling
 LED into the atlas loop now would redesign a path P6 replaces anyway.
 
@@ -347,7 +347,7 @@ impl Island {
 }
 ```
 
-### Seam brief — P2 state seam (old → new, per DESIGN_DOC_STANDARD §6)
+### Seam brief — P2 state seam (old → new, per DESIGN_DOC_STANDARD section 6)
 
 All in `layer_compositor.rs`; every map's companion `*_last_used_frame` map widens
 identically. Screen path only — the four `led_*` fields are explicitly NOT in this
@@ -362,7 +362,7 @@ table (B3).
 
 Layer buffers widen with the chains because they are the chains' canvases: a chain
 instance processes a whole texture at `PresetContext` dims (today's semantics, zero
-node changes — §6.1's entire point), so each island's instance gets an island-sized
+node changes — section 6.1's entire point), so each island's instance gets an island-sized
 buffer and the composite scissors it into the atlas region. Precedent for
 non-full-res chains driven by context dims: the LED master chain already
 auto-allocates at half-res via `ensure_buffers` (`layer_compositor.rs:449-452`).
@@ -398,10 +398,10 @@ the two `led_group_*` fields.
   semantically required — the islands show different pixels — but it is real cost
   (2–4× worst case at 2–4 islands). First-frame pipeline/instance warm-up per island
   falls under the existing prewarm rule (BUG-037 (glp-first-render-stall) sibling rule in
-  DESIGN_DOC_STANDARD §5).
+  DESIGN_DOC_STANDARD section 5).
 - `render()` (`layer_compositor.rs:2128`) is not one canvas even today — fixed main
   composite + tonemap + master chain + the independent LED path + the serial/parallel
-  CB split. The queue was right that §2's inventory understates this; this addendum
+  CB split. The queue was right that section 2's inventory understates this; this addendum
   and the P2 re-issue brief carry the corrected picture so the executor reads the
   real structure before the loop change.
 
@@ -431,7 +431,7 @@ never-unify-CVDisplayLinks rule: no vsync callback exists on this path at all.
 - **Preview:** the workspace preview composites island textures at their stage-plan
   positions over the panel background — the gap is literal empty UI, costing nothing.
   Placement outlines drawn on top. Perform HUD same. **Rehearsal view** (deferred,
-  §12) elevates this into an audience-eye mode — islands glowing in a dark stage,
+  section 12) elevates this into an audience-eye mode — islands glowing in a dark stage,
   fixtures rendered as points — so a show is authorable at home with zero hardware.
 
 ## 7. Display-aware content
@@ -482,7 +482,7 @@ completeness gate applies.
 | `node.stage_uv` | Stage UV | UV field in normalized stage space for the current island's window — the coordinate handle for Stage-domain looks in graphs that want it explicitly. |
 | `node.display_info` | Display Info | CPU/value node: counts, display or island N's center/size in mm and normalized stage space. Wire `islands[1].center` into an emitter → bounce between totems. |
 
-Cross-gap behavior needs no gap pixels — Stage domain (§4) plus these coordinates
+Cross-gap behavior needs no gap pixels — Stage domain (section 4) plus these coordinates
 cover it. Later sugar like layer→display routing is a preset over the same data, not a
 new mechanism.
 
@@ -496,7 +496,7 @@ extending the placement model to **DMX fixtures** (pars, strips, moving-head col
 puts lights on the same map: a fixture placement samples the Stage-domain composition
 at its physical position. A sweep crosses Totem L → the fixtures in the air between →
 Totem R. Visuals and lighting from one composition. For a small artist this replaces a
-lighting operator; lands with the LED unification phase (§10).
+lighting operator; lands with the LED unification phase (section 10).
 
 **Who each tier is for (Peter, 2026-07-02):** most clubs are console-owned DMX cables
 with no network — the house rig is physically unreachable (and club desks often can't
@@ -623,10 +623,10 @@ A projector placement is the **projected image** on the stage plan, not the proj
 meaningless for projectors and is skipped). Everything else is identical — a projected
 wall is an island like any panel. Consequence for priorities (Peter, 2026-07-02:
 projectors are the likely primary rig — cheap large surfaces for small-scale artists):
-**warp meshes and edge blending move to the front of the post-v1 queue** (§12).
+**warp meshes and edge blending move to the front of the post-v1 queue** (section 12).
 4-corner keystone in the v1 advanced flap covers a flat, square-ish throw only; real
 mapping (uneven surfaces, set pieces, overlapping projectors) needs warp + blend. The
-per-output stage in §6.2 is where both slot in — they are output transforms, invisible
+per-output stage in section 6.2 is where both slot in — they are output transforms, invisible
 to content, requiring no change to islands or domains.
 
 ## 8. What it buys on stage
@@ -637,7 +637,7 @@ to content, requiring no change to islands or domains.
 - Alternate-totem strobe = Display Mask × LFO. Chase = anything driven by Display Info
   centers. Mirrored totems = flip the layer to Every-display.
 - Rearrange the venue, drag the stage view to match, content adapts — no re-authoring.
-- Plug-in at the venue is two clicks (identity re-matching, §5), not a mapping session.
+- Plug-in at the venue is two clicks (identity re-matching, section 5), not a mapping session.
 - A super-wide stage is free: cost follows the hardware you own, not the meters
   between it.
 
@@ -646,7 +646,7 @@ to content, requiring no change to islands or domains.
 - **Pixel work = sum of display pixels.** Two portrait 1080×1920 totems ≈ 4.1MP ≈ 2×
   1080p — regardless of whether they're 1m or 40m apart. (The rejected v1 model hit
   14.5MP at native density for a 3m gap.)
-- **Dispatch overhead × island count** (§6.1). Two islands is noise; the fusion
+- **Dispatch overhead × island count** (section 6.1). Two islands is noise; the fusion
   compiler is the escape hatch for many-island stages. Baseline content render today
   is 4.5–5.5ms; the 4K-margin campaign owns the budget — this design's job is to keep
   cost proportional to owned hardware and visible in the stage view readout.
@@ -663,12 +663,12 @@ to content, requiring no change to islands or domains.
 
 Each phase lands alone, is testable alone, and doesn't break single-display flow.
 
-Entry state for every phase: re-verify the §2 anchors it touches (audited
+Entry state for every phase: re-verify the section 2 anchors it touches (audited
 2026-07-02). Forbidden across all phases: display links anywhere on the content
-path (never-unify rule — §6.2 has no vsync callback at all); software
+path (never-unify rule — section 6.2 has no vsync callback at all); software
 frame-locking; storing derived data (islands/packing are re-derived, never
-serialized — D3); shader changes for island support (§6.1's whole point is zero);
-`vec3` fields in any new uniform (alignment rule — vec4 only, §7.1).
+serialized — D3); shader changes for island support (section 6.1's whole point is zero);
+`vec3` fields in any new uniform (alignment rule — vec4 only, section 7.1).
 
 - **P1 — core model. ✅ BUILT + MERGED (2026-07-03, `0cb5114f`).** `stage.rs` +
   `derive_stage` (19 unit tests), 9 EditingService commands, `.manifoldvenue`
@@ -680,28 +680,28 @@ serialized — D3); shader changes for island support (§6.1's whole point is ze
   `stage.rs` (StageLayout, DisplayPlacement, identity, OutputId),
   `derive_stage` + unit tests (clustering/snap, rotation, packing, density, empty
   layout = legacy single island), serde defaults, EditingService commands, venue-file
-  export/import (it's serialization — lands here). Read-back: §3, §5 whole. Gate:
+  export/import (it's serialization — lands here). Read-back: section 3, section 5 whole. Gate:
   derive_stage unit tests; empty-layout project loads and renders byte-identically
   (existing tests green); `cargo test -p manifold-core --lib`.
-- **P2 — island rendering (re-issued against §6.1a).** Atlas render target,
-  per-island scissored execution loop, per-island chain-runtime instances (§6.1a B1
+- **P2 — island rendering (re-issued against section 6.1a).** Atlas render target,
+  per-island scissored execution loop, per-island chain-runtime instances (section 6.1a B1
   — NOT a StateStore key change), `IslandId`, layer `spatial_domain` field (Stage |
-  EveryDisplay) + coordinate mapping, the one-shot multi-island+LED warning (§6.1a
-  B3). Read-back: §6.1 + §6.1a whole (including the corrected state inventory and
+  EveryDisplay) + coordinate mapping, the one-shot multi-island+LED warning (section 6.1a
+  B3). Read-back: section 6.1 + section 6.1a whole (including the corrected state inventory and
   the honest `render()` structure note) + `feedback_effect_chain_state_caches`
   (reset walks BOTH caches, now across a layer's island entries) +
-  `feedback_state_capture_is_per_port`. Seam: §6.1a's table governs — re-derive
+  `feedback_state_capture_is_per_port`. Seam: section 6.1a's table governs — re-derive
   with its command before touching; escalate on surprises. Forbidden: touching
   `StateStore`'s key type or `PresetContext::owner_key` semantics; scissoring one
   shared chain across islands; touching any `led_*` field. Gate: **single-island
   path provably identical to today — headless PNG diff over the bundled presets,
-  zero diffs**; §6.1a's negative gate (no bare-`LayerId` chain map on the screen
+  zero diffs**; section 6.1a's negative gate (no bare-`LayerId` chain map on the screen
   path); full workspace sweep (graph runtime = infrastructure).
 - **P3 — multi-output present.** Surface vec + in-flight counters + non-blocking
   acquire; per-output blit with region/rotation/trim/keystone; attach/detach; output
   window creation per placement ("Output" menu); identity matching + unassigned
   state; test patterns + Identify (they need output windows — land here). Read-back:
-  §6.2 whole, `content_pipeline.rs` direct-present block. Seam: `output_surface:
+  section 6.2 whole, `content_pipeline.rs` direct-present block. Seam: `output_surface:
   Option<GpuSurface>` → the vec — re-derive call sites with `rg -n 'output_surface'
   crates/manifold-app/` first; the old field is deleted, negative gate `rg -c
   'output_surface' crates/manifold-app/` = 0 after. Forbidden: blocking
@@ -709,14 +709,14 @@ serialized — D3); shader changes for island support (§6.1's whole point is ze
   Gate: two windows on one Mac (external monitor), skew accepted; single-output
   projects present exactly as before; full workspace sweep (present path = infra).
 - **P4 — stage uniform + primitives.** StageUniform into frame globals +
-  `wgsl_compute`; the three atoms with full descriptors (§7.2 — completeness gate
-  applies). Read-back: §7.1–7.2, `node_graph/effect_node.rs` (FrameTime carrier),
+  `wgsl_compute`; the three atoms with full descriptors (section 7.2 — completeness gate
+  applies). Read-back: section 7.1–7.2, `node_graph/effect_node.rs` (FrameTime carrier),
   `feedback_wgsl_vec3_alignment`. Forbidden: fusing the three atoms into one
   "stage info" monolith. Gate: gpu_tests for mask/stage_uv (value-level: exact rect
   edges), display_info plain unit test; focused `manifold-renderer` lib tests.
 - **P5 — stage view UI.** Arrangement panel (drag, snap-to-island with visible merge,
   numeric fields, EDID prefill, rotation, live pixel readout, assign picker), advanced
-  flap (keystone, trim, density cap). Read-back: §5 UX whole; existing panel/scroll
+  flap (keystone, trim, density cap). Read-back: section 5 UX whole; existing panel/scroll
   infra (inventory first — `ScrollContainer`, chrome panels). Gate: headless PNG
   verification (`reference_ui_headless_png_verification`); stage edits are undoable
   commands (test undo/redo round-trip).
@@ -745,7 +745,7 @@ Full workspace test sweep gates P2 and P3 (graph runtime + present path = infra)
    performer-facing concept; invisible on single-display projects.
 5. Effects execute per-island with viewport scissor — today's shader semantics, zero
    shader changes; state isolated per island (mechanism committed 2026-07-06 in
-   §6.1a: per-island chain-runtime instances, StateStore key untouched). Cross-gap
+   section 6.1a: per-island chain-runtime instances, StateStore key untouched). Cross-gap
    neighborhood bleed is intentionally impossible; abutting continuity is preserved
    by island merging.
 6. Stage view = macOS-display-arrangement mental model, real units, EDID prefill,
@@ -774,8 +774,8 @@ Full workspace test sweep gates P2 and P3 (graph runtime + present path = infra)
 ## 12. Open (deferred, not blocking)
 
 - **Warp meshes + edge blending — FIRST post-v1 item** (raised from the bottom of this
-  list per §7.4: projectors are the likely primary rig). Output-stage transforms in
-  §6.2; no impact on islands/domains. **Designed: `docs/PROJECTION_MAPPING_DESIGN.md`**
+  list per section 7.4: projectors are the likely primary rig). Output-stage transforms in
+  section 6.2; no impact on islands/domains. **Designed: `docs/PROJECTION_MAPPING_DESIGN.md`**
   (corner-pin/grid warp, masks, slices, blend; phases assume P1–P3 here).
 - **Camera-assisted auto-calibration** (after warp/blend exist as data): structured-
   light scan — project gray-code patterns, any camera watches, solve projector↔surface
@@ -783,7 +783,7 @@ Full workspace test sweep gates P2 and P3 (graph runtime + present path = infra)
   tech (MadMapper spatial scanner, TD CamSchnappr), no ML required. Optional tiers on
   top: depth/segmentation models for scene understanding (shares ML-nodes infra +
   existing `DepthEstimator`), phone LiDAR venue scan to auto-populate the stage plan.
-  Key property: calibration is a setup-time tool that *writes* the §6.2 data
+  Key property: calibration is a setup-time tool that *writes* the section 6.2 data
   structures — never a runtime path. Natural MCP-driven flow.
 - Pointwise-fusion of per-island loops into atlas-wide dispatches (many-island
   stages) — rides the existing fusion-compiler direction.
@@ -791,7 +791,7 @@ Full workspace test sweep gates P2 and P3 (graph runtime + present path = infra)
 - LED placement unification details (P6) — strip geometry on the stage plan.
 - Multi-island export composites (stage-plan-arranged proxy video for offline review).
 - **Rehearsal view** — audience-eye preview mode (islands + fixture points in a dark
-  stage); author a show with zero hardware. Builds on the §6.2 preview compositing.
+  stage); author a show with zero hardware. Builds on the section 6.2 preview compositing.
 - **Per-output frame delay** — hybrid rigs mix device latencies (projector ≈ 1–3
   frames, LED processors vary); a delay offset per output re-syncs them. Costs
   buffered frames per output, so post-v1 — but the advanced flap reserves the slot.

@@ -118,7 +118,7 @@ against its background level.
 
 ### 4.6 Accent + state colours
 One accent (the blue) used **sparingly and boldly** for active/selected. State colours
-(armed / on / warning) defined once. See §11 — never colour alone.
+(armed / on / warning) defined once. See section 11 — never colour alone.
 
 ### 4.7 Honest caveat: contrast steps, not brightness
 "High contrast" for a live tool means clearly *distinct levels*, not a *bright* UI. Keep the
@@ -192,7 +192,7 @@ Goal: every card identical and calm; clutter hidden until wanted; modulation leg
   text entry.
 - **The handle + number already track the live post-modulation value** (`param_values` via
   `sync_values`), so "value rides" is *done*. The open gap is marking the *base setpoint* while
-  modulated — see §11.
+  modulated — see section 11.
 
 ### 6.3 Mockups (rough — spacing tuned in the real renderer)
 
@@ -321,7 +321,7 @@ card thrown away each frame) and removed a per-frame allocation. Shipped.
 - The always-visible **E / → / A** button trio on every param (→ into the drawer).
 - The **repeated full audio-mod panels** shown per param (→ collapsed by default).
 - **Ragged right-aligned labels** and **mismatched per-card headers**.
-- **Knobs as a control idea** — explicitly rejected (see §10).
+- **Knobs as a control idea** — explicitly rejected (see section 10).
 
 ---
 
@@ -338,7 +338,7 @@ From the screenshots reviewed (Resolume Arena, DaVinci Resolve, Blender, Ableton
   → our collapsed card header.
 - **Blender / Resolve — drag-scrub number fields** (drag or type). → reclaims slider width.
 - **Resolume — Dashboard layout** (a compact macro row) for the Macros section —
-  *layout* idea only, **not** the knobs (see §10).
+  *layout* idea only, **not** the knobs (see section 10).
 
 **Parked for later:** Blender's vertical icon tab-rail (right edge) — only worth it if
 inspector scopes multiply past Clip/Layer/Group/Master.
@@ -413,12 +413,12 @@ Not in most desktop checklists — these are ours because the tool is played liv
 **Open:**
 - **Which params (if any) are switched *live*?** Those stay segmented (one-click); everything
   else becomes a dropdown. Best guess: Feature/Band/Source/Mode are all set-once → all dropdowns.
-- **Clip Trigger** — keep as an aligned toggle row, or move to a card-settings area? (§6.4)
+- **Clip Trigger** — keep as an aligned toggle row, or move to a card-settings area? (section 6.4)
 - **Base setpoint marking** while a param is modulated — the handle rides live, so the value you
   *set* isn't shown cleanly. Worth a subtle base tick / hover-reveal.
 - **"Modulated-only" view** — optional per-layer filter to audit just audio-driven params (idea,
   not committed).
-- ~~Exact token values (grey ramp steps, radii, spacing) — §4 is a proposal to lock.~~ **Locked
+- ~~Exact token values (grey ramp steps, radii, spacing) — section 4 is a proposal to lock.~~ **Locked
   in Phase 3** (13/22/31/42 ramp, 3px/5px radius, 4/8/12/16/24 spacing); tunable in one file.
 - Whether to match transport/footer heights exactly or keep a deliberate ratio.
 
@@ -444,12 +444,12 @@ Not in most desktop checklists — these are ours because the tool is played liv
 5. **Redesign the generic card** ✅ — landed once in `panels::param_card` (hits all cards). Shipped
    as five passes: **5a** card radius token + toggle on the kit; **5b** left-align labels; **5c**
    Collapse-all / Expand-all control (new cards stay expanded); **5d** toggle/trigger rows aligned
-   to the slider grid (§6.4); **5e** tabbed modulation config drawer, one-click arm kept (§6.2).
+   to the slider grid (section 6.4); **5e** tabbed modulation config drawer, one-click arm kept (section 6.2).
    Grounding showed most of the original list already existed (reset = right-click, glance badge =
    header chips, type-in = Phase 2b, per-slider drawers), so Phase 5 was the genuine deltas. Static
    checks pass each pass (param_card tests incl. golden + 3 new tabbed tests; clippy). **Still needs
    the running-app eyeball** — the renderer is custom, can't screenshot here.
-6. **Modulation-drawer follow-ups (§6.5) — ✅ Phase 6 COMPLETE 2026-06-24.**
+6. **Modulation-drawer follow-ups (section 6.5) — ✅ Phase 6 COMPLETE 2026-06-24.**
    **6a** ✅ renamed modulators (Trigger / LFO / Audio; arm T / waveform-icon / A; chips TRG / LFO).
    **6b** ✅ global compact toggle (⚙ in the tab strip) hides every card's mod drawers while mods
    stay armed; per-row ▾ deferred (not requested).
@@ -478,9 +478,9 @@ column-alignment test replaced the running-app eyeball gate). The rules below ar
 every spatial constant in the UI.
 
 ### 14.1 The problem (grounded)
-The scale was locked in Phase 3 (§4.2) but **the layout code never consumed it.** A parallel
+The scale was locked in Phase 3 (section 4.2) but **the layout code never consumed it.** A parallel
 set of hand-picked magic numbers lives in the panel files, most of them *off* the 4px grid.
-Same disease for radius (§4.3 tokens exist; raw `corner_radius: 1.0/2.0/4.0/7.0/8.0` literals
+Same disease for radius (section 4.3 tokens exist; raw `corner_radius: 1.0/2.0/4.0/7.0/8.0` literals
 scattered everywhere). The visible symptoms in the inspector:
 
 - **Insets nest, so columns stagger.** A section label starts at `CONTENT_PADDING_H` 8; an
@@ -495,7 +495,7 @@ scattered everywhere). The visible symptoms in the inspector:
   `CONTENT_PADDING_V`).
 
 This pass does **not** make the UI prettier in a taste sense (colour / hierarchy / density live
-in §4–§7). It removes the drift: same insets, same columns, same radii. That's the win.
+in section 4–section 7). It removes the drift: same insets, same columns, same radii. That's the win.
 
 ### 14.2 The eight rules
 
@@ -508,7 +508,7 @@ in §4–§7). It removes the drift: same insets, same columns, same radii. That
 3. **One affordance grid.** The inspector row is fixed columns:
    `[inset 8][label][slider flex][value][mod-icon lane][inset 8]`. The value+icon gutter is one
    fixed width, and section-header trailing controls right-align to the **same** gutter x.
-   (Resolve's right column, §9 — made literal.)
+   (Resolve's right column, section 9 — made literal.)
 4. **Three vertical gaps, max.** In-card row spacing **4**; between cards **8**; between major
    sections **12**. One owner per gap — `CARD_BOTTOM_MARGIN` → 0, the container owns the
    inter-card gap.
@@ -519,7 +519,7 @@ in §4–§7). It removes the drift: same insets, same columns, same radii. That
    **`CARD_RADIUS` 5**; chips/dots/small handles **`SMALL_RADIUS` 2**; popups **`POPUP_RADIUS` 6**.
    No raw literals. (Sub-pixel-thin overlay bars ≤6px wide may keep `1.0` as a documented hairline
    exception — eyeball call.)
-7. **Hit target ≠ draw width** (carry-over from §11). Snapping draw sizes never shrinks a grab
+7. **Hit target ≠ draw width** (carry-over from section 11). Snapping draw sizes never shrinks a grab
    zone below the Fitts floor.
 8. **Tokens, not local copies.** Per-file constants (`LH_BTN_RADIUS`, `SECTION_RADIUS`,
    `CELL_RADIUS`, `LAYER_CTRL_PADDING`, …) become thin aliases onto the global tokens, or are
@@ -527,7 +527,7 @@ in §4–§7). It removes the drift: same insets, same columns, same radii. That
 
 ### 14.3 Constant → token map (inspector — the pain)
 
-> **⚠️ §2.5 audit correction (2026-06-25, Phase 3).** The eight `inspector_layout::*` rows below
+> **⚠️ section 2.5 audit correction (2026-06-25, Phase 3).** The eight `inspector_layout::*` rows below
 > were **dead** — a Unity-port leftover (`InspectorLayout.cs`) the live inspector grew past;
 > nothing in the workspace referenced `inspector_layout::`. **The whole module was deleted in
 > Phase 3.** The rows are kept here only to record that the map pointed at the wrong code. The
@@ -586,22 +586,22 @@ in §4–§7). It removes the drift: same insets, same columns, same radii. That
 ### 14.5 Build order
 
 - **A — Spec & freeze (this section).** ✅ no code; the maps above are the freeze.
-- **B — Spacing snap (mechanical, low-risk).** ✅ 2026-06-25. Tokenised the live §14.4 spacing
+- **B — Spacing snap (mechanical, low-risk).** ✅ 2026-06-25. Tokenised the live section 14.4 spacing
   constants onto `SPACE_*` (`param_slider_shared`, `header`, `transport`, `footer`, `layer_header`);
-  value changes: section-header 22→24, chrome gaps 6/5/3 → 4, card header 27.5→28. The §14.3
-  `inspector_layout` rows turned out **dead and were deleted** (see §14.3 correction). Deferred the
+  value changes: section-header 22→24, chrome gaps 6/5/3 → 4, card header 27.5→28. The section 14.3
+  `inspector_layout` rows turned out **dead and were deleted** (see section 14.3 correction). Deferred the
   `EFFECT_CONTAINER_SPACING`/`CARD_BOTTOM_MARGIN` gap pair (→E). All golden-layout oracles green.
 - **B′ — Radius snap (sibling of B).** ✅ 2026-06-25. All 53 raw `corner_radius`/`.radius()`
   literals → radius tokens; local copies (`SECTION_RADIUS`, `LH_BTN_RADIUS`) aliased/inlined. Added
   `HAIRLINE_RADIUS` (1px) as the named rule-6 hairline exception for thin bars/tracks/fills. One
-  survivor: a `// design-token-exempt:` circular status dot. **§16 RADIUS_BASELINE lowered 53 → 0
+  survivor: a `// design-token-exempt:` circular status dot. **section 16 RADIUS_BASELINE lowered 53 → 0
   — the radius guard is now absolute.**
-- **C — Unify the inset.** ✅ 2026-06-25. The §14.3 map pointed at dead code; the live stagger was
+- **C — Unify the inset.** ✅ 2026-06-25. The section 14.3 map pointed at dead code; the live stagger was
   border-less chrome content (`PAD_H` 2) vs bordered card param labels (`BORDER 1 + PADDING 6` = 7),
   three different left edges. New token `color::SECTION_CONTENT_INSET` (`SPACE_M + 1px` border
   compensation) is the one column; `param_card::PADDING` 6→`SPACE_M` (card owns the canonical inset,
   `slider_w`/`label_width`/`cog_x` cascade from it); `master`/`layer`/`clip` chrome `PAD_H` 2→
-  `SECTION_CONTENT_INSET`. **Not** the §14.3-literal `SECTION_INSET`→0 — that erases the visible
+  `SECTION_CONTENT_INSET`. **Not** the section 14.3-literal `SECTION_INSET`→0 — that erases the visible
   section-card frame; keeping the frame and aligning *content* to one column is the right call. New
   test `param_label_column_aligns_to_section_inset` pins it on node bounds (no GPU). Visible change:
   chrome controls shift right ~7px to meet the card label column.
@@ -632,7 +632,7 @@ the columns are node bounds we can assert headlessly).
 
 ## 15. Semantic colour ramp 🎨
 
-**Status:** spec. The grey ramp (§4.1) fixed the *neutrals*. The *chromatic* state colours never
+**Status:** spec. The grey ramp (section 4.1) fixed the *neutrals*. The *chromatic* state colours never
 got the same treatment — they're the same pre-ramp muddle, one hue-step lower.
 
 ### 15.1 The problem (grounded in `color.rs`)
@@ -667,7 +667,7 @@ they never collide in one widget; the rule is consistent steps, not artificial c
 Collapses ~25 hand-picked constants → 7 hues × 3 steps. The old names persist as thin aliases
 onto the ramp (same approach as the grey re-point in Phase 3), so call sites don't churn.
 
-§11 still holds: **shape + colour, never colour alone** — the ramp makes hue consistent; armed
+section 11 still holds: **shape + colour, never colour alone** — the ramp makes hue consistent; armed
 state still also changes fill/icon.
 
 ---
@@ -676,7 +676,7 @@ state still also changes fill/icon.
 
 **Status:** BUILT (2026-06-25, Phase 2). **Highest-leverage item in this whole doc.**
 
-Tokens exist (§4) and still drift (§14, §15) because **nothing stops a raw literal.** That's why
+Tokens exist (section 4) and still drift (section 14, section 15) because **nothing stops a raw literal.** That's why
 the cleanup sections have to exist — and why they re-drift in weeks without a guard. A design
 *system* makes violations fail CI; right now they're only discouraged. This is the difference
 between a cleanup and a system.
@@ -694,7 +694,7 @@ A `manifold-ui` unit test that walks `src/**` and **fails** on:
 
 Cheap, deterministic, runs in the existing `cargo test -p manifold-ui --lib`. An allowlist
 comment (`// design-token-exempt: <reason>`) covers the rare honest exception (e.g. the ≤6px
-hairline bars in §14.2 rule 6). Once green, the system is *enforced*, not aspirational.
+hairline bars in section 14.2 rule 6). Once green, the system is *enforced*, not aspirational.
 
 ### 16.3 Built — the ratchet (Phase 2, 2026-06-25)
 [`crates/manifold-ui/tests/design_tokens.rs`](../crates/manifold-ui/tests/design_tokens.rs)
@@ -703,17 +703,17 @@ hairline bars in §14.2 rule 6). Once green, the system is *enforced*, not aspir
 `corner_radius:`/`.radius(` *numeric* literals (a `color::` token or computed expression starts with
 a letter, so it isn't flagged). `// design-token-exempt: <reason>` on a line clears it.
 
-Because colour (§15) and radii (§14 B′) aren't cleaned yet, a hard "zero raw literals" rule would
+Because colour (section 15) and radii (section 14 B′) aren't cleaned yet, a hard "zero raw literals" rule would
 fail today. So it's a **ratchet** keyed on per-category baselines (high-water marks):
 - count **rises above** baseline → fail (new drift — use a token or exempt it);
 - count **drops below** baseline → fail (a cleanup landed — *lower the baseline* to lock it in).
 
 So the number can only go down. **Baselines: `COLOR_BASELINE = 145` (still grandfathered, pending
-§15); `RADIUS_BASELINE = 0` (Phase 3 B′ tokenised all 53 — the radius guard is now absolute).**
-§15 drives the colour count down next. The classifier (detection
+section 15); `RADIUS_BASELINE = 0` (Phase 3 B′ tokenised all 53 — the radius guard is now absolute).**
+section 15 drives the colour count down next. The classifier (detection
 + exempt) is unit-tested directly (`classifier_detects_and_exempts`), so the guard's own logic is
-trusted, not just the baseline. Spacing-literal enforcement (§16.2 stretch) is deferred — noisier to
-detect; revisit after §14's spacing snap lands.
+trusted, not just the baseline. Spacing-literal enforcement (section 16.2 stretch) is deferred — noisier to
+detect; revisit after section 14's spacing snap lands.
 
 ---
 
@@ -725,8 +725,8 @@ detect; revisit after §14's spacing snap lands.
 read as *glued* to the panel; there's no language that says "this is above."
 
 **Fix — a 2-level elevation language:**
-- **Flat (in-panel):** the §4.1 fill ramp only, no border. Cards/sections separate by fill level,
-  as already decided (§4.4 "grouping = fill level, not boxes").
+- **Flat (in-panel):** the section 4.1 fill ramp only, no border. Cards/sections separate by fill level,
+  as already decided (section 4.4 "grouping = fill level, not boxes").
 - **Raised (floating):** one **`BORDER`** hairline token (collapse the 5 greys → one, ≈ `DIVIDER`
   56) **plus a single soft drop-shadow** under popovers/dropdowns/drawers. One shadow step, not a
   Material-style ramp — just enough to lift off the panel.
@@ -748,12 +748,12 @@ within-bar 59-vs-71 neutral-grey split). Each verified by a headless render in `
 **Popups DONE** too: one shared `panels::popup_shell` (scrim + a single rounded 1px-bordered
 container) now backs all three (`dropdown`/`browser_popup`/`ableton_picker`) — the pickers' fake
 outer+inner border pair collapsed to a real border, three scrim dims → `PopupStyle::DROPDOWN`/`MODAL`,
-per-file `BG_BORDER`/`BG_INNER` hoisted to `MODAL_*` tokens (ratchet 145 → 139). The §17 overlay loop
+per-file `BG_BORDER`/`BG_INNER` hoisted to `MODAL_*` tokens (ratchet 145 → 139). The section 17 overlay loop
 already lifts every popup, so the shell carries no shadow of its own.
 **Remaining:** only the param card's `*_btn_style` one-offs in `param_slider_shared`.
 
 **Rule:** no bespoke button / toggle / dropdown / segmented styling. Every instance is a kit
-component on the §4 tokens + §15 ramp. Audit each panel; replace one-offs; delete the local style
+component on the section 4 tokens + section 15 ramp. Audit each panel; replace one-offs; delete the local style
 helpers (`*_btn_style` in `param_slider_shared`, per-file `LH_BTN_*`, etc.). After this, the kit —
 not the panels — owns how a control looks.
 
@@ -766,11 +766,11 @@ depth — a control is one step off *its own* background, so the two tiers carry
 
 ## 19. Layout hierarchy & micro-motion 🎬
 
-**Status:** spec. Two gaps the grid (§14) doesn't address.
+**Status:** spec. Two gaps the grid (section 14) doesn't address.
 
 - **Flat hierarchy.** Every card is equal visual weight; the object you're *editing* isn't
   emphasised and the rest doesn't recede. SOTA inspectors lift the focused section (fill +1,
-  subtle accent edge) and dim the rest. Pairs with collapse-by-default (§6).
+  subtle accent edge) and dim the rest. Pairs with collapse-by-default (section 6).
 - **Micro-motion (restrained).** No feedback on press / arm / collapse / value-commit. At 60fps in
   the custom renderer this is cheap — and for a *live* tool the SOTA call is restraint: a fast
   button-press flash, an arm-state pulse, a collapse ease. **No** decorative animation (distracting
@@ -782,20 +782,20 @@ depth — a control is one step off *its own* background, so the two tiers carry
 
 ## 20. Roadmap — system to SOTA
 
-§14–§19 in leverage order. §16 (enforcement) underwrites all the cleanup — do it early so the
+section 14–section 19 in leverage order. section 16 (enforcement) underwrites all the cleanup — do it early so the
 rest can't re-drift.
 
 | # | Work | Kind | Risk |
 |---|---|---|---|
-| §16 | Token-enforcement guard | systemic | low |
-| §14 | Padding / layout grid | cleanup | C is structural |
-| §15 | Semantic colour ramp ✅ | cleanup | low (aliases) |
-| §17 | Elevation / separation ✅ | additive | low |
-| §18 | Apply component kit everywhere ✅ (chrome + popups; param-card one-offs left) | coverage | medium (broad) |
-| §19 | Hierarchy + micro-motion | additive | medium |
-| §24 | Timeline visual upgrade (clips) | additive + structural | clips→GPU is the gate |
+| section 16 | Token-enforcement guard | systemic | low |
+| section 14 | Padding / layout grid | cleanup | C is structural |
+| section 15 | Semantic colour ramp ✅ | cleanup | low (aliases) |
+| section 17 | Elevation / separation ✅ | additive | low |
+| section 18 | Apply component kit everywhere ✅ (chrome + popups; param-card one-offs left) | coverage | medium (broad) |
+| section 19 | Hierarchy + micro-motion | additive | medium |
+| section 24 | Timeline visual upgrade (clips) | additive + structural | clips→GPU is the gate |
 
-**Honest caveat:** §14–§18 get the *system* to SOTA-grade — consistent, enforced, complete. They
+**Honest caveat:** section 14–section 18 get the *system* to SOTA-grade — consistent, enforced, complete. They
 do **not** guarantee the *look* is best-in-class; that's a taste/tuning pass (the ramp values, the
 hierarchy emphasis, the shadow weight) settled only by eyeballing the running app. The system can
 be perfect and still look ordinary — these fix the system; taste is the layer on top.
@@ -804,7 +804,7 @@ be perfect and still look ordinary — these fix the system; taste is the layer 
 
 ## 21. Duplication audit 🔁
 
-**Status:** spec (from a 2026-06-25 targeted scan of `manifold-ui/src`). The §14/§15/§18 cleanups
+**Status:** spec (from a 2026-06-25 targeted scan of `manifold-ui/src`). The section 14/section 15/section 18 cleanups
 are all instances of **one root pattern**, found everywhere once you look:
 
 > **A shared primitive exists, but only some call sites use it. The rest reimplement it.**
@@ -817,10 +817,10 @@ through it. Buttons, headers, popups, and some drag handlers just never followed
 | Domain | Shared home | Reimplemented by | Severity |
 |---|---|---|---|
 | **Buttons / toggles** | `chrome/components.rs` (the kit) | `transport`, `header`, `footer`, `layer_header` — own draw + style | **HIGH** |
-| **Card / section header row** | *none — should be one template (§6.1)* | `master_chrome` `header_row`, `param_card` `effect_header_row`, `clip_chrome` `section_label`, `macros_panel` | **HIGH** |
+| **Card / section header row** | *none — should be one template (section 6.1)* | `master_chrome` `header_row`, `param_card` `effect_header_row`, `clip_chrome` `section_label`, `macros_panel` | **HIGH** |
 | **Popup chrome** | `overlay.rs` (positioning only) | `dropdown`, `browser_popup`, `ableton_picker` — own border / radius / shadow / item rows | MED |
-| **State colours** | `color.rs` | ~25 hand-picked reds/greens/ambers (§15) | MED |
-| **Radii / spacing** | `color.rs` tokens | raw literals (§14) | MED |
+| **State colours** | `color.rs` | ~25 hand-picked reds/greens/ambers (section 15) | MED |
+| **Radii / spacing** | `color.rs` tokens | raw literals (section 14) | MED |
 | **Widget drag** | `slider.rs::SliderDragState` | `macros_panel::handle_drag`, `layer_header` gain-drag — own drag math | MED |
 | **Word-wrap** | *none* | `graph_canvas/model::wrap_text` **and** `graph_editor::wrap_words` (two copies) | LOW |
 | **Rect-contains-point** | `node.rs::contains` / `hit.rs` | `mapping_popover::point_in` + inline `x>=…&&…` checks | LOW |
@@ -833,15 +833,15 @@ through it. Buttons, headers, popups, and some drag handlers just never followed
 - **Timeline clip hit/drag** (`clip_hit_tester`, `interaction_overlay`) — legitimately its own
   domain, not duplication.
 
-### 21.3 The fix is the same as §16 + §18
+### 21.3 The fix is the same as section 16 + section 18
 There's no new pattern to invent — every row above is "lift/keep one primitive, migrate the call
 sites, delete the copies":
-- **HIGH** — finish the kit migration (§18) and build the **one** card-header template (§6.1),
+- **HIGH** — finish the kit migration (section 18) and build the **one** card-header template (section 6.1),
   used by master / layer / clip / effect / macros.
-- **MED** — give popups one shared chrome (border + §17 shadow + item row); route `macros` and
-  `layer_header` drag through `SliderDragState`; the colour/radii/spacing ones are §14/§15.
+- **MED** — give popups one shared chrome (border + section 17 shadow + item row); route `macros` and
+  `layer_header` drag through `SliderDragState`; the colour/radii/spacing ones are section 14/section 15.
 - **LOW** — merge the two word-wrap fns; one `point_in_rect` helper.
-- The §16 guard catches the literal-level ones (colour, radius) automatically once on.
+- The section 16 guard catches the literal-level ones (colour, radius) automatically once on.
 
 ### 21.4 Limits of this scan
 Targeted at widgets / popups / headers / drag / text / hit-test. **Not** audited: icon rendering,
@@ -853,8 +853,8 @@ those.
 ## 22. Full duplication audit — 5-agent pass 🔬
 
 **Status:** complete (2026-06-25). Five parallel agents, one per crate slice, read every file in
-`manifold-ui/src` (924k tokens, 118 tool calls). This **supersedes §21** (the preliminary scan) —
-§21's findings all confirmed, plus much more. One finding is a **live correctness bug**, not tidiness.
+`manifold-ui/src` (924k tokens, 118 tool calls). This **supersedes section 21** (the preliminary scan) —
+section 21's findings all confirmed, plus much more. One finding is a **live correctness bug**, not tidiness.
 
 ### 22.1 Headline: a real bug, not just duplication ⚠️
 > **✅ FIXED 2026-06-26 (`da7811f7`).** Hover now routes through the canonical
@@ -885,7 +885,7 @@ This is the *whole* disease, now fully enumerated. Sliders, `TextMeasure`, `tran
 | **Buttons / toggles** | `chrome/components.rs` kit | `transport`, `header`, `footer`, `audio_setup_panel` (own `*_btn_style`); inspector chevrons (`macros`/`master`/`layer`/`param_card`); LED toggle (`master_chrome`), loop toggle (`clip_chrome`) | HIGH |
 | **Card/section header row** | *none — add `components::section_header`* | `master_chrome`, `layer_chrome`, `macros_panel`, `clip_chrome` (label-only), `param_card` (×2 w/ extra furniture) | MED |
 | **Drag lifecycle** | `drag.rs::DragController<T>` (its own doc lists the 5 machines it replaces) | `macros_panel` (`i32 = -1` sentinel), `layer_header` (redundant `active_gain_drag` beside `SliderDragState`), `audio_setup` band-divider | MED |
-| **Hit-test (half-open interval)** | `hit::Span` | `view.rs:30`, `cursor_nav.rs:121`, graph-canvas (`mapping_popover`, `hit.rs`, `interaction.rs` — inclusive `<=`, a latent edge-bug), + the clip hit-tester (§22.1) | MED |
+| **Hit-test (half-open interval)** | `hit::Span` | `view.rs:30`, `cursor_nav.rs:121`, graph-canvas (`mapping_popover`, `hit.rs`, `interaction.rs` — inclusive `<=`, a latent edge-bug), + the clip hit-tester (section 22.1) | MED |
 | **Popup shell** (backdrop+border+inner+radius) | *none — add `popup_shell()` + tokens* | `browser_popup`, `ableton_picker`, `dropdown`, `audio_setup` — `BG_BORDER/BG_INNER` consts **already drifted** (19,19,**22** vs 19,19,**20**) | HIGH |
 | **Popup edge-clamp** | `overlay::compute_overlay_rect` | `dropdown`, `browser_popup`, `ableton_picker` (SelfManaged → opt out of the shared clamp) | LOW |
 | **Char-width estimate** | `text::TextMeasure` | `dropdown` (×7.0), `browser_popup` (×0.6), `graph render` (×0.55) — three magic factors | LOW |
@@ -918,11 +918,11 @@ primitives; `hit::Span` + `node::Rect::contains`; the `chrome` View/Host/compone
 `marker_flag_rect` (draw==hit). The primitives are good — the bypasses are the bug.
 
 ### 22.6 Fix order
-1. **§22.1 clip hit-test bug** — ✅ DONE (`da7811f7`): routed through `ClipHitTester`, types unified.
+1. **section 22.1 clip hit-test bug** — ✅ DONE (`da7811f7`): routed through `ClipHitTester`, types unified.
 2. **`Color32::lighten/darken`** — ✅ DONE (`e8b92e90`, Phase 1 dedups): one home in `color.rs`, ~7 copies gone.
-3. **§16 guard** — turns the literal-level families (colour, radius, button styles) into CI failures.
-4. **Buttons kit (§18)** + **`section_header`** — the two HIGH structural ones.
-5. **Build-vs-update desync (§22.3)** — extract the shared ruler/grid iterators.
+3. **section 16 guard** — turns the literal-level families (colour, radius, button styles) into CI failures.
+4. **Buttons kit (section 18)** + **`section_header`** — the two HIGH structural ones.
+5. **Build-vs-update desync (section 22.3)** — extract the shared ruler/grid iterators.
 6. The MED/LOW dedups as the relevant files are touched.
 
 ---
@@ -930,7 +930,7 @@ primitives; `hit::Span` + `node::Rect::contains`; the `chrome` View/Host/compone
 ## 23. Headless render + interaction harness (Phase -1) 📸
 
 **Status:** spec. Build this **first** — it removes ~80% of the "Peter must look" gating that
-otherwise blocks every visual phase (§14, §17, §18). The renderer is custom, so this is the only
+otherwise blocks every visual phase (section 14, section 17, section 18). The renderer is custom, so this is the only
 way I can self-verify visual/interaction changes without a running window.
 
 ### 23.1 Why it works
@@ -979,16 +979,16 @@ Multi-step (drag a slider) = a list of `(event, pos, time)` steps, snapshot at t
 
 ### 23.5 Accuracy & limits (honest)
 - **Accurate:** yes for correctness — same renderer, same rasterizer, same layout. It does **not**
-  replace Peter's eye for **taste** (does the colour feel pro, §8/§9 hierarchy) — only for correctness
+  replace Peter's eye for **taste** (does the colour feel pro, section 8/section 9 hierarchy) — only for correctness
   (aligned, no overlap, rendered, drawer opened).
 - **Scope:** the UI chrome (panels, inspector, popups, timeline). The **video viewport** is GPU/Metal
   (manifold-renderer, IOSurface) — a different offscreen path, not covered by this harness.
 
 ### 23.6 Payoff against the 11 phases
-- Visual phases (§14 grid, §17 elevation, §18 kit) flip from "Peter-gated each iteration" → "I
+- Visual phases (section 14 grid, section 17 elevation, section 18 kit) flip from "Peter-gated each iteration" → "I
   self-check via snapshot + tree assertions; Peter signs off once at the end."
-- Pairs with the §16 token guard: **guard catches bad tokens, snapshots catch bad layout, tree
-  assertions catch bad structure.** Together they make the per-phase automation (§ build order) safe.
+- Pairs with the section 16 token guard: **guard catches bad tokens, snapshots catch bad layout, tree
+  assertions catch bad structure.** Together they make the per-phase automation (section build order) safe.
 
 ### 23.7 Existing infra — reuse, don't rebuild (inventoried 2026-06-25)
 Peter's instinct was right: the GPU/node side already solved the hard half. Phase -1 is **~40% new,
@@ -1007,7 +1007,7 @@ Peter's instinct was right: the GPU/node side already solved the hard half. Phas
 **Build new (the genuinely missing 40%):**
 - A **UI render entrypoint** that builds a `UITree` for a given state and renders one frame to a
   buffer/texture (the GPU parity harness renders an *effect graph*, not the UI tree — that's the gap).
-- A **headless input driver** (synthesize `UIEvent`s at a coordinate + injectable clock; §23.4.2/3).
+- A **headless input driver** (synthesize `UIEvent`s at a coordinate + injectable clock; section 23.4.2/3).
 - **Glue**: tree-assertion helpers (find node by key, rect, overlap) + snapshot save/diff.
 
 **Caveat (Peter's "don't get misled into old infra"):** reuse the harness *bones* (device, readback,
@@ -1048,13 +1048,13 @@ golden-snapshot save/diff. The hard unknowns are now all answered.
 
 ## 24. Timeline visual upgrade — the clips 🎞️
 
-**Status:** spec (captured 2026-06-26 from a mockup-driven session). **Not covered by §1–§23** —
+**Status:** spec (captured 2026-06-26 from a mockup-driven session). **Not covered by section 1–section 23** —
 this whole doc has been the *inspector + chrome*; the timeline lanes were never in scope. The
-clip *hit/drag* domain is correctly its own thing (§22.5) and the two hit-testers were already
+clip *hit/drag* domain is correctly its own thing (section 22.5) and the two hit-testers were already
 unified (`da7811f7`), so this chapter is **purely visual** — it adds nothing to hit-testing.
 
 The mockups that drove it (neutral chrome, colour = identity, value-based depth, readable clips)
-live in the session scratchpad — direction only, not the spec (§12: prototype in-renderer).
+live in the session scratchpad — direction only, not the spec (section 12: prototype in-renderer).
 
 ### 24.1 The problem (grounded in code)
 The timeline is the most-played surface and it tells you almost nothing:
@@ -1082,7 +1082,7 @@ Meanwhile the **GPU UITree path already has the hard primitive**:
 with AA, scissor-depth layers, and CoreText text. The inspector/chrome use it; the clips don't.
 **That gap is the whole reason the timeline looks flat.** What the GPU path is *missing* for the
 full look: a **gradient fill** (no `gradient` in `ui_renderer.rs` today) and the **one soft shadow**
-§17 already wants.
+section 17 already wants.
 
 ### 24.3 The upgrades (what the mockups showed)
 - **A — Readable clips.** Name strip at the top of every clip, a real boundary, a content-preview
@@ -1102,22 +1102,22 @@ full look: a **gradient fill** (no `gradient` in `ui_renderer.rs` today) and the
   system, the one the LFO arm button already uses).
 - **D — One clear "now."** Resolve playhead vs insert-cursor so the playback position is
   unmissable — the rule that matters most live.
-- **E — Navigation.** Scroll-to-zoom, a draggable scrollbar thumb. (Minimap = optional, §24.6.)
+- **E — Navigation.** Scroll-to-zoom, a draggable scrollbar thumb. (Minimap = optional, section 24.6.)
 
 ### 24.4 The gating move — clips onto the GPU SDF pipeline
 Migrate clip drawing off the CPU bitmap onto the **same GPU SDF pipeline the chrome already uses.**
 Then rounded body, name strip, gradient body, lift-on-select, and a thumbnail texture-slot all come
-from primitives that exist or are added once in §24.5(1).
+from primitives that exist or are added once in section 24.5(1).
 
 It's also a **perf win at show scale** (a real project is 2928 clips, `project_typical_project_scale`):
 GPU instanced quads drop the per-frame CPU paint entirely and retire the pixel-shift scroll
 optimisation that only exists *because* CPU painting is expensive.
 
-### 24.5 Build order (depends on §15 + §17)
+### 24.5 Build order (depends on section 15 + section 17)
 1. **Gradient primitive** in the shared GPU rect shader (`ui_renderer.rs` `RectCommand` +
-   fragment). Pairs with §17's single shadow term. Small, contained, benefits chrome too.
+   fragment). Pairs with section 17's single shadow term. Small, contained, benefits chrome too.
 2. **Clips → GPU SDF quads** — rounded body, name strip, gradient body, lift-on-select. Verify via
-   the §23 headless harness (node-bounds assertions + PNG snapshot), not Peter-gated per iteration.
+   the section 23 headless harness (node-bounds assertions + PNG snapshot), not Peter-gated per iteration.
 3. **Thumbnail pipeline** — generator previews first (scaffolding exists), then video poster frames
    (new). Cache per clip; invalidate on trim / source change.
 4. **One-grammar headers + type badges** — collapse the four heights; type → icon badge.
@@ -1126,15 +1126,15 @@ optimisation that only exists *because* CPU painting is expensive.
 ### 24.6 Out of scope / not now
 - **A dedicated perform-mode timeline** (bigger targets, stripped chrome, "what's playing now").
   There *is* a Perform button; whether perform gets its own timeline treatment vs one shared surface
-  is an **open design fork** — decide before investing past §24.5(2).
+  is an **open design fork** — decide before investing past section 24.5(2).
 - **Minimap / arrangement overview** — optional; revisit if jump-around-live still feels slow after E.
-- **Clip hit/drag** — already its own unified domain (§22.5, `da7811f7`); untouched here.
+- **Clip hit/drag** — already its own unified domain (section 22.5, `da7811f7`); untouched here.
 
 ### 24.7 Dependencies on the rest of the doc
-- **§15 (colour ramp)** — clip colours desaturate onto identity hues; chrome stays neutral.
-- **§17 (elevation)** — the one shadow term is shared between floating popups and clip lift.
-- **§19 (hierarchy)** — focused-track emphasis is the timeline echo of focused-card emphasis.
-- **§23 (headless harness)** — the verifier for every step here.
+- **section 15 (colour ramp)** — clip colours desaturate onto identity hues; chrome stays neutral.
+- **section 17 (elevation)** — the one shadow term is shared between floating popups and clip lift.
+- **section 19 (hierarchy)** — focused-track emphasis is the timeline echo of focused-card emphasis.
+- **section 23 (headless harness)** — the verifier for every step here.
 
 ---
 

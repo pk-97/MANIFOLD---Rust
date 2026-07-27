@@ -4,12 +4,12 @@
 
 > **SHIPPED 2026-06-23.** All six tasks landed behaviour-preserving, one commit
 > each; manifold-ui 330 + manifold-app 91 tests green, clippy `-D warnings`
-> clean. This doc is the as-built record — the §3 scoping notes (canvas stays in
+> clean. This doc is the as-built record — the section 3 scoping notes (canvas stays in
 > `manifold-app`; `GraphEditCommand` not on the `IntentRegistry`; the editor
 > keyboard owner over a literal shared `process_events`) match what shipped.
 
 Sub-design-doc for **Phase 4** of the UI Architecture Overhaul
-(`docs/UI_ARCHITECTURE_OVERHAUL.md` §5.4 (Graph Canvas API), §13). Scopes the six Phase-4 tasks
+(`docs/UI_ARCHITECTURE_OVERHAUL.md` section 5.4 (Graph Canvas API), section 13). Scopes the six Phase-4 tasks
 against the codebase as it actually stands today. Written after a full read of
 the graph-editor surface (the 4,262-line `graph_canvas.rs`, the sidebar panels,
 the `PanelAction` graph block, and the editor window's input fork); every claim
@@ -40,7 +40,7 @@ dependency graph is `renderer → ui` (CLAUDE.md crate table; `manifold-ui`'s
 
 **Therefore Phase 4.2 is a split *in place* into a `graph_canvas/` directory
 inside `manifold-app`** — exactly what Phase 3.6 did to `viewport.rs`. The
-"named, reusable module" the overhaul (§5.4) asks for is a directory of
+"named, reusable module" the overhaul (section 5.4) asks for is a directory of
 one-concern submodules under one `GraphCanvas` struct, not a crate move. Moving
 the canvas to its own crate (or into `manifold-ui`) is gated on **Phase 5's
 layering inversion** (UI-local events, the app maps to engine commands) and is
@@ -49,8 +49,8 @@ identical; Phase 5 is the prerequisite for relocating it.
 
 This is the one place the Canvas API genuinely differs from Chrome: Chrome lives
 in `manifold-ui/src/chrome/`; the Canvas API lives app-side because it consumes
-renderer snapshots. The overhaul's §11 ("three purpose-built APIs, don't unify
-them") and §5.4 ("the canvas stays immediate-mode") both hold — we mirror the
+renderer snapshots. The overhaul's section 11 ("three purpose-built APIs, don't unify
+them") and section 5.4 ("the canvas stays immediate-mode") both hold — we mirror the
 *discipline* of the Chrome host (describe-once, one dispatch model), not its
 UITree plumbing.
 
@@ -129,7 +129,7 @@ crates/manifold-app/src/graph_canvas/        (4.2 — the monolith, split)
 
 `GraphEditCommand` (4.3) is the canvas surface's own command vocabulary; it lives
 in `manifold-ui` (so both the app-side canvas and the `manifold-ui` sidebar can
-emit it) — see §3.3.
+emit it) — see section 3.3.
 
 The three ideas, each with exactly one owner:
 - **4.2/4.4 — one geometry source.** `NodeView` (in `model.rs`) is the single
@@ -161,7 +161,7 @@ shared geometry stays as `NodeView` methods in `model.rs` — no geometry math i
 copied into `render.rs` or `hit.rs` that isn't already a `NodeView` method today.
 Where `draw_node` and `param_row_under` each open-code `header_h + preview_h +
 i*row_h`, that is preserved verbatim (a behaviour-preserving move, not a
-unification — unifying it is a follow-up, noted in §4).
+unification — unifying it is a follow-up, noted in section 4).
 
 The test module (`graph_canvas.rs:3713-4262`) reaches into private fields
 (`canvas.nodes`, `canvas.drag_mode`, `select_single`, `is_double_click`, the
@@ -240,7 +240,7 @@ Mechanics:
 
 The `u32` (canvas runtime id) vs `core::NodeId` (expose addressing) split is
 **preserved as-is** — reconciling the two identity spaces is a deeper change than
-Phase 4 and is noted as a wart in §4, not fixed here.
+Phase 4 and is noted as a wart in section 4, not fixed here.
 
 *Done when:* no graph-mutation variant remains in `PanelAction`; the canvas and
 sidebar emit `GraphEditCommand`; `app_render` translates it to the same
@@ -277,7 +277,7 @@ So 4.5 delivers the stated goal — the three id-matching entry points collapse 
 one — without the registry generalisation. Folding the sidebar onto a
 `GraphEditCommand`-aware registry is left to whenever the registry is generalised
 (naturally part of Phase 5's UI-local-event work). This mirrors
-`TIMELINE_API_DESIGN` §3.3's "not reusing `trim.rs`" call: take the correct,
+`TIMELINE_API_DESIGN` section 3.3's "not reusing `trim.rs`" call: take the correct,
 scoped step, record why the larger one waited.
 
 > **RESOLVED by Phase 6 (2026-06-23).** The registry is now generic —
@@ -288,7 +288,7 @@ scoped step, record why the larger one waited.
 > `editor_sidebar_intents` registry (mirroring `editor_card_intents`). The
 > "crate-wide change touching every panel" never materialised — the default type
 > param means the chrome panels + `ui_root` compile untouched. See
-> `UI_ARCHITECTURE_OVERHAUL.md` §13 (Phase checklist (the cross-chat tracker)) Phase 6.
+> `UI_ARCHITECTURE_OVERHAUL.md` section 13 (Phase checklist (the cross-chat tracker)) Phase 6.
 
 **Why not a full declarative `view()` rewrite of the 3,110-line `build()`:** the
 Chrome API's headline win is killing the `build()`/`update()` dual-write — but
@@ -315,7 +315,7 @@ side is already shared (`drain_edits` feeds the same dispatch). The editor is
 `ed.ui_root.input.process_pointer`; only the centre canvas column bypasses it.
 
 The canvas is a stateful immediate-mode widget and the overhaul keeps it that way
-(§5.4) — so we do **not** fold it into the UITree (the "deeper one-substrate fix"
+(section 5.4) — so we do **not** fold it into the UITree (the "deeper one-substrate fix"
 is explicitly not Phase 4). Instead we mirror the timeline's structure: an
 `InputHandler` + host-trait pair already serves the primary window
 (`input_handler.rs:59` + `TimelineInputHost`/`AppInputHost`). Introduce the graph

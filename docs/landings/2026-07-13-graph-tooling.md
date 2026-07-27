@@ -1,7 +1,7 @@
 # Landing report — GRAPH_TOOLING P1–P4 (2026-07-13)
 
 **Design:** `docs/GRAPH_TOOLING_DESIGN.md` (authored, approved, and executed same day; Fable orchestrating 4 Sonnet workers, one warm worktree, branch `feat/graph-tooling-design`).
-**Status line now reads:** `**Status:** SHIPPED — P1–P4 built, gated, and landed 2026-07-13 (same-day design→execution, Fable orchestrating Sonnet workers). Deferred items in §7 remain open.`
+**Status line now reads:** `**Status:** SHIPPED — P1–P4 built, gated, and landed 2026-07-13 (same-day design→execution, Fable orchestrating Sonnet workers). Deferred items in section 7 remain open.`
 
 ## What shipped
 
@@ -19,7 +19,7 @@
 
 ## For Peter — triage owed (not fixed, per D8)
 
-11 bundled presets trip card WARNINGS: range-after-remap (lint h) on BlobTracking, VoronoiPrism, Glitch, Bloom, FluidSim2D, MetallicGlass, ParticleText, BlossomWire, TwistColumn, OilyFluid; defaults-disagreement (lint g) on ApricotWeather. Each may be intentional (over-range drive) or a real card bug — one pass in the app decides promotion per class (design §7 Deferred).
+11 bundled presets trip card WARNINGS: range-after-remap (lint h) on BlobTracking, VoronoiPrism, Glitch, Bloom, FluidSim2D, MetallicGlass, ParticleText, BlossomWire, TwistColumn, OilyFluid; defaults-disagreement (lint g) on ApricotWeather. Each may be intentional (over-range drive) or a real card bug — one pass in the app decides promotion per class (design section 7 Deferred).
 
 ## Click-script (≤2 min)
 
@@ -30,6 +30,6 @@
 ## Deviations & debt
 
 - P4 fixtures live as inline JSON in tests (P1 left no `tests/fixtures/invalid-graphs/` dir); held-out property preserved via orchestrator-side scratchpad fixtures.
-- `Composite` binding targets unlinted (runtime-resolved; zero bundled users) — added to design §7 Deferred with trigger.
+- `Composite` binding targets unlinted (runtime-resolved; zero bundled users) — added to design section 7 Deferred with trigger.
 - New bundled-preset validate test creates a Metal device in the default sweep (~2s, allocation only, no dispatch) — accepted per design's honest-cost note; first suspect if the sweep ever flakes.
 - Verification debt: none beyond the above — no VD entries opened.

@@ -2,7 +2,7 @@
 
 **Status:** P1 SHIPPED 2026-07-08 (region mechanism + main-window migration + D4 enforcement; BUG-060 stopgap removed — landing report: `docs/landings/2026-07-08-ui-clip-z-p1.md`). P2 (editor window + perform) and P3 (enforcement closure + sweep) OPEN. One carried gap: D2 tier-ordering is enforced on the `traverse()` render path (headless snapshots + editor window) but NOT on the live main-window cache path (`panel_cache_info`, array-ordered), where D1 containment alone carries BUG-060 — see VERIFICATION_DEBT VD-018, close in P2. · design 2026-07-07 · Fable
 **Prerequisites:** none (UI_ARCHITECTURE_OVERHAUL phases 0–8 shipped 2026-06-23; this builds on that substrate)
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5 (Phase briefs)–§6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 before starting any phase.
 
 The governing insight: the architecture overhaul gave panels a clean way to
 **compose**, but nothing makes their **bounds** binding. Pixel clipping is
@@ -49,7 +49,7 @@ footer — dies here), BUG-047 (Audio Setup overflow — becomes visible clippin
 the missing scroll stays its own bug), BUG-027 (editor z — fixed locally;
 pinned structurally here), BUG-025 (no-slug) (timeline row bleed — gains an enforced
 invariant). **Out of scope, explicitly:** BUG-049 (child-row-right-indent) (row indent arithmetic — row
-geometry, not bounds; deferred, see §8) and BUG-015 (no-slug) (stale content — state-sync
+geometry, not bounds; deferred, see section 8) and BUG-015 (no-slug) (stale content — state-sync
 class, FOUNDATIONAL_GAPS A1).
 
 Extend, don't redesign: every mechanism needed already exists — the flag, the
@@ -101,7 +101,7 @@ ancestor stack, the scissor batching, the overlay registry. This design adds
   every lane into a region and explode the region list. Consequences, stated
   honestly: two containment idioms coexist — region clips at the window
   level, the RAII scissor inside the timeline — and a reader must know which
-  applies where; §1's table is that record.
+  applies where; section 1's table is that record.
 
 **The plausible-wrong architecture, forbidden by name:** you will want to fix
 BUG-060 by adding `CLIPS_CHILDREN` to the inspector panel and calling it done
@@ -173,7 +173,7 @@ is the hot path only in the weak sense above (no per-frame work added).
 
 - **Entry state:** clean main; `cargo test -p manifold-ui --lib` green;
   re-verify anchors `node.rs:381`, `tree.rs:247`, `ui_root.rs:632`.
-- **Read-back:** this doc §1–§3; restate D1–D6, the forbidden per-panel patch,
+- **Read-back:** this doc section 1–section 3; restate D1–D6, the forbidden per-panel patch,
   and entry-check results, before any code.
 - **Deliverables:** `ZTier`, `RegionToken`, `begin_region`, `ALLOW_OVERFLOW`;
   region-list sorted traversal; `ui_root.rs` builds every main-window panel
@@ -230,7 +230,7 @@ is the hot path only in the weak sense above (no per-frame work added).
 ### P3 — Enforcement closure + sweep
 
 - **Deliverables:** the debug assertion promoted to the permanent contract
-  (documented on `begin_region`); `docs/UI_ARCHITECTURE_OVERHAUL.md` §status
+  (documented on `begin_region`); `docs/UI_ARCHITECTURE_OVERHAUL.md` section status
   and `FOUNDATIONAL_GAPS.md` A2 updated to point here; BUG-060 moved to
   Fixed / BUG-047 re-scoped in `BUG_BACKLOG.md`; subregion-scissor /
   compositor-ordering invariant memories updated to name the region contract.
@@ -241,7 +241,7 @@ is the hot path only in the weak sense above (no per-frame work added).
 - **Acceptance demo:** `Demo: the P1 flow re-run + full PNG set — L3`.
 - **Test scope:** the one workspace sweep for the whole design, here.
 
-Phasing-completeness check (§5 of the standard): every affordance the body
+Phasing-completeness check (section 5 of the standard): every affordance the body
 commits to — binding region clips (P1), declared tiers incl. overlay fold-in
 (P1), editor window + perform (P2), enforcement + doc/status truth (P3),
 `ALLOW_OVERFLOW` ghosts (P1) — appears in exactly one phase. Row-geometry

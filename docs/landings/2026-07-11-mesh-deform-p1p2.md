@@ -1,6 +1,6 @@
 # MESH_DEFORM P1 (growth core) + P2 (shape deformers) — landed 2026-07-11 @ merge of feat/mesh-deform (b0ad33f2)
 
-**Branch:** feat/mesh-deform · **Level reached:** L2 / target L2 (§10)
+**Branch:** feat/mesh-deform · **Level reached:** L2 / target L2 (section 10)
 **Doc status line (quoted verbatim):** IN PROGRESS — P1 (growth core) + P2 (shape deformers) SHIPPED 2026-07-11 (`feat/mesh-deform`); all atoms on the freeze codegen path per decided #10. P3 (curve→mesh) + P4 (scatter + glTF fit) remain. · 2026-07-10 · Fable (with Peter in the room)
 
 ## What landed

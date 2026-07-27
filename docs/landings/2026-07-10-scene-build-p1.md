@@ -6,14 +6,14 @@
 
 ## What shipped
 
-- `crates/manifold-renderer/src/node_graph/transform.rs` — `Transform { pos, rot_euler (radians), scale }` CPU-struct, `Default` = identity (pos 0 / rot 0 / scale 1), transcribed verbatim from design §3. Wired into `node_graph/mod.rs`.
+- `crates/manifold-renderer/src/node_graph/transform.rs` — `Transform { pos, rot_euler (radians), scale }` CPU-struct, `Default` = identity (pos 0 / rot 0 / scale 1), transcribed verbatim from design section 3. Wired into `node_graph/mod.rs`.
 - `PortType::Transform` variant + full plumbing across `ports.rs`, `backend.rs` (+ `MockBackend`), `bindings.rs` (`NodeInputs::transform`, `NodeOutputs::set_transform` + `pending_transform_writes`), `execution.rs` (scratch + drain), `metal_backend.rs`, `primitive.rs` macro arm, `snapshot.rs`, `catalog_gen.rs`.
 - **UI mirror-enum boundary** (not on the original checklist; caught by the compiler): `manifold-ui/src/graph_view.rs` mirror `PortKindSnapshot` + `manifold-app/src/ui_translate.rs::port_kind_to_ui` both gained a `Transform` arm — the sanctioned translation boundary per the ui-foundation convention.
 - Editor pin color: `PORT_TRANSFORM_COLOR = Color32::new(255, 128, 199, 255)` (hot pink, hue ≈326°) in `graph_canvas/mod.rs`, consumed in `graph_canvas/model.rs`. Nearest existing hues (Camera salmon ~0°, Texture3D purple ~273°) are >45° away.
 - `crates/manifold-renderer/src/node_graph/primitives/transform_3d.rs` — `node.transform_3d`: nine TRS params verbatim from `render_scene`'s current per-object generation (labels/ranges/`ParamType::Angle` radians, minus `_{i}` suffix), nine same-named optional scalar input ports (port-shadows-param), one `transform: Transform` output, full `PrimitiveDescription`.
 - Unit tests (16): identity default; param→output (radians preserved); one port-override test per TRS family.
 
-## §2.5 audit verdict (confirmed by inspection)
+## 2.5 audit verdict (confirmed by inspection)
 
 Port = one-wire-from-existing — fourth CPU-struct port alongside Camera/Light/Material, same accessor shape, zero GPU resource on the wire. Atom = genuinely new — `affine_transform` is a 2D UV effect (not TRS); `generate_instance_transforms`/`InstanceTransform` is the GPU instancing array path (anonymous copies, GPU Pod). No existing primitive covers TRS-as-a-named-CPU-struct-port.
 

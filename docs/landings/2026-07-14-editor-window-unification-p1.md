@@ -1,6 +1,6 @@
 # EDITOR_WINDOW_UNIFICATION P1 — landed 2026-07-14 @ c8584b8d
 
-**Branch:** feat/editor-window-unification · **Level reached:** L2 / target L2 (§10)
+**Branch:** feat/editor-window-unification · **Level reached:** L2 / target L2 (section 10)
 **Doc status line (quoted verbatim):** `**Status:** APPROVED design · P1 LANDED 2026-07-14 (BUG-151 FIXED) · P2–P3 not built · Fable 5 (with Peter in the room) · Sonnet-executable`
 
 ## Gate results (verbatim)
@@ -33,9 +33,9 @@ cargo deny check bans → bans ok
 
 ## Deviations from brief
 
-D2 as literally written in the original design doc turned out to be unimplementable: the doc's §1 audit claimed the editor's `UIRoot::build()` already populated `overlay_draw` "exactly like the main window's." This was false — only the main window ever calls `UIRoot::build()`; the editor's tree is assembled by hand each frame and never recorded overlays at all, so `overlay_draw`/`overlay_region_start` were permanently empty for the editor. That gap, not a flat-scan traversal quirk, is BUG-151's actual root cause.
+D2 as literally written in the original design doc turned out to be unimplementable: the doc's section 1 audit claimed the editor's `UIRoot::build()` already populated `overlay_draw` "exactly like the main window's." This was false — only the main window ever calls `UIRoot::build()`; the editor's tree is assembled by hand each frame and never recorded overlays at all, so `overlay_draw`/`overlay_region_start` were permanently empty for the editor. That gap, not a flat-scan traversal quirk, is BUG-151's actual root cause.
 
-P1's first worker hit this correctly as a must-escalate line and stopped rather than improvising past it (landed D1 + D4 only, commit `9e3d710e`). The orchestrator brought it to Peter, who preferred "make the editor run the same overlay-registration step the main window runs, scoped to what it actually has." A design-reviewer pass (Fable, review-only, no code) confirmed the direction and found the correct granularity: not the whole `UIRoot::build()` (which lays out main-window-only panels and would corrupt editor state), but a new minimal `UIRoot::build_overlays_for_screen()` wrapper around the existing private `build_overlays()`. A second Sonnet worker implemented that spec, corrected the design doc's §1 audit and D2 text, and corrected the BUG-151 backlog entry (commit `1c26b219`).
+P1's first worker hit this correctly as a must-escalate line and stopped rather than improvising past it (landed D1 + D4 only, commit `9e3d710e`). The orchestrator brought it to Peter, who preferred "make the editor run the same overlay-registration step the main window runs, scoped to what it actually has." A design-reviewer pass (Fable, review-only, no code) confirmed the direction and found the correct granularity: not the whole `UIRoot::build()` (which lays out main-window-only panels and would corrupt editor state), but a new minimal `UIRoot::build_overlays_for_screen()` wrapper around the existing private `build_overlays()`. A second Sonnet worker implemented that spec, corrected the design doc's section 1 audit and D2 text, and corrected the BUG-151 backlog entry (commit `1c26b219`).
 
 Net effect: the phase's substance (D1, D2, D4, BUG-151 fix) is exactly what was promised, but the mechanism inside D2 differs from the doc's original prose, and the doc itself was corrected in the same landing per the "don't compound doc inaccuracy" concern Peter raised.
 

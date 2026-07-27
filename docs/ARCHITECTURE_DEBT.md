@@ -49,7 +49,7 @@ Non-target (assessed at Wave 2, cohesive): `manifold-editing/src/service.rs` (1,
 
 | Was (single file, pre-Wave-3 lines) | Now | Note |
 |---|---|---|
-| `node_graph/freeze/codegen.rs` (6,374) | `node_graph/freeze/codegen/` (mod/types/uniforms/entry_points/standalone/fused + tests) | `FREEZE_COMPILER_MAP.md` §2 (File map) stays authoritative for module sizes; D2 named ceiling `fused.rs` |
+| `node_graph/freeze/codegen.rs` (6,374) | `node_graph/freeze/codegen/` (mod/types/uniforms/entry_points/standalone/fused + tests) | `FREEZE_COMPILER_MAP.md` section 2 (File map) stays authoritative for module sizes; D2 named ceiling `fused.rs` |
 | `preset_runtime.rs` (8,175) | `preset_runtime/` (mod/core/build/errors/segments/bindings/instrumentation + `tests/` #[path] modules) | D3 named ceiling `core.rs` (~2k, Peter-sanctioned); `PresetRuntime` stays one type |
 | `node_graph/gltf_import.rs` (8,502) | `node_graph/gltf_import/` (mod/assembly/animation/materials/cards/object_group/scene/merge/report + tests) split by feature; P3-D tabled `MAP_FAMILIES`/`MATERIAL_PARAMS`; P3-A `ImportCtx`/`ObjectAssembly` | importer cohesive — split, not redesigned |
 

@@ -1,10 +1,10 @@
 # Real-Time Audio Infrastructure — Design Doc
 
-<!-- index: The real-time audio stack: capture (cpal input devices + CoreAudio output taps for system/per-app audio), the off-RT analysis worker, the native CoreAudio device directory (channel names, stable UIDs, hot-plug), and the audio-settings UX. Threading, data flow, perf budget, the phased build plan, and the backend-neutral CaptureBackend seam (§11). -->
+<!-- index: The real-time audio stack: capture (cpal input devices + CoreAudio output taps for system/per-app audio), the off-RT analysis worker, the native CoreAudio device directory (channel names, stable UIDs, hot-plug), and the audio-settings UX. Threading, data flow, perf budget, the phased build plan, and the backend-neutral CaptureBackend seam (section 11). -->
 
 The end-to-end real-time audio stack that feeds the instrument: how samples get in, how they become control signals, and how the device/channel metadata around them is surfaced and kept honest. This is the *infrastructure* layer. The feature that consumes it — driving effect sliders from audio — lives in [Audio Modulation — Design Doc](AUDIO_MODULATION_DESIGN.md); read that for the modulation source, the per-slider drawer, and the v2 pitch-tracking intelligence. This doc owns capture, analysis, the device directory, threading, and performance.
 
-Status: **implemented (2026-06-17).** Phases 1–6 and the Phase 7 cross-platform fallback have all shipped on `audio-modulation`: the native CoreAudio device directory (channel names, UIDs, liveness, subdevice grouping, hot-plug), UID-based identity + legacy migration, names/grouping in the UI, stage reliability (hot-plug rebuild, mic TCC, offline indicators), perf hygiene, and the full audio-settings UX (rename, identity color, mono/stereo, per-send meter, delete-in-use confirm). **Output taps** — capturing system audio or a single app's output (no loopback driver) — shipped on `audio-app-tap` behind the backend-neutral [`CaptureBackend`] seam; see **§11**. Still future by design: native Linux/Windows directory *and* tap backends (the seam is stubbed and ready), and the output-channel/subdevice tree view (7.3). The §9 plan below records what was built; "planned" wording in earlier sections is historical design context.
+Status: **implemented (2026-06-17).** Phases 1–6 and the Phase 7 cross-platform fallback have all shipped on `audio-modulation`: the native CoreAudio device directory (channel names, UIDs, liveness, subdevice grouping, hot-plug), UID-based identity + legacy migration, names/grouping in the UI, stage reliability (hot-plug rebuild, mic TCC, offline indicators), perf hygiene, and the full audio-settings UX (rename, identity color, mono/stereo, per-send meter, delete-in-use confirm). **Output taps** — capturing system audio or a single app's output (no loopback driver) — shipped on `audio-app-tap` behind the backend-neutral [`CaptureBackend`] seam; see **section 11**. Still future by design: native Linux/Windows directory *and* tap backends (the seam is stubbed and ready), and the output-channel/subdevice tree view (7.3). The section 9 plan below records what was built; "planned" wording in earlier sections is historical design context.
 
 [`CaptureBackend`]: ../crates/manifold-audio/src/capture/mod.rs
 
@@ -44,7 +44,7 @@ The split matters: the sample path stays on cpal (portable, proven). Only the me
 [crates/manifold-audio/src/capture/](../crates/manifold-audio/src/capture/mod.rs). All capture is behind one trait — [`CaptureBackend`](../crates/manifold-audio/src/capture/mod.rs): it streams Float32 interleaved samples into a lock-free SPSC ring (`ringbuf`, ~2 seconds deep) and reports `sample_rate()` + `channels()`. Downstream code (analysis worker, recording) consumes only the ring consumer and those two numbers — never a platform type — so the same path runs whatever the source is. Two backend families implement it:
 
 - **Input devices** — [`cpal_input`](../crates/manifold-audio/src/capture/cpal_input.rs): a cpal stream on a hardware / aggregate / virtual input, at its **native sample rate and channel count** (no format conversion). This is the original path and should not be touched.
-- **Output taps** — [`process_tap`](../crates/manifold-audio/src/capture/process_tap.rs) (macOS): CoreAudio process taps for system or per-app output. See **§11**.
+- **Output taps** — [`process_tap`](../crates/manifold-audio/src/capture/process_tap.rs) (macOS): CoreAudio process taps for system or per-app output. See **section 11**.
 
 The realtime callback (cpal's, or the tap's IO proc) obeys the RT contract: **no alloc, no lock, no log, no panic** — only a `push_slice` into the ring, with an atomic overflow counter on the rare full ring.
 
@@ -140,14 +140,14 @@ Planned UX (all post-Phase-2):
 - **Rename + color sends** — "Kick," not the auto-assigned "Audio N"; a per-send color carried into the modulation drawer so a driven slider is visibly tied to its source.
 - **Channel dropdown shows names, grouped by subdevice** — `BlackHole ▸ BH_IN_L / BH_IN_R`, `MacBook ▸ Mic`. A flat 64-item list on a big aggregate is unusable.
 - **Stereo / paired channels** — a mono/stereo toggle per send. `SendSpec.channels` already supports multiple channels (`downmix` averages them); this is just the UI affordance plus a 2-channel default.
-- **Per-send meter** — reads the send's analyzed amplitude feature off the content-thread analyzer snapshot (`FeatureFrame` and the worker-side analysis it belonged to are gone — see §3.2), shipped via the normal `ContentState` snapshot (no new path, no GPU). Paired with gain trim it becomes the calibration surface: set a send so it actually swings 0–1 on your material.
+- **Per-send meter** — reads the send's analyzed amplitude feature off the content-thread analyzer snapshot (`FeatureFrame` and the worker-side analysis it belonged to are gone — see section 3.2), shipped via the normal `ContentState` snapshot (no new path, no GPU). Paired with gain trim it becomes the calibration surface: set a send so it actually swings 0–1 on your material.
 - **Delete-in-use warning** — show "drives N params" on the row and confirm before deleting, so a bound send isn't silently severed.
 
 Explicitly **not** doing: a dockable window (the panel is a right-anchored overlay, not a dock — see above; the original "no non-dim modality" item here was reversed by AUDIO_SENDS_UX D6); per-send smoothing/attack-release (deferred — and if added, it likely belongs in the drawer, not here).
 
 ## 8. Performance — the budget is sacred
 
-Analysis is on the **content thread** (§3.2) so a send's capture mono and its layer taps can be summed before one analysis. That trade only pays for itself if the content-thread cost is bounded — which is what the per-send gating (D4) is for. Verdict:
+Analysis is on the **content thread** (section 3.2) so a send's capture mono and its layer taps can be summed before one analysis. That trade only pays for itself if the content-thread cost is bounded — which is what the per-send gating (D4) is for. Verdict:
 
 - **GPU: zero.** Nothing in the audio path touches the GPU. It never competes with the 4.5–5.5ms frame budget.
 - **Downmix worker (off-RT OS thread): microseconds.** Deinterleave + per-send mono average, no FFT, no alloc, no lock on the read path.
@@ -157,9 +157,9 @@ Analysis is on the **content thread** (§3.2) so a send's capture mono and its l
 
 Discipline to keep it there:
 
-- Never move analysis back to the worker thread to "save" content-thread time — that's the mix-before-analyze property gone, not a perf win (§3.2, D4 rationale).
+- Never move analysis back to the worker thread to "save" content-thread time — that's the mix-before-analyze property gone, not a perf win (section 3.2, D4 rationale).
 - Never widen the gate to "analyze if any mod exists anywhere" — it must be keyed per-send (`analysis_consumed_sends`), or one bound param anywhere in the project pays for all 16 sends again, which is the exact regression D4 fixes.
-- `MAX_SENDS = 16` (`analysis.rs`) stands; the gate is the scaling answer, not a bigger cap (`AUDIO_SENDS_UX_DESIGN.md` §5.2).
+- `MAX_SENDS = 16` (`analysis.rs`) stands; the gate is the scaling answer, not a bigger cap (`AUDIO_SENDS_UX_DESIGN.md` section 5.2).
 - Don't run the downmix worker with zero sends / no device — it currently idle-wakes ~500×/sec regardless ([analysis.rs run loop](../crates/manifold-audio/src/analysis.rs)). Gate its existence on "device open AND ≥1 send" (capture-level gate, separate from and upstream of the per-send analysis gate).
 - Cap channel count sanely: the capture ring is `2s × SR × channels`; a 64-ch aggregate at 96kHz is ~49MB. One-time alloc, but an exotic device shouldn't surprise us.
 
@@ -191,7 +191,7 @@ Sequenced by dependency. **Critical path: 1 → 2 → (3 ∥ 4).** Phase 3's sav
 ### Phase 5 — UX
 - **5.1** Rename + color sends (carry into the modulation drawer).
 - **5.2** Stereo / paired channels (UI toggle over existing multi-channel `downmix`).
-- **5.3** Per-send meter (analyzed amplitude off the content-thread analyzer snapshot via `ContentState` — `FeatureFrame` is gone, see §3.2).
+- **5.3** Per-send meter (analyzed amplitude off the content-thread analyzer snapshot via `ContentState` — `FeatureFrame` is gone, see section 3.2).
 - **5.4** Delete-in-use warning ("drives N params").
 
 ### Phase 6 — Perf hygiene
@@ -226,7 +226,7 @@ CaptureSource::SystemAudio             → process tap, global (whole mix)
 CaptureSource::Apps { handles }        → process tap, mixdown of those processes
 ```
 
-`CaptureSource` is the *resolved, ready-to-open* form — recomputed every time capture (re)builds, never persisted. The persisted form is `AudioDeviceRef { uid, name, kind }` (see §5); the runtime's `resolve_source` maps `kind` → `CaptureSource`: a device UID becomes an openable name, an app **bundle id** becomes live process [`TapHandle`]s. A configured-but-absent source (device unplugged, app not running, tap unsupported) leaves capture dark — the remappable policy — rather than failing the tick.
+`CaptureSource` is the *resolved, ready-to-open* form — recomputed every time capture (re)builds, never persisted. The persisted form is `AudioDeviceRef { uid, name, kind }` (see section 5); the runtime's `resolve_source` maps `kind` → `CaptureSource`: a device UID becomes an openable name, an app **bundle id** becomes live process [`TapHandle`]s. A configured-but-absent source (device unplugged, app not running, tap unsupported) leaves capture dark — the remappable policy — rather than failing the tick.
 
 [`TapHandle`]: ../crates/manifold-audio/src/directory.rs
 

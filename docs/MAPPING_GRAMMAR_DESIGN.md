@@ -50,5 +50,5 @@ is a small feature — check before any card claims it.
 ## Owed
 
 - ~~First worked card~~ superseded 2026-07-10: full draft corpus in MAPPING_CARDS.md. Now owed: **Peter's first judging pass at the rig** — wire one shipped card (Tesseract or Fluid Sim 2D recommended: kick + band sends cover their signature rows today) and judge against real music. Text review validates structure only, never taste (Peter, 2026-07-10).
-- The veto list — empty until real cards get judged. MAPPING_CARDS.md §Open (questions for Peter (first judging pass)) questions holds the first four candidates.
+- The veto list — empty until real cards get judged. MAPPING_CARDS.md section Open (questions for Peter (first judging pass)) questions holds the first four candidates.
 - H13 (engage = clip placement) — structural confirm from Peter.

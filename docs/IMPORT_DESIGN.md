@@ -1,18 +1,18 @@
 # Import — Blender/glTF Scenes, Baked Caches, Texture Sets, TD & Resolume Funnels
 
 **Status: APPROVED design, P1 PARTIALLY SHIPPED — re-cut below · 2026-07-03 · Fable · baseline-reviewed 2026-07-05 · reality note refreshed 2026-07-10 (F2 coherence audit).**
-**Reality note (refreshed 2026-07-10 — the 2026-07-05 version undersold what shipped):** the glTF wave landed *most of P1*, not a mesh-level door. Two stages ship in manifold-renderer: stage 1 `node_graph::gltf_load` (CPU-only `.glb` parse → `GltfImportSummary`) and stage 2 `node_graph::gltf_import::assemble_import_graph` (verified in-tree), a pure assembler that turns the summary into a full `node.render_scene` generator graph — **one object per distinct material** (material-filtered geometry via `node.gltf_mesh_source`, base-colour texture via `node.gltf_texture_source`, a `node.pbr_material` carrying the glTF PBR factors), a synthesized framing camera (`node.orbit_camera`), a sun (`node.light`), an IBL envmap (`node.bake_environment`), named+tinted node **groups** per object, an over-cap drop (smallest-by-vertex first), and an `ImportReport`. The production caller `Application::import_model_file` installs the result as one undo transaction via `manifold_editing::commands::layer::ImportModelLayerCommand`. **Placement question resolved by what shipped:** the importer lives in manifold-renderer because it emits renderer node types (`EffectGraphDef`), *not* manifold-io — D1/§3's manifold-io placement is superseded; do not move it. **P1 is therefore a re-cut of what remains (§5 P1), not a rebuild** — an executor who follows the original P1 brief will re-author the shipped assembler. Known in-app bugs against the shipped nodes are VD-003 in `docs/VERIFICATION_DEBT.md`; held-out fixtures are the CC0 photoscans already sitting untracked in `tests/fixtures/gltf/` (apricot, azalea, lowe — the §8 Stewartia was never downloaded; these replace it).
+**Reality note (refreshed 2026-07-10 — the 2026-07-05 version undersold what shipped):** the glTF wave landed *most of P1*, not a mesh-level door. Two stages ship in manifold-renderer: stage 1 `node_graph::gltf_load` (CPU-only `.glb` parse → `GltfImportSummary`) and stage 2 `node_graph::gltf_import::assemble_import_graph` (verified in-tree), a pure assembler that turns the summary into a full `node.render_scene` generator graph — **one object per distinct material** (material-filtered geometry via `node.gltf_mesh_source`, base-colour texture via `node.gltf_texture_source`, a `node.pbr_material` carrying the glTF PBR factors), a synthesized framing camera (`node.orbit_camera`), a sun (`node.light`), an IBL envmap (`node.bake_environment`), named+tinted node **groups** per object, an over-cap drop (smallest-by-vertex first), and an `ImportReport`. The production caller `Application::import_model_file` installs the result as one undo transaction via `manifold_editing::commands::layer::ImportModelLayerCommand`. **Placement question resolved by what shipped:** the importer lives in manifold-renderer because it emits renderer node types (`EffectGraphDef`), *not* manifold-io — D1/section 3's manifold-io placement is superseded; do not move it. **P1 is therefore a re-cut of what remains (section 5 P1), not a rebuild** — an executor who follows the original P1 brief will re-author the shipped assembler. Known in-app bugs against the shipped nodes are VD-003 in `docs/VERIFICATION_DEBT.md`; held-out fixtures are the CC0 photoscans already sitting untracked in `tests/fixtures/gltf/` (apricot, azalea, lowe — the section 8 Stewartia was never downloaded; these replace it).
 **Prerequisites (per phase): P1–P2 need REALTIME_3D P1 + MATERIAL M1–M5 **and M6**
-(albedo/metallic maps + alpha cutout — MATERIAL §11; without M6 a textured glTF
-imports colourless and foliage renders as opaque cards; see §8 addendum). P3 pairs with
+(albedo/metallic maps + alpha cutout — MATERIAL section 11; without M6 a textured glTF
+imports colourless and foliage renders as opaque cards; see section 8 addendum). P3 pairs with
 MEDIA_BACKEND streaming discipline. P4 needs only MATERIAL. P5 needs SESSION_MODE +
 MEDIA_BACKEND P2 (DXV). P6 needs VOCAB apply; its agent half needs MCP_INTERFACE.**
-**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5 (Phase briefs)–§6 and §8 before starting
+**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 and section 8 before starting
 any phase.**
 **Ordering note (2026-07-15): `docs/IMPORT_FIDELITY_DESIGN.md` (full PBR map set,
 split-sum IBL, softbox default look) outranks this doc's P1-remaining in build order —
-Peter's call ("really critical infra"). Its F-P4 also absorbs the §8 normal-map
-report-line scope; re-read §8 before briefing P1.**
+Peter's call ("really critical infra"). Its F-P4 also absorbs the section 8 normal-map
+report-line scope; re-read section 8 before briefing P1.**
 
 Peter's directives (2026-07-03): Blender import "would be amazing and seriously open
 up Manifold as a real contender … that beats TouchDesigner at this type of thing";
@@ -21,7 +21,7 @@ amazing"; community materials/textures/looks wanted. The thesis: **artists autho
 the world's best tools; MANIFOLD is the stage it all plays on** — same shape as
 Ableton playing studio-produced stems.
 
-Companions: `REALTIME_3D_DESIGN.md` (the scene imports land in; supersedes its §8 (Deferred (with triggers))
+Companions: `REALTIME_3D_DESIGN.md` (the scene imports land in; supersedes its section 8 (Deferred (with triggers))
 import bullet), `SIMULATIONS_DESIGN.md` (its lane 1 = P3 here), `MEDIA_BACKEND_DESIGN.md`
 (DXV, streaming), `SESSION_MODE_DESIGN.md` (Resolume grid target),
 `MCP_INTERFACE_DESIGN.md` (TD agent path), `ABLETON_SHOW_SYNC_DESIGN.md` (the
@@ -34,15 +34,15 @@ precedent: we already parse another app's format — .als — for interop).
 | Piece | Where | State |
 |---|---|---|
 | Scene model shaped for import | `REALTIME_3D_DESIGN.md` D1 | Object list + TRS + material = what a .glb unpacks into. Built for this |
-| PBR texture inputs | `MATERIAL_SYSTEM_DESIGN.md` §5 (Renderer integration) | `base_color_map/normal_map/roughness_map/metallic_map/envmap` — exactly the community-texture-set shape |
-| DXV/HAP native decode | `MEDIA_BACKEND_DESIGN.md` §4 (TextureCodec backend — HAP and DXV) | A Resolume user's library plays natively |
+| PBR texture inputs | `MATERIAL_SYSTEM_DESIGN.md` section 5 (Renderer integration) | `base_color_map/normal_map/roughness_map/metallic_map/envmap` — exactly the community-texture-set shape |
+| DXV/HAP native decode | `MEDIA_BACKEND_DESIGN.md` section 4 (TextureCodec backend — HAP and DXV) | A Resolume user's library plays natively |
 | Session grid | `SESSION_MODE_DESIGN.md` | Layer × scene ≅ Resolume layer × column |
-| Cross-tool alias dictionary | `archive/NODE_VOCABULARY_AUDIT.md` §8b | TD/Resolume/AE names per atom — seeds the op-mapping tables |
+| Cross-tool alias dictionary | `archive/NODE_VOCABULARY_AUDIT.md` section 8b | TD/Resolume/AE names per atom — seeds the op-mapping tables |
 | .als interop parsing | `ABLETON_SHOW_SYNC_DESIGN.md` | The in-house precedent for parsing user-owned third-party files |
 | Beat atoms | `beat_ramp` etc. | The retimed-playhead drivers |
 
 `⚠ VERIFY-AT-IMPL`: everything above is design-stage except the alias dictionary and
-beat atoms — this doc executes late in the build order; run the §8.3 pre-flight and
+beat atoms — this doc executes late in the build order; run the section 8.3 pre-flight and
 re-verify against as-built code.
 
 ## 2. Decisions
@@ -70,7 +70,7 @@ re-verify against as-built code.
   via Blender or a one-hop conversion. **Streamed from disk with lookahead**
   (media-backend prefetch discipline — caches can exceed RAM; never fully resident,
   never decoded on the content tick). Alembic and VDB are deferred with triggers
-  (§8). This is `SIMULATIONS_DESIGN.md` lane 1 — photoreal Houdini water on stage,
+  (section 8). This is `SIMULATIONS_DESIGN.md` lane 1 — photoreal Houdini water on stage,
   beat-retimed.
 - **D5 — Texture sets are first-class drops.** Drop a PolyHaven/ambientCG-style
   folder → maps auto-wire to a `pbr_material` by filename convention
@@ -111,7 +111,7 @@ re-verify against as-built code.
 
 - `node.placeholder` — identity passthrough + metadata (source tool, op name,
   original params as a string table). One primitive; the editor shows it flagged.
-  §2.5 audit at impl (expect: genuinely new, nothing adjacent).
+  section 2.5 audit at impl (expect: genuinely new, nothing adjacent).
 - Vertex-cache playback: a mesh-sequence source atom (`node.mesh_sequence` sketch
   name) — path + playhead param (beat-addressable per D3) → `Array(MeshVertex)`
   into `render_scene`. Streaming reader behind it (D4).
@@ -149,7 +149,7 @@ FBX/USD scope creep.
      report `false` when this lands).
   3. **Import report surfaced to the user** — the `ImportReport` struct + logs exist;
      needs a user-visible surface (over-cap drop + skipped-feature warnings on import).
-  4. **`alphaMode` / tangent-space-normal / `doubleSided` report lines** per §8 (audit
+  4. **`alphaMode` / tangent-space-normal / `doubleSided` report lines** per section 8 (audit
      which of these already emit; each un-mapped feature is a report line, D9).
   5. **Hierarchy transform pre-compose** — verify/ensure parent-matrix pre-composition for
      the flat-v1 claim (D1).
@@ -157,7 +157,7 @@ FBX/USD scope creep.
      (`gltf_import.rs:49`) is a stale mirror of the retired `render_scene` `MAX_OBJECTS`;
      the renderer is now `OBJECT_SLIDER_MAX = 64`. Track it (SCENE_BUILD D9 makes the
      importer threshold `OBJECT_SLIDER_MAX`).
-  7. **Khronos conformance fixtures + gate**, plus the §8 Stewartia/photoscan visual gate.
+  7. **Khronos conformance fixtures + gate**, plus the section 8 Stewartia/photoscan visual gate.
 
   Fixtures: Khronos glTF sample models + the `tests/fixtures/gltf/` photoscans. Gate: a
   known .glb with lights + an embedded camera imports with both mapped (not synthesized);
@@ -214,10 +214,10 @@ P2–P6 focused per the scope rule.
 
 ## 8. Addendum 2026-07-04 — material-mapping corrections + fixtures (pre-execution)
 
-Verified against the shipped Material system (as-built record: MATERIAL §11.1).
-Corrections to this doc's §1 audit and P1 scope:
+Verified against the shipped Material system (as-built record: MATERIAL section 11.1).
+Corrections to this doc's section 1 audit and P1 scope:
 
-- **§1 audit row "PBR texture inputs" was design-stage optimism.** As-built,
+- **section 1 audit row "PBR texture inputs" was design-stage optimism.** As-built,
   `node.render_mesh` has `envmap` / `normal_map` / `roughness_map` only
   (`render_3d_mesh.rs:67–75`) — no `base_color_map`, no `metallic_map`. **MATERIAL
   M6 is therefore a hard P1 prerequisite** (now in the header and

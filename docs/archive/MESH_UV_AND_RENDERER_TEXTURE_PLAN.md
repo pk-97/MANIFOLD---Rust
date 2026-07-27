@@ -29,7 +29,7 @@ The correct fix is to sample surface-bound textures at **mesh UV**, an interpola
 
 ## 3. Core decisions
 
-1. **Add a `uv: [f32; 2]` channel to `MeshVertex`.** Position + normal + UV is the standard mesh vertex shape — every pro engine has at least this much per vertex. Total grows from 32 → 32 bytes (with packing) or 48 bytes (with padding); see §4 for the packing decision.
+1. **Add a `uv: [f32; 2]` channel to `MeshVertex`.** Position + normal + UV is the standard mesh vertex shape — every pro engine has at least this much per vertex. Total grows from 32 → 32 bytes (with packing) or 48 bytes (with padding); see section 4 for the packing decision.
 
 2. **All current mesh producers populate UV.** Each producer's UV mapping is intrinsic to the geometry it generates — grid uses (col/cols, row/rows); cube uses per-face UV unwrap; polytope/wireframe uses a parametric (s, t). No new authoring burden on preset authors.
 
@@ -231,7 +231,7 @@ Expected visual deltas vs the legacy deferred-shading version (all minor):
 
 - `mesh_common.rs`: extend struct, bump assertion to 48 bytes.
 - `generate_grid_mesh.rs` + `.wgsl`: write `uv = (col/cols, row/rows)`.
-- `generate_cube_mesh.rs` + `.wgsl`: write per-face UV per §5.
+- `generate_cube_mesh.rs` + `.wgsl`: write per-face UV per section 5.
 - `polytope_vertices.rs` + `.wgsl`: write placeholder `uv = (i/total, 0)`.
 - WGSL `Vertex` struct updates in `generate_grid_mesh.wgsl`, `generate_cube_mesh.wgsl`, `polytope_vertices.wgsl`.
 - `cast_array.rs` (cast_as_mesh_vertex): the cast input declares byte buffer + size; size assertion now matches the new layout.
@@ -275,7 +275,7 @@ Expected visual deltas vs the legacy deferred-shading version (all minor):
 
 **Goal:** the visible MetallicGlass image comes from the bundled PBR pipeline; legacy deferred-shading nodes deleted.
 
-- Edit `MetallicGlass.json` per §8.
+- Edit `MetallicGlass.json` per section 8.
 - Default slider values may need a tweak to match the legacy look (light_int ~1.5 to compensate for no attenuation).
 - Verify: `check-presets`, visual A/B against legacy, smoke test the outer-card sliders.
 

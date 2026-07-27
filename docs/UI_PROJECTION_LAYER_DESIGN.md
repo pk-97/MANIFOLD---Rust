@@ -5,17 +5,17 @@
 > **Supersession note (2026-07-22, UI_FUNNEL P-Z):** references below to `dispatch_inspector` / `ActiveInspectorDrag` / `PanelAction` trio variants describe the PRE-decomposition architecture. Current state: 12 flat domain enums + exhaustive router (P-D), one Scrub gesture wire with `ScrubState.active` (P-I, `ActiveInspectorDrag` extinct), per-domain `dispatch/` handlers (P-B). Anchors here are historical.
 back **KILL** for the declarative projection layer; the surviving piece — compiler-enforced
 orphan coverage — landed the same session. This reverses the pre-Fable draft's C-then-A
-recommendation (`0271934b`); Peter may override — §2 names the trigger that would revive the layer.
+recommendation (`0271934b`); Peter may override — section 2 names the trigger that would revive the layer.
 **Prerequisites:** none. UI_HARNESS_UNIFICATION (approved, Sonnet-executing) is the
 *verification* half of the seam story and is unaffected.
 **Execution contract:** nothing left to execute. This doc is the record that stops the
-declarative layer being re-proposed without new evidence — read §2 before reopening.
+declarative layer being re-proposed without new evidence — read section 2 before reopening.
 
 **What happened.** FOUNDATIONAL_GAPS A1 pre-registered a kill-test: survey the actual snapshot
 fields; kill the declarative layer if it would be mostly escape hatches. The draft surveyed
 field **classes**, found four bespoke classes, scoped the table to the regular scalar-mirror
 class, and answered scoped-yes. This pass surveyed each field's **halves** and inventoried
-existing enforcement (§1.1): the emit half is already compiler-enforced, the consume half is
+existing enforcement (section 1.1): the emit half is already compiler-enforced, the consume half is
 bespoke display logic no table can generate. The table would generate the only part that never
 breaks. Kill.
 
@@ -89,7 +89,7 @@ A2/cache territory. **Corpus bugs in the class the mirror table would govern: ze
 | Drag suppression per field | Exists, generic, at a different seam (project snapshots). |
 | Dirty conditions per field | No per-field dirty machinery exists to declare into. |
 | Kills hand-threading churn | The churn is display/view-model semantics a table can't generate. |
-| Kills a stale-state bug class | Zero corpus bugs in the mirror class (§1.2). |
+| Kills a stale-state bug class | Zero corpus bugs in the mirror class (section 1.2). |
 
 Cost side (from the draft, still true): an indirection layer, likely codegen, generated code in
 the tree, ceremony per field.
@@ -103,8 +103,8 @@ new mirror field costs one struct line + one literal line, both compiler-checked
 multiplier is real; the multiplicand is approximately zero.**
 
 **Rejected (for the future session that will reinvent these at 2am):**
-- **Shape A — declarative mirror table**, all §2.2 realizations (proc-macro / build.rs /
-  registry; that fork is moot): every claimed benefit dissolves against §1.1/§1.2.
+- **Shape A — declarative mirror table**, all section 2.2 realizations (proc-macro / build.rs /
+  registry; that fork is moot): every claimed benefit dissolves against section 1.1/section 1.2.
 - **Shape B — `Projected<T>` read-tracking:** a runtime, test-dependent version of what the
   `dead_code` lint does statically, for free.
 - **Shape C as a new test:** inventing infra that exists — the lint IS the coverage test; the
@@ -125,7 +125,7 @@ flows are its observability net. Third bite → fold the pattern into `ui-state-
   `dead_code`, live since P0 removed the allow, failing the existing pre-commit
   `cargo clippy --workspace -- -D warnings` gate. A field staged "for later" fails by design —
   land the field WITH its consumer, or don't land it. Feature-gated consumers only count under
-  their feature: the A7 feature-matrix clippy job (STRUCTURAL_AUDIT_VERDICTS §3) is what makes
+  their feature: the A7 feature-matrix clippy job (STRUCTURAL_AUDIT_VERDICTS section 3) is what makes
   I1 sound across the matrix.
 - **I2 — the hot-path packer stays bespoke.** No mechanism exists to route it through; this
   line is the record of why one must not be built.
@@ -141,24 +141,24 @@ flows are its observability net. Third bite → fold the pattern into `ui-state-
   allow gone; `cargo test -p manifold-app` green (163+10+1+3); negative `rg` for the field
   names in `manifold-app/src` zero (the one repo hit left is `LinkSync`'s own `link_tempo` —
   a different struct). Demo: none — L1; the observation was the lint firing pre-deletion
-  (§1.1 proof command).
-- **No further phases.** P1 (the table) killed per §2.
+  (section 1.1 proof command).
+- **No further phases.** P1 (the table) killed per section 2.
 
 Side-note from the probe: three more never-read fields exist behind their own allows
 (`input_host.rs:34` cfg-gated, `project_io.rs:185 flash_save`, `workspace.rs:42 kind`) — each
 names its un-suppression trigger per the CLAUDE.md rule. Sanctioned pending work, not orphans.
 
-## §. Decided — do not reopen
+## . Decided — do not reopen
 
-1. **The declarative mirror layer is KILLED** by A1's own kill-test (§1.1/§2). Reviving
-   trigger in §2. Reverses the pre-Fable draft's C-then-A; Peter may override.
+1. **The declarative mirror layer is KILLED** by A1's own kill-test (section 1.1/section 2). Reviving
+   trigger in section 2. Reverses the pre-Fable draft's C-then-A; Peter may override.
 2. `modulation_snapshot` is exempt from any projection mechanism, current or future.
 3. This design never claimed the stale-pixel bugs: BUG-015 (OPEN) / BUG-060 (REOPENED) are
    A2/cache — UI_CLIP_AND_Z_OWNERSHIP_DESIGN + UI_HARNESS_UNIFICATION.
-4. Q-GROWTH's fact is settled and does NOT revive the table (§2).
+4. Q-GROWTH's fact is settled and does NOT revive the table (section 2).
 
-## §. Deferred
+## . Deferred
 
 - **Export progress display (BUG-083)** and **recording drop counter (BUG-084)** — the product
   gaps P0's lint exposed. When built, their fields return WITH consumers (I1 enforces this).
-- **Source-arbitration write-up** — trigger: a third bug in the class (§2 residual).
+- **Source-arbitration write-up** — trigger: a third bug in the class (section 2 residual).

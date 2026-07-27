@@ -1,9 +1,9 @@
 # Param Storage Boundaries — load reconcile, card single-source, migration self-containment
 
-**Status:** SHIPPED — P1 (`0438b60e`) + P2 (`254792c0`) + P3 (`eec807cd`) all landed on main 2026-07-09 (Opus-orchestrated Sonnet wave; design 2026-07-06 · Fable). Load reconcile stage, card single-source + derive-on-save, and the BUG-040 migration are all live. Follow-up: three `meta.params` shadow-readers flagged in §P2 (renderer-side, non-data-loss); BUG-040 closed; unrelated trunk-red BUG-077 (UI test fixtures) found during the P3 sweep.
+**Status:** SHIPPED — P1 (`0438b60e`) + P2 (`254792c0`) + P3 (`eec807cd`) all landed on main 2026-07-09 (Opus-orchestrated Sonnet wave; design 2026-07-06 · Fable). Load reconcile stage, card single-source + derive-on-save, and the BUG-040 migration are all live. Follow-up: three `meta.params` shadow-readers flagged in section P2 (renderer-side, non-data-loss); BUG-040 closed; unrelated trunk-red BUG-077 (UI test fixtures) found during the P3 sweep.
 **Prerequisites:** PARAM_STORAGE_DESIGN.md P1–P5 (all SHIPPED 2026-07-05) + the BUG-036 (param-manifest-construction-not-a-unified-safe-g…)
 fix wave (`b2f78725`, `0434da5e`, 2026-07-06). Nothing else.
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5 (Phase briefs)–§6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 before starting any phase.
 **Executor sizing:** written for Sonnet at medium effort — every phase is mechanical
 transcription plus compiler-driven migration; no architectural choices remain open.
 
@@ -30,7 +30,7 @@ magic ordering, a future card feature reading the stale copy of a spec. It is
 insurance for the August authoring push, not a feature.
 
 Companions: [PARAM_STORAGE_DESIGN.md](PARAM_STORAGE_DESIGN.md) (the model this
-hardens; its §7 decided-items still bind), [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md)
+hardens; its section 7 decided-items still bind), [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md)
 (execution contract), `docs/BUG_BACKLOG.md` BUG-040 (P3's subject).
 
 ---
@@ -46,7 +46,7 @@ hardens; its §7 decided-items still bind), [DESIGN_DOC_STANDARD.md](DESIGN_DOC_
 | Overlay rollback | `manifold-renderer/src/preset_loader.rs` (`ProjectPresetsSnapshot`, `project_presets_snapshot`, `restore_project_presets`) + 3 call sites + test in `tests/project_preset_overlay.rs` | Guards "hook mutated overlay, then load failed". **Deleted by P1** — after P1 the install happens only after a successful deserialize, so the hazard window is gone. |
 | Card spec rows | `manifold-app/src/ui_bridge/state_sync.rs:1888–2013` | Rows sourced from registry `param_defs` (effects) / graph `meta.params` (generators), then a per-instance graph-override `meta.params` overlay patches min/max/name/`is_angle`. Two sources, one dual-write. |
 | The dual-write | `manifold-editing/src/commands/effects.rs:923–983` (`EditParamMappingCommand` region) | Calibration writes BOTH the manifest spec (the authority) AND the graph `meta.params` shadow (for the card overlay). **Deleted by P2.** |
-| D12 derive-on-save | PARAM_STORAGE_DESIGN §2 D12 says `meta.params` is "derived on save from the manifest" | **Not implemented** — verified by grep 2026-07-06: no save-time rewrite exists; the shadow is maintained only by the dual-writes above. P2 implements D12 as written. |
+| D12 derive-on-save | PARAM_STORAGE_DESIGN section 2 D12 says `meta.params` is "derived on save from the manifest" | **Not implemented** — verified by grep 2026-07-06: no save-time rewrite exists; the shadow is maintained only by the dual-writes above. P2 implements D12 as written. |
 | V1.4 migration | `manifold-io/src/migrations/param_storage_v14.rs` | Positional→id order comes from the instance's own graph, else the baked `LEGACY_PARAM_ORDER` table. Never consults the file's own `embeddedPresets` → BUG-040. |
 | Regression tests | `manifold-app/tests/project_local_preset_reload.rs` (both load defenses), `manifold-renderer/tests/project_preset_overlay.rs` (overlay tiers + rollback), `effects.rs` unit `effect_instance_deserialize_params_without_registry_keeps_state` | All green on main. P1 modifies the first and third; the rollback test is deleted with its subject. |
 | Instance walker precedent | `manifold-core/src/project.rs` (`tracking_preset_ids`) | Read-only walk over every `PresetInstance` home: master effects, layer effects, clip effects, `gen_params`. P1's mutable walker copies its coverage exactly. |
@@ -109,9 +109,9 @@ order source becomes: own graph `meta.params` → `embeddedPresets[type].def
 .presetMetadata.params` → baked `LEGACY_PARAM_ORDER` → loud-drop. Pure `Value → Value`,
 self-contained in the same JSON tree, quarantine intact. Rejected: regenerating the
 baked table to include import-era types — the table is frozen by design ("never
-regenerated", PARAM_STORAGE_DESIGN §4); the file itself is the right authority.
+regenerated", PARAM_STORAGE_DESIGN section 4); the file itself is the right authority.
 
-**Not in scope (already Deferred in PARAM_STORAGE_DESIGN §8 — do not revive here):**
+**Not in scope (already Deferred in PARAM_STORAGE_DESIGN section 8 — do not revive here):**
 registry eradication beyond containment, id interning, id-keyed transport,
 `PresetDef` removal.
 
@@ -176,8 +176,8 @@ within the two serialize fns, before writing the wrapper.
 
 Landed on `wave/param-boundaries-p1` (worktree `.claude/worktrees/param-bound-p1`):
 `pending_wire` stash + `Project::reconcile_param_manifests()` (with a
-keep-vs-clear refinement not spelled out in §3 — see below); the loader
-reshaped per §3, `EmbeddedPresetsPrePass` and the JSON pre-scan deleted; the
+keep-vs-clear refinement not spelled out in section 3 — see below); the loader
+reshaped per section 3, `EmbeddedPresetsPrePass` and the JSON pre-scan deleted; the
 rollback API (`ProjectPresetsSnapshot` + both fns + 3 call sites + its test)
 deleted; the three-arm `project_local_preset_reload` test green (order
 independence proven live); round-trip gate green against
@@ -186,7 +186,7 @@ independence proven live); round-trip gate green against
 and the `cam_orbit` driver resolves against a real one, zero
 dropping/placeholder log lines).
 
-Implementation note beyond §3's literal snippet: `pending_wire` does NOT
+Implementation note beyond section 3's literal snippet: `pending_wire` does NOT
 clear unconditionally on the first `reconcile_manifest()` call. If that pass
 still can't resolve a template (`template_known_for` false — the
 keep-don't-drop path), the stash is kept so a *later* reconcile call — after
@@ -196,7 +196,7 @@ resolves a real template (the common case: one load, one reconcile). This is
 what makes the P1 brief's third test arm (bare load → install → reconcile
 directly, order-independence) actually possible; a destructive `.take()` on
 every call would make that sequence a no-op. Also: `#[serde(skip)]` from
-§3's snippet doesn't apply here — `PresetInstance` has hand-written
+section 3's snippet doesn't apply here — `PresetInstance` has hand-written
 `Serialize`/`Deserialize` impls (not derived), so the attribute isn't a
 registered helper and won't compile; the field is simply never written by
 the custom `Serialize` impl, achieving the same "never on the wire" property
@@ -213,7 +213,7 @@ pre-deserialize hook) was corrected.
 `cargo test -p manifold-app --test project_local_preset_reload` green;
 `rg -n "EmbeddedPresetsPrePass" crates/manifold-io/src/loader.rs` returns the struct.
 
-**Read-back first:** this doc §2 D1–D3 + §3; PARAM_STORAGE_DESIGN §4 (load
+**Read-back first:** this doc section 2 D1–D3 + section 3; PARAM_STORAGE_DESIGN section 4 (load
 reconcile rules — they still govern `build_param_manifest`, unchanged);
 `loader.rs` whole; `build_param_manifest` and its callers
 (`rg -n "build_param_manifest" crates/manifold-core/src`). Restate the decisions,
@@ -223,7 +223,7 @@ the forbidden moves, and what the entry checks found before any edit.
 - `pending_wire` stash + `Project::reconcile_param_manifests()` (walker coverage
   copied from `tracking_preset_ids`; add a mut-walker helper next to it if none
   exists rather than open-coding four loops twice).
-- Loader fns reshaped per §3; `EmbeddedPresetsPrePass` and the JSON pre-scan deleted.
+- Loader fns reshaped per section 3; `EmbeddedPresetsPrePass` and the JSON pre-scan deleted.
 - Rollback API deleted: `ProjectPresetsSnapshot` + both fns in `preset_loader.rs`,
   the three call sites (`project_io.rs`, `app_lifecycle.rs` ×2), and the
   `overlay_snapshot_restores_after_a_candidate_install` test.
@@ -234,7 +234,7 @@ the forbidden moves, and what the entry checks found before any edit.
   `reconcile_param_manifests()` directly and assert full template resolution —
   the sequence that was impossible pre-P1.
 
-**Seam brief:** old → new is §3 verbatim; the public fn names and the installer
+**Seam brief:** old → new is section 3 verbatim; the public fn names and the installer
 signature do not change, so app call sites are untouched except deleting the three
 rollback lines. Compiler-driven: delete `EmbeddedPresetsPrePass` and
 `project_presets_snapshot` FIRST; the red build is the checklist.
@@ -248,7 +248,7 @@ is unconditional inside the loader); lazy reconcile-on-first-access (re-introduc
 hidden global ordering); widening into P2's card work.
 
 **Gate.** Positive: `cargo test -p manifold-core -p manifold-io -p manifold-app`
-green; the three-arm reload test green. Round-trip gate (§5 of the standard): load
+green; the three-arm reload test green. Round-trip gate (section 5 of the standard): load
 `~/Downloads/meshImportTests.manifold` headlessly via the scratch pattern from the
 BUG-036 session (throwaway test, deleted after) — all 17 params present, `cam_orbit`
 driver resolves, zero "dropping unknown param id" lines. Negative:
@@ -263,7 +263,7 @@ Landed on `wave/param-boundaries-p2` (worktree `.claude/worktrees/param-bound-p2
 `state_sync`'s row-building collapsed to one `rows_from_manifest(inst)` helper
 called for both kinds (the registry arm, the user-binding append loop, and
 the overlay block all deleted); `GraphWithDerivedParams` implemented and
-wired into both `PresetInstance` serialize arms (resolves the §3
+wired into both `PresetInstance` serialize arms (resolves the section 3
 ⚠ VERIFY-AT-IMPL marker); `EditParamMappingCommand` no longer writes
 `meta.params` — its execute/undo now source name/min/max/invert/curve from
 the manifest only, while scale/offset (which have no manifest home) still
@@ -314,7 +314,7 @@ path is an escalation, not an adapter.
 - `state_sync` spec rows built by one iteration over `inst.params` (both kinds);
   registry arm, user-binding append loop, and overlay block (1982–2013) deleted.
 - `GraphWithDerivedParams` serialize wrapper wired into both serialize arms
-  (⚠ VERIFY-AT-IMPL marker in §3 resolves here).
+  (⚠ VERIFY-AT-IMPL marker in section 3 resolves here).
 - Dual-writes to `meta.params` in `EditParamMappingCommand` (and the expose command
   if the inventory finds it shadow-writing) deleted — the manifest spec write stays.
 - Regression: extend `user_exposed_angle_param_carries_is_angle_through_manifest_and_synth`
@@ -362,7 +362,7 @@ gap, unrelated to param storage). All `manifold-io` tests, including the BUG-040
 fixtures, are green; clippy is clean.
 
 **Entry state:** P1 landed (P3 is independent of P2; run in either order after P1).
-**Read-back:** BUG-040 entry in `docs/BUG_BACKLOG.md`; `param_storage_v14.rs` §
+**Read-back:** BUG-040 entry in `docs/BUG_BACKLOG.md`; `param_storage_v14.rs` section
 around the order-source resolution (`rg -n "LEGACY_PARAM_ORDER" crates/manifold-io/src/migrations/param_storage_v14.rs`).
 **Deliverables:** the D5 lookup arm; two fixtures — positional generator instance
 WITH matching embedded preset (values land by that order) and WITHOUT (falls to
@@ -385,7 +385,7 @@ clippy. Negative: `rg -n "preset_definition_registry" crates/manifold-io/src/mig
 5. The migration's order authority chain: own graph → file's `embeddedPresets` →
    baked table → loud drop. The baked table is never regenerated.
 6. Registry eradication, interning, id-keyed transport: still Deferred
-   (PARAM_STORAGE_DESIGN §8 owns them).
+   (PARAM_STORAGE_DESIGN section 8 owns them).
 
 ## 6. Deferred
 
