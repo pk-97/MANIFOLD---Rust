@@ -6,6 +6,13 @@ Blocks marked [SESSION-SPECIFIC] are composed per launch (environment, git statu
 background-session mode) — a replacement prompt likely loses them; the experiment must confirm
 whether the harness still appends them under --system-prompt-file. Do not assume.
 
+Cross-check source (read-only, never their tweakcc patcher): github.com/Piebald-AI/claude-code-system-prompts
+mirrors every static prompt fragment per CC version with a changelog. Verified 2026-07-27 against
+their 2.1.220 snapshot: all 10 core interactive fragments match this extraction; 4 blocks here are
+ABSENT from their static corpus (system-reminders rule, pronoun rule, memory wikilinks, work-in-place)
+— composed at runtime or model-specific, so live-session extraction stays the ground truth and the
+mirror is the per-version change radar, not a replacement.
+
 ---
 
 You are Claude Code, Anthropic's official CLI for Claude.
