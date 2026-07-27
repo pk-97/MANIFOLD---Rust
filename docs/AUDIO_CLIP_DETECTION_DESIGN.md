@@ -13,7 +13,7 @@ The detection engine is built and stays. None of it is rewritten — it's re-poi
 - **Python pipeline** — demucs stems → ADTOF drums + basic_pitch bass/synth + madmom beats → JSON. ([tools/audio_analysis/](../tools/audio_analysis/))
 - **Orchestrator** — subprocess driving, non-blocking state machine on the content thread. ([percussion_orchestrator.rs](../crates/manifold-playback/src/percussion_orchestrator.rs))
 - **Parse → plan → apply** — [percussion_parser.rs](../crates/manifold-playback/src/percussion_parser.rs), [percussion_planner.rs](../crates/manifold-playback/src/percussion_planner.rs), [percussion_import.rs](../crates/manifold-playback/src/percussion_import.rs) (the `EditingService` mutation gateway).
-- **Audio clips** — `TimelineClip.audio_file_path`, `LayerType::Audio`, drag-drop, waveform, warp. ([clip.rs](../crates/manifold-core/src/clip.rs), [AUDIO_LAYER_DESIGN.md](AUDIO_LAYER_DESIGN.md))
+- **Audio clips** — `TimelineClip.audio_file_path`, `LayerType::Audio`, drag-drop, waveform, warp. ([clip.rs](../crates/manifold-core/src/clip.rs), [AUDIO_LAYER_DESIGN.md](archive/AUDIO_LAYER_DESIGN.md))
 - **Audio clip inspector section** — `build_audio_section` (Source / Warp / Clip BPM). Detection UI joins here. ([clip_chrome.rs:386](../crates/manifold-ui/src/panels/clip_chrome.rs#L386))
 
 ## 1. Decisions (locked 2026-06-18)
@@ -151,7 +151,7 @@ The demucs pass already produces 4 stems (drums / bass / vocals / other); the pe
 
 ### 8.1 What one press produces
 
-- **4 stem audio lanes**, one per stem file, each in the new **analysis-only** output state — silent to master, still feeding its send. See [LAYER_CONTROLS_DESIGN section 5](LAYER_CONTROLS_DESIGN.md).
+- **4 stem audio lanes**, one per stem file, each in the new **analysis-only** output state — silent to master, still feeding its send. See [LAYER_CONTROLS_DESIGN section 5](archive/LAYER_CONTROLS_DESIGN.md).
 - **Trigger lanes** with the detected hits placed (Kick / Snare / …), as today.
 - **One send per stem** in Audio Setup. Create with `AddAudioSendCommand`, then route the stem lane to it with `SetLayerAudioSendCommand` (the layer→send route the layer-header Send dropdown already drives — a layer feeds **at most one** send). The send reads the stem lane's **realtime post-fader tap** (the shipped model — section 8.6). **Reused by source**, so re-detect never piles up duplicates.
 - **A group** wrapping source + stems + triggers, named after the song.
