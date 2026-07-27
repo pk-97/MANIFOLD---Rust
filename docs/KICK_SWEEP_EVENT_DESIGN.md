@@ -9,7 +9,7 @@ Scope lane @ `b6aed008` (rode the ScopeColumn typed-overlay refactor) · landing
 **The governing insight:** on a bass-heavy full mix the Low band's onset detector goes
 near-deaf on kicks — the bassline owns the band's flux baseline and the kick can't
 out-shout it in its own 45–120 Hz range. The masked-novelty workaround shipped as the
-BUG-046 (low-band-kick-deafness-on-mixes) partial (`61c2b0fd`) traded that deafness for the opposite fault: it fires on
+BUG-046 (low-band-kick-deafness-on-mixes) partial traded that deafness for the opposite fault: it fires on
 bass-note attacks too, so a kick-bound visual strobes on the bassline (Peter, live,
 confirmed). Both faults are the same root — **flux cannot tell a kick from a bass note
 in the Low band.** But the kick leaves one signature the bass usually does not: a fast,

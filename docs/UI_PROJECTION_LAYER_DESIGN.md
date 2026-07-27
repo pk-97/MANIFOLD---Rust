@@ -115,7 +115,7 @@ bugs whose root cause is a mis-threaded mirror field. Today's count: zero.
 
 **The one live residual:** *source-arbitration* bugs — which side of the seam is authoritative
 for a field while the user edits it. Two observed, both fixed: BPM (`101616e4`, `7a946218`;
-the worked pattern is the arbitration comment at state_sync.rs:202) and VSync (`0da7f99e`).
+the worked pattern is the arbitration comment at state_sync.rs:202) and VSync.
 Per-field semantic judgment — no table or lint checks it. n=2; UI_HARNESS_UNIFICATION's L3
 flows are its observability net. Third bite → fold the pattern into `ui-state-sync-path`.
 

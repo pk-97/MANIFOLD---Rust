@@ -365,8 +365,6 @@ This is the JSON shape an AI agent reads to learn what's available. The composit
 
 ---
 
-**Next concrete step:** section 6.0 — build the parity test framework. Without it nothing downstream is verifiable.
-
 ---
 
 ## 9. Naming + UX audit (2026-05-17, ongoing)
@@ -823,7 +821,7 @@ Whoever picks this up: the rename script (`scripts/audit_rename.py`) is *not* th
 
 ---
 
-**End of section 9.** Audit applied across 7 phases (1, 2, 3, 4, 6, 7a, 7b, 7c); ~237 source edits + tooling. Phase 5 deferred per above.
+**End of section 9.** Phase 5 deferred per above.
 
 ---
 
@@ -1130,9 +1128,9 @@ The section 10 plan organised work into phases (A–E). This section is the orth
 
 ### 12.1 What shipped post-Phase B kickoff
 
-- **Control wire plumbing** (`cc6d0856`) — `PortType::Scalar(ScalarType)`, `Backend::set_scalar`, `NodeOutputs::set_scalar` with per-step scratch drain. Macro learned `ScalarF32`/`ScalarVec2`/etc. port types. Convention: when a primitive declares an optional `Scalar` input port with the same name as a same-named `ParamDef`, the wire shadows the param when present (FluidSim pattern). First wired consumer: `wet_dry_mix.wet_dry`.
-- **Control producers** (`239877fb`) — `node.value` (constant scalar), `node.lfo` (beat-locked oscillator, sine/triangle/saw/square, stateless), `node.math` (binary op, divide-by-zero clamps to 0).
-- **Auto-populated palette** (`3de11521`) — `PrimitiveFactory` carries `picker: Option<PickerInfo>`; macro accepts `picker: { label, category }`; `palette_atoms()` walks inventory. New nodes appear in the editor by declaring picker info at their definition site, not by editing a central list.
+- **Control wire plumbing** — `PortType::Scalar(ScalarType)`, `Backend::set_scalar`, `NodeOutputs::set_scalar` with per-step scratch drain. Macro learned `ScalarF32`/`ScalarVec2`/etc. port types. Convention: when a primitive declares an optional `Scalar` input port with the same name as a same-named `ParamDef`, the wire shadows the param when present (FluidSim pattern). First wired consumer: `wet_dry_mix.wet_dry`.
+- **Control producers** — `node.value` (constant scalar), `node.lfo` (beat-locked oscillator, sine/triangle/saw/square, stateless), `node.math` (binary op, divide-by-zero clamps to 0).
+- **Auto-populated palette** — `PrimitiveFactory` carries `picker: Option<PickerInfo>`; macro accepts `picker: { label, category }`; `palette_atoms()` walks inventory. New nodes appear in the editor by declaring picker info at their definition site, not by editing a central list.
 
 ### 12.2 Remaining V1 node categories
 

@@ -142,12 +142,12 @@ Grouped in waves; within a wave, items are independent and order is free.
 **Wave 1 — the stage foundations.** (2026-07-03: P1s landing in parallel worktrees off `feat/timeline-ui-redesign`.)
 4. MULTI_DISPLAY P1–P3 (core model → island rendering → multi-output present) — the
    widest unblock in the corpus: projection mapping, LED P2, and the rig work all
-   ride it. **P1 ✅ merged (`0cb5114f`); section 6.1a seam committed 2026-07-06 — P2 RE-ISSUABLE** (the hardening-queue item is resolved).
-5. SESSION_MODE — second performance surface; unblocks session perform. **P1 (`4f072100`) + P2 (`f852d2bc`) + P3 (`9a069aa4`) ✅ merged. P4 = the grid UI — hand to Peter for feel review, not auto-gated. P5 = recording.**
+   ride it. **P1 ✅ merged; section 6.1a seam committed 2026-07-06 — P2 RE-ISSUABLE** (the hardening-queue item is resolved).
+5. SESSION_MODE — second performance surface; unblocks session perform. **P1 + P2 + P3 ✅ merged. P4 = the grid UI — hand to Peter for feel review, not auto-gated. P5 = recording.**
 6. MEDIA_BACKEND P1–P3 (Metal era) — decode/encode traits; independent of everything.
    **section 3a addendum resolved 2026-07-06 (FrameLease + MediaBackends committed against the
    shipped async protocol) — P1 RE-ISSUABLE.**
-7. GIG_RESILIENCE P2 (breadcrumb + `--resume`) — needs nothing from other designs. **✅ merged (`3dffe29a`). D8 Ableton-position rejoin deferred to ABLETON_SHOW_SYNC (bridge has no inbound song-position); breadcrumb-beat fallback shipped. P3 (understudy) needs PERFORM_SURFACE P1.**
+7. GIG_RESILIENCE P2 (breadcrumb + `--resume`) — needs nothing from other designs. **✅ merged. D8 Ableton-position rejoin deferred to ABLETON_SHOW_SYNC (bridge has no inbound song-position); breadcrumb-beat fallback shipped. P3 (understudy) needs PERFORM_SURFACE P1.**
 
 **Wave 2 — the show becomes playable end-to-end.**
 8. PERFORM_SURFACE P1 (chrome-hosted perform substrate, timeline perform migrated).

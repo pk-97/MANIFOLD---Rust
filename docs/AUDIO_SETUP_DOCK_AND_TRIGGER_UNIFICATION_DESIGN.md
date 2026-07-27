@@ -270,7 +270,7 @@ carry over unchanged.
 
 ## 4. Phasing
 
-### Phase 1 — The dock (layout column + overlay-path deletion + scroll) — SHIPPED 2026-07-10 (`36a96791`)
+### Phase 1 — The dock (layout column + overlay-path deletion + scroll) — SHIPPED 2026-07-10
 - **Entry state:** `rg -n "audio_setup_width" crates/manifold-ui/src/layout.rs` → zero
   hits; `rg -n "OverlayId::AudioSetup" crates/manifold-app/src/ui_root.rs` hits `:27`
   region; anchors `layout.rs:88/:152`, `audio_setup_panel.rs:745/:2314` re-verified.
@@ -296,7 +296,7 @@ carry over unchanged.
 - **Test scope:** `cargo test -p manifold-ui --lib` + the flow; no workspace sweep.
 - **Demo:** the PNG + flow above — L3.
 
-### Phase 2 — LayerClipTrigger model + migration + evaluation (core/playback/io/app-runtime) — SHIPPED 2026-07-10 (`e4aa01bf`)
+### Phase 2 — LayerClipTrigger model + migration + evaluation (core/playback/io/app-runtime) — SHIPPED 2026-07-10
 - **Entry state:** section 3.4's `rg` sweep run fresh, count matches the brief's baked list
   (else stop and list); `audio_trigger.rs:152/:194`, `live_trigger.rs:56`,
   `layer.rs:140` re-verified.
@@ -325,7 +325,7 @@ carry over unchanged.
 
 ### Phase 3 — Layer-side authoring UI + drawer unification + fire meter (D5/D6)
 
-> **SPLIT 2026-07-10 during execution.** **P3a SHIPPED (`47f2a112`):** the Triggers-matrix
+> **SPLIT 2026-07-10 during execution.** **P3a SHIPPED:** the Triggers-matrix
 > deletion (section deliverable "matrix deleted") + the shared drawer's Length-row capability
 > (D5) — both independent of the placement question below. Consumers rows re-pointed to
 > `Project::clip_trigger_consumers` (the panel-side display of layer-owned triggers).
@@ -457,7 +457,7 @@ to read the settings panel anymore").
 
 BUG-109. Three independent breaks, all must land together (P5):
 
-1. **Playing: capture wiped after triggers write.** P3c (`12fbc37d`) placed the per-tick
+1. **Playing: capture wiped after triggers write.** P3c placed the per-tick
    `FireMeterCapture` reset inside `tick_playing`'s modulation step
    ([`engine.rs:901`](../crates/manifold-playback/src/engine.rs#L901)) with a comment
    asserting clip triggers evaluate "below". They evaluate at step 3b

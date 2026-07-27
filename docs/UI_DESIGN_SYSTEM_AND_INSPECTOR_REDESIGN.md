@@ -30,8 +30,6 @@ checklists ignore.
 
 ## 2. Shipped this session ✅
 
-All committed and pushed to branch `ui-layout-fullwidth-timeline`.
-
 | Change | What | Commit |
 |---|---|---|
 | Inspector full-height | Right panel now runs transport-bottom → footer-top (was a short top-right box with wasted space). | `bc61a1ae` |
@@ -301,9 +299,9 @@ problem; relocation is a separate call).
    below. Clip chrome is a content panel (single name row + source / warp / trigger sections) with
    no header+opacity triple — nothing to merge, left as-is.
 
-Also note — **card panels are now reused across rebuilds** (matched by effect id; generator by
+**Card panels are reused across rebuilds** (matched by effect id; generator by
 layer), not re-allocated every sync. Fixed the mod-tab snap-back (UI-only tab state was on a
-card thrown away each frame) and removed a per-frame allocation. Shipped.
+card thrown away each frame) and removed a per-frame allocation.
 
 ---
 
@@ -471,7 +469,7 @@ the renderer is custom.
 
 ## 14. Padding & layout rules — the sub-element grid 📏
 
-**Status:** **A–F all shipped 2026-06-25 (Phase 3, automated).** Spacing + radii snapped to
+**As built (A–F):** spacing + radii snapped to
 the scale, the inspector inset unified to one column, the right gutter shared, the inter-card
 gap single-owned, and the header rhythm unified — each verified by tests (a layout-geometry
 column-alignment test replaced the running-app eyeball gate). The rules below are the SSOT for
@@ -586,17 +584,17 @@ in section 4–section 7). It removes the drift: same insets, same columns, same
 ### 14.5 Build order
 
 - **A — Spec & freeze (this section).** ✅ no code; the maps above are the freeze.
-- **B — Spacing snap (mechanical, low-risk).** ✅ 2026-06-25. Tokenised the live section 14.4 spacing
+- **B — Spacing snap (mechanical, low-risk).** ✅ Tokenised the live section 14.4 spacing
   constants onto `SPACE_*` (`param_slider_shared`, `header`, `transport`, `footer`, `layer_header`);
   value changes: section-header 22→24, chrome gaps 6/5/3 → 4, card header 27.5→28. The section 14.3
   `inspector_layout` rows turned out **dead and were deleted** (see section 14.3 correction). Deferred the
   `EFFECT_CONTAINER_SPACING`/`CARD_BOTTOM_MARGIN` gap pair (→E). All golden-layout oracles green.
-- **B′ — Radius snap (sibling of B).** ✅ 2026-06-25. All 53 raw `corner_radius`/`.radius()`
+- **B′ — Radius snap (sibling of B).** ✅ All 53 raw `corner_radius`/`.radius()`
   literals → radius tokens; local copies (`SECTION_RADIUS`, `LH_BTN_RADIUS`) aliased/inlined. Added
   `HAIRLINE_RADIUS` (1px) as the named rule-6 hairline exception for thin bars/tracks/fills. One
   survivor: a `// design-token-exempt:` circular status dot. **section 16 RADIUS_BASELINE lowered 53 → 0
   — the radius guard is now absolute.**
-- **C — Unify the inset.** ✅ 2026-06-25. The section 14.3 map pointed at dead code; the live stagger was
+- **C — Unify the inset.** ✅ The section 14.3 map pointed at dead code; the live stagger was
   border-less chrome content (`PAD_H` 2) vs bordered card param labels (`BORDER 1 + PADDING 6` = 7),
   three different left edges. New token `color::SECTION_CONTENT_INSET` (`SPACE_M + 1px` border
   compensation) is the one column; `param_card::PADDING` 6→`SPACE_M` (card owns the canonical inset,
@@ -605,17 +603,17 @@ in section 4–section 7). It removes the drift: same insets, same columns, same
   section-card frame; keeping the frame and aligning *content* to one column is the right call. New
   test `param_label_column_aligns_to_section_inset` pins it on node bounds (no GPU). Visible change:
   chrome controls shift right ~7px to meet the card label column.
-- **D — Shared right column.** ✅ 2026-06-25. The generator header padded `r: 0` (trailing controls
+- **D — Shared right column.** ✅ The generator header padded `r: 0` (trailing controls
   flush to the inner edge) while the effect header and the param rows' value/mod-icon lane already
   right-align to `inner_right - PADDING`. Gave the gen header `r: PADDING` → one shared right gutter.
   Golden oracle re-frozen to the gutter position. (The cross-panel header-*title* x-alignment, a
   bigger restyle of every chrome header, is the only piece left for a future `section_header` pass.)
-- **E — Row rhythm + gaps.** ✅ 2026-06-25. Inter-card gap single-owned: `CARD_BOTTOM_MARGIN` 6→0,
+- **E — Row rhythm + gaps.** ✅ Inter-card gap single-owned: `CARD_BOTTOM_MARGIN` 6→0,
   `inspector::SECTION_GAP` 6→`SPACE_M` (was 6+6=12, now one 8). One header height: new token
   `color::HEADER_ROW_HEIGHT` (28) wired into the card header and the master/layer chrome headers
   (was a 27.5-vs-28 half-pixel split). `SECTION_CARD_RADIUS` 4→`CARD_RADIUS` (rule 6). Content row
   (24) and the 18/22.5 second tier kept (rule 5 tolerates a documented second tier).
-- **F — Roll across variety.** ✅ 2026-06-25. 419 manifold-ui lib tests (which build every panel
+- **F — Roll across variety.** ✅ 419 manifold-ui lib tests (which build every panel
   variety — effect/gen cards, master/layer/clip chrome, macros) + the geometry test + the token
   ratchet + workspace build, all green. clippy `-D warnings` clean.
 
@@ -852,12 +850,11 @@ those.
 
 ## 22. Full duplication audit — 5-agent pass 🔬
 
-**Status:** complete (2026-06-25). Five parallel agents, one per crate slice, read every file in
-`manifold-ui/src` (924k tokens, 118 tool calls). This **supersedes section 21** (the preliminary scan) —
+**Status:** complete. This **supersedes section 21** (the preliminary scan) —
 section 21's findings all confirmed, plus much more. One finding is a **live correctness bug**, not tidiness.
 
 ### 22.1 Headline: a real bug, not just duplication ⚠️
-> **✅ FIXED 2026-06-26 (`da7811f7`).** Hover now routes through the canonical
+> **✅ FIXED 2026-06-26.** Hover now routes through the canonical
 > `ClipHitTester::hit_test` ([viewport/interaction.rs:32](../crates/manifold-ui/src/panels/viewport/interaction.rs#L32));
 > duplicate types removed; tests `hit_test_clip_delegates_to_shared_hit_tester` +
 > `hit_test_clip_skips_group_layers` pin it. The original finding kept below for the record.
@@ -918,7 +915,7 @@ primitives; `hit::Span` + `node::Rect::contains`; the `chrome` View/Host/compone
 `marker_flag_rect` (draw==hit). The primitives are good — the bypasses are the bug.
 
 ### 22.6 Fix order
-1. **section 22.1 clip hit-test bug** — ✅ DONE (`da7811f7`): routed through `ClipHitTester`, types unified.
+1. **section 22.1 clip hit-test bug** — ✅ DONE: routed through `ClipHitTester`, types unified.
 2. **`Color32::lighten/darken`** — ✅ DONE (`e8b92e90`, Phase 1 dedups): one home in `color.rs`, ~7 copies gone.
 3. **section 16 guard** — turns the literal-level families (colour, radius, button styles) into CI failures.
 4. **Buttons kit (section 18)** + **`section_header`** — the two HIGH structural ones.
@@ -1014,7 +1011,7 @@ Peter's instinct was right: the GPU/node side already solved the hard half. Phas
 fixtures, compare) — **not** its `run_legacy` / `EffectChain` path, which is the dead Phase-4a legacy
 side. The bones are current; the legacy effect path is not.
 
-### 23.8 Spike result — PROVEN (2026-06-25) ✅
+### 23.8 Spike result — proven ✅
 All three seams confirmed by a working test:
 [`crates/manifold-renderer/tests/headless_ui_spike.rs`](../crates/manifold-renderer/tests/headless_ui_spike.rs)
 (`cargo test -p manifold-renderer --test headless_ui_spike`). Compiled first try, runs in ~2.5s.
@@ -1048,10 +1045,10 @@ golden-snapshot save/diff. The hard unknowns are now all answered.
 
 ## 24. Timeline visual upgrade — the clips 🎞️
 
-**Status:** spec (captured 2026-06-26 from a mockup-driven session). **Not covered by section 1–section 23** —
+**Status:** spec. **Not covered by section 1–section 23** —
 this whole doc has been the *inspector + chrome*; the timeline lanes were never in scope. The
 clip *hit/drag* domain is correctly its own thing (section 22.5) and the two hit-testers were already
-unified (`da7811f7`), so this chapter is **purely visual** — it adds nothing to hit-testing.
+unified, so this chapter is **purely visual** — it adds nothing to hit-testing.
 
 The mockups that drove it (neutral chrome, colour = identity, value-based depth, readable clips)
 live in the session scratchpad — direction only, not the spec (section 12: prototype in-renderer).

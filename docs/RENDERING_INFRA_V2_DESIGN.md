@@ -31,7 +31,7 @@ not for the current chip.
 
 - **Scene ladder first** (running, other agent): Scenes 1–3 are the intake evidence —
   what a lit scene here actually lacks is the requirements list for section 3. First
-  finding already in: BUG-118 (render-scene-fog-washes-out-instead-of-depth-gra…) fog-washout, fog pulled from Scene 1 (`0d65db3d`).
+  finding already in: BUG-118 (render-scene-fog-washes-out-instead-of-depth-gra…) fog-washout, fog pulled from Scene 1.
 - **PERF_BUDGET_GATE builds in PARALLEL** (approved, Sonnet-executable). Every
   decision below is a milliseconds question; the instrument precedes the measured
   decisions, not the capture of direction.

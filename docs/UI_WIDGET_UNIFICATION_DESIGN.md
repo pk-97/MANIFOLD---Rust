@@ -6,7 +6,7 @@ P7.6's own closing inventory and deliberately left out of P7.6's named scope) is
 zero-design mechanical fold, identical in shape to every completed P7 phase. Added per
 Peter's instruction that ready bugs with a known fix shape should not sit deferred for
 no reason. Fully briefed above; awaiting execution. · 2026-07-13 (Sonnet, P8 execution):
-**P8 LANDED (main `d5ab1ae7`) — closes BUG-143.** `MacrosPanel`'s Ableton trim-bar
+**P8 LANDED — closes BUG-143.** `MacrosPanel`'s Ableton trim-bar
 `dragging_ableton_trim: i32` (−1 idle) + `dragging_ableton_trim_is_min: bool` sentinel
 pair folds onto `DragController<AbletonTrimDrag>`, a struct payload
 (`index: usize, is_min: bool` — chosen over an enum because the existing call sites
@@ -491,17 +491,13 @@ script driver supports a raw-position right-click on the canvas (⚠ VERIFY-AT-I
 Performer gesture: right-click a node slider track to zero a param mid-set-build — the
 demo exercises exactly this.
 
-**P1 LANDED 2026-07-13 (Sonnet, main `02418e4d`).** Entry re-verify found 4 hand
-registration sites, not 3 — `param_card.rs`'s `register_intents` had three independent
-`on(ids.track/sl.track/cfg.decay_slider.track, RightClick, reset)` calls (main rows,
-envelope decay, audio-shape drawer rows) the section 1 audit table never named. Converted all 4;
-I1's own negative gate requires it regardless of the count discrepancy. Demo: the
-`--script` JSON runner (`scripts/ui-flows/` + `ui_snapshot/script.rs`) has no graph-canvas
-wiring at all (confirmed by reading both — `AutomationTarget`/`Gesture::RightClick` exist
-but nothing routes them to `GraphCanvas`), so **L3 isn't reachable**; landed as **L2**:
-the `gltfeditor` scene's base PNG (`target/ui-snapshots/gltfeditor/gltfeditor.png`) plus
-the pre-existing `right_click_track_zone_resets_numeric_param_to_default` test, which
-asserts the exact emitted `SetGraphNodeParam` on the real `on_right_button_down` path.
+**P1 — as built.** All 4 hand registration sites converted (one more than the
+section 1 audit table named: `param_card.rs`'s `register_intents` carried three
+independent RightClick-reset calls — main rows, envelope decay, audio-shape drawer).
+The `--script` JSON runner has no graph-canvas wiring, so **L3 isn't reachable**;
+proof is **L2**: the `gltfeditor` base PNG plus
+`right_click_track_zone_resets_numeric_param_to_default`, which asserts the emitted
+`SetGraphNodeParam` on the real `on_right_button_down` path.
 
 **P2 — stepper + send-fader contracts (closes BUG-070's remainder).**
 Entry: re-read BUG-070's backlog entry; inventory the Audio Setup gain `[−]value[＋]`
@@ -511,23 +507,18 @@ crates/manifold-ui/src/panels`). Deliverables: each widget gets the same shape �
 Gate: `-p manifold-ui --lib`; reset works on both widgets (unit tests naming BUG-070);
 BUG-070 entry closed in the same landing.
 
-**P2 LANDED 2026-07-13 (Sonnet, main `e68f033f`).** Entry re-read found BUG-070 already
-FIXED before this session (`docs/BUG_BACKLOG.md`, no reopen needed) — the stepper and the
-overlay-drag send-fader turned out to be the SAME underlying gain value with two input
-methods, already sharing one reset gesture; no second widget to contract separately.
-Added a minimal `StepperZone`/`StepperIntent` contract (`crates/manifold-ui/src/
-stepper.rs`) and converted `audio_setup_panel.rs`'s hand `UIEvent::RightClick` id match to
-consult it. Scope note NOT closed here: unlike the slider hosts, `AudioSetupPanel` routes
-none of its gestures through `IntentRegistry` — full P1-style `register_intents`
-derivation would be a panel-wide dispatch migration, left as a follow-up.
+**P2 — as built.** The stepper and the overlay-drag send-fader are the SAME gain
+value with two input methods, already sharing one reset gesture (BUG-070 — stepper
+reset — was fixed separately; `docs/BUG_BACKLOG.md`). `StepperZone`/`StepperIntent`
+(`crates/manifold-ui/src/stepper.rs`) is the contract; `audio_setup_panel.rs`'s hand
+`UIEvent::RightClick` id match consults it. Open follow-up: `AudioSetupPanel` routes
+none of its gestures through `IntentRegistry` — full derivation is a panel-wide
+dispatch migration.
 
 **P3 — full derivation for the slider's remaining gestures (re-briefed 2026-07-13; D13–D15 govern).**
-History: **NOT ATTEMPTED 2026-07-13** — "heterogeneous, non-uniform
-label-mapping/value-cell-edit logic… comparable in scope to P1." The design-pass audit
-confirmed the deferral was hiding real design gaps, not just budget (section 1b): the
-committed ValueCell row was wrong, EditValue can't ride the registry, and label
-gestures diverge by host. D13–D15 resolve all three; the phase below has zero open
-decisions.
+D13–D15 resolve the three real gaps here (the committed ValueCell row was wrong,
+EditValue can't ride the registry, label gestures diverge by host); the phase below
+has zero open decisions.
 
 Entry: re-verify the section 1b anchors this phase depends on — `rg -n 'ParamLabelRightClick|MacroLabelRightClick'
 crates/manifold-ui/src` (expect: enum defs in panels/mod.rs:792/:803, registration at
@@ -709,10 +700,9 @@ committed `SetGraphNodeParam` in the run log (P1's demo precedent). Performer ge
 double-click a node's value box mid-set-build, type `0.5`, Enter — the exact value
 lands without a scrub.
 
-**P6 — RETIRED 2026-07-13 (D18).** The audit found no chrome-only widget whose gesture
-semantics exist in more than one place — every original target is already unified
-(overlay system, popup_shell, picker_core, typed dropdown items) or covered by
-P1/P2/P3. "Mechanical" was wrong on both counts: there is nothing mechanical left, and
+**P6 — RETIRED (D18).** No chrome-only widget has gesture semantics in more than
+one place — every original target is already unified (overlay system, popup_shell,
+picker_core, typed dropdown items) or covered by P1/P2/P3.
 what remains (panel dispatch migration) is neither mechanical nor duplication — see
 D18 and Deferred. I1's repo-wide gates land with P3; no separate phase.
 
@@ -982,29 +972,23 @@ Gate: `-p manifold-ui --lib` + clippy; the I5 gates. Demo: **L2** — before/aft
 the timeline ruler scrub position via `ui-snap`, plus the dock/audio-setup pinning
 tests. Performer gesture: scrub the timeline ruler to relocate during a build-up.
 
-**P7.3–P7.6 LANDED 2026-07-13 (Sonnet, main `09f7570e`/`bb56bd7b`/`903001bf`/P7.6's
-commit).** P7.3: automation gestures fold onto `TimelineDrag`'s payload;
+**P7.3–P7.6 — as built.** P7.3: automation gestures fold onto `TimelineDrag`'s payload;
 `AutomationMarqueeState` deleted. P7.4: trim/region fold onto `TrimDrag`/`RegionDrag`.
-P7.5: the Move fold — entry-proof found the `poll_drag` anchor guard VACUOUS (the sole
-arming site, `begin_move_drag`, sets the anchor on every path before returning), so the
-anchor is `ClipId` (not `Option<ClipId>`) by construction; the entire pre-existing
-Move/Trim/motion pinning suite passed UNMODIFIED through all three folds — the strongest
-available proof of behavior preservation on the live-show's highest-stakes gesture. P7.6:
+P7.5: the Move anchor is `ClipId` (not `Option<ClipId>`) by construction — the sole
+arming site sets it on every path — and the pre-existing Move/Trim/motion pinning suite
+passed unmodified through all three folds; that suite is the behavior-preservation
+proof on the live-show's highest-stakes gesture. P7.6:
 viewport (`ViewportDragMode` + `marker_drag_id`/`marker_drag_start_beat` +
 `scrollbar_grab_dx` → `DragController<ViewportDrag>`), audio-setup (`dragging_band`/
 `calibration_drag` — a genuine two-`Option` multi-armed-bug-class pair →
 `DragController<AudioSetupDrag>`), dock (`Option<DockEdge>` →
-`DragController<DockEdge>`). The closing `rg 'dragging'` inventory found one item outside
-every fold and D12's out-list — `MacrosPanel`'s Ableton-trim-bar drag
-(`dragging_ableton_trim: i32` sentinel) — logged as BUG-143, deliberately left unfolded
-(out of P7.6's named scope). Value-math inventory confirmed genuinely host-specific units
-by reading the code, not assuming it. New pinning tests added across all four touched
-files (interaction_overlay.rs, viewport.rs, audio_setup_panel.rs, dock.rs), each driven
-through the real public API; every phase's own negative gate and I5's repo-wide gates
-landed clean. Full workspace gate (nextest + clippy -D warnings + cargo deny) green at
-every landing. **P7 is DONE.**
+`DragController<DockEdge>`). One drag sits outside every fold and D12's out-list: `MacrosPanel`'s
+Ableton-trim-bar drag (`dragging_ableton_trim: i32` sentinel) — BUG-143 (macros
+trim-bar fold), P8. Value math is genuinely host-specific (read, not assumed). Pinning
+tests cover all four touched files (interaction_overlay.rs, viewport.rs,
+audio_setup_panel.rs, dock.rs), each driven through the real public API.
 
-Phasing-completeness walk (re-done 2026-07-13 for the redesigned phases): contract
+Phasing-completeness walk: contract
 both surfaces → P1; stepper/fader reset → P2; label-mapping derivation + the
 ValueCell-row correction + D15 dead-stop record → P3; canvas-editor pins +
 gesture-constant single-sourcing → P4; the text model → P5a; app session + mouse +
@@ -1015,18 +999,15 @@ dispatch migration → Deferred, each with its trigger; drag lifecycle consolida
 P7 (was Deferred — D5's
 "emission is parity-true" claim was correct but incomplete: the lifecycle machines
 share one shape, `DragController<T>` already exists with migrated consumers). Within
-P7 (walk re-done 2026-07-13): audio-trigger shape → P7.0 (landed); param-card slots →
+P7: audio-trigger shape → P7.0 (landed); param-card slots →
 P7.1; canvas → P7.2; overlay automation → P7.3; overlay trim/region → P7.4; overlay
 move → P7.5; viewport/audio-setup/dock + closing inventory + value-math read → P7.6;
 input recognizer / scroll container / SliderDragState panels → D12 out-list (Deferred
 with reasons). No body-committed affordance is unphased.
 
-**P8 — BUG-143: fold `MacrosPanel`'s Ableton-trim-bar drag onto `DragController`
-(zero-design cleanup, added 2026-07-13 per Peter's "no reason to defer bugs for the
-sake of deferring" instruction).** Not a phase this design invented — it's the one
-item P7.6's own closing `rg 'dragging'` inventory found and named (BUG-143 in
-`docs/BUG_BACKLOG.md`), deliberately left unfolded only because P7.6's brief scoped it
-to viewport/audio-setup/dock. Same disease, same cure, no open questions: `macros_panel.rs:70-71`
+**P8 — BUG-143 (macros trim-bar fold): fold `MacrosPanel`'s Ableton-trim-bar drag
+onto `DragController`** (Peter: "no reason to defer bugs for the sake of deferring").
+Same disease, same cure, no open questions: `macros_panel.rs:70-71`
 carries `dragging_ableton_trim: i32` (−1 = idle sentinel) + `dragging_ableton_trim_is_min: bool`
 — the exact pre-P7.1 `ParamDragState` shape, a discriminant-by-sentinel duplicate of what
 `DragController<T>` already exists to replace. Symptom: none — the gesture works correctly

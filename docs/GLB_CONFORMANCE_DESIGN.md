@@ -204,7 +204,7 @@ object counts that goldens would otherwise churn on. Every phase: clippy scoped
 `-p <touched crates>`; full workspace sweep only at landing in the main checkout.
 Every phase report carries `Shortcuts taken:` and `Demo artifact:` per standard section 8.7.
 
-### G-P1 — the conformance harness (vertical slice) — SHIPPED 2026-07-15 (`909976d2`)
+### G-P1 — the conformance harness (vertical slice) — SHIPPED 2026-07-15
 
 - **Entry state:** `git log --oneline -1` contains `44b921cf` in ancestry
   (`git merge-base --is-ancestor 44b921cf HEAD`); `cargo run -p manifold-renderer
@@ -274,7 +274,7 @@ Every phase report carries `Shortcuts taken:` and `Demo artifact:` per standard 
 - **Test scope:** focused (`-p manifold-renderer`); gpu-proofs for the conformance
   binary only.
 
-### G-P2 — 1:1 import (the cap dies) — SHIPPED 2026-07-15 (`909976d2`)
+### G-P2 — 1:1 import (the cap dies) — SHIPPED 2026-07-15
 
 - **Entry state:** G-P1 landed (`cargo test ... --test glb_conformance` runs);
   re-verify anchors: `rg -n "OBJECT_SLIDER_MAX" crates/manifold-renderer/src/` —

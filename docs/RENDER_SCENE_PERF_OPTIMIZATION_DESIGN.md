@@ -15,7 +15,7 @@ zero executor discretion. Scoping authority for anything this doc did not answer
 orchestrator — if a phase hit an undecided fork, the rule was STOP and surface it, never improvise
 (Peter's instruction to the orchestrator, verbatim: "you do not have permission to make decisions
 yourself unadvised").
-**Prerequisites:** PERF_BUDGET_GATE_DESIGN.md P1+P2+P2b SHIPPED (`7afcb059`/`49f5a066`) — perf-soak
+**Prerequisites:** PERF_BUDGET_GATE_DESIGN.md P1+P2+P2b SHIPPED — perf-soak
 is this design's sole measurement oracle. GLTF_ANIMATION_DESIGN.md A1–A3 SHIPPED. Nothing here
 waits on A4 or on SCENE_SETUP_PANEL_DESIGN.md (see D9).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.

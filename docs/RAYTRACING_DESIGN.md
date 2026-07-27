@@ -145,10 +145,10 @@ fixed same-day — and established that the remaining gaps are structural, not t
 section is the durable brief for the next RT session.
 
 **Fixed 2026-07-23 (context for the roadmap, not open work):**
-- RT toggles invisible everywhere — `card_visible_for` had no `node.render_scene` arm (`6e44894e`).
-- RT ambient floor unremovable — now rides the scene Ambient knob; knob 0 = true black (`7b3d8dd2`).
+- RT toggles invisible everywhere — `card_visible_for` had no `node.render_scene` arm.
+- RT ambient floor unremovable — now rides the scene Ambient knob; knob 0 = true black.
 - Sun counted twice — the irradiance kernel carried its own sun*n·l*vis copy on top of the
-  raster light loop's; irradiance is now ambient*ao + gi only (`818a06b0`). Post-fix probe:
+  raster light loop's; irradiance is now ambient*ao + gi only. Post-fix probe:
   occluded region drop 45.5%, lit region change 2.7% (`rt_p1_region_probe`, 18/18 rt proofs green).
 
 **Tier 1 — one amendment, shared infrastructure, do first (unblocks everything):**
@@ -225,14 +225,14 @@ Staging: T2-A → T2-B sequential (both touch `render_scene.rs`). Pre-allocated 
 
 **Outcome of that eye test (2026-07-23, same day): initially FAILED — see `BUG-322`, now fixed and confirmed.** Peter's rotation still flickers, with shadows changing shape *and* location for the duration of the gesture and snapping back on stop. T2-C's mechanism is correct and proven, but it is not what he was seeing; nor was BUG-320's. **Standing lesson, stronger than D19/D20's:** two consecutive mechanism-level fixes were declared done on value-level GPU proofs of *reasoned* causes, with no in-app observation anywhere in the loop — and both missed. On this surface, a proof that the mechanism now behaves as designed is not evidence that the mechanism was the cause. The next attempt starts with an instrumented in-app drag (per-frame `rebuild_epoch`/`topo_key`/`rt_accel_built`), not with a code reading.
 
-**BUG-322 close-out (2026-07-23) — the diagnosis, and the method lesson that cost three attempts.** The helmet shimmer was NOT an acceleration-structure problem. `accumulate_irradiance` compared `stored_normal` (world space, written last frame, in the object's PREVIOUS orientation) against `cur_normal` (this frame's orientation) with no correction, so a ROTATING object failed the depth/normal validity test every frame and discarded all temporal history — leaving the raw 4 AO / 2 GI half-res budget on screen. T2-C had carried the reprojected POSITION through `obj_motion` and never did the same for the normal. Fixed by carrying the current normal back through that matrix's rotation block and comparing in one orientation (`d68e07bb`).
+**BUG-322 close-out (2026-07-23) — the diagnosis, and the method lesson that cost three attempts.** The helmet shimmer was NOT an acceleration-structure problem. `accumulate_irradiance` compared `stored_normal` (world space, written last frame, in the object's PREVIOUS orientation) against `cur_normal` (this frame's orientation) with no correction, so a ROTATING object failed the depth/normal validity test every frame and discarded all temporal history — leaving the raw 4 AO / 2 GI half-res budget on screen. T2-C had carried the reprojected POSITION through `obj_motion` and never did the same for the normal. Fixed by carrying the current normal back through that matrix's rotation block and comparing in one orientation.
 
 Three things future RT work should take from how this was found:
 1. **The split case is the diagnosis.** Peter's "flowers look correct, the helmet has the problem" eliminated every cause common to both objects in one sentence — no stale-accel theory survives one of two co-moving objects rendering correctly. Ask what does NOT show the symptom before reading any code.
 2. **Match the oracle's stimulus to the user's gesture.** The synthetic object-motion probe built for this bug TRANSLATED its occluder and passed honestly while the defect sat in ROTATION — translation leaves normals untouched, so the oracle was structurally blind. It is now `rt_object_motion_shadow.rs` and still useful (it proved accel refit correct), but it could never have found this.
 3. **A green value-level proof of a reasoned mechanism is not evidence that the mechanism was the cause.** BUG-320 and BUG-321 were both real defects, both proven fixed at value level, and neither moved the symptom. Two "fixed" reports were wrong before an in-app observation entered the loop. On this surface, close a motion-quality bug on Peter's look, never on a passing gate.
 
-## 9. RT Reflections — traced specular for the PBR base lobe (Tier 3 item 7; APPROVED 2026-07-24 · **R1 LANDED 2026-07-25** — probe: mirror on 2.15 vs off 0.82 (delta 1.33); empty-scene equality 0.305 ≈ 0.308; worst frame 9.82 ms; native byte-diff identical. R2 LANDED 2026-07-26 (`74563a4c`); R3 not started)
+## 9. RT Reflections — traced specular for the PBR base lobe (Tier 3 item 7; APPROVED 2026-07-24 · **R1 LANDED 2026-07-25** — probe: mirror on 2.15 vs off 0.82 (delta 1.33); empty-scene equality 0.305 ≈ 0.308; worst frame 9.82 ms; native byte-diff identical. R2 LANDED 2026-07-26; R3 not started)
 
 Folded in from `RT_REFLECTIONS_DESIGN.md` (draft deleted on fold, per its own header). Reviewed by
 K3 (lead) 2026-07-24: every section 1 code anchor re-verified against main (`render_scene.wgsl:1518`
@@ -445,7 +445,7 @@ Execution order: Base traced reflections (R1) → Raster-parity reflections → 
 (R2) → Textured roughness (R3). Raster-parity runs BEFORE Stable: denoising a signal that shades
 wrong is wasted work, and the black-car defect is what makes reflections unusable on real assets.
 
-#### Base traced reflections (R1) — traced base-lobe reflection, factors only, no accumulation — LANDED 2026-07-25 (`163ed86f`)
+#### Base traced reflections (R1) — traced base-lobe reflection, factors only, no accumulation — LANDED 2026-07-25
 
 - *Entry:* Tier 2 on main (`git merge-base --is-ancestor` on the T2-B tip); re-verify
   `raytrace.rs:1478` (`GiMaterial` still 32 B) and `render_scene.wgsl:1518` (`specular_ibl` still
@@ -517,7 +517,7 @@ wrong is wasted work, and the black-car defect is what makes reflections unusabl
   claiming parity from a code-diff argument instead of Peter's look on the PNG pair; widening the
   texture cap without stating the new limit's trigger.
 
-#### Stable reflections (R2) — specular temporal accumulation + roughness-aware filtering · **LANDED 2026-07-26 (`74563a4c`)** — gate: scene control-leg blend/cut + kernel-level proof, both green; D-61 (gate shape), D-62 (two root causes fixed en route)
+#### Stable reflections (R2) — specular temporal accumulation + roughness-aware filtering · **LANDED 2026-07-26** — gate: scene control-leg blend/cut + kernel-level proof, both green; D-61 (gate shape), D-62 (two root causes fixed en route)
 
 - *Entry:* Raster-parity reflections landed; Base traced reflections' (R1) `trace_ms` delta and
   Peter's L2 verdict recorded in the phase report.
@@ -622,7 +622,7 @@ are the agreed contract the fixes are reviewed against.
 
 **Conviction test (Peter's repro project):** reload → RT engages without re-import;
 pause → converges clean, no fade; resume → no black beat; rotating → unchanged (speckle
-expected, tuning scope). **Bug A (reload-inert RT) LANDED 2026-07-26 (`f0c61b10`):**
+expected, tuning scope). **Bug A (reload-inert RT) LANDED 2026-07-26:**
 root was NOT bindings/params (three probe harnesses + two live logged sessions exonerated
 the whole chain) — the accel topo key hashed vertex-buffer identity, never content;
 async glb parse lands after the initial build, the BUG-326 one-shot rerun lost the race

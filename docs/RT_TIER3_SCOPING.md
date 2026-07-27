@@ -120,7 +120,7 @@ ray in the tier*. Second-bounce energy is small, low-frequency, and mostly what 
 already faking. Adding it doubles GI ray cost for an effect Peter may not be able to point at.
 **Blocking question:** whether the ambient knob's flat term should be *removed* when multi-bounce
 lands — otherwise the design is paying rays to compute something a knob is already approximating,
-and the two will double-count. That is the same trap as the sun (`818a06b0`) and reflections (RD1),
+and the two will double-count. That is the same trap as the sun and reflections (RD1),
 third time.
 
 ## 4. T3-9 — RT translucency, and why it splits

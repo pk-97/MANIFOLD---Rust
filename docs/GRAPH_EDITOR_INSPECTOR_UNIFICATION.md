@@ -327,7 +327,7 @@ that card. Same underlying retarget call, two entry points.
 
 ---
 
-## Change 4 — Layout invariance (closes BUG-160) · P2 SHIPPED 2026-07-15 (`d85ab207`); P1 PARTIAL (D1/D2/D7 shipped, D3 + width-sweep test owed) · Fable design, Sonnet execution
+## Change 4 — Layout invariance (closes BUG-160) · P2 SHIPPED 2026-07-15; P1 PARTIAL (D1/D2/D7 shipped, D3 + width-sweep test owed) · Fable design, Sonnet execution
 
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -472,7 +472,7 @@ drawer; if card frames still disagree with their content, fix the
 touching P1. P1 (width geometry) follows.
 
 **P1 — Geometry unification (one session).** PARTIAL — SHIPPED 2026-07-15
-(`d85ab207`): D1 (chevron lane reserved in both contexts), D2 (`row_geometry()`
+: D1 (chevron lane reserved in both contexts), D2 (`row_geometry()`
 shared helper), D7 (`Dock::editor()`'s `right_range` widened to the shared
 policy range), and a scoped D5 equivalence test
 (`perform_and_author_slider_rows_are_geometry_identical`). NOT shipped: D3
@@ -503,7 +503,7 @@ Forbidden moves: per-row nudges (fix in the helper); a second "editor card" widg
 touching `build_in_rect`'s structure; PNG-diff as a gate.
 
 **P2 — Tick parity (one session, may batch with P1).** SHIPPED 2026-07-15
-(`d85ab207`).
+.
 Entry: P1 merged or same branch. Read-back: D4, D6; BUG-157 backlog entry.
 Deliverables: `UIRoot::tick_inspector` extraction; editor per-frame call
 (`tick_inspector` + `update_fire_meters` mirrored, in the main tick's editor branch

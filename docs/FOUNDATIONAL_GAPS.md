@@ -100,7 +100,7 @@ two consumers today.
 their own config, carry-rules, and UI: drivers/LFOs, envelopes, automation
 lanes, `ableton_mappings`, `audio_mods` (now also trigger mode, per
 LIVE_AUDIO_TRIGGERS section 9), macros, control wires, param step-actions (proposed).
-`PresetInstance::duplicated()` (`2e3dc4f3`) had to hand-write a carry-rule per
+`PresetInstance::duplicated()` had to hand-write a carry-rule per
 family — that's the tell. Bugs from the seams: BUG-004 (effect-paste-carries-ableton-automation-bindings…) (paste carries some
 bindings, drops others), BUG-005 (macro addressing), BUG-036 (LFO dead on
 reload), BUG-039 (angle wrap vs. modulation).
@@ -122,7 +122,7 @@ carry/reload unification — check their scope first.
 
 **Evidence.** BUG-001 (pasting-effect-shares-sources-effectid)..004 fixed as a class by `duplicated()` (`2e3dc4f3`,
 "one home for the fresh-copy carry-rule"); BUG-005 by EffectId addressing
-(`9f43f183`). Remaining: the home is convention — a new clone path can bypass
+. Remaining: the home is convention — a new clone path can bypass
 it silently; BUG-031 (context-menu/rename still positional) shows positional
 addressing survives; `pool-keyed-by-identity-not-position` memory guards the
 GPU side of the same idea.
