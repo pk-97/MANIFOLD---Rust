@@ -864,6 +864,57 @@ def _check_hooks_fire():
         return {"cmd": cmd_label, "exit": 1, "duration_s": duration, "tail": str(e)}
 
 
+_MANIFEST_PATH = MAIN_CHECKOUT / ".claude" / "hooks" / "enforcement-table.json"
+
+
+def _check_enforcement_manifest():
+    """Check h: the enforcement table (machine form of SEMANTIC_WORKFLOW_
+    PROGRAMS §3) matches reality. Hook rows: file exists AND is registered
+    in settings.json. Exit-code rows with a file: file exists. Prompt rows:
+    counted and printed — the visible soft surface the migration program
+    burns down."""
+    cmd_label = "enforcement manifest"
+    start = time.time()
+    try:
+        manifest = json.loads(_MANIFEST_PATH.read_text())
+        settings = json.loads(
+            (MAIN_CHECKOUT / ".claude" / "settings.json").read_text())
+        registered = "\n".join(
+            hk.get("command", "")
+            for entries in (settings.get("hooks") or {}).values()
+            for e in entries for hk in e.get("hooks", []))
+
+        fails, n_prompt = [], 0
+        for row in manifest.get("transitions", []):
+            kind, f = row.get("enforcement"), row.get("file")
+            if kind == "prompt":
+                n_prompt += 1
+                continue
+            if kind not in ("hook", "exit-code"):
+                fails.append(f"unknown enforcement {kind!r}: {row.get('transition')}")
+                continue
+            if f is None:
+                continue
+            if not (MAIN_CHECKOUT / f).is_file():
+                fails.append(f"{f} missing ({row.get('transition', '')[:40]})")
+            elif kind == "hook" and Path(f).name not in registered:
+                fails.append(f"{f} not registered in settings.json")
+
+        duration = round(time.time() - start, 1)
+        if fails:
+            tail = "; ".join(fails[:6])
+            _print_check("FAIL", cmd_label, tail)
+            return {"cmd": cmd_label, "exit": 1, "duration_s": duration, "tail": tail}
+        n = len(manifest.get("transitions", []))
+        tail = f"{n} rows live; {n_prompt} still prompt-enforced (soft surface)"
+        _print_check("PASS", cmd_label, tail)
+        return {"cmd": cmd_label, "exit": 0, "duration_s": duration, "tail": tail}
+    except Exception as e:
+        duration = round(time.time() - start, 1)
+        _print_check("FAIL", cmd_label, str(e))
+        return {"cmd": cmd_label, "exit": 1, "duration_s": duration, "tail": str(e)}
+
+
 def cmd_pre_wave(args):
     """Run the pre-wave checks (P2 + hook liveness) and append a verdict."""
     litellm_url = os.environ.get("LITELLM_URL") or args.litellm_url or DEFAULT_LITELLM_URL
@@ -877,6 +928,7 @@ def cmd_pre_wave(args):
         _check_wave_base(args.base),
         _check_hooks_registered(),
         _check_hooks_fire(),
+        _check_enforcement_manifest(),
     ]
 
     all_pass = all(g["exit"] == 0 for g in checks)
@@ -1252,6 +1304,30 @@ def cmd_report(args):
     sys.exit(0)
 
 
+_DECISIONS_FILE = MAIN_CHECKOUT / ".claude" / "orchestration" / "decisions.md"
+MIN_RATIONALE_CHARS = 20
+
+
+def cmd_review(args):
+    """Record a REVIEW verdict + rationale in decisions.md.
+
+    §9's verdict-rationale field, mechanized: the runtime appends the line,
+    so recording the *why* is not model goodwill. The verdict trail stays
+    gate-only (D8) — review is a judgment record and lives with the other
+    judgment records. Refuses an empty or token rationale."""
+    rationale = (args.rationale or "").strip()
+    if len(rationale) < MIN_RATIONALE_CHARS:
+        die(f"review requires a rationale (>= {MIN_RATIONALE_CHARS} chars) — "
+            "the why is the record; 'looks good' is not a why")
+    date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    line = (f"- **REVIEW {args.verdict} ({args.by}, {date}): "
+            f"{args.subject} [{args.task}].** {rationale}\n")
+    with open(_DECISIONS_FILE, "a") as f:
+        f.write(line)
+    print(f"recorded: {line.strip()}")
+    sys.exit(0)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Gate Runtime — verdicts the machine writes",
@@ -1282,6 +1358,17 @@ def main():
     pd = sub.add_parser("pre-dispatch", help="Run pre-dispatch brief lint (P3)")
     pd.add_argument("--brief", required=True, help="Path to brief markdown file")
     pd.set_defaults(func=cmd_pre_dispatch)
+
+    rv = sub.add_parser("review", help="Record a REVIEW verdict rationale in decisions.md")
+    rv.add_argument("--task", required=True, help="Task ID (BUG-xxx)")
+    rv.add_argument("--verdict", required=True,
+                    choices=["accept", "accept-with-fix", "reject"])
+    rv.add_argument("--subject", required=True,
+                    help="What was reviewed (step name, commit sha)")
+    rv.add_argument("--rationale", required=True,
+                    help=f"The why, >= {MIN_RATIONALE_CHARS} chars")
+    rv.add_argument("--by", default="lead", help="Reviewing seat (default: lead)")
+    rv.set_defaults(func=cmd_review)
 
     rp = sub.add_parser("report", help="Wave-activity report (P4 / D7)")
     rp.add_argument("--since", default=None,

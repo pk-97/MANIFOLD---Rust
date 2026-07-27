@@ -1,0 +1,33 @@
+{
+  "comment": "Machine form of SEMANTIC_WORKFLOW_PROGRAMS.md §3 — every workflow transition and what enforces it. hook = machine, cannot be ignored; exit-code = runtime-checked; prompt = model goodwill (the known failure surface; migrate rows upward one at a time). gate_runner pre-wave verifies hook rows are registered and present, exit-code rows exist, and reports the prompt-row count as the open migration surface. Keep rows aligned with settings.json and the hooks directory; a row here with no live file goes red at wave start.",
+  "transitions": [
+    {"transition": "worktrees from slot ring only; no agent edits on main", "enforcement": "hook", "file": ".claude/hooks/worktree-guard.py"},
+    {"transition": "raw `git worktree add` denied; landing protocol; pre-land verdict coverage (I1); persistent-cd denial; shell allowlist", "enforcement": "hook", "file": ".claude/hooks/preToolUseBash.py"},
+    {"transition": "debug escalation ladder — probe loops delegated, seam review first", "enforcement": "hook", "file": ".claude/hooks/probe-loop-guard.py"},
+    {"transition": "memory is rules, not history", "enforcement": "hook", "file": ".claude/hooks/memory-history-guard.py"},
+    {"transition": "no bare #[allow(dead_code)]", "enforcement": "hook", "file": ".claude/hooks/dead-code-suppression-hook.py"},
+    {"transition": "explicit model per Agent spawn", "enforcement": "hook", "file": ".claude/hooks/agent-model-guard.py"},
+    {"transition": "no executor-tier agents spawning agents", "enforcement": "hook", "file": ".claude/hooks/agent-tier-spawn-guard.py"},
+    {"transition": "teammate slot naming from the slot map", "enforcement": "hook", "file": ".claude/hooks/agent-teammate-naming-guard.py"},
+    {"transition": "Agent-tool worktree isolation denied (slot ring instead)", "enforcement": "hook", "file": ".claude/hooks/agent-worktree-isolation-guard.py"},
+    {"transition": "seat identity frozen per pane", "enforcement": "hook", "file": ".claude/hooks/seat-freeze-guard.py"},
+    {"transition": "context ceiling on lead tool calls", "enforcement": "hook", "file": ".claude/hooks/context-ceiling-guard.py"},
+    {"transition": "workflow launches announce roster + explicit models", "enforcement": "hook", "file": ".claude/hooks/workflow-gate.py"},
+    {"transition": "per-lane gates fire at executor stop; trail streak releases past limit (D10)", "enforcement": "hook", "file": ".claude/hooks/subagent-stop-gate.py"},
+    {"transition": "no lane goes idle without a SendMessage report", "enforcement": "hook", "file": ".claude/hooks/lane-report-enforcer.py"},
+    {"transition": "verdicts written only by gate_runner (I2 edit guard)", "enforcement": "hook", "file": ".claude/hooks/worktree-guard.py"},
+    {"transition": "cc-fleet subagents at declared tiers only", "enforcement": "hook", "file": ".claude/hooks/cc-fleet-tier-guard.py"},
+    {"transition": "GATE: brief gate commands executed verbatim, verdict to trail; gaming scan (D9)", "enforcement": "exit-code", "file": "scripts/gate_runner.py"},
+    {"transition": "pre-dispatch brief lint: anchors resolve, gates parse, slots valid, bead named", "enforcement": "exit-code", "file": "scripts/gate_runner.py"},
+    {"transition": "UI flow gate on touched paths at landing", "enforcement": "exit-code", "file": "scripts/run_ui_flows.py"},
+    {"transition": "docs index freshness on doc add/rename", "enforcement": "exit-code", "file": "scripts/gen_docs_index.py"},
+    {"transition": "pure-move / dispatch-split proofs on decomposition commits", "enforcement": "exit-code", "file": "scripts/move_identity_check.py"},
+    {"transition": "clippy -D warnings before commit; workspace sweep + deny bans at landing", "enforcement": "exit-code", "file": null},
+    {"transition": "scoped tests per touched crate; gpu-proofs on GPU-path contact", "enforcement": "exit-code", "file": null},
+    {"transition": "one commit then stop for review (lanes)", "enforcement": "prompt", "file": null},
+    {"transition": "lane retry cap 2 before park", "enforcement": "prompt", "file": null},
+    {"transition": "brief completeness (findings, anchors, reuse target, conviction test, gates, scope)", "enforcement": "prompt", "file": null},
+    {"transition": "lead reviews, does not author (D-55 context packs)", "enforcement": "prompt", "file": null},
+    {"transition": "REVIEW rationale recorded at accept/reject (gate_runner review mechanizes the append)", "enforcement": "prompt", "file": null}
+  ]
+}

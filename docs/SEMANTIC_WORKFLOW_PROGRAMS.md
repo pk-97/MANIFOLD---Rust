@@ -61,6 +61,8 @@ Every transition is enforced by one of three things. This table is where the arc
 
 The soft transitions are the known failure surface. The table turns "make agents more reliable" into a finite ordered list: migrate soft transitions to hooks, one at a time.
 
+**Machine form (2026-07-27, Peter + Fable):** `.claude/hooks/enforcement-table.json` is this table as data — every transition, its enforcement kind, its enforcing file. `gate_runner pre-wave` verifies it against reality (hook rows registered + present, exit-code rows present) and prints the prompt-row count as the open soft surface. A migration is a one-row edit the census counts; a dead enforcing file goes red at wave start.
+
 ## 4. The holes (skeptical pass, kept sharp)
 
 1. **The deterministic part is a for-loop.** The runtime-owned portion (iterate queue, run gates, park failures) is real but small. The wave's success lives inside three opcodes the runtime cannot check: COMPILE_WAVE, BRIEF, REVIEW.
@@ -95,7 +97,7 @@ True, with two edges:
 1. **Hooks stop repeats, not novel problems.** R1's five incidents had five different mechanisms, zero repeats. Machinery kills classes; it does not slow the arrival of new classes. Whether novelty decays once the roster/config freezes is the open empirical question.
 2. **Some judgment ratcheted into the charter, not the machine.** D-52/D-55 didn't eliminate judgment — they relocated and standardized it (lead = sole correctness read; design work → judgment-tier one-shots). Both piles are improvements; only the first grows the machine.
 
-**The falsifiable test:** R2 runs on the R1-hardened machine with driver-ready queues and a frozen roster. Near-zero new D-entries → the judgment residue is converging. Another five-mechanism crop → the machine grows but the novel-incident tax is permanent. The decisions file is already the instrument.
+**The falsifiable test:** R2 runs on the R1-hardened machine with driver-ready queues and a frozen roster. Near-zero new D-entries → the judgment residue is converging. Another five-mechanism crop → the machine grows but the novel-incident tax is permanent. The decisions file is already the instrument, and the reading is mechanical: `gate_runner report --since <R2 open>` counts the entries — agreed 2026-07-27 that the number decides, not the impression.
 
 ## 7. Where it lands: strict workflow programs, not general compute
 
@@ -122,9 +124,9 @@ Not novel as a concept — workflow engines and CI pipelines are old. What is ne
 ## 9. Open questions / next steps
 
 - **R2 as the pitch.** The machine's next run decides whether this is converging or permanently tax-paying (§6). **The operational pre-flight checklist lives in `.claude/orchestration/rt-reflections-r2-queue.md`** (blocking items + the workflow upgrades below, scoped to that wave — 2026-07-25).
-- **Hook migration list.** From §3's soft rows: retry-cap enforcement (count gate invocations per lane session), one-commit-then-stop (deny a second commit from executor-tier transcripts). Build deliberately, not reactively.
-- **Verdict rationale field.** The IR has no representation for *why* a judgment was made; Verdict wants a mandatory one-line rationale, appended to the decisions file by the runtime, not by model goodwill.
-- **Driver script.** Peter's call, per the handoff's standing note.
+- **Hook migration list.** From §3's soft rows: retry-cap enforcement (count gate invocations per lane session), one-commit-then-stop (deny a second commit from executor-tier transcripts). Build deliberately, not reactively. Migrated 2026-07-27: gate-gaming scan + fail-streak (D9/D10 in GATE_RUNTIME_DESIGN), persistent-cd denial (§10.5's class, promoted after a second occurrence), hook-liveness pre-wave checks.
+- **Verdict rationale field.** BUILT 2026-07-27: `gate_runner review --task --verdict --subject --rationale` appends the line to decisions.md and refuses token rationales; the trail stays gate-only per GATE_RUNTIME_DESIGN D8.
+- **Driver script.** Peter 2026-07-27: likely unnecessary — the lead IS the driver; the queue, hooks, and gate_runner are the mechanism. A standalone driver only ever buys unattended multi-day runs; unbuilt unless that need arrives, and still Peter's call.
 - **Plan-template library.** After R2, name the repeated shapes and pre-adversarial them.
 - **The general claim stays parked.** Universal semantic IR between humans, models, and workflows — overshoot until oracle coverage exists outside code (§4.9).
 
@@ -138,7 +140,7 @@ The RT static-death hunt (BUG-jddy) ran one full day: ~5 hours of theory-buildin
 2. **Trigger overfitting (~2h lost).** First repro was transport pause; two theories built on pause; Peter corrected twice ("not JUST the pause"). Opcode: **GENERALIZE_TRIGGER after the first repro** — write the trigger's class in one sentence ("what did this repro change about the system's inputs?"), design the next test against the class. Operator reports of the symptom outside the repro's conditions are data about the class, not noise.
 3. **Reading past the stall point (~2h lost).** Two hours of kernel/executor reading after the correlation "alive ⟺ refit this frame" was established. Opcode: **CURE_TEST once a perfect action-correlation exists and two read rounds have not cracked the mechanism** — force the smallest version of the correlated action (marked STOPGAP). Never wasted: works → rig safe + cause localized to the action's parts; fails → suspect eliminated. Then DECOMPOSE: test each part of the action alone; the survivor is the mechanism.
 4. **Unbudgeted delegate (~200K tokens lost).** An adversarial review agent with a read-only brief wandered for an hour and ignored two stop messages. Opcode: **BUDGET every review/consult brief** — hard token/time cap, mandatory partial-report checkpoint ("report at N, incomplete is fine"), named deliverable shape; orchestrator polices at half the budget.
-5. **Delayed-failure `cd` (near-miss).** A persistent-cwd slip nearly produced a merge into the wrong checkout an hour later. Not an opcode — a reinforcement that shell-state errors surface *delayed*; the no-`cd` rule's cost model is this incident, not tidiness.
+5. **Delayed-failure `cd` (near-miss — then the real thing).** A persistent-cwd slip nearly produced a merge into the wrong checkout an hour later. On 2026-07-27 the same mechanism fired for real: a no-op `cd` left a lead session's shell in a worktree and the landing merge silently merged a branch into itself. Second occurrence = promotion to the hook row: `preToolUseBash.py` now denies any top-level `cd` off a checkout root, in every mode. The rule's cost model is these two incidents, not tidiness.
 
 **The skeleton the opcodes hang on:** REPRODUCE_HEADLESS_FIRST (build/borrow the instrument before reading — this one we got right, and it was the session's spine) → SCHEMA_SEARCH → REPRO → GENERALIZE_TRIGGER → SPLIT_CASE (what does NOT show the symptom — existing discipline, fired early, worked) → two read rounds max → CURE_TEST → DECOMPOSE → LAND the stopgap marked, root cause in beads.
 

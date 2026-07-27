@@ -181,5 +181,20 @@ check("hooks registered in settings.json", entry["exit"] == 0, entry["tail"])
 entry = gate_runner._check_hooks_fire()
 check("worktree-guard denies the canary", entry["exit"] == 0, entry["tail"])
 
+entry = gate_runner._check_enforcement_manifest()
+check("enforcement manifest matches reality", entry["exit"] == 0, entry["tail"])
+check("manifest reports soft surface", "prompt-enforced" in entry["tail"],
+      entry["tail"])
+
+# review subcommand refuses token rationales (die() → SystemExit)
+import argparse
+ns = argparse.Namespace(task="BUG-t", verdict="accept", subject="x",
+                        rationale="ok", by="lead")
+try:
+    gate_runner.cmd_review(ns)
+    check("review refuses token rationale", False, "no SystemExit")
+except SystemExit as e:
+    check("review refuses token rationale", bool(e.code), str(e.code)[:60])
+
 print(f"\n{PASSED} passed, {FAILED} failed")
 sys.exit(0 if FAILED == 0 else 1)
