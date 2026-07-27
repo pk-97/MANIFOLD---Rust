@@ -1,8 +1,8 @@
-# PARAM_MANIFEST_GATE — make a half-built param manifest unobservable at runtime (BUG-080)
+# PARAM_MANIFEST_GATE — make a half-built param manifest unobservable at runtime (BUG-080 (Design pass: param-manifest two-phase…))
 
 **Status:** P1 SHIPPED 2026-07-14 (bug-wave lane B) · Sonnet 5 (Peter approved the direction same day: "I want to also ensure these bugs are fixed at the root and fundamental level … remove bug classes where possible and sensible") · `manifest_provisional()` (`crates/manifold-core/src/effects.rs`), the two seam asserts + throttled warns (`crates/manifold-renderer/src/preset_runtime.rs`'s `assert_manifest_gate`, `crates/manifold-app/src/ui_bridge/state_sync.rs`'s `rows_from_manifest`), the D3 meta-test (`crates/manifold-core/tests/bug080_project_deserialize_single_door.rs`), and the two INV-1 tests all landed; gate green (1721/1721, `-p manifold-core -p manifold-renderer -p manifold-io`).
 **Prerequisites:** PARAM_STORAGE_BOUNDARIES_DESIGN.md P1 (SHIPPED — the reconcile stage this design hardens)
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting the phase. Executes inside the 2026-07-14 bug-wave **lane B** session.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5 (Phase briefs)–§6 before starting the phase. Executes inside the 2026-07-14 bug-wave **lane B** session.
 
 The governing insight: BUG-080's "partially built manifest is an observable state" does
 not need a new construction pipeline — PARAM_STORAGE_BOUNDARIES D1 already built the
@@ -10,7 +10,7 @@ gate (deserialize builds + stashes, the loader reconciles). What's missing is th
 provisional state is *silent*: `pending_wire.is_some()` already IS the structural marker
 for "this manifest was built against an incomplete registry," but nothing observes it at
 the seams where a degraded manifest becomes user-visible. So a future load/ingest path
-that forgets the reconcile call inherits empty/placeholder knobs silently (the BUG-036
+that forgets the reconcile call inherits empty/placeholder knobs silently (the BUG-036 (param-manifest-construction-not-a-unified-safe-g…)
 class). The class fix is to make the existing marker loud at the runtime seams and to
 pin the loader as the single production door with a machine check — detection at the
 seam, not a 255-site type-state sweep.
@@ -26,7 +26,7 @@ release before Peter hits it mid-set.
 |---|---|---|
 | Deserialize-time build + wire stash | `crates/manifold-core/src/effects.rs:1344` (custom `Deserialize`), stash field `pending_wire` at `effects.rs:618` (private) | Ships (BOUNDARIES D1). Manifest built against whatever registry is visible; wire stashed for retry |
 | Retryable per-instance reconcile | `PresetInstance::reconcile_manifest`, `effects.rs:1599` | Ships. Keeps the stash while the template is unknown; clears it only on a real resolve — already idempotent and retry-safe |
-| Project-wide pass | `Project::reconcile_param_manifests`, `crates/manifold-core/src/project.rs:1143`, walking `for_each_preset_instance_mut` (`project.rs:1108`) | Ships. Returns unresolved count into `load_report` (BUG-079 toast) |
+| Project-wide pass | `Project::reconcile_param_manifests`, `crates/manifold-core/src/project.rs:1143`, walking `for_each_preset_instance_mut` (`project.rs:1108`) | Ships. Returns unresolved count into `load_report` (BUG-079 (missing-preset-fails-silently-no-onscreen-signal) toast) |
 | The one production gate | `crates/manifold-io/src/loader.rs:224` (from_str → register embedded → reconcile → strip → on_after_deserialize) | Ships. **Convention, not structure** — nothing stops a second door |
 | Production deserialize entries outside the loader | rg sweep 2026-07-14 for `from_str::<Project>` / `from_value::<Project>` / `from_str::<PresetInstance>` etc. | **Zero hits outside tests** — the hazard is future paths, not current ones |
 | Runtime seam: chain build | `PresetRuntime::try_build`, `crates/manifold-renderer/src/preset_runtime.rs:811` (takes `&[PresetInstance]`) | Where a degraded manifest becomes passthrough/wrong-params |
@@ -50,7 +50,7 @@ radius).
 top of `PresetRuntime::try_build`'s per-instance loop, and at the manifest-row
 translation fn (`state_sync.rs:1971`):
 `debug_assert!(!inst.manifest_provisional(), "BUG-080: provisional manifest reached runtime — a load/ingest path skipped reconcile_param_manifests()")`,
-plus a release-mode once-per-instance throttled `log::warn!` (shape it like the BUG-038
+plus a release-mode once-per-instance throttled `log::warn!` (shape it like the BUG-038 (ableton-log-spam)
 once-then-quiet throttle in the Ableton bridge). Rationale: these are the exactly-two
 places a half-built manifest becomes user-visible, and every production frame passes
 them — a skipped gate cannot stay silent. **Rejected:** asserting inside a `params()`
@@ -83,7 +83,7 @@ fix.
 
 **Entry state:** anchors re-verified: `rg -n 'pending_wire' crates/manifold-core/src/effects.rs` (fields at ~618, reconcile at ~1599), `rg -n 'reconcile_param_manifests' crates/manifold-io/src/loader.rs` (one call), `rg -n 'fn try_build' crates/manifold-renderer/src/preset_runtime.rs`. Counts that differ from the audit table → stop, list, proceed against the fresh inventory.
 
-**Read-back (mandatory first step):** this doc whole; PARAM_STORAGE_BOUNDARIES_DESIGN.md §2 D1–D3; `effects.rs:1590–1625`. Restate: the two seams, the three rejections, the forbidden moves.
+**Read-back (mandatory first step):** this doc whole; PARAM_STORAGE_BOUNDARIES_DESIGN.md §2 (Decisions) D1–D3; `effects.rs:1590–1625`. Restate: the two seams, the three rejections, the forbidden moves.
 
 **Deliverables:** `manifest_provisional()` (D1) · the two seam asserts + throttled release warns (D2) · meta-test `bug080_project_deserialize_single_door` (D3) · tests `bug080_provisional_manifest_asserts_at_chain_build` + `bug080_loader_path_never_provisional` (INV-1) · this doc's Status flipped at landing.
 
@@ -91,7 +91,7 @@ fix.
 
 **Demo:** none — L1. No user-visible surface; the artifact is the assert-fires/loader-clean test pair.
 
-**Forbidden moves (this phase's temptations, by name):** clearing `pending_wire` anywhere except `reconcile_manifest`'s successful-resolve branch (that silently destroys the marker this design depends on) · adding a `manifests_reconciled: bool` on `Project` (second copy of a per-instance fact) · touching any of the 255 `.params` read sites · widening into the BUG-158/two-way-binding territory (separate bug, separate brief) · `unwrap()` on the seam paths.
+**Forbidden moves (this phase's temptations, by name):** clearing `pending_wire` anywhere except `reconcile_manifest`'s successful-resolve branch (that silently destroys the marker this design depends on) · adding a `manifests_reconciled: bool` on `Project` (second copy of a per-instance fact) · touching any of the 255 `.params` read sites · widening into the BUG-158 (mapped-param-edits-snap-back-no-two-way-binding)/two-way-binding territory (separate bug, separate brief) · `unwrap()` on the seam paths.
 
 ## 5. Decided — do not reopen
 

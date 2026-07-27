@@ -2,7 +2,7 @@
 
 **Status:** APPROVED design, not built · 2026-07-06 · Fable (with Peter in the room)
 **Prerequisites:** none for P1–P3 (all phases run against shipped code: the muda menu, the overlay driver, the Chrome API). Future-wave slots (§8) bind their own waves, not this doc.
-**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any phase.
+**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5 (Phase briefs)–§6 and §8 before starting any phase.
 
 The governing insight: **MANIFOLD's shell is scattered, not missing.** A native menu bar, a settings popup, a config-modal substrate (the overlay driver), and a declarative panel API all ship today — but the menu stops at File, the settings popup holds four rows while a dozen real settings have no UI at all, `ProjectSettings` mixes four storage scopes in one serialized struct, and every keyboard shortcut past ⌘S is invisible. This doc commits the taxonomy — which surface owns which kind of control, which store owns which scope of setting, and how commands are named — so the existing pieces get completed rather than reinvented, and so the four future waves that each need a config surface (multi-display, projection mapping, LED, media backend) inherit a contract instead of inventing idioms.
 

@@ -1,6 +1,6 @@
 # Harness Fidelity Invariant
 
-**Status: APPROVED — 2026-07-10.** Opus (1M) authored, from the UI_HARNESS_UNIFICATION P0–P3 wave; raised by Peter after two same-class defects surfaced in one session. Fable reviewed and returned **ADOPT the invariant and build §4 step 2**, with three amendments — now folded in below (§3's caller test, §4 step 2's seam scope, §5's essential-duplication carve-out) — and the §6 open questions resolved. Folds into `UI_HARNESS_UNIFICATION_DESIGN.md` (harden D3) + `DESIGN_AUTHORING.md` (the lesson in §4). **BUG-097 is closed by construction as part of §4 step 2 — never as a point fix** (see §4).
+**Status: APPROVED — 2026-07-10.** Opus (1M) authored, from the UI_HARNESS_UNIFICATION P0–P3 wave; raised by Peter after two same-class defects surfaced in one session. Fable reviewed and returned **ADOPT the invariant and build §4 step 2**, with three amendments — now folded in below (§3's caller test, §4 step 2's seam scope, §5's essential-duplication carve-out) — and the §6 open questions resolved. Folds into `UI_HARNESS_UNIFICATION_DESIGN.md` (harden D3) + `DESIGN_AUTHORING.md` (the lesson in §4 (The shared seam (committed signatures))). **BUG-097 is closed by construction as part of §4 step 2 — never as a point fix** (see §4).
 
 ## 1. The finding
 

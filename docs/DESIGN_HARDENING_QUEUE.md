@@ -24,11 +24,11 @@ reviewer to weigh, **not** adopt) · the forbidden shortcut a rushed executor wo
 
 - **2026-07-06 — MEDIA_BACKEND_DESIGN §3** (parked 2026-07-03): decoder trait
   re-committed against the shipped async decode protocol. Answer written as
-  `MEDIA_BACKEND_DESIGN.md §3a` (write-into-caller delivery, `MediaBackends` owns the
+  `MEDIA_BACKEND_DESIGN.md §3a (Hardening addendum (2026-07-06) — decoder trait matches the shipped async protocol)` (write-into-caller delivery, `MediaBackends` owns the
   shared pool, scheduler payload → neutral `FrameLease`, copy stays on the content
   thread). **P1 re-issuable.**
 - **2026-07-06 — MULTI_DISPLAY_DESIGN §6.1** (parked 2026-07-03): per-island state
-  seam committed. Answer written as `MULTI_DISPLAY_DESIGN.md §6.1a` (isolation by
+  seam committed. Answer written as `MULTI_DISPLAY_DESIGN.md §6.1a (Hardening addendum (2026-07-06) — the per-island state seam, committed)` (isolation by
   per-`(layer, island)` chain-runtime instances — StateStore key untouched; zero
   primitive edits, the queue's "13 struct-held primitives" inventory was stale after
   the StateStore migration; LED stays legacy until P6). **P2 re-issuable.**

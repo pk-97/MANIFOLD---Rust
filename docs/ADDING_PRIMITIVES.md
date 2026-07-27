@@ -6,11 +6,11 @@ Primitives auto-register via `inventory::submit!` from inside the macro — drop
 
 ## Audit precondition (mandatory)
 
-Before authoring any new primitive, complete the read-only audit per [DECOMPOSING_GENERATORS.md §2.5](DECOMPOSING_GENERATORS.md):
+Before authoring any new primitive, complete the read-only audit per [DECOMPOSING_GENERATORS.md §2.5 (Precondition: audit by analogy before workflow step 1)](DECOMPOSING_GENERATORS.md):
 
 1. **Survey existing primitives** — `rg 'purpose: "' crates/manifold-renderer/src/node_graph/primitives/ -g '*.rs'`. One line per node telling you what it does.
 2. **Check the registered-but-unused atoms** — `mip_chain`, `uv_displace_by_flow`, `centered_uv`, `polar_field`, `distance_to_point`, `noise`, `depth_estimate_midas`, `blob_detect_ffi`, `blob_overlay_render`, `optical_flow_estimate`, `envelope_follower_ar`, `peak`, `render_3d_mesh`, `render_instanced_3d_mesh`, `generate_cube_mesh`, `generate_platonic_solid`, `generate_instance_transforms`, `integrate_particles`, and the unused noise/coordinate atoms. Many of these *exactly* cover what a new primitive proposal is reaching for; activate them by wiring them into your graph rather than building a new one. (Photoreal PBR is *not* an atom to wire up — it lives inside `node.render_3d_mesh`'s `node.pbr_material`; the standalone `cook_torrance_specular` / `equirect_envmap_sample` were removed 2026-05-30.)
-3. **Read the nearest reference preset end-to-end** ([NODE_CATALOG.md §5 / §6.1](NODE_CATALOG.md), [DECOMPOSING_GENERATORS.md §2.5](DECOMPOSING_GENERATORS.md)).
+3. **Read the nearest reference preset end-to-end** ([NODE_CATALOG.md §5 (Effect presets) / §6.1](NODE_CATALOG.md), [DECOMPOSING_GENERATORS.md §2.5](DECOMPOSING_GENERATORS.md)).
 4. **Reconcile your sketch** — state explicitly which existing primitives you'll reuse, which you'll extend, and which are genuinely new. State the audit findings in the PR description before any new-primitive code.
 
 Skipping the audit produces the recurring "argue from snippets" anti-pattern and the bundle-as-primitive shortcut. The §2.5 precondition is a hard rule in `CLAUDE.md`.
@@ -40,7 +40,7 @@ What's **not** allowed:
 What's **fine** when it's the right granularity:
 
 - A single compute dispatch that does irreducible math — Cook-Torrance specular evaluation, a Lorenz ODE RK2 step, a Schwarzschild geodesic update — these are below the dispatch level (per-arithmetic-op decomposition would pay launch overhead for what should be inlined math). They stay as primitives.
-- Curated families with N enum-selected variants where the variants are real user-facing aesthetic choices (e.g. attractor type, polytope shape). When the family is genuinely user-math (not just bundled operations), implement the backend as `wgsl_compute` with N shader strings + a "Custom" option per [DECOMPOSING_GENERATORS.md §5.6](DECOMPOSING_GENERATORS.md) — that's the curated-as-doorway pattern, not curated-as-wall.
+- Curated families with N enum-selected variants where the variants are real user-facing aesthetic choices (e.g. attractor type, polytope shape). When the family is genuinely user-math (not just bundled operations), implement the backend as `wgsl_compute` with N shader strings + a "Custom" option per [DECOMPOSING_GENERATORS.md §5.6 (Atom decomposition is the path — wgsl_compute is the escape hatch, not a curated-family backing)](DECOMPOSING_GENERATORS.md) — that's the curated-as-doorway pattern, not curated-as-wall.
 
 ## Files you touch per primitive
 
@@ -127,7 +127,7 @@ name which one when you claim an exemption:
    applies, and the debt lives in the compiler, not the atom. Past case (closed): the
    `draw_*` family (per-pixel bodies that index a marks `Array` — texture-domain
    codegen had no storage-array read-path). Fixed by `InputAccess::BufferIndex`
-   (FUSION_SOTA_DESIGN.md D3/P4a+P4b, BUG-114) — a texture-domain atom now tags such
+   (FUSION_SOTA_DESIGN.md D3/P4a+P4b, BUG-114 (draw-family-blocked-on-array-into-texture-codege…)) — a texture-domain atom now tags such
    an input `BufferIndex` and the codegen binds it as `buf_<port>: array<Element>`,
    synthesized from the port's `Channels[…]` layout; see `draw_dots.rs`/
    `draw_connections.rs` (the latter proves two BufferIndex-tagged inputs on one atom).
@@ -292,7 +292,7 @@ primitive! {
   - `Array(T)` — `T` is a `#[repr(C)] + bytemuck::Pod` struct with a `KnownItem` impl that supplies `const SPECS: &[ChannelSpec]`. The macro folds T's specs into the wire's Channels signature automatically. Canonical for the seven typed families (`Particle`, `MeshVertex`, `Vec4Vertex`, `InstanceTransform`, `CurvePoint`, `EdgePair`, plus `u32`/`f32`/`[f32; 2]` for bare scalars).
   - `Channels<T>` — equivalent shorthand for `Array(T)`. Same emission. Pick whichever reads better at the declaration site.
   - `Channels[name: Type, ...]` — inline syntax for ad-hoc signatures (no `KnownItem` impl). `name` is either a bare ident resolving against `crate::node_graph::channel_names::well_known::*` (e.g. `POSITION`, `WIDTH`, `A_INDEX`) OR a string literal (e.g. `"my_local_channel"`). `Type` is one of `F32`, `I32`, `U32`, `Vec2F`, `Vec3F`, `Vec4F`. Mix idents and literals freely within the same `Channels[...]`. Used for `wgsl_compute` outputs and any primitive whose wire shape doesn't fit a typed family.
-  - `Channels[permissive]` — opt-in for generic transform operators (`node.rename_channel`, `node.reorder_channels`, etc.) whose input port accepts any Channels producer regardless of signature. The `pub const PERMISSIVE_PRIMITIVE_ALLOWLIST` in `validation.rs` gates which primitives may legitimately use this — see `docs/CHANNEL_TYPE_SYSTEM.md` §11.4.
+  - `Channels[permissive]` — opt-in for generic transform operators (`node.rename_channel`, `node.reorder_channels`, etc.) whose input port accepts any Channels producer regardless of signature. The `pub const PERMISSIVE_PRIMITIVE_ALLOWLIST` in `validation.rs` gates which primitives may legitimately use this — see `docs/CHANNEL_TYPE_SYSTEM.md` §11.4. (Per-port match-mode discipline)
 - Inputs default to `required`; mark optional with the `optional` keyword.
 - **Port-shadows-param convention.** If you declare a scalar input port with the same name as a `ParamDef` (e.g. `gain` in both `inputs:` and `params:`), the wire wins when present, the param is the fallback. Standard pattern for any control-rate modulation. The graph editor disables the expose checkbox + value cell on wire-driven rows automatically.
 - `picker: { label, category }` declares how the palette and effect-card UI surface this primitive. Categories used today: `Color`, `Spatial`, `Stylize`, `Filmic`, `Driver` (texture→scalar bridges), `Math` (scalar arithmetic / LFO / BeatGate), `Source` (constants / generators), `Diagnostic`.
@@ -356,7 +356,7 @@ fn invert_decomposes_pixel_exactly_across_all_fixtures() {
 - **Don't add a primitive for speculative future use.** The `≥2-use` filter is enforced at review time.
 - **Don't ship a fused single-effect / single-generator bundle.** If your primitive internally orchestrates multiple distinct dispatches that each do a different operation, that's a graph, not a primitive. Build the atoms separately and wire them in JSON. The recurring failure mode in past decomposition passes was reaching for a fused kernel to pass parity quickly; the no-fused-monolith rule prohibits this regardless of parity-test pressure. If parity drift is the concern, spec intermediate texture formats up to `Rgba32Float` to eliminate the rounding gap — the bandwidth cost is negligible on M-series and the bundle-as-primitive cost is structural.
 - **Don't touch the kernel without re-reading the purpose.** `purpose` states the math (`docs/archive/NODE_VOCABULARY_AUDIT.md` §2.6) and lives right next to the shader in the same file, on screen during the edit — there's no excuse for it drifting. Touch the kernel, re-read the purpose.
-- **Rasterizer with texture inputs → declare `output_canvas_scale` `(1, 1)`.** The plan compiler's default sizes a node's output as *max of its texture input dims* — right for image-processing nodes, wrong for a rasterizer whose texture inputs are scene resources (envmap, base-color/normal maps, LUT-like lookups): without the declaration your render target inherits the largest wired map's dims instead of the canvas. BUG-140 shipped exactly this — imported glb scenes rendered into the envmap's 1024×1024 and were stretched to canvas (aspect distortion + resolution loss). `render_scene` / `render_3d_mesh` / `render_instanced_3d_mesh` are the reference impls (`impl Primitive` override, one method). Explicit declarations beat the max-of-inputs heuristic since 2026-07-12.
+- **Rasterizer with texture inputs → declare `output_canvas_scale` `(1, 1)`.** The plan compiler's default sizes a node's output as *max of its texture input dims* — right for image-processing nodes, wrong for a rasterizer whose texture inputs are scene resources (envmap, base-color/normal maps, LUT-like lookups): without the declaration your render target inherits the largest wired map's dims instead of the canvas. BUG-140 (glb-import-non-square-aspect-distortion) shipped exactly this — imported glb scenes rendered into the envmap's 1024×1024 and were stretched to canvas (aspect distortion + resolution loss). `render_scene` / `render_3d_mesh` / `render_instanced_3d_mesh` are the reference impls (`impl Primitive` override, one method). Explicit declarations beat the max-of-inputs heuristic since 2026-07-12.
 
 ## Parity-without-fusion
 

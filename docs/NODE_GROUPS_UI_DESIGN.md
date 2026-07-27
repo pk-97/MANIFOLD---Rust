@@ -7,7 +7,7 @@ corrected 2026-06-13). Phases A–C (snapshot nesting, read-only navigation +
 breadcrumb, marquee select + collapse/ungroup) are built. **Phase D (interface
 editing) is dropped** — groups are organisation-only, exposure stays direct-to-card
 (Peter, 2026-06-13). Phase E (naming + color) is scoped in
-`docs/GRAPH_EDITOR_UX_BUILD_BRIEF.md` §4. Builds on the backend in
+`docs/GRAPH_EDITOR_UX_BUILD_BRIEF.md` §4. (— Groups: naming + color) Builds on the backend in
 `NODE_GROUPS_DESIGN.md` (schema + `flatten_groups`). Companion: `NODE_GRAPH_SYSTEM.md`,
 `CARD_TARGET_UNIFICATION.md`.
 

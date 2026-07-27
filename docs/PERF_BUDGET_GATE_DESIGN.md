@@ -1,8 +1,8 @@
 # Perf Budget Gate — a standing frame-time regression gate on the canonical show file
 
-**Status:** SHIPPED (all phases P1, P2, P2b, P3) 2026-07-16/17 — P1 `cargo xtask perf-soak` headless frame-budget gate (`30b21e29`), P2 profiled GPU attribution with scoped multi-executor tags (`efddffce`), P2b bare-glb import-graph mode (`19ae42fd`, BUG-189 its first customer), P3 landing-protocol + pre-gig-checklist wiring (`ae7b3db6`, cfg-gate fix `2bef5ce4`); D8 per-label `passes` breakdown amendment landed 2026-07-17 during RENDER_SCENE_PERF P0. Known tool gaps, tracked as bugs not phases: BUG-191 (`--start` seek-frame spike), continuously-animated imports never satisfy the byte-stable warmup gate (noted in BUG-190). Original approval trail: APPROVED 2026-07-09 (Peter) · design 2026-07-09 · Fable · amended 2026-07-14 (Fable + Peter): D5/D6 added — per-node GPU attribution pass (P2) + real-time pacing with `--start` targeting; protocol wiring renumbered to P3 · amended 2026-07-16 (Fable + Peter): D7/P2b added — bare-glb import-graph mode (BUG-189 is the first customer); all D7 decisions closed, zero executor discretion · amended 2026-07-16 (Fable + Peter, mid-P2): D6 corrected — a real project frame is multi-executor / multi-command-buffer (every layer's chain + every generator is its own `Executor`, `composite_parallel` gives each layer its own command buffer), so the bare `"s{idx}"` step tag collides across executors; scoped tags (`"{scope}:s{idx}"`) adopted as the join key, profiled mode forces `composite_serial`, untagged spans reported explicitly. P2 brief updated accordingly; all decisions closed, zero executor discretion.
+**Status:** SHIPPED (all phases P1, P2, P2b, P3) 2026-07-16/17 — P1 `cargo xtask perf-soak` headless frame-budget gate (`30b21e29`), P2 profiled GPU attribution with scoped multi-executor tags (`efddffce`), P2b bare-glb import-graph mode (`19ae42fd`, BUG-189 its first customer), P3 landing-protocol + pre-gig-checklist wiring (`ae7b3db6`, cfg-gate fix `2bef5ce4`); D8 per-label `passes` breakdown amendment landed 2026-07-17 during RENDER_SCENE_PERF P0. Known tool gaps, tracked as bugs not phases: BUG-191 (`--start` seek-frame spike), continuously-animated imports never satisfy the byte-stable warmup gate (noted in BUG-190 (brainstem-24-skinned-objects-370ms-per-frame)). Original approval trail: APPROVED 2026-07-09 (Peter) · design 2026-07-09 · Fable · amended 2026-07-14 (Fable + Peter): D5/D6 added — per-node GPU attribution pass (P2) + real-time pacing with `--start` targeting; protocol wiring renumbered to P3 · amended 2026-07-16 (Fable + Peter): D7/P2b added — bare-glb import-graph mode (BUG-189 (import-graph-10ms-resolution-independent-gpu-flo…) is the first customer); all D7 decisions closed, zero executor discretion · amended 2026-07-16 (Fable + Peter, mid-P2): D6 corrected — a real project frame is multi-executor / multi-command-buffer (every layer's chain + every generator is its own `Executor`, `composite_parallel` gives each layer its own command buffer), so the bare `"s{idx}"` step tag collides across executors; scoped tags (`"{scope}:s{idx}"`) adopted as the join key, profiled mode forces `composite_serial`, untagged spans reported explicitly. P2 brief updated accordingly; all decisions closed, zero executor discretion.
 **Prerequisites:** none (extends existing harness + trace infra; UI_HARNESS_UNIFICATION P0 makes the numbers more representative but is not a blocker)
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5 (Phase briefs)–§6 before starting any phase.
 
 Hot-path discipline is currently prose (CLAUDE.md) plus one *per-phase* gate (the
 content-thread work gate, DESIGN_DOC_STANDARD §5) that only fires when a brief remembers to
@@ -33,7 +33,7 @@ measurement system.
 - **D1 — Measure the show, not the parts.** The gate runs the canonical Liveschool fixture
   headlessly for N seconds at project FPS and records content-thread frame times (and GPU
   frame time where the trace already exposes it). Rejected: per-primitive micro-benchmarks —
-  they don't compose, and the corpus's perf escapes (BUG-035's 59 ms on-thread conversion)
+  they don't compose, and the corpus's perf escapes (BUG-035 (authoring-hitch)'s 59 ms on-thread conversion)
   were composition effects invisible to unit benchmarks.
 - **D2 — Deliberate run, not default CI.** Same posture as `gpu-proofs`: needs the GPU,
   takes minutes, flakes under device contention. Invoked when a landing wave touched
@@ -52,7 +52,7 @@ measurement system.
 - **D5 — Real-time pacing, targeted windows.** The soak paces at project FPS: `--seconds 30`
   costs 30 wall-clock seconds. Targeting is the answer to long sets, not speed: a
   `--start <beats>` flag seeks the transport so a run soaks the passage under suspicion
-  (e.g. the FluidSim3D clip behind BUG-156) instead of playing from the top. Rejected:
+  (e.g. the FluidSim3D clip behind BUG-156 (fluidsim3d-4k-perf-regression-suspect-bug066-fix)) instead of playing from the top. Rejected:
   uncapped faster-than-realtime rendering — headless has no vsync so it's possible, but it
   starves video-decode readahead of wall time (stalls that wouldn't happen on stage) and
   runs thermals hotter than any real set, i.e. it distorts exactly what the gate measures.

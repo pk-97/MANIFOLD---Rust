@@ -79,7 +79,7 @@ working.
 (fail-closed blocks everything unapproved, so silent execution convicts).
 Treat the exclusion list above as applying only to the exact shapes listed;
 any interpreter invocation with flags between the binary and the payload
-must be assumed to skip the classifier. BUG-lu32 tracks re-deriving the full
+must be assumed to skip the classifier. BUG-lu32 (Higher-tier audit of the auto-mode permission…) tracks re-deriving the full
 exclusion semantics from the binary.
 
 **`awk` and `find` are not in the exclusion list at all**, and both are

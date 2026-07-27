@@ -82,7 +82,7 @@ Test: how much of the RT-reflections R1 wave was expressible in its queue file *
 
 **Pre-expressed (and it all ran as written):** T1–T6 with exact anchors, gate commands, commit messages, seat assignments, pre-allocated BUG range, pre-named escalation triggers ("fails twice", "anchor moved", "new file outside named ones", "lead fills probe math if scaffold stalls"). The one real escalation (struct-layout fork) fired a pre-named trigger. Even the final probe debugging was pre-parked.
 
-**Emergent (D-50..D-56, BUG-323/324/325):** seat rotation under quota pressure; Flash self-gating / thin middle (cost observation: dispatcher 10M tokens clerical vs Flash 1.67M actual); stand-down incident → freeze hook; Flash parse storms → three rounds of proxy patches; "lead reviews, does not author"; seat-identity fix; GLM-4.7's "pre-existing" mislabel caught in review.
+**Emergent (D-50..D-56, BUG-323 (graph-tool-render-cant-inject-string-bindings)/324/325):** seat rotation under quota pressure; Flash self-gating / thin middle (cost observation: dispatcher 10M tokens clerical vs Flash 1.67M actual); stand-down incident → freeze hook; Flash parse storms → three rounds of proxy patches; "lead reviews, does not author"; seat-identity fix; GLM-4.7's "pre-existing" mislabel caught in review.
 
 **Reading:** program coverage ~100% — every *artifact-level* decision was in the transition table before the wave ran. But everything that broke broke *below* the IR's abstraction level: transport (D-54), identity (D-56), halt semantics (D-53), economics (D-51/52/55). ISA errata, not program bugs. The IR described the wave's logic completely and its work maybe 40% — most lead-window tokens went to runtime maintenance.
 
@@ -132,7 +132,7 @@ Not novel as a concept — workflow engines and CI pipelines are old. What is ne
 
 ## 10. CANDIDATE: DEBUG_INVESTIGATION — a program shape from the RT static-death hunt (2026-07-26, proposed, not adopted)
 
-The RT static-death hunt (BUG-jddy) ran one full day: ~5 hours of theory-building that reading could not settle, resolved in the end by a cure-test (forced refit) that was simultaneously the stopgap and the bisect. Retrospective: every wasted hour traces to a judgment failure of a kind a fixed opcode sequence would have prevented, and every win came from a step that *was* in the discipline but executed late. A bug investigation is a recurring shape with the same skeleton — it is a plan-template candidate (§9).
+The RT static-death hunt (BUG-jddy (RT GI+reflections die when scene goes static…)) ran one full day: ~5 hours of theory-building that reading could not settle, resolved in the end by a cure-test (forced refit) that was simultaneously the stopgap and the bisect. Retrospective: every wasted hour traces to a judgment failure of a kind a fixed opcode sequence would have prevented, and every win came from a step that *was* in the discipline but executed late. A bug investigation is a recurring shape with the same skeleton — it is a plan-template candidate (§9).
 
 **The measured failures and their opcodes:**
 

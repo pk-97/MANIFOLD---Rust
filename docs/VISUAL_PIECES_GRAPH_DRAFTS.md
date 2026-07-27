@@ -6,7 +6,7 @@
 
 **How to read a piece:** *Intent* is the stage sentence. *Audit* says what ships today, what gets extended, what is genuinely new. *Graph* gives the top-level groups (GROUPING_GRAPHS.md discipline: spine visible, 6–12 boxes, control plumbing gathered). *New atoms* carry full port/param signatures and the one-dispatch statement each must satisfy. *Card* is the performer surface — ≤12 outer params, prime modulation targets marked **(mod)**. *Verify* names the gate.
 
-**Tiers.** **A** — buildable now against the shipped registry. **B** — rides vocabulary committed in approved designs (GAUSSIAN_SPLATS_DESIGN.md §3, BOX3D_PHYSICS_DESIGN.md §2–§3). **C** — rides waves whose atom vocabulary is not yet committed (XPBD sims, multi-display, Realtime-3D P2 shadows); atom names there are PROPOSED and the wave design may rename them.
+**Tiers.** **A** — buildable now against the shipped registry. **B** — rides vocabulary committed in approved designs (GAUSSIAN_SPLATS_DESIGN.md §3 (The atoms (all new — §1 audit)), BOX3D_PHYSICS_DESIGN.md §2 (Decisions)–§3). **C** — rides waves whose atom vocabulary is not yet committed (XPBD sims, multi-display, Realtime-3D P2 shadows); atom names there are PROPOSED and the wave design may rename them.
 
 ## Pick-list summary
 
@@ -465,7 +465,7 @@ through the Log tonemap — never saturated purple, never slow cartoon animation
 - **Outputs are one `points` + one `widths` + two `EdgePair` topologies (`core_edges`, `branch_edges`)**, not two `CurvePoint` arrays. Variable-length polylines inside fixed-capacity Array buffers are only expressible on `draw_lines`' sentinel-skipping edges path (the sequential path draws the whole buffer capacity), and branches are *disjoint* polylines, which a bare point array can't encode at all. `CurvePoint` stays its frozen 8-byte layout; the width taper rides the parallel `widths: Array(f32)` — which is also the shape of the `draw_lines` extension that landed with the piece (optional `widths` input, tapered-capsule SDF, geometry bit-identical when unwired).
 - **Extra outputs `strike_pulse` (1.0 on the strike frame) + `age`.** The flash envelope is `strike_pulse → envelope_follower_ar` (activated from the registered-but-unused list) `→ scale_offset_value(scale = Flash card) → flash.amount` — no new envelope logic anywhere.
 - **`auto_strike_beats` param + Auto Strike card** (default 2 beats): beat-quantized strikes without MIDI, and the only way headless renders/tests can fire the bolt besides `--triggers`. The Strike card is the NestedCubes idiom: a toggle (`isTriggerGate`) on `trigger_gate.enable`, clip triggers as the instrument.
-- **`node.set_alpha` (new atom, codegen path + parity test) ends the chain.** The afterglow loop (`Max` mix against `feedback × decay`) locks alpha at 0 forever — see the "additive feedback loop eats the alpha channel" bug class in DECOMPOSING_GENERATORS.md §8. Opaque display output is the same decision `resolve_scatter` bakes in-kernel.
+- **`node.set_alpha` (new atom, codegen path + parity test) ends the chain.** The afterglow loop (`Max` mix against `feedback × decay`) locks alpha at 0 forever — see the "additive feedback loop eats the alpha channel" bug class in DECOMPOSING_GENERATORS.md §8. (Bug classes to recognise) Opaque display output is the same decision `resolve_scatter` bakes in-kernel.
 - **Card list as shipped (7):** Strike (gate toggle) · Auto Strike · Jaggedness · Branches · Afterglow · Flash · Reach. Palette was killed with L2; colors are `draw_lines` HDR color params (near-white blue core, branches at 0.3×).
 - **Harness gotchas for look-dev renders:** pin `--max-frames` equal to `--frames` (the convergence loop otherwise keeps rendering until the afterglow decays to black and saves that), and expect the PNG dimmer than the app — `readback_to_srgb_png` applies its own Reinhard on top of the preset's Log curve, capping PNG whites at ~0.5.
 
@@ -596,7 +596,7 @@ Same atom, one optional input: `target: Texture2D`. When wired (an edge map of a
 
 # Tier B — committed future vocabulary
 
-Pinned to GAUSSIAN_SPLATS_DESIGN.md §3 (`splat_source`, `mask_splats_by_color`, `mask_splats_by_bounds`, `displace_splats`, `render_splats`) and BOX3D_PHYSICS_DESIGN.md §2–§3 (`physics_world`, `body_set`, `collider_set`, impulse params, P4 `heightfield_collider`; bodies render through the shipped `render_copies` + material/light/camera stack). Anything beyond those docs is flagged.
+Pinned to GAUSSIAN_SPLATS_DESIGN.md §3 (`splat_source`, `mask_splats_by_color`, `mask_splats_by_bounds`, `displace_splats`, `render_splats`) and BOX3D_PHYSICS_DESIGN.md §2 (Decisions)–§3 (`physics_world`, `body_set`, `collider_set`, impulse params, P4 `heightfield_collider`; bodies render through the shipped `render_copies` + material/light/camera stack). Anything beyond those docs is flagged.
 
 ## B1. Monolith Collapse (set-piece composition)
 
@@ -686,6 +686,6 @@ A11 unchanged, plus MULTI_DISPLAY's stage-space canvas: bolt endpoints in *stage
 
 If the pick is "start playing soonest": **L1 + L2 first** (every density piece inherits them), then **A5 Film Chain** (zero atoms, instant payoff on existing content), then **A2 Cymatics** (zero atoms, quiet-section anchor), then **A1 Murmuration** (first new-atom pair), then the self-portraits **A13/A12** (the big CPU atom and the zero-atom loop). A6/A9/A10/A11 follow by taste. Tier B waits on its waves by design; C1/C3 have today-approximations worth building when the quiet sections need filling.
 
-Every Tier A piece is sized for a Sonnet build session against this spec plus DECOMPOSING_GENERATORS.md and GROUPING_GRAPHS.md; the §2.5 audit here was run against the registry at `048285b9` and must be re-verified at build time (the registry moves).
+Every Tier A piece is sized for a Sonnet build session against this spec plus DECOMPOSING_GENERATORS.md and GROUPING_GRAPHS.md; the §2.5 (Precondition: audit by analogy before workflow step 1) audit here was run against the registry at `048285b9` and must be re-verified at build time (the registry moves).
 
 

@@ -414,7 +414,7 @@ evaluation arm, the count-combination seam, and ~15 lines of drawer spec.
   `TransientEdge` struct usable by both `LiveTriggerState` (keyed by send×band) and the
   new param evaluator (keyed by instance). Runtime state, never serialized. Audit
   finding: `LiveTriggerState::clear()` documents "call on transport stop" but has zero
-  call sites (BUG-051) — P1 wires BOTH edge-state holders into the transport-stop reset
+  call sites (BUG-051 (trigger-clear-unwired)) — P1 wires BOTH edge-state holders into the transport-stop reset
   rather than copying the omission.
 - **D5 — Effect chains receive the clip edge too (Peter, 2026-07-07: "I would like
   triggers to be possible with effects too").** `set_frame_context` currently pins
@@ -605,7 +605,7 @@ app       PanelAction + dispatch + state_sync card view                WIRE
       the new UI at L3/L4 once it exists.
 - [x] **P4 — Ship (P1/P2/P3a only — P3b not in this landing).** Full workspace
       gate rerun twice — once pre-merge in the `wave/param-triggers` worktree,
-      once more in the main checkout after merging a concurrent BUG-052 landing
+      once more in the main checkout after merging a concurrent BUG-052 (sample-rate-dependent-detection) landing
       (`216549e2`/`6e0e8988`) that arrived while this was landing — both green
       (workspace suite, `manifold-core` 318, `gpu-proofs` 1245, workspace clippy).
       Merged `--no-ff` into `main` @ `3089e0a3`, pushed, rejected once (someone
@@ -705,5 +705,5 @@ by this section; D1 (two counters, event-time gating), D3 (immediate fires), D5
       manifold-ui param_card tests, full suite green) + `cargo clippy
       --workspace -- -D warnings` clean + `cargo clippy -p manifold-app
       --features ui-snapshot` clean except the pre-existing unrelated
-      BUG-057 (`make_blit_pipeline` dead code, landed in an earlier commit,
+      BUG-057 (ui-snapshot-dead-blit-pipeline) (`make_blit_pipeline` dead code, landed in an earlier commit,
       logged not fixed — out of scope).

@@ -6,7 +6,7 @@ must not spend its frame budget on invisible air. v2 replaces it with the island
 model. Execution is a Sonnet apply pass — every decision needed is in here; don't
 reopen §11.
 **Prerequisites: none. P1–P3 unblock PROJECTION_MAPPING and LED_STRIPS P2 (`docs/DESIGN_BUILD_ORDER.md`).**
-**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any phase.**
+**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5 (Phase briefs)–§6 and §8 before starting any phase.**
 
 The driving use case: two vertical LED totems on stage, meters apart. Content chases
 between them, bounces off them, crosses the gap — the physical setup is part of the
@@ -397,7 +397,7 @@ the two `led_group_*` fields.
 - The DNN primitives run inference **per island** for a spanning layer. That is
   semantically required — the islands show different pixels — but it is real cost
   (2–4× worst case at 2–4 islands). First-frame pipeline/instance warm-up per island
-  falls under the existing prewarm rule (BUG-037 sibling rule in
+  falls under the existing prewarm rule (BUG-037 (glp-first-render-stall) sibling rule in
   DESIGN_DOC_STANDARD §5).
 - `render()` (`layer_compositor.rs:2128`) is not one canvas even today — fixed main
   composite + tonemap + master chain + the independent LED path + the serial/parallel

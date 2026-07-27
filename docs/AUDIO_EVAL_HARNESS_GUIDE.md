@@ -74,7 +74,7 @@ liveliness, transients`, then `tracked_f0_hz`, then per band `pitch, presence`.
 `P2 <scenario>:` tracker trajectory gates · `P2b:` presence gates ·
 `P2c notes:` note-based material gates · `P3:` transient fire-count gates.
 Each line prints its own bound and PASS/FAIL. **Known-failing by design as of
-2026-07-06 (post-BUG-042/043 fixes):** ONE line — `P2c notes` pitch accuracy
+2026-07-06 (post-BUG-042 (onset-settle-grab)/043 fixes):** ONE line — `P2c notes` pitch accuracy
 (87.6%, gate 90) — now owned by BUG-045 (gap-ring-down-chase), the residual
 mechanism after BUG-042's fix. Notes presence is green (100%). Everything else green is the entry state; a change that reddens any other
 line is a regression regardless of what it improves.
@@ -91,8 +91,8 @@ on real note-based basslines is effectively dark.
 |---|---|---|
 | BUG-045 gap-ring-down-chase | tracker follows the kernel ring-down 2-4 bins down in note gaps; value-trend fix direction + its knife-edge risk recorded in the entry | `notes` accuracy line (87.6/90) |
 | ~~BUG-042~~ FIXED 2026-07-06 | position-anchored re-acquire window (accelerated takeover clock); see backlog Fixed entry | notes gates + tears bass are the regression guard |
-| ~~BUG-044~~ FIXED 2026-07-06 | novelty-vs-recent-max dual onset criterion; see backlog Fixed entry | `densemix` gate + feel/apricots/tears mix fire counts |
-| ~~BUG-043~~ FIXED 2026-07-06 | apex-masked salience comb + dominance/consistency presence factors (see backlog Fixed entry) | `sub` scenario gates are the permanent regression guard |
+| ~~BUG-044 (mix-trigger-deafness)~~ FIXED 2026-07-06 | novelty-vs-recent-max dual onset criterion; see backlog Fixed entry | `densemix` gate + feel/apricots/tears mix fire counts |
+| ~~BUG-043 (deep-bass-floor-anchor)~~ FIXED 2026-07-06 | apex-masked salience comb + dominance/consistency presence factors (see backlog Fixed entry) | `sub` scenario gates are the permanent regression guard |
 
 **Floor experiment (2026-07-06, 25 clips, off vs −28 dB):** a raised analysis floor
 is a TRADE, not a win — transient sensitivity recovers on quiet stems (feel bass

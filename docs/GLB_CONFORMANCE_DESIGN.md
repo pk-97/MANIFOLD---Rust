@@ -1,8 +1,8 @@
 # GLB Conformance — drop in any glb and it renders accurately
 
-**Status: SHIPPED · 2026-07-15 · Fable 5 (authored) + Sonnet 5 (G-P1+G-P2 executed and landed same day, `909976d2`; G-P3+G-P4+G-P5 executed and landed same day, session 2; G-P6 executed and landed same day, session 3, `017e1e41`; G-P7 executed and landed same day, session 3). All seven phases SHIPPED: G-P1 (conformance harness), G-P2 (cap deleted, import is 1:1, BUG-163 fixed as a side effect), G-P3 (anisotropic filtering), G-P4 (KHR_texture_transform all five map families + specular/ior F0), G-P5 (clearcoat lobe, factor-only), G-P6 (node.hdri_source, env_mode card switch, Softbox stays default), G-P7 (full 148-asset Khronos manifest classified — 56 expect_pass / 92 xfail / 0 unclassified; certification record `docs/GLB_CONFORMANCE_STATUS.md`; 8 new bugs logged BUG-166–BUG-173 for genuinely-new gaps the full sweep surfaced, none fixed this phase per its own scope).**
+**Status: SHIPPED · 2026-07-15 · Fable 5 (authored) + Sonnet 5 (G-P1+G-P2 executed and landed same day, `909976d2`; G-P3+G-P4+G-P5 executed and landed same day, session 2; G-P6 executed and landed same day, session 3, `017e1e41`; G-P7 executed and landed same day, session 3). All seven phases SHIPPED: G-P1 (conformance harness), G-P2 (cap deleted, import is 1:1, BUG-163 (amg-livery-black-body-carpaint-extension-and-tex…) fixed as a side effect), G-P3 (anisotropic filtering), G-P4 (KHR_texture_transform all five map families + specular/ior F0), G-P5 (clearcoat lobe, factor-only), G-P6 (node.hdri_source, env_mode card switch, Softbox stays default), G-P7 (full 148-asset Khronos manifest classified — 56 expect_pass / 92 xfail / 0 unclassified; certification record `docs/GLB_CONFORMANCE_STATUS.md`; 8 new bugs logged BUG-166–BUG-173 (nodeperformancetest-exceeds-object-safety-bound-…) for genuinely-new gaps the full sweep surfaced, none fixed this phase per its own scope).**
 **Prerequisites: IMPORT_FIDELITY F-P1–F-P7 (all SHIPPED 2026-07-15, `44b921cf`). Nothing else.**
-**Execution contract: read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase. Executed as a Sonnet→Sonnet orchestration; every phase brief is written to be run with nobody in the room.**
+**Execution contract: read docs/DESIGN_DOC_STANDARD.md §5 (Phase briefs)–§6 before starting any phase. Executed as a Sonnet→Sonnet orchestration; every phase brief is written to be run with nobody in the room.**
 
 Peter, 2026-07-15: **"I would like our system to be able to drop in any glb and
 accurately render it"** and, on the importer's texture rationing: **"why is there a
@@ -214,7 +214,7 @@ Every phase report carries `Shortcuts taken:` and `Demo artifact:` per standard 
   `generate_preset_thumbnails.rs` (its readback is what moves into
   `headless_readback.rs`); `gltf_import.rs` test
   `damaged_helmet_imports_wires_all_maps_and_renders_non_degenerate` (the
-  convergence-poll pattern to reuse — byte-stable + non-black floor, BUG-100
+  convergence-poll pattern to reuse — byte-stable + non-black floor, BUG-100 (gltf-fresh-import-renders-near-black-for-non-aza…)
   comment explains why both). Restate: D2 (shared transform, no local tonemap),
   D3 (no Khronos pixel-matching), D8 (emissive is not broken).
 - **Deliverables:** `headless_readback.rs` (extracted, thumbnails migrated onto it);
@@ -246,7 +246,7 @@ Every phase report carries `Shortcuts taken:` and `Demo artifact:` per standard 
   test treats it as not-yet-fetchable, same as any other missing fixture),
   `SpecularTest`; `xfail:G-P5` = `ClearCoatTest`. `TextureSettingsTest`
   renders non-degenerate but exercises per-texture sampler wrap/filter
-  settings that the current importer cannot honor (BUG-164, logged this
+  settings that the current importer cannot honor (BUG-164 (material-maps-force-one-repeat-sampler-ignores-p…), logged this
   session: every material map shares one hardcoded REPEAT sampler) — no
   future phase in this doc currently owns that fix, so it is `xfail:BUG-164`
   pending a phase assignment.

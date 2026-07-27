@@ -3,7 +3,7 @@
 **Status: APPROVED 2026-07-09 (Peter) — design ready, awaiting build (Sonnet, P1–P4); differentiator, not release-gating; box3d MIT license confirmed 2026-07-09 · design 2026-07-07 · Fable**
 **Prerequisites: none for P1–P3 (renders through the shipped `node.render_copies`).
 P4 (content colliders) wants the depth-estimate primitive, already shipped.**
-**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting
+**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5 (Phase briefs)–§6 and §8 before starting
 any phase.**
 
 Peter's directives (2026-07-07): box3d over alternatives — "box3d is very appealing
@@ -22,7 +22,7 @@ not physics existing (TouchDesigner has Bullet, Notch has rigid bodies); it is p
 as a **musical citizen** — impulses quantized to beats, gravity on a fader, and bodies
 colliding with the *content* via depth-estimated heightfields.
 
-Companions: `SIMULATIONS_DESIGN.md` (XPBD lane — this doc supersedes its §8
+Companions: `SIMULATIONS_DESIGN.md` (XPBD lane — this doc supersedes its §8 (Deferred (with triggers))
 "GPU rigid bodies" deferral; coupling stays deferred there), `REALTIME_3D_DESIGN.md`
 (the scene bodies will eventually join via `instances_n`), `MATERIAL_SYSTEM_DESIGN.md`
 (bodies get materials for free through the existing renderers).
@@ -206,7 +206,7 @@ anywhere · new modulation machinery (D6).
   inside expected bounds after N steps, **determinism: two identical runs, byte-
   identical pose streams**; headless PNG at t=0 and t≈3 s shows bricks fallen and
   stacked (L2 demo, actually read). `MANIFOLD_RENDER_TRACE=1` run with 1024 bodies:
-  no frame >20 ms, step time reported in the phase notes (BUG-035 gate).
+  no frame >20 ms, step time reported in the phase notes (BUG-035 (authoring-hitch) gate).
   Gate (negative): `rg 'Arc<Mutex' crates/manifold-physics crates/manifold-renderer/src/node_graph/physics*` → zero;
   `rg 'wgpu' crates/manifold-physics` → zero; vendor tree byte-identical to the
   pinned upstream commit (diff against the recorded SHA). Round-trip: save/reload
@@ -216,7 +216,7 @@ anywhere · new modulation machinery (D6).
   — default sweep covers it; no gpu-proofs run needed.
 - **P2 — The performance surface.** Impulse + reset triggers (edge-gated), gravity/
   time_scale port-shadowing verified live, perf HUD line (bodies × substeps ×
-  step-ms). Performer-gesture gate (BUG-039 lesson): a full-range LFO on gravity_y
+  step-ms). Performer-gesture gate (BUG-039 (saw-rotation-wrap) lesson): a full-range LFO on gravity_y
   and a saw beat_ramp on time_scale both behave (no clamp surprises); demo flow —
   a trigger-driven impulse preset, PNG pair before/after the hit (L2). Focused
   tests (`-p manifold-renderer --lib` + `-p manifold-physics`).

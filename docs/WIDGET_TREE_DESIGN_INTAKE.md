@@ -17,11 +17,11 @@ Design the queryable widget/param layer at the UI↔engine boundary — the stru
 
 1. `docs/SYSTEM_UPGRADE_2026_07_PLAN.md` — diagnosis + doctrine (short).
 2. `docs/SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md` — the autopsy of the failure class this layer kills.
-3. `docs/INSPECTOR_DRAG_TAB_FINDINGS.md` — BUG-265/266/267; the three-geometry-sources disease (BUG-265 root fix may land via Wave 2 before you finish — check `git log` / backlog).
+3. `docs/INSPECTOR_DRAG_TAB_FINDINGS.md` — BUG-265/266/267; the three-geometry-sources disease (BUG-265 (inspector-card-drag-indicator-stale-geometry) root fix may land via Wave 2 before you finish — check `git log` / backlog).
 4. `docs/UI_HARNESS_UNIFICATION_DESIGN.md` — the groundwork this rides on (read the Reframe block first, per its own header).
 5. Exemplar state-level tests in-tree: `ui_bridge/inspector.rs` (`undo_baseline`, `mapping_undo_baseline`, `bug_266_tab_pin` — the last landed 2026-07-20, `fcd4c084`).
 6. `docs/UI_ARCHITECTURE_OVERHAUL.md` + `docs/archive/UI_ARCHITECTURE_AUDIT.md` — prior architecture read (audit is archived, still the best crate map).
-7. Recent structural state: BUG-267's unification landed 2026-07-20 (`717f8910` — one card storage keyed by scope in `inspector.rs`); build on it, don't re-derive.
+7. Recent structural state: BUG-267 (inspector-duplicated-card-lists)'s unification landed 2026-07-20 (`717f8910` — one card storage keyed by scope in `inspector.rs`); build on it, don't re-derive.
 
 ## Coordination
 

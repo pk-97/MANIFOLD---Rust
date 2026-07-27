@@ -1,8 +1,8 @@
 # UI Layout Invariant Lints — the tree dump becomes a gate
 
-**Status:** PROPOSED · 2026-07-10 · Fable, from Peter's ask after BUG-108's escape
+**Status:** PROPOSED · 2026-07-10 · Fable, from Peter's ask after BUG-108 (effect-card-add-effect-button-floats-over-sectio…)'s escape
 **Prerequisites:** none — UI_HARNESS_UNIFICATION P0–P3 SHIPPED, UI_CLIP_AND_Z_OWNERSHIP shipped the flags this leans on
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5 (Phase briefs)–§6 before starting any phase.
 
 The harness renders the app faithfully and dumps every node's real rect — and then the
 only thing standing between a layout defect and main is someone looking at a PNG and
@@ -15,7 +15,7 @@ test system to prevent these types of failures?"**
 
 The answer this doc commits to: **machine-checkable layout invariants over the built
 `UITree`, run as ordinary `cargo test` on every harness scene.** Assertions cover
-geometry; the PNG look remains the net for appearance (color, glyphs — BUG-107's
+geometry; the PNG look remains the net for appearance (color, glyphs — BUG-107 (text-rasterizer-draws-fallback-glyph-ids-with-ba…)'s
 mojibake is a font-coverage bug, not a geometry bug, and stays out of scope here).
 
 Sibling doc: [HARNESS_FIDELITY_INVARIANT_PROPOSAL.md](HARNESS_FIDELITY_INVARIANT_PROPOSAL.md)

@@ -1,14 +1,14 @@
 # Project File Integrity — a save format you can trust your show to
 
-**Status:** SHIPPED — P1–P3 all landed 2026-07-09 (Opus-orchestrated Sonnet/medium wave; closes BUG-062/063/064/065). Durability (P1 fsync) ships at L1 — verified by code inspection + negative gate, not fault injection (VERIFICATION_DEBT). · 2026-07-09 · Opus (1M) · Peter in the room
+**Status:** SHIPPED — P1–P3 all landed 2026-07-09 (Opus-orchestrated Sonnet/medium wave; closes BUG-062 (no-forward-version-guard)/063/064/065). Durability (P1 fsync) ships at L1 — verified by code inspection + negative gate, not fault injection (VERIFICATION_DEBT). · 2026-07-09 · Opus (1M) · Peter in the room
 **Prerequisites:** none (touches `manifold-core` version constant + `manifold-io` load/save; no design depends on this landing first)
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5 (Phase briefs)–§6 before starting any phase.
 
 The instrument this protects is the `.manifold` file itself. Today three paths can silently
 cost you work: **(BUG-062)** an older build opens a file written by a newer build, drops the
 fields and effects it doesn't recognize, and writes the loss back on the next save;
-**(BUG-064)** a power cut mid-save can leave a durably-renamed file pointing at unflushed,
-torn bytes; **(BUG-065)** the 24-bit save-dedup hash can collide, making a real save look
+**(BUG-064 (save-rename-before-fsync))** a power cut mid-save can leave a durably-renamed file pointing at unflushed,
+torn bytes; **(BUG-065 (save-dedup-history-identity-key-6-hex-chars))** the 24-bit save-dedup hash can collide, making a real save look
 identical to a prior one and get skipped. The governing insight: **the file must always be
 either a faithful superset of what MANIFOLD read, or refused outright — never a silently
 lesser version of it.** Because a build can't safely round-trip data it doesn't understand

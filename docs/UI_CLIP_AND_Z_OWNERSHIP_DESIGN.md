@@ -2,7 +2,7 @@
 
 **Status:** P1 SHIPPED 2026-07-08 (region mechanism + main-window migration + D4 enforcement; BUG-060 stopgap removed — landing report: `docs/landings/2026-07-08-ui-clip-z-p1.md`). P2 (editor window + perform) and P3 (enforcement closure + sweep) OPEN. One carried gap: D2 tier-ordering is enforced on the `traverse()` render path (headless snapshots + editor window) but NOT on the live main-window cache path (`panel_cache_info`, array-ordered), where D1 containment alone carries BUG-060 — see VERIFICATION_DEBT VD-018, close in P2. · design 2026-07-07 · Fable
 **Prerequisites:** none (UI_ARCHITECTURE_OVERHAUL phases 0–8 shipped 2026-06-23; this builds on that substrate)
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5 (Phase briefs)–§6 before starting any phase.
 
 The governing insight: the architecture overhaul gave panels a clean way to
 **compose**, but nothing makes their **bounds** binding. Pixel clipping is
@@ -11,7 +11,7 @@ opt-in per panel (`CLIPS_CHILDREN`), and stacking is an accident of build order
 those two facts wearing a different panel: the inspector paints over the footer
 because it never opted into a clip and happens to build later (BUG-060); Audio
 Setup content spills past the panel edge (BUG-047); node previews composited
-over the wrong chrome in the editor window (BUG-027, fixed locally). This
+over the wrong chrome in the editor window (BUG-027 (graph-editor-node-previews-composite-wrong-z-lay…), fixed locally). This
 design moves both properties to the substrate: **a top-level region's rect is a
 GPU scissor its content cannot escape, and its stacking tier is declared, not
 inferred** — for the main window, the graph-editor window, and every future
@@ -47,9 +47,9 @@ input-side sibling: same single-owner principle applied to pointer events),
 Bug family this touches (from `docs/BUG_BACKLOG.md`): BUG-060 (inspector over
 footer — dies here), BUG-047 (Audio Setup overflow — becomes visible clipping;
 the missing scroll stays its own bug), BUG-027 (editor z — fixed locally;
-pinned structurally here), BUG-025 (timeline row bleed — gains an enforced
-invariant). **Out of scope, explicitly:** BUG-049 (row indent arithmetic — row
-geometry, not bounds; deferred, see §8) and BUG-015 (stale content — state-sync
+pinned structurally here), BUG-025 (no-slug) (timeline row bleed — gains an enforced
+invariant). **Out of scope, explicitly:** BUG-049 (child-row-right-indent) (row indent arithmetic — row
+geometry, not bounds; deferred, see §8) and BUG-015 (no-slug) (stale content — state-sync
 class, FOUNDATIONAL_GAPS A1).
 
 Extend, don't redesign: every mechanism needed already exists — the flag, the

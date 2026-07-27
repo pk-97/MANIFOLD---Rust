@@ -10,11 +10,11 @@ P3 @ `da452351`, P4+P5 @ `7d3c41b6`). Landing reports:
 Object wire, and the outliner+properties panel are all live on main.
 Three known, tracked gaps outside what P1-P5 committed to fix (none are
 regressions from this landing — all found BY this wave's own gates, all
-logged before the session ended, per house rule): BUG-218 ("Add modifier"
+logged before the session ended, per house rule): BUG-218 (modifier-commands-splice-at-dead-group-output-ve…) ("Add modifier"
 chip is a dead affordance against any real grouped object — the D6
 modifier-stack commands still splice at the pre-D12 group_output.vertices
 port, fix owed to `manifold-editing`, out of every phase's committed blast
-radius); BUG-212 (`DuplicateSceneObjectCommand`'s fresh NodeIds break an
+radius); BUG-212 (duplicate-scene-object-string-bindings-dangle-on…) (`DuplicateSceneObjectCommand`'s fresh NodeIds break an
 imported object's string-bound model-file path — Duplicate on a
 hand-built object works, on an imported one does not); BUG-199 (dock
 scroll — explicitly out of scope for this whole design, owned elsewhere).
@@ -29,7 +29,7 @@ see that report for the full diagnosis.**
 object model and panel layout in place). BUG-199 (dock scroll) is explicitly OUT of this set —
 another session owns it (Peter, 2026-07-17: "another agent has BUG-199 planned for fixing so we
 can leave it out of this set").
-**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any
+**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5 (Phase briefs)–§6 and §8 before starting any
 phase. Executor: Sonnet, orchestrated (Sonnet → Sonnet). Peter, verbatim: **"Sonnet must not
 make any decisions, it must just execute mechanical spec."** Anything that feels like a
 decision is an escalation, full stop.

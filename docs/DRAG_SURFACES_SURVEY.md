@@ -18,8 +18,8 @@ turned up:
    bump from ANY concurrent edit (not necessarily related to the drag) mid-gesture replaces
    `local_project` wholesale and reverts the in-flight value; the eventual drag-end commit then
    sees old == new and records no undo entry (or, worse, silently discards the user's live
-   motion for one frame). This class DOES recur — two confirmed instances below (BUG-280,
-   BUG-281), plus a related-but-distinct undo-flood defect (BUG-282) on the same code path.
+   motion for one frame). This class DOES recur — two confirmed instances below (BUG-280 (marker-drag-unguarded-mid-gesture-race),
+   BUG-281 (graph-canvas-bound-param-scrub-unguarded-mid-ges…)), plus a related-but-distinct undo-flood defect (BUG-282) on the same code path.
 
 ## Verdict table
 
@@ -36,7 +36,7 @@ turned up:
 | Graph-canvas param-scrub, UNBOUND row (same `CanvasDrag::ParamScrub`/`VecScrub`, unbound branch, `app_render.rs:2972-2980`) | (geometry n/a — this is an undo-batching defect, not a geometry one) | — | — | **No** — every `on_pointer_move` tick pushes `GraphEditCommand::SetGraphNodeParam` (`graph_canvas/interaction.rs:504-539`, `:541-569`), and the unbound arm in `app_render.rs` executes a brand-new `SetGraphNodeParamCommand` as a full undo-worthy `Execute` on EVERY tick — confirmed by the release-handler's own comment (`graph_canvas/interaction.rs:1315-1323`): "the scrub emitted its value on each pointer move; nothing to finalize for an ordinary row" (`EndGraphNodeParamScrub` only closes out the bound case). No other drag family in the codebase behaves this way — all others batch to one undo entry at drag-end | none on file | **undo-flood — filed BUG-282** |
 | Browser → timeline drag-in, Finder files (`drag_interpose.rs`, `drag_hover.rs`) | Live where the platform interposition installs (`drag_interpose::drag_position()`, polled fresh via `draggingUpdated:`); falls back to last-known `cursor_pos` otherwise | N/A (one-shot resolve on drop) | N/A | N/A — single atomic action on `DroppedFile`, no per-frame project write | already tracked: the file's own doc comment flags the AppKit-forwarding assumption as unverifiable headless, see `docs/TIMELINE_INGEST_DESIGN.md` P1 gate | HEALTHY (design already accounts for its one open unknown; not a new finding) |
 | Browser → timeline drag-in, internal (in-app asset panel to timeline) | — | — | — | — | no such mechanism exists — `graph_palette.rs` and `browser_popup.rs` are click-to-add only, no drag path found | N/A — surface doesn't exist |
-| Slider / param scrub family (`slider.rs`) | Live: `update_value` reads `tree.get_bounds(ids.track)` (`slider.rs:470`) | Yes | Yes | N/A (base widget; drag-guard is the caller's responsibility — see mapping-range/card-slider rows) | already fixed 2026-07-19 (BUG-258/259) — this IS the reference pattern BUG-265's fix in W2-B replicates | HEALTHY |
+| Slider / param scrub family (`slider.rs`) | Live: `update_value` reads `tree.get_bounds(ids.track)` (`slider.rs:470`) | Yes | Yes | N/A (base widget; drag-guard is the caller's responsibility — see mapping-range/card-slider rows) | already fixed 2026-07-19 (BUG-258 (trim-geometry-math-duplicated-across-four-sites)/259) — this IS the reference pattern BUG-265's fix in W2-B replicates | HEALTHY |
 | Text-selection drag (`text_input.rs` `drag_to`) | Byte offset computed by the caller from a live pixel-to-char mapping each call | Yes | N/A | N/A — local edit-buffer state only, never touches `Project` | none on file | HEALTHY |
 | Scene outliner reorder | — | — | — | — | no such surface — `scene_setup_panel.rs`'s "outliner" is click-select only, no drag/reorder mechanism | N/A — surface doesn't exist |
 | Card drag (baseline reference) | Was build-time `card_y()` snapshot | No (pre-fix) | No (pre-fix) | N/A | BUG-265 | BUG-265-CLASS — **fixed in W2-B** (concurrent lane, not this survey's scope) |
@@ -51,7 +51,7 @@ turned up:
   infrastructure (`cursors.rs`, `input.rs`, `intent.rs`) that routes events to the surfaces
   already audited rather than owning geometry itself.
 - The graph-canvas param-scrub findings (BUG-281, BUG-282) share one root: the `pending_actions`
-  loop in `app_render.rs` is the same mechanism BUG-262/BUG-263 already flagged as
+  loop in `app_render.rs` is the same mechanism BUG-262/BUG-263 (no-app-level-harness-for-pending-actions-gesture…) already flagged as
   under-tested and partially unguarded for the mapping-sidebar case. The bound-row branch added
   since BUG-262 (`BoundNodeParamDrag`, D1 of `PARAM_TWO_WAY_BINDING_DESIGN.md`) repeats the
   same unguarded-live-write shape on a fresh field instead of extending `ActiveInspectorDrag`

@@ -918,7 +918,7 @@ With every effect either a preset graph (4b) or a monolithic node (4c), `EffectC
 - **Dispatch fusion compiler.** Adjacent pixel-local primitives compile to a single shader.
 - **Multi-queue / async compute.** Independent branches dispatch on parallel queues.
 - **Vulkan backend.** `VulkanBackend: Backend` plugs into the existing executor. No graph-runtime changes.
-- **User-built composite saving / sharing.** Per `NODE_GRAPH_SYSTEM.md` §13.
+- **User-built composite saving / sharing.** Per `NODE_GRAPH_SYSTEM.md` §13. (Save Format)
 
 ---
 

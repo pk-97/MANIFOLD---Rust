@@ -93,7 +93,7 @@ Call 600 costs **6x** what call 20 cost, for identical work. Session totals:
 
 **12% of sessions burn 50% of all tokens.**
 
-> **The existing doctrine threshold is wrong.** `AGENT_ROUTING.md` §Overnight says seats rotate at "~500K observed as the sensible ceiling." At 500K every subsequent call costs half a megatoken. **Rotate at ~200K (around call 150).** This is the single largest lever in this document and it is a one-line change. (Workers/dispatchers only — the lead seat is exempt from the hook ceiling, Peter 2026-07-24.)
+> **The existing doctrine threshold is wrong.** `AGENT_ROUTING.md` §Overnight (orchestration pattern (added 2026-07-21, god-file wave — Peter's directives)) says seats rotate at "~500K observed as the sensible ceiling." At 500K every subsequent call costs half a megatoken. **Rotate at ~200K (around call 150).** This is the single largest lever in this document and it is a one-line change. (Workers/dispatchers only — the lead seat is exempt from the hook ceiling, Peter 2026-07-24.)
 
 ---
 
@@ -129,7 +129,7 @@ Recent-window run rate is higher: **~$17,600/month**.
 | MiniMax M3 | $0.30 | $1.20 | $0.06 |
 | Kimi K3 | — | — | **~$0.80** (measured 2026-07-18) |
 
-Source: opencode Zen published rates; Kimi from the measurement recorded in `AGENT_ROUTING.md` §Provider facts.
+Source: opencode Zen published rates; Kimi from the measurement recorded in `AGENT_ROUTING.md` §Provider (facts (cc-fleet)) facts.
 
 **K3's cache-read rate ($0.80) is higher than Opus 4.8's ($0.50).** A heavy K3 top session is the single most expensive configuration available. This is not a reason to avoid K3 — it is the reason the lead seat must stay small and rare.
 

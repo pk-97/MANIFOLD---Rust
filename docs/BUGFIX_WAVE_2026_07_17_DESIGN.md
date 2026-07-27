@@ -1,6 +1,6 @@
 # Bugfix Wave 2026-07-17 — six mechanical lanes over the post-GLB backlog
 
-**Status:** APPROVED 2026-07-17 (Peter: "prepare what's needed for the mechanical Sonnet orchestration session") · directives authored by Fable 5, every root cause verified in-session against tip `9a7a7fa2` · execution: Sonnet orchestrator, overnight wave, one worktree slot per lane · Covers BUG-183/184/190/191/192/193/194/195/196/198/199 + VD-029. BUG-187-dup renumber and the PERF_BUDGET_GATE status header were fixed at this doc's own landing, not in the wave.
+**Status:** APPROVED 2026-07-17 (Peter: "prepare what's needed for the mechanical Sonnet orchestration session") · directives authored by Fable 5, every root cause verified in-session against tip `9a7a7fa2` · execution: Sonnet orchestrator, overnight wave, one worktree slot per lane · Covers BUG-183 (fusion-coverage-baseline-slipped)/184/190/191/192/193/194/195/196/198/199 + VD-029. BUG-187 (meshoptcubetest-khr-mesh-quantization-unsupporte…)-dup renumber and the PERF_BUDGET_GATE status header were fixed at this doc's own landing, not in the wave.
 
 This is a directive pack, not an exploratory design: each lane states a verified root cause, the decided fix, the files, and the gates. Executors implement exactly what's written; anything off-script is an ESCALATE (log to the backlog, report in the landing note, do not improvise). The §2.5 audit rule doesn't apply — no lane proposes new primitives.
 
@@ -8,11 +8,11 @@ This is a directive pack, not an exploratory design: each lane states a verified
 
 - One worktree slot per lane via `scripts/agent-worktree.py acquire <lane> <branch>` (never per phase; `POOL FULL` = stop and surface). Step-0 guard: `git log --oneline -1` must match the intended tip.
 - Lanes 1–5 are independent — run in parallel. Lane 6 is diagnosis-only and can run anytime.
-- Land in batches of 2–3 lanes per the landing protocol (`.claude/GIT_TREE_DISCIPLINE.md` §2): fetch, merge `origin/main` into the lane branch, rerun the lane gate, `merge --no-ff` to main, full `cargo clippy --workspace -- -D warnings` + `cargo nextest run --workspace` + `cargo deny check bans` in the warm main checkout, push.
+- Land in batches of 2–3 lanes per the landing protocol (`.claude/GIT_TREE_DISCIPLINE.md` §2 (Landing protocol (replaces the retired ff-only convention))): fetch, merge `origin/main` into the lane branch, rerun the lane gate, `merge --no-ff` to main, full `cargo clippy --workspace -- -D warnings` + `cargo nextest run --workspace` + `cargo deny check bans` in the warm main checkout, push.
 - Every fixed bug: flip its `**Status:**` line in `docs/BUG_BACKLOG.md` (and the summary-table row) in the same landing. That's the supersession sweep for this wave.
 - Undo proofs are COMMAND-LEVEL (`execute()` + `undo()` + byte-equal graph assert) — never a headless `Key Z` step (that's BUG-198, fixed in Lane 4; until it lands, `Key Z` in a flow proves nothing).
 
-## Lane 1 — dock scroll input (BUG-199, re-greens VD-029)
+## Lane 1 — dock scroll input (BUG-199 (audio-and-scene-setup-docks-have-no-working-scro…), re-greens VD-029)
 
 **Root cause (verified):** `crates/manifold-app/src/window_input.rs` `primary_mouse_wheel` (line ~672) branches only on `inspector_rect` / `tracks_rect` / dropdown-open. Neither dock rect is checked, so a real wheel over either dock is dropped. The docks also don't consume `UIEvent::Scroll` in their `handle_event`, which is why the headless harness's `Gesture::Scroll` was equally dead. Both panels already have working scroll plumbing: `layout.scene_setup()` / `layout.audio_setup()` rect getters (`crates/manifold-ui/src/layout.rs:211,227`), `ScenePanel::handle_scroll` (`scene_setup_panel.rs:2115`) and `AudioSetupPanel::handle_scroll` (`audio_setup_panel.rs:562`), both `ScrollContainer`-backed with `offset_content` applied at build.
 
@@ -38,11 +38,11 @@ This makes the real app and the headless harness share one path. Do NOT add insp
 
 **BUG-184 (verified):** `ClearLaneCommand` (`crates/manifold-editing/src/commands/automation.rs:306`) and `RemoveLaneCommand` (`:197`) have zero UI references. Right-clicks on the automation lane strip are explicitly unhandled today (`crates/manifold-ui/src/interaction_overlay.rs:740` — "Right-clicks are left alone").
 
-**Fix:** right-click on an automation lane opens a two-item context menu — "Clear Automation" → `ClearLaneCommand`, "Remove Lane" → `RemoveLaneCommand` — using the existing layer context-menu infrastructure (`host.on_track_right_click` → ShowLayerContextMenu precedent at `interaction_overlay.rs:756`; lane-header affordance conventions in `docs/AUTOMATION_LANES_DESIGN.md` §7).
+**Fix:** right-click on an automation lane opens a two-item context menu — "Clear Automation" → `ClearLaneCommand`, "Remove Lane" → `RemoveLaneCommand` — using the existing layer context-menu infrastructure (`host.on_track_right_click` → ShowLayerContextMenu precedent at `interaction_overlay.rs:756`; lane-header affordance conventions in `docs/AUTOMATION_LANES_DESIGN.md` §7 (UI / UX (decided: copy Ableton's model — Peter, 2026-07-02))).
 
 **Gates:** command-level unit tests for all four paths (execute + undo byte-equal; remove-middle-object renumbering; remove-only-light; clear-then-undo restores points). A headless flow proving remove-object updates the panel. Focused clippy + `cargo nextest run -p manifold-editing -p manifold-ui -p manifold-app`.
 
-## Lane 3 — mesh stats in the graph def (BUG-194 + BUG-195, folds in BUG-196)
+## Lane 3 — mesh stats in the graph def (BUG-194 (scene-setup-vertex-count-not-computable-from-def) + BUG-195 (scene-setup-merge-no-stored-object-radius-for-sc…), folds in BUG-196)
 
 **Decided design (Fable, this session — do not reopen):** persist mesh stats as DECLARED node params on the two glTF mesh-source primitives. Option (b) from BUG-194's entry (pipe counts back through `ContentState`) is REJECTED — it breaks `SceneVm::from_def`'s purity contract (D3 of SCENE_SETUP_PANEL_DESIGN). Undeclared params are rejected at load (`persistence.rs` `UnknownParam`), so the params must be declared; unbound params never render on preset cards (the card surface is bindings-driven), so there's no card noise. The graph editor's raw node view will show them — acceptable, they're honest authoring facts.
 
@@ -81,7 +81,7 @@ This makes the real app and the headless harness share one path. Do NOT add insp
 
 **BUG-190 (BrainStem ~20ms CPU-encode wall):** run `cargo xtask perf-soak tests/fixtures/gltf/khronos/BrainStem.glb --size 1920x1080 --warmup-frames 30 --profile` and read the per-node `cpu_us` breakdown to separate suspect (b) — 24× redundant `load_gltf_skinned_mesh` background re-parse — from (d) — per-frame CPU pose-sampling across 24 `node.gltf_skeleton_pose` chains. If `cpu_us` doesn't discriminate, instrument the two suspect paths with `eprintln!` timers and rerun (observe, don't deduce). Write the attribution + fix shape into the backlog entry.
 
-**BUG-191 (perf-soak `--start` seek spike):** run `cargo xtask perf-soak "Liveschool Live Show V6 LEDS.manifold" --start 400 --profile`, attribute the single ~34-37ms post-seek frame. If it's first-use resource creation → the fix is seek-time prewarm per BUG-037's precedent (that MAY qualify as the small mechanical fix). If it's `sync_clips_to_time` seek-path cost → report only (CORE_ENGINE_MAP.md territory, one line in `sync_clips_to_time` outranks this whole wave).
+**BUG-191 (perf-soak `--start` seek spike):** run `cargo xtask perf-soak "Liveschool Live Show V6 LEDS.manifold" --start 400 --profile`, attribute the single ~34-37ms post-seek frame. If it's first-use resource creation → the fix is seek-time prewarm per BUG-037 (glp-first-render-stall)'s precedent (that MAY qualify as the small mechanical fix). If it's `sync_clips_to_time` seek-path cost → report only (CORE_ENGINE_MAP.md territory, one line in `sync_clips_to_time` outranks this whole wave).
 
 ## Decided — do not reopen
 
@@ -89,5 +89,5 @@ This makes the real app and the headless harness share one path. Do NOT add insp
 - Dock scroll uses the generic `UIEvent::Scroll` pipeline end-to-end (Lane 1); no per-panel window_input special case, no in-place offset optimization.
 - BUG-183 is a floor update, not a regression hunt (Lane 5); the backlog's earlier "don't lower" note is superseded by the `a065dec4` evidence.
 - Unmatched modifier-Key steps in the headless driver fail loudly (Lane 4); "ok"-but-no-op is the bug class being removed.
-- BUG-187 stays with mesh-quantization (manifest xfail unchanged); the animation-pointer entry filed during A1 turned out to be a duplicate of BUG-170 (five `xfail:BUG-170` assets, same `gltf-json` `Target::node` serde gap) and was superseded into it — BUG-200 is a burned tombstone id. BUG-170 itself is NOT in this wave — it's real vendored-crate work, queued behind Peter's call on GLTF_ANIMATION follow-ups.
-- Also not in this wave: BUG-182 (blocked on one of Peter's failing .exr files), BUG-185 (golden re-baseline = orchestrator PNG-review call at its own landing), BUG-186/BUG-188 (glTF loader polish, batch with the next conformance session), BUG-197 (already FIXED).
+- BUG-187 stays with mesh-quantization (manifest xfail unchanged); the animation-pointer entry filed during A1 turned out to be a duplicate of BUG-170 (five `xfail:BUG-170` assets, same `gltf-json` `Target::node` serde gap) and was superseded into it — BUG-200 (khr-animation-pointer-channels-fail-to-deseriali…) is a burned tombstone id. BUG-170 itself is NOT in this wave — it's real vendored-crate work, queued behind Peter's call on GLTF_ANIMATION follow-ups.
+- Also not in this wave: BUG-182 (blocked on one of Peter's failing .exr files), BUG-185 (golden re-baseline = orchestrator PNG-review call at its own landing), BUG-186 (sheenwoodleathersofa-webp-error-message-misattri…)/BUG-188 (glTF loader polish, batch with the next conformance session), BUG-197 (already FIXED).

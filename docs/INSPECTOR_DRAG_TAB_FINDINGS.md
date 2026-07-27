@@ -67,7 +67,7 @@ One vec keyed by scope (or one vec + scope field on the card). Mechanical but wi
 1. **Auto-scroll during card drag.** `update_card_drag` clamps the ghost to the viewport but never scrolls; long effect lists are unreachable drop targets. Edge-proximity scroll while `card_drag_active`; the in-place scroll path already exists.
 2. **Multi-select drop footprint.** Multi drags dim all selected cards but show a single 2px insertion line (`DRAG_INDICATOR_H`, inspector.rs:93). Size/tint the gap for the group.
 3. **No drag cancel.** `end_card_drag` always reorders unless a perfect no-op (inspector.rs:1801-1805). Esc-to-cancel or drop-outside-cancels is nearly free.
-4. **Geometry unit tests.** Cursor-Y → target-index is pure math; test scrolled / animating / mixed-height layouts. This is the missing "breaks every time we touch it" detector. Same for pin survival across add-effect. Note BUG-263: no app-level harness for gesture paths — unit level may be the only cheap option.
+4. **Geometry unit tests.** Cursor-Y → target-index is pure math; test scrolled / animating / mixed-height layouts. This is the missing "breaks every time we touch it" detector. Same for pin survival across add-effect. Note BUG-263 (no-app-level-harness-for-pending-actions-gesture…): no app-level harness for gesture paths — unit level may be the only cheap option.
 
 ## Verification notes
 

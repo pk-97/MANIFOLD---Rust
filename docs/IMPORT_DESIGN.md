@@ -7,7 +7,7 @@
 imports colourless and foliage renders as opaque cards; see §8 addendum). P3 pairs with
 MEDIA_BACKEND streaming discipline. P4 needs only MATERIAL. P5 needs SESSION_MODE +
 MEDIA_BACKEND P2 (DXV). P6 needs VOCAB apply; its agent half needs MCP_INTERFACE.**
-**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting
+**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5 (Phase briefs)–§6 and §8 before starting
 any phase.**
 **Ordering note (2026-07-15): `docs/IMPORT_FIDELITY_DESIGN.md` (full PBR map set,
 split-sum IBL, softbox default look) outranks this doc's P1-remaining in build order —
@@ -21,7 +21,7 @@ amazing"; community materials/textures/looks wanted. The thesis: **artists autho
 the world's best tools; MANIFOLD is the stage it all plays on** — same shape as
 Ableton playing studio-produced stems.
 
-Companions: `REALTIME_3D_DESIGN.md` (the scene imports land in; supersedes its §8
+Companions: `REALTIME_3D_DESIGN.md` (the scene imports land in; supersedes its §8 (Deferred (with triggers))
 import bullet), `SIMULATIONS_DESIGN.md` (its lane 1 = P3 here), `MEDIA_BACKEND_DESIGN.md`
 (DXV, streaming), `SESSION_MODE_DESIGN.md` (Resolume grid target),
 `MCP_INTERFACE_DESIGN.md` (TD agent path), `ABLETON_SHOW_SYNC_DESIGN.md` (the
@@ -34,8 +34,8 @@ precedent: we already parse another app's format — .als — for interop).
 | Piece | Where | State |
 |---|---|---|
 | Scene model shaped for import | `REALTIME_3D_DESIGN.md` D1 | Object list + TRS + material = what a .glb unpacks into. Built for this |
-| PBR texture inputs | `MATERIAL_SYSTEM_DESIGN.md` §5 | `base_color_map/normal_map/roughness_map/metallic_map/envmap` — exactly the community-texture-set shape |
-| DXV/HAP native decode | `MEDIA_BACKEND_DESIGN.md` §4 | A Resolume user's library plays natively |
+| PBR texture inputs | `MATERIAL_SYSTEM_DESIGN.md` §5 (Renderer integration) | `base_color_map/normal_map/roughness_map/metallic_map/envmap` — exactly the community-texture-set shape |
+| DXV/HAP native decode | `MEDIA_BACKEND_DESIGN.md` §4 (TextureCodec backend — HAP and DXV) | A Resolume user's library plays natively |
 | Session grid | `SESSION_MODE_DESIGN.md` | Layer × scene ≅ Resolume layer × column |
 | Cross-tool alias dictionary | `archive/NODE_VOCABULARY_AUDIT.md` §8b | TD/Resolume/AE names per atom — seeds the op-mapping tables |
 | .als interop parsing | `ABLETON_SHOW_SYNC_DESIGN.md` | The in-house precedent for parsing user-owned third-party files |

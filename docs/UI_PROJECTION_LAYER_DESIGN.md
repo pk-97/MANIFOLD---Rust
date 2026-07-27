@@ -46,8 +46,8 @@ Persistence and time-model do not bind (`ContentState` is transient, never seria
   the note itself had rotted). When P0 un-suppressed the lint, it found 4 more the draft's
   survey missed: `is_exporting`, `export_progress`, `export_status`,
   `recording_dropped_frames`. Git shows the last four **never had a consumer** — video export
-  has no progress display and never did (BUG-083), the recording drop counter was never
-  surfaced (BUG-084).
+  has no progress display and never did (BUG-083 (video-export-has-no-progress-display)), the recording drop counter was never
+  surfaced (BUG-084 (recording-drop-counter-never-surfaced)).
 
 ### 1.1 The enforcement inventory that flips the verdict (each claim observed, not derived)
 
@@ -75,7 +75,7 @@ the table was scoped to.
 
 ### 1.2 Bug evidence (draft's correction confirmed, one fix)
 
-BUG-026 is a missing animation poll; BUG-036 is load-ordering — not projection. Fix to the
+BUG-026 (Batch-2 popups: entrance fade freezes at t=0…) is a missing animation poll; BUG-036 (param-manifest-construction-not-a-unified-safe-g…) is load-ordering — not projection. Fix to the
 draft's wording: BUG-015 is **OPEN** (repro needed) and BUG-060 is **REOPENED** (live path via
 `panel_cache_info()`/`UICacheManager`, cause open) — not "already fixed/addressed". Both are
 A2/cache territory. **Corpus bugs in the class the mirror table would govern: zero.**

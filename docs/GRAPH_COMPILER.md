@@ -20,7 +20,7 @@ Two unlocks, each independently worth the investment:
 
 Every multi-atom effect chain today eats real bandwidth. A 75-node Plasma graph is 75 full-canvas dispatches at 60fps × 4K = a lot of redundant texture reads/writes for math that could live in registers. On Metal, dispatch launch overhead is non-trivial too. A fusion pass would compile that 75-node graph down to ~8 dispatches (one per "branch" of the fan-out where two unrelated sub-graphs meet at a mux/compose), with all the per-pixel arithmetic chained as local variables inside each fused shader.
 
-The performance argument alone probably justifies the build. Atomized graphs become free — there's no longer a performance tax for decomposing a curated effect into 12 atoms instead of one bespoke shader. The "fuse for parity" anti-pattern (`docs/DECOMPOSING_GENERATORS.md` §1.1) disappears as a tradeoff, because composing and fusing become the same thing at compile time.
+The performance argument alone probably justifies the build. Atomized graphs become free — there's no longer a performance tax for decomposing a curated effect into 12 atoms instead of one bespoke shader. The "fuse for parity" anti-pattern (`docs/DECOMPOSING_GENERATORS.md` §1.1 (No fused single-effect or single-generator monoliths)) disappears as a tradeoff, because composing and fusing become the same thing at compile time.
 
 ### 2.2 Expressiveness — per-pixel loops as graphs
 
@@ -101,7 +101,7 @@ Plasma is the only one that hits the loop wall hard enough to be worth deferring
 
 ## 8. Why now, vs. later
 
-The forcing function is Plasma. Without the compiler, Plasma ships with two single-use loop atoms (`iterated_sin_fbm_2d`, `iterated_sin_warp_2d`) that are exactly the "per-shader primitive wrap" anti-pattern `docs/DECOMPOSING_GENERATORS.md` §5 warns against — they exist only to serve one variant each. With the compiler, they're 4-5 visible atoms in a graph. That's a much better shipping shape, and the architectural investment pays out across every future per-pixel iteration case (Mandelbrot, raymarching, …) plus the across-the-board performance win on every atomized effect.
+The forcing function is Plasma. Without the compiler, Plasma ships with two single-use loop atoms (`iterated_sin_fbm_2d`, `iterated_sin_warp_2d`) that are exactly the "per-shader primitive wrap" anti-pattern `docs/DECOMPOSING_GENERATORS.md` §5 (The WGSL escape hatch — when it's right, when it's wrong) warns against — they exist only to serve one variant each. With the compiler, they're 4-5 visible atoms in a graph. That's a much better shipping shape, and the architectural investment pays out across every future per-pixel iteration case (Mandelbrot, raymarching, …) plus the across-the-board performance win on every atomized effect.
 
 The cost is real but bounded: 2-4 weeks of focused work, scoped, with Plasma as a concrete validation target so we know when it's done. The pile of future work it unlocks is much larger than its cost. The alternative — ship Plasma with the two anti-pattern atoms, defer the compiler indefinitely — leaves a known anti-pattern in the catalog and a known performance ceiling on every multi-atom effect.
 

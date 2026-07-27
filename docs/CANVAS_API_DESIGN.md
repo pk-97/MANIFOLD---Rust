@@ -9,7 +9,7 @@
 > keyboard owner over a literal shared `process_events`) match what shipped.
 
 Sub-design-doc for **Phase 4** of the UI Architecture Overhaul
-(`docs/UI_ARCHITECTURE_OVERHAUL.md` §5.4, §13). Scopes the six Phase-4 tasks
+(`docs/UI_ARCHITECTURE_OVERHAUL.md` §5.4 (Graph Canvas API), §13). Scopes the six Phase-4 tasks
 against the codebase as it actually stands today. Written after a full read of
 the graph-editor surface (the 4,262-line `graph_canvas.rs`, the sidebar panels,
 the `PanelAction` graph block, and the editor window's input fork); every claim
@@ -288,7 +288,7 @@ scoped step, record why the larger one waited.
 > `editor_sidebar_intents` registry (mirroring `editor_card_intents`). The
 > "crate-wide change touching every panel" never materialised — the default type
 > param means the chrome panels + `ui_root` compile untouched. See
-> `UI_ARCHITECTURE_OVERHAUL.md` §13 Phase 6.
+> `UI_ARCHITECTURE_OVERHAUL.md` §13 (Phase checklist (the cross-chat tracker)) Phase 6.
 
 **Why not a full declarative `view()` rewrite of the 3,110-line `build()`:** the
 Chrome API's headline win is killing the `build()`/`update()` dual-write — but

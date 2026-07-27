@@ -5,7 +5,7 @@
 (`node.render_scene`) for scene composition — cloth can smoke-test through
 `node.render_mesh` before it. Vocab-audit apply first (post-rename ids used
 throughout).**
-**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting
+**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5 (Phase briefs)–§6 and §8 before starting
 any phase.**
 
 Peter's directives (2026-07-03): realtime simulations "like Nuke and Houdini";
@@ -14,7 +14,7 @@ bridge → live solver → volumes, **cloth first, liquids second** in the live 
 Competitive frame: **Notch** (realtime stage sims), not offline Houdini — Houdini is
 the authoring world lane 1 borrows from.
 
-Companions: `REALTIME_3D_DESIGN.md` (the scene sims render into; its §8 pins lane 1),
+Companions: `REALTIME_3D_DESIGN.md` (the scene sims render into; its §8 (Deferred (with triggers)) pins lane 1),
 `MATERIAL_SYSTEM_DESIGN.md` (shading), `CAPABILITY_ROADMAP.md` §4.1 (vertex-cache
 origin).
 

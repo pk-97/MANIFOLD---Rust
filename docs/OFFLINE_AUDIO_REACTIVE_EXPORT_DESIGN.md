@@ -10,7 +10,7 @@ runs are bit-identical in extracted frames. P3 shipped as the standing
 gpu-proofs; needs ffmpeg/ffprobe on PATH). L4 (Peter exports a real track and
 sees the pump) = VD-016. Landing report:
 `docs/landings/2026-07-07-offline-audio-reactive-export.md`.**
-**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 + §8 first.
+**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5 (Phase briefs)–§6 + §8 first.
 Anchors are a 2026-07-04 snapshot — re-verify before each phase.**
 
 ## The problem

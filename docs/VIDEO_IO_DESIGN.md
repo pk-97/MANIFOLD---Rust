@@ -6,7 +6,7 @@
 **Status:** APPROVED 2026-07-09 (Peter) — Syphon (BSD, clean) + NDI (royalty-free SDK license, cleared 2026-07-09; conditions in §0) · design 2026-07-07 · Fable
 **Prerequisites:** none for P1–P2 (SharedTextureBridge, stage/venue model, and the
 source-atom slot all exist). P3–P4 need the NDI SDK decision (§D8, VERIFY-AT-IMPL).
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5 (Phase briefs)–§6 before starting any phase.
 
 ## §0. License clearance (verified 2026-07-09, Opus — full NDI SDK License Agreement, Nov 2024, read)
 
@@ -44,8 +44,8 @@ cross-machine feeds (NDI, either direction)". This doc supersedes
 CAPABILITY_ROADMAP.md §3 (the 2026-06-17 sketch) where they differ — notably the
 send-as-graph-node idea, rejected in D2.
 
-Companions: `MULTI_DISPLAY_DESIGN.md` (output model this extends; its §10 P6 listed
-"NDI/Syphon outputs" as deferred — this doc is that item), `ML_NODES_DESIGN.md` §4
+Companions: `MULTI_DISPLAY_DESIGN.md` (output model this extends; its §10 (Phasing (Sonnet-executable)) P6 listed
+"NDI/Syphon outputs" as deferred — this doc is that item), `ML_NODES_DESIGN.md` §4 (Sources)
 (the source-atom slot the input side fills), `GIG_RESILIENCE_DESIGN.md` (failure
 doctrine), `MEDIA_BACKEND_DESIGN.md` (deferred NDI/Syphon here).
 
@@ -62,8 +62,8 @@ Extend, don't redesign. Every piece below was verified at the cited anchor today
 | Content-thread output surface (direct present path) | `crates/manifold-app/src/content_pipeline.rs:622` (`output_surface`) | Exists — the render-side seam where textures are real |
 | Source atom + generator-preset wrapping precedent | `crates/manifold-renderer/src/node_graph/primitives/gltf_texture_source.rs`; `crates/manifold-renderer/assets/generator-presets/Text.json` wraps `node.render_text` | Exists — the input side copies this shape |
 | Background FFI worker handing the graph its latest result | `manifold-native` (`DepthEstimator`) | Exists — the async contract live inputs inherit |
-| `node.camera` (AVCapture source atom) | `ML_NODES_DESIGN.md` §4 | **Designed, not built.** NDI/Syphon-in were already named there as "same slot later" — this doc is that later |
-| Fixture source routing `Master \| layer/group` ("routing = bus") | `MULTI_DISPLAY_DESIGN.md` §7.3 | Designed, not built — D3 mirrors it. ⚠ VERIFY-AT-IMPL: if the fixture-routing enum has landed by execution time, reuse the type; command: `rg -n 'enum.*Source' crates/manifold-core/src/stage.rs` |
+| `node.camera` (AVCapture source atom) | `ML_NODES_DESIGN.md` §4 (Sources) | **Designed, not built.** NDI/Syphon-in were already named there as "same slot later" — this doc is that later |
+| Fixture source routing `Master \| layer/group` ("routing = bus") | `MULTI_DISPLAY_DESIGN.md` §7.3 (Lighting: fixtures as placements, consoles as peers) | Designed, not built — D3 mirrors it. ⚠ VERIFY-AT-IMPL: if the fixture-routing enum has landed by execution time, reuse the type; command: `rg -n 'enum.*Source' crates/manifold-core/src/stage.rs` |
 
 Classification: **genuinely new** = the Syphon/NDI FFI surfaces and the send blit.
 Everything else is one wire away from existing.

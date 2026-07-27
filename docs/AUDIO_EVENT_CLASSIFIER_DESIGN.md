@@ -1,8 +1,8 @@
 # Audio Event Classifier — name the hit the DSP front-end already found
 
-**Status:** IN PROGRESS — P1+P2+P3 executed 2026-07-18 (same day); heldout exam run, verdict SHORT OF BAR (see §8): dev tuning plateaued (round 1 accepted, rounds 2+3 measured net-negative and reverted), heldout collapse proves a DATA gap, not a tuning gap. P4/P5 blocked on Peter's call: expand training data (D6 dial + more labeled shows / license-verified Splice) or park. ADTOF stays meanwhile; BUG-069 unchanged. · 2026-07-18 · Fable
+**Status:** IN PROGRESS — P1+P2+P3 executed 2026-07-18 (same day); heldout exam run, verdict SHORT OF BAR (see §8): dev tuning plateaued (round 1 accepted, rounds 2+3 measured net-negative and reverted), heldout collapse proves a DATA gap, not a tuning gap. P4/P5 blocked on Peter's call: expand training data (D6 dial + more labeled shows / license-verified Splice) or park. ADTOF stays meanwhile; BUG-069 (shipping-license-audit) unchanged. · 2026-07-18 · Fable
 **Prerequisites:** none — the harness, shared data store, and truth assets all landed 2026-07-18 (`74c14de6` and ancestors).
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5 (Phase briefs)–§6 before starting any phase.
 
 The governing insight, measured 2026-07-18: **detection is solved, naming is the
 wall.** On raw single-track masters of Peter's live show, the license-clean DSP
@@ -33,7 +33,7 @@ detector — future side-input, Deferred).
 
 | Piece | Where | State |
 |---|---|---|
-| DSP onset front-end | `tools/audio_analysis/manifold_audio/stage1_dsp_detection.py` (`detect_onsets`) | Raw-master any-onset recall 934/934, median err 2–9ms (5 liveshow songs); BUG-241 fixed + threshold 0.075 tuned same day |
+| DSP onset front-end | `tools/audio_analysis/manifold_audio/stage1_dsp_detection.py` (`detect_onsets`) | Raw-master any-onset recall 934/934, median err 2–9ms (5 liveshow songs); BUG-241 (stage1-dsp-onset-frontend-misses-loud-real-kicks…) fixed + threshold 0.075 tuned same day |
 | Labeler (to be replaced) | same file, `_label_clusters*` | The wall: snare 0.00 on 3/5 show songs; fitted profiles regress off-domain |
 | Liveshow dense truth | `eval/liveshow_labels/` + `sweep_p4.DENSE_IN_WINDOW` | 1,771 labels (kick 396 · snare 707 · hat 545 · synth 48 · bass_sustained 48 · vocal 27); heldout pair `liveshow_stagnate`/`liveshow_basalt` NEVER touched in dev |
 | E-GMD | `eval/data/egmd` via `eval/fetch/egmd.py` | 63 perf fetched (59 dev / 4 heldout), CC-BY 4.0 verified at fetch; Range fetcher can pull more |
@@ -42,7 +42,7 @@ detector — future side-input, Deferred).
 | Eval harness / exam | `eval/bakeoff_b1.py`, `eval/sweep_p4.py`, scoreboard | Per-class F1, DENSE_IN_WINDOW windowing, heldout discipline — the classifier plugs in as a labeling arm, harness unchanged |
 | Shared data store | `eval/paths.py` `DATA_ROOT` | Worktree-safe, no re-downloads |
 | Torch runtime | `tools/audio_analysis/BundledRuntime` | torch 2.8.0 + MPS — training runs locally (M4 Max, 36GB, measured) |
-| Live machinery (Rust) | `crates/manifold-audio` (`analysis.rs`: kick ridges, pitch/presence tracker; `manifold-spectral` SR-invariant grid, BUG-052) | NOT used offline today; P4 consumes the spectral grid; ridge/tracker side-inputs Deferred |
+| Live machinery (Rust) | `crates/manifold-audio` (`analysis.rs`: kick ridges, pitch/presence tracker; `manifold-spectral` SR-invariant grid, BUG-052 (sample-rate-dependent-detection)) | NOT used offline today; P4 consumes the spectral grid; ridge/tracker side-inputs Deferred |
 
 **Licensing constraints (load-bearing):** ADTOF + madmom models are CC BY-NC-SA —
 their OUTPUTS may never become training labels (license laundering). Slakh2100 is

@@ -3,7 +3,7 @@
 **Status: APPROVED design, not built · 2026-07-03 · Fable queue (perform surface builder, steal-pass S2)**
 **Prerequisites: none for P1. P2 (session perform) requires `docs/SESSION_MODE_DESIGN.md` to be built.
 P4 (editor workspaces) gets its own design pass when scheduled — this doc only pins its direction.**
-**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any phase.**
+**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5 (Phase briefs)–§6 and §8 before starting any phase.**
 
 Peter's scope (2026-07-03): **"let's just keep it simple for now, doesn't need to be complex at
 all to start"** — plus two extensions: **"the timeline mode should also reuse the UI widget
@@ -128,7 +128,7 @@ drawer does today. Zero new styling infra.
    hold-progress indicator and understudy status strip (later the thermal glyph) as
    widgets on this surface. Its state hooks ride the perform enter/exit lifecycle and
    don't touch this design; the widgets land right after P1 (sequencing:
-   `docs/DESIGN_BUILD_ORDER.md` §2).
+   `docs/DESIGN_BUILD_ORDER.md` §2 (Hard dependency edges)).
 1. **Builder v1** — arrange/resize/add/remove widgets on the grid, per-project persistence,
    undoable commands, `WidgetTarget` for param/macro/layer widgets. Trigger: after session
    perform has proven the widget set.

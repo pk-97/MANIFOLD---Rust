@@ -1,6 +1,6 @@
 # Auto-Populate — section detection + grammar-legal visual rolls
 
-**Status:** DIRECTION captured 2026-07-09 · Fable + Peter discussion · not designed to STANDARD, not built. Real design doc(s) to be authored (Opus) inheriting this whole file. Gated on the BUG-069 license rework (madmom/ADTOF out).
+**Status:** DIRECTION captured 2026-07-09 · Fable + Peter discussion · not designed to STANDARD, not built. Real design doc(s) to be authored (Opus) inheriting this whole file. Gated on the BUG-069 (shipping-license-audit) license rework (madmom/ADTOF out).
 **Companion docs:** [MAPPING_GRAMMAR_DESIGN.md](MAPPING_GRAMMAR_DESIGN.md) (the legal space rolls sample from), [TIMELINE_INGEST_DESIGN.md](TIMELINE_INGEST_DESIGN.md) (this is its compose stage), [AUDIO_ANALYSIS_ACCURACY_DESIGN.md](AUDIO_ANALYSIS_ACCURACY_DESIGN.md) (detection stack + 2026-07-09 addendum).
 
 ## Concept

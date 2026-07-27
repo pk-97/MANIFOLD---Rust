@@ -27,7 +27,7 @@ is also where he catches a misread of scope while it's still free to fix — and
 the property and forks lines below, a misread of *intent*: a plan faithful to the
 steps while the abstract goal quietly drifts. That failure passes every gate
 (compiles, tests, lands) because it's conformance to intent, not correctness — so
-only Peter reading the brief catches it. BUG-061 is the specimen: the executor
+only Peter reading the brief catches it. BUG-061 (slider-reset-per-panel-lottery) is the specimen: the executor
 understood "make reset the slider's own gesture", built one shared reset action, but
 registered it per-panel "for lower risk" — leaving the exact skippable seam the goal
 existed to close, which surfaced as a whole panel of sliders with no reset. Steps can
@@ -87,7 +87,7 @@ Order matters less than presence. A prompt missing one of these is not done.
    the steps is the BUG-061 hole.
 
 3. **Read-first list.** The design doc WHOLE (never sections — the traps live in the
-   parts that look skippable), its contract header, `DESIGN_DOC_STANDARD.md` §5–§6,
+   parts that look skippable), its contract header, `DESIGN_DOC_STANDARD.md` §5 (Phase briefs)–§6,
    the context docs the design names, and the **binding memories by exact name** so
    the session can pull them. Naming a memory is how judgment crosses the context
    boundary — "audio-stays-on-perform-surface" in the prompt is worth a paragraph of
@@ -160,11 +160,11 @@ device serializer, and nextest's process-per-test model would defeat it); batch 
 phase's edits and verify ONCE at the end. The full workspace sweep (workspace clippy + `cargo nextest run --workspace`
 + `cargo deny check bans`) runs ONCE per workstream, at landing time, in the warm
 main checkout — never in a worktree, where it is a second cold build
-(`feedback_prefer_focused_tests`, `.claude/GIT_TREE_DISCIPLINE.md` §2c).
+(`feedback_prefer_focused_tests`, `.claude/GIT_TREE_DISCIPLINE.md` §2c (Build-speed rules (added 2026-07-10 — orchestration wall-clock pass))).
 
 ## 5. Git modes — reference, don't restate
 
-The spec is `.claude/GIT_TREE_DISCIPLINE.md` §2; the prompt names the mode and fills
+The spec is `.claude/GIT_TREE_DISCIPLINE.md` §2 (Landing protocol (replaces the retired ff-only convention)); the prompt names the mode and fills
 in the blanks rather than re-deriving the rules.
 
 - **Mode A — docs-only.** The worktree-guard hook (2026-07-08) denies agent edits

@@ -26,7 +26,7 @@ mirror, silently dropping sections for glTF-imported generators).
 **P4 SHIPPED 2026-07-10**: group boxes render their exposed param rows on the node face (same
 `ChangeGraphParamCommand` path as the card — one value, three surfaces; collapsed → "N params" chip).
 Verified on the REAL azalea import: the "QS1694-W02-1-1"/"Material.001" object boxes carry live
-Metallic/Roughness sliders. Fixed the payoff-blocking BUG-103 (`outer_routings_from_view` never
+Metallic/Roughness sliders. Fixed the payoff-blocking BUG-103 (outer-routings-drop-bindings-that-target-a-node-…) (`outer_routings_from_view` never
 recursed into group bodies, so in-group material bindings were dropped for exactly the imported
 scenes the wave targets — 9/13 → 13/13 routings). Landings:
 `docs/landings/2026-07-10-scene-build-p{1,2,3,4}.md`.
@@ -38,7 +38,7 @@ add-light). Landing: `docs/landings/2026-07-10-scene-build-p5.md`. **Wave comple
 P1–P2 must land **before this doc's P3 only** (the card phase reads specs straight off
 the manifest; building it against the pre-boundaries dual-source card path would wire it
 to code P2 deletes). P1/P2/P4/P5 here have no dependency on the boundaries wave.
-**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting
+**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5 (Phase briefs)–§6 and §8 before starting
 any phase.
 
 Peter's directives (2026-07-06, verbatim — these opened the design): `render_scene` is
@@ -93,13 +93,13 @@ a moved anchor is an escalation, not a guess.
 | Card rendering | `crates/manifold-ui/src/panels/param_card.rs:2205` (`build_generator`) + `build_effect` | Flat slider list, manifest order. **No section concept exists anywhere in the card UI** (searched panels/) |
 | Node-face rows | `GRAPH_EDITOR_REDESIGN.md` on-node phases 1–6 (all ✅ 2026-07-01); `graph_canvas/model.rs` (`NodeRow`, `compute_node_rows`) | Regular nodes render param rows with sliders/checkboxes/editors; the row substrate P4 reuses. Canvas already computes wire-driven/outer-driven state (`apply_driven_state`, `outer_routings`) |
 | Group box rendering | `graph_canvas/model.rs:114-123` (`is_group`, `group_tint`) | Groups draw as tinted boxes with interface ports only — no param rows |
-| Group exposure policy | `NODE_GROUPS_UI_DESIGN.md` status | Phase D (interface editing) **dropped** — Peter 2026-06-13: organisation-only, exposure direct-to-card. This design keeps that; **no live group-param runtime**. *(F14 clarification 2026-07-10: `COMPONENT_LIBRARY_DESIGN.md` §4/§4a is the sanctioned `GroupParamDef` consumer — but declaration-only: component macros are `GroupParamDef` entries that **lower onto ordinary card `BindingDef`s at expose** (COMPONENT §4b), so the thing this design kills — a live group-param interface runtime — stays dead. "`GroupParamDef` stays unused" was too strong; "no live group-param runtime" is the real invariant.)* |
+| Group exposure policy | `NODE_GROUPS_UI_DESIGN.md` status | Phase D (interface editing) **dropped** — Peter 2026-06-13: organisation-only, exposure direct-to-card. This design keeps that; **no live group-param runtime**. *(F14 clarification 2026-07-10: `COMPONENT_LIBRARY_DESIGN.md` §4 (The interaction set (the actual UX))/§4a is the sanctioned `GroupParamDef` consumer — but declaration-only: component macros are `GroupParamDef` entries that **lower onto ordinary card `BindingDef`s at expose** (COMPONENT §4b), so the thing this design kills — a live group-param interface runtime — stays dead. "`GroupParamDef` stays unused" was too strong; "no live group-param runtime" is the real invariant.)* |
 | glTF importer | `crates/manifold-renderer/src/node_graph/gltf_import.rs:274-669` (`build_import_graph`) | Already builds one named+tinted group per material with stable inner `node_id`s; curates a 13-slider card (camera/sun/reflections + per-object metallic/roughness with " 2"-style suffixes); sets recenter via `pos_x_{k}` params ON the render node (`:510-518`); **no transform sliders on the card at all** |
 | Stale importer cap | `gltf_import.rs:45` (`MAX_RENDER_SCENE_OBJECTS = 8`) | Comment says "mirrored from node.render_scene's own MAX_OBJECTS" — that constant was deleted 2026-07-05 (`render_scene.rs:64`, `OBJECT_SLIDER_MAX = 64`). Imports silently drop materials past 8 while the renderer is uncapped. Fixed in P2 |
 | Migration chain | `crates/manifold-io/src/migrate.rs:5-84` | Version-gated `Value → Value` steps, top currently `1.11.0`; `migrations/param_storage_v14.rs` is the quarantined-module precedent |
 | Fan-out bindings | `effect_graph_def.rs:404-413` (`BindingDef`, one id → many targets, per-target `scale`/`offset`) | Ableton-style macros are already representable — a load-bearing input to the Phase-D kill |
 | As-built REALTIME_3D deviation | `render_scene.rs:26` header; BASELINE_REVIEW_2026_07 | Object transforms are NOT port-shadowed; P6 gizmos not built. This design supersedes the "additive follow-up" note — see §8 |
-| `EffectGroup` | `crates/manifold-core/src/effects.rs:2457` | Rack-grouping of whole effect *cards* (BUG-019's subject) — a different layer; NOT this design's mechanism. Named here so no executor conflates them |
+| `EffectGroup` | `crates/manifold-core/src/effects.rs:2457` | Rack-grouping of whole effect *cards* (BUG-019 (deferred)'s subject) — a different layer; NOT this design's mechanism. Named here so no executor conflates them |
 
 `⚠ VERIFY-AT-IMPL` (all phases): the boundaries wave and other landings will have moved
 lines; re-run the anchors above before editing. Line drift alone is not an escalation —
@@ -379,7 +379,7 @@ port types beyond `Transform` · widening into REALTIME_3D P5/P6 viewport work.
   migrations::` + the importer tests green; **round-trip gate**:
   `meshImportTests.manifold` loads through the migration → all params resolve, cam
   orbit driver still runs, save → reload → transforms intact (throwaway scratch test,
-  deleted after, per the BUG-036 session pattern); **held-out input**: one of the
+  deleted after, per the BUG-036 (param-manifest-construction-not-a-unified-safe-g…) session pattern); **held-out input**: one of the
   three CC0 scans in `tests/fixtures/gltf/` (VD-003 fixtures) imports and renders —
   not the azalea the code was developed against; focused GPU run:
   `cargo test -p manifold-renderer --features gpu-proofs render_scene` (the gpu tests

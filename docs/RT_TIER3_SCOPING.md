@@ -2,10 +2,10 @@
 
 **Type: scoping pass, NOT a design contract** (DESIGN_DOC_STANDARD §1 — this is neither a design nor
 a working guide; it is the intake that decides *which designs get written*). No phase here is
-executable. Each item graduates to its own design — or into `RAYTRACING_DESIGN.md` §9+ — when a team
+executable. Each item graduates to its own design — or into `RAYTRACING_DESIGN.md` §9 (RT Reflections — traced specular for the PBR base lobe (Tier 3 item 7; APPROVED 2026-07-24 · **R1 LANDED 2026-07-25** — probe: mirror on 2.15 vs off 0.82 (delta 1.33); empty-scene equality 0.305 ≈ 0.308; worst frame 9.82 ms; native byte-diff identical. R2 LANDED 2026-07-26 (`74563a4c`); R3 not started))+ — when a team
 leader picks it up, and this doc's per-item section is that design's §0/§1 already done.
 **Author:** Opus 4.8 · 2026-07-23 · audit anchors verified that day.
-**Purpose:** `RAYTRACING_DESIGN.md` §8 Tier 3 is four one-line bullets. This pass turns them into
+**Purpose:** `RAYTRACING_DESIGN.md` §8 (v2 roadmap — from landed skeleton to stage-ready (captured 2026-07-23, Peter's first real look)) Tier 3 is four one-line bullets. This pass turns them into
 scoped work with the legwork spent: what already exists, what the item actually *is* once you look at
 this codebase rather than the literature, what it costs, and what a reviewer must rule on. Reflections
 (item 7) got the full treatment in `RT_REFLECTIONS_DESIGN.md`; the other three are here.
@@ -13,7 +13,7 @@ this codebase rather than the literature, what it costs, and what a reviewer mus
 **Two audit findings reshape the tier before any sequencing argument.** They are the reason this doc
 exists rather than four briefs.
 
-**Finding 1 — "many lights" is the wrong frame for this renderer.** `RAYTRACING_DESIGN.md` §8 item 6
+**Finding 1 — "many lights" is the wrong frame for this renderer.** `RAYTRACING_DESIGN.md` §8 (v2 roadmap — from landed skeleton to stage-ready (captured 2026-07-23, Peter's first real look)) item 6
 proposes ReSTIR, the standard answer to sampling hundreds of lights. This scene system does not have
 hundreds of lights. It has: a `lights` storage buffer packed as **direction + premultiplied colour
 only** (`render_scene.rs:2792-2794`; WGSL layout comment at `shaders/render_scene.wgsl:234-235`) —
@@ -113,7 +113,7 @@ for this instrument).
 **My read: path extension, and only after Finding 2's refactor.** A probe cache is the classic
 answer and the wrong one here specifically because MANIFOLD's hero objects are animated — probes
 would need invalidation on every gesture, which is the same class of problem that cost three attempts
-on BUG-322.
+on BUG-322 (OPEN).
 
 **Honest cost, and the reason I rank this last:** at 2 GI spp, a second bounce is *the least visible
 ray in the tier*. Second-bounce energy is small, low-frequency, and mostly what the ambient term is

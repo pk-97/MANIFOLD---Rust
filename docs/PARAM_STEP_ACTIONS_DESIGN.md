@@ -2,7 +2,7 @@
 
 **Status:** P1–P3 SHIPPED 2026-07-08 (`43a7f508`/`d9b46422`/`fd3f767e`); P4 (Plasma re-author) DEFERRED — Peter's call this session, not started, no code written. The full feature (Continuous/Step/Random on any param, audio- and clip-fired, drawer UI) is live and usable on every preset without P4; P4 is cleanup on one preset's leftover graph wiring. See `docs/landings/2026-07-08-param-step-actions.md` for gate output and the click-script.
 **Prerequisites:** LIVE_AUDIO_TRIGGERS §9 unification (SHIPPED 2026-07-07 @ `14e0a90a`) — this design extends the unified `ParameterAudioMod`, which must exist as landed.
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5 (Phase briefs)–§6 before starting any phase.
 
 The governing insight: the §8/§9 trigger work built a general event system (edge
 detection, fire modes, pulse plumbing, drawer UI) whose only response so far is
@@ -27,9 +27,9 @@ Two of Peter's calls decide the shape (both 2026-07-07, this session):
   a sibling response to the same events, not a replacement for event-consuming
   graphs (D10; forbidden move F6).
 
-Companions: `LIVE_AUDIO_TRIGGERS_DESIGN.md` §8–§9 (the event system this rides
-on — read §9 before any phase); `AUDIO_MODULATION_DESIGN.md` §10 (drawer
-mechanics); `AUTOMATION_LANES_DESIGN.md` §4 (the base-writer contract steps
+Companions: `LIVE_AUDIO_TRIGGERS_DESIGN.md` §8 (Param triggers — audio fires the Trigger controls (designed 2026-07-07, NOT BUILT))–§9 (the event system this rides
+on — read §9 before any phase); `AUDIO_MODULATION_DESIGN.md` §10 (UI — the drawer) (drawer
+mechanics); `AUTOMATION_LANES_DESIGN.md` §4 (Override latch (the precedence rule)) (the base-writer contract steps
 shadow).
 
 ## 1. Audit — what exists (verified 2026-07-07, against `14e0a90a`)
@@ -246,7 +246,7 @@ channel, no new thread, no shared state.
   in `evaluate_instance_audio_mods` (audio edge only — clip edge is P2);
   `apply_step_values` wired into `evaluate_modulation` Phase 1.5; hash-ordinal
   random with discrete non-repeat; snapping for `whole_numbers`/`value_labels`;
-  `clear`-on-stop joins the BUG-051 path (`engine.stop()` already clears
+  `clear`-on-stop joins the BUG-051 (trigger-clear-unwired) path (`engine.stop()` already clears
   trigger edges — step state clears there too).
 - **Gate (positive):** new `modulation::tests::step_*` covering: step advances
   base-shadow on fire only; wrap/bounce/clamp at both rails; a small `amount`
@@ -297,7 +297,7 @@ channel, no new thread, no shared state.
   PanelAction + dispatch + state_sync; UI seeding of `amount` defaults (D2).
 - **Gate:** ui + app focused tests; workspace clippy; **round-trip gate** —
   configure a step mod, save, reload, fire, verify stepping resumes from
-  committed base (BUG-036 rule: modulate *after* reload); headless PNG of the
+  committed base (BUG-036 (param-manifest-construction-not-a-unified-safe-g…) rule: modulate *after* reload); headless PNG of the
   drawer open with Action=Step on a whole-numbers param (Plasma `pattern`) and
   on a continuous param (Bloom amount).
 - **Acceptance demo (L3):** a `scripts/ui-flows/` flow that opens the drawer,

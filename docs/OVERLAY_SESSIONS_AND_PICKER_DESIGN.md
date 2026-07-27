@@ -2,7 +2,7 @@
 
 **Status:** SHIPPED — P1–P2 landed 2026-07-04/05 (`PickerCore`, `BrowserSession`, owned text sessions all live in-tree) · designed 2026-07-04 · Fable
 **Prerequisites:** none (extends the SHIPPED overlay driver, `docs/OVERLAY_SYSTEM_DESIGN.md`)
-**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5–§6 before starting any phase.
+**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5 (Phase briefs)–§6 before starting any phase.
 
 The governing insight: the overlay driver (shipped 2026-06-16) unified *hosting* —
 build, draw, input routing, z-order — but left each overlay's *contents and state

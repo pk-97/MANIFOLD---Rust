@@ -2,11 +2,11 @@
 
 **Status:** IN PROGRESS — P1/P2/P3/P4 SHIPPED 2026-07-06 (all gates green; P4 landed
 `586d2bac` + fix `00e9fd19`). **Remaining: P5 (scope overlay — anchors stale, see F13
-note at P5 below) + BUG-045; P6 dead, superseded by KICK_SWEEP_EVENT.** Header
+note at P5 below) + BUG-045 (gap-ring-down-chase); P6 dead, superseded by KICK_SWEEP_EVENT.** Header
 truth-fixed 2026-07-10 (coherence audit F11) — was previously stated "APPROVED design,
 not built," which under-reported a mostly-shipped design and made the status board wrong.
 **Prerequisites:** none (the mod_harness eval loop shipped 2026-07-06 @ `ca9eb490`)
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5 (Phase briefs)–§6 before starting any phase.
 
 This is **step 7 of [AUDIO_MODULATION_DESIGN.md](AUDIO_MODULATION_DESIGN.md)** — the
 "v2 intelligence" its feature seam was cut for. That doc's §6 commitments (log-space
@@ -180,7 +180,7 @@ activation set to the analyzers). Cost is small enough that the gate is about hy
 not survival; the gate exists so an untouched project's analysis is byte-identical to
 today's.
 
-**D8 — The dive's transient false-fire is in scope (BUG-041).** The kills-list demands
+**D8 — The dive's transient false-fire is in scope (BUG-041 (superflux-glide-fire)).** The kills-list demands
 a silent transients lane on a pure glide; today's SuperFlux fires continuously on the
 supersaw dive (evidence: `docs/evidence/audio_modulation/selftest_dive.png`,
 2026-07-06). P3 hardens the detector against the dive scenario with the harness as
@@ -190,12 +190,12 @@ redesign; if tuning can't reach the gate, escalate with the sweep results rather
 widening scope.
 
 **D9 — Causal HPSS at the ODF seam: designed, prototyped, and MEASURED
-INSUFFICIENT (BUG-046, 2026-07-06 — P6a verdict below; the section is kept as
+INSUFFICIENT (BUG-046 (low-band-kick-deafness-on-mixes), 2026-07-06 — P6a verdict below; the section is kept as
 the record of what was tried and why each family fails).** On bass-heavy full mixes the Low band is near-deaf to kicks
 (bad_guy mix Low 6 fires vs drums-stem 46; feel 7 vs 36; apricots 6 vs 13): the
 sustained bassline owns the Low band's ODF baseline — median AND recent max —
 so a kick can't out-shout it in the very band bound for kick triggering, and
-BUG-044's novelty criterion can't help because bass notes are themselves novel
+BUG-044 (mix-trigger-deafness)'s novelty criterion can't help because bass notes are themselves novel
 in that band. Threshold tuning in the band is exhausted (BUG-044's session).
 The structural fix is harmonic/percussive separation on the columns we already
 stream, applied at exactly one seam:
@@ -481,7 +481,7 @@ sustained acquisition (≤ 20% of hops).
 *Forbidden:* smoothing pitch anywhere but the D5 state machine; reading `latest()`
 features into the tracker (it consumes the column, not its own outputs).
 
-**BUG-043 record (2026-07-06, later the same day):** the `sub` scenario (45 Hz
+**BUG-043 (deep-bass-floor-anchor) record (2026-07-06, later the same day):** the `sub` scenario (45 Hz
 deep sub, the bottom-octave case none of the first seven exercised) pinned and fixed
 deep-bass-floor-anchor at the mechanism: D1's comb now reads an APEX-MASKED column
 (`salience_into` — local maxima ±PEAK_MASK_RADIUS, dilated ±1), because at the bottom
@@ -550,7 +550,7 @@ data-version change only, toggling each send analyzer's `set_pitch_tracking`.
 Gates green: round-trip integration test (manifold-io `load_project`), serde
 names over ALL kinds, legacy cases, `rg PitchDelta` = migration arm only,
 workspace sweep + clippy. VERIFICATION_DEBT (L2 floor per the brief): drawer
-row is now 7 uniform buttons — label fit needs a running-app look (BUG-033
+row is now 7 uniform buttons — label fit needs a running-app look (BUG-033 (the `ui-snapshot` harness doesn't compile on…)
 blocks headless UI); runtime activation needs one running-app smoke with a
 bound Pitch mod driving a param. Original brief follows.
 

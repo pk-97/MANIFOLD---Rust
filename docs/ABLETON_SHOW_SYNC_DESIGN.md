@@ -4,7 +4,7 @@
 
 **Status: APPROVED (Peter, 2026-07-02). Not implemented. Sonnet-executable.**
 **Prerequisites: none (rides existing bridge + trigger-clip infra). Sequencing: `docs/DESIGN_BUILD_ORDER.md` wave 2.**
-**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any
+**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5 (Phase briefs)–§6 and §8 before starting any
 phase. Conformance-hardened: audit claims are a 2026-07-02 snapshot — run the §8.3
 pre-flight (re-verify bridge/timeline anchors) before each phase.**
 
@@ -58,7 +58,7 @@ and the merge.
 | D13 | **Import and re-sync are each one undo entry** through `EditingService` (single command wrapping all mutations). |
 | D14 | **Parsing:** `flate2` gunzip + `quick-xml` streaming, on a background thread; the parsed `NormalizedSet` is applied on the content thread via one command. Pin to Peter's Live major version (12); unknown schema → loud, user-visible error, never a panic, never a partial import. |
 | D15 | **Rack macro inventory pre-seeds the OSC mapping picker** — parsed device racks (name, `device_class_name`, macro names) populate `AbletonSetContext` so mapping targets are offered before the bridge ever connects. |
-| D16 | **Out of scope v1:** automation-envelope import (lands as a natural extension once `docs/AUTOMATION_LANES_DESIGN.md` is built — envelopes → lanes), session-view scenes (session mode not built), time signatures beyond the project's beats-per-bar if trivially mappable, writing `.als`, video/return/master track content. **Both deferral triggers have FIRED (coherence audit F9, 2026-07-10): AUTOMATION_LANES shipped P1–P4 (2026-07-04) and SESSION_MODE shipped P1–P3 (2026-07-03). Neither fold-in is designed here** — the executing session decides fold-in vs keep-deferred for envelope import, and SESSION_MODE §5's `SessionLaunchScene` id-mapping still explicitly punts scene import to "the Ableton-sync project" (i.e. here) with no design written on either side. Brief-time work, not a doc contradiction. |
+| D16 | **Out of scope v1:** automation-envelope import (lands as a natural extension once `docs/AUTOMATION_LANES_DESIGN.md` is built — envelopes → lanes), session-view scenes (session mode not built), time signatures beyond the project's beats-per-bar if trivially mappable, writing `.als`, video/return/master track content. **Both deferral triggers have FIRED (coherence audit F9, 2026-07-10): AUTOMATION_LANES shipped P1–P4 (2026-07-04) and SESSION_MODE shipped P1–P3 (2026-07-03). Neither fold-in is designed here** — the executing session decides fold-in vs keep-deferred for envelope import, and SESSION_MODE §5 (Recording)'s `SessionLaunchScene` id-mapping still explicitly punts scene import to "the Ableton-sync project" (i.e. here) with no design written on either side. Brief-time work, not a doc contradiction. |
 
 ---
 

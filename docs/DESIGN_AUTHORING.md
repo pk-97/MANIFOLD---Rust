@@ -140,7 +140,7 @@ value now has two homes that must be kept in agreement by hand. The reference fa
 is the scene panel's synthesized `scene.{doc}.{param}` ids + per-frame id map +
 `resolve_scene_param`/`resolve_mod_target` funnels (SCENE_PANEL_EXPOSURE_CONVERGENCE
 §3a, 2026-07-19) — a whole addressing universe built to avoid reusing the exposure
-system that already did the job, and the home of BUG-237/249/250/260 in one week.
+system that already did the job, and the home of BUG-237 (scene-setup-camera-world-light-param-scrub-does-…)/249/250/260 in one week.
 This test composes with §4: when your second candidate architecture deletes a
 translation layer instead of adding one, that is strong evidence it is the right one.
 
@@ -181,7 +181,7 @@ doesn't?*
   the code got written twice. Share the one function; there was nothing to verify.
   (Specimen: UI_HARNESS_UNIFICATION kept the immediate-pass assembly as a parallel
   harness copy behind a match-audit and produced two lookalikes — the editor 3-tree
-  topology and BUG-097's overlay pass — in a single execution session. The fix,
+  topology and BUG-097 (ui-snap-render-overlay-pass-uses-wrong-traversal)'s overlay pass — in a single execution session. The fix,
   `HARNESS_FIDELITY_INVARIANT_PROPOSAL.md`, deletes the copy.)
 - **Yes → essential duplication → automate the equivalence.** Sometimes two
   implementations *are* the feature: freeze/fusion parity, an exporter's fast path vs.
@@ -215,7 +215,7 @@ The standard requires each design to forbid its tempting wrong architecture *by 
    consumer's one-shot derivation has run. If the consumer caches on a key, the key
    must hash a signal that flips when the late content lands, or the derivation must
    re-run once at first-ready. A key over size/transform is blind to content arrival
-   (BUG-326: BLAS built over pre-load zero buffers, never rebuilt).
+   (BUG-326 (rt-depth-snapshot-wrong-on-imported-glb-scenes): BLAS built over pre-load zero buffers, never rebuilt).
 
 The tell that you've found the right one: **it's the thing you yourself were tempted
 to do in §4 before the kill-pass.** Your own first instinct is the best predictor of
@@ -273,11 +273,11 @@ Phasing is part of the design, not packaging. The rules that matter:
   code paths.
 - **Gates must be behavioral, and a blind oracle is a stop sign.** Deletion greps
   and unit tests prove structure, not behavior; the scene-convergence landing was
-  green on both while 8 of 21 scene flow scripts were silently dead (BUG-252).
+  green on both while 8 of 21 scene flow scripts were silently dead (BUG-252 (eight-scene-flow-scripts-dead-at-step-2-on-stale…)).
   Two rules follow. A landing that claims flow verification must account for every
   flow file on disk for that surface — a count match, not a named subset chosen
   post hoc. And when the harness *cannot observe* the behavior that matters most
-  (BUG-239: live values were invisible to `--script`), the options are fix the oracle
+  (BUG-239 (headless-script-harness-shows-stale-value-after-…): live values were invisible to `--script`), the options are fix the oracle
   or don't land — waiving the most important assertion and landing anyway is how
   "green" came to mean nothing on this surface. (BUG-239 was later fixed the right
   way — WS3 2026-07-21 gave converged rows queryable names + a `ScrollTo` action, so
@@ -342,7 +342,7 @@ Opus inherits — bug hunts and complex tasks run the same skeleton, cheaper:
   discipline (state the observable end condition before starting), same kill-pass
   before declaring victory (verify one level closer to the stage than where you
   changed things).
-- **Emergent bugs** (the BUG-066 class — a feedback loop misbehaves while every
+- **Emergent bugs** (the BUG-066 (fluid3d-corner-drift) class — a feedback loop misbehaves while every
   component reads clean; also: drift, hysteresis, "it slowly goes wrong"): reading
   code CANNOT find these — the bug lives in the composition, not in any kernel, so
   every component-level audit returns "symmetric, correct" and every theory feels

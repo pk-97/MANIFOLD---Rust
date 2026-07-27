@@ -2,7 +2,7 @@
 
 **Status:** IN PROGRESS — P1 done (BUG-219, unreproduced on this env, RSS evidence recorded), P2 SHIPPED 2026-07-17 (`lane/import-responsiveness`) — D2's duplicate-device deletion landed, negative gate green. P3 BUILT 2026-07-17 (same branch, session 3), pending landing — D3+D4 wholesale: `import_model_file` is spawn+enqueue only, `import_worker.rs` runs the background pipeline, `drain_import_progress` (per-frame, `app_render.rs`) turns `Stage`/`Done`/`Failed` into toasts + the unchanged UI-thread command-dispatch tail. Gates 1–3 detailed in P3's phase brief below. · 2026-07-17 · Sonnet
 **Prerequisites:** none (BUG-219's diagnosis on `lane/glb-triage` lands independently; this design consumes it)
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5 (Phase briefs)–§6 before starting any phase.
 
 Peter, 2026-07-17, live-testing GLB imports: *"We also need a loading bar or something when importing the glb files initially as it takes time for the scenes to load in with large complex files"* and, on `ABeautifulGame.glb` (43 MB): *"I think we're also missing the safety check on large scenes. … Just crashed trying to load this in."* One design, because it's one seam: everything between the file drop and the layer appearing runs synchronously on the UI thread today, and one of those steps also allocates a second GPU universe. On stage: a mid-set model drop must never beachball the rig, and a big file must degrade to "slow, with feedback," never to a crash.
 
@@ -18,9 +18,9 @@ Binding constraints: no hot path (import is an event, not per-frame — but it c
 | Crash evidence | BUG-219 (docs/BUG_BACKLOG.md) | Headless import of the same file does NOT crash (`render-import` converged, correct render) — the crash is app-path-specific; actual backtrace NOT yet captured. BUG-180 (open) is the adjacent uncapped-decode-memory bug |
 | Background→UI precedent | content_state receiver drained per frame (app_render.rs); `gltf_mesh_source` re-parses on its own background threads at render time | The channel-drain pattern exists; no import-shaped background worker exists yet |
 | Progress surface | `ToastPanel` (toast.rs: `show`, `show_with_accent`, `tick`) | Static-text toasts, re-showable — sufficient for stage-level progress; no percent-bar widget exists anywhere |
-| Import report channel | `ImportReport::report_lines` → the BUG-063 "opened with repairs" toast mechanism | The existing end-of-import reporting path; progress stages extend the same user surface |
+| Import report channel | `ImportReport::report_lines` → the BUG-063 (silent-load-repairs) "opened with repairs" toast mechanism | The existing end-of-import reporting path; progress stages extend the same user surface |
 
-Out of scope, owned elsewhere: BUG-180 (decode memory caps), BUG-213/214 (extension reporting), the conformance xfails.
+Out of scope, owned elsewhere: BUG-180 (decode memory caps), BUG-213 (no-report-line-for-unimplemented-optional-materi…)/214 (extension reporting), the conformance xfails.
 
 ## 2. Decisions
 
@@ -41,7 +41,7 @@ pub(crate) enum ImportProgress {
 }
 ```
 Consequences, stated honestly: the Blender subprocess and the parse become cancel-less background work — closing the app mid-import abandons the thread (acceptable: it holds no locks and writes nothing until Done is drained on the UI thread). The def crosses a thread boundary by value; it's already `Send` plain data.
-*Rejected: doing the work on the content thread* — import is editor-side assembly; the content thread's frame budget is the show's, and BUG-035's lesson (measure, don't argue) applies squarely. *Rejected: a thread pool / async runtime* — one drop at a time is the real workload; a pool is infrastructure without a customer.
+*Rejected: doing the work on the content thread* — import is editor-side assembly; the content thread's frame budget is the show's, and BUG-035 (authoring-hitch)'s lesson (measure, don't argue) applies squarely. *Rejected: a thread pool / async runtime* — one drop at a time is the real workload; a pool is infrastructure without a customer.
 
 **D4 — Progress is stage-level toasts, not a percent bar.** Each `Stage` event re-shows the toast ("Importing chessboard.glb — parsing…", accent color). `Done` shows the existing report toast; `Failed` shows the error. The gltf crate exposes no meaningful percent mid-parse, so a percent bar would be theater; stage text is honest and reuses `ToastPanel` verbatim. If Peter wants a real bar later, that's a widget design with a genuine data source (per-texture decode counts), deferred.
 *Rejected: a modal progress dialog* — the whole point is the rig stays playable during an import.
@@ -69,7 +69,7 @@ Consequences, stated honestly: the Blender subprocess and the parse become cance
   **`bug219_verify.rs` adapted** (P1/P2's harness): `import_model_file` no longer blocks, so both `#[ignore]`d tests now call the new `drive_import_to_completion` helper (poll `drain_import_progress` until idle, 60s timeout) after the spawn — re-run this session, both still pass (no crash, RSS evidence unchanged in shape).
   **Negative gates (§3), verified:** `rg -n 'GpuDevice::new' crates/manifold-app/src/app_lifecycle.rs` → 0 hits; `rg -n 'assemble_import_graph|convert_via_blender' crates/manifold-app/src/app_lifecycle.rs` → 0 code hits (one comment mention only); `rg -n 'ContentCommand' crates/manifold-app/src/import_worker.rs` → 0 hits outside doc comments (the worker never sends one); no new `Arc<Mutex>`/`Arc<RwLock>` anywhere touched.
   **Content-thread statement:** zero new work — the content thread's own frame loop (`ContentThread::tick_frame`/`run`) is untouched by this phase; the new worker is a separate `std::thread`, and the new per-frame `drain_import_progress` call runs on the UI thread inside `tick_and_render`, not the content thread. Gate 3's measurement is the direct proof: the content thread's own frame counter never stalled across a full 43MB import.
-  **BUG-227 logged:** scoping this phase's clippy gate surfaced 3 pre-existing, unrelated `--tests`-only clippy hits (confirmed present on `HEAD` before any P3 edit via `git stash`) — logged, not fixed (out of scope, same convention as BUG-088/BUG-110).
+  **BUG-227 (madmom-onset-detector-not-gain-or-timestretch-in…) logged:** scoping this phase's clippy gate surfaced 3 pre-existing, unrelated `--tests`-only clippy hits (confirmed present on `HEAD` before any P3 edit via `git stash`) — logged, not fixed (out of scope, same convention as BUG-088 (pre-existing-clippy-tests-gate-dirty-since-f1-la…)/BUG-110 (osc-receiver-test-type-complexity-clippy-debt)).
 
 Forbidden moves (all phases): a size-threshold reject (D5's rejected alternative); a progress dialog; moving command dispatch off the UI thread; an async runtime dependency; touching BUG-180's decode paths "while we're here."
 

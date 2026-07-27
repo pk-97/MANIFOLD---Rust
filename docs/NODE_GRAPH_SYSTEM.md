@@ -137,7 +137,7 @@ Inside the graph editor, every inner-node param row has an expose checkbox. Chec
 
 **Status:** Architecturally committed, implementation deferred.
 
-[PRIMITIVE_LIBRARY_DESIGN.md §12.5](PRIMITIVE_LIBRARY_DESIGN.md) commits the stance: *decompose at authoring time, fuse at compile time.* The editor sees small primitives; the GPU runs fused dispatches for per-pixel chains.
+[PRIMITIVE_LIBRARY_DESIGN.md §12.5 (Decomposition + fusion-on-compile)](PRIMITIVE_LIBRARY_DESIGN.md) commits the stance: *decompose at authoring time, fuse at compile time.* The editor sees small primitives; the GPU runs fused dispatches for per-pixel chains.
 
 The fusion classification (pixel-local / UV-rewriting / neighborhood / reduction / multi-pass / stateful), partition algorithm, and `naga_oil`-based toolchain are designed in detail at §8.2–§8.4 of this doc's predecessor and still apply.
 
