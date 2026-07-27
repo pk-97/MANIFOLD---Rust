@@ -502,11 +502,10 @@ Post-vocab ids in play: `node.render_mesh`, `node.render_copies`,
   draw-order/OIT design; Mask covers foliage, decals, and cutout UI. glTF `BLEND`
   materials import as Mask (cutoff 0.5) with an import-report warning
   (IMPORT_DESIGN D9). Trigger to revive: a hero asset that genuinely reads wrong as
-  cutout. **[TRIGGER FIRED 2026-07-15 (car windows) → `docs/IMPORT_FIDELITY_DESIGN.md`
-  D8/F-P5 (SHIPPED 2026-07-15, `61400029`) added `AlphaMode::Blend` + a sorted
-  per-object blend pass in `render_scene` and flipped the import mapping there.
-  `render_mesh`/`render_copies` keep Mask-only — this deferral stays live for
-  them; OIT stays deferred everywhere.]**
+  cutout. **[Trigger fired (car windows) → `docs/IMPORT_FIDELITY_DESIGN.md` D8/F-P5:
+  `AlphaMode::Blend` + a sorted per-object blend pass in `render_scene`, import
+  mapping flipped there. `render_mesh`/`render_copies` keep Mask-only — this
+  deferral stays live for them; OIT stays deferred everywhere.]**
 - **M6-D4 — Double-sided stays the only mode; back-face lighting gets fixed.** No
   cull-mode API is added (nothing needs single-sided today; revisit only if the perf
   HUD ever shows overdraw pain). The lit entry points take `@builtin(front_facing)`
@@ -519,7 +518,7 @@ Post-vocab ids in play: `node.render_mesh`, `node.render_copies`,
   skips tangent-space normal maps and lists each skip in the import report.
   Trigger: a hero import that visibly needs them → tangent generation at import
   time + a `normal_space` mode on the renderer, as its own designed slice.
-  **[TRIGGER FIRED 2026-07-15 → `docs/IMPORT_FIDELITY_DESIGN.md` D4 is the designed
+  **[Trigger fired → `docs/IMPORT_FIDELITY_DESIGN.md` D4 is the designed
   slice. It lands tangent-space maps on `render_scene` only, via a fragment-shader
   cotangent frame — NOT import-time tangent generation, and NOT a `normal_space`
   mode on `render_mesh`, whose world-space contract stays untouched.]**

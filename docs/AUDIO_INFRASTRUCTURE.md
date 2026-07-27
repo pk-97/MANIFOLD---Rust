@@ -32,8 +32,8 @@ The infrastructure below exists to make those three true. Everything is a conseq
 
 Two independent data paths:
 
-- **The sample path** (left-to-right, top): real audio samples flow RT thread → ring → worker → content thread. This is the hot path and it is already built.
-- **The metadata path** (bottom): device list, channel names, stable IDs, and hot-plug events flow from the native directory to the UI and the save format. This is the new work.
+- **The sample path** (left-to-right, top): real audio samples flow RT thread → ring → worker → content thread.
+- **The metadata path** (bottom): device list, channel names, stable IDs, and hot-plug events flow from the native directory to the UI and the save format.
 
 The split matters: the sample path stays on cpal (portable, proven). Only the metadata path drops to native CoreAudio, because that is the only place the information we want actually lives.
 
@@ -52,7 +52,7 @@ What the cpal backend exposes for the device picker: `list_devices()` (name + de
 
 ### 3.2 Analysis — split across the downmix worker and the content thread
 
-Analysis is **not** one worker-thread stage anymore. It splits at the mono handoff (`docs/AUDIO_SENDS_UX_DESIGN.md` D4, shipped 2026-07-06):
+Analysis splits at the mono handoff (`docs/AUDIO_SENDS_UX_DESIGN.md` D4):
 
 ```text
 capture ring (f32, interleaved) ─drain→ AudioFeatureWorker ─mono→ content thread
@@ -147,7 +147,7 @@ Explicitly **not** doing: a dockable window (the panel is a right-anchored overl
 
 ## 8. Performance — the budget is sacred
 
-Analysis moved onto the **content thread** (§3.2) specifically so a send's capture mono and its layer taps can be summed before one analysis. That trade only pays for itself if the content-thread cost is bounded — which is what the per-send gating (D4) is for. Verdict:
+Analysis is on the **content thread** (§3.2) so a send's capture mono and its layer taps can be summed before one analysis. That trade only pays for itself if the content-thread cost is bounded — which is what the per-send gating (D4) is for. Verdict:
 
 - **GPU: zero.** Nothing in the audio path touches the GPU. It never competes with the 4.5–5.5ms frame budget.
 - **Downmix worker (off-RT OS thread): microseconds.** Deinterleave + per-send mono average, no FFT, no alloc, no lock on the read path.

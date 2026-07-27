@@ -21,7 +21,7 @@ got here, not where we are):
 - `GRAPH_COMPILER.md` — a walked-back 2026-05 brainstorm (`for_each_n`).
   Historical only; nothing in it is the shipped compiler.
 
-Fixed 2026-07-14 (fusion-sweep phase 8): `freeze/classify.rs`'s `Gather` /
+`freeze/classify.rs`'s `Gather` /
 `BufferGather` / `Source` doc comments no longer claim a gather input or a
 buffer atom forces a node to Boundary, or that Source generators can't head a
 region — all three fuse today (tier 3 buffer-fusion + generator-as-producer
@@ -393,8 +393,7 @@ invariant a fused def must respect:
 
 ## 11. Honest edges (the bug hunt starts here)
 
-**Update 2026-07-03: the hunt ran** (40-agent adversarial workflow; 10 lenses, 2 skeptics
-per finding). Outcome: 7 confirmed + 2 split-verdict findings, all documented as
+An adversarial hunt confirmed 7 + 2 split-verdict findings, all documented as
 **BUG-006 (param-edits-undo-fused-away-nodes-silently-no) … BUG-014 (parked) in [BUG_BACKLOG.md](BUG_BACKLOG.md)** — including a likely mechanism
 for edge #2 below (unchecked Metal command-buffer status, BUG-013 (commit-wait-completed-never-checks-command-buffe…)). The completeness
 critic's round-2 lens list (what got shallow coverage): the executor itself
@@ -404,7 +403,7 @@ fallback, `diff.rs` (can the oracle itself false-pass?), `reference.rs` golden-u
 discipline, `graph_loader.rs`'s consumption of fused defs, the segment Pending-hang path,
 and edges #3/#7 below, which no lens engaged.
 
-1. FIXED (2026-07-14, FUSION_SOTA_DESIGN.md P1): the **marker ABI** (§5 (Decided — do not reopen)) now has
+1. FIXED: the **marker ABI** (§5 (Decided — do not reopen)) now has
    type-level enforcement — `freeze/markers.rs`'s `Marker` enum with `emit`/`parse`
    as the sole wire-format implementation, both codegen/install (producer) and
    `wgsl_compute::introspect` (consumer) compile against it. Negative gate
@@ -413,7 +412,7 @@ and edges #3/#7 below, which no lens engaged.
    changed zero emitted bytes.
 2. The **suite-parallelism GPU flake** is an eroding safety net — worth a root
    cause before trusting any future red/green signal.
-3. FIXED (2026-07-14): **Out-of-loop ≈ulp** now has one named constant pair,
+3. FIXED: **Out-of-loop ≈ulp** now has one named constant pair,
    `OUT_OF_LOOP_ULP_ABS_TOL`/`OUT_OF_LOOP_ULP_REL_TOL` (`freeze/proof.rs`),
    backing the 15 out-of-loop-texture-region proofs that all already shared
    the same (1e-2, 3e-2) texel bound (ColorGrade, camera-derived, gather/warp
@@ -421,10 +420,10 @@ and edges #3/#7 below, which no lens engaged.
    proof's pass/fail behavior changed. The per-proof `passes(max_over_fraction)`
    budget stays per-proof by design (§7.4) — that fraction is tuned to each
    kernel's discontinuity profile, not part of the shared texel-level contract.
-4. FIXED (2026-07-14): `classify.rs` doc-comment drift (see header note above)
+4. FIXED: `classify.rs` doc-comment drift (see header note above)
    — the `Gather`/`BufferGather`/`Source` comments no longer mis-describe
    gathers/buffers as forcing Boundary or Source as standalone-only.
-5. FIXED (2026-07-14): `def_content_key` normalizes a cloned def — clearing
+5. FIXED: `def_content_key` normalizes a cloned def — clearing
    `editor_pos`/`title` on every node, including nodes nested inside group
    bodies — before hashing, so a node drag or rename no longer perturbs the
    key. Same "serialize the whole thing and hash the bytes" mechanism as
@@ -439,7 +438,7 @@ and edges #3/#7 below, which no lens engaged.
    resampler-into-region remain deliberate boundaries — under-fusing by
    design. (Vec3/Vec4/Color params lifted P5; multi-output texture atoms
    — voronoi_2d, block_displace_field — lifted P6, FUSION_SOTA_DESIGN.md D4.)
-7. FIXED (2026-07-14, FUSION_SOTA_DESIGN.md P7): `leak_params`/`leak_ports`/
+7. FIXED: `leak_params`/`leak_ports`/
    `Box::leak` of views are gone — fused caches (`FUSED_EFFECT_CACHE`/
    `FUSED_GENERATOR_CACHE`/`SEGMENT_CACHE`) hold `Arc<T>` with owned
    `Vec`/`String` interiors; at cap, LRU evicts the least-recently-hit entry
@@ -447,7 +446,7 @@ and edges #3/#7 below, which no lens engaged.
    crates/manifold-renderer/src/node_graph/freeze/` returns zero hits
    (`freeze_has_no_leaks`). Pathological edit-spam past 512 shapes now evicts
    and frees instead of leaking per rebuild.
-8. FIXED (2026-07-14, FUSION_SOTA_DESIGN.md P2): segment `Pending` can no
+8. FIXED: segment `Pending` can no
    longer hang forever — `SEGMENT_PENDING` carries enqueue timestamps;
    `pump_segment_results` expires anything past `SEGMENT_COMPILE_DEADLINE`
    (60s) into the negative cache with one log line, and a worker panic is now
