@@ -10,7 +10,7 @@ Test matrix:
   T2: Executor, gates fail  → exit 2, stderr feedback
   T3: Unknown payload shape → exit 0, log line written
   T4: Non-executor model   → exit 0
-  T5: MAX_BLOCKS exceeded  → exit 0, systemMessage
+  T5: trail streak > limit → exit 0, systemMessage
   T6: stop_hook_active     → exit 0 immediately
 
 Usage: python3 .claude/hooks/test_subagent_stop_gate.py
@@ -31,17 +31,16 @@ GATE_RUNNER = os.path.join(REPO, "scripts", "gate_runner.py")
 
 PASSED = 0
 FAILED = 0
-STATE_FILE = "/tmp/subagent_stop_gate_state.json"
 PAYLOAD_LOG = "/tmp/manifold_subagent_stop_payloads.jsonl"
 
 
 def clean_state():
-    """Remove state file and payload log between tests."""
-    for p in [STATE_FILE, PAYLOAD_LOG]:
-        try:
-            os.remove(p)
-        except FileNotFoundError:
-            pass
+    """Remove the payload log between tests (the block counter lives in the
+    verdict trail, sandboxed per-test via GATE_RUNNER_VERDICTS_DIR)."""
+    try:
+        os.remove(PAYLOAD_LOG)
+    except FileNotFoundError:
+        pass
 
 
 def ok(label):
@@ -222,7 +221,10 @@ def test_4_non_executor():
 
 
 def test_5_max_blocks():
-    """Counter exceeds MAX_BLOCKS (3) → exit 0 with systemMessage on 4th."""
+    """Trail streak past the limit → exit 0 with systemMessage on 4th red.
+
+    The counter is the verdict trail (no private state file): prime it with
+    3 red per-lane verdicts; this run's red makes 4 > FAIL_STREAK_LIMIT."""
     clean_state()
     with tempfile.TemporaryDirectory() as tmpdir:
         brief = os.path.join(tmpdir, "brief_fail.md")
@@ -230,11 +232,17 @@ def test_5_max_blocks():
         verdicts_dir = os.path.join(tmpdir, "verdicts")
         os.makedirs(verdicts_dir)
 
-        # Prime the state to MAX_BLOCKS
         agent_id = "test-agent-deepseek-blocked-999"
-        state = {agent_id: 3}
-        with open(STATE_FILE, "w") as f:
-            json.dump(state, f)
+        red = {
+            "schema": 1, "task": "BUG-ogblk", "phase": "per-lane",
+            "brief": brief, "branch": "lane/x", "commit": None, "gates": [],
+            "scope": {"files_changed": [], "in_scope": True}, "pass": False,
+            "kind": "gate", "reason": None, "runner": "gate_runner.py@lead",
+            "ts": "2026-07-27T00:00:00+00:00",
+        }
+        with open(os.path.join(verdicts_dir, "BUG-ogblk.jsonl"), "w") as f:
+            for _ in range(3):
+                f.write(json.dumps(red) + "\n")
 
         payload = make_payload({
             "agent_id": agent_id,

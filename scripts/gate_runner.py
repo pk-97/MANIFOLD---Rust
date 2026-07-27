@@ -778,8 +778,94 @@ def _check_wave_base(wave_base):
         return {"cmd": cmd_label, "exit": 1, "duration_s": duration, "tail": str(e)}
 
 
+# Enforcement hooks fail OPEN by design (a guard bug must never wedge a
+# session) — which means enforcement can evaporate silently: a hook
+# unregistered, deleted, or crashing on a changed payload shape just stops
+# firing. These two checks are the noise that fail-open lacks.
+_HOOK_SUFFIXES = ("-guard.py", "-gate.py", "-enforcer.py", "-hook.py")
+_HOOK_EXTRAS = ("preToolUseBash.py",)
+
+
+def _check_hooks_registered():
+    """Check f: every enforcement hook file is registered in settings.json,
+    and every registered hook command points at an existing file."""
+    cmd_label = "hooks registered"
+    start = time.time()
+    try:
+        hooks_dir = MAIN_CHECKOUT / ".claude" / "hooks"
+        settings = json.loads(
+            (MAIN_CHECKOUT / ".claude" / "settings.json").read_text())
+        commands = []
+        for entries in (settings.get("hooks") or {}).values():
+            for e in entries:
+                for hk in e.get("hooks", []):
+                    if hk.get("command"):
+                        commands.append(hk["command"])
+        registered_text = "\n".join(commands)
+
+        fails = []
+        for f in sorted(hooks_dir.iterdir()):
+            name = f.name
+            if name.startswith("test_"):
+                continue
+            if not (name.endswith(_HOOK_SUFFIXES) or name in _HOOK_EXTRAS):
+                continue
+            if name not in registered_text:
+                fails.append(f"{name} exists but is not registered")
+        for cmd in commands:
+            m = re.search(r"\.claude/hooks/([\w.-]+\.py)", cmd)
+            if m and not (hooks_dir / m.group(1)).is_file():
+                fails.append(f"{m.group(1)} registered but file missing")
+
+        duration = round(time.time() - start, 1)
+        if fails:
+            tail = "; ".join(fails[:6])
+            _print_check("FAIL", cmd_label, tail)
+            return {"cmd": cmd_label, "exit": 1, "duration_s": duration, "tail": tail}
+        tail = f"{len(commands)} registrations, all files present"
+        _print_check("PASS", cmd_label, tail)
+        return {"cmd": cmd_label, "exit": 0, "duration_s": duration, "tail": tail}
+    except Exception as e:
+        duration = round(time.time() - start, 1)
+        _print_check("FAIL", cmd_label, str(e))
+        return {"cmd": cmd_label, "exit": 1, "duration_s": duration, "tail": str(e)}
+
+
+def _check_hooks_fire():
+    """Check g: canary-fire worktree-guard with a synthetic main-checkout
+    edit and require the deny. Proves the deny path end to end — a hook that
+    crashes or fails open on today's payload shape goes red here, not silent."""
+    cmd_label = "hooks fire"
+    start = time.time()
+    try:
+        guard = MAIN_CHECKOUT / ".claude" / "hooks" / "worktree-guard.py"
+        payload = json.dumps({
+            "tool_name": "Edit",
+            "tool_input": {"file_path": str(MAIN_CHECKOUT / "src" / "canary.rs")},
+            "cwd": str(MAIN_CHECKOUT),
+        })
+        r = subprocess.run(
+            [sys.executable, str(guard)], input=payload,
+            capture_output=True, text=True, timeout=30,
+        )
+        duration = round(time.time() - start, 1)
+        denied = '"deny"' in r.stdout
+        if r.returncode == 0 and denied:
+            _print_check("PASS", cmd_label, "worktree-guard denied the canary edit")
+            return {"cmd": cmd_label, "exit": 0, "duration_s": duration,
+                    "tail": "worktree-guard denied the canary edit"}
+        tail = (f"worktree-guard did NOT deny the canary "
+                f"(exit {r.returncode}, stdout {r.stdout.strip()[:120]!r})")
+        _print_check("FAIL", cmd_label, tail)
+        return {"cmd": cmd_label, "exit": 1, "duration_s": duration, "tail": tail}
+    except Exception as e:
+        duration = round(time.time() - start, 1)
+        _print_check("FAIL", cmd_label, str(e))
+        return {"cmd": cmd_label, "exit": 1, "duration_s": duration, "tail": str(e)}
+
+
 def cmd_pre_wave(args):
-    """Run the five P2 pre-wave checks and append a verdict."""
+    """Run the pre-wave checks (P2 + hook liveness) and append a verdict."""
     litellm_url = os.environ.get("LITELLM_URL") or args.litellm_url or DEFAULT_LITELLM_URL
 
     print("=== pre-wave preflight ===")
@@ -789,6 +875,8 @@ def cmd_pre_wave(args):
         _check_quota(),
         _check_goldens(),
         _check_wave_base(args.base),
+        _check_hooks_registered(),
+        _check_hooks_fire(),
     ]
 
     all_pass = all(g["exit"] == 0 for g in checks)
