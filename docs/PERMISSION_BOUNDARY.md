@@ -223,8 +223,7 @@ Bash(sed -n *)
 Bash(cc-fleet status *)
 Bash(cc-fleet spawn *)
 Bash(cc-fleet teardown *)
-Bash(cc-fleet update *)
-Bash(.claude/hooks/flash *)
+Bash(.claude/hooks/oneshot *)
 Bash(pkill -f rust-analyzer)
 Bash(pkill -f "zola.*serve")
 Bash(memory_pressure -Q)
@@ -270,7 +269,7 @@ Rationale for the script rules (unchanged from the original audit):
 | `scripts/agent-worktree.py acquire *` | bounded by the slot ring cap |
 | `scripts/gen_docs_index.py` | no arguments |
 | `scripts/seat_tool.py show` | read-only |
-| `scripts/gate_runner.py show *` / `report *` | fixed read-only subprocesses; note `show` runs `cc-fleet keyget`, which prints an API key into the transcript |
+| `scripts/gate_runner.py show *` / `report *` | read-only (verdicts trail / subprocess-free report); `cc-fleet keyget` runs under `pre-wave`, which is NOT allowlisted |
 | `scripts/token_report.py *` | reads transcripts, flags only |
 | `scripts/run_ui_flows.py *` | bounded by `scripts/ui-flows/manifest.json` — which is agent-editable, so this is a §4 residual-risk rule |
 | `scripts/move_identity_check.py *` | git refs only |
