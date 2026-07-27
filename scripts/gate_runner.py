@@ -415,6 +415,41 @@ def _diff_for_commit(commit):
         return None
 
 
+WORKTREES_DIR = Path(
+    os.environ.get("GATE_RUNNER_WORKTREES_DIR")
+    or MAIN_CHECKOUT / ".claude" / "worktrees"
+)
+
+
+def _resolve_lane_commit(task_id):
+    """Find the lane commit for a task via its bead id (D3: trace identity).
+
+    Scans worktree slots for branches carrying commits not yet on
+    origin/main whose messages mention the task id. Exactly one slot → its
+    HEAD. None or ambiguous → None: the scan is skipped, never pointed at a
+    guessed diff (a wrong diff makes the gaming verdict a lie both ways).
+    """
+    candidates = []
+    try:
+        for slot in sorted(WORKTREES_DIR.glob("slot-*")):
+            r = subprocess.run(
+                ["git", "-C", str(slot), "log", "origin/main..HEAD",
+                 "--fixed-strings", f"--grep={task_id}", "--format=%H", "-n", "1"],
+                capture_output=True, text=True, timeout=15,
+            )
+            if r.returncode != 0 or not r.stdout.strip():
+                continue
+            head = subprocess.run(
+                ["git", "-C", str(slot), "rev-parse", "HEAD"],
+                capture_output=True, text=True, timeout=15,
+            )
+            if head.returncode == 0 and head.stdout.strip():
+                candidates.append(head.stdout.strip())
+    except Exception:
+        return None
+    return candidates[0] if len(candidates) == 1 else None
+
+
 def _fail_streak(task_id):
     """Count trailing consecutive failed per-lane gate verdicts for a task."""
     streak = 0
@@ -453,17 +488,21 @@ def cmd_per_lane(args):
 
     # Gaming scan: unlike scope, this IS a pass/fail input — a diff that
     # weakened the gate to go green is a red verdict, not evidence.
+    # Commit resolution: explicit --commit, else the --branch tip, else the
+    # worktree slot whose unlanded commits name this task. Never cwd HEAD —
+    # from the main checkout that diffs main against main and scans nothing.
     commit = args.commit
-    if not commit:
-        ref = args.branch or "HEAD"
+    if not commit and args.branch:
         try:
             rp = subprocess.run(
-                ["git", "rev-parse", ref],
+                ["git", "rev-parse", args.branch],
                 capture_output=True, text=True, timeout=15,
             )
             commit = rp.stdout.strip() if rp.returncode == 0 else None
         except Exception:
             commit = None
+    if not commit:
+        commit = _resolve_lane_commit(args.task)
     diff_text = _diff_for_commit(commit)
     if diff_text is not None:
         for entry in scan_gaming(diff_text):
