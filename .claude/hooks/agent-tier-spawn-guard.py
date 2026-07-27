@@ -36,8 +36,11 @@ import os
 import re
 import sys
 
+# glm-4.7 is classifier-dedicated (2026-07-27) — no agent role, so any
+# glm-4.7 session gets deny-all-spawns; checked before DISPATCHER_TIERS.
 EXECUTOR_TIERS = re.compile(
-    r"claude-(sonnet|haiku)|deepseek|kimi-k2|kimi-for-coding", re.IGNORECASE
+    r"claude-(sonnet|haiku)|deepseek|kimi-k2|kimi-for-coding|glm-4\.7",
+    re.IGNORECASE,
 )
 DISPATCHER_TIERS = re.compile(r"\bglm-", re.IGNORECASE)
 # The only slot a dispatcher may spawn: the executor tier (DeepSeek Flash).
