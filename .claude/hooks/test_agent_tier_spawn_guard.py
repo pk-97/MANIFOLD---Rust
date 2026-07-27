@@ -32,16 +32,15 @@ def check(name: str, cond: bool) -> None:
 # --- decide(): tier rules -------------------------------------------------
 
 # Executor tier: all spawns denied regardless of target slot.
-# glm-4.7 is classifier-dedicated (2026-07-27) — deny-all, same as executors.
 for model in ("deepseek-v4-flash", "kimi-for-coding", "kimi-k2.7-code",
-              "claude-sonnet-5", "claude-haiku-4-5-20251001", "glm-4.7"):
+              "claude-sonnet-5", "claude-haiku-4-5-20251001"):
     for slot in ("haiku", "sonnet", ""):
         r = hook.decide(model, slot)
         check(f"executor denied: {model} -> {slot or '(none)'}",
               bool(r) and "executor" in r)
 
-# Dispatcher tier (glm-5.2): haiku only.
-for model in ("glm-5.2",):
+# Dispatcher tier (both GLM versions, Peter 2026-07-27): haiku only.
+for model in ("glm-4.7", "glm-5.2"):
     check(f"dispatcher allowed: {model} -> haiku",
           hook.decide(model, "haiku") == "")
     for slot in ("sonnet", "opus", "fable", ""):
