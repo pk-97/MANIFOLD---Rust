@@ -11,7 +11,7 @@ object's group to `render_scene`'s `mesh_k`/`material_k`/`transform_k` ports —
 port family was replaced by `SCENE_OBJECT_AND_PANEL_V2_DESIGN.md` (shipped 2026-07-17) with one
 `object_k` wire out of a `node.scene_object` node; `AddSceneObjectCommand` now emits the new
 shape. The rest of this doc's design (card sections, Transform atoms, group boxes) is unaffected
-and still describes the shipped mechanism. **P1 SHIPPED 2026-07-10** (main `3a6e30b7`):
+and still describes the shipped mechanism. **P1 SHIPPED 2026-07-10**:
 `PortType::Transform` + `node.transform_3d` atom. **P2 SHIPPED 2026-07-10**: `render_scene` sheds
 all per-object transform params for `transform_n` ports; v1.12.0 migration carries old saves across
 (values + card bindings re-pointed); glTF importer emits the end-state shape. Migration parity vs

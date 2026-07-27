@@ -39,7 +39,7 @@ principle below** — do not re-argue it. Issues 1–3 are now fixed (2026-07-01
 issue 4's mini-timeline landed the same pass. Issue 4's "hide-unused sockets" and
 the remaining steps (typed wires, inline slider restyle) are still open.
 
-1. **NO hiding text on zoom. — FIXED.** The label-LOD gate (`51a32b8a`) was reverted
+1. **NO hiding text on zoom. — FIXED.** The label-LOD gate was reverted
    and the pre-existing `show_text` / `PARAM_LOD_ZOOM` gating deleted. All node text
    (title, params, port labels) now scales linearly with zoom — the `.max(7.0)` font
    floors are gone (they caused the mush by stopping scale-down) — and is elided to

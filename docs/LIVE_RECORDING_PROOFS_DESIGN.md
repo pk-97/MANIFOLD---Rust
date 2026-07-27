@@ -18,13 +18,13 @@ cumulative-state failures inside or below AVAssetWriter** that no unit test and 
 1. **Silent writer death at ~2:20** — AVAssetWriter transitioned to a non-Writing
    state, 17 minutes of frames dropped silently, file unrecoverable (no moov atom).
    Fixed by fragmented MOV + loud first-failure logging + resilient finalize
-   (`2b621085`).
+.
 2. **HEVC hardware encoder malfunction at ~3 GB cumulative bitstream** under sustained
    4K60 (kVTVideoEncoderMalfunctionErr, upstream of AVAssetWriter). Fixed by moving
-   SDR capture to ProRes 422 Proxy — a separate hardware encoder path (`b2e26a09`).
+   SDR capture to ProRes 422 Proxy — a separate hardware encoder path.
 3. **-16364 duplicate PTS at ~7500 frames** — timescale 600 rounded two jittery
    content-thread frames to the same PTS; AVAssetWriter goes permanently Failed on a
-   non-increasing PTS. Fixed by timescale 90000 + a monotonic clamp (`fbee1ed2`).
+   non-increasing PTS. Fixed by timescale 90000 + a monotonic clamp.
 
 The design conclusion from that history: **the test must drive the real
 `LiveRecordingSession` API into the real native AVAssetWriter encoder, at realistic

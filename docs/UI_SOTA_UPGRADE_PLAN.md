@@ -184,10 +184,10 @@ per-layer CPU clip bitmap is gone end to end.
 Full design + the cross-thread architecture: [docs/CLIP_THUMBNAILS_DESIGN.md](CLIP_THUMBNAILS_DESIGN.md).
 Snapshot-on-play into a shared content→UI atlas (IOSurface triple-buffer, cloned from the node-thumbnail
 atlas), blitted into the clip body in the 4b″ slot (rounded-mask, centre-cropped). Phases shipped:
-**P1** transport + live snapshot (`08790b43`); **P2a** with-effects source — `LayerCompositor::clip_post_fx_texture`
-(`32386ad3`); **P2c** generator cold-start — parked clips render an isolated default-look thumbnail
-(`5a1efc61`); **P2b** video posters — parked clips decode an isolated poster frame, prefix-keyed so it
-can never corrupt the live decode (`b663291c`). Source order per clip: compositor post-fx > live >
+**P1** transport + live snapshot; **P2a** with-effects source — `LayerCompositor::clip_post_fx_texture`
+; **P2c** generator cold-start — parked clips render an isolated default-look thumbnail
+; **P2b** video posters — parked clips decode an isolated poster frame, prefix-keyed so it
+can never corrupt the live decode. Source order per clip: compositor post-fx > live >
 generator cold-start > video poster. Each phase carried an adversarial multi-agent review. Remaining is
 polish (representative-frame video seek; modulated/override cold-start) and the running-app eye pass.
 

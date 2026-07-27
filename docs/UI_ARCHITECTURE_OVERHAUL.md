@@ -23,50 +23,19 @@ and how we get there."
 > `IntentRegistry<GraphEditCommand>`: `GraphEditorPanel::handle_click_event`
 > became `register_intents`, `handle_event` now carries only the stateful drag,
 > and the app resolves sidebar clicks through a new `editor_sidebar_intents`
-> registry (mirroring `editor_card_intents`). Behaviour-preserving; manifold-ui
-> 370 + manifold-app 55 tests green, clippy `-D warnings` clean. The historical
-> per-phase status below is kept as the running record.
+> registry (mirroring `editor_card_intents`). Behaviour-preserving. Per-phase history lives in git and the
+> sub-design docs.
 >
-> **Status: Phases 0–5 + 7 + 8 COMPLETE (2026-06-23); only Phase 6 remains (its
-> own chat, scoped in section 13).** Phase 2 (Chrome API), Phase 3 (Timeline API),
-> Phase 4 (Canvas API), Phase 5 (layering inversion), **Phase 7 (one shared input
-> owner)**, and **Phase 8 (relocate the graph canvas into `manifold-ui`)** all
-> landed behaviour-preserving, tests + clippy green — see each phase's sub-design
-> doc (`CHROME_API_DESIGN`, `TIMELINE_API_DESIGN`, `CANVAS_API_DESIGN`,
-> `UI_LAYERING_INVERSION`) and the section 13 checklist. **Phase 5** moved `manifold-ui`
-> to UI-local events + view-data (the app maps them to engine commands via
-> `ui_translate.rs`) so the crate compiles with no `manifold-core` dependency — it
-> depends only on the new zero-dep `manifold-foundation`. That *unblocked* three
-> deeper moves earlier phases deferred to it (Phases 6–8, each independent, its
-> own chat, scoped in section 13): generalise `IntentRegistry` off `PanelAction` (6), one
-> shared input owner for the editor window (7), relocate the graph canvas out of
-> `manifold-app` (8). **Phase 7 is now done** — `editor_input.rs` became
-> `window_input.rs`, the single owner both windows route input through:
-> `window_event`'s pointer/wheel/keyboard arms are one delegation each into
-> `input_*` dispatchers, the ~614 inlined primary-window input lines moved beside
-> the `editor_*` bodies, and the line-delta→pixel scroll rule + physical→logical
-> cursor projection are now shared helpers (the canvas stays immediate-mode and
-> the three text-input keyboard policies stay window-specific by design — see section 13
-> Phase 7). **Phase 8 is also done** — the 4,334-line `graph_canvas/` + its
-> mapping popover moved into `manifold-ui` reading a UI-local `graph_view`
-> snapshot (the app translates the renderer's via `ui_translate.rs`) and painting
-> through a new `Painter` trait the renderer impls for `UIRenderer`; the canvas no
-> longer depends on `manifold-renderer`. **Phase 6 is the one remaining
-> follow-on.** The Phase-2b-era status below is kept as history.
+> **As built:** every phase landed behaviour-preserving — Chrome API (2),
+> Timeline API (3), Canvas API (4), layering inversion (5), one shared input
+> owner (7, `window_input.rs`), graph canvas relocated into `manifold-ui` (8,
+> via a UI-local `graph_view` snapshot + `Painter` trait). Phase 5 left
+> `manifold-ui` depending only on zero-dep `manifold-foundation`; the app maps
+> UI events to engine commands in `ui_translate.rs`. Contracts per phase:
+> `CHROME_API_DESIGN`, `TIMELINE_API_DESIGN`, `CANVAS_API_DESIGN`,
+> `UI_LAYERING_INVERSION`, and the section 13 checklist.
 >
-> **Status: Phase 2b IN PROGRESS (2026-06-22)** — 7 panels fully migrated; **3 of
-> the 4 heavyweights chrome-staged** (`param_card` frame + generator header,
-> `layer_header` top chrome, `audio_setup` modal chrome); the `inspector`'s
-> sub-panels are all migrated (it's the orchestrator). All verified + pushed (~20
-> commits), plus the `slider_row` + `dropdown_trigger` building blocks. **Key
-> result, proven on three beasts: the heavyweights stage into committable, tested
-> steps (frame/chrome → header → body) — not all-or-nothing.** What remains is each
-> beast's dynamic *body* — param_card's dragged rows + the effect-header badge fork,
-> layer_header's scroll rows, audio_setup's meters/spectrogram, the inspector's
-> interleaved section bgs + add buttons. All dragged/real-time surfaces that want
-> the app running to verify. Branch `ui-chrome-phase2b`.
->
-> **Typed building blocks (the direction Peter steered to 2026-06-22):** the
+> **Typed building blocks:** the
 > repeated interactive widgets become *typed Chrome components the host
 > materialises*, so panels compose them declaratively instead of hand-rolling
 > imperative slots. **Shipped:** (1) `View::slider_row(SliderSpec).key(K)` — the
@@ -81,30 +50,16 @@ and how we get there."
 > into a keyed slot; promoting them is what makes param/audio-setup clean
 > compositions.
 >
-> **Done + verified + pushed (6 panels + the slider block):**
-> - **2b.8 footer**, **2b.7 header**, **2b.6 transport** — the static bars, each
->   rewritten on the Chrome API: `Panel::build` → `host.build(view, rect)`,
->   `Panel::update` → `host.update` (in-place reconcile, free when unchanged since
->   the tree setters dirty-check), `register_intents` → `host.register_intents`.
->   Value setters drop their `&mut UITree` arg and just store the field. No more
->   `self.*_id` hoarding, no `build()`/`sync_*()` dual write. Each carries a
->   `#[cfg(test)]` golden that reproduces the original pixel math and asserts every
->   interactive cell lands at the same rect — provably non-regressing at build.
-> - **2b.2 master_chrome**, **2b.3 layer_chrome** — the first slider-bearing
->   inspector cards, on the **hybrid** pattern (below): host owns the card's
->   declarative chrome + `Fill` slider slots, the `BitmapSlider` drops into the
->   recovered slot byte-identical. Slot-golden asserts the slider lands at the old
->   rect. Public interface unchanged → the inspector composite is untouched.
-> - **Chrome API extensions landed for the migration:** `View::key` →
->   `LaidNode.key` → `ChromeHost::node_id_for_key` (stable semantic addressing —
->   a panel resolves a specific element's tree id for overlay anchoring instead of
->   storing it); `View::disabled(bool)` (host applies/toggles `UIFlags::DISABLED`
->   in place, excluded from the structural signature).
+> Every migrated bar/card carries a `#[cfg(test)]` golden reproducing the
+> original pixel math (interactive cells land at the same rect — provably
+> non-regressing at build). Chrome API extensions from the migration:
+> `View::key` → `ChromeHost::node_id_for_key` (stable semantic addressing) and
+> `View::disabled(bool)` (host-toggled, excluded from the structural signature).
 >
-> **Remaining 2b (the slider/drawer cards) — verification boundary:**
+> **The slider/drawer cards (hybrid pattern — why, as built):**
 > `param_card`, `macros_panel`, `master_chrome`, `layer_chrome`, `clip_chrome`,
-> `layer_header`, `inspector` (composite), `audio_setup_panel`. These are **not
-> "largely mechanical"** the way the static bars were. Two reasons:
+> `layer_header`, `inspector` (composite), `audio_setup_panel`. Two constraints
+> shaped these:
 > 1. **Sliders aren't `View` nodes.** `BitmapSlider` is a 5-node widget whose
 >    fill/thumb rects are computed *after* layout (from the resolved track width ×
 >    value) and mutated *imperatively* during drag by `SliderDragState`. A `View`
@@ -124,14 +79,10 @@ and how we get there."
 >    old 2b.0 note flagged for `param_card`, now understood to apply to the whole
 >    slider/drawer family.
 >
-> **UPDATE 2026-06-22: all of the above is DONE** — every card + the inspector
-> composite + `layer_header` + `audio_setup_panel` chrome + 2b.11 typed dropdowns
-> are migrated, verified (golden byte-equivalence + focused tests), and pushed (35
-> commits). The dragged/real-time widget bodies stay imperative by design (the
-> chrome-declarative / widget-imperative split). The note below is kept as the
-> historical rationale for why the heavyweights were staged rather than done blind;
-> the running-build check still applies to anyone re-touching the live
-> drag/drawer/meter paths. See the Phase-2b completion summary at the end of section 13.
+> All cards, the inspector composite, and the typed dropdowns are migrated
+> (golden byte-equivalence + focused tests). Dragged/real-time widget bodies stay
+> imperative by design — the chrome-declarative / widget-imperative split. The
+> running-build check applies to anyone re-touching live drag/drawer/meter paths.
 >
 > **Phase 2a (Chrome API):** a declarative `chrome` module in `manifold-ui` — a panel
 > describes its UI once as a `View` tree; a `ChromeHost` reconciler decides build-vs-update

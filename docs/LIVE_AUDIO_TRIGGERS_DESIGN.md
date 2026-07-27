@@ -606,7 +606,7 @@ app       PanelAction + dispatch + state_sync card view                WIRE
 - [x] **P4 — Ship (P1/P2/P3a only — P3b not in this landing).** Full workspace
       gate rerun twice — once pre-merge in the `wave/param-triggers` worktree,
       once more in the main checkout after merging a concurrent BUG-052 (sample-rate-dependent-detection) landing
-      (`216549e2`/`6e0e8988`) that arrived while this was landing — both green
+ that arrived while this was landing — both green
       (workspace suite, `manifold-core` 318, `gpu-proofs` 1245, workspace clippy).
       Merged `--no-ff` into `main`, pushed, rejected once (someone
       else landed first — the sample-rate-invariance fix), re-fetched/merged/
