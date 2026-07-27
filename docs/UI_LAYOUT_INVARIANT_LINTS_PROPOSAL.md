@@ -2,7 +2,7 @@
 
 **Status:** PROPOSED · 2026-07-10 · Fable, from Peter's ask after BUG-108 (effect-card-add-effect-button-floats-over-sectio…)'s escape
 **Prerequisites:** none — UI_HARNESS_UNIFICATION P0–P3 SHIPPED, UI_CLIP_AND_Z_OWNERSHIP shipped the flags this leans on
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
 The harness renders the app faithfully and dumps every node's real rect — and then the
 only thing standing between a layout defect and main is someone looking at a PNG and

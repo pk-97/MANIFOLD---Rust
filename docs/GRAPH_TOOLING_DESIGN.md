@@ -2,13 +2,13 @@
 
 **Status:** SHIPPED — P1–P4 built, gated, and landed 2026-07-13 (same-day design→execution, Fable orchestrating Sonnet workers). Deferred items in section 7 remain open.
 **Prerequisites:** none. NODE_VOCABULARY_AUDIT apply pass is SHIPPED (2026-07-03), so the catalog speaks final names. This design deliberately pulls the *validate* slice of MCP_INTERFACE_DESIGN P2 forward as a CLI; the MCP server itself stays where DESIGN_BUILD_ORDER puts it (wave 3, after COMPONENT_LIBRARY).
-**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 before starting any phase.
+**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
 Peter's directives, verbatim (2026-07-13): *"I want graph composition to be easy, effortless, and accurate."* · *"Surely our graphs and atoms should be opt-out and work with fusion by default?"* · *"This will be a fundamental part of the authoring process so it needs to be strong, fast, safe, efficient, and sensible."*
 
 **The governing insight:** everything an agent needs to compose graphs mechanically already exists in the codebase — the catalog generator, the preset validator, the pure fusion classifier — but each is reachable only from one call site (a doc generator, a bundled-preset checker, the freeze pipeline). This design adds **no new validation or classification logic**. It extracts one seam (a shared validate function), exposes two CLI verbs over existing machinery, and adds one enforcement test that converts Peter's fusable-by-default rule from prose into a build failure. The instrument story: this is authoring infrastructure for the ~Aug content push — an agent (or later, Claude Desktop via MCP) authoring presets gets machine-checked feedback in milliseconds, and an imported .glb either loads clean or names the node and port that's wrong at drag-in time, never mid-rehearsal.
 
-Companion docs: `MCP_INTERFACE_DESIGN.md` (the server this front-runs; its section 6 (Authoring loop (declarative, not imperative)) validate contract is implemented here), `ADDING_PRIMITIVES.md` section"The codegen path is mandatory" (the exemption taxonomy section 5 enforces), `FREEZE_COMPILER_MAP.md` (authoritative fusion pipeline), the `codegen-conversion-sweep` memory (the 2026-07-11 triage that seeds the declarations).
+Companion docs: `MCP_INTERFACE_DESIGN.md` (the server this front-runs; its section 6 (Authoring loop (declarative, not imperative)) validate contract is implemented here), `ADDING_PRIMITIVES.md` section"The codegen path is mandatory" (the exemption taxonomy section 5 (Tool surface (v1 — 14 tools)) enforces), `FREEZE_COMPILER_MAP.md` (authoritative fusion pipeline), the `codegen-conversion-sweep` memory (the 2026-07-11 triage that seeds the declarations).
 
 ---
 

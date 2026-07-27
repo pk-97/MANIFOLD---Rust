@@ -87,7 +87,7 @@ Order matters less than presence. A prompt missing one of these is not done.
    the steps is the BUG-061 hole.
 
 3. **Read-first list.** The design doc WHOLE (never sections — the traps live in the
-   parts that look skippable), its contract header, `DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6,
+   parts that look skippable), its contract header, `DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes),
    the context docs the design names, and the **binding memories by exact name** so
    the session can pull them. Naming a memory is how judgment crosses the context
    boundary — "audio-stays-on-perform-surface" in the prompt is worth a paragraph of

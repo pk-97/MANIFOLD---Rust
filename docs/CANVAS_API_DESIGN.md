@@ -9,7 +9,7 @@
 > keyboard owner over a literal shared `process_events`) match what shipped.
 
 Sub-design-doc for **Phase 4** of the UI Architecture Overhaul
-(`docs/UI_ARCHITECTURE_OVERHAUL.md` section 5.4 (Graph Canvas API), section 13). Scopes the six Phase-4 tasks
+(`docs/UI_ARCHITECTURE_OVERHAUL.md` section 5.4 (Graph Canvas API), section 13 (Phase checklist (the cross-chat tracker))). Scopes the six Phase-4 tasks
 against the codebase as it actually stands today. Written after a full read of
 the graph-editor surface (the 4,262-line `graph_canvas.rs`, the sidebar panels,
 the `PanelAction` graph block, and the editor window's input fork); every claim

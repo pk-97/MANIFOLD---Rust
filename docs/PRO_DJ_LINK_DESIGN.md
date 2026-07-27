@@ -8,7 +8,7 @@ CDJs/mixer (Peter has gig access).**
 **Companion: `DJ_PERFORMANCE_DESIGN.md` (DJing from Ableton; this doc is DJing
 from the booth). Both are instances of one abstraction: external musical
 timelines driving MANIFOLD.**
-**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 and section 8 before any
+**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before any
 phase. Hardening level: conformance — re-derive all anchors at implementation.**
 
 Peter's ask (2026-07-03): sync with Pioneer/AlphaTheta gear "using the same

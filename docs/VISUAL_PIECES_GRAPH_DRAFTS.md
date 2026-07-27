@@ -6,7 +6,7 @@
 
 **How to read a piece:** *Intent* is the stage sentence. *Audit* says what ships today, what gets extended, what is genuinely new. *Graph* gives the top-level groups (GROUPING_GRAPHS.md discipline: spine visible, 6–12 boxes, control plumbing gathered). *New atoms* carry full port/param signatures and the one-dispatch statement each must satisfy. *Card* is the performer surface — ≤12 outer params, prime modulation targets marked **(mod)**. *Verify* names the gate.
 
-**Tiers.** **A** — buildable now against the shipped registry. **B** — rides vocabulary committed in approved designs (GAUSSIAN_SPLATS_DESIGN.md section 3 (The atoms (all new — section 1 audit)), BOX3D_PHYSICS_DESIGN.md section 2 (Decisions)–section 3). **C** — rides waves whose atom vocabulary is not yet committed (XPBD sims, multi-display, Realtime-3D P2 shadows); atom names there are PROPOSED and the wave design may rename them.
+**Tiers.** **A** — buildable now against the shipped registry. **B** — rides vocabulary committed in approved designs (GAUSSIAN_SPLATS_DESIGN.md section 3 (The atoms (all new — section 1 (Audit — what exists (verified 2026-07-05)) audit)), BOX3D_PHYSICS_DESIGN.md section 2 (Decisions)–section 3 (The atoms (all new — section 1 audit))). **C** — rides waves whose atom vocabulary is not yet committed (XPBD sims, multi-display, Realtime-3D P2 shadows); atom names there are PROPOSED and the wave design may rename them.
 
 ## Pick-list summary
 
@@ -600,7 +600,7 @@ Pinned to GAUSSIAN_SPLATS_DESIGN.md section 3 (`splat_source`, `mask_splats_by_c
 
 ## B1. Monolith Collapse (set-piece composition)
 
-**Intent.** A photoreal column/facade at 1:1 on the tower, static long enough to be filed as architecture — then it fails, physically, and the screen goes dark. (Full dramaturgy: archive/VISUAL_BRAINSTORM_2026_07_08.md section 4.)
+**Intent.** A photoreal column/facade at 1:1 on the tower, static long enough to be filed as architecture — then it fails, physically, and the screen goes dark. (Full dramaturgy: archive/VISUAL_BRAINSTORM_2026_07_08.md section 4. (The monolith set-piece (Peter's idea, sharpened)))
 
 **Variant a — statue/organic (splat dissolve):** `splat_source(scan)` → `mask_splats_by_bounds` (crop + reveal volume) → `displace_splats(simplex, amount = Collapse card, mask-weighted so failure starts at the top)` → `render_splats(look_at_camera, static, 1:1 framing)`. D5's displacement-comes-home gives the rebuild for free: Collapse back to 0 re-forms the statue over the outro.
 

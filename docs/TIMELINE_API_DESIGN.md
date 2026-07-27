@@ -8,7 +8,7 @@
 > what shipped, including the `trim.rs`-not-reused note in section 3.3).
 
 Sub-design-doc for **Phase 3** of the UI Architecture Overhaul
-(`docs/UI_ARCHITECTURE_OVERHAUL.md` section 5.3 (Timeline API), section 13). Scopes the six Phase-3 tasks
+(`docs/UI_ARCHITECTURE_OVERHAUL.md` section 5.3 (Timeline API), section 13 (Phase checklist (the cross-chat tracker))). Scopes the six Phase-3 tasks
 against the codebase as it actually stands today. Written after a full read of
 the timeline surface; every claim below is backed by a `file:line`.
 

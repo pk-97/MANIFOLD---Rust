@@ -6,7 +6,7 @@
 
 > **Supersession note (2026-07-22, UI_FUNNEL P-Z):** references below to `dispatch_inspector` / `ActiveInspectorDrag` / `PanelAction` trio variants describe the PRE-decomposition architecture. Current state: 12 flat domain enums + exhaustive router (P-D), one Scrub gesture wire with `ScrubState.active` (P-I, `ActiveInspectorDrag` extinct), per-domain `dispatch/` handlers (P-B). Anchors here are historical.
 **Prerequisites:** SCENE_OBJECT_AND_PANEL_V2 (SHIPPED `e78d97d2`). Independent of REALTIME_3D P5/P6 (viewport/gizmos) — the two land in the same wave but share no code seam.
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
 Peter, 2026-07-17, looking at the shipped v2 panel against a real GLB import: *"It's also really weird to select objects, it only updates once you start moving the params. We should reuse the effect card and widget infra, unified style system etc. It needs to be more intuitive."* The governing insight: the v2 wave shipped the panel's **data contract** (scene VM, value-cell gestures, command routing) correctly, and its **presentation** as bespoke minimal rows. Every fix in this design is presentation and event plumbing — zero model changes, zero new state, zero new crates. On stage this is the difference between "scene editing exists" and "click an object, see its properties instantly, grab a value and pull" — the panel must respond at click speed mid-set, not at next-mutation speed.
 

@@ -17,7 +17,7 @@ _Original approved framing, kept for the record:_ APPROVED 2026-07-18. Supersede
 stub in `RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md` section Deferred (which framed R4 as a graph-wide
 re-index; this design rejected that — see D1). P0 was a proof-of-concept STOP gate; it did its job.
 
-**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 before any phase.
+**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before any phase.
 
 ## 1. Intake — what this does on stage
 

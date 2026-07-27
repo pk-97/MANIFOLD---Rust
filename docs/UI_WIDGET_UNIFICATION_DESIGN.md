@@ -18,7 +18,7 @@ arms, green before the fold and re-verified green after. Gates: `manifold-ui --l
 (`rg 'dragging_ableton_trim' crates/manifold-ui/src`) zero hits. **UI_WIDGET_UNIFICATION
 is now fully complete — P1 through P8, nothing outstanding.**
 **Prerequisites:** none
-**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 and section 8 before starting any phase.
+**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before starting any phase.
 
 Peter, 2026-07-10: *"The 2 different UI architectures we use between the main window and
 graph editor concerns me honestly"* → after the assessment: *"it's no longer theoretical.

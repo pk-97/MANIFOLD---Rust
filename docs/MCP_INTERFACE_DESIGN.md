@@ -3,7 +3,7 @@
 **Status:** Approved design, not implemented. Sonnet-executable.
 **Decided:** 2026-07-02. Decided questions in section 13 — do not reopen them.
 **Prerequisites:** NODE_VOCABULARY_AUDIT apply pass (the catalog this serves must speak the final vocabulary). COMPONENT_LIBRARY_DESIGN strongly recommended first — components are the authoring surface agents compose from. Sequencing: `docs/DESIGN_BUILD_ORDER.md` wave 3.
-**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 and section 8 before starting any phase. Conformance-hardened: run the section 8.3 pre-flight before each phase — the command/catalog surfaces this design wraps will have moved by execution time.
+**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before starting any phase. Conformance-hardened: run the section 8.3 pre-flight before each phase — the command/catalog surfaces this design wraps will have moved by execution time.
 
 MANIFOLD becomes an MCP server so AI assistants (Claude Desktop, and anything that speaks MCP to a localhost URL) can drive it directly — no Claude Code, no JSON knowledge required from the user.
 

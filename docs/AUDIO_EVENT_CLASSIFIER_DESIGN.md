@@ -2,7 +2,7 @@
 
 **Status:** IN PROGRESS — P1+P2+P3 executed 2026-07-18 (same day); heldout exam run, verdict SHORT OF BAR (see section 8): dev tuning plateaued (round 1 accepted, rounds 2+3 measured net-negative and reverted), heldout collapse proves a DATA gap, not a tuning gap. P4/P5 blocked on Peter's call: expand training data (D6 dial + more labeled shows / license-verified Splice) or park. ADTOF stays meanwhile; BUG-069 (shipping-license-audit) unchanged. · 2026-07-18 · Fable
 **Prerequisites:** none — the harness, shared data store, and truth assets all landed 2026-07-18 (`74c14de6` and ancestors).
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
 The governing insight, measured 2026-07-18: **detection is solved, naming is the
 wall.** On raw single-track masters of Peter's live show, the license-clean DSP

@@ -53,7 +53,7 @@ plus `card_reshape_roundtrips` / `macro_curve_inverse_roundtrips`
 (manifold-editing) for D9. The full vertical path (a real node-face drag
 moving both the card and the render) has not been driven end-to-end by an
 automated test — flagged for whoever picks up P2 or does the look-pass.
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
 Closes **BUG-158** (mapped-param-edits-snap-back-no-two-way-binding). The governing
 insight: a card binding makes the outer card param the *sole authority* the render

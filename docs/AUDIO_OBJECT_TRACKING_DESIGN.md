@@ -6,7 +6,7 @@ note at P5 below) + BUG-045 (gap-ring-down-chase); P6 dead, superseded by KICK_S
 truth-fixed 2026-07-10 (coherence audit F11) — was previously stated "APPROVED design,
 not built," which under-reported a mostly-shipped design and made the status board wrong.
 **Prerequisites:** none (the mod_harness eval loop shipped 2026-07-06 @ `ca9eb490`)
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
 This is **step 7 of [AUDIO_MODULATION_DESIGN.md](AUDIO_MODULATION_DESIGN.md)** — the
 "v2 intelligence" its feature seam was cut for. That doc's section 6 commitments (log-space

@@ -2,7 +2,7 @@
 
 **Status:** SHIPPED — P1–P2 built, gated, landed 2026-07-13 (same-day design→execution). Outcome: only FOUR contracts exist library-wide (mux selector/counts — Index/Count); every section 2 "likely real" floor/clamp was REJECTED on kernel evidence (P2 report in docs/landings/2026-07-13-param-range-contract.md). Text-entry hint clamps removed (5 sites).
 **Prerequisites:** GRAPH_TOOLING_DESIGN (SHIPPED 2026-07-13) — the card lints, `validate_def`, and the `boundary_reason` declared-excuse pattern this design reuses.
-**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 before starting any phase.
+**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
 Peter's rulings, verbatim (2026-07-13): *"Sliders that 'over drive' isn't a thing, a slider shouldn't be able to go past a value that makes no sense."* · *"We should make this a design and real fundamental invariant of the nodes and graph systems. Bloom sounds correct, it lets you blow out the image if you want. Inner nodes that don't have a real physical range or boundary shouldn't have a boundary — that's what the card mappings and ranges are for."* · *"As long as the node ranges and sliders themselves are not restrictive to users."*
 

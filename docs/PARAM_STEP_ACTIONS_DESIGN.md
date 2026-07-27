@@ -2,7 +2,7 @@
 
 **Status:** P1–P3 SHIPPED 2026-07-08 (`43a7f508`/`d9b46422`/`fd3f767e`); P4 (Plasma re-author) DEFERRED — Peter's call this session, not started, no code written. The full feature (Continuous/Step/Random on any param, audio- and clip-fired, drawer UI) is live and usable on every preset without P4; P4 is cleanup on one preset's leftover graph wiring. See `docs/landings/2026-07-08-param-step-actions.md` for gate output and the click-script.
 **Prerequisites:** LIVE_AUDIO_TRIGGERS section 9 unification (SHIPPED 2026-07-07 @ `14e0a90a`) — this design extends the unified `ParameterAudioMod`, which must exist as landed.
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
 The governing insight: the section 8/section 9 trigger work built a general event system (edge
 detection, fire modes, pulse plumbing, drawer UI) whose only response so far is
@@ -27,7 +27,7 @@ Two of Peter's calls decide the shape (both 2026-07-07, this session):
   a sibling response to the same events, not a replacement for event-consuming
   graphs (D10; forbidden move F6).
 
-Companions: `LIVE_AUDIO_TRIGGERS_DESIGN.md` section 8 (Param triggers — audio fires the Trigger controls (designed 2026-07-07, NOT BUILT))–section 9 (the event system this rides
+Companions: `LIVE_AUDIO_TRIGGERS_DESIGN.md` section 8 (Param triggers — audio fires the Trigger controls (designed 2026-07-07, NOT BUILT))–section 9 (Unification — the trigger IS an audio mod (Peter, 2026-07-07: "reuse the existing detectors so we don't have this stupid and dangerous split")) (the event system this rides
 on — read section 9 before any phase); `AUDIO_MODULATION_DESIGN.md` section 10 (UI — the drawer) (drawer
 mechanics); `AUTOMATION_LANES_DESIGN.md` section 4 (Override latch (the precedence rule)) (the base-writer contract steps
 shadow).

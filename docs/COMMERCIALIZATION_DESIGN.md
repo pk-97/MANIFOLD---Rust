@@ -6,7 +6,7 @@
 for Peter, not agents; read it for the why, this doc for the how.**
 **Prerequisites: none hard; P4 telemetry rides GIG_RESILIENCE P1–P2 breadcrumbs.
 All four phases ship inside v1.0 (launch gate — DESIGN_BUILD_ORDER section 3).**
-**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 and section 8 before
+**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before
 starting any phase. Hardening level: conformance (section 9) — re-derive all anchors
 at implementation; this doc predates execution by months.**
 

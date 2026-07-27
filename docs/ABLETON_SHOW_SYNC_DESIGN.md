@@ -4,7 +4,7 @@
 
 **Status: APPROVED (Peter, 2026-07-02). Not implemented. Sonnet-executable.**
 **Prerequisites: none (rides existing bridge + trigger-clip infra). Sequencing: `docs/DESIGN_BUILD_ORDER.md` wave 2.**
-**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 and section 8 before starting any
+**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before starting any
 phase. Conformance-hardened: audit claims are a 2026-07-02 snapshot — run the section 8.3
 pre-flight (re-verify bridge/timeline anchors) before each phase.**
 

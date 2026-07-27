@@ -2,7 +2,7 @@
 
 **Status: COMPLETE — all phases shipped: P-P/P-B 2026-07-21, P-D/P-I/P-S 2026-07-22, P-Z closed 2026-07-22. Landing reports in docs/landings/2026-07-2{1,2}-ui-funnel-*. Follow-on design items on the register: CHROME_PARAMS, GESTURE_ENTRY, ROW_MODEL_EDGES, VERIFICATION_INFRA (priority one). · Fable**
 **Prerequisites:** WIDGET_TREE (COMPLETE 2026-07-21), SCENE_PANEL_EXPOSURE_CONVERGENCE (COMPLETE 2026-07-21). Campaign register: `docs/ARCHITECTURE_DEBT.md` (inventory + wave map; status for this wave lives ONLY on this doc's Status line).
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 before starting any phase. Pure-move commits gate on `scripts/move_identity_check.py` (built + self-tested 2026-07-21).
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase. Pure-move commits gate on `scripts/move_identity_check.py` (built + self-tested 2026-07-21).
 
 **The governing insight: the funnel files are not big because the UI is big — they are big because four concerns (projecting state, describing surfaces, routing gestures, translating to commands) each live a slice in every domain's file instead of each owning a thin layer.** Every UI change funnels through `dispatch` (18 args, 303-variant match), `dispatch_inspector` (one 3,160-line function), `sync_inspector_data`/`push_state`, and `tick_and_render` (one 3,270-line frame function). The end state is the matrix: **layers are the hard boundaries, domains are small files within each layer.** Payoff test, honest form: adding a new panel touches nothing outside its own domain plus one registration line per registry.
 

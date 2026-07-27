@@ -27,7 +27,7 @@
 
 Phasing is unchanged in shape (P0 beachhead → P1 seam extraction → P2 repoint the runner + captures → P3 editor window); only P0's deliverable and gate change, restated in the P0 phase block below. Where the sections further down still speak of the red bracket, the differential-as-gate, or BUG-060 as the target, **this block wins.**
 **Prerequisites:** none unbuilt. Builds on UI_AUTOMATION P1–P2 (shipped: the `--script` driver + `AutomationAction`) and UI_CLIP_AND_Z P1 (shipped: per-panel `begin_region` wrap). Relates to BUG-060 (CLOSED 2026-07-10 @ `cc4eeb37`); fixes BUG-071 in P0 (D9c).
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
 **The governing insight: the app renders its main-window UI through a stateful GPU atlas cache (`UICacheManager`), and *not one test touches that code.* Both existing headless harnesses reimplement a lookalike of it — one renders the whole tree fresh every frame on the GPU (`render_ui_to_png`), the other walks node bounds in pure CPU with no pixels (`footer_leak_probe`). A stale-pixel bug lives only in the cache's incremental update, so both lookalikes are structurally blind to it. That blindness is why BUG-060 has been "fixed" and reopened ~4 times: every fix was proven green in a path the performer never runs.** This design makes the app's real render path callable, drives it from a single headless harness that also feeds real input, and proves the harness faithful by making it fail on a known-broken commit before it's trusted.
 

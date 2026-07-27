@@ -29,7 +29,7 @@ see that report for the full diagnosis.**
 object model and panel layout in place). BUG-199 (dock scroll) is explicitly OUT of this set —
 another session owns it (Peter, 2026-07-17: "another agent has BUG-199 planned for fixing so we
 can leave it out of this set").
-**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 and section 8 before starting any
+**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before starting any
 phase. Executor: Sonnet, orchestrated (Sonnet → Sonnet). Peter, verbatim: **"Sonnet must not
 make any decisions, it must just execute mechanical spec."** Anything that feels like a
 decision is an escalation, full stop.

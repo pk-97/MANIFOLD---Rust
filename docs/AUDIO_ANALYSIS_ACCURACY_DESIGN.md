@@ -4,7 +4,7 @@
 
 **Status:** IN PROGRESS — P1–P4 SHIPPED (P4 landed 2026-07-18: truth-type-aware scoring; BUG-235 (manifold-own-kick-fixtures-systematic-adtof-timi…) scorer calibration accepted, five-fixture kick 0.238→0.739; accepted production defaults kick thr×1.15 / snare ×1.3 / hat ×0.5 — dense F1 kick .858 snare .641 hat .303, heldout confirmed no recall regressions, hats +5.5pp; shape/cofire/phase knobs REJECTED for transcription, PARKED for trigger-selection layer; synth deferred n=1 coverage gap. Next: ADTOF bake-off addendum vs post-P4 numbers, then P5/P6) · designed 2026-07-08 · Fable
 **Prerequisites:** none. All work in `tools/audio_analysis/` plus two small Rust seams (new trigger-type variants + inspector rows) in P5.
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
 Peter's vision, verbatim (2026-07-08): *"My vision is we analyse the track and you get
 the full set of clips for the whole track with clips that actually make sense where the

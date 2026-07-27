@@ -124,9 +124,14 @@ def fix_file(path: Path, titles, write):
             if not fm or guard.NAME_PAREN_RE.match(out, sm.end()):
                 continue
             target = fm.group(1)
-            tpath = (path.parent / Path(target).name)
-            if not tpath.exists():
-                tpath = REPO / target.removeprefix("./")
+            base = Path(target).name
+            for cand in (path.parent / base, REPO / target.removeprefix("./"),
+                         REPO / "docs" / base, REPO / "docs/archive" / base):
+                if cand.exists():
+                    tpath = cand
+                    break
+            else:
+                tpath = path.parent / base
             title = heading_title(tpath, sm.group().split()[-1])
             if not title:
                 unresolved.append(f"{path.name}:{i+1} {target} {sm.group()} (no heading match)")

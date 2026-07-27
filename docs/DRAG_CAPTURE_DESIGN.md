@@ -2,7 +2,7 @@
 
 **Status:** SHIPPED 2026-07-08 (all phases) — **P1 @ `9bb8ca86`** (ownership D1–D4 + D9, L3); **P2 @ `12683746`** (z-aware seams D5 + `swallow_drag` retired, L1; VD-017/018); **P3 @ `f23fa1f1`** (immediate-drag threshold D6, L1; VD-019 = Peter's crossover-nudge feel pass) · design 2026-07-07 (approved same day by Peter) · Fable
 **Prerequisites:** none (BUG-058 (drag-end-consumable) instrumentation + BUG-059 (band-line-grab-falls-through) stopgap landed 2026-07-07 @ `fb2bdc07`; P2 deletes the stopgap)
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
 The governing insight: MANIFOLD has no single notion of who owns an in-flight drag.
 Four uncoordinated layers each re-decide per event — raw-position interceptors in

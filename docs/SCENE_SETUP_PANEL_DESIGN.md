@@ -6,7 +6,7 @@
 **Prerequisites:** none — every substrate this design consumes is SHIPPED and verified in-tree
 (SCENE_BUILD_AND_GROUP_PARAMS P1–P5, REALTIME_3D P1–P4/P8/P9, MATERIAL M1–M6, IMPORT_FIDELITY
 F-P1–F-P7, GLB_CONFORMANCE, the audio-dock `ScreenLayout` column, `ChangeGraphParamCommand`).
-**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 and section 8 before starting any
+**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before starting any
 phase. Executor: Sonnet, orchestrated overnight. The orchestrator may consult ONE Fable
 advisor agent, only on a critical blocking problem the doc does not foresee.
 

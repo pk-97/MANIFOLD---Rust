@@ -150,7 +150,7 @@ The current `Array<Particle>` only answers "how many bytes per item": 64. Everyt
 
 ### 3.5 Designed to compose with the fusion compiler
 
-The Channel type system is designed forward-compatible with the planned WGSL fusion compiler (see [GRAPH_COMPILER.md](GRAPH_COMPILER.md)). Decisions in section 4 (compile-time-known specs, deterministic std430 layout, const-foldable channel names, closed element-type set, simple match modes) are all in service of letting a future compiler pass walk a sub-graph of Channels-typed atoms and emit one fused shader without runtime introspection. **section 16 enumerates the specific constraints; future amendments to section 4 must check against section 16 before changing the type system shape.**
+The Channel type system is designed forward-compatible with the planned WGSL fusion compiler (see [GRAPH_COMPILER.md](GRAPH_COMPILER.md)). Decisions in section 4 (compile-time-known specs, deterministic std430 layout, const-foldable channel names, closed element-type set, simple match modes) are all in service of letting a future compiler pass walk a sub-graph of Channels-typed atoms and emit one fused shader without runtime introspection. **section 16 enumerates the specific constraints; future amendments to section 4 (Two unlocks, one engine) must check against section 16 before changing the type system shape.**
 
 ---
 

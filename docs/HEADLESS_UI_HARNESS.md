@@ -76,7 +76,7 @@ one.
 | `all` | Renders `timeline`, `states`, `inspector`, `graph` (default preset), and `editor` (default preset) in one process. | A full-app sweep for eyeballing everything after a change. |
 
 **Preset ids for `--preset`:** any shipping effect or generator id — e.g. `Mirror`, `Bloom`,
-`Tesseract`. The catalog lives in `docs/NODE_CATALOG.md` (section 5 (Effect presets)/section 6.1) and
+`Tesseract`. The catalog lives in `docs/NODE_CATALOG.md` (section 5 (Effect presets)/section 6.1 (JSON-defined)) and
 `assets/effect-presets/` + `assets/generator-presets/`. An unknown id exits 2 with a message.
 
 **Provenance:** the `feat/timeline-ui-redesign` review found the redesign rode three
