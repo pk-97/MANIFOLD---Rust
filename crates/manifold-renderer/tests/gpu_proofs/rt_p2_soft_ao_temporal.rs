@@ -95,6 +95,37 @@ fn upload_irr(device: &GpuDevice, r: f32, g: f32, b: f32, label: &str) -> GpuTex
     texture
 }
 
+/// RT-R2 S1: 1x1 Rgba16Float dummy texture for the accumulate_irradiance
+/// refl-cur/history params (inert — the S1 passthrough writes them and
+/// nothing downstream reads them in this fixture).
+fn dummy_rgba16(device: &GpuDevice, label: &str) -> GpuTexture {
+    device.create_texture(&GpuTextureDesc {
+        width: 1,
+        height: 1,
+        depth: 1,
+        format: manifold_gpu::GpuTextureFormat::Rgba16Float,
+        dimension: GpuTextureDimension::D2,
+        usage: GpuTextureUsage::SHADER_WRITE | GpuTextureUsage::SHADER_READ,
+        label,
+        mip_levels: 1,
+    })
+}
+
+/// RT-R2 S1: 1x1 R8Unorm dummy roughness texture (value 1.0) — in this
+/// fixture the value is never read.
+fn dummy_r8(device: &GpuDevice, label: &str) -> GpuTexture {
+    device.create_texture(&GpuTextureDesc {
+        width: 1,
+        height: 1,
+        depth: 1,
+        format: manifold_gpu::GpuTextureFormat::R8Unorm,
+        dimension: GpuTextureDimension::D2,
+        usage: GpuTextureUsage::SHADER_WRITE | GpuTextureUsage::SHADER_READ,
+        label,
+        mip_levels: 1,
+    })
+}
+
 /// A history texture, freshly allocated (undefined content — every use
 /// below either reset=true's into it first, or reads it only after a
 /// prior write).
@@ -328,9 +359,16 @@ fn run_accumulate_with_motion(
     obj_motion: [[f32; 4]; 4],
     label: &str,
 ) {
+    // RT-R2 S1: dummy refl textures for the accumulate call (inert — refl
+    // not exercised by P2 soft-AO temporal tests; the kernel's S1 passthrough
+    // writes them, nothing downstream reads them in this fixture).
+    let dummy_refl_cur = dummy_rgba16(device, "p2-dummy-refl-cur");
+    let dummy_refl_history = dummy_rgba16(device, "p2-dummy-refl-history");
+    let dummy_rough_half = dummy_r8(device, "p2-dummy-rough-half");
+
     let params_buffer =
         device.create_buffer_shared(std::mem::size_of::<AccumulateParams>() as u64);
-    let params = AccumulateParams::new([W, H], alpha, reset, obj_count, IDENTITY, IDENTITY);
+    let params = AccumulateParams::new([W, H], alpha, reset, obj_count, [0.0; 3], IDENTITY, IDENTITY);
     let obj_motion_buffer =
         device.create_buffer_shared(std::mem::size_of::<[[f32; 4]; 4]>() as u64);
     {
@@ -364,6 +402,10 @@ fn run_accumulate_with_motion(
             history.write_normal(),
             history.read_moments(),
             history.write_moments(),
+            &dummy_refl_cur,
+            &dummy_refl_history,
+            &dummy_refl_history,
+            &dummy_rough_half,
             label,
         );
     }

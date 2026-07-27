@@ -805,6 +805,16 @@ pub struct RenderScene {
     /// RT-R1 (§9.3): full-res reflection scratch for à-trous ping-pong
     /// (mirrors `rt_irr_full_b`). Inert/bind-only until T5.
     rt_refl_full_b: Option<manifold_gpu::GpuTexture>,
+    /// RT-R2 (§9.6 S1): specular-history ping-pong pair — the reflection
+    /// equivalent of `rt_irr_history`. Full-res Rgba16Float, same reset/
+    /// swap discipline as the irradiance history pair. Inert (passthrough)
+    /// until S2's virtual-reprojection accumulation.
+    rt_refl_history: [Option<manifold_gpu::GpuTexture>; 2],
+    /// RT-R2 (§9.6 S1, RD11): half-res R8 (fallback R16Float) per-pixel
+    /// roughness texture, written by `trace_shadow_rays` at every out_refl
+    /// write site (1.0 for pixels with no reflection value). Consumed
+    /// NEAREST at `tid/2` by accumulate_irradiance and atrous_filter.
+    rt_refl_rough_half: Option<manifold_gpu::GpuTexture>,
     /// RT-T1-C (RAYTRACING_DESIGN.md §8 Tier-1 item 1, BUG-311): the
     /// temporally-accumulated demodulated irradiance, its per-pixel depth,
     /// and its per-pixel normal history, each a PING-PONG PAIR —
@@ -1059,6 +1069,8 @@ impl RenderScene {
             rt_refl_half: None,
             rt_refl_full: None,
             rt_refl_full_b: None,
+            rt_refl_history: [None, None],
+            rt_refl_rough_half: None,
             rt_irr_history: [None, None],
             rt_depth_history: [None, None],
             rt_normal_history: [None, None],
@@ -1768,6 +1780,19 @@ impl RenderScene {
         // scratch (mirror `rt_irr_full`/`rt_irr_full_b`). Inert until T5.
         self.rt_refl_full = Some(make(width, height, rgba16, "node.render_scene rt_refl_full (RT-R1)"));
         self.rt_refl_full_b = Some(make(width, height, rgba16, "node.render_scene rt_refl_full_b (RT-R1 atrous)"));
+        // RT-R2 (§9.6 S1, RD11): specular-history ping-pong pair (full-res
+        // rgba16) and half-res per-pixel roughness (R8Unorm) — same reset
+        // discipline as the other history textures (undefined until first
+        // accumulate; `rt_moments_valid`-pattern gating by the caller).
+        self.rt_refl_history = [
+            make(width, height, rgba16, "node.render_scene rt_refl_history_a (RT-R2)"),
+            make(width, height, rgba16, "node.render_scene rt_refl_history_b (RT-R2)"),
+        ]
+        .map(Some);
+        // RD11: R8 (fallback R16Float) for per-pixel roughness at half-res.
+        // R8 is sufficient for roughness in [0,1]; R16Float if R8 lacks
+        // storage-write support on this device (not encountered on Apple).
+        self.rt_refl_rough_half = Some(make(half_w, half_h, manifold_gpu::GpuTextureFormat::R8Unorm, "node.render_scene rt_refl_rough_half (RT-R2)"));
         // RT-T1-C: current-frame primary-hit normal, same half/full
         // lifecycle as irradiance above (not persistent history).
         self.rt_normal_half = Some(make(half_w, half_h, rgba16, "node.render_scene rt_normal_half (RT-T1-C)"));
@@ -4157,6 +4182,7 @@ impl EffectNode for RenderScene {
                 let refl_half = self.rt_refl_half.as_ref().expect("ensured above");
                 let refl_full = self.rt_refl_full.as_ref().expect("ensured above");
                 let _refl_full_b = self.rt_refl_full_b.as_ref().expect("ensured above");
+                let refl_rough_half = self.rt_refl_rough_half.as_ref().expect("ensured above");
                 tracer.dispatch_shadow_rays(
                     gpu.native_enc,
                     accel,
@@ -4178,6 +4204,7 @@ impl EffectNode for RenderScene {
                     self.prefiltered_specular.as_ref().unwrap_or(
                         self.dummy_texture.as_ref().expect("ensured at 3491"),
                     ),
+                    refl_rough_half,
                     "node.render_scene RT-D3/RT-P2/RT-P3 trace_shadow_rays",
                 );
                 tracer.upsample_shadow(
@@ -4246,6 +4273,7 @@ impl EffectNode for RenderScene {
                         dst_n,
                         src_refl,
                         dst_refl,
+                        refl_rough_half,
                         "node.render_scene RT-T1-D atrous_pass",
                     );
                 }
@@ -4272,6 +4300,7 @@ impl EffectNode for RenderScene {
                     IRRADIANCE_ACCUM_ALPHA,
                     reset,
                     shadow_caster_draws.len() as u32,
+                    cam.pos,
                     inv_view_proj,
                     prev_view_proj,
                 );
@@ -4289,6 +4318,11 @@ impl EffectNode for RenderScene {
                 let normal_history_read = self.rt_normal_history[read_idx].as_ref().expect("ensured above");
                 let normal_history_write = self.rt_normal_history[write_idx].as_ref().expect("ensured above");
                 let moments_write = self.rt_moments_history[write_idx].as_ref().expect("ensured above");
+                // RT-R2 (§9.6 S1): specular-history ping-pong — SAME
+                // `read_idx`/`write_idx` as irradiance; passthrough (inert)
+                // until S2's virtual-reprojection accumulation replaces it.
+                let refl_history_read = self.rt_refl_history[read_idx].as_ref().expect("ensured above");
+                let refl_history_write = self.rt_refl_history[write_idx].as_ref().expect("ensured above");
                 tracer.accumulate_irradiance(
                     gpu.native_enc,
                     &accumulate_params,
@@ -4305,6 +4339,10 @@ impl EffectNode for RenderScene {
                     normal_history_write,
                     moments_read,
                     moments_write,
+                    refl_full,
+                    refl_history_read,
+                    refl_history_write,
+                    refl_rough_half,
                     "node.render_scene RT-P2/RT-T1-C/RT-T1-D accumulate_irradiance",
                 );
                 self.rt_history_ping = write_idx;

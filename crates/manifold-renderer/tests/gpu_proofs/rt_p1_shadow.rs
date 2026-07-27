@@ -230,6 +230,7 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         device.create_buffer_shared(std::mem::size_of::<manifold_gpu::raytrace::RtNormalSource>() as u64);
 
     let mut encoder = device.create_encoder("rt-p1-shadow-proof");
+    let dummy_roughness = harness::shared().dummy_roughness();
     tracer.dispatch_shadow_rays(
         &mut encoder,
         &accel,
@@ -244,6 +245,7 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         &out_n,
         &out_refl,
         &prefiltered_env,
+        &dummy_roughness,
         "trace_shadow_rays-proof",
     );
     encoder.commit_and_wait_completed();
@@ -441,6 +443,7 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
     let normal_sources_buffer =
         device.create_buffer_shared(std::mem::size_of::<manifold_gpu::raytrace::RtNormalSource>() as u64);
 
+    let dummy_roughness = harness::shared().dummy_roughness();
     let mut encoder = device.create_encoder("rt-p1-2blas-shadow-proof");
     tracer.dispatch_shadow_rays(
         &mut encoder,
@@ -456,6 +459,7 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
         &out_n,
         &out_refl,
         &prefiltered_env,
+        &dummy_roughness,
         "trace_shadow_rays-2blas-proof",
     );
     encoder.commit_and_wait_completed();

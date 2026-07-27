@@ -655,7 +655,7 @@ struct AccumulateParams {
     // float4x4s at the same 16-byte-aligned offsets the CPU mirror
     // asserts.
     uint  obj_count;
-    uint  pad0; uint pad1; uint pad2;
+    packed_float3 camera_pos;  // RT-R2 (§9.6 S1): per-pixel virtual-hit reprojection
     float4x4 inv_view_proj;
     float4x4 prev_view_proj;
 };
@@ -804,6 +804,9 @@ kernel void trace_shadow_rays(
     // has no env chain — the miss branch then reads the same nothing the
     // raster IBL would).
     texture2d<float>               prefiltered_env [[texture(69)]],
+    // RT-R2 (§9.6 S1): half-res R8 (per-pixel roughness) written at every
+    // out_refl write site — 6 + MAX_RT_MATERIAL_TEXTURES = 70.
+    texture2d<float, access::write> out_rough [[texture(70)]],
     uint2 tid [[thread_position_in_grid]])
 {
     if (tid.x >= p.trace_size.x || tid.y >= p.trace_size.y) return;
@@ -826,6 +829,7 @@ kernel void trace_shadow_rays(
         // `.a >= 0`. Alpha semantics: >0 hit distance, 0 env-miss
         // (RT_REFL_MISS_HIT_DIST), -1 no valid value.
         out_refl.write(float4(0, 0, 0, -1.0), tid);
+        out_rough.write(1.0, tid);  // RT-R2 S1: no roughness value — write 1.0 (max rough)
         return;
     }
     // Neighbor world positions (screen-space reconstruction, RT-D3) — kept
@@ -1074,6 +1078,7 @@ kernel void trace_shadow_rays(
             // RD7: above the cutoff+band the prefiltered env IS the
             // approximation — no ray cast.
             out_refl.write(float4(env, RT_REFL_MISS_HIT_DIST), tid);
+            out_rough.write(roughness, tid);  // RT-R2 S1: roughness from gi_materials[roi]
         } else {
             float3 rdir = R;
             if (roughness > 0.0) {
@@ -1149,6 +1154,7 @@ kernel void trace_shadow_rays(
             // visible edge (Q2's approved BRDF-domain split).
             float band_t = saturate((roughness - p.refl_max_roughness) / max(p.refl_rough_band, 1e-4));
             out_refl.write(float4(mix(traced, env, band_t), hit_dist), tid);
+            out_rough.write(roughness, tid);  // RT-R2 S1: roughness from gi_materials[hoi] or fallback
         }
     } else {
         // Reflections off this frame (or the primary ray missed — no
@@ -1157,6 +1163,7 @@ kernel void trace_shadow_rays(
         // primary-miss case covers Mask holes: the depth prepass writes
         // depth where the RT primary ray alpha-tests the triangle away).
         out_refl.write(float4(0, 0, 0, -1.0), tid);
+        out_rough.write(1.0, tid);  // RT-R2 S1: no roughness value — write 1.0
     }
 
     // RT-P2/D3: demodulated irradiance — AO-occluded flat ambient plus
@@ -1322,6 +1329,9 @@ kernel void atrous_filter(
     // filter).
     texture2d<float>                 src_refl     [[texture(8)]],
     texture2d<float, access::write>  dst_refl     [[texture(9)]],
+    // RT-R2 (§9.6 S1): half-res per-pixel roughness — bind-only (body
+    // untouched; S3 narrows the refl channel's luma sigma with it).
+    texture2d<float>                 rough_half   [[texture(10)]],
     uint2 tid [[thread_position_in_grid]])
 {
     if (tid.x >= p.size.x || tid.y >= p.size.y) return;
@@ -1443,6 +1453,13 @@ kernel void accumulate_irradiance(
     // 1e-5 scale this filter needs to resolve (catastrophic cancellation).
     texture2d<float>                     moments_read         [[texture(9)]],
     texture2d<float, access::write>      moments_write        [[texture(10)]],
+    // RT-R2 (§9.6 S1): specular-history plumbing — current frame's refl
+    // radiance, ping-pong history pair, half-res roughness texture.
+    // Bind-inert; body writes refl_history_write as pure passthrough.
+    texture2d<float>                     refl_cur             [[texture(11)]],
+    texture2d<float>                     refl_history_read    [[texture(12)]],
+    texture2d<float, access::write>      refl_history_write   [[texture(13)]],
+    texture2d<float>                     rough_half           [[texture(14)]],
     uint2 tid [[thread_position_in_grid]])
 {
     if (tid.x >= p.size.x || tid.y >= p.size.y) return;
@@ -1457,6 +1474,7 @@ kernel void accumulate_irradiance(
         depth_history_write.write(float4(cur_depth, 0, 0, 0), tid);
         normal_history_write.write(float4(cur_normal, 0), tid);
         moments_write.write(float4(cur_luma, cur_luma * cur_luma, 0, 0), tid);
+        refl_history_write.write(refl_cur.read(tid), tid);  // RT-R2 S1: passthrough
         return;
     }
 
@@ -1554,6 +1572,7 @@ kernel void accumulate_irradiance(
     depth_history_write.write(float4(cur_depth, 0, 0, 0), tid);
     normal_history_write.write(float4(cur_normal, 0), tid);
     moments_write.write(float4(moment1, moment2, 0, 0), tid);
+    refl_history_write.write(refl_cur.read(tid), tid);  // RT-R2 S1: passthrough (inert until S2)
 }
 
 // RT-T1-B value-level test surface ONLY (`docs/RAYTRACING_DESIGN.md` §8
@@ -1923,9 +1942,12 @@ pub struct AccumulateParams {
     /// (stale texture content across a topology change) reprojects
     /// camera-only instead of reading out of bounds.
     pub obj_count: u32,
-    /// Explicit pad — keeps the two `float4x4`s below on the 16-byte
-    /// offsets the MSL struct's own padding puts them at (asserted below).
-    pub _pad: [u32; 3],
+    /// RT-R2 (§9.6 S1): per-pixel virtual-hit reprojection point — the SAME
+    /// `cam.pos` `ShadowRayParams::camera_pos` carries, re-quired here so
+    /// `accumulate_irradiance` can reconstruct the virtual reflected point
+    /// before reprojecting it through object motion + prev camera. Replaces
+    /// the previous explicit pad (same 12 bytes, same 16B-alignment).
+    pub camera_pos: [f32; 3],
     /// RT-T1-C (BUG-311): current-frame inverse view-proj, for
     /// reconstructing this texel's world position from `depth_tex` — SAME
     /// matrix `ShadowRayParams::inv_view_proj` already carries this frame.
@@ -1937,7 +1959,7 @@ pub struct AccumulateParams {
     pub prev_view_proj: [[f32; 4]; 4],
 }
 
-// `size`(8) + `alpha`(4) + `reset`(4) + `obj_count`(4) + pad(12) = 32
+// `size`(8) + `alpha`(4) + `reset`(4) + `obj_count`(4) + `camera_pos`(12) = 32
 // bytes — a multiple of 16, so both `float4x4`s that follow land on a
 // 16-byte boundary (RT-T2-C widened the pre-matrix block from 16 to 32).
 // Asserted directly rather than re-derived, same discipline as the
@@ -1952,6 +1974,7 @@ impl AccumulateParams {
         alpha: f32,
         reset: bool,
         obj_count: u32,
+        camera_pos: [f32; 3],
         inv_view_proj: [[f32; 4]; 4],
         prev_view_proj: [[f32; 4]; 4],
     ) -> Self {
@@ -1960,7 +1983,7 @@ impl AccumulateParams {
             alpha,
             reset: reset as u32,
             obj_count,
-            _pad: [0; 3],
+            camera_pos,
             inv_view_proj,
             prev_view_proj,
         }
@@ -2136,6 +2159,9 @@ pub trait ShadowRayTracer {
         // reflection ray's miss radiance. Always bound (dummy when the
         // scene has no env chain).
         prefiltered_env: &GpuTexture,
+        // RT-R2 (§9.6 S1): half-res per-pixel roughness texture — written
+        // at every out_refl write site (1.0 for pixels without a value).
+        out_rough: &GpuTexture,
         label: &str,
     );
 
@@ -2186,6 +2212,9 @@ pub trait ShadowRayTracer {
         dst_n: &GpuTexture,
         src_refl: &GpuTexture,
         dst_refl: &GpuTexture,
+        // RT-R2 (§9.6 S1): half-res per-pixel roughness — bind-only
+        // (body untouched; S3 narrows refl channel's luma with it).
+        rough_half: &GpuTexture,
         label: &str,
     );
 
@@ -2223,6 +2252,13 @@ pub trait ShadowRayTracer {
         // comments.
         moments_read: &GpuTexture,
         moments_write: &GpuTexture,
+        // RT-R2 (§9.6 S1): specular-history plumbing — current refl
+        // radiance, ping-pong history pair, half-res roughness. Inert
+        // passthrough until S2.
+        refl_cur: &GpuTexture,
+        refl_history_read: &GpuTexture,
+        refl_history_write: &GpuTexture,
+        rough_half: &GpuTexture,
         label: &str,
     );
 }
@@ -2295,6 +2331,9 @@ impl MetalShadowRayTracer {
         // RT-R1: prefiltered_env, MSL [[texture(69)]] — miss-branch
         // radiance source.
         trace_slots.push((5 + MAX_RT_MATERIAL_TEXTURES as u32, SlotKind::Texture));
+        // RT-R2 (§9.6 S1): out_rough, MSL [[texture(70)]] — per-pixel
+        // roughness for virtual reprojection and roughness-aware filtering.
+        trace_slots.push((6 + MAX_RT_MATERIAL_TEXTURES as u32, SlotKind::Texture));
         let trace_pipeline = compile_pipeline(
             device,
             &library,
@@ -2338,6 +2377,8 @@ impl MetalShadowRayTracer {
                 // pipeline's slot-map note (T3 missed these too).
                 (8, SlotKind::Texture),
                 (9, SlotKind::Texture),
+                // RT-R2 (§9.6 S1): rough_half at [[texture(10)]] — bind-only.
+                (10, SlotKind::Texture),
             ]),
         );
         let accumulate_pipeline = compile_pipeline(
@@ -2358,6 +2399,12 @@ impl MetalShadowRayTracer {
                 (8, SlotKind::Texture), // RT-T1-C: normal_history_write
                 (9, SlotKind::Texture),  // RT-T1-D: moments_read
                 (10, SlotKind::Texture), // RT-T1-D: moments_write
+                // RT-R2 (§9.6 S1): specular-history plumbing — refl_cur,
+                // refl_history_read/write, rough_half at [[texture(11..14)]].
+                (11, SlotKind::Texture),
+                (12, SlotKind::Texture),
+                (13, SlotKind::Texture),
+                (14, SlotKind::Texture),
             ]),
         );
         let debug_fetch_normal_pipeline = compile_pipeline(
@@ -2477,6 +2524,7 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         out_n: &GpuTexture,
         out_refl: &GpuTexture,
         prefiltered_env: &GpuTexture,
+        out_rough: &GpuTexture,
         label: &str,
     ) {
         params_buffer.upload(bytemuck_bytes(params));
@@ -2538,6 +2586,11 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         bindings.push(GpuBinding::Texture {
             binding: 5 + MAX_RT_MATERIAL_TEXTURES as u32,
             texture: prefiltered_env,
+        });
+        // RT-R2 (§9.6 S1): out_rough at [[texture(70)]] — per-pixel roughness.
+        bindings.push(GpuBinding::Texture {
+            binding: 6 + MAX_RT_MATERIAL_TEXTURES as u32,
+            texture: out_rough,
         });
         encoder.dispatch_compute_with_accel(&self.trace_pipeline, 0, accel, &bindings, groups, label);
     }
@@ -2630,6 +2683,7 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         dst_n: &GpuTexture,
         src_refl: &GpuTexture,
         dst_refl: &GpuTexture,
+        rough_half: &GpuTexture,
         label: &str,
     ) {
         params_buffer.upload(atrous_params_bytes(params));
@@ -2683,6 +2737,11 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                     binding: 9,
                     texture: dst_refl,
                 },
+                // RT-R2 (§9.6 S1): rough_half at [[texture(10)]] — bind-only.
+                GpuBinding::Texture {
+                    binding: 10,
+                    texture: rough_half,
+                },
             ],
             groups,
             label,
@@ -2708,6 +2767,11 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         normal_history_write: &GpuTexture,
         moments_read: &GpuTexture,
         moments_write: &GpuTexture,
+        // RT-R2 (§9.6 S1): specular-history plumbing — inert passthrough.
+        refl_cur: &GpuTexture,
+        refl_history_read: &GpuTexture,
+        refl_history_write: &GpuTexture,
+        rough_half: &GpuTexture,
         label: &str,
     ) {
         params_buffer.upload(accumulate_params_bytes(params));
@@ -2768,6 +2832,24 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                 GpuBinding::Texture {
                     binding: 10,
                     texture: moments_write,
+                },
+                // RT-R2 (§9.6 S1): refl_cur/refl_history_read/refl_history_write/rough_half
+                // at [[texture(11..14)]] — inert passthrough.
+                GpuBinding::Texture {
+                    binding: 11,
+                    texture: refl_cur,
+                },
+                GpuBinding::Texture {
+                    binding: 12,
+                    texture: refl_history_read,
+                },
+                GpuBinding::Texture {
+                    binding: 13,
+                    texture: refl_history_write,
+                },
+                GpuBinding::Texture {
+                    binding: 14,
+                    texture: rough_half,
                 },
             ],
             groups,

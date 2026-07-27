@@ -123,6 +123,24 @@ impl ParityHarness {
         texture
     }
 
+    /// Create a 1x1 R8 roughness texture for tests that call
+    /// dispatch_shadow_rays but don't exercise reflections.
+    pub fn dummy_roughness(&self) -> GpuTexture {
+        let tex = self.device.create_texture(&GpuTextureDesc {
+            width: 1,
+            height: 1,
+            depth: 1,
+            format: GpuTextureFormat::R8Unorm,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_WRITE | GpuTextureUsage::SHADER_READ,
+            label: "rt-r2-dummy-roughness",
+            mip_levels: 1,
+        });
+        // Upload 1.0 as R8Unorm (255 = 1.0 in normalized format)
+        self.device.upload_texture(&tex, &[255u8]);
+        tex
+    }
+
     /// Feed a fully-transparent (all-zero, premultiplied) fixture into
     /// EVERY `Texture2D` input of `prim` and read back its first
     /// `Texture2D` output as raw `Rgba16Float` bytes.

@@ -221,6 +221,7 @@ fn run_fixture(alpha_mask: bool) -> [f32; 2] {
     let params_buffer = device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
     let gi_materials_buffer = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
 
+    let dummy_roughness = harness::shared().dummy_roughness();
     let mut encoder = device.create_encoder("rt-t2a-shadow-proof");
     tracer.dispatch_shadow_rays(
         &mut encoder,
@@ -236,6 +237,7 @@ fn run_fixture(alpha_mask: bool) -> [f32; 2] {
         &out_n,
         &out_refl,
         &prefiltered_env,
+        &dummy_roughness,
         "trace_shadow_rays-t2a-proof",
     );
     encoder.commit_and_wait_completed();
