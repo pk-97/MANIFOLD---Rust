@@ -11,8 +11,17 @@ from the docs each run, it cannot drift: the moment a build session flips a
 doc's status line, the next board reflects it.
 
 Usage:
-    python3 .claude/hooks/design_status.py          # print the board
-    python3 .claude/hooks/design_status.py --raw    # one line per doc, untrimmed
+    python3 .claude/hooks/design_status.py                    # print the board
+    python3 .claude/hooks/design_status.py --raw              # one line per doc, untrimmed
+    python3 .claude/hooks/design_status.py --lifecycle-check  # exit 1 on dead docs
+
+Lifecycle check (the docs-pile class fix, Peter 2026-07-28): a SHIPPED design
+doc must either be cited by a live surface (CLAUDE.md, hooks, memory, or any
+non-shipped doc — one hop, no credit for citations from other shipped docs)
+or move to docs/archive/. Liveness is recomputed every run, so a doc whose
+last citation disappears gets flagged automatically; nothing is hand-marked.
+Override for a deliberate uncited keep: a `Lifecycle: contract` line in the
+doc header. Enforced by crates/manifold-core/tests/docs_lifecycle.rs.
 
 The `last-changed` date is the drift check: a doc that says "not built" but
 was touched this week is the flag to look closer (the Haiku merge housekeeper
@@ -135,8 +144,61 @@ def build_board(raw: bool = False) -> str:
     return "\n".join(out)
 
 
+# Index-like docs list every doc by name; a mention there is not a citation.
+INDEX_DOCS = {"README.md", "DESIGN_BUILD_ORDER.md", "DESIGN_HARDENING_QUEUE.md"}
+
+
+def dead_shipped_docs() -> list[str]:
+    """SHIPPED design docs in docs/ top level with no live citation and no
+    `Lifecycle: contract` override. These belong in docs/archive/."""
+    docs = {p.name: p for p in DOCS.glob("*.md")}
+    shipped = set()
+    for p in DOCS.glob("*_DESIGN.md"):
+        s = status_line(p)
+        if s and bucket_of(s) == 3:
+            shipped.add(p.name)
+    live_text = (REPO / "CLAUDE.md").read_text(errors="replace")
+    live_text += "".join(p.read_text(errors="replace")
+                         for p in (REPO / ".claude/hooks").glob("*.py"))
+    mem = Path.home() / ".claude" / "projects"
+    live_text += "".join(p.read_text(errors="replace")
+                         for p in mem.glob("*/memory/*.md"))
+    live_text += "".join(docs[n].read_text(errors="replace") for n in docs
+                         if n not in shipped and n not in INDEX_DOCS)
+    dead = []
+    for n in sorted(shipped):
+        if n in live_text:
+            continue
+        header = "\n".join(docs[n].read_text(errors="replace").splitlines()[:40])
+        if "lifecycle: contract" in header.lower():
+            continue
+        dead.append(n)
+    return dead
+
+
+def lifecycle_check() -> int:
+    dead = dead_shipped_docs()
+    for n in dead:
+        print(f"DEAD {n}: SHIPPED, cited by no live surface")
+    if dead:
+        print(f"lifecycle: FAIL — {len(dead)} shipped doc(s) with no live citation. "
+              "Either `git mv docs/<doc> docs/archive/` (+ scripts/gen_docs_index.py) "
+              "or add a `Lifecycle: contract — <why>` header line.")
+        return 1
+    print("lifecycle: OK")
+    return 0
+
+
 def main() -> int:
-    print(build_board(raw="--raw" in sys.argv))
+    if "--lifecycle-check" in sys.argv:
+        return lifecycle_check()
+    board = build_board(raw="--raw" in sys.argv)
+    if "--raw" not in sys.argv:
+        dead = dead_shipped_docs()
+        if dead:
+            board += (f"\n\nARCHIVE CANDIDATES — shipped, cited by nothing live "
+                      f"({len(dead)}): " + ", ".join(dead))
+    print(board)
     return 0
 
 

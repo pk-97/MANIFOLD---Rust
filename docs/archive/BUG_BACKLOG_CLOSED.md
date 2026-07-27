@@ -488,7 +488,7 @@ Owed: the in-app one-press-closes confirmation (headless can't drive it), but th
 proven editor branch exactly. Original analysis below.
 
 **Symptom** — found 2026-07-04 auditing `window_input.rs`'s keyboard routing while
-implementing `docs/OVERLAY_SESSIONS_AND_PICKER_DESIGN.md`. For the MAIN window (effect/
+implementing `docs/archive/OVERLAY_SESSIONS_AND_PICKER_DESIGN.md`. For the MAIN window (effect/
 generator browser), once the search field has focus (`self.text_input.active &&
 field == SearchFilter`), every keystroke is intercepted by the `if self.text_input.active { ... }`
 block in `window_input.rs` (`primary_keyboard_input`, ~line 1593) before it ever reaches
@@ -1812,7 +1812,7 @@ MANIFOLD (project format X) than this build can open (Y). Update MANIFOLD to ope
 surfaced through the existing load-error modal (no app change). A coarse secondary guard
 refuses a newer archive `format_version`. No unknown-field round-trip (deferred by design D1 —
 refusal is the honest fix while an old build can't render missing effects). See
-docs/PROJECT_FILE_INTEGRITY_DESIGN.md.
+docs/archive/PROJECT_FILE_INTEGRITY_DESIGN.md.
 
 **Found 2026-07-07 by the PROJECT_IO_MAP read (docs/PROJECT_IO_MAP.md section 9 E1).**
 `migrate_if_needed` (migrate.rs:5) only gates on `is_version_less_than` — there is no check
