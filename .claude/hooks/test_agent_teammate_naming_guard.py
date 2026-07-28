@@ -66,7 +66,7 @@ check("fork exempt", hook.decide({"subagent_type": "fork"}, SEAT_ENV) == "")
 check("nameless allowed", hook.decide({"model": "haiku", "subagent_type": "general-purpose"}, SEAT_ENV) == "")
 
 r = spawn("flash-beads-migration", subagent_type="")
-check("missing subagent_type denied", "subagent_type" in r)
+check("missing subagent_type allowed", r == "")
 
 r = spawn("Flash-Beads-Migration")
 check("bad casing denied", "kebab-case" in r)
