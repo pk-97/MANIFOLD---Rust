@@ -71,7 +71,11 @@ def main() -> None:
         n = state["count"]
 
         # The written review resets the loop (newer than the previous action).
-        if os.path.exists(REVIEW_FILE):
+        # prev_mtime == 0.0 means no counter existed yet — a review file left
+        # over from an earlier session must NOT reset (it deleted the counter
+        # on every probe, so the guard never counted past 1: the 2026-07-28
+        # silent-disarm, 253 telemetry fires with zero output).
+        if prev_mtime > 0.0 and os.path.exists(REVIEW_FILE):
             try:
                 if os.path.getsize(REVIEW_FILE) >= 200 and os.path.getmtime(REVIEW_FILE) > prev_mtime:
                     os.remove(cp)

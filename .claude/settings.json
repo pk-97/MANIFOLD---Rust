@@ -99,6 +99,10 @@
           {
             "type": "command",
             "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" context-nudge.py"
+          },
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" delegation-nudge.py"
           }
         ]
       },
@@ -138,6 +142,10 @@
           {
             "type": "command",
             "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" agent-teammate-naming-guard.py"
+          },
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" delegation-nudge.py"
           }
         ]
       },
@@ -167,6 +175,10 @@
           {
             "type": "command",
             "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" context-nudge.py"
+          },
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" delegation-nudge.py"
           }
         ]
       },

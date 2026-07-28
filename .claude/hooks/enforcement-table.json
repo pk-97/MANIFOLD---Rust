@@ -1,5 +1,5 @@
 {
-  "comment": "Machine form of SEMANTIC_WORKFLOW_PROGRAMS.md §3 — every workflow transition and what enforces it. hook = machine, cannot be ignored; exit-code = runtime-checked; prompt = model goodwill (the known failure surface; migrate rows upward one at a time). gate_runner pre-wave verifies hook rows are registered and present, exit-code rows exist, and reports the prompt-row count as the open migration surface. Keep rows aligned with settings.json and the hooks directory; a row here with no live file goes red at wave start.",
+  "comment": "Machine form of SEMANTIC_WORKFLOW_PROGRAMS.md \u00a73 \u2014 every workflow transition and what enforces it. hook = machine, cannot be ignored; exit-code = runtime-checked; prompt = model goodwill (the known failure surface; migrate rows upward one at a time). gate_runner pre-wave verifies hook rows are registered and present, exit-code rows exist, and reports the prompt-row count as the open migration surface. Keep rows aligned with settings.json and the hooks directory; a row here with no live file goes red at wave start.",
   "transitions": [
     {
       "transition": "worktrees from slot ring only; no agent edits on main",
@@ -12,9 +12,14 @@
       "file": ".claude/hooks/preToolUseBash.py"
     },
     {
-      "transition": "debug escalation ladder — probe loops delegated, seam review first",
+      "transition": "debug escalation ladder \u2014 probe loops delegated, seam review first",
       "enforcement": "hook",
       "file": ".claude/hooks/probe-loop-guard.py"
+    },
+    {
+      "transition": "sustained hands-on grinding without delegation gets a routing nudge every 20 actions",
+      "enforcement": "hook",
+      "file": ".claude/hooks/delegation-nudge.py"
     },
     {
       "transition": "memory is rules, not history",
@@ -142,7 +147,7 @@
       "file": null
     },
     {
-      "transition": "no new landing reports — landing prose in the merge commit",
+      "transition": "no new landing reports \u2014 landing prose in the merge commit",
       "enforcement": "hook",
       "file": ".claude/hooks/landing-report-guard.py"
     },
