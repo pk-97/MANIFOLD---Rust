@@ -17,9 +17,15 @@ use crate::generators::mesh_common::MeshVertex;
 /// glTF extensions MANIFOLD's importer actually supports, independent of
 /// what the pinned `gltf` 1.4.1 crate's own feature-flag set types —
 /// GLB_XFAIL_BURNDOWN_DESIGN.md D1. Everything in `Cargo.toml`'s `gltf`
-/// feature list, plus extensions this codebase maps downstream that the
-/// crate has no typed accessor for at this version: `KHR_materials_unlit`
-/// (`MATERIAL_SYSTEM_DESIGN.md`'s unlit shading mode),
+/// feature list (which now includes `KHR_materials_unlit`'s typed
+/// `Material::unlit()` accessor — BUG-w5wv: this extension was declared
+/// supported here for a long time but never actually read anywhere, so
+/// unlit-authored assets got full PBR lighting; this module now reads the
+/// flag onto [`GltfMaterialInfo::unlit`] genuinely, unremapped, and
+/// `gltf_import/object_group.rs` routes an unlit material to
+/// `node.unlit_material` instead of `node.pbr_material`), plus extensions
+/// this codebase maps downstream that the crate has no typed accessor for
+/// at this version:
 /// `KHR_materials_pbrSpecularGlossiness` (converted to metal-rough at
 /// import, BUG-167), `KHR_materials_clearcoat` (raw-JSON sniff,
 /// `GLB_CONFORMANCE_DESIGN.md` G-P5), and — as of
@@ -45,7 +51,8 @@ const MANIFOLD_SUPPORTED_EXTENSIONS: &[&str] = &[
     "KHR_materials_specular",
     "KHR_materials_ior",
     "KHR_materials_volume",
-    // MANIFOLD-mapped, no typed crate accessor at 1.4.1:
+    // BUG-w5wv: now genuinely consumed — see `Material::unlit()` in the
+    // per-material parse below, routed downstream to `node.unlit_material`.
     "KHR_materials_unlit",
     "KHR_materials_pbrSpecularGlossiness",
     "KHR_materials_clearcoat",
@@ -1225,6 +1232,13 @@ pub(crate) struct GltfMaterialInfo {
     /// is already `true` when this is) and the importer emits a report
     /// line noting the downgrade.
     pub was_blend: bool,
+    /// BUG-w5wv: `KHR_materials_unlit` presence (`Material::unlit()`,
+    /// default `false`). Every other field on this struct stays the
+    /// genuine parsed glTF value — the importer (`gltf_import/
+    /// object_group.rs`) reads this flag to route the material to
+    /// `node.unlit_material` instead of `node.pbr_material`, not by
+    /// remapping any field here.
+    pub unlit: bool,
     /// `KHR_materials_ior`'s `ior` (default 1.5 — glTF's implicit default,
     /// and the value that makes `dielectric_f0` below collapse to today's
     /// hardcoded 0.04). GLB_CONFORMANCE_DESIGN.md G-P4/D5.
@@ -3657,6 +3671,19 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 }
             }
 
+            let emissive = m.emissive_factor();
+            let emissive_strength = m.emissive_strength().unwrap_or(1.0);
+            // BUG-w5wv: KHR_materials_unlit. Every glTF field above is read
+            // genuinely (no remap) — the importer (`gltf_import/object_group.rs`)
+            // routes an unlit material to `node.unlit_material` instead of
+            // `node.pbr_material` using this flag, feeding it the SAME
+            // base_color_factor/base_color_texture MANIFOLD already parses,
+            // so a textured unlit material keeps its texture through the
+            // shared `base_color_map` port every material kind samples via
+            // `resolve_albedo` (`render_3d_mesh.wgsl`) — no field on this
+            // struct needs to change shape for that to work.
+            let unlit = m.unlit();
+
             // GLB_XFAIL_BURNDOWN_DESIGN.md D3 (BUG-164): one lookup per map
             // family, keyed off the same texture index each map's own
             // field above already resolved — `None` (map unwired) reads
@@ -3680,7 +3707,7 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 vertex_color_varies,
                 metallic,
                 roughness,
-                emissive: m.emissive_factor(),
+                emissive,
                 alpha_mask,
                 alpha_cutoff: m.alpha_cutoff().unwrap_or(0.5),
                 base_color_texture,
@@ -3690,7 +3717,7 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 occlusion_texture,
                 occlusion_strength: m.occlusion_texture().map(|t| t.strength()).unwrap_or(1.0),
                 emissive_texture,
-                emissive_strength: m.emissive_strength().unwrap_or(1.0),
+                emissive_strength,
                 ior,
                 specular_factor,
                 specular_color_factor,
@@ -3734,6 +3761,7 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 volume_attenuation_color,
                 volume_thickness_texture,
                 was_blend,
+                unlit,
                 mr_texture_is_gloss_alpha,
                 vertex_count,
                 base_color_sampler,
@@ -3845,6 +3873,7 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
             volume_attenuation_color: [1.0, 1.0, 1.0],
             volume_thickness_texture: None,
             was_blend: false,
+            unlit: false,
             ior: 1.5,
             specular_factor: 1.0,
             specular_color_factor: [1.0, 1.0, 1.0],
@@ -4458,14 +4487,22 @@ mod tests {
         );
 
         // Known azalea shape: 2 distinct textured materials, no cameras,
-        // no default-material geometry.
+        // no default-material geometry. BUG-w5wv: both materials actually
+        // declare `KHR_materials_unlit` — this parse layer reads every
+        // field genuinely (no remap), so `base_color_texture` stays
+        // wired here exactly as a non-unlit textured material would; only
+        // `m.unlit` flags it. `gltf_import`'s importer is what routes an
+        // unlit material to `node.unlit_material` downstream — see
+        // `unlit_material_routes_to_unlit_material_card` in
+        // `gltf_import::tests` for that value-level gate.
         assert_eq!(summary.materials.len(), 2, "azalea has 2 materials with geometry");
         assert_eq!(summary.camera_count, 0);
         assert_eq!(summary.default_material_vertex_count, 0);
         for m in &summary.materials {
+            assert!(m.unlit, "material {} declares KHR_materials_unlit", m.material_index);
             assert!(
                 m.base_color_texture.is_some(),
-                "material {} should carry a base-color texture",
+                "material {} should carry a base-color texture (parsed genuinely, unremapped)",
                 m.material_index
             );
             assert!(m.vertex_count > 0);
@@ -4594,6 +4631,51 @@ mod tests {
         assert!((parsed.fov_y - 0.660_592_56_f32).abs() < 1e-5);
         assert!((parsed.near - 1.0).abs() < 1e-5);
         assert!((parsed.far - 10000.0).abs() < 1e-5);
+    }
+
+    /// BUG-w5wv: `KHR_materials_unlit` was declared supported
+    /// (`MANIFOLD_SUPPORTED_EXTENSIONS`) but never actually read — an
+    /// unlit-authored asset got full PBR lighting instead of a flat,
+    /// un-shaded look. This parse layer's fix is just the flag: `m.unlit`
+    /// reads `Material::unlit()` genuinely, and every other field
+    /// (`base_color_factor`, `base_color_texture`, `metallic`, `roughness`)
+    /// stays the real parsed glTF value — no remap here. Khronos's own
+    /// `UnlitTest.glb` conformance fixture carries two unlit, factor-only
+    /// materials; the downstream routing to `node.unlit_material` is
+    /// gated in `gltf_import::tests::unlit_material_routes_to_unlit_material_card`.
+    #[test]
+    fn unlit_flag_reads_genuinely_without_remapping_other_fields() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/khronos/UnlitTest.glb");
+        assert!(path.exists(), "UnlitTest.glb fixture missing at {}", path.display());
+        let summary = gltf_import_summary(&path).expect("parse UnlitTest.glb");
+        assert_eq!(summary.materials.len(), 2, "UnlitTest.glb has 2 unlit materials");
+
+        let expected_base_color: &[(&str, [f32; 3])] = &[
+            ("Orange", [1.0, 0.217_637_64, 0.0]),
+            ("Blue", [0.0, 0.217_637_64, 1.0]),
+        ];
+        for m in &summary.materials {
+            assert!(m.unlit, "material {} declares KHR_materials_unlit", m.material_index);
+            let name = m.name.as_deref().unwrap_or("<unnamed>");
+            let (_, expected) = expected_base_color
+                .iter()
+                .find(|(n, _)| *n == name)
+                .unwrap_or_else(|| panic!("unexpected material name {name}"));
+            for (c, expected_c) in expected.iter().enumerate() {
+                assert!(
+                    (m.base_color_factor[c] - expected_c).abs() < 1e-6,
+                    "{name}: base_color_factor[{c}] = {}, expected {} (genuine glTF value, unremapped)",
+                    m.base_color_factor[c],
+                    expected_c
+                );
+            }
+            assert_eq!(m.base_color_factor[3], 1.0, "{name}: alpha untouched");
+            assert_eq!(m.base_color_texture, None, "{name}: UnlitTest.glb has no textures");
+            assert_eq!(m.emissive, [0.0, 0.0, 0.0], "{name}: no emissiveFactor declared");
+            assert_eq!(m.metallic, 1.0, "{name}: metallic stays the glTF-spec default, unremapped");
+            assert_eq!(m.roughness, 1.0, "{name}: roughness stays the glTF-spec default, unremapped");
+        }
     }
 
     /// GLB_XFAIL_BURNDOWN_DESIGN.md D2 (BUG-167) value-level gate: known

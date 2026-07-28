@@ -113,19 +113,33 @@ pub(super) fn collides_with_object_group_inner_handle(name: &str, k: usize) -> b
 /// — a material literally named e.g. `"mat_0"` would otherwise stamp both the
 /// group/scene_object handle AND the sibling `node.pbr_material` handle with
 /// the same string, colliding once flattened (see that function's doc comment).
+///
+/// `name_seed` and `handle_k` are DELIBERATELY separate (BUG-w5wv): `name_seed`
+/// is purely cosmetic — which object this is WITHIN its own import/merge
+/// (0-based), driving the "Object N" fallback and the first suffix guess
+/// tried — while `handle_k` is the object's REAL inner-handle number
+/// (`mesh_{k}`/`mat_{k}`/…, [`merge.rs`]'s `max_local_k_recursive` may offset
+/// it past the target scene's own handles) and MUST be checked for
+/// self-collision regardless of the cosmetic seed. A fresh import passes the
+/// SAME value for both (`build_import_graph`'s `k`); a merge passes the
+/// per-merge loop position for `name_seed` (so a merged file's own first
+/// unnamed/colliding object is still "Object 1"/"Existing 1", not some large
+/// number reflecting the target's unrelated existing object count) and the
+/// offset `local_k` for `handle_k`.
 pub(super) fn unique_group_name(
     material_name: Option<&str>,
-    index: usize,
+    name_seed: usize,
+    handle_k: usize,
     used: &mut std::collections::HashSet<String>,
 ) -> String {
     let base = material_name
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(|s| s.replace('/', " "))
-        .unwrap_or_else(|| format!("Object {}", index + 1));
+        .unwrap_or_else(|| format!("Object {}", name_seed + 1));
     let mut name = base.clone();
-    let mut n = index + 1;
-    while used.contains(&name) || collides_with_object_group_inner_handle(&name, index) {
+    let mut n = name_seed + 1;
+    while used.contains(&name) || collides_with_object_group_inner_handle(&name, handle_k) {
         name = format!("{base} {n}");
         n += 1;
     }

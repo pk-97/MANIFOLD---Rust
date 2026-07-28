@@ -322,14 +322,22 @@ mod tests {
     /// (`snapshot_for_view` → `outer_routings_from_view`).
     #[test]
     fn gltf_import_group_material_bindings_resolve_through_groups() {
+        // BUG-w5wv: this test's whole premise is the shared Ambient knob's
+        // in-group fan-out, which only exists on a `node.pbr_material`
+        // (`node.unlit_material` has no `ambient` param, `fs_unlit` has no
+        // lighting to fill). The azalea CC0 fixture this test used to load
+        // turned out to itself declare `KHR_materials_unlit` on both its
+        // materials — a real asset, not a bug — so it no longer exercises
+        // this path at all. `two_material_pbr.glb` is a tiny hand-built
+        // synthetic fixture (two flat-shaded triangles, two ordinary
+        // non-unlit PBR materials, no Blender needed) that keeps the
+        // through-groups resolution premise intact with real importer
+        // machinery.
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../tests/fixtures/gltf/cc0__oomurasaki_azalea_r._x_pulchrum.glb");
-        if !path.exists() {
-            println!("gltf fixture missing at {}, skipping", path.display());
-            return;
-        }
+            .join("../../tests/fixtures/gltf/hostile/two_material_pbr.glb");
+        assert!(path.exists(), "two_material_pbr.glb fixture missing at {}", path.display());
         let (def, _report) = crate::node_graph::gltf_import::assemble_import_graph(&path)
-            .expect("assemble azalea import graph");
+            .expect("assemble two_material_pbr import graph");
 
         // Build the LoadedPresetView the pristine path builds — same
         // canonical_def + owned bindings + skip_mode `build_view` produces,

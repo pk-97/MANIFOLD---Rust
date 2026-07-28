@@ -65,6 +65,11 @@ gltf = { version = "1", features = [
     "KHR_materials_ior",
     "KHR_materials_pbrSpecularGlossiness",
     "KHR_materials_volume",
+    # BUG-w5wv: typed `Material::unlit()` accessor — was previously read
+    # only via raw-JSON sniff in `gltf_load.rs`'s doc comment claims, but
+    # never actually consumed anywhere; this feature is what makes the
+    # typed accessor exist to fix that.
+    "KHR_materials_unlit",
     # IMPORT_ANYTHING_WAVE_DESIGN.md W1: EXT_texture_webp textures omit the
     # base `source` index entirely (the image lives only behind the
     # extension), which the crate's default validation rejects as Missing.

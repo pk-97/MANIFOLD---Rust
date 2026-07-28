@@ -1268,7 +1268,14 @@ fn assembles_azalea_into_two_object_render_scene_graph() {
 
     assert_eq!(report.material_count, 2, "azalea has 2 materials with geometry");
     assert_eq!(report.object_count, 2);
-    assert_eq!(report.textures_wired, 2, "both azalea materials carry a base-color texture");
+    // BUG-w5wv: both azalea materials actually declare `KHR_materials_unlit`
+    // with a `baseColorTexture` — real-world unlit-textured assets, not a
+    // synthetic case. The importer routes them to `node.unlit_material`
+    // instead of `node.pbr_material`, but `base_color_texture` still wires
+    // to `node.scene_object`'s `base_color_map` port exactly like a non-unlit
+    // material's does (that wiring is unconditional on material kind — see
+    // `object_group.rs`), so `textures_wired` stays 2.
+    assert_eq!(report.textures_wired, 2, "both azalea textures still wire to base_color_map");
     assert_eq!(report.default_material_vertex_count, 0);
     assert!(report.camera_synthesized);
 
@@ -1397,25 +1404,21 @@ fn assembles_azalea_into_two_object_render_scene_graph() {
     // shared Ambient fill still starts at 0 — softbox lighting comes
     // from the envmap + sun, not a flat fill floor.
     assert_eq!(env_intensity.default_value, 1.0, "environment bakes at softbox intensity 1.0 by default (D7)");
-    let scene_ambient = meta.params.iter().find(|p| p.id == "scene_ambient").unwrap();
-    assert_eq!(scene_ambient.default_value, 0.0, "no ambient fill by default");
-    // The Ambient card fans out to every material's `ambient` param.
-    let ambient_targets: std::collections::HashSet<String> = meta
-        .bindings
-        .iter()
-        .filter(|b| b.id == "scene_ambient")
-        .filter_map(|b| match &b.target {
-            BindingTarget::Node { node_id, param } => {
-                assert_eq!(param, "ambient");
-                Some(node_id.as_str().to_string())
-            }
-            _ => None,
-        })
-        .collect();
-    assert_eq!(
-        ambient_targets,
-        ["mat_0", "mat_1"].into_iter().map(String::from).collect(),
-        "shared Ambient drives both azalea materials"
+    // BUG-w5wv: both azalea materials declare `KHR_materials_unlit`, so
+    // both route to `node.unlit_material` (no `ambient` param — `fs_unlit`
+    // has no lighting to fill). With zero materials binding to it, the
+    // shared "Ambient" card is correctly absent rather than orphaned (a
+    // param with nothing bound to it fails `check_card_lints`) — see
+    // `unlit_material_routes_to_unlit_material_card` for the routing gate
+    // itself and `scene.rs`'s conditional push of this card param.
+    assert!(
+        meta.params.iter().all(|p| p.id != "scene_ambient"),
+        "azalea's materials are all unlit — no material binds ambient, so \
+         the shared Ambient card must not be pushed"
+    );
+    assert!(
+        meta.bindings.iter().all(|b| b.id != "scene_ambient"),
+        "no unlit material contributes a scene_ambient binding"
     );
     // The envmap intensity slider is the Environment master; it fans out
     // to envmap.intensity AND hdri_gain.gain (G-P6).
@@ -1605,6 +1608,7 @@ fn build_import_graph_groups_each_object_and_flattens_to_flat_wiring() {
         volume_thickness_texture: None,
         was_blend: false,
         vertex_color_varies: false,
+        unlit: false,
         vertex_count: verts,
         base_color_sampler: super::gltf_load::GltfSamplerInfo::default(),
         normal_sampler: super::gltf_load::GltfSamplerInfo::default(),
@@ -1853,6 +1857,7 @@ fn full_material(material_index: u32, name: &str, verts: u32) -> super::gltf_loa
         volume_thickness_texture: None,
         was_blend: false,
         vertex_color_varies: false,
+        unlit: false,
         vertex_count: verts,
         base_color_sampler: super::gltf_load::GltfSamplerInfo::default(),
         normal_sampler: super::gltf_load::GltfSamplerInfo::default(),
@@ -2931,6 +2936,72 @@ fn imports_all_map_kinds_with_correct_color_spaces() {
     );
 }
 
+/// BUG-w5wv: a material with `KHR_materials_unlit` set must construct a
+/// `node.unlit_material` card, never `node.pbr_material` — the extension's
+/// own doctrine is "ignore every PBR term except baseColor", so this
+/// checks the routing decision itself (the emission-only stopgap this
+/// replaces still built `node.pbr_material`, which carries a residual
+/// specular/IBL sheen `node.unlit_material`'s `fs_unlit` doesn't have).
+/// `full_material` also sets normal/mr/occlusion/emissive textures — an
+/// unlit material must wire none of those (unlit ignores every PBR map
+/// family), but its `base_color_texture` must still wire `base_color_map`,
+/// the same shared port every material kind samples through.
+#[test]
+fn unlit_material_routes_to_unlit_material_card() {
+    let mut m = full_material(0, "Glow", 500);
+    m.unlit = true;
+    m.base_color_factor = [0.9, 0.3, 0.1, 1.0];
+    let summary = GltfImportSummary {
+        materials: vec![m],
+        bbox_min: [-1.0, -1.0, -1.0],
+        bbox_max: [1.0, 1.0, 1.0],
+        camera_count: 0,
+        default_material_vertex_count: 0,
+        animations: Vec::new(),
+        animation_report_lines: Vec::new(),
+        extension_report_lines: Vec::new(),
+    };
+    let path = std::path::Path::new("/tmp/synthetic_unlit.glb");
+    let (def, report) = build_import_graph(&summary, path).expect("build graph");
+    assert_eq!(
+        report.textures_wired, 1,
+        "base_color_texture wiring is unconditional on material kind"
+    );
+
+    let flat = manifold_core::flatten::flatten_groups(&def).expect("flatten");
+
+    let mat = flat
+        .nodes
+        .iter()
+        .find(|n| n.type_id == "node.unlit_material")
+        .expect("unlit material must construct a node.unlit_material card");
+    assert_eq!(mat.params.get("color_r"), Some(&float(0.9)));
+    assert_eq!(mat.params.get("color_g"), Some(&float(0.3)));
+    assert_eq!(mat.params.get("color_b"), Some(&float(0.1)));
+    assert_eq!(mat.params.get("color_a"), Some(&float(1.0)));
+    assert!(
+        !flat.nodes.iter().any(|n| n.type_id == "node.pbr_material"),
+        "an unlit material must never also construct a node.pbr_material card"
+    );
+
+    for prefix in ["normal_tex_", "mr_tex_", "occlusion_tex_", "emissive_tex_"] {
+        assert!(
+            !flat.nodes.iter().any(|n| n.node_id.starts_with(prefix)),
+            "unlit material must not wire a `{prefix}*` PBR-extension map source"
+        );
+    }
+
+    let scene_object = flat
+        .nodes
+        .iter()
+        .find(|n| n.type_id == "node.scene_object")
+        .expect("scene_object bind node");
+    assert!(
+        flat.wires.iter().any(|w| w.to_node == scene_object.id && w.to_port == "base_color_map"),
+        "unlit material's base_color_texture must still wire scene_object's base_color_map"
+    );
+}
+
 /// D5 ORM-packing: when `occlusion_texture` and `mr_texture` share the
 /// same glTF texture index (the common "one packed ORM image" case),
 /// the importer must wire ONE `node.gltf_texture_source` into BOTH
@@ -3749,6 +3820,109 @@ fn hostile_fixtures_merge_into_existing_scene() {
     }
 }
 
+/// Pre-existing merge-path bug (surfaced, not introduced, by BUG-w5wv):
+/// `build_object_group`'s `local_k` numbers a merged object's OWN inner
+/// STRING handles ("mat_{k}", "mesh_{k}", …), a SEPARATE identifier system
+/// from the numeric `EffectGraphNode.id` — those handles are what a card
+/// binding's `NodeId` addresses, and they're never renamed downstream. A
+/// fresh import's `local_k` always starts at 0, so merging a SECOND glTF
+/// (whose own `local_k` ALSO starts at 0) into a target scene that already
+/// has its own "mat_0" collides on that bare handle — `check_card_lints`/
+/// `graph.instance_by_node_id` then resolve the incoming material's OWN
+/// binding against the TARGET's colliding node instead of its own. Silently
+/// harmless when every colliding node happened to be identically
+/// `node.pbr_material` with similar-looking values (nobody could tell which
+/// of the two a binding actually landed on); this test proves the fix
+/// (`max_local_k_recursive`'s offset in `merge.rs`) with DISTINGUISHABLE
+/// values on each side, fully decoupled from the unlit-routing feature
+/// (BUG-w5wv's own `azalea + cubicspline_interp.glb` real-fixture merge,
+/// which DOES put two different primitive types behind the collision, is
+/// covered by `hostile_fixtures_merge_into_existing_scene`'s general sweep).
+#[test]
+fn merge_local_k_offset_avoids_colliding_with_the_targets_own_material_handle() {
+    use crate::node_graph::persistence::EffectGraphDefExt;
+    // Target: one object, its own material's color_r = 0.8 (full_material's
+    // default) — this is what a colliding resolution would WRONGLY return.
+    let target = scene_def_with_bbox_half_extent(1.0);
+    let (render_id, _existing_objects) = render_scene_objects(&target);
+
+    // Incoming: one object, color_r overridden to a clearly distinct value —
+    // pre-fix, this material's OWN `local_k` would ALSO be 0 (restarting
+    // independently of the target), colliding on the bare handle "mat_0".
+    let mut incoming = full_material(0, "Incoming", 300);
+    incoming.base_color_factor[0] = 0.15;
+    let summary = merge_summary(vec![incoming], 1.0);
+    let path = std::path::Path::new("/tmp/synthetic_merge_local_k_collision.glb");
+    let plan = merge_import_into_graph(&target, &summary, path).expect("merge incoming material");
+
+    // The offset must have moved the incoming material's handle off "mat_0"
+    // (the target's own material already claims it).
+    let incoming_mat_handle = plan
+        .new_nodes
+        .iter()
+        .find_map(|n| find_handle_by_type(n, "node.pbr_material"))
+        .expect("incoming material must build node.pbr_material");
+    assert_ne!(
+        incoming_mat_handle, "mat_0",
+        "incoming material's handle must not collide with the target's own mat_0"
+    );
+
+    let mut merged = target.clone();
+    merged.nodes.extend(plan.new_nodes.clone());
+    merged.wires.extend(plan.new_wires.clone());
+    if let Some(node) = merged.nodes.iter_mut().find(|n| n.id == render_id) {
+        node.params.insert(
+            "objects".to_string(),
+            SerializedParamValue::Int { value: plan.new_objects_count as i32 },
+        );
+    }
+    if let Some(meta) = merged.preset_metadata.as_mut() {
+        meta.params.extend(plan.new_card_params.clone());
+        meta.bindings.extend(plan.new_card_bindings.clone());
+        meta.string_bindings.extend(plan.new_string_bindings.clone());
+    }
+
+    let registry = PrimitiveRegistry::with_builtin();
+    let graph = merged.clone().into_graph(&registry).expect("merged graph must build");
+    let (errors, _warnings) = crate::node_graph::validate::check_card_lints(&merged, Some(&graph));
+    assert!(errors.is_empty(), "card lints rejected the merged def: {errors:?}");
+
+    // The incoming material's own "color_r" binding must resolve to ITS OWN
+    // node — proven by the VALUE (0.15), not the target's colliding 0.8.
+    let color_r_binding = merged
+        .preset_metadata
+        .as_ref()
+        .unwrap()
+        .bindings
+        .iter()
+        .find(|b| matches!(&b.target, BindingTarget::Node { node_id, param } if node_id.as_str() == incoming_mat_handle && param == "color_r"))
+        .expect("incoming material's color_r binding must exist");
+    let BindingTarget::Node { node_id, .. } = &color_r_binding.target else { unreachable!() };
+    let instance = graph
+        .instance_by_node_id(node_id)
+        .and_then(|idx| graph.get_node(idx))
+        .expect("color_r binding must resolve to a real node instance");
+    assert!(
+        matches!(
+            instance.params.get("color_r"),
+            Some(crate::node_graph::parameters::ParamValue::Float(v)) if (*v - 0.15).abs() < 1e-6
+        ),
+        "color_r binding must resolve to the INCOMING material's own node (0.15), not the \
+         target's colliding one (0.8) — got {:?}",
+        instance.params.get("color_r")
+    );
+}
+
+/// Group-aware handle search, mirroring [`contains_type`]: the first
+/// node of `type_id` anywhere in `node` (including inside its own group
+/// body), returning its OWN `handle`.
+fn find_handle_by_type<'a>(node: &'a EffectGraphNode, type_id: &str) -> Option<&'a str> {
+    if node.type_id == type_id {
+        return node.handle.as_deref();
+    }
+    node.group.as_ref()?.nodes.iter().find_map(|inner| find_handle_by_type(inner, type_id))
+}
+
 /// Group-aware type search: merge plans emit one GROUP node per object
 /// with the real producers in its `group.body`.
 fn contains_type(node: &EffectGraphNode, type_id: &str) -> bool {
@@ -4040,6 +4214,7 @@ fn corrupted_assembler_output_fails_validation_naming_the_node() {
         volume_thickness_texture: None,
         was_blend: false,
         vertex_color_varies: false,
+        unlit: false,
         vertex_count: verts,
         base_color_sampler: super::gltf_load::GltfSamplerInfo::default(),
         normal_sampler: super::gltf_load::GltfSamplerInfo::default(),
