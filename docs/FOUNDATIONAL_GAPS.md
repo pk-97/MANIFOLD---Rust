@@ -159,9 +159,12 @@ second real runtime (plugin host, remote render) arrives.
 BUG-056 (audio-mixdown-clippy-debt)/057 (clippy debt behind features). Non-default features rot because no
 gate builds them.
 
-**The missing system.** Not a system — a CI/gate matrix: the pre-push or
-periodic gate builds `--features gpu-proofs,ui-snapshot,journey-proofs,profiling`
-(build/clippy only, not the GPU-run suites). Half a day, kills the class.
+**Killed 2026-07-28.** `scripts/feature_matrix.py` clippy-checks every
+non-default feature in the workspace (build/lint only, not the GPU-run
+suites) as part of the landing sweep —
+GIT_TREE_DISCIPLINE.md section 2 (Landing protocol). Its coverage check
+fails when a Cargo.toml grows a feature the matrix doesn't list, so the
+matrix can't itself rot.
 
 ---
 
@@ -191,7 +194,8 @@ harness.
 
 ## Suggested order (stage risk × readiness)
 
-1. **A7** — half a day, kills a class, no design needed.
+1. ~~**A7** — half a day, kills a class, no design needed.~~ Done 2026-07-28:
+   `scripts/feature_matrix.py` in the landing sweep (see A7 entry).
 2. **B1 follow-through** — work PROJECT_IO_MAP honest edges; show files are
    the one unrecoverable asset.
 3. ~~**A1** — design the declarative projection (survey fields first; kill-test

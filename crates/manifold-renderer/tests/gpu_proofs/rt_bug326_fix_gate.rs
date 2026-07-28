@@ -146,9 +146,9 @@ fn imported_glb_rt_on_stays_within_80pct_of_baseline() {
     let h = harness::shared();
 
     // Baseline: rt=0.
-    let (mut rt_baseline, tex_baseline) = build_helmet_harness(&h, false, false);
+    let (mut rt_baseline, tex_baseline) = build_helmet_harness(h, false, false);
     for f in 0..90 {
-        frame(&mut rt_baseline, &h, &tex_baseline, f);
+        frame(&mut rt_baseline, h, &tex_baseline, f);
     }
     let baseline_frac = non_black_fraction_rgbf32(&readback_rgba_f32(&h.device, &tex_baseline));
 
@@ -157,11 +157,11 @@ fn imported_glb_rt_on_stays_within_80pct_of_baseline() {
     // back as black on this harness's fresh target (in-app the previous
     // frame persists). Window length is load-dependent (completion-handler
     // delivery), so a fixed frame count is flaky under full-suite load.
-    let (mut rt_on, tex_on) = build_helmet_harness(&h, true, true);
+    let (mut rt_on, tex_on) = build_helmet_harness(h, true, true);
     let threshold = 0.20 * baseline_frac;
     let mut on_frac = 0.0f64;
     for f in 0..600 {
-        frame(&mut rt_on, &h, &tex_on, f);
+        frame(&mut rt_on, h, &tex_on, f);
         if f >= 84 && f % 5 == 4 {
             on_frac = on_frac.max(non_black_fraction_rgbf32(&readback_rgba_f32(&h.device, &tex_on)));
             if on_frac >= threshold {

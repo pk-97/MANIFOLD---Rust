@@ -525,11 +525,11 @@ fn kill_mid_take_leaves_recoverable_file() {
     let poll_start = std::time::Instant::now();
     let mut reached_threshold = false;
     loop {
-        if let Ok(meta) = std::fs::metadata(&out) {
-            if meta.len() >= SIZE_THRESHOLD_BYTES {
-                reached_threshold = true;
-                break;
-            }
+        if let Ok(meta) = std::fs::metadata(&out)
+            && meta.len() >= SIZE_THRESHOLD_BYTES
+        {
+            reached_threshold = true;
+            break;
         }
         if poll_start.elapsed() >= POLL_TIMEOUT {
             break;

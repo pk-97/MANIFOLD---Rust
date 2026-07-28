@@ -356,11 +356,11 @@ mod gpu_tests {
         );
 
         // One firing column per lane, in lane (field) order bottom-up.
-        let fired_cols: [usize; ScopeOnsets::COUNT] = [10, 20, 30, 40];
+        let fired_cols: [usize; ScopeOnsets::COUNT] = [10, 20, 30];
         let silence = vec![0.0f32; 64];
         for c in 0..COLS as usize {
             let mut onsets = ScopeOnsets::default();
-            let lanes = [&mut onsets.kick, &mut onsets.low, &mut onsets.mid, &mut onsets.high];
+            let lanes = [&mut onsets.low, &mut onsets.mid, &mut onsets.high];
             for (lane, col) in lanes.into_iter().zip(fired_cols) {
                 if c == col {
                     *lane = 1.0;
