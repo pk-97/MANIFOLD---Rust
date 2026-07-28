@@ -1,6 +1,6 @@
 {
   "uid": "manifold-value",
-  "title": "MANIFOLD fleet — subscription value",
+  "title": "MANIFOLD fleet \u2014 subscription value",
   "description": "What the subscriptions are worth against what they cost. Every figure is notional: each provider's traffic priced at that provider's OWN published list rate, never billed. Invoices are ground truth. Anthropic rows come from Claude Code transcripts via scripts/claude_usage_export.py; every other provider comes from litellm SpendLogs.",
   "tags": [
     "manifold",
@@ -61,13 +61,80 @@
   },
   "panels": [
     {
+      "id": 8,
+      "type": "stat",
+      "title": "Data freshness \u2014 how long since each provider last reported",
+      "description": "Green: data is current. Red: that provider's feed has stopped, so an empty chart below means MISSING DATA, not zero usage. If everything here is green and a provider still looks empty, widen the time range (top right). Anthropic rows are pushed hourly by the launchd job com.manifold.claude-usage-export; every other provider logs through the litellm proxy as calls happen.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "manifold-litellm-pg"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dtdurations",
+          "decimals": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 86400
+              },
+              {
+                "color": "red",
+                "value": 172800
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": true
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT provider AS \"Provider\",\n       EXTRACT(EPOCH FROM (now() - max(ts))) AS \"age\"\nFROM manifold_fleet_usage\nGROUP BY provider\nORDER BY provider",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "manifold-litellm-pg"
+          },
+          "editorMode": "code"
+        }
+      ]
+    },
+    {
       "type": "row",
       "title": "Is the subscription paying for itself?",
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 0
+        "y": 4
       },
       "collapsed": false,
       "panels": []
@@ -75,7 +142,7 @@
     {
       "id": 1,
       "type": "bargauge",
-      "title": "Leverage — list-rate value earned per dollar of plan cost",
+      "title": "Leverage \u2014 list-rate value earned per dollar of plan cost",
       "description": "Above 1.0x the plan is ahead. Plan cost is prorated to the dashboard time range from the monthly figures at the top of the page.",
       "datasource": {
         "type": "grafana-postgresql-datasource",
@@ -85,7 +152,7 @@
         "h": 8,
         "w": 14,
         "x": 0,
-        "y": 1
+        "y": 5
       },
       "fieldConfig": {
         "defaults": {
@@ -155,7 +222,7 @@
         "h": 8,
         "w": 10,
         "x": 14,
-        "y": 1
+        "y": 5
       },
       "fieldConfig": {
         "defaults": {
@@ -245,7 +312,7 @@
         "h": 10,
         "w": 24,
         "x": 0,
-        "y": 9
+        "y": 13
       },
       "fieldConfig": {
         "defaults": {
@@ -330,7 +397,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 19
+        "y": 23
       },
       "collapsed": false,
       "panels": []
@@ -339,7 +406,7 @@
       "id": 4,
       "type": "table",
       "title": "Cost per completed agent turn",
-      "description": "An agent turn is a call that wrote 100+ output tokens — real work, not a permission verdict or a session title. This measures cost and throughput only; whether the turn was any GOOD is not in this database.",
+      "description": "An agent turn is a call that wrote 100+ output tokens \u2014 real work, not a permission verdict or a session title. This measures cost and throughput only; whether the turn was any GOOD is not in this database.",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "manifold-litellm-pg"
@@ -348,7 +415,7 @@
         "h": 10,
         "w": 14,
         "x": 0,
-        "y": 20
+        "y": 24
       },
       "fieldConfig": {
         "defaults": {
@@ -487,7 +554,7 @@
       "id": 5,
       "type": "barchart",
       "title": "Where the money actually goes",
-      "description": "Spend split by inferred work class. A large permission-classifier slice is overhead, not work — it is the auto-mode gate paying to say 'no' on every tool call.",
+      "description": "Spend split by inferred work class. A large permission-classifier slice is overhead, not work \u2014 it is the auto-mode gate paying to say 'no' on every tool call.",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "manifold-litellm-pg"
@@ -496,7 +563,7 @@
         "h": 10,
         "w": 10,
         "x": 14,
-        "y": 20
+        "y": 24
       },
       "fieldConfig": {
         "defaults": {
@@ -549,7 +616,7 @@
         "h": 6,
         "w": 12,
         "x": 0,
-        "y": 30
+        "y": 34
       },
       "fieldConfig": {
         "defaults": {
@@ -608,7 +675,7 @@
       "id": 7,
       "type": "timeseries",
       "title": "Daily list-rate value by provider",
-      "description": "Flat-lining on a provider means that seat is idle — a plan you are paying for and not using.",
+      "description": "Flat-lining on a provider means that seat is idle \u2014 a plan you are paying for and not using.",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "manifold-litellm-pg"
@@ -617,7 +684,7 @@
         "h": 6,
         "w": 12,
         "x": 12,
-        "y": 30
+        "y": 34
       },
       "fieldConfig": {
         "defaults": {
