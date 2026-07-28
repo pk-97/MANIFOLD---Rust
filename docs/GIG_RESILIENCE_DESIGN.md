@@ -317,7 +317,7 @@ forever → seamless re-attach. Result-hardened per D7.
   only, v1 — no auto-degradation; the operator sees it coming instead of
   guessing.
 
-## 9. Phasing (Sonnet-executable)
+## 9. Phasing
 
 Entry state for every phase: re-verify the section 1 anchors the phase touches (the
 audit is a 2026-07-02 snapshot). Forbidden across all phases: catch_unwind as a

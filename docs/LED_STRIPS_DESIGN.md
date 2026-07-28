@@ -121,7 +121,7 @@ Project side: the strip island is declared like any island (multi-display model)
 maps island columns → wire. Project ↔ venue separation matches projection mapping: content
 addresses the island, the venue profile knows the copper.
 
-## 5. Phasing (Sonnet-executable)
+## 5. Phasing
 
 - **P1 — Patch generalization + sACN.** `LedPatch`/`LedFixture`/`LedOutputDef` replace
   `LedSettings`; sACN sender alongside Art-Net; per-fixture pack (color order, reversal,

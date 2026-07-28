@@ -159,7 +159,7 @@ applies).
 - Author by grabbing things — Unity-style — then bind the same transforms to MIDI.
   The gizmo and the knob edit the same param.
 
-## 5. Phasing (Sonnet-executable)
+## 5. Phasing
 
 Forbidden, all phases: touching `render_mesh`/`render_copies` behavior (additive
 design) · `Arc<Mutex>` anywhere · viewport/gizmo state in `manifold-core` (it's

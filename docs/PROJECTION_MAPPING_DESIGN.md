@@ -209,7 +209,7 @@ commands; the venue file round-trips it (multi-display #13).
 
 ---
 
-## 7. Phasing (Sonnet-executable)
+## 7. Phasing
 
 Each phase lands alone. Present path = infrastructure → **full workspace test sweep
 gates every phase that touches it (P1, P2, P4).**

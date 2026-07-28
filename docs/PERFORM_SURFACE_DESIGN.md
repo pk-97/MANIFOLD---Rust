@@ -142,7 +142,7 @@ drawer does today. Zero new styling infra.
    rejection (steal-pass R1) still bounds it: arranging purpose-built panels, never composing
    arbitrary UI.
 
-## 8. Phasing (Sonnet-executable)
+## 8. Phasing
 
 Entry state, every phase: re-verify the section 1 anchors (`perform_mode/render.rs`,
 `state.rs`, `macros.rs`/`cue.rs`/`tracks.rs` snapshot structs, `panels/mod.rs:777` —

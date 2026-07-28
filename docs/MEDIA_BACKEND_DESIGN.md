@@ -298,7 +298,7 @@ starts with measurement** (instrument `image_renderer.rs` open→first-texture),
 Root-fix rule applies: whatever the measurement shows, fix the class (prefetch
 discipline), not the symptom.
 
-## 8. Phasing (Sonnet-executable)
+## 8. Phasing
 
 Entry state, every phase: re-verify the section 1 anchors (`decoder_ffi.rs:12`,
 `decode_scheduler.rs`, `metal_encoder.rs`, `image_renderer.rs` — audited 2026-07-02).

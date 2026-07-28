@@ -110,7 +110,7 @@ persistent buffers, keyed per the two-cache rules.
   crash is a lane-1 bake that breaks exactly on the downbeat.
 - Slow-motion everything: time-scale on a fader.
 
-## 5. Phasing (Sonnet-executable)
+## 5. Phasing
 
 Forbidden, all phases: fused per-effect sim nodes (D2) · private renderers (D7) ·
 variable-dt integration (D4) · new modulation machinery (D8) · per-frame allocation

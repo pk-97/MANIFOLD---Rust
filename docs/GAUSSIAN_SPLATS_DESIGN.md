@@ -196,7 +196,7 @@ writing the fragment shader, per `alpha-standardisation` — do not assume).
 - Content-thread cost: zero per-frame allocation (persistent buffers, pool
   discipline); parse never touches the content tick (background thread, D3).
 
-## 6. Phasing (Sonnet-executable)
+## 6. Phasing
 
 Forbidden, all phases: velocity/age channels on `Splat` or any splat stepper (D5) ·
 CPU per-frame sort or sort-every-N-frames (D6) · new deps for parsing (D3) ·
