@@ -742,6 +742,256 @@
           "editorMode": "code"
         }
       ]
+    },
+    {
+      "type": "row",
+      "title": "Tokens \u2014 totals over the selected range",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 40
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 9,
+      "type": "table",
+      "title": "Token totals by model \u2014 fresh input / cache / output",
+      "description": "Every token the fleet moved in this window, per model. Fresh input is what actually bills at full rate; cache reads bill at ~a tenth. OpenCode reports no cache split, so all its input counts as fresh here. Same numbers the value figures above are priced from.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "manifold-litellm-pg"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 14,
+        "x": 0,
+        "y": 41
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 1,
+          "custom": {
+            "align": "right",
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Provider"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "left"
+              },
+              {
+                "id": "unit",
+                "value": "none"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Model"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "left"
+              },
+              {
+                "id": "unit",
+                "value": "none"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Total"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "gauge",
+                  "mode": "basic"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              },
+              {
+                "id": "min",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "sortBy": [
+          {
+            "displayName": "Total",
+            "desc": true
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT provider AS \"Provider\",\n       model    AS \"Model\",\n       sum(prompt_tokens - cache_read - cache_write) AS \"Fresh input\",\n       sum(cache_read)    AS \"Cache read\",\n       sum(cache_write)   AS \"Cache write\",\n       sum(output_tokens) AS \"Output\",\n       sum(prompt_tokens + output_tokens) AS \"Total\"\nFROM manifold_fleet_usage\nWHERE $__timeFilter(ts)\nGROUP BY provider, model\nORDER BY \"Total\" DESC",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "manifold-litellm-pg"
+          },
+          "editorMode": "code"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "barchart",
+      "title": "Token mix by provider",
+      "description": "Total tokens stacked by kind. A tall green (cache read) stack is a provider doing cheap context re-reads; a tall orange (fresh input) stack is paying full rate for every prompt token.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "manifold-litellm-pg"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 10,
+        "x": 14,
+        "y": 41
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "fillOpacity": 85,
+            "lineWidth": 0,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Fresh input"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Cache read"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Cache write"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#c98500"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Output"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "orientation": "horizontal",
+        "xTickLabelRotation": 0,
+        "stacking": "normal",
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT provider AS \"Provider\",\n       sum(prompt_tokens - cache_read - cache_write) AS \"Fresh input\",\n       sum(cache_read)    AS \"Cache read\",\n       sum(cache_write)   AS \"Cache write\",\n       sum(output_tokens) AS \"Output\"\nFROM manifold_fleet_usage\nWHERE $__timeFilter(ts)\nGROUP BY provider\nORDER BY sum(prompt_tokens + output_tokens) DESC",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "manifold-litellm-pg"
+          },
+          "editorMode": "code"
+        }
+      ]
+    }
+  ],
+  "links": [
+    {
+      "type": "dashboards",
+      "title": "MANIFOLD dashboards",
+      "tags": [
+        "manifold"
+      ],
+      "asDropdown": false,
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "icon": "dashboard"
     }
   ]
 }

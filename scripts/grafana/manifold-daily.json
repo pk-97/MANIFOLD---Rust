@@ -628,6 +628,246 @@
           "editorMode": "code"
         }
       ]
+    },
+    {
+      "type": "row",
+      "title": "Tokens \u2014 what the fleet actually chewed through",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 23
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Tokens each day \u2014 by kind",
+      "description": "One stacked bar per day: fresh input (full price), cache reads (~tenth price), cache writes, and output. Compare against the cost chart above \u2014 a day tall here but cheap there means the caches were doing the carrying.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "manifold-litellm-pg"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 24
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 85,
+            "lineWidth": 0,
+            "barAlignment": 0,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Fresh input"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Cache read"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Cache write"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#c98500"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Output"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT date_trunc('day', ts AT TIME ZONE 'Australia/Sydney') AT TIME ZONE 'Australia/Sydney' AS time,\n       kind AS metric,\n       sum(v) AS value\nFROM (\n  SELECT ts, 'Fresh input' AS kind, prompt_tokens - cache_read - cache_write AS v\n    FROM manifold_fleet_usage WHERE $__timeFilter(ts)\n  UNION ALL SELECT ts, 'Cache read', cache_read\n    FROM manifold_fleet_usage WHERE $__timeFilter(ts)\n  UNION ALL SELECT ts, 'Cache write', cache_write\n    FROM manifold_fleet_usage WHERE $__timeFilter(ts)\n  UNION ALL SELECT ts, 'Output', output_tokens\n    FROM manifold_fleet_usage WHERE $__timeFilter(ts)\n) u\nGROUP BY 1, 2\nORDER BY 1",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "manifold-litellm-pg"
+          },
+          "editorMode": "code"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Tokens each day \u2014 by provider",
+      "description": "Total tokens (input + cache + output) per provider per day, same fixed provider colors as everywhere else. This is volume, not money \u2014 a provider can be huge here and cheap on the cost chart because its tokens are mostly cache reads.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "manifold-litellm-pg"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 24
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 85,
+            "lineWidth": 0,
+            "barAlignment": 0,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Anthropic"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Kimi"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "OpenCode"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Z.AI"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#c98500"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT date_trunc('day', ts AT TIME ZONE 'Australia/Sydney') AT TIME ZONE 'Australia/Sydney' AS time,\n       provider AS metric,\n       sum(prompt_tokens + output_tokens) AS value\nFROM manifold_fleet_usage\nWHERE $__timeFilter(ts)\nGROUP BY 1, provider\nORDER BY 1",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "manifold-litellm-pg"
+          },
+          "editorMode": "code"
+        }
+      ]
     }
   ],
   "templating": {
@@ -655,5 +895,19 @@
         ]
       }
     ]
-  }
+  },
+  "links": [
+    {
+      "type": "dashboards",
+      "title": "MANIFOLD dashboards",
+      "tags": [
+        "manifold"
+      ],
+      "asDropdown": false,
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "icon": "dashboard"
+    }
+  ]
 }

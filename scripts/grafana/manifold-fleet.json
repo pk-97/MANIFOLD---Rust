@@ -1,0 +1,112 @@
+{
+  "uid": "manifold-fleet",
+  "title": "MANIFOLD fleet",
+  "tags": ["manifold", "litellm"],
+  "timezone": "Australia/Sydney",
+  "refresh": "30s",
+  "time": {"from": "now-6h", "to": "now"},
+  "schemaVersion": 39,
+  "version": 2,
+  "annotations": {"list": []},
+  "templating": {"list": []},
+  "links": [
+    {"type": "dashboards", "title": "MANIFOLD dashboards", "tags": ["manifold"], "asDropdown": false, "includeVars": false, "keepTime": true, "targetBlank": false, "icon": "dashboard"}
+  ],
+  "panels": [
+    {"type": "row", "id": 1, "title": "Spend (list-rate equivalent — notional for subscription seats)", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0}, "collapsed": false, "panels": []},
+
+    {"type": "stat", "id": 2, "title": "Spend last 1h", "datasource": {"type": "prometheus", "uid": "Prometheus"},
+     "gridPos": {"h": 6, "w": 8, "x": 0, "y": 1},
+     "targets": [{"refId": "A", "expr": "sum by (model) (increase(litellm_spend_metric_total[1h]))", "legendFormat": "{{model}}", "instant": true, "range": false}],
+     "fieldConfig": {"defaults": {"unit": "currencyUSD", "color": {"mode": "thresholds"}, "thresholds": {"steps": [{"color": "green"}]}}, "overrides": []},
+     "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"}},
+
+    {"type": "stat", "id": 3, "title": "Spend last 24h", "datasource": {"type": "prometheus", "uid": "Prometheus"},
+     "gridPos": {"h": 6, "w": 8, "x": 8, "y": 1},
+     "targets": [{"refId": "A", "expr": "sum by (model) (increase(litellm_spend_metric_total[24h]))", "legendFormat": "{{model}}", "instant": true, "range": false}],
+     "fieldConfig": {"defaults": {"unit": "currencyUSD", "color": {"mode": "thresholds"}, "thresholds": {"steps": [{"color": "green"}]}}, "overrides": []},
+     "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"}},
+
+    {"type": "stat", "id": 4, "title": "Spend all-time (since metrics enabled)", "datasource": {"type": "prometheus", "uid": "Prometheus"},
+     "gridPos": {"h": 6, "w": 8, "x": 16, "y": 1},
+     "targets": [{"refId": "A", "expr": "sum by (model) (litellm_spend_metric_total)", "legendFormat": "{{model}}", "instant": true, "range": false}],
+     "fieldConfig": {"defaults": {"unit": "currencyUSD", "color": {"mode": "thresholds"}, "thresholds": {"steps": [{"color": "green"}]}}, "overrides": []},
+     "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"}},
+
+    {"type": "timeseries", "id": 5, "title": "Spend rate ($/h) by model", "datasource": {"type": "prometheus", "uid": "Prometheus"},
+     "gridPos": {"h": 8, "w": 24, "x": 0, "y": 7},
+     "targets": [{"refId": "A", "expr": "sum by (model) (rate(litellm_spend_metric_total[5m])) * 3600", "legendFormat": "{{model}}"}],
+     "fieldConfig": {"defaults": {"unit": "currencyUSD", "custom": {"drawStyle": "line", "fillOpacity": 15, "stacking": {"mode": "normal"}, "showPoints": "never"}}, "overrides": []},
+     "options": {"legend": {"displayMode": "table", "placement": "right", "calcs": ["lastNotNull", "mean"]}, "tooltip": {"mode": "multi"}}},
+
+    {"type": "row", "id": 6, "title": "Tokens", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 15}, "collapsed": false, "panels": []},
+
+    {"type": "timeseries", "id": 7, "title": "Input tokens/s", "datasource": {"type": "prometheus", "uid": "Prometheus"},
+     "gridPos": {"h": 8, "w": 8, "x": 0, "y": 16},
+     "targets": [{"refId": "A", "expr": "sum by (model) (rate(litellm_input_tokens_metric_total[5m]))", "legendFormat": "{{model}}"}],
+     "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "line", "fillOpacity": 15, "stacking": {"mode": "normal"}, "showPoints": "never"}}, "overrides": []},
+     "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi"}}},
+
+    {"type": "timeseries", "id": 8, "title": "Output tokens/s", "datasource": {"type": "prometheus", "uid": "Prometheus"},
+     "gridPos": {"h": 8, "w": 8, "x": 8, "y": 16},
+     "targets": [{"refId": "A", "expr": "sum by (model) (rate(litellm_output_tokens_metric_total[5m]))", "legendFormat": "{{model}}"}],
+     "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "line", "fillOpacity": 15, "stacking": {"mode": "normal"}, "showPoints": "never"}}, "overrides": []},
+     "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi"}}},
+
+    {"type": "timeseries", "id": 9, "title": "Cache-read + reasoning tokens/s", "datasource": {"type": "prometheus", "uid": "Prometheus"},
+     "gridPos": {"h": 8, "w": 8, "x": 16, "y": 16},
+     "targets": [
+       {"refId": "A", "expr": "sum by (model) (rate(litellm_provider_cache_read_input_tokens_metric_total[5m]))", "legendFormat": "{{model}} cache"},
+       {"refId": "B", "expr": "sum by (model) (rate(litellm_output_reasoning_tokens_metric_total[5m]))", "legendFormat": "{{model}} reasoning"}
+     ],
+     "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "line", "fillOpacity": 15, "showPoints": "never"}}, "overrides": []},
+     "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi"}}},
+
+    {"type": "stat", "id": 14, "title": "Input tokens — total over range", "datasource": {"type": "prometheus", "uid": "Prometheus"},
+     "gridPos": {"h": 5, "w": 8, "x": 0, "y": 24},
+     "targets": [{"refId": "A", "expr": "sum by (model) (increase(litellm_input_tokens_metric_total[$__range]))", "legendFormat": "{{model}}", "instant": true, "range": false}],
+     "fieldConfig": {"defaults": {"unit": "short", "decimals": 1, "color": {"mode": "thresholds"}, "thresholds": {"steps": [{"color": "blue"}]}}, "overrides": []},
+     "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"}},
+
+    {"type": "stat", "id": 15, "title": "Output tokens — total over range", "datasource": {"type": "prometheus", "uid": "Prometheus"},
+     "gridPos": {"h": 5, "w": 8, "x": 8, "y": 24},
+     "targets": [{"refId": "A", "expr": "sum by (model) (increase(litellm_output_tokens_metric_total[$__range]))", "legendFormat": "{{model}}", "instant": true, "range": false}],
+     "fieldConfig": {"defaults": {"unit": "short", "decimals": 1, "color": {"mode": "thresholds"}, "thresholds": {"steps": [{"color": "green"}]}}, "overrides": []},
+     "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"}},
+
+    {"type": "stat", "id": 16, "title": "Cache-read + reasoning tokens — total over range", "datasource": {"type": "prometheus", "uid": "Prometheus"},
+     "gridPos": {"h": 5, "w": 8, "x": 16, "y": 24},
+     "targets": [
+       {"refId": "A", "expr": "sum by (model) (increase(litellm_provider_cache_read_input_tokens_metric_total[$__range]))", "legendFormat": "{{model}} cache", "instant": true, "range": false},
+       {"refId": "B", "expr": "sum by (model) (increase(litellm_output_reasoning_tokens_metric_total[$__range]))", "legendFormat": "{{model}} reasoning", "instant": true, "range": false}
+     ],
+     "fieldConfig": {"defaults": {"unit": "short", "decimals": 1, "color": {"mode": "thresholds"}, "thresholds": {"steps": [{"color": "purple"}]}}, "overrides": []},
+     "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"}},
+
+    {"type": "row", "id": 10, "title": "Traffic & latency", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 29}, "collapsed": false, "panels": []},
+
+    {"type": "timeseries", "id": 11, "title": "Requests/min by model + status", "datasource": {"type": "prometheus", "uid": "Prometheus"},
+     "gridPos": {"h": 8, "w": 8, "x": 0, "y": 30},
+     "targets": [{"refId": "A", "expr": "sum by (requested_model, status_code) (rate(litellm_proxy_total_requests_metric_total[5m])) * 60", "legendFormat": "{{requested_model}} {{status_code}}"}],
+     "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "line", "fillOpacity": 15, "showPoints": "never"}}, "overrides": []},
+     "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi"}}},
+
+    {"type": "timeseries", "id": 12, "title": "Request latency p50 / p95 (s)", "datasource": {"type": "prometheus", "uid": "Prometheus"},
+     "gridPos": {"h": 8, "w": 8, "x": 8, "y": 30},
+     "targets": [
+       {"refId": "A", "expr": "histogram_quantile(0.50, sum by (le, model) (rate(litellm_request_total_latency_metric_bucket[5m])))", "legendFormat": "{{model}} p50"},
+       {"refId": "B", "expr": "histogram_quantile(0.95, sum by (le, model) (rate(litellm_request_total_latency_metric_bucket[5m])))", "legendFormat": "{{model}} p95"}
+     ],
+     "fieldConfig": {"defaults": {"unit": "s", "custom": {"drawStyle": "line", "fillOpacity": 10, "showPoints": "never"}}, "overrides": []},
+     "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi"}}},
+
+    {"type": "timeseries", "id": 13, "title": "Time to first token p50 / p95 (s)", "datasource": {"type": "prometheus", "uid": "Prometheus"},
+     "gridPos": {"h": 8, "w": 8, "x": 16, "y": 30},
+     "targets": [
+       {"refId": "A", "expr": "histogram_quantile(0.50, sum by (le, model) (rate(litellm_llm_api_time_to_first_token_metric_bucket[5m])))", "legendFormat": "{{model}} p50"},
+       {"refId": "B", "expr": "histogram_quantile(0.95, sum by (le, model) (rate(litellm_llm_api_time_to_first_token_metric_bucket[5m])))", "legendFormat": "{{model}} p95"}
+     ],
+     "fieldConfig": {"defaults": {"unit": "s", "custom": {"drawStyle": "line", "fillOpacity": 10, "showPoints": "never"}}, "overrides": []},
+     "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi"}}}
+  ]
+}
