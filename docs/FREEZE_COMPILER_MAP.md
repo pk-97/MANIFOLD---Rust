@@ -335,6 +335,7 @@ invariant a fused def must respect:
    at `late_capture` (`Backend::swap_texture_2d`, end of frame); cross-format
    loops bridge one dispatch. The editor thumbnail path pins the pre-swap
    texture identity (post-frame re-resolve strobed black on alternate frames).
+   Full history: `docs/archive/FEEDBACK_PINGPONG_DESIGN.md`.
 6. **Element-space authority** — `space.rs` never re-derives the dim rules; it
    builds the unfused plan and reads `resource_dims`/`resource_canvas_scales`.
    The plan's propagation (concrete / canvas-scaled / canvas, mixed-input ⇒
