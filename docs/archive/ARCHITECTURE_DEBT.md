@@ -1,5 +1,7 @@
 # Architecture Debt Register — god-file campaign inventory
 
+**FOLDED INTO BEADS 2026-07-28** (BUG-cu55, fold debt registers into beads). Named design items live as `bd` epics (CHROME_PARAMS, GESTURE_ENTRY, ROW_MODEL_EDGES, VERIFICATION_INFRA); wave status lives on the wave design docs; ceilings are enforced by `godfile_regrowth.rs`. Frozen — never edit.
+
 **This file is inventory and pointers, never status.** Wave status lives on each wave design doc's `**Status:**` line (the design-status board watches those). Baseline sizes/churn measured 2026-07-21; re-verify fresh at each wave's Phase 0 (`wc -l`, `git log --since --name-only`).
 
 Campaign origin: Peter, 2026-07-21 — *"I want god files gone, I want proper software architecture, designs, and boundaries."* Operating plan discussion + adversarial review same day. Godhood = size × churn × mixed concerns; cohesive large files are NOT targets.

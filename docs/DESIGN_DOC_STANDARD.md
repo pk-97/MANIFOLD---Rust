@@ -343,7 +343,7 @@ Written here once so docs don't repeat it; every doc's header points here.
    checkout (worktrees lack the gitignored fixtures) and reads the artifact. The
    landing report states the level reached (section 10), ends with a ≤2-minute
    click-script for Peter (numbered steps, expected observation per step), and
-   appends one line per unclosed gap to `docs/VERIFICATION_DEBT.md`.
+   files one `bd` issue per unclosed gap (section 10 verification-debt form).
 9. **Landing updates the doc (added 2026-07-05 — Peter's rule).** A landing that
    completes, starts, or blocks any phase of a design updates that design doc's
    **Status:** line and the affected phase markers in the same landing, before
@@ -397,13 +397,17 @@ Rules:
 - **Landing reports state the level reached.** "Shipped" with no level is banned;
   L1-shipped may never be announced as "working".
 - **The gap between the level reached and the phase's target is verification
-  debt:** one line in `docs/VERIFICATION_DEBT.md` at landing, burned down or
-  consciously carried every wave. The pre-ledger failure mode this replaces:
-  "unverified interactively" notes in landing reports and memory decayed silently
-  into "shipped" (automation lanes, preset picker — both gaps were recorded,
-  neither was acted on, both were found by Peter in the app on 2026-07-05).
+  debt:** a `bd` issue at landing (title `VD: <surface> — L<reached> reached /
+  L<target> target`, label `verification-debt`), burned down or consciously
+  carried every wave. Beads replaced the retired `VERIFICATION_DEBT.md` ledger
+  2026-07-28 (folded per BUG-cu55 (fold debt registers into beads); frozen
+  history in `docs/archive/`, old `VD-NNN` ids preserved in bead titles). The
+  pre-ledger failure mode the rule kills: "unverified interactively" notes in
+  landing reports and memory decayed silently into "shipped" (automation lanes,
+  preset picker — both gaps were recorded, neither was acted on, both were
+  found by Peter in the app on 2026-07-05).
 - **Escape analysis:** a bug found in the app after an orchestrated landing gets an
-  `Escaped:` line in its BUG_BACKLOG entry naming the wave and the stage that would
+  `Escaped:` note in its `bd` entry naming the wave and the stage that would
   have caught it (brief / gate / demo / held-out input / review). The
-  countermeasures in this standard were designed from anecdotes; the escape ledger
+  countermeasures in this standard were designed from anecdotes; the escape record
   replaces anecdote with evidence about which stage actually leaks.

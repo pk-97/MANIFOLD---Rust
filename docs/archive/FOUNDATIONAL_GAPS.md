@@ -1,5 +1,7 @@
 # Foundational Gaps — where a general system is missing
 
+**FOLDED INTO BEADS 2026-07-28** (BUG-cu55, fold debt registers into beads). Open gaps live in `bd` under label `foundational-gaps`; shipped/killed entries are history. Frozen — never edit.
+
 Status: inventory, 2026-07-07. Audience: design sessions choosing the next
 fundamental work. Each entry names a place where point-patches stand in for a
 system that was never built, with the evidence trail, a one-paragraph sketch of

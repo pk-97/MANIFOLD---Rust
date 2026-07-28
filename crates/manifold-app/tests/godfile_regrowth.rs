@@ -3,10 +3,12 @@
 //! Wave 1 D11 (`docs/UI_FUNNEL_DECOMPOSITION_DESIGN.md`) specified this test;
 //! Wave 2 P2-Z built it (`docs/MODEL_COMMAND_DECOMPOSITION_DESIGN.md` INV-M6,
 //! review M4 found it was never created). Per-file line ceilings for every
-//! register-listed file: post-split size + slack. A failure here means a file
-//! on the register is regrowing — the fix is a decomposition conversation
-//! against `docs/ARCHITECTURE_DEBT.md`, never bumping the ceiling in this
-//! table without a register/design update naming the reason.
+//! campaign-listed file: post-split size + slack. A failure here means a
+//! decomposed file is regrowing — the fix is a decomposition conversation
+//! against the owning wave design doc (UI_FUNNEL / MODEL_COMMAND /
+//! RENDERER_RUNTIME decomposition designs; register history in
+//! `docs/archive/ARCHITECTURE_DEBT.md`), never bumping the ceiling in this
+//! table without a design update naming the reason.
 //!
 //! Ceiling policy: post-split `wc -l` + max(15%, 100) rounded up to 50s,
 //! set at each wave's final landing. Wave-1 files still awaiting P-I/P-S get
@@ -120,8 +122,8 @@ fn no_register_listed_file_regrows() {
     }
     assert!(
         violations.is_empty(),
-        "god-file regrowth detected (see docs/ARCHITECTURE_DEBT.md — do not bump ceilings \
-         without a register/design update):\n{}",
+        "god-file regrowth detected (see the owning decomposition design doc — do not bump \
+         ceilings without a design update naming the reason):\n{}",
         violations.join("\n")
     );
 }
