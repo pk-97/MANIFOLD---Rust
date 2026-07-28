@@ -17,6 +17,12 @@ At 3: warning (additionalContext). At 6+: DENY until the session writes
 /tmp/manifold_seam_review.md (>=200 chars — the evidence table), which
 resets the counter. Fails OPEN on any error.
 
+LEAD SEAT ONLY (Peter 2026-07-28): the ladder binds the lead; lanes are the
+delegation target and legitimately run probe loops. Caller tier is read from
+the payload transcript's last assistant `message.model` (same mechanism as
+agent-tier-spawn-guard.py); a non-lead model returns silent. Empty or
+unreadable model enforces — the lead is the failure surface.
+
 Obsolete when: the debug escalation ladder in docs/AGENT_ROUTING.md is retired or replaced; this hook is that doctrine's enforcement arm.
 """
 import json
@@ -28,6 +34,33 @@ import time
 REVIEW_FILE = "/tmp/manifold_seam_review.md"
 WARN_AT = 3
 DENY_AT = 6
+
+LEAD_TIERS = re.compile(r"fable|claude-opus|kimi-k3", re.IGNORECASE)
+TAIL_BYTES = 256 * 1024
+
+
+def caller_model(transcript_path: str) -> str:
+    try:
+        with open(transcript_path, "rb") as f:
+            try:
+                f.seek(-TAIL_BYTES, os.SEEK_END)
+            except OSError:
+                f.seek(0)
+            tail = f.read().decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+    model = ""
+    for line in tail.splitlines():
+        if '"model"' not in line:
+            continue
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        m = (entry.get("message") or {}).get("model") or entry.get("model") or ""
+        if isinstance(m, str) and m:
+            model = m
+    return model
 
 KERNEL_PATH = re.compile(r"crates/manifold-gpu/src/metal/|render_scene\.rs$|\.wgsl$")
 PROBE_CMD = re.compile(r"render-import|gpu-proofs|gpu_proofs")
@@ -53,6 +86,10 @@ def main() -> None:
             is_probe = bool(PROBE_CMD.search(ti.get("command", "")))
         if not is_probe:
             return
+
+        model = caller_model(payload.get("transcript_path") or "")
+        if model and not LEAD_TIERS.search(model):
+            return  # lane/dispatcher seat — probe loops are their job
 
         cp = counter_path(session)
         # Anchor the reset check BEFORE rewriting the counter: the review must

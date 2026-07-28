@@ -18,16 +18,51 @@ main context" for normal-sized work, so denying all sustained direct work
 would fight the contract. The DENY arm for instrument-probe loops lives in
 probe-loop-guard.py. Fails OPEN on any error.
 
+LEAD SEAT ONLY (Peter 2026-07-28): grinding is a lane's job description —
+nudging a worker to spawn agents inverts the routing model (and executors
+are denied spawns anyway by agent-tier-spawn-guard.py). Caller tier is read
+from the payload transcript's last assistant `message.model` (same mechanism
+as agent-tier-spawn-guard.py); a non-lead model returns silent. Empty or
+unreadable model enforces — the lead is the failure surface.
+
 Obsolete when: docs/AGENT_ROUTING.md's lead/lane split is retired, or the
 harness itself meters lead token spend against delegation.
 """
 import json
+import os
 import re
 import sys
 
 NUDGE_EVERY = 20
 
 HANDS_ON_TOOLS = ("Bash", "Edit", "Write", "MultiEdit")
+
+LEAD_TIERS = re.compile(r"fable|claude-opus|kimi-k3", re.IGNORECASE)
+TAIL_BYTES = 256 * 1024
+
+
+def caller_model(transcript_path: str) -> str:
+    try:
+        with open(transcript_path, "rb") as f:
+            try:
+                f.seek(-TAIL_BYTES, os.SEEK_END)
+            except OSError:
+                f.seek(0)
+            tail = f.read().decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+    model = ""
+    for line in tail.splitlines():
+        if '"model"' not in line:
+            continue
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        m = (entry.get("message") or {}).get("model") or entry.get("model") or ""
+        if isinstance(m, str) and m:
+            model = m
+    return model
 
 
 def state_path(session: str) -> str:
@@ -40,6 +75,11 @@ def main() -> None:
         payload = json.load(sys.stdin)
         tool = payload.get("tool_name", "")
         session = payload.get("session_id", "unknown")
+
+        model = caller_model(payload.get("transcript_path") or "")
+        if model and not LEAD_TIERS.search(model):
+            return  # worker seat — grinding is its job, never nudge it to spawn
+
         sp = state_path(session)
 
         state = {"hands_on": 0}
