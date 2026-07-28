@@ -3007,6 +3007,9 @@ fn vertex_color_varies_flag_produces_report_line_and_leaves_base_color_alone() {
         animations: Vec::new(),
         animation_report_lines: Vec::new(),
         extension_report_lines: Vec::new(),
+        lights: Vec::new(),
+        cameras: Vec::new(),
+        camera_report_lines: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_vertex_color_varies.glb");
     let (def, report) = build_import_graph(&summary, path).expect("build graph");
