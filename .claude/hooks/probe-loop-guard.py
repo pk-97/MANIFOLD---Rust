@@ -13,6 +13,9 @@ Mechanism: counts probe-loop actions per session —
   - Edit/Write/MultiEdit touching RT/GPU kernel or shader files
     (manifold-gpu/metal/**, render_scene.rs, *.wgsl under crates/)
   - Bash running render-import or gpu-proofs tests
+Read-only git plumbing is exempt (BUG-0c28): merge-base, rev-parse, log,
+and branch segments are stripped before matching — querying git metadata
+is not probing.
 At 3: warning (additionalContext). At 6+: DENY until the session writes
 /tmp/manifold_seam_review.md (>=200 chars — the evidence table), which
 resets the counter. Fails OPEN on any error.
@@ -44,6 +47,18 @@ def is_worker_seat(payload: dict) -> bool:
 
 KERNEL_PATH = re.compile(r"crates/manifold-gpu/src/metal/|render_scene\.rs$|\.wgsl$")
 PROBE_CMD = re.compile(r"render-import|gpu-proofs|gpu_proofs")
+# Read-only git plumbing is bookkeeping, not probing (BUG-0c28): a landing's
+# merge-base/rev-parse/log/branch loops must never feed the probe counter,
+# even when branch names or arguments contain probe-marker strings. Strip
+# those invocations from the command text before PROBE_CMD matches.
+GIT_PLUMBING = re.compile(
+    r"\bgit\s+(?:-C\s+(?:\"[^\"]*\"|'[^']*'|\S+)\s+)*"
+    r"(?:merge-base|rev-parse|log|branch)\b[^|;&\n]*"
+)
+# A for-loop's word list is data, never execution — branch names like
+# lane/render-import-fix in `for b in …` must not count either. The loop
+# BODY (after `do`) still matches normally.
+FOR_HEADER = re.compile(r"\bfor\s+\w+\s+in\s+[^;\n]*")
 
 
 def counter_path(session: str) -> str:
@@ -63,7 +78,8 @@ def main() -> None:
             path = ti.get("file_path", "")
             is_probe = bool(KERNEL_PATH.search(path))
         elif tool == "Bash":
-            is_probe = bool(PROBE_CMD.search(ti.get("command", "")))
+            cmd = GIT_PLUMBING.sub("", FOR_HEADER.sub("", ti.get("command", "")))
+            is_probe = bool(PROBE_CMD.search(cmd))
         if not is_probe:
             return
 
