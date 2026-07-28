@@ -36,7 +36,7 @@ thing that decides whether a look is usable live.
 - NOT persistence (no project-format change — see D1), NOT thread residency (mesh caching already
   lives where it lives), NOT time model, NOT a new performance-surface control.
 
-## 2. Audit — what exists (verified 2026-07-18 against `cff8595e`)
+## 2. Audit — what exists (verified 2026-07-18)
 
 | Piece | Where | State |
 |---|---|---|

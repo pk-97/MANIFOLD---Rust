@@ -230,17 +230,17 @@ gpu-proofs <module>` (never nextest); every phase runs the freeze suite
 `cargo test -p manifold-renderer --lib node_graph::freeze` + scoped clippy; full sweep at landing
 per GIT_TREE_DISCIPLINE.
 
-- **P1 — `freeze/markers.rs` (D1). SHIPPED `3dac02c7`.** Deliverables: the module (enum + emit/parse + roundtrip
+- **P1 — `freeze/markers.rs` (D1).** Deliverables: the module (enum + emit/parse + roundtrip
   test), all emit/parse sites rewritten through it (inventory in section 1 — re-derive with
   `rg '"// @' crates/manifold-renderer/src` at execution; if counts differ from section 1, stop and list),
   `marker_literals_live_in_one_module`, `fused_wgsl_snapshot_unchanged`. Gate: freeze suite green;
   snapshot test proves byte-identical emission; negative gate zero stray literals. Demo: none — L1
   (pure refactor proven by snapshot).
-- **P2 — segment worker robustness (D2). SHIPPED `6297946b`.** Deliverables: catch_unwind wrap, timestamped
+- **P2 — segment worker robustness (D2).** Deliverables: catch_unwind wrap, timestamped
   `SEGMENT_PENDING`, `SEGMENT_COMPILE_DEADLINE=60s` expiry in `pump_segment_results`, the two unit
   tests, the at-cap refresh nit fix (all three caches). Gate: freeze suite; new tests green.
   Demo: none — L1 (the observable surface is a log line on a fault path).
-- **P3 — refusal census (D4 instrument). SHIPPED `c7ff8ebc`, `docs/fusion_census.md` committed.
+- **P3 — refusal census (D4 instrument). `docs/fusion_census.md` committed.
   No trigger crossed (buffer-fan-out measured 0 refusals vs. trigger ≥3; resample's trigger is
   runtime hot-chain evidence, not a static count) — all four D4 defaults stand unchanged.**
   Deliverables: `audit_all_presets` extended to bucket
@@ -251,15 +251,14 @@ per GIT_TREE_DISCIPLINE.
   numbers in the doc. Demo: the census file itself — L2. **This phase's numbers may flip D4's
   census-gated defaults; flipping a DEFER to LIFT is an escalation to Peter with the number
   attached, not a silent scope change.**
-- **P4 — `BufferIndex` + the draw-family conversion (D3, closes BUG-114).** Split: **P4a —
-  SHIPPED `ae9ab74c`.** The read path (classify variant, region rule, standalone+fused codegen,
+- **P4 — `BufferIndex` + the draw-family conversion (D3, closes BUG-114).** Split: **P4a.** The read path (classify variant, region rule, standalone+fused codegen,
   synthesized `Channels` struct) + `draw_dots` converted as the proving atom, with parity oracle.
   Escalation found and resolved with Peter (see D4's scope-expansion note): the literal
   region-formation demo (`draw_dots_fuses_into_texture_region`) is NOT reachable yet — draw_dots'
   `Color` param independently boundary-cuts it until P5 lands; P4a instead proved the mechanism
   at the classify/region layer directly (wire never unions, producer stays external) plus the
   before/after `graph_tool fusion` dispatch count on `BlobTracking.json` (unchanged, as expected,
-  pending P5). **Phase order changed: P5 now runs BEFORE P4b.** **P4b — SHIPPED.** The remaining
+  pending P5). **Phase order changed: P5 now runs BEFORE P4b.** **P4b.** The remaining
   five `draw_*` atoms (`draw_markers`/`draw_ticks`/`draw_gauge`/`draw_scanlines`/
   `draw_connections`) + `blob_overlay` converted per ADDING_PRIMITIVES (`wgsl_body` +
   `fusion_kind`/`input_access` + generated-vs-hand parity oracle each), every `Blocked` reason
@@ -273,7 +272,7 @@ per GIT_TREE_DISCIPLINE.
   `draw_scanlines` stays unfused in this preset (topologically isolated by two `value_overlay`
   draw-call boundaries, not a param/array gap) — expected, not a regression.
   Demo: before/after dispatch count on the Blob Track HUD preset (the census tool prints it) — L2.
-- **P5 — Vec3 + Vec4/Color param lift (D4, expanded scope). SHIPPED.** `classify_node`'s param
+- **P5 — Vec3 + Vec4/Color param lift (D4, expanded scope).** `classify_node`'s param
   gate (`region.rs`, was `:954–961`) narrowed via a new shared predicate
   `codegen::param_is_fusable` (Vec3/Vec4/Color pass, Table/String still cut); `classify_refusal`'s
   mirror updated in lockstep (`refusal_census_matches_classify_node` invariant), including a
@@ -297,13 +296,13 @@ per GIT_TREE_DISCIPLINE.
   lives in — OilyFluid/MetallicGlass/StarField are grouped GENERATOR presets); floor raised on the
   widened, isolated-measured numbers (32/52/203 pre-P5 → 32/54/216 post-P5 on the same walk).
   Gate: gpu-proofs full suite + `--lib` full suite, both clean modulo 8 pre-existing failures
-  verified unchanged at P4a HEAD (21794f5c) — 6 synthetic `codegen::gpu_tests` cases and 2
+  verified unchanged at P4a HEAD — 6 synthetic `codegen::gpu_tests` cases and 2
   prewarm-cache tests that fail only under full-suite contention, not in isolation; clippy clean.
   Demo: census refusal count for the param-type family 19→10 (the 9 real Vec3/Vec4/Color flips);
   `wave2_color_param_atoms_now_fuse_in_shipped_presets` proves all 5 real-preset atoms now fuse;
   `buffer_index_external_stays_external` proves `draw_dots` forms a real 2-member region with a
   synthetic neighbor via `partition_regions` — L2.
-- **P6 — multi-output texture atoms (D4). SHIPPED.** Deliverables: struct-return texture wrapper
+- **P6 — multi-output texture atoms (D4).** Deliverables: struct-return texture wrapper
   extended from the buffer-domain precedent (`codegen.rs`'s `BufferOutputs` wrapper) into
   `generate_fused` — per-multi-output-member `N{i}BodyOutputs` struct (dedup-safe namespacing),
   `InputSource::NodeOutput`/`RegionInput::MemberPort` carrying the escaping port so a wire into or

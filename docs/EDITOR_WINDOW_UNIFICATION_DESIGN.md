@@ -18,7 +18,7 @@ Companion docs: [UI_HARNESS_UNIFICATION_DESIGN.md](UI_HARNESS_UNIFICATION_DESIGN
 
 ---
 
-## 1. Audit — the seam census (verified 2026-07-14 at `e310c592`)
+## 1. Audit — the seam census (verified 2026-07-14)
 
 **This table is the deliverable Peter asked for: every mechanism in the main window's frame composition and event loop, with how the editor gets it today and how it is unified.** Rows were derived from reading `ui_frame.rs` (whole), `editor_frame.rs` (whole), `UIRoot::build_overlays`/`process_events`, `workspace.rs`, and `window_input.rs`'s routing layer — not from memory. Extend, don't redesign.
 

@@ -18,7 +18,7 @@ Result: indicator Y and drop-target index are off by exactly the scroll delta ac
 
 ### Root cause 2: height from a second, live source
 
-The same loop uses `card.compute_height()` (`param_card.rs:1611`), which re-derives height from animated state (`collapse_frac()`, `animated_drawer_height()`) instead of the laid-out rect. Mid-tween, hit-test geometry disagrees with the screen. Two parallel implementations (`compute_height_effect` `param_card.rs:1618`, `compute_height_generator` `param_card.rs:1690`) must each mirror the build draw loop exactly — BUG-108 was already this exact drift, and the param-drawer unification (b0124dc3) added more animated height to keep in sync.
+The same loop uses `card.compute_height()` (`param_card.rs:1611`), which re-derives height from animated state (`collapse_frac()`, `animated_drawer_height()`) instead of the laid-out rect. Mid-tween, hit-test geometry disagrees with the screen. Two parallel implementations (`compute_height_effect` `param_card.rs:1618`, `compute_height_generator` `param_card.rs:1690`) must each mirror the build draw loop exactly — BUG-108 was already this exact drift, and the param-drawer unification added more animated height to keep in sync.
 
 ### Root cause 3 (latent): drop-index assumes contiguous tail
 
@@ -72,4 +72,4 @@ One vec keyed by scope (or one vec + scope field on the card). Mechanical but wi
 ## Verification notes
 
 - Read-only investigation; root causes confirmed by code reading, not yet reproduced on screen. A headless repro (scroll → drag → indicator offset = scroll delta) would confirm before fixing.
-- BUG-108 (compute_height drift) and the b0124dc3 param-drawer unification are the relevant prior art.
+- BUG-108 (compute_height drift) and the param-drawer unification are the relevant prior art.
