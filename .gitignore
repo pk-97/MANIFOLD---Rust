@@ -18,6 +18,7 @@ __pycache__/
 # layer and must have history; local state stays ignored.
 .claude/*
 !.claude/hooks/
+!.claude/skills/
 !.claude/daemon/
 !.claude/settings.json
 !.claude/GIT_TREE_DISCIPLINE.md
