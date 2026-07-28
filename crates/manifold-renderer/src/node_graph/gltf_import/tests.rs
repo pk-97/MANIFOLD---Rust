@@ -2960,6 +2960,9 @@ fn unlit_material_routes_to_unlit_material_card() {
         animations: Vec::new(),
         animation_report_lines: Vec::new(),
         extension_report_lines: Vec::new(),
+        lights: Vec::new(),
+        cameras: Vec::new(),
+        camera_report_lines: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_unlit.glb");
     let (def, report) = build_import_graph(&summary, path).expect("build graph");
