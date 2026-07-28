@@ -646,7 +646,17 @@ pub(super) fn build_import_graph(
     // The shared Ambient fill knob (its per-material bindings were fanned out
     // in the object loop above). 0.0 = no flat fill (lights-only); raise it to
     // lift the shadow side of every material at once.
-    card_params.push(card_param("scene_ambient", "Ambient", 0.0, 1.0, 0.0, false, "Environment"));
+    //
+    // BUG-w5wv: an unlit material's `node.unlit_material` card has no
+    // `ambient` param (`fs_unlit` has no lighting to fill), so the object
+    // loop above skips its binding — an import where EVERY material is
+    // unlit contributes zero "scene_ambient" bindings, and pushing this
+    // slider unconditionally would orphan it (a card param with nothing
+    // bound to it, which `check_card_lints` correctly rejects). Only push
+    // it when at least one material actually bound to it.
+    if card_bindings.iter().any(|b| b.id == "scene_ambient") {
+        card_params.push(card_param("scene_ambient", "Ambient", 0.0, 1.0, 0.0, false, "Environment"));
+    }
 
     // No SSAO card sliders (Peter, 2026-07-15: "the defaults look good") —
     // the `ao` node group stays wired at its defaults
