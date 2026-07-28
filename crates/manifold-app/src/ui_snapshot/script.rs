@@ -519,17 +519,37 @@ impl Runner {
                         artifact: None,
                     }
                 } else if !modifiers.is_none() {
-                    self.fail(
-                        index,
-                        action_desc,
-                        ui,
-                        data,
-                        out_dir,
-                        format!(
-                            "no headless seam for modifier-bearing Key {key:?} ({modifiers:?}) — \
-                             only Cmd+Z (undo) / Cmd+Shift+Z (redo) are wired; see BUG-198"
-                        ),
-                    )
+                    // Real shortcut path: queue the KeyDown through the same
+                    // `UIRoot::key_event` the live app forwards to, then drain
+                    // through the real dispatch. BUG-198's rule holds via the
+                    // action count: a combo nothing handled fails loudly
+                    // instead of reporting a vacuous "ok". Needs a focused
+                    // widget (click something first), same as the live app.
+                    ui.key_event(*key, *modifiers);
+                    let handled = self.drain_and_dispatch(ui, data);
+                    if handled == 0 {
+                        self.fail(
+                            index,
+                            action_desc,
+                            ui,
+                            data,
+                            out_dir,
+                            format!(
+                                "modifier-bearing Key {key:?} ({modifiers:?}) produced no \
+                                 panel action — either no widget is focused (click one \
+                                 first) or nothing handles this combo; see BUG-198"
+                            ),
+                        )
+                    } else {
+                        self.advance_frame(ui, data, zoom_ppb, render, false);
+                        StepResult {
+                            index,
+                            action: action_desc,
+                            status: "ok",
+                            detail: format!("key {key:?} ({modifiers:?}) -> {handled} action(s)"),
+                            artifact: None,
+                        }
+                    }
                 } else {
                     ui.key_event(*key, *modifiers);
                     // Was `let _ = ui.process_events()` — key-triggered panel
@@ -901,13 +921,17 @@ impl Runner {
     /// the exact real path `app_render.rs`'s viewport-events block uses,
     /// minus the live `Application` (see the module doc for why that's
     /// still the real path, not a parallel one).
-    fn drain_and_dispatch(&mut self, ui: &mut UIRoot, data: &mut SceneData) {
+    /// Returns the number of panel actions the UI produced this drain, so
+    /// key steps can distinguish a handled shortcut from a silent no-op
+    /// (BUG-198: "ok" with nothing happened is the bug, not the fallthrough).
+    fn drain_and_dispatch(&mut self, ui: &mut UIRoot, data: &mut SceneData) -> usize {
         let actions = ui.process_events();
+        let n_actions = actions.len();
         self.apply_panel_actions(ui, data, &actions);
 
         let viewport_events = ui.drain_viewport_events();
         if viewport_events.is_empty() {
-            return;
+            return n_actions;
         }
         self.overlay.set_modifiers(self.modifiers);
         // Local, call-scoped sinks for the two `AppEditingHost` outputs the
@@ -993,6 +1017,7 @@ impl Runner {
             self.needs_structural_sync = true;
         }
         self.apply_panel_actions(ui, data, &pending);
+        n_actions + pending.len()
     }
 
     /// Route every `PanelAction` through the REAL `ui_bridge::dispatch` —

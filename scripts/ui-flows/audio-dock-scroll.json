@@ -13,7 +13,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "EXTRA 23 • Bloom • Amount"
+          "text": "EXTRA 23 \u2022 Bloom \u2022 Amount"
         }
       },
       "check": {
@@ -37,7 +37,7 @@
         "Scroll": {
           "delta": {
             "x": 0.0,
-            "y": 300.0
+            "y": -300.0
           }
         }
       }
@@ -48,7 +48,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "EXTRA 23 • Bloom • Amount"
+          "text": "EXTRA 23 \u2022 Bloom \u2022 Amount"
         }
       },
       "check": {

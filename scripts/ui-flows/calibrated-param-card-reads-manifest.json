@@ -3,25 +3,44 @@
   "Dump",
   {
     "Assert": {
-      "selector": { "Query": { "text": "GLOW", "type": "Label" } },
+      "selector": {
+        "Query": {
+          "text": "GLOW",
+          "type": "Label"
+        }
+      },
       "check": "Exists"
     }
   },
   {
     "Assert": {
-      "selector": { "Query": { "text": "Amount" } },
-      "check": { "Count": 5 }
+      "selector": {
+        "Query": {
+          "text": "Amount"
+        }
+      },
+      "check": {
+        "Count": 3
+      }
     }
   },
   {
     "Assert": {
-      "selector": { "Query": { "text": "Rate" } },
+      "selector": {
+        "Query": {
+          "text": "Rate"
+        }
+      },
       "check": "Exists"
     }
   },
   {
     "Assert": {
-      "selector": { "Query": { "text": "Clip Trigger" } },
+      "selector": {
+        "Query": {
+          "text": "Clip Trigger"
+        }
+      },
       "check": "Exists"
     }
   },

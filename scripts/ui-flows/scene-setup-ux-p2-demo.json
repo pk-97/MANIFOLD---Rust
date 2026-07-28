@@ -1,33 +1,92 @@
 [
   {
     "Pointer": {
-      "target": { "Query": { "text": "Scene" } },
-      "gesture": { "Click": { "modifiers": {} } }
+      "target": {
+        "Query": {
+          "text": "Scene"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
     }
   },
   "Snapshot",
   {
-    "Assert": { "selector": { "Query": { "text": "Roughness", "nth": 2 } }, "check": "Exists" }
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.10_roughness"
+        }
+      },
+      "check": "Exists"
+    }
   },
   {
     "Pointer": {
-      "target": { "Point": { "x": 722.2, "y": 444.0 } },
+      "target": {
+        "Query": {
+          "name": "param_row.10_metallic.slider"
+        }
+      },
       "gesture": "Hover"
     }
   },
   "Snapshot",
   {
     "Pointer": {
-      "target": { "Point": { "x": 700.0, "y": 444.0 } },
-      "gesture": { "Drag": { "to": { "Point": { "x": 660.0, "y": 444.0 } }, "steps": 8 } }
+      "target": {
+        "Query": {
+          "name": "param_row.10_metallic.slider"
+        }
+      },
+      "gesture": {
+        "Drag": {
+          "to": {
+            "Point": {
+              "x": 660.0,
+              "y": 594.0
+            }
+          },
+          "steps": 8
+        }
+      }
     }
   },
   "Snapshot",
   {
     "Pointer": {
-      "target": { "Point": { "x": 722.2, "y": 624.0 } },
-      "gesture": { "Drag": { "to": { "Point": { "x": 770.0, "y": 624.0 } }, "steps": 8 } }
+      "target": {
+        "Query": {
+          "name": "param_row.10_roughness.slider"
+        }
+      },
+      "gesture": {
+        "Drag": {
+          "to": {
+            "Point": {
+              "x": 770.0,
+              "y": 624.0
+            }
+          },
+          "steps": 8
+        }
+      }
     }
   },
-  "Snapshot"
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.10_roughness.value"
+        }
+      },
+      "check": {
+        "TextEquals": "0.82"
+      }
+    }
+  }
 ]

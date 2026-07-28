@@ -3,7 +3,12 @@
   "Dump",
   {
     "Assert": {
-      "selector": { "Query": { "text": "AUDIO TRIGGERS", "type": "Label" } },
+      "selector": {
+        "Query": {
+          "text": "AUDIO TRIGGERS",
+          "type": "Label"
+        }
+      },
       "check": "Exists"
     }
   },
@@ -11,57 +16,106 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "▶",
+          "text": "\u25b6",
           "type": "Button",
           "under_text": "AUDIO TRIGGERS"
         }
       },
-      "gesture": { "Click": { "modifiers": {} } }
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
     }
   },
   {
     "Assert": {
-      "selector": { "Query": { "text": "▸ Low → Kick", "type": "Button" } },
+      "selector": {
+        "Query": {
+          "text": "\u25b8 Low \u2192 Kick",
+          "type": "Button"
+        }
+      },
       "check": "Exists"
     }
   },
   {
     "Pointer": {
-      "target": { "Query": { "text": "+ Add Trigger", "type": "Button" } },
-      "gesture": { "Click": { "modifiers": {} } }
+      "target": {
+        "Query": {
+          "text": "+ Add Trigger",
+          "type": "Button"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
     }
   },
   "Snapshot",
   "Dump",
   {
     "Assert": {
-      "selector": { "Query": { "text": "▼ Low → Kick", "type": "Button" } },
+      "selector": {
+        "Query": {
+          "text": "\u25bc Low \u2192 Kick",
+          "type": "Button"
+        }
+      },
       "check": "Exists"
     }
   },
   {
     "Assert": {
-      "selector": { "Query": { "text": "Listen", "type": "Label" } },
+      "selector": {
+        "Query": {
+          "text": "Listen",
+          "type": "Label"
+        }
+      },
       "check": "Exists"
     }
   },
   {
     "Assert": {
-      "selector": { "Query": { "text": "Snare", "type": "Button" } },
+      "selector": {
+        "Query": {
+          "text": "Snare",
+          "type": "Button",
+          "nth": 0
+        }
+      },
       "check": "Exists"
     }
   },
   {
     "Pointer": {
-      "target": { "Query": { "text": "Snare", "type": "Button" } },
-      "gesture": { "Click": { "modifiers": {} } }
+      "target": {
+        "Query": {
+          "text": "Snare",
+          "type": "Button",
+          "nth": 0
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
     }
   },
   "Snapshot",
   "Dump",
   {
     "Assert": {
-      "selector": { "Query": { "text": "▼ Mid → Transients", "type": "Button" } },
+      "selector": {
+        "Query": {
+          "text": "\u25bc Mid \u2192 Transients",
+          "type": "Button"
+        }
+      },
       "check": "Exists"
     }
   }

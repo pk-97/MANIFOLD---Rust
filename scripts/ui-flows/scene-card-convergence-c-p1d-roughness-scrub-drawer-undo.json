@@ -1,33 +1,106 @@
 [
   {
     "Pointer": {
-      "target": { "Query": { "text": "Scene" } },
-      "gesture": { "Click": { "modifiers": {} } }
+      "target": {
+        "Query": {
+          "text": "Scene"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
     }
   },
   "Snapshot",
   {
     "Assert": {
-      "selector": { "Query": { "text": "Roughness", "nth": 2 } },
-      "check": "Exists"
+      "selector": {
+        "Query": {
+          "name": "param_row.10_roughness.value"
+        }
+      },
+      "check": {
+        "TextEquals": "1.00"
+      }
     }
   },
   {
     "Pointer": {
-      "target": { "Point": { "x": 722.2, "y": 624.0 } },
-      "gesture": { "Drag": { "to": { "Point": { "x": 770.0, "y": 624.0 } }, "steps": 8 } }
+      "target": {
+        "Query": {
+          "name": "param_row.10_roughness.slider"
+        }
+      },
+      "gesture": {
+        "Drag": {
+          "to": {
+            "Point": {
+              "x": 640.0,
+              "y": 624.0
+            }
+          },
+          "steps": 8
+        }
+      }
     }
   },
   "Snapshot",
   {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.10_roughness.value"
+        }
+      },
+      "check": {
+        "TextEquals": "0.01"
+      }
+    }
+  },
+  {
     "Pointer": {
-      "target": { "Point": { "x": 892.0, "y": 624.0 } },
-      "gesture": { "Click": { "modifiers": {} } }
+      "target": {
+        "Query": {
+          "name": "param_row.10_roughness.driver_btn"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
     }
   },
   "Snapshot",
-  { "Key": { "key": "Z", "modifiers": { "command": true } } },
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true
+      }
+    }
+  },
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true
+      }
+    }
+  },
   "Snapshot",
-  { "Key": { "key": "Z", "modifiers": { "command": true } } },
-  "Snapshot"
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.10_roughness.value"
+        }
+      },
+      "check": {
+        "TextEquals": "1.00"
+      }
+    }
+  }
 ]
