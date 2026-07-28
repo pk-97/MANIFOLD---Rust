@@ -33,12 +33,6 @@ Behavior (deterministic, no model calls):
 - Wrong/missing slot prefix, bad casing, opaque task part -> deny with the
   fix and the live slot map spelled out.
 
-(A missing-subagent_type deny lived here 2026-07-25 to 2026-07-29: one lane
-spawned 07-22 without it got no agentType in the team file and rendered no
-panel row. The harness has since written agentType on defaulted spawns, and
-forcing "general-purpose" flattened the recorded type, so the check was
-removed rather than kept as a stale workaround.)
-
 Fails open on any error: a guard hook must never be able to block a session.
 
 Obsolete when: the routing policy in docs/AGENT_ROUTING.md retires the slot-ring naming scheme this guard derives from; recheck at each routing-policy revision.
