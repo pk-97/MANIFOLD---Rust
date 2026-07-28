@@ -84,7 +84,7 @@ Gated by `allow_structure_edits`: `preview_graph`, `save_preset`, `transport`. E
 
 **Surface growth rule:** grow by nouns (session grid, timeline, displays), not by per-feature tool piles. The surface must stay small enough for an agent to hold entirely in context.
 
-**Amendment (2026-07-02):** the component tier (`docs/COMPONENT_LIBRARY_DESIGN.md`) extends this surface — `list_nodes` gains `tier: "atom" | "component"`, `get_node_docs` serves component interfaces, and `save_component` joins the gated verbs. Agents compose components first, atoms to glue, raw WGSL last.
+The component tier (`docs/COMPONENT_LIBRARY_DESIGN.md`) extends this surface — `list_nodes` gains `tier: "atom" | "component"`, `get_node_docs` serves component interfaces, and `save_component` joins the gated verbs. Agents compose components first, atoms to glue, raw WGSL last.
 
 ### Catalog = the live registry. Single source of truth.
 
@@ -110,7 +110,7 @@ save_preset(json, name)
 
 Why declarative: atomic, no stale imperative state held by the model, validation errors reference the submitted document directly, and the artifact is inspectable at every step.
 
-`validate_graph` wraps `node_graph::validate::validate_def` — built and shipped by GRAPH_TOOLING_DESIGN (2026-07-13) together with a `graph-tool` CLI and card lints; P2 here is an adapter over that seam, not new checks. It runs the existing graph compile path **minus GPU dispatch**: unknown primitive types, channel-type mismatches on wires, unwired required ports, cycle check honoring per-port state capture (`state_capture_input_ports`), param name/range validation. Error messages must name the node id and port — they are consumed by a model, and vague errors burn the user's tokens.
+`validate_graph` wraps `node_graph::validate::validate_def` (GRAPH_TOOLING_DESIGN); P2 here is an adapter over that seam, not new checks. It runs the existing graph compile path **minus GPU dispatch**: unknown primitive types, channel-type mismatches on wires, unwired required ports, cycle check honoring per-port state capture (`state_capture_input_ports`), param name/range validation. Error messages must name the node id and port — they are consumed by a model, and vague errors burn the user's tokens.
 
 ## 7. Preview render path
 
@@ -181,7 +181,7 @@ Each phase gates on its test before the next starts.
 
 ## 12. Relationship to the vocabulary stress-test
 
-The stress-test (Fable authors presets cold using only what `list_nodes`/`get_node_docs` would serve) is the acceptance test for section 5's catalog design and is **critical path** — if the main interface is AI, agent expressive range equals catalog quality. Its gap report feeds the descriptor backend and P5.
+The stress-test (presets authored cold using only what `list_nodes`/`get_node_docs` would serve) is the acceptance test for section 5's catalog design and is **critical path** — if the main interface is AI, agent expressive range equals catalog quality. Its gap report feeds the descriptor backend and P5.
 
 ## 13. Decided questions — do not reopen
 

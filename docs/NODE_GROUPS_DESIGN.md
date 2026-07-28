@@ -55,9 +55,9 @@ does today, because by the time any of it runs, the groups are already gone.
 
 This is why the design is low-risk: it is additive preprocessing, not a new runtime concept.
 
-### Why this is cleaner than "generalize the splicer" (the earlier verbal sketch)
+### Why this is cleaner than "generalize the splicer"
 
-Reading the load path showed there are already **two distinct boundary layers**, and they must not
+There are already **two distinct boundary layers**, and they must not
 be conflated:
 
 - **Effect boundary** — `system.source` / `system.final_output`. This is where the *host* splices

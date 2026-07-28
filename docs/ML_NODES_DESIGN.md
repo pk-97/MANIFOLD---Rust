@@ -63,7 +63,7 @@ ONNX Runtime (`ort` crate) behind a cargo feature, one impl per task trait, open
 - **`node.camera`** — new source atom. AVCaptureSession → CVPixelBuffer → IOSurface → Metal texture, zero-copy. Device-selection param; Continuity Camera (iPhone as camera) comes free with AVFoundation. Camera permission handled at app level (Info.plist).
 - ML nodes consume **any** `Texture2D`. Camera is just one source — running depth estimation on your own generative output is legitimate and encouraged.
 - Deferred sources, same slot later: NDI in, Syphon in (ownership moved to
-  `VIDEO_IO_DESIGN.md`, approved 2026-07-09 — audit F15, 2026-07-10), ScreenCaptureKit
+  `VIDEO_IO_DESIGN.md`), ScreenCaptureKit
   (capture any app/display — the video analog of the audio output-tap).
 
 ## 5. Node roster and model picks
@@ -106,7 +106,7 @@ One struct for all three tasks; `joint` namespaces differ (body ~17–19, hand 2
 
 - The **worker owns ID association**, independent of backend (greedy IoU/ByteTrack-style matching, ~100 lines, MIT-licensed prior art). Vision doesn't provide stable IDs; ours are consistent across both backends.
 - IDs are **monotonic u32, never reused within a session** (same doctrine as typed IDs). Person walks off camera → their keypoints stop appearing; walk back within a short re-association window → same ID; otherwise a new one.
-- This **supersedes the parked blob tracker** at a higher semantic level (Peter unparked person-tracking-in-evolved-form, 2026-07-02). Blob detection itself stays parked.
+- This **supersedes the parked blob tracker** at a higher semantic level (Peter unparked person-tracking-in-evolved-form). Blob detection itself stays parked.
 
 ### 6.3 Smoothing and convenience
 
@@ -182,7 +182,7 @@ Full workspace sweep gates P1 (runtime infrastructure). P2–P5 are per-node sco
 - **Real-time diffusion img2img** — approved direction, needs its own design pass (model management, prompt-as-param, seed/latent interpolation, thermal budget). Separate doc; the async contract here is its foundation.
 - MetalFX upscaling — separate perf item (section 10).
 - NDI / Syphon / ScreenCaptureKit sources — same source-node slot, later. NDI/Syphon
-  ownership moved to `VIDEO_IO_DESIGN.md` (approved 2026-07-09 — audit F15, 2026-07-10);
+  ownership moved to `VIDEO_IO_DESIGN.md`;
   ScreenCaptureKit is still this doc's.
 - Same-input inference dedup — deferred optimization (section 10).
 - Per-instance mask outputs on `node.segment_anything` — v1 is single mask.
