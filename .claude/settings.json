@@ -40,11 +40,15 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/worktree-size-sentinel.py\""
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" worktree-size-sentinel.py"
           },
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/seat-identity.py\""
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" seat-identity.py"
+          },
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" bead-staleness.py"
           }
         ]
       },
@@ -52,7 +56,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/system-prompt-version-check.py\""
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" system-prompt-version-check.py"
           }
         ]
       }
@@ -63,11 +67,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/conversation-recall-hook.py\""
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" conversation-recall-hook.py"
           },
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/response-style-hook.py\""
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" response-style-hook.py"
           }
         ]
       }
@@ -78,23 +82,23 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/preToolUseBash.py\""
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" preToolUseBash.py"
           },
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/cc-fleet-tier-guard.py\""
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" cc-fleet-tier-guard.py"
           },
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/lsp-nudge.py\""
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" lsp-nudge.py"
           },
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/probe-loop-guard.py\""
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" probe-loop-guard.py"
           },
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/context-nudge.py\""
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" context-nudge.py"
           }
         ]
       },
@@ -103,7 +107,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/ask-question-guard.py\""
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" ask-question-guard.py"
           }
         ]
       },
@@ -112,7 +116,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/workflow-gate.py\""
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" workflow-gate.py"
           }
         ]
       },
@@ -121,19 +125,19 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/agent-model-guard.py\""
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" agent-model-guard.py"
           },
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/agent-worktree-isolation-guard.py\""
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" agent-worktree-isolation-guard.py"
           },
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/agent-tier-spawn-guard.py\""
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" agent-tier-spawn-guard.py"
           },
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/agent-teammate-naming-guard.py\""
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" agent-teammate-naming-guard.py"
           }
         ]
       },
@@ -142,27 +146,27 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/worktree-guard.py\""
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" worktree-guard.py"
           },
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/probe-loop-guard.py\""
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" probe-loop-guard.py"
           },
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/memory-history-guard.py\""
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" memory-history-guard.py"
           },
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/bare-id-guard.py\""
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" bare-id-guard.py"
           },
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/landing-report-guard.py\""
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" landing-report-guard.py"
           },
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/context-nudge.py\""
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" context-nudge.py"
           }
         ]
       },
@@ -171,7 +175,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/context-ceiling-guard.py\""
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" context-ceiling-guard.py"
           }
         ]
       },
@@ -180,7 +184,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/seat-freeze-guard.py\""
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" seat-freeze-guard.py"
           }
         ]
       }
@@ -191,11 +195,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/test-summary-guard.py\""
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" test-summary-guard.py"
           },
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/spinning-guard.py\""
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" spinning-guard.py"
           }
         ]
       },
@@ -204,11 +208,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/dead-code-suppression-hook.py\""
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" dead-code-suppression-hook.py"
           },
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/spinning-guard.py\""
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" spinning-guard.py"
           }
         ]
       }
@@ -219,7 +223,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/lane-report-enforcer.py\""
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" lane-report-enforcer.py"
           }
         ]
       }
@@ -230,7 +234,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/subagent-stop-gate.py\""
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" subagent-stop-gate.py"
           }
         ]
       }
