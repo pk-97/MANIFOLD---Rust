@@ -501,6 +501,298 @@ fn meshopt_primitive_reports_instead_of_reading_garbage() {
     );
 }
 
+/// Build a minimal, valid `.glb` with TWO materials: `Mat0` has one real
+/// F32 triangle, `Mat1`'s sole primitive's POSITION accessor is
+/// `KHR_mesh_quantization`-style: normalized SHORT components instead of
+/// F32.
+///
+/// BUG-jfe2: the vendored gltf crate's `Item::from_slice` reinterprets
+/// every accessor read as F32 stride — a normalized SHORT/BYTE accessor
+/// misaligns every subsequent byte, silent garbage geometry with no error.
+/// `bufferView` 1 here is real, in-range, and exactly the right length for
+/// 3 VEC3<i16> (18 bytes) — detection must come from the accessor's
+/// `componentType`, not from a failed read. No `extensionsRequired` entry
+/// (same choice the Draco/meshopt fixtures make): this fixture reproduces
+/// the "primitive silently reads wrong" shape, not the separate "whole
+/// document refuses to load" gate.
+fn write_synthetic_quantized_position_glb() -> std::path::PathBuf {
+    let tri: [[f32; 3]; 3] = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+    let mut bin = Vec::with_capacity(36 + 18);
+    for v in &tri {
+        for c in v {
+            bin.extend_from_slice(&c.to_le_bytes());
+        }
+    }
+    // Normalized SHORT POSITION: 3 vertices * VEC3<i16> = 18 bytes.
+    // Component values are arbitrary — never legitimately read as
+    // dequantized geometry, only checked for componentType.
+    let quantized_tri: [[i16; 3]; 3] = [[0, 0, 0], [32767, 0, 0], [0, 32767, 0]];
+    for v in &quantized_tri {
+        for c in v {
+            bin.extend_from_slice(&c.to_le_bytes());
+        }
+    }
+
+    let doc = serde_json::json!({
+        "asset": { "version": "2.0" },
+        "extensionsUsed": ["KHR_mesh_quantization"],
+        "scene": 0,
+        "scenes": [{ "nodes": [0, 1] }],
+        "nodes": [{ "mesh": 0 }, { "mesh": 1, "name": "QuantizedPositionNode" }],
+        "meshes": [
+            { "primitives": [{ "attributes": { "POSITION": 0 }, "material": 0 }] },
+            {
+                "name": "QuantizedPositionMesh",
+                "primitives": [{ "attributes": { "POSITION": 1 }, "material": 1 }]
+            },
+        ],
+        "accessors": [
+            {
+                "bufferView": 0,
+                "componentType": 5126, // FLOAT
+                "count": 3,
+                "type": "VEC3",
+                "min": [0.0, 0.0, 0.0],
+                "max": [1.0, 1.0, 0.0],
+            },
+            {
+                "bufferView": 1,
+                "componentType": 5122, // SHORT
+                "normalized": true,
+                "count": 3,
+                "type": "VEC3",
+                "min": [0, 0, 0],
+                "max": [32767, 32767, 0],
+            },
+        ],
+        "bufferViews": [
+            { "buffer": 0, "byteOffset": 0, "byteLength": 36 },
+            { "buffer": 0, "byteOffset": 36, "byteLength": 18 },
+        ],
+        "materials": [
+            { "name": "Mat0", "pbrMetallicRoughness": { "baseColorFactor": [0.5, 0.5, 0.5, 1.0] } },
+            { "name": "Mat1", "pbrMetallicRoughness": { "baseColorFactor": [0.5, 0.5, 0.5, 1.0] } },
+        ],
+        "buffers": [{ "byteLength": bin.len() }],
+    });
+    let json_bytes = serde_json::to_vec(&doc).expect("serialize synthetic quantized-position glTF JSON");
+
+    let mut json_padded = json_bytes;
+    while !json_padded.len().is_multiple_of(4) {
+        json_padded.push(b' ');
+    }
+    let mut bin_padded = bin;
+    while !bin_padded.len().is_multiple_of(4) {
+        bin_padded.push(0);
+    }
+    let total_len = 12 + 8 + json_padded.len() + 8 + bin_padded.len();
+
+    let mut glb = Vec::with_capacity(total_len);
+    glb.extend_from_slice(b"glTF");
+    glb.extend_from_slice(&2u32.to_le_bytes());
+    glb.extend_from_slice(&(total_len as u32).to_le_bytes());
+    glb.extend_from_slice(&(json_padded.len() as u32).to_le_bytes());
+    glb.extend_from_slice(b"JSON");
+    glb.extend_from_slice(&json_padded);
+    glb.extend_from_slice(&(bin_padded.len() as u32).to_le_bytes());
+    glb.extend_from_slice(b"BIN\0");
+    glb.extend_from_slice(&bin_padded);
+
+    let path = std::env::temp_dir().join(format!(
+        "manifold_synthetic_quantized_position_{}_{}.glb",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    std::fs::write(&path, &glb).expect("write synthetic quantized-position glb to temp dir");
+    path
+}
+
+/// BUG-jfe2: a `KHR_mesh_quantization`-style normalized-SHORT POSITION
+/// accessor must never be read as raw F32 bytes (garbage geometry, no
+/// error) — `Mat1` (quantized) must be dropped from the imported objects
+/// and named in `ImportReport::report_lines`, while `Mat0` (real F32
+/// geometry) still imports normally.
+#[test]
+fn quantized_position_primitive_reports_instead_of_reading_garbage() {
+    let path = write_synthetic_quantized_position_glb();
+    let (_def, report) = assemble_import_graph(&path).expect("assemble quantized-position synthetic glb");
+    std::fs::remove_file(&path).ok();
+
+    assert_eq!(
+        report.material_count, 1,
+        "only Mat0 has readable geometry — Mat1 (quantized POSITION) is dropped"
+    );
+    assert!(
+        report
+            .report_lines
+            .iter()
+            .any(|l| l.contains("quantized POSITION") && l.contains("skipped")),
+        "report must name the quantized POSITION skip, got: {:?}",
+        report.report_lines
+    );
+    assert!(
+        report
+            .report_lines
+            .iter()
+            .any(|l| l.contains("QuantizedPositionMesh") || l.contains("QuantizedPositionNode")),
+        "report line must identify the mesh/node that was skipped, got: {:?}",
+        report.report_lines
+    );
+}
+
+/// Build a minimal, valid `.glb` with TWO materials: `Mat0` has one real
+/// F32 triangle (no NORMAL, exercises the face-normal fallback path
+/// elsewhere), `Mat1`'s sole primitive has a valid F32 POSITION accessor
+/// but a `KHR_mesh_quantization`-style normalized BYTE NORMAL accessor.
+///
+/// Proves a quantized NORMAL (or TEXCOORD_0) drops the whole primitive
+/// even when POSITION is valid F32 — partial garbage attributes (correct
+/// positions, garbage normals) are not acceptable.
+fn write_synthetic_quantized_normal_glb() -> std::path::PathBuf {
+    let tri: [[f32; 3]; 3] = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+    let mut bin = Vec::with_capacity(36 + 36 + 9);
+    for v in &tri {
+        for c in v {
+            bin.extend_from_slice(&c.to_le_bytes());
+        }
+    }
+    // Mat1's valid F32 POSITION.
+    for v in &tri {
+        for c in v {
+            bin.extend_from_slice(&c.to_le_bytes());
+        }
+    }
+    // Normalized BYTE NORMAL: 3 vertices * VEC3<i8> = 9 bytes. Component
+    // values are arbitrary — never legitimately read, only checked for
+    // componentType.
+    let quantized_normals: [[i8; 3]; 3] = [[0, 0, 127], [0, 0, 127], [0, 0, 127]];
+    for v in &quantized_normals {
+        for c in v {
+            bin.push(*c as u8);
+        }
+    }
+
+    let doc = serde_json::json!({
+        "asset": { "version": "2.0" },
+        "extensionsUsed": ["KHR_mesh_quantization"],
+        "scene": 0,
+        "scenes": [{ "nodes": [0, 1] }],
+        "nodes": [{ "mesh": 0 }, { "mesh": 1, "name": "QuantizedNormalNode" }],
+        "meshes": [
+            { "primitives": [{ "attributes": { "POSITION": 0 }, "material": 0 }] },
+            {
+                "name": "QuantizedNormalMesh",
+                "primitives": [{ "attributes": { "POSITION": 1, "NORMAL": 2 }, "material": 1 }]
+            },
+        ],
+        "accessors": [
+            {
+                "bufferView": 0,
+                "componentType": 5126, // FLOAT
+                "count": 3,
+                "type": "VEC3",
+                "min": [0.0, 0.0, 0.0],
+                "max": [1.0, 1.0, 0.0],
+            },
+            {
+                "bufferView": 1,
+                "componentType": 5126, // FLOAT
+                "count": 3,
+                "type": "VEC3",
+                "min": [0.0, 0.0, 0.0],
+                "max": [1.0, 1.0, 0.0],
+            },
+            {
+                "bufferView": 2,
+                "componentType": 5120, // BYTE
+                "normalized": true,
+                "count": 3,
+                "type": "VEC3",
+                "min": [0, 0, 0],
+                "max": [0, 0, 127],
+            },
+        ],
+        "bufferViews": [
+            { "buffer": 0, "byteOffset": 0, "byteLength": 36 },
+            { "buffer": 0, "byteOffset": 36, "byteLength": 36 },
+            { "buffer": 0, "byteOffset": 72, "byteLength": 9 },
+        ],
+        "materials": [
+            { "name": "Mat0", "pbrMetallicRoughness": { "baseColorFactor": [0.5, 0.5, 0.5, 1.0] } },
+            { "name": "Mat1", "pbrMetallicRoughness": { "baseColorFactor": [0.5, 0.5, 0.5, 1.0] } },
+        ],
+        "buffers": [{ "byteLength": bin.len() }],
+    });
+    let json_bytes = serde_json::to_vec(&doc).expect("serialize synthetic quantized-normal glTF JSON");
+
+    let mut json_padded = json_bytes;
+    while !json_padded.len().is_multiple_of(4) {
+        json_padded.push(b' ');
+    }
+    let mut bin_padded = bin;
+    while !bin_padded.len().is_multiple_of(4) {
+        bin_padded.push(0);
+    }
+    let total_len = 12 + 8 + json_padded.len() + 8 + bin_padded.len();
+
+    let mut glb = Vec::with_capacity(total_len);
+    glb.extend_from_slice(b"glTF");
+    glb.extend_from_slice(&2u32.to_le_bytes());
+    glb.extend_from_slice(&(total_len as u32).to_le_bytes());
+    glb.extend_from_slice(&(json_padded.len() as u32).to_le_bytes());
+    glb.extend_from_slice(b"JSON");
+    glb.extend_from_slice(&json_padded);
+    glb.extend_from_slice(&(bin_padded.len() as u32).to_le_bytes());
+    glb.extend_from_slice(b"BIN\0");
+    glb.extend_from_slice(&bin_padded);
+
+    let path = std::env::temp_dir().join(format!(
+        "manifold_synthetic_quantized_normal_{}_{}.glb",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    std::fs::write(&path, &glb).expect("write synthetic quantized-normal glb to temp dir");
+    path
+}
+
+/// BUG-jfe2: a valid F32 POSITION accessor does not save a primitive whose
+/// NORMAL is `KHR_mesh_quantization`-style normalized BYTE — partial
+/// garbage attributes are not acceptable, so the whole primitive is
+/// dropped and named in `ImportReport::report_lines`.
+#[test]
+fn quantized_normal_primitive_reports_instead_of_reading_garbage() {
+    let path = write_synthetic_quantized_normal_glb();
+    let (_def, report) = assemble_import_graph(&path).expect("assemble quantized-normal synthetic glb");
+    std::fs::remove_file(&path).ok();
+
+    assert_eq!(
+        report.material_count, 1,
+        "only Mat0 has readable geometry — Mat1 (quantized NORMAL, valid POSITION) is dropped whole"
+    );
+    assert!(
+        report
+            .report_lines
+            .iter()
+            .any(|l| l.contains("quantized NORMAL") && l.contains("skipped")),
+        "report must name the quantized NORMAL skip, got: {:?}",
+        report.report_lines
+    );
+    assert!(
+        report
+            .report_lines
+            .iter()
+            .any(|l| l.contains("QuantizedNormalMesh") || l.contains("QuantizedNormalNode")),
+        "report line must identify the mesh/node that was skipped, got: {:?}",
+        report.report_lines
+    );
+}
+
 /// Build a minimal, valid `.glb` with ONE triangle primitive that has NO
 /// `material` key at all — glTF's implicit default material
 /// (GLB_XFAIL_BURNDOWN_DESIGN.md D4, BUG-171). No `materials` array in

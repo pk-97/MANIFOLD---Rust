@@ -2458,6 +2458,40 @@ fn summarize_node(
                 ));
                 continue;
             }
+            // BUG-jfe2: KHR_mesh_quantization stores POSITION/NORMAL/
+            // TEXCOORD_0 as normalized BYTE/SHORT (or plain U32 for indices)
+            // instead of F32 to shrink file size. This module's reads —
+            // here and in the vendored gltf crate's Item::from_slice —
+            // assume F32 stride throughout; a quantized accessor misaligns
+            // every subsequent byte, silent garbage geometry with no error.
+            // Checked BEFORE any accessor is read, same skip-and-report
+            // mechanism as the meshopt/Draco checks above. A non-F32 NORMAL
+            // or TEXCOORD_0 skips the whole primitive even when POSITION is
+            // valid F32 — partial garbage attributes are not acceptable.
+            let quantized_semantic = [
+                (gltf::Semantic::Positions, "POSITION"),
+                (gltf::Semantic::Normals, "NORMAL"),
+                (gltf::Semantic::TexCoords(0), "TEXCOORD_0"),
+            ]
+            .into_iter()
+            .find_map(|(semantic, name)| {
+                prim.get(&semantic).and_then(|accessor| {
+                    (accessor.data_type() != gltf::accessor::DataType::F32)
+                        .then(|| (name, accessor.data_type()))
+                })
+            });
+            if let Some((name, data_type)) = quantized_semantic {
+                let label = format!(
+                    "mesh {:?} primitive {} (node {:?})",
+                    mesh.name().unwrap_or("<unnamed>"),
+                    prim.index(),
+                    node.name().unwrap_or("<unnamed>")
+                );
+                report_lines.push(format!(
+                    "{label}: quantized {name} accessor ({data_type:?}) is not supported — primitive skipped (no dequantization)"
+                ));
+                continue;
+            }
             let reader = prim.reader(|b| buffers.get(b.index()).map(|d| d.0.as_slice()));
             let Some(positions) = reader.read_positions() else {
                 // BUG-mbol: a Draco-compressed primitive's base POSITION
