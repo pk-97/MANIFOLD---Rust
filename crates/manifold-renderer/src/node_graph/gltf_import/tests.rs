@@ -324,6 +324,7 @@ fn all_materials_expose_opacity_and_wiring_survives_round_trip() {
         animations: Vec::new(),
         animation_report_lines: Vec::new(),
         extension_report_lines: Vec::new(),
+        lights: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_curation_round_trip.glb");
     let (def, report) = build_import_graph(&summary, path).expect("build 20-object graph");
@@ -738,6 +739,7 @@ fn build_import_graph_groups_each_object_and_flattens_to_flat_wiring() {
         animations: Vec::new(),
         animation_report_lines: Vec::new(),
         extension_report_lines: Vec::new(),
+        lights: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_model.glb");
     let (def, report) = build_import_graph(&summary, path).expect("build grouped graph");
@@ -992,6 +994,7 @@ fn build_import_graph_seeds_source_vertex_count_and_bbox_radius() {
         animations: Vec::new(),
         animation_report_lines: Vec::new(),
         extension_report_lines: Vec::new(),
+        lights: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_seed_test.glb");
     let (def, _report) = build_import_graph(&summary, path).expect("build import graph");
@@ -1062,6 +1065,7 @@ fn bug221_object_transform_recenters_about_own_bbox_center_not_scene_center() {
         animations: Vec::new(),
         animation_report_lines: Vec::new(),
         extension_report_lines: Vec::new(),
+        lights: Vec::new(),
     };
     let center = [
         (summary.bbox_min[0] + summary.bbox_max[0]) * 0.5,
@@ -1159,6 +1163,7 @@ fn bug303_object_transform_exposure_default_matches_stamped_recenter_not_origin(
         animations: Vec::new(),
         animation_report_lines: Vec::new(),
         extension_report_lines: Vec::new(),
+        lights: Vec::new(),
     };
     let center = [
         (summary.bbox_min[0] + summary.bbox_max[0]) * 0.5,
@@ -1223,6 +1228,7 @@ fn bug303_stamped_transform_survives_preset_runtime_instantiation() {
         animations: Vec::new(),
         animation_report_lines: Vec::new(),
         extension_report_lines: Vec::new(),
+        lights: Vec::new(),
     };
     let center = [
         (summary.bbox_min[0] + summary.bbox_max[0]) * 0.5,
@@ -1288,6 +1294,7 @@ fn imported_object_card_visible_shows_pos_hides_scale_and_material() {
         animations: Vec::new(),
         animation_report_lines: Vec::new(),
         extension_report_lines: Vec::new(),
+        lights: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_card_visible_test.glb");
     let (def, _report) = build_import_graph(&summary, path).expect("build import graph");
@@ -1357,6 +1364,7 @@ fn material_named_like_its_own_inner_handle_does_not_collide() {
         animations: Vec::new(),
         animation_report_lines: Vec::new(),
         extension_report_lines: Vec::new(),
+        lights: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_mat_0_collision.glb");
     let (def, _report) =
@@ -1408,6 +1416,7 @@ fn scene_def_with_bbox_half_extent(half_extent: f32) -> EffectGraphDef {
         animations: Vec::new(),
         animation_report_lines: Vec::new(),
         extension_report_lines: Vec::new(),
+        lights: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_target_scene.glb");
     let (def, _report) = build_import_graph(&summary, path).expect("build target scene");
@@ -1424,6 +1433,7 @@ fn merge_summary(materials: Vec<super::gltf_load::GltfMaterialInfo>, half_extent
         animations: Vec::new(),
         animation_report_lines: Vec::new(),
         extension_report_lines: Vec::new(),
+        lights: Vec::new(),
     }
 }
 
@@ -1942,6 +1952,7 @@ fn imports_all_map_kinds_with_correct_color_spaces() {
         animations: Vec::new(),
         animation_report_lines: Vec::new(),
         extension_report_lines: Vec::new(),
+        lights: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_all_maps.glb");
     let (def, report) = build_import_graph(&summary, path).expect("build graph");
@@ -2030,6 +2041,7 @@ fn orm_packed_occlusion_and_mr_share_one_texture_source_node() {
         animations: Vec::new(),
         animation_report_lines: Vec::new(),
         extension_report_lines: Vec::new(),
+        lights: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_orm.glb");
     let (def, _report) = build_import_graph(&summary, path).expect("build graph");
@@ -2089,6 +2101,7 @@ fn over_featured_material_wires_clearcoat_texture_and_maps_transmission_to_blend
         animations: Vec::new(),
         animation_report_lines: Vec::new(),
         extension_report_lines: Vec::new(),
+        lights: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_over_featured.glb");
     let (def, report) = build_import_graph(&summary, path).expect("build graph");
@@ -2165,6 +2178,7 @@ fn sun_macros_bind_both_the_light_and_the_envmap_disc_direction() {
         animations: Vec::new(),
         animation_report_lines: Vec::new(),
         extension_report_lines: Vec::new(),
+        lights: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_sun.glb");
     let (def, _report) = build_import_graph(&summary, path).expect("build graph");
@@ -2268,6 +2282,7 @@ fn round_trip_preserves_map_wires_and_sun_coherence_bindings() {
         animations: Vec::new(),
         animation_report_lines: Vec::new(),
         extension_report_lines: Vec::new(),
+        lights: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_round_trip.glb");
     let (def, _report) = build_import_graph(&summary, path).expect("build graph");
@@ -2348,6 +2363,7 @@ fn animated_material_wires_animation_source_into_its_own_transform_3d() {
         animations: Vec::new(),
         animation_report_lines: Vec::new(),
         extension_report_lines: Vec::new(),
+        lights: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_animation_wiring.glb");
     let (def, _report) = build_import_graph(&summary, path).expect("build graph");
@@ -2436,6 +2452,7 @@ fn animation_cards_are_one_linked_section_per_glb() {
         }],
         animation_report_lines: Vec::new(),
         extension_report_lines: Vec::new(),
+        lights: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_shared_anim_cards.glb");
     let (def, _report) = build_import_graph(&summary, path).expect("build graph");
@@ -2896,6 +2913,7 @@ fn animation_selectors_survive_json_round_trip() {
         animations: Vec::new(),
         animation_report_lines: Vec::new(),
         extension_report_lines: Vec::new(),
+        lights: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_animation_round_trip.glb");
     let (def, _report) = build_import_graph(&summary, path).expect("build graph");
@@ -2944,6 +2962,7 @@ fn round_trip_preserves_blend_alpha_mode_and_opacity_binding() {
         animations: Vec::new(),
         animation_report_lines: Vec::new(),
         extension_report_lines: Vec::new(),
+        lights: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_glass_round_trip.glb");
     let (def, _report) = build_import_graph(&summary, path).expect("build graph");
@@ -3066,6 +3085,7 @@ fn corrupted_assembler_output_fails_validation_naming_the_node() {
         animations: Vec::new(),
         animation_report_lines: Vec::new(),
         extension_report_lines: Vec::new(),
+        lights: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_model.glb");
     let (mut def, _report) = build_import_graph(&summary, path).expect("build graph");

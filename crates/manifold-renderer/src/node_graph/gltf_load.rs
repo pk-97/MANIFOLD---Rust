@@ -362,6 +362,93 @@ pub(crate) fn cross3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     ]
 }
 
+/// BUG-5uqg: `KHR_lights_punctual` light subcategory, mirroring
+/// `gltf::khr_lights_punctual::Kind` but without its borrow (so it can be
+/// carried on [`GltfPunctualLight`] past the parsed `Document`'s lifetime).
+/// `gltf_import::scene` maps `Directional` to `node.light`'s Sun mode and
+/// both `Point` and `Spot` to its Point mode — `node.light` has no cone
+/// attenuation, so a Spot import is a lossy (but visually-closer-than-omitting)
+/// approximation; see that module's conversion doc for the reasoning.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum GltfLightKind {
+    Directional,
+    Point,
+    Spot {
+        /// Radians from the cone centre where falloff begins.
+        inner_cone_angle: f32,
+        /// Radians from the cone centre where falloff ends.
+        outer_cone_angle: f32,
+    },
+}
+
+/// One `KHR_lights_punctual` light, resolved to its owning node's world
+/// transform. `color`/`intensity`/`range` are the RAW spec values (linear
+/// RGB; lux for `Directional`, candela for `Point`/`Spot`; range in metres,
+/// `None` = spec's unbounded default) — `gltf_import::scene` converts
+/// `intensity` into `node.light`'s unitless scale at import time, not here,
+/// so a parse-only test can assert the raw spec numbers unchanged.
+#[derive(Debug, Clone)]
+pub(crate) struct GltfPunctualLight {
+    pub name: Option<String>,
+    pub kind: GltfLightKind,
+    pub color: [f32; 3],
+    pub intensity: f32,
+    pub range: Option<f32>,
+    /// World-space translation of the light's node.
+    pub world_pos: [f32; 3],
+    /// Normalised world-space direction the light illuminates — the node's
+    /// local -Z axis (glTF's fixed light-forward convention) carried through
+    /// the node's world rotation. Position and scale don't affect it (per
+    /// spec, only orientation does), but deriving it as
+    /// `normalize(transform(-Z) - transform(0))` gets the same answer
+    /// without a separate rotation-only matrix path.
+    pub world_forward: [f32; 3],
+}
+
+/// Recursively collect every node in `document` carrying a
+/// `KHR_lights_punctual` light, alongside its world transform. Mirrors
+/// `walk_gltf_node`'s recursion shape but only needs `node.transform()` — no
+/// buffers, no geometry.
+fn walk_gltf_node_for_lights(node: &gltf::Node, parent_world: Mat4, out: &mut Vec<GltfPunctualLight>) {
+    let world = mat4_mul(&parent_world, &node.transform().matrix());
+    if let Some(light) = node.light() {
+        let world_pos = mat4_transform_point(&world, [0.0, 0.0, 0.0]);
+        let fwd_pt = mat4_transform_point(&world, [0.0, 0.0, -1.0]);
+        let world_forward = normalize3(sub3(fwd_pt, world_pos));
+        let kind = match light.kind() {
+            gltf::khr_lights_punctual::Kind::Directional => GltfLightKind::Directional,
+            gltf::khr_lights_punctual::Kind::Point => GltfLightKind::Point,
+            gltf::khr_lights_punctual::Kind::Spot { inner_cone_angle, outer_cone_angle } => {
+                GltfLightKind::Spot { inner_cone_angle, outer_cone_angle }
+            }
+        };
+        out.push(GltfPunctualLight {
+            name: light.name().map(str::to_string),
+            kind,
+            color: light.color(),
+            intensity: light.intensity(),
+            range: light.range(),
+            world_pos,
+            world_forward,
+        });
+    }
+    for child in node.children() {
+        walk_gltf_node_for_lights(&child, world, out);
+    }
+}
+
+/// BUG-5uqg: every `KHR_lights_punctual` light in `document`'s imported node
+/// set (`resolve_import_nodes` — same scene-resolution fallback the mesh
+/// walk uses), resolved to world space. Called once from
+/// `gltf_import_summary`, stored on [`GltfImportSummary::lights`].
+pub(crate) fn collect_punctual_lights(document: &gltf::Document) -> Vec<GltfPunctualLight> {
+    let mut out = Vec::new();
+    for node in resolve_import_nodes(document) {
+        walk_gltf_node_for_lights(&node, MAT4_IDENTITY, &mut out);
+    }
+    out
+}
+
 /// GLB_XFAIL_BURNDOWN_DESIGN.md D6 (BUG-168): build a column-major `Mat4`
 /// from a glTF-convention TRS triple (`q` = quaternion `[x, y, z, w]`) — the
 /// same formula the glTF spec uses to define a node's own TRS matrix, so an
@@ -1395,6 +1482,11 @@ pub(crate) struct GltfImportSummary {
     /// proceeds without them. One line per extension, never a silent skip.
     /// `gltf_import.rs` folds these into `ImportReport::report_lines`.
     pub extension_report_lines: Vec<String>,
+    /// BUG-5uqg: every `KHR_lights_punctual` light in the imported node set,
+    /// resolved to world space — `gltf_import::scene` adds one `node.light`
+    /// card per entry, alongside (not replacing) the synthesized sun/fill/
+    /// strip rig.
+    pub lights: Vec<GltfPunctualLight>,
 }
 
 /// glTF sampler interpolation mode, as encoded in the runtime track
@@ -3269,6 +3361,10 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
     // ones already hard-failed in `parse_document_and_buffers`.
     let extension_report_lines = unsupported_optional_extension_lines(&document);
 
+    // BUG-5uqg: KHR_lights_punctual was listed as supported but never
+    // imported — collect every punctual light in world space.
+    let lights = collect_punctual_lights(&document);
+
     Ok(GltfImportSummary {
         materials,
         bbox_min,
@@ -3278,6 +3374,7 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
         animations,
         animation_report_lines,
         extension_report_lines,
+        lights,
     })
 }
 
@@ -3714,6 +3811,88 @@ mod tests {
         // drift them.
         assert_eq!(DEFAULT_MATERIAL_SENTINEL, u32::MAX);
         assert_eq!(DEFAULT_MATERIAL_MESH_PARAM, -2);
+    }
+
+    /// BUG-5uqg: `KHR_lights_punctual` was listed in
+    /// `MANIFOLD_SUPPORTED_EXTENSIONS` but never actually parsed — this
+    /// pins `collect_punctual_lights`/`gltf_import_summary` against the
+    /// Khronos conformance fixture's single directional light: identity
+    /// node transform at the origin, so world_pos is the origin and
+    /// world_forward is the untouched local -Z axis.
+    #[test]
+    fn directional_light_fixture_imports_one_light_with_expected_shape() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/khronos/DirectionalLight.glb");
+        if !path.exists() {
+            println!(
+                "directional_light_fixture_imports_one_light_with_expected_shape: fixture not found at {}, skipping",
+                path.display()
+            );
+            return;
+        }
+        let summary = gltf_import_summary(&path)
+            .unwrap_or_else(|e| panic!("gltf_import_summary({}): {e}", path.display()));
+        assert_eq!(summary.lights.len(), 1, "expected exactly one KHR_lights_punctual light");
+        let light = &summary.lights[0];
+        assert_eq!(light.kind, GltfLightKind::Directional);
+        assert!((light.color[0] - 0.9).abs() < 1e-4);
+        assert!((light.color[1] - 0.8).abs() < 1e-4);
+        assert!((light.color[2] - 0.1).abs() < 1e-4);
+        assert!((light.intensity - 1.0).abs() < 1e-4);
+        assert_eq!(light.range, None);
+        assert!(
+            (light.world_pos[0]).abs() < 1e-4
+                && (light.world_pos[1]).abs() < 1e-4
+                && (light.world_pos[2]).abs() < 1e-4,
+            "identity node transform should leave the light at the origin, got {:?}",
+            light.world_pos
+        );
+        assert!(
+            (light.world_forward[0]).abs() < 1e-4
+                && (light.world_forward[1]).abs() < 1e-4
+                && (light.world_forward[2] - (-1.0)).abs() < 1e-4,
+            "identity node transform should leave the light aiming down -Z, got {:?}",
+            light.world_forward
+        );
+    }
+
+    /// BUG-5uqg: the multi-light Khronos fixture — one directional and one
+    /// point light on non-identity node transforms — pins that both
+    /// spec kinds parse with the RAW (unconverted) intensity units;
+    /// `gltf_import::scene`'s conversion is exercised separately by the
+    /// import-graph assembly tests.
+    #[test]
+    fn playset_light_test_fixture_imports_directional_and_point_lights() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/khronos/PlaysetLightTest.glb");
+        if !path.exists() {
+            println!(
+                "playset_light_test_fixture_imports_directional_and_point_lights: fixture not found at {}, skipping",
+                path.display()
+            );
+            return;
+        }
+        let summary = gltf_import_summary(&path)
+            .unwrap_or_else(|e| panic!("gltf_import_summary({}): {e}", path.display()));
+        assert_eq!(summary.lights.len(), 2, "expected the fixture's two KHR_lights_punctual lights");
+
+        let directional = summary
+            .lights
+            .iter()
+            .find(|l| l.kind == GltfLightKind::Directional)
+            .expect("expected one Directional light");
+        assert!((directional.intensity - 512.25).abs() < 1e-2);
+
+        let point = summary
+            .lights
+            .iter()
+            .find(|l| l.kind == GltfLightKind::Point)
+            .expect("expected one Point light");
+        assert!((point.intensity - 1500.0).abs() < 1e-1);
+        assert_eq!(point.name.as_deref(), Some("LEDlight"));
+        // Non-identity node transform (translation ~[0.117, 0.124, 0.001]):
+        // world_pos must actually carry it, not fall back to the origin.
+        assert!(point.world_pos[0].abs() > 1e-3 || point.world_pos[1].abs() > 1e-3);
     }
 }
 
