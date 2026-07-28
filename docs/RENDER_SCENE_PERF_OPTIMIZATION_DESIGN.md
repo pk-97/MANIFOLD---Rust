@@ -1,38 +1,6 @@
 # Render-Scene Perf Optimization — retiring BUG-189 (import-graph-10ms-resolution-independent-gpu-flo…)'s ~10 ms import-graph GPU floor
 
-**Status:** SHIPPED 2026-07-17 — all phases (P0–P4 + P3b) landed and P5's final re-measure is in
-(Sonnet, orchestrated overnight per Peter's explicit mandate: "finish the optimisations end to end
-in this orchestration session using sonnet agents") · design 2026-07-16 (Fable) · APPROVED
-2026-07-16. **Final numbers (AMG GT3, M4 Max, two-consecutive-run pairs, `cargo xtask perf-soak`):**
-@3840×2160 GPU p50 13.554ms → **9.45ms** (~4.1ms/~30% drop); @1920×1080 GPU p50 9.830ms → **5.73ms**
-(~4.1ms/~42% drop). BUG-189's shadow+IBL re-render waste is closed; the residual is `render_scene`'s
-main pass — real work, not staleness, and now essentially 100% of render_scene's own GPU time in
-steady state (no separately-labeled shadow/IBL rows survive a profiled run) — R4 (indexed-mesh
-rendering, deferred) is the next lever, per the Deferred section below. BUG-190 (BrainStem CPU cost)
-was diagnosed, not fixed, per this doc's own D3/D3b scope — see `docs/BUG_BACKLOG.md`. This document
-was the execution contract for an unattended Sonnet-orchestrated build; every decision was closed,
-zero executor discretion. Scoping authority for anything this doc did not answer was Fable, not the
-orchestrator — if a phase hit an undecided fork, the rule was STOP and surface it, never improvise
-(Peter's instruction to the orchestrator, verbatim: "you do not have permission to make decisions
-yourself unadvised").
-**Prerequisites:** PERF_BUDGET_GATE_DESIGN.md P1+P2+P2b SHIPPED — perf-soak
-is this design's sole measurement oracle. GLTF_ANIMATION_DESIGN.md A1–A3 SHIPPED. Nothing here
-waits on A4 or on SCENE_SETUP_PANEL_DESIGN.md (see D9).
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
-**P3 amendment (2026-07-17, post-P3):** the mechanism landed exactly as specified and every
-phase-local correctness gate passes (I2 animated-envmap parity, I4 static bit-identity, per-producer
-gpu-proofs tests on `bake_equirect_envmap`/`hdri_source`/`render_scene`, all on real GPU hardware) —
-but the phase's OWN perf gate (a multi-ms AMG @4K delta matching P0's measured ~41% IBL share) FAILS
-on a real glTF import: measured p50 13.554ms → 13.333ms, ~0.22ms/1.6%, not multi-ms. Root cause is
-outside this phase's file scope: every glTF import wires
-`node.bake_environment → node.switch_texture (env_mode select) → node.render_scene`, never a direct
-wire, and `node.switch_texture` copies its selected branch into its own output every frame without
-ever declaring `mark_outputs_unchanged` — so `render_scene`'s envmap generation never stabilizes on
-a real import and P3's `ibl_cache_key` misses every frame. Filed as BUG-197 (`docs/BUG_BACKLOG.md`),
-which also updates BUG-189's fix-shape note. P3's code is safe and correct to keep (any DIRECTLY-
-wired envmap — a hand-authored generator preset, or `switch_texture` once BUG-197 lands — gets the
-full benefit today), but BUG-189's floor is NOT closed by P3 alone; do not treat this phase as having
-delivered its headline number without BUG-197 landing first.
+**Status:** SHIPPED 2026-07-17 — all phases (P0–P4 + P3b) landed, final re-measure in. Final numbers (AMG GT3, M4 Max, `cargo xtask perf-soak`): @3840×2160 GPU p50 13.554ms → **9.45ms** (~30% drop); @1920×1080 9.830ms → **5.73ms** (~42%). BUG-189's shadow+IBL re-render waste is closed; the residual is `render_scene`'s main pass — real work, essentially 100% of its steady-state GPU time — and R4 (indexed-mesh rendering, Deferred) is the next lever. P3's own perf gate FAILED on real imports: the mechanism is correct (all parity gates green) but every glTF import routes env through `node.switch_texture`, which copies its branch per frame without `mark_outputs_unchanged`, hiding the win — tracked in `docs/BUG_BACKLOG.md` with BUG-190 (BrainStem CPU cost, diagnosed not fixed). · design 2026-07-16 · APPROVED 2026-07-16**
 
 BUG-189: the glb import graph burns ~10 ms of true GPU time per frame *regardless of resolution*
 (9.8 ms @1080p, 13.5 ms median / 22.7 ms p95 @4K, AMG GT3, 302k tris / 78 materials, M4 Max).

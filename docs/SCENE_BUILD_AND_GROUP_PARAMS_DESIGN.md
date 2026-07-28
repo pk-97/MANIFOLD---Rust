@@ -11,29 +11,9 @@ object's group to `render_scene`'s `mesh_k`/`material_k`/`transform_k` ports —
 port family was replaced by `SCENE_OBJECT_AND_PANEL_V2_DESIGN.md` (shipped 2026-07-17) with one
 `object_k` wire out of a `node.scene_object` node; `AddSceneObjectCommand` now emits the new
 shape. The rest of this doc's design (card sections, Transform atoms, group boxes) is unaffected
-and still describes the shipped mechanism. **P1 SHIPPED 2026-07-10**:
-`PortType::Transform` + `node.transform_3d` atom. **P2 SHIPPED 2026-07-10**: `render_scene` sheds
-all per-object transform params for `transform_n` ports; v1.12.0 migration carries old saves across
-(values + card bindings re-pointed); glTF importer emits the end-state shape. Migration parity vs
-the real `meshImportTests` project is pixel-identical; a wired LFO→`rot_y` spins an imported object.
-This realizes REALTIME_3D's amended D3 (object transforms are now a `transform_n: Transform` port).
-**P3 SHIPPED 2026-07-10**: card sections from group names (`ParamSpecDef.section` seeded at expose +
-by importer; collapsible headers with UI-local fold state; group-rename sweep; manifest-only mapping
-write). A glTF-imported scene's card is now named foldable blocks (`QS1694-W02-1-1`, `Material.001`,
-`Camera`/`Sun`/`Environment`), not a flat slider wall — verified via faithful-render capture + a
-field-level fold proof. Also fixed a load-bearing registry gap (`ParamDef` lacked the `section`
-mirror, silently dropping sections for glTF-imported generators).
-**P4 SHIPPED 2026-07-10**: group boxes render their exposed param rows on the node face (same
-`ChangeGraphParamCommand` path as the card — one value, three surfaces; collapsed → "N params" chip).
-Verified on the REAL azalea import: the "QS1694-W02-1-1"/"Material.001" object boxes carry live
-Metallic/Roughness sliders. Fixed the payoff-blocking BUG-103 (outer-routings-drop-bindings-that-target-a-node-…) (`outer_routings_from_view` never
-recursed into group bodies, so in-group material bindings were dropped for exactly the imported
-scenes the wave targets — 9/13 → 13/13 routings). Landings:
-`docs/landings/2026-07-10-scene-build-p{1,2,3,4}.md`.
-**P5 SHIPPED 2026-07-10** (`AddSceneObjectCommand` + `AddSceneLightCommand` with node-face "+ Object"/
-"+ Light" buttons, D7a light defaults incl. `cast_shadows` ON; same-pair wire ribbons with `×N` badge).
-Both gestures verified on the real azalea import (node/wire counts 8→9/12→15 add-object, 8→9/12→13
-add-light). Landing: `docs/landings/2026-07-10-scene-build-p5.md`. **Wave complete.**
+and still describes the shipped mechanism.
+
+P1–P5 as-built records: `docs/landings/2026-07-10-scene-build-p1.md` through `…-p5.md`.
 **Prerequisites:** PARAM_STORAGE_DESIGN P1–P5 (SHIPPED). PARAM_STORAGE_BOUNDARIES_DESIGN
 P1–P2 must land **before this doc's P3 only** (the card phase reads specs straight off
 the manifest; building it against the pre-boundaries dual-source card path would wire it
