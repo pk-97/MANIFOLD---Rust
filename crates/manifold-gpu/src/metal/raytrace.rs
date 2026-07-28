@@ -921,17 +921,23 @@ kernel void trace_shadow_rays(
         texel_scale = 1e-3; // degenerate/singular reconstruction fallback
     }
     float bias_eps = min(texel_scale * 2.0, BIAS_EPS_CAP);
-    // BUG-309 follow-up: bias along `sun_dir` ONLY, not `n` — originally
-    // because the (now-removed) depth finite-difference normal was noisy
-    // at this scene's depth-precision scale and produced a visibly
-    // scattered, wide false-shadow footprint even after the epsilon-scale
-    // fix above. RT-T1-B's `n` is a real interpolated vertex normal now
-    // (no longer noisy), but `sun_dir` stays the bias direction anyway —
-    // it's exact (a CPU-computed light direction, never reconstructed) and
-    // this bias is a shadow-ray-only concern unrelated to AO/GI's `n`
-    // consumers; changing it is a separate, unscoped decision (T1-B's
-    // brief is normals, not shadow-bias direction).
+    // BUG-309 follow-up: the SHADOW ray biases along `sun_dir`, not `n` —
+    // originally because the (now-removed) depth finite-difference normal
+    // was noisy at this scene's depth-precision scale and produced a
+    // visibly scattered, wide false-shadow footprint even after the
+    // epsilon-scale fix above. `sun_dir` is exact (a CPU-computed light
+    // direction, never reconstructed), and biasing toward the light is
+    // correct for a shadow ray.
     float3 origin = wp + p.sun_dir * bias_eps;
+    // BUG-8p1h: secondary rays (AO / GI / reflection) get their OWN origin,
+    // biased along the interpolated vertex normal `n` (real since RT-T1-B)
+    // — never along `sun_dir`. Sharing the sun-biased origin meant a sun
+    // BELOW the surface sank every secondary-ray origin inside the
+    // geometry (self-intersection: ao→0, GI dead, reflections hitting
+    // backfaces), so moving a zero-intensity sun visibly changed lighting
+    // — a lights-out cue integrity bug. Sun position must affect nothing
+    // but the sun's own (intensity-scaled) terms.
+    float3 sec_origin = wp + n * bias_eps;
 
     ray r;
     r.origin = origin;
@@ -965,7 +971,7 @@ kernel void trace_shadow_rays(
     if (p.ao_spp > 0) {
         ao = 0.0;
         ray ao_r;
-        ao_r.origin = origin;
+        ao_r.origin = sec_origin;
         ao_r.min_distance = bias_eps * 0.5;
         ao_r.max_distance = p.ao_radius;
         for (uint s = 0; s < p.ao_spp; s++) {
@@ -1003,7 +1009,7 @@ kernel void trace_shadow_rays(
     float3 gi = float3(0.0);
     if (p.gi_spp > 0) {
         ray gr;
-        gr.origin = origin;
+        gr.origin = sec_origin;
         gr.min_distance = bias_eps * 0.5;
         gr.max_distance = INFINITY;
         for (uint s = 0; s < p.gi_spp; s++) {
@@ -1069,8 +1075,8 @@ kernel void trace_shadow_rays(
     // value" (BUG-88m) for fs_pbr's substitution gate — R2 must treat
     // `.a < 0` as invalid too when it lands.
     //
-    // `origin` biases along `sun_dir` (the shadow ray's bias — the design
-    // says reuse it): the t_min rejection below is what protects the
+    // `sec_origin` biases along the surface normal (BUG-8p1h — never
+    // `sun_dir`): the t_min rejection below is what protects the
     // reflection ray from self-intersection, same as the shadow ray's.
     const float RT_REFL_MISS_HIT_DIST = 0.0;
     if (p.refl_spp > 0u && obj_id >= 0.0) {
@@ -1092,7 +1098,7 @@ kernel void trace_shadow_rays(
                 rdir = ggx_reflection_dir(n, V, roughness, blue_noise_sample(tid, p.frame_index, 0u, p.refl_spp));
             }
             ray rr;
-            rr.origin = origin;
+            rr.origin = sec_origin;
             rr.direction = rdir;
             rr.min_distance = bias_eps * 0.5;
             rr.max_distance = INFINITY;
