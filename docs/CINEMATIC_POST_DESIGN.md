@@ -1,6 +1,6 @@
 # Cinematic Post — DoF, SSAO, motion blur as graph atoms
 
-**Status:** SHIPPED (closed 2026-07-16 — Peter waived the owed P4/P5/P6 look-passes in the verification-debt burn-down; VD-020-CINEMATIC closed. Look issues from here are new BUG_BACKLOG entries. BUG-136's live-repro escalation stays open in the backlog.) — P0–P6 SHIPPED · Sonnet 5 · **P0 (D7/I6, both layers, `docs/landings/2026-07-12-cinematic-post-batch-a.md`) — derived uniforms are first-class on the texture codegen path AND in fused regions. P1+P2 (`docs/landings/2026-07-12-cinematic-post-batch-b.md`) — `node.coc_from_depth` + DoF slice, `node.ssao_from_depth` + SSAO arm. P3 (`docs/landings/2026-07-12-cinematic-post-batch-c.md`) — `node.motion_blur` tail. AMENDED 2026-07-13 (Fable, with Peter): quality verdict on the shipped stack (*"look terrible and need a lot of work... very blocky and has a hard cut off on the blur"*) → P4 escalated from optional to the DoF root fix (see the `dof-polish-wave-prompt` lane; bugs BUG-136/137/138 own the diagnosis), P5 GTAO decisions committed (D9), P6 AO denoise added (D8), PNG look-pass rule added to open phases (section 4). **P4 SHIPPED 2026-07-13 (Sonnet 5, `dof-polish` worktree/branch `feat/dof-polish`)** — BUG-137's `node.coc_dilate` (standalone neighborhood-max atom) landed first, then `node.bokeh_gather` (D5's 32-tap occlusion-aware disc gather) replaced the two `variable_blur` H/V nodes, still consuming `coc_dilate`'s dilated CoC. `CinematicScene` now runs the full DoF(dilated+bokeh)+SSAO+motion-blur chain. Orchestrator before/after PNG look-pass (see BUG-137 (no-slug)) showed the silhouette-bleed halo visibly gone; Peter's own confirmation on a richer depth-discontinuity scene was waived 2026-07-16 (verification-debt burn-down). BUG-138 (blockiness) FIXED 2026-07-13 in `node.variable_blur` itself (scales sub-tap density with CoC radius above an 8px `step_size` threshold, byte-identical below it) — the atom is no longer in `CinematicScene`'s chain but remains user-wireable elsewhere. BUG-136 (motion blur no visible effect) — the dof-polish lane ran both committed runtime probes (shutter_angle at uniform-pack, a velocity texel during a headless orbit) against the shipped `CinematicScene` graph: both check out clean every frame, and a `shutter=0` vs `shutter=181.05` headless render diff shows a real shader-level visual delta. This exonerates the graph wiring, shader math, matrix bookkeeping, derived-uniform packing, and velocity buffer end to end — the bug does not reproduce headlessly. **ESCALATED, not fixed:** the remaining suspects (UI slider-drag propagation cadence into the content-thread graph; whether the render loop ticks continuously outside active playback) live entirely in the live app's interactive layer, which this lane's headless workers cannot observe — needs either a live repro session with Peter or a design decision on which layer to instrument. **P6 SHIPPED 2026-07-13 (Sonnet 5, AO-quality lane, `feat/ao-denoise-gtao`)** — `node.bilateral_blur` (D8, MultiInputCoincident, Gather+GatherTexel) inserted between the AO node and its mix in `CinematicScene`'s `ao` group; I7's three named tests + generated-vs-hand parity all green; fusion 15→17 dispatches (bilat_v joins the mix region, bilat_h stays isolated — Gather-can't-fuse-with-producer, the design's own stated cost). Demo scene (flat plane, near-zero real occlusion) shows no visible before/after difference — an honest scene limitation, not a claim of effect; the numeric I7 tests are the actual proof. **P5 SHIPPED 2026-07-13 (Sonnet 5, same lane)** — `node.ssao_gtao` (D9(a), the committed 2-slice/4-step horizon-angle integral) replaces `node.ssao_from_depth` outright (D9(b)): old primitive file deleted, not paralleled; load-migration via `manifold_core::type_id_migration::TYPE_ID_MIGRATIONS` (the actual node-typeId choke point, `graph_loader.rs`'s `migrate_def_type_ids` — NOT `manifold-io`'s top-level `PresetInstance.effectType` walker, which doesn't reach nested graph-node typeIds) extended to also drop params the successor doesn't declare (`bias`), proven by a round-trip test; I8's four named checks green; negative `rg 'ssao_from_depth'` gate clean (doc/comment/migration-table hits only); fusion dispatch count unchanged (17 — pure retype). Before/after PNG (SSAO vs GTAO, both bilateral-denoised) shows a real visible difference: GTAO darkens the plane's silhouette edge where SSAO showed almost nothing — the expected depth-cliff sensitivity difference, within D9's stated honest cost (thin-object over-darkening). **Peter waived the P5/P6 look-pass 2026-07-16** (verification-debt burn-down; orchestrator-level PNG review had found no defects) — any look issue found in use is filed as a bug, not reopened as a gate.**
+**Status:** SHIPPED (closed 2026-07-16) — P0–P6 all landed; as-built record in section 7. Peter waived the owed P4/P5/P6 look-passes in the verification-debt burn-down (VD-020-CINEMATIC closed); any look issue from here is filed as a new BUG_BACKLOG entry, never reopened as a gate. OPEN: BUG-136 (cinematic-motion-blur-no-visible-effect) — see section 7's escalation note. · 2026-07-12**
 **Prerequisites:** P0 (this doc, D7) before P1–P4; CAMERA_AND_LENS P1+P2 and GBUFFER P1 before this P1/P2; GBUFFER P2 before this P3.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -475,3 +475,35 @@ affordance is unphased.
   once depth is a wire; needs no design — listed so nobody writes one.
 - **Auto-focus (focus follows a target object)** — trigger: Peter asks;
   shape: a CPU atom reading a transform wire → focus_distance scalar out.
+
+## 7. As built (P0–P6)
+
+- **P0** — derived uniforms first-class in the freeze compiler, texture codegen
+  path AND fused regions (D7, both layers).
+- **P1/P2/P3** — `coc_from_depth` + DoF slice, `ssao_from_depth` + SSAO arm,
+  `node.motion_blur` tail, all per their briefs in section 4.
+- **P4 (escalated to the DoF root fix after Peter's quality verdict on the first
+  ship)** — BUG-137's `node.coc_dilate` (neighborhood-max atom) + `node.bokeh_gather`
+  (D5's 32-tap occlusion-aware disc gather) replaced the two `variable_blur` H/V
+  nodes; silhouette-bleed halo confirmed gone in before/after PNGs. BUG-138
+  (blockiness) fixed inside `node.variable_blur` itself (sub-tap density scales with
+  CoC radius above an 8px `step_size` threshold, byte-identical below) — the atom
+  left `CinematicScene`'s chain but stays user-wireable.
+- **P5** — `node.ssao_gtao` (D9's 2-slice/4-step horizon-angle integral) replaced
+  `node.ssao_from_depth` outright: old primitive deleted, load-migration through
+  `TYPE_ID_MIGRATIONS` (the graph-node typeId choke point) extended to drop params
+  the successor doesn't declare, proven by round-trip test; negative
+  `rg 'ssao_from_depth'` gate clean; fusion dispatch count unchanged.
+- **P6** — `node.bilateral_blur` (D8) inserted between AO and its mix; fusion
+  15→17 dispatches (bilat_h stays isolated — Gather-can't-fuse-with-producer, the
+  design's stated cost). The flat-plane demo scene shows no visible difference —
+  honest scene limitation; I7's numeric tests are the proof.
+- **BUG-136 escalation (OPEN):** motion blur shows no visible effect live. Both
+  committed runtime probes (shutter_angle at uniform pack, a velocity texel during
+  a headless orbit) check out clean every frame, and a shutter 0-vs-181° headless
+  render diff shows a real shader-level delta — graph wiring, shader math, matrix
+  bookkeeping, derived-uniform packing, and the velocity buffer are exonerated end
+  to end. The bug does not reproduce headlessly; remaining suspects live in the
+  interactive layer (slider-drag propagation cadence into the content-thread graph;
+  whether the render loop ticks outside active playback). Needs a live repro
+  session with Peter or a decision on which layer to instrument.
