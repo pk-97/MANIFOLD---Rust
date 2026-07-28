@@ -380,7 +380,15 @@ fn assembles_azalea_into_two_object_render_scene_graph() {
 
     assert_eq!(report.material_count, 2, "azalea has 2 materials with geometry");
     assert_eq!(report.object_count, 2);
-    assert_eq!(report.textures_wired, 2, "both azalea materials carry a base-color texture");
+    // BUG-w5wv: both azalea materials actually declare `KHR_materials_unlit`
+    // with a `baseColorTexture` — real-world unlit-textured assets, not a
+    // synthetic case. The importer now maps unlit's baseColor (factor AND
+    // texture) to the emissive slot instead of base-color, so
+    // `textures_wired` (which counts ONLY the base-colour wire, per its own
+    // doc comment in `object_group.rs`) is correctly 0 here; both textures
+    // are still imported, just wired to `emissive_map` via the ordinary
+    // `MAP_FAMILIES` walk instead.
+    assert_eq!(report.textures_wired, 0, "azalea's textures moved to emissive (unlit mapping)");
     assert_eq!(report.default_material_vertex_count, 0);
     assert!(report.camera_synthesized);
 
