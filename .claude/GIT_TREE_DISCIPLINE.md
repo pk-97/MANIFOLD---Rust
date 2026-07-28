@@ -109,11 +109,12 @@ origin main` (allow + reminder present); `merge <branch>` while on main
   rejected because someone landed first, repeat. New/renamed docs need
   `scripts/gen_docs_index.py` before the sweep — a freshness test
   enforces it. The gate also owns status housekeeping: in the worktree, run
-  its copies of `bug_status.py --check` (fix drift with `--write` there — it
-  refuses in main) and `design_status_check.py origin/main HEAD`, so backlog
-  reflow and design-doc status lines land in the same merge as the code. The
-  post-merge housekeeper on main is a backstop, not the workflow — its
-  remedies are worktree-shaped, never in-place edits to main.
+  its copy of `.claude/hooks/design_status_check.py origin/main HEAD`, so
+  design-doc status lines land in the same merge as the code. (Bug status
+  lives in beads since BUG_BACKLOG.md froze 2026-07-25 — `bug_status.py` and
+  its landing-time reflow are retired.) The post-merge housekeeper on main is
+  a backstop, not the workflow — its remedies are worktree-shaped, never
+  in-place edits to main.
 - **Perf gate for content-thread/render-path waves** (PERF_BUDGET_GATE_DESIGN.md
   P3): if the wave touched content-thread or render-path code, the gate list
   above also includes `cargo xtask perf-soak <project|glb> [--seconds N]
