@@ -98,7 +98,9 @@ origin main` (allow + reminder present); `merge <branch>` while on main
 - **To land a workstream:** fetch → merge current `origin/main` into your
   branch → rerun the gate (touched-crate clippy + focused tests; the full
   workspace sweep — workspace clippy `--tests` + `cargo nextest run --workspace` +
-  `cargo deny check bans` — at batched landings per section 2c, or sooner when blast
+  `cargo deny check bans` + `scripts/feature_matrix.py` (non-default features
+  are invisible to the workspace sweep and rot without it, FOUNDATIONAL_GAPS.md
+  A7 (feature-matrix build rot)) — at batched landings per section 2c, or sooner when blast
   radius says so; plus the UI flow gate — `scripts/run_ui_flows.py
   --touched origin/main...HEAD` — path-scoped via the flow manifest's
   `path_triggers`, exits 0 immediately when no flow-mapped path is touched;

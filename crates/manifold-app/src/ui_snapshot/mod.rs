@@ -1884,7 +1884,7 @@ mod overlay_fidelity_proof {
         // composite of the same panels, and return (base_before, after).
         // Comparing before/after the SAME offscreen keeps the assertion immune
         // to the font/GPU nondeterminism a second composite would introduce.
-        let mut paint_range = |renderer: &mut UIRenderer,
+        let paint_range = |renderer: &mut UIRenderer,
                                cache: &mut UICacheManager,
                                ui: &mut UIRoot,
                                sub_region: bool|

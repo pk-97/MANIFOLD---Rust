@@ -16,13 +16,13 @@
 //!
 //! Three measurements per run:
 //! - B = baseline (emission 10, converged after 16 warmup + 6 motion frames)
-//! - A_nc = step+1 frame, NO owner change (accumulation blends 0.9*B + 0.1*2B)
-//! - A_c = step+1 frame, owner_key 1 (accumulation resets, raw 2*B)
+//! - a_nc = step+1 frame, NO owner change (accumulation blends 0.9*B + 0.1*2B)
+//! - a_c = step+1 frame, owner_key 1 (accumulation resets, raw 2*B)
 //!
-//! Theory: A_nc/B = 1.1, A_c/B = 2.0
+//! Theory: a_nc/B = 1.1, a_c/B = 2.0
 //!
-//! GATE-MUST-FAIL discipline: if A_nc/B ≈ 2.0 the history isn't engaging
-//! (accumulation dead); if A_c/B ≈ 1.1 the cut didn't reset (reset path dead).
+//! GATE-MUST-FAIL discipline: if a_nc/B ≈ 2.0 the history isn't engaging
+//! (accumulation dead); if a_c/B ≈ 1.1 the cut didn't reset (reset path dead).
 //! Measured values (2026-07-26): B=?, A_nc=?, A_c=?
 
 use half::f16;
@@ -353,8 +353,8 @@ fn mirror_pixel(cam: &Camera, world: [f32; 3], w: u32, h: u32) -> (f32, f32) {
 ///
 /// Theory:
 /// - B (converged at emission 10): baseline luminance
-/// - A_nc (step+1, no cut): 0.9 * B + 0.1 * (2 * B) = 1.1 * B
-/// - A_c (step+1, cut via owner_key=1): raw trace = 2 * B
+/// - a_nc (step+1, no cut): 0.9 * B + 0.1 * (2 * B) = 1.1 * B
+/// - a_c (step+1, cut via owner_key=1): raw trace = 2 * B
 ///
 /// Bands: [1.02, 1.25] for blend, [1.8, 2.2] for cut (pinned from measured
 /// values 2026-07-26: B=?, A_nc=?, A_c=?).
@@ -371,46 +371,46 @@ fn specular_history_blends_without_cut_and_resets_on_cut() {
 
     const RADIUS: i32 = 7;
 
-    // No-cut run: baseline B and step+1 A_nc (both owner_key 0).
+    // No-cut run: baseline B and step+1 a_nc (both owner_key 0).
     let (b_bytes, nc_bytes, _, _) = render_sequence(h, &json, false);
-    let B = region_luma(&b_bytes, w, hh, px, py, RADIUS);
-    let A_nc = region_luma(&nc_bytes, w, hh, px, py, RADIUS);
+    let b = region_luma(&b_bytes, w, hh, px, py, RADIUS);
+    let a_nc = region_luma(&nc_bytes, w, hh, px, py, RADIUS);
 
-    // Cut run: step+1 A_c with owner_key 1 on the target frame.
+    // Cut run: step+1 a_c with owner_key 1 on the target frame.
     let (_, c_bytes, _, _) = render_sequence(h, &json, true);
-    let A_c = region_luma(&c_bytes, w, hh, px, py, RADIUS);
+    let a_c = region_luma(&c_bytes, w, hh, px, py, RADIUS);
 
     // Neighbor pixel 30 texels right of the mirror pixel (for sanity).
     let neighbor = region_luma(&b_bytes, w, hh, px + 30.0, py, RADIUS);
 
-    let ratio_nc = A_nc / B;
-    let ratio_c = A_c / B;
+    let ratio_nc = a_nc / b;
+    let ratio_c = a_c / b;
 
     eprintln!("R2 STEP 4 ACCUM GATE — measured values (2026-07-26)");
-    eprintln!("  B={B:.6}  A_nc={A_nc:.6}  A_c={A_c:.6}");
-    eprintln!("  A_nc/B={ratio_nc:.6}  A_c/B={ratio_c:.6}");
-    eprintln!("  neighbor={neighbor:.6}  B/neighbor={:.4}", B / neighbor);
+    eprintln!("  B={b:.6}  A_nc={a_nc:.6}  A_c={a_c:.6}");
+    eprintln!("  a_nc/B={ratio_nc:.6}  a_c/B={ratio_c:.6}");
+    eprintln!("  neighbor={neighbor:.6}  B/neighbor={:.4}", b / neighbor);
     eprintln!(
         "  mirror_pixel=({px:.0},{py:.0})  w={w} h={hh}"
     );
 
     // Sanity: emitter reflection is visible over the background.
     assert!(
-        B > neighbor * 2.0,
-        "Sanity fail: emitter not visible in reflection. B={B:.6} neighbor={neighbor:.6}",
+        b > neighbor * 2.0,
+        "Sanity fail: emitter not visible in reflection. B={b:.6} neighbor={neighbor:.6}",
     );
 
     // Blend: no-cut must show ~10% blend (not full reset).
     assert!(
         ratio_nc > 1.02 && ratio_nc < 1.25,
-        "Blend fail: A_nc/B={ratio_nc:.6}. Expected ≈1.1 (blend engaged). \
+        "Blend fail: a_nc/B={ratio_nc:.6}. Expected ≈1.1 (blend engaged). \
          If ≈2.0, accumulation is dead (gate-must-fail).",
     );
 
     // Cut: owner change must reset to raw trace (~2x B).
     assert!(
         ratio_c > 1.8 && ratio_c < 2.2,
-        "Cut reset fail: A_c/B={ratio_c:.6}. Expected ≈2.0 (raw trace). \
+        "Cut reset fail: a_c/B={ratio_c:.6}. Expected ≈2.0 (raw trace). \
          If ≈1.1, cut path dead (gate-must-fail).",
     );
 }
@@ -434,102 +434,101 @@ const SWEEP_FRAMES: i64 = 24;
 /// Camera orbit is time-driven via two node.math nodes wired from
 /// system.generator_input.time: orbit = 0.7 + time * 0.6.
 fn sweep_scene_json() -> String {
-    format!(
-        r#"{{"version":2,"name":"RtR2SweepDump","nodes":[
-        {{"id":0,"typeId":"system.generator_input","nodeId":"input"}},
-        {{"id":1,"typeId":"node.grid_mesh","nodeId":"ground_grid","params":{{
-            "max_capacity":{{"type":"Int","value":8192}},
-            "resolution_x":{{"type":"Int","value":20}},
-            "resolution_y":{{"type":"Int","value":20}},
-            "size_x":{{"type":"Float","value":8.0}},
-            "size_y":{{"type":"Float","value":8.0}}}}}},
-        {{"id":2,"typeId":"node.make_triangles","nodeId":"ground_tris","params":{{
-            "src_cols":{{"type":"Int","value":20}},
-            "src_rows":{{"type":"Int","value":20}}}}}},
-        {{"id":5,"typeId":"node.grid_mesh","nodeId":"quad_grid","params":{{
-            "max_capacity":{{"type":"Int","value":8192}},
-            "resolution_x":{{"type":"Int","value":4}},
-            "resolution_y":{{"type":"Int","value":4}},
-            "size_x":{{"type":"Float","value":1.0}},
-            "size_y":{{"type":"Float","value":1.0}}}}}},
-        {{"id":6,"typeId":"node.make_triangles","nodeId":"quad_tris","params":{{
-            "src_cols":{{"type":"Int","value":4}},
-            "src_rows":{{"type":"Int","value":4}}}}}},
-        {{"id":7,"typeId":"node.transform_3d","nodeId":"quad_xform","params":{{
-            "pos_x":{{"type":"Float","value":0.0}},
-            "pos_y":{{"type":"Float","value":0.8}},
-            "pos_z":{{"type":"Float","value":2.0}}}}}},
-        {{"id":8,"typeId":"node.pbr_material","nodeId":"quad_mat","params":{{
-            "color_r":{{"type":"Float","value":0.5}},
-            "color_g":{{"type":"Float","value":0.5}},
-            "color_b":{{"type":"Float","value":0.5}},
-            "ambient":{{"type":"Float","value":0.0}},
-            "metallic":{{"type":"Float","value":0.0}},
-            "roughness":{{"type":"Float","value":0.5}},
-            "emission_r":{{"type":"Float","value":1.0}},
-            "emission_g":{{"type":"Float","value":0.2}},
-            "emission_b":{{"type":"Float","value":0.1}},
-            "emission_intensity":{{"type":"Float","value":10.0}}}}}},
-        {{"id":3,"typeId":"node.orbit_camera","nodeId":"cam","params":{{
-            "orbit":{{"type":"Float","value":0.7}},
-            "tilt":{{"type":"Float","value":0.95}},
-            "distance":{{"type":"Float","value":10.0}},
-            "fov_y":{{"type":"Float","value":0.8}}}}}},
-        {{"id":30,"typeId":"node.light","nodeId":"sun","params":{{
-            "mode":{{"type":"Enum","value":0}},
-            "pos_x":{{"type":"Float","value":3.0}},
-            "pos_y":{{"type":"Float","value":20.0}},
-            "pos_z":{{"type":"Float","value":3.0}},
-            "aim_x":{{"type":"Float","value":0.0}},
-            "aim_y":{{"type":"Float","value":0.0}},
-            "aim_z":{{"type":"Float","value":0.0}},
-            "color_r":{{"type":"Float","value":1.0}},
-            "color_g":{{"type":"Float","value":1.0}},
-            "color_b":{{"type":"Float","value":1.0}},
-            "intensity":{{"type":"Float","value":1.0}},
-            "cast_shadows":{{"type":"Float","value":1.0}}}}}},
-        {{"id":4,"typeId":"node.pbr_material","nodeId":"ground_mat","params":{{
-            "color_r":{{"type":"Float","value":0.8}},
-            "color_g":{{"type":"Float","value":0.8}},
-            "color_b":{{"type":"Float","value":0.8}},
-            "ambient":{{"type":"Float","value":0.0}},
-            "metallic":{{"type":"Float","value":1.0}},
-            "roughness":{{"type":"Float","value":0.01}}}}}},
-        {{"id":10,"typeId":"node.bake_environment","nodeId":"env","params":{{
-            "width":{{"type":"Int","value":16}},
-            "height":{{"type":"Int","value":8}},
-            "intensity":{{"type":"Float","value":0.0}}}}}},
-        {{"id":40,"typeId":"node.math","nodeId":"orbit_rate","params":{{
-            "a":{{"type":"Float","value":0.0}},
-            "b":{{"type":"Float","value":0.6}},
-            "op":{{"type":"Enum","value":2}}}}}},
-        {{"id":41,"typeId":"node.math","nodeId":"orbit_base","params":{{
-            "a":{{"type":"Float","value":0.0}},
-            "b":{{"type":"Float","value":0.7}},
-            "op":{{"type":"Enum","value":0}}}}}},
-        {{"id":20,"typeId":"node.render_scene","nodeId":"scene","params":{{
-            "objects":{{"type":"Int","value":2}},
-            "lights":{{"type":"Int","value":1}},
-            "rt_enabled":{{"type":"Bool","value":true}},
-            "rt_reflections":{{"type":"Bool","value":true}}}}}},
-        {{"id":99,"typeId":"system.final_output","nodeId":"out"}}
+    r#"{"version":2,"name":"RtR2SweepDump","nodes":[
+        {"id":0,"typeId":"system.generator_input","nodeId":"input"},
+        {"id":1,"typeId":"node.grid_mesh","nodeId":"ground_grid","params":{
+            "max_capacity":{"type":"Int","value":8192},
+            "resolution_x":{"type":"Int","value":20},
+            "resolution_y":{"type":"Int","value":20},
+            "size_x":{"type":"Float","value":8.0},
+            "size_y":{"type":"Float","value":8.0}}},
+        {"id":2,"typeId":"node.make_triangles","nodeId":"ground_tris","params":{
+            "src_cols":{"type":"Int","value":20},
+            "src_rows":{"type":"Int","value":20}}},
+        {"id":5,"typeId":"node.grid_mesh","nodeId":"quad_grid","params":{
+            "max_capacity":{"type":"Int","value":8192},
+            "resolution_x":{"type":"Int","value":4},
+            "resolution_y":{"type":"Int","value":4},
+            "size_x":{"type":"Float","value":1.0},
+            "size_y":{"type":"Float","value":1.0}}},
+        {"id":6,"typeId":"node.make_triangles","nodeId":"quad_tris","params":{
+            "src_cols":{"type":"Int","value":4},
+            "src_rows":{"type":"Int","value":4}}},
+        {"id":7,"typeId":"node.transform_3d","nodeId":"quad_xform","params":{
+            "pos_x":{"type":"Float","value":0.0},
+            "pos_y":{"type":"Float","value":0.8},
+            "pos_z":{"type":"Float","value":2.0}}},
+        {"id":8,"typeId":"node.pbr_material","nodeId":"quad_mat","params":{
+            "color_r":{"type":"Float","value":0.5},
+            "color_g":{"type":"Float","value":0.5},
+            "color_b":{"type":"Float","value":0.5},
+            "ambient":{"type":"Float","value":0.0},
+            "metallic":{"type":"Float","value":0.0},
+            "roughness":{"type":"Float","value":0.5},
+            "emission_r":{"type":"Float","value":1.0},
+            "emission_g":{"type":"Float","value":0.2},
+            "emission_b":{"type":"Float","value":0.1},
+            "emission_intensity":{"type":"Float","value":10.0}}},
+        {"id":3,"typeId":"node.orbit_camera","nodeId":"cam","params":{
+            "orbit":{"type":"Float","value":0.7},
+            "tilt":{"type":"Float","value":0.95},
+            "distance":{"type":"Float","value":10.0},
+            "fov_y":{"type":"Float","value":0.8}}},
+        {"id":30,"typeId":"node.light","nodeId":"sun","params":{
+            "mode":{"type":"Enum","value":0},
+            "pos_x":{"type":"Float","value":3.0},
+            "pos_y":{"type":"Float","value":20.0},
+            "pos_z":{"type":"Float","value":3.0},
+            "aim_x":{"type":"Float","value":0.0},
+            "aim_y":{"type":"Float","value":0.0},
+            "aim_z":{"type":"Float","value":0.0},
+            "color_r":{"type":"Float","value":1.0},
+            "color_g":{"type":"Float","value":1.0},
+            "color_b":{"type":"Float","value":1.0},
+            "intensity":{"type":"Float","value":1.0},
+            "cast_shadows":{"type":"Float","value":1.0}}},
+        {"id":4,"typeId":"node.pbr_material","nodeId":"ground_mat","params":{
+            "color_r":{"type":"Float","value":0.8},
+            "color_g":{"type":"Float","value":0.8},
+            "color_b":{"type":"Float","value":0.8},
+            "ambient":{"type":"Float","value":0.0},
+            "metallic":{"type":"Float","value":1.0},
+            "roughness":{"type":"Float","value":0.01}}},
+        {"id":10,"typeId":"node.bake_environment","nodeId":"env","params":{
+            "width":{"type":"Int","value":16},
+            "height":{"type":"Int","value":8},
+            "intensity":{"type":"Float","value":0.0}}},
+        {"id":40,"typeId":"node.math","nodeId":"orbit_rate","params":{
+            "a":{"type":"Float","value":0.0},
+            "b":{"type":"Float","value":0.6},
+            "op":{"type":"Enum","value":2}}},
+        {"id":41,"typeId":"node.math","nodeId":"orbit_base","params":{
+            "a":{"type":"Float","value":0.0},
+            "b":{"type":"Float","value":0.7},
+            "op":{"type":"Enum","value":0}}},
+        {"id":20,"typeId":"node.render_scene","nodeId":"scene","params":{
+            "objects":{"type":"Int","value":2},
+            "lights":{"type":"Int","value":1},
+            "rt_enabled":{"type":"Bool","value":true},
+            "rt_reflections":{"type":"Bool","value":true}}},
+        {"id":99,"typeId":"system.final_output","nodeId":"out"}
         ],"wires":[
-        {{"fromNode":1,"fromPort":"vertices","toNode":2,"toPort":"in"}},
-        {{"fromNode":2,"fromPort":"out","toNode":20,"toPort":"mesh_0"}},
-        {{"fromNode":5,"fromPort":"vertices","toNode":6,"toPort":"in"}},
-        {{"fromNode":6,"fromPort":"out","toNode":20,"toPort":"mesh_1"}},
-        {{"fromNode":7,"fromPort":"transform","toNode":20,"toPort":"transform_1"}},
-        {{"fromNode":8,"fromPort":"out","toNode":20,"toPort":"material_1"}},
-        {{"fromNode":0,"fromPort":"time","toNode":40,"toPort":"a"}},
-        {{"fromNode":40,"fromPort":"out","toNode":41,"toPort":"a"}},
-        {{"fromNode":41,"fromPort":"out","toNode":3,"toPort":"orbit"}},
-        {{"fromNode":3,"fromPort":"out","toNode":20,"toPort":"camera"}},
-        {{"fromNode":4,"fromPort":"out","toNode":20,"toPort":"material_0"}},
-        {{"fromNode":30,"fromPort":"out","toNode":20,"toPort":"light_0"}},
-        {{"fromNode":10,"fromPort":"envmap","toNode":20,"toPort":"envmap"}},
-        {{"fromNode":20,"fromPort":"color","toNode":99,"toPort":"in"}}
-        ]}}"#
-    )
+        {"fromNode":1,"fromPort":"vertices","toNode":2,"toPort":"in"},
+        {"fromNode":2,"fromPort":"out","toNode":20,"toPort":"mesh_0"},
+        {"fromNode":5,"fromPort":"vertices","toNode":6,"toPort":"in"},
+        {"fromNode":6,"fromPort":"out","toNode":20,"toPort":"mesh_1"},
+        {"fromNode":7,"fromPort":"transform","toNode":20,"toPort":"transform_1"},
+        {"fromNode":8,"fromPort":"out","toNode":20,"toPort":"material_1"},
+        {"fromNode":0,"fromPort":"time","toNode":40,"toPort":"a"},
+        {"fromNode":40,"fromPort":"out","toNode":41,"toPort":"a"},
+        {"fromNode":41,"fromPort":"out","toNode":3,"toPort":"orbit"},
+        {"fromNode":3,"fromPort":"out","toNode":20,"toPort":"camera"},
+        {"fromNode":4,"fromPort":"out","toNode":20,"toPort":"material_0"},
+        {"fromNode":30,"fromPort":"out","toNode":20,"toPort":"light_0"},
+        {"fromNode":10,"fromPort":"envmap","toNode":20,"toPort":"envmap"},
+        {"fromNode":20,"fromPort":"color","toNode":99,"toPort":"in"}
+        ]}"#
+    .to_string()
 }
 
 /// Peter's R2 motion-quality artifact (D-61): the mirror scene under a fast
