@@ -559,6 +559,23 @@ def test_cd_guard():
           g("git fetch && cd /tmp", MAIN_CWD) is not None)
 
 
+def test_sed_write_guard_asks_on_w_command():
+    for cmd in ["sed -n 'w /tmp/x' f", "sed -n '1,5w /etc/pwn' f",
+                "sed -n 'p;w out' f", "sed 's/a/b/w out' f",
+                "sed -n w/tmp/x f"]:
+        check(f"sed_write_guard asks: {cmd}",
+              hook.sed_write_guard(cmd) is not None, cmd)
+
+
+def test_sed_write_guard_ignores_read_only_sed():
+    for cmd in ["sed -n '5,10p' f", "sed -n 's/a/b/p' f",
+                "sed -n '440,460p' file.rs", "sed -n 's/wide/w2/' f",
+                "sed -n 'p' wide.rs", "cat f | sed -n '3p'",
+                "rg -n 'w ' file", "git log --oneline"]:
+        check(f"sed_write_guard silent: {cmd}",
+              hook.sed_write_guard(cmd) is None, cmd)
+
+
 def main():
     test_cd_guard()
     test_branch_force_main_asks()
@@ -605,6 +622,9 @@ def main():
     test_worktree_add_denied_all_modes()
     test_worktree_add_in_compound_denied()
     test_worktree_read_and_remove_unaffected()
+
+    test_sed_write_guard_asks_on_w_command()
+    test_sed_write_guard_ignores_read_only_sed()
 
     test_merge_denied_missing_verdict()
     test_merge_passes_with_gate_verdict()

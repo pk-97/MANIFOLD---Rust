@@ -128,6 +128,29 @@ script and then runs it gets unreviewed execution — the edit is visible, the
 execution is not. Keep allowlisted scripts small and boring, and treat edits to
 them as security-relevant in review.
 
+## 4b. Full-list audit under the section 4 bar (2026-07-28, BUG-lu32 — higher-tier audit of the auto-mode permission boundary)
+
+Every rule then live (102) was read against the bar. Outcome:
+
+- **Fixed:** `Bash(sed -n *)` — sed's `w` script command writes files and was
+  invisible to both the rule and the collapsed-span classifier. Now caught on
+  the raw command by `sed_write_guard` in `preToolUseBash.py` (asks in every
+  mode, outranking allow rules). Three dead one-off rules (fixed-path unzip/cp/
+  mv from finished sessions) pruned.
+- **Accepted, hook-carried:** `git -C *`, `git checkout *`, and the wide git
+  set ride on `preToolUseBash.py`'s destructive-git classification (reset/
+  clean/rebase/force still prompt). These verdicts assume the hook stays
+  registered — the pre-wave `hooks registered`/`hooks fire` checks are the
+  alarm for that assumption.
+- **Accepted, inherent:** cargo build/test/run execute repo code (build
+  scripts, proc macros, tests) by design; the reviewer's unit is the repo
+  diff, not the command. Same class as the section 4 allowlisted-script
+  residual.
+- **Sync:** section 5 drift is machine-checked (`permissions_sync_check.py`);
+  classifier mechanics were re-read at binary 2.1.219 — unchanged since the
+  section 2 (which model runs it) verification, and that section now carries
+  the recheck-on-upgrade rule.
+
 ## 5. Current allow list
 
 Three sources: user-global `~/.claude/settings.json`, committed
@@ -255,9 +278,6 @@ Read(//Users/peterkiemann/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/o
 Read(//Users/peterkiemann/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-app-kit-0.2.2/**)
 Read(//Users/peterkiemann/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-0.5.2/src/**)
 Read(//Users/peterkiemann/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-foundation-0.2.2/src/**)
-Bash(unzip -o '/Users/peterkiemann/Library/CloudStorage/Dropbox/Videos/LATENT SPACE - Marketing Content/MANIFOLD Projects/Interim/Album Art Animation.manifold' -d /private/tmp/claude-501/-Users-peterkiemann-MANIFOLD---Rust/15bacc9b-646a-4bea-bfbd-006916506835/scratchpad/albumart)
-Bash(git -C "/Users/peterkiemann/.claude" mv commands/brief.md commands/tldr.md 2>/dev/null || mv "/Users/peterkiemann/.claude/commands/brief.md" "/Users/peterkiemann/.claude/commands/tldr.md")
-Bash(cp ~/Library/Logs/DiagnosticReports/manifold-2026-06-27-161935.ips /private/tmp/claude-501/-Users-peterkiemann-MANIFOLD---Rust/e3756d30-0ebe-48c4-8b3c-95225affbb28/scratchpad/crash.ips; wc -l /private/tmp/claude-501/-Users-peterkiemann-MANIFOLD---Rust/e3756d30-0ebe-48c4-8b3c-95225affbb28/scratchpad/crash.ips)
 Bash(psql postgresql://litellm:litellm-local@localhost:5432/litellm -c "select \\"startTime\\", model, \\"model_group\\", api_key, total_tokens from \\"LiteLLM_SpendLogs\\" order by \\"startTime\\" desc limit 15;")
 ```
 

@@ -440,7 +440,9 @@ def segment_is_allowed(seg: str) -> bool:
 
     if head == "sed":
         # `-i` / `--in-place` edits the file. Reject any short-flag cluster
-        # containing `i`, or `--in-place`.
+        # containing `i`, or `--in-place`. (The script's `w` command is the
+        # other write path — caught on the RAW command by sed_write_guard,
+        # since quoted scripts are collapsed before this classifier runs.)
         for t in toks[1:]:
             if t.startswith("--in-place") or re.match(r"^-[A-Za-z]*i", t):
                 return False
@@ -845,6 +847,40 @@ def worktree_add_guard(cmd, cwd):
 # tracker state). Ask, not deny: legitimate cases exist, a human
 # confirms them.
 # ---------------------------------------------------------------------------
+
+
+# sed's `w`/`W` script command writes files (`sed -n 'w /path' file`, `s/a/b/w
+# path`) — invisible to the segment classifier because quoted scripts collapse
+# to a placeholder before it runs, and the `Bash(sed -n *)` allow rule would
+# otherwise auto-approve it (BUG-lu32 permission audit, 2026-07-28). Matches a
+# w command at script start, after `;`/`{`, after an address, or as an s///w
+# flag. False positives just prompt.
+_SED_W_RE = re.compile(r"(?:^|[;{])\s*(?:[0-9$.,/*^\[\]-]+\s*)?[wW]\s|/[wW]\s")
+_QUOTED_SPAN_RE = re.compile(r"'([^']*)'|\"([^\"]*)\"")
+
+
+def sed_write_guard(cmd):
+    """ASK when a sed command's script contains a file-writing w command."""
+    if not re.search(r"(?:^|[|;&(\s])sed\s", cmd):
+        return None
+    for m in _QUOTED_SPAN_RE.finditer(cmd):
+        span = (m.group(1) or m.group(2) or "") + " "
+        if _SED_W_RE.search(span):
+            return (
+                "sed script contains a `w` (write-file) command — this writes "
+                "to a path the allow rule never reviewed. If intended, approve; "
+                "otherwise use an explicit redirect or the Write tool."
+            )
+    # unquoted script token (e.g. `sed -n w/tmp/x f` — no space needed after w)
+    unquoted_w = re.compile(r"(?:^|[;{])\s*(?:[0-9$.,*^\[\]-]+\s*)?[wW][\s/]")
+    for tok in cmd.split():
+        if not tok.startswith("-") and unquoted_w.search(tok + " "):
+            return (
+                "sed script contains a `w` (write-file) command — this writes "
+                "to a path the allow rule never reviewed. If intended, approve; "
+                "otherwise use an explicit redirect or the Write tool."
+            )
+    return None
 
 
 def destructive_outward_guard(cmd, cwd):
@@ -1319,6 +1355,13 @@ def main() -> int:
     outward_ask = destructive_outward_guard(cmd, cwd)
     if outward_ask:
         json.dump(build_ask(outward_ask), sys.stdout)
+        return 0
+
+    # 0h. sed w-command guard (BUG-lu32 audit): a quoted sed script can write
+    # files; the allow rule and the collapsed-span classifier both miss it.
+    sed_ask = sed_write_guard(cmd)
+    if sed_ask:
+        json.dump(build_ask(sed_ask), sys.stdout)
         return 0
 
     # T4/T5/T8: warning-only lints, computed unconditionally so they land as
