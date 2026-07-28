@@ -1210,6 +1210,8 @@ fn all_materials_expose_opacity_and_wiring_survives_round_trip() {
         animation_report_lines: Vec::new(),
         extension_report_lines: Vec::new(),
         lights: Vec::new(),
+        cameras: Vec::new(),
+        camera_report_lines: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_curation_round_trip.glb");
     let (def, report) = build_import_graph(&summary, path).expect("build 20-object graph");
@@ -1625,6 +1627,8 @@ fn build_import_graph_groups_each_object_and_flattens_to_flat_wiring() {
         animation_report_lines: Vec::new(),
         extension_report_lines: Vec::new(),
         lights: Vec::new(),
+        cameras: Vec::new(),
+        camera_report_lines: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_model.glb");
     let (def, report) = build_import_graph(&summary, path).expect("build grouped graph");
@@ -1880,6 +1884,8 @@ fn build_import_graph_seeds_source_vertex_count_and_bbox_radius() {
         animation_report_lines: Vec::new(),
         extension_report_lines: Vec::new(),
         lights: Vec::new(),
+        cameras: Vec::new(),
+        camera_report_lines: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_seed_test.glb");
     let (def, _report) = build_import_graph(&summary, path).expect("build import graph");
@@ -1951,6 +1957,8 @@ fn bug221_object_transform_recenters_about_own_bbox_center_not_scene_center() {
         animation_report_lines: Vec::new(),
         extension_report_lines: Vec::new(),
         lights: Vec::new(),
+        cameras: Vec::new(),
+        camera_report_lines: Vec::new(),
     };
     let center = [
         (summary.bbox_min[0] + summary.bbox_max[0]) * 0.5,
@@ -2049,6 +2057,8 @@ fn bug303_object_transform_exposure_default_matches_stamped_recenter_not_origin(
         animation_report_lines: Vec::new(),
         extension_report_lines: Vec::new(),
         lights: Vec::new(),
+        cameras: Vec::new(),
+        camera_report_lines: Vec::new(),
     };
     let center = [
         (summary.bbox_min[0] + summary.bbox_max[0]) * 0.5,
@@ -2114,6 +2124,8 @@ fn bug303_stamped_transform_survives_preset_runtime_instantiation() {
         animation_report_lines: Vec::new(),
         extension_report_lines: Vec::new(),
         lights: Vec::new(),
+        cameras: Vec::new(),
+        camera_report_lines: Vec::new(),
     };
     let center = [
         (summary.bbox_min[0] + summary.bbox_max[0]) * 0.5,
@@ -2180,6 +2192,8 @@ fn imported_object_card_visible_shows_pos_hides_scale_and_material() {
         animation_report_lines: Vec::new(),
         extension_report_lines: Vec::new(),
         lights: Vec::new(),
+        cameras: Vec::new(),
+        camera_report_lines: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_card_visible_test.glb");
     let (def, _report) = build_import_graph(&summary, path).expect("build import graph");
@@ -2250,6 +2264,8 @@ fn material_named_like_its_own_inner_handle_does_not_collide() {
         animation_report_lines: Vec::new(),
         extension_report_lines: Vec::new(),
         lights: Vec::new(),
+        cameras: Vec::new(),
+        camera_report_lines: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_mat_0_collision.glb");
     let (def, _report) =
@@ -2302,6 +2318,8 @@ fn scene_def_with_bbox_half_extent(half_extent: f32) -> EffectGraphDef {
         animation_report_lines: Vec::new(),
         extension_report_lines: Vec::new(),
         lights: Vec::new(),
+        cameras: Vec::new(),
+        camera_report_lines: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_target_scene.glb");
     let (def, _report) = build_import_graph(&summary, path).expect("build target scene");
@@ -2319,6 +2337,8 @@ fn merge_summary(materials: Vec<super::gltf_load::GltfMaterialInfo>, half_extent
         animation_report_lines: Vec::new(),
         extension_report_lines: Vec::new(),
         lights: Vec::new(),
+        cameras: Vec::new(),
+        camera_report_lines: Vec::new(),
     }
 }
 
@@ -2838,6 +2858,8 @@ fn imports_all_map_kinds_with_correct_color_spaces() {
         animation_report_lines: Vec::new(),
         extension_report_lines: Vec::new(),
         lights: Vec::new(),
+        cameras: Vec::new(),
+        camera_report_lines: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_all_maps.glb");
     let (def, report) = build_import_graph(&summary, path).expect("build graph");
@@ -2927,6 +2949,8 @@ fn orm_packed_occlusion_and_mr_share_one_texture_source_node() {
         animation_report_lines: Vec::new(),
         extension_report_lines: Vec::new(),
         lights: Vec::new(),
+        cameras: Vec::new(),
+        camera_report_lines: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_orm.glb");
     let (def, _report) = build_import_graph(&summary, path).expect("build graph");
@@ -2987,6 +3011,8 @@ fn over_featured_material_wires_clearcoat_texture_and_maps_transmission_to_blend
         animation_report_lines: Vec::new(),
         extension_report_lines: Vec::new(),
         lights: Vec::new(),
+        cameras: Vec::new(),
+        camera_report_lines: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_over_featured.glb");
     let (def, report) = build_import_graph(&summary, path).expect("build graph");
@@ -3064,6 +3090,8 @@ fn sun_macros_bind_both_the_light_and_the_envmap_disc_direction() {
         animation_report_lines: Vec::new(),
         extension_report_lines: Vec::new(),
         lights: Vec::new(),
+        cameras: Vec::new(),
+        camera_report_lines: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_sun.glb");
     let (def, _report) = build_import_graph(&summary, path).expect("build graph");
@@ -3168,6 +3196,8 @@ fn round_trip_preserves_map_wires_and_sun_coherence_bindings() {
         animation_report_lines: Vec::new(),
         extension_report_lines: Vec::new(),
         lights: Vec::new(),
+        cameras: Vec::new(),
+        camera_report_lines: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_round_trip.glb");
     let (def, _report) = build_import_graph(&summary, path).expect("build graph");
@@ -3249,6 +3279,8 @@ fn animated_material_wires_animation_source_into_its_own_transform_3d() {
         animation_report_lines: Vec::new(),
         extension_report_lines: Vec::new(),
         lights: Vec::new(),
+        cameras: Vec::new(),
+        camera_report_lines: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_animation_wiring.glb");
     let (def, _report) = build_import_graph(&summary, path).expect("build graph");
@@ -3338,6 +3370,8 @@ fn animation_cards_are_one_linked_section_per_glb() {
         animation_report_lines: Vec::new(),
         extension_report_lines: Vec::new(),
         lights: Vec::new(),
+        cameras: Vec::new(),
+        camera_report_lines: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_shared_anim_cards.glb");
     let (def, _report) = build_import_graph(&summary, path).expect("build graph");
@@ -3799,6 +3833,8 @@ fn animation_selectors_survive_json_round_trip() {
         animation_report_lines: Vec::new(),
         extension_report_lines: Vec::new(),
         lights: Vec::new(),
+        cameras: Vec::new(),
+        camera_report_lines: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_animation_round_trip.glb");
     let (def, _report) = build_import_graph(&summary, path).expect("build graph");
@@ -3848,6 +3884,8 @@ fn round_trip_preserves_blend_alpha_mode_and_opacity_binding() {
         animation_report_lines: Vec::new(),
         extension_report_lines: Vec::new(),
         lights: Vec::new(),
+        cameras: Vec::new(),
+        camera_report_lines: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_glass_round_trip.glb");
     let (def, _report) = build_import_graph(&summary, path).expect("build graph");
@@ -3971,6 +4009,8 @@ fn corrupted_assembler_output_fails_validation_naming_the_node() {
         animation_report_lines: Vec::new(),
         extension_report_lines: Vec::new(),
         lights: Vec::new(),
+        cameras: Vec::new(),
+        camera_report_lines: Vec::new(),
     };
     let path = std::path::Path::new("/tmp/synthetic_model.glb");
     let (mut def, _report) = build_import_graph(&summary, path).expect("build graph");
@@ -6533,5 +6573,75 @@ fn bug221_pivot_spins_in_place_after_fix_but_not_before() {
          — look at both: pre-fix should show cube(s) swung away from their unrotated footprint, \
          post-fix should show every cube still occupying roughly its unrotated footprint, just \
          with rotated faces"
+    );
+}
+
+fn duck_fixture_path() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/gltf/khronos/Duck.glb")
+}
+
+/// BUG-d2qz: Khronos `Duck.glb` carries one embedded perspective camera.
+/// The import must add it as an extra, unwired `node.free_camera` card at
+/// its authored pose/FOV WITHOUT changing the default active camera — the
+/// synthesized bbox-framed `node.orbit_camera` must still be the one wired
+/// into `lens`/`render`. Cross-checks the free_camera node's stamped params
+/// against an independent parse (`gltf_load::gltf_import_summary`), not
+/// just against the assembler's own output.
+#[test]
+fn duck_import_adds_extra_camera_card_default_camera_unchanged() {
+    let path = duck_fixture_path();
+    if !path.exists() {
+        println!("duck_import_adds_extra_camera_card_default_camera_unchanged: fixture not found, skipping");
+        return;
+    }
+
+    let expected = super::gltf_load::gltf_import_summary(&path).expect("independent parse for the oracle");
+    assert_eq!(expected.cameras.len(), 1, "Duck.glb's one camera is perspective");
+    let expected_cam = &expected.cameras[0];
+
+    let (def, report) = assemble_import_graph(&path).expect("assemble Duck");
+    assert!(report.camera_synthesized, "the synthesized orbit camera is still the default");
+    assert!(
+        report.report_lines.iter().any(|l| l.contains("node.free_camera")),
+        "report must name the imported camera and its fov: {:?}",
+        report.report_lines
+    );
+
+    let orbit = def
+        .nodes
+        .iter()
+        .find(|n| n.type_id == "node.orbit_camera")
+        .expect("synthesized orbit camera node must still exist");
+    let free_cams: Vec<_> = def.nodes.iter().filter(|n| n.type_id == "node.free_camera").collect();
+    assert_eq!(free_cams.len(), 1, "Duck.glb carries exactly one embedded camera");
+
+    let get_float = |node: &EffectGraphNode, param: &str| match node.params.get(param) {
+        Some(SerializedParamValue::Float { value }) => *value,
+        other => panic!("{param} missing or not a Float: {other:?}"),
+    };
+    assert!((get_float(free_cams[0], "pos_x") - expected_cam.pos[0]).abs() < 1e-4);
+    assert!((get_float(free_cams[0], "pos_y") - expected_cam.pos[1]).abs() < 1e-4);
+    assert!((get_float(free_cams[0], "pos_z") - expected_cam.pos[2]).abs() < 1e-4);
+    assert!((get_float(free_cams[0], "yaw") - expected_cam.yaw).abs() < 1e-5);
+    assert!((get_float(free_cams[0], "pitch") - expected_cam.pitch).abs() < 1e-5);
+    assert!((get_float(free_cams[0], "roll") - expected_cam.roll).abs() < 1e-5);
+    assert!((get_float(free_cams[0], "fov_y") - expected_cam.fov_y).abs() < 1e-5);
+
+    // Default active camera is unchanged: `lens`'s `camera` input still
+    // wires from the synthesized orbit camera, never from the imported one.
+    let lens_id = def
+        .nodes
+        .iter()
+        .find(|n| n.type_id == "node.camera_lens")
+        .expect("lens node present")
+        .id;
+    let lens_camera_wire = def
+        .wires
+        .iter()
+        .find(|w| w.to_node == lens_id && w.to_port == "camera")
+        .expect("lens camera input wired");
+    assert_eq!(
+        lens_camera_wire.from_node, orbit.id,
+        "lens must still read from the synthesized orbit camera, not the imported one"
     );
 }
