@@ -1604,6 +1604,7 @@ fn build_import_graph_groups_each_object_and_flattens_to_flat_wiring() {
         volume_attenuation_color: [1.0, 1.0, 1.0],
         volume_thickness_texture: None,
         was_blend: false,
+        vertex_color_varies: false,
         vertex_count: verts,
         base_color_sampler: super::gltf_load::GltfSamplerInfo::default(),
         normal_sampler: super::gltf_load::GltfSamplerInfo::default(),
@@ -1851,6 +1852,7 @@ fn full_material(material_index: u32, name: &str, verts: u32) -> super::gltf_loa
         volume_attenuation_color: [1.0, 1.0, 1.0],
         volume_thickness_texture: None,
         was_blend: false,
+        vertex_color_varies: false,
         vertex_count: verts,
         base_color_sampler: super::gltf_load::GltfSamplerInfo::default(),
         normal_sampler: super::gltf_load::GltfSamplerInfo::default(),
@@ -2982,6 +2984,53 @@ fn orm_packed_occlusion_and_mr_share_one_texture_source_node() {
     }
 }
 
+/// BUG-5mma (BUG-177 (glb-vertex-colors-not-wired-color0-never-read)): the
+/// constant-vs-varying fold itself is proven at the parse layer
+/// (`gltf_load.rs`'s `constant_vertex_color_folds_into_base_color_factor`/
+/// `varying_vertex_color_within_one_primitive_is_not_folded`) — this test
+/// covers the OTHER half, the D9 report-line wiring in `object_group.rs`:
+/// `vertex_color_varies = true` on a `GltfMaterialInfo` must produce a
+/// report line naming the material and leave `color_r`/`color_g`/`color_b`
+/// on `node.pbr_material` exactly at the material's own (unfolded)
+/// `base_color_factor`.
+#[test]
+fn vertex_color_varies_flag_produces_report_line_and_leaves_base_color_alone() {
+    let mut m = full_material(0, "VaryingVC", 300);
+    m.base_color_factor = [0.8, 0.6, 0.4, 1.0];
+    m.vertex_color_varies = true;
+    let summary = GltfImportSummary {
+        materials: vec![m],
+        bbox_min: [-1.0, -1.0, -1.0],
+        bbox_max: [1.0, 1.0, 1.0],
+        camera_count: 0,
+        default_material_vertex_count: 0,
+        animations: Vec::new(),
+        animation_report_lines: Vec::new(),
+        extension_report_lines: Vec::new(),
+    };
+    let path = std::path::Path::new("/tmp/synthetic_vertex_color_varies.glb");
+    let (def, report) = build_import_graph(&summary, path).expect("build graph");
+
+    assert!(
+        report
+            .report_lines
+            .iter()
+            .any(|l| l.contains("COLOR_0 varies") && l.contains("vertex colors not supported")),
+        "expected a per-vertex COLOR_0 varies report line, got {:?}",
+        report.report_lines
+    );
+
+    let flat = manifold_core::flatten::flatten_groups(&def).expect("flatten");
+    let mat_node = flat
+        .nodes
+        .iter()
+        .find(|n| n.type_id == "node.pbr_material")
+        .expect("pbr_material node");
+    assert_eq!(mat_node.params.get("color_r"), Some(&float(0.8)));
+    assert_eq!(mat_node.params.get("color_g"), Some(&float(0.6)));
+    assert_eq!(mat_node.params.get("color_b"), Some(&float(0.4)));
+}
+
 /// D9 doctrine ("every import produces a report") applied to G-P5's
 /// clearcoat feature set. GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1
 /// revised — full spec surface): a TEXTURED coat is now a real mapping
@@ -3987,6 +4036,7 @@ fn corrupted_assembler_output_fails_validation_naming_the_node() {
         volume_attenuation_color: [1.0, 1.0, 1.0],
         volume_thickness_texture: None,
         was_blend: false,
+        vertex_color_varies: false,
         vertex_count: verts,
         base_color_sampler: super::gltf_load::GltfSamplerInfo::default(),
         normal_sampler: super::gltf_load::GltfSamplerInfo::default(),

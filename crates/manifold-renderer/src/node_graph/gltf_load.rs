@@ -1282,6 +1282,15 @@ pub(crate) struct GltfMaterialInfo {
     /// RGB specular tint (vs. the scalar `specular_factor` above, which
     /// IS converted) is Deferred (section 8) — not read here at all.
     pub mr_texture_is_gloss_alpha: bool,
+    /// BUG-5mma: `true` when COLOR_0 genuinely varies across the primitives
+    /// sharing this material — either within one primitive, or two
+    /// primitives disagree on their (otherwise-constant) color, or a
+    /// colored primitive shares the material with an uncolored one. See
+    /// [`VertexColorAccum`]. `base_color_factor` above already has any
+    /// AGREED constant color folded in (`fold_vertex_color`); this flag
+    /// exists only to drive the "vertex colors not supported" report line
+    /// in `gltf_import/object_group.rs` for the varying case.
+    pub vertex_color_varies: bool,
     pub vertex_count: u32,
     /// GLB_XFAIL_BURNDOWN_DESIGN.md D3 (BUG-164): per-map-family sampler
     /// settings, read straight off each map's own glTF `sampler` (default
@@ -2632,6 +2641,91 @@ pub(crate) fn load_gltf_morph_deltas(
     ))
 }
 
+/// BUG-5mma: per-material COLOR_0 state, accumulated across EVERY primitive
+/// that shares a material (mirrors `per_material`/`per_material_bbox` —
+/// `GltfMeshSelector::Material` combines those primitives into one shared
+/// `node.pbr_material`, scene-wide, so a per-primitive fold would let one
+/// primitive's vertex color silently recolor another's). `Constant` means
+/// every contributing primitive agreed (within 1/255 per channel) on one
+/// RGBA color; anything else collapses to `Varies` and is never folded.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum VertexColorAccum {
+    /// No primitive contributing this material has carried COLOR_0 so far.
+    NoColor,
+    /// Every primitive seen so far agreed on this one constant RGBA color.
+    Constant([f32; 4]),
+    /// Colors vary within a primitive, disagree between primitives, or mix
+    /// colored with uncolored primitives on the same material.
+    Varies,
+}
+
+/// 1/255 per channel — glTF's own u8-normalized color quantization step, so
+/// a color read from a `u8`-encoded COLOR_0 accessor and re-derived via a
+/// different code path never spuriously reads as "varying".
+const VERTEX_COLOR_TOLERANCE: f32 = 1.0 / 255.0;
+
+fn vertex_colors_close(a: [f32; 4], b: [f32; 4]) -> bool {
+    a.iter().zip(b.iter()).all(|(x, y)| (x - y).abs() <= VERTEX_COLOR_TOLERANCE)
+}
+
+impl VertexColorAccum {
+    /// Fold one more primitive's own COLOR_0 state into this material's
+    /// running state. `colors` is `None` when the primitive has no COLOR_0
+    /// at all; `Some(values)` is every value `read_colors(0)` yielded for
+    /// that primitive (one per POSITION entry, pre-index-expansion — same
+    /// convention `flatten_primitive` uses for positions/normals/uvs).
+    fn merge_primitive(self, colors: Option<&[[f32; 4]]>) -> Self {
+        match colors {
+            None => match self {
+                // A material with no color info yet, and this primitive adds
+                // none either — still nothing known.
+                VertexColorAccum::NoColor => VertexColorAccum::NoColor,
+                // A colored primitive sharing this material with an
+                // uncolored one — no single color applies to the whole
+                // material, so this is "varies" too.
+                VertexColorAccum::Constant(_) => VertexColorAccum::Varies,
+                VertexColorAccum::Varies => VertexColorAccum::Varies,
+            },
+            Some(values) => {
+                let Some(&first) = values.first() else {
+                    // Accessor present but empty (malformed/degenerate
+                    // primitive) — nothing this primitive can tell us.
+                    return self;
+                };
+                if !values.iter().all(|c| vertex_colors_close(*c, first)) {
+                    return VertexColorAccum::Varies;
+                }
+                match self {
+                    VertexColorAccum::NoColor => VertexColorAccum::Constant(first),
+                    VertexColorAccum::Constant(existing) => {
+                        if vertex_colors_close(existing, first) {
+                            VertexColorAccum::Constant(existing)
+                        } else {
+                            VertexColorAccum::Varies
+                        }
+                    }
+                    VertexColorAccum::Varies => VertexColorAccum::Varies,
+                }
+            }
+        }
+    }
+}
+
+/// Fold a material's accumulated COLOR_0 state into its `base_color_factor`
+/// — component-wise multiply when every contributing primitive agreed on
+/// one constant color, otherwise `base` is returned untouched. The second
+/// return value is `vertex_color_varies` (BUG-5mma): whether to emit the
+/// "vertex colors not supported" report line in `object_group.rs`.
+fn fold_vertex_color(base: [f32; 4], accum: Option<VertexColorAccum>) -> ([f32; 4], bool) {
+    match accum {
+        Some(VertexColorAccum::Constant(c)) => {
+            ([base[0] * c[0], base[1] * c[1], base[2] * c[2], base[3] * c[3]], false)
+        }
+        Some(VertexColorAccum::Varies) => (base, true),
+        Some(VertexColorAccum::NoColor) | None => (base, false),
+    }
+}
+
 /// Recursively accumulate per-material world-combined vertex counts and a
 /// world-space bounding box over a node subtree. Keyed by
 /// `material().index()` (`None` = glTF default material).
@@ -2663,6 +2757,10 @@ fn summarize_node(
     // into `ImportReport::report_lines` the same way as
     // `extension_report_lines` (`gltf_import.rs`'s `scene.rs` merge).
     report_lines: &mut Vec<String>,
+    // BUG-5mma: same key convention as `per_material` — accumulates each
+    // material's COLOR_0 agreement state across every contributing
+    // primitive scene-wide (see `VertexColorAccum`).
+    per_material_color: &mut std::collections::BTreeMap<Option<usize>, VertexColorAccum>,
 ) -> Result<(), String> {
     let local = node.transform().matrix();
     let world = mat4_mul(&parent_world, &local);
@@ -2808,6 +2906,21 @@ fn summarize_node(
             let own_bbox = per_material_bbox
                 .entry(prim.material().index())
                 .or_insert(([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]));
+            // BUG-5mma: read COLOR_0 straight off the accessor (one value
+            // per POSITION entry — `into_rgba_f32()` normalizes every glTF
+            // encoding: vec3/vec4, u8/u16/f32) and fold it into this
+            // material's running agreement state. Read once here regardless
+            // of static/skinned/morphed — `base_color_factor` is a
+            // material-level property applied identically by
+            // `object_group.rs::write_material_params` no matter which
+            // `flatten_*` function later produces this primitive's
+            // MeshVertex data, so one read site covers every mesh shape.
+            let colors: Option<Vec<[f32; 4]>> =
+                reader.read_colors(0).map(|c| c.into_rgba_f32().collect());
+            let color_entry = per_material_color
+                .entry(prim.material().index())
+                .or_insert(VertexColorAccum::NoColor);
+            *color_entry = color_entry.merge_primitive(colors.as_deref());
             let joints: Option<Vec<[u16; 4]>> =
                 reader.read_joints(0).map(|it| it.into_u16().collect());
             let weights: Option<Vec<[f32; 4]>> =
@@ -2861,6 +2974,7 @@ fn summarize_node(
             bbox_max,
             per_material_bbox,
             report_lines,
+            per_material_color,
         )?;
     }
     Ok(())
@@ -3074,6 +3188,10 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
     // "never a silent skip" doctrine as BUG-213's document-level extension
     // lines.
     let mut geometry_report_lines: Vec<String> = Vec::new();
+    // BUG-5mma: per-material COLOR_0 agreement state, alongside the two maps
+    // above.
+    let mut per_material_color: std::collections::BTreeMap<Option<usize>, VertexColorAccum> =
+        std::collections::BTreeMap::new();
     for node in &import_nodes {
         summarize_node(
             node,
@@ -3085,6 +3203,7 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
             &mut bbox_max,
             &mut per_material_bbox,
             &mut geometry_report_lines,
+            &mut per_material_color,
         )?;
     }
 
@@ -3548,10 +3667,17 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
             let occlusion_sampler = sampler_info_for(&document, occlusion_texture);
             let emissive_sampler = sampler_info_for(&document, emissive_texture);
 
+            // BUG-5mma: fold this material's COLOR_0 agreement state into
+            // `base_color_factor` now that it's finalized (the spec-gloss
+            // override above is its last write) — see `fold_vertex_color`.
+            let (base_color_factor, vertex_color_varies) =
+                fold_vertex_color(base_color_factor, per_material_color.get(&material_key).copied());
+
             Some(GltfMaterialInfo {
                 material_index,
                 name: m.name().map(|s| s.to_string()),
                 base_color_factor,
+                vertex_color_varies,
                 metallic,
                 roughness,
                 emissive: m.emissive_factor(),
@@ -3671,10 +3797,15 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 rmn.slot_nodes.len()
             ));
         }
+        // BUG-5mma: same fold as the real-material branch above, keyed by
+        // `None` (the default-material bucket).
+        let (default_base_color_factor, default_vertex_color_varies) =
+            fold_vertex_color([1.0, 1.0, 1.0, 1.0], per_material_color.get(&None).copied());
         materials.push(GltfMaterialInfo {
             material_index: DEFAULT_MATERIAL_SENTINEL,
             name: None,
-            base_color_factor: [1.0, 1.0, 1.0, 1.0],
+            base_color_factor: default_base_color_factor,
+            vertex_color_varies: default_vertex_color_varies,
             metallic: 1.0,
             roughness: 1.0,
             emissive: [0.0, 0.0, 0.0],
@@ -3993,6 +4124,196 @@ mod animation_tests {
         assert_eq!(mode_of("Linear Scale"), GltfInterp::Linear);
         assert_eq!(mode_of("CubicSpline Scale"), GltfInterp::CubicSpline);
         assert_eq!(mode_of("CubicSpline Rotation"), GltfInterp::CubicSpline);
+    }
+
+    /// BUG-5mma (BUG-177 (glb-vertex-colors-not-wired-color0-never-read)):
+    /// `BoxVertexColors.glb`'s single materialless primitive carries a
+    /// genuinely varying COLOR_0 (that's the entire point of the fixture —
+    /// a gradient-colored box), so it must land as `vertex_color_varies =
+    /// true` with `base_color_factor` left at the glTF default-material
+    /// value ([1,1,1,1]) — never folded, since no single constant color
+    /// applies.
+    #[test]
+    fn box_vertex_colors_fixture_reports_varying_not_folded() {
+        let path = khronos_dir().join("BoxVertexColors.glb");
+        if !path.exists() {
+            println!("box_vertex_colors_fixture_reports_varying_not_folded: fixture missing, skipping");
+            return;
+        }
+        let summary = gltf_import_summary(&path).expect("parse BoxVertexColors.glb");
+        assert_eq!(summary.materials.len(), 1, "one synthetic default-material entry");
+        let m = &summary.materials[0];
+        assert!(m.vertex_color_varies, "BoxVertexColors.glb's vertex colors genuinely vary");
+        assert_eq!(
+            m.base_color_factor,
+            [1.0, 1.0, 1.0, 1.0],
+            "varying COLOR_0 must never be folded into base_color_factor"
+        );
+    }
+
+    /// Same shape as [`box_vertex_colors_fixture_reports_varying_not_folded`]
+    /// for `VertexColorTest.glb`, which carries TWO materials — one whose
+    /// primitive(s) have no COLOR_0 at all ("Label_Mat", unaffected) and
+    /// one whose primitive(s) carry genuinely varying colors
+    /// ("VC_Checks_Mat", the fixture's own per-vertex color check pattern).
+    #[test]
+    fn vertex_color_test_fixture_flags_only_the_colored_material() {
+        let path = khronos_dir().join("VertexColorTest.glb");
+        if !path.exists() {
+            println!("vertex_color_test_fixture_flags_only_the_colored_material: fixture missing, skipping");
+            return;
+        }
+        let summary = gltf_import_summary(&path).expect("parse VertexColorTest.glb");
+        let label = summary.materials.iter().find(|m| m.name.as_deref() == Some("Label_Mat"));
+        let checks = summary.materials.iter().find(|m| m.name.as_deref() == Some("VC_Checks_Mat"));
+        let label = label.expect("Label_Mat present in VertexColorTest.glb");
+        let checks = checks.expect("VC_Checks_Mat present in VertexColorTest.glb");
+        assert!(!label.vertex_color_varies, "Label_Mat carries no COLOR_0 — nothing to report");
+        assert!(checks.vertex_color_varies, "VC_Checks_Mat's per-vertex color pattern genuinely varies");
+    }
+
+    /// BUG-5mma: minimal single-triangle `.glb` with an explicit COLOR_0
+    /// accessor (VEC4 FLOAT, one value per vertex), so the fold/varies
+    /// logic can be proven directly rather than depending on a specific
+    /// Khronos fixture's exact authored colors. Same hand-rolled
+    /// binary-container shape as
+    /// `gltf_import::tests::write_synthetic_multimaterial_glb`.
+    fn write_synthetic_color0_glb(
+        base_color_factor: [f32; 4],
+        vertex_colors: [[f32; 4]; 3],
+    ) -> std::path::PathBuf {
+        let tri: [[f32; 3]; 3] = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        let mut bin: Vec<u8> = Vec::new();
+        for v in &tri {
+            for c in v {
+                bin.extend_from_slice(&c.to_le_bytes());
+            }
+        }
+        let color_byte_offset = bin.len();
+        for c in &vertex_colors {
+            for ch in c {
+                bin.extend_from_slice(&ch.to_le_bytes());
+            }
+        }
+
+        let doc = serde_json::json!({
+            "asset": { "version": "2.0" },
+            "scene": 0,
+            "scenes": [{ "nodes": [0] }],
+            "nodes": [{ "mesh": 0 }],
+            "meshes": [{ "primitives": [{
+                "attributes": { "POSITION": 0, "COLOR_0": 1 },
+                "material": 0,
+            }] }],
+            "accessors": [
+                {
+                    "bufferView": 0,
+                    "componentType": 5126, // FLOAT
+                    "count": 3,
+                    "type": "VEC3",
+                    "min": [0.0, 0.0, 0.0],
+                    "max": [1.0, 1.0, 0.0],
+                },
+                {
+                    "bufferView": 1,
+                    "componentType": 5126, // FLOAT
+                    "count": 3,
+                    "type": "VEC4",
+                },
+            ],
+            "bufferViews": [
+                { "buffer": 0, "byteOffset": 0, "byteLength": 36 },
+                { "buffer": 0, "byteOffset": color_byte_offset, "byteLength": 48 },
+            ],
+            "materials": [
+                {
+                    "name": "ColoredTri",
+                    "pbrMetallicRoughness": { "baseColorFactor": base_color_factor },
+                },
+            ],
+            "buffers": [{ "byteLength": bin.len() }],
+        });
+        let json_bytes = serde_json::to_vec(&doc).expect("serialize synthetic glTF JSON");
+
+        // GLB container: header + JSON chunk (space-padded to 4 bytes) + BIN
+        // chunk (zero-padded to 4 bytes). Chunk type magics per the Binary
+        // glTF spec: 0x4E4F534A = "JSON", 0x004E4942 = "BIN\0".
+        let mut json_padded = json_bytes;
+        while !json_padded.len().is_multiple_of(4) {
+            json_padded.push(b' ');
+        }
+        let mut bin_padded = bin;
+        while !bin_padded.len().is_multiple_of(4) {
+            bin_padded.push(0);
+        }
+        let total_len = 12 + 8 + json_padded.len() + 8 + bin_padded.len();
+
+        let mut glb = Vec::with_capacity(total_len);
+        glb.extend_from_slice(b"glTF");
+        glb.extend_from_slice(&2u32.to_le_bytes());
+        glb.extend_from_slice(&(total_len as u32).to_le_bytes());
+        glb.extend_from_slice(&(json_padded.len() as u32).to_le_bytes());
+        glb.extend_from_slice(b"JSON");
+        glb.extend_from_slice(&json_padded);
+        glb.extend_from_slice(&(bin_padded.len() as u32).to_le_bytes());
+        glb.extend_from_slice(b"BIN\0");
+        glb.extend_from_slice(&bin_padded);
+
+        let path = std::env::temp_dir().join(format!(
+            "manifold_synthetic_color0_{}_{}.glb",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::write(&path, &glb).expect("write synthetic glb to temp dir");
+        path
+    }
+
+    /// BUG-5mma core case: every vertex on the (sole) primitive sharing this
+    /// material agrees on one constant COLOR_0 — it must fold component-wise
+    /// into `base_color_factor`, and `vertex_color_varies` must stay false.
+    #[test]
+    fn constant_vertex_color_folds_into_base_color_factor() {
+        let base = [0.8, 0.6, 0.4, 1.0];
+        let tint = [0.5, 1.0, 0.25, 0.5];
+        let path = write_synthetic_color0_glb(base, [tint, tint, tint]);
+        let summary = gltf_import_summary(&path).expect("parse synthetic constant-color glb");
+        std::fs::remove_file(&path).ok();
+
+        assert_eq!(summary.materials.len(), 1);
+        let m = &summary.materials[0];
+        assert!(!m.vertex_color_varies, "every vertex agreed on one color — nothing to report");
+        for i in 0..4 {
+            assert!(
+                (m.base_color_factor[i] - base[i] * tint[i]).abs() < 1e-5,
+                "channel {i}: base_color_factor {:?} must be base*tint (expected {}), got {}",
+                m.base_color_factor,
+                base[i] * tint[i],
+                m.base_color_factor[i]
+            );
+        }
+    }
+
+    /// BUG-5mma varying case at the parse layer (mirrors the two
+    /// fixture-based tests above, but with control over the exact colors):
+    /// three genuinely different vertex colors on one primitive must leave
+    /// `base_color_factor` untouched and set `vertex_color_varies`.
+    #[test]
+    fn varying_vertex_color_within_one_primitive_is_not_folded() {
+        let base = [0.8, 0.6, 0.4, 1.0];
+        let path = write_synthetic_color0_glb(
+            base,
+            [[1.0, 0.0, 0.0, 1.0], [0.0, 1.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]],
+        );
+        let summary = gltf_import_summary(&path).expect("parse synthetic varying-color glb");
+        std::fs::remove_file(&path).ok();
+
+        assert_eq!(summary.materials.len(), 1);
+        let m = &summary.materials[0];
+        assert!(m.vertex_color_varies, "red/green/blue vertices must be flagged as varying");
+        assert_eq!(m.base_color_factor, base, "varying color must leave base_color_factor untouched");
     }
 }
 
