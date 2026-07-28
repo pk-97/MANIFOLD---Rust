@@ -27,16 +27,11 @@ it when onboarding a model (seat_tool warns when it's missing).
 A name that carries the slot makes every panel entry, inbox message, and
 litellm ledger line self-describing: model AND role at a glance.
 
-Also enforced: explicit `subagent_type` (Peter found the split case
-2026-07-25): spawns that omit it run fine but write NO agentType into the
-team file, and the teammate panel row keys off that field — the lane is
-invisible.
-
 Behavior (deterministic, no model calls):
 - subagent_type "fork" or a missing name -> allow (nameless spawns are the
   model guard's / harness's concern; this hook only judges names it can see).
-- Missing subagent_type, wrong/missing slot prefix, bad casing, opaque task
-  part -> deny with the fix and the live slot map spelled out.
+- Wrong/missing slot prefix, bad casing, opaque task part -> deny with the
+  fix and the live slot map spelled out.
 
 Fails open on any error: a guard hook must never be able to block a session.
 
@@ -103,16 +98,6 @@ def decide(tool_input: dict, env=os.environ) -> str:
     name = (tool_input.get("name") or "").strip()
     if not name:
         return ""  # nothing to judge; harness/hooks cover nameless spawns
-
-    subagent_type = (tool_input.get("subagent_type") or "").strip()
-    if not subagent_type:
-        return (
-            f"Teammate spawn '{name}' has no subagent_type — the harness runs "
-            "general-purpose but writes NO agentType into the team file, and the "
-            "teammate panel row keys off that field: the lane is invisible "
-            "(split case found by Peter 2026-07-25). Re-issue with "
-            'subagent_type: "general-purpose".'
-        )
 
     model = str(tool_input.get("model") or "").strip().lower()
     mapping = slot_map(env)
