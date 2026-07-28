@@ -21,7 +21,7 @@ pub struct CompositeLayerDescriptor<'a> {
     pub parent_layer_id: Option<&'a LayerId>,
     /// Whether this layer is a group container.
     pub is_group: bool,
-    /// §8 D1/D5: this layer's effective `trigger_count` (clip edge + audio
+    /// section 8 D1/D5: this layer's effective `trigger_count` (clip edge + audio
     /// fires), read from `GeneratorRenderer::effective_trigger_count_for_layer`
     /// and fed into this layer's effect chain's `PresetContext` — the same
     /// value the layer's own generator graph sees. `0` for a layer with no
@@ -41,7 +41,7 @@ pub struct CompositorFrame<'a> {
     pub layers: &'a [CompositeLayerDescriptor<'a>],
     pub master_effects: &'a [PresetInstance],
     pub master_effect_groups: &'a [EffectGroup],
-    /// §8 D5: master/global chains have no owning layer, so their effective
+    /// section 8 D5: master/global chains have no owning layer, so their effective
     /// `trigger_count` is audio-fires-only (clip contribution is always 0
     /// here) — accumulated by the content pipeline across every
     /// `TriggerPulse { layer_id: None }` and fed into the master chain's
@@ -164,7 +164,7 @@ pub trait Compositor: Send {
     /// The final compositor output texture (post-tonemap, post-effects).
     fn output_texture(&self) -> &manifold_gpu::GpuTexture;
 
-    /// §24 5c with-effects clip thumbnails: the post-effect output texture for
+    /// section 24 5c with-effects clip thumbnails: the post-effect output texture for
     /// `clip_id` when it is the SOLE clip on its layer (so the layer output is that
     /// clip's full look — generator/video + layer effects). `None` for multi-clip
     /// layers (a clip can't be isolated) and for compositors without per-layer

@@ -69,7 +69,7 @@ mod tests {
         assert_eq!(back.get_base_param("speed"), 1.25);
     }
 
-    /// docs/NODE_VOCABULARY_AUDIT.md §3 test (b): a project fixture carrying
+    /// docs/NODE_VOCABULARY_AUDIT.md section 3 test (b): a project fixture carrying
     /// an old `generatorType` value loads through the real deserializer and
     /// comes back on the current id. Exercises
     /// `type_id_migration::TYPE_ID_MIGRATIONS`' fixture entry

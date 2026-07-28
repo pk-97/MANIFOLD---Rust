@@ -1,4 +1,4 @@
-// node.mirror_axis — fusable body (freeze §12), GATHER. Sample the input at UVs
+// node.mirror_axis — fusable body (freeze section 12), GATHER. Sample the input at UVs
 // mirrored across a line through the centre at `angle` radians (rotate -angle →
 // fold Y → rotate +angle → fract(+0.5)). The hand shader computes cos/sin from the
 // angle uniform on the GPU, so the body does the same (bit-exact). Matches

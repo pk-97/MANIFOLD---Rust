@@ -1,4 +1,4 @@
-// node.edge_detect — fusable body (freeze §12), GATHER. Sobel 3×3 on the
+// node.edge_detect — fusable body (freeze section 12), GATHER. Sobel 3×3 on the
 // luminance of `in` (gathered at the 8 neighbours, one texel apart) → gradient
 // magnitude → smoothstep threshold → crossfade against the source by `amount`.
 // The hand shader carries the texel step in its uniform (texel_size_x/y); the

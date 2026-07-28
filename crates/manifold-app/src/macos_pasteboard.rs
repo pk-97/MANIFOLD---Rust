@@ -1,5 +1,5 @@
 //! General NSPasteboard access — the sole module allowed to name
-//! `NSPasteboard`/`NSPasteboardItem` (docs/TIMELINE_INGEST_DESIGN.md §4/P3).
+//! `NSPasteboard`/`NSPasteboardItem` (docs/TIMELINE_INGEST_DESIGN.md section 4/P3).
 //!
 //! Backs the D4 Finder-paste arbitration: `general_change_count()` gives
 //! AppKit's own recency oracle (snapshotted at internal `copy_clips` time,

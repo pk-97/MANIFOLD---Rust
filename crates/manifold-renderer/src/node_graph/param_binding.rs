@@ -2,7 +2,7 @@
 //! UI sliders / OSC paths / Ableton macros and the inner graph nodes
 //! that actually consume the values.
 //!
-//! See `docs/EFFECT_RUNTIME_UNIFICATION.md` §7 and
+//! See `docs/EFFECT_RUNTIME_UNIFICATION.md` section 7 and
 //! `docs/archive/BINDINGS_UNIFICATION_PLAN.md` for the full design.
 //!
 //! ## Two layers, one runtime

@@ -1,5 +1,5 @@
 //! Oracle diff core — the foundational verification primitive for the
-//! freeze/fusion compiler (design §7, §11.D).
+//! freeze/fusion compiler (design section 7, section 11.D).
 //!
 //! The frozen (fused) build is a mechanical transform of the unfused graph, so
 //! the unfused graph is a free exact oracle: render both ways on the same
@@ -8,7 +8,7 @@
 //! verdict, instead of the per-pixel CPU scan the legacy parity harness used
 //! (slow, doesn't scale to fuzzed multi-resolution sweeps).
 //!
-//! The verdict is two-sided and discontinuity-aware (design §11.D): a texel
+//! The verdict is two-sided and discontinuity-aware (design section 11.D): a texel
 //! fails only when it breaks BOTH the absolute and relative bounds, and the
 //! pass test tolerates a small fraction of such texels rather than tripping on
 //! one — the f16-round-trip vs f32-register split lands a few boundary texels
@@ -47,7 +47,7 @@ pub struct DiffResult {
     /// Count of texels where the two sides DISAGREE on finiteness — one side
     /// produced a NaN/Inf the other didn't (fusion introduced or erased a
     /// special value). Any non-zero count fails the verdict: a divergent NaN/Inf
-    /// is never "within tolerance" (design §12.3 step 6). Texels where both
+    /// is never "within tolerance" (design section 12.3 step 6). Texels where both
     /// sides agree on a non-finite result are not counted.
     pub special_count: u32,
     /// Total texels compared (`width * height`).
@@ -69,7 +69,7 @@ impl DiffResult {
     /// leaked into the diagnostic maxima. The tolerances themselves were applied
     /// in the shader; this is the discontinuity-aware fraction gate plus the
     /// hard NaN/Inf-agreement gate on top (a divergent special is never "within
-    /// tolerance", design §12.3 step 6).
+    /// tolerance", design section 12.3 step 6).
     pub fn passes(&self, max_over_fraction: f64) -> bool {
         self.special_count == 0
             && self.max_abs.is_finite()

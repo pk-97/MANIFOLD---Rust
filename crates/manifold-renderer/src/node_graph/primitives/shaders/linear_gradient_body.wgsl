@@ -1,4 +1,4 @@
-// node.linear_gradient — fusable body (freeze §12), SOURCE. Directional 0→1 ramp
+// node.linear_gradient — fusable body (freeze section 12), SOURCE. Directional 0→1 ramp
 // smoothstepped across a line through (cx,cy) perpendicular to `rotation`, band
 // width `softness`. Broadcast to RGB, A=1. Matches linear_gradient.wgsl. PARAMS:
 // [cx, cy, rotation, softness].

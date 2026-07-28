@@ -14,7 +14,7 @@
 //! it onto a driver / envelope / audio-mod edit), so the layout + hit-test logic
 //! lives here once.
 //!
-//! See `docs/AUDIO_MODULATION_DESIGN.md` §10.2.
+//! See `docs/AUDIO_MODULATION_DESIGN.md` section 10.2.
 
 use std::cell::Cell;
 

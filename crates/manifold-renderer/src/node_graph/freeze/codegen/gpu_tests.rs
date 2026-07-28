@@ -136,7 +136,7 @@ fn dispatch_pointwise(
     out
 }
 
-/// Determinism (design §12.3): the generator emits byte-identical WGSL
+/// Determinism (design section 12.3): the generator emits byte-identical WGSL
 /// across calls — the cross-session pipeline-cache key depends on it.
 #[test]
 fn generated_wgsl_is_deterministic() {
@@ -791,7 +791,7 @@ fn generated_pointwise_atoms_match_originals() {
         ("node.contrast", "contrast.wgsl", &[1.5]),
         ("node.colorize", "colorize.wgsl", &[0.5, 200.0, 0.7, 0.6]),
         ("node.clamp", "clamp_texture.wgsl", &[0.1, 0.8]),
-        // Vocabulary widening (design §12.3): pure-pointwise color/tone atoms
+        // Vocabulary widening (design section 12.3): pure-pointwise color/tone atoms
         // converted to single-source bodies. Partial invert exercises the
         // mix; levels uses the MetallicGlass height shape; posterize at 6.
         ("node.invert", "invert.wgsl", &[0.5]),
@@ -889,7 +889,7 @@ fn generated_mix_matches_original() {
     assert!(r.max_abs < 1e-5, "coincident path should be ~bit-identical, got {}", r.max_abs);
 }
 
-/// Positional-atom parity (design §12.3 vocabulary widening). vignette is the
+/// Positional-atom parity (design section 12.3 vocabulary widening). vignette is the
 /// first atom that reads its pixel POSITION via the ambient `uv`/`dims` args.
 /// The generated standalone kernel derives `aspect = dims.x/dims.y` itself and
 /// must reproduce the hand vignette.wgsl (which takes `aspect` as a uniform)
@@ -988,7 +988,7 @@ fn dispatch_two_texel(
     out
 }
 
-/// CoincidentTexel parity (design §12.3 read-semantics generalization).
+/// CoincidentTexel parity (design section 12.3 read-semantics generalization).
 /// dither is the first atom with exact-texel inputs and NO sampler — both
 /// `in` and `pattern` are textureLoad'd at the fragment texel (sampling the
 /// threshold map would blend neighbouring thresholds and smear the dither).
@@ -1316,7 +1316,7 @@ fn generated_paramless_atom_matches_original() {
     );
 }
 
-/// Gather parity (design §11.B): remap is the first GATHER atom — `source` is
+/// Gather parity (design section 11.B): remap is the first GATHER atom — `source` is
 /// sampled at a coord the body COMPUTES, so the codegen passes it as a
 /// texture+sampler arg (not a pre-read register), while `uv_field` is
 /// coincident. The hand remap.wgsl interleaves the sampler between its two

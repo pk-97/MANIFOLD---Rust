@@ -1,4 +1,4 @@
-//! GPU per-clip content textures (§24 5b). Paints each visible audio clip's
+//! GPU per-clip content textures (section 24 5b). Paints each visible audio clip's
 //! waveform into its OWN small texture and draws it as a quad inside the clip
 //! body — so the waveform is part of the clip, on the GPU, rather than baked into
 //! a layer-wide CPU bitmap laid over the bodies.

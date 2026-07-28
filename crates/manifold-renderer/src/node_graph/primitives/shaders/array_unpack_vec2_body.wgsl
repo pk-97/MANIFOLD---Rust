@@ -1,4 +1,4 @@
-// node.array_unpack_vec2 — BUFFER body (freeze §12, buffer domain), MULTI-OUTPUT.
+// node.array_unpack_vec2 — BUFFER body (freeze section 12, buffer domain), MULTI-OUTPUT.
 // Splits a coincident [f32;2] element into its two scalar components, one per
 // output array. Matches array_unpack_vec2.wgsl.
 //

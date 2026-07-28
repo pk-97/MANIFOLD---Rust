@@ -19,7 +19,7 @@
 //! No struct wrapper. The old `EffectChain` carried exactly one
 //! `Option<PresetRuntime>` plus a debug-only topology dump field — moving
 //! the dump into a local in [`dispatch_chain`] dropped the wrapper to
-//! a no-op around `Option`. §6.6 #31.
+//! a no-op around `Option`. section 6.6 #31.
 
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -173,7 +173,7 @@ pub fn dispatch_chain<'a>(
     // to rebuild from the freshly-loaded defs on the next frame.
     // Chain fusion: land any finished background segment compiles before the
     // rebuild decision, then rebuild chains that were waiting on one (the
-    // fused-segment swap-in — docs/CHAIN_FUSION_DESIGN.md §5). At rest both
+    // fused-segment swap-in — docs/CHAIN_FUSION_DESIGN.md section 5). At rest both
     // checks are a relaxed atomic load each.
     crate::node_graph::freeze::install::pump_segment_results();
 
@@ -194,7 +194,7 @@ pub fn dispatch_chain<'a>(
         let t0 = std::time::Instant::now();
         // Hand the outgoing runtime to the build as the state-harvest donor:
         // unchanged cards carry their sims / trails / workers across the
-        // rebuild instead of resetting (docs/CHAIN_FUSION_DESIGN.md §5).
+        // rebuild instead of resetting (docs/CHAIN_FUSION_DESIGN.md section 5).
         let mut prior = cache.take();
         *cache = PresetRuntime::try_build(
             ChainBuildInputs {

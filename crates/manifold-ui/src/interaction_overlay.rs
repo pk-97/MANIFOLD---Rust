@@ -151,17 +151,17 @@ pub enum DragMode {
     TrimRight,
     RegionSelect,
     /// Dragging an existing automation breakpoint (P4 Unit A,
-    /// `docs/AUTOMATION_LANES_DESIGN.md` §7). State lives in
+    /// `docs/AUTOMATION_LANES_DESIGN.md` section 7). State lives in
     /// `TimelineDrag::AutomationPoint`'s payload (P7.3).
     AutomationPoint,
-    /// Alt-dragging a segment into a curve bend (P4 Unit B, §7's
+    /// Alt-dragging a segment into a curve bend (P4 Unit B, section 7's
     /// "modifier-drag a segment"). State in `TimelineDrag::AutomationSegmentBend`.
     AutomationSegmentBend,
     /// Plain (no-Alt) vertical drag of a segment — both endpoints move by the
-    /// same value delta (P4 Unit B, §7's "drag a segment"). State in
+    /// same value delta (P4 Unit B, section 7's "drag a segment"). State in
     /// `TimelineDrag::AutomationSegmentDrag`.
     AutomationSegmentDrag,
-    /// Rubber-band selecting automation breakpoints (P4 Unit B, §7's
+    /// Rubber-band selecting automation breakpoints (P4 Unit B, section 7's
     /// "Marquee-select multiple dots"). No payload — the press corner is the
     /// controller session's own `start` (P7.3, D9-style).
     AutomationMarquee,
@@ -169,7 +169,7 @@ pub enum DragMode {
     /// of the selected dots while the marquee set has 2+ members). State in
     /// `TimelineDrag::AutomationGroupMove`.
     AutomationGroupMove,
-    /// Pencil/draw mode stroke (P4 Unit B, §7's "Draw mode") — active
+    /// Pencil/draw mode stroke (P4 Unit B, section 7's "Draw mode") — active
     /// whenever `UIState::automation_draw_mode` is on and the press lands in
     /// a lane strip, overriding dot/segment/marquee routing entirely. State
     /// in `TimelineDrag::AutomationDraw`.
@@ -177,7 +177,7 @@ pub enum DragMode {
 }
 
 // ── AutomationDragState ─────────────────────────────────────────
-// P4 Unit A (`docs/AUTOMATION_LANES_DESIGN.md` §7): grabbed-dot geometry for
+// P4 Unit A (`docs/AUTOMATION_LANES_DESIGN.md` section 7): grabbed-dot geometry for
 // a `DragMode::AutomationPoint` drag. `last_beat`/`last_value` track where
 // the point currently sits (recomputed fresh from screen each frame, not
 // incrementally) so `TimelineEditingHost::set_automation_point_preview`'s
@@ -199,7 +199,7 @@ struct AutomationDragState {
 }
 
 // ── AutomationSegmentBendState / AutomationSegmentDragState ────────
-// P4 Unit B (`docs/AUTOMATION_LANES_DESIGN.md` §7): grabbed-segment geometry
+// P4 Unit B (`docs/AUTOMATION_LANES_DESIGN.md` section 7): grabbed-segment geometry
 // for the two segment gestures. Both re-derive their live value from the
 // ORIGINAL grab geometry each frame (never incrementally), matching every
 // other drag state in this file.
@@ -240,7 +240,7 @@ struct AutomationSegmentDragState {
 }
 
 // ── AutomationGroupDragState / AutomationDrawState ──────────────────────
-// P4 Unit B (`docs/AUTOMATION_LANES_DESIGN.md` §7): group move of the
+// P4 Unit B (`docs/AUTOMATION_LANES_DESIGN.md` section 7): group move of the
 // marquee-selected set, and pencil/draw mode. The marquee's own state
 // (P7.3, D9-style) is just the drag controller session's `start` — no
 // separate `AutomationMarqueeState` struct.
@@ -729,7 +729,7 @@ impl InteractionOverlay {
         ui_state: &mut UIState,
         viewport: &TimelineViewportPanel,
     ) {
-        // P4 Unit A (`docs/AUTOMATION_LANES_DESIGN.md` §7): a click inside an
+        // P4 Unit A (`docs/AUTOMATION_LANES_DESIGN.md` section 7): a click inside an
         // automation lane strip is handled entirely here — click-on-line adds
         // a breakpoint, click-on-dot selects it, double-click-on-dot deletes
         // it — and never falls through to clip/region logic below.
@@ -854,7 +854,7 @@ impl InteractionOverlay {
     }
 
     // ────────────────────────────────────────────────────────────
-    // AUTOMATION LANE EDITING (P4 Unit A, `docs/AUTOMATION_LANES_DESIGN.md` §7)
+    // AUTOMATION LANE EDITING (P4 Unit A, `docs/AUTOMATION_LANES_DESIGN.md` section 7)
     // ────────────────────────────────────────────────────────────
 
     /// Handle a click/double-click that lands inside an automation lane
@@ -865,7 +865,7 @@ impl InteractionOverlay {
     /// - Double-click on an existing dot → remove it immediately.
     /// - Click (or double-click) on bare strip → add a breakpoint at the
     ///   clicked beat/value (grid-snapped unless Cmd is held; `Hold` shape
-    ///   for whole-numbers params, `Linear` otherwise — §8).
+    ///   for whole-numbers params, `Linear` otherwise — section 8).
     fn handle_automation_click(
         &mut self,
         pos: Vec2,
@@ -928,7 +928,7 @@ impl InteractionOverlay {
     /// Hit-test `press_pos` against automation lane strips for a drag begin.
     /// Returns `true` when an existing dot was grabbed (caller must return
     /// without falling through to clip drag logic). A drag press on bare
-    /// strip area is NOT handled here — §7's "click on line adds a point" is
+    /// strip area is NOT handled here — section 7's "click on line adds a point" is
     /// a click action (`handle_automation_click`), not a drag-begin; the
     /// `DragBegin` event only fires for what the platform layer already
     /// distinguishes as a drag gesture, so a plain click on the strip is
@@ -948,7 +948,7 @@ impl InteractionOverlay {
 
         // Pencil/draw mode overrides ALL other drag routing while active —
         // Ableton's pencil draws regardless of whether the press happened to
-        // land on an existing dot/segment (P4 Unit B, §7's "Draw mode").
+        // land on an existing dot/segment (P4 Unit B, section 7's "Draw mode").
         if ui_state.automation_draw_mode {
             let lane_index = match hit {
                 AutomationHit::Dot { lane_index, .. }
@@ -1135,8 +1135,8 @@ impl InteractionOverlay {
     }
 
     /// Grab a segment for either an Alt-drag curve bend or a plain vertical
-    /// drag (P4 Unit B, §7). Curve-bend is gated off for `whole_numbers`
-    /// lanes (§8: enum/int params author with `Hold`, so bending one would
+    /// drag (P4 Unit B, section 7). Curve-bend is gated off for `whole_numbers`
+    /// lanes (section 8: enum/int params author with `Hold`, so bending one would
     /// silently change its runtime sampling from a step to a curve) — Alt on
     /// such a lane falls back to the vertical-drag gesture instead of a no-op.
     fn begin_automation_segment_drag(
@@ -1259,7 +1259,7 @@ impl InteractionOverlay {
         };
         let mut delta_px = state.grab_y - pos.y;
         if self.modifiers.shift {
-            delta_px *= 0.25; // fine adjustment, mirrors §7's Shift-drag convention
+            delta_px *= 0.25; // fine adjustment, mirrors section 7's Shift-drag convention
         }
         let bend = (delta_px / Self::SEGMENT_BEND_PX_RANGE).clamp(-1.0, 1.0);
         host.set_automation_segment_bend_preview(&state.target, &state.param_id, state.left_beat, bend);

@@ -5,7 +5,7 @@
 //! and optional paste button. Completely separate from DropdownPanel —
 //! different layout, interaction, and rendering model.
 //!
-//! `OVERLAY_SESSIONS_AND_PICKER_DESIGN.md` §3/§4 (P1+P2): per-open state is a
+//! `OVERLAY_SESSIONS_AND_PICKER_DESIGN.md` section 3/section 4 (P1+P2): per-open state is a
 //! [`BrowserSession`] constructed whole by [`BrowserPopupPanel::open`] and
 //! dropped whole by [`BrowserPopupPanel::close`] — no field-by-field reset
 //! list to keep in sync as fields get added. Filtering, category-chip
@@ -218,7 +218,7 @@ impl BrowserLayout {
     }
 }
 
-/// Per-open state (`OVERLAY_SESSIONS_AND_PICKER_DESIGN.md` §3, D1) —
+/// Per-open state (`OVERLAY_SESSIONS_AND_PICKER_DESIGN.md` section 3, D1) —
 /// constructed whole by `open()`, dropped whole by `close()`.
 pub struct BrowserSession {
     pub mode: BrowserPopupMode,
@@ -431,7 +431,7 @@ impl BrowserPopupPanel {
         let pw = POPUP_WIDTH;
         let ph = session.layout.total_height;
 
-        // Scrim + modal container via the shared shell (§17 lifts it with a
+        // Scrim + modal container via the shared shell (section 17 lifts it with a
         // soft shadow; search bar / chips / grid are added on top as siblings).
         let shell = popup_shell::build(
             tree,

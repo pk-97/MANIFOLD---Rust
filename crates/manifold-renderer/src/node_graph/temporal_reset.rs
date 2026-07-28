@@ -1,6 +1,6 @@
 //! Node-local temporal-history reset detection.
 //!
-//! RAYTRACING_DESIGN.md §5.2 P4 + D3; ruling RT-D2
+//! RAYTRACING_DESIGN.md section 5.2 P4 + D3; ruling RT-D2
 //! (`.claude/orchestration/decisions.md`) — read before touching this file.
 //!
 //! D3: scene cuts (clip triggers) reset denoiser/upscaler history

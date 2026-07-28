@@ -91,7 +91,7 @@ pub struct Graph {
     /// added via [`Graph::add_node`] don't appear here. Handles are
     /// `&'static str` (set at effect construction); user bindings on
     /// disk store the same string and look up the live id at apply
-    /// time. See `docs/EFFECT_RUNTIME_UNIFICATION.md` §7.
+    /// time. See `docs/EFFECT_RUNTIME_UNIFICATION.md` section 7.
     handles: AHashMap<&'static str, NodeInstanceId>,
     /// Bumped when a param write changes some node's
     /// [`EffectNode::force_consumed_outputs`] result (e.g. `render_scene`'s

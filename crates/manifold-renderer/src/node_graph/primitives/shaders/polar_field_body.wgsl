@@ -1,4 +1,4 @@
-// node.polar_field — fusable body (freeze §12), SOURCE. R=angle (atan2
+// node.polar_field — fusable body (freeze section 12), SOURCE. R=angle (atan2
 // normalized to 0..1), G=radius (UV distance), B=0, A=1. PI/TAU inlined as
 // literals (matches polar_field.wgsl's consts) to avoid any fused-region const
 // collision. PARAMS: [cx, cy].

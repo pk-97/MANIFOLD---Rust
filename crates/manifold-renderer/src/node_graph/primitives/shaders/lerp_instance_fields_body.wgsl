@@ -1,4 +1,4 @@
-// node.lerp_instance_fields — fusable BUFFER body (freeze §12, buffer domain),
+// node.lerp_instance_fields — fusable BUFFER body (freeze section 12, buffer domain),
 // COINCIDENT 2-input. Elementwise lerp of two InstanceTransforms:
 // out = (1 - t) * a + t * b, on both pos_scale and rot. Matches
 // lerp_instance_fields.wgsl bit-for-bit — uses the SAME explicit

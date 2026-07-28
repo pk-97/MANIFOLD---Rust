@@ -282,7 +282,7 @@ mod tests {
 mod gpu_tests {
     //! Real-GPU value-level tests. No legacy predecessor to diff against —
     //! parity is against a hand-written Rust reference of the committed
-    //! formula, element-wise, per DECOMPOSING_GENERATORS.md §9.
+    //! formula, element-wise, per DECOMPOSING_GENERATORS.md section 9.
     use super::*;
     use half::f16;
     use manifold_gpu::GpuTextureFormat as Fmt;
@@ -458,7 +458,7 @@ mod gpu_tests {
         let device = crate::test_device();
         let gen_wgsl = generated_wgsl();
         // 12 identical vertices (position 0, normal +Y) so displacement
-        // magnitude along Y directly reads off the effective weight. The §4
+        // magnitude along Y directly reads off the effective weight. The section 4
         // invariant guards the "silent zero" failure: even though the weight
         // buffer's tail (verts 2..12) physically holds 0.0, a logical
         // weights_len of 2 must make those verts degrade to w=1.0 (deform at

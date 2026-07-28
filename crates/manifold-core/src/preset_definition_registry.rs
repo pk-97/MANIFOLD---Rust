@@ -146,9 +146,9 @@ fn build_effect_kind_map(json_presets: &[PresetMetadata]) -> PresetMap {
             Arc::make_mut(def).legacy_value_aliases = alias_meta.aliases;
         }
     }
-    // JSON-loaded presets (§11 unified-registry migration). Each entry is
+    // JSON-loaded presets (section 11 unified-registry migration). Each entry is
     // converted to a `PresetDef` and inserted — a JSON-loaded preset wins
-    // over an inventory submission for the same id. Post-§11 every shipping
+    // over an inventory submission for the same id. Post-section 11 every shipping
     // effect lives in JSON; the inventory loop above only fires for tests
     // that submit synthetic `EffectMetadata` entries.
     for preset in json_presets {
@@ -192,7 +192,7 @@ fn build_generator_kind_map(json_presets: &[PresetMetadata]) -> PresetMap {
             Arc::make_mut(def).legacy_param_aliases = alias_meta.aliases;
         }
     }
-    // JSON-loaded presets (§11). A JSON-loaded preset wins over an
+    // JSON-loaded presets (section 11). A JSON-loaded preset wins over an
     // inventory submission for the same id — same dual-source pattern as
     // the effect side, so a generator that ships with a bundled JSON
     // preset *and* a legacy inventory entry uses the JSON as the
@@ -317,7 +317,7 @@ pub fn try_get(type_id: &PresetTypeId) -> Option<Arc<PresetDef>> {
 /// instance-construction time, not a live hand gesture, so it must not mark
 /// the fresh slots `touched`. A brand-new effect would otherwise start every
 /// param pre-latched as "overridden" for the automation-lane override latch
-/// (`docs/AUTOMATION_LANES_DESIGN.md` §4) before any lane or hand ever
+/// (`docs/AUTOMATION_LANES_DESIGN.md` section 4) before any lane or hand ever
 /// touched it.
 pub fn create_default(type_id: &PresetTypeId) -> crate::effects::PresetInstance {
     let def = get(type_id);
@@ -499,7 +499,7 @@ fn format_float_with_format_string(value: f32, fmt: &str) -> String {
 
 // ─── Shared converters ───
 //
-// §11 of `docs/PRIMITIVE_LIBRARY_DESIGN.md` describes the migration from
+// section 11 of `docs/PRIMITIVE_LIBRARY_DESIGN.md` describes the migration from
 // inventory-submitted metadata to JSON-authoritative preset files. The
 // two `PresetSource` buckets (`effect::PresetSource` /
 // `generator::PresetSource`) stay separate; everything below is shared.
@@ -813,7 +813,7 @@ mod tests {
         }
     }
 
-    // ── §11 block 2: PresetMetadata → EffectDef converter ──────────
+    // ── section 11 block 2: PresetMetadata → EffectDef converter ──────────
 
     use crate::effect_graph_def::{
         AliasEntry, BindingDef, BindingTarget, ParamSpecDef, PresetMetadata, SkipModeDef,

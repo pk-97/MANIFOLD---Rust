@@ -18,7 +18,7 @@ struct Uniforms {
     // in this generic texture-repack primitive, not in the PBR shader.
     // metallic is written 0.0 (spec-gloss's dielectric default, matching
     // `gltf_load::convert_spec_gloss`'s factor-level conversion); the RGB
-    // specular tint is Deferred (§8) and is NOT read here.
+    // specular tint is Deferred (section 8) and is NOT read here.
     mode: f32,
 };
 

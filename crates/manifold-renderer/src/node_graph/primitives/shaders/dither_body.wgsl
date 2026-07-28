@@ -1,4 +1,4 @@
-// node.dither — fusable body (freeze §12). The first CoincidentTexel atom: both
+// node.dither — fusable body (freeze section 12). The first CoincidentTexel atom: both
 // inputs are read by EXACT integer texel (textureLoad, no sampler) because the
 // `pattern` input is an ordered threshold map where each texel is a distinct
 // value — sampling would blend neighbouring thresholds and smear the dither.

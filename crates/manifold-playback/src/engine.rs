@@ -62,7 +62,7 @@ pub struct TickContext {
 
 /// Output of a single engine tick.
 ///
-/// No longer `Clone` as of automation recording (§5): `pending_gesture_commits`
+/// No longer `Clone` as of automation recording (section 5): `pending_gesture_commits`
 /// holds `Box<dyn Command>`, which trait objects can't derive `Clone` for.
 /// Nothing in the codebase cloned a `TickResult` (it's always moved through
 /// once, ending at `reclaim_tick_result`), so dropping the derive is a
@@ -88,10 +88,10 @@ pub struct TickResult {
     pub prewarm_candidates:
         Option<std::collections::HashMap<String, crate::video_time::PrewarmCandidate>>,
     /// One `CommitRecordedGestureCommand` per automation recording gesture
-    /// (§5) that finished this tick — built by
+    /// (section 5) that finished this tick — built by
     /// `crate::automation::evaluate_all_automation`'s gesture-closure pass.
     /// The content thread runs each through `EditingService::execute` (the
-    /// single undo entry per gesture §5/§11.6 requires) right after this
+    /// single undo entry per gesture section 5/section 11.6 requires) right after this
     /// tick returns, mirroring how `percussion_orchestrator.tick()` is
     /// already handed `&mut Project` + `&mut EditingService` synchronously
     /// in the same spot. Always empty while stopped/paused (recording only
@@ -135,7 +135,7 @@ pub struct PlaybackEngine {
     live_clip_manager: Option<LiveClipManager>,
 
     // Session mode runtime (P2). Never serialized, never undo-wrapped — see
-    // docs/SESSION_MODE_DESIGN.md §4. Sibling of `live_clip_manager`; always
+    // docs/SESSION_MODE_DESIGN.md section 4. Sibling of `live_clip_manager`; always
     // present (unlike the live-clip manager, it holds no platform resources).
     session_runtime: SessionRuntime,
 
@@ -189,7 +189,7 @@ pub struct PlaybackEngine {
     session_refs_scratch: Vec<ActiveClipRef>,
     /// Pre-allocated scratch: clip ids to force-evict this tick because a
     /// session loop wrap kept the same inner clip active across the boundary
-    /// (§4 wrap-restart rule) — `compute_sync` diffs by clip_id and wouldn't
+    /// (section 4 wrap-restart rule) — `compute_sync` diffs by clip_id and wouldn't
     /// otherwise restart it. Evicted via the engine's own `stop_clip` so the
     /// very next `compute_sync` call sees it as a fresh `to_start`.
     session_wrap_restart_scratch: Vec<ClipId>,
@@ -197,7 +197,7 @@ pub struct PlaybackEngine {
     sync_start_scratch: Vec<ActiveClipRef>,
     /// Pre-allocated scratch for modulation active clip timing.
     modulation_timing_scratch: Vec<(Beats, Beats)>,
-    /// §8 param triggers: which instances' own `audio_trigger` config fired
+    /// section 8 param triggers: which instances' own `audio_trigger` config fired
     /// this tick, from the most recent `evaluate_modulation` call. Drained by
     /// [`Self::take_trigger_pulses`] each tick (P2 plumbs this into the
     /// renderer's per-layer `audio_count`); reused as scratch between ticks to
@@ -233,15 +233,15 @@ pub struct PlaybackEngine {
     /// the last Back to Arrangement. Runtime-only, owned by the playback
     /// side (never the `Project`), never serialized, survives play/stop
     /// within a session. See `crate::automation` and
-    /// `docs/AUTOMATION_LANES_DESIGN.md` §4.
+    /// `docs/AUTOMATION_LANES_DESIGN.md` section 4.
     automation_latches: crate::automation::AutomationLatches,
-    /// Global Automation Arm (§5): while on, a live touch on an automated
+    /// Global Automation Arm (section 5): while on, a live touch on an automated
     /// param (while playing) records into its lane instead of latching an
     /// override. Runtime-only, owned by the playback side, never the
     /// `Project`, never serialized — same lifetime rule as
     /// `automation_latches`. Off by default.
     automation_armed: bool,
-    /// In-flight recording gestures (§5). Runtime-only, owned by the
+    /// In-flight recording gestures (section 5). Runtime-only, owned by the
     /// playback side alongside `automation_latches`/`automation_armed`.
     automation_gestures: crate::automation::AutomationGestures,
     /// Frame count when timeline_active_scratch was last populated.
@@ -451,7 +451,7 @@ impl PlaybackEngine {
     /// The engine's real wall clock, as of the most recent `tick()` (or
     /// `set_clock()` for pre-first-tick callers) — the epoch every
     /// clip-lifecycle timing gate (`recently_started_times`, pending-pause,
-    /// `compositor_dirty_deadline`) is anchored on. See F4 (CORE_ENGINE_MAP.md §5).
+    /// `compositor_dirty_deadline`) is anchored on. See F4 (CORE_ENGINE_MAP.md section 5).
     pub fn last_realtime_now(&self) -> f64 {
         self.last_realtime_now
     }
@@ -599,7 +599,7 @@ impl PlaybackEngine {
         // BUG-051: drop every audio-trigger edge-detector's armed state so a
         // stale "fired, not yet re-armed" flag can't suppress the first onset
         // next time transport starts. Both the live clip-trigger routes
-        // (§1-7) and the §8 param-trigger holders (audio_trigger.edge +
+        // (section 1-7) and the section 8 param-trigger holders (audio_trigger.edge +
         // ParameterAudioMod.trigger_edge) are runtime-only and never
         // serialized, so this is the only reset point that reaches them.
         self.live_trigger_state.clear();
@@ -608,7 +608,7 @@ impl PlaybackEngine {
         }
         // Transport stop stops all session playback and clears pending
         // launches (Ableton behavior). session_override is NOT cleared —
-        // layers stay detached until an explicit Back to Arrangement (§4).
+        // layers stay detached until an explicit Back to Arrangement (section 4).
         self.session_runtime.on_transport_stop();
         self.current_time_double = 0.0;
         self.current_time = Seconds::ZERO;
@@ -697,7 +697,7 @@ impl PlaybackEngine {
 
         // Session slots are beat-anchored and stateless, so a seek never
         // stops them — but pending launches must retarget to the next
-        // quantize boundary after the new position (§4), or a jump could
+        // quantize boundary after the new position (section 4), or a jump could
         // fire one off-grid (or, if the new position is already past the
         // old target, instantly).
         self.session_runtime.on_seek(self.current_beat);
@@ -803,7 +803,7 @@ impl PlaybackEngine {
         result
     }
 
-    /// §8 param triggers: drain this tick's fired `audio_trigger` pulses
+    /// section 8 param triggers: drain this tick's fired `audio_trigger` pulses
     /// (P1's evaluator output) for the caller to fold into the renderer's
     /// per-layer `audio_count` (P2). Leaves the scratch Vec's capacity intact
     /// for reuse next tick.
@@ -874,9 +874,9 @@ impl PlaybackEngine {
         //     (tick_playing only — export drives the transport in Playing
         //     state too, so export sampling falls out for free; when stopped,
         //     tick_non_playing never calls this, so lanes don't write and
-        //     params hold). See docs/AUTOMATION_LANES_DESIGN.md §1, §3.
+        //     params hold). See docs/AUTOMATION_LANES_DESIGN.md section 1, section 3.
         //     While `automation_armed`, a touched param records into its
-        //     lane instead of latching (§5); `pending_gesture_commits`
+        //     lane instead of latching (section 5); `pending_gesture_commits`
         //     carries one `CommitRecordedGestureCommand` per gesture that
         //     closed this tick, for the content thread to run through
         //     `EditingService` right after this tick returns.
@@ -982,7 +982,7 @@ impl PlaybackEngine {
         //    Port of C# line 1122.
         self.update_active_clip_playback_rates();
 
-        // 2b. Live audio triggers, meter-only (BUG-109 §7.1 item 2). A clip
+        // 2b. Live audio triggers, meter-only (BUG-109 section 7.1 item 2). A clip
         //     trigger never FIRES while stopped — one-shot expiry is
         //     beat-based and the clock is frozen — but a performer tuning a
         //     trigger at soundcheck (transport stopped, track through the
@@ -1063,7 +1063,7 @@ impl PlaybackEngine {
             modulation_active: modulation_dirty,
             stopped_clips: Vec::new(), // Populated by tick() after this returns
             prewarm_candidates: None,
-            // Recording only runs during tick_playing (§5's "armed + playing
+            // Recording only runs during tick_playing (section 5's "armed + playing
             // + touched") — stopped/paused never opens or closes a gesture.
             pending_gesture_commits: Vec::new(),
         }
@@ -1092,7 +1092,7 @@ impl PlaybackEngine {
                 let Some(layer) = project.timeline.layers.get(*li) else {
                     continue;
                 };
-                // Arrangement suppression (§6): a layer detached into session
+                // Arrangement suppression (section 6): a layer detached into session
                 // mode plays ONLY session content. Skipping it here is the
                 // entire integration — the scheduler diff then stops
                 // arrangement clips and starts session clips with no further
@@ -1359,7 +1359,7 @@ impl PlaybackEngine {
             mgr.fill_live_slot_refs(&mut self.live_slot_refs_scratch);
         }
 
-        // Third reference source (§4/§9): an input to this sole authority,
+        // Third reference source (section 4/section 9): an input to this sole authority,
         // never a parallel path. May evict a clip via `stop_clip` (the same
         // primitive this function's own to_stop loop uses) to force a
         // same-clip loop-wrap restart before the diff below runs.
@@ -1498,13 +1498,13 @@ impl PlaybackEngine {
             .resolve_clip_for_start(&project.session, layer_id, &entry.clip_id, entry.start_beat)
     }
 
-    // ─── Session mode commands (P2, §5) ───
+    // ─── Session mode commands (P2, section 5) ───
 
     /// Launch a session slot, or — if the (layer, scene) cell is empty —
-    /// issue the sparse-grid stop for that layer (§5: "empty slot cells
+    /// issue the sparse-grid stop for that layer (section 5: "empty slot cells
     /// don't exist"). Starts the transport first if it was stopped, and in
     /// that case launches immediately rather than waiting for the next
-    /// quantize boundary (§4: "the grid is dead on first click for
+    /// quantize boundary (section 4: "the grid is dead on first click for
     /// timeline-free users" otherwise).
     pub fn session_launch_slot(&mut self, layer_id: LayerId, scene_id: SceneId) {
         let has_slot = self
@@ -1530,7 +1530,7 @@ impl PlaybackEngine {
     }
 
     /// Quantized stop for one layer's session slot. `session_override`
-    /// persists (§5/§12) — the layer goes black, it does not fall back to
+    /// persists (section 5/section 12) — the layer goes black, it does not fall back to
     /// the arrangement.
     pub fn session_stop_slot(&mut self, layer_id: LayerId) {
         let current_beat = self.current_beat;
@@ -1540,7 +1540,7 @@ impl PlaybackEngine {
 
     /// Launch every slot in `scene_id`; layers currently playing a session
     /// slot with no slot in this scene get a quantized stop (Ableton "stop
-    /// other tracks" default, §5). Starts the transport first if stopped,
+    /// other tracks" default, section 5). Starts the transport first if stopped,
     /// same as `session_launch_slot`.
     pub fn session_launch_scene(&mut self, scene_id: SceneId) {
         let immediate = !self.is_playing();
@@ -1599,7 +1599,7 @@ impl PlaybackEngine {
         &self.automation_latches
     }
 
-    /// Toggle the global Automation Arm (§5). Runtime-only, not a project
+    /// Toggle the global Automation Arm (section 5). Runtime-only, not a project
     /// mutation — no undo entry (`ContentCommand::AutomationSetArmed` is
     /// handled directly on the content thread, same shape as
     /// `automation_back_to_arrangement`).

@@ -814,7 +814,7 @@ impl GraphCanvas {
     /// exists for verification surfaces (the headless snapshot harness) that
     /// need to show a specific node collapsed regardless of the canvas-wide
     /// default, e.g. proving D6's "N params" chip
-    /// (`docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` §2) on a group box next
+    /// (`docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` section 2) on a group box next
     /// to an expanded sibling in the same capture.
     pub fn set_collapsed(&mut self, node_id: u32, collapsed: bool) {
         self.collapsed.insert(node_id, collapsed);

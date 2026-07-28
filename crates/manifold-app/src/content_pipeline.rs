@@ -65,7 +65,7 @@ fn compute_occluded_layer_indices(
 ) {
     out.clear();
     // Audio layers have their own solo/mute bus (audible, not visual) — they must
-    // never affect compositing. See docs/AUDIO_LAYER_DESIGN.md §5.
+    // never affect compositing. See docs/AUDIO_LAYER_DESIGN.md section 5.
     let any_solo = layers.iter().filter(|l| !l.is_audio()).any(|l| l.is_solo);
     let mut cutoff: Option<i32> = None;
     for l in layers {
@@ -256,7 +256,7 @@ mod atlas_cell_uv_tests {
     }
 }
 
-/// Clip-thumbnail **filmstrip** atlas geometry (§24 5c-2), decoupled from the
+/// Clip-thumbnail **filmstrip** atlas geometry (section 24 5c-2), decoupled from the
 /// node atlas above. A non-square grid of small 16:9 cells; each cell holds one
 /// bar (or bar-group) of one clip's filmstrip. Cells are interchangeable — a clip
 /// holds a *list* of cell indices — so no rectangle packing is needed. Smaller
@@ -279,7 +279,7 @@ pub const CLIP_ATLAS_H: u32 = CLIP_ATLAS_ROWS * CLIP_ATLAS_CELL_H;
 pub const CLIP_ATLAS_CELLS: usize = (CLIP_ATLAS_COLS * CLIP_ATLAS_ROWS) as usize;
 
 /// Snapshot of `(published layout, clip→content-hash)` captured when a save
-/// readback is submitted, consumed when it returns (§24 5c-2 P4).
+/// readback is submitted, consumed when it returns (section 24 5c-2 P4).
 type ClipAtlasPersistSnapshot = (Vec<(manifold_core::ClipId, u32, u32)>, AHashMap<String, u64>);
 
 /// `(built layout, GPU signal value the pixels land on)` — see
@@ -336,7 +336,7 @@ fn clip_atlas_cell_full(i: usize) -> (f32, f32, f32, f32) {
     )
 }
 
-/// §24 5c cold-start: locate a PARKED generator clip by id — its layer (must be a
+/// section 24 5c cold-start: locate a PARKED generator clip by id — its layer (must be a
 /// generator), clip index, and clip-start `(time, beat)` for a thumbnail render.
 /// `None` if not found or the layer isn't a generator (video posters are separate).
 #[cfg(target_os = "macos")]
@@ -357,7 +357,7 @@ fn find_parked_generator_clip<'a>(
     None
 }
 
-/// §24 5c P2b: locate a PARKED video clip by id — returns its `video_clip_id`
+/// section 24 5c P2b: locate a PARKED video clip by id — returns its `video_clip_id`
 /// (the file reference), for a one-shot poster decode. `None` if not found or not
 /// a video clip.
 #[cfg(target_os = "macos")]
@@ -406,7 +406,7 @@ fn thumb_source_shader_readable(label: &str, tex: &manifold_gpu::GpuTexture) -> 
 }
 
 /// Snapshot live clip output into the single shared clip-thumbnail atlas
-/// surface (§24 5c, BUG-119 root fix). `sources` maps each *active* clip
+/// surface (section 24 5c, BUG-119 root fix). `sources` maps each *active* clip
 /// (under the playhead this frame) to its just-rendered source texture. A clip
 /// is (re)snapshot when it first appears or after `REFRESH_INTERVAL` frames,
 /// at most `MAX_SNAPSHOTS_PER_FRAME` per frame, so cold thumbnails fill in
@@ -567,7 +567,7 @@ fn fill_clip_atlas(
     true
 }
 
-/// Restore cached filmstrip cells into the shared clip atlas surface (§24 5c-2
+/// Restore cached filmstrip cells into the shared clip atlas surface (section 24 5c-2
 /// P4). Requests missing strips from the disk cache, stashes finished loads,
 /// and uploads **one** cell per frame via a reused RGBA8 staging texture
 /// (`replaceRegion` is a CPU write, so a single upload+blit per frame avoids
@@ -775,7 +775,7 @@ pub struct ContentPipeline {
     /// atlas is off or nothing was captured.
     last_node_atlas_layout: Vec<(NodeId, u32)>,
 
-    // ── Clip thumbnail atlas (§24 5c) ──────────────────────────────
+    // ── Clip thumbnail atlas (section 24 5c) ──────────────────────────────
     // BUG-119 root fix (2026-07-11): ONE IOSurface-backed texture shared by
     // both threads, replacing a private persistent texture plus a
     // `SharedTextureBridge` triple-buffer ring. Every cell blit uses
@@ -828,7 +828,7 @@ pub struct ContentPipeline {
     /// its blit is confirmed complete (layout never leads pixels; BUG-119
     /// item 3). Content-thread-owned; no lock needed.
     clip_atlas_pending_layout: Option<ClipAtlasPendingLayout>,
-    /// §24 5c-2 P4: sidecar disk cache so filmstrips survive reload. `None` if no
+    /// section 24 5c-2 P4: sidecar disk cache so filmstrips survive reload. `None` if no
     /// cache dir is available. All disk IO is on its own worker thread.
     clip_thumb_cache: Option<crate::clip_thumb_cache::ClipThumbCache>,
     /// Async RGBA8 readback of the persistent atlas for the debounced disk save.
@@ -886,7 +886,7 @@ pub struct ContentPipeline {
     /// Downscale blit used for the workspace preview texture.
     #[cfg(target_os = "macos")]
     preview_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
-    /// §24 5c-2 P5: 4×4 box-filter downsample blit for clip-thumbnail capture.
+    /// section 24 5c-2 P5: 4×4 box-filter downsample blit for clip-thumbnail capture.
     /// A full-res clip output (e.g. 3456px) into a 128px cell is a ~27× downscale;
     /// a single bilinear tap aliases badly, so the capture averages a tap grid.
     #[cfg(target_os = "macos")]
@@ -958,7 +958,7 @@ pub struct ContentPipeline {
     /// construction from `MANIFOLD_OCCLUSION_RENDER_SKIP` (default on; set to
     /// `0` to A/B the perf win against today's blend-skip-only behavior).
     occlusion_render_skip_enabled: bool,
-    /// §8 D5: master/global effect chains have no owning layer, so their
+    /// section 8 D5: master/global effect chains have no owning layer, so their
     /// audio-trigger fires accumulate here instead of on a `GeneratorRenderer`
     /// layer state. Clip contribution is always 0 for master (no clip
     /// lifecycle); this counter alone is the master chain's effective
@@ -1248,7 +1248,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             ..Default::default()
         }));
 
-        // §24 5c-2 P5: box-filter downsample for clip-thumbnail capture (anti-alias
+        // section 24 5c-2 P5: box-filter downsample for clip-thumbnail capture (anti-alias
         // the big full-res→cell downscale). Reusable helper (unit-tested in
         // manifold-renderer).
         self.clip_downsample_pipeline =
@@ -1651,7 +1651,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     /// Install the content-side texture + keep-alive `Arc` for the single
-    /// shared clip-thumbnail atlas surface (§24 5c, BUG-119). The caller must
+    /// shared clip-thumbnail atlas surface (section 24 5c, BUG-119). The caller must
     /// have already cleared `texture` once (Metal doesn't zero-init) — this
     /// is the atlas's ONE lifetime clear; every later write is `LoadAction::Load`.
     #[cfg(target_os = "macos")]
@@ -1696,7 +1696,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         Arc::clone(&self.shared_output)
     }
 
-    /// §8 P2: fold this tick's audio-trigger fires into the renderer's
+    /// section 8 P2: fold this tick's audio-trigger fires into the renderer's
     /// per-layer (or master) `audio_count`. `pulses` is
     /// `PlaybackEngine::take_trigger_pulses`'s output for this tick — pure
     /// bookkeeping, no GPU work. A `Some(layer_id)` pulse bumps that layer's
@@ -1870,7 +1870,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let mut atlas_filled_this_frame = false;
         let texture_pool = self.texture_pool.as_ref();
 
-        // §8 P2: drain this tick's audio-trigger fires (P1's evaluator
+        // section 8 P2: drain this tick's audio-trigger fires (P1's evaluator
         // output) before the split borrow below — `take_trigger_pulses`
         // needs `&mut engine` in full, same as `split_renderer_project`.
         let trigger_pulses = engine.take_trigger_pulses();
@@ -2175,7 +2175,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // as base layer. This ordering is required by generate_layers' consecutive-run grouping.
         clip_descs.sort_unstable_by(|a, b| b.layer_index.cmp(&a.layer_index));
 
-        // §8 D1/D5: each layer's effect chain gets its generator's effective
+        // section 8 D1/D5: each layer's effect chain gets its generator's effective
         // trigger_count (clip edge + audio fires) fed via `PresetContext` —
         // the same value the layer's own generator graph sees. `None` (no
         // GeneratorRenderer registered) reads as 0 for every layer, same as
@@ -2187,7 +2187,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let layer_descs: Vec<CompositeLayerDescriptor> = layers
             .iter()
             // Audio layers produce no visual output and must not enter the
-            // compositor (their solo/mute is an audible bus). §5 of the design.
+            // compositor (their solo/mute is an audible bus). section 5 of the design.
             .filter(|layer| !layer.is_audio())
             .map(|layer| CompositeLayerDescriptor {
                 layer_index: layer.index,
@@ -2222,7 +2222,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             layers: &layer_descs,
             master_effects,
             master_effect_groups,
-            // §8 D5: master has no layer, so its effective count is
+            // section 8 D5: master has no layer, so its effective count is
             // audio-fires-only, accumulated across the session in
             // `self.master_trigger_count` (bumped in `apply_trigger_pulses`,
             // called earlier this frame before generators render).
@@ -2299,7 +2299,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             self.last_clip_atlas_layout = layout;
         }
 
-        // ── Clip thumbnail atlas snapshot (§24 5c) ──────────────────
+        // ── Clip thumbnail atlas snapshot (section 24 5c) ──────────────────
         // AFTER the compositor render so we can prefer each clip's POST-EFFECT
         // output (with-effects thumbnail). `frame` is no longer borrowing `self`
         // here, and `native_enc` is free again (its compositor wrapper dropped), so
@@ -2358,7 +2358,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 }
             }
 
-            // Cold-start (§24 5c P2c): render up to K PARKED generator clips'
+            // Cold-start (section 24 5c P2c): render up to K PARKED generator clips'
             // thumbnails — visible clips with no live source this frame and no atlas
             // cell yet. Their default look (base params, no modulation/override/warm-
             // up) fills the gap until the clip first plays (then the live snapshot

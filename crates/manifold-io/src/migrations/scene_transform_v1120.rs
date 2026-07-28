@@ -1,7 +1,7 @@
 //! v1.11.0 → v1.12.0: `node.render_scene` per-object transform params
 //! synthesize into `node.transform_3d` atoms wired through the new
 //! `transform_n: Transform` port. See
-//! `docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` §2 D3/D4 for the design;
+//! `docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` section 2 D3/D4 for the design;
 //! this doc comment covers mechanics only.
 //!
 //! Pure `Value → Value`, pre-typed-deserialize (the quarantine rule — this

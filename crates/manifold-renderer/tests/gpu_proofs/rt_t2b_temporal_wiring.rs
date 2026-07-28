@@ -1,4 +1,4 @@
-//! RAYTRACING_DESIGN.md §8.2 D22 (T2-B) gate — the live reduced-res render
+//! RAYTRACING_DESIGN.md section 8.2 D22 (T2-B) gate — the live reduced-res render
 //! path + MetalFX Temporal wiring inside `node.render_scene::evaluate()`
 //! itself (as opposed to `rt_p4_metalfx_temporal.rs`, which exercises the
 //! standalone `MetalFxTemporalUpscaler` unit in isolation with jitter held

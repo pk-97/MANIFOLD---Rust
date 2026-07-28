@@ -1,6 +1,6 @@
 //! Chain-graph splicing primitives.
 //!
-//! After the §11 unified-registry migration, every shipping effect is
+//! After the section 11 unified-registry migration, every shipping effect is
 //! a JSON `EffectGraphDef` consumed via [`crate::node_graph::LoadedPresetView`].
 //! The chain build loop calls [`splice_def_into_chain`] with each
 //! active effect's canonical (or per-instance overridden) def to graft
@@ -13,7 +13,7 @@
 //! The legacy `ChainSpec` inventory channel that previously lived here
 //! is gone (block 8); the file name persists for the moment so the
 //! re-export surface in `node_graph/mod.rs` can stay stable through
-//! the rest of §11.
+//! the rest of section 11.
 
 use std::borrow::Cow;
 

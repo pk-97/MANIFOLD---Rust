@@ -1,4 +1,4 @@
-// node.noise — fusable body (freeze §12), SOURCE. Unified 2D noise (Perlin /
+// node.noise — fusable body (freeze section 12), SOURCE. Unified 2D noise (Perlin /
 // Simplex / Random) with octave fBM. Helpers verbatim from noise.wgsl; base_noise
 // takes noise_type as an arg (no global uniform in a body). The Random branch
 // reconstructs the hand shader's (id+0.5)*inv via (floor(uv*dims)+0.5)*inv so its

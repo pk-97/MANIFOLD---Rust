@@ -260,7 +260,7 @@ impl AbletonPickerPopup {
         let pw = POPUP_W;
         let ph = self.popup_h;
 
-        // Scrim + modal container via the shared shell (§17 lifts it with a
+        // Scrim + modal container via the shared shell (section 17 lifts it with a
         // soft shadow; the header + columns are added on top as siblings).
         let shell = popup_shell::build(
             tree,

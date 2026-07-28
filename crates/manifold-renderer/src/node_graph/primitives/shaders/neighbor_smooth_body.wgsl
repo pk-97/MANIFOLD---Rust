@@ -1,4 +1,4 @@
-// node.neighbor_smooth — fusable BUFFER body (freeze §12, buffer domain).
+// node.neighbor_smooth — fusable BUFFER body (freeze section 12, buffer domain).
 // 5-point cross-neighbourhood smoothing over an Array<InstanceTransform> laid
 // out as an NxN grid. Smooths the xyz position with the 4 grid neighbours;
 // scale (.w) and rotation (.rot) pass through unchanged. Border instances fall

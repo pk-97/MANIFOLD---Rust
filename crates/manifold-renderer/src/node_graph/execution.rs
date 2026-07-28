@@ -368,7 +368,7 @@ pub struct StepProfile {
 impl Executor {
     /// Mark a persistent resource as already initialized, so the first-frame
     /// clear-to-black at acquisition is skipped. Called by the state harvest
-    /// (docs/CHAIN_FUSION_DESIGN.md §5) after installing a carried-over
+    /// (docs/CHAIN_FUSION_DESIGN.md section 5) after installing a carried-over
     /// texture into the resource's slot — without this, the rebuilt
     /// executor's fresh `initialized_persistent` set would wipe the migrated
     /// trail on its first frame.

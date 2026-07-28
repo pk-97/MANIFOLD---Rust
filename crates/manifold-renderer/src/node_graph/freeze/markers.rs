@@ -14,7 +14,7 @@
 //! rendering shared by `catalog_gen` and `graph_tool` for the same reason
 //! (two ends of one string contract must never disagree).
 //!
-//! Full inventory + semantics: `docs/FREEZE_COMPILER_MAP.md` §5. Two markers
+//! Full inventory + semantics: `docs/FREEZE_COMPILER_MAP.md` section 5. Two markers
 //! here (`Pure`, `Fusion`) are hand-authored only — no codegen emit site
 //! exists for them (BlackHole's bake, user `@fusion:` fragments) — but they
 //! still round-trip through this grammar so a review can diff one place.
@@ -25,7 +25,7 @@
 //! Out of scope: `@channel_skip`, `@in:`, `@param:` — these are a different,
 //! unrelated micro-grammar (Channels-struct field skipping; user fragment
 //! port/param declarations), not part of the marker ABI table in
-//! `FREEZE_COMPILER_MAP.md` §5, and not touched by this module.
+//! `FREEZE_COMPILER_MAP.md` section 5, and not touched by this module.
 
 /// One marker on the freeze compiler's WGSL comment-based wire.
 ///
@@ -208,7 +208,7 @@ mod tests {
     use super::*;
 
     /// Every variant round-trips: `parse(&m.emit()) == Some(m)`. One
-    /// representative instance per variant (invariant table, FUSION_SOTA_DESIGN §3).
+    /// representative instance per variant (invariant table, FUSION_SOTA_DESIGN section 3).
     #[test]
     fn marker_roundtrip_every_variant() {
         let variants = vec![
@@ -318,7 +318,7 @@ mod tests {
         }
     }
 
-    /// Invariant (FUSION_SOTA_DESIGN D1 / §3): every marker byte on the wire is
+    /// Invariant (FUSION_SOTA_DESIGN D1 / section 3): every marker byte on the wire is
     /// produced/consumed by THIS module. A Rust string literal starting `"// @`
     /// anywhere else in `manifold-renderer/src` is a hand-formatted/hand-matched
     /// marker that has drifted out of the single-sourced grammar — the exact

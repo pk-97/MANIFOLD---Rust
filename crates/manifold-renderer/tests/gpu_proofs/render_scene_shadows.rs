@@ -1,4 +1,4 @@
-//! `node.render_scene` shadow-map proof (REALTIME_3D_DESIGN §5 P2 gate).
+//! `node.render_scene` shadow-map proof (REALTIME_3D_DESIGN section 5 P2 gate).
 //!
 //! What the isolated Rust unit tests CAN'T reach: that the depth-only
 //! shadow pipeline (void `@fragment`, no colour attachment) actually

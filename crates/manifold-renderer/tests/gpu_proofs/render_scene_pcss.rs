@@ -1,5 +1,5 @@
 //! `node.render_scene` PCSS contact-hardening proof (REALTIME_3D_DESIGN
-//! §11 P9 gate).
+//! section 11 P9 gate).
 //!
 //! Numeric, no image judgment (per the phase brief — no PNGs here, unlike
 //! the sibling `render_scene_shadows` suite). Decisive scene: a small plate

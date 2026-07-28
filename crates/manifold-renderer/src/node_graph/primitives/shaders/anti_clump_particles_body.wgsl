@@ -1,4 +1,4 @@
-// node.anti_clump_particles — fusable BUFFER body (freeze §12, buffer domain),
+// node.anti_clump_particles — fusable BUFFER body (freeze section 12, buffer domain),
 // COINCIDENT + OPTIONAL TEXTURE. Modulator-weighted Brownian kick on each live
 // particle's position.xy. Matches anti_clump_particles.wgsl.
 //

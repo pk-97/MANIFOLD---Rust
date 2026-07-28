@@ -36,7 +36,7 @@ pub enum GraphError {
     /// disagree. The boxed payload carries the specific divergence
     /// (count / name / type) so the validator error message can point
     /// at exactly the channel that mismatched. See
-    /// `docs/CHANNEL_TYPE_SYSTEM.md` §5.3.
+    /// `docs/CHANNEL_TYPE_SYSTEM.md` section 5.3.
     ///
     /// Boxed to keep `GraphError` small (clippy `result_large_err`).
     ///
@@ -52,7 +52,7 @@ pub enum GraphError {
     /// (R / G / B / A) at which producer and consumer diverged so
     /// the validator error message can point at exactly the mis-
     /// labelled texel component. See `docs/CHANNEL_TYPE_SYSTEM.md`
-    /// §17 for the texture-channel extension.
+    /// section 17 for the texture-channel extension.
     ///
     /// Untyped [`PortType::Texture2D`] on either side is the migration
     /// back-compat valve and accepts any typed counterparty without
@@ -405,7 +405,7 @@ pub(super) fn validate_wire_endpoints(
     // OR (b) the consumer is Permissive (generic transform operators
     // accept any Channels producer regardless of their own specs).
     // Surfaces a structured `ChannelMismatch` on disagreement per
-    // `docs/CHANNEL_TYPE_SYSTEM.md` §5. Wires that match neither
+    // `docs/CHANNEL_TYPE_SYSTEM.md` section 5. Wires that match neither
     // condition fall through to `port_types_compatible` (raw-byte
     // size+align match) below.
     if let (PortType::Array(producer), PortType::Array(consumer)) =
@@ -434,7 +434,7 @@ pub(super) fn validate_wire_endpoints(
         // Typed-vs-typed Texture2D: enforce exact per-slot match. An
         // untyped Texture2D on either side is the back-compat valve
         // and routes through `port_types_compatible` below. See
-        // `docs/CHANNEL_TYPE_SYSTEM.md` §17.
+        // `docs/CHANNEL_TYPE_SYSTEM.md` section 17.
         if let Err(reason) = texture_channels_compatible(producer, consumer) {
             return Err(GraphError::TextureChannelMismatch(Box::new(
                 TextureChannelMismatchInfo {
@@ -483,7 +483,7 @@ pub(super) fn validate_wire_endpoints(
 /// - [`MatchMode::Permissive`] (opt-in for generic transform
 ///   operators): accept any producer signature.
 ///
-/// See `docs/CHANNEL_TYPE_SYSTEM.md` §5.2.
+/// See `docs/CHANNEL_TYPE_SYSTEM.md` section 5.2.
 pub fn channels_compatible(
     producer: ArrayType,
     consumer: ArrayType,
@@ -534,7 +534,7 @@ pub fn channels_compatible(
 /// No `MatchMode` distinction (unlike the Array path) — typed texture
 /// ports always match exactly. The back-compat valve for untyped
 /// [`PortType::Texture2D`] runs in `port_types_compatible` instead.
-/// See `docs/CHANNEL_TYPE_SYSTEM.md` §17.
+/// See `docs/CHANNEL_TYPE_SYSTEM.md` section 17.
 pub fn texture_channels_compatible(
     producer: TextureChannels,
     consumer: TextureChannels,
@@ -632,7 +632,7 @@ fn port_types_compatible(from: PortType, to: PortType) -> bool {
     if from == to {
         return true;
     }
-    // Texture2D back-compat valve for the §17 migration: an untyped
+    // Texture2D back-compat valve for the section 17 migration: an untyped
     // `Texture2D` on either side accepts any `Texture2DTyped`
     // counterparty (the producer hasn't declared a signature yet, or
     // the consumer hasn't migrated). When BOTH sides are typed and
@@ -2179,7 +2179,7 @@ mod tests {
             assert!(g.connect((src, "out"), (dst, "in")).is_ok());
         }
 
-        // ─── §17: Texture2D channel-signature validator tests ────────
+        // ─── section 17: Texture2D channel-signature validator tests ────────
 
         use crate::node_graph::ports::TextureChannels;
 
@@ -2204,7 +2204,7 @@ mod tests {
         fn texture_channels_compatible_reports_first_diverging_slot() {
             // Watercolor convention (R=flow_x, G=confidence, B=flow_y, A=valid)
             // vs MiDaS convention (R=flow_x, G=flow_y, B=confidence, A=valid)
-            // — the exact bug class the §17 extension is designed to catch.
+            // — the exact bug class the section 17 extension is designed to catch.
             let watercolor = TextureChannels::new(
                 well_known::FLOW_X,
                 well_known::CONFIDENCE,

@@ -22,7 +22,7 @@ pub struct Particle {
 // If these fail, you've changed a field without updating the WGSL counterpart (or vice versa).
 const _: () = assert!(std::mem::size_of::<Particle>() == 64);
 
-/// Channels signature for [`Particle`] per `docs/CHANNEL_TYPE_SYSTEM.md` §6.1.
+/// Channels signature for [`Particle`] per `docs/CHANNEL_TYPE_SYSTEM.md` section 6.1.
 /// Std430 layout reproduces the existing `#[repr(C)]` 64-byte stride:
 ///   position: Vec3F at 0   (size 12, align 16 → next 16)
 ///   velocity: Vec3F at 16  (size 12, align 16 → next 28)

@@ -1,4 +1,4 @@
-// node.radial_offset_field — fusable body (freeze §12), SOURCE. Directional
+// node.radial_offset_field — fusable body (freeze section 12), SOURCE. Directional
 // displacement-field generator. Radial mode: dir = normalize(uv-0.5) scaled by a
 // centre→edge falloff mask (smoothstep(0,0.707,dist), faded by 1-falloff, near-
 // centre fallback (1,0)). Linear mode: dir = (cos(angle), sin(angle)) uniform.

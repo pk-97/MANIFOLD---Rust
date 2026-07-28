@@ -1,4 +1,4 @@
-// node.diffuse_force_3d_at_particles — fusable BUFFER body (freeze §12, buffer
+// node.diffuse_force_3d_at_particles — fusable BUFFER body (freeze section 12, buffer
 // domain), COINCIDENT multi-input + TEXTURE. Per-particle incoherent 3D random
 // kick added in place to a [f32;3] force buffer, weighted by local density
 // (sampled from a Texture3D). Matches diffuse_force_3d_at_particles.wgsl.

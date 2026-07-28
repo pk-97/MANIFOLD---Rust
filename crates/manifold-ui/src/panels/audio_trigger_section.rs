@@ -587,7 +587,7 @@ impl AudioTriggerSection {
         }
     }
 
-    /// P7 (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` §7.2 item 5):
+    /// P7 (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` section 7.2 item 5):
     /// row index of the currently-OPEN clip-trigger drawer, if any.
     /// `audio_configs[i].is_some()` already means "this row is expanded AND
     /// the section isn't collapsed" (see `configure_and_build`'s gate).

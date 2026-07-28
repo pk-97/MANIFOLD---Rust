@@ -1,4 +1,4 @@
-//! Step 4 — install fused regions into the live render path (design §12.2/§12.3).
+//! Step 4 — install fused regions into the live render path (design section 12.2/section 12.3).
 //!
 //! [`super::region::partition_regions`] is the finder: it splits a flattened
 //! [`EffectGraphDef`] into its maximal pointwise/coincident regions, cutting at
@@ -46,7 +46,7 @@
 //!   preset — an effect with a per-instance graph override
 //!   (`PresetInstance.graph = Some`) is rendered from the user's wiring,
 //!   unfused, so editing stays live.
-//! - This is "freeze = render-only binary, graph = source" (the §12 framing).
+//! - This is "freeze = render-only binary, graph = source" (the section 12 framing).
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -73,7 +73,7 @@ use crate::node_graph::{LoadedPresetView, ParamBinding, ParamTarget, PrimitiveRe
 /// Whether fusion is enabled this process. Default ON — the freeze compiler is
 /// the main render path (Peter's request). The `MANIFOLD_FREEZE` env var is the
 /// v1 kill-switch: set it to `0` / `false` / `off` and relaunch to render every
-/// effect unfused (the §12.3 step 7 "never fuse tonight" switch, restart-scoped
+/// effect unfused (the section 12.3 step 7 "never fuse tonight" switch, restart-scoped
 /// for now; a live hot-toggle is the step-7 follow-up). Read once and cached so
 /// it's a process constant — no per-frame env lookup, no topology-hash churn.
 pub fn freeze_enabled() -> bool {
@@ -461,7 +461,7 @@ thread_local! {
     /// Keys currently in flight on the worker — dedupes enqueues across the
     /// rebuilds that happen while a compile is pending. Value is the enqueue
     /// time, so [`pump_segment_results`] can expire a wedged key (D2,
-    /// FUSION_SOTA_DESIGN §2): a panic already survives via `catch_unwind` in
+    /// FUSION_SOTA_DESIGN section 2): a panic already survives via `catch_unwind` in
     /// the worker, but a truly hung compile (infinite loop, not a panic) would
     /// otherwise leave the key `Pending` forever.
     static SEGMENT_PENDING: std::cell::RefCell<AHashMap<u64, std::time::Instant>> =
@@ -470,7 +470,7 @@ thread_local! {
 
 /// How long a segment compile may sit `Pending` before the pump gives up
 /// waiting and negative-caches the key as `Refused`. Segment codegen is pure
-/// CPU and measured in milliseconds (§8 of the map), so 60s crossing means the
+/// CPU and measured in milliseconds (section 8 of the map), so 60s crossing means the
 /// worker is genuinely wedged, not just busy. A late result landing after
 /// expiry still overwrites the negative-cache entry (`pump_segment_results`'s
 /// insert path), so a slow-but-alive worker self-heals back to fused on its
@@ -653,7 +653,7 @@ pub fn fused_segment_view_for(
 }
 
 // Test-only panic injection for `compile_segment_view` (D2, FUSION_SOTA_DESIGN
-// §2): armed by `segment_worker_panic_refuses_key` to prove the worker survives
+// section 2): armed by `segment_worker_panic_refuses_key` to prove the worker survives
 // a panicking compile. Compiled only under `#[cfg(test)]` — no production code
 // path can reach it.
 #[cfg(test)]
@@ -2208,7 +2208,7 @@ mod tests {
 
     #[test]
     fn content_key_ignores_editor_pos_drag() {
-        // FREEZE_COMPILER_MAP.md §11 honest-edge #5: a node drag (editor_pos
+        // FREEZE_COMPILER_MAP.md section 11 honest-edge #5: a node drag (editor_pos
         // change only) must not perturb the content key, or a watched graph
         // re-fuses on every mouse-up.
         let def = minimal_def();

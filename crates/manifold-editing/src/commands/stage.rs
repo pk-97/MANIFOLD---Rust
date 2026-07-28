@@ -10,7 +10,7 @@
 //! execute/undo are deterministic.
 //!
 //! Derivation (`derive_stage`) is not run by these commands: it is a pure,
-//! cheap function callers re-run after any mutation (§5 "Mutations"), not
+//! cheap function callers re-run after any mutation (section 5 "Mutations"), not
 //! state these commands need to maintain.
 
 use crate::command::Command;
@@ -125,7 +125,7 @@ impl Command for RenameDisplayPlacementCommand {
 }
 
 /// Move/rotate a placement on the stage plan — one undo step per drag or
-/// numeric-entry commit (position and rotation change together, §5).
+/// numeric-entry commit (position and rotation change together, section 5).
 #[derive(Debug)]
 pub struct SetDisplayPlacementTransformCommand {
     id: OutputId,
@@ -174,7 +174,7 @@ impl Command for SetDisplayPlacementTransformCommand {
 }
 
 /// Correct a placement's physical panel size (EDID prefill is often right,
-/// sometimes garbage — always editable, §5).
+/// sometimes garbage — always editable, section 5).
 #[derive(Debug)]
 pub struct SetDisplayPhysicalSizeCommand {
     id: OutputId,
@@ -284,7 +284,7 @@ impl Command for SetDisplayEnabledCommand {
 }
 
 /// Assign or clear a placement's live-display identity (the "assign" picker,
-/// §5). `None` = unassigned — the placement still renders but presents nowhere.
+/// section 5). `None` = unassigned — the placement still renders but presents nowhere.
 #[derive(Debug)]
 pub struct SetDisplayIdentityCommand {
     id: OutputId,

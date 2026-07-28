@@ -1,4 +1,4 @@
-// node.posterize — fusable body fragment (freeze/fusion compiler, design §12).
+// node.posterize — fusable body fragment (freeze/fusion compiler, design section 12).
 //
 // Convention (see gain_body.wgsl): a PURE `fn body(...)` — own element in, own
 // element out. The `levels` param follows the color register (PARAMS order).

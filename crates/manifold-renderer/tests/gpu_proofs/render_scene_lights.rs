@@ -1,5 +1,5 @@
 //! `node.render_scene` unbounded-lights proof
-//! (RENDER_SCENE_UNBOUNDED_LIGHTS_DESIGN §4 gate items 3 + the acceptance
+//! (RENDER_SCENE_UNBOUNDED_LIGHTS_DESIGN section 4 gate items 3 + the acceptance
 //! PNG). The lights design moves light data out of the fixed uniform array
 //! into an `@binding(8) var<storage, read>` buffer, uncapping light count.
 //! `fragment_storage.rs` already proves the fragment-stage storage-read

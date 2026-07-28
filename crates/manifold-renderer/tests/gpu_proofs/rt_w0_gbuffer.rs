@@ -1,4 +1,4 @@
-//! `docs/RAYTRACING_DESIGN.md` §5.2 W0 — `node.render_scene`'s stored
+//! `docs/RAYTRACING_DESIGN.md` section 5.2 W0 — `node.render_scene`'s stored
 //! `depth`/`velocity` G-buffer, forced on for RT-enabled scenes independent
 //! of graph wiring (D14), reusing exactly the `GBUFFER_DESIGN.md` D1/D5
 //! lazy-allocation machinery and formats — see

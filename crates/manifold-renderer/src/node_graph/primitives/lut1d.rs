@@ -1,5 +1,5 @@
 //! `node.color_lut` — pixel-exact replacement for legacy
-//! [`InfraredFX`](crate::effects::infrared::InfraredFX). Eighth §6.1
+//! [`InfraredFX`](crate::effects::infrared::InfraredFX). Eighth section 6.1
 //! migration and the first multi-input primitive in the trivial
 //! phase.
 //!

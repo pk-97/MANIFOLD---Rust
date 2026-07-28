@@ -47,7 +47,7 @@ pub enum ContentCommand {
     SetMidiClockDevice(i32),
     ResetBpm,
 
-    // ── Session mode (P2, docs/SESSION_MODE_DESIGN.md §5) ───────────
+    // ── Session mode (P2, docs/SESSION_MODE_DESIGN.md section 5) ───────────
     // No producer yet — the grid panel is P4. The variants + content-thread
     // plumbing (PlaybackEngine::session_* methods) are ready to wire up, same
     // as `ReplanClip`/`CancelExport` above.
@@ -82,7 +82,7 @@ pub enum ContentCommand {
     #[allow(dead_code)]
     SessionSetQuantize { beats: Beats },
 
-    // ── Automation lanes (P1/P4, docs/AUTOMATION_LANES_DESIGN.md §4/§6/§7) ──
+    // ── Automation lanes (P1/P4, docs/AUTOMATION_LANES_DESIGN.md section 4/section 6/section 7) ──
     /// Automation lanes' "Back to Arrangement": clears every override latch
     /// (one global action, not per-layer — lights up red in the transport
     /// bar when any latch is set), resuming every automated param's lane.
@@ -92,7 +92,7 @@ pub enum ContentCommand {
     /// BACK button (`PanelAction::AutomationBackToArrangement` →
     /// `ui_bridge::transport::dispatch_transport`).
     AutomationBackToArrangement,
-    /// Toggle the global Automation Arm (§5): while on, touching an
+    /// Toggle the global Automation Arm (section 5): while on, touching an
     /// automated param (while playing) records into its lane instead of
     /// latching an override. Runtime-only state, same shape as
     /// `AutomationBackToArrangement` — no undo entry. Sent by the transport
@@ -300,7 +300,7 @@ pub enum ContentCommand {
     /// live show pays nothing.
     SetNodeAtlasVisible(Vec<manifold_core::NodeId>),
 
-    /// The set of clips that currently want a timeline thumbnail (§24 5c) —
+    /// The set of clips that currently want a timeline thumbnail (section 24 5c) —
     /// on-screen generator/video clips wide enough to read. Sent by the UI when
     /// the visible-thumbnail scope changes (scroll/zoom/edit), deduped so a stable
     /// view costs nothing. The content thread keeps/refreshes those clips' atlas

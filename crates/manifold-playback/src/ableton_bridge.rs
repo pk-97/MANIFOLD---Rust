@@ -376,7 +376,7 @@ pub struct AbletonBridge {
     /// Outbound: last known MANIFOLD play state (edge detection feeding
     /// the state machine's local-gesture inputs).
     transport_last_was_playing: bool,
-    /// Closed-loop transport state machine (design §4). All echo/retry/
+    /// Closed-loop transport state machine (design section 4). All echo/retry/
     /// confirmation logic lives here; the bridge just pumps I/O.
     transport_sync: crate::transport_sync::AbletonTransportSync,
 
@@ -2397,7 +2397,7 @@ impl AbletonBridge {
     /// Called after engine tick (same timing slot as OscPositionSender::late_update).
     ///
     /// All echo/confirmation/retry decisions live in `transport_sync.rs`
-    /// (docs/ABLETON_TRANSPORT_SYNC_DESIGN.md §4) — this method is I/O only.
+    /// (docs/ABLETON_TRANSPORT_SYNC_DESIGN.md section 4) — this method is I/O only.
     pub fn late_update_transport(
         &mut self,
         is_playing: bool,

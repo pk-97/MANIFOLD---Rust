@@ -5,7 +5,7 @@
 use manifold_ui::color;
 use manifold_ui::node::Color32;
 
-// ── Layout constants (from USER_GUIDE.md §2) ───────────────────
+// ── Layout constants (from USER_GUIDE.md section 2) ───────────────────
 
 #[test]
 fn layout_transport_bar_height() {
@@ -31,13 +31,13 @@ fn layout_ruler_height() {
 
 #[test]
 fn layout_track_height() {
-    // Redesign §B value (was Unity 140) — expanded track = 200px.
+    // Redesign section B value (was Unity 140) — expanded track = 200px.
     assert_eq!(color::TRACK_HEIGHT, 200.0);
 }
 
 #[test]
 fn layout_layer_controls_width() {
-    // Redesign §K1 value (was Unity 200) — header column widened to 230.
+    // Redesign section K1 value (was Unity 200) — header column widened to 230.
     assert_eq!(color::LAYER_CONTROLS_WIDTH, 230.0);
 }
 
@@ -52,7 +52,7 @@ fn layout_default_inspector_width() {
     assert_eq!(color::DEFAULT_INSPECTOR_WIDTH, 500.0);
 }
 
-// ── Accent colors (from USER_GUIDE.md §32.3) ───────────────────
+// ── Accent colors (from USER_GUIDE.md section 32.3) ───────────────────
 
 #[test]
 fn color_accent_blue() {
@@ -68,7 +68,7 @@ fn color_play_active() {
 
 #[test]
 fn color_stop_red() {
-    // §15 ramp re-point: STOP_RED now aliases RED_BASE (#B83838), no longer the
+    // section 15 ramp re-point: STOP_RED now aliases RED_BASE (#B83838), no longer the
     // Unity #803333. Tracks the ramp, not Unity, for state colours.
     assert_eq!(color::STOP_RED, Color32::new(184, 56, 56, 255));
 }
@@ -81,14 +81,14 @@ fn color_record_inactive() {
 
 #[test]
 fn color_record_active() {
-    // §15 ramp re-point: RECORD_ACTIVE now aliases RED_ACTIVE (#D94038), no
+    // section 15 ramp re-point: RECORD_ACTIVE now aliases RED_ACTIVE (#D94038), no
     // longer the Unity #D12E2E.
     assert_eq!(color::RECORD_ACTIVE, Color32::new(217, 64, 56, 255));
 }
 
 #[test]
 fn color_paused_yellow() {
-    // §15 ramp re-point: PAUSED_YELLOW now aliases AMBER_BASE (#CCA626), no
+    // section 15 ramp re-point: PAUSED_YELLOW now aliases AMBER_BASE (#CCA626), no
     // longer the Unity #D1A626.
     assert_eq!(color::PAUSED_YELLOW, Color32::new(204, 166, 38, 255));
 }
@@ -117,7 +117,7 @@ fn color_export_marker() {
     assert_eq!(color::EXPORT_MARKER_COLOR, Color32::new(77, 141, 235, 255));
 }
 
-// ── Clip colors (from USER_GUIDE.md §9.3) ───────────────────────
+// ── Clip colors (from USER_GUIDE.md section 9.3) ───────────────────────
 
 #[test]
 fn color_video_clip_normal() {
@@ -155,11 +155,11 @@ fn color_generator_clip_selected() {
     assert_eq!(color::CLIP_GEN_SELECTED, Color32::new(102, 140, 224, 255));
 }
 
-// ── Text colors (from USER_GUIDE.md §32.4) ──────────────────────
+// ── Text colors (from USER_GUIDE.md section 32.4) ──────────────────────
 
 #[test]
 fn color_text_primary() {
-    // Contrast pass (§A) lifted primary text brighter than the old Unity value.
+    // Contrast pass (section A) lifted primary text brighter than the old Unity value.
     assert_eq!(color::TEXT_NORMAL, Color32::new(230, 230, 235, 255));
 }
 
@@ -168,11 +168,11 @@ fn color_text_primary_c32() {
     assert_eq!(color::TEXT_PRIMARY_C32, Color32::new(230, 230, 235, 255));
 }
 
-// ── Elevation hierarchy (from USER_GUIDE.md §32.2) ──────────────
+// ── Elevation hierarchy (from USER_GUIDE.md section 32.2) ──────────────
 
 #[test]
 fn color_track_background_deep_level() {
-    // Contrast pass (§A) re-pointed TRACK_BG deeper to the BG ramp step (33,33,36).
+    // Contrast pass (section A) re-pointed TRACK_BG deeper to the BG ramp step (33,33,36).
     assert_eq!(color::TRACK_BG, Color32::new(33, 33, 36, 255));
 }
 

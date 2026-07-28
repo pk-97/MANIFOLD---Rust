@@ -241,7 +241,7 @@ impl InspectorCompositePanel {
             let collapsed = self.any_active_card_expanded();
             return vec![PanelAction::Params(ParamsAction::SetAllCardsCollapsed { collapsed })];
         }
-        // §6b — compact toggle: flip global mod-drawer visibility (UI-only). Flip
+        // section 6b — compact toggle: flip global mod-drawer visibility (UI-only). Flip
         // here and return a structural no-op so the inspector rebuilds with the
         // new state propagated to every card.
         if self.compact_toggle_btn_id == Some(node_id) {

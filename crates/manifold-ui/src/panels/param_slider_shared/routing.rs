@@ -172,7 +172,7 @@ pub(crate) enum AudioConfigClick {
 /// Feature and Band rows, then — only where shaping is offered (every target
 /// EXCEPT `is_trigger_gate`, which fires on the raw BUG-242 edge) the Invert
 /// toggle, then (D8, non-toggle/non-trigger rows only) the Action row, then
-/// — while armed to Step — the Wrap row, then the trailing Mode row (§9
+/// — while armed to Step — the Wrap row, then the trailing Mode row (section 9
 /// U2/D3). Must stay in lockstep with the row order `build_audio_mod_drawer`
 /// actually builds.
 pub(crate) fn resolve_audio_config_click(

@@ -128,7 +128,7 @@ pub fn run(args: &[String]) {
         }
     }
 
-    // `--script <file.json>` (UI_AUTOMATION_DESIGN.md §6, P2): a JSON array of
+    // `--script <file.json>` (UI_AUTOMATION_DESIGN.md section 6, P2): a JSON array of
     // `AutomationAction`s executed in order. Fully owns its own build + gate
     // exit code — bypasses the `--dump`/`--interact`/mockup flags below.
     if let Some(path) = script_path {
@@ -185,7 +185,7 @@ pub fn run(args: &[String]) {
         return;
     }
 
-    // P5 demo (`docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` §2 D7/D7a): the
+    // P5 demo (`docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` section 2 D7/D7a): the
     // SAME real azalea import as `gltfeditor`, before/after one real
     // `AddSceneObjectCommand`/`AddSceneLightCommand` execution against the
     // fixture's actual `Project` (the same mutation the canvas button's
@@ -346,7 +346,7 @@ fn render_ui_scene(
     // tests in `engine_tick.rs` / `live_trigger.rs`, which this harness
     // can't reach headless). The `inspector` fixture already opens a
     // fire-mode drawer on Strobe's `clip_trigger` row and on GLOW's own
-    // clip-trigger section (§7.1's overclaim was exactly the reverse of
+    // clip-trigger section (section 7.1's overclaim was exactly the reverse of
     // this — a PNG with the meter present but fed nothing; this one is
     // fed an explicit hot level through the same public API the live app
     // calls). `Some(0.9)` unconditionally so it lights up every open
@@ -407,7 +407,7 @@ fn render_ui_scene(
         let outcome = interact::apply(&mut ui, &mut data, &spec);
         let desc = outcome.desc;
         println!("ui-snap: interact {desc}");
-        // D6 (§6 seam brief): a miss is not patched over — the outcome's
+        // D6 (section 6 seam brief): a miss is not patched over — the outcome's
         // STRUCTURAL flag (set by every verb's Err path) fails the run
         // loudly with the dump attached, rather than rendering an "after"
         // that never actually happened. (Was a `contains("MISS: ")` grep
@@ -1030,7 +1030,7 @@ fn render_and_dump(
     println!("ui-snap: wrote {}", png.display());
 
     if want_dump {
-        // Custom-surface targets (UI_AUTOMATION_DESIGN.md D5/§5): the same
+        // Custom-surface targets (UI_AUTOMATION_DESIGN.md D5/section 5): the same
         // live geometry `render_ui_to_png` paints from and `ClipHitTester` /
         // `hit_test_automation` hit-test against — read once here so the dump
         // can never disagree with what's on screen or clickable.
@@ -1779,7 +1779,7 @@ mod editor_window_harness {
 mod overlay_fidelity_proof {
     //! BUG-097 — the permanent RED→GREEN regression proof for the overlay
     //! pass, closed by construction in
-    //! `HARNESS_FIDELITY_INVARIANT_PROPOSAL.md` §4 step 2.
+    //! `HARNESS_FIDELITY_INVARIANT_PROPOSAL.md` section 4 step 2.
     //!
     //! `UIRoot::build_overlays` mints each open overlay as its own region and
     //! records `(start, end)` with `start = tree.count()` taken AFTER
@@ -1817,7 +1817,7 @@ mod overlay_fidelity_proof {
 
     /// The minimal `MainUiPassInputs` a headless overlay-only frame needs —
     /// every timeline/clip/VQT input absent (`None`/empty), exactly as
-    /// `render_ui_to_png` fills them (§3: input presence, not caller
+    /// `render_ui_to_png` fills them (section 3: input presence, not caller
     /// identity). Only the overlay pass, which reads off `ui_root`, produces
     /// pixels here.
     fn overlay_only_inputs<'a>(

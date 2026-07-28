@@ -1,4 +1,4 @@
-// node.mesh_ramp — fusable BUFFER body (freeze §12, buffer domain), COINCIDENT.
+// node.mesh_ramp — fusable BUFFER body (freeze section 12, buffer domain), COINCIDENT.
 // Per-vertex growth-mask weight from a spatial axis sweep. The coincident input
 // `in` (MeshVertex) is pre-read by the wrapper into `e_in` (Element {position,
 // normal, uv}); the output is a bare f32 weight per vertex. Matches

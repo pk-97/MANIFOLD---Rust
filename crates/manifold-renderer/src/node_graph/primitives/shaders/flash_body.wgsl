@@ -1,4 +1,4 @@
-// node.flash — fusable body (freeze §12). Brightness modulate by `amount` in
+// node.flash — fusable body (freeze section 12). Brightness modulate by `amount` in
 // three modes (0 Opacity toward black, 1 White, 2 Gain = 3x at amount=1). Pure
 // own-texel. Matches flash.wgsl. PARAMS: [amount, mode]; mode is Enum -> u32.
 fn body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {

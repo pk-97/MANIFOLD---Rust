@@ -1,4 +1,4 @@
-// node.bilateral_blur — fusable body (freeze §12), MultiInputCoincident,
+// node.bilateral_blur — fusable body (freeze section 12), MultiInputCoincident,
 // GATHER (via the STENCIL-FETCH ABI) on `in` + GATHERTEXEL on `depth`
 // (docs/CINEMATIC_POST_DESIGN.md D8). Single-axis, depth-guided (bilateral)
 // blur: pair an H pass with a V pass for a 2D edge-aware blur between an AO

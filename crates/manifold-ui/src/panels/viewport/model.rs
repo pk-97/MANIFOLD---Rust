@@ -5,7 +5,7 @@
 //! the timeline addresses. A single source of each drives **both** the CPU
 //! paint and the hit-test, so they cannot disagree. Track *height* lives only on
 //! the `CoordinateMapper`; marker flag geometry lives only in `coordinate.rs`.
-//! See `docs/TIMELINE_API_DESIGN.md` §3.2.
+//! See `docs/TIMELINE_API_DESIGN.md` section 3.2.
 
 use super::*;
 
@@ -47,7 +47,7 @@ pub struct ViewportClip {
 }
 
 /// A visible clip resolved to its on-screen rectangle and the style inputs the
-/// GPU clip emitter needs (§24 5b). The viewport produces these every frame from
+/// GPU clip emitter needs (section 24 5b). The viewport produces these every frame from
 /// the same geometry the hit-tester uses, so the drawn body and the clickable
 /// region cannot disagree. Selection / hover / marquee are resolved by the
 /// caller (it owns the selection state); this carries only what the viewport
@@ -183,7 +183,7 @@ pub fn clip_zones(rect: &ClipScreenRect, neighbor_gaps: (f32, f32)) -> ClipZones
 }
 
 /// Screen-space geometry for the timeline overlays drawn on top of the clip
-/// bodies + waveforms (§24 5b GPU rects, no longer baked into a bitmap). The
+/// bodies + waveforms (section 24 5b GPU rects, no longer baked into a bitmap). The
 /// caller scissors to the tracks rect and draws these under the clip names.
 /// `Copy` + allocation-free: the beat markers (variable count) are written into a
 /// caller-owned scratch `Vec` instead of being boxed in here, so resolving the
@@ -212,7 +212,7 @@ pub struct SelectionRegion {
 /// Track *height* is intentionally NOT a field here — it is owned solely by the
 /// [`CoordinateMapper`] (`mapper.get_layer_height(i)`), the single Y-layout
 /// authority. `TrackInfo` carries only the per-track *style/state* the renderer
-/// needs. See `docs/TIMELINE_API_DESIGN.md` §3.4.
+/// needs. See `docs/TIMELINE_API_DESIGN.md` section 3.4.
 #[derive(Debug, Clone, Default)]
 pub struct TrackInfo {
     pub is_muted: bool,
@@ -224,7 +224,7 @@ pub struct TrackInfo {
 }
 
 /// One automation lane bucketed to its track row — mirrors `ViewportClip`'s
-/// `layer_index` bucketing pattern (`docs/AUTOMATION_LANES_DESIGN.md` §7).
+/// `layer_index` bucketing pattern (`docs/AUTOMATION_LANES_DESIGN.md` section 7).
 #[derive(Debug, Clone)]
 pub struct ViewportAutomationLane {
     pub layer_index: usize,
@@ -238,7 +238,7 @@ pub struct ViewportAutomationLane {
 /// UITree nodes, the same "GPU rects computed here, drawn there" split as
 /// [`ClipScreenRect`] / [`TimelineOverlays`]. `InteractionOverlay`'s
 /// automation hit-testing/editing also reads this same geometry (per
-/// `docs/AUTOMATION_LANES_DESIGN.md` §7's "click on the line adds a
+/// `docs/AUTOMATION_LANES_DESIGN.md` section 7's "click on the line adds a
 /// breakpoint" vocabulary) — one source for both the draw and the click, so
 /// they cannot disagree, the same discipline `ClipScreenRect` already keeps
 /// for clip bodies.
@@ -270,7 +270,7 @@ pub struct AutomationLaneScreen {
     pub param_min: f32,
     pub param_max: f32,
     /// Whether this param is integral — new points click-added on it default
-    /// to `Hold` instead of `Linear` (`docs/AUTOMATION_LANES_DESIGN.md` §8).
+    /// to `Hold` instead of `Linear` (`docs/AUTOMATION_LANES_DESIGN.md` section 8).
     pub whole_numbers: bool,
 }
 

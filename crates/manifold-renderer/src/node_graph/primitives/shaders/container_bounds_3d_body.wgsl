@@ -1,4 +1,4 @@
-// node.container_bounds_3d — fusable BUFFER body (freeze §12, buffer domain),
+// node.container_bounds_3d — fusable BUFFER body (freeze section 12, buffer domain),
 // COINCIDENT. Post-integration hard containment: toroidal wrap (None) or SDF
 // reflect + clamp (Cube/Sphere/Torus). Matches container_bounds_3d.wgsl bit-for-
 // bit (self-contained SDF helpers inlined, prefixed cb3_).

@@ -1,4 +1,4 @@
-// node.resolve_3d_accumulator — BUFFER→TEXTURE resolve body (freeze §12). Reads
+// node.resolve_3d_accumulator — BUFFER→TEXTURE resolve body (freeze section 12). Reads
 // the u32 fixed-point 3D accumulator cell, divides by fixed_point_scale
 // (default 4096, FluidSim3D's legacy multiplier), writes the density into R
 // (G/B = 0), and self-clears the cell. Mirrors the 2D resolve_accumulator's

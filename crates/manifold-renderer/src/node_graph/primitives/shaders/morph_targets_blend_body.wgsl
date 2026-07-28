@@ -1,4 +1,4 @@
-// node.morph_targets_blend — fusable BUFFER body (freeze §12, buffer domain).
+// node.morph_targets_blend — fusable BUFFER body (freeze section 12, buffer domain).
 // glTF additive morph-target blend: out = base + sum(weight[t] * delta[t])
 // over up to `target_count` targets, deltas looked up from buf_deltas
 // (BufferGather, flattened target-major: deltas[t * count + idx] — NOT
@@ -6,7 +6,7 @@
 // (BufferGather, one f32 per target — node.gltf_morph_weights' output).
 // No legacy hand-WGSL predecessor exists for this brand-new primitive — the
 // gpu_tests parity oracle is an independently-implemented Rust reference
-// of this exact formula (DECOMPOSING_GENERATORS.md §9), not a parallel
+// of this exact formula (DECOMPOSING_GENERATORS.md section 9), not a parallel
 // .wgsl file.
 //
 // The effective loop bound is `min(target_count, weights_len, deltas_len /

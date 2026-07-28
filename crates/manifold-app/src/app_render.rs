@@ -283,7 +283,7 @@ impl Application {
             }
         }
 
-        // 1a. Debounced background autosave (GIG_RESILIENCE_DESIGN §6). Runs
+        // 1a. Debounced background autosave (GIG_RESILIENCE_DESIGN section 6). Runs
         // after the drain so it sees the latest data_version + dirty flag;
         // never reached in perform mode (early return above) — that IS the
         // D5 "autosave timer parks" behavior.
@@ -296,7 +296,7 @@ impl Application {
         // model-import worker's progress channel at the same per-frame site.
         self.drain_import_progress();
 
-        // 1a1. Breadcrumb sidecar (GIG_RESILIENCE_DESIGN §5.1). Unlike
+        // 1a1. Breadcrumb sidecar (GIG_RESILIENCE_DESIGN section 5.1). Unlike
         // autosave this is NOT parked in perform mode — see the matching
         // call in `tick_perform_mode` (perform_mode/render.rs) for that path.
         self.tick_breadcrumb();
@@ -494,7 +494,7 @@ impl Application {
 
         // Overlay-hosted text sessions (main window): cancel any session
         // whose overlay just closed during the routing above — the app pump
-        // half of `OVERLAY_SESSIONS_AND_PICKER_DESIGN.md` §3, D2. A no-op
+        // half of `OVERLAY_SESSIONS_AND_PICKER_DESIGN.md` section 3, D2. A no-op
         // most frames (empty drain).
         for id in self.ws.ui_root.take_closed_overlays() {
             self.text_input
@@ -643,7 +643,7 @@ impl Application {
                             // popup's owned text session (no manual `cancel()`
                             // needed here — that was the distributed-reset
                             // pattern `OVERLAY_SESSIONS_AND_PICKER_DESIGN.md`
-                            // §3 replaces).
+                            // section 3 replaces).
                             let was_open = ed.ui_root.browser_popup.is_open();
                             if let Some(action) = ed.ui_root.browser_popup.handle_click(node_id) {
                                 ed.ui_root.note_overlay_closed_if(
@@ -2325,7 +2325,7 @@ impl Application {
                                     }),
                                 ));
                             }
-                            // else: degenerate scale (D1 §3) — read-only, no
+                            // else: degenerate scale (D1 section 3) — read-only, no
                             // write; the row keeps showing the bound badge.
                             continue;
                         }
@@ -2452,7 +2452,7 @@ impl Application {
                     new_value,
                 } => {
                     // D6 parity invariant (`docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md`
-                    // §2): a group-face row mirrors an already-exposed card
+                    // section 2): a group-face row mirrors an already-exposed card
                     // param, so it re-dispatches through the IDENTICAL
                     // `PanelAction::ParamChanged` handler the card's own
                     // slider uses (`ui_bridge/inspector.rs`) — never a
@@ -3215,10 +3215,10 @@ impl Application {
         // panel sends `None`, stopping column production.
         //
         // P7 tap-follow (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md`
-        // §7.2 item 5): a currently-open fire-mode drawer (clip trigger or
+        // section 7.2 item 5): a currently-open fire-mode drawer (clip trigger or
         // `is_trigger_gate` param card) wins over the panel's own selected
         // send — collapsing it falls straight back to the panel's selection,
-        // since this is computed fresh every frame, never persisted (§7.3 P7
+        // since this is computed fresh every frame, never persisted (section 7.3 P7
         // "Tap-follow state is session-only").
         {
             let desired = if self.ws.ui_root.audio_setup_panel.is_open() {
@@ -3236,12 +3236,12 @@ impl Application {
         }
 
         // 6b. Repaint dirty layer GRID bitmaps. Clip bodies/content + the region /
-        // cursor / marker overlays are all GPU now (§24 5b), so the grid is a pure
+        // cursor / marker overlays are all GPU now (section 24 5b), so the grid is a pure
         // function of the viewport and needs no selection/hover state here.
         self.ws.ui_root.viewport.repaint_dirty_layers();
 
         // 6c. Upload dirty layer GRID textures + the lane/stem/overview/group
-        // panel bitmaps to the single layer-bitmap instance (§24 5b — the per-layer
+        // panel bitmaps to the single layer-bitmap instance (section 24 5b — the per-layer
         // "front" buffer is gone; waveforms are per-clip GPU textures, overlays are
         // GPU rects). Grid uses per-layer indices; panels use 1000/1001/1002/2000+.
         if let (Some(gpu), Some(bitmap_gpu)) = (&self.gpu, &mut self.layer_bitmap_gpu) {

@@ -9,7 +9,7 @@
 //! JSON file in the stock directory — no rebuild required.
 //!
 //! The bundled preset for `PresetTypeId::X` is the canonical default
-//! graph for that effect. Post-§11 the JSON file is authoritative —
+//! graph for that effect. Post-section 11 the JSON file is authoritative —
 //! the chain runtime and editor snapshot both source bindings,
 //! skip-mode, and topology from the embedded
 //! [`PresetMetadata`](manifold_core::effect_graph_def::PresetMetadata)
@@ -138,7 +138,7 @@ pub fn bundled_preset_type_ids(kind: PresetKind) -> impl Iterator<Item = PresetT
 /// Loader function for the core's [`LoadedPresetSource`] inventory.
 /// Walks the bundled preset table, parses each JSON document, and
 /// returns the `preset_metadata` field from every entry that carries
-/// one (v2 schema). Every shipping bundled preset is v2 post-§11;
+/// one (v2 schema). Every shipping bundled preset is v2 post-section 11;
 /// the `Option`-returning shape is retained so test-only or
 /// hand-authored v1 fixtures stay loadable as graphs without
 /// breaking the metadata projection.

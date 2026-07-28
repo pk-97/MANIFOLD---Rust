@@ -1,7 +1,7 @@
 //! `render-import` — headless render of ONE glb/gltf file through the
 //! PRODUCTION import path (`assemble_import_graph`), for look-dev and as the
 //! conformance harness's oracle binary (D2, `docs/GLB_CONFORMANCE_DESIGN.md`
-//! §3). Shaped like `render_generator_preset.rs`: parse → build →
+//! section 3). Shaped like `render_generator_preset.rs`: parse → build →
 //! converged-readback → PNG, sharing the SAME output transform
 //! (`headless_readback::readback_to_srgb_png`) every headless render tool in
 //! this crate uses — never a local tonemap (D2).

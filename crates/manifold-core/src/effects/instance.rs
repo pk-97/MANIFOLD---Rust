@@ -17,7 +17,7 @@ use super::instance_serde::{
 ///
 /// Serialization (custom impls below):
 ///
-/// - `params` is one id-keyed V1.4 map (PARAM_STORAGE_DESIGN.md §4):
+/// - `params` is one id-keyed V1.4 map (PARAM_STORAGE_DESIGN.md section 4):
 ///   `{ id: { value, exposed, base? } }`, `base` present iff
 ///   `base_tracked`. This is the ONLY wire shape the typed (de)serialize
 ///   understands — the historical positional/keyed value duo (a values
@@ -30,7 +30,7 @@ use super::instance_serde::{
 ///
 /// In-memory storage stays positional (`Vec<ParamSlot>`) — the hot
 /// path reads/writes by index. The Map form only exists on the wire.
-/// See `docs/EFFECT_RUNTIME_UNIFICATION.md` §7 step 12.
+/// See `docs/EFFECT_RUNTIME_UNIFICATION.md` section 7 step 12.
 #[derive(Debug, Clone)]
 pub struct PresetInstance {
     /// Whether this instance is an effect (transforms an input) or a
@@ -399,7 +399,7 @@ impl PresetInstance {
     /// `reconcile_manifest`'s saved-file wire — this is exactly the encode
     /// half of the save/load cycle that already preserves state on disk, run
     /// in-memory instead. `build_param_manifest` then overlays that wire onto
-    /// descriptors freshly gathered from `graph` (§`gather_known_params`):
+    /// descriptors freshly gathered from `graph` (section `gather_known_params`):
     /// existing params keep their live value/base/exposed/calibration by id;
     /// a param whose backing node was newly stamped appears with its spec
     /// default; a param whose backing node is no longer in
@@ -553,7 +553,7 @@ impl PresetInstance {
     /// Set the user-intended base value of param `id`. **The single funnel**
     /// every live hand (UI slider, Ableton macro, OSC, macro bank, editing
     /// commands) writes through — marks the param `touched` so the
-    /// automation-lane override latch (`docs/AUTOMATION_LANES_DESIGN.md` §4) can
+    /// automation-lane override latch (`docs/AUTOMATION_LANES_DESIGN.md` section 4) can
     /// detect it. Returns whether `id` resolved. System-level seeding that is
     /// NOT a live gesture uses [`Self::write_base_param`] /
     /// [`Self::set_base_param_from_automation`] (no `touched`).
@@ -570,7 +570,7 @@ impl PresetInstance {
     /// Automation-lane-only sibling of [`Self::set_base_param`]: writes
     /// `base`/`value` identically but does **not** set `touched` (using
     /// `set_base_param` from the automation evaluator would self-latch the lane
-    /// as overridden the next frame). See `docs/AUTOMATION_LANES_DESIGN.md` §4.
+    /// as overridden the next frame). See `docs/AUTOMATION_LANES_DESIGN.md` section 4.
     pub fn set_base_param_from_automation(&mut self, id: &str, value: f32) {
         self.write_base_param(id, value);
     }
@@ -805,7 +805,7 @@ impl PresetInstance {
             is_trigger_gate: false,
             wraps: false,
             // Section seeding from the innermost enclosing group's display
-            // name (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2 D5) — resolved
+            // name (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md section 2 D5) — resolved
             // by the expose command (`mirror_effect_side`) and carried on
             // the `UserParamBinding` this fn receives.
             section: binding.section.clone(),
@@ -1328,11 +1328,11 @@ impl PresetInstance {
     }
 
     /// Whether this instance's clip-launch edge should count toward its own
-    /// Trigger response (§9 U3, supersedes the deleted `AudioTriggerMod::
+    /// Trigger response (section 9 U3, supersedes the deleted `AudioTriggerMod::
     /// clip_edge_enabled`). Finds an ENABLED `audio_mods` entry targeting a
     /// trigger-gate param (`spec.is_trigger_gate`); none found means no audio
     /// config exists for this gate, so the clip edge is unconditionally on
-    /// (the pre-§8 behavior, unchanged). A DISABLED mod is semantically
+    /// (the pre-section 8 behavior, unchanged). A DISABLED mod is semantically
     /// absent — the same "disabled means absent" rule the old per-instance
     /// config used to own (the bug that shipped a disarmed Transient config
     /// silently killing clip triggers on reload), now expressed with zero
@@ -1394,7 +1394,7 @@ impl PresetInstance {
     /// The instance's automation-lane list, auto-created on first access.
     /// Sibling of [`Self::drivers_mut`] / [`Self::envelopes_mut`] /
     /// [`Self::audio_mods_mut`] — same per-param-id-row pattern. See
-    /// `docs/AUTOMATION_LANES_DESIGN.md` §2.
+    /// `docs/AUTOMATION_LANES_DESIGN.md` section 2.
     pub fn automation_lanes_mut(&mut self) -> &mut Vec<AutomationLane> {
         if self.automation_lanes.is_none() {
             self.automation_lanes = Some(Vec::new());
@@ -1614,7 +1614,7 @@ mod tests {
     // display, pruning, and runtime modulation resolution alike), so
     // there is no positional index to disagree in the first place.
 
-    // ── §9 U1: unified trigger-gate mods ─────────────────────────────────
+    // ── section 9 U1: unified trigger-gate mods ─────────────────────────────────
 
     /// A bundled `is_trigger_gate` param — mirrors [`slot`] but flips the
     /// gate flag, the same way a `clip_trigger` toggle card ships on the 11
@@ -2193,7 +2193,7 @@ mod tests {
         let mut inst = PresetInstance::new(PresetTypeId::new("TestGate"));
         inst.params.push(gate_slot("clip_trigger"));
 
-        // No mod at all → clip edge unconditionally on (pre-§8 behavior).
+        // No mod at all → clip edge unconditionally on (pre-section 8 behavior).
         assert!(inst.clip_edge_enabled());
 
         let mut m = ParameterAudioMod::new(

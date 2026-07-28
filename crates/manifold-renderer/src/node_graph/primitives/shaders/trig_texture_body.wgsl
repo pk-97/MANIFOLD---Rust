@@ -1,4 +1,4 @@
-// node.trig_texture — fusable body (freeze §12), MultiInputCoincident with
+// node.trig_texture — fusable body (freeze section 12), MultiInputCoincident with
 // OPTIONAL-INPUT use-flags. Per-pixel sin/cos/tan of (in.rgb * freq + phase). freq
 // and phase come from the scalar params unless their texture-shadow inputs
 // (freq_tex / phase_tex) are wired, in which case each pixel reads them from the

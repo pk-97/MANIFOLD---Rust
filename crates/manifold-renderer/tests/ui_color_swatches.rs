@@ -1,7 +1,7 @@
-//! Colour contact sheet — renders the §15 semantic ramp and the state colours
+//! Colour contact sheet — renders the section 15 semantic ramp and the state colours
 //! re-pointed onto it to a PNG, so the ramp can be eyeballed headlessly (no
 //! running app). Reuses the same windowless render path as the headless UI
-//! spike (docs §23): `GpuDevice::new()` → `UIRenderer` immediate draws →
+//! spike (docs section 23): `GpuDevice::new()` → `UIRenderer` immediate draws →
 //! texture readback → PNG.
 //!
 //! Run: `SWATCH_OUT=/some/dir cargo test -p manifold-renderer --test ui_color_swatches`
@@ -90,7 +90,7 @@ fn color_ramp_contact_sheet() {
     // App-background fill so swatches sit on the real panel grey.
     ui.draw_rect(0.0, 0.0, W as f32, H as f32, color::BG_1);
 
-    ui.draw_text(SW_X, 8.0, "SEMANTIC RAMP (§15)", 13.0, color::TEXT_NORMAL);
+    ui.draw_text(SW_X, 8.0, "SEMANTIC RAMP (section 15)", 13.0, color::TEXT_NORMAL);
     draw_column(&mut ui, SW_X, 32.0, ramp);
 
     let col2 = 350.0;
@@ -113,7 +113,7 @@ fn color_ramp_contact_sheet() {
     eprintln!("colour contact sheet → {png}");
 }
 
-/// Renders the footer chrome bar after the §18 kit migration, so the new
+/// Renders the footer chrome bar after the section 18 kit migration, so the new
 /// neutral/segment button look (grey-raised active vs the old blue) can be seen.
 #[test]
 fn footer_demo() {
@@ -163,7 +163,7 @@ fn footer_demo() {
     eprintln!("footer demo → {png}");
 }
 
-/// Renders the transport bar after the §18 `state_button` migration, so the
+/// Renders the transport bar after the section 18 `state_button` migration, so the
 /// neutral-chip lift (the always-grey NEW/OPEN/SAVE buttons moved from the old
 /// 59-grey to the shared `BUTTON_DIM` 71-chip) and the unchanged semantic
 /// PLAY=green / STOP=red / REC=red buttons can be eyeballed in situ.
@@ -214,7 +214,7 @@ fn transport_demo() {
     eprintln!("transport demo → {png}");
 }
 
-/// Renders the header bar after the §18 migration, so the unified neutral chip
+/// Renders the header bar after the section 18 migration, so the unified neutral chip
 /// (zoom −/+ and Audio/Perform/Monitor now share transport's BUTTON_DIM chip —
 /// the action buttons moved off the old 59-grey) can be eyeballed in situ.
 #[test]
@@ -261,7 +261,7 @@ fn header_demo() {
     eprintln!("header demo → {png}");
 }
 
-/// Renders the §18 `state_button` kit output directly: each hue (the M/S/L/A
+/// Renders the section 18 `state_button` kit output directly: each hue (the M/S/L/A
 /// identity quartet + the transport ramp aliases) in OFF (neutral chip) and ON
 /// (filled) state, sitting on a layer-colour strip and on the dark bar, so the
 /// shared mechanic is visible without standing up a full panel.
@@ -323,7 +323,7 @@ fn state_button_sheet() {
     eprintln!("state button sheet → {png}");
 }
 
-/// §18 Phase 3: the inspector-card button skins (`CARD_RAISED` / `CARD_RECESSED`)
+/// section 18 Phase 3: the inspector-card button skins (`CARD_RAISED` / `CARD_RECESSED`)
 /// rendered on the dark card well, so the off-chip + on-fill + hover + press read
 /// the same as the chrome `state_button` did before the kit move.
 #[test]
@@ -377,7 +377,7 @@ fn card_button_skins_sheet() {
     eprintln!("card button skins sheet → {png}");
 }
 
-/// §19 Phase 4: the static focus lifts (card well, timeline lane), the
+/// section 19 Phase 4: the static focus lifts (card well, timeline lane), the
 /// `panel_state` empty/error/loading line colours, and the record-button breathe
 /// sampled across one cycle — all on one sheet to eyeball the hierarchy + states.
 #[test]
@@ -442,9 +442,9 @@ fn focus_states_record_sheet() {
     eprintln!("focus/states/record sheet → {png}");
 }
 
-/// Renders the browser popup after the §18 shared-shell migration, so the modal
+/// Renders the browser popup after the section 18 shared-shell migration, so the modal
 /// container (now ONE rounded 1px-bordered panel via `popup_shell`, replacing the
-/// old outer+inner fake-border pair) can be eyeballed. The §17 drop-shadow is
+/// old outer+inner fake-border pair) can be eyeballed. The section 17 drop-shadow is
 /// app-composited, so it does not appear here — this checks the container + cells.
 #[test]
 fn browser_popup_demo() {
@@ -620,7 +620,7 @@ fn browser_popup_thumbnails_paint() {
     eprintln!("browser popup thumbnails → {png}");
 }
 
-/// Renders a floating surface with and without the §17 soft shadow, so the
+/// Renders a floating surface with and without the section 17 soft shadow, so the
 /// "lift" can be eyeballed headlessly.
 #[test]
 fn shadow_demo() {
@@ -656,7 +656,7 @@ fn shadow_demo() {
     eprintln!("shadow demo → {png}");
 }
 
-/// Renders the §24 5a gradient primitive: a flat control rect, then vertical /
+/// Renders the section 24 5a gradient primitive: a flat control rect, then vertical /
 /// horizontal / rounded gradient rects, so the new `draw_gradient_rect` and the
 /// shared-shader change can be eyeballed (and flat rects confirmed unregressed).
 #[test]
@@ -703,7 +703,7 @@ fn gradient_demo() {
     eprintln!("gradient demo → {png}");
 }
 
-/// Renders GPU clip bodies (§24 5b) across their states — normal / selected /
+/// Renders GPU clip bodies (section 24 5b) across their states — normal / selected /
 /// hovered / muted / locked, video + generator — on the dark tracks background,
 /// so the rounded gradient body, the normal vs selected border, and the
 /// lift-on-select shadow can be eyeballed before the in-app cutover. This is the
@@ -819,7 +819,7 @@ fn clip_body_sheet() {
 }
 
 /// Renders audio-clip bodies with their waveform painted INSIDE the body via the
-/// per-clip GPU content path (§24 5b) — so the in-clip waveform (spectral colour,
+/// per-clip GPU content path (section 24 5b) — so the in-clip waveform (spectral colour,
 /// rounded-corner inset, sitting on the gradient body) can be eyeballed headlessly.
 /// Covers a wide clip, a narrow clip, and a selected clip.
 #[test]
@@ -918,7 +918,7 @@ fn clip_waveform_sheet() {
     eprintln!("clip waveform sheet → {png}");
 }
 
-/// Renders clip thumbnails (§24 5c): blits cells of a synthetic content→UI atlas
+/// Renders clip thumbnails (section 24 5c): blits cells of a synthetic content→UI atlas
 /// into clip bodies via `ClipThumbGpu`, masked to the rounded clip shape. Verifies
 /// the WGSL→Metal pipeline compiles and that the thumbnail fills the body with
 /// rounded corners (no square nibs over the round clip).
@@ -1004,7 +1004,7 @@ fn clip_thumbnail_sheet() {
         uv_max: [0.5, 0.5],
     });
 
-    // A FILMSTRIP clip (§24 5c-2): four bar cells tiled across one body, each
+    // A FILMSTRIP clip (section 24 5c-2): four bar cells tiled across one body, each
     // sampling a different atlas cell. All share the same `body_rect`, so the
     // interior seams stay square and only the outer corners round.
     let strip_body = Rect::new(24.0 + 320.0, 290.0, 280.0, ch);
@@ -1058,7 +1058,7 @@ fn clip_thumbnail_sheet() {
 
 #[test]
 fn box_downsample_averages_high_frequency() {
-    // The §24 5c-2 P5 capture downsample must AVERAGE a high-frequency source into
+    // The section 24 5c-2 P5 capture downsample must AVERAGE a high-frequency source into
     // a cell, not point-sample it (which would alias to an extreme). Downsample a
     // 256×256 1px checkerboard into 64×64 and assert the centre reads mid-grey.
     use manifold_renderer::clip_thumb_gpu::create_box_downsample_pipeline;
@@ -1120,7 +1120,7 @@ fn box_downsample_averages_high_frequency() {
     );
 }
 
-/// Renders every atlas icon (§24 5d/5e) — the 5 waveforms, the cog, the four
+/// Renders every atlas icon (section 24 5d/5e) — the 5 waveforms, the cog, the four
 /// layer-type badges (video play / generator starburst / group folder / audio
 /// bars), and the playhead head triangle — each on a dark tile and on a
 /// layer-colour tile (contrast-coloured, as drawn in the header), so the glyph
@@ -1202,7 +1202,7 @@ fn icon_badge_sheet() {
     eprintln!("icon badge sheet → {png}");
 }
 
-/// Renders the §24 5e "now + nav" elements in a mock timeline: the playhead (red
+/// Renders the section 24 5e "now + nav" elements in a mock timeline: the playhead (red
 /// line + downward triangle head at the ruler top) next to the blue insert cursor
 /// (single-row bar + ruler square), and the horizontal scrollbar (track + rounded
 /// thumb) in its reserved strip — so the unmissable-now treatment and the

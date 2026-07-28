@@ -1722,7 +1722,7 @@ mod scene_card_convergence_tests {
             );
         }
 
-        /// WIDGET_TREE_DESIGN.md §7 P4, gaps #2/#3 carried from
+        /// WIDGET_TREE_DESIGN.md section 7 P4, gaps #2/#3 carried from
         /// `docs/landings/2026-07-21-widget-tree-p2.md`: bridge-level
         /// dispatch tests for the modulation-family action kinds — every
         /// test above this point dispatches against a GENERATOR target

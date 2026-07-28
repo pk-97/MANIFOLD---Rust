@@ -778,7 +778,7 @@ fn pitch_presence_mods_survive_roundtrip_and_drive() {
 
 // ── P2 clip-trigger migration: canonical-fixture round trip ──
 //
-// AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md §3.2/P2 gate: the
+// AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md section 3.2/P2 gate: the
 // hand-crafted migration proofs live in `manifold-io/src/loader.rs`'s own
 // `legacy_clip_trigger_migration_tests` module; this is the no-regression
 // proof on Peter's real load-bearing fixture (`canonical-fixture-liveschool`
@@ -794,7 +794,7 @@ fn liveschool_v6_leds_clip_trigger_migration_round_trips_cleanly() {
 
     // Legacy send-owned storage is drained (present-but-empty is fine; the
     // struct field is real, `skip_serializing` just means it won't reappear
-    // in the JSON, per §3.1).
+    // in the JSON, per section 3.1).
     for send in &project.audio_setup.sends {
         assert!(
             send.triggers.is_empty(),

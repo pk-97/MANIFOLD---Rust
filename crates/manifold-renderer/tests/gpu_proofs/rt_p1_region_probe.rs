@@ -1,4 +1,4 @@
-//! `docs/RAYTRACING_DESIGN.md` §5.2 P1/RT-D3 — scripted region-luminance
+//! `docs/RAYTRACING_DESIGN.md` section 5.2 P1/RT-D3 — scripted region-luminance
 //! probe: the P1 gate's stand-in for the apricot-scan probe (no photoscan
 //! asset is wired into this repo's test fixtures; this reuses
 //! `render_scene_shadows.rs`'s decisive ground-plane + occluder + sun

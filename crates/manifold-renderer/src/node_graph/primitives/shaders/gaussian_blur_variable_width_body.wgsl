@@ -1,4 +1,4 @@
-// node.gaussian_blur_variable_width — fusable body (freeze §12), 2-input GATHER
+// node.gaussian_blur_variable_width — fusable body (freeze section 12), 2-input GATHER
 // via the STENCIL-FETCH ABI, with SPECIALIZATION constants. Separable Gaussian
 // blur whose per-pixel width is sampled from a `width` texture (R = CoC). Both
 // `in` and `width` are gathered along one axis at body-computed tap offsets

@@ -1,5 +1,5 @@
 //! `node.bend_mesh` — classic per-vertex bend of an `Array<MeshVertex>`
-//! (MESH_DEFORM_AND_CURVE_GEOMETRY_DESIGN.md D3/D4, §3 atom table).
+//! (MESH_DEFORM_AND_CURVE_GEOMETRY_DESIGN.md D3/D4, section 3 atom table).
 //!
 //! Rotation convention (bend axis `A`, companion `C` = the next axis in
 //! cyclic X→Y→Z→X order, rotation happens about the THIRD axis `B` — the
@@ -272,7 +272,7 @@ mod tests {
 mod gpu_tests {
     //! Real-GPU value-level tests. No legacy predecessor to diff against —
     //! parity is against a hand-written Rust reference of the committed
-    //! formula, element-wise, per DECOMPOSING_GENERATORS.md §9.
+    //! formula, element-wise, per DECOMPOSING_GENERATORS.md section 9.
     use super::*;
 
     fn mk_vertex(pos: [f32; 3], normal: [f32; 3], uv: [f32; 2]) -> MeshVertex {
@@ -449,7 +449,7 @@ mod gpu_tests {
         let gen_wgsl = generated_wgsl();
         // 12 identical vertices at x=1.0 so the bend amount along Y directly
         // reads off the effective weight. weights_len forced short (2)
-        // independently of the (full-size) physical buffer, per D2/§4.
+        // independently of the (full-size) physical buffer, per D2/section 4.
         let src: Vec<MeshVertex> = (0..12)
             .map(|_| mk_vertex([1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0]))
             .collect();

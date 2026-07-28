@@ -1,4 +1,4 @@
-// node.wrap_particles_torus — fusable BUFFER body (freeze §12, buffer domain),
+// node.wrap_particles_torus — fusable BUFFER body (freeze section 12, buffer domain),
 // COINCIDENT form. Per-particle toroidal wrap of position.xy to [0, 1]² via
 // fract(position.xy + 1). Dead particles (life <= 0) pass through unchanged.
 //

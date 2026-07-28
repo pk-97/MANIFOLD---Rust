@@ -1,4 +1,4 @@
-// node.sample_texture_at_particles — fusable BUFFER body (freeze §12, buffer
+// node.sample_texture_at_particles — fusable BUFFER body (freeze section 12, buffer
 // domain), COINCIDENT + TEXTURE. Bilinear-sample a 2D texture at each particle's
 // position.xy, write the RG channels as the [f32;2] output. Matches
 // sample_texture_at_particles.wgsl bit-for-bit.

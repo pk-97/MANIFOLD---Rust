@@ -1,5 +1,5 @@
 //! `node.morph_mesh` — static two-mesh lerp between two `Array<MeshVertex>`s
-//! (MESH_DEFORM_AND_CURVE_GEOMETRY_DESIGN.md D3/D4/D9, §3 atom table).
+//! (MESH_DEFORM_AND_CURVE_GEOMETRY_DESIGN.md D3/D4/D9, section 3 atom table).
 //!
 //! `n = min(count_a, count_b)`; `pos = mix(a, b, t * w)`, `normal =
 //! normalize(mix(a.normal, b.normal, t * w))`, `uv` from `a`. Correspondence
@@ -245,7 +245,7 @@ mod tests {
 mod gpu_tests {
     //! Real-GPU value-level tests. No legacy predecessor to diff against —
     //! parity is against a hand-written Rust reference of the committed
-    //! formula, element-wise, per DECOMPOSING_GENERATORS.md §9.
+    //! formula, element-wise, per DECOMPOSING_GENERATORS.md section 9.
     use super::*;
 
     fn mk_vertex(pos: [f32; 3], normal: [f32; 3], uv: [f32; 2]) -> MeshVertex {

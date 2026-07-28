@@ -16,12 +16,12 @@ use serde::{Deserialize, Serialize};
 use crate::types::TonemapCurve;
 
 /// Snap tolerance (mm): placements whose post-rotation rects are within this
-/// distance of touching merge into one island. See §5.
+/// distance of touching merge into one island. See section 5.
 pub const SNAP_TOLERANCE_MM: f32 = 5.0;
 
 /// Gutter (px) inserted between packed islands in the render atlas, so a
 /// neighborhood GPU op (blur, convolution) on one island's edge never samples
-/// into an unrelated island. See §3 D2.
+/// into an unrelated island. See section 3 D2.
 pub const ATLAS_GUTTER_PX: u32 = 16;
 
 // ─── OutputId ───
@@ -52,8 +52,8 @@ impl OutputId {
 // ─── Rotation ───
 
 /// Per-placement rotation. Vertical totems are usually landscape panels
-/// rotated 90/270; rotation applies in the output blit (§6.2), never in
-/// content (§6.1 — zero shader changes).
+/// rotated 90/270; rotation applies in the output blit (section 6.2), never in
+/// content (section 6.1 — zero shader changes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Rotation {
@@ -75,7 +75,7 @@ impl Rotation {
 
 /// Stable identity for re-matching a placement to a live physical display
 /// across launches/reboots (`CGDirectDisplayID`s are not stable). Match on
-/// `uuid` first, then `name`; `None` on both = unassigned. See §5
+/// `uuid` first, then `name`; `None` on both = unassigned. See section 5
 /// "Display identity rules (gig-critical)".
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -89,7 +89,7 @@ pub struct DisplayIdentity {
 // ─── OutputAdvanced ───
 
 /// Per-output advanced calibration — the "advanced flap," closed by default
-/// in the stage view (§5). Output-transform-only (§6.2, §7.4): none of these
+/// in the stage view (section 5). Output-transform-only (section 6.2, section 7.4): none of these
 /// fields change content, only how an island's pixels reach the device.
 ///
 /// `density_cap_px_per_mm` is the only field `derive_stage` reads in P1; the
@@ -102,7 +102,7 @@ pub struct DisplayIdentity {
 pub struct OutputAdvanced {
     /// 4-corner keystone homography in normalized device coordinates
     /// (top-left, top-right, bottom-right, bottom-left). `None` = identity —
-    /// covers a flat, square-ish projector throw (§5, §7.4).
+    /// covers a flat, square-ish projector throw (section 5, section 7.4).
     pub keystone_corners: Option<[[f32; 2]; 4]>,
     /// Multiplicative RGB gain trim, applied at present time.
     pub color_gain: [f32; 3],
@@ -113,7 +113,7 @@ pub struct OutputAdvanced {
     pub tonemap_override: Option<TonemapCurve>,
     /// Cap this display's contribution to its island's render density
     /// (px/mm) — for LED processors that report absurd native modes.
-    /// `None` = native density (§9 "Density knobs").
+    /// `None` = native density (section 9 "Density knobs").
     pub density_cap_px_per_mm: Option<f32>,
 }
 
@@ -134,7 +134,7 @@ impl Default for OutputAdvanced {
 /// One physical output (display, projector, LED processor) positioned on the
 /// stage plan. `physical_size_mm` and `native_resolution` are pre-rotation
 /// (the panel's own dimensions); `position_mm` is post-rotation (top-left of
-/// the placement's actual stage-plan footprint). See §5.
+/// the placement's actual stage-plan footprint). See section 5.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DisplayPlacement {
@@ -142,7 +142,7 @@ pub struct DisplayPlacement {
     #[serde(default)]
     pub name: String,
     /// Pre-rotation panel size (mm). For a projector this is the measured
-    /// throw size, not a physical device dimension (§7.4).
+    /// throw size, not a physical device dimension (section 7.4).
     pub physical_size_mm: [f32; 2],
     /// Pre-rotation pixel mode MANIFOLD drives this output at.
     pub native_resolution: [u32; 2],
@@ -190,7 +190,7 @@ impl DisplayPlacement {
         self.native_resolution[0] as f32 / self.physical_size_mm[0]
     }
 
-    /// Density after the advanced-flap cap (§9): `min(native, cap)`.
+    /// Density after the advanced-flap cap (section 9): `min(native, cap)`.
     pub fn effective_density_px_per_mm(&self) -> f32 {
         let native = self.native_density_px_per_mm();
         match self.advanced.density_cap_px_per_mm {
@@ -203,7 +203,7 @@ impl DisplayPlacement {
 // ─── StageLayout ───
 
 /// Physical arrangement of outputs on the stage plan. Serialized inside
-/// `ProjectSettings` (§5) — the single source of truth at runtime — and
+/// `ProjectSettings` (section 5) — the single source of truth at runtime — and
 /// separately exportable/importable as a standalone venue file
 /// (`manifold-io::venue_file`, D13).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -270,7 +270,7 @@ pub struct DerivedStage {
 
 /// Derive islands, packing, and density from a stage layout. Pure function,
 /// no allocation surprises for the hot path: callers re-derive per-action
-/// (on a stage edit), never per-frame (§9).
+/// (on a stage edit), never per-frame (section 9).
 ///
 /// Disabled placements (`enabled: false`) are excluded entirely — they
 /// contribute no pixels and cannot merge into an island.
@@ -460,7 +460,7 @@ mod tests {
 
     #[test]
     fn placements_beyond_snap_tolerance_stay_separate_islands() {
-        // Two totems 3 metres apart — the driving use case (§0).
+        // Two totems 3 metres apart — the driving use case (section 0).
         let a = placement(0, [0.0, 0.0], [500.0, 1000.0], [1080, 1920]);
         let b = placement(1, [3500.0, 0.0], [500.0, 1000.0], [1080, 1920]);
         let layout = StageLayout {
@@ -570,7 +570,7 @@ mod tests {
     #[test]
     fn total_atlas_pixels_track_owned_hardware_not_stage_width() {
         // Moving islands further apart must never change rendered pixel count
-        // (§8, §9 — "dragging displays apart never changes it").
+        // (section 8, section 9 — "dragging displays apart never changes it").
         let a = placement(0, [0.0, 0.0], [500.0, 1000.0], [1080, 1920]);
         let b_near = placement(1, [3500.0, 0.0], [500.0, 1000.0], [1080, 1920]);
         let b_far = placement(1, [50_000.0, 0.0], [500.0, 1000.0], [1080, 1920]);

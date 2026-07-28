@@ -181,7 +181,7 @@ impl Project {
 
     pub fn has_active_audio_mods(&self) -> bool {
         fn inst_has(fx: &crate::effects::PresetInstance) -> bool {
-            // §9 U4: a fire-mode (trigger-gate) mod is a normal `audio_mods`
+            // section 9 U4: a fire-mode (trigger-gate) mod is a normal `audio_mods`
             // entry now — no separate `audio_trigger` config to special-case,
             // so this plain check already covers it.
             fx.audio_mods
@@ -210,12 +210,12 @@ impl Project {
     /// same instance set [`Self::has_active_audio_mods`] does (master
     /// effects, layer effects, layer generator params — NOT clip effects,
     /// mirroring that function), plus every layer's `clip_triggers` (P2 —
-    /// the §3.4 walker arm; a send-owned `AudioSend::triggers` is drained
+    /// the section 3.4 walker arm; a send-owned `AudioSend::triggers` is drained
     /// legacy storage now and is never read here again).
     /// `AudioModRuntime` recomputes this only on a data-version change and
     /// skips every send outside the set (unless it's the scope-tapped send) —
-    /// see `docs/AUDIO_SENDS_UX_DESIGN.md` D4/§3.2,
-    /// `docs/AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` §3.4.
+    /// see `docs/AUDIO_SENDS_UX_DESIGN.md` D4/section 3.2,
+    /// `docs/AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` section 3.4.
     pub fn analysis_consumed_sends(&self) -> ahash::AHashSet<crate::AudioSendId> {
         // A plain fn (not a closure capturing `out`) so it can be called
         // alongside the direct `out.insert` the clip-trigger arm below needs —
@@ -225,7 +225,7 @@ impl Project {
             out: &mut ahash::AHashSet<crate::AudioSendId>,
             fx: &crate::effects::PresetInstance,
         ) {
-            // §9 U4: a fire-mode mod is just an enabled `audio_mods` entry,
+            // section 9 U4: a fire-mode mod is just an enabled `audio_mods` entry,
             // already covered below — no separate arm needed.
             if let Some(mods) = fx.audio_mods.as_ref() {
                 for m in mods.iter().filter(|m| m.enabled) {
@@ -258,7 +258,7 @@ impl Project {
     /// warn before deleting a send that sliders still depend on.
     pub fn audio_send_usage_count(&self, send_id: &crate::id::AudioSendId) -> usize {
         fn inst_count(fx: &crate::effects::PresetInstance, send_id: &crate::id::AudioSendId) -> usize {
-            // §9 U4: a fire-mode mod is a normal `audio_mods` entry — already
+            // section 9 U4: a fire-mode mod is a normal `audio_mods` entry — already
             // counted below, no separate arm needed.
             fx.audio_mods
                 .as_ref()
@@ -296,7 +296,7 @@ impl Project {
             send_id: &crate::id::AudioSendId,
             out: &mut Vec<(Option<crate::id::LayerId>, String)>,
         ) {
-            // §9 U4: a fire-mode mod is a normal `audio_mods` entry — already
+            // section 9 U4: a fire-mode mod is a normal `audio_mods` entry — already
             // listed below by its own param name (no more bespoke "Trigger"
             // label; the param the gate card lives on names itself).
             if let Some(mods) = fx.audio_mods.as_ref() {
@@ -337,7 +337,7 @@ impl Project {
     /// can't reach, since a clip trigger has no `param_id`/effect to name.
     /// Mirrors that method's shape: `(owning layer, display label)`, enabled
     /// configs sourcing `send_id` only. Label format is "Clip trigger •
-    /// Layer • Band" (§7.2 item 7, P8, 2026-07-11 — matches the mod rows'
+    /// Layer • Band" (section 7.2 item 7, P8, 2026-07-11 — matches the mod rows'
     /// "Layer • Effect • Param" bullet convention instead of the deleted
     /// Triggers matrix's arrow style, "Low → LayerName").
     pub fn clip_trigger_consumers(
@@ -564,7 +564,7 @@ mod tests {
 
     #[test]
     fn analysis_consumed_sends_ignores_drained_legacy_send_triggers() {
-        // §3.4: `send.triggers` is deserialize-only legacy storage now —
+        // section 3.4: `send.triggers` is deserialize-only legacy storage now —
         // even if something hand-populates it (bypassing the load
         // migration), `analysis_consumed_sends` must never read it again.
         let mut p = Project::default();
@@ -621,12 +621,12 @@ mod tests {
 
     #[test]
     fn armed_trigger_gate_mod_turns_the_analysis_gate_on_and_claims_its_send() {
-        // Regression (2026-07-07, class-collapsed 2026-07-07 per §9 U1/U4): a
+        // Regression (2026-07-07, class-collapsed 2026-07-07 per section 9 U1/U4): a
         // project whose ONLY audio consumer is an armed fire-mode mod on a
         // trigger-gate param never started capture (has_active_audio_mods
         // false) and, even with capture running, its send was skipped by the
         // D4 gate (analysis_consumed_sends empty) — so armed audio triggers
-        // silently never fired. §9 deletes the second per-instance config
+        // silently never fired. section 9 deletes the second per-instance config
         // type that caused it; this test is the proof the plain `audio_mods`
         // walk covers a fire-mode mod with zero special-case code.
         let mut p = Project::default();

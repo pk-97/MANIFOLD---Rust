@@ -1,5 +1,5 @@
 //! Fusion codegen — emit WGSL kernels from atom `wgsl_body` fragments
-//! (design doc §12). This module is the v1 foundation: the **standalone**
+//! (design doc section 12). This module is the v1 foundation: the **standalone**
 //! single-atom kernel generator. It wraps one atom's body fragment in the
 //! iteration boilerplate (dims/guard/sample/store) + a merged param uniform,
 //! reproducing that atom's hand-written kernel so the hand shader can be
@@ -9,7 +9,7 @@
 //! The fused MULTI-atom generator (chaining N bodies, namespace+dedup) is
 //! build step 3/4; it reuses this module's param-emission + read-path helpers.
 //!
-//! Determinism (design §12.3): output is byte-identical run-to-run — fields
+//! Determinism (design section 12.3): output is byte-identical run-to-run — fields
 //! emit in `PARAMS` slice order, the body is verbatim, and there are no
 //! float-literal-from-param emissions (all params are live uniform reads in
 //! v1, never baked constants). The generated WGSL text is the cross-session

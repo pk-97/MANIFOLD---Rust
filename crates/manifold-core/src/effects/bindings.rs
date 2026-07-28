@@ -60,7 +60,7 @@ pub enum ParamConvert {
 /// A user-exposed parameter on an [`PresetInstance`].
 ///
 /// V2 user-exposed-params surface (see `docs/EFFECT_RUNTIME_UNIFICATION.md`
-/// §7.6). Each binding is per-instance: ticking "expose UVTransform.translate"
+/// section 7.6). Each binding is per-instance: ticking "expose UVTransform.translate"
 /// on Mirror#0 doesn't affect Mirror#1.
 ///
 /// Stable addressing comes from [`NodeId`] — the inner node's identity,
@@ -162,7 +162,7 @@ pub struct UserParamBinding {
     /// reshape overlay. `serde(default)` keeps pre-existing projects loading.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub value_labels: Vec<String>,
-    /// Card-bundling section name (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2
+    /// Card-bundling section name (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md section 2
     /// D5), captured from the innermost enclosing group's display name at
     /// expose time and carried onto the appended [`crate::effect_graph_def
     /// ::ParamSpecDef`] so the card reads it through the normal manifest

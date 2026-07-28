@@ -1,11 +1,11 @@
 //! Session mode runtime state — Ableton-style scene/clip launch tracking.
 //!
 //! P2 of `docs/SESSION_MODE_DESIGN.md`. Runtime-only: never serialized, never
-//! undo-wrapped (§4). Owned by `PlaybackEngine`, sibling of `LiveClipManager`.
+//! undo-wrapped (section 4). Owned by `PlaybackEngine`, sibling of `LiveClipManager`.
 //!
 //! [`SessionRuntime`] is the THIRD reference source into
 //! `PlaybackEngine::sync_clips_to_time` — an input to the sole playback
-//! authority, never a second one (§9). It never touches a renderer directly:
+//! authority, never a second one (section 9). It never touches a renderer directly:
 //! it produces [`ActiveClipRef`]s for the scheduler's diff, and reports
 //! wrap-restart evictions (`resolve_refs`'s `wrap_restarts` out-param) for the
 //! *caller* to apply via the engine's own `stop_clip` — the same primitive
@@ -23,20 +23,20 @@ use crate::scheduler::ActiveClipRef;
 #[derive(Debug, Clone)]
 struct PlayingSlot {
     scene_id: SceneId,
-    /// Global beat the slot started at (post-quantize). §4.
+    /// Global beat the slot started at (post-quantize). section 4.
     launch_beat: f64,
     /// Loop iteration resolved on the previous `resolve_refs` call — detects
     /// the wrap boundary.
     last_iteration: i64,
     /// Inner clip id active on the previous `resolve_refs` call. Wrap only
     /// force-restarts when the active clip_id is unchanged across the
-    /// boundary (§4) — a sequence with multiple clips already gets a natural
+    /// boundary (section 4) — a sequence with multiple clips already gets a natural
     /// stop+start from `compute_sync`'s ordinary clip_id diff.
     last_active_clip_id: Option<ClipId>,
 }
 
 /// What a queued launch does when its quantize boundary arrives. Named but
-/// left undefined by §4's `PendingSlotLaunch` sketch ("or Stop — see
+/// left undefined by section 4's `PendingSlotLaunch` sketch ("or Stop — see
 /// LaunchAction below"); this is the mechanical completion — a private
 /// interior type, not a public API shape the doc pins down.
 #[derive(Debug, Clone)]
@@ -53,11 +53,11 @@ struct PendingSlotLaunch {
     target_beat: f64,
 }
 
-/// Default global launch quantize: 1 bar at 4/4 (§4).
+/// Default global launch quantize: 1 bar at 4/4 (section 4).
 const DEFAULT_QUANTIZE_BEATS: f64 = 4.0;
 
 /// Runtime session-playback state. See module docs and
-/// `docs/SESSION_MODE_DESIGN.md` §4.
+/// `docs/SESSION_MODE_DESIGN.md` section 4.
 pub struct SessionRuntime {
     playing: AHashMap<LayerId, PlayingSlot>,
     pending: Vec<PendingSlotLaunch>,
@@ -77,7 +77,7 @@ impl SessionRuntime {
 
     // ─── Accessors ───
 
-    /// Whether `layer_id` is detached from the arrangement (§6) — suppresses
+    /// Whether `layer_id` is detached from the arrangement (section 6) — suppresses
     /// `query_active_timeline_clips` for that layer.
     pub fn is_overridden(&self, layer_id: &LayerId) -> bool {
         self.session_override.contains(layer_id)
@@ -119,7 +119,7 @@ impl SessionRuntime {
     // ─── Quantize math (pure) ───
 
     /// Next quantize boundary at/after `beat`. `quantize <= 0` means launch
-    /// now (§5 "Quantize 0 = launch immediately"). `pub(crate)`: also the
+    /// now (section 5 "Quantize 0 = launch immediately"). `pub(crate)`: also the
     /// shared ceil for `LiveClipManager::compute_trigger_snap_beat`'s MIDI
     /// launch-quantize fallback (F2) — one ceil function, not two that can
     /// drift.
@@ -135,7 +135,7 @@ impl SessionRuntime {
         Self::ceil_to_boundary(current_beat, self.quantize_beats.0)
     }
 
-    // ─── Launch semantics (§5) ───
+    // ─── Launch semantics (section 5) ───
 
     fn replace_pending_for_layer(&mut self, layer_id: &LayerId) {
         self.pending.retain(|p| &p.layer_id != layer_id);
@@ -143,7 +143,7 @@ impl SessionRuntime {
 
     /// Enqueue a slot launch at the next quantize boundary (or immediately if
     /// `immediate` — set when the launch is also starting the transport from
-    /// stopped, §4). Replaces any pending launch for the layer.
+    /// stopped, section 4). Replaces any pending launch for the layer.
     pub fn launch_slot(&mut self, layer_id: LayerId, scene_id: SceneId, current_beat: f64, immediate: bool) {
         self.replace_pending_for_layer(&layer_id);
         let target = if immediate {
@@ -159,7 +159,7 @@ impl SessionRuntime {
     }
 
     /// Enqueue a quantized stop for one layer's session slot.
-    /// `session_override` is untouched (§5/§12: the layer goes black, it does
+    /// `session_override` is untouched (section 5/section 12: the layer goes black, it does
     /// not fall back to the arrangement).
     pub fn stop_slot(&mut self, layer_id: LayerId, current_beat: f64, immediate: bool) {
         self.replace_pending_for_layer(&layer_id);
@@ -177,7 +177,7 @@ impl SessionRuntime {
 
     /// Launch a scene: every layer with a slot in `scene_id` launches; every
     /// layer currently playing a session slot with NO slot in `scene_id` gets
-    /// a quantized stop (Ableton "stop other tracks" default, §5). Layers
+    /// a quantized stop (Ableton "stop other tracks" default, section 5). Layers
     /// never session-launched are untouched.
     pub fn launch_scene(&mut self, scene_id: &SceneId, grid: &SessionGrid, current_beat: f64, immediate: bool) {
         for slot in grid.slots.iter().filter(|s| &s.scene_id == scene_id) {
@@ -195,7 +195,7 @@ impl SessionRuntime {
     /// slot — the "stop all clips" gesture, distinct from a full transport
     /// stop (`on_transport_stop`, which is immediate and Ableton-standard).
     /// `session_override` is untouched, exactly like a single `stop_slot`
-    /// (§12: session_override persists "including after a slot stops").
+    /// (section 12: session_override persists "including after a slot stops").
     pub fn stop_all(&mut self, current_beat: f64) {
         let layer_ids: AHashSet<LayerId> = self
             .playing
@@ -211,7 +211,7 @@ impl SessionRuntime {
     /// Back to arrangement: immediate (not quantized). Clears
     /// `session_override` and any playing/pending session state for the
     /// given layer, or every layer if `None`. Timeline clips resume via
-    /// normal `sync_clips_to_time` on the next tick (§5).
+    /// normal `sync_clips_to_time` on the next tick (section 5).
     pub fn back_to_arrangement(&mut self, layer_id: Option<&LayerId>) {
         match layer_id {
             Some(id) => {
@@ -228,7 +228,7 @@ impl SessionRuntime {
     }
 
     /// Transport stop: stops all session playback and clears pending
-    /// launches (Ableton behavior, §4). `session_override` is NOT cleared —
+    /// launches (Ableton behavior, section 4). `session_override` is NOT cleared —
     /// layers stay detached until an explicit Back to Arrangement.
     pub fn on_transport_stop(&mut self) {
         self.playing.clear();
@@ -236,7 +236,7 @@ impl SessionRuntime {
     }
 
     /// Seek: session slots are beat-anchored and stateless, so a seek never
-    /// stops them (§4) — `elapsed` in `resolve_refs` just changes. Pending
+    /// stops them (section 4) — `elapsed` in `resolve_refs` just changes. Pending
     /// launches DO retarget to the next quantize boundary after the new
     /// position, so a jump backward/forward can't fire them off-grid or (if
     /// the new position is already past the old target) instantly.
@@ -247,12 +247,12 @@ impl SessionRuntime {
         }
     }
 
-    // ─── Per-tick resolution (§4) ───
+    // ─── Per-tick resolution (section 4) ───
 
     /// Promote any pending launch/stop whose `target_beat` has arrived.
     /// Idempotent: promoted entries are drained from `pending`, so a repeat
     /// call at an unchanged `current_beat` is a no-op — consistent with the
-    /// statelessness rule (§4): resolution derives from `current_beat` alone,
+    /// statelessness rule (section 4): resolution derives from `current_beat` alone,
     /// this is the one genuine state transition, and it can't double-apply.
     fn activate_due_pending(&mut self, current_beat: f64) {
         if self.pending.is_empty() {
@@ -277,7 +277,7 @@ impl SessionRuntime {
                     }
                     LaunchAction::Stop => {
                         self.playing.remove(&due.layer_id);
-                        // session_override persists (§12).
+                        // session_override persists (section 12).
                     }
                 }
             } else {
@@ -287,13 +287,13 @@ impl SessionRuntime {
     }
 
     /// Resolve every currently-playing slot into `ActiveClipRef`s (the third
-    /// `sync_clips_to_time` input) and detect the wrap-restart case (§4): when
+    /// `sync_clips_to_time` input) and detect the wrap-restart case (section 4): when
     /// a loop iteration increments but the active inner clip is unchanged,
     /// its id is pushed into `wrap_restarts` so the caller can evict it via
     /// its own `stop_clip` — the ordinary `compute_sync` diff then restarts
     /// it (`to_start`) from `in_point` on the very next step of the same
     /// `sync_clips_to_time` call. `out` and `wrap_restarts` are caller-owned
-    /// scratch buffers (hot-path / no-per-tick-allocation rule, §4/§9); both
+    /// scratch buffers (hot-path / no-per-tick-allocation rule, section 4/section 9); both
     /// are cleared by the caller before this call, not here.
     pub fn resolve_refs(
         &mut self,
@@ -338,7 +338,7 @@ impl SessionRuntime {
             {
                 // Same clip spans the wrap boundary: compute_sync diffs by
                 // clip_id and would treat this as "already active" and never
-                // restart it. Force the restart explicitly (§4/§12 — sequence
+                // restart it. Force the restart explicitly (section 4/section 12 — sequence
                 // wrap hard-restarts from in_point).
                 wrap_restarts.push(active_clip_id.clone().expect("checked Some above"));
             }
@@ -439,7 +439,7 @@ mod tests {
         grid
     }
 
-    // ─── Quantize targeting (§5) ───
+    // ─── Quantize targeting (section 5) ───
 
     #[test]
     fn launch_slot_targets_next_boundary() {
@@ -538,7 +538,7 @@ mod tests {
         let timeline = timeline_with_layers(&["l1"]);
         // Sequence length == clip duration: the single clip spans the whole
         // loop, so every wrap keeps the SAME clip_id active — the mandatory
-        // wrap-restart case (§4/§12).
+        // wrap-restart case (section 4/section 12).
         let grid = grid_with_slot(&l1, &s1, one_clip_sequence(4.0, 0.0, 4.0, "c1"));
 
         let mut rt = SessionRuntime::new();
@@ -600,7 +600,7 @@ mod tests {
         assert!(wraps.is_empty(), "clip_id changed across the boundary — ordinary diff handles it");
     }
 
-    // ─── Scene launch/stop matrix (§5) ───
+    // ─── Scene launch/stop matrix (section 5) ───
 
     #[test]
     fn launch_scene_launches_every_slot_in_scene() {
@@ -658,7 +658,7 @@ mod tests {
         rt.stop_all(0.0);
         rt.activate_due_pending(0.0);
         assert_eq!(rt.playing_count(), 0);
-        // session_override persists (§12) even though nothing is playing.
+        // session_override persists (section 12) even though nothing is playing.
         assert!(rt.is_overridden(&l1));
         assert!(rt.is_overridden(&l2));
     }
@@ -738,7 +738,7 @@ mod tests {
         rt.activate_due_pending(0.0);
 
         rt.on_seek(100.0);
-        assert!(rt.is_playing_layer(&l1), "seek must not stop session playback (§4)");
+        assert!(rt.is_playing_layer(&l1), "seek must not stop session playback (section 4)");
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! `node.transform` — pixel-exact replacement for legacy
 //! Originally `TransformFX`. Fifth
-//! §6.1 migration.
+//! section 6.1 migration.
 //!
 //! 2D UV affine with aspect-correct rotation. The primitive surfaces
 //! `rotation` in **degrees, screen-CW** (the user-facing convention

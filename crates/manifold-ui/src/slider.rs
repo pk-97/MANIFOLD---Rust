@@ -120,7 +120,7 @@ impl Slider {
     }
 }
 
-// ── The gesture contract (UI_WIDGET_UNIFICATION_DESIGN.md §3) ──────────
+// ── The gesture contract (UI_WIDGET_UNIFICATION_DESIGN.md section 3) ──────────
 //
 // Zone geometry + gesture→intent mapping, in widget language. Hosts
 // translate an intent into their own action type (chrome → `PanelAction` at
@@ -912,7 +912,7 @@ mod tests {
         )
     }
 
-    /// I2: pins the full contract table (§3/§4). Chrome and canvas both
+    /// I2: pins the full contract table (section 3/section 4). Chrome and canvas both
     /// resolve `intent_for` — this is the one place the table itself is
     /// asserted, so a change here is a deliberate contract edit, not drift.
     #[test]

@@ -1,4 +1,4 @@
-// node.generate_cube_mesh — fusable BUFFER body (freeze §12, buffer domain),
+// node.generate_cube_mesh — fusable BUFFER body (freeze section 12, buffer domain),
 // SOURCE. Emit a unit cube as 36 triangle-list MeshVertex entries (6 faces × 2
 // tris × 3 verts) with per-face outward normals + cubemap-cross UVs. Matches
 // generate_cube_mesh.wgsl bit-for-bit (same const tables + uv helper, inlined).

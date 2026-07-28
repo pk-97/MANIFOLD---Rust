@@ -62,9 +62,9 @@ pub(crate) struct RowHost {
     /// Per-param "A" audio-mod button node id.
     pub(crate) audio_btn_ids: Vec<Option<NodeId>>,
     /// Per-param audio drawer ids + send count (for click resolution). An
-    /// `is_trigger_gate` row's "A" button + drawer live here too (§9).
+    /// `is_trigger_gate` row's "A" button + drawer live here too (section 9).
     pub(crate) audio_configs: Vec<Option<(crate::panels::drawer::DrawerIds, usize)>>,
-    /// Per-param collapsed-row mode-indicator label (§9, `is_trigger_gate`
+    /// Per-param collapsed-row mode-indicator label (section 9, `is_trigger_gate`
     /// rows only).
     pub(crate) audio_trigger_mode_badge_ids: Vec<Option<NodeId>>,
     /// Per-param orange envelope target handle on the slider track (when armed).
@@ -218,7 +218,7 @@ impl RowHost {
         }
     }
 
-    /// §5.6 shared per-row value push: normalize → format → update row `i`'s
+    /// section 5.6 shared per-row value push: normalize → format → update row `i`'s
     /// slider fill + readout. The ONE place both parameter cards write a
     /// slider value (`ParamCardPanel::sync_param_value` and
     /// `ScenePanel::sync_properties_values`), so the fill/readout math can't
@@ -412,7 +412,7 @@ impl RowHost {
         self.audio_set_source_action(target, pi, None, Some(kind_idx), Some(band_idx), rows, mod_state)
     }
 
-    /// A click on an `is_trigger_gate` row's Mode row (§9 U3) — converts the
+    /// A click on an `is_trigger_gate` row's Mode row (section 9 U3) — converts the
     /// clicked button index to a `TriggerFireMode` at this dispatch boundary
     /// and issues one `AudioModSetTriggerMode`, the same command family every
     /// other audio-mod drawer edit uses.

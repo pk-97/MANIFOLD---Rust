@@ -1,4 +1,4 @@
-// node.shininess — fusable body (freeze §12). Blinn-Phong specular
+// node.shininess — fusable body (freeze section 12). Blinn-Phong specular
 // highlight from a tangent-space normal map. Per pixel:
 //   h = normalize(light + view)
 //   spec = pow(max(dot(n, h), 0), power)

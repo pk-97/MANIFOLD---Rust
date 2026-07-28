@@ -2,7 +2,7 @@
 //! named sends that the per-slider audio drawers reference.
 //!
 //! A non-dimming overlay docked to the viewport's right edge (D6 —
-//! `docs/AUDIO_SENDS_UX_DESIGN.md` §2/§3.3), full height, with an input-device
+//! `docs/AUDIO_SENDS_UX_DESIGN.md` section 2/section 3.3), full height, with an input-device
 //! picker and one row per send: channel, gain, and delete, plus an "Add send"
 //! button. The show stays visible underneath and outside clicks pass through
 //! (it's a calibration surface used while performing — accidental dismissal
@@ -11,7 +11,7 @@
 //! data handed in via [`AudioSetupPanel::configure`] and maps a clicked node
 //! id back to a [`PanelAction`] (the project-level audio-setup actions,
 //! already routed through `ui_bridge`). See
-//! `docs/AUDIO_MODULATION_DESIGN.md` §10.1.
+//! `docs/AUDIO_MODULATION_DESIGN.md` section 10.1.
 //!
 //! v1 scope: device cycle, add/remove send, per-send single-channel routing and
 //! gain trim. Per-send labels are auto-assigned ("Audio N") until a text-field
@@ -125,7 +125,7 @@ pub struct AudioSendRow {
     /// Human-readable routing lines for the read-only Inputs section — the
     /// capture device (when channels are assigned) plus one line per feeding
     /// layer. Built by `state_sync`. (Formerly also fed a row-level "Cap"
-    /// chip and its click-to-reveal routings dropdown; both deleted §7.2
+    /// chip and its click-to-reveal routings dropdown; both deleted section 7.2
     /// item 7, P8, 2026-07-11 — this is the ONE place the detail lives now.)
     pub routings: Vec<String>,
     // `consumers` below is the panel's sole surviving
@@ -148,8 +148,8 @@ pub struct AudioSendRow {
 
 /// One consumer row in the Audio Setup modal's Consumers section: a named
 /// audio mod ("Layer • Effect • Param") or an enabled clip trigger ("Clip
-/// trigger • Layer • Band", §7.2 item 7, P8, 2026-07-11), each clickable to
-/// jump to the owning layer. See `docs/AUDIO_SENDS_UX_DESIGN.md` §3.1.
+/// trigger • Layer • Band", section 7.2 item 7, P8, 2026-07-11), each clickable to
+/// jump to the owning layer. See `docs/AUDIO_SENDS_UX_DESIGN.md` section 3.1.
 #[derive(Clone, Debug)]
 pub struct SendConsumerRow {
     pub label: String,
@@ -253,7 +253,7 @@ impl Default for SendRowIds {
 /// sensitivity value label. Carries the pre-drag pointer x + value so
 /// `on_event`'s `Drag` arm can compute the live absolute value from
 /// horizontal movement alone (1 px = 0.1 dB / 0.5%, see
-/// `docs/AUDIO_SENDS_UX_DESIGN.md` §3.4) without re-deriving it from the
+/// `docs/AUDIO_SENDS_UX_DESIGN.md` section 3.4) without re-deriving it from the
 /// project each frame. Exactly one drag (crossover OR calibration) is ever
 /// armed at a time.
 #[derive(Clone)]
@@ -801,7 +801,7 @@ impl AudioSetupPanel {
             tree.set_name(self.send_ids[i].gain_plus, "audio_setup.gain_plus");
             tree.set_name(self.send_ids[i].gain_value, "audio_setup.gain_value");
 
-            // Channel dropdown fills the row (Cap chip removed, §7.2 item 7,
+            // Channel dropdown fills the row (Cap chip removed, section 7.2 item 7,
             // P8, 2026-07-11 — device-vs-layer-fed detail lives in the
             // read-only Inputs section now, not a row-level chip), showing
             // the resolved channel name(s).
@@ -1804,7 +1804,7 @@ impl AudioSetupPanel {
     /// Route one event to the docked panel. Returns `(consumed, actions)` —
     /// `consumed` means the caller stops routing this event to lower panels.
     /// Called from `UIRoot::process_events` at the docked-panel site (the panel
-    /// is no longer an `Overlay`; D1/§3.5). Escape is NOT handled here — it
+    /// is no longer an `Overlay`; D1/section 3.5). Escape is NOT handled here — it
     /// moved to the app's single key-dispatch site so there is ONE close path,
     /// not two. The close (×) button and the header Audio button both toggle
     /// the dock via `PanelAction::OpenAudioSetup`.
@@ -1934,7 +1934,7 @@ impl AudioSetupPanel {
                     None => (true, Vec::new()),
                 },
                 // 1 px = 0.1 dB / 0.5% (D7, `docs/AUDIO_SENDS_UX_DESIGN.md`
-                // §3.4); the host clamps the candidate to the real range.
+                // section 3.4); the host clamps the candidate to the real range.
                 // P4, D8: Shift held at drag-start ("fine") multiplies the
                 // applied per-pixel delta by 0.1.
                 Some(AudioSetupDrag::Calibration(CalibrationDrag::Gain { send, start_x, start_db, fine })) => {

@@ -23,11 +23,11 @@ use crate::tree::UITree;
 
 // ── Layout constants (from MasterChromeBitmapPanel.cs) ───────────
 
-const HEADER_ROW_H: f32 = color::HEADER_ROW_HEIGHT; // §14.2 rule 5: one header height (was 27.5)
+const HEADER_ROW_H: f32 = color::HEADER_ROW_HEIGHT; // section 14.2 rule 5: one header height (was 27.5)
 const EXIT_PATH_ROW_H: f32 = 27.5;
 const SLIDER_ROW_H: f32 = 22.5;
 const DIVIDER_H: f32 = 1.0;
-const PAD_H: f32 = color::SECTION_CONTENT_INSET; // §14.5 C: align with card param-label column
+const PAD_H: f32 = color::SECTION_CONTENT_INSET; // section 14.5 C: align with card param-label column
 const PAD_V: f32 = 2.0;
 const GAP: f32 = 4.0;
 const CHEVRON_W: f32 = 18.0;
@@ -91,7 +91,7 @@ impl MasterChromePanel {
         if self.is_collapsed {
             PAD_V + HEADER_ROW_H + PAD_V
         } else {
-            // §6d: opacity is now inline on the header row; only the LED row
+            // section 6d: opacity is now inline on the header row; only the LED row
             // stays below it.
             PAD_V + HEADER_ROW_H + DIVIDER_H + EXIT_PATH_ROW_H + DIVIDER_H + PAD_V
         }
@@ -180,7 +180,7 @@ impl MasterChromePanel {
             .inert() // click handled via handle_click (inspector routing kept)
             .key(KEY_CHEVRON);
 
-        // §6d — title + chevron, then the opacity slider inline (was a separate
+        // section 6d — title + chevron, then the opacity slider inline (was a separate
         // stacked row). The LED row stays below in `chrome_view`.
         let mut row = View::row(GAP)
             .fill_w()
@@ -415,7 +415,7 @@ mod tests {
     use super::*;
     use crate::tree::UITree;
 
-    // Golden oracle for the LED brightness slot (unchanged by §6d — still on the
+    // Golden oracle for the LED brightness slot (unchanged by section 6d — still on the
     // LED row, the second row). The opacity slot moved inline onto the header row
     // and its X depends on the measured title width, so it's checked structurally.
     fn golden_brightness(rect: Rect) -> Rect {
@@ -453,7 +453,7 @@ mod tests {
                 && (a.height - b.height).abs() < 0.01
         };
         assert!(close(got_bright, bright), "brightness slot {got_bright:?} != {bright:?}");
-        // §6d: opacity is inline on the header row now.
+        // section 6d: opacity is inline on the header row now.
         assert!(
             (got_opacity.y - (rect.y + PAD_V)).abs() < 0.01 && got_opacity.width > 0.0,
             "opacity slot not inline on header row: {got_opacity:?}"

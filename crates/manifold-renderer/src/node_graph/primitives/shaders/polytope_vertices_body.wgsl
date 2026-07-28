@@ -1,4 +1,4 @@
-// node.polytope_vertices — fusable BUFFER body (freeze §12, buffer domain),
+// node.polytope_vertices — fusable BUFFER body (freeze section 12, buffer domain),
 // SOURCE. Emit one of five Platonic-solid vertex sets as Array<MeshVertex>,
 // normalised to radius 0.25 with outward-radial normals. Matches
 // polytope_vertices.wgsl bit-for-bit (per-shape switch tables inlined, prefixed

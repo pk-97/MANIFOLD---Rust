@@ -25,10 +25,10 @@ mod routing;
 
 
 // ── Layout constants ────────────────────────────────────────────
-// §14.5 E — the container owns the inter-card gap (one owner): the canonical
+// section 14.5 E — the container owns the inter-card gap (one owner): the canonical
 // `SPACE_M`, paired with `param_card::CARD_BOTTOM_MARGIN` → 0 (was 6 + 6 = 12).
 const SECTION_GAP: f32 = color::SPACE_M;
-const SECTION_CARD_RADIUS: f32 = color::CARD_RADIUS; // §14.2 rule 6: section cards = CARD_RADIUS
+const SECTION_CARD_RADIUS: f32 = color::CARD_RADIUS; // section 14.2 rule 6: section cards = CARD_RADIUS
 const SECTION_CARD_PAD: f32 = 6.0;
 const SECTION_CARD_BG: Color32 = Color32::new(22, 22, 23, 255);
 const SECTION_CARD_BORDER: Color32 = Color32::new(50, 50, 54, 255);
@@ -50,7 +50,7 @@ const TAB_GAP: f32 = 2.0;
 /// Width of the collapse-all / expand-all control reserved at the right edge of
 /// the tab strip. The tabs lay out in the remaining width.
 const COLLAPSE_ALL_W: f32 = 60.0;
-/// §6b — width of the "hide mod settings" (compact) gear toggle, left of the
+/// section 6b — width of the "hide mod settings" (compact) gear toggle, left of the
 /// collapse-all control.
 const COMPACT_TOGGLE_W: f32 = 26.0;
 const TAB_FONT_SIZE: u16 = 12;
@@ -193,9 +193,9 @@ pub struct InspectorCompositePanel {
     tab_node_ids: Vec<(NodeId, InspectorTab)>,
     /// The collapse-all / expand-all control at the right of the tab strip.
     collapse_all_btn_id: Option<NodeId>,
-    /// §6b — the "hide mod settings" (compact) toggle, left of collapse-all.
+    /// section 6b — the "hide mod settings" (compact) toggle, left of collapse-all.
     compact_toggle_btn_id: Option<NodeId>,
-    /// §6b — global compact mode: hide every card's modulation config drawers
+    /// section 6b — global compact mode: hide every card's modulation config drawers
     /// (mods stay armed). UI-only, propagated to all cards each build.
     mods_compact: bool,
 
@@ -423,7 +423,7 @@ impl InspectorCompositePanel {
 
 
 
-    /// §6b — push the global compact flag onto every card (master + layer effect
+    /// section 6b — push the global compact flag onto every card (master + layer effect
     /// cards and the generator-param card) so their drawers hide/show together.
     fn apply_mods_compact(&mut self) {
         let c = self.mods_compact;
@@ -645,7 +645,7 @@ impl InspectorCompositePanel {
         self.audio_trigger_section.update_fire_meters(tree, fire_level, dt);
     }
 
-    /// P7 (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` §7.2 item 5):
+    /// P7 (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` section 7.2 item 5):
     /// the send whichever fire-mode drawer is currently open across the whole
     /// inspector is reading, if any — master effects, active-layer effects,
     /// the active layer's generator, and the layer's own clip triggers, same
@@ -1758,7 +1758,7 @@ mod tests {
         );
     }
 
-    /// `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` P1 stopgap decision (§ "The
+    /// `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` P1 stopgap decision (section "The
     /// stopgap removal"): the bespoke, root-parented `content_clip_id`
     /// (`ClipRegion` at `(rect.x, columns_y, rect.width, columns_h)`) is
     /// gone — decided empirically, not by reading. With the outer
@@ -2399,7 +2399,7 @@ mod tests {
         }
     }
 
-    /// INV-3 regression pin (WIDGET_TREE_DESIGN §6/§7 P3): the drag
+    /// INV-3 regression pin (WIDGET_TREE_DESIGN section 6/section 7 P3): the drag
     /// interaction path reads no geometry snapshot — it follows the live
     /// tree end to end, from a post-scroll cursor position through to the
     /// emitted `PanelAction`. The `drag_hit_test_uses_live_bounds_after_in_

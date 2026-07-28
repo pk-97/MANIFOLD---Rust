@@ -292,7 +292,7 @@ impl Default for ChipMotion {
 // grammar — chip radius, the dim dropdown caret, the prefix micro-label, the
 // hover/press feel, the hairline-on-light policy — across two SURFACES: a hueless
 // neutral panel (chrome / inspector / pickers) and an identity-coloured one (a
-// layer header). The §"same grammar, neutral surface" decision: only where the
+// layer header). The section "same grammar, neutral surface" decision: only where the
 // fill colour comes from differs, never the shape or affordances.
 
 /// The surface a chip sits on. `Neutral` = the grey ramp's control level
@@ -600,7 +600,7 @@ pub enum PanelStateKind {
     /// Something went wrong — the line tints to the status red.
     Error,
     /// Work in flight — a neutral dimmed line. No spinner: the app redraws on
-    /// completion, so restraint wins over decorative idle motion (§19).
+    /// completion, so restraint wins over decorative idle motion (section 19).
     Loading,
 }
 

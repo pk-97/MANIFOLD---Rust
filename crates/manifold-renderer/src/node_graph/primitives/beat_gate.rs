@@ -234,7 +234,7 @@ mod tests {
 
     /// Bit-for-bit match with the inline gate in `node.strobe`'s shader:
     /// `phase = fract(beat * rate); on = step(0.5, phase); strobe = amount * on`.
-    /// This is the parity test that backs the §12.6 Strobe-as-graph claim.
+    /// This is the parity test that backs the section 12.6 Strobe-as-graph claim.
     #[test]
     fn matches_legacy_strobe_inline_gate() {
         // Strobe defaults: rate=6 (1/16 → 4 cycles/beat), amount=1.0, duty=0.5.

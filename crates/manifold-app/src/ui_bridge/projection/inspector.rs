@@ -152,7 +152,7 @@ pub fn sync_inspector_data(
     // ── Scene Setup panel (SCENE_SETUP_PANEL_DESIGN.md) ──
     // Rebuilt from scratch every sync while the dock is open — no cached/
     // staged copy anywhere (D1: "no rotting, no staleness"). Selection
-    // scoping mirrors the inspector-tab rung derivation just below (§1 VERIFY
+    // scoping mirrors the inspector-tab rung derivation just below (section 1 VERIFY
     // marker, resolved): the selection's own layer, falling back to
     // `active_layer`.
     if ui.scene_setup_panel.is_open() {
@@ -753,7 +753,7 @@ pub fn sync_inspector_data(
                             let world_sections = {
                                 use manifold_renderer::node_graph::scene_vm::{AtmosphereVm, EnvironmentVm};
                                 let mut ids = Vec::new();
-                                // RAYTRACING_DESIGN.md D14/§5.2: the scene
+                                // RAYTRACING_DESIGN.md D14/section 5.2: the scene
                                 // root's stamped "Rendering" section (RT
                                 // Enabled / Temporal Upscale) surfaces under
                                 // World — scene-global toggles, and World is
@@ -773,7 +773,7 @@ pub fn sync_inspector_data(
                                 manifold_renderer::node_graph::scene_vm::EnvironmentVm::Importer(e) => {
                                     EnvironmentRowVm::Importer {
                                         // BUG-260's dead-chip case (design
-                                        // doc §3b.9): reads through
+                                        // doc section 3b.9): reads through
                                         // `display_value` like every other
                                         // row so a bound "selector" still
                                         // shows correctly; still not a
@@ -1197,7 +1197,7 @@ pub fn sync_inspector_data(
 ///
 /// `resolve` maps a modulation row's `param_id` to its card slot index.
 /// `latched` is `ContentState::automation_latched_params` — checked against
-/// `(inst.id, lane.param_id)` for the overridden-gray state (P4 §7's dot).
+/// `(inst.id, lane.param_id)` for the overridden-gray state (P4 section 7's dot).
 /// Always `inst.id`, which (fixed 2026-07-11) is now also the card's own
 /// DISPLAYED `effect_id` for both kinds — `preset_to_config` used to blank
 /// the generator arm's `effect_id` to `EffectId::new("")`, so this function
@@ -1247,7 +1247,7 @@ pub(crate) fn build_card_modulation(
     }
     if let Some(ref lanes) = inst.automation_lanes {
         for lane in lanes {
-            // Enabled + non-empty only (§7: "an empty/disabled lane shows no
+            // Enabled + non-empty only (section 7: "an empty/disabled lane shows no
             // dot") — matches the sampler's own `has_lanes` gate in
             // `manifold_playback::automation`.
             if !lane.enabled || lane.points.is_empty() {
@@ -1271,7 +1271,7 @@ pub(crate) fn build_card_modulation(
 /// is filled separately by [`attach_audio_sends`] (it needs the project's
 /// `AudioSetup`, which this per-instance builder doesn't carry).
 ///
-/// §9: a trigger-gate row's config is a normal `ParameterAudioMod` like any
+/// section 9: a trigger-gate row's config is a normal `ParameterAudioMod` like any
 /// other, so this single walk covers it too — `trigger_mode_idx` is read off
 /// `am.trigger_mode` (defaulting to `Both`, mirroring the evaluator's
 /// `unwrap_or(TriggerFireMode::Both)` fallback) alongside the other fields.
@@ -1309,7 +1309,7 @@ pub(crate) fn build_audio_card_state(
         // PARAM_STEP_ACTIONS D3: an unset `trigger_mode`'s effective default
         // depends on the mod's action — a gate's (or a plain Continuous mod's)
         // arm-time default is `Both` (adding audio must not silently kill clip
-        // launches, §9 U3); a Step/Random mod's default is `Transient` (a step
+        // launches, section 9 U3); a Step/Random mod's default is `Transient` (a step
         // mod with no audio intent armed is meaningless — the user opened an
         // audio drawer). This must track the evaluator's own default exactly,
         // or the drawer shows a Mode selection that isn't what actually fires.
@@ -1582,7 +1582,7 @@ mod build_audio_card_state_trigger_mode_tests {
         move |id| params.iter().position(|&p| p == id)
     }
 
-    /// §9: a trigger-gate row's fire mode lives on the mod itself
+    /// section 9: a trigger-gate row's fire mode lives on the mod itself
     /// (`ParameterAudioMod.trigger_mode`), not a separate per-instance
     /// config — `build_audio_card_state` reads it into `trigger_mode_idx`
     /// in the SAME walk that populates `active`/`send_id`/`band_idx`/etc.
@@ -1633,8 +1633,8 @@ mod build_audio_card_state_trigger_mode_tests {
         assert!(!cfg.rows[0].active);
     }
 
-    /// No `trigger_mode` set on the mod (defensive — §9 U3 always arms with
-    /// `Some(Both)`, but a hand-built or pre-§9-migrated mod could carry
+    /// No `trigger_mode` set on the mod (defensive — section 9 U3 always arms with
+    /// `Some(Both)`, but a hand-built or pre-section 9-migrated mod could carry
     /// `None`) reads the SAME `Both` fallback the evaluator uses
     /// (`unwrap_or(TriggerFireMode::Both)`), so the badge/drawer never
     /// disagrees with what actually fires.

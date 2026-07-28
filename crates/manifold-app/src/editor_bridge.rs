@@ -670,7 +670,7 @@ impl Application {
     /// `true` when `(node_id, param_name)` on the watched graph at
     /// `scope_path` has an incoming wire — same override-then-canonical
     /// fallback as [`Self::watched_binding_for_node_param`]. The P1
-    /// enforcement backstop (Invariants §4): a wired param is never rerouted
+    /// enforcement backstop (Invariants section 4): a wired param is never rerouted
     /// through the card write-back path, matching D5/D6 (wire beats binding).
     pub(crate) fn watched_node_param_is_wired(&self, scope_path: &[u32], node_id: u32, param_name: &str) -> bool {
         let Some(target) = self.watched_graph_target.as_ref() else {
@@ -1545,7 +1545,7 @@ impl Application {
             // Frame the whole level on editor open / scope change (camera only).
             canvas.apply_pending_fit(vp);
             // D17 "wire→port magnetize": needs `vp` (port screen positions),
-            // which the main `canvas.tick(dt_ms)` call site (§1c above)
+            // which the main `canvas.tick(dt_ms)` call site (section 1c above)
             // doesn't have — ticked here instead, right before the draw
             // pass that reads it.
             canvas.tick_wire_magnet(vp);

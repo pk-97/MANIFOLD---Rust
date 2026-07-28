@@ -5,24 +5,24 @@
 //! node or preset by name: graph-node `type_id`s (`node.gain`) and
 //! [`crate::PresetTypeId`] values (`"Bloom"`, `"EdgeGlow"`). The two
 //! namespaces never collide (`node.`/`system.` prefix vs. bare PascalCase),
-//! so one table and one lookup function cover both — matching §3's "one
+//! so one table and one lookup function cover both — matching section 3's "one
 //! static table" shape rather than one per document kind.
 //!
-//! **Old ids are never reused** (§2 rule 5): once an id is retired here it is
+//! **Old ids are never reused** (section 2 rule 5): once an id is retired here it is
 //! retired permanently, so a stale entry can never resolve to the wrong
 //! current node.
 //!
 //! **What this table is NOT for:** the bundled preset JSON library, parity/
 //! gpu tests, `hand_descriptor!` entries, and `primitive!` registrations are
-//! rewritten directly in the repo as part of the rename commit (§3, fourth
+//! rewritten directly in the repo as part of the rename commit (section 3, fourth
 //! bullet) — they never carry an old id in the first place, so migration
 //! never runs on them. This table exists only for **content that already
 //! shipped**: saved project files (clips, effect/generator instances, their
 //! embedded [`crate::effect_graph_def::EffectGraphDef`] graphs) that may
 //! still carry an id from before a rename.
 //!
-//! Choke points (both wired in P1 — see `docs/NODE_VOCABULARY_AUDIT.md` §3,
-//! §9 P1):
+//! Choke points (both wired in P1 — see `docs/NODE_VOCABULARY_AUDIT.md` section 3,
+//! section 9 P1):
 //! - `EffectGraphDef` node `type_id`s — migrated in
 //!   `manifold_renderer::node_graph::graph_loader::instantiate_def`, before
 //!   the group flatten, recursing into group bodies. Every loader (generator
@@ -52,13 +52,13 @@ pub static TYPE_ID_MIGRATIONS: &[(&str, &str)] = &[
         "__vocab_migration_test_old__",
         "__vocab_migration_test_new__",
     ),
-    // --- VOCAB P2 1/8: Color & Tone / Composite (docs/NODE_VOCABULARY_AUDIT.md §4) ---
+    // --- VOCAB P2 1/8: Color & Tone / Composite (docs/NODE_VOCABULARY_AUDIT.md section 4) ---
     ("node.gain", "node.exposure"),
     ("node.color_ramp", "node.gradient_map"),
     ("node.channel_mix", "node.channel_mixer"),
     ("node.clamp_texture", "node.clamp"),
     ("node.hdr_retention_mix", "node.hdr_mix"),
-    // --- VOCAB P2 2/8: Blur / Distort / Stylize (docs/NODE_VOCABULARY_AUDIT.md §4) ---
+    // --- VOCAB P2 2/8: Blur / Distort / Stylize (docs/NODE_VOCABULARY_AUDIT.md section 4) ---
     ("node.blur_3d_separable", "node.blur_3d"),
     ("node.convolution_2d_9tap", "node.custom_convolution"),
     ("node.gaussian_blur_variable_width", "node.variable_blur"),
@@ -68,14 +68,14 @@ pub static TYPE_ID_MIGRATIONS: &[(&str, &str)] = &[
     ("node.radial_fold_uv", "node.kaleidoscope"),
     ("node.uv_strip_clamp", "node.edge_stretch"),
     ("node.affine_transform", "node.transform"),
-    // --- VOCAB P2 3/8: Generate / Mask / Noise (docs/NODE_VOCABULARY_AUDIT.md §4) ---
+    // --- VOCAB P2 3/8: Generate / Mask / Noise (docs/NODE_VOCABULARY_AUDIT.md section 4) ---
     ("node.gradient_ramp", "node.gradient"),
     ("node.render_filled_rects", "node.draw_rectangles"),
     ("node.render_lines", "node.draw_lines"),
     ("node.render_value_overlay", "node.value_overlay"),
     ("node.box_mask", "node.rectangle_mask"),
     ("node.ellipse_mask", "node.circle_mask"),
-    // --- VOCAB P2 4/8: Math & Convert (docs/NODE_VOCABULARY_AUDIT.md §4) ---
+    // --- VOCAB P2 4/8: Math & Convert (docs/NODE_VOCABULARY_AUDIT.md section 4) ---
     // Note: node.array_math and node.array_feedback keep their ids (label-only
     // changes: Array Math / Array Feedback) - no migration entry needed.
     ("node.abs_texture", "node.absolute_value"),
@@ -97,7 +97,7 @@ pub static TYPE_ID_MIGRATIONS: &[(&str, &str)] = &[
     ("node.resolve_accumulator", "node.resolve_scatter"),
     ("node.resolve_3d_accumulator", "node.resolve_scatter_3d"),
     ("node.texture_dimensions", "node.texture_size"),
-    // --- VOCAB P2 5/8: Fields & Coordinates (docs/NODE_VOCABULARY_AUDIT.md §4) ---
+    // --- VOCAB P2 5/8: Fields & Coordinates (docs/NODE_VOCABULARY_AUDIT.md section 4) ---
     ("node.gradient_central_diff", "node.edge_slope"),
     ("node.gradient_central_diff_3d", "node.edge_slope_3d"),
     ("node.lic_integrate", "node.flow_lines"),
@@ -105,7 +105,7 @@ pub static TYPE_ID_MIGRATIONS: &[(&str, &str)] = &[
     ("node.rotate_vec2_by_angle", "node.rotate_vector"),
     ("node.sin_term", "node.sine_wave"),
     ("node.sample_volume_2d", "node.slice_volume"),
-    // --- VOCAB P2 6/8: 3D Geometry / Materials (docs/NODE_VOCABULARY_AUDIT.md §4) ---
+    // --- VOCAB P2 6/8: 3D Geometry / Materials (docs/NODE_VOCABULARY_AUDIT.md section 4) ---
     ("node.camera_orbit", "node.orbit_camera"),
     ("node.consecutive_edges", "node.edge_pairs"),
     ("node.displace_mesh", "node.push_mesh"),
@@ -129,7 +129,7 @@ pub static TYPE_ID_MIGRATIONS: &[(&str, &str)] = &[
     ("node.fresnel_rim", "node.rim_light"),
     ("node.lambert_directional", "node.basic_light"),
     ("node.heightmap_to_normal", "node.surface_bumps"),
-    // --- VOCAB P2 7/8: Particles (2D + 3D) (docs/NODE_VOCABULARY_AUDIT.md §4) ---
+    // --- VOCAB P2 7/8: Particles (2D + 3D) (docs/NODE_VOCABULARY_AUDIT.md section 4) ---
     ("node.apply_radial_burst_to_particles", "node.add_burst"),
     ("node.apply_radial_burst_3d_to_particles", "node.add_burst_3d"),
     ("node.array_diffuse_particles", "node.spread_out"),
@@ -155,7 +155,7 @@ pub static TYPE_ID_MIGRATIONS: &[(&str, &str)] = &[
     ("node.lerp_instance_fields", "node.blend_copies"),
     ("node.sample_texture_at_particles", "node.sample_image_at_particles"),
     ("node.sample_texture_3d_at_particles", "node.sample_volume_at_particles"),
-    // --- VOCAB P2 8/8: Detection / Routing (docs/NODE_VOCABULARY_AUDIT.md §4) ---
+    // --- VOCAB P2 8/8: Detection / Routing (docs/NODE_VOCABULARY_AUDIT.md section 4) ---
     ("node.blob_detect_ffi", "node.blob_tracker"),
     ("node.blob_overlay_render", "node.blob_overlay"),
     ("node.depth_estimate_midas", "node.depth_map"),
@@ -164,7 +164,7 @@ pub static TYPE_ID_MIGRATIONS: &[(&str, &str)] = &[
     ("node.mux_array", "node.switch_array"),
     ("node.mux_scalar", "node.switch_value"),
     ("node.mux_texture", "node.switch_texture"),
-    // --- VOCAB P3: Preset renames (docs/NODE_VOCABULARY_AUDIT.md §6) ---
+    // --- VOCAB P3: Preset renames (docs/NODE_VOCABULARY_AUDIT.md section 6) ---
     ("EdgeGlow", "EdgeDetect"),
     ("HdrBoost", "HighlightBoost"),
     ("InvertColors", "Invert"),
@@ -173,13 +173,13 @@ pub static TYPE_ID_MIGRATIONS: &[(&str, &str)] = &[
     ("ComputeStrangeAttractor", "StrangeAttractor"),
     ("FluidSimulation", "FluidSim2D"),
     ("FluidSimulation3D", "FluidSim3D"),
-    // --- VOCAB P4: Legacy trio folds (docs/NODE_VOCABULARY_AUDIT.md §7) ---
+    // --- VOCAB P4: Legacy trio folds (docs/NODE_VOCABULARY_AUDIT.md section 7) ---
     // node.rotate_vec2_90 -> node.rotate_vector: port-identical (the legacy
     // id constructs the exact same RotateVec2ByAngle struct); the fold only
     // needs the angle seeded (see PARAM_SEED_MIGRATIONS below).
     ("node.rotate_vec2_90", "node.rotate_vector"),
     // node.fluid_project_scatter_2d -> node.draw_particles_camera:
-    // port-identical (verified §7.2), plain rename, no param seed needed.
+    // port-identical (verified section 7.2), plain rename, no param seed needed.
     ("node.fluid_project_scatter_2d", "node.draw_particles_camera"),
     // --- CINEMATIC_POST D9 (docs/CINEMATIC_POST_DESIGN.md P5): GTAO replaces
     // SSAO --- node.ssao_gtao is a deleted-not-paralleled replacement, not a
@@ -197,7 +197,7 @@ pub static TYPE_ID_MIGRATIONS: &[(&str, &str)] = &[
 /// `node.rotate_vector`).
 pub type ParamSeedMigration = (&'static str, &'static str, &'static [(&'static str, SerializedParamValue)]);
 
-/// Param-seeding table for §7 legacy folds: a retired node (`old_id`) with no
+/// Param-seeding table for section 7 legacy folds: a retired node (`old_id`) with no
 /// direct id-for-id equivalent folds into a parameterized successor
 /// (`new_id`), seeding the params a plain rename can't express.
 pub static PARAM_SEED_MIGRATIONS: &[ParamSeedMigration] = &[(
@@ -208,7 +208,7 @@ pub static PARAM_SEED_MIGRATIONS: &[ParamSeedMigration] = &[(
     // matching the retired node's fixed +90° CCW rotation and
     // `node.rotate_vector`'s own `angle` default, so this seed is
     // technically redundant with the successor's default but pins the
-    // value explicitly per docs/NODE_VOCABULARY_AUDIT.md §7.1 rather than
+    // value explicitly per docs/NODE_VOCABULARY_AUDIT.md section 7.1 rather than
     // relying on the coincidence.
     &[("angle", SerializedParamValue::Float { value: std::f32::consts::FRAC_PI_2 })],
 )];
@@ -231,7 +231,7 @@ mod tests {
     #[test]
     fn unknown_id_is_identity() {
         // `node.mix` and `Bloom` are never renamed by the vocabulary audit
-        // (docs/NODE_VOCABULARY_AUDIT.md §4/§6) — safe stand-ins for "any
+        // (docs/NODE_VOCABULARY_AUDIT.md section 4/section 6) — safe stand-ins for "any
         // current id with no migration entry".
         assert_eq!(migrate_type_id("node.mix"), "node.mix");
         assert_eq!(migrate_type_id("Bloom"), "Bloom");

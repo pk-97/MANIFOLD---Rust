@@ -1,4 +1,4 @@
-// node.explosion_force — fusable TEXTURE body (freeze §12, texture domain),
+// node.explosion_force — fusable TEXTURE body (freeze section 12, texture domain),
 // SOURCE. Per-pixel vec2 force field for a radial+tangent impulse burst
 // around (point_x, point_y) within `radius`, with a noise-perturbed radial
 // direction. Matches radial_burst_force_field.wgsl bit-for-bit. `simplex3d`

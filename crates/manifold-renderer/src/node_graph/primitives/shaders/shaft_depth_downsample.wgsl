@@ -4,7 +4,7 @@
 // upsample-composite pass (depth-similarity weights). Point sample, not
 // min/max — "no min/max depth puzzle in v1" (D3). Internal to render_scene,
 // not a graph atom — same exemption class as `ensure_shadow_pass`'s
-// hand-written shadow_depth.wgsl pipeline (§2.5 audit: zero new graph
+// hand-written shadow_depth.wgsl pipeline (section 2.5 audit: zero new graph
 // primitives).
 
 @group(0) @binding(0) var full_depth: texture_2d<f32>;

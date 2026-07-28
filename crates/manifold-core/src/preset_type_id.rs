@@ -234,7 +234,7 @@ impl PresetTypeId {
 /// effect id space has no entries, so applying it globally is a no-op for them.
 ///
 /// One-off historical rename. General renames (`docs/NODE_VOCABULARY_AUDIT.md`
-/// §6) go in [`crate::type_id_migration::TYPE_ID_MIGRATIONS`] instead — every
+/// section 6) go in [`crate::type_id_migration::TYPE_ID_MIGRATIONS`] instead — every
 /// call site here chains through [`crate::type_id_migration::migrate_type_id`]
 /// after this, so a `PresetTypeId` string sees both maps regardless of which
 /// one an old id lands in.
@@ -391,7 +391,7 @@ mod tests {
         assert_eq!(back, PresetTypeId::BASIC_SHAPES);
     }
 
-    /// docs/NODE_VOCABULARY_AUDIT.md §3 test (b), supplementary: the general
+    /// docs/NODE_VOCABULARY_AUDIT.md section 3 test (b), supplementary: the general
     /// `type_id_migration` table (not just the one-off `remap_legacy_string`
     /// rename) is chained in at all three deserialize entry points — the
     /// plain `Deserialize` impl (what `Clip::generator_type`'s legacy field

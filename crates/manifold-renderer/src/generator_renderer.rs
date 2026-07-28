@@ -42,11 +42,11 @@ struct LayerGeneratorState {
     generator: Box<PresetRuntime>,
     generator_type: PresetTypeId,
     /// The layer's clip-launch edge counter (existing behavior, unconditional
-    /// pre-§8) — bumped in `acquire_clip`, gated by the generator's own
-    /// `audio_trigger.mode` wanting `ClipEdge` (§8 D1; no config = always on,
+    /// pre-section 8) — bumped in `acquire_clip`, gated by the generator's own
+    /// `audio_trigger.mode` wanting `ClipEdge` (section 8 D1; no config = always on,
     /// preserving old-project behavior byte-for-byte).
     clip_count: u32,
-    /// §8 D1: bumped once per audio-trigger fire this layer's generator (or
+    /// section 8 D1: bumped once per audio-trigger fire this layer's generator (or
     /// any effect in its chain — D5) is configured to react to, mode-gated at
     /// increment time by the firing instance's own `audio_trigger.mode`
     /// wanting `Transient`. See [`Self::effective_trigger_count`].
@@ -92,7 +92,7 @@ struct LayerGeneratorState {
 }
 
 impl LayerGeneratorState {
-    /// §8 D1: the value fed into `PresetContext.trigger_count` / consuming
+    /// section 8 D1: the value fed into `PresetContext.trigger_count` / consuming
     /// graphs' `generator_input.trigger_count` — the layer's clip edge plus
     /// its audio-trigger fires. Wrapping add: a `u32` overflow only after
     /// billions of triggers on one layer in one session, and wrapping (not
@@ -109,18 +109,18 @@ impl LayerGeneratorState {
 /// needs internal downscaling for performance (e.g. raymarching, fluid sim),
 /// it does so inside its own `render()` by allocating and managing its own
 /// reduced-resolution intermediate textures — the runtime doesn't model it.
-/// Thumbnail-resolution dimensions for the §24 5c cold-start render. Rendered at
+/// Thumbnail-resolution dimensions for the section 24 5c cold-start render. Rendered at
 /// 2× the atlas cell (256×144) so the box-downsample into the cell supersamples
 /// — crisper text and edges than a 1:1 render. Still tiny, so the parked-clip
 /// thumbnail render stays cheap (~1.2 MB transient target).
 const THUMB_W: u32 = 512;
 const THUMB_H: u32 = 288;
-/// Warm-up frames for a freshly-created cold-start instance (§24 5c-2): stateful
+/// Warm-up frames for a freshly-created cold-start instance (section 24 5c-2): stateful
 /// generators look empty at t=0, so we advance the runtime this many steps before
 /// the parked still is read. ~0.75 s at 60 fps; cheap on the tiny target.
 const WARMUP_FRAMES: usize = 45;
 
-/// §24 5c cold-start: an ISOLATED generator instance + small render target for one
+/// section 24 5c cold-start: an ISOLATED generator instance + small render target for one
 /// PARKED clip's thumbnail. Separate from the live per-layer `layer_generators` so
 /// rendering a parked clip's thumbnail can never disturb an active clip's state on
 /// the same layer.
@@ -141,7 +141,7 @@ pub struct GeneratorRenderer {
     registry: GeneratorRegistry,
     active_clips: AHashMap<ClipId, ActiveClip>,
     layer_generators: AHashMap<LayerId, LayerGeneratorState>,
-    /// §24 5c cold-start thumbnail instances, keyed by clip id (parked clips).
+    /// section 24 5c cold-start thumbnail instances, keyed by clip id (parked clips).
     thumb_gens: AHashMap<ClipId, ThumbGen>,
     available_rts: Vec<RenderTarget>,
     /// Pre-allocated scratch buffer for render iteration (avoids per-frame alloc).
@@ -291,7 +291,7 @@ impl GeneratorRenderer {
         }
     }
 
-    /// §8 D1: bump `layer_id`'s audio-trigger counter by one fire. Called by
+    /// section 8 D1: bump `layer_id`'s audio-trigger counter by one fire. Called by
     /// the content pipeline for every [`manifold_playback::modulation::TriggerPulse`]
     /// with `layer_id: Some(_)` this tick (mode-gating already happened in the
     /// playback-side evaluator — a pulse only exists here because its
@@ -304,7 +304,7 @@ impl GeneratorRenderer {
         }
     }
 
-    /// §8 D1: `layer_id`'s effective `trigger_count` (clip edge + audio
+    /// section 8 D1: `layer_id`'s effective `trigger_count` (clip edge + audio
     /// fires) for the content pipeline to feed into that layer's effect
     /// chain's `PresetContext` (D5 — replaces the old pinned 0.0). `0` if the
     /// layer has no live generator.
@@ -442,7 +442,7 @@ impl GeneratorRenderer {
             // emitted — the user sees the same pattern back-to-back
             // even though the math should never produce duplicates.
             // The counter is conceptually "how many times has this
-            // layer been triggered" (clip launches + audio fires, §8 D1)
+            // layer been triggered" (clip launches + audio fires, section 8 D1)
             // and is generator-agnostic, so carrying both forward is
             // semantically correct.
             let (preserved_clip_count, preserved_audio_count) = self
@@ -467,9 +467,9 @@ impl GeneratorRenderer {
             }
         }
 
-        // §8 D1: the clip-launch edge is mode-gated at increment time by the
+        // section 8 D1: the clip-launch edge is mode-gated at increment time by the
         // generator's own `audio_trigger.mode` (no config = always on,
-        // preserving pre-§8 behavior byte-for-byte for every project that
+        // preserving pre-section 8 behavior byte-for-byte for every project that
         // hasn't touched this feature).
         if clip_edge_enabled && let Some(ls) = self.layer_generators.get_mut(&layer_id) {
             ls.clip_count = ls.clip_count.wrapping_add(1);
@@ -1044,7 +1044,7 @@ impl GeneratorRenderer {
         self.active_clips.len()
     }
 
-    /// §24 5c cold-start: render a PARKED generator clip's thumbnail into an
+    /// section 24 5c cold-start: render a PARKED generator clip's thumbnail into an
     /// ISOLATED thumbnail-resolution target and return it. Shows the generator's
     /// default look at `time`/`beat` with the clip's authored (base) params —
     /// NOT modulation, override-graph edits, or warm-up state, none of which are
@@ -1196,7 +1196,7 @@ impl ClipRenderer for GeneratorRenderer {
             .map(|l| l.generator_graph_structure_version())
             .unwrap_or(0);
         let param_version = layer.map(|l| l.generator_graph_version()).unwrap_or(0);
-        // §9 U3 (formerly §8 D1): the clip edge is mode-gated by the
+        // section 9 U3 (formerly section 8 D1): the clip edge is mode-gated by the
         // generator's OWN fire-mode audio mod, if any (no such mod = always
         // on — old-project behavior, unchanged). `Transient`-only mode
         // silently drops the clip-launch contribution for this layer's
@@ -1534,7 +1534,7 @@ mod tests {
         );
     }
 
-    /// §8 D1 — the generator half of the P2 gate (the effect-chain half is
+    /// section 8 D1 — the generator half of the P2 gate (the effect-chain half is
     /// `preset_runtime::generator_input_tests::run_feeds_nonzero_trigger_count_into_generator_input_effect_slot`).
     /// `effective_trigger_count` sums `clip_count` (clip-launch edge) +
     /// `audio_count` (audio-trigger fires), and the clip edge is mode-gated

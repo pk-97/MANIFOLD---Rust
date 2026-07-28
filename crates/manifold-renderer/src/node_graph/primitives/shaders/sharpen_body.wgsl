@@ -1,4 +1,4 @@
-// node.sharpen — fusable body (freeze §12), GATHER. 4-neighbour Laplacian
+// node.sharpen — fusable body (freeze section 12), GATHER. 4-neighbour Laplacian
 // unsharp mask: `in` is gathered at the four axis neighbours (one texel apart,
 // texel = 1/dims) and the centre is sharpened by `amount`. amount<=0 returns the
 // centre unchanged (the legacy passthrough fast-path). The hand shader derives

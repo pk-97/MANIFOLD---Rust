@@ -1,4 +1,4 @@
-// node.bend_mesh — fusable BUFFER body (freeze §12, buffer domain),
+// node.bend_mesh — fusable BUFFER body (freeze section 12, buffer domain),
 // COINCIDENT `in` + COINCIDENT optional `weights`. Classic per-vertex bend:
 // rotates BOTH position and normal by the SAME local rotation (D4 exact).
 // Matches bend_mesh.wgsl.

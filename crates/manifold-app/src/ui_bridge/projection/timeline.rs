@@ -26,7 +26,7 @@ pub fn sync_project_data(
         // `_for_layout` (not the plain `layers_to_ui`) resolves
         // `automation_lane_count` from `selection.automation_mode_visible` — the
         // one flag that grows a track when lanes are visible
-        // (`docs/AUTOMATION_LANES_DESIGN.md` §7).
+        // (`docs/AUTOMATION_LANES_DESIGN.md` section 7).
         ui.viewport.rebuild_mapper_layout(&crate::ui_translate::layers_to_ui_for_layout(
             &project.timeline.layers,
             selection.automation_mode_visible,
@@ -191,7 +191,7 @@ pub fn sync_project_data(
         ui.viewport.set_clips(viewport_clips);
 
         // Automation lane data → viewport (P4, `docs/AUTOMATION_LANES_DESIGN.md`
-        // §7). Gated on the same flag `layers_to_ui_for_layout` used above, so
+        // section 7). Gated on the same flag `layers_to_ui_for_layout` used above, so
         // the Y-layout and the lane list can never disagree about whether
         // lanes are showing this frame.
         let mut viewport_lanes = Vec::new();
@@ -319,7 +319,7 @@ fn clip_base_color(
 /// each frame the same way clip move-drag does, and needs the SAME per-frame
 /// resync path so a dragged dot's on-screen position updates live instead of
 /// waiting for the next structural sync — `docs/AUTOMATION_LANES_DESIGN.md`
-/// §7). Cheap: gated the same way the clip refresh already is (mouse-pressed
+/// section 7). Cheap: gated the same way the clip refresh already is (mouse-pressed
 /// or structural change), and lane counts are tens, not hundreds.
 pub fn sync_clip_positions(
     ui: &mut UIRoot,

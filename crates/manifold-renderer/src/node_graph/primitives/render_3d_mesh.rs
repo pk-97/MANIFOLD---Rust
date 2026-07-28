@@ -272,7 +272,7 @@ fn build_uniforms(
                 // IMPORT_FIDELITY_DESIGN.md D1: render_mesh doesn't implement
                 // the sorted blend pass — a Blend material here renders as
                 // Opaque coverage until the render_mesh IBL-upgrade trigger
-                // (§7 Deferred #3) migrates this renderer too.
+                // (section 7 Deferred #3) migrates this renderer too.
                 crate::node_graph::material::AlphaMode::Opaque
                 | crate::node_graph::material::AlphaMode::Blend => 0.0,
             },

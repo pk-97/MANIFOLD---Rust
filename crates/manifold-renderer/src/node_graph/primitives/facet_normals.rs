@@ -155,7 +155,7 @@ mod tests {
         assert_eq!(FacetNormals::OUTPUTS.len(), 1);
         assert_eq!(FacetNormals::OUTPUTS[0].ty, PortType::Array(mesh_layout));
 
-        assert!(FacetNormals::PARAMS.is_empty(), "facet_normals has no params per §3 table");
+        assert!(FacetNormals::PARAMS.is_empty(), "facet_normals has no params per section 3 table");
     }
 
     #[test]

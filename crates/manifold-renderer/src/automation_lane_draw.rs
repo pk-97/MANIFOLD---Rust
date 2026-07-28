@@ -1,4 +1,4 @@
-//! Automation lane strip emission (P4, `docs/AUTOMATION_LANES_DESIGN.md` §7).
+//! Automation lane strip emission (P4, `docs/AUTOMATION_LANES_DESIGN.md` section 7).
 //! Turns the viewport's resolved `AutomationLaneScreen` geometry into
 //! `UIRenderer` draws — the same "geometry in manifold-ui, GPU draw here"
 //! split as `clip_draw.rs`. A strip is: a subtle background band, the sampled
@@ -59,7 +59,7 @@ pub fn emit_automation_lanes(ui: &mut UIRenderer, lanes: &[AutomationLaneScreen]
 
         // Label, left-anchored inside the strip — the read-only stand-in for
         // Live's param-chooser dropdown (breakpoint editing / the chooser
-        // itself are a later phase; see docs/AUTOMATION_LANES_DESIGN.md §7).
+        // itself are a later phase; see docs/AUTOMATION_LANES_DESIGN.md section 7).
         ui.draw_text(
             l.strip_rect.x + 4.0,
             l.strip_rect.y + 2.0,

@@ -7,7 +7,7 @@
 //! dump. There is no second source: every row fact enters through the
 //! projection's single manifest walk.
 //!
-//! # Adding a row affordance (the §5b recipe — five steps, never five files)
+//! # Adding a row affordance (the section 5b recipe — five steps, never five files)
 //!
 //! 1. Add the `RowRole` variant (P2; this module).
 //! 2. Add the fact as ONE field on [`ParamRow`] (or its sub-structs) and its
@@ -18,7 +18,7 @@
 //!
 //! Anything that can't be expressed this way is an escalation, by definition
 //! of the layer. Building row/slider/drawer machinery anywhere else is
-//! forbidden (WIDGET_TREE_DESIGN §5b, Peter's standing rule, INV-8).
+//! forbidden (WIDGET_TREE_DESIGN section 5b, Peter's standing rule, INV-8).
 
 use crate::panels::param_card::{ParamCardKind, ParamCardStringInfo, RelightCardConfig, RowMod};
 use crate::panels::param_slider_shared::{AbletonMappingDisplay, AudioCardState};

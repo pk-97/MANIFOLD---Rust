@@ -17,7 +17,7 @@
 //! (unbound) node-face numeric row already dispatches per drag tick
 //! (`manifold-app/src/app_render.rs`'s `GraphEditCommand::SetGraphNodeParam`
 //! handling) — never a new mutation path. No direct project mutation and no
-//! shared-lock wrapper types appear anywhere in this file (§4 negative gate).
+//! shared-lock wrapper types appear anywhere in this file (section 4 negative gate).
 
 use crate::{ProjectAction, RootAction};
 use crate::chrome::{ChromeHost, Pad, Sizing, View};
@@ -1268,7 +1268,7 @@ impl ScenePanel {
     /// single-row action footer (D6: + Object · + Light · Import Model…).
     /// Every row (selectable or not) renders the same `[type icon | name |
     /// trailing affordance]` template — flat, no nesting (D5; inherited from
-    /// REALTIME_3D "Decided — do not reopen" §1).
+    /// REALTIME_3D "Decided — do not reopen" section 1).
     fn build_outliner(
         &mut self,
         tree: &mut UITree,
@@ -1490,7 +1490,7 @@ impl ScenePanel {
     /// the filtered slice (real param ids, real modulation state, no
     /// synthesis), and renders every retained row through the shared
     /// `build_param_row`/`RowIndex`/`row_action` core `ParamCardPanel` uses
-    /// (§5.6: one row component, no per-panel forks). `configure_from_filtered`
+    /// (section 5.6: one row component, no per-panel forks). `configure_from_filtered`
     /// builds the id→row-index join map the per-frame value sync
     /// (`sync_properties_values`) resolves against — no retained-index list
     /// (BUG-313). Renders nothing when there's no config or no section
@@ -2182,7 +2182,7 @@ impl ScenePanel {
                             *index as u32,
                         )));
                     } else if let Some((row, role)) = self.properties_card.row_host.row_index.get(tree.widget_of(*node_id)) {
-                        // P2 slice 2b (`docs/WIDGET_TREE_DESIGN.md` §4/§5b):
+                        // P2 slice 2b (`docs/WIDGET_TREE_DESIGN.md` section 4/section 5b):
                         // the ONE unified properties card's D/E/A buttons +
                         // config drawers, routed through the same
                         // `RowIndex`/`row_action` core `ParamCardPanel` uses
@@ -2341,7 +2341,7 @@ impl ScenePanel {
 
     /// Route a resolved `(row, role)` hit on the unified properties card to
     /// the `PanelAction` it emits — the scene-panel twin of
-    /// `ParamCardPanel::row_action` (`docs/WIDGET_TREE_DESIGN.md` §4/§5b):
+    /// `ParamCardPanel::row_action` (`docs/WIDGET_TREE_DESIGN.md` section 4/section 5b):
     /// bundle roles (`DriverConfig`/`AbletonConfig`/`AudioConfig`) delegate
     /// to the bundle's own `resolve`, this function only knows which row it
     /// belongs to. `target` is the caller's `GraphParamTarget::GeneratorOf(
@@ -2514,7 +2514,7 @@ fn section_label_style() -> UIStyle {
 
 /// A drag-armable value label — visually distinct (subtle hover fill) from a
 /// bare `label_style()` text row so it reads as draggable, not static prose
-/// (the affordance-legibility rule: DESIGN_DOC_STANDARD §5). UX-P2 (D3c):
+/// (the affordance-legibility rule: DESIGN_DOC_STANDARD section 5). UX-P2 (D3c):
 /// `text_color` is the SAME `SLIDER_TEXT_C32` token the `BitmapSlider` value
 /// box uses — `font_size`/`text_align` already matched (both `FONT_LABEL`/
 /// `Center`) before this phase; token parity across the panel's two value

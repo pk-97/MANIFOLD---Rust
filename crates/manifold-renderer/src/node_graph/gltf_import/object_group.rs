@@ -80,7 +80,7 @@ pub(super) struct ImportCtx<'a> {
 /// and its top-level wiring into `render_scene`. `local_k` numbers this
 /// object's INNER handles (`mesh_{local_k}`, `mat_{local_k}`, …) —
 /// purely cosmetic, namespaced away by the group-name-prefixing flattener
-/// (`docs/GROUPING_GRAPHS.md` §2), so it always starts at 0 for a fresh
+/// (`docs/GROUPING_GRAPHS.md` section 2), so it always starts at 0 for a fresh
 /// call — a merge's incoming materials get their own local numbering,
 /// never the target scene's. `port_index` is the render_scene OBJECT SLOT
 /// this group wires into (`mesh_{port_index}` etc. on `render_scene`
@@ -181,7 +181,7 @@ pub(super) fn build_object_group(
 
         let mesh_id = fresh_id();
         // GLTF_ANIMATION_DESIGN.md A2 (D2): a skinned object's positioning
-        // comes ENTIRELY from its joint hierarchy (glTF 2.0 §3.7.3.3) — the
+        // comes ENTIRELY from its joint hierarchy (glTF 2.0 section 3.7.3.3) — the
         // rigid-object `node.gltf_mesh_source` Material selector, which
         // world-transforms vertices by the mesh-owning node's OWN
         // transform, would double-transform a skinned mesh. BUG-207: `m.skin`
@@ -264,7 +264,7 @@ pub(super) fn build_object_group(
             // morph block below decides whether this object is ALSO
             // morphed — a skin+morph combination chains
             // node.morph_targets_blend between this node's `vertices` and
-            // skin_mesh's `in` (glTF applies morph then skin, §3.7.2); a
+            // skin_mesh's `in` (glTF applies morph then skin, section 3.7.2); a
             // skin-only object wires directly, same as before.
             group_wires.push(wire(mesh_id, "joints", skinmesh_id, "joints"));
             group_wires.push(wire(mesh_id, "weights", skinmesh_id, "weights"));
@@ -358,7 +358,7 @@ pub(super) fn build_object_group(
         } else {
             let mut mesh_node =
                 plain_node(mesh_id, &mesh_node_id, "node.gltf_mesh_source", &mesh_node_id);
-            // GLB_XFAIL_BURNDOWN_DESIGN.md D4/§3: `m.material_index ==
+            // GLB_XFAIL_BURNDOWN_DESIGN.md D4/section 3: `m.material_index ==
             // DEFAULT_MATERIAL_SENTINEL` (u32::MAX) marks the synthetic
             // default-material entry — never re-queried as a document
             // material index. Translate it to `gltf_mesh_source`'s own
@@ -404,7 +404,7 @@ pub(super) fn build_object_group(
         // ordinary node transforms DO position a morphed mesh, so there is
         // no separate "morph mesh source" analogous to
         // `node.gltf_skinned_mesh_source` for the rigid path. When the
-        // object is ALSO skinned, glTF applies morph THEN skin (§3.7.2):
+        // object is ALSO skinned, glTF applies morph THEN skin (section 3.7.2):
         // the blend is chained between the skinned source's vertices and
         // node.skin_mesh's `in` further below, and
         // node.gltf_morph_deltas_source's `skinned` param routes the
@@ -500,7 +500,7 @@ pub(super) fn build_object_group(
             group_wires.push(wire(deltas_id, "deltas", blend_id, "deltas"));
             group_wires.push(wire(weights_id, "weights", blend_id, "weights"));
             if let Some(skinmesh_id) = skinned_vertices_source {
-                // BUG-208: morph applied BEFORE skin (glTF 2.0 §3.7.2) —
+                // BUG-208: morph applied BEFORE skin (glTF 2.0 section 3.7.2) —
                 // the blend's output feeds skin_mesh's `in` instead of the
                 // group output directly (the group-output match further
                 // below already routes through skinmesh_id whenever
@@ -511,7 +511,7 @@ pub(super) fn build_object_group(
                     "{group_name}: morphed ({} targets) on a skinned object — \
                      node.gltf_skinned_mesh_source + node.gltf_morph_deltas_source + \
                      node.gltf_morph_weights + node.morph_targets_blend + node.skin_mesh \
-                     (morph applied before skin, glTF 2.0 §3.7.2 — BUG-208)",
+                     (morph applied before skin, glTF 2.0 section 3.7.2 — BUG-208)",
                     morph.target_count
                 ));
             } else {

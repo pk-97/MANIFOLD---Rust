@@ -1,7 +1,7 @@
 //! Engine-level integration tests for Session Mode P2
 //! (`docs/SESSION_MODE_DESIGN.md`): proves the wiring through the real
-//! `PlaybackEngine` — arrangement suppression (§6), the launch-from-stopped
-//! path (§4), and scene launch/stop (§5) — on top of the pure resolution-math
+//! `PlaybackEngine` — arrangement suppression (section 6), the launch-from-stopped
+//! path (section 4), and scene launch/stop (section 5) — on top of the pure resolution-math
 //! unit tests in `src/session_state.rs`. Headless: `StubRenderer`, no GPU.
 
 use manifold_core::clip::TimelineClip;
@@ -64,7 +64,7 @@ fn launch_slot_from_stopped_starts_transport_and_plays_immediately() {
 
     engine.session_launch_slot(layer_id.clone(), scene_id.clone());
 
-    // §4: a launch from stopped starts the transport and plays immediately —
+    // section 4: a launch from stopped starts the transport and plays immediately —
     // not a dead click waiting for a quantize boundary that will never arrive
     // while stopped.
     assert_eq!(engine.current_state(), PlaybackState::Playing);
@@ -95,7 +95,7 @@ fn session_override_suppresses_timeline_clip_on_same_layer() {
     assert_eq!(engine.active_clip_count(), 1);
 
     // Launch the session slot on the same layer — arrangement suppression
-    // (§6) means the timeline clip stops and the session clip takes over,
+    // (section 6) means the timeline clip stops and the session clip takes over,
     // even though the timeline clip is still "active" at this beat.
     engine.session_launch_slot(layer_id.clone(), scene_id.clone());
     engine.sync_clips_to_time();
@@ -126,7 +126,7 @@ fn transport_stop_clears_session_playback_but_not_override() {
     assert!(!engine.session_runtime().is_playing_layer(&layer_id));
     assert!(
         engine.session_runtime().is_overridden(&layer_id),
-        "session_override persists through transport stop (§4/§12)"
+        "session_override persists through transport stop (section 4/section 12)"
     );
 }
 

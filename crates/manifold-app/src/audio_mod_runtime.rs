@@ -13,7 +13,7 @@
 //! common rate) and pushes the mix into the send's single analyzer. So a send
 //! can be fed by the capture device, by audio layers, or by **both at once** —
 //! one analysis drives features, the spectrogram scope, and the per-band meters
-//! ("what you hear is what modulates"). See `docs/AUDIO_LAYER_DESIGN.md` §3R.
+//! ("what you hear is what modulates"). See `docs/AUDIO_LAYER_DESIGN.md` section 3R.
 //!
 //! Lifecycle is **gated and self-healing**: the capture worker runs only while
 //! the project has at least one capture-fed send and either an active audio
@@ -132,7 +132,7 @@ pub struct AudioModRuntime {
     /// switches each analyzer's ridge tracker on/off per tick (byte-identical
     /// analysis when off, so unbound projects pay nothing).
     pitch_sends: ahash::AHashSet<AudioSendId>,
-    /// D4 activation set (AUDIO_SENDS_UX_DESIGN §3.2): sends with at least one
+    /// D4 activation set (AUDIO_SENDS_UX_DESIGN section 3.2): sends with at least one
     /// enabled audio mod or enabled trigger route — `Project::analysis_consumed_sends`.
     /// Recomputed only on a data-version change, mirroring `pitch_sends`. The
     /// per-send loop skips any send outside this set that also isn't the
@@ -152,7 +152,7 @@ pub struct AudioModRuntime {
     /// Resampled layer mono (layer rate → analyzer rate) for one send.
     resampled: Vec<f32>,
     /// Cached at construction from `MANIFOLD_AUDIO_TRACE` — the P1 gate
-    /// instrument (`docs/AUDIO_SENDS_UX_DESIGN.md` §4 Phase 1). Checked once,
+    /// instrument (`docs/AUDIO_SENDS_UX_DESIGN.md` section 4 Phase 1). Checked once,
     /// not per tick, so the trace stays zero-cost when unset.
     trace: bool,
 }
@@ -235,7 +235,7 @@ impl AudioModRuntime {
                 self.capture = None;
             }
             self.reconcile(engine.project());
-            // D4 activation set (AUDIO_SENDS_UX_DESIGN §3.2): recomputed only here,
+            // D4 activation set (AUDIO_SENDS_UX_DESIGN section 3.2): recomputed only here,
             // never per tick.
             self.consumed =
                 engine.project().map(|p| p.analysis_consumed_sends()).unwrap_or_default();
@@ -300,7 +300,7 @@ impl AudioModRuntime {
                 if is_tapped {
                     tapped_index = Some(i);
                 }
-                // D4 gate (AUDIO_SENDS_UX_DESIGN §3.2): a send outside the
+                // D4 gate (AUDIO_SENDS_UX_DESIGN section 3.2): a send outside the
                 // consumed set and not the scope-tapped send costs nothing —
                 // no mono push, no analyzer entry. One hash lookup per send.
                 if !is_tapped && !self.consumed.contains(&send.id) {
@@ -400,7 +400,7 @@ impl AudioModRuntime {
                 features.push((i, entry.analyzer.latest()));
             }
 
-            // P1 gate instrument (AUDIO_SENDS_UX_DESIGN §4 Phase 1): only runs
+            // P1 gate instrument (AUDIO_SENDS_UX_DESIGN section 4 Phase 1): only runs
             // when `trace` was cached true at construction — zero cost otherwise.
             if self.trace {
                 let ids: Vec<&str> = features

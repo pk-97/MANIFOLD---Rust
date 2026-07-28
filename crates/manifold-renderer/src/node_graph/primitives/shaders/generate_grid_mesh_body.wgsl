@@ -1,4 +1,4 @@
-// node.grid_mesh — fusable BUFFER body (freeze §12, buffer domain), SOURCE.
+// node.grid_mesh — fusable BUFFER body (freeze section 12, buffer domain), SOURCE.
 // Emit a regular resolution_x × resolution_y grid of MeshVertex items in the
 // XZ plane (Y=0), UV = grid index normalized to [0, 1]. Matches
 // generate_grid_mesh.wgsl bit-for-bit (origin_x/origin_z are always 0.0 in the

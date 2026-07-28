@@ -172,7 +172,7 @@ pub struct RowMod {
     /// Driver free-running period in beats (`Some` => free mode).
     pub driver_free_period: Option<f32>,
     /// An enabled automation lane (≥1 point) exists on this instance for
-    /// this param — drives the red "automated" dot (P4 §7).
+    /// this param — drives the red "automated" dot (P4 section 7).
     pub automation_active: bool,
     /// That lane is currently overridden (latched) — the dot grays instead
     /// of showing red.

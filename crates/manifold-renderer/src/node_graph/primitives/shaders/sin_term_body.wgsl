@@ -1,4 +1,4 @@
-// node.sine_wave — fusable body (freeze §12). Fused linear-projection + sin
+// node.sine_wave — fusable body (freeze section 12). Fused linear-projection + sin
 // term: out = sin((a*field.r + b*field.g + c) * freq * freq_scale + time *
 // time_scale), broadcast to RGB with A=1. Matches sin_term.wgsl exactly.
 // First arg named `field` (not `c`) to avoid colliding with the `c` param

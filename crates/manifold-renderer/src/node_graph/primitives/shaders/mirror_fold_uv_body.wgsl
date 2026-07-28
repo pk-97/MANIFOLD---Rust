@@ -1,4 +1,4 @@
-// node.mirror_fold_uv — fusable body (freeze §12), SOURCE. Rewrites the fragment
+// node.mirror_fold_uv — fusable body (freeze section 12), SOURCE. Rewrites the fragment
 // uv via an axis flip / kaleidoscope fold (mode table), emits it as R/G. The uv
 // param is immutable so the working copy is `var p`. Matches mirror_fold_uv.wgsl.
 // PARAMS: [mode] (Enum -> u32).

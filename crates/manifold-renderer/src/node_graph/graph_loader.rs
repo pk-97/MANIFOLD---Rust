@@ -266,7 +266,7 @@ fn migrate_def_type_ids(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> O
                 // `GraphBuildError::UnknownParam` below and hard-fail the
                 // load of every pre-rename project/preset that still
                 // carries it. Drop params the successor doesn't declare —
-                // per the round-trip gate (DESIGN_DOC_STANDARD §5), a
+                // per the round-trip gate (DESIGN_DOC_STANDARD section 5), a
                 // migrated load must succeed, not merely a fresh save.
                 if let Some(new_node) = registry.construct(new_id) {
                     let known: ahash::AHashSet<&str> =
@@ -1846,7 +1846,7 @@ mod tests {
             crate::node_graph::pre_allocate_resources;
     }
 
-    // ── docs/NODE_VOCABULARY_AUDIT.md §3 test (a) ──
+    // ── docs/NODE_VOCABULARY_AUDIT.md section 3 test (a) ──
     //
     // `type_id_migration::TYPE_ID_MIGRATIONS` is empty in every shipped
     // build except one fixture entry
@@ -1933,7 +1933,7 @@ mod tests {
         assert!(migrate_def_type_ids(&new_twin, &registry).is_none());
     }
 
-    /// docs/NODE_VOCABULARY_AUDIT.md §7.1: the retired `node.rotate_vec2_90`
+    /// docs/NODE_VOCABULARY_AUDIT.md section 7.1: the retired `node.rotate_vec2_90`
     /// folds into `node.rotate_vector` AND seeds `angle = PI/2` (radians —
     /// the stored representation, not the UI's degrees) via
     /// `PARAM_SEED_MIGRATIONS`, reproducing the retired node's fixed +90°
@@ -2005,7 +2005,7 @@ mod tests {
         );
     }
 
-    /// docs/NODE_VOCABULARY_AUDIT.md §7.2: the retired
+    /// docs/NODE_VOCABULARY_AUDIT.md section 7.2: the retired
     /// `node.fluid_project_scatter_2d` is a plain rename fold (port-identical
     /// to `node.draw_particles_camera`, no param seed) — proves the rename
     /// side of the same choke point still works with zero
@@ -2156,7 +2156,7 @@ mod tests {
     /// directly, not just defined alongside it.
     #[test]
     fn instantiate_def_migrates_boundary_free_standing_old_id_graph() {
-        // `system.*` ids are exempt from migration (§2 rule 7) and are the
+        // `system.*` ids are exempt from migration (section 2 rule 7) and are the
         // only ids `instantiate_def` can build without a real registry
         // entry, so this proves migration runs inside `instantiate_def`
         // without disturbing boundary handling — the fixture above proves
@@ -2188,7 +2188,7 @@ mod tests {
     /// retired `node.ssao_from_depth` type id loads through the real
     /// `instantiate_def` entry point, resolves to `node.ssao_gtao`, and its
     /// `radius`/`intensity` params carry over untouched — the round-trip
-    /// gate (DESIGN_DOC_STANDARD §5) for the D9(b) seam. The old fixture
+    /// gate (DESIGN_DOC_STANDARD section 5) for the D9(b) seam. The old fixture
     /// also carries `bias` (every project saved before this rename has it),
     /// proving `migrate_def_type_ids`'s new "drop params the successor
     /// doesn't declare" step — without it this load would hard-fail with

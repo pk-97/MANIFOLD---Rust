@@ -1,4 +1,4 @@
-// node.field_combine — fusable body (freeze §12). Per-pixel scalar field
+// node.field_combine — fusable body (freeze section 12). Per-pixel scalar field
 // a*in.r + b*in.g + c, broadcast to RGB, alpha forced to 1. Pure own-texel. The
 // colour arg is named `s` (not `c`) so it doesn't clash with the `c` param.
 // Matches field_combine.wgsl. PARAMS: [a, b, c].

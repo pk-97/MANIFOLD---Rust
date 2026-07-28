@@ -9,7 +9,7 @@
 //! controls per-tap pixel stride — legacy Halation passes
 //! `spread * 5.0 + 1.0`, legacy DoF passes `coc * 6.0 + 1.0` (variable
 //! per-pixel; DoF's variable-width variant needs a separate primitive
-//! when §6.4 lands).
+//! when section 6.4 lands).
 
 use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
@@ -431,7 +431,7 @@ mod gpu_tests {
     /// positive-side tap). These constants are NOT normalized to 1.0
     /// in the legacy shaders — preserving the exact gain is part of
     /// the parity contract for Halation/Bloom/Watercolor when they're
-    /// reassembled in §6.3 commits 3–6.
+    /// reassembled in section 6.3 commits 3–6.
     const K9_GAIN: f32 = 0.16501 + 2.0 * (0.15019 + 0.11325 + 0.07076 + 0.03664);
     const K17_GAIN: f32 = 0.10315
         + 2.0 * (0.09998 + 0.09103 + 0.07786 + 0.06257 + 0.04723 + 0.03350 + 0.02232 + 0.01396);

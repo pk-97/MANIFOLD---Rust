@@ -269,7 +269,7 @@ mod hash_tests {
 // (`paramId: "amount"`) project file shapes. The runtime always reads
 // `param_id`; legacy projects park the index in `legacy_param_index`
 // for the post-load resolver to translate. See
-// `docs/EFFECT_RUNTIME_UNIFICATION.md` §7 step 8.
+// `docs/EFFECT_RUNTIME_UNIFICATION.md` section 7 step 8.
 impl<'de> Deserialize<'de> for ParameterDriver {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where

@@ -3,7 +3,7 @@
 //!
 //! Chrome panels describe a `UITree` that `manifold-renderer` walks and draws.
 //! The graph canvas is immediate-mode by design (`docs/UI_ARCHITECTURE_OVERHAUL.md`
-//! §5.4): it paints rects/lines/text directly each frame. Historically it called
+//! section 5.4): it paints rects/lines/text directly each frame. Historically it called
 //! `manifold_renderer::ui_renderer::UIRenderer` for that, which forced the canvas
 //! to live app-side (a `manifold-ui` → `manifold-renderer` dependency is a cycle).
 //!
@@ -11,7 +11,7 @@
 //! through `&mut dyn Painter`; `manifold-renderer` implements the trait for
 //! `UIRenderer` (it already depends on `manifold-ui`). So the canvas is now a
 //! pure UI component with no renderer dependency, and the renderer side is one
-//! adapter `impl`. See `docs/CANVAS_API_DESIGN.md` §0 and Phase 8 of the
+//! adapter `impl`. See `docs/CANVAS_API_DESIGN.md` section 0 and Phase 8 of the
 //! overhaul.
 
 use crate::node::Color32;

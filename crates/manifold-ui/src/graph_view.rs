@@ -3,7 +3,7 @@
 //! `manifold-renderer` dependency.
 //!
 //! Phase 8 of `docs/UI_ARCHITECTURE_OVERHAUL.md` (sub-design
-//! `docs/CANVAS_API_DESIGN.md` §0): the canvas moved into `manifold-ui`, so it
+//! `docs/CANVAS_API_DESIGN.md` section 0): the canvas moved into `manifold-ui`, so it
 //! can no longer name the renderer's `GraphSnapshot`. These are owned, plain-data
 //! mirrors; the app is the sole translator (`manifold-app/src/ui_translate.rs`),
 //! exactly the Phase-5 layering-inversion pattern.

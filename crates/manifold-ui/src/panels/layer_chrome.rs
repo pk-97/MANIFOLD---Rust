@@ -17,8 +17,8 @@ use crate::tree::UITree;
 
 // ── Layout constants (from LayerChromeBitmapPanel.cs) ─────────────
 
-const HEADER_ROW_H: f32 = color::HEADER_ROW_HEIGHT; // §14.2 rule 5: one header height (was 27.5)
-const PAD_H: f32 = color::SECTION_CONTENT_INSET; // §14.5 C: align with card param-label column
+const HEADER_ROW_H: f32 = color::HEADER_ROW_HEIGHT; // section 14.2 rule 5: one header height (was 27.5)
+const PAD_H: f32 = color::SECTION_CONTENT_INSET; // section 14.5 C: align with card param-label column
 const PAD_V: f32 = 2.0;
 const GAP: f32 = 4.0;
 const CHEVRON_W: f32 = 18.0;
@@ -68,7 +68,7 @@ impl LayerChromePanel {
     }
 
     pub fn compute_height(&self) -> f32 {
-        // §6d: name + chevron + opacity are merged onto one row, so the chrome is
+        // section 6d: name + chevron + opacity are merged onto one row, so the chrome is
         // a single row — constant whether collapsed (opacity hidden in-place) or
         // expanded.
         PAD_V + HEADER_ROW_H + PAD_V
@@ -130,7 +130,7 @@ impl LayerChromePanel {
             .inert()
             .key(KEY_CHEVRON);
 
-        // §6d — one merged row: the layer name (the meaningful identity; falls
+        // section 6d — one merged row: the layer name (the meaningful identity; falls
         // back to the type header when unnamed), the collapse chevron, then the
         // opacity slider inline. Was three stacked rows (type header / name /
         // opacity). The chevron still collapses the layer's inspector section;
@@ -287,7 +287,7 @@ mod tests {
 
     #[test]
     fn opacity_slot_is_inline_on_header_row() {
-        // §6d: the opacity slider now sits on the single merged header row, not a
+        // section 6d: the opacity slider now sits on the single merged header row, not a
         // stacked row below. Assert it's at the header-row Y with real width.
         let mut tree = UITree::new();
         let mut panel = LayerChromePanel::new();
@@ -312,7 +312,7 @@ mod tests {
 
     #[test]
     fn height_is_constant_one_row() {
-        // §6d merge: height no longer changes with name/opacity visibility — it's
+        // section 6d merge: height no longer changes with name/opacity visibility — it's
         // always one row + trailing divider.
         let mut panel = LayerChromePanel::new();
         let full_h = panel.compute_height();

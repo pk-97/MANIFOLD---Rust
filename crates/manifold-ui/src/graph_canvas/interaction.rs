@@ -783,7 +783,7 @@ impl GraphCanvas {
             return;
         }
         // "+ Object" / "+ Light" gesture buttons on `render_scene`'s face
-        // (D7/D7a, `docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` §2). Checked
+        // (D7/D7a, `docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` section 2). Checked
         // before the expose glyph / param scrub below — Action rows carry no
         // param so `param_row_under` already skips them, but checking first
         // keeps the gesture's dispatch next to the other whole-row hit-tests

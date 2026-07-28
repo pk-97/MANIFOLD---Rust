@@ -1,4 +1,4 @@
-// node.simplex_noise_force_at_particles — fusable BUFFER body (freeze §12, buffer
+// node.simplex_noise_force_at_particles — fusable BUFFER body (freeze section 12, buffer
 // domain), COINCIDENT multi-input + OPTIONAL TEXTURE. Per-particle 2D simplex
 // noise force added in place to a [f32;2] force buffer, optionally boosted by a
 // modulator texture. Matches simplex_noise_force_at_particles.wgsl.

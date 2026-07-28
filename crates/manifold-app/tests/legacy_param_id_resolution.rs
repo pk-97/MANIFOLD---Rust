@@ -1,5 +1,5 @@
 //! End-to-end registry-resolution test for the V1.1 → V1.2 driver
-//! migration (step 8 of `docs/EFFECT_RUNTIME_UNIFICATION.md` §11).
+//! migration (step 8 of `docs/EFFECT_RUNTIME_UNIFICATION.md` section 11).
 //!
 //! Lives in `manifold-app/tests/` rather than `manifold-io/tests/`
 //! because the post-load resolver depends on `inventory::submit!`

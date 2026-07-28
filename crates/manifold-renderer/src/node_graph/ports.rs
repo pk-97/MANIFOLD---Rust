@@ -20,14 +20,14 @@ pub enum PortType {
     /// the texture rely on prose `composition_notes` to know the layout.
     /// Connects to any other [`Texture2D`](PortType::Texture2D) or
     /// [`Texture2DTyped`](PortType::Texture2DTyped) endpoint (the
-    /// migration valve — see `docs/CHANNEL_TYPE_SYSTEM.md` §17).
+    /// migration valve — see `docs/CHANNEL_TYPE_SYSTEM.md` section 17).
     Texture2D,
     /// Texture2D decorated with a four-slot named-channel signature
     /// (one [`ChannelName`] per RGBA slot). The validator enforces
     /// exact-match between two typed endpoints and surfaces a per-slot
     /// diff on mismatch; an untyped consumer / producer on the other
     /// side connects through the back-compat valve. See
-    /// `docs/CHANNEL_TYPE_SYSTEM.md` §17 for the texture-channel
+    /// `docs/CHANNEL_TYPE_SYSTEM.md` section 17 for the texture-channel
     /// extension to the Channel type system.
     Texture2DTyped(TextureChannels),
     Texture3D,
@@ -62,7 +62,7 @@ pub enum PortType {
     /// CPU-only struct wire carrying an
     /// [`Atmosphere`](crate::node_graph::atmosphere::Atmosphere) — scene-wide
     /// exponential depth fog + ambient/sky tint. Produced by `node.atmosphere`,
-    /// consumed by `render_scene`'s optional `atmosphere` input (REALTIME_3D §5
+    /// consumed by `render_scene`'s optional `atmosphere` input (REALTIME_3D section 5
     /// P3). Same CPU-struct lifetime model as `Camera` / `Light` / `Material` /
     /// `Transform`; unwired = fog off = byte-identical to no atmosphere.
     Atmosphere,
@@ -102,7 +102,7 @@ impl PortType {
 /// rest ignored, etc.) so [`TextureChannels`] carries only names. The
 /// names interned through the same FNV-1a-64 const-hash mechanism as
 /// [`ChannelSpec::name`] and resolved against the shared `well_known`
-/// channel-name registry. See `docs/CHANNEL_TYPE_SYSTEM.md` §17.
+/// channel-name registry. See `docs/CHANNEL_TYPE_SYSTEM.md` section 17.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TextureChannels {
     /// Channel names in R, G, B, A order.
@@ -136,7 +136,7 @@ pub enum ScalarType {
 // (a list of named typed [`ChannelSpec`]s); the legacy
 // `(item_size, item_align, item_kind)` triple collapses to just the
 // (size, align) pair plus the specs. See
-// `docs/CHANNEL_TYPE_SYSTEM.md` §5.
+// `docs/CHANNEL_TYPE_SYSTEM.md` section 5.
 
 /// Compile-time descriptor for an item type that flows through an
 /// [`ArrayType`] wire. Every canonical item struct in the primitive
@@ -152,7 +152,7 @@ pub enum ScalarType {
 /// describing the same byte layout.
 pub trait KnownItem: bytemuck::Pod {
     /// Named typed channels per sample, in std430 order. See
-    /// `docs/CHANNEL_TYPE_SYSTEM.md` §6 for the per-typed-family
+    /// `docs/CHANNEL_TYPE_SYSTEM.md` section 6 for the per-typed-family
     /// signatures.
     const SPECS: &'static [ChannelSpec] = &[];
 }
@@ -160,7 +160,7 @@ pub trait KnownItem: bytemuck::Pod {
 impl KnownItem for u32 {
     // Single-channel `value: U32` — the canonical convention for
     // bare scalar arrays (scatter accumulators, grid indices, ID
-    // streams) per `docs/CHANNEL_TYPE_SYSTEM.md` §6.8.
+    // streams) per `docs/CHANNEL_TYPE_SYSTEM.md` section 6.8.
     const SPECS: &'static [ChannelSpec] = &[ChannelSpec {
         name: ChannelName::from_str("value"),
         ty: ChannelElementType::U32,
@@ -177,7 +177,7 @@ impl KnownItem for f32 {
 impl KnownItem for [f32; 2] {
     // Paired scalars (x, y) at 4-byte alignment, not a single Vec2F —
     // preserves byte parity with the existing `[f32; 2]` layout per
-    // the §6.8 / §13(3) resolution.
+    // the section 6.8 / section 13(3) resolution.
     const SPECS: &'static [ChannelSpec] = &[
         ChannelSpec { name: ChannelName::from_str("x"), ty: ChannelElementType::F32 },
         ChannelSpec { name: ChannelName::from_str("y"), ty: ChannelElementType::F32 },
@@ -227,7 +227,7 @@ pub struct ArrayType {
     pub item_align: u32,
     /// Named typed channels per sample, in std430 order. Drives the
     /// validator's [`channels_compatible`] check. See
-    /// `docs/CHANNEL_TYPE_SYSTEM.md` §4-§5.
+    /// `docs/CHANNEL_TYPE_SYSTEM.md` section 4-section 5.
     pub specs: &'static [ChannelSpec],
     /// Wire-validator matching policy. Default [`MatchMode::Exact`];
     /// [`MatchMode::Permissive`] is the opt-in for generic transform
@@ -276,7 +276,7 @@ impl ArrayType {
     /// channel specs. `item_size` and `item_align` are derived from
     /// the specs via std430 layout rules. The canonical constructor
     /// for ad-hoc signatures declared via inline `Channels[name: Type, …]`
-    /// macro syntax (per `docs/CHANNEL_TYPE_SYSTEM.md` §12.1).
+    /// macro syntax (per `docs/CHANNEL_TYPE_SYSTEM.md` section 12.1).
     pub const fn of_channels(
         specs: &'static [ChannelSpec],
         match_mode: MatchMode,
@@ -291,7 +291,7 @@ impl ArrayType {
     }
 }
 
-// ─── Channel type system (per docs/CHANNEL_TYPE_SYSTEM.md §4) ─────────
+// ─── Channel type system (per docs/CHANNEL_TYPE_SYSTEM.md section 4) ─────────
 
 /// A channel's name, interned at compile time via const FNV-1a-64
 /// hashing of the source string. Comparison is u64 equality; the
@@ -301,7 +301,7 @@ impl ArrayType {
 /// Hashing happens in `const` context so port type declarations stay
 /// `const` — the `primitive!` macro can declare `Channels[x: F32, y: F32]`
 /// in a `static` port array with no runtime allocation. See
-/// `docs/CHANNEL_TYPE_SYSTEM.md` §4.2 for the collision analysis
+/// `docs/CHANNEL_TYPE_SYSTEM.md` section 4.2 for the collision analysis
 /// (~2.7e-14 probability across the expected name set; gated by the
 /// `well_known_channels!`-emitted collision test).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -349,7 +349,7 @@ const fn const_fnv1a_64(bytes: &[u8]) -> u64 {
 /// calculator, the WGSL emitter (future fusion compiler), the macro
 /// type-keyword recognizer, and the test matrix. Each new type is a
 /// deliberate decision, not a generic-over-T extension. See
-/// `docs/CHANNEL_TYPE_SYSTEM.md` §4.3.
+/// `docs/CHANNEL_TYPE_SYSTEM.md` section 4.3.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ChannelElementType {
     F32,
@@ -401,13 +401,13 @@ pub enum MatchMode {
     /// `select_channels`, `channel_math`, etc.). A `pub const`
     /// allow-list in `validation.rs` enumerates which primitive
     /// `TYPE_ID`s may legitimately declare Permissive on a port, and a
-    /// test enforces the allow-list — see §11.4.
+    /// test enforces the allow-list — see section 11.4.
     Permissive,
 }
 
 /// Per-channel byte offsets and total sample stride for a Channels
 /// signature, computed per WGSL std430 rules. Pure function of the
-/// specs slice. See `docs/CHANNEL_TYPE_SYSTEM.md` §4.4.
+/// specs slice. See `docs/CHANNEL_TYPE_SYSTEM.md` section 4.4.
 ///
 /// Returns `(per_channel_offsets, sample_stride_bytes, sample_alignment)`.
 pub fn std430_layout(specs: &[ChannelSpec]) -> (Vec<u32>, u32, u32) {
@@ -544,7 +544,7 @@ mod channel_layout_tests {
     #[test]
     fn std430_layout_curve_point_two_scalars() {
         // CurvePoint equivalent: [x: F32, y: F32]. 4-byte aligned per
-        // the §6.3 / §13(3) resolution (paired scalars, not Vec2F).
+        // the section 6.3 / section 13(3) resolution (paired scalars, not Vec2F).
         const SPECS: &[ChannelSpec] = &[
             ChannelSpec { name: X, ty: ChannelElementType::F32 },
             ChannelSpec { name: Y, ty: ChannelElementType::F32 },
@@ -712,7 +712,7 @@ mod object_port_single_hop_tests {
 
     /// `type_id`s allowed to declare an `Object`-typed INPUT port. Extending
     /// this list is itself the design's named escalation trigger ("any need
-    /// for a second Object consumer/producer" — §8) — don't add to it
+    /// for a second Object consumer/producer" — section 8) — don't add to it
     /// without re-reading the design doc.
     const ALLOWED_OBJECT_CONSUMERS: &[&str] = &["node.render_scene"];
 
@@ -733,7 +733,7 @@ mod object_port_single_hop_tests {
                 !has_object_input || ALLOWED_OBJECT_CONSUMERS.contains(&factory.type_id),
                 "{} declares an Object input but isn't in ALLOWED_OBJECT_CONSUMERS \
                  — a second Object consumer is a design escalation, not a \
-                 mechanical addition (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md §8)",
+                 mechanical addition (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md section 8)",
                 factory.type_id,
             );
         }

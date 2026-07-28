@@ -197,7 +197,7 @@ pub(crate) fn dispatch_audio_setup(action: &AudioSetupAction, ctx: &mut super::s
                 Box::new(SetAudioSendChannelsCommand::new(id.clone(), old, ch.clone())),
             )
         }
-        // `AudioSendStereoToggle` is deleted (§7.2 item 6, P8, 2026-07-11) —
+        // `AudioSendStereoToggle` is deleted (section 7.2 item 6, P8, 2026-07-11) —
         // the channel dropdown now carries any channel vec directly via
         // `AudioSetSendChannels` above; mono falls out of picking one channel.
         AudioSetupAction::AudioSendGainStep(id, delta_db) => {
@@ -273,7 +273,7 @@ pub(crate) fn dispatch_audio_setup(action: &AudioSetupAction, ctx: &mut super::s
         // AudioTriggerLayerClicked) are deleted with the matrix (P3, D2). Clip
         // triggers are authored on the layer only (`LayerClipTrigger`, P2).
         // `AudioSendAddLayerClicked` (Inputs section "+ Layer") is deleted
-        // with the section's authoring (§7.2 item 7, P8, 2026-07-11).
+        // with the section's authoring (section 7.2 item 7, P8, 2026-07-11).
         // Band-divider (crossover) drag trio migrated to the unified
         // `PanelAction::Scrub` wire (`ValueRef::AudioCrossover`, P-I / D4): the
         // dragged `BandDivider` rides the address, that line's raw Hz rides

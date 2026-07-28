@@ -1,4 +1,4 @@
-// node.downsample — fusable body (freeze §12), GATHER. Integer-factor box-filter
+// node.downsample — fusable body (freeze section 12), GATHER. Integer-factor box-filter
 // downsample. Reads factor×factor source texels per output texel (the effective
 // factor is derived from in_dims/out_dims, NOT the uniform `factor` which is kept
 // for diagnostics) and writes their mean via textureLoad (exact integer reads — a

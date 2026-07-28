@@ -4,7 +4,7 @@
 //! shared across the catalog uses a constant from `well_known` below.
 //! Primitives that need a name not in the registry either (a) add it
 //! to the registry (if reusable), or (b) declare it as an inline
-//! string literal (if genuinely local — see §7.4).
+//! string literal (if genuinely local — see section 7.4).
 //!
 //! Hard rule: a primitive declaring a `Channels[...]` port should
 //! reach for `well_known::*` constants by default. Inline string
@@ -14,7 +14,7 @@
 //!
 //! Append one line inside the `well_known_channels!` invocation below
 //! in the appropriate category. The `pub const` and the collision-
-//! check coverage are emitted from the same source list — see §7.5.
+//! check coverage are emitted from the same source list — see section 7.5.
 
 use crate::node_graph::ports::ChannelName;
 
@@ -184,7 +184,7 @@ pub mod well_known {
 ///    well-known set's few-dozen entries.
 /// 2. Runtime overflow map populated via [`register_runtime_name`] —
 ///    covers names introduced by `wgsl_compute` shader field parsing
-///    (per `docs/CHANNEL_TYPE_SYSTEM.md` §8.4). Bounded by the
+///    (per `docs/CHANNEL_TYPE_SYSTEM.md` section 8.4). Bounded by the
 ///    distinct field-name set across all `wgsl_compute` shaders
 ///    loaded in a session; in practice tiny.
 ///

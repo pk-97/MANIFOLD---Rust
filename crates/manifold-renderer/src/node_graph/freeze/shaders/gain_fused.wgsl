@@ -5,7 +5,7 @@
 // product of the gains, kept in f32 registers and rounded to f16 exactly once
 // on write. So fused != unfused bit-exact — they diff by the accumulated
 // intermediate f16 rounding, which is precisely the divergence the oracle's
-// two-sided tolerance is meant to absorb (design §11.D). Read once, multiply,
+// two-sided tolerance is meant to absorb (design section 11.D). Read once, multiply,
 // write once: the bandwidth collapse the real compiler will reproduce.
 //
 // Reads the source with textureLoad (exact texel) rather than Gain's

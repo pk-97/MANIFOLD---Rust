@@ -35,7 +35,7 @@ impl Project {
 
         // Fold a legacy pre-UID `deviceName` into a UID-less AudioDeviceRef so
         // older saves resolve their audio input by name. See
-        // `docs/AUDIO_INFRASTRUCTURE.md` §5.
+        // `docs/AUDIO_INFRASTRUCTURE.md` section 5.
         self.audio_setup.migrate_legacy_device();
 
         // P2: drain each send's legacy `TriggerRoute`s (pre-unification
@@ -45,14 +45,14 @@ impl Project {
         // single struct's `Deserialize` impl — this can't be a per-struct
         // drain. This Project-level pass, which runs after the whole
         // `Project` (sends AND layers) has deserialized, is the seam. See
-        // `docs/AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` §3.2.
+        // `docs/AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` section 3.2.
         self.migrate_legacy_clip_triggers();
 
-        // §7.2 item 2 (2026-07-11): "Delta" (rate-of-change) left the drawer
+        // section 7.2 item 2 (2026-07-11): "Delta" (rate-of-change) left the drawer
         // UI everywhere — no button can toggle or clear it anymore. A saved
         // `rate_of_change: true` would carry invisible behavior the UI can't
         // show, so clear it on load across every carrier. See
-        // `docs/AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` §7.2.
+        // `docs/AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` section 7.2.
         self.clear_legacy_rate_on_flags();
 
         // Validate tempo map data
@@ -76,7 +76,7 @@ impl Project {
         // V1.1 → V1.2 migration: every driver/envelope/Ableton mapping
         // deserialized from a legacy `paramIndex: i32` shape needs its
         // `param_id` filled in from the registry. See
-        // `docs/EFFECT_RUNTIME_UNIFICATION.md` §7 step 8.
+        // `docs/EFFECT_RUNTIME_UNIFICATION.md` section 7 step 8.
         self.resolve_legacy_param_ids();
 
         // Slot-value migration. Walks the per-effect
@@ -122,7 +122,7 @@ impl Project {
     /// back). Idempotent: a project with no legacy routes (already migrated,
     /// or never had any) is a no-op. Unresolvable routes (no such layer) are
     /// dropped — counted and named on stderr, never silent. See
-    /// `docs/AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` §3.2.
+    /// `docs/AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` section 3.2.
     fn migrate_legacy_clip_triggers(&mut self) {
         let mut dropped = 0usize;
         for send_idx in 0..self.audio_setup.sends.len() {
@@ -185,7 +185,7 @@ impl Project {
         }
     }
 
-    /// §7.2 item 2 load migration (2026-07-11): "Delta" (rate-of-change)
+    /// section 7.2 item 2 load migration (2026-07-11): "Delta" (rate-of-change)
     /// left the drawer UI everywhere — no button can toggle or clear
     /// `AudioModShape::rate_of_change` anymore, on either carrier. A `true`
     /// flag saved before this migration would carry invisible behavior no
@@ -221,7 +221,7 @@ impl Project {
         if cleared > 0 {
             eprintln!(
                 "[Migration] cleared rate_of_change on {cleared} audio-mod config(s) — \
-                 \"Delta\" was removed from the drawer UI 2026-07-11 (§7.2 item 2)"
+                 \"Delta\" was removed from the drawer UI 2026-07-11 (section 7.2 item 2)"
             );
         }
     }
@@ -1251,7 +1251,7 @@ mod tests {
 
     #[test]
     fn clear_legacy_rate_on_flags_stays_cleared_across_a_save_reload_round_trip() {
-        // DESIGN_DOC_STANDARD §5's round-trip gate: create-path green is half
+        // DESIGN_DOC_STANDARD section 5's round-trip gate: create-path green is half
         // a gate for stateful features. Save → reload must not resurrect the
         // flag `on_after_deserialize` cleared on the previous load.
         let mut p = Project::default();

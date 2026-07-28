@@ -1,4 +1,4 @@
-// node.hue_saturation — fusable body (freeze §12). HSV rotate/scale: rotate
+// node.hue_saturation — fusable body (freeze section 12). HSV rotate/scale: rotate
 // hue (degrees), scale saturation + value in HSV space. Pure; alpha passes
 // through. Matches hue_saturation.wgsl. PARAMS order: [hue, saturation, value].
 //

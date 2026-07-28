@@ -1,4 +1,4 @@
-// node.hdr_retention_mix — fusable body (freeze §12), MultiInputCoincident:
+// node.hdr_retention_mix — fusable body (freeze section 12), MultiInputCoincident:
 // compressed + reference at the SAME uv. SDR body (<=1) from compressed; HDR
 // portion (>1) lerps compressed<->reference by retention; alpha from compressed.
 // Matches hdr_retention_mix.wgsl. PARAMS: [retention].

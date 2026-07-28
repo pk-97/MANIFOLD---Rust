@@ -1,7 +1,7 @@
 //! Feature-gated proof-harness support (`recording-proofs`): the pattern
 //! writer that bakes a decodable frame index into pixels via the real GPU
 //! path, and the ffprobe/ffmpeg oracle that reads it back out of a recorded
-//! file. See docs/LIVE_RECORDING_PROOFS_DESIGN.md §4.
+//! file. See docs/LIVE_RECORDING_PROOFS_DESIGN.md section 4.
 //!
 //! Everything here is test/harness infrastructure — it is not part of the
 //! production recording path (that stays in `session.rs`/`recording_thread.rs`

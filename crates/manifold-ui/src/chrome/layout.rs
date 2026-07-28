@@ -45,7 +45,7 @@ pub struct LaidNode {
     /// mints this node via `add_node_keyed` (D4 card-root identity).
     pub identity: Option<u64>,
     /// Automation component name copied from [`View::name`] — applied to the
-    /// built node via `UITree::set_name` (`UI_AUTOMATION_DESIGN.md` D8/§3).
+    /// built node via `UITree::set_name` (`UI_AUTOMATION_DESIGN.md` D8/section 3).
     pub name: Option<&'static str>,
 }
 

@@ -1,4 +1,4 @@
-// node.revolve_curve — fusable BUFFER body (freeze §12, buffer domain), GATHER.
+// node.revolve_curve — fusable BUFFER body (freeze section 12, buffer domain), GATHER.
 // Revolve a P-point profile curve (Array<CurvePoint>, x=radius, y=height)
 // around the Y axis into a P×(segments+1) positions+uv grid (MESH_DEFORM_AND_
 // CURVE_GEOMETRY_DESIGN.md D5 — normals left zero; wire node.make_triangles

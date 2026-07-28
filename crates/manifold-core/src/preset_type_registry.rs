@@ -29,7 +29,7 @@ pub struct PresetTypeRegistration {
 
 // ── Categories (effect picker only) ──────────────────────────────────────
 //
-// Five user-facing buckets after the §9.1.4 audit. `POST_PROCESS` /
+// Five user-facing buckets after the section 9.1.4 audit. `POST_PROCESS` /
 // `SURVEILLANCE` are retained as constants only so unavailable-stub effects
 // keep compiling against their existing category strings; they aren't in
 // `ALL_CATEGORIES` and so are excluded from the picker.

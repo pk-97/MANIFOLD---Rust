@@ -8,7 +8,7 @@
 //! scratchpad probe had its own Reinhard-without-sRGB-encode readback and
 //! rendered systematically darker than the app all session — a harness-local
 //! tonemap is precisely the failure mode this module exists to close off
-//! (DESIGN_AUTHORING §4's reimplement-and-verify carve-out: share the seam,
+//! (DESIGN_AUTHORING section 4's reimplement-and-verify carve-out: share the seam,
 //! don't audit the match).
 
 use half::f16;

@@ -298,7 +298,7 @@ mod tests {
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
-    //! Buffer-domain SOURCE parity oracle (freeze §12) — generate_instance_
+    //! Buffer-domain SOURCE parity oracle (freeze section 12) — generate_instance_
     //! transforms had no GPU test. The generated kernel (self-contained
     //! wang_hash; active_count is a param; two-count inactive collapse) must
     //! reproduce the hand kernel transform-for-transform across ALL four layouts,

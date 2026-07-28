@@ -1,4 +1,4 @@
-// node.affine_transform — fusable body (freeze §12). `in` is a GATHER input:
+// node.affine_transform — fusable body (freeze section 12). `in` is a GATHER input:
 // the body samples it at the affine-transformed coordinate it computes, so the
 // codegen passes texture + sampler args rather than a pre-read register.
 // Verbatim port of affine_transform.wgsl with two relocations: aspect ratio is

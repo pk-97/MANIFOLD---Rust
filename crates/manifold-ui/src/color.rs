@@ -106,7 +106,7 @@ pub fn contrast_text_color(bg: Color32) -> Color32 {
 // ════════════════════════════════════════════════════════════════════
 
 // ── Grey ramp (elevation) ───────────────────────────────────────────
-// §A contrast pass: the range is spread wider (deeper void, lighter raised
+// section A contrast pass: the range is spread wider (deeper void, lighter raised
 // control) so the levels read as distinct on a dark stage without the UI going
 // bright — deeper black gives raised surfaces somewhere to separate to.
 pub const BG_0: Color32 = Color32::new(9, 9, 11, 255); // app / void
@@ -126,16 +126,16 @@ pub const BG_3_PRESSED: Color32 = Color32::new(41, 41, 45, 255);
 //             section breaks). A line between things, not a box around them.
 //   GROOVE  — dark inset line separating stacked tracks/rows in the
 //             timeline + layer panel (reads as void showing through).
-pub const DIVIDER: Color32 = Color32::new(64, 64, 68, 255); // §A: more visible
-pub const GROOVE: Color32 = Color32::new(8, 8, 10, 255); // §A: tracks the deeper void
-// One element-outline hairline. §17: was 5 near-duplicate greys (RACK 56 /
+pub const DIVIDER: Color32 = Color32::new(64, 64, 68, 255); // section A: more visible
+pub const GROOVE: Color32 = Color32::new(8, 8, 10, 255); // section A: tracks the deeper void
+// One element-outline hairline. section 17: was 5 near-duplicate greys (RACK 56 /
 // CARD 46 / CARD_C32 55 / DROPDOWN 58); collapsed to one. In-panel grouping
 // should lean on fill level (the BG ramp), not boxes — this is the subtle
 // edge for surfaces that still want an outline + the floating-element border.
 // (The purple-tinted generator-card border stays its own identity tint.)
-pub const BORDER: Color32 = Color32::new(64, 64, 68, 255); // §A: more visible element outline
+pub const BORDER: Color32 = Color32::new(64, 64, 68, 255); // section A: more visible element outline
 
-// ── Elevation shadow (§17) ──────────────────────────────────────────
+// ── Elevation shadow (section 17) ──────────────────────────────────────────
 // One soft step under FLOATING surfaces only (dropdowns, popovers, modals).
 // A lift, not a glow: dark + low alpha. In-panel grouping stays fill-level.
 pub const SHADOW: Color32 = Color32::new(0, 0, 0, 110);
@@ -147,7 +147,7 @@ pub const SHADOW_OFFSET_Y: f32 = 4.0;
 /// draw_shadow primitive stays.
 pub const SHADOWS_ENABLED: bool = false;
 
-// ── Semantic colour ramp (§15) ──────────────────────────────────────
+// ── Semantic colour ramp (section 15) ──────────────────────────────────────
 // One definition per role-hue, three steps each (idle · base · active).
 // The state colours below ALIAS onto these, so the same red/green/amber
 // means the same thing in every widget — the chromatic counterpart to the
@@ -158,8 +158,8 @@ pub const SHADOWS_ENABLED: bool = false;
 // single widget, or are an identity palette): the modulation indicators
 // (DRIVER cyan / ENVELOPE orange / AUDIO green / ABL purple — co-drawn on
 // one slider), the sync-source colours (LINK / MIDI / Ableton), the marker
-// and layer-colour palettes, and the M/S/L/A layer quartet. §15:
-// "consistent steps, not artificial collapse." Values are the §15.2 table —
+// and layer-colour palettes, and the M/S/L/A layer quartet. section 15:
+// "consistent steps, not artificial collapse." Values are the section 15.2 table —
 // tune on the running app (the warm trio red/amber/orange must stay apart).
 pub const RED_IDLE: Color32 = Color32::new(107, 38, 38, 255);
 pub const RED_BASE: Color32 = Color32::new(184, 56, 56, 255);
@@ -265,7 +265,7 @@ pub const CLIP_GEN_SELECTED: Color32 = Color32::new(102, 140, 224, 255);
 pub const CLIP_GEN_HOVER: Color32 = Color32::new(77, 97, 153, 255);
 pub const GEN_TYPE_LABEL: Color32 = Color32::new(140, 179, 242, 255);
 
-// ── GPU clip body styling (§24 5b) ──────────────────────────────────
+// ── GPU clip body styling (section 24 5b) ──────────────────────────────────
 // Clips render as GPU SDF rounded rects (body gradient + border + lift). These
 // are the *default* values — the look is tuned by eye on the running app in the
 // Phase-6 taste pass, not fixed here. Keep them in one place so that tuning is a
@@ -277,7 +277,7 @@ pub const CLIP_RADIUS: f32 = 4.0;
 /// read as distinct tiles without the old blue-on-every-clip busyness.
 pub const CLIP_BORDER_NORMAL: Color32 = Color32::new(12, 12, 14, 140);
 pub const CLIP_BORDER_NORMAL_WIDTH: f32 = 1.0;
-/// Border on the selected clip. §E: the bright `SELECTED_LAYER_RING` (not the
+/// Border on the selected clip. section E: the bright `SELECTED_LAYER_RING` (not the
 /// accent blue) so it reads on a blue layer too — unified with the layer-header
 /// selection ring; a blue border vanished on a blue clip ("muted on muted").
 pub const CLIP_BORDER_SELECTED: Color32 = SELECTED_LAYER_RING;
@@ -286,7 +286,7 @@ pub const CLIP_BORDER_SELECTED_WIDTH: f32 = 2.0;
 /// over the base colour, fading to the base at the bottom. Gives the body a
 /// soft top-lit roundness. 0 = flat.
 pub const CLIP_GRADIENT_LIGHTEN: u8 = 14;
-/// Soft drop-shadow under the *selected* clip (lift-on-select, §17). Subtler
+/// Soft drop-shadow under the *selected* clip (lift-on-select, section 17). Subtler
 /// than the overlay-panel shadow — a clip rises a little, it doesn't float.
 pub const CLIP_SHADOW: Color32 = Color32::new(0, 0, 0, 90);
 pub const CLIP_SHADOW_BLUR: f32 = 6.0;
@@ -300,11 +300,11 @@ pub const CLIP_LABEL_MIN_WIDTH: f32 = 30.0;
 /// Left inset of the label inside the clip body.
 pub const CLIP_LABEL_PAD_X: f32 = 6.0;
 
-// ── Clip name-strip band (§E / §K15) ────────────────────────────────
+// ── Clip name-strip band (section E / section K15) ────────────────────────────────
 // Premiere/FCP anatomy: a content PREVIEW on top + a solid layer-coloured NAME
 // STRIP on the bottom (the mockup's `.clip .body` + `.clip .strip`). The strip
 // carries the identity colour and the name; the preview area is a darker well of
-// the same hue (it becomes the thumbnail once §F lands). Below a minimum clip
+// the same hue (it becomes the thumbnail once section F lands). Below a minimum clip
 // height the band is dropped — the clip is just a solid identity bar + name
 // (collapsed lanes), matching the mockup's collapsed-row clip.
 pub const CLIP_STRIP_HEIGHT: f32 = 16.0;
@@ -319,7 +319,7 @@ pub const CLIP_STRIP_MIN_CLIP_HEIGHT: f32 = 22.0;
 /// to the clip border.
 pub const CLIP_THUMB_INSET: f32 = 4.0;
 /// The preview well = the identity colour scaled toward black by this factor
-/// (hue-preserving), standing in for the thumbnail until §F populates it. Keeps
+/// (hue-preserving), standing in for the thumbnail until section F populates it. Keeps
 /// the clip's identity readable while making the strip read as a distinct band.
 /// Tuned so the well is clearly darker than the strip without going muddy.
 pub const CLIP_PREVIEW_WELL_SCALE: f32 = 0.5;
@@ -330,7 +330,7 @@ pub const DEFAULT_GROUP_ACCENT: Color32 = PURPLE_BASE;
 pub const GROUP_BOTTOM_BORDER: Color32 = Color32::new(97, 97, 148, 153);
 
 // ── Text colors ─────────────────────────────────────────────────────
-// §A contrast pass: brighter at every tier so secondary/faint labels actually
+// section A contrast pass: brighter at every tier so secondary/faint labels actually
 // read on the dark chrome (Peter's "faint labels you can't read"), still clearly
 // stepped below TEXT_NORMAL.
 pub const TEXT_NORMAL: Color32 = Color32::new(230, 230, 235, 255);
@@ -359,7 +359,7 @@ pub const PAUSED_YELLOW: Color32 = AMBER_BASE;
 pub const STOP_RED: Color32 = RED_BASE;
 pub const RECORD_RED: Color32 = RED_IDLE;
 pub const RECORD_ACTIVE: Color32 = RED_ACTIVE;
-/// §19 record pulse: while recording, the Record button breathes between these
+/// section 19 record pulse: while recording, the Record button breathes between these
 /// two reds (a smooth sine, not a hard blink — the one functional motion in the
 /// UI, an Ableton-style "recording now" cue that reads on stage without
 /// strobing). They bracket the button's static active red (180,40,40).
@@ -416,7 +416,7 @@ pub const SELECTED_BORDER: Color32 = BLUE_BASE;
 /// selection can't be a fill: a tint (`lighten`) vanishes against the colour, and
 /// a blue ring vanishes on a blue layer. A bright near-white ring reads on every
 /// hue and pairs with a small lift — the one distinct "this layer is selected"
-/// signal on a coloured header. See `docs/TIMELINE_UI_REDESIGN.md` §H.
+/// signal on a coloured header. See `docs/TIMELINE_UI_REDESIGN.md` section H.
 pub const SELECTED_LAYER_RING: Color32 = Color32::new(232, 240, 255, 255);
 pub const SELECTED_LAYER_RING_WIDTH: f32 = 2.0;
 
@@ -629,10 +629,10 @@ pub const TRANSPARENT: Color32 = Color32::new(0, 0, 0, 0);
 pub const HOVER_OVERLAY: Color32 = Color32::new(255, 255, 255, 15);
 pub const PRESS_OVERLAY: Color32 = Color32::new(255, 255, 255, 25);
 pub const PANEL_BG_DARK: Color32 = BG_1;
-pub const TEXT_PRIMARY_C32: Color32 = Color32::new(230, 230, 235, 255); // §A: synced w/ TEXT_NORMAL
+pub const TEXT_PRIMARY_C32: Color32 = Color32::new(230, 230, 235, 255); // section A: synced w/ TEXT_NORMAL
 pub const TEXT_WHITE_C32: Color32 = Color32::new(255, 255, 255, 255);
-pub const TEXT_LIGHT_C32: Color32 = Color32::new(226, 226, 231, 255); // §A
-pub const TEXT_DIMMED_C32: Color32 = Color32::new(178, 178, 184, 255); // §A: synced w/ TEXT_DIMMED
+pub const TEXT_LIGHT_C32: Color32 = Color32::new(226, 226, 231, 255); // section A
+pub const TEXT_DIMMED_C32: Color32 = Color32::new(178, 178, 184, 255); // section A: synced w/ TEXT_DIMMED
 pub const DIVIDER_C32: Color32 = DIVIDER;
 
 // ── Bitmap Slider Palette ───────────────────────────────────────────
@@ -714,7 +714,7 @@ pub const INSPECTOR_HEADER_BG: Color32 = Color32::new(44, 74, 122, 255);
 // ── Bitmap Effect Card ──────────────────────────────────────────────
 pub const EFFECT_CARD_INNER_BG_C32: Color32 = BG_0; // dark well, recessed in the card
 pub const CARD_BORDER_C32: Color32 = BORDER;
-/// §19 focus: the edited object lifts one ramp step so it reads first — the
+/// section 19 focus: the edited object lifts one ramp step so it reads first — the
 /// inspector card's inner well (BG_0→~BG_1) and the timeline's focused lane
 /// (BG_2→~BG_3) get the *same* lift. Hue-preserving (saturating per-channel add),
 /// so it works on the effect's neutral well and the generator's purple-tinted
@@ -771,10 +771,10 @@ pub const LAYER_ROW_BG: Color32 = Color32::new(40, 40, 42, 255);
 pub const LAYER_ROW_HOVER_BG: Color32 = Color32::new(50, 50, 53, 255);
 pub const LAYER_ROW_PRESSED_BG: Color32 = Color32::new(35, 35, 37, 255);
 
-// ── Header-control chip (§C / §K) ───────────────────────────────────
+// ── Header-control chip (section C / section K) ───────────────────────────────────
 // A control sitting on a layer header sits on the layer's IDENTITY colour, so
 // it must use an opaque NEUTRAL chip — never a tint of the hue (a darken of the
-// hue is just darker hue → reads hue-on-hue, the low-contrast trap §C names).
+// hue is just darker hue → reads hue-on-hue, the low-contrast trap section C names).
 // One dark neutral chip + a white hairline reads cleanly on any identity colour
 // (Ableton's pattern). Drives the type badge, M/S/L, blend, and routing-value
 // chips. Distinct from BUTTON_DIM (the grey chrome-bar chip) on purpose.
@@ -784,7 +784,7 @@ pub const CHIP_BG_PRESSED: Color32 = Color32::new(20, 20, 25, 255);
 /// Hairline edge on a chip — a low-alpha white so the chip separates from the
 /// identity colour behind it without a hard line.
 pub const CHIP_LINE: Color32 = Color32::new(255, 255, 255, 41);
-/// Hairline for a tonal header chip on a *light* identity header (§ layer-header
+/// Hairline for a tonal header chip on a *light* identity header (section layer-header
 /// restyle): a faint dark line that re-seats the chip where the old white stroke
 /// would have glared. Omitted on dark headers, where the darkened chip separates
 /// on its own. ~35% black.
@@ -894,12 +894,12 @@ pub const HEADER_HEIGHT: f32 = 40.0;
 // so they read as one deliberate top/bottom chrome frame (and their buttons
 // match). Locked to TRANSPORT_BAR_HEIGHT rather than a loose literal.
 pub const FOOTER_HEIGHT: f32 = TRANSPORT_BAR_HEIGHT;
-// ── Track-row height presets (§24 5d) ───────────────────────────────
+// ── Track-row height presets (section 24 5d) ───────────────────────────────
 // One named tier per content density, selected by display *state* — never by
 // layer *type* (type is shown by a badge, not by restructuring the header). See
 // `coordinate_mapper::TrackHeight`.
 /// Expanded: the default track — clip bodies + content + routing form. 200px
-/// per the redesign spec §B (Peter: focusing on a single layer is intended).
+/// per the redesign spec section B (Peter: focusing on a single layer is intended).
 pub const TRACK_HEIGHT: f32 = 200.0;
 /// Collapsed (a.k.a. compact): identity + mix row, no routing. The two-tier
 /// system is collapsed↔expanded; 58px gives the name + M/S/L row breathing room.
@@ -908,7 +908,7 @@ pub const COLLAPSED_TRACK_HEIGHT: f32 = 58.0;
 /// tall mode; the preset exists so the height vocabulary is complete.
 pub const TALL_TRACK_HEIGHT: f32 = 200.0;
 
-// ── Automation lane strips (P4, `docs/AUTOMATION_LANES_DESIGN.md` §7) ──────
+// ── Automation lane strips (P4, `docs/AUTOMATION_LANES_DESIGN.md` section 7) ──────
 // Engaging automation mode grows a content track by one strip per enabled
 // lane — `CoordinateMapper::layer_height` is the single place this height
 // actually applies (never re-derived elsewhere).
@@ -927,20 +927,20 @@ pub const AUTOMATION_LABEL_COLOR: Color32 = TEXT_DIMMED_C32;
 pub const AUTOMATION_LABEL_FONT: u16 = FONT_SMALL;
 
 pub const RULER_HEIGHT: f32 = 40.0;
-// §K1: header column widened 200→230 to match the mockup grid (room for the
+// section K1: header column widened 200→230 to match the mockup grid (room for the
 // 18px type-badge chip + name + menu in the identity row without crushing).
 pub const LAYER_CONTROLS_WIDTH: f32 = 230.0;
 pub const PLAYHEAD_WIDTH: f32 = 2.0;
 /// Size of the playhead head marker — a downward triangle at the top of the
-/// ruler that makes the "now" position unmissable next to the insert cursor (§24 5e).
+/// ruler that makes the "now" position unmissable next to the insert cursor (section 24 5e).
 pub const PLAYHEAD_HEAD_SIZE: f32 = 13.0;
 pub const CLIP_MIN_WIDTH: f32 = 10.0;
-// §K14: tighter clip inset (12→6) so clip cards fill more of the lane, matching
+// section K14: tighter clip inset (12→6) so clip cards fill more of the lane, matching
 // the mockup's `top:6px; bottom:6px`. One token → viewport rects, hit-test, and
 // the GPU clip pass stay in agreement.
 pub const CLIP_VERTICAL_PAD: f32 = 6.0;
 pub const OVERVIEW_STRIP_HEIGHT: f32 = 16.0;
-// ── Timeline horizontal scrollbar (§24 5e) ──────────────────────────
+// ── Timeline horizontal scrollbar (section 24 5e) ──────────────────────────
 /// Height of the reserved scrollbar strip at the bottom of the timeline body.
 pub const TIMELINE_SCROLLBAR_HEIGHT: f32 = 11.0;
 /// Minimum thumb length so it stays grabbable when the content is very long.
@@ -994,14 +994,14 @@ pub const SPACE_L: f32 = 12.0;
 pub const SPACE_XL: f32 = 16.0;
 pub const SPACE_XXL: f32 = 24.0;
 
-// The single left edge every inspector section-content row aligns to (§14.2
+// The single left edge every inspector section-content row aligns to (section 14.2
 // rule 1), measured from the card/chrome rect. A bordered param card reaches it
 // as `1px frame border + SPACE_M`; the border-less chrome panels (master / layer
 // / clip) use it directly as their horizontal pad, so chrome controls share one
 // column with the cards' param labels instead of staggering 2px-vs-7px.
 pub const SECTION_CONTENT_INSET: f32 = SPACE_M + 1.0;
 
-// The one card / section header-row height (§14.2 rule 5). Param cards and the
+// The one card / section header-row height (section 14.2 rule 5). Param cards and the
 // master / layer chrome headers all reference this so they share one rhythm
 // (was a 27.5-vs-28 half-pixel split).
 pub const HEADER_ROW_HEIGHT: f32 = 28.0;
@@ -1021,10 +1021,10 @@ pub const POPUP_RADIUS: f32 = 6.0;
 /// `DropdownPanel::build_nodes`) and the highlight needs to read as a
 /// distinct rounded chip rather than a flush-edged box.
 pub const MENU_ITEM_RADIUS: f32 = 4.0;
-// The §14.2-rule-6 hairline exception, realised as a token instead of scattered
+// The section 14.2-rule-6 hairline exception, realised as a token instead of scattered
 // `1.0` literals: thin bars, tracks, fills, and ≤6px overlay handles that read
 // crisper left near-square (slider track, progress fill, drop indicator, the
-// trim/target/scale bars). A named token so the guard (§16) stays at zero.
+// trim/target/scale bars). A named token so the guard (section 16) stays at zero.
 pub const HAIRLINE_RADIUS: f32 = 1.0;
 
 // ── Motion ────────────────────────────────────────────────────────────
@@ -1067,7 +1067,7 @@ pub const DEFAULT_ZOOM_INDEX: usize = 7; // 120 pixels/beat
 // ── Scroll ──────────────────────────────────────────────────────────
 pub const SCROLL_SENSITIVITY: f32 = 1.0;
 pub const BITMAP_SCROLL_SPEED: f32 = 12.5;
-/// Continuous cursor-anchored zoom (§24 5e): the zoom multiplier applied per
+/// Continuous cursor-anchored zoom (section 24 5e): the zoom multiplier applied per
 /// wheel notch. Each notch scales pixels-per-beat by this factor (or its inverse
 /// when zooming out), so zoom is smooth instead of jumping between fixed levels.
 pub const ZOOM_WHEEL_STEP_PER_NOTCH: f32 = 1.18;
@@ -1076,12 +1076,12 @@ pub const ZOOM_WHEEL_STEP_PER_NOTCH: f32 = 1.18;
 pub const LAYER_CTRL_PADDING: f32 = SPACE_M; // mockup edge gutter (8px) — tracks breathe
 pub const LAYER_CTRL_CHEVRON_WIDTH: f32 = 18.0;
 pub const LAYER_CTRL_DRAG_HANDLE_WIDTH: f32 = 18.0;
-/// Square type-badge chip in the layer name row (§24 5d / §K3). 18px to match
+/// Square type-badge chip in the layer name row (section 24 5d / section K3). 18px to match
 /// the mockup badge — a filled chip the glyph sits inside, not a bare glyph.
 pub const LAYER_CTRL_TYPE_BADGE_SIZE: f32 = 18.0;
 pub const LAYER_CTRL_NAME_ROW_HEIGHT: f32 = 18.0;
 pub const LAYER_CTRL_ROW_STEP: f32 = 23.0;
-// §K5: M/S/L chips narrowed 28→20 to match the mockup iconbtn (frees width for
+// section K5: M/S/L chips narrowed 28→20 to match the mockup iconbtn (frees width for
 // the blend chip + keeps the mix row uncrowded in the 230px column).
 pub const LAYER_CTRL_MUTE_SOLO_BTN_WIDTH: f32 = 20.0;
 pub const LAYER_CTRL_BTN_HEIGHT: f32 = 18.0;

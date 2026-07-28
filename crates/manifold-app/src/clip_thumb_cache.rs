@@ -1,4 +1,4 @@
-//! Sidecar disk cache for clip-thumbnail filmstrips (§24 5c-2 P4).
+//! Sidecar disk cache for clip-thumbnail filmstrips (section 24 5c-2 P4).
 //!
 //! Survives reload so a rehearsed project's filmstrips are present on open
 //! instead of re-captured. **Safety is by construction** — nothing here can stall

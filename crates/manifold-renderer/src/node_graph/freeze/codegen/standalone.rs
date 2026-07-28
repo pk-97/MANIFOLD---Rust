@@ -424,7 +424,7 @@ pub fn generate_standalone(spec: &StandaloneKernelSpec<'_>) -> Result<String, Co
     // the shared `samp`, which the body samples at a coord it computes. `uv`
     // (normalized center-of-texel) and `dims` (float canvas size) are the
     // ambient fragment context every body receives after its inputs (design
-    // §slot / line 60, extended with dims so positional atoms recover aspect =
+    // section slot / line 60, extended with dims so positional atoms recover aspect =
     // dims.x/dims.y and pixel = uv*dims). Derived fields (frame-recomputed
     // CPU-struct data, e.g. a Camera's basis vectors) follow the user params,
     // mirroring the buffer path's layout. Atoms that ignore an arg simply

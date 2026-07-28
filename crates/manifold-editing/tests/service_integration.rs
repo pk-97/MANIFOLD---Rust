@@ -563,7 +563,7 @@ fn move_clip_to_layer() {
 }
 
 // ─── Move clips across layers (B14 keyboard Up/Down —
-// docs/TIMELINE_INTERACTION_P1_SPEC.md §5 P1.6) ───
+// docs/TIMELINE_INTERACTION_P1_SPEC.md section 5 P1.6) ───
 
 #[test]
 fn move_clips_across_layers_batches_as_one_undo_entry() {

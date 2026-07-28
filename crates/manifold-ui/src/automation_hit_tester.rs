@@ -7,7 +7,7 @@
 //! Operates directly over `TimelineViewportPanel::automation_lane_screens`'
 //! output — the SAME geometry the renderer draws from, so a click can never
 //! disagree with what's on screen (mirrors `ClipHitTester`'s "one source for
-//! draw and hit-test" discipline). See `docs/AUTOMATION_LANES_DESIGN.md` §7.
+//! draw and hit-test" discipline). See `docs/AUTOMATION_LANES_DESIGN.md` section 7.
 
 use crate::hit_targets::{HitTargetEntry, HitTargets};
 use crate::node::{Rect, Vec2};
@@ -21,7 +21,7 @@ pub const DOT_HIT_RADIUS_PX: f32 = 7.0;
 
 /// Vertical tolerance (screen pixels) around a segment's drawn curve for a
 /// "grab this segment" hit — P4 Unit B (`docs/AUTOMATION_LANES_DESIGN.md`
-/// §7's "drag a segment" / "modifier-drag a segment" bullets). Deliberately
+/// section 7's "drag a segment" / "modifier-drag a segment" bullets). Deliberately
 /// close to `DOT_HIT_RADIUS_PX` — a click has to land ON the line, not just
 /// somewhere in the strip, or it falls through to `Strip` (add-a-point).
 pub const SEGMENT_HIT_DISTANCE_PX: f32 = 8.0;
@@ -132,7 +132,7 @@ pub fn marquee_rect(a: Vec2, b: Vec2) -> Rect {
 }
 
 /// All `(lane_index, dot_index)` pairs whose dot falls within `rect` — the
-/// pure core of marquee-select (P4 Unit B, §7's "Marquee-select multiple
+/// pure core of marquee-select (P4 Unit B, section 7's "Marquee-select multiple
 /// dots"). `InteractionOverlay` calls this every frame during an
 /// `AutomationMarquee` drag to refresh `UIState::selected_automation_points`.
 pub fn dots_in_rect(rect: Rect, lanes: &[AutomationLaneScreen]) -> Vec<(usize, usize)> {
@@ -147,7 +147,7 @@ pub fn dots_in_rect(rect: Rect, lanes: &[AutomationLaneScreen]) -> Vec<(usize, u
     out
 }
 
-// ── Automation surface (UI_AUTOMATION_DESIGN.md D5/§5) ───────────
+// ── Automation surface (UI_AUTOMATION_DESIGN.md D5/section 5) ───────────
 
 /// Stable text form of a lane's addressing target, shared by the strip and
 /// point payloads below (`"effect:<id>"` / `"generator:<id>"`).

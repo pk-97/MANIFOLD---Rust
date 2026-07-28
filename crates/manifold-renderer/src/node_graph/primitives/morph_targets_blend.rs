@@ -6,7 +6,7 @@
 //! flattened target-major `Array(MeshVertex)`, looked up via a
 //! `BufferGather` `deltas[target * vertex_count + idx]`) onto the base
 //! mesh (`in`, coincident — typically `node.gltf_mesh_source`'s output),
-//! per glTF 2.0 §3.7.2.1's additive morph formula:
+//! per glTF 2.0 section 3.7.2.1's additive morph formula:
 //!
 //! `pos' = base.pos + sum(weight[t] * delta[t].pos)`
 //! `normal' = normalize(base.normal + sum(weight[t] * delta[t].normal))`
@@ -219,7 +219,7 @@ mod gpu_tests {
     //! Real-GPU value-level tests. No legacy predecessor to diff against —
     //! parity is against a hand-written Rust reference of the committed
     //! additive morph formula, element-wise, per
-    //! DECOMPOSING_GENERATORS.md §9.
+    //! DECOMPOSING_GENERATORS.md section 9.
     use super::*;
 
     fn mk_vertex(pos: [f32; 3], normal: [f32; 3]) -> MeshVertex {

@@ -1,7 +1,7 @@
 //! [`build_strobe_opacity`] — Strobe (Opacity mode) as a primitive graph.
 //!
 //! Decomposition of the legacy Strobe Opacity branch:
-//! `Source → Gain(gain = 1 - BeatGate) → out`. Validates the §12.6
+//! `Source → Gain(gain = 1 - BeatGate) → out`. Validates the section 12.6
 //! worked example end-to-end — that a fused Strobe shader can be
 //! expressed as a graph of small primitives with **pixel-exact
 //! parity**. The parity holds because the gate signal flows on a

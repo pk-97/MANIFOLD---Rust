@@ -43,7 +43,7 @@ pub(super) fn emit_buffer_struct(specs: &[ChannelSpec], name: &str) -> String {
 /// `tex + samp` ABI the standalone buffer kernel passes, so the sample is
 /// bit-identical (the `*_at_particles` force samplers, anti_clump's modulator).
 /// Emit the D7/P0 side-channel markers a fused region's derived-uniform members
-/// need (`docs/CINEMATIC_POST_DESIGN.md`, `docs/FREEZE_COMPILER_MAP.md` §5 marker
+/// need (`docs/CINEMATIC_POST_DESIGN.md`, `docs/FREEZE_COMPILER_MAP.md` section 5 marker
 /// ABI): one `// @camera_external: camera_ext_N` per distinct Camera external the
 /// region routes (`FusionRegion::camera_externals`), then one
 /// `// @derived_uniform_member: <first_field> words=<n> <type_id> [<camera_port>]`

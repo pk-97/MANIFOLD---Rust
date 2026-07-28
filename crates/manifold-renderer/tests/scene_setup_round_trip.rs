@@ -1,4 +1,4 @@
-//! SCENE_SETUP_PANEL_DESIGN.md P1 round-trip gate (DESIGN_DOC_STANDARD §5):
+//! SCENE_SETUP_PANEL_DESIGN.md P1 round-trip gate (DESIGN_DOC_STANDARD section 5):
 //! a Scene Setup panel edit must survive save → reload, not just the create
 //! path. Builds a generator layer with a per-instance graph override holding
 //! an atmosphere node, "edits" its fog density the same way

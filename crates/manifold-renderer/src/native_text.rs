@@ -505,7 +505,7 @@ const ICON_V_MARGIN: f32 = 0.1;
 
 /// Generate every atlas icon bitmap, indexed by [`Icon`] id: the 5 waveform SDF
 /// icons (ported from Unity DriverWaveformIcons.cs), the cog, the four layer-type
-/// badges (§24 5d), and the playhead head (§24 5e). All are R8 coverage bitmaps.
+/// badges (section 24 5d), and the playhead head (section 24 5e). All are R8 coverage bitmaps.
 fn generate_atlas_icons() -> [Vec<u8>; ICON_COUNT] {
     std::array::from_fn(|i| match i as u8 {
         x if x == Icon::Cog.id() => generate_cog_icon(),
@@ -567,7 +567,7 @@ fn generate_cog_icon() -> Vec<u8> {
     pixels
 }
 
-// ─── Layer-type badge + playhead icons (§24 5d / 5e) ────────────────────────
+// ─── Layer-type badge + playhead icons (section 24 5d / 5e) ────────────────────────
 
 /// Supersample a filled shape into an R8 coverage bitmap. `inside(nx, ny)` tests
 /// whether a normalised (0..1) sample point is within the shape; 4×4 samples per
@@ -664,7 +664,7 @@ fn generate_level_bars_icon() -> Vec<u8> {
 }
 
 /// Playhead head — a downward triangle (▼) whose apex points at the playline,
-/// drawn at the top of the ruler so the "now" position is unmissable (§24 5e).
+/// drawn at the top of the ruler so the "now" position is unmissable (section 24 5e).
 fn generate_playhead_head_icon() -> Vec<u8> {
     let a = (0.16, 0.20);
     let b = (0.84, 0.20);

@@ -99,7 +99,7 @@ impl UIRoot {
             // the event through the single driver. If one consumes it (or a modal
             // captures it), lower any stashed selection and skip the panels below.
             if self.route_overlay_event(event, &mut actions) {
-                // D6/§3.4 (`docs/DRAG_CAPTURE_DESIGN.md`): the consuming overlay
+                // D6/section 3.4 (`docs/DRAG_CAPTURE_DESIGN.md`): the consuming overlay
                 // may have just armed a precision-drag surface (audio panel's
                 // band divider) on this exact PointerDown — request zero-
                 // threshold drag for the current press so the very next Move
@@ -113,7 +113,7 @@ impl UIRoot {
                 continue;
             }
 
-            // Escape closes the Audio Setup dock (D1/§3.5) — the ONE key path,
+            // Escape closes the Audio Setup dock (D1/section 3.5) — the ONE key path,
             // handled AFTER overlays (a dropdown/settings opened over the app
             // gets Escape first) and routed through the same `OpenAudioSetup`
             // toggle the header button and the × use.
@@ -199,7 +199,7 @@ impl UIRoot {
         // undo snapshot is committed. handle_drag_end is idempotent: if DragEnd
         // already cleared pressed_target, PointerUp is a no-op.
         //
-        // D1/D2 (`docs/DRAG_CAPTURE_DESIGN.md` §3.2/§3.3): `DragBegin` still arms
+        // D1/D2 (`docs/DRAG_CAPTURE_DESIGN.md` section 3.2/section 3.3): `DragBegin` still arms
         // the inspector/layer-header drag state unconditionally, exactly as
         // before — that arming is what `resolve_drag_owner` reads immediately
         // after, to fix `drag_owner` for the rest of the gesture. `Drag`

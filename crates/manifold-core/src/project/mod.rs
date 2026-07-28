@@ -100,7 +100,7 @@ pub struct Project {
     /// overlapping clips removed, orphaned references purged, missing media
     /// files). Transient runtime state, recomputed every load — never
     /// serialized, exactly the `clip.layer_id` pattern (`BUG-063`,
-    /// `docs/PROJECT_FILE_INTEGRITY_DESIGN.md` §3.6).
+    /// `docs/PROJECT_FILE_INTEGRITY_DESIGN.md` section 3.6).
     #[serde(skip)]
     pub load_report: LoadReport,
 

@@ -1,6 +1,6 @@
 //! The viewport's coordinate surface over `CoordinateMapper` — beat↔pixel, the
 //! per-track Y, grid snapping, and marker-flag geometry. See
-//! `docs/TIMELINE_API_DESIGN.md` §3.4.
+//! `docs/TIMELINE_API_DESIGN.md` section 3.4.
 
 use super::*;
 
@@ -10,7 +10,7 @@ impl TimelineViewportPanel {
     /// The single definition of marker-flag geometry — both the flag node
     /// (`build_markers` / the scroll update-in-place) and the hit-test
     /// read it, so a marker's clickable area cannot drift from where it is
-    /// drawn. See `docs/TIMELINE_API_DESIGN.md` §3.5.
+    /// drawn. See `docs/TIMELINE_API_DESIGN.md` section 3.5.
     pub(super) fn marker_flag_rect(&self, beat: Beats) -> Rect {
         let flag_w = color::MARKER_FLAG_WIDTH;
         let px = self.beat_to_pixel(beat);

@@ -1,5 +1,5 @@
 //! `node.twist_mesh` — per-vertex twist of an `Array<MeshVertex>` about its
-//! own bend axis (MESH_DEFORM_AND_CURVE_GEOMETRY_DESIGN.md D3/D4, §3 atom
+//! own bend axis (MESH_DEFORM_AND_CURVE_GEOMETRY_DESIGN.md D3/D4, section 3 atom
 //! table).
 //!
 //! `theta(v) = angle * (coord(v) - center) * w`, where `coord(v)` is the
@@ -264,7 +264,7 @@ mod tests {
 mod gpu_tests {
     //! Real-GPU value-level tests. No legacy predecessor to diff against —
     //! parity is against a hand-written Rust reference of the committed
-    //! formula, element-wise, per DECOMPOSING_GENERATORS.md §9.
+    //! formula, element-wise, per DECOMPOSING_GENERATORS.md section 9.
     use super::*;
 
     fn mk_vertex(pos: [f32; 3], normal: [f32; 3], uv: [f32; 2]) -> MeshVertex {
@@ -387,7 +387,7 @@ mod gpu_tests {
 
     /// The exact bar this test guards: a saw LFO doing full revolutions
     /// (angle sweeping past 2*pi and beyond) must keep producing the exact
-    /// analytic rotation with no clamp-induced stall. §4 "bend/twist rotate
+    /// analytic rotation with no clamp-induced stall. section 4 "bend/twist rotate
     /// normals exactly".
     #[test]
     fn exact_normals_match_analytic_rotation_past_2pi() {

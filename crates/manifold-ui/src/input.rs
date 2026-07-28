@@ -12,7 +12,7 @@ pub enum PointerAction {
 /// Keyboard modifier flags.
 ///
 /// `#[serde(default)]`: an `AutomationAction` script (`UI_AUTOMATION_DESIGN.md`
-/// §4/§6) names a `Gesture::Click { modifiers }` far more often with no
+/// section 4/section 6) names a `Gesture::Click { modifiers }` far more often with no
 /// modifiers held than with — every omitted field defaults to `false`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -387,7 +387,7 @@ pub struct UIInputSystem {
     last_drag_pos: Vec2,
     is_dragging: bool,
 
-    // D6 (`docs/DRAG_CAPTURE_DESIGN.md` §3.4): armed by `request_immediate_drag`
+    // D6 (`docs/DRAG_CAPTURE_DESIGN.md` section 3.4): armed by `request_immediate_drag`
     // while routing the CURRENT press's `PointerDown`; makes the Move arm treat
     // the drag threshold as 0 for this press only. Cleared on `Up` alongside the
     // other per-press state — never carries over to the next gesture.
@@ -936,7 +936,7 @@ mod tests {
         assert_eq!(clicks.len(), 0);
     }
 
-    /// P3 (D6, `docs/DRAG_CAPTURE_DESIGN.md` §3.4): a press that armed
+    /// P3 (D6, `docs/DRAG_CAPTURE_DESIGN.md` section 3.4): a press that armed
     /// `request_immediate_drag` begins the drag on the very next Move, no
     /// matter how small — proving the effective per-press threshold really
     /// drops to 0, not just "lower". 1px is nowhere near the ordinary 4px

@@ -1,4 +1,4 @@
-// node.rotate_3d — fusable BUFFER body (freeze §12, buffer domain), COINCIDENT.
+// node.rotate_3d — fusable BUFFER body (freeze section 12, buffer domain), COINCIDENT.
 // XYZ Euler rotation of each MeshVertex's position + normal (X -> Y -> Z order),
 // uv passes through. Matches generator_math::rotate_3d / rotate_3d.wgsl
 // bit-for-bit (trig computed on-GPU both ways, so identical).

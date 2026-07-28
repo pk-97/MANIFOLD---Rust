@@ -5,7 +5,7 @@
 //! a target colour. The canonical "where is this colour" generator.
 //!
 //! Second Phase A primitive (per `docs/PRIMITIVE_LIBRARY_DESIGN.md`
-//! §10). Pairs with `masked_mix` to make any effect operate selectively
+//! section 10). Pairs with `masked_mix` to make any effect operate selectively
 //! on a chosen colour range — the immediate demo for both primitives
 //! is the "Edge Stretch By Colour" preset, which stretches only the
 //! pixels matching a user-picked target colour.
@@ -184,7 +184,7 @@ impl Primitive for ChromaKey {
 mod gpu_tests {
     //! GPU correctness tests for `ChromaKey`.
     //!
-    //! Test shape per §10.3:
+    //! Test shape per section 10.3:
     //!   1. Smoke — dispatches without panic.
     //!   2. Matching pixel → mask ~ 1 (Select mode, exact key colour).
     //!   3. Non-matching pixel → mask ~ 0 (very far from key).

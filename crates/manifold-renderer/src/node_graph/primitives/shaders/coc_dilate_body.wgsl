@@ -1,4 +1,4 @@
-// node.coc_dilate — fusable body (freeze §12), Pointwise + sampler-Gather
+// node.coc_dilate — fusable body (freeze section 12), Pointwise + sampler-Gather
 // (STENCIL-FETCH ABI). Fixed 3x3 neighborhood max of the input texture's R
 // channel — BUG-137's committed fix shape (docs/BUG_BACKLOG.md): spread the
 // maximum CoC found in a small neighborhood outward so `node.variable_blur`'s

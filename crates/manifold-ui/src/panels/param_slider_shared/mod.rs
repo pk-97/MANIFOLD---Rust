@@ -54,7 +54,7 @@ pub(crate) const DRAWER_INDENT: f32 = color::SPACE_L;
 /// The bottom needs none: the drawer's own internal `TOP_PAD` already insets the
 /// last row. Visual only — does not move content or affect height math.
 pub(crate) const MOD_CARD_PAD: f32 = 4.0;
-// Card inner inset (§14.5 C). The canonical `SPACE_M`: with the card's 1px frame
+// Card inner inset (section 14.5 C). The canonical `SPACE_M`: with the card's 1px frame
 // border that puts param-label content at `BORDER_W + SPACE_M` =
 // `color::SECTION_CONTENT_INSET`, the one column the border-less chrome panels
 // align to. `slider_w` / `label_width` / the header trailing-x all derive from

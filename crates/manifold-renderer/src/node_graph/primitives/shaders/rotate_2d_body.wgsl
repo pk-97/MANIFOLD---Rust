@@ -1,4 +1,4 @@
-// node.rotate_coordinates — fusable body (freeze §12). Rotates a 2-channel
+// node.rotate_coordinates — fusable body (freeze section 12). Rotates a 2-channel
 // coordinate texture (R=x, G=y) by `angle` radians around the origin.
 // Output B=0, A=1 — this is a coordinate transform, not a colour
 // passthrough, so alpha is NOT taken from the input (matches

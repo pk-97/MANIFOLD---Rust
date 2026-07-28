@@ -1,14 +1,14 @@
 //! Drive interaction through the REAL input host, then the caller re-syncs and
-//! re-renders. `select:<layer>` is sugar (`UI_AUTOMATION_DESIGN.md` §6) for a
+//! re-renders. `select:<layer>` is sugar (`UI_AUTOMATION_DESIGN.md` section 6) for a
 //! one-step `AutomationAction::Pointer { target: Query{text}, gesture: Click }`
-//! compiled to the §4 core (`super::script::click_by_text`): resolve the
+//! compiled to the section 4 core (`super::script::click_by_text`): resolve the
 //! target header's rect from the built tree, synthesize a real pointer
 //! Down+Up (`UIRoot::pointer_event` → `UIInputSystem::process_pointer`),
 //! drain the real `UIEvent`s, and dispatch through the real panel/bridge path
 //! — the exact same seam the `--script` runner uses, not a parallel one. No
 //! faked state, and no fallback on a miss (D6) — a miss is returned as an
 //! `Err` and surfaced loudly by the caller (`mod.rs`'s `--interact` branch).
-//! See `docs/HEADLESS_UI_HARNESS.md` §2.
+//! See `docs/HEADLESS_UI_HARNESS.md` section 2.
 
 use manifold_core::{Beats, ClipId, LayerId};
 
@@ -318,7 +318,7 @@ fn drag_readout(ui: &mut UIRoot, data: &mut SceneData, rest: &str) -> Result<Str
     ))
 }
 
-/// P4 Unit A evidence-gathering verb (`docs/AUTOMATION_LANES_DESIGN.md` §7):
+/// P4 Unit A evidence-gathering verb (`docs/AUTOMATION_LANES_DESIGN.md` section 7):
 /// `automation_add:<layer_id>:<param_id>:<beat>` adds a breakpoint at
 /// `beat` with value = the param range's midpoint, directly on `data.
 /// project` — same "drive the data field directly, the level under test is
@@ -379,7 +379,7 @@ fn automation_move_point(data: &mut SceneData, rest: &str) -> Result<String, Str
     Ok(format!("automation_move -> '{layer_id}':'{param_id}'[{idx}] beat {old_beat} -> {new_beat}"))
 }
 
-/// P4 Unit B evidence-gathering verb (`docs/AUTOMATION_LANES_DESIGN.md` §7):
+/// P4 Unit B evidence-gathering verb (`docs/AUTOMATION_LANES_DESIGN.md` section 7):
 /// `automation_bend:<layer_id>:<param_id>:<point_index>:<bend>` sets the
 /// point at `point_index`'s shape to `Curved(bend)`, directly on `data.
 /// project` — same "drive the data field, prove the RENDER reacts" level as
@@ -653,9 +653,9 @@ fn delete_layer(data: &mut SceneData, target: &str) -> Result<String, String> {
     Ok(format!("delete -> removed '{target}' and any children; {before} -> {after} layers"))
 }
 
-/// `select:<layer_id>` sugar (§6): looks up the layer's display name (the
+/// `select:<layer_id>` sugar (section 6): looks up the layer's display name (the
 /// CLI's existing `select:<id>` contract, unchanged) and compiles to a
-/// one-step `Pointer { target: Query{text}, gesture: Click }` against the §4
+/// one-step `Pointer { target: Query{text}, gesture: Click }` against the section 4
 /// core (`super::script::click_by_text`) — the same resolver + gesture
 /// dispatch the `--script` runner uses, not a parallel reimplementation. A
 /// synthesized-click miss is no longer silently patched over with an id

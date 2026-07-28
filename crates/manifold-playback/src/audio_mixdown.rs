@@ -9,7 +9,7 @@
 //! playback): it must produce the SAME audio you hear, so the placement, warp,
 //! gain, and solo/mute rules are mirrored from that module exactly.
 //!
-//! Per audio layer (design §5): a layer reaches the **master mix** only when
+//! Per audio layer (design section 5): a layer reaches the **master mix** only when
 //! `master_hot` — not muted, not silenced by another layer's solo, and not
 //! analysis-only. A layer's **tap** (its own mono, exposed via
 //! `ExportAudio::per_layer_mono` for layers requested in `tapped_layers`) is
@@ -117,7 +117,7 @@ pub fn render_export_audio(
     let total_frames = pre_roll_samples + main_frames;
     let render_start_seconds = start_seconds - pre_roll_samples as f64 / out_sr;
 
-    // Audio layers have their own solo bus (design §5): any soloed audio layer
+    // Audio layers have their own solo bus (design section 5): any soloed audio layer
     // silences the others to master. Mirrors `AudioLayerPlayback::update`.
     let any_solo = project
         .timeline

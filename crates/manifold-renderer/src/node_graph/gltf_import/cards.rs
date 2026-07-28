@@ -13,7 +13,7 @@ use crate::node_graph::primitives::gltf_anim_shared::LOOP_MODES;
 /// the wired node param's value (through `scale`) so the card reproduces the
 /// assembler's look on first frame with no drift. `section` bundles this
 /// knob under a collapsible card header (D5/D9,
-/// SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2): per-object knobs get the
+/// SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md section 2): per-object knobs get the
 /// object's group name, shared knobs get `"Camera"`/`"Sun"`/`"Environment"`.
 pub(super) fn card_param(
     id: &str,

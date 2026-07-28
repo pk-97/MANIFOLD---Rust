@@ -1,7 +1,7 @@
 //! Input mapping for the P5 interactive 3D viewport
 //! (`docs/REALTIME_3D_DESIGN.md` D7, P5 as-built note): translates raw
 //! pointer/scroll events into [`manifold_renderer::node_graph::ViewportSession`]
-//! calls, per the industry-standard bindings the doc commits to (D7 §7.7):
+//! calls, per the industry-standard bindings the doc commits to (D7 section 7.7):
 //! left-drag orbits, shift-drag or middle-drag pans, scroll/pinch dollies.
 //!
 //! Deliberately winit-agnostic in its inputs — takes resolved primitives

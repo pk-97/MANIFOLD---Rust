@@ -12,9 +12,9 @@
 //! The small real differences between the two kinds live on these structs as
 //! kind-tagged or optional fields (effect-only: `enabled`, badges,
 //! `has_graph_mod`; generator-only: `string_params`). `is_toggle`/
-//! `is_trigger` apply to both kinds (§8.4 P3b gave effect cards the same
+//! `is_trigger` apply to both kinds (section 8.4 P3b gave effect cards the same
 //! toggle/trigger row rendering generators already had — see
-//! `docs/LIVE_AUDIO_TRIGGERS_DESIGN.md` §8). Readers branch on
+//! `docs/LIVE_AUDIO_TRIGGERS_DESIGN.md` section 8). Readers branch on
 //! [`ParamCardKind`] or ignore the field that doesn't apply to them.
 
 use crate::{ParamsAction, RootAction};
@@ -82,7 +82,7 @@ fn audio_shape_value_text(which: AudioShapeParam, value: f32) -> String {
 // (effect: drag-handle + ABL/ENV/DRV/MOD badges + ON/OFF toggle; generator:
 // Change button) carries its own kind-specific widths.
 
-const HEADER_HEIGHT: f32 = color::HEADER_ROW_HEIGHT; // §14.2 rule 5: one header height
+const HEADER_HEIGHT: f32 = color::HEADER_ROW_HEIGHT; // section 14.2 rule 5: one header height
 /// Breathing room between the coloured header and the first param row, so the
 /// slider doesn't butt against the header. Matches the card's bottom padding.
 const HEADER_BODY_GAP: f32 = PADDING;
@@ -94,7 +94,7 @@ const BORDER_W: f32 = 1.0;
 // visual — it doesn't move any laid rect, so the golden header-layout tests
 // are unaffected.
 const CORNER_RADIUS: f32 = color::CARD_RADIUS;
-// §14.5 E — the inter-card gap is owned by the container (`inspector::SECTION_GAP`),
+// section 14.5 E — the inter-card gap is owned by the container (`inspector::SECTION_GAP`),
 // not split between margin + gap. Zero here; the card reports just its frame height.
 const CARD_BOTTOM_MARGIN: f32 = 0.0;
 const CHEVRON_W: f32 = 18.0;
@@ -307,7 +307,7 @@ pub struct ParamCardPanel {
     /// positioned yet" — snap instead of ease so a tab strip appearing for the
     /// first time doesn't visibly slide in from x=0.
     mod_tab_ink: Vec<AnimF32>,
-    /// §6b compact mode — when true, every modulation config drawer on this card
+    /// section 6b compact mode — when true, every modulation config drawer on this card
     /// is hidden (mods stay armed; arm buttons + slider track overlays still
     /// show). Driven globally by the inspector's "hide mod settings" toggle.
     compact: bool,
@@ -319,7 +319,7 @@ pub struct ParamCardPanel {
     osc_addresses: Vec<Option<String>>,
 
     /// D5 card-section fold state (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md
-    /// §2), keyed by section name. UI-local workspace state — same home as
+    /// section 2), keyed by section name. UI-local workspace state — same home as
     /// the graph canvas's `GraphCanvas::collapsed` (survives rebuilds of
     /// this panel instance, never serialized to the project; folds reset on
     /// app restart, persistence Deferred). Missing entry = unfolded
@@ -336,7 +336,7 @@ pub struct ParamCardPanel {
     param_cache: Vec<f32>,
     toggle_cache: Vec<bool>,
     label_cache: Vec<Option<String>>,
-    /// P2 "value-change flash" (`UI_CRAFT_AND_MOTION_PLAN.md` §4) — per-param
+    /// P2 "value-change flash" (`UI_CRAFT_AND_MOTION_PLAN.md` section 4) — per-param
     /// one-shot fired when `sync_values` sees a genuine value change (not the
     /// post-`configure()` NaN resync, and not while this card's slider is being
     /// dragged — the drag itself is the feedback). Ticked alongside
@@ -608,7 +608,7 @@ impl ParamCardPanel {
         }
     }
 
-    /// P7 (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` §7.2 item 5):
+    /// P7 (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` section 7.2 item 5):
     /// param index of the currently-OPEN fire-mode (`is_trigger_gate`, armed)
     /// drawer, if any — deliberately narrower than the Amount meter itself
     /// (every open drawer shows a meter, 2026-07-11): only a fire-mode config
@@ -796,7 +796,7 @@ impl ParamCardPanel {
     }
 
     /// Inner-well fill for the card's current kind + focus. The selected card
-    /// lifts its well one ramp step (§19) so the edited card reads first; the
+    /// lifts its well one ramp step (section 19) so the edited card reads first; the
     /// rest sit at the base recessed well.
     fn base_inner_bg(&self) -> Color32 {
         let base = match self.kind {
@@ -829,7 +829,7 @@ impl ParamCardPanel {
                 },
             );
         }
-        // §19 focus: lift the inner well one ramp step in place, so the edited
+        // section 19 focus: lift the inner well one ramp step in place, so the edited
         // card reads first without a rebuild. The well is a static panel (no
         // hover/press/text), so a bg+radius style is complete.
         if let Some(inner_id) = self.inner_bg_id {
@@ -1058,7 +1058,7 @@ mod tests {
 
     /// Config with a third (`is_toggle`) and fourth (`is_trigger`) param —
     /// exercises the effect card's toggle/trigger row rendering + click
-    /// dispatch (§8.4 P3b: effect cards previously had no branch for either
+    /// dispatch (section 8.4 P3b: effect cards previously had no branch for either
     /// and rendered them as raw sliders — the Task A bug).
     fn effect_config_with_toggle_and_trigger() -> ParamSurface {
         let mut c = effect_config();
@@ -1136,7 +1136,7 @@ mod tests {
         assert!(panel.row_host.audio_btn_ids[3].is_some());
     }
 
-    /// `WIDGET_TREE_DESIGN.md` §5 dump-queryability: every converged card row
+    /// `WIDGET_TREE_DESIGN.md` section 5 dump-queryability: every converged card row
     /// carries a param-id-derived automation name on its row-root and drivable
     /// controls, so a `--script` flow can find and drive it directly. This is
     /// the wire VD-035 needed — a modifier param row past its value cell is
@@ -1266,7 +1266,7 @@ mod tests {
         assert!(matches!(actions[0], PanelAction::Root(RootAction::OpenAudioSetup) | PanelAction::Modulation(ModulationAction::AudioModToggle(..))));
     }
 
-    /// Config with an `is_trigger_gate` toggle param (§9, the outer-card gate
+    /// Config with an `is_trigger_gate` toggle param (section 9, the outer-card gate
     /// for a generator's/effect's audio trigger response — Strobe's/the 11
     /// generators' `clip_trigger`), armed with a real `ParameterAudioMod` (a
     /// `trigger_mode`, not a separate config type) so the drawer builds.
@@ -1336,7 +1336,7 @@ mod tests {
 
     #[test]
     fn open_fire_mode_drawer_send_and_band_read_the_armed_trigger_gate_row() {
-        // P7 (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` §7.2 item
+        // P7 (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` section 7.2 item
         // 5): the fixture arms the clip_trigger row on send "send-kick",
         // band index 1 (Low) — the accessors must report exactly that.
         let mut tree = UITree::new();
@@ -1367,7 +1367,7 @@ mod tests {
 
     #[test]
     fn open_fire_mode_drawer_send_is_none_for_a_plain_continuous_mod() {
-        // Negative gate (§7.3 P7): an armed but NON-trigger-gate audio mod's
+        // Negative gate (section 7.3 P7): an armed but NON-trigger-gate audio mod's
         // open drawer must never re-tap the scope — only fire-mode configs do.
         let mut tree = UITree::new();
         let mut panel = ParamCardPanel::new();
@@ -2715,7 +2715,7 @@ mod tests {
 
     #[test]
     fn param_label_column_aligns_to_section_inset() {
-        // §14.2 rule 1 / §14.5 C — one inset. The effect card and generator card
+        // section 14.2 rule 1 / section 14.5 C — one inset. The effect card and generator card
         // land their first param label on the SAME left column, and that column is
         // the canonical `SECTION_CONTENT_INSET` (= card 1px border + SPACE_M). The
         // border-less chrome panels set `PAD_H = SECTION_CONTENT_INSET`, so they
@@ -2768,7 +2768,7 @@ mod tests {
         let inner_x = rect.x + BORDER_W;
         let inner_y = rect.y + BORDER_W;
         let inner_w = rect.width - BORDER_W * 2.0;
-        // §14.5 D — trailing controls right-align to the shared `inner_right - PADDING`
+        // section 14.5 D — trailing controls right-align to the shared `inner_right - PADDING`
         // gutter (was flush to the inner edge).
         let chevron_x = inner_x + inner_w - PADDING - CHEVRON_W;
         let cog_x = chevron_x - COG_W;
@@ -2950,7 +2950,7 @@ mod tests {
         assert!(matches!(actions[0], PanelAction::Params(ParamsAction::GenCardClicked)));
     }
 
-    /// D5 card sections (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2): Speed +
+    /// D5 card sections (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md section 2): Speed +
     /// Invert sectioned under "Leaf" (a contiguous run), Scale unsectioned.
     fn gen_config_with_sections() -> ParamSurface {
         let mut c = gen_config();
@@ -3083,7 +3083,7 @@ mod tests {
 
     #[test]
     fn compact_mode_hides_driver_drawer_height() {
-        // §6b: with a driver armed, compact mode drops the drawer back out of the
+        // section 6b: with a driver armed, compact mode drops the drawer back out of the
         // card height (mod stays armed; only the config drawer is hidden).
         let mut panel = ParamCardPanel::new();
         panel.configure(&gen_config());
@@ -3182,7 +3182,7 @@ mod tests {
 
     /// Shared assertion: `track` resolves to a `SliderReset` via the registry
     /// on right-click. Reused across the main-slider and drawer-slider cases
-    /// below (spec §8).
+    /// below (spec section 8).
     fn assert_track_resets(reg: &crate::intent::IntentRegistry, tree: &UITree, track: NodeId) {
         match reg.resolve(tree, Some(track), crate::intent::Gesture::RightClick) {
             Some(PanelAction::Root(RootAction::SliderReset { .. })) => {}
@@ -3242,7 +3242,7 @@ mod tests {
         assert_track_resets(&reg, &tree, track);
     }
 
-    // ── P2 dispatch-family coverage (`docs/WIDGET_TREE_DESIGN.md` §6/P2) —
+    // ── P2 dispatch-family coverage (`docs/WIDGET_TREE_DESIGN.md` section 6/P2) —
     // roles the pre-existing suite above didn't already regression-pin
     // (DriverBtn/AudioBtn/ToggleBtn/MappingChevron/SectionHeader/ModTab were
     // covered before this lane and stayed green through the RowIndex swap;

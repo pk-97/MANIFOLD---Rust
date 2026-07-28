@@ -280,7 +280,7 @@ pub fn push_state(
         let can_clear = project.tempo_map.point_count() > 1;
         ui.transport.set_bpm_clear_active(can_clear);
 
-        // Automation globals (P4, docs/AUTOMATION_LANES_DESIGN.md §4/§5/§7):
+        // Automation globals (P4, docs/AUTOMATION_LANES_DESIGN.md section 4/section 5/section 7):
         // ARM mirrors the runtime arm flag; BACK lights red exactly when any
         // lane override latch is active (Live's Back to Arrangement).
         ui.transport.set_automation_state(
@@ -410,7 +410,7 @@ pub fn push_state(
         .and_then(|i| project.timeline.layers.get(i))
         .map(|l| l.layer_id.clone());
     ui.layer_headers.set_active_layer(active_layer_id);
-    // §19 timeline echo: the focused lane lifts in the viewport body too (track
+    // section 19 timeline echo: the focused lane lifts in the viewport body too (track
     // index == layer index, the `tracks` vec is built 1:1 from project layers).
     ui.viewport.set_active_track_index(active_layer);
     {

@@ -1,4 +1,4 @@
-// node.apply_radial_burst_3d_to_particles — fusable BUFFER body (freeze §12,
+// node.apply_radial_burst_3d_to_particles — fusable BUFFER body (freeze section 12,
 // buffer domain), COINCIDENT. Per-particle 3D injection burst around one of four
 // hardcoded tetrahedron-vertex zones (inject_index < 0 = off): noise-perturbed
 // radial push + vortex-ring tangent on position.xyz. Matches

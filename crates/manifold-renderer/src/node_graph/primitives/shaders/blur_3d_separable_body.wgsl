@@ -1,4 +1,4 @@
-// node.blur_3d_separable — fusable body (freeze §12), 3D-VOLUME GATHER. Single-
+// node.blur_3d_separable — fusable body (freeze section 12), 3D-VOLUME GATHER. Single-
 // axis separable Gaussian blur on a Texture3D. `in` is gathered along one axis at
 // the bilinear tap-pair midpoints (sigma = max(radius/2.5, 0.5)); the texel step
 // comes from vol_res. The hand shader has two entry points (blur_scalar writes the

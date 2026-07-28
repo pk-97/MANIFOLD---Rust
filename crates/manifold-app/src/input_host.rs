@@ -1590,7 +1590,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         *self.needs_structural_sync = true;
     }
 
-    // ── D4/D5 Finder-paste arbitration (docs/TIMELINE_INGEST_DESIGN.md §2) ──
+    // ── D4/D5 Finder-paste arbitration (docs/TIMELINE_INGEST_DESIGN.md section 2) ──
 
     fn pasteboard_file_urls(&self) -> Vec<std::path::PathBuf> {
         #[cfg(target_os = "macos")]

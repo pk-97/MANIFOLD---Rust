@@ -510,7 +510,7 @@ fn prefilter_and_irradiance_cost_is_measured_and_reported() {
 /// GLB_CONFORMANCE_DESIGN.md G-P6 deliverable: "prefilter cost measurement
 /// at 4096×2048 reported as a number ... if the first-frame convolution
 /// exceeds 10ms, drop the node's default width/height to 2048×1024 and
-/// state it." `node.hdri_source`'s default output (§3 committed shape) IS
+/// state it." `node.hdri_source`'s default output (section 3 committed shape) IS
 /// already 2048×1024 — this test measures what the cost WOULD have been at
 /// the larger 4096×2048 size, so the 2048×1024 default is a checked
 /// decision, not an unverified guess. Reuses `ibl_scene_json`'s harness
@@ -601,7 +601,7 @@ fn hdri_source_default_resolution_prefilter_cost_at_4096x2048_is_measured_and_re
          wired={wired_per_frame_ms:.3}ms/frame unwired={unwired_per_frame_ms:.3}ms/frame \
          delta={ibl_cost_ms:.3}ms/frame (re-tune trigger: >10ms -> drop \
          node.hdri_source's default to 2048x1024, which is ALREADY the \
-         committed default per GLB_CONFORMANCE_DESIGN.md §3)"
+         committed default per GLB_CONFORMANCE_DESIGN.md section 3)"
     );
     assert!(
         ibl_cost_ms < 200.0,
@@ -611,7 +611,7 @@ fn hdri_source_default_resolution_prefilter_cost_at_4096x2048_is_measured_and_re
 }
 
 /// Companion to the 4096×2048 measurement above: confirms `node.hdri_source`'s
-/// SHIPPED default (2048×1024, §3) stays under the phase brief's 10ms
+/// SHIPPED default (2048×1024, section 3) stays under the phase brief's 10ms
 /// re-tune trigger, so the committed default is a checked "yes, this is
 /// safe" rather than only a checked "the bigger size wasn't."
 #[test]

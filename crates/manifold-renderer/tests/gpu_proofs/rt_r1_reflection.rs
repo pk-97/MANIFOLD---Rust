@@ -1,4 +1,4 @@
-//! `docs/RAYTRACING_DESIGN.md` §9.6 R1 gate (a) — mirror reflection probe:
+//! `docs/RAYTRACING_DESIGN.md` section 9.6 R1 gate (a) — mirror reflection probe:
 //! metallic/roughness-0 ground plane with one emissive quad at a known world
 //! position above it. The reflection leg (`rt_reflections`=TRUE) must show the
 //! emissive quad's mirror image above a threshold; the control leg
@@ -304,7 +304,7 @@ fn mirror_reflection_of_emissive_quad_appears_only_when_rt_reflections_enabled()
     );
 }
 
-/// Raster-parity reflections gate (§9.6, 2026-07-25): the env-at-hit term
+/// Raster-parity reflections gate (section 9.6, 2026-07-25): the env-at-hit term
 /// must ADD environment radiance at reflection hits. Same mirror fixture,
 /// reflections ON in both legs; the ONLY difference is the baked env's
 /// intensity (0.0 vs 4.0 — high so the delta swamps the region's partial

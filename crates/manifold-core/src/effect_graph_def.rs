@@ -27,7 +27,7 @@
 //!   picker/OSC/routing surface (display name, category, params,
 //!   bindings, skip mode, alias tables). The format used by user-saved
 //!   presets, AI-authored presets, and the migrated bundled-preset
-//!   library after §11 of `docs/PRIMITIVE_LIBRARY_DESIGN.md` lands.
+//!   library after section 11 of `docs/PRIMITIVE_LIBRARY_DESIGN.md` lands.
 //!
 //! Constructors emit v1 by default; calling
 //! [`with_preset_metadata`](EffectGraphDef::with_preset_metadata)
@@ -45,11 +45,11 @@ use crate::id::NodeId;
 
 /// Schema version for graph-topology-only documents (no preset
 /// metadata). Default for per-instance graph overrides and the 25
-/// shipping bundled-preset snapshots prior to the §11 migration.
+/// shipping bundled-preset snapshots prior to the section 11 migration.
 pub const EFFECT_GRAPH_VERSION: u32 = 1;
 
 /// Schema version for documents that carry [`PresetMetadata`].
-/// Bundled presets after the §11 migration, user-saved presets, and
+/// Bundled presets after the section 11 migration, user-saved presets, and
 /// AI-authored presets all live at this version.
 pub const EFFECT_GRAPH_VERSION_WITH_METADATA: u32 = 2;
 
@@ -395,7 +395,7 @@ pub struct PresetMetadata {
     /// Drives `is_line_based` plumbing on the renderer side. Ignored
     /// for effect presets — kept on `PresetMetadata` (instead of
     /// forking generator metadata into its own schema) so generators
-    /// can ride the same §11 unified-registry path effects already use.
+    /// can ride the same section 11 unified-registry path effects already use.
     #[serde(default)]
     pub is_line_based: bool,
     /// Outer-card slider definitions. Each entry corresponds to one
@@ -488,7 +488,7 @@ pub struct ParamSpecDef {
     /// on serialize when false so non-angle presets stay byte-identical on disk.
     #[serde(default, skip_serializing_if = "is_false")]
     pub is_angle: bool,
-    /// §8 D6: identifies the outer-card gate for a generator's/effect's audio
+    /// section 8 D6: identifies the outer-card gate for a generator's/effect's audio
     /// trigger response (the `clip_trigger` toggle on the 11 trigger-
     /// responsive generators; the Strobe `clip_trigger` card added in P3) —
     /// an EXPLICIT flag, not a match on the id string `"clip_trigger"`
@@ -508,7 +508,7 @@ pub struct ParamSpecDef {
     #[serde(default, skip_serializing_if = "is_false")]
     pub wraps: bool,
     /// Card-bundling group name (D5,
-    /// `docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` §2): contiguous runs of
+    /// `docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` section 2): contiguous runs of
     /// specs sharing the same `section` render under one collapsible header
     /// on the card. `None` renders exactly as today (a flat slider). Seeded
     /// two ways — at expose, from the innermost enclosing group's display
@@ -839,7 +839,7 @@ mod tests {
 
     #[test]
     fn param_spec_no_section_skipped_on_serialize() {
-        // SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2 D5: `section: None` (every
+        // SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md section 2 D5: `section: None` (every
         // existing preset, and any spec expose/importer never touched) must
         // not appear on the wire, so a no-section preset stays byte-identical
         // to the on-disk source (the `is_angle`/`curve` precedent above).

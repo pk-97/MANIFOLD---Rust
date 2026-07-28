@@ -275,7 +275,7 @@ fn add_scene_object(g: &mut Graph, render: NodeInstanceId, index: usize) -> Node
 /// Add a `node.transform_3d` node, set its `pos_x` param, and wire its
 /// `transform` output into `scene_object`'s `transform` input. Test helper
 /// replacing the retired `render_scene` per-object `pos_x_{index}` param
-/// (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2 D3 — TRS lives on
+/// (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md section 2 D3 — TRS lives on
 /// `node.scene_object`'s `transform` input now, fed by `node.transform_3d`).
 fn wire_pos_x(g: &mut Graph, scene_object: NodeInstanceId, pos_x: f32) {
     let t = g.add_node(Box::new(Transform3D::new()));
@@ -809,7 +809,7 @@ fn render_scene_occlusion_frame(w: u32, h: u32, offset: f32) -> Vec<[f32; 4]> {
     readback_rgba_f32(&device, out_tex, w, h)
 }
 
-/// Value-level occlusion gate (REALTIME_3D §5 P1): two overlapping cube
+/// Value-level occlusion gate (REALTIME_3D section 5 P1): two overlapping cube
 /// meshes through `node.render_scene`, sharing one depth buffer. Object 0
 /// (red, nearer) and object 1 (green, farther) are both centred on the
 /// camera's optical axis, so the exact centre pixel is covered by both
@@ -934,7 +934,7 @@ fn render_scene_phong_quad_frame(w: u32, h: u32, num_lights: u32) -> Vec<[f32; 4
     readback_rgba_f32(&device, out_tex, w, h)
 }
 
-/// Value-level multi-light gate (REALTIME_3D §5 P1): 2 IDENTICAL lights
+/// Value-level multi-light gate (REALTIME_3D section 5 P1): 2 IDENTICAL lights
 /// must sum to (approximately) 2× the diffuse of 1 light at a
 /// directly-lit pixel, within f16 round-trip tolerance.
 #[test]
@@ -1074,7 +1074,7 @@ fn render_scene_two_cubes_png(w: u32, h: u32) -> Vec<u8> {
     rgba
 }
 
-/// Visual gate (REALTIME_3D §5 P1): render the two-cube scene to a PNG
+/// Visual gate (REALTIME_3D section 5 P1): render the two-cube scene to a PNG
 /// for the orchestrator to eyeball. Ignored by default: needs a GPU and
 /// writes a file. Point `MESH_SNAP_OUT` at an absolute path to control
 /// the output location; defaults to `target/mesh-snap/scene_two_cubes.png`.

@@ -97,7 +97,7 @@ fn optimize_spirv(spv_words: &[u32], label: &str, use_half: bool) -> Vec<u32> {
         // end of the function" and leaves those helpers as calls — correct,
         // but it forfeits the intra-kernel register-threading win and spams
         // the console on every chain rebuild. This is the pass the warning
-        // itself recommends (design §12.3 step 6).
+        // itself recommends (design section 12.3 step 6).
         .register_pass(opt::Passes::MergeReturn)
         .register_pass(opt::Passes::InlineExhaustive)
         .register_pass(opt::Passes::EliminateDeadFunctions)
