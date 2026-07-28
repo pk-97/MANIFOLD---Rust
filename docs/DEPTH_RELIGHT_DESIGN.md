@@ -2,9 +2,9 @@
 
 <!-- index: The "3D Shading" toggle: depth as a compiler-propagated companion channel, a fixed relight stage (Lambert + specular + heightfield GTAO + shadows), heightfield-native shadow atom, fp32 precision for derivative consumers. Zero graph edits for existing presets. -->
 
-**Status:** APPROVED 2026-07-17 (Peter, after the rendered probe sweep) — EXECUTING; P1–P5b all on main. P1 `node.heightfield_shadow` · P2 `depth_rule` on all registered nodes · P3 `relight_augment` + the compile-level toggle (off = byte-identical, golden test in `relight.rs`) · P4 fp32 precision-critical intermediates + the BUG-216 (feedback-loop-freeze) fix · P5 per-instance backend (commands, live render-path reads, deterministic `rl_<handle>` template ids, and fusion VETOED while relight is on) · P5b card UI (the "3D" header icon, D3 knob rows, D4 Height From). Known cost: a live knob drag re-splices per tick (structural dispatch) — P6's soak measures it. REMAINING: P6 acceptance sweep + perf gate; P7 (D8) removes the fusion veto by augmenting before the fusion compiler with a knob-invariant cache key.
-**Author:** Fable, from the 2026-07-17 depth-relight probe session.
-**Prior landings from the probe (already on main):** GTAO `slices`/`steps` quality params; GTAO `projection = Height Field` mode (ortho frame, raw-height read, fp32 in-kernel); `graph_tool render` verb; BUG-216/217 logged.
+**Status:** APPROVED 2026-07-17 (Peter, after the rendered probe sweep) — EXECUTING; P1–P5b all on main (shadow atom, depth rules, relight augment + compile-level toggle with byte-identical-off golden test, fp32 intermediates, per-instance backend with fusion VETOED while relight is on, card UI). REMAINING: P6 acceptance sweep + perf gate (a live knob drag re-splices per tick — the soak measures it); P7 (D8) removes the fusion veto by augmenting before the fusion compiler with a knob-invariant cache key. Phase detail: section 3 (Phases). · 2026-07-17 · Fable
+
+Prior landings from the probe (already on main): GTAO `slices`/`steps` quality params; GTAO `projection = Height Field` mode (ortho frame, raw-height read, fp32 in-kernel); `graph_tool render` verb; BUG-216 (feedback-loop-freeze) and BUG-217 (non-lerp-mix-alpha-passthrough-kills-trails) logged.
 
 ## 1. Goal and evidence
 

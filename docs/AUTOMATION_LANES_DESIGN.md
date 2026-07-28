@@ -1,10 +1,8 @@
 # Automation Lanes — Design
 
-**Status: SHIPPED — P1–P4 on main @ `8b306de0` (2026-07-04); P5 (section 7 addendum) partially shipped 2026-07-07 on `lane/automation-exposure` — see the P5 status block after section 10 for exactly what landed vs. what remains.** The original gap (param-chooser + "+" + touch-to-select never shipped, so lanes could only be born via ARM recording) was the root cause of Peter's 2026-07-05 "lane-visibility issues" / dead-LANES report — the 2026-07-07 timeline-ux audit proved the LANES toggle functional end-to-end headless (real dispatch, strips off/on, PNGs; `scripts/ui-flows/toggle-lanes.json`) and root-caused the symptom as unreachability, not wiring: see `docs/TIMELINE_UX_AUDIT_2026-07-07.md` section 1. (The "dead LANES button" — what it actually was) Status previously corrected in the 2026-07-05 baseline review (the canonical stale-status escape, `DESIGN_DOC_STANDARD.md` section 10 (Verification levels, the debt ledger, and escapes (added 2026-07-05))). Open verification debt: VD-001 — Peter's L4 residue narrowed to confirming LANES lights live + ARM-recording a first lane.
-**Prerequisites: none. Sequencing: `docs/DESIGN_BUILD_ORDER.md` wave 3. Note: SESSION_MODE_DESIGN section 2 (Hard dependency edges) reserves a serde-optional field slot on `ClipSequence` for this feature — fill that slot, don't invent a second home.**
-**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before starting any
-phase. Conformance-hardened: audit claims are a 2026-07-02 snapshot — run the section 8.3
-pre-flight before each phase.**
+**Status: SHIPPED — P1–P4 on main 2026-07-04; P5 (section 7 (UI/UX) addendum) partially shipped and merged 2026-07-07 — the P5 status block after section 10 (Phasing) is exact on landed vs. remaining. Owed: VD-001 (LANES live confirm) — Peter confirms LANES lights live and ARM-records a first lane.**
+**Prerequisites: none. SESSION_MODE_DESIGN section 2 (Hard dependency edges) reserves a serde-optional field slot on `ClipSequence` for this feature — fill that slot, don't invent a second home.**
+**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs) and section 8 (Execution protocol) before any phase; audit claims are a 2026-07-02 snapshot — run the section 8.3 (pre-flight) check first.**
 
 Timeline automation for effect/generator params, modeled on Ableton arrangement
 automation. One sentence: **a lane is a beat-indexed base writer** — it records

@@ -1,18 +1,6 @@
 # Ratchet pins for the status-header budget (design_status.py --lifecycle-check).
 # One line per over-budget doc: <name> <allowed words>. Growth past the pin fails;
 # a doc trimmed under the cap must have its pin deleted. This list only burns down.
-AUDIO_SENDS_UX_DESIGN.md 164
-AUTOMATION_LANES_DESIGN.md 225
-DEPTH_RELIGHT_DESIGN.md 158
-FUSION_SOTA_DESIGN.md 416
-GATE_RUNTIME_DESIGN.md 156
-GAUSSIAN_SPLATS_DESIGN.md 121
-GIG_RESILIENCE_DESIGN.md 237
-GLB_CONFORMANCE_DESIGN.md 173
-GLB_XFAIL_BURNDOWN_DESIGN.md 252
-GLTF_ANIMATION_DESIGN.md 366
-GLTF_ANIM_RUNTIME_V2_DESIGN.md 145
-IMPORT_DESIGN.md 368
 IMPORT_FIDELITY_DESIGN.md 215
 INDEXED_MESH_RENDERING_DESIGN.md 164
 KICK_SWEEP_EVENT_DESIGN.md 154

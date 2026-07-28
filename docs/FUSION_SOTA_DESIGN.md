@@ -1,38 +1,7 @@
 # Fusion SOTA — closing the freeze compiler's structural gaps
 
-**Status:** SHIPPED · 2026-07-14 · Fable 5 design (with Peter in the room) · Sonnet 5 executing
-P1–P3 SHIPPED (markers module, segment worker robustness, refusal census committed as
-`docs/fusion_census.md` — no D4 default flipped, all four stand). P4a SHIPPED. **P5 SHIPPED**
-(Vec3 lift + D4 scope-expansion Vec4/Color lift, landed BEFORE P4b per the reordering below —
-`classify_node`'s param gate narrowed, fused codegen + install-time param seeding extended,
-`fusion_coverage_baseline` widened to effect+generator/flattened and its floor raised). **P4b
-SHIPPED** (closes BUG-114): the remaining five `draw_*` atoms + `blob_overlay` converted onto the
-codegen path; `BlobTracking.json` now forms a real 6-member fused region (18→13 estimated
-dispatches, `graph-tool fusion` measured). **P6 SHIPPED**: cut rule 6 narrowed to `tex_out == 0`
-boundary only (was `!= 1`); the struct-return `BodyOutputs` wrapper extended from the buffer path
-into `generate_fused` (`N{i}BodyOutputs` per multi-output member, `InputSource::NodeOutput` field
-pick, `FusionRegion::outputs`/`RegionInput::MemberPort` carry the escaping port); voronoi_2d and
-block_displace_field (both already codegen-path, both already struct-return) both fuse now. Found
-and fixed in the same phase: a region-forming gap the narrowing exposed — a multi-output node's two
-ports independently unioning into otherwise-unrelated branches could bridge two components that
-only otherwise touched via an *excluded* gather wire, which `build_region` then correctly (but
-totally) refused; `partition_regions`' union step gained a gather-bridge guard (mirrors the existing
-cycle-convexity check) so the two components stay separate and connect via the same cross-region
-gather the multi-region model already relies on. Real-preset wins: VoronoiPrism, StarField (both
-fold voronoi_2d in) and Glitch (folds block_displace_field into its existing 2-region split) each
-gain a member; `fusion_coverage_baseline` raised 33/55/222→33/55/225. Census multi-output family:
-3→0 refusals (both real atoms no longer refused). **P7 SHIPPED**: `FUSED_EFFECT_CACHE` /
-`FUSED_GENERATOR_CACHE` / `SEGMENT_CACHE` values moved from `Box::leak`'d `&'static T` to
-`Arc<T>` with owned interiors (no more `leak_params`/`leak_ports`); LRU eviction at cap replaces
-refuse-to-insert (precedent: `EFFECT_CHAIN_LIFECYCLE.md`'s chain-pool eviction); negative gate
-`rg 'Box::leak' .../freeze/` returns zero hits. Canonical/bundled-preset views deliberately stay
-as they were — only fused (runtime-computed, evictable) artifacts moved. All seven phases (P1–P7)
-now shipped; the design is closed.
-**Prerequisites:** none for P1–P4; P5–P6 read P3's census numbers. The companion Sonnet sweep
-(BUG-135 (fused-texture-codegen-drops-wgsl-includes)/141 includes fix, the 13-atom `CONVERSION_DEBT_LEDGER` conversion sweep, BUG-146 (landed after this entry was first written, not…) prewarm,
-BUG-115 (mux-multiblend-dynamic-arity-blocks-codegen-conv…) spike, content-key normalization, tolerance/comment hygiene) is SEPARATE work with existing
-specs — it does not depend on this doc and this doc does not depend on it, except where a phase
-below names it.
+**Status:** SHIPPED 2026-07-14 — all seven phases (P1–P7) on main; the design is closed, nothing owed. Current compiler state: `FREEZE_COMPILER_MAP.md` (authoritative); refusal census: `docs/fusion_census.md`; per-phase as-built record: section 7 (As-built record). · Fable design, Peter in the room, Sonnet executing
+**Prerequisites:** none — shipped. The companion Sonnet sweep (includes fix, conversion sweep, prewarm, spike, hygiene items) was separate work with its own specs.
 **Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
 Peter, 2026-07-14, on the whole backlog of compiler gaps: *"I would like ALL of this work to be
@@ -374,3 +343,13 @@ this list.
   fragments) — trigger: first user-authored fragment bug traced to a malformed marker.
 - **Hot-toggle for kill switches** (restart-scoped today) — unchanged from the map; not this doc's
   scope.
+
+## 7. As-built record
+
+Moved from the status header 2026-07-28; landing prose lives in the merge commits, this keeps only what a future compiler session might need.
+
+- **P1–P3:** markers module; segment worker robustness; refusal census committed as `docs/fusion_census.md` — no D4 default flipped, all four stand.
+- **P5 (landed before P4b, deliberate reorder):** Vec3 lift + D4 scope-expansion Vec4/Color lift — `classify_node`'s param gate narrowed, fused codegen + install-time param seeding extended, `fusion_coverage_baseline` widened to effect+generator/flattened and its floor raised.
+- **P4b (closes BUG-114, draw-atom fusion gap):** the remaining five `draw_*` atoms + `blob_overlay` converted onto the codegen path; `BlobTracking.json` forms a real 6-member fused region (18→13 estimated dispatches, `graph-tool fusion` measured).
+- **P6:** cut rule 6 narrowed to the `tex_out == 0` boundary only (was `!= 1`); struct-return `BodyOutputs` wrapper extended from the buffer path into `generate_fused` (`N{i}BodyOutputs` per multi-output member, `InputSource::NodeOutput` field pick, `FusionRegion::outputs`/`RegionInput::MemberPort` carry the escaping port); voronoi_2d and block_displace_field fuse now. Same-phase find: a multi-output node's two ports independently unioning into unrelated branches could bridge two components whose only other contact was an *excluded* gather wire, which `build_region` then correctly (but totally) refused — `partition_regions`' union step gained a gather-bridge guard (mirrors the cycle-convexity check) so the components stay separate and connect via the ordinary cross-region gather. Preset wins: VoronoiPrism, StarField, Glitch each gain a member; `fusion_coverage_baseline` 33/55/222→33/55/225; census multi-output family 3→0 refusals.
+- **P7:** `FUSED_EFFECT_CACHE`/`FUSED_GENERATOR_CACHE`/`SEGMENT_CACHE` values moved from `Box::leak`'d `&'static T` to `Arc<T>` with owned interiors; LRU eviction at cap replaces refuse-to-insert (precedent: `EFFECT_CHAIN_LIFECYCLE.md`'s chain-pool eviction); negative gate: `rg 'Box::leak'` over `freeze/` returns zero hits. Canonical/bundled-preset views deliberately unchanged — only fused (runtime-computed, evictable) artifacts moved.

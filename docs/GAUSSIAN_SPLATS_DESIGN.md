@@ -1,9 +1,7 @@
 # Gaussian Splats — photoreal scans as a playable instrument
 
-**Status:** APPROVED design, not built · 2026-07-05 · Fable · **baseline-reviewed 2026-07-05, cleared** (zero unlabeled forks; `render_scene` P1 prerequisite re-verified in-tree @ `8daa89fc`; the "no GPU sort exists" negative claim re-run and confirmed; camera audit row pinned — look_at_camera landed, free_camera absent. section 10 levels: P1/P2 gate L1 by nature — no visual surface until P3; P3–P6 gates are already L2 with value-level pixel asserts.)
-**Prerequisites:** none hard — `node.render_scene` P1 is shipped (`render_scene.rs`,
-commit `8daa89fc`), which is all the scene-composite phase (P4) consumes. P1–P3 and
-P5–P6 depend on nothing unbuilt.
+**Status:** APPROVED design, not built · 2026-07-05 · Fable · baseline-reviewed 2026-07-05, cleared.
+**Prerequisites:** none hard — `node.render_scene` P1 is shipped (`render_scene.rs`), which is all the scene-composite phase (P4) consumes. P1–P3 and P5–P6 depend on nothing unbuilt.
 **Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before
 starting any phase.
 

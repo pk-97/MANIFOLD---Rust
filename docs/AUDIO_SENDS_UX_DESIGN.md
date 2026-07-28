@@ -1,6 +1,6 @@
 # Audio Sends UX — make the routing legible, the tuning live, and the analysis pay-per-use
 
-**Status:** SHIPPED P1–P4 2026-07-06 (orchestrated wave, Fable + Sonnet workers, branch `feat/audio-sends-ux`; landing report `docs/landings/2026-07-06-audio-sends-ux.md`) · **P5 DROPPED by Peter 2026-07-06 ("I don't want them. Not useful") — do not build, do not re-propose** · L4 residue: Peter's in-app pass owed (P1 trace-count run, P3 drag feel + undo-step check) · BUG-047 (setup-panel-overflow) logged (panel overflow past SCOPE_H_MIN floor, LOW) · approved by Peter 2026-07-04 · Fable · D5 word confirmed: "Source" · **baseline-reviewed 2026-07-05, cleared** (zero unlabeled forks; anchors spot-reverified EXACT — PANEL_W_FRAC :39, analyzers :129, MAX_SENDS :56, GainBank :72; D5-confirmation propagated into section 2/P4 which still read "pending". section 10 levels: P2/P3/P4 already gate on headless PNGs = L2; P1's eprintln count = L2 log trace; P3/P5 in-app checks = L4 today, L3-able via UI_AUTOMATION once landed since the panel is standard widgets.)
+**Status:** SHIPPED P1–P4 2026-07-06. **P5 DROPPED by Peter 2026-07-06 ("I don't want them. Not useful") — do not build, do not re-propose.** Owed: Peter's in-app pass (VD-011/VD-012 — the click-script in section 7 (As-built residue)); BUG-047 (setup-panel-overflow) open.
 **Prerequisites:** none (all phases run against shipped audio-modulation code)
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -145,3 +145,18 @@ One new `DrawerControl::Segmented` row in the audio `DrawerSpec`; click maps to 
 - **Jump-opens-the-drawer** (consumer click auto-expands the exact param drawer) — revive if layer-select proves too coarse in use.
 - **v2 pitch features in presets** — when the ridge tracker ships.
 - **User-defined presets** — revive if the four built-ins see real use and Peter asks.
+
+## 7. As-built residue
+
+Folded from `docs/landings/2026-07-06-audio-sends-ux.md` 2026-07-28; the report stays as history, this is the live part.
+
+Owed — Peter's in-app pass (VD-011 P1 trace-count, VD-012 P3 drag feel; `docs/VERIFICATION_DEBT.md`), ≤2 minutes:
+
+1. Cmd+Shift+A — Audio Setup docks right (~38%), show visible and undimmed behind it; outside clicks pass through, Escape closes.
+2. Click a source's swatch — "Inputs — X", "Spectrogram — X", "Triggers — X", "Consumers — X" sections for that source.
+3. Click a consumer row ("›") — owning layer selects; panel stays open.
+4. With audio playing, drag horizontally on a gain "0 dB" label — value and meter follow live, no audio glitch; ONE Cmd+Z reverts the whole drag.
+5. `MANIFOLD_AUDIO_TRACE=1`, 16 sources, one param bound — terminal shows `analyzed 1 send(s)`; open the scope on a second source → `analyzed 2 send(s)`.
+6. Vocabulary: "+ Add Source", "No source"; nothing user-visible says "Send".
+
+Open: BUG-047 (setup-panel-overflow) — sections can clip past the SCOPE_H_MIN floor at ~18+ combined rows; fix is a deliberate UX call (cap+"+N more" vs ScrollContainer), not improvised.

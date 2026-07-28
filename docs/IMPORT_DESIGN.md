@@ -1,18 +1,8 @@
 # Import — Blender/glTF Scenes, Baked Caches, Texture Sets, TD & Resolume Funnels
 
-**Status: APPROVED design, P1 PARTIALLY SHIPPED — re-cut below · 2026-07-03 · Fable · baseline-reviewed 2026-07-05 · reality note refreshed 2026-07-10 (F2 coherence audit).**
-**Reality note (refreshed 2026-07-10 — the 2026-07-05 version undersold what shipped):** the glTF wave landed *most of P1*, not a mesh-level door. Two stages ship in manifold-renderer: stage 1 `node_graph::gltf_load` (CPU-only `.glb` parse → `GltfImportSummary`) and stage 2 `node_graph::gltf_import::assemble_import_graph` (verified in-tree), a pure assembler that turns the summary into a full `node.render_scene` generator graph — **one object per distinct material** (material-filtered geometry via `node.gltf_mesh_source`, base-colour texture via `node.gltf_texture_source`, a `node.pbr_material` carrying the glTF PBR factors), a synthesized framing camera (`node.orbit_camera`), a sun (`node.light`), an IBL envmap (`node.bake_environment`), named+tinted node **groups** per object, an over-cap drop (smallest-by-vertex first), and an `ImportReport`. The production caller `Application::import_model_file` installs the result as one undo transaction via `manifold_editing::commands::layer::ImportModelLayerCommand`. **Placement question resolved by what shipped:** the importer lives in manifold-renderer because it emits renderer node types (`EffectGraphDef`), *not* manifold-io — D1/section 3's manifold-io placement is superseded; do not move it. **P1 is therefore a re-cut of what remains (section 5 P1), not a rebuild** — an executor who follows the original P1 brief will re-author the shipped assembler. Known in-app bugs against the shipped nodes are VD-003 in `docs/VERIFICATION_DEBT.md`; held-out fixtures are the CC0 photoscans already sitting untracked in `tests/fixtures/gltf/` (apricot, azalea, lowe — the section 8 Stewartia was never downloaded; these replace it).
-**Prerequisites (per phase): P1–P2 need REALTIME_3D P1 + MATERIAL M1–M5 **and M6**
-(albedo/metallic maps + alpha cutout — MATERIAL section 11; without M6 a textured glTF
-imports colourless and foliage renders as opaque cards; see section 8 addendum). P3 pairs with
-MEDIA_BACKEND streaming discipline. P4 needs only MATERIAL. P5 needs SESSION_MODE +
-MEDIA_BACKEND P2 (DXV). P6 needs VOCAB apply; its agent half needs MCP_INTERFACE.**
-**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before starting
-any phase.**
-**Ordering note (2026-07-15): `docs/IMPORT_FIDELITY_DESIGN.md` (full PBR map set,
-split-sum IBL, softbox default look) outranks this doc's P1-remaining in build order —
-Peter's call ("really critical infra"). Its F-P4 also absorbs the section 8 normal-map
-report-line scope; re-read section 8 before briefing P1.**
+**Status: APPROVED, P1 PARTIALLY SHIPPED — the P1 remainder is a re-cut (section 5 (Phasing) P1), not a rebuild; shipped detail in section 9 (Reality note). The importer lives in manifold-renderer — section 3 (New pieces)'s manifold-io placement is superseded, do not move it. Build order: `IMPORT_FIDELITY_DESIGN.md` outranks P1-remaining (Peter 2026-07-15, "really critical infra"); re-read section 8 (Addendum) before briefing P1. · 2026-07-03 · Fable**
+**Prerequisites (per phase): P1–P2: REALTIME_3D P1 + MATERIAL M1–M6 (without M6 a textured glTF imports colourless). P3: MEDIA_BACKEND streaming discipline. P4: MATERIAL. P5: SESSION_MODE + MEDIA_BACKEND P2 (DXV). P6: VOCAB apply (+ MCP_INTERFACE for the agent half).**
+**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.**
 
 Peter's directives (2026-07-03): Blender import "would be amazing and seriously open
 up Manifold as a real contender … that beats TouchDesigner at this type of thing";
@@ -248,3 +238,9 @@ Corrections to this doc's section 1 audit and P1 scope:
   account login, so Peter downloads it by hand** (glTF format) into that directory
   before P1 starts; P1's gate renders it and eyeballs against Sketchfab's own
   preview (per the visual-question oracle: a PNG, not a green test).
+
+## 9. Reality note — what actually shipped (refreshed 2026-07-10, F2 coherence audit; moved from the header 2026-07-28)
+
+The glTF wave landed *most of P1*, not a mesh-level door. Two stages ship in manifold-renderer: stage 1 `node_graph::gltf_load` (CPU-only `.glb` parse → `GltfImportSummary`) and stage 2 `node_graph::gltf_import::assemble_import_graph`, a pure assembler that turns the summary into a full `node.render_scene` generator graph — **one object per distinct material** (material-filtered geometry via `node.gltf_mesh_source`, base-colour texture via `node.gltf_texture_source`, a `node.pbr_material` carrying the glTF PBR factors), a synthesized framing camera (`node.orbit_camera`), a sun (`node.light`), an IBL envmap (`node.bake_environment`), named+tinted node **groups** per object, an over-cap drop (smallest-by-vertex first), and an `ImportReport`. The production caller `Application::import_model_file` installs the result as one undo transaction via `manifold_editing::commands::layer::ImportModelLayerCommand`.
+
+Known in-app bugs against the shipped nodes: VD-003 in `docs/VERIFICATION_DEBT.md`. Held-out fixtures: the CC0 photoscans untracked in `tests/fixtures/gltf/` (apricot, azalea, lowe — the section 8 (Addendum) Stewartia was never downloaded; these replace it).
