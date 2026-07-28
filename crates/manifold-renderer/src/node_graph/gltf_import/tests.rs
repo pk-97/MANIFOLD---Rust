@@ -602,14 +602,23 @@ fn assembles_azalea_into_two_object_render_scene_graph() {
             "`{absent}` should not be in the imported graph"
         );
     }
-    // No SSAO/DoF card sliders — the underlying nodes keep their defaults,
+    // No DoF card sliders — the underlying nodes keep their defaults,
     // they're just not auto-exposed on the card.
-    for gone_prefix in ["ssao_", "dof_"] {
-        assert!(
-            !meta.params.iter().any(|p| p.id.starts_with(gone_prefix)),
-            "no card param should start with `{gone_prefix}`"
-        );
-    }
+    assert!(
+        !meta.params.iter().any(|p| p.id.starts_with("dof_")),
+        "no card param should start with `dof_`"
+    );
+    // SSAO intensity is re-exposed as a live escape hatch for the
+    // flat-plane GTAO artifact (BUG-y5w7, Peter 2026-07-28) — radius and
+    // the rest of the ao-group params stay unexposed per 2026-07-15.
+    assert!(
+        meta.params.iter().any(|p| p.id == "ssao_intensity"),
+        "ssao_intensity card param must exist (BUG-y5w7 escape hatch)"
+    );
+    assert!(
+        !meta.params.iter().any(|p| p.id.starts_with("ssao_") && p.id != "ssao_intensity"),
+        "no card param other than ssao_intensity should start with `ssao_`"
+    );
     for gone in [
         "dof_radius", "motion_blur_px", "mb_shutter", "ssao_bias", "fog_density", "god_rays",
     ] {
