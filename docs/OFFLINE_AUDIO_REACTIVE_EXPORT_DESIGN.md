@@ -110,8 +110,7 @@ and what is analyzed.
 
 ## Phases
 
-All three DONE 2026-07-07 (P1 `d207f94a`, P2 `bdbf50d5`, P3 `f2d4cc38` on
-`wave/offline-audio-export`). Execution drift folded in at orchestration time:
+All three DONE. Execution drift folded in at orchestration time:
 the live path had gained per-send analysis gating (`analysis_consumed_sends()`),
 per-send pitch tracking (`sends_with_pitch_mods()`), and snapshot-fed param/clip
 triggers since the 07-04 snapshot — the offline driver mirrors all three, so
