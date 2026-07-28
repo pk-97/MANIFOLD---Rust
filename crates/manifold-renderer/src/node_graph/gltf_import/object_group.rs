@@ -153,6 +153,17 @@ pub(super) fn build_object_group(
                 m.occlusion_strength
             ));
         }
+        // BUG-5mma: a shared constant COLOR_0 across every primitive using
+        // this material is already folded into `base_color_factor` above —
+        // this only fires when the color genuinely varies (within a
+        // primitive, between primitives sharing the material, or a mix of
+        // colored/uncolored primitives), which `MeshVertex`'s frozen ABI has
+        // nowhere to store.
+        if m.vertex_color_varies {
+            report_lines.push(format!(
+                "{group_name}: per-vertex COLOR_0 varies across the primitives sharing this material — vertex colors not supported, ignored (a shared constant tint would have been folded into base color)"
+            ));
+        }
         // IMPORT_FIDELITY_DESIGN.md D8: glTF BLEND and
         // KHR_materials_transmission both become a real `Blend` material.
         //
