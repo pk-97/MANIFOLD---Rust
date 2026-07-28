@@ -1,13 +1,8 @@
 # Realtime 3D — Scenes, Lighting, Viewport
 
-**Status: IN PROGRESS** — shipped and on main: P0 (materials M1–M6), P1 `node.render_scene`, P2 shadow maps + P3 atmosphere/fog, P4 camera atoms, P5 interactive viewport (P5a core, P5b persistent session, P5c live panel wiring — mechanics live in the `viewport_camera`/`viewport_render`/`viewport_session`/`viewport_gizmo` module docs), P6 viewport gizmos, P8 scene instancing (section 10), P9 PCSS penumbra (section 11), section 9's `node.spawn_from_mesh`. Remaining: P7 (starter preset + polish, section 5). Amendments in force: D3/D8 amended by `SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` section 8 (Amendments to REALTIME_3D); shadow-caster cap `MAX_SHADOW_CASTING_LIGHTS = 4` replaces the dead "8 objects, 4 lights" budget (D4). Per-object transforms ride `node.transform_3d` atoms (SCENE_BUILD P2) — P1's "not port-shadowed" deviation is retired.
-
-· designed 2026-07-03
-**Prerequisites: MATERIAL_SYSTEM_DESIGN M1–M5 (un-held by this doc — its contract is
-unchanged; this design consumes its extension points). Vocab-audit apply should land
-first (this doc uses post-rename ids: `node.render_mesh`, `node.render_copies`).**
-**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before starting
-any phase.**
+**Status: IN PROGRESS** — on main: P0–P6 (materials, `node.render_scene`, shadows + fog, cameras, viewport — mechanics in the `viewport_*` module docs — gizmos), P8 instancing, P9 PCSS, section 9 (spawn-from-mesh). Remaining: P7 (starter preset + polish, section 5 (Phasing)). Amendments: D3/D8 per `SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` section 8 (Amendments to REALTIME_3D); `MAX_SHADOW_CASTING_LIGHTS = 4` replaces the dead budget (D4); transforms ride `node.transform_3d` — P1's "not port-shadowed" deviation retired. · designed 2026-07-03
+**Prerequisites: MATERIAL_SYSTEM_DESIGN M1–M5 (its contract unchanged; this design consumes its extension points).**
+**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.**
 
 Peter's directives (2026-07-03): proper realtime 3D scenes with proper lighting — "I
 think we have all of the basics but don't have it fleshed out yet so it's easy to use."

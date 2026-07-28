@@ -1,8 +1,8 @@
 # Import Fidelity — imported PBR assets read like their authoring-tool previews
 
-**Status: SHIPPED · F-P1 + F-P3 SHIPPED 2026-07-15 (orchestrator session 1 of 3, landing report `docs/landings/2026-07-15-import-fidelity-p1p3.md`) · F-P2 + F-P4 SHIPPED 2026-07-15 (orchestrator session 2 of 3, landing report `docs/landings/2026-07-15-import-fidelity-p2p4.md`) · F-P5 SHIPPED 2026-07-15 (orchestrator session 3 of 3, landing report `docs/landings/2026-07-15-import-fidelity-p5.md`) · approved by Peter 2026-07-15 ("Approved") · authored 2026-07-15 · Fable 5 (his product calls are quoted in the intro, D7, and D8; glass/F-P5, pure-black base, and sun coherence added same day at his direction). Execution: 3 orchestrator sessions — (1) F-P1 ∥ F-P3 DONE, (2) F-P2 + F-P4 DONE, (3) F-P5 DONE — all phases shipped. · F-P6 (material-map mip pipeline) + F-P7 (softbox dome fill + rig defaults) SHIPPED 2026-07-15 (session 4, same-day fix after Peter's helmet/AMG renders exposed LOD-0 map aliasing and the metals-in-a-black-void failure; his fill/strip look pass was waived 2026-07-16 in the verification-debt burn-down — look issues from here are BUG_BACKLOG entries).**
-**Prerequisites: none — MATERIAL M1–M6, REALTIME_3D P1–P3/P8/P9, SCENE_BUILD P1–P5 and the shipped glTF assembler are all in-tree. IMPORT_DESIGN P1-remaining (lights/cameras/report surface) is independent and this doc outranks it in build order (Peter, 2026-07-15: "really critical infra").**
-**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before starting any phase.**
+**Status: SHIPPED — F-P1–F-P7 on main 2026-07-15 (approved by Peter same day: "Approved"; glass/F-P5, pure-black base, and sun coherence added at his direction; F-P6+F-P7 were a same-day fix after his helmet/AMG renders exposed LOD-0 map aliasing and the metals-in-a-black-void failure). Peter's fill/strip look pass was waived 2026-07-16 in the verification-debt burn-down — look issues from here are BUG_BACKLOG entries. Standing residue: section 8 (As-built residue). · authored 2026-07-15 · Fable**
+**Prerequisites: none — everything this needed is in-tree. IMPORT_DESIGN P1-remaining is independent; this doc outranks it in build order (Peter, 2026-07-15: "really critical infra").**
+**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.**
 
 Peter's directives (2026-07-15, comparing an imported Mercedes-AMG GT3 .glb against
 its store-page preview): "this sounds like really critical infra that should be
@@ -459,3 +459,11 @@ F-P3/F-P4/F-P7 focused per the scope rule.
    whose report enumerates a non-default scale/strength and visibly needs it —
    fix shape is one uniform field each plus a one-line multiply in the two
    resolve functions, no ABI growth.
+
+## 8. As-built residue
+
+Folded 2026-07-28 from the three landing reports (`docs/landings/2026-07-15-import-fidelity-p1p3.md`, `…-p2p4.md`, `…-p5.md` — kept as history); this is the still-live part.
+
+- **`normal_texture.scale` / `occlusion_texture.strength` parsed but not wired end-to-end** — no shader-ABI param carries them; both held-out fixtures default to neutral values and the import report line names the gap. Tracked Deferred item (section 7 (Deferred) #7).
+- **F-P1's diffuse-irradiance gate is a generous-band sanity check**, not the originally specified uniform-white-env value-level test (the current procedural baker can't produce that env without new infra). A stricter gate needs baker infra first.
+- **F-P2 repurposed a dead binding** rather than adding a fourth; dead bindings 5/7 left in place, not renumbered.

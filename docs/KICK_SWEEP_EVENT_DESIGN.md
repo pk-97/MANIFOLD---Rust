@@ -1,8 +1,6 @@
 # Kick Sweep-Event Detector — motion-based kick detection for the bass-heavy Low band
 
-**Status:** IN PROGRESS · P1 (prototype) + P2 (runtime) + P4 (Kick split from Transients, ridge-only) + P5 (latency retune: d10/w6 + abs floor, median fire offset +31→+9 ms, section P5) SHIPPED 2026-07-07 · scope kick lane (magenta bottom tick lane on the Audio Setup scope, P3's tuning monitor) SHIPPED 2026-07-07 · P3 (feel-pass, now binds the Kick feature) owed to Peter · 2026-07-07 · Opus 4.8 + Fable
-P1 @ `648f07e3` · P2 landing report: `docs/landings/2026-07-07-kick-sweep-p2.md`. The live `reduce_send` reproduces the prototype's reference fire counts on all 10 mix/drums fixtures (post-P5: bit-exact outside the stream fade-in region); masked-novelty deleted. P5 reference: `--family ridge-one --drop 10 --win 6 --absfloor 0.005 --ridge-only`.
-Scope lane @ `b6aed008` (rode the ScopeColumn typed-overlay refactor) · landing report: `docs/landings/2026-07-07-kick-scope-lane.md`.
+**Status:** IN PROGRESS — P1/P2/P4/P5 + the scope kick lane (magenta bottom ticks on the Audio Setup scope, P3's tuning monitor) SHIPPED 2026-07-07; P3 (feel-pass, binds the Kick feature) owed to Peter. The live `reduce_send` reproduces the prototype's reference fire counts on all 10 mix/drums fixtures (post-P5 bit-exact outside the stream fade-in region); masked-novelty deleted. P5 reference: `--family ridge-one --drop 10 --win 6 --absfloor 0.005 --ridge-only`. Landing reports: `docs/landings/2026-07-07-kick-sweep-p2.md`, `…-kick-scope-lane.md`. · Opus 4.8 + Fable
 **Prerequisites:** none (the prototype and the 73-label corpus both exist).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 

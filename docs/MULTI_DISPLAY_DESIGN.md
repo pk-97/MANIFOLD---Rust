@@ -1,10 +1,6 @@
 # Multi-Display / Totem Canvas Model
 
-**Status: IN PROGRESS — P1 built + merged (2026-07-03, commit `0cb5114f`). section 6.1a hardening addendum resolved 2026-07-06 (per-island state seam committed: isolation by chain-runtime instance, seam brief in section 6.1a) — P2 is RE-ISSUABLE. P3–P5 not implemented.** Written 2026-07-02 (Fable). **v2, same
-day:** the v1 "render the gaps" pixel canvas was rejected by Peter — a super-wide stage
-must not spend its frame budget on invisible air. v2 replaces it with the island atlas
-model. Execution is a Sonnet apply pass — every decision needed is in here; don't
-reopen section 11.
+**Status: IN PROGRESS — P1 built + merged 2026-07-03; section 6.1a (hardening addendum) resolved 2026-07-06 (per-island state seam committed) — P2 is RE-ISSUABLE; P3–P5 not implemented. v2: Peter rejected v1's "render the gaps" pixel canvas — a super-wide stage must not spend frame budget on invisible air; v2 is the island atlas model. Every decision needed is in here; don't reopen section 11 (Decided). · written 2026-07-02 · Fable**
 **Prerequisites: none. P1–P3 unblock PROJECTION_MAPPING and LED_STRIPS P2 (`docs/DESIGN_BUILD_ORDER.md`).**
 **Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before starting any phase.**
 
