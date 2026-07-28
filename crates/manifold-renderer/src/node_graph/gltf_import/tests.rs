@@ -472,6 +472,159 @@ fn ktx2_texture_reports_instead_of_aborting_whole_import() {
     );
 }
 
+/// Build a minimal, valid `.glb`: one triangle whose primitive carries
+/// BOTH `TEXCOORD_0` and `TEXCOORD_1`, textured by `Mat0` whose
+/// `occlusionTexture` explicitly points at `texCoord: 1`. Exercises both
+/// BUG-pm9m warning paths in one fixture — the material-slot check
+/// (occlusion references TEXCOORD_1) and the primitive-attribute check
+/// (the mesh itself carries a TEXCOORD_1 set) — same hand-rolled binary
+/// container shape as `write_synthetic_ktx2_glb`, with a second UV
+/// accessor and a `texCoord` override on the occlusion texture reference.
+fn write_synthetic_multi_uv_glb() -> std::path::PathBuf {
+    let tri: [[f32; 3]; 3] = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+    let uv0: [[f32; 2]; 3] = [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]];
+    let uv1: [[f32; 2]; 3] = [[0.0, 0.5], [1.0, 0.5], [0.0, 1.5]];
+
+    let mut png = Vec::new();
+    {
+        use image::ImageEncoder;
+        let pixel: [u8; 4] = [255, 255, 255, 255];
+        image::codecs::png::PngEncoder::new(&mut png)
+            .write_image(&pixel, 1, 1, image::ExtendedColorType::Rgba8)
+            .expect("encode 1x1 fixture png");
+    }
+
+    let mut bin: Vec<u8> = Vec::new();
+    let pos_off = bin.len();
+    bin.extend(tri.iter().flatten().flat_map(|f| f.to_le_bytes()));
+    let uv0_off = bin.len();
+    bin.extend(uv0.iter().flatten().flat_map(|f| f.to_le_bytes()));
+    let uv1_off = bin.len();
+    bin.extend(uv1.iter().flatten().flat_map(|f| f.to_le_bytes()));
+    while !bin.len().is_multiple_of(4) {
+        bin.push(0);
+    }
+    let png_off = bin.len();
+    bin.extend_from_slice(&png);
+    while !bin.len().is_multiple_of(4) {
+        bin.push(0);
+    }
+
+    let doc = serde_json::json!({
+        "asset": { "version": "2.0" },
+        "scene": 0,
+        "scenes": [{ "nodes": [0] }],
+        "nodes": [{ "mesh": 0 }],
+        "meshes": [
+            {
+                "primitives": [{
+                    "attributes": { "POSITION": 0, "TEXCOORD_0": 1, "TEXCOORD_1": 2 },
+                    "material": 0,
+                }],
+            },
+        ],
+        "accessors": [
+            {
+                "bufferView": 0,
+                "componentType": 5126, // FLOAT
+                "count": 3,
+                "type": "VEC3",
+                "min": [0.0, 0.0, 0.0],
+                "max": [1.0, 1.0, 0.0],
+            },
+            { "bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC2" },
+            { "bufferView": 2, "componentType": 5126, "count": 3, "type": "VEC2" },
+        ],
+        "bufferViews": [
+            { "buffer": 0, "byteOffset": pos_off, "byteLength": 36 },
+            { "buffer": 0, "byteOffset": uv0_off, "byteLength": 24 },
+            { "buffer": 0, "byteOffset": uv1_off, "byteLength": 24 },
+            { "buffer": 0, "byteOffset": png_off, "byteLength": png.len() },
+        ],
+        "images": [
+            { "name": "Occ", "bufferView": 3, "mimeType": "image/png" },
+        ],
+        "textures": [
+            { "source": 0 },
+        ],
+        "materials": [
+            {
+                "name": "Mat0",
+                "pbrMetallicRoughness": { "baseColorFactor": [0.5, 0.5, 0.5, 1.0] },
+                "occlusionTexture": { "index": 0, "texCoord": 1 },
+            },
+        ],
+        "buffers": [{ "byteLength": bin.len() }],
+    });
+    let json_bytes = serde_json::to_vec(&doc).expect("serialize synthetic multi-UV glTF JSON");
+
+    let mut json_padded = json_bytes;
+    while !json_padded.len().is_multiple_of(4) {
+        json_padded.push(b' ');
+    }
+    let mut bin_padded = bin;
+    while !bin_padded.len().is_multiple_of(4) {
+        bin_padded.push(0);
+    }
+    let total_len = 12 + 8 + json_padded.len() + 8 + bin_padded.len();
+
+    let mut glb = Vec::with_capacity(total_len);
+    glb.extend_from_slice(b"glTF");
+    glb.extend_from_slice(&2u32.to_le_bytes());
+    glb.extend_from_slice(&(total_len as u32).to_le_bytes());
+    glb.extend_from_slice(&(json_padded.len() as u32).to_le_bytes());
+    glb.extend_from_slice(b"JSON");
+    glb.extend_from_slice(&json_padded);
+    glb.extend_from_slice(&(bin_padded.len() as u32).to_le_bytes());
+    glb.extend_from_slice(b"BIN\0");
+    glb.extend_from_slice(&bin_padded);
+
+    let path = std::env::temp_dir().join(format!(
+        "manifold_synthetic_multiuv_{}_{}.glb",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    std::fs::write(&path, &glb).expect("write synthetic multi-uv glb to temp dir");
+    path
+}
+
+/// BUG-pm9m: TEXCOORD_1 is silently ignored today — every texture map
+/// samples UV0 regardless of its own `texCoord` index, and any TEXCOORD_1+
+/// attribute a primitive carries is dropped with no trace. Neither is
+/// fixed here (that's a priced ABI decision — `MeshVertex` carries one UV
+/// channel), but both must now surface as report lines instead of a
+/// silent wrong-UV render.
+#[test]
+fn texcoord_1_reports_instead_of_silently_sampling_uv0() {
+    let path = write_synthetic_multi_uv_glb();
+    let result = assemble_import_graph(&path);
+    std::fs::remove_file(&path).ok();
+
+    let (_def, report) =
+        result.expect("a TEXCOORD_1-carrying glb must still import — this is a report-only degrade");
+
+    assert_eq!(report.material_count, 1, "Mat0's triangle must import despite the TEXCOORD_1 references");
+    assert!(
+        report
+            .report_lines
+            .iter()
+            .any(|l| l.contains("occlusion") && l.contains("TEXCOORD_1")),
+        "report must name the occlusion texture's TEXCOORD_1 override, got: {:?}",
+        report.report_lines
+    );
+    assert!(
+        report
+            .report_lines
+            .iter()
+            .any(|l| l.contains("TEXCOORD_1") && l.contains("ignored")),
+        "report must name the primitive's own TEXCOORD_1 attribute as ignored, got: {:?}",
+        report.report_lines
+    );
+}
+
 /// Build a minimal, valid `.glb` with TWO materials: `Mat0` has one real
 /// triangle, `Mat1`'s sole primitive's POSITION accessor points at a
 /// bufferView tagged `EXT_meshopt_compression`.

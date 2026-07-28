@@ -2545,6 +2545,31 @@ fn summarize_node(
                 ));
                 continue;
             }
+            // BUG-pm9m: a primitive can carry TEXCOORD_1+ attributes even
+            // when no material slot references them (a common export
+            // habit — bake the second UV set in "just in case"). Nothing
+            // reads them (only `TEXCOORD_0` is ever fetched, e.g. the
+            // `reader.read_tex_coords(0)` calls throughout this module) —
+            // one summary line per primitive rather than per attribute, the
+            // extra sets are ignored as a group.
+            let mut extra_uv_sets: Vec<u32> = prim
+                .attributes()
+                .filter_map(|(semantic, _)| match semantic {
+                    gltf::Semantic::TexCoords(n) if n >= 1 => Some(n),
+                    _ => None,
+                })
+                .collect();
+            if !extra_uv_sets.is_empty() {
+                extra_uv_sets.sort_unstable();
+                extra_uv_sets.dedup();
+                let sets = extra_uv_sets.iter().map(|n| format!("TEXCOORD_{n}")).collect::<Vec<_>>().join(", ");
+                let noun = if extra_uv_sets.len() == 1 { "attribute" } else { "attributes" };
+                report_lines.push(format!(
+                    "mesh {:?} primitive {}: carries {sets} {noun} — additional UV sets are ignored",
+                    mesh.name().unwrap_or("<unnamed>"),
+                    prim.index()
+                ));
+            }
             let reader = prim.reader(|b| buffers.get(b.index()).map(|d| d.0.as_slice()));
             let Some(positions) = reader.read_positions() else {
                 // BUG-mbol: a Draco-compressed primitive's base POSITION
@@ -3002,6 +3027,12 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
             let mut base_color_info = pbr.base_color_texture();
             let mut base_color_uv_transform = fold_typed(pbr.base_color_texture());
             let mut mr_texture_index = pbr.metallic_roughness_texture().map(|t| t.texture().index() as u32);
+            // BUG-pm9m: retained alongside `mr_texture_index` (updated in
+            // lockstep, including the spec-gloss override below) purely to
+            // read its `tex_coord()` for the TEXCOORD_n warning further
+            // down — `mr_texture_index` alone only carries the texture,
+            // not which UV set it samples.
+            let mut mr_info = pbr.metallic_roughness_texture();
             let mut mr_uv_transform = fold_typed(pbr.metallic_roughness_texture());
             let mut base_color_factor = pbr.base_color_factor();
             let mut metallic = pbr.metallic_factor();
@@ -3033,11 +3064,13 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 match sg.specular_glossiness_texture() {
                     Some(tex) => {
                         mr_texture_index = Some(tex.texture().index() as u32);
+                        mr_info = sg.specular_glossiness_texture();
                         mr_uv_transform = fold_typed(sg.specular_glossiness_texture());
                         mr_texture_is_gloss_alpha = true;
                     }
                     None => {
                         mr_texture_index = None;
+                        mr_info = None;
                         mr_uv_transform = IDENTITY_UV_TRANSFORM;
                     }
                 }
@@ -3080,6 +3113,16 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
             // that block) can share it too.
             let tex_idx = |v: &serde_json::Value, key: &str| -> Option<u32> {
                 v.get(key)?.get("index")?.as_u64().map(|i| i as u32)
+            };
+            // BUG-pm9m: sibling of `tex_idx` — the raw-JSON texture-info
+            // object's own `texCoord` (glTF spec default 0), read the same
+            // way for the extension texture families below that have no
+            // typed accessor at 1.4.1 (clearcoat/sheen/iridescence/
+            // anisotropy). `None` means the slot itself is absent, not
+            // texCoord 0 — filtered out below same as every typed slot.
+            let tex_coord_idx = |v: &serde_json::Value, key: &str| -> Option<u32> {
+                let obj = v.get(key)?;
+                Some(obj.get("texCoord").and_then(|t| t.as_u64()).unwrap_or(0) as u32)
             };
             let specular_ext = m.specular();
             let specular_factor = specular_factor_override
@@ -3223,10 +3266,79 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 .and_then(|v| v.thickness_texture())
                 .map(|t| t.texture().index() as u32);
 
-            let base_color_texture = base_color_info.map(|t| t.texture().index() as u32);
+            let base_color_texture = base_color_info.as_ref().map(|t| t.texture().index() as u32);
             let normal_texture = m.normal_texture().map(|t| t.texture().index() as u32);
             let occlusion_texture = m.occlusion_texture().map(|t| t.texture().index() as u32);
             let emissive_texture = m.emissive_texture().map(|t| t.texture().index() as u32);
+
+            // BUG-pm9m: `MeshVertex` carries one UV channel end to end (see
+            // the ABI comment near its definition) — every texture slot
+            // samples TEXCOORD_0 regardless of the `texCoord` index it
+            // actually declares. That's a silent wrong-UV bug for any slot
+            // that legitimately points at TEXCOORD_1+ (a baked-AO or
+            // lightmap UV set is the common real-world case). Warning
+            // only, same "never a silent skip" doctrine as the Draco/
+            // meshopt/quantization/KTX2 report lines above — no second UV
+            // set is added (that's a priced ABI decision, not this fix).
+            for (slot, tex_coord) in [
+                ("baseColor", base_color_info.map(|t| t.tex_coord())),
+                ("metallicRoughness", mr_info.map(|t| t.tex_coord())),
+                ("normal", m.normal_texture().map(|t| t.tex_coord())),
+                ("occlusion", m.occlusion_texture().map(|t| t.tex_coord())),
+                ("emissive", m.emissive_texture().map(|t| t.tex_coord())),
+                (
+                    "specular",
+                    specular_ext.as_ref().and_then(|s| s.specular_texture()).map(|t| t.tex_coord()),
+                ),
+                (
+                    "specularColor",
+                    specular_ext.as_ref().and_then(|s| s.specular_color_texture()).map(|t| t.tex_coord()),
+                ),
+                (
+                    "volumeThickness",
+                    volume_ext.as_ref().and_then(|v| v.thickness_texture()).map(|t| t.tex_coord()),
+                ),
+                ("clearcoat", clearcoat_ext.and_then(|v| tex_coord_idx(v, "clearcoatTexture"))),
+                (
+                    "clearcoatRoughness",
+                    clearcoat_ext.and_then(|v| tex_coord_idx(v, "clearcoatRoughnessTexture")),
+                ),
+                (
+                    "clearcoatNormal",
+                    clearcoat_ext.and_then(|v| tex_coord_idx(v, "clearcoatNormalTexture")),
+                ),
+                ("sheenColor", sheen_ext.and_then(|v| tex_coord_idx(v, "sheenColorTexture"))),
+                (
+                    "sheenRoughness",
+                    sheen_ext.and_then(|v| tex_coord_idx(v, "sheenRoughnessTexture")),
+                ),
+                (
+                    "iridescence",
+                    iridescence_ext.and_then(|v| tex_coord_idx(v, "iridescenceTexture")),
+                ),
+                (
+                    "iridescenceThickness",
+                    iridescence_ext.and_then(|v| tex_coord_idx(v, "iridescenceThicknessTexture")),
+                ),
+                (
+                    "anisotropy",
+                    anisotropy_ext.and_then(|v| tex_coord_idx(v, "anisotropyTexture")),
+                ),
+                (
+                    "transmission",
+                    m.transmission().and_then(|t| t.transmission_texture()).map(|t| t.tex_coord()),
+                ),
+            ] {
+                if let Some(n) = tex_coord
+                    && n != 0
+                {
+                    geometry_report_lines.push(format!(
+                        "{label}: {slot} texture uses TEXCOORD_{n} — only UV set 0 is supported, \
+                         map will sample UV0 (likely wrong for baked AO/lightmaps)"
+                    ));
+                }
+            }
+
             // GLB_XFAIL_BURNDOWN_DESIGN.md D3 (BUG-164): one lookup per map
             // family, keyed off the same texture index each map's own
             // field above already resolved — `None` (map unwired) reads
