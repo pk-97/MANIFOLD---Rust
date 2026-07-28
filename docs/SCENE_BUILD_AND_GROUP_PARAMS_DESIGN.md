@@ -1,25 +1,9 @@
 # Scene Build + Group Params — named objects, transform atoms, sectioned cards
 
-**Status:** ✅ **DONE — WAVE COMPLETE 2026-07-10 (P1–P5 all shipped).** Design 2026-07-06 · Fable;
-built by an Opus-orchestrated Sonnet wave. Scene-building is now named per-object card sections,
-transforms as composable `Transform`-port atoms (beat-modulatable), group boxes that carry their
-sub-node sliders, and one-click "+ Object"/"+ Light" that spawn wired/lit/visible — all verified on
-the real azalea glTF import. Owed: Peter's L4 feel-pass on the P5 gestures (click-script in
-`docs/landings/2026-07-10-scene-build-p5.md`). Per-phase detail below. · design 2026-07-06 · Fable.
-**SUPERSEDED 2026-07-17 (object-identity mechanism only):** D7 below describes wiring a new
-object's group to `render_scene`'s `mesh_k`/`material_k`/`transform_k` ports — that per-object
-port family was replaced by `SCENE_OBJECT_AND_PANEL_V2_DESIGN.md` (shipped 2026-07-17) with one
-`object_k` wire out of a `node.scene_object` node; `AddSceneObjectCommand` now emits the new
-shape. The rest of this doc's design (card sections, Transform atoms, group boxes) is unaffected
-and still describes the shipped mechanism.
-
-P1–P5 as-built records: `docs/landings/2026-07-10-scene-build-p1.md` through `…-p5.md`.
-**Prerequisites:** PARAM_STORAGE_DESIGN P1–P5 (SHIPPED). PARAM_STORAGE_BOUNDARIES_DESIGN
-P1–P2 must land **before this doc's P3 only** (the card phase reads specs straight off
-the manifest; building it against the pre-boundaries dual-source card path would wire it
-to code P2 deletes). P1/P2/P4/P5 here have no dependency on the boundaries wave.
-**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before starting
-any phase.
+**Status:** ✅ **DONE — WAVE COMPLETE 2026-07-10 (P1–P5 all shipped; verified on the real azalea glTF import).** Owed: Peter's L4 feel-pass on the P5 gestures (click-script in `docs/landings/2026-07-10-scene-build-p5.md`). As-built records: `…-scene-build-p1.md` through `…-p5.md`. · design 2026-07-06 · Fable
+**SUPERSEDED 2026-07-17 (object-identity mechanism only):** D7's per-object `mesh_k`/`material_k`/`transform_k` port family was replaced by `SCENE_OBJECT_AND_PANEL_V2_DESIGN.md` (shipped) with one `object_k` wire out of `node.scene_object`; `AddSceneObjectCommand` emits the new shape. Card sections, Transform atoms, and group boxes are unaffected and still describe the shipped mechanism.
+**Prerequisites:** satisfied — wave complete.
+**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 
 Peter's directives (2026-07-06, verbatim — these opened the design): `render_scene` is
 "really horrible to use and clunky and does not let you build scenes easily," and "this

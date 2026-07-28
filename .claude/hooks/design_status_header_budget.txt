@@ -1,16 +1,3 @@
 # Ratchet pins for the status-header budget (design_status.py --lifecycle-check).
 # One line per over-budget doc: <name> <allowed words>. Growth past the pin fails;
 # a doc trimmed under the cap must have its pin deleted. This list only burns down.
-RENDER_SCENE_UNBOUNDED_LIGHTS_DESIGN.md 194
-SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md 215
-SCENE_OBJECT_AND_PANEL_V2_DESIGN.md 323
-SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md 350
-SCENE_PANEL_UX_DESIGN.md 140
-SCENE_SETUP_PANEL_DESIGN.md 226
-SESSION_MODE_DESIGN.md 163
-TIMELINE_INGEST_DESIGN.md 141
-UI_AUTOMATION_DESIGN.md 235
-UI_HARNESS_UNIFICATION_DESIGN.md 373
-VOLUMETRIC_LIGHT_DESIGN.md 186
-VULKAN_BACKEND_DESIGN.md 152
-WIDGET_TREE_DESIGN.md 123

@@ -2,13 +2,9 @@
 
 > **SUPERSEDED for the param mechanism (2026-07-21) → [`docs/SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md`](SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md) is the current authority.** This doc's curated projection + synthesized `scene.{doc}.{param}` id system + resolution funnels are gone: the panel now renders exposed-param manifest rows through the card path (P1/P2 LANDED), and `scene_vm.rs` is slimmed to item-discovery only (P3 LANDED `7ee0a887`). The outliner / selection / structural verbs described here still stand; the per-param addressing, hand metadata tables, and dual write path do not.
 
-**Status: SHIPPED (all phases P1–P5) 2026-07-17. P1 (column + discovery + Environment/Fog) + P2 (Objects section) + P3 (Lights + Camera sections) + P4 (Import Model merge, held-out warehouse+skull gate passed) + P5 (modifier stack: 3 splice commands + panel UI) all landed. Sonnet-executable, orchestrated overnight. BUG-193 (no object/light remove command), BUG-194 (vertex count not computable from def), BUG-195 (merge scale-sanity has no stored object radius, defaulted proxy), BUG-198 (headless `Key Z` doesn't reach Undo — found during P5, pre-existing harness gap) opened as honest escalations, not blocking. · 2026-07-16 · Fable 5 (design session with Peter) · **REVISED 2026-07-17:** the object-identity mechanism (D3's group trace), the section 4 "no new port types" invariant, the D4 panel layout, and the section 9 per-object-visibility deferral are superseded by `docs/SCENE_OBJECT_AND_PANEL_V2_DESIGN.md` (APPROVED — `node.scene_object` + `Object` wire, outliner + properties layout, numeric value-cell contract). D1/D5/D6/D7/D8 doctrine carries forward unchanged.**
-**Prerequisites:** none — every substrate this design consumes is SHIPPED and verified in-tree
-(SCENE_BUILD_AND_GROUP_PARAMS P1–P5, REALTIME_3D P1–P4/P8/P9, MATERIAL M1–M6, IMPORT_FIDELITY
-F-P1–F-P7, GLB_CONFORMANCE, the audio-dock `ScreenLayout` column, `ChangeGraphParamCommand`).
-**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before starting any
-phase. Executor: Sonnet, orchestrated overnight. The orchestrator may consult ONE Fable
-advisor agent, only on a critical blocking problem the doc does not foresee.
+**Status: SHIPPED (all phases P1–P5) 2026-07-17 — dock column + discovery + Environment/Fog, Objects, Lights + Camera, Import Model merge, modifier stack; orchestrated overnight. Honest escalations opened, not blocking: BUG-193 (no object/light remove command), BUG-194 (vertex count not computable), BUG-195 (merge scale-sanity proxy), BUG-198 (headless Key Z misses Undo — pre-existing harness gap). REVISED 2026-07-17: D3's group trace, the section 4 (Invariants) "no new port types" invariant, the D4 layout, and the section 9 (Deferred) visibility deferral are superseded by `docs/SCENE_OBJECT_AND_PANEL_V2_DESIGN.md`; D1/D5/D6/D7/D8 doctrine carries forward unchanged. · 2026-07-16 · Fable, design session with Peter**
+**Prerequisites:** none — every consumed substrate is SHIPPED in-tree.
+**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 
 Peter's directives (2026-07-16, verbatim — these opened and decided the design):
 

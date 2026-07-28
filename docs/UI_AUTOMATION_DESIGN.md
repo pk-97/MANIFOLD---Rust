@@ -1,12 +1,8 @@
 # UI Automation — the agent drives the instrument
 
-**Status:** IN PROGRESS · **P1 SHIPPED 2026-07-05 @ `3294eb9d`** (selector surface). · **P2 SHIPPED 2026-07-05** (script driver: `AutomationAction` core + selector resolver + real gesture synthesis incl. a genuine synthesized clip drag through the production input path + `--script` runner + `interact.rs` miss-fallback deleted; gate green, L2 reached — the drag-clip flow moved a clip 230→314px in the before/after PNGs — see section 9 P2). **L3 verification is now available repo-wide** via `scripts/ui-flows/` (see `DESIGN_DOC_STANDARD.md` section 10 (Verification levels, the debt ledger, and escapes (added 2026-07-05))). P3 (live door) + P4 (flow library) not built. · 2026-07-03 · Fable · baseline-reviewed 2026-07-05 (anchors spot-reverified; automation-lane surface added to P1/D5 scope; acceptance demos + section 10 (Verification levels, the debt ledger, and escapes (added 2026-07-05)) levels added; dev feature renamed `ui-automation`)
-**Prerequisites:** none. P1–P2 extend the shipped ui-snap harness; P3–P4 are self-contained dev infra. No wave edges (`docs/DESIGN_BUILD_ORDER.md`).
-**Forward note (coherence audit F18, 2026-07-10):** `UI_HARNESS_UNIFICATION_DESIGN.md` P2
-rewrites the `--script` Runner this doc's P2 shipped — its parallel rebuild is deleted and
-its render re-points through `UICacheManager`. P3/P4 briefs must re-derive Runner anchors
-against UI_HARNESS's landed state, not this doc's P2 code, once that phase lands.
-**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before starting any phase. P1–P2 are full-hardened against today's code; P3–P4 carry pre-flight re-derivation commands.
+**Status:** IN PROGRESS — P1 (selector surface) + P2 (script driver: gesture synthesis through the production input path, `--script` runner) SHIPPED 2026-07-05; L3 verification is available repo-wide via `scripts/ui-flows/` (`DESIGN_DOC_STANDARD.md` section 10 (Verification levels)). P3 (live door) + P4 (flow library) not built — their briefs must re-derive Runner anchors against UI_HARNESS_UNIFICATION's landed P2 rewrite of the `--script` Runner, not this doc's P2 code. · 2026-07-03 · Fable · baseline-reviewed 2026-07-05
+**Prerequisites:** none. P1–P2 extend the shipped ui-snap harness; P3–P4 are self-contained dev infra.
+**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase. P3–P4 carry pre-flight re-derivation commands.
 
 Peter, 2026-07-03: *"we will likely need custom infra so you can interact with Manifold and test UI and UX features in depth"* — and, on scope: the agent should *"interact with the app as a first class feature… widgets, gizmos, etc"*, because *"this will be a huge help in verifying features and systems where unit tests can't. Automated integration testing!"*
 

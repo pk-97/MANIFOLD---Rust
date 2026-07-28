@@ -2,37 +2,9 @@
 
 > **SUPERSEDED for the param mechanism (2026-07-21) → [`docs/SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md`](SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md) is the current authority.** The `node.scene_object` + `Object`-wire vocabulary and the outliner-plus-properties layout this doc established still stand and are load-bearing. What changed: the properties body is no longer a transcribed value-cell contract — it renders exposed-param manifest rows via the card path (P1/P2 LANDED), and `scene_vm.rs` is slimmed to item-discovery only (P3 LANDED `7ee0a887`, `scene_vm::is_param_driven` sources driven-state generically).
 
-**Status: SHIPPED — all 5 phases landed on main 2026-07-17 (P1+P2 @ `5c5dacfe`,
-P3 @ `da452351`, P4+P5 @ `7d3c41b6`). Landing reports:
-`docs/landings/2026-07-17-scene-object-v2-p1-p2.md`,
-`docs/landings/2026-07-17-scene-object-v2-p3.md`,
-`docs/landings/2026-07-17-scene-object-v2-p4-p5.md`. The object model, the
-Object wire, and the outliner+properties panel are all live on main.
-Three known, tracked gaps outside what P1-P5 committed to fix (none are
-regressions from this landing — all found BY this wave's own gates, all
-logged before the session ended, per house rule): BUG-218 (modifier-commands-splice-at-dead-group-output-ve…) ("Add modifier"
-chip is a dead affordance against any real grouped object — the D6
-modifier-stack commands still splice at the pre-D12 group_output.vertices
-port, fix owed to `manifold-editing`, out of every phase's committed blast
-radius); BUG-212 (duplicate-scene-object-string-bindings-dangle-on…) (`DuplicateSceneObjectCommand`'s fresh NodeIds break an
-imported object's string-bound model-file path — Duplicate on a
-hand-built object works, on an imported one does not); BUG-199 (dock
-scroll — explicitly out of scope for this whole design, owned elsewhere).
-BUG-210 (AddSceneObjectCommand pre-migration wires) FIXED by P3. A fourth,
-more severe gap was found AND FIXED during P4+P5's own landing (not left
-open): the D5 migration was never actually wired into the real project-load
-path, and `SceneVm`'s transform/material/vertex-count tracing didn't
-understand the migrated-project topology — both fixed in the same landing,
-see that report for the full diagnosis.**
-**(APPROVED design 2026-07-17, design session with Peter)**
-**Prerequisites:** SCENE_SETUP_PANEL_DESIGN P1–P5 (SHIPPED 2026-07-17 — this design revises its
-object model and panel layout in place). BUG-199 (dock scroll) is explicitly OUT of this set —
-another session owns it (Peter, 2026-07-17: "another agent has BUG-199 planned for fixing so we
-can leave it out of this set").
-**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before starting any
-phase. Executor: Sonnet, orchestrated (Sonnet → Sonnet). Peter, verbatim: **"Sonnet must not
-make any decisions, it must just execute mechanical spec."** Anything that feels like a
-decision is an escalation, full stop.
+**Status: SHIPPED — all 5 phases on main 2026-07-17; landing reports `docs/landings/2026-07-17-scene-object-v2-p1-p2.md` / `…-p3.md` / `…-p4-p5.md`. Open gaps found by this wave's own gates, logged, outside the committed blast radius: BUG-218 (modifier-commands-splice-at-dead-group-output-vertices), BUG-212 (duplicate-scene-object-string-bindings-dangle), BUG-199 (dock scroll, owned elsewhere). The D5 migration wiring gap was found AND FIXED at the P4+P5 landing — see that report. · APPROVED 2026-07-17, design session with Peter**
+**Prerequisites:** SCENE_SETUP_PANEL_DESIGN P1–P5 (SHIPPED — revised in place); BUG-199 explicitly out (Peter: "another agent has BUG-199 planned for fixing").
+**Execution contract:** `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs) before any phase. Peter, verbatim: **"Sonnet must not make any decisions, it must just execute mechanical spec."**
 
 Peter's directives (2026-07-17, verbatim — these opened and decided the design):
 
