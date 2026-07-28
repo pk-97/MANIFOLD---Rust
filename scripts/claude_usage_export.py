@@ -63,6 +63,15 @@ CREATE TABLE IF NOT EXISTS manifold_anthropic_usage (
     cost          double precision NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS manifold_anthropic_usage_ts_idx ON manifold_anthropic_usage (ts);
+
+CREATE TABLE IF NOT EXISTS manifold_anthropic_errors (
+    message_uuid text PRIMARY KEY,
+    session_id   text NOT NULL,
+    model        text NOT NULL DEFAULT '',
+    ts           timestamptz NOT NULL,
+    project      text
+);
+CREATE INDEX IF NOT EXISTS manifold_anthropic_errors_ts_idx ON manifold_anthropic_errors (ts);
 """
 
 # One row shape per API call across every provider, so a single query answers a panel
@@ -193,14 +202,68 @@ def scan(paths):
     return list(rows.values()), unpriced
 
 
-def load(rows):
-    """COPY into a temp table, then upsert — one round trip, no per-row statements."""
-    payload = "".join(
+def scan_errors(paths):
+    # Same dedup rationale as scan(): keyed by message uuid, because a resumed or
+    # forked session copies earlier turns — including their error records — verbatim
+    # into a new transcript file.
+    rows = {}
+    for path in paths:
+        project = os.path.basename(os.path.dirname(path))
+        fallback_session = os.path.splitext(os.path.basename(path))[0]
+        with open(path, errors="ignore") as handle:
+            for line in handle:
+                if '"isApiErrorMessage"' not in line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not record.get("isApiErrorMessage"):
+                    continue
+                uuid = record.get("uuid")
+                timestamp = record.get("timestamp")
+                if not uuid or not timestamp:
+                    continue
+                message = record.get("message")
+                model = message.get("model") if isinstance(message, dict) else None
+                if model is None:
+                    # No model on the error record (e.g. it never reached the API) —
+                    # keep it, but with no model to attribute cost/blame to.
+                    model = ""
+                elif model == "<synthetic>":
+                    # Claude Code injects a synthetic assistant message when the call
+                    # itself failed (rate limit, auth, timeout) — the very failures
+                    # this table exists to surface. In practice every error record
+                    # carries this, never a real model id. May include proxy-seat
+                    # failures too; those are also visible live in Prometheus.
+                    model = "synthetic"
+                else:
+                    model = normalize_model(model)
+                    if not model.startswith("claude-"):
+                        continue
+                rows[uuid] = [
+                    uuid,
+                    record.get("sessionId") or fallback_session,
+                    model,
+                    timestamp,
+                    project,
+                ]
+    return list(rows.values())
+
+
+def _copy_payload(rows):
+    return "".join(
         "\t".join(str(field).replace("\t", " ").replace("\n", " ") for field in row) + "\n"
         for row in rows
     )
+
+
+def load(rows, error_rows):
+    """COPY into temp tables, then upsert — one round trip, no per-row statements."""
+    payload = _copy_payload(rows)
+    errors_payload = _copy_payload(error_rows)
     # One explicit transaction: psql autocommits per statement, which would drop the
-    # ON COMMIT DROP staging table before the COPY could reach it.
+    # ON COMMIT DROP staging tables before the COPY could reach them.
     sql = f"""
 BEGIN;
 {SCHEMA}
@@ -217,6 +280,19 @@ ON CONFLICT (message_uuid) DO UPDATE SET
     cache_write   = EXCLUDED.cache_write,
     output_tokens = EXCLUDED.output_tokens,
     cost          = EXCLUDED.cost;
+
+CREATE TEMP TABLE staging_errors (LIKE manifold_anthropic_errors) ON COMMIT DROP;
+COPY staging_errors (message_uuid, session_id, model, ts, project)
+     FROM STDIN;
+{errors_payload}\\.
+INSERT INTO manifold_anthropic_errors
+SELECT * FROM staging_errors
+ON CONFLICT (message_uuid) DO UPDATE SET
+    session_id = EXCLUDED.session_id,
+    model      = EXCLUDED.model,
+    ts         = EXCLUDED.ts,
+    project    = EXCLUDED.project;
+
 {VIEW}
 {WORK_CLASS_VIEW}
 COMMIT;
@@ -244,16 +320,26 @@ def main():
         paths = [p for p in paths if os.path.getmtime(p) >= cutoff]
 
     rows, unpriced = scan(paths)
+    error_rows = scan_errors(paths)
     total = sum(float(row[-1]) for row in rows)
-    print(f"transcripts={len(paths)} calls={len(rows)} list_rate_cost=${total:,.2f}")
+    print(
+        f"transcripts={len(paths)} calls={len(rows)} list_rate_cost=${total:,.2f} "
+        f"api_errors={len(error_rows)}"
+    )
+    # Unpriced models still export at $0 — the launchd log needs a nonzero exit so a
+    # rate gap doesn't rot silently until someone notices the dashboard undercounting.
+    exit_code = 0
     if unpriced:
         print(f"WARNING: no rate for {sorted(unpriced)} — priced at $0, add to RATES", file=sys.stderr)
-    if args.dry_run or not rows:
-        return 0
+        exit_code = 1
+    if args.dry_run:
+        return exit_code
+    if not rows and not error_rows:
+        return exit_code
 
-    load(rows)
+    load(rows, error_rows)
     print("loaded; views manifold_fleet_usage + manifold_fleet_work refreshed")
-    return 0
+    return exit_code
 
 
 if __name__ == "__main__":

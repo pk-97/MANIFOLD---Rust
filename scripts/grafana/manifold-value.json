@@ -10,6 +10,7 @@
   "timezone": "Australia/Sydney",
   "editable": true,
   "schemaVersion": 39,
+  "version": 1,
   "refresh": "5m",
   "time": {
     "from": "now-7d",
@@ -971,6 +972,134 @@
           "format": "table",
           "rawQuery": true,
           "rawSql": "SELECT provider AS \"Provider\",\n       sum(prompt_tokens - cache_read - cache_write) AS \"Fresh input\",\n       sum(cache_read)    AS \"Cache read\",\n       sum(cache_write)   AS \"Cache write\",\n       sum(output_tokens) AS \"Output\"\nFROM manifold_fleet_usage\nWHERE $__timeFilter(ts)\nGROUP BY provider\nORDER BY sum(prompt_tokens + output_tokens) DESC",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "manifold-litellm-pg"
+          },
+          "editorMode": "code"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Instrumentation health",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 51
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 11,
+      "type": "stat",
+      "title": "Unpriced Anthropic calls",
+      "description": "Calls priced at $0 because the model is missing from RATES in scripts/claude_usage_export.py — every one of these undercounts the Anthropic column.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "manifold-litellm-pg"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 0,
+        "y": 52
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT count(*) AS \"Unpriced\"\nFROM manifold_fleet_usage\nWHERE source = 'anthropic' AND cost = 0 AND output_tokens > 0 AND $__timeFilter(ts)",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "manifold-litellm-pg"
+          },
+          "editorMode": "code"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "barchart",
+      "title": "Work-class threshold audit — output tokens per call",
+      "description": "The real-work split assumes a valley at ≤16 output tokens (the permission-classifier signature). If the buckets next to the threshold fill in, the heuristic broke and the overhead split is lying.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "manifold-litellm-pg"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 18,
+        "x": 6,
+        "y": 52
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "fillOpacity": 85,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "xTickLabelRotation": 0,
+        "stacking": "normal",
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH b AS (\n  SELECT\n    CASE\n      WHEN output_tokens <= 16  THEN '0–16'\n      WHEN output_tokens <= 32  THEN '17–32'\n      WHEN output_tokens <= 64  THEN '33–64'\n      WHEN output_tokens <= 128 THEN '65–128'\n      WHEN output_tokens <= 512 THEN '129–512'\n      ELSE '513+'\n    END AS bucket,\n    CASE\n      WHEN output_tokens <= 16  THEN 1\n      WHEN output_tokens <= 32  THEN 2\n      WHEN output_tokens <= 64  THEN 3\n      WHEN output_tokens <= 128 THEN 4\n      WHEN output_tokens <= 512 THEN 5\n      ELSE 6\n    END AS sort_order,\n    provider\n  FROM manifold_fleet_usage\n  WHERE $__timeFilter(ts)\n)\nSELECT bucket AS \"Bucket\",\n       count(*) FILTER (WHERE provider = 'Anthropic') AS \"Anthropic\",\n       count(*) FILTER (WHERE provider = 'Kimi')      AS \"Kimi\",\n       count(*) FILTER (WHERE provider = 'Z.AI')      AS \"Z.AI\",\n       count(*) FILTER (WHERE provider = 'OpenCode')  AS \"OpenCode\"\nFROM b\nGROUP BY bucket, sort_order\nORDER BY sort_order",
           "datasource": {
             "type": "grafana-postgresql-datasource",
             "uid": "manifold-litellm-pg"

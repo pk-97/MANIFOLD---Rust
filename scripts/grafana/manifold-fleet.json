@@ -1,13 +1,13 @@
 {
   "uid": "manifold-fleet",
   "title": "MANIFOLD fleet",
-  "description": "Proxy models come from Prometheus (live, 5m rate). Anthropic models come from the hourly transcript export in Postgres: 1h buckets, up to ~1h behind, and no status/latency/TTFT data — the latency panels are proxy-only.",
+  "description": "Proxy models come from Prometheus (live, 5m rate). Anthropic models come from the hourly transcript export in Postgres: 1h buckets, the series end at the last complete exported hour (up to ~1h behind the live proxy lines), and no status/latency/TTFT data — the latency panels are proxy-only.",
   "tags": ["manifold", "litellm"],
   "timezone": "Australia/Sydney",
   "refresh": "30s",
   "time": {"from": "now-6h", "to": "now"},
   "schemaVersion": 39,
-  "version": 3,
+  "version": 4,
   "annotations": {"list": []},
   "templating": {"list": []},
   "links": [
@@ -47,7 +47,7 @@
      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 7},
      "targets": [
        {"refId": "A", "datasource": {"type": "prometheus", "uid": "Prometheus"}, "expr": "sum by (model) (rate(litellm_spend_metric_total[5m])) * 3600", "legendFormat": "{{model}}"},
-       {"refId": "B", "datasource": {"type": "grafana-postgresql-datasource", "uid": "manifold-litellm-pg"}, "format": "time_series", "rawQuery": true, "editorMode": "code", "rawSql": "SELECT $__timeGroup(ts, '1h') AS time, model AS metric, sum(cost)::float8 AS value FROM manifold_fleet_usage WHERE source = 'anthropic' AND $__timeFilter(ts) GROUP BY 1, 2 ORDER BY 1"}
+       {"refId": "B", "datasource": {"type": "grafana-postgresql-datasource", "uid": "manifold-litellm-pg"}, "format": "time_series", "rawQuery": true, "editorMode": "code", "rawSql": "SELECT $__timeGroup(ts, '1h') AS time, model AS metric, sum(cost)::float8 AS value FROM manifold_fleet_usage WHERE source = 'anthropic' AND $__timeFilter(ts) AND ts < date_trunc('hour', (SELECT max(ts) FROM manifold_fleet_usage WHERE source = 'anthropic')) GROUP BY 1, 2 ORDER BY 1"}
      ],
      "fieldConfig": {"defaults": {"unit": "currencyUSD", "custom": {"drawStyle": "line", "fillOpacity": 15, "stacking": {"mode": "normal"}, "showPoints": "never"}}, "overrides": []},
      "options": {"legend": {"displayMode": "table", "placement": "right", "calcs": ["lastNotNull", "mean"]}, "tooltip": {"mode": "multi"}}},
@@ -58,7 +58,7 @@
      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 16},
      "targets": [
        {"refId": "A", "datasource": {"type": "prometheus", "uid": "Prometheus"}, "expr": "sum by (model) (rate(litellm_input_tokens_metric_total[5m]))", "legendFormat": "{{model}}"},
-       {"refId": "B", "datasource": {"type": "grafana-postgresql-datasource", "uid": "manifold-litellm-pg"}, "format": "time_series", "rawQuery": true, "editorMode": "code", "rawSql": "SELECT $__timeGroup(ts, '1h') AS time, model AS metric, sum(prompt_tokens - cache_read - cache_write)::float8 / 3600 AS value FROM manifold_fleet_usage WHERE source = 'anthropic' AND $__timeFilter(ts) GROUP BY 1, 2 ORDER BY 1"}
+       {"refId": "B", "datasource": {"type": "grafana-postgresql-datasource", "uid": "manifold-litellm-pg"}, "format": "time_series", "rawQuery": true, "editorMode": "code", "rawSql": "SELECT $__timeGroup(ts, '1h') AS time, model AS metric, sum(prompt_tokens - cache_read - cache_write)::float8 / 3600 AS value FROM manifold_fleet_usage WHERE source = 'anthropic' AND $__timeFilter(ts) AND ts < date_trunc('hour', (SELECT max(ts) FROM manifold_fleet_usage WHERE source = 'anthropic')) GROUP BY 1, 2 ORDER BY 1"}
      ],
      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "line", "fillOpacity": 15, "stacking": {"mode": "normal"}, "showPoints": "never"}}, "overrides": []},
      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi"}}},
@@ -67,7 +67,7 @@
      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 16},
      "targets": [
        {"refId": "A", "datasource": {"type": "prometheus", "uid": "Prometheus"}, "expr": "sum by (model) (rate(litellm_output_tokens_metric_total[5m]))", "legendFormat": "{{model}}"},
-       {"refId": "B", "datasource": {"type": "grafana-postgresql-datasource", "uid": "manifold-litellm-pg"}, "format": "time_series", "rawQuery": true, "editorMode": "code", "rawSql": "SELECT $__timeGroup(ts, '1h') AS time, model AS metric, sum(output_tokens)::float8 / 3600 AS value FROM manifold_fleet_usage WHERE source = 'anthropic' AND $__timeFilter(ts) GROUP BY 1, 2 ORDER BY 1"}
+       {"refId": "B", "datasource": {"type": "grafana-postgresql-datasource", "uid": "manifold-litellm-pg"}, "format": "time_series", "rawQuery": true, "editorMode": "code", "rawSql": "SELECT $__timeGroup(ts, '1h') AS time, model AS metric, sum(output_tokens)::float8 / 3600 AS value FROM manifold_fleet_usage WHERE source = 'anthropic' AND $__timeFilter(ts) AND ts < date_trunc('hour', (SELECT max(ts) FROM manifold_fleet_usage WHERE source = 'anthropic')) GROUP BY 1, 2 ORDER BY 1"}
      ],
      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "line", "fillOpacity": 15, "stacking": {"mode": "normal"}, "showPoints": "never"}}, "overrides": []},
      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi"}}},
@@ -77,7 +77,7 @@
      "targets": [
        {"refId": "A", "datasource": {"type": "prometheus", "uid": "Prometheus"}, "expr": "sum by (model) (rate(litellm_provider_cache_read_input_tokens_metric_total[5m]))", "legendFormat": "{{model}} cache"},
        {"refId": "B", "datasource": {"type": "prometheus", "uid": "Prometheus"}, "expr": "sum by (model) (rate(litellm_output_reasoning_tokens_metric_total[5m]))", "legendFormat": "{{model}} reasoning"},
-       {"refId": "C", "datasource": {"type": "grafana-postgresql-datasource", "uid": "manifold-litellm-pg"}, "format": "time_series", "rawQuery": true, "editorMode": "code", "rawSql": "SELECT $__timeGroup(ts, '1h') AS time, model || ' cache' AS metric, sum(cache_read)::float8 / 3600 AS value FROM manifold_fleet_usage WHERE source = 'anthropic' AND $__timeFilter(ts) GROUP BY 1, 2 ORDER BY 1"}
+       {"refId": "C", "datasource": {"type": "grafana-postgresql-datasource", "uid": "manifold-litellm-pg"}, "format": "time_series", "rawQuery": true, "editorMode": "code", "rawSql": "SELECT $__timeGroup(ts, '1h') AS time, model || ' cache' AS metric, sum(cache_read)::float8 / 3600 AS value FROM manifold_fleet_usage WHERE source = 'anthropic' AND $__timeFilter(ts) AND ts < date_trunc('hour', (SELECT max(ts) FROM manifold_fleet_usage WHERE source = 'anthropic')) GROUP BY 1, 2 ORDER BY 1"}
      ],
      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "line", "fillOpacity": 15, "showPoints": "never"}}, "overrides": []},
      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi"}}},
@@ -116,7 +116,7 @@
      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 30},
      "targets": [
        {"refId": "A", "datasource": {"type": "prometheus", "uid": "Prometheus"}, "expr": "sum by (requested_model, status_code) (rate(litellm_proxy_total_requests_metric_total[5m])) * 60", "legendFormat": "{{requested_model}} {{status_code}}"},
-       {"refId": "B", "datasource": {"type": "grafana-postgresql-datasource", "uid": "manifold-litellm-pg"}, "format": "time_series", "rawQuery": true, "editorMode": "code", "rawSql": "SELECT $__timeGroup(ts, '1h') AS time, model AS metric, count(*)::float8 / 60 AS value FROM manifold_fleet_usage WHERE source = 'anthropic' AND $__timeFilter(ts) GROUP BY 1, 2 ORDER BY 1"}
+       {"refId": "B", "datasource": {"type": "grafana-postgresql-datasource", "uid": "manifold-litellm-pg"}, "format": "time_series", "rawQuery": true, "editorMode": "code", "rawSql": "SELECT $__timeGroup(ts, '1h') AS time, model AS metric, count(*)::float8 / 60 AS value FROM manifold_fleet_usage WHERE source = 'anthropic' AND $__timeFilter(ts) AND ts < date_trunc('hour', (SELECT max(ts) FROM manifold_fleet_usage WHERE source = 'anthropic')) GROUP BY 1, 2 ORDER BY 1"}
      ],
      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "line", "fillOpacity": 15, "showPoints": "never"}}, "overrides": []},
      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi"}}},
