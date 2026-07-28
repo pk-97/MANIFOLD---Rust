@@ -44,7 +44,7 @@ Companions: [RENDERING_INFRA_V2_DESIGN.md](RENDERING_INFRA_V2_DESIGN.md) section
 doctrine, reused verbatim; the sibling amendment landing with this doc adds AO
 denoise + GTAO there).
 
-## 1. Audit — what exists (verified 2026-07-13, tip `a11e93d6`)
+## 1. Audit — what exists (verified 2026-07-13)
 
 | Piece | Where | State |
 |---|---|---|

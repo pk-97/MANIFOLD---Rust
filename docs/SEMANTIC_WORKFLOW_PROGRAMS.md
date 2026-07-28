@@ -61,7 +61,7 @@ Every transition is enforced by one of three things. This table is where the arc
 
 The soft transitions are the known failure surface. The table turns "make agents more reliable" into a finite ordered list: migrate soft transitions to hooks, one at a time.
 
-**Machine form (2026-07-27, Peter + Fable):** `.claude/hooks/enforcement-table.json` is this table as data — every transition, its enforcement kind, its enforcing file. `gate_runner pre-wave` verifies it against reality (hook rows registered + present, exit-code rows present) and prints the prompt-row count as the open soft surface. A migration is a one-row edit the census counts; a dead enforcing file goes red at wave start.
+**Machine form (2026-07-27, Peter):** `.claude/hooks/enforcement-table.json` is this table as data — every transition, its enforcement kind, its enforcing file. `gate_runner pre-wave` verifies it against reality (hook rows registered + present, exit-code rows present) and prints the prompt-row count as the open soft surface. A migration is a one-row edit the census counts; a dead enforcing file goes red at wave start.
 
 ## 4. The holes (skeptical pass, kept sharp)
 

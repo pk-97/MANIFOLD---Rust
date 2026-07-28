@@ -24,7 +24,7 @@ open): the D5 migration was never actually wired into the real project-load
 path, and `SceneVm`'s transform/material/vertex-count tracing didn't
 understand the migrated-project topology — both fixed in the same landing,
 see that report for the full diagnosis.**
-**(APPROVED design 2026-07-17 · Fable 5, design session with Peter)**
+**(APPROVED design 2026-07-17, design session with Peter)**
 **Prerequisites:** SCENE_SETUP_PANEL_DESIGN P1–P5 (SHIPPED 2026-07-17 — this design revises its
 object model and panel layout in place). BUG-199 (dock scroll) is explicitly OUT of this set —
 another session owns it (Peter, 2026-07-17: "another agent has BUG-199 planned for fixing so we

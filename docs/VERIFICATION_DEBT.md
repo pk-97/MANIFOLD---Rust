@@ -25,10 +25,10 @@ Rules (normative home: `DESIGN_DOC_STANDARD.md` section 10 (Verification levels,
 ## Open
 
 ### VD-030 — editor-window surfaces (REALTIME_3D P5c viewport, P6 gizmos) reach L2 only
-Landed 2026-07-17 (`34a38a45`, `b4d2d448`; `docs/landings/2026-07-17-scene-3d-ux-wave.md`). The flow driver has no graph-editor-window routing, so navigation and gizmo drags are proven by production-function tests + orchestrator-reviewed PNGs, never a scripted real-input pass. Burn-down: extend UI_AUTOMATION to the editor window (flow-driver routing for the second window), or Peter's L4 pass on the click-script.
+Landed 2026-07-17 (`docs/landings/2026-07-17-scene-3d-ux-wave.md`). The flow driver has no graph-editor-window routing, so navigation and gizmo drags are proven by production-function tests + orchestrator-reviewed PNGs, never a scripted real-input pass. Burn-down: extend UI_AUTOMATION to the editor window (flow-driver routing for the second window), or Peter's L4 pass on the click-script.
 
 ### VD-031 — modulation/scrub L3 claims are dispatch+value-level, not pixels (harness gaps BUG-234 (ui-snap-script-harness-never-runs-a-content-thre…) [FIXED] / BUG-298 (slider-fill-under-modulation-pixel-unverified))
-Landed 2026-07-17 (UX-P3a `ee30d52d`, convergence C-P1a on-branch). The `--script` harness never runs a content-thread tick (BUG-234) and doesn't visually update slider fill mid-flow (BUG-235 (manifold-own-kick-fixtures-systematic-adtof-timi…)), so every "value modulates / scrub moves the slider" claim rests on Rust value tests plus static PNGs.
+Landed 2026-07-17 (UX-P3a, convergence C-P1a on-branch). The `--script` harness never runs a content-thread tick (BUG-234) and doesn't visually update slider fill mid-flow (BUG-235 (manifold-own-kick-fixtures-systematic-adtof-timi…)), so every "value modulates / scrub moves the slider" claim rests on Rust value tests plus static PNGs.
 **BUG-234 half burned down 2026-07-21** (lane/bug234-modulation-tick): `Step`'s frame loop now runs `evaluate_modulation` (drivers + envelopes) plus `reconcile_state` every stepped frame, so a flow CAN assert a changing param value across `Snapshot`s. `scripts/ui-flows/envelope-modulation.json` (new `envmod` fixture) proves it: a Bloom `amount` envelope reads base 0.50, then one frame after the clip's rising edge the Amount row NO LONGER shows 0.50 (asserted as `Count 0` on the base value — a machine-independent "the value moved off base", not a pinned decayed float; the Dump captures the actual pulled-toward-target value, ~4.85, as evidence), then returns to exactly 0.50 once elapsed clears the 1-beat decay — confirmed to fail without the wire. `reconcile_state`'s `sync_param_value` drives the slider's fill/thumb norm off the same `effective` value as the text, so the visual-fill half is very likely fixed too, riding the same wire. **Stale cross-reference resolved 2026-07-21:** the "BUG-235" this entry originally pointed at (slider-fill-mid-flow) had been renumbered away (current BUG-235 is `manifold-own-kick-fixtures-systematic-adtof-timing-bias`, unrelated audio timing); the slider-fill-under-modulation gap is now tracked as **BUG-298** (LOW, pixel-verification only). Burn-down remaining: render the modulated frame and PNG-diff the slider fill region (BUG-298), then close this entry.
 
 ### VD-033 — C-P1c's sun-intensity render proof is subtle to the eye; the pixel-diff assertion carried the gate, not a look-pass
@@ -63,7 +63,7 @@ at the value level and reachable headless or via a short manual run — none nee
 manual checks, ≤2 minutes total.
 
 ### VD-024 — AUDIO_SETUP_DOCK P3b: AudioTriggerSection has no unit-test module
-Landed 2026-07-10 (`5c4fbcca`; `docs/landings/2026-07-10-audio-dock-p3b.md`). The new
+Landed 2026-07-10 (`docs/landings/2026-07-10-audio-dock-p3b.md`). The new
 `crates/manifold-ui/src/panels/audio_trigger_section.rs` lacks the `#[cfg(test)]` collapse/click
 module that its siblings `macros_panel.rs` and `layer_chrome.rs` carry. Covered for now by
 compile + the 658-test `manifold-ui` suite (no regressions) + the L3 add-trigger flow
@@ -85,7 +85,7 @@ headless integration harness described in the design's section 8 Deferred P3 ent
 thread + compositor smoke), or accept L4-by-use as sufficient and mark this consciously carried.
 
 ### VD-022 — LIVE_RECORDING_PROOFS P2: full-scale pre-gig soak + BUG-086 — L2 reached / L4 carried
-Landed 2026-07-10 (`docs/landings/2026-07-10-live-recording-proofs.md`, P2 @ `091290e3`). The
+Landed 2026-07-10 (`docs/landings/2026-07-10-live-recording-proofs.md`, P2). The
 `recording-soak` bin and its decoded-index PASS gate are verified at L2 via a short 1080p/2-minute
 run the orchestrator executed and whose `.mov` it opened. **Two carried gaps:**
 (a) The **full-scale 4K60 20-minute soak has never been run** — by design (section 6 P2), its first
@@ -113,7 +113,7 @@ an `LD_PRELOAD`/`dm-flakey` crash-consistency harness, else Peter accepting L1 f
 ordering fix.
 
 ### VD-020 — PARAM_STORAGE_BOUNDARIES P2: calibration-drag gesture is L1, not L3 — L1 reached / L3 target
-Landed 2026-07-09 @ P2 (`254792c0`). The card-rendering half reached L3
+Landed 2026-07-09 @ P2. The card-rendering half reached L3
 (`scripts/ui-flows/calibrated-param-card-reads-manifest.json` — inspector renders
 Mirror/Bloom/Strobe cards with manifest-sourced ranges, PNG confirmed). The literal
 "drag a calibrated slider → reload → real degree range" gesture is only L1 (the
@@ -125,7 +125,7 @@ round-trip is Rust-proven, not interaction-proven. L4 (Peter dragging it live) r
 ultimate target.
 
 ### VD-001 — Automation lanes P1–P4: runtime pointer→command editing path — **L3 reached** / L4 target
-Landed 2026-07-04 @ `8b306de0`. **L3 burned down 2026-07-05 (Opus):**
+Landed 2026-07-04. **L3 burned down 2026-07-05:**
 `scripts/ui-flows/drag-automation-point.json` resolves Mirror's middle breakpoint by its
 `automation_lanes` surface target and drags it through the real input path (pointer →
 viewport events → `InteractionOverlay` → `AppEditingHost` → automation command on the scene

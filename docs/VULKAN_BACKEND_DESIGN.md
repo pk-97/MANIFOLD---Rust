@@ -19,7 +19,7 @@ The port is further along than "add a Vulkan backend" suggests. Already true on 
 |---|---|---|
 | Backend selection | DONE — cfg-gated, exactly one backend per build, `--features vulkan` | `crates/manifold-gpu/src/lib.rs` |
 | Shader pipeline | DONE — WGSL → naga → SPIR-V → spirv-opt is backend-neutral and always compiled; only the final "SPIR-V → X" step diverges | `src/shader_common.rs` |
-| Vulkan scaffold | DONE — `SlotMap`, `compile_wgsl_to_spirv_{compute,render}`, `build_slot_map`, type shells | `src/vulkan/` (commit 0c5dde17) |
+| Vulkan scaffold | DONE — `SlotMap`, `compile_wgsl_to_spirv_{compute,render}`, `build_slot_map`, type shells | `src/vulkan/` |
 | `ash` dependency | DONE — pinned 0.38, optional, feature-gated | `Cargo.toml` |
 | Barrier seam | API EXISTS — `GpuEncoder::pipeline_barrier(reads, writes)` is a documented no-op on Metal with Vulkan semantics spelled out in its doc comment. **No call sites exist yet** — see section 4 for why that's fine | `src/metal/encoder.rs:1516` |
 | Metal type leakage outside the crate | NONE — no `metal::`/`objc2` types escape `manifold-gpu` except the cfg(macos) escape hatches (`raw_device_ptr` for DNN FFI, IOSurface fns) which are already platform-gated at their call sites | verified by sweep |
@@ -178,7 +178,7 @@ Mechanics:
 
 ## 8. Tier 2 — platform coupling beyond the GPU (inventory, one page)
 
-Verified by sweep 2026-07-02. Each row is a separate future design; none block P1–P3.
+Each row is a separate future design; none block P1–P3.
 
 | Subsystem | macOS today (where) | Cross-platform answer | Effort |
 |---|---|---|---|

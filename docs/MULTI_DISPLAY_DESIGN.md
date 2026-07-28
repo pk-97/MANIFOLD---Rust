@@ -659,7 +659,7 @@ to content, requiring no change to islands or domains.
 - **Hot-path discipline:** stage derivation is per-action; the per-frame uniform build
   copies from a cached struct. No per-frame allocation.
 
-## 10. Phasing (Sonnet-executable)
+## 10. Phasing
 
 Each phase lands alone, is testable alone, and doesn't break single-display flow.
 
@@ -670,7 +670,7 @@ frame-locking; storing derived data (islands/packing are re-derived, never
 serialized — D3); shader changes for island support (section 6.1's whole point is zero);
 `vec3` fields in any new uniform (alignment rule — vec4 only, section 7.1).
 
-- **P1 — core model. ✅ BUILT + MERGED (2026-07-03, `0cb5114f`).** `stage.rs` +
+- **P1 — core model. ✅ BUILT + MERGED (2026-07-03).** `stage.rs` +
   `derive_stage` (19 unit tests), 9 EditingService commands, `.manifoldvenue`
   export/import, `ProjectSettings.stage_layout` (serde-defaulted, empty = legacy
   single island). Real Liveschool migration verified in the merged tree. Note for P2:

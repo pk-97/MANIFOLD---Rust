@@ -8,9 +8,7 @@ session of itself (solo or orchestrating Sonnet workers).**
 This is the downstream sibling: how to brief the session that executes one. A design
 doc is the contract; the session prompt is the briefing that carries everything the
 doc *cannot* carry — the git mode, the verification gates, the traps specific to this
-work, and what Peter owes or is owed. Every prompt in the Fable-era corpus (the
-`fable-window-handoff` memory's Prompts C–F, and the Opus pack that follows this
-guide) was built to this shape; they are the model instances. When this guide and a
+work, and what Peter owes or is owed. When this guide and a
 newer instance disagree, the instance won — figure out why and update the guide.
 
 The test of a good prompt: a fresh session with zero conversation history executes
@@ -118,7 +116,7 @@ Order matters less than presence. A prompt missing one of these is not done.
 
 ## 3. Finding the traps — where the judgment lives
 
-The trap section is the part that used to be Fable's contribution. It transfers by
+The trap section transfers by
 knowing where trap knowledge is stored, not by intuition. Check all five, every time:
 
 1. **The design doc's own negative gates** and "Decided — do not reopen" sections.
@@ -164,7 +162,7 @@ main checkout — never in a worktree, where it is a second cold build
 
 ## 5. Git modes — reference, don't restate
 
-The spec is `.claude/GIT_TREE_DISCIPLINE.md` section 2 (Landing protocol (replaces the retired ff-only convention)); the prompt names the mode and fills
+The spec is `.claude/GIT_TREE_DISCIPLINE.md` section 2 (Landing protocol); the prompt names the mode and fills
 in the blanks rather than re-deriving the rules.
 
 - **Mode A — docs-only.** The worktree-guard hook (2026-07-08) denies agent edits

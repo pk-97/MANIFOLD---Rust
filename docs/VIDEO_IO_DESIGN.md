@@ -8,7 +8,7 @@
 source-atom slot all exist). P3–P4 need the NDI SDK decision (section D8, VERIFY-AT-IMPL).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
-## 0. License clearance (verified 2026-07-09, Opus — full NDI SDK License Agreement, Nov 2024, read)
+## 0. License clearance (verified 2026-07-09 — full NDI SDK License Agreement, Nov 2024, read)
 
 Both mechanisms are cleared for commercial closed-source use. **Syphon:** BSD framework, no
 conditions. **NDI:** MANIFOLD qualifies as a royalty-free licensed "Product" (section 1b — desktop
@@ -44,14 +44,14 @@ cross-machine feeds (NDI, either direction)". This doc supersedes
 CAPABILITY_ROADMAP.md section 3 (the 2026-06-17 sketch) where they differ — notably the
 send-as-graph-node idea, rejected in D2.
 
-Companions: `MULTI_DISPLAY_DESIGN.md` (output model this extends; its section 10 (Phasing (Sonnet-executable)) P6 listed
+Companions: `MULTI_DISPLAY_DESIGN.md` (output model this extends; its section 10 (Phasing) P6 listed
 "NDI/Syphon outputs" as deferred — this doc is that item), `ML_NODES_DESIGN.md` section 4 (Sources)
 (the source-atom slot the input side fills), `GIG_RESILIENCE_DESIGN.md` (failure
 doctrine), `MEDIA_BACKEND_DESIGN.md` (deferred NDI/Syphon here).
 
 ## 1. Audit — what exists (verified 2026-07-07)
 
-Extend, don't redesign. Every piece below was verified at the cited anchor today.
+Extend, don't redesign.
 
 | Piece | Where | State |
 |---|---|---|
