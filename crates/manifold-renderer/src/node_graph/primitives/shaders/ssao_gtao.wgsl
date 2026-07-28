@@ -59,6 +59,12 @@ fn integrate_arc(h: f32, n: f32) -> f32 {
     return 0.25 * (-cos(2.0 * h - n) + cos(n) + 2.0 * h * sin(n));
 }
 
+// See ssao_gtao_body.wgsl's gtao_full_ref / ssao_gtao.rs's
+// cpu_reference::full_ref for the grazing-angle-fix derivation (BUG-y5w7).
+fn full_ref(n: f32) -> f32 {
+    return cos(n) + n * sin(n);
+}
+
 fn height_pos(c: vec2<i32>, dims_i: vec2<i32>, aspect: f32, relief: f32) -> vec3<f32> {
     let cc = clamp(c, vec2<i32>(0, 0), dims_i - vec2<i32>(1, 1));
     let raw = textureLoad(depth_tex, cc, 0).r;
@@ -115,10 +121,13 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let n_steps = max(1u, u32(gtao_round(u.steps)));
 
     var visibility_sum = 0.0;
+    var baseline_sum = 0.0;
     for (var s: u32 = 0u; s < n_slices; s = s + 1u) {
         let phi = rot * 0.5 + f32(s) * (2.0 * GTAO_HALF_PI / f32(n_slices));
         let dir2 = vec2<f32>(cos(phi), sin(phi));
-        let dir3 = vec3<f32>(dir2, 0.0);
+        // See ssao_gtao_body.wgsl's matching comment (BUG-y5w7 root cause):
+        // dir3 must flip Y to match the Y-flip in pos_dispatch's ndc_y.
+        let dir3 = vec3<f32>(dir2.x, -dir2.y, 0.0);
 
         let axis = cross(dir3, view_vec);
         let axis_len = length(axis);
@@ -168,9 +177,10 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 
         let arc = integrate_arc(h1, n_signed) + integrate_arc(h2, n_signed);
         visibility_sum = visibility_sum + proj_len * arc;
+        baseline_sum = baseline_sum + proj_len * full_ref(n_signed);
     }
 
-    let visibility = clamp(visibility_sum / f32(n_slices), 0.0, 1.0);
+    let visibility = clamp(visibility_sum / max(baseline_sum, 1e-4), 0.0, 1.0);
     let ao = clamp(1.0 - u.intensity * (1.0 - visibility), 0.0, 1.0);
     textureStore(output_tex, c, vec4<f32>(ao, ao, ao, 1.0));
 }

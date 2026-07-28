@@ -815,10 +815,16 @@ pub(super) fn build_import_graph(
         card_params.push(card_param("scene_ambient", "Ambient", 0.0, 1.0, 0.0, false, "Environment"));
     }
 
-    // No SSAO card sliders (Peter, 2026-07-15: "the defaults look good") —
-    // the `ao` node group stays wired at its defaults
-    // (`ssao_radius_default`/1.0 intensity, set on the ssao node above);
-    // it's just no longer exposed on the outer card.
+    // SSAO intensity re-exposed on the outer card (Peter, 2026-07-28) —
+    // escape hatch for the flat-plane GTAO artifact (BUG-y5w7): the radius
+    // is FOV-driven, not radius-driven, at the import camera's fov_y=0.9
+    // (a radius small enough to hide it also kills the AO effect — no
+    // in-graph clamp fixes it), so a live intensity fader lets a performer
+    // dial the artifact to zero on a per-scene basis until the GTAO kernel
+    // itself is fixed. `radius` and the other ao-group params stay
+    // unexposed per 2026-07-15 ("the defaults look good").
+    card_params.push(card_param("ssao_intensity", "AO Intensity", 0.0, 4.0, 1.0, false, "Ambient Occlusion"));
+    card_bindings.push(card_binding("ssao_intensity", "AO Intensity", 1.0, "ssao", "intensity", 1.0));
 
     // No Atmosphere section: fog + god rays removed with the atmosphere
     // node — see the removal comment in
