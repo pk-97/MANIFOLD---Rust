@@ -26,8 +26,8 @@ Acceptance artifact read: round-trip load of the real `~/Downloads/meshImportTes
 The point of P1 is that loading, snapshot-restore, and calibrated ranges behave **identically** — it removes the ways they could silently regress, it adds nothing visible.
 
 ## Deviations from the brief
-1. `pending_wire` uses no `#[serde(skip)]` (the doc §3 snippet assumed a derived impl; `PresetInstance` hand-writes `Serialize`/`Deserialize`, so the field is simply never written by the `Serialize` impl — same "never on the wire" property, and the attribute wouldn't compile there).
-2. `reconcile_manifest()` clear-condition (`template_known_for` gate) is an interior detail the §3 snippet didn't spell out; it's the only reading consistent with the doc's idempotence language and the required order-independence test arm.
+1. `pending_wire` uses no `#[serde(skip)]` (the doc section 3 snippet assumed a derived impl; `PresetInstance` hand-writes `Serialize`/`Deserialize`, so the field is simply never written by the `Serialize` impl — same "never on the wire" property, and the attribute wouldn't compile there).
+2. `reconcile_manifest()` clear-condition (`template_known_for` gate) is an interior detail the section 3 snippet didn't spell out; it's the only reading consistent with the doc's idempotence language and the required order-independence test arm.
 3. Re-derivation guard found **4** app call sites of the `_with` loader fns, not the audited 3 — the extra is `ui_snapshot/fixtures.rs:69` (the headless `ui-snap` harness). D3 keeps the installer signature identical, so it needs zero behaviour change; only its stale comment (naming the deleted pre-deserialize hook) was corrected. Noted so the audit count is known-one-short for P2/P3 planning.
 
 ## Status line (quoted verbatim, bumped in the same merge)

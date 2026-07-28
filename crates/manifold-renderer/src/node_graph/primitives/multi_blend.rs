@@ -173,7 +173,7 @@ impl EffectNode for MultiBlend {
         Some(crate::node_graph::freeze::classify::BoundaryReason::Blocked)
     }
 
-    /// PARAM_RANGE_CONTRACT_DESIGN.md D6/§2 mechanical grant: `num_inputs`
+    /// PARAM_RANGE_CONTRACT_DESIGN.md D6/section 2 mechanical grant: `num_inputs`
     /// sizes the live port allocation — `reconfigure` (this file, line 191)
     /// clamps to `[2, MAX_INPUTS]` before `rebuild_ports` slices the static
     /// `IN_PORT_NAMES` table.

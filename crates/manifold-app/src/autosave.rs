@@ -1,4 +1,4 @@
-//! Debounced background autosave — GIG_RESILIENCE_DESIGN §6, phase P1.
+//! Debounced background autosave — GIG_RESILIENCE_DESIGN section 6, phase P1.
 //!
 //! Trigger: dirty-debounced. `AUTOSAVE_DEBOUNCE` after the LAST edit, and only
 //! while `EditingService` reports dirty — never a blind wall-clock save. One
@@ -28,7 +28,7 @@ use manifold_core::project::Project;
 
 use crate::app::Application;
 
-/// Seconds of edit silence before a dirty project autosaves (§6 default).
+/// Seconds of edit silence before a dirty project autosaves (section 6 default).
 pub(crate) const AUTOSAVE_DEBOUNCE: Duration = Duration::from_secs(60);
 
 /// Debounce + in-flight bookkeeping for the background autosave.
@@ -161,7 +161,7 @@ fn spawn_autosave(
         .name("autosave".to_string())
         .spawn(move || {
             // Deep clone on the background thread — the whole point: the UI
-            // and content threads never pay for serialization (§6).
+            // and content threads never pay for serialization (section 6).
             let mut project = (*snapshot).clone();
             stamp.apply(&mut project);
             crate::project_io::snapshot_and_prune_embedded_presets(&mut project);

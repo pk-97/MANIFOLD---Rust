@@ -1,6 +1,6 @@
 # DRAG_CAPTURE P1 — landed 2026-07-08 @ `9bb8ca86`
 
-**Branch:** `wave/drag-capture-p1` (feat `6e4bddcb`, merge `9bb8ca86`) · **Level reached:** L3 / target L3 (§10)
+**Branch:** `wave/drag-capture-p1` (feat `6e4bddcb`, merge `9bb8ca86`) · **Level reached:** L3 / target L3 (section 10)
 **Doc status line (quoted verbatim):** `**Status:** IN PROGRESS — **P1 LANDED 2026-07-08 @ `9bb8ca86`** (single drag-capture ownership D1–D4 + D9, L3); P2–P3 pending · design 2026-07-07 (approved same day by Peter) · Fable`
 
 ## What landed

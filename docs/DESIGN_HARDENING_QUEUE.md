@@ -3,7 +3,7 @@
 **Status: LIVING · empty as of 2026-07-06 · Owner: Peter → Fable design-review agent.**
 
 Items where an execution worker hit a design-doc gap — the doc contradicts the shipped
-code, or a refactor phase lacks the `§6` seam brief (old→new signatures) that
+code, or a refactor phase lacks the `section 6` seam brief (old→new signatures) that
 `DESIGN_DOC_STANDARD.md` requires — and **STOPPED clean** (zero code, zero commits) per
 the escalate-don't-adapt rule, rather than improvising a shortcut.
 
@@ -22,13 +22,13 @@ reviewer to weigh, **not** adopt) · the forbidden shortcut a rushed executor wo
 
 ## Resolved
 
-- **2026-07-06 — MEDIA_BACKEND_DESIGN §3** (parked 2026-07-03): decoder trait
+- **2026-07-06 — MEDIA_BACKEND_DESIGN section 3** (parked 2026-07-03): decoder trait
   re-committed against the shipped async decode protocol. Answer written as
-  `MEDIA_BACKEND_DESIGN.md §3a` (write-into-caller delivery, `MediaBackends` owns the
+  `MEDIA_BACKEND_DESIGN.md section 3a (Hardening addendum (2026-07-06) — decoder trait matches the shipped async protocol)` (write-into-caller delivery, `MediaBackends` owns the
   shared pool, scheduler payload → neutral `FrameLease`, copy stays on the content
   thread). **P1 re-issuable.**
-- **2026-07-06 — MULTI_DISPLAY_DESIGN §6.1** (parked 2026-07-03): per-island state
-  seam committed. Answer written as `MULTI_DISPLAY_DESIGN.md §6.1a` (isolation by
+- **2026-07-06 — MULTI_DISPLAY_DESIGN section 6.1** (parked 2026-07-03): per-island state
+  seam committed. Answer written as `MULTI_DISPLAY_DESIGN.md section 6.1a (Hardening addendum (2026-07-06) — the per-island state seam, committed)` (isolation by
   per-`(layer, island)` chain-runtime instances — StateStore key untouched; zero
   primitive edits, the queue's "13 struct-held primitives" inventory was stale after
   the StateStore migration; LED stays legacy until P6). **P2 re-issuable.**
@@ -39,6 +39,6 @@ reviewer to weigh, **not** adopt) · the forbidden shortcut a rushed executor wo
 
 1. Fable reviews the item, decides each question, and writes the answer into the named
    design doc as an addendum **with committed signatures** (per `DESIGN_DOC_STANDARD.md`
-   §4/§6) — including the old→new seam brief for refactor phases.
+   section 4/section 6) — including the old→new seam brief for refactor phases.
 2. Remove the item from this queue once the doc carries the decision.
 3. Re-issue the blocked phase against the hardened doc.

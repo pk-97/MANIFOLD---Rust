@@ -1131,7 +1131,7 @@ impl GpuDevice {
     }
 
     /// [`Self::create_render_pipeline_depth_msaa`]'s specialized-plus-MRT
-    /// superset (`docs/GBUFFER_DESIGN.md` §2 D5, P2): text-substitutes
+    /// superset (`docs/GBUFFER_DESIGN.md` section 2 D5, P2): text-substitutes
     /// `specializations` into `wgsl_source` before compiling (the same
     /// "function constant" mechanism as [`Self::create_specialized_render_pipeline`]
     /// — a single WGSL template compiled into distinct pipeline variants,
@@ -1297,7 +1297,7 @@ impl GpuDevice {
         }
 
         // Optional MRT aux attachment (index 1) — `docs/GBUFFER_DESIGN.md`
-        // §2 D3/D5, P2's velocity output. `None` leaves attachment 1 at the
+        // section 2 D3/D5, P2's velocity output. `None` leaves attachment 1 at the
         // descriptor's default (`PixelFormatInvalid` = unused), reproducing
         // exactly today's single-color-attachment pipeline. No blending —
         // velocity (and any future aux MRT use) writes raw values, not a

@@ -1,4 +1,4 @@
-// node.morph_mesh — fusable BUFFER body (freeze §12, buffer domain),
+// node.morph_mesh — fusable BUFFER body (freeze section 12, buffer domain),
 // COINCIDENT 2-mesh-input (the node.blend_copies shape, MeshVertex instead
 // of InstanceTransform) + COINCIDENT optional `weights`. Static two-mesh
 // lerp by index: pos = mix(a, b, t*w), normal = normalize(mix(a.n, b.n,

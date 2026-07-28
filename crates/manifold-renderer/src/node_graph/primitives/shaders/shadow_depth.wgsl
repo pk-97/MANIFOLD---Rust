@@ -11,7 +11,7 @@
 // with no re-pack. Only position is read; normal/uv are ignored (a
 // depth pass has no shading).
 //
-// The shadow pass instances too (REALTIME_3D_DESIGN.md §10 D11+P8): the
+// The shadow pass instances too (REALTIME_3D_DESIGN.md section 10 D11+P8): the
 // SAME per-object instances buffer (or identity stub) binds at
 // @binding(2), and vs_main applies the identical instance-then-model TRS
 // composition as render_scene.wgsl's vs_main, so a shadow-casting

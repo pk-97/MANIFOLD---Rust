@@ -36,8 +36,11 @@ import os
 import re
 import sys
 
+# glm-4.7 is dispatch-tier (Peter 2026-07-27): classifier-dedicated on the
+# sonnet slot, but still a legitimate dispatcher — haiku-only spawns.
 EXECUTOR_TIERS = re.compile(
-    r"claude-(sonnet|haiku)|deepseek|kimi-k2|kimi-for-coding", re.IGNORECASE
+    r"claude-(sonnet|haiku)|deepseek|kimi-k2|kimi-for-coding",
+    re.IGNORECASE,
 )
 DISPATCHER_TIERS = re.compile(r"\bglm-", re.IGNORECASE)
 # The only slot a dispatcher may spawn: the executor tier (DeepSeek Flash).

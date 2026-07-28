@@ -217,7 +217,7 @@
         let mut gpu = GpuEncoder::new(&mut native_enc, &device);
 
         // A layer whose generator has been triggered 7 times (clip launches
-        // + audio fires, already summed by the caller per §8 D1) — the
+        // + audio fires, already summed by the caller per section 8 D1) — the
         // effect chain on that same layer must see the SAME 7, not the old
         // pinned 0.0.
         let ctx = PresetContext {
@@ -254,7 +254,7 @@
         );
     }
 
-    /// §8 D6 — Strobe reachability proof: the bundled Strobe preset's
+    /// section 8 D6 — Strobe reachability proof: the bundled Strobe preset's
     /// `clip_trigger` card (Trigger Gate → Envelope Decay → Max-combine with
     /// the beat gate) actually flashes when the layer's effective
     /// `trigger_count` jumps, and does NOT when the card is off. This is the
@@ -277,7 +277,7 @@
                 p.value = if clip_trigger_on { 1.0 } else { 0.0 };
                 p.base = p.value;
             } else {
-                panic!("Strobe must ship a clip_trigger card (§8 D6)");
+                panic!("Strobe must ship a clip_trigger card (section 8 D6)");
             }
 
             let mut cg = PresetRuntime::try_build(ChainBuildInputs { effects: std::slice::from_ref(&fx), groups: &[], primitives: &primitives, device: &device, pool: None, width: 64, height: 64, preview_effect: None }, None)
@@ -358,7 +358,7 @@
         );
     }
 
-    /// **The production main-path proof (design §12.3 step 5).** With the freeze
+    /// **The production main-path proof (design section 12.3 step 5).** With the freeze
     /// toggle on (default), [`PresetRuntime::try_build`] renders a canonical
     /// ColorGrade card through the FUSED node, not the 7 atoms: the built chain
     /// graph contains one `node.wgsl_compute` and none of the original

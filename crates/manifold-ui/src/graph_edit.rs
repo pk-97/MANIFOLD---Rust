@@ -15,7 +15,7 @@
 //! type. Part of Phase 5's layering inversion: a UI-local command the app maps
 //! to an engine command.
 //!
-//! Deliberately NOT here (see `docs/CANVAS_API_DESIGN.md` §3): the
+//! Deliberately NOT here (see `docs/CANVAS_API_DESIGN.md` section 3): the
 //! `EffectMapping*` binding-edit family (a different command family —
 //! `EditUserParamBindingCommand`) and the `Open*` window-open intents (emitted
 //! from the main-window card, not the canvas). Those stay on `PanelAction`.
@@ -112,7 +112,7 @@ pub enum GraphEditCommand {
     EndGraphNodeParamScrub { node_id: u32, param_name: String },
     /// Set an **outer performance-card param** to a new value. Emitted by a
     /// scrub/click on a group box's face row (D6,
-    /// `docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` §2): that row is a live
+    /// `docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` section 2): that row is a live
     /// mirror of an already-exposed card param, not an inner node's own row,
     /// so it's addressed the same way the card's own slider is — by the
     /// outer binding's stable `ParamId` string — rather than by
@@ -224,7 +224,7 @@ pub enum GraphEditCommand {
     /// no undo, no model mutation.
     SetNodePreviewNormalize(bool),
     /// The "+ Object" one-click gesture (D7,
-    /// `docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` §2): build a placeholder
+    /// `docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` section 2): build a placeholder
     /// cube+material+transform group and wire it into `render_scene`'s next
     /// object slot. Emitted by the `NodeRow::Action(AddSceneObject)` button on
     /// the `render_scene` node face. Routed to `AddSceneObjectCommand`.

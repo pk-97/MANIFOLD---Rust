@@ -18,7 +18,7 @@
 //!
 //! `velocity` is GBUFFER's `node.render_scene` `velocity` output — Rg16Float
 //! NDC-space `(dx, dy) = (ndc_now - ndc_prev)`, camera + rigid-object motion
-//! only (`GBUFFER_DESIGN.md` §2 D5's documented v1 limitation: a re-scattered
+//! only (`GBUFFER_DESIGN.md` section 2 D5's documented v1 limitation: a re-scattered
 //! instance array contributes no per-instance velocity). Read as
 //! `CoincidentTexel` (own-texel, exact — a directional vector must never be
 //! blended with a neighbour's). `in` (the color to smear) is read as

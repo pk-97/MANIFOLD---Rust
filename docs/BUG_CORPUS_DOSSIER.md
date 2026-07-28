@@ -1,9 +1,11 @@
 # Bug Corpus Dossier — mined for structural-verdict pass
 
+Ledger by design: the commit hashes and attributions below are the mined evidence — doc-cleanup sweeps skip this file.
+
 Miner: Sonnet (background job), 2026-07-09. Read-only mining; classification below is a
 **suggestion**, not a verdict — a later high-tier session issues verdicts per subsystem.
 
-## §1 Method + inputs
+## 1 Method + inputs
 
 Sources: `docs/BUG_BACKLOG.md` (2898 lines, BUG-001–082, full read, no gaps), `docs/FOUNDATIONAL_GAPS.md`
 (clusters A1–A7 + Part B), `docs/CORE_ENGINE_FINDINGS.md` (findings F1–F17, all `manifold-playback`),
@@ -13,110 +15,110 @@ files. Extraction of raw bug fields and git mining were delegated to three paral
 the taxonomy classification, cluster cross-referencing, subsystem rollup, and suggested verdicts
 below are mine, done against that raw material. The "Checked and safe" section (line 2866) contains
 **zero** numbered bugs — it lists 4 audited-and-found-correct duplication paths, confirmed by direct
-read; no bug in §2 below carries `checked-safe` status as a result. Cross-reference `rg` over the
+read; no bug in section 2 below carries `checked-safe` status as a result. Cross-reference `rg` over the
 full backlog for `FOUNDATIONAL_GAPS|CORE_ENGINE_FINDINGS|\bF1[0-7]?\b|\bA[1-7]\b` found **zero**
 hits — the backlog never names either doc's clusters by id; all cluster mappings below are mine,
 inferred from subsystem + mechanism match, not doc-stated.
 
-## §2 Per-bug table (all 82)
+## 2 Per-bug table (all 82)
 
 Columns: ID | Subsystem | Class | Fix | Enforcement | Evidence | Cluster. Fix: `struct`=fixed-structural,
 `patch`=fixed-patch, `open`=open (parenthetical = doc's own status note). Cluster: `none` = no fit found
-in FOUNDATIONAL_GAPS/CORE_ENGINE_FINDINGS (candidate for §5).
+in FOUNDATIONAL_GAPS/CORE_ENGINE_FINDINGS (candidate for section 5).
 
 | ID | Subsystem | Class | Fix | Enforcement | Evidence | Cluster |
 |---|---|---|---|---|---|---|
 | BUG-001 | manifold-editing/clipboard.rs | identity-minting-on-duplicate | struct | none named | BUG_BACKLOG.md:2748 | A5 |
-| BUG-002 | manifold-core/clip.rs | identity-minting-on-duplicate | struct | none named | :2784 | A5 |
-| BUG-003 | manifold-core/effects.rs+layer.rs | identity-minting-on-duplicate | struct | none named | :2820 | A5 |
-| BUG-004 | manifold-editing/clipboard.rs | structural-design-flaw | patch | none named | :2834 | A4 |
-| BUG-005 | manifold-core/macro_bank.rs | missing-invariant-enforcement | struct | none named | :2851 | A5 |
+| BUG-002 (clip-clone-new-id-doesnt-regenerate-nested-effec…) | manifold-core/clip.rs | identity-minting-on-duplicate | struct | none named | :2784 | A5 |
+| BUG-003 (duplicating-grouped-effect-leaves-group-id-point…) | manifold-core/effects.rs+layer.rs | identity-minting-on-duplicate | struct | none named | :2820 | A5 |
+| BUG-004 (effect-paste-carries-ableton-automation-bindings…) | manifold-editing/clipboard.rs | structural-design-flaw | patch | none named | :2834 | A4 |
+| BUG-005 (macro-targets-cant-disambiguate-two-same-type-ef…) | manifold-core/macro_bank.rs | missing-invariant-enforcement | struct | none named | :2851 | A5 |
 | BUG-006 | manifold-renderer/node_graph/bound_graph.rs | stale-state/projection | open | none | :953 | none |
-| BUG-007 | manifold-renderer/node_graph/freeze/region.rs | missing-invariant-enforcement | open | none | :975 | none |
-| BUG-008 | manifold-renderer/node_graph/freeze/codegen.rs | missing-invariant-enforcement | open | none | :998 | none |
-| BUG-009 | manifold-renderer/node_graph/freeze/segment.rs | missing-invariant-enforcement | open | none | :1017 | none |
-| BUG-010 | manifold-renderer/node_graph/primitives/wgsl_compute.rs | missing-invariant-enforcement | open | none | :1041 | none |
-| BUG-011 | manifold-renderer/node_graph/primitives/wgsl_compute.rs | missing-invariant-enforcement | open | none | :1060 | none |
-| BUG-012 | manifold-renderer/node_graph/primitives/wgsl_compute.rs | missing-invariant-enforcement | open | none | :1078 | none |
-| BUG-013 | manifold-gpu/metal/encoder.rs | resource-lifecycle | struct | verify_completed gate | :2198 | none |
-| BUG-014 | manifold-renderer/node_graph/freeze/install.rs | convention-mismatch (serde) | open (parked) | none | :1093 | none |
-| BUG-015 | manifold-renderer/ui_cache_manager.rs + inspector.rs | stale-state/projection | open (partial) | 2 tests named | :1107 | A1 |
-| BUG-016 | manifold-renderer/gltf_import.rs + app_lifecycle.rs | structural-design-flaw | struct | none named | :2233 | none |
-| BUG-017 | docs/tooling (docs_index_sync test) | process-failure | patch | docs_index_is_in_sync_with_docs_dir | :2265 | A7 (adjacent) |
-| BUG-018 | manifold-renderer/node_graph::catalog_gen | process-failure | open | catalog_gen::tests::regenerates_in_sync | :1476 | A7 (adjacent) |
-| BUG-019 | manifold-ui (inspector, EffectGroup) | one-off | open (deferred) | none | :1494 | none |
-| BUG-020 | manifold-ui/param_card.rs | structural-design-flaw | open (deferred) | none | :1511 | none |
-| BUG-021 | manifold-app/ui_bridge/inspector.rs | structural-design-flaw | open (deferred) | none | :1522 | none |
-| BUG-022 | manifold-app/window_input.rs | missing-invariant-enforcement | patch | none named | :2287 | A3 |
-| BUG-023 | manifold-ui/design_tokens.rs+browser_popup.rs | convention-mismatch (tokens) | patch | no_new_raw_color_literals | :2369 | none |
-| BUG-024 | manifold-renderer/preset_thumbnail.rs | convention-mismatch (alpha) | patch | none named | :2329 | none |
-| BUG-025 | manifold-ui timeline (clip/header scissor) | stale-state/projection | open (unreproduced) | none | :1533 | A2 |
-| BUG-026 | manifold-ui/browser_popup.rs+app_render.rs | stale-state/projection | open (fix landed, unverified) | none named (VD-006) | :1570 | A1 |
-| BUG-027 | manifold-ui/manifold-app graph editor | structural-design-flaw | struct | node_previews_render_in_per_node_depth_bands | :2404 | A2 |
-| BUG-028 | manifold-app/drag_interpose.rs+app.rs | missing-invariant-enforcement | struct | 4 unit tests | :2455 | A3 |
-| BUG-029 | manifold-app/content_thread.rs+content_commands.rs | process-failure | patch | cargo check --features profiling gate | :2144 | A7 |
-| BUG-030 | manifold-ui/design_tokens.rs | convention-mismatch (tokens) | open (parked) | design_tokens.rs ratchet | :924 | none |
-| BUG-031 | manifold-ui/layer_header.rs+app.rs | missing-invariant-enforcement | open | none | :1599 | A5 |
-| BUG-032 | manifold-renderer/node_graph graph_loader | structural-design-flaw | struct | 2 tests named | :2496 | none |
-| BUG-033 | manifold-app/ui_snapshot/interact.rs | process-failure | patch | none named (fixed incidentally) | :2174 | A7 |
-| BUG-034 | manifold-app/app_render.rs (atlas UV) | process-failure | open (gated on BUG-033) | none | :908 | A7 (adjacent) |
-| BUG-035 | manifold-app/content_pipeline.rs | structural-design-flaw (hot-path) | open (root cause found, no fix) | none | :780 | none |
-| BUG-036 | manifold-io/loader.rs+manifold-core/effects.rs | structural-design-flaw | struct | project_local_preset_reload.rs | :2090 | A1 |
-| BUG-037 | manifold-renderer generator pipeline warm-up | resource-lifecycle | open | none | :750 | none |
-| BUG-038 | manifold-playback/ableton_bridge.rs | missing-invariant-enforcement | open | none | :769 | F11 (loose) |
-| BUG-039 | manifold-core ParamSpecDef/modulation | convention-mismatch (units) | open (sequenced) | none (planned) | :723 | none |
-| BUG-040 | manifold-io/migrations/param_storage_v14.rs | structural-design-flaw | patch | 3 bug040_* tests | :2532 | B1 |
-| BUG-041 | manifold-audio/analysis.rs (SuperFlux) | one-off | patch | mod_harness selftest gates | :2706 | none |
-| BUG-042 | manifold-audio D5 ridge tracker | one-off | struct | notes accuracy/octave-jump gates | :2632 | none |
-| BUG-043 | manifold-audio salience comb | one-off | struct | sub scenario gate (100/100) | :2664 | none |
-| BUG-044 | manifold-audio transient/onset detection | one-off | struct | densemix selftest gate (7/7) | :2591 | none |
-| BUG-045 | manifold-audio D5 tracker | one-off | open (declined, knife-edge) | P2c notes accuracy (known-failing) | :699 | none |
-| BUG-046 | manifold-audio Low-band kick detection | one-off | open (partial) | mod_harness recovery counts | :644 | none |
-| BUG-047 | manifold-ui/audio_setup_panel.rs | structural-design-flaw | open | consumers_fit_within_panel test | :626 | A2 |
-| BUG-048 | manifold-ui/transport.rs | one-off (UX) | open (UX call pending) | automation_state_toggles test | :611 | none |
-| BUG-049 | manifold-ui/layer_header.rs | one-off | open | layout_matches_frozen_oracle (stale) | :598 | none |
-| BUG-050 | manifold-playback/transport_sync.rs | structural-design-flaw | open (partial) | [ABL-SYNC] traces + 3 tests | :574 | F6/F14 (loose) |
-| BUG-051 | manifold-playback/live_trigger.rs+modulation.rs | missing-invariant-enforcement | struct | clear_all_trigger_edges_rearms_generator_edge | :2570 | none |
-| BUG-052 | manifold-audio/manifold-playback | convention-mismatch (units) | struct | time_grid_holds_hop_and_window_duration | :1925 | none |
-| BUG-053 | manifold-media/recording (session.rs+native) | structural-design-flaw | open | hdr_blocked_by_bug_053 guard | :553 | none |
-| BUG-054 | manifold-renderer/generator_renderer.rs | resource-lifecycle | open | none (workaround only) | :532 | A6 |
-| BUG-055 | manifold-audio examples | convention-mismatch (units) | patch | debug_assert grid match | :2074 | none |
-| BUG-056 | manifold-playback/audio_mixdown.rs | process-failure | open | none | :493 | A7 |
-| BUG-057 | manifold-app/ui_snapshot/render.rs | process-failure | open | none | :513 | A7 |
-| BUG-058 | manifold-app/ui_root.rs | missing-invariant-enforcement | struct | DRAG_CAPTURE P1-P3 tests | :1963 | A3 |
-| BUG-059 | manifold-ui/audio_setup_panel.rs | missing-invariant-enforcement | struct | 2 tests named | :2012 | A3 |
-| BUG-060 | manifold-ui/inspector.rs+ui_cache_manager.rs | stale-state/projection | open (REOPENED) | footer_leak_probe test | :1309 | A1 |
-| BUG-061 | manifold-ui/slider.rs+param_card.rs | missing-invariant-enforcement | struct | per-surface SliderReset tests | :1689 | none |
-| BUG-062 | manifold-io/migrate.rs | missing-invariant-enforcement | struct | forward-version guard / LoadError::TooNew | :1626 | B1 |
-| BUG-063 | manifold-io/loader.rs | missing-invariant-enforcement | open (P3 partial) | non-blocking toast only | :293 | B1 |
-| BUG-064 | manifold-io/archive.rs | resource-lifecycle | patch | 2 sync_all negative-gate | :1651 | B1 |
-| BUG-065 | manifold-io/archive.rs | structural-design-flaw | patch | none named | :1671 | B1 |
-| BUG-066 | manifold-renderer node_graph FluidSim3D | one-off | open | fluid3d_bias.rs (--ignored) | :182 | none |
-| BUG-067 | manifold-app/ui_snapshot/render.rs | process-failure | open | none | :161 | A7 |
-| BUG-068 | manifold-app ui_snapshot fixtures | one-off | open | none | :172 | none |
+| BUG-007 (particle-loop-fusion-exclusion-blind-configured-…) | manifold-renderer/node_graph/freeze/region.rs | missing-invariant-enforcement | open | none | :975 | none |
+| BUG-008 (fused-buffer-region-mismatched-array-lengths-rea…) | manifold-renderer/node_graph/freeze/codegen.rs | missing-invariant-enforcement | open | none | :998 | none |
+| BUG-009 (segment-stateless-gate-misses-statestore-held-sc…) | manifold-renderer/node_graph/freeze/segment.rs | missing-invariant-enforcement | open | none | :1017 | none |
+| BUG-010 (wgsl-compute-silently-dispatches-first-multiple-…) | manifold-renderer/node_graph/primitives/wgsl_compute.rs | missing-invariant-enforcement | open | none | :1041 | none |
+| BUG-011 (fused-fused-output-buffer-sized-max-all-array) | manifold-renderer/node_graph/primitives/wgsl_compute.rs | missing-invariant-enforcement | open | none | :1060 | none |
+| BUG-012 (no-slug) | manifold-renderer/node_graph/primitives/wgsl_compute.rs | missing-invariant-enforcement | open | none | :1078 | none |
+| BUG-013 (commit-wait-completed-never-checks-command-buffe…) | manifold-gpu/metal/encoder.rs | resource-lifecycle | struct | verify_completed gate | :2198 | none |
+| BUG-014 (parked) | manifold-renderer/node_graph/freeze/install.rs | convention-mismatch (serde) | open (parked) | none | :1093 | none |
+| BUG-015 (no-slug) | manifold-renderer/ui_cache_manager.rs + inspector.rs | stale-state/projection | open (partial) | 2 tests named | :1107 | A1 |
+| BUG-016 (imported-glb-layers-are-black-boxes-no-card) | manifold-renderer/gltf_import.rs + app_lifecycle.rs | structural-design-flaw | struct | none named | :2233 | none |
+| BUG-017 (docs-index-sync-docs-dir-red-main-two) | docs/tooling (docs_index_sync test) | process-failure | patch | docs_index_is_in_sync_with_docs_dir | :2265 | A7 (adjacent) |
+| BUG-018 (catalog-stale) | manifold-renderer/node_graph::catalog_gen | process-failure | open | catalog_gen::tests::regenerates_in_sync | :1476 | A7 (adjacent) |
+| BUG-019 (deferred) | manifold-ui (inspector, EffectGroup) | one-off | open (deferred) | none | :1494 | none |
+| BUG-020 (deferred) | manifold-ui/param_card.rs | structural-design-flaw | open (deferred) | none | :1511 | none |
+| BUG-021 (deferred) | manifold-app/ui_bridge/inspector.rs | structural-design-flaw | open (deferred) | none | :1522 | none |
+| BUG-022 (main-window-browser-popup-escape-while-search-fi…) | manifold-app/window_input.rs | missing-invariant-enforcement | patch | none named | :2287 | A3 |
+| BUG-023 (no-new-raw-color-literals-red-main-real) | manifold-ui/design_tokens.rs+browser_popup.rs | convention-mismatch (tokens) | patch | no_new_raw_color_literals | :2369 | none |
+| BUG-024 (generator-preset-thumbnails-render-white-backgro…) | manifold-renderer/preset_thumbnail.rs | convention-mismatch (alpha) | patch | none named | :2329 | none |
+| BUG-025 (no-slug) | manifold-ui timeline (clip/header scissor) | stale-state/projection | open (unreproduced) | none | :1533 | A2 |
+| BUG-026 (Batch-2 popups: entrance fade freezes at t=0…) | manifold-ui/browser_popup.rs+app_render.rs | stale-state/projection | open (fix landed, unverified) | none named (VD-006) | :1570 | A1 |
+| BUG-027 (graph-editor-node-previews-composite-wrong-z-lay…) | manifold-ui/manifold-app graph editor | structural-design-flaw | struct | node_previews_render_in_per_node_depth_bands | :2404 | A2 |
+| BUG-028 (file-drop-targeting-cant-read-live-pointer-durin…) | manifold-app/drag_interpose.rs+app.rs | missing-invariant-enforcement | struct | 4 unit tests | :2455 | A3 |
+| BUG-029 (profiling-feature-doesnt-compile-rotted-against-…) | manifold-app/content_thread.rs+content_commands.rs | process-failure | patch | cargo check --features profiling gate | :2144 | A7 |
+| BUG-030 (Design-token ratchet red on trunk: raw…) | manifold-ui/design_tokens.rs | convention-mismatch (tokens) | open (parked) | design_tokens.rs ratchet | :924 | none |
+| BUG-031 (no-slug) | manifold-ui/layer_header.rs+app.rs | missing-invariant-enforcement | open | none | :1599 | A5 |
+| BUG-032 (gltf-import-model-2-materials-fails-load-unknown) | manifold-renderer/node_graph graph_loader | structural-design-flaw | struct | 2 tests named | :2496 | none |
+| BUG-033 (the `ui-snapshot` harness doesn't compile on…) | manifold-app/ui_snapshot/interact.rs | process-failure | patch | none named (fixed incidentally) | :2174 | A7 |
+| BUG-034 (Headless preview verification doesn't cover the…) | manifold-app/app_render.rs (atlas UV) | process-failure | open (gated on BUG-033) | none | :908 | A7 (adjacent) |
+| BUG-035 (authoring-hitch) | manifold-app/content_pipeline.rs | structural-design-flaw (hot-path) | open (root cause found, no fix) | none | :780 | none |
+| BUG-036 (param-manifest-construction-not-a-unified-safe-g…) | manifold-io/loader.rs+manifold-core/effects.rs | structural-design-flaw | struct | project_local_preset_reload.rs | :2090 | A1 |
+| BUG-037 (glp-first-render-stall) | manifold-renderer generator pipeline warm-up | resource-lifecycle | open | none | :750 | none |
+| BUG-038 (ableton-log-spam) | manifold-playback/ableton_bridge.rs | missing-invariant-enforcement | open | none | :769 | F11 (loose) |
+| BUG-039 (saw-rotation-wrap) | manifold-core ParamSpecDef/modulation | convention-mismatch (units) | open (sequenced) | none (planned) | :723 | none |
+| BUG-040 (v13-import-migration-drop) | manifold-io/migrations/param_storage_v14.rs | structural-design-flaw | patch | 3 bug040_* tests | :2532 | B1 |
+| BUG-041 (superflux-glide-fire) | manifold-audio/analysis.rs (SuperFlux) | one-off | patch | mod_harness selftest gates | :2706 | none |
+| BUG-042 (onset-settle-grab) | manifold-audio D5 ridge tracker | one-off | struct | notes accuracy/octave-jump gates | :2632 | none |
+| BUG-043 (deep-bass-floor-anchor) | manifold-audio salience comb | one-off | struct | sub scenario gate (100/100) | :2664 | none |
+| BUG-044 (mix-trigger-deafness) | manifold-audio transient/onset detection | one-off | struct | densemix selftest gate (7/7) | :2591 | none |
+| BUG-045 (gap-ring-down-chase) | manifold-audio D5 tracker | one-off | open (declined, knife-edge) | P2c notes accuracy (known-failing) | :699 | none |
+| BUG-046 (low-band-kick-deafness-on-mixes) | manifold-audio Low-band kick detection | one-off | open (partial) | mod_harness recovery counts | :644 | none |
+| BUG-047 (setup-panel-overflow) | manifold-ui/audio_setup_panel.rs | structural-design-flaw | open | consumers_fit_within_panel test | :626 | A2 |
+| BUG-048 (arm-two-reds) | manifold-ui/transport.rs | one-off (UX) | open (UX call pending) | automation_state_toggles test | :611 | none |
+| BUG-049 (child-row-right-indent) | manifold-ui/layer_header.rs | one-off | open | layout_matches_frozen_oracle (stale) | :598 | none |
+| BUG-050 (ableton-anchor-yankback) | manifold-playback/transport_sync.rs | structural-design-flaw | open (partial) | [ABL-SYNC] traces + 3 tests | :574 | F6/F14 (loose) |
+| BUG-051 (trigger-clear-unwired) | manifold-playback/live_trigger.rs+modulation.rs | missing-invariant-enforcement | struct | clear_all_trigger_edges_rearms_generator_edge | :2570 | none |
+| BUG-052 (sample-rate-dependent-detection) | manifold-audio/manifold-playback | convention-mismatch (units) | struct | time_grid_holds_hop_and_window_duration | :1925 | none |
+| BUG-053 (hdr-live-recording-structural) | manifold-media/recording (session.rs+native) | structural-design-flaw | open | hdr_blocked_by_bug_053 guard | :553 | none |
+| BUG-054 (renderer-device-ptr-dangles) | manifold-renderer/generator_renderer.rs | resource-lifecycle | open | none (workaround only) | :532 | A6 |
+| BUG-055 (eval-harness-stale-time-grid) | manifold-audio examples | convention-mismatch (units) | patch | debug_assert grid match | :2074 | none |
+| BUG-056 (audio-mixdown-clippy-debt) | manifold-playback/audio_mixdown.rs | process-failure | open | none | :493 | A7 |
+| BUG-057 (ui-snapshot-dead-blit-pipeline) | manifold-app/ui_snapshot/render.rs | process-failure | open | none | :513 | A7 |
+| BUG-058 (drag-end-consumable) | manifold-app/ui_root.rs | missing-invariant-enforcement | struct | DRAG_CAPTURE P1-P3 tests | :1963 | A3 |
+| BUG-059 (band-line-grab-falls-through) | manifold-ui/audio_setup_panel.rs | missing-invariant-enforcement | struct | 2 tests named | :2012 | A3 |
+| BUG-060 (VD-019: BUG-060 L3 scroll to true bottom) | manifold-ui/inspector.rs+ui_cache_manager.rs | stale-state/projection | open (REOPENED) | footer_leak_probe test | :1309 | A1 |
+| BUG-061 (slider-reset-per-panel-lottery) | manifold-ui/slider.rs+param_card.rs | missing-invariant-enforcement | struct | per-surface SliderReset tests | :1689 | none |
+| BUG-062 (no-forward-version-guard) | manifold-io/migrate.rs | missing-invariant-enforcement | struct | forward-version guard / LoadError::TooNew | :1626 | B1 |
+| BUG-063 (silent-load-repairs) | manifold-io/loader.rs | missing-invariant-enforcement | open (P3 partial) | non-blocking toast only | :293 | B1 |
+| BUG-064 (save-rename-before-fsync) | manifold-io/archive.rs | resource-lifecycle | patch | 2 sync_all negative-gate | :1651 | B1 |
+| BUG-065 (save-dedup-history-identity-key-6-hex-chars) | manifold-io/archive.rs | structural-design-flaw | patch | none named | :1671 | B1 |
+| BUG-066 (fluid3d-corner-drift) | manifold-renderer node_graph FluidSim3D | one-off | open | fluid3d_bias.rs (--ignored) | :182 | none |
+| BUG-067 (ui-snapshot-dead-blit-pipeline) | manifold-app/ui_snapshot/render.rs | process-failure | open | none | :161 | A7 |
+| BUG-068 (inspector-scene-cliphit-overlap) | manifold-app ui_snapshot fixtures | one-off | open | none | :172 | none |
 | BUG-069 | licensing (deps: madmom/ADTOF, rusty_link, ffmpeg) | other: dependency-licensing | open | rg zero-hit gate (planned) | :115 | none |
-| BUG-070 | manifold-ui/audio_setup_panel.rs+drawer.rs | missing-invariant-enforcement | open (partial) | BUG-061 tests (partial coverage) | :461 | none |
-| BUG-071 | manifold-app/ui_snapshot/dump.rs | stale-state/projection | open | none | :110 | none |
-| BUG-072 | manifold-playback/audio_mixdown.rs | process-failure | open | none | :440 | A7 |
-| BUG-073 | manifold-app ui_snapshot --script driver | process-failure | open (workaround only) | none | :397 | A7 |
-| BUG-074 | manifold-playback/audio_mixdown.rs tests | resource-lifecycle | open (unknown root cause) | none | :376 | none |
-| BUG-075 | manifold-app/ui_root.rs | missing-invariant-enforcement | patch | timeline_drag_end_reaches_viewport test | :1894 | A3 |
-| BUG-076 | manifold-ui/inspector.rs (ScrollContainer) | stale-state/projection | open (unconfirmed) | none (planned test) | :334 | none |
-| BUG-077 | manifold-renderer+manifold-ui test fixtures | process-failure | patch | cargo test --workspace (0 hits) | :1799 | none |
-| BUG-078 | manifold-renderer/preset_runtime.rs | stale-state/projection | struct | generator_rebuild_reshape_honors_live_manifest | :1744 | none |
+| BUG-070 (stepper-and-nonstandard-slider-reset) | manifold-ui/audio_setup_panel.rs+drawer.rs | missing-invariant-enforcement | open (partial) | BUG-061 tests (partial coverage) | :461 | none |
+| BUG-071 (ui-snap-dump-stale-parent) | manifold-app/ui_snapshot/dump.rs | stale-state/projection | open | none | :110 | none |
+| BUG-072 (audio-mixdown-all-targets-clippy-debt) | manifold-playback/audio_mixdown.rs | process-failure | open | none | :440 | A7 |
+| BUG-073 (ui-snap-script-drawer-tween-never-ticks) | manifold-app ui_snapshot --script driver | process-failure | open (workaround only) | none | :397 | A7 |
+| BUG-074 (a `TestDir` temp-path collision, not…) | manifold-playback/audio_mixdown.rs tests | resource-lifecycle | open (unknown root cause) | none | :376 | none |
+| BUG-075 (timeline-drag-end-never-finalizes) | manifold-app/ui_root.rs | missing-invariant-enforcement | patch | timeline_drag_end_reaches_viewport test | :1894 | A3 |
+| BUG-076 (inspector-scroll-underestimates-content-height) | manifold-ui/inspector.rs (ScrollContainer) | stale-state/projection | open (unconfirmed) | none (planned test) | :334 | none |
+| BUG-077 (test-fixtures-not-region-wrapped) | manifold-renderer+manifold-ui test fixtures | process-failure | patch | cargo test --workspace (0 hits) | :1799 | none |
+| BUG-078 (generator-runtime-reshapes-from-stale-meta-param…) | manifold-renderer/preset_runtime.rs | stale-state/projection | struct | generator_rebuild_reshape_honors_live_manifest | :1744 | none |
 | BUG-079 | manifold-core/effects.rs+preset_runtime.rs | missing-invariant-enforcement | open | none | :105 | none |
 | BUG-080 | manifold-core param manifest construction | structural-design-flaw | open (wants Opus design pass) | none | :100 | none |
-| BUG-081 | manifold-playback/audio_layer_playback.rs | one-off | open | none | :887 | none |
-| BUG-082 | manifold-playback/modulation.rs+param_slider_shared.rs | structural-design-flaw | open | none | :95 | none |
+| BUG-081 (no-slug) | manifold-playback/audio_layer_playback.rs | one-off | open | none | :887 | none |
+| BUG-082 (trigger-fire-mode-level-features-near-dead) | manifold-playback/modulation.rs+param_slider_shared.rs | structural-design-flaw | open | none | :95 | none |
 
 Class totals (n=82): missing-invariant-enforcement 20 · structural-design-flaw 15 · one-off 12 ·
 process-failure 11 · stale-state/projection 8 · convention-mismatch 7 · resource-lifecycle 5 ·
 identity-minting-on-duplicate 3 · other 1.
 
-Fix-type totals: fixed-structural 20 · fixed-patch 14 · open 48 · checked-safe 0 (confirmed §1).
+Fix-type totals: fixed-structural 20 · fixed-patch 14 · open 48 · checked-safe 0 (confirmed section 1).
 **48/82 (59%) are still open** — the corpus is not a closed record, it's a live backlog.
 
-## §3 Per-subsystem rollup (SUGGESTED verdicts — miner opinion, pending review)
+## 3 Per-subsystem rollup (SUGGESTED verdicts — miner opinion, pending review)
 
 | Subsystem | n | Open | Class histogram (top) | Enforcement | Suggested verdict |
 |---|---|---|---|---|---|
@@ -158,7 +160,7 @@ Notes on the three flagged **structurally-wrong**:
    structural-audit language agree, which is why this reads as structurally-wrong rather than merely
    under-tested.
 
-## §4 Patch-density findings from git history
+## 4 Patch-density findings from git history
 
 `git log --grep='fix' -i` over current-branch history: **1672 commits**, ~1.1% noise
 (fixture/prefix/suffix false-positives). Top of the density map (fix-labeled commits touching path):
@@ -203,7 +205,7 @@ full Unity-port stabilization, the wgpu→native-Metal migration, the TexturePoo
 has **zero backlog coverage**. Any structural/symptom judgment for that period rests on commit
 messages and diffs alone, not on the same documentation discipline the post-06-23 corpus has.
 
-## §5 Deltas vs FOUNDATIONAL_GAPS/CORE_ENGINE_FINDINGS (candidate new clusters)
+## 5 Deltas vs FOUNDATIONAL_GAPS/CORE_ENGINE_FINDINGS (candidate new clusters)
 
 1. **Freeze/fusion compiler correctness (BUG-006–012, 014)** — the single largest delta. No A-cluster
    or F-finding covers it; `FREEZE_COMPILER_MAP.md` exists as a map but names no enforcement gap of
@@ -223,14 +225,14 @@ messages and diffs alone, not on the same documentation discipline the post-06-2
    map-coverage gap, a dependency/legal risk. It's already tracked in agent memory
    (`audio-analysis-accuracy`) but not in either structural doc; flag as intentionally out-of-scope
    for a code-structure verdict rather than a missed cluster.
-5. **Pre-backlog git history (§4)** — the TexturePool abandon-and-retry and the multi-cause vsync
+5. **Pre-backlog git history (section 4)** — the TexturePool abandon-and-retry and the multi-cause vsync
    saga are real structural incidents with zero BUG_BACKLOG.md trace. Not a "cluster" in the
    A1–A7/F1–F17 sense, but a corpus-completeness gap worth naming for the verdict pass: verdicts
    drawn only from the backlog undercount manifold-app's/manifold-gpu's actual historical churn.
 
-## §6 Open questions for the verdict pass
+## 6 Open questions for the verdict pass
 
-1. Should freeze/fusion-compiler (§5.1) become a formal FOUNDATIONAL_GAPS cluster (A8), given it's
+1. Should freeze/fusion-compiler (section 5.1) become a formal FOUNDATIONAL_GAPS cluster (A8), given it's
    the largest uncovered delta and already has a live tracking doc (FREEZE_COMPILER_MAP.md) to anchor
    it to?
 2. Is BUG-080 (param-manifest two-phase construction) the same underlying shape as F5
@@ -241,7 +243,7 @@ messages and diffs alone, not on the same documentation discipline the post-06-2
    Is this bandwidth (nobody's gotten to it) or does sync/timing complexity structurally resist the
    fix patterns that worked elsewhere (`manifold-io`'s guard+test pattern, `manifold-audio`'s
    accuracy-gate pattern)? The verdict pass should say which, since the fix shape differs either way.
-4. Given §4's surprise (zero backlog coverage before 2026-06-23), should the verdict pass treat
+4. Given section 4's surprise (zero backlog coverage before 2026-06-23), should the verdict pass treat
    pre-backlog git history as first-class evidence, or explicitly scope verdicts to the
    backlog-covered period and flag the gap as a caveat?
 5. BUG-069 (licensing) — does a "structural" verdict pass even have a bucket for it, or should it be

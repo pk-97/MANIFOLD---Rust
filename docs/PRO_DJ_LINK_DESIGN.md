@@ -8,7 +8,7 @@ CDJs/mixer (Peter has gig access).**
 **Companion: `DJ_PERFORMANCE_DESIGN.md` (DJing from Ableton; this doc is DJing
 from the booth). Both are instances of one abstraction: external musical
 timelines driving MANIFOLD.**
-**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before any
+**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before any
 phase. Hardening level: conformance — re-derive all anchors at implementation.**
 
 Peter's ask (2026-07-03): sync with Pioneer/AlphaTheta gear "using the same
@@ -112,7 +112,7 @@ CDJs with zero laptop-jockeying.
 ## 4. Phasing
 
 Forbidden, all phases: locking render cadence to network beats (D2) · packet
-layouts synthesized from memory instead of the published analysis (§1) · new
+layouts synthesized from memory instead of the published analysis (section 1) · new
 shared state beyond the D7 channel · silent unmapped-track fallthrough (D4).
 
 - **P1 — Network core.** Discovery, virtual-device join, beat/status/mixer
@@ -132,7 +132,7 @@ shared state beyond the D7 channel · silent unmapped-track fallthrough (D4).
   quirk pass on real gear; packet-capture fixtures recorded and committed.
   Gate: the bring-up checklist executed on a real booth (Peter), captures
   archived; phrase trigger demo filmed — release-trailer material
-  (BUSINESS_PLAN §7).
+  (BUSINESS_PLAN section 7).
 
 ## 5. Deferred (with triggers)
 

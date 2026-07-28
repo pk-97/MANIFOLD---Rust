@@ -1,4 +1,4 @@
-// node.basic_shape — fusable body (freeze §12), SOURCE. Renders one of three
+// node.basic_shape — fusable body (freeze section 12), SOURCE. Renders one of three
 // centred 2D SDF shapes (Square / Diamond / Octagon) with fwidth-antialiased
 // edges. The body absorbs the run-side preprocessing the hand path used to do
 // before packing its uniform: uv_scale = 1/scale (zoom out as scale grows),

@@ -37,7 +37,7 @@ impl ActiveClipRef {
     /// timeline; resolved from `Project::session` instead). Distinct from
     /// `LIVE_SLOT` — a parallel discriminant on the same field, following
     /// the shape `is_live_slot` already uses rather than adding an enum.
-    /// See `docs/SESSION_MODE_DESIGN.md` §4.
+    /// See `docs/SESSION_MODE_DESIGN.md` section 4.
     pub const SESSION_SLOT: u32 = u32::MAX - 1;
 
     /// Computed end beat (start + duration).
@@ -113,7 +113,7 @@ impl ClipScheduler {
     /// - `session_refs`: Session-grid slot clips resolved by `SessionRuntime` for
     ///   the current beat (third reference source — an input to this sole
     ///   authority, never a parallel scheduler; see `docs/SESSION_MODE_DESIGN.md`
-    ///   §4/§9). Already gated to "should be active now" by the caller, so —
+    ///   section 4/section 9). Already gated to "should be active now" by the caller, so —
     ///   unlike `live_slots` — no additional start-beat check is applied here.
     /// - `currently_active_ids`: IDs of clips that currently have a renderer assigned
     /// - `looping_clip_ids`: Clip IDs with IsLooping enabled (bypass min-remaining check)

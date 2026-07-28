@@ -10,7 +10,7 @@
 //! decomposition into atomic primitives would round through fp16
 //! intermediates at multiple boundaries and lose bit-exact parity.
 //! Ships as a fused composite like Bloom, Halation, and the four
-//! §6.1 fused composites; the future fusion compiler can expose
+//! section 6.1 fused composites; the future fusion compiler can expose
 //! the underlying atoms when there's a real use case.
 //!
 //! State: persistent `feedback` texture (carries to next frame),
@@ -18,7 +18,7 @@
 //! `flow_map`. Rebuilt on size change; `clear_state()` clears
 //! feedback to black (seek-correct).
 //!
-//! Until the legacy effect is deleted in §6.6 cutover, the shader
+//! Until the legacy effect is deleted in section 6.6 cutover, the shader
 //! is shared with `effects/shaders/fx_watercolor_compute.wgsl` via
 //! `include_str!` — keeps the parity test honest (no risk of the
 //! primitive and legacy drifting on a shader edit).

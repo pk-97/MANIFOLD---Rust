@@ -1,9 +1,9 @@
 # MCP Interface — AI Assistant Design
 
 **Status:** Approved design, not implemented. Sonnet-executable.
-**Decided:** 2026-07-02. Decided questions in §13 — do not reopen them.
+**Decided:** 2026-07-02. Decided questions in section 13 — do not reopen them.
 **Prerequisites:** NODE_VOCABULARY_AUDIT apply pass (the catalog this serves must speak the final vocabulary). COMPONENT_LIBRARY_DESIGN strongly recommended first — components are the authoring surface agents compose from. Sequencing: `docs/DESIGN_BUILD_ORDER.md` wave 3.
-**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any phase. Conformance-hardened: run the §8.3 pre-flight before each phase — the command/catalog surfaces this design wraps will have moved by execution time.
+**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before starting any phase. Conformance-hardened: run the section 8.3 pre-flight before each phase — the command/catalog surfaces this design wraps will have moved by execution time.
 
 MANIFOLD becomes an MCP server so AI assistants (Claude Desktop, and anything that speaks MCP to a localhost URL) can drive it directly — no Claude Code, no JSON knowledge required from the user.
 
@@ -23,8 +23,8 @@ This is expected to evolve into the **main interface pattern** for MANIFOLD user
 
 - **No remote access.** Localhost only. No ChatGPT-web support (its connector model requires a publicly reachable HTTPS server — that means tunneling the instrument to the internet; explicitly rejected).
 - **No timeline arrangement editing.** Timeline is read-only in v1. Graph authoring + params is where AI value is dense; arrangement edits are where risk is dense.
-- **No imperative node-by-node editing.** No `add_node`/`wire` verbs. Declarative whole-graph submission only (§6). A `patch_graph` verb for surgical edits to large graphs may come later.
-- **No plugin execution.** §10 pins the forward constraint only; the plugin system is its own future design.
+- **No imperative node-by-node editing.** No `add_node`/`wire` verbs. Declarative whole-graph submission only (section 6). A `patch_graph` verb for surgical edits to large graphs may come later.
+- **No plugin execution.** section 10 pins the forward constraint only; the plugin system is its own future design.
 - **No multi-client sessions, no OAuth.** One user, one machine, bearer token.
 
 ## 3. Architecture
@@ -76,7 +76,7 @@ Read verbs execute against the content thread's `Project` (via the request chann
 | `set_params` | `target` (effect instance / generator clip), `values: {param_id: value}` | ok / per-param errors |
 | `get_output_snapshot` | `width?` | PNG of the current program output |
 | `transport` | `action: "play" \| "stop" \| "seek"`, `beat?` | ok |
-| `get_mood_board` | — | all entries: notes as text, links as URLs, images/videos as 256px thumbnails + captions + tags (§8) |
+| `get_mood_board` | — | all entries: notes as text, links as URLs, images/videos as 256px thumbnails + captions + tags (section 8) |
 | `get_mood_reference` | `entry_id`, `max_dim?` | image at up to 1024px, or multi-frame contact sheet for a video entry |
 | `add_mood_note` | `text`, `tags?` | entry id (agent-authored note, undoable) |
 
@@ -84,7 +84,7 @@ Gated by `allow_structure_edits`: `preview_graph`, `save_preset`, `transport`. E
 
 **Surface growth rule:** grow by nouns (session grid, timeline, displays), not by per-feature tool piles. The surface must stay small enough for an agent to hold entirely in context.
 
-**Amendment (2026-07-02):** the component tier (`docs/COMPONENT_LIBRARY_DESIGN.md`) extends this surface — `list_nodes` gains `tier: "atom" | "component"`, `get_node_docs` serves component interfaces, and `save_component` joins the gated verbs. Agents compose components first, atoms to glue, raw WGSL last.
+The component tier (`docs/COMPONENT_LIBRARY_DESIGN.md`) extends this surface — `list_nodes` gains `tier: "atom" | "component"`, `get_node_docs` serves component interfaces, and `save_component` joins the gated verbs. Agents compose components first, atoms to glue, raw WGSL last.
 
 ### Catalog = the live registry. Single source of truth.
 
@@ -92,7 +92,7 @@ Gated by `allow_structure_edits`: `preview_graph`, `save_preset`, `transport`. E
 
 - The node-descriptor backend (friendly names, taxonomy, roles, aliases, tooltips — see `project_node_descriptor_ux_backend`) is the payload of `get_node_docs`. Work invested there directly improves agent authoring.
 - `docs/NODE_CATALOG.md` remains the human-facing doc; both derive from the registry.
-- Bundled presets (via `list_presets` + `get_graph`) are the few-shot examples — an agent reading 2–3 reference presets before authoring is the expected pattern, same as the §2.5 audit rule for humans.
+- Bundled presets (via `list_presets` + `get_graph`) are the few-shot examples — an agent reading 2–3 reference presets before authoring is the expected pattern, same as the section 2.5 audit rule for humans.
 
 ## 6. Authoring loop (declarative, not imperative)
 
@@ -110,7 +110,7 @@ save_preset(json, name)
 
 Why declarative: atomic, no stale imperative state held by the model, validation errors reference the submitted document directly, and the artifact is inspectable at every step.
 
-`validate_graph` wraps `node_graph::validate::validate_def` — built and shipped by GRAPH_TOOLING_DESIGN (2026-07-13) together with a `graph-tool` CLI and card lints; P2 here is an adapter over that seam, not new checks. It runs the existing graph compile path **minus GPU dispatch**: unknown primitive types, channel-type mismatches on wires, unwired required ports, cycle check honoring per-port state capture (`state_capture_input_ports`), param name/range validation. Error messages must name the node id and port — they are consumed by a model, and vague errors burn the user's tokens.
+`validate_graph` wraps `node_graph::validate::validate_def` (GRAPH_TOOLING_DESIGN); P2 here is an adapter over that seam, not new checks. It runs the existing graph compile path **minus GPU dispatch**: unknown primitive types, channel-type mismatches on wires, unwired required ports, cycle check honoring per-port state capture (`state_capture_input_ports`), param name/range validation. Error messages must name the node id and port — they are consumed by a model, and vague errors burn the user's tokens.
 
 ## 7. Preview render path
 
@@ -181,7 +181,7 @@ Each phase gates on its test before the next starts.
 
 ## 12. Relationship to the vocabulary stress-test
 
-The stress-test (Fable authors presets cold using only what `list_nodes`/`get_node_docs` would serve) is the acceptance test for §5's catalog design and is **critical path** — if the main interface is AI, agent expressive range equals catalog quality. Its gap report feeds the descriptor backend and P5.
+The stress-test (presets authored cold using only what `list_nodes`/`get_node_docs` would serve) is the acceptance test for section 5's catalog design and is **critical path** — if the main interface is AI, agent expressive range equals catalog quality. Its gap report feeds the descriptor backend and P5.
 
 ## 13. Decided questions — do not reopen
 

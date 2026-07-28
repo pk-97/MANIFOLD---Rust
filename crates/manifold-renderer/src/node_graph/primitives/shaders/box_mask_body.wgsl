@@ -1,4 +1,4 @@
-// node.box_mask — fusable body (freeze §12), SOURCE. Rotated rectangular SDF
+// node.box_mask — fusable body (freeze section 12), SOURCE. Rotated rectangular SDF
 // (Chebyshev distance in normalized half-extents), smoothstep falloff of width
 // `softness`. Matches box_mask.wgsl. PARAMS: [cx, cy, half_width, half_height,
 // rotation, softness].

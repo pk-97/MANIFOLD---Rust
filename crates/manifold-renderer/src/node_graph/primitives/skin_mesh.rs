@@ -233,7 +233,7 @@ mod gpu_tests {
     //! Real-GPU value-level tests. No legacy predecessor to diff against —
     //! parity is against a hand-written Rust reference of the committed
     //! linear-blend-skinning formula, element-wise, per
-    //! DECOMPOSING_GENERATORS.md §9.
+    //! DECOMPOSING_GENERATORS.md section 9.
     use super::*;
 
     fn mk_vertex(pos: [f32; 3], normal: [f32; 3]) -> MeshVertex {

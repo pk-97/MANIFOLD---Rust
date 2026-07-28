@@ -839,7 +839,7 @@ pub trait EffectNode: Send {
     /// load for EFFECT chains), GENERATORS have no per-frame idle-reset
     /// pass — a generator instance is deliberately long-lived per layer so
     /// particle sims / feedback / accumulators survive clip changes
-    /// (`docs/DECOMPOSING_GENERATORS.md` §9). That means a trigger latch
+    /// (`docs/DECOMPOSING_GENERATORS.md` section 9). That means a trigger latch
     /// inside a generator graph, once captured, silently outlives the
     /// "Trigger" card option being switched back off — the param that
     /// drove capture goes back to 0, but the captured value or cycle index
@@ -1014,7 +1014,7 @@ pub trait EffectNode: Send {
         &[]
     }
 
-    /// Fusion classification for the freeze/fusion compiler (design doc §12).
+    /// Fusion classification for the freeze/fusion compiler (design doc section 12).
     /// Defaults to [`FusionKind::Boundary`](crate::node_graph::freeze::classify::FusionKind::Boundary)
     /// — never fused — so the region-grower only folds nodes that explicitly
     /// opt in. Primitives set it via the `primitive!` macro's `fusion_kind:`

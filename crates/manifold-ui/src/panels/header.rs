@@ -18,8 +18,8 @@ use crate::tree::UITree;
 // ── Layout constants (from HeaderLayout.cs) ────────────────────────
 
 const INSET: f32 = color::SPACE_M;
-const GROUP_Y_PAD: f32 = color::SPACE_S; // §14.4: 5 → 4
-const GROUP_SPACING: f32 = color::SPACE_S; // §14.4: 5 → 4
+const GROUP_Y_PAD: f32 = color::SPACE_S; // section 14.4: 5 → 4
+const GROUP_SPACING: f32 = color::SPACE_S; // section 14.4: 5 → 4
 
 const PROJECT_NAME_W: f32 = 200.0;
 const SPACER: f32 = color::SPACE_M;

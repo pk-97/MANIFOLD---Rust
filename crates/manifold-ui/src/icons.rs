@@ -24,13 +24,13 @@ pub enum Icon {
     WaveRandom = 4,
     /// Cog / gear — the "hide modulation settings" toggle (the UI font has no ⚙).
     Cog = 5,
-    /// Layer type badges (§24 5d) — drawn in the layer-header name row so type is
+    /// Layer type badges (section 24 5d) — drawn in the layer-header name row so type is
     /// read from a glyph, not from the header restructuring by type.
     LayerVideo = 6,
     LayerGenerator = 7,
     LayerGroup = 8,
     LayerAudio = 9,
-    /// Playhead head marker (§24 5e) — a downward triangle at the top of the
+    /// Playhead head marker (section 24 5e) — a downward triangle at the top of the
     /// ruler so the "now" position is unmissable next to the insert cursor.
     Playhead = 10,
 }

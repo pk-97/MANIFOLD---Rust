@@ -17,7 +17,7 @@ Tier rules (model strings measured from real transcripts 2026-07-24:
   ALL cc-fleet spawn verbs denied. Executors execute; decisions flow up.
 - Dispatcher tier (glm*): may drive the executor provider only
   (EXECUTOR_PROVIDERS) via `cc-fleet subagent`. Anything else — spawning
-  glm/kimi seats, workflows, unparseable targets — is denied with an
+  zai/kimi seats, workflows, unparseable targets — is denied with an
   escalate-up pointer.
 - Lead tier (fable/opus/k3 — anything not matched above): passes through.
 

@@ -1,6 +1,6 @@
 # Effect Runtime Unification
 
-**Status:** Closed. Phases 1–4 shipped through the May 2026 migration sweep. The legacy `EffectChain` runtime was deleted; the graph runtime is the sole dispatcher. The bindings unification (separately tracked in [BINDINGS_UNIFICATION_PLAN.md](BINDINGS_UNIFICATION_PLAN.md)) and the JSON-authoritative preset migration both ride on top of the unified runtime documented here. The §0 "true goal" framing remains the canonical north star — the primitive library *is* the product.
+**Status:** Closed. Phases 1–4 shipped through the May 2026 migration sweep. The legacy `EffectChain` runtime was deleted; the graph runtime is the sole dispatcher. The bindings unification (separately tracked in [BINDINGS_UNIFICATION_PLAN.md](BINDINGS_UNIFICATION_PLAN.md)) and the JSON-authoritative preset migration both ride on top of the unified runtime documented here. The section 0 (Motivation) "true goal" framing remains the canonical north star — the primitive library *is* the product.
 
 > **Supersession note (2026-07-22, UI_FUNNEL P-Z):** references below to `dispatch_inspector` / `ActiveInspectorDrag` / `PanelAction` trio variants describe the PRE-decomposition architecture. Current state: 12 flat domain enums + exhaustive router (P-D), one Scrub gesture wire with `ScrubState.active` (P-I, `ActiveInspectorDrag` extinct), per-domain `dispatch/` handlers (P-B). Anchors here are historical.
 
@@ -23,7 +23,7 @@ This reframes every downstream decision in this document:
 - **Some effects don't decompose** — BlobTracking (FFI worker + One-Euro filter), WireframeDepth (3 DNN workers, 15 passes), AutoGain (resolution-independent envelope state), DepthEstimate (MiDaS), FlowEstimate. These stay as monolithic custom `EffectNode`s in the library, the way TouchDesigner ships monolithic DNN TOPs. Rough split: ~12–15 of 19 effects decompose; ~5 remain monolithic.
 - **Every primitive needs**: clear semantic purpose, typed ports, named parameters, docstrings, example presets. Not just GPU correctness — the metadata is what makes AI composition possible.
 
-Phase 4 as originally written (wrap each remaining effect in a `LegacyPostProcessNode`, then delete `EffectChain`) would ship faster but produces a graph runtime that runs the same effects. It does not unlock the creative surface. §9 now reflects the decompose-first rewrite.
+Phase 4 as originally written (wrap each remaining effect in a `LegacyPostProcessNode`, then delete `EffectChain`) would ship faster but produces a graph runtime that runs the same effects. It does not unlock the creative surface. section 9 now reflects the decompose-first rewrite.
 
 ---
 
@@ -36,7 +36,7 @@ MANIFOLD currently has **two parallel runtimes** for effect work:
 
 The chain runtime cannot host:
 
-- Cross-effect dispatch fusion (the `NODE_GRAPH_SYSTEM.md` §5.1 promise — adjacent pixel-local primitives compile to one compute shader).
+- Cross-effect dispatch fusion (the `NODE_GRAPH_SYSTEM.md` section 8 (Shader Fusion (Graph Compiler)) promise — adjacent pixel-local primitives compile to one compute shader).
 - Static elision (disabled effects, identity transforms, zero-amount nodes drop out at compile time).
 - Branching topology (the wet/dry "snapshot + lerp" dance is imperative).
 - Independent branches on parallel queues.
@@ -50,7 +50,7 @@ This document specifies the unification: **collapse both runtimes into the graph
 
 ### Goals
 
-**Primary (creative surface, per §0):**
+**Primary (creative surface, per section 0):**
 - An orthogonal primitive library users and AI agents compose into custom visuals. Primitives small, semantically named, typed ports, docstrings, example presets.
 - Existing effects (Bloom/Halation/etc.) become preset graphs over primitives. "Add Bloom" loads a graph; users fork and remix.
 - Preset graphs serialize as a stable, AI-readable format (the same project-file graph format).
@@ -153,7 +153,7 @@ The graph runtime infrastructure is **substantially built**:
 
 The `Executor`'s per-step cost is ~5-10 `AHashMap` lookups (~50-100ns each) plus the `evaluate()` body. For a 10-effect chain: ~2.5-10μs of executor overhead per frame. Negligible compared to GPU dispatch costs (typically tens to hundreds of μs per effect).
 
-Compared to `EffectChain::apply_chain`'s per-effect overhead (1 `registry.get_mut` + 1 `should_skip` + `apply` + possible group lookup): same order of magnitude. **Executor overhead is not a perf concern.** The real per-frame allocation question is plan rebuild frequency — addressed in §6.2.
+Compared to `EffectChain::apply_chain`'s per-effect overhead (1 `registry.get_mut` + 1 `should_skip` + `apply` + possible group lookup): same order of magnitude. **Executor overhead is not a perf concern.** The real per-frame allocation question is plan rebuild frequency — addressed in section 6.2.
 
 For typical project scale (53 layers, 128 effects across chains): plans compile on edit only, total plan storage ~tens of KB. Plan compilation itself is O(V+E) topo sort + O(V) resource analysis — at chain scale, ~10μs per compile. User-imperceptible.
 
@@ -231,7 +231,7 @@ fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
 
 `ctx.state` is a borrow scoped to the current node + current owner. Nodes don't see other nodes' state.
 
-**Rationale** (see §7 stateful inventory): all 8 stateful effects key their state by `owner_key: i64` only. State lifetimes are uniform — lazy or eager allocation, cleanup on owner destruction, optional resize-triggered rebuild. A single `StateStore` API serves all of them.
+**Rationale** (see section 7 stateful inventory): all 8 stateful effects key their state by `owner_key: i64` only. State lifetimes are uniform — lazy or eager allocation, cleanup on owner destruction, optional resize-triggered rebuild. A single `StateStore` API serves all of them.
 
 **Background workers** (BlobTracking, DOF, WireframeDepth use FFI thread pools) stay with their effects. The `StateStore` owns GPU textures and CPU buffers. Workers are stateful singletons that manage their own thread lifetimes; moving them into `StateStore` would conflate two concerns.
 
@@ -646,7 +646,7 @@ Generator-specific concerns:
 
 ### 7.11 Bindings unification (Phases 1–4, May 2026)
 
-The earlier sections of §7 describe the *first* shape of the binding
+The earlier sections of section 7 describe the *first* shape of the binding
 system, where a renderer-side `ParamBinding` (static spec) and a
 core-side `UserParamBinding` (per-instance) lived as parallel
 structures. That parallel split survived for months before a user-
@@ -656,7 +656,7 @@ not need it. Phases 1–4 of `docs/BINDINGS_UNIFICATION_PLAN.md`
 collapsed every parallel-tier path. The end-state matters for anyone
 extending the binding system later, so it's captured here.
 
-**Runtime (Phase 1, `1decd1a4`).** One `ResolvedBinding` type per
+**Runtime.** One `ResolvedBinding` type per
 effect slot — a `Vec<ResolvedBinding>` of length `n_static + n_user`,
 with `bindings[0..n_static]` hydrated from `ChainSpec.bindings` via
 `ResolvedBinding::from_static` and `bindings[n_static..]` hydrated
@@ -670,7 +670,7 @@ resolved-target enum has only `Node | Composite | Custom` —
 Acceptance: the `&[]` second-slice bug class is unrepresentable
 because there is no second slice.
 
-**UI ↔ bridge wire format (Phase 2, `dfbeb1f1`).** Per-param
+**UI ↔ bridge wire format.** Per-param
 `PanelAction` variants carry `manifold_core::effects::ParamId`, not
 positional `pi: usize`. `EffectParamInfo` / `GenParamInfo` carry
 `param_id` populated at `state_sync.rs`. `AbletonPickerContext::*Param`
@@ -686,7 +686,7 @@ the wire format gives the bridge a `ParamId` directly. A future
 handler can't reintroduce the bug — there's no positional index
 step to misroute.
 
-**Outer routing source tag (Phase 3, `6070031e`).** The snapshot's
+**Outer routing source tag.** The snapshot's
 `OuterParamRouting` carries `source: OuterParamSource`
 (`Static | User`). `outer_routings_from_bindings` (runtime walk
 over `Vec<ResolvedBinding>`) translates the binding's tier source
@@ -696,7 +696,7 @@ to the snapshot's tier marker. The registry walk in
 consumers no longer re-derive the static-vs-user split from
 external context.
 
-**Convert enum merge (Phase 4, `9073daa9`).** The renderer-side
+**Convert enum merge.** The renderer-side
 `ParamConvert` and core-side `UserParamConvert` were two enums with
 overlapping shape. The Phase 4 collapse: deleted the renderer-
 exclusive `EnumRemap(Cow<'static, [u32]>)` and `FloatTransform(fn)`
@@ -783,9 +783,9 @@ Complete. Findings synthesized here. Gates:
 
 **Goal:** Runtime infrastructure for the parameter binding work. Some already shipped during Phase 0/StylizedFeedback POC.
 
-1. ✅ **manifold-gpu: pipeline barrier API** *(shipped: c62432ca)*. No-op stub for Metal; signature ready for Vulkan.
+1. ✅ **manifold-gpu: pipeline barrier API.** No-op stub for Metal; signature ready for Vulkan.
 2. **manifold-gpu: feature-gate Metal-only modules.** `mps`, `metalfx`, `fft` behind `metal` feature. Audit caller sites.
-3. ✅ **node_graph: StateStore API + tests** *(shipped: 9d5b6489)*. Plumbed through `EffectNodeContext`.
+3. ✅ **node_graph: StateStore API + tests.** Plumbed through `EffectNodeContext`.
 4. **node_graph: edit-driven plan caching.** `Graph::topology_version` + `CachedPlan` pattern. Tests confirming param changes don't invalidate, structural changes do.
 
 **Gate to Phase 2:** plan caching works against the StylizedFeedback graph and any other graph-backed effect.
@@ -830,7 +830,7 @@ This is the largest and most invasive phase. It touches data model, serializatio
 
 ### Phase 4 — Primitive library + preset graphs + EffectChain cutover
 
-**Rewritten 2026-05-11.** The original Phase 4 plan was wrap-first: take each remaining effect and shove it into a `LegacyPostProcessNode`. That ships fast but delivers a graph runtime that runs the same monolithic effects — it doesn't unlock the §0 creative surface. New plan is decompose-first.
+**Rewritten 2026-05-11.** The original Phase 4 plan was wrap-first: take each remaining effect and shove it into a `LegacyPostProcessNode`. That ships fast but delivers a graph runtime that runs the same monolithic effects — it doesn't unlock the section 0 creative surface. New plan is decompose-first.
 
 #### 4a. Primitive library design + build
 
@@ -918,7 +918,7 @@ With every effect either a preset graph (4b) or a monolithic node (4c), `EffectC
 - **Dispatch fusion compiler.** Adjacent pixel-local primitives compile to a single shader.
 - **Multi-queue / async compute.** Independent branches dispatch on parallel queues.
 - **Vulkan backend.** `VulkanBackend: Backend` plugs into the existing executor. No graph-runtime changes.
-- **User-built composite saving / sharing.** Per `NODE_GRAPH_SYSTEM.md` §13.
+- **User-built composite saving / sharing.** Per `NODE_GRAPH_SYSTEM.md` section 13. (Save Format)
 
 ---
 
@@ -926,7 +926,7 @@ With every effect either a preset graph (4b) or a monolithic node (4c), `EffectC
 
 ### Risks
 
-1. **Performance regression at scale.** Mitigated by: analytical baseline (§4.2), edge-driven plan caching, executor scratch reuse. Measured by: 53-layer benchmark Phase 4 gate.
+1. **Performance regression at scale.** Mitigated by: analytical baseline (section 4.2), edge-driven plan caching, executor scratch reuse. Measured by: 53-layer benchmark Phase 4 gate.
 
 2. **Stateful migration complexity.** WireframeDepth has 8 RTTs + 4 CPU buffers + 3 workers — a lot of state. Mitigated by: ParamBinding framework lands first so each migration is mostly composition, not new mechanism. StylizedFeedback POC validates the smaller case.
 
@@ -1011,7 +1011,7 @@ Phase 4: Primitive library + preset graphs + cutover (~20-25 commits)
 
 Total: ~40-50 commits across the arc under the reframed Phase 4 (was ~25-30 with the wrap-first plan). Each commit independently shippable. Each phase has a hard gate. Rolling back from any phase leaves the system functional.
 
-Phases 2 and 4 are the two big design exercises. Phase 2 (parameter binding) was the precondition — done. Phase 4a (primitive library design) is the new center of gravity: it's where the §0 creative surface is actually built. Get the primitive library right and the rest of Phase 4 is composition + cutover; get it wrong and the system has a bad creative surface forever. Treat 4a as the most important design pass in the arc.
+Phases 2 and 4 are the two big design exercises. Phase 2 (parameter binding) was the precondition — done. Phase 4a (primitive library design) is the new center of gravity: it's where the section 0 creative surface is actually built. Get the primitive library right and the rest of Phase 4 is composition + cutover; get it wrong and the system has a bad creative surface forever. Treat 4a as the most important design pass in the arc.
 
 ---
 

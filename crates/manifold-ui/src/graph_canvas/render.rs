@@ -137,7 +137,7 @@ impl GraphCanvas {
         // same wires, same geometry, draw-order only.
         //
         // D8 same-pair ribbons (`docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md`
-        // §2): tiers 1/2 collapse ≥2 wires sharing a (from_node, to_node)
+        // section 2): tiers 1/2 collapse ≥2 wires sharing a (from_node, to_node)
         // pair into one ribbon + an "×N" badge. Tier 3 (focused) is the
         // "expanded" state by construction — a pair with either endpoint
         // hovered/selected has ALL its members filtered into this tier by

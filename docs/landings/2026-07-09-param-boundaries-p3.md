@@ -21,7 +21,7 @@ P3 owns the wave's single `cargo test --workspace`. It reports **987 passed / 6 
 1. Open a project saved in the V1.3→V1.4 window that contains imported generators (or any older project with project-local generators). → Expect: their params now load intact instead of dropping.
 There is no new UI; this is a load-fidelity fix for old files.
 
-## Deviations from the brief: none. Deliverables exactly as §4 P3 specifies; the negative-grep lexical hit was flagged, not worked around (editing pre-existing out-of-scope prose was correctly declined).
+## Deviations from the brief: none. Deliverables exactly as section 4 P3 specifies; the negative-grep lexical hit was flagged, not worked around (editing pre-existing out-of-scope prose was correctly declined).
 
 ## Status line (quoted verbatim; P2 slot reconciled at P2's land)
 `**Status:** IN PROGRESS · P1 SHIPPED (\`wave/param-boundaries-p1\`) · P3 SHIPPED (\`wave/param-boundaries-p3\`) · P2 not built · 2026-07-06 · Fable`

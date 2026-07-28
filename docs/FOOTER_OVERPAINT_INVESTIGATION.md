@@ -1,27 +1,27 @@
 # Footer Overpaint / Disappearance — Investigation Handoff (for Fable)
 
 > **CORRECTION 2026-07-08 (Peter + Opus 2nd pass) — READ BEFORE TRUSTING ANYTHING BELOW.**
-> The core measurement this doc is built on is WRONG. §4.2's "footer-right goes dark, RGB ~9-16"
+> The core measurement this doc is built on is WRONG. section 4.2's "footer-right goes dark, RGB ~9-16"
 > is a **harness / atlas-readback failure**, NOT the live symptom. On the real display the footer
 > band retains **stale UI content** — UI colours and button / chrome fragments left over from a
 > prior render — until a full clear (tab-swap) wipes it. So the bug is a **stale-pixel / dirty-clear**
 > failure (BUG-015 class), not a clear-colour gap, and the "(B) something overwrites the footer with
 > darkness" fork below is chasing a phantom. Also disproven since: the inspector does NOT
 > geometrically leak below the footer on the LIVE cache path (`traverse_flat_range`) — proven by
-> `footer_leak_probe` in `crates/manifold-app/src/ui_snapshot/mod.rs`, so §4.1's premise stands but
-> §7's "(B) immediate-mode draws overwrite" is unsupported (the inspector/footer use none). The
+> `footer_leak_probe` in `crates/manifold-app/src/ui_snapshot/mod.rs`, so section 4.1's premise stands but
+> section 7's "(B) immediate-mode draws overwrite" is unsupported (the inspector/footer use none). The
 > current, corrected state of this bug lives in `docs/BUG_BACKLOG.md` under BUG-060 — trust that over
-> this doc. Anything in this file keyed to the "dark" reading (§4.2, §4.4's brightness numbers, §5's
-> (A)/(B) fork, §7's ruled-out list) must be re-derived once the atlas readback itself is validated.
+> this doc. Anything in this file keyed to the "dark" reading (section 4.2, section 4.4's brightness numbers, section 5's
+> (A)/(B) fork, section 7's ruled-out list) must be re-derived once the atlas readback itself is validated.
 
-**UPDATE 2026-07-08 (Fable): fork §5 resolved — it's (B).** A patched trace
+**UPDATE 2026-07-08: fork section 5 resolved — it's (B).** A patched trace
 (commits `28d74981`, `6332df8f`: footer-pass draws included, clip early-outs
 logged) plus one live repro proved all 8 footer nodes draw with correct bounds,
 `scissor=None`, on every clear frame. The footer is innocent; something
-overwrites its atlas pixels afterward. §4.1's "scissor proof" only ever covered
+overwrites its atlas pixels afterward. section 4.1's "scissor proof" only ever covered
 tree-node draws — immediate-mode draws are untraced and remain the prime
 suspect, consistent with the "near-black" bad pixels matching inspector
-card/drawer backgrounds (~18), which §7's "blue overpaint ruled out" reasoning
+card/drawer backgrounds (~18), which section 7's "blue overpaint ruled out" reasoning
 wrongly generalized. **Resolution path chosen (Peter):** don't hunt the single
 leaking element — execute `docs/UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` P1 (binding
 per-region GPU scissors), which kills the class by construction. A per-pass
@@ -30,7 +30,7 @@ still wanted. This branch's binary is the verification rig for P1.
 
 **Status: UNSOLVED.** Two shipped "fixes" did not fix it. This document is the full
 history, evidence, reasoning, and the current impasse. It is written to let a fresh
-reasoner (Fable) pick up without re-deriving. Author: Opus, 2026-07-08 session.
+reasoner pick up without re-deriving. Author: Opus, 2026-07-08 session.
 
 Instrumentation lives on branch `fix/bug-060-footer-leak-trace` (worktree
 `.claude/worktrees/footer-leak`). **None of the debug code is on `main`.** The two
@@ -50,7 +50,7 @@ prior *fixes* (BUG-060, BUG-015) ARE on main.
 - Early in the session Peter described "blue artifacts" and a stray blue rounded rect.
   **That was a red herring** — the real, consistent phenomenon is the footer's right
   half going **dark/missing**, not a blue overpaint. (The earlier "blue video patch"
-  was separately resolved as the preview window, not a bug — see BUG-015 verdict §3.)
+  was separately resolved as the preview window, not a bug — see BUG-015 verdict section 3.)
 
 The footer is the global bottom bar: left = a selection status label ("Layers: N |
 Clips: M"), right = `Q:` + quantize button + `FPS:` + fps field. The **right** group
@@ -79,7 +79,7 @@ sweep at :2131). (2) `build_toggle_trigger_row` gained the `drawer_reveal` param
 (the clip container) was shipped as **defense-in-depth** and the author wrote that they
 "could not independently reproduce a settled-state footer overpaint this fix alone
 closes" — because `ScrollContainer::reparent_content` already swept card content under
-its column clip. **This session proved fix #1 addresses a non-problem** (see §4.1).
+its column clip. **This session proved fix #1 addresses a non-problem** (see section 4.1).
 
 ### BUG-015 — "incremental cache drops out-of-sub-region dirt" — shipped `4319eb8d` (this session)
 
@@ -188,11 +188,11 @@ recreate/clear-without-footer-repaint path despite the constant size.
 The footer is **one panel, drawn atomically** by a single `render_tree_range(48,56)` — 8
 nodes: full-width dark background row + left status label + `Q:` label + quantize button
 + `FPS:` label + fps field ([footer.rs `view()`](../crates/manifold-ui/src/panels/footer.rs#L108)).
-It renders full-width on clear frames (§4.3). And **no draw_node call ever paints below
-the footer line** (§4.1).
+It renders full-width on clear frames (section 4.3). And **no draw_node call ever paints below
+the footer line** (section 4.1).
 
 Yet on some clear-frame rebuilds the footer's right half — **background included** —
-comes out near-black while the left half is correct (§4.2). For a single atomic render
+comes out near-black while the left half is correct (section 4.2). For a single atomic render
 that emits all 8 footer nodes, "left painted, right dark" should be impossible unless:
 
 - **(A)** the footer's Q/FPS (and the right portion of its background) are **misplaced or
@@ -210,7 +210,7 @@ We have not distinguished (A) from (B). Everything measured is consistent with b
 ## 6. Next step already staged (not yet run)
 
 The latest committed build adds a `FOOTER-DBG   node N: bounds=… visible=… text=…` line
-per footer node per frame. Running it and reading a **bad clear-frame** answers §5
+per footer node per frame. Running it and reading a **bad clear-frame** answers section 5
 directly: if Q/FPS bounds are correct and `visible=true`, it's **(B)** an overwrite (and
 the hunt moves to non-draw_node atlas writes — instrument `prepare_and_draw` / the atlas
 encoder). If bounds are wrong / off-atlas / `visible=false`, it's **(A)** the footer's own
@@ -232,14 +232,14 @@ straightforward `PIL` one-liners over `/tmp/atlas_dumps/atlas_*.png`.
 
 ## 7. Ruled out (do not re-chase)
 
-- Inspector content escaping its clip into the footer — **refuted** (§4.1, scissor proof).
+- Inspector content escaping its clip into the footer — **refuted** (section 4.1, scissor proof).
 - BUG-060 fix #1 (inspector clip container) as the cure — it fixed a non-problem.
 - The trigger-row drawer's missing reveal clip (BUG-060 fix #2) — real but unrelated; that
   clip only exists mid-tween, and the footer breaks in settled states.
 - Stale out-of-sub-region dirt (BUG-015) — different mechanism, fixed, not this.
 - Blue overpaint / video bleed — red herring; the phenomenon is the footer-right going
   **dark/missing**, and the compositor writes video only into `video_area`, never the footer.
-- A too-narrow footer rect or a skipped footer render — refuted (§4.3: rect full-width,
+- A too-narrow footer rect or a skipped footer render — refuted (section 4.3: rect full-width,
   renders on every clear frame).
 
 ---

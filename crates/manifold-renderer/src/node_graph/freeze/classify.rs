@@ -1,4 +1,4 @@
-//! Fusion classification metadata (design doc §12, §3).
+//! Fusion classification metadata (design doc section 12, section 3).
 //!
 //! Every primitive declares — via the `primitive!` macro, defaulting to the
 //! conservative [`FusionKind::Boundary`] — whether and how it can fold into a
@@ -81,14 +81,14 @@ pub enum InputAccess {
     /// sampling would blend neighbours and corrupt the value (e.g. dither's
     /// ordered-threshold pattern, where each texel IS a distinct threshold). The
     /// region-grower must refuse to fuse a `CoincidentTexel` input across a
-    /// resolution seam (design §11.B / line 147).
+    /// resolution seam (design section 11.B / line 147).
     CoincidentTexel,
     /// Read at a coordinate the BODY computes — a dependent sample (the UV-warp
     /// family: remap, chromatic_displace, uv_displace_by_flow). The codegen
     /// CANNOT pre-sample this into a register (it doesn't know the coord), so the
     /// body receives the texture + sampler as ARGS and samples them itself,
     /// owning the exact filter/address-mode of the unfused atom ("pure modulo
-    /// declared sampled-texture args", design §11.B / line 156). A node with a
+    /// declared sampled-texture args", design section 11.B / line 156). A node with a
     /// Gather input CAN be a region member — the region-grower just refuses to
     /// union the WIRE feeding it (a gather-consumed wire never merges into a
     /// threaded register; the gathered producer stays an external the body
@@ -113,7 +113,7 @@ pub enum InputAccess {
     /// the gathered array stays a bound `var<storage, read>` input the body
     /// indexes itself. Buffer atoms DO fuse into multi-node buffer regions
     /// (`classify_buffer_node` in `region.rs`) — FluidSim / FluidSim3D /
-    /// DigitalPlants ship as fused, bit-exact buffer regions (freeze §7.3); a
+    /// DigitalPlants ship as fused, bit-exact buffer regions (freeze section 7.3); a
     /// `BufferGather` input just means that one wire stays external, same as
     /// texture `Gather`.
     BufferGather,
@@ -140,7 +140,7 @@ pub enum InputAccess {
 }
 
 /// Why a Boundary primitive is excused from the codegen-path mandate
-/// (`docs/ADDING_PRIMITIVES.md` §"The codegen path is mandatory",
+/// (`docs/ADDING_PRIMITIVES.md` section "The codegen path is mandatory",
 /// `docs/GRAPH_TOOLING_DESIGN.md` D4). A closed enum: every currently-Boundary
 /// primitive declares exactly one of these reasons (via the `primitive!`
 /// macro's `boundary_reason:` field, or a direct
@@ -449,7 +449,7 @@ mod tests {
 
         // Curated table: every `(type_id, param_id, reason)` any registered
         // primitive is allowed to declare a `RangeContract` for. Empty in
-        // P1; seeded in P2 (PARAM_RANGE_CONTRACT_DESIGN.md §2/D6) — each
+        // P1; seeded in P2 (PARAM_RANGE_CONTRACT_DESIGN.md section 2/D6) — each
         // entry names its kernel/shader evidence file:line so a contract
         // can't creep back onto a merely-conventional range.
         //
@@ -471,7 +471,7 @@ mod tests {
         //     returns `Some(max_edges)` verbatim as the allocated `edges`
         //     array capacity — sizes a real allocation.
         //
-        // §2 VERIFY reads performed, all REJECTED (evidence in the P2
+        // section 2 VERIFY reads performed, all REJECTED (evidence in the P2
         // session report, not repeated here — no contract added):
         //   - connect_nearest.max_distance: only ever squared into a
         //     comparison threshold, no division, no degenerate collapse

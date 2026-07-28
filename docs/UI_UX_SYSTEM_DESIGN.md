@@ -72,9 +72,9 @@ backend" means every asset below lands on a surface.
 | **`purpose`** (precise technical) | `descriptor.rs` | deep info popover |
 | per-param **`tooltip`** | `node_graph/param_doc.rs` (`tooltip_for`) | on-node knob tooltip |
 | **`ParamType::Angle` / `Frequency`** | `node_graph/parameters.rs` | on-node value units (°, Hz) — already wired to card + sidebar |
-| binding **`min` / `max` / `convert` / `is_angle` / `label`** | `manifold-core` `UserParamBinding` | the param-mapping popover (§5) |
-| Ableton **invert (`ned`) + range** | `manifold-core` `ableton_mapping`, INV button in `param_slider_shared.rs` | the param-mapping popover (§5) |
-| driver/envelope **`range_min` / `range_max`** | `manifold-core` modulation, `ResolvedParam` | the param-mapping popover (§5) |
+| binding **`min` / `max` / `convert` / `is_angle` / `label`** | `manifold-core` `UserParamBinding` | the param-mapping popover (section 5) |
+| Ableton **invert (`ned`) + range** | `manifold-core` `ableton_mapping`, INV button in `param_slider_shared.rs` | the param-mapping popover (section 5) |
+| driver/envelope **`range_min` / `range_max`** | `manifold-core` modulation, `ResolvedParam` | the param-mapping popover (section 5) |
 
 The descriptor backend is finished. The work is the UI that reads it.
 
@@ -85,7 +85,7 @@ The descriptor backend is finished. The work is the UI that reads it.
 ### 3a. The card (performance face) — already right, don't redesign
 The card is the Ableton rack and the correct abstraction for a live instrument.
 It is the part you touch on stage. Its remaining headroom is *affordance detail*
-(the param-mapping editor, §5), not structure. Leave the model alone.
+(the param-mapping editor, section 5), not structure. Leave the model alone.
 
 ### 3b. The node palette (authoring discovery) — the weak link
 **Current:** [`node_graph/palette.rs`](../crates/manifold-renderer/src/node_graph/palette.rs)
@@ -105,7 +105,7 @@ powered by the descriptor:
 - Reuse `browser_popup`'s machinery (text_input + chips + grid) rather than
   inventing a second one.
 
-**The one seam to get right up front (§7):** the browser must consume a single
+**The one seam to get right up front (section 7):** the browser must consume a single
 merged list of entries that mixes a **static** source (built-in atoms — the
 `&'static` descriptor inventory) and a **dynamic** source (user-saved recipes /
 groups — runtime data). Then adding recipes later is "populate a kind," not
@@ -117,7 +117,7 @@ show header + one summary line + ports. Ports are **already type-coloured**
 (texture / scalar / array / camera / light / material). Params are edited in a
 separate 320px right sidebar ([`graph_editor.rs`](../crates/manifold-ui/src/panels/graph_editor.rs)).
 
-**Target:** see §4 (on-node controls), §6 (previews + animation), plus
+**Target:** see section 4 (on-node controls), section 6 (previews + animation), plus
 category-coloured node headers (instant Blender/TD-style visual grouping).
 
 ---
@@ -131,7 +131,7 @@ params.
 
 Rules:
 - **Depth opens in place, not at the edge.** A knob's deep settings — its
-  min/max/invert/unit mapping (§5) — open as a **popover off the knob**, not a
+  min/max/invert/unit mapping (section 5) — open as a **popover off the knob**, not a
   side panel. Detail when you ask, gone when you don't. (Keeps the box rule: the
   knob is a face; opening it reveals its interior.)
 - **Progressive disclosure — clean by default (decided 2026-05-31, shipped).**
@@ -160,7 +160,7 @@ controls on the face is mostly "stop throwing the params away."
 2. Per-node **collapse** toggle.
 3. **In-place editing** (drag/click on the knob), porting the sidebar's edit
    logic onto the tile; emits the existing `SetGraphNodeParam`.
-4. **Previews** (§6).
+4. **Previews** (section 6).
 
 The right sidebar is demoted as the on-node controls land, then retired. Do not
 delete it on day one — build alongside, then remove.
@@ -186,7 +186,7 @@ fragmentation is why "degrees" cost threading `is_angle` through five crates —
 there is no single param-mapping layer to drop a unit into.
 
 **Target:** one param-mapping model and **one editor surface** — the knob's
-in-place popover (§4) — reused across all binding contexts. Degrees, Hz, invert,
+in-place popover (section 4) — reused across all binding contexts. Degrees, Hz, invert,
 range, custom name become *fields in that one editor*, not bespoke threading.
 This is the **value-scale boundary**: a face (the knob) over an interior (the
 mapping). It is the same editor pattern as a group's face, one scale down.
@@ -218,7 +218,7 @@ it:
   binding `id` (it is forever). Drag-driven min/max uses the
   snapshot/changed/commit triad (one undo entry per drag). Bumps
   `user_param_bindings_version` so the renderer re-resolves.
-- **Surface:** an in-place popover off the knob (§4), built **surface-agnostic**
+- **Surface:** an in-place popover off the knob (section 4), built **surface-agnostic**
   so it later serves the card knob, Ableton, and driver/envelope. Reuses
   `build_trim_handles` (min/max), the Ableton INV button style, `config_btn_style`
   (curve dropdown).
@@ -250,7 +250,7 @@ custom/editable curve is the deferred Table widget); invert-then-curve order
 (rec: yes, matches the Ableton source-invert order); unit scope (rec: defer a
 full Unit enum, surface only the existing `is_angle` degrees toggle); trigger
 location (wire onto the temporary sidebar rows now vs wait for on-node knobs
-§4-pass-3).
+section 4-pass-3).
 
 ---
 
@@ -299,7 +299,7 @@ The model is chosen *now* so these drop in as data, not rewrites:
   collapse-into-group and expand-back. (This is the load-bearing future canvas
   feature — more than thumbnails.)
 - **Recipes** — a boundary you drop from the palette (a saved subgraph). Lives
-  in the **dynamic** half of the palette's merged source (§3b).
+  in the **dynamic** half of the palette's merged source (section 3b).
 - **Effects / generators** — the outermost boundary; the card is its face.
 - **Graph compiler / fusion** — execution detail *below* the boundary. A group
   is a UX boundary the compiler is free to fuse straight through, so grouping is
@@ -360,19 +360,19 @@ graph, which suits authoring (two real panes, not a strip).
 
 ## 9. Recommended build order
 
-1. **Window behaviour fix** (§8) — first-class window + always-summon-to-front +
+1. **Window behaviour fix** (section 8) — first-class window + always-summon-to-front +
    remembered geometry. **Shipped.** (In-window docking is deferred to the layout
    phase; the `editor-in-window-audit` 7-step plan is kept for it.)
-2. **On-node controls** (§4), in the four passes. Read-only first to tune the
+2. **On-node controls** (section 4), in the four passes. Read-only first to tune the
    look.
-3. **Search-first, category-grouped palette** (§3b) off the descriptor backend,
+3. **Search-first, category-grouped palette** (section 3b) off the descriptor backend,
    reusing the `browser_popup` pattern, built on the merged static+dynamic
-   source (§7).
-4. **Param-mapping popover editor** (§5) — unify the three range systems behind
+   source (section 7).
+4. **Param-mapping popover editor** (section 5) — unify the three range systems behind
    one surface.
-5. **Previews + animation** (§6) — the authoring tap + the preview-capability
+5. **Previews + animation** (section 6) — the authoring tap + the preview-capability
    trait.
-6. Later: node groups / sub-networks + canvas level-navigation (§7); dockable
+6. Later: node groups / sub-networks + canvas level-navigation (section 7); dockable
    layout; the unified atom/effect browser.
 
 ---

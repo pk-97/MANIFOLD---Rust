@@ -49,7 +49,7 @@ Non-target (assessed at Wave 2, cohesive): `manifold-editing/src/service.rs` (1,
 
 | Was (single file, pre-Wave-3 lines) | Now | Note |
 |---|---|---|
-| `node_graph/freeze/codegen.rs` (6,374) | `node_graph/freeze/codegen/` (mod/types/uniforms/entry_points/standalone/fused + tests) | `FREEZE_COMPILER_MAP.md` §2 stays authoritative for module sizes; D2 named ceiling `fused.rs` |
+| `node_graph/freeze/codegen.rs` (6,374) | `node_graph/freeze/codegen/` (mod/types/uniforms/entry_points/standalone/fused + tests) | `FREEZE_COMPILER_MAP.md` section 2 (File map) stays authoritative for module sizes; D2 named ceiling `fused.rs` |
 | `preset_runtime.rs` (8,175) | `preset_runtime/` (mod/core/build/errors/segments/bindings/instrumentation + `tests/` #[path] modules) | D3 named ceiling `core.rs` (~2k, Peter-sanctioned); `PresetRuntime` stays one type |
 | `node_graph/gltf_import.rs` (8,502) | `node_graph/gltf_import/` (mod/assembly/animation/materials/cards/object_group/scene/merge/report + tests) split by feature; P3-D tabled `MAP_FAMILIES`/`MATERIAL_PARAMS`; P3-A `ImportCtx`/`ObjectAssembly` | importer cohesive — split, not redesigned |
 
@@ -62,7 +62,7 @@ Non-target (assessed at Wave 2, cohesive): `manifold-editing/src/service.rs` (1,
 | **CHROME_PARAMS** | App-level built-in performance params (master opacity, layer gain, crossovers) declared via a small static manifest, hosted on ParamSurface; exposure/automation/perform-surface semantics | D-39 (Peter: chrome hard-coding is an accident of history) |
 | **GESTURE_ENTRY** | Unify the frame-resident gestures (editor mapping range/affine, node-face drags) onto one designed gesture entry path; kills VD-037's two-entry-point risk class by construction | P-I Fork-2 compromise |
 | **ROW_MODEL_EDGES** | Decide end-states for relight rows outside RowHost (historical special-casing) and RowHost's params-by-reference routing surface. RowHost's `row_action` wide-arg surface shares the bloated-call disease class Wave 3 P3-A fixed with context structs (`ImportCtx`, `ObjectAssembly`, `ChainBuildInputs`, `StandaloneKernelSpec`, `FrameContextInputs` — plain structs bundling params that travel as one fact); that is the precedent when this item is designed | P-S2/P-S3 seam compromises |
-| **VERIFICATION_INFRA (priority-one prerequisite for any future UI wave)** | The flow-driver blind-spot family (BUG-234/293/294/296/300) behind all 7 known-red flows — the oracle every UI wave leans on | Wave-1 close audit |
+| **VERIFICATION_INFRA (priority-one prerequisite for any future UI wave)** | The flow-driver blind-spot family (BUG-234 (ui-snap-script-harness-never-runs-a-content-thre…)/293/294/296/300) behind all 7 known-red flows — the oracle every UI wave leans on | Wave-1 close audit |
 
 ## Explicit non-targets (cohesive; do not split for size)
 

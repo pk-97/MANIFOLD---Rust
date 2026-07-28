@@ -30,7 +30,7 @@ gained `dim_lo_y`/`dim_hi_y` (the KEPT y-range, same bottom-up convention as
 `dim_range: Option<(f32, f32)>` parameter, and the fragment shader darkens (`× 0.28`)
 the colour-mapped magnitude outside the kept range — applied BEFORE the
 divider/centroid/onset/cursor draws, so those stay full-brightness (fire feedback lives
-in the drawer meter, §5 item 6, never re-opened). `VqtPassState` gained `band_dim`,
+in the drawer meter, section 5 item 6, never re-opened). `VqtPassState` gained `band_dim`,
 resolved once per frame from `UIRoot::open_fire_mode_drawer_band()`.
 
 ### P8 — Panel de-clutter
@@ -93,7 +93,7 @@ regression from this wave — no file it depends on was touched.
   Full) matches the brief's intent exactly.
 - **P8 entry-state anchor was imprecise** — the brief pointed at
   `manifold-renderer --lib` for `ScopeOnsets`; it actually lives in `manifold-spectral`.
-  Caught at execution time (§5's re-verification rule) and the test-scope command
+  Caught at execution time (section 5's re-verification rule) and the test-scope command
   followed the real crate.
 
 ## Shortcuts confessed

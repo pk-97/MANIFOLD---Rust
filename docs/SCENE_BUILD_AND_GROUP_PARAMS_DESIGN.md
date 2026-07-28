@@ -1,45 +1,9 @@
 # Scene Build + Group Params — named objects, transform atoms, sectioned cards
 
-**Status:** ✅ **DONE — WAVE COMPLETE 2026-07-10 (P1–P5 all shipped).** Design 2026-07-06 · Fable;
-built by an Opus-orchestrated Sonnet wave. Scene-building is now named per-object card sections,
-transforms as composable `Transform`-port atoms (beat-modulatable), group boxes that carry their
-sub-node sliders, and one-click "+ Object"/"+ Light" that spawn wired/lit/visible — all verified on
-the real azalea glTF import. Owed: Peter's L4 feel-pass on the P5 gestures (click-script in
-`docs/landings/2026-07-10-scene-build-p5.md`). Per-phase detail below. · design 2026-07-06 · Fable.
-**SUPERSEDED 2026-07-17 (object-identity mechanism only):** D7 below describes wiring a new
-object's group to `render_scene`'s `mesh_k`/`material_k`/`transform_k` ports — that per-object
-port family was replaced by `SCENE_OBJECT_AND_PANEL_V2_DESIGN.md` (shipped 2026-07-17) with one
-`object_k` wire out of a `node.scene_object` node; `AddSceneObjectCommand` now emits the new
-shape. The rest of this doc's design (card sections, Transform atoms, group boxes) is unaffected
-and still describes the shipped mechanism. **P1 SHIPPED 2026-07-10** (main `3a6e30b7`):
-`PortType::Transform` + `node.transform_3d` atom. **P2 SHIPPED 2026-07-10**: `render_scene` sheds
-all per-object transform params for `transform_n` ports; v1.12.0 migration carries old saves across
-(values + card bindings re-pointed); glTF importer emits the end-state shape. Migration parity vs
-the real `meshImportTests` project is pixel-identical; a wired LFO→`rot_y` spins an imported object.
-This realizes REALTIME_3D's amended D3 (object transforms are now a `transform_n: Transform` port).
-**P3 SHIPPED 2026-07-10**: card sections from group names (`ParamSpecDef.section` seeded at expose +
-by importer; collapsible headers with UI-local fold state; group-rename sweep; manifest-only mapping
-write). A glTF-imported scene's card is now named foldable blocks (`QS1694-W02-1-1`, `Material.001`,
-`Camera`/`Sun`/`Environment`), not a flat slider wall — verified via faithful-render capture + a
-field-level fold proof. Also fixed a load-bearing registry gap (`ParamDef` lacked the `section`
-mirror, silently dropping sections for glTF-imported generators).
-**P4 SHIPPED 2026-07-10**: group boxes render their exposed param rows on the node face (same
-`ChangeGraphParamCommand` path as the card — one value, three surfaces; collapsed → "N params" chip).
-Verified on the REAL azalea import: the "QS1694-W02-1-1"/"Material.001" object boxes carry live
-Metallic/Roughness sliders. Fixed the payoff-blocking BUG-103 (`outer_routings_from_view` never
-recursed into group bodies, so in-group material bindings were dropped for exactly the imported
-scenes the wave targets — 9/13 → 13/13 routings). Landings:
-`docs/landings/2026-07-10-scene-build-p{1,2,3,4}.md`.
-**P5 SHIPPED 2026-07-10** (`AddSceneObjectCommand` + `AddSceneLightCommand` with node-face "+ Object"/
-"+ Light" buttons, D7a light defaults incl. `cast_shadows` ON; same-pair wire ribbons with `×N` badge).
-Both gestures verified on the real azalea import (node/wire counts 8→9/12→15 add-object, 8→9/12→13
-add-light). Landing: `docs/landings/2026-07-10-scene-build-p5.md`. **Wave complete.**
-**Prerequisites:** PARAM_STORAGE_DESIGN P1–P5 (SHIPPED). PARAM_STORAGE_BOUNDARIES_DESIGN
-P1–P2 must land **before this doc's P3 only** (the card phase reads specs straight off
-the manifest; building it against the pre-boundaries dual-source card path would wire it
-to code P2 deletes). P1/P2/P4/P5 here have no dependency on the boundaries wave.
-**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting
-any phase.
+**Status:** ✅ **DONE — WAVE COMPLETE 2026-07-10 (P1–P5 all shipped; verified on the real azalea glTF import).** Owed: Peter's L4 feel-pass on the P5 gestures (click-script in `docs/landings/2026-07-10-scene-build-p5.md`). As-built records: `…-scene-build-p1.md` through `…-p5.md`. · design 2026-07-06 · Fable
+**SUPERSEDED 2026-07-17 (object-identity mechanism only):** D7's per-object `mesh_k`/`material_k`/`transform_k` port family was replaced by `SCENE_OBJECT_AND_PANEL_V2_DESIGN.md` (shipped) with one `object_k` wire out of `node.scene_object`; `AddSceneObjectCommand` emits the new shape. Card sections, Transform atoms, and group boxes are unaffected and still describe the shipped mechanism.
+**Prerequisites:** satisfied — wave complete.
+**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 
 Peter's directives (2026-07-06, verbatim — these opened the design): `render_scene` is
 "really horrible to use and clunky and does not let you build scenes easily," and "this
@@ -60,14 +24,14 @@ fix is to move per-object state to where identity lives (a transform atom inside
 object's named group) and to let group names organize the card (sections). Everything
 else in this design is that principle applied to each surface.
 
-Binding constraints (DESIGN_AUTHORING §1): **performance surface** (transforms and
+Binding constraints (DESIGN_AUTHORING section 1): **performance surface** (transforms and
 sections are live controls — card, MIDI/OSC, modulation are in scope from the start);
 **persistence** (saved scenes carry render_scene transform params today → one-time
 migration; sections serialize on the spec); hot path is touched only trivially (one
 CPU struct read per object per frame replaces nine param lookups).
 
 Companions: `REALTIME_3D_DESIGN.md` (this doc **amends** its D3/D8 and re-grounds P6 —
-see §8; do not read the two docs' transform stories independently),
+see section 8; do not read the two docs' transform stories independently),
 `PARAM_STORAGE_BOUNDARIES_DESIGN.md` (card single-source — prerequisite for P3),
 `GROUPING_GRAPHS.md` + `NODE_GROUPS_DESIGN.md` (groups stay organisation-only;
 flattener untouched), `GRAPH_EDITOR_REDESIGN.md` (the node-face row infrastructure P4
@@ -93,13 +57,13 @@ a moved anchor is an escalation, not a guess.
 | Card rendering | `crates/manifold-ui/src/panels/param_card.rs:2205` (`build_generator`) + `build_effect` | Flat slider list, manifest order. **No section concept exists anywhere in the card UI** (searched panels/) |
 | Node-face rows | `GRAPH_EDITOR_REDESIGN.md` on-node phases 1–6 (all ✅ 2026-07-01); `graph_canvas/model.rs` (`NodeRow`, `compute_node_rows`) | Regular nodes render param rows with sliders/checkboxes/editors; the row substrate P4 reuses. Canvas already computes wire-driven/outer-driven state (`apply_driven_state`, `outer_routings`) |
 | Group box rendering | `graph_canvas/model.rs:114-123` (`is_group`, `group_tint`) | Groups draw as tinted boxes with interface ports only — no param rows |
-| Group exposure policy | `NODE_GROUPS_UI_DESIGN.md` status | Phase D (interface editing) **dropped** — Peter 2026-06-13: organisation-only, exposure direct-to-card. This design keeps that; **no live group-param runtime**. *(F14 clarification 2026-07-10: `COMPONENT_LIBRARY_DESIGN.md` §4/§4a is the sanctioned `GroupParamDef` consumer — but declaration-only: component macros are `GroupParamDef` entries that **lower onto ordinary card `BindingDef`s at expose** (COMPONENT §4b), so the thing this design kills — a live group-param interface runtime — stays dead. "`GroupParamDef` stays unused" was too strong; "no live group-param runtime" is the real invariant.)* |
+| Group exposure policy | `NODE_GROUPS_UI_DESIGN.md` status | Phase D (interface editing) **dropped** — Peter 2026-06-13: organisation-only, exposure direct-to-card. This design keeps that; **no live group-param runtime**. *(F14 clarification 2026-07-10: `COMPONENT_LIBRARY_DESIGN.md` section 4 (The interaction set (the actual UX))/section 4a is the sanctioned `GroupParamDef` consumer — but declaration-only: component macros are `GroupParamDef` entries that **lower onto ordinary card `BindingDef`s at expose** (COMPONENT section 4b), so the thing this design kills — a live group-param interface runtime — stays dead. "`GroupParamDef` stays unused" was too strong; "no live group-param runtime" is the real invariant.)* |
 | glTF importer | `crates/manifold-renderer/src/node_graph/gltf_import.rs:274-669` (`build_import_graph`) | Already builds one named+tinted group per material with stable inner `node_id`s; curates a 13-slider card (camera/sun/reflections + per-object metallic/roughness with " 2"-style suffixes); sets recenter via `pos_x_{k}` params ON the render node (`:510-518`); **no transform sliders on the card at all** |
 | Stale importer cap | `gltf_import.rs:45` (`MAX_RENDER_SCENE_OBJECTS = 8`) | Comment says "mirrored from node.render_scene's own MAX_OBJECTS" — that constant was deleted 2026-07-05 (`render_scene.rs:64`, `OBJECT_SLIDER_MAX = 64`). Imports silently drop materials past 8 while the renderer is uncapped. Fixed in P2 |
 | Migration chain | `crates/manifold-io/src/migrate.rs:5-84` | Version-gated `Value → Value` steps, top currently `1.11.0`; `migrations/param_storage_v14.rs` is the quarantined-module precedent |
 | Fan-out bindings | `effect_graph_def.rs:404-413` (`BindingDef`, one id → many targets, per-target `scale`/`offset`) | Ableton-style macros are already representable — a load-bearing input to the Phase-D kill |
-| As-built REALTIME_3D deviation | `render_scene.rs:26` header; BASELINE_REVIEW_2026_07 | Object transforms are NOT port-shadowed; P6 gizmos not built. This design supersedes the "additive follow-up" note — see §8 |
-| `EffectGroup` | `crates/manifold-core/src/effects.rs:2457` | Rack-grouping of whole effect *cards* (BUG-019's subject) — a different layer; NOT this design's mechanism. Named here so no executor conflates them |
+| As-built REALTIME_3D deviation | `render_scene.rs:26` header; BASELINE_REVIEW_2026_07 | Object transforms are NOT port-shadowed; P6 gizmos not built. This design supersedes the "additive follow-up" note — see section 8 |
+| `EffectGroup` | `crates/manifold-core/src/effects.rs:2457` | Rack-grouping of whole effect *cards* (BUG-019 (deferred)'s subject) — a different layer; NOT this design's mechanism. Named here so no executor conflates them |
 
 `⚠ VERIFY-AT-IMPL` (all phases): the boundaries wave and other landings will have moved
 lines; re-run the anchors above before editing. Line drift alone is not an escalation —
@@ -130,7 +94,7 @@ scalar input port** per the control-wires convention
 back to the param). One output `transform: Transform`. This closes REALTIME_3D's
 "transforms not beat-addressable" as-built gap in the right place: an LFO wired to
 `rot_y` is a spinning object; a `beat_ramp` into `pos_z` is a drop hit.
-Optional input `parent: Transform` is **Deferred** (§9) — it is the v2 hierarchy
+Optional input `parent: Transform` is **Deferred** (section 9) — it is the v2 hierarchy
 mechanism (compose parent × local), designed-for but not built.
 
 **D3 — `render_scene` sheds all per-object transform params; gains
@@ -138,7 +102,7 @@ mechanism (compose parent × local), designed-for but not built.
 params; each object's port group becomes `mesh_n` (required) + `material_n` (required)
 + `base_color_map_n` (optional) + `transform_n` (optional; unwired = identity).
 `evaluate` reads `ctx.inputs.transform(&format!("transform_{n}"))` and feeds the
-existing `model_matrix`. **This amends REALTIME_3D D3** (see §8). The node face drops
+existing `model_matrix`. **This amends REALTIME_3D D3** (see section 8). The node face drops
 from 2+9N rows to 2.
 **The plausible-wrong architecture, forbidden by name:** keeping the 9N params as an
 unwired fallback ("port shadows the params, no migration needed"). No. That is the
@@ -186,13 +150,13 @@ Card rendering: contiguous runs of the same `section` draw under one collapsible
 header row (name + fold triangle + row count when folded); `None` runs render exactly
 as today. Fold state is UI-local (workspace state, like node collapse), not
 serialized — honest cost: folds reset on app restart; persistence is Deferred with a
-trigger (§9).
+trigger (section 9).
 Rejected: **reviving `GroupParamDef` as a live group-param runtime / NODE_GROUPS_UI
 Phase D** — a second card-to-node resolution path beside the just-audited manifest/binding
 system, its own authoring UI, and its one real superpower (one knob → many targets) already
 exists as fan-out `BindingDef`s. Peter re-confirmed the kill 2026-07-06 after full pricing.
 *(F14, 2026-07-10: this rejects a **live runtime**, not the `GroupParamDef` **type** —
-`COMPONENT_LIBRARY` §4 reuses the type as a declaration schema that lowers to those same
+`COMPONENT_LIBRARY` section 4 reuses the type as a declaration schema that lowers to those same
 fan-out `BindingDef`s at expose. Same kill target, different word: no live group-param
 runtime.)*
 
@@ -331,16 +295,16 @@ port types beyond `Transform` · widening into REALTIME_3D P5/P6 viewport work.
 
 ### P1 — Transform port + `node.transform_3d` (one session)
 
-- **Entry state:** clean tree off current `origin/main`; `rg -n "Transform" crates/manifold-renderer/src/node_graph/ports.rs` → no variant; §1 anchors re-run.
-- **Read-back:** this doc §2 D1/D2, §3; `ports.rs` whole; one Material-port plumbing
+- **Entry state:** clean tree off current `origin/main`; `rg -n "Transform" crates/manifold-renderer/src/node_graph/ports.rs` → no variant; section 1 anchors re-run.
+- **Read-back:** this doc section 2 D1/D2, section 3; `ports.rs` whole; one Material-port plumbing
   commit (`git log --oneline -S "PortType::Material" -- crates/manifold-renderer` →
   read the M1 diff); `node.light`'s producer atom end-to-end;
-  `project_control_wires_port_shadows_param` memory. Restate the §2.5 audit verdict:
+  `project_control_wires_port_shadows_param` memory. Restate the section 2.5 audit verdict:
   port = one-wire-from-existing (fourth CPU-struct port), atom = genuinely new
   (`affine_transform` is 2D UV; `InstanceTransform` is instancing data).
 - **Deliverables:** `transform.rs`, `PortType::Transform` + full plumbing,
   `set_transform`/`inputs.transform`, `node.transform_3d` (registered, descriptor,
-  §2.5-audited), unit tests: identity default; param→output; each scalar port
+  section 2.5-audited), unit tests: identity default; param→output; each scalar port
   overrides its same-named param (the port-shadows contract, one test per family).
 - **Gate.** Positive: `cargo test -p manifold-renderer --lib transform` green;
   `check-presets` clean. Negative: `rg -n "Arc<Mutex|Arc<RwLock" crates/manifold-renderer/src/node_graph/transform.rs primitives/transform_3d.rs` → 0.
@@ -352,8 +316,8 @@ port types beyond `Transform` · widening into REALTIME_3D P5/P6 viewport work.
 ### P2 — the swap: `render_scene` ports, migration, importer (one strong session)
 
 - **Entry state:** P1 landed; `rg -n "pos_x_" crates/manifold-renderer/src/node_graph/primitives/render_scene.rs` shows the param generation; the migration-chain top re-derived (D4 command); `~/Downloads/meshImportTests.manifold` present (ask Peter if moved).
-- **Read-back:** §2 D3/D4/D9, §3, §8; `render_scene.rs` whole; `gltf_import.rs:274-669`;
-  `migrations/param_storage_v14.rs` (the quarantine pattern); DESIGN_DOC_STANDARD §5
+- **Read-back:** section 2 D3/D4/D9, section 3, section 8; `render_scene.rs` whole; `gltf_import.rs:274-669`;
+  `migrations/param_storage_v14.rs` (the quarantine pattern); DESIGN_DOC_STANDARD section 5
   round-trip gate. Restate: what is deleted, what replaces it, the forbidden fallback.
 - **Seam brief.** Old → new: `rebuild()` loses the 9-param loop (`:223-296`), the port
   loop gains `transform_{i}: PortType::Transform, required: false`; `evaluate` replaces
@@ -379,7 +343,7 @@ port types beyond `Transform` · widening into REALTIME_3D P5/P6 viewport work.
   migrations::` + the importer tests green; **round-trip gate**:
   `meshImportTests.manifold` loads through the migration → all params resolve, cam
   orbit driver still runs, save → reload → transforms intact (throwaway scratch test,
-  deleted after, per the BUG-036 session pattern); **held-out input**: one of the
+  deleted after, per the BUG-036 (param-manifest-construction-not-a-unified-safe-g…) session pattern); **held-out input**: one of the
   three CC0 scans in `tests/fixtures/gltf/` (VD-003 fixtures) imports and renders —
   not the azalea the code was developed against; focused GPU run:
   `cargo test -p manifold-renderer --features gpu-proofs render_scene` (the gpu tests
@@ -403,7 +367,7 @@ port types beyond `Transform` · widening into REALTIME_3D P5/P6 viewport work.
 
 - **Entry state:** BOUNDARIES P1–P2 landed (`rg -n "reconcile_param_manifests" crates/manifold-io` hits; state_sync card rows read `inst.params` — spot-check the fn);
   P2 of THIS doc landed (sections get seeded with real content by the importer).
-- **Read-back:** §2 D5; `ParamSpecDef` (`effect_graph_def.rs:450-491`);
+- **Read-back:** section 2 D5; `ParamSpecDef` (`effect_graph_def.rs:450-491`);
   `mirror_effect_side` + `ToggleNodeParamExposeCommand.scope_path`;
   `param_card.rs` `build_generator`/`build_effect`; the group-rename command
   (`rg -n "RenameGroup" crates/manifold-editing`).
@@ -435,7 +399,7 @@ port types beyond `Transform` · widening into REALTIME_3D P5/P6 viewport work.
 
 - **Entry state:** P3 landed (sections exist — the join key); the on-node row infra
   anchors (`compute_node_rows`, `apply_driven_state`) re-verified.
-- **Read-back:** §2 D6; `graph_canvas/model.rs` rows + driven-state; the perform-card
+- **Read-back:** section 2 D6; `graph_canvas/model.rs` rows + driven-state; the perform-card
   slider dispatch site (D6's VERIFY marker — resolve it FIRST and restate the command).
 - **Deliverables:** group `NodeView` rows for card params targeting inner nodes
   (transitive); render + hit + scrub emitting the card param's exact command;
@@ -457,9 +421,9 @@ port types beyond `Transform` · widening into REALTIME_3D P5/P6 viewport work.
 ### P5 — gestures: add-object + wire ribbons (one session, closes the wave)
 
 - **Entry state:** P2 landed (transform atoms exist for the composite to spawn).
-- **Read-back:** §2 D7/D7a/D8; the compound-command precedent (D7 VERIFY marker);
+- **Read-back:** section 2 D7/D7a/D8; the compound-command precedent (D7 VERIFY marker);
   `graph_canvas` wire render (`render.rs` wire pass) + hover-highlight code (the
-  "must preserve" list in GRAPH_EDITOR_REDESIGN §7).
+  "must preserve" list in GRAPH_EDITOR_REDESIGN section 7).
 - **Deliverables:** `AddSceneObjectCommand` + node-face "+ Object" button on
   `render_scene` (a `NodeRow` action row, same geometry-source discipline);
   `AddSceneLightCommand` + "+ Light" button per D7a (bare `node.light`, auto-wired,
@@ -499,7 +463,7 @@ stop).
 3. Card bundling = `ParamSpecDef.section`, seeded from group names, stored on the
    manifest spec, never derived at display. Phase D (the live group-param runtime) stays
    dropped (re-confirmed 2026-07-06 after pricing). *(F14, 2026-07-10: the `GroupParamDef`
-   **type** is not dropped — `COMPONENT_LIBRARY` §4 reuses it as a declaration schema that
+   **type** is not dropped — `COMPONENT_LIBRARY` section 4 reuses it as a declaration schema that
    lowers to card `BindingDef`s; card sections here are orthogonal to component macros.)*
 4. Group boxes render their exposed-param rows; same command path as the card —
    three surfaces, one value, zero new machinery.
@@ -553,7 +517,7 @@ stop).
 - **Group interface params (Phase D)** — revive only for swappable "rack" presets
   with stable knob surfaces (contents change, knobs don't). Sections don't block it.
   *(F14, 2026-07-10: that "rack presets" use case **is** `COMPONENT_LIBRARY` — it reuses
-  `GroupParamDef` as a declaration schema lowered to card `BindingDef`s (its §4b), which is
+  `GroupParamDef` as a declaration schema lowered to card `BindingDef`s (its section 4b), which is
   a component macro layer, not the live Phase-D runtime this doc kills. Named so the two
   don't read as contradicting.)*
 - **Per-object normal/roughness/metallic map ports** — pre-existing render_scene

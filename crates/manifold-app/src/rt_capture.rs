@@ -126,7 +126,35 @@ pub(crate) fn arm_capture() {
 }
 
 pub fn run(args: &[String]) -> ! {
+    // main.rs's logger init runs after subcommand dispatch — without this the
+    // harness drops every log::info from the RT path (rebuild/fallback).
+    let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .try_init();
+
     let paused_mode = args.iter().any(|a| a == "--paused");
+
+    // `--set param=value` (repeatable): one MutateProject write after load —
+    // the RT-off baseline runs `--set 8_rt_enabled=0`.
+    let sets: Vec<(String, f32)> = args
+        .windows(2)
+        .filter(|w| w[0] == "--set")
+        .filter_map(|w| w[1].split_once('=').map(|(k, v)| (k.to_string(), v.parse::<f32>().ok())))
+        .filter_map(|(k, v)| v.map(|v| (k, v)))
+        .collect();
+    // `--animate <param> <delta>`: per-frame MutateProject write of
+    // base + frame*delta — the same storage-level write a modulator makes.
+    let animate: Option<(String, f32)> = args
+        .windows(3)
+        .find(|w| w[0] == "--animate")
+        .and_then(|w| w[2].parse::<f32>().ok().map(|d| (w[1].clone(), d)));
+
+    // `--disable-driver-at N`: at frame N, MutateProject disables every
+    // param driver on layer 0's generator — the "motion stops mid-play"
+    // case, with the transport still running.
+    let disable_driver_at: Option<u32> = args
+        .windows(2)
+        .find(|w| w[0] == "--disable-driver-at")
+        .and_then(|w| w[1].parse().ok());
 
     // Resolve project path: skip the subcommand name (args[0]), then first non-flag arg.
     let project_path = args.iter().skip(1)
@@ -166,8 +194,61 @@ pub fn run(args: &[String]) -> ! {
     // Phase 1: Play N frames (rotation, beat advancing).
     ct.handle_command(ContentCommand::Play);
     let rotation_frames = if paused_mode { 60 } else { total_frames };
+
+    // One-shot --set writes, through the same MutateProject path the UI uses.
+    for (param, value) in &sets {
+        let (param, value) = (param.clone(), *value);
+        ct.handle_command(ContentCommand::MutateProject(Box::new(move |project| {
+            if let Some(g) = project.timeline.layers[0].gen_params_mut() {
+                g.set_param(&param, value);
+            }
+        })));
+    }
+    // Base value for --animate, read from the loaded project before frame 0.
+    let mut animate_base: Option<f32> = None;
+
+    // Capture early AND late: the static-death window is seconds out. When
+    // --disable-driver-at is used, bracket the expected death (~15 frames
+    // after motion stops) densely.
+    let capture_at = |frame: u32, total: u32| {
+        frame == 30
+            || frame == 120
+            || frame == 300
+            || frame == total.saturating_sub(1)
+            || disable_driver_at.is_some_and(|n| {
+                frame == n + 5 || frame == n + 15 || frame == n + 30 || frame == n + 90
+            })
+    };
+
     for frame in 0..rotation_frames {
-        if frame == 30 || frame == 59 {
+        if disable_driver_at == Some(frame) {
+            ct.handle_command(ContentCommand::MutateProject(Box::new(move |project| {
+                if let Some(g) = project.timeline.layers[0].gen_params_mut()
+                    && let Some(drivers) = g.drivers.as_mut()
+                {
+                    for d in drivers.iter_mut() {
+                        d.enabled = false;
+                    }
+                }
+            })));
+            println!("=== DRIVERS DISABLED at frame {frame} (transport keeps playing) ===");
+        }
+        if let Some((param, delta)) = &animate {
+            let base = *animate_base.get_or_insert_with(|| {
+                ct.engine
+                    .project()
+                    .and_then(|p| p.timeline.layers[0].gen_params())
+                    .map(|g| g.get_param(param))
+                    .unwrap_or(0.0)
+            });
+            let (param, value) = (param.clone(), base + frame as f32 * delta);
+            ct.handle_command(ContentCommand::MutateProject(Box::new(move |project| {
+                if let Some(g) = project.timeline.layers[0].gen_params_mut() {
+                    g.set_param(&param, value);
+                }
+            })));
+        }
+        if capture_at(frame, total_frames) {
             arm_capture();
         }
         ct.timer.wait_for_deadline();

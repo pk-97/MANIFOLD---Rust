@@ -1,10 +1,10 @@
-<!-- index: Offline audio analysis v2: measured accuracy instead of vibes. An eval harness over public MIR datasets (Slakh, Harmonix, MUSDB18, MAESTRO) + metamorphic tests scores every detector; Beat This (MIT) replaces madmom's NC-licensed beat/downbeat/tempo models; live-proven precision machinery (median-adaptive thresholds, refractory windows) ports into the offline post-processing; sustained objects (chords, vocal phrases, sections) become duration clips through the existing Event/planner path. Clip-per-note is the contract (Peter). Unattended agent tuning loops run sweeps over cached model intermediates — tokens ≈ 0, held-out split untouchable. Also the shipping-license audit: madmom + ADTOF models are CC BY-NC-SA (BUG-069). -->
+<!-- index: Offline audio analysis v2: measured accuracy instead of vibes. An eval harness over public MIR datasets (Slakh, Harmonix, MUSDB18, MAESTRO) + metamorphic tests scores every detector; Beat This (MIT) replaces madmom's NC-licensed beat/downbeat/tempo models; live-proven precision machinery (median-adaptive thresholds, refractory windows) ports into the offline post-processing; sustained objects (chords, vocal phrases, sections) become duration clips through the existing Event/planner path. Clip-per-note is the contract (Peter). Unattended agent tuning loops run sweeps over cached model intermediates — tokens ≈ 0, held-out split untouchable. Also the shipping-license audit: madmom + ADTOF models are CC BY-NC-SA (BUG-069 (shipping-license-audit)). -->
 
 # Audio Analysis Accuracy — measured detection, licensed models, sustained objects
 
-**Status:** IN PROGRESS — P1–P4 SHIPPED (P4 landed 2026-07-18: truth-type-aware scoring; BUG-235 scorer calibration accepted, five-fixture kick 0.238→0.739; accepted production defaults kick thr×1.15 / snare ×1.3 / hat ×0.5 — dense F1 kick .858 snare .641 hat .303, heldout confirmed no recall regressions, hats +5.5pp; shape/cofire/phase knobs REJECTED for transcription, PARKED for trigger-selection layer; synth deferred n=1 coverage gap. Next: ADTOF bake-off addendum vs post-P4 numbers, then P5/P6) · designed 2026-07-08 · Fable
+**Status:** IN PROGRESS — P1–P4 SHIPPED (P4 landed 2026-07-18: truth-type-aware scoring; BUG-235 (manifold-own-kick-fixtures-systematic-adtof-timi…) scorer calibration accepted, five-fixture kick 0.238→0.739; accepted production defaults kick thr×1.15 / snare ×1.3 / hat ×0.5 — dense F1 kick .858 snare .641 hat .303, heldout confirmed no recall regressions, hats +5.5pp; shape/cofire/phase knobs REJECTED for transcription, PARKED for trigger-selection layer; synth deferred n=1 coverage gap. Next: ADTOF bake-off addendum vs post-P4 numbers, then P5/P6) · designed 2026-07-08 · Fable
 **Prerequisites:** none. All work in `tools/audio_analysis/` plus two small Rust seams (new trigger-type variants + inspector rows) in P5.
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
 Peter's vision, verbatim (2026-07-08): *"My vision is we analyse the track and you get
 the full set of clips for the whole track with clips that actually make sense where the
@@ -37,7 +37,7 @@ feeds — its engine, orchestrator, parser, planner are reused untouched);
 (**consumes this doc's `eval/` harness** — F10: one harness, not two. Its per-instrument
 Basic-Pitch replacement is sequenced *after* this doc's P3 baseline + P4 precision pass and
 must beat the post-P4 Basic Pitch F₁ in `eval/`; and if it drops Basic Pitch from the
-synth/pad stem, §4.3's chord clustering — which consumes Basic Pitch notes on that stem —
+synth/pad stem, section 4.3's chord clustering — which consumes Basic Pitch notes on that stem —
 must re-point to its segmenter output or coexist as a separate emitter. See OBJECT_INGEST
 D4/D5).
 
@@ -282,8 +282,8 @@ end of P5 only. No GPU-proofs anywhere (nothing touches shaders). Git: Mode B, O
 warm worktree for the workstream (`agent-worktree.py acquire`), orchestrator lands.
 
 - **P1 — Harness core + noise floor.** *Entry:* repo tip; `python3 -c "import manifold_audio"`
-  succeeds in the staged runtime. *Read-back:* this doc §2–§4; DESIGN_DOC_STANDARD §5.
-  *Deliverables:* `eval/` package (layout §3), `bundles.py` (D7 cache, stamped),
+  succeeds in the staged runtime. *Read-back:* this doc section 2–section 4; DESIGN_DOC_STANDARD section 5.
+  *Deliverables:* `eval/` package (layout section 3), `bundles.py` (D7 cache, stamped),
   `metrics.py` (D10, frozen), `metamorphic.py`, fetch scripts for `babyslakh_16k` +
   Harmonix annotations + MUSDB18-compressed, `fixtures.toml` with dev/heldout split,
   noise-floor measurement (D11, N=3, committed to `scoreboard/`), and the **D14
@@ -297,7 +297,7 @@ warm worktree for the workstream (`agent-worktree.py acquire`), orchestrator lan
   *Demo:* the scoreboard JSON + one worst-track detail dump — L1 (no UI surface).
   *Forbidden:* inventing app seams; downloading full Slakh; metric definitions beyond D10.
 - **P2 — Beat This swap.** *Entry:* P1 landed (`eval/run.py` exists); anchors
-  `bpm.py:22–31,:180,:281,:552` re-verified. *Read-back:* §4.1 seam brief + D1/D2.
+  `bpm.py:22–31,:180,:281,:552` re-verified. *Read-back:* section 4.1 seam brief + D1/D2.
   *Deliverables:* `beat_tracking.py`, rewired grid construction, madmom beat/downbeat/
   tempo arms deleted, before/after scoreboard committed, listen-list (10 tracks, beat
   click renders) for Peter. *Gate (positive):* beat F₁ + downbeat F₁ ≥ madmom baseline
@@ -315,15 +315,15 @@ warm worktree for the workstream (`agent-worktree.py acquire`), orchestrator lan
   negative gates from P1 re-run. *Demo:* baseline report — L1. *Forbidden:* tuning
   anything (this phase only measures); committing audio.
 - **P4 — Precision pass (drums, bass, synth).** *Entry:* P3 baseline exists.
-  *Read-back:* §4.2, D6, D9, D11. *Deliverables:* shared post-processing module,
+  *Read-back:* section 4.2, D6, D9, D11. *Deliverables:* shared post-processing module,
   applied to ADTOF + basic_pitch + stem-onset paths; sweep configs; accepted params.
   *Gate:* held-out P/R/F₁ improves > 2× noise floor for hats + perc + synth (the named
   weak spots) with no instrument regressing beyond noise; metamorphic suite still green.
   *Demo:* before/after scoreboard — L1. *Forbidden:* touching event *counts* via
   density targets (D10: economy metrics are advisory); reading heldout in sweep.py.
 - **P5 — Sustained objects + sections + Rust seams.** *Entry:* P2 landed (sections
-  need the grid). *Read-back:* §4.3–4.5, D4/D5, round-trip gate in DESIGN_DOC_STANDARD
-  §5. *Deliverables:* chord/vocal-phrase/section emitters; `label` field; enum variants
+  need the grid). *Read-back:* section 4.3–4.5, D4/D5, round-trip gate in DESIGN_DOC_STANDARD
+  section 5. *Deliverables:* chord/vocal-phrase/section emitters; `label` field; enum variants
   + parser mapping + inspector rows; per-type length floors; **D14 Rust half** —
   `onset_compensation_seconds` default 10 ms → zero (`percussion_settings.rs:42`), the
   knob re-documented as artistic offset only; Section row ships default-OFF until its
@@ -355,7 +355,7 @@ warm worktree for the workstream (`agent-worktree.py acquire`), orchestrator lan
   delta or a clean no-change report. Post-release territory — Peter re-ranks
   (his call, 2026-07-08: release-relevance sequencing is his).
 
-Phasing-completeness check (run 2026-07-08): every §2–§4 commitment maps to a phase —
+Phasing-completeness check: every section 2–section 4 commitment maps to a phase —
 harness/cache/metrics/noise floor + D14 alignment fixtures → P1; Beat This + fusion
 deletion + alignment gate → P2; datasets + baselines → P3; precision/hats/perc → P4;
 chords/phrases/sections/labels/Rust seams/inspector rows/length floors +
@@ -475,7 +475,7 @@ replacement, DALI, learned sections, realtime tuning → Deferred #1–#4.
 
 Peter's directive (2026-07-17, verbatim intent): *prove we are as good or better than
 ADTOF, or — if we fall short and can't measurably close — document the gap in numbers.*
-That is Deferred #1's "drum accuracy work resuming" trigger. The approach text in §7.1
+That is Deferred #1's "drum accuracy work resuming" trigger. The approach text in section 7.1
 stands unchanged (Stage 1 DSP-on-drum-stem with per-track onset clustering; Stage 2 small
 own-trained CRNN with the demucs-separated-render domain-matching trick; both emit into
 the same Event JSON contract). This addendum adds the measured bar, the decision gate,
@@ -492,12 +492,12 @@ dense electronic-domain truth (E-GMD/Slakh-drums heldout split + self-render hol
 liveshow heldout as sparse-recall confirmation) → that class ships the candidate and its
 ADTOF arm is deleted. Candidate falls short after ≤3 judged iteration rounds → the gap is
 recorded per class in the scoreboard and ADTOF stays until the commercialization gate
-forces Stage 2. Mixed outcomes ship mixed (per §7.1's own contract: kick may stay DSP
+forces Stage 2. Mixed outcomes ship mixed (per section 7.1's own contract: kick may stay DSP
 while hats go learned — or vice versa).
 
 **Phasing:** **B1** — E-GMD fetch (license VERIFY-AT-FETCH) + Slakh drum-truth
-extraction with dev/heldout split; Stage-1 DSP implementation (cluster-first, per §7.1);
-first full scoreboard vs the bar. **B2** — judged iteration (Sonnet sweeps, orchestrator
+extraction with dev/heldout split; Stage-1 DSP implementation (cluster-first, per section 7.1);
+first full scoreboard vs the bar. **B2** — judged iteration (orchestrator
 accepts; same rules as P4; ≤3 rounds/class). **B3** — verdict landing: per-class
 ship/keep decisions, BUG-069 status update, and — only if gaps remain that matter —
 a Stage-2 training proposal for Peter's explicit approval (compute + dataset build are
@@ -510,7 +510,7 @@ one.
 
 ### B3 verdict (2026-07-18, Fable) — Stage 1 falls short; gap documented; Stage 2 is the parity path
 
-Two judged rounds (B1 `c566539a`, B2 `d55cb2f3`). Stage-1 DSP (cluster-first,
+Two judged rounds (B1, B2). Stage-1 DSP (cluster-first,
 dev-fitted signatures, real bugs fixed en route — including a wrong-input bug in the
 bake-off scorer itself) reaches, on dev dense truth, electronic slice: kick **0.311**
 vs ADTOF **0.702** · snare 0.250/0.653 (n=1) · hat **0.592 vs 0.426** (n=2, thin) ·
@@ -519,10 +519,10 @@ hat 0.270/0.529, perc 0.256/0.553. Kick electronic < the 0.5 round-3 bar → ver
 called without spending round 3; heldout not consumed (a dev shortfall is sufficient
 for a negative verdict; heldout spends only on ship candidates).
 
-**Rulings:** ADTOF stays, per the gate. (Follow-up 2026-07-18: the Stage-1 electronic kick number is measured through **BUG-241** — a real onset-front-end bug that misses loud, present kicks track-dependently; the verdict itself stands — labeling was independently weak — but the kick gap is overstated by this bug. Same-day update: BUG-241 is FIXED — root cause was the RMS backtrack refinement, removed; fixture kick recall roughly 4x on the failing tracks — see the backlog entry for numbers. The scoreboard re-run to re-read the kick line is still owed.) The per-class gap table above is the
+**Rulings:** ADTOF stays, per the gate. (Follow-up 2026-07-18: the Stage-1 electronic kick number is measured through **BUG-241** — a real onset-front-end bug that misses loud, present kicks track-dependently; the verdict itself stands — labeling was independently weak — but the kick gap is overstated by this bug. Same-day update: BUG-241 (stage1-dsp-onset-frontend-misses-loud-real-kicks…) is FIXED — root cause was the RMS backtrack refinement, removed; fixture kick recall roughly 4x on the failing tracks — see the backlog entry for numbers. The scoreboard re-run to re-read the kick line is still owed.) The per-class gap table above is the
 documented shortfall Peter asked for. The hat lead (n=2) and the lever-2 finding that
 fitted profiles regress on out-of-profile timbres both point the same way: signature
-labeling needs learned representations and much more per-class data — i.e. §7.1
+labeling needs learned representations and much more per-class data — i.e. section 7.1
 Stage 2 (small CRNN, permissive-only data, demucs-separated-render domain matching),
 which now has a quantified case: it must close kick +0.39, snare +0.40, perc +0.55
 electronic. **Stage 2 requires Peter's explicit approval (compute + dataset build)

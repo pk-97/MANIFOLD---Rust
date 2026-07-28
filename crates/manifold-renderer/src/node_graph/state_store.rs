@@ -12,7 +12,7 @@
 //! behavior, accessed by reference through [`EffectNodeContext`]. State is
 //! cleaned up in one place, lifecycle is uniform across all stateful
 //! nodes, and the future graph runtime can reason about state as a
-//! first-class resource (see `docs/EFFECT_RUNTIME_UNIFICATION.md` §5.3).
+//! first-class resource (see `docs/EFFECT_RUNTIME_UNIFICATION.md` section 5.3).
 //!
 //! ## Type erasure
 //!
@@ -103,7 +103,7 @@ impl StateStore {
 
     /// Move every `(node, *)` bucket out of this store into `dst`, re-keyed
     /// to `new_node` — the state harvest across a chain rebuild
-    /// (docs/CHAIN_FUSION_DESIGN.md §5). Contents move untouched (no
+    /// (docs/CHAIN_FUSION_DESIGN.md section 5). Contents move untouched (no
     /// `cleanup`, no drop): a Feedback trail or sim buffer carries across
     /// the rebuild bit-for-bit. Any pre-existing entry in `dst` under the
     /// new key is replaced (its `cleanup` fires).

@@ -26,6 +26,9 @@ import os
 import sys
 
 MAX_BLOCKS = 3
+# Anthropic-model lanes over-report; style advice doesn't hold, a bounce does.
+# One re-write demand per idle, then allow (never loop on a stubborn lane).
+MAX_REPORT_CHARS = 3000
 PAYLOAD_LOG = "/tmp/teammate_idle_payload_last.json"
 STATE = "/tmp/lane_report_enforcer_state.json"
 
@@ -66,6 +69,7 @@ def main() -> None:
 
         # Did the lane call SendMessage since its last inbound message?
         sent = False
+        last_report_len = 0
         try:
             for line in open(transcript_path):
                 try:
@@ -78,10 +82,27 @@ def main() -> None:
                 for c in msg.get("content") or []:
                     if isinstance(c, dict) and c.get("type") == "tool_use" and c.get("name") in ("SendMessage", "mcp__team__SendMessage"):
                         sent = True
+                        body = (c.get("input") or {}).get("message") or (c.get("input") or {}).get("content") or ""
+                        last_report_len = len(body) if isinstance(body, str) else 0
         except Exception:
             return  # unreadable transcript — fail open
 
         if sent:
+            state = load_json(STATE, {})
+            len_key = f"{teammate_id}:len_bounced"
+            if last_report_len > MAX_REPORT_CHARS and not state.get(len_key):
+                state[len_key] = 1
+                json.dump(state, open(STATE, "w"))
+                print(
+                    f"lane-report-enforcer: your report is {last_report_len} chars — over the "
+                    f"{MAX_REPORT_CHARS} cap. Re-send via SendMessage compressed to: outcome, "
+                    "numbers/exit codes, blockers. No narration, no history, no options you "
+                    "don't recommend. Then stop.",
+                    file=sys.stderr,
+                )
+                sys.exit(2)
+            state.pop(len_key, None)
+            json.dump(state, open(STATE, "w"))
             return  # report delivered — allow idle
 
         state = load_json(STATE, {})

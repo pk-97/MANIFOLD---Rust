@@ -1,4 +1,4 @@
-//! `docs/RAYTRACING_DESIGN.md` §9.6 R2 gate (Step 4) — specular temporal
+//! `docs/RAYTRACING_DESIGN.md` section 9.6 R2 gate (Step 4) — specular temporal
 //! accumulation blend-engagement + cut-reset gate.
 //!
 //! RULE: The specular temporal accumulation blends 10% per frame

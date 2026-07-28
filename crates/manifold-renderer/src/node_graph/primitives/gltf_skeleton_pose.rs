@@ -841,7 +841,7 @@ mod tests {
 
     /// P1's mandatory perf gate: a synthetic dragon-fixture-scale
     /// `GltfAnimSet` (52 clips x 630 channels x ~160 keys, 300 joints,
-    /// GLTF_ANIM_RUNTIME_V2_DESIGN.md §3) sampled for one full pose must
+    /// GLTF_ANIM_RUNTIME_V2_DESIGN.md section 3) sampled for one full pose must
     /// stay well under budget with the binary-search slice path — the
     /// exact O(rows) linear-scan cost class this design removes. Debug
     /// build asserts < 8ms (the doc's stated debug ceiling); release is

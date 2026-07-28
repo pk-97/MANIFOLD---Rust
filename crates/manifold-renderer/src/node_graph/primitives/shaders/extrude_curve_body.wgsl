@@ -1,4 +1,4 @@
-// node.extrude_curve — fusable BUFFER body (freeze §12, buffer domain),
+// node.extrude_curve — fusable BUFFER body (freeze section 12, buffer domain),
 // GATHER. Extrude a P-point outline curve (Array<CurvePoint>, x/y in curve
 // space) along +Z into a (steps+1)×cols positions+uv grid (MESH_DEFORM_AND_
 // CURVE_GEOMETRY_DESIGN.md D5 — normals left zero; wire node.make_triangles

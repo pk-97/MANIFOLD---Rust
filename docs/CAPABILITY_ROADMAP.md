@@ -10,7 +10,7 @@ The through-line is **size**. The gaps are not equal, and the most common mistak
 
 Pixel-side, the graph is **TouchDesigner-TOP complete and then some**: colour/tone, blur, the `coordinate-field → remap → mix` warp family, compositing, masks, feedback — no meaningful holes. On two axes we are *past* stock TD and Notch: the CV/AI stack (depth, person-segment, blob+track+1€, optical flow) and the particle/fluid sims (2D + 3D + camera-projected).
 
-The gaps are not in pixels. They are in **geometry (SOP-side), 3D shading, video IO, and the performance clocks**. Audio-in is a deliberate non-gap (see §1).
+The gaps are not in pixels. They are in **geometry (SOP-side), 3D shading, video IO, and the performance clocks**. Audio-in is a deliberate non-gap (see section 1).
 
 ---
 
@@ -19,10 +19,10 @@ The gaps are not in pixels. They are in **geometry (SOP-side), 3D shading, video
 These are settled directions. Pin them before building anything in the later sections.
 
 - **Audio stays first-class on the perform UI — never graph nodes.** No audio spectrum / FFT / band / onset primitives. The moment audio is just another graph input, Manifold concedes it's a TD patcher with a timeline bolted on. Audio reactivity routes through the perform-surface modulation path (param bindings), see [AUDIO_MODULATION_DESIGN.md](AUDIO_MODULATION_DESIGN.md). Memory: `audio-stays-on-perform-surface`.
-- **Output mapping is deferred to Resolume.** Manifold is the source-and-processing instrument; Resolume does projection mapping / warping / slicing. This only works *because* video-out (§3) is how we hand Resolume the image — the two decisions reinforce each other. Don't build mapping.
-- **Video IO becomes first-class** (§3).
-- **Timecode locks the score, not the render** (§5). Manifold is not a video server. Memory: `timecode-locks-score-not-render`.
-- **Cue-list is a subset of the planned Session mode** (§5) — build Session, not a standalone cue list.
+- **Output mapping is deferred to Resolume.** Manifold is the source-and-processing instrument; Resolume does projection mapping / warping / slicing. This only works *because* video-out (section 3) is how we hand Resolume the image — the two decisions reinforce each other. Don't build mapping.
+- **Video IO becomes first-class** (section 3).
+- **Timecode locks the score, not the render** (section 5). Manifold is not a video server. Memory: `timecode-locks-score-not-render`.
+- **Cue-list is a subset of the planned Session mode** (section 5) — build Session, not a standalone cue list.
 
 ---
 
@@ -53,12 +53,12 @@ Two mechanisms, two directions. Syphon-first because it's almost free and it's t
 
 ## 4. The 3D engine (Medium → Large)
 
-The 3D ambition — "massive scenes with dynamic lights and shadows" — is three things of very different sizes. Deferred shading (§2) is the cheap one. The rest:
+The 3D ambition — "massive scenes with dynamic lights and shadows" — is three things of very different sizes. Deferred shading (section 2) is the cheap one. The rest:
 
 - **Geometry-nodes mesh toolkit (Medium).** Extrude, subdivide, bevel, solidify, boolean, merge-by-distance, scatter-points-on-surface, plus **3D splines + curve-to-mesh** (sweep a profile along a path → tubes/ribbons — bread-and-butter VJ geometry we can't make today; our curve work is 2D-polyline only). *Do not* chase Blender's lazy-field evaluation model — `Array<T>` + named Channels already covers ~90% of it; add the *operations*, not the evaluation-model rewrite. (`for_each_n` was correctly walked back; see the graph-compiler memory.)
 - **Shadow maps (Medium).** General dynamic shadows — render scene depth from each light's POV, sample in the lighting pass. We only have the bespoke `digital_plants_render` shadow today. Pairs with deferred and spot lights; scales with shadow-casting light count.
 - **Volumetric fog / light shafts (Medium).** Screen-space pass over the G-buffer. This is what actually makes a scene *read* as massive — depth haze and visible beams beat polygon count. Notch leans on it hard.
-- **True scene graph (Large).** Multiple objects with a transform hierarchy (parent one to another, move as a unit), rendered into a shared depth buffer. Only take this on if the depth-composite atom (§2) starts feeling like a workaround. **Importing a Blender scene and building a scene graph are the same project** — a `.glb` *is* a transform hierarchy, so asset import forces (and answers) this question.
+- **True scene graph (Large).** Multiple objects with a transform hierarchy (parent one to another, move as a unit), rendered into a shared depth buffer. Only take this on if the depth-composite atom (section 2) starts feeling like a workaround. **Importing a Blender scene and building a scene graph are the same project** — a `.glb` *is* a transform hierarchy, so asset import forces (and answers) this question.
 
 ### 4.1 The Blender pipe — asset import (Large, strategic)
 
@@ -88,8 +88,8 @@ Manifold today is a *tempo-driven, improvisational* instrument (beats + clip tri
 
 Two decisions gate the big 3D work because they change what the 3D layer *is*:
 
-1. **Procedural-only, or asset-importing?** A procedural-geometry playground vs a scene compositor that also ingests authored Blender assets. Shapes everything downstream (§4.1).
-2. **Depth-composite atom, or full scene graph?** Cheap-first (§2) vs architectural (§4). The atom buys most of the "multiple objects occlude correctly" win; the scene graph is for parenting/hierarchy and is forced by asset import anyway.
+1. **Procedural-only, or asset-importing?** A procedural-geometry playground vs a scene compositor that also ingests authored Blender assets. Shapes everything downstream (section 4.1).
+2. **Depth-composite atom, or full scene graph?** Cheap-first (section 2) vs architectural (section 4). The atom buys most of the "multiple objects occlude correctly" win; the scene graph is for parenting/hierarchy and is forced by asset import anyway.
 
 ---
 

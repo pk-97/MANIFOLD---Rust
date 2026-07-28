@@ -3,7 +3,7 @@
 //!
 //! Generalisation of the older `node.rotate_vec2_90` (retired; a load-time
 //! migration folds it into this primitive with `angle` seeded to PI/2,
-//! docs/NODE_VOCABULARY_AUDIT.md §7.1). `angle` is port-shadow-param so a control wire — LFO, audio
+//! docs/NODE_VOCABULARY_AUDIT.md section 7.1). `angle` is port-shadow-param so a control wire — LFO, audio
 //! envelope, clip-trigger driver, manual slider — can sweep the
 //! rotation continuously. Defaults to `angle = PI/2` so existing
 //! presets that simply replaced `rotate_vec2_90` with this primitive
@@ -56,7 +56,7 @@ crate::primitive! {
     ],
     // depth_rule: rotates the per-pixel vector VALUE stored in RG (pointwise), not the sampling UV — distinct from node.transform/rotate_coordinates which rotate the image itself
     depth_rule: Inherit,
-    composition_notes: "BA of the input are ignored; output BA = (0, 1). Chain order for fluid-sim curl: `gradient_central_diff(scale_mode=UV, wrap_mode=Repeat) → scale_offset_texture(slope_strength * area_scale) → rotate_vec2_by_angle(angle)` — the decomposed shape of the legacy `fluid_gradient_rotate` bundle. For the oily-fluid divergence-free curl pattern, leave angle at the default PI/2 and wire a normalized gradient into `in`. For larger rotations of a UV-space transform use `node.rotate_coordinates` (different operation — that's a UV-space coordinate transform, not a per-pixel vec2 rotation). The retired `node.rotate_vec2_90` type-ID folds into this primitive at load time with `angle` seeded to PI/2 (docs/NODE_VOCABULARY_AUDIT.md §7.1); saved projects keep working unchanged.",
+    composition_notes: "BA of the input are ignored; output BA = (0, 1). Chain order for fluid-sim curl: `gradient_central_diff(scale_mode=UV, wrap_mode=Repeat) → scale_offset_texture(slope_strength * area_scale) → rotate_vec2_by_angle(angle)` — the decomposed shape of the legacy `fluid_gradient_rotate` bundle. For the oily-fluid divergence-free curl pattern, leave angle at the default PI/2 and wire a normalized gradient into `in`. For larger rotations of a UV-space transform use `node.rotate_coordinates` (different operation — that's a UV-space coordinate transform, not a per-pixel vec2 rotation). The retired `node.rotate_vec2_90` type-ID folds into this primitive at load time with `angle` seeded to PI/2 (docs/NODE_VOCABULARY_AUDIT.md section 7.1); saved projects keep working unchanged.",
     examples: [],
     picker: { label: "Rotate Vector", category: Atom },
     summary: "Rotates a 2D vector field by an angle, turning every arrow in a flow or gradient field by the same amount.",

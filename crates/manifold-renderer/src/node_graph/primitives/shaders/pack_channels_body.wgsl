@@ -1,4 +1,4 @@
-// node.pack_channels — fusable body (freeze §12), 4-input Coincident with
+// node.pack_channels — fusable body (freeze section 12), 4-input Coincident with
 // OPTIONAL-INPUT use-flags. Reads the .r of each of r/g/b/a (sampled at uv) into
 // the matching output channel; when an input is unwired (use_*==0) that channel
 // falls back to default_*. The codegen injects a use_<name> flag per optional

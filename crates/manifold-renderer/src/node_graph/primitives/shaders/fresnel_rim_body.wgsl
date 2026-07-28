@@ -1,4 +1,4 @@
-// node.rim_light — fusable body (freeze §12). Fresnel-based edge highlight
+// node.rim_light — fusable body (freeze section 12). Fresnel-based edge highlight
 // from a tangent-space normal map. Per pixel:
 //   f = pow(1 - max(dot(n, view), 0), power)
 //   out.rgb = color.rgb * f; out.a = f

@@ -1,4 +1,4 @@
-//! `docs/RAYTRACING_DESIGN.md` §8 T1-A — pre-fix oracles for BUG-311
+//! `docs/RAYTRACING_DESIGN.md` section 8 T1-A — pre-fix oracles for BUG-311
 //! (motion ghosting) and BUG-312 (static-shot speckle), through the real
 //! node path (`rt_p1_region_probe`'s scene + camera-math precedent).
 //!
@@ -289,7 +289,7 @@ const HOLD_FRAMES: usize = 1;
 const GHOST_FRAMES: usize = RAMP_FRAMES + HOLD_FRAMES;
 const GHOST_TIME_STEP: f64 = 1.0;
 
-/// FIXED by T1-C (RAYTRACING_DESIGN.md §8 Tier-1 item 1, BUG-311):
+/// FIXED by T1-C (RAYTRACING_DESIGN.md section 8 Tier-1 item 1, BUG-311):
 /// `accumulate_irradiance` now reprojects history through `prev_view_proj`
 /// before blending and rejects a depth/normal mismatch. See the doc comment
 /// above for the pre-fix vs post-fix numbers recorded for this revised
@@ -446,7 +446,7 @@ const SPECKLE_TEMPORAL_VARIANCE_THRESHOLD: f64 = 1e-5;
 const SPECKLE_SPATIAL_VARIANCE_THRESHOLD: f64 = 7e-5;
 const SPECKLE_FRAMES: usize = 8;
 
-/// PARTIALLY ADDRESSED by T1-D (RAYTRACING_DESIGN.md §8 Tier-1 item 3,
+/// PARTIALLY ADDRESSED by T1-D (RAYTRACING_DESIGN.md section 8 Tier-1 item 3,
 /// BUG-312): per-texel moment/variance tracking in `accumulate_irradiance`,
 /// a depth/normal/variance-guided à-trous spatial filter (REPLACING the
 /// old depth-only bilateral upsample), and blue-noise (R2 sequence) AO/GI

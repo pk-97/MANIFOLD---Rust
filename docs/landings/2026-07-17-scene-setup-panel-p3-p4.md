@@ -1,11 +1,11 @@
 # SCENE_SETUP_PANEL_DESIGN.md P3+P4 — landed 2026-07-17 @ 658a2acc (flow fix follow-up @ 6c7d47fc)
 
-**Branch:** wave/scene-setup-panel · **Level reached:** L3 (scripted UI-flow interaction, incl. a real held-out asset merge run and read by the orchestrating session) / target L3 (§10)
+**Branch:** wave/scene-setup-panel · **Level reached:** L3 (scripted UI-flow interaction, incl. a real held-out asset merge run and read by the orchestrating session) / target L3 (section 10)
 **Doc status line (quoted verbatim):** IN PROGRESS — P1 (column + discovery + Environment/Fog) + P2 (Objects section) + P3 (Lights + Camera sections) + P4 (Import Model merge, held-out warehouse+skull gate passed) SHIPPED 2026-07-17; P5 (modifier stack) not implemented. Sonnet-executable, orchestrated overnight. BUG-193 (no object/light remove command), BUG-194 (vertex count not computable from def), BUG-195 (merge scale-sanity has no stored object radius, defaulted proxy) opened as honest escalations, not blocking. · 2026-07-16 · Fable 5 (design session with Peter)
 
 ## Gate results (verbatim)
 
-All gates re-run independently by the orchestrating session (per DESIGN_DOC_STANDARD §8.5), including a genuine held-out-asset gate the executing worker for P4 could not run itself (its worktree lacks the gitignored fixtures).
+All gates re-run independently by the orchestrating session (per DESIGN_DOC_STANDARD section 8.5), including a genuine held-out-asset gate the executing worker for P4 could not run itself (its worktree lacks the gitignored fixtures).
 
 `cargo build --workspace` (main checkout, post-merge): clean, 43.19s.
 
@@ -15,7 +15,7 @@ All gates re-run independently by the orchestrating session (per DESIGN_DOC_STAN
 
 `cargo deny check bans`: `bans ok`.
 
-Negative gates (§4): `rg "MutateProject|Arc<Mutex|Arc<RwLock" crates/manifold-ui/src/panels/scene_setup_panel.rs` → 0 hits; `rg "Project\b" crates/manifold-renderer/src/node_graph/scene_vm.rs` → 0 hits; `layer.rs`/`ports.rs` untouched (`git diff --stat` empty against the P2 landing tip). Merge-path negative gate: `rg -n "assemble_import_graph"` inside `merge_import_into_graph`'s body → 0 hits (the merge never calls the whole-graph assembler).
+Negative gates (section 4): `rg "MutateProject|Arc<Mutex|Arc<RwLock" crates/manifold-ui/src/panels/scene_setup_panel.rs` → 0 hits; `rg "Project\b" crates/manifold-renderer/src/node_graph/scene_vm.rs` → 0 hits; `layer.rs`/`ports.rs` untouched (`git diff --stat` empty against the P2 landing tip). Merge-path negative gate: `rg -n "assemble_import_graph"` inside `merge_import_into_graph`'s body → 0 hits (the merge never calls the whole-graph assembler).
 
 **P4's held-out gate — run for real, by the orchestrator, in the main checkout** (the worktree lacks these fixtures): a new test `merges_skull_into_warehouse_held_out_real_assets` (authored by the orchestrator, `crates/manifold-renderer/tests/scene_setup_p4_heldout_merge.rs`) imports `abandoned_warehouse_-_interior_scene.glb` (35 objects), merges `skull_salazar_downloadable.glb` into it via the real production parse path, and asserts: object count grows (35→37), zero chrome node type-ids among the new nodes, and the D5 scale-sanity rule fires correctly — `report_lines: ["merged import scaled ×13.3908 to match the scene (incoming radius 1.3800 vs scene reference 18.4789)"]`, i.e. the skull (tiny relative to the warehouse) was scaled UP by the correct factor. The merged def was then validated: `graph-tool validate … --kind generator` → `OK`; `graph-tool fusion` → clean, all new nodes correctly classified as `boundary:io_bridge`/`boundary:non_gpu`. This test is now part of the default `cargo nextest run --workspace` sweep (it ran as test #3526 above) — it will only pass on a machine that has these three fixtures on disk, matching the codebase's existing convention for other large-glb-fixture tests (e.g. the azalea-fixture tests already in `gltf_import.rs`), which are likewise unconditional and un-ignored.
 
@@ -38,7 +38,7 @@ PNGs read by the orchestrator (affordance check): full panel with Lights section
 
 ## Verification debt
 
-None newly opened. BUG-193/194/195 are tracked escalations (per the doc's own §8 contract), not silent verification gaps. The flow-fix regression above was caught and closed within this same landing, not carried forward.
+None newly opened. BUG-193/194/195 are tracked escalations (per the doc's own section 8 contract), not silent verification gaps. The flow-fix regression above was caught and closed within this same landing, not carried forward.
 
 ## Click-script for Peter (≤2 minutes)
 

@@ -1,4 +1,4 @@
-// node.rotate_4d — fusable BUFFER body (freeze §12, buffer domain), COINCIDENT.
+// node.rotate_4d — fusable BUFFER body (freeze section 12, buffer domain), COINCIDENT.
 // 4D rotation (XY, ZW, XW planes) of each Vec4Vertex. Matches
 // generator_math::rotate_4d / rotate_4d.wgsl bit-for-bit (trig on-GPU both ways).
 //

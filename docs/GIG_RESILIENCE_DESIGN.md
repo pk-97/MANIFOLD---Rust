@@ -1,10 +1,8 @@
 # Gig Resilience — Red-Teaming the Live Show
 
-**Status: IN PROGRESS — P1 (`3dffe29a` P2 merge) and P2 built + merged into `feat/timeline-ui-redesign` (2026-07-03); P3–P4 not implemented. Sonnet-executable. Phases in §9.**
-**D8 status (updated 2026-07-10 — F8):** P2 shipped D8's breadcrumb-beat fallback (autonomous, plays immediately). The 2026-07-03 caveat said the "rejoin to live Ableton position" branch could not be built because the bridge had no inbound song-position field — **that is now false.** `ABLETON_TRANSPORT_SYNC` (P1–P3, landed 2026-07-07) added the inbound listener: `ableton_bridge.rs` parses `/live/song/get/current_song_time` into `PendingTransportState::song_time` (`:242`, `:891`). **Peter's decision (2026-07-10): build the `--resume` Ableton-position rejoin now.** It is remaining work here (wiring `--resume`'s D8 rejoin to the shipped `song_time` listener — a P3/P4-adjacent task; see §5.2 and §9 P4). The old "deferred to ABLETON_SHOW_SYNC, decision pending Peter" pointer is retired — transport landed in ABLETON_TRANSPORT_SYNC, and the rejoin consumes it from here.
-**Prerequisites: none for P1–P2. P3 after PERFORM_SURFACE_DESIGN P1 (`docs/DESIGN_BUILD_ORDER.md` §2).**
-**P4 priority (Peter, 2026-07-13): CRITICAL — but do NOT start yet; Peter calls the timing.** P4 (peripheral resilience, GPU-fault surfacing, thermal glyph, quarantine, D7 hardening, and the `--resume` Ableton-position rejoin) is show-critical and outranks the rest of the approved-not-built queue when scheduling resumes. P4 has no dependency on P3 and may run before the understudy.
-**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any phase.**
+**Status: IN PROGRESS — P1–P2 on main (2026-07-03); P3–P4 not implemented; phases in section 9 (Phasing). P4 priority (Peter, 2026-07-13): CRITICAL — but do NOT start yet; Peter calls the timing. P4 (peripheral resilience, GPU-fault surfacing, thermal glyph, quarantine, D7 hardening, and the `--resume` Ableton-position rejoin — Peter 2026-07-10: build it now; prerequisite landed, see section 5.2 (Boot fast path)) outranks the approved-not-built queue when scheduling resumes, and has no dependency on P3.**
+**Prerequisites: none for P1–P2. P3 after PERFORM_SURFACE_DESIGN P1 (`docs/DESIGN_BUILD_ORDER.md` section 2 (Hard dependency edges)).**
+**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before starting any phase.**
 
 MANIFOLD is a live instrument. This doc is the operational failure audit of the
 whole gig — pre-show, mid-show, recovery — and the design that makes failure
@@ -18,7 +16,7 @@ Companion designs: `docs/ABLETON_SHOW_SYNC_DESIGN.md` (the score that makes
 rejoin exact), `docs/SESSION_MODE_DESIGN.md` (the second performance surface),
 `docs/PERFORM_SURFACE_DESIGN.md` (perform mode becomes chrome-hosted — P3's
 visible arming indicators are widgets on that surface; sequencing in
-`docs/DESIGN_BUILD_ORDER.md` §2).
+`docs/DESIGN_BUILD_ORDER.md` section 2 (Hard dependency edges)).
 
 ---
 
@@ -43,7 +41,7 @@ re-verify at implementation time.
 
 | # | Finding | Evidence | Consequence on stage |
 |---|---|---|---|
-| G1 | `panic = "abort"` in release — any panic on any thread kills the whole process. Also silently disables every `catch_unwind` (the bridge's isolation is dev-only). | `Cargo.toml:113` | The show-ending event is "process dies," not "thread dies." Decided: this is CORRECT (§2 D1) — but it makes G2/G3 mandatory, and worker threads must stop relying on catch_unwind (D7). |
+| G1 | `panic = "abort"` in release — any panic on any thread kills the whole process. Also silently disables every `catch_unwind` (the bridge's isolation is dev-only). | `Cargo.toml:113` | The show-ending event is "process dies," not "thread dies." Decided: this is CORRECT (section 2 D1) — but it makes G2/G3 mandatory, and worker threads must stop relying on catch_unwind (D7). |
 | G2 | Autosave machinery exists but is never triggered — every `save_project` call passes `is_auto=false`; no timer anywhere. | `manifold-app/src/app_lifecycle.rs:58`, `project_io.rs:348,404` | Crash = everything since last Cmd+S gone. |
 | G3 | No relaunch-into-show path. Reopen, transport, bridge reconnect, output window placement: all manual. | — | Crash-to-picture measured in minutes, in the dark, mid-set. |
 | G4 | Save and load failures are log-only. No dialog, no toast. | `project_io.rs:323,358` | Disk full at soundcheck → you believe you saved; you didn't. |
@@ -69,7 +67,7 @@ re-verify at implementation time.
 - **D2 — The watchdog ("understudy") is REQUIRED, not optional.** A separate
   tiny process that covers the output display the instant the main app dies or
   hangs, plays fallback content, relaunches MANIFOLD behind itself, and hands
-  the display back on first good frame. Spec in §4. Peter: "the watchdog idea
+  the display back on first good frame. Spec in section 4. Peter: "the watchdog idea
   is fantastic."
 - **D3 — Every rung of the recovery ladder is autonomous.** Peter: "driving
   manually does not work, it defeats the purpose." No rung may require human
@@ -78,7 +76,7 @@ re-verify at implementation time.
 - **D4 — Autosave = versioned full snapshots via the existing `history/`
   mechanism.** No diff format — projects compress to a few MB; diffs are
   complexity for nothing. Peter asked for versioned revert: the archive already
-  stores it; what's missing is the trigger and the browser UI (§6).
+  stores it; what's missing is the trigger and the browser UI (section 6).
 - **D5 — Show mode is not a separate toggle: entering perform mode arms the
   protections** (watchdog spawn, Cmd+Q guard, set-start snapshot, autosave
   timer parks). Exiting disarms. Editor mode never runs the watchdog — there,
@@ -101,7 +99,7 @@ re-verify at implementation time.
   current one.** Because rejoin follows live transport, the crash beat is
   already behind you when you're back — the risk is the same content re-firing
   at the next section repeat. Quarantine = disable the suspect content for the
-  rest of the show (§5.3).
+  rest of the show (section 5.3).
 - **D10 — Cover content: black.** Peter: "just black is fine if it's going to
   recover within a few seconds." A few seconds of black reads as a lighting
   choice; recovery makes it a blink. Optional per-project fallback loop
@@ -126,8 +124,8 @@ handled) · GPU fault on one encoder (G9) · thermal throttle (G11).
 **Work-destroying** (nobody sees it until later):
 no autosave (G2) · silent save failure (G4) · crash.log overwrite (G10).
 
-The design attacks them in that order: §4–5 kill the show-enders, §6 the
-work-destroyers, §7–8 the degraders.
+The design attacks them in that order: section 4–5 kill the show-enders, section 6 the
+work-destroyers, section 7–8 the degraders.
 
 ---
 
@@ -154,7 +152,7 @@ that killed the main app. It must be boring enough to trust.
      the UI thread — it's the one that matters) writes a heartbeat every tick.
      Stall > 2 s while transport is playing → treat as hang: cover, `SIGKILL`,
      ladder. This unifies panic and hang into one recovery path (kills G8).
-3. **Relaunch.** `manifold --resume <breadcrumb-path>` per the ladder (§5).
+3. **Relaunch.** `manifold --resume <breadcrumb-path>` per the ladder (section 5).
 4. **Hand back.** Main app signals "first output frame presented" on the same
    socket → understudy fades its cover over ~300 ms and rearms.
 
@@ -166,7 +164,7 @@ cleanly or the operator disarms perform mode):
 | Crash # this show | Action |
 |---|---|
 | 1 | Cover → relaunch `--resume` → hand back. Transient crashes (races, driver hiccups) are the common case; this covers them in seconds. |
-| 2 | Same, plus pass `--quarantine <crash-report-path>` — main app disables suspect content on load (§5.3). Still fully autonomous. |
+| 2 | Same, plus pass `--quarantine <crash-report-path>` — main app disables suspect content on load (section 5.3). Still fully autonomous. |
 | 3+ | Stop relaunching. Cover stays up (black, or the loop if set) for the rest of the set. The operator decides at the next natural break — never a dialog on the output. |
 
 ### 4.3 Protocol notes
@@ -178,7 +176,7 @@ cleanly or the operator disarms perform mode):
 - The understudy never draws attention on the *control* display — status goes
   to a small strip the main app renders when connected, plus its own log file.
 - Testing: `kill -9` drills and `SIGSTOP` (hang simulation) against a running
-  perform session are the acceptance tests. See §9.
+  perform session are the acceptance tests. See section 9.
 
 ---
 
@@ -206,7 +204,7 @@ are score-addressed.
 `--resume` skips everything that isn't pixels:
 
 1. Parse breadcrumb → open project (normal open already yields last-saved
-   state, which includes autosaves — §6).
+   state, which includes autosaves — section 6).
 2. Restore output windows from breadcrumb topology (display UUID match;
    missing display → fall back to largest non-primary, then primary).
 3. Enter perform mode (which re-arms protections, D5), connect Ableton bridge.
@@ -218,7 +216,7 @@ are score-addressed.
    building it.** Wire it to the shipped inbound listener: read
    `PendingTransportState::song_time` (`ableton_bridge.rs:242/:891`, added by
    ABLETON_TRANSPORT_SYNC) — if it has updated within the ~2 s window, seek to that beat;
-   else breadcrumb beat. This is the remaining `--resume` work, briefed in §9 P4.]**
+   else breadcrumb beat. This is the remaining `--resume` work, briefed in section 9 P4.]**
 5. First frame presented → `PRESENTED` to the understudy.
 
 Engineering the number: project load at canonical scale (2 928 clips, 53
@@ -290,9 +288,9 @@ Where this attaches (verified 2026-07-03): the arming hooks ride perform
 mode's enter/exit lifecycle (`perform_mode/mod.rs` `pending_enter` /
 `pending_exit`), which survives the chrome-hosting rebuild in
 `PERFORM_SURFACE_DESIGN` P1 unchanged. The *visible* pieces — hold-progress
-indicator, understudy status strip, thermal glyph (§8) — are chrome widgets
+indicator, understudy status strip, thermal glyph (section 8) — are chrome widgets
 on the perform surface, not hand-drawn HUD. Build P3 after PERFORM_SURFACE
-P1 (`docs/DESIGN_BUILD_ORDER.md` §2) so they're built once.
+P1 (`docs/DESIGN_BUILD_ORDER.md` section 2 (Hard dependency edges)) so they're built once.
 
 ## 8. Peripheral resilience (the degraders)
 
@@ -305,7 +303,7 @@ forever → seamless re-attach. Result-hardened per D7.
 - **Audio capture (G7):** stream error callback sets a failed flag → owner
   rebuilds the stream next tick; follow default-device changes for the
   default-input path; output taps revalidate on CoreAudio device-list change
-  (`docs/AUDIO_INFRASTRUCTURE.md` §11). Analysis worker already tolerates
+  (`docs/AUDIO_INFRASTRUCTURE.md` section 11 (Output taps — system & per-app capture)). Analysis worker already tolerates
   silence; the fix is reattachment, not analysis.
 - **GPU faults (G9):** wire `add_completed_handler_with_status` on every
   submitted command buffer in the content pipeline (label = pass name). On
@@ -317,9 +315,9 @@ forever → seamless re-attach. Result-hardened per D7.
   only, v1 — no auto-degradation; the operator sees it coming instead of
   guessing.
 
-## 9. Phasing (Sonnet-executable)
+## 9. Phasing
 
-Entry state for every phase: re-verify the §1 anchors the phase touches (the
+Entry state for every phase: re-verify the section 1 anchors the phase touches (the
 audit is a 2026-07-02 snapshot). Forbidden across all phases: catch_unwind as a
 fix (dead code under `panic = "abort"` — D7 means Result-hardening, not
 catching); in-process recovery of any kind (D1); new `Arc<Mutex>`/`Arc<RwLock>`
@@ -334,10 +332,10 @@ not grow); any rung that needs human input mid-set (D3).
   Snapshot; (2) save to a full/read-only volume surfaces the UI event.
   Autosave wiring + background serialization +
   history browser + save/load error surfacing + crash.log rotation & banner.
-  Read-back: §6 whole, `archive.rs:45,143,341`, `app_lifecycle.rs:58`,
+  Read-back: section 6 whole, `archive.rs:45,143,341`, `app_lifecycle.rs:58`,
   `project_io.rs:323-404`. Forbidden: a new save path — everything routes
   through the existing `saver::save_project(…, is_auto=true)`; serializing on
-  the content or UI thread (snapshot → background thread, §6). Gate: test —
+  the content or UI thread (snapshot → background thread, section 6). Gate: test —
   edit, wait debounce, assert history entry appears + prune caps hold; save to
   a full/readonly volume surfaces a UI event (manual check); touches
   `manifold-io` save path = infrastructure → full workspace sweep.
@@ -354,9 +352,9 @@ not grow); any rung that needs human input mid-set (D3).
   + a `[Resume]` log line) — not yet run.
   Breadcrumb sidecar + `--resume` boot path + output
   window topology restore + transport rejoin (Ableton-first, breadcrumb
-  fallback) + panic-hook beat stamp. Read-back: §5 whole. Forbidden:
+  fallback) + panic-hook beat stamp. Read-back: section 5 whole. Forbidden:
   per-frame breadcrumb writes (cadence = integer-beat + transport changes,
-  §5.1); blocking IO on the content tick (pre-serialized buffer, background
+  section 5.1); blocking IO on the content tick (pre-serialized buffer, background
   write). Gate: kill the app while playing, relaunch `--resume` by hand →
   correct project, correct beat, correct output display; **profile
   crash-to-picture and report the measured number** (target: low single-digit
@@ -364,29 +362,29 @@ not grow); any rung that needs human input mid-set (D3).
 - **P3 — The understudy.** New `manifold-understudy` crate + socket protocol +
   heartbeat from content tick + cover/relaunch/handback + ladder governor +
   fallback-asset setting + perform-mode arming (spawn/disarm, Cmd+Q hold
-  guard — visible indicators are perform-surface widgets, §7). **Named line item
+  guard — visible indicators are perform-surface widgets, section 7). **Named line item
   (coherence audit F19, 2026-07-10): the panic/understudy path must call LED
   `blackout()` (`LED_STRIPS_DESIGN.md` D8) so dead render never freezes strips at
   full white — LED_STRIPS D8 names this doc as the owner but the cross-reference was
   never added here until now; wire it into the cover/relaunch path this phase, not a
-  follow-on.** Read-back: §4
-  whole, §7, PERFORM_SURFACE_DESIGN §4, `LED_STRIPS_DESIGN.md` D8. Forbidden: ANY manifold-* dependency
+  follow-on.** Read-back: section 4
+  whole, section 7, PERFORM_SURFACE_DESIGN section 4, `LED_STRIPS_DESIGN.md` D8. Forbidden: ANY manifold-* dependency
   in the understudy (negative gate: `cargo tree -p manifold-understudy` shows
   AppKit/AVFoundation bindings only — the independence rule is the design);
-  heartbeat from the UI thread (it must be the content tick, §4.1). Gate =
+  heartbeat from the UI thread (it must be the content tick, section 4.1). Gate =
   the drills, scripted in `scripts/gig_drill.sh`: `kill -9` mid-show →
   fallback pixels <100 ms + full show back autonomously (LED strips included —
   a drill run with LED patched must show blackout, not frozen white); `SIGSTOP` →
   same via hang detection; 3-crash script → cover stays, no relaunch spam. Ladder
-  table §4.2 is the test surface.
+  table section 4.2 is the test surface.
 - **P4 — Peripherals + polish.** MIDI hotplug, audio rebuild/device-follow,
-  GPU CB status wiring, thermal glyph, quarantine heuristic (§5.3),
+  GPU CB status wiring, thermal glyph, quarantine heuristic (section 5.3),
   Result-hardening pass on worker threads (D7), **`--resume` Ableton-position rejoin
-  (F8, Peter-approved 2026-07-10): wire §5 step 4's Ableton-first branch to the shipped
+  (F8, Peter-approved 2026-07-10): wire section 5 step 4's Ableton-first branch to the shipped
   `PendingTransportState::song_time` listener (`ableton_bridge.rs:242/:891`) — seek to the
   live song beat if it updated within the ~2 s window, else breadcrumb beat.** Read-back:
-  §8, §5.2, the Ableton-bridge template (`ableton_bridge.rs:564,675,702`) + the inbound
-  transport parse (`:891`). Forbidden: quarantine cleverness beyond the two §5.3
+  section 8, section 5.2, the Ableton-bridge template (`ableton_bridge.rs:564,675,702`) + the inbound
+  transport parse (`:891`). Forbidden: quarantine cleverness beyond the two section 5.3
   heuristics. Gate: focused per-crate tests + manual unplug/replug drill per peripheral;
   **for the rejoin, a kill→relaunch drill with Ableton playing lands the show at Ableton's
   current beat, not the breadcrumb beat, when the bridge reconnects inside the window;**
@@ -395,7 +393,7 @@ not grow); any rung that needs human input mid-set (D3).
 
 Testing note: P3's drills belong in a script (`scripts/gig_drill.sh`): launch,
 enter perform mode, kill/-STOP the process, assert understudy state
-transitions from its log. The ladder table in §4.2 is the load-bearing test
+transitions from its log. The ladder table in section 4.2 is the load-bearing test
 surface.
 
 ## 10. Ops checklist (no code — the laptop is part of the instrument)
@@ -403,7 +401,7 @@ surface.
 **This is the single named pre-gig checklist (coherence audit F17, 2026-07-10) —
 three other docs each add a pre-show ritual with no shared home; this section is now
 where they're named so nobody re-derives a fourth list:** the `kill -9` drill below
-(this doc, §9 P3) · **the perf soak** — `cargo xtask perf-soak` against the Liveschool
+(this doc, section 9 P3) · **the perf soak** — `cargo xtask perf-soak` against the Liveschool
 fixture (`PERF_BUDGET_GATE_DESIGN.md` P1–P3 — frame-budget regression check before a
 show) · **the recorder soak** (`LIVE_RECORDING_PROOFS_DESIGN.md`
 Tier 2 — manual pre-gig recording rehearsal). Run all three at soundcheck, not just this
@@ -420,7 +418,7 @@ soundcheck — if you haven't drilled it, you don't have it.
 - Auto-degradation on thermal/perf pressure (drop resolution before dropping
   frames) — needs the perf-gate work; telemetry first.
 - Understudy on Windows/Linux — protocol is ready; lands with the Vulkan
-  platform work (`docs/VULKAN_BACKEND_DESIGN.md` §8).
+  platform work (`docs/VULKAN_BACKEND_DESIGN.md` section 8 (Tier 2 — platform coupling beyond the GPU (inventory, one page))).
 - Quarantine beyond the two heuristics (bisection, beat-window inference).
 - A/B dual-machine failover (two laptops, one show) — different tier of rig;
   the understudy protocol is deliberately not designed for it.

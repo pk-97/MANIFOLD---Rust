@@ -57,7 +57,7 @@ All keys are **camelCase** (`#[serde(rename_all = "camelCase")]` throughout).
 - `id: u32` — document-local wire address. Wires reference it. Not stable identity.
 - `nodeId: string` — **stable identity, what bindings target.** Minted once, survives
   grouping/ungrouping/flattening. See [NODE_ID_TARGETING.md](NODE_ID_TARGETING.md).
-- `typeId: string` — the primitive, e.g. `"node.bend_mesh"`, or `"group"` (§4), or a
+- `typeId: string` — the primitive, e.g. `"node.bend_mesh"`, or `"group"` (section 4), or a
   `system.*` boundary node.
 - `handle: string?` — display/search name ONLY. Never an addressing key.
 - `params: { <name>: {"type": "Float"|"Int"|"Enum"|..., "value": ...} }` — static
@@ -120,15 +120,15 @@ legibility per [GROUPING_GRAPHS.md](GROUPING_GRAPHS.md), not granularity.
 
 ## 5. The authoring loop
 
-1. **Vocabulary first**: [NODE_CATALOG.md](NODE_CATALOG.md) §atoms + §presets; find
-   the nearest shipped preset and read it end-to-end (§2.5 discipline). No new
+1. **Vocabulary first**: [NODE_CATALOG.md](NODE_CATALOG.md) section atoms + section presets; find
+   the nearest shipped preset and read it end-to-end (section 2.5 discipline). No new
    primitives without the audit.
 2. **Edit the JSON.** Python surgery beats hand-editing for wire renumbering.
 3. **Validate**: `cargo test -p manifold-renderer --lib preset` (~0.4s) — parse,
    port/type, and compile checks for every bundled preset.
 4. **Render**: `cargo run -p manifold-renderer --release --bin render-generator-preset
    -- <PresetId> --size 1280x720 --frames 3000 --out /tmp/x.png --param id=value ...`
-   — `--param` takes outer-card ids. **Always `--frames 3000`** until BUG-117
+   — `--param` takes outer-card ids. **Always `--frames 3000`** until BUG-117 (render-generator-preset-silently-under-renders-a…)
    (silent under-render while async loads converge) ships its `--wait-converged` fix.
 5. **LOOK at the PNG — at an angle where failure would show.** An above-angle camera
    hides everything below a ground plane; a front angle hides depth errors. Render
@@ -175,7 +175,7 @@ before committing defaults.
   untouched clips read the catalog). (2026-07-11, corrected same day)
 - `render-generator-preset` under-renders async-loading presets silently — BUG-117.
   `--frames 3000` until fixed. (2026-07-11)
-- `render_scene` fog washes out the whole frame instead of depth-grading — BUG-118,
+- `render_scene` fog washes out the whole frame instead of depth-grading — BUG-118 (render-scene-fog-washes-out-instead-of-depth-gra…),
   logged, unfixed. Leave `fog_density` 0. (2026-07-11)
 - Count-param port renumbering breaks wires silently until validation. (2026-07-11)
 - Verification angle: pick the camera that would SHOW the bug. Above-angle "confirmed"
@@ -191,6 +191,6 @@ before committing defaults.
 | Graph runtime architecture | [NODE_GRAPH_SYSTEM.md](NODE_GRAPH_SYSTEM.md) |
 | Organizing a graph into groups | [GROUPING_GRAPHS.md](GROUPING_GRAPHS.md) / [NODE_GROUPS_DESIGN.md](NODE_GROUPS_DESIGN.md) |
 | Why bindings target nodeId | [NODE_ID_TARGETING.md](NODE_ID_TARGETING.md) |
-| Writing a new primitive | [ADDING_PRIMITIVES.md](ADDING_PRIMITIVES.md) (§2.5 audit first) |
+| Writing a new primitive | [ADDING_PRIMITIVES.md](ADDING_PRIMITIVES.md) (audit-precondition section first) |
 | Array/channel wire types | [CHANNEL_TYPE_SYSTEM.md](CHANNEL_TYPE_SYSTEM.md) |
 | Authoritative metadata structs | `crates/manifold-core/src/effects.rs` |

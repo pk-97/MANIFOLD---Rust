@@ -10,7 +10,7 @@
 // - 1)` (mip 0 = perfect mirror, the last mip = fully rough), writing into
 // a single-mip VIEW of the destination chain
 // (`GpuTexture::mip_level_view`). 256 importance samples per texel — the
-// F-P1 committed default (IMPORT_FIDELITY_DESIGN.md §5, "change only if
+// F-P1 committed default (IMPORT_FIDELITY_DESIGN.md section 5, "change only if
 // the cost measurement exceeds 10ms").
 
 struct PrefilterUniforms {

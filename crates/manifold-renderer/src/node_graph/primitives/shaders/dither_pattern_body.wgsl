@@ -1,4 +1,4 @@
-// node.dither_pattern — fusable body (freeze §12), SOURCE. Ordered-dither /
+// node.dither_pattern — fusable body (freeze section 12), SOURCE. Ordered-dither /
 // halftone threshold pattern (6 algorithms) in screen space. The integer pixel
 // is recovered as floor(uv*dims) (uv = (id+0.5)/dims, so floor pins it back to
 // id exactly at any resolution); pixel_pos = floor(uv*dims) + 0.5 == the hand

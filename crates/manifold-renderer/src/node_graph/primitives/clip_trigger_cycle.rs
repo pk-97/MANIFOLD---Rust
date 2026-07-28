@@ -1,4 +1,4 @@
-//! `node.clip_trigger_cycle` — the §7 clip-trigger uniqueness
+//! `node.clip_trigger_cycle` — the section 7 clip-trigger uniqueness
 //! invariant as a graph primitive. Wraps
 //! [`crate::generators::clip_trigger::ClipTriggerCycle::step`] —
 //! emits `trigger_count % modulus`, but advances by +1 when the
@@ -14,7 +14,7 @@
 //! row selection, NestedCubes's pose advance, etc.
 //!
 //! State: a single `ClipTriggerCycle` in the primitive's
-//! `extra_fields`. Reset on graph rebuild (the §10 known limit —
+//! `extra_fields`. Reset on graph rebuild (the section 10 known limit —
 //! graph editor is authoring, not performance).
 
 use std::borrow::Cow;

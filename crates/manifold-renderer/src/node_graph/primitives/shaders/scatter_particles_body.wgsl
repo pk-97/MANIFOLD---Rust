@@ -1,4 +1,4 @@
-// node.scatter_particles — BUFFER body (freeze §12, buffer domain), ATOMIC
+// node.scatter_particles — BUFFER body (freeze section 12, buffer domain), ATOMIC
 // SCATTER. Each live particle atomic-adds `scaled_energy` to its nearest
 // accumulator cell. Matches scatter_particles.wgsl `splat_main`.
 //

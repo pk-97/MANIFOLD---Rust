@@ -1,4 +1,4 @@
-// node.container_repel_force_3d — fusable BUFFER body (freeze §12, buffer
+// node.container_repel_force_3d — fusable BUFFER body (freeze section 12, buffer
 // domain), COINCIDENT multi-input. Soft container-boundary repulsion added in
 // place to a [f32;3] force buffer: within a 0.1 margin of the SDF wall, a gentle
 // inward cushion `forces -= n * t*t*0.15`. Matches container_repel_force_3d.wgsl.

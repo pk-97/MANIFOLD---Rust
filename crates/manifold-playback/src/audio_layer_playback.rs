@@ -1,5 +1,5 @@
 //! Per-clip audio-layer playback (Phase 3 of the Audio Layer feature — see
-//! `docs/AUDIO_LAYER_DESIGN.md` §4) plus the realtime modulation tap (§3R).
+//! `docs/AUDIO_LAYER_DESIGN.md` section 4) plus the realtime modulation tap (section 3R).
 //!
 //! One **kira voice per active audio clip**, keyed by `ClipId`. Each tick the
 //! content thread calls [`AudioLayerPlayback::update`]: every audio clip under
@@ -14,7 +14,7 @@
 //! lock-free ring. The content thread drains that ring into a
 //! [`StreamingSendAnalyzer`](manifold_audio::analysis::StreamingSendAnalyzer) to
 //! drive a layer-fed send's modulation — what you hear is what modulates. This
-//! replaces the old offline decode-the-whole-file approach (see §3R).
+//! replaces the old offline decode-the-whole-file approach (see section 3R).
 //!
 //! Decoding reuses [`crate::audio_sync::preload_audio`] (symphonia + encoder-delay
 //! probe), so there is no second decode path.
@@ -214,7 +214,7 @@ impl AudioLayerPlayback {
         let beat = engine.current_beat();
         let now = engine.current_time();
         let state = engine.current_state();
-        // Audio layers have their own solo bus (design §5): a soloed audio layer
+        // Audio layers have their own solo bus (design section 5): a soloed audio layer
         // silences other audio layers, independent of the visual solo.
         let any_solo = project.timeline.layers.iter().any(|l| l.is_audio() && l.is_solo);
 
@@ -224,7 +224,7 @@ impl AudioLayerPlayback {
             // silence-decaying stream even while the layer is paused or muted.
             self.ensure_layer_track(&layer.layer_id);
 
-            // Output state (design §5): two gates from two flags.
+            // Output state (design section 5): two gates from two flags.
             // - `tap_hot`: the layer feeds its post-fader send tap (drives visuals).
             //   Analysis-only is NOT muted, so it stays hot.
             // - `master_hot`: the layer reaches the speakers. Analysis-only cuts
@@ -494,7 +494,7 @@ impl AudioLayerPlayback {
     }
 }
 
-/// Realtime-tap path (steps 2–3 of the §3R plan): proves a clip routed to a
+/// Realtime-tap path (steps 2–3 of the section 3R plan): proves a clip routed to a
 /// layer's sub-track is captured post-fader off the [`LayerTap`] and reaches the
 /// content thread through [`AudioLayerPlayback::drain_layer_tap`] — the exact
 /// signal the send analyzer consumes. Ignored because it opens the default
@@ -555,7 +555,7 @@ mod layer_tap_tests {
     /// to master), the `LayerTap` must STILL stream the tone — proving the tap reads
     /// the frame *before* the output volume. If this fails, kira applies the
     /// sub-track volume before the effect chain and analysis-only needs a different
-    /// tap point (see AUDIO_LAYER_DESIGN §5).
+    /// tap point (see AUDIO_LAYER_DESIGN section 5).
     #[test]
     #[ignore = "opens the default audio output device; run with --ignored"]
     fn tap_stays_hot_when_subtrack_muted_to_master() {

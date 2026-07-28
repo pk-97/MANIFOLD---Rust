@@ -1,4 +1,4 @@
-// node.simplex_field_2d — fusable body (freeze §12), SOURCE. 3D Perlin-style
+// node.simplex_field_2d — fusable body (freeze section 12), SOURCE. 3D Perlin-style
 // simplex noise at (uv*scale + offset, z); the signed value is written to the
 // selected output channel. Helpers verbatim from simplex_field_2d.wgsl. PARAMS:
 // [scale_x, scale_y, offset_x, offset_y, z, output_channel (Enum -> u32)].

@@ -74,7 +74,7 @@ impl InspectorCompositePanel {
     /// laid out left→right starting at `x`. Returns the x after the last control.
     /// They act on the active tab's column (the single source of truth).
     fn build_tab_controls(&mut self, tree: &mut UITree, x: f32, y: f32, h: f32) -> f32 {
-        // §6b — compact toggle (cog): hide every card's modulation config drawers
+        // section 6b — compact toggle (cog): hide every card's modulation config drawers
         // while keeping mods armed. The kit toggle — accent fill when engaged.
         let id = tree.add_button(
             None,
@@ -373,7 +373,7 @@ impl InspectorCompositePanel {
 
         self.viewport_rect = rect;
 
-        // §6b — propagate global compact mode to every card before layout, so
+        // section 6b — propagate global compact mode to every card before layout, so
         // compute_height and build agree on whether drawers are hidden.
         self.apply_mods_compact();
 

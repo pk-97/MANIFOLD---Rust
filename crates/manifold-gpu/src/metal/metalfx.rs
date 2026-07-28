@@ -183,7 +183,7 @@ pub fn metalfx_temporal_available() -> bool {
 }
 
 /// MetalFX Temporal Scaler — motion-vector-fed upscaling with history
-/// accumulation (RAYTRACING_DESIGN.md §5.2 P4). Unlike the spatial scaler,
+/// accumulation (RAYTRACING_DESIGN.md section 5.2 P4). Unlike the spatial scaler,
 /// it consumes depth + motion vectors alongside color and blends across
 /// frames; callers must supply a camera-jitter sequence on the color source
 /// and drive [`Self::encode`]'s `reset` flag on scene cuts (D3) — the reset
@@ -254,7 +254,7 @@ impl MetalFxTemporalScaler {
             scaler.setInputContentWidth(input_width as usize);
             scaler.setInputContentHeight(input_height as usize);
             // Motion vectors arrive in NDC-space `(dx, dy)` per pixel
-            // (GBUFFER_DESIGN.md §2 D5 — the format W0 stores). MetalFX
+            // (GBUFFER_DESIGN.md section 2 D5 — the format W0 stores). MetalFX
             // expects motion in pixel units: multiplying by half the
             // render-resolution converts an NDC delta spanning [-1, 1]
             // across the full input width/height into pixels.

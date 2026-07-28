@@ -72,9 +72,9 @@ For each segment, build a **concatenated def**:
    keeps pushing frame scalars to its own.
 
 Then `fuse_segment(concat_def, per_card_bindings)` runs the **existing** pipeline:
-`partition_regions` → region mask (see §4) → codegen → `FusedDef { def, retarget,
+`partition_regions` → region mask (see section 4) → codegen → `FusedDef { def, retarget,
 expected_spaces }` → `fused_def_builds` validation. A region that spans a seam is just a
-region. The result is cached (see §3) as a `SegmentView`:
+region. The result is cached (see section 3) as a `SegmentView`:
 
 - the fused segment def (spliced **once** in place of the cards' individual splices);
 - per-card retargeted static binding lists (namespace-prefixed lookup into the shared
@@ -94,7 +94,7 @@ Binding parity note: there is no generator analog of a card *chain* — generato
 cards rendered through `JsonGraphGenerator::from_def`. The only shared machinery touched is
 the effect-side `retarget_bindings`; `retarget_binding_defs` (generator) has no cross-card
 case. The real future seam — generator output → first effect card — crosses two runtimes
-and is explicitly out of v1 (noted in §7).
+and is explicitly out of v1 (noted in section 7).
 
 ## 3. Cache key and lifecycle
 
@@ -126,7 +126,7 @@ masked and measured through `measure_def` like any multi-region card. Two refine
   Only seam-spanning regions are genuinely novel measurements.
 - **When measurement happens** (never-stall constraint):
   - *Project load:* chains are known from the project file. Load enqueues every chain's
-    segments for compile + measure on the worker (§5) immediately, before the show starts.
+    segments for compile + measure on the worker (section 5) immediately, before the show starts.
     A chain dispatched before its verdict lands renders per-card (current performance)
     until the swap — degraded-to-today, never stalled.
   - *Live edit:* the novel segment compiles + measures in the background. Live-edit
@@ -162,7 +162,7 @@ Live-edit sequence (reorder / insert / delete / bypass / skip flip / editor open
    `needs_rebuild` adds `cg.has_pending_segments() && generation_advanced`. The next
    dispatch rebuilds, hits the cache, splices fused.
 
-**Status: BUILT (2026-06-11), and broader than first scoped — the harvest runs on EVERY
+**Status: BUILT, and broader than first scoped — the harvest runs on EVERY
 chain rebuild, not just the swap-in.** Reordering, adding, removing, or bypassing a card
 no longer resets the other cards' sims and trails at all (the pre-existing wipe-on-rebuild
 wart is gone, per Peter's direction while dialing in chains). Three pieces, because state

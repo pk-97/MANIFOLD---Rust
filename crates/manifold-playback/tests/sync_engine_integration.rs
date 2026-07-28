@@ -37,7 +37,7 @@ fn tick(engine: &mut PlaybackEngine, realtime: &mut f64, frame: &mut u64, dt: f6
     result
 }
 
-/// §11 `video_sync_interval` = 2.0s (asserted directly on the default
+/// section 11 `video_sync_interval` = 2.0s (asserted directly on the default
 /// engine — this is the ruled-correct constant). The cadence *behavior*
 /// below runs with a shortened interval purely so the test is fast; the
 /// gate mechanism under test (`current_time - last_sync_time >=
@@ -71,7 +71,7 @@ fn single_video_clip_project(bpm: f32) -> Project {
     project
 }
 
-/// §5 / §11: `correct_video_drift` re-seeks a player whose reported time
+/// section 5 / section 11: `correct_video_drift` re-seeks a player whose reported time
 /// has drifted > 0.1s from the expected source time — but only on the
 /// `video_sync_interval` cadence, not every frame.
 ///
@@ -90,7 +90,7 @@ fn drift_correction_reseeks_only_after_cadence_interval() {
     engine.initialize(project);
     engine.set_state(PlaybackState::Playing);
     // Shrink the cadence for a fast test — the mechanism under test is the
-    // gate itself; §11's literal 2.0s default is asserted separately above.
+    // gate itself; section 11's literal 2.0s default is asserted separately above.
     let interval = Seconds(0.5);
     engine.set_video_sync_interval(interval);
 
@@ -174,7 +174,7 @@ fn looping_project() -> Project {
     project
 }
 
-/// §5: a custom-loop-duration clip restarts at its `in_point` once the
+/// section 5: a custom-loop-duration clip restarts at its `in_point` once the
 /// player's reported time reaches `in_point + loop_len_sec` —
 /// `check_custom_loop_boundaries`, driven by the real engine.
 #[test]
@@ -256,7 +256,7 @@ fn clip_start_anchors_recently_started_gate_on_real_clock_not_zero_epoch() {
     let mut frame = 0_u64;
 
     // Advance the engine's wall clock well past the 0.1s gate window
-    // (§11 RECENTLY_STARTED_TIME) while STOPPED. `tick()` stamps
+    // (section 11 RECENTLY_STARTED_TIME) while STOPPED. `tick()` stamps
     // `last_realtime_now` unconditionally at its top regardless of playback
     // state (engine.rs `last_realtime_now = ctx.realtime_now.0`), so by the
     // time `play()` is called below, the clock already reads ~2s — this is

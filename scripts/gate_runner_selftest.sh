@@ -200,10 +200,10 @@ echo ""
 echo "--- P2 Test 1: pre-wave against live fleet ---"
 OUT=$("$GATE_RUNNER" pre-wave 2>&1) && RC=$? || RC=$?
 if [ "$RC" -eq 0 ]; then ok "pre-wave exit 0"; else fail "pre-wave exit $RC (expected 0): $(echo "$OUT" | tail -3)"; fi
-# Must print five check lines
+# Must print eight check lines (P2's five + hook liveness x2 + enforcement manifest)
 CHECK_COUNT=$(echo "$OUT" | grep -cE '^\s+\[(PASS|FAIL|WARN)\]' || true)
-if [ "$CHECK_COUNT" -eq 5 ]; then ok "pre-wave prints 5 check lines"; else fail "pre-wave prints $CHECK_COUNT check lines (expected 5)"; fi
-echo "$OUT" | grep -qE 'pre-wave: [0-9]+/5 checks passed' && ok "pre-wave summary line" || fail "pre-wave missing summary line"
+if [ "$CHECK_COUNT" -eq 8 ]; then ok "pre-wave prints 8 check lines"; else fail "pre-wave prints $CHECK_COUNT check lines (expected 8)"; fi
+echo "$OUT" | grep -qE 'pre-wave: [0-9]+/8 checks passed' && ok "pre-wave summary line" || fail "pre-wave missing summary line"
 echo ""
 
 # Clean up the pre-wave verdict from live run so induced-failure test starts clean
@@ -238,7 +238,7 @@ assert v['schema'] == 1, 'schema != 1'
 assert v['phase'] == 'pre-wave', 'phase != pre-wave'
 assert v['kind'] == 'gate', 'kind != gate'
 assert 'preflight' in v['runner'], 'runner missing preflight'
-assert len(v['gates']) == 5, f'expected 5 gates, got {len(v[\"gates\"])}'
+assert len(v['gates']) == 8, f'expected 8 gates, got {len(v[\"gates\"])}'
 # At least one gate must be failure (the liveliness one)
 assert not v['pass'], 'verdict should not pass with bad liveliness'
 print('schema validation: OK')
@@ -256,7 +256,7 @@ echo "=== P3 pre-dispatch tests ==="
 echo ""
 
 # --- P3 Test 1: synthetic broken brief ---
-echo "--- P3 Test 1: broken brief fails all 4 checks ---"
+echo "--- P3 Test 1: broken brief fails all lint checks ---"
 BRIEF_BROKEN=$(mktemp /tmp/gate_selftest_broken.XXXXXX.md)
 cat > "$BRIEF_BROKEN" << 'EOF'
 # Broken brief for pre-dispatch lint
@@ -281,7 +281,7 @@ rm -f "$BRIEF_BROKEN"
 echo ""
 
 # --- P3 Test 2: synthetic good brief ---
-echo "--- P3 Test 2: good brief passes all 4 checks ---"
+echo "--- P3 Test 2: good brief passes all lint checks ---"
 # Create a real temp file as an anchor target
 BRIEF_GOOD=$(mktemp /tmp/gate_selftest_good.XXXXXX.md)
 TMP_RS=$(mktemp /tmp/gate_selftest_target.XXXXXX.rs)

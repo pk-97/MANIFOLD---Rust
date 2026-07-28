@@ -1,4 +1,4 @@
-// node.remap — fusable body (freeze §12), the first GATHER atom. `source` is a
+// node.remap — fusable body (freeze section 12), the first GATHER atom. `source` is a
 // Gather input: the body samples it at a coordinate it COMPUTES (a dependent
 // sample), so the codegen passes the texture + sampler as args rather than a
 // pre-read register. `uv_field` is Coincident (sampled at the fragment uv) and

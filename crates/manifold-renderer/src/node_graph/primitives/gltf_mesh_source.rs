@@ -25,7 +25,7 @@ use crate::node_graph::primitive::Primitive;
 /// arbitrary scale/origin; `unit_box` normalizes it so deformer defaults and
 /// `node.mesh_ramp`'s 0..1 bounds are meaningful without a separate
 /// `normalize_mesh` GPU atom (which would need a same-frame GPU->CPU bounds
-/// readback, forbidden by DECOMPOSING §7).
+/// readback, forbidden by DECOMPOSING section 7).
 pub const GLTF_FIT_MODES: &[&str] = &["none", "unit_box"];
 
 /// Apply the `fit`/`recenter` transform to a freshly parsed vertex set,
@@ -545,7 +545,7 @@ mod tests {
 
     #[test]
     fn fit_none_is_a_byte_identical_no_op() {
-        // The old-preset-unaffected proof (D7, §3 gate): fit=none never
+        // The old-preset-unaffected proof (D7, section 3 gate): fit=none never
         // touches position/normal/uv, regardless of recenter.
         let verts = off_scale_off_center_verts();
         let out_a = apply_mesh_fit(verts.clone(), false, true);

@@ -343,13 +343,13 @@ fn unrelated_layer_edge_after_reorder_does_not_confuse_the_gate() {
     );
 }
 
-// ── PARAM_STEP_ACTIONS P3 round-trip gate (DESIGN_DOC_STANDARD §5, BUG-036
+// ── PARAM_STEP_ACTIONS P3 round-trip gate (DESIGN_DOC_STANDARD section 5, BUG-036
 // rule) ──────────────────────────────────────────────────────────────────
 //
 // The P1 unit test (`modulation.rs`'s `serde round-trip` test) only proves
 // `serde_json::to_string`/`from_str` round-trips the isolated
 // `ParameterAudioMod` struct in memory. That is HALF the gate for stateful
-// features (§5): it never drives the real `manifold-io` save/load pipeline
+// features (section 5): it never drives the real `manifold-io` save/load pipeline
 // (path resolution, migrations, post-load validation) that a saved show
 // file actually goes through, and it never re-fires the mod afterward. This
 // test exercises the full stack: build a project with an armed Step mod,

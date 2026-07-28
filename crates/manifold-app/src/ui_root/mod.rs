@@ -30,7 +30,7 @@ mod overlay;
 /// then forces the wiring. See `docs/OVERLAY_SYSTEM_DESIGN.md`.
 ///
 /// `pub(crate)`: `text_input::TextSessionOwner` (`OVERLAY_SESSIONS_AND_PICKER_DESIGN.md`
-/// §3, D2) tags a text session with the id of the overlay hosting it, so the
+/// section 3, D2) tags a text session with the id of the overlay hosting it, so the
 /// crate needs to name overlays outside this module.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OverlayId {
@@ -38,7 +38,7 @@ pub(crate) enum OverlayId {
     Dropdown,
     // Audio Setup is no longer an overlay — it is a `ScreenLayout` dock column
     // built from the root pass and routed at the docked-panel site
-    // (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` D1/§3.5).
+    // (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` D1/section 3.5).
     Settings,
     BrowserPopup,
     AbletonPicker,
@@ -67,7 +67,7 @@ impl OverlayId {
 /// [`UIRoot::resolve_drag_owner`], cleared by the terminal broadcast (D2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DragOwner {
-    /// An open overlay claimed it (modal, or origin inside its rect — §3.2).
+    /// An open overlay claimed it (modal, or origin inside its rect — section 3.2).
     Overlay(OverlayId),
     /// The timeline tracks surface → stashed to `InteractionOverlay`.
     TimelineTracks,
@@ -265,7 +265,7 @@ pub struct UIRoot {
 
     /// `PanelAction`s produced by keyboard-driven overlay picking outside the
     /// normal per-frame event queue (`OVERLAY_SESSIONS_AND_PICKER_DESIGN.md`
-    /// §4/§5 P2 arrow/Enter nav). An active `SearchFilter` text session
+    /// section 4/section 5 P2 arrow/Enter nav). An active `SearchFilter` text session
     /// intercepts keys in `window_input.rs` before they ever reach
     /// `route_overlay_event`, so the browser popup's `handle_key_nav` is
     /// called directly from there; the resulting action is stashed here and
@@ -332,7 +332,7 @@ pub struct UIRoot {
     pub overlay_draw: Vec<(usize, usize)>,
     /// On-screen rect of each OPEN overlay as of the last `build_overlays` —
     /// the same `rect` value passed to that overlay's `build_at`. Read by
-    /// `overlay_contains_point` (D5, `docs/DRAG_CAPTURE_DESIGN.md` §2) so the
+    /// `overlay_contains_point` (D5, `docs/DRAG_CAPTURE_DESIGN.md` section 2) so the
     /// window-seam press interceptors in `window_input.rs` can yield to a
     /// floating overlay instead of punching straight through it. Limitation:
     /// `Anchor::SelfManaged` overlays (dropdown, browser popup, Ableton
@@ -357,7 +357,7 @@ pub struct UIRoot {
     /// [`detect_overlay_open_change`]: UIRoot::detect_overlay_open_change
     overlay_open_snapshot: u8,
     /// Overlays whose `is_open()` flipped false since the last drain —
-    /// `OVERLAY_SESSIONS_AND_PICKER_DESIGN.md` §3, D2. Populated by
+    /// `OVERLAY_SESSIONS_AND_PICKER_DESIGN.md` section 3, D2. Populated by
     /// `route_overlay_event` (covers Escape and normal click routing for both
     /// windows) and `note_overlay_closed_if` (covers the graph-editor window's
     /// bespoke browser-popup routing, which bypasses `route_overlay_event`).
@@ -1411,7 +1411,7 @@ impl UIRoot {
         // `DropdownPanel::update`'s own guard) — cheap to call unconditionally.
         self.dropdown.update(&mut self.tree);
         // Same D17 enter, mirrored to the other three popups (P2 batch 2 —
-        // `UI_CRAFT_AND_MOTION_PLAN.md` §5 item 4: "universal popup enter").
+        // `UI_CRAFT_AND_MOTION_PLAN.md` section 5 item 4: "universal popup enter").
         self.ableton_picker.update(&mut self.tree);
         self.browser_popup.update(&mut self.tree);
         self.settings_popup.update(&mut self.tree);
@@ -1444,7 +1444,7 @@ impl UIRoot {
         self.inspector.update_fire_meters(&mut self.tree, &|key| fire_meters.get(key), dt);
     }
 
-    /// P7 (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` §7.2 item 5):
+    /// P7 (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` section 7.2 item 5):
     /// the send whichever fire-mode drawer is currently open in the inspector
     /// is reading, if any. `manifold_core::AudioSendId` is
     /// `manifold_foundation::AudioSendId` re-exported at its historical path

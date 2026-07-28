@@ -10,8 +10,8 @@
 //! App-internal module (no new crate, no new dependency, no thread-residency
 //! change) — everything here is `pub(crate)`.
 //!
-//! ── Deviations from the design doc's §4 committed signatures
-//! (`UI_HARNESS_UNIFICATION_DESIGN.md` §4), found at VERIFY-AT-IMPL and
+//! ── Deviations from the design doc's section 4 committed signatures
+//! (`UI_HARNESS_UNIFICATION_DESIGN.md` section 4), found at VERIFY-AT-IMPL and
 //! reported to the orchestrator rather than silently absorbed — see the P1
 //! phase report for the full escalation writeup:
 //!
@@ -62,7 +62,7 @@
 //!    substituted. All seven are cached/computed once per frame by the
 //!    caller exactly as before; nothing here recreates GPU state.
 //! 4. `apply_ui_frame_invalidations` clears `signals.scrolled_in_place`
-//!    after consuming it (not documented as a write-back field in §4 — only
+//!    after consuming it (not documented as a write-back field in section 4 — only
 //!    `needs_rebuild` was). The live App builds `signals` fresh every tick
 //!    so this is a no-op for it either way; the P0 harness reuses one
 //!    `UiFrameSignals` across many simulated frames, and without the clear
@@ -83,12 +83,12 @@
 //!    frames (cosmetic — those frames had nothing to time anyway).
 //!
 //! ── `render_main_ui_passes` (P2, `HARNESS_FIDELITY_INVARIANT_PROPOSAL.md`
-//! §4 step 2) — additional deviations found at VERIFY-AT-IMPL:
+//! section 4 step 2) — additional deviations found at VERIFY-AT-IMPL:
 //!
 //! 6. Profiling is split by value, not deleted. The async **GPU-time sink**
 //!    IS preserved: it's threaded in as `MainUiPassInputs::gpu_sink`
 //!    (`Option<(Arc<AtomicU64>, Arc<AtomicU64>)>`, fed by
-//!    `UiFrameProfile::gpu_sink()`; `None` headless — §3 input presence) and
+//!    `UiFrameProfile::gpu_sink()`; `None` headless — section 3 input presence) and
 //!    the seam attaches `encoder.add_gpu_time_handler(...)` before its
 //!    commit, so the "our GPU work vs. content-thread starvation" attribution
 //!    the frame-pacing investigations depend on is unchanged. What DID
@@ -116,7 +116,7 @@
 //!    `#[cfg(target_os = "macos")]` on `Application` — see `app.rs`) — the
 //!    seam only ever sees `Option<ThumbPass>`/`Option<&mut VqtPassState>`,
 //!    already `None` on a non-mac build via the caller's own
-//!    `#[cfg(not(target_os = "macos"))]` arm. Input-presence branching (§3),
+//!    `#[cfg(not(target_os = "macos"))]` arm. Input-presence branching (section 3),
 //!    not caller-identity — the seam doesn't know or care which platform
 //!    left the input `None`.
 //! 9. The live caller gates the ENTIRE `render_main_ui_passes` call on
@@ -356,7 +356,7 @@ pub(crate) struct VqtPassState<'a> {
     pub content_low_hz: f32,
     pub content_mid_hz: f32,
     pub scope_cursor_y: f32,
-    /// P7 (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` §7.2 item 5):
+    /// P7 (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` section 7.2 item 5):
     /// the band a currently-open fire-mode drawer is reading, if any — `Some`
     /// dims the spectrum outside it, `None` (no drawer open, or Full band)
     /// dims nothing. Caller-resolved from `UIRoot::open_fire_mode_drawer_band`.
@@ -367,7 +367,7 @@ pub(crate) struct VqtPassState<'a> {
 /// content-thread atlas texture, and this frame's resolved quad list —
 /// atlas and quads are caller-resolved (content-thread atlas live;
 /// `thumbs::make_test_atlas`/`build_quads` headless via `--thumbs`; both
-/// absent → `None`, §3).
+/// absent → `None`, section 3).
 pub(crate) struct ThumbPass<'a> {
     pub gpu: &'a mut ClipThumbGpu,
     pub atlas: &'a GpuTexture,
@@ -381,7 +381,7 @@ pub(crate) type LandingFlash = (f32, Beats, usize, usize);
 
 /// Caller-resolved per-pass data for [`render_main_ui_passes`]. Every
 /// `Option`/empty field is a legitimate "input absent"
-/// (`HARNESS_FIDELITY_INVARIANT_PROPOSAL.md` §3): the live app fills what it
+/// (`HARNESS_FIDELITY_INVARIANT_PROPOSAL.md` section 3): the live app fills what it
 /// has this frame; the harness fills the subset it can resolve headless and
 /// leaves the rest `None`/empty. A pass whose input is absent skips itself
 /// — the live app skips the same pass on a frame whose own input happens to
@@ -418,7 +418,7 @@ pub(crate) struct MainUiPassInputs<'a> {
     // seam's command-buffer completion handler before commit. `Some` only when
     // the live app's `MANIFOLD_UI_FRAME_PROFILE` profiler is enabled
     // (`UiFrameProfile::gpu_sink()`); `None` headless — no perf HUD there
-    // (§3 input presence, not caller identity).
+    // (section 3 input presence, not caller identity).
     pub gpu_sink: Option<(std::sync::Arc<std::sync::atomic::AtomicU64>, std::sync::Arc<std::sync::atomic::AtomicU64>)>,
 }
 
@@ -429,14 +429,14 @@ pub(crate) struct MainUiPassInputs<'a> {
 /// (`present_all_windows`) and the headless harness (`render_ui_to_png`,
 /// `script.rs`'s `Runner`). Branches only on input presence (an
 /// absent/empty field on `inputs`), never on caller identity
-/// (`HARNESS_FIDELITY_INVARIANT_PROPOSAL.md` §3): every skip here is a skip
+/// (`HARNESS_FIDELITY_INVARIANT_PROPOSAL.md` section 3): every skip here is a skip
 /// the live app itself takes on a frame whose own input happens to be
 /// absent. Commits its own encoder (mirrors `composite_main_ui_frame`'s
 /// internal commit) — the caller creates no encoder of its own for these
 /// passes.
 /// Precedent: `present_all_windows` (pre-extraction) :3920-4695; deletes the
 /// harness's `draw_immediate_passes` and its overlay pass (BUG-097, closed
-/// by construction — see `HARNESS_FIDELITY_INVARIANT_PROPOSAL.md` §4 step
+/// by construction — see `HARNESS_FIDELITY_INVARIANT_PROPOSAL.md` section 4 step
 /// 1, not point-fixed).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn render_main_ui_passes(
@@ -499,7 +499,7 @@ pub(crate) fn render_main_ui_passes(
     }
 
     // Pass 4b': Per-clip waveform textures, painted INSIDE the audio-clip
-    // bodies (§24 5b). Reuses the visible-clip list resolved in 4b; only audio
+    // bodies (section 24 5b). Reuses the visible-clip list resolved in 4b; only audio
     // clips with a decoded waveform cost anything, and a still timeline
     // re-uploads nothing (textures are cached per clip).
     if let Some(content_gpu) = clip_content_gpu.as_mut()
@@ -508,11 +508,11 @@ pub(crate) fn render_main_ui_passes(
         content_gpu.render(device, &mut encoder, offscreen, logical_w, logical_h, sf, tracks, clip_rects);
     }
 
-    // Pass 4b″: Clip thumbnails (§24 5c) — blit each visible generator/video
+    // Pass 4b″: Clip thumbnails (section 24 5c) — blit each visible generator/video
     // clip's atlas cell (published by the content thread, or a labeled test
     // fixture headless) into its body, after the waveform pass, centre-cropped
     // to the body aspect and masked to the rounded shape. Atlas + quads are
-    // caller-resolved (§3); this pass only decides whether to draw.
+    // caller-resolved (section 3); this pass only decides whether to draw.
     if let Some(thumb) = thumb
         && !thumb.quads.is_empty()
     {
@@ -574,19 +574,19 @@ pub(crate) fn render_main_ui_passes(
         }
     }
 
-    // Clip name labels (§24 5b) — on top of the bodies + waveforms, at
+    // Clip name labels (section 24 5b) — on top of the bodies + waveforms, at
     // BASE depth (under the dropdown/modal overlays). Reuses the visible
     // clip list resolved for the Pass 4b body emission this frame.
     manifold_renderer::clip_draw::emit_clip_names(ui_renderer, clip_rects, tracks);
 
-    // Automation lane strips (P4, `docs/AUTOMATION_LANES_DESIGN.md` §7) —
+    // Automation lane strips (P4, `docs/AUTOMATION_LANES_DESIGN.md` section 7) —
     // on top of the clip names, same overlay pass. Empty whenever
     // automation mode is off (the caller never populated any lanes this
     // frame), so this is a no-op cost in the common case.
     manifold_renderer::automation_lane_draw::emit_automation_lanes(ui_renderer, automation_lanes, tracks);
 
     // Playhead — a red line spanning ruler + tracks, capped by a downward
-    // triangle head at the top of the ruler (§24 5e). The head is the
+    // triangle head at the top of the ruler (section 24 5e). The head is the
     // single dominant "now" marker so it never competes with the blue
     // insert cursor for "where am I".
     if let Some(px) = ui_root.viewport.playhead_pixel() {
@@ -613,7 +613,7 @@ pub(crate) fn render_main_ui_passes(
         );
     }
 
-    // Horizontal scrollbar (§24 5e): a slim track + draggable thumb in the
+    // Horizontal scrollbar (section 24 5e): a slim track + draggable thumb in the
     // reserved strip below the tracks. Geometry comes from the viewport —
     // the same source the drag hit-test uses — so the drawn thumb and the
     // grabbable region can't drift. Drawn here as GPU rects, like the
@@ -807,7 +807,7 @@ pub(crate) fn render_main_ui_passes(
     // profiler whether next_drawable's block is our own GPU work (heavy
     // offscreen) or external starvation (content thread hogging the shared
     // GPU). `Some` only when the live app's frame profiler is enabled; `None`
-    // headless (§3 input presence). Precedent: `present_all_windows`
+    // headless (section 3 input presence). Precedent: `present_all_windows`
     // (pre-extraction) :4671-4676, which timed this same "Frame" encoder.
     if let Some((sink_us, sink_n)) = gpu_sink {
         encoder.add_gpu_time_handler(move |secs| {

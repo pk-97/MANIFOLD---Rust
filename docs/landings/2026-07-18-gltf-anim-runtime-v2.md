@@ -22,7 +22,7 @@ Keyframe payload moved out of graph defs into a shared file-backed cache (`gltf_
 | dragon (52 clips, 5.41 M keys) | 1.42–1.46 GB across 4 poses | 5.19 GB (−72%) | instructions 125 G → ~16.7 G (−87%); 4 pairwise-distinct PNGs, jaw visibly animates |
 | blossom control (static) | 0.40 GB | 0.43 GB | no regression |
 
-Original `< 1 GB` gate was a design-time estimate — **revised transparently** (design §3): measured floor is 0.40 GB; residual attributed (inference, unproven) to per-source-node whole-file parses → **BUG-247**. Peter's reported after-delete GUI-FPS symptom on static assets → **BUG-248** (needs in-app profile). BUG-190's 370 ms figure not re-measured in-app; entry noted, left OPEN.
+Original `< 1 GB` gate was a design-time estimate — **revised transparently** (design section 3): measured floor is 0.40 GB; residual attributed (inference, unproven) to per-source-node whole-file parses → **BUG-247**. Peter's reported after-delete GUI-FPS symptom on static assets → **BUG-248** (needs in-app profile). BUG-190's 370 ms figure not re-measured in-app; entry noted, left OPEN.
 
 **Verification level:** L2 (PNG artifacts read by orchestrator: `/tmp/drogon_v2_t{0.5,1.5,2.5,3.5}.png`, `/tmp/blossom_v2.png`). L4 pending Peter.
 **Verification debt:** in-app steady-state frame time + delete-recovers-memory observation are unverified headlessly — carried as BUG-248 + the BUG-190 note (no separate VD entry; the bugs are the ledger here).

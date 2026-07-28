@@ -160,7 +160,7 @@ fn main() {
             crate::rt_capture::run(&args[1..]);
         }
     }
-    // --- `--resume <breadcrumb-path>` (GIG_RESILIENCE_DESIGN §5.2) ---
+    // --- `--resume <breadcrumb-path>` (GIG_RESILIENCE_DESIGN section 5.2) ---
     // The crash-recovery relaunch path: `manifold --resume <path>` skips
     // everything that isn't pixels. Parsed here (no other CLI arg parsing
     // exists in this binary — see `crash_log_tests` module for the closest
@@ -180,7 +180,7 @@ fn main() {
                 .unwrap_or_default();
             d.as_secs()
         };
-        // Score-address the crash report (GIG_RESILIENCE_DESIGN §5.1): the
+        // Score-address the crash report (GIG_RESILIENCE_DESIGN section 5.1): the
         // content-state drain publishes the latest known beat to a single
         // atomic every UI frame (`breadcrumb::publish_beat_for_crash_log`);
         // read it here since a panic hook has no `&Application` to call
@@ -219,7 +219,7 @@ fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     log::info!("MANIFOLD starting...");
 
-    // --- Unclean-exit detection (GIG_RESILIENCE_DESIGN §6, G10) ---
+    // --- Unclean-exit detection (GIG_RESILIENCE_DESIGN section 6, G10) ---
     // A sentinel file lives for the duration of a session and is removed on
     // clean exit. Finding it at startup means the last session ended in a
     // panic-abort, kill, or power loss — surface one quiet notice so the
@@ -249,7 +249,7 @@ fn main() {
 }
 
 // ---------------------------------------------------------------------------
-// `--resume` CLI parsing (GIG_RESILIENCE_DESIGN §5.2)
+// `--resume` CLI parsing (GIG_RESILIENCE_DESIGN section 5.2)
 // ---------------------------------------------------------------------------
 
 /// Parse `--resume <breadcrumb-path>` out of the process arguments. Returns
@@ -262,7 +262,7 @@ fn parse_resume_arg(args: impl Iterator<Item = String>) -> Option<std::path::Pat
 }
 
 // ---------------------------------------------------------------------------
-// Crash-log rotation + session sentinel (GIG_RESILIENCE_DESIGN §6 / G10)
+// Crash-log rotation + session sentinel (GIG_RESILIENCE_DESIGN section 6 / G10)
 // ---------------------------------------------------------------------------
 
 /// How many timestamped crash logs to keep.

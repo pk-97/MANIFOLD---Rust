@@ -1,4 +1,4 @@
-//! `docs/RAYTRACING_DESIGN.md` §8.2 Tier-2 item 4 (D21, T2-A) — value-level
+//! `docs/RAYTRACING_DESIGN.md` section 8.2 Tier-2 item 4 (D21, T2-A) — value-level
 //! proof for alpha-aware shadow rays
 //! (`manifold_gpu::raytrace::{ShadowRayTracer, MetalShadowRayTracer}`'s
 //! `walk_with_alpha_test`/`sample_candidate_alpha` MSL path).
@@ -42,7 +42,7 @@ use manifold_gpu::{GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFor
 use crate::harness;
 
 /// Flat (non-indexed) vertex layout: 12-byte position + 8-byte UV, no
-/// padding — `packed_float3`/`packed_float2` mandatory (P0 §5.1 kernel
+/// padding — `packed_float3`/`packed_float2` mandatory (P0 section 5.1 kernel
 /// lesson), stride 20.
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -188,7 +188,7 @@ fn run_fixture(alpha_mask: bool) -> [f32; 2] {
         label: "rt-t2a-out_refl-stub",
         mip_levels: 1,
     });
-    // RT-R1 (§9.3 RD4): prefiltered env for reflection miss branch — 1x1 dummy
+    // RT-R1 (section 9.3 RD4): prefiltered env for reflection miss branch — 1x1 dummy
     let prefiltered_env = device.create_texture(&GpuTextureDesc {
         width: 1,
         height: 1,

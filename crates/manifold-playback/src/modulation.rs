@@ -316,7 +316,7 @@ pub fn evaluate_modulation(
     // Phase 2.5: Evaluate audio modulations (live audio → effective). Driver-
     // like (sets the value), so it runs alongside drivers and before the
     // additive envelope phase. Inert when no audio features are present.
-    // §9 U1/U6: a trigger-gate target's fire is collected into
+    // section 9 U1/U6: a trigger-gate target's fire is collected into
     // `trigger_pulses` by this SAME walk (the deleted `AudioTriggerMod`
     // config's separate `evaluate_all_param_triggers` pass is gone — a
     // fire-mode mod is a normal audio mod now). A trigger-gate fire never
@@ -403,7 +403,7 @@ pub fn apply_step_values(project: &mut Project) -> bool {
 /// Evaluate every audio modulation on master effects, layer effects, and
 /// generator params, using the latest per-send feature `snapshot`. Returns true
 /// if any modulation wrote a value (compositor should be marked dirty).
-/// Clears and refills `pulses` with every trigger-gate fire this tick (§9 U1)
+/// Clears and refills `pulses` with every trigger-gate fire this tick (section 9 U1)
 /// — a fire never sets the return bool (see [`evaluate_instance_audio_mods`]).
 ///
 /// Walks the same instance set as the driver pass (master + layer effects +
@@ -494,7 +494,7 @@ pub fn evaluate_all_audio_mods(
 
 /// Evaluate every audio modulation on a single instance. Returns true if any
 /// wrote a param value (a trigger-gate fire pushed onto `pulses` does NOT
-/// count — see §9 U1). `layer_id` is `None` for a master-chain instance,
+/// count — see section 9 U1). `layer_id` is `None` for a master-chain instance,
 /// cloned onto every pulse this instance emits. `clip_edge` (PARAM_STEP_
 /// ACTIONS D5) is whether this instance's owning layer had a clip-start edge
 /// since this was last called — always `false` for a master-chain instance
@@ -567,7 +567,7 @@ fn evaluate_instance_audio_mods(
         // about where the fire threshold sat. Every other arm keeps
         // `conditioned`, the signal they actually read.
         if is_trigger_gate {
-            // §9 U1: the mod's target is a trigger-gate card (e.g.
+            // section 9 U1: the mod's target is a trigger-gate card (e.g.
             // `clip_trigger`) — never write the toggle's value (R2's
             // continuous-mod flapping stays dead; the toggle is a user
             // control). Same D5b fire chassis as `is_trigger` below, but a
@@ -605,7 +605,7 @@ fn evaluate_instance_audio_mods(
         fire_meters.push(fire_meter_key_for_param(fx.id.as_str(), m.param_id.as_ref()), conditioned);
 
         if is_trigger {
-            // §8 D5b: a fire-button target wants a monotonic count, not a
+            // section 8 D5b: a fire-button target wants a monotonic count, not a
             // level — edge-detect the shaped signal (rising through
             // mid-range) instead of overwriting continuously. Downstream
             // `last_count`-style consumers edge-detect the written value
@@ -739,7 +739,7 @@ fn evaluate_instance_audio_mods(
     wrote
 }
 
-/// One instance's trigger-gate fire this tick (§9 U1, formerly §8 D1's
+/// One instance's trigger-gate fire this tick (section 9 U1, formerly section 8 D1's
 /// `audio_trigger` pulse), for the renderer (P2) to fold into its
 /// `audio_count`. `layer_id` is `None` for a master-chain instance (D5:
 /// "master/global chains have no layer... audio fires still work") — the
@@ -750,13 +750,13 @@ pub struct TriggerPulse {
     pub layer_id: Option<manifold_core::id::LayerId>,
 }
 
-/// BUG-051 fix (§8 D4, still true post-§9): drop every audio-mod's trigger
+/// BUG-051 fix (section 8 D4, still true post-section 9): drop every audio-mod's trigger
 /// edge-detector back to armed. Call on transport stop / project reset so a
 /// stale "fired, not yet re-armed" flag can't suppress the first onset next
 /// time. Walks the same instance set [`evaluate_all_audio_mods`] does,
 /// clearing every mod's `trigger_edge` — the single edge-state holder that
 /// now backs both `is_trigger` fire buttons (D5b) and `is_trigger_gate`
-/// cards (§9 U1); the former separate `audio_trigger.edge` holder was
+/// cards (section 9 U1); the former separate `audio_trigger.edge` holder was
 /// deleted along with the config type it lived on.
 ///
 /// PARAM_STEP_ACTIONS D4: also drops each mod's step shadow
@@ -1339,7 +1339,7 @@ mod tests {
         );
     }
 
-    // ── §9 U1: unified trigger-gate mods (formerly §8's separate
+    // ── section 9 U1: unified trigger-gate mods (formerly section 8's separate
     //    `AudioTriggerMod` config, deleted) ──────────────────────────────
 
     use manifold_core::effect_graph_def::ParamSpecDef;

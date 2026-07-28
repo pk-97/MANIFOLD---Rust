@@ -1,4 +1,4 @@
-//! `node.camera_lens` exposure proof (CAMERA_AND_LENS_DESIGN.md §2 D5, §4
+//! `node.camera_lens` exposure proof (CAMERA_AND_LENS_DESIGN.md section 2 D5, section 4
 //! P2 gate).
 //!
 //! A single unlit white quad, lit only by its own emission-free albedo (no
@@ -172,7 +172,7 @@ fn ev_one_doubles_ev_zero_within_f16_tolerance() {
 
 #[test]
 fn ev_zero_camera_lens_is_byte_identical_to_no_camera_lens() {
-    // I5 (docs/CAMERA_AND_LENS_DESIGN.md §3): a camera_lens at ev=0 must be
+    // I5 (docs/CAMERA_AND_LENS_DESIGN.md section 3): a camera_lens at ev=0 must be
     // a pure no-op, indistinguishable from not wiring camera_lens at all —
     // proven at the pixel level on the exposure-carrying scene itself, not
     // just asserted from the uniform math.

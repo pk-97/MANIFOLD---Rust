@@ -1,6 +1,6 @@
 //! Native alert dialogs for project-file failures and crash notices.
 //!
-//! GIG_RESILIENCE_DESIGN §6 (G4): save and load failures were log-only — the
+//! GIG_RESILIENCE_DESIGN section 6 (G4): save and load failures were log-only — the
 //! worst failure mode is believing you saved when you didn't. These are
 //! blocking native dialogs on the UI thread, following the existing pattern
 //! (`app_render.rs` `confirm_remove_node_orphans`): fine for authoring-time

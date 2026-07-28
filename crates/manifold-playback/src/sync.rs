@@ -281,7 +281,7 @@ mod tests {
         ClockAuthority::Osc,
     ];
 
-    // ── §7 gate matrix: "every sync controller passes (source, authority)
+    // ── section 7 gate matrix: "every sync controller passes (source, authority)
     // and the call is dropped unless they match." Exhaustive over the 4×4
     // grid for each of the five gated operations. ──────────────────────────
 
@@ -359,7 +359,7 @@ mod tests {
         }
     }
 
-    // ── §11 thresholds ──────────────────────────────────────────────────
+    // ── section 11 thresholds ──────────────────────────────────────────────────
 
     /// `OWNERSHIP_GRACE_PERIOD` = 0.5s: `manifold_owns_playback` cannot be
     /// cleared before the grace period elapses, even if asked — covers the

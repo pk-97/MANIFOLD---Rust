@@ -1,12 +1,12 @@
 # Audio Sends UX — make the routing legible, the tuning live, and the analysis pay-per-use
 
-**Status:** SHIPPED P1–P4 2026-07-06 (orchestrated wave, Fable + Sonnet workers, branch `feat/audio-sends-ux`; landing report `docs/landings/2026-07-06-audio-sends-ux.md`) · **P5 DROPPED by Peter 2026-07-06 ("I don't want them. Not useful") — do not build, do not re-propose** · L4 residue: Peter's in-app pass owed (P1 trace-count run, P3 drag feel + undo-step check) · BUG-047 logged (panel overflow past SCOPE_H_MIN floor, LOW) · approved by Peter 2026-07-04 · Fable · D5 word confirmed: "Source" · **baseline-reviewed 2026-07-05, cleared** (zero unlabeled forks; anchors spot-reverified EXACT — PANEL_W_FRAC :39, analyzers :129, MAX_SENDS :56, GainBank :72; D5-confirmation propagated into §2/P4 which still read "pending". §10 levels: P2/P3/P4 already gate on headless PNGs = L2; P1's eprintln count = L2 log trace; P3/P5 in-app checks = L4 today, L3-able via UI_AUTOMATION once landed since the panel is standard widgets.)
+**Status:** SHIPPED P1–P4 2026-07-06. **P5 DROPPED by Peter 2026-07-06 ("I don't want them. Not useful") — do not build, do not re-propose.** Owed: Peter's in-app pass (VD-011/VD-012 — the click-script in section 7 (As-built residue)); BUG-047 (setup-panel-overflow) open.
 **Prerequisites:** none (all phases run against shipped audio-modulation code)
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
 Peter, opening the session: "The sends work but they're awkward to use and tricky to understand," and "I'm worried about the performance problems if we have heaps and heaps of audio stems all being analysed." The audit found the model and the sample path sound; every problem is presentation-layer plus one perf gap. **The governing insight: a send sits at the center of a star (channels and layers feed it; params, triggers, and the scope listen to it), but the UI only ever shows one arm of the star at a time, across four surfaces.** This doc makes the whole star visible in one place, moves the tuning half of Audio Setup out from behind a show-dimming modal, and makes analysis cost proportional to what is actually consumed.
 
-Companion docs: `AUDIO_MODULATION_DESIGN.md` (the feature this UX fronts), `AUDIO_INFRASTRUCTURE.md` (capture/analysis stack — **§3.2/§8 are stale**, corrected by Phase 1), `LAYER_CONTROLS_DESIGN.md` §5.3 (layer→send routing), `OVERLAY_SYSTEM_DESIGN.md` (modality machinery Phase 3 touches).
+Companion docs: `AUDIO_MODULATION_DESIGN.md` (the feature this UX fronts), `AUDIO_INFRASTRUCTURE.md` (capture/analysis stack — **section 3.2 (The Audio Setup — one place to route and label)/section 8 (Shaping — what makes it an instrument) are stale**, corrected by Phase 1), `LAYER_CONTROLS_DESIGN.md` section 5.3 (layer→send routing), `OVERLAY_SYSTEM_DESIGN.md` (modality machinery Phase 3 touches).
 
 ---
 
@@ -21,7 +21,7 @@ Companion docs: `AUDIO_MODULATION_DESIGN.md` (the feature this UX fronts), `AUDI
 | Layer→send routing (audio layer picks the send it feeds) | `crates/manifold-ui/src/panels/layer_header.rs:654-658`, `PanelAction::AudioSendClicked` | Shipped — the ONLY place layer feeds are edited |
 | Per-send analyzers on the **content thread**, one `StreamingSendAnalyzer` per send | `crates/manifold-app/src/audio_mod_runtime.rs:127-129`, loop at `:258` | Shipped. Capture gate is **global** (any mod ∨ any enabled trigger ∨ scope open, `:231`); once up, **every send** is analyzed every tick |
 | Measured cost (release, M-series, probe 2026-07-04) | — | 16 sends ≈ **0.96 ms mean / 1.27 ms worst per tick** (~60 µs/send) against the 16.6 ms tick; `MAX_SENDS = 16` hard cap (`analysis.rs:56`) |
-| Live no-glitch param banks (gain, crossovers) | `analysis.rs:72` (`GainBank`), crossover drag via `MutateProjectLive` + commit command (`AUDIO_MODULATION_DESIGN.md` §10.0.1) | Shipped — the precedent for all Phase 3 drags |
+| Live no-glitch param banks (gain, crossovers) | `analysis.rs:72` (`GainBank`), crossover drag via `MutateProjectLive` + commit command (`AUDIO_MODULATION_DESIGN.md` section 10.0 (Spectrogram feature overlays + draggable bands)) | Shipped — the precedent for all Phase 3 drags |
 | Drawer builder (declarative `DrawerSpec` → rows) | `crates/manifold-ui/src/panels/drawer.rs` | Shipped — sole builder for all four drawers |
 
 Extend, don't redesign. No new crates, no new threads, no new shared state anywhere in this doc.
@@ -30,11 +30,11 @@ Extend, don't redesign. No new crates, no new threads, no new shared state anywh
 
 - **D1 — One send-path view, inside the existing panel.** Selecting a send (swatch click, as today) shows its full star: inputs (capture channels + feeding layers) → send (meter/gain/floor) → consumers (named params + trigger routes). Rationale: the four-surface hunt is the root of "tricky to understand"; on stage it is the debugging surface for "why isn't this visual moving." Rejected: a separate routing-graph window, because the panel already owns send selection and the data layer (`state_sync`) already aggregates per-send state — a new surface would duplicate both.
 - **D2 — Layer feeds become editable from the panel, both directions.** The inputs section lists feeding layers with a remove (×) per row and an "+ layer" dropdown of audio layers. Uses the **same EditingService command** the layer header fires. Rejected: keeping the panel read-only ("source chip is status"), because it forces a timeline expedition mid-calibration to fix routing.
-  **As-built note (2026-07-11, `AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` §7.2 item 7, P8):** superseded — panel-side layer-routing authoring is removed outright. The Inputs section is now read-only (device line + one line per feeding layer, straight from `AudioSendRow::routings`); the layer header's own Send dropdown is the one surviving path to `SetLayerAudioSend`, extending D2's own precedent ("uses the same EditingService command the layer header fires") to its logical single-owner conclusion. The rejected alternative above ("keeping the panel read-only") is exactly what shipped — the calibration-loop cost that rejected it in 2026-07-04 was judged, by 2026-07-11, to matter less than one authoring surface per binding (the same call already made for the Triggers matrix).
-- **D3 — Consumers list is navigational, not editable.** Each consumer row (param: "LayerName · EffectName · ParamName"; trigger: "Clip trigger · LayerName · Band" — reworded from the original "Low → LayerName" arrow style to match the mod-row bullet convention, §7.2 item 7, P8, 2026-07-11) is clickable and selects the owning layer; editing stays in the drawer / trigger matrix. Rejected: inline editing of mods from the panel — it would duplicate the drawer's seven controls in a second surface and they would drift.
+  **As-built note (2026-07-11, `AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` section 7.2 (Decisions (Peter, 2026-07-11) — do not reopen) item 7, P8):** superseded — panel-side layer-routing authoring is removed outright. The Inputs section is now read-only (device line + one line per feeding layer, straight from `AudioSendRow::routings`); the layer header's own Send dropdown is the one surviving path to `SetLayerAudioSend`, extending D2's own precedent ("uses the same EditingService command the layer header fires") to its logical single-owner conclusion. The rejected alternative above ("keeping the panel read-only") is exactly what shipped — the calibration-loop cost that rejected it in 2026-07-04 was judged, by 2026-07-11, to matter less than one authoring surface per binding (the same call already made for the Triggers matrix).
+- **D3 — Consumers list is navigational, not editable.** Each consumer row (param: "LayerName · EffectName · ParamName"; trigger: "Clip trigger · LayerName · Band" — reworded from the original "Low → LayerName" arrow style to match the mod-row bullet convention, section 7.2 item 7, P8, 2026-07-11) is clickable and selects the owning layer; editing stays in the drawer / trigger matrix. Rejected: inline editing of mods from the panel — it would duplicate the drawer's seven controls in a second surface and they would drift.
 - **D4 — Per-send analysis gating.** A send is analyzed only if it has ≥1 enabled audio mod, ≥1 enabled trigger route, or is the scope-tapped send. Consumed-send set recomputed **only on project change** (DataVersion dirty-check), never per tick. Rationale: today one bound param makes all 16 sends pay ~60 µs each per tick on the content thread. Rejected: moving analysis back to the worker thread, because the content-thread placement is deliberate — a send must sum capture mono with audio-layer taps *before* one analysis ("what you hear is what modulates," `analysis.rs:18-21`).
 - **D5 — Rename "Send" → "Source" in user-facing strings only.** Ableton's "send" is an amount feeding a return that carries audio; ours carries nothing — things listen to it. "Source" matches the drawer's existing row label. **Rust types, serde fields, command names, and `AudioSendId` keep their names** — a serialized-format rename is load-migration risk for zero user value. Rejected: "Stem", because a send can be a mic, a system tap, or an app tap — not always a stem of a mix. **Confirmed by Peter 2026-07-04: "Source"** (the status line recorded it; this body note lagged until the 2026-07-05 baseline review — P4 is NOT blocked).
-- **D6 — The panel stops dimming the show and moves aside.** Audio Setup becomes a non-dimming overlay anchored to the viewport's right edge (~38% width, full height); the preview stays visible. Trigger sensitivity, gain, floor, and crossovers are calibration against live output — a dimming 80% modal makes the panel's own purpose impossible. Device picking doesn't need dimming either, so the panel stays one surface. Supersedes `AUDIO_INFRASTRUCTURE.md` §7 "stays modal" — that call predates the trigger matrix growing in here. Rejected: splitting into a modal Devices panel + docked Tuning panel — two surfaces for one concept re-creates the fragmentation D1 kills. **Superseded in turn (coherence audit F12, 2026-07-10): `AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` (approved 2026-07-09) moves this non-dimming overlay to a real `ScreenLayout` workspace column — the reasoning that killed the dimming modal kills the overlay too (it still occludes the inspector). This D6/§3.3 shape is completed history, not the current target.**
+- **D6 — The panel stops dimming the show and moves aside.** Audio Setup becomes a non-dimming overlay anchored to the viewport's right edge (~38% width, full height); the preview stays visible. Trigger sensitivity, gain, floor, and crossovers are calibration against live output — a dimming 80% modal makes the panel's own purpose impossible. Device picking doesn't need dimming either, so the panel stays one surface. Supersedes `AUDIO_INFRASTRUCTURE.md` section 7 (The audio-settings UX) "stays modal" — that call predates the trigger matrix growing in here. Rejected: splitting into a modal Devices panel + docked Tuning panel — two surfaces for one concept re-creates the fragmentation D1 kills. **Superseded in turn (coherence audit F12, 2026-07-10): `AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` (approved 2026-07-09) moves this non-dimming overlay to a real `ScreenLayout` workspace column — the reasoning that killed the dimming modal kills the overlay too (it still occludes the inspector). This D6/section 3.3 (Evaluation (manifold-playback)) shape is completed history, not the current target.**
 - **D7 — Calibration values get drag.** Gain and trigger sensitivity value labels become horizontal drag zones (steppers stay for fine clicks). Live drag via `MutateProjectLive`, one command committed on release — the exact crossover-drag pattern. `GainBank` already absorbs gain edits with no capture restart.
 - **D8 — DROPPED by Peter 2026-07-06 ("I don't want them. Not useful") — never built, do not re-propose.** Original decision kept for the record: Drawer presets are one-shot fills. A "Preset" segmented row atop the audio drawer: **Pump · Snap · Follow · Wobble**. Clicking one writes feature/band/attack/release/amount in a single command; nothing stores "which preset is active" — the matrix stays the truth. Rejected: persistent preset modes, because divergence-after-edit would need tracking state for no benefit.
 
@@ -91,23 +91,23 @@ One new `DrawerControl::Segmented` row in the audio `DrawerSpec`; click maps to 
 
 ### Phase 1 — Per-send gating + infrastructure-doc truth pass
 - **Entry state:** `rg -n "analyzers: AHashMap" crates/manifold-app/src/audio_mod_runtime.rs` hits (~:129); `rg -n "MAX_SENDS" crates/manifold-audio/src/analysis.rs` hits :56.
-- **Read-back:** this doc §2 D4 + §3.2; `audio_mod_runtime.rs` module header + reconcile/tick fn; CLAUDE.md hot-path rules. Restate the gate condition and the no-per-tick-alloc constraint.
-- **Deliverables:** consumed-set cache in `audio_mod_runtime.rs`; skip logic in the per-send loop; `AUDIO_INFRASTRUCTURE.md` §3.2/§8 rewritten to content-thread reality with the measured numbers (16 sends ≈ 0.96 ms mean / 1.27 ms worst per tick, release).
+- **Read-back:** this doc section 2 D4 + section 3.2; `audio_mod_runtime.rs` module header + reconcile/tick fn; CLAUDE.md hot-path rules. Restate the gate condition and the no-per-tick-alloc constraint.
+- **Deliverables:** consumed-set cache in `audio_mod_runtime.rs`; skip logic in the per-send loop; `AUDIO_INFRASTRUCTURE.md` section 3.2 (Analysis — split across the downmix worker and the content thread)/section 8 (Performance — the budget is sacred) rewritten to content-thread reality with the measured numbers (16 sends ≈ 0.96 ms mean / 1.27 ms worst per tick, release).
 - **Gate:** *Positive:* with 16 sends and one bound param, an `eprintln!` count logs 1 analyzed send (2 with scope open); Peter runs it. `cargo clippy --workspace -- -D warnings`. *Negative:* `rg "collect|AHashSet::new" ` in the per-tick path of the diff returns hits only inside the version-gated rebuild.
 - **Forbidden moves:** moving analysis off the content thread; gating capture (already handled) instead of analysis; a "temporary" always-analyze flag.
 - **Test scope:** `cargo test -p manifold-app --lib` if the crate has lib tests, else the eprintln proof; no workspace sweep.
 
 ### Phase 2 — Send-path view
-- **Entry state:** `rg -n "routings: Vec<String>" crates/manifold-ui/src/panels/audio_setup_panel.rs` hits (~:81); the §3.1 VERIFY-AT-IMPL sweep, results written into session notes.
-- **Read-back:** §2 D1–D3, §3.1, and the state_sync builder for `AudioSendRow`. Restate the state_sync-only boundary rule.
+- **Entry state:** `rg -n "routings: Vec<String>" crates/manifold-ui/src/panels/audio_setup_panel.rs` hits (~:81); the section 3.1 VERIFY-AT-IMPL sweep, results written into session notes.
+- **Read-back:** section 2 D1–D3, section 3.1, and the state_sync builder for `AudioSendRow`. Restate the state_sync-only boundary rule.
 - **Deliverables:** `SendConsumerRow`, `consumers` + `feeding_layers` on `AudioSendRow`; Inputs + Consumers sections in the panel; layer add/remove wired to the existing command; consumer click → layer select.
 - **Gate:** *Positive:* headless PNG of the open panel with a 2-send fixture (per `reference_ui_headless_png_verification` memory), Read and eyeball: both sections render, labels resolve. Focused `cargo test -p manifold-ui --lib`. *Negative:* `rg "\.project\(\)|&Project" crates/manifold-ui/src/panels/audio_setup_panel.rs` → zero hits (panel never touches the model).
 - **Forbidden moves:** a second mutation path bypassing the layer-header command; editing mods inline; widening into panel visual redesign.
 - **Test scope:** focused only.
 
 ### Phase 3 — Non-dimming right-anchor + calibration drags
-- **Entry state:** `rg -n "PANEL_W_FRAC" crates/manifold-ui/src/panels/audio_setup_panel.rs` hits :39; the §3.3 Modality sweep done and written down.
-- **Read-back:** §2 D6–D7, §3.3–3.4 drag paragraph, the crossover-drag code path, `OVERLAY_SYSTEM_DESIGN.md` modality section.
+- **Entry state:** `rg -n "PANEL_W_FRAC" crates/manifold-ui/src/panels/audio_setup_panel.rs` hits :39; the section 3.3 Modality sweep done and written down.
+- **Read-back:** section 2 D6–D7, section 3.3–3.4 drag paragraph, the crossover-drag code path, `OVERLAY_SYSTEM_DESIGN.md` modality section.
 - **Deliverables:** right-anchored non-dim overlay; gain + sensitivity drag (live + commit-on-release).
 - **Gate:** *Positive:* headless PNG shows panel right-anchored, content behind undimmed; in-app: drag gain while audio plays — meter follows, no capture restart (no audible/visual glitch), one undo step per drag. Peter runs the in-app check. *Negative:* `rg "dim" ` on the panel's modality returns no dimming path.
 - **Forbidden moves:** splitting into two panels; making it a dockable window; per-tick command spam during drag (live-mutate + single commit only).
@@ -122,8 +122,8 @@ One new `DrawerControl::Segmented` row in the audio `DrawerSpec`; click maps to 
 - **Test scope:** `cargo test -p manifold-io --lib` (proves save format untouched) + focused ui lib.
 
 ### Phase 5 — Drawer presets — CANCELLED by Peter 2026-07-06 before build ("not useful"); D8 dropped, nothing shipped
-- **Entry state:** `AudioModShape` field names read from `manifold-core` (§3.4 marker); drawer builder API skimmed (`panels/drawer.rs`).
-- **Read-back:** D8 + the §3.4 table. Restate: one-shot fill, no stored preset state.
+- **Entry state:** `AudioModShape` field names read from `manifold-core` (section 3.4 marker); drawer builder API skimmed (`panels/drawer.rs`).
+- **Read-back:** D8 + the section 3.4 table. Restate: one-shot fill, no stored preset state.
 - **Deliverables:** Preset segmented row in the audio `DrawerSpec`; one EditingService command writing the five fields; the four presets per the table.
 - **Gate:** *Positive:* in-app — click Pump on a param with a kick send: slider pumps; undo reverts all five fields in one step. *Negative:* `rg "preset" crates/manifold-core/src/audio_mod.rs` → zero hits (no persisted preset field).
 - **Forbidden moves:** persisting preset identity; per-field commands (must be one undo step); inventing new features/bands for a preset.
@@ -141,7 +141,22 @@ One new `DrawerControl::Segmented` row in the audio `DrawerSpec`; click maps to 
 
 ## 6. Deferred
 
-- **Per-send attack/release in the setup panel** — already rejected in `AUDIO_INFRASTRUCTURE.md` §7; belongs in the drawer if ever.
+- **Per-send attack/release in the setup panel** — already rejected in `AUDIO_INFRASTRUCTURE.md` section 7 (The audio-settings UX); belongs in the drawer if ever.
 - **Jump-opens-the-drawer** (consumer click auto-expands the exact param drawer) — revive if layer-select proves too coarse in use.
 - **v2 pitch features in presets** — when the ridge tracker ships.
 - **User-defined presets** — revive if the four built-ins see real use and Peter asks.
+
+## 7. As-built residue
+
+Folded from `docs/landings/2026-07-06-audio-sends-ux.md` 2026-07-28; the report stays as history, this is the live part.
+
+Owed — Peter's in-app pass (VD-011 P1 trace-count, VD-012 P3 drag feel; `docs/VERIFICATION_DEBT.md`), ≤2 minutes:
+
+1. Cmd+Shift+A — Audio Setup docks right (~38%), show visible and undimmed behind it; outside clicks pass through, Escape closes.
+2. Click a source's swatch — "Inputs — X", "Spectrogram — X", "Triggers — X", "Consumers — X" sections for that source.
+3. Click a consumer row ("›") — owning layer selects; panel stays open.
+4. With audio playing, drag horizontally on a gain "0 dB" label — value and meter follow live, no audio glitch; ONE Cmd+Z reverts the whole drag.
+5. `MANIFOLD_AUDIO_TRACE=1`, 16 sources, one param bound — terminal shows `analyzed 1 send(s)`; open the scope on a second source → `analyzed 2 send(s)`.
+6. Vocabulary: "+ Add Source", "No source"; nothing user-visible says "Send".
+
+Open: BUG-047 (setup-panel-overflow) — sections can clip past the SCOPE_H_MIN floor at ~18+ combined rows; fix is a deliberate UX call (cap+"+N more" vs ScrollContainer), not improvised.

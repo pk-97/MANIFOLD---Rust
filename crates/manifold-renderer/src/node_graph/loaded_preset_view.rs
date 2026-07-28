@@ -1,4 +1,4 @@
-//! Runtime view of a JSON-loaded preset — the §11 replacement for
+//! Runtime view of a JSON-loaded preset — the section 11 replacement for
 //! [`crate::node_graph::chain_spec::ChainSpec`].
 //!
 //! A [`LoadedPresetView`] pairs the canonical [`EffectGraphDef`] (from
@@ -108,7 +108,7 @@ static VIEW_CACHE: std::sync::LazyLock<ViewCache> = std::sync::LazyLock::new(|| 
 /// Lookup a [`LoadedPresetView`] by effect type id, building it on
 /// first call (and after each hot-reload generation bump) and caching for
 /// the process lifetime. Returns `None` for effects whose JSON file doesn't
-/// carry `presetMetadata` (i.e., v1 entries — not yet migrated by §11
+/// carry `presetMetadata` (i.e., v1 entries — not yet migrated by section 11
 /// block 4).
 pub fn loaded_preset_view_by_id(id: &PresetTypeId) -> Option<&'static LoadedPresetView> {
     let generation = crate::preset_loader::catalog_generation();

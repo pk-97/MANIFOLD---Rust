@@ -34,10 +34,10 @@ pub enum TransportAction {
     ToggleSyncOutput,
     /// Toggle the global Automation Arm: while armed, touching an automated
     /// param (while playing) records into its lane instead of latching an
-    /// override (§5).
+    /// override (section 5).
     ToggleAutomationArm,
     /// Back to Arrangement: clears every automation override latch, resuming
-    /// every automated param's lane (§4). Lit red in the transport bar
+    /// every automated param's lane (section 4). Lit red in the transport bar
     /// whenever any latch is active.
     AutomationBackToArrangement,
     /// Show/hide lane strips across the timeline (Live's `A`) — a pure UI
@@ -55,7 +55,7 @@ pub enum TransportAction {
     SetInsertCursor(f32),
     /// Overview strip scrub — normalized [0,1] position. Centers viewport.
     OverviewScrub(f32),
-    /// Horizontal scrollbar drag/jump — an absolute scroll-x in beats (§24 5e).
+    /// Horizontal scrollbar drag/jump — an absolute scroll-x in beats (section 24 5e).
     TimelineScrollbarH(f32),
     SetMidiClockDevice(i32),            // MIDI device index
 }
@@ -95,7 +95,7 @@ pub enum LayerAction {
     ToggleMute(LayerId),
     ToggleSolo(LayerId),
     /// Toggle an audio layer's analysis-only output state (silent to master, still
-    /// feeding its send). See LAYER_CONTROLS_DESIGN §5.3.
+    /// feeding its send). See LAYER_CONTROLS_DESIGN section 5.3.
     ToggleAnalysisOnly(LayerId),
     ToggleLed(LayerId),
     SetBlendMode(LayerId, String),
@@ -166,7 +166,7 @@ pub enum ProjectAction {
     /// D7 "New 3D Scene" empty-state action: assign the bundled Scene
     /// Starter generator preset to the selected layer — the SAME
     /// generator-assignment path the picker's `SetGenType` already uses
-    /// (§1 VERIFY marker, resolved: `PanelAction::SetGenType`).
+    /// (section 1 VERIFY marker, resolved: `PanelAction::SetGenType`).
     SceneSetupNewScene(LayerId),
     /// P2 "+ Object" button: `(layer_id, render_scene_node_doc_id,
     /// next_index)`. Dispatches the EXISTING `AddSceneObjectCommand`
@@ -333,12 +333,12 @@ pub enum ParamsAction {
     /// payload and mutates no model.
     ModConfigTabChanged,
     /// A card section header was clicked (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md
-    /// §2 D5) — the card already flipped its own UI-only `section_folded`
+    /// section 2 D5) — the card already flipped its own UI-only `section_folded`
     /// entry in `handle_click`. Routes to a structural rebuild so the folded/
     /// unfolded rows repaint; carries no payload and mutates no model (fold
     /// state is workspace-local, never serialized).
     SectionFoldToggled,
-    /// §6b — the global "hide mod settings" (compact) toggle was clicked. The
+    /// section 6b — the global "hide mod settings" (compact) toggle was clicked. The
     /// inspector already flipped its own UI-only flag; this routes to a
     /// structural rebuild so every card's drawers hide/show. No model mutation.
     ModsCompactToggled,
@@ -452,17 +452,17 @@ pub enum ModulationAction {
     /// Toggle an audio modulation's rate-of-change flag
     /// (`AudioModShape::rate_of_change`) — the feature would drive on its
     /// motion rather than its level. No drawer button reaches this anymore
-    /// (§7.2 item 2, 2026-07-11 — "Delta" removed from the UI, "not very
+    /// (section 7.2 item 2, 2026-07-11 — "Delta" removed from the UI, "not very
     /// useful and adds a lot of clutter"); the variant and the runtime field
     /// and `condition()` arm it drives stay compiled for a possible future
     /// re-wire. Un-suppression trigger for any dead-code warning this
     /// strands: re-wire per AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md
-    /// §7.2 item 2.
+    /// section 7.2 item 2.
     AudioModSetRateOfChange(GraphParamTarget, ParamId),
     // Audio-mod shaping-slider scrub trio (sensitivity / attack / release)
     // migrated to `PanelAction::Scrub` (`ValueRef::AudioModShape`, P-I / D4).
     /// Set a trigger-gate param's fire mode — index into `[ClipEdge,
-    /// Transient, Both]` (§9 U3), converted to `TriggerFireMode` at the
+    /// Transient, Both]` (section 9 U3), converted to `TriggerFireMode` at the
     /// dispatch boundary (this crate mirrors core enums rather than
     /// depending on `manifold-core` directly; see `ui_translate.rs`). The
     /// drawer's one trigger-only row, on top of the standard Source/Feature/
@@ -548,7 +548,7 @@ pub enum AudioSetupAction {
     AudioRenameSend(AudioSendId, String),
     /// Set a send's input channels (downmixed to mono for analysis). The
     /// channel dropdown enumerates stereo pairs AND single channels directly
-    /// (§7.2 item 7, P8, 2026-07-11), so this carries any length channel vec
+    /// (section 7.2 item 7, P8, 2026-07-11), so this carries any length channel vec
     /// — mono falls out of a one-channel pick, no separate toggle needed.
     /// `AudioSendStereoToggle`, `AudioSendAddLayerClicked`, and
     /// `AudioSendRoutingsClicked` are deleted the same phase (items 6/7):
@@ -757,7 +757,7 @@ pub enum RootAction {
         label: String,
     },
     /// Set the binding's card section (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md
-    /// §2 D5). One-shot edit; `None` clears the row back to unsectioned.
+    /// section 2 D5). One-shot edit; `None` clears the row back to unsectioned.
     /// Manifest-only per BOUNDARIES D4 — see `BindingMappingEdit::section`.
     EffectMappingSection {
         binding_id: String,

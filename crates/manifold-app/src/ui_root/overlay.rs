@@ -182,7 +182,7 @@ impl UIRoot {
     /// overlay consumed it (or a modal captured it), so the caller skips the
     /// lower panels. Stashed selections are lowered by `drain_overlay_selections`.
     /// Also records into `closed_overlays` any overlay whose `on_event` flipped
-    /// it shut (self-close on Escape / backdrop / cell pick) — §3, D2.
+    /// it shut (self-close on Escape / backdrop / cell pick) — section 3, D2.
     pub(crate) fn route_overlay_event(&mut self, event: &UIEvent, actions: &mut Vec<PanelAction>) -> bool {
         let mut tree = std::mem::replace(&mut self.tree, UITree::new());
         let mut consumed = false;
@@ -276,7 +276,7 @@ impl UIRoot {
     /// `TextSessionOwner` and calls `cancel_if_owned_by` — closing the
     /// orphaned-search-session bug for every current and future
     /// overlay-hosted text field, not just the browser search
-    /// (`OVERLAY_SESSIONS_AND_PICKER_DESIGN.md` §3).
+    /// (`OVERLAY_SESSIONS_AND_PICKER_DESIGN.md` section 3).
     pub fn take_closed_overlays(&mut self) -> smallvec::SmallVec<[OverlayId; 2]> {
         std::mem::take(&mut self.closed_overlays)
     }

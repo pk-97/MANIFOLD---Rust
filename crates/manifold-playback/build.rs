@@ -1,4 +1,4 @@
-// Compiles the Signalsmith Stretch C ABI wrapper (Audio Layer warp, §4.1).
+// Compiles the Signalsmith Stretch C ABI wrapper (Audio Layer warp, section 4.1).
 // The library is a vendored single-header C++ project under vendor/signalsmith/;
 // the wrapper exposes one `extern "C"` time-stretch entry point. C++17 is
 // required by the Signalsmith headers.

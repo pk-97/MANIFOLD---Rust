@@ -363,7 +363,7 @@ fn total_luma(bytes: &[u8]) -> f64 {
     sum
 }
 
-/// D8/§4 Invariants: a Blend object between the sun and the ground casts NO
+/// D8/section 4 Invariants: a Blend object between the sun and the ground casts NO
 /// shadow — the object is excluded from every shadow-caster depth pass at
 /// the CODE-PATH level, regardless of the light's own `cast_shadows` flag.
 /// Same Blend occluder present in BOTH renders (so its own visible footprint

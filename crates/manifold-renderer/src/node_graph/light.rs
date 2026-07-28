@@ -54,7 +54,7 @@ pub enum LightMode {
 /// Stepped PCF kernel size — the user-facing softness knob on `node.light`.
 /// Four levels: the fixed-kernel `Hard` 3×3 / `Soft` 5×5 / `VerySoft` 7×7
 /// PCF taps from the original design audit, plus `Contact` — PCSS
-/// contact-hardening penumbra (REALTIME_3D_DESIGN §11, D12): a per-fragment
+/// contact-hardening penumbra (REALTIME_3D_DESIGN section 11, D12): a per-fragment
 /// dynamic kernel width driven by a blocker search instead of a fixed tap
 /// count, so shadows harden at contact and soften with occluder distance.
 /// `light_size` carries the world-units light diameter that drives the

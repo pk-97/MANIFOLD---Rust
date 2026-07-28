@@ -78,7 +78,7 @@ pub fn card_visible_for(type_id: &str, param: &str) -> bool {
         ],
         "node.transform_3d" => &["pos_x", "pos_y", "pos_z", "rot_x", "rot_y", "rot_z"],
         "node.bake_environment" => &["intensity", "fill"],
-        // RAYTRACING_DESIGN.md D14/§5.2/§9 RD9: the auto-stamp already curates the
+        // RAYTRACING_DESIGN.md D14/section 5.2/section 9 RD9: the auto-stamp already curates the
         // root to exactly these three (RENDER_SCENE_STAMPED_PARAMS), and the
         // Scene Setup panel's World "Rendering" section renders through the
         // card-filtered surface — hidden here means the section shows zero

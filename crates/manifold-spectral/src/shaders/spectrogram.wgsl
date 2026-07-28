@@ -45,7 +45,7 @@ struct Params {
     // Each tick lane's height as a fraction of the scope (LANE_HEIGHT_FRAC
     // in scope.rs — one owner; the UI gutter legend uses the same value).
     lane_frac: f32,
-    // P7 (AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md §7.2 item 5):
+    // P7 (AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md section 7.2 item 5):
     // the KEPT y-range (bottom-up 0..1, same convention as band_lo_y/
     // band_hi_y) of the currently-open fire-mode drawer's selected band —
     // everything outside it darkens. dim_lo_y < 0 disables dimming.
@@ -192,7 +192,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let y_from_bottom = 1.0 - in.uv.y;
 
     // P7 band dimming (AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md
-    // §7.2 item 5): darken the magnitude colour OUTSIDE the open fire-mode
+    // section 7.2 item 5): darken the magnitude colour OUTSIDE the open fire-mode
     // drawer's selected band's kept range — dividers/centroids/onsets/cursor
     // below stay full-brightness (fire feedback lives in the drawer meter,
     // not here; this shows what the config LISTENS TO). Multiplicative, not

@@ -2,10 +2,10 @@
 
 # Timeline Ingest — drop, paste, replace
 
-**Status:** P3+P4+P5 SHIPPED 2026-07-05 @ `e0a2931b` (Finder paste, replace-audio, role-keyed stem lanes; manual L4 running-app checks still owed). P1/P2 PARKED — both AppKit drag-poll sources frozen mid-drag; root fix landed separately as BUG-028 (`draggingUpdated:` interpose, `wave/timeline-drop`, live-drag verification owed). · 2026-07-04 · Fable · **baseline-reviewed 2026-07-05, cleared** (zero unlabeled forks; anchors spot-reverified — symbols all hold, line drift only, e.g. drop arms app.rs:2388→~2447, SwapVideoCommand :338→:368; trust each phase's entry-state re-derivation. §10 levels: P1/P2 gates are L4 by nature — neither headless tests nor the UI-automation layer can synthesize an OS drag session; P3–P5 gate L1 with manual L4 extras.)
+**Status:** P3+P4+P5 SHIPPED 2026-07-05 (Finder paste, replace-audio, role-keyed stem lanes; manual L4 running-app checks still owed). P1/P2 PARKED — both AppKit drag-poll sources freeze mid-drag; root fix landed separately as BUG-028 (`draggingUpdated:` interpose root fix; live-drag verification owed). · 2026-07-04 · Fable · baseline-reviewed 2026-07-05, cleared
 **Prerequisites:** none (extends shipped audio-clip-detection + drop paths)
 **Compose stage:** direction captured 2026-07-09 in [AUTO_POPULATE_DESIGN.md](AUTO_POPULATE_DESIGN.md) (section detection → grammar-legal visual rolls).
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
 Peter, 2026-07-04: *"Dragging and dropping an audio file seems to create a new layer
 instead of dropping the audio file onto the layer. Would be nice to be able to copy and
@@ -20,8 +20,8 @@ give the drop path the real pointer, give the paste path the real pasteboard, gi
 clip a real replace operation, give stem lanes a real identity.
 
 Companion docs: `AUDIO_CLIP_DETECTION_DESIGN.md` (the detect/group machinery this
-extends — its §8.3 lane-keyed reuse is the contract P5 here makes hold),
-`AUDIO_LAYER_DESIGN.md` §6 (the original drop affordance).
+extends — its section 8.3 lane-keyed reuse is the contract P5 here makes hold),
+`AUDIO_LAYER_DESIGN.md` section 6 (the original drop affordance).
 
 ## 1. Audit — what exists (verified 2026-07-04)
 
@@ -238,7 +238,7 @@ speculative).
 
 ### P1 — True drop targeting *(app)*
 - **Entry state:** clean main; `rg -n "self.cursor_pos" crates/manifold-app/src/app.rs` shows the DroppedFile/image arms reading it (re-verify the audit anchors app.rs:2388-2412, project_io.rs:605-694).
-- **Read-back:** this doc §2 D1/D2, §3, §4; `app.rs` WindowEvent arms for `HoveredFile`/`DroppedFile`/`HoveredFileCancelled`; the §3 verify step runs FIRST.
+- **Read-back:** this doc section 2 D1/D2, section 3, section 4; `app.rs` WindowEvent arms for `HoveredFile`/`DroppedFile`/`HoveredFileCancelled`; the section 3 verify step runs FIRST.
 - **Deliverables:** `drag_hover.rs` + tracker wired into the event loop (poll called in the per-frame tick while active); every drop arm (audio/MIDI at app.rs:2392, images at app.rs:2429) resolves position via `tracker.drop_position().unwrap_or(self.cursor_pos)`; objc2-app-kit dep added.
 - **Gate:** positive — Peter drags a file from Finder onto an existing audio lane and the log reads `Dropped 1 audio file(s) onto lane`; onto empty space reads `as new lane(s)`; an image drop lands on the lane under the pointer. Unit tests for the screen→window→px conversion (`cargo test -p manifold-app drag_hover` — manifold-app is bin-only, so no `--lib` target exists). Negative — the DroppedFile arm no longer reads `self.cursor_pos` directly: `rg -n "cursor_pos" crates/manifold-app/src/app.rs` hits only the tracker fallback and unrelated arms.
 - **Forbidden moves:** patching/forking winit · runtime method injection into winit classes · any `Arc<Mutex>`/cross-thread position sharing · caching one position at hover-enter instead of polling.
@@ -263,15 +263,15 @@ speculative).
 ### P4 — Replace audio file *(editing, app, ui)*
 - **Entry state:** re-verify clip.rs:338 (SwapVideoCommand) and orchestrator clear walk (percussion_orchestrator.rs:800-853).
 - **Read-back:** D6/D7; `SwapVideoCommand` end-to-end including its undo; the parent doc's locked "Detect is manual" decision.
-- **Deliverables:** `ReplaceAudioFileCommand` (§4 shape) + composite with the `detection_source` clip deletions; inspector Source row → file dialog → command (PanelAction precedent: the existing `ClipDetect*` actions in [inspector.rs:730-806](../crates/manifold-app/src/ui_bridge/inspector.rs#L730)); roundtrip + undo test in `manifold-editing/tests/command_roundtrips.rs` (existing file, existing pattern).
+- **Deliverables:** `ReplaceAudioFileCommand` (section 4 shape) + composite with the `detection_source` clip deletions; inspector Source row → file dialog → command (PanelAction precedent: the existing `ClipDetect*` actions in [inspector.rs:730-806](../crates/manifold-app/src/ui_bridge/inspector.rs#L730)); roundtrip + undo test in `manifold-editing/tests/command_roundtrips.rs` (existing file, existing pattern).
 - **Gate:** positive — roundtrip test proves undo restores path, in_point, recorded_bpm, detection state, and the deleted generated clips; manual — replace a detected song's file, old triggers/stems vanish, config + routing survive in the inspector, Detect re-populates onto the same lanes. Negative — `rg -n "detect" crates/manifold-editing/src/commands/clip.rs` shows the command clears analysis, never invokes detection.
 - **Forbidden moves:** flag-parameterizing `SwapVideoCommand` to double as audio · auto-running Detect on replace · leaving the old song's triggers alive "until next detect".
 - **Test scope:** `cargo test -p manifold-editing` (lib + command_roundtrips) + clippy.
 
 ### P5 — Role-keyed stem lanes *(core, playback)*
 - **Entry state:** re-verify the name-match lookup at percussion_orchestrator.rs:604-616 and `STEM_DISPLAY` order at :524.
-- **Read-back:** D8; parent doc §8.3 (the reuse contract this makes hold); the orchestrator tests at the bottom of percussion_orchestrator.rs (`clear_clip_triggers_removes_only_tagged`, `replan_clip_places_from_cache_without_backend`) — new tests follow their harness.
-- **Deliverables:** `DetectStemRole` + `Layer.detect_stem_role` (§4); lookup by role with name-match fallback that stamps the role; rename-on-reuse of lane + send + group per D8's don't-clobber rule; test: detect on a lane, replace with a differently-named song (P4), re-detect → assert same lane IDs, same send IDs, zero new lanes, names updated.
+- **Read-back:** D8; parent doc section 8.3 (the reuse contract this makes hold); the orchestrator tests at the bottom of percussion_orchestrator.rs (`clear_clip_triggers_removes_only_tagged`, `replan_clip_places_from_cache_without_backend`) — new tests follow their harness.
+- **Deliverables:** `DetectStemRole` + `Layer.detect_stem_role` (section 4); lookup by role with name-match fallback that stamps the role; rename-on-reuse of lane + send + group per D8's don't-clobber rule; test: detect on a lane, replace with a differently-named song (P4), re-detect → assert same lane IDs, same send IDs, zero new lanes, names updated.
 - **Gate:** positive — the new orchestrator tests + `cargo test -p manifold-playback --lib` + `-p manifold-core --lib` (serde roundtrip of the new field). Negative — `rg -n 'l.name == lane_name' crates/manifold-playback/src/percussion_orchestrator.rs` returns zero hits as the primary lookup (the name match survives only inside the stamped fallback, commented as such).
 - **Forbidden moves:** delete-and-recreate lanes as "rename" · an eager load-migration pass over existing projects (the lazy fallback IS the migration) · renaming user-edited names.
 - **Test scope:** focused per above + clippy. No workspace sweep — no GPU/parity surface anywhere in this wave.

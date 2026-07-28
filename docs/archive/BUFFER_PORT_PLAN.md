@@ -28,9 +28,9 @@
 
 Full pixel-exact FluidSim parity needs additional blur + gradient atoms and the 7-pattern seed shader port — both follow-up sessions on top of this foundation.
 
-**Why this exists:** Today's particle / mesh / line generators (FluidSim, BlackHole, MetallicGlass, Tesseract, Lissajous, etc.) are opaque atomic primitives because their internal state lives in `MTLBuffer`s that have no externally-visible wire type. To decompose them into a creative surface — the §0 "primitive library is the product" promise — graph wires need to carry not just textures and scalars but also **arrays of structured items** (particles, vertices, line points, audio samples).
+**Why this exists:** Today's particle / mesh / line generators (FluidSim, BlackHole, MetallicGlass, Tesseract, Lissajous, etc.) are opaque atomic primitives because their internal state lives in `MTLBuffer`s that have no externally-visible wire type. To decompose them into a creative surface — the section 0 "primitive library is the product" promise — graph wires need to carry not just textures and scalars but also **arrays of structured items** (particles, vertices, line points, audio samples).
 
-Companion docs: [PRIMITIVE_LIBRARY_DESIGN.md §12.3](PRIMITIVE_LIBRARY_DESIGN.md) (Array port promoted to V1) and §12.8 (Black Hole / FluidSim worked-example decompositions).
+Companion docs: [PRIMITIVE_LIBRARY_DESIGN.md section 12.3](PRIMITIVE_LIBRARY_DESIGN.md) (Array port promoted to V1) and section 12.8 (Black Hole / FluidSim worked-example decompositions).
 
 ---
 
@@ -107,7 +107,7 @@ SeedParticles ─┐
 
 **Phase A — foundational (shipped)**
 
-The Array port + the particle family. Worked out in detail at [PRIMITIVE_LIBRARY_DESIGN.md §12.8](PRIMITIVE_LIBRARY_DESIGN.md). Delivered:
+The Array port + the particle family. Worked out in detail at [PRIMITIVE_LIBRARY_DESIGN.md section 12.8](PRIMITIVE_LIBRARY_DESIGN.md). Delivered:
 
 1. ✅ `PortType::Array(ArrayType)` variant + `primitive!` macro support for `Array(T)` syntax (paren syntax — `<>` doesn't parse cleanly in macros).
 2. ✅ Wire format: validated through the existing `EffectGraphDef` schema; wires reference ports by name, port-type matching uses `PortType` derived Eq on the new variant.
@@ -145,7 +145,7 @@ Two of three shipped:
 
 **Phase D — 3D volume family (parked)**
 
-`Sample3D`, `SliceVolume`, `Volume3DSplat`, `Volume3DAdvect`. Per [PRIMITIVE_LIBRARY_DESIGN.md §12.4](PRIMITIVE_LIBRARY_DESIGN.md), these were V2-deferred. The case for promoting is still weaker — only FluidSim3D and MriVolume need them, both can stay atomic-with-internal-state, and the prerequisite infrastructure isn't there: `MetalBackend` only allocates real Texture2D resources today; Texture3D falls back to mock semantics. Build the Texture3D backend first, then primitives.
+`Sample3D`, `SliceVolume`, `Volume3DSplat`, `Volume3DAdvect`. Per [PRIMITIVE_LIBRARY_DESIGN.md section 12.4](PRIMITIVE_LIBRARY_DESIGN.md), these were V2-deferred. The case for promoting is still weaker — only FluidSim3D and MriVolume need them, both can stay atomic-with-internal-state, and the prerequisite infrastructure isn't there: `MetalBackend` only allocates real Texture2D resources today; Texture3D falls back to mock semantics. Build the Texture3D backend first, then primitives.
 
 ---
 
@@ -161,15 +161,15 @@ Two of three shipped:
 ## What this doesn't do
 
 - Doesn't migrate generators to JSON. That's a separate pass (the JSON migration scoped earlier in the same session). Once Phase A lands, the JSON migration can use Buffer ports for the buffer-using generators rather than wrapping them as atomic-with-internal-state.
-- Doesn't add subgraph iteration (§12.4 of PRIMITIVE_LIBRARY_DESIGN). That stays V2+.
-- Doesn't fuse particle dispatches (§12.5 fusion compiler). Still parked behind measured perf pressure.
+- Doesn't add subgraph iteration (section 12.4 of PRIMITIVE_LIBRARY_DESIGN). That stays V2+.
+- Doesn't fuse particle dispatches (section 12.5 fusion compiler). Still parked behind measured perf pressure.
 
 ---
 
 ## References
 
-- [PRIMITIVE_LIBRARY_DESIGN.md §12.3](PRIMITIVE_LIBRARY_DESIGN.md) — Array port promoted to V1
-- [PRIMITIVE_LIBRARY_DESIGN.md §12.8](PRIMITIVE_LIBRARY_DESIGN.md) — Black Hole + FluidSim worked-example decompositions
+- [PRIMITIVE_LIBRARY_DESIGN.md section 12.3](PRIMITIVE_LIBRARY_DESIGN.md) — Array port promoted to V1
+- [PRIMITIVE_LIBRARY_DESIGN.md section 12.8](PRIMITIVE_LIBRARY_DESIGN.md) — Black Hole + FluidSim worked-example decompositions
 - [NODE_GRAPH_SYSTEM.md](NODE_GRAPH_SYSTEM.md) — overall graph architecture
 - [ADDING_PRIMITIVES.md](ADDING_PRIMITIVES.md) — primitive macro authoring guide
 - `crates/manifold-renderer/src/node_graph/ports.rs` — current PortType (Texture2D / Texture3D / Scalar)

@@ -5,7 +5,7 @@ human-readable node groups — the thing that turns a 57-node hairball into ten 
 can read at a glance. It is the sibling of [DECOMPOSING_GENERATORS.md](DECOMPOSING_GENERATORS.md):
 that guide is about *granularity* (what the atoms are), this one is about *legibility* (how the
 atoms are arranged once they exist) — and the one cleanup that cuts complexity hardest before you
-draw a single boundary: folding redundant slider-rescaling out of the graph (§4).
+draw a single boundary: folding redundant slider-rescaling out of the graph (section 4).
 
 **The audience is an AI agent restructuring a preset's JSON directly.** This is the JSON-level
 procedure — partition the nodes, fold away redundant plumbing, rewrite the wires, verify — not the
@@ -15,7 +15,7 @@ result, but the author following this guide is the agent.
 Read alongside:
 - [NODE_GROUPS_DESIGN.md](NODE_GROUPS_DESIGN.md) — the flattener mechanics + JSON schema (the
   authoritative spec for *what a group is*; this guide assumes it).
-- [DECOMPOSING_GENERATORS.md](DECOMPOSING_GENERATORS.md) §6.6 — naming nodes for what they do.
+- [DECOMPOSING_GENERATORS.md](DECOMPOSING_GENERATORS.md) section 6.6 (Name nodes for what they do, not how they're built) — naming nodes for what they do.
 
 ---
 
@@ -29,7 +29,7 @@ store, the performance surface never see a group.
 Grouping is **not**:
 - **Decomposition.** It does not change what the atoms are or how fine-grained they are. If a
   graph balloons with repeated math scaffolding, that's a *primitive* problem — build the
-  primitive (see DECOMPOSING §6.1), don't paper over it with a group.
+  primitive (see DECOMPOSING section 6.1), don't paper over it with a group.
 - **Performance optimization.** Groups do not fuse, reduce dispatches, or change cost. The
   freeze/bake fusion direction is a separate concern. Grouping a slow graph leaves it exactly as
   slow; it just makes it readable.
@@ -55,7 +55,7 @@ addresses inner nodes by `nodeId`, never by handle or position. So:
 > A slider that drove `turbulence_base` before still drives it after, no matter how many boxes
 > you wrap around it.
 
-(The NODE_GROUPS_DESIGN §6 line about bindings targeting "prefixed handles" predates the
+(The NODE_GROUPS_DESIGN section 6 line about bindings targeting "prefixed handles" predates the
 node-id-targeting work — bindings target `nodeId` now, which is exactly why grouping is free.)
 
 Corollary: never rewrite a `nodeId` while grouping. If you're transforming the JSON
@@ -145,8 +145,8 @@ targets this way; give each entry the `scale` its target needs).
 gone), so it does **not** pass the flatten-equivalence-to-original check. Verify it instead by
 reading the constants — the binding's `scale`/`offset` must reproduce the deleted node's
 `in * k + c` exactly — and by confirming the node's sole consumer was the target. Do every fold
-first, then take the *post-fold* graph as the baseline for the grouping equivalence check (§8).
-(This is the linear-remap path that DECOMPOSING §7's "needs a `math` node in the graph" note
+first, then take the *post-fold* graph as the baseline for the grouping equivalence check (section 8).
+(This is the linear-remap path that DECOMPOSING section 7's "needs a `math` node in the graph" note
 predates — `scale` / `offset` are separate fields from the `convert` enum, which stays
 passthrough-only.)
 
@@ -158,7 +158,7 @@ passthrough-only.)
 enough that the flat layout is genuinely hard to read. If the graph is small — roughly under a
 dozen nodes — or is a flat chain of already-well-named atoms with no separable subsystem, **leave
 it flat and record why.** Wrapping a six-node colour filter in boxes adds structure without adding
-clarity, and it's churn on a file that was already legible. (The §4 fold is still worth doing on a
+clarity, and it's churn on a file that was already legible. (The section 4 fold is still worth doing on a
 graph you're otherwise leaving alone — deleting a redundant rescaling node helps regardless.) For
 everything past that bar:
 
@@ -221,7 +221,7 @@ wires, for one signal. Inject Burst's four outputs each pay this twice. So the t
 
 Names are a UX surface — palette, canvas headers, search, and the prompt an AI agent reads. Every
 part of a grouped graph gets a sensible, human name: the groups, the pins, **and the individual
-nodes inside.** Apply DECOMPOSING §6.6 wholesale, at every level:
+nodes inside.** Apply DECOMPOSING section 6.6 wholesale, at every level:
 
 - **Name for what it does to the output**, in plain language. `Flow Field`, `Render Density`,
   `Clip Triggers` — not `gradient_rotate_block` or `subsystem_3`.
@@ -235,7 +235,7 @@ nodes inside.** Apply DECOMPOSING §6.6 wholesale, at every level:
   canvas-header name and is honored for every node type; with no title it falls back to a prettified
   type id, so a graph full of bare `node.math` / `node.value` / `node.mux_scalar` reads as anonymous
   boxes. Set a plain-language `title` on each — Glitch titles its two `node.value` hubs `Amount` and
-  `Speed`. Title is display only; **never touch `nodeId`** (§2).
+  `Speed`. Title is display only; **never touch `nodeId`** (section 2).
 - **Always title `node.wgsl_compute` — this is the most important one.** A custom shader with no
   title renders as a generic `node.wgsl_compute (WGSL)` box: the one node type whose entire purpose
   is invisible from the graph, since the logic lives in a hand-written kernel nothing else can read.
@@ -251,7 +251,7 @@ This is live-show code; a rewiring slip becomes the show. A grouped graph that l
 it's *equivalent*. Prove equivalence directly.
 
 **The equivalence recipe (the gold standard).** Flatten both the grouped graph and the
-pre-grouping baseline (the *post-fold* graph, if you ran §4), then compare **in `nodeId` space** (which survives the id-renumbering and
+pre-grouping baseline (the *post-fold* graph, if you ran section 4), then compare **in `nodeId` space** (which survives the id-renumbering and
 handle-prefixing the flattener does):
 
 1. **Connectivity set** — `{(fromNodeId, fromPort, toNodeId, toPort)}` for every wire. Must be
@@ -283,7 +283,7 @@ write it, run it, delete it. Leaving it in `tests/` ships a test that can't run 
 
 **Known limitation — edit the JSON, not a round-tripped copy.** Re-saving a grouped preset back
 through the runtime's serializer currently *re-flattens* it: the `from_graph` reconstruction of
-groups is deferred (NODE_GROUPS_DESIGN §9), so a mutate-and-save drops the grouping. It's cosmetic,
+groups is deferred (NODE_GROUPS_DESIGN section 9), so a mutate-and-save drops the grouping. It's cosmetic,
 not behavioral — but it means the bundled JSON on disk is the source of truth for a preset's group
 structure. Author there; don't expect groups to survive a round trip through a live `Graph`.
 
@@ -313,24 +313,24 @@ reference (three flat groups, no nesting).
 
 1. **Read the flat graph end to end.** Identify the spine (chain or loop), the stateful/IO nodes,
    the shared signals, and the control plumbing. Don't group what you don't understand.
-2. **Fold static slider-rescaling first (§4).** Delete every pure constant-affine node that only
+2. **Fold static slider-rescaling first (section 4).** Delete every pure constant-affine node that only
    remaps a card slider toward one target; move its `k`/`c` onto the binding's `scale`/`offset`,
    re-point the binding's `target.nodeId`, and sweep any node orphaned by the deletion. Fewer nodes
    to place, and a smaller baseline to verify against.
-3. **Decide whether to group at all (§5).** Small graph (~under a dozen nodes) or a flat chain with
+3. **Decide whether to group at all (section 5).** Small graph (~under a dozen nodes) or a flat chain with
    no separable subsystem → leave it flat, record why, stop here. Otherwise continue.
 4. **Draft the partition.** Assign every remaining node to exactly one group or to the top level.
-   Name each group for what it does to the output (§7). Keep the spine pivot and IO boundary nodes
-   at the top level (§3.6, §5).
-5. **Decide flat vs. nested per group** using the §6 cost test. Default to flat.
+   Name each group for what it does to the output (section 7). Keep the spine pivot and IO boundary nodes
+   at the top level (section 3.6, section 5).
+5. **Decide flat vs. nested per group** using the section 6 cost test. Default to flat.
 6. **Define each interface** — the inputs (signals entering) and outputs (signals leaving),
-   exactly one producer per output (§3.1), accurate `portType` tags (§3.5), camelCase names (§7).
-7. **Name everything (§7).** Title every ambiguous node and *every* `node.wgsl_compute`; clean
-   group and port names. Never touch `nodeId` (§2).
+   exactly one producer per output (section 3.1), accurate `portType` tags (section 3.5), camelCase names (section 7).
+7. **Name everything (section 7).** Title every ambiguous node and *every* `node.wgsl_compute`; clean
+   group and port names. Never touch `nodeId` (section 2).
 8. **Build it programmatically**, preserving every `nodeId`, `params`, and `wgslSource` verbatim
-   (§2, §8). Omit `interface.params` for pure reorganization (§3.7).
+   (section 2, section 8). Omit `interface.params` for pure reorganization (section 3.7).
 9. **Verify equivalence** with the three-set `nodeId`-space comparison against the post-fold
-   baseline, then `check-presets`, then the one-frame-execute test (§8). Delete the throwaway test
+   baseline, then `check-presets`, then the one-frame-execute test (section 8). Delete the throwaway test
    after. Do not skip the frame execute.
 10. **Update the preset `description`** to narrate the groups (what each box does, why anything is
     nested), and state plainly that the groups flatten to the same behavior. Glitch and Fluid Sim 2D

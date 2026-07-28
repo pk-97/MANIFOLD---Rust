@@ -1,4 +1,4 @@
-// node.hypercube_points — fusable BUFFER body (freeze §12, buffer domain),
+// node.hypercube_points — fusable BUFFER body (freeze section 12, buffer domain),
 // SOURCE. Emit the 16 corner vertices of a 4D hypercube into an
 // Array<Vec4Vertex>, with a continuous `dimension` control that collapses
 // higher axes toward zero. Matches hypercube_vertices.wgsl bit-for-bit.

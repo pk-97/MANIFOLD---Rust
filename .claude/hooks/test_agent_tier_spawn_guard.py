@@ -39,7 +39,7 @@ for model in ("deepseek-v4-flash", "kimi-for-coding", "kimi-k2.7-code",
         check(f"executor denied: {model} -> {slot or '(none)'}",
               bool(r) and "executor" in r)
 
-# Dispatcher tier (both GLM versions): haiku only.
+# Dispatcher tier (both GLM versions, Peter 2026-07-27): haiku only.
 for model in ("glm-4.7", "glm-5.2"):
     check(f"dispatcher allowed: {model} -> haiku",
           hook.decide(model, "haiku") == "")

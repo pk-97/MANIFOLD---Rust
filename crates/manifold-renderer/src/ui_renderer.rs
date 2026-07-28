@@ -912,7 +912,7 @@ impl UIRenderer {
     /// Queue a rounded rectangle with a linear-gradient body from `start` to
     /// `end`, interpolated along the unit direction `dir` in the rect's UV space
     /// (`[0.0, 1.0]` = top→bottom, `[1.0, 0.0]` = left→right). The shared
-    /// primitive behind gradient card/clip bodies (§24 5a); border + shadow paths
+    /// primitive behind gradient card/clip bodies (section 24 5a); border + shadow paths
     /// are unaffected. `corner_radius: 0.0` gives a flat (non-rounded) gradient.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_gradient_rect(
@@ -973,7 +973,7 @@ impl UIRenderer {
         });
     }
 
-    /// Queue a soft drop-shadow for a rounded element (§17 elevation). The
+    /// Queue a soft drop-shadow for a rounded element (section 17 elevation). The
     /// shadow quad is the element rect grown by `blur` on every side; the
     /// element's rounded rect sits inset at the centre and alpha falls from
     /// `color.a` at its edge to 0 over `blur` px. Encoded as a negative border
@@ -1489,7 +1489,7 @@ impl UIRenderer {
             }
         }
 
-        // Dropdown caret (§M / mockup `.sel::after`): a dim ▼ pinned to the
+        // Dropdown caret (section M / mockup `.sel::after`): a dim ▼ pinned to the
         // node's right edge, drawn independent of the main text so a value chip
         // reads as a dropdown without baking the glyph into the value string.
         #[cfg(target_os = "macos")]

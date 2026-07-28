@@ -215,7 +215,7 @@ impl TimelineClip {
         }
     }
 
-    /// Warp ratio for this clip at `project_bpm` (Audio Layer §4.1): how much
+    /// Warp ratio for this clip at `project_bpm` (Audio Layer section 4.1): how much
     /// faster than 1× the source must play to lock the clip's recorded tempo to
     /// the project. `project_bpm / recorded_bpm`, or **1.0 when the clip has no
     /// recorded BPM** (0 = warp off → source plays at its native speed). The

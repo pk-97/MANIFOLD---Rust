@@ -165,7 +165,7 @@ mod tests {
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
-    //! Buffer→texture resolve value oracle (freeze §12). Dispatches the generated
+    //! Buffer→texture resolve value oracle (freeze section 12). Dispatches the generated
     //! kernel over a known u32 accumulator, reads back the density texture, and
     //! asserts (a) each pixel's R = raw / fixed_point_scale and (b) the
     //! accumulator is self-cleared to zero. The generated kernel derives dims +

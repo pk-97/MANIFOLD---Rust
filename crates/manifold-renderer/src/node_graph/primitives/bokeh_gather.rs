@@ -15,11 +15,11 @@
 //! `bokeh_gather` shares `variable_blur`'s `in`/`width` port names/shapes
 //! exactly so the preset swap is a straight re-wire, not a new topology.
 //!
-//! §2.5 audit (`docs/DECOMPOSING_GENERATORS.md`, re-verified 2026-07-13):
+//! section 2.5 audit (`docs/DECOMPOSING_GENERATORS.md`, re-verified 2026-07-13):
 //! `rg 'purpose: "' crates/manifold-renderer/src/node_graph/primitives/ -g
 //! "*.rs" | grep -i bokeh` → 0 hits before this file. Genuinely new — no
 //! existing atom does a CoC-weighted 2D disc gather (the design doc's own
-//! §2.5 audit already named `bokeh_gather` as one of the four genuinely-new
+//! section 2.5 audit already named `bokeh_gather` as one of the four genuinely-new
 //! atoms in this cluster; this re-confirms zero drift since).
 //!
 //! Precedent read end-to-end before authoring: `gaussian_blur_variable_

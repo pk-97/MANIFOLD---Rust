@@ -1,4 +1,4 @@
-// node.fbm_per_instance — fusable BUFFER body (freeze §12, buffer domain),
+// node.fbm_per_instance — fusable BUFFER body (freeze section 12, buffer domain),
 // COINCIDENT. Sample multi-octave 3D-simplex fBM at each UV; emit one f32 per
 // slot. Matches fbm_per_instance.wgsl bit-for-bit (same simplex3d + fbm loop;
 // simplex3d prepended via wgsl_includes from noise_common.wgsl).

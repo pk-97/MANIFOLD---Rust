@@ -1,4 +1,4 @@
-// node.gradient_central_diff — fusable body (freeze §12), GATHER_TEXEL. Per-pixel
+// node.gradient_central_diff — fusable body (freeze section 12), GATHER_TEXEL. Per-pixel
 // central-difference gradient of one channel of `in`: reads the 4 axis
 // neighbours via an EXACT integer textureLoad (one texel index step), with
 // the boundary policy resolved MANUALLY from `wrap_mode` (see

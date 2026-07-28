@@ -143,15 +143,11 @@ The single floor is "what counts as audible," shared with the display. These sit
   both `vqt_raw` and `state.col`. `band_reduce` uses the **fixed** `db_min`.
 - **Phase 3 — Delete the hidden gate.** Remove `ONSET_AMP_GATE` and every `if loud`
   gate; features compute on the floored column directly.
-- **Phase 4 — Decouple correction.** A first cut fed the floor to the display as a
-  *live* `db_min`, which made the floor recolour the whole spectrogram. Reverted:
-  `db_min` is fixed contrast; the floor only zeros. The live-`db_min` plumbing
-  (widget `set_db_min`, `resolved_floor_db`, `ContentState.spectrogram_floor_db` and
-  its wiring) was removed.
-- **Tick-smear fix (same pass).** The scope onset ticks marked the decaying impulse
-  (~5 columns/fire), smearing the true rate into a carpet. Now the scope marks only
-  the fire instant (`transients > 0.999` → 1 column); modulation still reads the
-  decaying impulse.
+- **Phase 4 — Decouple correction.** `db_min` is fixed contrast; the floor only
+  zeros — never fed to the display as a live `db_min` (that recolours the whole
+  spectrogram).
+- **Tick smear.** The scope marks only the fire instant (`transients > 0.999` →
+  1 column); modulation still reads the decaying impulse.
 
 ## Files
 

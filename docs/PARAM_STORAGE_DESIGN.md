@@ -1,8 +1,8 @@
 # Param Manifest — id-keyed per-instance parameter storage
 
-**Status:** SHIPPED (closed 2026-07-16) — all five phases landed 2026-07-05; no code work remains. Outstanding items are Peter-owned, not design work: the one-time library re-save to V1.4, and the running-app/hardware confirmations VD-007–VD-010 (`docs/VERIFICATION_DEBT.md`), all closable in one rig pass. Detail: **P5 CODE-COMPLETE (2026-07-05 @ `bdeebbd3`)**: inspector single-source landed. The angle-display flag `is_angle` now has a single persistent home on the manifest `ParamSpecDef` (serde default, skipped when false so presets stay byte-identical) — seeded at every user-expose path (`append_user_binding`, the position-aware insert) from the inner `ParamType::Angle`, and read by the inspector card through the existing single-source overlay. `synth_user_binding` reads `spec.is_angle` instead of the hardcoded `false` that had dead-fed every card since the P2 unification, so exposed angle params (incl. glTF camera orbit/tilt/FOV, threaded through `card_param`) show degrees again. **Two corrections to the earlier plan, found by reading the code:** (a) the *calibrated-range* worry was already solved — `EditParamMappingCommand` dual-writes calibration to both the manifest spec and the `meta.params` shadow, and the card overlay reads the shadow, so calibrated bundled params already displayed correctly; the only real defect was `is_angle`. (b) `convert` was NOT added to the spec — it already lives correctly on `BindingDef` (synth reads it; `whole_numbers` is derived onto the spec at expose), so putting it on the spec would have duplicated a field with a home. Back-compat verified: the V1.4 migration only writes value-state, never the spec, so no migration change was needed. Regression test `user_exposed_angle_param_carries_is_angle_through_manifest_and_synth`. Full workspace test + clippy clean (except pre-existing BUG-030). See `docs/landings/2026-07-05-param-storage-p5-inspector.md`. **REMAINING P5 — 1 item, Peter-owned:** the one-time real library re-save to V1.4 (open each show project, confirm integrity, save). The earlier field-shed (`PresetDef` dropped `param_count`/`id_to_index`/`param_ids`/`index_for_param` + positional registry fns) and the macro-label slice (`describe_macro_mapping`) landed before this. See `docs/landings/2026-07-05-param-storage-p5-fieldshed.md` + `…-p5-partial.md`. **P4 SHIPPED (2026-07-05)**: Ableton + OSC resolve param mappings by manifest id against the LIVE manifest, not the frozen registry's positional tables — user-added and glb-imported params are now mappable (Ableton) and addressable (OSC) where they were silently dropped; repros written first (red), bundled OSC addresses proven byte-identical by guard (VD-009 = the owed real-hardware round-trip). P5 (registry containment + library re-save) remains. **P3 SHIPPED (2026-07-05)**: the UI↔content modulation bridge now stamps each transport block with `ParamManifest::topology()` at capture and skips a block on apply when the live topology no longer matches — replacing the `len == len` guard that silently misrouted a same-length param reorder (VD-008 = the owed running-app smoke). **P2 SHIPPED (2026-07-05)**: positional Vec<ParamSlot> + three resolvers deleted; per-instance params now the id-keyed ParamManifest end to end (storage, funnels, renderer bind seam, modulation/automation, serde). bench_resolve 72.38 ns/op (≤271.5 ceiling). Three production migration gaps the test-pass surfaced — revert-prunes-user-params, edit-mapping-writes-live-manifest-spec (D6), restore-honors-snapshot-arity — fixed at the root. See `docs/landings/2026-07-05-param-storage-p4.md` + `…-p3.md` + `…-p2.md`; P1 SHIPPED @ `c7ae831f`. · approved 2026-07-05 · Fable 5
+**Status:** SHIPPED (closed 2026-07-16) — all five phases landed 2026-07-05; no code work remains. As-built records per phase: `docs/landings/2026-07-05-param-storage-p2.md` through `…-p5-inspector.md`. Outstanding is Peter-owned, not design work: the one-time library re-save to V1.4, and the running-app/hardware confirmations VD-007–VD-010 (`docs/VERIFICATION_DEBT.md`) — all closable in one rig pass. · approved 2026-07-05**
 **Prerequisites:** none
-**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5–§6 before starting any phase.
+**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
 A parameter's runtime identity today is its integer position in a flat array,
 even though every parameter already has a stable string id. Every consumer —
@@ -30,10 +30,10 @@ Peter's directives (2026-07-05, verbatim — these decided the shape):
   possible."
 
 Companion docs: `docs/archive/PARAM_STORAGE_REDESIGN_BRIEF.md` (Opus's grounded census —
-the input this design was built from; its §5 blast-radius categories still
+the input this design was built from; its section 5 blast-radius categories still
 apply). `docs/NODE_GROUPS_DESIGN.md` (the derive-don't-store discipline this
 design copies: positional views are computed at boundaries, never stored as
-identity). `docs/AUTOMATION_LANES_DESIGN.md` §4 (the `touched` latch semantics,
+identity). `docs/AUTOMATION_LANES_DESIGN.md` section 4 (Override latch (the precedence rule)) (the `touched` latch semantics,
 which must survive unchanged). `docs/FREEZE_COMPILER_MAP.md` (freeze reads
 params through the same runtime apply path; it has no positional dependency —
 verified below).
@@ -88,7 +88,7 @@ commands/preset.rs 17, content_state.rs 15).
 two id-keyed structures whose *membership* must stay in lockstep, which is the
 same disease one level up. The manifest's insertion order IS the card display
 order; identity is the id; nothing is derived. Rejected:
-`IndexMap<ParamId, ParamSlot>` beside `meta.params` (the brief's §7 sketch),
+`IndexMap<ParamId, ParamSlot>` beside `meta.params` (the brief's section 7 sketch),
 because it preserves the descriptor/state split.
 Rejected: a global project-wide param table keyed by (instance, param) — it
 centralizes nothing that isn't already O(1) per-instance, and it breaks the
@@ -137,7 +137,7 @@ generator graph-meta range authority both collapse into "read the Param".
 **D7 — `ResolvedBinding.source_index` becomes `source_id: ParamId`; the
 per-frame apply does a direct manifest lookup.** No cached index, no rebuild
 scratch — a cached index is a smaller copy of the bug this design kills. At
-< 40 params per instance a linear id scan is nanoseconds (§8). Fallback if
+< 40 params per instance a linear id scan is nanoseconds (section 8). Fallback if
 profiling ever disagrees: topology-keyed index caching, listed in Deferred —
 do not build it preemptively.
 
@@ -166,7 +166,7 @@ identity. `ToggleStaticParamExposeCommand { param_index }` becomes
 Ids are short strings, manifests are < ~40 entries; a scan with early exit
 beats hash overhead at this size and preserves order for free. The driver
 evaluator's per-frame `Vec` allocation (`modulation.rs:225`) is deleted as part
-of the rewrite (worked example in P2's seam brief). Measure per §8; interning
+of the rewrite (worked example in P2's seam brief). Measure per section 8; interning
 is Deferred until a profile demands it.
 
 **D12 — On disk, the manifest is the single per-instance param home.** The
@@ -377,7 +377,7 @@ moved.
 
 ---
 
-## 5. Hot-path budget (§8 of the brief, resolved)
+## 5. Hot-path budget (section 8 of the brief, resolved)
 
 Today's per-frame driver path: registry `try_get` (hash) + `resolve_param_in`
 (meta.params linear scan for generators, AHashMap + user-binding scan for
@@ -408,15 +408,15 @@ default sweep ≈ 990 tests / ~24s), so infrastructure phases run it.
 - **Entry state:** clean tree off current `origin/main`;
   `rg -n "ParamValuesWire" crates/manifold-core/src/effects.rs` shows the four
   arms; `cargo test -p manifold-core --lib` green.
-- **Read-back:** this doc §2 D4/D5/D12, §4 whole; `effects.rs:785-844`,
-  `:1099-1186`, `:2446-2474`; `docs/DESIGN_DOC_STANDARD.md` §5–§6. Restate the
+- **Read-back:** this doc section 2 D4/D5/D12, section 4 whole; `effects.rs:785-844`,
+  `:1099-1186`, `:2446-2474`; `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6. (Seam briefs — refactors and API changes) Restate the
   four legacy shapes and where each dies.
 - **Deliverables:**
   - `manifold-io/src/migrations/param_storage_v14.rs` + baked
     `LEGACY_PARAM_ORDER` table (generated from the live registry ONCE, by a
     dev-test that prints it; committed as source, never regenerated) + baked
     alias table. Wired into both V1 JSON and V2 ZIP load paths.
-  - V1.4 serialize/deserialize in `effects.rs`: `params` map per §4;
+  - V1.4 serialize/deserialize in `effects.rs`: `params` map per section 4;
     `paramValues`/`baseParamValues` producers and the four wire arms deleted.
     (In-memory storage is still `Vec<ParamSlot>` this phase; the loader places
     keyed values by id→index at the boundary — that placement code survives
@@ -447,14 +447,14 @@ default sweep ≈ 990 tests / ~24s), so infrastructure phases run it.
 
 - **Entry state:** P1 landed;
   `rg -c "param_values" crates/ --type rust` — re-derive the sweep list; if
-  file counts differ materially from §1's table, list the new sites in the
+  file counts differ materially from section 1's table, list the new sites in the
   phase notes before editing anything. Record the old-resolver bench number
-  (§5) BEFORE deleting `resolve_param_in`.
-- **Read-back:** §2 D1/D2/D3/D6/D7/D10/D11, §3 whole (the types are
-  transcribed, not designed), §5; `feedback_eliminate_bug_class_at_storage_layer`.
+  (section 5) BEFORE deleting `resolve_param_in`.
+- **Read-back:** section 2 D1/D2/D3/D6/D7/D10/D11, section 3 whole (the types are
+  transcribed, not designed), section 5; `feedback_eliminate_bug_class_at_storage_layer`.
   Restate: what gets deleted, what replaces it, the forbidden positional view.
-- **Seam brief (§6 of the standard):**
-  - Old → new signatures: §3 blocks, verbatim.
+- **Seam brief (section 6 of the standard):**
+  - Old → new signatures: section 3 blocks, verbatim.
   - Technique: compiler-driven. Delete `param_values`, `ParamSlot`, and the
     three resolvers FIRST; the build errors across
     core/playback/renderer/editing/app are the exhaustive checklist.
@@ -480,19 +480,19 @@ default sweep ≈ 990 tests / ~24s), so infrastructure phases run it.
     `ToggleStaticParamExposeCommand` → `ToggleParamExposeCommand { param_id }`
     including its UI dispatch site; `ResolvedBinding.source_id` + apply loop +
     user-tail rehydration in `preset_runtime.rs` (the `n_static`/
-    `n_static_slots` fields die with it); `PresetContext` staging removal (§3
+    `n_static_slots` fields die with it); `PresetContext` staging removal (section 3
     VERIFY-AT-IMPL); calibration absorption — the chevron write path targets
     `Param.spec` + `calibrated` and the `override_range` closure dies;
     instantiation (`create_default` / preset install / glb import) seeds the
-    manifest from the template; loader reconcile per §4.
-  - Re-derivation commands: the two `rg -c` sweeps from §1, re-run at entry
+    manifest from the template; loader reconcile per section 4.
+  - Re-derivation commands: the two `rg -c` sweeps from section 1, re-run at entry
     AND at gate (the second run must show only migration-module and
     template-boundary hits).
 - **Deliverables:** `params.rs` types + unit tests (get/push/remove/insert_at/
   topology semantics, id-uniqueness debug_assert); the sweep; rewritten
   regression test `bundled_slider_delete_does_not_misroute_survivor_drivers`
   (now provable at the type level — keep it anyway as the canonical-failure
-  memorial); undo inverse-pair tests updated and green; bench per §5.
+  memorial); undo inverse-pair tests updated and green; bench per section 5.
 - **Gate:**
   - Positive: **full workspace sweep** (`cargo test --workspace`, default
     features) green; `cargo clippy --workspace -- -D warnings`; bench number
@@ -512,7 +512,7 @@ default sweep ≈ 990 tests / ~24s), so infrastructure phases run it.
 
 - **Entry state:** P2 landed; `rg -n "block_lens" crates/manifold-app/src/content_state.rs`
   anchors intact.
-- **Read-back:** §2 D8; `content_state.rs:283-402`; the two-thread model
+- **Read-back:** section 2 D8; `content_state.rs:283-402`; the two-thread model
   section of `CLAUDE.md`.
 - **Deliverables:** per-instance-block topology stamp in the snapshot
   (`Vec<u32>` parallel to `block_lens`, or a widened block header — executor's
@@ -539,13 +539,13 @@ default sweep ≈ 990 tests / ~24s), so infrastructure phases run it.
 - **Entry state:** P2 landed (P3 independent);
   `rg -n "param_index" crates/manifold-playback/src/ableton_bridge.rs crates/manifold-playback/src/osc_param_router.rs`
   shows today's index plumbing.
-- **Read-back:** §2 D9; §1 rows for both files; `project_ableton_param_scaling`
+- **Read-back:** section 2 D9; section 1 rows for both files; `project_ableton_param_scaling`
   memory (50+ mapped params must keep their scaling behavior).
 - **Deliverables:**
   - FIRST, the two acceptance repros as failing tests: (a) an Ableton mapping
     on a user-added / bundled-beyond-registry param (glb-import shape) resolves
     and writes; (b) an OSC address for a user-added param exists and dispatches.
-    These are the §6-of-the-brief latent bugs, captured before the fix.
+    These are the section 6-of-the-brief latent bugs, captured before the fix.
   - `WriteTarget` drops `param_index`; apply resolves via the `param_id` it
     already carries (`ableton_bridge.rs:2119`).
   - OSC registration iterates `fx.params.iter()` (all params, user included);
@@ -574,7 +574,7 @@ default sweep ≈ 990 tests / ~24s), so infrastructure phases run it.
 ### P5 — registry containment, library re-save, final proof
 
 - **Entry state:** P1–P4 landed.
-- **Read-back:** §2 D2; `preset_def.rs:51-82`;
+- **Read-back:** section 2 D2; `preset_def.rs:51-82`;
   `rg -l "preset_definition_registry" crates/` re-derived.
 - **Deliverables:**
   - Registry containment: `preset_definition_registry` consumers reduced to
@@ -589,7 +589,7 @@ default sweep ≈ 990 tests / ~24s), so infrastructure phases run it.
     open each show project, confirm visual + mapping integrity, save → V1.4).
     The Liveschool fixture is committed re-saved; a legacy-shape copy stays in
     the migration tests.
-  - `docs/` truth pass: EFFECT_RUNTIME_UNIFICATION §7, DEVELOPMENT_REFERENCE,
+  - `docs/` truth pass: EFFECT_RUNTIME_UNIFICATION section 7, DEVELOPMENT_REFERENCE,
     and the brief get status addenda; this doc's status flips when shipped.
 - **Gate:**
   - Positive: full workspace sweep + clippy; `gpu_proofs` smoke suite
@@ -633,7 +633,7 @@ default sweep ≈ 990 tests / ~24s), so infrastructure phases run it.
 ## 8. Deferred (with revival triggers)
 
 - **Id interning / `SmallVec` for manifest entries** — revive iff the P2 bench
-  or a real-project profile shows the resolve path above budget (§5).
+  or a real-project profile shows the resolve path above budget (section 5).
 - **Topology-keyed index caching for `ResolvedBinding`** — revive only on the
   same profile evidence, never preemptively (D7 fallback).
 - **Registry module eradication** (beyond containment) — revive when the three

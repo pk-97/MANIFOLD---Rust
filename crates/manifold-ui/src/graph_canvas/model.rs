@@ -25,7 +25,7 @@ impl PortView {
             // Typed Texture2D shares the texture-port colour — the
             // four-slot channel signature is a tooltip-level detail,
             // not a separate port category. See
-            // `docs/CHANNEL_TYPE_SYSTEM.md` §17.
+            // `docs/CHANNEL_TYPE_SYSTEM.md` section 17.
             PortKindSnapshot::Texture2DTyped { .. } => PORT_TEXTURE2D_COLOR,
             PortKindSnapshot::Texture3D => PORT_TEXTURE3D_COLOR,
             PortKindSnapshot::Scalar => PORT_SCALAR_COLOR,
@@ -70,7 +70,7 @@ pub(crate) enum NodeRow {
     /// param): dot on the left edge, name. Field indexes `NodeView::inputs`.
     Input { port: usize },
     /// A one-click gesture button occupying its own row
-    /// (`docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` §2 D7/D7a) — currently
+    /// (`docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` section 2 D7/D7a) — currently
     /// only "+ Object" / "+ Light" on `render_scene`'s face, spliced in right
     /// after the `objects`/`lights` param rows by `GraphCanvas::rebuild_rows`.
     /// No port, no param index; a click anywhere on the row fires the
@@ -181,7 +181,7 @@ pub(crate) struct NodeView {
     pub(crate) revealed: bool,
     /// `true` when `type_id == "node.render_scene"` — drives the "+ Object" /
     /// "+ Light" gesture-button rows spliced onto this node's face
-    /// (`docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` §2 D7/D7a). The literal
+    /// (`docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` section 2 D7/D7a). The literal
     /// mirrors `manifold_renderer::node_graph::primitives::render_scene::RENDER_SCENE_TYPE_ID`
     /// — `manifold-ui` doesn't depend on `manifold-renderer`, so this is a
     /// same-string re-derivation, not a shared constant. Resolved once on the
@@ -480,7 +480,7 @@ pub(crate) fn splice_render_scene_action_rows(rows: &mut Vec<NodeRow>, params: &
 
 /// Group `wires` by their `(from_node, to_node)` pair, preserving first-seen
 /// order — the pure shape behind D8's same-pair ribbon collapse
-/// (`docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` §2). A pair with ≥2
+/// (`docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` section 2). A pair with ≥2
 /// members ribbons in `draw_wire_tier`; a pair with exactly 1 draws
 /// normally. Pure over its input (no rendering, no `Painter`), so it's
 /// unit-tested directly.
@@ -589,7 +589,7 @@ pub(crate) struct ParamView {
     /// when both apply. Recomputed per snapshot from `outer_routings`. (Phase 5.)
     pub(crate) outer_driver: Option<String>,
     /// `Some(outer_param_id)` for a **group-face mirror row** (D6,
-    /// `docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` §2): this `ParamView`
+    /// `docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` section 2): this `ParamView`
     /// isn't an inner node's own param row, it's a group box's live copy of an
     /// already-exposed card param whose binding target resolves inside the
     /// group. `None` for every ordinary node-face row. Drives the scrub/click
@@ -798,7 +798,7 @@ fn find_node_by_handle<'a>(
 }
 
 /// Build a group `NodeView`'s on-face param rows (D6,
-/// `docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` §2): one [`ParamView`] per
+/// `docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` section 2): one [`ParamView`] per
 /// `outer_routings` entry whose binding target (`node_handle`, `inner_param`)
 /// resolves to a node inside `body`, transitively through nested groups —
 /// the same join the canvas already computes for the "↳ outer-driven" hint

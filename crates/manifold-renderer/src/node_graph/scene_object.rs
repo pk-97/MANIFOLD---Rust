@@ -85,7 +85,7 @@ pub struct SceneObject {
     pub instances: Option<Slot>,
 }
 
-// Invariant (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md §4): `SceneObject` stays
+// Invariant (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md section 4): `SceneObject` stays
 // `Copy` — hot-path legal by construction, no per-frame allocation. A type
 // that stops being `Copy` fails this assertion at compile time instead of
 // silently degrading the hot path.

@@ -24,7 +24,7 @@ mod ffi;
 #[cfg(target_os = "macos")]
 mod format_converter;
 /// Feature-gated proof-harness support (pattern writer + ffprobe oracle).
-/// See docs/LIVE_RECORDING_PROOFS_DESIGN.md §4.
+/// See docs/LIVE_RECORDING_PROOFS_DESIGN.md section 4.
 #[cfg(all(target_os = "macos", feature = "recording-proofs"))]
 pub mod proofs;
 #[cfg(target_os = "macos")]

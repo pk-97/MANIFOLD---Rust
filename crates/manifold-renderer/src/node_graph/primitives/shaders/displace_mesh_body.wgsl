@@ -1,4 +1,4 @@
-// node.displace_mesh — fusable BUFFER body (freeze §12, buffer domain),
+// node.displace_mesh — fusable BUFFER body (freeze section 12, buffer domain),
 // COINCIDENT + REQUIRED TEXTURE. Per-vertex height displacement of a
 // MeshVertex grid by a height Texture2D sampled at the vertex's own UV.
 // Matches displace_mesh.wgsl.

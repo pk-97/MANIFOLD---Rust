@@ -1,16 +1,16 @@
 # Primitive Library Design — Phase 4a
 
-**Status:** SHIPPED / HISTORICAL — the primitive library is built (~185 primitives in-tree; current inventory lives in [NODE_CATALOG.md](NODE_CATALOG.md), never here). This doc is kept as design rationale + historical context per the CLAUDE.md reference table; the per-section update notes below track what was superseded. Header corrected 2026-07-16 — it still read "Draft 1" two months after the library shipped. Draft 1 was 2026-05-11, implementing §0 of [`EFFECT_RUNTIME_UNIFICATION.md`](EFFECT_RUNTIME_UNIFICATION.md).
+**Status:** SHIPPED / HISTORICAL — the primitive library is built (~185 primitives in-tree; current inventory lives in [NODE_CATALOG.md](NODE_CATALOG.md), never here). This doc is kept as design rationale + historical context per the CLAUDE.md reference table; the per-section update notes below track what was superseded. Header corrected 2026-07-16 — it still read "Draft 1" two months after the library shipped. Draft 1 was 2026-05-11, implementing section 0 of [`EFFECT_RUNTIME_UNIFICATION.md`](EFFECT_RUNTIME_UNIFICATION.md).
 
-> **Update 2026-05-26:** Principles 1, 3, and 4 below are partially superseded by the no-fused-monolith rule. The original plan tolerated fused composites and monolithic remainders pending a future fusion compiler; the post-migration inventory revealed that this carve-out produced the bundle-as-primitive anti-pattern at scale, and the rule has been tightened. The authoritative spec is now `CLAUDE.md` (hard rules) + `DECOMPOSING_GENERATORS.md` §1.1 + [PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md](PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md). This doc is kept as historical record of the Phase 4a thinking; per-principle deltas inlined below.
+> **Update 2026-05-26:** Principles 1, 3, and 4 below are partially superseded by the no-fused-monolith rule. The original plan tolerated fused composites and monolithic remainders pending a future fusion compiler; the post-migration inventory revealed that this carve-out produced the bundle-as-primitive anti-pattern at scale, and the rule has been tightened. The authoritative spec is now `CLAUDE.md` (hard rules) + `DECOMPOSING_GENERATORS.md` section 1.1 + [PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md](PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md). This doc is kept as historical record of the Phase 4a thinking; per-principle deltas inlined below.
 >
-> **Update 2026-05-28:** The Array-port type-system sections of this doc — specifically §12.3 (`Array<T>` port type, `Array<Particle>` references) — were superseded by the Channel type system migration. Wire identity is now a named Channels signature; see [CHANNEL_TYPE_SYSTEM.md](CHANNEL_TYPE_SYSTEM.md). The §12.8 generator-decomposition worked examples remain accurate at the topology level; just read `Array<Particle>` as `Channels<Particle>` and `Array<u32>` as `Channels<u32>` in those discussions.
+> **Update 2026-05-28:** The Array-port type-system sections of this doc — specifically section 12.3 (`Array<T>` port type, `Array<Particle>` references) — were superseded by the Channel type system migration. Wire identity is now a named Channels signature; see [CHANNEL_TYPE_SYSTEM.md](CHANNEL_TYPE_SYSTEM.md). The section 12.8 generator-decomposition worked examples remain accurate at the topology level; just read `Array<Particle>` as `Channels<Particle>` and `Array<u32>` as `Channels<u32>` in those discussions.
 
 **Goal:** A primitive library that humans and AI agents compose into custom visuals (TouchDesigner-style creative surface), while preserving pixel-exact reproduction of every existing effect and generator. The library is the product.
 
 ## 1. Design principles
 
-1. **Pixel-perfect mathematically exact.** Every existing effect and generator must round-trip bit-identical bytes through its decomposed form. ~~Where multi-pass decomposition introduces intermediate `Rgba16Float` rounding that the legacy single-pass shader doesn't have, the primitive is shipped as a *fused composite primitive* (one shader, one pass) rather than split.~~ **Superseded 2026-05-26:** the fp16-rounding fusion exception turned out to be the migration-shortcut justification more often than a real precision constraint. Decompose into atoms; spec the intermediate texture format as `Rgba32Float` (or whatever the legacy shader's register precision was) so the round-trip is bit-exact. The "future fusion compiler" this waited on has not shipped; the cost of waiting is the bundle-as-primitive pile now being audited out. See `DECOMPOSING_GENERATORS.md` §5 for the residual irreducible-chain exception (multi-pass + per-pass format choices both load-bearing) — a real but narrow category.
+1. **Pixel-perfect mathematically exact.** Every existing effect and generator must round-trip bit-identical bytes through its decomposed form. ~~Where multi-pass decomposition introduces intermediate `Rgba16Float` rounding that the legacy single-pass shader doesn't have, the primitive is shipped as a *fused composite primitive* (one shader, one pass) rather than split.~~ **Superseded 2026-05-26:** the fp16-rounding fusion exception turned out to be the migration-shortcut justification more often than a real precision constraint. Decompose into atoms; spec the intermediate texture format as `Rgba32Float` (or whatever the legacy shader's register precision was) so the round-trip is bit-exact. The "future fusion compiler" this waited on has not shipped; the cost of waiting is the bundle-as-primitive pile now being audited out. See `DECOMPOSING_GENERATORS.md` section 5 (The WGSL escape hatch — when it's right, when it's wrong) for the residual irreducible-chain exception (multi-pass + per-pass format choices both load-bearing) — a real but narrow category.
 2. **≥2-use filter for atomics, single-use OK for "the effect IS the primitive".** Don't build `BoxBlur` because nothing uses it. Do build `KaleidoFold` even though only Kaleidoscope uses it — because the effect itself becomes that primitive.
 3. **~~Generators stay mostly monolithic.~~** **Superseded:** all generators are JSON-defined graphs as of May 2026 (`docs/GENERATOR_DECOMPOSITION_PLAN.md`); zero Rust `inventory::submit!` generators remain. The "mostly monolithic" framing came from the original Phase 4a planning when the unknown was how far decomposition would reach; the answer turned out to be "all of them," and the per-generator history is documented case-by-case.
 4. **~~Monolithic remainders are first-class library members.~~** **Superseded by the no-fused-monolith rule:** DNN / FFI / CPU work is correctly at primitive granularity (`depth_estimate_midas`, `blob_detect_ffi`, `optical_flow_estimate`, `envelope_follower_ar`, `peak`, `render_text` — all single-purpose primitives), but the fused outer kernel bundling them with their consumers is a decomposition target, not a permanent shape. The four effects originally carved out as permanent monoliths (AutoGain, BlobTrack, WireframeDepth, DoF-DNN) are all 2nd-pass decomposition targets — see [PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md](PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md). TouchDesigner doesn't ship DNN TOPs as monolithic blackboxes either — it ships them as nodes you compose with, the same shape the no-monolith rule produces here.
@@ -289,13 +289,13 @@ Each commit: primitive code + WGSL + preset graph replacing the effect + parity 
 
 ### 6.3 Multi-pass primitives + effects (4 commits)
 
-**Update 2026-05-11:** the original recipes assumed Bloom, Halation, and Watercolor could decompose into separable-Gaussian + mip-chain primitives. Auditing the legacy shaders showed:
+the original recipes assumed Bloom, Halation, and Watercolor could decompose into separable-Gaussian + mip-chain primitives. Auditing the legacy shaders showed:
 
 - **Bloom** uses Unity-style Blur9 tent + Blur13 filmic kernels with a ping-ponging dual mip chain — no separable-Gaussian path.
-- **Halation** fuses threshold-tint INTO the H Gaussian (per-tap, not as a pre-pass). Splitting it would store an fp16 intermediate texture and lose bit-exact parity (same reason Glitch was fused in §6.1).
+- **Halation** fuses threshold-tint INTO the H Gaussian (per-tap, not as a pre-pass). Splitting it would store an fp16 intermediate texture and lose bit-exact parity (same reason Glitch was fused in section 6.1).
 - **Watercolor**'s edge blur is a 2D non-separable 9-tap — no separable-Gaussian path.
 
-All three ship as fused composite primitives (same pattern as Glitch, Strobe, EdgeDetect, VoronoiPrism in §6.1). `MipChainDown` / `MipChainUp` are deferred — no §6.3 customer; they'll land when there's a real use case in §6.7+ or a future Bloom-style preset library. `SeparableGaussian` still ships because it's bit-exact for DoF (§6.4) and is useful as a user-facing composition primitive.
+All three ship as fused composite primitives (same pattern as Glitch, Strobe, EdgeDetect, VoronoiPrism in section 6.1). `MipChainDown` / `MipChainUp` are deferred — no section 6.3 customer; they'll land when there's a real use case in section 6.7+ or a future Bloom-style preset library. `SeparableGaussian` still ships because it's bit-exact for DoF (section 6.4) and is useful as a user-facing composition primitive.
 
 16. `SeparableGaussian` (for DoF + general user composition; not used by Bloom/Halation/Watercolor)
 17. **Bloom** fused composite primitive (legacy `bloom_compute.wgsl` wrapped, owns mip pyramid state)
@@ -309,9 +309,9 @@ All three ship as fused composite primitives (same pattern as Glitch, Strobe, Ed
 
 ### 6.5 Monolithic remainders as custom nodes (4 commits) — *superseded 2026-05-26*
 
-> **Status:** This subsection captures the original Phase 4a plan, where the four DNN/FFI/envelope-state effects (`AutoGain`, `BlobTrack`, `WireframeDepth`, `DoFDepth`) were planned to ship as monolithic custom nodes that wrapped their legacy pipelines wholesale. **This carve-out is retired.** The no-fused-monolith rule (`CLAUDE.md` hard rules, `DECOMPOSING_GENERATORS.md` §1.1) requires every effect to be a graph of single-purpose primitives, including DNN / FFI / CPU work. DNN inference, FFI calls, CPU envelope follows, and CPU peak detection are correctly at primitive granularity — they stay — but the fused outer kernel that bundles them with their consumers is a decomposition target. See [PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md](PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md) for the current per-bundle decomposition plan; the atoms each effect activates (`depth_estimate_midas`, `blob_detect_ffi`, `blob_overlay_render`, `envelope_follower_ar`) are already registered as primitives today.
+> **Status:** This subsection captures the original Phase 4a plan, where the four DNN/FFI/envelope-state effects (`AutoGain`, `BlobTrack`, `WireframeDepth`, `DoFDepth`) were planned to ship as monolithic custom nodes that wrapped their legacy pipelines wholesale. **This carve-out is retired.** The no-fused-monolith rule (`CLAUDE.md` hard rules, `DECOMPOSING_GENERATORS.md` section 1.1) requires every effect to be a graph of single-purpose primitives, including DNN / FFI / CPU work. DNN inference, FFI calls, CPU envelope follows, and CPU peak detection are correctly at primitive granularity — they stay — but the fused outer kernel that bundles them with their consumers is a decomposition target. See [PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md](PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md) for the current per-bundle decomposition plan; the atoms each effect activates (`depth_estimate_midas`, `blob_detect_ffi`, `blob_overlay_render`, `envelope_follower_ar`) are already registered as primitives today.
 
-22. ~~`AutoGainNode` — CPU envelope + GPU apply pass wrapped as a single `EffectNode`.~~ → decomposes into `luminance` + `envelope_follower_ar` + `gain` + `character_color` (the 5-variant character coloration becomes a curated-via-wgsl_compute family per `DECOMPOSING_GENERATORS.md` §5.6).
+22. ~~`AutoGainNode` — CPU envelope + GPU apply pass wrapped as a single `EffectNode`.~~ → decomposes into `luminance` + `envelope_follower_ar` + `gain` + `character_color` (the 5-variant character coloration becomes a curated-via-wgsl_compute family per `DECOMPOSING_GENERATORS.md` section 5.6 (Atom decomposition is the path — wgsl_compute is the escape hatch, not a curated-family backing)).
 23. ~~`BlobTrackNode` — native plugin + One-Euro + overlay render.~~ → decomposes into `blob_detect_ffi` + `one_euro_filter` (new primitive) + `blob_overlay_render`.
 24. ~~`WireframeDepthNode` — full 15-pass pipeline + DNN workers.~~ → decomposes into `depth_estimate_midas` + `edge_detect` + wireframe rendering primitives.
 25. ~~`DoFDepthNode` — MiDaS-based DoF.~~ → decomposes per branch: DNN branch (`depth_estimate_midas` + CoC + separable Gaussian + composite), tilt-shift branch (`tilt_shift_mask` + CoC + …), radial branch (`radial_mask` + CoC + …).
@@ -324,14 +324,14 @@ All three ship as fused composite primitives (same pattern as Glitch, Strobe, Ed
 27. **[shipped]** Effect save-file refactor: `EffectInstance` already carries `graph: Option<EffectGraphDef>` (`None` = use bundled preset, `Some` = per-card override) and `graph_version: u32` for cache invalidation. Catalog defaults now source from the bundled-preset registry, so per-card divergence is available on every effect (not just Mirror + SoftFocus). Edit commands (`AddGraphNode`, `RemoveGraphNode`, `ConnectPorts`, `DisconnectPorts`, `MoveGraphNode`, `SetGraphNodeParam`) all lift `None → Some(catalog_default)` on first edit. No project-version bump — `graph` is `skip_serializing_if = "Option::is_none"`, so unedited fixtures round-trip byte-identically.
 28. **[shipped]** `EffectChain::apply_chain` is a thin wrapper over `ChainGraph::try_build` + `ChainGraph::run` — the graph-runtime path is the only path. Static elision via `ChainSpec::SkipMode::OnZero` (effects with `amount ≤ 0` are dropped from the plan) and wet/dry sub-graphs via `OpenGroup` + multi-segment `Mix` both ship. **Dynamic bypass: explicitly not planned (2026-05-17).** A per-frame `bypass_predicate` on `ExecutionStep` would preserve primitive state (Bloom mip pyramids, Watercolor feedback, Stylized Feedback trails) across `amount=0` crossings without a topology rebuild — but the current behavior (rebuild on flip, state lost) is acceptable for the show. Filed here as a future revisit if a live-perf use case (ducking-as-transition without losing trails) becomes load-bearing. The `EffectChain` shim itself disappears in #31.
 29. **[shipped]** `GraphCanvas` editing affordances. Add (palette click → `AddGraphNode`), wire (drag output port → input port → `ConnectPorts`), disconnect (click connected input port → `DisconnectPorts` — gap closed in this commit), delete (Delete key on selected node → `RemoveGraphNode`), move (drag node header → `MoveGraphNode`), parameter set (right-sidebar inspector → `SetGraphNodeParam`). All flow through `manifold_editing::commands::graph::*` → undo stack → `Project` mutation; save-on-change is implicit because the Project is the live model and the standard save path serializes it.
-30. **[shipped — minimum viable]** "Reset to Default" affordance in the graph editor header surfaces when the watched effect is diverged from its bundled preset (`instance.graph.is_some()`). One click emits `PanelAction::RevertEffectGraph` → `RevertEffectGraphCommand` (clears the override, undoable). The header label flips to "Live Graph — MODIFIED" so the diverged state is visible alongside the existing pink "MOD" badge on the effect card. The fuller "library browser" with named user-saved presets is deferred — bundled presets are the only library today, and the picker for that library is the implicit "Add Effect" catalog. User-saved named-preset support would add a `Project.preset_library` field + UI; not gated by §6.6.
+30. **[shipped — minimum viable]** "Reset to Default" affordance in the graph editor header surfaces when the watched effect is diverged from its bundled preset (`instance.graph.is_some()`). One click emits `PanelAction::RevertEffectGraph` → `RevertEffectGraphCommand` (clears the override, undoable). The header label flips to "Live Graph — MODIFIED" so the diverged state is visible alongside the existing pink "MOD" badge on the effect card. The fuller "library browser" with named user-saved presets is deferred — bundled presets are the only library today, and the picker for that library is the implicit "Add Effect" catalog. User-saved named-preset support would add a `Project.preset_library` field + UI; not gated by section 6.6.
 31. **[shipped — EffectChain deletion]** `crates/manifold-renderer/src/effect_chain.rs` deleted. The shim was a single-field wrapper around `Option<ChainGraph>` with three thin methods (`apply_chain`, `clear_graph_runner_state`, `resize`). Replaced by a free-function module `chain_dispatch.rs` (`dispatch_chain`, `clear_chain_state`, counters + `take_chain_dispatch_stats`). `LayerCompositor` now stores `Option<ChainGraph>` directly in its per-layer / per-group / per-LED maps. Parity tests (29 effects, bit-exact) confirm the dispatch path is byte-identical. The "per-effect `EffectInstance.effect_type` enum surface" part stays as-is: `EffectTypeId` is not an actual enum — it's a `Cow<'static, str>` newtype used as the catalog key for bundled-preset lookup, `EffectMetadata` (OSC prefix, display name), and `ChainSpec` bindings/skip metadata. Its role as a sealed dispatch discriminant was already gone after the graph-runtime cutover.
 
 `GraphSnapshot` and `GraphEditorPanel` already exist; this phase mostly wires them into editing flows and lays down the persistence path.
 
 ### 6.7+ Generator pass (separate, later)
 
-Once §6.6 has shipped and we've used the effect graph system in anger, return to generators with that feedback. Plan placeholder (specifics revisit-able after §6.6):
+Once section 6.6 has shipped and we've used the effect graph system in anger, return to generators with that feedback. Plan placeholder (specifics revisit-able after section 6.6):
 
 - **G1** Generator shared-infra primitives (~8 commits): `Camera3D`, `Rotation3D/4D`, `LineRasterize`, `MeshRender`, `Shadow`, `ParticleScatter/Resolve`, `ParticleSimRK2`, `Raymarch`.
 - **G2** Generator algorithm primitives (~5 commits): `Plasma`, `StarField`, `ConcentricShapes`, `ParametricSDF`, `BasicShapes`.
@@ -359,13 +359,11 @@ This is the JSON shape an AI agent reads to learn what's available. The composit
 
 ## 8. Open questions parked
 
-- **Generator parity testing.** Effects have a clean "render at fixed input + params" surface. Generators are pure outputs — parity tests them at fixed `time`, `beat`, `resolution`. Some generators have RNG state (Mycelium agents, fluid particle init) that needs deterministic seeding for parity. **Resolve in §6.6.**
-- **Preset graph format vs project file format.** Preset graphs are a subset of the existing project-file graph format. Whether presets live as embedded JSON in the binary or as files in `assets/effect-presets/` is a §6.1 detail.
+- **Generator parity testing.** Effects have a clean "render at fixed input + params" surface. Generators are pure outputs — parity tests them at fixed `time`, `beat`, `resolution`. Some generators have RNG state (Mycelium agents, fluid particle init) that needs deterministic seeding for parity. **Resolve in section 6.6.**
+- **Preset graph format vs project file format.** Preset graphs are a subset of the existing project-file graph format. Whether presets live as embedded JSON in the binary or as files in `assets/effect-presets/` is a section 6.1 detail.
 - **Versioning of preset graphs.** When a primitive's parameter set changes, old presets break. **Use `ParamAlias` mechanism from Phase 2.**
 
 ---
-
-**Next concrete step:** §6.0 — build the parity test framework. Without it nothing downstream is verifiable.
 
 ---
 
@@ -380,7 +378,7 @@ The card UI surface comes from two sources that must agree:
 - `EffectMetadata.params: &[ParamSpec]` — the slider definition (id, label, range, default, format, unit string). Drives the card render and OSC.
 - `ChainSpec.bindings: &[ParamBinding]` — the routing from each outer slider to an inner-node param. Has its own `id` + `label` (must match `EffectMetadata.params`) and `target.param` (the inner-node param name).
 
-Inventory captured (raw): every shipping effect's outer-card surface. Findings below; per-effect change table in §9.1.4.
+Inventory captured (raw): every shipping effect's outer-card surface. Findings below; per-effect change table in section 9.1.4.
 
 #### 9.1.1 Truncated labels — drop the abbreviation tax
 
@@ -415,7 +413,7 @@ Param **id**s on the wire follow snake_case English: `segments`, `direction`, `p
 
 #### 9.1.2 Outer ↔ inner param name divergence
 
-Today the outer slider has a short id (`thresh`, `algo`, `dir`, `sens`, `rot`) but the binding routes to an inner-node param with the full word (`threshold`, `algorithm`, `mode`, `sens`, `rotation`). The label-rename in §9.1.1 naturally collapses this — the outer id becomes the inner id, and the `target.param` mapping in the binding is a no-op:
+Today the outer slider has a short id (`thresh`, `algo`, `dir`, `sens`, `rot`) but the binding routes to an inner-node param with the full word (`threshold`, `algorithm`, `mode`, `sens`, `rotation`). The label-rename in section 9.1.1 naturally collapses this — the outer id becomes the inner id, and the `target.param` mapping in the binding is a no-op:
 
 ```rust
 // Before
@@ -487,7 +485,7 @@ A few values worth questioning:
 
 - Edge Stretch `Width` range `[0.1, 0.9]`, default `0.433` — why not `0.5`? Random-looking number, probably ported from a Unity asset's saved value. **Recommend default 0.5.**
 - Voronoi Prism `Cell Size` (source_width) range `[0.1, 1.0]`, default `0.5625` — same as above. **Recommend default 0.5.**
-- Bloom `amount` default `0.187` — looks like a saved value, not a designed default. **Recommend default 0.5** (per §9.1.5).
+- Bloom `amount` default `0.187` — looks like a saved value, not a designed default. **Recommend default 0.5** (per section 9.1.5).
 - Wireframe Depth `width` default `1.335` — same family. **Recommend default 1.0 or 1.5.**
 - Wireframe Depth `subject` default `0.52` — same. **Recommend default 0.5.**
 - Wireframe Depth `smooth` default `0.90` upper bound `0.98` — that's a strange ceiling. If the param is bounded `[0, 1]` everywhere else, allow the full range. **Recommend `[0, 1]` with default `0.9`.**
@@ -545,7 +543,7 @@ This is the **action list** the rename script consumes. Fields: effect, change-k
 | Stylized Feedback | category | `Post-Process` | `Stylize` |
 | Soft Focus | category | `Post-Process` | `Stylize` |
 | Watercolor | category | `Post-Process` | `Stylize` |
-| (13 effects with `amount=0`) | default | `amount=0` | `amount=1.0` or `0.5` per §9.1.5 |
+| (13 effects with `amount=0`) | default | `amount=0` | `amount=1.0` or `0.5` per section 9.1.5 |
 
 **Rename volume preview:** ~40 label+id renames, ~12 category moves, ~17 default changes, 2 type_id renames. Estimated ~70 mechanical edits — worth a script.
 
@@ -553,7 +551,7 @@ This is the **action list** the rename script consumes. Fields: effect, change-k
 
 The inner-node surface is what the user sees in the graph editor's right-sidebar panel when they click a node. Most primitives mirror the outer-card param shape 1:1 (since the bundled preset wires outer ↔ inner directly), but a handful have their own param names that diverge from the outer card. Plus there are non-card-backed primitives (Mix, Blend, Threshold, Blur, GaussianBlur, Sample, MipChain, WetDry, Brightness, ChannelMix, ColorRamp, MipChain, Feedback, Transform — these are pure building blocks the AI/user composes with).
 
-#### 9.2.1 Inner names that lag behind §9.1's outer renames
+#### 9.2.1 Inner names that lag behind section 9.1's outer renames
 
 After Layer 1 lifts every outer abbreviation to full English, four primitives still have inner-name abbreviations that need to follow:
 
@@ -575,13 +573,13 @@ Once renamed, the binding's `target.param` field collapses to a no-op identity (
 
 - `node.threshold` has param `level` with label `"Threshold"`. The id and label disagree. **Recommendation:** rename param `level` → `threshold` (then the label is just the title-cased id).
 - `node.wet_dry` has param label `"Wet / Dry"` — the space-slash-space is unusual. **Recommendation:** `"Wet/Dry"`.
-- `node.chromatic_aberration` (the ChromaticOffset primitive) has label `"Angle (deg)"` — only primitive with the unit baked into the label. Inconsistent with everything else. **Recommendation:** drop `(deg)`, add `°` to the unit field instead (see §9.1.6).
+- `node.chromatic_aberration` (the ChromaticOffset primitive) has label `"Angle (deg)"` — only primitive with the unit baked into the label. Inconsistent with everything else. **Recommendation:** drop `(deg)`, add `°` to the unit field instead (see section 9.1.6).
 - `node.gaussian_blur` enum param `kernel_size` has label `"Kernel"` — the primitive's label is shorter than the id. Either expand label to `"Kernel Size"` or shorten id to `kernel`. **Recommendation:** label → `"Kernel Size"`.
 - `node.affine_transform`'s params `translate_x`, `translate_y` are split because the outer card wires them as two scalars. The standalone primitive `node.transform` uses `translate: Vec2`. Two parallel primitives doing similar work. **Open question:** is this duplication load-bearing, or should we collapse to one `Transform` primitive with Vec2 params? Today the outer card can't drive Vec2 sliders (only scalars + enums), so the split exists for the binding shim. Defer until the binding shim grows Vec2 support.
 
 #### 9.2.4 Defaults in primitives that mirror outer-card magic numbers
 
-These need to flip in lockstep with the outer-card defaults (§9.1.7) so the bundled preset's "no override" path produces the same value the user sees:
+These need to flip in lockstep with the outer-card defaults (section 9.1.7) so the bundled preset's "no override" path produces the same value the user sees:
 
 | Primitive | Param | Current default | Proposed |
 |---|---|---|---|
@@ -596,11 +594,11 @@ The bundled preset JSON files also need to re-emit these — the regenerator (`t
 
 #### 9.2.5 Inner labels with weird casing / abbreviations
 
-- `node.auto_gain` param `hdr_ret` has label `"HDR Retention"` — the label is right; the id is what's wrong (lifted in §9.2.1).
+- `node.auto_gain` param `hdr_ret` has label `"HDR Retention"` — the label is right; the id is what's wrong (lifted in section 9.2.1).
 - `node.auto_gain` param `char` has label `"Character"` — same.
 - `node.wireframe_depth` param `z_scale` has label `"Z Scale"` — looks fine.
 
-After §9.2.1 renames, all primitive labels are full English. Nothing else to clean up.
+After section 9.2.1 renames, all primitive labels are full English. Nothing else to clean up.
 
 #### 9.2.6 Param `id` casing convention — confirmed `snake_case`
 
@@ -710,7 +708,7 @@ Generators have no `category` field in their metadata today. They're listed flat
 | **Volumetric** | MRI Volume |
 | **Text** | Text, Particle Text (already in Particles too — assign primary) |
 
-Add a `category: &'static str` field to `GeneratorMetadata` mirroring `EffectMetadata.category`, then populate. The picker UI groups by category. (Today the picker is flat — see open question §9.4 about grouped pickers.)
+Add a `category: &'static str` field to `GeneratorMetadata` mirroring `EffectMetadata.category`, then populate. The picker UI groups by category. (Today the picker is flat — see open question section 9.4 about grouped pickers.)
 
 #### 9.3.7 Layer 3 change table (summary)
 
@@ -747,8 +745,8 @@ Add a `category: &'static str` field to `GeneratorMetadata` mirroring `EffectMet
 - **Param `id` casing convention.** Most current ids are `snake_case` (`tint_hue`, `block_size`). Some are single words (`amount`, `gain`). Confirm `snake_case` everywhere as the rule.
 - **Display label casing.** Current mix: `Title Case` (`Edge Detect`, `Block Size`), `PascalCase` (`TintHue`, `ZScale`), abbreviations (`HDR Ret`). Confirm `Title Case With Spaces` as the rule.
 - **Type id rename migration shape.** `EffectValueAliasMetadata` exists for enum-value remaps. For type id renames we need a sibling: `EffectTypeAliasMetadata` mapping old type id strings to new. Stamp this once; reuse for the HDR Boost / Edge Detect / Strange Attractor renames.
-- **Grouped picker UI.** Today both the "Add Effect" and "Add Generator" pickers are flat alphabetical. Once categories land (§9.1.4, §9.3.6), the picker should group by category with collapsible sections. UX call: scope this into the rename pass, or defer?
-- **Camera primitive.** `Cam Dist`/`Cam Orbit`/`Cam Tilt`/`Cam FOV`/`Look Y` repeats across 4 generators. Tempting to factor into a shared `Camera3D` primitive (which §6.7 G1 already plans). Don't do it now — wait for the generator decomposition pass. Just align the names today so the future primitive lands without further migration.
+- **Grouped picker UI.** Today both the "Add Effect" and "Add Generator" pickers are flat alphabetical. Once categories land (section 9.1.4, section 9.3.6), the picker should group by category with collapsible sections. UX call: scope this into the rename pass, or defer?
+- **Camera primitive.** `Cam Dist`/`Cam Orbit`/`Cam Tilt`/`Cam FOV`/`Look Y` repeats across 4 generators. Tempting to factor into a shared `Camera3D` primitive (which section 6.7 G1 already plans). Don't do it now — wait for the generator decomposition pass. Just align the names today so the future primitive lands without further migration.
 
 ### 9.5 Rotation / angular slider loop convention
 
@@ -786,7 +784,7 @@ Two acceptable ranges satisfy this:
 
 ### 9.6 Deferred — type-id renames + future migration tool
 
-**Decision (2026-05-17):** the three internal type-id renames called for in §9.1.3 / §9.2.2 / §9.3.4 — `HdrBoost → HighlightBoost`, `EdgeGlow → EdgeDetect`, `ComputeStrangeAttractor → StrangeAttractor` — are **deferred indefinitely**. Not killed; revisit only when there's a real reason to (a confusing debugging session, a related refactor, etc.).
+**Decision (2026-05-17):** the three internal type-id renames called for in section 9.1.3 / section 9.2.2 / section 9.3.4 — `HdrBoost → HighlightBoost`, `EdgeGlow → EdgeDetect`, `ComputeStrangeAttractor → StrangeAttractor` — are **deferred indefinitely**. Not killed; revisit only when there's a real reason to (a confusing debugging session, a related refactor, etc.).
 
 **Why deferred.** The type-id string is internal-only. The user-facing display names ("Highlight Boost", "Edge Detect", "Strange Attractor") are already correct after this audit. The legacy strings appear in three places only:
 - `.manifold` save files, where users never look.
@@ -823,13 +821,13 @@ Whoever picks this up: the rename script (`scripts/audit_rename.py`) is *not* th
 
 ---
 
-**End of §9.** Audit applied across 7 phases (1, 2, 3, 4, 6, 7a, 7b, 7c); ~237 source edits + tooling. Phase 5 deferred per above.
+**End of section 9.** Phase 5 deferred per above.
 
 ---
 
 ## 10. Toward a real composition surface (2026-05-17)
 
-The §9 audit finished the cosmetic and structural cleanup. Next: the substantive expressiveness work that turns the graph editor from "fancy serial chain of fused effects" into a real composition surface where new aesthetic operators can emerge.
+The section 9 audit finished the cosmetic and structural cleanup. Next: the substantive expressiveness work that turns the graph editor from "fancy serial chain of fused effects" into a real composition surface where new aesthetic operators can emerge.
 
 ### 10.1 The diagnosis
 
@@ -918,7 +916,7 @@ Interleaves with Phase C rather than landing all at once — each new node categ
 - Commit to ~3 new aesthetic operators per release cycle.
 - Each carries a deliberate stylistic stance — riso print, ink-bleed, thermal scan, oil-on-water, halftone, lo-fi broadcast, photocopier, datamosh, oxidation, etc. Different lineages (printmaking, broadcast video, photographic, painterly) rather than all-shader-aesthetic.
 - Tag by stylistic family in the catalog so users browse by lineage rather than alphabetically.
-- AI-authoring infrastructure (primitive-metadata export tool, LLM composition workflow, generated-preset preview loop) joins this phase when Phase B/C/D are stable. The §7 primitive metadata schema is the LLM-readable foundation; the open question is the generation tool itself.
+- AI-authoring infrastructure (primitive-metadata export tool, LLM composition workflow, generated-preset preview loop) joins this phase when Phase B/C/D are stable. The section 7 primitive metadata schema is the LLM-readable foundation; the open question is the generation tool itself.
 
 The catalog *must* keep growing or the design philosophy collapses — users exhaust the aesthetic catalog, descend to atomic, the TD look returns. This isn't a phase that completes; it's a practice that has to become routine.
 
@@ -958,9 +956,7 @@ That's the wedge nobody else is building. Convergence with TouchDesigner on the 
 
 ## 11. Unified authoring registry — pre-implementation research (2026-05-18)
 
-> **Status: complete, 2026-05-18.** Landed across 14 commits over two sessions. Chain runtime, editor snapshot, and primitive registry are all single-path; ~4500 lines of legacy deleted; every shipping effect's metadata + canonical graph lives in `assets/effect-presets/*.json` with `presetMetadata` populated. Adding a new effect is now a JSON drop. Manual UI walkthrough (picker, MIDI mapping on Liveschool fixture) is the one remaining check.
-
-Before starting the JSON-authoritative migration sketched at the end of §10, this section captures an audit of the existing registries and consumers, with refinements to the original plan. The architectural target stays the same — *one source of truth per category, no hand-maintained lists* — but the migration is more nuanced than first stated.
+Before starting the JSON-authoritative migration sketched at the end of section 10, this section captures an audit of the existing registries and consumers, with refinements to the original plan. The architectural target stays the same — *one source of truth per category, no hand-maintained lists* — but the migration is more nuanced than first stated.
 
 ### 11.1 What "registry" currently means — three overlapping systems
 
@@ -994,7 +990,7 @@ Audit of all 25 effect files in `crates/manifold-renderer/src/effects/`:
 
 - **`auto_gain`** — Per-owner CPU envelope state (`AutoGainOwnerState`: measure buffer + EMA state + frame count). *But* the matching `AutoGain` primitive in `node_graph/primitives/` already owns the per-owner state via `StateStore`. The legacy effect file's state is **dead code** in the post-cutover render path (ChainGraph → primitives doesn't call `PostProcessEffect::apply()`). Effect file can be deleted; primitive carries state forward.
 
-- **`blob_tracking`** — Spawns native `BlobDetector` plugin as background worker, owns font atlas texture, 512-quad overlay instance buffer, One-Euro smoothing state, blob matching. *Worker creation happens in the legacy effect's `new(device)`.* For migration: either move worker init into the primitive's lazy first-run, or keep a small `PluginPrewarm` inventory specifically for the plugin-using effects (see §11.5).
+- **`blob_tracking`** — Spawns native `BlobDetector` plugin as background worker, owns font atlas texture, 512-quad overlay instance buffer, One-Euro smoothing state, blob matching. *Worker creation happens in the legacy effect's `new(device)`.* For migration: either move worker init into the primitive's lazy first-run, or keep a small `PluginPrewarm` inventory specifically for the plugin-using effects (see section 11.5).
 
 - **`depth_of_field`** — Spawns MiDaS depth-estimation worker, manages readback→inference→upload pipeline, 3 focus modes. Same shape as blob_tracking — worker init is in the effect file; needs preserving via prewarm path.
 
@@ -1067,11 +1063,11 @@ The other surviving role of `EffectFactory` is `graph_snapshot_for(type_id) -> S
 
 **In the JSON-authoritative world this is replaced by `ChainGraph::build_and_render(loaded_preset.graph_def)`.** The canonical graph is what the chain runs anyway; rendering a snapshot is one frame of that graph against the editor's preview input. `EffectFactory` doesn't need to exist for this purpose — the snapshot path migrates to the same code path the live chain uses.
 
-That fully eliminates `EffectFactory`. The `PluginPrewarm` channel from §11.5 covers the only remaining startup-time concern. `EffectRegistry` itself can be deleted.
+That fully eliminates `EffectFactory`. The `PluginPrewarm` channel from section 11.5 covers the only remaining startup-time concern. `EffectRegistry` itself can be deleted.
 
 ### 11.7 `EffectDef` is the right shape for the unified loaded preset
 
-The original §10.5 proposal sketched a `LoadedPreset` struct with all the metadata. Looking at the actual codebase, `EffectDef` in `effect_definition_registry.rs` is already 90% that struct — `display_name`, `param_count`, `param_defs`, `osc_prefix`, `id_to_index`, `param_ids`, `legacy_param_aliases`, `legacy_node_aliases`, `legacy_value_aliases`. It just needs to absorb the graph topology fields (the existing `EffectGraphDef::nodes` + `wires`), the bindings, the skip mode, and the category. Then `EffectDef` becomes the unified runtime view of a loaded preset.
+The original section 10.5 proposal sketched a `LoadedPreset` struct with all the metadata. Looking at the actual codebase, `EffectDef` in `effect_definition_registry.rs` is already 90% that struct — `display_name`, `param_count`, `param_defs`, `osc_prefix`, `id_to_index`, `param_ids`, `legacy_param_aliases`, `legacy_node_aliases`, `legacy_value_aliases`. It just needs to absorb the graph topology fields (the existing `EffectGraphDef::nodes` + `wires`), the bindings, the skip mode, and the category. Then `EffectDef` becomes the unified runtime view of a loaded preset.
 
 This is a happy finding — the load-bearing addressing infrastructure (`id_to_index` map walked by every OSC / driver / project-storage lookup) doesn't need rebuilding. It already exists with the right shape; it just changes its data source from `EffectMetadata::to_effect_def()` to `LoadedPreset::to_effect_def()`. The 50+ callsites in `effects.rs` and `project.rs` going through `effect_definition_registry::try_get()` continue to work unchanged.
 
@@ -1095,7 +1091,7 @@ Each preset's JSON gets a `legacyDiscriminant: Option<i32>` field (already in `E
 
 ### 11.10 Refined scope
 
-Original §10.5 estimate: 1-2 weeks. Adjusted with these findings: **~2 weeks**, in this order:
+Original section 10.5 estimate: 1-2 weeks. Adjusted with these findings: **~2 weeks**, in this order:
 
 1. **`EffectGraphDef` v2 schema** (1d). Add new fields with serde defaults so v1 documents still parse. Bump version constant. Migration tests.
 2. **JSON loader → `EffectDef`** (1d). New `loaded_preset_to_effect_def()` builder that takes a parsed `EffectGraphDef` and produces an `EffectDef`. Update `effect_definition_registry::build_definitions()` to iterate loaded presets instead of `inventory::iter::<EffectMetadata>()`. All consumers via `effect_definition_registry::try_get()` keep working unchanged.
@@ -1126,16 +1122,15 @@ After this migration the system has *one source of truth per category*:
 
 No hand-maintained lists. No drift tests. No "did you remember to update X." Adding a primitive = drop 2 files + 1 `mod` line. Adding a preset = drop 1 JSON file. Same shape whether it's authored by Peter, Claude, an AI agent, or eventually a user via the graph editor's "Save Preset" affordance.
 
-
 ## 12. Node-type taxonomy (2026-05-18)
 
-The §10 plan organised work into phases (A–E). This section is the orthogonal cut — **what kinds of nodes exist in the graph language**, in the shape they need to converge to so users can decompose every effect down to a small set of composable primitives. Reference for future authoring decisions.
+The section 10 plan organised work into phases (A–E). This section is the orthogonal cut — **what kinds of nodes exist in the graph language**, in the shape they need to converge to so users can decompose every effect down to a small set of composable primitives. Reference for future authoring decisions.
 
 ### 12.1 What shipped post-Phase B kickoff
 
-- **Control wire plumbing** (`cc6d0856`) — `PortType::Scalar(ScalarType)`, `Backend::set_scalar`, `NodeOutputs::set_scalar` with per-step scratch drain. Macro learned `ScalarF32`/`ScalarVec2`/etc. port types. Convention: when a primitive declares an optional `Scalar` input port with the same name as a same-named `ParamDef`, the wire shadows the param when present (FluidSim pattern). First wired consumer: `wet_dry_mix.wet_dry`.
-- **Control producers** (`239877fb`) — `node.value` (constant scalar), `node.lfo` (beat-locked oscillator, sine/triangle/saw/square, stateless), `node.math` (binary op, divide-by-zero clamps to 0).
-- **Auto-populated palette** (`3de11521`) — `PrimitiveFactory` carries `picker: Option<PickerInfo>`; macro accepts `picker: { label, category }`; `palette_atoms()` walks inventory. New nodes appear in the editor by declaring picker info at their definition site, not by editing a central list.
+- **Control wire plumbing** — `PortType::Scalar(ScalarType)`, `Backend::set_scalar`, `NodeOutputs::set_scalar` with per-step scratch drain. Macro learned `ScalarF32`/`ScalarVec2`/etc. port types. Convention: when a primitive declares an optional `Scalar` input port with the same name as a same-named `ParamDef`, the wire shadows the param when present (FluidSim pattern). First wired consumer: `wet_dry_mix.wet_dry`.
+- **Control producers** — `node.value` (constant scalar), `node.lfo` (beat-locked oscillator, sine/triangle/saw/square, stateless), `node.math` (binary op, divide-by-zero clamps to 0).
+- **Auto-populated palette** — `PrimitiveFactory` carries `picker: Option<PickerInfo>`; macro accepts `picker: { label, category }`; `palette_atoms()` walks inventory. New nodes appear in the editor by declaring picker info at their definition site, not by editing a central list.
 
 ### 12.2 Remaining V1 node categories
 
@@ -1155,7 +1150,7 @@ The exception: ship a separate `Convolution` primitive as a **power-user node** 
 
 ### 12.3 Array (Buffer) data — promoted to V1
 
-The original §10 port-type discussion deferred a `Buffer` port type to V2. The case studies in §12.8 (Black Hole and FluidSim) walk through why that should flip: both ship-critical generators have particle systems internally, and without an array-data wire type their entire particle pipelines collapse into one opaque Shader-with-internal-state node. With it, particles flow on a wire and `SeedParticles → SimulateParticles → ScatterToTexture` become first-class primitives a user can rearrange or replace. Promoting to V1.
+The original section 10 port-type discussion deferred a `Buffer` port type to V2. The case studies in section 12.8 (Black Hole and FluidSim) walk through why that should flip: both ship-critical generators have particle systems internally, and without an array-data wire type their entire particle pipelines collapse into one opaque Shader-with-internal-state node. With it, particles flow on a wire and `SeedParticles → SimulateParticles → ScatterToTexture` become first-class primitives a user can rearrange or replace. Promoting to V1.
 
 **Naming.** "Buffer" is the Metal term (`MTLBuffer`) but it's a generic word in graphics — could mean vertex buffer, command buffer, framebuffer, audio buffer, ring buffer. User-facing, the port type carries an **array of structured items** indexed by position (not spatial coordinates). Lean toward calling it `Array` in the user-facing port-type vocabulary; keep "buffer" as the internal Metal layer term. The macro would expose this as e.g. `ArrayOfParticles`, `ArrayOfVertices` — parameterised by item type. Open question: does the type system carry the item layout (`Array<Particle>` with a Particle struct definition somewhere), or is it generic bytes with item layout as shader-side knowledge?
 
@@ -1175,7 +1170,7 @@ After promoting Array to V1, two categories remain genuinely V2:
 
 ### 12.5 Decomposition + fusion-on-compile
 
-The architectural stance the §10 plan was implicitly aiming at, now explicit:
+The architectural stance the section 10 plan was implicitly aiming at, now explicit:
 
 **Decompose everything authored from now on into the smallest primitives that compose cleanly.** The graph editor is the teaching surface — users learn how effects work by opening them up. Aesthetic operators get authored as visible compositions of primitives + kernel inputs + occasional WGSL Shader nodes at the leaves. No new effect should ship as a single opaque shader if it can be expressed as a graph of existing primitives.
 
@@ -1183,13 +1178,13 @@ The architectural stance the §10 plan was implicitly aiming at, now explicit:
 
 **Add a fusion-on-compile pass when perf demands it.** Recognise common atomic chains (per-pixel ops with no gather between them) and emit a single fused shader for the hot path. The editor still sees small primitives; the GPU runs fused. Gather chains (Blur, MipChain, anything with a non-trivial neighbourhood read) stay as real intermediate textures because the producer has to materialise — those effects are already composites anyway.
 
-The §10.4 "EffectGraphDef v1→v2 migration" cross-cutting note is the entry point for fusion: once the v2 schema is in place, the compile pass takes a v2 graph + a fusion ruleset and emits either a sequence of dispatches or a fused shader per fusable chain.
+The section 10.4 "EffectGraphDef v1→v2 migration" cross-cutting note is the entry point for fusion: once the v2 schema is in place, the compile pass takes a v2 graph + a fusion ruleset and emits either a sequence of dispatches or a fused shader per fusable chain.
 
-### 12.6 The fp16-as-blocker myth (correcting §6.1)
+### 12.6 The fp16-as-blocker myth (correcting section 6.1)
 
-§6.1's parity-migration notes mention that some effects (Strobe specifically) had to ship as fused composites because decomposing them broke pixel-exact parity through fp16 intermediate textures. That framing assumed all wires were `Rgba16Float` texture wires. With scalar wires (`PortType::Scalar(F32)`, `ParamValue::Float(f32)`) the constraint dissolves for scalar data: the producer's value flows through an f32 scalar wire, never touches an fp16 texture, and reaches the consumer at full precision. Pixel-exact parity is achievable without fusion-on-compile *for any decomposition where the inter-primitive value is scalar*.
+section 6.1's parity-migration notes mention that some effects (Strobe specifically) had to ship as fused composites because decomposing them broke pixel-exact parity through fp16 intermediate textures. That framing assumed all wires were `Rgba16Float` texture wires. With scalar wires (`PortType::Scalar(F32)`, `ParamValue::Float(f32)`) the constraint dissolves for scalar data: the producer's value flows through an f32 scalar wire, never touches an fp16 texture, and reaches the consumer at full precision. Pixel-exact parity is achievable without fusion-on-compile *for any decomposition where the inter-primitive value is scalar*.
 
-**Worked example: Strobe (Opacity mode).** Legacy Strobe shader does `phase = fract(beat*rate); on = step(0.5, phase); strobe = amount * on; col *= (1 - strobe)` all in one shader with `strobe` staying in an f32 register. The §6.1 attempt to split this into separate primitives wired through an `Rgba16Float` intermediate texture would have quantised `strobe` near numerical edges (0.49998 vs 0.5) and broken parity. Post-scalar-wires the correct decomposition is:
+**Worked example: Strobe (Opacity mode).** Legacy Strobe shader does `phase = fract(beat*rate); on = step(0.5, phase); strobe = amount * on; col *= (1 - strobe)` all in one shader with `strobe` staying in an f32 register. The section 6.1 attempt to split this into separate primitives wired through an `Rgba16Float` intermediate texture would have quantised `strobe` near numerical edges (0.49998 vs 0.5) and broken parity. Post-scalar-wires the correct decomposition is:
 
 ```text
 Source ──→ Gain(in, gain=wire) ──→ output
@@ -1220,7 +1215,7 @@ The rule for Shader-leaf granularity:
 
 **Practical sizing target for Shader leaves: 30-100 lines of substantive WGSL** (after stripping uniform boilerplate and helper functions). Bigger → look for a seam. Smaller → probably should just be a regular primitive (`Math`, `Sample`, named convolution-family) rather than a Shader node.
 
-The cost of finer splits is dispatch count + intermediate texture allocations. That's where fusion-on-compile (§12.5) earns its keep: editor sees small chunks, GPU runs fused dispatches for per-pixel chains. The architectural stance commits us to "decompose at authoring time, fuse at compile time" — the seams are for human understanding, not for the GPU.
+The cost of finer splits is dispatch count + intermediate texture allocations. That's where fusion-on-compile (section 12.5) earns its keep: editor sees small chunks, GPU runs fused dispatches for per-pixel chains. The architectural stance commits us to "decompose at authoring time, fuse at compile time" — the seams are for human understanding, not for the GPU.
 
 ### 12.8 Worked examples — decomposed catalog generators
 
@@ -1247,11 +1242,11 @@ Decomposes to ~14 nodes:
 
 What the decomposition reveals: FluidSim's "fluid" is misleading naming. It's not a Navier-Stokes solver — it's a density-displacement trick (particles → density texture → blur → gradient → rotate = vector field → advect → loop). Once decomposed, a user can replace the vector-field generation step (rotated-gradient → curl-noise → camera-motion-energy → audio-band-driven flow) without touching seed/scatter/advect. The recipe is more interesting than the result.
 
-What both case studies surface that wasn't fully captured in the original §12 V1 scope:
+What both case studies surface that wasn't fully captured in the original section 12 V1 scope:
 
-- **Array port type is V1, not V2.** Both signature generators have particle systems internally. Without it, those pipelines stay opaque. (Handled in §12.3 above.)
-- **3D-volume primitives genuinely matter** for `FluidSim3D`. (Handled in §12.4.)
-- **Rebake-on-change scheduler caching.** Black Hole's deflection map only rebuilds when camera params change — a major perf win. In a decomposed graph, the executor needs to track "this node's inputs haven't changed since last frame, skip evaluation, reuse output." Similar to skip-passthrough but for content rather than topology. Not a primitive; a scheduler feature. Parked in §12.9.
+- **Array port type is V1, not V2.** Both signature generators have particle systems internally. Without it, those pipelines stay opaque. (Handled in section 12.3 above.)
+- **3D-volume primitives genuinely matter** for `FluidSim3D`. (Handled in section 12.4.)
+- **Rebake-on-change scheduler caching.** Black Hole's deflection map only rebuilds when camera params change — a major perf win. In a decomposed graph, the executor needs to track "this node's inputs haven't changed since last frame, skip evaluation, reuse output." Similar to skip-passthrough but for content rather than topology. Not a primitive; a scheduler feature. Parked in section 12.9.
 
 ### 12.9 Open questions parked
 
@@ -1261,7 +1256,7 @@ Three items surfaced during this session that need owners but aren't blocking th
 
 **Rebake-on-change scheduler caching.** Black Hole today caches its expensive deflection-map raymarch and only rebuilds when camera params change. In a decomposed graph this needs to be a scheduler feature: track input-parameter dirty bits per node, skip evaluation when nothing's changed, reuse the previous frame's output. Same conceptual pattern as skip-passthrough but for content rather than topology. Load-bearing for any heavy-compute primitive's perf — when ParametricSurface ships as a decomposed graph it'll need this too.
 
-**When to build fusion-on-compile.** §12.5 commits us to the architectural stance but explicitly defers the implementation until perf demands it. The question is what "demands it" means — measured frame budget pressure on a real show file, not theoretical dispatch-count anxiety. Profile a fully-decomposed FluidSim or Black Hole on the Liveschool fixture before committing to the fusion infrastructure.
+**When to build fusion-on-compile.** section 12.5 commits us to the architectural stance but explicitly defers the implementation until perf demands it. The question is what "demands it" means — measured frame budget pressure on a real show file, not theoretical dispatch-count anxiety. Profile a fully-decomposed FluidSim or Black Hole on the Liveschool fixture before committing to the fusion infrastructure.
 
 ### 12.10 What we deliberately avoid
 

@@ -1,4 +1,4 @@
-// node.instance_position_jitter — fusable BUFFER body (freeze §12, buffer
+// node.instance_position_jitter — fusable BUFFER body (freeze section 12, buffer
 // domain), COINCIDENT multi-input. Add 3-axis 3D-simplex position noise to each
 // InstanceTransform's pos.xyz; scale (.w) and rotation pass through. Matches
 // instance_position_jitter.wgsl bit-for-bit (same simplex3d, prepended via

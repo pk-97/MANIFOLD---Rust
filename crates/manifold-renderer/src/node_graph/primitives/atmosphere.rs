@@ -1,6 +1,6 @@
 //! `node.atmosphere` — scene-wide fog + sky-tint producer.
 //!
-//! Per `docs/REALTIME_3D_DESIGN.md` D5 / §5 P3: emits a single
+//! Per `docs/REALTIME_3D_DESIGN.md` D5 / section 5 P3: emits a single
 //! [`Atmosphere`] struct (exponential depth fog colour + density + height
 //! falloff + ambient tint), consumed by `render_scene`'s optional
 //! `atmosphere` input. Every param is port-shadowed by a same-named optional

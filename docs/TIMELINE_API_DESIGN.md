@@ -2,13 +2,11 @@
 
 **Status:** SHIPPED 2026-06-22 — as-built record.
 
-> **SHIPPED 2026-06-22.** All six tasks landed behaviour-preserving, one commit
-> each; manifold-ui 333 + manifold-app 103 + manifold-editing 59 tests green,
-> clippy clean. This doc is the as-built record (the order/decisions below match
-> what shipped, including the `trim.rs`-not-reused note in §3.3).
+> The order/decisions below match what shipped, including the `trim.rs`-not-reused
+> note in section 3.3.
 
 Sub-design-doc for **Phase 3** of the UI Architecture Overhaul
-(`docs/UI_ARCHITECTURE_OVERHAUL.md` §5.3, §13). Scopes the six Phase-3 tasks
+(`docs/UI_ARCHITECTURE_OVERHAUL.md` section 5.3 (Timeline API), section 13 (Phase checklist (the cross-chat tracker))). Scopes the six Phase-3 tasks
 against the codebase as it actually stands today. Written after a full read of
 the timeline surface; every claim below is backed by a `file:line`.
 

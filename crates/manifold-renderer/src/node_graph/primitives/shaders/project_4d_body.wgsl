@@ -1,4 +1,4 @@
-// node.project_4d — fusable BUFFER body (freeze §12, buffer domain), COINCIDENT
+// node.project_4d — fusable BUFFER body (freeze section 12, buffer domain), COINCIDENT
 // type-changing. Project a 4D vertex to a 2D curve point via two-stage
 // perspective (4D -> 3D collapse, then 3D -> 2D). Matches generator_math::
 // project_4d bit-for-bit. Output is origin-centered pre-aspect curve space

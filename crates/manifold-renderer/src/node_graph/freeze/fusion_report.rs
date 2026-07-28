@@ -1,5 +1,5 @@
 //! Fusion report — per-node classification + region summary for `graph_tool
-//! fusion` (GRAPH_TOOLING_DESIGN D2/D10, §3 "Committed shapes").
+//! fusion` (GRAPH_TOOLING_DESIGN D2/D10, section 3 "Committed shapes").
 //!
 //! Calls [`region::partition_regions`] — the exact pure function the freeze
 //! pipeline itself calls to grow fusion regions — and reuses its private
@@ -156,14 +156,14 @@ fn cut_reason_for(
                 }
                 Some(_) => "fusable atom, cut by a graph-specific gate (unwired/optional input, \
                              non-scalar param, texture arity, resample scale, or space mismatch \
-                             — see docs/FREEZE_COMPILER_MAP.md §4 cut rules 2-9)"
+                             — see docs/FREEZE_COMPILER_MAP.md section 4 cut rules 2-9)"
                     .to_string(),
                 None => "unknown type_id — never fuses".to_string(),
             }
         }
         NodeClass::Eligible => "eligible atom not grouped into any region (isolated, or excluded \
                                  by a union/region-build gate — see docs/FREEZE_COMPILER_MAP.md \
-                                 §4 union/region gates, MIN_REGION_LEN=2)"
+                                 section 4 union/region gates, MIN_REGION_LEN=2)"
             .to_string(),
     }
 }

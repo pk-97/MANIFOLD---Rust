@@ -45,7 +45,7 @@ impl Application {
             }
         }
 
-        // 1a. Breadcrumb sidecar (GIG_RESILIENCE_DESIGN §5.1) — this is the
+        // 1a. Breadcrumb sidecar (GIG_RESILIENCE_DESIGN section 5.1) — this is the
         // path that matters most: perform mode IS the live show. Unlike
         // autosave (D5 parks it here), the breadcrumb keeps refreshing.
         self.tick_breadcrumb();

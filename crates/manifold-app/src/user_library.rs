@@ -1,5 +1,5 @@
 //! `UserLibrary` — the file-ops service behind "My Library"
-//! (`docs/PRESET_LIBRARY_DESIGN.md` §4/§6 D4, phase P3).
+//! (`docs/PRESET_LIBRARY_DESIGN.md` section 4/section 6 D4, phase P3).
 //!
 //! Writes/renames/duplicates/deletes standalone preset JSON files under the
 //! SAME user preset root `manifold_renderer::preset_loader` already resolves
@@ -13,7 +13,7 @@
 //! service needs `manifold_renderer::preset_loader`'s live catalog to check
 //! id collisions — core has no renderer dependency.
 //!
-//! The struct is a thin `{ root: PathBuf }` (§4) deliberately — every
+//! The struct is a thin `{ root: PathBuf }` (section 4) deliberately — every
 //! operation re-derives its target path from `root` + `kind` + `id` each
 //! call, so there's no cached state to go stale against the hot-reload
 //! watcher's own view of the directory.
@@ -118,7 +118,7 @@ impl UserLibrary {
     /// injected test root self-consistent for disambiguation tests), and
     /// (2) the live merged catalog (stock + user + the current project's
     /// overlay) — the "never colliding with an existing stock or user id"
-    /// rule (D4, §6.9: no save may silently create a new stem-override).
+    /// rule (D4, section 6.9: no save may silently create a new stem-override).
     fn id_taken(&self, kind: PresetKind, id: &str) -> bool {
         if self.path_for(kind, id).is_file() {
             return true;
@@ -190,7 +190,7 @@ impl UserLibrary {
 
     /// Whether `id` names an entry with a file under THIS user root — the
     /// user-vs-factory test (`PRESET_LIBRARY_DESIGN` D3/P4): a factory/stock
-    /// preset never lives under `root` (§4's structural guarantee, same one
+    /// preset never lives under `root` (section 4's structural guarantee, same one
     /// [`Self::delete`]/[`Self::rename`] rely on), so this is exactly "can
     /// [`Self::push`] overwrite this id, or does the caller need to fall
     /// back to Save-to-Library-as-new instead."
@@ -198,7 +198,7 @@ impl UserLibrary {
         self.path_for(kind, id.as_str()).is_file()
     }
 
-    /// Push to Library (PRESET_LIBRARY_DESIGN §4: "Push to Library =
+    /// Push to Library (PRESET_LIBRARY_DESIGN section 4: "Push to Library =
     /// `UserLibrary::save` targeting the existing entry's file"): overwrite
     /// an EXISTING user-library entry's file in place with `def` — unlike
     /// [`Self::save`], this NEVER mints a new id/name; the id and filename

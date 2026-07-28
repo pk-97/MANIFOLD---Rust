@@ -381,7 +381,7 @@ impl DropdownPanel {
         // enter/exit motion). `bounds` is just the container rect.
         let bounds = self.container_bounds;
 
-        // Scrim + bordered container via the shared shell. The §17 overlay loop
+        // Scrim + bordered container via the shared shell. The section 17 overlay loop
         // lifts the container with a soft drop-shadow (it skips the scrim).
         let shell = popup_shell::build(
             tree,

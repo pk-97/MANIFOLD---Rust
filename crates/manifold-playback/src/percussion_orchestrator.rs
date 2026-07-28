@@ -498,7 +498,7 @@ impl PercussionImportOrchestrator {
         Self::auto_route_unset_instruments(clip_id, project);
 
         let placed = self.plan_and_apply_for_clip(clip_id, &analysis, project, editing_service);
-        // Detect-and-Group (§8): split the demucs stems into analysis-only lanes,
+        // Detect-and-Group (section 8): split the demucs stems into analysis-only lanes,
         // wrap source + stems + trigger lanes in a named group, and route each
         // stem to its own send. The pipeline reports the persisted stem paths in
         // its JSON (`stemPaths`); we trust those rather than guessing the cache
@@ -509,7 +509,7 @@ impl PercussionImportOrchestrator {
         placed
     }
 
-    /// Detect-and-Group (§8): after triggers are placed, split the demucs stems
+    /// Detect-and-Group (section 8): after triggers are placed, split the demucs stems
     /// into analysis-only audio lanes, route each to a send, and wrap the source
     /// lane + stems + trigger lanes in a named group. Keyed to the **source audio
     /// lane** (`Layer.detect_group_source`): re-detecting any clip on that lane

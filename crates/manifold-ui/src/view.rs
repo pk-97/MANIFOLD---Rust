@@ -98,7 +98,7 @@ pub struct UiLayer {
     /// reserve room for (0 when automation mode is off, the layer is
     /// collapsed, or it carries no enabled lanes). `CoordinateMapper::
     /// layer_height` is the single place this count turns into pixels — see
-    /// `docs/AUTOMATION_LANES_DESIGN.md` §7. Computed by
+    /// `docs/AUTOMATION_LANES_DESIGN.md` section 7. Computed by
     /// `ui_translate::layers_to_ui_for_layout`, never by the plain
     /// `layers_to_ui` (which defaults this to 0 for callers that only need
     /// selection-shape fields, not the Y-layout).
@@ -176,7 +176,7 @@ impl UiMarker {
     }
 }
 
-// ── Automation lanes (P4, `docs/AUTOMATION_LANES_DESIGN.md` §7) ────────────
+// ── Automation lanes (P4, `docs/AUTOMATION_LANES_DESIGN.md` section 7) ────────────
 //
 // UI-local mirror of `manifold_core::effects::{AutomationLane, AutomationPoint,
 // SegmentShape}`. Built once per structural sync by `ui_translate::
@@ -254,11 +254,11 @@ pub struct UiAutomationLane {
     pub param_max: f32,
     /// Whether the param is integral (registry `whole_numbers`/`value_labels`,
     /// or an integral user-binding conversion) — `docs/AUTOMATION_LANES_DESIGN.md`
-    /// §8: "Enum/int-backed params: author with Hold segments." Newly-clicked
+    /// section 8: "Enum/int-backed params: author with Hold segments." Newly-clicked
     /// points on such a param default to `Hold` instead of `Linear` — see
     /// [`Self::new_point_shape`].
     pub whole_numbers: bool,
-    /// True for a chosen-but-not-yet-automated param (P5, §7 addendum's
+    /// True for a chosen-but-not-yet-automated param (P5, section 7 addendum's
     /// "first-draw path") — a single synthetic point at the param's current
     /// base value, no backing `AutomationLane` on the core side yet.
     /// `viewport.rs`'s `automation_lane_screens` skips dot emission for
@@ -279,7 +279,7 @@ impl UiAutomationLane {
         self.param_min + n * (self.param_max - self.param_min)
     }
 
-    /// Default `SegmentShape` for a NEWLY clicked/added point (§8: enum/int
+    /// Default `SegmentShape` for a NEWLY clicked/added point (section 8: enum/int
     /// params author with `Hold`; everything else defaults `Linear`, matching
     /// the shape leaving-this-point convention `AutomationPoint::shape` docs).
     pub fn new_point_shape(&self) -> UiSegmentShape {
@@ -351,7 +351,7 @@ impl UiAutomationLane {
 /// actually samples on the content thread. `pub(crate)`: also used by
 /// `automation_hit_tester.rs` to compute the exact on-screen segment Y a
 /// segment-drag/curve-bend hit-test must agree with (P4 Unit B,
-/// `docs/AUTOMATION_LANES_DESIGN.md` §7).
+/// `docs/AUTOMATION_LANES_DESIGN.md` section 7).
 pub(crate) fn automation_segment_bend(t: f32, bend: f32) -> f32 {
     let bend = bend.clamp(-1.0, 1.0);
     if bend == 0.0 {

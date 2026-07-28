@@ -7,7 +7,7 @@
 //! (same background-thread parse + staging-buffer-per-frame-blit
 //! pattern), NOT an extension of it — that primitive's Material selector
 //! world-transforms vertices by the contributing node's own bind matrix,
-//! which is WRONG for a skinned mesh (glTF 2.0 §3.7.3.3: a skinned mesh's
+//! which is WRONG for a skinned mesh (glTF 2.0 section 3.7.3.3: a skinned mesh's
 //! positioning comes entirely from the joint hierarchy; the mesh-owning
 //! node's own transform is ignored). This primitive never applies a node
 //! transform — `gltf_load::load_gltf_skinned_mesh` returns raw local-space

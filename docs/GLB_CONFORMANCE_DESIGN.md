@@ -1,8 +1,8 @@
 # GLB Conformance — drop in any glb and it renders accurately
 
-**Status: SHIPPED · 2026-07-15 · Fable 5 (authored) + Sonnet 5 (G-P1+G-P2 executed and landed same day, `909976d2`; G-P3+G-P4+G-P5 executed and landed same day, session 2; G-P6 executed and landed same day, session 3, `017e1e41`; G-P7 executed and landed same day, session 3). All seven phases SHIPPED: G-P1 (conformance harness), G-P2 (cap deleted, import is 1:1, BUG-163 fixed as a side effect), G-P3 (anisotropic filtering), G-P4 (KHR_texture_transform all five map families + specular/ior F0), G-P5 (clearcoat lobe, factor-only), G-P6 (node.hdri_source, env_mode card switch, Softbox stays default), G-P7 (full 148-asset Khronos manifest classified — 56 expect_pass / 92 xfail / 0 unclassified; certification record `docs/GLB_CONFORMANCE_STATUS.md`; 8 new bugs logged BUG-166–BUG-173 for genuinely-new gaps the full sweep surfaced, none fixed this phase per its own scope).**
-**Prerequisites: IMPORT_FIDELITY F-P1–F-P7 (all SHIPPED 2026-07-15, `44b921cf`). Nothing else.**
-**Execution contract: read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase. Executed as a Sonnet→Sonnet orchestration; every phase brief is written to be run with nobody in the room.**
+**Status: SHIPPED 2026-07-15 — all seven phases (G-P1–G-P7) on main: harness, 1:1 import (cap deleted), anisotropic filtering, KHR_texture_transform + specular/ior, clearcoat, HDRI source, and the full 148-asset Khronos manifest classified (56 expect_pass / 92 xfail / 0 unclassified). Certification record: `docs/GLB_CONFORMANCE_STATUS.md`. G-P7 logged eight new bugs in beads for genuinely-new gaps, none fixed by scope. · Fable authored, Sonnet executed**
+**Prerequisites: IMPORT_FIDELITY F-P1–F-P7 (all SHIPPED 2026-07-15). Nothing else.**
+**Execution contract: read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase. Executed as a Sonnet→Sonnet orchestration; every phase brief is written to be run with nobody in the room.**
 
 Peter, 2026-07-15: **"I would like our system to be able to drop in any glb and
 accurately render it"** and, on the importer's texture rationing: **"why is there a
@@ -27,7 +27,7 @@ at soundcheck.
 
 Companions: `IMPORT_FIDELITY_DESIGN.md` (the shading/lighting machinery this builds
 on — SHIPPED, do not reopen its decisions), `IMPORT_DESIGN.md` (owns non-material
-import concerns: lights/cameras/report surface; its §8 already names Khronos fixtures
+import concerns: lights/cameras/report surface; its section 8 already names Khronos fixtures
 — this doc is where that intent becomes real), `MATERIAL_SYSTEM_DESIGN.md` (the
 Material port type contract).
 
@@ -49,7 +49,7 @@ Every row below was verified by running code this same day, not recalled.
 | EXR decode | `image = { version = "0.25", default-features = false, features = ["png","jpeg","webp","bmp","gif"] }` — `crates/manifold-renderer/Cargo.toml:26` | `exr` feature exists in image 0.25 but is not enabled; no HDR file source primitive exists (verified: `rg -l "exr" crates/` → no runtime hits) |
 | Headless import-render harness | **Scratchpad only** — the 2026-07-15 probe (`envprobe`, session scratch): renders `assemble_import_graph` output through `PresetRuntime::from_def_with_device`, convergence-polls background decodes, writes PNG | Proven diagnostic value (found/killed 6 hypotheses in one session) but **dies with the session**. Port target precedent: `crates/manifold-renderer/src/bin/render_generator_preset.rs` |
 | Display transform | The probe used Reinhard-without-sRGB-encode and rendered systematically darker than the app; `crates/manifold-renderer/src/bin/generate_preset_thumbnails.rs` has the in-repo readback/encode precedent | ⚠ the harness must NOT invent its own transform (D2) |
-| Khronos sample assets | Not in repo. `tests/fixtures/gltf/README.md` (tier 1) and `IMPORT_DESIGN.md` §8 already call for them; never fetched | Fetch script is genuinely new |
+| Khronos sample assets | Not in repo. `tests/fixtures/gltf/README.md` (tier 1) and `IMPORT_DESIGN.md` section 8 already call for them; never fetched | Fetch script is genuinely new |
 | Committed fixtures | `tests/fixtures/gltf/DamagedHelmet.glb` (CC-BY, committed) + blossom/azalea photoscans | Usable as-is |
 | Untracked local fixtures | `mercedes-amg_gt3__www.vecarz.com.glb` (licensing unverified — **never commit**), `kloppenheim_07_puresky_4k.exr` (Poly Haven CC0, 4096×2048 equirect — keep untracked for repo size; fetchable by script) | Held-out + HDRI demo material |
 | Import-graph gpu tests | `gltf_import.rs` tests: helmet renders non-degenerate + wires all five maps; AMG smoke (`if present` skip pattern) | The skip-if-absent pattern for uncommitted fixtures is established here |
@@ -77,7 +77,7 @@ manifest format.
   ONE shared function (new module `crates/manifold-renderer/src/headless_readback.rs`)
   that `render_import`, `generate_preset_thumbnails`, and the conformance tests all
   call. **Rejected: a harness-local tonemap** — the 2026-07-15 probe had one and its
-  renders diverged from the app all session (DESIGN_AUTHORING §4's
+  renders diverged from the app all session (DESIGN_AUTHORING section 4's
   reimplement-and-verify carve-out: share the seam, don't audit the match).
 - **D3 — Gates are per-feature numeric asserts plus self-goldens, never
   pixel-matching Khronos's reference renders.** Khronos's goldens come from a
@@ -107,7 +107,7 @@ manifest format.
   (map to F0 scale — parse already on). Everything else (sheen, iridescence,
   anisotropy-the-extension, volume, Draco, KTX2, meshopt) stays a report line and a
   named `xfail` entry in the conformance manifest — visible, counted, deferred with
-  triggers in §8.
+  triggers in section 8.
 - **D6 — HDRI environments via a new `node.hdri_source` primitive,** IoBridge-shaped
   like `gltf_texture_source` (background decode thread → `Rgba16Float` upload →
   stretch-blit into its slot; mipmapped output like F-P6). Enables the `exr` feature
@@ -202,23 +202,23 @@ Ordering rationale: G-P1 first because it is the vertical slice AND the oracle e
 later phase gates against. G-P2 (cap) before extensions because 1:1 import changes
 object counts that goldens would otherwise churn on. Every phase: clippy scoped
 `-p <touched crates>`; full workspace sweep only at landing in the main checkout.
-Every phase report carries `Shortcuts taken:` and `Demo artifact:` per standard §8.7.
+Every phase report carries `Shortcuts taken:` and `Demo artifact:` per standard section 8.7.
 
-### G-P1 — the conformance harness (vertical slice) — SHIPPED 2026-07-15 (`909976d2`)
+### G-P1 — the conformance harness (vertical slice) — SHIPPED 2026-07-15
 
 - **Entry state:** `git log --oneline -1` contains `44b921cf` in ancestry
   (`git merge-base --is-ancestor 44b921cf HEAD`); `cargo run -p manifold-renderer
   --bin render_generator_preset -- --help` exits 0 (precedent binary alive);
   `tests/fixtures/gltf/DamagedHelmet.glb` exists.
-- **Read-back:** this doc §1–§4 whole; `render_generator_preset.rs` end-to-end;
+- **Read-back:** this doc section 1–section 4 whole; `render_generator_preset.rs` end-to-end;
   `generate_preset_thumbnails.rs` (its readback is what moves into
   `headless_readback.rs`); `gltf_import.rs` test
   `damaged_helmet_imports_wires_all_maps_and_renders_non_degenerate` (the
-  convergence-poll pattern to reuse — byte-stable + non-black floor, BUG-100
+  convergence-poll pattern to reuse — byte-stable + non-black floor, BUG-100 (gltf-fresh-import-renders-near-black-for-non-aza…)
   comment explains why both). Restate: D2 (shared transform, no local tonemap),
   D3 (no Khronos pixel-matching), D8 (emissive is not broken).
 - **Deliverables:** `headless_readback.rs` (extracted, thumbnails migrated onto it);
-  `bin/render_import.rs` per §3 CLI; `scripts/fetch-gltf-conformance.sh` (pinned
+  `bin/render_import.rs` per section 3 CLI; `scripts/fetch-gltf-conformance.sh` (pinned
   Khronos commit, downloads ONLY the assets named in the manifest, ~10 files);
   `tests/fixtures/gltf/khronos/manifest.json` v1 with exactly these assets:
   `MetalRoughSpheres`, `EmissiveStrengthTest`, `TextureTransformTest`,
@@ -246,7 +246,7 @@ Every phase report carries `Shortcuts taken:` and `Demo artifact:` per standard 
   test treats it as not-yet-fetchable, same as any other missing fixture),
   `SpecularTest`; `xfail:G-P5` = `ClearCoatTest`. `TextureSettingsTest`
   renders non-degenerate but exercises per-texture sampler wrap/filter
-  settings that the current importer cannot honor (BUG-164, logged this
+  settings that the current importer cannot honor (BUG-164 (material-maps-force-one-repeat-sampler-ignores-p…), logged this
   session: every material map shares one hardcoded REPEAT sampler) — no
   future phase in this doc currently owns that fix, so it is `xfail:BUG-164`
   pending a phase assignment.
@@ -261,7 +261,7 @@ Every phase report carries `Shortcuts taken:` and `Demo artifact:` per standard 
   exits 0. **Held-out input:** the orchestrator (not the worker) additionally runs
   `render_import` on ONE Khronos asset absent from the manifest and confirms exit
   0 or a clean exit-3 report — never a panic.
-- **Gate (negative):** the display-transform rg gate (§4); `rg -n "reinhard|/ \(1\.0
+- **Gate (negative):** the display-transform rg gate (section 4); `rg -n "reinhard|/ \(1\.0
   \+ v\)" crates/manifold-renderer/src/bin/ crates/manifold-renderer/tests/` →
   zero hits.
 - **Acceptance demo (L2):** `/tmp/helmet.png` + the conformance run's summary table
@@ -274,7 +274,7 @@ Every phase report carries `Shortcuts taken:` and `Demo artifact:` per standard 
 - **Test scope:** focused (`-p manifold-renderer`); gpu-proofs for the conformance
   binary only.
 
-### G-P2 — 1:1 import (the cap dies) — SHIPPED 2026-07-15 (`909976d2`)
+### G-P2 — 1:1 import (the cap dies) — SHIPPED 2026-07-15
 
 - **Entry state:** G-P1 landed (`cargo test ... --test glb_conformance` runs);
   re-verify anchors: `rg -n "OBJECT_SLIDER_MAX" crates/manifold-renderer/src/` —
@@ -298,7 +298,7 @@ Every phase report carries `Shortcuts taken:` and `Demo artifact:` per standard 
   multi-material Khronos asset (e.g. `SciFiHelmet` or suite equivalent) renders with
   object_count == its material count.
 - **Round-trip gate:** import → save `.manifold` → reload → object count and card
-  params identical (the standard §5 round-trip rule; imports serialize).
+  params identical (the standard section 5 round-trip rule; imports serialize).
 - **Performer gesture:** drop a 78-material car into a set; every panel exists;
   the card shows 16 sliders, not 78.
 - **Forbidden moves:** raising 64 to another silent number; merging meshes;
@@ -369,7 +369,7 @@ Every phase report carries `Shortcuts taken:` and `Demo artifact:` per standard 
   xfail.
 - **Read-back:** D5; IMPORT_FIDELITY Deferred #1 (the original pricing);
   `fs_pbr` in `render_scene.wgsl` (the existing GGX terms to reuse); MATERIAL
-  M §7 "new fields, defaulted" seam. Restate: second specular lobe, NOT a second
+  M section 7 "new fields, defaulted" seam. Restate: second specular lobe, NOT a second
   material system.
 - **Deliverables:** `Material` grows `clearcoat: f32` + `clearcoat_roughness: f32`
   (defaulted 0.0 — every existing constructor site unchanged by `..` or explicit
@@ -397,7 +397,7 @@ Every phase report carries `Shortcuts taken:` and `Demo artifact:` per standard 
   the F-P6 section of IMPORT_FIDELITY (mip contract). Restate: EXR is linear, no
   color_space param; output mipmapped.
 - **Deliverables:** `image` dep gains `exr` feature (one Cargo.toml line — this is
-  the approved dependency change, no other); `primitives/hdri_source.rs` per §3;
+  the approved dependency change, no other); `primitives/hdri_source.rs` per section 3;
   registry entry + catalog regen (`cargo run -p manifold-renderer --bin
   gen_node_catalog`); importer `env_mode` enum param + `hdri_file` string binding
   + card wiring (Environment section); prefilter cost measurement at 4096×2048
@@ -405,7 +405,7 @@ Every phase report carries `Shortcuts taken:` and `Demo artifact:` per standard 
   exceeds 10ms, drop the node's default width/height to 2048×1024 and state it.
 - **Gate:** unit tests (params/ports/skip-if-absent decode test with a tiny
   committed 64×32 EXR fixture — generate it in the test with the `exr` crate via
-  `image`, don't commit a binary); the content-thread grep gate (§4); conformance
+  `image`, don't commit a binary); the content-thread grep gate (section 4); conformance
   sweep unchanged (HDRI is opt-in); `check-presets` green.
 - **Acceptance demo (L2):** DamagedHelmet via `render_import` with
   `--param env_mode=1 --param hdri_file=<kloppenheim path>` — the helmet lit by
@@ -428,7 +428,7 @@ Every phase report carries `Shortcuts taken:` and `Demo artifact:` per standard 
   the forbidden-third-state rule). Final tally: **56 expect_pass, 92 xfail, 0
   unclassified.** 49 of the 92 xfail are `deferred-3` (sheen / iridescence /
   volume / transmission-family / anisotropy-the-extension, per D5's grouping);
-  the full-suite sweep surfaced 8 genuinely new gaps not covered by any §7
+  the full-suite sweep surfaced 8 genuinely new gaps not covered by any section 7
   deferred item, logged as `docs/BUG_BACKLOG.md` BUG-166 through BUG-173
   (extensionsRequired veto in the `gltf` crate, unhandled spec-gloss and
   GPU-instancing extensions, a texture-less-material black-render bug, a
@@ -440,10 +440,10 @@ Every phase report carries `Shortcuts taken:` and `Demo artifact:` per standard 
   `docs/GLB_CONFORMANCE_STATUS.md`, generated by
   `scripts/gen_glb_conformance_status.py` from the manifest. Full conformance
   sweep: green, 91.95s.
-- **Read-back:** the manifest; this doc §2 D3/D5; `docs/VERIFICATION_DEBT.md`.
+- **Read-back:** the manifest; this doc section 2 D3/D5; `docs/VERIFICATION_DEBT.md`.
 - **Deliverables:** manifest grows to the FULL Khronos suite glb list (script
   fetches all); every asset classified in the manifest: `expect_pass` (with
-  checks+golden), or `xfail:<deferred-item>` pointing at a §8 entry — **no third
+  checks+golden), or `xfail:<deferred-item>` pointing at a section 8 entry — **no third
   state**; a `docs/GLB_CONFORMANCE_STATUS.md` generated table (asset × status ×
   gap) committed as the certification record; BUG_BACKLOG sweep: BUG-163 status
   → FIXED (G-P2 reference).
@@ -492,4 +492,4 @@ Every phase report carries `Shortcuts taken:` and `Demo artifact:` per standard 
 6. **Vulkan aniso mapping** — trigger: VULKAN_BACKEND_DESIGN execution begins; the
    field lands there with a comment naming this doc.
 7. **Animation / skinning / morph targets** — out of scope for this doc entirely;
-   owned by IMPORT_DESIGN P1-remaining (§8 there). Rendering conformance only here.
+   owned by IMPORT_DESIGN P1-remaining (section 8 there). Rendering conformance only here.

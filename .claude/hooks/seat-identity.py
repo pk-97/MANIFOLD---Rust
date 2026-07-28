@@ -13,10 +13,10 @@ statusline uses.
 Mechanism (rekeyed 2026-07-24, D-48 slot map): slots no longer identify
 seats — the kimi seat's slots now carry LANE tiers (opus=glm-5.2,
 sonnet=glm-4.7, haiku=deepseek-v4-flash), so matching slot env against
-default_model is wrong (it labelled the K3 lead as glm/dispatcher once
+default_model is wrong (it labelled the K3 lead as zai/dispatcher once
 already). Seat resolution order:
   1. ANTHROPIC_MODEL — the session's OWN model, injected inline by the
-     tmux launch binding (survives profile regeneration; k3 -> kimi-code).
+     `k3m` shell alias (survives profile regeneration; k3 -> kimi).
   2. ANTHROPIC_DEFAULT_OPUS_MODEL matched against each provider's
      EFFECTIVE STRONG SLOT (strong_model, else default_model). Unique per
      seat by invariant: no two seats may share a strong slot.
@@ -38,7 +38,7 @@ PROVIDERS_TOML = os.path.expanduser("~/.config/cc-fleet/providers.toml")
 
 # Seat map per docs/AGENT_ROUTING.md §The tiering (2026-07-24 roster).
 SEATS = {
-    "kimi-code": (
+    "kimi": (
         "LEAD",
         "You hold the lead seat: design, judgment, review, verification, "
         "landing. Drive dispatcher/executor lanes as native Agent subagents "
@@ -48,7 +48,7 @@ SEATS = {
         "restating the brief back to yourself; briefs, verdicts, and "
         "decisions only. Delegate early: lanes are 3-5x faster than you.",
     ),
-    "glm": (
+    "zai": (
         "DISPATCHER",
         "You hold the dispatcher seat: clerical only — pop the queue, brief "
         "lanes, run exit-code gates, accept/reject, escalate. Drive executors "
@@ -93,16 +93,16 @@ def main() -> None:
         name = ""
         # 1. Explicit session model (lead binding injects ANTHROPIC_MODEL=k3).
         session_model = os.environ.get("ANTHROPIC_MODEL", "")
-        EXPLICIT_SEAT = {"k3": "kimi-code", "kimi-for-coding": "kimi-code"}
+        EXPLICIT_SEAT = {"k3": "kimi", "kimi-for-coding": "kimi"}
         if session_model in EXPLICIT_SEAT:
             name = EXPLICIT_SEAT[session_model]
-        # 1b. Fable-slot pin (D-48 tmux binding sets FABLE=k3 alongside
+        # 1b. Fable-slot pin (the k3m alias sets FABLE=k3 alongside
         #     ANTHROPIC_MODEL; panes started before that binding update carry
         #     ONLY the fable pin — without this branch they fall through to
         #     base_url and get misidentified (glm-4.7 lead, 2026-07-24).
         if not name:
             if os.environ.get("ANTHROPIC_DEFAULT_FABLE_MODEL", "") == "k3":
-                name = "kimi-code"
+                name = "kimi"
                 session_model = "k3"
         # 2. Effective strong slot (strong_model, else default_model) —
         #    unique per seat by invariant; slots below strong are lane tiers.

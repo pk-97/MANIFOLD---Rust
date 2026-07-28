@@ -308,7 +308,7 @@ path).
 
 Grounding the command layer corrected the design (the spec's "delete `EffectTarget`
 entirely" was wrong) and split it into stages — see the rewritten
-`docs/CARD_TARGET_UNIFICATION.md` (§ "Correction", "The migration (step 3)").
+`docs/CARD_TARGET_UNIFICATION.md` (section "Correction", "The migration (step 3)").
 
 - **Stage A — editing layer: DONE, in `git stash@{0}`** (`git stash show -p
   stash@{0}` to restore). Compiles as a lib. Single-effect commands
@@ -343,7 +343,7 @@ generalize to a graph target ONCE. This REVISES Stage A: the stashed
 (`Effect(EffectId) | Generator(LayerId)`). The UI is already unified (chevron
 gated on `mappable`), so once `gen_params_to_config` sets `mappable: true` for
 generator bindings the chevron lights up with no UI work. Full plan in
-`docs/CARD_TARGET_UNIFICATION.md` § "Stage B+ — generator editable bindings".
+`docs/CARD_TARGET_UNIFICATION.md` section "Stage B+ — generator editable bindings".
 
 **Widened again (2026-06-01): the fork is THREE-WAY** (Peter: "go for this").
 The mapping drawer being user-binding-only revealed built-in effect params
@@ -357,4 +357,4 @@ the mapping is a downstream reshape (never rewrites the slot, applied after the
 modulation write). The unification must never move a `param_id`/slot and must not
 duplicate a built-in param into a user binding. Adversarial gate checks per-frame
 writes byte-identical for a fixture with Ableton+OSC+driver+envelope bound. Spec
-§ "Stage B++" + "Verification".
+section "Stage B++" + "Verification".

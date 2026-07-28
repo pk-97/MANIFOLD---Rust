@@ -652,7 +652,7 @@ mod tests {
         }
     }
 
-    /// §11 OSC nudge/seek split = 0.5s: while playing, a small position
+    /// section 11 OSC nudge/seek split = 0.5s: while playing, a small position
     /// error nudges every message rather than hard-seeking.
     #[test]
     fn osc_sync_nudges_when_playing_delta_under_threshold() {
@@ -714,7 +714,7 @@ mod tests {
         assert_eq!(arb_target.seek_count, 0);
     }
 
-    /// §11 OSC stopped `seek_threshold` = 0.05s: while stopped, only seek
+    /// section 11 OSC stopped `seek_threshold` = 0.05s: while stopped, only seek
     /// when drift exceeds the threshold (avoid churn while paused).
     #[test]
     fn osc_sync_stopped_seeks_beyond_threshold() {
@@ -755,7 +755,7 @@ mod tests {
         assert_eq!(arb_target.nudge_count, 0);
     }
 
-    /// §7: "timecode arriving = play, 0.5s silence = pause."
+    /// section 7: "timecode arriving = play, 0.5s silence = pause."
     #[test]
     fn osc_update_plays_when_timecode_starts_arriving() {
         let mut ctrl = OscSyncController::new();

@@ -6,18 +6,18 @@ FOUNDATIONAL_GAPS.md A1–A7/Part B and CORE_ENGINE_FINDINGS.md F1–F17). Purpo
 availability ends, Opus designs and Sonnet builds against THESE verdicts instead of rediscovering
 them. Status: verdicts final unless Peter overrides.
 
-## §0 Evidence status — read before trusting
+## 0 Evidence status — read before trusting
 
 Verdicts rest on the dossier plus direct verification of the three load-bearing claims:
-BUG-006/007/008 entries read in full (BUG_BACKLOG.md:953–1016), BUG-060's REOPENED status and
+BUG-006/007/008 entries read in full (BUG_BACKLOG.md:953–1016), BUG-060 (VD-019: BUG-060 L3 scroll to true bottom)'s REOPENED status and
 reopen mechanism read (:1309–1322), F5's exact text read (CORE_ENGINE_FINDINGS.md:157–163).
-The per-bug table in dossier §2 was NOT re-audited row by row — before acting on any single row,
+The per-bug table in dossier section 2 was NOT re-audited row by row — before acting on any single row,
 read that bug's backlog entry. Scope: verdicts are drawn from the backlog-covered period
-(post 2026-06-23); pre-backlog git history (dossier §4) is admitted as corroborating evidence
+(post 2026-06-23); pre-backlog git history (dossier section 4) is admitted as corroborating evidence
 only. Known corpus gap: March–May (vsync saga, TexturePool abandon-and-retry, wgpu migration)
 has zero backlog coverage — verdicts undercount manifold-app/manifold-gpu historical churn.
 
-## §1 Headline
+## 1 Headline
 
 The codebase is not riddled with wrong designs; it is riddled with **unenforced right designs**.
 Majority class: missing-invariant-enforcement (20) + stale-state/projection (8) +
@@ -25,7 +25,7 @@ identity-minting (3) = 31/82 bugs where the invariant existed in prose (map doc,
 memory) and nothing in code enforced it. The corpus's own strongest datapoint (backlog, "The
 pattern behind all of this"): the one duplication path with a test never regressed; every path
 without one did. Two genuine structural faults stand out (UI↔content projection seam; engine
-mutation authority), plus one severe blocked feature (BUG-053, HDR recording).
+mutation authority), plus one severe blocked feature (BUG-053 (hdr-live-recording-structural), HDR recording).
 
 Consequence for how Opus/Sonnet work from here: **"fixed" for any bug in a recurring class means
 fix + the enforcement that makes recurrence impossible + backlog entry updated.** The two proven
@@ -33,21 +33,21 @@ templates to copy: manifold-io's guard+test pattern (forward-version guard, fsyn
 1/6 still open, best ratio of any early-corpus crate) and manifold-audio's accuracy-gate pattern
 (every fix lands with a scored selftest gate — 8 bugs, all one-offs, none recurred).
 
-## §2 Verdicts by subsystem
+## 2 Verdicts by subsystem
 
 | Subsystem | Verdict | Fix owner |
 |---|---|---|
-| manifold-ui ↔ content projection seam | ~~structurally-wrong (= A1, confirmed)~~ **DOWNGRADED 2026-07-09 (Fable, §6): sound-but-under-enforced; A1's kill-test came back KILL** — enforcement shipped same day (UI_PROJECTION_LAYER_DESIGN P0), declarative layer rejected | ~~Opus design~~ done |
+| manifold-ui ↔ content projection seam | ~~structurally-wrong (= A1, confirmed)~~ **DOWNGRADED 2026-07-09 (Fable, section 6): sound-but-under-enforced; A1's kill-test came back KILL** — enforcement shipped same day (UI_PROJECTION_LAYER_DESIGN P0), declarative layer rejected | ~~Opus design~~ done |
 | manifold-playback | sound-but-underspecified; ONE structural fault: engine mutation authority (F5) | Opus design |
 | freeze/fusion compiler | sound design, **unenforced contract** (miner's "structurally-wrong" downgraded — see below) | Sonnet fixes + Opus verifier design |
 | manifold-media/recording | structurally-wrong, severe, n=1 (BUG-053 blocks HDR recording) | LIVE_RECORDING_PROOFS design already PROPOSED |
-| manifold-core | sound-but-underspecified; BUG-080 confirmed as its own design item | Opus design (already self-nominated) |
-| manifold-app | sound-but-underspecified; A7 feature-matrix rot = 6 bugs, but a compile+clippy CI gate closes only 4 (029/033/057/067) — 034+073 are separate coverage fixes (see §5) | Sonnet, cheap, do first |
-| manifold-io | closest to target state; export its pattern | BUG-063 remainder only |
+| manifold-core | sound-but-underspecified; BUG-080 (Design pass: param-manifest two-phase…) confirmed as its own design item | Opus design (already self-nominated) |
+| manifold-app | sound-but-underspecified; A7 feature-matrix rot = 6 bugs, but a compile+clippy CI gate closes only 4 (029/033/057/067) — 034+073 are separate coverage fixes (see section 5) | Sonnet, cheap, do first |
+| manifold-io | closest to target state; export its pattern | BUG-063 (silent-load-repairs) remainder only |
 | manifold-audio | sound; export its pattern | — |
 | manifold-editing, manifold-gpu, docs tooling | sound at current n | — |
-| identity-on-duplicate (A5, cross-crate) | pattern exists + tested in graph-node paste; port it | Sonnet (see §4 Q6) |
-| BUG-069 licensing | excluded — legal/dependency risk, not architecture; tracked in `audio-analysis-accuracy` memory / opus-prompt-pack Prompt 14 | — |
+| identity-on-duplicate (A5, cross-crate) | pattern exists + tested in graph-node paste; port it | Sonnet (see section 4 Q6) |
+| BUG-069 (shipping-license-audit) licensing | excluded — legal/dependency risk, not architecture; tracked in `audio-analysis-accuracy` memory / opus-prompt-pack Prompt 14 | — |
 
 ### UI↔content projection (verdict: structurally-wrong; priority #1 for the release)
 
@@ -77,8 +77,8 @@ stakes are the highest in the codebase: this is the timing crate, and a timing b
 ### Freeze/fusion compiler (verdict: sound design, unenforced contract — miner downgraded)
 
 The miner suggested structurally-wrong; I'm overruling with evidence: all 8 campaign bugs have
-precise, LOCAL root causes with cheap fix shapes written in the backlog — BUG-007 is one line
-(`configured_construct` for the one bare-construct hold-out), BUG-008 has a conservative
+precise, LOCAL root causes with cheap fix shapes written in the backlog — BUG-007 (particle-loop-fusion-exclusion-blind-configured-…) is one line
+(`configured_construct` for the one bare-construct hold-out), BUG-008 (fused-buffer-region-mismatched-array-lengths-rea…) has a conservative
 fail-closed option (refuse >1 array external at `build_region`). Wrong designs don't localize
 like that. What the campaign actually proved: FREEZE_COMPILER_MAP's documented invariants
 (cut rules, marker ABI, precision contract) are enforced nowhere at fuse time. Two actions:
@@ -91,20 +91,20 @@ the editor is a stage-facing correctness bug wearing a perf-feature costume.
 ### Standing hazard zone (not a verdict — a rule)
 
 The vsync/present neighborhood (`app.rs`/`app_render.rs`/`content_pipeline.rs`) produced 4+
-distinct root causes under one symptom in two weeks (pre-backlog, dossier §4) despite standing
+distinct root causes under one symptom in two weeks (pre-backlog, dossier section 4) despite standing
 memory warnings. Warnings don't enforce. Rule for executors: any change in that neighborhood
 requires reading `docs/VSYNC_AND_FRAME_PACING.md` first and a soak run before landing.
 
-## §3 Execution queue (in order)
+## 3 Execution queue (in order)
 
 Opus design windows:
-1. ~~**A1 UI projection layer** — release-critical, gates every new screen.~~ **RESOLVED 2026-07-09 (Fable, §6):** kill-test killed the layer; the enforceable gap (orphan fields) shipped as a compiler gate the same day. Nothing here gates new screens anymore.
+1. ~~**A1 UI projection layer** — release-critical, gates every new screen.~~ **RESOLVED 2026-07-09 (Fable, section 6):** kill-test killed the layer; the enforceable gap (orphan fields) shipped as a compiler gate the same day. Nothing here gates new screens anymore.
 2. **ENGINE_STATE_AUTHORITY** — resolves F5 and triages F1–F17.
 3. **FREEZE_VERIFIER (A8)** — after or parallel to the Sonnet fix wave.
 4. **BUG-080 param-manifest construction** — already self-nominated for an Opus pass.
 
 Sonnet waves (no design needed, briefs can cite this doc + the backlog fix shapes):
-- A7 feature-matrix CI gate (one job compiling + clippy'ing the feature matrix) — closes BUG-029/033/057/067 (057≈067 same dead fn; 033 already fixed). **BUG-034 and BUG-073 are NOT compile-rot** (a missing atlas-UV test; the `--script` driver not ticking animations) — separate coverage/behavior fixes the gate can't close. See §5.
+- A7 feature-matrix CI gate (one job compiling + clippy'ing the feature matrix) — closes BUG-029 (profiling-feature-doesnt-compile-rotted-against-…)/033/057/067 (057≈067 same dead fn; 033 already fixed). **BUG-034 (Headless preview verification doesn't cover the…) and BUG-073 (ui-snap-script-drawer-tween-never-ticks) are NOT compile-rot** (a missing atlas-UV test; the `--script` driver not ticking animations) — separate coverage/behavior fixes the gate can't close. See section 5.
 - Freeze campaign fixes BUG-006–012/014, gpu-proofs-gated per fix.
 - A5 identity ports: first a direct code comparison (does `EffectId`/`ClipId` duplication lack the
   trait/macro shape `NodeId` has? — dossier Q6), then port the graph-node paste pattern + one
@@ -112,65 +112,65 @@ Sonnet waves (no design needed, briefs can cite this doc + the backlog fix shape
 - BUG-053 execution once LIVE_RECORDING_PROOFS is approved — it is on the export path, which is
   the release's second pillar; treat as release-gating, not n=1 trivia.
 
-## §4 Dossier §6 questions — answers
+## 4 Dossier section 6 questions — answers
 
 1. A8 for freeze/fusion: **yes** — anchor it to FREEZE_COMPILER_MAP.md; fold into
    FOUNDATIONAL_GAPS.md at landing time (deliberately not edited on this branch to keep the diff
    one file).
 2. BUG-080 vs F5 same shape? They rhyme ("invariant suspended during a privileged window") but the
    fixes differ — construction-time completeness vs runtime write authority. Two designs, shared lens.
-3. Answered in §2 playback verdict: bandwidth + unowned decision, not structural resistance.
-4. Pre-backlog history: corroborating evidence only; scoped out of verdicts, recorded in §0 as a
+3. Answered in section 2 playback verdict: bandwidth + unowned decision, not structural resistance.
+4. Pre-backlog history: corroborating evidence only; scoped out of verdicts, recorded in section 0 as a
    known undercount.
-5. BUG-069: excluded from architecture verdicts (see §2 table).
-6. Not assumed copy-paste; comparison step is first in the A5 Sonnet brief (§3).
+5. BUG-069: excluded from architecture verdicts (see section 2 table).
+6. Not assumed copy-paste; comparison step is first in the A5 Sonnet brief (section 3).
 
-## §5 Re-audit amendment (Opus, 2026-07-09)
+## 5 Re-audit amendment
 
-Row-by-row re-audit of the dossier §2 table against all 82 backlog entries — the pass §0 deferred.
+Row-by-row re-audit of the dossier section 2 table against all 82 backlog entries — the pass section 0 deferred.
 **The table holds:** fix-status correct 82/82 (the 48-open / 20-struct / 14-patch totals reconcile
 by hand), evidence line-numbers correct 82/82, class labels all defensible. Three corrections, none
 of which moves a verdict:
 
-1. **A7 is a 4-bug gate, not 6** (corrected in §2 table + §3 in place). The manifold-app
+1. **A7 is a 4-bug gate, not 6** (corrected in section 2 table + section 3 in place). The manifold-app
    process-failures are 029, 033, 034, 057, 067, 073. A feature-matrix compile+clippy job catches
    only the four compile/lint-under-feature rots (029, 033, 057, 067 — and 057≈067 are the same dead
    `make_blit_pipeline`; 033 is already FIXED). **BUG-034** (missing test for the live atlas-UV path)
    and **BUG-073** (headless `--script` driver never ticks animations) compile and lint clean — they
    are coverage/behavior gaps the gate cannot close. A Sonnet brief citing "6" would leave two open
    and read as a gate failure.
-2. **Dossier §3 histogram nits** (raw-material doc; noted here, not edited there). manifold-audio is
-   labelled "one-off×8" but two of its eight (052, 055) are convention-mismatch in §2 itself
+2. **Dossier section 3 histogram nits** (raw-material doc; noted here, not edited there). manifold-audio is
+   labelled "one-off×8" but two of its eight (052, 055) are convention-mismatch in section 2 itself
    (real split: one-off×6 + convention×2); manifold-core is "identity×3(fixed)" but only 002/003 are
    identity — the third fixed core bug (005) is missing-invariant, and 079 is dropped from the count.
    Neither changes the "sound" / "sound-but-underspecified" verdicts.
-3. **BUG-047 enforcement mis-cite** (dossier §2). Its listed test `consumers_fit_within_panel` guards
+3. **BUG-047 (setup-panel-overflow) enforcement mis-cite** (dossier section 2). Its listed test `consumers_fit_within_panel` guards
    the adjacent, already-fixed ordering bug; the entry itself states "no executable test for this
    clamp overflow yet." BUG-047's real enforcement is **none**.
 
 Not done: verifying each entry's root cause against the Rust itself — this pass audited the dossier
-against the backlog, not the backlog against the code (per §0's scope). Recommended posture stands:
+against the backlog, not the backlog against the code (per section 0's scope). Recommended posture stands:
 verify each Sonnet-wave entry against code at pick-up, one level closer to stage than static reading.
 
-**§5 confirmed (Fable, 2026-07-09, second pass):** all three corrections re-verified against
+**section 5 confirmed (Fable, 2026-07-09, second pass):** all three corrections re-verified against
 dossier + backlog — A7 four-bug gate ✓ (034 = coverage, 073 = behavior; 057≈067 same slug),
 audio one-off×6 + convention×2 ✓ (052/055 rows), core identity×2 ✓ (005 = missing-invariant),
 BUG-047 real enforcement none ✓ (the cited test guards the adjacent fixed ordering bug);
 48/14/20 totals reconcile ✓.
 
-## §6 A1 verdict amendment (Fable, 2026-07-09, second pass)
+## 6 A1 verdict amendment (Fable, 2026-07-09, second pass)
 
-The §2 "structurally-wrong" verdict for the projection seam is **downgraded to
+The section 2 "structurally-wrong" verdict for the projection seam is **downgraded to
 sound-but-under-enforced**, and the queue's #1 design window is **dissolved**. What changed:
 working the pre-Fable A1 draft against the code showed (a) the emit half of the seam was
 already compiler-enforced (exhaustive struct literal), (b) the orphan class was a suppressed
 compiler lint, not a missing system — un-suppressing it became UI_PROJECTION_LAYER_DESIGN P0,
-shipped same day, and immediately exposed two real product gaps (BUG-083 export progress,
-BUG-084 recording drops); (c) the A1 bug-evidence list dissolves on re-read (015/060 are
+shipped same day, and immediately exposed two real product gaps (BUG-083 (video-export-has-no-progress-display) export progress,
+BUG-084 (recording-drop-counter-never-surfaced) recording drops); (c) the A1 bug-evidence list dissolves on re-read (015/060 are
 A2/cache — 015 OPEN, 060 REOPENED; 026 animation poll; 036 load ordering) — zero corpus bugs
 in the class a declarative table would govern; (d) drag suppression already exists generically
 (`ActiveInspectorDrag`). Full evidence chain and the reviving trigger:
-UI_PROJECTION_LAYER_DESIGN.md §1.1/§2. The "every field hand-threaded" churn is real but lives
+UI_PROJECTION_LAYER_DESIGN.md section 1.1 (The enforcement inventory that flips the verdict (each claim observed, not derived))/section 2. (The verdict, priced) The "every field hand-threaded" churn is real but lives
 in view-model/display code no table can generate — it stays covered by the ui_translate
 boundary and UI_HARNESS_UNIFICATION's verification half. Headline unchanged: the codebase's
 disease is unenforced right designs — this amendment is that thesis applying to the audit's

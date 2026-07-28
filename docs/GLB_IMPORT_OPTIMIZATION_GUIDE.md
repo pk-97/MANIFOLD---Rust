@@ -80,7 +80,7 @@ The aggressive cut with a normal bake is where the bigger geometry win lives, un
 
 ## Already-shipped engine wins (don't re-derive)
 
-Static-scene shadow caching and IBL gating landed 2026-07-17 (BUG-189 + BUG-197,
+Static-scene shadow caching and IBL gating landed 2026-07-17 (BUG-189 (import-graph-10ms-resolution-independent-gpu-flo…) + BUG-197 (switch-texture-blocks-ibl-generation-gate),
 `RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md` P0–P5) — shadow maps and env maps for a static scene
 no longer re-render every frame. **Indexed-mesh rendering (R4) was tried and CLOSED 2026-07-18**
 (`INDEXED_MESH_RENDERING_DESIGN.md`): the index engaged (3.9×–5.3× vertex collapse) but p50 barely

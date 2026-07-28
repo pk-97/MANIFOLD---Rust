@@ -3,15 +3,15 @@
 //!
 //! `FakeAbleton` is a pure model of Ableton Live + AbletonOSC: no sockets, no
 //! threads, no sleeps, no wall clock — everything is stepped by an explicit
-//! `f64` test-time `now`, matching the machine's own contract (§4). Commands
+//! `f64` test-time `now`, matching the machine's own contract (section 4). Commands
 //! delivered to it apply after a configurable scheduler delay (AbletonOSC
 //! processes on Live's ~100ms timer); its listeners emit `is_playing`/`tempo`
 //! on change and `current_song_time` at ~10 Hz while playing (discrete change
 //! while stopped) — the cadence the design's D4 measures against. Fault
 //! knobs (`drop_next_inbound`/`drop_next_outbound`) model single-packet UDP
-//! loss (§1: "position seek sent exactly once").
+//! loss (section 1: "position seek sent exactly once").
 //!
-//! `Harness` is the driving loop the content thread will run post-P3 (§5):
+//! `Harness` is the driving loop the content thread will run post-P3 (section 5):
 //! per frame, tick the machine, drain its `OutMsg`s into the fake, step the
 //! fake, feed its `ObsEvent`s back as `on_osc_*`, drain+apply `EngineAction`s
 //! to a simulated engine transport, and — only when no expectation is
@@ -20,7 +20,7 @@
 //! modeled exactly as the content thread runs it today; gating it on
 //! `sync_pending()` is D5, and its absence is what produces F1 on stage.
 //!
-//! One named test per §2 failure-catalog entry, per the P2 brief.
+//! One named test per section 2 failure-catalog entry, per the P2 brief.
 
 use manifold_playback::transport_sync::{
     AbletonTransportSync, EngineAction, OutMsg, TransportSyncStatus,
@@ -48,7 +48,7 @@ struct FakeAbleton {
     tempo_bpm: f32,
     /// Last instant `song_time_beats` was advanced to (dead-reckoning anchor).
     last_advance_at: f64,
-    /// AbletonOSC/Live's command-processing latency (default 100ms, §1).
+    /// AbletonOSC/Live's command-processing latency (default 100ms, section 1).
     scheduler_delay: f64,
     extra_latency: f64,
     /// Seconds between `current_song_time` listener reports while playing.
@@ -150,7 +150,7 @@ impl FakeAbleton {
     }
 
     /// Advance the playhead to `now` (only moves while playing), matching
-    /// the design's dead-reckoning rule (§4).
+    /// the design's dead-reckoning rule (section 4).
     fn advance(&mut self, now: f64) {
         if self.is_playing {
             let elapsed = (now - self.last_advance_at).max(0.0) as f32;
@@ -225,7 +225,7 @@ struct FrameResult {
 
 /// Ties `AbletonTransportSync` + `FakeAbleton` + a simulated engine transport
 /// together into the per-frame driving loop the content thread will run
-/// post-P3 (§5 integration seam).
+/// post-P3 (section 5 integration seam).
 struct Harness {
     machine: AbletonTransportSync,
     fake: FakeAbleton,
@@ -387,7 +387,7 @@ fn f1_play_from_cursor_no_dragback() {
 
 // ── F2 — single-packet seek loss ────────────────────────────────────
 
-/// The deferred `SetSongTime` — "the least-protected packet" per §1 — is
+/// The deferred `SetSongTime` — "the least-protected packet" per section 1 — is
 /// dropped once. The retransmit (D7) must still land the seek.
 #[test]
 fn f2_seek_survives_packet_loss() {

@@ -1,4 +1,4 @@
-// node.simplex_per_instance — fusable BUFFER body (freeze §12, buffer domain),
+// node.simplex_per_instance — fusable BUFFER body (freeze section 12, buffer domain),
 // COINCIDENT. Sample 3D simplex noise at each UV; emit one f32 per slot. Matches
 // simplex_per_instance.wgsl bit-for-bit (simplex3d prepended via wgsl_includes
 // from noise_common.wgsl).

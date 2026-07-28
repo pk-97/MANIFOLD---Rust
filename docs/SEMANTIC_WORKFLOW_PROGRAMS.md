@@ -61,6 +61,8 @@ Every transition is enforced by one of three things. This table is where the arc
 
 The soft transitions are the known failure surface. The table turns "make agents more reliable" into a finite ordered list: migrate soft transitions to hooks, one at a time.
 
+**Machine form (2026-07-27, Peter):** `.claude/hooks/enforcement-table.json` is this table as data — every transition, its enforcement kind, its enforcing file. `gate_runner pre-wave` verifies it against reality (hook rows registered + present, exit-code rows present) and prints the prompt-row count as the open soft surface. A migration is a one-row edit the census counts; a dead enforcing file goes red at wave start.
+
 ## 4. The holes (skeptical pass, kept sharp)
 
 1. **The deterministic part is a for-loop.** The runtime-owned portion (iterate queue, run gates, park failures) is real but small. The wave's success lives inside three opcodes the runtime cannot check: COMPILE_WAVE, BRIEF, REVIEW.
@@ -68,11 +70,11 @@ The soft transitions are the known failure surface. The table turns "make agents
 3. **Typed artifacts validate shape, not truth.** A schema-perfect Brief can name a nonexistent reuse target or a non-discriminating conviction test. Only a reading mind catches that.
 4. **REVIEW is the only opcode whose oracle is a model — and it is load-bearing.** Everything else has a cheap external check. The entire cost structure (lead window economy, parallelism = review bandwidth) is downstream of this one fact.
 5. **Benchmarking won't have the n.** A wave is 5–10 lanes; per-opcode model comparisons are inside binomial noise for months. Model selection stays anecdote-driven.
-6. **Replay is an audit log, not a debugger.** Executor output is sampled; same input hash, different diff. Traceability yes, reproduction no.
+6. **Replay is an audit log, not a debugger.** Executor output is sampled; same input hash, different diff. Traceability yes, reproduction no. External confirmation (Compiled AI, arXiv 2604.05150): non-determinism survives temperature 0 — up to 15% accuracy variance across identical runs from MoE routing alone. Corollary: a lane rerun is a new sample, not a retry; one pass + one fail on the same gate means "unstable," never "flaky infra."
 7. **Model-independent but harness-dependent.** The transition table lives in Claude Code hooks + this repo's conventions. The IR would port; the machine wouldn't.
 8. **The target moves.** The roster changed three times in a week; a frozen IR lags doctrine and starts lying.
 9. **Generalization fails without oracles.** All hard gates exist because this is a Rust repo (clippy, tests, exit codes). Domains without a compiler have no GATE opcode. This is an architecture *for oracled work*, not a universal one.
-10. **Semantic caching by hash rarely fires.** Plans are never bit-identical; similarity-based caching reintroduces a model judgment into the lookup path. (Where caching *does* fire: plan templates for repeated wave shapes — see §7.)
+10. **Semantic caching by hash rarely fires.** Plans are never bit-identical; similarity-based caching reintroduces a model judgment into the lookup path. (Where caching *does* fire: plan templates for repeated wave shapes — see section 7.)
 
 ## 5. R1 coverage analysis — the one real measurement
 
@@ -80,7 +82,7 @@ Test: how much of the RT-reflections R1 wave was expressible in its queue file *
 
 **Pre-expressed (and it all ran as written):** T1–T6 with exact anchors, gate commands, commit messages, seat assignments, pre-allocated BUG range, pre-named escalation triggers ("fails twice", "anchor moved", "new file outside named ones", "lead fills probe math if scaffold stalls"). The one real escalation (struct-layout fork) fired a pre-named trigger. Even the final probe debugging was pre-parked.
 
-**Emergent (D-50..D-56, BUG-323/324/325):** seat rotation under quota pressure; Flash self-gating / thin middle (cost observation: dispatcher 10M tokens clerical vs Flash 1.67M actual); stand-down incident → freeze hook; Flash parse storms → three rounds of proxy patches; "lead reviews, does not author"; seat-identity fix; GLM-4.7's "pre-existing" mislabel caught in review.
+**Emergent (D-50..D-56, BUG-323 (graph-tool-render-cant-inject-string-bindings)/324/325):** seat rotation under quota pressure; Flash self-gating / thin middle (cost observation: dispatcher 10M tokens clerical vs Flash 1.67M actual); stand-down incident → freeze hook; Flash parse storms → three rounds of proxy patches; "lead reviews, does not author"; seat-identity fix; GLM-4.7's "pre-existing" mislabel caught in review.
 
 **Reading:** program coverage ~100% — every *artifact-level* decision was in the transition table before the wave ran. But everything that broke broke *below* the IR's abstraction level: transport (D-54), identity (D-56), halt semantics (D-53), economics (D-51/52/55). ISA errata, not program bugs. The IR described the wave's logic completely and its work maybe 40% — most lead-window tokens went to runtime maintenance.
 
@@ -95,7 +97,7 @@ True, with two edges:
 1. **Hooks stop repeats, not novel problems.** R1's five incidents had five different mechanisms, zero repeats. Machinery kills classes; it does not slow the arrival of new classes. Whether novelty decays once the roster/config freezes is the open empirical question.
 2. **Some judgment ratcheted into the charter, not the machine.** D-52/D-55 didn't eliminate judgment — they relocated and standardized it (lead = sole correctness read; design work → judgment-tier one-shots). Both piles are improvements; only the first grows the machine.
 
-**The falsifiable test:** R2 runs on the R1-hardened machine with driver-ready queues and a frozen roster. Near-zero new D-entries → the judgment residue is converging. Another five-mechanism crop → the machine grows but the novel-incident tax is permanent. The decisions file is already the instrument.
+**The falsifiable test:** R2 runs on the R1-hardened machine with driver-ready queues and a frozen roster. Near-zero new D-entries → the judgment residue is converging. Another five-mechanism crop → the machine grows but the novel-incident tax is permanent. The decisions file is already the instrument, and the reading is mechanical: `gate_runner report --since <R2 open>` counts the entries — agreed 2026-07-27 that the number decides, not the impression.
 
 ## 7. Where it lands: strict workflow programs, not general compute
 
@@ -121,9 +123,27 @@ Not novel as a concept — workflow engines and CI pipelines are old. What is ne
 
 ## 9. Open questions / next steps
 
-- **R2 as the pitch.** The machine's next run decides whether this is converging or permanently tax-paying (§6). **The operational pre-flight checklist lives in `.claude/orchestration/rt-reflections-r2-queue.md`** (blocking items + the workflow upgrades below, scoped to that wave — 2026-07-25).
-- **Hook migration list.** From §3's soft rows: retry-cap enforcement (count gate invocations per lane session), one-commit-then-stop (deny a second commit from executor-tier transcripts). Build deliberately, not reactively.
-- **Verdict rationale field.** The IR has no representation for *why* a judgment was made; Verdict wants a mandatory one-line rationale, appended to the decisions file by the runtime, not by model goodwill.
-- **Driver script.** Peter's call, per the handoff's standing note.
+- **R2 as the pitch.** The machine's next run decides whether this is converging or permanently tax-paying (section 6). **The operational pre-flight checklist lives in `.claude/orchestration/rt-reflections-r2-queue.md`** (blocking items + the workflow upgrades below, scoped to that wave — 2026-07-25).
+- **Hook migration list.** From section 3's soft rows: retry-cap enforcement (count gate invocations per lane session), one-commit-then-stop (deny a second commit from executor-tier transcripts). Build deliberately, not reactively. Migrated 2026-07-27: gate-gaming scan + fail-streak (D9/D10 in GATE_RUNTIME_DESIGN), persistent-cd denial (section 10.5's class, promoted after a second occurrence), hook-liveness pre-wave checks.
+- **Verdict rationale field.** BUILT 2026-07-27: `gate_runner review --task --verdict --subject --rationale` appends the line to decisions.md and refuses token rationales; the trail stays gate-only per GATE_RUNTIME_DESIGN D8.
+- **Driver script.** Peter 2026-07-27: likely unnecessary — the lead IS the driver; the queue, hooks, and gate_runner are the mechanism. A standalone driver only ever buys unattended multi-day runs; unbuilt unless that need arrives, and still Peter's call.
 - **Plan-template library.** After R2, name the repeated shapes and pre-adversarial them.
-- **The general claim stays parked.** Universal semantic IR between humans, models, and workflows — overshoot until oracle coverage exists outside code (§4.9).
+- **The general claim stays parked — but sharpened (Peter + Fable, 2026-07-27).** Universal semantic IR between humans, models, and workflows — overshoot until oracle coverage exists outside code (section 4.9). The sharpened form worth keeping: *the instruction set is the model.* A program library is a learned artifact — trained on incidents instead of gradients, one-shot per failure, no forgetting, human-reviewed updates, auditable and portable across models in a way weights aren't. Generalizing = learning program shapes across many repos and validating them against oracles; agents then compile problems into proven programs instead of improvising control flow (Agentless already proved the primitive case on SWE-bench). A training problem wearing a systems costume. R2 is the n=1 eval; still parked until it reads out.
+
+## 10. CANDIDATE: DEBUG_INVESTIGATION — a program shape from the RT static-death hunt (2026-07-26, proposed, not adopted)
+
+The RT static-death hunt (BUG-jddy (RT GI+reflections die when scene goes static…)) ran one full day: ~5 hours of theory-building that reading could not settle, resolved in the end by a cure-test (forced refit) that was simultaneously the stopgap and the bisect. Retrospective: every wasted hour traces to a judgment failure of a kind a fixed opcode sequence would have prevented, and every win came from a step that *was* in the discipline but executed late. A bug investigation is a recurring shape with the same skeleton — it is a plan-template candidate (section 9).
+
+**The measured failures and their opcodes:**
+
+1. **Keyword-vocabulary negative claim (~1h lost).** "The project has no modulator" — searched `modulator`/`lfo`; the data was under `drivers`/`waveform`. Opcode: **SCHEMA_SEARCH before any negative claim about a data file** — enumerate keys/structure; keyword search may confirm presence, never absence.
+2. **Trigger overfitting (~2h lost).** First repro was transport pause; two theories built on pause; Peter corrected twice ("not JUST the pause"). Opcode: **GENERALIZE_TRIGGER after the first repro** — write the trigger's class in one sentence ("what did this repro change about the system's inputs?"), design the next test against the class. Operator reports of the symptom outside the repro's conditions are data about the class, not noise.
+3. **Reading past the stall point (~2h lost).** Two hours of kernel/executor reading after the correlation "alive ⟺ refit this frame" was established. Opcode: **CURE_TEST once a perfect action-correlation exists and two read rounds have not cracked the mechanism** — force the smallest version of the correlated action (marked STOPGAP). Never wasted: works → rig safe + cause localized to the action's parts; fails → suspect eliminated. Then DECOMPOSE: test each part of the action alone; the survivor is the mechanism.
+4. **Unbudgeted delegate (~200K tokens lost).** An adversarial review agent with a read-only brief wandered for an hour and ignored two stop messages. Opcode: **BUDGET every review/consult brief** — hard token/time cap, mandatory partial-report checkpoint ("report at N, incomplete is fine"), named deliverable shape; orchestrator polices at half the budget.
+5. **Delayed-failure `cd` (near-miss — then the real thing).** A persistent-cwd slip nearly produced a merge into the wrong checkout an hour later. On 2026-07-27 the same mechanism fired for real: a no-op `cd` left a lead session's shell in a worktree and the landing merge silently merged a branch into itself. Second occurrence = promotion to the hook row: `preToolUseBash.py` now denies any top-level `cd` off a checkout root, in every mode. The rule's cost model is these two incidents, not tidiness.
+
+**The skeleton the opcodes hang on:** REPRODUCE_HEADLESS_FIRST (build/borrow the instrument before reading — this one we got right, and it was the session's spine) → SCHEMA_SEARCH → REPRO → GENERALIZE_TRIGGER → SPLIT_CASE (what does NOT show the symptom — existing discipline, fired early, worked) → two read rounds max → CURE_TEST → DECOMPOSE → LAND the stopgap marked, root cause in beads.
+
+**Honest bound (same shape as section 8's):** the program controls the mechanical fraction of debugging — the elimination sequence — not the judgment fraction. It would not have found the GPU-command-layer mechanism; nothing would have short of the evidence. What it buys is arrival at the corner in half the tokens, with the rig protected and the session's judgment budget spent on the one step that needed it. The mechanism hunt itself stays in the ESCALATE seat.
+
+**Adoption test:** next wrong-and-not-obvious bug, run the skeleton as a checklist (no runtime needed). If it changes the order of operations even once, it has paid for the ink.

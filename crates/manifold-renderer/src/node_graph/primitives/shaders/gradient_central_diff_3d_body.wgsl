@@ -1,4 +1,4 @@
-// node.gradient_central_diff_3d — fusable body (freeze §12), 3D-VOLUME
+// node.gradient_central_diff_3d — fusable body (freeze section 12), 3D-VOLUME
 // GatherTexel. 6-tap central-difference gradient of a scalar density Texture3D.
 // `density` is read via integer textureLoad at the 6 axis neighbours with toroidal
 // wrap (XY use vol_res, Z uses vol_depth); gradient = (dx, dy, dz) * 0.5 in

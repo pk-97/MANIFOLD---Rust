@@ -1,9 +1,9 @@
 # Realtime 3D — P9 (PCSS contact-hardening penumbra) landing
 
-**Branch:** `feat/pcss-penumbra` · **Level reached:** L1 / target L1 (§11's gate is numeric —
+**Branch:** `feat/pcss-penumbra` · **Level reached:** L1 / target L1 (section 11's gate is numeric —
 gradient-width comparisons via GPU readback, no PNG, no image judgment; the brief explicitly
 forbids PNGs for this phase).
-**Doc status line (quoted verbatim):** `Status: IN PROGRESS (status corrected + baseline-reviewed 2026-07-05; D3/D8 AMENDED 2026-07-06 by SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md — read its §8 before P6; D3/D4/§3/§6/§7.3 AMENDED 2026-07-10 (F2 coherence audit) — shadow-caster cap MAX_SHADOW_CASTING_LIGHTS = 4 replaces the dead "8 objects, 4 lights" budget, read D4 before P2). Shipped: P0 (MATERIAL M1–M6, all verified in-tree), P1 node.render_scene @ 8daa89fc, P4 camera atoms (both node.free_camera + node.look_at_camera in-tree), §9 node.spawn_from_mesh, P2 shadow maps + P3 atmosphere/fog @ feat/realtime3d-p2p3 2026-07-11 (gpu-proofs render_scene_shadows + render_scene_fog, PNG-verified; lights also moved to a ring-buffered storage buffer), P8 scene instancing @ feat/realtime3d-p8-instancing 2026-07-11 (§10 D11 — each object group grows an optional instances_n: Array(InstanceTransform) port; wired draws instance_count = buffer_size / 32 copies with model_n · T_instance in both the main pass and every caster's shadow pass; unwired binds a cached 1-entry identity stub, byte-identical to pre-P8 output; gpu-proofs render_scene_instances 4/4 green — identity parity, occlusion, instanced-shadow, instanced-fog; Garden.json re-wired single-pass, the node.mix Max-blend composite deleted), P9 PCSS contact-hardening penumbra @ feat/pcss-penumbra 2026-07-12 (§11 D12 — ShadowSoftness::Contact { light_size }, 16-tap golden-angle blocker search + standard-PCSS penumbra estimate feeding the existing PCF loop with a dynamic half-width; light_size's world-units→UV-space conversion derived per-fragment from the caster's own vp matrix, not a new caster-table field — zero layout growth as D12 required; gpu-proofs render_scene_pcss 3/3 green — contact-hardening gradient-width ratio, light_size=0 byte-matches Hard tier, existing tiers unperturbed; render_scene_shadows proof unmodified and green). The P1 "transforms not port-shadowed" deviation is retired by amendment, not by shadows: per-object transforms move to node.transform_3d atoms feeding transform_n: Transform ports (SCENE_BUILD P2). Remaining: P5 viewport navigate, P6 gizmos, P7 scene starter preset. · designed 2026-07-03 · Fable`
+**Doc status line (quoted verbatim):** `Status: IN PROGRESS (status corrected + baseline-reviewed 2026-07-05; D3/D8 AMENDED 2026-07-06 by SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md — read its section 8 before P6; D3/D4/section 3/section 6/section 7.3 AMENDED 2026-07-10 (F2 coherence audit) — shadow-caster cap MAX_SHADOW_CASTING_LIGHTS = 4 replaces the dead "8 objects, 4 lights" budget, read D4 before P2). Shipped: P0 (MATERIAL M1–M6, all verified in-tree), P1 node.render_scene @ 8daa89fc, P4 camera atoms (both node.free_camera + node.look_at_camera in-tree), section 9 node.spawn_from_mesh, P2 shadow maps + P3 atmosphere/fog @ feat/realtime3d-p2p3 2026-07-11 (gpu-proofs render_scene_shadows + render_scene_fog, PNG-verified; lights also moved to a ring-buffered storage buffer), P8 scene instancing @ feat/realtime3d-p8-instancing 2026-07-11 (section 10 D11 — each object group grows an optional instances_n: Array(InstanceTransform) port; wired draws instance_count = buffer_size / 32 copies with model_n · T_instance in both the main pass and every caster's shadow pass; unwired binds a cached 1-entry identity stub, byte-identical to pre-P8 output; gpu-proofs render_scene_instances 4/4 green — identity parity, occlusion, instanced-shadow, instanced-fog; Garden.json re-wired single-pass, the node.mix Max-blend composite deleted), P9 PCSS contact-hardening penumbra @ feat/pcss-penumbra 2026-07-12 (section 11 D12 — ShadowSoftness::Contact { light_size }, 16-tap golden-angle blocker search + standard-PCSS penumbra estimate feeding the existing PCF loop with a dynamic half-width; light_size's world-units→UV-space conversion derived per-fragment from the caster's own vp matrix, not a new caster-table field — zero layout growth as D12 required; gpu-proofs render_scene_pcss 3/3 green — contact-hardening gradient-width ratio, light_size=0 byte-matches Hard tier, existing tiers unperturbed; render_scene_shadows proof unmodified and green). The P1 "transforms not port-shadowed" deviation is retired by amendment, not by shadows: per-object transforms move to node.transform_3d atoms feeding transform_n: Transform ports (SCENE_BUILD P2). Remaining: P5 viewport navigate, P6 gizmos, P7 scene starter preset. · designed 2026-07-03 · Fable`
 
 ## What shipped
 
@@ -26,7 +26,7 @@ close to Hard's crisp edge everywhere, larger values read as an overcast, big-so
 - **`render_scene.wgsl`** — `shadow_factor` now dispatches on that sentinel to
   `pcss_shadow_factor`: 16 golden-angle-spiral taps (the CINEMATIC_POST D2 formula,
   `r_i = sqrt((i+0.5)/16)`, `θ_i = i·2.399963`) read PLAIN depth via `textureLoad` on the
-  existing `texture_depth_2d` bindings (no second binding needed — the VERIFY-AT-IMPL in §11
+  existing `texture_depth_2d` bindings (no second binding needed — the VERIFY-AT-IMPL in section 11
   resolves "yes" through the existing binding, not the doc's ABI-addition fallback), average
   the blockers, compute the penumbra width, and hand a dynamic half-width to the SAME
   `pcf_average` loop the fixed tiers use (extracted as a shared function, byte-identical to
@@ -63,7 +63,7 @@ test result: ok. 17 passed; 0 failed; 0 ignored
 
 ## Deviations from brief
 
-Both are interior-mechanism choices the brief left open, not architecture changes — see §11's
+Both are interior-mechanism choices the brief left open, not architecture changes — see section 11's
 "As-built deviations" note in the design doc for the fuller writeup:
 
 1. **`light_size`'s world→UV conversion is derived per-fragment via the caster's `vp`
@@ -84,10 +84,10 @@ Both are interior-mechanism choices the brief left open, not architecture change
    for "within 1px of Hard tier"; this makes it the literal same function call, 0px difference,
    not just close.
 
-Also: **the design doc's own §11 audit named the shadow-softness enum "Off/Soft/Softer/
+Also: **the design doc's own section 11 audit named the shadow-softness enum "Off/Soft/Softer/
 Softest"** — the shipped enum (since P2) is `Hard`/`Soft`/`VerySoft`, three variants not four,
 no "Off". This is doc-drift in the addendum's own prose (verified against `light.rs` before
-writing any code — DESIGN_DOC_STANDARD §3's "anchors are re-verified at execution time, not
+writing any code — DESIGN_DOC_STANDARD section 3's "anchors are re-verified at execution time, not
 trusted"), not a functional gap. Gate (b)'s "Off-tier hard edge" is read as "the sharpest
 existing tier" (`Hard`), which is what deviation 2 above makes exact. Corrected in the design
 doc's Status line for future readers.

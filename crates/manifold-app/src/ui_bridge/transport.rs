@@ -88,7 +88,7 @@ pub(super) fn dispatch_transport(
             DispatchResult::structural()
         }
         TransportAction::TimelineScrollbarH(scroll_x_beats) => {
-            // Horizontal scrollbar drag/jump (§24 5e) — absolute scroll-x in beats.
+            // Horizontal scrollbar drag/jump (section 24 5e) — absolute scroll-x in beats.
             ui.viewport
                 .set_scroll(*scroll_x_beats, ui.viewport.scroll_y_px());
             DispatchResult::structural()
@@ -119,7 +119,7 @@ pub(super) fn dispatch_transport(
             DispatchResult::handled()
         }
 
-        // ── Automation globals (P4, docs/AUTOMATION_LANES_DESIGN.md §4/§5) ──
+        // ── Automation globals (P4, docs/AUTOMATION_LANES_DESIGN.md section 4/section 5) ──
         // Runtime-only latch/arm state, not a project mutation — no undo entry,
         // same shape as `SessionBackToArrangement`/session quantize.
         TransportAction::ToggleAutomationArm => {
@@ -170,7 +170,7 @@ pub(super) fn dispatch_transport(
         // The +/- buttons step one discrete zoom level, anchored on the playhead
         // (no cursor to anchor to). `zoom_level_stepped` resolves the nearest
         // level first, so the buttons stay sane after a continuous scroll-zoom
-        // (§24 5e); `zoom_to` is the one shared anchored-zoom path.
+        // (section 24 5e); `zoom_to` is the one shared anchored-zoom path.
         TransportAction::ZoomIn => {
             let playhead = content_state.current_beat.as_f32();
             let playhead_px = ui.viewport.beat_to_pixel(Beats::from_f32(playhead));

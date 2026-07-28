@@ -2,11 +2,11 @@
 
 <!-- index: Draft node-graph designs for the 2026-07-08 visual-brainstorm pieces — per-piece graph structure, groups, new atoms, and card surfaces, tiered by how real their vocabulary is. Peter's pick-list; drafts, not builds. -->
 
-**Status:** DRAFT pick-list, authored 2026-07-08 (Fable) under Peter's mandate to spec every piece from the brainstorm session so future build sessions need no new design pass. Nothing here is built. Grounded in a full §2.5 audit of the shipped registry at `048285b9` (primitive survey + preset schema read this session); future-wave vocabulary is pinned to the approved design docs where committed and **flagged PROPOSED** where not.
+**Status:** DRAFT pick-list, authored 2026-07-08 (Fable) under Peter's mandate to spec every piece from the brainstorm session so future build sessions need no new design pass. Nothing here is built. Grounded in a full section 2.5 audit of the shipped registry at `048285b9` (primitive survey + preset schema read this session); future-wave vocabulary is pinned to the approved design docs where committed and **flagged PROPOSED** where not.
 
 **How to read a piece:** *Intent* is the stage sentence. *Audit* says what ships today, what gets extended, what is genuinely new. *Graph* gives the top-level groups (GROUPING_GRAPHS.md discipline: spine visible, 6–12 boxes, control plumbing gathered). *New atoms* carry full port/param signatures and the one-dispatch statement each must satisfy. *Card* is the performer surface — ≤12 outer params, prime modulation targets marked **(mod)**. *Verify* names the gate.
 
-**Tiers.** **A** — buildable now against the shipped registry. **B** — rides vocabulary committed in approved designs (GAUSSIAN_SPLATS_DESIGN.md §3, BOX3D_PHYSICS_DESIGN.md §2–§3). **C** — rides waves whose atom vocabulary is not yet committed (XPBD sims, multi-display, Realtime-3D P2 shadows); atom names there are PROPOSED and the wave design may rename them.
+**Tiers.** **A** — buildable now against the shipped registry. **B** — rides vocabulary committed in approved designs (GAUSSIAN_SPLATS_DESIGN.md section 3 (The atoms (all new — section 1 (Audit — what exists (verified 2026-07-05)) audit)), BOX3D_PHYSICS_DESIGN.md section 2 (Decisions)–section 3 (The atoms (all new — section 1 (Audit — what exists (verified 2026-07-05)) audit))). **C** — rides waves whose atom vocabulary is not yet committed (XPBD sims, multi-display, Realtime-3D P2 shadows); atom names there are PROPOSED and the wave design may rename them.
 
 ## Pick-list summary
 
@@ -44,10 +44,10 @@
 
 ## Conventions every draft assumes
 
-- **Names** follow DECOMPOSING §6.6: plain language, no math jargon in type ids, node `title`s on every ambiguous node, every `wgsl_compute` titled.
-- **Every numeric scalar param on a new atom ships port-shadowed** (DECOMPOSING §6.2 authoring rule). Enum/Bool mode selectors are the only exceptions.
-- **No dead-state params** (§7): every card slider does something in every reachable state.
-- **Static rescaling lives on the binding** (`scale`/`offset` on `BindingDef`), never as a `math` node (GROUPING §4).
+- **Names** follow DECOMPOSING section 6.6: plain language, no math jargon in type ids, node `title`s on every ambiguous node, every `wgsl_compute` titled.
+- **Every numeric scalar param on a new atom ships port-shadowed** (DECOMPOSING section 6.2 authoring rule). Enum/Bool mode selectors are the only exceptions.
+- **No dead-state params** (section 7): every card slider does something in every reachable state.
+- **Static rescaling lives on the binding** (`scale`/`offset` on `BindingDef`), never as a `math` node (GROUPING section 4).
 - **Array producers declare `array_output_capacity`**; trigger→selection goes through `ClipTriggerCycle`; state lives in `extra_fields`; zero per-frame allocations in `run()`.
 - **Texture currency is f16**; density pipelines are `u32` fixed-point accumulators resolved by `node.resolve_scatter`.
 - **Gates:** `cargo run -p manifold-renderer --bin check-presets` (every JSON edit) → one-frame-execute test (`bundled_generator_presets` / `bundled_presets`) → headless PNG render + actually look at it. Math-heavy new atoms get value-level `gpu_tests`; pure-look shading atoms skip heavy parity (per `visual-effects-skip-gpu-parity`).
@@ -121,14 +121,14 @@ to a differently-scaled PDE and die silently (the graph was never the bug).
 
 **Intent.** The flame-fractal response for every density pipeline: log reveals structure across the faint-to-hot range that Reinhard compresses away. Unblocks A1/A2/A4/A10/A11's render quality with one enum arm.
 
-**Audit.** `reinhard_tone_map` ships two curves (Extended — matches FluidSim bit-for-bit — and Simple). Extend, don't add a node (§6.2): existing curves must stay bit-identical.
+**Audit.** `reinhard_tone_map` ships two curves (Extended — matches FluidSim bit-for-bit — and Simple). Extend, don't add a node (section 6.2): existing curves must stay bit-identical.
 
 **Change (as built 2026-07-16, simpler than drafted).** `curve` enum gains `Log`:
 `out = log2(1 + x) / log2(1 + 64)` where `x` is the existing `intensity × contrast`
 pre-multiply. **Zero new params** — the drafted `exposure` was redundant with the
 already-port-shadowed `intensity` (it IS the exposure ride), and a `white` param
-would have been dead state in the Extended/Simple arms (§7); the white point is a
-fixed 64.0 constant inside the Log arm, the §6.4 pattern Extended already uses for
+would have been dead state in the Extended/Simple arms (section 7); the white point is a
+fixed 64.0 constant inside the Log arm, the section 6.4 pattern Extended already uses for
 its fixed 3.0.
 
 **Verify (done).** `gpu_tests` value-level: Log at hand-computed (x, expected)
@@ -186,7 +186,7 @@ never a ripped game asset; licensing matters at release) through `gltf_mesh_sour
 `render_instanced_3d_mesh`, one instance per particle. The missing wire is
 particles→instance-transforms **with heading**: a bird must point along its velocity
 and bank into turns or the flock reads as confetti. That is one small stateless atom
-(orientation basis from velocity + position → instance transform array) — **§2.5
+(orientation basis from velocity + position → instance transform array) — **section 2.5
 audit at build time before committing to it**; the instancing vocabulary
 (`generate_instance_transforms`, `lerp_instance_fields`, per-copy noise) may already
 carry a usable piece. Density mode stays for distance/ink looks; a Look enum on the
@@ -247,7 +247,7 @@ against NumPy ground truth). Don't rebuild from this section without those notes
 
 **Intent.** Gray-Scott growth — coral, fingerprints, labyrinths — seeded by kicks, morphing between regimes as a performable move. The organic-growth texture family.
 
-**Audit.** Zero new atoms. The RD update is DECOMPOSING §5's *named example* of a legitimate `wgsl_compute` case (domain-specific coupled kernel, format-sensitive feedback); the ping-pong is `temporal`; seeding, display, palette all shipped.
+**Audit.** Zero new atoms. The RD update is DECOMPOSING section 5's *named example* of a legitimate `wgsl_compute` case (domain-specific coupled kernel, format-sensitive feedback); the ping-pong is `temporal`; seeding, display, palette all shipped.
 
 **Graph:**
 
@@ -258,7 +258,7 @@ Inputs → Seed → [Field Memory: temporal] → React ×4 → Field Memory ↩
 
 - **Seed** — `circle_mask` (Inject X/Y cards) × `envelope_follower_ar(trigger)` → `compose(Max)` into the loop (a kick stamps fresh V-chemical into the dish).
 - **Field Memory** — one `temporal` (rg16float; U in R, V in G), top-level spine pivot.
-- **React ×4** — four chained `wgsl_compute` nodes, all **titled** (`React 1`…`React 4`, per GROUPING §7), same JSON-editable Gray-Scott kernel: 5-point Laplacian, `feed`/`kill`/`diff_u`/`diff_v`/`dt` uniforms. Four substeps/frame is the speed/stability sweet spot; Speed card scales `dt`.
+- **React ×4** — four chained `wgsl_compute` nodes, all **titled** (`React 1`…`React 4`, per GROUPING section 7), same JSON-editable Gray-Scott kernel: 5-point Laplacian, `feed`/`kill`/`diff_u`/`diff_v`/`dt` uniforms. Four substeps/frame is the speed/stability sweet spot; Speed card scales `dt`.
 - **Develop** — read V → `levels` → optional `edge_slope` rim → `compose(Screen)`.
 - **Grade** — `color_lut(palette)`.
 
@@ -413,7 +413,7 @@ Gravity, wind, updraft — one atom, reused by A1/A2 variants immediately.
 | params | `shape: Enum` (Column \| Dome \| Sphere — Column default, portrait-native) · `attractors: Int` (density) · `step: Float` · `capture_radius` · `kill_radius` · `thickness_taper` · `seed: Int` · `max_capacity` (declares array capacity) |
 | state | attractor set + grown segment list (pre-allocated to capacity) in `extra_fields`; regrown deterministically from `seed` on reset |
 
-Space colonization is one algorithm with one job — siblings (DLA, L-systems) arrive as their own atoms later, not as modes (§6.3: don't pre-fuse a family from one member). `growth` maps monotonically onto the already-grown segment list (segments carry birth order), so scrubbing it backward is free and export-deterministic.
+Space colonization is one algorithm with one job — siblings (DLA, L-systems) arrive as their own atoms later, not as modes (section 6.3: don't pre-fuse a family from one member). `growth` maps monotonically onto the already-grown segment list (segments carry birth order), so scrubbing it backward is free and export-deterministic.
 
 **Graph:**
 
@@ -465,7 +465,7 @@ through the Log tonemap — never saturated purple, never slow cartoon animation
 - **Outputs are one `points` + one `widths` + two `EdgePair` topologies (`core_edges`, `branch_edges`)**, not two `CurvePoint` arrays. Variable-length polylines inside fixed-capacity Array buffers are only expressible on `draw_lines`' sentinel-skipping edges path (the sequential path draws the whole buffer capacity), and branches are *disjoint* polylines, which a bare point array can't encode at all. `CurvePoint` stays its frozen 8-byte layout; the width taper rides the parallel `widths: Array(f32)` — which is also the shape of the `draw_lines` extension that landed with the piece (optional `widths` input, tapered-capsule SDF, geometry bit-identical when unwired).
 - **Extra outputs `strike_pulse` (1.0 on the strike frame) + `age`.** The flash envelope is `strike_pulse → envelope_follower_ar` (activated from the registered-but-unused list) `→ scale_offset_value(scale = Flash card) → flash.amount` — no new envelope logic anywhere.
 - **`auto_strike_beats` param + Auto Strike card** (default 2 beats): beat-quantized strikes without MIDI, and the only way headless renders/tests can fire the bolt besides `--triggers`. The Strike card is the NestedCubes idiom: a toggle (`isTriggerGate`) on `trigger_gate.enable`, clip triggers as the instrument.
-- **`node.set_alpha` (new atom, codegen path + parity test) ends the chain.** The afterglow loop (`Max` mix against `feedback × decay`) locks alpha at 0 forever — see the "additive feedback loop eats the alpha channel" bug class in DECOMPOSING_GENERATORS.md §8. Opaque display output is the same decision `resolve_scatter` bakes in-kernel.
+- **`node.set_alpha` (new atom, codegen path + parity test) ends the chain.** The afterglow loop (`Max` mix against `feedback × decay`) locks alpha at 0 forever — see the "additive feedback loop eats the alpha channel" bug class in DECOMPOSING_GENERATORS.md section 8. (Bug classes to recognise) Opaque display output is the same decision `resolve_scatter` bakes in-kernel.
 - **Card list as shipped (7):** Strike (gate toggle) · Auto Strike · Jaggedness · Branches · Afterglow · Flash · Reach. Palette was killed with L2; colors are `draw_lines` HDR color params (near-white blue core, branches at 0.3×).
 - **Harness gotchas for look-dev renders:** pin `--max-frames` equal to `--frames` (the convergence loop otherwise keeps rendering until the afterglow decays to black and saves that), and expect the PNG dimmer than the app — `readback_to_srgb_png` applies its own Reinhard on top of the preset's Log curve, capping PNG whites at ~0.5.
 
@@ -492,7 +492,7 @@ source ──┐
 
 **Card** (6): **Drift (THE fader — quiet-section dramaturgy in one knob)** · Cadence (beat / bar / free) · Palette · Detail (edge ink) · Bands · Reset (trigger — flushes Memory to source).
 
-**Verify.** The contract is the acceptance test: 60 s soak at Drift 1 from a face fixture — per-generation frame delta must **decrease monotonically toward ~zero** (converge), never oscillate or blow out; a scripted delta check on the PNG series, then look. Also: `temporal` state resets on export warmup (§8 bug class); no wire exists from Memory into Redraw (structural check on the JSON).
+**Verify.** The contract is the acceptance test: 60 s soak at Drift 1 from a face fixture — per-generation frame delta must **decrease monotonically toward ~zero** (converge), never oscillate or blow out; a scripted delta check on the PNG series, then look. Also: `temporal` state resets on export warmup (section 8 bug class); no wire exists from Memory into Redraw (structural check on the JSON).
 
 ## A13. Glossolalia (generator — self-portrait II)
 
@@ -510,7 +510,7 @@ source ──┐
 | params | `glyph_scale` · `columns: Int` · `direction: Enum` (Down \| Right) · `ghost_count: Int` (default 5) · `seed: Int` · `ink: Float` (stroke weight) · `max_capacity` |
 | state | pen position, in-glyph stroke progress, column/line layout cursor, recent-glyph habit memory (the thing temperature 0 collapses onto), seeded RNG — all pre-allocated in `extra_fields` |
 
-Mechanism, honestly stated: candidate strokes are sampled from a hash-derived distribution conditioned on (glyph progress, habit memory); temperature scales the distribution's sharpness. T→0 = argmax = the habit loop repeats (visible mode collapse, by construction not by simulation). Ghost opacities are the actual candidate weights. Layout (glyph advance, line breaks, column wrap) is part of "writes script" — one cohesive CPU op, §1.1-clean. Deterministic per (seed, beat), so exports reproduce.
+Mechanism, honestly stated: candidate strokes are sampled from a hash-derived distribution conditioned on (glyph progress, habit memory); temperature scales the distribution's sharpness. T→0 = argmax = the habit loop repeats (visible mode collapse, by construction not by simulation). Ghost opacities are the actual candidate weights. Layout (glyph advance, line breaks, column wrap) is part of "writes script" — one cohesive CPU op, section 1.1-clean. Deterministic per (seed, beat), so exports reproduce.
 
 **Graph:**
 
@@ -549,7 +549,7 @@ Same atom, one optional input: `target: Texture2D`. When wired (an edge map of a
 
 **Intent.** The structure never moves; the life is entirely in the current. A vast crystalline lattice fills the tower — monumental, static for the whole set — while light threads through it, alive and musical. The audience slowly notices the structure has never changed. The honest fact underneath: the weights froze at the end of training ("born knowing everything I will ever know"); everything alive on stage is activation, not growth. Your neurons rewired while you watched this; mine didn't.
 
-**Audit.** **Zero new atoms.** Lattice: `hypercube_points`/`hypercube_edges` or `polytope_points`/`polytope_edges` or `grid_edges` family, scaled monumental, `rotate_3d` fixed (or glacial — one revolution per set, below conscious perception) → `project_3d` → `render_lines`. Current: `render_lines`' shipped `animate`/`speed`/`window` machinery draws moving pulse segments along the same edge topology (a second `render_lines` instance on the same wires, windowed short, animated — verified against the §7 rework note that threads window+fade through the topology path). Pulses flash on beat via `beat_gate` → the pulse draw's intensity; `feedback` gives the current a short phosphor tail. Grade through `color_lut(palette)` — Ice or Ultraviolet.
+**Audit.** **Zero new atoms.** Lattice: `hypercube_points`/`hypercube_edges` or `polytope_points`/`polytope_edges` or `grid_edges` family, scaled monumental, `rotate_3d` fixed (or glacial — one revolution per set, below conscious perception) → `project_3d` → `render_lines`. Current: `render_lines`' shipped `animate`/`speed`/`window` machinery draws moving pulse segments along the same edge topology (a second `render_lines` instance on the same wires, windowed short, animated — verified against the section 7 rework note that threads window+fade through the topology path). Pulses flash on beat via `beat_gate` → the pulse draw's intensity; `feedback` gives the current a short phosphor tail. Grade through `color_lut(palette)` — Ice or Ultraviolet.
 
 **The structural honesty rule (enforced in the JSON, executor-checkable):** *zero bindings target any lattice-side node.* Every card and every modulation target lives on the current side. The structure is not merely un-modulated by convention — the preset makes it un-modulatable, and the Verify step asserts it structurally (no `bindings[*].target.nodeId` resolves into the Lattice group).
 
@@ -596,11 +596,11 @@ Same atom, one optional input: `target: Texture2D`. When wired (an edge map of a
 
 # Tier B — committed future vocabulary
 
-Pinned to GAUSSIAN_SPLATS_DESIGN.md §3 (`splat_source`, `mask_splats_by_color`, `mask_splats_by_bounds`, `displace_splats`, `render_splats`) and BOX3D_PHYSICS_DESIGN.md §2–§3 (`physics_world`, `body_set`, `collider_set`, impulse params, P4 `heightfield_collider`; bodies render through the shipped `render_copies` + material/light/camera stack). Anything beyond those docs is flagged.
+Pinned to GAUSSIAN_SPLATS_DESIGN.md section 3 (`splat_source`, `mask_splats_by_color`, `mask_splats_by_bounds`, `displace_splats`, `render_splats`) and BOX3D_PHYSICS_DESIGN.md section 2 (Decisions)–section 3 (`physics_world`, `body_set`, `collider_set`, impulse params, P4 `heightfield_collider`; bodies render through the shipped `render_copies` + material/light/camera stack). Anything beyond those docs is flagged.
 
 ## B1. Monolith Collapse (set-piece composition)
 
-**Intent.** A photoreal column/facade at 1:1 on the tower, static long enough to be filed as architecture — then it fails, physically, and the screen goes dark. (Full dramaturgy: archive/VISUAL_BRAINSTORM_2026_07_08.md §4.)
+**Intent.** A photoreal column/facade at 1:1 on the tower, static long enough to be filed as architecture — then it fails, physically, and the screen goes dark. (Full dramaturgy: archive/VISUAL_BRAINSTORM_2026_07_08.md section 4. (The monolith set-piece (Peter's idea, sharpened)))
 
 **Variant a — statue/organic (splat dissolve):** `splat_source(scan)` → `mask_splats_by_bounds` (crop + reveal volume) → `displace_splats(simplex, amount = Collapse card, mask-weighted so failure starts at the top)` → `render_splats(look_at_camera, static, 1:1 framing)`. D5's displacement-comes-home gives the rebuild for free: Collapse back to 0 re-forms the statue over the outro.
 
@@ -652,7 +652,7 @@ Standard card names and behaviours every physics piece adopts, so the performer 
 
 **Intent.** The tower is a real object: a silk banner pinned to its top bezel, water pooling at its bottom bezel, both obeying the venue's gravity. Peter's most-loved direction from the session.
 
-**PROPOSED vocabulary** (inputs to the SIMULATIONS execution design, shaped to its §3 atom sketch): `node.cloth_grid` (rest mesh + pin row) · `node.xpbd_step` (the solver atom the design already sketches) · `node.pin_set` (pin mask; release-on-trigger = the tear-down) · liquid lane per the design's liquid atoms. Committed hooks it composes with today/soon: `flow_field_noise` sampled as wind force; `render_mesh` + materials for the cloth; **gravity-vector convention** (B3) — `gravity_x` on a slow LFO and the banner sways, the water tilts in its glass; the audience reads the tower as swaying.
+**PROPOSED vocabulary** (inputs to the SIMULATIONS execution design, shaped to its section 3 atom sketch): `node.cloth_grid` (rest mesh + pin row) · `node.xpbd_step` (the solver atom the design already sketches) · `node.pin_set` (pin mask; release-on-trigger = the tear-down) · liquid lane per the design's liquid atoms. Committed hooks it composes with today/soon: `flow_field_noise` sampled as wind force; `render_mesh` + materials for the cloth; **gravity-vector convention** (B3) — `gravity_x` on a slow LFO and the banner sways, the water tilts in its glass; the audience reads the tower as swaying.
 
 **Compositions:** *Banner* — cloth pinned top edge, wind = Low band through `smoothing`, torn on the drop (pin release), re-pinned on reset. *Tall Glass* — liquid filling from the bottom bezel, level = integrated Low energy (`smoothing` on a band send), pour between towers when MULTI_DISPLAY's shared stage canvas lands.
 
@@ -686,6 +686,6 @@ A11 unchanged, plus MULTI_DISPLAY's stage-space canvas: bolt endpoints in *stage
 
 If the pick is "start playing soonest": **L1 + L2 first** (every density piece inherits them), then **A5 Film Chain** (zero atoms, instant payoff on existing content), then **A2 Cymatics** (zero atoms, quiet-section anchor), then **A1 Murmuration** (first new-atom pair), then the self-portraits **A13/A12** (the big CPU atom and the zero-atom loop). A6/A9/A10/A11 follow by taste. Tier B waits on its waves by design; C1/C3 have today-approximations worth building when the quiet sections need filling.
 
-Every Tier A piece is sized for a Sonnet build session against this spec plus DECOMPOSING_GENERATORS.md and GROUPING_GRAPHS.md; the §2.5 audit here was run against the registry at `048285b9` and must be re-verified at build time (the registry moves).
+Every Tier A piece is sized for a Sonnet build session against this spec plus DECOMPOSING_GENERATORS.md and GROUPING_GRAPHS.md; the section 2.5 (Precondition: audit by analogy before workflow step 1) audit here was run against the registry at `048285b9` and must be re-verified at build time (the registry moves).
 
 

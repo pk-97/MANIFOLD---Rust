@@ -1,4 +1,4 @@
-// node.uv_strip_clamp — fusable body (freeze §12), SOURCE. Edge-stretch coordinate
+// node.uv_strip_clamp — fusable body (freeze section 12), SOURCE. Edge-stretch coordinate
 // generator: clamp the per-pixel UV to a centre strip of width `width` on the
 // selected axis (0 Horiz / 1 Vert / 2 Both); pixels outside collapse to the edge.
 // Output (clamped_u, clamped_v, 0, 1). Matches uv_strip_clamp.wgsl. PARAMS:

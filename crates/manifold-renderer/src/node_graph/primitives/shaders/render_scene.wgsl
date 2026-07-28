@@ -131,7 +131,7 @@ struct Uniforms {
     alpha_params: vec4<f32>,
     // x: light_count (as f32, unbounded — the `lights` storage buffer is
     // runtime-sized), y: ambient (this object's material.ambient),
-    // z: exposure_ev (CAMERA_AND_LENS_DESIGN.md §2 D5 — the camera lens'
+    // z: exposure_ev (CAMERA_AND_LENS_DESIGN.md section 2 D5 — the camera lens'
     // exposure_ev; every fragment entry multiplies its final straight rgb
     // by exp2(exposure_ev) just before returning), w: reserved.
     scene_params: vec4<f32>,
@@ -149,7 +149,7 @@ struct Uniforms {
     // (Henyey-Greenstein g), z: shaft_quality (0/1/2 = Low/Med/High, as
     // f32), w: reserved.
     shaft_params: vec4<f32>,
-    // GBUFFER_DESIGN.md §2 D5 (P2): previous-frame scene view_proj and this
+    // GBUFFER_DESIGN.md section 2 D5 (P2): previous-frame scene view_proj and this
     // object's previous-frame model matrix — inputs to the EMIT_VELOCITY
     // pipeline variant's vs_main (clip_prev = prev_view_proj * prev_model *
     // position). Always present, ONE Uniforms layout shared by both the
@@ -192,7 +192,7 @@ struct Uniforms {
     // clearcoat_family_flags()) — bit0=clearcoat_map, bit1=
     // clearcoat_roughness_map, bit2=clearcoat_normal_map present.
     volume_attenuation_color: vec4<f32>,
-    // RAYTRACING_DESIGN.md §9 RD9/RD1: RT feature flags. x =
+    // RAYTRACING_DESIGN.md section 9 RD9/RD1: RT feature flags. x =
     // rt_reflections active this frame (rt_enabled && rt_ready &&
     // rt_reflections && non-empty casters — the trace dispatch ran with
     // refl_spp > 0, so binding 43 holds traced data). yzw reserved.
@@ -248,7 +248,7 @@ struct Uniforms {
 // are separate bindings because WGSL has no dynamic texture-binding
 // indexing — the K=4 switch in sample_shadow() picks the right one.
 // `kernel_half_width` doubles as the PCSS dispatch: a NEGATIVE value (D12,
-// REALTIME_3D_DESIGN §11) means this caster is the `Contact` softness tier
+// REALTIME_3D_DESIGN section 11) means this caster is the `Contact` softness tier
 // — `shadow_factor` runs the PCSS blocker-search branch instead of the
 // fixed kernel, and `light_size` (the 4th component, otherwise unused —
 // "zero layout growth" per D12) drives both the blocker-search radius and
@@ -260,7 +260,7 @@ struct Uniforms {
 @group(0) @binding(13) var shadow_map_3: texture_depth_2d;
 @group(0) @binding(14) var shadow_sampler: sampler_comparison;
 
-// Per-object instancing (REALTIME_3D_DESIGN.md §10 D11+P8). One always-bound
+// Per-object instancing (REALTIME_3D_DESIGN.md section 10 D11+P8). One always-bound
 // storage buffer per object: wired instances_n binds the real buffer,
 // unwired binds a cached 1-entry identity stub (pos_scale [0,0,0,1],
 // rot_pad zeros) drawn with instance_count 1 — the same always-bind
@@ -341,21 +341,21 @@ const PREFILTER_MAX_MIP: f32 = 5.0;
 // `textureLoad` at the exact fragment pixel (already native-res,
 // depth-aware-upsampled — no filtering) instead of the shadow-map path
 // when `u.scene_params.w > 0.5`. Always bound (ABI-stub discipline); a
-// 1x1 dummy when RT isn't active this frame. RAYTRACING_DESIGN.md §5.2
+// 1x1 dummy when RT isn't active this frame. RAYTRACING_DESIGN.md section 5.2
 // P2 widened the underlying GPU texture format (Rust-side) to carry a
 // SECOND channel: g = AO [0,1] — same binding, same texture, no WGSL
 // declaration change needed (an unwired/R32Float dummy simply reads 0.0
 // in .g, which `rt_ao_factor` below never samples since `scene_params.w`
 // gates it the same way `shadow_factor` gates .r).
 @group(0) @binding(41) var rt_shadow_mask: texture_2d<f32>;
-// RAYTRACING_DESIGN.md §5.2 P2/D3: full-res, temporally-accumulated
+// RAYTRACING_DESIGN.md section 5.2 P2/D3: full-res, temporally-accumulated
 // demodulated irradiance (no albedo folded in — ambient*ao + gi; NO
 // direct sun, the raster light loop owns that), written by the SAME
 // half-res dispatch's
 // `accumulate_irradiance` step. Always bound (ABI-stub discipline); a
 // 1x1 dummy when RT isn't active this frame.
 @group(0) @binding(42) var rt_irradiance_mask: texture_2d<f32>;
-// RAYTRACING_DESIGN.md §9 RD1: full-res traced reflection radiance,
+// RAYTRACING_DESIGN.md section 9 RD1: full-res traced reflection radiance,
 // SUBSTITUTED for the `prefiltered` env fetch in fs_pbr when
 // `scene_params.w > 0.5 && rt_flags.x > 0.5` — never added on top
 // (the 818a06b0 double-count trap). Always bound (ABI-stub discipline —
@@ -363,11 +363,11 @@ const PREFILTER_MAX_MIP: f32 = 5.0;
 // rt_irradiance_mask above. Consumed in exactly ONE place (I-R3).
 @group(0) @binding(43) var rt_reflection: texture_2d<f32>;
 
-// RAYTRACING_DESIGN.md §5.2 P2: RT ambient/AO term. Replaces the flat
+// RAYTRACING_DESIGN.md section 5.2 P2: RT ambient/AO term. Replaces the flat
 // `scene_params.y` ambient scalar with the ray-traced AO-occluded,
 // temporally-accumulated demodulated irradiance when RT is on — this IS
 // the structural replacement for a downstream `node.ssao_gtao` Multiply
-// node (RAYTRACING_DESIGN.md §5.2 P2's "GTAO term replaced, not
+// node (RAYTRACING_DESIGN.md section 5.2 P2's "GTAO term replaced, not
 // paralleled" deliverable): an RT-enabled `render_scene` never needs
 // (and should not be wired to) a separate GTAO node, since real
 // ray-traced occlusion is already folded in here. Falls back to the
@@ -441,7 +441,7 @@ fn sample_shadow(slot: i32, suv: vec2<f32>, ref_depth: f32) -> f32 {
 // Plain (non-comparison) depth read for the PCSS blocker search (D12) —
 // nearest texel, no hardware PCF. `texture_depth_2d` supports `textureLoad`
 // directly (standard WGSL builtin), so this needs no second binding or
-// sampler — the VERIFY-AT-IMPL in REALTIME_3D_DESIGN §11 resolves to "yes,
+// sampler — the VERIFY-AT-IMPL in REALTIME_3D_DESIGN section 11 resolves to "yes,
 // via the existing binding": same four textures `sample_shadow` above
 // already binds.
 fn plain_shadow_depth(slot: i32, uv: vec2<f32>) -> f32 {
@@ -523,7 +523,7 @@ fn pcss_search_radius_uv(vp: mat4x4<f32>, world_pos: vec3<f32>, suv: vec2<f32>, 
     return max(length(uv_x - suv), length(uv_z - suv));
 }
 
-// D12 — PCSS contact-hardening penumbra (REALTIME_3D_DESIGN §11).
+// D12 — PCSS contact-hardening penumbra (REALTIME_3D_DESIGN section 11).
 // (1) Blocker search: 16 golden-angle taps (CINEMATIC_POST D2 formula:
 // r_i = sqrt((i+0.5)/N), theta_i = i·2.399963) in a `search_radius_uv`
 // (the world-units `light_size` converted to UV space by
@@ -654,7 +654,7 @@ fn shadow_factor(world_pos: vec3<f32>, slot_f: f32, frag_xy: vec2<f32>) -> f32 {
     return pcf_average(slot, suv, ref_depth, texel, i32(khw_raw));
 }
 
-// GBUFFER_DESIGN.md §2 D5, P2: the EMIT_VELOCITY pipeline variant's
+// GBUFFER_DESIGN.md section 2 D5, P2: the EMIT_VELOCITY pipeline variant's
 // FsOut struct is text-substituted in here (replacing this comment) so
 // fs_unlit/fs_phong/fs_pbr/fs_cel can return a second MRT output
 // (`@location(1) velocity`) alongside `color`. Inert (a no-op comment) in
@@ -667,7 +667,7 @@ struct VsOut {
     @location(0) world_pos: vec3<f32>,
     @location(1) world_normal: vec3<f32>,
     @location(2) uv: vec2<f32>,
-    // GBUFFER_DESIGN.md §2 D5, P2: EMIT_VELOCITY substitutes
+    // GBUFFER_DESIGN.md section 2 D5, P2: EMIT_VELOCITY substitutes
     // `@location(3) clip_now: vec4<f32>, @location(4) clip_prev: vec4<f32>,`
     // here — the CURRENT and PREVIOUS clip-space positions, carried as
     // plain (perspective-correctly interpolated) varyings rather than
@@ -698,7 +698,7 @@ fn vs_main(
     let world = u.model * vec4<f32>(inst_pos, 1.0);
     out.world_pos = world.xyz;
     out.clip_pos = u.view_proj * world;
-    // GBUFFER_DESIGN.md §2 D5, P2: EMIT_VELOCITY substitutes
+    // GBUFFER_DESIGN.md section 2 D5, P2: EMIT_VELOCITY substitutes
     // `out.clip_now = out.clip_pos; let prev_world = u.prev_model *
     // vec4<f32>(inst_pos, 1.0); out.clip_prev = u.prev_view_proj *
     // prev_world;` here — reusing THIS frame's `inst_pos` (there is no
@@ -1122,7 +1122,7 @@ fn fs_unlit(in: VsOut) -> @location(0) vec4<f32> {
     if u.alpha_params.x == 1.0 && albedo.a < u.alpha_params.y {
         discard;
     }
-    // exp2(exposure_ev) — CAMERA_AND_LENS_DESIGN.md §2 D5. Multiplies the
+    // exp2(exposure_ev) — CAMERA_AND_LENS_DESIGN.md section 2 D5. Multiplies the
     // final STRAIGHT rgb (post-fog, post-emission, pre-output); alpha is
     // untouched (alpha contract). exposure_ev = 0 (PINHOLE default) → ×1,
     // byte-identical to pre-lens builds (I2/I5).
@@ -1160,7 +1160,7 @@ fn fs_phong(in: VsOut) -> @location(0) vec4<f32> {
         lit = lit + (diffuse + spec) * l_col.rgb * l_dir.w * vis;
     }
     let ambient = rt_or_flat_ambient(albedo.rgb, in.clip_pos.xy);
-    // exp2(exposure_ev) — CAMERA_AND_LENS_DESIGN.md §2 D5, see fs_unlit.
+    // exp2(exposure_ev) — CAMERA_AND_LENS_DESIGN.md section 2 D5, see fs_unlit.
     let rgb = apply_fog(lit + ambient + resolve_emissive(in.uv), in.world_pos) * exp2(u.scene_params.z);
     return vec4<f32>(rgb, albedo.a);
 }
@@ -1363,7 +1363,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E5: `KHR_materials_anisotropy` —
     // tangent-space GGX stretch. Tangent basis RESOLVED: imported meshes carry no `TANGENT`
     // attribute (`MeshVertex` is a fixed 48-byte ABI, growing it is its
-    // own vertex-layout project — see the design doc's §5 Deferred), so
+    // own vertex-layout project — see the design doc's section 5 Deferred), so
     // this reuses `cotangent_frame` — the SAME screen-space-derivative
     // tangent basis `resolve_normal`'s normal mapping already builds,
     // just computed here unconditionally (uniform control flow: `dpdx`/
@@ -1520,7 +1520,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let r_elevation = asin(clamp(R.y, -1.0, 1.0));
     let r_uv = vec2<f32>(r_azimuth / (2.0 * PI) + 0.5, r_elevation / PI + 0.5);
     var prefiltered = textureSampleLevel(prefiltered_specular, envmap_sampler, r_uv, roughness * PREFILTER_MAX_MIP).rgb;
-    // RAYTRACING_DESIGN.md §9 RD1: traced reflection radiance SUBSTITUTES
+    // RAYTRACING_DESIGN.md section 9 RD1: traced reflection radiance SUBSTITUTES
     // for the prefiltered env sample (never adds — same physical
     // quantity; the `(F0 * env_brdf.x + env_brdf.y)` weighting below is
     // untouched, so energy conservation and the roughness LUT are
@@ -1574,7 +1574,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
         let r_aniso_elevation = asin(clamp(r_aniso.y, -1.0, 1.0));
         let r_aniso_uv = vec2<f32>(r_aniso_azimuth / (2.0 * PI) + 0.5, r_aniso_elevation / PI + 0.5);
         let prefiltered_aniso = textureSampleLevel(prefiltered_specular, envmap_sampler, r_aniso_uv, roughness * PREFILTER_MAX_MIP).rgb;
-        // RAYTRACING_DESIGN.md §9 RD5: this branch OVERWRITES specular_ibl,
+        // RAYTRACING_DESIGN.md section 9 RD5: this branch OVERWRITES specular_ibl,
         // so the traced substitution must apply here too — when
         // reflections are on, consume the SAME substituted value (the
         // single textureLoad above, I-R3), not the bent-normal env fetch.
@@ -1696,7 +1696,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let coat_rgb = direct_coat + coat_ibl;
     let lit = base_rgb * (1.0 - fc) + coat_rgb * fc;
 
-    // exp2(exposure_ev) — CAMERA_AND_LENS_DESIGN.md §2 D5, see fs_unlit.
+    // exp2(exposure_ev) — CAMERA_AND_LENS_DESIGN.md section 2 D5, see fs_unlit.
     let rgb = apply_fog(lit, in.world_pos) * exp2(u.scene_params.z);
     return vec4<f32>(rgb, albedo.a);
 }
@@ -1731,7 +1731,7 @@ fn fs_cel(in: VsOut) -> @location(0) vec4<f32> {
         lit = lit + albedo.rgb * level * l_col.rgb * l_dir.w * vis;
     }
     let ambient = rt_or_flat_ambient(albedo.rgb, in.clip_pos.xy);
-    // exp2(exposure_ev) — CAMERA_AND_LENS_DESIGN.md §2 D5, see fs_unlit.
+    // exp2(exposure_ev) — CAMERA_AND_LENS_DESIGN.md section 2 D5, see fs_unlit.
     let rgb = apply_fog(lit + ambient + resolve_emissive(in.uv), in.world_pos) * exp2(u.scene_params.z);
     return vec4<f32>(rgb, albedo.a);
 }

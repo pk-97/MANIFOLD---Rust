@@ -1,6 +1,8 @@
 # Verification Debt — the unverified-surface ledger
 
-<!-- index: Live ledger of shipped-but-not-fully-verified surfaces. One entry per gap between the verification level a landing reached and its target; burned down or consciously carried every wave. Format and rules: DESIGN_DOC_STANDARD.md §10. -->
+Ledger by design: entries carry dates, hashes, and status stamps as data — doc-cleanup sweeps skip this file.
+
+<!-- index: Live ledger of shipped-but-not-fully-verified surfaces. One entry per gap between the verification level a landing reached and its target; burned down or consciously carried every wave. Format and rules: DESIGN_DOC_STANDARD.md section 10. (Verification levels, the debt ledger, and escapes (added 2026-07-05)) -->
 
 Why this exists: "unverified interactively" notes used to live in landing reports and
 memory, where they decayed silently into "shipped" — the bugs Peter found in the app
@@ -9,15 +11,15 @@ hard-coded) were all previously *recorded* as unverified, and nothing acted on t
 record. This file makes the debt durable, in-repo, and impossible to close by
 forgetting.
 
-Rules (normative home: `DESIGN_DOC_STANDARD.md` §10):
+Rules (normative home: `DESIGN_DOC_STANDARD.md` section 10 (Verification levels, the debt ledger, and escapes (added 2026-07-05))):
 
 - Every landing appends one entry per gap between the level reached and the target
-  level (L0–L4 ladder in §10).
+  level (L0–L4 ladder in section 10).
 - Every orchestration wave either burns entries down (verify → move to **Closed**
   with date and how) or consciously carries them — the landing report says so.
   Silence is not carrying.
 - IDs are stable (`VD-NNN`), never renumbered — they are referenced from landing
-  reports (committed under `docs/landings/`, per §8.10), BUG_BACKLOG `Escaped:`
+  reports (committed under `docs/landings/`, per section 8.10), BUG_BACKLOG `Escaped:`
   lines, and memory.
 
 ---
@@ -25,20 +27,20 @@ Rules (normative home: `DESIGN_DOC_STANDARD.md` §10):
 ## Open
 
 ### VD-030 — editor-window surfaces (REALTIME_3D P5c viewport, P6 gizmos) reach L2 only
-Landed 2026-07-17 (`34a38a45`, `b4d2d448`; `docs/landings/2026-07-17-scene-3d-ux-wave.md`). The flow driver has no graph-editor-window routing, so navigation and gizmo drags are proven by production-function tests + orchestrator-reviewed PNGs, never a scripted real-input pass. Burn-down: extend UI_AUTOMATION to the editor window (flow-driver routing for the second window), or Peter's L4 pass on the click-script.
+Landed 2026-07-17 (`docs/landings/2026-07-17-scene-3d-ux-wave.md`). The flow driver has no graph-editor-window routing, so navigation and gizmo drags are proven by production-function tests + orchestrator-reviewed PNGs, never a scripted real-input pass. Burn-down: extend UI_AUTOMATION to the editor window (flow-driver routing for the second window), or Peter's L4 pass on the click-script.
 
-### VD-031 — modulation/scrub L3 claims are dispatch+value-level, not pixels (harness gaps BUG-234 [FIXED] / BUG-298)
-Landed 2026-07-17 (UX-P3a `ee30d52d`, convergence C-P1a on-branch). The `--script` harness never runs a content-thread tick (BUG-234) and doesn't visually update slider fill mid-flow (BUG-235), so every "value modulates / scrub moves the slider" claim rests on Rust value tests plus static PNGs.
+### VD-031 — modulation/scrub L3 claims are dispatch+value-level, not pixels (harness gaps BUG-234 (ui-snap-script-harness-never-runs-a-content-thre…) [FIXED] / BUG-298 (slider-fill-under-modulation-pixel-unverified))
+Landed 2026-07-17 (UX-P3a, convergence C-P1a on-branch). The `--script` harness never runs a content-thread tick (BUG-234) and doesn't visually update slider fill mid-flow (BUG-235 (manifold-own-kick-fixtures-systematic-adtof-timi…)), so every "value modulates / scrub moves the slider" claim rests on Rust value tests plus static PNGs.
 **BUG-234 half burned down 2026-07-21** (lane/bug234-modulation-tick): `Step`'s frame loop now runs `evaluate_modulation` (drivers + envelopes) plus `reconcile_state` every stepped frame, so a flow CAN assert a changing param value across `Snapshot`s. `scripts/ui-flows/envelope-modulation.json` (new `envmod` fixture) proves it: a Bloom `amount` envelope reads base 0.50, then one frame after the clip's rising edge the Amount row NO LONGER shows 0.50 (asserted as `Count 0` on the base value — a machine-independent "the value moved off base", not a pinned decayed float; the Dump captures the actual pulled-toward-target value, ~4.85, as evidence), then returns to exactly 0.50 once elapsed clears the 1-beat decay — confirmed to fail without the wire. `reconcile_state`'s `sync_param_value` drives the slider's fill/thumb norm off the same `effective` value as the text, so the visual-fill half is very likely fixed too, riding the same wire. **Stale cross-reference resolved 2026-07-21:** the "BUG-235" this entry originally pointed at (slider-fill-mid-flow) had been renumbered away (current BUG-235 is `manifold-own-kick-fixtures-systematic-adtof-timing-bias`, unrelated audio timing); the slider-fill-under-modulation gap is now tracked as **BUG-298** (LOW, pixel-verification only). Burn-down remaining: render the modulated frame and PNG-diff the slider fill region (BUG-298), then close this entry.
 
 ### VD-033 — C-P1c's sun-intensity render proof is subtle to the eye; the pixel-diff assertion carried the gate, not a look-pass
-Landed 2026-07-18 (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md C-P1d landing session, reviewing C-P1c's own carried artifacts). BUG-237's render-level closure (`bug237_light_camera_commit_render_proof.rs`) rendered SceneStarter before/after `sun.intensity` 1.0→8.0 and measured `mean_abs_diff 0.09` — real, but visually subtle in the two PNGs (`/tmp/bug237_sun_intensity_{before,after}.png`) an orchestrator eyeballing them side by side would likely call "brighter, maybe" rather than an obvious win; the camera-orbit half of the same proof (`mean_abs_diff 0.06`, a quarter-turn reframe) reads unambiguously by contrast. The gate is real (the pixel-diff assertion is exact, deterministic, and correctly wired to the actual committed value), so this is not a correctness gap — it's a legibility note for whoever next does a look-pass over the Scene Setup panel's Light family: don't rely on eyeballing a static before/after pair for intensity changes this small; trust the numeric diff, or re-render at a starker delta (e.g. 1.0→20.0) if a demo PNG needs to read as obviously-brighter to a human. Burn-down: no action required unless a future look-pass wants a punchier demo asset.
+Landed 2026-07-18 (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md C-P1d landing session, reviewing C-P1c's own carried artifacts). BUG-237 (scene-setup-camera-world-light-param-scrub-does-…)'s render-level closure (`bug237_light_camera_commit_render_proof.rs`) rendered SceneStarter before/after `sun.intensity` 1.0→8.0 and measured `mean_abs_diff 0.09` — real, but visually subtle in the two PNGs (`/tmp/bug237_sun_intensity_{before,after}.png`) an orchestrator eyeballing them side by side would likely call "brighter, maybe" rather than an obvious win; the camera-orbit half of the same proof (`mean_abs_diff 0.06`, a quarter-turn reframe) reads unambiguously by contrast. The gate is real (the pixel-diff assertion is exact, deterministic, and correctly wired to the actual committed value), so this is not a correctness gap — it's a legibility note for whoever next does a look-pass over the Scene Setup panel's Light family: don't rely on eyeballing a static before/after pair for intensity changes this small; trust the numeric diff, or re-render at a starker delta (e.g. 1.0→20.0) if a demo PNG needs to read as obviously-brighter to a human. Burn-down: no action required unless a future look-pass wants a punchier demo asset.
 
 ### VD-028 — VOLUMETRIC_LIGHT_DESIGN P1–P3: mechanically L2 (PNGs rendered and read by the orchestrator), Peter's look-pass not yet run, and the demos read as a visual miss
 Landed 2026-07-13 (`docs/landings/2026-07-13-volumetric-light-p1-p3.md`). All numeric gates
 (V1–V6, CPU-vs-GPU parity, monotonic performer faders, content-thread perf) pass across both
 phases with a real acceptance-demo PNG at each look-critical phase (P2 Sun-only, P3 night-garden
-multi-light) — reaching L2 by the letter of §10. But unlike CINEMATIC_POST's VD-020 (numerically
+multi-light) — reaching L2 by the letter of section 10. But unlike CINEMATIC_POST's VD-020 (numerically
 green, look unconfirmed but not known-bad), this entry's L2 evidence is itself a negative
 result: the orchestrator looked at all four demo PNGs and neither one reads as "a black void
 filled with haze with beams of light shining through" — P2 shows an ordinary dim lit scene with
@@ -51,19 +53,19 @@ on later. Do not close this entry by re-running the existing demo; closing requi
 design-level fix that visibly changes the PNGs, or Peter accepting the current look as a
 baseline to build on.
 
-### VD-027 — mechbugs wave: BUG-123/038/079 fixes reached L1 (tests green) only, not L2 (observed)
+### VD-027 — mechbugs wave: BUG-123 (mesh-edges-capacity-vs-active-count)/038/079 fixes reached L1 (tests green) only, not L2 (observed)
 Landed 2026-07-13 (`docs/landings/2026-07-13-mechbugs-wave.md`). Three fixes in the wave have no
 render/log/toast actually produced and read by a person: BUG-123's `mesh_edges` `active_count`
 guard (a visual-artifact fix — the absence of the bright dot has not been confirmed on a real
-scene render), BUG-038's Ableton log throttle (the once-then-debug pattern has not been observed
-in a real console run with Live absent), and BUG-079's missing-preset toast (the toast has not
+scene render), BUG-038 (ableton-log-spam)'s Ableton log throttle (the once-then-debug pattern has not been observed
+in a real console run with Live absent), and BUG-079 (missing-preset-fails-silently-no-onscreen-signal)'s missing-preset toast (the toast has not
 been seen firing on a project with a genuinely unresolvable preset ref). All three are unit-tested
 at the value level and reachable headless or via a short manual run — none needs the live rig.
 **Burn down:** the wave's own click-script (in the landing report) is exactly this — three short
 manual checks, ≤2 minutes total.
 
 ### VD-024 — AUDIO_SETUP_DOCK P3b: AudioTriggerSection has no unit-test module
-Landed 2026-07-10 (`5c4fbcca`; `docs/landings/2026-07-10-audio-dock-p3b.md`). The new
+Landed 2026-07-10 (`docs/landings/2026-07-10-audio-dock-p3b.md`). The new
 `crates/manifold-ui/src/panels/audio_trigger_section.rs` lacks the `#[cfg(test)]` collapse/click
 module that its siblings `macros_panel.rs` and `layer_chrome.rs` carry. Covered for now by
 compile + the 658-test `manifold-ui` suite (no regressions) + the L3 add-trigger flow
@@ -81,14 +83,14 @@ compositor frame (`content_pipeline.rs:2547`) — has **no automated test**: P3'
 (see the design's P3 note). Today this glue is verified only at **L4 by Peter pressing record
 live at every show**. Residual risk: a future code change that unhooks the button-to-recorder
 wiring would not be caught by a test — only at the next soundcheck/show. Close by building the
-headless integration harness described in the design's §8 Deferred P3 entry (a real content
+headless integration harness described in the design's section 8 Deferred P3 entry (a real content
 thread + compositor smoke), or accept L4-by-use as sufficient and mark this consciously carried.
 
 ### VD-022 — LIVE_RECORDING_PROOFS P2: full-scale pre-gig soak + BUG-086 — L2 reached / L4 carried
-Landed 2026-07-10 (`docs/landings/2026-07-10-live-recording-proofs.md`, P2 @ `091290e3`). The
+Landed 2026-07-10 (`docs/landings/2026-07-10-live-recording-proofs.md`, P2). The
 `recording-soak` bin and its decoded-index PASS gate are verified at L2 via a short 1080p/2-minute
 run the orchestrator executed and whose `.mov` it opened. **Two carried gaps:**
-(a) The **full-scale 4K60 20-minute soak has never been run** — by design (§6 P2), its first
+(a) The **full-scale 4K60 20-minute soak has never been run** — by design (section 6 P2), its first
 execution is Peter's pre-gig ritual on the rig; the short soak is the wave's proxy, so the show
 configuration at full data volume (~17.5 GB, past every historical failure threshold) is L2/proxy,
 not L4/real. Close when Peter runs the full soak and it PASSes on the rig.
@@ -102,7 +104,7 @@ reruns. See `docs/BUG_BACKLOG.md` BUG-086 for the full diagnosis.
 
 ### VD-021 — PROJECT_FILE_INTEGRITY P1: save durability under power loss — L1 reached / L1 carried
 Landed 2026-07-09 (`docs/landings/2026-07-09-project-file-integrity.md`). `save_v2_archive` now
-`sync_all()`s the temp file's *contents* before the atomic rename (BUG-064), keeping the existing
+`sync_all()`s the temp file's *contents* before the atomic rename (BUG-064 (save-rename-before-fsync)), keeping the existing
 parent-directory fsync. Verified at L1: code inspection + a negative gate asserting two `sync_all`
 calls (temp-file + parent-dir), and the full save/load + history round-trip suite stays green. The
 actual property — a mid-save power cut can no longer replace a good archive with a torn one — is
@@ -113,7 +115,7 @@ an `LD_PRELOAD`/`dm-flakey` crash-consistency harness, else Peter accepting L1 f
 ordering fix.
 
 ### VD-020 — PARAM_STORAGE_BOUNDARIES P2: calibration-drag gesture is L1, not L3 — L1 reached / L3 target
-Landed 2026-07-09 @ P2 (`254792c0`). The card-rendering half reached L3
+Landed 2026-07-09 @ P2. The card-rendering half reached L3
 (`scripts/ui-flows/calibrated-param-card-reads-manifest.json` — inspector renders
 Mirror/Bloom/Strobe cards with manifest-sourced ranges, PNG confirmed). The literal
 "drag a calibrated slider → reload → real degree range" gesture is only L1 (the
@@ -125,7 +127,7 @@ round-trip is Rust-proven, not interaction-proven. L4 (Peter dragging it live) r
 ultimate target.
 
 ### VD-001 — Automation lanes P1–P4: runtime pointer→command editing path — **L3 reached** / L4 target
-Landed 2026-07-04 @ `8b306de0`. **L3 burned down 2026-07-05 (Opus):**
+Landed 2026-07-04. **L3 burned down 2026-07-05:**
 `scripts/ui-flows/drag-automation-point.json` resolves Mirror's middle breakpoint by its
 `automation_lanes` surface target and drags it through the real input path (pointer →
 viewport events → `InteractionOverlay` → `AppEditingHost` → automation command on the scene
@@ -138,10 +140,10 @@ effect in the running app) remains the target** and is where the real symptom mu
 **07-07 update (timeline-ux audit):** the LANES transport toggle is also proven headless
 end-to-end through the REAL `ui_bridge::dispatch` (`scripts/ui-flows/toggle-lanes.json` —
 strips off/on, asserts + PNGs), and the in-app symptom is root-caused as an EXPOSURE gap, not
-a wiring break: no UI path creates a first lane (AUTOMATION_LANES §7 chooser unbuilt), so
+a wiring break: no UI path creates a first lane (AUTOMATION_LANES section 7 chooser unbuilt), so
 LANES on a lane-less project visibly does nothing. See `docs/TIMELINE_UX_AUDIT_2026-07-07.md`
-§1. Peter's L4 residue narrows to: confirm LANES lights live + ARM-record a first lane.
-**2026-07-16 (Peter):** automation lanes still need substantial UI/UX work (the §7
+section 1. Peter's L4 residue narrows to: confirm LANES lights live + ARM-record a first lane.
+**2026-07-16 (Peter):** automation lanes still need substantial UI/UX work (the section 7
 first-lane chooser among it) before the L4 confirm is meaningful — stays open, blocked
 on that UI/UX pass, not on a rig session.
 
@@ -163,7 +165,7 @@ it, and there is no `AutomationAction` to open a popup. So the four picker flows
 (a) a P3 live door into a running app, (b) new scene fixtures that pre-open the picker (single
 frame only — no animation, no search text since `AutomationAction::Text` has no headless seam),
 or (c) a driver extension that implements the open-picker dispatch headlessly. Until then the
-interim Peter click-script (L4) is the only path. Same reach gap blocks the BUG-026 frame-0
+interim Peter click-script (L4) is the only path. Same reach gap blocks the BUG-026 (Batch-2 popups: entrance fade freezes at t=0…) frame-0
 repro (see VD-006).
 
 ### VD-003 — glTF import: correctness beyond the development fixture — **L2 reached (geometry)** / L2 target; textured + production-drop path still owed
@@ -206,7 +208,7 @@ Landed 2026-07-07 (`docs/landings/2026-07-07-ableton-transport-sync.md`). The st
 proven at L1 (16 transition tests + 8 failure-catalog scenarios incl. play-from-cursor drag-back,
 packet loss, 400ms scheduler), but every scenario runs against FakeAbleton — real Live's listener
 cadence, `set current_song_time` during playback, and SPP-on-relocate behavior are modeled, not
-observed. Burn-down: Peter's 7-step live checklist (design doc §6 P4 demo) — play-from-cursor both
+observed. Burn-down: Peter's 7-step live checklist (design doc section 6 P4 demo) — play-from-cursor both
 sides, scrub during playback, rapid play/stop drumming, tempo ramp, IAC-kill degrade test, loaded
 machine. The checklist IS the acceptance gate; the design's safety property (unconfirmed
 expectation never moves the playhead) bounds the worst case at no-worse-than-before.
@@ -221,7 +223,7 @@ does it catch kicks on a bass-heavy finished track, does it strobe on bass, is t
 confirmation latency (D7) acceptable. Burn-down: the landing report's ≤2-min click-script;
 `KICK_WIN` is the latency knob if it reads late.
 
-### VD-015 — BUG-052 sample-rate invariance: end-to-end cross-rate fire-time match — L2 reached / L3 target
+### VD-015 — BUG-052 (sample-rate-dependent-detection) sample-rate invariance: end-to-end cross-rate fire-time match — L2 reached / L3 target
 Fixed 2026-07-07 (`6e0e8988`). Grid invariance is L2-proven by unit test (hop/window duration hold
 across 44.1/48/88.2/96/192k) + the green analysis suite, so all hop-count constants keep their
 wall-clock meaning by construction. What's unproven is the original gate: take one fixture, resample
@@ -274,7 +276,7 @@ one design-level call; accepted for P1 because BUG-060 dies by containment indep
 Landed 2026-07-08. The acceptance flow (`scripts/ui-flows/bug060-inspector-footer-containment.json`)
 drives the real click path and proves the footer stays hit-testable and dispatches with the inspector
 busy and scrolled — but `try_inspector_scroll`'s effective max is ~15-20px on content ~1200px too
-tall (BUG-076), so it never reaches the *very bottom* that is BUG-060's exact repro condition.
+tall (BUG-076 (inspector-scroll-underestimates-content-height)), so it never reaches the *very bottom* that is BUG-060's exact repro condition.
 Containment makes bottom-scroll safe by construction (the region clip is unconditional), so this is a
 demonstration gap, not a correctness one. Burn-down: fix BUG-076 (scroll estimator under-counts
 drawer-open card height), then re-run the flow to a true bottom and re-capture.
@@ -287,11 +289,11 @@ will extend this list.)*
 ## Closed
 
 ### VD-035 — scene-setup-modifier-stack flow unrunnable headless (BUG-293); modifier add/reorder pinned at value level only — CLOSED 2026-07-21 (WS3 lane/ws3-queryable-rows: queryable row names + ScrollTo; flow green unmodified-intent)
-**CLOSED 2026-07-21 (WS3 `lane/ws3-queryable-rows`).** The §5b fix shape above landed: `build_param_row`/`build_toggle_trigger_row` now emit param-id-derived names on every converged card row (`param_row.<id>[.slider|.value|.driver_btn]`), and a new `AutomationAction::ScrollTo` scrolls a deep row into view before a Pointer step acts. `scripts/ui-flows/scene-setup-modifier-stack.json` is re-authored at ORIGINAL fidelity — add + value + slider **DRAG** + driver btn + reorder + undo — and runs **green, unmodified-intent** on the real gltfscene GPU path (30/30 steps): `ScrollTo` reaches the deep inspector `param_row.15_angle.slider` (y≈7789 → on-screen), the drag executes on the named track, `param_row.15_angle.driver_btn` asserts by name, the two `↑` reorder buttons resolve, and the four Cmd+Z presses report `undo_count` 2→1→0. The close condition (green unmodified-intent, drag/driver asserts intact) is met — no weakening. Same run also closes BUG-239 (the value cell tracks the dispatched write).
+**CLOSED 2026-07-21 (WS3 `lane/ws3-queryable-rows`).** The section 5b fix shape above landed: `build_param_row`/`build_toggle_trigger_row` now emit param-id-derived names on every converged card row (`param_row.<id>[.slider|.value|.driver_btn]`), and a new `AutomationAction::ScrollTo` scrolls a deep row into view before a Pointer step acts. `scripts/ui-flows/scene-setup-modifier-stack.json` is re-authored at ORIGINAL fidelity — add + value + slider **DRAG** + driver btn + reorder + undo — and runs **green, unmodified-intent** on the real gltfscene GPU path (30/30 steps): `ScrollTo` reaches the deep inspector `param_row.15_angle.slider` (y≈7789 → on-screen), the drag executes on the named track, `param_row.15_angle.driver_btn` asserts by name, the two `↑` reorder buttons resolve, and the four Cmd+Z presses report `undo_count` 2→1→0. The close condition (green unmodified-intent, drag/driver asserts intact) is met — no weakening. Same run also closes BUG-239 (the value cell tracks the dispatched write).
 Found 2026-07-21 during the scene-convergence P5 flow sweep (14/15 scene-setup flows green; this is the 1 failure). The flow's modifier add goes through a context-menu action, and the `--script` driver drops `host.pending_actions` on the floor (BUG-293), so "Twist" never appears and the flow fails at its first post-add assert — a harness gap, not an app regression (the flow was green 2026-07-17 under the pre-convergence add path; the live app is unaffected). Burn-down: fix BUG-293 (route `pending_actions` like `app_render.rs` does), then re-run this flow unmodified; it is deliberately NOT re-pointed or weakened in the meantime.
-**2026-07-21 update (verif-infra-flow-driver lane):** BUG-293 fixed (`pending_actions` now routed through `apply_panel_actions`, `script.rs:805-817`), verified NOT the whole story: the flow **still fails**, identically, before AND after the BUG-293 fix — confirmed by running both the pre-fix and post-fix binary against this exact flow. The failure is NOT a pending_actions drop: `+ Add Modifier`'s click resolves and reports `ok`, but at a resolved screen position of `(736.0, 3430.0)` — far below `LOGICAL_H` (1216.0) — so whatever the click actually hits (if anything) never produces a dropdown with "Twist" in it, `07.fail.tree.json` shows no dropdown content at all. This looks like separate fixture/layout drift (the Scene Setup dock's `+ Add Modifier` button now renders far below the fold in this fixture, likely BUG-294-adjacent but not the same fix) rather than the pending_actions gap this entry names. Left OPEN — do not close on the BUG-293 fix alone; the real blocker for this specific flow needs its own investigation.
-**2026-07-21 RE-DIAGNOSIS (scene-convergence P3 landing, orchestrator) — NOT a layout bug.** Instrumented `ScenePanel::handle_scroll` under the gltfscene fixture: the content DOES overflow correctly (`content_height ≈ 3384`, `viewport ≈ 1098`, `max_scroll = 2286`, `overflows=true`) — the panel knows the "+ Add Modifier" row is below the fold and the scroll range covers it. The blocker was the **scroll delta SIGN**: `ScrollState::apply_scroll_delta` does `scroll_offset -= delta * SCROLL_SPEED`, so a POSITIVE `y` delta scrolls UP and clamps to 0. The flow (and the `scene-setup-add-fog-drag` flow it was modeled on) used positive `y: 900`, so `offset` stayed pinned at 0 and the button never moved — which reads as "unreachable." A NEGATIVE delta scrolls down as intended: proved `offset 0→900→1800→2286` (clamped at max), landing the button on-screen (`3384 − 2286 ≈ 1098`, within the viewport). **The live app is unaffected** (a real mouse wheel feeds the correct sign); this is purely a `--script` flow-authoring error. With the scroll fixed, the flow then fails on **stale pre-convergence assertion names** (`scene_setup.modifier.param1_value` / `param1_track` / `param1_driver_btn`) — those bespoke ids are gone (the panel names only `scene_setup.properties.*` now); the modifier param rows render as ordinary converged card rows (the value IS present in the tree — no regression, NOT a P3 deletion casualty). **Fix = flow-suite re-authoring** (add the negative-delta scroll + re-target the modifier drag/driver/reorder asserts at the converged card rows) — design §6 P4's "rewrite the scene flow suite against the real rows," deliberately deferred beyond the P4 docs-only supersession sweep. VD-035 stays OPEN but is now FULLY diagnosed; no code bug, no new BUG-NNN.
-**2026-07-21 INSTRUMENTED CONFIRMATION + partial-re-author blocker (WS2 bug-debt wave, Opus orchestrator).** Ran a probe flow (`cargo xtask ui-snap gltfscene`) to reproduce the two claims above before re-authoring. Confirmed: (1) the negative-scroll prescription is correct — a `Scroll { delta.y: -2400 }` over "+ Add Modifier" moves it from y≈3430 to y≈1144 (on-screen), the dropdown opens, and Twist is added (all steps green). NOTE the working `scene-setup-add-fog-drag` flow uses a POSITIVE `y:300` and is green only because its target sits at a shallower depth — do not model the modifier scroll on it; the modifier section needs the large negative delta. (2) The partial-re-author blocker is worse than "stale names": the converged Twist-modifier param rows (Axis/Angle/Center) carry **only text labels, `name=None`** — the entire Scene Setup panel emits exactly ONE bespoke widget name (`scene_setup.properties.name_value`) and the card protocol names only `inspector.param_card.mapping_chevron`. So the value/reorder(`↑`)/undo asserts ARE re-targetable (by `text`), but the original `param1_track` (slider **drag** target) and `param1_driver_btn` have NO queryable selector, and the modifier param rows render very deep (Angle at y≈7789, past even the max scroll). Closing VD-035 at the ORIGINAL fidelity therefore needs a harness affordance, NOT a pure flow-authoring change. **RULING (Peter/lead 2026-07-21): (c) carry — approved; (b) reduced-fidelity is REJECTED** (the close condition is green UNMODIFIED-intent; dropping the drag/driver asserts is exactly the weakening this entry forbids). **Fix shape is NOT bespoke — it is the `docs/WIDGET_TREE_DESIGN.md` §5b row-affordance recipe** (emit queryable names on the converged rows, machine-enforced by `no_bespoke_row_infra`), plus a deep-scroll-to-target harness helper. It **rides the in-progress WIDGET_TREE execution** (whose P5 status already lists this flow as the 14/15 gap) — do NOT author it ad-hoc as a standalone task. Consciously carried until then (verification debt; live app unaffected — a real wheel/drag works). Probe artifacts: `scratchpad/vd035-probe*.log`, `target/ui-snapshots/gltfscene/run-vd035-probe/10.tree.json`.
+**2026-07-21 update (verif-infra-flow-driver lane):** BUG-293 fixed (`pending_actions` now routed through `apply_panel_actions`, `script.rs:805-817`), verified NOT the whole story: the flow **still fails**, identically, before AND after the BUG-293 fix — confirmed by running both the pre-fix and post-fix binary against this exact flow. The failure is NOT a pending_actions drop: `+ Add Modifier`'s click resolves and reports `ok`, but at a resolved screen position of `(736.0, 3430.0)` — far below `LOGICAL_H` (1216.0) — so whatever the click actually hits (if anything) never produces a dropdown with "Twist" in it, `07.fail.tree.json` shows no dropdown content at all. This looks like separate fixture/layout drift (the Scene Setup dock's `+ Add Modifier` button now renders far below the fold in this fixture, likely BUG-294 (scene-setup-dock-scroll-headless-noop)-adjacent but not the same fix) rather than the pending_actions gap this entry names. Left OPEN — do not close on the BUG-293 fix alone; the real blocker for this specific flow needs its own investigation.
+**2026-07-21 RE-DIAGNOSIS (scene-convergence P3 landing, orchestrator) — NOT a layout bug.** Instrumented `ScenePanel::handle_scroll` under the gltfscene fixture: the content DOES overflow correctly (`content_height ≈ 3384`, `viewport ≈ 1098`, `max_scroll = 2286`, `overflows=true`) — the panel knows the "+ Add Modifier" row is below the fold and the scroll range covers it. The blocker was the **scroll delta SIGN**: `ScrollState::apply_scroll_delta` does `scroll_offset -= delta * SCROLL_SPEED`, so a POSITIVE `y` delta scrolls UP and clamps to 0. The flow (and the `scene-setup-add-fog-drag` flow it was modeled on) used positive `y: 900`, so `offset` stayed pinned at 0 and the button never moved — which reads as "unreachable." A NEGATIVE delta scrolls down as intended: proved `offset 0→900→1800→2286` (clamped at max), landing the button on-screen (`3384 − 2286 ≈ 1098`, within the viewport). **The live app is unaffected** (a real mouse wheel feeds the correct sign); this is purely a `--script` flow-authoring error. With the scroll fixed, the flow then fails on **stale pre-convergence assertion names** (`scene_setup.modifier.param1_value` / `param1_track` / `param1_driver_btn`) — those bespoke ids are gone (the panel names only `scene_setup.properties.*` now); the modifier param rows render as ordinary converged card rows (the value IS present in the tree — no regression, NOT a P3 deletion casualty). **Fix = flow-suite re-authoring** (add the negative-delta scroll + re-target the modifier drag/driver/reorder asserts at the converged card rows) — design section 6 P4's "rewrite the scene flow suite against the real rows," deliberately deferred beyond the P4 docs-only supersession sweep. VD-035 stays OPEN but is now FULLY diagnosed; no code bug, no new BUG-NNN.
+**2026-07-21 INSTRUMENTED CONFIRMATION + partial-re-author blocker (WS2 bug-debt wave, Opus orchestrator).** Ran a probe flow (`cargo xtask ui-snap gltfscene`) to reproduce the two claims above before re-authoring. Confirmed: (1) the negative-scroll prescription is correct — a `Scroll { delta.y: -2400 }` over "+ Add Modifier" moves it from y≈3430 to y≈1144 (on-screen), the dropdown opens, and Twist is added (all steps green). NOTE the working `scene-setup-add-fog-drag` flow uses a POSITIVE `y:300` and is green only because its target sits at a shallower depth — do not model the modifier scroll on it; the modifier section needs the large negative delta. (2) The partial-re-author blocker is worse than "stale names": the converged Twist-modifier param rows (Axis/Angle/Center) carry **only text labels, `name=None`** — the entire Scene Setup panel emits exactly ONE bespoke widget name (`scene_setup.properties.name_value`) and the card protocol names only `inspector.param_card.mapping_chevron`. So the value/reorder(`↑`)/undo asserts ARE re-targetable (by `text`), but the original `param1_track` (slider **drag** target) and `param1_driver_btn` have NO queryable selector, and the modifier param rows render very deep (Angle at y≈7789, past even the max scroll). Closing VD-035 at the ORIGINAL fidelity therefore needs a harness affordance, NOT a pure flow-authoring change. **RULING (Peter/lead 2026-07-21): (c) carry — approved; (b) reduced-fidelity is REJECTED** (the close condition is green UNMODIFIED-intent; dropping the drag/driver asserts is exactly the weakening this entry forbids). **Fix shape is NOT bespoke — it is the `docs/WIDGET_TREE_DESIGN.md` section 5b (Agent contract & enforcement (added 2026-07-20, adversarial review — Peter's directive)) row-affordance recipe** (emit queryable names on the converged rows, machine-enforced by `no_bespoke_row_infra`), plus a deep-scroll-to-target harness helper. It **rides the in-progress WIDGET_TREE execution** (whose P5 status already lists this flow as the 14/15 gap) — do NOT author it ad-hoc as a standalone task. Consciously carried until then (verification debt; live app unaffected — a real wheel/drag works). Probe artifacts: `scratchpad/vd035-probe*.log`, `target/ui-snapshots/gltfscene/run-vd035-probe/10.tree.json`.
 
 ### VD-034 — WIDGET_TREE P3: card-drag L3 flow variant not authored; geometry proven at L1 math + generic drag flow only — CLOSED 2026-07-21 (BUG-296 fixed, `inspector-card-drag-reorder.json` authored)
 Landed 2026-07-20 (P3 lane `cb2347b6` + P1a, merged together). The P3 gate names "drag flow (the `drag-clip.json` pattern, card variant)"; no card-drag flow existed on disk, so the landing ran the existing `timeline` `drag-clip.json` (green, L3, proves the drag input path generally) plus the new pure-math drop-target family and the INV-3 pin (`inv3_drag_targets_follow_live_bounds_after_in_place_scroll`, which drives through to the dispatched `EffectReorder`). Burn-down note (P5 sweep) said authoring was blocked on BUG-296 — the drag fires the real input path (`dispatched EffectReorder(0, 2) (structural=true)` in the `inspector` fixture scene) but the `--script` driver never rebuilds the inspector cards after a structural dispatch. **Closed 2026-07-21 (verif-infra-flow-driver lane):** BUG-296's real root cause turned out to be different from the suspected one — `Runner.active_layer` was never seeded from the fixture's actual active layer, so a structural dispatch silently mutated the wrong layer's (empty) effect chain instead of the displayed one; not a missing rebuild. Fixed by seeding `runner.active_layer` from `data.active` in `script.rs::run` (~line 184). `scripts/ui-flows/inspector-card-drag-reorder.json` now proves the card-drag reorder end-to-end under the `inspector` scene: drags Mirror's KEY_DRAG handle onto Strobe, dispatches the real `EffectReorder(0, 2)`, and asserts the post-drag label rects — `[Mirror,Bloom,Strobe]` → `[Bloom,Mirror,Strobe]` (index 2 lands the dragged card at index 1, not 2 — the real result, not the originally-assumed index). `cargo xtask ui-snap inspector --script scripts/ui-flows/inspector-card-drag-reorder.json` exits 0, 9/9 steps.
@@ -351,10 +353,10 @@ Same re-save-pass subsumption as VD-007.
 This was the panel's stated acceptance gate; Peter, who owns the gate, closed it.
 
 ### VD-020 — CINEMATIC_POST P5/P6 (GTAO + AO denoise) look-pass — CLOSED 2026-07-16 (waived)
-Also waives the P4 dof-polish verdict; BUG-137/BUG-138's pending-confirmation notes resolved in the same pass (BUG-136's live-repro escalation stays open). Duplicate-ID note: the PARAM_STORAGE_BOUNDARIES VD-020 remains OPEN.
+Also waives the P4 dof-polish verdict; BUG-137 (no-slug)/BUG-138 (no-slug)'s pending-confirmation notes resolved in the same pass (BUG-136 (CINEMATIC_POST motion blur has no visible…)'s live-repro escalation stays open). Duplicate-ID note: the PARAM_STORAGE_BOUNDARIES VD-020 remains OPEN.
 
 ### VD-021 — GLB_CONFORMANCE G-P1+G-P2 AMG-livery + card-curation look-pass — CLOSED 2026-07-16 (waived)
-BUG-165 and the TextureTransformTest fixture gap stay tracked in the backlog / design doc. No conflict with the in-flight GLTF_MATERIAL_EXTENSIONS or animation work — this covered the already-landed AMG livery fix and card curation. Duplicate-ID note: the PROJECT_FILE_INTEGRITY VD-021 remains OPEN.
+BUG-165 (boombox-multi-texture-never-converges) and the TextureTransformTest fixture gap stay tracked in the backlog / design doc. No conflict with the in-flight GLTF_MATERIAL_EXTENSIONS or animation work — this covered the already-landed AMG livery fix and card curation. Duplicate-ID note: the PROJECT_FILE_INTEGRITY VD-021 remains OPEN.
 
 ### VD-004 — Audio layer export mixdown — CLOSED 2026-07-07 (L2 reached)
 `audio_mixdown.rs` offline mix was unverified on a real export since it shipped. **Closed by
@@ -370,7 +372,7 @@ path (clip moved 230→314px), and `select-and-inspect.json` resolves a widget b
 name/text and clicks it: the selector surface is now scripted-driven end-to-end (L3).
 Residual carried as an organic-growth item, NOT debt: the `editor` scene still surfaces
 zero *named* widgets (graph-editor chrome unnamed headless) — name points as flows need
-them, per §3 ("coverage grows organically"). Landing report:
+them, per section 3 ("coverage grows organically"). Landing report:
 `docs/landings/2026-07-05-ui-automation-p2.md`.
 
 - VD-036 · 2026-07-21 · UI_FUNNEL P-P rider: INV-G4 MANIFOLD_RENDER_TRACE frame-cost spot-check not run (headless flows cover the sync calls, not the multi-window per-frame cadence). Burn down: next interactive session or the P-F landing trace gate. Owner: Wave-1 WS1.

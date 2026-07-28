@@ -54,7 +54,7 @@ A **preset** is a `LoadedPresetView` over a JSON file. `assets/effect-presets/<T
 - `nodes` + `wires` (the graph topology)
 - `presetMetadata.params` (the effect-card slider list)
 - `presetMetadata.bindings` (how card sliders route to inner-node params or wires)
-- `presetMetadata.skipMode` (the optimisation hint — see §6.2 of [EFFECT_RUNTIME_UNIFICATION.md](EFFECT_RUNTIME_UNIFICATION.md))
+- `presetMetadata.skipMode` (the optimisation hint — see section 6.2 of [EFFECT_RUNTIME_UNIFICATION.md](EFFECT_RUNTIME_UNIFICATION.md))
 
 Composite Rust builders under `composites/` still exist (Bloom, Halation, Infrared, Mirror, SoftFocus, StrobeOpacity) but are used only for parity tests against legacy fused shaders. Shipping artifacts are the JSON files.
 
@@ -123,13 +123,13 @@ Effect cards present a flat list of named, typed parameters. MIDI/OSC mapping, m
 
 ### 7.2 Bindings — unified (May 2026)
 
-A card-slider write resolves through a single `Vec<ResolvedBinding>` on each effect slot. The binding can target an inner-node param, a control-wire scalar source, a composite-Rust handle, or a custom slot. See [BINDINGS_UNIFICATION_PLAN.md](BINDINGS_UNIFICATION_PLAN.md) (the closed historical record) and §7.11 of [EFFECT_RUNTIME_UNIFICATION.md](EFFECT_RUNTIME_UNIFICATION.md).
+A card-slider write resolves through a single `Vec<ResolvedBinding>` on each effect slot. The binding can target an inner-node param, a control-wire scalar source, a composite-Rust handle, or a custom slot. See [BINDINGS_UNIFICATION_PLAN.md](BINDINGS_UNIFICATION_PLAN.md) (the closed historical record) and section 7.11 of [EFFECT_RUNTIME_UNIFICATION.md](EFFECT_RUNTIME_UNIFICATION.md).
 
 The bug class that motivated unification — passing `&[]` for the user-bindings slice — is now structurally unrepresentable. Wire format carries `ParamId` directly; no `pi: usize → ParamId` translation layer remains.
 
 ### 7.3 Expose flow
 
-Inside the graph editor, every inner-node param row has an expose checkbox. Checking it adds a `bindings` entry to the effect's `EffectInstance.user_param_bindings`, which routes through the same `ResolvedBinding` pipeline as static spec bindings. Wire-driven rows are checkbox-disabled (see §4.1).
+Inside the graph editor, every inner-node param row has an expose checkbox. Checking it adds a `bindings` entry to the effect's `EffectInstance.user_param_bindings`, which routes through the same `ResolvedBinding` pipeline as static spec bindings. Wire-driven rows are checkbox-disabled (see section 4.1).
 
 ---
 
@@ -137,11 +137,11 @@ Inside the graph editor, every inner-node param row has an expose checkbox. Chec
 
 **Status:** Architecturally committed, implementation deferred.
 
-[PRIMITIVE_LIBRARY_DESIGN.md §12.5](PRIMITIVE_LIBRARY_DESIGN.md) commits the stance: *decompose at authoring time, fuse at compile time.* The editor sees small primitives; the GPU runs fused dispatches for per-pixel chains.
+[PRIMITIVE_LIBRARY_DESIGN.md section 12.5 (Decomposition + fusion-on-compile)](PRIMITIVE_LIBRARY_DESIGN.md) commits the stance: *decompose at authoring time, fuse at compile time.* The editor sees small primitives; the GPU runs fused dispatches for per-pixel chains.
 
-The fusion classification (pixel-local / UV-rewriting / neighborhood / reduction / multi-pass / stateful), partition algorithm, and `naga_oil`-based toolchain are designed in detail at §8.2–§8.4 of this doc's predecessor and still apply.
+The fusion classification (pixel-local / UV-rewriting / neighborhood / reduction / multi-pass / stateful), partition algorithm, and `naga_oil`-based toolchain are designed in detail at section 8.2–section 8.4 of this doc's predecessor and still apply.
 
-**Why deferred:** §12.5 / §12.9 of PRIMITIVE_LIBRARY_DESIGN explicitly defers until measured frame-budget pressure on a real show file demands it (Profile a fully-decomposed FluidSim or Black Hole on the Liveschool fixture before committing to the fusion infrastructure). §12.6 also softened the urgency — scalar wires removed the fp16-quantisation motivation, so the remaining pressure is purely dispatch overhead, which is fine at current scale.
+**Why deferred:** section 12.5 / section 12.9 of PRIMITIVE_LIBRARY_DESIGN explicitly defers until measured frame-budget pressure on a real show file demands it (Profile a fully-decomposed FluidSim or Black Hole on the Liveschool fixture before committing to the fusion infrastructure). section 12.6 also softened the urgency — scalar wires removed the fp16-quantisation motivation, so the remaining pressure is purely dispatch overhead, which is fine at current scale.
 
 ---
 
@@ -149,7 +149,7 @@ The fusion classification (pixel-local / UV-rewriting / neighborhood / reduction
 
 **V1 (current):** Parameter tweaks during playback are free. Topology edits (adding nodes, rewiring) trigger a synchronous chain rebuild on the content thread; rebuilds are rare enough post-chain-pool-refactor that the cost is invisible in practice.
 
-**V2 (parked):** Atomic `Arc<ExecutionPlan>` swap with state-continuity rules. The compile thread is designed but not built — see §10. The trigger for building it is editing during a live show becoming a routine performer surface (see §12.9 "Mid-show preset editing safety" in PRIMITIVE_LIBRARY_DESIGN.md).
+**V2 (parked):** Atomic `Arc<ExecutionPlan>` swap with state-continuity rules. The compile thread is designed but not built — see section 10. The trigger for building it is editing during a live show becoming a routine performer surface (see section 12.9 "Mid-show preset editing safety" in PRIMITIVE_LIBRARY_DESIGN.md).
 
 ---
 
@@ -163,12 +163,9 @@ If live topology editing during playback ships, this becomes load-bearing: compi
 
 ---
 
-## 11. Migration (Done)
+## 11. Migration
 
-The May 2026 migration ran in two coordinated arcs:
-
-- **§11 Preset migration** (blocks 4–9): every shipping effect moved from `inventory::submit! { EffectMetadata, EffectFactory }` to `assets/effect-presets/<TypeId>.json` + `build.rs` codegen. `EffectRegistry`, `EffectFactory`, `metadata_by_id`, `effect_category_registry`, and 21 orphan `.rs` files were deleted. The graph runtime is the only dispatcher.
-- **Bindings unification** (Phases 1–5): static + user binding paths collapsed onto one `ResolvedBinding` walk, one cache, one `ParamConvert` enum, `ParamId` on the wire.
+Every shipping effect is an `assets/effect-presets/<TypeId>.json` preset (`build.rs` codegen); the graph runtime is the only dispatcher; static + user binding paths share one `ResolvedBinding` walk, one cache, one `ParamConvert` enum, `ParamId` on the wire.
 
 Projects from before the migration load unchanged. The legacy `PostProcessEffect` and `Generator` traits are gone — there is no coexistence period any longer; the trait-wrapped path was always a migration scaffold.
 
@@ -185,7 +182,7 @@ Designed but parked:
 - **Project bundling** of custom composites into the V2 ZIP under `graphs/custom_composites/`.
 - **Bundle wins** on identity-collision with the user's library.
 
-The mid-show editing safety question (§12.9 of PRIMITIVE_LIBRARY_DESIGN) is upstream of shipping user composites — it dictates whether mid-show edits apply live, undo cleanly, and handle node-removal without breaking a render.
+The mid-show editing safety question (section 12.9 of PRIMITIVE_LIBRARY_DESIGN) is upstream of shipping user composites — it dictates whether mid-show edits apply live, undo cleanly, and handle node-removal without breaking a render.
 
 ---
 
@@ -207,11 +204,11 @@ User-saved composites (V2) will land under `graphs/custom_composites/<id>.json` 
 
 Real ones, parked. Not the "(none yet)" placeholder from V0.
 
-- **Mid-show preset editing safety.** If presets become M4L-style devices and the graph editor is the depth, editing during a live performance is a real possibility. What gets undo? What happens if a user removes a node mid-render? See §12.9 of PRIMITIVE_LIBRARY_DESIGN.md.
-- **Rebake-on-change scheduler caching.** Heavy generators (Black Hole's deflection map, ParametricSurface mesh build) need per-node dirty bits so the executor can skip re-evaluation when inputs haven't changed. Similar pattern to skip-passthrough but content-based. See §12.9 of PRIMITIVE_LIBRARY_DESIGN.md.
-- **When to build fusion-on-compile.** Pending a measured profile on a fully-decomposed Black Hole or FluidSim on the Liveschool fixture. See §8 above and §12.5 / §12.9 of PRIMITIVE_LIBRARY_DESIGN.md.
+- **Mid-show preset editing safety.** If presets become M4L-style devices and the graph editor is the depth, editing during a live performance is a real possibility. What gets undo? What happens if a user removes a node mid-render? See section 12.9 of PRIMITIVE_LIBRARY_DESIGN.md.
+- **Rebake-on-change scheduler caching.** Heavy generators (Black Hole's deflection map, ParametricSurface mesh build) need per-node dirty bits so the executor can skip re-evaluation when inputs haven't changed. Similar pattern to skip-passthrough but content-based. See section 12.9 of PRIMITIVE_LIBRARY_DESIGN.md.
+- **When to build fusion-on-compile.** Pending a measured profile on a fully-decomposed Black Hole or FluidSim on the Liveschool fixture. See section 8 above and section 12.5 / section 12.9 of PRIMITIVE_LIBRARY_DESIGN.md.
 - **Chain pool rekey by semantic ID.** [CHAIN_POOL_REFACTOR_PLAN.md](CHAIN_POOL_REFACTOR_PLAN.md) is audited and designed but not started. Layer reorder still hits the positional-indexing bug class.
-- **Array port / Buffer port.** §12.3 of PRIMITIVE_LIBRARY_DESIGN.md promotes Array (particle pipelines) to V1. Buffer (audio waveforms) and 3D-volume primitives remain V2.
+- **Array port / Buffer port.** section 12.3 of PRIMITIVE_LIBRARY_DESIGN.md promotes Array (particle pipelines) to V1. Buffer (audio waveforms) and 3D-volume primitives remain V2.
 
 ---
 

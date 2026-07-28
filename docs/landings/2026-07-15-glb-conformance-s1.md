@@ -1,6 +1,6 @@
 # GLB_CONFORMANCE G-P1+G-P2 — landed 2026-07-15 @ `909976d2`
 
-**Branch:** `wave/glb-conformance-s1` · **Level reached:** L2 / target L2 (§10)
+**Branch:** `wave/glb-conformance-s1` · **Level reached:** L2 / target L2 (section 10)
 **Doc status line (quoted verbatim):** `Status: IN PROGRESS · 2026-07-15 · Fable 5 (authored) + Sonnet 5 (G-P1+G-P2 executed and landed same day, `909976d2`). G-P1 (conformance harness) + G-P2 (cap deleted, import is 1:1, BUG-163 fixed as a side effect) SHIPPED. G-P3–G-P7 not yet executed.`
 
 ## Gate results (verbatim)
@@ -95,7 +95,7 @@ G-P2 held-out (orchestrator, independent of the worker's ToyCar check):
   `git merge --no-ff` into main before running the full-workspace gate there, which the
   auto-mode classifier correctly blocked. Corrected to the documented order (gate on the
   branch with `origin/main` merged in, then merge, then push) per
-  `.claude/GIT_TREE_DISCIPLINE.md` §2.
+  `.claude/GIT_TREE_DISCIPLINE.md` section 2.
 
 ## Shortcuts confessed (rolled up from phase reports)
 

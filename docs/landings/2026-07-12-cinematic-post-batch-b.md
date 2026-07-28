@@ -103,7 +103,7 @@ clippy, and `nextest --lib` re-run clean (1136/1136) after the merge commit `20a
 
 P1: none. P2: one, documented — the GPU-vs-CPU synthetic-ramp parity test (I1a) tolerates ≤5%
 (measured 2.3%) single-sample boundary flips from cross-platform trig rounding on the binary
-occlusion threshold, mirroring `FREEZE_COMPILER_MAP.md` §7's "≈1 ulp, not bit-exact" contract for
+occlusion threshold, mirroring `FREEZE_COMPILER_MAP.md` section 7's "≈1 ulp, not bit-exact" contract for
 out-of-loop texture math. The GPU-vs-GPU hand-kernel test (I1b) passes at tight 1e-4, proving the
 codegen path itself is exact.
 

@@ -1,11 +1,11 @@
 # DRAG_CAPTURE P3 (final phase) — landed 2026-07-08 @ `f23fa1f1`
 
-**Branch:** `wave/drag-capture-p3` (feat `2fc4cfbd`, merge `f23fa1f1`) · **Level reached:** L1 / target L1 (§5 P3 — the 1px feel is L4 by nature, tracked as VD-019)
+**Branch:** `wave/drag-capture-p3` (feat `2fc4cfbd`, merge `f23fa1f1`) · **Level reached:** L1 / target L1 (section 5 P3 — the 1px feel is L4 by nature, tracked as VD-019)
 **Doc status line (quoted verbatim):** `**Status:** SHIPPED 2026-07-08 (all phases) — **P1 @ `9bb8ca86`** (ownership D1–D4 + D9, L3); **P2 @ `12683746`** (z-aware seams D5 + `swallow_drag` retired, L1; VD-017/018); **P3 @ `f23fa1f1`** (immediate-drag threshold D6, L1; VD-019 = Peter's crossover-nudge feel pass) · design 2026-07-07 (approved same day by Peter) · Fable`
 
 ## What landed
 
-Immediate-drag threshold for precision surfaces (D6 / §3.4). `UIInputSystem::request_immediate_drag()`
+Immediate-drag threshold for precision surfaces (D6 / section 3.4). `UIInputSystem::request_immediate_drag()`
 (`input.rs:458`) sets `immediate_drag_armed` (`input.rs:394`), which makes `process_pointer`'s Move
 arm use an effective threshold of `0.0` for the current press (`input.rs:561`), cleared on the next
 Up (`input.rs:672`) — the global `DRAG_THRESHOLD`/`DRAG_THRESHOLD_PX` constant is untouched.

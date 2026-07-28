@@ -53,7 +53,7 @@ pub struct Param {
     pub base: f32,
     pub exposed: bool,
     /// Runtime-only automation-latch flag (see `AUTOMATION_LANES_DESIGN.md`
-    /// §4). Set by the single `set_base_param` funnel so the automation
+    /// section 4). Set by the single `set_base_param` funnel so the automation
     /// evaluator can detect "a hand touched this since I last looked". Never
     /// serialized.
     pub touched: bool,
@@ -440,7 +440,7 @@ mod tests {
     }
 
     /// New-storage replacement for the deleted `bench_old_resolve_param_in_baseline`
-    /// (PARAM_STORAGE_DESIGN §5). Measures `ParamManifest::get(id)` worst-case: a
+    /// (PARAM_STORAGE_DESIGN section 5). Measures `ParamManifest::get(id)` worst-case: a
     /// 40-param manifest, the target id LAST, and every id sharing a long common
     /// prefix so each non-matching compare does realistic work (real ids look like
     /// `user.mix.amount.1`). The old positional resolver (`resolve_param_in`, which

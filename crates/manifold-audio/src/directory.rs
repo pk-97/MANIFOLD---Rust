@@ -8,7 +8,7 @@
 //! backend-neutral split as `manifold-gpu` (Metal now, Vulkan later): the rest
 //! of the app sees only [`DeviceInfo`]/[`ChannelInfo`], never a platform type.
 //!
-//! See `docs/AUDIO_INFRASTRUCTURE.md` §4.
+//! See `docs/AUDIO_INFRASTRUCTURE.md` section 4.
 
 #[cfg(target_os = "macos")]
 mod coreaudio;

@@ -1,4 +1,4 @@
-// node.vignette — fusable body (freeze §12). The first POSITIONAL atom: it
+// node.vignette — fusable body (freeze section 12). The first POSITIONAL atom: it
 // reads only its own texel but modulates that texel by the pixel's POSITION.
 // `uv` (normalized center-of-texel) drives the shape distance; `dims` recovers
 // aspect = dims.x/dims.y for the aspect-correct circle (aspect is no longer a

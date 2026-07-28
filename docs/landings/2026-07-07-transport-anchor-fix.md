@@ -1,7 +1,7 @@
 # wave/transport-sync-anchor-fix (BUG-050 partial) — landed 2026-07-07 @ 6bf0c23b
 
 **Branch:** wave/transport-sync-anchor-fix · **Level reached:** L1 / target L4 (rig confirmation, Peter — same VD-013 checklist)
-**Doc status line (quoted verbatim):** unchanged — "**Status:** P1–P3 SHIPPED 2026-07-07 (same-session build, Fable) · P4 landing complete except the L4 live checklist (§6 P4 demo — Peter-owned, the real acceptance gate)" — plus deviation 5 (moving-anchor amendment) added.
+**Doc status line (quoted verbatim):** unchanged — "**Status:** P1–P3 SHIPPED 2026-07-07 (same-session build, Fable) · P4 landing complete except the L4 live checklist (section 6 P4 demo — Peter-owned, the real acceptance gate)" — plus deviation 5 (moving-anchor amendment) added.
 
 Same-day follow-up to `2026-07-07-ableton-transport-sync.md`: Peter's first L4 run
 (checklist step 1) failed — BUG-050. This landing fixes the proven half and

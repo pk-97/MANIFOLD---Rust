@@ -51,7 +51,7 @@ fn fixtures_dir() -> PathBuf {
 }
 
 // ---------------------------------------------------------------------------
-// Manifest schema (D1/D3, GLB_CONFORMANCE_DESIGN.md §3)
+// Manifest schema (D1/D3, GLB_CONFORMANCE_DESIGN.md section 3)
 // ---------------------------------------------------------------------------
 
 #[derive(serde::Deserialize)]

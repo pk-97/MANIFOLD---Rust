@@ -731,7 +731,7 @@ impl Application {
                 }
             } else if tracks_rect.contains(pos) {
                 if self.modifiers.alt {
-                    // Alt + scroll Y → continuous, cursor-anchored zoom (§24 5e):
+                    // Alt + scroll Y → continuous, cursor-anchored zoom (section 24 5e):
                     // smooth scaling of pixels-per-beat (not a jump between ten
                     // fixed levels), anchored on the beat under the mouse so the
                     // view zooms toward where you're pointing.
@@ -2252,7 +2252,7 @@ impl Application {
     /// it on `pending_keyboard_actions` for `process_events` to dispatch next
     /// frame. Mirrors the click-arm translation in `browser_popup.rs`'s
     /// `Overlay::on_event` impl, just reached from a keyboard pick
-    /// (`OVERLAY_SESSIONS_AND_PICKER_DESIGN.md` §5 P2 arrow/Enter nav)
+    /// (`OVERLAY_SESSIONS_AND_PICKER_DESIGN.md` section 5 P2 arrow/Enter nav)
     /// instead of a mouse click.
     fn stash_browser_popup_pick(
         &mut self,

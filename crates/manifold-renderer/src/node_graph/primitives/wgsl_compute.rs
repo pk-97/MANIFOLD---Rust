@@ -825,7 +825,7 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
                 // an OPTIONAL ScalarF32 input port with the same name as
                 // the param. evaluate() uses scalar_or_param(name) to
                 // read from the wire when present, falling back to the
-                // param value otherwise. Matches the §6.2 authoring
+                // param value otherwise. Matches the section 6.2 authoring
                 // rule that "every numeric scalar param ships as a
                 // port-shadowed optional input by default."
                 inputs.extend(derived_scalar_inputs);
@@ -1294,7 +1294,7 @@ fn element_to_array_type(
 /// Walk a WGSL storage-array struct's members and emit a Channels
 /// signature.
 ///
-/// Per `docs/CHANNEL_TYPE_SYSTEM.md` §8.2 / §14.9:
+/// Per `docs/CHANNEL_TYPE_SYSTEM.md` section 8.2 / section 14.9:
 /// - Fields the author tagged with a preceding `// @channel_skip`
 ///   marker are SKIPPED. The skip set is the per-struct lookup in
 ///   `skip_map`, built by [`extract_channel_skip`] from the original
@@ -1407,7 +1407,7 @@ type ChannelSkipMap = AHashMap<String, AHashSet<String>>;
 /// array struct fields. Returns a map from struct name → set of field
 /// names to skip when emitting the Channels signature.
 ///
-/// Per `docs/CHANNEL_TYPE_SYSTEM.md` §8.2 / §14.9 — the explicit marker
+/// Per `docs/CHANNEL_TYPE_SYSTEM.md` section 8.2 / section 14.9 — the explicit marker
 /// is the only mechanism for skipping fields (the old `_pad*` name-
 /// prefix heuristic was retired alongside this preprocessor's landing).
 ///

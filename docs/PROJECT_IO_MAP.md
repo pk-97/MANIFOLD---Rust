@@ -3,8 +3,8 @@
 Status: AUTHORITATIVE current-state map, 2026-07-07, from a full read of
 `manifold-io` (all 11 source files) plus the app-side seams (`project_io.rs`,
 `autosave.rs`, `app_lifecycle.rs`). Sibling of CORE_ENGINE_MAP.md /
-FREEZE_COMPILER_MAP.md. §9 honest edges is the payload — each is a latent-bug
-lens; the top ones are logged as BUG-062..065 in `docs/BUG_BACKLOG.md`.
+FREEZE_COMPILER_MAP.md. section 9 (Executor contracts fusion leans on) honest edges is the payload — each is a latent-bug
+lens; the top ones are logged as BUG-062 (no-forward-version-guard)..065 in `docs/BUG_BACKLOG.md`.
 
 The stakes here are singular: the `.manifold` file is the one unrecoverable
 asset. A renderer bug costs a frame; an IO bug costs the show file.
@@ -34,7 +34,7 @@ renderer catalog (embedded-preset snapshotting) deliberately lives app-side in
 - **V1 (legacy)**: plain JSON text file. Detected by ZIP-open failure —
   there is no magic-byte check; any non-ZIP bytes are treated as V1 JSON.
 - Standalone files: preset JSON (`preset_file.rs`), venue/stage JSON
-  (`venue_file.rs`). Neither is versioned with a migration chain (§9 E8).
+  (`venue_file.rs`). Neither is versioned with a migration chain (section 9 E8).
 - Snapshot identity and save dedup both key on **the first 6 hex chars (24
   bits) of SHA-256** of the pretty-printed project JSON (`compute_hash`,
   archive.rs:289).
@@ -61,31 +61,31 @@ original archive is untouched.
 
 `ProjectIOService::save_project` (project_io.rs:428) is the ported Unity path,
 currently `#[allow(dead_code)]` — the live saves route through the two paths
-above. Three save-shaped functions exist for one behavior (§9 E5).
+above. Three save-shaped functions exist for one behavior (section 9 E5).
 
 ## 4. Load pipeline (in order)
 
 `load_project_with` (loader.rs:49):
 
 1. Read file → try ZIP (`project.json` entry) → else V1 plain JSON.
-2. `migrate::migrate_if_needed` — the JSON-level version chain (§5).
+2. `migrate::migrate_if_needed` — the JSON-level version chain (section 5).
 3. **Embedded-presets pre-pass**: parse just `embeddedPresets` and hand them
    to the app's installer BEFORE the typed deserialize — the V1.4 param
    loader resolves params against the preset registry *during* `Project`
-   deserialization (BUG-036 root cause). Pre-pass failure is a WARN, not an
-   error (§9 E6).
+   deserialization (BUG-036 (param-manifest-construction-not-a-unified-safe-g…) root cause). Pre-pass failure is a WARN, not an
+   error (section 9 E6).
 4. Typed `serde_json` deserialize into `Project`.
 5. `strip_unknown_effects` — unrecognized effect types silently deleted.
 6. `on_after_deserialize` — rebuild caches; BPM synced from tempo-map beat 0,
    clamped 20–300.
 7. V1 only: `migrate_duration_modes` (all layers forced to NoteOff).
-8. `PathResolver::resolve_all` (§6).
+8. `PathResolver::resolve_all` (section 6).
 9. Post-load validation (loader.rs:204): `validate` (WARN only),
    `validate_clips` (missing files, WARN only), `purge_orphaned_references`,
    stamp `clip.layer_id` from structural ownership, reconcile desynced
    generator identity, backfill legacy fork display names, and
    **`repair_overlapping_clips` — deletes the shorter clip of every
-   overlapping pair**, logged at WARN (§9 E4).
+   overlapping pair**, logged at WARN (section 9 E4).
 
 App-side wrapper (`open_project_from_path`, project_io.rs:341) additionally:
 snapshots the preset overlay before the pre-pass hook mutates it and **rolls
@@ -108,7 +108,7 @@ hand-argued in doc comments (each rewrite only matches the legacy shape).
 | 1.0 → 1.1 | Percussion fields nested into `percussionImport`; layer generator fields into `genParams` |
 | 1.1 → 1.2 | Param addressing → stable `param_id` (no-op: dual Deserialize + post-load resolver) |
 | 1.2 → 1.3 | Per-param exposure (no-op: handled by the 1.11 step uniformly) |
-| 1.3 → 1.4 | Binding-storage unification (BUG-040 lived here: positional params of project-local generators dropped in a narrow window) |
+| 1.3 → 1.4 | Binding-storage unification (BUG-040 (v13-import-migration-drop) lived here: positional params of project-local generators dropped in a narrow window) |
 | 1.4 → 1.5, 1.5 → 1.6 | (see migrate.rs:247–390 — graph/envelope home unification era) |
 | 1.6 → 1.7 | WireframeDepthGraph → WireframeDepth rename |
 | 1.7 → 1.8 | Repair generator `genParams` serialized through the effect path (`effectType` → `generatorType`; the "cleared generator" bug) |
@@ -124,7 +124,7 @@ silently dropped by `filter_map` (a hypothetical `"1.4.0-beta"` parses as
 
 **There is no upper-bound check.** A file whose version is *newer* than the
 build runs zero migrations and deserializes on serde's ignore-unknown-fields
-default (§9 E1 — the worst edge in the crate).
+default (section 9 E1 — the worst edge in the crate).
 
 ## 6. Path resolution
 
@@ -136,7 +136,7 @@ name match only if file size matches the stored `file_size` (size check
 skipped when stored size < 0, and entirely absent for directories).
 Unresolved paths are counted and logged, never surfaced to the UI. On save,
 `store_relative_paths` refreshes the relative forms. Audio clip paths and
-other path-bearing fields are NOT visited (§9 E7).
+other path-bearing fields are NOT visited (section 9 E7).
 
 ## 7. History / recovery surface
 
@@ -144,7 +144,7 @@ other path-bearing fields are NOT visited (§9 E7).
   `history/` (gzip). Restore = `load_project_snapshot(archive, hash)` → full
   load pipeline → revert menu (`refresh_history_menu` after each autosave).
 - Cap: 50 newest autosaves. Manual saves are never pruned — a
-  manual-save-heavy project's archive grows monotonically (§9 E10).
+  manual-save-heavy project's archive grows monotonically (section 9 E10).
 - Dedup means "Save with no changes" is a no-op: no history entry, no
   timestamp bump.
 
@@ -158,7 +158,7 @@ never-shadow-Saved, Liveschool size gate.
 
 Dark: the Liveschool fixture is gitignored — `load_liveschool_live_show_v6`
 and the size gate **silently pass when the fixture is absent**, so only
-Peter's machine actually runs the real-scale proof (§9 E9). No test constructs
+Peter's machine actually runs the real-scale proof (section 9 E9). No test constructs
 a future-version file, a corrupted ZIP, a truncated write, or a hash
 collision. `save_project_v1` and preset/venue files have no roundtrip tests in
 this crate.
@@ -174,7 +174,7 @@ this crate.
   one-mistake show-file eater. Fix shape: compare `projectVersion` against
   the build's known ceiling before deserialize; refuse or open read-only
   with an explicit dialog.
-- **E2 — Silent destructive load repairs (BUG-063, MED-HIGH).**
+- **E2 — Silent destructive load repairs (BUG-063 (silent-load-repairs), MED-HIGH).**
   `repair_overlapping_clips` deletes clips, `purge_orphaned_references`
   removes clips/mappings, `strip_unknown_effects` drops effects — all
   log-only. The user never learns the file changed; the next save persists
@@ -182,14 +182,14 @@ this crate.
   Compounds E1 (the stripped load "repairs" clean). Fix shape: aggregate a
   load-repair report and surface any nonzero count as a dialog with a
   "keep original in history as a labeled snapshot" escape.
-- **E3 — Temp file not fsynced before rename (BUG-064, MED).**
+- **E3 — Temp file not fsynced before rename (BUG-064 (save-rename-before-fsync), MED).**
   `save_v2_archive` fsyncs the parent directory after rename but never
   `sync_all()` on the temp file itself; `zip.finish()` flushes userspace
   buffers only. On power loss (the gig scenario: venue power is not
   laptop-battery-guaranteed — see GIG_RESILIENCE_DESIGN) the rename can be
   durable while the file's data blocks aren't: a valid-looking `.manifold`
   containing garbage, having already replaced the good save. One-line fix.
-- **E4 — 24-bit content hash for dedup and snapshot identity (BUG-065, LOW
+- **E4 — 24-bit content hash for dedup and snapshot identity (BUG-065 (save-dedup-history-identity-key-6-hex-chars), LOW
   prob / HIGH cost).** A collision between the new save and `current_hash`
   skips the save ("No changes detected") while real changes are lost until
   the next edit re-fires autosave; a collision between two history entries

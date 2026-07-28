@@ -34,7 +34,7 @@ fn default_true() -> bool {
 /// Map a 0..1 sensitivity slider to a transient fire threshold. Shared by
 /// [`TriggerRoute`] (clip-launch routes) and the legacy `AudioTriggerMod`
 /// wire shape ([`LegacyAudioTriggerMod`], migrated onto `ParameterAudioMod`
-/// since §9) so both surfaces felt identical to tune. Inverted: sensitivity
+/// since section 9) so both surfaces felt identical to tune. Inverted: sensitivity
 /// 1.0 → [`MIN_TRIGGER_THRESHOLD`] (fire easily); 0.0 → [`MAX_TRIGGER_THRESHOLD`]
 /// (only the strongest onsets).
 pub fn sensitivity_to_threshold(sensitivity: f32) -> f32 {
@@ -46,7 +46,7 @@ pub fn sensitivity_to_threshold(sensitivity: f32) -> f32 {
 /// level drops below `threshold * REARM_RATIO`. Below 1.0 so a noisy plateau
 /// just above threshold doesn't chatter; well above 0 so the edge re-arms
 /// promptly between onsets. Shared by the live clip-trigger evaluator
-/// (`manifold-playback::live_trigger::LiveTriggerState`) and the §8 param-
+/// (`manifold-playback::live_trigger::LiveTriggerState`) and the section 8 param-
 /// trigger evaluator.
 pub const REARM_RATIO: f32 = 0.6;
 
@@ -55,7 +55,7 @@ pub const REARM_RATIO: f32 = 0.6;
 /// falls back below `threshold * REARM_RATIO`. Tempo-independent, runtime-only
 /// (never serialized) — extracted from `LiveTriggerState`'s per-route armed
 /// flag (D4) so both the clip-trigger evaluator (keyed by send×band) and the
-/// `ParameterAudioMod` trigger-gate evaluator (keyed by mod, §9 U1) share one
+/// `ParameterAudioMod` trigger-gate evaluator (keyed by mod, section 9 U1) share one
 /// implementation.
 ///
 /// **BUG-242 (2026-07-18):** both callers advance this on the
@@ -102,7 +102,7 @@ impl TransientEdge {
 }
 
 /// Which events increment a generator's/effect's Trigger response while audio
-/// triggers are enabled on it (§8 D1/D2). Peter, 2026-07-07: *"if Trigger is
+/// triggers are enabled on it (section 8 D1/D2). Peter, 2026-07-07: *"if Trigger is
 /// enabled we can choose if we want rising clip edge (default) OR the
 /// transient trigger OR both."*
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -131,9 +131,9 @@ impl TriggerFireMode {
     }
 }
 
-/// Deserialize-only wire shape for the pre-§9 `audioTrigger` field (§8 D2:
+/// Deserialize-only wire shape for the pre-section 9 `audioTrigger` field (section 8 D2:
 /// `AudioTriggerMod`, a per-instance config parallel to `audio_mods` — deleted
-/// 2026-07-07 per §9 U1, the day after it shipped, because the parallel
+/// 2026-07-07 per section 9 U1, the day after it shipped, because the parallel
 /// config type forced every gate/walker/drawer/command to know about two
 /// things instead of one). Kept only so an old project's `audioTrigger` field
 /// load-migrates onto a `ParameterAudioMod` on the instance's trigger-gate
@@ -210,7 +210,7 @@ impl TriggerRoute {
 /// vocabulary (`AudioModSource` + `AudioModShape`) param triggers use.
 /// `TriggerRoute` (above) becomes deserialize-only legacy; this is its
 /// replacement as the only authorable shape. See
-/// `docs/AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` §3.1/D2/D3.
+/// `docs/AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` section 3.1/D2/D3.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LayerClipTrigger {
@@ -368,7 +368,7 @@ mod fire_meter_tests {
         assert_eq!(cap.get(MAX_FIRE_METERS as u64 + 1), None);
     }
 
-    /// Content-thread work gate (DESIGN_DOC_STANDARD §5/BUG-035) — the two
+    /// Content-thread work gate (DESIGN_DOC_STANDARD section 5/BUG-035) — the two
     /// live evaluators (`manifold-playback::modulation`,
     /// `manifold-playback::live_trigger`) run inside `PlaybackEngine::tick`,
     /// which `MANIFOLD_RENDER_TRACE`'s spike-triggered breakdown does NOT
@@ -489,7 +489,7 @@ mod tests {
     }
 
     // The `disabled_config_never_suppresses_clip_edge` regression and the
-    // `AudioTriggerMod` threshold/serde tests moved with the type: §9 U1
+    // `AudioTriggerMod` threshold/serde tests moved with the type: section 9 U1
     // deletes `AudioTriggerMod` (a fire-mode config is now a normal
     // `ParameterAudioMod`), so the "disabled means absent" proof now lives on
     // `PresetInstance::clip_edge_enabled()` in `effects.rs`
@@ -527,7 +527,7 @@ mod tests {
     #[test]
     fn legacy_audio_trigger_mod_deserializes_the_pre_unification_wire_shape() {
         // U5 migration source: the exact `audioTrigger` blob a project saved
-        // during the one day §8's `AudioTriggerMod` shipped. Proves
+        // during the one day section 8's `AudioTriggerMod` shipped. Proves
         // `LegacyAudioTriggerMod` still parses it so
         // `effects::migrate_legacy_audio_trigger` has something to convert.
         let json = r#"{

@@ -1,4 +1,4 @@
-//! Forward-version guard (BUG-062) — PROJECT_FILE_INTEGRITY_DESIGN.md §3.2/§3.3, P2.
+//! Forward-version guard (BUG-062) — PROJECT_FILE_INTEGRITY_DESIGN.md section 3.2/section 3.3, P2.
 //!
 //! Proves the guard fires BEFORE migration for a file newer than this build,
 //! still opens a current-version file, still migrates an older file forward,

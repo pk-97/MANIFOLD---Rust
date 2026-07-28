@@ -633,7 +633,7 @@ const ODF_NOVELTY_HI: usize = 10;
 // per-band fire counts exactly on the 48 kHz fixtures (the 44.1 kHz stems
 // near-match: same BUG-052 grid, but the offline replay's window placement
 // differs sub-hop from the streaming fade-in, flipping a few borderline
-// events — see KICK_SWEEP_EVENT_DESIGN §retune).
+// events — see KICK_SWEEP_EVENT_DESIGN section retune).
 const KICK_WIN: usize = 6; // descent-confirmation window (hops) = fire latency
 const KICK_DROP_BINS: f32 = 10.0; // net descent required across the window (bins)
 const KICK_STEP_MAX: f32 = 4.0; // max down-step per hop (2 bins/hop + slop)
@@ -1077,7 +1077,7 @@ fn strongest_peak(peaks: &[(f32, f32)]) -> Option<(f32, f32)> {
 // per window (Full/Low/Mid/High, D4) runs over the ONE shared salience column
 // computed above — the tracker never re-derives salience, and never reads its
 // own past *output* features, only this hop's salience + this hop's transient
-// fire (docs §6: "no second transform", "not reading latest()").
+// fire (docs section 6: "no second transform", "not reading latest()").
 
 /// Continuation radius (bins): a peak within this of `pos` is "the same
 /// object moving", eligible for slewed continuation (D5 step 2) rather than
@@ -1933,7 +1933,7 @@ fn relative_flux(flux: f32, energy: f32) -> f32 {
 // the SAME variable-Q transform + band reductions the live capture worker uses
 // ([`form_tilted_column`] + [`reduce_send`]), so a layer-fed send analyses
 // bit-for-bit like a captured one — warp, gain, and mute are already baked into
-// the tapped samples (docs/AUDIO_LAYER_DESIGN.md §3R).
+// the tapped samples (docs/AUDIO_LAYER_DESIGN.md section 3R).
 
 /// A fresh per-send analysis state for an analyzer that feeds mono samples
 /// directly (no channel downmix) — the offline-free streaming + test paths.
@@ -3098,7 +3098,7 @@ mod tests {
     }
 
     // `streaming_analyzer_scope_reports_kick_fires` removed
-    // (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` §7.2 item 1, P8,
+    // (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` section 7.2 item 1, P8,
     // 2026-07-11): its whole premise — the scope's kick lane firing end to
     // end — no longer exists (`ScopeOnsets` dropped the `kick` field
     // outright). The detector itself is untouched and still covered by

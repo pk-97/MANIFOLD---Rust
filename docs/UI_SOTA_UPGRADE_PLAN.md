@@ -3,7 +3,7 @@
 **Status:** spec, ready to build. **Captured:** 2026-06-26.
 **Execution SSOT** for taking the UI from "competent but flat" to best-in-class. The *rationale*
 for each piece lives in [UI_DESIGN_SYSTEM_AND_INSPECTOR_REDESIGN.md](UI_DESIGN_SYSTEM_AND_INSPECTOR_REDESIGN.md)
-(§15/§17/§18/§19/§24); this doc is the **sequenced, grounded build plan** — current state, exact
+(section 15/section 17/section 18/section 19/section 24); this doc is the **sequenced, grounded build plan** — current state, exact
 changes, files, verification, acceptance, and risk per phase.
 
 Grounded against the live code 2026-06-26 (the design doc had stale status markers; this one is
@@ -20,7 +20,7 @@ Three moves carry the whole upgrade:
    via value steps + one soft shadow for floating elements.
 3. **Clips you can read** — name strip + content preview + real boundary, on the GPU pipeline.
 
-**Honest caveat (carried from §20):** Phases 1–5 get the *system* to SOTA-grade — consistent,
+**Honest caveat (carried from section 20):** Phases 1–5 get the *system* to SOTA-grade — consistent,
 enforced, complete. They do **not** guarantee the *look* is best-in-class; that's the taste pass
 (Phase 6), settled only by eyeballing the running app. The system is the floor, not the ceiling.
 
@@ -28,14 +28,14 @@ enforced, complete. They do **not** guarantee the *look* is best-in-class; that'
 
 ## 1. Invariants that hold across every phase
 
-- **Tokens, never literals.** Every colour/radius/spacing references a `color.rs` token. The §16
+- **Tokens, never literals.** Every colour/radius/spacing references a `color.rs` token. The section 16
   ratchet ([`tests/design_tokens.rs`](../crates/manifold-ui/tests/design_tokens.rs)) fails CI on new
   raw literals — it's already on.
 - **Aliases, not churn.** Re-point existing constants onto new ramps; don't rename call sites. Same
-  approach the grey ramp (§4) and lighten/darken dedup already used.
-- **Verify headless, sign off live.** Every visual phase is checked by the §23 harness (PNG snapshot
+  approach the grey ramp (section 4) and lighten/darken dedup already used.
+- **Verify headless, sign off live.** Every visual phase is checked by the section 23 harness (PNG snapshot
   + tree-bounds assertions); Peter eyeballs taste once at the end of the phase, not each iteration.
-- **Shape + colour, never colour alone** (§11). Armed/active states change fill/icon too — colour-blind
+- **Shape + colour, never colour alone** (section 11). Armed/active states change fill/icon too — colour-blind
   + dark-stage-wash safe.
 - **Dark palette.** Distinct value *steps*, not a *bright* UI. A live tool glows in a dark room.
 - **One atomic cutover per surface.** No per-call fallback paths; migrate a surface fully, snapshot,
@@ -45,43 +45,43 @@ enforced, complete. They do **not** guarantee the *look* is best-in-class; that'
 
 ## 2. Phase 0 — Verification backbone (do first)
 
-**Why:** §23's spike is proven but renders one card. Generalising it removes ~80% of the
+**Why:** section 23's spike is proven but renders one card. Generalising it removes ~80% of the
 "Peter must look" gating that otherwise blocks every visual phase below.
 
 | | |
 |---|---|
 | **Current** | [`tests/headless_ui_spike.rs`](../crates/manifold-renderer/tests/headless_ui_spike.rs) renders one `ParamCardPanel` headless, injects a click, re-renders. Hard unknowns (windowless render, input injection, build→click→re-render) all answered ✅. |
 | **Changes** | Generalise to arbitrary panels (`InspectorCompositePanel`, timeline `heads`+`lanes`, transport, footer). Add tree-assertion helpers: find-node-by-key, rect, no-overlap, column-x-match. Add golden-snapshot save + diff. |
-| **Files** | New `manifold-renderer/tests/ui_harness/` (helpers); reuse `GpuDevice::new`, `readback`, `image` crate, `assert_bytewise_equal`. **Reuse the harness bones, not the dead `run_legacy`/`EffectChain` path** (§23.7 caveat). |
+| **Files** | New `manifold-renderer/tests/ui_harness/` (helpers); reuse `GpuDevice::new`, `readback`, `image` crate, `assert_bytewise_equal`. **Reuse the harness bones, not the dead `run_legacy`/`EffectChain` path** (section 23.7 caveat). |
 | **Verify** | The harness verifies itself: render a known panel, assert known node layout, golden-diff the PNG. |
 | **Done** | I can render inspector + timeline + chrome headless, assert layout, and golden-diff. |
 | **Risk** | Low — spike answered the unknowns. ~40% new, 60% reuse. |
 
 ---
 
-## 3. Phase 1 — Semantic colour ramp (§15)
+## 3. Phase 1 — Semantic colour ramp (section 15)
 
 **Why:** the single change that makes the UI read as *designed*. Highest leverage, lowest risk.
 
 | | |
 |---|---|
 | **Current** | ~25 hand-picked state colours in [color.rs](../crates/manifold-ui/src/color.rs): `PLAYHEAD_RED` 217,64,56 · `STOP_RED` 128,51,51 · `RECORD_RED` 107,38,38 · `RECORD_ACTIVE` 209,46,46 · `EXPORT_ACTIVE` 184,56,56 · `BPM_CLEAR_ACTIVE` 133,51,51 · `MUTE_BTN_ACTIVE` 199,102,56 · `SOLO_BTN_ACTIVE` 217,191,64 · `PLAY_GREEN` 56,115,66 · `PLAY_ACTIVE` 64,184,82 · … `COLOR_BASELINE = 145`. |
-| **Changes** | Define **7 hues × 3 steps** (idle/base/active) per the §15.2 table: RED, GREEN, AMBER, ORANGE, BLUE, CYAN, PURPLE. Re-point the ~25 constants as thin aliases onto the ramp. Tune the warm trio (red/amber/orange) so mute/solo stay distinct when adjacent. |
+| **Changes** | Define **7 hues × 3 steps** (idle/base/active) per the section 15.2 table: RED, GREEN, AMBER, ORANGE, BLUE, CYAN, PURPLE. Re-point the ~25 constants as thin aliases onto the ramp. Tune the warm trio (red/amber/orange) so mute/solo stay distinct when adjacent. |
 | **Files** | `color.rs` only (ramp + aliases). No call-site churn. |
-| **Verify** | §16 ratchet — lower `COLOR_BASELINE` as the raw count drops (it *must* fall here). Harness snapshot of transport/footer/inspector for warm-trio adjacency. Peter eyeballs the warm trio live. |
+| **Verify** | section 16 ratchet — lower `COLOR_BASELINE` as the raw count drops (it *must* fall here). Harness snapshot of transport/footer/inspector for warm-trio adjacency. Peter eyeballs the warm trio live. |
 | **Done** | One definition per hue; same red everywhere; `COLOR_BASELINE` lowered; ratchet green. |
 | **Risk** | Low (aliases). Only judgment is value-tuning on the running app. |
 
 ---
 
-## 4. Phase 2 — Elevation & separation (§17)
+## 4. Phase 2 — Elevation & separation (section 17)
 
 **Why:** depth instead of flatness — the "lift" in the mockups.
 
 | | |
 |---|---|
 | **Current** | 5 near-identical neutral borders: `RACK_BORDER` 56 · `CARD_BORDER` 46 · `CARD_BORDER_C32` 55 · `DROPDOWN_BORDER` 58 · `GEN_CARD_BORDER_C32` 58 (purple-tinted). **No shadow primitive** in [ui_renderer.rs](../crates/manifold-renderer/src/ui_renderer.rs). |
-| **Changes** | (a) Collapse the 5 → **one `BORDER` hairline token** (gen-card purple tint folds into §15's PURPLE). (b) **Value-step depth** via the existing `BG_0..BG_3` ramp — card header a step brighter than body, header column lifts over lanes (no new primitive). (c) Add **one soft drop-shadow** to the GPU rect pipeline (`RectCommand` + fragment SDF outer-term), for **floating elements only** (dropdown, browser_popup, mod drawer). One step, not a Material ramp. |
+| **Changes** | (a) Collapse the 5 → **one `BORDER` hairline token** (gen-card purple tint folds into section 15's PURPLE). (b) **Value-step depth** via the existing `BG_0..BG_3` ramp — card header a step brighter than body, header column lifts over lanes (no new primitive). (c) Add **one soft drop-shadow** to the GPU rect pipeline (`RectCommand` + fragment SDF outer-term), for **floating elements only** (dropdown, browser_popup, mod drawer). One step, not a Material ramp. |
 | **Files** | `color.rs` (BORDER token); `ui_renderer.rs` (shadow param + fragment); floating call sites opt in. |
 | **Verify** | Harness PNG of a dropdown/drawer (shadow present, subtle); tree unaffected. |
 | **Done** | One border token; floating elements lift with one subtle shadow; in-panel grouping stays fill-level. |
@@ -89,16 +89,16 @@ enforced, complete. They do **not** guarantee the *look* is best-in-class; that'
 
 ---
 
-## 5. Phase 3 — Apply the component kit everywhere (§18)
+## 5. Phase 3 — Apply the component kit everywhere (section 18)
 
-**Why:** one grammar. A half-standardised UI is *worse* than none (§10 — forced relearning).
+**Why:** one grammar. A half-standardised UI is *worse* than none (section 10 — forced relearning).
 
-**Status: ✅ DONE (2026-06-27).** Chrome bars + popups landed earlier; the final param-card `*_btn_style` one-offs are now on the kit too. Added a [`StateButtonSkin`](../crates/manifold-ui/src/chrome/components.rs) (CHROME / CARD_RAISED / CARD_RECESSED) so the state-button *mechanic* (active fills with the caller's hue, off sits on a neutral chip) lives in exactly one place, and `de_btn_style` / `config_btn_style` / `config_btn_style_colored` are now thin `state_button_skinned` delegations. Off-state chips + active hover are byte-identical to the old look; the lone deliberate delta is the fixed config button's *pressed* red now deriving (`darken 10`) like the colored variant already did — sub-perceptual, and it deletes the two orphaned `DRIVER_ACTIVE_HOVER/PRESS` constants. Earlier in this phase: [`state_button`](../crates/manifold-ui/src/chrome/components.rs) — the standalone latching/momentary button (on = filled semantic hue + lighten(30)/darken(20); off = neutral `BUTTON_DIM` chip), the generalisation of `toggle` (accent special-case). The button mechanic was copy-pasted six times across the chrome; now centralised. Migrated: **footer** (button_secondary/segment), **transport** (`button_style` → kit; neutral buttons unified to the `BUTTON_DIM` chip), **layer-card mixer** (`mute/solo/led/analysis` → one `state_btn` shim on the carve-out hues, zero visual change), **header** (zoom + Audio/Perform/Monitor → one neutral chip, fixed a within-bar 59-vs-71 split). **Popups:** one shared [`panels::popup_shell`](../crates/manifold-ui/src/panels/popup_shell.rs) (scrim + a single rounded 1px-bordered container) now backs `dropdown`/`browser_popup`/`ableton_picker` — pickers' fake outer+inner border → a real border, three scrim dims → `PopupStyle::DROPDOWN`/`MODAL`, picker literals hoisted to `MODAL_*` tokens (ratchet 145 → 139). **Plumbing, not a look change** — visually near-identical, so the later visual upgrade lands in one place. Each verified by headless renders in [`ui_color_swatches.rs`](../crates/manifold-renderer/tests/ui_color_swatches.rs).
+**Status: ✅ DONE.** Chrome bars + popups landed earlier; the final param-card `*_btn_style` one-offs are now on the kit too. Added a [`StateButtonSkin`](../crates/manifold-ui/src/chrome/components.rs) (CHROME / CARD_RAISED / CARD_RECESSED) so the state-button *mechanic* (active fills with the caller's hue, off sits on a neutral chip) lives in exactly one place, and `de_btn_style` / `config_btn_style` / `config_btn_style_colored` are now thin `state_button_skinned` delegations. Off-state chips + active hover are byte-identical to the old look; the lone deliberate delta is the fixed config button's *pressed* red now deriving (`darken 10`) like the colored variant already did — sub-perceptual, and it deletes the two orphaned `DRIVER_ACTIVE_HOVER/PRESS` constants. Earlier in this phase: [`state_button`](../crates/manifold-ui/src/chrome/components.rs) — the standalone latching/momentary button (on = filled semantic hue + lighten(30)/darken(20); off = neutral `BUTTON_DIM` chip), the generalisation of `toggle` (accent special-case). The button mechanic was copy-pasted six times across the chrome; now centralised. Migrated: **footer** (button_secondary/segment), **transport** (`button_style` → kit; neutral buttons unified to the `BUTTON_DIM` chip), **layer-card mixer** (`mute/solo/led/analysis` → one `state_btn` shim on the carve-out hues, zero visual change), **header** (zoom + Audio/Perform/Monitor → one neutral chip, fixed a within-bar 59-vs-71 split). **Popups:** one shared [`panels::popup_shell`](../crates/manifold-ui/src/panels/popup_shell.rs) (scrim + a single rounded 1px-bordered container) now backs `dropdown`/`browser_popup`/`ableton_picker` — pickers' fake outer+inner border → a real border, three scrim dims → `PopupStyle::DROPDOWN`/`MODAL`, picker literals hoisted to `MODAL_*` tokens (ratchet 145 → 139). **Plumbing, not a look change** — visually near-identical, so the later visual upgrade lands in one place. Each verified by headless renders in [`ui_color_swatches.rs`](../crates/manifold-renderer/tests/ui_color_swatches.rs).
 
 | | |
 |---|---|
 | **Current** | The kit ([chrome/components.rs](../crates/manifold-ui/src/chrome/components.rs): toggle/**state_button**/button/icon_button/segment/dropdown_trigger/reset/mod_badge) now owns every **chrome-bar** button. Popups (`dropdown`/`browser_popup`/`ableton_picker`) still hand-roll their shells. |
-| **Changes** | ✅ transport / header / footer / layer_header buttons+toggles onto the kit; bespoke `*_style` fns deleted or collapsed to thin font/radius shims. ⬜ Popups onto one shared `popup_shell` (§22.2), colours from §15, depth from §17. |
+| **Changes** | ✅ transport / header / footer / layer_header buttons+toggles onto the kit; bespoke `*_style` fns deleted or collapsed to thin font/radius shims. ⬜ Popups onto one shared `popup_shell` (section 22.2), colours from section 15, depth from section 17. |
 | **Files** | ✅ `transport.rs`, `header.rs`, `footer.rs`, `layer_header.rs`. ⬜ the three popups. |
 | **Verify** | Harness snapshot per panel (panel-by-panel, one atomic cutover each); ratchet catches stray literals; tree assertions for layout. |
 | **Done** | No bespoke button/toggle/dropdown styling; the kit owns the look; local helpers gone. **Chrome buttons there; popups pending.** |
@@ -106,9 +106,9 @@ enforced, complete. They do **not** guarantee the *look* is best-in-class; that'
 
 ---
 
-## 6. Phase 4 — Hierarchy emphasis + functional state (§19)
+## 6. Phase 4 — Hierarchy emphasis + functional state (section 19)
 
-**Status: ✅ DONE (2026-06-27).** All three landed: (A) the focused inspector card lifts its inner well one ramp step (`FOCUS_LIFT_STEP`) on top of the existing accent border, and the timeline's selected lane gets the *same* lift (dirty-checked in-place recolor, track index 1:1 with project layers); (B) a shared `panel_state` kit component (centered dimmed line, status-red for error) now backs the graph-editor empty state; (C) the Record button breathes red while recording, off the existing per-frame `update()` tick + an elapsed-time sine — no animation subsystem, nothing spent while stopped. The original plan's decorative motion (press flash, collapse ease, generic arm pulse) was cut as un-DAW-like. Adversarially reviewed; zero code defects found.
+**Status: ✅ DONE.** All three landed: (A) the focused inspector card lifts its inner well one ramp step (`FOCUS_LIFT_STEP`) on top of the existing accent border, and the timeline's selected lane gets the *same* lift (dirty-checked in-place recolor, track index 1:1 with project layers); (B) a shared `panel_state` kit component (centered dimmed line, status-red for error) now backs the graph-editor empty state; (C) the Record button breathes red while recording, off the existing per-frame `update()` tick + an elapsed-time sine — no animation subsystem, nothing spent while stopped. The original plan's decorative motion (press flash, collapse ease, generic arm pulse) was cut as un-DAW-like. Adversarially reviewed; zero code defects found.
 
 **Why:** SOTA editors emphasise the object you're editing and recede the rest — *statically*.
 Ableton, Resolve, and Resolume are near-motionless: selection is a fill/border shift, not an
@@ -129,19 +129,19 @@ on every modulated param, idle micro-motion.
 
 ---
 
-## 7. Phase 5 — Timeline visual upgrade (§24) — the structural spine
+## 7. Phase 5 — Timeline visual upgrade (section 24) — the structural spine
 
 **Why:** the biggest perceived lift (readable clips) and the only real rendering-architecture move.
 
 > **Dead gate (removed):** the old "perform-mode timeline treatment" gate was invalid — perform mode
 > does not display clips. Do not raise it again.
 
-**5a — Gradient primitive. ✅ DONE (2026-06-26).** `UIRenderer::draw_gradient_rect` + a linear-gradient
+**5a — Gradient primitive. ✅ DONE.** `UIRenderer::draw_gradient_rect` + a linear-gradient
 body in the shared rect shader (`ui_renderer.rs`: `UIVertex` grew `color2` + `grad`; fragment mixes
 `color`→`color2` along `grad.xy`, every existing draw stays gradient-off). Plumbing only — nothing
 calls it yet, so zero visual change. Verified headless (`gradient_demo`). Benefits chrome *and* clips.
 
-**5b — Clips → GPU. ✅ DONE (2026-06-26).** Clips render entirely on the GPU now: rounded SDF body,
+**5b — Clips → GPU. ✅ DONE.** Clips render entirely on the GPU now: rounded SDF body,
 the waveform painted INSIDE the body as a per-clip texture, and the timeline overlays as GPU rects. The
 per-layer CPU clip bitmap is gone end to end.
 - **Bodies:** [`clip_draw.rs`](../crates/manifold-renderer/src/clip_draw.rs) — `emit_clips` (lift
@@ -184,10 +184,10 @@ per-layer CPU clip bitmap is gone end to end.
 Full design + the cross-thread architecture: [docs/CLIP_THUMBNAILS_DESIGN.md](CLIP_THUMBNAILS_DESIGN.md).
 Snapshot-on-play into a shared content→UI atlas (IOSurface triple-buffer, cloned from the node-thumbnail
 atlas), blitted into the clip body in the 4b″ slot (rounded-mask, centre-cropped). Phases shipped:
-**P1** transport + live snapshot (`08790b43`); **P2a** with-effects source — `LayerCompositor::clip_post_fx_texture`
-(`32386ad3`); **P2c** generator cold-start — parked clips render an isolated default-look thumbnail
-(`5a1efc61`); **P2b** video posters — parked clips decode an isolated poster frame, prefix-keyed so it
-can never corrupt the live decode (`b663291c`). Source order per clip: compositor post-fx > live >
+**P1** transport + live snapshot; **P2a** with-effects source — `LayerCompositor::clip_post_fx_texture`
+; **P2c** generator cold-start — parked clips render an isolated default-look thumbnail
+; **P2b** video posters — parked clips decode an isolated poster frame, prefix-keyed so it
+can never corrupt the live decode. Source order per clip: compositor post-fx > live >
 generator cold-start > video poster. Each phase carried an adversarial multi-agent review. Remaining is
 polish (representative-frame video seek; modulated/override cold-start) and the running-app eye pass.
 
@@ -237,7 +237,7 @@ the Ableton macro picker, settings). Landed in the "professional pass" — `crat
 
 - **No shadows UI-wide, for now** (`color::SHADOWS_ENABLED = false`). On MANIFOLD's near-black stage
   palette a dark drop-shadow doesn't read as elevation, it reads as a smudge under the panel. Gated at
-  both production call sites rather than deleted — the §17 `draw_shadow` primitive and its constants
+  both production call sites rather than deleted — the section 17 `draw_shadow` primitive and its constants
   stay, so this is a one-line flip when a lighter theme or a different shadow treatment makes it worth
   re-enabling.
 - **Instant popup open, no enter/exit motion.** The 0.98→1 scale + fade tween (`enter_anim`, D17) that
@@ -278,7 +278,7 @@ the Ableton macro picker, settings). Landed in the "professional pass" — `crat
   shipped, are all harness-verifiable, and are low-to-medium risk. Do them first for fast, safe wins.
 - **Timeline (5) last among the build phases:** it's the heavy structural lift. 5a–5e are all done;
   only the Phase-6 taste pass on the running app remains.
-- **§16 guard runs throughout** so nothing re-drifts as we go.
+- **section 16 guard runs throughout** so nothing re-drifts as we go.
 
 ## 10. Decision gates (need Peter)
 

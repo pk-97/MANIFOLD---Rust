@@ -73,7 +73,7 @@ struct NodeRow {
     role: Role,
     aliases: &'static [&'static str],
     /// Bundled preset ids that use this node — auto-populated from a scan
-    /// of every shipping preset's graph (docs/NODE_VOCABULARY_AUDIT.md §8b),
+    /// of every shipping preset's graph (docs/NODE_VOCABULARY_AUDIT.md section 8b),
     /// never hand-written, so it cannot go stale.
     examples: Vec<String>,
     inputs: Vec<PortRow>,
@@ -136,7 +136,7 @@ fn is_test_fixture(type_id: &str) -> bool {
 /// inside a group still counts, and inverts node-usage into
 /// `type_id -> sorted, deduped preset ids`. Computed fresh at catalog-build
 /// time from the live registry, so — unlike a hand-maintained list — it
-/// cannot go stale (docs/NODE_VOCABULARY_AUDIT.md §8b).
+/// cannot go stale (docs/NODE_VOCABULARY_AUDIT.md section 8b).
 fn preset_examples() -> AHashMap<String, Vec<String>> {
     fn walk(nodes: &[EffectGraphNode], preset_id: &str, out: &mut AHashMap<String, Vec<String>>) {
         for n in nodes {
@@ -643,7 +643,7 @@ mod tests {
         }
     }
 
-    /// docs/NODE_VOCABULARY_AUDIT.md §8c completeness gate: every
+    /// docs/NODE_VOCABULARY_AUDIT.md section 8c completeness gate: every
     /// palette-visible node (Atom or Driver stratum — hidden/legacy/
     /// `system.*` nodes are `Unlisted`, from having no `picker:`, and are
     /// exempt) must ship a non-empty label, summary, category, and alias

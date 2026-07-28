@@ -1,10 +1,10 @@
 //! MetalFX Temporal Scaler integration — motion-vector-fed,
-//! history-accumulating upscaling (RAYTRACING_DESIGN.md §5.2 P4).
+//! history-accumulating upscaling (RAYTRACING_DESIGN.md section 5.2 P4).
 //!
 //! Companion to `metalfx_upscaler.rs` (the spatial, single-frame variant,
 //! the template this module follows). The temporal variant additionally
 //! consumes depth + motion vectors (the exact formats W0 stores per-scene
-//! for RT-enabled scenes, GBUFFER_DESIGN.md §2 D2/D5) and blends across
+//! for RT-enabled scenes, GBUFFER_DESIGN.md section 2 D2/D5) and blends across
 //! frames, so callers must:
 //!   1. Apply [`jitter_offset`] to the scene camera's projection BEFORE
 //!      rendering color/depth/velocity at `src_w x src_h` — this is what

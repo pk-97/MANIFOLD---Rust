@@ -85,7 +85,7 @@ pub trait PrimitiveSpec: Send {
     const PARAMS: &'static [ParamDef];
 
     /// Fusion classification — whether/how this primitive folds into a fused
-    /// kernel (freeze/fusion compiler, design doc §12). Defaults to
+    /// kernel (freeze/fusion compiler, design doc section 12). Defaults to
     /// [`FusionKind::Boundary`] (never fused), so the compiler only fuses what
     /// an atom explicitly opts into. Set via the macro's `fusion_kind:` field.
     const FUSION_KIND: crate::node_graph::freeze::classify::FusionKind =
@@ -126,7 +126,7 @@ pub trait PrimitiveSpec: Send {
     /// Optional fusable body fragment: a WGSL `fn body(...)` with no global
     /// accesses (purity-checked) that the fusion codegen chains into one
     /// kernel — and from which the standalone `cs_main` is generated
-    /// (single-source authoring, design doc §12). `None` = no body; the
+    /// (single-source authoring, design doc section 12). `None` = no body; the
     /// primitive's own hand-written kernel is authoritative. Set via the
     /// macro's `wgsl_body:` field (typically `include_str!("shaders/x_body.wgsl")`).
     const WGSL_BODY: Option<&'static str> = None;
@@ -1166,7 +1166,7 @@ macro_rules! __primitive_port_type {
     // string literal (mirrors the `Channels[...]` array-port macro).
     // The texture's element-type per slot is implicit in the texture
     // format (no per-slot type required). See
-    // `docs/CHANNEL_TYPE_SYSTEM.md` §17.
+    // `docs/CHANNEL_TYPE_SYSTEM.md` section 17.
     (Texture2D [
         R : $r:tt ,
         G : $g:tt ,
@@ -1225,7 +1225,7 @@ macro_rules! __primitive_port_type {
     };
     // `Channels[permissive]` — a port that accepts any Channels signature.
     // Used by generic transform operators (rename_channel, reorder_channels,
-    // select_channels, channel_math). The §11.4 allow-list gates which
+    // select_channels, channel_math). The section 11.4 allow-list gates which
     // primitives may legitimately declare Permissive — Phase 3 wires the
     // enforcement test.
     (Channels [ permissive ]) => {
@@ -1327,7 +1327,7 @@ macro_rules! __channels_specs {
 /// declaration to a [`ChannelName`](crate::node_graph::ports::ChannelName).
 /// Accepts either a `well_known::*` constant ident or an inline string
 /// literal — same dual-form policy as `__channels_specs!` for Array
-/// ports (per `docs/CHANNEL_TYPE_SYSTEM.md` §17).
+/// ports (per `docs/CHANNEL_TYPE_SYSTEM.md` section 17).
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __texture_channel_name {
@@ -1348,7 +1348,7 @@ macro_rules! __texture_channel_name {
 // (c) plugs into the `EffectNode` blanket impl, and (d) exposes the AI
 // metadata. No GPU work — the `run` body is a no-op since we only
 // care about the surface here. Real production primitives land in
-// subsequent commits (§6.1 onward).
+// subsequent commits (section 6.1 onward).
 
 #[cfg(test)]
 mod tests {
@@ -1774,7 +1774,7 @@ mod tests {
         );
     }
 
-    // ─── §17: Texture2D channel-signature macro smoke primitives ─────
+    // ─── section 17: Texture2D channel-signature macro smoke primitives ─────
 
     // A primitive whose output is a typed Texture2D — exercises the
     // new `Texture2D[R: Name, G: Name, B: Name, A: Name]` macro arm

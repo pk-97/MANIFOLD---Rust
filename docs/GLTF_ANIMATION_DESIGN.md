@@ -1,11 +1,11 @@
 # glTF Animation — imported clips as performable motion (node TRS, skinning, morphs)
 
-**Status:** SHIPPED (all phases A1–A4) · 2026-07-16/17 · Fable 5 design (Peter approved), executed by Sonnet 5 orchestrator · A1 SHIPPED 2026-07-16 (rigid TRS animation vertical slice: `node.gltf_animation_source`, beat-drive default, saw-LFO loop gesture, four-phase goldens, save/reload round-trip — BUG-170 logged (A1 filed it as BUG-187/200; deduped 2026-07-17 into BUG-170, the canonical five-asset entry), blocks the `AnimatedColorsCube`-style `KHR_animation_pointer` held-out case) · A2 SHIPPED 2026-07-16 (skinning vertical slice: `node.gltf_skinned_mesh_source` + `node.gltf_skeleton_pose` + `node.skin_mesh`, codegen-path + parity test, CesiumMan/Fox deform correctly, hot-path 5-7ms/frame — BUG-190 logged, `BrainStem.glb`'s 24-skinned-object case measures ~370ms/frame, NOT a named gate fixture, does not block) · A3 SHIPPED 2026-07-16 (morph-target animation: `node.gltf_morph_weights` (CPU weight sampler) + `node.morph_targets_blend` (GPU codegen-path N-ary additive blend) + `node.gltf_morph_deltas_source` (background-thread target-delta loader, added mid-phase — vertex-scale delta data doesn't fit the import-time Table convention), `node.morph_mesh` untouched per its header's boundary; AnimatedMorphCube/MorphStressTest animate correctly, parity+round-trip+hot-path gates green — §3's "through the morph_mesh shape" wording was superseded by the brief's re-derived N-ary additive-blend finding) · A4 SHIPPED 2026-07-17 (performance surface: D4 clip selector + Loop/Once/PingPong loop modes + retrigger-origin-shift, shared across all three CPU samplers via new `gltf_anim_shared.rs` — a deliberate deviation from A1–A3's per-primitive-duplication precedent, justified by real cross-primitive sync coupling; `progress` stays wire-only, a real "Rate" card knob substitutes for a literal progress-scrub override per the A4 phase brief's Deviation note below; Rate/Clip/Loop Mode/Retrigger card knobs stamped on every animated object; L3 flow `gltf-clip-scrub-retrigger.json` green — BUG-192 logged, `under_text` doesn't resolve against `param_card.rs`'s flat row layout, worked around with `Widget`/`nth` targeting in the one flow that hit it)
-**Prerequisites:** GLB_XFAIL_BURNDOWN_DESIGN.md P2 (owns the BUG-170 crate-bump verdict; its D8 may hand this doc three pointer-animation assets). No dependency on GLTF_MATERIAL_EXTENSIONS_DESIGN.md — the two can execute in either order.
-**Superseded note (2026-07-18):** this doc's keyframe-STORAGE decisions (A1's per-def `ParamValue::Table` convention, A4's compound-key row lookup tables) are SUPERSEDED by `docs/GLTF_ANIM_RUNTIME_V2_DESIGN.md` (BUILT P1–P4 on `lane/gltf-anim-v2`) — payload moved out of the graph def into a shared, file-backed, `Weak`-held cache with binary-search sampling. The runtime/performer surface this doc shipped (progress/rate/clip/loop/retrigger as graph params, the three sampler node identities) is UNCHANGED.
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
+**Status:** SHIPPED — all phases A1–A4 on main 2026-07-16/17 (rigid TRS, skinning, morph targets, performance surface). Per-phase as-built record: section 6 (As-built record). Open bugs from the wave live in beads: BUG-170 (gltf-crate-missing-field-node-parse-failure), BUG-190 (brainstem-24-skinned-objects-370ms-per-frame), BUG-192 (ui-automation-under-text-flat-card-rows). · Fable design (Peter approved), Sonnet orchestrator
+**Prerequisites:** none — shipped.
+**Superseded note (2026-07-18):** this doc's keyframe-STORAGE decisions are SUPERSEDED by `docs/GLTF_ANIM_RUNTIME_V2_DESIGN.md` (SHIPPED) — payload moved to a shared file-backed cache. The runtime/performer surface this doc shipped (progress/rate/clip/loop/retrigger params, the three sampler node identities) is UNCHANGED.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
-Peter's ask (2026-07-16): *"the ability to import animated glb files and scenes too."* Today animated glbs import as frozen statues: the importer reads no `animations`, `skins`, or morph-target data (verified 2026-07-16 — zero hits for JOINTS/WEIGHTS/animation parsing in `gltf_load.rs`/`gltf_import.rs`; `GLB_CONFORMANCE_DESIGN.md` §7 deferred item 7 scoped it out).
+Peter's ask (2026-07-16): *"the ability to import animated glb files and scenes too."* Today animated glbs import as frozen statues: the importer reads no `animations`, `skins`, or morph-target data (verified 2026-07-16 — zero hits for JOINTS/WEIGHTS/animation parsing in `gltf_load.rs`/`gltf_import.rs`; `GLB_CONFORMANCE_DESIGN.md` section 7 (Deferred (with triggers)) deferred item 7 scoped it out).
 
 Honesty about certification: this doc barely moves the conformance number — most animated Khronos assets (`BoxAnimated`, `CesiumMan`, `Fox`, `BrainStem`, `RiggedFigure`, `MorphPrimitivesTest`…) already **pass statically**, because the suite's checks render one converged frame. The value is the instrument, not the scoreboard.
 
@@ -24,15 +24,15 @@ Snapshot: meshes flow through the graph as first-class data — `gltf_mesh_sourc
 ## 2. Decisions (direction-level; each gets full treatment in the executing phase's re-derivation)
 
 - **D1 — Animation is graph-native: a clip source node + existing param wires.** Import produces `node.gltf_animation_source`: inputs a progress scalar (0..1), outputs the sampled values — per-node TRS as transform params, morph weights as scalars — wired to the same object params the static importer already sets. Sampling is CPU-side, content-thread, per-frame, allocation-free after load (pre-sorted keyframe tracks, binary-search + lerp/slerp/cubic per spec). Rejected: a parallel "animation player" subsystem outside the graph, because the graph IS the modulation system — anything else would re-invent param binding and lose the performance surface for free.
-- **D2 — Skinning is a fusable GPU mesh atom: `node.skin_mesh`.** Per-vertex joint blend (4 joints/weights per spec) is a barrier-free pure per-element kernel — it MUST ship on the freeze codegen path per the standing all-nodes-fusable rule (CLAUDE.md; `docs/ADDING_PRIMITIVES.md` §"The codegen path is mandatory"). Joint matrices arrive as a buffer input computed CPU-side from the sampled skeleton pose (matrix palette is small — spec-typical ≤ 256 joints; `BrainStem` is the stress case, re-derive its joint count). `MeshData` grows optional JOINTS_0/WEIGHTS_0 attributes (⚠ VERIFY-AT-IMPL: MeshData's attribute model — extend the way UVs/normals ride today, one owner, no parallel skinned-mesh type). Morph targets reuse the `morph_mesh` shape (positions-delta blend) with imported targets. Rejected: CPU skinning, because a 50k-vertex character per frame on the content thread is hot-path allocation/latency the two-thread model exists to avoid.
+- **D2 — Skinning is a fusable GPU mesh atom: `node.skin_mesh`.** Per-vertex joint blend (4 joints/weights per spec) is a barrier-free pure per-element kernel — it MUST ship on the freeze codegen path per the standing all-nodes-fusable rule (CLAUDE.md; `docs/ADDING_PRIMITIVES.md` section"The codegen path is mandatory"). Joint matrices arrive as a buffer input computed CPU-side from the sampled skeleton pose (matrix palette is small — spec-typical ≤ 256 joints; `BrainStem` is the stress case, re-derive its joint count). `MeshData` grows optional JOINTS_0/WEIGHTS_0 attributes (⚠ VERIFY-AT-IMPL: MeshData's attribute model — extend the way UVs/normals ride today, one owner, no parallel skinned-mesh type). Morph targets reuse the `morph_mesh` shape (positions-delta blend) with imported targets. Rejected: CPU skinning, because a 50k-vertex character per frame on the content thread is hot-path allocation/latency the two-thread model exists to avoid.
 - **D3 — Seconds→beats at import, performer-facing progress at runtime.** The clip's duration in seconds is metadata; the runtime surface is normalized progress (0..1) plus a default drive: `progress = wrap(beat × rate / clip_beats)` where `clip_beats = duration_s × bpm / 60` computed live from the transport (beats primary; Seconds only at the glTF edge — the house time invariant). The performer sees: progress (scrub/modulate), rate, loop mode (loop / once / ping-pong), and a retrigger input (trigger resets phase — the phantom-clip/trigger precedent). Rejected: storing a beats conversion at import time, because it bakes a BPM into the asset and goes wrong the moment the tempo changes live — the exact class of bug the beats-primary rule exists to kill.
 - **D4 — Multi-clip glbs expose a clip selector param** (glTF `animations[]` is a list; `Fox` ships three). Inline-mux option-table pattern (`feedback_inline_mux_option_table_params`). Blending between clips is Deferred — trigger: a real performance need Peter names, not spec completeness.
 - **D5 — BUG-170's pointer-extension assets** (`KHR_animation_pointer`, `KHR_node_visibility`) join this doc's scope only if the burn-down's crate bump fails; animation *pointer* targets (animating arbitrary properties, not just TRS/weights) are Deferred regardless — trigger: an asset Peter actually wants that uses them.
 
-## 3. Phasing (conformance level — one session each; full briefs written by the executing orchestrator against re-derived inventory, per STANDARD §9)
+## 3. Phasing (conformance level — one session each; full briefs written by the executing orchestrator against re-derived inventory, per STANDARD section 9)
 
-- **A1 — Rigid animation vertical slice.** Parse `animations[]` (TRS channels only), `node.gltf_animation_source`, default beat-drive, progress param. Gate: `BoxAnimated.glb` visibly animates in a headless multi-frame render (PNG sequence at progress 0/0.25/0.5/0.75 — four distinct goldens); save→reload→animate round-trip (STANDARD §5 round-trip gate); performer-gesture line: progress driven by a saw LFO loops the clip cleanly at the wrap point. The vertical slice runs model → graph → pixels before anything else lands — DESIGN_AUTHORING §7.
-- **A2 — Skinning.** JOINTS/WEIGHTS through `MeshData`, `node.skin_mesh` (codegen path + generated-vs-hand parity test, mandatory), skeleton pose sampling. Gate: `CesiumMan`/`Fox` animate; parity test green; hot-path check (`MANIFOLD_RENDER_TRACE=1`, no frame >20ms — STANDARD §5 content-thread gate).
+- **A1 — Rigid animation vertical slice.** Parse `animations[]` (TRS channels only), `node.gltf_animation_source`, default beat-drive, progress param. Gate: `BoxAnimated.glb` visibly animates in a headless multi-frame render (PNG sequence at progress 0/0.25/0.5/0.75 — four distinct goldens); save→reload→animate round-trip (STANDARD section 5 round-trip gate); performer-gesture line: progress driven by a saw LFO loops the clip cleanly at the wrap point. The vertical slice runs model → graph → pixels before anything else lands — DESIGN_AUTHORING section 7.
+- **A2 — Skinning.** JOINTS/WEIGHTS through `MeshData`, `node.skin_mesh` (codegen path + generated-vs-hand parity test, mandatory), skeleton pose sampling. Gate: `CesiumMan`/`Fox` animate; parity test green; hot-path check (`MANIFOLD_RENDER_TRACE=1`, no frame >20ms — STANDARD section 5 content-thread gate).
 - **A3 — Morph-target animation.** Imported targets + weight channels through the `morph_mesh` shape. Gate: `AnimatedMorphCube` + `MorphStressTest` animate; four-phase goldens.
 - **A4 — Performance surface.** Clip selector (D4), loop modes, retrigger wiring, perform-UI exposure per `feedback_param_values_is_performance_surface`. Gate: L3 ui-flow driving retrigger + scrub; performer gesture: retrigger on a MIDI note fires the clip from zero within one frame.
 
@@ -43,12 +43,12 @@ Snapshot: meshes flow through the graph as first-class data — `gltf_mesh_sourc
 
 ## A1 Phase Brief (written 2026-07-16, orchestrating session, re-derived inventory)
 
-**Entry state:** `origin/main` HEAD `39bff66c` (E6 SHIPPED). `tests/fixtures/gltf/khronos/BoxAnimated.glb` present. `AnimatedCube`/`AnimatedTriangle` (named in the handoff prompt) have **no glTF-Binary variant at the Khronos pin** (`docs/GLB_CONFORMANCE_STATUS.md:155-156`) — not fetchable, not a blocker; `BoxAnimated.glb` alone is the doc's own A1 gate fixture (§3).
+**Entry state:** `origin/main` HEAD `39bff66c` (E6 SHIPPED). `tests/fixtures/gltf/khronos/BoxAnimated.glb` present. `AnimatedCube`/`AnimatedTriangle` (named in the handoff prompt) have **no glTF-Binary variant at the Khronos pin** (`docs/GLB_CONFORMANCE_STATUS.md:155-156`) — not fetchable, not a blocker; `BoxAnimated.glb` alone is the doc's own A1 gate fixture (section 3).
 
 **Read-back / re-derived inventory:**
-- `crates/manifold-renderer/src/node_graph/gltf_load.rs` — zero hits for `animations()`/`skins()`/JOINTS/WEIGHTS (confirmed live, matches §1's audit). Add animation-track parsing here, alongside the existing mesh-flatten parse — same "one parse entry" doctrine as `MANIFOLD_SUPPORTED_EXTENSIONS`/`the_one_parse_entry` (file header).
+- `crates/manifold-renderer/src/node_graph/gltf_load.rs` — zero hits for `animations()`/`skins()`/JOINTS/WEIGHTS (confirmed live, matches section 1's audit). Add animation-track parsing here, alongside the existing mesh-flatten parse — same "one parse entry" doctrine as `MANIFOLD_SUPPORTED_EXTENSIONS`/`the_one_parse_entry` (file header).
 - `crates/manifold-renderer/src/node_graph/gltf_import.rs::build_import_graph` — each material becomes a node **group** containing its own `node.transform_3d` (line ~1008-1020), currently seeded with a static recenter translation only (`pos_x/y/z = -center`). Critically: **`node.transform_3d`'s all nine TRS params (`pos_x/y/z`, `rot_x/y/z`, `scale_x/y/z`) are ALREADY port-shadowed by same-named optional scalar input ports** (`crates/manifold-renderer/src/node_graph/primitives/transform_3d.rs`). D1 — "animating a rigid node = animating params" — is therefore: wire a new source node's per-channel scalar outputs into this existing `transform_3d`'s input ports. No change to `render_scene` needed.
-- `node.beat_ramp` and `node.lfo` (shape=Saw, in `LFO_SHAPES`) already exist — the saw-LFO performer gesture (§3 A1 gate) wires an existing `node.lfo` (shape=Saw) into the new source node's `progress` input port; no new LFO primitive needed.
+- `node.beat_ramp` and `node.lfo` (shape=Saw, in `LFO_SHAPES`) already exist — the saw-LFO performer gesture (section 3 A1 gate) wires an existing `node.lfo` (shape=Saw) into the new source node's `progress` input port; no new LFO primitive needed.
 - `ParamValue::Table(Arc<TableData>)` (`parameters.rs:111` `TableData{ rows: Vec<Vec<f32>>, cols }`) is the existing vocabulary for small 2D numeric blobs and is Table params' proven serialization path (V1/V2 project formats already round-trip `ParamValue` variants) — use it to carry parsed keyframe tracks (one row per keyframe: `[time_s, x, y, z]` for translation/scale, `[time_s, x, y, z, w]` for rotation quaternion) rather than inventing a new param/wire type.
 - **Known scope boundary, not solved this phase:** glTF animation channels target scene-graph *node* indices; MANIFOLD's import graph groups objects by *material* (`summarize_node` keys by `material().index()`, world-combining node instances). For `BoxAnimated.glb` (one node, one mesh, one material) this is 1:1 and the vertical slice is unaffected. Multi-node-per-material assets (instancing) are out of scope for A1 — re-derive at A2/A4 if a real asset needs it.
 
@@ -62,25 +62,25 @@ Snapshot: meshes flow through the graph as first-class data — `gltf_mesh_sourc
 
 **Gate:**
 - Positive: a new `#[test]` in `gltf_import.rs` (or a sibling test module) rendering the four-phase PNG sequence for `BoxAnimated.glb` to `tests/fixtures/gltf/goldens/` (follow the existing `imported_*_renders_faithfully_to_png` naming/goldens convention) — four distinct, non-identical PNGs. A round-trip test: build the import graph, serialize via the V1/V2 project path, reload, re-render at progress 0.5, confirm pixel match with the pre-reload progress-0.5 render. A saw-LFO loop test asserting near-progress-0 and near-progress-1 renders are near-identical (loop continuity).
-- Phase-sequence frames go through `assert_phase_sequence_distinct`: every run writes to `MESH_SNAP_OUT_DIR` (gitignored), and the committed `tests/fixtures/gltf/goldens/` copies are refreshed only under `MANIFOLD_REBASELINE_GOLDENS=1`, after the assertions pass. A failing run must never overwrite the goldens it just contradicted (2026-07-26, BUG-325).
+- Phase-sequence frames go through `assert_phase_sequence_distinct`: every run writes to `MESH_SNAP_OUT_DIR` (gitignored), and the committed `tests/fixtures/gltf/goldens/` copies are refreshed only under `MANIFOLD_REBASELINE_GOLDENS=1`, after the assertions pass. A failing run must never overwrite the goldens it just contradicted (2026-07-26, BUG-325 (box-animated-test-renders-all-zero-frames)).
 - Negative: `rg -n 'JOINTS_0|WEIGHTS_0|skins\(\)'` in this phase's diff returns zero hits (A1 is TRS-only, skinning is A2 — don't scope-creep).
 - Test scope: focused — `cargo test -p manifold-renderer --lib gltf_import`, `... gltf_load`, `... primitives::gltf_animation_source` (new render/round-trip tests are GPU-touching via `render_scene`'s existing headless path — check whether the existing `imported_*_renders_to_png` tests already require `--features gpu-proofs`; match that convention, don't invent a new one).
 - Clippy: `cargo clippy -p manifold-renderer -- -D warnings` (worktree-scoped).
 
 **Forbidden moves:** a parallel "animation player" outside the graph (D1, decided); baking seconds→beats at import (D3, decided); CPU skinning or scope-creep into A2 (D2/A2 boundary); silently dropping a channel type A1 doesn't handle (fail loudly or leave inert-but-present, per the round-trip corollary); synthesizing the keyframe-sampling math from memory instead of implementing straight off the glTF spec's defined interpolation (LINEAR only for A1 — CUBICSPLINE/STEP are Deferred unless `BoxAnimated` needs them, re-derive at execution).
 
-**Performer-gesture line:** progress driven by a saw LFO loops the clip cleanly at the wrap point (§3, restated) — this is gate item 3 above, not optional.
+**Performer-gesture line:** progress driven by a saw LFO loops the clip cleanly at the wrap point (section 3, restated) — this is gate item 3 above, not optional.
 
 ## A2 Phase Brief (written 2026-07-16, orchestrating session, re-derived inventory)
 
 **Entry state:** `origin/main` HEAD `87b803fd` (A1 SHIPPED). Test fixtures present:
 `tests/fixtures/gltf/khronos/{CesiumMan,Fox,BrainStem,RiggedFigure,RiggedSimple}.glb`.
-`CesiumMan`/`Fox` are the doc's named A2 gate fixtures (§3); `BrainStem` was named as
+`CesiumMan`/`Fox` are the doc's named A2 gate fixtures (section 3); `BrainStem` was named as
 "the joint-count stress case, re-derive its joint count" — re-derived below, and it
 turned out to be the WRONG stress axis (see Deviation from D2 below).
 
 **Re-derived / re-confirmed inventory:**
-- `MeshData` doesn't exist as a named type (§1's audit note was right to flag this
+- `MeshData` doesn't exist as a named type (section 1's audit note was right to flag this
   generically) — the real vertex type is `crates::generators::mesh_common::MeshVertex`
   (48 bytes, fixed position/normal/uv layout), used pervasively. D2's "MeshData grows
   optional JOINTS_0/WEIGHTS_0 attributes" is resolved the way `node.morph_mesh`'s
@@ -107,7 +107,7 @@ turned out to be the WRONG stress axis (see Deviation from D2 below).
   `GltfMaterialInfo` grows `skin: Option<GltfObjectSkin>`, resolved under the IDENTICAL
   single-node-per-material scope boundary A1's `animation` field already uses.
 - **Real deviation from D2, found by rendering not assumed:** a skinned mesh's
-  positioning comes ENTIRELY from the joint hierarchy — glTF 2.0 §3.7.3.3 says the
+  positioning comes ENTIRELY from the joint hierarchy — glTF 2.0 section 3.7.3.3 says the
   mesh-owning node's own transform is ignored for a skinned mesh. The existing
   `node.gltf_mesh_source` Material selector WORLD-TRANSFORMS vertices by the
   contributing node's own bind matrix (correct for every static/rigid object, wrong for
@@ -137,7 +137,7 @@ turned out to be the WRONG stress axis (see Deviation from D2 below).
   against per-joint row RANGES inside the flat Tables (one linear scan per joint per
   frame to find the range — cheap at the joint counts these fixtures carry, confirmed by
   the hot-path gate below) instead of one Table per channel.
-- **§2.5 audit (CLAUDE.md, mandatory before proposing `node.skin_mesh`):**
+- **section 2.5 audit (CLAUDE.md, mandatory before proposing `node.skin_mesh`):**
   `rg 'purpose: "' crates/manifold-renderer/src/node_graph/primitives/ -g "*.rs"` — no
   existing primitive does per-vertex joint blending, matrix-palette lookup, or anything
   adjacent (`node.morph_mesh` is the nearest relative — a coincident two-mesh lerp with
@@ -174,7 +174,7 @@ turned out to be the WRONG stress axis (see Deviation from D2 below).
    clamp rather than read out of bounds. Mandatory generated-vs-hand parity test: since
    this is a brand-new primitive with no legacy predecessor, "hand" is an
    independently-implemented Rust reference of the committed formula
-   (DECOMPOSING_GENERATORS.md §9's documented convention for exactly this case), not a
+   (DECOMPOSING_GENERATORS.md section 9 (The acceptance bar)'s documented convention for exactly this case), not a
    parallel `.wgsl` file.
 5. `gltf_import.rs::build_import_graph`: when `GltfMaterialInfo::skin` resolves, an
    object's group wires `node.gltf_skinned_mesh_source` → `node.skin_mesh` (`in`/`joints`/
@@ -219,7 +219,7 @@ that measures CesiumMan at 6ms — an 18x-over-budget number worth taking seriou
 NOT diagnosed this session (BrainStem was never a named A2 gate fixture; the actual gate
 fixtures pass cleanly) and NOT something to guess-fix under session time pressure per
 DESIGN_AUTHORING.md's discipline. Logged as **BUG-190**, cross-referenced against
-BUG-189 (a same-shaped "many-material glTF import has a large resolution-independent
+BUG-189 (import-graph-10ms-resolution-independent-gpu-flo…) (a same-shaped "many-material glTF import has a large resolution-independent
 per-frame GPU floor" finding from the same day) since they may share a root cause.
 
 **Forbidden moves (all held):** CPU skinning (D2, decided — `node.skin_mesh` is GPU,
@@ -231,15 +231,15 @@ scope-creep into A3 (morph targets) or A4 (clip selector, performance surface, r
 
 **Entry state:** `origin/main` HEAD `6fb1714d` (A2 SHIPPED). Test fixtures present:
 `tests/fixtures/gltf/khronos/{AnimatedMorphCube,MorphStressTest,MorphPrimitivesTest}.glb`.
-`AnimatedMorphCube`/`MorphStressTest` are the doc's named A3 gate fixtures (§3).
+`AnimatedMorphCube`/`MorphStressTest` are the doc's named A3 gate fixtures (section 3).
 
-**Re-derived inventory (this phase's finding overrides §3's A3 line — verified live, not
+**Re-derived inventory (this phase's finding overrides section 3's A3 line — verified live, not
 assumed):**
 - `AnimatedMorphCube.glb`: 2 morph targets, 1 animation, channel path `weights`.
 - `MorphStressTest.glb`: 8 morph targets, 3 animations, all channel path `weights`.
 - `MorphPrimitivesTest.glb`: 1 morph target, static `mesh.weights = [0.5]`, no animation —
   useful as a held-out static-weight smoke case.
-- §3's phrasing ("through the `morph_mesh` shape") does not fit what's actually on disk.
+- section 3's phrasing ("through the `morph_mesh` shape") does not fit what's actually on disk.
   `node.morph_mesh` (`primitives/morph_mesh.rs:1-11`) is architecturally a **two-mesh**
   lerp (`pos = mix(a, b, t*w)`), and its own header already warns: *"this is the static
   two-mesh lerp only; glTF morph-target playback is a separate future design (D9), do not
@@ -248,7 +248,7 @@ assumed):**
   independently weighted and live-sampled — not a pairwise lerp. Same shape of surprise as
   A2's node-transform deviation (see A2 brief above): the doc's assumption doesn't survive
   contact with the real assets.
-- §2.5 audit (CLAUDE.md, mandatory before proposing new primitives):
+- section 2.5 audit (CLAUDE.md, mandatory before proposing new primitives):
   `rg 'purpose: "' crates/manifold-renderer/src/node_graph/primitives/` — no existing
   primitive does N-ary weighted delta-sum blending. `node.morph_mesh` and
   `node.blend_copies` are the nearest relatives, both strictly 2-ary. Genuinely new,
@@ -302,7 +302,7 @@ assumed):**
 3. `node.morph_targets_blend` (`primitives/morph_targets_blend.rs`) — per Fable's shape
    above; codegen path mandatory (`standalone_for_spec::<Self>()`, no hand `include_str!`
    runtime kernel); generated-vs-hand parity test (independent Rust reference formula, per
-   DECOMPOSING_GENERATORS.md §9's "brand-new primitive, no legacy predecessor" convention —
+   DECOMPOSING_GENERATORS.md section 9 (The acceptance bar)'s "brand-new primitive, no legacy predecessor" convention —
    same pattern A2's `skin_mesh` parity test already used).
 4. `gltf_import.rs::build_import_graph`: when an object's mesh carries morph targets, wire
    `node.gltf_mesh_source` (base mesh) → `node.morph_targets_blend.in`, `node.gltf_morph_weights.weights`
@@ -393,7 +393,7 @@ hard gate (A2 didn't repeat A1's LFO test either — precedent for reasonable sc
   `rate`/`clip_index`/`loop_mode`/`trigger_count` card knobs for every
   animated object's group, alongside the existing Camera/Sun/Environment
   cards.
-- **Deviation from §3's literal "scrub" wording, found at execution, not
+- **Deviation from section 3's literal "scrub" wording, found at execution, not
   assumed:** a `progress` CARD OVERRIDE has no clean semantics. Outer-card
   bindings are architecturally always-live (`feedback_param_values_is_performance_surface`:
   "every card slider reads/writes there each frame") — there is no "untouched"
@@ -505,7 +505,7 @@ hard gate (A2 didn't repeat A1's LFO test either — precedent for reasonable sc
   `ParamCommit(...)`) to be a genuine `EditingService`-bound write, not a
   local-only UI toggle — and clicks the Retrigger button, resolved via
   `{"text":"▶","nth":1}` (empirically disambiguated: `under_text` does not
-  resolve against this card's flat per-row layout — logged as BUG-191, a
+  resolve against this card's flat per-row layout — logged as BUG-191 (perf-soak-start-seek-first-frame-spike), a
   real `ui-automation` gap worth fixing generically, not chased this
   session) landing inside its correct on-screen bounds. Widget-id targeting
   (used for the Rate drag; text/`under_text` queries can't reach a
@@ -533,3 +533,12 @@ TRS/joint/morph specifics).
 
 ## 5. Deferred
 - Clip blending/crossfade (D4) · animation-pointer property targets (D5) · IK/retargeting (never in scope for import) · timeline-clip integration (an imported animation as a timeline clip with in/out points — real feature, but it builds ON A1–A4's progress param; trigger: Peter's call after playing with A4).
+
+## 6. As-built record
+
+Moved from the status header 2026-07-28.
+
+- **A1 (2026-07-16) — rigid TRS vertical slice:** `node.gltf_animation_source`, beat-drive default, saw-LFO loop gesture, four-phase goldens, save/reload round-trip. BUG-170 (gltf-crate-missing-field-node-parse-failure) logged (A1 filed it as BUG-187/BUG-200; deduped 2026-07-17 into BUG-170, the canonical five-asset entry) — blocks the `AnimatedColorsCube`-style `KHR_animation_pointer` held-out case.
+- **A2 (2026-07-16) — skinning vertical slice:** `node.gltf_skinned_mesh_source` + `node.gltf_skeleton_pose` + `node.skin_mesh`, codegen-path + parity test; CesiumMan/Fox deform correctly at 5–7 ms/frame. BUG-190 (brainstem-24-skinned-objects-370ms-per-frame) logged; `BrainStem.glb` is not a named gate fixture and did not block.
+- **A3 (2026-07-16) — morph targets:** `node.gltf_morph_weights` (CPU weight sampler) + `node.morph_targets_blend` (GPU codegen-path N-ary additive blend) + `node.gltf_morph_deltas_source` (background-thread delta loader, added mid-phase — vertex-scale delta data doesn't fit the import-time Table convention); `node.morph_mesh` untouched per its header's boundary. AnimatedMorphCube/MorphStressTest animate; parity + round-trip + hot-path gates green. Section 3 (Phasing)'s "through the morph_mesh shape" wording was superseded by the brief's re-derived N-ary additive-blend finding.
+- **A4 (2026-07-17) — performance surface:** D4 clip selector + Loop/Once/PingPong + retrigger-origin-shift, shared across all three CPU samplers via `gltf_anim_shared.rs` — a deliberate deviation from A1–A3's per-primitive duplication, justified by real cross-primitive sync coupling. `progress` stays wire-only; a real "Rate" card knob substitutes for a literal progress-scrub override per the A4 brief's Deviation note. Rate/Clip/Loop Mode/Retrigger knobs stamped on every animated object; L3 flow `gltf-clip-scrub-retrigger.json` green. BUG-192 (ui-automation-under-text-flat-card-rows) logged — `under_text` doesn't resolve against `param_card.rs`'s flat rows; worked around with `Widget`/`nth` targeting.

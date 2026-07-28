@@ -1,59 +1,8 @@
 # Param Two-Way Binding — node-face edits on bound params write back through the inverse mapping
 
-**Status:** SHIPPED — P1 SHIPPED 2026-07-14 (Sonnet 5, `bc2f2c0b`) · P2 SHIPPED 2026-07-15 (Fable 5 orchestrating 2 Sonnet agents, `bug/158-two-way-p2`) · authored 2026-07-14 · Fable 5
-
-**P2 execution note (2026-07-15):** the input-layer scrub prevention and its
-unit test turned out to already exist in-tree (`interaction.rs:873`,
-`wire_driven_row_is_read_only_no_scrub` — landed earlier with the wire-driven
-read-only pass), so P2's built scope was: (a) the real data gap — D5's live
-fill was impossible because `live_node_params` read the param map, which a
-wire never writes; a new executor `live_scalar_inputs` capture now feeds
-wire-resolved values to the tap, param-map fallback when unwired; (b) the
-visual treatment — whole-slider dim (not just text), tinted jack halo behind
-the input socket, hover tooltip "driven by <node>.<port>", click highlights
-the feeding wire via the existing wire-focus render path, and D6's dual
-attribution (`← wired (↳ outer)`) replacing the old wire-hides-binding label.
-L2 PNG gate: graph scene, Tesseract — wired and bound rows visibly differ on
-one node. **Unverified edge:** per-node live values inside a FUSED region rest
-on FREEZE_COMPILER_MAP cut rule 10 (control producers survive the rewrite) by
-doc-level reasoning only, not an empirical fused run; if a fused region ever
-collapses a wired node's step, the tap soft-fails to the stale param map —
-degraded display, never a crash. Group-face mirror rows get the dim/jack
-treatment but not the `driven by` source label (needs inner-level node list;
-scoped out, noted in `apply_driven_state`'s doc comment).
-**Prerequisites:** none (BUG-158's investigation + Fable design consult are folded in; all code anchors re-verified 2026-07-14)
-
-**P1 execution note (2026-07-14, Sonnet):** shipped the inverse machinery
-(D2/D3), the dispatch-layer reroute (D1), D4's effective-value display, and
-D9's freeze-on-unmap. One judgment call, not pre-approved in this doc: §3's
-"emit the ParamSnapshot/ParamChanged/ParamCommit lifecycle" assumed a
-gesture-boundary signal that doesn't exist on the wire for a plain node-face
-`SetGraphNodeParam`/`ParamScrub` (only card-slider drags and group-face
-mirror rows carry snapshot/commit ticks; a plain node-face scrub emits one
-`SetGraphNodeParam` per pointer-move with no press/release signal reaching
-the app). Fix: added `GraphEditCommand::EndGraphNodeParamScrub`, emitted
-unconditionally on `ParamScrub` release (a no-op for unbound rows), so the
-dispatch layer can close a bound-param drag with ONE undo-worthy
-`ChangeGraphParamCommand` covering the whole gesture instead of one per
-move — the smallest addition matching the existing `NodeMove`
-release-emits-one-command precedent in the same file. D10's sequencing rule
-(P2 must not trail a shipped P1) was knowingly not followed: only one phase
-fit this session, and P1 leaves wired-param behavior completely unchanged
-(a wired param still runs the pre-existing `SetGraphNodeParamCommand` path
-untouched), so the specific harm D10 names — wire-driven snap-back reading
-as newly broken — does not occur. The P1 gate's named integration test
-(`node_face_edit_on_bound_param_moves_card_not_def`) was NOT written
-verbatim: `Application`-level dispatch needs a winit/GPU harness this
-session didn't have one for. In its place: `binding_reroute_tests` in
-`crates/manifold-app/src/app_render.rs` unit-tests the resolution helpers
-(`binding_for_node_param`, `node_param_is_wired`) the reroute is built from,
-plus `card_reshape_roundtrips` / `macro_curve_inverse_roundtrips`
-(manifold-core) for the inverse math, and
-`unexpose_user_binding_freezes_effective_value_into_def_slot`
-(manifold-editing) for D9. The full vertical path (a real node-face drag
-moving both the card and the render) has not been driven end-to-end by an
-automated test — flagged for whoever picks up P2 or does the look-pass.
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
+**Status:** SHIPPED — P1 2026-07-14, P2 2026-07-15; closes BUG-158 (mapped-param-edits-snap-back-no-two-way-binding). Standing edges: the full vertical path (a real node-face drag moving both card and render) has no automated end-to-end test — flagged for the look-pass; fused-region live values rest on FREEZE_COMPILER_MAP cut rule 10 (control producers survive the rewrite) by reasoning only — the tap soft-fails to the stale param map, degraded display, never a crash; group-face mirror rows lack the `driven by` source label. Execution notes: section 8 (As-built execution notes). · authored 2026-07-14 · Fable
+**Prerequisites:** none (BUG-158's investigation + design consult folded in; anchors re-verified 2026-07-14)
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
 Closes **BUG-158** (mapped-param-edits-snap-back-no-two-way-binding). The governing
 insight: a card binding makes the outer card param the *sole authority* the render
@@ -218,7 +167,7 @@ The reroute is a dispatch-layer concern where both vocabularies already meet.
 **Entry state:** `rg -n "fn apply_card_reshape" crates/manifold-core/src/effects.rs`
 hits `:489`; `rg -n "SetGraphNodeParam" crates/manifold-app/src/app_render.rs` hits
 the `:2480` arm; re-verify both anchors.
-**Read-back:** this doc §2–§4 whole; restate D1, D2's signature, the two forbidden
+**Read-back:** this doc section 2–section 4 whole; restate D1, D2's signature, the two forbidden
 architectures, and what the entry checks found — before any code.
 **Deliverables:** `MacroCurve::inverse` (macro_bank.rs) + `invert_card_reshape`
 (effects.rs) with the two roundtrip tests; the dispatch-arm reroute with resolved-at-
@@ -239,7 +188,7 @@ changes continuously; release, Cmd-Z, both ends return together.
 **Demo:** `ui-snap` editor scene variant with a bound param at a non-default value —
 node row and card slider visibly agree (L2). **Test scope:** focused crates above;
 workspace sweep at landing.
-**Forbidden moves:** the two named wrong architectures (§3); TODO-as-deferral for D9;
+**Forbidden moves:** the two named wrong architectures (section 3); TODO-as-deferral for D9;
 touching `scalar_or_param`.
 
 ### P2 — Driven treatment + input-layer prevention (one session)
@@ -247,7 +196,7 @@ touching `scalar_or_param`.
 **Read-back:** D5–D7, D10; the existing driven-dim block in `render.rs`.
 **Deliverables:** driven readout row per D5 (dimmed track + live fill + input-jack
 glyph + hover source + click-highlights-wire); input-layer scrub prevention with its
-unit test (Invariants §4); D6's driven-wins ordering including the visible binding
+unit test (Invariants section 4); D6's driven-wins ordering including the visible binding
 badge; D7's badge tooltip naming the outer param.
 **Gate (positive):** gesture-layer test green; `cargo test -p manifold-ui --lib`;
 **acceptance demo (L2, mandatory):** headless editor PNG with one wire-driven param
@@ -263,7 +212,7 @@ grabs, the row visibly says why, and clicking it lights the wire to the LFO.
 row rendering); hiding the binding badge under the driven state (D6 keeps it).
 
 ## 6. Decided — do not reopen
-1. Reroute at dispatch; no dual-write; no binding-skip flags (D1, §3).
+1. Reroute at dispatch; no dual-write; no binding-skip flags (D1, section 3).
 2. Inverse lives beside forward in `effects.rs`; curve inverse on `MacroCurve` (D2, D3).
 3. All four curves invertible — no read-only fallback for curves in v1 (D3).
 4. Node face shows effective value for bound params (D4).
@@ -279,3 +228,11 @@ row rendering); hiding the binding badge under the driven state (D6 keeps it).
   only if a stale slot is shown to leak into behavior despite D4/D9.
 - **Two-way editing for signal-driven ports** (writing back into an LFO's params) —
   out of scope; a different feature (macro learn), not an inverse.
+
+## 8. As-built execution notes
+
+Moved from the status header 2026-07-28.
+
+**P1 (2026-07-14, Sonnet):** shipped the inverse machinery (D2/D3), the dispatch-layer reroute (D1), D4's effective-value display, and D9's freeze-on-unmap. One judgment call, not pre-approved: section 3 (Design body)'s "emit the ParamSnapshot/ParamChanged/ParamCommit lifecycle" assumed a gesture-boundary signal that doesn't exist for a plain node-face `SetGraphNodeParam`/`ParamScrub` (only card-slider drags and group-face mirror rows carry snapshot/commit ticks). Fix: `GraphEditCommand::EndGraphNodeParamScrub`, emitted unconditionally on `ParamScrub` release (no-op for unbound rows), so a bound-param drag closes with ONE undo-worthy `ChangeGraphParamCommand` — the smallest addition matching the `NodeMove` release-emits-one-command precedent. D10's sequencing rule (P2 must not trail a shipped P1) was knowingly not followed: P1 leaves wired-param behavior unchanged, so the harm D10 names doesn't occur. The P1 gate's named integration test was not written verbatim (`Application`-level dispatch needs a winit/GPU harness); in its place: `binding_reroute_tests` (app_render.rs) for the resolution helpers, `card_reshape_roundtrips` / `macro_curve_inverse_roundtrips` (manifold-core) for the inverse math, and `unexpose_user_binding_freezes_effective_value_into_def_slot` (manifold-editing) for D9.
+
+**P2 (2026-07-15):** the input-layer scrub prevention + unit test already existed in-tree (`interaction.rs`, `wire_driven_row_is_read_only_no_scrub`), so P2's built scope was (a) the real data gap — D5's live fill was impossible because `live_node_params` read the param map, which a wire never writes; a new executor `live_scalar_inputs` capture feeds wire-resolved values to the tap, param-map fallback when unwired; and (b) the visual treatment — whole-slider dim, tinted jack halo, hover tooltip "driven by <node>.<port>", click highlights the feeding wire, D6's dual attribution (`← wired (↳ outer)`). L2 PNG gate: graph scene, Tesseract — wired and bound rows visibly differ on one node. Group-face mirror rows get dim/jack but no source label (needs inner-level node list; scoped out, noted in `apply_driven_state`'s doc comment).

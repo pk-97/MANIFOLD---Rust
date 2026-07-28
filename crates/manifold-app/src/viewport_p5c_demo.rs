@@ -3,7 +3,7 @@
 //! the exact call `window_input.rs`'s `editor_mouse_input`/
 //! `editor_cursor_moved` make) against a real `ViewportSession`, then dumps
 //! before/after headless PNGs and asserts the pixels actually changed —
-//! the L2 acceptance-demo bar (`docs/DESIGN_DOC_STANDARD.md` §10).
+//! the L2 acceptance-demo bar (`docs/DESIGN_DOC_STANDARD.md` section 10).
 //!
 //! **Why this lives here instead of a `scripts/ui-flows/*.json` L3 script**
 //! (the preferred bar): the flow driver (`ui_snapshot::script::run`) only

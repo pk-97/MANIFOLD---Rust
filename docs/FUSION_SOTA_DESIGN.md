@@ -1,39 +1,8 @@
 # Fusion SOTA — closing the freeze compiler's structural gaps
 
-**Status:** SHIPPED · 2026-07-14 · Fable 5 design (with Peter in the room) · Sonnet 5 executing
-P1–P3 SHIPPED (markers module, segment worker robustness, refusal census committed as
-`docs/fusion_census.md` — no D4 default flipped, all four stand). P4a SHIPPED. **P5 SHIPPED**
-(Vec3 lift + D4 scope-expansion Vec4/Color lift, landed BEFORE P4b per the reordering below —
-`classify_node`'s param gate narrowed, fused codegen + install-time param seeding extended,
-`fusion_coverage_baseline` widened to effect+generator/flattened and its floor raised). **P4b
-SHIPPED** (closes BUG-114): the remaining five `draw_*` atoms + `blob_overlay` converted onto the
-codegen path; `BlobTracking.json` now forms a real 6-member fused region (18→13 estimated
-dispatches, `graph-tool fusion` measured). **P6 SHIPPED**: cut rule 6 narrowed to `tex_out == 0`
-boundary only (was `!= 1`); the struct-return `BodyOutputs` wrapper extended from the buffer path
-into `generate_fused` (`N{i}BodyOutputs` per multi-output member, `InputSource::NodeOutput` field
-pick, `FusionRegion::outputs`/`RegionInput::MemberPort` carry the escaping port); voronoi_2d and
-block_displace_field (both already codegen-path, both already struct-return) both fuse now. Found
-and fixed in the same phase: a region-forming gap the narrowing exposed — a multi-output node's two
-ports independently unioning into otherwise-unrelated branches could bridge two components that
-only otherwise touched via an *excluded* gather wire, which `build_region` then correctly (but
-totally) refused; `partition_regions`' union step gained a gather-bridge guard (mirrors the existing
-cycle-convexity check) so the two components stay separate and connect via the same cross-region
-gather the multi-region model already relies on. Real-preset wins: VoronoiPrism, StarField (both
-fold voronoi_2d in) and Glitch (folds block_displace_field into its existing 2-region split) each
-gain a member; `fusion_coverage_baseline` raised 33/55/222→33/55/225. Census multi-output family:
-3→0 refusals (both real atoms no longer refused). **P7 SHIPPED**: `FUSED_EFFECT_CACHE` /
-`FUSED_GENERATOR_CACHE` / `SEGMENT_CACHE` values moved from `Box::leak`'d `&'static T` to
-`Arc<T>` with owned interiors (no more `leak_params`/`leak_ports`); LRU eviction at cap replaces
-refuse-to-insert (precedent: `EFFECT_CHAIN_LIFECYCLE.md`'s chain-pool eviction); negative gate
-`rg 'Box::leak' .../freeze/` returns zero hits. Canonical/bundled-preset views deliberately stay
-as they were — only fused (runtime-computed, evictable) artifacts moved. All seven phases (P1–P7)
-now shipped; the design is closed.
-**Prerequisites:** none for P1–P4; P5–P6 read P3's census numbers. The companion Sonnet sweep
-(BUG-135/141 includes fix, the 13-atom `CONVERSION_DEBT_LEDGER` conversion sweep, BUG-146 prewarm,
-BUG-115 spike, content-key normalization, tolerance/comment hygiene) is SEPARATE work with existing
-specs — it does not depend on this doc and this doc does not depend on it, except where a phase
-below names it.
-**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5–§6 before starting any phase.
+**Status:** SHIPPED 2026-07-14 — all seven phases (P1–P7) on main; the design is closed, nothing owed. Current compiler state: `FREEZE_COMPILER_MAP.md` (authoritative); refusal census: `docs/fusion_census.md`; per-phase as-built record: section 7 (As-built record). · Fable design, Peter in the room, Sonnet executing
+**Prerequisites:** none — shipped. The companion Sonnet sweep (includes fix, conversion sweep, prewarm, spike, hygiene items) was separate work with its own specs.
+**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
 Peter, 2026-07-14, on the whole backlog of compiler gaps: *"I would like ALL of this work to be
 implemented and fixed"*, *"I never made a call about post release. No need to defer this fusion
@@ -50,8 +19,8 @@ design removes the silent-slowness classes (hung worker, unfusable overlay HUDs,
 that never got a second look) and hardens the one silent-WRONG-output class that exists (marker
 drift) so it cannot recur.
 
-Companion docs: `FREEZE_COMPILER_MAP.md` (authoritative current-state map — §4 cut rules, §5
-marker ABI, §11 honest edges are this doc's inputs); `ADDING_PRIMITIVES.md` (the conversion recipe
+Companion docs: `FREEZE_COMPILER_MAP.md` (authoritative current-state map — section 4 (The cut rules — when fusion says no) cut rules, section 5 (The marker ABI)
+marker ABI, section 11 honest edges are this doc's inputs); `ADDING_PRIMITIVES.md` (the conversion recipe
 P4 reuses); `docs/BUG_BACKLOG.md` BUG-114 (the `draw_*` gap this doc's P4 closes).
 
 ---
@@ -80,7 +49,7 @@ adds a thread, a lock, or shared state; nothing changes the fuse decision model
 ## 2. Decisions
 
 **D1 — One markers module owns the marker ABI; both ends compile against it.**
-New `freeze/markers.rs`: a `Marker` enum with one variant per marker (§5 of the map), each
+New `freeze/markers.rs`: a `Marker` enum with one variant per marker (section 5 of the map), each
 carrying its typed payload (e.g. `DispatchCountParam { field: String }`,
 `DerivedUniformMember { first_field: String, words: u32, type_id: String, camera_port: Option<String> }`),
 with `emit(&self) -> String` and `parse(line: &str) -> Option<Marker>` as the ONLY implementations
@@ -122,7 +91,7 @@ A texture-domain fusable atom may tag an `Array`/`Channels` input `BufferIndex`.
 body reads elements of the input array global `buf_<port>` by indices it computes — exactly
 `BufferGather`'s convention (`codegen.rs:728,802`), hosted in a texture-domain kernel.
 - **Classify** (`classify_node`): a wire into a `BufferIndex`-tagged input does not cut (narrowing
-  cut rule 9, same shape as the Camera exemption at map §4.9).
+  cut rule 9, same shape as the Camera exemption at map section 4.9).
 - **Region** (`partition_regions`): the array producer NEVER unions into the texture region
   (cross-domain, exactly like a gather-consumed wire) — it stays an external; `build_region`
   records it as a buffer external.
@@ -169,7 +138,7 @@ decisions, revisable only by census numbers:
   cuts from this family, it lands anyway as capability (palette vocabulary: voronoi's cell+distance
   outputs) but LAST in the wave order.
 - **Buffer fan-out regions (`region.rs:1532`): DEFER.** Lifting means N fresh-dst arrays per fused
-  buffer kernel with per-output alias reasoning against §9.7's in-place-loop model — the riskiest
+  buffer kernel with per-output alias reasoning against section 9.7's in-place-loop model — the riskiest
   interior in the compiler for a family the census must first show actually cuts anything. Trigger:
   census ≥3 refusals across shipped content, or a user graph demonstrably paying it.
 - **Nested stencils / `MAX_VIRTUAL_CHAIN=1` (`region.rs:368`): CORRECT AS-IS.** The cap is a cost
@@ -230,17 +199,17 @@ gpu-proofs <module>` (never nextest); every phase runs the freeze suite
 `cargo test -p manifold-renderer --lib node_graph::freeze` + scoped clippy; full sweep at landing
 per GIT_TREE_DISCIPLINE.
 
-- **P1 — `freeze/markers.rs` (D1). SHIPPED `3dac02c7`.** Deliverables: the module (enum + emit/parse + roundtrip
-  test), all emit/parse sites rewritten through it (inventory in §1 — re-derive with
-  `rg '"// @' crates/manifold-renderer/src` at execution; if counts differ from §1, stop and list),
+- **P1 — `freeze/markers.rs` (D1).** Deliverables: the module (enum + emit/parse + roundtrip
+  test), all emit/parse sites rewritten through it (inventory in section 1 — re-derive with
+  `rg '"// @' crates/manifold-renderer/src` at execution; if counts differ from section 1, stop and list),
   `marker_literals_live_in_one_module`, `fused_wgsl_snapshot_unchanged`. Gate: freeze suite green;
   snapshot test proves byte-identical emission; negative gate zero stray literals. Demo: none — L1
   (pure refactor proven by snapshot).
-- **P2 — segment worker robustness (D2). SHIPPED `6297946b`.** Deliverables: catch_unwind wrap, timestamped
+- **P2 — segment worker robustness (D2).** Deliverables: catch_unwind wrap, timestamped
   `SEGMENT_PENDING`, `SEGMENT_COMPILE_DEADLINE=60s` expiry in `pump_segment_results`, the two unit
   tests, the at-cap refresh nit fix (all three caches). Gate: freeze suite; new tests green.
   Demo: none — L1 (the observable surface is a log line on a fault path).
-- **P3 — refusal census (D4 instrument). SHIPPED `c7ff8ebc`, `docs/fusion_census.md` committed.
+- **P3 — refusal census (D4 instrument). `docs/fusion_census.md` committed.
   No trigger crossed (buffer-fan-out measured 0 refusals vs. trigger ≥3; resample's trigger is
   runtime hot-chain evidence, not a static count) — all four D4 defaults stand unchanged.**
   Deliverables: `audit_all_presets` extended to bucket
@@ -251,15 +220,14 @@ per GIT_TREE_DISCIPLINE.
   numbers in the doc. Demo: the census file itself — L2. **This phase's numbers may flip D4's
   census-gated defaults; flipping a DEFER to LIFT is an escalation to Peter with the number
   attached, not a silent scope change.**
-- **P4 — `BufferIndex` + the draw-family conversion (D3, closes BUG-114).** Split: **P4a —
-  SHIPPED `ae9ab74c`.** The read path (classify variant, region rule, standalone+fused codegen,
+- **P4 — `BufferIndex` + the draw-family conversion (D3, closes BUG-114).** Split: **P4a.** The read path (classify variant, region rule, standalone+fused codegen,
   synthesized `Channels` struct) + `draw_dots` converted as the proving atom, with parity oracle.
   Escalation found and resolved with Peter (see D4's scope-expansion note): the literal
   region-formation demo (`draw_dots_fuses_into_texture_region`) is NOT reachable yet — draw_dots'
   `Color` param independently boundary-cuts it until P5 lands; P4a instead proved the mechanism
   at the classify/region layer directly (wire never unions, producer stays external) plus the
   before/after `graph_tool fusion` dispatch count on `BlobTracking.json` (unchanged, as expected,
-  pending P5). **Phase order changed: P5 now runs BEFORE P4b.** **P4b — SHIPPED.** The remaining
+  pending P5). **Phase order changed: P5 now runs BEFORE P4b.** **P4b.** The remaining
   five `draw_*` atoms (`draw_markers`/`draw_ticks`/`draw_gauge`/`draw_scanlines`/
   `draw_connections`) + `blob_overlay` converted per ADDING_PRIMITIVES (`wgsl_body` +
   `fusion_kind`/`input_access` + generated-vs-hand parity oracle each), every `Blocked` reason
@@ -273,7 +241,7 @@ per GIT_TREE_DISCIPLINE.
   `draw_scanlines` stays unfused in this preset (topologically isolated by two `value_overlay`
   draw-call boundaries, not a param/array gap) — expected, not a regression.
   Demo: before/after dispatch count on the Blob Track HUD preset (the census tool prints it) — L2.
-- **P5 — Vec3 + Vec4/Color param lift (D4, expanded scope). SHIPPED.** `classify_node`'s param
+- **P5 — Vec3 + Vec4/Color param lift (D4, expanded scope).** `classify_node`'s param
   gate (`region.rs`, was `:954–961`) narrowed via a new shared predicate
   `codegen::param_is_fusable` (Vec3/Vec4/Color pass, Table/String still cut); `classify_refusal`'s
   mirror updated in lockstep (`refusal_census_matches_classify_node` invariant), including a
@@ -297,13 +265,13 @@ per GIT_TREE_DISCIPLINE.
   lives in — OilyFluid/MetallicGlass/StarField are grouped GENERATOR presets); floor raised on the
   widened, isolated-measured numbers (32/52/203 pre-P5 → 32/54/216 post-P5 on the same walk).
   Gate: gpu-proofs full suite + `--lib` full suite, both clean modulo 8 pre-existing failures
-  verified unchanged at P4a HEAD (21794f5c) — 6 synthetic `codegen::gpu_tests` cases and 2
+  verified unchanged at P4a HEAD — 6 synthetic `codegen::gpu_tests` cases and 2
   prewarm-cache tests that fail only under full-suite contention, not in isolation; clippy clean.
   Demo: census refusal count for the param-type family 19→10 (the 9 real Vec3/Vec4/Color flips);
   `wave2_color_param_atoms_now_fuse_in_shipped_presets` proves all 5 real-preset atoms now fuse;
   `buffer_index_external_stays_external` proves `draw_dots` forms a real 2-member region with a
   synthetic neighbor via `partition_regions` — L2.
-- **P6 — multi-output texture atoms (D4). SHIPPED.** Deliverables: struct-return texture wrapper
+- **P6 — multi-output texture atoms (D4).** Deliverables: struct-return texture wrapper
   extended from the buffer-domain precedent (`codegen.rs`'s `BufferOutputs` wrapper) into
   `generate_fused` — per-multi-output-member `N{i}BodyOutputs` struct (dedup-safe namespacing),
   `InputSource::NodeOutput`/`RegionInput::MemberPort` carrying the escaping port so a wire into or
@@ -342,13 +310,13 @@ per GIT_TREE_DISCIPLINE.
   gained one more member each). Census: multi-output family 3→0 refusals.
 - **P7 — cache ownership (D5).** Deliverables: Arc-valued caches, owned view interiors, LRU
   eviction, the `freeze_has_no_leaks` negative gate, eviction unit test. Seam brief applies
-  (standard §6): re-derive the consumer inventory with
+  (standard section 6): re-derive the consumer inventory with
   `rg "&'static LoadedPresetView|&'static SegmentView|&'static EffectGraphDef" crates/manifold-renderer/src`
   at execution time; compiler-driven migration (change the type, follow the errors); misfit sites
   escalate, never adapt. Gate: freeze suite + full `-p manifold-renderer --lib`; negative gate.
   Demo: none — L1 (behavior-identical by construction; the observable is the negative gate).
 
-Phase-completeness: every §2 decision lands in exactly one phase (D1→P1, D2→P2, D4→P3+P5+P6 with
+Phase-completeness: every section 2 decision lands in exactly one phase (D1→P1, D2→P2, D4→P3+P5+P6 with
 DEFER verdicts recorded in Deferred below, D3→P4, D5→P7). No design-body affordance exists outside
 this list.
 
@@ -375,3 +343,13 @@ this list.
   fragments) — trigger: first user-authored fragment bug traced to a malformed marker.
 - **Hot-toggle for kill switches** (restart-scoped today) — unchanged from the map; not this doc's
   scope.
+
+## 7. As-built record
+
+Moved from the status header 2026-07-28; landing prose lives in the merge commits, this keeps only what a future compiler session might need.
+
+- **P1–P3:** markers module; segment worker robustness; refusal census committed as `docs/fusion_census.md` — no D4 default flipped, all four stand.
+- **P5 (landed before P4b, deliberate reorder):** Vec3 lift + D4 scope-expansion Vec4/Color lift — `classify_node`'s param gate narrowed, fused codegen + install-time param seeding extended, `fusion_coverage_baseline` widened to effect+generator/flattened and its floor raised.
+- **P4b (closes BUG-114, draw-atom fusion gap):** the remaining five `draw_*` atoms + `blob_overlay` converted onto the codegen path; `BlobTracking.json` forms a real 6-member fused region (18→13 estimated dispatches, `graph-tool fusion` measured).
+- **P6:** cut rule 6 narrowed to the `tex_out == 0` boundary only (was `!= 1`); struct-return `BodyOutputs` wrapper extended from the buffer path into `generate_fused` (`N{i}BodyOutputs` per multi-output member, `InputSource::NodeOutput` field pick, `FusionRegion::outputs`/`RegionInput::MemberPort` carry the escaping port); voronoi_2d and block_displace_field fuse now. Same-phase find: a multi-output node's two ports independently unioning into unrelated branches could bridge two components whose only other contact was an *excluded* gather wire, which `build_region` then correctly (but totally) refused — `partition_regions`' union step gained a gather-bridge guard (mirrors the cycle-convexity check) so the components stay separate and connect via the ordinary cross-region gather. Preset wins: VoronoiPrism, StarField, Glitch each gain a member; `fusion_coverage_baseline` 33/55/222→33/55/225; census multi-output family 3→0 refusals.
+- **P7:** `FUSED_EFFECT_CACHE`/`FUSED_GENERATOR_CACHE`/`SEGMENT_CACHE` values moved from `Box::leak`'d `&'static T` to `Arc<T>` with owned interiors; LRU eviction at cap replaces refuse-to-insert (precedent: `EFFECT_CHAIN_LIFECYCLE.md`'s chain-pool eviction); negative gate: `rg 'Box::leak'` over `freeze/` returns zero hits. Canonical/bundled-preset views deliberately unchanged — only fused (runtime-computed, evictable) artifacts moved.

@@ -1,38 +1,6 @@
-# Render-Scene Perf Optimization — retiring BUG-189's ~10 ms import-graph GPU floor
+# Render-Scene Perf Optimization — retiring BUG-189 (import-graph-10ms-resolution-independent-gpu-flo…)'s ~10 ms import-graph GPU floor
 
-**Status:** SHIPPED 2026-07-17 — all phases (P0–P4 + P3b) landed and P5's final re-measure is in
-(Sonnet, orchestrated overnight per Peter's explicit mandate: "finish the optimisations end to end
-in this orchestration session using sonnet agents") · design 2026-07-16 (Fable) · APPROVED
-2026-07-16. **Final numbers (AMG GT3, M4 Max, two-consecutive-run pairs, `cargo xtask perf-soak`):**
-@3840×2160 GPU p50 13.554ms → **9.45ms** (~4.1ms/~30% drop); @1920×1080 GPU p50 9.830ms → **5.73ms**
-(~4.1ms/~42% drop). BUG-189's shadow+IBL re-render waste is closed; the residual is `render_scene`'s
-main pass — real work, not staleness, and now essentially 100% of render_scene's own GPU time in
-steady state (no separately-labeled shadow/IBL rows survive a profiled run) — R4 (indexed-mesh
-rendering, deferred) is the next lever, per the Deferred section below. BUG-190 (BrainStem CPU cost)
-was diagnosed, not fixed, per this doc's own D3/D3b scope — see `docs/BUG_BACKLOG.md`. This document
-was the execution contract for an unattended Sonnet-orchestrated build; every decision was closed,
-zero executor discretion. Scoping authority for anything this doc did not answer was Fable, not the
-orchestrator — if a phase hit an undecided fork, the rule was STOP and surface it, never improvise
-(Peter's instruction to the orchestrator, verbatim: "you do not have permission to make decisions
-yourself unadvised").
-**Prerequisites:** PERF_BUDGET_GATE_DESIGN.md P1+P2+P2b SHIPPED (`7afcb059`/`49f5a066`) — perf-soak
-is this design's sole measurement oracle. GLTF_ANIMATION_DESIGN.md A1–A3 SHIPPED. Nothing here
-waits on A4 or on SCENE_SETUP_PANEL_DESIGN.md (see D9).
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
-**P3 amendment (2026-07-17, post-P3):** the mechanism landed exactly as specified and every
-phase-local correctness gate passes (I2 animated-envmap parity, I4 static bit-identity, per-producer
-gpu-proofs tests on `bake_equirect_envmap`/`hdri_source`/`render_scene`, all on real GPU hardware) —
-but the phase's OWN perf gate (a multi-ms AMG @4K delta matching P0's measured ~41% IBL share) FAILS
-on a real glTF import: measured p50 13.554ms → 13.333ms, ~0.22ms/1.6%, not multi-ms. Root cause is
-outside this phase's file scope: every glTF import wires
-`node.bake_environment → node.switch_texture (env_mode select) → node.render_scene`, never a direct
-wire, and `node.switch_texture` copies its selected branch into its own output every frame without
-ever declaring `mark_outputs_unchanged` — so `render_scene`'s envmap generation never stabilizes on
-a real import and P3's `ibl_cache_key` misses every frame. Filed as BUG-197 (`docs/BUG_BACKLOG.md`),
-which also updates BUG-189's fix-shape note. P3's code is safe and correct to keep (any DIRECTLY-
-wired envmap — a hand-authored generator preset, or `switch_texture` once BUG-197 lands — gets the
-full benefit today), but BUG-189's floor is NOT closed by P3 alone; do not treat this phase as having
-delivered its headline number without BUG-197 landing first.
+**Status:** SHIPPED 2026-07-17 — all phases (P0–P4 + P3b) landed, final re-measure in. Final numbers (AMG GT3, M4 Max, `cargo xtask perf-soak`): @3840×2160 GPU p50 13.554ms → **9.45ms** (~30% drop); @1920×1080 9.830ms → **5.73ms** (~42%). BUG-189's shadow+IBL re-render waste is closed; the residual is `render_scene`'s main pass — real work, essentially 100% of its steady-state GPU time — and R4 (indexed-mesh rendering, Deferred) is the next lever. P3's own perf gate FAILED on real imports: the mechanism is correct (all parity gates green) but every glTF import routes env through `node.switch_texture`, which copies its branch per frame without `mark_outputs_unchanged`, hiding the win — tracked in `docs/BUG_BACKLOG.md` with BUG-190 (BrainStem CPU cost, diagnosed not fixed). · design 2026-07-16 · APPROVED 2026-07-16**
 
 BUG-189: the glb import graph burns ~10 ms of true GPU time per frame *regardless of resolution*
 (9.8 ms @1080p, 13.5 ms median / 22.7 ms p95 @4K, AMG GT3, 302k tris / 78 materials, M4 Max).
@@ -45,7 +13,7 @@ to the camera moves, lens gestures, and effects Peter actually performs, and onl
 something in the scene genuinely animates. Root cause of the whole class: the graph runtime has
 no per-slot "unchanged this frame" signal, so every consumer must assume dirty always.
 Companion: BUG-190 (BrainStem.glb, 24 skinned objects, flat ~370 ms/frame) gets its diagnosis —
-not a guessed fix — in P0. Hardening level (DESIGN_DOC_STANDARD §9): conformance treatment —
+not a guessed fix — in P0. Hardening level (DESIGN_DOC_STANDARD section 9): conformance treatment —
 anchors carry re-derivation commands.
 
 ## 1. Audit — what exists (verified 2026-07-16 against the live tree; re-derive at each phase)
@@ -96,7 +64,7 @@ Extend, don't redesign: every fix below is an existing in-repo pattern (`brdf_lu
   first proven consumer (the I1 mutation trio is what earns trust before IBL leans on it); splitting
   the infra out of P2 buys nothing on a serial night (D10). What changes: P2's perf gate is
   corrected (a ~4% delta ≈ ~0.5 ms @4K is inside unprofiled run-to-run noise — see the P2 gate
-  text), P3's gate carries the measured anchor, and §Deferred's R4 entry is updated — main pass is
+  text), P3's gate carries the measured anchor, and section Deferred's R4 entry is updated — main pass is
   the single largest share and cannot be dirty-gated (the camera animates on stage every frame), so
   R4's revival is now near-certain rather than speculative; its trigger (P5's measured residual)
   and the supervised-session requirement both stand.
@@ -262,15 +230,15 @@ Extend, don't redesign: every fix below is an existing in-repo pattern (`brdf_lu
 - **I6 — No new `Arc<Mutex>`/shared state.** Generations live in the `Executor`, single-threaded
   with the graph walk. Enforcement: review + `rg -n 'Arc<(Mutex|RwLock)' crates/manifold-renderer/src/node_graph/` unchanged.
 
-## §. Phasing
+## . Phasing
 
 Worktree: one slot for the whole workstream (D10). Every brief opens with the base-verification
 guard (`git log --oneline -1` matches the intended tip). Perf-run commands assume the fixture
-paths verified in §1.
+paths verified in section 1.
 
 **P0 — measurement: span-label breakdown + BUG-189 bisection + BUG-190 diagnosis (half session, Sonnet).**
 Entry: PERF_BUDGET_GATE P2b shipped (verify: `cargo xtask perf-soak tests/fixtures/gltf/mercedes-amg_gt3__www.vecarz.com.glb --size 3840x2160 --frames 100` runs and emits `"mode": "import"` JSON).
-Read-back: this doc §1–§2 (D4 especially); PERF_BUDGET_GATE_DESIGN.md D6+D7; `perf_soak_import.rs`
+Read-back: this doc section 1–section 2 (D4 especially); PERF_BUDGET_GATE_DESIGN.md D6+D7; `perf_soak_import.rs`
 `run_profiled` end-to-end; `manifold-gpu/src/metal/profiling.rs` module doc.
 Deliverables: (1) in `run_profiled`, unmatched spans grouped by `span.tag` into per-label rows
 (`type_id: "unmatched"`) replacing the `untagged_ms` scalar — import mode only, project mode
@@ -462,7 +430,7 @@ applies.
 
 **P4 — R5: CPU evaluate() repair (half–one session, Sonnet).**
 Entry: P3 landed (or P2 landed and P3 blocked-and-surfaced — P4 is data-independent of P3).
-Read-back: this doc §1's CPU row; `render_scene.rs` `evaluate()` region ~2264 onward and the
+Read-back: this doc section 1's CPU row; `render_scene.rs` `evaluate()` region ~2264 onward and the
 rebuild-time name generation ~705–743 (names are ALREADY format!-generated once at rebuild — the
 evaluate-time re-formatting is pure waste); `bindings.rs:40–55`; hot-path discipline (CLAUDE.md).
 Deliverables: (1) per-object port-index tables built once at `rebuild()` (object index → the
@@ -534,7 +502,7 @@ added/renamed, so this was the only regen trigger). Default workspace sweep
 (`cargo nextest run --workspace`) green: 3450 passed, 12 skipped, including the docs-index
 freshness test.
 
-## §. Decided — do not reopen
+## . Decided — do not reopen
 1. Tonight = R0+R1+R2+R3+R5; R4 and R6 deferred with named triggers (D1/D2).
 2. BrainStem/BUG-190 is diagnosis-only tonight; no fix built against a guess (D3).
 3. No ablation flags; the split comes from per-label unmatched-span rows, import mode only,
@@ -548,7 +516,7 @@ freshness test.
 7. Perf claims from unprofiled runs only; import mode stays report-only, no baselines (D8/I5).
 8. No phase waits on A4 or SCENE_SETUP_PANEL; serial landing in one worktree slot (D9/D10).
 
-## §. Deferred
+## . Deferred
 - **R4 — indexed mesh rendering — CLOSED, NOT the lever (2026-07-18).** The revival happened
   (`INDEXED_MESH_RENDERING_DESIGN.md`, render-boundary framing, not the graph-wide re-index this
   entry assumed) and its P0 proof-of-concept **STOPPED**: the index provably engaged (3.9×–5.3×

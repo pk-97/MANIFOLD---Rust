@@ -1,10 +1,10 @@
 # Param Step Actions — triggers step, randomize, and sequence any param
 
 **Status:** P1–P3 SHIPPED 2026-07-08 (`43a7f508`/`d9b46422`/`fd3f767e`); P4 (Plasma re-author) DEFERRED — Peter's call this session, not started, no code written. The full feature (Continuous/Step/Random on any param, audio- and clip-fired, drawer UI) is live and usable on every preset without P4; P4 is cleanup on one preset's leftover graph wiring. See `docs/landings/2026-07-08-param-step-actions.md` for gate output and the click-script.
-**Prerequisites:** LIVE_AUDIO_TRIGGERS §9 unification (SHIPPED 2026-07-07 @ `14e0a90a`) — this design extends the unified `ParameterAudioMod`, which must exist as landed.
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
+**Prerequisites:** LIVE_AUDIO_TRIGGERS section 9 unification (SHIPPED 2026-07-07 @ `14e0a90a`) — this design extends the unified `ParameterAudioMod`, which must exist as landed.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
-The governing insight: the §8/§9 trigger work built a general event system (edge
+The governing insight: the section 8/section 9 trigger work built a general event system (edge
 detection, fire modes, pulse plumbing, drawer UI) whose only response so far is
 "bump a trigger count". This design adds a second response family: **a trigger
 event steps a param** — next value, previous, random, ±N with wrap — turning any
@@ -27,9 +27,9 @@ Two of Peter's calls decide the shape (both 2026-07-07, this session):
   a sibling response to the same events, not a replacement for event-consuming
   graphs (D10; forbidden move F6).
 
-Companions: `LIVE_AUDIO_TRIGGERS_DESIGN.md` §8–§9 (the event system this rides
-on — read §9 before any phase); `AUDIO_MODULATION_DESIGN.md` §10 (drawer
-mechanics); `AUTOMATION_LANES_DESIGN.md` §4 (the base-writer contract steps
+Companions: `LIVE_AUDIO_TRIGGERS_DESIGN.md` section 8 (Param triggers — audio fires the Trigger controls (designed 2026-07-07, NOT BUILT))–section 9 (Unification — the trigger IS an audio mod (Peter, 2026-07-07: "reuse the existing detectors so we don't have this stupid and dangerous split")) (the event system this rides
+on — read section 9 before any phase); `AUDIO_MODULATION_DESIGN.md` section 10 (UI — the drawer) (drawer
+mechanics); `AUTOMATION_LANES_DESIGN.md` section 4 (Override latch (the precedence rule)) (the base-writer contract steps
 shadow).
 
 ## 1. Audit — what exists (verified 2026-07-07, against `14e0a90a`)
@@ -47,7 +47,7 @@ shadow).
 | Discrete-param vocabulary (`whole_numbers`, `value_labels`) | `crates/manifold-core/src/effect_graph_def.rs:456-463` | exists — defines "discrete slider" |
 | Offline export feeds real analysis into the same tick ("param modulation, param triggers, and live clip triggers — deterministic audio reactivity") | `crates/manifold-app/src/content_export.rs:439-451` | exists — step actions inherit export support with no new work |
 | Clip-edge observation (renderer-side): `acquire_clip` + `clip_count`/`audio_count` | `crates/manifold-renderer/src/generator_renderer.rs:44-92,350-360` | exists — stays for gate cards; steps get an ENGINE-side edge (D5) |
-| Drawer UI: standard audio-mod drawer + trailing Mode row; command family (`SetAudioModTriggerModeCommand`) | LIVE_AUDIO_TRIGGERS §9.2 U-P2; `param_slider_shared.rs` (`build_toggle_trigger_row`) | exists — Action rows extend the same drawer (D8/P3) |
+| Drawer UI: standard audio-mod drawer + trailing Mode row; command family (`SetAudioModTriggerModeCommand`) | LIVE_AUDIO_TRIGGERS section 9.2 U-P2; `param_slider_shared.rs` (`build_toggle_trigger_row`) | exists — Action rows extend the same drawer (D8/P3) |
 
 Classification: the event sources, edge detection, config home, evaluator walk,
 export determinism, drawer chassis, and editing-command family all **exist**.
@@ -60,9 +60,9 @@ mostly wiring; the audit is why.
 - **D1 — One config type, one new field.** `ParameterAudioMod` gains
   `action: TriggerAction` (serde default `Continuous`, skip-when-default — old
   projects and ordinary mods stay byte-identical). NO new config struct, NO new
-  per-instance field. Rejected: a parallel `ParamStepMod` type, because §9 just
+  per-instance field. Rejected: a parallel `ParamStepMod` type, because section 9 just
   paid a same-night two-bug tax to delete exactly that shape ("the walker
-  forgets the second config type" bug class); the §9 U1 lesson is a hard
+  forgets the second config type" bug class); the section 9 U1 lesson is a hard
   precedent, not a preference.
 
 - **D2 — The action enum.**
@@ -108,9 +108,9 @@ mostly wiring; the audit is why.
   gates' arm-time Both: a gate must not silently kill clip launches, but a step
   mod with no audio intent is meaningless — the user armed an audio drawer).
   Master-chain instances have no layer: clip contribution is 0, audio fires
-  work (same rule as §8 D5). Rejected: a new source enum on the action —
+  work (same rule as section 8 D5). Rejected: a new source enum on the action —
   duplicates `TriggerFireMode` and forks the vocabulary the drawer just
-  unified. Beat-clock and driver-edge sources are REJECTED (see §7 — drivers
+  unified. Beat-clock and driver-edge sources are REJECTED (see section 7 — drivers
   already cover tempo-locked stepping; Peter's call, 2026-07-07).
 
 - **D4 — Step replaces the base value (Peter, verbatim above).** Runtime state
@@ -177,14 +177,14 @@ mostly wiring; the audit is why.
 
 - **D8 — UI home: the same audio drawer, one Action row group.** On any
   non-toggle, non-trigger param card, the standard audio-mod drawer
-  (§9 U2) gains: Segmented **Action** (Cont / Step / Rand); when Step —
+  (section 9 U2) gains: Segmented **Action** (Cont / Step / Rand); when Step —
   stepper **Amount** (signed, snapped for whole-number params) + Segmented
   **Wrap** (Wrap/Bounce/Clamp); when Step or Rand — the Mode row (Clip/Audio/
   Both) that gate cards already render. Collapsed
-  card row shows the action as a badge (the §8 "silent mode trap" rule).
+  card row shows the action as a badge (the section 8 "silent mode trap" rule).
   Commands: one new `EditingService` command per field, shaped like
   `SetAudioModTriggerModeCommand` (the smallest member of the existing
-  audio-mod command family, §9.2 U-P2) — whole-old/new capture, one undo step.
+  audio-mod command family, section 9.2 U-P2) — whole-old/new capture, one undo step.
   Trigger-gate cards (`is_trigger_gate`) and fire-buttons (`is_trigger`) do
   NOT get an Action row: their fire semantics are the count, by design.
 
@@ -193,7 +193,7 @@ mostly wiring; the audit is why.
   sensitivity. Mods with identical source+shape settings see the same features
   in the same tick and fire together — phase lock falls out of the
   architecture. Rejected: a trigger-group entity binding N params to one
-  config — new addressing surface, new walker arm, and the §9 lesson again;
+  config — new addressing surface, new walker arm, and the section 9 lesson again;
   revisit only if L4 shows drift between same-source mods (it can't, short of
   differing sensitivity, which is user intent).
 
@@ -236,17 +236,17 @@ channel, no new thread, no shared state.
 
 ## 4. Phasing
 
-### P1 — Core action model + audio-fired steps (one session) — SHIPPED 2026-07-08 @ `43a7f508` (hotfix `2682f9f4`)
-- **Entry:** `14e0a90a` or later on main; re-verify the §1 anchors for
+### P1 — Core action model + audio-fired steps (one session) — SHIPPED 2026-07-08 (hotfix `2682f9f4`)
+- **Entry:** `14e0a90a` or later on main; re-verify the section 1 anchors for
   `audio_mod.rs:344-381` and `modulation.rs:390-462`.
-- **Read-back:** this doc §1–§3; LIVE_AUDIO_TRIGGERS §9.1 (U1–U6); restate D1,
+- **Read-back:** this doc section 1–section 3; LIVE_AUDIO_TRIGGERS section 9.1 (U1–U6); restate D1,
   D4, D7 and forbidden moves F1–F4 before coding.
 - **Deliverables:** `TriggerAction`/`WrapMode` + `action` field
   (`audio_mod.rs`); runtime `step_value`/`step_dir` (serde-skip); the step arm
   in `evaluate_instance_audio_mods` (audio edge only — clip edge is P2);
   `apply_step_values` wired into `evaluate_modulation` Phase 1.5; hash-ordinal
   random with discrete non-repeat; snapping for `whole_numbers`/`value_labels`;
-  `clear`-on-stop joins the BUG-051 path (`engine.stop()` already clears
+  `clear`-on-stop joins the BUG-051 (trigger-clear-unwired) path (`engine.stop()` already clears
   trigger edges — step state clears there too).
 - **Gate (positive):** new `modulation::tests::step_*` covering: step advances
   base-shadow on fire only; wrap/bounce/clamp at both rails; a small `amount`
@@ -263,13 +263,13 @@ channel, no new thread, no shared state.
   `rg -n "every\s*:\s*u32|fire_count.*every|%\s*every" crates/manifold-core/src crates/manifold-playback/src`
   → zero hits (D6 retired — no divisor field anywhere).
 - **Demo:** none — L1 (no UI surface yet; the vertical slice lands in P3).
-- **Forbidden moves:** F1–F4 (§6).
+- **Forbidden moves:** F1–F4 (section 6).
 
-### P2 — Engine clip edge + mode gating (one session) — SHIPPED 2026-07-08 @ `d9b46422`. Content-thread `MANIFOLD_RENDER_TRACE` gate reasoned not measured, same wall as VD-014 — see VD-016.
+### P2 — Engine clip edge + mode gating (one session) — SHIPPED 2026-07-08. Content-thread `MANIFOLD_RENDER_TRACE` gate reasoned not measured, same wall as VD-014 — see VD-016.
 - **Entry:** P1 merged; re-verify `engine.rs` tick structure and
   `generator_renderer.rs:350-360` (the semantics being mirrored).
 - **Read-back:** D3, D5 (including the divergence consequence — do NOT sync to
-  renderer readiness); CORE_ENGINE_MAP.md §on sync_clips_to_time.
+  renderer readiness); CORE_ENGINE_MAP.md section on sync_clips_to_time.
 - **Deliverables:** per-layer active-clip-identity tracking in the engine tick
   (pre-allocated, AHashMap or Vec keyed by layer index — no per-frame alloc);
   clip-edge flags into the modulation pass; `trigger_mode` gating on step mods
@@ -286,10 +286,10 @@ channel, no new thread, no shared state.
 - **Demo:** none — L1 (surface still P3).
 - **Forbidden moves:** F5, F1.
 
-### P3 — Drawer UI + vertical slice (one session) — SHIPPED 2026-07-08 @ `fd3f767e`. Performer gesture (Kick → BasicShapes variant, Step/Wrap, 4-bar loop) is Peter's L4 feel-pass, owed — see VD-017.
+### P3 — Drawer UI + vertical slice (one session) — SHIPPED 2026-07-08. Performer gesture (Kick → BasicShapes variant, Step/Wrap, 4-bar loop) is Peter's L4 feel-pass, owed — see VD-017.
 - **Entry:** P1+P2 merged. Re-verify `build_toggle_trigger_row` /
-  `build_audio_mod_drawer` shapes (§9.2 U-P2 moved them recently).
-- **Read-back:** D8; AUDIO_MODULATION_DESIGN §10.2; the §9.2 U-P2 account of
+  `build_audio_mod_drawer` shapes (section 9.2 U-P2 moved them recently).
+- **Read-back:** D8; AUDIO_MODULATION_DESIGN section 10.2; the section 9.2 U-P2 account of
   which drawer pieces are shared.
 - **Deliverables:** Action/Amount/Wrap rows per D8; collapsed-row action
   badge; `SetAudioModActionCommand` (+ siblings if field-per-command fits the
@@ -297,7 +297,7 @@ channel, no new thread, no shared state.
   PanelAction + dispatch + state_sync; UI seeding of `amount` defaults (D2).
 - **Gate:** ui + app focused tests; workspace clippy; **round-trip gate** —
   configure a step mod, save, reload, fire, verify stepping resumes from
-  committed base (BUG-036 rule: modulate *after* reload); headless PNG of the
+  committed base (BUG-036 (param-manifest-construction-not-a-unified-safe-g…) rule: modulate *after* reload); headless PNG of the
   drawer open with Action=Step on a whole-numbers param (Plasma `pattern`) and
   on a continuous param (Bloom amount).
 - **Acceptance demo (L3):** a `scripts/ui-flows/` flow that opens the drawer,
@@ -309,7 +309,7 @@ channel, no new thread, no shared state.
 
 ### P4 — Exemplar preset re-author: Plasma (one session) — DEFERRED 2026-07-08, Peter's call, not started
 
-**Pre-flight finding (orchestrator's in-context §2.5 audit, 2026-07-08, before the phase was
+**Pre-flight finding (orchestrator's in-context section 2.5 audit, 2026-07-08, before the phase was
 deferred — worth keeping so the next session doesn't redo it):** `Plasma.json` (v2) already
 exposes `pattern` as a `presetMetadata.params` card with exactly the shape this phase asks for
 (`min: 0, max: 7, wholeNumbers: true, formatString: "F0"`), bound to `pattern_mux.in_0`. Nothing
@@ -322,7 +322,7 @@ binding straight at `plasma.pattern`, and **investigate whether any existing sav
 stored card state depends on the old binding path** (unconfirmed — the load-migration question
 in F7 is still open, next session must check `param_storage_v14.rs`'s resolution model before
 concluding either way, not assume no-op).
-- **Entry:** P1–P3 merged. §2.5 audit of Plasma's graph (open the JSON, follow
+- **Entry:** P1–P3 merged. section 2.5 audit of Plasma's graph (open the JSON, follow
   every wire from `pattern_cycle`).
 - **Deliverables:** Plasma's `pattern_cycle` node (`clip_trigger_cycle`,
   Plasma.json node id 3) deleted; `pattern` exposed as a whole-numbers card
@@ -347,12 +347,12 @@ entity. No committed affordance is unowned.
 
 ## 5. Decided — do not reopen
 
-1. Fires are immediate — no launch-quantize on step actions. Carried from §8
+1. Fires are immediate — no launch-quantize on step actions. Carried from section 8
    D3 (Peter re-confirmed 2026-07-07: the quantize suggestion "is wrong").
 2. Step replaces the base value; drivers/mods/envelopes stack on top; no new
    precedence system (D4).
 3. One config type — `TriggerAction` on `ParameterAudioMod`; never a parallel
-   step-config type (D1, §9's paid-for lesson).
+   step-config type (D1, section 9's paid-for lesson).
 4. Random = deterministic fire-ordinal hash, never repeats current discrete
    value; no RNG state anywhere (D7).
 5. Step state is runtime-only; reload falls back to committed base (D4).
@@ -383,7 +383,7 @@ entity. No committed affordance is unowned.
 ## 6. Forbidden moves (named for this design)
 
 - **F1 — A parallel config/walker.** You will want a `ParamStepMod` struct or
-  a separate `evaluate_all_param_steps` walk. No — §9 deleted that shape after
+  a separate `evaluate_all_param_steps` walk. No — section 9 deleted that shape after
   it produced two same-night bugs; one field, one arm, the existing walk.
 - **F2 — Writing `p.base` or issuing `EditingService` commands per fire.** A
   kick at 128 BPM would flood the 200-cap undo stack in 100 seconds and dirty
@@ -401,7 +401,7 @@ entity. No committed affordance is unowned.
   preset never licenses touching its neighbors' event wiring.
 - **F7 — Preset migration without load-migration.** Deleting a card param that
   existing projects reference silently drops user state on load — the forbidden
-  move of load paths (standard §5). param_storage_v14 is the template.
+  move of load paths (standard section 5). param_storage_v14 is the template.
 
 ## 7. Deferred (with revival triggers)
 

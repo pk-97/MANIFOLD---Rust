@@ -65,7 +65,7 @@ mod validation;
 /// Canonical channel-name registry for the Channel type system. The
 /// `well_known_channels!` macro generates the constants and the
 /// collision-check test from a single source list; see the module
-/// docs and `docs/CHANNEL_TYPE_SYSTEM.md` §7.
+/// docs and `docs/CHANNEL_TYPE_SYSTEM.md` section 7.
 pub mod channel_names;
 
 pub use backend::{Backend, MockBackend};

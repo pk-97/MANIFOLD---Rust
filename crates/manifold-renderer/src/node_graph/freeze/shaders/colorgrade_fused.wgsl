@@ -10,7 +10,7 @@
 // bit-identical between hue_saturation and colorize, so one copy serves both.
 // The ONLY intended divergence from the unfused chain is precision: the chain
 // rounds RGB to f16 after every pass; this rounds once on write. The oracle's
-// two-sided tolerance absorbs that drift (design §11.D).
+// two-sided tolerance absorbs that drift (design section 11.D).
 //
 // Source is read with textureLoad (exact texel); the atoms sample at pixel
 // centers, which returns the identical texel for a same-dimension texture.

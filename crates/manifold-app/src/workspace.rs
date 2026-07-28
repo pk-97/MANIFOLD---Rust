@@ -114,7 +114,7 @@ pub struct Workspace {
     pub viewport_drag: Option<(winit::event::MouseButton, f32, f32)>,
     /// P6 (`docs/REALTIME_3D_DESIGN.md` D7 Tier 2): the currently active
     /// gizmo mode (move/rotate/scale) — a plain toggle, not project state
-    /// (editor state per `docs/REALTIME_3D_DESIGN.md` §5's "Forbidden"
+    /// (editor state per `docs/REALTIME_3D_DESIGN.md` section 5's "Forbidden"
     /// list: "viewport/gizmo state in `manifold-core`").
     pub viewport_gizmo_mode: manifold_renderer::node_graph::GizmoMode,
     /// The `node.scene_object` doc id the gizmo is attached to this session,

@@ -1,4 +1,4 @@
-// node.ellipse_mask — fusable body (freeze §12), SOURCE. Rotated elliptical SDF
+// node.ellipse_mask — fusable body (freeze section 12), SOURCE. Rotated elliptical SDF
 // mask, smoothstep falloff of width `softness`. Matches ellipse_mask.wgsl.
 // PARAMS: [cx, cy, radius_x, radius_y, rotation, softness].
 fn body(uv: vec2<f32>, dims: vec2<f32>, cx: f32, cy: f32, radius_x: f32, radius_y: f32, rotation: f32, softness: f32) -> vec4<f32> {

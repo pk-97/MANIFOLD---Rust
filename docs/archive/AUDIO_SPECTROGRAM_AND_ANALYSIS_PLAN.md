@@ -10,15 +10,15 @@ Design determined in session 2026-06-17. **Status: implemented (2026-06-17).** P
 
 **Deliverable: a per-send VQT spectrogram in the Audio Setup panel** — with the modulation's band (and, if pitch tracking ever lands, the tracked ridge) drawn on it — so the performer can *see* where their kick/bass lands and calibrate against it. Plus the `TexturePane` graphics API it needs to get a live GPU texture onscreen.
 
-This is a calibration tool. The deeper modulation *analysis* — making `onset` and the pitch features actually fire — is a **separate, later concern, out of scope here**; so is the band-energy scaling fix (§3). This plan ships the spectrogram and everything it requires, no more. The spectrogram and that future analysis converge on the same VQT engine, which is exactly why building it here (`manifold-spectral`, §4) lays the groundwork without committing to the analysis features now.
+This is a calibration tool. The deeper modulation *analysis* — making `onset` and the pitch features actually fire — is a **separate, later concern, out of scope here**; so is the band-energy scaling fix (section 3). This plan ships the spectrogram and everything it requires, no more. The spectrogram and that future analysis converge on the same VQT engine, which is exactly why building it here (`manifold-spectral`, section 4) lays the groundwork without committing to the analysis features now.
 
 ## 2. Decisions
 
 - **Spectrogram lives only in Audio Setup**, as a per-send detail scope for the *selected* send (one at a time = natural cost gate). **No dedicated drawer button** — the panel is reachable from the header Audio button / ⌘⇧A, and the "A" button on a slider with no sends opens Audio Setup. Send selection is a new gesture *inside* the panel.
 - **Reuse the Analyzer's CQT pipeline.** It already runs on `manifold-gpu` (path dep), including `GpuFft`. Factor the reusable DSP into a new `manifold-spectral` crate; the visualization (dB/colormap/scroll) ports as a WGSL shader, the egui-GL sampling does not.
-- **Producer is worker-side, not present-pass.** The capture ring is single-consumer, so the VQT producer lives in/beside the existing audio worker, publishing magnitude columns latest-wins (§4.1). Heavy DSP never touches the vsync-timed present path.
+- **Producer is worker-side, not present-pass.** The capture ring is single-consumer, so the VQT producer lives in/beside the existing audio worker, publishing magnitude columns latest-wins (section 4.1). Heavy DSP never touches the vsync-timed present path.
 - **The column stream is an internal interface** (we own both ends): raw linear per-bin magnitudes (length = VQT bin count) + bin freq metadata for log-y, published latest-wins, gated on the panel being open. dB/colormap happen in our shader, so the producer stays dumb.
-- **Build the texture-in-UI API properly** (`TexturePane`, §5) — the "graphics API upgrade." Built fresh for the spectrogram. **Scope cut:** we do *not* retrofit the existing inline blits (node-preview, master-out, thumbnails), add a pane registry, make the bridge format-generic, or migrate the VST. Those stay as-is; `TexturePane` is the clean path forward, not a consolidation pass.
+- **Build the texture-in-UI API properly** (`TexturePane`, section 5) — the "graphics API upgrade." Built fresh for the spectrogram. **Scope cut:** we do *not* retrofit the existing inline blits (node-preview, master-out, thumbnails), add a pane registry, make the bridge format-generic, or migrate the VST. Those stay as-is; `TexturePane` is the clean path forward, not a consolidation pass.
 
 ## 3. Verified findings (2026-06-17, checked against code)
 
@@ -38,7 +38,7 @@ The audio worker already owns the capture consumer and runs an FFT per send. Ext
 
 ### 4.2 Render & overlays
 
-A cheap fullscreen pass samples the column history into a `GpuTexture` (port `spectrum_line.wgsl`). The panel reserves a scope rect; the texture blits in via `TexturePane` (§5). Overlaid as UI atlas nodes: **band dividers** (the low/mid/high split the modulation reads) on a log-frequency axis, **frequency labels**, and the scope shows the **post-gain** analyzed mono signal (what feeds analysis), not raw input.
+A cheap fullscreen pass samples the column history into a `GpuTexture` (port `spectrum_line.wgsl`). The panel reserves a scope rect; the texture blits in via `TexturePane` (section 5). Overlaid as UI atlas nodes: **band dividers** (the low/mid/high split the modulation reads) on a log-frequency axis, **frequency labels**, and the scope shows the **post-gain** analyzed mono signal (what feeds analysis), not raw input.
 
 ## 5. The Texture-Pane API
 

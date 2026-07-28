@@ -1,4 +1,4 @@
-// node.voronoi_2d — fusable body (freeze §12), SOURCE with MULTI-OUTPUT. 2D
+// node.voronoi_2d — fusable body (freeze section 12), SOURCE with MULTI-OUTPUT. 2D
 // Worley/Voronoi cellular noise. Visits the 9 neighbouring cells of the query
 // pixel and returns F1/F2 distances + a per-cell stable hash. Two outputs: `out`
 // packs (F1, F2, F2-F1, cell_hash) scaled by out_scale (hash raw), `cell_id`

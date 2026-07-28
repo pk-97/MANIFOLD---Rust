@@ -1,4 +1,4 @@
-// node.block_displace_field — fusable body (freeze §12), SOURCE + MULTI-OUTPUT.
+// node.block_displace_field — fusable body (freeze section 12), SOURCE + MULTI-OUTPUT.
 // Per-block random UV-offset field (datamosh/block-glitch). Quantises the canvas
 // into block_size-px blocks, hashes each (animated by `time`), emits `offset`
 // (RG signed displacement gated so only a fraction of blocks move) and `hash` (R

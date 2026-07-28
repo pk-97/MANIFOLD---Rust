@@ -337,7 +337,7 @@ fn decide_emit(param_id: &ParamId, legacy_index: Option<i32>) -> (bool, bool) {
 // variant) shapes. Legacy indices are parked on the wrapper's
 // `legacy_param_index` field for the post-load resolver to translate.
 //
-// See `docs/EFFECT_RUNTIME_UNIFICATION.md` §7 step 11.
+// See `docs/EFFECT_RUNTIME_UNIFICATION.md` section 7 step 11.
 impl<'de> Deserialize<'de> for MacroMapping {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where

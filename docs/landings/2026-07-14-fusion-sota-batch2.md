@@ -1,6 +1,6 @@
 # FUSION_SOTA batch 2 (P4a + P5 + P4b) — landed 2026-07-14 @ 78d897cb
 
-**Branch:** feat/fusion-sota · **Level reached:** L2 / target L2 (§10 — P4a/P4b have a
+**Branch:** feat/fusion-sota · **Level reached:** L2 / target L2 (section 10 — P4a/P4b have a
 user-visible-in-editor surface via `graph_tool fusion`'s dispatch-count delta, actually observed
 and read; P5 is L1, a pure compiler-gate change with no independent user-visible surface)
 
@@ -34,7 +34,7 @@ too (simpler than Vec3 — no padding needed) and reorder P5 before P4b. Recorde
 `BadInput` panics + 2 prewarm-cache tests) — orchestrating session independently re-verified all 8
 against P4a HEAD in a throwaway detached worktree: the 6 codegen failures reproduce byte-identical
 at P4a HEAD (pre-dating P5), and the 2 prewarm tests pass in isolation at P5 HEAD (the documented
-full-suite-parallelism GPU flake per FREEZE_COMPILER_MAP.md §10, not a regression). Full `--lib`:
+full-suite-parallelism GPU flake per FREEZE_COMPILER_MAP.md section 10, not a regression). Full `--lib`:
 1219 passed, 0 failed. Clippy clean. Census: param-type refusals 19→10 (the 9 Vec3/Vec4/Color
 flips). `fusion_coverage_baseline` widened (effect+generator, flattened) and its floor raised
 32/52/203 → 32/54/216 regions/atoms.

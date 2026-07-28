@@ -1,8 +1,8 @@
 # UI Layout Invariant Lints — the tree dump becomes a gate
 
-**Status:** PROPOSED · 2026-07-10 · Fable, from Peter's ask after BUG-108's escape
+**Status:** PROPOSED · 2026-07-10 · Fable, from Peter's ask after BUG-108 (effect-card-add-effect-button-floats-over-sectio…)'s escape
 **Prerequisites:** none — UI_HARNESS_UNIFICATION P0–P3 SHIPPED, UI_CLIP_AND_Z_OWNERSHIP shipped the flags this leans on
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
 The harness renders the app faithfully and dumps every node's real rect — and then the
 only thing standing between a layout defect and main is someone looking at a PNG and
@@ -15,7 +15,7 @@ test system to prevent these types of failures?"**
 
 The answer this doc commits to: **machine-checkable layout invariants over the built
 `UITree`, run as ordinary `cargo test` on every harness scene.** Assertions cover
-geometry; the PNG look remains the net for appearance (color, glyphs — BUG-107's
+geometry; the PNG look remains the net for appearance (color, glyphs — BUG-107 (text-rasterizer-draws-fallback-glyph-ids-with-ba…)'s
 mojibake is a font-coverage bug, not a geometry bug, and stays out of scope here).
 
 Sibling doc: [HARNESS_FIDELITY_INVARIANT_PROPOSAL.md](HARNESS_FIDELITY_INVARIANT_PROPOSAL.md)
@@ -169,9 +169,9 @@ the executor's business. The ink-predicate constants (alpha ≥ 8) live as named
 - Entry state: `cargo test -p manifold-app --lib` green; anchors re-verified
   (`mod.rs:1021` test exists, `fixtures.rs:28` registry, `ui_root.rs:379`).
 - Read-back: this doc whole; `mod.rs:1021` end-to-end; `ui_frame.rs:654-699`.
-- Deliverables: `layout_lints.rs` (shapes per §3); `SCENES` slice on the fixtures
+- Deliverables: `layout_lints.rs` (shapes per section 3); `SCENES` slice on the fixtures
   registry; report-mode test printing the full finding inventory for all 15 scenes;
-  the `overlay_ranges` dump key (D5); the triage table appended to THIS doc (§7) —
+  the `overlay_ranges` dump key (D5); the triage table appended to THIS doc (section 7) —
   every finding classified bug / rule-gap / declared, per D3.
 - Gate (positive): `cargo test -p manifold-app --lib layout_lints` runs all scenes and
   prints the inventory; the triage table is committed with zero unclassified rows.

@@ -1,0 +1,35 @@
+{
+  "_doc": "Path-triggered context injection: first Edit/Write touching a matching path this session injects the snippet (once per topic). Consumed by .claude/hooks/context-nudge.py. Add an invariant = add a line to a snippet or a glob here, never a new hook.",
+  "nudges": [
+    {
+      "topic": "wgsl-shaders",
+      "globs": ["*.wgsl", "*shaders/*", "*gpu_encoder*", "*manifold-gpu/*"],
+      "snippet": "gpu-shader-gotchas.md"
+    },
+    {
+      "topic": "ui-invariants",
+      "globs": ["*crates/manifold-ui/*", "*ui_bridge/*", "*app_render.rs"],
+      "snippet": "ui-invariants.md"
+    },
+    {
+      "topic": "effect-runtime",
+      "globs": ["*chain_dispatch*", "*chain_spec*", "*preset_runtime*", "*content_pipeline.rs", "*node_graph/execution*", "*node_graph/freeze/*"],
+      "snippet": "effect-runtime-invariants.md"
+    },
+    {
+      "topic": "graph-authoring",
+      "globs": ["*node_graph/primitives/*", "*presets/*.json", "*composites/*"],
+      "snippet": "graph-authoring-rules.md"
+    },
+    {
+      "topic": "landing",
+      "command_globs": ["*git merge*", "*git push*origin main*"],
+      "snippet": "landing-protocol.md"
+    },
+    {
+      "topic": "workspace-test",
+      "command_globs": ["*cargo*--workspace*", "*cargo test --all*"],
+      "snippet": "test-scope.md"
+    }
+  ]
+}

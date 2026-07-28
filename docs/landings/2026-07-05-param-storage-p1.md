@@ -1,15 +1,15 @@
 # PARAM_STORAGE P1 (V1.4 id-keyed params wire + quarantined migration) — landed 2026-07-05 @ db546564
 
-**Branch:** wave/param-storage-p1 (merged `--no-ff`; merge parents cdf37515 + branch-tip 186df124) · **Level reached:** L1 (focused tests + fixture load) / target L1 (§10 — P1 changes the wire + migration only; storage semantics unchanged, so no L2 render artifact is applicable this phase)
+**Branch:** wave/param-storage-p1 (merged `--no-ff`; merge parents cdf37515 + branch-tip 186df124) · **Level reached:** L1 (focused tests + fixture load) / target L1 (section 10 — P1 changes the wire + migration only; storage semantics unchanged, so no L2 render artifact is applicable this phase)
 **Doc status line (quoted verbatim):** `**Status:** IN PROGRESS — **P1 SHIPPED @ `c7ae831f` (2026-07-05)**: V1.4 id-keyed wire + quarantined migration landed, positional arms deleted from effects.rs; P2–P5 remain (P2 = the compile-driven storage swap).`
 
-> **Retroactive report (written 2026-07-05, late-session).** This landing's original chat-side report was produced earlier in the same session and has since been summarised out of context. Structural facts (merge SHA, parents, scope, the deviation) are recovered from git and the phase notes and are accurate. The **verbatim gate-output tails are NOT recoverable** — the section below reconstructs the gate that was run and its intent from notes, and is explicitly marked as reconstructed rather than pasted. Written per DESIGN_DOC_STANDARD.md §8.10's retroactive-preservation directive so the click-script and deviation survive.
+> **Retroactive report (written 2026-07-05, late-session).** This landing's original chat-side report was produced earlier in the same session and has since been summarised out of context. Structural facts (merge SHA, parents, scope, the deviation) are recovered from git and the phase notes and are accurate. The **verbatim gate-output tails are NOT recoverable** — the section below reconstructs the gate that was run and its intent from notes, and is explicitly marked as reconstructed rather than pasted. Written per DESIGN_DOC_STANDARD.md section 8.10's retroactive-preservation directive so the click-script and deviation survive.
 >
 > Note the SHA split: the doc status line quotes `c7ae831f` (the P1 content commit on the branch); the merge into `main` is `db546564`. Both name the same landing.
 
 ## Gate results (verbatim)
 
-**Reconstructed from phase notes — original verbatim tails unavailable (see banner).** P1 test scope per the design (§P1) was FOCUSED, not a workspace sweep, because P1 changes only the serde wire + a quarantined migration and leaves in-memory storage semantics untouched:
+**Reconstructed from phase notes — original verbatim tails unavailable (see banner).** P1 test scope per the design (section P1) was FOCUSED, not a workspace sweep, because P1 changes only the serde wire + a quarantined migration and leaves in-memory storage semantics untouched:
 
 - `cargo test -p manifold-core --lib` — green (V1.4 `params`-map serialize/deserialize round-trips; `base` rides the entry under `base_tracked`).
 - `cargo test -p manifold-io --lib` — green (the `param_storage_v14.rs` `Value → Value` migration: positional `paramValues` array → id-keyed `params` map, baked id tables).

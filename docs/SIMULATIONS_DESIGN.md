@@ -5,7 +5,7 @@
 (`node.render_scene`) for scene composition — cloth can smoke-test through
 `node.render_mesh` before it. Vocab-audit apply first (post-rename ids used
 throughout).**
-**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting
+**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before starting
 any phase.**
 
 Peter's directives (2026-07-03): realtime simulations "like Nuke and Houdini";
@@ -14,8 +14,8 @@ bridge → live solver → volumes, **cloth first, liquids second** in the live 
 Competitive frame: **Notch** (realtime stage sims), not offline Houdini — Houdini is
 the authoring world lane 1 borrows from.
 
-Companions: `REALTIME_3D_DESIGN.md` (the scene sims render into; its §8 pins lane 1),
-`MATERIAL_SYSTEM_DESIGN.md` (shading), `CAPABILITY_ROADMAP.md` §4.1 (vertex-cache
+Companions: `REALTIME_3D_DESIGN.md` (the scene sims render into; its section 8 (Deferred (with triggers)) pins lane 1),
+`MATERIAL_SYSTEM_DESIGN.md` (shading), `CAPABILITY_ROADMAP.md` section 4.1 (vertex-cache
 origin).
 
 ---
@@ -40,7 +40,7 @@ this doc and execution.
   water) baked to per-frame vertex caches, streamed as mesh sequences, **beat-retimed**
   (`beat_ramp` scrubs the playhead; loop a bar; freeze on a trigger). Designed:
   `docs/IMPORT_DESIGN.md` P3 (MDD/PC2 streaming + `node.mesh_sequence`). **Lane 2 — live XPBD (this doc's body).** **Lane 3 — volume rendering**
-  (raymarched smoke/pyro + baked VDB) — deferred §8; baked VDB may cover most stage
+  (raymarched smoke/pyro + baked VDB) — deferred section 8; baked VDB may cover most stage
   needs first.
 - **D2 — One solver, families as constraint recipes. No monoliths.** XPBD
   (position-based dynamics — the same family Houdini Vellum, Unreal and Unity cloth
@@ -71,11 +71,11 @@ this doc and execution.
 - **D5 — Collision v1 = analytic shapes; scene-mesh SDF = v2.** A collider-list atom
   (planes, spheres, boxes — port-shadowed transforms, so a collider can dance).
   Baking `render_scene` objects to SDF volumes is real infra — deferred with its
-  trigger (§8).
+  trigger (section 8).
 - **D6 — Liquid surface is screen-space, decomposed.** Particles → depth splat →
   bilateral smooth → normals → shaded (refraction/fresnel via the existing envmap/
   material machinery + `render_scene`'s depth output). Each step is one dispatch —
-  the §2.5 audit at implementation reconciles against existing atoms
+  the section 2.5 audit at implementation reconciles against existing atoms
   (`node.surface_bumps`, blur family) before any new primitive is proposed.
 - **D7 — Sim outputs are ordinary wires.** Cloth emits `Array(MeshVertex)` →
   feeds a `render_scene` object input (or `node.render_mesh`) and gets materials,
@@ -87,7 +87,7 @@ this doc and execution.
   cloth, a fluid that thickens on the drop. Reseed/reset quantized to the bar via
   the existing trigger machinery. No new modulation mechanism.
 
-## 3. Atom sketch (names reconciled at §2.5 audit)
+## 3. Atom sketch (names reconciled at section 2.5 audit)
 
 | Atom | One purpose |
 |---|---|
@@ -110,7 +110,7 @@ persistent buffers, keyed per the two-cache rules.
   crash is a lane-1 bake that breaks exactly on the downbeat.
 - Slow-motion everything: time-scale on a fader.
 
-## 5. Phasing (Sonnet-executable)
+## 5. Phasing
 
 Forbidden, all phases: fused per-effect sim nodes (D2) · private renderers (D7) ·
 variable-dt integration (D4) · new modulation machinery (D8) · per-frame allocation
@@ -123,7 +123,7 @@ in solver loops (pre-allocated constraint/particle buffers only).
   under gravity settles to known sag (value-level vertex positions, fixed seed);
   collision keeps particles outside a sphere; determinism — two identical runs,
   identical buffers. Full workspace sweep (new stateful runtime pattern = infra).
-- **P2 — Liquids.** `liquid_constraints` (PBF) + `liquid_surface` (post-§2.5-audit
+- **P2 — Liquids.** `liquid_constraints` (PBF) + `liquid_surface` (post-section 2.5-audit
   decomposition). Gate: gpu_tests — density constraint keeps rest spacing (value
   level); surface pass PNG on a known splash frame; pour-into-box demo preset.
 - **P3 — Grains + ropes.** Constraint recipes only — solver untouched. Gate: recipe
@@ -166,4 +166,4 @@ escape hatch, HDR half-res rule applies).
   is the cheap version if so.~~ **SUPERSEDED 2026-07-07** — rigid bodies are now
   `docs/BOX3D_PHYSICS_DESIGN.md` (box3d FFI, Peter's call). Two-way coupling with
   this doc's XPBD lane remains deferred here; collider-atom vocabulary reconciles at
-  this lane's §2.5 audit.
+  this lane's section 2.5 audit.

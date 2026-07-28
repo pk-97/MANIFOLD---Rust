@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Standalone test runner for preToolUseBash.py's shared-checkout guard
-(.claude/GIT_TREE_DISCIPLINE.md §1). Invokes the hook's functions directly
-with synthetic pidfiles under a temp verdicts dir — never touches the real
-`.claude/daemon/verdicts/` or spawns a real hook subprocess against a live
-session (per DESIGN.md: "test hooks by invoking them directly with synthetic
-stdin, not by observing your own session").
+Standalone test runner for preToolUseBash.py's guards (landing-protocol,
+worktree-ring, pre-land verdict coverage, compound-landing-merge, shell
+lints). Invokes the hook's functions directly with synthetic stdin — never
+spawns a real hook subprocess against a live session (per DESIGN.md: "test
+hooks by invoking them directly with synthetic stdin, not by observing your
+own session").
 
 Run: python3 .claude/hooks/test_preToolUseBash.py
 """
@@ -35,18 +35,6 @@ def check(name, cond, detail=""):
         FAIL.append((name, detail))
 
 
-def with_verdicts_dir(fn):
-    """Run `fn(verdicts_dir)` with hook._VERDICTS_DIR patched to a scratch
-    temp dir, restoring it afterward regardless of outcome."""
-    orig = hook._VERDICTS_DIR
-    with tempfile.TemporaryDirectory() as td:
-        hook._VERDICTS_DIR = Path(td)
-        try:
-            fn(Path(td))
-        finally:
-            hook._VERDICTS_DIR = orig
-
-
 def with_orch_verdicts_dir(fn):
     """Run `fn(orch_verdicts_dir)` with hook._ORCH_VERDICTS_DIR patched to a
     scratch temp dir, restoring it afterward regardless of outcome."""
@@ -59,115 +47,8 @@ def with_orch_verdicts_dir(fn):
             hook._ORCH_VERDICTS_DIR = orig
 
 
-def make_pidfile(verdicts_dir, session_id, pid_text):
-    (verdicts_dir / f"{session_id}.pid").write_text(pid_text)
-
-
-LIVE_PID = str(os.getpid())  # our own process is guaranteed alive
-DEAD_PID = "999999"  # extremely unlikely to be a live pid on any dev box
 MAIN_CWD = str(hook._PROJECT_DIR)
 WORKTREE_CWD = str(hook._WORKTREES_DIR / "some-branch")
-
-
-def test_bare_checkout_foreign_live():
-    def run(vd):
-        make_pidfile(vd, "other-session", LIVE_PID)
-        reason = hook.shared_checkout_guard("git checkout main", "my-session", MAIN_CWD)
-        check("bare checkout, foreign live pidfile -> ask", reason is not None, reason)
-        check("ask reason names the foreign session", reason and "other-session" in reason, reason)
-    with_verdicts_dir(run)
-
-
-def test_bare_checkout_only_own_session():
-    def run(vd):
-        make_pidfile(vd, "my-session", LIVE_PID)
-        reason = hook.shared_checkout_guard("git checkout main", "my-session", MAIN_CWD)
-        check("bare checkout, only own-session pidfile -> no guard", reason is None, reason)
-    with_verdicts_dir(run)
-
-
-def test_bare_checkout_no_pidfiles():
-    def run(vd):
-        reason = hook.shared_checkout_guard("git checkout main", "my-session", MAIN_CWD)
-        check("bare checkout, solo (no pidfiles) -> no guard", reason is None, reason)
-    with_verdicts_dir(run)
-
-
-def test_worktree_checkout_foreign_live():
-    def run(vd):
-        make_pidfile(vd, "other-session", LIVE_PID)
-        # Quoted because the real repo path contains a space
-        # ("MANIFOLD - Rust") -- this also exercises that shlex, not the
-        # placeholder-collapsing `sanitize`, is what resolves -C's value.
-        cmd = f'git -C "{hook._WORKTREES_DIR / "some-branch"}" checkout main'
-        reason = hook.shared_checkout_guard(cmd, "my-session", MAIN_CWD)
-        check("git -C worktree checkout, foreign live -> unaffected (no guard)", reason is None, reason)
-    with_verdicts_dir(run)
-
-
-def test_dead_pid_pidfile():
-    def run(vd):
-        make_pidfile(vd, "other-session", DEAD_PID)
-        reason = hook.shared_checkout_guard("git checkout main", "my-session", MAIN_CWD)
-        check("dead-pid foreign pidfile -> treated as absent, no guard", reason is None, reason)
-    with_verdicts_dir(run)
-
-
-def test_malformed_pidfile():
-    def run(vd):
-        make_pidfile(vd, "other-session", "not-a-pid")
-        reason = hook.shared_checkout_guard("git checkout main", "my-session", MAIN_CWD)
-        check("malformed pidfile -> treated as absent, no guard", reason is None, reason)
-    with_verdicts_dir(run)
-
-
-def test_switch_variant():
-    def run(vd):
-        make_pidfile(vd, "other-session", LIVE_PID)
-        reason = hook.shared_checkout_guard("git switch feature-branch", "my-session", MAIN_CWD)
-        check("git switch, foreign live -> ask", reason is not None, reason)
-    with_verdicts_dir(run)
-
-
-def test_merge_variant():
-    def run(vd):
-        make_pidfile(vd, "other-session", LIVE_PID)
-        reason = hook.shared_checkout_guard("git merge feature-branch", "my-session", MAIN_CWD)
-        check("git merge, foreign live -> ask", reason is not None, reason)
-    with_verdicts_dir(run)
-
-
-def test_checkout_bare_new_branch():
-    def run(vd):
-        make_pidfile(vd, "other-session", LIVE_PID)
-        reason = hook.shared_checkout_guard("git checkout -b new-thing", "my-session", MAIN_CWD)
-        check("git checkout -b, foreign live -> ask", reason is not None, reason)
-    with_verdicts_dir(run)
-
-
-def test_checkout_dashdash_paths_unchanged():
-    def run(vd):
-        make_pidfile(vd, "other-session", LIVE_PID)
-        reason = hook.shared_checkout_guard("git checkout -- src/main.rs", "my-session", MAIN_CWD)
-        check("git checkout -- <paths> (file restore) -> unaffected, no guard", reason is None, reason)
-    with_verdicts_dir(run)
-
-
-def test_solo_still_reaches_allow_path():
-    """No pidfiles at all: guard stays out of the way AND job-1 pre-approval
-    still fires for a plain `git checkout main` (regression guard on job 1).
-    Deliberately calls the two functions directly rather than shelling out to
-    a subprocess against the REAL verdicts dir — this session's own live
-    pidfile (and any concurrent session's) would make an out-of-process,
-    unpatched invocation observe genuine foreign daemons and correctly `ask`,
-    which would misreport as a regression. Per DESIGN.md: test hooks with
-    synthetic stdin, not by observing your own session."""
-    def run(vd):
-        cmd = "git checkout main"
-        reason = hook.shared_checkout_guard(cmd, "my-session", MAIN_CWD)
-        check("solo: guard step yields no ask", reason is None, reason)
-        check("solo: job-1 pre-approval still allows", hook.is_preapproved_command(cmd))
-    with_verdicts_dir(run)
 
 
 def test_branch_force_main_asks():
@@ -255,22 +136,15 @@ def test_bare_push_on_main_branch_reminds():
 def run_hook_main(payload):
     """Drive hook.main() end-to-end with synthetic stdin, returning what it
     wrote to stdout ("" = no decision, fell through to the permission
-    system). Wrapped in a patched verdicts dir so the shared-checkout guard
-    never observes this session's real pidfile."""
-    result = {}
-
-    def run(vd):
-        orig_in, orig_out = sys.stdin, sys.stdout
-        sys.stdin = io.StringIO(json.dumps(payload))
-        sys.stdout = io.StringIO()
-        try:
-            hook.main()
-            result["out"] = sys.stdout.getvalue()
-        finally:
-            sys.stdin, sys.stdout = orig_in, orig_out
-
-    with_verdicts_dir(run)
-    return result["out"]
+    system)."""
+    orig_in, orig_out = sys.stdin, sys.stdout
+    sys.stdin = io.StringIO(json.dumps(payload))
+    sys.stdout = io.StringIO()
+    try:
+        hook.main()
+        return sys.stdout.getvalue()
+    finally:
+        sys.stdin, sys.stdout = orig_in, orig_out
 
 
 # --- worktree-ring guard (2026-07-15: pool capped at 6 slots; raw
@@ -296,14 +170,21 @@ def test_worktree_add_in_compound_denied():
 
 
 def test_worktree_read_and_remove_unaffected():
-    for cmd in ("git worktree list", "git worktree prune",
-                "git worktree remove --force .claude/worktrees/slot-0"):
+    for cmd in ("git worktree list", "git worktree prune"):
         out = run_hook_main({
             "tool_input": {"command": cmd},
             "cwd": MAIN_CWD,
             "permission_mode": "default",
         })
         check(f"`{cmd}` -> not denied", '"deny"' not in out, out)
+    # `worktree remove` denied since 25056b1d — releases go through the slot ring
+    out = run_hook_main({
+        "tool_input": {"command": "git worktree remove --force .claude/worktrees/slot-0"},
+        "cwd": MAIN_CWD,
+        "permission_mode": "default",
+    })
+    check("`git worktree remove --force` -> deny (slot ring)",
+          '"deny"' in out and "slot ring" in out, out)
 
 
 # ---------------------------------------------------------------------------
@@ -474,7 +355,7 @@ def test_cc_fleet_lane_workflow_preapproved():
     check(
         "cc-fleet subagent spawn is pre-approved",
         hook.is_preapproved_command(
-            "cc-fleet subagent kimi-code --prompt-file /tmp/b.md --background"
+            "cc-fleet subagent kimi --prompt-file /tmp/b.md --background"
         ),
     )
     check(
@@ -488,7 +369,7 @@ def test_cc_fleet_lane_workflow_preapproved():
     )
     check(
         "cc-fleet keyget is NOT pre-approved",
-        not hook.is_preapproved_command("cc-fleet keyget kimi-code"),
+        not hook.is_preapproved_command("cc-fleet keyget kimi"),
     )
 
 
@@ -650,18 +531,36 @@ def test_compound_landing_merge_worktree_unaffected():
         hook._current_branch = orig
 
 
+def test_cd_guard():
+    g = hook.persistent_cd_guard
+    slot = str(hook._WORKTREES_DIR / "slot-1")
+
+    # The 2026-07-27 incident shape: no-op cd into a worktree
+    check("cd worktree + true -> deny",
+          g(f'cd "{slot}/scripts" 2>/dev/null; true', MAIN_CWD) is not None)
+    # Bare cd (lands in $HOME) -> deny
+    check("bare cd -> deny", g("cd", MAIN_CWD) is not None)
+    check("cd /tmp -> deny", g("cd /tmp && ls", MAIN_CWD) is not None)
+    check("cd - -> deny", g("cd -", MAIN_CWD) is not None)
+    # Recovery moves allowed
+    check("cd project root -> allowed",
+          g(f'cd "{MAIN_CWD}" && pwd', MAIN_CWD) is None)
+    check("cd slot root -> allowed", g(f'cd "{slot}"', MAIN_CWD) is None)
+    # Non-persistent forms exempt
+    check("subshell cd -> exempt", g("(cd /tmp && make)", MAIN_CWD) is None)
+    check("substitution cd -> exempt",
+          g('echo "$(cd /tmp && pwd)"', MAIN_CWD) is None)
+    # cd as text, not command
+    check("quoted cd text -> exempt",
+          g("git commit -m 'retire cd /tmp habit' -- a.rs", MAIN_CWD) is None)
+    check("plain command -> exempt", g("git status", MAIN_CWD) is None)
+    # Mid-chain cd
+    check("chain-tail cd -> deny",
+          g("git fetch && cd /tmp", MAIN_CWD) is not None)
+
+
 def main():
-    test_bare_checkout_foreign_live()
-    test_bare_checkout_only_own_session()
-    test_bare_checkout_no_pidfiles()
-    test_worktree_checkout_foreign_live()
-    test_dead_pid_pidfile()
-    test_malformed_pidfile()
-    test_switch_variant()
-    test_merge_variant()
-    test_checkout_bare_new_branch()
-    test_checkout_dashdash_paths_unchanged()
-    test_solo_still_reaches_allow_path()
+    test_cd_guard()
     test_branch_force_main_asks()
     test_branch_force_main_worktree_unaffected()
     test_branch_force_non_main_unaffected()

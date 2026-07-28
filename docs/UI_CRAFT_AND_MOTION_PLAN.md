@@ -2,7 +2,7 @@
 
 **Status:** APPROVED design, not built · 2026-07-03 · Fable 5
 **Prerequisites:** none (independent of Wave 1 designs; touches manifold-ui + bundled preset JSONs only)
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
 The governing insight: **the design language is right and settled; what separates MANIFOLD
 from Ableton-grade is finish, not style.** This doc converts a Fable art-director audit
@@ -35,7 +35,7 @@ escalation, not a guess.
 | BUTTON_RADIUS(3) users | buttons: `panels/macros_panel.rs:231`, `panels/audio_setup_panel.rs:936,1844` · list cells (deliberate): `panels/graph_editor.rs:297`, `panels/ableton_picker.rs:383,481`, `panels/browser_popup.rs:416,584` | Two buttons missed the chip sweep |
 | Hardcoded radii outside tokens | one: `panels/transport.rs:70` (documented circular-dot exemption) | Token discipline otherwise clean |
 | Duplicate scrollbar token families | `color.rs:209,239` vs `color.rs:749-751` | Two sets, different values |
-| Comment-synced text tokens | `color.rs:627,630` (`TEXT_PRIMARY_C32`, `TEXT_DIMMED_C32` — "§A: synced w/") | Drift waiting; alias instead |
+| Comment-synced text tokens | `color.rs:627,630` (`TEXT_PRIMARY_C32`, `TEXT_DIMMED_C32` — "section A: synced w/") | Drift waiting; alias instead |
 | Timeline scrollbar | `panels/viewport.rs` (draw side) | Square thumb; generic `scroll_container.rs:34` already supports `corner_radius` |
 | Clip rendering | `manifold-renderer/src/clip_draw.rs` (GPU SDF body) | Rounded top (CLIP_RADIUS 4), square-cornered name strip bottom; ring at body radius |
 | Layer seam composition | `color.rs:896` `CLIP_VERTICAL_PAD 6` + `:233` `TRACK_SEPARATOR_HEIGHT 2` | Visible inter-layer boundary = fuzzy multi-edge band; header column groove is crisp 2px |
@@ -196,16 +196,16 @@ runs; a `bool any_animating` bubbles up for dirty-tracking.
 
 Everything else in this plan modifies existing code; seams are listed per phase.
 
-## §4. Phasing
+## 4. Phasing
 
-Every phase: fresh session, read-back first (this doc §1-§3 + the files the phase
+Every phase: fresh session, read-back first (this doc section 1-section 3 + the files the phase
 touches), batch edits, ONE verify cycle at the end. Test scope is manifold-ui-local
 until P7's single workspace-adjacent sweep. `ui-snap` renders are the visual gate;
 Peter eyeballs taste-tagged items.
 
 ### P1 — Motion foundation
-- **Entry:** anchors in §1 re-verified; `cargo test -p manifold-ui --lib` green.
-- **Deliverables:** `anim.rs` — all four pieces (§3: `AnimF32`, `Transient`,
+- **Entry:** anchors in section 1 re-verified; `cargo test -p manifold-ui --lib` green.
+- **Deliverables:** `anim.rs` — all four pieces (section 3: `AnimF32`, `Transient`,
   `FlipList`, exit-state pattern doc-comment) + `MOTION_*`/`EASE_SNAP` tokens
   (D1, D15) + reduced-motion check; applied to: kit chip hover/press (background +
   1px press drop) and drawer open/close height.
@@ -273,7 +273,7 @@ Peter eyeballs taste-tagged items.
 ### P5 — Graph editor legibility
 - **Deliverables:** D9 preset position re-bake (write the batch tool, run it, commit
   regenerated JSONs) · D10 wire under-node dimming · port-label LOD (hide below the
-  same threshold params use; ⚠ VERIFY-AT-IMPL the constant per §1) · param-row echo
+  same threshold params use; ⚠ VERIFY-AT-IMPL the constant per section 1) · param-row echo
   fix (bound name == param name → render once; else ellipsize target only) · D13
   value-format table · investigate-and-fix the graph-vs-editor scene node-border
   divergence (`ui-snap graph` borderless vs `editor` cyan-bordered — one is
@@ -323,13 +323,13 @@ Peter eyeballs taste-tagged items.
 - **Forbidden:** fixing audit findings in-phase (they're the next plan's input);
   golden images from a dirty tree.
 
-## §5. Decided — do not reopen
+## 5. Decided — do not reopen
 1. Headers stay full-saturation (Peter, verbatim in D8).
 2. Blue keeps selection+active roles; only the white header ring ships.
 3. Motion = 90/160/240 ms, two curves (ease + EASE_SNAP), chrome-only,
    action-triggered ONLY — ambient/beat-aware motion rejected verbatim (D18).
 4. No animation clock thread, no global registry; per-panel ownership ticked by
-   the UI frame. Motion layer = exactly four pieces (§3).
+   the UI frame. Motion layer = exactly four pieces (section 3).
 4b. Data snaps instantly; visuals settle after (D15). Playhead never eases.
 4c. Stepped zoom is dead; continuous 0.25–1000 px/beat (D16).
 5. Radius system = 2/4/6 (+3 for list cells under a cell-named token).
@@ -340,7 +340,7 @@ Peter eyeballs taste-tagged items.
 10. "Array" is the user word; grids stay button grids (older standing decisions
     touching these surfaces — see decision log).
 
-## §6. Deferred
+## 6. Deferred
 - **Perform-mode skin** — rides PERFORM_SURFACE P1; revive when its chrome exists.
 - **Commerce surface polish** (license entry, watermark, update prompt) — rides
   COMMERCIALIZATION_DESIGN phases; must use this kit when built.

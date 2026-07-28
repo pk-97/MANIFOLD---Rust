@@ -1,6 +1,6 @@
 # Token Economics — measured spend, provider options, routing rules
 
-**Status:** MEASURED BASELINE 2026-07-23 (Fable session, final night of the Claude roster). Every number below came from local Claude Code transcripts, not from estimates — regenerate with `scripts/token_report.py`. Companion to `docs/AGENT_ROUTING.md` §0 (R5 window economy, R6 executor shape, R7 CLAUDE.md size, R8 LiteLLM proxy). **Read this before making any purchasing or routing decision.**
+**Status:** MEASURED BASELINE 2026-07-23 (Fable session, final night of the Claude roster). Every number below came from local Claude Code transcripts, not from estimates — regenerate with `scripts/token_report.py`. Companion to `docs/AGENT_ROUTING.md` section 0 (R5 window economy, R6 executor shape, R7 CLAUDE.md size, R8 LiteLLM proxy). **Read this before making any purchasing or routing decision.**
 
 Written the night before the K3/GLM5.2/DeepSeek roster change, so the baseline is the *old* roster at full tilt. That is the point: it is the control group.
 
@@ -93,7 +93,7 @@ Call 600 costs **6x** what call 20 cost, for identical work. Session totals:
 
 **12% of sessions burn 50% of all tokens.**
 
-> **The existing doctrine threshold is wrong.** `AGENT_ROUTING.md` §Overnight says seats rotate at "~500K observed as the sensible ceiling." At 500K every subsequent call costs half a megatoken. **Rotate at ~200K (around call 150).** This is the single largest lever in this document and it is a one-line change. (Workers/dispatchers only — the lead seat is exempt from the hook ceiling, Peter 2026-07-24.)
+> **The existing doctrine threshold is wrong.** `AGENT_ROUTING.md` section Overnight (orchestration pattern (added 2026-07-21, god-file wave — Peter's directives)) says seats rotate at "~500K observed as the sensible ceiling." At 500K every subsequent call costs half a megatoken. **Rotate at ~200K (around call 150).** This is the single largest lever in this document and it is a one-line change. (Workers/dispatchers only — the lead seat is exempt from the hook ceiling, Peter 2026-07-24.)
 
 ---
 
@@ -124,12 +124,12 @@ Recent-window run rate is higher: **~$17,600/month**.
 | Claude Haiku 4.5 | $1.00 | $5.00 | $0.10 |
 | GLM 5.2 | $1.40 | $4.40 | $0.26 |
 | DeepSeek V4 Pro | $1.74 | $3.48 | $0.145 |
-| **DeepSeek V4 Flash** | **$0.14** | **$0.28** | **$0.028** via opencode Zen; **$0.0028 direct API** (verified 2026-07-24 — 10x gap between sellers, see §12) |
+| **DeepSeek V4 Flash** | **$0.14** | **$0.28** | **$0.028** via opencode Zen; **$0.0028 direct API** (verified 2026-07-24 — 10x gap between sellers, see section 12) |
 | Qwen3.7 Max | $2.50 | $7.50 | $0.50 |
 | MiniMax M3 | $0.30 | $1.20 | $0.06 |
 | Kimi K3 | — | — | **~$0.80** (measured 2026-07-18) |
 
-Source: opencode Zen published rates; Kimi from the measurement recorded in `AGENT_ROUTING.md` §Provider facts.
+Source: opencode Zen published rates; Kimi from the measurement recorded in `AGENT_ROUTING.md` section Provider (facts (cc-fleet)) facts.
 
 **K3's cache-read rate ($0.80) is higher than Opus 4.8's ($0.50).** A heavy K3 top session is the single most expensive configuration available. This is not a reason to avoid K3 — it is the reason the lead seat must stay small and rare.
 
@@ -182,7 +182,7 @@ Go's quota is dollar-denominated, so **oversized requests exhaust it long before
 
 **~$82/month added.** Start at zAI Pro, not Max: the roster is unproven and R6 should move volume down to Flash. Upgrade only on a real cap-out.
 
-**SUPERSEDED 2026-07-24 — Peter decided a different stack after live-pricing verification: see §12.**
+**SUPERSEDED 2026-07-24 — Peter decided a different stack after live-pricing verification: see section 12.**
 
 **Watch item:** z.ai sizes a prompt at 15–20 model invocations. Measured here: **32.6**. Treat effective capacity as roughly half the headline — Pro's 2,000/week may behave like ~1,000. Also unverified: whether z.ai's terms carry a context-length or fair-use clause that bites at 217K-token turns, and whether proxying a subscription endpoint through LiteLLM is permitted by Kimi's and z.ai's terms.
 
@@ -199,8 +199,8 @@ Go's quota is dollar-denominated, so **oversized requests exhaust it long before
 
 Two assumptions, **stated as estimates, not measurements**:
 
-1. **Workers cut 8x** — R6 option A gives Flash one small task with no repo context (~400K → ~50K). *This is the load-bearing assumption.* If workers still haul full context, the saving mostly vanishes. §3a says the gap is currently zero, so the headroom is real; whether it is captured depends entirely on R6 being implemented as written.
-2. **Seats cut 2x** — rotation at 200K instead of 500K. Grounded in the §3c curve; higher confidence.
+1. **Workers cut 8x** — R6 option A gives Flash one small task with no repo context (~400K → ~50K). *This is the load-bearing assumption.* If workers still haul full context, the saving mostly vanishes. section 3a says the gap is currently zero, so the headroom is real; whether it is captured depends entirely on R6 being implemented as written.
+2. **Seats cut 2x** — rotation at 200K instead of 500K. Grounded in the section 3c curve; higher confidence.
 
 **After optimising, K3 becomes the largest line item** ($1,792 of $3,051) despite being a third of seat volume, because of its $0.80 cache rate. The cheapest configuration is one where the lead thinks hard and rarely and everything else happens below it — i.e. the old Fable window-economy posture was structurally correct, not merely a workaround for Anthropic's pricing. **This answers R5 with data.**
 
@@ -214,10 +214,10 @@ A lead→middle→worker waterfall sorts by *seniority of the task*. The measure
 If clippy, a test, or an exit code catches the error, use the cheapest model *regardless of task difficulty* — the gate is the reviewer. If only judgment catches it (wrong reuse target, bad seam, semantics), it needs an expensive seat *regardless of how trivial the edit looks*. This supersedes "mechanical vs judgment," which is a lossy proxy for it.
 
 **2. How much context does it need?**
-This matters more than model choice. A cheap model at 225K costs more than an expensive one at 20K. Everything currently runs at ~225K regardless of task (§3a) — worker tasks are being charged lead-seat prices. Sizing context per task beats switching models.
+This matters more than model choice. A cheap model at 225K costs more than an expensive one at 20K. Everything currently runs at ~225K regardless of task (section 3a) — worker tasks are being charged lead-seat prices. Sizing context per task beats switching models.
 
 **3. Does the answer need to be prose?**
-73% of calls currently say yes (§3b). Most shouldn't. Structured returns below the lead; "commit `<sha>`, gate green, 3 files" instead of five paragraphs.
+73% of calls currently say yes (section 3b). Most shouldn't. Structured returns below the lead; "commit `<sha>`, gate green, 3 files" instead of five paragraphs.
 
 Consequences:
 
@@ -249,7 +249,7 @@ Your own tier-spawn guard records why this section exists: the rule "was policy,
 
 ## 11. Open items
 
-- The §8 optimised figure is a **target, not a result.** Re-run `token_report.py` after the first full wave on the new roster and record the actual against it here.
+- The section 8 optimised figure is a **target, not a result.** Re-run `token_report.py` after the first full wave on the new roster and record the actual against it here.
 - Pair spend with an outcome number before optimising on cost alone (R8): landed diffs that survived, lanes rejected at review, bugs that returned. The most expensive line will be the lead's review pass, and that pass is what prevents the failure the steering model exists to stop. Cost-only optimisation points straight at cutting it.
 - Currency: AUD display, USD enforcement, rate + date stamped on every figure (R8). Applies to the metered tier only; Kimi and z.ai are subscriptions where notional dollars are a within-endpoint usage proxy, not money.
 
@@ -269,12 +269,12 @@ External prices re-verified against the live web 2026-07-24 (Fable session). Rat
 
 **FINAL (Peter, 2026-07-24 evening — supersedes the Qwen revision below):** dispatcher = **z.ai Coding Plan Pro at $64.8/mo** (10% monthly promo off $72; quarterly −20% available — consider after the seat proves out), running **GLM-4.7 as the default dispatcher model (the only always-1x model on the plan; ~73.8% SWE-bench Verified — per-step diff judgment is its strength, and the file-based orchestration doctrine deliberately removes the long-horizon autonomy that is 5.2's actual edge, Terminal-Bench 41 vs 81).** GLM-5.2 permitted off-peak while the through-September 1x promo runs (z.ai peak = 16:00–20:00 Sydney; overnight waves are off-peak) — free A/B of 4.7-vs-5.2 dispatcher stall rate; after September, 5.2 is deliberate-escalation only. Alibaba Qwen Coding Plan DROPPED: Pro slots are stock-limited (daily restock 02:00 Sydney, "endless out of stock" reports) — right product, unbuyable in practice. MiniMax DISQUALIFIED for any seat: their own GitHub issues document Token Plan quota exhausted by cache reads ("cache_read inflates monotonically per turn"), $20 tier gone in 4–5h of Claude Code use, 10:1 cache discount unverifiable in balance deductions. Lilac (getlilac.com) REJECTED for seats: personal non-commercial terms (MANIFOLD is commercial) + OpenAI-format-only API (needs the unbuilt LiteLLM translation); revisit as overflow/A-B pool post-proxy. Bonus discovered on Go's page: Go includes Kimi K3 at 2x request limits (limited-time) — a small K3 consult pool separate from the Allegro window. **Purchased totals: Kimi Allegro $99 + z.ai Pro $64.8 + Go $10 ($5 first month) = $173.8 USD ≈ $249 AUD/mo** against the $350 budget.
 
-**D-48 slot-map note (2026-07-24, later the same day):** Peter's native-lane slot map (AGENT_ROUTING §Native provider lanes) puts **GLM-5.2 on the dispatcher (`opus`) slot**, superseding the "4.7 default / 5.2 off-peak A/B" ruling above as the *default* dispatcher. The quota reasoning above is NOT retired: 5.2 draws 2–3x plan quota at peak (1x promo through September, z.ai peak 16:00–20:00 Sydney), so peak-time waves can still brief the `sonnet` (GLM-4.7) lane as the dispatcher — the slot map makes that a per-wave choice, not a config change. If plan-window pressure appears, the 5.2 dispatcher slot is the first suspect (also flagged in AGENT_ROUTING).
+**D-48 slot-map note (2026-07-24, later the same day):** Peter's native-lane slot map (AGENT_ROUTING section Native provider lanes) puts **GLM-5.2 on the dispatcher (`opus`) slot**, superseding the "4.7 default / 5.2 off-peak A/B" ruling above as the *default* dispatcher. The quota reasoning above is NOT retired: 5.2 draws 2–3x plan quota at peak (1x promo through September, z.ai peak 16:00–20:00 Sydney), so peak-time waves can still brief the `sonnet` (GLM-4.7) lane as the dispatcher — the slot map makes that a per-wave choice, not a config change. If plan-window pressure appears, the 5.2 dispatcher slot is the first suspect (also flagged in AGENT_ROUTING).
 
 **Dispatcher revision (Peter, 2026-07-24, same day — SUPERSEDED above; kept for the reasoning trail):** z.ai Pro DROPPED before purchase — GLM 5.2's 2–3x quota multiplier makes the plan burn fast (corroborated by user reports), and GLM 5.2 never won the seat on merit. Ruling: three DIFFERENT providers across the tiers (Moonshot / Alibaba / DeepSeek) so review blind spots don't correlate — the dispatcher seat is deliberately "dumb": pop queue, brief, gate, review Flash diffs, escalate. Qwen Coding Plan Pro meters in REQUESTS (90K/mo, 45K/wk, 6K/5h — context size irrelevant, the right currency for this workload) and bundles glm-5, kimi-k2.5, MiniMax-M2.5, qwen3-max, qwen3-coder-next/plus behind one key (verified on the purchase page 2026-07-24) — model fallback without vendor switch. Purchase: Alibaba Cloud international console (Singapore), Coding Plan page (NOT the credits-metered "Token Plan"), one-time first month, dedicated Coding-Plan API key. Benchmarks: qwen3-coder-next 70–74% SWE-bench Verified; qwen3-max ≈ GLM-5.2 (near-ties); floor-clearing evidence only — the first wave's outcome metrics decide the seat. Named fallback if Qwen review quality disappoints across its bundle: MiniMax M3 Plus $20 (verify how cached tokens count against its quota first).
 
 - **Go is the trial route for Flash, DeepSeek's direct API the named fallback** — switch if the $12/5h throttle stalls a wave or the mix turns cache-hit-heavy. Direct: prepaid balance (natural hard cap), cache hits $0.0028/MTok — 10x cheaper than through opencode, netting ~1.7x after Go's 6x quota subsidy; miss-heavy favours Go, hit-heavy favours direct.
 - **Ollama Cloud** — not rejected on the K3 gap (K3 rides the Kimi sub; their cloud hosts GLM-5.2 and Flash). Declined because GPU-time metering charges the prefill (this workload's expensive dimension) with unpublished ceilings, and Pro caps at 3 concurrent — wrong shape for worker fan-out. Optional $20 consolidation experiment later.
-- **Verified corrections to §5/§7:** Kimi tiers are Moderato $19 / Allegretto $39 / Allegro $99 / Vivace $199; absolute Kimi quotas unpublished (7-day + 5-hour window, `/usage` in Kimi Code is the oracle, paid boosters are the overflow). z.ai: GLM-5.2 consumes plan quota at 3x peak (16:00–20:00 Sydney) / 2x off-peak (promo 1x to Sept) — overnight Sydney waves run off-peak; treat Pro's 2,000/wk as 500–1,000 effective.
-- **Effort policy (Peter, 2026-07-24): every seat defaults to LOW reasoning effort; DeepSeek runs with reasoning OFF (non-reasoning Flash mode). Raising effort is a deliberate per-task call, never the default.** Mirrored in AGENT_ROUTING.md §Reasoning effort.
-- **K3 quality concern CLOSED (Peter's direct observation): K3 has caught many errors Fable and Opus missed.** The remaining first-wave unknown is the GLM dispatcher seat — judge it on §11's outcome metrics, not cost.
+- **Verified corrections to section 5/section 7:** Kimi tiers are Moderato $19 / Allegretto $39 / Allegro $99 / Vivace $199; absolute Kimi quotas unpublished (7-day + 5-hour window, `/usage` in Kimi Code is the oracle, paid boosters are the overflow). z.ai: GLM-5.2 consumes plan quota at 3x peak (16:00–20:00 Sydney) / 2x off-peak (promo 1x to Sept) — overnight Sydney waves run off-peak; treat Pro's 2,000/wk as 500–1,000 effective.
+- **Effort policy (Peter, 2026-07-24): every seat defaults to LOW reasoning effort; DeepSeek runs with reasoning OFF (non-reasoning Flash mode). Raising effort is a deliberate per-task call, never the default.** Mirrored in AGENT_ROUTING.md section Reasoning effort.
+- **K3 quality concern CLOSED (Peter's direct observation): K3 has caught many errors Fable and Opus missed.** The remaining first-wave unknown is the GLM dispatcher seat — judge it on section 11's outcome metrics, not cost.

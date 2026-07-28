@@ -16,7 +16,7 @@
 //! tail mutates `local_project` and reads the process-global preset
 //! registry; per `CLAUDE.md`, all project mutation stays UI/content-thread
 //! only, never a bare background thread. This module never sends a
-//! `ContentCommand` — see the negative gate in the design's §3.
+//! `ContentCommand` — see the negative gate in the design's section 3.
 
 use std::path::PathBuf;
 use std::sync::Arc;

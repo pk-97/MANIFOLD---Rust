@@ -2,30 +2,26 @@
 
 <!-- index: The named-Channels array-wire type system: Channels<T> identity, port typing, and coercion rules. Consult before extending the graph type system. -->
 
-**Status:** Phases 0–4 + 6 shipped, including the §14.9 explicit-marker preprocessor (commits `72fd83af` extractor + `dd6889e3` integration), the editor-snapshot Channels extension (`dd6889e3`), the runtime debug-name registry (`dd6889e3`), and the doc sweep across companion files (BUFFER_PORT_PLAN, NODE_CATALOG, ADDING_PRIMITIVES, DECOMPOSING_GENERATORS, PRIMITIVE_LIBRARY_DESIGN). Phase 5 (workspace test gate + canonical-fixture visual sanity check) is the last remaining phase; Peter did informal eyeball verification on the affected presets but the formal `cargo test --workspace` + `cargo clippy --workspace -- -D warnings` pass + GPU frame-time baseline check still wants doing. This document is the source of truth for the named-channel type system migration. Agents executing any remaining phase should read this document end-to-end first.
+**Status:** Phases 0–4 + 6 shipped, including the section 14.9 explicit-marker preprocessor (commits `72fd83af` extractor + `dd6889e3` integration), the editor-snapshot Channels extension (`dd6889e3`), the runtime debug-name registry (`dd6889e3`), and the doc sweep across companion files (BUFFER_PORT_PLAN, NODE_CATALOG, ADDING_PRIMITIVES, DECOMPOSING_GENERATORS, PRIMITIVE_LIBRARY_DESIGN). Phase 5 (workspace test gate + canonical-fixture visual sanity check) is the last remaining phase; Peter did informal eyeball verification on the affected presets but the formal `cargo test --workspace` + `cargo clippy --workspace -- -D warnings` pass + GPU frame-time baseline check still wants doing. This document is the source of truth for the named-channel type system migration. Agents executing any remaining phase should read this document end-to-end first.
 
-**Established:** 2026-05-27. Sign-off pass on 2026-05-27 added a Phase 0 (end-to-end smoke test on one typed family before Phase 1 hardens the foundation) and baked in five revisions to the original design: sample count rides on the wire's runtime interface; pad fields use an explicit per-field marker instead of a `_pad*` name-prefix heuristic; one canonical macro form per typed family enforced by lint; the `well_known` registry + collision test are emitted from a single source list via macro; the Permissive allow-list is a `pub const` in the validator that the test enumerates against. §13 resolutions and the relevant sections (§3.1, §7.5, §8.2, §8.6, §9.5, §10, §11.4, §12.1) reflect these decisions. The pad-marker mechanism — originally walked-back to a `_pad*` heuristic during Phase 4a — landed as designed in Phase 4b.7 via the `// @channel_skip` preprocessor (§8.2, §14.9).
-
-**Implementation log (2026-05-27 → 2026-05-28):**
+**Established:** 2026-05-27. Sign-off pass on 2026-05-27 added a Phase 0 (end-to-end smoke test on one typed family before Phase 1 hardens the foundation) and baked in five revisions to the original design: sample count rides on the wire's runtime interface; pad fields use an explicit per-field marker instead of a `_pad*` name-prefix heuristic; one canonical macro form per typed family enforced by lint; the `well_known` registry + collision test are emitted from a single source list via macro; the Permissive allow-list is a `pub const` in the validator that the test enumerates against. section 13 resolutions and the relevant sections (section 3.1, section 7.5, section 8.2, section 8.6, section 9.5, section 10, section 11.4, section 12.1) reflect these decisions. The pad-marker mechanism — originally walked-back to a `_pad*` heuristic during Phase 4a — landed as designed in Phase 4b.7 via the `// @channel_skip` preprocessor (section 8.2, section 14.9).
 
 - **Phase 0 shipped** — commit `c59427e4`. Throwaway smoke test on `EdgePair` validated the design end-to-end before Phase 1 hardened anything.
-- **Phase 1 shipped** — commit `6a7a469c`. Core types (`ChannelName`, `ChannelElementType`, `ChannelSpec`, reshaped `ArrayType`, `MatchMode`, std430 calculators, `well_known_channels!` macro + registry, `channels_compatible` predicate, `GraphError::ChannelMismatch(Box<ChannelMismatchInfo>)`). Channel-name registry + collision test emit from a single source list per §7.5 resolution.
+- **Phase 1 shipped** — commit `6a7a469c`. Core types (`ChannelName`, `ChannelElementType`, `ChannelSpec`, reshaped `ArrayType`, `MatchMode`, std430 calculators, `well_known_channels!` macro + registry, `channels_compatible` predicate, `GraphError::ChannelMismatch(Box<ChannelMismatchInfo>)`). Channel-name registry + collision test emit from a single source list per section 7.5 resolution.
 - **Phase 2 shipped** — commit `05463952`. `primitive!` macro extended with `Channels[name: Type, ...]` inline syntax and `Channels[permissive]` modifier. TT-muncher `__channels_specs!` handles mixed `well_known::*` ident and inline string literal names. Four smoke primitives + six tests exercise the syntax end-to-end through the validator.
-- **Phase 3 shipped** — commit `e6357705`. `KnownItem` trait gains `const SPECS: &'static [ChannelSpec] = &[]` default; `ArrayType::of_known<T>()` folds `T::SPECS` into wire specs. Every typed family (`Particle`, `MeshVertex`, `Vec4Vertex`, `InstanceTransform`, `CurvePoint`, `EdgePair`, `Blob`) defines its `_SPECS` constant and wires it through `KnownItem`. §13(3) resolution applied (paired scalars at 4-byte align for CurvePoint and Vec4Vertex). Seven drift-assertion tests confirm `std430_stride(SPECS) == size_of::<Struct>()` for each family.
-- **Phase 4a shipped** — commit `40af5d37`. `wgsl_compute`'s naga walk extracts ChannelSpec lists from `var<storage>` struct fields (§8.2). The existing `_pad*` name-prefix heuristic ships as v1; the explicit-marker preprocessor originally signed off is slotted as scheduled follow-up (rationale in §8.2). `port_types_compatible` gains an Anonymous-pair compatibility rule preserving the wgsl_compute → cast atom bridge during the transition.
+- **Phase 3 shipped** — commit `e6357705`. `KnownItem` trait gains `const SPECS: &'static [ChannelSpec] = &[]` default; `ArrayType::of_known<T>()` folds `T::SPECS` into wire specs. Every typed family (`Particle`, `MeshVertex`, `Vec4Vertex`, `InstanceTransform`, `CurvePoint`, `EdgePair`, `Blob`) defines its `_SPECS` constant and wires it through `KnownItem`. section 13(3) resolution applied (paired scalars at 4-byte align for CurvePoint and Vec4Vertex). Seven drift-assertion tests confirm `std430_stride(SPECS) == size_of::<Struct>()` for each family.
+- **Phase 4a shipped** — commit `40af5d37`. `wgsl_compute`'s naga walk extracts ChannelSpec lists from `var<storage>` struct fields (section 8.2). The existing `_pad*` name-prefix heuristic ships as v1; the explicit-marker preprocessor originally signed off is slotted as scheduled follow-up (rationale in section 8.2). `port_types_compatible` gains an Anonymous-pair compatibility rule preserving the wgsl_compute → cast atom bridge during the transition.
 - **Phase 4b.1 shipped** — commit `b57b4e87`. JSON surgery on three generator presets (`BlackHole`, `ComputeStrangeAttractor`, `ParticleText`) splicing out four `node.cast_as_*` nodes; wgsl_compute's atomic-accumulator path also updated to emit `[value: U32]` specs matching what `u32`'s `KnownItem` produces downstream. Visually verified on all three presets before commit.
 - **Phase 4b.2 shipped** — commit `ab8f53ec`. Cast atom family deletion (6 atoms + 5 stub `Blob[N]` Pod types via `cast_array.rs` removal) and legacy `wgsl_compute_0in_1tex` / `_1tex_1tex` / `_2tex_1tex` variant deletion (3 files). Tests in `persistence.rs` and `json_graph_generator.rs` migrate to the generic `node.wgsl_compute`.
 - **Phase 4b.3 shipped** — commit `6a1d15b8`. `pub struct Blob` + `BLOB_SPECS` + drift assertion removed from `mesh_common.rs`. `blob_detect_ffi` and `blob_overlay_render` each carry their own module-private `BlobRect` Pod struct; the port declarations switch to inline `Channels[X: F32, Y: F32, WIDTH: F32, HEIGHT: F32]`. The wire is the public contract.
 - **Phase 4b.4 shipped** — commit `52b7f732`. `pub enum ItemKind`, `KnownItem::ITEM_KIND` const, `ArrayType::item_kind` field all deleted. `port_types_compatible` simplifies to "exact equality OR matching empty-specs Array sizes." Nine primitive test files drop their `assert_eq!(layout.item_kind, ItemKind::X)` assertions; the `every_conventional_array_port_declares_a_kind` invariant renames + tightens to require non-empty `specs` on every non-carve-out Array port.
 - **Phase 4b.6 shipped** — commit `72fd83af`. `extract_channel_skip(source)` preprocessor lands as a pure transformation with 17 unit tests covering every edge case from the original design: marker variations, multi-line struct decls, mixed `//` / `/* */` comments, per-struct isolation, attribute prefixes, stacked-markers idempotence, same-line markers rejected, orphan markers warn-only. No integration yet — function lands isolated so the integration commit reads cleanly.
 - **Phase 4b.7 + Phase 6.1 shipped** — commit `dd6889e3`. Skip set threads through `introspect` → `element_to_array_type` → `struct_members_to_specs`; the storage-struct `_pad[0-9]*` name-prefix heuristic retires entirely (no current core-dev shader exercised it — every `_pad*` field in the five wgsl_compute presets lives in *uniform* structs, which keep their separate `parse_uniform` `_pad*` filter). Three integration tests exercise the marker end-to-end + the post-heuristic behaviour + per-struct isolation through naga. **Bundled with the runtime debug-name registry** (`channel_names::register_runtime_name` + a `OnceLock<RwLock<AHashMap>>` overflow map; `wgsl_compute::struct_members_to_specs` registers each WGSL field name) so editor tooltips and validator errors recover "position" / "_pad0" / etc. instead of the raw hex hash. **And the snapshot extension:** `PortKindSnapshot::Array` reshapes to a struct variant carrying `channels: Vec<ChannelSnapshot>`, `match_mode`, `item_size`, `item_align`; `ChannelSnapshot { name: String, ty: String }` is the editor-facing shape. `graph_canvas::PortView::from_kind` migrates to borrow `&PortKindSnapshot`.
-- **Phase 6.2 shipped** — commit `<this>`. Companion doc sweep: NODE_CATALOG.md adds §1.1 with the `well_known` overview + a one-line note that `Array(T)` macro syntax expands to a Channels-typed wire; ADDING_PRIMITIVES.md's macro reference enumerates all four Array/Channels port-type forms; BUFFER_PORT_PLAN.md, DECOMPOSING_GENERATORS.md, PRIMITIVE_LIBRARY_DESIGN.md each get a top-of-doc note declaring their Array-port type-system sections superseded by this doc (topology references stay accurate; just read `Array<T>` as `Channels<T>`). Memory entry `feedback_named_channels_canonical.md` written for future sessions.
+- **Phase 6.2 shipped** — commit `<this>`. Companion doc sweep: NODE_CATALOG.md adds section 1.1 (Well-known channel-name registry (one-line overview)) with the `well_known` overview + a one-line note that `Array(T)` macro syntax expands to a Channels-typed wire; ADDING_PRIMITIVES.md's macro reference enumerates all four Array/Channels port-type forms; BUFFER_PORT_PLAN.md, DECOMPOSING_GENERATORS.md, PRIMITIVE_LIBRARY_DESIGN.md each get a top-of-doc note declaring their Array-port type-system sections superseded by this doc (topology references stay accurate; just read `Array<T>` as `Channels<T>`). Memory entry `feedback_named_channels_canonical.md` written for future sessions.
 
 **Phase 5 remains — workspace test gate + canonical-fixture visual sanity check.** Peter did informal eyeball verification on the three migration-affected presets during Phase 4b.1 sign-off; the formal `cargo test --workspace` + workspace clippy + GPU frame-time baseline check on `Liveschool Live Show V6 LEDS.manifold` still wants doing. Saved for whenever the next end-to-end testing session happens.
 
-**§17 (Texture2D channel signatures) — Phase 17.A shipped 2026-05-28.** Extends the Channel type system to decorate Texture2D ports with a four-slot RGBA channel signature. Same well_known registry, same FNV-1a-64 const-hash interning, same compile-time decidable match. Untyped Texture2D stays the back-compat default. Validator surfaces a structured `TextureChannelMismatch` carrying the first diverging slot index. Macro: `Texture2D[R: Name, G: Name, B: Name, A: Name]`. Migrated `node.optical_flow_estimate` to declare the Watercolor `(R: FLOW_X, G: CONFIDENCE, B: FLOW_Y, A: VALID)` convention; downstream consumer migrations (the bug-fix that motivated this) live in a follow-up commit. See §17 for the full surface.
-
-**Scheduled follow-up:** ~~Build the explicit-marker (`// @channel_skip`) preprocessor for `wgsl_compute` pad-field handling.~~ Shipped 2026-05-28 in commits 4b.6 + dd6889e3. See §8.2 and the §14.9 historical note for the final form.
+**section 17 (Texture2D channel signatures) — Phase 17.A shipped 2026-05-28.** Extends the Channel type system to decorate Texture2D ports with a four-slot RGBA channel signature. Same well_known registry, same FNV-1a-64 const-hash interning, same compile-time decidable match. Untyped Texture2D stays the back-compat default. Validator surfaces a structured `TextureChannelMismatch` carrying the first diverging slot index. Macro: `Texture2D[R: Name, G: Name, B: Name, A: Name]`. Migrated `node.optical_flow_estimate` to declare the Watercolor `(R: FLOW_X, G: CONFIDENCE, B: FLOW_Y, A: VALID)` convention; downstream consumer migrations (the bug-fix that motivated this) live in a follow-up commit. See section 17 for the full surface.
 
 **Acceptance criteria after Phase 6:** 862/862 manifold-renderer lib tests passing; clippy clean; `check-presets` reports 49/49 OK; three affected presets (BlackHole, ComputeStrangeAttractor, ParticleText) visually verified; manifold-app binary builds; companion docs reference CHANNEL_TYPE_SYSTEM.md as the type-system source of truth.
 
@@ -38,7 +34,7 @@
 - [MANIFOLD_GPU_ARCHITECTURE.md](MANIFOLD_GPU_ARCHITECTURE.md) — WGSL std430 layout rules, uniform alignment.
 - [NODE_CATALOG.md](NODE_CATALOG.md) — registry of currently shipped primitives. Updates during migration.
 - [PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md](PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md) — the active 2nd-pass decomposition. Several future decompositions become substantially easier after this migration lands.
-- [GRAPH_COMPILER.md](GRAPH_COMPILER.md) — the planned WGSL fusion compiler + `for_each_n` per-pixel loops initiative. The Channel type system is designed to compose with the future fusion compiler; see §16 for the design constraints this imposes on the channel system.
+- [GRAPH_COMPILER.md](GRAPH_COMPILER.md) — the planned WGSL fusion compiler + `for_each_n` per-pixel loops initiative. The Channel type system is designed to compose with the future fusion compiler; see section 16 for the design constraints this imposes on the channel system.
 
 ---
 
@@ -51,7 +47,7 @@ If you're picking this up cold:
 - **Scope:** 7 phases (Phase 0 → Phase 6), ~7½ chats of work. Migrates every typed array (Particle, MeshVertex, CurvePoint, etc.) and the `wgsl_compute` escape hatch onto Channels. Deletes `ItemKind` enum + `Array<Anonymous>` + the `cast_as_*` atom family.
 - **Performance impact:** zero runtime cost. Same byte layouts, same buffer allocations, same WGSL shaders. The migration is type-system-only on the data path.
 - **Risk surface:** primarily *naming consistency* across migrated primitives. Mitigated by a code-level `well_known` channel-name registry that every migrated primitive references.
-- **Where to start:** Phase 0 in §10 — a ~½-chat end-to-end smoke test on one typed family (EdgePair recommended) before Phase 1 hardens the type infrastructure. Read §3-§6 first for the model; §11-§12 give worked examples; §13 records the closed sign-off decisions; §16 covers fusion-compatibility constraints any future amendment must respect.
+- **Where to start:** Phase 0 in section 10 — a ~½-chat end-to-end smoke test on one typed family (EdgePair recommended) before Phase 1 hardens the type infrastructure. Read section 3-section 6 first for the model; section 11-section 12 give worked examples; section 13 records the closed sign-off decisions; section 16 covers fusion-compatibility constraints any future amendment must respect.
 
 ---
 
@@ -96,7 +92,7 @@ New data shapes are graph-authoring concerns, not Rust changes. A user wanting "
 
 The thing flowing on a wire is a **`Channels` array**: a list of *samples*, where each sample carries a set of named typed *channels*.
 
-- **Sample** — one item in the array. A particle is a sample. A detection is a sample. An audio FFT frame's bin array is one sample carrying many bin channels (or N samples each with one bin channel, depending on framing — see §4.5).
+- **Sample** — one item in the array. A particle is a sample. A detection is a sample. An audio FFT frame's bin array is one sample carrying many bin channels (or N samples each with one bin channel, depending on framing — see section 4.5).
 - **Channel** — one named typed slot on every sample. A particle has channels named `position`, `velocity`, `life`, `age`, `color`. A detection has channels named `x`, `y`, `width`, `height`.
 - **Channel element type** — the type of values in one channel (F32, I32, U32, Vec2F, Vec3F, Vec4F).
 - **Channel spec** — the `(name, element type)` pair describing one channel.
@@ -110,7 +106,7 @@ The name *Channel* was chosen for MANIFOLD because: (a) the graph is fundamental
 
 ### 3.1 Data shape
 
-Every Channels array carries N samples × M channels, where M is fixed per wire type (set at graph compile time) and N is the runtime sample count (bounded by `max_capacity`). The active sample count is exposed *through the wire's runtime interface* — a consumer that declares a Channels port receives both the buffer handle and the sample count cohesively, without separately wiring an `active_count` scalar port. The underlying runtime mechanism is unchanged from BUFFER_PORT_PLAN.md §"Active-count slider": the producer sets the count per dispatch and the runtime passes it via uniform. The wire-level API just bundles the uniform with the buffer so consumers (and AI agents reading the graph) see one handle, not two parallel signals. This preserves fusion-compatibility (§16.6 — the fusion compiler still emits a shader looping over a runtime uniform).
+Every Channels array carries N samples × M channels, where M is fixed per wire type (set at graph compile time) and N is the runtime sample count (bounded by `max_capacity`). The active sample count is exposed *through the wire's runtime interface* — a consumer that declares a Channels port receives both the buffer handle and the sample count cohesively, without separately wiring an `active_count` scalar port. The underlying runtime mechanism is unchanged from BUFFER_PORT_PLAN.md section"Active-count slider": the producer sets the count per dispatch and the runtime passes it via uniform. The wire-level API just bundles the uniform with the buffer so consumers (and AI agents reading the graph) see one handle, not two parallel signals. This preserves fusion-compatibility (section 16.6 — the fusion compiler still emits a shader looping over a runtime uniform).
 
 Channel layout is **interleaved sample-major**:
 
@@ -121,19 +117,19 @@ Channel layout is **interleaved sample-major**:
  sample_N-1_ch_0, ..., sample_N-1_ch_M-1]
 ```
 
-Byte offset of channel `i` in sample `j` is `(j × sample_stride_bytes + channel_offset[i])`. The `sample_stride_bytes` and per-channel `channel_offset[i]` are derived from the Channels signature via WGSL std430 layout rules (see §4.4). They are compile-time constants per wire.
+Byte offset of channel `i` in sample `j` is `(j × sample_stride_bytes + channel_offset[i])`. The `sample_stride_bytes` and per-channel `channel_offset[i]` are derived from the Channels signature via WGSL std430 layout rules (see section 4.4). They are compile-time constants per wire.
 
 One `MTLBuffer` per Channels wire. Same as today's `Array<T>` allocation. Buffer pool / allocation lifecycle inherited from the existing typed-array infrastructure unchanged.
 
 ### 3.2 The wire type carries names
 
-The wire's `PortType::Array` carries the full Channels signature, including channel names. The validator uses the signature to check producer→consumer compatibility (§5). The graph editor uses it to render channel names on ports and wires.
+The wire's `PortType::Array` carries the full Channels signature, including channel names. The validator uses the signature to check producer→consumer compatibility (section 5). The graph editor uses it to render channel names on ports and wires.
 
-Names are **interned at compile time** as `ChannelName` values (u64 hash of the name string — see §4.2). Lookup, comparison, and storage are cheap; the original string is retained in a parallel debug registry for display and error messages.
+Names are **interned at compile time** as `ChannelName` values (u64 hash of the name string — see section 4.2). Lookup, comparison, and storage are cheap; the original string is retained in a parallel debug registry for display and error messages.
 
 ### 3.3 The byte layout matches what the existing typed structs use
 
-Every existing typed array (Particle, MeshVertex, etc.) is `#[repr(C)]` with explicit pad fields that match WGSL std430 layout (verified — see §6 migration map for per-type proofs). Replacing these with Channels signatures of equivalent specs produces byte-identical layouts: same offsets per field, same total stride, same alignment. The existing GPU shaders see the same bytes; the existing Rust producer code writes through the same struct field accesses.
+Every existing typed array (Particle, MeshVertex, etc.) is `#[repr(C)]` with explicit pad fields that match WGSL std430 layout (verified — see section 6 migration map for per-type proofs). Replacing these with Channels signatures of equivalent specs produces byte-identical layouts: same offsets per field, same total stride, same alignment. The existing GPU shaders see the same bytes; the existing Rust producer code writes through the same struct field accesses.
 
 The migration is therefore byte-preserving on the data path. The change is in the *type tag* the validator sees and the *names* the editor and AI agents can read.
 
@@ -150,7 +146,7 @@ The current `Array<Particle>` only answers "how many bytes per item": 64. Everyt
 
 ### 3.5 Designed to compose with the fusion compiler
 
-The Channel type system is designed forward-compatible with the planned WGSL fusion compiler (see [GRAPH_COMPILER.md](GRAPH_COMPILER.md)). Decisions in §4 (compile-time-known specs, deterministic std430 layout, const-foldable channel names, closed element-type set, simple match modes) are all in service of letting a future compiler pass walk a sub-graph of Channels-typed atoms and emit one fused shader without runtime introspection. **§16 enumerates the specific constraints; future amendments to §4 must check against §16 before changing the type system shape.**
+The Channel type system is designed forward-compatible with the planned WGSL fusion compiler (see [GRAPH_COMPILER.md](GRAPH_COMPILER.md)). Decisions in section 4 (compile-time-known specs, deterministic std430 layout, const-foldable channel names, closed element-type set, simple match modes) are all in service of letting a future compiler pass walk a sub-graph of Channels-typed atoms and emit one fused shader without runtime introspection. **section 16 enumerates the specific constraints; future amendments to section 4 (Two unlocks, one engine) must check against section 16 before changing the type system shape.**
 
 ---
 
@@ -254,7 +250,7 @@ Compile-time hashing means port type declarations stay `const`. The `primitive!`
 
 Storage cost: 8 bytes per channel name. Comparison: u64 equality. Hash for AHashMap lookup: identity.
 
-**Collision risk:** 64-bit hashing across the expected name set (a few hundred well-known names plus a handful of user-introduced names per session, total bound under 1000) gives collision probability of approximately 2.7e-14. Treat as zero. If a collision ever appears (it won't), the failure mode is a validator accepting an incompatible wire silently; a CI test (§9.5) walks every distinct channel name in the registry and asserts pairwise distinct hashes.
+**Collision risk:** 64-bit hashing across the expected name set (a few hundred well-known names plus a handful of user-introduced names per session, total bound under 1000) gives collision probability of approximately 2.7e-14. Treat as zero. If a collision ever appears (it won't), the failure mode is a validator accepting an incompatible wire silently; a CI test (section 9.5) walks every distinct channel name in the registry and asserts pairwise distinct hashes.
 
 **Original name retention.** Hash-only would make error messages unreadable. A parallel runtime registry maps `ChannelName → &'static str` so debug formatting, error messages, and editor display can resolve hashes back to strings. The registry is populated as channel names are constructed; entries are never removed.
 
@@ -280,7 +276,7 @@ Each element type has fixed WGSL std430 size and alignment:
 | Vec3F | 12 | 16 |
 | Vec4F | 16 | 16 |
 
-The std430 rule for Vec3F (12-byte payload, 16-byte alignment) is the same trap that produced `_pad0` fields in today's `Particle` / `MeshVertex` structs. The Channels layout calculator (§4.4) inserts the same padding automatically; the resulting byte layout matches the hand-coded structs exactly.
+The std430 rule for Vec3F (12-byte payload, 16-byte alignment) is the same trap that produced `_pad0` fields in today's `Particle` / `MeshVertex` structs. The Channels layout calculator (section 4.4) inserts the same padding automatically; the resulting byte layout matches the hand-coded structs exactly.
 
 **Out of v1:**
 - Bool / packed-bool channels. No current typed array carries bools; defer.
@@ -309,13 +305,13 @@ algorithm std430_layout(specs):
     return (offsets, sample_stride, max_align)
 ```
 
-**Implementation note for Phase 1:** the calculator runs at graph compile time, not in `const` context. Per-type `_SPECS` constants get their `item_size` / `item_align` cached via either (a) lazy `OnceLock<ArrayType>` initialization (preferred — keeps the calculator regular Rust), or (b) a `const fn` calculator if stable Rust permits the required `while`/`for` constructs at the time of writing. Layout drift is caught by a Phase 1 test (§9.4) that round-trips every `_SPECS` constant through the calculator and asserts the stride matches the existing `#[repr(C)]` struct's `size_of`. The runtime-vs-const-fn choice is an implementation detail; the test is the real safety net.
+**Implementation note for Phase 1:** the calculator runs at graph compile time, not in `const` context. Per-type `_SPECS` constants get their `item_size` / `item_align` cached via either (a) lazy `OnceLock<ArrayType>` initialization (preferred — keeps the calculator regular Rust), or (b) a `const fn` calculator if stable Rust permits the required `while`/`for` constructs at the time of writing. Layout drift is caught by a Phase 1 test (section 9.4) that round-trips every `_SPECS` constant through the calculator and asserts the stride matches the existing `#[repr(C)]` struct's `size_of`. The runtime-vs-const-fn choice is an implementation detail; the test is the real safety net.
 
 **Why std430 specifically:** the bytes flowing through the wire end up bound as storage buffers in WGSL compute kernels and storage / vertex inputs in render pipelines. WGSL std430 is the layout rule the shader compiler uses to read those bytes back. Matching std430 at the Channels layer means the producer's bytes and the shader's interpretation agree by construction.
 
 ### 4.5 What "sample" means in context
 
-The "sample" axis is the variable-length axis on the wire. Sample count is bounded by `max_capacity` (allocated at chain build) and runtime-set via the producer's `active_count` mechanism (BUFFER_PORT_PLAN.md §"Active-count slider").
+The "sample" axis is the variable-length axis on the wire. Sample count is bounded by `max_capacity` (allocated at chain build) and runtime-set via the producer's `active_count` mechanism (BUFFER_PORT_PLAN.md section"Active-count slider").
 
 Different data shapes use the sample axis differently:
 
@@ -329,7 +325,7 @@ Different data shapes use the sample axis differently:
 | MIDI velocity (one frame, 128 notes) | One sample per note | velocity per note |
 | Per-channel scalar control (LFO sweep) | One sample per evaluation step | value per step |
 
-The wire carries one frame's worth of samples. Frame-to-frame state lives in `node.array_feedback` (renamed in this migration — see §6) and the wider StateStore system.
+The wire carries one frame's worth of samples. Frame-to-frame state lives in `node.array_feedback` (renamed in this migration — see section 6) and the wider StateStore system.
 
 ---
 
@@ -399,7 +395,7 @@ enum ChannelMismatchReason {
 }
 ```
 
-The original channel name strings (resolved from the debug registry, see §4.2) appear in the error message. A user sees:
+The original channel name strings (resolved from the debug registry, see section 4.2) appear in the error message. A user sees:
 
 ```
 ChannelMismatch in wire blob_detect_ffi.blobs → renderer.in:
@@ -412,7 +408,7 @@ ChannelMismatch in wire blob_detect_ffi.blobs → renderer.in:
   `well_known::WIDTH`.
 ```
 
-The error message points at the `well_known` registry as the resolution path. This is intentional: the registry IS the convention enforcement (§7).
+The error message points at the `well_known` registry as the resolution path. This is intentional: the registry IS the convention enforcement (section 7).
 
 ### 5.4 Port matching at the graph level
 
@@ -429,7 +425,7 @@ The pattern for each type:
 1. Define a `pub const X_SPECS: &'static [ChannelSpec]` in the same module as the existing `#[repr(C)]` struct.
 2. Replace `impl KnownItem for X { const ITEM_KIND: ItemKind = ItemKind::X; }` with the macro's new mechanism for emitting `ArrayType { specs: X_SPECS, ... }` when a primitive declares `Channels[...spec_pattern...]`.
 3. The Rust `#[repr(C)]` struct STAYS in its current form — it remains the in-memory representation, the GPU shader's struct mirror, and the `bytemuck::Pod` source. The struct is no longer the wire-type identity; the specs constant is.
-4. A drift-assertion test (§9.4) verifies `std430_stride(X_SPECS) == size_of::<X>()`. Caught at test time.
+4. A drift-assertion test (section 9.4) verifies `std430_stride(X_SPECS) == size_of::<X>()`. Caught at test time.
 
 Per-type signatures and byte-layout proofs:
 
@@ -525,7 +521,7 @@ Std430 layout: xy at 0 (align 8, size 8). Stride 8, align 8. **NOT** byte-equiva
 
 **Resolution:** use **Option A** (two scalar channels at 4-byte alignment) to preserve current byte parity with `[f32; 2]`-style consumers. The existing `Array<CurvePoint>` is 4-byte aligned; Option B would break that. Consumers that want Vec2 semantics compose via downstream `pack_vec2_from_scalars` or treat the two scalars as Vec2 in shader code.
 
-Documented as a convention in §7.
+Documented as a convention in section 7.
 
 ### 6.4 `Vec4Vertex` → `VEC4_VERTEX_SPECS`
 
@@ -618,7 +614,7 @@ These are the "fragments of larger compositions" types — scatter accumulators,
 // Array<[f32; 2]> consumers → Channels[x: F32, y: F32] at 4-byte align (same convention as CurvePoint)
 ```
 
-These do NOT get global `_SPECS` constants. The macro emits the inline signature per port declaration. Consumers that today wire generic `Array<f32>` (array_math, generate_range, lfo output, smoothing input, etc.) declare specific channel names per port — `value`, `t`, `gain`, `freq`, whatever is semantically correct for that port. **This is where naming consistency matters most** (§7).
+These do NOT get global `_SPECS` constants. The macro emits the inline signature per port declaration. Consumers that today wire generic `Array<f32>` (array_math, generate_range, lfo output, smoothing input, etc.) declare specific channel names per port — `value`, `t`, `gain`, `freq`, whatever is semantically correct for that port. **This is where naming consistency matters most** (section 7).
 
 ### 6.9 The deletion list
 
@@ -626,7 +622,7 @@ After migration completes (end of Phase 4):
 
 - `pub enum ItemKind` — deleted entirely.
 - `pub trait KnownItem` and its `ITEM_KIND` constant — deleted. The trait still exists if any helper code wants it, but the migration removes its only purpose.
-- `ItemKind::Anonymous` variant — deleted. `wgsl_compute` migrates to declared signatures (§8).
+- `ItemKind::Anonymous` variant — deleted. `wgsl_compute` migrates to declared signatures (section 8).
 - The `Array(Anonymous)` macro path — deleted.
 - The asymmetric typed→Anonymous coercion in `port_types_compatible` — deleted.
 - The cast atom family (`cast_as_particle`, `cast_as_u32`, `cast_as_mesh_vertex`, `cast_as_curve_point`, `cast_as_edge_pair`, `cast_as_instance_transform`) — deleted. Their job was bridging Anonymous → typed at the wgsl_compute boundary; Anonymous is gone.
@@ -668,7 +664,7 @@ The registry is the enforcement mechanism. The doc describes the registry.
 //! Adding a name: append one line inside the `well_known_channels!`
 //! macro invocation in the appropriate category. The constant
 //! declaration and the collision-check coverage are generated from
-//! the same source list — see §7.5.
+//! the same source list — see section 7.5.
 
 use crate::node_graph::ports::ChannelName;
 
@@ -834,7 +830,7 @@ Today's atoms in `cast_array.rs`:
 
 All delete in Phase 4. Their purpose was bridging `Array(Anonymous)` → typed; under the new model, the producer's `wgsl_compute` already emits a typed Channels signature. Consumers connect directly.
 
-Preset migration: every preset currently using a cast atom (BlackHole inserts 2 × `cast_as_u32`; ComputeStrangeAttractor inserts 1 × `cast_as_particle`) gets its cast nodes deleted and the surrounding wires reconnected directly. The Channels signatures must align between the wgsl_compute output and the downstream consumer — see Phase 4 in §10 for the per-preset audit.
+Preset migration: every preset currently using a cast atom (BlackHole inserts 2 × `cast_as_u32`; ComputeStrangeAttractor inserts 1 × `cast_as_particle`) gets its cast nodes deleted and the surrounding wires reconnected directly. The Channels signatures must align between the wgsl_compute output and the downstream consumer — see Phase 4 in section 10 for the per-preset audit.
 
 ### 8.4 Reparse semantics
 
@@ -854,7 +850,7 @@ This is **desired behavior** — the wgsl_compute author has changed the data's 
 
 ### 8.6 The `wgsl_compute_*` variants
 
-The three legacy variants (`wgsl_compute_0in_1tex`, `wgsl_compute_1tex_1tex`, `wgsl_compute_2tex_1tex`) are listed as deletion candidates in [PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md §1.5](PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md).
+The three legacy variants (`wgsl_compute_0in_1tex`, `wgsl_compute_1tex_1tex`, `wgsl_compute_2tex_1tex`) are listed as deletion candidates in [PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md section 1.5 (Deletion candidates (genuinely superseded))](PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md).
 
 **Decision:** Phase 4 deletes them outright. They are texture-only variants that pre-date the generic `node.wgsl_compute` and don't touch the Channels migration's storage-array surface (no `var<storage>` bindings — only texture I/O). They are superseded by `node.wgsl_compute` for any consumer that needs the full surface. If the deletion audit during Phase 4 surfaces a shipping preset that still depends on one of the legacy variants, the preset migrates to `node.wgsl_compute` in the same change; no new naga-typed-signature work is needed because there are no storage-array ports on these variants to migrate.
 
@@ -917,7 +913,7 @@ One test per migrated type. Runs every build. Catches the drift class entirely.
 
 ### 9.5 Channel-name collision test
 
-The collision test is emitted from the same source list as the `well_known::*` constants, via the `well_known_channels!` macro described in §7.5. The macro walks its `(NAME, "string")` pairs and generates:
+The collision test is emitted from the same source list as the `well_known::*` constants, via the `well_known_channels!` macro described in section 7.5. The macro walks its `(NAME, "string")` pairs and generates:
 
 - The `pub const` declarations.
 - A test that computes the FNV-1a hash for each pair and asserts pairwise distinct, naming which two constants collide if one ever appears.
@@ -932,7 +928,7 @@ The most important integration test. After Phase 3 (typed family migration) and 
 2. Compile to an `ExecutionPlan` without validator errors.
 3. Render its first frame on the canonical fixture (`Liveschool Live Show V6 LEDS.manifold`) without visual regression.
 
-The first two are gated by `cargo run -p manifold-renderer --bin check-presets`. The third is the manual canonical-fixture sanity check pattern established in [PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md §3](PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md).
+The first two are gated by `cargo run -p manifold-renderer --bin check-presets`. The third is the manual canonical-fixture sanity check pattern established in [PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md section 3 (Parity-test strategy)](PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md).
 
 This is the test that catches naming-inconsistency landmines. If `pack_curve_xy` declares its output as `Channels[x, y]` but `render_lines` declares its input as `Channels[posx, posy]`, every Lissajous-shape preset breaks. The round-trip surfaces it immediately.
 
@@ -964,7 +960,7 @@ Estimated chat counts per phase. Each phase's "Done when" is the explicit accept
 
 **Out of scope:** anything in Phase 1 (the production type infrastructure, registry, macro). The throwaway stubs in Phase 0 get deleted when Phase 1 ships the real types.
 
-**Done when:** a single integration test passes that exercises declare → validate → bind → read on a Channels-shaped wire end-to-end. If it doesn't, the foundation design in §4-§5 needs revision before Phase 1 ships.
+**Done when:** a single integration test passes that exercises declare → validate → bind → read on a Channels-shaped wire end-to-end. If it doesn't, the foundation design in section 4-section 5 needs revision before Phase 1 ships.
 
 ### Phase 1 — Core type infrastructure (~2 chats)
 
@@ -978,8 +974,8 @@ Estimated chat counts per phase. Each phase's "Done when" is the explicit accept
 - `std430_stride` and `std430_offsets` calculators. Runtime fn for now.
 - New `GraphError::ChannelMismatch` variant with structured reason. Old `PortTypeMismatch` replaced.
 - Validator: new `channels_compatible` predicate inside `port_types_compatible`. Old `Array(Anonymous)` coercion path deleted.
-- `well_known` channel-name registry — initial roster (§7.2).
-- All unit tests from §9.1 + §9.2 + §9.5 passing.
+- `well_known` channel-name registry — initial roster (section 7.2).
+- All unit tests from section 9.1 + section 9.2 + section 9.5 passing.
 
 **Out of scope for Phase 1:** macro changes, primitive migrations, wgsl_compute changes. The type system exists but no primitive uses it yet.
 
@@ -992,7 +988,7 @@ Estimated chat counts per phase. Each phase's "Done when" is the explicit accept
 - Macro accepts both `well_known::POSITION` constants and inline string literals: `Channels[x: F32, "custom_field": Vec3F]`.
 - Default match mode Exact; `Channels[permissive]` opt-in modifier for Permissive.
 - One trivial primitive migrated to the new syntax end-to-end as proof-of-life. Recommendation: pick `node.value` or `node.constant_channels` (newly-added) — a no-input, single-channel-output primitive.
-- Macro expansion tests from §9.3 passing.
+- Macro expansion tests from section 9.3 passing.
 
 **Out of scope:** the broader catalog migration.
 
@@ -1001,8 +997,8 @@ Estimated chat counts per phase. Each phase's "Done when" is the explicit accept
 ### Phase 3 — Typed-family migration (~1 chat)
 
 **Deliverables:**
-- `PARTICLE_SPECS`, `MESH_VERTEX_SPECS`, `CURVE_POINT_SPECS`, `EDGE_PAIR_SPECS`, `INSTANCE_TRANSFORM_SPECS`, `VEC4_VERTEX_SPECS`, `BLOB_SPECS` defined per §6.
-- Drift assertions (§9.4) for each typed family.
+- `PARTICLE_SPECS`, `MESH_VERTEX_SPECS`, `CURVE_POINT_SPECS`, `EDGE_PAIR_SPECS`, `INSTANCE_TRANSFORM_SPECS`, `VEC4_VERTEX_SPECS`, `BLOB_SPECS` defined per section 6.
+- Drift assertions (section 9.4) for each typed family.
 - `impl KnownItem for X` for each typed array updated to emit `ArrayType { specs: X_SPECS, ... }`.
 - For the primitive-types (`u32`, `f32`, `[f32; 2]`): `KnownItem` impls updated to single-channel Channels signatures with sensible default names (`value`, `xy`).
 - Every primitive in the catalog that declares `Array(T)` ports continues to work — the macro emits the right Channels signature via the `ItemKind` → specs mapping.
@@ -1018,8 +1014,8 @@ Estimated chat counts per phase. Each phase's "Done when" is the explicit accept
 ### Phase 4 — `wgsl_compute` migration + Anonymous deletion (~1 chat)
 
 **Deliverables:**
-- `wgsl_compute`'s naga walk extracts ChannelSpec lists from `var<storage>` struct fields (§8.2).
-- Explicit pad-field marker mechanism chosen and implemented (§8.2 — preferred WGSL attribute, fallback doc-comment preprocessor). Existing core-dev shaders that use `_pad*` naming migrate to the marker in the same pass.
+- `wgsl_compute`'s naga walk extracts ChannelSpec lists from `var<storage>` struct fields (section 8.2).
+- Explicit pad-field marker mechanism chosen and implemented (section 8.2 — preferred WGSL attribute, fallback doc-comment preprocessor). Existing core-dev shaders that use `_pad*` naming migrate to the marker in the same pass.
 - The 6 cast atoms (`cast_as_particle`, etc.) deleted.
 - Stub Pod types (`Blob4`, `Blob8`, `Blob32`, `Blob48`, `Blob64`) deleted.
 - `Array(Anonymous)` port type — deleted from the macro and the validator.
@@ -1028,7 +1024,7 @@ Estimated chat counts per phase. Each phase's "Done when" is the explicit accept
 - `pub struct Blob` — deleted.
 - BlackHole.json + ComputeStrangeAttractor.json (the two presets using cast atoms) — cast nodes deleted, wires reconnected directly.
 - Any other primitive that uses `Array(Anonymous)` — audited and migrated to typed Channels signatures.
-- Legacy `wgsl_compute_0in_1tex` / `wgsl_compute_1tex_1tex` / `wgsl_compute_2tex_1tex` variants deleted (§8.6). Any shipping preset still depending on one migrates to `node.wgsl_compute` in the same pass.
+- Legacy `wgsl_compute_0in_1tex` / `wgsl_compute_1tex_1tex` / `wgsl_compute_2tex_1tex` variants deleted (section 8.6). Any shipping preset still depending on one migrates to `node.wgsl_compute` in the same pass.
 
 **Out of scope:** snapshot UI updates (Phase 6), docs (Phase 6).
 
@@ -1077,14 +1073,14 @@ Estimated chat counts per phase. Each phase's "Done when" is the explicit accept
 
 **Mitigation:**
 - The `well_known` registry. Every migrated primitive uses canonical constants. Drift is mechanically detectable in code review (inline string literals stand out).
-- §9.6 round-trip test runs every shipped preset through `check-presets` and the canonical-fixture sanity check after each migration phase. Naming inconsistencies surface immediately.
+- section 9.6 round-trip test runs every shipped preset through `check-presets` and the canonical-fixture sanity check after each migration phase. Naming inconsistencies surface immediately.
 - The migration phase ordering (typed families first, then wgsl_compute) batches the naming decisions per phase. One pass through `mesh_common.rs` aligns CurvePoint / MeshVertex / EdgePair / Vec4Vertex / InstanceTransform / Blob; one pass through `compute_common.rs` aligns Particle. Each pass is a coherent reviewable change.
 
 ### 11.2 `bytemuck::Pod` and visible pad fields
 
 **Risk:** `#[repr(C)]` structs require all fields to be `pub` for `bytemuck::Pod`. The pad fields (`_pad0`, `_pad1`, etc.) are public Rust fields but are *not* channels in the new model. The "real" channels (position, velocity, etc.) and the pad fields describe the same bytes through different lenses.
 
-**Mitigation:** the model accommodates this by design. The `_SPECS` constant lists only the semantic channels; std430 layout reintroduces the padding automatically. The Rust struct's pad fields are an implementation detail of the in-memory representation; they don't appear in the wire type. Drift between specs and struct is caught by the per-type drift assertion (§9.4).
+**Mitigation:** the model accommodates this by design. The `_SPECS` constant lists only the semantic channels; std430 layout reintroduces the padding automatically. The Rust struct's pad fields are an implementation detail of the in-memory representation; they don't appear in the wire type. Drift between specs and struct is caught by the per-type drift assertion (section 9.4).
 
 Subtle implication: a primitive author adding a new channel to a typed family must update BOTH `_SPECS` AND the matching `#[repr(C)]` struct. The drift assertion catches "I updated specs but forgot the struct" or vice versa. Adding a new channel is a deliberate two-place edit.
 
@@ -1102,7 +1098,7 @@ Subtle implication: a primitive author adding a new channel to a typed family mu
 
 ### 11.5 The compile-time-vs-runtime layout calculator
 
-**Risk:** I committed in §4.4 to allowing either const-fn or runtime layout calculation. If the implementer goes runtime, lazy `OnceLock<ArrayType>` initialization adds a synchronization point on every primitive's first port type access. Compounded across hundreds of primitives, this could measurably slow chain build time.
+**Risk:** I committed in section 4.4 to allowing either const-fn or runtime layout calculation. If the implementer goes runtime, lazy `OnceLock<ArrayType>` initialization adds a synchronization point on every primitive's first port type access. Compounded across hundreds of primitives, this could measurably slow chain build time.
 
 **Mitigation:** measure first. The runtime calculator runs once per primitive at first port access, then never again. Total cost ≈ (number of distinct `_SPECS` constants) × (calculator runtime). For ~10 typed families × ~5 channels each × ~100ns per calculation ≈ 5µs total per process lifetime. Negligible.
 
@@ -1124,9 +1120,9 @@ Saved presets (the JSON files) carry no port-type info — wires reference ports
 
 ### 11.8 Design choices that would break fusion-compiler compatibility
 
-**Risk:** the Channel type system is designed forward-compatible with the planned WGSL fusion compiler (see §16). A future amendment that introduces a feature incompatible with fusion would silently delete a major end-game capability. Examples of the kind of additions that would break fusion: a `ChannelElementType::Dynamic` that resolves at runtime; per-sample variable channel layouts; channel names that aren't const-foldable; a match mode whose compatibility check requires runtime introspection.
+**Risk:** the Channel type system is designed forward-compatible with the planned WGSL fusion compiler (see section 16). A future amendment that introduces a feature incompatible with fusion would silently delete a major end-game capability. Examples of the kind of additions that would break fusion: a `ChannelElementType::Dynamic` that resolves at runtime; per-sample variable channel layouts; channel names that aren't const-foldable; a match mode whose compatibility check requires runtime introspection.
 
-**Mitigation:** §16 lists the fusion-compatibility constraints explicitly. Any amendment to §4 (the type system contract) or §5 (validator semantics) that introduces new variants, modes, or runtime behaviour MUST check §16 before merging. CI can't catch this directly — the fusion compiler doesn't exist yet — so the check is a code-review discipline. The section is positioned so that an agent extending the type system finds the constraints before writing the code.
+**Mitigation:** section 16 lists the fusion-compatibility constraints explicitly. Any amendment to section 4 (the type system contract) or section 5 (validator semantics) that introduces new variants, modes, or runtime behaviour MUST check section 16 before merging. CI can't catch this directly — the fusion compiler doesn't exist yet — so the check is a code-review discipline. The section is positioned so that an agent extending the type system finds the constraints before writing the code.
 
 ---
 
@@ -1277,7 +1273,7 @@ struct HandJoint {
 @group(0) @binding(0) var<storage> hand_joints: array<HandJoint>;
 ```
 
-Naga's struct walk produces `Channels[position: Vec3F, confidence: F32]` (skipping `_pad` per §8.2). No Rust code change. No recompile. The wire is typed; downstream consumers wiring to it can introspect the signature and reach for `well_known::POSITION` and `well_known::CONFIDENCE`.
+Naga's struct walk produces `Channels[position: Vec3F, confidence: F32]` (skipping `_pad` per section 8.2). No Rust code change. No recompile. The wire is typed; downstream consumers wiring to it can introspect the signature and reach for `well_known::POSITION` and `well_known::CONFIDENCE`.
 
 A future "particle field follows hand position" effect just wires `Channels[position: Vec3F, confidence: F32]` → its input. The validator confirms; the data flows; the effect runs.
 
@@ -1289,11 +1285,11 @@ This is what end-game flexibility looks like: new user data shapes are graph-aut
 
 The three decisions originally parked for first-review pass are resolved below. Sign-off pass on 2026-05-27 closed all three; the resolutions are now load-bearing throughout the doc and Phase implementations should not re-litigate them.
 
-1. **Sample-count exposed via the wire's runtime interface.** Consumers declaring a Channels port receive the buffer handle and the sample count cohesively through one interface — no separately-wired `active_count` scalar port. The runtime mechanism is unchanged from BUFFER_PORT_PLAN.md (the producer sets the count per dispatch, the runtime passes it via uniform, the fusion compiler still emits a shader looping over the runtime uniform per §16.6); only the API surface changes. Resolved in favour of cohesive wire-level introspection because the project's stated end goal is AI-authored graphs (per `project_primitive_library_for_ai_authoring.md`), and forcing an agent to wire two parallel signals (buffer + count) for every Channels consumer undercuts the "wires self-describe" promise. See §3.1 for the wire-interface description.
+1. **Sample-count exposed via the wire's runtime interface.** Consumers declaring a Channels port receive the buffer handle and the sample count cohesively through one interface — no separately-wired `active_count` scalar port. The runtime mechanism is unchanged from BUFFER_PORT_PLAN.md (the producer sets the count per dispatch, the runtime passes it via uniform, the fusion compiler still emits a shader looping over the runtime uniform per section 16.6); only the API surface changes. Resolved in favour of cohesive wire-level introspection because the project's stated end goal is AI-authored graphs (per `project_primitive_library_for_ai_authoring.md`), and forcing an agent to wire two parallel signals (buffer + count) for every Channels consumer undercuts the "wires self-describe" promise. See section 3.1 for the wire-interface description.
 
-2. **One canonical macro form per case, not "ship both".** `Channels<T>` is the canonical form for the ~10 typed families with a `_SPECS` constant (Particle, MeshVertex, EdgePair, CurvePoint, InstanceTransform, Vec4Vertex, Blob-equivalent, etc.). `Channels[...]` inline is the canonical form for ad-hoc signatures (wgsl_compute outputs, primitive-types, experimental shapes). A lint enforces non-overlap. Resolved this way because "ship both" permits drift — readers mentally translate between forms and `rg` queries for a typed family miss the inline-form sites. See §12.1 for the worked example.
+2. **One canonical macro form per case, not "ship both".** `Channels<T>` is the canonical form for the ~10 typed families with a `_SPECS` constant (Particle, MeshVertex, EdgePair, CurvePoint, InstanceTransform, Vec4Vertex, Blob-equivalent, etc.). `Channels[...]` inline is the canonical form for ad-hoc signatures (wgsl_compute outputs, primitive-types, experimental shapes). A lint enforces non-overlap. Resolved this way because "ship both" permits drift — readers mentally translate between forms and `rg` queries for a typed family miss the inline-form sites. See section 12.1 for the worked example.
 
-3. **2D positions emit as paired scalars, not Vec2F.** Codified as a §7.3 naming convention. `CurvePoint` and `Vec2Slot` migrate as `Channels[x: F32, y: F32]` (4-byte aligned, matching today's `[f32; 2]` consumers). New primitives authoring 2D position channels follow the same convention. Consumers needing Vec2 semantics either consume the two scalars directly in shader code or compose via a downstream `pack_vec2_from_scalars` atom.
+3. **2D positions emit as paired scalars, not Vec2F.** Codified as a section 7.3 naming convention. `CurvePoint` and `Vec2Slot` migrate as `Channels[x: F32, y: F32]` (4-byte aligned, matching today's `[f32; 2]` consumers). New primitives authoring 2D position channels follow the same convention. Consumers needing Vec2 semantics either consume the two scalars directly in shader code or compose via a downstream `pack_vec2_from_scalars` atom.
 
 ---
 
@@ -1333,9 +1329,7 @@ A `tx` channel might carry "this is normalized [0, 1]" or "this is in pixels" or
 
 A future `node.channel_math_pairwise` that takes two Channels arrays and applies an op channel-wise (Channels A's `x` + Channels B's `x`, A's `y` + B's `y`, etc.). Currently expressible via repeated `select_channel` + `array_math` + `pack_channels`. Worth a single-atom shortcut when the pattern shows up enough to be visible.
 
-### 14.9 Explicit-marker preprocessor for `wgsl_compute` pad-field handling — **shipped 2026-05-28**
-
-Historical note. The Phase 4a `wgsl_compute` naga walk shipped a `_pad[0-9]*` name-prefix heuristic for skipping padding fields, walked back from the sign-off's "explicit per-field marker" decision. Phase 4b.6 (`extract_channel_skip` preprocessor) and Phase 4b.7 (integration + heuristic deletion) finished the work on 2026-05-28. See §8.2 for the current contract.
+Historical note. The Phase 4a `wgsl_compute` naga walk shipped a `_pad[0-9]*` name-prefix heuristic for skipping padding fields, walked back from the sign-off's "explicit per-field marker" decision. Phase 4b.6 (`extract_channel_skip` preprocessor) and Phase 4b.7 (integration + heuristic deletion) finished the work on 2026-05-28. See section 8.2 for the current contract.
 
 The migration sweep collapsed to "drop the heuristic, no shader changes" — the read-only audit of all five wgsl_compute presets (BlackHole, ComputeStrangeAttractor, FluidSimulation, ParticleText, StarField) plus `DEFAULT_WGSL` found every `_pad*` field in *uniform* structs, none in storage structs. The uniform-side `_pad*` filter in `parse_uniform` was out of scope for this work and stays as the ergonomic shortcut for uniform layout, which has no Channels-signature implications.
 
@@ -1353,10 +1347,10 @@ Rules for amendments and additions to this document:
 - **Numbered sections are stable.** Don't renumber existing sections; append new ones with the next available number.
 - **Each section has a one-line role.** Skim-readers should know what a section covers from its header.
 - **Code examples use the current Rust/WGSL spelling.** If macro syntax or struct shape changes during implementation, update the examples to match in the same commit.
-- **Open questions deferred go in §13.** Resolved questions move to the appropriate section.
-- **Risks discovered during implementation go in §11.** Don't bury them in commit messages.
-- **Migration map (§6) stays canonical.** New typed-family additions append entries with byte-layout proofs.
-- **The `well_known` roster in §7.2 mirrors the code.** Update both when adding a name.
+- **Open questions deferred go in section 13.** Resolved questions move to the appropriate section.
+- **Risks discovered during implementation go in section 11.** Don't bury them in commit messages.
+- **Migration map (section 6) stays canonical.** New typed-family additions append entries with byte-layout proofs.
+- **The `well_known` roster in section 7.2 mirrors the code.** Update both when adding a name.
 - **Naming decisions reference this doc.** Memory entries (`feedback_*.md`) for end-game decisions cite this document; the source of truth is here.
 
 ---
@@ -1365,9 +1359,9 @@ Rules for amendments and additions to this document:
 
 ### 16.1 Why this section exists
 
-The Channel type system designed in §3-§5 is foundational infrastructure that will outlive everything built on top of it. The biggest single thing that gets built on top of it — by stated MANIFOLD architectural direction — is the **WGSL fusion compiler + `for_each_n` per-pixel loops** initiative documented in [GRAPH_COMPILER.md](GRAPH_COMPILER.md). Plasma decomposition is parked until the fusion compiler lands; performance optimization for atomized graphs depends on it; the no-fused-monolith rule survives long-term because of it.
+The Channel type system designed in section 3-section 5 is foundational infrastructure that will outlive everything built on top of it. The biggest single thing that gets built on top of it — by stated MANIFOLD architectural direction — is the **WGSL fusion compiler + `for_each_n` per-pixel loops** initiative documented in [GRAPH_COMPILER.md](GRAPH_COMPILER.md). Plasma decomposition is parked until the fusion compiler lands; performance optimization for atomized graphs depends on it; the no-fused-monolith rule survives long-term because of it.
 
-The Channel design choices in this document were made *with fusion compatibility in mind*. This section makes that compatibility explicit so future agents extending the Channel type system don't accidentally close off a major end-game capability without realising it. **If you are amending §4 (type system contract), §5 (validator semantics), or §8 (wgsl_compute integration), read this section before merging your change.**
+The Channel design choices in this document were made *with fusion compatibility in mind*. This section makes that compatibility explicit so future agents extending the Channel type system don't accidentally close off a major end-game capability without realising it. **If you are amending section 4 (type system contract), section 5 (validator semantics), or section 8 (wgsl_compute integration), read this section before merging your change.**
 
 This section also explains the concrete fusion-compiler synergies the Channel system unlocks — useful context both for the fusion compiler's eventual implementer and for any agent reasoning about why the channel design landed where it did.
 
@@ -1383,7 +1377,7 @@ The fusion compiler is unstarted (Status section of GRAPH_COMPILER.md), so this 
 
 Four concrete synergies — these are the wins the fusion compiler picks up from the Channel system "for free":
 
-**(1) Auto-generated intermediate struct definitions.** A fusion compiler chaining `producer → atom_a → atom_b → consumer` along Array wires must emit a WGSL struct for each intermediate buffer type so the inlined shader can declare local variables of the right shape. Today, every typed array (Particle, MeshVertex, etc.) has a hand-written WGSL struct in a `.wgsl` file matching the Rust `#[repr(C)]` definition; the fusion compiler would need a hardcoded mapping from `ItemKind` → struct source string. With Channels, the compiler reads the `_SPECS` constant and emits the WGSL struct declaration mechanically: `struct ParticleIntermediate { position: vec3<f32>, velocity: vec3<f32>, life: f32, age: f32, color: vec4<f32>, };`. The std430 layout calculator (§4.4) gives the field offsets directly. No hand-mapping table to maintain.
+**(1) Auto-generated intermediate struct definitions.** A fusion compiler chaining `producer → atom_a → atom_b → consumer` along Array wires must emit a WGSL struct for each intermediate buffer type so the inlined shader can declare local variables of the right shape. Today, every typed array (Particle, MeshVertex, etc.) has a hand-written WGSL struct in a `.wgsl` file matching the Rust `#[repr(C)]` definition; the fusion compiler would need a hardcoded mapping from `ItemKind` → struct source string. With Channels, the compiler reads the `_SPECS` constant and emits the WGSL struct declaration mechanically: `struct ParticleIntermediate { position: vec3<f32>, velocity: vec3<f32>, life: f32, age: f32, color: vec4<f32>, };`. The std430 layout calculator (section 4.4) gives the field offsets directly. No hand-mapping table to maintain.
 
 **(2) Dead-channel elimination.** A producer emitting `Channels[position, velocity, life, age, color]` whose downstream consumers in a fused sub-graph only ever read `position` lets the fusion compiler skip writing the other four channels (or, if the intermediate isn't observed at all in the fused output, skip allocating them entirely). Today, atom A writes the full Particle struct because the fusion compiler can't analyze across the buffer boundary to know what atom B will read. Channels make this cheap: walk the consumer's source for `channel_get("velocity")`-style calls, drop unused channels from the local intermediate. Bigger wins on richly-channeled types (Particle is 5 channels; a future audio FFT bucket might be hundreds).
 
@@ -1399,17 +1393,17 @@ These constraints are the "fusion is possible" surface of the Channel type syste
 
 **C1. Channel specs are compile-time-known.** Every `ArrayType::specs` is a `&'static [ChannelSpec]` known at graph-compile time. The fusion compiler reads specs to emit WGSL struct definitions; specs that resolved only at runtime would force the fusion compiler to be dynamic, which is not a small change — it would require runtime shader generation per draw, which is the model the fusion initiative is *avoiding*.
 
-**C2. Std430 layout is deterministic from specs alone.** Given `(specs)`, the std430 layout calculator (§4.4) produces `(per_channel_offset, sample_stride, sample_align)` deterministically with no runtime input. The fusion compiler uses these offsets to emit correct WGSL struct field accesses. Layout that depended on a runtime value (e.g., a `dynamic_padding` param) would break this.
+**C2. Std430 layout is deterministic from specs alone.** Given `(specs)`, the std430 layout calculator (section 4.4) produces `(per_channel_offset, sample_stride, sample_align)` deterministically with no runtime input. The fusion compiler uses these offsets to emit correct WGSL struct field accesses. Layout that depended on a runtime value (e.g., a `dynamic_padding` param) would break this.
 
 **C3. Channel names are const-foldable.** `ChannelName` is a u64 FNV hash computed at compile time via `const fn from_str`. The fusion compiler compares hashes at compile time when deciding whether a `select_channel` operator's target channel exists on the producer. Channel names that required runtime hash computation, runtime string lookup, or runtime registry resolution would force fusion-time decisions into runtime — defeating the optimization.
 
-**C4. The element type set is closed and concrete.** Every variant in `ChannelElementType` maps to exactly one concrete WGSL type (F32→f32, Vec3F→vec3<f32>, etc.). The fusion compiler emits WGSL declarations and field accesses using this mapping. A "wildcard" or "dynamic" element type that the WGSL emitter couldn't resolve concretely would break shader emission. Adding new element types is fine (e.g., F16, Bool — both flagged in §14); each must be added with a concrete WGSL mapping.
+**C4. The element type set is closed and concrete.** Every variant in `ChannelElementType` maps to exactly one concrete WGSL type (F32→f32, Vec3F→vec3<f32>, etc.). The fusion compiler emits WGSL declarations and field accesses using this mapping. A "wildcard" or "dynamic" element type that the WGSL emitter couldn't resolve concretely would break shader emission. Adding new element types is fine (e.g., F16, Bool — both flagged in section 14); each must be added with a concrete WGSL mapping.
 
 **C5. Match modes are statically decidable.** `MatchMode::Exact` and `MatchMode::Permissive` both decide compatibility at graph-compile time from the wire's static `specs`. The fusion compiler uses match decisions to determine which sub-graphs can fuse (compatible wires fuse; incompatible boundaries don't). A match mode whose compatibility check required runtime data would force fusion boundaries to be runtime-decided, defeating the compile-time fusion model.
 
 **C6. Pure type-level operators are byte-preserving.** `rename_channel`, `reorder_channels`, `select_channels`, and similar operators describe themselves as pure data-shape transformations: they emit the same bytes the producer wrote, just in a (possibly reordered) channel layout. The fusion compiler erases them in the fused output. Adding a "rename" variant that actually mutated bytes would force the fusion compiler to detect and preserve the mutation — eliminating the optimization for that operator.
 
-**C7. `wgsl_compute` Channels signatures are recovered from the WGSL source.** The naga parser walks the storage-array struct fields at graph-compile time and produces the Channels signature (§8.2). The fusion compiler must be able to read the same WGSL source and reconstruct equivalent inlinable expressions; the naga walk is the bridge. Any wgsl_compute feature that produced a Channels signature without a matching WGSL struct (e.g., synthetic channels added in Rust code) would break the equivalence.
+**C7. `wgsl_compute` Channels signatures are recovered from the WGSL source.** The naga parser walks the storage-array struct fields at graph-compile time and produces the Channels signature (section 8.2). The fusion compiler must be able to read the same WGSL source and reconstruct equivalent inlinable expressions; the naga walk is the bridge. Any wgsl_compute feature that produced a Channels signature without a matching WGSL struct (e.g., synthetic channels added in Rust code) would break the equivalence.
 
 **C8. Sample stride is identical at runtime and at fusion time.** The buffer the producer writes has stride `sample_stride_bytes`; the fusion compiler emits WGSL that reads at the same stride. A future "stride-variant" feature (e.g., compact packed sub-byte channels) would force the fusion compiler to emit per-channel offset arithmetic, which is fine in principle but adds complexity. Keep the rule "one channel-spec → one stride" simple.
 
@@ -1423,7 +1417,7 @@ Concrete examples of additions that would break the constraints above. Listed so
 - ❌ `MatchMode::RuntimeSubset` — accept producer if it has at least the channels listed in this runtime-evaluated param. (Use the explicit `select_channels` atom instead; same outcome, compile-time.)
 - ❌ `node.synthesize_channel(name, formula)` that adds a new named channel to a wire without writing to any underlying buffer. (Use a real `pack_channels` from a producer instead; same outcome, the channel exists in bytes.)
 - ❌ Per-sample channel layouts (different samples in the same array have different channels). Variable layouts per sample would require runtime per-sample dispatch decisions.
-- ❌ Channel names that aren't ASCII identifiers, since they'd need quoting in WGSL field-name emission. Use the §7.3 naming conventions.
+- ❌ Channel names that aren't ASCII identifiers, since they'd need quoting in WGSL field-name emission. Use the section 7.3 naming conventions.
 
 ### 16.6 Constraints that don't apply
 
@@ -1432,19 +1426,19 @@ To prevent over-constraining future work, these are NOT fusion-compatibility con
 - **New element types are fine** if each has a concrete WGSL mapping. Adding `F16` with `f16` mapping is straightforward; same for `Bool` (mapped to `u32` in std430 storage buffer per WGSL rules).
 - **New operators are fine** as long as their compute model is consistent with C6 (pure type-level operators are byte-preserving) or they live outside the fusable subgraph (operators with side effects, multi-tap reads, etc., simply don't inline). The fusion compiler will skip them; that's correct behaviour.
 - **Per-channel optimization metadata is fine** if it's compile-time-known and the fusion compiler can use it as a hint (e.g., "this channel is read-only, this one is write-only"). Hints that improve optimization without changing semantics are forward-compatible by definition.
-- **Variable sample count is fine** — the underlying `active_count` uniform mechanism is unchanged. The fusion compiler emits a shader that loops over samples; the loop bound is a runtime uniform. (Per the §13(1) resolution, the wire's *API surface* exposes the sample count through the Channels handle rather than as a separately-wired scalar port. This is an API ergonomics change for consumers and AI agents; the runtime data path — uniform passed per dispatch, fusion-compiler loop over the uniform — is unchanged.)
+- **Variable sample count is fine** — the underlying `active_count` uniform mechanism is unchanged. The fusion compiler emits a shader that loops over samples; the loop bound is a runtime uniform. (Per the section 13(1) resolution, the wire's *API surface* exposes the sample count through the Channels handle rather than as a separately-wired scalar port. This is an API ergonomics change for consumers and AI agents; the runtime data path — uniform passed per dispatch, fusion-compiler loop over the uniform — is unchanged.)
 
 ### 16.7 Reference reading order for agents extending the type system
 
 If you're an agent extending the Channel type system (adding a new element type, new match mode, new operator family, new validator rule, etc.):
 
-1. Read §4 (current contract) and §5 (validator semantics) — understand what exists.
-2. Read this section (§16) — understand what cannot change without breaking fusion.
-3. Read [GRAPH_COMPILER.md §4](GRAPH_COMPILER.md) — understand the fusion compiler's implementation model.
-4. Read [GRAPH_COMPILER.md §6](GRAPH_COMPILER.md) — understand the per-atom inline gates and what makes an atom fusable.
-5. Draft your amendment, then check it against C1-C8 in §16.4 above.
+1. Read section 4 (current contract) and section 5 (validator semantics) — understand what exists.
+2. Read this section (section 16) — understand what cannot change without breaking fusion.
+3. Read [GRAPH_COMPILER.md section 4 (Two unlocks, one engine)](GRAPH_COMPILER.md) — understand the fusion compiler's implementation model.
+4. Read [GRAPH_COMPILER.md section 6 (What this defers)](GRAPH_COMPILER.md) — understand the per-atom inline gates and what makes an atom fusable.
+5. Draft your amendment, then check it against C1-C8 in section 16.4 above.
 
-If your amendment violates a constraint, the resolution is one of: (a) redesign the amendment to be compile-time, (b) confine the new feature to non-fusable atoms only (lives outside the fusable subgraph), or (c) escalate to a design discussion that updates §16 with the new constraint structure. Don't merge an amendment that silently breaks fusion compatibility.
+If your amendment violates a constraint, the resolution is one of: (a) redesign the amendment to be compile-time, (b) confine the new feature to non-fusable atoms only (lives outside the fusable subgraph), or (c) escalate to a design discussion that updates section 16 with the new constraint structure. Don't merge an amendment that silently breaks fusion compatibility.
 
 ---
 
@@ -1584,7 +1578,7 @@ Two designs were considered:
 
 **(b) Add a new variant `PortType::Texture2DTyped(TextureChannels)` alongside the existing unit `Texture2D`.** Strictly additive. Zero existing references break. Untyped Texture2D becomes the back-compat default by virtue of existing. Validator handles cross-compatibility through one new branch.
 
-The §17 implementation took (b). The "two variants for one conceptual thing" cost is real but contained — both variants share one pool key (the channel signature is a validator concern, not a GPU allocation one) and one snapshot bucket category. A future cleanup pass could collapse to (a) once every Texture2D-producing primitive has migrated to a typed signature; treat that as a Phase-6-style sweep after the per-primitive migration finishes.
+The section 17 implementation took (b). The "two variants for one conceptual thing" cost is real but contained — both variants share one pool key (the channel signature is a validator concern, not a GPU allocation one) and one snapshot bucket category. A future cleanup pass could collapse to (a) once every Texture2D-producing primitive has migrated to a typed signature; treat that as a Phase-6-style sweep after the per-primitive migration finishes.
 
 ### 17.6 Pool-key & runtime invariants
 
@@ -1604,7 +1598,7 @@ pub enum PortKindSnapshot {
 }
 ```
 
-`From<PortType>` resolves each slot's `ChannelName` through `debug_name` (well_known + runtime registry from §6.1) so the hover-tooltip can render readable layouts like `Texture2D[R: flow_x, G: confidence, B: flow_y, A: valid]` directly. Unknown names fall back to hex hashes, same as the Array channel path.
+`From<PortType>` resolves each slot's `ChannelName` through `debug_name` (well_known + runtime registry from section 6.1) so the hover-tooltip can render readable layouts like `Texture2D[R: flow_x, G: confidence, B: flow_y, A: valid]` directly. Unknown names fall back to hex hashes, same as the Array channel path.
 
 ### 17.8 `well_known` additions
 
@@ -1626,16 +1620,16 @@ Phase 17.B (separate work): migrate the V2 WireframeDepth pipeline's typed-side 
 
 Phase 17.C (eventual sweep): migrate every Texture2D-producing primitive in the catalog to declare its slot meanings. Catalog-wide; mechanical once the convention is settled; collapses the validator's two-variant Texture2D representation into one once nothing depends on the untyped fallback.
 
-### 17.10 Forward-compatibility check (vs §16)
+### 17.10 Forward-compatibility check (vs section 16)
 
-The fusion-compiler compatibility constraints in §16.4 stay satisfied:
+The fusion-compiler compatibility constraints in section 16.4 stay satisfied:
 
 - **C1 / C2 / C3 / C4 / C5:** `TextureChannels::slots` is a fixed-length `[ChannelName; 4]` known at compile time. Per-slot identity is the const-hashed `ChannelName` already in scope. Texture format determines per-slot element type at compile time (out of scope here; covered by the existing texture-format contract). The match check is exact equality on a fixed-length array — fully decidable at graph-compile time.
 - **C6:** No new operators added. Future rename / reorder atoms for texture channels would be a separate decision; the type system doesn't presuppose them.
 - **C7:** N/A — Texture2DTyped signatures come from the primitive's macro declaration, not from naga introspection. `wgsl_compute` outputs that are textures stay untyped Texture2D for now; typing them is a future concern that would extend the naga walk's texture-binding path.
 - **C8:** Per-slot byte stride is fixed by the texture format (1, 2, 4 bytes per channel depending on format). No variant of the new types affects stride.
 
-The §16 anti-pattern list also stays clean: no runtime-resolved slot count, no per-pixel variable layout, no introspection requirement for compatibility — all decisions are static at graph compile time. Same fusion-compatibility surface as the Array channel design.
+The section 16 anti-pattern list also stays clean: no runtime-resolved slot count, no per-pixel variable layout, no introspection requirement for compatibility — all decisions are static at graph compile time. Same fusion-compatibility surface as the Array channel design.
 
 ---
 
@@ -1646,7 +1640,7 @@ Files added:
 
 Files modified:
 - `crates/manifold-renderer/src/node_graph/ports.rs` — types reshape, `ItemKind` retained alongside (deletion in Phase 4), new types added.
-- `crates/manifold-renderer/src/node_graph/validation.rs` — `channels_compatible` predicate, `ChannelMismatch` error variant, updated error display. Also adds `PERMISSIVE_PRIMITIVE_ALLOWLIST: &[PrimitiveTypeId]` const (see §11.4).
+- `crates/manifold-renderer/src/node_graph/validation.rs` — `channels_compatible` predicate, `ChannelMismatch` error variant, updated error display. Also adds `PERMISSIVE_PRIMITIVE_ALLOWLIST: &[PrimitiveTypeId]` const (see section 11.4).
 - `crates/manifold-renderer/src/node_graph/mod.rs` — re-export new types and `well_known`.
 
 Tests added:
@@ -1665,7 +1659,7 @@ Before starting Phase 0 implementation (and by extension Phase 1, since the same
 
 - [ ] Read this document end-to-end.
 - [ ] Read [BUFFER_PORT_PLAN.md](BUFFER_PORT_PLAN.md) to understand the existing Array port system this migration reshapes.
-- [ ] Read [GRAPH_COMPILER.md](GRAPH_COMPILER.md) to understand the fusion-compatibility constraints in §16. Especially relevant if extending §4 (type contract) or §5 (validator semantics).
+- [ ] Read [GRAPH_COMPILER.md](GRAPH_COMPILER.md) to understand the fusion-compatibility constraints in section 16. Especially relevant if extending section 4 (type contract) or section 5 (validator semantics).
 - [ ] Read [crates/manifold-renderer/src/node_graph/ports.rs](../crates/manifold-renderer/src/node_graph/ports.rs) — the current `PortType` / `ArrayType` / `ItemKind` shapes.
 - [ ] Read [crates/manifold-renderer/src/node_graph/validation.rs:264](../crates/manifold-renderer/src/node_graph/validation.rs#L264) — the current `port_types_compatible` predicate.
 - [ ] Read `crates/manifold-renderer/src/generators/mesh_common.rs` and `compute_common.rs` — the typed-array struct definitions and `KnownItem` impls this migration touches. Phase 0's smoke test starts from `EdgePair` here.

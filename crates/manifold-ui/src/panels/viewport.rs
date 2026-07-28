@@ -35,7 +35,7 @@ const MAX_RULER_TICKS: usize = 1500;
 
 // ── Submodules (the god-panel split: model / coordinate / render / interaction) ──
 // `panels/viewport.rs` stays as the parent module and owns these concern files.
-// See `docs/TIMELINE_API_DESIGN.md` §3.6.
+// See `docs/TIMELINE_API_DESIGN.md` section 3.6.
 mod coordinate;
 mod interaction;
 mod model;
@@ -90,7 +90,7 @@ pub struct TimelineViewportPanel {
     // Access all clips via clips_by_layer.iter().flatten().
     clips_by_layer: Vec<Vec<ViewportClip>>,
 
-    // Automation lane data (P4, `docs/AUTOMATION_LANES_DESIGN.md` §7) — single
+    // Automation lane data (P4, `docs/AUTOMATION_LANES_DESIGN.md` section 7) — single
     // storage bucketed by layer index, mirroring `clips_by_layer`. Populated
     // by `set_automation_lanes` only when automation mode is visible (the
     // translator gates it); empty otherwise, so this panel never needs to
@@ -124,7 +124,7 @@ pub struct TimelineViewportPanel {
     // playhead: unified overlay quad in app.rs (ruler → waveform → stems → tracks)
     insert_cursor_ruler_id: Option<NodeId>,
 
-    // Horizontal scrollbar (§24 5e): a reserved strip below the tracks. The strip
+    // Horizontal scrollbar (section 24 5e): a reserved strip below the tracks. The strip
     // rect is the single source for its draw + hit geometry; the button exists
     // only so the input system routes presses/drags here.
     scrollbar_h_rect: Rect,
@@ -149,7 +149,7 @@ pub struct TimelineViewportPanel {
     track_bg_ids: Vec<NodeId>,
     track_bg_groups: Vec<TrackBgGroup>,
     /// The focused layer's track index — its lane background lifts one ramp step
-    /// (§19 timeline echo), the same focus emphasis the inspector card gets.
+    /// (section 19 timeline echo), the same focus emphasis the inspector card gets.
     /// `cached_*` drives the dirty-checked in-place recolor on selection change.
     active_track_index: Option<usize>,
     cached_active_track_index: Option<usize>,
@@ -204,7 +204,7 @@ pub struct TimelineViewportPanel {
     // move/trim gesture. Set once per frame by app_render.rs from the
     // overlay's drag state (`set_drag_readout`); display-only, no styling
     // (deferred to UI_CRAFT_AND_MOTION per `TIMELINE_INTERACTION_P1_SPEC.md`
-    // B13/§6.9).
+    // B13/section 6.9).
     drag_readout: Option<(Beats, Beats, usize)>,
     /// Dirty-checked format cache — house pattern is `TransportDisplayCache`
     /// (`manifold-app/src/ui_bridge/state_sync.rs`): `format!` runs only
@@ -216,7 +216,7 @@ pub struct TimelineViewportPanel {
     /// View snapshot captured by `Z` (zoom-to-selection, B14) so `Shift+Z`
     /// can restore it. One level, not a stack — matches the doc's "zoom-back"
     /// wording, not a full zoom history. `docs/TIMELINE_INTERACTION_P1_SPEC.md`
-    /// §5 P1.6.
+    /// section 5 P1.6.
     zoom_back: Option<(f32, Beats, f32)>,
 
     // ── P2 motion (`UI_CRAFT_AND_MOTION_PLAN.md` D17 "timeline marquee
@@ -617,7 +617,7 @@ impl TimelineViewportPanel {
     /// `set_clips`'s clear-and-refill so repeated calls don't reallocate the
     /// inner `Vec`s. Called with an empty `lanes` whenever automation mode is
     /// off (the translator gates population, not this panel) — see
-    /// `docs/AUTOMATION_LANES_DESIGN.md` §7.
+    /// `docs/AUTOMATION_LANES_DESIGN.md` section 7.
     pub fn set_automation_lanes(&mut self, lanes: Vec<ViewportAutomationLane>) {
         for v in &mut self.automation_lanes_by_layer {
             v.clear();
@@ -738,7 +738,7 @@ impl TimelineViewportPanel {
         rects
     }
 
-    /// On-screen clip rectangles for the GPU clip pass (§24 5b), rebuilt every
+    /// On-screen clip rectangles for the GPU clip pass (section 24 5b), rebuilt every
     /// frame into `out`. Mirrors `layer_bitmap_rects`' visibility cull and the
     /// hit-tester's geometry (same `beat_to_pixel` / `track_y` + `CLIP_VERTICAL_PAD`),
     /// so the drawn body and the clickable region can't disagree. Group layers are
@@ -823,7 +823,7 @@ impl TimelineViewportPanel {
 
     /// Screen-space geometry for the timeline overlays that sit ON TOP of the
     /// clip bodies + waveforms: the marquee/region highlight, the insert cursor,
-    /// and the beat markers. Since §24 5b these are GPU rects emitted in the
+    /// and the beat markers. Since section 24 5b these are GPU rects emitted in the
     /// overlay pass rather than baked into a per-layer bitmap.
     ///
     /// **D7 — the scissor is structural, not an opt-in caller convention.**
@@ -900,7 +900,7 @@ impl TimelineViewportPanel {
     }
 
     /// Screen-space geometry for every visible automation lane strip (P4,
-    /// `docs/AUTOMATION_LANES_DESIGN.md` §7): one [`AutomationLaneScreen`] per
+    /// `docs/AUTOMATION_LANES_DESIGN.md` section 7): one [`AutomationLaneScreen`] per
     /// lane, in the same "geometry here, GPU draw in manifold-renderer" split
     /// as [`Self::visible_clip_rects`] / [`Self::timeline_overlays`]. Empty
     /// whenever `set_automation_lanes` was last called with no data (i.e.
@@ -955,7 +955,7 @@ impl TimelineViewportPanel {
                     x += STEP_PX;
                 }
 
-                // Placeholder lanes (P5, §7 addendum) carry one synthetic
+                // Placeholder lanes (P5, section 7 addendum) carry one synthetic
                 // point at the param's current value so the flat-line
                 // polyline above samples correctly, but it isn't a real
                 // breakpoint yet — no dot, until the first click creates one.
@@ -1023,7 +1023,7 @@ impl TimelineViewportPanel {
     /// (clamped into the tracks rect). Sets zoom + horizontal scroll atomically —
     /// the one anchored-zoom entry point shared by scroll-wheel zoom (anchor =
     /// cursor) and the +/- buttons / keyboard (anchor = playhead), so the anchor
-    /// maths can't drift between them (§24 5e).
+    /// maths can't drift between them (section 24 5e).
     pub fn zoom_to(&mut self, new_ppb: f32, anchor_beat: f32, anchor_screen_x: f32) {
         let local_x =
             (anchor_screen_x - self.tracks_rect.x).clamp(0.0, self.tracks_rect.width.max(0.0));
@@ -1034,7 +1034,7 @@ impl TimelineViewportPanel {
         self.set_scroll(new_scroll.max(0.0), self.scroll_y_px);
     }
 
-    // ── Horizontal scrollbar (§24 5e) ────────────────────────────────
+    // ── Horizontal scrollbar (section 24 5e) ────────────────────────────────
 
     /// Total content length in beats represented by the horizontal scrollbar:
     /// the furthest clip end, but never less than one visible window (so a short
@@ -1246,7 +1246,7 @@ impl TimelineViewportPanel {
         self.hovered_clip_id = id;
     }
 
-    /// Set the focused layer's track index — its lane lifts one ramp step (§19
+    /// Set the focused layer's track index — its lane lifts one ramp step (section 19
     /// timeline echo). Stored now, applied in `update()` via dirty-check; `None`
     /// clears the focus. Cheap to call every frame.
     pub fn set_active_track_index(&mut self, index: Option<usize>) {
@@ -1254,7 +1254,7 @@ impl TimelineViewportPanel {
     }
 
     /// Recolor the focused-lane highlight in place when the active layer changes,
-    /// without a track rebuild (§19 echo): the old lane drops to its resting
+    /// without a track rebuild (section 19 echo): the old lane drops to its resting
     /// stripe, the new lane lifts one ramp step. Dirty-checked, so a stable
     /// selection costs one comparison per frame.
     fn sync_active_track_lane(&mut self, tree: &mut UITree) {
@@ -1418,7 +1418,7 @@ impl Panel for TimelineViewportPanel {
         // out of vertical alignment with their tracks (nothing recomputes it).
         let header_h = layout.track_header_height();
         // Reserve a slim strip at the very bottom of the timeline body for the
-        // horizontal scrollbar (§24 5e). It sits OUTSIDE `tracks_rect`, so a drag
+        // horizontal scrollbar (section 24 5e). It sits OUTSIDE `tracks_rect`, so a drag
         // there never reaches the clip-marquee InteractionOverlay.
         let sb_h = color::TIMELINE_SCROLLBAR_HEIGHT;
         self.viewport_rect = Rect::new(tracks_x, body.y, tracks_w, body.height);
@@ -1517,7 +1517,7 @@ impl Panel for TimelineViewportPanel {
             "",
         );
 
-        // Horizontal scrollbar routing button (§24 5e). Transparent — the track
+        // Horizontal scrollbar routing button (section 24 5e). Transparent — the track
         // and thumb are drawn as GPU rects in app.rs from `scrollbar_h_layout`
         // (one geometry source for draw + hit). The button only exists so the
         // input system emits press/drag events over the strip; the actual routing
@@ -1607,7 +1607,7 @@ mod tests {
         ScreenLayout::new(1920.0, 1080.0)
     }
 
-    // ── B14 zoom-back (`docs/TIMELINE_INTERACTION_P1_SPEC.md` §5 P1.6) ──
+    // ── B14 zoom-back (`docs/TIMELINE_INTERACTION_P1_SPEC.md` section 5 P1.6) ──
 
     // ── P7.6 viewport-drag-fold pinning ─────────────────────────────────
     // `docs/UI_WIDGET_UNIFICATION_DESIGN.md` P7.6: prove ruler-scrub,
@@ -2091,7 +2091,7 @@ mod tests {
 
     #[test]
     fn zeroed_scrollbar_rect_yields_no_layout() {
-        // §24 5e-C regression: a build that early-returns (collapsed timeline)
+        // section 24 5e-C regression: a build that early-returns (collapsed timeline)
         // zeroes `scrollbar_h_rect`, and a zero strip must produce neither a
         // drawable nor a grabbable scrollbar — even with overflow content.
         let mut panel = TimelineViewportPanel::new();

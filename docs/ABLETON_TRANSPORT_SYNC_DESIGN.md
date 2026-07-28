@@ -1,8 +1,8 @@
 # Ableton Transport Sync — closed-loop transport between MANIFOLD and Ableton Live
 
-**Status:** P1–P3 SHIPPED 2026-07-07 (same-session build, Fable) · P4 landing complete except the L4 live checklist (§6 P4 demo — Peter-owned, the real acceptance gate)
+**Status:** P1–P3 SHIPPED 2026-07-07 (same-session build, Fable) · P4 landing complete except the L4 live checklist (section 6 P4 demo — Peter-owned, the real acceptance gate)
 **Prerequisites:** none
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
 **Build deviations (2026-07-07, recorded at landing):**
 1. **D5 widened:** the clock-plane gate also holds CLK *transport* relay (not
@@ -15,17 +15,17 @@
    `is_transport_receiving` and is stale precisely on the first message after
    an idle period — the from-idle play in Ableton would have been discarded).
    Arbiter calls pass (Osc, Osc); the CLK-liveness check is the real gate.
-3. **P3 negative gate scoped:** the §6 rg pattern also matches `osc_sender.rs`
+3. **P3 negative gate scoped:** the section 6 rg pattern also matches `osc_sender.rs`
    (M4L legacy, untouched by scope ruling); the gate applies to the AbletonOSC
    path files, where it passes with zero hits.
 4. **P3 L2 demo deferred to VD:** the "no-peer degrade" log trace requires
    driving the windowed app; the same sequence is asserted by
    `f7_slow_scheduler_400ms_still_converges` + T7/T8 at L1. Entry in
-   `docs/VERIFICATION_DEBT.md`; Peter's checklist (§6 P4) closes it at L4.
-5. **Moving-anchor amendment (2026-07-07, from the first L4 run — BUG-050).**
+   `docs/VERIFICATION_DEBT.md`; Peter's checklist (section 6 P4) closes it at L4.
+5. **Moving-anchor amendment (2026-07-07, from the first L4 run — BUG-050 (ableton-anchor-yankback)).**
    Peter's checklist step 1 failed on the real rig: Ableton repeatedly
    snapped back to the gesture position, then MANIFOLD got clock-dragged
-   after retries exhausted. Root defect in the §4 semantics as first built:
+   after retries exhausted. Root defect in the section 4 semantics as first built:
    a PLAYING expectation held a **frozen** target beat, so (a) the ack was a
    point match against a position both engines immediately run away from —
    a ~ε-wide window real listener cadence can miss — and (b) every T7
@@ -69,7 +69,7 @@ separate cleanup, deferred below). MANIFOLD→Ableton *control* of Live
 parameters is explicitly out of scope: *"Don't need to drive Ableton controls
 from Manifold yet."*
 
-Companion docs: `CORE_ENGINE_MAP.md` §7/§13 (the authoritative sync-stack map;
+Companion docs: `CORE_ENGINE_MAP.md` section 7 (External sync — who is allowed to move the playhead)/section 13 (Honest edges (the bug hunt starts here)) (the authoritative sync-stack map;
 its findings 11/12/14 are fixed by this design — update it at landing);
 `AUDIO_INFRASTRUCTURE.md` (unrelated audio capture; shares no code).
 
@@ -81,7 +81,7 @@ its findings 11/12/14 are fixed by this design — update it at landing);
 |---|---|---|
 | AbletonOSC bridge | `crates/manifold-playback/src/ableton_bridge.rs` (3279 lines) | Session discovery, macro listeners, cue points, PLAY-group HUD — all healthy, untouched by this design. Transport machinery: lines 43–61 (constants), 377–403 (state fields), 2316–2355 (enable/disable listeners: `is_playing` + `tempo` only), 2379–2404 (`drain_transport`), 2409–2418 (`transport_changed_externally` — **dead code, zero callers**), 2425–2549 (`late_update_transport`) |
 | Outbound transport send | `ableton_bridge.rs:2454-2482` | Play/stop sent 3×; **position seek sent exactly once** (line 2512) — the one message carrying *where* is the least-protected packet |
-| Echo suppression | `ableton_bridge.rs:45,2478` + `sync.rs:79` | 0.5s wall-clock ignore window + one-shot `suppress_next_transport` boolean (stale-flag hazard = CORE_ENGINE_MAP §13.12) |
+| Echo suppression | `ableton_bridge.rs:45,2478` + `sync.rs:79` | 0.5s wall-clock ignore window + one-shot `suppress_next_transport` boolean (stale-flag hazard = CORE_ENGINE_MAP section 13.12) |
 | Drift detection | `ableton_bridge.rs:2526-2541` | Dead-reckoned expected-beat vs engine beat; >0.5 beat → send seek. **Feedback hazard: cannot distinguish user seek from clock-plane drag-back**, so it re-sends stale positions to Ableton (the play-from-cursor bug's second half) |
 | Inbound transport relay | `content_thread.rs:1582-1589` | **Commented out** ("echo loops → play/pause oscillation"). Ableton-side play reaches MANIFOLD only via MIDI Clock |
 | Sync arbiter | `crates/manifold-playback/src/sync.rs` | Authority gate + `manifold_owns_playback` (0.5s grace) + `set_user_seek_time` (0.3s cooldown). Sound structure, keep; the windows it hosts are the open-loop parts |
@@ -133,7 +133,7 @@ Each becomes a named harness test in P2. F1 is Peter's observed bug
   command channel; can't seek Ableton).
 - **D2 — Pending-expectation state machine, pure module.** All transport
   decision logic moves to a new socket-free, clock-free struct
-  (`transport_sync.rs`, §4). Inputs are explicit events with explicit `now`;
+  (`transport_sync.rs`, section 4). Inputs are explicit events with explicit `now`;
   outputs are drained effect lists. The bridge pumps it; tests drive it with
   scripted time. Rejected: fixing the logic in place inside `ableton_bridge.rs`
   as more flags — that is the architecture that produced F1–F7, and it is
@@ -178,7 +178,7 @@ Each becomes a named harness test in P2. F1 is Peter's observed bug
   derive from it. Fixes F7. Rejected: keeping tuned constants — "tuned to the
   machine it was tuned on" is the F7 failure by construction.
 - **D9 — Timeout degrades loudly and adopts reality.** Max retries exhausted →
-  the machine surfaces a sync warning (§6, `sync_status`), releases all
+  the machine surfaces a sync warning (section 6, `sync_status`), releases all
   suppression, and adopts Ableton's last observed state rather than fighting.
   Never: silent retry forever, silent give-up, or keeping the engine on an
   unconfirmed position.
@@ -380,8 +380,8 @@ negative gates below prove deletion.
 
 ### P1 — the machine + transition tests (Fable, this session)
 
-Entry: this doc. Read-back: §3–§4.
-Deliverables: `transport_sync.rs` implementing §4 exactly; in-module unit
+Entry: this doc. Read-back: section 3–section 4.
+Deliverables: `transport_sync.rs` implementing section 4 exactly; in-module unit
 tests, one per transition row T1–T13, named `t1_local_play_creates_pending`
 style, all with scripted `now` values (no sleeps, no wall clock).
 Gate: `cargo test -p manifold-playback --lib transport_sync` green; negative:
@@ -389,12 +389,12 @@ Gate: `cargo test -p manifold-playback --lib transport_sync` green; negative:
 → zero hits.
 Demo: none — L1 (pure logic; behavior demos land in P2/P4).
 Forbidden: any I/O in the module; any engine type imported; widening ε or
-retry caps beyond §3 without a doc edit.
+retry caps beyond section 3 without a doc edit.
 
-### P2 — FakeAbleton harness + failure-catalog scenarios (Sonnet)
+### P2 — FakeAbleton harness + failure-catalog scenarios
 
 Entry: P1 merged; `cargo test -p manifold-playback --lib transport_sync` green.
-Read-back: §2 (the catalog), §4 transition table, T-row test names from P1.
+Read-back: section 2 (the catalog), section 4 transition table, T-row test names from P1.
 Deliverables: `crates/manifold-playback/tests/ableton_transport_sync.rs` with a
 `FakeAbleton` model (pure struct, stepped by test time: applies commands after
 a configurable scheduler delay — default 100 ms; emits listener events at
@@ -415,12 +415,12 @@ that is this phase's ceiling.
 Forbidden: real UDP (that's P4's smoke, not P2); asserting on log strings;
 relaxing an F-test to pass (a failing F-test means P1 has a bug — escalate).
 
-### P3 — integration: bridge, content thread, arbiter gates, UI status (Sonnet, seam brief §5)
+### P3 — integration: bridge, content thread, arbiter gates, UI status (Sonnet, seam brief section 5)
 
-Entry: P1+P2 green. Re-derive the §5 anchors:
+Entry: P1+P2 green. Re-derive the section 5 anchors:
 `rg -n 'TRANSPORT_ECHO_WINDOW|pending_play_seek|is_seek_cooldown_active|late_update_transport' crates/`
-— if counts differ from §1/§5, stop and list before touching.
-Deliverables: §5's four seams, compiler-driven (delete the old bridge fields
+— if counts differ from section 1/section 5, stop and list before touching.
+Deliverables: section 5's four seams, compiler-driven (delete the old bridge fields
 FIRST; the errors are the checklist).
 Gate: workspace `cargo clippy --workspace -- -D warnings`;
 `cargo test -p manifold-playback -p manifold-app`; negative:
@@ -437,8 +437,8 @@ old window/flag "just in case"; new shared state.
 ### P4 — landing + live acceptance (orchestrating session + Peter)
 
 Entry: P3 gate output in hand.
-Deliverables: landing per DESIGN_DOC_STANDARD §8.8–10 (`docs/landings/`),
-CORE_ENGINE_MAP §7/§13 updated (findings 11/12/14 marked fixed), BUG_BACKLOG
+Deliverables: landing per DESIGN_DOC_STANDARD section 8.8–10 (`docs/landings/`),
+CORE_ENGINE_MAP section 7/section 13 updated (findings 11/12/14 marked fixed), BUG_BACKLOG
 entries for anything found-not-fixed, this doc's Status line updated.
 Gate: one real-UDP smoke test (loopback socket to a spawned FakeAbleton
 responder) run by the orchestrator; full sweep green.
@@ -479,7 +479,7 @@ replaces one real round trip under load):
   seam-brief cleanup (touches settings serde + default).
 - **MANIFOLD→Ableton control** (firing clips/scenes, writing macros). Trigger:
   Peter asks; the bus doctrine conversation (VIDEO_IO) is the likely context.
-- **SMPTE/LiveMTC re-wire** (CORE_ENGINE_MAP §13.1). Unrelated to this path;
+- **SMPTE/LiveMTC re-wire** (CORE_ENGINE_MAP section 13.1). Unrelated to this path;
   belongs to the core-engine fix session already queued in the Opus pack.
 - **Adaptive ε / sub-beat position acks** via the integer `beat` listener
   event. Trigger: checklist item 1 shows landing-bar ambiguity at high BPM.

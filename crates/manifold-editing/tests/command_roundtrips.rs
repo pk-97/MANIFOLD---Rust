@@ -2294,7 +2294,7 @@ fn unexpose_prunes_orphan_envelopes_and_undo_restores_them() {
 }
 
 // ─── Session Commands (P3) ───
-// docs/SESSION_MODE_DESIGN.md §7 — grid editing + timeline<->session capture/paste.
+// docs/SESSION_MODE_DESIGN.md section 7 — grid editing + timeline<->session capture/paste.
 
 fn make_session_test_project() -> Project {
     let mut project = Project::default();
@@ -2504,7 +2504,7 @@ fn capture_range_names_scene_from_nearest_marker_at_or_before() {
     assert_eq!(project.session.scenes[0].name, "Verse");
 }
 
-/// The load-bearing parity check (§7 + P3 gate): `CaptureRangeToSceneCommand`
+/// The load-bearing parity check (section 7 + P3 gate): `CaptureRangeToSceneCommand`
 /// must reuse the existing split path's head-trim math, not reimplement it.
 /// This runs the REAL `SplitClipCommand` (via
 /// `EditingService::split_clip_at_beat`) on one project and the REAL

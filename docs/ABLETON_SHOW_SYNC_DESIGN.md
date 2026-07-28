@@ -4,8 +4,8 @@
 
 **Status: APPROVED (Peter, 2026-07-02). Not implemented. Sonnet-executable.**
 **Prerequisites: none (rides existing bridge + trigger-clip infra). Sequencing: `docs/DESIGN_BUILD_ORDER.md` wave 2.**
-**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any
-phase. Conformance-hardened: audit claims are a 2026-07-02 snapshot — run the §8.3
+**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before starting any
+phase. Conformance-hardened: audit claims are a 2026-07-02 snapshot — run the section 8.3
 pre-flight (re-verify bridge/timeline anchors) before each phase.**
 
 One gesture: *File → Import Ableton Set…* → pick an `.als` → MANIFOLD builds the
@@ -23,46 +23,46 @@ and the merge.
 
 ---
 
-## §1 What already exists (audit, 2026-07-02)
+## 1 What already exists (audit, 2026-07-02)
 
 | Piece | Where | Relevance |
 |---|---|---|
 | Trigger-clips-from-analysis pattern | `manifold-core/src/audio_clip_detection.rs`, `TimelineClip.detection_source` ([clip.rs:43](../crates/manifold-core/src/clip.rs)) | The exact provenance shape this design extends: generated clips point back at their source; re-run clears only its own output. `.als` import is the symbolic twin of detection. |
 | Phantom clips from live MIDI | NoteOn creates, NoteOff commits (CLAUDE.md invariant) | Proof that note→clip is the established mapping. Import is the same thing offline. |
 | Tempo map | `manifold-core/src/tempo.rs` — `TempoMap`, `TempoPoint`, `TempoPointSource`, beat↔seconds converters | Direct landing for Ableton's tempo automation. Beat-indexed, like the .als. |
-| Layer model | `manifold-core/src/layer.rs` — `name`, `layer_type`, `parent_layer_id` (grouping), `clips`, `enforce_non_overlap()` | Tracks → layers, group tracks → parent layers. Non-overlap is the write-time invariant that shapes MIDI landing (§4.3). |
+| Layer model | `manifold-core/src/layer.rs` — `name`, `layer_type`, `parent_layer_id` (grouping), `clips`, `enforce_non_overlap()` | Tracks → layers, group tracks → parent layers. Non-overlap is the write-time invariant that shapes MIDI landing (section 4.3). |
 | Clip model | `manifold-core/src/clip.rs` — `TimelineClip` beat-primary, `new_generator` / `new_audio`, `color_override`, `recorded_bpm`/`warp_ratio` | Trigger clips = generator clips; stems = audio clips with warp. No `name` field on clips — clip names do not import (layer names do). |
-| Cues | `CuePoint` in `manifold-playback/src/ableton_bridge.rs:120` — **runtime-only, arrives over OSC** | No persistent cue storage exists. §4.5 adds one (small, project-level) so the show works with Ableton closed. |
-| OSC bridge | `ableton_bridge.rs` — macros, transport, structural identity via `device_class_name` (`ableton_mapping.rs`) | **Unchanged by this design.** File import = structure, offline. OSC = live values. §4.6 pre-seeds the mapping picker from the parsed set. |
+| Cues | `CuePoint` in `manifold-playback/src/ableton_bridge.rs:120` — **runtime-only, arrives over OSC** | No persistent cue storage exists. section 4.5 adds one (small, project-level) so the show works with Ableton closed. |
+| OSC bridge | `ableton_bridge.rs` — macros, transport, structural identity via `device_class_name` (`ableton_mapping.rs`) | **Unchanged by this design.** File import = structure, offline. OSC = live values. section 4.6 pre-seeds the mapping picker from the parsed set. |
 | Per-clip audio detection | `docs/AUDIO_CLIP_DETECTION_DESIGN.md` — stem + trigger clips, clear-by-source, lane reuse | Post-import, imported stem clips get detection for free — it's a property of audio clips. |
 | Undo | `EditingService` → `Command`, sole mutation gateway | Import and re-sync are each ONE undo entry. |
 
 ---
 
-## §2 Decisions (settled — don't reopen)
+## 2 Decisions (settled — don't reopen)
 
 | # | Decision |
 |---|---|
 | D1 | **One-way.** `.als` → MANIFOLD only. MANIFOLD never writes or modifies the Live set. |
 | D2 | **Everything lands as existing entities.** Clips, layers, tempo points, cues. Events are clips; the rising clip edge is the trigger. No "trigger lane" entity, no event streams. |
 | D3 | **Provenance on the entity, baseline on the project.** `Option<AbletonRef>` on `Layer` and `TimelineClip` (serde `skip_serializing_if = "Option::is_none"`, following `detection_source` / `color_override` precedent — old projects round-trip byte-identical). Project-level `AbletonImportState` holds the set path, Live version, per-track import modes, and the **normalized baseline snapshot** of the last import. |
-| D4 | **Re-sync is a three-way merge**: baseline vs new `.als` vs current project, per mirrored field. "Touched" is *computed* (current ≠ baseline), never a runtime flag. Rules in §5.2. |
+| D4 | **Re-sync is a three-way merge**: baseline vs new `.als` vs current project, per mirrored field. "Touched" is *computed* (current ≠ baseline), never a runtime flag. Rules in section 5.2. |
 | D5 | **Conflicts default to keep-MANIFOLD**, listed in a sync report. Never silently clobber a hand edit. |
 | D6 | **Deletions:** entity gone from the new `.als` → if locally untouched, delete it (it was a pure mirror); if locally modified, move it to an **"Ableton (orphaned)"** group layer, muted, and report. Never auto-delete user work. |
 | D7 | **Identity:** Ableton XML `Id` attributes first; fallback heuristic `(track match, same name, ≥50% time overlap)`; else treated as new. Matching is per-track, then per-clip within matched tracks. |
 | D8 | **Drum racks pitch-split: one layer per pad**, named from the drum-rack chain names ("Kick", "Snare 909"…), grouped under a parent layer named after the track. Required anyway — overlapping notes on one layer would violate `enforce_non_overlap`. |
 | D9 | **Melodic MIDI tracks stay one layer**; overlapping notes (chords) are resolved by the existing `enforce_non_overlap` trim on insert. Chords collapse toward their rising edge, which is what a trigger cares about. Note durations import as-is (gate length), no minimum floor. |
-| D10 | **MIDI note → generator clip** (`TimelineClip::new_generator`): `start_beat` = note start, `duration_beats` = note duration, velocity → new `trigger_velocity: Option<f32>` (§4.4). User assigns generators to the layer afterward — that's the "tune" step. |
-| D11 | **Audio arrangement regions → real audio clips** (`new_audio`) referencing the set's sample files, **muted by default** (Ableton is front-of-house audio; MANIFOLD stems exist for per-clip detection and export mixdown). Warp handling in §4.2. |
+| D10 | **MIDI note → generator clip** (`TimelineClip::new_generator`): `start_beat` = note start, `duration_beats` = note duration, velocity → new `trigger_velocity: Option<f32>` (section 4.4). User assigns generators to the layer afterward — that's the "tune" step. |
+| D11 | **Audio arrangement regions → real audio clips** (`new_audio`) referencing the set's sample files, **muted by default** (Ableton is front-of-house audio; MANIFOLD stems exist for per-clip detection and export mixdown). Warp handling in section 4.2. |
 | D12 | **Selective import dialog:** per-track mode — `Full` / `Skip` (default: Full for tracks with content). Modes persist in `AbletonImportState` and are re-applied plus re-editable on re-sync. |
 | D13 | **Import and re-sync are each one undo entry** through `EditingService` (single command wrapping all mutations). |
 | D14 | **Parsing:** `flate2` gunzip + `quick-xml` streaming, on a background thread; the parsed `NormalizedSet` is applied on the content thread via one command. Pin to Peter's Live major version (12); unknown schema → loud, user-visible error, never a panic, never a partial import. |
 | D15 | **Rack macro inventory pre-seeds the OSC mapping picker** — parsed device racks (name, `device_class_name`, macro names) populate `AbletonSetContext` so mapping targets are offered before the bridge ever connects. |
-| D16 | **Out of scope v1:** automation-envelope import (lands as a natural extension once `docs/AUTOMATION_LANES_DESIGN.md` is built — envelopes → lanes), session-view scenes (session mode not built), time signatures beyond the project's beats-per-bar if trivially mappable, writing `.als`, video/return/master track content. **Both deferral triggers have FIRED (coherence audit F9, 2026-07-10): AUTOMATION_LANES shipped P1–P4 (2026-07-04) and SESSION_MODE shipped P1–P3 (2026-07-03). Neither fold-in is designed here** — the executing session decides fold-in vs keep-deferred for envelope import, and SESSION_MODE §5's `SessionLaunchScene` id-mapping still explicitly punts scene import to "the Ableton-sync project" (i.e. here) with no design written on either side. Brief-time work, not a doc contradiction. |
+| D16 | **Out of scope v1:** automation-envelope import (lands as a natural extension once `docs/AUTOMATION_LANES_DESIGN.md` is built — envelopes → lanes), session-view scenes (session mode not built), time signatures beyond the project's beats-per-bar if trivially mappable, writing `.als`, video/return/master track content. **Both deferral triggers have FIRED (coherence audit F9, 2026-07-10): AUTOMATION_LANES shipped P1–P4 (2026-07-04) and SESSION_MODE shipped P1–P3 (2026-07-03). Neither fold-in is designed here** — the executing session decides fold-in vs keep-deferred for envelope import, and SESSION_MODE section 5 (Recording)'s `SessionLaunchScene` id-mapping still explicitly punts scene import to "the Ableton-sync project" (i.e. here) with no design written on either side. Brief-time work, not a doc contradiction. |
 
 ---
 
-## §3 Extraction — what the `.als` gives us
+## 3 Extraction — what the `.als` gives us
 
 An `.als` is gzipped XML: Ableton's entire document model. Nearly everything is
 **symbolic — parse, don't infer.** Audio analysis (existing detection pipeline)
@@ -99,18 +99,18 @@ absolute element paths from this doc — **pin them from fixtures**:
 
 ---
 
-## §4 Mapping — where each feature lands
+## 4 Mapping — where each feature lands
 
 | Ableton | MANIFOLD | Detail |
 |---|---|---|
-| Set tempo + tempo automation | `TempoMap` points | §4.1 |
-| Locator | Project cue (new storage) | §4.5 |
+| Set tempo + tempo automation | `TempoMap` points | section 4.1 |
+| Locator | Project cue (new storage) | section 4.5 |
 | Group track | `Layer` with children via `parent_layer_id` | name + color |
-| MIDI track (drum rack) | Parent layer + **one child layer per pad** | §4.3 |
-| MIDI track (melodic) | One layer | §4.3 |
-| MIDI note | Generator clip (trigger) | §4.4 |
+| MIDI track (drum rack) | Parent layer + **one child layer per pad** | section 4.3 |
+| MIDI track (melodic) | One layer | section 4.3 |
+| MIDI note | Generator clip (trigger) | section 4.4 |
 | Audio track | Audio layer | |
-| Audio region | Audio clip, muted | §4.2 |
+| Audio region | Audio clip, muted | section 4.2 |
 | Track/clip color | Layer color / `color_override` | Ableton palette index → RGB via a pinned lookup table (approximate is fine) |
 | Rack macros | `AbletonSetContext` pre-seed | D15; no mapping created, just the picker inventory |
 
@@ -186,7 +186,7 @@ audio routing changes. The import builds the **score**; the user builds the
 
 ---
 
-## §5 Provenance & re-sync (the merge)
+## 5 Provenance & re-sync (the merge)
 
 ### 5.1 Data
 
@@ -250,7 +250,7 @@ edited an individual note clip, the touched rules above protect it.
 Re-sync ends with a modal summary: counts (applied / kept / conflicts /
 orphaned / new / deleted), then the itemized conflict + orphan list (entity,
 field, kept value, incoming value). Also surfaced: missing sample files,
-non-uniform warp approximations, unmatched-ID fallback matches (§D7) so the
+non-uniform warp approximations, unmatched-ID fallback matches (section D7) so the
 user can spot a wrong guess. Plain data in `ContentState`; UI renders it.
 
 ### 5.4 The command shape
@@ -264,7 +264,7 @@ thread).
 
 ---
 
-## §6 Import dialog
+## 6 Import dialog
 
 - File picker → background parse → dialog with the track list: name, type
   (drums / MIDI / audio / group), content summary ("214 notes, 3 pads" /
@@ -272,14 +272,14 @@ thread).
 - Defaults: everything with content = Full. Group tracks import iff any child does.
 - Re-sync entry point: *File → Re-sync Ableton Set* (enabled when
   `AbletonImportState` exists) — re-parses the same path (re-pickable if
-  moved), shows the same dialog pre-filled with saved modes, then runs §5.
+  moved), shows the same dialog pre-filled with saved modes, then runs section 5.
 - Switching a track from Skip→Full on re-sync imports it fresh; Full→Skip
   treats its entities per the deletion rules (untouched mirrors delete,
   touched ones orphan).
 
 ---
 
-## §7 Implementation notes
+## 7 Implementation notes
 
 - **New module:** `manifold-io/src/als/` — `schema.rs` (pinned element names,
   version check), `parse.rs` (gunzip + streaming parse → `NormalizedSet`),
@@ -302,9 +302,9 @@ thread).
   fix is a new fixture + `schema.rs` update — the failure mode is a loud
   version error, never a wrong import.
 
-## §8 Phasing (Sonnet)
+## 8 Phasing
 
-- **P1 — Parse.** Fixtures (§3.1), `als/` module, `NormalizedSet`, version
+- **P1 — Parse.** Fixtures (section 3.1), `als/` module, `NormalizedSet`, version
   pinning. Tests: golden normalized output per fixture; tempo/warp math unit
   tests; drum-rack pad routing incl. the receiving-note quirk.
 - **P2 — First import.** `AbletonRef` + `AbletonImportState` + `CueMarker`
@@ -312,7 +312,7 @@ thread).
   legacy fixtures). Import dialog, `ImportAbletonSetCommand` create-only path,
   velocity exposure in `LayerGeneratorState`. Milestone: Peter imports his
   live set, sees the full score, undo works.
-- **P3 — Re-sync.** Baseline persistence, three-way diff (§5.2) as pure
+- **P3 — Re-sync.** Baseline persistence, three-way diff (section 5.2) as pure
   functions with exhaustive rule-table tests, orphan group, user-suppressed
   IDs, sync report UI. Milestone: edit set in Ableton → re-sync → moves
   applied, hand edits intact, report correct.
@@ -325,12 +325,12 @@ Testing scope per CLAUDE.md: per-crate focused tests throughout
 the load-bearing test surface. Full workspace sweep only at P2/P3 completion
 (serialization fields touch project I/O = infrastructure).
 
-## §9 Deferred / non-goals
+## 9 Deferred / non-goals
 
 - Automation envelopes → automation lanes (after AUTOMATION_LANES ships — **shipped
   2026-07-04**; fold-in vs keep-deferred is a brief-time decision, D16).
 - Session-view scenes → session mode (after SESSION_MODE ships — **shipped P1–P3
-  2026-07-03**; SESSION_MODE §5's scene id-mapping still punts here, D16).
+  2026-07-03**; SESSION_MODE section 5's scene id-mapping still punts here, D16).
 - Piecewise per-marker warp fidelity inside one region.
 - Live-OSC structural population (OSC stays values/transport; structure comes
   from the file).

@@ -6,13 +6,12 @@
 from a full read of `manifold-playback`, the timeline/tempo model in
 `manifold-core`, and the content-thread plumbing in `manifold-app`.** This is
 the doc to read before touching transport, scheduling, sync, MIDI, OSC, or
-timecode — and the doc a bug hunt attacks (§13). It is the sibling of
+timecode — and the doc a bug hunt attacks (section 13). It is the sibling of
 `FREEZE_COMPILER_MAP.md`: that doc maps what turns graphs into pixels; this one
 maps what decides *which clips are alive and what time it is*.
 
-Written at `feat/timeline-ui-redesign` immediately after SESSION_MODE P2 merged
-(`f852d2bc` — `SessionRuntime` as the third ref source). Sections marked (P2)
-are that fresh.
+Written immediately after SESSION_MODE P2 merged (`SessionRuntime` as the
+third ref source); sections marked (P2) are that fresh.
 
 ---
 
@@ -33,7 +32,7 @@ structural gatekeeper (`SyncArbiter`) decides who may touch the transport.
 the beat, keeps video locked to Ableton for a whole set, and decides what is on
 screen at every moment of a show. Its failure modes are timing failures — a
 launch that lands off-grid, a playhead that drags backward after a scrub, a
-clip that black-frames on its first hit. Every threshold in §11 exists because
+clip that black-frames on its first hit. Every threshold in section 11 exists because
 one of those happened.
 
 ## 2. File map
@@ -56,7 +55,7 @@ one of those happened.
 | `midi_import.rs` | MIDI-file → timeline clips. | 193 |
 | `link_sync.rs` | Ableton Link via rusty_link: beat/phase/tempo poll, start-stop sync → arbiter play/pause. | 179 |
 | `osc_receiver.rs` | UDP OSC listener: background thread → latest-message-per-address queue → main-thread dispatch to subscribers. | 358 |
-| `osc_sync.rs` | OSC/SMPTE timecode controller (LiveMTC): drop-frame conversion, timecode-activity transport follow, nudge/seek. **Receive path currently unwired — see §13.1.** | 428 |
+| `osc_sync.rs` | OSC/SMPTE timecode controller (LiveMTC): drop-frame conversion, timecode-activity transport follow, nudge/seek. **Receive path currently unwired — see section 13.1.** | 428 |
 | `osc_sender.rs` | `/manifold/play|transport|position` to M4L: 3× redundant sends, 0.3s re-confirm window, echo suppression via arbiter flag. | 311 |
 | `osc_param_router.rs` | Data-driven OSC float → param writes (macros, master/layer effects, generator params, opacity). Rebuilt on structural change from command handlers. | 336 |
 | `ableton_bridge.rs` | AbletonOSC (11000/11001): session discovery, macro listeners → param writes, cue points + PLAY-group arrangement for the perform HUD, outbound transport (mirror of osc_sender). Inbound transport relay **disabled** (echo loops). | 3204 |
@@ -64,7 +63,7 @@ one of those happened.
 | `tempo_recorder.rs` | External-tempo recording: session lifecycle, point spacing (≥0.125 beats, ≥0.05 BPM delta), tempo-lane snapshot into provenance. | 339 |
 | `modulation.rs` | Per-frame pipeline: reset effectives → LFO drivers → audio mods → clip-triggered decay envelopes. Per-instance envelopes (post-unification). | 939 |
 | `video_time.rs` | Pure video-time math (in-point, looping, rate) — Unity-exact. | 116 |
-| `active_window.rs` | Incremental active-clip window (boundary cursors). **Dead code — never instantiated; see §13.8.** | 680 |
+| `active_window.rs` | Incremental active-clip window (boundary cursors). **Dead code — never instantiated; see section 13.8.** | 680 |
 | `renderer.rs` | `ClipRenderer` trait (video pool / generator / image implement it) + `StubRenderer` for tests. | 202 |
 | `audio_sync.rs` / `audio_warp.rs` / `audio_layer_playback.rs` / `audio_mixdown.rs` | Per-clip audio decode (kira) + encoder-delay probe, warp, transport-following playback, offline mixdown. | ~1.1k |
 | `percussion_*.rs`, `process_runner.rs` | Percussion import pipeline (external process). Not core transport; not mapped further here. | ~4.4k |
@@ -73,8 +72,8 @@ one of those happened.
 
 | File | Role |
 |---|---|
-| `units.rs` | `Beats`(f64) / `Seconds`(f64) / `Bpm`(f32) newtypes. The engine's beat accumulator is f64; several boundaries still round-trip f32 (§13.6). |
-| `tempo.rs` | `TempoMap` (sorted points, step-change BPM) + `TempoMapConverter` (piecewise beat↔seconds integration, f64 variant for the per-frame path, BPM clamped 20–300). Linear walks (§13.9). |
+| `units.rs` | `Beats`(f64) / `Seconds`(f64) / `Bpm`(f32) newtypes. The engine's beat accumulator is f64; several boundaries still round-trip f32 (section 13.6). |
+| `tempo.rs` | `TempoMap` (sorted points, step-change BPM) + `TempoMapConverter` (piecewise beat↔seconds integration, f64 variant for the per-frame path, BPM clamped 20–300). Linear walks (section 13.9). |
 | `timeline.rs` | `Timeline`: layers, self-healing clip-id lookup cache, `enforce_tree_order` (pre-order DFS group invariant), mute/solo-aware `get_active_clips_at_beat_ref`, markers. |
 | `layer.rs` | `Layer`: sorted clip caches, **`enforce_non_overlap_for`** — DaVinci-style write-time overlap resolution (delete / trim-start with in-point advance / trim-end / split), returning `OverlapAction`s for undo. |
 | `clip.rs` | `TimelineClip`: beat-domain position/duration, `in_point` (Seconds), loop fields, `recorded_bpm`, absolute-tick provenance. |
@@ -85,7 +84,7 @@ one of those happened.
 
 | File | Role |
 |---|---|
-| `content_thread.rs` | The loop: real-time thread policy, command drain with seek coalescing, surface wait, `tick_frame` (order in §3), `tick_sync_controllers`, `derive_external_beat`, `apply_resolved_tempo`, state push. |
+| `content_thread.rs` | The loop: real-time thread policy, command drain with seek coalescing, surface wait, `tick_frame` (order in section 3), `tick_sync_controllers`, `derive_external_beat`, `apply_resolved_tempo`, state push. |
 | `content_commands.rs` | `handle_command`: transport (Play aligns to CLK beat, claims ownership, sets seek cooldown), editing, session gestures, project lifecycle, OSC router rebuilds. |
 | `content_command.rs` | The `ContentCommand` enum — the complete UI→content surface. |
 | `content_state.rs` | `ContentState` snapshot — everything the UI knows per frame. |
@@ -102,12 +101,12 @@ timer.wait_for_deadline()                 (mach_wait_until + 2ms spin)
 3. tick_midi_input                        (drain midir notes → ClipLauncher → LiveClipManager)
 3b. tick_sync_controllers
       auto-detect ClockAuthority          (CLK-receiving > OSC-timecode > Link-with-peers > Internal;
-                                           written into project.settings each frame — §13.4)
+                                           written into project.settings each frame — section 13.4)
       Link.update    → arbiter play/pause, live tempo (priority 1)
       MidiClock.update → external_time_sync gate, transport, nudge/seek position, live tempo (priority 2)
       OscReceiver.update → dispatch subscribers → OscParamRouter.apply
       AbletonBridge.update/apply          (macro writes; sets ableton_active flag)
-      OscSync.update (M4L mode)           (timecode transport + position — currently starved, §13.1)
+      OscSync.update (M4L mode)           (timecode transport + position — currently starved, section 13.1)
 3c. derive_external_beat                  (CLK: beat := clock beat unless seek-cooldown;
                                            Link: beat := link beat − cached offset unless manifold owns)
     update_recording_session_state / apply_resolved_tempo
@@ -116,18 +115,18 @@ timer.wait_for_deadline()                 (mach_wait_until + 2ms spin)
 4. engine.tick(ctx)
      — fire_meters reset (ONE per tick, BEFORE the branch — BUG-109 P5: a
        prior per-branch reset ran after the playing branch's own
-       clip-trigger push and wiped it every tick; see §6)
+       clip-trigger push and wiped it every tick; see section 6)
      playing branch:
        consume sync-dirty → advance_time (unless external_time_sync) → sync_project_bpm
        → activate due pending live launches → audio triggers (fire/expire one-shots,
-         pushes fire_meters — §6)
-       → sync_clips_to_time               (THE authority — see §5)
+         pushes fire_meters — section 6)
+       → sync_clips_to_time               (THE authority — see section 5)
        → update_active_clip_playback_rates → check_custom_loop_boundaries
        → evaluate_modulation (pushes fire_meters) → correct_video_drift (every 2s, not in export)
        → filter_ready_clips → compute_prewarm_candidates
      non-playing branch: flush sync-dirty (sync + seek_active_clips), rates,
        audio triggers meter-only walk (pushes fire_meters, never fires — BUG-109 P5,
-       §6), modulation (pushes fire_meters), filter
+       section 6), modulation (pushes fire_meters), filter
 4b. transport out (AbletonBridge or OscPositionSender late_update — echo-suppressed)
 5. audio_layer_playback.update            (kira voices follow transport)
 6. percussion tick · video prewarm handoff
@@ -151,7 +150,7 @@ timer.wait_for_deadline()                 (mach_wait_until + 2ms spin)
 - Live external tempo (Link first, then MIDI Clock) is held in
   `engine.live_external_tempo` and consulted *before* the tempo map by
   `get_bpm_at_beat` / `get_seconds_per_beat_at_beat` — this drives video
-  playback *rates* and BPM display regardless of authority (§13.5).
+  playback *rates* and BPM display regardless of authority (section 13.5).
 - `sync_project_bpm_from_current_beat` runs every tick and writes
   `project.settings.bpm` (quantized, 0.005-thresholded) from live tempo or the
   map. It is a display/rate convenience, not an undoable edit.
@@ -226,7 +225,7 @@ shaped `condition()` signal into `engine.fire_meters` (D6 fire meter), keyed
 without ever advancing the fire edge or emitting a `FireRequest` — a
 performer tuning a trigger at soundcheck (transport stopped, track through
 the tap) still sees the meter move, but nothing can fire while stopped
-(BUG-109, fixed by AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md §7 P5).
+(BUG-109 (fire-meter-dead-in-all-transport-states), fixed by AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md section 7 (Wave 2 (2026-07-11) — as-built correction + P5–P8) P5).
 `fire_meters` itself resets exactly ONCE per tick, at the top of
 `engine.tick`, before either branch's evaluators run — a prior per-branch
 reset placed after the playing branch's own step-3b push silently wiped it
@@ -249,7 +248,7 @@ video-time math.
 
 `SyncArbiter` is the structural gate: every sync controller passes
 `(source, authority)` and the call is dropped unless they match. Authority is
-**auto-detected each frame** (§3) — the CLK/Link/OSC toggles control *sources*,
+**auto-detected each frame** (section 3) — the CLK/Link/OSC toggles control *sources*,
 not authority.
 
 - **MIDI Clock** (one-way, DAW → MANIFOLD): 0xF8 ticks accumulate
@@ -268,8 +267,8 @@ not authority.
   seconds) → drop-frame-correct seconds; timecode arriving = play, 0.5s
   silence = pause; playing: nudge every message (<0.5s) else seek; stopped:
   seek beyond 0.05s. **Currently starved — no subscription wires the receiver
-  to `on_timecode_received` (§13.1).**
-- **AbletonOSC transport (rewritten 2026-07-07 — ABLETON_TRANSPORT_SYNC_DESIGN.md
+  to `on_timecode_received` (section 13.1).**
+- **AbletonOSC transport (ABLETON_TRANSPORT_SYNC_DESIGN.md
   is the authority):** closed-loop pending-expectation state machine
   (`transport_sync.rs`, pure/testable). Commands (play/stop/seek) create
   expectations; inbound `is_playing` + `current_song_time` listener values
@@ -286,7 +285,7 @@ not authority.
   play carries the beat, stop is `/transport 0`, seeks fire on >0.5-beat
   divergence from dead-reckoned position; 3× redundant sends + 0.3s confirm
   window; echo suppressed via `suppress_next_transport`. Deletion is a
-  deferred cleanup (ABLETON_TRANSPORT_SYNC_DESIGN §8).
+  deferred cleanup (ABLETON_TRANSPORT_SYNC_DESIGN section 8).
 - **Ableton bridge** additionally: session discovery (tracks/racks/macros),
   macro listeners → replace-mode param writes each frame (flagged so the UI
   snapshot follows), cue points + PLAY-group arrangement for the perform HUD.
@@ -314,7 +313,7 @@ project clone).
   design). Ableton bridge has its own recv thread + pending-write mutex.
 - Zero-alloc discipline on the tick: scheduler buffer reclaim,
   `TickResult` reclaim, scratch vectors on the engine, `Arc<str>` state
-  strings. (Where it's violated, see §13.7.)
+  strings. (Where it's violated, see section 13.7.)
 
 ## 10. Write-time invariants (the model's contracts)
 
@@ -329,7 +328,7 @@ project clone).
 - All persistent mutation flows through `EditingService` commands — the
   exceptions on the engine tick (settings.bpm, clock_authority, OSC/Ableton
   param writes, modulation effectives) are deliberately *live* state, but two
-  of them land in serialized fields (§13.4).
+  of them land in serialized fields (section 13.4).
 
 ## 11. The threshold table
 
@@ -380,7 +379,7 @@ Every magic number on the timing paths, in one place:
   math incl. drop-frame), `osc_receiver`, `osc_param_router`,
   `transport_controller`, `tempo_recorder`, engine drift correction and
   custom-loop boundaries. The entire external-sync stack is verified only on
-  stage (§13.2).
+  stage (section 13.2).
 - Scope: `cargo test -p manifold-playback` is seconds. The canonical
   load-bearing fixture is `Liveschool Live Show V6 LEDS.manifold`.
 - Debugging timing bugs: this is callback/event-ordering territory — add
@@ -459,12 +458,11 @@ Every magic number on the timing paths, in one place:
     `LIVE_PREWARM_MAX_UNIQUE_CLIPS` / `RECENT_PRIORITY_COUNT` /
     `COMBINED_PREWARM_MAX` are unused. First MIDI fire of a cold video clip
     rides only the 0.02s recently-started gate — black-frame risk on stage.
-11. ~~AbletonOSC inbound transport relay is disabled~~ **FIXED 2026-07-07**
+11. ~~AbletonOSC inbound transport relay is disabled~~ **FIXED**
     (ABLETON_TRANSPORT_SYNC_DESIGN): relay re-enabled through the closed-loop
     state machine — own commands are value-matched acks, not relayable
     echoes; CLK keeps priority, OSC is the fallback authority tier.
-12. ~~`suppress_next_transport` staleness~~ **FIXED for the AbletonOSC path
-    2026-07-07**: the bridge no longer consumes the flag (value-matching
+12. ~~`suppress_next_transport` staleness~~ **FIXED for the AbletonOSC path**: the bridge no longer consumes the flag (value-matching
     replaces it) and AbletonOSC mode clears it each frame when the M4L
     sender is disabled. The M4L sender still uses the flag with the original
     staleness hazard — retired path, deferred cleanup.
@@ -473,7 +471,7 @@ Every magic number on the timing paths, in one place:
     (only `unsubscribe_all` is used, single-subscriber addresses) but a trap
     for the next subscriber.
 14. ~~Round-trip constants are wall-clock guesses~~ **FIXED for position/
-    transport correctness 2026-07-07**: the CLK plane now releases on
+    transport correctness**: the CLK plane now releases on
     value-matched acknowledgment, not on the 0.3s cooldown, and retry
     cadence adapts to measured RTT (EWMA). The 0.3s cooldown and 0.5s
     ownership grace still exist as M4L-path/secondary heuristics, but

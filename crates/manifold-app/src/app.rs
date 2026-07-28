@@ -101,7 +101,7 @@ pub struct Application {
     /// Frame count when suppress_snapshot_until was set (for timeout).
     pub(crate) suppress_snapshot_set_at: u64,
 
-    /// Debounced background autosave (GIG_RESILIENCE_DESIGN §6). Ticked from
+    /// Debounced background autosave (GIG_RESILIENCE_DESIGN section 6). Ticked from
     /// `tick_and_render` after the state drain, editor mode only — perform
     /// mode returns before the tick, which parks the timer (D5).
     pub(crate) autosave: crate::autosave::AutosaveState,
@@ -136,7 +136,7 @@ pub struct Application {
     /// `drain_import_progress` immediately after each `Done`/`Failed`.
     pub(crate) import_queue: std::collections::VecDeque<crate::import_worker::ImportRequest>,
 
-    /// Gig-resilience breadcrumb sidecar (GIG_RESILIENCE_DESIGN §5.1), phase
+    /// Gig-resilience breadcrumb sidecar (GIG_RESILIENCE_DESIGN section 5.1), phase
     /// P2. Cadence gate — pure logic, ticked from the content-state drain in
     /// both editor and perform mode (unlike autosave, NOT parked in perform
     /// mode: the breadcrumb is exactly what a live show needs).
@@ -222,7 +222,7 @@ pub struct Application {
     /// (or topology) changes, not every frame. Empty = atlas off / editor closed.
     pub(crate) last_atlas_visible_sent: Vec<manifold_core::NodeId>,
     /// Single shared IOSurface + the UI-side texture imported from it for the
-    /// clip-thumbnail atlas (§24 5c, BUG-119: one surface, no rotation — see
+    /// clip-thumbnail atlas (section 24 5c, BUG-119: one surface, no rotation — see
     /// `crate::shared_texture::SharedAtlasSurface`).
     #[cfg(target_os = "macos")]
     pub(crate) clip_atlas_surface: Option<Arc<crate::shared_texture::SharedAtlasSurface>>,
@@ -230,7 +230,7 @@ pub struct Application {
     pub(crate) ui_clip_atlas_texture: Option<manifold_gpu::GpuTexture>,
     /// Last clip-thumbnail visible set sent — dedups `SetClipAtlasVisible`.
     pub(crate) last_clip_atlas_visible_sent: Vec<manifold_core::ClipId>,
-    /// Blits clip-thumbnail atlas cells into clip bodies (§24 5c), 4b′ slot.
+    /// Blits clip-thumbnail atlas cells into clip bodies (section 24 5c), 4b′ slot.
     pub(crate) clip_thumb_gpu: Option<manifold_renderer::clip_thumb_gpu::ClipThumbGpu>,
     /// Reused per-frame scratch for the thumbnail quad list — no per-frame heap on
     /// the render hot path.
@@ -305,10 +305,10 @@ pub struct Application {
     /// overview / collapsed-group bitmaps — all drawn around the GPU clip passes.
     /// The grid (per-layer indices) draws BEFORE the clips so opaque bodies occlude
     /// it; the panels (1000/1001/1002/2000+) are separate regions whose z-order vs
-    /// clips is moot. One instance since §24 5b retired the per-layer "front" buffer.
+    /// clips is moot. One instance since section 24 5b retired the per-layer "front" buffer.
     pub(crate) layer_bitmap_gpu: Option<manifold_renderer::layer_bitmap_gpu::LayerBitmapGpu>,
     /// Per-clip waveform textures, drawn INSIDE the audio-clip bodies after the
-    /// body pass (§24 5b) — the waveform is part of the clip on the GPU, no longer
+    /// body pass (section 24 5b) — the waveform is part of the clip on the GPU, no longer
     /// a layer-wide CPU bitmap laid over the bodies.
     pub(crate) clip_content_gpu: Option<manifold_renderer::clip_content_gpu::ClipContentGpu>,
     /// Reused per-frame scratch for the GPU clip pass — visible clip rects from
@@ -2238,7 +2238,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
             // Layer grid bitmaps + lane/stem/overview/group panels (one instance),
             // and per-clip waveform textures, drawn around the GPU clip passes
-            // (§24 5b).
+            // (section 24 5b).
             self.layer_bitmap_gpu = Some(manifold_renderer::layer_bitmap_gpu::LayerBitmapGpu::new(
                 &native_device,
                 manifold_gpu::GpuTextureFormat::Bgra8Unorm,
@@ -2350,7 +2350,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 self.ui_node_atlas_textures = atlas_textures.map(Some);
                 self.node_atlas_texture_bridge = Some(Arc::clone(&atlas_bridge));
 
-                // Clip-thumbnail FILMSTRIP atlas surface (§24 5c-2, BUG-119) — its own
+                // Clip-thumbnail FILMSTRIP atlas surface (section 24 5c-2, BUG-119) — its own
                 // smaller cell-grid geometry (many narrow bar cells), independent
                 // lifecycle (always-on in the timeline vs editor-only). A SINGLE
                 // shared IOSurface, not a triple-buffer bridge: the atlas is
@@ -2463,7 +2463,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 content_pipeline.set_node_atlas_textures(atlas_textures, Arc::clone(bridge));
             }
             // Content-side import of the single shared clip-thumbnail atlas
-            // surface (§24 5c, BUG-119), plus its one-time init clear — Metal
+            // surface (section 24 5c, BUG-119), plus its one-time init clear — Metal
             // doesn't zero-init, and this is the ONLY clear the atlas ever gets:
             // every cell blit after this uses `LoadAction::Load` (see
             // `fill_clip_atlas`/`restore_clip_atlas` in content_pipeline.rs). The
@@ -2601,7 +2601,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             &self.content_state.automation_latched_params,
         );
 
-        // `--resume` boot fast path (GIG_RESILIENCE_DESIGN §5.2): content
+        // `--resume` boot fast path (GIG_RESILIENCE_DESIGN section 5.2): content
         // thread + GPU are up, so this is the earliest point that can load a
         // project and seek/play it. Output-window creation + perform-mode
         // entry happen on the next `about_to_wait` via the flag this sets

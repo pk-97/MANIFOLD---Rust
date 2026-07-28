@@ -127,7 +127,7 @@ pub trait TimelineInputHost {
     /// Paste clips at target position.
     fn paste_clips(&mut self, target_beat: f32, target_layer: i32);
 
-    // ── Finder-paste arbitration (docs/TIMELINE_INGEST_DESIGN.md §2 D4) ──
+    // ── Finder-paste arbitration (docs/TIMELINE_INGEST_DESIGN.md section 2 D4) ──
     // These four stay platform-neutral on purpose: `macos_pasteboard.rs` is
     // the only module allowed to name NSPasteboard, so this trait exposes
     // its results (file URLs, a changeCount, a snapshot) rather than the
@@ -273,7 +273,7 @@ pub trait TimelineInputHost {
     /// Whether any markers are currently selected.
     fn has_selected_markers(&self) -> bool;
 
-    // ── Automation lane editing (P4, `docs/AUTOMATION_LANES_DESIGN.md` §7) ──
+    // ── Automation lane editing (P4, `docs/AUTOMATION_LANES_DESIGN.md` section 7) ──
 
     /// Whether a single automation breakpoint is currently selected (set by
     /// a plain click on a dot — `UIState::selected_automation_point`).

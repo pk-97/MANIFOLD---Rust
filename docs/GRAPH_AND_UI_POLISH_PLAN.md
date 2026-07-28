@@ -55,10 +55,10 @@ A deep static-analysis pass found most of section B/C was already built by the p
 
 ## A. Preset grouping — DONE (refine passes remain)
 
-Shipped on `preset-grouping`: BlackHole (`89cb711e`), GROUP tier 10 (`af5cc04a`), medium-grouped 5 (`905b3547`), flat-titled 21 (`f0fbfb91`). **40 / 45 presets** grouped or titled+described; all gate green (3-set nodeId equivalence + check-presets 45/45 + one-frame Metal execute). See [[project_graph_grouping_campaign]] memory for the full machinery.
+Shipped on `preset-grouping`: BlackHole, GROUP tier 10, medium-grouped 5, flat-titled 21. **40 / 45 presets** grouped or titled+described; all gate green (3-set nodeId equivalence + check-presets 45/45 + one-frame Metal execute). See [[project_graph_grouping_campaign]] memory for the full machinery.
 
 - **Throwaway tooling still on disk** (uncommitted, deliberately): `crates/manifold-core/examples/apply_grouping.rs` (spec→grouped JSON via `group_edit::group_selection`, verbatim bodies; `--batch` mode) and `crates/manifold-core/tests/grouping_equivalence.rs` (the gate). Baselines in `/tmp/grouping-baselines/` (re-snapshot from git if gone). Kept for the refine passes; delete when fully closed.
-- **Refine-later:** ComputeStrangeAttractor's WGSL kernel is untitled; Duocylinder under-grouped (1 box / 19 nodes); DepthOfField maybe over-boxed (8); Infrared 1-box borderline; per-graph description-voice polish; the §4 slider-rescale folds (hand-verify each — they delete nodes + repoint bindings, kept out of the agent phase on purpose).
+- **Refine-later:** ComputeStrangeAttractor's WGSL kernel is untitled; Duocylinder under-grouped (1 box / 19 nodes); DepthOfField maybe over-boxed (8); Infrared 1-box borderline; per-graph description-voice polish; the section 4 slider-rescale folds (hand-verify each — they delete nodes + repoint bindings, kept out of the agent phase on purpose).
 - **Deferred (decomposition-pending bundles, per CLAUDE.md):** DigitalPlants, NestedCubes, Tesseract. **Skipped (fixtures):** NodeGraphTest, TrivialPassthrough.
 - **Open decision:** open the PR / merge, or keep iterating on the branch.
 

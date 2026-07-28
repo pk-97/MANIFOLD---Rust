@@ -1,7 +1,7 @@
-//! RAYTRACING_DESIGN.md §5.2 P4 gate — MetalFX Temporal upscaling.
+//! RAYTRACING_DESIGN.md section 5.2 P4 gate — MetalFX Temporal upscaling.
 //!
 //! Three scripted, computed-number gates (no PNG oracles — Peter 2026-07-22,
-//! §5.2 preamble):
+//! section 5.2 preamble):
 //!   1. `temporal_scaler_produces_exact_target_resolution` — the scaler's
 //!      output texture is exactly `dst_w x dst_h`, not "close to".
 //!   2. `upscaled_output_approximates_native_within_coarse_epsilon` —

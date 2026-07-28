@@ -1,0 +1,3 @@
+# Ratchet pins for the status-header budget (design_status.py --lifecycle-check).
+# One line per over-budget doc: <name> <allowed words>. Growth past the pin fails;
+# a doc trimmed under the cap must have its pin deleted. This list only burns down.

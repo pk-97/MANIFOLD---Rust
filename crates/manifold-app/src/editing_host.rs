@@ -1042,7 +1042,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         let old_converted = old_points.map(convert);
         // Already applied live by `set_automation_draw_preview` during the
         // stroke — this only registers the undo entry, reusing the SAME
-        // command §5's Automation Arm recording commits with
+        // command section 5's Automation Arm recording commits with
         // (`CommitRecordedGestureCommand`).
         let cmd = CommitRecordedGestureCommand::new(graph_target, param_id_str, new_converted, old_converted);
         crate::content_command::ContentCommand::send(

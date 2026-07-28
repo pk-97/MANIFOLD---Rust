@@ -266,7 +266,7 @@ fn nominal_with_audio() {
 // ---------------------------------------------------------------------
 
 /// Scripted adversarial elapsed-time sequence over a 600-frame 60fps grid.
-/// See docs/LIVE_RECORDING_PROOFS_DESIGN.md §4 test 3 for the injection
+/// See docs/LIVE_RECORDING_PROOFS_DESIGN.md section 4 test 3 for the injection
 /// spec; each anomaly is applied relative to the plain grid so its effect
 /// on PTS is legible in isolation.
 fn scripted_elapsed(n: u32) -> Duration {
@@ -490,7 +490,7 @@ fn pool_accounting_consistent() {
 /// unpaced, with a large frame budget so it keeps writing well past the
 /// polling window; polls the growing output file; SIGKILLs the child once
 /// it's written enough to prove sustained encoding (not just startup);
-/// probes what's left. Per design §4 item 5, this gate is deliberately only
+/// probes what's left. Per design section 4 item 5, this gate is deliberately only
 /// "readable content survives a hard kill" — fragment-flush cadence is
 /// media-time driven, not something this test controls or asserts on.
 #[test]
@@ -589,7 +589,7 @@ fn kill_mid_take_leaves_recoverable_file() {
 /// (LiveRecordingPlugin.m), a format-mismatched Metal blit. This test
 /// asserts the failure surfaces LOUDLY — never a silent SDR fallback and
 /// never a silently "successful" HDR recording. When BUG-053 is fixed, this
-/// test is replaced by an HDR twin of `nominal_video_only` (design §8).
+/// test is replaced by an HDR twin of `nominal_video_only` (design section 8).
 #[test]
 fn hdr_blocked_by_bug_053() {
     let _guard = proofs::gpu_guard();

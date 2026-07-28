@@ -1,10 +1,10 @@
 # Volumetric Light — god rays and haze for render_scene
 
-**Status:** SHIPPED (P1–P3, 2026-07-13) — mechanically complete: every invariant (V1–V6), the CPU-vs-GPU parity proof, the monotonic performer faders, and the content-thread perf gate all pass, across Sun and Point lights. **But NOT show-ready:** across both look-critical demos (P2's Sun-only vertical slice and P3's night-garden multi-light shot), the rendered output does not read as "a black void filled with haze with beams of light shining through" — it reads as an ordinary dim scene with a faint shadow patch (P2) or a soft ambient glow next to unlit silhouettes (P3), with no legible directional beam in either. This is the numerically-green/looks-wrong pattern D6 exists to catch; see the landing report for the full look-pass writeup and next-step recommendation. Pending Peter's look-pass — do not present this as "god rays are done" until he's seen it. · 2026-07-13 · Fable 5 (design) / Sonnet 5 (P1–P3 execution)
-**Prerequisites:** none (REALTIME_3D P2 shadows + P3 fog and CAMERA_AND_LENS P2 are shipped and are the substrate; verified in §1)
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
+**Status:** SHIPPED (P1–P3, 2026-07-13) — mechanically complete: invariants V1–V6, the CPU-vs-GPU parity proof, monotonic performer faders, and the content-thread perf gate all pass across Sun and Point lights. **But NOT show-ready:** both look-critical demos read as a dim scene / soft glow, not "a black void filled with haze with beams of light shining through" — no legible directional beam (numerically-green/looks-wrong; full writeup in the landing report). Pending Peter's look-pass — do not present this as "god rays are done" until he's seen it. · 2026-07-13 · Fable design / Sonnet execution
+**Prerequisites:** none (the substrate is shipped)
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 
-**Machine-check gates (added 2026-07-13 — GRAPH_TOOLING + PARAM_RANGE_CONTRACT are live on main; this lane is their first live test):** every edited or authored preset JSON pre-flights `cargo run -p manifold-renderer --bin graph-tool -- validate <file> --kind effect|generator` (zero errors required; warnings reported verbatim in the phase report, never fixed or suppressed) and `graph-tool fusion` before/after, with the dispatch-count delta reported. Any new atom or any param-shape change regenerates the catalog (`cargo run -p manifold-renderer --bin gen_node_catalog`) in the same commit — the drift test fails otherwise. A new atom must pass `every_boundary_atom_declares_its_reason`: fusable per ADDING_PRIMITIVES §"The codegen path is mandatory", or a declared `boundary_reason:` from the taxonomy — an undeclared boundary fails the default sweep. New params: `min`/`max` are display hints and must never restrict (PARAM_RANGE_CONTRACT D3); add a `RangeContract` ONLY for a real physical bound (Index/Count/degenerate — kernel evidence cited in the curated meta-test table). Card params follow `docs/CARD_AUTHORING.md`. The landing report carries a `Tool feedback:` section — friction, false positives, unclear messages — first-live-test telemetry Peter asked for.
+**Machine-check gates (added 2026-07-13 — GRAPH_TOOLING + PARAM_RANGE_CONTRACT are live on main; this lane is their first live test):** every edited or authored preset JSON pre-flights `cargo run -p manifold-renderer --bin graph-tool -- validate <file> --kind effect|generator` (zero errors required; warnings reported verbatim in the phase report, never fixed or suppressed) and `graph-tool fusion` before/after, with the dispatch-count delta reported. Any new atom or any param-shape change regenerates the catalog (`cargo run -p manifold-renderer --bin gen_node_catalog`) in the same commit — the drift test fails otherwise. A new atom must pass `every_boundary_atom_declares_its_reason`: fusable per ADDING_PRIMITIVES section"The codegen path is mandatory", or a declared `boundary_reason:` from the taxonomy — an undeclared boundary fails the default sweep. New params: `min`/`max` are display hints and must never restrict (PARAM_RANGE_CONTRACT D3); add a `RangeContract` ONLY for a real physical bound (Index/Count/degenerate — kernel evidence cited in the curated meta-test table). Card params follow `docs/CARD_AUTHORING.md`. The landing report carries a `Tool feedback:` section — friction, false positives, unclear messages — first-live-test telemetry Peter asked for.
 
 
 Peter's directives, 2026-07-13, all quoted because each one decides something:
@@ -33,18 +33,18 @@ params on `node.atmosphere` → cards → faders. The beams inherit every light
 modulation for free — a beat-enveloped light color pulses its own shafts,
 which is exactly the "lights will do that for us" contract. A black-fog void
 (fog_color = black) gives pure darkness + carved light beams; a colored fog
-gives classic atmosphere. BUG-118's "milk filter" complaint is this design's
+gives classic atmosphere. BUG-118 (render-scene-fog-washes-out-instead-of-depth-gra…)'s "milk filter" complaint is this design's
 intake evidence: constant-color exponential fog is light-blind, so it can only
 wash; marched inscatter is light-driven, so it can only sculpt.
 
-Companions: [RENDERING_INFRA_V2_DESIGN.md](RENDERING_INFRA_V2_DESIGN.md) §4
-(the direction this graduates; §4's froxel alternative is rejected below) ·
+Companions: [RENDERING_INFRA_V2_DESIGN.md](RENDERING_INFRA_V2_DESIGN.md) section 4 (Volumetric light shafts)
+(the direction this graduates; section 4's froxel alternative is rejected below) ·
 [REALTIME_3D_DESIGN.md](REALTIME_3D_DESIGN.md) (shadow + fog substrate) ·
 [CINEMATIC_POST_DESIGN.md](CINEMATIC_POST_DESIGN.md) (D2 deterministic-sampling
 doctrine, reused verbatim; the sibling amendment landing with this doc adds AO
 denoise + GTAO there).
 
-## 1. Audit — what exists (verified 2026-07-13, tip `a11e93d6`)
+## 1. Audit — what exists (verified 2026-07-13)
 
 | Piece | Where | State |
 |---|---|---|
@@ -62,7 +62,7 @@ denoise + GTAO there).
 | BUG-118 fog washout (constant-color fog reads as milk at macro scales) | `docs/BUG_BACKLOG.md` BUG-118, OPEN | Absorbed: P1 characterizes numerically, this design supersedes the look problem (the backlog entry already names this doc's lane as the superseder) |
 | Volumetric/god-ray/froxel code | nowhere (`rg -i 'froxel|volumetric|god.?ray' crates/` → renderer hits none, 2026-07-13) | Genuinely new: two internal compute kernels (march, upsample-composite) inside render_scene |
 
-§2.5 audit statement: **zero new graph primitives.** The feature is internal
+section 2.5 audit statement: **zero new graph primitives.** The feature is internal
 to `render_scene` (precedent: shadows P2, fog P3 — both scene-internal, both
 exempt from the codegen path as part of the render_* draw boundary), plus
 fields on an existing CPU wire type. The march and upsample kernels are
@@ -200,7 +200,7 @@ need to produce the PNGs if they're not going to look at them"*); his
 2026-07-13 verdict on the result — *"look terrible and need a lot of work"* —
 is the observed failure of that premise for look-critical work. This design's
 phases each end with ONE headless render (`render-generator-preset`, minding
-BUG-117's async caveat — the committed demo scene is fully procedural) that
+BUG-117 (render-generator-preset-silently-under-renders-a…)'s async caveat — the committed demo scene is fully procedural) that
 lands in the landing report for Peter's eyes. Gates stay numeric; the PNG is
 the acceptance demo (L2), and Peter's look-pass is the phase's real exit.
 
@@ -217,8 +217,8 @@ the acceptance demo (L2), and Peter's look-pass is the phase's real exit.
 
 ## 4. Phasing
 
-Common read-back for all phases: this doc §2 whole ·
-`render_scene.rs` module header + the anchors in §1 · CINEMATIC_POST D2 (the
+Common read-back for all phases: this doc section 2 whole ·
+`render_scene.rs` module header + the anchors in section 1 · CINEMATIC_POST D2 (the
 hash + determinism doctrine). **Forbidden moves, all phases:** screen-space
 radial-blur "god rays" post effect (only works with an on-screen sun; not
 "all lights"; forbidden by name) · marching in lit fragment shaders (D3) ·
@@ -231,7 +231,7 @@ math beyond what P1's characterization demands (D4). **Test scope:** focused
 plain `cargo test`, never nextest); workspace sweep at landing.
 
 - **P1 — Atmosphere fields + plumbing + fog characterization** (one session).
-  Entry: `rg 'shaft_intensity' crates/` → 0 hits; anchors §1 re-verified.
+  Entry: `rg 'shaft_intensity' crates/` → 0 hits; anchors section 1 re-verified.
   Deliverables: the three `Atmosphere` fields + defaults + doc comments
   (atmosphere.rs), three `node.atmosphere` params, fields threaded into
   `RenderSceneUniforms` (zero-cost when off), V1 tests (`shafts_off_byte_
@@ -242,7 +242,7 @@ plain `cargo test`, never nextest); workspace sweep at landing.
   report as V6 evidence anyway). Performer gesture: none yet (no visible
   surface).
 - **P2 — Sun shafts, vertical slice** (one session). Entry: P1 landed;
-  ⚠ VERIFY-AT-IMPL from §1 resolved: read the caster-table layout
+  ⚠ VERIFY-AT-IMPL from section 1 resolved: read the caster-table layout
   (`render_scene.rs:1184-1310`) and record the view-proj access in the phase
   notes before writing the kernel. Deliverables: half-res march kernel (Sun
   lights only), depth downsample, committed bilateral upsample + additive
@@ -300,7 +300,7 @@ quality enum, beams-follow-lights) lands in a named phase; nothing rides on
 
 - **Froxel volumetrics / many-light scaling** — trigger: stage scenes need
   >4 shadow-casting lights or per-light beam cost dominates the trace.
-  (RENDERING_INFRA_V2 §4 names froxels; rejected for v1 as a clustered-volume
+  (RENDERING_INFRA_V2 section 4 names froxels; rejected for v1 as a clustered-volume
   infrastructure build with no current scene demanding it.)
 - **Cube-map point shadows** (beams carved in all directions from a Point
   light) — trigger: Peter stages a lantern-in-fog look and the single-frustum

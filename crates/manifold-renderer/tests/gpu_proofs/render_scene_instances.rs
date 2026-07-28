@@ -1,5 +1,5 @@
 //! `node.render_scene` per-object instancing proof (REALTIME_3D_DESIGN.md
-//! §10 D11+P8 gate).
+//! section 10 D11+P8 gate).
 //!
 //! Four things the unit tests can't reach: that a wired `instances_n`
 //! storage buffer actually binds and drives `@builtin(instance_index)`

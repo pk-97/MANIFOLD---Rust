@@ -472,7 +472,7 @@ fn profile_per_dispatch(registry: &PrimitiveRegistry, device: &std::sync::Arc<Gp
 ///   - fused: ONE dispatch of an N-op kernel (read particle once, N ops in
 ///     registers, write once).
 ///
-/// The question this answers (design §11.E / Phase-0): buffer chains are
+/// The question this answers (design section 11.E / Phase-0): buffer chains are
 /// IN-PLACE ALIASED, so unlike textures there is no fresh-VRAM round-trip to
 /// eliminate — fusion only saves the (N-1) re-reads/re-writes of the SAME
 /// buffer + per-dispatch overhead, and risks lower occupancy from register
@@ -1039,7 +1039,7 @@ fn profile_auto_fused_colorgrade(registry: &PrimitiveRegistry, device: &std::syn
 /// The headline fusion number: time the SHIPPED ColorGrade preset (unfused, 9
 /// graph steps) against the hand-fused single kernel
 /// ([`reference::dispatch_fused_colorgrade`]), both as real GPU time on the
-/// same run. This answers the §11.E question the synthetic per-pass number
+/// same run. This answers the section 11.E question the synthetic per-pass number
 /// can't: the unfused baseline gets the GPU's free cross-dispatch overlap that
 /// fusion forfeits, so the real speedup may sit below the naive
 /// steps-×-ms/step projection. Measured, not projected.

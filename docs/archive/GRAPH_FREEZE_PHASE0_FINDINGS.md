@@ -1,8 +1,8 @@
 # Graph Freeze Compiler — Phase 0 Findings + Architecture Direction
 
-**Status:** Phase 0 complete (2026-06-02). Branch `freeze-compiler` (worktree off `c5c4b850`). Method: a headless GPU bench (`cargo run --release -p manifold-renderer --bin freeze-profile`) + a 44-preset static fusion-headroom sweep. No app, no GUI. Companion: `docs/GRAPH_COMPILER.md` (shelved transcript), `docs/CHANNEL_TYPE_SYSTEM.md` §16, memory `project_graph_freeze_compiler_direction`.
+**Status:** Phase 0 complete (2026-06-02). Branch `freeze-compiler` (worktree off `c5c4b850`). Method: a headless GPU bench (`cargo run --release -p manifold-renderer --bin freeze-profile`) + a 44-preset static fusion-headroom sweep. No app, no GUI. Companion: `docs/GRAPH_COMPILER.md` (shelved transcript), `docs/CHANNEL_TYPE_SYSTEM.md` section 16, memory `project_graph_freeze_compiler_direction`.
 
-The §1–§4 measurements are settled. The §5 architecture is a **proposed direction informed by Phase 0**, for the Phase 2 design checkpoint (Peter's call before implementation) — not committed.
+The section 1–section 4 measurements are settled. The section 5 architecture is a **proposed direction informed by Phase 0**, for the Phase 2 design checkpoint (Peter's call before implementation) — not committed.
 
 **Goal (Peter, 2026-06-02): a state-of-the-art graph compiler optimised for performance, covering BOTH the texture-pixel and buffer/array domains as first-class peers.**
 
@@ -38,14 +38,14 @@ Driven through the production `Generator::render` path, avg over 60 frames:
 | DigitalPlants | 2.43 | 2.79 | **flat** (1.1×) | **buffer** (array_math + 160k instanced render) |
 | FluidSimulation | 11.34 | 14.17 | **flat** (1.25×) | **buffer/particle** (heaviest preset measured) |
 
-**Key diagnostic — resolution scaling separates the domains.** Cost that stays ~flat from 1080p→4K is *element/buffer-bound* (cost = per-particle / per-instance compute, not pixels); cost that scales ~linearly with pixel count is *texture-bound*. So **FluidSimulation** (11→14 ms, flat) and **DigitalPlants** (2.4→2.8, flat) are the real **buffer-domain** fusion targets — their cost is the per-particle / per-instance chains. **OilyFluid**, despite the name, is *texture*-bound (a grid fluid that scales 4× with resolution), so its win is texture-domain (the color-grade tail + per-pixel composites), not buffer. FluidSimulation at 11–14 ms is the single heaviest preset in the library and it's buffer-bound — concrete confirmation that buffer fusion is not optional. (Cost decomposition — how much of that 11 ms is the fusible per-particle chain — is now measured via parameter sweeps in **§1d**, no finer instrumentation needed.)
+**Key diagnostic — resolution scaling separates the domains.** Cost that stays ~flat from 1080p→4K is *element/buffer-bound* (cost = per-particle / per-instance compute, not pixels); cost that scales ~linearly with pixel count is *texture-bound*. So **FluidSimulation** (11→14 ms, flat) and **DigitalPlants** (2.4→2.8, flat) are the real **buffer-domain** fusion targets — their cost is the per-particle / per-instance chains. **OilyFluid**, despite the name, is *texture*-bound (a grid fluid that scales 4× with resolution), so its win is texture-domain (the color-grade tail + per-pixel composites), not buffer. FluidSimulation at 11–14 ms is the single heaviest preset in the library and it's buffer-bound — concrete confirmation that buffer fusion is not optional. (Cost decomposition — how much of that 11 ms is the fusible per-particle chain — is now measured via parameter sweeps in **section 1d**, no finer instrumentation needed.)
 
 ### 1c. Proper GPU timing — real GPU time + isolated per-pass (no wall-clock)
 
-The §1/§1b tables above (v1) timed CPU wall-clock around `commit_and_wait`, which conflates GPU execution with encode + scheduling + wait latency. Replaced with **true GPU time** via `MTLCommandBuffer.GPUStartTime/GPUEndTime` (added as `GpuEncoder::commit_and_wait_completed_timed`). What that changed:
+The section 1/section 1b tables above (v1) timed CPU wall-clock around `commit_and_wait`, which conflates GPU execution with encode + scheduling + wait latency. Replaced with **true GPU time** via `MTLCommandBuffer.GPUStartTime/GPUEndTime` (added as `GpuEncoder::commit_and_wait_completed_timed`). What that changed:
 
 - **Heavy presets barely moved** (GPU work dominates): ColorGrade 4K 2.73→**2.60 ms**, Glitch 4.53→4.39, FluidSim 4K 14.2→13.9 — wall-clock was only ~2–5% high.
-- **Cheap presets were massively overstated** (a fixed ~0.1–0.2 ms commit/wait overhead swamped the real GPU time): Plasma 1080p 0.25→**0.032 ms** (8×), InvertColors 0.14→0.039. The v1 cheap-preset numbers were mostly overhead, not GPU. (So treat §1/§1b as v1 wall-clock; real GPU is within ~5% on the heavy presets that matter.)
+- **Cheap presets were massively overstated** (a fixed ~0.1–0.2 ms commit/wait overhead swamped the real GPU time): Plasma 1080p 0.25→**0.032 ms** (8×), InvertColors 0.14→0.039. The v1 cheap-preset numbers were mostly overhead, not GPU. (So treat section 1/section 1b as v1 wall-clock; real GPU is within ~5% on the heavy presets that matter.)
 
 **Synthetic per-pass — the rigorous per-node number.** `Source → Gain×N → FinalOutput` at 4K, real GPU time, isolating ONE full-canvas pointwise dispatch instead of dividing a total by a step count:
 
@@ -62,18 +62,18 @@ The §1/§1b tables above (v1) timed CPU wall-clock around `commit_and_wait`, wh
 
 **Grounded ColorGrade fusion math (no longer an estimate):** its 7 fusable pointwise passes ≈ 7 × 0.344 ≈ 2.41 ms of the 2.60 ms total (the ~0.19 ms remainder is source/output). Fusing 7→1 keeps one read + all math in registers + one write ≈ 0.344 ms.
 
-**Now MEASURED, not projected (§1e).** A hand-fused single-kernel ColorGrade — every atom transcribed verbatim, validated bit-faithful against the unfused preset through the oracle — was timed against the shipped graph on the same run:
+**Now MEASURED, not projected (section 1e).** A hand-fused single-kernel ColorGrade — every atom transcribed verbatim, validated bit-faithful against the unfused preset through the oracle — was timed against the shipped graph on the same run:
 
 | res | unfused (9 steps) | hand-fused (1 kernel) | speedup |
 |---|---|---|---|
 | 1080p | 0.555 ms | 0.068 ms | **8.1×** |
 | 2160p | 2.649 ms | **0.358 ms** | **7.4×** |
 
-The fused 4K time (0.358 ms) lands on the single-pass bandwidth cost (0.354 ms synthetic) — exactly one round-trip, as the thesis predicted. **7.4× is above the ~4.8× I'd projected**, and it directly answers the §11.E worry: the unfused baseline already gets the GPU's free cross-dispatch overlap, and fusion *still* wins 7.4× — the overlap fusion forfeits does NOT erode the bandwidth win for a 7-deep pointwise chain. §11.E's texture-domain perf flag is resolved by measurement. (Build: `freeze::reference::dispatch_fused_colorgrade`; correctness gate: `freeze::proof::fused_colorgrade_matches_unfused_within_tolerance`; bench: `freeze-profile`.)
+The fused 4K time (0.358 ms) lands on the single-pass bandwidth cost (0.354 ms synthetic) — exactly one round-trip, as the thesis predicted. **7.4× is above the ~4.8× I'd projected**, and it directly answers the section 11.E worry: the unfused baseline already gets the GPU's free cross-dispatch overlap, and fusion *still* wins 7.4× — the overlap fusion forfeits does NOT erode the bandwidth win for a 7-deep pointwise chain. section 11.E's texture-domain perf flag is resolved by measurement. (Build: `freeze::reference::dispatch_fused_colorgrade`; correctness gate: `freeze::proof::fused_colorgrade_matches_unfused_within_tolerance`; bench: `freeze-profile`.)
 
 ### 1d. FluidSim cost decomposition — measured, not inferred
 
-The §1c "per-stage still pending" note is now resolved by **two orthogonal parameter sweeps** at fixed 1080p — no executor surgery, no `MTLCounterSampleBuffer` gamble, just driving the graph's own params and timing real GPU frames. This decomposes the 11.3 ms into per-particle (buffer-domain, fusible) vs per-pixel/fixed.
+The section 1c "per-stage still pending" note is now resolved by **two orthogonal parameter sweeps** at fixed 1080p — no executor surgery, no `MTLCounterSampleBuffer` gamble, just driving the graph's own params and timing real GPU frames. This decomposes the 11.3 ms into per-particle (buffer-domain, fusible) vs per-pixel/fixed.
 
 **First, a negative control that almost fooled me.** Sweeping `active_count` (250k → 2M) left the frame time **dead flat at ~11.3 ms**. `active_count` is a *logical alive-gate* read inside the kernels — the per-particle dispatches are sized by the pool **capacity** (`max_capacity = 8,000,000` on the seed node), not by how many particles are "alive." Profiling FluidSim by `active_count` measures nothing. (Gotcha worth recording: the work-size knob is `max_capacity`, not `active_count`.)
 
@@ -116,9 +116,9 @@ Element = array sample (particle / vertex / curve point / FFT bin / detection). 
 
 This is where **most of the library's cost lives** — the sweep showed generators/sims are buffer-dominated (DigitalPlants ~9 `array_math`, Duocylinder 8, every particle sim's force chain). Texture-only fusion leaves all of it slow.
 
-**The channel system is the enabler here, and this is what it was designed for (CHANNEL_TYPE_SYSTEM.md §16):** the compiler reads a wire's `_SPECS` to emit the intermediate WGSL struct mechanically (§16.3.1), drops untouched channels (dead-channel elim, §16.3.2), and erases `rename`/`reorder`/`select` plumbing to nothing (§16.3.4). The texture domain barely needs channels (a pixel is always `vec4`); the buffer domain is **load-bearing** on them. Peter's earlier "the channel system is key here" intuition and this "buffer fusion is equally important" steer are the same insight.
+**The channel system is the enabler here, and this is what it was designed for (CHANNEL_TYPE_SYSTEM.md section 16):** the compiler reads a wire's `_SPECS` to emit the intermediate WGSL struct mechanically (section 16.3.1), drops untouched channels (dead-channel elim, section 16.3.2), and erases `rename`/`reorder`/`select` plumbing to nothing (section 16.3.4). The texture domain barely needs channels (a pixel is always `vec4`); the buffer domain is **load-bearing** on them. Peter's earlier "the channel system is key here" intuition and this "buffer fusion is equally important" steer are the same insight.
 
-True boundaries (both domains): large/variable multi-tap (blur, convolution, Sobel, LIC; buffer neighbor/reduce), stateful feedback, resolution/length change (resample, downsample, compaction/realloc), domain crossings (§5), FFI/DNN.
+True boundaries (both domains): large/variable multi-tap (blur, convolution, Sobel, LIC; buffer neighbor/reduce), stateful feedback, resolution/length change (resample, downsample, compaction/realloc), domain crossings (section 5), FFI/DNN.
 
 ## 5. Proposed architecture — one unified fusion compiler (draft, Phase 2 review)
 
@@ -127,7 +127,7 @@ A single region-growing fusion pass, **parametrized by domain**, not two separat
 1. **Classify** each node by `(domain, element-space, purity)`. Domain ∈ {Texture2D, Array, Texture3D}. Element-space = the iteration extent (canvas resolution; array length; volume dims).
 2. **Grow maximal regions**: a fusable region is a connected subgraph of per-element *pure* ops in the **same domain at the same element-space**, bounded by cross-element ops, state, resolution/length changes, and domain crossings.
 3. **Domain-crossing bridges are the seams**: `scatter_particles` (Array→Texture), `sample_texture_at_particles` (Texture→Array), `resolve_accumulator`, `render_3d_mesh`. Each stays its own dispatch; the regions on either side fuse internally.
-4. **Emit one fused kernel per region** — texture: one dispatch over the pixel grid; buffer: one dispatch over the element index; intermediates live in registers. Same `wgsl_body` inliner + the existing naga → spirv-opt backend for both; the only per-domain difference is the iteration-space wrapper and the intermediate type (`vec4` vs the channel struct from §4b).
+4. **Emit one fused kernel per region** — texture: one dispatch over the pixel grid; buffer: one dispatch over the element index; intermediates live in registers. Same `wgsl_body` inliner + the existing naga → spirv-opt backend for both; the only per-domain difference is the iteration-space wrapper and the intermediate type (`vec4` vs the channel struct from section 4b).
 5. **`wgsl_body` calling convention is domain-parametric**: pixel op = `fn(color: vec4<f32>, uv) -> vec4<f32>`; element op = `fn(elem: T, index) -> T` (or per-channel). Codegen wraps the body in the right iteration space.
 
 This is Halide-shaped (separate the per-element algorithm from the schedule/fusion) applied **uniformly across texture, buffer, and volume domains** — which is the "state of the art" bar. The freeze/closed-world step (un-exposed params → constants → DCE → fuse → specialize) and the verification harness (oracle: render/run two ways, diff) apply to both domains unchanged.
@@ -142,7 +142,7 @@ Two graph levels: the **per-card graph** (authored in the editor) and the **chai
 
 This compiler is not a novel algorithm (fusion + LTO is textbook); it is the **payoff of MANIFOLD's existing architectural bets**, and those bets are the moat. To current knowledge TouchDesigner does not do general multi-pass TOP fusion — its answer to "too slow" is the hand-written GLSL TOP, i.e. it pushes fusion onto the user. (Verify before claiming publicly; TD internals aren't fully open — but the GLSL-TOP escape hatch is strong evidence.) Three structural reasons it's hard for a TD-style tool:
 
-1. **Sealed operators vs a decomposed atom library.** A TD TOP is a compiled black-box shader with no extractable per-element body and no self-describing wire types. Fusion needs atoms authored as inlineable fragments + a type system that hands the compiler the intermediate layout — MANIFOLD has both (primitive library + channel type system §16). You can't fuse what you can't introspect and splice.
+1. **Sealed operators vs a decomposed atom library.** A TD TOP is a compiled black-box shader with no extractable per-element body and no self-describing wire types. Fusion needs atoms authored as inlineable fragments + a type system that hands the compiler the intermediate layout — MANIFOLD has both (primitive library + channel type system section 16). You can't fuse what you can't introspect and splice.
 2. **Live-always vs an authoring/perform split.** TD's identity is no-build-step interactivity; there's nowhere to hide a compile pass. MANIFOLD's authoring-vs-perform split makes a background compile invisible.
 3. **Openness vs a closed world.** TD allows anything to change anytime (Python/C++/live topology); the specialization half needs a closed world (a known fixed-vs-live set). MANIFOLD's fixed-rack-during-show + explicit exposed-param set provides it.
 
@@ -151,5 +151,5 @@ The substrate — typed atom library + channel system + authoring/perform split,
 ## 8. Status & next
 
 - **Phase 0: complete.** Bandwidth-round-trip thesis confirmed (both domains); ColorGrade first target (~3–6×); the breadth lever (fusion-model richness) and the second co-equal domain (buffer/array, channel-powered) identified.
-- **Phase 1 (verification harness)** + **Phase 2 (`wgsl_body` convention)** next. The convention must be domain-parametric from day one (§5.5) — that is the keystone checkpoint, Peter's call before implementation.
+- **Phase 1 (verification harness)** + **Phase 2 (`wgsl_body` convention)** next. The convention must be domain-parametric from day one (section 5.5) — that is the keystone checkpoint, Peter's call before implementation.
 - Reproduce: `cargo run --release -p manifold-renderer --bin freeze-profile`.

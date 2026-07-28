@@ -576,7 +576,7 @@ mod tests {
         assert!(body.wires.iter().any(|w| w.to_port == "object_0" && w.to_node == 10));
     }
 
-    /// Flatten-equivalence (DESIGN_DOC_STANDARD §5's migration test trio,
+    /// Flatten-equivalence (DESIGN_DOC_STANDARD section 5's migration test trio,
     /// third leg): a group-wrapped def migrates and flattens cleanly —
     /// flattening after migration must not lose or mis-wire the minted
     /// scene_object or its `object_0` wire into render_scene, the same

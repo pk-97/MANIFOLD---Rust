@@ -1,5 +1,5 @@
 // depth_common.wgsl — Shared depth-linearization helper for MANIFOLD's
-// stored G-buffer depth (docs/GBUFFER_DESIGN.md §2 D4).
+// stored G-buffer depth (docs/GBUFFER_DESIGN.md section 2 D4).
 //
 // Include via string concatenation at pipeline creation time, same
 // convention as noise_common.wgsl:

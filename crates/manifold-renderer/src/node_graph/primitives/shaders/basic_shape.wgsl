@@ -70,7 +70,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let rotation = u.rotation;
 
     // Transform UV — the 0.315 screen-fit factor matches legacy
-    // BasicShapes vertex magnitude (kept inline per docs §6.4).
+    // BasicShapes vertex magnitude (kept inline per docs section 6.4).
     var p = p_uv / 0.315;
     p = rotate2d(p, rotation);
 

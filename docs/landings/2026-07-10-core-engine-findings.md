@@ -1,6 +1,6 @@
 # Landing report — CORE_ENGINE_FINDINGS F1–F4 + F6
 
-**Queue:** `docs/CORE_ENGINE_FINDINGS.md` (derived from CORE_ENGINE_MAP §13) · **Orchestrator:** Opus · **Date:** 2026-07-10
+**Queue:** `docs/CORE_ENGINE_FINDINGS.md` (derived from CORE_ENGINE_MAP section 13) · **Orchestrator:** Opus · **Date:** 2026-07-10
 **Model of record:** fixes built by Sonnet workers in one shared worktree (`.claude/worktrees/core-engine-findings`, off `cc4eeb37`); every fix re-verified by the orchestrator against the worktree manifest before landing.
 
 The P0/P1 tranche of the core-engine work queue: two broken sync features restored, the
@@ -56,7 +56,7 @@ Test: `tests/sync_engine_integration.rs`.
 The live AbletonOSC path was already fixed 2026-07-07 (per-frame clear at
 `content_thread.rs:644-645`); F3 pins the arbiter setter contract (`sync.rs:298`). Residue is
 the retired M4L `OscPositionSender`, deferred with that sender's deletion
-(ABLETON_TRANSPORT_SYNC_DESIGN §8). No content-thread harness exists; building one for a
+(ABLETON_TRANSPORT_SYNC_DESIGN section 8). No content-thread harness exists; building one for a
 dead path is unwarranted.
 
 ## Verification

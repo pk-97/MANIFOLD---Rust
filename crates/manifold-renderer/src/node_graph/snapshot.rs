@@ -6,7 +6,7 @@
 //! resources, and no trait objects — just plain data the canvas can render.
 //!
 //! V1 graphs don't carry editor positions yet (the editor that would set
-//! them is V2 work — see `docs/NODE_GRAPH_SYSTEM.md` §13–14), so the
+//! them is V2 work — see `docs/NODE_GRAPH_SYSTEM.md` section 13–14), so the
 //! snapshot exposes `editor_pos: Option<(f32, f32)>` and the canvas falls
 //! back to auto-layout when it's `None`.
 //!
@@ -286,7 +286,7 @@ pub enum ArrayMatchMode {
 pub enum PortKindSnapshot {
     Texture2D,
     /// Texture2D decorated with a four-slot named-channel signature
-    /// (per `docs/CHANNEL_TYPE_SYSTEM.md` §17). The `slots` array
+    /// (per `docs/CHANNEL_TYPE_SYSTEM.md` section 17). The `slots` array
     /// carries the channel name strings in R, G, B, A order so the
     /// editor's hover-tooltip can render the per-port texture-channel
     /// layout directly.

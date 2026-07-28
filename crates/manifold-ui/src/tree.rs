@@ -73,13 +73,13 @@ pub struct UITree {
     /// (a child salts off its parent's id) and for [`widget_of`](UITree::widget_of).
     widget_ids: Vec<WidgetId>,
     /// Durable component name per slot, parallel to `nodes`/`widget_ids`
-    /// (`UI_AUTOMATION_DESIGN.md` D8/§3). `&'static str` only — panels register a
+    /// (`UI_AUTOMATION_DESIGN.md` D8/section 3). `&'static str` only — panels register a
     /// literal like `"layer_header.mute"` via [`set_name`](UITree::set_name)
     /// right after building the node; *which row* it's on comes from the
     /// selector's structural query (`under_text`), never a per-row `String`
     /// allocation (the editor rebuilds its tree every frame, so that would be a
     /// per-frame alloc on the UI thread). `None` for the overwhelming majority
-    /// of nodes — the automation dump (§3) reaches unnamed nodes via
+    /// of nodes — the automation dump (section 3) reaches unnamed nodes via
     /// text/type/structure instead.
     names: Vec<Option<Box<str>>>,
     /// Per-slot count of children added so far, parallel to `nodes`. The auto
@@ -605,7 +605,7 @@ impl UITree {
     ///
     /// `extra_flags` is normally `UIFlags::empty()`; pass `ALLOW_OVERFLOW`
     /// for the `Ghost`-tier escape hatch (D3) — the design doc's committed
-    /// signature (§3) omits this parameter but its own doc comment on
+    /// signature (section 3) omits this parameter but its own doc comment on
     /// `begin_region` requires it ("unless ALLOW_OVERFLOW is passed in
     /// extra_flags"), and D3's opt-out cannot exist without it. Resolved
     /// here in the 4-param direction the doc's own prose specifies; see the
@@ -918,7 +918,7 @@ impl UITree {
     /// (`Base` first / furthest back, `Ghost` last / topmost), insertion
     /// order breaking ties within a tier. Four linear passes over the
     /// (small, ~10-entry) region list — no sort, no allocation, per the
-    /// hot-path discipline the design commits to (§3).
+    /// hot-path discipline the design commits to (section 3).
     fn traverse_regions<F>(&self, start: usize, end: usize, visitor: &mut F)
     where
         F: FnMut(TraversalEvent),
@@ -1086,18 +1086,18 @@ impl UITree {
         self.widget_to_node.get(&widget).copied()
     }
 
-    // ── Automation component names (D8, §3) ──────────────────────────
+    // ── Automation component names (D8, section 3) ──────────────────────────
 
     /// Register `id`'s durable component name (e.g. `"layer_header.mute"`) —
     /// the automation selector surface's `name` field. Call once, right after
     /// the builder that minted `id` returns, at a high-value interaction point
-    /// (§3's naming-pass scope) — most nodes stay unnamed and stay reachable via
+    /// (section 3's naming-pass scope) — most nodes stay unnamed and stay reachable via
     /// text/type/structure. A no-op (debug-asserts) on a stale/invalid id.
     ///
     /// Accepts both `&'static str` literals (the mute/solo-chip style: one
     /// static name shared across every instance, disambiguated by `under_text`)
     /// and owned `String`s (the per-row identity style: param-id-derived names
-    /// on converged card rows, `WIDGET_TREE_DESIGN.md` §5 — a row's own name IS
+    /// on converged card rows, `WIDGET_TREE_DESIGN.md` section 5 — a row's own name IS
     /// its selector because `under_text` can't reach a control past the value
     /// cell in a flat row). Owned names live in the tree's `names` vec and die
     /// with the rebuild — no leak, no global interner.
@@ -1114,7 +1114,7 @@ impl UITree {
     }
 
     /// `id`'s registered component name, or `None` if it was never named (the
-    /// common case) or `id` is stale. Read by the automation dump (§3).
+    /// common case) or `id` is stale. Read by the automation dump (section 3).
     pub fn name_of(&self, id: NodeId) -> Option<&str> {
         if !self.is_live(id) {
             return None;

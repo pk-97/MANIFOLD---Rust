@@ -1,10 +1,8 @@
 # Gaussian Splats — photoreal scans as a playable instrument
 
-**Status:** APPROVED design, not built · 2026-07-05 · Fable · **baseline-reviewed 2026-07-05, cleared** (zero unlabeled forks; `render_scene` P1 prerequisite re-verified in-tree @ `8daa89fc`; the "no GPU sort exists" negative claim re-run and confirmed; camera audit row pinned — look_at_camera landed, free_camera absent. §10 levels: P1/P2 gate L1 by nature — no visual surface until P3; P3–P6 gates are already L2 with value-level pixel asserts.)
-**Prerequisites:** none hard — `node.render_scene` P1 is shipped (`render_scene.rs`,
-commit `8daa89fc`), which is all the scene-composite phase (P4) consumes. P1–P3 and
-P5–P6 depend on nothing unbuilt.
-**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before
+**Status:** APPROVED design, not built · 2026-07-05 · Fable · baseline-reviewed 2026-07-05, cleared.
+**Prerequisites:** none hard — `node.render_scene` P1 is shipped (`render_scene.rs`), which is all the scene-composite phase (P4) consumes. P1–P3 and P5–P6 depend on nothing unbuilt.
+**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before
 starting any phase.
 
 Peter's directive (2026-07-04 phone brainstorm): Gaussian splats "will definitely be
@@ -28,19 +26,19 @@ Companions: `REALTIME_3D_DESIGN.md` (the scene splats composite into),
 
 | Piece | Where | State |
 |---|---|---|
-| Channels wire system — `ArrayType` carries named channel specs; `MatchMode::Exact` per port, `Permissive` for generic operators | `ports.rs:197` (`ArrayType`), CHANNEL_TYPE_SYSTEM §5–§6 | Shipped. `Particle` (64B, `compute_common.rs:11`) and `MeshVertex` (48B, `mesh_common.rs:34`) are the declaration precedents, each with a `_SPECS` constant + drift assertion |
+| Channels wire system — `ArrayType` carries named channel specs; `MatchMode::Exact` per port, `Permissive` for generic operators | `ports.rs:197` (`ArrayType`), CHANNEL_TYPE_SYSTEM section 5–section 6 | Shipped. `Particle` (64B, `compute_common.rs:11`) and `MeshVertex` (48B, `mesh_common.rs:34`) are the declaration precedents, each with a `_SPECS` constant + drift assertion |
 | File-source node precedent — background-thread parse, resident cache, staging upload, path via `stringBindings` | `primitives/gltf_mesh_source.rs` | Shipped (glTF wave, 2026-07-04). **The shape `node.splat_source` copies wholesale** |
-| Multi-object scene renderer, shared depth | `primitives/render_scene.rs` (`8daa89fc`) | Shipped P1. As-built outputs: `color` only — the lazy `depth` output promised in REALTIME_3D §3 is **not built**; P4 here builds it |
+| Multi-object scene renderer, shared depth | `primitives/render_scene.rs` | Shipped P1. As-built outputs: `color` only — the lazy `depth` output promised in REALTIME_3D section 3 is **not built**; P4 here builds it |
 | Instanced render-pass draws with depth attachment + configurable blend state | `manifold-gpu` `encoder.rs:695` (`draw_instanced_depth`), `device.rs:720` (blend config on pipeline creation) | Shipped. Depth-read-without-write is a `GpuDepthStencilDesc` flag |
 | Compute dispatch + WGSL→MSL pipeline, persistent node-owned buffers | `dispatch_compute`, `primitive!` `extra_fields` pattern | Shipped, used by every particle atom |
 | GPU sort | — | **Does not exist.** No radix/bitonic sort anywhere in `manifold-gpu` or the graph (verified by search 2026-07-05; MPS bindings cover blur/sobel/histogram/reduction, not sort). P2 builds it |
 | 3D particle stack (seed/force/step/render) | `scatter_particles_3d.rs`, `euler_step_particles_3d.rs`, etc. | Shipped. Splats deliberately do NOT reuse it (D5) — no velocity channel, displacement not integration |
 | Camera | `node_graph/camera.rs`, `node.orbit_camera` | Shipped. Pinned 2026-07-05 baseline review: BOTH `node.free_camera` and `node.look_at_camera` have landed (`primitives/free_camera.rs` :18, `look_at_camera.rs` :19) — REALTIME_3D P4 is done; the starter preset may use any of the three cameras |
 
-§2.5 audit finding: nothing splat-shaped exists under any name. `scatter_particles_3d`
+section 2.5 audit finding: nothing splat-shaped exists under any name. `scatter_particles_3d`
 scatters in a volume, `spawn_from_image` samples a texture, `displace_mesh` displaces
 `MeshVertex` — the nearest verbs exist but none reads or writes anisotropic gaussians.
-The five atoms in §3 are genuinely new; the sort is genuinely new infrastructure.
+The five atoms in section 3 are genuinely new; the sort is genuinely new infrastructure.
 
 ## 2. Decisions
 
@@ -71,14 +69,14 @@ The five atoms in §3 are genuinely new; the sort is genuinely new infrastructur
   stale and the INRIA layout is a fixed header + packed binary — parsing it is not
   worth a dependency). Parse-time transforms are part of the format contract:
   `opacity = sigmoid(raw)`, `scale = exp(raw)`, `color = 0.5 + 0.28209479 · f_dc`,
-  quaternion normalized and reordered to xyzw. Rejected for v1 with triggers in §8:
+  quaternion normalized and reordered to xyzw. Rejected for v1 with triggers in section 8:
   `.spz`/SOGS (compressed), SH bands ≥1.
 - **D4 — Spherical harmonics: DC only in v1.** `f_rest_*` bands are dropped at parse
   with a logged report line (IMPORT D9: never a silent drop). Full SH3 is 45 extra
   floats per splat (+180B, 4× memory) for view-dependent sheen that stage content
   at performance distance doesn't read. The antimatter15 `.splat` format dropped SH
   entirely and became the web standard — the precedent that DC-only looks right.
-  SH1 is deferred with a trigger (§8).
+  SH1 is deferred with a trigger (section 8).
 - **D5 — Splats displace; they do not integrate.** There is no velocity channel and
   no euler stepper for splats. A scan is a rest pose the graph re-derives every
   frame: `splat_source` (stable cached buffer) → modulators (pure per-frame
@@ -87,7 +85,7 @@ The five atoms in §3 are genuinely new; the sort is genuinely new infrastructur
   drops, which is what a performed scan needs. The plausible-wrong architecture,
   forbidden by name: **do not bolt velocity/age onto `Splat` and clone the particle
   steppers.** When a splat needs ballistic physics it becomes a particle (the
-  splats→particles bridge is deferred, §8, with its trigger).
+  splats→particles bridge is deferred, section 8, with its trigger).
 - **D6 — Renderer = `node.render_splats`: depth-sorted instanced quads through the
   existing render pipeline.** Per frame, internally: (1) one compute pass projects
   splats through the wired `Camera`, computes the 2D covariance (Σ = R·S·S·Rᵀ
@@ -99,7 +97,7 @@ The five atoms in §3 are genuinely new; the sort is genuinely new infrastructur
   falloff × opacity, back-to-front over-blend, **depth test against the optional
   scene depth input, depth write off.** Rejected: the INRIA tile-based compute
   rasterizer — better peak throughput but a much larger, riskier build; it is the
-  v2 perf upgrade (§8) once real scenes exceed the quad path's budget, and the
+  v2 perf upgrade (section 8) once real scenes exceed the quad path's budget, and the
   sorted-quad path is the proven production approach in Metal splat renderers.
   Also rejected, by name: **CPU sorting per frame** (millions of keys on the content
   thread — never) and **sort-every-N-frames** (visible popping exactly when the
@@ -121,7 +119,7 @@ The five atoms in §3 are genuinely new; the sort is genuinely new infrastructur
   type.** `render_splats` takes optional `scene_color` + `scene_depth` inputs; wired,
   splats blend over the scene and depth-test against its geometry (mesh occludes
   splat, splat blends over mesh). P4 builds `render_scene`'s lazy `depth` output —
-  already promised in REALTIME_3D §3, additive, unwired = never rendered. Unwired,
+  already promised in REALTIME_3D section 3, additive, unwired = never rendered. Unwired,
   `render_splats` stands alone over transparent black. Rejected: splat object groups
   inside `render_scene` — mixing port types per object group complicates its dynamic
   reconfigure for zero authoring win; a wire does it.
@@ -134,8 +132,8 @@ The five atoms in §3 are genuinely new; the sort is genuinely new infrastructur
   deleted render_scene's per-object TRS *params* (per-object transforms are now graph
   structure fed through `transform_n: Transform` ports). Splat placement stays as
   port-shadowed node params (a splat scan is one object, like `render_mesh`'s own TRS,
-  which SCENE_BUILD §9 explicitly leaves alone) — **but** an optional `transform: Transform`
-  override input rides the **same SCENE_BUILD §9 trigger** that adds the Transform port to
+  which SCENE_BUILD section 9 explicitly leaves alone) — **but** an optional `transform: Transform`
+  override input rides the **same SCENE_BUILD section 9 trigger** that adds the Transform port to
   `render_mesh` / `render_copies`: unwired, the port-shadowed params place the scan
   (unchanged); wired, a `node.transform_3d` drives it, which is what makes splat placement
   visible to REALTIME_3D P6 gizmos. Deferred to that shared trigger — not built in splats
@@ -150,7 +148,7 @@ The five atoms in §3 are genuinely new; the sort is genuinely new infrastructur
   consumer because emission is a render-time property; it is a param, not a bundled
   effect.
 
-## 3. The atoms (all new — §1 audit)
+## 3. The atoms (all new — section 1 audit)
 
 | Atom | Signature | One thing it does |
 |---|---|---|
@@ -190,17 +188,17 @@ writing the fragment shader, per `alpha-standardisation` — do not assume).
   projection is one cheap pointwise pass. **The real cost is fill rate** —
   overlapping gaussian quads at 4K is overdraw-bound. Production Metal splat
   renderers hold 1–2M splats at 60fps at 1080p–1440p; treat 4K + multi-megasplat as
-  a headline load the perf HUD must show per-pass, and the tile rasterizer (§8) as
+  a headline load the perf HUD must show per-pass, and the tile rasterizer (section 8) as
   the lever when a real scene misses budget. The frame budget owner is still the
   4K-margin campaign.
 - Content-thread cost: zero per-frame allocation (persistent buffers, pool
   discipline); parse never touches the content tick (background thread, D3).
 
-## 6. Phasing (Sonnet-executable)
+## 6. Phasing
 
 Forbidden, all phases: velocity/age channels on `Splat` or any splat stepper (D5) ·
 CPU per-frame sort or sort-every-N-frames (D6) · new deps for parsing (D3) ·
-`Arc<Mutex>` anywhere · fusing source/mask/displace/render into one node (§1 audit
+`Arc<Mutex>` anywhere · fusing source/mask/displace/render into one node (section 1 audit
 + D7 give the cut lines) · touching `render_scene` beyond the additive lazy depth
 output (P4).
 
@@ -226,13 +224,13 @@ output (P4).
   ortho camera renders; report the measured frame cost at 1M random splats.
   Scope: focused + `check_presets`.
 - **P4 — Scene composite.** `render_scene` lazy `depth` output (additive — REALTIME_3D
-  §3 promised it; follow `render_mesh`'s lazy-output rule) + `scene_color`/
+  section 3 promised it; follow `render_mesh`'s lazy-output rule) + `scene_color`/
   `scene_depth` consumption in `render_splats`. Gate: PNG — splat behind a cube is
   occluded, splat in front blends over it; negative: with `depth` unwired,
   `render_scene` encodes no extra pass (frame capture or dispatch-count assert);
   existing bundled 3D presets byte-identical. Scope: **full workspace sweep**
   (touches the shipped scene renderer = infrastructure).
-- **P5 — Mask + displace atoms.** The three modulators from §3. Gate: value-level —
+- **P5 — Mask + displace atoms.** The three modulators from section 3. Gate: value-level —
   bounds mask on known positions yields exact 0/1 channel values; color mask
   tolerance=0 selects only exact-color splats; displace at amount 0 is
   byte-identical passthrough; displace mask_weight=0 ignores mask. PNG: masked
@@ -242,7 +240,7 @@ output (P4).
   via Browse stringBindings (image_folder convention); NODE_CATALOG regen; perf-HUD
   splat line. Gate: `check_presets` clean; headless PNG of the preset on the
   Peter-hands scan; **this phase runs the wave's single full workspace sweep**
-  (per DESIGN_DOC_STANDARD §5 batching).
+  (per DESIGN_DOC_STANDARD section 5 batching).
 
 ## 7. Decided — do not reopen
 
@@ -271,7 +269,7 @@ output (P4).
   sort is already its building block.
 - **Splats→particles bridge** (`node.spawn_from_splats`, positions+colors seed the
   existing particle stack) — when a scan needs ballistic physics, not displacement;
-  shape it exactly like `node.spawn_from_mesh` (REALTIME_3D §9).
+  shape it exactly like `node.spawn_from_mesh` (REALTIME_3D section 9).
 - **Mesh albedo-segmentation at import** (direction 1 of the 2026-07-04 brainstorm)
   — deliberately NOT folded in: `MeshVertex` has no color channel, and Exact
   matching makes widening it a corpus-wide migration; the right shape there is

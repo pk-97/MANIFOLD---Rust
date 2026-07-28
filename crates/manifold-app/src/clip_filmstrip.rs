@@ -1,4 +1,4 @@
-//! Filmstrip bar→cell math (§24 5c-2), shared by the content-thread capture and
+//! Filmstrip bar→cell math (section 24 5c-2), shared by the content-thread capture and
 //! the UI draw so the two can never disagree about which cell holds which bar.
 //!
 //! A clip's filmstrip is `cell_count` cells laid left→right across the clip body.
@@ -80,7 +80,7 @@ pub fn cell_beat_range(
     (s, e.max(s))
 }
 
-/// §F/§G continuous filmstrip windows. The atlas captures one cell per bar(-group),
+/// section F/section G continuous filmstrip windows. The atlas captures one cell per bar(-group),
 /// but capture is sparse — a bar's cell only exists once the playhead has swept it
 /// during playback, so unplayed bars have no cell. Drawing a window only where a cell
 /// exists leaves dark gaps at irregular x positions (the "spotty / unaligned" look).

@@ -1,4 +1,4 @@
-// node.array_diffuse_particles — fusable BUFFER body (freeze §12, buffer
+// node.array_diffuse_particles — fusable BUFFER body (freeze section 12, buffer
 // domain), COINCIDENT. Per-particle hash-based random kick on Particle.velocity.
 // Matches array_diffuse_particles.wgsl bit-for-bit (self-contained wang_hash /
 // hash_float3 inlined, prefixed adp_ for fusion-collision safety).

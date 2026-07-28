@@ -7,7 +7,7 @@ MEDIA_BACKEND P1 (audio decode for cue preview). Post-v1.0 candidate — Peter
 ranks (DESIGN_BUILD_ORDER).**
 **Companion: `PRO_DJ_LINK_DESIGN.md` (the other half of "external musical
 timelines" — DJing on CDJs instead of from Ableton).**
-**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before any
+**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before any
 phase. Hardening level: conformance — re-derive all anchors at implementation.**
 
 Peter's ask (2026-07-03): DJ with Ableton the way Rekordbox DJs work a booth —
@@ -126,7 +126,7 @@ allocation in the surface widgets (hot-path discipline).
 - **P4 — Visuals coupling + polish.** Section-sliced scores follow deck
   launches; blend behavior on the visual side (master deck owns the score;
   on-air crossfade). Gate: demo crate + filmed run-through — this phase's
-  output is also a release trailer (BUSINESS_PLAN §7).
+  output is also a release trailer (BUSINESS_PLAN section 7).
 
 ## 4. Deferred (with triggers)
 

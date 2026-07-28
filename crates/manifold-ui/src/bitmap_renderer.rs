@@ -2,7 +2,7 @@
 //! buffer holding the timeline grid lines (+ the layer-0 top separator) for a
 //! single layer track.
 //!
-//! Since §24 5b the clip *bodies* are GPU rounded rects (`manifold-renderer::
+//! Since section 24 5b the clip *bodies* are GPU rounded rects (`manifold-renderer::
 //! clip_draw`), their *content* (audio waveforms) is per-clip GPU textures
 //! (`clip_content_gpu`), and the timeline overlays (region highlight, insert
 //! cursor, markers) are GPU rects emitted in the overlay pass. So this buffer

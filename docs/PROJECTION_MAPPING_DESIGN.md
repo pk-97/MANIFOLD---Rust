@@ -2,13 +2,13 @@
 
 **Status: APPROVED design, not built · 2026-07-02 · Fable queue #11**
 **Prerequisites: MULTI_DISPLAY_DESIGN P1–P3 (stage model, island rendering, multi-output present).**
-**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any
+**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before starting any
 phase. Conformance-hardened: this executes AFTER multi-display reshapes the present path —
 every claim about the per-output blit and `content_pipeline.rs` is `⚠ VERIFY-AT-IMPL`
-against the as-built multi-display code. Run the §8.3 pre-flight first.**
+against the as-built multi-display code. Run the section 8.3 pre-flight first.**
 
-Expands the "first post-v1 item" from `docs/MULTI_DISPLAY_DESIGN.md` §12. Mapping is an
-**output transform in the per-output present pass** (§6.2 there) — invisible to content,
+Expands the "first post-v1 item" from `docs/MULTI_DISPLAY_DESIGN.md` section 12. (Open (deferred, not blocking)) Mapping is an
+**output transform in the per-output present pass** (section 6.2 there) — invisible to content,
 zero impact on islands, domains, or shader semantics. That architectural slot was decided
 in multi-display (#10: per-output stage is region/rotate/keystone/trim/tonemap only);
 this doc fills it in.
@@ -93,7 +93,7 @@ pub struct EdgeBlend {
 
 pub struct BlendEdge {
     pub width_px: f32,           // 0 = off (default)
-    pub gamma: f32,              // ramp curve, default 1.0 (see §5)
+    pub gamma: f32,              // ramp curve, default 1.0 (see section 5)
 }
 ```
 
@@ -128,7 +128,7 @@ bilinear from the island atlas (already filterable); nothing else to do — phys
 
 ## 4. Present-pass integration
 
-Multi-display §6.2 defines the per-output present draw (sample atlas region → rotate →
+Multi-display section 6.2 defines the per-output present draw (sample atlas region → rotate →
 keystone → trim → tonemap). Mapping **replaces the keystone hook** with the general
 path:
 
@@ -149,7 +149,7 @@ for slice in mapping.slices.iter().filter(enabled):
 - **Calibration drag:** rebuilds happen per mouse-move *action* on the UI/edit side
   (CPU tessellation into a pre-allocated staging vec, upload). The content tick never
   waits; a mid-rebuild frame just presents the previous mesh.
-- Rotation (portrait outputs) composes before warp exactly as §6.2 orders it — Peter's
+- Rotation (portrait outputs) composes before warp exactly as section 6.2 orders it — Peter's
   portrait rig is rotation + corner-pin, both in the one draw.
 
 **Masks** rasterize per-action into a cached R8 half-res mask texture per output
@@ -178,7 +178,7 @@ every mapping tool's "blend curve" knob.
   ramp widths. Writes the same `EdgeBlend` fields; manual remains the override.
 - **Black-level compensation deferred:** projectors can't show true black, so the
   overlap zone glows in dark scenes; compensation lifts non-overlap regions to match.
-  Needs measurement to do honestly — documented, not built (§8).
+  Needs measurement to do honestly — documented, not built (section 8).
 
 ---
 
@@ -186,7 +186,7 @@ every mapping tool's "blend curve" knob.
 
 **Home amendment (2026-07-06, Peter-ruled):** the Mapping surface is no longer its
 own dock panel. It is the **focused mode** entered from the unified Stage surface
-(MULTI_DISPLAY §5a) by selecting a projector output and hitting Edit — full-canvas,
+(MULTI_DISPLAY section 5a) by selecting a projector output and hitting Edit — full-canvas,
 usable while content runs (that's the point), breadcrumb back to the stage plan.
 Everything below — tabs, handles, nudge keys, math — is unchanged; only where it
 lives moved. Per output:
@@ -195,7 +195,7 @@ lives moved. Per output:
   top. Tabs: **Warp / Masks / Blend**.
 - **Warp:** 4 handles (corner-pin) or K×L handles (grid). Click to select; drag with
   mouse; **arrow keys nudge 1px, Shift+arrows 10px, Option+arrows 0.1px**. Grid density
-  stepper (resample rule §3). Tab cycles selected point.
+  stepper (resample rule section 3). Tab cycles selected point.
 - **Masks:** click-to-place polygon points, drag to adjust, feather slider, invert.
 - **Blend:** per-edge width + gamma sliders.
 - **Test patterns** per output: alignment grid (100px lines, border, center cross,
@@ -209,7 +209,7 @@ commands; the venue file round-trips it (multi-display #13).
 
 ---
 
-## 7. Phasing (Sonnet-executable)
+## 7. Phasing
 
 Each phase lands alone. Present path = infrastructure → **full workspace test sweep
 gates every phase that touches it (P1, P2, P4).**
@@ -245,6 +245,6 @@ gates every phase that touches it (P1, P2, P4).**
 9. Calibration: mouse + keyboard nudge first; MIDI encoder nudge is P4, bindable
    actions through the existing binding system (Peter: useful, not high priority).
 
-Deferred (not blocking): camera-assisted auto-calibration (multi-display §12 — it
+Deferred (not blocking): camera-assisted auto-calibration (multi-display section 12 — it
 *writes* these structures; natural MCP flow), black-level compensation, per-slice color
 trim, bilinear-warp toggle for stretched-fabric surfaces.

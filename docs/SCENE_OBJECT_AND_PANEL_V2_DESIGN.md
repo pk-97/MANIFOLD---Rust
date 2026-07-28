@@ -2,37 +2,9 @@
 
 > **SUPERSEDED for the param mechanism (2026-07-21) → [`docs/SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md`](SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md) is the current authority.** The `node.scene_object` + `Object`-wire vocabulary and the outliner-plus-properties layout this doc established still stand and are load-bearing. What changed: the properties body is no longer a transcribed value-cell contract — it renders exposed-param manifest rows via the card path (P1/P2 LANDED), and `scene_vm.rs` is slimmed to item-discovery only (P3 LANDED `7ee0a887`, `scene_vm::is_param_driven` sources driven-state generically).
 
-**Status: SHIPPED — all 5 phases landed on main 2026-07-17 (P1+P2 @ `5c5dacfe`,
-P3 @ `da452351`, P4+P5 @ `7d3c41b6`). Landing reports:
-`docs/landings/2026-07-17-scene-object-v2-p1-p2.md`,
-`docs/landings/2026-07-17-scene-object-v2-p3.md`,
-`docs/landings/2026-07-17-scene-object-v2-p4-p5.md`. The object model, the
-Object wire, and the outliner+properties panel are all live on main.
-Three known, tracked gaps outside what P1-P5 committed to fix (none are
-regressions from this landing — all found BY this wave's own gates, all
-logged before the session ended, per house rule): BUG-218 ("Add modifier"
-chip is a dead affordance against any real grouped object — the D6
-modifier-stack commands still splice at the pre-D12 group_output.vertices
-port, fix owed to `manifold-editing`, out of every phase's committed blast
-radius); BUG-212 (`DuplicateSceneObjectCommand`'s fresh NodeIds break an
-imported object's string-bound model-file path — Duplicate on a
-hand-built object works, on an imported one does not); BUG-199 (dock
-scroll — explicitly out of scope for this whole design, owned elsewhere).
-BUG-210 (AddSceneObjectCommand pre-migration wires) FIXED by P3. A fourth,
-more severe gap was found AND FIXED during P4+P5's own landing (not left
-open): the D5 migration was never actually wired into the real project-load
-path, and `SceneVm`'s transform/material/vertex-count tracing didn't
-understand the migrated-project topology — both fixed in the same landing,
-see that report for the full diagnosis.**
-**(APPROVED design 2026-07-17 · Fable 5, design session with Peter)**
-**Prerequisites:** SCENE_SETUP_PANEL_DESIGN P1–P5 (SHIPPED 2026-07-17 — this design revises its
-object model and panel layout in place). BUG-199 (dock scroll) is explicitly OUT of this set —
-another session owns it (Peter, 2026-07-17: "another agent has BUG-199 planned for fixing so we
-can leave it out of this set").
-**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any
-phase. Executor: Sonnet, orchestrated (Sonnet → Sonnet). Peter, verbatim: **"Sonnet must not
-make any decisions, it must just execute mechanical spec."** Anything that feels like a
-decision is an escalation, full stop.
+**Status: SHIPPED — all 5 phases on main 2026-07-17; landing reports `docs/landings/2026-07-17-scene-object-v2-p1-p2.md` / `…-p3.md` / `…-p4-p5.md`. Open gaps found by this wave's own gates, logged, outside the committed blast radius: BUG-218 (modifier-commands-splice-at-dead-group-output-vertices), BUG-212 (duplicate-scene-object-string-bindings-dangle), BUG-199 (dock scroll, owned elsewhere). The D5 migration wiring gap was found AND FIXED at the P4+P5 landing — see that report. · APPROVED 2026-07-17, design session with Peter**
+**Prerequisites:** SCENE_SETUP_PANEL_DESIGN P1–P5 (SHIPPED — revised in place); BUG-199 explicitly out (Peter: "another agent has BUG-199 planned for fixing").
+**Execution contract:** `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs) before any phase. Peter, verbatim: **"Sonnet must not make any decisions, it must just execute mechanical spec."**
 
 Peter's directives (2026-07-17, verbatim — these opened and decided the design):
 
@@ -57,7 +29,7 @@ identity. On top of that model, the panel adopts the Blender split — a compact
 selection's controls — and every numeric value cell in the app's docks gains the standard
 gesture set: **drag to scrub, double-click to type, right-click to reset, Shift for fine.**
 
-Binding constraints (DESIGN_AUTHORING §1): **persistence** binds hardest — `render_scene`'s
+Binding constraints (DESIGN_AUTHORING section 1): **persistence** binds hardest — `render_scene`'s
 port surface changes, so every existing scene def (projects, bundled/reference presets, user
 library) load-migrates via one idempotent def rewrite (D5). **Hot path**: `scene_object` is a
 CPU struct emit per frame (a `Copy` struct, no allocation — the `node.light` cost class);
@@ -67,8 +39,8 @@ to MIDI/LFO from birth. Thread residency and time model: untouched.
 
 Companions: `SCENE_SETUP_PANEL_DESIGN.md` (v1 — its D1 view-not-model doctrine, D5 merge, D6
 modifier stack, D7 empty states, D8 scope fence all CARRY FORWARD unchanged; this doc
-supersedes only its object-identity mechanism, §4 "no new port types" invariant, panel layout,
-and the §9 visibility deferral), `UI_WIDGET_UNIFICATION_DESIGN.md` (SHIPPED — the gesture
+supersedes only its object-identity mechanism, section 4 "no new port types" invariant, panel layout,
+and the section 9 visibility deferral), `UI_WIDGET_UNIFICATION_DESIGN.md` (SHIPPED — the gesture
 contract pattern P4 extends), `GROUPING_GRAPHS.md` (groups = legibility, restored),
 `FREEZE_COMPILER_MAP.md` (cut-rule treatment of CPU-struct wires, which `Object` joins).
 
@@ -86,7 +58,7 @@ missing symbol is an escalation.
 | Slot-level resource resolution | `bindings.rs:190-196` (`texture_2d_slot(Slot)`, `array_slot(Slot)`) — and `render_scene.rs:2436-2450` already resolves `mesh_k` port→Slot→buffer, reads `slot_generation_of(slot)` for its shadow cache | SHIPPED. `SceneObject` carrying `Slot`s changes *where the slot comes from*, not how it resolves |
 | Unbound-mesh & zero-vertex tolerance | `render_scene.rs:2437` (`let Some(vertices) = … else` skip), `:3078-3083` (vertex_count == 0 fallback) | SHIPPED — `visible: false` → skip-the-draw lands on existing tolerance |
 | Planner lifetime extension for dynamically-consumed inputs | `effect_node.rs:595-599` (`variadic_skip_passthrough_out`: "planner extends every wired texture input's lifetime to the output's last reader") | SHIPPED precedent for D2's `carries_resources` hook |
-| Fusion cut-rule exemption for CPU-struct wires | `docs/FREEZE_COMPILER_MAP.md` §4 ("a wire into a `Camera`-typed CPU-struct port does NOT cut…"); code: `freeze/install.rs`, `freeze/region.rs` (`rg -n "PortType::Camera" crates/manifold-renderer/src/node_graph/freeze/`) | SHIPPED — `Object` joins the same list |
+| Fusion cut-rule exemption for CPU-struct wires | `docs/FREEZE_COMPILER_MAP.md` section 4 ("a wire into a `Camera`-typed CPU-struct port does NOT cut…"); code: `freeze/install.rs`, `freeze/region.rs` (`rg -n "PortType::Camera" crates/manifold-renderer/src/node_graph/freeze/`) | SHIPPED — `Object` joins the same list |
 | `render_scene` per-object dynamic ports | `render_scene.rs:742` (`rebuild(objects, lights)`), `:777-782` (`mesh_{i}` et al. port construction), `:1905` (full port list in `composition_notes`), `OBJECT_SAFETY_MAX` `:743` | SHIPPED — P2 rewrites the per-object list to `object_{i}` |
 | Def load-migration precedents | type-id level: `graph_loader.rs:243` (`migrate_def_type_ids`, runs at `instantiate_def:321`); model level at project load: `binding_migration.rs:40` (`migrate_user_param_bindings_to_node_id(&mut Project)`, called from `manifold-app/src/project_io.rs`); JSON ladder: `manifold-io/src/migrate.rs` (v-rung functions) | SHIPPED ×3. D5's migration is model/def-level (binding_migration's residency), NOT the io ladder — the panel reads unflattened defs from snapshots, so migration must land in the stored def, not only at instantiate |
 | Object identity today (the thing being replaced) | `scene_vm.rs:102-129` (`SceneObjectVm::Known` = group-output trace; `Custom` = everything else), SceneStarter.json (objects "Floor"/"Cube" are groups exporting `vertices`/`material`/`transform` group-output ports — the proto-bundle this design formalizes) | SHIPPED — the group-output port bundle is exactly `scene_object`'s input list, proven in every scene asset |
@@ -98,7 +70,7 @@ missing symbol is an escalation.
 | Dropdown widget | `panels/dropdown.rs:1-11` — generic floating menu, `open()` + `DropdownAction`, app-routed | SHIPPED — enum value cells reuse it; **no new widget kinds** |
 | Text sessions | `text_input.rs:22` (`TextInputField` enum + per-field ctx structs; commit paths in `app_render.rs`) | SHIPPED — P4 adds two variants, same shape |
 | Panel structure | `scene_setup_panel.rs:738-2000` (`build_docked` → `build_live` → per-section builders `build_objects_section`/`build_light_row`/`build_camera_section`/…; UI-local fold state; `SceneSetupVm` DTO from `state_sync`) | SHIPPED — P5 reorganizes `build_live` into outliner + properties, **reusing the row builders' bodies** |
-| Node catalog | `docs/NODE_CATALOG.md` §"Registered node index" — generated by `cargo run -p manifold-renderer --bin gen_node_catalog`, drift-guarded | Regenerate in P1 |
+| Node catalog | `docs/NODE_CATALOG.md` section"Registered node index" — generated by `cargo run -p manifold-renderer --bin gen_node_catalog`, drift-guarded | Regenerate in P1 |
 | Open bugs this design absorbs or touches | BUG-193 (no remove-object command — **absorbed, P3 is the root fix**); BUG-194 (vertex counts — untouched, stays open); BUG-195 (merge reference radius — untouched, stays open); BUG-198 (headless `Key`/text gap — constrains P4's gate levels, see brief); BUG-199 (dock scroll — excluded per Peter) | Backlog Status lines updated at each absorbing landing |
 
 Negative claims (searches run 2026-07-17): no object/bundle-shaped primitive exists among the
@@ -107,7 +79,7 @@ Negative claims (searches run 2026-07-17): no object/bundle-shaped primitive exi
 0); no node-handle rename command (`rg -n "SetNodeHandle" crates/manifold-editing/` → 0); no
 Shift-fine drag anywhere in `manifold-ui`; `SliderIntent::EditValue` has no dock consumer.
 
-**§2.5 audit verdict (run this session):** `Object` port + `node.scene_object` +
+**section 2.5 audit verdict (run this session):** `Object` port + `node.scene_object` +
 `render_scene`'s `object_k` surface are *genuinely new*; every other ingredient (CPU-struct
 wires, slot resolution, drains, migration hooks, rename sweep, dropdown, type-in, drag
 sessions) *exists* and is reused. The SceneStarter/importer group-output bundle
@@ -199,7 +171,7 @@ port families (`mesh_{i}`, `transform_{i}`, `material_{i}`, the five map ports,
 cast — an invisible object leaves no shadow); otherwise resolve slots exactly as today.
 `objects`/`OBJECT_SAFETY_MAX`/caster-cap semantics unchanged. **Consequences, stated
 honestly:** this is a breaking def-surface change; D5's migration is what makes it safe, and
-the two must land in the same batch. The v1 design's §4 invariant "no new port types, no
+the two must land in the same batch. The v1 design's section 4 invariant "no new port types, no
 model change" is formally superseded by this doc — that invariant protected the v1 *panel*
 wave from scope creep; this design IS the model change, decided by Peter.
 
@@ -363,8 +335,8 @@ vocabulary now, not the importer's wrapping paper.
 | Migration is idempotent and lossless | `migrate_scene_object_wires_idempotent` (apply twice, def-equality) + `migrate_unparseable_triple_left_intact` (a mangled def round-trips byte-identical); flatten-equivalence on a migrated grouped def |
 | An invisible object leaves no shadow | `gpu_tests` PNG pair in P2's gate: caster `visible` off → its shadow gone from the receiver |
 | Planner keeps carried resources alive | `carries_resources_extends_lifetimes` unit test on a synthetic plan: texture into scene_object, render_scene as last reader, assert no pool release between (shape it like the variadic-mux lifetime test — ⚠ VERIFY-AT-IMPL: `rg -n "variadic" crates/manifold-renderer/src/node_graph/execution_plan.rs` and mirror its test) |
-| Panel introduces no new mutation path; one value, four surfaces (v1 §4, carried forward) | Same gates: `rg -n "MutateProject\|Arc<Mutex\|Arc<RwLock" scene_setup_panel.rs` → 0; `scene_panel_slider_emits_card_identical_command` stays green |
-| `SceneVm` purity (v1 §4, carried) | Same: takes `&EffectGraphDef` only; `rg -n "Project\b" scene_vm.rs` → 0 outside doc comments |
+| Panel introduces no new mutation path; one value, four surfaces (v1 section 4, carried forward) | Same gates: `rg -n "MutateProject\|Arc<Mutex\|Arc<RwLock" scene_setup_panel.rs` → 0; `scene_panel_slider_emits_card_identical_command` stays green |
+| `SceneVm` purity (v1 section 4, carried) | Same: takes `&EffectGraphDef` only; `rg -n "Project\b" scene_vm.rs` → 0 outside doc comments |
 | Every numeric value cell built by the dock registers all three gestures | Unit test `dock_numeric_cells_register_full_contract`: after a `build_docked` on the azalea-shaped synthetic Vm, every drag-armable cell id is also present in the type-in registration set (and vice versa) |
 | Selection never dangles | Unit test: remove the selected object from the Vm, rebuild — selection falls back to first-object-else-World |
 | No stored modifier list / no panel-owned scene state (v1, carried) | `rg -n "modifier" crates/manifold-core/` → no stored stack; selection map lives in the panel struct only, `rg -n "SceneSelection" crates/manifold-io crates/manifold-core` → 0 |
@@ -383,7 +355,7 @@ path · `cd` prefixes, `add -A`, unpathspec'd commits (house rules).
   re-run: `ports.rs:17` PortType enum, `bindings.rs:125`, `execution.rs:77-85`,
   `light.rs:38`, `effect_node.rs:547/587`.
 - **Read-back:** this doc D1–D3 + Invariants; `docs/ADDING_PRIMITIVES.md`; `light.rs` whole
-  (the template); FREEZE_COMPILER_MAP §4 + §9.
+  (the template); FREEZE_COMPILER_MAP section 4 + section 9.
 - **Deliverables:** `PortType::Object` (ports.rs, doc comment naming the single-hop
   invariant); `scene_object.rs` struct per D2; `primitives/scene_object.rs` per D3 +
   registration; `NodeInputs::{object, slot_of}` + `NodeOutputs::set_object` +
@@ -433,7 +405,7 @@ path · `cd` prefixes, `add -A`, unpathspec'd commits (house rules).
   `graph_tool migrate`).
 - **Test scope:** focused + GPU as above; **P1+P2 land as one batch** — full workspace sweep
   + `cargo clippy --workspace -- -D warnings` + `cargo deny check bans` in the main checkout
-  at landing; landing report per §8.10, quoting this doc's status line update.
+  at landing; landing report per section 8.10, quoting this doc's status line update.
 
 ### P3 — Producers and verbs: importer, merge, add, remove, duplicate, rename
 
@@ -521,7 +493,7 @@ path · `cd` prefixes, `add -A`, unpathspec'd commits (house rules).
   the window; if still unreachable, that's BUG-199's remit — do not fix scroll here, note it
   in the landing report). Selection-fallback unit test. **Held-out:** the merged
   warehouse+skull scene — outliner shows both objects + lights; PNG read by orchestrator,
-  affordance check (eye/buttons read as clickable). *Negative:* §4 carried gates;
+  affordance check (eye/buttons read as clickable). *Negative:* section 4 carried gates;
   `rg -n "SceneSelection" crates/manifold-io crates/manifold-core` → 0.
   **Demo (L3 + PNGs):** flows above + full-panel PNG on the merged scene.
   **Performer gesture:** click Warehouse's eye — the venue vanishes, the skull hangs in fog;
@@ -531,14 +503,14 @@ path · `cd` prefixes, `add -A`, unpathspec'd commits (house rules).
 - **Test scope:** focused; **wave close at the P4+P5 landing:** full workspace sweep +
   `cargo clippy --workspace -- -D warnings` + `cargo deny check bans` + the GPU suite iff
   any P4/P5 diff touched shader/runtime files (none should — escalate if the diff disagrees);
-  landing report per §8.10; this doc's Status line updated; supersession sweep per §8 below.
+  landing report per section 8.10; this doc's Status line updated; supersession sweep per section 8 below.
 
 **Phasing-completeness walk:** Object type/atom/executor/planner/fusion (P1) · render_scene
 surface + migration + preset regen + invisible-shadow proof (P2) · importer/merge/add emit +
 remove (BUG-193) + duplicate + rename object/light commands (P3) · scrub-everywhere contract +
 Shift-fine + dock type-in + enum dropdowns + degrees (P4) · outliner + eye + selection +
-properties + duplicate/remove/rename UI + flows (P5). Every §2 commitment lands in exactly one
-phase; everything else sits in §9 with a trigger.
+properties + duplicate/remove/rename UI + flows (P5). Every section 2 commitment lands in exactly one
+phase; everything else sits in section 9 with a trigger.
 
 ## 6. Performance (stated honestly)
 
@@ -570,14 +542,14 @@ beyond the struct emit is off-brief — stop and escalate.
     Remove renumbers and is BUG-193's fix.
 11. BUG-199 (dock scroll) is out of scope — owned elsewhere; v1's D1/D5/D6/D7/D8 doctrine
     carries forward unchanged.
-12. All v1 "Decided" items (its §7) stand except #3's layout description and the §4
+12. All v1 "Decided" items (its section 7) stand except #3's layout description and the section 4
     invariant this doc names — the graph stays the only model.
 
 ## 8. Execution notes for the orchestrator
 
-- Fresh session per phase; the phase brief + this doc are the context (standard §8). Gates
+- Fresh session per phase; the phase brief + this doc are the context (standard section 8). Gates
   run by the orchestrating session; PNGs read, not assumed; landing reports in
-  `docs/landings/`, status line updated per §8.9.
+  `docs/landings/`, status line updated per section 8.9.
 - Landing batches: P1+P2 (the model flip is atomic — never land P2 without P1 or vice
   versa), P3, P4+P5. One worktree slot for the workstream
   (`scripts/agent-worktree.py acquire scene-object-v2 wave/scene-object-v2`).
@@ -612,6 +584,6 @@ beyond the struct emit is off-brief — stop and escalate.
 - **Audio-dock full row audit under the value-cell contract** (P4 covers its numeric cells;
   any exotic rows found get listed, not improvised). Trigger: the VERIFY-enumerate in P4
   finding non-numeric-cell shapes.
-- Everything in v1's §9 (clip scene-states, per-scene ms, asset embedding, hot reload,
+- Everything in v1's section 9 (clip scene-states, per-scene ms, asset embedding, hot reload,
   multi-camera, multi-scene picker, animation section, video textures, scene presets,
   splats) — unchanged owners, unchanged triggers.

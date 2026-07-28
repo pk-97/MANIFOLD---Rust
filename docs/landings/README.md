@@ -1,9 +1,9 @@
 # Landing reports — the durable record of every landing
 
-<!-- index: One committed file per landing (gate output, level reached, click-script, deviations, VD refs). Rule: DESIGN_DOC_STANDARD.md §8.10. -->
+<!-- index: One committed file per landing (gate output, level reached, click-script, deviations, VD refs). Rule: DESIGN_DOC_STANDARD.md section 8.10. -->
 
 One file per landing, named `YYYY-MM-DD-<slug>.md`, committed in the same push
-as the landing itself (DESIGN_DOC_STANDARD.md §8.10). The chat-side landing
+as the landing itself (DESIGN_DOC_STANDARD.md section 8.10). The chat-side landing
 report is a summary plus a pointer here. `docs/VERIFICATION_DEBT.md` entries
 and BUG_BACKLOG `Escaped:` lines reference these files.
 
@@ -13,7 +13,7 @@ omitted:
 ```markdown
 # <wave/phase> — landed YYYY-MM-DD @ <merge SHA>
 
-**Branch:** <branch> · **Level reached:** L<0–4> / target L<n> (§10)
+**Branch:** <branch> · **Level reached:** L<0–4> / target L<n> (section 10)
 **Doc status line (quoted verbatim):** <the new Status: line>
 
 ## Gate results (verbatim)

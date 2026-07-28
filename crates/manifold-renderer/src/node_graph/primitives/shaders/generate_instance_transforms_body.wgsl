@@ -1,4 +1,4 @@
-// node.generate_instance_transforms — fusable BUFFER body (freeze §12, buffer
+// node.generate_instance_transforms — fusable BUFFER body (freeze section 12, buffer
 // domain), SOURCE. Fill an Array<InstanceTransform> with a procedural layout
 // (grid / ring / spiral / random). Matches generate_instance_transforms.wgsl
 // bit-for-bit (self-contained wang_hash / hash_to_unit — no external include).

@@ -1,4 +1,4 @@
-// node.lic_integrate — fusable body (freeze §12), 2-input GATHER (source +
+// node.lic_integrate — fusable body (freeze section 12), 2-input GATHER (source +
 // velocity both walked). Line Integral Convolution: walk N steps forward and
 // backward along the normalised velocity field, weighted-accumulating source.r
 // with a triangular weight. Both inputs are gathered along the streamline (the

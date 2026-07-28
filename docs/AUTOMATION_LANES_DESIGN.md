@@ -1,10 +1,8 @@
 # Automation Lanes — Design
 
-**Status: SHIPPED — P1–P4 on main @ `8b306de0` (2026-07-04); P5 (§7 addendum) partially shipped 2026-07-07 on `lane/automation-exposure` — see the P5 status block after §10 for exactly what landed vs. what remains.** The original gap (param-chooser + "+" + touch-to-select never shipped, so lanes could only be born via ARM recording) was the root cause of Peter's 2026-07-05 "lane-visibility issues" / dead-LANES report — the 2026-07-07 timeline-ux audit proved the LANES toggle functional end-to-end headless (real dispatch, strips off/on, PNGs; `scripts/ui-flows/toggle-lanes.json`) and root-caused the symptom as unreachability, not wiring: see `docs/TIMELINE_UX_AUDIT_2026-07-07.md` §1. Status previously corrected in the 2026-07-05 baseline review (the canonical stale-status escape, `DESIGN_DOC_STANDARD.md` §10). Open verification debt: VD-001 — Peter's L4 residue narrowed to confirming LANES lights live + ARM-recording a first lane.
-**Prerequisites: none. Sequencing: `docs/DESIGN_BUILD_ORDER.md` wave 3. Note: SESSION_MODE_DESIGN §2 reserves a serde-optional field slot on `ClipSequence` for this feature — fill that slot, don't invent a second home.**
-**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any
-phase. Conformance-hardened: audit claims are a 2026-07-02 snapshot — run the §8.3
-pre-flight before each phase.**
+**Status: SHIPPED — P1–P4 on main 2026-07-04; P5 (section 7 (UI/UX) addendum) partially shipped and merged 2026-07-07 — the P5 status block after section 10 (Phasing) is exact on landed vs. remaining. Owed: VD-001 (LANES live confirm) — Peter confirms LANES lights live and ARM-records a first lane.**
+**Prerequisites: none. SESSION_MODE_DESIGN section 2 (Hard dependency edges) reserves a serde-optional field slot on `ClipSequence` for this feature — fill that slot, don't invent a second home.**
+**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs) and section 8 (Execution protocol) before any phase; audit claims are a 2026-07-02 snapshot — run the section 8.3 (pre-flight) check first.**
 
 Timeline automation for effect/generator params, modeled on Ableton arrangement
 automation. One sentence: **a lane is a beat-indexed base writer** — it records
@@ -47,7 +45,7 @@ enabled LFO driver or audio mod does nothing (the modulator's absolute set
 overwrites `value` regardless of base) — same as mapping an M4L LFO onto an
 automated param in Live. The move, as in Live, is to automate the *driver's*
 rate/trim instead (drivers are addressable state; automating driver fields is
-deferred, §11). No base-relative driver mode in v1.
+deferred, section 11). No base-relative driver mode in v1.
 
 What this is on stage: the arc of the set gets drawn/recorded in the
 arrangement — a slow filter sweep over 32 bars, a strobe-rate ramp into the
@@ -151,7 +149,7 @@ Ableton semantics, copied:
 **Touch detection — single funnel, no per-path hooks.** Add a runtime-only
 `touched: bool` to `ParamSlot` (not serialized, `#[serde(skip)]`):
 `set_base_param` sets it. The automation evaluator, per lane: if
-`touched` since last frame → latch (or record, §5), clear the flag, skip the
+`touched` since last frame → latch (or record, section 5), clear the flag, skip the
 write. Because every hand funnels through `set_base_param`, this catches UI
 commands, Ableton, OSC, and macro bank with zero call-site changes. The
 evaluator's own writes go through a private path that doesn't set `touched`
@@ -195,7 +193,7 @@ All lane edits go through `EditingService` commands (`manifold-editing`):
   `RemoveAutomationPointCommand` — point-level, drag preview + commit with
   explicit reverse (drag-undo pattern).
 - `SetLaneEnabledCommand`, `ClearLaneCommand`, `RemoveLaneCommand`.
-- `CommitRecordedGestureCommand` — the §5 single-entry commit.
+- `CommitRecordedGestureCommand` — the section 5 single-entry commit.
 - `BackToArrangement` is NOT a command (it mutates runtime latch state, not
   the project) — it's a `ContentCommand` variant handled on the content
   thread, no undo entry.
@@ -226,7 +224,7 @@ makes "wiggle the knob, then draw" the zero-friction path to a new lane.
   the selection.
 - **Drag a segment** vertically to move it; **modifier-drag a segment**
   (Alt/Option, Live 11 style) bends it into a curve — this is the
-  `Curved(f32)` shape in §2.
+  `Curved(f32)` shape in section 2.
 - **Cmd-drag** bypasses grid snap for fine placement (Live's convention);
   **Shift-drag** for fine value adjustment.
 - **Marquee-select** multiple dots and drag/delete them together.
@@ -299,14 +297,14 @@ workflow.
   `manifold-core` effects types, so the finishing commit runs the full
   workspace sweep.
 
-## 10. Phasing (Sonnet-executable)
+## 10. Phasing
 
 - **P1 — model + runtime:** `AutomationLane`/`AutomationPoint`/`SegmentShape`
   in core; serde; pruning-row integration; curve eval; `automation.rs`
   sampling pass wired into the content tick before `evaluate_modulation`;
   `touched` flag + latch map + Back to Arrangement `ContentCommand`. Full
   workspace sweep (core types touched).
-- **P2 — editing:** the §6 command set + state_sync exposure (lane data +
+- **P2 — editing:** the section 6 command set + state_sync exposure (lane data +
   latch/arm state to UI snapshots).
 - **P3 — recording:** arm toggle, gesture capture, punch boundaries,
   single-undo commit.
@@ -316,15 +314,14 @@ workflow.
 P1 ships value on its own only via P2/P4 editing — but P1+P2 land as one
 reviewable arc; P3/P4 independent after.
 
-- **P5 — exposure (added 2026-07-07; = TIMELINE_UX_AUDIT item #1):** the §7
+- **P5 — exposure (added 2026-07-07; = TIMELINE_UX_AUDIT item #1):** the section 7
   addendum. `A` keybinding; param chooser + "+" on the expanded layer;
   touch-to-select; flat-line render + first-click lane birth. P1–P4 SHIPPED
   2026-07-04; P5 status below (partial ship, 2026-07-07).
 
-### P5 status (2026-07-07, Sonnet, `lane/automation-exposure`)
+### P5 status
 
-**Shipped and headless-PNG-verified** — Peter's actual complaint (ARM
-recording was the ONLY way to birth a lane) is fixed:
+**Shipped and headless-PNG-verified:**
 
 - `A` keybinding, real unit test (`input_handler.rs`'s
   `bare_a_toggles_automation_mode_visible_regardless_of_current_state`) —
@@ -347,7 +344,7 @@ recording was the ONLY way to birth a lane) is fixed:
   `drag-automation-point.json`) still pass unchanged — no regression on the
   shared lane pipeline.
 
-**Descoped, not silently dropped** — flagged back rather than faked:
+**Descoped, not silently dropped:**
 
 - **The "+" button / full param-picker popover** (device dropdown + param
   dropdown search list) is NOT built. Building a real one (vs. another
@@ -365,7 +362,7 @@ recording was the ONLY way to birth a lane) is fixed:
   strip stacks below the layer using the SAME additive-height pattern real
   lane strips already use (`layer.automation_lane_count` →
   `CoordinateMapper::layer_height`), which lives entirely within the
-  existing non-collapsed ("expanded" in §7's original 2026-07-02 language)
+  existing non-collapsed ("expanded" in section 7's original 2026-07-02 language)
   tier — no new tier needed. Item #2's actual complaint (the routing form
   showing unconditionally whenever a layer isn't collapsed, wasting vertical
   space) is a separate, real UX question — whether "expanded" should become

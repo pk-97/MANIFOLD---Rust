@@ -35,7 +35,7 @@ required-features = ["recording-proofs"]
 # Pre-gig soak (Tier 2): the show configuration (4K60 SDR ProRes + audio,
 # 20 media-minutes), run manually before a gig as a soundcheck for the
 # recorder. Gated the same way as the proof-suite test above -- see
-# docs/LIVE_RECORDING_PROOFS_DESIGN.md §5 / §6 P2.
+# docs/LIVE_RECORDING_PROOFS_DESIGN.md section 5 / section 6 P2.
 [[bin]]
 name = "recording-soak"
 path = "src/bin/recording_soak.rs"

@@ -1,4 +1,4 @@
-// node.sample_texture_3d_at_particles — fusable BUFFER body (freeze §12, buffer
+// node.sample_texture_3d_at_particles — fusable BUFFER body (freeze section 12, buffer
 // domain), COINCIDENT + TEXTURE (3D). Trilinear-sample a vec3 Texture3D at each
 // particle's position.xyz, write the RGB as the [f32;3] output. Matches
 // sample_texture_3d_at_particles.wgsl bit-for-bit. The 3D sibling of

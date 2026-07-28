@@ -75,7 +75,7 @@ pub struct UIState {
     // Transient drag/trim/scrub state is NOT here — it has a single owner,
     // `InteractionOverlay` (the timeline interaction component). UIState holds
     // only the persistent selection/cursor/zoom the renderer reads. See
-    // `docs/TIMELINE_API_DESIGN.md` §3.3.
+    // `docs/TIMELINE_API_DESIGN.md` section 3.3.
 
     // ── Zoom ──
     pub current_zoom_index: usize,
@@ -98,7 +98,7 @@ pub struct UIState {
     scope_pin: Option<(InspectorTab, SelectionIdentity)>,
 
     /// Automation-mode view toggle (Live's `A`, P4 `docs/AUTOMATION_LANES_DESIGN.md`
-    /// §7): show/hide lane strips across the timeline. Purely a view-state
+    /// section 7): show/hide lane strips across the timeline. Purely a view-state
     /// bool — never serialized, never routed through `EditingService` — but it
     /// DOES change the Y-layout (a visible lane grows its track), so any
     /// toggle must also mark the app's structural-sync dirty flag; see
@@ -108,7 +108,7 @@ pub struct UIState {
 
     /// The single selected breakpoint, for the Delete key (P4 Unit A —
     /// marquee multi-select is a later unit; `docs/AUTOMATION_LANES_DESIGN.md`
-    /// §7's "Marquee-select multiple dots and drag/delete them together").
+    /// section 7's "Marquee-select multiple dots and drag/delete them together").
     /// Set on a plain click on an existing dot; cleared on any other
     /// selection change or when automation mode toggles off. Never
     /// serialized — pure view/interaction state, same tier as
@@ -116,7 +116,7 @@ pub struct UIState {
     pub selected_automation_point: Option<UiAutomationPointRef>,
 
     /// Marquee (rubber-band) multi-selection of automation breakpoints (P4
-    /// Unit B, `docs/AUTOMATION_LANES_DESIGN.md` §7's "Marquee-select
+    /// Unit B, `docs/AUTOMATION_LANES_DESIGN.md` section 7's "Marquee-select
     /// multiple dots and drag/delete them together"). Populated live during
     /// an `AutomationMarquee` drag; Delete removes the whole set as one undo
     /// entry, a drag starting on a member moves the whole set together. Same
@@ -126,13 +126,13 @@ pub struct UIState {
 
     /// Pencil/draw mode toggle (Live's `B`) — while on, dragging inside an
     /// automation lane strip draws a point at each grid step instead of
-    /// grabbing a dot/segment (P4 Unit B, §7's "Draw mode"). Only meaningful
+    /// grabbing a dot/segment (P4 Unit B, section 7's "Draw mode"). Only meaningful
     /// while `automation_mode_visible`; never serialized.
     pub automation_draw_mode: bool,
 
     /// The param most recently touched (slider grab, inspector knob drag) on
     /// each layer — independent of whether it has a real `AutomationLane`
-    /// yet (P5, `docs/AUTOMATION_LANES_DESIGN.md` §7 addendum's
+    /// yet (P5, `docs/AUTOMATION_LANES_DESIGN.md` section 7 addendum's
     /// "touch-to-select" + "first-draw path"). While automation mode is
     /// visible, a chosen param with no backing lane renders as a flat line
     /// at its current base value — Live's "every param has an implicit
@@ -178,7 +178,7 @@ impl UIState {
         }
     }
 
-    /// Touch-to-select (§7 addendum): record `target`/`param_id` as the
+    /// Touch-to-select (section 7 addendum): record `target`/`param_id` as the
     /// layer's active automation-chooser selection. Called from the same
     /// funnel every param drag already goes through
     /// (`PanelAction::ParamSnapshot`'s handler, `ui_bridge/inspector.rs`) —

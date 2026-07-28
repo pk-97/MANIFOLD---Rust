@@ -1,4 +1,4 @@
-// node.gaussian_blur — fusable body (freeze §12), GATHER via the STENCIL-FETCH
+// node.gaussian_blur — fusable body (freeze section 12), GATHER via the STENCIL-FETCH
 // ABI. Single-axis Gaussian blur, two algorithms behind one primitive. `in` is
 // gathered along one axis: the body reads it through `fetch_in(uv)` — defined
 // by the codegen as the real textureSampleLevel over the bound texture

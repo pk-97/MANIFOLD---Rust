@@ -89,7 +89,7 @@ impl PurgeResult {
 /// `load_project_from_json_with`; `run_post_load_validation`'s overlap
 /// repair, orphan purge, and missing-file detection) into
 /// `Project::load_report` — the single owner of "what this load altered"
-/// (`BUG-063`, `docs/PROJECT_FILE_INTEGRITY_DESIGN.md` §3.6).
+/// (`BUG-063`, `docs/PROJECT_FILE_INTEGRITY_DESIGN.md` section 3.6).
 #[derive(Debug, Clone, Default)]
 pub struct LoadReport {
     pub unknown_effects_removed: usize,

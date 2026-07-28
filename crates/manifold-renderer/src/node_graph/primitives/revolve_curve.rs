@@ -1,5 +1,5 @@
 //! `node.revolve_curve` — revolve a 2D profile curve around the Y axis into
-//! a 3D positions+uv grid (MESH_DEFORM_AND_CURVE_GEOMETRY_DESIGN.md D5, §3
+//! a 3D positions+uv grid (MESH_DEFORM_AND_CURVE_GEOMETRY_DESIGN.md D5, section 3
 //! curve→mesh table).
 //!
 //! `profile: Array<CurvePoint>` (x = radius, y = height) sweeps into a
@@ -231,7 +231,7 @@ mod tests {
 mod gpu_tests {
     //! Real-GPU value-level tests. Parity is generated-vs-hand (design
     //! decided #10's proof), plus a chain test into node.make_triangles per
-    //! DECOMPOSING_GENERATORS.md §9's chain rule (§4 invariant table).
+    //! DECOMPOSING_GENERATORS.md section 9's chain rule (section 4 invariant table).
     use super::*;
 
     fn mk_curve(x: f32, y: f32) -> CurvePoint {
@@ -283,7 +283,7 @@ mod gpu_tests {
     }
 
 
-    /// The chain rule (DECOMPOSING_GENERATORS.md §9 / design §4 invariant
+    /// The chain rule (DECOMPOSING_GENERATORS.md section 9 / design section 4 invariant
     /// table): revolve -> make_triangles on a small profile, assert the
     /// resulting triangle count and a hand-computed vertex position/uv.
     #[test]

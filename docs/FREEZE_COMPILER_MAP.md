@@ -9,9 +9,9 @@ supersedes the *status* sections of the older design docs (which record how we
 got here, not where we are):
 
 - `GRAPH_FREEZE_COMPILER_DESIGN.md` — the original design + adversarial review.
-  Still correct on philosophy (§0, §7, §8); its §12 status ends at "ColorGrade
-  only" and its perf-gate plan (§12.3 step 6) describes a mechanism that was
-  later **deleted** (see §6 below).
+  Still correct on philosophy (section 0, section 7, section 8); its section 12 status ends at "ColorGrade
+  only" and its perf-gate plan (section 12.3 step 6) describes a mechanism that was
+  later **deleted** (see section 6 below).
 - `CHAIN_FUSION_DESIGN.md` — segment design. Correct except every mention of a
   "per-region gate on every cross-card region": the fuse decision is structural
   now, there is no measurement.
@@ -21,7 +21,7 @@ got here, not where we are):
 - `GRAPH_COMPILER.md` — a walked-back 2026-05 brainstorm (`for_each_n`).
   Historical only; nothing in it is the shipped compiler.
 
-Fixed 2026-07-14 (fusion-sweep phase 8): `freeze/classify.rs`'s `Gather` /
+`freeze/classify.rs`'s `Gather` /
 `BufferGather` / `Source` doc comments no longer claim a gather input or a
 buffer atom forces a node to Boundary, or that Source generators can't head a
 region — all three fuse today (tier 3 buffer-fusion + generator-as-producer
@@ -47,7 +47,7 @@ fuse/don't-fuse decision is **structural** (region shape), never measured.
 **For the instrument:** this is the machinery that decides what pixels reach
 the screen every frame of a show. Its failure mode is not a crash — it is a
 *silently different picture* than the editor showed. Every rule below exists to
-make that impossible; the invariant list (§9) is what a review must attack.
+make that impossible; the invariant list (section 9) is what a review must attack.
 
 ## 2. File map
 
@@ -60,7 +60,7 @@ make that impossible; the invariant list (§9) is what a review must attack.
 | `freeze/install.rs` | The rewrite: def surgery (delete members, insert fused `node.wgsl_compute` nodes, rewire), binding retarget, control-wire re-anchor, derived-uniform wiring, in-place-loop detection, build check, all caches, the chain-fusion worker, `should_render_fused`. | 2333 |
 | `freeze/segment.rs` | Cross-card concat: N adjacent cards → one namespaced def (`c{i}.` prefixes), seam boundaries stitched out. + `def_is_segment_stateless` eligibility. | 296 |
 | `freeze/diff.rs` | GPU texture-diff reducer (max-abs + over-count verdicts) — the oracle's measuring device. | 305 |
-| `freeze/proof.rs` | The oracle suite (test-only): ~40 render-two-ways proofs, per-feature. See §10. | 3864 |
+| `freeze/proof.rs` | The oracle suite (test-only): ~40 render-two-ways proofs, per-feature. See section 10. | 3864 |
 | `freeze/reference.rs` | Frozen golden hand-kernels for codegen-drift checks. | 101 |
 | `primitives/wgsl_compute.rs` | The host primitive every fused kernel becomes. Ports/params/bindings derived from the WGSL by naga introspection; parses all freeze markers; owns static-param specialization. | 3440 |
 | `node_graph/execution_plan.rs` | `compile(graph)`: topo + liveness filter + resource dims/canvas-scale propagation + lifetimes (`free_after`) + persistent resources + late-capture steps + hoistable classification. | 1411 |
@@ -149,7 +149,7 @@ type_id has a registered recompute in `freeze::derived_uniform_registry`
 (`has_recompute`, checked at install time) — data-driven, not name-matched.
 vec3-typed derived uniforms (e.g. a camera basis vector) are now sourceable,
 via the member's wired `Camera` input routed to the fused node as a
-`@camera_external` port (see §5) and recomputed every frame in
+`@camera_external` port (see section 5) and recomputed every frame in
 `wgsl_compute::evaluate()`. The time-family (`dt_scaled`, `frame_count`,
 `time`/`time2`/`time_val`) migrated onto this same mechanism — the old
 per-name control wire from `system.generator_input` is gone; every primitive
@@ -211,11 +211,11 @@ should diff both ends.
 | `// @dispatch_count_param: n{i}_<p>` | fused buffer codegen (in-place loop regions where all members agree on one `active_count` producer) | Cap the 1D grid at the named uniform's live value instead of buffer capacity (the FluidSim "fused slower" fix — kernel carries the matching guard). |
 | `// @sampler_address_mode: repeat\|mirror` on `samp` | fused texture codegen | Create the shared gather sampler at this mode (WGSL can't express address modes). `clamp` emits no marker — byte-identical legacy text. |
 | `// @reset_gated` | seed-pattern kernels | Node grows a synthetic optional `reset_trigger` input; dispatches only on integer edges. On skip of an *aliased* kernel it calls `mark_gpu_accessed()` — the executor stale-guard's documented escape hatch. |
-| `// @static_param: <field>` (one per line, prefix block) | install, texture regions only (never buffer — detected by `var<storage`) | Field is *eligible* for const-baking (specialization). Excluded: control-wired fields AND outer-card binding targets. Correctness does NOT rest on this classification — see §7. |
+| `// @static_param: <field>` (one per line, prefix block) | install, texture regions only (never buffer — detected by `var<storage`) | Field is *eligible* for const-baking (specialization). Excluded: control-wired fields AND outer-card binding targets. Correctness does NOT rest on this classification — see section 7. |
 | `// @pure` | hand-authored kernels (BlackHole bake) | Author asserts output = f(params, inputs) → memoizer may hold it. |
 | `// @fusion: pointwise\|source` (+ `fn body`) | user-authored fragment-form `wgsl_compute` | The node synthesizes its standalone kernel via `generate_standalone` and reports a real `fusion_kind`, so user fragments fuse like built-ins. |
 | `// @camera_external: camera_ext_N` (P0/D7, 2026-07-12) | fused texture/buffer codegen, when a region member has a wired `Camera` input | Declares a synthetic, non-introspected `Camera`-typed input port on the fused node — the only channel a CPU-struct with no WGSL representation can travel through the def. Producer wire (Camera→Camera) reuses the ordinary `control_wires` rewrite. |
-| `// @derived_uniform_member: <first_field> words=<n> <type_id> [<camera_port>]` (P0/D7, 2026-07-12) | fused texture/buffer codegen, one per region member with non-empty `derived_uniforms()` | The contiguous uniform-buffer block that member's derived fields occupy, and how to refresh it every frame: `wgsl_compute::evaluate()` calls `derived_uniform_registry::recompute(type_id, ctx)` (ctx = frame clock + the routed `@camera_external` value, if named) and packs the result through each field's real `UniformMemberType`. Consulted by `introspect()` to exclude these fields from the generic port-shadow/param set. Kernels carrying this marker are excluded from static-param specialization (§7) — baking would shift the surviving fields' byte offsets. |
+| `// @derived_uniform_member: <first_field> words=<n> <type_id> [<camera_port>]` (P0/D7, 2026-07-12) | fused texture/buffer codegen, one per region member with non-empty `derived_uniforms()` | The contiguous uniform-buffer block that member's derived fields occupy, and how to refresh it every frame: `wgsl_compute::evaluate()` calls `derived_uniform_registry::recompute(type_id, ctx)` (ctx = frame clock + the routed `@camera_external` value, if named) and packs the result through each field's real `UniformMemberType`. Consulted by `introspect()` to exclude these fields from the generic port-shadow/param set. Kernels carrying this marker are excluded from static-param specialization (section 7) — baking would shift the surviving fields' byte offsets. |
 
 Sampler default everywhere is ClampToEdge; markers only encode deviations, so
 all-clamp regions keep byte-identical WGSL — and the WGSL text is the
@@ -359,7 +359,7 @@ invariant a fused def must respect:
     derived, or recomputed from a routed `Camera` external) must be refreshed
     every frame from the SAME ambient context the unfused `run()` would have
     read (`freeze::derived_uniform_registry`, consumed in
-    `wgsl_compute::evaluate()`; see §5's two new markers). A type_id with no
+    `wgsl_compute::evaluate()`; see section 5's two new markers). A type_id with no
     registered recompute fails the fuse closed at install time
     (`has_recompute`) — the same fail-safe contract every other cut rule
     follows: refusal always renders unfused, unfused is always correct.
@@ -368,7 +368,7 @@ invariant a fused def must respect:
 
 - **The oracle pattern** (proof.rs): render the REAL preset fused and unfused
   through the real executor, diff on GPU (`TextureDiff` — max_abs + over-count
-  + NaN/Inf classification), assert per contract tier (§7). ~40 proofs cover:
+  + NaN/Inf classification), assert per contract tier (section 7). ~40 proofs cover:
   per-feature fixtures (gather folding, fan-out, source-headed, cross-res
   sampled externals, stencil integer/fractional taps, optional-input folding,
   q16 loops, ping-pong vs copy, seed gating, buffer regions ×3, generators,
@@ -393,18 +393,17 @@ invariant a fused def must respect:
 
 ## 11. Honest edges (the bug hunt starts here)
 
-**Update 2026-07-03: the hunt ran** (40-agent adversarial workflow; 10 lenses, 2 skeptics
-per finding). Outcome: 7 confirmed + 2 split-verdict findings, all documented as
-**BUG-006 … BUG-014 in [BUG_BACKLOG.md](BUG_BACKLOG.md)** — including a likely mechanism
-for edge #2 below (unchecked Metal command-buffer status, BUG-013). The completeness
+An adversarial hunt confirmed 7 + 2 split-verdict findings, all documented as
+**BUG-006 (param-edits-undo-fused-away-nodes-silently-no) … BUG-014 (parked) in [BUG_BACKLOG.md](BUG_BACKLOG.md)** — including a likely mechanism
+for edge #2 below (unchecked Metal command-buffer status, BUG-013 (commit-wait-completed-never-checks-command-buffe…)). The completeness
 critic's round-2 lens list (what got shallow coverage): the executor itself
-(`execution.rs`/`execution_plan.rs`, esp. the §9.9 specialization-vs-memoizer question),
+(`execution.rs`/`execution_plan.rs`, esp. the section 9.9 specialization-vs-memoizer question),
 `classify.rs`'s gates independent of its stale comments, `space.rs`'s mixed-input canvas
 fallback, `diff.rs` (can the oracle itself false-pass?), `reference.rs` golden-update
 discipline, `graph_loader.rs`'s consumption of fused defs, the segment Pending-hang path,
 and edges #3/#7 below, which no lens engaged.
 
-1. FIXED (2026-07-14, FUSION_SOTA_DESIGN.md P1): the **marker ABI** (§5) now has
+1. FIXED: the **marker ABI** (section 5 (Decided — do not reopen)) now has
    type-level enforcement — `freeze/markers.rs`'s `Marker` enum with `emit`/`parse`
    as the sole wire-format implementation, both codegen/install (producer) and
    `wgsl_compute::introspect` (consumer) compile against it. Negative gate
@@ -413,18 +412,18 @@ and edges #3/#7 below, which no lens engaged.
    changed zero emitted bytes.
 2. The **suite-parallelism GPU flake** is an eroding safety net — worth a root
    cause before trusting any future red/green signal.
-3. FIXED (2026-07-14): **Out-of-loop ≈ulp** now has one named constant pair,
+3. FIXED: **Out-of-loop ≈ulp** now has one named constant pair,
    `OUT_OF_LOOP_ULP_ABS_TOL`/`OUT_OF_LOOP_ULP_REL_TOL` (`freeze/proof.rs`),
    backing the 15 out-of-loop-texture-region proofs that all already shared
    the same (1e-2, 3e-2) texel bound (ColorGrade, camera-derived, gather/warp
    regions, quarter-res, fan-out, etc.) — a name-the-magic-number refactor, no
    proof's pass/fail behavior changed. The per-proof `passes(max_over_fraction)`
-   budget stays per-proof by design (§7.4) — that fraction is tuned to each
+   budget stays per-proof by design (section 7.4) — that fraction is tuned to each
    kernel's discontinuity profile, not part of the shared texel-level contract.
-4. FIXED (2026-07-14): `classify.rs` doc-comment drift (see header note above)
+4. FIXED: `classify.rs` doc-comment drift (see header note above)
    — the `Gather`/`BufferGather`/`Source` comments no longer mis-describe
    gathers/buffers as forcing Boundary or Source as standalone-only.
-5. FIXED (2026-07-14): `def_content_key` normalizes a cloned def — clearing
+5. FIXED: `def_content_key` normalizes a cloned def — clearing
    `editor_pos`/`title` on every node, including nodes nested inside group
    bodies — before hashing, so a node drag or rename no longer perturbs the
    key. Same "serialize the whole thing and hash the bytes" mechanism as
@@ -439,7 +438,7 @@ and edges #3/#7 below, which no lens engaged.
    resampler-into-region remain deliberate boundaries — under-fusing by
    design. (Vec3/Vec4/Color params lifted P5; multi-output texture atoms
    — voronoi_2d, block_displace_field — lifted P6, FUSION_SOTA_DESIGN.md D4.)
-7. FIXED (2026-07-14, FUSION_SOTA_DESIGN.md P7): `leak_params`/`leak_ports`/
+7. FIXED: `leak_params`/`leak_ports`/
    `Box::leak` of views are gone — fused caches (`FUSED_EFFECT_CACHE`/
    `FUSED_GENERATOR_CACHE`/`SEGMENT_CACHE`) hold `Arc<T>` with owned
    `Vec`/`String` interiors; at cap, LRU evicts the least-recently-hit entry
@@ -447,7 +446,7 @@ and edges #3/#7 below, which no lens engaged.
    crates/manifold-renderer/src/node_graph/freeze/` returns zero hits
    (`freeze_has_no_leaks`). Pathological edit-spam past 512 shapes now evicts
    and frees instead of leaking per rebuild.
-8. FIXED (2026-07-14, FUSION_SOTA_DESIGN.md P2): segment `Pending` can no
+8. FIXED: segment `Pending` can no
    longer hang forever — `SEGMENT_PENDING` carries enqueue timestamps;
    `pump_segment_results` expires anything past `SEGMENT_COMPILE_DEADLINE`
    (60s) into the negative cache with one log line, and a worker panic is now

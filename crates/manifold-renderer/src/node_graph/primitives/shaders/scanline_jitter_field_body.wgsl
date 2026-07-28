@@ -1,4 +1,4 @@
-// node.scanline_jitter_field — fusable body (freeze §12), SOURCE. Per-row
+// node.scanline_jitter_field — fusable body (freeze section 12), SOURCE. Per-row
 // horizontal-offset field. motion=0 Tear (VHS jolt, byte-identical to the
 // original sine-hash + scanline gate); motion=1 Slide (smooth value-noise
 // per-band drift, the Latent Space website mosh slide). res from the ambient

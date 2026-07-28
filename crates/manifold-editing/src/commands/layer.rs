@@ -193,7 +193,7 @@ impl Command for ImportModelLayerCommand {
 /// If the deleted layer is a group, its children's parent_layer_id is cleared
 /// (matching Unity's behavior where children become root layers).
 ///
-/// Grid integrity (`docs/SESSION_MODE_DESIGN.md` §7): a `LayerId` with no
+/// Grid integrity (`docs/SESSION_MODE_DESIGN.md` section 7): a `LayerId` with no
 /// resolving layer must never be left behind in `Project.session.slots` —
 /// deleting a layer removes that layer's session slots in the same command,
 /// restored on undo.
@@ -590,7 +590,7 @@ impl Command for SetLayerAudioGainCommand {
 
 /// Toggle an audio layer's **analysis-only** output state: silent to the master
 /// mix but still feeding its send (the third state beside Live and Muted). Mute
-/// still wins. See `docs/AUDIO_LAYER_DESIGN.md` §5 / `LAYER_CONTROLS_DESIGN.md` §5.3.
+/// still wins. See `docs/AUDIO_LAYER_DESIGN.md` section 5 / `LAYER_CONTROLS_DESIGN.md` section 5.3.
 #[derive(Debug)]
 pub struct SetLayerAnalysisOnlyCommand {
     layer_id: LayerId,
@@ -636,7 +636,7 @@ impl Command for SetLayerAnalysisOnlyCommand {
 // ─── LayerClipTrigger (P2) ─────────────────────────────────────────────
 //
 // The one authorable clip-trigger shape (`docs/AUDIO_SETUP_DOCK_AND_TRIGGER_
-// UNIFICATION_DESIGN.md` §3.1/D2) lives on `Layer.clip_triggers: Vec<LayerClipTrigger>`.
+// UNIFICATION_DESIGN.md` section 3.1/D2) lives on `Layer.clip_triggers: Vec<LayerClipTrigger>`.
 // No `DriverTarget` here — that enum addresses effect/generator-param drivers,
 // not a layer's own field — so these commands address by `LayerId` directly,
 // exactly like `SetLayerAudioGainCommand`/`SetLayerAnalysisOnlyCommand` above.

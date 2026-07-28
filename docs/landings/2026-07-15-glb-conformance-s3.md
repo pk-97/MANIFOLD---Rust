@@ -26,7 +26,7 @@ cargo test ... --test glb_conformance -- --test-threads=1 →
   (92.84s; full suite fetched in main via scripts/fetch-gltf-conformance.sh — 111 fetched, 15 present)
 ```
 
-G-P6 negative gates rerun by the orchestrator in the worktree: content-thread grep (decode only inside `thread::spawn`), no `color_space` anywhere in the primitive, §4's exact tonemap gate on `src/bin/` zero hits. Conformance sweep byte-stable pre/post G-P6 (HDRI is opt-in), check-presets green, `-p manifold-renderer --lib` 1260 passed.
+G-P6 negative gates rerun by the orchestrator in the worktree: content-thread grep (decode only inside `thread::spawn`), no `color_space` anywhere in the primitive, section 4's exact tonemap gate on `src/bin/` zero hits. Conformance sweep byte-stable pre/post G-P6 (HDRI is opt-in), check-presets green, `-p manifold-renderer --lib` 1260 passed.
 
 ## Verification level reached
 
@@ -49,12 +49,12 @@ G-P6 negative gates rerun by the orchestrator in the worktree: content-thread gr
 
 - `EffectNode::io_pending()` (above) — new defaulted trait method, orchestrator-approved, doc didn't specify it.
 - `env_intensity` fan-out to the HDRI branch — the worker's first pass left HDRI mode with no exposure control (confessed as a shortcut); the fix reuses the existing `node.exposure` atom and the established fan-out pattern. Measured basis: kloppenheim mean radiance 0.24 (~4× dimmer than the softbox default), so an exposure control is load-bearing, not polish.
-- G-P7's 29 no-glb-variant assets are `xfail:G-P7` (per the orchestrator's clarification following the TextureTransformTest precedent) rather than pointing at a §7 deferred item — the reason is visible and counted; converting them means teaching the fetch script gltf+sidecar handling per asset (BUG-166–BUG-173 hunting may absorb some).
+- G-P7's 29 no-glb-variant assets are `xfail:G-P7` (per the orchestrator's clarification following the TextureTransformTest precedent) rather than pointing at a section 7 deferred item — the reason is visible and counted; converting them means teaching the fetch script gltf+sidecar handling per asset (BUG-166–BUG-173 hunting may absorb some).
 - Worker "released" the slot mid-session and a second worktree (slot-3) ended up holding the branch; the orchestrator consolidated onto slot-3, neutralized slot-2 (synced + detached), and verified no work was lost (slot-2's staged diff was exactly the reverse of the committed fix — phantom staging from the branch ref advancing under it).
 
 ## Notes / carried debt
 
-- Pre-existing, untouched: two ad-hoc tonemaps in `tests/` (`fluid3d_bias.rs:162`, `gpu_proofs/film_grain_decorrelation.rs:251`) predate this design; §4's gate is scoped to `src/bin/` and passes. Candidates for a later `headless_readback` migration.
+- Pre-existing, untouched: two ad-hoc tonemaps in `tests/` (`fluid3d_bias.rs:162`, `gpu_proofs/film_grain_decorrelation.rs:251`) predate this design; section 4's gate is scoped to `src/bin/` and passes. Candidates for a later `headless_readback` migration.
 - `docs/BUG_BACKLOG.md` has **two entries named BUG-163** (freeze-codegen, line ~879, FIXED; amg-livery, line ~2328, FIXED) — a pre-existing ID collision worth a one-line dedup pass.
 - BUG-165 (BoomBox/VirtualCity never-converge) and BUG-166–BUG-173 root causes logged as "not investigated" — classification-depth only, per G-P7's scope.
 - The G-P6 first-demo escape (converged-before-decode) is exactly the class the io_pending surface now deletes; no VERIFICATION_DEBT entry needed — the mechanism is the fix.

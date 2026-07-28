@@ -1,4 +1,4 @@
-// node.mix — fusable body (freeze §12), MultiInputCoincident: inputs `a` and
+// node.mix — fusable body (freeze section 12), MultiInputCoincident: inputs `a` and
 // `b` are sampled at the SAME element. blend(a,b,mode) then crossfade by
 // `amount`. BUG-181: alpha only crossfades a->b in Lerp mode (mode == 0) — a
 // genuine crossfade, alpha included. Every other blend mode is RGB-only and
@@ -46,7 +46,7 @@ fn body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32,
     let out_rgb = mix(a.rgb, blended, amount);
     // Branchless on purpose: an `if` here compiles differently in fused vs
     // standalone kernel contexts (FMA regrouping) and broke the fp32
-    // bit-exact proof (precision contract §7.1's "match the exact arithmetic
+    // bit-exact proof (precision contract section 7.1's "match the exact arithmetic
     // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
     // IS alpha pass-through, in the original instruction shape.
     let t_a = select(0.0, amount, mode == 0u);

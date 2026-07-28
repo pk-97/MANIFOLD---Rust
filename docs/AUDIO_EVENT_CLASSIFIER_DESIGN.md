@@ -1,8 +1,8 @@
 # Audio Event Classifier — name the hit the DSP front-end already found
 
-**Status:** IN PROGRESS — P1+P2+P3 executed 2026-07-18 (same day); heldout exam run, verdict SHORT OF BAR (see §8): dev tuning plateaued (round 1 accepted, rounds 2+3 measured net-negative and reverted), heldout collapse proves a DATA gap, not a tuning gap. P4/P5 blocked on Peter's call: expand training data (D6 dial + more labeled shows / license-verified Splice) or park. ADTOF stays meanwhile; BUG-069 unchanged. · 2026-07-18 · Fable
+**Status:** IN PROGRESS — P1+P2+P3 executed 2026-07-18 (same day); heldout exam run, verdict SHORT OF BAR (see section 8): dev tuning plateaued (round 1 accepted, rounds 2+3 measured net-negative and reverted), heldout collapse proves a DATA gap, not a tuning gap. P4/P5 blocked on Peter's call: expand training data (D6 dial + more labeled shows / license-verified Splice) or park. ADTOF stays meanwhile; BUG-069 (shipping-license-audit) unchanged. · 2026-07-18 · Fable
 **Prerequisites:** none — the harness, shared data store, and truth assets all landed 2026-07-18 (`74c14de6` and ancestors).
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
 The governing insight, measured 2026-07-18: **detection is solved, naming is the
 wall.** On raw single-track masters of Peter's live show, the license-clean DSP
@@ -19,7 +19,7 @@ detected onset. Peter's directives, verbatim, which decide the shape:
 - Synthetic data caution: *"I'm cautious of the synthetic masters"* → the
   composited-data share is a measured dial, never the foundation (D6).
 - **Training approval:** this doc IS the scoped approval AUDIO_ANALYSIS_ACCURACY
-  §7.1 required — the small classifier only (*"let's start"*, 2026-07-18), NOT the
+  section 7.1 required — the small classifier only (*"let's start"*, 2026-07-18), NOT the
   full Stage-2 transcription CRNN, which stays parked.
 
 On stage this buys: per-drum triggers from the live feed (snare-only strobes,
@@ -33,7 +33,7 @@ detector — future side-input, Deferred).
 
 | Piece | Where | State |
 |---|---|---|
-| DSP onset front-end | `tools/audio_analysis/manifold_audio/stage1_dsp_detection.py` (`detect_onsets`) | Raw-master any-onset recall 934/934, median err 2–9ms (5 liveshow songs); BUG-241 fixed + threshold 0.075 tuned same day |
+| DSP onset front-end | `tools/audio_analysis/manifold_audio/stage1_dsp_detection.py` (`detect_onsets`) | Raw-master any-onset recall 934/934, median err 2–9ms (5 liveshow songs); BUG-241 (stage1-dsp-onset-frontend-misses-loud-real-kicks…) fixed + threshold 0.075 tuned same day |
 | Labeler (to be replaced) | same file, `_label_clusters*` | The wall: snare 0.00 on 3/5 show songs; fitted profiles regress off-domain |
 | Liveshow dense truth | `eval/liveshow_labels/` + `sweep_p4.DENSE_IN_WINDOW` | 1,771 labels (kick 396 · snare 707 · hat 545 · synth 48 · bass_sustained 48 · vocal 27); heldout pair `liveshow_stagnate`/`liveshow_basalt` NEVER touched in dev |
 | E-GMD | `eval/data/egmd` via `eval/fetch/egmd.py` | 63 perf fetched (59 dev / 4 heldout), CC-BY 4.0 verified at fetch; Range fetcher can pull more |
@@ -42,7 +42,7 @@ detector — future side-input, Deferred).
 | Eval harness / exam | `eval/bakeoff_b1.py`, `eval/sweep_p4.py`, scoreboard | Per-class F1, DENSE_IN_WINDOW windowing, heldout discipline — the classifier plugs in as a labeling arm, harness unchanged |
 | Shared data store | `eval/paths.py` `DATA_ROOT` | Worktree-safe, no re-downloads |
 | Torch runtime | `tools/audio_analysis/BundledRuntime` | torch 2.8.0 + MPS — training runs locally (M4 Max, 36GB, measured) |
-| Live machinery (Rust) | `crates/manifold-audio` (`analysis.rs`: kick ridges, pitch/presence tracker; `manifold-spectral` SR-invariant grid, BUG-052) | NOT used offline today; P4 consumes the spectral grid; ridge/tracker side-inputs Deferred |
+| Live machinery (Rust) | `crates/manifold-audio` (`analysis.rs`: kick ridges, pitch/presence tracker; `manifold-spectral` SR-invariant grid, BUG-052 (sample-rate-dependent-detection)) | NOT used offline today; P4 consumes the spectral grid; ridge/tracker side-inputs Deferred |
 
 **Licensing constraints (load-bearing):** ADTOF + madmom models are CC BY-NC-SA —
 their OUTPUTS may never become training labels (license laundering). Slakh2100 is
@@ -151,14 +151,14 @@ PYTHONPATH = the worktree's `tools/audio_analysis`). All data writes go to
 
 ### P1 — Dataset pipeline (1 session)
 **Entry:** audit anchors re-verified (`detect_onsets` exists; liveshow labels load;
-E-GMD present in DATA_ROOT). **Read-back:** this doc §2 D3/D4/D6 + §4 + the
+E-GMD present in DATA_ROOT). **Read-back:** this doc section 2 D3/D4/D6 + section 4 + the
 DENSE_IN_WINDOW machinery in `sweep_p4.py`.
 **Deliverables:** `train/sources.toml` + `dataset.py` extracting labeled mel
 patches (D4 defaults) from: liveshow dev in-window events, E-GMD dev hits,
 manifold_own kicks, self_render; `other`-class patches mined from liveshow
 master onsets that fall INSIDE a class's window but match no truth within 50ms
 (they are real detections of non-labeled content) — plus synth/bass/vocal truth
-as their own classes; the license test (§4); per-class count report to stdout.
+as their own classes; the license test (section 4); per-class count report to stdout.
 **Gate:** license test green; extraction unit tests green (patch shape, jitter,
 window discipline); printed class support table (expect kick ≈400+, snare ≈700+,
 hat ≈550+, other ≈1000+, vocal thin). **Demo:** none — L1.
@@ -194,7 +194,7 @@ raising the composited share past 50% without an underfitting finding to cite.
 
 ### P4 — Rust inference + parity (1 session)
 **Entry:** shipped weights from P3 (or P2 baseline if Peter ships early).
-**Read-back:** D9 + §3 seams + `manifold-spectral` grid (BUG-052 notes).
+**Read-back:** D9 + section 3 seams + `manifold-spectral` grid (BUG-052 notes).
 **Deliverables:** `MelPatch` builder in `manifold-spectral`; `EventClassifier`
 in `manifold-audio`; weights loader (versioned, forward-compatible header);
 `classifier_parity` test over P2's exported fixtures; timing measurement
@@ -206,7 +206,7 @@ deps in the workspace, Python invocation from Rust, silent fallback when the
 weights file is absent.
 
 ### P5 — Offline analysis integration (1 session)
-**Entry:** P4 green. **Read-back:** §3 seams; the offline analyzer's current
+**Entry:** P4 green. **Read-back:** section 3 seams; the offline analyzer's current
 labeling path. **Deliverables:** the offline import-analysis path can use
 `EventClassifier` (explicit setting, default ON when weights present, absence
 loudly logged); one end-to-end run on a manifold_own master committed as a

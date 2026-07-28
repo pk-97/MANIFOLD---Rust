@@ -18,7 +18,7 @@ Result: indicator Y and drop-target index are off by exactly the scroll delta ac
 
 ### Root cause 2: height from a second, live source
 
-The same loop uses `card.compute_height()` (`param_card.rs:1611`), which re-derives height from animated state (`collapse_frac()`, `animated_drawer_height()`) instead of the laid-out rect. Mid-tween, hit-test geometry disagrees with the screen. Two parallel implementations (`compute_height_effect` `param_card.rs:1618`, `compute_height_generator` `param_card.rs:1690`) must each mirror the build draw loop exactly — BUG-108 was already this exact drift, and the param-drawer unification (b0124dc3) added more animated height to keep in sync.
+The same loop uses `card.compute_height()` (`param_card.rs:1611`), which re-derives height from animated state (`collapse_frac()`, `animated_drawer_height()`) instead of the laid-out rect. Mid-tween, hit-test geometry disagrees with the screen. Two parallel implementations (`compute_height_effect` `param_card.rs:1618`, `compute_height_generator` `param_card.rs:1690`) must each mirror the build draw loop exactly — BUG-108 was already this exact drift, and the param-drawer unification added more animated height to keep in sync.
 
 ### Root cause 3 (latent): drop-index assumes contiguous tail
 
@@ -67,9 +67,9 @@ One vec keyed by scope (or one vec + scope field on the card). Mechanical but wi
 1. **Auto-scroll during card drag.** `update_card_drag` clamps the ghost to the viewport but never scrolls; long effect lists are unreachable drop targets. Edge-proximity scroll while `card_drag_active`; the in-place scroll path already exists.
 2. **Multi-select drop footprint.** Multi drags dim all selected cards but show a single 2px insertion line (`DRAG_INDICATOR_H`, inspector.rs:93). Size/tint the gap for the group.
 3. **No drag cancel.** `end_card_drag` always reorders unless a perfect no-op (inspector.rs:1801-1805). Esc-to-cancel or drop-outside-cancels is nearly free.
-4. **Geometry unit tests.** Cursor-Y → target-index is pure math; test scrolled / animating / mixed-height layouts. This is the missing "breaks every time we touch it" detector. Same for pin survival across add-effect. Note BUG-263: no app-level harness for gesture paths — unit level may be the only cheap option.
+4. **Geometry unit tests.** Cursor-Y → target-index is pure math; test scrolled / animating / mixed-height layouts. This is the missing "breaks every time we touch it" detector. Same for pin survival across add-effect. Note BUG-263 (no-app-level-harness-for-pending-actions-gesture…): no app-level harness for gesture paths — unit level may be the only cheap option.
 
 ## Verification notes
 
 - Read-only investigation; root causes confirmed by code reading, not yet reproduced on screen. A headless repro (scroll → drag → indicator offset = scroll delta) would confirm before fixing.
-- BUG-108 (compute_height drift) and the b0124dc3 param-drawer unification are the relevant prior art.
+- BUG-108 (compute_height drift) and the param-drawer unification are the relevant prior art.

@@ -493,7 +493,7 @@ fn n2_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f
     let out_rgb = mix(a.rgb, blended, amount);
     // Branchless on purpose: an `if` here compiles differently in fused vs
     // standalone kernel contexts (FMA regrouping) and broke the fp32
-    // bit-exact proof (precision contract §7.1's "match the exact arithmetic
+    // bit-exact proof (precision contract section 7.1's "match the exact arithmetic
     // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
     // IS alpha pass-through, in the original instruction shape.
     let t_a = select(0.0, amount, mode == 0u);
@@ -638,7 +638,7 @@ fn n5_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f
     let out_rgb = mix(a.rgb, blended, amount);
     // Branchless on purpose: an `if` here compiles differently in fused vs
     // standalone kernel contexts (FMA regrouping) and broke the fp32
-    // bit-exact proof (precision contract §7.1's "match the exact arithmetic
+    // bit-exact proof (precision contract section 7.1's "match the exact arithmetic
     // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
     // IS alpha pass-through, in the original instruction shape.
     let t_a = select(0.0, amount, mode == 0u);
@@ -1197,7 +1197,7 @@ fn n5_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f
     let out_rgb = mix(a.rgb, blended, amount);
     // Branchless on purpose: an `if` here compiles differently in fused vs
     // standalone kernel contexts (FMA regrouping) and broke the fp32
-    // bit-exact proof (precision contract §7.1's "match the exact arithmetic
+    // bit-exact proof (precision contract section 7.1's "match the exact arithmetic
     // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
     // IS alpha pass-through, in the original instruction shape.
     let t_a = select(0.0, amount, mode == 0u);
@@ -1325,7 +1325,7 @@ fn n2_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f
     let out_rgb = mix(a.rgb, blended, amount);
     // Branchless on purpose: an `if` here compiles differently in fused vs
     // standalone kernel contexts (FMA regrouping) and broke the fp32
-    // bit-exact proof (precision contract §7.1's "match the exact arithmetic
+    // bit-exact proof (precision contract section 7.1's "match the exact arithmetic
     // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
     // IS alpha pass-through, in the original instruction shape.
     let t_a = select(0.0, amount, mode == 0u);
@@ -1559,7 +1559,7 @@ fn n2_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f
     let out_rgb = mix(a.rgb, blended, amount);
     // Branchless on purpose: an `if` here compiles differently in fused vs
     // standalone kernel contexts (FMA regrouping) and broke the fp32
-    // bit-exact proof (precision contract §7.1's "match the exact arithmetic
+    // bit-exact proof (precision contract section 7.1's "match the exact arithmetic
     // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
     // IS alpha pass-through, in the original instruction shape.
     let t_a = select(0.0, amount, mode == 0u);
@@ -1760,7 +1760,7 @@ fn n2_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f
     let out_rgb = mix(a.rgb, blended, amount);
     // Branchless on purpose: an `if` here compiles differently in fused vs
     // standalone kernel contexts (FMA regrouping) and broke the fp32
-    // bit-exact proof (precision contract §7.1's "match the exact arithmetic
+    // bit-exact proof (precision contract section 7.1's "match the exact arithmetic
     // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
     // IS alpha pass-through, in the original instruction shape.
     let t_a = select(0.0, amount, mode == 0u);
@@ -1915,7 +1915,7 @@ fn n4_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f
     let out_rgb = mix(a.rgb, blended, amount);
     // Branchless on purpose: an `if` here compiles differently in fused vs
     // standalone kernel contexts (FMA regrouping) and broke the fp32
-    // bit-exact proof (precision contract §7.1's "match the exact arithmetic
+    // bit-exact proof (precision contract section 7.1's "match the exact arithmetic
     // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
     // IS alpha pass-through, in the original instruction shape.
     let t_a = select(0.0, amount, mode == 0u);
@@ -2014,7 +2014,7 @@ fn n2_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f
     let out_rgb = mix(a.rgb, blended, amount);
     // Branchless on purpose: an `if` here compiles differently in fused vs
     // standalone kernel contexts (FMA regrouping) and broke the fp32
-    // bit-exact proof (precision contract §7.1's "match the exact arithmetic
+    // bit-exact proof (precision contract section 7.1's "match the exact arithmetic
     // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
     // IS alpha pass-through, in the original instruction shape.
     let t_a = select(0.0, amount, mode == 0u);
@@ -2138,7 +2138,7 @@ fn n2_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f
     let out_rgb = mix(a.rgb, blended, amount);
     // Branchless on purpose: an `if` here compiles differently in fused vs
     // standalone kernel contexts (FMA regrouping) and broke the fp32
-    // bit-exact proof (precision contract §7.1's "match the exact arithmetic
+    // bit-exact proof (precision contract section 7.1's "match the exact arithmetic
     // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
     // IS alpha pass-through, in the original instruction shape.
     let t_a = select(0.0, amount, mode == 0u);
@@ -2262,7 +2262,7 @@ fn n2_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f
     let out_rgb = mix(a.rgb, blended, amount);
     // Branchless on purpose: an `if` here compiles differently in fused vs
     // standalone kernel contexts (FMA regrouping) and broke the fp32
-    // bit-exact proof (precision contract §7.1's "match the exact arithmetic
+    // bit-exact proof (precision contract section 7.1's "match the exact arithmetic
     // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
     // IS alpha pass-through, in the original instruction shape.
     let t_a = select(0.0, amount, mode == 0u);
@@ -2397,7 +2397,7 @@ fn n4_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f
     let out_rgb = mix(a.rgb, blended, amount);
     // Branchless on purpose: an `if` here compiles differently in fused vs
     // standalone kernel contexts (FMA regrouping) and broke the fp32
-    // bit-exact proof (precision contract §7.1's "match the exact arithmetic
+    // bit-exact proof (precision contract section 7.1's "match the exact arithmetic
     // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
     // IS alpha pass-through, in the original instruction shape.
     let t_a = select(0.0, amount, mode == 0u);
@@ -2557,7 +2557,7 @@ fn n3_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f
     let out_rgb = mix(a.rgb, blended, amount);
     // Branchless on purpose: an `if` here compiles differently in fused vs
     // standalone kernel contexts (FMA regrouping) and broke the fp32
-    // bit-exact proof (precision contract §7.1's "match the exact arithmetic
+    // bit-exact proof (precision contract section 7.1's "match the exact arithmetic
     // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
     // IS alpha pass-through, in the original instruction shape.
     let t_a = select(0.0, amount, mode == 0u);
@@ -2807,7 +2807,7 @@ fn n4_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f
     let out_rgb = mix(a.rgb, blended, amount);
     // Branchless on purpose: an `if` here compiles differently in fused vs
     // standalone kernel contexts (FMA regrouping) and broke the fp32
-    // bit-exact proof (precision contract §7.1's "match the exact arithmetic
+    // bit-exact proof (precision contract section 7.1's "match the exact arithmetic
     // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
     // IS alpha pass-through, in the original instruction shape.
     let t_a = select(0.0, amount, mode == 0u);
@@ -2852,7 +2852,7 @@ fn n9_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f
     let out_rgb = mix(a.rgb, blended, amount);
     // Branchless on purpose: an `if` here compiles differently in fused vs
     // standalone kernel contexts (FMA regrouping) and broke the fp32
-    // bit-exact proof (precision contract §7.1's "match the exact arithmetic
+    // bit-exact proof (precision contract section 7.1's "match the exact arithmetic
     // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
     // IS alpha pass-through, in the original instruction shape.
     let t_a = select(0.0, amount, mode == 0u);
@@ -2865,7 +2865,7 @@ fn n10_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: 
     let out_rgb = mix(a.rgb, blended, amount);
     // Branchless on purpose: an `if` here compiles differently in fused vs
     // standalone kernel contexts (FMA regrouping) and broke the fp32
-    // bit-exact proof (precision contract §7.1's "match the exact arithmetic
+    // bit-exact proof (precision contract section 7.1's "match the exact arithmetic
     // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
     // IS alpha pass-through, in the original instruction shape.
     let t_a = select(0.0, amount, mode == 0u);
@@ -2962,7 +2962,7 @@ fn n1_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f
     let out_rgb = mix(a.rgb, blended, amount);
     // Branchless on purpose: an `if` here compiles differently in fused vs
     // standalone kernel contexts (FMA regrouping) and broke the fp32
-    // bit-exact proof (precision contract §7.1's "match the exact arithmetic
+    // bit-exact proof (precision contract section 7.1's "match the exact arithmetic
     // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
     // IS alpha pass-through, in the original instruction shape.
     let t_a = select(0.0, amount, mode == 0u);
@@ -3657,7 +3657,7 @@ fn n3_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f
     let out_rgb = mix(a.rgb, blended, amount);
     // Branchless on purpose: an `if` here compiles differently in fused vs
     // standalone kernel contexts (FMA regrouping) and broke the fp32
-    // bit-exact proof (precision contract §7.1's "match the exact arithmetic
+    // bit-exact proof (precision contract section 7.1's "match the exact arithmetic
     // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
     // IS alpha pass-through, in the original instruction shape.
     let t_a = select(0.0, amount, mode == 0u);
@@ -3843,7 +3843,7 @@ fn n3_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f
     let out_rgb = mix(a.rgb, blended, amount);
     // Branchless on purpose: an `if` here compiles differently in fused vs
     // standalone kernel contexts (FMA regrouping) and broke the fp32
-    // bit-exact proof (precision contract §7.1's "match the exact arithmetic
+    // bit-exact proof (precision contract section 7.1's "match the exact arithmetic
     // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
     // IS alpha pass-through, in the original instruction shape.
     let t_a = select(0.0, amount, mode == 0u);
@@ -3894,7 +3894,7 @@ fn n6_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f
     let out_rgb = mix(a.rgb, blended, amount);
     // Branchless on purpose: an `if` here compiles differently in fused vs
     // standalone kernel contexts (FMA regrouping) and broke the fp32
-    // bit-exact proof (precision contract §7.1's "match the exact arithmetic
+    // bit-exact proof (precision contract section 7.1's "match the exact arithmetic
     // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
     // IS alpha pass-through, in the original instruction shape.
     let t_a = select(0.0, amount, mode == 0u);
@@ -3907,7 +3907,7 @@ fn n7_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f
     let out_rgb = mix(a.rgb, blended, amount);
     // Branchless on purpose: an `if` here compiles differently in fused vs
     // standalone kernel contexts (FMA regrouping) and broke the fp32
-    // bit-exact proof (precision contract §7.1's "match the exact arithmetic
+    // bit-exact proof (precision contract section 7.1's "match the exact arithmetic
     // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
     // IS alpha pass-through, in the original instruction shape.
     let t_a = select(0.0, amount, mode == 0u);
@@ -3924,7 +3924,7 @@ fn n9_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f
     let out_rgb = mix(a.rgb, blended, amount);
     // Branchless on purpose: an `if` here compiles differently in fused vs
     // standalone kernel contexts (FMA regrouping) and broke the fp32
-    // bit-exact proof (precision contract §7.1's "match the exact arithmetic
+    // bit-exact proof (precision contract section 7.1's "match the exact arithmetic
     // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
     // IS alpha pass-through, in the original instruction shape.
     let t_a = select(0.0, amount, mode == 0u);
@@ -5652,7 +5652,7 @@ fn n1_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f
     let out_rgb = mix(a.rgb, blended, amount);
     // Branchless on purpose: an `if` here compiles differently in fused vs
     // standalone kernel contexts (FMA regrouping) and broke the fp32
-    // bit-exact proof (precision contract §7.1's "match the exact arithmetic
+    // bit-exact proof (precision contract section 7.1's "match the exact arithmetic
     // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
     // IS alpha pass-through, in the original instruction shape.
     let t_a = select(0.0, amount, mode == 0u);
@@ -5665,7 +5665,7 @@ fn n2_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f
     let out_rgb = mix(a.rgb, blended, amount);
     // Branchless on purpose: an `if` here compiles differently in fused vs
     // standalone kernel contexts (FMA regrouping) and broke the fp32
-    // bit-exact proof (precision contract §7.1's "match the exact arithmetic
+    // bit-exact proof (precision contract section 7.1's "match the exact arithmetic
     // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
     // IS alpha pass-through, in the original instruction shape.
     let t_a = select(0.0, amount, mode == 0u);
@@ -5955,7 +5955,7 @@ fn n1_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f
     let out_rgb = mix(a.rgb, blended, amount);
     // Branchless on purpose: an `if` here compiles differently in fused vs
     // standalone kernel contexts (FMA regrouping) and broke the fp32
-    // bit-exact proof (precision contract §7.1's "match the exact arithmetic
+    // bit-exact proof (precision contract section 7.1's "match the exact arithmetic
     // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
     // IS alpha pass-through, in the original instruction shape.
     let t_a = select(0.0, amount, mode == 0u);
@@ -6179,7 +6179,7 @@ fn n2_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f
     let out_rgb = mix(a.rgb, blended, amount);
     // Branchless on purpose: an `if` here compiles differently in fused vs
     // standalone kernel contexts (FMA regrouping) and broke the fp32
-    // bit-exact proof (precision contract §7.1's "match the exact arithmetic
+    // bit-exact proof (precision contract section 7.1's "match the exact arithmetic
     // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
     // IS alpha pass-through, in the original instruction shape.
     let t_a = select(0.0, amount, mode == 0u);
@@ -6192,7 +6192,7 @@ fn n3_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f
     let out_rgb = mix(a.rgb, blended, amount);
     // Branchless on purpose: an `if` here compiles differently in fused vs
     // standalone kernel contexts (FMA regrouping) and broke the fp32
-    // bit-exact proof (precision contract §7.1's "match the exact arithmetic
+    // bit-exact proof (precision contract section 7.1's "match the exact arithmetic
     // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
     // IS alpha pass-through, in the original instruction shape.
     let t_a = select(0.0, amount, mode == 0u);
@@ -6534,7 +6534,7 @@ fn n0_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f
     let out_rgb = mix(a.rgb, blended, amount);
     // Branchless on purpose: an `if` here compiles differently in fused vs
     // standalone kernel contexts (FMA regrouping) and broke the fp32
-    // bit-exact proof (precision contract §7.1's "match the exact arithmetic
+    // bit-exact proof (precision contract section 7.1's "match the exact arithmetic
     // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
     // IS alpha pass-through, in the original instruction shape.
     let t_a = select(0.0, amount, mode == 0u);
@@ -6857,7 +6857,7 @@ fn n0_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f
     let out_rgb = mix(a.rgb, blended, amount);
     // Branchless on purpose: an `if` here compiles differently in fused vs
     // standalone kernel contexts (FMA regrouping) and broke the fp32
-    // bit-exact proof (precision contract §7.1's "match the exact arithmetic
+    // bit-exact proof (precision contract section 7.1's "match the exact arithmetic
     // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
     // IS alpha pass-through, in the original instruction shape.
     let t_a = select(0.0, amount, mode == 0u);
@@ -7204,7 +7204,7 @@ fn n2_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f
     let out_rgb = mix(a.rgb, blended, amount);
     // Branchless on purpose: an `if` here compiles differently in fused vs
     // standalone kernel contexts (FMA regrouping) and broke the fp32
-    // bit-exact proof (precision contract §7.1's "match the exact arithmetic
+    // bit-exact proof (precision contract section 7.1's "match the exact arithmetic
     // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
     // IS alpha pass-through, in the original instruction shape.
     let t_a = select(0.0, amount, mode == 0u);
@@ -7292,7 +7292,7 @@ fn n10_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: 
     let out_rgb = mix(a.rgb, blended, amount);
     // Branchless on purpose: an `if` here compiles differently in fused vs
     // standalone kernel contexts (FMA regrouping) and broke the fp32
-    // bit-exact proof (precision contract §7.1's "match the exact arithmetic
+    // bit-exact proof (precision contract section 7.1's "match the exact arithmetic
     // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
     // IS alpha pass-through, in the original instruction shape.
     let t_a = select(0.0, amount, mode == 0u);
@@ -7320,7 +7320,7 @@ fn n13_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: 
     let out_rgb = mix(a.rgb, blended, amount);
     // Branchless on purpose: an `if` here compiles differently in fused vs
     // standalone kernel contexts (FMA regrouping) and broke the fp32
-    // bit-exact proof (precision contract §7.1's "match the exact arithmetic
+    // bit-exact proof (precision contract section 7.1's "match the exact arithmetic
     // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
     // IS alpha pass-through, in the original instruction shape.
     let t_a = select(0.0, amount, mode == 0u);
@@ -7344,7 +7344,7 @@ fn n16_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: 
     let out_rgb = mix(a.rgb, blended, amount);
     // Branchless on purpose: an `if` here compiles differently in fused vs
     // standalone kernel contexts (FMA regrouping) and broke the fp32
-    // bit-exact proof (precision contract §7.1's "match the exact arithmetic
+    // bit-exact proof (precision contract section 7.1's "match the exact arithmetic
     // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
     // IS alpha pass-through, in the original instruction shape.
     let t_a = select(0.0, amount, mode == 0u);
@@ -7580,7 +7580,7 @@ fn n3_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f
     let out_rgb = mix(a.rgb, blended, amount);
     // Branchless on purpose: an `if` here compiles differently in fused vs
     // standalone kernel contexts (FMA regrouping) and broke the fp32
-    // bit-exact proof (precision contract §7.1's "match the exact arithmetic
+    // bit-exact proof (precision contract section 7.1's "match the exact arithmetic
     // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
     // IS alpha pass-through, in the original instruction shape.
     let t_a = select(0.0, amount, mode == 0u);
@@ -7614,7 +7614,7 @@ fn n5_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f
     let out_rgb = mix(a.rgb, blended, amount);
     // Branchless on purpose: an `if` here compiles differently in fused vs
     // standalone kernel contexts (FMA regrouping) and broke the fp32
-    // bit-exact proof (precision contract §7.1's "match the exact arithmetic
+    // bit-exact proof (precision contract section 7.1's "match the exact arithmetic
     // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
     // IS alpha pass-through, in the original instruction shape.
     let t_a = select(0.0, amount, mode == 0u);
@@ -8843,7 +8843,7 @@ fn n9_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f
     let out_rgb = mix(a.rgb, blended, amount);
     // Branchless on purpose: an `if` here compiles differently in fused vs
     // standalone kernel contexts (FMA regrouping) and broke the fp32
-    // bit-exact proof (precision contract §7.1's "match the exact arithmetic
+    // bit-exact proof (precision contract section 7.1's "match the exact arithmetic
     // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
     // IS alpha pass-through, in the original instruction shape.
     let t_a = select(0.0, amount, mode == 0u);
@@ -8856,7 +8856,7 @@ fn n10_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: 
     let out_rgb = mix(a.rgb, blended, amount);
     // Branchless on purpose: an `if` here compiles differently in fused vs
     // standalone kernel contexts (FMA regrouping) and broke the fp32
-    // bit-exact proof (precision contract §7.1's "match the exact arithmetic
+    // bit-exact proof (precision contract section 7.1's "match the exact arithmetic
     // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
     // IS alpha pass-through, in the original instruction shape.
     let t_a = select(0.0, amount, mode == 0u);

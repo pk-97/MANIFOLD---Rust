@@ -1,5 +1,5 @@
 //! `node.taper_mesh` — per-vertex taper of an `Array<MeshVertex>` along
-//! `axis` (MESH_DEFORM_AND_CURVE_GEOMETRY_DESIGN.md D3/D4, §3 atom table).
+//! `axis` (MESH_DEFORM_AND_CURVE_GEOMETRY_DESIGN.md D3/D4, section 3 atom table).
 //!
 //! `s(v) = mix(1, taper, clamp((coord(v) - center) / length, 0, 1) * w)`,
 //! where `coord(v)` is the vertex's coordinate along `axis` and `w` is the
@@ -265,7 +265,7 @@ mod tests {
 mod gpu_tests {
     //! Real-GPU value-level tests. No legacy predecessor to diff against —
     //! parity is against a hand-written Rust reference of the committed
-    //! formula, element-wise, per DECOMPOSING_GENERATORS.md §9.
+    //! formula, element-wise, per DECOMPOSING_GENERATORS.md section 9.
     use super::*;
 
     fn mk_vertex(pos: [f32; 3], normal: [f32; 3], uv: [f32; 2]) -> MeshVertex {

@@ -34,13 +34,13 @@ pub enum CameraMode {
 }
 
 /// Physical lens parameters rewritten by `node.camera_lens`
-/// (`docs/CAMERA_AND_LENS_DESIGN.md` §2 D4) — the one writer of this block.
+/// (`docs/CAMERA_AND_LENS_DESIGN.md` section 2 D4) — the one writer of this block.
 /// Rides the `Camera` struct so every consumer (DoF, motion blur, exposure)
 /// reads the same lens instead of duplicating four params each.
 ///
 /// This struct is CPU-only wire data, same as `Camera` itself — never
 /// serialized (`Camera` is "wire data, never serialized" per the design's
-/// §1 audit). `node.camera_lens`'s own PARAMS (which back these fields when
+/// section 1 audit). `node.camera_lens`'s own PARAMS (which back these fields when
 /// unwired) ARE serialized like any param, which is why that primitive's
 /// `f_stop` param default is a large finite sentinel rather than literally
 /// `f32::INFINITY` — `serde_json` silently encodes non-finite floats as
@@ -100,7 +100,7 @@ pub struct Camera {
     pub view: [[f32; 4]; 4],
     /// Physical lens (focus/aperture/shutter/exposure). Every builder below
     /// sets `LensParams::PINHOLE` — `node.camera_lens` is the only writer
-    /// that changes it (`docs/CAMERA_AND_LENS_DESIGN.md` §2 D4).
+    /// that changes it (`docs/CAMERA_AND_LENS_DESIGN.md` section 2 D4).
     pub lens: LensParams,
 }
 
@@ -322,7 +322,7 @@ impl Camera {
     }
 
     /// THE reference oracle for every conformance gate in the camera/lens
-    /// cluster (`docs/CAMERA_AND_LENS_DESIGN.md` §2 D2) — GPU projection
+    /// cluster (`docs/CAMERA_AND_LENS_DESIGN.md` section 2 D2) — GPU projection
     /// paths are verified against this function, never against each other
     /// or a screenshot. Projects a world-space point to a pixel coordinate
     /// in a `width x height` render target using this camera's `view_proj`.
@@ -345,7 +345,7 @@ impl Camera {
 }
 
 /// Result of [`Camera::project_to_pixel`] — the committed CPU oracle shape
-/// (`docs/CAMERA_AND_LENS_DESIGN.md` §2 D2). Every field is derived from the
+/// (`docs/CAMERA_AND_LENS_DESIGN.md` section 2 D2). Every field is derived from the
 /// same `view_proj` every GPU consumer is expected to agree with.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PixelProjection {
@@ -363,7 +363,7 @@ pub struct PixelProjection {
 }
 
 /// CPU twin of `shared/depth_common.wgsl`'s `linearize_depth`
-/// (`docs/GBUFFER_DESIGN.md` §2 D4) — the exact inverse of
+/// (`docs/GBUFFER_DESIGN.md` section 2 D4) — the exact inverse of
 /// [`crate::generators::mesh_pipeline::perspective_rh`]'s depth mapping
 /// (`range = far / (near - far)`). Both implementations MUST stay
 /// bit-for-bit the same formula (I3's unit test checks them against the
@@ -639,7 +639,7 @@ mod tests {
 
     #[test]
     fn linearize_depth_is_the_exact_perspective_rh_inverse() {
-        // I3 (GBUFFER_DESIGN.md §2 D4): `linearize_depth` must invert
+        // I3 (GBUFFER_DESIGN.md section 2 D4): `linearize_depth` must invert
         // `perspective_rh`'s depth mapping exactly — checked against the
         // SAME oracle (`Camera::project_to_pixel`) every other conformance
         // gate in this cluster uses, at 5 depths spanning the near/far
@@ -684,7 +684,7 @@ mod tests {
         assert!((ortho[2][3] - 0.0).abs() < 1e-5);
     }
 
-    // ===== LensParams (CAMERA_AND_LENS_DESIGN.md §2 D4, P2) =====
+    // ===== LensParams (CAMERA_AND_LENS_DESIGN.md section 2 D4, P2) =====
 
     #[test]
     fn pinhole_lens_is_neutral_per_committed_field_semantics() {

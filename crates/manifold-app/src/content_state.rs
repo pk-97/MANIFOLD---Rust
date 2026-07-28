@@ -231,7 +231,7 @@ pub struct ContentState {
     /// blit the thumbnail. Empty unless the editor enabled the atlas.
     pub node_atlas_layout: Vec<(manifold_core::NodeId, u32)>,
     /// `(clip_id, filmstrip_cell_index, atlas_cell_index)` for the timeline
-    /// clip-thumbnail **filmstrip** atlas (§24 5c-2). Each clip owns one entry per
+    /// clip-thumbnail **filmstrip** atlas (section 24 5c-2). Each clip owns one entry per
     /// captured filmstrip cell (bar / bar-group); the timeline tiles them across the
     /// clip body. Empty when no clips currently hold a thumbnail.
     pub clip_atlas_layout: Vec<(manifold_core::ClipId, u32, u32)>,
@@ -239,7 +239,7 @@ pub struct ContentState {
     /// Automation-lane override latches active this frame — runtime-only
     /// state (`manifold_playback::automation::AutomationLatches`, owned by
     /// `PlaybackEngine`, never part of `Project`/serialized; see
-    /// `docs/AUTOMATION_LANES_DESIGN.md` §4). Copied each tick from
+    /// `docs/AUTOMATION_LANES_DESIGN.md` section 4). Copied each tick from
     /// `PlaybackEngine::automation_latches()`, mirroring how other runtime-only
     /// playback state (e.g. `audio_send_levels`) reaches the UI thread — lane
     /// *data* itself needs no such copy since it lives on `PresetInstance` and
@@ -250,7 +250,7 @@ pub struct ContentState {
     /// only wires the data through.
     pub automation_latched_params: Vec<(EffectId, ParamId)>,
 
-    /// Global Automation Arm state (§5) — runtime-only, owned by
+    /// Global Automation Arm state (section 5) — runtime-only, owned by
     /// `PlaybackEngine`, copied each tick from `PlaybackEngine::
     /// automation_armed()` exactly like `automation_latched_params` above.
     /// Drives the transport-bar arm button's lit/unlit state (P4).

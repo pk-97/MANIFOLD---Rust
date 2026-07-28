@@ -1,4 +1,4 @@
-// node.gradient_map — fusable body (freeze §12). Maps input luminance to a
+// node.gradient_map — fusable body (freeze section 12). Maps input luminance to a
 // two-stop gradient (color_a at luma 0 -> color_b at luma 1), preserving
 // input coverage (premultiplied alpha in/out). Matches color_ramp.wgsl
 // exactly. PARAMS: [color_a, color_b], each a Color param expanded to four

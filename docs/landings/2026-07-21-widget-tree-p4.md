@@ -4,7 +4,7 @@
 
 ## What landed — and what turned out not to need landing
 
-**The consolidation was already done.** The lane verified (rather than assumed) each dual-edit target and found the effect/generator twins were collapsed over `GraphParamTarget` by `79905d63` (2026-06-08, "unify all UI dispatch arms") — a month before the design's audit. The design doc's §1 transcription-#4 row is now corrected in place. `resolve_param_range` already reads the manifest slot spec. Zero `ParamCardKind::` forks in `ui_bridge/inspector.rs` (negative gate quoted in lane report).
+**The consolidation was already done.** The lane verified (rather than assumed) each dual-edit target and found the effect/generator twins were collapsed over `GraphParamTarget` by `79905d63` (2026-06-08, "unify all UI dispatch arms") — a month before the design's audit. The design doc's section 1 transcription-#4 row is now corrected in place. `resolve_param_range` already reads the manifest slot spec. Zero `ParamCardKind::` forks in `ui_bridge/inspector.rs` (negative gate quoted in lane report).
 
 **What did land: the `row_dispatch` Harness family (closing P2's owed gaps #2/#3)** — 14 bridge-level tests, each `PanelAction` dispatched against BOTH a master-effect and a layer-effect target through the real `dispatch_inspector` path (via the editor-context entry, real production code), commands executed + undone through a real `EditingService`. This is the standing "fixed for Master, forgot Layer" detector. Two real semantics discovered and pinned as such, not forced symmetric:
 - `EnvelopeToggle` on a MASTER effect is intentionally inert (effects are clip-timed; documented no-op) — pinned as a zero-commands assertion.

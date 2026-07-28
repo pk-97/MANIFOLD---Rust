@@ -1,4 +1,4 @@
-// node.convolution_2d_9tap — fusable body (freeze §12), GATHER. General 3×3
+// node.convolution_2d_9tap — fusable body (freeze section 12), GATHER. General 3×3
 // non-separable convolution with a uniform-supplied kernel. `in` is gathered at
 // the 9 neighbours (row-major k0..k8, k4 = centre; texel = 1/dims recovered from
 // the ambient dims). normalise=1 divides by sum(weights); bias is added; alpha

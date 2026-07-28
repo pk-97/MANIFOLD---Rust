@@ -41,6 +41,11 @@ SCHEMA_VERSION = 1
 GATE_TIMEOUT_S = 300
 TAIL_LINES = 20
 
+# After this many consecutive red per-lane runs on a task, the lane's job
+# flips from "fix it" to "report blocked": a clear blocked report is a
+# successful lane outcome; retrying past this point breeds gate-gaming.
+FAIL_STREAK_LIMIT = 3
+
 REPO = Path(__file__).resolve().parent.parent
 VERDICTS_DIR = Path(
     os.environ.get("GATE_RUNNER_VERDICTS_DIR")
@@ -52,13 +57,14 @@ VERDICTS_DIR = Path(
 MAIN_CHECKOUT = Path("/Users/peterkiemann/MANIFOLD - Rust")
 DEFAULT_LITELLM_URL = "http://127.0.0.1:4000/health/liveliness"
 
-# Load slot-to-model mapping from the naming guard (single source of truth)
+# Slot labels from the naming guard (single source of truth) — the guard
+# derives them from the session env, so gate_runner sees the same map the
+# spawn-time hook will enforce.
 _GUARD_PATH = REPO / ".claude" / "hooks" / "agent-teammate-naming-guard.py"
 _guard_spec = importlib.util.spec_from_file_location("_naming_guard", str(_GUARD_PATH))
 _guard_mod = importlib.util.module_from_spec(_guard_spec)
 _guard_spec.loader.exec_module(_guard_mod)
-SLOT_FOR_MODEL = _guard_mod.SLOT_FOR_MODEL
-VALID_SLOTS = sorted(set(SLOT_FOR_MODEL.values()))
+VALID_SLOTS = sorted({label for _b, label in _guard_mod.slot_map().values()})
 
 SECTION_LABEL = re.compile(r"^\s*-?\s*\*\*[A-Z][A-Za-z/-]+\**\s*:")
 GATE_HEADING = re.compile(r"^\s*-?\s*\*{0,2}Gate\*{0,2}\s*:")
@@ -292,6 +298,170 @@ def scope_from_git(commit, brief_text):
         return empty
 
 
+# ---------------------------------------------------------------------------
+# Gaming scan — green earned by weakening the gate is not green
+# ---------------------------------------------------------------------------
+
+_ASSERT_RE = re.compile(r"\b(?:debug_)?assert(?:_eq|_ne|_matches)?!\s*[(\[]")
+_TEST_ATTR_RE = re.compile(r"#\[\s*(?:tokio::)?test\s*[\](]")
+_ALLOW_RE = re.compile(r"#!?\[\s*(?:cfg_attr\s*\([^,]+,\s*)?allow\s*\(")
+_IGNORE_RE = re.compile(r"#\[\s*ignore\b")
+
+
+def scan_gaming(diff_text):
+    """Scan a unified diff for gate-gaming signals. Returns gate entries.
+
+    A flash-tier lane under a red gate will make it green the cheap way
+    without malice: delete the failing assertion, #[ignore] the test, add an
+    #[allow] to silence clippy. Each signal below turns the verdict red so
+    the lane stops and reports instead. Legitimate cases exist (refactors,
+    justified suppressions) — they go through the lead with a reason, which
+    is exactly the review the signal exists to force.
+
+      removed-asserts  net loss of assert!/assert_eq!/... lines
+      removed-tests    net loss of #[test] attributes
+      added-allow      any added #[allow(/#![allow( lint suppression
+      added-ignore     any added #[ignore] attribute
+    """
+    counts = {
+        "removed-asserts": [0, 0],  # [removed, added]
+        "removed-tests": [0, 0],
+        "added-allow": [0, 0],
+        "added-ignore": [0, 0],
+    }
+    in_rust = False
+    for line in diff_text.split("\n"):
+        if line.startswith("+++"):
+            # All four signals are Rust constructs; scanning non-Rust hunks
+            # trips on pattern text quoted in scripts/docs (self-reference).
+            in_rust = line.rstrip().endswith(".rs")
+            continue
+        if line.startswith("---"):
+            continue
+        if not in_rust:
+            continue
+        if line.startswith("+"):
+            idx = 1
+        elif line.startswith("-"):
+            idx = 0
+        else:
+            continue
+        body = line[1:]
+        if _ASSERT_RE.search(body):
+            counts["removed-asserts"][idx] += 1
+        if _TEST_ATTR_RE.search(body):
+            counts["removed-tests"][idx] += 1
+        if _ALLOW_RE.search(body):
+            counts["added-allow"][idx] += 1
+        if _IGNORE_RE.search(body):
+            counts["added-ignore"][idx] += 1
+
+    entries = []
+    checks = [
+        ("removed-asserts",
+         counts["removed-asserts"][0] > counts["removed-asserts"][1],
+         f"{counts['removed-asserts'][0]} assert lines removed, "
+         f"{counts['removed-asserts'][1]} added"),
+        ("removed-tests",
+         counts["removed-tests"][0] > counts["removed-tests"][1],
+         f"{counts['removed-tests'][0]} #[test] removed, "
+         f"{counts['removed-tests'][1]} added"),
+        ("added-allow",
+         counts["added-allow"][1] > 0,
+         f"{counts['added-allow'][1]} lint suppression(s) added"),
+        ("added-ignore",
+         counts["added-ignore"][1] > 0,
+         f"{counts['added-ignore'][1]} #[ignore] added"),
+    ]
+    for name, tripped, detail in checks:
+        if tripped:
+            entries.append({
+                "cmd": f"gaming: {name}",
+                "exit": 1,
+                "duration_s": 0.0,
+                "tail": f"{detail} — stop and report; the lead reviews this "
+                        "with your reason, the gate does not accept it silently",
+            })
+    if not entries:
+        entries.append({
+            "cmd": "gaming: scan",
+            "exit": 0,
+            "duration_s": 0.0,
+            "tail": "no gaming signals in diff",
+        })
+    return entries
+
+
+def _diff_for_commit(commit):
+    """Unified diff merge-base(origin/main, commit)..commit, or None.
+
+    Worktrees share the object store, so lane commits resolve from here.
+    No commit or any git failure → None (scan skipped, like empty scope)."""
+    if not commit:
+        return None
+    try:
+        mb = subprocess.run(
+            ["git", "merge-base", "origin/main", commit],
+            capture_output=True, text=True, timeout=15, cwd=str(REPO),
+        )
+        if mb.returncode != 0:
+            return None
+        d = subprocess.run(
+            ["git", "diff", f"{mb.stdout.strip()}..{commit}"],
+            capture_output=True, text=True, timeout=30, cwd=str(REPO),
+        )
+        return d.stdout if d.returncode == 0 else None
+    except Exception:
+        return None
+
+
+WORKTREES_DIR = Path(
+    os.environ.get("GATE_RUNNER_WORKTREES_DIR")
+    or MAIN_CHECKOUT / ".claude" / "worktrees"
+)
+
+
+def _resolve_lane_commit(task_id):
+    """Find the lane commit for a task via its bead id (D3: trace identity).
+
+    Scans worktree slots for branches carrying commits not yet on
+    origin/main whose messages mention the task id. Exactly one slot → its
+    HEAD. None or ambiguous → None: the scan is skipped, never pointed at a
+    guessed diff (a wrong diff makes the gaming verdict a lie both ways).
+    """
+    candidates = []
+    try:
+        for slot in sorted(WORKTREES_DIR.glob("slot-*")):
+            r = subprocess.run(
+                ["git", "-C", str(slot), "log", "origin/main..HEAD",
+                 "--fixed-strings", f"--grep={task_id}", "--format=%H", "-n", "1"],
+                capture_output=True, text=True, timeout=15,
+            )
+            if r.returncode != 0 or not r.stdout.strip():
+                continue
+            head = subprocess.run(
+                ["git", "-C", str(slot), "rev-parse", "HEAD"],
+                capture_output=True, text=True, timeout=15,
+            )
+            if head.returncode == 0 and head.stdout.strip():
+                candidates.append(head.stdout.strip())
+    except Exception:
+        return None
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def _fail_streak(task_id):
+    """Count trailing consecutive failed per-lane gate verdicts for a task."""
+    streak = 0
+    for v in reversed(read_verdicts(task_id)):
+        if v.get("phase") != "per-lane" or v.get("kind") != "gate":
+            continue
+        if v.get("pass"):
+            break
+        streak += 1
+    return streak
+
+
 def cmd_per_lane(args):
     """Run gate commands from the brief and append a per-lane verdict."""
     brief_path = Path(args.brief)
@@ -316,6 +486,30 @@ def cmd_per_lane(args):
             "tail": tail,
         })
 
+    # Gaming scan: unlike scope, this IS a pass/fail input — a diff that
+    # weakened the gate to go green is a red verdict, not evidence.
+    # Commit resolution: explicit --commit, else the --branch tip, else the
+    # worktree slot whose unlanded commits name this task. Never cwd HEAD —
+    # from the main checkout that diffs main against main and scans nothing.
+    commit = args.commit
+    if not commit and args.branch:
+        try:
+            rp = subprocess.run(
+                ["git", "rev-parse", args.branch],
+                capture_output=True, text=True, timeout=15,
+            )
+            commit = rp.stdout.strip() if rp.returncode == 0 else None
+        except Exception:
+            commit = None
+    if not commit:
+        commit = _resolve_lane_commit(args.task)
+    diff_text = _diff_for_commit(commit)
+    if diff_text is not None:
+        for entry in scan_gaming(diff_text):
+            if entry["exit"] != 0:
+                all_pass = False
+            results.append(entry)
+
     # Scope is evidence for the reviewer (SCOPE_CHECK is the dispatcher's
     # opcode, IR §2), never a pass/fail input here.
     scope = scope_from_git(args.commit, brief_path.read_text())
@@ -336,6 +530,7 @@ def cmd_per_lane(args):
         "ts": datetime.now(timezone.utc).isoformat(),
     }
 
+    streak_before = _fail_streak(args.task)
     append_verdict(args.task, verdict)
 
     total = len(results)
@@ -344,6 +539,17 @@ def cmd_per_lane(args):
     for r in results:
         status = "PASS" if r["exit"] == 0 else f"FAIL (exit {r['exit']})"
         print(f"  [{status}] {r['cmd']} ({r['duration_s']}s)")
+
+    if not all_pass and streak_before + 1 >= FAIL_STREAK_LIMIT:
+        # One line so SubagentStop feedback (which selects FAIL lines)
+        # carries it back to the lane intact.
+        print(
+            f"FAIL streak {streak_before + 1} for {args.task}: stop retrying. "
+            "Your job is now a blocked report — what fails, the exact error, "
+            "what you tried, your best root-cause suspects — sent to team-lead, "
+            "then stop. A clear blocked report is a successful lane outcome; "
+            "weakening the gate to go green is not."
+        )
 
     sys.exit(0 if all_pass else 1)
 
@@ -572,8 +778,145 @@ def _check_wave_base(wave_base):
         return {"cmd": cmd_label, "exit": 1, "duration_s": duration, "tail": str(e)}
 
 
+# Enforcement hooks fail OPEN by design (a guard bug must never wedge a
+# session) — which means enforcement can evaporate silently: a hook
+# unregistered, deleted, or crashing on a changed payload shape just stops
+# firing. These two checks are the noise that fail-open lacks.
+_HOOK_SUFFIXES = ("-guard.py", "-gate.py", "-enforcer.py", "-hook.py")
+_HOOK_EXTRAS = ("preToolUseBash.py",)
+
+
+def _check_hooks_registered():
+    """Check f: every enforcement hook file is registered in settings.json,
+    and every registered hook command points at an existing file."""
+    cmd_label = "hooks registered"
+    start = time.time()
+    try:
+        hooks_dir = MAIN_CHECKOUT / ".claude" / "hooks"
+        settings = json.loads(
+            (MAIN_CHECKOUT / ".claude" / "settings.json").read_text())
+        commands = []
+        for entries in (settings.get("hooks") or {}).values():
+            for e in entries:
+                for hk in e.get("hooks", []):
+                    if hk.get("command"):
+                        commands.append(hk["command"])
+        registered_text = "\n".join(commands)
+
+        fails = []
+        for f in sorted(hooks_dir.iterdir()):
+            name = f.name
+            if name.startswith("test_"):
+                continue
+            if not (name.endswith(_HOOK_SUFFIXES) or name in _HOOK_EXTRAS):
+                continue
+            if name not in registered_text:
+                fails.append(f"{name} exists but is not registered")
+        for cmd in commands:
+            m = re.search(r"\.claude/hooks/([\w.-]+\.py)", cmd)
+            if m and not (hooks_dir / m.group(1)).is_file():
+                fails.append(f"{m.group(1)} registered but file missing")
+
+        duration = round(time.time() - start, 1)
+        if fails:
+            tail = "; ".join(fails[:6])
+            _print_check("FAIL", cmd_label, tail)
+            return {"cmd": cmd_label, "exit": 1, "duration_s": duration, "tail": tail}
+        tail = f"{len(commands)} registrations, all files present"
+        _print_check("PASS", cmd_label, tail)
+        return {"cmd": cmd_label, "exit": 0, "duration_s": duration, "tail": tail}
+    except Exception as e:
+        duration = round(time.time() - start, 1)
+        _print_check("FAIL", cmd_label, str(e))
+        return {"cmd": cmd_label, "exit": 1, "duration_s": duration, "tail": str(e)}
+
+
+def _check_hooks_fire():
+    """Check g: canary-fire worktree-guard with a synthetic main-checkout
+    edit and require the deny. Proves the deny path end to end — a hook that
+    crashes or fails open on today's payload shape goes red here, not silent."""
+    cmd_label = "hooks fire"
+    start = time.time()
+    try:
+        guard = MAIN_CHECKOUT / ".claude" / "hooks" / "worktree-guard.py"
+        payload = json.dumps({
+            "tool_name": "Edit",
+            "tool_input": {"file_path": str(MAIN_CHECKOUT / "src" / "canary.rs")},
+            "cwd": str(MAIN_CHECKOUT),
+        })
+        r = subprocess.run(
+            [sys.executable, str(guard)], input=payload,
+            capture_output=True, text=True, timeout=30,
+        )
+        duration = round(time.time() - start, 1)
+        denied = '"deny"' in r.stdout
+        if r.returncode == 0 and denied:
+            _print_check("PASS", cmd_label, "worktree-guard denied the canary edit")
+            return {"cmd": cmd_label, "exit": 0, "duration_s": duration,
+                    "tail": "worktree-guard denied the canary edit"}
+        tail = (f"worktree-guard did NOT deny the canary "
+                f"(exit {r.returncode}, stdout {r.stdout.strip()[:120]!r})")
+        _print_check("FAIL", cmd_label, tail)
+        return {"cmd": cmd_label, "exit": 1, "duration_s": duration, "tail": tail}
+    except Exception as e:
+        duration = round(time.time() - start, 1)
+        _print_check("FAIL", cmd_label, str(e))
+        return {"cmd": cmd_label, "exit": 1, "duration_s": duration, "tail": str(e)}
+
+
+_MANIFEST_PATH = MAIN_CHECKOUT / ".claude" / "hooks" / "enforcement-table.json"
+
+
+def _check_enforcement_manifest():
+    """Check h: the enforcement table (machine form of SEMANTIC_WORKFLOW_
+    PROGRAMS §3) matches reality. Hook rows: file exists AND is registered
+    in settings.json. Exit-code rows with a file: file exists. Prompt rows:
+    counted and printed — the visible soft surface the migration program
+    burns down."""
+    cmd_label = "enforcement manifest"
+    start = time.time()
+    try:
+        manifest = json.loads(_MANIFEST_PATH.read_text())
+        settings = json.loads(
+            (MAIN_CHECKOUT / ".claude" / "settings.json").read_text())
+        registered = "\n".join(
+            hk.get("command", "")
+            for entries in (settings.get("hooks") or {}).values()
+            for e in entries for hk in e.get("hooks", []))
+
+        fails, n_prompt = [], 0
+        for row in manifest.get("transitions", []):
+            kind, f = row.get("enforcement"), row.get("file")
+            if kind == "prompt":
+                n_prompt += 1
+                continue
+            if kind not in ("hook", "exit-code"):
+                fails.append(f"unknown enforcement {kind!r}: {row.get('transition')}")
+                continue
+            if f is None:
+                continue
+            if not (MAIN_CHECKOUT / f).is_file():
+                fails.append(f"{f} missing ({row.get('transition', '')[:40]})")
+            elif kind == "hook" and Path(f).name not in registered:
+                fails.append(f"{f} not registered in settings.json")
+
+        duration = round(time.time() - start, 1)
+        if fails:
+            tail = "; ".join(fails[:6])
+            _print_check("FAIL", cmd_label, tail)
+            return {"cmd": cmd_label, "exit": 1, "duration_s": duration, "tail": tail}
+        n = len(manifest.get("transitions", []))
+        tail = f"{n} rows live; {n_prompt} still prompt-enforced (soft surface)"
+        _print_check("PASS", cmd_label, tail)
+        return {"cmd": cmd_label, "exit": 0, "duration_s": duration, "tail": tail}
+    except Exception as e:
+        duration = round(time.time() - start, 1)
+        _print_check("FAIL", cmd_label, str(e))
+        return {"cmd": cmd_label, "exit": 1, "duration_s": duration, "tail": str(e)}
+
+
 def cmd_pre_wave(args):
-    """Run the five P2 pre-wave checks and append a verdict."""
+    """Run the pre-wave checks (P2 + hook liveness) and append a verdict."""
     litellm_url = os.environ.get("LITELLM_URL") or args.litellm_url or DEFAULT_LITELLM_URL
 
     print("=== pre-wave preflight ===")
@@ -583,6 +926,9 @@ def cmd_pre_wave(args):
         _check_quota(),
         _check_goldens(),
         _check_wave_base(args.base),
+        _check_hooks_registered(),
+        _check_hooks_fire(),
+        _check_enforcement_manifest(),
     ]
 
     all_pass = all(g["exit"] == 0 for g in checks)
@@ -693,7 +1039,7 @@ def _check_gates_parse(brief_path):
 
 
 def _check_slots(text):
-    """Check c: every named lane slot prefix is a valid SLOT_FOR_MODEL value.
+    """Check c: every named lane slot prefix is a valid slot label.
 
     Scans for tokens matching slot-prefix pattern, validates each against
     VALID_SLOTS (from agent-teammate-naming-guard.py).
@@ -728,8 +1074,36 @@ def _check_bead(text):
         return (1, "missing bug id")
 
 
+def _check_predecessors(requires):
+    """Check e: phase ordering — every named predecessor task has a passing
+    per-lane (or no-gate) verdict in the trail.
+
+    The deterministic-control-plane pattern (arXiv 2606.26924): starting
+    phase n fails unless phase n−1 recorded its end. Queue authors put
+    `--requires BUG-aaa,BUG-bbb` on step n's dispatch line; without it,
+    sequential queues are ordered by lead attention only (a soft row).
+    Returns (exit_code, detail)."""
+    if not requires:
+        print("  [PASS] predecessors — none declared")
+        return (0, "none declared")
+    fails = []
+    for task_id in [t.strip() for t in requires.split(",") if t.strip()]:
+        verdicts = [v for v in read_verdicts(task_id)
+                    if v.get("phase") == "per-lane"]
+        if not verdicts:
+            fails.append(f"{task_id}: no per-lane verdict in trail")
+        elif not verdicts[-1].get("pass"):
+            fails.append(f"{task_id}: latest verdict is FAIL")
+    if fails:
+        for f in fails:
+            print(f"  [FAIL] predecessor: {f}")
+        return (1, "; ".join(fails))
+    print("  [PASS] predecessors — all prior steps have passing verdicts")
+    return (0, "all predecessors green")
+
+
 def cmd_pre_dispatch(args):
-    """Run the four P3 pre-dispatch brief lint checks.
+    """Run the P3 pre-dispatch brief lint checks (+ phase ordering).
 
     Appends one schema-1 verdict to pre-dispatch.jsonl. Exits 0 iff no FAIL.
     """
@@ -746,6 +1120,7 @@ def cmd_pre_dispatch(args):
         ("gates_parse", *_check_gates_parse(brief_path)),
         ("slots", *_check_slots(text)),
         ("bead", *_check_bead(text)),
+        ("predecessors", *_check_predecessors(getattr(args, "requires", None))),
     ]
 
     verdict_gates = [
@@ -958,6 +1333,30 @@ def cmd_report(args):
     sys.exit(0)
 
 
+_DECISIONS_FILE = MAIN_CHECKOUT / ".claude" / "orchestration" / "decisions.md"
+MIN_RATIONALE_CHARS = 20
+
+
+def cmd_review(args):
+    """Record a REVIEW verdict + rationale in decisions.md.
+
+    §9's verdict-rationale field, mechanized: the runtime appends the line,
+    so recording the *why* is not model goodwill. The verdict trail stays
+    gate-only (D8) — review is a judgment record and lives with the other
+    judgment records. Refuses an empty or token rationale."""
+    rationale = (args.rationale or "").strip()
+    if len(rationale) < MIN_RATIONALE_CHARS:
+        die(f"review requires a rationale (>= {MIN_RATIONALE_CHARS} chars) — "
+            "the why is the record; 'looks good' is not a why")
+    date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    line = (f"- **REVIEW {args.verdict} ({args.by}, {date}): "
+            f"{args.subject} [{args.task}].** {rationale}\n")
+    with open(_DECISIONS_FILE, "a") as f:
+        f.write(line)
+    print(f"recorded: {line.strip()}")
+    sys.exit(0)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Gate Runtime — verdicts the machine writes",
@@ -987,7 +1386,21 @@ def main():
 
     pd = sub.add_parser("pre-dispatch", help="Run pre-dispatch brief lint (P3)")
     pd.add_argument("--brief", required=True, help="Path to brief markdown file")
+    pd.add_argument("--requires", default=None,
+                    help="Comma-separated predecessor task IDs that must have "
+                         "passing verdicts (phase ordering)")
     pd.set_defaults(func=cmd_pre_dispatch)
+
+    rv = sub.add_parser("review", help="Record a REVIEW verdict rationale in decisions.md")
+    rv.add_argument("--task", required=True, help="Task ID (BUG-xxx)")
+    rv.add_argument("--verdict", required=True,
+                    choices=["accept", "accept-with-fix", "reject"])
+    rv.add_argument("--subject", required=True,
+                    help="What was reviewed (step name, commit sha)")
+    rv.add_argument("--rationale", required=True,
+                    help=f"The why, >= {MIN_RATIONALE_CHARS} chars")
+    rv.add_argument("--by", default="lead", help="Reviewing seat (default: lead)")
+    rv.set_defaults(func=cmd_review)
 
     rp = sub.add_parser("report", help="Wave-activity report (P4 / D7)")
     rp.add_argument("--since", default=None,

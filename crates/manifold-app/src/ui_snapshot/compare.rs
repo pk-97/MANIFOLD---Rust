@@ -2,7 +2,7 @@
 //! composite it next to the app render, so the app and the design target sit
 //! side by side in one image. No pass/fail — a human-judged comparison (kept
 //! separate from any app-vs-app check, per the doc's honesty rail).
-//! See `docs/HEADLESS_UI_HARNESS.md` §5.
+//! See `docs/HEADLESS_UI_HARNESS.md` section 5.
 
 use std::path::Path;
 

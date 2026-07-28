@@ -32,7 +32,7 @@ const TOP_GAP: f32 = color::LAYER_CTRL_TOP_ROW_GAP;
 // Widths for the MIDI trigger-mode toggle and per-layer device dropdown
 // packed into the existing MIDI / CH rows (no new row, preserves TRACK_HEIGHT).
 const MODE_TOGGLE_W: f32 = 32.0;
-/// §D routing form: one fixed label column for Folder/MIDI/Channel/Device so the
+/// section D routing form: one fixed label column for Folder/MIDI/Channel/Device so the
 /// values align in a second column (wide enough for the spelled-out labels).
 const LBL_W: f32 = 52.0;
 /// Vertical gap between routing rows (Folder/MIDI/Channel/Device) — the mockup
@@ -70,7 +70,7 @@ const INSERT_LINE_H: f32 = 2.0;
 const NAME_FONT: u16 = color::FONT_SUBHEADING;
 const SMALL_FONT: u16 = color::FONT_BODY;
 const BTN_FONT: u16 = color::FONT_LABEL;
-// §K6: header controls round to the 4px chip radius (the mockup rounds every
+// section K6: header controls round to the 4px chip radius (the mockup rounds every
 // header chip the same), distinct from the 2px inspector `SMALL_RADIUS`.
 const LH_BTN_RADIUS: f32 = color::CHIP_RADIUS;
 // The M/S/L/A toggles round harder than the dropdown chips — the mockup reads
@@ -78,12 +78,12 @@ const LH_BTN_RADIUS: f32 = color::CHIP_RADIUS;
 // cluster is legible as a group of buttons rather than more dropdowns. 6 on the
 // 18px button is rounded-pill, not a full capsule (which would be 9).
 const MSL_PILL_RADIUS: f32 = 6.0;
-/// Breathing room above and below the mix→routing divider (§K). Wider than the
+/// Breathing room above and below the mix→routing divider (section K). Wider than the
 /// inter-row gap so the rule reads as a deliberate section break between the
 /// M/S/L/Blend mix row and the routing form, not just another row line.
 const MIX_DIVIDER_PAD: f32 = 10.0;
 const MIX_DIVIDER_THICK: f32 = 1.0;
-/// §19 record pulse: one breathe (dim → bright → dim) per this many seconds. A
+/// section 19 record pulse: one breathe (dim → bright → dim) per this many seconds. A
 /// calm ~1 Hz cadence — present without strobing.
 const RECORD_PULSE_PERIOD_SECS: f32 = 1.1;
 
@@ -120,7 +120,7 @@ fn led_style(led: bool, layer_color: Color32) -> UIStyle {
 
 /// The layer-card flavour of the state-button mechanic: M/S/L/A on an
 /// identity-coloured header. Off = a tonal chip (the header colour darkened); on =
-/// filled with the caller's M/S/L/A hue. Pilled (§K) — rounder than the dropdown
+/// filled with the caller's M/S/L/A hue. Pilled (section K) — rounder than the dropdown
 /// chips so M/S/L/A read as buttons, not more value pickers.
 fn state_btn(active_color: Color32, active: bool, layer_color: Color32) -> UIStyle {
     components::chip_state_style(
@@ -134,7 +134,7 @@ fn state_btn(active_color: Color32, active: bool, layer_color: Color32) -> UISty
 
 /// A header chip for the non-toggle header controls (blend, MIDI mode): the same
 /// tonal surface as `state_btn`'s off state, so every control on the coloured
-/// header shares one recessed surface (§C / §K9). The `CHIP_TEXT_INSET_X` keeps
+/// header shares one recessed surface (section C / section K9). The `CHIP_TEXT_INSET_X` keeps
 /// left-aligned value/prefix text off the chip edge (mockup `.sel`/`.blend` 7px).
 fn chip_button_style(layer_color: Color32) -> UIStyle {
     components::chip_style(
@@ -149,7 +149,7 @@ fn chip_button_style(layer_color: Color32) -> UIStyle {
 /// A routing *value* chip (Folder path, MIDI note, Channel, Device): the tonal
 /// header chip, left-aligned, with the renderer-painted dropdown caret pinned to
 /// the right edge so values read as "opens a list" — the mockup's `.sel` dropdown
-/// (§K13 / §M).
+/// (section K13 / section M).
 fn value_chip_style(layer_color: Color32) -> UIStyle {
     components::dropdown_chip_style(
         components::ChipSurface::Tonal(layer_color),
@@ -191,7 +191,7 @@ fn field_style() -> UIStyle {
 /// A routing *label* (FOLDER / MIDI / CHANNEL / DEVICE): faint, uppercase, in the
 /// fixed label column. Faint = the layer's contrast text dropped to ~70% alpha,
 /// so it stays legible on any identity hue (a flat white would wash out on a
-/// light layer colour) while reading as a secondary label (§K10 / §K12).
+/// light layer colour) while reading as a secondary label (section K10 / section K12).
 fn routing_label_style(text_clr: Color32) -> UIStyle {
     UIStyle {
         // Full contrast — same as the layer name / main control text (Peter,
@@ -226,7 +226,7 @@ fn bg_style(selected: bool, layer_color: Color32) -> UIStyle {
     }
 }
 
-/// The Record button's pulsed red at `t` seconds into recording (§19): a smooth
+/// The Record button's pulsed red at `t` seconds into recording (section 19): a smooth
 /// sine breathe between the dim and bright reds, one cycle per
 /// `RECORD_PULSE_PERIOD_SECS`. Pure — at `t=0` it sits at the midpoint, peaks
 /// bright a quarter-cycle in, troughs dim three-quarters in.
@@ -252,7 +252,7 @@ pub struct LayerInfo {
     pub is_muted: bool,
     pub is_solo: bool,
     /// Audio "analysis-only" output state: silent to master, still feeding its
-    /// send. Drives the teal `A` toggle on the audio row. See LAYER_CONTROLS §5.3.
+    /// send. Drives the teal `A` toggle on the audio row. See LAYER_CONTROLS section 5.3.
     pub analysis_only: bool,
     pub is_led: bool,
     pub parent_layer_id: Option<String>,
@@ -314,7 +314,7 @@ enum LayerControl {
     Led,
     Blend,
     /// Hairline rule under the mix row separating M/S/L/Blend from the routing
-    /// form (§K). Decoration — non-interactive, drawn over the background.
+    /// form (section K). Decoration — non-interactive, drawn over the background.
     MixDivider,
     Separator,
     Info,
@@ -517,7 +517,7 @@ fn compute_layer_row(
     // ── Button row: M | S | [L | BlendMode] ──
     // Audio layers carry only Mute / Solo here, then a Gain row and a Send row;
     // they have no LED output, blend mode, folder, clip, or MIDI controls.
-    // §B mix row: M | S | L pills with a 6px gap — a touch more air than the old
+    // section B mix row: M | S | L pills with a 6px gap — a touch more air than the old
     // 5px so the rounded toggles read as a breathing cluster, not jammed.
     const MSL_GAP: f32 = 6.0;
     let mut btn_x = pad;
@@ -555,13 +555,13 @@ fn compute_layer_row(
         return d;
     }
 
-    // §D routing form — aligned [label | value] rows (expanded-only). A fixed
+    // section D routing form — aligned [label | value] rows (expanded-only). A fixed
     // label column (LBL_W) puts every value at the same x; Channel and Device get
     // their own spelled-out rows instead of sharing one cramped line. Groups have
     // no routing.
     if !is_group {
         let right_edge = w - right_pad - RIGHT_GUTTER;
-        // §K divider: a contrast-aware rule separating the M/S/L/Blend mix row from
+        // section K divider: a contrast-aware rule separating the M/S/L/Blend mix row from
         // the routing form — the mockup's clean section break. MIX_DIVIDER_PAD of
         // breathing room above and below it (more than the inter-row gap) so it
         // reads as a deliberate break, not another row line.
@@ -576,7 +576,7 @@ fn compute_layer_row(
         let mode_x = right_edge - MODE_TOGGLE_W;
 
         // FOLDER label | folder-path value chip — video layers only (generators
-        // have no source folder). §K11: the static label sits in the label column
+        // have no source folder). section K11: the static label sits in the label column
         // (PathLabel), the interactive picker chip in the value column (Folder).
         if !is_generator {
             d.set(C::PathLabel, Rect::new(pad, y, LBL_W, BTN_H));
@@ -640,7 +640,7 @@ fn compute_audio_row(
     use LayerControl as C;
     let card_w = (w - card_x).max(1.0);
     // Analysis-only toggle on the button row after Mute/Solo (M | S | A): silent to
-    // master, still feeding the send. See `docs/LAYER_CONTROLS_DESIGN.md` §5.3.
+    // master, still feeding the send. See `docs/LAYER_CONTROLS_DESIGN.md` section 5.3.
     d.set(C::Analysis, Rect::new(btn_x, y_buttons, MS_BTN_W, BTN_H));
 
     if is_collapsed {
@@ -817,7 +817,7 @@ pub struct LayerHeaderPanel {
 
     // ── Live recording controls (in spacer area above layers) ──
     record_btn_id: Option<NodeId>,
-    /// When recording started — drives the §19 record-button breathe. `None`
+    /// When recording started — drives the section 19 record-button breathe. `None`
     /// when not recording, so the pulse costs nothing while stopped.
     recording_since: Option<Instant>,
     audio_device_label_id: Option<NodeId>,
@@ -946,7 +946,7 @@ impl LayerHeaderPanel {
             return;
         }
         self.recording_active = active;
-        // Start/stop the §19 breathe clock. `tick_record_pulse` (per-frame) takes
+        // Start/stop the section 19 breathe clock. `tick_record_pulse` (per-frame) takes
         // over the button bg while recording; clearing it here lets the static
         // active/inactive style below stand once stopped.
         self.recording_since = active.then(Instant::now);
@@ -989,7 +989,7 @@ impl LayerHeaderPanel {
         }
     }
 
-    /// Breathe the Record button red while recording (§19 — the one functional
+    /// Breathe the Record button red while recording (section 19 — the one functional
     /// motion). Driven by the per-frame `update()` tick + elapsed time, so it
     /// needs no animation subsystem; recording is never the idle state, so the
     /// app is already redrawing and a stopped recorder costs nothing here.
@@ -1077,7 +1077,7 @@ impl LayerHeaderPanel {
     /// recording-control buttons in the spacer above the layer rows. The rows
     /// themselves stay imperative (a scroll body of dragged per-layer widgets).
     fn top_chrome_view(&self) -> View {
-        const REC_PAD: f32 = color::SPACE_S; // §14.4: 6 → 4
+        const REC_PAD: f32 = color::SPACE_S; // section 14.4: 6 → 4
         const REC_BTN_H: f32 = 22.0;
         const REC_LABEL_H: f32 = 16.0;
         View::panel()
@@ -1254,7 +1254,7 @@ impl LayerHeaderPanel {
     }
 
     pub fn set_blend_mode_text(&mut self, tree: &mut UITree, index: usize, text: &str) {
-        // §M: the "BLEND" micro-label is a style prefix (`prefix_label`) painted by
+        // section M: the "BLEND" micro-label is a style prefix (`prefix_label`) painted by
         // the renderer — the live-refresh text is just the bare mode value.
         if let Some(row) = self.rows.get(index)
             && let Some(id) = row.id(LayerControl::Blend) {
@@ -1263,7 +1263,7 @@ impl LayerHeaderPanel {
     }
 
     pub fn set_midi_note_text(&mut self, tree: &mut UITree, index: usize, text: &str) {
-        // §M: the caret is a style flag (`dropdown_caret`), painted by the
+        // section M: the caret is a style flag (`dropdown_caret`), painted by the
         // renderer — the live-refresh text is just the value, no glyph to re-append.
         if let Some(row) = self.rows.get(index)
             && let Some(id) = row.id(LayerControl::MidiInput) {
@@ -1691,7 +1691,7 @@ impl LayerHeaderPanel {
                             bg_color: Color32::TRANSPARENT,
                             hover_bg_color: color::LAYER_CHEVRON_HOVER,
                             pressed_bg_color: color::LAYER_CHEVRON_PRESSED,
-                            // §K16: a selected layer's name brightens to pure white
+                            // section K16: a selected layer's name brightens to pure white
                             // (paired with the focus ring), so the selected layer
                             // reads first; otherwise the identity-contrast colour.
                             text_color: if layer.is_selected {
@@ -1819,7 +1819,7 @@ impl LayerHeaderPanel {
                     "L",
                 ),
                 C::Blend => {
-                    // §M: a dim "BLEND" micro-label prefixes the mode (the mockup's
+                    // section M: a dim "BLEND" micro-label prefixes the mode (the mockup's
                     // `<b>BLEND</b> Normal`). The label is a renderer-painted prefix
                     // (`prefix_label`/`prefix_color`), not baked into the value
                     // string — so the value reads bright and the label reads dim.
@@ -1888,7 +1888,7 @@ impl LayerHeaderPanel {
                         },
                     )
                 }
-                // §K11: the interactive element is the VALUE in the value column
+                // section K11: the interactive element is the VALUE in the value column
                 // (a dropdown chip showing the folder path + caret), the static
                 // "FOLDER" label sits in the label column. `FolderClicked` stays
                 // wired to `C::Folder`, now correctly the value chip.
@@ -2070,7 +2070,7 @@ impl LayerHeaderPanel {
                     )
                 }
             };
-            // Naming pass (UI_AUTOMATION_DESIGN.md D8/§3, high-value points only):
+            // Naming pass (UI_AUTOMATION_DESIGN.md D8/section 3, high-value points only):
             // row identity comes from the selector's `under_text` ancestor query,
             // not a per-row name string — every mute/solo chip across every layer
             // shares the same static name.
@@ -2392,7 +2392,7 @@ impl LayerHeaderPanel {
     }
 
     pub fn update(&mut self, tree: &mut UITree) {
-        // §19: breathe the Record button while recording. First, so a selection
+        // section 19: breathe the Record button while recording. First, so a selection
         // change (which early-returns below) never skips a pulse frame.
         self.tick_record_pulse(tree);
 
@@ -2623,7 +2623,7 @@ mod tests {
         }
         // Video layers should have folder routing.
         assert!(panel.rows[0].id(LayerControl::Folder).is_some());
-        // §C: clip-count line + "+ clip" / "+ new clip" buttons are removed.
+        // section C: clip-count line + "+ clip" / "+ new clip" buttons are removed.
         assert_eq!(panel.rows[0].id(LayerControl::Info), None);
         assert_eq!(panel.rows[0].id(LayerControl::NewClip), None);
         assert_eq!(panel.rows[2].id(LayerControl::AddGenClip), None);
@@ -3091,7 +3091,7 @@ mod tests {
             );
             return d;
         }
-        // §D routing form — aligned [label | value] rows (mirrors compute_layer_row
+        // section D routing form — aligned [label | value] rows (mirrors compute_layer_row
         // rect-for-rect; the equivalence gate enforces it).
         if !is_group {
             let right_edge = w - right_pad - RIGHT_GUTTER;

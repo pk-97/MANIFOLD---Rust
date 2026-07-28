@@ -683,7 +683,7 @@ impl ContentThread {
             // CLK-relayed play sets it unconditionally, and with the M4L
             // sender disabled nothing would ever consume it — enabling SYNC
             // later would then swallow the first real transport edge
-            // (CORE_ENGINE_MAP §13.12). Clear it each frame in AbletonOSC
+            // (CORE_ENGINE_MAP section 13.12). Clear it each frame in AbletonOSC
             // mode; the closed-loop machine needs no suppression flag.
             if !self.transport_controller.osc_sender_enabled {
                 self.sync_arbiter.suppress_next_transport = false;
@@ -704,7 +704,7 @@ impl ContentThread {
         }
 
         // 5c. Audio-layer playback — one kira voice per active audio clip,
-        // following the transport. See docs/AUDIO_LAYER_DESIGN.md §4.
+        // following the transport. See docs/AUDIO_LAYER_DESIGN.md section 4.
         if let Some(ref mut audio_layer_playback) = self.audio_layer_playback
             && let Some(project) = self.engine.project()
         {
@@ -723,7 +723,7 @@ impl ContentThread {
         }
 
         // 6a2. Commit any automation recording gestures that finished this
-        // tick (§5) — one undo entry per gesture, built by
+        // tick (section 5) — one undo entry per gesture, built by
         // `crate::automation::evaluate_all_automation`'s gesture-closure
         // pass inside `self.engine.tick()` above. Mirrors the percussion
         // tick just above: `&mut Project` + `&mut EditingService` handed to

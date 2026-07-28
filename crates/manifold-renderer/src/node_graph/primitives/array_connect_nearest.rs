@@ -55,10 +55,10 @@ crate::primitive! {
     role: Control,
     aliases: ["connect nearest", "array connect nearest", "nearest neighbour", "constellation"],
     boundary_reason: NonGpu,
-    // PARAM_RANGE_CONTRACT_DESIGN.md D6/§2 mechanical grant: `max_edges`
+    // PARAM_RANGE_CONTRACT_DESIGN.md D6/section 2 mechanical grant: `max_edges`
     // sizes the output array — `array_output_capacity` (this file) returns
     // `Some(max_edges)` verbatim as the allocated `edges` buffer capacity.
-    // `max_distance` was VERIFIED (P2 §2 read) and rejected: `run()` (this
+    // `max_distance` was VERIFIED (P2 section 2 read) and rejected: `run()` (this
     // file) only ever squares it into a comparison threshold — no division,
     // no degenerate collapse at 0, so it stays a display hint.
     param_contracts: [

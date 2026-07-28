@@ -1,10 +1,10 @@
 # Cinematic Post — DoF, SSAO, motion blur as graph atoms
 
-**Status:** SHIPPED (closed 2026-07-16 — Peter waived the owed P4/P5/P6 look-passes in the verification-debt burn-down; VD-020-CINEMATIC closed. Look issues from here are new BUG_BACKLOG entries. BUG-136's live-repro escalation stays open in the backlog.) — P0–P6 SHIPPED · Sonnet 5 · **P0 (D7/I6, both layers, `docs/landings/2026-07-12-cinematic-post-batch-a.md`) — derived uniforms are first-class on the texture codegen path AND in fused regions. P1+P2 (`docs/landings/2026-07-12-cinematic-post-batch-b.md`) — `node.coc_from_depth` + DoF slice, `node.ssao_from_depth` + SSAO arm. P3 (`docs/landings/2026-07-12-cinematic-post-batch-c.md`) — `node.motion_blur` tail. AMENDED 2026-07-13 (Fable, with Peter): quality verdict on the shipped stack (*"look terrible and need a lot of work... very blocky and has a hard cut off on the blur"*) → P4 escalated from optional to the DoF root fix (see the `dof-polish-wave-prompt` lane; bugs BUG-136/137/138 own the diagnosis), P5 GTAO decisions committed (D9), P6 AO denoise added (D8), PNG look-pass rule added to open phases (§4). **P4 SHIPPED 2026-07-13 (Sonnet 5, `dof-polish` worktree/branch `feat/dof-polish`)** — BUG-137's `node.coc_dilate` (standalone neighborhood-max atom) landed first, then `node.bokeh_gather` (D5's 32-tap occlusion-aware disc gather) replaced the two `variable_blur` H/V nodes, still consuming `coc_dilate`'s dilated CoC. `CinematicScene` now runs the full DoF(dilated+bokeh)+SSAO+motion-blur chain. Orchestrator before/after PNG look-pass (see BUG-137) showed the silhouette-bleed halo visibly gone; Peter's own confirmation on a richer depth-discontinuity scene was waived 2026-07-16 (verification-debt burn-down). BUG-138 (blockiness) FIXED 2026-07-13 in `node.variable_blur` itself (scales sub-tap density with CoC radius above an 8px `step_size` threshold, byte-identical below it) — the atom is no longer in `CinematicScene`'s chain but remains user-wireable elsewhere. BUG-136 (motion blur no visible effect) — the dof-polish lane ran both committed runtime probes (shutter_angle at uniform-pack, a velocity texel during a headless orbit) against the shipped `CinematicScene` graph: both check out clean every frame, and a `shutter=0` vs `shutter=181.05` headless render diff shows a real shader-level visual delta. This exonerates the graph wiring, shader math, matrix bookkeeping, derived-uniform packing, and velocity buffer end to end — the bug does not reproduce headlessly. **ESCALATED, not fixed:** the remaining suspects (UI slider-drag propagation cadence into the content-thread graph; whether the render loop ticks continuously outside active playback) live entirely in the live app's interactive layer, which this lane's headless workers cannot observe — needs either a live repro session with Peter or a design decision on which layer to instrument. **P6 SHIPPED 2026-07-13 (Sonnet 5, AO-quality lane, `feat/ao-denoise-gtao`)** — `node.bilateral_blur` (D8, MultiInputCoincident, Gather+GatherTexel) inserted between the AO node and its mix in `CinematicScene`'s `ao` group; I7's three named tests + generated-vs-hand parity all green; fusion 15→17 dispatches (bilat_v joins the mix region, bilat_h stays isolated — Gather-can't-fuse-with-producer, the design's own stated cost). Demo scene (flat plane, near-zero real occlusion) shows no visible before/after difference — an honest scene limitation, not a claim of effect; the numeric I7 tests are the actual proof. **P5 SHIPPED 2026-07-13 (Sonnet 5, same lane)** — `node.ssao_gtao` (D9(a), the committed 2-slice/4-step horizon-angle integral) replaces `node.ssao_from_depth` outright (D9(b)): old primitive file deleted, not paralleled; load-migration via `manifold_core::type_id_migration::TYPE_ID_MIGRATIONS` (the actual node-typeId choke point, `graph_loader.rs`'s `migrate_def_type_ids` — NOT `manifold-io`'s top-level `PresetInstance.effectType` walker, which doesn't reach nested graph-node typeIds) extended to also drop params the successor doesn't declare (`bias`), proven by a round-trip test; I8's four named checks green; negative `rg 'ssao_from_depth'` gate clean (doc/comment/migration-table hits only); fusion dispatch count unchanged (17 — pure retype). Before/after PNG (SSAO vs GTAO, both bilateral-denoised) shows a real visible difference: GTAO darkens the plane's silhouette edge where SSAO showed almost nothing — the expected depth-cliff sensitivity difference, within D9's stated honest cost (thin-object over-darkening). **Peter waived the P5/P6 look-pass 2026-07-16** (verification-debt burn-down; orchestrator-level PNG review had found no defects) — any look issue found in use is filed as a bug, not reopened as a gate.**
+**Status:** SHIPPED (closed 2026-07-16) — P0–P6 all landed; as-built record in section 7. Peter waived the owed P4/P5/P6 look-passes in the verification-debt burn-down (VD-020-CINEMATIC closed); any look issue from here is filed as a new BUG_BACKLOG entry, never reopened as a gate. OPEN: BUG-136 (cinematic-motion-blur-no-visible-effect) — see section 7's escalation note. · 2026-07-12**
 **Prerequisites:** P0 (this doc, D7) before P1–P4; CAMERA_AND_LENS P1+P2 and GBUFFER P1 before this P1/P2; GBUFFER P2 before this P3.
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
-**Machine-check gates (added 2026-07-13 — GRAPH_TOOLING + PARAM_RANGE_CONTRACT are live on main; this lane is their first live test):** every edited or authored preset JSON pre-flights `cargo run -p manifold-renderer --bin graph-tool -- validate <file> --kind effect|generator` (zero errors required; warnings reported verbatim in the phase report, never fixed or suppressed) and `graph-tool fusion` before/after, with the dispatch-count delta reported. Any new atom or any param-shape change regenerates the catalog (`cargo run -p manifold-renderer --bin gen_node_catalog`) in the same commit — the drift test fails otherwise. A new atom must pass `every_boundary_atom_declares_its_reason`: fusable per ADDING_PRIMITIVES §"The codegen path is mandatory", or a declared `boundary_reason:` from the taxonomy — an undeclared boundary fails the default sweep. New params: `min`/`max` are display hints and must never restrict (PARAM_RANGE_CONTRACT D3); add a `RangeContract` ONLY for a real physical bound (Index/Count/degenerate — kernel evidence cited in the curated meta-test table). Card params follow `docs/CARD_AUTHORING.md`. The landing report carries a `Tool feedback:` section — friction, false positives, unclear messages — first-live-test telemetry Peter asked for.
+**Machine-check gates (added 2026-07-13 — GRAPH_TOOLING + PARAM_RANGE_CONTRACT are live on main; this lane is their first live test):** every edited or authored preset JSON pre-flights `cargo run -p manifold-renderer --bin graph-tool -- validate <file> --kind effect|generator` (zero errors required; warnings reported verbatim in the phase report, never fixed or suppressed) and `graph-tool fusion` before/after, with the dispatch-count delta reported. Any new atom or any param-shape change regenerates the catalog (`cargo run -p manifold-renderer --bin gen_node_catalog`) in the same commit — the drift test fails otherwise. A new atom must pass `every_boundary_atom_declares_its_reason`: fusable per ADDING_PRIMITIVES section"The codegen path is mandatory", or a declared `boundary_reason:` from the taxonomy — an undeclared boundary fails the default sweep. New params: `min`/`max` are display hints and must never restrict (PARAM_RANGE_CONTRACT D3); add a `RangeContract` ONLY for a real physical bound (Index/Count/degenerate — kernel evidence cited in the curated meta-test table). Card params follow `docs/CARD_AUTHORING.md`. The landing report carries a `Tool feedback:` section — friction, false positives, unclear messages — first-live-test telemetry Peter asked for.
 
 **Companions:** [CAMERA_AND_LENS_DESIGN.md](CAMERA_AND_LENS_DESIGN.md) (`LensParams` on the Camera wire; the CPU oracle) · [GBUFFER_DESIGN.md](GBUFFER_DESIGN.md) (the depth/velocity inputs; the shared linearize helper) · [RENDERING_INFRA_V2_DESIGN.md](RENDERING_INFRA_V2_DESIGN.md) (direction: pillar 2, "our 2D graph system already excels here; the missing inputs are per-pixel depth and motion vectors") · [docs/ADDING_PRIMITIVES.md](ADDING_PRIMITIVES.md) (authoring contract; the codegen-path rule every atom here satisfies)
 
@@ -38,7 +38,7 @@ judgment, no flake surface. (Precedent: the hand-vs-generated kernel parity
 suites, e.g. `project_3d.rs::gpu_tests`; this extends the same idea from
 "two kernels agree" to "kernel agrees with committed math".)
 
-## 1. Audit — what exists (verified 2026-07-12, tip `9e537b16`)
+## 1. Audit — what exists (verified 2026-07-12)
 
 | Piece | Where | State |
 |---|---|---|
@@ -52,7 +52,7 @@ suites, e.g. `project_3d.rs::gpu_tests`; this extends the same idea from
 | Effect/generator preset JSON + checker + card surface | `assets/` presets, `check_presets` (remember: checker ≠ runtime — load smoke required) | The composition deliverable's plumbing |
 | DoF/SSAO/motion-blur/bokeh atoms | nowhere | Genuinely new: 4 atoms, all single-dispatch, all codegen-path |
 
-§2.5 audit statement (mandatory): `coc_from_depth` = genuinely new
+section 2.5 audit statement (mandatory): `coc_from_depth` = genuinely new
 (pointwise math, no existing atom computes CoC); DoF gather = **exists**
 (`variable_blur` — one wire away); `ssao_from_depth`, `motion_blur`,
 `bokeh_gather` = genuinely new (no neighborhood atom samples depth-derived
@@ -174,7 +174,7 @@ Discovered at P1 implementation start: D1 commits `coc_from_depth` to read
 `fov_y`/`near`/`far`/viewport CPU-side from the Camera wire into its
 kernel's uniform every frame — and the mechanism for exactly that,
 `DERIVED_UNIFORMS` (`n: [...]` in `primitive!`), exists **only for
-Array-output buffer atoms**. Verified anchors (tip `71a3503e`):
+Array-output buffer atoms**. Verified anchors:
 `standalone_for_spec` routes derived uniforms solely through
 `generate_standalone_buffer` (`freeze/codegen.rs:203-217`; the texture
 path `generate_standalone_ext` has no derived parameter); in fused
@@ -237,7 +237,7 @@ raw (`CinematicScene.json` wire `12.out → 13.b`, verified 2026-07-13) — 16
 hash-rotated samples per pixel with NO smoothing pass is per-pixel noise by
 construction, and every production AO implementation (SSAO or GTAO) follows
 the sampler with an edge-aware blur. We shipped the sampler without the blur.
-§2.5 audit (2026-07-13, 214 primitives surveyed): no edge-aware/bilateral
+section 2.5 audit (2026-07-13, 214 primitives surveyed): no edge-aware/bilateral
 blur exists — nearest relatives are `separable_gaussian.rs` (the axis-pair
 pattern + fixed 9-tap kernel to copy) and `gaussian_blur_variable_width.rs`
 (the two-texture-input Gather ABI to copy) — genuinely new, and
@@ -320,14 +320,14 @@ the committed math is the contract, upgrades are new decisions).
 | I3 — CoC math agrees with hand-computed values | unit test (CPU, no GPU): 5 (depth, focus, f_stop) triples → coc_px vs values computed by hand in the test source with the D1 formula |
 | I4 — All four atoms are codegen-path | existing meta-test that every `primitive!` with `wgsl_body` proves generated-vs-hand parity; plus negative gate `rg 'create_compute_pipeline\(include_str' <the four new files>` = 0 hits |
 | I5 — Presets stay loadable | `check_presets` green + load-smoke gpu_test instantiating `CinematicScene` and executing one frame (magenta-free readback: no structured errors) |
-| I6 — Derived-uniform atoms are fused == unfused, byte-identical under the precision contract (FREEZE_COMPILER_MAP §7) | freeze proof gpu_test: a graph chaining a camera-derived pointwise atom with a pointwise neighbour, fused vs unfused full-buffer byte-compare; PLUS the entire existing freeze proof suite stays green (the time-family migration in D7 touches every fused buffer sim) |
+| I6 — Derived-uniform atoms are fused == unfused, byte-identical under the precision contract (FREEZE_COMPILER_MAP section 7) | freeze proof gpu_test: a graph chaining a camera-derived pointwise atom with a pointwise neighbour, fused vs unfused full-buffer byte-compare; PLUS the entire existing freeze proof suite stays green (the time-family migration in D7 touches every fused buffer sim) |
 | I7 — `bilateral_blur` on a uniform-depth plane equals the plain 9-tap gaussian; across a depth step it does not bleed | gpu_tests (P6): `bilateral_uniform_depth_matches_gaussian` (flat synthetic depth, byte-compare vs K9 reference) + `bilateral_depth_edge_no_bleed` (step-edge depth, cross-edge contribution < 1% asserted numerically) + I1-pattern CPU-reference parity |
 | I8 — GTAO analytic sanity + migration round trip | gpu_tests (P5): `gtao_flat_plane_full_visibility` (unoccluded plane → out.r ≈ 1 within 1e-3) + `gtao_matches_cpu_reference` (I1 pattern, synthetic depth ramp) · unit test `ssao_from_depth_migrates_to_gtao` (a saved graph JSON with the old type id loads, node resolves to `node.ssao_gtao`, radius/intensity carried) · negative gate: `rg 'ssao_from_depth' crates/ assets/` → only migration-table + doc hits |
 
 ## 4. Phasing
 
-Common to all phases — **Read-back:** this doc §2 (the phase's D-decision
-whole), `docs/ADDING_PRIMITIVES.md`, `docs/DECOMPOSING_GENERATORS.md` §2.5,
+Common to all phases — **Read-back:** this doc section 2 (the phase's D-decision
+whole), `docs/ADDING_PRIMITIVES.md`, `docs/DECOMPOSING_GENERATORS.md` section 2.5,
 the precedent atom named in the phase. **Forbidden moves, all phases:**
 algorithm substitution (D2/D-math are the contract) · fused monolith
 kernels · any gate that requires looking at an image · touching tone-map
@@ -345,10 +345,8 @@ phase ends with ONE headless `render-generator-preset` PNG of
 and Peter's look-pass is the real exit. P0–P3 shipped under the old rule;
 this governs everything still open.
 
-- **P0 — derived uniforms first-class in the freeze compiler — SHIPPED
-  2026-07-12** (D7; two sessions, standalone layer `42929678` then fusion
-  layer `38d2f0f8`, both landed together in batch A `docs/landings/
-  2026-07-12-cinematic-post-batch-a.md`). Deliverables landed:
+- **P0 — derived uniforms first-class in the freeze compiler — SHIPPED**
+  (D7; batch A `docs/landings/2026-07-12-cinematic-post-batch-a.md`). Deliverables landed:
   texture-path `DERIVED_UNIFORMS` in `generate_standalone_ext` +
   CPU-struct inputs binding nothing; `install.rs`'s name whitelist +
   vec3 bail deleted, replaced by `freeze/derived_uniform_registry.rs`
@@ -361,13 +359,13 @@ this governs everything still open.
   passed) + the full `manifold-renderer --features gpu-proofs` sweep
   (1412 passed, 0 failed) + focused suite (1114 passed) + clippy — all
   independently re-run by the orchestrating session, not self-reported.
-  `docs/FREEZE_COMPILER_MAP.md` §4/§5/§9 (+ a §7 cross-reference) updated
+  `docs/FREEZE_COMPILER_MAP.md` section 4 (The cut rules — when fusion says no)/section 5 (The marker ABI)/section 9 (+ a section 7 (Precision contract (editor == stage)) cross-reference) updated
   to the new sourcing model in the same landing. Demo: none — compiler
   phase, the proofs are the demo.
 - **P1 — `coc_from_depth` + DoF slice of `CinematicScene`** — SHIPPED
-  2026-07-12 (`docs/landings/2026-07-12-cinematic-post-batch-b.md`; `focus_distance`/`f_stop`
+  (`docs/landings/2026-07-12-cinematic-post-batch-b.md`; `focus_distance`/`f_stop`
   read entirely via derived_uniforms from the Camera's lens block, no port-shadowed
-  overrides on the atom itself — cards bind to `camera_lens` directly). (one session).
+  overrides on the atom itself — cards bind to `camera_lens` directly).
   Entry: P0 landed (both layers) + CAMERA P2 + GBUFFER P1 landed (verify:
   `rg 'LensParams'` hits camera.rs; `rg 'linearize_depth'` hits shared
   header; `rg 'DERIVED_UNIFORMS' crates/manifold-renderer/src/node_graph/freeze/codegen.rs`
@@ -380,21 +378,21 @@ this governs everything still open.
   (cluster no-PNG rule). Performer gesture: `focus_distance` bound to a slow LFO — the
   rack-focus breathe; the gate exercises the binding path by driving the
   card param and asserting the CoC buffer changes accordingly.
-- **P2 — `ssao_from_depth` + SSAO arm** — SHIPPED 2026-07-12
+- **P2 — `ssao_from_depth` + SSAO arm** — SHIPPED
   (`docs/landings/2026-07-12-cinematic-post-batch-b.md`; `radius`/`intensity`/`bias`
   are ordinary atom params, not port-shadowed — D3 doesn't call for it and the
-  preset cards bind directly). (one session). Entry: GBUFFER P1.
+  preset cards bind directly). Entry: GBUFFER P1.
   Deliverables: atom per D3 (Gather), CPU reference, synthetic-ramp parity
   (I1), analytic sanity unit test (flat plane → occlusion 0 everywhere
   except bias tolerance), preset arm + `ssao_intensity`/`ssao_radius`
   cards, I5. Demo: none — L1 (cluster no-PNG rule).
   Performer gesture: `ssao_intensity` on a fader — contact weight swells.
-- **P3 — `node.motion_blur`** — SHIPPED 2026-07-12
+- **P3 — `node.motion_blur`** — SHIPPED
   (`docs/landings/2026-07-12-cinematic-post-batch-c.md`; `shutter_angle` read
   entirely via derived_uniforms from the Camera's lens block, no port-shadowed
   override on the atom itself — the card binds to `camera_lens` directly,
   matching P1/P2's precedent; `node.camera_lens` already had a working
-  port-shadowed `shutter_angle` param reserved for this). (one session). Entry: GBUFFER P2 (velocity
+  port-shadowed `shutter_angle` param reserved for this). Entry: GBUFFER P2 (velocity
   exists) + CAMERA P2 (shutter on the wire). Deliverables: atom per D4,
   CPU reference on a synthetic velocity ramp (I1), I2 zero-shutter
   identity, preset tail + `shutter_angle` card, I5. Demo: none — L1
@@ -464,7 +462,7 @@ affordance is unphased.
    16-tap deterministic single-frame budget, no thickness heuristic, no
    temporal (D9, 2026-07-13).
 10. Open phases gate numeric AND ship a looked-at PNG — the 2026-07-12
-    no-PNG directive is ended by Peter's 2026-07-13 verdict (§4 demo rule).
+    no-PNG directive is ended by Peter's 2026-07-13 verdict (section 4 demo rule).
 
 ## 6. Deferred
 
@@ -472,8 +470,40 @@ affordance is unphased.
   seeing P4's circular discs.
 - **Temporal accumulation (TAA-style noise smoothing)** — trigger: static
   SSAO/bokeh patterns visibly band on a real scene AND MetalFX work starts
-  (RENDERING_INFRA_V2 §9 owns that lane).
+  (RENDERING_INFRA_V2 section 9 owns that lane).
 - **Depth-graded fog/color (depth-driven LUT)** — one `math` graph away
   once depth is a wire; needs no design — listed so nobody writes one.
 - **Auto-focus (focus follows a target object)** — trigger: Peter asks;
   shape: a CPU atom reading a transform wire → focus_distance scalar out.
+
+## 7. As built (P0–P6)
+
+- **P0** — derived uniforms first-class in the freeze compiler, texture codegen
+  path AND fused regions (D7, both layers).
+- **P1/P2/P3** — `coc_from_depth` + DoF slice, `ssao_from_depth` + SSAO arm,
+  `node.motion_blur` tail, all per their briefs in section 4.
+- **P4 (escalated to the DoF root fix after Peter's quality verdict on the first
+  ship)** — BUG-137's `node.coc_dilate` (neighborhood-max atom) + `node.bokeh_gather`
+  (D5's 32-tap occlusion-aware disc gather) replaced the two `variable_blur` H/V
+  nodes; silhouette-bleed halo confirmed gone in before/after PNGs. BUG-138
+  (blockiness) fixed inside `node.variable_blur` itself (sub-tap density scales with
+  CoC radius above an 8px `step_size` threshold, byte-identical below) — the atom
+  left `CinematicScene`'s chain but stays user-wireable.
+- **P5** — `node.ssao_gtao` (D9's 2-slice/4-step horizon-angle integral) replaced
+  `node.ssao_from_depth` outright: old primitive deleted, load-migration through
+  `TYPE_ID_MIGRATIONS` (the graph-node typeId choke point) extended to drop params
+  the successor doesn't declare, proven by round-trip test; negative
+  `rg 'ssao_from_depth'` gate clean; fusion dispatch count unchanged.
+- **P6** — `node.bilateral_blur` (D8) inserted between AO and its mix; fusion
+  15→17 dispatches (bilat_h stays isolated — Gather-can't-fuse-with-producer, the
+  design's stated cost). The flat-plane demo scene shows no visible difference —
+  honest scene limitation; I7's numeric tests are the proof.
+- **BUG-136 escalation (OPEN):** motion blur shows no visible effect live. Both
+  committed runtime probes (shutter_angle at uniform pack, a velocity texel during
+  a headless orbit) check out clean every frame, and a shutter 0-vs-181° headless
+  render diff shows a real shader-level delta — graph wiring, shader math, matrix
+  bookkeeping, derived-uniform packing, and the velocity buffer are exonerated end
+  to end. The bug does not reproduce headlessly; remaining suspects live in the
+  interactive layer (slider-drag propagation cadence into the content-thread graph;
+  whether the render loop ticks outside active playback). Needs a live repro
+  session with Peter or a decision on which layer to instrument.

@@ -84,7 +84,7 @@ fn hot_snapshot() -> manifold_core::audio_features::AudioFeatureSnapshot {
     manifold_core::audio_features::AudioFeatureSnapshot { sends: vec![f] }
 }
 
-/// BUG-109 §7.1 item 1: P3c's per-branch `FireMeterCapture` reset ran AFTER
+/// BUG-109 section 7.1 item 1: P3c's per-branch `FireMeterCapture` reset ran AFTER
 /// `tick_playing`'s step 3b had already pushed the clip-trigger level,
 /// wiping it every playing tick. The fix moved the reset to the top of
 /// `tick()`, once, before either branch's evaluators run.
@@ -121,7 +121,7 @@ fn playing_tick_leaves_the_clip_trigger_level_in_fire_meters() {
     );
 }
 
-/// BUG-109 §7.1 item 2: while stopped, clip triggers must still push their
+/// BUG-109 section 7.1 item 2: while stopped, clip triggers must still push their
 /// shaped level (a performer tuning at soundcheck needs to see it move) but
 /// must never fire a clip.
 #[test]

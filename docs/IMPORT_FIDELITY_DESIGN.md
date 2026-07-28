@@ -1,8 +1,8 @@
 # Import Fidelity — imported PBR assets read like their authoring-tool previews
 
-**Status: SHIPPED · F-P1 + F-P3 SHIPPED 2026-07-15 (orchestrator session 1 of 3, landing report `docs/landings/2026-07-15-import-fidelity-p1p3.md`) · F-P2 + F-P4 SHIPPED 2026-07-15 (orchestrator session 2 of 3, landing report `docs/landings/2026-07-15-import-fidelity-p2p4.md`) · F-P5 SHIPPED 2026-07-15 (orchestrator session 3 of 3, landing report `docs/landings/2026-07-15-import-fidelity-p5.md`) · approved by Peter 2026-07-15 ("Approved") · authored 2026-07-15 · Fable 5 (his product calls are quoted in the intro, D7, and D8; glass/F-P5, pure-black base, and sun coherence added same day at his direction). Execution: 3 orchestrator sessions — (1) F-P1 ∥ F-P3 DONE, (2) F-P2 + F-P4 DONE, (3) F-P5 DONE — all phases shipped. · F-P6 (material-map mip pipeline) + F-P7 (softbox dome fill + rig defaults) SHIPPED 2026-07-15 (session 4, same-day fix after Peter's helmet/AMG renders exposed LOD-0 map aliasing and the metals-in-a-black-void failure; his fill/strip look pass was waived 2026-07-16 in the verification-debt burn-down — look issues from here are BUG_BACKLOG entries).**
-**Prerequisites: none — MATERIAL M1–M6, REALTIME_3D P1–P3/P8/P9, SCENE_BUILD P1–P5 and the shipped glTF assembler are all in-tree. IMPORT_DESIGN P1-remaining (lights/cameras/report surface) is independent and this doc outranks it in build order (Peter, 2026-07-15: "really critical infra").**
-**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any phase.**
+**Status: SHIPPED — F-P1–F-P7 on main 2026-07-15 (approved by Peter same day: "Approved"; glass/F-P5, pure-black base, and sun coherence added at his direction; F-P6+F-P7 were a same-day fix after his helmet/AMG renders exposed LOD-0 map aliasing and the metals-in-a-black-void failure). Peter's fill/strip look pass was waived 2026-07-16 in the verification-debt burn-down — look issues from here are BUG_BACKLOG entries. Standing residue: section 8 (As-built residue). · authored 2026-07-15 · Fable**
+**Prerequisites: none — everything this needed is in-tree. IMPORT_DESIGN P1-remaining is independent; this doc outranks it in build order (Peter, 2026-07-15: "really critical infra").**
+**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.**
 
 Peter's directives (2026-07-15, comparing an imported Mercedes-AMG GT3 .glb against
 its store-page preview): "this sounds like really critical infra that should be
@@ -20,14 +20,14 @@ conflict: `render_scene` uses the envmap for lighting only, never as background
 mostly-black environment with bright emitter strips: dramatic light streaks on dark
 metal, void stays void.
 
-Companions: `IMPORT_DESIGN.md` (owns the import funnels; its §8 tangent-space skip
+Companions: `IMPORT_DESIGN.md` (owns the import funnels; its section 8 (Addendum 2026-07-04 — material-mapping corrections + fixtures (pre-execution)) tangent-space skip
 is superseded here), `MATERIAL_SYSTEM_DESIGN.md` (M6-D5's revival trigger fired —
 this doc is the "own designed slice" it called for), `REALTIME_3D_DESIGN.md` (owns
-`render_scene`; this doc grows its per-object surface the way §10/P8 did),
+`render_scene`; this doc grows its per-object surface the way section 10/P8 did),
 `RENDER_SCENE_UNBOUNDED_LIGHTS_DESIGN.md` (precedent for a single-aspect
 render_scene doc). The pending void-haze design (bounded haze volume, Peter's go
 pending) is orthogonal and complementary — haze adds atmosphere; this doc makes the
-subject itself read correctly. Neither touches BUG-118 (fog wash — Peter: "I don't
+subject itself read correctly. Neither touches BUG-118 (render-scene-fog-washes-out-instead-of-depth-gra…) (fog wash — Peter: "I don't
 want bug-118 worked on").
 
 ---
@@ -44,10 +44,10 @@ want bug-118 worked on").
 | Shared BRDF helpers | `shaders/pbr_brdf.wgsl` | D_GGX / G_Smith / F_Schlick / equirect UV — correct and reusable; nothing IBL-specific beyond the UV mapping |
 | Envmap bake | `bake_equirect_envmap.rs:47-…` (`node.bake_environment`) | Procedural gradient studio (horizon_strength / azimuth_variation / intensity). No discrete emitters; import wires it at **intensity 0** (`gltf_import.rs:374`) — the deliberate "model on black", which also means zero IBL |
 | MeshVertex | `mesh_common.rs:34-43` | 48-byte position/normal/uv. **No tangents**; stride pinned by test + `MESH_VERTEX_SPECS` Channels signature — growing it is a workspace-wide ABI change |
-| Normal-map contract (render_mesh) | MATERIAL §11.1 / `render_3d_mesh.rs:66` | Existing `normal_map` is **world-space** (procedural heightfield chains); glTF maps are tangent-space — M6-D5 deferred them with trigger "a hero import that visibly needs them". **The trigger has fired** |
+| Normal-map contract (render_mesh) | MATERIAL section 11.1 / `render_3d_mesh.rs:66` | Existing `normal_map` is **world-space** (procedural heightfield chains); glTF maps are tangent-space — M6-D5 deferred them with trigger "a hero import that visibly needs them". **The trigger has fired** |
 | Exposure | `gltf_import.rs:396` wires `node.camera_lens` (`exposure_ev` port-shadowed) | Exposure exists; HDR→SDR happens at composite (MetallicGlass precedent). No new tone-map infra needed |
 | Texture-set / HDRI drop | `IMPORT_DESIGN.md` D5 / P4 | Already designed there — HDRI file loading is NOT this doc's scope |
-| Instancing / always-bind stub pattern | REALTIME_3D §10 D11, `render_scene.rs:874` | The precedent every new optional per-object port copies (unwired = dummy bind + flag 0 = byte-identical output) |
+| Instancing / always-bind stub pattern | REALTIME_3D section 10 D11, `render_scene.rs:874` | The precedent every new optional per-object port copies (unwired = dummy bind + flag 0 = byte-identical output) |
 
 Classification: the loader fields and importer wiring are *one wire away from
 existing* (the parse loop, texture-source atom, and port plumbing all exist);
@@ -101,7 +101,7 @@ split-sum IBL and the softbox bake mode are *genuinely new*; everything else is
   current binding table in `render_scene.rs` end-to-end before assigning indices
   (PCSS reserved 15/16-adjacent slots; Metal's 31-texture argument limit has
   ample headroom). Rejected: carrying texture refs on the Material wire
-  (MATERIAL §7 "Path B") — Material is a CPU `Copy` struct on a CPU wire;
+  (MATERIAL section 7 "Path B") — Material is a CPU `Copy` struct on a CPU wire;
   imports are machine-assembled so the "UX wart" Path B exists for never
   materialised; reopening a shipped contract for it fails dont-cascade-redesign.
   Rejected: reusing the existing single-channel `roughness_map`/`metallic_map`
@@ -173,12 +173,12 @@ split-sum IBL and the softbox bake mode are *genuinely new*; everything else is
   the void stays void. The Environment macro card keeps its 0–4 range and now
   defaults to 1.0. *Consequences, stated honestly:* existing presets are untouched
   (mode defaults to `gradient`, intensity semantics unchanged), but freshly imported
-  cards look different from pre-design imports, and — as with BUG-149's fog scaling —
+  cards look different from pre-design imports, and — as with BUG-149 (glb-import-fog-slider-per-world-unit-cliff)'s fog scaling —
   **already-imported projects need a re-import to pick up the new defaults.**
 - **D8 (added 2026-07-15, Peter: "I think it makes sense to add it") — Transparency
   v1 is a sorted per-object blend pass in `render_scene`, not order-independent
   transparency.** `AlphaMode` (MATERIAL M6-D2's enum, `material.rs`) gains a `Blend`
-  variant — the §7 "new fields/variants, defaulted, no version-break" seam; all four
+  variant — the section 7 "new fields/variants, defaulted, no version-break" seam; all four
   material atoms expose it in their existing `alpha_mode` param. `render_scene`
   splits its object list: `Blend`-material objects skip the opaque pass and every
   shadow-caster pass (a window must not throw an opaque shadow), then draw in a
@@ -224,7 +224,7 @@ split-sum IBL and the softbox bake mode are *genuinely new*; everything else is
 | Unwired new ports change nothing: a pre-design scene renders byte-identical | gpu-proof `render_scene_ibl` parity case + bundled 3D preset PNG diff (zero) — the P8 identity-parity pattern |
 | IBL responds to roughness: rough ≠ mirror | gpu-proof numeric case (F-P1 gate) — reflection gradient width ratio, no eyeballing |
 | BRDF LUT (envmap-independent) built once per device, never rebuilt | gpu-proof: dispatch-count assert, built exactly once (SHIPPED F-P1, `cddc618f`) |
-| Prefiltered specular chain + diffuse irradiance re-convolve whenever the wired envmap is present, every frame — no stale-content skip | **Corrected 2026-07-15 at F-P1 landing: this row previously said "same params → cached"; that contradicted D2's own consequence prose ("an animated envmap re-prefilters every frame — a fixed, small cost, not a correctness hazard") and was unbuildable besides — no `DataVersion`/generation-counter signal exists on `EffectNodeContext` inputs, and `bake_equirect_envmap` mutates its output texture in place every frame regardless of param change, so a pointer/size-keyed skip would treat the D7 sun-sweep gesture's animated envmap as "unchanged" and go stale (a correctness regression on the design's own showcase gesture). F-P1 built the two resources to re-convolve unconditionally per D2's prose instead; full reasoning in the F-P1 landing report. A generation-counter signal for `EffectNodeContext` is real infrastructure, deferred — see §7 Deferred #6 below.** Enforcement: `prefilter_and_irradiance_cost_is_measured_and_reported` gpu-proof reports the fixed per-frame cost as a number (3.09ms/frame measured 2026-07-15, well under the 10ms re-tune trigger). |
+| Prefiltered specular chain + diffuse irradiance re-convolve whenever the wired envmap is present, every frame — no stale-content skip | **Corrected 2026-07-15 at F-P1 landing: this row previously said "same params → cached"; that contradicted D2's own consequence prose ("an animated envmap re-prefilters every frame — a fixed, small cost, not a correctness hazard") and was unbuildable besides — no `DataVersion`/generation-counter signal exists on `EffectNodeContext` inputs, and `bake_equirect_envmap` mutates its output texture in place every frame regardless of param change, so a pointer/size-keyed skip would treat the D7 sun-sweep gesture's animated envmap as "unchanged" and go stale (a correctness regression on the design's own showcase gesture). F-P1 built the two resources to re-convolve unconditionally per D2's prose instead; full reasoning in the F-P1 landing report. A generation-counter signal for `EffectNodeContext` is real infrastructure, deferred — see section 7 Deferred #6 below.** Enforcement: `prefilter_and_irradiance_cost_is_measured_and_reported` gpu-proof reports the fixed per-frame cost as a number (3.09ms/frame measured 2026-07-15, well under the 10ms re-tune trigger). |
 | Colour space per map type never regresses | unit test on the importer's `color_space` assignments per map kind |
 | No unmapped feature is silently dropped | importer unit test: over-featured fixture → report enumerates clearcoat etc. (transmission until F-P5 lands, then it maps instead) |
 | `mode = gradient` is byte-identical legacy | gpu-proof: bake with explicit `gradient` vs build-of-record readback |
@@ -313,7 +313,7 @@ instead of reading it (`feedback_synthesis_drift`).
   bindings — the card's sun-direction macros bind to BOTH the sun `node.light`
   AND the envmap's `sun_x/y/z` (unit test asserts each sun macro carries both
   binding targets). Read-back: D5–D7;
-  `gltf_load.rs` + `gltf_import.rs` end-to-end; IMPORT_DESIGN D9/§8. Gate
+  `gltf_load.rs` + `gltf_import.rs` end-to-end; IMPORT_DESIGN D9/section 8. Gate
   (positive): unit tests — a synthetic summary with all texture kinds wires all
   ports with correct colour spaces; **held-out fixture** — Khronos DamagedHelmet
   (all five maps; CC-BY, add attribution line) imports with every map port wired
@@ -325,7 +325,7 @@ instead of reading it (`feedback_synthesis_drift`).
   look check (L4, his call, not any agent's). Gate (negative):
   report enumerates every unmapped feature of an over-featured fixture; existing
   assembler tests green; `check-presets` clean. Round-trip gate: save an imported
-  project, reload, maps still bound (BUG-036 rule). Demo: the ≤2-minute
+  project, reload, maps still bound (BUG-036 (param-manifest-construction-not-a-unified-safe-g…) rule). Demo: the ≤2-minute
   click-script for Peter — import the AMG, confirm chrome + void + glow.
 
 - **F-P5 — SHIPPED 2026-07-15, `61400029`.** Glass (sorted blend pass). D8 whole: `AlphaMode::Blend` variant +
@@ -422,7 +422,7 @@ F-P3/F-P4/F-P7 focused per the scope rule.
 ## 7. Deferred (with triggers)
 
 1. **Clearcoat lobe** (second GGX specular on `fs_pbr`, Material fields
-   `clearcoat`/`clearcoat_roughness` via the M §7 "new fields, defaulted" seam) —
+   `clearcoat`/`clearcoat_roughness` via the M section 7 "new fields, defaulted" seam) —
    trigger: a hero asset whose painted surfaces read flat after F-P1–F-P4 land.
    Peter's AMG may fire this immediately — the report line makes it visible.
    Needs typed parse (gltf crate bump or manual JSON), priced then.
@@ -459,3 +459,11 @@ F-P3/F-P4/F-P7 focused per the scope rule.
    whose report enumerates a non-default scale/strength and visibly needs it —
    fix shape is one uniform field each plus a one-line multiply in the two
    resolve functions, no ABI growth.
+
+## 8. As-built residue
+
+Folded 2026-07-28 from the three landing reports (`docs/landings/2026-07-15-import-fidelity-p1p3.md`, `…-p2p4.md`, `…-p5.md` — kept as history); this is the still-live part.
+
+- **`normal_texture.scale` / `occlusion_texture.strength` parsed but not wired end-to-end** — no shader-ABI param carries them; both held-out fixtures default to neutral values and the import report line names the gap. Tracked Deferred item (section 7 (Deferred) #7).
+- **F-P1's diffuse-irradiance gate is a generous-band sanity check**, not the originally specified uniform-white-env value-level test (the current procedural baker can't produce that env without new infra). A stricter gate needs baker infra first.
+- **F-P2 repurposed a dead binding** rather than adding a fourth; dead bindings 5/7 left in place, not renumbered.

@@ -17,7 +17,7 @@
 //! the no-fused-monolith rule the way `coc_from_depth` + `variable_blur`
 //! already do (`docs/CINEMATIC_POST_DESIGN.md` D1).
 //!
-//! §2.5 audit (`docs/DECOMPOSING_GENERATORS.md`): `rg 'purpose: "'` over
+//! section 2.5 audit (`docs/DECOMPOSING_GENERATORS.md`): `rg 'purpose: "'` over
 //! `primitives/` found no existing dilation / neighborhood-max atom for a
 //! CoC-shaped (or any single-channel mask) texture — `neighbor_smooth.rs`
 //! operates on `Array<InstanceTransform>` (a buffer of particle transforms),

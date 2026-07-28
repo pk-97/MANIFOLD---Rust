@@ -29,7 +29,7 @@ inventory::submit! {
 
 // ── Basic Shapes ───────────────────────────────────────────────────────
 //
-// First generator on the §11 unified-registry path: its schema lives
+// First generator on the section 11 unified-registry path: its schema lives
 // entirely in `assets/generator-presets/BasicShapes.json`. The JSON
 // preset's `presetMetadata` block is the canonical source of params,
 // defaults, value labels, OSC suffixes, and `legacyDiscriminant: 2`
@@ -39,7 +39,7 @@ inventory::submit! {
 
 // ── Concentric Tunnel ──────────────────────────────────────────────────
 //
-// Migrated to the §11 unified-registry path: canonical schema lives in
+// Migrated to the section 11 unified-registry path: canonical schema lives in
 // `assets/generator-presets/ConcentricTunnel.json` (line-rendered
 // concentric polygon rings via polygon_shape + concentric_outlines +
 // render_lines). The legacy SDF-based generator with Star variant is
@@ -70,7 +70,7 @@ inventory::submit! {
 
 // ── Tesseract ──────────────────────────────────────────────────────────
 //
-// Migrated to the §11 unified-registry path: canonical schema lives in
+// Migrated to the section 11 unified-registry path: canonical schema lives in
 // `assets/generator-presets/Tesseract.json` (with the new general-user
 // param names, `legacyDiscriminant: 4`, and `paramAliases` for legacy
 // `xy/zw/xw/verts/v_size/anim` names). The JSON-loaded preset
@@ -106,7 +106,7 @@ inventory::submit! {
 
 // ── Duocylinder ────────────────────────────────────────────────────────
 //
-// Migrated to the §11 unified-registry path: canonical schema lives in
+// Migrated to the section 11 unified-registry path: canonical schema lives in
 // `assets/generator-presets/Duocylinder.json`. Inventory remains as
 // fallback for non-renderer-linking crates. See Tesseract above for
 // the rationale.

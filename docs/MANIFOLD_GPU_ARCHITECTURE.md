@@ -85,8 +85,7 @@ manifold-gpu/
 Cross-platform (Mac, Windows, Linux) is a hard requirement as of 2026-07-02. The full
 design — policy decisions, API contract, hazard-tracking architecture, phasing, and
 platform-services inventory — lives in **`docs/VULKAN_BACKEND_DESIGN.md`**. Native `ash`
-Vulkan; there is no wgpu interim step (an earlier version of this section proposed one —
-superseded). Phase 0 scaffolding (`vulkan/` module, cfg-gated backend selection, shared
+Vulkan; there is no wgpu interim step. Phase 0 scaffolding (`vulkan/` module, cfg-gated backend selection, shared
 WGSL→SPIR-V pipeline) already ships in the crate.
 
 
@@ -113,14 +112,12 @@ Command Buffer 4 (compositor): Wait for layers → Blend all ───── com
 
 **CRITICAL: Command buffer commit ordering (hard-won lesson)**
 
-Metal executes command buffers from the same queue in **commit order**. Per-layer CBs read generator textures — so the generator CB MUST be committed BEFORE per-layer CBs. If generators and effects were on the same command buffer (as they were originally), per-layer CBs would be committed before the generator writes were visible, causing:
+Metal executes command buffers from the same queue in **commit order**. Per-layer CBs read generator textures — so the generator CB MUST be committed BEFORE per-layer CBs. If generators and effects were on the same command buffer, per-layer CBs would be committed before the generator writes were visible, causing:
 - Cross-layer texture contamination (effects reading stale/wrong generator output)
 - Effects appearing to not apply (reading uninitialized texture)
 - Intermittent single-frame glitches at clip boundaries where multiple layers are active
 
 The fix was splitting generators into their own CB (`gen_enc`) committed first. Per-layer CBs are committed next (Metal guarantees they see gen_enc's writes). The compositor CB is committed last and waits on all per-layer MTLEvent signals before blending.
-
-This bug was invisible with single-layer playback, required 2+ active layers with effects, and manifested as rare single-frame visual artifacts that looked like "layer bleeding." Diagnosed via eprintln instrumentation of texture pointers, clip/layer state per frame, and beat-backward detection, then confirmed by forcing the serial path (which uses a single CB and is immune to the ordering issue).
 
 **Impact:** Per-layer effect chains run concurrently. 8 layers each with 2ms effects: serial = 16ms, parallel = 2ms + compositor overhead.
 

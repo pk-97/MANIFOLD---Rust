@@ -248,7 +248,7 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
         // (`ValueRef::AudioModShape`, P-I / D4): the `AudioShapeParam` rides the
         // address, the whole shape is the restore payload.
 
-        // §9 U3: a trigger-gate row's Mode button — set `trigger_mode` on the
+        // section 9 U3: a trigger-gate row's Mode button — set `trigger_mode` on the
         // SAME `ParameterAudioMod` every other drawer edit targets (no
         // separate per-instance config, no separate command family).
         ModulationAction::AudioModSetTriggerMode(gpt, param_id, mode_idx) => {

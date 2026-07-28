@@ -11,12 +11,29 @@ from the docs each run, it cannot drift: the moment a build session flips a
 doc's status line, the next board reflects it.
 
 Usage:
-    python3 .claude/hooks/design_status.py          # print the board
-    python3 .claude/hooks/design_status.py --raw    # one line per doc, untrimmed
+    python3 .claude/hooks/design_status.py                    # print the board
+    python3 .claude/hooks/design_status.py --raw              # one line per doc, untrimmed
+    python3 .claude/hooks/design_status.py --lifecycle-check  # exit 1 on dead docs
+
+Lifecycle check (the docs-pile class fix, Peter 2026-07-28): a SHIPPED design
+doc must either be cited by a live surface (CLAUDE.md, hooks, memory, or any
+non-shipped doc — one hop, no credit for citations from other shipped docs)
+or move to docs/archive/. Liveness is recomputed every run, so a doc whose
+last citation disappears gets flagged automatically; nothing is hand-marked.
+Override for a deliberate uncited keep: a `Lifecycle: contract` line in the
+doc header. Enforced by crates/manifold-core/tests/docs_lifecycle.rs.
 
 The `last-changed` date is the drift check: a doc that says "not built" but
 was touched this week is the flag to look closer (the Haiku merge housekeeper
 automates that check; this is the human-readable view).
+
+Header budget (the status-stacking class fix, Peter 2026-07-28): a design doc's
+status header is state + owed/open items + one pointer, capped at HEADER_CAP
+words. History, amendments, and per-phase stories live in the doc body or beads.
+Docs still over budget are pinned at their current size in
+`design_status_header_budget.txt` — any growth fails, and a doc that shrinks
+under the cap must lose its pin (the ratchet only burns down). Enforced with the
+lifecycle check via crates/manifold-core/tests/docs_lifecycle.rs.
 """
 from __future__ import annotations
 
@@ -26,7 +43,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 DOCS = REPO / "docs"
-TRIM = 140  # max chars of the status line shown in grouped view
+TRIM = 100  # max chars of the status line shown in grouped view
 
 # Buckets in display order. First matching predicate wins, so order matters:
 # check the "partial / in progress" signals before the plain "shipped" signal,
@@ -119,6 +136,10 @@ def build_board(raw: bool = False) -> str:
             continue
         out.append(f"\n{label}")
         for _, name, date, status in group:
+            if b == 3:
+                # SHIPPED: the fact IS the status; the story lives in the doc.
+                out.append(f"  {name:<{width}}  {date}")
+                continue
             text = status or "(no **Status line in doc)"
             if len(text) > TRIM:
                 # Status lines append their NEWEST facts at the END (2026-07-11:
@@ -131,8 +152,124 @@ def build_board(raw: bool = False) -> str:
     return "\n".join(out)
 
 
+# Index-like docs list every doc by name; a mention there is not a citation.
+INDEX_DOCS = {"README.md", "DESIGN_BUILD_ORDER.md", "DESIGN_HARDENING_QUEUE.md"}
+
+
+def dead_shipped_docs() -> list[str]:
+    """SHIPPED design docs in docs/ top level with no live citation and no
+    `Lifecycle: contract` override. These belong in docs/archive/."""
+    docs = {p.name: p for p in DOCS.glob("*.md")}
+    shipped = set()
+    for p in DOCS.glob("*_DESIGN.md"):
+        s = status_line(p)
+        if s and bucket_of(s) == 3:
+            shipped.add(p.name)
+    live_text = (REPO / "CLAUDE.md").read_text(errors="replace")
+    live_text += "".join(p.read_text(errors="replace")
+                         for p in (REPO / ".claude/hooks").glob("*.py"))
+    mem = Path.home() / ".claude" / "projects"
+    live_text += "".join(p.read_text(errors="replace")
+                         for p in mem.glob("*/memory/*.md"))
+    live_text += "".join(docs[n].read_text(errors="replace") for n in docs
+                         if n not in shipped and n not in INDEX_DOCS)
+    dead = []
+    for n in sorted(shipped):
+        if n in live_text:
+            continue
+        header = "\n".join(docs[n].read_text(errors="replace").splitlines()[:40])
+        if "lifecycle: contract" in header.lower():
+            continue
+        dead.append(n)
+    return dead
+
+
+HEADER_CAP = 120  # words; the contract for a healthy status header
+BUDGET_FILE = Path(__file__).with_name("design_status_header_budget.txt")
+
+
+def status_paragraph_words(path: Path) -> int:
+    """Word count of the status header: every paragraph in the header region
+    (before the first `---` or `##`) that starts with a status-family bold tag
+    counts — the stacking disease appends sibling `**P5c …**` paragraphs, and a
+    line-3-only count would miss them."""
+    total, on = 0, False
+    for line in path.read_text(errors="replace").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("##") or stripped == "---":
+            break
+        core = stripped.lstrip("*#").lstrip()
+        if not on and core[:6].lower() == "status" and (len(core) == 6 or core[6] in ":* "):
+            on = True
+        elif on and not stripped:
+            on = False
+        elif not on and stripped.startswith("**") and any(
+                core.startswith(t) for t in ("P", "SHIPPED", "LANDED", "AMENDED", "Wave")):
+            on = True  # stacked sibling status paragraph
+        if on:
+            total += len(stripped.split())
+    return total
+
+
+def header_budget_failures() -> list[str]:
+    """Ratchet lint. A doc over HEADER_CAP fails unless pinned at >= its size;
+    a pinned doc that shrank under the cap fails until its pin is deleted."""
+    pins: dict[str, int] = {}
+    if BUDGET_FILE.exists():
+        for line in BUDGET_FILE.read_text().splitlines():
+            line = line.split("#")[0].strip()
+            if line:
+                name, words = line.rsplit(None, 1)
+                pins[name] = int(words)
+    fails = []
+    for p in sorted(DOCS.glob("*_DESIGN.md")):
+        words = status_paragraph_words(p)
+        pin = pins.pop(p.name, None)
+        if pin is not None and words <= HEADER_CAP:
+            fails.append(f"HEADER {p.name}: {words} words — under cap; delete its pin "
+                         f"from {BUDGET_FILE.name} (the ratchet only burns down)")
+        elif pin is not None and words > pin:
+            fails.append(f"HEADER {p.name}: {words} words, pinned at {pin} — headers "
+                         "never grow; move the new prose to the body or beads")
+        elif pin is None and words > HEADER_CAP:
+            fails.append(f"HEADER {p.name}: {words} words > {HEADER_CAP} cap — the "
+                         "status header is state + owed items + one pointer; history "
+                         "goes to the body or beads")
+    for name in pins:
+        fails.append(f"HEADER {name}: pinned in {BUDGET_FILE.name} but no such doc — delete the pin")
+    return fails
+
+
+def lifecycle_check() -> int:
+    dead = dead_shipped_docs()
+    for n in dead:
+        print(f"DEAD {n}: SHIPPED, cited by no live surface")
+    header_fails = header_budget_failures()
+    for f in header_fails:
+        print(f)
+    if dead:
+        print(f"lifecycle: FAIL — {len(dead)} shipped doc(s) with no live citation. "
+              "Either `git mv docs/<doc> docs/archive/` (+ scripts/gen_docs_index.py) "
+              "or add a `Lifecycle: contract — <why>` header line.")
+    if header_fails:
+        print(f"lifecycle: FAIL — {len(header_fails)} status header(s) over budget "
+              f"(cap {HEADER_CAP} words; ratchet file: {BUDGET_FILE.name}).")
+    if dead or header_fails:
+        return 1
+    print("lifecycle: OK")
+    return 0
+
+
 def main() -> int:
-    print(build_board(raw="--raw" in sys.argv))
+    if "--lifecycle-check" in sys.argv:
+        return lifecycle_check()
+    board = build_board(raw="--raw" in sys.argv)
+    if "--raw" not in sys.argv:
+        dead = dead_shipped_docs()
+        if dead:
+            board += (f"\n\nARCHIVE CANDIDATES — shipped, cited by nothing live "
+                      f"({len(dead)}): " + ", ".join(dead))
+    print(board)
     return 0
 
 

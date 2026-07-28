@@ -236,7 +236,7 @@ fn osc_timecode_packet_drives_seek_when_paused() {
 }
 
 /// Transport-follow: timecode arriving while stopped/paused must trigger
-/// PLAY (CORE_ENGINE_MAP §7's ported-from-Unity semantics — pinned here as
+/// PLAY (CORE_ENGINE_MAP section 7's ported-from-Unity semantics — pinned here as
 /// the wiring contract, not a claim about a live Ableton lock holding on
 /// stage).
 #[test]

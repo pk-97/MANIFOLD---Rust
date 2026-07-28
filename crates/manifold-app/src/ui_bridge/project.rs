@@ -256,7 +256,7 @@ pub(super) fn dispatch_project(
         // bundled-preset catalog default exactly like
         // `Application::watch_generator_graph` does, then dispatch the SAME
         // command a card/node-face/group-face write would — no new mutation
-        // path (§4).
+        // path (section 4).
         ProjectAction::SceneSetupParamChanged(layer_id, scope_path, node_doc_id, param_id, value) => {
             if let Some(default) = generator_catalog_default(project, layer_id) {
                 let target = manifold_core::GraphTarget::Generator(layer_id.clone());
@@ -569,7 +569,7 @@ pub(super) fn dispatch_project(
         }
         // D7 "New 3D Scene" empty-state action: assign the bundled Scene
         // Starter preset via the SAME `ChangeGeneratorTypeCommand` the
-        // browser-popup generator picker's `SetGenType` dispatches (§1 VERIFY
+        // browser-popup generator picker's `SetGenType` dispatches (section 1 VERIFY
         // marker, resolved).
         ProjectAction::SceneSetupNewScene(layer_id) => {
             let new_type = manifold_core::PresetTypeId::from_string("SceneStarter".to_string());

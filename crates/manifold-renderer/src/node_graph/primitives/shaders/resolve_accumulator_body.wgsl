@@ -1,4 +1,4 @@
-// node.resolve_accumulator — BUFFER→TEXTURE resolve body (freeze §12). Reads the
+// node.resolve_accumulator — BUFFER→TEXTURE resolve body (freeze section 12). Reads the
 // u32 fixed-point accumulator cell, divides by `fixed_point_scale`, writes a
 // grayscale density, and self-clears the cell to zero. Matches
 // resolve_accumulator.wgsl.

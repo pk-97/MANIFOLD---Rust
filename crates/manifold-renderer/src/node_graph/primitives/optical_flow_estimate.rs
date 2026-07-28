@@ -89,7 +89,7 @@ crate::primitive! {
         // A = valid_mask (0 or 1)
         //
         // Watercolor convention — R and B carry the flow components,
-        // G the confidence, A the validity. The §17 texture-channel
+        // G the confidence, A the validity. The section 17 texture-channel
         // signature catches the silent layout-mismatch class that
         // motivated this extension (consumers reading `flow_y` from
         // the wrong slot get a structured ChannelMismatch at graph
@@ -470,7 +470,7 @@ mod tests {
         assert_eq!(OpticalFlowEstimate::INPUTS[0].ty, PortType::Texture2D);
         assert_eq!(OpticalFlowEstimate::OUTPUTS.len(), 2);
         assert_eq!(OpticalFlowEstimate::OUTPUTS[0].name, "out");
-        // The output declares the Watercolor RGBA layout per §17 so
+        // The output declares the Watercolor RGBA layout per section 17 so
         // any consumer that has also migrated to a typed Texture2D
         // signature gets a structured ChannelMismatch on layout drift.
         assert_eq!(

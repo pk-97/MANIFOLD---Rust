@@ -62,7 +62,7 @@ liveliness, transients`, then `tracked_f0_hz`, then per band `pitch, presence`.
   and all file inputs). `salience_f0_hz` = memoryless P1 peak; `tracked_f0_hz` =
   the D5 tracker (NaN until first acquisition). `transients` hits exactly 1.0 on a
   fire hop, then decays ~0.85/hop.
-- Standard checks (python one-liners used throughout the 2026-07-06 review):
+- Standard checks (python one-liners):
   octave error = `12*log2(a/b)`; jump count = adjacent `tracked_f0_hz` deltas
   > 6 st; fire rate = count(`*_transients > 0.999`)/duration; on-grid % = fires
   within ±35 ms of the 8th/16th grid at the clip's BPM; presence health = mean
@@ -74,7 +74,7 @@ liveliness, transients`, then `tracked_f0_hz`, then per band `pitch, presence`.
 `P2 <scenario>:` tracker trajectory gates · `P2b:` presence gates ·
 `P2c notes:` note-based material gates · `P3:` transient fire-count gates.
 Each line prints its own bound and PASS/FAIL. **Known-failing by design as of
-2026-07-06 (post-BUG-042/043 fixes):** ONE line — `P2c notes` pitch accuracy
+2026-07-06 (post-BUG-042 (onset-settle-grab)/043 fixes):** ONE line — `P2c notes` pitch accuracy
 (87.6%, gate 90) — now owned by BUG-045 (gap-ring-down-chase), the residual
 mechanism after BUG-042's fix. Notes presence is green (100%). Everything else green is the entry state; a change that reddens any other
 line is a regression regardless of what it improves.
@@ -91,8 +91,8 @@ on real note-based basslines is effectively dark.
 |---|---|---|
 | BUG-045 gap-ring-down-chase | tracker follows the kernel ring-down 2-4 bins down in note gaps; value-trend fix direction + its knife-edge risk recorded in the entry | `notes` accuracy line (87.6/90) |
 | ~~BUG-042~~ FIXED 2026-07-06 | position-anchored re-acquire window (accelerated takeover clock); see backlog Fixed entry | notes gates + tears bass are the regression guard |
-| ~~BUG-044~~ FIXED 2026-07-06 | novelty-vs-recent-max dual onset criterion; see backlog Fixed entry | `densemix` gate + feel/apricots/tears mix fire counts |
-| ~~BUG-043~~ FIXED 2026-07-06 | apex-masked salience comb + dominance/consistency presence factors (see backlog Fixed entry) | `sub` scenario gates are the permanent regression guard |
+| ~~BUG-044 (mix-trigger-deafness)~~ FIXED 2026-07-06 | novelty-vs-recent-max dual onset criterion; see backlog Fixed entry | `densemix` gate + feel/apricots/tears mix fire counts |
+| ~~BUG-043 (deep-bass-floor-anchor)~~ FIXED 2026-07-06 | apex-masked salience comb + dominance/consistency presence factors (see backlog Fixed entry) | `sub` scenario gates are the permanent regression guard |
 
 **Floor experiment (2026-07-06, 25 clips, off vs −28 dB):** a raised analysis floor
 is a TRADE, not a win — transient sensitivity recovers on quiet stems (feel bass
@@ -110,7 +110,7 @@ never tune the floor to fix one feature without re-running the full scan.
 2. Any analysis change: selftest gates green (minus known-failing) → full 25-clip
    scan → read at least the PNGs your change should have moved AND one it shouldn't.
 3. New failure class found → new synthetic scenario that reproduces it minimally +
-   a gate, THEN fix. (That's how notes/riser/growl came to exist.)
+   a gate, THEN fix.
 4. Tuning constants: bounded candidates justified by mechanism, plateau demonstrated,
    or don't ship it (the 2026-07-06 presence formula history is the worked example).
 5. Bugs found and not fixed in-session go to BUG_BACKLOG with their oracle named.

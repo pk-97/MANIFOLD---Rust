@@ -77,7 +77,7 @@ struct ActiveVideoClip {
     time_accumulator: f32,
 }
 
-/// §24 5c-2 filmstrip walk state for a parked video clip's poster. The poster's
+/// section 24 5c-2 filmstrip walk state for a parked video clip's poster. The poster's
 /// isolated decoder is seeked to each bar's source time in turn; this tracks the
 /// per-bar source seconds and which bar the current decoded frame represents.
 struct FilmstripState {
@@ -100,12 +100,12 @@ pub struct VideoRenderer {
     height: u32,
     format: GpuTextureFormat,
     active_clips: AHashMap<ClipId, ActiveVideoClip>,
-    /// §24 5c P2b video posters: PARKED video clips decoded one-shot for a timeline
+    /// section 24 5c P2b video posters: PARKED video clips decoded one-shot for a timeline
     /// thumbnail. Reuses `ActiveVideoClip` but is NEVER advanced by `update` and
     /// NEVER composited (separate from `active_clips`) — it just holds the single
     /// decoded poster frame. Decode results route here too (`clip_state_mut`).
     poster_clips: AHashMap<ClipId, ActiveVideoClip>,
-    /// §24 5c-2: per-poster filmstrip walk state (bar source times + current bar),
+    /// section 24 5c-2: per-poster filmstrip walk state (bar source times + current bar),
     /// keyed by the same prefixed poster key as `poster_clips`. Absent for plain
     /// single-frame posters.
     poster_filmstrip: AHashMap<ClipId, FilmstripState>,
@@ -188,7 +188,7 @@ impl VideoRenderer {
         format!("\u{1}poster\u{1}{clip_id}")
     }
 
-    /// §24 5c P2b: request a one-shot POSTER decode for a PARKED video clip — its
+    /// section 24 5c P2b: request a one-shot POSTER decode for a PARKED video clip — its
     /// first frame, into an isolated render target that is NEVER composited (so a
     /// parked clip never appears in the live output). Idempotent: a clip that's
     /// active or already posted is skipped. The frame arrives asynchronously; read
@@ -243,7 +243,7 @@ impl VideoRenderer {
             .contains_key(Self::poster_key(clip_id).as_str())
     }
 
-    /// §24 5c-2: request a per-bar FILMSTRIP decode for a parked video clip. Like
+    /// section 24 5c-2: request a per-bar FILMSTRIP decode for a parked video clip. Like
     /// [`Self::request_clip_poster`] but walks the isolated decoder across
     /// `bar_times` (source seconds per filmstrip cell), so the timeline can show
     /// frames sampled across the clip's duration, not just its first frame.
@@ -670,7 +670,7 @@ impl ClipRenderer for VideoRenderer {
                 self.release_rt(clip.render_target);
             }
         }
-        // Also tear down poster decodes (§24 5c) — same Close + RT-release as active.
+        // Also tear down poster decodes (section 24 5c) — same Close + RT-release as active.
         let poster_keys: Vec<ClipId> = self.poster_clips.keys().cloned().collect();
         for key in &poster_keys {
             if let Some(clip) = self.poster_clips.remove(key.as_str()) {
@@ -864,7 +864,7 @@ impl ClipRenderer for VideoRenderer {
             clip.has_frame = false;
         }
 
-        // Posters (§24 5c) hold old-size RTs; drop them (+ close their decoders) so
+        // Posters (section 24 5c) hold old-size RTs; drop them (+ close their decoders) so
         // they re-decode at the new size on the next request. Their RTs just drop
         // (the pool was reset above).
         if !self.poster_clips.is_empty() {

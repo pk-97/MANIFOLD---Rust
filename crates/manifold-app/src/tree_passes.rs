@@ -21,7 +21,7 @@
 //! which needs `device`. Precedent: the `ui_frame.rs`/`editor_frame.rs` seam
 //! extractions themselves (`UI_HARNESS_UNIFICATION_DESIGN.md` P1/P3).
 //!
-//! ── Deviations from the design doc's §3 committed signature, found at
+//! ── Deviations from the design doc's section 3 committed signature, found at
 //! VERIFY-AT-IMPL:
 //!
 //! 1. `⚠ VERIFY-AT-IMPL (P1)` resolved as anticipated: the overlay-region
@@ -42,7 +42,7 @@ use manifold_renderer::ui_renderer::{Depth, UIRenderer};
 use crate::ui_root::UIRoot;
 
 /// Caller-resolved inputs. Every `Option` is input PRESENCE (the
-/// `HARNESS_FIDELITY_INVARIANT_PROPOSAL.md` §3 caller test, extended across
+/// `HARNESS_FIDELITY_INVARIANT_PROPOSAL.md` section 3 caller test, extended across
 /// windows by D4) — never caller identity. `text_input` is `Some` only when
 /// the active session belongs to THIS window
 /// (`TextInputState::is_owned_by_main`/`is_owned_by_editor`); this function
@@ -94,7 +94,7 @@ pub(crate) fn render_tree_overlay_passes(
     // isolation.
     for (i, &(start, end)) in ui_root.overlay_draw.iter().enumerate() {
         ui_renderer.push_depth(Depth::OVERLAY.above(i as i32));
-        // Soft drop-shadow under the floating panel (§17). Drawn first so it
+        // Soft drop-shadow under the floating panel (section 17). Drawn first so it
         // sits under the panel's own fill at this depth. Skip a leading
         // full-screen scrim (dim-modal backdrop) so the shadow lifts the
         // panel, not the whole screen.

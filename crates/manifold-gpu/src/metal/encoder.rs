@@ -4,14 +4,15 @@ use std::ffi::c_void;
 use std::ptr::NonNull;
 
 use objc2::rc::Retained;
+use objc2::msg_send;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
 use objc2_metal::{
     MTLBlitCommandEncoder, MTLBlitOption, MTLBlitPassDescriptor, MTLCommandBuffer,
     MTLCommandEncoder, MTLComputeCommandEncoder, MTLComputePassDescriptor, MTLIndexType,
     MTLLoadAction, MTLMultisampleDepthResolveFilter, MTLOrigin, MTLPrimitiveType,
-    MTLRenderCommandEncoder, MTLRenderPassDescriptor, MTLScissorRect, MTLSize, MTLStoreAction,
-    MTLTexture, MTLTextureUsage, MTLViewport,
+    MTLRenderCommandEncoder, MTLRenderPassDescriptor, MTLResourceUsage, MTLScissorRect, MTLSize,
+    MTLStoreAction, MTLTexture, MTLTextureUsage, MTLViewport,
 };
 
 use super::profiling::{self, ProfileState};
@@ -129,7 +130,7 @@ pub struct DepthMsaaDraw<'a> {
     instance_count: u32,
 }
 
-/// Committed shape (`docs/GBUFFER_DESIGN.md` §2 D3) for
+/// Committed shape (`docs/GBUFFER_DESIGN.md` section 2 D3) for
 /// [`GpuEncoder::draw_instanced_depth_msaa_batch_desc`] — the desc-struct
 /// seam that lets ONE batch entry point grow optional G-buffer attachments
 /// instead of a parallel `_with_depth` function per attachment combination.
@@ -465,6 +466,25 @@ impl GpuEncoder {
             }
         }
 
+        // Declare resource usage for Metal driver coherence (belt-and-
+        // suspenders on top of the `constant`→`device` address-space fix
+        // in raytrace.rs; BUG-jddy).
+        for binding in bindings {
+            match binding {
+                GpuBinding::Buffer { buffer, .. } => {
+                    unsafe {
+                        let () = msg_send![&enc, useResource: &*buffer.raw, usage: MTLResourceUsage::Read];
+                    }
+                }
+                GpuBinding::Texture { texture, .. } => {
+                    unsafe {
+                        let () = msg_send![&enc, useResource: &*texture.raw, usage: MTLResourceUsage::Read];
+                    }
+                }
+                GpuBinding::Bytes { .. } | GpuBinding::Sampler { .. } => {} // not MTLResource
+            }
+        }
+
         if pipeline.needs_sizes_buffer {
             let slot_idx = pipeline
                 .slot_map
@@ -597,6 +617,38 @@ impl GpuEncoder {
                         );
                     }
                 }
+            }
+        }
+        // BUG-jddy root fix: declare usage for every resource the trace
+        // kernel reaches only INDIRECTLY — the TLAS's referenced BLASes
+        // and the instance buffer the TLAS was built from. Resources no
+        // submitted command declares usage on get reclaimed by the
+        // driver; when the scene went static (no refits re-referencing
+        // them), GI/reflection ray paths read reclaimed memory ~5 frames
+        // later while shadow/AO survived (geometry traversal is
+        // self-contained in the TLAS — the split case).
+        unsafe {
+            let () = msg_send![&enc, useResource: &*accel.structure, usage: MTLResourceUsage::Read];
+            for blas in &accel.blas {
+                let () = msg_send![&enc, useResource: &*blas.structure, usage: MTLResourceUsage::Read];
+            }
+            let () = msg_send![&enc, useResource: accel.instance_buffer.raw(), usage: MTLResourceUsage::Read];
+        }
+        // Same contract for the direct bindings.
+        for binding in bindings {
+            match binding {
+                GpuBinding::Buffer { buffer, .. } => {
+                    unsafe {
+                        let () = msg_send![&enc, useResource: &*buffer.raw, usage: MTLResourceUsage::Read];
+                    }
+                }
+                GpuBinding::Texture { texture, .. } => {
+                    unsafe {
+                        let () = msg_send![&enc, useResource: &*texture.raw, usage: MTLResourceUsage::Read];
+                    }
+                }
+                GpuBinding::Bytes { .. } => {} // inline data, no resource
+                GpuBinding::Sampler { .. } => {} // samplers aren't MTLResource
             }
         }
         let wg = pipeline.workgroup_size;
@@ -904,7 +956,7 @@ impl GpuEncoder {
     }
 
     /// [`Self::draw_instanced_depth_msaa_batch`]'s desc-driven superset
-    /// (`docs/GBUFFER_DESIGN.md` §2 D3). Same single 4x-MSAA pass, same
+    /// (`docs/GBUFFER_DESIGN.md` section 2 D3). Same single 4x-MSAA pass, same
     /// shared depth buffer resolving inter-object occlusion; additionally:
     /// `desc.depth_resolve` — `Some(tex)` stores the depth attachment via
     /// `MultisampleResolve` with filter `Sample0` into `tex` (single-sample

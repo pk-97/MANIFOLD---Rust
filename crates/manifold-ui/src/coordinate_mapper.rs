@@ -11,7 +11,7 @@ use crate::transform::Axis;
 use crate::view::UiLayer;
 use manifold_foundation::Beats;
 
-/// Track-row height presets (§24 5d). A content track is sized by one of these
+/// Track-row height presets (section 24 5d). A content track is sized by one of these
 /// named tiers, chosen by its display *state* — never by its layer *type*. The
 /// type is shown by a badge in the header, not by giving a generator a taller
 /// row. Groups (container rows) and hidden children sit outside these tiers; see
@@ -181,7 +181,7 @@ impl CoordinateMapper {
 
     /// New ppb after a continuous multiplicative zoom by `factor`, clamped to the
     /// [`color::ZOOM_LEVELS`] range. Used by cursor-anchored scroll-wheel zoom so
-    /// zoom is smooth, not a jump between ten fixed steps (§24 5e).
+    /// zoom is smooth, not a jump between ten fixed steps (section 24 5e).
     pub fn zoom_continuous(&self, factor: f32) -> f32 {
         let min = color::ZOOM_LEVELS[0];
         let max = color::ZOOM_LEVELS[color::ZOOM_LEVELS.len() - 1];
@@ -229,16 +229,16 @@ impl CoordinateMapper {
     /// This is THE height rule — the viewport's bitmap sizing, the layer
     /// headers' row heights, and this mapper's Y-layout all flow from here, so
     /// they cannot disagree. (Previously copied verbatim in three places; see
-    /// `docs/TIMELINE_API_DESIGN.md` §3.4.)
+    /// `docs/TIMELINE_API_DESIGN.md` section 3.4.)
     ///
-    /// Two structural cases, then one preset (§24 5d) — the height is chosen by
+    /// Two structural cases, then one preset (section 24 5d) — the height is chosen by
     /// the layer's display *state*, never by its *type* (type is shown by a badge
     /// in the header, not by giving generators a taller row):
     /// - Child of a collapsed parent → 0 (hidden)
     /// - Group (any state) → a fixed container-header height (it shows no clips)
     /// - Otherwise → [`TrackHeight::Collapsed`] when collapsed, else
     ///   [`TrackHeight::Normal`] plus one [`color::AUTOMATION_LANE_STRIP_HEIGHT`]
-    ///   per visible automation lane (P4, `docs/AUTOMATION_LANES_DESIGN.md` §7) —
+    ///   per visible automation lane (P4, `docs/AUTOMATION_LANES_DESIGN.md` section 7) —
     ///   the same for video / generator / audio / text either way.
     pub fn layer_height(layers: &[UiLayer], index: usize) -> f32 {
         let layer = match layers.get(index) {
@@ -269,7 +269,7 @@ impl CoordinateMapper {
         }
 
         // Expanded content track: the base preset plus one strip per visible
-        // automation lane (P4, `docs/AUTOMATION_LANES_DESIGN.md` §7) — engaging
+        // automation lane (P4, `docs/AUTOMATION_LANES_DESIGN.md` section 7) — engaging
         // automation mode grows the track, exactly like Ableton.
         TrackHeight::Normal.px()
             + layer.automation_lane_count as f32 * color::AUTOMATION_LANE_STRIP_HEIGHT
@@ -509,7 +509,7 @@ mod tests {
         let layers = vec![video, gen_layer, group];
         mapper.rebuild_y_layout(&layers);
 
-        // §24 5d: collapse is sized by state, not type — collapsed video AND
+        // section 24 5d: collapse is sized by state, not type — collapsed video AND
         // collapsed generator are both Collapsed (58); the type is shown by a
         // badge. A group is a container row → its fixed 70.
         assert!((mapper.get_layer_height(0) - 58.0).abs() < 0.001);
@@ -571,7 +571,7 @@ mod tests {
 
     #[test]
     fn collapsed_height_is_type_independent() {
-        // §24 5d: collapse height is identical for every content type — the badge
+        // section 24 5d: collapse height is identical for every content type — the badge
         // carries type, so the header no longer restructures (and re-heights) by
         // it. This is the regression guard for the old generator-only 62.
         for t in [LayerType::Video, LayerType::Generator, LayerType::Audio] {

@@ -1,4 +1,4 @@
-// node.chroma_key — fusable body (freeze §12), Pointwise. Per-pixel colour
+// node.chroma_key — fusable body (freeze section 12), Pointwise. Per-pixel colour
 // proximity to `key_color` → soft mask; `invert` (the `mode` enum) flips
 // Select/Reject. key_color is a Vec3 param: the codegen expands it to three
 // uniform floats and hands the body a reassembled vec3<f32>. Matches

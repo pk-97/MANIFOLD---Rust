@@ -1,11 +1,11 @@
-<!-- index: 2026-07-07 headless UX audit of timeline / layers / layer-controls / interaction (final Fable window). Stage 1: the "dead LANES button" — click path proven alive at every headless layer; root cause = AUTOMATION_LANES §7 exposure never shipped (no way to create a first lane). Stage 2: PNG audit findings triaged into fixed-now / ranked spec items / Peter feel-pass. The ranked spec section is the work list for the next timeline-UX wave. -->
+<!-- index: 2026-07-07 headless UX audit of timeline / layers / layer-controls / interaction (final Fable window). Stage 1: the "dead LANES button" — click path proven alive at every headless layer; root cause = AUTOMATION_LANES section 7 exposure never shipped (no way to create a first lane). Stage 2: PNG audit findings triaged into fixed-now / ranked spec items / Peter feel-pass. The ranked spec section is the work list for the next timeline-UX wave. -->
 
 # Timeline UX Audit — 2026-07-07 (headless pass)
 
 **Status: AUDIT COMPLETE; small fixes landed on `fix/timeline-ux-pass`; spec items ranked below, unbuilt.**
 Method: every finding here is anchored to a headless render or a driven interaction
 (`ui-snap` scenes + the `--script` driver, which as of this branch dispatches through the
-real `ui_bridge` — see §4). Nothing in this doc is derived from reading code alone.
+real `ui_bridge` — see section 4). Nothing in this doc is derived from reading code alone.
 
 ## 1. The "dead LANES button" — what it actually was
 
@@ -21,7 +21,7 @@ structural rebuild → lane strips appear/disappear, PNG-verified both direction
 **Root cause of the symptom: the feature is unreachable, not broken.** Lane strips render
 only for params that already have lanes (`ui_translate::layer_automation_lanes_to_ui`),
 and the only way to create a first lane is Automation-Arm recording during playback —
-AUTOMATION_LANES_DESIGN §7's param-chooser + "+" affordance (the designed birth path for
+AUTOMATION_LANES_DESIGN section 7's param-chooser + "+" affordance (the designed birth path for
 lanes: "wiggle the knob, then draw") was never built; the strip label is explicitly a
 "read-only stand-in for Live's param-chooser dropdown" (`automation_lane_draw.rs`). In
 every project without recorded automation, LANES toggles a zero-row layout change: the
@@ -35,20 +35,20 @@ below it is proven.
 
 ## 2. Ranked spec items (design gaps — build in this order)
 
-1. **Automation exposure (AUTOMATION_LANES §7, unshipped half)** — the param-chooser
+1. **Automation exposure (AUTOMATION_LANES section 7, unshipped half)** — the param-chooser
    lane + "+" button on the expanded layer, and touch-to-select feeding the chooser.
    Without it the entire P1–P4 automation system is reachable only via live recording.
-   Design already decided (§7, "decided: copy Ableton's model — Peter 2026-07-02");
+   Design already decided (section 7, "decided: copy Ableton's model — Peter 2026-07-02");
    this is implementation, not design. Also add the first-point-draw path: choosing a
    param shows an empty strip; clicking the strip creates the lane via
    `AddAutomationPointCommand`'s existing `created_lane` semantics.
-2. **Layer-header height contract reconciliation (TIMELINE_UI_REDESIGN §B/§D)** — the
+2. **Layer-header height contract reconciliation (TIMELINE_UI_REDESIGN section B/section D)** — the
    doc's decided model is TWO heights (compact ≈58px identity+mix / expanded ≈200px
    + routing form); the shipped app renders the routing form at every non-collapsed
    height (states scene: NORMAL/MUTED/SOLO all show FOLDER/MIDI/CHANNEL/DEVICE at
-   ~140px). Either the two-tier contract is stale (then amend §B) or the shipped
+   ~140px). Either the two-tier contract is stale (then amend section B) or the shipped
    behavior is nonconforming (then wire the `Tall` stop `coordinate_mapper.rs` already
-   defines). Interacts with item 1: §7 places the automation chooser in the *expanded*
+   defines). Interacts with item 1: section 7 places the automation chooser in the *expanded*
    layer's advanced controls, so the expanded tier must exist as designed before the
    chooser has a home.
 3. **Mute/solo state legibility (MOTION P3, already planned — evidence added)** —
@@ -58,9 +58,9 @@ below it is proven.
    (`SOLO_BTN_ACTIVE = AMBER_ACTIVE`, color.rs:558) used elsewhere. P3's D4 mute-dim +
    SOLO_COLOR deletion covers this; rank it next in the motion sequence rather than
    cherry-picking.
-4. **Audio-layer card dead space (LAYER_CONTROLS §6 deferral)** — the audio card's
+4. **Audio-layer card dead space (LAYER_CONTROLS section 6 deferral)** — the audio card's
    controls occupy ~60px of a full-height header; the rest is empty identity color
-   (audiosends scene). §6 already scopes the fix: a shorter audio height branch in
+   (audiosends scene). section 6 already scopes the fix: a shorter audio height branch in
    `CoordinateMapper`, never in the panel.
 5. **ARM idle/active two-reds (transport automation cluster)** — idle ARM is
    `RECORD_RED`, armed is `RECORD_ACTIVE`: two reds distinguishable only by shade,
@@ -94,11 +94,11 @@ below it is proven.
    blue vertical flash at the landed beat, spanning the moved layers. Keep / kill /
    retime is the D15 gate (UI_CRAFT_AND_MOTION_PLAN); it was dormant since P1.4
    deleted its old trigger. One-line repro: move any clip.
-2. **LANES / BACK / ARM live confirmation (VD-001 L4)** — §1's owed observation, plus:
+2. **LANES / BACK / ARM live confirmation (VD-001 L4)** — section 1's owed observation, plus:
    with lanes visible, does the automation cluster's lit state read correctly at
    stage distance?
-3. **Selection-ring strength (TIMELINE_UI_REDESIGN §H, marked OPEN there)** — the ring
-   reads clearly on the multi-select render but thin at 1× on busy headers; §H
+3. **Selection-ring strength (TIMELINE_UI_REDESIGN section H, marked OPEN there)** — the ring
+   reads clearly on the multi-select render but thin at 1× on busy headers; section H
    anticipated "may push brighter/thicker for stage legibility."
 4. **First-lane recording flow** — ARM, play, wiggle a knob: does the punch-in/out
    gesture feel like Live's overwrite? (P3 recording shipped without a feel-pass.)
@@ -121,7 +121,7 @@ below it is proven.
 - ui-snap `project:<path>` scene (worker, this branch): loads a real .manifold file
   for real-scale renders; plus an `empty` scene (zero layers, File→New state).
 - ui-snap `--scroll` seed order (+ the header-bake re-sync) and structural
-  interact-miss detection (this branch; details in §2.6).
+  interact-miss detection (this branch; details in section 2.6).
 - Layer-header name/gen-type label collision on indented child rows (found on the
   Liveschool real-scale render: "FLUID SIM 2D" and its type label drew over each
   other on group-child compact rows) — fixed by a worker on this branch,
@@ -133,7 +133,7 @@ below it is proven.
   no bleed into the ruler (states scene, scroll-seeded after-render).
 - S1 multi-select chrome: per-clip crisp borders across a shift-range, no region band,
   no gaps (selectionclips driven render) — the P1.3b fix holds.
-- §7 automation affordances that DID ship render correctly: lane strips + red
+- section 7 automation affordances that DID ship render correctly: lane strips + red
   breakpoint line, overridden lane grays, param-card red/gray dots, BACK lights on a
   latch (automation + inspector scenes).
 - Layer-controls descriptor engine renders per-type cards correctly incl. the audio

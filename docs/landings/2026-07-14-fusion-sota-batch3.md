@@ -2,7 +2,7 @@
 
 **Branch:** feat/fusion-sota · **Level reached:** L2 (P6, has a census/dispatch-count-observed
 surface) / L1 (P7, behavior-identical by construction, observable is the negative gate) — both
-at their stated targets (§10)
+at their stated targets (section 10)
 
 **Doc status line (quoted verbatim):**
 > **Status:** SHIPPED · 2026-07-14 · Fable 5 design (with Peter in the room) · Sonnet 5 executing
@@ -49,11 +49,11 @@ across three landings (`ce6dcba8`, `9ceb4aab` fill-in / `78d897cb`, `7fe110ac` f
 
 - P6: found a real region-forming regression the narrowing itself would introduce, fixed within
   the same phase (not escalated — this was P6's own bug to fix, not a design-scope question).
-- P7: none from the brief. The call-site inventory in the design doc's §1 audit was completely
+- P7: none from the brief. The call-site inventory in the design doc's section 1 audit was completely
   stale by execution time (every migration since P1 rewrote install.rs) — re-derived fresh per
   the doc's own prescribed re-derivation command, as expected for a seam-brief phase this deep in
   the build order.
-- Orchestrating session (wave close): supersession sweep on `FREEZE_COMPILER_MAP.md`'s §11 honest
+- Orchestrating session (wave close): supersession sweep on `FREEZE_COMPILER_MAP.md`'s section 11 honest
   edges — marked #1 (marker ABI), #7 (leak model), #8 (segment worker hang) FIXED, matching the
   doc's existing convention for #3–#5. Retired the `fusion-sota-wave-prompts` memory handoff file
   per its own "delete after both land" instruction (both wave 1's fusion-sweep and this wave have

@@ -1,5 +1,5 @@
 //! Breadcrumb sidecar + `--resume` supporting types — GIG_RESILIENCE_DESIGN
-//! §5.1 (breadcrumb) / §5.2 (boot fast path), phase P2.
+//! section 5.1 (breadcrumb) / section 5.2 (boot fast path), phase P2.
 //!
 //! The breadcrumb is a small atomically-written JSON sidecar
 //! (`<project>.manifold.breadcrumb`, sibling of the project archive) the UI
@@ -16,7 +16,7 @@
 //! and never touches `sync_clips_to_time` (`manifold-playback/src/engine.rs`)
 //! or `content_thread.rs`'s tick body.
 //!
-//! The one exception is the panic-hook beat stamp (§5.1 last line): a panic
+//! The one exception is the panic-hook beat stamp (section 5.1 last line): a panic
 //! hook has no `&Application` to read from, so it needs a single process-wide
 //! atomic — `LAST_KNOWN_BEAT_BITS` below, stored from the same UI-thread drain
 //! point. This is the documented escape hatch ("publish it via a SINGLE
@@ -45,7 +45,7 @@ use crate::window_registry::WindowRole;
 
 /// Bit-cast latest known beat, refreshed once per UI frame from the
 /// content-state drain (never from the content thread itself). Read by the
-/// panic hook in `main.rs` so crash reports are score-addressed (§5.1).
+/// panic hook in `main.rs` so crash reports are score-addressed (section 5.1).
 /// `u64::MAX` is not a bit pattern `f64::to_bits` produces for any beat a
 /// running show can reach, so it doubles as "no frame observed yet".
 static LAST_KNOWN_BEAT_BITS: AtomicU64 = AtomicU64::new(u64::MAX);
@@ -78,7 +78,7 @@ pub(crate) fn last_known_beat_for_crash_log() -> Option<f64> {
 ///   - crossing an integer-beat boundary while playing
 ///
 /// Never fires merely because time advances within the same beat, and never
-/// fires on wall-clock alone while paused (§5.1: "a few writes per second,"
+/// fires on wall-clock alone while paused (section 5.1: "a few writes per second,"
 /// not a timer).
 #[derive(Debug)]
 pub(crate) struct BreadcrumbCadence {
@@ -110,7 +110,7 @@ impl BreadcrumbCadence {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// Breadcrumb data model (§5.1)
+// Breadcrumb data model (section 5.1)
 // ─────────────────────────────────────────────────────────────────────────
 
 /// One captured output window's placement — enough to reopen it on the same
@@ -138,7 +138,7 @@ pub(crate) struct BreadcrumbData {
     pub is_playing: bool,
     /// Generator/effect `type_id`s active at `current_beat` (from every
     /// layer with a clip scheduled right now). Written for the P4
-    /// quarantine heuristic (§5.3) to consume later — P2 only writes it.
+    /// quarantine heuristic (section 5.3) to consume later — P2 only writes it.
     pub active_type_ids: Vec<String>,
     /// Clip ids scheduled at `current_beat`. Same P4 consumer as above.
     pub active_clip_ids: Vec<String>,
@@ -158,7 +158,7 @@ fn tmp_path_for(final_path: &Path) -> PathBuf {
     PathBuf::from(s)
 }
 
-/// Atomic tmp+rename write (§5.1). Runs on the background writer thread —
+/// Atomic tmp+rename write (section 5.1). Runs on the background writer thread —
 /// never on the UI or content thread.
 fn write_breadcrumb_atomic(data: &BreadcrumbData) -> std::io::Result<()> {
     let path = breadcrumb_path_for(&data.project_path);
@@ -169,7 +169,7 @@ fn write_breadcrumb_atomic(data: &BreadcrumbData) -> std::io::Result<()> {
     std::fs::rename(&tmp, &path)
 }
 
-/// Parse a breadcrumb sidecar from disk (`--resume` boot path, §5.2 step 1).
+/// Parse a breadcrumb sidecar from disk (`--resume` boot path, section 5.2 step 1).
 pub(crate) fn read_breadcrumb(path: &Path) -> std::io::Result<BreadcrumbData> {
     let bytes = std::fs::read(path)?;
     serde_json::from_slice(&bytes).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
@@ -222,7 +222,7 @@ impl BreadcrumbWriter {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// Display UUID (macOS) — resume's display-topology restore chain (§5.2 step 2)
+// Display UUID (macOS) — resume's display-topology restore chain (section 5.2 step 2)
 // ─────────────────────────────────────────────────────────────────────────
 
 /// Resolve a stable UUID for a monitor via `CGDisplayCreateUUIDFromDisplayID`.
@@ -286,7 +286,7 @@ fn display_uuid_for_display_id(display_id: u32) -> Option<String> {
 }
 
 /// Resolve which currently-available monitor index best matches a captured
-/// display topology (§5.2 step 2 restore chain): exact UUID match first,
+/// display topology (section 5.2 step 2 restore chain): exact UUID match first,
 /// then the largest non-primary display, then the primary display. `None`
 /// only when there are zero monitors (callers already guard that case
 /// separately, e.g. `open_output_window`'s own "no monitors" check).
@@ -450,7 +450,7 @@ impl Application {
         }
     }
 
-    /// `--resume` boot path (§5.2). Called once from `resumed()` after the
+    /// `--resume` boot path (section 5.2). Called once from `resumed()` after the
     /// content thread + GPU are up, right before `self.initialized = true`.
     /// Parses the breadcrumb, opens the project through the SAME path
     /// `File > Open` uses, seeks/starts playback, and arms perform-mode

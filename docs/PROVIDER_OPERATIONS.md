@@ -22,6 +22,7 @@ pane; a bad `config.yaml` fails boot and freezes everything until fixed.
 
 | Layer | File | Owns |
 |---|---|---|
+| Seat names + consumer registry | `scripts/fleet_seats.toml` (repo) | seat = subscription account (`kimi`/`zai`/`opencode`, never a model name); every file that carries a seat token. `seat_tool check` is the drift gate; `seat_tool rename` migrates all consumers + secret files in one transaction |
 | Seat slot map | `~/.config/cc-fleet/providers.toml` | which model fills each slot (haiku/sonnet/opus) per profile |
 | Upstreams + routing | `~/.config/litellm/config.yaml` | model_list (api_base, key env, pricing), router_settings (retries, fallbacks) |
 | Virtual keys | `~/.config/litellm/key-*.json` | per-key model allow-lists (e.g. k3-lead) |
@@ -36,20 +37,21 @@ repair`** (2026-07-25 drift incident). `providers.toml` is the durable
 source; edit it only via `scripts/seat_tool.py`.
 
 **A new model is invisible to a seat until it is in that key's allow-list**
-(BUG-lng). The model_list entry alone is not enough.
+(BUG-lng (Add deepseek-v4-flash to k3-lead key allow-list)). The model_list entry alone is not enough.
 
 ## Procedures
 
 ### Swap which model fills a seat slot
 
 `scripts/seat_tool.py assign <slot> <model>` — edits providers.toml, runs
-repair, verifies the profile, updates the naming-guard map, warns on
-litellm/tier-guard gaps. Never hand-edit profiles. `seat_tool.py show` is
-the read oracle.
+repair, verifies the profile, warns on litellm/tier-guard/SHORT_LABEL gaps.
+The teammate naming guard needs no sync: it derives the slot map from the
+session env (`ANTHROPIC_DEFAULT_<TIER>_MODEL`) at spawn time. Never
+hand-edit profiles. `seat_tool.py show` is the read oracle.
 
 Slots are semantic, not provider-shaped: `sonnet` = default work model,
 `haiku` = fast/classifier-adjacent, `opus` = strong consult. The auto-mode
-classifier resolves off these slots (PERMISSION_BOUNDARY.md §2), so a slot
+classifier resolves off these slots (PERMISSION_BOUNDARY.md section 2 (Which model runs it)), so a slot
 swap changes what gates every permission decision — say so in the commit.
 
 ### Add or repoint an upstream
@@ -90,6 +92,32 @@ change: `input/output_cost_per_token` (+ cache rates) in config.yaml, the
 plan-cost variables on the fleet-value Grafana dashboard, and the `RATES`
 table in `scripts/claude_usage_export.py` for the Anthropic path.
 
+## Always-running services — the observability stack
+
+Five background services keep the fleet observable. All run as user launchd
+jobs (`launchctl list | rg 'manifold|mxcl'` is the liveness oracle; the
+three homebrew ones also answer to `brew services list`). Data flow:
+
+```
+CC transcripts ──(hourly export)──┐
+litellm proxy ──(SpendLogs)───────┤→ postgres :5432 ──→ grafana :3000 (dashboards)
+              └─(/metrics)──→ prometheus :9090 ────────↗
+```
+
+| Service | launchd label | If it dies | Restart |
+|---|---|---|---|
+| litellm proxy :4000 | `com.manifold.litellm-proxy` | **every seat freezes** (classifier fails closed); log `~/.config/litellm/proxy.log` | `launchctl kickstart -k gui/501/com.manifold.litellm-proxy` |
+| Postgres 16 :5432 | `homebrew.mxcl.postgresql@16` | proxy loses SpendLogs, dashboards empty | `brew services restart postgresql@16` |
+| Grafana :3000 | `homebrew.mxcl.grafana` | dashboards unreachable; data unharmed | `brew services restart grafana` |
+| Prometheus :9090 | `homebrew.mxcl.prometheus` | health metrics gap (metrics are scrape-time; the gap is permanent) | `brew services restart prometheus` |
+| Claude usage export (hourly) | `com.manifold.claude-usage-export` | Anthropic rows go stale — value dashboard freshness row turns red at 2 days | `launchctl kickstart -k gui/501/com.manifold.claude-usage-export` |
+
+Grafana provisions datasources and dashboards from files: repo
+`scripts/grafana/*` is the source, deployed by copy to
+`/opt/homebrew/etc/grafana/provisioning/{datasources,dashboards}/` and
+`/opt/homebrew/etc/grafana/dashboards/` (30 s auto-reload). Edit in the
+repo, copy out — never edit only the deployed copy.
+
 ## Verification oracles
 
 - **Which deployment served a call:** SpendLogs `model` column
@@ -99,6 +127,12 @@ table in `scripts/claude_usage_export.py` for the Anthropic path.
   upstream's own failure, distinguishing provider wobble from proxy trouble.
 - **Fleet rates/errors/latency:** Grafana `manifold-fleet` dashboard
   (Prometheus, from 2026-07-25 only); SpendLogs is all-time ground truth.
+- **Anthropic rows on `manifold-value`:** exported hourly by launchd job
+  `com.manifold.claude-usage-export` (plist versioned in `scripts/grafana/`,
+  installed copy in `~/Library/LaunchAgents/`; log
+  `~/.config/litellm/claude-usage-export.log`). The dashboard's top
+  freshness row goes orange at 1 day stale, red at 2 — red means the feed
+  stopped, not that a seat idled.
 
 ## Hazards
 
@@ -106,7 +140,7 @@ table in `scripts/claude_usage_export.py` for the Anthropic path.
   `.claude/hooks/litellm_patches_reapply.py` after any upgrade (and re-pip
   `prometheus-client` into the venv).
 - **Classifier coupling:** the classifier is a session-sticky resolution
-  off the slot map (PERMISSION_BOUNDARY.md §2). A demoted pane never
+  off the slot map (PERMISSION_BOUNDARY.md section 2 (Which model runs it)). A demoted pane never
   recovers — restart it, don't debug it.
 - **Fallback legs are load-bearing subscriptions.** As of 2026-07-26 the
   z.ai/GLM plan is the fallback for both deepseek groups; cancelling it

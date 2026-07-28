@@ -1,4 +1,4 @@
-// node.rotate_vec2_by_angle — fusable body (freeze §12), Pointwise. Rotate the
+// node.rotate_vec2_by_angle — fusable body (freeze section 12), Pointwise. Rotate the
 // input's RG vec2 by `angle` (radians): out.x = v.x*cos - v.y*sin, out.y = v.x*sin
 // + v.y*cos, out = (.x, .y, 0, 1). The hand shader took CPU-precomputed cos_a/sin_a
 // in its uniform; the body computes them from the `angle` param instead (the

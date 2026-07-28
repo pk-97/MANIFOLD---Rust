@@ -17,7 +17,7 @@ use crate::tree::UITree;
 // ── Layout constants (from FooterLayout.cs) ────────────────────────
 
 const PAD: f32 = color::SPACE_M;
-const ELEM_Y_PAD: f32 = color::SPACE_S; // §14.4: 3 → 4
+const ELEM_Y_PAD: f32 = color::SPACE_S; // section 14.4: 3 → 4
 const LABEL_GAP: f32 = color::SPACE_S;
 const SECTION_SPACER: f32 = 18.0;
 
@@ -82,7 +82,7 @@ impl FooterPanel {
 
     // ── Styles ──────────────────────────────────────────────────────
 
-    /// §18: the look now comes from the component kit; the footer only overrides
+    /// section 18: the look now comes from the component kit; the footer only overrides
     /// the compact footer font. A plain (non-state) action button → secondary.
     fn footer_button_style() -> UIStyle {
         UIStyle {

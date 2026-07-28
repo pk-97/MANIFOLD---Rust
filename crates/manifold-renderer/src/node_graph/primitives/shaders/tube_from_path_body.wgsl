@@ -1,4 +1,4 @@
-// node.tube_from_path — fusable BUFFER body (freeze §12, buffer domain),
+// node.tube_from_path — fusable BUFFER body (freeze section 12, buffer domain),
 // GATHER × 3. Sweep a circular ring around a K-point centerline path
 // (Array<CurvePoint>, XZ plane — x=world X, y=world Z) into a K×(sides+1)
 // positions+uv tube grid (MESH_DEFORM_AND_CURVE_GEOMETRY_DESIGN.md D5/D6 —

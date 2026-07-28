@@ -1,6 +1,6 @@
 // C ABI wrapper around Signalsmith Stretch (MIT, vendored under
 // vendor/signalsmith/) for the Audio Layer warp seam — see
-// docs/AUDIO_LAYER_DESIGN.md §4.1.
+// docs/AUDIO_LAYER_DESIGN.md section 4.1.
 //
 // One job: time-stretch a whole decoded buffer WITHOUT changing pitch, offline
 // (ahead of playback). The Rust side hands kira the warped samples at

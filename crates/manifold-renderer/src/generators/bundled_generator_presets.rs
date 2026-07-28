@@ -37,7 +37,7 @@ use crate::preset_loader::GENERATOR_CATALOG;
 /// effect side.
 ///
 /// Cached at the `loaded_preset_metadata()` callsite — invoked once per
-/// process. The §11 generator unification means a JSON preset's
+/// process. The section 11 generator unification means a JSON preset's
 /// `presetMetadata` block IS the canonical schema for that generator,
 /// and the legacy inventory submission (if any) is overridden.
 pub fn loaded_generator_presets_from_bundled()

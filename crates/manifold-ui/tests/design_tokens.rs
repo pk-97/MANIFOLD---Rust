@@ -1,8 +1,8 @@
-//! Design-token enforcement guard (design system §16).
+//! Design-token enforcement guard (design system section 16).
 //!
 //! Blocks NEW raw colour and radius literals so the design tokens can't silently
-//! re-drift — the exact bug class the dedup audit (§22) keeps surfacing. The rule
-//! (§16.1): colours and radii are defined once in `color.rs`; call sites reference
+//! re-drift — the exact bug class the dedup audit (section 22) keeps surfacing. The rule
+//! (section 16.1): colours and radii are defined once in `color.rs`; call sites reference
 //! tokens, never raw literals.
 //!
 //! Existing, not-yet-cleaned violations are grandfathered by a per-category
@@ -10,8 +10,8 @@
 //!   - Add a raw literal  → count goes up  → test fails (use a token, or exempt it).
 //!   - Clean one up        → count goes down → test fails until you LOWER the baseline.
 //!
-//! So the number can only go down, and each future cleanup phase (§14 B′ radii,
-//! §15 colour ramp) tightens it toward zero.
+//! So the number can only go down, and each future cleanup phase (section 14 B′ radii,
+//! section 15 colour ramp) tightens it toward zero.
 //!
 //! Escape hatch for the rare honest exception (a sub-pixel hairline, a test
 //! fixture colour): put `// design-token-exempt: <reason>` on the same line.
@@ -28,9 +28,9 @@ use std::path::{Path, PathBuf};
 // literal now references a radius token (`BUTTON`/`CARD`/`SMALL`/`POPUP`/
 // `HAIRLINE_RADIUS`). The one survivor is a `// design-token-exempt:` circular
 // status dot. From here the radius guard is absolute — any raw literal fails.
-// COLOR is still grandfathered pending the §15 ramp.
+// COLOR is still grandfathered pending the section 15 ramp.
 // DEBT: tokenize the graph-editor redesign's 69 raw literals before that
-// redesign closes, then ratchet the baseline back down toward the §15 ramp.
+// redesign closes, then ratchet the baseline back down toward the section 15 ramp.
 // 214→213, 2026-07-21 (convergence-lane merge): the lane's P2 slice deleted
 // one raw literal in scene_setup_panel.rs; ratcheted per the test's own rule.
 const COLOR_BASELINE: usize = 213;
