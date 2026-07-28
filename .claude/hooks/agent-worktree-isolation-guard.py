@@ -9,6 +9,8 @@ Agents get worktrees from the ring, never from the harness.
 
 Never blocks any other Agent call. Fail-safe: any parse failure emits
 nothing (normal permission flow).
+
+Obsolete when: the slot-ring worktree model (scripts/agent-worktree.py) is retired.
 """
 import json
 import sys

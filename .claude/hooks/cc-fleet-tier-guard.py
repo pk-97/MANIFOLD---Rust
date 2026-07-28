@@ -22,6 +22,8 @@ Tier rules (model strings measured from real transcripts 2026-07-24:
 - Lead tier (fable/opus/k3 — anything not matched above): passes through.
 
 Fails open on any error — a guard hook must never block a session.
+
+Obsolete when: the routing policy in docs/AGENT_ROUTING.md retires the provider-tier model this guard polices, or cc-fleet is removed from the toolchain.
 """
 import json
 import os

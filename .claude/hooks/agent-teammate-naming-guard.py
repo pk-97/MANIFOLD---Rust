@@ -39,6 +39,8 @@ Behavior (deterministic, no model calls):
   part -> deny with the fix and the live slot map spelled out.
 
 Fails open on any error: a guard hook must never be able to block a session.
+
+Obsolete when: the routing policy in docs/AGENT_ROUTING.md retires the slot-ring naming scheme this guard derives from; recheck at each routing-policy revision.
 """
 import json
 import os

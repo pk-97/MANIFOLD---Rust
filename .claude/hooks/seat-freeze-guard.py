@@ -28,6 +28,8 @@ future session that meets the same seat.
 
 Fails open on any error (missing/unreadable freeze file or transcript,
 format drift): a guard hook must never be able to block a session.
+
+Obsolete when: the routing policy in docs/AGENT_ROUTING.md retires the two-tier lead/lane model this guard polices; recheck at each routing-policy revision.
 """
 import json
 import os

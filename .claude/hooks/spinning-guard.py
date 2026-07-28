@@ -11,6 +11,8 @@ Any `git commit` or `bd create/close` resets all counters (an artifact
 landed). Warns at the thresholds below — advisory only, never blocks,
 because Peter-driven feedback loops legitimately edit one file many times.
 Fails open on any error.
+
+Obsolete when: the routing policy in docs/AGENT_ROUTING.md retires the two-tier lead/lane model this guard polices; recheck at each routing-policy revision.
 """
 import json
 import re

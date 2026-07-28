@@ -35,6 +35,8 @@ failure.
 
 Receives `{"tool_name", "tool_input": {"file_path": ...}, "cwd": ...}` on stdin.
 Emits hookSpecificOutput.permissionDecision="deny" + reason, or nothing.
+
+Obsolete when: the main checkout stops being the shared runnable trunk (every seat, lead included, works in disposable worktrees, or landing moves to a server-side gate).
 """
 import json
 import subprocess

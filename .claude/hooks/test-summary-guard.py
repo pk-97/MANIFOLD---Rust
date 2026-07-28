@@ -19,6 +19,8 @@ get the warning up front, at launch time, since their output arrives later.
 This is advisory context, not a block — the agent may be mid-pipeline — but
 it is injected EVERY time, so "forgot to check" can no longer survive a
 turn. Fails open on any error.
+
+Obsolete when: the test runners emit machine-verified summaries the harness checks itself (result verification moves into the tool layer).
 """
 import json
 import re

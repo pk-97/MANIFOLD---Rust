@@ -38,6 +38,8 @@ Deterministic contract (this docstring is the spec):
           migrate-on-touch progress, never for blocking.
 
 Fails open on any error.
+
+Obsolete when: IDs are rendered with their names automatically wherever prose is read (bd/doc tooling inlines titles), so bare IDs stop costing the reader a lookup.
 """
 import json
 import re

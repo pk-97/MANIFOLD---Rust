@@ -30,6 +30,8 @@ History: 2026-07-24 R2 extended DENY to the open provider roster (model ids
 measured from real transcripts: `deepseek-v4-flash`, `glm-4.7`).
 2026-07-24 D-48 split GLM out of the executor tier: subagent nesting is
 harness-possible and the GLM dispatcher legitimately spawns haiku lanes.
+
+Obsolete when: the routing policy in docs/AGENT_ROUTING.md retires the two-tier lead/lane model this guard polices; recheck at each routing-policy revision.
 """
 import json
 import os

@@ -22,6 +22,8 @@ the gate.
 
 ## 2. Which model runs it
 
+Recheck at every Claude Code binary upgrade — resolution order, interpreter-exclusion list, and session-sticky demotion are all version-sensitive (last verified at 2.1.219).
+
 Resolution order:
 
 1. Server config Anthropic pushes (`tengu_auto_mode_config.model` /
@@ -105,6 +107,8 @@ shell redirection; the breakout class to worry about is commands with their
 own write/exec flags (awk/find/tee above), not the shell.
 
 ## 4. The bar for adding an allow rule
+
+Obsolete when: the harness gains argument-level permission rules (constraining what an allowed command may receive) — the bar then moves into the rule syntax itself. The question below is timeless; only the manual review of it retires.
 
 Ask one question: **can any argument permitted by this rule cause code to run,
 or state to be destroyed, that the reviewer would not see in the command text?**

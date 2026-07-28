@@ -58,6 +58,8 @@ AGENT_ROUTING.md already specifies.
 Fails open on any error (missing/unreadable transcript, format drift): a guard
 hook must never be able to block a session. Escape hatch for a genuinely
 unavoidable long seat: MANIFOLD_CONTEXT_CEILING=off in the environment.
+
+Obsolete when: the harness manages context budgets natively (automatic compaction makes the ceiling advisory).
 """
 import json
 import os

@@ -30,6 +30,8 @@ Payload schema (empirically verified 2026-07-25, claude CLI 2.1.219):
 
 Executor tiers (from agent-tier-spawn-guard.py):
   claude-sonnet, claude-haiku, deepseek*, kimi-k2*, kimi-for-coding
+
+Obsolete when: the routing policy in docs/AGENT_ROUTING.md retires the two-tier lead/lane model this guard polices; recheck at each routing-policy revision.
 """
 
 import json

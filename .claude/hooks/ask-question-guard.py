@@ -31,6 +31,8 @@ never prescribes — deny reasons are pre-authored (sleep-pass-editable only,
 like moves.md payloads).
 
 Fails open on any error: this hook must never be able to block a session.
+
+Obsolete when: background/autonomous sessions can genuinely block on user input without stalling work (interactive-only operation).
 """
 import hashlib
 import json

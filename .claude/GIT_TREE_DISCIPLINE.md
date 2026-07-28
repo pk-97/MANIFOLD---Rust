@@ -55,6 +55,8 @@ worktrees, not the shared checkout) and the merge-trunk landing protocol
 
 ## 1b. Landing-protocol guard (spec — implementing this session)
 
+Obsolete when: landing moves to a server-side gate (CI-enforced merge checks) — a local hook guarding a shared checkout has nothing left to guard.
+
 File: `.claude/hooks/preToolUseBash.py`. Two new behaviors, both scoped to
 the MAIN checkout only (same `in_main` resolution as section 1; worktree-targeted
 commands are unaffected):
@@ -89,6 +91,8 @@ origin main` (allow + reminder present); `merge <branch>` while on main
 `.claude/worktrees/` (unaffected, no reminder, no ask).
 
 ## 2. Landing protocol (replaces the retired ff-only convention)
+
+Obsolete when: main stops being a locally-landed shared trunk (PR/CI-gated merges) — the protocol's invariants would then be server-enforced.
 
 - **Main is the merge-based trunk.** No separate integration branch — the
   branch that accidentally became one (`feat/timeline-ui-redesign`) is
@@ -160,6 +164,8 @@ origin main` (allow + reminder present); `merge <branch>` while on main
   acquire` only, with the step-0 base-verification guard in the brief.
 
 ## 2c. Build-speed rules (added 2026-07-10 — orchestration wall-clock pass)
+
+Obsolete when: the build system changes (sccache removed, workspace split, non-cargo builds) — re-measure before carrying any rule over.
 
 Measured basis: ~80% of a phase's wall-clock is cargo compile/test (playbook,
 2026-07-03); by 2026-07-10 ten live worktrees carried 5–41 GB of cold-built
@@ -240,6 +246,8 @@ resurrected files against their new-path versions before deleting (a merge,
 not an agent, may have restored them).
 
 ## 3b. Shared-checkout commit mechanics (added 2026-07-07 — four sessions hit these in one day)
+
+Obsolete when: sessions stop sharing the main checkout's index (all work in per-session worktrees) — the pathspec discipline exists only because the index is shared.
 
 - **Untracked-file exception to the pathspec-commit rule.** `git commit -m …
   -- <path>` fails with "pathspec did not match" for a NEW file — git cannot

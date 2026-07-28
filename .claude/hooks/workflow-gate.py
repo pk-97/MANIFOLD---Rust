@@ -37,6 +37,8 @@ thing that may ever widen permissions.
 Fails open on any error — a parse failure, unreadable scriptPath, or
 unbalanced script never denies. Telemetry: `workflow_gate` records on every
 decision, for sleep-pass review.
+
+Obsolete when: the cc-fleet workflow engine is retired or gains its own built-in gating.
 """
 import json
 import os

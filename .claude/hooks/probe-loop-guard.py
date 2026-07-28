@@ -16,6 +16,8 @@ Mechanism: counts probe-loop actions per session —
 At 3: warning (additionalContext). At 6+: DENY until the session writes
 /tmp/manifold_seam_review.md (>=200 chars — the evidence table), which
 resets the counter. Fails OPEN on any error.
+
+Obsolete when: the debug escalation ladder in docs/AGENT_ROUTING.md is retired or replaced; this hook is that doctrine's enforcement arm.
 """
 import json
 import os

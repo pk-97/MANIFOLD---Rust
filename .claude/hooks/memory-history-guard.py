@@ -13,6 +13,8 @@ vectors, both machine-detectable:
 Fires only on ADDED text (Edit: in new_string, not old_string), only for
 files under a `.claude/projects/*/memory/` directory. `guide_decision_log.md`
 is exempt — dated, settled decisions are its purpose. Fails open on any error.
+
+Obsolete when: memory files are generated from source-of-truth stores instead of hand-written, so status can no longer drift into them.
 """
 import json
 import re

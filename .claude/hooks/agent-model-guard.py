@@ -16,6 +16,8 @@ Behavior (deterministic, no model calls):
   (forks always inherit; the param is documented as ignored there).
 
 Fails open on any error: this hook must never be able to block a session.
+
+Obsolete when: the routing policy in docs/AGENT_ROUTING.md retires the two-tier lead/lane model this guard polices; recheck at each routing-policy revision.
 """
 import json
 import sys

@@ -8,6 +8,8 @@ and remain Edit-able (on-touch ID naming etc.) — only Write (file creation /
 overwrite) is denied there.
 
 Fails open on any error.
+
+Obsolete when: docs/landings/ is deleted outright — with no directory, there is nothing to guard.
 """
 import json
 import sys

@@ -51,6 +51,8 @@ Receives `{"tool_name": "Bash", "tool_input": {"command": "..."}, "session_id":
 "...", "cwd": "..."}` on stdin. Emits a JSON object with hookSpecificOutput.
 permissionDecision ("allow", "ask", or "deny") plus a reason, or nothing
 (normal flow).
+
+Obsolete when: the harness gains native argument-level Bash permissioning (per-argument allow rules), making the classifier layer redundant.
 """
 import json
 import os
