@@ -185,6 +185,169 @@ fn object_cap_exceeded_glb_errors_loudly_never_truncates() {
     );
 }
 
+/// Build a minimal, valid `.glb` with TWO materials: `Mat0` has one real
+/// triangle (so the asset has SOME geometry and `gltf_import_summary`
+/// doesn't bail with "parsed no geometry"), `Mat1`'s sole primitive is
+/// tagged `KHR_draco_mesh_compression`.
+///
+/// A "no-fallback" Draco export (the common case — the whole point of
+/// Draco is the size win, and a redundant uncompressed fallback accessor
+/// gives most of that back) omits `bufferView` on the base POSITION
+/// accessor entirely (spec-legal per KHR_draco_mesh_compression's
+/// conformance text: Draco-aware loaders ignore that accessor's
+/// `bufferView`/`byteOffset` anyway). That shape does NOT reach this
+/// module at all today — `parse_document_and_buffers` re-runs the vendored
+/// `gltf-json` crate's own structural `Validate` (BUG-213's filter only
+/// drops the `extensionsRequired` check), and that crate's accessor
+/// validation hook unconditionally requires `bufferView` unless the
+/// accessor is `sparse` (`gltf-json-1.4.1/src/accessor.rs`
+/// `accessor_validate_hook`) — it has no KHR_draco_mesh_compression
+/// awareness, so a genuinely spec-legal no-fallback Draco asset fails the
+/// WHOLE document's import at that gate with an opaque "bufferView
+/// Missing" error, never reaching `summarize_node`'s primitive loop this
+/// fix targets. Reported up alongside this change (see the lane report) —
+/// out of this fix's scope, since relaxing that structural gate is a
+/// separate, bigger decision.
+///
+/// This fixture instead reproduces the one Draco shape that DOES reach
+/// `summarize_node` today without tripping that earlier gate: `Mat1`'s
+/// POSITION accessor has a real `bufferView` (satisfies `Validate`) that
+/// is deliberately too small for its declared `count`/`type` — the same
+/// `reader.read_positions() == None` outcome (`accessor::Iter::new`'s
+/// `slice.get(start..end)` fails on a too-short buffer view), reachable
+/// via a truncated/corrupt buffer on ANY primitive, Draco-tagged or not.
+/// Same hand-rolled binary-container shape as
+/// `write_synthetic_multimaterial_glb`.
+fn write_synthetic_draco_glb() -> std::path::PathBuf {
+    let tri: [[f32; 3]; 3] = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+    let mut bin = Vec::with_capacity(36);
+    for v in &tri {
+        for c in v {
+            bin.extend_from_slice(&c.to_le_bytes());
+        }
+    }
+    // A few extra bytes so bufferView 1 (below) is a real, in-range slice
+    // of the buffer — just too short for accessor 1's VEC3*3 = 36 bytes.
+    bin.extend_from_slice(&[0u8; 4]);
+
+    let doc = serde_json::json!({
+        "asset": { "version": "2.0" },
+        "extensionsUsed": ["KHR_draco_mesh_compression"],
+        "scene": 0,
+        "scenes": [{ "nodes": [0, 1] }],
+        "nodes": [{ "mesh": 0 }, { "mesh": 1, "name": "DracoNode" }],
+        "meshes": [
+            { "primitives": [{ "attributes": { "POSITION": 0 }, "material": 0 }] },
+            {
+                "name": "DracoMesh",
+                "primitives": [{
+                    "attributes": { "POSITION": 1 },
+                    "material": 1,
+                    "extensions": {
+                        "KHR_draco_mesh_compression": {
+                            "bufferView": 0,
+                            "attributes": { "POSITION": 0 }
+                        }
+                    }
+                }]
+            },
+        ],
+        "accessors": [
+            {
+                "bufferView": 0,
+                "componentType": 5126, // FLOAT
+                "count": 3,
+                "type": "VEC3",
+                "min": [0.0, 0.0, 0.0],
+                "max": [1.0, 1.0, 0.0],
+            },
+            // Structurally valid (has bufferView + min/max, passes
+            // `Validate`) but the referenced bufferView is too short to
+            // actually supply 3 VEC3<f32> — `read_positions()` returns
+            // `None` at read time, same outcome a no-fallback Draco
+            // accessor's missing `bufferView` would produce if it ever
+            // got past the validation gate above.
+            {
+                "bufferView": 1,
+                "componentType": 5126, // FLOAT
+                "count": 3,
+                "type": "VEC3",
+                "min": [0.0, 0.0, 0.0],
+                "max": [1.0, 1.0, 0.0],
+            },
+        ],
+        "bufferViews": [
+            { "buffer": 0, "byteOffset": 0, "byteLength": 36 },
+            { "buffer": 0, "byteOffset": 36, "byteLength": 4 },
+        ],
+        "materials": [
+            { "name": "Mat0", "pbrMetallicRoughness": { "baseColorFactor": [0.5, 0.5, 0.5, 1.0] } },
+            { "name": "Mat1", "pbrMetallicRoughness": { "baseColorFactor": [0.5, 0.5, 0.5, 1.0] } },
+        ],
+        "buffers": [{ "byteLength": bin.len() }],
+    });
+    let json_bytes = serde_json::to_vec(&doc).expect("serialize synthetic draco glTF JSON");
+
+    let mut json_padded = json_bytes;
+    while !json_padded.len().is_multiple_of(4) {
+        json_padded.push(b' ');
+    }
+    let mut bin_padded = bin;
+    while !bin_padded.len().is_multiple_of(4) {
+        bin_padded.push(0);
+    }
+    let total_len = 12 + 8 + json_padded.len() + 8 + bin_padded.len();
+
+    let mut glb = Vec::with_capacity(total_len);
+    glb.extend_from_slice(b"glTF");
+    glb.extend_from_slice(&2u32.to_le_bytes());
+    glb.extend_from_slice(&(total_len as u32).to_le_bytes());
+    glb.extend_from_slice(&(json_padded.len() as u32).to_le_bytes());
+    glb.extend_from_slice(b"JSON");
+    glb.extend_from_slice(&json_padded);
+    glb.extend_from_slice(&(bin_padded.len() as u32).to_le_bytes());
+    glb.extend_from_slice(b"BIN\0");
+    glb.extend_from_slice(&bin_padded);
+
+    let path = std::env::temp_dir().join(format!(
+        "manifold_synthetic_draco_{}_{}.glb",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    std::fs::write(&path, &glb).expect("write synthetic draco glb to temp dir");
+    path
+}
+
+/// BUG-mbol: a Draco-compressed primitive must never silently vanish —
+/// `Mat1` (Draco-tagged, undecoded) is dropped from the imported objects
+/// (MANIFOLD has no Draco decoder), but the drop must be named in
+/// `ImportReport::report_lines`, and `Mat0` (real geometry) must still
+/// import normally.
+#[test]
+fn draco_primitive_reports_instead_of_vanishing_silently() {
+    let path = write_synthetic_draco_glb();
+    let (_def, report) = assemble_import_graph(&path).expect("assemble draco synthetic glb");
+    std::fs::remove_file(&path).ok();
+
+    assert_eq!(report.material_count, 1, "only Mat0 has readable geometry — Mat1 (Draco) is dropped");
+    assert!(
+        report
+            .report_lines
+            .iter()
+            .any(|l| l.contains("KHR_draco_mesh_compression") && l.contains("skipped")),
+        "report must name the Draco skip, got: {:?}",
+        report.report_lines
+    );
+    assert!(
+        report.report_lines.iter().any(|l| l.contains("DracoMesh") || l.contains("DracoNode")),
+        "report line must identify the mesh/node that was skipped, got: {:?}",
+        report.report_lines
+    );
+}
+
 /// Build a minimal, valid `.glb` with ONE triangle primitive that has NO
 /// `material` key at all — glTF's implicit default material
 /// (GLB_XFAIL_BURNDOWN_DESIGN.md D4, BUG-171). No `materials` array in

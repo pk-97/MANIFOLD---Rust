@@ -1393,7 +1393,11 @@ pub(crate) struct GltfImportSummary {
     /// (those hard-fail in [`parse_document_and_buffers`]) — optional
     /// extensions the asset lists that we don't implement, so the import
     /// proceeds without them. One line per extension, never a silent skip.
-    /// `gltf_import.rs` folds these into `ImportReport::report_lines`.
+    /// BUG-mbol: also carries per-primitive geometry skips found by
+    /// `summarize_node` — a Draco-compressed primitive (no decoder) or any
+    /// other primitive with no readable POSITION data, named by mesh/
+    /// primitive/node, never a silent zero-vertex drop. `gltf_import.rs`
+    /// folds these into `ImportReport::report_lines`.
     pub extension_report_lines: Vec<String>,
 }
 
@@ -2399,6 +2403,13 @@ fn summarize_node(
     // one above, so `gltf_import_summary` can compute a per-object center
     // distinct from the whole-scene center.
     per_material_bbox: &mut std::collections::BTreeMap<Option<usize>, ([f32; 3], [f32; 3])>,
+    // A primitive with no readable POSITION data contributes nothing to
+    // `per_material` and is otherwise invisible — without a report line the
+    // material it belonged to just silently has zero vertices and
+    // `gltf_import_summary`'s `filter_map` drops it as "unused." Folded
+    // into `ImportReport::report_lines` the same way as
+    // `extension_report_lines` (`gltf_import.rs`'s `scene.rs` merge).
+    report_lines: &mut Vec<String>,
 ) -> Result<(), String> {
     let local = node.transform().matrix();
     let world = mat4_mul(&parent_world, &local);
@@ -2423,6 +2434,30 @@ fn summarize_node(
         for prim in mesh.primitives() {
             let reader = prim.reader(|b| buffers.get(b.index()).map(|d| d.0.as_slice()));
             let Some(positions) = reader.read_positions() else {
+                // BUG-mbol: a Draco-compressed primitive's base POSITION
+                // accessor carries no `bufferView` (the real data lives
+                // Draco-encoded in `KHR_draco_mesh_compression`'s
+                // `bufferView`, which MANIFOLD has no decoder for) — that
+                // used to `continue` here with zero report, so the
+                // primitive's material ended up with `vertex_count == 0`
+                // and `gltf_import_summary`'s `filter_map` dropped it as
+                // "unused," vanishing the whole mesh with no trace. Now
+                // named and loud either way: Draco names the extension, a
+                // plain missing-POSITION primitive (malformed asset) still
+                // gets a line instead of a silent skip.
+                let label = format!(
+                    "mesh {:?} primitive {} (node {:?})",
+                    mesh.name().unwrap_or("<unnamed>"),
+                    prim.index(),
+                    node.name().unwrap_or("<unnamed>")
+                );
+                if prim.extension_value("KHR_draco_mesh_compression").is_some() {
+                    report_lines.push(format!(
+                        "{label}: KHR_draco_mesh_compression is not supported — primitive skipped (no decoder)"
+                    ));
+                } else {
+                    report_lines.push(format!("{label}: missing POSITION accessor data — primitive skipped"));
+                }
                 continue;
             };
             let positions: Vec<[f32; 3]> = positions.collect();
@@ -2479,7 +2514,17 @@ fn summarize_node(
     }
 
     for child in node.children() {
-        summarize_node(&child, world, document, buffers, per_material, bbox_min, bbox_max, per_material_bbox)?;
+        summarize_node(
+            &child,
+            world,
+            document,
+            buffers,
+            per_material,
+            bbox_min,
+            bbox_max,
+            per_material_bbox,
+            report_lines,
+        )?;
     }
     Ok(())
 }
@@ -2687,6 +2732,11 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
     // one above.
     let mut per_material_bbox: std::collections::BTreeMap<Option<usize>, ([f32; 3], [f32; 3])> =
         std::collections::BTreeMap::new();
+    // Per-primitive geometry skips (Draco-compressed or otherwise missing
+    // POSITION data) — folded into `extension_report_lines` below, same
+    // "never a silent skip" doctrine as BUG-213's document-level extension
+    // lines.
+    let mut geometry_report_lines: Vec<String> = Vec::new();
     for node in &import_nodes {
         summarize_node(
             node,
@@ -2697,6 +2747,7 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
             &mut bbox_min,
             &mut bbox_max,
             &mut per_material_bbox,
+            &mut geometry_report_lines,
         )?;
     }
 
@@ -3267,7 +3318,8 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
 
     // BUG-213: surface optional extensions we don't implement — required
     // ones already hard-failed in `parse_document_and_buffers`.
-    let extension_report_lines = unsupported_optional_extension_lines(&document);
+    let mut extension_report_lines = unsupported_optional_extension_lines(&document);
+    extension_report_lines.extend(geometry_report_lines);
 
     Ok(GltfImportSummary {
         materials,
