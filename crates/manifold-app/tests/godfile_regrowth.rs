@@ -59,10 +59,13 @@ const CEILINGS: &[(&str, usize)] = &[
     ("crates/manifold-renderer/src/node_graph/gltf_import/materials.rs", 450),
     ("crates/manifold-renderer/src/node_graph/gltf_import/cards.rs", 250),
     ("crates/manifold-renderer/src/node_graph/gltf_import/object_group.rs", 1100),
-    ("crates/manifold-renderer/src/node_graph/gltf_import/scene.rs", 800),
+    // 2026-07-28 gltf import wave: lights/cameras/unlit/vertex-color/ssao
+    // exposure blocks (scene.rs) + per-feature import tests (tests.rs);
+    // decomposition follow-up in beads.
+    ("crates/manifold-renderer/src/node_graph/gltf_import/scene.rs", 950),
     ("crates/manifold-renderer/src/node_graph/gltf_import/merge.rs", 450),
     ("crates/manifold-renderer/src/node_graph/gltf_import/report.rs", 50),
-    ("crates/manifold-renderer/src/node_graph/gltf_import/tests.rs", 6050),
+    ("crates/manifold-renderer/src/node_graph/gltf_import/tests.rs", 7000),
     // freeze/codegen/ (P3-C split + P3-A StandaloneKernelSpec)
     ("crates/manifold-renderer/src/node_graph/freeze/codegen/mod.rs", 50),
     ("crates/manifold-renderer/src/node_graph/freeze/codegen/types.rs", 550),

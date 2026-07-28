@@ -37,6 +37,48 @@ pub(super) fn max_node_id_recursive(nodes: &[EffectGraphNode]) -> u32 {
         .unwrap_or(0)
 }
 
+/// BUG-w5wv: `build_object_group`'s `local_k` argument numbers ONE
+/// object's own inner STRING handles ("mat_{k}", "mesh_{k}",
+/// "transform_{k}", …) — a SEPARATE identifier system from the numeric
+/// `EffectGraphNode.id` [`max_node_id_recursive`] already guards. Those
+/// numeric ids only need to be unique per-level and get reassigned fresh at
+/// flatten time (this file's own doc comment above), but the STRING handles
+/// do NOT get renamed anywhere downstream — `check_card_lints` and
+/// `loaded_preset_view::collect_node_handles` both resolve a card binding's
+/// `NodeId` against a GLOBAL map keyed by that bare string, built by
+/// walking every group's body. A fresh import's own `local_k` always starts
+/// at 0 (`build_import_graph`), so merging a SECOND asset whose `local_k`
+/// ALSO starts at 0 collides with the target's own "mat_0"/"mesh_0"/… —
+/// silently harmless while every colliding node was identically
+/// `node.pbr_material` (a binding resolving to the "wrong" one of two
+/// functionally-identical nodes was never observable), now a real
+/// misresolution once `node.unlit_material` makes two same-named nodes
+/// genuinely different types.
+///
+/// Every object group unconditionally carries exactly one `mat_{k}` node
+/// (every material with geometry gets a material node, pbr or unlit) at
+/// this same `k` its `mesh_{k}`/`transform_{k}`/… siblings share by
+/// construction (`build_object_group` takes ONE `local_k` for all of an
+/// object's inner handles) — so scanning for the `mat_` prefix alone finds
+/// every existing object's `k`, recursively through group bodies exactly
+/// like [`max_node_id_recursive`]. `None` when the target has no glTF-
+/// imported object in its history at all (a hand-built scene, or the
+/// target's very first merge).
+fn max_local_k_recursive(nodes: &[EffectGraphNode]) -> Option<u32> {
+    nodes
+        .iter()
+        .filter_map(|n| {
+            let own = n.handle.as_deref().and_then(|h| h.strip_prefix("mat_")).and_then(|k| k.parse::<u32>().ok());
+            let inner = n.group.as_ref().and_then(|g| max_local_k_recursive(&g.nodes));
+            match (own, inner) {
+                (Some(a), Some(b)) => Some(a.max(b)),
+                (Some(a), None) => Some(a),
+                (None, b) => b,
+            }
+        })
+        .fold(None, |acc, v| Some(acc.map_or(v, |a: u32| a.max(v))))
+}
+
 /// the largest KNOWN `source_bbox_radius` (BUG-194's
 /// import-time provenance param, stamped on every `node.gltf_mesh_source`/
 /// `node.gltf_skinned_mesh_source` this session's importer creates) among
@@ -293,9 +335,17 @@ pub(super) fn merge_import_into_graph(
         used_group_names: &mut used_group_names,
         fresh_id: &mut fresh_id,
     };
-    for (local_k, m) in materials.iter().enumerate() {
-        let port_index = existing_objects as usize + local_k;
-        let mut out = build_object_group(&mut import_ctx, local_k, port_index, m, &anim_prefix);
+    // BUG-w5wv: `local_k` (this merge's OWN inner-handle numbering) starts
+    // past whatever the target scene's existing objects already used, so
+    // "mat_{k}"/"mesh_{k}"/… never collides with a target object's own
+    // handles — see `max_local_k_recursive`. `port_index` (render_scene's
+    // `object_{N}` port numbering) is a separate, already-correct offset,
+    // unchanged.
+    let local_k_offset = max_local_k_recursive(&def.nodes).map_or(0usize, |k| k as usize + 1);
+    for (i, m) in materials.iter().enumerate() {
+        let local_k = local_k_offset + i;
+        let port_index = existing_objects as usize + i;
+        let mut out = build_object_group(&mut import_ctx, local_k, i, port_index, m, &anim_prefix);
         // D5 scale sanity: seeded on THIS object's own transform_3d — an
         // ordinary, visible, undoable value, never hidden state. Every
         // object in one incoming asset shares the same normalize factor

@@ -103,10 +103,12 @@ pub(super) fn build_import_graph(
     }
     if summary.camera_count > 0 {
         log::info!(
-            "gltf_import::assemble_import_graph({}): glb carries {} embedded camera(s) — v1 \
-             ignores them and synthesizes its own bbox-framed orbit camera",
+            "gltf_import::assemble_import_graph({}): glb carries {} embedded camera(s), {} \
+             importable as extra selectable node.free_camera cards (BUG-d2qz) — the synthesized \
+             bbox-framed orbit camera stays the default",
             path.display(),
             summary.camera_count,
+            summary.cameras.len(),
         );
     }
 
@@ -320,6 +322,49 @@ pub(super) fn build_import_graph(
         &lens_node_params,
     );
 
+    // BUG-d2qz: every embedded perspective camera becomes an extra
+    // `node.free_camera` card at its authored world-space pose — unwired
+    // (the synthesized orbit camera above stays the default active
+    // camera; nothing about default behavior changes), selectable by
+    // rewiring `lens`'s `camera` input in the graph editor. Own section
+    // per camera so its pos/yaw/pitch/roll/fov sliders don't collide with
+    // the synthesized camera's "Camera" section.
+    let mut imported_camera_lines: Vec<String> = Vec::new();
+    for (k, imported_cam) in summary.cameras.iter().enumerate() {
+        let handle = format!("camera_import_{k}");
+        let imported_cam_id = fresh_id();
+        let mut imported_cam_node =
+            plain_node(imported_cam_id, &handle, "node.free_camera", &handle);
+        imported_cam_node.params.insert("pos_x".to_string(), float(imported_cam.pos[0]));
+        imported_cam_node.params.insert("pos_y".to_string(), float(imported_cam.pos[1]));
+        imported_cam_node.params.insert("pos_z".to_string(), float(imported_cam.pos[2]));
+        imported_cam_node.params.insert("yaw".to_string(), float(imported_cam.yaw));
+        imported_cam_node.params.insert("pitch".to_string(), float(imported_cam.pitch));
+        imported_cam_node.params.insert("roll".to_string(), float(imported_cam.roll));
+        imported_cam_node.params.insert("fov_y".to_string(), float(imported_cam.fov_y));
+        imported_cam_node.params.insert("near".to_string(), float(imported_cam.near));
+        imported_cam_node.params.insert("far".to_string(), float(imported_cam.far));
+        let imported_cam_params = imported_cam_node.params.clone();
+        nodes.push(imported_cam_node);
+        let label = imported_cam.name.clone().unwrap_or_else(|| format!("Camera {}", k + 1));
+        stamp_scene_node_exposures_into(
+            &mut card_params,
+            &mut card_bindings,
+            imported_cam_id,
+            &NodeId::new(&handle),
+            "node.free_camera",
+            &format!("{label} (Imported Camera)"),
+            &metadata_for_node_type("node.free_camera"),
+            &imported_cam_params,
+        );
+        imported_camera_lines.push(format!(
+            "camera {label:?}: imported as an extra selectable node.free_camera card, fov_y \
+             {:.3} rad ({:.1}\u{b0}) — the synthesized orbit camera stays the default",
+            imported_cam.fov_y,
+            imported_cam.fov_y.to_degrees(),
+        ));
+    }
+
     let sun_id = fresh_id();
     let mut sun_node = plain_node(sun_id, "sun", "node.light", "sun");
     sun_node.params.insert("mode".to_string(), enum_val(0)); // Sun
@@ -371,7 +416,12 @@ pub(super) fn build_import_graph(
     let render_id = fresh_id();
     let mut render_node = plain_node(render_id, "render", "node.render_scene", "render");
     render_node.params.insert("objects".to_string(), int(n as i32));
-    render_node.params.insert("lights".to_string(), int(1));
+    // BUG-5uqg: light_0 is always the synthesized sun; every KHR_lights_punctual
+    // light imported below takes light_1, light_2, ... — the port count grows
+    // with the glb, it never silently drops a light past a fixed cap.
+    render_node
+        .params
+        .insert("lights".to_string(), int(1 + summary.lights.len() as i32));
     // RAYTRACING_DESIGN.md D14/section 5.2: stamp the root's curated RT subset
     // (RENDER_SCENE_STAMPED_PARAMS) like every other vocab node above —
     // without it a fresh import has no "Rendering" rows until a save/reload
@@ -386,6 +436,113 @@ pub(super) fn build_import_graph(
         &metadata_for_node_type("node.render_scene"),
         &render_node.params.clone(),
     );
+
+    // BUG-5uqg: KHR_lights_punctual was listed in MANIFOLD_SUPPORTED_EXTENSIONS
+    // but never imported — one node.light card per glb light, ADDED alongside
+    // the synthesized sun above (never replacing it). `node.light` only has
+    // two modes (Sun/Point — see primitives::light's doc comment), so a spec
+    // Directional maps to Sun and both Point and Spot map to Point; Spot's
+    // cone is a real loss (Point is omnidirectional) — flagged in the report
+    // line below, never silently approximated.
+    //
+    // Unit conversion: glTF's photometric units (lux for Directional,
+    // candela for Point/Spot) have no native meaning on node.light's unitless
+    // `intensity` scale. Both convert through the same recipe: divide by 683
+    // (the standard lm/W luminous-efficacy constant used for photometric ↔
+    // radiometric conversion, e.g. by the reference glTF-Blender-IO
+    // importer), then multiply by π — the exact energy-conservation
+    // compensation the synthesized sun's hand-tuned `intensity: 3.5` above
+    // already approximates (node.pbr_material divides diffuse by π), derived
+    // here instead of eyeballed. A glTF asset authored at real-world
+    // brightness (e.g. ~100,000 lux daylight) will therefore land far
+    // outside node.light's 0..10 UI slider range — the underlying param has
+    // no hard clamp, so it still renders, just past the slider's drawn end;
+    // flagged in the report so an unexpectedly blown-out import is
+    // traceable to this conversion, not a mystery.
+    const LUX_OR_CANDELA_PER_WATT: f32 = 683.0;
+    let mut imported_light_report_lines: Vec<String> = Vec::new();
+    for (i, light) in summary.lights.iter().enumerate() {
+        let label = light.name.clone().unwrap_or_else(|| format!("Light {}", i + 1));
+        let node_str_id = format!("light_{}", i + 1);
+        let light_id = fresh_id();
+        let mut light_node = plain_node(light_id, &node_str_id, "node.light", &node_str_id);
+
+        let (mode, spec_unit, kind_note) = match light.kind {
+            gltf_load::GltfLightKind::Directional => (0u32, "lux", String::new()),
+            gltf_load::GltfLightKind::Point => (1u32, "candela", String::new()),
+            gltf_load::GltfLightKind::Spot { inner_cone_angle, outer_cone_angle } => (
+                1u32,
+                "candela",
+                format!(
+                    " — spot cone (inner {:.1}°, outer {:.1}°) DROPPED: node.light has no cone \
+                     attenuation, imported as an omnidirectional Point",
+                    inner_cone_angle.to_degrees(),
+                    outer_cone_angle.to_degrees(),
+                ),
+            ),
+        };
+        let manifold_intensity = (light.intensity / LUX_OR_CANDELA_PER_WATT) * std::f32::consts::PI;
+
+        // aim only needs to sit somewhere along the light's own forward
+        // direction (Light::dir is `normalize(aim - pos)` — see light.rs) so
+        // any nonzero distance reproduces the spec direction; scaling by the
+        // model's own bbox radius keeps the Sun-mode shadow ortho frustum
+        // (centred on `aim`) roughly over the imported geometry, same
+        // reasoning as the synthesized sun's `range` sizing above.
+        let reach = radius.max(1.0);
+        let aim = [
+            light.world_pos[0] + light.world_forward[0] * reach,
+            light.world_pos[1] + light.world_forward[1] * reach,
+            light.world_pos[2] + light.world_forward[2] * reach,
+        ];
+        // glTF `range` is a hard distance cutoff (intensity considered zero
+        // beyond it); node.light's `range` is the SOFT attenuation
+        // half-distance (`1/(1+d²/range²)`, 50% at d = range — see light.rs).
+        // These are different falloff shapes, not just different numbers —
+        // passing the spec value straight through means the imported light
+        // reads dimmer at range than the source asset intended. Approximated
+        // here rather than solved (no request to reshape node.light's
+        // falloff curve); absent a spec range, fall back to the same
+        // radius-scaled default reasoning as the sun's shadow extent.
+        let manifold_range = light.range.unwrap_or_else(|| (radius * 2.0).max(0.01));
+
+        light_node.params.insert("mode".to_string(), enum_val(mode));
+        light_node.params.insert("pos_x".to_string(), float(light.world_pos[0]));
+        light_node.params.insert("pos_y".to_string(), float(light.world_pos[1]));
+        light_node.params.insert("pos_z".to_string(), float(light.world_pos[2]));
+        light_node.params.insert("aim_x".to_string(), float(aim[0]));
+        light_node.params.insert("aim_y".to_string(), float(aim[1]));
+        light_node.params.insert("aim_z".to_string(), float(aim[2]));
+        light_node.params.insert("color_r".to_string(), float(light.color[0]));
+        light_node.params.insert("color_g".to_string(), float(light.color[1]));
+        light_node.params.insert("color_b".to_string(), float(light.color[2]));
+        light_node.params.insert("intensity".to_string(), float(manifold_intensity));
+        light_node.params.insert("range".to_string(), float(manifold_range));
+        light_node.params.insert("cast_shadows".to_string(), float(1.0));
+        light_node.params.insert("shadow_softness".to_string(), enum_val(1)); // Soft
+        let light_node_params = light_node.params.clone();
+        nodes.push(light_node);
+        stamp_scene_node_exposures_into(
+            &mut card_params,
+            &mut card_bindings,
+            light_id,
+            &NodeId::new(&node_str_id),
+            "node.light",
+            &label,
+            &metadata_for_node_type("node.light"),
+            &light_node_params,
+        );
+        wires.push(wire(light_id, "out", render_id, &format!("light_{}", i + 1)));
+
+        imported_light_report_lines.push(format!(
+            "{label}: KHR_lights_punctual {:?} imported as node.light ({}) — intensity {:.1} \
+             {spec_unit} → {manifold_intensity:.3} (÷{LUX_OR_CANDELA_PER_WATT:.0}, ×π \
+             energy-conservation compensation){kind_note}",
+            light.kind,
+            if mode == 0 { "Sun" } else { "Point" },
+            light.intensity,
+        ));
+    }
 
     let mut string_bindings = Vec::new();
     let mut textures_wired = 0usize;
@@ -417,7 +574,7 @@ pub(super) fn build_import_graph(
         fresh_id: &mut fresh_id,
     };
     for (k, m) in materials.iter().enumerate() {
-        let mut out = build_object_group(&mut import_ctx, k, k, m, "anim");
+        let mut out = build_object_group(&mut import_ctx, k, k, k, m, "anim");
         nodes.push(out.group_node);
         wires.append(&mut out.wires_to_render);
         card_params.append(&mut out.card_params);
@@ -646,12 +803,28 @@ pub(super) fn build_import_graph(
     // The shared Ambient fill knob (its per-material bindings were fanned out
     // in the object loop above). 0.0 = no flat fill (lights-only); raise it to
     // lift the shadow side of every material at once.
-    card_params.push(card_param("scene_ambient", "Ambient", 0.0, 1.0, 0.0, false, "Environment"));
+    //
+    // BUG-w5wv: an unlit material's `node.unlit_material` card has no
+    // `ambient` param (`fs_unlit` has no lighting to fill), so the object
+    // loop above skips its binding — an import where EVERY material is
+    // unlit contributes zero "scene_ambient" bindings, and pushing this
+    // slider unconditionally would orphan it (a card param with nothing
+    // bound to it, which `check_card_lints` correctly rejects). Only push
+    // it when at least one material actually bound to it.
+    if card_bindings.iter().any(|b| b.id == "scene_ambient") {
+        card_params.push(card_param("scene_ambient", "Ambient", 0.0, 1.0, 0.0, false, "Environment"));
+    }
 
-    // No SSAO card sliders (Peter, 2026-07-15: "the defaults look good") —
-    // the `ao` node group stays wired at its defaults
-    // (`ssao_radius_default`/1.0 intensity, set on the ssao node above);
-    // it's just no longer exposed on the outer card.
+    // SSAO intensity re-exposed on the outer card (Peter, 2026-07-28) —
+    // escape hatch for the flat-plane GTAO artifact (BUG-y5w7): the radius
+    // is FOV-driven, not radius-driven, at the import camera's fov_y=0.9
+    // (a radius small enough to hide it also kills the AO effect — no
+    // in-graph clamp fixes it), so a live intensity fader lets a performer
+    // dial the artifact to zero on a per-scene basis until the GTAO kernel
+    // itself is fixed. `radius` and the other ao-group params stay
+    // unexposed per 2026-07-15 ("the defaults look good").
+    card_params.push(card_param("ssao_intensity", "AO Intensity", 0.0, 4.0, 1.0, false, "Ambient Occlusion"));
+    card_bindings.push(card_binding("ssao_intensity", "AO Intensity", 1.0, "ssao", "intensity", 1.0));
 
     // No Atmosphere section: fog + god rays removed with the atmosphere
     // node — see the removal comment in
@@ -715,6 +888,13 @@ pub(super) fn build_import_graph(
     report_lines.extend(summary.animation_report_lines.iter().cloned());
     // BUG-213: same fold for unimplemented OPTIONAL extensionsUsed entries.
     report_lines.extend(summary.extension_report_lines.iter().cloned());
+    // BUG-5uqg: same fold for every imported KHR_lights_punctual light —
+    // in particular this is where a Spot's dropped cone surfaces.
+    report_lines.extend(imported_light_report_lines);
+    // BUG-d2qz: same fold for imported perspective cameras and skipped
+    // orthographic ones.
+    report_lines.extend(imported_camera_lines);
+    report_lines.extend(summary.camera_report_lines.iter().cloned());
 
     let report = ImportReport {
         material_count: summary.materials.len(),

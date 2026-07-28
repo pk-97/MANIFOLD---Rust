@@ -7,20 +7,62 @@
 //! preset wires the output into a `node.mix` (Multiply mode) against the
 //! scene color, unchanged by the swap.
 //!
-//! Committed algorithm, no substitution (D9(a) verbatim — see
-//! `shaders/ssao_gtao_body.wgsl`'s header comment for the full derivation):
-//! reconstruct view-space center position + normal exactly as D3
+//! Committed algorithm (D9(a), Jimenez et al.'s GTAO closed form — see
+//! `shaders/ssao_gtao_body.wgsl`'s header comment for the full derivation),
+//! plus two grazing-angle corrections (BUG-y5w7, below): reconstruct
+//! view-space center position + normal exactly as D3
 //! (`node.ssao_from_depth`'s method); 2 slices per pixel at hash-derived
 //! angles; per slice, per side, 4 screen-space steps at radii derived from
 //! the world `radius` projected at the center pixel's depth (transcribed
 //! from `ssao_from_depth`'s existing ndc<->view projection, not re-derived);
-//! horizon-angle integral (Jimenez et al.'s GTAO closed form) with a
-//! deterministic per-side "-1.0 floor" for the no-occluder case; visibility
-//! averaged over the 2 slices; `out.r = clamp(1 - intensity*(1-visibility),
-//! 0, 1)`. 16 depth taps total (2 slices * 2 sides * 4 steps) + the same
-//! +/-1-texel normal reconstruction as D3 — same sample class as the
-//! retired atom's 16-tap budget (Peter's "not hitting the performance
-//! harder than the current SSAO" bar).
+//! horizon-angle integral with a deterministic per-side "-1.0 floor" for the
+//! no-occluder case; visibility normalized by the per-slice fully-open
+//! baseline (`cpu_reference::full_ref`, BUG-y5w7) instead of by slice count;
+//! `out.r = clamp(1 - intensity*(1-visibility), 0, 1)`. 16 depth taps total
+//! (2 slices * 2 sides * 4 steps) + the same +/-1-texel normal
+//! reconstruction as D3 — same sample class as the retired atom's 16-tap
+//! budget (Peter's "not hitting the performance harder than the current
+//! SSAO" bar).
+//!
+//! BUG-y5w7 (GTAO flat-plane grazing-angle darkening) — two independent,
+//! compounding bugs, both required to fully fix it (verified: fixing either
+//! alone leaves substantial residual loss; fixing both drives worst-pixel
+//! loss to exactly 0 on a flat plane at any tested FOV up to 90 degrees):
+//!
+//! 1. **Sign bug (dominant; `dir3`, below).** `view_pos`/`height_pos` both
+//!    flip Y when reconstructing a sample's position from its pixel offset
+//!    (`ndc_y = 1.0 - v*2.0` / `1.0 - v` — screen-space Y grows downward,
+//!    view/world-space Y grows upward). `dir3` (the screen direction
+//!    embedded as a view-space vector, used to build the slice's `axis`
+//!    and hence `n_signed`) used unflipped `dir2.y`, so for any slice
+//!    direction with a nonzero Y component, `n_signed` was measured in a
+//!    frame that didn't match the frame the actual samples live in. This
+//!    made the "no real occluder" clamp target (`n_signed +/- pi/2`)
+//!    diverge from the TRUE geometric horizon of a flat, unoccluded
+//!    continuation by up to ~0.9 rad at grazing pixels (measured on the
+//!    real import fov_y=0.9 regime) — real occlusion was being reported
+//!    where there wasn't any. Fix: `dir3 = (dir2.x, -dir2.y, 0)`.
+//! 2. **Normalization bug (secondary; `full_ref`, below).** Even with
+//!    `dir3` correctly signed, the raw closed-form visibility (`proj_len *
+//!    (a(h1)+a(h2))`, averaged over slice count) is only exactly 1 for a
+//!    genuinely unoccluded surface when the per-pixel view vector
+//!    `V = normalize(-P)` is fronto-parallel to the normal. Once `V` tilts
+//!    away from the normal (any pixel off the principal point under
+//!    perspective, worse at wide FOV), the closed-form arc integral
+//!    `a(n-pi/2,n) + a(n+pi/2,n) = cos(n) + n*sin(n)` is provably NOT
+//!    constant in the slice's normal angle `n` — confirmed even in the
+//!    continuous (infinite-slice) limit, so this is not 2-slice
+//!    discretization noise, and matches production references (XeGTAO):
+//!    their own known fix for out-of-radius samples doesn't touch this
+//!    case, since a flat plane's samples ARE found within radius (they're
+//!    the same surface, not real occluders). Fix: normalize the
+//!    accumulated visibility by the sum of `proj_len * full_ref(n)` per
+//!    slice (the analytically-known fully-open baseline for that exact
+//!    slice geometry) instead of by slice count. This is exact by
+//!    construction whenever every slice is genuinely unoccluded — actual
+//!    and baseline are the same expression — at any view angle, and scales
+//!    real occlusion proportionally otherwise (`full_ref` needs no
+//!    occlusion state, only `n`).
 //!
 //! `bias` has NO successor param — the range check (`len <= radius`) already
 //! guards self-occlusion acne; D9(b) explicitly forbids re-adding it.
@@ -69,7 +111,7 @@ struct SsaoGtaoUniforms {
 crate::primitive! {
     name: SsaoGtao,
     type_id: "node.ssao_gtao",
-    purpose: "Ground Truth Ambient Occlusion (GTAO) from scene depth + a Camera (docs/CINEMATIC_POST_DESIGN.md D9), replacing node.ssao_from_depth. Reconstructs view-space center position + normal exactly as the retired atom (linearize_depth + inverse-projection xy; normal via explicit +/-1-texel finite differences). 2 slices per pixel at hash-derived angles (phi_i = hash_angle(px)*0.5 + i*(pi/2)); per slice, per side (+/- the slice's screen direction), 4 steps at screen radii derived from `radius` projected at the center pixel's depth; each step's sample is range-checked against `radius` in view space and folded into a per-side horizon cosine (max, floored at -1.0 for 'no occluder'); horizon angles converted via acos, clamped against the normal's signed in-plane angle, and integrated with the closed-form arc a(h) = 0.25*(-cos(2h-n)+cos(n)+2h*sin(n)); slice visibility = ||N_p||*(a(h1)+a(h2)); pixel visibility = mean of the 2 slices; out.r = clamp(1 - intensity*(1-visibility), 0, 1) (broadcast to RGB, alpha 1). Depth taps = slices*2*steps — the default (slices=2, steps=4, 16 taps) is the committed D9(a) budget, bit-identical for existing graphs; the `slices`/`steps` params buy fidelity at linear cost (e.g. 4x8 = 64 taps). No temporal accumulation, no thickness heuristic — deterministic single-frame budget (D9(a)). Output is an AO map — wire it into a node.mix (Multiply mode) against the scene color; this atom does NOT modify the color image itself. Reads fov_y/near/far entirely via derived uniforms — the Camera wire is never a GPU binding.",
+    purpose: "Ground Truth Ambient Occlusion (GTAO) from scene depth + a Camera (docs/CINEMATIC_POST_DESIGN.md D9), replacing node.ssao_from_depth. Reconstructs view-space center position + normal exactly as the retired atom (linearize_depth + inverse-projection xy; normal via explicit +/-1-texel finite differences). 2 slices per pixel at hash-derived angles (phi_i = hash_angle(px)*0.5 + i*(pi/2)); per slice, per side (+/- the slice's screen direction), 4 steps at screen radii derived from `radius` projected at the center pixel's depth; each step's sample is range-checked against `radius` in view space and folded into a per-side horizon cosine (max, floored at -1.0 for 'no occluder'); the slice's normal-angle basis uses dir3=(dir2.x,-dir2.y,0) (Y negated to match the Y-flip in the view-space position reconstruction — BUG-y5w7 sign fix, see the module doc comment); horizon angles converted via acos, clamped against the normal's signed in-plane angle, and integrated with the closed-form arc a(h) = 0.25*(-cos(2h-n)+cos(n)+2h*sin(n)); slice contribution = ||N_p||*(a(h1)+a(h2)); pixel visibility = sum of slice contributions / sum of ||N_p||*full_ref(n) (full_ref(n) = cos(n)+n*sin(n), the analytically-known fully-open value of a(h1)+a(h2) for that slice's normal angle — normalizing by this instead of by slice count fixes BUG-y5w7's grazing-angle darkening on flat surfaces: the raw closed-form is exact only when the per-pixel view vector is fronto-parallel to the normal); out.r = clamp(1 - intensity*(1-visibility), 0, 1) (broadcast to RGB, alpha 1). Depth taps = slices*2*steps — the default (slices=2, steps=4, 16 taps) is the committed D9(a) budget, bit-identical for existing graphs; the `slices`/`steps` params buy fidelity at linear cost (e.g. 4x8 = 64 taps). No temporal accumulation, no thickness heuristic — deterministic single-frame budget (D9(a)). Output is an AO map — wire it into a node.mix (Multiply mode) against the scene color; this atom does NOT modify the color image itself. Reads fov_y/near/far entirely via derived uniforms — the Camera wire is never a GPU binding.",
     inputs: {
         depth: Texture2D required,
         camera: Camera required,
@@ -417,9 +459,6 @@ pub(crate) mod cpu_reference {
     fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
         [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
     }
-    fn cross2(a: [f32; 2], b: [f32; 3]) -> [f32; 3] {
-        cross([a[0], a[1], 0.0], b)
-    }
     fn length(a: [f32; 3]) -> f32 {
         (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt()
     }
@@ -439,6 +478,24 @@ pub(crate) mod cpu_reference {
 
     fn integrate_arc(h: f32, n: f32) -> f32 {
         0.25 * (-(2.0 * h - n).cos() + n.cos() + 2.0 * h * n.sin())
+    }
+
+    /// `integrate_arc` evaluated at the fully-open horizon (h1=n-pi/2,
+    /// h2=n+pi/2) for a given slice's normal angle `n` — the closed-form
+    /// arc value a genuinely unoccluded slice must produce. Grazing-angle
+    /// fix (BUG-y5w7): this is NOT constant across `n` (it's `cos(n) +
+    /// n*sin(n)`, algebraically), so multiplying it by `proj_len` and
+    /// averaging naively over just 2 slices does not reproduce full
+    /// visibility once the per-pixel view vector `V = normalize(-P)` tilts
+    /// away from a fronto-parallel normal under perspective — confirmed
+    /// even in the continuous (infinite-slice) limit, not just 2-slice
+    /// discretization noise. `gtao_texel` below normalizes the accumulated
+    /// visibility by the sum of this per-slice baseline instead of by
+    /// slice count, which is exact by construction (dividing a quantity by
+    /// itself) whenever every slice is genuinely unoccluded, at any view
+    /// angle, and scales real occlusion proportionally otherwise.
+    fn full_ref(n: f32) -> f32 {
+        n.cos() + n * n.sin()
     }
 
     /// The D9(a) algorithm, transcribed exactly (independent of the WGSL
@@ -493,12 +550,28 @@ pub(crate) mod cpu_reference {
         let rot = hash_angle(cx as f32, cy as f32);
 
         let mut visibility_sum = 0.0f32;
+        let mut baseline_sum = 0.0f32;
         for s in 0..slices {
             let phi = rot * 0.5 + (s as f32) * (2.0 * GTAO_HALF_PI / slices as f32);
             let dir2 = [phi.cos(), phi.sin()];
-            let dir3 = [dir2[0], dir2[1], 0.0];
+            // `dir3`: the VIEW-SPACE direction a +dir2 PIXEL-space step
+            // reconstructs to, not the raw pixel-space vector embedded with
+            // z=0. Root cause (BUG-y5w7): `view_pos`/`height_pos` both flip
+            // Y (`ndc_y = 1.0 - v*2.0` / `1.0 - v`, screen-down to view/
+            // world-up) when reconstructing a sample's position, but
+            // `dir3` (which defines the slice's local basis for `axis`/
+            // `n_signed`) previously used unflipped `dir2.y` — a
+            // coordinate-convention mismatch between the frame `n_signed`
+            // was measured in and the frame samples actually live in. For
+            // slice directions with a nonzero Y component this made the
+            // "no occluder" clamp target (`n_signed +/- pi/2`) diverge from
+            // the ACTUAL geometric horizon of a flat, unoccluded
+            // continuation by up to ~0.9 rad at grazing pixels — far
+            // larger than the `full_ref` normalization gap above, and the
+            // dominant cause of the reported flat-surface darkening.
+            let dir3 = [dir2[0], -dir2[1], 0.0];
 
-            let axis = cross2(dir2, view_vec);
+            let axis = cross(dir3, view_vec);
             let axis_len = length(axis);
             let mut proj_len = 0.0f32;
             let mut n_signed = 0.0f32;
@@ -545,9 +618,10 @@ pub(crate) mod cpu_reference {
 
             let arc = integrate_arc(h1, n_signed) + integrate_arc(h2, n_signed);
             visibility_sum += proj_len * arc;
+            baseline_sum += proj_len * full_ref(n_signed);
         }
 
-        let visibility = (visibility_sum / slices as f32).clamp(0.0, 1.0);
+        let visibility = (visibility_sum / baseline_sum.max(1e-4)).clamp(0.0, 1.0);
         (1.0 - intensity * (1.0 - visibility)).clamp(0.0, 1.0)
     }
 }
@@ -555,46 +629,151 @@ pub(crate) mod cpu_reference {
 /// **Analytic sanity test** (`docs/CINEMATIC_POST_DESIGN.md` I8:
 /// `gtao_flat_plane_full_visibility`) — a flat plane (constant raw depth,
 /// no local depth discontinuity anywhere) must give `out.r ~= 1` (full
-/// visibility) within 1e-3. Pure CPU, no GPU device.
+/// visibility). BUG-y5w7: before the `full_ref` normalization fix, this
+/// only held near-exactly in a near-orthographic fixture (fov_y=0.02) —
+/// the per-pixel view vector `V=normalize(-P)` rotates under perspective,
+/// and the pre-fix formula (normalizing by slice count) darkened flat
+/// surfaces as that rotation grew, worst-pixel ~0.6 loss at a 90-degree FOV
+/// and radius 0.5. The fix makes visibility exactly 1 (by construction) for
+/// any genuinely unoccluded slice regardless of view angle, so this test
+/// now also covers the REAL import regime (fov_y=0.9) and a 90-degree FOV,
+/// not just the original near-orthographic fixture. Pure CPU, no GPU
+/// device.
 #[cfg(test)]
 mod analytic_sanity {
     use super::cpu_reference::{gtao_texel, DepthBuffer};
 
-    #[test]
-    fn gtao_flat_plane_full_visibility() {
+    /// `margin`: pixels excluded from every edge before checking. The
+    /// +/-1-texel finite-difference normal (D3's method, shared by this
+    /// atom) has no real neighbor beyond the depth buffer's edge —
+    /// `DepthBuffer::load`'s `ClampToEdge` duplicates the edge texel there,
+    /// giving a degenerate normal at the outermost ring REGARDLESS of this
+    /// bug's fix (measured: worst loss drops from ~0.11 at margin=0 to
+    /// ~0.01-0.03 by margin=2 on this 16x16 fixture — a boundary artifact
+    /// of ANY screen-space normal-from-depth reconstruction, orthogonal to
+    /// BUG-y5w7's view-angle mechanism, and negligible on a real render's
+    /// actual resolution where it's confined to the literal outermost
+    /// pixel ring).
+    fn assert_flat_plane_visible(fov_y: f32, near: f32, far: f32, radius: f32, raw: f32, margin: i32, bound: f32) {
         let (w, h) = (16i32, 16i32);
-        let raw = vec![0.5f32; (w * h) as usize];
-        let depth = DepthBuffer { w, h, raw: &raw };
+        let raw_buf = vec![raw; (w * h) as usize];
+        let depth = DepthBuffer { w, h, raw: &raw_buf };
+        let intensity = 1.0;
 
-        // Unlike D3's hemisphere SSAO (whose kernel_vec is lifted along the
-        // reconstructed normal itself, so a fronto-parallel plane's lateral
-        // samples reproject onto EXACTLY the same view_z regardless of FOV),
-        // GTAO's horizon test compares each screen-space sample's direction
-        // against `view_vec = normalize(-P)`, which rotates slightly from
-        // pixel to pixel purely from perspective (off-center pixels look
-        // through the lens at a different angle than the normal, which is
-        // constant across the flat plane). That per-pixel view/normal
-        // misalignment is what the D9(a) integral is supposed to measure as
-        // "not occluded" (the -1.0 floor + the h1/h2 clamp handle it), but
-        // it is not EXACTLY zero at finite FOV/radius — a narrow FOV and a
-        // radius small relative to depth (measured: worst-pixel deviation
-        // ~2e-4 at fov_y=0.02, radius=0.05 vs ~0.6 at a 90-degree FOV/radius
-        // 0.5, via a standalone python model of this exact algorithm) keeps
-        // the near-orthographic approximation tight enough for the I8
-        // 1e-3 bound. This is a fixture choice for the analytic sanity
-        // check, not a claim that GTAO is FOV-invariant in general.
-        let (radius, intensity) = (0.05, 1.0);
-        let (fov_y, near, far) = (0.02, 0.1, 1000.0);
-
-        for cy in 0..h {
-            for cx in 0..w {
+        for cy in margin..(h - margin) {
+            for cx in margin..(w - margin) {
                 let vis = gtao_texel(&depth, cx, cy, radius, intensity, 2, 4, false, 0.2, fov_y, near, far);
                 assert!(
-                    (vis - 1.0).abs() < 1e-3,
-                    "texel ({cx},{cy}): flat plane must give ~full visibility (out.r~1), got {vis}"
+                    (vis - 1.0).abs() < bound,
+                    "fov_y={fov_y} texel ({cx},{cy}): flat plane must give ~full visibility (out.r~1), got {vis}"
                 );
             }
         }
+    }
+
+    /// The original I8 fixture (near-orthographic, tiny radius) — kept as a
+    /// tight-tolerance regression check now that the fix makes it exact.
+    #[test]
+    fn gtao_flat_plane_full_visibility() {
+        assert_flat_plane_visible(0.02, 0.1, 1000.0, 0.05, 0.5, 0, 1e-3);
+    }
+
+    /// BUG-y5w7: the real import graph's camera FOV (`preset.generator.
+    /// cinematic_scene`'s default) and a realistic radius — this is the
+    /// regime that showed the dark-square-on-flat-rug bug. `raw` is chosen
+    /// so the reconstructed depth is ~2.5 view units (radius is a 20%
+    /// fraction of depth, a generous but plausible AO radius) rather than
+    /// the ~0.1 view units `raw=0.5` gives at this near/far pair — at that
+    /// near-field depth, `radius=0.5` is 5x the surface's own distance from
+    /// the camera, so `radius_px` (the world radius projected to screen
+    /// pixels) vastly exceeds this 16x16 fixture and EVERY sample clamps to
+    /// the depth buffer's edge (`DepthBuffer::load`'s `ClampToEdge`) — a
+    /// real but separate, orthogonal limitation of any finite screen-space
+    /// search radius, not the view-angle bug this test targets (confirmed:
+    /// an unclamped/infinite-extrapolation stand-in gives exactly 0 loss at
+    /// this same fov/radius/near/far at ANY canvas size once `raw` is
+    /// physically reasonable).
+    #[test]
+    fn gtao_flat_plane_full_visibility_at_import_fov() {
+        assert_flat_plane_visible(0.9, 0.05, 200.0, 0.5, 0.9802, 2, 0.05);
+    }
+
+    /// BUG-y5w7: a 90-degree FOV (the worst case measured pre-fix, ~0.6
+    /// worst-pixel loss) — the fix must hold well beyond the import
+    /// regime's fov_y=0.9, not just barely cover it. Same `raw` rationale
+    /// as `gtao_flat_plane_full_visibility_at_import_fov` above (~2.5 view
+    /// units of depth for this near/far pair).
+    #[test]
+    fn gtao_flat_plane_full_visibility_at_90_degree_fov() {
+        assert_flat_plane_visible(std::f32::consts::FRAC_PI_2, 0.1, 1000.0, 0.5, 0.9601, 2, 0.05);
+    }
+
+    /// BUG-y5w7 regression guard: the ORIGINAL reported regime (radius 5x
+    /// the surface depth, `raw=0.5` at near=0.05/far=200) is dominated by
+    /// depth-buffer edge-clamping, not the view-angle bug — but the fix
+    /// must not make it WORSE, and should still land well under the
+    /// pre-fix ~0.3 worst-pixel loss measured on this exact fixture.
+    #[test]
+    fn gtao_flat_plane_boundary_clamped_regime_does_not_regress() {
+        assert_flat_plane_visible(0.9, 0.05, 200.0, 0.5, 0.5, 0, 0.2);
+    }
+}
+
+/// **Corner/crease occlusion** (requirement 3: the flat-plane fix must not
+/// wash out real AO) — a near "block" surface (`raw_near`) standing in
+/// front of a farther "back wall" (`raw_far`), meeting at a depth step
+/// (`step_x`). A pixel on the far surface immediately adjacent to the step
+/// has part of its hemisphere genuinely blocked by the near surface —
+/// unlike the flat-plane cases above, this is real geometry, not a
+/// view-angle artifact, so it must show substantially more occlusion than
+/// a flat, unoccluded region of the same buffer.
+#[cfg(test)]
+mod corner_sanity {
+    use super::cpu_reference::{gtao_texel, DepthBuffer};
+
+    #[test]
+    fn corner_shows_real_occlusion_flat_region_does_not() {
+        let (w, h) = (64i32, 64i32);
+        let step_x = 32i32;
+        // Chosen so the far surface's view_z (~2.5) keeps radius_px well
+        // under the 28px gap from the flat sample points to the step
+        // (~13px at radius=0.5, fov_y=0.9), while the near surface sits
+        // just close enough (~2.3 view_z, a 0.2-unit step — comfortably
+        // inside the `radius=0.5` world-space range check together with
+        // the small lateral offset near the crease) to register as a real
+        // occluder rather than get rejected by the range check.
+        let (raw_near, raw_far) = (0.978f32, 0.9802f32);
+        let mut raw = vec![raw_far; (w * h) as usize];
+        for y in 0..h {
+            for x in step_x..w {
+                raw[(y * w + x) as usize] = raw_near;
+            }
+        }
+        let depth = DepthBuffer { w, h, raw: &raw };
+        let (fov_y, near, far, radius, intensity) = (0.9f32, 0.05f32, 200.0f32, 0.5, 1.0);
+
+        // Just past the step, on the far (back-wall) side — genuinely
+        // occluded by the near block in front of it.
+        let vis_at_crease = gtao_texel(&depth, step_x - 2, h / 2, radius, intensity, 2, 4, false, 0.2, fov_y, near, far);
+        // Far from the step on the SAME (far) surface — flat, unoccluded.
+        let vis_flat_far = gtao_texel(&depth, 4, h / 2, radius, intensity, 2, 4, false, 0.2, fov_y, near, far);
+        // Far from the step on the near block — also flat, unoccluded.
+        let vis_flat_near = gtao_texel(&depth, w - 4, h / 2, radius, intensity, 2, 4, false, 0.2, fov_y, near, far);
+
+        assert!(
+            vis_flat_far > 0.9,
+            "flat region on the far surface, away from the crease, must read as near-unoccluded, got {vis_flat_far}"
+        );
+        assert!(
+            vis_flat_near > 0.9,
+            "flat region on the near surface, away from the crease, must read as near-unoccluded, got {vis_flat_near}"
+        );
+        assert!(
+            vis_at_crease < vis_flat_far - 0.15,
+            "texel just past the crease on the far surface must show real occlusion from the near \
+             block, not get washed out by the flat-plane fix: vis_at_crease={vis_at_crease} \
+             vis_flat_far={vis_flat_far}"
+        );
     }
 }
 

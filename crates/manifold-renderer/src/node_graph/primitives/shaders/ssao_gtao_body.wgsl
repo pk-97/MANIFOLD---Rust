@@ -31,15 +31,30 @@
 //      side, not zero.
 //   6. Signed horizon angles: h1 = -acos(hcos_minus), h2 = +acos(hcos_plus).
 //      The surface normal projected into the slice's plane (spanned by V
-//      and the slice's screen direction embedded as a view-space vector
-//      with z=0 — the standard GTAO screen-space-direction-as-tangent
-//      approximation) gives length ||N_p|| and a signed angle `n` from V
-//      (sign by which side of the plane the slice tangent falls on).
-//      Clamp: h1 = n + max(h1 - n, -pi/2); h2 = n + min(h2 - n, pi/2).
+//      and the slice's screen direction embedded as a VIEW-SPACE vector
+//      dir3=(dir2.x, -dir2.y, 0) — Y NEGATED to match the Y-flip
+//      `gtao_view_pos`/`gtao_height_pos` apply when reconstructing a
+//      sample's position from its pixel offset (BUG-y5w7 root cause: dir3
+//      must live in the same frame the actual samples do, or `n`/`axis`
+//      are measured relative to a direction no real sample walks along)
+//      gives length ||N_p|| and a signed angle `n` from V (sign by which
+//      side of the plane the slice tangent falls on). Clamp: h1 = n +
+//      max(h1 - n, -pi/2); h2 = n + min(h2 - n, pi/2).
 //   7. Per-side arc a(h) = 0.25*(-cos(2h-n) + cos(n) + 2h*sin(n)); slice
-//      visibility = ||N_p|| * (a(h1) + a(h2)). Pixel visibility = mean of
-//      the 2 slices.
-//   8. out.r = clamp(1 - intensity*(1 - visibility), 0, 1), broadcast RGB,
+//      contribution = ||N_p|| * (a(h1) + a(h2)).
+//   8. Pixel visibility = (sum of slice contributions) / (sum of ||N_p|| *
+//      full_ref(n)), where full_ref(n) = cos(n) + n*sin(n) is a(h1)+a(h2)
+//      evaluated at the fully-open horizon (h1=n-pi/2, h2=n+pi/2) — the
+//      analytically-known baseline a genuinely unoccluded slice must
+//      produce. Grazing-angle fix (BUG-y5w7, see gtao_full_ref below):
+//      normalizing by slice count alone (the original D9(a) text) is only
+//      exact when the per-pixel view vector V=normalize(-P) is
+//      fronto-parallel to the normal; full_ref(n) is provably not constant
+//      in n, so tilted V (any off-center pixel under perspective) darkened
+//      genuinely flat, unoccluded surfaces. Dividing by the baseline
+//      instead is exact by construction whenever unoccluded (numerator and
+//      denominator are the same expression), at any view angle.
+//   9. out.r = clamp(1 - intensity*(1 - visibility), 0, 1), broadcast RGB,
 //      alpha 1 — same output contract as D3 (ssao_from_depth), so the
 //      preset's mix wiring and cards are untouched by the swap.
 //
@@ -114,6 +129,16 @@ fn gtao_view_pos(
 // Committed a(h) integral (D9(a) step 7).
 fn gtao_integrate_arc(h: f32, n: f32) -> f32 {
     return 0.25 * (-cos(2.0 * h - n) + cos(n) + 2.0 * h * sin(n));
+}
+
+// `gtao_integrate_arc` evaluated at the fully-open horizon (h1=n-pi/2,
+// h2=n+pi/2) — the closed-form arc a genuinely unoccluded slice must
+// produce. NOT constant across `n` (grazing-angle fix, BUG-y5w7): see
+// `ssao_gtao.rs`'s `cpu_reference::full_ref` doc comment for the full
+// derivation. `body()` normalizes the accumulated visibility by the sum of
+// this per-slice baseline instead of by slice count.
+fn gtao_full_ref(n: f32) -> f32 {
+    return cos(n) + n * sin(n);
 }
 
 // Heightfield-mode position: orthographic frame, `depth` read as a raw
@@ -203,12 +228,20 @@ fn body(
     let rot = gtao_hash_angle(vec2<f32>(c));
 
     var visibility_sum = 0.0;
+    var baseline_sum = 0.0;
     for (var s: u32 = 0u; s < n_slices; s = s + 1u) {
         // Spread N slices across the semicircle (pi/N spacing) — reduces to
         // the committed i*(pi/2) at the default N=2.
         let phi = rot * 0.5 + f32(s) * (2.0 * GTAO_HALF_PI / f32(n_slices));
         let dir2 = vec2<f32>(cos(phi), sin(phi));
-        let dir3 = vec3<f32>(dir2, 0.0);
+        // `dir3`: the VIEW-SPACE direction a +dir2 PIXEL-space step
+        // reconstructs to. `gtao_view_pos`/`gtao_height_pos` both flip Y
+        // (`ndc_y = 1.0 - v*2.0` / `1.0 - v`, screen-down to view/world-up)
+        // when reconstructing a sample position, so `dir3` must flip Y too
+        // to stay in the SAME frame `n_signed`/`axis` are measured in
+        // (BUG-y5w7 root cause — see ssao_gtao.rs's cpu_reference doc
+        // comment for the derivation and measured magnitude).
+        let dir3 = vec3<f32>(dir2.x, -dir2.y, 0.0);
 
         // Slice-plane projection of the normal (standard GTAO
         // screen-direction-as-tangent construction, D9(a) step 6).
@@ -260,9 +293,10 @@ fn body(
 
         let arc = gtao_integrate_arc(h1, n_signed) + gtao_integrate_arc(h2, n_signed);
         visibility_sum = visibility_sum + proj_len * arc;
+        baseline_sum = baseline_sum + proj_len * gtao_full_ref(n_signed);
     }
 
-    let visibility = clamp(visibility_sum / f32(n_slices), 0.0, 1.0);
+    let visibility = clamp(visibility_sum / max(baseline_sum, 1e-4), 0.0, 1.0);
     let ao = clamp(1.0 - intensity * (1.0 - visibility), 0.0, 1.0);
     return vec4<f32>(ao, ao, ao, 1.0);
 }
