@@ -142,15 +142,18 @@ pub(crate) fn parse_document_and_buffers(
     Ok((document, buffers))
 }
 
-pub(crate) fn import_glb(
-    path: &std::path::Path,
-) -> Result<(gltf::Document, Vec<gltf::buffer::Data>, Vec<gltf::image::Data>), String> {
+/// `(document, buffers, images, image_report_lines)` — `image_report_lines`
+/// is BUG-ssgz's per-image decode-failure report (KTX2/BasisU and any other
+/// unsupported source), one line per substituted dummy texture.
+pub(crate) type GlbImport =
+    (gltf::Document, Vec<gltf::buffer::Data>, Vec<gltf::image::Data>, Vec<String>);
+
+pub(crate) fn import_glb(path: &std::path::Path) -> Result<GlbImport, String> {
     let (document, buffers) = parse_document_and_buffers(path)?;
     let base = path.parent().unwrap_or_else(|| std::path::Path::new("./"));
-    let images = import_images_with_webp(&document, base, &buffers)
-        .map_err(|e| format!("{}: image import failed: {e}", path.display()))?;
+    let (images, image_report_lines) = import_images_with_webp(&document, base, &buffers);
 
-    Ok((document, buffers, images))
+    Ok((document, buffers, images, image_report_lines))
 }
 
 /// `gltf::import_images` hard-fails the ENTIRE document the moment any one
@@ -160,27 +163,80 @@ pub(crate) fn import_glb(
 /// all. IMPORT_ANYTHING_WAVE_DESIGN.md W1: decode webp images ourselves
 /// (our `image` dependency has the `webp` feature on) and fall back to the
 /// crate's own per-image decode for everything else.
+///
+/// BUG-ssgz: a per-image decode failure (KTX2/BasisU and any other
+/// unsupported source) no longer aborts the whole import — it substitutes a
+/// dummy texture and returns a report line instead of erroring. Never
+/// returns `Err`; the return type stays a plain tuple rather than `Result`
+/// to make that a compile-time fact at the call site.
 fn import_images_with_webp(
     document: &gltf::Document,
     base: &std::path::Path,
     buffers: &[gltf::buffer::Data],
-) -> Result<Vec<gltf::image::Data>, String> {
+) -> (Vec<gltf::image::Data>, Vec<String>) {
     let mut out = Vec::with_capacity(document.images().count());
+    let mut report_lines = Vec::new();
     for image in document.images() {
         let mime_type = match image.source() {
             gltf::image::Source::View { mime_type, .. } => Some(mime_type),
             gltf::image::Source::Uri { mime_type, .. } => mime_type,
         };
-        if mime_type == Some("image/webp") {
-            out.push(decode_webp_image(&image, buffers)?);
+        let decoded = if mime_type == Some("image/webp") {
+            decode_webp_image(&image, buffers)
         } else {
-            out.push(
-                gltf::image::Data::from_source(image.source(), Some(base), buffers)
-                    .map_err(|e| format!("image {}: decode failed: {e}", image.index()))?,
-            );
+            gltf::image::Data::from_source(image.source(), Some(base), buffers)
+                .map_err(|e| e.to_string())
+        };
+        match decoded {
+            Ok(data) => out.push(data),
+            Err(e) => {
+                if mime_type == Some("image/ktx2") {
+                    report_lines.push(format!(
+                        "image {}: KTX2/BasisU compressed texture is not supported — \
+                         dummy texture substituted (no transcoder)",
+                        image.index()
+                    ));
+                } else {
+                    report_lines.push(format!(
+                        "image {} (\"{}\"): decode failed ({e}) — dummy texture substituted",
+                        image.index(),
+                        image_label(&image)
+                    ));
+                }
+                out.push(dummy_image_data());
+            }
         }
     }
-    Ok(out)
+    (out, report_lines)
+}
+
+/// Best-effort human label for an image-decode-failure report line: the
+/// glTF `name`, else the external URI, else `<unnamed>` for a
+/// bufferView-embedded image with neither.
+fn image_label(image: &gltf::image::Image) -> String {
+    if let Some(name) = image.name() {
+        return name.to_string();
+    }
+    match image.source() {
+        gltf::image::Source::Uri { uri, .. } => uri.to_string(),
+        gltf::image::Source::View { .. } => "<unnamed>".to_string(),
+    }
+}
+
+/// Placeholder substituted for any image MANIFOLD can't decode (BUG-ssgz):
+/// 2x2 magenta RGBA8 — loud enough to spot on a mesh, cheap enough to not
+/// matter. No existing 1x1/checker CPU-side `gltf::image::Data` helper to
+/// reuse (the `1×1 dummy` precedent in `render_instanced_3d_mesh.rs` and
+/// `standalone.rs` is a GPU-side `manifold_gpu::GpuTexture`, a different
+/// layer entirely).
+fn dummy_image_data() -> gltf::image::Data {
+    const MAGENTA: [u8; 4] = [255, 0, 255, 255];
+    gltf::image::Data {
+        pixels: MAGENTA.repeat(4),
+        format: gltf::image::Format::R8G8B8A8,
+        width: 2,
+        height: 2,
+    }
 }
 
 /// Decode one `image/webp` glTF image (bufferView-embedded only — external
@@ -193,10 +249,7 @@ fn decode_webp_image(
     let view = match image.source() {
         gltf::image::Source::View { view, .. } => view,
         gltf::image::Source::Uri { .. } => {
-            return Err(format!(
-                "image {}: external-URI webp images are not supported",
-                image.index()
-            ));
+            return Err("external-URI webp images are not supported".to_string());
         }
     };
     let buf = &buffers[view.buffer().index()].0;
@@ -205,7 +258,7 @@ fn decode_webp_image(
     let encoded = &buf[begin..end];
 
     let decoded = image::load_from_memory_with_format(encoded, image::ImageFormat::WebP)
-        .map_err(|e| format!("image {}: webp decode failed: {e}", image.index()))?
+        .map_err(|e| format!("webp decode failed: {e}"))?
         .to_rgba8();
     let (width, height) = (decoded.width(), decoded.height());
     Ok(gltf::image::Data {
@@ -691,7 +744,7 @@ pub(crate) fn load_gltf_mesh(
     path: &std::path::Path,
     selector: GltfMeshSelector,
 ) -> Result<Vec<MeshVertex>, String> {
-    let (document, buffers, _images) = import_glb(path)?;
+    let (document, buffers, _images, _image_report_lines) = import_glb(path)?;
 
     let mut out = Vec::new();
     match selector {
@@ -771,7 +824,7 @@ pub(crate) fn load_gltf_texture(
     path: &std::path::Path,
     texture_index: u32,
 ) -> Result<(u32, u32, Vec<u8>), String> {
-    let (document, _buffers, images) = import_glb(path)?;
+    let (document, _buffers, images, _image_report_lines) = import_glb(path)?;
 
     let textures: Vec<gltf::Texture> = document.textures().collect();
     let tex = textures.get(texture_index as usize).ok_or_else(|| {
@@ -2184,7 +2237,7 @@ pub(crate) fn load_gltf_skinned_mesh(
     path: &std::path::Path,
     material_index: u32,
 ) -> Result<SkinnedMeshData, String> {
-    let (document, buffers, _images) = import_glb(path)?;
+    let (document, buffers, _images, _image_report_lines) = import_glb(path)?;
     for node in resolve_import_nodes(&document) {
         if let Some(found) = find_skinned_node_for_material(&node, material_index) {
             return flatten_skinned_node(&found, &buffers, material_index);
@@ -2331,7 +2384,7 @@ pub(crate) fn load_gltf_morph_deltas(
     material_index: u32,
     skinned: bool,
 ) -> Result<(Vec<MeshVertex>, u32, u32), String> {
-    let (document, buffers, _images) = import_glb(path)?;
+    let (document, buffers, _images, _image_report_lines) = import_glb(path)?;
     let parent_of = build_parent_map(&document);
     for node in resolve_import_nodes(&document) {
         let Some(found) = find_mesh_node_for_material(&node, material_index) else {
@@ -2781,7 +2834,7 @@ fn resolve_animations_for_key(
 /// geometry, the world-space bbox, camera count, and unassigned-geometry
 /// count. One parse; no GPU. See [`GltfImportSummary`].
 pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSummary, String> {
-    let (document, buffers, _images) = import_glb(path)?;
+    let (document, buffers, _images, image_report_lines) = import_glb(path)?;
     let import_nodes = resolve_import_nodes(&document);
 
     let mut per_material: std::collections::BTreeMap<Option<usize>, u32> =
@@ -3380,6 +3433,10 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
     // ones already hard-failed in `parse_document_and_buffers`.
     let mut extension_report_lines = unsupported_optional_extension_lines(&document);
     extension_report_lines.extend(geometry_report_lines);
+    // BUG-ssgz: per-image decode failures (KTX2/BasisU and any other
+    // unsupported source) — same "never a silent skip" doctrine, folded in
+    // here rather than a separate `GltfImportSummary` field.
+    extension_report_lines.extend(image_report_lines);
 
     Ok(GltfImportSummary {
         materials,
@@ -3462,7 +3519,7 @@ mod animation_tests {
     #[test]
     fn step_interp_fixture_parses_as_step_not_dropped() {        let path = hostile_dir().join("step_interp.glb");
         assert!(path.exists(), "step_interp.glb fixture missing at {}", path.display());
-        let (document, buffers, _images) = import_glb(&path).expect("parse step_interp.glb");
+        let (document, buffers, _images, _image_report_lines) = import_glb(&path).expect("parse step_interp.glb");
         let animations = parse_animations(&document, &buffers);
         assert_eq!(animations.len(), 1);
         assert!(animations[0].skipped_channels.is_empty(), "STEP must not be skipped");
@@ -3480,7 +3537,7 @@ mod animation_tests {
     fn cubicspline_interp_fixture_parses_with_tangents_deinterleaved() {
         let path = hostile_dir().join("cubicspline_interp.glb");
         assert!(path.exists(), "cubicspline_interp.glb fixture missing at {}", path.display());
-        let (document, buffers, _images) =
+        let (document, buffers, _images, _image_report_lines) =
             import_glb(&path).expect("parse cubicspline_interp.glb");
         let animations = parse_animations(&document, &buffers);
         assert_eq!(animations.len(), 1);
@@ -3585,7 +3642,7 @@ mod animation_tests {
             );
             return;
         }
-        let (document, buffers, _images) = import_glb(&path).expect("parse InterpolationTest.glb");
+        let (document, buffers, _images, _image_report_lines) = import_glb(&path).expect("parse InterpolationTest.glb");
         let animations = parse_animations(&document, &buffers);
         assert_eq!(animations.len(), 9, "one animation clip per channel in this fixture");
 

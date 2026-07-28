@@ -348,6 +348,130 @@ fn draco_primitive_reports_instead_of_vanishing_silently() {
     );
 }
 
+/// Build a minimal, valid `.glb` with ONE material (`Mat0`, real triangle
+/// geometry, so the asset always has something to import) whose
+/// `baseColorTexture` points at a KTX2/BasisU image: `mimeType:
+/// "image/ktx2"`, bufferView-embedded, and the bytes are garbage (not a
+/// real KTX2 container) — MANIFOLD has no BasisU transcoder either way, so
+/// the mime type alone is enough to prove the "unsupported source, not a
+/// corrupt one" report line without needing a real KTX2 encoder in the test.
+/// BUG-ssgz: this used to hard-fail the WHOLE document at `import_glb`
+/// (`gltf::image::Data::from_source` errors on any unrecognized mime type,
+/// same class of bug W1 already fixed for `image/webp`) — the mesh and
+/// material must now still import, with the texture swapped for a dummy.
+fn write_synthetic_ktx2_glb() -> std::path::PathBuf {
+    let tri: [[f32; 3]; 3] = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+    let mut bin = Vec::with_capacity(48);
+    for v in &tri {
+        for c in v {
+            bin.extend_from_slice(&c.to_le_bytes());
+        }
+    }
+    // Not a real KTX2 container — just bytes no decoder anywhere
+    // recognizes. The mime type, not the payload, is what makes this
+    // KTX2/BasisU (a well-formed KTX2 file would fail to decode exactly
+    // the same way — MANIFOLD's `image` crate has no BasisU transcoder,
+    // see `crates/manifold-renderer/Cargo.toml`'s `image` feature list).
+    let ktx2_bytes: [u8; 8] = [0xAB, 0x4B, 0x54, 0x58, 0x20, 0x32, 0x30, 0xBB];
+    bin.extend_from_slice(&ktx2_bytes);
+
+    let doc = serde_json::json!({
+        "asset": { "version": "2.0" },
+        "scene": 0,
+        "scenes": [{ "nodes": [0] }],
+        "nodes": [{ "mesh": 0 }],
+        "meshes": [
+            { "primitives": [{ "attributes": { "POSITION": 0 }, "material": 0 }] },
+        ],
+        "accessors": [
+            {
+                "bufferView": 0,
+                "componentType": 5126, // FLOAT
+                "count": 3,
+                "type": "VEC3",
+                "min": [0.0, 0.0, 0.0],
+                "max": [1.0, 1.0, 0.0],
+            },
+        ],
+        "bufferViews": [
+            { "buffer": 0, "byteOffset": 0, "byteLength": 36 },
+            { "buffer": 0, "byteOffset": 36, "byteLength": ktx2_bytes.len() },
+        ],
+        "images": [
+            { "name": "BrokenKtx2", "bufferView": 1, "mimeType": "image/ktx2" },
+        ],
+        "textures": [
+            { "source": 0 },
+        ],
+        "materials": [
+            {
+                "name": "Mat0",
+                "pbrMetallicRoughness": {
+                    "baseColorFactor": [0.5, 0.5, 0.5, 1.0],
+                    "baseColorTexture": { "index": 0 },
+                },
+            },
+        ],
+        "buffers": [{ "byteLength": bin.len() }],
+    });
+    let json_bytes = serde_json::to_vec(&doc).expect("serialize synthetic ktx2 glTF JSON");
+
+    let mut json_padded = json_bytes;
+    while !json_padded.len().is_multiple_of(4) {
+        json_padded.push(b' ');
+    }
+    let mut bin_padded = bin;
+    while !bin_padded.len().is_multiple_of(4) {
+        bin_padded.push(0);
+    }
+    let total_len = 12 + 8 + json_padded.len() + 8 + bin_padded.len();
+
+    let mut glb = Vec::with_capacity(total_len);
+    glb.extend_from_slice(b"glTF");
+    glb.extend_from_slice(&2u32.to_le_bytes());
+    glb.extend_from_slice(&(total_len as u32).to_le_bytes());
+    glb.extend_from_slice(&(json_padded.len() as u32).to_le_bytes());
+    glb.extend_from_slice(b"JSON");
+    glb.extend_from_slice(&json_padded);
+    glb.extend_from_slice(&(bin_padded.len() as u32).to_le_bytes());
+    glb.extend_from_slice(b"BIN\0");
+    glb.extend_from_slice(&bin_padded);
+
+    let path = std::env::temp_dir().join(format!(
+        "manifold_synthetic_ktx2_{}_{}.glb",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    std::fs::write(&path, &glb).expect("write synthetic ktx2 glb to temp dir");
+    path
+}
+
+/// BUG-ssgz: a KTX2/BasisU-textured material must import — mesh and
+/// material survive with a dummy texture substituted — instead of the
+/// undecodable image aborting the entire document.
+#[test]
+fn ktx2_texture_reports_instead_of_aborting_whole_import() {
+    let path = write_synthetic_ktx2_glb();
+    let result = assemble_import_graph(&path);
+    std::fs::remove_file(&path).ok();
+
+    let (_def, report) =
+        result.expect("a KTX2-textured glb must still import — no BasisU transcoder is a per-texture degrade, not a whole-file failure");
+
+    assert_eq!(report.material_count, 1, "Mat0's mesh must import despite the undecodable KTX2 texture");
+    assert!(
+        report
+            .report_lines
+            .iter()
+            .any(|l| l.contains("KTX2") || l.contains("BasisU")),
+        "report must name the KTX2/BasisU decode failure, got: {:?}",
+        report.report_lines
+    );
+}
+
 /// Build a minimal, valid `.glb` with TWO materials: `Mat0` has one real
 /// triangle, `Mat1`'s sole primitive's POSITION accessor points at a
 /// bufferView tagged `EXT_meshopt_compression`.
