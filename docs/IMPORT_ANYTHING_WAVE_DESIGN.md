@@ -52,7 +52,7 @@
 
 ## Lane W5 — .exr HDRIs through `node.hdri_source` (BUG-182 (hdri-exr-files-fail-or-fail-silently))
 
-**Reality:** `image` crate has `exr` enabled (Cargo.toml:26), the atom claims .exr support, Peter's real files fail (BUG-182, root cause unknown). Two committed test files: `tests/fixtures/hdri/hdri_float32.exr` and `hdri_half16.exr` (256×128 HDR ramps, R up to ~4.1, G up to ~8.1, authored via Blender this session).
+**Reality:** `image` crate has `exr` enabled (Cargo.toml:26), the atom claims .exr support, Peter's real files fail (BUG-182, root cause unknown). Two committed test files: `tests/fixtures/hdri/hdri_float32.exr` and `hdri_half16.exr` (256×128 HDR ramps, R up to ~4.1, G up to ~8.1).
 
 **Fix shape:** first REPRODUCE — feed both fixtures through `node.hdri_source`'s decode path (read the primitive; write a CPU test that decodes each and asserts max R > 3.0 and max G > 6.0, proving HDR range survives). If both pass, the fixtures don't carry Peter's files' trait — then instrument: every failure path in the atom gets a specific error naming the cause (format? layer? compression? tiled vs scanline?) surfaced as a report/log line per the no-silent-fallbacks doctrine, land that, and note in BUG-182 that the next real failing file will now name its own cause. If a fixture DOES fail, root-cause and fix (suspects: half-float conversion, EXR multi-layer/channel-name assumptions, tiled storage). Gate: the CPU decode tests + a gpu-proofs render with `env_mode = HDRI` on a hostile-shelf asset showing non-black environment contribution. **STOP if:** the failure is inside the `image` crate's EXR reader itself — document the exact variant and file an issue-text in the backlog, consider `exr` crate direct usage as a NOTED option, don't switch decoders solo.
 
@@ -69,5 +69,5 @@ Read `docs/GLB_CONFORMANCE_STATUS.md`, `tests/fixtures/gltf/khronos/manifest.jso
 ## Decided — do not reopen
 
 - Fixtures live in-repo (`pending/` → `hostile/` promotion is the lane's definition of done); scratchpad paths die with sessions.
-- The conformance sweep must stay green at every landing — it went green today (BUG-211) for the first time since E6; a lane that reddens it reverts or fixes before landing, never xfails an `expect_pass` (the harness's own panic message says the same).
+- The conformance sweep must stay green at every landing; a lane that reddens it reverts or fixes before landing, never xfails an `expect_pass` (the harness's own panic message says the same).
 - "Loads and looks good with a report line" beats "loads wrong silently" — report-line doctrine (D9) applies to every new unsupported-feature path this wave touches.

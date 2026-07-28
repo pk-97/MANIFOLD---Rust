@@ -130,7 +130,7 @@ re-verify against as-built code.
 - A TD patch arrives 70% rebuilt with the gaps flagged; the agent closes most of the
   rest.
 
-## 5. Phasing (Sonnet-executable)
+## 5. Phasing
 
 Forbidden, all phases: silent drops (D9 — everything unmapped is reported) ·
 shipping/linking any third-party tool's binaries (D7) · fully-resident vertex
@@ -226,7 +226,7 @@ Corrections to this doc's section 1 audit and P1 scope:
   `alphaCutoff` → `alpha_cutoff`; `BLEND` → `Mask` (cutoff 0.5) **with an
   import-report warning** (MATERIAL M6-D3 — smooth transparency deferred).
   **[SUPERSEDED for scene imports 2026-07-15: IMPORT_FIDELITY D8/F-P5 (SHIPPED
-  2026-07-15, `61400029`) maps `BLEND` and `KHR_materials_transmission` to
+  2026-07-15) maps `BLEND` and `KHR_materials_transmission` to
   `AlphaMode::Blend` in `render_scene`; the Mask mapping stays correct for
   `render_mesh`/`render_copies` (D1 scope fence — untouched by this doc).]**
   `doubleSided` imports as a no-op with a report note: the engine rasterizes both
