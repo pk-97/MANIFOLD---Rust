@@ -2795,7 +2795,7 @@ fn hostile_fixtures_render_within_framing_invariants() {
             let (def, _report) = super::assemble_import_graph(&path)
                 .unwrap_or_else(|e| panic!("{name}: assemble failed: {e}"));
             let duration_s = skeleton_pose_duration_s_or_static(&def);
-            let rgba = render_skinned_import_at_progress(def, w, h, phase, duration_s);
+            let rgba = render_import_def_at_progress(def, w, h, phase, duration_s, &name);
 
             let mut lit = 0u64;
             let (mut cx, mut cy) = (0.0f64, 0.0f64);
@@ -3640,13 +3640,45 @@ fn set_bound_param(def: &mut EffectGraphDef, node_id: &str, param: &str, value: 
     }
 }
 
-/// Snapshot a phase sequence and assert its frames are pairwise distinct.
+/// Every phase pair must differ by at least this mean-abs diff (0–255
+/// scale) — catches a frozen animation. The floor sits 3x under the
+/// smallest genuine phase delta in the suite (CesiumMilkTruck's wheel
+/// spin, measured 0.032); a single stray hot pixel in a 256x256 frame
+/// is ~0.004, so one-pixel flicker no longer counts as "distinct"
+/// (BUG-gkaw, write-only goldens: `assert_ne!` proved almost nothing).
+#[cfg(feature = "gpu-proofs")]
+const PHASE_DISTINCT_FLOOR: f64 = 0.01;
+
+/// Golden compare tolerance, same value and units as
+/// `glb_conformance.rs`'s `check_golden` (mean-abs over all RGBA bytes,
+/// 0–255 scale, manifest.json's `mean_abs_tol: 2.0`).
+#[cfg(feature = "gpu-proofs")]
+const GOLDEN_MEAN_ABS_TOL: f64 = 2.0;
+
+/// Mean absolute difference between two same-sized RGBA8 buffers, 0–255.
+#[cfg(feature = "gpu-proofs")]
+fn mean_abs_diff(a: &[u8], b: &[u8]) -> f64 {
+    assert_eq!(a.len(), b.len(), "mean_abs_diff: buffer size mismatch");
+    let sum: f64 = a.iter().zip(b).map(|(x, y)| (f64::from(*x) - f64::from(*y)).abs()).sum();
+    sum / a.len() as f64
+}
+
+/// Snapshot a phase sequence and gate it three ways:
+/// 1. every frame clears a non-black floor — a blank render fails as
+///    "black frame", never as a confusing pair-compare message;
+/// 2. every frame pair differs by [`PHASE_DISTINCT_FLOOR`] — catches a
+///    frozen animation;
+/// 3. every frame matches its committed golden within
+///    [`GOLDEN_MEAN_ABS_TOL`] — catches a wrong-but-moving render the
+///    pairwise gates can't (BUG-gkaw: the goldens were write-only).
 ///
 /// Frames always land in `MESH_SNAP_OUT_DIR` (default `target/mesh-snap`,
 /// gitignored) so every run is inspectable. The committed
 /// `tests/fixtures/gltf/goldens/` copies are refreshed only under
-/// `MANIFOLD_REBASELINE_GOLDENS=1`, and only once the assertions pass — a
-/// failing run must never overwrite the goldens it just contradicted.
+/// `MANIFOLD_REBASELINE_GOLDENS=1` (which skips gate 3), only once the
+/// other assertions pass — a failing run must never overwrite the goldens
+/// it just contradicted — and only for a human who LOOKED at the PNGs
+/// before committing them.
 #[cfg(feature = "gpu-proofs")]
 fn assert_phase_sequence_distinct(
     stem: &str,
@@ -3672,21 +3704,66 @@ fn assert_phase_sequence_distinct(
     write_into(&snap_dir);
     eprintln!("{subject}: wrote {} phase frames to {}", frames.len(), snap_dir.display());
 
+    for (p, rgba) in phases.iter().zip(frames) {
+        let non_black =
+            rgba.chunks_exact(4).filter(|px| px[0] != 0 || px[1] != 0 || px[2] != 0).count();
+        let fraction = non_black as f64 / f64::from(w * h);
+        assert!(
+            fraction > 0.02,
+            "{subject}: frame at progress {p} is (nearly) black — non-black fraction \
+             {fraction:.4}. Blank headless render; see BUG-cs6 (skinned all-black headless, \
+             environment fault) before suspecting the shader."
+        );
+    }
+
     for i in 0..frames.len() {
         for j in (i + 1)..frames.len() {
-            assert_ne!(
-                frames[i], frames[j],
-                "{subject}: progress {} and progress {} rendered byte-identical frames",
+            let diff = mean_abs_diff(&frames[i], &frames[j]);
+            assert!(
+                diff > PHASE_DISTINCT_FLOOR,
+                "{subject}: progress {} and progress {} rendered near-identical frames \
+                 (mean-abs diff {diff:.4} <= floor {PHASE_DISTINCT_FLOOR}) — frozen animation \
+                 or a stuck sampler",
                 phases[i], phases[j]
             );
         }
     }
 
+    let goldens = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/gltf/goldens");
     if std::env::var("MANIFOLD_REBASELINE_GOLDENS").is_ok() {
-        let goldens = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../tests/fixtures/gltf/goldens");
         write_into(&goldens);
         eprintln!("{subject}: re-baselined {} goldens in {}", frames.len(), goldens.display());
+        return;
+    }
+    for (p, rgba) in phases.iter().zip(frames) {
+        let golden_path = goldens.join(name(*p));
+        assert!(
+            golden_path.exists(),
+            "{subject}: golden missing at {} — run once with MANIFOLD_REBASELINE_GOLDENS=1, \
+             look at the PNG, then commit it",
+            golden_path.display()
+        );
+        let golden = image::open(&golden_path)
+            .unwrap_or_else(|e| panic!("decode golden {}: {e}", golden_path.display()))
+            .to_rgba8();
+        assert!(
+            golden.width() == w && golden.height() == h,
+            "{subject}: golden {} is {}x{}, expected {w}x{h} — regenerate with \
+             MANIFOLD_REBASELINE_GOLDENS=1",
+            golden_path.display(),
+            golden.width(),
+            golden.height()
+        );
+        let diff = mean_abs_diff(rgba, golden.as_raw());
+        assert!(
+            diff <= GOLDEN_MEAN_ABS_TOL,
+            "{subject}: progress {p} diverged from committed golden {} (mean-abs diff \
+             {diff:.4} > tol {GOLDEN_MEAN_ABS_TOL}) — compare against {} and re-baseline ONLY \
+             after looking at both PNGs",
+            golden_path.display(),
+            snap_dir.join(name(*p)).display()
+        );
     }
 }
 
@@ -3728,23 +3805,27 @@ fn point_camera_down_to_see_inner_box(def: &mut manifold_core::effect_graph_def:
     set_bound_param(def, "camera", "distance", 6.0);
 }
 
-/// Render the assembled `def` at a chosen `progress` (via the
-/// `node.gltf_animation_source` default beat-drive: `progress =
-/// wrap(beats * rate / (duration_s * beats_per_second))` with
-/// `rate=1.0` and the `beats_per_second=2.0` fallback this test picks
-/// by setting `seconds = beats * 0.5` — see
-/// `gltf_animation_source::default_progress`), polling for the
-/// background mesh-parse to converge (same BUG-100 double-condition
-/// convergence loop `imported_azalea_renders_faithfully_to_png` uses).
-/// Returns the tonemapped RGBA8 buffer.
+/// Render an assembled import `def` at a chosen `progress` through the
+/// default beat-drive all three glTF samplers share
+/// (`node.gltf_animation_source` / `node.gltf_skeleton_pose` /
+/// `node.gltf_morph_weights`): `progress = wrap(beats * rate /
+/// (duration_s * beats_per_second))` with `rate=1.0` and the
+/// `beats_per_second=2.0` fallback picked by setting
+/// `seconds = beats * 0.5`. Polls for the background mesh parse to
+/// converge (the BUG-100 double condition: byte-stable frames AND a
+/// non-black floor) and PANICS if it never does — a blank or unstable
+/// frame is a harness/environment fault (BUG-cs6, skinned all-black
+/// headless: a post-crash GPU rendered black while the app was fine)
+/// and must fail HERE with that message, never leak black frames into
+/// downstream assertions where they read as "frames byte-identical".
 #[cfg(feature = "gpu-proofs")]
-#[allow(clippy::too_many_arguments)]
-fn render_box_animated_at_progress(
+fn render_import_def_at_progress(
     def: manifold_core::effect_graph_def::EffectGraphDef,
     w: u32,
     h: u32,
     progress: f32,
     duration_s: f32,
+    label: &str,
 ) -> Vec<u8> {
     use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
     use crate::preset_context::PresetContext;
@@ -3759,8 +3840,10 @@ fn render_box_animated_at_progress(
     let registry = PrimitiveRegistry::with_builtin();
     let mut generator =
         PresetRuntime::from_def_with_device(def, &registry, device.arc(), w, h, format, None)
-            .expect("BoxAnimated graph must build through PresetRuntime::from_def_with_device");
-    let target = RenderTarget::new(&device, w, h, format, "box-animated");
+            .unwrap_or_else(|e| {
+                panic!("{label}: import graph failed PresetRuntime::from_def_with_device: {e:?}")
+            });
+    let target = RenderTarget::new(&device, w, h, format, label);
     let ctx = PresetContext {
         time: seconds,
         beat: beats as f64,
@@ -3778,13 +3861,13 @@ fn render_box_animated_at_progress(
     };
 
     const STABLE_STREAK: u32 = 3;
-    let max_attempts = 200;
-    let mut rgba = Vec::new();
+    const MAX_ATTEMPTS: u32 = 200;
     let mut prev_rgba: Option<Vec<u8>> = None;
     let mut stable_count = 0u32;
-    for _attempt in 0..max_attempts {
+    let mut last_fraction = 0.0f64;
+    for _attempt in 0..MAX_ATTEMPTS {
         {
-            let mut enc = device.create_encoder("box-animated-render");
+            let mut enc = device.create_encoder("import-def-render");
             {
                 let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
                 generator.render(
@@ -3798,13 +3881,13 @@ fn render_box_animated_at_progress(
         }
         let bytes_per_row = w * 8;
         let readback_buf = device.create_buffer_shared(u64::from(h * bytes_per_row));
-        let mut readback_enc = device.create_encoder("box-animated-readback");
+        let mut readback_enc = device.create_encoder("import-def-readback");
         readback_enc.copy_texture_to_buffer(&target.texture, &readback_buf, w, h, bytes_per_row);
         readback_enc.commit_and_wait_completed();
         let ptr = readback_buf.mapped_ptr().expect("shared readback");
         let halves: &[u16] =
             unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
-        rgba = Vec::with_capacity((w * h * 4) as usize);
+        let mut rgba = Vec::with_capacity((w * h * 4) as usize);
         let mut non_black = 0usize;
         for px in halves.chunks_exact(4) {
             let r = tonemap_channel(half_to_f32(px[0]));
@@ -3819,19 +3902,25 @@ fn render_box_animated_at_progress(
             let a = half_to_f32(px[3]).clamp(0.0, 1.0);
             rgba.push((a * 255.0).round() as u8);
         }
-        let fraction = non_black as f64 / (w * h) as f64;
-        if fraction > 0.02 && prev_rgba.as_deref() == Some(rgba.as_slice()) {
+        last_fraction = non_black as f64 / (w * h) as f64;
+        if last_fraction > 0.02 && prev_rgba.as_deref() == Some(rgba.as_slice()) {
             stable_count += 1;
         } else {
             stable_count = 0;
         }
-        prev_rgba = Some(rgba.clone());
-        if stable_count >= STABLE_STREAK {
-            break;
+        let converged = stable_count >= STABLE_STREAK;
+        prev_rgba = Some(rgba);
+        if converged {
+            return prev_rgba.expect("frame stored above");
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
-    rgba
+    panic!(
+        "{label}: render at progress {progress} never converged after {MAX_ATTEMPTS} attempts \
+         (last non-black fraction {last_fraction:.4}) — blank or unstable headless render. If \
+         the app renders this asset correctly, suspect the headless GPU environment (BUG-cs6, \
+         skinned all-black headless, was a post-crash GPU firmware fault, not a code bug)."
+    );
 }
 
 /// A1 gate item 1 (four-phase PNG goldens): `BoxAnimated.glb`
@@ -3861,7 +3950,7 @@ fn box_animated_four_phase_pngs_are_visibly_distinct() {
     for &p in &phases {
         let (mut def, _report) = assemble_import_graph(&path).expect("assemble BoxAnimated");
         point_camera_down_to_see_inner_box(&mut def);
-        frames.push(render_box_animated_at_progress(def, w, h, p, duration_s));
+        frames.push(render_import_def_at_progress(def, w, h, p, duration_s, "box-animated"));
     }
 
     assert_phase_sequence_distinct(
@@ -3904,8 +3993,8 @@ fn box_animated_round_trip_preserves_animation_and_renders_identically() {
         serde_json::from_str(&json).expect("deserialize EffectGraphDef");
     assert_eq!(def, reloaded, "round trip must be byte-for-byte structurally identical");
 
-    let before = render_box_animated_at_progress(def, w, h, 0.5, duration_s);
-    let after = render_box_animated_at_progress(reloaded, w, h, 0.5, duration_s);
+    let before = render_import_def_at_progress(def, w, h, 0.5, duration_s, "box-animated");
+    let after = render_import_def_at_progress(reloaded, w, h, 0.5, duration_s, "box-animated");
     assert_eq!(
         before, after,
         "progress-0.5 render must pixel-match before and after a save/reload round trip"
@@ -3954,7 +4043,7 @@ fn skeleton_pose_duration_s(def: &manifold_core::effect_graph_def::EffectGraphDe
 /// (IMPORT_ANYTHING_WAVE_DESIGN.md W1 added a plain unrigged fixture —
 /// `webp_texture.glb` — alongside the skinned Mixamo-shaped ones):
 /// `0.0` when the asset has no skeleton pose at all, which
-/// `render_skinned_import_at_progress` renders as a static rest pose
+/// `render_import_def_at_progress` renders as a static rest pose
 /// regardless of `progress`. The strict panicking variant stays for
 /// call sites that know their fixture is always skinned.
 #[cfg(feature = "gpu-proofs")]
@@ -3978,107 +4067,6 @@ fn skeleton_pose_duration_s_or_static(
         None
     }
     find(&def.nodes).unwrap_or(0.0)
-}
-
-/// Render an assembled skinned-import `def` at a chosen `progress`
-/// (via `node.gltf_skeleton_pose`'s default beat-drive — identical
-/// formula/convergence-polling as `render_box_animated_at_progress`,
-/// generalized past the BoxAnimated-specific camera override since
-/// CesiumMan/Fox frame fine under the importer's default camera).
-#[cfg(feature = "gpu-proofs")]
-fn render_skinned_import_at_progress(
-    def: manifold_core::effect_graph_def::EffectGraphDef,
-    w: u32,
-    h: u32,
-    progress: f32,
-    duration_s: f32,
-) -> Vec<u8> {
-    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use crate::preset_context::PresetContext;
-    use crate::render_target::RenderTarget;
-    use manifold_gpu::GpuTextureFormat;
-
-    let beats = progress * duration_s * 2.0;
-    let seconds = (beats * 0.5) as f64;
-
-    let device = crate::test_device();
-    let format = GpuTextureFormat::Rgba16Float;
-    let registry = PrimitiveRegistry::with_builtin();
-    let mut generator =
-        PresetRuntime::from_def_with_device(def, &registry, device.arc(), w, h, format, None)
-            .expect("skinned import graph must build through PresetRuntime::from_def_with_device");
-    let target = RenderTarget::new(&device, w, h, format, "skinned-import");
-    let ctx = PresetContext {
-        time: seconds,
-        beat: beats as f64,
-        dt: 1.0 / 60.0,
-        width: w,
-        height: h,
-        output_width: w,
-        output_height: h,
-        aspect: 1.0,
-        owner_key: 0,
-        is_clip_level: false,
-        frame_count: 0,
-        anim_progress: 0.0,
-        trigger_count: 0,
-    };
-
-    const STABLE_STREAK: u32 = 3;
-    let max_attempts = 200;
-    let mut rgba = Vec::new();
-    let mut prev_rgba: Option<Vec<u8>> = None;
-    let mut stable_count = 0u32;
-    for _attempt in 0..max_attempts {
-        {
-            let mut enc = device.create_encoder("skinned-import-render");
-            {
-                let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
-                generator.render(
-                    &mut gpu,
-                    &target.texture,
-                    &ctx,
-                    &manifold_core::params::ParamManifest::default(),
-                );
-            }
-            enc.commit_and_wait_completed();
-        }
-        let bytes_per_row = w * 8;
-        let readback_buf = device.create_buffer_shared(u64::from(h * bytes_per_row));
-        let mut readback_enc = device.create_encoder("skinned-import-readback");
-        readback_enc.copy_texture_to_buffer(&target.texture, &readback_buf, w, h, bytes_per_row);
-        readback_enc.commit_and_wait_completed();
-        let ptr = readback_buf.mapped_ptr().expect("shared readback");
-        let halves: &[u16] =
-            unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
-        rgba = Vec::with_capacity((w * h * 4) as usize);
-        let mut non_black = 0usize;
-        for px in halves.chunks_exact(4) {
-            let r = tonemap_channel(half_to_f32(px[0]));
-            let g = tonemap_channel(half_to_f32(px[1]));
-            let b = tonemap_channel(half_to_f32(px[2]));
-            if r != 0 || g != 0 || b != 0 {
-                non_black += 1;
-            }
-            rgba.push(r);
-            rgba.push(g);
-            rgba.push(b);
-            let a = half_to_f32(px[3]).clamp(0.0, 1.0);
-            rgba.push((a * 255.0).round() as u8);
-        }
-        let fraction = non_black as f64 / (w * h) as f64;
-        if fraction > 0.02 && prev_rgba.as_deref() == Some(rgba.as_slice()) {
-            stable_count += 1;
-        } else {
-            stable_count = 0;
-        }
-        prev_rgba = Some(rgba.clone());
-        if stable_count >= STABLE_STREAK {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
-    rgba
 }
 
 /// A2 gate: `CesiumMan.glb` and `Fox.glb` — a real rigged, skinned,
@@ -4108,7 +4096,7 @@ fn skinned_characters_render_four_visibly_distinct_deformed_poses() {
         let mut frames = Vec::new();
         for &p in &phases {
             let (def, _report) = assemble_import_graph(&path).expect("assemble skinned import");
-            frames.push(render_skinned_import_at_progress(def, w, h, p, duration_s));
+            frames.push(render_import_def_at_progress(def, w, h, p, duration_s, asset));
         }
 
         let stem = format!("{}_skin", asset.trim_end_matches(".glb").to_lowercase());
@@ -4171,7 +4159,7 @@ fn rigid_multi_node_held_out_fixture_renders_four_distinct_poses() {
     let mut frames = Vec::new();
     for &p in &phases {
         let (def, _report) = assemble_import_graph(&path).expect("assemble CesiumMilkTruck import");
-        frames.push(render_skinned_import_at_progress(def, w, h, p, duration_s));
+        frames.push(render_import_def_at_progress(def, w, h, p, duration_s, asset));
     }
 
     assert_phase_sequence_distinct(
@@ -4313,107 +4301,6 @@ fn morph_weights_duration_s(def: &manifold_core::effect_graph_def::EffectGraphDe
     find(&def.nodes).expect("assembled graph has no node.gltf_morph_weights with a duration_s param")
 }
 
-/// Render an assembled morphed-import `def` at a chosen `progress` (via
-/// `node.gltf_morph_weights`' default beat-drive) — identical
-/// formula/convergence-polling as `render_skinned_import_at_progress`,
-/// just against the morph weights node's own `duration_s` instead of
-/// the skeleton pose's.
-#[cfg(feature = "gpu-proofs")]
-fn render_morph_import_at_progress(
-    def: manifold_core::effect_graph_def::EffectGraphDef,
-    w: u32,
-    h: u32,
-    progress: f32,
-    duration_s: f32,
-) -> Vec<u8> {
-    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use crate::preset_context::PresetContext;
-    use crate::render_target::RenderTarget;
-    use manifold_gpu::GpuTextureFormat;
-
-    let beats = progress * duration_s * 2.0;
-    let seconds = (beats * 0.5) as f64;
-
-    let device = crate::test_device();
-    let format = GpuTextureFormat::Rgba16Float;
-    let registry = PrimitiveRegistry::with_builtin();
-    let mut generator =
-        PresetRuntime::from_def_with_device(def, &registry, device.arc(), w, h, format, None)
-            .expect("morphed import graph must build through PresetRuntime::from_def_with_device");
-    let target = RenderTarget::new(&device, w, h, format, "morph-import");
-    let ctx = PresetContext {
-        time: seconds,
-        beat: beats as f64,
-        dt: 1.0 / 60.0,
-        width: w,
-        height: h,
-        output_width: w,
-        output_height: h,
-        aspect: 1.0,
-        owner_key: 0,
-        is_clip_level: false,
-        frame_count: 0,
-        anim_progress: 0.0,
-        trigger_count: 0,
-    };
-
-    const STABLE_STREAK: u32 = 3;
-    let max_attempts = 200;
-    let mut rgba = Vec::new();
-    let mut prev_rgba: Option<Vec<u8>> = None;
-    let mut stable_count = 0u32;
-    for _attempt in 0..max_attempts {
-        {
-            let mut enc = device.create_encoder("morph-import-render");
-            {
-                let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
-                generator.render(
-                    &mut gpu,
-                    &target.texture,
-                    &ctx,
-                    &manifold_core::params::ParamManifest::default(),
-                );
-            }
-            enc.commit_and_wait_completed();
-        }
-        let bytes_per_row = w * 8;
-        let readback_buf = device.create_buffer_shared(u64::from(h * bytes_per_row));
-        let mut readback_enc = device.create_encoder("morph-import-readback");
-        readback_enc.copy_texture_to_buffer(&target.texture, &readback_buf, w, h, bytes_per_row);
-        readback_enc.commit_and_wait_completed();
-        let ptr = readback_buf.mapped_ptr().expect("shared readback");
-        let halves: &[u16] =
-            unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
-        rgba = Vec::with_capacity((w * h * 4) as usize);
-        let mut non_black = 0usize;
-        for px in halves.chunks_exact(4) {
-            let r = tonemap_channel(half_to_f32(px[0]));
-            let g = tonemap_channel(half_to_f32(px[1]));
-            let b = tonemap_channel(half_to_f32(px[2]));
-            if r != 0 || g != 0 || b != 0 {
-                non_black += 1;
-            }
-            rgba.push(r);
-            rgba.push(g);
-            rgba.push(b);
-            let a = half_to_f32(px[3]).clamp(0.0, 1.0);
-            rgba.push((a * 255.0).round() as u8);
-        }
-        let fraction = non_black as f64 / (w * h) as f64;
-        if fraction > 0.02 && prev_rgba.as_deref() == Some(rgba.as_slice()) {
-            stable_count += 1;
-        } else {
-            stable_count = 0;
-        }
-        prev_rgba = Some(rgba.clone());
-        if stable_count >= STABLE_STREAK {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
-    rgba
-}
-
 /// A3 gate (positive): `AnimatedMorphCube.glb` and `MorphStressTest.glb`
 /// — imported and rendered headless at four chosen progress values —
 /// must each produce four visibly distinct frames, proving the morph
@@ -4468,7 +4355,7 @@ fn morph_targets_render_four_visibly_distinct_poses() {
         let mut frames = Vec::new();
         for &p in &phases {
             let (def, _report) = assemble_import_graph(&path).expect("assemble morphed import");
-            frames.push(render_morph_import_at_progress(def, w, h, p, duration_s));
+            frames.push(render_import_def_at_progress(def, w, h, p, duration_s, asset));
         }
 
         let stem = format!("{}_morph", asset.trim_end_matches(".glb").to_lowercase());
@@ -4511,8 +4398,8 @@ fn morph_targets_round_trip_preserves_weights_and_renders_identically() {
         serde_json::from_str(&json).expect("deserialize EffectGraphDef");
     assert_eq!(def, reloaded, "round trip must be byte-for-byte structurally identical");
 
-    let before = render_morph_import_at_progress(def, w, h, 0.5, duration_s);
-    let after = render_morph_import_at_progress(reloaded, w, h, 0.5, duration_s);
+    let before = render_import_def_at_progress(def, w, h, 0.5, duration_s, "morph-import");
+    let after = render_import_def_at_progress(reloaded, w, h, 0.5, duration_s, "morph-import");
     assert_eq!(
         before, after,
         "progress-0.5 render must pixel-match before and after a save/reload round trip"
