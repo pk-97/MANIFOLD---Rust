@@ -417,7 +417,7 @@ pub(super) fn build_import_graph(
         fresh_id: &mut fresh_id,
     };
     for (k, m) in materials.iter().enumerate() {
-        let mut out = build_object_group(&mut import_ctx, k, k, m, "anim");
+        let mut out = build_object_group(&mut import_ctx, k, k, k, m, "anim");
         nodes.push(out.group_node);
         wires.append(&mut out.wires_to_render);
         card_params.append(&mut out.card_params);

@@ -2769,6 +2769,109 @@ fn hostile_fixtures_merge_into_existing_scene() {
     }
 }
 
+/// Pre-existing merge-path bug (surfaced, not introduced, by BUG-w5wv):
+/// `build_object_group`'s `local_k` numbers a merged object's OWN inner
+/// STRING handles ("mat_{k}", "mesh_{k}", …), a SEPARATE identifier system
+/// from the numeric `EffectGraphNode.id` — those handles are what a card
+/// binding's `NodeId` addresses, and they're never renamed downstream. A
+/// fresh import's `local_k` always starts at 0, so merging a SECOND glTF
+/// (whose own `local_k` ALSO starts at 0) into a target scene that already
+/// has its own "mat_0" collides on that bare handle — `check_card_lints`/
+/// `graph.instance_by_node_id` then resolve the incoming material's OWN
+/// binding against the TARGET's colliding node instead of its own. Silently
+/// harmless when every colliding node happened to be identically
+/// `node.pbr_material` with similar-looking values (nobody could tell which
+/// of the two a binding actually landed on); this test proves the fix
+/// (`max_local_k_recursive`'s offset in `merge.rs`) with DISTINGUISHABLE
+/// values on each side, fully decoupled from the unlit-routing feature
+/// (BUG-w5wv's own `azalea + cubicspline_interp.glb` real-fixture merge,
+/// which DOES put two different primitive types behind the collision, is
+/// covered by `hostile_fixtures_merge_into_existing_scene`'s general sweep).
+#[test]
+fn merge_local_k_offset_avoids_colliding_with_the_targets_own_material_handle() {
+    use crate::node_graph::persistence::EffectGraphDefExt;
+    // Target: one object, its own material's color_r = 0.8 (full_material's
+    // default) — this is what a colliding resolution would WRONGLY return.
+    let target = scene_def_with_bbox_half_extent(1.0);
+    let (render_id, _existing_objects) = render_scene_objects(&target);
+
+    // Incoming: one object, color_r overridden to a clearly distinct value —
+    // pre-fix, this material's OWN `local_k` would ALSO be 0 (restarting
+    // independently of the target), colliding on the bare handle "mat_0".
+    let mut incoming = full_material(0, "Incoming", 300);
+    incoming.base_color_factor[0] = 0.15;
+    let summary = merge_summary(vec![incoming], 1.0);
+    let path = std::path::Path::new("/tmp/synthetic_merge_local_k_collision.glb");
+    let plan = merge_import_into_graph(&target, &summary, path).expect("merge incoming material");
+
+    // The offset must have moved the incoming material's handle off "mat_0"
+    // (the target's own material already claims it).
+    let incoming_mat_handle = plan
+        .new_nodes
+        .iter()
+        .find_map(|n| find_handle_by_type(n, "node.pbr_material"))
+        .expect("incoming material must build node.pbr_material");
+    assert_ne!(
+        incoming_mat_handle, "mat_0",
+        "incoming material's handle must not collide with the target's own mat_0"
+    );
+
+    let mut merged = target.clone();
+    merged.nodes.extend(plan.new_nodes.clone());
+    merged.wires.extend(plan.new_wires.clone());
+    if let Some(node) = merged.nodes.iter_mut().find(|n| n.id == render_id) {
+        node.params.insert(
+            "objects".to_string(),
+            SerializedParamValue::Int { value: plan.new_objects_count as i32 },
+        );
+    }
+    if let Some(meta) = merged.preset_metadata.as_mut() {
+        meta.params.extend(plan.new_card_params.clone());
+        meta.bindings.extend(plan.new_card_bindings.clone());
+        meta.string_bindings.extend(plan.new_string_bindings.clone());
+    }
+
+    let registry = PrimitiveRegistry::with_builtin();
+    let graph = merged.clone().into_graph(&registry).expect("merged graph must build");
+    let (errors, _warnings) = crate::node_graph::validate::check_card_lints(&merged, Some(&graph));
+    assert!(errors.is_empty(), "card lints rejected the merged def: {errors:?}");
+
+    // The incoming material's own "color_r" binding must resolve to ITS OWN
+    // node — proven by the VALUE (0.15), not the target's colliding 0.8.
+    let color_r_binding = merged
+        .preset_metadata
+        .as_ref()
+        .unwrap()
+        .bindings
+        .iter()
+        .find(|b| matches!(&b.target, BindingTarget::Node { node_id, param } if node_id.as_str() == incoming_mat_handle && param == "color_r"))
+        .expect("incoming material's color_r binding must exist");
+    let BindingTarget::Node { node_id, .. } = &color_r_binding.target else { unreachable!() };
+    let instance = graph
+        .instance_by_node_id(node_id)
+        .and_then(|idx| graph.get_node(idx))
+        .expect("color_r binding must resolve to a real node instance");
+    assert!(
+        matches!(
+            instance.params.get("color_r"),
+            Some(crate::node_graph::parameters::ParamValue::Float(v)) if (*v - 0.15).abs() < 1e-6
+        ),
+        "color_r binding must resolve to the INCOMING material's own node (0.15), not the \
+         target's colliding one (0.8) — got {:?}",
+        instance.params.get("color_r")
+    );
+}
+
+/// Group-aware handle search, mirroring [`contains_type`]: the first
+/// node of `type_id` anywhere in `node` (including inside its own group
+/// body), returning its OWN `handle`.
+fn find_handle_by_type<'a>(node: &'a EffectGraphNode, type_id: &str) -> Option<&'a str> {
+    if node.type_id == type_id {
+        return node.handle.as_deref();
+    }
+    node.group.as_ref()?.nodes.iter().find_map(|inner| find_handle_by_type(inner, type_id))
+}
+
 /// Group-aware type search: merge plans emit one GROUP node per object
 /// with the real producers in its `group.body`.
 fn contains_type(node: &EffectGraphNode, type_id: &str) -> bool {

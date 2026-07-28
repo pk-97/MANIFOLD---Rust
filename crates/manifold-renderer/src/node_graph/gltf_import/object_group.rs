@@ -78,21 +78,32 @@ pub(super) struct ImportCtx<'a> {
 /// Build ONE object's group (mesh source + material + optional skin/morph/
 /// animation + texture maps + transform, wrapped in a named `GroupDef`)
 /// and its top-level wiring into `render_scene`. `local_k` numbers this
-/// object's INNER handles (`mesh_{local_k}`, `mat_{local_k}`, …) —
-/// purely cosmetic, namespaced away by the group-name-prefixing flattener
-/// (`docs/GROUPING_GRAPHS.md` section 2), so it always starts at 0 for a fresh
-/// call — a merge's incoming materials get their own local numbering,
-/// never the target scene's. `port_index` is the render_scene OBJECT SLOT
-/// this group wires into (`mesh_{port_index}` etc. on `render_scene`
-/// itself) — for a single import these are the same number; for a merge,
-/// `port_index` is offset by the target scene's existing `objects` count
-/// while `local_k` restarts at 0. `anim_prefix` is the shared per-glb
-/// animation card id prefix (see `animation_card_params`) — "anim" for a
-/// fresh import; the merge path uniquifies against the target scene's
-/// existing card ids. The import-wide facts travel in `ctx`.
+/// object's INNER handles (`mesh_{local_k}`, `mat_{local_k}`, …). These
+/// handles are STRINGS a card binding's `NodeId` addresses directly and
+/// are NEVER renamed downstream (unlike the numeric `EffectGraphNode.id`,
+/// which the flattener does reassign fresh) — BUG-w5wv: `local_k` therefore
+/// must be unique against every OTHER object anywhere in the eventual def,
+/// not just within this one call. A fresh import's `local_k` starts at 0
+/// (`build_import_graph`); a merge's starts past the target scene's own
+/// existing object handles (`merge.rs`'s `max_local_k_recursive`), never
+/// colliding with them. `name_seed` is the separate, purely cosmetic
+/// per-import/per-merge object position (0-based, always restarts at 0 for
+/// each call) — it drives ONLY the "Object N" display-name fallback and
+/// [`unique_group_name`]'s first suffix guess, decoupled from `local_k` so
+/// a merge's own group names still read "Object 1"/"Existing 1" on first
+/// collision rather than some large number reflecting the target scene's
+/// unrelated existing object count. `port_index` is the render_scene
+/// OBJECT SLOT this group wires into (`mesh_{port_index}` etc. on
+/// `render_scene` itself) — for a single import this equals `name_seed`;
+/// for a merge, `port_index` is offset by the target's existing `objects`
+/// count. `anim_prefix` is the shared per-glb animation card id prefix
+/// (see `animation_card_params`) — "anim" for a fresh import; the merge
+/// path uniquifies against the target scene's existing card ids. The
+/// import-wide facts travel in `ctx`.
 pub(super) fn build_object_group(
     ctx: &mut ImportCtx<'_>,
     local_k: usize,
+    name_seed: usize,
     port_index: usize,
     m: &gltf_load::GltfMaterialInfo,
     anim_prefix: &str,
@@ -118,7 +129,7 @@ pub(super) fn build_object_group(
         // per-object card knobs pushed further down can stamp it as their
         // `section` (D5/D9) — the section now carries the per-object
         // identity the old " 2"-style label suffix used to.
-        let group_name = unique_group_name(m.name.as_deref(), k, used_group_names);
+        let group_name = unique_group_name(m.name.as_deref(), name_seed, k, used_group_names);
 
         // D9 — every unmapped feature this material carries is a report
         // line, never a silent drop. GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6
