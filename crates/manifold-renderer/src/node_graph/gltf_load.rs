@@ -4552,7 +4552,8 @@ mod tests {
         // Independent oracle: re-derive world position/fwd/up straight off
         // the document's node tree (root's uniform scale composed with the
         // camera node's local matrix), bypassing `parse_cameras` entirely.
-        let (document, _buffers, _images) = import_glb(&path).expect("reparse for the oracle");
+        let (document, _buffers, _images, _image_report_lines) =
+            import_glb(&path).expect("reparse for the oracle");
         let cam_node = document
             .nodes()
             .find(|n| n.camera().is_some())
