@@ -42,6 +42,11 @@
       "file": ".claude/hooks/agent-tier-spawn-guard.py"
     },
     {
+      "transition": "every subagent/teammate receives the worker-seat charge on its first tool call",
+      "enforcement": "hook",
+      "file": ".claude/hooks/worker-seat-charge.py"
+    },
+    {
       "transition": "teammate slot naming from the slot map",
       "enforcement": "hook",
       "file": ".claude/hooks/agent-teammate-naming-guard.py"

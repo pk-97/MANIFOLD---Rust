@@ -199,6 +199,15 @@
             "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" seat-freeze-guard.py"
           }
         ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" worker-seat-charge.py"
+          }
+        ]
       }
     ],
     "PostToolUse": [
