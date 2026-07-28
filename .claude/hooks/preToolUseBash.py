@@ -1077,6 +1077,126 @@ def merge_verdict_guard(cmd, cwd):
 
 
 # ---------------------------------------------------------------------------
+# Pre-land flow-gate guard
+#
+# The flow gate (`scripts/run_ui_flows.py --touched ...`) was a prose line in
+# the landing protocol: nine flows drifted red across multiple landings before
+# a sweep caught them, because nothing made "the gate ran, green, at the tip
+# that lands" a machine fact. run_ui_flows.py now writes a marker
+# (.claude/orchestration/flow-gate-marker.json in the main checkout: HEAD sha,
+# pass, ts) on every --touched run; this guard denies a merge into main when
+# the merged branch touches flow-mapped paths (manifest path_triggers or flow
+# JSON files) and no green marker exists for exactly that branch tip.
+#
+# Fails open loudly, like merge_verdict_guard. Docs-only and unmapped
+# branches never see it.
+#
+# Obsolete when: landing moves to a server-side CI gate that runs the flow
+# suite itself, or the flow suite is folded into gate_runner pre-land
+# execution.
+# ---------------------------------------------------------------------------
+
+_FLOW_MARKER_PATH = (
+    _main_checkout_path() / ".claude" / "orchestration" / "flow-gate-marker.json"
+)
+_FLOW_MANIFEST_PATH = (
+    _main_checkout_path() / "scripts" / "ui-flows" / "manifest.json"
+)
+
+
+def _flow_mapped(path, triggers):
+    """True when a changed path is covered by the flow gate: either a flow
+    script itself or a path_triggers prefix match."""
+    if (path.startswith("scripts/ui-flows/") and path.endswith(".json")
+            and not path.endswith("manifest.json")):
+        return True
+    return any(path.startswith(prefix) for prefix in triggers)
+
+
+def flow_gate_guard(cmd, cwd):
+    """Return (deny_reason, allow_context) for a git merge targeting main.
+
+    Deny when the merged branch touches flow-mapped paths and the flow-gate
+    marker is missing, red, or written at a different HEAD than the branch
+    tip. Fails open on error — prints loudly, returns (None, None)."""
+    try:
+        for toks in _shlex_segments(cmd):
+            toks = _strip_leading_keywords(toks)
+            if not toks or toks[0] != "git":
+                continue
+            target_dir, sub, rest = _git_checkout_dir(toks, cwd)
+            if target_dir is None or not _in_main_checkout(target_dir):
+                continue
+            if sub != "merge":
+                continue
+            if _current_branch(target_dir) != "main":
+                continue
+            source_branch = _get_merge_source_branch(rest)
+            if source_branch is None:
+                continue
+
+            diff_r = subprocess.run(
+                ["git", "-C", str(target_dir), "diff", "--name-only",
+                 "origin/main", source_branch],
+                capture_output=True, text=True, timeout=15,
+            )
+            if diff_r.returncode != 0:
+                return (None, None)
+            changed = [l.strip()
+                       for l in diff_r.stdout.strip().split("\n") if l.strip()]
+
+            triggers = json.loads(
+                _FLOW_MANIFEST_PATH.read_text()).get("path_triggers", {})
+            mapped = [p for p in changed if _flow_mapped(p, triggers)]
+            if not mapped:
+                return (None, None)
+
+            tip_r = subprocess.run(
+                ["git", "-C", str(target_dir), "rev-parse", source_branch],
+                capture_output=True, text=True, timeout=15,
+            )
+            if tip_r.returncode != 0:
+                return (None, None)
+            tip = tip_r.stdout.strip()
+
+            problem = None
+            if not _FLOW_MARKER_PATH.exists():
+                problem = "no flow-gate marker exists"
+            else:
+                marker = json.loads(_FLOW_MARKER_PATH.read_text())
+                if marker.get("head") != tip:
+                    problem = (f"marker is stale: written at "
+                               f"{str(marker.get('head'))[:12]}, branch tip is "
+                               f"{tip[:12]}")
+                elif marker.get("pass") is not True:
+                    problem = "marker records a RED run"
+
+            if problem is None:
+                return (None,
+                        f"Flow gate: green marker matches {source_branch} tip.")
+
+            return (
+                f"Merge blocked by the flow gate: {source_branch} touches "
+                f"{len(mapped)} flow-mapped path(s) (e.g. {mapped[0]}) but "
+                f"{problem}.\n\n"
+                f"In the branch's worktree run:\n"
+                f"  scripts/run_ui_flows.py --touched origin/main...HEAD\n"
+                f"(writes the marker on completion), then retry the merge. "
+                f"BUG-313 shipped exactly this way — its catching flow was "
+                f"red and unrun.",
+                None,
+            )
+
+    except Exception as e:
+        print(f"flow_gate_guard FAILED OPEN: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        return (None, None)
+
+    return (None, None)  # no merge-to-main segment found
+
+
+# ---------------------------------------------------------------------------
 # Warning-only lints (never deny, never ask) — additionalContext on allow
 #
 # TICKETS.md T4/T5/T8: three independent shell-shape mistakes that have each
@@ -1348,6 +1468,13 @@ def main() -> int:
         json.dump(build_deny([merge_deny]), sys.stdout)
         return 0
 
+    # 0e2. Pre-land flow-gate guard: a merge into main whose branch touches
+    # flow-mapped paths requires a green flow-gate marker at the branch tip.
+    flow_deny, flow_context = flow_gate_guard(cmd, cwd)
+    if flow_deny:
+        json.dump(build_deny([flow_deny]), sys.stdout)
+        return 0
+
     # 0f. Destructive outward actions (force-push to any ref, remote branch
     # deletion, `gh pr merge`, `bd delete`) ASK in every mode — settings
     # allow rules would otherwise skip the classifier for them. Must run
@@ -1375,7 +1502,7 @@ def main() -> int:
     # 1. Pre-approved? Allow outright, pipes and loops included.
     if is_preapproved_command(cmd):
         combined = "\n\n".join(c for c in (
-            landing_context, merge_context,
+            landing_context, merge_context, flow_context,
             rg_warning, masked_exit_warning, comment_swallow_warning,
             workspace_sweep_warning,
         ) if c) or None

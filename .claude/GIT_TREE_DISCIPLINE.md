@@ -108,7 +108,11 @@ Obsolete when: main stops being a locally-landed shared trunk (PR/CI-gated merge
   radius says so; plus the UI flow gate — `scripts/run_ui_flows.py
   --touched origin/main...HEAD` — path-scoped via the flow manifest's
   `path_triggers`, exits 0 immediately when no flow-mapped path is touched;
-  added after BUG-313 shipped with its catching flow red and unrun) →
+  added after BUG-313 shipped with its catching flow red and unrun. The flow
+  gate is hook-enforced: the run writes a marker
+  (`.claude/orchestration/flow-gate-marker.json`, main checkout) and
+  `preToolUseBash.py` (`flow_gate_guard`) denies a merge into main whose
+  branch touches flow-mapped paths without a green marker at that exact tip) →
   `git merge --no-ff` into main → push → if the push is
   rejected because someone landed first, repeat. New/renamed docs need
   `scripts/gen_docs_index.py` before the sweep — a freshness test

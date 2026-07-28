@@ -576,6 +576,98 @@ def test_sed_write_guard_ignores_read_only_sed():
               hook.sed_write_guard(cmd) is None, cmd)
 
 
+# ---------------------------------------------------------------------------
+# Pre-land flow-gate guard — flow_gate_guard
+# ---------------------------------------------------------------------------
+
+TIP_SHA = "a" * 40
+
+
+def _run_flow_gate(diff_output, marker=None, cmd="git merge --no-ff lane/x"):
+    """Run flow_gate_guard with mocked git + temp manifest/marker paths."""
+    mock_run = unittest.mock.MagicMock()
+
+    def side_effect(argv, *args, **kwargs):
+        result = unittest.mock.MagicMock()
+        result.returncode = 0
+        joined = " ".join(argv) if isinstance(argv, list) else argv
+        if "diff" in joined:
+            result.stdout = diff_output
+        elif "rev-parse" in joined:
+            result.stdout = TIP_SHA + "\n"
+        else:
+            result.stdout = ""
+        return result
+
+    mock_run.side_effect = side_effect
+    orig_branch = hook._current_branch
+    orig_marker = hook._FLOW_MARKER_PATH
+    orig_manifest = hook._FLOW_MANIFEST_PATH
+    hook._current_branch = lambda cwd: "main"
+    with tempfile.TemporaryDirectory() as td:
+        manifest_path = Path(td) / "manifest.json"
+        manifest_path.write_text(json.dumps(
+            {"path_triggers": {"crates/manifold-ui/": ["scene-setup"]}}))
+        hook._FLOW_MANIFEST_PATH = manifest_path
+        marker_path = Path(td) / "flow-gate-marker.json"
+        if marker is not None:
+            marker_path.write_text(json.dumps(marker))
+        hook._FLOW_MARKER_PATH = marker_path
+        patcher = unittest.mock.patch.object(hook.subprocess, "run", mock_run)
+        patcher.start()
+        try:
+            return hook.flow_gate_guard(cmd, MAIN_CWD)
+        finally:
+            patcher.stop()
+            hook._current_branch = orig_branch
+            hook._FLOW_MARKER_PATH = orig_marker
+            hook._FLOW_MANIFEST_PATH = orig_manifest
+
+
+def test_flow_gate_unmapped_branch_unaffected():
+    reason, context = _run_flow_gate("crates/manifold-core/src/lib.rs\n")
+    check("flow gate: unmapped branch -> silent",
+          reason is None and context is None, (reason, context))
+
+
+def test_flow_gate_denies_missing_marker():
+    reason, _ = _run_flow_gate("crates/manifold-ui/src/panels/foo.rs\n")
+    check("flow gate: mapped + no marker -> deny", reason is not None, reason)
+    check("flow gate: deny names run_ui_flows",
+          reason and "run_ui_flows.py --touched" in reason, reason)
+
+
+def test_flow_gate_denies_stale_marker():
+    reason, _ = _run_flow_gate(
+        "crates/manifold-ui/src/panels/foo.rs\n",
+        marker={"head": "b" * 40, "pass": True})
+    check("flow gate: stale marker -> deny",
+          reason is not None and "stale" in reason, reason)
+
+
+def test_flow_gate_denies_red_marker():
+    reason, _ = _run_flow_gate(
+        "crates/manifold-ui/src/panels/foo.rs\n",
+        marker={"head": TIP_SHA, "pass": False})
+    check("flow gate: red marker -> deny",
+          reason is not None and "RED" in reason, reason)
+
+
+def test_flow_gate_passes_green_marker_at_tip():
+    reason, context = _run_flow_gate(
+        "crates/manifold-ui/src/panels/foo.rs\n",
+        marker={"head": TIP_SHA, "pass": True})
+    check("flow gate: green marker at tip -> allow", reason is None, reason)
+    check("flow gate: allow carries context",
+          context is not None and "green" in context.lower(), context)
+
+
+def test_flow_gate_touched_flow_file_is_mapped():
+    reason, _ = _run_flow_gate("scripts/ui-flows/some-flow.json\n")
+    check("flow gate: touched flow file counts as mapped",
+          reason is not None, reason)
+
+
 def main():
     test_cd_guard()
     test_branch_force_main_asks()
@@ -631,6 +723,13 @@ def main():
     test_merge_passes_with_no_gate_verdict()
     test_merge_passes_no_bug_ids()
     test_merge_passes_docs_only()
+
+    test_flow_gate_unmapped_branch_unaffected()
+    test_flow_gate_denies_missing_marker()
+    test_flow_gate_denies_stale_marker()
+    test_flow_gate_denies_red_marker()
+    test_flow_gate_passes_green_marker_at_tip()
+    test_flow_gate_touched_flow_file_is_mapped()
 
     for name in PASS:
         print(f"PASS: {name}")

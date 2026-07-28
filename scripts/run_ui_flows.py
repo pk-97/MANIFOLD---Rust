@@ -52,6 +52,47 @@ def run_flow(name, scene):
     return r.returncode, tail
 
 
+def write_gate_marker(range_spec, filters, ok):
+    """Record a --touched run for the pre-land flow-gate guard.
+
+    preToolUseBash.py (flow_gate_guard) denies a merge into main when the
+    merged branch touches flow-mapped paths and this marker is missing, red,
+    or written at a different HEAD than the branch tip — so "the gate ran,
+    green, on exactly what lands" is machine-checked, not remembered. The
+    marker lives in the MAIN checkout (resolved via --git-common-dir) so a
+    run inside a branch worktree is visible to the guard. Best-effort: a
+    marker failure never fails the suite.
+    """
+    try:
+        common = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            cwd=ROOT, capture_output=True, text=True, timeout=15)
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=ROOT, capture_output=True, text=True, timeout=15)
+        if common.returncode != 0 or head.returncode != 0:
+            return
+        main_root = os.path.dirname(
+            os.path.normpath(os.path.join(ROOT, common.stdout.strip())))
+        marker_dir = os.path.join(main_root, ".claude", "orchestration")
+        os.makedirs(marker_dir, exist_ok=True)
+        import datetime
+        with open(os.path.join(marker_dir, "flow-gate-marker.json"), "w") as f:
+            json.dump({
+                "head": head.stdout.strip(),
+                "range": range_spec,
+                "filters": filters,
+                "pass": ok,
+                "ts": datetime.datetime.now(datetime.timezone.utc)
+                      .isoformat(timespec="seconds"),
+            }, f, indent=1)
+        print(f"flow gate: marker written for HEAD {head.stdout.strip()[:12]} "
+              f"(pass={ok})")
+    except Exception as e:
+        print(f"flow gate: marker write failed (non-fatal): {e}",
+              file=sys.stderr)
+
+
 def filters_for_touched(range_spec, manifest):
     """Map a git diff range to flow-name filters via manifest `path_triggers`.
     Returns (filters, hits) — hits is {touched_path: [matched prefixes/flows]}
@@ -102,6 +143,7 @@ def main():
         if not gate_filters:
             print(f"flow gate: no flow-mapped paths touched in {touched_range} "
                   "— nothing to run")
+            write_gate_marker(touched_range, [], True)
             return 0
         print(f"flow gate: {touched_range} → {len(hits)} flow-mapped file(s) "
               f"→ filters {gate_filters}")
@@ -165,6 +207,8 @@ def main():
         print(f"STALE manifest entries (no such flow file): {stale}")
 
     ok = not green_fail and not xfail_surprise and not missing and not stale
+    if touched_range is not None:
+        write_gate_marker(touched_range, filters, ok)
     return 0 if ok else 1
 
 
