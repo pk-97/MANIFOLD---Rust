@@ -30,6 +30,11 @@ History: 2026-07-24 R2 extended DENY to the open provider roster (model ids
 measured from real transcripts: `deepseek-v4-flash`, `glm-4.7`).
 2026-07-24 D-48 split GLM out of the executor tier: subagent nesting is
 harness-possible and the GLM dispatcher legitimately spawns haiku lanes.
+2026-07-28: seat markers (`agent_id`/`agent_type`/`teammate_name` in the
+payload) now deny BEFORE the transcript read — teammate payloads carry the
+PARENT transcript, so the model check saw the lead's model and let a haiku
+teammate spawn an Explore agent. The transcript-tier path below survives
+only for the marker-less lead session.
 
 Obsolete when: the routing policy in docs/AGENT_ROUTING.md retires the two-tier lead/lane model this guard polices; recheck at each routing-policy revision.
 """
@@ -113,6 +118,26 @@ def decide(model: str, spawn_slot: str) -> str:
 def main() -> None:
     try:
         payload = json.load(sys.stdin)
+
+        # Seat markers first (2026-07-28, measured via telemetry `keys`):
+        # subagent/teammate PreToolUse payloads carry `agent_id`/`agent_type`;
+        # the lead's carry neither. Transcript-model detection CANNOT see
+        # this — teammate payloads carry the PARENT transcript, so the model
+        # reads as the lead and a haiku lane spawned an Explore agent
+        # (2026-07-28). Marker present → deny: with the dispatcher seat
+        # retired (CLAUDE.md Agents), no worker seat spawns anything; if a
+        # dispatcher tier returns, reintroduce its allowance HERE, on
+        # markers, never on transcript model.
+        if any(payload.get(k) for k in ("agent_id", "agent_type", "teammate_name")):
+            deny(
+                "Agent spawn denied: this session is a worker seat "
+                "(subagent/teammate payload markers present). Workers never "
+                "spawn sub-agents at any depth (docs/AGENT_ROUTING.md). If the "
+                "task genuinely needs delegation, STOP and report that up to "
+                "your orchestrator instead."
+            )
+            sys.exit(0)
+
         transcript_path = payload.get("transcript_path") or ""
         if not transcript_path or not os.path.isfile(transcript_path):
             sys.exit(0)  # fail open — can't identify the caller

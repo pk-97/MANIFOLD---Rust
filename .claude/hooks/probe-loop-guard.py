@@ -18,10 +18,13 @@ At 3: warning (additionalContext). At 6+: DENY until the session writes
 resets the counter. Fails OPEN on any error.
 
 LEAD SEAT ONLY (Peter 2026-07-28): the ladder binds the lead; lanes are the
-delegation target and legitimately run probe loops. Caller tier is read from
-the payload transcript's last assistant `message.model` (same mechanism as
-agent-tier-spawn-guard.py); a non-lead model returns silent. Empty or
-unreadable model enforces — the lead is the failure surface.
+delegation target and legitimately run probe loops. Seat test (measured from
+real payloads, telemetry `keys` field 2026-07-28): subagent/teammate
+PreToolUse payloads carry `agent_id`/`agent_type`; the lead's carry neither.
+Marker present → silent. Transcript-model detection is WRONG here: teammate
+payloads carry the PARENT session's transcript and session_id, so the model
+read is always the lead's (the 2026-07-28 friendly-fire deny that pushed a
+haiku lane into writing the lead's seam-review unlock file).
 
 Obsolete when: the debug escalation ladder in docs/AGENT_ROUTING.md is retired or replaced; this hook is that doctrine's enforcement arm.
 """
@@ -35,32 +38,9 @@ REVIEW_FILE = "/tmp/manifold_seam_review.md"
 WARN_AT = 3
 DENY_AT = 6
 
-LEAD_TIERS = re.compile(r"fable|claude-opus|kimi-k3", re.IGNORECASE)
-TAIL_BYTES = 256 * 1024
 
-
-def caller_model(transcript_path: str) -> str:
-    try:
-        with open(transcript_path, "rb") as f:
-            try:
-                f.seek(-TAIL_BYTES, os.SEEK_END)
-            except OSError:
-                f.seek(0)
-            tail = f.read().decode("utf-8", errors="replace")
-    except OSError:
-        return ""
-    model = ""
-    for line in tail.splitlines():
-        if '"model"' not in line:
-            continue
-        try:
-            entry = json.loads(line)
-        except ValueError:
-            continue
-        m = (entry.get("message") or {}).get("model") or entry.get("model") or ""
-        if isinstance(m, str) and m:
-            model = m
-    return model
+def is_worker_seat(payload: dict) -> bool:
+    return any(payload.get(k) for k in ("agent_id", "agent_type", "teammate_name"))
 
 KERNEL_PATH = re.compile(r"crates/manifold-gpu/src/metal/|render_scene\.rs$|\.wgsl$")
 PROBE_CMD = re.compile(r"render-import|gpu-proofs|gpu_proofs")
@@ -87,9 +67,8 @@ def main() -> None:
         if not is_probe:
             return
 
-        model = caller_model(payload.get("transcript_path") or "")
-        if model and not LEAD_TIERS.search(model):
-            return  # lane/dispatcher seat — probe loops are their job
+        if is_worker_seat(payload):
+            return  # lane/consult seat — probe loops are their job
 
         cp = counter_path(session)
         # Anchor the reset check BEFORE rewriting the counter: the review must

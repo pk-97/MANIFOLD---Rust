@@ -66,9 +66,22 @@ def main():
 
     try:
         event = ""
+        seat = {}
         if stdin_data:
             try:
-                event = json.loads(stdin_data).get("hook_event_name", "")
+                payload = json.loads(stdin_data)
+                event = payload.get("hook_event_name", "")
+                # Seat attribution (2026-07-28): the teammate-vs-lead payload
+                # shape is the enforcement surface — guards mis-tiered a
+                # teammate because payloads carry the PARENT transcript.
+                # Record the discriminating fields so seat bugs are a lookup.
+                for k in ("session_id", "teammate_name", "team_name", "tool_name"):
+                    v = payload.get(k)
+                    if v:
+                        seat[k] = v
+                # Full key inventory: the teammate-payload shape question
+                # (does ANY field discriminate seats?) must be a lookup.
+                seat["keys"] = ",".join(sorted(payload.keys()))
             except (json.JSONDecodeError, AttributeError):
                 pass
         _LOG.parent.mkdir(parents=True, exist_ok=True)
@@ -81,6 +94,7 @@ def main():
                 "out": len(r.stdout),
                 "err": len(r.stderr),
                 "ms": ms,
+                **seat,
             }, sort_keys=True) + "\n")
     except Exception:
         pass  # telemetry must never change hook behavior
