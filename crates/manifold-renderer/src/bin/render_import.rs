@@ -19,7 +19,12 @@
 //! is assembled (only then do we know which `string_params`/`params` ids
 //! exist), so `--param env_mode=1 --param hdri_file=/path/to.exr` works in
 //! one consistent flag rather than a second `--string` flag callers have to
-//! remember. `--orbit`/`--tilt` are convenience sugar for the synthesized
+//! remember. A numeric override outside the param's own declared `[min,
+//! max]` (e.g. `emitter_elevation`'s `[-1, 1]` normalized "up" component,
+//! not degrees) is a hard error naming the value and the declared range —
+//! never a silent write-through (BUG-6s5m: an out-of-range value used to
+//! render a misleading "looks the same" degenerate picture instead of
+//! erroring). `--orbit`/`--tilt` are convenience sugar for the synthesized
 //! camera's orbit/tilt params — the import graph stamps their ids as
 //! `{camera_node_id}_orbit`/`{camera_node_id}_tilt` (e.g. `5_orbit`), NOT a
 //! fixed `cam_orbit`/`cam_tilt` (BUG-su2o: the doc previously claimed the
@@ -117,6 +122,26 @@ fn resolve_camera_sugar_param(suffix: &str, available: &[String]) -> Result<Stri
             many.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
         )),
     }
+}
+
+/// BUG-6s5m: a `--param` value outside the target param's own declared
+/// `[min, max]` used to write through silently and produce a degenerate
+/// render — `emitter_elevation`'s range is `[-1, 1]` (a normalized "up"
+/// component, not degrees), so an out-of-range probe value like `10` or
+/// `80` pushed the emitter strip fully outside the visible dome and
+/// rendered as "no strip", byte-identical to an unrelated
+/// `emitter_intensity=0` override. This tool exists to answer "what does
+/// this param value look like" — a value outside its own declared range
+/// can't answer that, so it must stop the probe loudly rather than render
+/// a misleading picture. `min < max` guards the degenerate case (no real
+/// range declared): those params pass through unchecked.
+fn check_param_range(id: &str, parsed: f32, min: f32, max: f32) -> Result<(), String> {
+    if min < max && (parsed < min || parsed > max) {
+        return Err(format!(
+            "--param {id}={parsed} is out of range — declared range is [{min}, {max}]"
+        ));
+    }
+    Ok(())
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -311,9 +336,14 @@ fn main() {
         }
         match params.iter_mut().find(|p| p.id() == id) {
             Some(p) => {
-                p.value = v
+                let parsed: f32 = v
                     .parse()
-                    .unwrap_or_else(|e| panic!("bad value for numeric param '{id}': {e}"))
+                    .unwrap_or_else(|e| panic!("bad value for numeric param '{id}': {e}"));
+                if let Err(e) = check_param_range(id, parsed, p.spec.min, p.spec.max) {
+                    eprintln!("error: {e}");
+                    std::process::exit(2);
+                }
+                p.value = parsed;
             }
             None => {
                 eprintln!("error: import graph has no outer param or string param '{id}'");
@@ -419,7 +449,12 @@ fn main() {
     // Apply numeric overrides ONCE into base params, then clone per frame.
     for (id, v) in &args.overrides {
         if !string_param_ids.contains(id) && let Some(p) = base_params.iter_mut().find(|p| p.id() == id) {
-            p.value = v.parse().unwrap_or_else(|e| panic!("bad value for numeric param '{id}': {e}"));
+            let parsed: f32 = v.parse().unwrap_or_else(|e| panic!("bad value for numeric param '{id}': {e}"));
+            if let Err(e) = check_param_range(id, parsed, p.spec.min, p.spec.max) {
+                eprintln!("error: {e}");
+                std::process::exit(2);
+            }
+            p.value = parsed;
         }
     }
 
@@ -747,5 +782,37 @@ mod tests {
         let available = vec!["5_orbit".to_string(), "5_tilt".to_string(), "cam_dist".to_string()];
         assert_eq!(resolve_camera_sugar_param("orbit", &available).unwrap(), "5_orbit");
         assert_eq!(resolve_camera_sugar_param("tilt", &available).unwrap(), "5_tilt");
+    }
+
+    /// BUG-6s5m: a value inside the param's declared range must pass through
+    /// untouched — this is the common case, and the check must never bite it.
+    #[test]
+    fn check_param_range_in_range_passes() {
+        assert!(check_param_range("1_emitter_elevation", 0.5, -1.0, 1.0).is_ok());
+        assert!(check_param_range("1_emitter_elevation", -1.0, -1.0, 1.0).is_ok());
+        assert!(check_param_range("1_emitter_elevation", 1.0, -1.0, 1.0).is_ok());
+    }
+
+    /// BUG-6s5m root cause: `emitter_elevation` 10/80 vs its declared `[-1,
+    /// 1]` range — this is the exact repro that used to render a degenerate
+    /// "no strip" picture silently instead of erroring.
+    #[test]
+    fn check_param_range_out_of_range_errors_naming_the_range() {
+        let err = check_param_range("1_emitter_elevation", 10.0, -1.0, 1.0).unwrap_err();
+        assert!(err.contains("1_emitter_elevation"), "error must name the param: {err}");
+        assert!(err.contains("10"), "error must name the given value: {err}");
+        assert!(err.contains("-1") && err.contains('1'), "error must name the declared range: {err}");
+
+        let err = check_param_range("1_emitter_elevation", 80.0, -1.0, 1.0).unwrap_err();
+        assert!(err.contains("80"));
+    }
+
+    /// A param with no real declared range (`min >= max` — the degenerate
+    /// case; every real card param carries a genuine range in practice)
+    /// passes through unchecked rather than being treated as an
+    /// unsatisfiable `[0, 0]` bound.
+    #[test]
+    fn check_param_range_no_declared_range_passes() {
+        assert!(check_param_range("some_param", 999.0, 0.0, 0.0).is_ok());
     }
 }
