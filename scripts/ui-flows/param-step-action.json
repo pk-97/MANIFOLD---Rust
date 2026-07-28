@@ -3,36 +3,108 @@
   "Dump",
   {
     "Pointer": {
-      "target": { "Query": { "text": "GLOW", "type": "Button" } },
-      "gesture": { "Click": { "modifiers": {} } }
+      "target": {
+        "Query": {
+          "text": "GLOW",
+          "type": "Button"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
     }
   },
   "Snapshot",
   "Dump",
   {
     "Assert": {
-      "selector": { "Query": { "text": "Cont", "type": "Button" } },
+      "selector": {
+        "Query": {
+          "text": "Cont",
+          "type": "Button"
+        }
+      },
       "check": "Exists"
     }
   },
   {
     "Assert": {
-      "selector": { "Query": { "text": "A", "type": "Button", "under_text": "Amount" } },
-      "check": { "Count": 1 }
+      "selector": {
+        "Query": {
+          "text": "Wrap",
+          "type": "Button"
+        }
+      },
+      "check": {
+        "Count": 0
+      }
     }
   },
   {
     "Pointer": {
-      "target": { "Query": { "text": "Step", "type": "Button" } },
-      "gesture": { "Click": { "modifiers": {} } }
+      "target": {
+        "Query": {
+          "text": "Step",
+          "type": "Button"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
     }
   },
   "Snapshot",
   "Dump",
   {
     "Assert": {
-      "selector": { "Query": { "text": "S", "type": "Button", "under_text": "Amount" } },
-      "check": { "Count": 1 }
+      "selector": {
+        "Query": {
+          "text": "Wrap",
+          "type": "Button"
+        }
+      },
+      "check": {
+        "Count": 1
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Bounce",
+          "type": "Button"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Clamp",
+          "type": "Button"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "S",
+          "type": "Button"
+        }
+      },
+      "check": {
+        "Count": 4
+      }
     }
   }
 ]

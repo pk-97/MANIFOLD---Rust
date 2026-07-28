@@ -3,16 +3,40 @@
   "Dump",
   {
     "Assert": {
-      "selector": { "Surface": { "surface": "timeline_clips", "kind": "clip", "label": "Plasma 1" } },
-      "check": { "RectWithin": { "x": 230.0, "y": 618.08, "width": 1152.0, "height": 188.0 } }
+      "selector": {
+        "Surface": {
+          "surface": "timeline_clips",
+          "kind": "clip",
+          "label": "Plasma 1"
+        }
+      },
+      "check": {
+        "RectWithin": {
+          "x": 230.0,
+          "y": 618.08,
+          "width": 1152.0,
+          "height": 188.0
+        }
+      }
     }
   },
   {
     "Pointer": {
-      "target": { "Surface": { "surface": "timeline_clips", "kind": "clip", "label": "Plasma 1" } },
+      "target": {
+        "Surface": {
+          "surface": "timeline_clips",
+          "kind": "clip",
+          "label": "Plasma 1"
+        }
+      },
       "gesture": {
         "Drag": {
-          "to": { "Point": { "x": 1500.0, "y": 712.08 } },
+          "to": {
+            "Point": {
+              "x": 1500.0,
+              "y": 712.08
+            }
+          },
           "steps": 6
         }
       }
@@ -22,22 +46,59 @@
   "Dump",
   {
     "Assert": {
-      "selector": { "Surface": { "surface": "timeline_clips", "kind": "clip", "label": "Plasma 1" } },
-      "check": { "RectWithin": { "x": 824.0, "y": 618.08, "width": 1152.0, "height": 188.0 } }
+      "selector": {
+        "Surface": {
+          "surface": "timeline_clips",
+          "kind": "clip",
+          "label": "Plasma 1"
+        }
+      },
+      "check": {
+        "RectWithin": {
+          "x": 824.0,
+          "y": 618.08,
+          "width": 1152.0,
+          "height": 188.0
+        }
+      }
     }
   },
   {
     "Assert": {
-      "selector": { "Surface": { "surface": "timeline_clips", "kind": "clip", "label": "Video 3" } },
-      "check": { "RectWithin": { "x": 902.0, "y": 218.08, "width": 480.0, "height": 188.0 } }
+      "selector": {
+        "Surface": {
+          "surface": "timeline_clips",
+          "kind": "clip",
+          "label": "Video 3"
+        }
+      },
+      "check": {
+        "RectWithin": {
+          "x": 902.0,
+          "y": 218.08,
+          "width": 480.0,
+          "height": 188.0
+        }
+      }
     }
   },
   {
     "Pointer": {
-      "target": { "Surface": { "surface": "timeline_clips", "kind": "clip", "label": "Video 3" } },
+      "target": {
+        "Surface": {
+          "surface": "timeline_clips",
+          "kind": "clip",
+          "label": "Video 3"
+        }
+      },
       "gesture": {
         "Drag": {
-          "to": { "Point": { "x": 700.0, "y": 312.08 } },
+          "to": {
+            "Point": {
+              "x": 1600.0,
+              "y": 312.08
+            }
+          },
           "steps": 6
         }
       }
@@ -47,8 +108,21 @@
   "Dump",
   {
     "Assert": {
-      "selector": { "Surface": { "surface": "timeline_clips", "kind": "clip", "label": "Video 3" } },
-      "check": { "RectWithin": { "x": 524.0, "y": 218.08, "width": 480.0, "height": 188.0 } }
+      "selector": {
+        "Surface": {
+          "surface": "timeline_clips",
+          "kind": "clip",
+          "label": "Video 3"
+        }
+      },
+      "check": {
+        "RectWithin": {
+          "x": 1296.6,
+          "y": 218.08,
+          "width": 480.0,
+          "height": 188.0
+        }
+      }
     }
   }
 ]

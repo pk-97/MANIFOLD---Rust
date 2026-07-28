@@ -1,39 +1,102 @@
 [
   {
     "Assert": {
-      "selector": { "Query": { "text": "Amount" } },
+      "selector": {
+        "Query": {
+          "text": "Amount"
+        }
+      },
       "check": "Exists"
     }
   },
   {
     "Pointer": {
-      "target": { "Query": { "text": "Amount" } },
-      "gesture": { "Click": { "modifiers": {} } }
+      "target": {
+        "Query": {
+          "text": "Amount",
+          "nth": 0
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
     }
   },
   {
-    "Key": { "key": "A", "modifiers": { "command": true, "shift": true } }
+    "Key": {
+      "key": "A",
+      "modifiers": {
+        "command": true,
+        "shift": true
+      }
+    }
   },
   "Snapshot",
   {
     "Assert": {
-      "selector": { "Query": { "text": "Amount" } },
+      "selector": {
+        "Query": {
+          "text": "Audio Setup",
+          "type": "Label"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Amount"
+        }
+      },
       "check": "Exists"
     }
   },
   {
     "Pointer": {
-      "target": { "Query": { "text": "Amount" } },
-      "gesture": { "Click": { "modifiers": {} } }
+      "target": {
+        "Query": {
+          "text": "Amount",
+          "nth": 0
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
     }
   },
   {
-    "Key": { "key": "Escape", "modifiers": {} }
+    "Key": {
+      "key": "Escape",
+      "modifiers": {}
+    }
   },
   "Snapshot",
   {
     "Assert": {
-      "selector": { "Query": { "text": "Amount" } },
+      "selector": {
+        "Query": {
+          "text": "Audio Setup",
+          "type": "Label"
+        }
+      },
+      "check": {
+        "Count": 0
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Amount"
+        }
+      },
       "check": "Exists"
     }
   }
