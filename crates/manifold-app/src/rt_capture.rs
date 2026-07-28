@@ -34,7 +34,9 @@ use manifold_renderer::node_graph::primitives::{
 use crate::content_command::ContentCommand;
 use crate::headless_harness::headless_content_thread;
 
-fn process_capture(cap: &RtCaptureSlot, device: &manifold_gpu::GpuDevice, out_dir: &std::path::Path) {
+/// Shared stats computation — reused by headless harness and live capture.
+/// Returns (hit_frac, mean_luma, stddev).
+pub(crate) fn compute_rt_channel_stats(cap: &RtCaptureSlot, device: &manifold_gpu::GpuDevice) -> (f64, f64, f64) {
     let raw = readback_raw_halves(device, &cap.tex, cap.w, cap.h);
     let pixel_count = (cap.w * cap.h) as usize;
     let mut n_hits = 0usize;
@@ -46,8 +48,6 @@ fn process_capture(cap: &RtCaptureSlot, device: &manifold_gpu::GpuDevice, out_di
         let g = half::f16::from_bits(u16::from_le_bytes([raw[base+2], raw[base+3]])).to_f32();
         let b = half::f16::from_bits(u16::from_le_bytes([raw[base+4], raw[base+5]])).to_f32();
         let a = half::f16::from_bits(u16::from_le_bytes([raw[base+6], raw[base+7]])).to_f32();
-        // For RT internal channels (refl, irr): alpha encodes hit distance.
-        // For composite: non-black threshold (a > 0.03 in any RGB channel).
         if is_composite {
             if r > 0.03 || g > 0.03 || b > 0.03 { n_hits += 1; }
         } else {
@@ -60,6 +60,13 @@ fn process_capture(cap: &RtCaptureSlot, device: &manifold_gpu::GpuDevice, out_di
     let mn = if pixel_count > 0 { sum_luma / pixel_count as f64 } else { 0.0 };
     let vr = if pixel_count > 0 { (sum_luma_sq / pixel_count as f64) - mn*mn } else { 0.0 };
     let sd = vr.sqrt();
+    (hit_frac, mn, sd)
+}
+
+fn process_capture(cap: &RtCaptureSlot, device: &manifold_gpu::GpuDevice, out_dir: &std::path::Path) {
+    let (hit_frac, mn, sd) = compute_rt_channel_stats(cap, device);
+    let raw = readback_raw_halves(device, &cap.tex, cap.w, cap.h);
+    let pixel_count = (cap.w * cap.h) as usize;
 
     // Write tonemapped PNG (alpha channel encodes hit distance for RT channels).
     let mut rgba8 = Vec::with_capacity(pixel_count * 4);
@@ -83,6 +90,24 @@ fn process_capture(cap: &RtCaptureSlot, device: &manifold_gpu::GpuDevice, out_di
     );
 }
 
+/// Drain capture queue, compute per-channel stats, return label→(hit,luma,sd) map.
+/// Used by both headless harness and live capture (content_thread).
+pub(crate) fn drain_capture_stats(
+    device: &manifold_gpu::GpuDevice,
+) -> std::collections::BTreeMap<String, (f64, f64, f64)> {
+    let caps = {
+        let mut q = RT_CAPTURE_QUEUE.lock().unwrap();
+        std::mem::take(&mut *q)
+    };
+    if caps.is_empty() { return Default::default(); }
+    let mut map = std::collections::BTreeMap::new();
+    for c in &caps {
+        let stats = compute_rt_channel_stats(c, device);
+        map.insert(c.label.clone(), stats);
+    }
+    map
+}
+
 fn drain_captures(device: &manifold_gpu::GpuDevice, frame: u32) {
     let caps = {
         let mut q = RT_CAPTURE_QUEUE.lock().unwrap();
@@ -95,7 +120,7 @@ fn drain_captures(device: &manifold_gpu::GpuDevice, frame: u32) {
     for c in &caps { process_capture(c, device, &dir); }
 }
 
-fn arm_capture() {
+pub(crate) fn arm_capture() {
     RT_CAPTURE_ARM.store(true, Ordering::Relaxed);
     RT_CAPTURE_ARM_COMPOSITE.store(true, Ordering::Relaxed);
 }
