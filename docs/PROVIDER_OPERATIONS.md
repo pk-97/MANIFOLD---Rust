@@ -101,6 +101,12 @@ table in `scripts/claude_usage_export.py` for the Anthropic path.
   upstream's own failure, distinguishing provider wobble from proxy trouble.
 - **Fleet rates/errors/latency:** Grafana `manifold-fleet` dashboard
   (Prometheus, from 2026-07-25 only); SpendLogs is all-time ground truth.
+- **Anthropic rows on `manifold-value`:** exported hourly by launchd job
+  `com.manifold.claude-usage-export` (plist versioned in `scripts/grafana/`,
+  installed copy in `~/Library/LaunchAgents/`; log
+  `~/.config/litellm/claude-usage-export.log`). The dashboard's top
+  freshness row goes orange at 1 day stale, red at 2 — red means the feed
+  stopped, not that a seat idled.
 
 ## Hazards
 

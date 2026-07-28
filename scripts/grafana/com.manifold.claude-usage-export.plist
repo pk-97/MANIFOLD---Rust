@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Hourly export of Claude Code transcript usage into the litellm Postgres so the
+     Anthropic column on the manifold-value Grafana dashboard stays current without
+     manual runs. Install: cp to ~/Library/LaunchAgents/ then
+     launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.manifold.claude-usage-export.plist -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.manifold.claude-usage-export</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/peterkiemann/MANIFOLD - Rust/scripts/claude_usage_export.py</string>
+        <string>--since-days</string>
+        <string>2</string>
+    </array>
+    <key>StartInterval</key>
+    <integer>3600</integer>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/Users/peterkiemann/.config/litellm/claude-usage-export.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/peterkiemann/.config/litellm/claude-usage-export.log</string>
+</dict>
+</plist>
