@@ -1,0 +1,340 @@
+{
+  "uid": "manifold-daily",
+  "title": "MANIFOLD fleet — daily glance",
+  "description": "What is actually happening: is anything broken right now, when do you work, what does a day cost, and how much of the spend is real work vs overhead. The manifold-value dashboard answers 'should I keep paying'; this one answers 'what is going on'. Health stats come from Prometheus and cover proxy providers only — Claude talks straight to Anthropic and never passes the proxy. Provider colors are fixed everywhere: Anthropic orange, Kimi blue, OpenCode aqua, Z.AI yellow.",
+  "tags": [
+    "manifold",
+    "fleet"
+  ],
+  "timezone": "Australia/Sydney",
+  "editable": true,
+  "schemaVersion": 39,
+  "refresh": "5m",
+  "time": {
+    "from": "now-14d",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "type": "row",
+      "title": "Right now — proxy providers only (Claude never passes the proxy)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Calls failing (last 15m)",
+      "description": "Failed calls to any provider in the last 15 minutes. Anything above zero and a seat is feeling it.",
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(increase(litellm_llm_api_failed_requests_metric_total[15m])) OR on() vector(0)",
+          "instant": true,
+          "datasource": { "type": "prometheus", "uid": "Prometheus" }
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Fallback saves (last 24h)",
+      "description": "Calls where the main provider failed and the backup quietly took over. A high number means a provider is having a bad day and the backup subscription is earning its keep.",
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 1 },
+              { "color": "red", "value": 50 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(increase(litellm_deployment_successful_fallbacks_total[24h])) OR on() vector(0)",
+          "instant": true,
+          "datasource": { "type": "prometheus", "uid": "Prometheus" }
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Spend rate now",
+      "description": "Notional list-rate dollars per hour the proxy fleet is burning right now (15-minute average). Zero just means the seats are idle.",
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "text", "value": null }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(litellm_spend_metric_total[15m])) * 3600 OR on() vector(0)",
+          "instant": false,
+          "datasource": { "type": "prometheus", "uid": "Prometheus" }
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Calls in flight",
+      "description": "Requests the proxy is holding open this second. Stuck high while nothing is happening = something is hung.",
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "text", "value": null }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(litellm_in_flight_requests) OR on() vector(0)",
+          "instant": true,
+          "datasource": { "type": "prometheus", "uid": "Prometheus" }
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Your rhythm — all providers, over the time range picked top right",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 5,
+      "type": "barchart",
+      "title": "When you work — calls by hour of day",
+      "description": "Every call in the selected range, bucketed by Sydney clock hour. The shape is your working rhythm; a bar where you were asleep is an overnight agent run.",
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "manifold-litellm-pg" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": { "mode": "fixed", "fixedColor": "#3987e5" },
+          "custom": {
+            "fillOpacity": 85,
+            "lineWidth": 0
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "vertical",
+        "xTickLabelRotation": 0,
+        "showValue": "never",
+        "legend": { "showLegend": false },
+        "tooltip": { "mode": "single" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT to_char(ts AT TIME ZONE 'Australia/Sydney', 'HH24') AS \"hour\",\n       count(*)::int AS \"calls\"\nFROM manifold_fleet_usage\nWHERE $__timeFilter(ts)\nGROUP BY 1\nORDER BY 1",
+          "datasource": { "type": "grafana-postgresql-datasource", "uid": "manifold-litellm-pg" },
+          "editorMode": "code"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "What each day cost — list-rate value by provider",
+      "description": "One stacked bar per day, split by provider. Remember these are notional list-rate dollars — what the work would have cost per-token, not what you were billed.",
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "manifold-litellm-pg" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 85,
+            "lineWidth": 0,
+            "barAlignment": 0,
+            "stacking": { "mode": "normal" }
+          }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Anthropic" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "#d95926" } } ] },
+          { "matcher": { "id": "byName", "options": "Kimi" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "#3987e5" } } ] },
+          { "matcher": { "id": "byName", "options": "OpenCode" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "#199e70" } } ] },
+          { "matcher": { "id": "byName", "options": "Z.AI" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "#c98500" } } ] }
+        ]
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT date_trunc('day', ts AT TIME ZONE 'Australia/Sydney') AT TIME ZONE 'Australia/Sydney' AS time,\n       provider AS metric,\n       sum(cost) AS value\nFROM manifold_fleet_usage\nWHERE $__timeFilter(ts)\nGROUP BY 1, provider\nORDER BY 1",
+          "datasource": { "type": "grafana-postgresql-datasource", "uid": "manifold-litellm-pg" },
+          "editorMode": "code"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Where the effort goes",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Real work vs overhead — share of each day's spend",
+      "description": "Real agent work is a call that wrote 100+ tokens. Permission checks are the auto-mode gate paying to say yes/no on every tool call — pure overhead. If the orange band grows, the gate is eating the budget.",
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "manifold-litellm-pg" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 15 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "max": 1,
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 85,
+            "lineWidth": 0,
+            "stacking": { "mode": "percent" }
+          }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Real agent work" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "#3987e5" } } ] },
+          { "matcher": { "id": "byName", "options": "Short replies" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "#199e70" } } ] },
+          { "matcher": { "id": "byName", "options": "Permission checks" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "#d95926" } } ] },
+          { "matcher": { "id": "byName", "options": "Tiny utility" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "#c3c2b7" } } ] }
+        ]
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT date_trunc('day', ts AT TIME ZONE 'Australia/Sydney') AT TIME ZONE 'Australia/Sydney' AS time,\n       CASE work_class\n         WHEN 'agent-turn' THEN 'Real agent work'\n         WHEN 'short-reply' THEN 'Short replies'\n         WHEN 'permission-classifier' THEN 'Permission checks'\n         ELSE 'Tiny utility'\n       END AS metric,\n       sum(cost) AS value\nFROM manifold_fleet_work\nWHERE $__timeFilter(ts)\nGROUP BY 1, 2\nORDER BY 1",
+          "datasource": { "type": "grafana-postgresql-datasource", "uid": "manifold-litellm-pg" },
+          "editorMode": "code"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "bargauge",
+      "title": "Where the money went — top models this range",
+      "description": "List-rate spend per model over the selected range, biggest first.",
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "manifold-litellm-pg" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 15 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 0,
+          "min": 0,
+          "color": { "mode": "fixed", "fixedColor": "#3987e5" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "#3987e5", "value": null }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "basic",
+        "orientation": "horizontal",
+        "valueMode": "color",
+        "showUnfilled": true,
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": true }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT provider || ' · ' || model AS \"Model\",\n       sum(cost) AS \"spend\"\nFROM manifold_fleet_usage\nWHERE $__timeFilter(ts)\nGROUP BY 1\nORDER BY 2 DESC\nLIMIT 8",
+          "datasource": { "type": "grafana-postgresql-datasource", "uid": "manifold-litellm-pg" },
+          "editorMode": "code"
+        }
+      ]
+    }
+  ]
+}
