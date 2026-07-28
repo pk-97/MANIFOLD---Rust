@@ -104,19 +104,26 @@
   }
  },
  {
+  "ScrollTo": {
+   "target": {
+    "Query": {
+     "name": "param_row.31_fog_density.slider"
+    }
+   }
+  }
+ },
+ {
   "Pointer": {
    "target": {
-    "Point": {
-     "x": 700.0,
-     "y": 1154.0
+    "Query": {
+     "name": "param_row.31_fog_density.slider"
     }
    },
    "gesture": {
     "Drag": {
      "to": {
-      "Point": {
-       "x": 1034.0,
-       "y": 1154.0
+      "Query": {
+       "name": "param_row.31_fog_density.driver_btn"
       }
      },
      "steps": 8
