@@ -1,5 +1,7 @@
 # Bug Corpus Dossier — mined for structural-verdict pass
 
+Ledger by design: the commit hashes and attributions below are the mined evidence — doc-cleanup sweeps skip this file.
+
 Miner: Sonnet (background job), 2026-07-09. Read-only mining; classification below is a
 **suggestion**, not a verdict — a later high-tier session issues verdicts per subsystem.
 

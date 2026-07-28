@@ -1,5 +1,7 @@
 # Verification Debt — the unverified-surface ledger
 
+Ledger by design: entries carry dates, hashes, and status stamps as data — doc-cleanup sweeps skip this file.
+
 <!-- index: Live ledger of shipped-but-not-fully-verified surfaces. One entry per gap between the verification level a landing reached and its target; burned down or consciously carried every wave. Format and rules: DESIGN_DOC_STANDARD.md section 10. (Verification levels, the debt ledger, and escapes (added 2026-07-05)) -->
 
 Why this exists: "unverified interactively" notes used to live in landing reports and
