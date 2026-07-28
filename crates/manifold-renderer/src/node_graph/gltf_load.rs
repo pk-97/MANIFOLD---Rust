@@ -4591,7 +4591,7 @@ mod tests {
         }
 
         // FOV/clip planes pass through untouched from the glTF accessor.
-        assert!((parsed.fov_y - 0.6605925559997559_f32).abs() < 1e-5);
+        assert!((parsed.fov_y - 0.660_592_56_f32).abs() < 1e-5);
         assert!((parsed.near - 1.0).abs() < 1e-5);
         assert!((parsed.far - 10000.0).abs() < 1e-5);
     }
