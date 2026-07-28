@@ -20,6 +20,7 @@ Usage:
   scripts/agent-worktree.py list
   scripts/agent-worktree.py acquire <task-label> <branch> [--tip REF] [--owner TEXT]
   scripts/agent-worktree.py release <slot>
+  scripts/agent-worktree.py scrub
 
 `acquire` prints the slot path plus the step-0 base-verification line
 (`git log --oneline -1`). The CALLER must confirm that line matches the
@@ -45,6 +46,16 @@ workstreams actually happen).
 
 Release is an optimization, not a safety mechanism: a forgotten lease
 expires after LEASE_TTL_HOURS and only ever pins one slot.
+
+`scrub` is the end-of-session counterpart to acquire's lazy cap: acquire
+only wipes the ONE slot it hands out, so a finished wave leaves every
+other slot's warm target on disk until some future acquire happens to
+pick it (2026-07-29: ten idle landed slots, 201 GB, SessionStart alarm).
+Scrub touches idle slots only (leased, dirty, unlanded, or live-session
+slots are skipped): wipe any target/ over TARGET_CAP_GB, then, while the
+pool exceeds SCRUB_TO_GB, wipe the least-recently-built idle targets so
+the warmest caches survive. A SessionEnd hook runs it automatically
+(.claude/hooks/session-end-worktree-scrub.py); by hand it is always safe.
 
 Acquire also drops a `.metadata_never_index` marker at the pool root so
 Spotlight never indexes the slot target/ dirs (BUG-297 machine-lockup
@@ -79,6 +90,8 @@ LEASE_NAME = ".worktree-lease.json"  # gitignored; mtime is the staleness clock
 LEASE_TTL_HOURS = 8
 MAX_SLOTS = 10         # hard structural cap — there is no override flag
 TARGET_CAP_GB = 25     # per-slot target/ ceiling, enforced at acquire
+SCRUB_TO_GB = 150      # scrub trims the pool under this — below the sentinel's
+                       # 200 GB alarm so a scrubbed pool never alarms
 SLOT_PREFIX = "slot-"
 
 
@@ -299,6 +312,49 @@ def cmd_acquire(args):
     verify_and_report(wt)
 
 
+def build_recency(wt):
+    """Best available 'last build' clock for LRU scrub ordering: newest mtime
+    among target/'s immediate children (cargo touches debug/ or release/ on
+    every build; the target/ root mtime only moves when entries appear)."""
+    t = wt / "target"
+    times = [t.stat().st_mtime] if t.is_dir() else [0.0]
+    if t.is_dir():
+        times += [p.stat().st_mtime for p in t.iterdir()]
+    return max(times)
+
+
+def cmd_scrub(_args):
+    slots = pool_slots()
+    idle = []
+    for wt in slots:
+        is_idle, reason = idle_state(wt)
+        if not is_idle:
+            print(f"KEEP {wt.name}: {reason}")
+        elif slot_has_live_session(wt):
+            print(f"KEEP {wt.name}: live session inside it")
+        else:
+            idle.append(wt)
+    for wt in idle:
+        enforce_target_cap(wt)
+
+    def pool_gb():
+        out = subprocess.run(["du", "-sk", str(POOL)],
+                             capture_output=True, text=True)
+        return int(out.stdout.split()[0]) / 2**20 if out.returncode == 0 else 0
+
+    total = pool_gb()
+    victims = sorted((wt for wt in idle if target_bytes(wt)), key=build_recency)
+    while total > SCRUB_TO_GB and victims:
+        wt = victims.pop(0)  # least recently built loses its cache first
+        size = target_bytes(wt) / 2**30
+        shutil.rmtree(wt / "target", ignore_errors=True)
+        print(f"SCRUBBED {wt.name}: {size:.1f}G target wiped (pool over "
+              f"{SCRUB_TO_GB}G)")
+        total = pool_gb()
+    print(f"POOL: {total:.0f}G ({len(idle)} idle / {len(slots)} slots, "
+          f"scrub target {SCRUB_TO_GB}G)")
+
+
 def cmd_release(args):
     wt = POOL / args.slot
     lease = wt / LEASE_NAME
@@ -323,8 +379,10 @@ def main():
                      help="who holds the lease (session id or label)")
     rel = sub.add_parser("release")
     rel.add_argument("slot", help="slot name printed by acquire (e.g. slot-2)")
+    sub.add_parser("scrub")
     args = parser.parse_args()
-    {"list": cmd_list, "acquire": cmd_acquire, "release": cmd_release}[args.cmd](args)
+    {"list": cmd_list, "acquire": cmd_acquire, "release": cmd_release,
+     "scrub": cmd_scrub}[args.cmd](args)
 
 
 if __name__ == "__main__":
