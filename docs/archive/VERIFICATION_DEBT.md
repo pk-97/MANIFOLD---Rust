@@ -1,5 +1,7 @@
 # Verification Debt — the unverified-surface ledger
 
+**FOLDED INTO BEADS 2026-07-28** (BUG-cu55, fold debt registers into beads — Peter 2026-07-27: beads is the only queue). Open entries live in `bd` with `VD-NNN` preserved in titles; closed entries are history. This file is frozen — never edit; new verification debt is a `bd` issue per DESIGN_DOC_STANDARD.md section 10 (Verification levels, the debt ledger, and escapes).
+
 Ledger by design: entries carry dates, hashes, and status stamps as data — doc-cleanup sweeps skip this file.
 
 <!-- index: Live ledger of shipped-but-not-fully-verified surfaces. One entry per gap between the verification level a landing reached and its target; burned down or consciously carried every wave. Format and rules: DESIGN_DOC_STANDARD.md section 10. (Verification levels, the debt ledger, and escapes (added 2026-07-05)) -->
