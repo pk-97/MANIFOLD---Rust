@@ -31,7 +31,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 crossbeam-channel = "0.5"
 ahash = { workspace = true }
-# `UIRoot::closed_overlays` (OVERLAY_SESSIONS_AND_PICKER_DESIGN.md §3) — a
+# `UIRoot::closed_overlays` (OVERLAY_SESSIONS_AND_PICKER_DESIGN.md section 3) — a
 # handful of overlay ids per frame at most, so a small inline buffer avoids a
 # heap alloc on the common empty/one-close case. Already resolved in
 # Cargo.lock via a transitive dep.
@@ -59,7 +59,7 @@ objc2 = "0.6"
 # needed by drag_interpose.rs to convert draggingLocation into cursor_pos's
 # logical top-left convention. Already in Cargo.lock (transitive via winit).
 objc2-foundation = { version = "0.3", features = ["NSString", "NSNotification", "NSURL", "NSArray", "objc2-core-foundation"] }
-# P3 (docs/TIMELINE_INGEST_DESIGN.md §4): general-pasteboard access for the
+# P3 (docs/TIMELINE_INGEST_DESIGN.md section 4): general-pasteboard access for the
 # Finder-paste arbitration. macos_pasteboard.rs is the sole module allowed
 # to name these types.
 objc2-app-kit = { version = "0.3", features = [

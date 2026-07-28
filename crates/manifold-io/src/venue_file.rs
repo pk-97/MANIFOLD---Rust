@@ -2,7 +2,7 @@
 //! `.manifoldvenue` JSON document, independent of the composition.
 //!
 //! The show and the venue are different lifetimes (`docs/MULTI_DISPLAY_DESIGN.md`
-//! §5, D13): the composition is per-show, but stage layout + assignments +
+//! section 5, D13): the composition is per-show, but stage layout + assignments +
 //! advanced-flap calibration (keystone, trim, density cap — all carried on
 //! `DisplayPlacement`/`OutputAdvanced` already) are per-venue. `StageLayout`
 //! stays the single source of truth serialized inside `ProjectSettings` at

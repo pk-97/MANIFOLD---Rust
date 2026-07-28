@@ -985,7 +985,7 @@ impl UIRoot {
                             .with_action(PanelAction::Params(ParamsAction::RevertToLibrary(gpt.clone()))),
                     );
                     // Wording states the blast radius WITHOUT computing it
-                    // (PRESET_LIBRARY_DESIGN §4/§6: counting how many
+                    // (PRESET_LIBRARY_DESIGN section 4/section 6: counting how many
                     // instances track an id is the forbidden machinery this
                     // design deletes) — "instances", not a computed N.
                     items.push(

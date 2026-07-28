@@ -1,8 +1,8 @@
-//! RAYTRACING_DESIGN.md §5.2 P2 gate — soft shadows + AO + temporal
+//! RAYTRACING_DESIGN.md section 5.2 P2 gate — soft shadows + AO + temporal
 //! accumulation with D3 resets.
 //!
 //! Two scripted, computed-number gates (no PNG oracles — Peter 2026-07-22,
-//! §5.2 preamble), exercising `manifold_gpu::raytrace`'s
+//! section 5.2 preamble), exercising `manifold_gpu::raytrace`'s
 //! `accumulate_irradiance` kernel directly (the P2-specific piece; P1's
 //! `rt_p1_shadow`/`rt_p4_metalfx_temporal` already prove the shared
 //! accel/dispatch/upsample machinery this extends):

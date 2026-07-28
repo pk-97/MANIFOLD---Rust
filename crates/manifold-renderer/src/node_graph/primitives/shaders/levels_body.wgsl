@@ -1,4 +1,4 @@
-// node.levels — fusable body fragment (freeze/fusion compiler, design §12).
+// node.levels — fusable body fragment (freeze/fusion compiler, design section 12).
 //
 // Convention (see gain_body.wgsl): a PURE `fn body(...)` — own element in, own
 // element out. Params follow the color register in PARAMS declaration order

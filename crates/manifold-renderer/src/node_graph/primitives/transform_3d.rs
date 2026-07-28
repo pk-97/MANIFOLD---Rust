@@ -1,7 +1,7 @@
 //! `node.transform_3d` — TRS (position / rotation / scale) producer for
 //! scene objects.
 //!
-//! Per `docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` §2 D2: nine scalar
+//! Per `docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` section 2 D2: nine scalar
 //! params (position, Euler rotation in radians, scale) mirroring
 //! `render_scene`'s current per-object transform params verbatim (same
 //! labels, ranges, `ParamType::Angle` for rotation), each port-shadowed by a

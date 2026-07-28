@@ -1140,7 +1140,7 @@ pub(crate) struct GltfMaterialInfo {
     /// time so `render_scene`'s existing G=roughness/B=metallic read stays
     /// untouched — the shader sees only metal-rough, per D2. The texture's
     /// RGB specular tint (vs. the scalar `specular_factor` above, which
-    /// IS converted) is Deferred (§8) — not read here at all.
+    /// IS converted) is Deferred (section 8) — not read here at all.
     pub mr_texture_is_gloss_alpha: bool,
     pub vertex_count: u32,
     /// GLB_XFAIL_BURNDOWN_DESIGN.md D3 (BUG-164): per-map-family sampler
@@ -1230,7 +1230,7 @@ pub(crate) struct SpecGlossConversion {
 /// first model (a "metal" under spec-gloss is modeled as near-black
 /// diffuse + near-white specular, not a metalness scalar). `specular_factor`
 /// folds the RGB factor to its mean — the per-channel RGB TINT is
-/// Deferred (§8); this only carries the scalar magnitude, same as
+/// Deferred (section 8); this only carries the scalar magnitude, same as
 /// `KHR_materials_specular` already does for factor-only materials.
 pub(crate) fn convert_spec_gloss(
     glossiness_factor: f32,
@@ -1255,7 +1255,7 @@ pub(crate) const DEFAULT_MATERIAL_MESH_PARAM: i32 = -2;
 
 /// [`GltfImportSummary::materials`]' reserved sentinel for the synthetic
 /// glTF-default-material entry (D4) — pinned by
-/// `GLB_XFAIL_BURNDOWN_DESIGN.md` §3: real glTF material indices are
+/// `GLB_XFAIL_BURNDOWN_DESIGN.md` section 3: real glTF material indices are
 /// always `< u32::MAX` (the format has no material anywhere near that
 /// count), so this can never collide with a genuine index.
 /// `gltf_import.rs` must treat it as "no glTF material to re-query" —
@@ -1385,7 +1385,7 @@ pub(crate) struct GltfImportSummary {
     /// channel (STEP/CUBICSPLINE, Deferred past A1), a morph-weight
     /// channel (A3 scope), an unreadable channel (e.g. a target that
     /// couldn't be resolved), or a same-object TRS-channel conflict
-    /// (§"resolve_object_animation") — one line per occurrence, never a
+    /// (section "resolve_object_animation") — one line per occurrence, never a
     /// silent drop. `gltf_import.rs` folds these into `ImportReport::report_lines`.
     pub animation_report_lines: Vec<String>,
     /// BUG-213: `extensionsUsed` entries that are NOT in
@@ -1474,7 +1474,7 @@ pub(crate) struct GltfNodeAnimation {
     /// GLTF_ANIMATION_DESIGN.md A3: this node's morph-target `weights`
     /// channel, when present. Populated the same single-node-owns-this-
     /// channel way TRS channels are — a `weights` channel targets the
-    /// mesh-owning node itself (glTF 2.0 §3.7.2.1: it animates that node's
+    /// mesh-owning node itself (glTF 2.0 section 3.7.2.1: it animates that node's
     /// morph weights, overriding `mesh.weights`), so unlike TRS there is
     /// no ancestor-chain composition to resolve — `gltf_import.rs` looks
     /// this up directly by the contributing node's index.
@@ -1964,7 +1964,7 @@ pub(crate) struct GltfObjectMorph {
     pub target_count: u32,
     /// `mesh.weights()[i]` for `i in 0..target_count`, defaulted to `0.0`
     /// for any target past a short (or absent) `weights` array — glTF 2.0
-    /// §3.7.2.1's spec default for an unauthored target weight. Used as
+    /// section 3.7.2.1's spec default for an unauthored target weight. Used as
     /// the fallback for a target this object's `weights` channel (if any)
     /// doesn't animate — mirrors `GltfSkinInfo::joint_bind_translation`'s
     /// "unanimated joint gets its bind-pose static row" convention.
@@ -1980,7 +1980,7 @@ pub(crate) type SkinnedMeshData = (Vec<MeshVertex>, Vec<[f32; 4]>, Vec<[f32; 4]>
 /// `material_index`) into a triangle-list `MeshVertex` buffer plus
 /// coincident per-vertex joint indices (as f32 — exact for the spec's
 /// joint-count range) and weights. LOCAL space, NO node-transform applied:
-/// per glTF 2.0 §3.7.3.3, a skinned mesh's positioning comes ENTIRELY from
+/// per glTF 2.0 section 3.7.3.3, a skinned mesh's positioning comes ENTIRELY from
 /// the joint hierarchy — the mesh-owning node's own transform is ignored,
 /// unlike every static/rigid object this importer otherwise
 /// world-transforms via `walk_gltf_node`. A vertex missing JOINTS_0/
@@ -2309,7 +2309,7 @@ fn flatten_primitive_morph_deltas(
 ///
 /// `skinned`: BUG-208 — a skin+morph combination on the same object chains
 /// `node.morph_targets_blend` between `node.gltf_skinned_mesh_source` and
-/// `node.skin_mesh` (glTF applies morph THEN skin, §3.7.2). Per A2/A3,
+/// `node.skin_mesh` (glTF applies morph THEN skin, section 3.7.2). Per A2/A3,
 /// `flatten_skinned_node`'s base vertices are emitted in UNTRANSFORMED
 /// bind-pose/local space — `node.gltf_skinned_mesh_source` never applies
 /// the mesh-owning node's world matrix, since a skinned object's
@@ -2411,7 +2411,7 @@ fn summarize_node(
             None => vec![world],
         };
         // BUG-205: a SKINNED mesh's rendered position ignores the mesh
-        // node's own world transform (glTF 2.0 §3.7.3.3) — its static
+        // node's own world transform (glTF 2.0 section 3.7.3.3) — its static
         // (bind-pose) world positions are `skin_matrix[j] * v` blended by
         // the vertex weights, exactly what `node.skin_mesh` computes at
         // runtime. Summarizing it through `world` instead put the bbox in
@@ -3156,7 +3156,7 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
         // GLB_XFAIL_BURNDOWN_DESIGN.md D4 (BUG-171): geometry with no
         // material assigned gets the glTF spec's implicit default material
         // (base color [1,1,1,1], metallic 1.0, roughness 1.0 — glTF spec
-        // §3.9.2) instead of being silently dropped. Sentinel
+        // section 3.9.2) instead of being silently dropped. Sentinel
         // `material_index = DEFAULT_MATERIAL_SENTINEL` (u32::MAX) marks
         // this entry as synthetic — `gltf_import.rs` must never re-query
         // material index u32::MAX in the document for it.
@@ -3676,7 +3676,7 @@ mod tests {
     /// is a mirror — roughness 0.0 (perfectly smooth, `glossiness_factor`'s
     /// own documented meaning); full rough spec-gloss (glossiness 0.0) →
     /// roughness 1.0. `specular_factor` folds the RGB factor to its mean
-    /// (the RGB tint itself is Deferred, §8) and `metallic` is always the
+    /// (the RGB tint itself is Deferred, section 8) and `metallic` is always the
     /// dielectric default 0.0 — spec-gloss has no metalness channel.
     #[test]
     fn convert_spec_gloss_maps_glossiness_and_specular_factor() {
@@ -3703,7 +3703,7 @@ mod tests {
     }
 
     /// D4 (BUG-171): the synthetic default-material entry's sentinel and
-    /// spec-mandated neutral factors (glTF spec §3.9.2's implicit default
+    /// spec-mandated neutral factors (glTF spec section 3.9.2's implicit default
     /// material: base color white, metallic 1.0, roughness 1.0).
     #[test]
     fn default_material_synthetic_entry_shape() {

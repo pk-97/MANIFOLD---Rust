@@ -232,9 +232,9 @@ const CLICK_BEATS: usize = 8;
 const CLICK_FPS: f32 = 24.0;
 /// Generator param this whole harness drives: StarField's `brightness`
 /// (`assets/generator-presets/StarField.json`, id `StarField`) is the single
-/// scalar the §2.5-equivalent audit found that both (a) has a wide range
+/// scalar the section 2.5-equivalent audit found that both (a) has a wide range
 /// (0..4, default 1.5) and (b) is wired as the LAST op in its graph
-/// (`... => scale_offset brightness`, NODE_CATALOG.md §6.1) — a flat
+/// (`... => scale_offset brightness`, NODE_CATALOG.md section 6.1) — a flat
 /// multiplicative gain on the whole rendered frame, so driving it end-to-end
 /// changes mean frame luma directly and unambiguously. No fused/bundled
 /// primitive involved; this harness only sets an existing param's audio-mod
@@ -477,7 +477,7 @@ mod tests {
         );
     }
 
-    /// Round-trip gate (DESIGN_DOC_STANDARD §5, from BUG-036): SAVE the
+    /// Round-trip gate (DESIGN_DOC_STANDARD section 5, from BUG-036): SAVE the
     /// audio-reactive fixture through the real project-io save path, RELOAD
     /// it through the real load path, export the RELOADED project. Bindings
     /// must modulate AFTER reload, not just after creation — the create-path

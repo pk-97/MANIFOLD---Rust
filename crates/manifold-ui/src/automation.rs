@@ -1,6 +1,6 @@
 //! `AutomationAction` — the transport-agnostic core the agent drives MANIFOLD
-//! through. `docs/UI_AUTOMATION_DESIGN.md` §3/§4: one `AutomationAction`
-//! enum, resolved against the tree dump's data (the selector "DOM", §3) and
+//! through. `docs/UI_AUTOMATION_DESIGN.md` section 3/section 4: one `AutomationAction`
+//! enum, resolved against the tree dump's data (the selector "DOM", section 3) and
 //! acted on by synthesizing input through the production path (D4). Both
 //! transports (the headless `--script` runner, P2; the dev-only live door,
 //! P3) reach the types and the resolver in this module — neither depends on
@@ -16,11 +16,11 @@ use crate::input::{Key, Modifiers};
 use crate::node::{Rect, Vec2};
 use crate::tree::UITree;
 
-// ── §4 committed action model ───────────────────────────────────────────
+// ── section 4 committed action model ───────────────────────────────────────────
 
 /// One automation request. Transport-agnostic: the ui-snap script driver
 /// (headless) and the dev TCP server (live, P3) both compile scripts down to
-/// this. `UI_AUTOMATION_DESIGN.md` §4 — committed shape, transcribed exactly.
+/// this. `UI_AUTOMATION_DESIGN.md` section 4 — committed shape, transcribed exactly.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum AutomationAction {
     /// Resolve `target` against the current build, synthesize the gesture
@@ -42,7 +42,7 @@ pub enum AutomationAction {
     Step {
         frames: u32,
     },
-    /// Emit the extended dump (§3) to the run's output dir / reply.
+    /// Emit the extended dump (section 3) to the run's output dir / reply.
     Dump,
     /// Emit a PNG of the current UI to the run's output dir / reply.
     Snapshot,
@@ -59,7 +59,7 @@ pub enum AutomationAction {
     /// gesture drives) — never a bespoke offset write — and converges by
     /// observing the target's rect move each step (direction auto-detected, so
     /// it works for either container regardless of wheel-sign convention).
-    /// Deep converged card rows (`WIDGET_TREE_DESIGN.md` §5/§6) are why this
+    /// Deep converged card rows (`WIDGET_TREE_DESIGN.md` section 5/section 6) are why this
     /// exists: a fixed `Scroll { delta }` is fixture-fragile; this is not.
     ScrollTo {
         target: AutomationTarget,
@@ -99,7 +99,7 @@ pub enum FlowScrubTarget {
     GeneratorParam { param: String },
 }
 
-/// §4 committed shape. `Surface`'s `surface` field is `&'static str` in the
+/// section 4 committed shape. `Surface`'s `surface` field is `&'static str` in the
 /// design doc (matching `HitTargets::surface_id()`'s return type); a JSON
 /// script can't hand us a `'static` borrow, so the `Deserialize` impl leaks
 /// the parsed string once via `leak_surface_id` — cheap and correct for a
@@ -108,11 +108,11 @@ pub enum FlowScrubTarget {
 /// still just writes a literal).
 #[derive(Debug, Clone, serde::Serialize)]
 pub enum AutomationTarget {
-    /// §3 structural query.
+    /// section 3 structural query.
     Query(SelectorQuery),
     /// A `WidgetId` raw value from a prior dump.
     Widget(u64),
-    /// §5 custom-surface target.
+    /// section 5 custom-surface target.
     Surface {
         surface: &'static str,
         kind: String,
@@ -151,11 +151,11 @@ pub enum AssertCheck {
     RectWithin(Rect),
 }
 
-/// §3 selector — a structural query over the dump. Resolution: filter nodes
+/// section 3 selector — a structural query over the dump. Resolution: filter nodes
 /// by `name`/`text`/`type`; `under_text` walks ancestors until a node whose
 /// `text` matches; `nth` disambiguates; exactly-one match required.
 ///
-/// `#[serde(default)]`: a script only names the fields it filters on (§3's
+/// `#[serde(default)]`: a script only names the fields it filters on (section 3's
 /// own worked examples are single- and double-field objects); every omitted
 /// field defaults to `None` rather than being a parse error.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
@@ -208,7 +208,7 @@ fn leak_surface_id(s: String) -> &'static str {
     Box::leak(s.into_boxed_str())
 }
 
-// ── Resolver (§3) ────────────────────────────────────────────────────────
+// ── Resolver (section 3) ────────────────────────────────────────────────────────
 
 /// A target resolved to the rect a gesture should act on, plus a human
 /// description (evidence for `result.json` / failure messages).
@@ -278,7 +278,7 @@ pub fn resolve_all(
 }
 
 /// Resolve `target` against the current build (`tree` + the enumerated
-/// custom `surfaces`, §5) to exactly one rect. D6: zero or >1 candidate is a
+/// custom `surfaces`, section 5) to exactly one rect. D6: zero or >1 candidate is a
 /// hard failure carrying the candidate list as evidence.
 pub fn resolve(
     tree: &UITree,
@@ -393,7 +393,7 @@ fn node_matches(
     true
 }
 
-/// §3: "under_text walks ancestors until a node whose text matches (how 'the
+/// section 3: "under_text walks ancestors until a node whose text matches (how 'the
 /// mute button of the PLASMA row' works without per-row name allocation)".
 ///
 /// Real row chrome (`layer_header.rs`) doesn't put the row's name text on an
@@ -492,7 +492,7 @@ fn describe_node(tree: &UITree, nodes: &[crate::node::UINode], i: usize) -> Stri
 /// spaced points strictly between `from` and `to` (excludes both endpoints —
 /// the caller synthesizes Down at `from` and Up at `to` separately), so the
 /// caller emits `steps` `Move` events between them. `steps < 2` is clamped to
-/// 2 (§4: "`steps` ≥ 2" — a single Move can't be guaranteed to cross the
+/// 2 (section 4: "`steps` ≥ 2" — a single Move can't be guaranteed to cross the
 /// drag threshold AND still leave room for a subsequent Move to register the
 /// real per-frame drag update).
 pub fn interpolate_drag(from: Vec2, to: Vec2, steps: u32) -> Vec<Vec2> {

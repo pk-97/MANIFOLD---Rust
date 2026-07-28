@@ -1,4 +1,4 @@
-// node.gradient_ramp — fusable body (freeze §12), SOURCE with a TABLE param.
+// node.gradient_ramp — fusable body (freeze section 12), SOURCE with a TABLE param.
 // N-stop piecewise-linear gradient → LUT texture. Output column x maps to
 // t = x/(width-1) * domain — ENDPOINT-inclusive, so texel 0 holds the gradient
 // at t=0 (the first stop, e.g. pure black) and the last texel holds t=domain.

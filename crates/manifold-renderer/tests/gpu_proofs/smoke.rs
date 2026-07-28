@@ -2,7 +2,7 @@
 //! and run one frame without panicking or producing NaN / Inf pixels.
 //!
 //! The legacy per-effect smoke test that iterated `EffectFactory` is
-//! gone with §11 block 8 — effects no longer run through singletons.
+//! gone with section 11 block 8 — effects no longer run through singletons.
 //! Per-effect runtime correctness is covered by the parity tests
 //! (against fixtures) and `every_bundled_preset_loads_validates_and_compiles`
 //! (chain-buildable). Generators are still inventory-based and remain

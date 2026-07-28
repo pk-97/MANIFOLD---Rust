@@ -10,7 +10,7 @@
 //! Both edges are always live. There used to be a `Mode = Range |
 //! Bipolar` enum where Bipolar silently ignored `low` and pinned the
 //! band to `(-high, high)` — that violated the "every declared param
-//! must affect output under every reachable state" rule in §7 of
+//! must affect output under every reachable state" rule in section 7 of
 //! `docs/DECOMPOSING_GENERATORS.md`. The bipolar shortcut is now a
 //! graph-level pattern: wire `node.math(operation=Negate) → low` if
 //! you want a symmetric-around-zero curve from a single `high` slider.
@@ -165,7 +165,7 @@ mod tests {
         // off in Bipolar — a documented dead-param state. The fix was
         // to delete the mode and let users compose bipolar via a
         // negate math node. If a future commit reintroduces a mode
-        // here, that's a §7 invariant violation; this test pins the
+        // here, that's a section 7 invariant violation; this test pins the
         // shape.
         let names: Vec<&str> = SmoothstepTexture::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(names, vec!["low", "high"]);

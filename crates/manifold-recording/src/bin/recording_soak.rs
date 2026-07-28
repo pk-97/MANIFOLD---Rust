@@ -1,10 +1,10 @@
 //! `recording-soak` — the pre-gig soundcheck for the live show recorder
-//! (Tier 2). See docs/LIVE_RECORDING_PROOFS_DESIGN.md §5.
+//! (Tier 2). See docs/LIVE_RECORDING_PROOFS_DESIGN.md section 5.
 //!
 //! Drives the real `LiveRecordingSession` at the show configuration (4K60
 //! SDR ProRes + synthetic audio, 20 media-minutes by default), then verifies
 //! the output with the same ffprobe/ffmpeg oracle as the Tier-1 proof suite
-//! (`crate::proofs`) — reused, not reinvented (design §6 P2).
+//! (`crate::proofs`) — reused, not reinvented (design section 6 P2).
 //!
 //! `cargo run --release -p manifold-recording --features recording-proofs --bin recording-soak`
 //!
@@ -34,7 +34,7 @@ const MAX_FRAME_INDEX_EXCLUSIVE: u32 = 1 << 24;
 const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
 
 /// Rough ProRes 422 Proxy (SDR) size estimate, derived from the design's own
-/// reference point (§5: 4K60, 20 min, 72,000 frames ~= 17.5 GB):
+/// reference point (section 5: 4K60, 20 min, 72,000 frames ~= 17.5 GB):
 /// bits/pixel = (17.5 * 1024^3 * 8) / (3840 * 2160 * 72000) ~= 0.2517.
 /// This is only a preflight disk-space sanity check — the 1.5x safety
 /// margin in `run()` absorbs estimation error, it does not need to be exact.
@@ -554,7 +554,7 @@ fn submit_frame_unpaced(
 /// else { record_dropped_frame() }`, never blocks). The submitted timestamp
 /// is the ACTUAL measured wall-clock elapsed time at submission (not a
 /// synthetic grid) -- the true-dress-rehearsal reading of "paces submissions
-/// to wall clock" (design §5): production always stamps real elapsed time
+/// to wall clock" (design section 5): production always stamps real elapsed time
 /// via `submit_frame`, and `--realtime` is the soak mode built to match it.
 fn submit_frame_realtime(
     session: &mut LiveRecordingSession,

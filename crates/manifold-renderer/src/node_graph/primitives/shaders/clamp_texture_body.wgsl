@@ -1,4 +1,4 @@
-// node.clamp_texture — fusable body (freeze §12). Saturate RGB to [min, max].
+// node.clamp_texture — fusable body (freeze section 12). Saturate RGB to [min, max].
 // Pure; alpha passes through. Matches clamp_texture.wgsl. PARAMS order:
 // [min, max] — args named min_v/max_v so they don't shadow the WGSL builtins
 // (codegen passes params positionally, arg names are free).

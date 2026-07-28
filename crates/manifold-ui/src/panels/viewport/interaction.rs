@@ -1,6 +1,6 @@
 //! Viewport-local interaction: clip/marker hit-testing, hover, and the ruler /
 //! overview / marker-drag event routing. (Clip move/trim/region lives in
-//! `interaction_overlay.rs`.) See `docs/TIMELINE_API_DESIGN.md` §3.6.
+//! `interaction_overlay.rs`.) See `docs/TIMELINE_API_DESIGN.md` section 3.6.
 
 use crate::{EditingAction, MarkerAction, TransportAction};
 use super::*;
@@ -68,7 +68,7 @@ impl TimelineViewportPanel {
     }
 
     /// Resolve a press in the horizontal scrollbar strip to a pan action, computing
-    /// the grab offset for a subsequent drag to latch (§24 5e). A press on the thumb
+    /// the grab offset for a subsequent drag to latch (section 24 5e). A press on the thumb
     /// grabs it where touched; a press on the track centres the thumb under the
     /// pointer. Returns `(grab_dx, action)` — the caller decides whether to persist
     /// `grab_dx` into a drag session (`DragBegin`) or discard it (a plain `Click`
@@ -155,7 +155,7 @@ impl TimelineViewportPanel {
                     let beat = self.scrub_snap_beat(raw, self.scrub_free);
                     return vec![PanelAction::Transport(TransportAction::Seek(beat.as_f32()))];
                 }
-                // Horizontal scrollbar drag (§24 5e). Latches the grab offset so
+                // Horizontal scrollbar drag (section 24 5e). Latches the grab offset so
                 // the thumb tracks the pointer 1:1.
                 if self.scrollbar_h_rect.contains(*origin) {
                     if let Some((grab_dx, action)) = self.scrollbar_h_press(*origin) {

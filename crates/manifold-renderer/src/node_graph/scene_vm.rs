@@ -693,7 +693,7 @@ fn node_source_vertex_count(node: &EffectGraphNode) -> Option<u32> {
 
 /// Closed-form vertex counts for procedural mesh generators whose output
 /// size is a pure function of their own declared params — no GPU readback,
-/// no fabricated numbers. §2.5 audit of every `Array(MeshVertex)`-producing
+/// no fabricated numbers. section 2.5 audit of every `Array(MeshVertex)`-producing
 /// `Source`-role primitive: only `node.cube_mesh` (a fixed 36-vertex
 /// constant — 6 faces × 2 triangles × 3 vertices, `generate_cube_mesh.rs`)
 /// and `node.grid_mesh` (`resolution_x * resolution_y`, confirmed against
@@ -1456,7 +1456,7 @@ mod tests {
     #[test]
     fn scene_vm_is_pure_no_project_type_referenced() {
         // Compile-time proof by construction: this module imports nothing
-        // from `manifold_core::project`. The negative `rg` gate (§4) checks
+        // from `manifold_core::project`. The negative `rg` gate (section 4) checks
         // the same claim textually across the file.
         let d = importer_shaped_def();
         let vm1 = SceneVm::from_def(&d);

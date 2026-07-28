@@ -15,7 +15,7 @@ use crate::preset_def::{PresetDef, PresetKind};
 /// Lives on `EffectMetadata` (and `GeneratorMetadata`) so a schema
 /// change is one literal addition next to the effect's `params`
 /// slice, instead of a hardcoded match arm in
-/// `align_to_definition`. See `docs/EFFECT_RUNTIME_UNIFICATION.md` §7
+/// `align_to_definition`. See `docs/EFFECT_RUNTIME_UNIFICATION.md` section 7
 /// step 15.
 ///
 /// Applied by:

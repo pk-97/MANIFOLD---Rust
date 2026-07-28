@@ -8,7 +8,7 @@
 //! dependency on the audio/CoreAudio stack — it reads core types only.
 //!
 //! These are **runtime** values: never serialized, recomputed every analysis
-//! block. See `docs/AUDIO_MODULATION_DESIGN.md` §5.
+//! block. See `docs/AUDIO_MODULATION_DESIGN.md` section 5.
 
 /// The detector outputs for one frequency band, all normalized **0..1**. The
 /// same five detectors run on every band (`Full`/`Low`/`Mid`/`High`), so any

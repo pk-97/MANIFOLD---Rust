@@ -1,4 +1,4 @@
-// Oracle diff-core reduction (freeze/fusion compiler, design §7).
+// Oracle diff-core reduction (freeze/fusion compiler, design section 7).
 //
 // Compares two same-dimension textures texel-by-texel — no sampler, because
 // the oracle wants an EXACT same-texel comparison, not a filtered one — and
@@ -6,7 +6,7 @@
 // back four words, never the image, so a 4K compare costs one dispatch + a
 // tiny readback instead of the per-pixel CPU scan the legacy parity path used.
 //
-// Tolerance model (design §11.D, two-sided + discontinuity-aware): a texel
+// Tolerance model (design section 11.D, two-sided + discontinuity-aware): a texel
 // "fails" only when it exceeds BOTH the absolute and relative bounds. We tally
 // those into `over_count`, so the verdict can tolerate a small fraction of
 // post-discontinuity boundary texels (where one f16 quantum on the wrong side
@@ -17,7 +17,7 @@
 // negative IEEE-754 floats the raw bit pattern is monotonic in value, so an
 // atomicMax over the bitcast u32 yields the maximum float.
 //
-// NaN/Inf agreement (design §11.D / §12.3 step 6): we do NOT trust `max()` to
+// NaN/Inf agreement (design section 11.D / section 12.3 step 6): we do NOT trust `max()` to
 // propagate a NaN — WGSL `max(NaN, x)` may return `x`, silently dropping it,
 // and an Inf would survive the max yet pass an `is_nan`-only verdict. So
 // non-finite texels are classified EXPLICITLY, with the bit pattern (NaN != NaN

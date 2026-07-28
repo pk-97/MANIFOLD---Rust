@@ -187,7 +187,7 @@ pub struct ProjectIOAction {
     pub record_commands: Vec<Box<dyn Command>>,
     /// Non-blocking notice for the UI toast (e.g. "Opened with repairs: …").
     /// `None` means nothing to show — the common case. See BUG-063,
-    /// `docs/PROJECT_FILE_INTEGRITY_DESIGN.md` §3.6.
+    /// `docs/PROJECT_FILE_INTEGRITY_DESIGN.md` section 3.6.
     pub notice: Option<String>,
 }
 
@@ -729,7 +729,7 @@ impl ProjectIOService {
             imported_count += 1;
         }
 
-        // Process audio files (Audio Layer feature, docs/AUDIO_LAYER_DESIGN.md §6).
+        // Process audio files (Audio Layer feature, docs/AUDIO_LAYER_DESIGN.md section 6).
         // A file dropped ONTO an existing audio lane joins it (a new clip on that
         // lane at the drop beat); a file dropped on empty timeline space appends
         // its own new audio lane. `join_audio_layer` is the lane under the cursor,
@@ -1124,7 +1124,7 @@ mod tests {
         let _ = std::fs::remove_file(temp_path);
     }
 
-    // ── BUG-063 — surface silent load-repairs (PROJECT_FILE_INTEGRITY_DESIGN §3.6 P3) ──
+    // ── BUG-063 — surface silent load-repairs (PROJECT_FILE_INTEGRITY_DESIGN section 3.6 P3) ──
     //
     // `manifold-app` is bin-only (no `[lib]` target), so an integration test
     // under `tests/*.rs` can't call `open_project_from_path` at all — only a

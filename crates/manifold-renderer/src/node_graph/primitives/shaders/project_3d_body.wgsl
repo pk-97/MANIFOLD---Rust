@@ -1,4 +1,4 @@
-// node.project_3d — fusable BUFFER body (freeze §12, buffer domain), COINCIDENT
+// node.project_3d — fusable BUFFER body (freeze section 12, buffer domain), COINCIDENT
 // type-changing. Project a 3D mesh vertex to a 2D curve point, orthographic
 // (out.xy = pos.xy * proj_scale) or perspective (s = proj_dist / (proj_dist +
 // z)). Origin-centered output (render_lines applies the aspect + screen-shift).

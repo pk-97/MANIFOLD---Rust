@@ -1,4 +1,4 @@
-// node.taper_mesh — fusable BUFFER body (freeze §12, buffer domain),
+// node.taper_mesh — fusable BUFFER body (freeze section 12, buffer domain),
 // COINCIDENT `in` + COINCIDENT optional `weights`. Per-vertex taper along
 // `axis`: the two off-axis position components scale by s; normals divide
 // by s and renormalize (D4 exact for this transform). Matches

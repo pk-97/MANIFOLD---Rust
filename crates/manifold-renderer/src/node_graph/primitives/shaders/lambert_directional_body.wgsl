@@ -1,4 +1,4 @@
-// node.lambert_directional — fusable body (freeze §12). Coincident: the
+// node.lambert_directional — fusable body (freeze section 12). Coincident: the
 // normal-map texel arrives as a register. This is the SCALAR-PARAM path only —
 // light colour is the white default, so the hand kernel's `* light_color`
 // multiply drops out (x * 1.0 is bit-identical). A wired `node.light` input is

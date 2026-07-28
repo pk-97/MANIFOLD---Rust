@@ -130,7 +130,7 @@ pub struct DepthMsaaDraw<'a> {
     instance_count: u32,
 }
 
-/// Committed shape (`docs/GBUFFER_DESIGN.md` §2 D3) for
+/// Committed shape (`docs/GBUFFER_DESIGN.md` section 2 D3) for
 /// [`GpuEncoder::draw_instanced_depth_msaa_batch_desc`] — the desc-struct
 /// seam that lets ONE batch entry point grow optional G-buffer attachments
 /// instead of a parallel `_with_depth` function per attachment combination.
@@ -956,7 +956,7 @@ impl GpuEncoder {
     }
 
     /// [`Self::draw_instanced_depth_msaa_batch`]'s desc-driven superset
-    /// (`docs/GBUFFER_DESIGN.md` §2 D3). Same single 4x-MSAA pass, same
+    /// (`docs/GBUFFER_DESIGN.md` section 2 D3). Same single 4x-MSAA pass, same
     /// shared depth buffer resolving inter-object occlusion; additionally:
     /// `desc.depth_resolve` — `Some(tex)` stores the depth attachment via
     /// `MultisampleResolve` with filter `Sample0` into `tex` (single-sample

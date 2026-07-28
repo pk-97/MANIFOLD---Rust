@@ -10,7 +10,7 @@
 //!   `out[i].xy = vec2(x[i] * scale * PROJ_SCALE, y[i] * scale * PROJ_SCALE)`
 //!
 //! The `PROJ_SCALE = 0.25` screen-fit constant is baked inside the
-//! primitive (per `DECOMPOSING_GENERATORS.md` §6.4 home #2 —
+//! primitive (per `DECOMPOSING_GENERATORS.md` section 6.4 home #2 —
 //! intrinsic to "produce curve-space points sized correctly for
 //! render_lines"). The user-facing `scale` param (port-shadowed,
 //! default 1.0) is the visible knob; the 0.25 lives where it

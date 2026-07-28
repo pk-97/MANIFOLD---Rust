@@ -5,7 +5,7 @@
 //!   Hash2 (mode 0): out.rg = hash2(seeded)   ∈ [0,1]²
 //!   Hash1 (mode 1): out.rgb = hash1(seeded)  ∈ [0,1]
 //!
-//! The "re-hash a value field by a seed" atom the §2.5 audit found
+//! The "re-hash a value field by a seed" atom the section 2.5 audit found
 //! missing. Feed `node.voronoi_2d`'s `cell_id` output (RG) and a
 //! `beat_floor` seed to get per-cell randoms that jump each beat — the
 //! per-beat reshuffle at the heart of Voronoi Prism. General: any value

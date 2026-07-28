@@ -310,7 +310,7 @@ pub(crate) struct LayerOutput {
 // field on LayerCompositor makes the struct non-Send without this impl.
 unsafe impl Send for LayerOutput {}
 
-/// §24 5c with-effects thumbnails: a single-clip layer's post-effect output,
+/// section 24 5c with-effects thumbnails: a single-clip layer's post-effect output,
 /// keyed by clip id. Unlike `LayerOutput`, this is consumed LATER in the frame
 /// by the clip-thumbnail snapshot, by which time the layer/effect render target
 /// it came from may have been recycled. So it owns a `GpuTexture` clone (one
@@ -402,7 +402,7 @@ pub struct LayerCompositor {
     /// Cleared and populated each frame by generate_layers / composite_parallel
     /// to avoid per-frame heap allocation.
     layer_outputs_scratch: Vec<LayerOutput>,
-    /// §24 5c with-effects thumbnails: `clip_id → that layer's post-effect output
+    /// section 24 5c with-effects thumbnails: `clip_id → that layer's post-effect output
     /// texture`, populated only for SINGLE-clip layers (where the layer output IS
     /// that clip's full look — generator/video + layer effects). Multi-clip layers
     /// can't isolate one clip, so they're absent and the thumbnail uses the raw
@@ -1187,7 +1187,7 @@ impl LayerCompositor {
                     layer_index: layer_idx,
                     blit_to_led: layer_desc.is_some_and(|ld| ld.blit_to_led),
                 });
-                // §24 5c: for a SINGLE-clip layer, this post-effect output IS that
+                // section 24 5c: for a SINGLE-clip layer, this post-effect output IS that
                 // clip's full look — expose it for a with-effects thumbnail. Clone
                 // (cheap retain) now, while the target is provably alive, so the
                 // snapshot later in the frame binds a live texture even if the pool
@@ -2013,7 +2013,7 @@ impl LayerCompositor {
 }
 
 impl Compositor for LayerCompositor {
-    /// §24 5c with-effects thumbnails — the post-effect output for a sole-clip
+    /// section 24 5c with-effects thumbnails — the post-effect output for a sole-clip
     /// layer (that clip's full look). `None` for multi-clip layers; valid only for
     /// the frame just rendered. See the trait default for the contract.
     fn clip_post_fx_texture(&self, clip_id: &str) -> Option<&GpuTexture> {

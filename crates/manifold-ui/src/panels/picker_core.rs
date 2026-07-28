@@ -1,7 +1,7 @@
 //! `PickerCore` — the reusable pick-from-a-list model shared by every
 //! search + category-chip + filtered-grid + keyboard-nav surface.
 //!
-//! `OVERLAY_SESSIONS_AND_PICKER_DESIGN.md` §4, D3. Owns items, categories,
+//! `OVERLAY_SESSIONS_AND_PICKER_DESIGN.md` section 4, D3. Owns items, categories,
 //! filter text, the filtered index list, the keyboard cursor, and scroll —
 //! plus the interaction rules (typing filters, chips filter, arrows move,
 //! Enter picks, Escape dismisses). Deliberately does NOT render: the browser
@@ -33,7 +33,7 @@ pub struct PickerItem {
     /// pickers with no source concept (the graph-editor node picker).
     pub source: Option<Source>,
     /// True for a project-embedded `Snapshot` entry surfaced only because its
-    /// library file is gone (PRESET_LIBRARY_DESIGN §3/D6: "listed only when
+    /// library file is gone (PRESET_LIBRARY_DESIGN section 3/D6: "listed only when
     /// their source file is gone, badged 'missing from library'"). Distinct
     /// from `source`/`badge` because it also gates the browser's right-click
     /// management menu off (an auto-captured cache isn't user-manageable the

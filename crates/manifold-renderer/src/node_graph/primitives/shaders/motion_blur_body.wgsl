@@ -1,4 +1,4 @@
-// node.motion_blur — fusable body (freeze §12), MultiInputCoincident:
+// node.motion_blur — fusable body (freeze section 12), MultiInputCoincident:
 // `in` is Gather (stencil-fetch), `velocity` is CoincidentTexel.
 //
 // Velocity-directed gather motion blur (docs/CINEMATIC_POST_DESIGN.md D4).

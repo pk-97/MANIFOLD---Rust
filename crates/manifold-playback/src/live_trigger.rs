@@ -10,7 +10,7 @@
 //! (`manifold-playback::modulation`), edge-detects the shaped signal at the
 //! fixed 0.5 threshold, and emits a [`FireRequest`] naming the owning layer
 //! directly. See `docs/AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md`
-//! D2/D3/§3.3 (P2) and `docs/LIVE_AUDIO_TRIGGERS_DESIGN.md` (the original
+//! D2/D3/section 3.3 (P2) and `docs/LIVE_AUDIO_TRIGGERS_DESIGN.md` (the original
 //! send-owned design this replaces).
 //!
 //! **Why this is just edge detection:** the upstream transient detector already
@@ -26,7 +26,7 @@
 //! `advance()` too, so a second onset landing inside the first one's decay
 //! tail never re-armed the edge, deafening triggers on dense material. The
 //! conditioned signal remains the fire-meter's source of truth; only the edge
-//! decoupled. (§8, 2026-07-07: the edge itself moved to
+//! decoupled. (section 8, 2026-07-07: the edge itself moved to
 //! `manifold_core::audio_trigger::TransientEdge` so the param-trigger
 //! evaluator could share it; P2, 2026-07-10: this module's own state moved
 //! from send×band keys to layer×index keys when clip triggers became
@@ -56,7 +56,7 @@ pub struct FireRequest {
 /// Runtime envelope-follower + edge state for one clip-trigger config. Mirrors
 /// what `ParameterAudioMod` carries inline (`smoothed`, `prev_raw`,
 /// `trigger_edge` — `audio_mod.rs`); kept out-of-line here because
-/// `LayerClipTrigger` is a pure data model (§3.1 of the design doc), not a
+/// `LayerClipTrigger` is a pure data model (section 3.1 of the design doc), not a
 /// struct that already carried follower state.
 #[derive(Debug, Clone, Copy, Default)]
 struct ClipTriggerFollower {
@@ -90,7 +90,7 @@ impl LiveTriggerState {
         self.walk(snapshot, setup, layers, dt, fire_meters, true)
     }
 
-    /// BUG-109 §7.1 item 2: while the transport is stopped, clip triggers
+    /// BUG-109 section 7.1 item 2: while the transport is stopped, clip triggers
     /// never fire (one-shot expiry is beat-based and the clock is frozen),
     /// but a performer tuning a trigger at soundcheck — transport stopped,
     /// track playing through the tap — still needs to see the shaped signal
@@ -377,7 +377,7 @@ mod tests {
 
     #[test]
     fn evaluate_meter_only_pushes_the_level_but_never_advances_the_edge() {
-        // BUG-109 §7.1 item 2: the stopped-tick walk must push the same
+        // BUG-109 section 7.1 item 2: the stopped-tick walk must push the same
         // shaped signal the edge reads, without ever deciding a fire.
         let (setup, layers) = setup_and_layer("Kick", AudioBand::Full, 1.0);
         let mut state = LiveTriggerState::default();

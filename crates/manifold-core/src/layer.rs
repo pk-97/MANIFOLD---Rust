@@ -90,13 +90,13 @@ pub struct Layer {
     /// but still feeds its send** (the third state beside Live and Muted). Mute
     /// still wins — a muted layer is silent everywhere. Default `false` (Live).
     /// Stem lanes from Detect-and-Group default this `true`. See
-    /// `docs/AUDIO_LAYER_DESIGN.md` §5 / `LAYER_CONTROLS_DESIGN.md` §5.3.
+    /// `docs/AUDIO_LAYER_DESIGN.md` section 5 / `LAYER_CONTROLS_DESIGN.md` section 5.3.
     #[serde(default, skip_serializing_if = "is_false")]
     pub analysis_only: bool,
     /// Set ONLY on a Detect-and-Group **group** layer: the source audio lane this
     /// set was built for. Drives lane-keyed reuse — re-detecting any clip on that
     /// lane reuses this group's stem lanes + sends instead of making a second set.
-    /// `None` on every other layer. See `docs/AUDIO_CLIP_DETECTION_DESIGN.md` §8.3.
+    /// `None` on every other layer. See `docs/AUDIO_CLIP_DETECTION_DESIGN.md` section 8.3.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detect_group_source: Option<LayerId>,
     /// Set on a Detect-and-Group **stem lane**: which of the four demucs stems
@@ -105,7 +105,7 @@ pub struct Layer {
     /// stem lanes. `None` on every other layer, and on stem lanes created
     /// before this field existed — those fall back to the legacy name match,
     /// which stamps this field on first touch (lazy migration, no load pass).
-    /// See `docs/TIMELINE_INGEST_DESIGN.md` §5 P5 / D8.
+    /// See `docs/TIMELINE_INGEST_DESIGN.md` section 5 P5 / D8.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detect_stem_role: Option<DetectStemRole>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -162,7 +162,7 @@ pub struct Layer {
     /// Empty (the default) means no audio trigger fires clips on this layer.
     /// The only authorable clip-trigger shape — see
     /// `crate::audio_trigger::LayerClipTrigger` and
-    /// `docs/AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` §3.1/D2.
+    /// `docs/AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` section 3.1/D2.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clip_triggers: Vec<crate::audio_trigger::LayerClipTrigger>,
 

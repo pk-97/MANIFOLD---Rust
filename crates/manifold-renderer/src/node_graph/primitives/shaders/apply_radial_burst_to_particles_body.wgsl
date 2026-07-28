@@ -1,4 +1,4 @@
-// node.apply_radial_burst_to_particles — fusable BUFFER body (freeze §12, buffer
+// node.apply_radial_burst_to_particles — fusable BUFFER body (freeze section 12, buffer
 // domain), COINCIDENT. Per-particle radial impulse around (point_x, point_y):
 // radial + tangent curl + noise-perturbed radial + (1-t²)² falloff, applied to
 // position.xy. Matches apply_radial_burst_to_particles.wgsl bit-for-bit (the

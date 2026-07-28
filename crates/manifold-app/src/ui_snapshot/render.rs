@@ -10,7 +10,7 @@
 //! `crate::ui_frame::composite_main_ui_frame` — the SAME function
 //! `present_all_windows` and `cache_path_full_render` call.
 //!
-//! P2 (`HARNESS_FIDELITY_INVARIANT_PROPOSAL.md` §4 step 2): the immediate-mode
+//! P2 (`HARNESS_FIDELITY_INVARIANT_PROPOSAL.md` section 4 step 2): the immediate-mode
 //! passes that used to continue here as this module's own `draw_immediate_
 //! passes` (clip bodies, optional injected thumbnails, clip names,
 //! automation lanes, top-level overlays) are now `crate::ui_frame::
@@ -102,7 +102,7 @@ pub fn render_ui_to_png(
         .collect();
 
     // Thumbnail atlas + quads (`--thumbs` only) — a labeled test fixture
-    // standing in for the content-thread atlas (§3's caller test: the render
+    // standing in for the content-thread atlas (section 3's caller test: the render
     // code (`ClipThumbGpu::render`, inside the seam) is the real, shared
     // code; only the input is synthetic). `atlas`/`thumb_gpu` must outlive
     // the seam call, so they're bound here even when unused (`with_thumbs ==
@@ -300,7 +300,7 @@ pub fn render_graph_editor_to_png(
     // `HitTargets` enumeration as a `custom_surfaces` entry. `None` skips the
     // dump entirely (unchanged PNG-only behavior).
     dump_path: Option<&std::path::Path>,
-    // D6 verification (`docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` §2):
+    // D6 verification (`docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` section 2):
     // force these node ids collapsed regardless of the harness's usual
     // "expand everything" default, so a group-face "N params" chip can be
     // captured next to (or instead of) its expanded rows. Empty for every
@@ -590,7 +590,7 @@ pub fn render_graph_editor_to_png(
 /// glyphs rotate with their node, (c) a rect scaled about its own center
 /// bulges symmetrically past an unscaled reference outline (proving the pivot
 /// is the node's rect center, not a corner). `UIStyle::transform` is
-/// node-local (§3 of the design doc) — the renderer pivots it about each
+/// node-local (section 3 of the design doc) — the renderer pivots it about each
 /// node's own bounds at draw time.
 pub fn render_transform_proof_to_png(path: &str) {
     use manifold_ui::node::{Color32, TextAlign, UIFlags, UINodeType, UIStyle};

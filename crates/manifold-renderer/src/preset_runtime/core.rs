@@ -257,7 +257,7 @@ pub(super) struct EffectSlot {
     pub(super) user_bindings_version: u32,
     /// Content key of the card's EFFECTIVE def (edited graph or canonical) at
     /// build time — the state-harvest match key (docs/CHAIN_FUSION_DESIGN.md
-    /// §5). A rebuild harvests a card's node state from the prior runtime
+    /// section 5). A rebuild harvests a card's node state from the prior runtime
     /// only when `(effect_id, def_content_key)` match: same card, same inner
     /// content, so the old impls' baked configuration (ports, WGSL source,
     /// pipelines) is exactly what the new build constructed. Independent of
@@ -436,7 +436,7 @@ impl PresetRuntime {
     /// their node state (impl instances + StateStore buckets) from it, so a
     /// reorder / add / bypass / editor-close / fused-segment swap-in never
     /// resets a sim or a feedback trail — state identity is the card, not the
-    /// chain position (docs/CHAIN_FUSION_DESIGN.md §5). `None` on first build;
+    /// chain position (docs/CHAIN_FUSION_DESIGN.md section 5). `None` on first build;
     /// skipped automatically when dimensions changed.
     pub fn try_build(inputs: ChainBuildInputs<'_>, prior: Option<&mut Self>) -> Option<Self> {
         let ChainBuildInputs {
@@ -819,7 +819,7 @@ impl PresetRuntime {
                 );
                 return None;
             };
-            // Freeze compiler (design §12, step 2): fusion is on-demand and keyed
+            // Freeze compiler (design section 12, step 2): fusion is on-demand and keyed
             // by the def's CONTENT, so ANY shape — shipped, edited in the node
             // editor, or created — fuses through one cache. The "effective def" is
             // the user's edited graph when present, else the canonical preset;
@@ -1309,7 +1309,7 @@ impl PresetRuntime {
         Some(runtime)
     }
 
-    /// State harvest across a rebuild (docs/CHAIN_FUSION_DESIGN.md §5): for
+    /// State harvest across a rebuild (docs/CHAIN_FUSION_DESIGN.md section 5): for
     /// every card whose `(effect_id, def_content_key)` matches a card in the
     /// prior runtime, move the prior node *impls* (the `Box<dyn EffectNode>`
     /// holding sim buffers, trail textures, DNN workers) and their StateStore
@@ -1673,7 +1673,7 @@ impl PresetRuntime {
             // the primitive's 0.0 default here ("clip-side concepts that
             // don't reach the effect chain") — the caller now feeds the
             // owning layer's EFFECTIVE count (clip edge + audio fires,
-            // §8 D1) same as a generator graph gets; master/global chains
+            // section 8 D1) same as a generator graph gets; master/global chains
             // have no layer, so their clip contribution is 0 and only
             // audio fires move the count. `anim_progress` stays clip-side
             // (effects have no anim_progress concept) and is always 0.0
@@ -2027,7 +2027,7 @@ impl PresetRuntime {
     ///
     /// The narrow sibling of [`Self::reset_state`]: generators are
     /// deliberately long-lived per layer (`docs/DECOMPOSING_GENERATORS.md`
-    /// §9 — particle sims / feedback survive clip changes), so a full
+    /// section 9 — particle sims / feedback survive clip changes), so a full
     /// `reset_state()` on every transport stop would be its own
     /// regression (nuking sim state the performer expects to persist).
     /// A trigger latch has no such expectation — it exists only to mirror

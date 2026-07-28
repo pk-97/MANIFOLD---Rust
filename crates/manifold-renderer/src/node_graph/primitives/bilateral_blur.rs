@@ -5,7 +5,7 @@
 //! no smoothing pass — per-pixel noise by construction, and every production
 //! AO implementation (SSAO or GTAO) follows the sampler with an edge-aware
 //! blur. General-purpose by design (any texture + depth guide, not AO-only)
-//! per the §2.5 audit (2026-07-13, 214 primitives surveyed) that found no
+//! per the section 2.5 audit (2026-07-13, 214 primitives surveyed) that found no
 //! edge-aware/bilateral blur in the catalog.
 //!
 //! Fixed 9 taps at 1-texel spacing along `axis`, weighted by the SAME

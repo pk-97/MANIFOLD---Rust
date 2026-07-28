@@ -1830,7 +1830,7 @@ mod tests {
         );
     }
 
-    /// RAYTRACING_DESIGN.md §9 RD9 / T4: the scene-level `rt_reflections`
+    /// RAYTRACING_DESIGN.md section 9 RD9 / T4: the scene-level `rt_reflections`
     /// toggle follows the EXACT same generic-param path that `rt_enabled`'s
     /// P1 test proved — no bespoke command, no bespoke serialization.
     /// Proves both the write and the save/reload round-trip.

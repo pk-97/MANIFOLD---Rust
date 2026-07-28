@@ -8,7 +8,7 @@
 //!    with the unfused chain (the chain rounds to f16 between every pass; the
 //!    fused kernel keeps f32 in registers and rounds once). The two-sided
 //!    tolerance absorbs that f16-accumulation drift, which is the whole reason
-//!    it is two-sided (design §11.D).
+//!    it is two-sided (design section 11.D).
 //! 2. A *wrong* fusion fails the oracle. Without this, "the oracle passed"
 //!    would be meaningless — so we deliberately mis-fuse (product off by 1.5×)
 //!    and assert it is flagged.
@@ -39,7 +39,7 @@ use manifold_gpu::{
 
 const FMT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
 
-/// The §7.4 "out-of-loop ≈ulp" precision-contract tolerance (freeze §7,
+/// The section 7.4 "out-of-loop ≈ulp" precision-contract tolerance (freeze section 7,
 /// `docs/FREEZE_COMPILER_MAP.md`): the shared per-texel (abs, rel) bound for
 /// every out-of-loop texture-region fusion proof — f16-round-trip drift
 /// through pointwise/gather/warp chains, amplified by discontinuities
@@ -356,7 +356,7 @@ fn fused_colorgrade_matches_unfused_within_tolerance() {
     // Looser than Gain: 7 stages of f16 round-trips through HSV + smoothstep
     // discontinuities (hue wrap, colorize edges) drift more, and a handful of
     // boundary texels can land on opposite sides of a step. Tolerate ≤0.5% of
-    // texels failing both bounds (§11.D discontinuity-aware metric).
+    // texels failing both bounds (section 11.D discontinuity-aware metric).
     let r = differ.compare(&device, &unfused.texture, &fused.texture, OUT_OF_LOOP_ULP_ABS_TOL, OUT_OF_LOOP_ULP_REL_TOL);
     assert!(
         r.passes(0.005),
@@ -369,7 +369,7 @@ fn fused_colorgrade_matches_unfused_within_tolerance() {
     );
 }
 
-/// CHAIN FUSION CHECKPOINT (docs/CHAIN_FUSION_DESIGN.md §8) — the fail-fast
+/// CHAIN FUSION CHECKPOINT (docs/CHAIN_FUSION_DESIGN.md section 8) — the fail-fast
 /// gate before any cross-card generalization. Two pointwise cards are rendered
 /// the way the chain renders them today (card A's graph to a texture, that
 /// texture fed into card B's graph — the full-canvas seam round-trip), and
@@ -475,7 +475,7 @@ fn chain_segment_fused_matches_sequential_per_card() {
 /// CPU-built gradient with spatially-varying alpha (A ramps in x), so the
 /// faithful per-atom alpha threading (mix lerps a.a→b.a in Lerp mode, and
 /// passes a.a through untouched in every other mode — BUG-181) is observable
-/// in the diff — the §12.4 hardened-fixture alpha axis. R/G/B as in
+/// in the diff — the section 12.4 hardened-fixture alpha axis. R/G/B as in
 /// `gradient_input`.
 fn gradient_input_varying_alpha(device: &GpuDevice, w: u32, h: u32) -> GpuTexture {
     let mut px = vec![f16::from_f32(0.0); (w * h * 4) as usize];
@@ -509,7 +509,7 @@ fn gradient_input_varying_alpha(device: &GpuDevice, w: u32, h: u32) -> GpuTextur
 
 /// Deterministic LCG (Numerical Recipes constants) — a fuzzer needs random
 /// coverage but a *reproducible* seed so a failure can be replayed exactly
-/// (design §12.3 step 7 reproducer). Not for crypto; just spreads samples.
+/// (design section 12.3 step 7 reproducer). Not for crypto; just spreads samples.
 fn lcg_next(state: &mut u64) -> u32 {
     *state = state
         .wrapping_mul(6364136223846793005)
@@ -522,7 +522,7 @@ fn lcg_f32(state: &mut u64, lo: f32, hi: f32) -> f32 {
     lo + u * (hi - lo)
 }
 
-/// **Step-6 fuzz hardening (design §12.3 step 6 / §12.4).** The single hardened
+/// **Step-6 fuzz hardening (design section 12.3 step 6 / section 12.4).** The single hardened
 /// fixture proves correctness at one point; this sweeps the param space so we
 /// aren't trusting one vector. For many random in-range param sets — including
 /// every `mix` blend mode (0..7, so the `switch` + `safe_div` divide path are
@@ -642,7 +642,7 @@ fn colorgrade_fuzz_fused_agrees_with_unfused() {
     }
 }
 
-/// **The step-4 production gate (design §12.3 step 5).** Drives the *install*
+/// **The step-4 production gate (design section 12.3 step 5).** Drives the *install*
 /// path end-to-end through the real executor: the region-grower
 /// ([`super::install::fuse_canonical_def`]) auto-discovers the ColorGrade region
 /// and rewrites the def into one `node.wgsl_compute` fused node carrying the
@@ -655,7 +655,7 @@ fn colorgrade_fuzz_fused_agrees_with_unfused() {
 /// def-rewrite, the WgslCompute uniform introspection, the per-atom param
 /// seeding, and the executor — i.e. exactly what renders on stage.
 ///
-/// Hardened fixture (§12.4): interior `mix_amount = 0.35` so the source→mix.a
+/// Hardened fixture (section 12.4): interior `mix_amount = 0.35` so the source→mix.a
 /// fork materially contributes (not crossfaded out), plus a spatially-varying
 /// input alpha so faithful alpha threading is exercised. Both sides run the
 /// same alpha-faithful atom bodies, so alpha must agree exactly.
@@ -731,7 +731,7 @@ fn auto_fused_colorgrade_via_executor_matches_unfused() {
     let differ = TextureDiff::new(&device);
     // Same discontinuity-aware budget as the hand-kernel test, plus an absolute
     // cap on the failing-texel count so a contiguous failure band can't hide in
-    // the 0.5% fraction (§12.4 verdict tightening).
+    // the 0.5% fraction (section 12.4 verdict tightening).
     let r = differ.compare(&device, &unfused.texture, &fused.texture, OUT_OF_LOOP_ULP_ABS_TOL, OUT_OF_LOOP_ULP_REL_TOL);
     assert!(
         r.passes(0.005) && r.over_count < 64,
@@ -755,7 +755,7 @@ fn auto_fused_colorgrade_via_executor_matches_unfused() {
 /// synthesized `camera_ext_0` port — the SAME mechanism that lets a real
 /// future camera-derived atom (P1's `coc_from_depth`) fuse with a pointwise
 /// neighbour instead of being a permanent boundary. Same precision tier as
-/// the ColorGrade proof above (freeze §7 tier 4, "out-of-loop texture
+/// the ColorGrade proof above (freeze section 7 tier 4, "out-of-loop texture
 /// regions: ≈1 ulp, not bit-exact, and cannot be" — the unfused chain
 /// round-trips the intermediate through an actual rgba16float texture
 /// between the two members; the fused kernel keeps it in an f32 register).
@@ -857,7 +857,7 @@ fn camera_derived_pointwise_atom_fuses_and_matches_unfused() {
     let fused = render_graph(&device.arc(), &mut fused_graph, &fused_plan, f_src, &input, f_out);
 
     let differ = TextureDiff::new(&device);
-    // Out-of-loop texture tier (freeze §7.4): ≈1 f16 ULP, same tolerance band
+    // Out-of-loop texture tier (freeze section 7.4): ≈1 f16 ULP, same tolerance band
     // the ColorGrade proof above uses.
     let r = differ.compare(&device, &unfused.texture, &fused.texture, OUT_OF_LOOP_ULP_ABS_TOL, OUT_OF_LOOP_ULP_REL_TOL);
     assert!(
@@ -990,7 +990,7 @@ fn coc_from_depth_fuses_with_pointwise_neighbor_and_matches_unfused() {
     let fused = render_graph(&device.arc(), &mut fused_graph, &fused_plan, f_src, &input, f_out);
 
     let differ = TextureDiff::new(&device);
-    // Out-of-loop texture tier (freeze §7.4): ≈1 f16 ULP, same tolerance band
+    // Out-of-loop texture tier (freeze section 7.4): ≈1 f16 ULP, same tolerance band
     // the ColorGrade / I6 proofs above use.
     let r = differ.compare(&device, &unfused.texture, &fused.texture, OUT_OF_LOOP_ULP_ABS_TOL, OUT_OF_LOOP_ULP_REL_TOL);
     assert!(

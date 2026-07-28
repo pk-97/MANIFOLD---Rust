@@ -1,4 +1,4 @@
-// node.checkerboard — fusable body (freeze §12), SOURCE (no texture input). A
+// node.checkerboard — fusable body (freeze section 12), SOURCE (no texture input). A
 // binary {0,1} checker from uv*scale + offset, broadcast to RGB, alpha 1. The
 // body takes no colour arg — only the ambient uv/dims and its params. Matches
 // checkerboard.wgsl. PARAMS: [scale, offset_x, offset_y].

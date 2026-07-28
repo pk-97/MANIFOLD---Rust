@@ -257,14 +257,14 @@ impl Application {
 
         // ── Passes 4a→5 + VQT + overlay dirty-clear — the shared seam
         // (`ui_frame::render_main_ui_passes`, `HARNESS_FIDELITY_INVARIANT_
-        // PROPOSAL.md` §4 step 2), also called by the headless harness
+        // PROPOSAL.md` section 4 step 2), also called by the headless harness
         // (`ui_snapshot/render.rs::render_ui_to_png`, `script.rs`'s
         // `Runner`). It owns its own encoder (created and committed
         // internally, mirroring `composite_main_ui_frame`) and pass order —
         // everything from here through the seam call below is INPUT
         // RESOLUTION: drag-adjusted clip bodies, thumbnail atlas + quads,
         // timeline overlays, automation lanes, scope cursor — kept here
-        // because it's live-only/caller-side state (§3's caller test); the
+        // because it's live-only/caller-side state (section 3's caller test); the
         // seam itself decides pass order and per-pass render-call choice
         // and is never re-sequenced or re-implemented by any caller.
 
@@ -453,12 +453,12 @@ impl Application {
         #[cfg(not(target_os = "macos"))]
         let mut vqt_state: Option<crate::ui_frame::VqtPassState> = None;
 
-        // Pass 4b″ input: Clip thumbnails (§24 5c) — resolve each visible
+        // Pass 4b″ input: Clip thumbnails (section 24 5c) — resolve each visible
         // generator/video clip's atlas cell (published by the content
         // thread) into a `ThumbQuad`, centre-cropped to the body aspect.
         // The actual blit (`ClipThumbGpu::render`) moved into the seam
         // below as `MainUiPassInputs::thumb` — this block only builds the
-        // input; `thumb_pass` stays `None` (skips the pass, §3) whenever the
+        // input; `thumb_pass` stays `None` (skips the pass, section 3) whenever the
         // atlas/bridge isn't resolved, quads end up empty, or off-macOS.
         #[cfg(target_os = "macos")]
         let mut thumb_pass: Option<crate::ui_frame::ThumbPass> = None;
@@ -486,7 +486,7 @@ impl Application {
                 let inv_rows = 1.0 / crate::content_pipeline::CLIP_ATLAS_ROWS as f32;
                 let bpb = self.ws.ui_root.viewport.beats_per_bar() as f64;
                 self.clip_thumb_quad_scratch.clear();
-                // §F aspect-locked window scratch — reused across clips this frame
+                // section F aspect-locked window scratch — reused across clips this frame
                 // (cleared per clip; grows once), like `strips_of` above.
                 let mut thumb_cells: Vec<(u32, f32)> = Vec::new();
                 let mut thumb_windows: Vec<(u32, f32, f32)> = Vec::new();
@@ -522,7 +522,7 @@ impl Application {
                     let count = crate::clip_filmstrip::cell_count(
                         crate::clip_filmstrip::clip_bar_count(dur_b, bpb),
                     );
-                    // §F/§G: collect the captured cells with their on-screen start x,
+                    // section F/section G: collect the captured cells with their on-screen start x,
                     // then lay a continuous grid of aspect-locked windows over the body,
                     // each filled by the nearest captured frame — gapless and regularly
                     // spaced even when only some bars have been swept/captured.
@@ -537,7 +537,7 @@ impl Application {
                     }
                     thumb_cells.sort_unstable_by(|a, b| a.1.total_cmp(&b.1));
                     // Window width = a project-aspect frame at the lane height, decoupled
-                    // from bar width — the §F fix for the squished low-zoom filmstrip.
+                    // from bar width — the section F fix for the squished low-zoom filmstrip.
                     let win_w = body.height * cell_aspect;
                     crate::clip_filmstrip::grid_windows(
                         &thumb_cells,
@@ -597,7 +597,7 @@ impl Application {
         // needed (module doc, `ui_frame.rs`).
 
         // Timeline overlays (region highlight / insert cursor / beat markers) as
-        // GPU rects (§24 5b — no longer baked into a per-layer bitmap). Resolved
+        // GPU rects (section 24 5b — no longer baked into a per-layer bitmap). Resolved
         // here while `self` is free; drawn inside the seam below (region/cursor/
         // markers under the clip names). The insert cursor's layer comes from
         // the app's selection (it owns the resolved layer id).

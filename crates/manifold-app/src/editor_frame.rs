@@ -208,7 +208,7 @@ pub(crate) fn build_editor_preview_column(
     toggle_id
 }
 
-/// Precomputed mini-timeline draw inputs (§ live: `mini_timeline_data` +
+/// Precomputed mini-timeline draw inputs (section live: `mini_timeline_data` +
 /// `ws.dock`'s bottom rect / `show_bottom`; harness: the same
 /// `mini_timeline_data` free function over the fixture `Project` at beat 0).
 /// Bundled into a struct, not individual params, to keep
@@ -256,7 +256,7 @@ pub(crate) struct EditorMiniTimelineInputs<'a> {
 /// reason (module doc deviation 2).
 /// Precedent: `present_graph_editor_window` (pre-extraction) :3694-3751
 /// minus the drawable-tail's node-preview blits; caller order per
-/// `EDITOR_WINDOW_UNIFICATION_DESIGN.md` §3 (popover moves AFTER the tree-
+/// `EDITOR_WINDOW_UNIFICATION_DESIGN.md` section 3 (popover moves AFTER the tree-
 /// overlay pass — depth sorting, not enqueue order, governs stacking, so
 /// this is not a visual change: POPOVER(300) still paints above
 /// OVERLAY(200) and below TOOLTIP(400) regardless of enqueue order).

@@ -1,4 +1,4 @@
-//! `--script <file.json>` runner (`UI_AUTOMATION_DESIGN.md` §6, P2 §9). A
+//! `--script <file.json>` runner (`UI_AUTOMATION_DESIGN.md` section 6, P2 section 9). A
 //! JSON array of `AutomationAction`s (`manifold_ui::automation`) executed in
 //! order against a scene fixture. Artifacts land in
 //! `target/ui-snapshots/<scene>/run-<script-stem>/`: a numbered PNG/dump per
@@ -551,9 +551,9 @@ impl Runner {
                 // entirely in `Application::text_input` (manifold-app), which
                 // `UIRoot` can't reach (no `pub fn text_event` on `UIRoot` —
                 // re-derived while building this driver). Fails loudly (D6)
-                // rather than silently no-op-ing; §7's live door is the
+                // rather than silently no-op-ing; section 7's live door is the
                 // precedent for wiring this once P3 has a live Application.
-                self.fail(index, action_desc, ui, data, out_dir, "no headless seam for AutomationAction::Text (Application::text_input only; see UI_AUTOMATION_DESIGN.md §7)".into())
+                self.fail(index, action_desc, ui, data, out_dir, "no headless seam for AutomationAction::Text (Application::text_input only; see UI_AUTOMATION_DESIGN.md section 7)".into())
             }
             AutomationAction::Pointer { target, gesture } => {
                 self.pointer(ui, data, zoom_ppb, index, action_desc, target, gesture, out_dir, render)
@@ -751,7 +751,7 @@ impl Runner {
 
     /// Scroll `target`'s enclosing container until it sits inside the visible
     /// band, so a following `Pointer` step can act on a row that laid out far
-    /// below the fold (`WIDGET_TREE_DESIGN.md` §5/§6 converged card rows —
+    /// below the fold (`WIDGET_TREE_DESIGN.md` section 5/section 6 converged card rows —
     /// `Angle` at y≈7789 in the gltfscene fixture). Loops [`Self::scroll_once`]
     /// and re-resolves each step, converging by OBSERVATION (it watches the
     /// target's rect move) rather than a fixture-fragile fixed delta. Direction
@@ -1241,7 +1241,7 @@ impl Runner {
     /// shape; see `render.rs`'s module doc). Draws the SAME
     /// `crate::ui_frame::render_main_ui_passes` the live app and
     /// `render_ui_to_png` call (P2, `HARNESS_FIDELITY_INVARIANT_PROPOSAL.md`
-    /// §4 step 2 — no more parallel `draw_immediate_passes`) on top, then
+    /// section 4 step 2 — no more parallel `draw_immediate_passes`) on top, then
     /// stamps D9b's pointer crosshair(s) CPU-side on the readback COPY —
     /// never into the atlas/offscreen, which would poison it for any later
     /// frame or the P0 differential shelf tool. No thumbnails here (this
@@ -1324,9 +1324,9 @@ fn stamp_crosshair(bgra: &mut [u8], tex_w: u32, tex_h: u32, pt: Vec2) {
     }
 }
 
-/// One-shot click dispatch for `interact.rs`'s `select:` sugar (§6 — the
+/// One-shot click dispatch for `interact.rs`'s `select:` sugar (section 6 — the
 /// existing `select:`/`open:` verbs become one-step scripts compiled to the
-/// §4 core). Resolves a layer header by its display `text` and fires a real
+/// section 4 core). Resolves a layer header by its display `text` and fires a real
 /// `Click` through the exact same core the `--script` runner uses
 /// (`Runner::resolve` + `drain_and_dispatch`) — no bespoke reimplementation.
 /// `Err` on a miss (D6): the caller surfaces it loudly instead of guessing at

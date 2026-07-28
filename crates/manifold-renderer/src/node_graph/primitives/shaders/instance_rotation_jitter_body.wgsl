@@ -1,4 +1,4 @@
-// node.instance_rotation_jitter — fusable BUFFER body (freeze §12, buffer
+// node.instance_rotation_jitter — fusable BUFFER body (freeze section 12, buffer
 // domain), COINCIDENT. Add hash-driven per-instance Euler-rotation jitter to
 // each InstanceTransform's rot.xyz (ADD semantics); position + scale pass
 // through. Matches instance_rotation_jitter.wgsl bit-for-bit (same hash_u32,

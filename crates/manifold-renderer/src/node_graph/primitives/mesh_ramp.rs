@@ -428,7 +428,7 @@ mod gpu_tests {
             );
         }
 
-        // Hand-computed anchors (§4 invariant: "monotonic ramp along its
+        // Hand-computed anchors (section 4 invariant: "monotonic ramp along its
         // axis... hand-computed expected at a couple of vertices").
         assert!((got[0] - 1.0).abs() < 1e-5, "v0 should be fully weighted, got {}", got[0]);
         assert!(

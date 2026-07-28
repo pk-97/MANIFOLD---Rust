@@ -226,7 +226,7 @@ impl EffectNode for MuxTexture {
         Some(crate::node_graph::freeze::classify::BoundaryReason::Blocked)
     }
 
-    /// PARAM_RANGE_CONTRACT_DESIGN.md D6/§2 mechanical grant: both params on
+    /// PARAM_RANGE_CONTRACT_DESIGN.md D6/section 2 mechanical grant: both params on
     /// this hand-`impl EffectNode` primitive address/size a discrete
     /// resource, evidenced by this file's own defensive clamps (curated in
     /// `freeze::classify::tests::every_range_contract_names_a_real_boundary`).

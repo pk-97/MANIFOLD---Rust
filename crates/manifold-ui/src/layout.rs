@@ -708,7 +708,7 @@ mod tests {
         // The zero-width-is-today's-layout invariant, mirroring the audio
         // dock's own gate: with BOTH utility docks closed, content_area()
         // and inspector() are exactly what they were before either dock
-        // existed. This is the machine check §4's "Show path never pays"
+        // existed. This is the machine check section 4's "Show path never pays"
         // invariant reduces to at the layout level.
         let layout = ScreenLayout::new(1920.0, 1080.0);
         assert_eq!(layout.audio_setup_width, 0.0);

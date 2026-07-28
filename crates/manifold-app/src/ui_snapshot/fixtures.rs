@@ -2,7 +2,7 @@
 //! translation path (`state_sync::sync_project_data`/`push_state`), so a
 //! snapshot is what the app actually draws — not hand-built panel structs.
 //! The `timeline` scene reproduces the redesign mockup: text / video /
-//! generator / group+children / audio. See `docs/HEADLESS_UI_HARNESS.md` §2.
+//! generator / group+children / audio. See `docs/HEADLESS_UI_HARNESS.md` section 2.
 
 use manifold_core::clip::TimelineClip;
 use manifold_core::effects::PresetInstance;
@@ -387,7 +387,7 @@ fn scroll_shrink_scene() -> SceneData {
     SceneData { project, content, active: None, selection: UIState::default() }
 }
 
-/// P4a evidence scene (`docs/AUTOMATION_LANES_DESIGN.md` §7): the same layer
+/// P4a evidence scene (`docs/AUTOMATION_LANES_DESIGN.md` section 7): the same layer
 /// set as `timeline_scene`, but with the automation transport globals LIVE —
 /// Automation Arm on, lane strips visible — so the transport bar's ARM/BACK/
 /// LANES buttons render their lit state, AND the FLOWERS layer carries two
@@ -450,7 +450,7 @@ fn automation_scene() -> SceneData {
     data
 }
 
-/// P5 (`docs/AUTOMATION_LANES_DESIGN.md` §7 addendum) evidence scene: proves
+/// P5 (`docs/AUTOMATION_LANES_DESIGN.md` section 7 addendum) evidence scene: proves
 /// the "first-draw path" end to end — a param the user has chosen but never
 /// automated renders as a flat line with NO dot (not `automation_scene`'s
 /// already-real Mirror/Bloom lanes, which would make the two states
@@ -660,13 +660,13 @@ fn selection_clips_scene() -> SceneData {
 /// the inspector width). A couple of context layers sit above/below so the
 /// timeline still reads as a real session next to the inspector.
 ///
-/// P4 §7 evidence (the param-card "automated" dot): Mirror carries an
+/// P4 section 7 evidence (the param-card "automated" dot): Mirror carries an
 /// enabled, non-empty automation lane with no latch — its card shows the red
 /// dot. Bloom carries one too, but its `(EffectId, ParamId)` is latched in
 /// `automation_latched_params` — its card shows the gray (overridden) dot.
 /// Mirrors `automation_scene`'s Mirror-live / Bloom-overridden pairing.
 ///
-/// §9 evidence (`LIVE_AUDIO_TRIGGERS_DESIGN.md` U-P2): Strobe carries an
+/// section 9 evidence (`LIVE_AUDIO_TRIGGERS_DESIGN.md` U-P2): Strobe carries an
 /// armed trigger-gate audio mod (`clip_trigger`, mode Transient) and Plasma
 /// carries one too (mode Both) — both reach the STANDARD audio-mod drawer
 /// (Source/Feature/Band/Inv/Delta/Amount/Attack/Release) plus its trailing
@@ -739,7 +739,7 @@ fn inspector_scene() -> SceneData {
         ],
     }]);
     let bloom_id = bloom.id.clone();
-    // Regression look (§9 U2): a PLAIN slider's own armed audio mod reaches
+    // Regression look (section 9 U2): a PLAIN slider's own armed audio mod reaches
     // the exact same drawer builder as Strobe's/Plasma's trigger-gate rows,
     // minus the Mode row — the direct side-by-side proof the unification
     // didn't disturb the non-gate path.
@@ -750,7 +750,7 @@ fn inspector_scene() -> SceneData {
     );
     bloom.audio_mods = Some(vec![bloom_mod]);
 
-    // Strobe: the effect-side trigger-gate reachability proof (§8 P3a) — its
+    // Strobe: the effect-side trigger-gate reachability proof (section 8 P3a) — its
     // `clip_trigger` card gets an armed audio mod with `trigger_mode:
     // Some(Transient)`, so the card shows the standard drawer OPEN with the
     // Mode row highlighting "Audio", plus the collapsed-row badge.
@@ -780,7 +780,7 @@ fn inspector_scene() -> SceneData {
     glow.clip_triggers.push(glow_trigger);
 
     // Plasma: the generator-side proof, mode Both (the arm-time default,
-    // §9 U3) — drawer open, badge reads "Both".
+    // section 9 U3) — drawer open, badge reads "Both".
     let mut plasma = Layer::new_generator("PLASMA".into(), manifold_core::PresetTypeId::PLASMA, 2);
     plasma.layer_id = lid("plasma");
     plasma.clips.push(TimelineClip::new_generator(Beats(0.0), Beats(20.0)));
@@ -884,14 +884,14 @@ fn bug060_scene() -> SceneData {
 /// shows its own card too), carrying a stacked Color Compass effect (3
 /// instances — the reopen notes' "Plasma + stacked Color Compass" repro)
 /// plus 6 additional DISTINCT effects chosen for high param counts / dense
-/// modulation draws (`docs/NODE_CATALOG.md` §6.1 param counts):
+/// modulation draws (`docs/NODE_CATALOG.md` section 6.1 param counts):
 /// ColorGrade(9), DepthOfField(8), WireframeDepth(8), ChromaticAberration(5),
 /// Glitch(5), Strobe(4). 9 cards total. Several carry an armed (open)
 /// audio-mod drawer — the heaviest per-frame modulation draw case, matching
 /// Peter's "heavy modulation while scrolling" repro — and Strobe carries an
 /// armed TRIGGER-GATE (`clip_trigger`) mod, the concrete BUG-060 escape
 /// named in `docs/BUG_BACKLOG.md`. WireframeDepth and one Color Compass
-/// instance are left plain (no mod) so the compact-toggle (§6b) gesture the
+/// instance are left plain (no mod) so the compact-toggle (section 6b) gesture the
 /// differential drives exercises a mix of armed/unarmed cards, not an
 /// all-or-nothing set.
 fn bug060heavy_scene() -> SceneData {

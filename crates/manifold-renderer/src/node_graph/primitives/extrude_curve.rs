@@ -1,5 +1,5 @@
 //! `node.extrude_curve` — extrude a 2D outline curve along +Z into a 3D
-//! positions+uv grid (MESH_DEFORM_AND_CURVE_GEOMETRY_DESIGN.md D5, §3
+//! positions+uv grid (MESH_DEFORM_AND_CURVE_GEOMETRY_DESIGN.md D5, section 3
 //! curve→mesh table).
 //!
 //! `outline: Array<CurvePoint>` sweeps into a `(steps+1) × cols` grid

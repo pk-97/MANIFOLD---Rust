@@ -335,7 +335,7 @@ impl ParamCardPanel {
         h + CARD_BOTTOM_MARGIN
     }
 
-    /// §6b — set compact mode (hide all modulation config drawers on this card).
+    /// section 6b — set compact mode (hide all modulation config drawers on this card).
     /// Driven by the inspector's global "hide mod settings" toggle.
     pub fn set_compact(&mut self, compact: bool) {
         self.compact = compact;
@@ -388,7 +388,7 @@ impl ParamCardPanel {
             .radius(CORNER_RADIUS - BORDER_W)
             .interactive()
             .inert()
-            // §14.5 D — one right gutter: trailing controls right-align to
+            // section 14.5 D — one right gutter: trailing controls right-align to
             // `inner_right - PADDING`, same as the effect header and the param
             // rows' value/mod-icon lane (was r: 0, flush to the inner edge).
             .pad(Pad { l: PADDING, t: 0.0, r: PADDING, b: 0.0 })
@@ -952,7 +952,7 @@ impl ParamCardPanel {
     }
 
     /// Contiguous runs of `rows[..].section` — the D5 display-grouping
-    /// unit (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2): a run is a maximal
+    /// unit (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md section 2): a run is a maximal
     /// span of consecutive rows sharing the same section value (`None`
     /// included — an unsectioned run renders with no header at all). A
     /// repeated section name after a gap is intentionally a SECOND run/header
@@ -1151,7 +1151,7 @@ impl ParamCardPanel {
             let info = self.rows[i].clone();
 
             if info.spec.is_toggle || info.spec.is_trigger {
-                // Toggle / Trigger row — shared builder (Task A of §8.4 P3b:
+                // Toggle / Trigger row — shared builder (Task A of section 8.4 P3b:
                 // effect cards previously had no branch for this at all and
                 // fell through to `build_param_row`, rendering a boolean/
                 // fire-once param as a raw draggable slider). Same shared
@@ -1268,7 +1268,7 @@ impl ParamCardPanel {
                     "\u{203A}", // ›
                     param_row_key_base(&info.id) | ROW_ROLE_CHEVRON,
                 ));
-                // Naming pass (UI_AUTOMATION_DESIGN.md D8/§3): one static name for
+                // Naming pass (UI_AUTOMATION_DESIGN.md D8/section 3): one static name for
                 // every row's chevron — which row comes from the selector's
                 // `under_text` query, not a per-row name string.
                 if let Some(id) = self.row_host.mapping_chevron_ids[i] {
@@ -1472,7 +1472,7 @@ impl ParamCardPanel {
                 let info = self.rows[i].clone();
 
                 if info.spec.is_toggle || info.spec.is_trigger {
-                    // Toggle / Trigger row — shared builder (Task A of §8.4
+                    // Toggle / Trigger row — shared builder (Task A of section 8.4
                     // P3b unified this with the effect card's toggle/trigger
                     // rendering; see `build_toggle_trigger_row`'s doc comment).
                     // ON/OFF for sticky toggles, ▶ for momentary fire-once
@@ -1819,7 +1819,7 @@ impl ParamCardPanel {
     /// ON/OFF button; a trigger row does nothing (the fire counter isn't
     /// user-visible). Kept as one function so the two kinds can't drift back
     /// apart the way `build_effect_sliders` and `build_generator`'s toggle
-    /// rendering did (§8.4 P3b Task A).
+    /// rendering did (section 8.4 P3b Task A).
     fn sync_param_value(&mut self, tree: &mut UITree, i: usize, val: f32) {
         let info = &self.rows[i];
 
@@ -1868,7 +1868,7 @@ impl ParamCardPanel {
             // value change (drag commit, automation, undo) has no animating
             // snapback here, so the override is `None` and the fill draws the
             // value exactly as before. The normalize→format→update math itself
-            // is the shared §5.6 push both cards use (`RowHost::push_slider_value`).
+            // is the shared section 5.6 push both cards use (`RowHost::push_slider_value`).
             let display_norm_override = self
                 .value_snapback
                 .get(i)

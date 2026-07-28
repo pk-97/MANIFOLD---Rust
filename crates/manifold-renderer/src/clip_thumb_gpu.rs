@@ -1,4 +1,4 @@
-//! GPU clip thumbnails (§24 5c). Blits a cell of the shared content→UI thumbnail
+//! GPU clip thumbnails (section 24 5c). Blits a cell of the shared content→UI thumbnail
 //! atlas into a generator/video clip's body, so the clip shows what it looks like
 //! instead of a flat colour.
 //!
@@ -116,7 +116,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 "#;
 
 /// Create the 4×4 box-filter downsample blit pipeline used to capture a clip's
-/// (often full-res) output into a small filmstrip cell without aliasing (§24 5c-2
+/// (often full-res) output into a small filmstrip cell without aliasing (section 24 5c-2
 /// P5). Tap spacing is one cell footprint / 4 in UV, so for any source size the 4
 /// linear taps per axis cover the output texel's footprint instead of point-
 /// sampling it. Bindings: `0` = source texture, `1` = (linear) sampler. Render it

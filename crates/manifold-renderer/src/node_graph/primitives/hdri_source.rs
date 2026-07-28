@@ -4,7 +4,7 @@
 //! instead of (or alongside) the procedural `node.bake_environment` studio.
 //!
 //! Shaped identically to `node.gltf_texture_source`
-//! (GLB_CONFORMANCE_DESIGN.md D6/§3: "copy `gltf_texture_source.rs` wholesale
+//! (GLB_CONFORMANCE_DESIGN.md D6/section 3: "copy `gltf_texture_source.rs` wholesale
 //! as the shape") — background decode thread → `Rgba16Float` upload →
 //! stretch-blit into the chain-allocated `out` slot → mipmapped output
 //! (IMPORT_FIDELITY F-P6's mip contract: `render_scene` samples `envmap`
@@ -49,7 +49,7 @@ struct HdriBlitUniforms {
 /// the caller's thread — this function is only ever invoked from inside a
 /// `std::thread::spawn` closure (`run()` step 2 below), never on the content
 /// thread, per the `node.hdri_source never blocks the content thread`
-/// invariant (GLB_CONFORMANCE_DESIGN.md §4).
+/// invariant (GLB_CONFORMANCE_DESIGN.md section 4).
 ///
 /// `image::open` dispatches on the file's magic number (the `exr` feature
 /// registers OpenEXR's), so this accepts any `.exr` regardless of extension
@@ -225,7 +225,7 @@ impl Primitive for HdriSource {
 
         // 2. Re-trigger a background decode if the path changed since the
         // last one we started. Decode + `std::fs`/`image::open` happen ONLY
-        // inside this spawned thread — never on the content thread (§4
+        // inside this spawned thread — never on the content thread (section 4
         // invariant, gated by the G-P6 grep gate).
         if path != self.last_path && self.pending_load.is_none() {
             self.last_path = path.clone();

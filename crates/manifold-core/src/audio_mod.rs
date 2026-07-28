@@ -8,7 +8,7 @@
 //!
 //! Evaluation lives in `manifold-playback` (the modulation pipeline); this
 //! module owns the model and the pure shaping math. See
-//! `docs/AUDIO_MODULATION_DESIGN.md` §7–§8.
+//! `docs/AUDIO_MODULATION_DESIGN.md` section 7–section 8.
 
 use serde::{Deserialize, Serialize};
 
@@ -502,25 +502,25 @@ pub struct ParameterAudioMod {
     /// Runtime state, not serialized.
     #[serde(skip)]
     pub prev_raw: f32,
-    /// §8 D5b: when this mod's target param is `is_trigger`, evaluation
+    /// section 8 D5b: when this mod's target param is `is_trigger`, evaluation
     /// switches from continuous overwrite to edge detection over the shaped
     /// `out_norm` (rising through 0.5). Runtime state, not serialized —
     /// resets to armed on load, matching `smoothed`/`prev_raw`.
     #[serde(skip)]
     pub trigger_edge: crate::audio_trigger::TransientEdge,
-    /// §8 D5b: monotonic fire counter for an `is_trigger` target — each
+    /// section 8 D5b: monotonic fire counter for an `is_trigger` target — each
     /// `trigger_edge` fire bumps this by one; the written value is
     /// `base + fire_count`, the same monotonic-counter shape every
     /// `last_count`-style consumer already edge-detects. Runtime state, not
     /// serialized.
     #[serde(skip)]
     pub fire_count: u32,
-    /// §9 U1/U3: when this mod's target param is a trigger-gate card
+    /// section 9 U1/U3: when this mod's target param is a trigger-gate card
     /// (`spec.is_trigger_gate`), which events fire the gate's trigger
     /// response — `ClipEdge`/`Transient`/`Both`. `None` on every non-gate
     /// target (the vast majority of mods); serde skip-none so ordinary audio
     /// mods stay byte-identical. Supersedes the deleted `AudioTriggerMod`
-    /// (§8 D2) — a fire-mode mod is now a normal `ParameterAudioMod`, not a
+    /// (section 8 D2) — a fire-mode mod is now a normal `ParameterAudioMod`, not a
     /// parallel per-instance config type.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trigger_mode: Option<crate::audio_trigger::TriggerFireMode>,
@@ -812,7 +812,7 @@ mod tests {
         assert_eq!(m, back);
         // Runtime state is not serialized.
         assert!(!json.contains("smoothed"));
-        // §9 U3: `trigger_mode` is `None` on an ordinary (non-gate) mod and
+        // section 9 U3: `trigger_mode` is `None` on an ordinary (non-gate) mod and
         // must not appear on the wire — old projects stay byte-identical.
         assert!(!json.contains("triggerMode"));
     }

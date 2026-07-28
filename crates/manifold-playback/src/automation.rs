@@ -26,7 +26,7 @@
 //! `Project`), and survive play/stop within a session — only Back to
 //! Arrangement clears them (Ableton semantics).
 //!
-//! ## Recording (§5)
+//! ## Recording (section 5)
 //!
 //! When the global Automation Arm is on, a touched param (while playing)
 //! records into its lane instead of latching an override — the SAME
@@ -48,7 +48,7 @@
 //! to the pre-gesture curve, which is what "the old curve resumes exactly"
 //! means) and returns one `CommitRecordedGestureCommand` per finished
 //! gesture for the caller to run through `EditingService` — the single
-//! undo entry §5/§11.6 requires.
+//! undo entry section 5/section 11.6 requires.
 
 use ahash::AHashMap;
 
@@ -73,11 +73,11 @@ type ParamId = manifold_core::effects::ParamId;
 pub type AutomationLatches = AHashMap<(EffectId, ParamId), ()>;
 
 /// Beats of inactivity after the last recorded touch before an in-progress
-/// gesture is considered finished and committed (§5's "~2 beats of
+/// gesture is considered finished and committed (section 5's "~2 beats of
 /// inactivity ends the gesture").
 const GESTURE_INACTIVITY_BEATS: f64 = 2.0;
 
-/// One in-progress recording gesture (§5). Runtime-only, owned by
+/// One in-progress recording gesture (section 5). Runtime-only, owned by
 /// `PlaybackEngine` alongside [`AutomationLatches`] — never the `Project`,
 /// never serialized. A gesture is a live in-flight performance action; it
 /// isn't expected to survive a save/load (nothing persists it, same as a
@@ -114,7 +114,7 @@ pub type AutomationGestures = AHashMap<(EffectId, ParamId), GestureState>;
 /// `modulation::evaluate_modulation` each tick — automation is a hand, not a
 /// modulator, so it must land before the base→value reset.
 ///
-/// `armed` is the global Automation Arm (§5): while on, a touched param
+/// `armed` is the global Automation Arm (section 5): while on, a touched param
 /// records into its lane instead of latching an override. Returns
 /// `(any_wrote, gesture_commits)` — `any_wrote` folds into the same
 /// compositor-dirty path as `modulation_active` (never bumps the project
@@ -168,7 +168,7 @@ pub fn evaluate_all_automation(
 
 /// Evaluate every automation lane on a single instance, plus (when armed)
 /// any touched param that has no lane yet at all — the "arm creates a lane"
-/// path (§5). Returns true if any lane wrote a value or recorded a point.
+/// path (section 5). Returns true if any lane wrote a value or recorded a point.
 fn evaluate_instance_automation(
     fx: &mut PresetInstance,
     target: &GraphTarget,
@@ -184,7 +184,7 @@ fn evaluate_instance_automation(
     let any_touched = fx.params.iter().any(|p| p.touched);
     // Nothing to do unless there's an existing lane to sample/latch/continue
     // recording, or (armed) a touch that might be starting a brand new
-    // gesture — see docs/AUTOMATION_LANES_DESIGN.md §5 "arm creates a lane".
+    // gesture — see docs/AUTOMATION_LANES_DESIGN.md section 5 "arm creates a lane".
     if !(has_lanes || (armed && any_touched)) {
         return false;
     }
@@ -242,7 +242,7 @@ fn evaluate_instance_automation(
     }
 
     // Pass over touched params NOT covered by an existing enabled lane
-    // above (armed only): this is how a lane is BORN from performance (§5).
+    // above (armed only): this is how a lane is BORN from performance (section 5).
     // Includes a currently-disabled lane's param, which `param_id_for_idx`
     // + the gesture-start lookup below treat the same as "not currently
     // automated" from the touch's perspective.
@@ -263,7 +263,7 @@ fn evaluate_instance_automation(
     // just touched, then write sampled values via the non-touching
     // automation write path (using `set_base_param` here would set
     // `touched` on our own write and self-latch the very next frame — see
-    // `docs/AUTOMATION_LANES_DESIGN.md` §4), then feed recording gestures.
+    // `docs/AUTOMATION_LANES_DESIGN.md` section 4), then feed recording gestures.
     for param_id in to_latch {
         if let Some(p) = fx.params.get_mut(param_id.as_ref()) {
             p.touched = false;
@@ -320,7 +320,7 @@ fn evaluate_instance_automation(
 /// new touch: join the recorded segment onto the pre-gesture curve (old
 /// points before punch-in + the recorded segment + old points after the
 /// last touch, so the untouched tail is byte-identical to before — "the old
-/// curve resumes exactly", §5) and return one `CommitRecordedGestureCommand`
+/// curve resumes exactly", section 5) and return one `CommitRecordedGestureCommand`
 /// per closed gesture for the caller to run through `EditingService`.
 fn close_expired_gestures(
     gestures: &mut AutomationGestures,
@@ -714,7 +714,7 @@ mod tests {
 
     #[test]
     fn armed_touch_with_no_lane_creates_one_on_commit() {
-        // "Arm creates a lane" (§5): no lane exists yet for `amount`, but a
+        // "Arm creates a lane" (section 5): no lane exists yet for `amount`, but a
         // touch while armed still opens a gesture and, once it closes,
         // yields a commit whose `old_points` is `None` (lane creation).
         let mut layer = layer_with_one_effect();

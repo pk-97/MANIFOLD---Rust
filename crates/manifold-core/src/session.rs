@@ -7,7 +7,7 @@
 //! of this module. Launch/grid-edit commands (`ContentCommand` variants,
 //! `session_commands.rs`) are P2/P3.
 //!
-//! Content-agnostic by design (§11 of the doc): nothing here branches on
+//! Content-agnostic by design (section 11 of the doc): nothing here branches on
 //! clip kind (video / image / generator / audio). `ClipSequence` reuses
 //! `TimelineClip` unchanged.
 
@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 /// grid. `clips[].start_beat` is RELATIVE to the sequence start (beat 0 =
 /// sequence start), non-overlapping, sorted — mirrors a `Layer`'s lane but
 /// scoped to one slot. The degenerate case (one clip at beat 0) is a plain
-/// launchable clip; no special type. See `docs/SESSION_MODE_DESIGN.md` §3.
+/// launchable clip; no special type. See `docs/SESSION_MODE_DESIGN.md` section 3.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClipSequence {
@@ -71,7 +71,7 @@ pub struct Scene {
 /// (`SessionRuntime`: which slot is playing per layer, pending quantized
 /// launches, session-override set) is owned by `PlaybackEngine` on the
 /// content thread, never serialized and never undo-wrapped. See
-/// `docs/SESSION_MODE_DESIGN.md` §4.
+/// `docs/SESSION_MODE_DESIGN.md` section 4.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionGrid {
@@ -120,7 +120,7 @@ impl SessionGrid {
     /// `SessionSlot` docs). A plain linear scan: grids are small (a handful
     /// of layers x scenes) and P3's `slot_lookup` cache has no writer yet in
     /// P2, so scanning `slots` directly is simpler than reasoning about
-    /// cache staleness. `docs/SESSION_MODE_DESIGN.md` §5/§6.
+    /// cache staleness. `docs/SESSION_MODE_DESIGN.md` section 5/section 6.
     pub fn get_slot(&self, layer_id: &LayerId, scene_id: &SceneId) -> Option<&SessionSlot> {
         self.slots
             .iter()

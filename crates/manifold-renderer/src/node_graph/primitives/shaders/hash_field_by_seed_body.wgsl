@@ -1,4 +1,4 @@
-// node.hash_field_by_seed — fusable body (freeze §12), CoincidentTexel. Hash the
+// node.hash_field_by_seed — fusable body (freeze section 12), CoincidentTexel. Hash the
 // input value-field's RG with an added scalar seed: seeded = field.rg + seed *
 // (seed_x, seed_y). Hash2 (mode 0) → out.rg; Hash1 (mode 1) → out.rgb. `field` is
 // read at the OWN texel via integer textureLoad (no interpolation — keeps a per-

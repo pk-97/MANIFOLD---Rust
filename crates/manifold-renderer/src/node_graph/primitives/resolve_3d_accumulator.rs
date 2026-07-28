@@ -203,7 +203,7 @@ mod tests {
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
-    //! Buffer→texture 3D resolve value oracle (freeze §12). Dispatches the
+    //! Buffer→texture 3D resolve value oracle (freeze section 12). Dispatches the
     //! generated kernel over a known u32 volume accumulator, reads back the
     //! density Texture3D, and asserts each voxel's R = raw / 4096 AND the
     //! accumulator is self-cleared. Proves the 3D resolve path: dims + the

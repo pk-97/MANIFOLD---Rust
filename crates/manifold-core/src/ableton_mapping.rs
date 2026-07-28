@@ -128,7 +128,7 @@ impl Serialize for AbletonParamMapping {
 
 // Custom `Deserialize` accepting both V1.1 (`paramIndex: usize`) and
 // V1.2+ (`paramId: "amount"`) shapes. See
-// `docs/EFFECT_RUNTIME_UNIFICATION.md` §7 step 10.
+// `docs/EFFECT_RUNTIME_UNIFICATION.md` section 7 step 10.
 impl<'de> Deserialize<'de> for AbletonParamMapping {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where

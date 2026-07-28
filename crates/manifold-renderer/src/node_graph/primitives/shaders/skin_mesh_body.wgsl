@@ -1,11 +1,11 @@
-// node.skin_mesh — fusable BUFFER body (freeze §12, buffer domain).
+// node.skin_mesh — fusable BUFFER body (freeze section 12, buffer domain).
 // Per-vertex linear-blend GPU skinning (glTF spec formula): blend up to 4
 // joint matrices per vertex, looked up from buf_matrices (BufferGather —
 // not coincident with the per-vertex dispatch) by the coincident
 // per-vertex e_joints/e_weights. Weights normalized defensively. No
 // legacy hand-WGSL predecessor exists for this brand-new primitive — the
 // gpu_tests parity oracle is an independently-implemented Rust reference
-// of this exact formula (DECOMPOSING_GENERATORS.md §9), not a parallel
+// of this exact formula (DECOMPOSING_GENERATORS.md section 9), not a parallel
 // .wgsl file.
 fn body(
     idx: u32,

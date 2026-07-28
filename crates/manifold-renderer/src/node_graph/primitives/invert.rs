@@ -1,7 +1,7 @@
 //! `node.invert` — pixel-exact replacement for the legacy
 //! Originally `InvertColorsFX`
 //! effect. First production primitive authored via the
-//! [`primitive!`](crate::primitive) macro and the first §6.1
+//! [`primitive!`](crate::primitive) macro and the first section 6.1
 //! migration from the Phase 4a primitive library design.
 //!
 //! Math: `mix(source, vec4(1-r, 1-g, 1-b, a), intensity)`. Alpha is

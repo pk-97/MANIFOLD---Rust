@@ -6,7 +6,7 @@ use crate::node_graph::ports::{ChannelElementType, ChannelSpec, NodeInput, NodeO
 /// Entry-point name every generated kernel uses. Exactly `cs_main`, and no
 /// emitted helper/struct may have it as a prefix (the backend's
 /// `find_entry_function` tries an exact match first, then prefix-matches —
-/// design §12.3 / shader_compiler.rs).
+/// design section 12.3 / shader_compiler.rs).
 pub const ENTRY: &str = "cs_main";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -114,7 +114,7 @@ pub(crate) fn wgsl_safe_field(name: &str) -> std::borrow::Cow<'_, str> {
         "layout",
         // `length(v)` is a WGSL builtin function (vector magnitude).
         // node.taper_mesh's committed param name (MESH_DEFORM_AND_CURVE_
-        // GEOMETRY_DESIGN.md §3) is literally `length` (the taper falloff
+        // GEOMETRY_DESIGN.md section 3) is literally `length` (the taper falloff
         // span) — collides with the builtin identifier in the generated
         // Params struct field / `params.length` access. Renamed to
         // `p_length` in generated WGSL only; the outward ParamDef.name,

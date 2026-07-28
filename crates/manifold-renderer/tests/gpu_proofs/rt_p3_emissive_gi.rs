@@ -1,8 +1,8 @@
-//! `docs/RAYTRACING_DESIGN.md` §5.2 P3 — emissive GI + RT volumetrics
+//! `docs/RAYTRACING_DESIGN.md` section 5.2 P3 — emissive GI + RT volumetrics
 //! (D4/D5). Three proofs, all computed numbers/exit codes, no PNG oracle
 //! (per the wave's "no agent gates on reading an image" rule):
 //!
-//! 1. [`self_emission_combine_matches_cpu_oracle_exactly`] — the §5.1
+//! 1. [`self_emission_combine_matches_cpu_oracle_exactly`] — the section 5.1
 //!    self-emission gap's value-level proof: a 2-triangle emissive quad
 //!    (one `node.grid_mesh` at 1x1 resolution), zero lights, zero IBL,
 //!    zero ambient/fog, so `render_scene.wgsl`'s combine reduces to
@@ -12,7 +12,7 @@
 //!    the two scripted region probes over one RT-enabled ground+emitter
 //!    scene (`rt_p1_region_probe.rs`'s exact geometry/camera, occluder
 //!    repurposed as an emitter): (a) a ground region near the emitter
-//!    must brighten emissive-ON vs OFF (closes the §5.1 "no sun-bounce/
+//!    must brighten emissive-ON vs OFF (closes the section 5.1 "no sun-bounce/
 //!    GI gather" gap — D4), (b) the emitter's own surface region must
 //!    read >= its material's emissive luminance (proves self-emission
 //!    survives the RT-on combine path, not just the RT-off one proof 1
@@ -357,7 +357,7 @@ fn emissive_gather_brightens_neighbor_region_and_glows_itself() {
         delta * 100.0
     );
 
-    // RAYTRACING_DESIGN.md §5.2 P3 (D4): the GI gather's emissive-hit term
+    // RAYTRACING_DESIGN.md section 5.2 P3 (D4): the GI gather's emissive-hit term
     // must measurably brighten a neighboring surface — a real, non-zero
     // effect of turning emission on, not a rounding-level wobble.
     assert!(
@@ -407,7 +407,7 @@ fn volumetric_shaft_region_brightens_with_emissive_on() {
         delta * 100.0
     );
 
-    // RAYTRACING_DESIGN.md §5.2 P3 (D5, "emissive-colored volumetric
+    // RAYTRACING_DESIGN.md section 5.2 P3 (D5, "emissive-colored volumetric
     // glow"): with fog+shafts on, the emitter is appended as a Point-mode
     // entry in the march's light table — the SAME neighbor region must
     // brighten emissive-ON vs OFF, same as the no-fog proof above (the

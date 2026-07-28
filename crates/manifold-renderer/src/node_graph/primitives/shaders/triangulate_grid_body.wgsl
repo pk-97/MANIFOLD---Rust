@@ -1,4 +1,4 @@
-// node.triangulate_grid — fusable BUFFER body (freeze §12, buffer domain),
+// node.triangulate_grid — fusable BUFFER body (freeze section 12, buffer domain),
 // GATHER. Convert an NxM positions grid (Array<MeshVertex>) into a triangle-list
 // of (N-1)*(M-1)*6 vertices with finite-difference normals. Matches
 // triangulate_grid.wgsl bit-for-bit.

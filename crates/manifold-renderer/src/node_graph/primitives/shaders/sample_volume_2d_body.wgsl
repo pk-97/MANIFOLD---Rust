@@ -1,4 +1,4 @@
-// node.sample_volume_2d — fusable body (freeze §12), MIXED-DIM GATHER. Sample a
+// node.sample_volume_2d — fusable body (freeze section 12), MIXED-DIM GATHER. Sample a
 // Texture3D `volume` at a fixed Z slice (with a UV re-frame) to produce a
 // Texture2D. The output is 2D (so the wrapper is 2D: frag_uv/dims are vec2), but
 // the input is a 3D volume gathered at a body-computed vec3 coord. Matches

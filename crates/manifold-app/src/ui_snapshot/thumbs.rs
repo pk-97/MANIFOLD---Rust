@@ -1,7 +1,7 @@
 //! Inject a deterministic test-pattern atlas and render thumbnail windows over
 //! the clip bodies through the REAL `ClipThumbGpu` path — so clip previews (and,
-//! layered onto this same seam, the §F aspect-locked window) render headless
-//! without the content thread. See `docs/HEADLESS_UI_HARNESS.md` §5 / Phase 3.
+//! layered onto this same seam, the section F aspect-locked window) render headless
+//! without the content thread. See `docs/HEADLESS_UI_HARNESS.md` section 5 / Phase 3.
 //!
 //! Mirrors the app's clip-thumbnail pass: each non-audio clip RESERVES the bottom
 //! name-strip band (the thumbnail tiles only the preview area above it) and lays a

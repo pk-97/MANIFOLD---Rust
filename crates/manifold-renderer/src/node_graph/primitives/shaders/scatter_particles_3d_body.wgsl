@@ -1,4 +1,4 @@
-// node.scatter_particles_3d — BUFFER body (freeze §12, buffer domain), ATOMIC
+// node.scatter_particles_3d — BUFFER body (freeze section 12, buffer domain), ATOMIC
 // 3D SCATTER. Each live particle atomic-adds `scaled_energy` to its nearest
 // voxel in a vol_res × vol_res × vol_depth accumulator. Matches
 // fluid_scatter_3d.wgsl `splat_3d`.

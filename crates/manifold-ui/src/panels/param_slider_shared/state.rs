@@ -129,10 +129,10 @@ pub struct ParamModState {
     /// drawer index into the id an `AudioModSetSource` command needs.
     pub audio_send_ids: Vec<manifold_foundation::AudioSendId>,
 
-    /// Per-param: fire-mode index into `[ClipEdge, Transient, Both]` (§9 U3),
+    /// Per-param: fire-mode index into `[ClipEdge, Transient, Both]` (section 9 U3),
     /// read off `ParameterAudioMod.trigger_mode`. Only meaningful on an
     /// `is_trigger_gate` row's mod; harmless elsewhere (never read). Unlike
-    /// the pre-§9 `audio_trigger_*` arrays this rides the SAME per-param
+    /// the pre-section 9 `audio_trigger_*` arrays this rides the SAME per-param
     /// `audio_*` state above — a trigger-gate card's config is a normal
     /// `ParameterAudioMod`, not a separate per-instance field.
     pub audio_mode_idx: Vec<i32>,
@@ -155,7 +155,7 @@ pub struct ParamModState {
     /// never writes it; it mirrors no model field.
     pub audio_matrix_open: Vec<bool>,
 
-    // ── Automation lane indicator (P4 §7 last bullet) ──
+    // ── Automation lane indicator (P4 section 7 last bullet) ──
     /// Per-param: an enabled automation lane with ≥1 point exists on this
     /// instance for this param (Live's red "automated" dot).
     pub automation_active: Vec<bool>,
@@ -328,7 +328,7 @@ pub struct AudioRowState {
     pub sensitivity: f32,
     pub attack_ms: f32,
     pub release_ms: f32,
-    /// Fire-mode index (`ParameterAudioMod.trigger_mode`, §9 U3), into
+    /// Fire-mode index (`ParameterAudioMod.trigger_mode`, section 9 U3), into
     /// `[ClipEdge, Transient, Both]`. Only meaningful on an `is_trigger_gate`
     /// target; a harmless default elsewhere.
     pub trigger_mode_idx: i32,
@@ -524,7 +524,7 @@ pub(crate) enum ParamDragTarget {
     /// `dragging_decay_param: i32`.
     EnvDecay { index: usize },
     /// An audio shaping slider drag in the drawer. A trigger-gate row's
-    /// Amount/Attack/Release sliders ride this SAME path (§9 unified the
+    /// Amount/Attack/Release sliders ride this SAME path (section 9 unified the
     /// drawer) — no separate trigger-mod drag target. Was
     /// `dragging_audio_shape: Option<(usize, AudioShapeParam)>`.
     AudioShape {
@@ -729,14 +729,14 @@ pub(crate) struct ToggleTriggerRowIds {
     pub(crate) label_id: Option<NodeId>,
     pub(crate) button_id: NodeId,
     /// The "A" audio-mod button — `Some` for `is_trigger` (D5b) AND
-    /// `is_trigger_gate` (§9) rows alike; both reach the SAME per-param
+    /// `is_trigger_gate` (section 9) rows alike; both reach the SAME per-param
     /// drawer mechanism now. Plain toggles never build one (`None`, zero
     /// lane reserved).
     pub(crate) audio_btn: Option<NodeId>,
     /// The audio-mod drawer, when armed. Same shape as a slider row's
     /// `audio_config` so `resolve_audio_config_click` resolves both identically.
     pub(crate) audio_config: Option<(crate::panels::drawer::DrawerIds, usize)>,
-    /// Collapsed-row mode indicator (§9 consequence, carried over from §8 D6:
+    /// Collapsed-row mode indicator (section 9 consequence, carried over from section 8 D6:
     /// "Transient mode silently ignores clip launches... the drawer must
     /// show the mode on the collapsed card row"). `Some` only for
     /// `is_trigger_gate` rows; text is set (or left blank for the default

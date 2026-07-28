@@ -1,4 +1,4 @@
-//! Region partition — the pointwise-fusion finder (design §3).
+//! Region partition — the pointwise-fusion finder (design section 3).
 //!
 //! This is the "other half" of the freeze compiler. [`super::codegen`] already
 //! chains a region of atom bodies into one kernel; [`super::install`] already
@@ -11,7 +11,7 @@
 //! with a blur (or warp, feedback, DNN, resolution change) in the middle still
 //! fuses the pure runs on either side of it.
 //!
-//! ## The algorithm (§3 "region growing")
+//! ## The algorithm (section 3 "region growing")
 //!
 //! 1. **Classify** each node as [`NodeClass::Eligible`] (a same-element-space
 //!    pointwise/coincident atom that can thread a register) or
@@ -30,7 +30,7 @@
 //!    the executor wouldn't allocate — left unfused, never miscompiled.
 //!
 //! Everything here is a pure function over the def + registry — no GPU — so the
-//! partition is unit-tested structurally (design §7's "cheap GPU-free layer
+//! partition is unit-tested structurally (design section 7's "cheap GPU-free layer
 //! first") before the install path ever renders it.
 //!
 //! ## Conservative-by-construction
@@ -1211,7 +1211,7 @@ pub(crate) fn classify_node(
     // always `NodeClass::Boundary` by cut rule 4 already, never reaching
     // this predicate); this keeps the exemption set structurally complete
     // for the day a second Object consumer exists, which is itself an
-    // escalation trigger (design doc §8).
+    // escalation trigger (design doc section 8).
     let camera_ports: AHashSet<&str> = if n.derived_uniforms().is_empty() {
         AHashSet::default()
     } else {
@@ -3968,7 +3968,7 @@ mod audit {
     /// Run the census over every bundled effect/generator preset plus the
     /// Liveschool fixture's `embedded_presets` (per-instance forked/edited
     /// graphs — the one place a real show's graphs diverge from the catalog
-    /// canonical defs), and render the FUSION_SOTA_DESIGN §D4 report. Returns
+    /// canonical defs), and render the FUSION_SOTA_DESIGN section D4 report. Returns
     /// the exact text committed to `docs/fusion_census.md`.
     fn build_census_report() -> String {
         let registry = PrimitiveRegistry::with_builtin();

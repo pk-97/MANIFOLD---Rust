@@ -211,9 +211,9 @@ impl Command for SaveToProjectCommand {
 }
 
 /// Revert a diverged instance back to tracking its library entry
-/// (PRESET_LIBRARY_DESIGN D3/§4, P4): clears the per-instance graph override
+/// (PRESET_LIBRARY_DESIGN D3/section 4, P4): clears the per-instance graph override
 /// (`inst.graph = None`), undoable. The card/editor's "MODIFIED" badge is
-/// exactly `graph.is_some()` (D3/§6.6 — no hashing), so this is the single
+/// exactly `graph.is_some()` (D3/section 6.6 — no hashing), so this is the single
 /// action that turns the badge back off.
 ///
 /// Fails loud: if the instance's library id no longer resolves in the
@@ -352,7 +352,7 @@ impl Command for RenameEmbeddedPresetCommand {
 /// Deliberately does NOT retarget any instance still tracking this id (an
 /// instance addresses its preset by id, D8) — a card left pointing at a
 /// deleted project preset behaves exactly like today's "missing id" case
-/// (§1's VERIFY-AT-IMPL, resolved by P2's snapshot fallback for the
+/// (section 1's VERIFY-AT-IMPL, resolved by P2's snapshot fallback for the
 /// self-containment case); this command's job is only the removal.
 #[derive(Debug)]
 pub struct DeleteEmbeddedPresetCommand {

@@ -1,4 +1,4 @@
-//! GPU clip-body emission (§24 5b). Turns a clip's on-screen rect + state into
+//! GPU clip-body emission (section 24 5b). Turns a clip's on-screen rect + state into
 //! `UIRenderer` rounded-rect / gradient / shadow draws, reusing the shared SDF
 //! rect pipeline. Replaces the CPU `bitmap_painter::draw_clip` fills — clips are
 //! GPU tiles (rounded, gradient body, lift-on-select) instead of baked pixels.
@@ -83,7 +83,7 @@ pub fn emit_clip_shadows(ui: &mut UIRenderer, clips: &[ClipBody]) {
 }
 
 /// Name-strip band height for a clip of height `h`: `Some(strip_h)` when the clip
-/// has room for a preview + a name strip (§E / §K15), `None` only for a clip too
+/// has room for a preview + a name strip (section E / section K15), `None` only for a clip too
 /// short to carry a legible strip at all. Collapsed/short clips get a *proportional*
 /// strip (capped at `CLIP_STRIP_HEIGHT`) so the name always reads on a solid band
 /// instead of floating over the thumbnail — the thumbnail reserves this band.
@@ -92,7 +92,7 @@ pub fn clip_strip_height(h: f32) -> Option<f32> {
 }
 
 /// The preview-well colour: the identity colour scaled toward black (hue-
-/// preserving), standing in for the thumbnail until §F populates it. Carries
+/// preserving), standing in for the thumbnail until section F populates it. Carries
 /// the input's own alpha through unchanged — a preview well is a solid
 /// backstop against the lane grid EXCEPT during a P2
 /// duplicate-drag ghost (`ClipBody::alpha` < 1.0, see [`body_alpha`]), where
@@ -121,8 +121,8 @@ fn body_alpha(c: Color32, alpha: f32) -> Color32 {
     }
 }
 
-/// Emit one clip body. Tall clips render the §E anatomy — a darker preview WELL
-/// on top (the thumbnail's home once §F lands) + a solid identity NAME STRIP on
+/// Emit one clip body. Tall clips render the section E anatomy — a darker preview WELL
+/// on top (the thumbnail's home once section F lands) + a solid identity NAME STRIP on
 /// the bottom — then the border on top. Short/collapsed clips stay a single
 /// rounded identity bar. The border is transparent-filled so only the outline draws.
 pub fn emit_clip_body(ui: &mut UIRenderer, c: &ClipBody) {
@@ -183,7 +183,7 @@ pub fn emit_clip_body(ui: &mut UIRenderer, c: &ClipBody) {
     }
 
     // Border over the whole clip — transparent fill, so only the outline shows.
-    // §E: a normal clip's frame is the LAYER's IDENTITY colour (Ableton clip-colour),
+    // section E: a normal clip's frame is the LAYER's IDENTITY colour (Ableton clip-colour),
     // tying the full-bleed thumbnail + name strip to the layer; the selected clip
     // keeps the bright focus ring. Locked clips stay on the dim neutral edge.
     let (bw, bc) = if c.selected {
@@ -256,7 +256,7 @@ pub fn emit_clip_names(ui: &mut UIRenderer, clips: &[ClipScreenRect], tracks: Re
             continue;
         }
         ui.push_immediate_clip(c.rect.x + pad, c.rect.y, inner_w, c.rect.height);
-        // The name lives on the bottom NAME STRIP (§K15): centred in the strip
+        // The name lives on the bottom NAME STRIP (section K15): centred in the strip
         // band on a tall clip, or bottom-anchored on a short solid bar. Either
         // way the strip carries the identity colour, so the luminance-picked text
         // colour above already reads against it. Clamp so a tiny clip can't push

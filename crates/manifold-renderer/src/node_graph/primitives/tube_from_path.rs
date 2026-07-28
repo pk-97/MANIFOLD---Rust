@@ -1,6 +1,6 @@
 //! `node.tube_from_path` — sweep a circular ring around a centerline path
 //! into a 3D positions+uv tube grid (MESH_DEFORM_AND_CURVE_GEOMETRY_
-//! DESIGN.md D5/D6, §3 curve→mesh table).
+//! DESIGN.md D5/D6, section 3 curve→mesh table).
 //!
 //! `path: Array<CurvePoint>` (XZ plane — x = world X, y = world Z) sweeps
 //! into a `path_len × (sides+1)` grid. Optional `lift` (+Y per path point)

@@ -1,5 +1,5 @@
 // node.render_scene internal pass (VOLUMETRIC_LIGHT_DESIGN.md D2, P2/P3) —
-// half-res single-scattering light-shaft march. Committed algorithm (§2 D2's
+// half-res single-scattering light-shaft march. Committed algorithm (section 2 D2's
 // block), implemented verbatim — no substitution. P3: every wired light
 // (Sun AND Point) contributes; Point attenuation is D2's
 // `1/(1+d²/range²)` (light.rs:261), and Point shadow sampling is
@@ -7,7 +7,7 @@
 // 48-51) via the SAME `shadow_vis` caster-table lookup Sun already uses —
 // outside the frustum (or no caster slot) falls through to `vis=1.0`
 // unshadowed glow (D2's honest cost, not a bug).
-// Internal to render_scene, not a graph atom (§2.5 audit).
+// Internal to render_scene, not a graph atom (section 2.5 audit).
 //
 // `linearize_depth` is forked (copied, not shared/concatenated) from
 // `shared/depth_common.wgsl` — same "forked, not shared" convention every
@@ -15,7 +15,7 @@
 // (ssao_from_depth.wgsl, coc_from_depth.wgsl), so this file validates
 // standalone under `tests/wgsl_validation.rs`'s auto-discovery. Both
 // implementations MUST stay bit-for-bit the same formula (synthesis-drift
-// is the bug class this convention risks — GBUFFER_DESIGN.md §2 D4).
+// is the bug class this convention risks — GBUFFER_DESIGN.md section 2 D4).
 fn linearize_depth(raw: f32, near: f32, far: f32) -> f32 {
     let range = far / (near - far);
     return (range * near) / (raw + range);
@@ -45,7 +45,7 @@ struct Uniforms {
     camera_fwd: vec4<f32>,   // xyz, aspect
     fog_shaft: vec4<f32>,    // fog_density, height_falloff, shaft_anisotropy(g), shaft_intensity
     // steps(as f32), light_count(as f32), exposure_ev, rt_enabled(as f32,
-    // RAYTRACING_DESIGN.md §5.2 P3/D5 — was reserved/0 before P3).
+    // RAYTRACING_DESIGN.md section 5.2 P3/D5 — was reserved/0 before P3).
     misc: vec4<f32>,
 };
 
@@ -59,7 +59,7 @@ struct Uniforms {
 //   [i*3+1] = premultiplied color.rgb, .w = this light's caster slot index
 //             (-1 = no shadow, unshadowed glow per D2)
 //   [i*3+2] = .x = attenuation range (Point only; ignored for Sun), rest 0
-// RAYTRACING_DESIGN.md §5.2 P3 (D5, "emissive-colored volumetric glow"):
+// RAYTRACING_DESIGN.md section 5.2 P3 (D5, "emissive-colored volumetric glow"):
 // `render_scene.rs` also appends one Point-mode entry per emissive object
 // (world-space centroid as `pos`, the object's emission factor as `color`,
 // slot -1 — unshadowed glow, same honest-cost convention as an unshadowed
@@ -73,7 +73,7 @@ struct Uniforms {
 @group(0) @binding(7) var shadow_map_3: texture_depth_2d;
 @group(0) @binding(8) var shadow_sampler: sampler_comparison;
 @group(0) @binding(9) var output_tex: texture_storage_2d<rgba16float, write>;
-// RAYTRACING_DESIGN.md §5.2 P3 (D5, "volumetric march sampling shadow-ray
+// RAYTRACING_DESIGN.md section 5.2 P3 (D5, "volumetric march sampling shadow-ray
 // visibility instead of shadow-map lookups"): the SAME full-res RT
 // sun-visibility mask the surface pass (RT-P1/P2's half-res dispatch +
 // upsample) already computed — reused here for the Sun light's march
@@ -172,7 +172,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let exposure_ev = u.misc.z;
     let rt_enabled = u.misc.w > 0.5;
 
-    // RAYTRACING_DESIGN.md §5.2 P3 (D5): the Sun light's march visibility,
+    // RAYTRACING_DESIGN.md section 5.2 P3 (D5): the Sun light's march visibility,
     // resolved ONCE per pixel from the RT sun-visibility mask instead of a
     // per-step, per-sample shadow-map lookup — reusing the RT visibility
     // the surface pass already computed rather than re-testing occlusion
@@ -214,7 +214,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
             let pos_or_dir = shaft_lights[base];
             let color_slot = shaft_lights[base + 1u];
             let range_v = shaft_lights[base + 2u];
-            // RAYTRACING_DESIGN.md §5.2 P3/D5: the Sun entry (mode 0)
+            // RAYTRACING_DESIGN.md section 5.2 P3/D5: the Sun entry (mode 0)
             // reuses the per-pixel RT visibility computed once above,
             // in place of `shadow_vis`'s shadow-map lookup, when RT is on.
             let is_sun = pos_or_dir.w < 0.5;

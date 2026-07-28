@@ -569,7 +569,7 @@
         );
     }
 
-    /// State harvest (docs/CHAIN_FUSION_DESIGN.md §5): rebuilding a chain
+    /// State harvest (docs/CHAIN_FUSION_DESIGN.md section 5): rebuilding a chain
     /// with the prior runtime as donor must carry a feedback trail across the
     /// rebuild — the rebuilt chain continues exactly like a chain that never
     /// rebuilt. A rebuild WITHOUT the donor must visibly reset (sensitivity

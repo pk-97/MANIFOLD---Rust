@@ -4,7 +4,7 @@
 //! interface [`process_tap`](super) does on macOS, so `capture::open` and the
 //! directory's tap capabilities compile and behave identically everywhere — they
 //! just report "unsupported." Each target platform has a native equivalent to
-//! fill in here (see `docs/AUDIO_INFRASTRUCTURE.md` §11.4 for the mapping):
+//! fill in here (see `docs/AUDIO_INFRASTRUCTURE.md` section 11.4 for the mapping):
 //!
 //! * **Windows** — WASAPI loopback for system audio; per-process loopback via
 //!   `ActivateAudioInterfaceAsync` + `AUDIOCLIENT_ACTIVATION_PARAMS`

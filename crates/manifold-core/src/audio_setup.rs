@@ -6,7 +6,7 @@
 //! it in one place. The capture/analysis subsystem reads this to configure its
 //! worker. Parallel to `midi_config` — input routing at the project root.
 //!
-//! See `docs/AUDIO_MODULATION_DESIGN.md` §3.2.
+//! See `docs/AUDIO_MODULATION_DESIGN.md` section 3.2.
 
 use serde::{Deserialize, Serialize};
 
@@ -22,7 +22,7 @@ use crate::math::short_id;
 /// Layer membership is the single source of truth for the layer↔send binding; the
 /// layer header's send dropdown edits it (one layer feeds at most one send). The
 /// Audio Setup source chip is a **read-only** view of a send's routings (device +
-/// layers). See `docs/AUDIO_LAYER_DESIGN.md` §3R.
+/// layers). See `docs/AUDIO_LAYER_DESIGN.md` section 3R.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct AudioSendSource {
@@ -132,7 +132,7 @@ pub struct AudioSend {
     /// feature-extracted — a per-send squelch so quiet bleed between hits can't
     /// trigger and doesn't clutter the scope. Default = OFF (passes everything).
     /// Applied live (no capture restart), like [`AudioSend::gain_db`]. See
-    /// `docs/LIVE_AUDIO_TRIGGERS_DESIGN.md` §7.
+    /// `docs/LIVE_AUDIO_TRIGGERS_DESIGN.md` section 7.
     #[serde(default = "floor_db_off", skip_serializing_if = "floor_is_off")]
     pub floor_db: f32,
     /// Which extractors run for this send.
@@ -147,7 +147,7 @@ pub struct AudioSend {
     /// "both homes work" window. Kept as a real field (not a shadow struct)
     /// only so the P3-doomed matrix UI (`inspector.rs`, `audio_setup_panel.rs`)
     /// keeps compiling against it until it's deleted in P3. See
-    /// `docs/AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` §3.1/§3.2/D2.
+    /// `docs/AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` section 3.1/section 3.2/D2.
     #[serde(default, skip_serializing)]
     pub triggers: Vec<TriggerRoute>,
     /// Where the send's signal comes from — the set of inputs (capture device
@@ -247,7 +247,7 @@ fn is_input_device_kind(k: &AudioSourceKind) -> bool {
 ///
 /// The app resolves this through `manifold_audio::directory` at capture time, so
 /// a renamed-but-same device still opens and a same-name-different device is not
-/// silently bound. See `docs/AUDIO_INFRASTRUCTURE.md` §5.
+/// silently bound. See `docs/AUDIO_INFRASTRUCTURE.md` section 5.
 ///
 /// [`SystemAudio`]: AudioSourceKind::SystemAudio
 /// [`App`]: AudioSourceKind::App

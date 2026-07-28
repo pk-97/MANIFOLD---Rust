@@ -7,10 +7,10 @@ use super::*;
 
 impl UIRoot {
     /// D1 — resolve who owns an in-flight drag gesture, once, at the
-    /// gesture's first `DragBegin`. Fixed order, first claim wins (§3.2):
+    /// gesture's first `DragBegin`. Fixed order, first claim wins (section 3.2):
     /// open overlays z-top-down → inspector → layer headers → ruler →
     /// timeline tracks → nobody. `node_id` is accepted for signature parity
-    /// with the design's committed call (`docs/DRAG_CAPTURE_DESIGN.md` §3.2)
+    /// with the design's committed call (`docs/DRAG_CAPTURE_DESIGN.md` section 3.2)
     /// — no resolution step needs it today; every claim is origin/state based.
     pub(crate) fn resolve_drag_owner(&mut self, origin: Vec2, _node_id: Option<NodeId>) -> Option<DragOwner> {
         // 1. Open overlays, z-top-down — same walk as `route_overlay_event`,
@@ -96,11 +96,11 @@ impl UIRoot {
         }
     }
 
-    /// D2/§3.3 — the terminal broadcast every gesture that began gets,
+    /// D2/section 3.3 — the terminal broadcast every gesture that began gets,
     /// exactly once, no matter who owned it or what ate the routed event.
     /// The fused form (hooks + `drag_owner` clear) is the self-heal on the
     /// next `PointerDown` when a stale owner survived (a lost OS release —
-    /// `docs/DRAG_CAPTURE_DESIGN.md` §3.3 failure story). The normal terminal
+    /// `docs/DRAG_CAPTURE_DESIGN.md` section 3.3 failure story). The normal terminal
     /// path does NOT use this — it calls `fire_gesture_end_hooks` and defers
     /// the clear past the stash read (see `process_events`); the two must not
     /// be re-fused (BUG-075).
@@ -109,7 +109,7 @@ impl UIRoot {
         self.drag_owner = None;
     }
 
-    /// D6/§3.4 (`docs/DRAG_CAPTURE_DESIGN.md`) — after a `PointerDown` is
+    /// D6/section 3.4 (`docs/DRAG_CAPTURE_DESIGN.md`) — after a `PointerDown` is
     /// consumed by `route_overlay_event`, does any OPEN overlay want
     /// immediate-drag armed for this press? `route_overlay_event` returns
     /// only whether an overlay consumed the event, not which one — but only
@@ -130,7 +130,7 @@ impl UIRoot {
     }
 
     /// Whether `event` should stash into `viewport_events` for
-    /// `InteractionOverlay` (`docs/DRAG_CAPTURE_DESIGN.md` §3.2). The drag
+    /// `InteractionOverlay` (`docs/DRAG_CAPTURE_DESIGN.md` section 3.2). The drag
     /// family (`DragBegin`/`Drag`/`DragEnd`) stashes by OWNERSHIP,
     /// unconditionally, no position check — `resolve_drag_owner` fixes
     /// `drag_owner` on `DragBegin` (see the `process_events` drag loop), and
@@ -231,7 +231,7 @@ mod drag_capture_tests {
         );
     }
 
-    /// §3.2 order: Ruler wins over TimelineTracks when the origin is in the
+    /// section 3.2 order: Ruler wins over TimelineTracks when the origin is in the
     /// ruler rect; TimelineTracks wins when it's only in the tracks rect;
     /// neither wins when the origin is in open space (e.g. above the ruler).
     #[test]
@@ -251,7 +251,7 @@ mod drag_capture_tests {
         assert_eq!(ui.resolve_drag_owner(dead_space, None), None);
     }
 
-    /// §3.3 failure story (a): a `DragEnd` released outside `tracks_rect`
+    /// section 3.3 failure story (a): a `DragEnd` released outside `tracks_rect`
     /// (e.g. the cursor drifted over the inspector) must still stash for
     /// `InteractionOverlay::on_end_drag` — ownership decides, not position.
     /// The old `is_event_in_tracks_area` positional gate would have dropped
@@ -278,7 +278,7 @@ mod drag_capture_tests {
         assert!(!ui.should_stash_for_tracks(&drag_end));
     }
 
-    /// §3.3: the terminal broadcast always clears the owner, so the next
+    /// section 3.3: the terminal broadcast always clears the owner, so the next
     /// gesture starts from a clean slate — this is what makes a drag
     /// released over the inspector followed immediately by a new drag on a
     /// second clip behave (the no-wedge proof `drag-clip-release-over-
@@ -349,7 +349,7 @@ mod drag_capture_tests {
         );
     }
 
-    /// D1/§3.5: full-stack proof that a PointerDown landing on the docked Audio
+    /// D1/section 3.5: full-stack proof that a PointerDown landing on the docked Audio
     /// Setup panel's Low/Mid crossover divider requests immediate drag for that
     /// press, so a 1px Move begins the drag immediately (not after the usual
     /// `DRAG_THRESHOLD_PX = 4.0`) and the following Drag reaches the panel as an

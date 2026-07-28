@@ -51,7 +51,7 @@ impl InputHandler {
         }
 
         // ── A — toggle automation lane visibility (P5, `docs/AUTOMATION_LANES_DESIGN.md`
-        // §7's "Automation mode toggle", Live's `A`). Same effect as clicking
+        // section 7's "Automation mode toggle", Live's `A`). Same effect as clicking
         // the transport bar's LANES button. Not gated on current visibility —
         // unlike `B`, this key must work from either state to turn lanes on
         // in the first place. ──
@@ -63,7 +63,7 @@ impl InputHandler {
         }
 
         // ── B — toggle automation draw/pencil mode (P4 Unit B,
-        // `docs/AUTOMATION_LANES_DESIGN.md` §7's "Draw mode", Live's `B`).
+        // `docs/AUTOMATION_LANES_DESIGN.md` section 7's "Draw mode", Live's `B`).
         // No pre-existing MANIFOLD binding on this key — bound directly,
         // Live-exact, no remap needed. Gated on automation mode being
         // visible: pencil mode is meaningless with no lanes shown. ──
@@ -118,7 +118,7 @@ impl InputHandler {
         }
 
         // ── Z — zoom to selection (B14 — `docs/TIMELINE_INTERACTION_P1_SPEC.md`
-        // §5 P1.6). Bare/Shift only — Cmd+Z and Cmd+Shift+Z above are
+        // section 5 P1.6). Bare/Shift only — Cmd+Z and Cmd+Shift+Z above are
         // undo/redo and take priority since they're checked first. ──
         if matches!(logical_key, Key::Character(c) if c.as_str() == "z") && m.is_none() {
             host.zoom_to_selection();
@@ -180,7 +180,7 @@ impl InputHandler {
         }
 
         // ── Paste: Cmd+V (context-sensitive) (Unity line 308) ──
-        // D4 (docs/TIMELINE_INGEST_DESIGN.md §2): arbitrate Finder-file
+        // D4 (docs/TIMELINE_INGEST_DESIGN.md section 2): arbitrate Finder-file
         // paste against the internal clip clipboard via AppKit's pasteboard
         // changeCount before falling through to the existing clip paste.
         if matches!(logical_key, Key::Character(c) if c.as_str() == "v") && m.is_command_only() {
@@ -248,7 +248,7 @@ impl InputHandler {
                 return true;
             }
             // Priority 1.4: marquee-selected automation breakpoints → delete
-            // the whole group as one undo entry (P4 Unit B, §7's
+            // the whole group as one undo entry (P4 Unit B, section 7's
             // "Marquee-select ... drag/delete them together"). Checked
             // BEFORE the single-point path below — a marquee selection
             // takes precedence over a stale single click-selection.
@@ -257,7 +257,7 @@ impl InputHandler {
                 return true;
             }
             // Priority 1.5: selected automation breakpoint → delete it
-            // (P4 Unit A, `docs/AUTOMATION_LANES_DESIGN.md` §7's "Delete
+            // (P4 Unit A, `docs/AUTOMATION_LANES_DESIGN.md` section 7's "Delete
             // removes the selection").
             if host.has_selected_automation_point() {
                 host.delete_selected_automation_point();
@@ -314,7 +314,7 @@ impl InputHandler {
         }
 
         // ── Cmd+E — split at playhead, Ableton-style binding (B14 —
-        // `docs/TIMELINE_INTERACTION_P1_SPEC.md` §5 P1.6). Same action as
+        // `docs/TIMELINE_INTERACTION_P1_SPEC.md` section 5 P1.6). Same action as
         // bare `S` above; both bindings ship side by side per the doc. ──
         if matches!(logical_key, Key::Character(c) if c.as_str() == "e") && m.is_command_only() {
             let ids: Vec<ClipId> = host.get_selected_clip_ids();
@@ -364,7 +364,7 @@ impl InputHandler {
 
         // ── Arrow keys: nudge/cross-layer-move clips when selected, navigate
         // cursor otherwise (Unity lines 426-458, extended by B14 —
-        // `docs/TIMELINE_INTERACTION_P1_SPEC.md` §5 P1.6: Shift+arrow = 1 beat,
+        // `docs/TIMELINE_INTERACTION_P1_SPEC.md` section 5 P1.6: Shift+arrow = 1 beat,
         // Cmd+arrow = fine/1 tick, Up/Down cross layers instead of no-op). ──
         if matches!(
             logical_key,
@@ -460,7 +460,7 @@ impl InputHandler {
     }
 }
 
-/// D4 (docs/TIMELINE_INGEST_DESIGN.md §2): pure Cmd+V arbitration between a
+/// D4 (docs/TIMELINE_INGEST_DESIGN.md section 2): pure Cmd+V arbitration between a
 /// Finder file copy and the internal clip clipboard.
 ///
 /// `internal_snapshot` is the pasteboard `changeCount` recorded the last
@@ -481,7 +481,7 @@ fn should_paste_pasteboard_files(
 
 #[cfg(test)]
 mod b14_keyboard_layer_tests {
-    //! B14 dispatch tests (`docs/TIMELINE_INTERACTION_P1_SPEC.md` §5 P1.6) —
+    //! B14 dispatch tests (`docs/TIMELINE_INTERACTION_P1_SPEC.md` section 5 P1.6) —
     //! exercise `InputHandler::handle_keyboard_input` end to end through a
     //! recording mock of `TimelineInputHost`, the same shape as
     //! `interaction_overlay.rs`'s `TimelineEditingHost` test mock: most
@@ -499,7 +499,7 @@ mod b14_keyboard_layer_tests {
         split_calls: Vec<Vec<ClipId>>,
         zoom_to_selection_calls: u32,
         zoom_back_calls: u32,
-        // D4 Finder-paste arbitration (docs/TIMELINE_INGEST_DESIGN.md §2).
+        // D4 Finder-paste arbitration (docs/TIMELINE_INGEST_DESIGN.md section 2).
         pasteboard_files_val: Vec<std::path::PathBuf>,
         pasteboard_change_count_val: i64,
         internal_snapshot_val: Option<i64>,
@@ -822,7 +822,7 @@ mod b14_keyboard_layer_tests {
         assert_eq!(host.zoom_back_calls, 0);
     }
 
-    // ── D4 Finder-paste arbitration (docs/TIMELINE_INGEST_DESIGN.md §2) ──
+    // ── D4 Finder-paste arbitration (docs/TIMELINE_INGEST_DESIGN.md section 2) ──
     // Decision table: internal-empty/external-file, internal-fresh/
     // external-stale, both-present-external-newer, text-only-pasteboard.
 

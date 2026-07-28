@@ -1,4 +1,4 @@
-// node.coc_from_depth — fusable body (freeze §12), Pointwise + CoincidentTexel.
+// node.coc_from_depth — fusable body (freeze section 12), Pointwise + CoincidentTexel.
 //
 // Physically-based circle-of-confusion (thin-lens model) from scene depth +
 // a Camera's fov/near/far/lens (docs/CINEMATIC_POST_DESIGN.md D1). Exact

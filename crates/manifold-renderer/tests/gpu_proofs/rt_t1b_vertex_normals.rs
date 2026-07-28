@@ -1,4 +1,4 @@
-//! `docs/RAYTRACING_DESIGN.md` §8 Tier-1 item 2 — value-level proof for
+//! `docs/RAYTRACING_DESIGN.md` section 8 Tier-1 item 2 — value-level proof for
 //! RT-T1-B's real vertex-normal interpolation
 //! (`manifold_gpu::raytrace::{RtNormalSource, ensure_normal_sources,
 //! MetalShadowRayTracer::debug_fetch_interpolated_normal}`), replacing the
@@ -36,7 +36,7 @@ use manifold_gpu::raytrace::{ensure_normal_sources, MetalShadowRayTracer, RtObje
 use crate::harness;
 
 /// Flat (non-indexed) vertex layout: 12-byte position, 12-byte normal, no
-/// padding — `packed_float3` mandatory (P0 §5.1 kernel lesson), stride 24.
+/// padding — `packed_float3` mandatory (P0 section 5.1 kernel lesson), stride 24.
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct PackedVertexN {

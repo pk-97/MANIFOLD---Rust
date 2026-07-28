@@ -16,12 +16,12 @@ use super::*;
 // the only place positional param knowledge survives.
 //
 // Save is trivial: iterate the manifest, emit each entry by its own id
-// ([`ManifestSer`]). Load is the §4 reconcile: seed bundled + user-added
+// ([`ManifestSer`]). Load is the section 4 reconcile: seed bundled + user-added
 // descriptors from the template/graph, overlay the file's state + calibration
 // by id, append self-describing inline-`spec` entries ([`build_param_manifest`]).
 // `meta.params` is READ at load only to reconstruct pre-P2 descriptors; it is
 // NOT re-derived on save (a user param's spec rides the wire's inline `spec`,
-// D12 §4 step 3; a bundled param's range edit rides the `calibration` block,
+// D12 section 4 step 3; a bundled param's range edit rides the `calibration` block,
 // D6). This keeps `meta.params` byte-stable across a round-trip and keeps the
 // manifest the sole runtime authority.
 
@@ -307,7 +307,7 @@ pub(super) fn template_known_for(
         || crate::preset_definition_registry::try_get(effect_type).is_some()
 }
 
-/// Build a `PresetInstance`'s manifest from its V1.4 `params` wire map (§4 load
+/// Build a `PresetInstance`'s manifest from its V1.4 `params` wire map (section 4 load
 /// reconcile): seed known descriptors, overlay each file entry's state +
 /// calibration by id (alias-aware), append self-describing inline-`spec`
 /// entries that match nothing, and drop unknown entries with a warning
@@ -521,7 +521,7 @@ impl Serialize for PresetInstance {
     }
 }
 
-/// §9 U5 load migration: a legacy `audioTrigger` field (§8 D2's now-deleted
+/// section 9 U5 load migration: a legacy `audioTrigger` field (section 8 D2's now-deleted
 /// `AudioTriggerMod`) converts to a `ParameterAudioMod` on the instance's
 /// trigger-gate param — the same param the `clip_trigger` toggle card lives
 /// on (`spec.is_trigger_gate`). Runs from BOTH `PresetInstance` Deserialize
@@ -589,7 +589,7 @@ impl<'de> Deserialize<'de> for PresetInstance {
             ableton_mappings: Option<Vec<crate::ableton_mapping::AbletonParamMapping>>,
             #[serde(default)]
             audio_mods: Option<Vec<crate::audio_mod::ParameterAudioMod>>,
-            /// §9 U5: the deleted `AudioTriggerMod`'s wire shape, kept only so
+            /// section 9 U5: the deleted `AudioTriggerMod`'s wire shape, kept only so
             /// an old project's `audioTrigger` field migrates onto
             /// `audio_mods` below — see [`migrate_legacy_audio_trigger`].
             #[serde(default, rename = "audioTrigger")]
@@ -615,7 +615,7 @@ impl<'de> Deserialize<'de> for PresetInstance {
         }
 
         let raw = Raw::deserialize(deserializer)?;
-        // V1.4 §4 reconcile: seed the manifest from the effect's registry
+        // V1.4 section 4 reconcile: seed the manifest from the effect's registry
         // template + the graph's `user_added` bindings, then overlay the
         // incoming `params` map (value/exposed/base/calibration by id, inline
         // spec for self-describing user params). Stash a copy of the wire
@@ -682,7 +682,7 @@ struct GeneratorInstanceRaw {
     ableton_mappings: Option<Vec<crate::ableton_mapping::AbletonParamMapping>>,
     #[serde(default)]
     audio_mods: Option<Vec<crate::audio_mod::ParameterAudioMod>>,
-    /// §9 U5: see `Raw::legacy_audio_trigger` on the effect-kind Deserialize
+    /// section 9 U5: see `Raw::legacy_audio_trigger` on the effect-kind Deserialize
     /// impl above — same migration, generator wire shape.
     #[serde(default, rename = "audioTrigger")]
     legacy_audio_trigger: Option<crate::audio_trigger::LegacyAudioTriggerMod>,
@@ -704,7 +704,7 @@ struct GeneratorInstanceRaw {
 
 impl GeneratorInstanceRaw {
     fn into_instance(self) -> PresetInstance {
-        // V1.4 §4 reconcile: a graph-backed generator's own `meta.params` is
+        // V1.4 section 4 reconcile: a graph-backed generator's own `meta.params` is
         // the descriptor authority (else the registry); overlay the incoming
         // `params` map by id. Stash a copy of the wire map first (D1) — see
         // the effect-kind `Deserialize` impl above for the same pattern.
@@ -770,7 +770,7 @@ mod tests {
     use super::*;
     use super::super::test_support::*;
 
-    // ── PresetInstance `params` wire format (V1.4, PARAM_STORAGE_DESIGN.md §4) ──
+    // ── PresetInstance `params` wire format (V1.4, PARAM_STORAGE_DESIGN.md section 4) ──
     //
     // The typed (de)serialize understands ONLY the id-keyed `params` map —
     // the four historical `paramValues` shapes (positional/keyed × bare-f32/
@@ -1216,8 +1216,8 @@ mod tests {
     #[test]
     fn legacy_audio_trigger_migrates_onto_a_parameter_audio_mod_on_the_gate_param() {
         // The exact `audioTrigger` shape a project saved during the one day
-        // §8's `AudioTriggerMod` shipped (see
-        // `docs/LIVE_AUDIO_TRIGGERS_DESIGN.md` §9 U5). A generator-kind
+        // section 8's `AudioTriggerMod` shipped (see
+        // `docs/LIVE_AUDIO_TRIGGERS_DESIGN.md` section 9 U5). A generator-kind
         // instance's `graph.presetMetadata.params` is the only route to an
         // `is_trigger_gate` param outside the JSON preset path (the
         // compile-time `ParamSpec` inventory format has no field for it —

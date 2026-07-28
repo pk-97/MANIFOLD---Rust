@@ -1,4 +1,4 @@
-// node.film_grain — fusable body (freeze §12), POSITIONAL: own texel modulated
+// node.film_grain — fusable body (freeze section 12), POSITIONAL: own texel modulated
 // by a per-pixel white-noise hash. Needs the pixel coordinate pixel = uv*dims
 // (recovered from the ambient uv + dims) so the grain stays resolution-locked
 // exactly like film_grain.wgsl — both compute uv*dims from the same values, so

@@ -17,7 +17,7 @@ fn generator_param_count_plasma() {
         6
     );
 }
-// `generator_param_count_basic_shapes` intentionally absent — post-§11
+// `generator_param_count_basic_shapes` intentionally absent — post-section 11
 // BasicShapes lives entirely in `assets/generator-presets/BasicShapes.json` and
 // is only registered when manifold-renderer is linked (via the
 // `LoadedPresetSource` inventory submission). manifold-core alone doesn't

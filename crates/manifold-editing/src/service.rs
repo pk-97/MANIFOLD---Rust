@@ -28,7 +28,7 @@ struct ClipboardEntry {
     beat_offset: Beats,
     layer_offset: i32,
     is_generator: bool,
-    /// D9 (docs/TIMELINE_INGEST_DESIGN.md §2): the clip's source layer was
+    /// D9 (docs/TIMELINE_INGEST_DESIGN.md section 2): the clip's source layer was
     /// `Audio` at copy time. Symmetric with `is_generator` — `paste_clips`
     /// skips an audio clip pasted onto a non-audio layer the same way it
     /// skips a generator/video mismatch.
@@ -1095,7 +1095,7 @@ impl EditingService {
     }
 
     /// Move a whole clip selection across layers by a fixed layer-index delta
-    /// (keyboard Up/Down, B14 — `docs/TIMELINE_INTERACTION_P1_SPEC.md` §5 P1.6).
+    /// (keyboard Up/Down, B14 — `docs/TIMELINE_INTERACTION_P1_SPEC.md` section 5 P1.6).
     /// All-or-nothing: if ANY selected clip's destination would fall outside
     /// the layer range, land on a group layer, or cross the gen/video type
     /// boundary, the whole press is a no-op — mirrors the drag cross-layer
@@ -1474,7 +1474,7 @@ impl Default for EditingService {
 
 #[cfg(test)]
 mod paste_type_guard_tests {
-    // D9 (docs/TIMELINE_INGEST_DESIGN.md §2): an audio clip pastes only onto
+    // D9 (docs/TIMELINE_INGEST_DESIGN.md section 2): an audio clip pastes only onto
     // an existing audio layer, symmetric with the pre-existing generator/
     // video mismatch guard in `paste_clips`.
     use super::*;

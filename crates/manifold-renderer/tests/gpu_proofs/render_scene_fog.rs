@@ -1,4 +1,4 @@
-//! `node.render_scene` atmosphere / depth-fog proof (REALTIME_3D_DESIGN §5
+//! `node.render_scene` atmosphere / depth-fog proof (REALTIME_3D_DESIGN section 5
 //! P3 gate).
 //!
 //! Two things the unit tests can't reach: (1) that a wired `node.atmosphere`
@@ -631,7 +631,7 @@ fn fog_scene_json_with_lens(lens_ev: Option<f32>) -> String {
 
 #[test]
 fn ev_zero_camera_lens_is_byte_identical_to_no_camera_lens() {
-    // I5 (docs/CAMERA_AND_LENS_DESIGN.md §3): extends this file's density-0
+    // I5 (docs/CAMERA_AND_LENS_DESIGN.md section 3): extends this file's density-0
     // byte-identity contract to camera_lens's exposure_ev — a camera_lens
     // wired at ev=0 must render byte-for-byte identical to not wiring
     // camera_lens at all, same "unwired/neutral = zero cost" shape as

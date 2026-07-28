@@ -375,7 +375,7 @@ pub enum LoadError {
     Deserialize(String),
     /// The file was written by a newer MANIFOLD than this build can open.
     /// `file_version` and `this_version` are the project-format versions
-    /// (D4) — for the archive-container guard (§3.3 site 2) they read
+    /// (D4) — for the archive-container guard (section 3.3 site 2) they read
     /// "archive vN" instead.
     TooNew {
         file_version: String,
@@ -405,11 +405,11 @@ impl std::error::Error for LoadError {}
 #[cfg(test)]
 mod legacy_clip_trigger_migration_tests {
     //! Round-trip gate for the P2 clip-trigger migration
-    //! (`docs/AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` §3.2), run
+    //! (`docs/AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` section 3.2), run
     //! through the REAL loader pipeline + REAL serde — not
     //! `Project::migrate_legacy_clip_triggers` called directly (that's
     //! manifold-core's own unit-level proof). Create-path green is half a
-    //! gate (`docs/DESIGN_DOC_STANDARD.md` §5, BUG-036): this proves
+    //! gate (`docs/DESIGN_DOC_STANDARD.md` section 5, BUG-036): this proves
     //! save -> reload survives too.
     //!
     //! `AudioSend.triggers` is `#[serde(skip_serializing)]`, so current code

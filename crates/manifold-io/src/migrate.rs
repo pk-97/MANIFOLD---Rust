@@ -78,7 +78,7 @@ pub fn migrate_if_needed(json: &str) -> Result<String, serde_json::Error> {
     // doc comments in manifold-core's `effects.rs`), not realizing
     // `projectVersion` had since marched on to 1.10.0 for unrelated shape
     // changes (graph-home unification, envelope-home unification, etc).
-    // The migration's substance (§4) is unaffected — "V1.4" is the
+    // The migration's substance (section 4) is unaffected — "V1.4" is the
     // param-wire shape's own name, not this field's value; this is simply
     // the next free slot in the one real version chain the project has.
     if is_version_less_than(&version, "1.11.0") {
@@ -95,7 +95,7 @@ pub fn migrate_if_needed(json: &str) -> Result<String, serde_json::Error> {
         root["projectVersion"] = Value::String("1.11.0".to_string());
     }
 
-    // v1.11.0 -> v1.12.0: SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2 D3/D4.
+    // v1.11.0 -> v1.12.0: SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md section 2 D3/D4.
     // `node.render_scene` sheds its nine-per-object TRS params for a
     // `transform_n: Transform` port; this rung synthesizes one
     // `node.transform_3d` node per legacy object (inside the object's own
@@ -745,7 +745,7 @@ fn move_field(
 }
 
 /// `pub(crate)`: the forward-compat guard in `loader.rs` reuses this same
-/// comparator (PROJECT_FILE_INTEGRITY_DESIGN §3.3 — do not duplicate it).
+/// comparator (PROJECT_FILE_INTEGRITY_DESIGN section 3.3 — do not duplicate it).
 pub(crate) fn is_version_less_than(version: &str, threshold: &str) -> bool {
     let v_parts: Vec<u32> = version.split('.').filter_map(|s| s.parse().ok()).collect();
     let t_parts: Vec<u32> = threshold

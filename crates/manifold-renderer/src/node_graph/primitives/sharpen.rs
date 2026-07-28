@@ -4,7 +4,7 @@
 //! could express, but with a single `amount` knob: driving sharpening
 //! from one outer slider via convolution_2d_9tap would require five
 //! `affine_scalar` nodes computing kernel weights (`-amount * 0.5` and
-//! `1 + 2 * amount`) and fanning into 9 ports — that's the §6.1 cue
+//! `1 + 2 * amount`) and fanning into 9 ports — that's the section 6.1 cue
 //! to ship the primitive instead.
 //!
 //! Bit-equivalent to the legacy `mri_slice_compute.wgsl` sharpen pass

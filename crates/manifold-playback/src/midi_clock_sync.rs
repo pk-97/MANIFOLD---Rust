@@ -922,7 +922,7 @@ mod tests {
 
     // ── BPM estimator ────────────────────────────────────────────────────
 
-    /// §11: BPM estimated over ≥96 ticks (24 PPQN ⇒ 4 beats), EMA α=0.30.
+    /// section 11: BPM estimated over ≥96 ticks (24 PPQN ⇒ 4 beats), EMA α=0.30.
     /// The raw-BPM formula (`ticks*60 / (24*seconds)`) is the standard
     /// MIDI-clock tempo derivation (24 clocks per quarter note) — an
     /// external standard, not something derived here, so convergence to the
@@ -1033,7 +1033,7 @@ mod tests {
         }
     }
 
-    /// §11 CLK nudge/seek split = 2.0s: while playing, a small position
+    /// section 11 CLK nudge/seek split = 2.0s: while playing, a small position
     /// error nudges rather than hard-seeking.
     #[test]
     fn clk_position_sync_nudges_when_playing_within_threshold() {
@@ -1090,7 +1090,7 @@ mod tests {
         assert_eq!(arb_target.nudge_count, 0);
     }
 
-    /// §11 CLK tick-delta sanity = 0..=384: a transport restart (position
+    /// section 11 CLK tick-delta sanity = 0..=384: a transport restart (position
     /// snaps back to 0, e.g. MIDI Start) is a large *negative* tick delta —
     /// outside the sane range — and must force a hard seek even when the
     /// resulting time delta alone would look nudge-sized.

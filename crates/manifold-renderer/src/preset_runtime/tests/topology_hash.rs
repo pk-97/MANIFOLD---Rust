@@ -50,7 +50,7 @@
         // states without a separate enabled toggle.
         //
         // Set up the test scenario explicitly: amount=0 first, then
-        // amount=0.5. The §9.1.5 audit moved most effects' default
+        // amount=0.5. The section 9.1.5 audit moved most effects' default
         // amount off zero, so we can't rely on the default for this
         // fixture.
         let mut fx = make_default(PresetTypeId::VORONOI_PRISM);

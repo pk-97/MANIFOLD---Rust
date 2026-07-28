@@ -183,7 +183,7 @@ pub(super) fn descend_level<'a>(
 
 /// Resolve the display name (`handle`) of the innermost group named by
 /// `scope` — the group whose name an exposed param's card `section` is
-/// stamped with (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2 D5). `scope` is a
+/// stamped with (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md section 2 D5). `scope` is a
 /// path of group-node ids from the document root; the LAST id is the
 /// innermost group. Returns `None` for a top-level node (empty scope), or if
 /// any hop doesn't resolve to a named group (an anonymous boundary node has
@@ -219,7 +219,7 @@ pub(super) fn collect_node_ids(nodes: &[EffectGraphNode], out: &mut Vec<NodeId>)
 
 // ---------------------------------------------------------------------------
 // Add Scene Object / Add Scene Light
-// (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2 D7/D7a, P5)
+// (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md section 2 D7/D7a, P5)
 // ---------------------------------------------------------------------------
 
 /// Build a plain (non-group, non-boundary) node for the scene-build gestures

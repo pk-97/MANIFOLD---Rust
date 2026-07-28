@@ -1,4 +1,4 @@
-// node.ssao_gtao — fusable body (freeze §12), Pointwise + GatherTexel.
+// node.ssao_gtao — fusable body (freeze section 12), Pointwise + GatherTexel.
 //
 // GTAO (docs/CINEMATIC_POST_DESIGN.md D9(a)) — REPLACES node.ssao_from_depth
 // outright (D9(b): the old primitive is deleted, not paralleled). Exact

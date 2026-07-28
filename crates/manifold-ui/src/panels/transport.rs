@@ -18,7 +18,7 @@ use crate::tree::UITree;
 
 const INSET: f32 = color::SPACE_M;
 const GROUP_Y_PAD: f32 = color::SPACE_S;
-const ITEM_SPACING: f32 = color::SPACE_S; // §14.4: 5 → 4
+const ITEM_SPACING: f32 = color::SPACE_S; // section 14.4: 5 → 4
 const SECTION_SPACER: f32 = color::SPACE_M;
 const CENTER_SPACER: f32 = color::SPACE_L;
 
@@ -42,7 +42,7 @@ const BPM_FIELD_W: f32 = 60.0;
 const BPM_RESET_W: f32 = 24.0;
 const BPM_CLEAR_W: f32 = 32.0;
 
-// Automation globals (P4, docs/AUTOMATION_LANES_DESIGN.md §7) — right-aligned
+// Automation globals (P4, docs/AUTOMATION_LANES_DESIGN.md section 7) — right-aligned
 // group, mirroring the removed file-ops group's old slot.
 const AUTO_ARM_BUTTON_W: f32 = 48.0;
 const AUTO_BACK_BUTTON_W: f32 = 92.0;

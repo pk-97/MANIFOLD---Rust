@@ -39,7 +39,7 @@ const SCENE_VOCABULARY_TYPE_IDS: &[&str] = &[
     "node.push_mesh",
     "node.morph_mesh",
     "node.rotate_3d",
-    // RAYTRACING_DESIGN.md D14/§5.2: the scene-level RT toggles live on the
+    // RAYTRACING_DESIGN.md D14/section 5.2: the scene-level RT toggles live on the
     // `node.render_scene` root. Curated to the RT subset in
     // `metadata_for_node_type` — the root node's other params (sun, env,
     // counts) stay hand-curated exposures, never auto-stamped.
@@ -48,7 +48,7 @@ const SCENE_VOCABULARY_TYPE_IDS: &[&str] = &[
 
 /// The curated `node.render_scene` auto-stamp subset (see the vocabulary
 /// entry above): the per-scene RT toggle (D14), the MetalFX temporal
-/// quality toggle (P4), and the per-scene reflection toggle (§9 RD9).
+/// quality toggle (P4), and the per-scene reflection toggle (section 9 RD9).
 /// Everything else on the root node is deliberately NOT auto-stamped.
 const RENDER_SCENE_STAMPED_PARAMS: &[&str] = &["rt_enabled", "temporal_upscale", "rt_reflections"];
 
@@ -254,7 +254,7 @@ mod tests {
         );
     }
 
-    /// RAYTRACING_DESIGN.md D14/§5.2/§9 RD9: the scene root's RT toggles surface on
+    /// RAYTRACING_DESIGN.md D14/section 5.2/section 9 RD9: the scene root's RT toggles surface on
     /// the scene panel via the same vocabulary migration as every other
     /// scene control — curated to EXACTLY the three toggles, so the root
     /// node's dozens of other params never flood the panel.

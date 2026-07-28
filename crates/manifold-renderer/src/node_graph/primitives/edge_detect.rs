@@ -1,6 +1,6 @@
 //! `node.edge_detect` — pixel-exact replacement for legacy
 //! Originally `EdgeDetectFX`.
-//! Tenth §6.1 migration and the first **fused composite primitive**.
+//! Tenth section 6.1 migration and the first **fused composite primitive**.
 //!
 //! Sobel 3×3 + smoothstep-threshold in a single compute pass. The
 //! atomic decomposition would be `Sobel3 → Threshold` with an

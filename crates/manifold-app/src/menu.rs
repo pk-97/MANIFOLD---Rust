@@ -276,7 +276,7 @@ fn build(actions: &mut HashMap<MenuId, MenuAction>) -> (Menu, Submenu, Submenu) 
         Some("CmdOrCtrl+Shift+S"),
     ));
     // "Revert to Snapshot" browses the archive's history/ entries (versioned
-    // autosave + manual saves — GIG_RESILIENCE_DESIGN §6). Populated at
+    // autosave + manual saves — GIG_RESILIENCE_DESIGN section 6). Populated at
     // runtime via `AppMenu::set_history_snapshots`.
     let history_m = Submenu::with_id("file.history", "Revert to Snapshot", true);
     let _ = file_m.append(&history_m);

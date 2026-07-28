@@ -1,4 +1,4 @@
-// node.heightfield_shadow — fusable body (freeze §12), Pointwise + GatherTexel.
+// node.heightfield_shadow — fusable body (freeze section 12), Pointwise + GatherTexel.
 //
 // Screen-space heightfield shadow raymarch (docs/DEPTH_RELIGHT_DESIGN.md D5).
 // Ortho heightfield frame IDENTICAL to node.ssao_gtao's Height Field mode

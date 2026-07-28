@@ -1,4 +1,4 @@
-// node.texture_advect — fusable body (freeze §12), 2-input gather (in advected,
+// node.texture_advect — fusable body (freeze section 12), 2-input gather (in advected,
 // velocity coincident). Backward semi-Lagrangian advection: sample `in` at uv -
 // velocity.rg * dt / dims. `in` is gathered (the body computes adv_uv), `velocity`
 // is coincident (pre-sampled at uv). The `boundary` param selects the sampler wrap

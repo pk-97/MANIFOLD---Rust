@@ -1,4 +1,4 @@
-//! `docs/RAYTRACING_DESIGN.md` §5.2 P1/RT-D3 — value-level proof for the
+//! `docs/RAYTRACING_DESIGN.md` section 5.2 P1/RT-D3 — value-level proof for the
 //! `manifold-gpu` hard-shadow-ray trait/kernel
 //! (`manifold_gpu::raytrace::{ShadowRayTracer, MetalShadowRayTracer}`),
 //! ported from `tools/rt_prototype/src/accel.rs` +
@@ -146,7 +146,7 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         label: "rt-p1-out_sv",
         mip_levels: 1,
     });
-    // RAYTRACING_DESIGN.md §5.2 P2 widened `trace_shadow_rays` to also
+    // RAYTRACING_DESIGN.md section 5.2 P2 widened `trace_shadow_rays` to also
     // write demodulated irradiance — this P1 proof only asserts on
     // `out_sv` (shadow visibility), so `out_irr` is an unread write
     // target, same ABI-stub discipline as every other unused-but-required
@@ -185,7 +185,7 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         label: "rt-p1-out_refl-stub",
         mip_levels: 1,
     });
-    // RT-R1 (§9.3 RD4): prefiltered env for reflection miss branch — 1x1 dummy
+    // RT-R1 (section 9.3 RD4): prefiltered env for reflection miss branch — 1x1 dummy
     // for this fixture (no reflection assertions, refl_spp == 0)
     let prefiltered_env = device.create_texture(&GpuTextureDesc {
         width: 1,
@@ -401,7 +401,7 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
         label: "rt-p1-2blas-out_refl-stub",
         mip_levels: 1,
     });
-    // RT-R1 (§9.3 RD4): prefiltered env for reflection miss branch — 1x1 dummy
+    // RT-R1 (section 9.3 RD4): prefiltered env for reflection miss branch — 1x1 dummy
     let prefiltered_env = device.create_texture(&GpuTextureDesc {
         width: 1,
         height: 1,

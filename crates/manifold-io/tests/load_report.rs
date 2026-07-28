@@ -1,5 +1,5 @@
 //! BUG-063 — `Project::load_report` surfaces what a load silently repaired.
-//! `docs/PROJECT_FILE_INTEGRITY_DESIGN.md` §3.6 / P3.
+//! `docs/PROJECT_FILE_INTEGRITY_DESIGN.md` section 3.6 / P3.
 
 use manifold_core::effects::PresetInstance;
 use manifold_core::preset_type_id::PresetTypeId;

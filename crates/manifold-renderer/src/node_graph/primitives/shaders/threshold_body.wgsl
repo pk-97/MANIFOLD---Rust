@@ -1,4 +1,4 @@
-// node.threshold — fusable body (freeze §12). Coincident: the source colour
+// node.threshold — fusable body (freeze section 12). Coincident: the source colour
 // arrives as a register. Verbatim port of the soft-knee bright-pass response
 // from threshold.wgsl (the legacy bloom prefilter curve). PARAMS: [level,
 // softness].

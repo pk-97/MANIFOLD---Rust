@@ -6,7 +6,7 @@
 //! weight and modulated by `amount` globally.
 //!
 //! This is the first of the Phase A texture primitives (per
-//! `docs/PRIMITIVE_LIBRARY_DESIGN.md` §10) — the foundational
+//! `docs/PRIMITIVE_LIBRARY_DESIGN.md` section 10) — the foundational
 //! mask-routing primitive that unlocks luma-keyed effects,
 //! chroma-keyed effects, edge-gated stylize, threshold-bloom-in-shadows,
 //! and every other "apply X only where Y" composition.
@@ -150,7 +150,7 @@ impl Primitive for MaskedMix {
 mod gpu_tests {
     //! GPU correctness tests for `MaskedMix`.
     //!
-    //! Test shape (per §10.3 — no legacy baseline exists for new
+    //! Test shape (per section 10.3 — no legacy baseline exists for new
     //! Phase A primitives):
     //!   1. Smoke — dispatches without panic, pipeline compiles.
     //!   2. Identity — mask = 0 returns A unchanged.

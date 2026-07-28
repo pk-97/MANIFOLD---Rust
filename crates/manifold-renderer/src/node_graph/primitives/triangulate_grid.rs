@@ -192,7 +192,7 @@ mod tests {
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
-    //! Buffer-domain GATHER parity oracle (freeze §12) — triangulate_grid had no
+    //! Buffer-domain GATHER parity oracle (freeze section 12) — triangulate_grid had no
     //! GPU test. The generated kernel (the body indexes the input grid global
     //! buf_in to read each output vertex's quad corner + the finite-difference
     //! normal neighbours) must reproduce the hand kernel vertex-for-vertex,

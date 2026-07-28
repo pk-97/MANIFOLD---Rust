@@ -1,4 +1,4 @@
-// node.scatter_particles_camera — BUFFER body (freeze §12, buffer domain),
+// node.scatter_particles_camera — BUFFER body (freeze section 12, buffer domain),
 // ATOMIC SCATTER with camera projection. Each live particle is projected
 // through the camera (perspective, or orthographic with toroidal wrap) to a
 // screen UV, then atomic-adds scaled_energy into a 2D disp_w × disp_h

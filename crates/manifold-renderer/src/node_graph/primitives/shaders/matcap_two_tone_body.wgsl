@@ -1,4 +1,4 @@
-// node.matcap_two_tone — fusable body (freeze §12). Cross-axis 4-colour
+// node.matcap_two_tone — fusable body (freeze section 12). Cross-axis 4-colour
 // matcap from a tangent-space normal map. Per pixel:
 //   mc = n.xy * 0.5 + 0.5
 //   base = mix(color_y_low, color_y_high, clamp(mc.y, 0, 1))

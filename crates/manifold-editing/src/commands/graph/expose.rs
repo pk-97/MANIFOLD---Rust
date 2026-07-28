@@ -522,7 +522,7 @@ fn mirror_effect_side(
     inner_convert: manifold_core::effects::ParamConvert,
     inner_is_angle: bool,
     inner_value_labels: &[String],
-    // D5 (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2): the innermost
+    // D5 (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md section 2): the innermost
     // enclosing group's display name, resolved by the caller from
     // `scope_path` BEFORE this fn runs. Only used on the append-new-binding
     // path (a static-slot toggle flips an EXISTING bundled spec, whose

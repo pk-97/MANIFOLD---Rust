@@ -239,7 +239,7 @@ impl std::fmt::Display for ChainError {
                 "node `{node_id}`.{port}: trigger-driven switch_value shadows a continuous \
                  binding at {shadowed_source} — a card fader feeding that binding will go dead \
                  while the trigger is active (BUG-104). Compose instead of replace (see \
-                 docs/DECOMPOSING_GENERATORS.md §4.1's trigger_modulate idiom: switch_value with \
+                 docs/DECOMPOSING_GENERATORS.md section 4.1's trigger_modulate idiom: switch_value with \
                  an identity default on the idle branch + a downstream math node), or if this is a \
                  genuine discrete selector, add it to trigger_shadow_lint::DISCRETE_REPLACE_ALLOWLIST \
                  and record the decision in this preset's description."

@@ -258,7 +258,7 @@ pub trait TimelineEditingHost {
     /// Returns 0 if unavailable. Unity: GetMaxDurationBeats (InteractionOverlay line 960-971).
     fn get_max_duration_beats(&self, clip_id: &str) -> Beats;
 
-    // ── Automation lane editing (P4, `docs/AUTOMATION_LANES_DESIGN.md` §7) ──
+    // ── Automation lane editing (P4, `docs/AUTOMATION_LANES_DESIGN.md` section 7) ──
     //
     // Mirrors the clip-drag shape above: a single click/double-click action
     // executes + sends immediately (like `create_clip_at_position`); a drag
@@ -321,7 +321,7 @@ pub trait TimelineEditingHost {
     fn remove_automation_point(&mut self, target: &UiGraphTarget, param_id: &ParamId, beat: Beats);
 
     // ── Automation lane editing — segment gestures (P4 Unit B,
-    // `docs/AUTOMATION_LANES_DESIGN.md` §7's "drag a segment" / "modifier-drag
+    // `docs/AUTOMATION_LANES_DESIGN.md` section 7's "drag a segment" / "modifier-drag
     // a segment") ────────────────────────────────────────────────────────
 
     /// Live-preview an Alt-drag curve bend: directly sets the point at
@@ -378,7 +378,7 @@ pub trait TimelineEditingHost {
         moves: Vec<(UiGraphTarget, ParamId, Beats, f32, f32, UiSegmentShape)>,
     );
 
-    // ── Automation lane editing — draw/pencil mode (P4 Unit B, §7's
+    // ── Automation lane editing — draw/pencil mode (P4 Unit B, section 7's
     // "Draw mode") ────────────────────────────────────────────────────
 
     /// Full (UNFILTERED by visible beat range) point list for `target`/
@@ -404,7 +404,7 @@ pub trait TimelineEditingHost {
     );
 
     /// Commit a finished draw stroke as ONE undo entry — installs
-    /// `new_points` via the same mechanism §5's Automation Arm recording
+    /// `new_points` via the same mechanism section 5's Automation Arm recording
     /// uses (`CommitRecordedGestureCommand`): `old_points` is the pre-stroke
     /// set (`None` if the stroke created the lane, mirroring
     /// `AddAutomationPointCommand`'s `created_lane` semantics).

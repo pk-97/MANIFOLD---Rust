@@ -1,5 +1,5 @@
 //! History-snapshot journaling tests — the P1 gate of
-//! docs/GIG_RESILIENCE_DESIGN.md §6 (autosave via the existing `history/`
+//! docs/GIG_RESILIENCE_DESIGN.md section 6 (autosave via the existing `history/`
 //! mechanism): every superseded save lands in `history/`, snapshots load
 //! back through the normal pipeline, the auto-save cap holds (keeping the
 //! NEWEST autos), and pruned snapshots lose their blob bytes too.

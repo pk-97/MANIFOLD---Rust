@@ -74,7 +74,7 @@ struct Params {
     /// fraction of the scope, carried in the uniform like the rest of the
     /// lane definition so the WGSL holds no lane-geometry literal.
     lane_frac: f32,
-    /// P7 (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` §7.2 item 5):
+    /// P7 (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` section 7.2 item 5):
     /// the KEPT (undimmed) y-range, same bottom-up 0..1 convention as
     /// `band_lo_y`/`band_hi_y` — the shader darkens everything OUTSIDE
     /// `[dim_lo_y, dim_hi_y]`. `dim_lo_y < 0.0` disables dimming entirely
@@ -247,7 +247,7 @@ impl Spectrogram {
     /// faint horizontal locator line (uv.y, 0 top → 1 bottom); negative hides it.
     /// `hovered_divider` brightens a divider's grip handle (`0` low/mid, `1`
     /// mid/high, `< 0` none) to signal it's draggable. `dim_range` (P7,
-    /// AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md §7.2 item 5) is the
+    /// AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md section 7.2 item 5) is the
     /// KEPT y-range (same bottom-up 0..1 convention as `band_ys`) — `Some`
     /// darkens everything outside it, `None` disables dimming.
     pub fn render(
@@ -427,7 +427,7 @@ mod gpu_tests {
     }
 
     /// GPU-readback proof of P7 band dimming
-    /// (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` §7.2 item 5): a
+    /// (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` section 7.2 item 5): a
     /// uniform unit-magnitude fill (colormap(1.0) = white, everywhere,
     /// undimmed) renders full-brightness inside the kept `dim_range` and
     /// darkened outside it — the actual Metal shader, not a value-level proof

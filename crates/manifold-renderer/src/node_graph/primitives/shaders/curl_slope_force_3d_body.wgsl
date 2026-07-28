@@ -1,4 +1,4 @@
-// node.curl_slope_force_3d — fusable body (freeze §12), 3D-VOLUME CoincidentTexel.
+// node.curl_slope_force_3d — fusable body (freeze section 12), 3D-VOLUME CoincidentTexel.
 // Combine a vec3 gradient Texture3D into a force field: cross the gradient with a
 // curl-noise reference axis for swirl + add the gradient scaled by slope.
 // `gradient` is read at the OWN voxel via integer textureLoad (CoincidentTexel, no

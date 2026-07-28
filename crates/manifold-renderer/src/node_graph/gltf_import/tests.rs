@@ -20,7 +20,7 @@ fn azalea_fixture_path() -> std::path::PathBuf {
 /// counts toward `ImportReport::material_count`) — hand-rolled binary
 /// container (12-byte header + JSON chunk + BIN chunk, no external
 /// `.bin`/textures, no `uri` on the buffer so it resolves to the BIN
-/// chunk per spec §Binary glTF). GLB_CONFORMANCE_DESIGN.md G-P2: proves
+/// chunk per spec section Binary glTF). GLB_CONFORMANCE_DESIGN.md G-P2: proves
 /// the FULL production parse path (`gltf::import` → `gltf_import_summary`
 /// → `build_import_graph`) imports every material 1:1, not just the
 /// graph-assembly half a synthetic [`GltfImportSummary`] would exercise.
@@ -255,7 +255,7 @@ fn write_synthetic_default_material_glb() -> std::path::PathBuf {
     path
 }
 
-/// GLB_XFAIL_BURNDOWN_DESIGN.md D4 (BUG-171) / §4 invariant ("no silent
+/// GLB_XFAIL_BURNDOWN_DESIGN.md D4 (BUG-171) / section 4 invariant ("no silent
 /// geometry drop"): a hand-rolled glb whose ONLY primitive has no
 /// material must import as exactly ONE object — the synthetic
 /// default-material entry — through the FULL production parse path
@@ -2516,7 +2516,7 @@ fn animated_and_rigged_import_passes_card_lints() {
     );
 }
 
-/// GLTF_ANIM_RUNTIME_V2_DESIGN.md §3 invariant, P2 gate: no keyframe
+/// GLTF_ANIM_RUNTIME_V2_DESIGN.md section 3 invariant, P2 gate: no keyframe
 /// payload in ANY def the importer emits. `skeleton_animated.glb` is a
 /// real rigged+animated asset (drives `node.gltf_skeleton_pose` +
 /// `node.gltf_animation_source` — see the neighboring card-lint and
@@ -2600,7 +2600,7 @@ fn skinned_import_gets_no_rigid_animation_source() {
 /// with its morph animation COMPOSED, not silently dropped —
 /// `node.morph_targets_blend` chained between
 /// `node.gltf_skinned_mesh_source` and `node.skin_mesh`'s `in` (glTF
-/// applies morph then skin, §3.7.2), and the deltas source's
+/// applies morph then skin, section 3.7.2), and the deltas source's
 /// `skinned` param set so its loaded deltas share the skinned
 /// source's untransformed bind-pose space. `skin_morph.glb`: a
 /// Blender-authored armature-skinned cylinder with a keyframed
@@ -2640,7 +2640,7 @@ fn skin_and_morph_combination_composes_instead_of_dropping() {
             .any(|w| w.from_node == blend.id && w.from_port == "out"
                 && w.to_node == skinmesh.id && w.to_port == "in"),
         "node.morph_targets_blend's `out` must feed node.skin_mesh's `in` directly — \
-         glTF applies morph before skin (§3.7.2)"
+         glTF applies morph before skin (section 3.7.2)"
     );
     let deltas = flat
         .nodes
@@ -2864,7 +2864,7 @@ fn skinned_import_summary_bbox_is_in_bind_skinned_space() {
 /// GLTF_ANIMATION_DESIGN.md A1 deliverable 4 / GLTF_ANIM_RUNTIME_V2_
 /// DESIGN.md P2: the animation source node (now `path` + per-channel
 /// node selectors, no keyframe Tables) survives V1 JSON save→reload —
-/// the STANDARD §5 gate must PROVE this, not assume it.
+/// the STANDARD section 5 gate must PROVE this, not assume it.
 #[test]
 fn animation_selectors_survive_json_round_trip() {
     use super::gltf_load::{GltfObjectAnimation, QuatTrack, Vec3Track};
@@ -3123,7 +3123,7 @@ fn corrupted_assembler_output_fails_validation_naming_the_node() {
 
 /// Regression for the glTF-import "unknown parameter 'pos_x_N'" load
 /// failure, REWRITTEN for
-/// SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2 D3/P2 — the original
+/// SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md section 2 D3/P2 — the original
 /// subject (a per-object param that only existed once `render_scene`
 /// reconfigured to a higher object count) no longer exists: per-object
 /// TRS is a `transform_n: Transform` PORT now, not a param. The
@@ -3256,7 +3256,7 @@ fn imported_azalea_renders_faithfully_to_png() {
     use manifold_gpu::GpuTextureFormat;
 
     // MESH_SNAP_GLB overrides the fixture — the P2 held-out-input gate
-    // (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §5 P2) points this at a
+    // (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md section 5 P2) points this at a
     // >1-object model NOT the azalea the transform-port swap was
     // developed against, to prove the group-placement wiring generalizes.
     let path = std::env::var("MESH_SNAP_GLB")
@@ -3879,7 +3879,7 @@ fn box_animated_four_phase_pngs_are_visibly_distinct() {
 /// confirm a pixel match against the pre-reload progress-0.5 render —
 /// proves `Table` params (the keyframe tracks) and the new
 /// `node.gltf_animation_source` node type survive save→reload AND
-/// stay live (not just structurally present — STANDARD §5's
+/// stay live (not just structurally present — STANDARD section 5's
 /// "modulation live after reload" gate, same doctrine as
 /// `round_trip_preserves_map_wires_and_sun_coherence_bindings`).
 #[cfg(feature = "gpu-proofs")]
@@ -4185,7 +4185,7 @@ fn rigid_multi_node_held_out_fixture_renders_four_distinct_poses() {
 }
 
 /// A2 gate: hot-path check (CLAUDE.md content-thread discipline;
-/// STANDARD §5's content-thread gate) on the design doc's two NAMED
+/// STANDARD section 5's content-thread gate) on the design doc's two NAMED
 /// gate fixtures, `CesiumMan.glb` and `Fox.glb`. Substitute for the
 /// `MANIFOLD_RENDER_TRACE`-driven `manifold-app` journey-proof harness
 /// (`bug035_verify.rs`/`bug037_verify.rs`'s pattern) — wiring a full
@@ -4743,7 +4743,7 @@ fn amg_gt3_fixture_path() -> std::path::PathBuf {
         .join("../../tests/fixtures/gltf/mercedes-amg_gt3__www.vecarz.com.glb")
 }
 
-/// F-P4 held-out-input gate (DESIGN_DOC_STANDARD.md §5): Khronos
+/// F-P4 held-out-input gate (DESIGN_DOC_STANDARD.md section 5): Khronos
 /// `DamagedHelmet.glb` (CC-BY 4.0 — attribution in
 /// `tests/fixtures/gltf/README.md`) carries all five glTF PBR map types
 /// and was never used to develop this importer — the fixture-overfitting

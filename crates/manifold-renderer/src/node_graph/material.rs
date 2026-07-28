@@ -91,7 +91,7 @@ pub enum MaterialKind {
 /// `render_copies` don't implement the sorted pass (D1 scope fence) — a
 /// `Blend` material wired there renders as `Opaque` coverage (no cutout,
 /// no sorting) until their own IBL-upgrade migration trigger fires
-/// (IMPORT_FIDELITY_DESIGN.md §7 Deferred #3).
+/// (IMPORT_FIDELITY_DESIGN.md section 7 Deferred #3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AlphaMode {
     /// Alpha ignored for coverage; all fragments written.
@@ -283,7 +283,7 @@ impl Material {
     /// test fixtures and for the very-narrow case where a backend exposes
     /// the slot before a producer has run. Production renderers MUST NOT
     /// silently substitute this — a missing `material` wire is a structured
-    /// error, per the design doc's §2 "no silent fallbacks" rule.
+    /// error, per the design doc's section 2 "no silent fallbacks" rule.
     pub fn default_unlit_white() -> Self {
         Self {
             kind: MaterialKind::Unlit,
@@ -415,7 +415,7 @@ impl Material {
 
     /// Whether the renderer needs a `light` input wired when this material
     /// is in use. Mirrors the per-kind requirement table in the design doc
-    /// (§5 "Conditional requirements"). Renderer-side validation reads this
+    /// (section 5 "Conditional requirements"). Renderer-side validation reads this
     /// at runtime; preset-load validation (when the material's source is
     /// statically resolvable) reads it via the same helper.
     pub fn requires_light(&self) -> bool {

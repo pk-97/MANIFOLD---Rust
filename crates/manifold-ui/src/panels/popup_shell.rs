@@ -8,7 +8,7 @@
 //! lives in **one** place — the future visual upgrade (gradient body, heavier
 //! shadow) changes this function, not three call sites.
 //!
-//! The §17 overlay loop ([`app_render`]) draws the soft drop-shadow under the
+//! The section 17 overlay loop ([`app_render`]) draws the soft drop-shadow under the
 //! container automatically: it skips the leading full-screen scrim and shadows
 //! the next node (the container). So the shell deliberately does *not* paint its
 //! own shadow.
@@ -73,7 +73,7 @@ pub fn build(tree: &mut UITree, screen: (f32, f32), rect: Rect, style: &PopupSty
         "",
     );
 
-    // One rounded, 1px-bordered container. The §17 overlay loop lifts it with a
+    // One rounded, 1px-bordered container. The section 17 overlay loop lifts it with a
     // soft shadow; this panel carries no shadow of its own.
     let container = tree.add_panel(
         None,
@@ -116,7 +116,7 @@ mod tests {
         assert_eq!(c.style.bg_color, crate::color::MODAL_BG);
         assert_eq!(c.style.border_color, crate::color::MODAL_BORDER);
         assert_eq!(c.style.corner_radius, crate::color::POPUP_RADIUS);
-        // Built scrim-first so the §17 shadow skips it and lifts the container.
+        // Built scrim-first so the section 17 shadow skips it and lifts the container.
         assert!(shell.backdrop.index() < shell.container.index());
     }
 }

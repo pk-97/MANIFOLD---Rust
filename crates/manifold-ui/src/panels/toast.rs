@@ -1,4 +1,4 @@
-//! D11 undo/redo toast (`UI_CRAFT_AND_MOTION_PLAN.md` §4 P2) — a transient
+//! D11 undo/redo toast (`UI_CRAFT_AND_MOTION_PLAN.md` section 4 P2) — a transient
 //! bottom-center message eased in over `MOTION_SLOW`, held ~1.4s, faded out
 //! over `MOTION_SLOW`. Reduces to one `Transient` (D3's one-shot-timed-event
 //! piece — the anim.rs doc-comment names "toast" explicitly as a `Transient`

@@ -260,7 +260,7 @@ pub struct RenamePresetCtx {
 }
 
 /// Which overlay (and in which window) an in-flight text session belongs to —
-/// `OVERLAY_SESSIONS_AND_PICKER_DESIGN.md` §3, D2. Set by `begin_owned`;
+/// `OVERLAY_SESSIONS_AND_PICKER_DESIGN.md` section 3, D2. Set by `begin_owned`;
 /// `None` means the field is panel-owned (BPM, layer name, etc.), not hosted
 /// inside an overlay. The app's overlay pump drains `UIRoot::take_closed_overlays`
 /// once per frame per window and calls `cancel_if_owned_by` for each closed id,
@@ -463,7 +463,7 @@ impl TextInputState {
     }
 
     /// `begin()` + tag the session with the overlay hosting it
-    /// (`OVERLAY_SESSIONS_AND_PICKER_DESIGN.md` §3, D2). The app's overlay
+    /// (`OVERLAY_SESSIONS_AND_PICKER_DESIGN.md` section 3, D2). The app's overlay
     /// pump cancels this session via [`Self::cancel_if_owned_by`] when
     /// `owner`'s overlay closes, so the field can't outlive its host.
     pub fn begin_owned(

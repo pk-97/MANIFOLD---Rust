@@ -1,6 +1,6 @@
 //! Viewport rendering: tree build, ruler / markers / track backgrounds, the
 //! overview minimap and collapsed-group bitmaps, and the scroll update-in-place
-//! paths. See `docs/TIMELINE_API_DESIGN.md` §3.6.
+//! paths. See `docs/TIMELINE_API_DESIGN.md` section 3.6.
 
 use super::*;
 
@@ -361,7 +361,7 @@ impl TimelineViewportPanel {
     }
 
     /// Resting background colour for track lane `i`: the zebra stripe, lifted
-    /// one ramp step when it is the focused lane (§19 timeline echo — the same
+    /// one ramp step when it is the focused lane (section 19 timeline echo — the same
     /// lift the inspector card's well gets). Mute does not tint the lane, to
     /// match Ableton. The single source for both `build_track_backgrounds` and
     /// the in-place `sync_active_track_lane` recolor.
@@ -406,7 +406,7 @@ impl TimelineViewportPanel {
             let visible = clamped_h > 0.0 && y + h >= tr_top && y <= tr_bottom;
 
             // Zebra stripe, lifted one ramp step when focused
-            // (§19 echo) — all owned by `track_bg_color` so build and the in-place
+            // (section 19 echo) — all owned by `track_bg_color` so build and the in-place
             // recolor (`sync_active_track_lane`) can never drift.
             let style = UIStyle {
                 bg_color: self.track_bg_color(i),

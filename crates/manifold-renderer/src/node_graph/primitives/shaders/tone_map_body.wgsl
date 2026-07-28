@@ -1,4 +1,4 @@
-// node.tone_map — fusable body (freeze §12). HDR -> display tone mapping,
+// node.tone_map — fusable body (freeze section 12). HDR -> display tone mapping,
 // four curves (Narkowicz ACES / Hill ACES / AgX / Khronos PBR Neutral) and
 // four output modes (SDR / PQ / EDR / EDR passthrough). Helpers verbatim
 // from aces_tonemap_compute.wgsl (the parity oracle, kept as

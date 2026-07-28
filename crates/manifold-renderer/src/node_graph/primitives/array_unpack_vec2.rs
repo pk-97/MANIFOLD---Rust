@@ -192,7 +192,7 @@ mod tests {
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
-    //! Buffer-domain MULTI-OUTPUT parity oracle (freeze §12). The generated
+    //! Buffer-domain MULTI-OUTPUT parity oracle (freeze section 12). The generated
     //! kernel's body returns a `BufferOutputs` struct the wrapper unpacks into
     //! two separate output arrays. Dispatches it over a known [f32;2] input and
     //! asserts x[i] == v[i].x and y[i] == v[i].y per element.

@@ -7,7 +7,7 @@
 //! where it gates the `target_angles` source between the pose cycler
 //! and the envelope-mode accumulator.
 //!
-//! The mux is the documented §7 exception to the no-dead-state rule:
+//! The mux is the documented section 7 exception to the no-dead-state rule:
 //! non-selected inputs are inert by design and the user's mental model
 //! accommodates this. The unwired-selected-slot case is a graph editor
 //! concern (separate work).

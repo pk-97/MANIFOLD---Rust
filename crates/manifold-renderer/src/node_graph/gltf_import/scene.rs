@@ -57,7 +57,7 @@ pub(super) const IMPORT_STRIPS_DEFAULT: f32 = 3.0;
 /// away at load (`manifold_core::flatten::flatten_groups`, run inside
 /// `instantiate_def`) to the exact same flat graph, and every inner node keeps its
 /// stable `node_id`, so the card/string bindings that target `mesh_k`/`mat_k`/
-/// `tex_k`/`transform_k` by id resolve unchanged (see `docs/GROUPING_GRAPHS.md` §2).
+/// `tex_k`/`transform_k` by id resolve unchanged (see `docs/GROUPING_GRAPHS.md` section 2).
 pub(super) fn build_import_graph(
     summary: &GltfImportSummary,
     path: &Path,
@@ -96,7 +96,7 @@ pub(super) fn build_import_graph(
         // to spot in a log dump when triaging an import.
         log::warn!(
             "gltf_import::assemble_import_graph({}): {} vertices belong to glTF's unassigned \
-             default material — imported as a normal object (glTF spec §3.9.2 implicit default)",
+             default material — imported as a normal object (glTF spec section 3.9.2 implicit default)",
             path.display(),
             summary.default_material_vertex_count,
         );
@@ -372,7 +372,7 @@ pub(super) fn build_import_graph(
     let mut render_node = plain_node(render_id, "render", "node.render_scene", "render");
     render_node.params.insert("objects".to_string(), int(n as i32));
     render_node.params.insert("lights".to_string(), int(1));
-    // RAYTRACING_DESIGN.md D14/§5.2: stamp the root's curated RT subset
+    // RAYTRACING_DESIGN.md D14/section 5.2: stamp the root's curated RT subset
     // (RENDER_SCENE_STAMPED_PARAMS) like every other vocab node above —
     // without it a fresh import has no "Rendering" rows until a save/reload
     // runs the load-time migration.

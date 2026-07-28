@@ -1,6 +1,6 @@
 //! V1.4 param-wire migration — `paramValues` (+ parallel `baseParamValues`)
 //! collapse into one id-keyed `params` map. See
-//! `docs/PARAM_STORAGE_DESIGN.md` §4 (D4/D5) for the full contract this
+//! `docs/PARAM_STORAGE_DESIGN.md` section 4 (D4/D5) for the full contract this
 //! module implements; this doc comment covers the mechanics only.
 //!
 //! Operates on the `serde_json::Value` project tree, BEFORE typed
@@ -154,7 +154,7 @@ pub(crate) const LEGACY_PARAM_ALIASES: &[(&str, &[ParamAlias])] = &[
 /// ids; WireframeDepth's own `LEGACY_PARAM_ALIASES` entry above collapses
 /// those onto `amount` at LOAD time (this migration does not need to know
 /// that — positional resolution and keyed alias resolution are separate
-/// steps, per §4).
+/// steps, per section 4).
 const WIREFRAME_DEPTH_LEGACY_14: &[&str] = &[
     "amount", "density", "width", "z_scale", "smooth", "", "", "subject", "blend", "wire_res",
     "mesh_rate", "flow", "lock", "",
@@ -182,7 +182,7 @@ fn aliases_for(type_id: &str) -> &'static [ParamAlias] {
 ///
 /// Reads the file's own `embeddedPresets` ONCE, up front (read-only, before
 /// the mutable per-instance walk below) — this is the D5/BUG-040 lookup
-/// table (`docs/PARAM_STORAGE_BOUNDARIES_DESIGN.md` §2 D5): a positional
+/// table (`docs/PARAM_STORAGE_BOUNDARIES_DESIGN.md` section 2 D5): a positional
 /// generator instance without its own inline graph order consults the
 /// matching embedded preset's param order before falling to the frozen
 /// baked table. Still pure `Value → Value`, self-contained in the same
@@ -278,7 +278,7 @@ fn positional_ids(
     array_len: usize,
     embedded: &HashMap<String, Vec<String>>,
 ) -> Vec<String> {
-    // Case 1 (§4 step 2, first case): a generator with its own per-instance
+    // Case 1 (section 4 step 2, first case): a generator with its own per-instance
     // graph carries the full [bundled | user-added] order in
     // `graph.presetMetadata.params` — self-contained, no table needed. This
     // is what makes the "generator-with-user-bindings positional" shape
@@ -326,7 +326,7 @@ fn positional_ids(
             .collect();
     }
 
-    // Case 3: the baked static order (§4 step 2, "otherwise"), with an
+    // Case 3: the baked static order (section 4 step 2, "otherwise"), with an
     // effect's per-instance user-added tail appended. Generators never get
     // a tail here — a generator positional array beyond the registry count
     // without its own graph shouldn't occur (the only way a generator grows
@@ -371,9 +371,9 @@ fn positional_ids(
 }
 
 /// Apply one legacy value container (`paramValues` or `baseParamValues`) —
-/// positional array or id-keyed map, per §4 step 1 — into the growing
+/// positional array or id-keyed map, per section 4 step 1 — into the growing
 /// V1.4 `params` map. `is_base` selects `baseParamValues`'s fold-into-`base`
-/// semantics (§4 step 4) over `paramValues`'s fresh-entry semantics.
+/// semantics (section 4 step 4) over `paramValues`'s fresh-entry semantics.
 fn apply_values(
     instance: &serde_json::Map<String, Value>,
     type_id: &str,
@@ -390,7 +390,7 @@ fn apply_values(
             for (i, v) in arr.into_iter().enumerate() {
                 let Some(id) = ids.get(i) else {
                     // Array longer than the table's order: truncate, warn
-                    // (§4 failure story) — the same posture
+                    // (section 4 failure story) — the same posture
                     // `align_to_definition` took today.
                     eprintln!(
                         "[param_storage_v14] WARNING: '{type_id}' {field_name}[{i}] has no \
@@ -406,7 +406,7 @@ fn apply_values(
         }
         Value::Object(obj) => {
             // Keyed forms never need the positional table — ids are already
-            // ids; only alias resolution applies (§4 step 3).
+            // ids; only alias resolution applies (section 4 step 3).
             for (k, v) in obj {
                 match resolve_param_alias(aliases_for(type_id), &k) {
                     Some(resolved) => {

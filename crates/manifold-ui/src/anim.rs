@@ -1,4 +1,4 @@
-//! The motion layer — chrome-only tweens (`docs/UI_CRAFT_AND_MOTION_PLAN.md` §3).
+//! The motion layer — chrome-only tweens (`docs/UI_CRAFT_AND_MOTION_PLAN.md` section 3).
 //!
 //! Four pieces, and every hover/press/drawer/toast/spawn/collapse effect in
 //! that plan reduces to them. An executor reaching for a fifth mechanism

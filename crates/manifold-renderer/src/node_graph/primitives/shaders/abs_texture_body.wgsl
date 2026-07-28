@@ -1,4 +1,4 @@
-// node.abs_texture — fusable body (freeze §12), PARAMLESS pointwise. abs(rgb),
+// node.abs_texture — fusable body (freeze section 12), PARAMLESS pointwise. abs(rgb),
 // alpha pass-through. With no params the generated standalone kernel emits no
 // uniform and no Params struct, so its textures start at binding 0 — matching
 // abs_texture.wgsl exactly (the parity oracle).

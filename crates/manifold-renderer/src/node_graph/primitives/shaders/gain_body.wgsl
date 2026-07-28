@@ -1,4 +1,4 @@
-// node.gain — fusable body fragment (freeze/fusion compiler, design doc §12).
+// node.gain — fusable body fragment (freeze/fusion compiler, design doc section 12).
 //
 // Convention: a PURE `fn body(...)` — own element in, own element out, no
 // global accesses (purity-checked). The input color arrives as a `vec4<f32>`

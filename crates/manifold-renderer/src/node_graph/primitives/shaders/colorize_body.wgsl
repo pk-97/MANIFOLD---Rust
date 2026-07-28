@@ -1,4 +1,4 @@
-// node.colorize — fusable body (freeze §12). Tint toward a hue, strength
+// node.colorize — fusable body (freeze section 12). Tint toward a hue, strength
 // masked per-pixel by brightness * neutrality * focus. Pure; alpha passes
 // through. Matches colorize.wgsl. PARAMS order: [amount, hue, saturation, focus].
 //

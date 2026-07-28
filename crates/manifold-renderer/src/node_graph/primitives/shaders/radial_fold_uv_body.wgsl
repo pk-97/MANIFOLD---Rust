@@ -1,4 +1,4 @@
-// node.radial_fold_uv — fusable body (freeze §12), SOURCE. Kaleidoscope fold:
+// node.radial_fold_uv — fusable body (freeze section 12), SOURCE. Kaleidoscope fold:
 // folds the plane into `segments` mirrored wedges around (cx,cy), emits the
 // folded uv as R/G. TAU inlined. `segments` floors to >= 2. Matches
 // radial_fold_uv.wgsl. PARAMS: [segments, cx, cy].

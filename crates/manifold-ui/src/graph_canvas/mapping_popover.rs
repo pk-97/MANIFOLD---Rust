@@ -174,7 +174,7 @@ pub struct MappingPopover {
     /// `PanelAction` so the app routes to the right `UserParamBinding`.
     binding_id: String,
     label: String,
-    /// The binding's card section (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2
+    /// The binding's card section (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md section 2
     /// D5). `None` = unsectioned. Editable via `EditField::Section` (P5c).
     section: Option<String>,
     /// The binding's declared min/max *range bounds* (the slider's full

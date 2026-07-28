@@ -5,7 +5,7 @@
 //! `exposure_ev`) from four port-shadowed scalar params, and passes every
 //! other field (position, basis, near/far, projection mode, cached view
 //! matrix) through unchanged. This is "the one lens" of
-//! `docs/CAMERA_AND_LENS_DESIGN.md` §2 D4 — insert it once between a camera
+//! `docs/CAMERA_AND_LENS_DESIGN.md` section 2 D4 — insert it once between a camera
 //! source (`node.orbit_camera` / `node.free_camera` / `node.look_at_camera`)
 //! and its consumers so depth-of-field (CINEMATIC_POST's `coc_from_depth`),
 //! motion blur (CINEMATIC_POST's `motion_blur`), and exposure

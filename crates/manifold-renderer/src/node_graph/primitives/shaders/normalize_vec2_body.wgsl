@@ -1,4 +1,4 @@
-// node.normalize_vec2 — fusable body (freeze §12), paramless Pointwise. Safe-
+// node.normalize_vec2 — fusable body (freeze section 12), paramless Pointwise. Safe-
 // normalize of the input's RG vec2: out = (v/length(v), 0, 1) when length > eps,
 // else (0, 0, 0, 1). Matches normalize_vec2.wgsl. PARAMS: [].
 const NV_EPS: f32 = 1e-6;

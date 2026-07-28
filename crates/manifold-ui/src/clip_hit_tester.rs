@@ -215,7 +215,7 @@ fn neighbor_gap_px(clips: &[ViewportClip], self_idx: usize, ppb: f32) -> (f32, f
     (left_gap, right_gap)
 }
 
-// ── Automation surface (UI_AUTOMATION_DESIGN.md D5/§5) ───────────
+// ── Automation surface (UI_AUTOMATION_DESIGN.md D5/section 5) ───────────
 
 /// [`HitTargets`] over the timeline's currently-visible clips — the same
 /// [`ClipScreenRect`] list `ClipHitTester::hit_test` and the clip painter both

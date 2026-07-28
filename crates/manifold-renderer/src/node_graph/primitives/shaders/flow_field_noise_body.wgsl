@@ -1,4 +1,4 @@
-// node.flow_field_noise — fusable body (freeze §12), SOURCE. 2D flow vector field
+// node.flow_field_noise — fusable body (freeze section 12), SOURCE. 2D flow vector field
 // from domain-warped fBM 3D Perlin noise (R=flow_x, B=flow_y, G=0, A=1, the
 // Watercolor flow-map convention). z = time * z_scale evolves it; warp_scale=0
 // skips the domain warp. The `resolution` param controls the output SIZE (handled

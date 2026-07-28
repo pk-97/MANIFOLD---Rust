@@ -10,7 +10,7 @@
 //! applies exponential depth fog in each lit fragment shader.
 //!
 //! Produced by `node.atmosphere`, consumed by `render_scene`'s optional
-//! `atmosphere` input (REALTIME_3D_DESIGN D5 / §5 P3). Unwired =
+//! `atmosphere` input (REALTIME_3D_DESIGN D5 / section 5 P3). Unwired =
 //! [`Atmosphere::default`] = `fog_density 0` = **no fog, byte-identical to no
 //! atmosphere** — the "unwired = zero cost" contract. Fog composits OVER the
 //! premultiplied-alpha contract rather than replacing it: it lerps the lit

@@ -1,7 +1,7 @@
 //! Closed-loop transport sync state machine for AbletonOSC mode.
 //!
-//! Design contract: docs/ABLETON_TRANSPORT_SYNC_DESIGN.md (§4 signatures,
-//! §4 transition table T1–T13). The one-sentence spec: a command to Ableton
+//! Design contract: docs/ABLETON_TRANSPORT_SYNC_DESIGN.md (section 4 signatures,
+//! section 4 transition table T1–T13). The one-sentence spec: a command to Ableton
 //! creates a *pending expectation*; inbound observations are matched against
 //! it by value (match = acknowledgment, contradiction while pending = stale
 //! pre-command state, contradiction while settled = genuine external command);
@@ -144,7 +144,7 @@ impl ObservedAbleton {
         format!("{playing}, {pos}, {tempo}")
     }
 
-    /// Ableton's song position projected to `now` (design §4 dead-reckoning
+    /// Ableton's song position projected to `now` (design section 4 dead-reckoning
     /// rule): advance the last report by elapsed time only while playing.
     fn song_time_at(&self, now: f64) -> Option<f32> {
         let (beats, received_at) = self.song_time?;
@@ -526,7 +526,7 @@ impl Default for AbletonTransportSync {
     }
 }
 
-// ── Tests: one per transition row (design §4 table) ────────────────
+// ── Tests: one per transition row (design section 4 table) ────────────────
 
 #[cfg(test)]
 mod tests {

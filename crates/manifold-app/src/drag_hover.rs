@@ -110,7 +110,7 @@ mod tests {
         // order, not type order) — a LATER audio file in the same hover must
         // not retroactively populate the probe. Matches the ghost's "v1
         // shows the first file's target" contract (TIMELINE_INGEST_DESIGN
-        // §7 Deferred: multi-file hover preview).
+        // section 7 Deferred: multi-file hover preview).
         let mut t = DragHoverTracker::default();
         t.on_hovered_file(PathBuf::from("/tmp/clip.mp4"));
         t.on_hovered_file(PathBuf::from("/tmp/song.wav"));

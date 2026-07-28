@@ -1,4 +1,4 @@
-// node.push_along_normals — fusable BUFFER body (freeze §12, buffer domain),
+// node.push_along_normals — fusable BUFFER body (freeze section 12, buffer domain),
 // COINCIDENT `in` + COINCIDENT optional `weights` + OPTIONAL TEXTURE `field`.
 // pos += normal * amount * w * f. Matches push_along_normals.wgsl.
 //

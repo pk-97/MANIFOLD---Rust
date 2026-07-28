@@ -5,13 +5,13 @@
 //! instance through [`Project::with_preset_graph_mut`] (which auto-inits a
 //! generator's `gen_params` if it doesn't exist yet) and edits that
 //! instance's `automation_lanes`, keyed by `param_id` — there is no
-//! layer-scoped lane pool. See `docs/AUTOMATION_LANES_DESIGN.md` §6.
+//! layer-scoped lane pool. See `docs/AUTOMATION_LANES_DESIGN.md` section 6.
 //!
 //! Lanes are created implicitly: [`AddAutomationPointCommand`] creates the
-//! lane if none exists for the param yet (the design's §6 command set has no
+//! lane if none exists for the param yet (the design's section 6 command set has no
 //! separate "AddLaneCommand" — a lane is born from its first point, same as
 //! drawing the first breakpoint in Ableton). `points` must stay sorted
-//! ascending by beat (§2's invariant, mirroring `TempoMap::ensure_sorted`);
+//! ascending by beat (section 2's invariant, mirroring `TempoMap::ensure_sorted`);
 //! [`AddAutomationPointCommand`] and [`MoveAutomationPointCommand`] both
 //! re-sort after mutating.
 //!
@@ -406,7 +406,7 @@ impl Command for RemoveLaneCommand {
     }
 }
 
-/// Commits a completed recording gesture (§5) as ONE undo entry. By the time
+/// Commits a completed recording gesture (section 5) as ONE undo entry. By the time
 /// this command is built, `manifold-playback::automation`'s gesture-closure
 /// pass has already computed the final joined point set (pre-punch-in old
 /// points + the recorded segment + post-punch-out old points) — this

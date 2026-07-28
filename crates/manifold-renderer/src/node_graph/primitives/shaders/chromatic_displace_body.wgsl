@@ -1,4 +1,4 @@
-// node.chromatic_displace — fusable body (freeze §12), GATHER. `in` is gathered
+// node.chromatic_displace — fusable body (freeze section 12), GATHER. `in` is gathered
 // at three per-channel offset taps along the `velocity` field (R at uv-off, G at
 // centre, B at uv+off); `velocity` is coincident. off = velocity.rg * amount /
 // dims. Matches chromatic_displace.wgsl. PARAMS: [amount].

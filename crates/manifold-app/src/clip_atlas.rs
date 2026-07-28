@@ -1,4 +1,4 @@
-//! Clip-thumbnail **filmstrip** atlas cell allocation (§24 5c / 5c-2).
+//! Clip-thumbnail **filmstrip** atlas cell allocation (section 24 5c / 5c-2).
 //!
 //! Each clip owns a *strip* of atlas cells — one per filmstrip cell index (bar or
 //! bar-group, see [`crate::clip_filmstrip`]). Cells are keyed by `(ClipId, cell

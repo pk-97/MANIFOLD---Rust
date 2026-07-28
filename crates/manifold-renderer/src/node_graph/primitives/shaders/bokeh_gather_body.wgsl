@@ -1,4 +1,4 @@
-// node.bokeh_gather — fusable body (freeze §12), 2-input GATHER via the
+// node.bokeh_gather — fusable body (freeze section 12), 2-input GATHER via the
 // STENCIL-FETCH ABI (matches node.variable_blur's shape). Single-pass
 // occlusion-aware disc gather DoF (docs/CINEMATIC_POST_DESIGN.md D5),
 // replacing the two-pass separable node.variable_blur H/V gather inside

@@ -17,7 +17,7 @@ impl Application {
             self.perform.pending_enter = false;
             if !self.perform.active {
                 if !self.window_registry.has_output_window() {
-                    // `--resume` (GIG_RESILIENCE_DESIGN §5.2 step 2) targets
+                    // `--resume` (GIG_RESILIENCE_DESIGN section 5.2 step 2) targets
                     // the display captured in the breadcrumb; every other
                     // caller of perform-mode entry leaves this `None` and
                     // keeps the existing "first non-primary" default inside

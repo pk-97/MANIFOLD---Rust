@@ -1,4 +1,4 @@
-// node.euler_step_particles — fusable BUFFER body (freeze §12, buffer domain),
+// node.euler_step_particles — fusable BUFFER body (freeze section 12, buffer domain),
 // COINCIDENT multi-input. One Euler step: position.xy += forces[i] * speed *
 // dt_scaled. Dead particles (life <= 0) pass through unchanged.
 //

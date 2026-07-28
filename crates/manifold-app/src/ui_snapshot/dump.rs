@@ -1,12 +1,12 @@
 //! The tree dump — the centerpiece of the harness. Walk a built `UITree` and
 //! emit every node's real layout + style values as JSON (next to the PNG) and
 //! a terse stdout summary, so UI work is reasoned on values, not eyeballed.
-//! See `docs/HEADLESS_UI_HARNESS.md` §1.
+//! See `docs/HEADLESS_UI_HARNESS.md` section 1.
 //!
-//! Extended (`UI_AUTOMATION_DESIGN.md` §3, additive): each node gains
+//! Extended (`UI_AUTOMATION_DESIGN.md` section 3, additive): each node gains
 //! `widget` (the durable `WidgetId`, interactive nodes only) and `name` (the
 //! static component name, when registered — D8). A sibling top-level
-//! `custom_surfaces` key carries the [`HitTargets`] enumeration (§5) for
+//! `custom_surfaces` key carries the [`HitTargets`] enumeration (section 5) for
 //! surfaces `UITree::hit_test` can't see inside (graph canvas, timeline
 //! clips, automation lanes) — none of those surfaces is owned by any single
 //! `UITree` node in this headless harness (the graph canvas in particular is

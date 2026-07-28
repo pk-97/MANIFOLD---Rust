@@ -10,7 +10,7 @@
 //!
 //! First consumer: Blob Track (detection regions). Future consumers
 //! (DNN depth, audio bins, MIDI, sensor data) extend the port
-//! signature per §6.2 or build Permissive output propagation infra.
+//! signature per section 6.2 or build Permissive output propagation infra.
 
 use std::borrow::Cow;
 

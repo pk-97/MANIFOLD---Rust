@@ -238,7 +238,7 @@ pub fn layers_to_ui(layers: &[Layer]) -> Vec<UiLayer> {
 /// Same as [`layers_to_ui`], but also resolves `automation_lane_count` — the
 /// one field that feeds `CoordinateMapper::layer_height`'s Y-layout, so the
 /// header column and viewport tracks grow together when automation mode is on
-/// (`docs/AUTOMATION_LANES_DESIGN.md` §7). Callers that only need the
+/// (`docs/AUTOMATION_LANES_DESIGN.md` section 7). Callers that only need the
 /// selection-shape fields (hit-testing, region math) should keep using the
 /// plain `layers_to_ui` — computing lane counts there would be wasted work
 /// and (more importantly) would NOT be the value `rebuild_mapper_layout` used,
@@ -272,9 +272,9 @@ pub fn layers_to_ui_for_layout(
 /// its effects chain plus its generator params, if any (mirrors the walk
 /// shape of `manifold_playback::automation::evaluate_all_automation`). Only
 /// `enabled` lanes produce a strip (Ableton: a deactivated lane draws
-/// nothing). See `docs/AUTOMATION_LANES_DESIGN.md` §7.
+/// nothing). See `docs/AUTOMATION_LANES_DESIGN.md` section 7.
 ///
-/// `chosen` (P5, §7 addendum): the param the user last touched/chose on this
+/// `chosen` (P5, section 7 addendum): the param the user last touched/chose on this
 /// layer, if any — appended as a placeholder flat-line strip (no dot, no
 /// core-side lane yet) UNLESS a real enabled lane for the same param already
 /// rendered above, so touching an already-automated param never double-draws

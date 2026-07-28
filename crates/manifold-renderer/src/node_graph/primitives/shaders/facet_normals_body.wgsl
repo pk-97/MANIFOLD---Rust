@@ -1,4 +1,4 @@
-// node.facet_normals — fusable BUFFER body (freeze §12, buffer domain), GATHER.
+// node.facet_normals — fusable BUFFER body (freeze section 12, buffer domain), GATHER.
 // Per-VERTEX flat normal: thread `idx` reads its triangle's 3 verts from the
 // input array global `buf_in` (base = 3*(idx/3)), computes the cross-product
 // normal, and writes vertex `idx` with that normal (position + uv unchanged).

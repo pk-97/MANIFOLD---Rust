@@ -1,4 +1,4 @@
-// node.slope_displace — fusable body (freeze §12), 2-input GATHER (base + image).
+// node.slope_displace — fusable body (freeze section 12), 2-input GATHER (base + image).
 // Emboss-style displacement: soft-light-blend `base` over `image`, take the
 // luminance Sobel gradient of that blend at a configurable step, displace `image`
 // by the gradient. Both inputs are gathered (neighbour taps + a final dependent

@@ -28,7 +28,7 @@
 //!
 //! ## Why no `build_color_compass` here
 //!
-//! New post-§11 effects ship as JSON-only — the `composite.color_compass`
+//! New post-section 11 effects ship as JSON-only — the `composite.color_compass`
 //! preset lives at `assets/effect-presets/ColorCompass.json` and is
 //! loaded into the registry through the standard `LoadedPresetSource`
 //! path. The Rust builders above predate the JSON-authoritative

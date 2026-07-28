@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 /// at runtime. External mappings (OSC, Ableton, MIDI, modulation
 /// drivers, envelopes) all key on this — never on positional indices.
 ///
-/// See `docs/EFFECT_RUNTIME_UNIFICATION.md` §7 for the full design.
+/// See `docs/EFFECT_RUNTIME_UNIFICATION.md` section 7 for the full design.
 ///
 /// Defined in `manifold-foundation` (the shared primitive vocabulary) and
 /// re-exported here at its historical path so the UI can share the identical

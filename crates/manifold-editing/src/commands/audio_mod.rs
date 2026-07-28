@@ -218,7 +218,7 @@ impl Command for SetAudioModShapeCommand {
     }
 }
 
-/// Change a trigger-gate mod's fire mode (§9 U3 — `ClipEdge`/`Transient`/
+/// Change a trigger-gate mod's fire mode (section 9 U3 — `ClipEdge`/`Transient`/
 /// `Both`, the drawer's Mode row). Mirrors [`SetAudioModSourceCommand`]'s
 /// shape: whole-field old/new capture, addressed by `param_id` like every
 /// other audio-mod command. Meaningless on a non-gate target (`trigger_mode`

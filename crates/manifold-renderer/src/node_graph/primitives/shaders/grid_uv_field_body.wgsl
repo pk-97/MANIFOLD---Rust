@@ -1,4 +1,4 @@
-// node.grid_uv_field — fusable BUFFER body (freeze §12, buffer domain), SOURCE
+// node.grid_uv_field — fusable BUFFER body (freeze section 12, buffer domain), SOURCE
 // form (0 array inputs). Write the grid-cell-centre UV for element idx on an
 // N×N grid: col = idx % N, row = idx / N, uv = ((col+0.5)/N, (row+0.5)/N).
 //

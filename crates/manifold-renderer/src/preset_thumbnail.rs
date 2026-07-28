@@ -8,7 +8,7 @@
 //! test-only so the fixture is reproduced here rather than crossing the
 //! test/production boundary).
 //!
-//! This is the ONLY render — the browser never renders (D7 / §6 forbidden
+//! This is the ONLY render — the browser never renders (D7 / section 6 forbidden
 //! move "browse-time rendering of presets"). Callers: `UserLibrary`'s
 //! Save-to-Library commit path (`manifold-app`), and the factory-thumbnail
 //! one-shot dev bin (`src/bin/generate_preset_thumbnails.rs`).

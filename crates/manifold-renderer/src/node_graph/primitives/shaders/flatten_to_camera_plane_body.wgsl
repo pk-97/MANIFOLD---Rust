@@ -1,4 +1,4 @@
-// node.flatten_to_camera_plane — fusable BUFFER body (freeze §12, buffer
+// node.flatten_to_camera_plane — fusable BUFFER body (freeze section 12, buffer
 // domain), COINCIDENT. Compress each live particle toward the camera viewing
 // plane: depth = dot(pos - 0.5, cam_fwd); pos -= cam_fwd * depth * flatten * 0.1.
 // Matches flatten_to_camera_plane.wgsl bit-for-bit.

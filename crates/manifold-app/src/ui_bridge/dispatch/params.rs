@@ -274,7 +274,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             DispatchResult::structural()
         }
         ParamsAction::ModsCompactToggled => {
-            // §6b — the inspector already flipped its own compact flag in
+            // section 6b — the inspector already flipped its own compact flag in
             // route_click; rebuild so every card hides/shows its mod drawers.
             // No model mutation.
             DispatchResult::structural()
@@ -683,7 +683,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
         // exhaustive (same pattern as `CardRightClicked` above).
         // ── Generator params ───────────────────────────────────────
         ParamsAction::GenTypeClicked(_) => DispatchResult::handled(),
-        // `ParamToggle`/`ParamFire` (§8.4 P3b): unified effect+generator via
+        // `ParamToggle`/`ParamFire` (section 8.4 P3b): unified effect+generator via
         // the same `resolve_graph_target` + `with_preset_graph_mut` path
         // `ParamChanged`/`ParamCommit` already use, rather than the old
         // `GenParamToggle`/`GenParamFire`'s generator-only `gen_params_mut()`

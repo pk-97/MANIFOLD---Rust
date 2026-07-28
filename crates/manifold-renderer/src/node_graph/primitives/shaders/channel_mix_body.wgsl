@@ -1,4 +1,4 @@
-// node.channel_mixer — fusable body (freeze §12). Per-pixel 4x4 RGBA
+// node.channel_mixer — fusable body (freeze section 12). Per-pixel 4x4 RGBA
 // matrix transform: out = M . in, M's rows are the four Vec4 params.
 // Matches channel_mix.wgsl exactly. PARAMS: [row0, row1, row2, row3], each
 // a Vec4 param expanded to four consecutive f32 fields and reassembled as

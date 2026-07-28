@@ -1,4 +1,4 @@
-// node.color_lut — fusable body (freeze §12), MultiInputCoincident with a GATHER
+// node.color_lut — fusable body (freeze section 12), MultiInputCoincident with a GATHER
 // LUT. `in` is read coincident (the pre-sampled centre colour); `lut` is gathered
 // at a 1D coord the body computes from BT.601 luminance (with contrast pivot at
 // 0.5), so it arrives as a texture+sampler arg. lum*0.5 bakes the legacy LUT_MAX_

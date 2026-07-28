@@ -162,7 +162,7 @@ pub struct View {
     /// collide across panels. Identity values must be globally derived
     /// (`param_surface::stable_key` over a real id), never small constants.
     pub(crate) identity: Option<u64>,
-    /// Automation component name (`UI_AUTOMATION_DESIGN.md` D8/§3), registered
+    /// Automation component name (`UI_AUTOMATION_DESIGN.md` D8/section 3), registered
     /// on the built `NodeId` via `UITree::set_name` once this view lands in the
     /// tree. `None` for the overwhelming majority of views — set only at the
     /// naming pass' high-value points (`.name("layer_header.mute")`).
@@ -458,7 +458,7 @@ impl View {
     }
 
     /// Register an automation component name for this node (`UI_AUTOMATION_DESIGN.md`
-    /// D8/§3) — a static literal like `"transport.play"`. Applied once the view
+    /// D8/section 3) — a static literal like `"transport.play"`. Applied once the view
     /// lands in the tree (`ChromeHost::build`/`materialize`); most views leave
     /// this unset.
     pub fn name(mut self, name: &'static str) -> Self {

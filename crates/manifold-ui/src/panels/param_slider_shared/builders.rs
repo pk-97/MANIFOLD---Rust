@@ -6,7 +6,7 @@ use super::*;
 
 /// Per-row modulation config tabs. The T/∿/A arm buttons stay on the row (one-
 /// click arm); when two or more configs are active they share ONE drawer with a
-/// tab strip rather than stacking three deep (§6.2). A single active config
+/// tab strip rather than stacking three deep (section 6.2). A single active config
 /// shows directly with no tab strip, exactly as before.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ModTab {
@@ -37,7 +37,7 @@ pub(crate) fn driver_config_height() -> f32 {
 /// PARAM_STEP_ACTIONS D8: a non-toggle, non-trigger param (`show_action`,
 /// mirrors `build_audio_mod_drawer`'s own gate) additionally carries the
 /// Action row, and — while armed to Step — the Amount slider + Wrap row.
-/// The trailing Mode row (§9 U2) shows for an `is_trigger_gate` target
+/// The trailing Mode row (section 9 U2) shows for an `is_trigger_gate` target
 /// unconditionally, or for a slider row armed to Step/Random (D3). The layer
 /// clip-trigger surface reserves its own height via
 /// [`clip_trigger_drawer_height`] — its drawer is a different, smaller row
@@ -159,14 +159,14 @@ pub(crate) fn clip_trigger_drawer_height() -> f32 {
 
 
 /// Number of fire-mode choices in a trigger-gate mod's Mode row
-/// (§9 U3: ClipEdge / Transient / Both).
+/// (section 9 U3: ClipEdge / Transient / Both).
 pub(crate) const AUDIO_TRIGGER_MODE_COUNT: usize = 3;
 
 
 /// Mode-row button labels, index-parallel to core's `TriggerFireMode`
 /// (`ClipEdge`/`Transient`/`Both`) — the UI carries only the index (mirrors
 /// `BEAT_DIV_LABELS`'s relationship to `BeatDivision`), converted at the
-/// `manifold-app` dispatch boundary. §9 unified the trigger-gate drawer onto
+/// `manifold-app` dispatch boundary. section 9 unified the trigger-gate drawer onto
 /// the standard audio-mod drawer; this is the one extra row it appends.
 pub(crate) fn audio_trigger_mode_labels() -> [&'static str; AUDIO_TRIGGER_MODE_COUNT] {
     ["Clip", "Audio", "Both"]
@@ -679,7 +679,7 @@ pub(crate) fn active_mod_tabs(mod_state: &ParamModState, info: &ParamRow, i: usi
     if info.mapping.ableton_display.is_some() {
         v.push(ModTab::Ableton);
     }
-    // §9: a trigger-gate row's config is a normal `ParameterAudioMod`, so
+    // section 9: a trigger-gate row's config is a normal `ParameterAudioMod`, so
     // `audio_active` above already covers it — no separate tab. The row is
     // still built directly by `build_toggle_trigger_row` (bypassing the tab
     // strip, same as `is_trigger`'s `Audio` tab), but height computation now
@@ -813,7 +813,7 @@ pub(crate) const ROW_ROLE_CHEVRON: u64 = 4 << 4;
 
 pub(crate) const ROW_ROLE_TOGGLE: u64 = 5 << 4;
 
-/// D5 card-section header row (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2) —
+/// D5 card-section header row (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md section 2) —
 /// keyed by the run's first row's identity, same scheme as the per-param
 /// roles above.
 pub(crate) const ROW_ROLE_SECTION_HEADER: u64 = 6 << 4;
@@ -928,7 +928,7 @@ pub(crate) const TRIGGER_GATE_BADGE_W: f32 = 40.0;
 /// Invert toggle + Sensitivity/Attack/Release shaping sliders, plus the
 /// conditional Action/Amount/Wrap/Mode rows). Shared by `build_param_row`'s
 /// Audio mod-tab branch (continuous params, behind the multi-tab drawer) and
-/// `build_toggle_trigger_row`'s `is_trigger`/`is_trigger_gate` cases (D5b/§9 —
+/// `build_toggle_trigger_row`'s `is_trigger`/`is_trigger_gate` cases (D5b/section 9 —
 /// a fire-button OR a trigger-gate toggle reaches the SAME drawer, audio-only,
 /// no tab strip since Driver/Envelope/Ableton never apply to either). The
 /// layer clip-trigger surface uses its own [`build_clip_trigger_drawer`]
@@ -940,7 +940,7 @@ pub(crate) const TRIGGER_GATE_BADGE_W: f32 = 40.0;
 /// PARAM_STEP_ACTIONS D8: a non-toggle, non-trigger `info` (a plain slider
 /// row) additionally gets the Action row (Cont/Step/Rand); while armed to
 /// Step it also gets the Amount slider + Wrap row. The trailing Mode row
-/// (Clip/Audio/Both, §9 U2) appends for an `is_trigger_gate` target
+/// (Clip/Audio/Both, section 9 U2) appends for an `is_trigger_gate` target
 /// unconditionally, or for a slider row armed to Step/Random (D3) — computed
 /// here from `mod_state`/`info` rather than threaded in by the caller, so
 /// both call sites (`build_toggle_trigger_row`, `build_param_row`) just pass
@@ -1193,7 +1193,7 @@ pub(crate) fn build_audio_mod_drawer(
     };
     // Modifier toggle below the band row: "Invert" (loud → low). Flat index
     // sits one past the bands. Delta (rate-of-change) removed from the UI
-    // (§7.2 item 2, 2026-07-11: "not very useful and adds a lot of clutter")
+    // (section 7.2 item 2, 2026-07-11: "not very useful and adds a lot of clutter")
     // — the runtime `AudioModShape::rate_of_change` field and its
     // `condition()` arm stay compiled for a possible future re-wire; only
     // this button, and the click routing that read it, are gone.
@@ -1226,7 +1226,7 @@ pub(crate) fn build_audio_mod_drawer(
         rows.push(DrawerRow::Buttons { buttons: toggle_buttons, width: ButtonWidth::Proportional, label: None });
     }
     rows.push(shape_slider(
-            // §7.2 item 3, 2026-07-11: display label only — "Amount" reads as
+            // section 7.2 item 3, 2026-07-11: display label only — "Amount" reads as
             // a generic gain knob; "Sensitivity" says what it tunes (how
             // easily this config fires/drives against the fixed 0.5 edge).
             // `AudioShapeParam::Sensitivity` was already the internal name.
@@ -1314,7 +1314,7 @@ pub(crate) fn build_audio_mod_drawer(
             });
         }
     }
-    // §9 U2/D3: the trailing Mode row (Clip/Audio/Both). An `is_trigger_gate`
+    // section 9 U2/D3: the trailing Mode row (Clip/Audio/Both). An `is_trigger_gate`
     // row always shows it; a slider row shows it once armed to Step or
     // Random — a step/random mod fires from the same clip-edge/audio-edge
     // sources a gate does, gated the same way (D3).
@@ -1346,14 +1346,14 @@ pub(crate) fn build_audio_mod_drawer(
 /// Build a toggle or trigger row — a label plus a single button (ON/OFF for
 /// a sticky toggle, "▶" for a momentary fire-once trigger) instead of a
 /// slider. Shared verbatim by the effect and generator cards (Task A of
-/// §8.4 P3b: effect cards previously had no toggle-row branch at all and
+/// section 8.4 P3b: effect cards previously had no toggle-row branch at all and
 /// rendered `isToggle`/`isTrigger` params as raw sliders — the bug this
 /// function fixes at the root by giving both kinds one code path).
 ///
 /// The button right-aligns to the same column a slider row's VALUE cell
 /// uses (`x + slider_w - TOGGLE_BTN_W`) — a toggle can't be modulated, so
 /// the D/E/A lane further right stays empty for it. `is_trigger` (D5b) and
-/// `is_trigger_gate` (§9) rows are the exception: both reach the standard
+/// `is_trigger_gate` (section 9) rows are the exception: both reach the standard
 /// per-param audio-mod "A" button + drawer at the SAME column a slider row's
 /// audio button would occupy, so the "A" column stays visually aligned down
 /// the whole card regardless of row kind. `is_trigger_gate` additionally
@@ -1445,7 +1445,7 @@ pub(crate) fn build_toggle_trigger_row(
     let mut audio_config = None;
     let mut mode_badge_id = None;
 
-    // is_trigger (D5b) and is_trigger_gate (§9) both reach the standard
+    // is_trigger (D5b) and is_trigger_gate (section 9) both reach the standard
     // per-param audio-mod "A" drawer — a fire-button counts by count-add, a
     // trigger-gate card fires a pulse (never writing the toggle's value, R2)
     // and additionally gets the drawer's trailing Mode row + the collapsed-
@@ -1531,7 +1531,7 @@ pub(crate) fn build_toggle_trigger_row(
         }
 
         if info.spec.is_trigger_gate {
-            // Collapsed-row mode indicator (§9, carried over from §8 D6):
+            // Collapsed-row mode indicator (section 9, carried over from section 8 D6):
             // "Transient mode silently ignores clip launches... the drawer
             // must show the mode on the collapsed card row" — shown whether
             // or not the drawer itself is open, so a user who never re-opens
@@ -1566,7 +1566,7 @@ pub(crate) fn build_toggle_trigger_row(
         }
     }
 
-    // Automation naming pass (`WIDGET_TREE_DESIGN.md` §5) — mirror the slider row.
+    // Automation naming pass (`WIDGET_TREE_DESIGN.md` section 5) — mirror the slider row.
     // A toggle/trigger row has no separate row-catcher; its button IS the row's
     // identity and its sole drivable control, so the param-id-derived name lands
     // there.
@@ -1604,7 +1604,7 @@ pub(crate) fn build_param_row(
     // Which config the modulation drawer shows when ≥2 are active (the panel's
     // stored per-param choice). Ignored when 0–1 configs are active.
     active_tab: ModTab,
-    // §6b: when false (compact mode), the config drawer + tab strip are not built
+    // section 6b: when false (compact mode), the config drawer + tab strip are not built
     // — the row, arm buttons, and slider track overlays still show, so mods stay
     // armed and their live ranges remain visible; only the settings are hidden.
     show_drawer: bool,
@@ -1772,7 +1772,7 @@ pub(crate) fn build_param_row(
         tree.set_flag(label_id, UIFlags::INTERACTIVE);
     }
 
-    // "Automated" indicator (P4 §7 last bullet, Live's red dot): a small,
+    // "Automated" indicator (P4 section 7 last bullet, Live's red dot): a small,
     // non-interactive circle at the left edge of the label cell when this
     // param carries an enabled automation lane. Red while live, grays when
     // the lane is overridden (latched) — same red/gray pairing as the lane
@@ -1917,7 +1917,7 @@ pub(crate) fn build_param_row(
         ROW_ROLE_AUDIO,
     );
 
-    // Automation naming pass (`WIDGET_TREE_DESIGN.md` §5, D8/§3): every converged
+    // Automation naming pass (`WIDGET_TREE_DESIGN.md` section 5, D8/section 3): every converged
     // card row carries a param-id-derived name on its row-root and its drivable
     // controls, so a `--script` flow can find and drive the row directly. Unlike
     // the mute/solo-chip idiom (one static name, `under_text` picks the row), a
@@ -1983,7 +1983,7 @@ pub(crate) fn build_param_row(
 
     // Modulation config drawer. Zero or one active config shows directly (no tab
     // strip — unchanged); two or more share this one drawer behind a tab strip
-    // so they never stack three deep (§6.2). The T/∿/A arm buttons above stay on
+    // so they never stack three deep (section 6.2). The T/∿/A arm buttons above stay on
     // the row, so arming is still one click. Track overlays (driver/audio trim
     // bars, envelope target) live on the slider above and show for every armed
     // mod regardless of which config tab is open. `active_tabs` / `shown_tab` were
@@ -2035,7 +2035,7 @@ pub(crate) fn build_param_row(
     // Audio-modulation drawer — shown when the Audio config tab is active.
     // Extracted to `build_audio_mod_drawer` (shared with
     // `build_toggle_trigger_row`'s `is_trigger`/`is_trigger_gate` cases,
-    // D5b/§9). A slider row is never `is_trigger_gate`, but it DOES get the
+    // D5b/section 9). A slider row is never `is_trigger_gate`, but it DOES get the
     // Action/Amount/Wrap rows (D8) — derived inside from `info`.
     if shown_tab == Some(ModTab::Audio) {
         let (dids, send_count) = build_audio_mod_drawer(
