@@ -92,6 +92,32 @@ change: `input/output_cost_per_token` (+ cache rates) in config.yaml, the
 plan-cost variables on the fleet-value Grafana dashboard, and the `RATES`
 table in `scripts/claude_usage_export.py` for the Anthropic path.
 
+## Always-running services — the observability stack
+
+Five background services keep the fleet observable. All run as user launchd
+jobs (`launchctl list | rg 'manifold|mxcl'` is the liveness oracle; the
+three homebrew ones also answer to `brew services list`). Data flow:
+
+```
+CC transcripts ──(hourly export)──┐
+litellm proxy ──(SpendLogs)───────┤→ postgres :5432 ──→ grafana :3000 (dashboards)
+              └─(/metrics)──→ prometheus :9090 ────────↗
+```
+
+| Service | launchd label | If it dies | Restart |
+|---|---|---|---|
+| litellm proxy :4000 | `com.manifold.litellm-proxy` | **every seat freezes** (classifier fails closed); log `~/.config/litellm/proxy.log` | `launchctl kickstart -k gui/501/com.manifold.litellm-proxy` |
+| Postgres 16 :5432 | `homebrew.mxcl.postgresql@16` | proxy loses SpendLogs, dashboards empty | `brew services restart postgresql@16` |
+| Grafana :3000 | `homebrew.mxcl.grafana` | dashboards unreachable; data unharmed | `brew services restart grafana` |
+| Prometheus :9090 | `homebrew.mxcl.prometheus` | health metrics gap (metrics are scrape-time; the gap is permanent) | `brew services restart prometheus` |
+| Claude usage export (hourly) | `com.manifold.claude-usage-export` | Anthropic rows go stale — value dashboard freshness row turns red at 2 days | `launchctl kickstart -k gui/501/com.manifold.claude-usage-export` |
+
+Grafana provisions datasources and dashboards from files: repo
+`scripts/grafana/*` is the source, deployed by copy to
+`/opt/homebrew/etc/grafana/provisioning/{datasources,dashboards}/` and
+`/opt/homebrew/etc/grafana/dashboards/` (30 s auto-reload). Edit in the
+repo, copy out — never edit only the deployed copy.
+
 ## Verification oracles
 
 - **Which deployment served a call:** SpendLogs `model` column

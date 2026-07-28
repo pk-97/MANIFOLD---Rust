@@ -14,6 +14,12 @@
         <string>--since-days</string>
         <string>2</string>
     </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- launchd jobs get a bare PATH; psql lives in /opt/homebrew/bin -->
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/bin:/bin</string>
+    </dict>
     <key>StartInterval</key>
     <integer>3600</integer>
     <key>RunAtLoad</key>
