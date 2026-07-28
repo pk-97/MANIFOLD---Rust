@@ -23,8 +23,11 @@ pub struct ImportReport {
     /// [`gltf_load::GltfImportSummary::default_material_vertex_count`]).
     pub default_material_vertex_count: u32,
     /// Always `true` today — the assembler always synthesizes a framing
-    /// camera (the glb's own embedded cameras, if any, are not yet
-    /// consumed). Kept as a field so a future embedded-camera path has
+    /// orbit camera and it is always the default active camera, even when
+    /// the glb also carries embedded cameras (BUG-d2qz: those import as
+    /// extra selectable `node.free_camera` cards, reported via
+    /// `report_lines`, never as a replacement for this default). Kept as a
+    /// field so a future "default to an authored camera" mode has
     /// somewhere to report `false`.
     pub camera_synthesized: bool,
     /// D9 doctrine ("every import produces a report") applied to the

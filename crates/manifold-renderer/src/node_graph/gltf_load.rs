@@ -1395,6 +1395,38 @@ pub(crate) struct GltfImportSummary {
     /// proceeds without them. One line per extension, never a silent skip.
     /// `gltf_import.rs` folds these into `ImportReport::report_lines`.
     pub extension_report_lines: Vec<String>,
+    /// Every embedded perspective camera, resolved to world-space pose —
+    /// BUG-d2qz. Orthographic cameras are parsed but not resolved here (no
+    /// `node.free_camera` ortho mode); one line is pushed to
+    /// `camera_report_lines` per skip instead. `gltf_import.rs` adds each
+    /// entry as an extra selectable `node.free_camera` card alongside the
+    /// synthesized bbox-framed orbit camera, which stays the default.
+    pub cameras: Vec<GltfCameraInfo>,
+    /// D9 doctrine, same as `animation_report_lines`/`extension_report_lines`:
+    /// one line per orthographic camera this importer doesn't resolve, never
+    /// a silent drop. `gltf_import.rs` folds these into `ImportReport::report_lines`.
+    pub camera_report_lines: Vec<String>,
+}
+
+/// One embedded glTF camera resolved to world-space pose, ready for
+/// `node.free_camera`'s pos/yaw/pitch/roll param surface. Perspective
+/// projection only (BUG-d2qz scope) — `parse_cameras` reports and skips
+/// orthographic cameras rather than guessing an equivalent.
+#[derive(Debug, Clone)]
+pub(crate) struct GltfCameraInfo {
+    /// The glTF camera's own `name`, falling back to its owning node's
+    /// `name`, falling back to `None` (caller numbers it).
+    pub name: Option<String>,
+    pub pos: [f32; 3],
+    /// Radians, `node.free_camera`'s convention: yaw about world +Y, pitch
+    /// about the camera's own right axis, roll about `fwd` — see
+    /// [`euler_from_fwd_up`], which inverts `Camera::from_pos_euler`.
+    pub yaw: f32,
+    pub pitch: f32,
+    pub roll: f32,
+    pub fov_y: f32,
+    pub near: f32,
+    pub far: f32,
 }
 
 /// glTF sampler interpolation mode, as encoded in the runtime track
@@ -1815,9 +1847,10 @@ pub(crate) fn build_parent_map(document: &gltf::Document) -> Vec<Option<usize>> 
 
 /// Static (non-animated) world matrix of `node_index`, composed by
 /// walking UP via `parent_of` to the scene root and multiplying
-/// `node.transform().matrix()` root-first. Used only for the (rare)
-/// ancestor chain ABOVE a skin's joint tree — see
-/// `GltfSkinInfo::joint_root_world`.
+/// `node.transform().matrix()` root-first. Used for the (rare) ancestor
+/// chain ABOVE a skin's joint tree (see `GltfSkinInfo::joint_root_world`)
+/// and, since BUG-d2qz, for a camera node's own world pose — cameras are
+/// never animated by A1/A2's scope, so the static chain is exact for them.
 fn static_world_matrix(document: &gltf::Document, node_index: usize, parent_of: &[Option<usize>]) -> Mat4 {
     let mut chain = vec![node_index];
     let mut cur = node_index;
@@ -1833,6 +1866,80 @@ fn static_world_matrix(document: &gltf::Document, node_index: usize, parent_of: 
         }
     }
     world
+}
+
+/// Invert `Camera::from_pos_euler`'s basis construction
+/// (`crate::node_graph::camera`): given a world-space forward and up
+/// (both expected normalized; `up` need only be non-parallel to `fwd` —
+/// it's re-orthonormalized here the same way `from_pos_euler` builds its
+/// own `up0`), recover the `(yaw, pitch, roll)` triple that reproduces
+/// them. `pitch = asin(fwd.y)`, `yaw = atan2(-fwd.x, -fwd.z)` fall straight
+/// out of `from_pos_euler`'s `fwd` formula; `roll` is recovered by
+/// projecting `up` onto the pre-roll `(right0, up0)` basis `from_pos_euler`
+/// itself derives from `yaw`/`pitch` before rotating by `roll` — see the
+/// round-trip proof in `tests::euler_from_fwd_up_round_trips_from_pos_euler`.
+/// Degenerate only where `from_pos_euler` itself is (`pitch` at exactly
+/// ±90°, where `yaw` isn't observable from `fwd` alone) — not exercised by
+/// any camera-bearing fixture in the Khronos sample set.
+fn euler_from_fwd_up(fwd: [f32; 3], up: [f32; 3]) -> (f32, f32, f32) {
+    let pitch = fwd[1].clamp(-1.0, 1.0).asin();
+    let yaw = (-fwd[0]).atan2(-fwd[2]);
+    let right0 = [yaw.cos(), 0.0, -yaw.sin()];
+    let up0 = [yaw.sin() * pitch.sin(), pitch.cos(), yaw.cos() * pitch.sin()];
+    let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let s = -dot(up, right0);
+    let c = dot(up, up0);
+    let roll = s.atan2(c);
+    (yaw, pitch, roll)
+}
+
+/// Every `document.nodes()` entry carrying a `camera()`, resolved to
+/// world-space pose via `static_world_matrix` — BUG-d2qz. Perspective
+/// cameras become a [`GltfCameraInfo`]; orthographic cameras (no
+/// `node.free_camera` ortho mode) are skipped with a report line each,
+/// never silently.
+fn parse_cameras(document: &gltf::Document, parent_of: &[Option<usize>]) -> (Vec<GltfCameraInfo>, Vec<String>) {
+    let mut cameras = Vec::new();
+    let mut report_lines = Vec::new();
+    for node in document.nodes() {
+        let Some(cam) = node.camera() else { continue };
+        let label = cam
+            .name()
+            .or(node.name())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| format!("camera {}", cam.index()));
+        match cam.projection() {
+            gltf::camera::Projection::Perspective(persp) => {
+                let world = static_world_matrix(document, node.index(), parent_of);
+                let pos = [world[3][0], world[3][1], world[3][2]];
+                // Local -Z is forward, local +Y is up (glTF camera
+                // convention, identical to `node.free_camera`'s own
+                // yaw=pitch=roll=0 convention) — transform both by the
+                // world rotation (columns 2 and 1) and normalize away any
+                // uniform node scale.
+                let fwd = normalize3([-world[2][0], -world[2][1], -world[2][2]]);
+                let up = normalize3([world[1][0], world[1][1], world[1][2]]);
+                let (yaw, pitch, roll) = euler_from_fwd_up(fwd, up);
+                cameras.push(GltfCameraInfo {
+                    name: Some(label),
+                    pos,
+                    yaw,
+                    pitch,
+                    roll,
+                    fov_y: persp.yfov(),
+                    near: persp.znear(),
+                    far: persp.zfar().unwrap_or(10_000.0),
+                });
+            }
+            gltf::camera::Projection::Orthographic(_) => {
+                report_lines.push(format!(
+                    "camera {label:?}: orthographic projection not imported (node.free_camera \
+                     has no orthographic mode) — skipped"
+                ));
+            }
+        }
+    }
+    (cameras, report_lines)
 }
 
 /// Parse every `document.skins()` entry, indexed by glTF skin index. A
@@ -3269,6 +3376,12 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
     // ones already hard-failed in `parse_document_and_buffers`.
     let extension_report_lines = unsupported_optional_extension_lines(&document);
 
+    // BUG-d2qz: resolve every embedded camera to world-space pose. Cameras
+    // are static (never in A1/A2's animation scope), so a fresh parent map
+    // built here (not shared with the mesh-node chains above) is exact.
+    let camera_parent_of = build_parent_map(&document);
+    let (cameras, camera_report_lines) = parse_cameras(&document, &camera_parent_of);
+
     Ok(GltfImportSummary {
         materials,
         bbox_min,
@@ -3278,6 +3391,8 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
         animations,
         animation_report_lines,
         extension_report_lines,
+        cameras,
+        camera_report_lines,
     })
 }
 
@@ -3669,6 +3784,116 @@ mod tests {
             );
             assert_eq!(verts.len() % 3, 0, "triangle list");
         }
+    }
+
+    /// BUG-d2qz: `euler_from_fwd_up` inverts `Camera::from_pos_euler`'s own
+    /// basis construction — round-trip every non-degenerate angle triple
+    /// (pitch away from ±90°, where yaw isn't observable from `fwd` alone,
+    /// matches `from_pos_euler`'s own documented pole limits) through
+    /// `from_pos_euler` to get `(fwd, up)`, decompose back, and recover the
+    /// SAME angles.
+    #[test]
+    fn euler_from_fwd_up_round_trips_from_pos_euler() {
+        use crate::node_graph::camera::Camera;
+
+        for yaw in [-2.4_f32, -0.7, 0.0, 0.3, 1.1, 2.9] {
+            for pitch in [-1.3_f32, -0.5, 0.0, 0.4, 1.3] {
+                for roll in [0.0_f32, 0.5, -1.8, 3.0] {
+                    let cam = Camera::from_pos_euler([0.0, 0.0, 0.0], yaw, pitch, roll, 0.9, 0.05, 200.0);
+                    let (yaw2, pitch2, roll2) = euler_from_fwd_up(cam.fwd, cam.up);
+                    let cam2 = Camera::from_pos_euler([0.0, 0.0, 0.0], yaw2, pitch2, roll2, 0.9, 0.05, 200.0);
+                    for axis in 0..3 {
+                        assert!(
+                            (cam.fwd[axis] - cam2.fwd[axis]).abs() < 1e-4,
+                            "fwd mismatch at yaw={yaw} pitch={pitch} roll={roll}: {:?} vs {:?}",
+                            cam.fwd,
+                            cam2.fwd
+                        );
+                        assert!(
+                            (cam.up[axis] - cam2.up[axis]).abs() < 1e-4,
+                            "up mismatch at yaw={yaw} pitch={pitch} roll={roll}: {:?} vs {:?}",
+                            cam.up,
+                            cam2.up
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// BUG-d2qz: Khronos `Duck.glb` (CC-BY 4.0 — attribution in
+    /// `tests/fixtures/gltf/README.md`) carries one embedded perspective
+    /// camera on a child node under a uniformly-scaled root — the real
+    /// shape `parse_cameras` has to resolve (world transform through an
+    /// ancestor chain, not just the camera node's own local matrix). Proof
+    /// that the resolved pose actually reproduces the glb's authored
+    /// direction: rebuild a `Camera` from the parsed yaw/pitch/roll and
+    /// check its `fwd`/`up` against the SAME world matrix decomposed
+    /// directly — an independent check, not a re-assertion of
+    /// `parse_cameras`' own math. (`AntiqueCamera.glb`, despite its name,
+    /// carries no embedded glTF camera — it's a model of a camera object,
+    /// not a scene camera — so it can't serve as this fixture.)
+    #[test]
+    fn duck_embedded_camera_resolves_to_authored_world_pose() {
+        use crate::node_graph::camera::Camera;
+
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/khronos/Duck.glb");
+        if !path.exists() {
+            println!("duck_embedded_camera_resolves_to_authored_world_pose: fixture not found, skipping");
+            return;
+        }
+        let summary = gltf_import_summary(&path).expect("summary");
+        assert_eq!(summary.camera_count, 1, "Duck.glb carries exactly one embedded camera");
+        assert_eq!(summary.cameras.len(), 1, "Duck's one camera is perspective — must resolve");
+        assert!(summary.camera_report_lines.is_empty(), "no orthographic camera to skip");
+
+        let parsed = &summary.cameras[0];
+
+        // Independent oracle: re-derive world position/fwd/up straight off
+        // the document's node tree (root's uniform scale composed with the
+        // camera node's local matrix), bypassing `parse_cameras` entirely.
+        let (document, _buffers, _images) = import_glb(&path).expect("reparse for the oracle");
+        let cam_node = document
+            .nodes()
+            .find(|n| n.camera().is_some())
+            .expect("Duck.glb has exactly one camera node");
+        let parent_of = build_parent_map(&document);
+        let world = static_world_matrix(&document, cam_node.index(), &parent_of);
+        let expected_pos = [world[3][0], world[3][1], world[3][2]];
+        let expected_fwd = normalize3([-world[2][0], -world[2][1], -world[2][2]]);
+        let expected_up = normalize3([world[1][0], world[1][1], world[1][2]]);
+
+        for axis in 0..3 {
+            assert!(
+                (parsed.pos[axis] - expected_pos[axis]).abs() < 1e-3,
+                "pos mismatch: {:?} vs {:?}",
+                parsed.pos,
+                expected_pos
+            );
+        }
+
+        let rebuilt =
+            Camera::from_pos_euler(parsed.pos, parsed.yaw, parsed.pitch, parsed.roll, parsed.fov_y, parsed.near, parsed.far);
+        for axis in 0..3 {
+            assert!(
+                (rebuilt.fwd[axis] - expected_fwd[axis]).abs() < 1e-3,
+                "fwd mismatch: {:?} vs {:?}",
+                rebuilt.fwd,
+                expected_fwd
+            );
+            assert!(
+                (rebuilt.up[axis] - expected_up[axis]).abs() < 1e-3,
+                "up mismatch: {:?} vs {:?}",
+                rebuilt.up,
+                expected_up
+            );
+        }
+
+        // FOV/clip planes pass through untouched from the glTF accessor.
+        assert!((parsed.fov_y - 0.6605925559997559_f32).abs() < 1e-5);
+        assert!((parsed.near - 1.0).abs() < 1e-5);
+        assert!((parsed.far - 10000.0).abs() < 1e-5);
     }
 
     /// GLB_XFAIL_BURNDOWN_DESIGN.md D2 (BUG-167) value-level gate: known

@@ -103,10 +103,12 @@ pub(super) fn build_import_graph(
     }
     if summary.camera_count > 0 {
         log::info!(
-            "gltf_import::assemble_import_graph({}): glb carries {} embedded camera(s) — v1 \
-             ignores them and synthesizes its own bbox-framed orbit camera",
+            "gltf_import::assemble_import_graph({}): glb carries {} embedded camera(s), {} \
+             importable as extra selectable node.free_camera cards (BUG-d2qz) — the synthesized \
+             bbox-framed orbit camera stays the default",
             path.display(),
             summary.camera_count,
+            summary.cameras.len(),
         );
     }
 
@@ -319,6 +321,49 @@ pub(super) fn build_import_graph(
         &metadata_for_node_type("node.camera_lens"),
         &lens_node_params,
     );
+
+    // BUG-d2qz: every embedded perspective camera becomes an extra
+    // `node.free_camera` card at its authored world-space pose — unwired
+    // (the synthesized orbit camera above stays the default active
+    // camera; nothing about default behavior changes), selectable by
+    // rewiring `lens`'s `camera` input in the graph editor. Own section
+    // per camera so its pos/yaw/pitch/roll/fov sliders don't collide with
+    // the synthesized camera's "Camera" section.
+    let mut imported_camera_lines: Vec<String> = Vec::new();
+    for (k, imported_cam) in summary.cameras.iter().enumerate() {
+        let handle = format!("camera_import_{k}");
+        let imported_cam_id = fresh_id();
+        let mut imported_cam_node =
+            plain_node(imported_cam_id, &handle, "node.free_camera", &handle);
+        imported_cam_node.params.insert("pos_x".to_string(), float(imported_cam.pos[0]));
+        imported_cam_node.params.insert("pos_y".to_string(), float(imported_cam.pos[1]));
+        imported_cam_node.params.insert("pos_z".to_string(), float(imported_cam.pos[2]));
+        imported_cam_node.params.insert("yaw".to_string(), float(imported_cam.yaw));
+        imported_cam_node.params.insert("pitch".to_string(), float(imported_cam.pitch));
+        imported_cam_node.params.insert("roll".to_string(), float(imported_cam.roll));
+        imported_cam_node.params.insert("fov_y".to_string(), float(imported_cam.fov_y));
+        imported_cam_node.params.insert("near".to_string(), float(imported_cam.near));
+        imported_cam_node.params.insert("far".to_string(), float(imported_cam.far));
+        let imported_cam_params = imported_cam_node.params.clone();
+        nodes.push(imported_cam_node);
+        let label = imported_cam.name.clone().unwrap_or_else(|| format!("Camera {}", k + 1));
+        stamp_scene_node_exposures_into(
+            &mut card_params,
+            &mut card_bindings,
+            imported_cam_id,
+            &NodeId::new(&handle),
+            "node.free_camera",
+            &format!("{label} (Imported Camera)"),
+            &metadata_for_node_type("node.free_camera"),
+            &imported_cam_params,
+        );
+        imported_camera_lines.push(format!(
+            "camera {label:?}: imported as an extra selectable node.free_camera card, fov_y \
+             {:.3} rad ({:.1}\u{b0}) — the synthesized orbit camera stays the default",
+            imported_cam.fov_y,
+            imported_cam.fov_y.to_degrees(),
+        ));
+    }
 
     let sun_id = fresh_id();
     let mut sun_node = plain_node(sun_id, "sun", "node.light", "sun");
@@ -715,6 +760,10 @@ pub(super) fn build_import_graph(
     report_lines.extend(summary.animation_report_lines.iter().cloned());
     // BUG-213: same fold for unimplemented OPTIONAL extensionsUsed entries.
     report_lines.extend(summary.extension_report_lines.iter().cloned());
+    // BUG-d2qz: same fold for imported perspective cameras and skipped
+    // orthographic ones.
+    report_lines.extend(imported_camera_lines);
+    report_lines.extend(summary.camera_report_lines.iter().cloned());
 
     let report = ImportReport {
         material_count: summary.materials.len(),
