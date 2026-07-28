@@ -49,6 +49,10 @@
           {
             "type": "command",
             "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" bead-staleness.py"
+          },
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" local-time.py"
           }
         ]
       },
@@ -57,6 +61,17 @@
           {
             "type": "command",
             "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" system-prompt-version-check.py"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" session-end-worktree-scrub.py"
           }
         ]
       }

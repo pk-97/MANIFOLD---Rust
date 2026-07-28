@@ -35,11 +35,14 @@ def main() -> int:
         if problems:
             print(
                 "WORKTREE POOL OVER BUDGET: " + " and ".join(problems) + ". "
-                "This should be structurally impossible (slot ring + git "
-                "worktree add deny) — something bypassed the ring. Tell "
-                "Peter NOW, run `scripts/agent-worktree.py list`, "
-                "and clean up idle slots with `git worktree remove` before "
-                "other work. Incident precedent: 2026-07-15, 455 GB."
+                "The SessionEnd scrub (session-end-worktree-scrub.py) should "
+                "keep the pool under this — either it isn't firing or "
+                "something bypassed the ring. Tell Peter, run "
+                "`scripts/agent-worktree.py list`, then "
+                "`scripts/agent-worktree.py scrub` (never raw `git worktree "
+                "remove` — the Bash hook denies it). More slot dirs than the "
+                "ring cap means a real bypass. Incident precedent: "
+                "2026-07-15, 455 GB."
             )
     except Exception:
         pass
