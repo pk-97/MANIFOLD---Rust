@@ -12,6 +12,10 @@ Subcommands:
     append a per-lane verdict to the trail. Exits 0 iff all pass.
   no-gate --task <id> --reason <text>
     Append a kind=no-gate verdict (explicit bypass with mandatory reason).
+  batch-no-gate --range <git-range> --reason <text> [--dry-run] [--repo <path>]
+    Same as no-gate, for every closed bead named across a git range that
+    lacks a passing verdict (skips ones that already have coverage or
+    aren't closed). One command instead of one no-gate call per bead.
   show --task <id>
     Print every verdict for the task from the trail.
 
@@ -577,6 +581,151 @@ def cmd_no_gate(args):
     append_verdict(args.task, verdict)
     print(f"no-gate verdict appended for task {args.task}: {args.reason}")
     sys.exit(0)
+
+
+_BUG_ID_RE = re.compile(r"BUG-\w+")
+
+
+def _has_passing_verdict(verdicts_dir, task_id):
+    """Same passing check as the merge guard (preToolUseBash.py I1):
+    schema 1, pass True, kind gate|no-gate — read from the given trail root."""
+    vpath = Path(verdicts_dir) / f"{task_id}.jsonl"
+    if not vpath.exists():
+        return False
+    with open(vpath) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                v = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if (v.get("schema") == 1
+                    and v.get("pass") is True
+                    and v.get("kind") in ("gate", "no-gate")):
+                return True
+    return False
+
+
+def _bead_status(task_id):
+    """Look up a bead's status via `bd show <id> --json`.
+
+    Returns (status_str_or_None, error_or_None). A non-zero exit, bad JSON,
+    or empty result is reported as an error — never guessed."""
+    try:
+        r = subprocess.run(
+            ["bd", "show", task_id, "--json"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if r.returncode != 0:
+            return None, f"bd exited {r.returncode}"
+        beads = json.loads(r.stdout)
+        if not beads:
+            return None, "bd returned no bead"
+        return beads[0].get("status"), None
+    except Exception as e:
+        return None, str(e)
+
+
+def _build_no_gate_verdict(task_id, reason):
+    """The same verdict shape cmd_no_gate appends (kept in one place so
+    batch-no-gate reuses it exactly)."""
+    return {
+        "schema": SCHEMA_VERSION,
+        "task": task_id,
+        "phase": "per-lane",
+        "brief": "",
+        "branch": "unknown",
+        "commit": None,
+        "gates": [],
+        "scope": {"files_changed": [], "in_scope": True},
+        "pass": True,
+        "kind": "no-gate",
+        "reason": reason,
+        "runner": "gate_runner.py@lead",
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _append_verdict_at(verdicts_dir, task_id, verdict):
+    """append_verdict, but against an explicit trail root (for --repo)."""
+    _verify_schema(verdict)
+    verdicts_dir = Path(verdicts_dir)
+    verdicts_dir.mkdir(parents=True, exist_ok=True)
+    path = verdicts_dir / f"{task_id}.jsonl"
+    if path.exists():
+        with open(path) as f:
+            for i, line in enumerate(f, 1):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    existing = json.loads(line)
+                except json.JSONDecodeError as e:
+                    die(f"{path}:{i}: invalid JSON — {e}")
+                _verify_schema(existing)
+    with open(path, "a") as f:
+        f.write(json.dumps(verdict, sort_keys=True) + "\n")
+
+
+def cmd_batch_no_gate(args):
+    """Stamp no-gate verdicts for every closed bead in a range/list that
+    lacks passing verdict coverage (BUG-o1z1). One command instead of one
+    manual `no-gate` call per bead when the merge-verdict guard (I1) blocks
+    a wave landing."""
+    if not args.reason:
+        die("batch-no-gate requires --reason")
+
+    repo = Path(args.repo) if args.repo else REPO
+    verdicts_dir = repo / ".claude" / "orchestration" / "verdicts"
+
+    if args.range:
+        log_r = subprocess.run(
+            ["git", "-C", str(repo), "log", "--format=%B", args.range],
+            capture_output=True, text=True, timeout=30,
+        )
+        if log_r.returncode != 0:
+            die(f"git log failed (exit {log_r.returncode}): {log_r.stderr.strip()}")
+        task_ids = sorted(set(_BUG_ID_RE.findall(log_r.stdout)))
+    else:
+        task_ids = sorted(set(args.task))
+
+    if not task_ids:
+        print("batch-no-gate: no task ids found")
+        sys.exit(0)
+
+    stamped, skipped, lookup_failed = 0, 0, 0
+    for task_id in task_ids:
+        if _has_passing_verdict(verdicts_dir, task_id):
+            print(f"{task_id}: skip (passing verdict exists)")
+            skipped += 1
+            continue
+
+        status, err = _bead_status(task_id)
+        if err is not None:
+            print(f"{task_id}: skip (bd lookup failed: {err})")
+            skipped += 1
+            lookup_failed += 1
+            continue
+        if status != "closed":
+            print(f"{task_id}: skip (bead not closed, status={status!r})")
+            skipped += 1
+            continue
+
+        if args.dry_run:
+            print(f"{task_id}: would stamp no-gate ({args.reason})")
+            stamped += 1
+            continue
+
+        verdict = _build_no_gate_verdict(task_id, args.reason)
+        _append_verdict_at(verdicts_dir, task_id, verdict)
+        print(f"{task_id}: stamp no-gate ({args.reason})")
+        stamped += 1
+
+    total = len(task_ids)
+    print(f"\nbatch-no-gate: {stamped} stamped, {skipped} skipped, {total} total")
+    sys.exit(0 if lookup_failed < total else 1)
 
 
 def cmd_show(args):
@@ -1374,6 +1523,23 @@ def main():
     ng.add_argument("--task", required=True, help="Task ID (BUG-xxx)")
     ng.add_argument("--reason", required=True, help="Reason for bypass")
     ng.set_defaults(func=cmd_no_gate)
+
+    bng = sub.add_parser("batch-no-gate",
+                          help="Stamp no-gate verdicts for closed beads "
+                               "missing verdict coverage (BUG-o1z1)")
+    bng_group = bng.add_mutually_exclusive_group(required=True)
+    bng_group.add_argument("--range", default=None,
+                            help="Git range to scan for BUG- ids (e.g. "
+                                 "origin/main..branch)")
+    bng_group.add_argument("--task", nargs="+", default=None,
+                            help="Explicit list of task IDs")
+    bng.add_argument("--reason", required=True, help="Reason for bypass")
+    bng.add_argument("--dry-run", action="store_true",
+                      help="Print decisions without writing verdicts")
+    bng.add_argument("--repo", default=None,
+                      help="Repo root for git log and the verdicts trail "
+                           "(default: this script's repo)")
+    bng.set_defaults(func=cmd_batch_no_gate)
 
     sh = sub.add_parser("show")
     sh.add_argument("--task", required=True, help="Task ID (BUG-xxx)")
