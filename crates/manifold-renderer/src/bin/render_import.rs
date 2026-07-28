@@ -19,8 +19,15 @@
 //! is assembled (only then do we know which `string_params`/`params` ids
 //! exist), so `--param env_mode=1 --param hdri_file=/path/to.exr` works in
 //! one consistent flag rather than a second `--string` flag callers have to
-//! remember. `--orbit`/`--tilt` are convenience sugar for the two camera params
-//! (`cam_orbit`/`cam_tilt`) every import graph carries. `--non-black-floor F`
+//! remember. `--orbit`/`--tilt` are convenience sugar for the synthesized
+//! camera's orbit/tilt params — the import graph stamps their ids as
+//! `{camera_node_id}_orbit`/`{camera_node_id}_tilt` (e.g. `5_orbit`), NOT a
+//! fixed `cam_orbit`/`cam_tilt` (BUG-su2o: the doc previously claimed the
+//! fixed ids, which no real import graph carries). Resolved AFTER assembly
+//! by suffix match against the graph's actual param listing — the exposed
+//! param whose id ends with `_orbit`/`_tilt` (or equals `orbit`/`tilt`
+//! exactly). Zero matches or more than one match is a hard error (never a
+//! silent no-op) listing the params it did/could match. `--non-black-floor F`
 //! (default 0.02, the DamagedHelmet-gpu-test precedent) lowers the
 //! convergence floor for a DELIBERATELY dim render (e.g. a lights-off pass
 //! that zeroes `7_intensity`/`1_intensity`) — without it, a legitimately dark
@@ -65,6 +72,10 @@ struct Args {
     // overrides once the import graph's `preset_metadata` is available (see
     // the module doc comment).
     overrides: Vec<(String, String)>,
+    // Raw `--orbit`/`--tilt` values, resolved by suffix match against the
+    // graph's actual param listing once it's assembled (module doc comment).
+    orbit: Option<String>,
+    tilt: Option<String>,
     frames_max: u32,
     non_black_floor: f64,
     trace: bool,
@@ -83,6 +94,31 @@ struct Args {
     anim_frames: Option<u32>,
 }
 
+/// BUG-su2o: resolves `--orbit`/`--tilt` against the import graph's ACTUAL
+/// exposed param ids by suffix — the graph stamps camera params as
+/// `{camera_node_id}_orbit`/`{camera_node_id}_tilt` (e.g. `5_orbit`), never
+/// a fixed `cam_orbit`/`cam_tilt`. Matches a param id ending in `_{suffix}`
+/// or equal to `{suffix}` exactly. Zero or multiple matches is a hard
+/// error listing the candidates, never a silent no-op.
+fn resolve_camera_sugar_param(suffix: &str, available: &[String]) -> Result<String, String> {
+    let matches: Vec<&String> = available
+        .iter()
+        .filter(|id| id.as_str() == suffix || id.ends_with(&format!("_{suffix}")))
+        .collect();
+    match matches.as_slice() {
+        [] => Err(format!(
+            "--{suffix} matched no param (looked for an id equal to '{suffix}' or ending in '_{suffix}'); available params: {}",
+            available.join(", ")
+        )),
+        [single] => Ok((*single).clone()),
+        many => Err(format!(
+            "--{suffix} is ambiguous: matched {} params: {}",
+            many.len(),
+            many.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+        )),
+    }
+}
+
 fn parse_args() -> Result<Args, String> {
     let mut argv = std::env::args().skip(1);
     let glb = argv
@@ -94,6 +130,8 @@ fn parse_args() -> Result<Args, String> {
         height: 720,
         out: PathBuf::from("/tmp/render-import.png"),
         overrides: Vec::new(),
+        orbit: None,
+        tilt: None,
         frames_max: 300,
         non_black_floor: 0.02,
         trace: false,
@@ -137,10 +175,10 @@ fn parse_args() -> Result<Args, String> {
                 args.overrides.push((id.to_string(), v.to_string()));
             }
             "--orbit" => {
-                args.overrides.push(("cam_orbit".to_string(), value));
+                args.orbit = Some(value);
             }
             "--tilt" => {
-                args.overrides.push(("cam_tilt".to_string(), value));
+                args.tilt = Some(value);
             }
             "--anim-param" => {
                 args.anim_param = Some(value);
@@ -202,7 +240,7 @@ fn main() {
         }
     }
 
-    let args = match parse_args() {
+    let mut args = match parse_args() {
         Ok(a) => a,
         Err(e) => {
             eprintln!("error: {e}");
@@ -227,8 +265,8 @@ fn main() {
     println!("render-import: {} -> {report:?}", args.glb.display());
 
     // Same outer-card override mechanism `render-generator-preset` uses: the
-    // import graph carries its own `preset_metadata.params` (cam_orbit,
-    // cam_tilt, cam_dist, 7_intensity, 1_intensity, ...) AND
+    // import graph carries its own `preset_metadata.params` (e.g. 5_orbit,
+    // 5_tilt, cam_dist, 7_intensity, 1_intensity, ...) AND
     // `preset_metadata.string_params` (model_file, hdri_file). `--param`
     // resolves against both — a numeric card param id sets `params`; a
     // string param id sets `string_overrides` instead (see module doc).
@@ -242,6 +280,29 @@ fn main() {
         .as_ref()
         .map(|m| m.string_params.iter().map(|s| s.id.clone()).collect())
         .unwrap_or_default();
+
+    // Resolve --orbit/--tilt sugar against the graph's ACTUAL param ids
+    // (module doc comment, BUG-su2o) before applying any override.
+    let available_param_ids: Vec<String> = params.iter().map(|p| p.id().to_string()).collect();
+    if let Some(value) = args.orbit.take() {
+        match resolve_camera_sugar_param("orbit", &available_param_ids) {
+            Ok(id) => args.overrides.push((id, value)),
+            Err(e) => {
+                eprintln!("error: {e}");
+                std::process::exit(2);
+            }
+        }
+    }
+    if let Some(value) = args.tilt.take() {
+        match resolve_camera_sugar_param("tilt", &available_param_ids) {
+            Ok(id) => args.overrides.push((id, value)),
+            Err(e) => {
+                eprintln!("error: {e}");
+                std::process::exit(2);
+            }
+        }
+    }
+
     let mut string_overrides: std::collections::BTreeMap<String, String> = Default::default();
     for (id, v) in &args.overrides {
         if string_param_ids.contains(id) {
@@ -596,4 +657,95 @@ fn render_single_frame(
     let png = encode_rgba8_png(&final_rgba, args.width, args.height);
     std::fs::write(&args.out, &png).unwrap_or_else(|e| panic!("write {}: {e}", args.out.display()));
     println!("OK {} ({}x{})", args.out.display(), args.width, args.height);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// BUG-su2o: `--orbit`/`--tilt` must resolve against a REAL import
+    /// graph's param listing, not a fixed `cam_orbit`/`cam_tilt` id no
+    /// import graph carries. Builds the production import graph for a
+    /// small fixture and proves the suffix resolver finds exactly one id
+    /// for each of "orbit"/"tilt", and that setting the resolved id
+    /// actually changes that param's value (never a silent no-op).
+    #[test]
+    fn orbit_tilt_sugar_resolves_against_real_import_graph() {
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/khronos/Duck.glb");
+        assert!(
+            fixture.exists(),
+            "fixture missing: {} (tests/fixtures/gltf/khronos/Duck.glb)",
+            fixture.display()
+        );
+
+        let (def, _report) =
+            assemble_import_graph(&fixture).expect("Duck.glb assembles through the import path");
+        let available_param_ids: Vec<String> = def
+            .preset_metadata
+            .as_ref()
+            .map(|m| m.params.iter().map(|s| s.id.clone()).collect())
+            .unwrap_or_default();
+        assert!(
+            !available_param_ids.is_empty(),
+            "import graph exposed zero outer params"
+        );
+
+        let orbit_id = resolve_camera_sugar_param("orbit", &available_param_ids)
+            .unwrap_or_else(|e| panic!("orbit did not resolve to exactly one param: {e}"));
+        let tilt_id = resolve_camera_sugar_param("tilt", &available_param_ids)
+            .unwrap_or_else(|e| panic!("tilt did not resolve to exactly one param: {e}"));
+        assert_ne!(orbit_id, tilt_id, "orbit and tilt must resolve to distinct params");
+        assert!(
+            orbit_id.ends_with("_orbit") || orbit_id == "orbit",
+            "resolved orbit id '{orbit_id}' doesn't look like a camera orbit param"
+        );
+        assert!(
+            tilt_id.ends_with("_tilt") || tilt_id == "tilt",
+            "resolved tilt id '{tilt_id}' doesn't look like a camera tilt param"
+        );
+
+        // Prove setting the resolved ids actually changes the values reaching
+        // the graph — the same param-application path `main()` uses.
+        let mut params: Vec<Param> = def
+            .preset_metadata
+            .as_ref()
+            .map(|m| m.params.iter().map(|s| Param::bundled(s.clone())).collect())
+            .unwrap_or_default();
+        let orbit_before = params.iter().find(|p| p.id() == orbit_id).unwrap().value;
+        let tilt_before = params.iter().find(|p| p.id() == tilt_id).unwrap().value;
+
+        let orbit_target = orbit_before + 0.5;
+        let tilt_target = tilt_before + 0.3;
+        params.iter_mut().find(|p| p.id() == orbit_id).unwrap().value = orbit_target;
+        params.iter_mut().find(|p| p.id() == tilt_id).unwrap().value = tilt_target;
+
+        let orbit_after = params.iter().find(|p| p.id() == orbit_id).unwrap().value;
+        let tilt_after = params.iter().find(|p| p.id() == tilt_id).unwrap().value;
+        assert!((orbit_after - orbit_target).abs() < 1e-6, "orbit override did not land");
+        assert!((tilt_after - tilt_target).abs() < 1e-6, "tilt override did not land");
+        assert_ne!(orbit_before, orbit_after, "--orbit must not no-op");
+        assert_ne!(tilt_before, tilt_after, "--tilt must not no-op");
+    }
+
+    #[test]
+    fn resolve_camera_sugar_param_errors_on_zero_matches() {
+        let available = vec!["cam_dist".to_string(), "7_intensity".to_string()];
+        let err = resolve_camera_sugar_param("orbit", &available).unwrap_err();
+        assert!(err.contains("no param") || err.contains("matched no param"));
+    }
+
+    #[test]
+    fn resolve_camera_sugar_param_errors_on_multiple_matches() {
+        let available = vec!["5_orbit".to_string(), "9_orbit".to_string()];
+        let err = resolve_camera_sugar_param("orbit", &available).unwrap_err();
+        assert!(err.contains("ambiguous"));
+    }
+
+    #[test]
+    fn resolve_camera_sugar_param_matches_exact_suffix() {
+        let available = vec!["5_orbit".to_string(), "5_tilt".to_string(), "cam_dist".to_string()];
+        assert_eq!(resolve_camera_sugar_param("orbit", &available).unwrap(), "5_orbit");
+        assert_eq!(resolve_camera_sugar_param("tilt", &available).unwrap(), "5_tilt");
+    }
 }
