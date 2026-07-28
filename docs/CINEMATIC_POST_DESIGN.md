@@ -38,7 +38,7 @@ judgment, no flake surface. (Precedent: the hand-vs-generated kernel parity
 suites, e.g. `project_3d.rs::gpu_tests`; this extends the same idea from
 "two kernels agree" to "kernel agrees with committed math".)
 
-## 1. Audit — what exists (verified 2026-07-12, tip `9e537b16`)
+## 1. Audit — what exists (verified 2026-07-12)
 
 | Piece | Where | State |
 |---|---|---|
@@ -174,7 +174,7 @@ Discovered at P1 implementation start: D1 commits `coc_from_depth` to read
 `fov_y`/`near`/`far`/viewport CPU-side from the Camera wire into its
 kernel's uniform every frame — and the mechanism for exactly that,
 `DERIVED_UNIFORMS` (`n: [...]` in `primitive!`), exists **only for
-Array-output buffer atoms**. Verified anchors (tip `71a3503e`):
+Array-output buffer atoms**. Verified anchors:
 `standalone_for_spec` routes derived uniforms solely through
 `generate_standalone_buffer` (`freeze/codegen.rs:203-217`; the texture
 path `generate_standalone_ext` has no derived parameter); in fused
@@ -345,10 +345,8 @@ phase ends with ONE headless `render-generator-preset` PNG of
 and Peter's look-pass is the real exit. P0–P3 shipped under the old rule;
 this governs everything still open.
 
-- **P0 — derived uniforms first-class in the freeze compiler — SHIPPED
-  2026-07-12** (D7; two sessions, standalone layer `42929678` then fusion
-  layer `38d2f0f8`, both landed together in batch A `docs/landings/
-  2026-07-12-cinematic-post-batch-a.md`). Deliverables landed:
+- **P0 — derived uniforms first-class in the freeze compiler — SHIPPED**
+  (D7; batch A `docs/landings/2026-07-12-cinematic-post-batch-a.md`). Deliverables landed:
   texture-path `DERIVED_UNIFORMS` in `generate_standalone_ext` +
   CPU-struct inputs binding nothing; `install.rs`'s name whitelist +
   vec3 bail deleted, replaced by `freeze/derived_uniform_registry.rs`
@@ -365,9 +363,9 @@ this governs everything still open.
   to the new sourcing model in the same landing. Demo: none — compiler
   phase, the proofs are the demo.
 - **P1 — `coc_from_depth` + DoF slice of `CinematicScene`** — SHIPPED
-  2026-07-12 (`docs/landings/2026-07-12-cinematic-post-batch-b.md`; `focus_distance`/`f_stop`
+  (`docs/landings/2026-07-12-cinematic-post-batch-b.md`; `focus_distance`/`f_stop`
   read entirely via derived_uniforms from the Camera's lens block, no port-shadowed
-  overrides on the atom itself — cards bind to `camera_lens` directly). (one session).
+  overrides on the atom itself — cards bind to `camera_lens` directly).
   Entry: P0 landed (both layers) + CAMERA P2 + GBUFFER P1 landed (verify:
   `rg 'LensParams'` hits camera.rs; `rg 'linearize_depth'` hits shared
   header; `rg 'DERIVED_UNIFORMS' crates/manifold-renderer/src/node_graph/freeze/codegen.rs`
@@ -380,21 +378,21 @@ this governs everything still open.
   (cluster no-PNG rule). Performer gesture: `focus_distance` bound to a slow LFO — the
   rack-focus breathe; the gate exercises the binding path by driving the
   card param and asserting the CoC buffer changes accordingly.
-- **P2 — `ssao_from_depth` + SSAO arm** — SHIPPED 2026-07-12
+- **P2 — `ssao_from_depth` + SSAO arm** — SHIPPED
   (`docs/landings/2026-07-12-cinematic-post-batch-b.md`; `radius`/`intensity`/`bias`
   are ordinary atom params, not port-shadowed — D3 doesn't call for it and the
-  preset cards bind directly). (one session). Entry: GBUFFER P1.
+  preset cards bind directly). Entry: GBUFFER P1.
   Deliverables: atom per D3 (Gather), CPU reference, synthetic-ramp parity
   (I1), analytic sanity unit test (flat plane → occlusion 0 everywhere
   except bias tolerance), preset arm + `ssao_intensity`/`ssao_radius`
   cards, I5. Demo: none — L1 (cluster no-PNG rule).
   Performer gesture: `ssao_intensity` on a fader — contact weight swells.
-- **P3 — `node.motion_blur`** — SHIPPED 2026-07-12
+- **P3 — `node.motion_blur`** — SHIPPED
   (`docs/landings/2026-07-12-cinematic-post-batch-c.md`; `shutter_angle` read
   entirely via derived_uniforms from the Camera's lens block, no port-shadowed
   override on the atom itself — the card binds to `camera_lens` directly,
   matching P1/P2's precedent; `node.camera_lens` already had a working
-  port-shadowed `shutter_angle` param reserved for this). (one session). Entry: GBUFFER P2 (velocity
+  port-shadowed `shutter_angle` param reserved for this). Entry: GBUFFER P2 (velocity
   exists) + CAMERA P2 (shutter on the wire). Deliverables: atom per D4,
   CPU reference on a synthetic velocity ramp (I1), I2 zero-shutter
   identity, preset tail + `shutter_angle` card, I5. Demo: none — L1

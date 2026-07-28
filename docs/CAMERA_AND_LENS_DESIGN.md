@@ -179,7 +179,7 @@ the next scene-wide scalar pays a 16 B uniform growth.
 |---|---|
 | I1 — Every GPU projection path agrees with `Camera::project_to_pixel` within 1.0 px | `gpu_proofs::camera_conformance` (P1): render_scene rasterized probe + flatten_3d camera-mode readback vs oracle, asserted per-vertex |
 | I2 — `LensParams::PINHOLE` cameras render byte-identically to pre-lens builds | P2 gate: existing `render_scene` gpu_tests + fog/shadow proofs pass unmodified (they construct cameras via builders, which default to PINHOLE) |
-| I3 — flatten_3d unwired-camera output is bit-identical to today | existing `project_3d.rs::gpu_tests::generated_project3d_matches_hand_kernel_both_modes` passes with `shaders/project_3d.wgsl` and all its assertions unmodified; the test's `gen_bytes` packing updates mechanically to the new `Params` layout (PARAMS words → one zero word per derived word, `use_camera` inert → `dispatch_count` → pad) — amended 2026-07-12 (Fable review, P1 escalation) after the packing/derived-uniforms conflict below was found |
+| I3 — flatten_3d unwired-camera output is bit-identical to today | existing `project_3d.rs::gpu_tests::generated_project3d_matches_hand_kernel_both_modes` passes with `shaders/project_3d.wgsl` and all its assertions unmodified; the test's `gen_bytes` packing updates mechanically to the new `Params` layout (PARAMS words → one zero word per derived word, `use_camera` inert → `dispatch_count` → pad) — amended 2026-07-12 after the packing/derived-uniforms conflict below was found |
 | I4 — No new bespoke projection math in any primitive | negative gate, landing: `rg -n 'proj_dist|proj_scale' crates/manifold-renderer/src/node_graph/primitives/ -g '*.rs'` hit-count == pre-phase count (re-derive at execution; new hits must be in flatten_3d only) |
 | I5 — ev=0 byte-identity | P2 gate: `gpu_proofs::render_scene_fog` density-0 byte-identity test extended with `ev=0` assertion |
 
@@ -219,7 +219,7 @@ only the `gen_bytes` packing (the hand-constructed generated-layout bytes) may
 differ, per the amended I3 machine-check above. Focused
 `cargo nextest run -p manifold-renderer --lib`; clippy `-p manifold-renderer`.
 
-**Amendment 2026-07-12 (Fable review, P1 escalation):** D3's derived-uniforms
+**Amendment 2026-07-12:** D3's derived-uniforms
 extension and I3's original "0-line diff on the test file" gate are mutually
 exclusive — the freeze codegen (`codegen.rs:834-880`) always places
 `derived_uniforms` fields immediately before the injected `dispatch_count`

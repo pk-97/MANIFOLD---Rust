@@ -34,11 +34,9 @@ the decision-log memory so it isn't re-proposed).
 
 ---
 
-## Landed 2026-07-10 — F1–F4 + F6 (Opus orchestration, Sonnet workers)
+## Landed 2026-07-10 — F1–F4 + F6
 
-Branch `fix/core-engine-findings`, worktree off `cc4eeb37`. Each fix landed with the
-pinning test that would have caught the bug; each independently re-verified by the
-orchestrator against the worktree manifest before landing.
+Each fix landed with the pinning test that would have caught the bug.
 
 - **F1 `cf1f3dc6`** (+ `fd519bdf` clippy nit in its test): OSC/SMPTE timecode receive
   is wired — a shared pending slot (mirroring `OscParamRouter`) drained in

@@ -212,7 +212,7 @@ Implementation note: this extends section 2.2's `detection_source` provenance fr
 
 ### 8.6 Status against the shipped audio infra (verified 2026-06-19)
 
-The audio/send rework landed. Two primitives this feature needs — one shipped, one didn't.
+Two primitives this feature needs — one shipped, one didn't.
 
 **Shipped — layer-fed sends (the realtime tap model, AUDIO_LAYER section 3R).** A send's source sums capture channels **and** audio layers: `AudioSend.source = AudioSendSource { layers: Vec<LayerId> }` ([audio_setup.rs:29](../crates/manifold-core/src/audio_setup.rs#L29)), with `is_layer_fed()` / `feeds_from_layer()` / `layers()` helpers. Each audio layer owns a kira sub-track with a **post-fader `LayerTap`**; a layer-fed send drains it live ([audio_layer_playback.rs](../crates/manifold-playback/src/audio_layer_playback.rs)). Wiring is one undoable command — `SetLayerAudioSendCommand` — already driven by the layer-header **Send** dropdown (`LayerControl::Send`, shipped). This is **not** the old "precomputed curve" of section 0/section 3 — it's a realtime tap, so a stem lane must *play into its tap* for the send to see signal.
 

@@ -112,7 +112,7 @@ This worker is the home of the **feature seam** — the single most important ar
 
 Feature frames are keyed by **send** (`AudioSendId`), not raw channel — the worker downmixes each send's channels to mono, runs one FFT, and reduces it. A frame is a small, fixed-shape struct per send — cheap to publish.
 
-**The feature × band matrix (shipped 2026-06-17).** Rather than a flat feature list, the worker runs the *same five detectors over four frequency bands*. The drawer picks one cell of the matrix — a detector (`kind`) × a band — so e.g. `Transients × Low` is a kick detector, `Brightness × High` is the brightness of just the top end. Every cell is normalized **0..1**.
+**The feature × band matrix.** Rather than a flat feature list, the worker runs the *same five detectors over four frequency bands*. The drawer picks one cell of the matrix — a detector (`kind`) × a band — so e.g. `Transients × Low` is a kick detector, `Brightness × High` is the brightness of just the top end. Every cell is normalized **0..1**.
 
 | Detector (`kind`) | Meaning | Full | Low | Mid | High |
 |---|---|:-:|:-:|:-:|:-:|
@@ -222,7 +222,7 @@ The drawer parallels the existing envelope/driver drawers built on `param_slider
 
 The drawer is authoring UI. It does not need to be perform-time minimal; it needs to be clear.
 
-### 10.0 Spectrogram feature overlays + draggable bands (shipped 2026-06-17)
+### 10.0 Spectrogram feature overlays + draggable bands
 
 The matrix (section 5) shipped, but the analysis was assigned blind. Three pieces made it legible, all on the **Audio Setup spectrogram** (per tapped send). All decoupled from the modulation hot path. Built draggable-bands first (it also positions the per-band meters), then meters, then the scrolling traces.
 
@@ -232,7 +232,7 @@ The matrix (section 5) shipped, but the analysis was assigned blind. Three piece
 
 3. **Scrolling centroid trace + transient ticks.** Per-column overlays computed in the worker from the CQT column (centroid as height-from-bottom — VQT bins are geometric, so it's already the log-freq centre; onset from column-to-column flux), streamed on a lock-step scalar ring (2 floats/column) alongside the magnitude columns, carried in `ContentState`, and drawn in the spectrogram shader from a third storage buffer keyed by the same 1:1 column slot — so they scroll locked to the waterfall with no scroll math. A `-1` centroid sentinel hides the trace on empty columns; the WGSL is guarded by a naga parse/validate unit test.
 
-The hover readout (freq + pink-weighted dB at the cursor) is a separate, parallel addition (see commits `ce932caa`/`627b4438`).
+The hover readout (freq + pink-weighted dB at the cursor) is a separate, parallel addition.
 
 ### 10.1 The Audio Setup panel
 

@@ -355,7 +355,7 @@ warm worktree for the workstream (`agent-worktree.py acquire`), orchestrator lan
   delta or a clean no-change report. Post-release territory — Peter re-ranks
   (his call, 2026-07-08: release-relevance sequencing is his).
 
-Phasing-completeness check (run 2026-07-08): every section 2–section 4 commitment maps to a phase —
+Phasing-completeness check: every section 2–section 4 commitment maps to a phase —
 harness/cache/metrics/noise floor + D14 alignment fixtures → P1; Beat This + fusion
 deletion + alignment gate → P2; datasets + baselines → P3; precision/hats/perc → P4;
 chords/phrases/sections/labels/Rust seams/inspector rows/length floors +
@@ -497,7 +497,7 @@ while hats go learned — or vice versa).
 
 **Phasing:** **B1** — E-GMD fetch (license VERIFY-AT-FETCH) + Slakh drum-truth
 extraction with dev/heldout split; Stage-1 DSP implementation (cluster-first, per section 7.1);
-first full scoreboard vs the bar. **B2** — judged iteration (Sonnet sweeps, orchestrator
+first full scoreboard vs the bar. **B2** — judged iteration (orchestrator
 accepts; same rules as P4; ≤3 rounds/class). **B3** — verdict landing: per-class
 ship/keep decisions, BUG-069 status update, and — only if gaps remain that matter —
 a Stage-2 training proposal for Peter's explicit approval (compute + dataset build are
@@ -510,7 +510,7 @@ one.
 
 ### B3 verdict (2026-07-18, Fable) — Stage 1 falls short; gap documented; Stage 2 is the parity path
 
-Two judged rounds (B1 `c566539a`, B2 `d55cb2f3`). Stage-1 DSP (cluster-first,
+Two judged rounds (B1, B2). Stage-1 DSP (cluster-first,
 dev-fitted signatures, real bugs fixed en route — including a wrong-input bug in the
 bake-off scorer itself) reaches, on dev dense truth, electronic slice: kick **0.311**
 vs ADTOF **0.702** · snare 0.250/0.653 (n=1) · hat **0.592 vs 0.426** (n=2, thin) ·
