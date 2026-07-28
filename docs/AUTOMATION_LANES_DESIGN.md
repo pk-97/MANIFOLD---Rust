@@ -299,7 +299,7 @@ workflow.
   `manifold-core` effects types, so the finishing commit runs the full
   workspace sweep.
 
-## 10. Phasing (Sonnet-executable)
+## 10. Phasing
 
 - **P1 — model + runtime:** `AutomationLane`/`AutomationPoint`/`SegmentShape`
   in core; serde; pruning-row integration; curve eval; `automation.rs`
@@ -321,10 +321,9 @@ reviewable arc; P3/P4 independent after.
   touch-to-select; flat-line render + first-click lane birth. P1–P4 SHIPPED
   2026-07-04; P5 status below (partial ship, 2026-07-07).
 
-### P5 status (2026-07-07, Sonnet, `lane/automation-exposure`)
+### P5 status
 
-**Shipped and headless-PNG-verified** — Peter's actual complaint (ARM
-recording was the ONLY way to birth a lane) is fixed:
+**Shipped and headless-PNG-verified:**
 
 - `A` keybinding, real unit test (`input_handler.rs`'s
   `bare_a_toggles_automation_mode_visible_regardless_of_current_state`) —
@@ -347,7 +346,7 @@ recording was the ONLY way to birth a lane) is fixed:
   `drag-automation-point.json`) still pass unchanged — no regression on the
   shared lane pipeline.
 
-**Descoped, not silently dropped** — flagged back rather than faked:
+**Descoped, not silently dropped:**
 
 - **The "+" button / full param-picker popover** (device dropdown + param
   dropdown search list) is NOT built. Building a real one (vs. another

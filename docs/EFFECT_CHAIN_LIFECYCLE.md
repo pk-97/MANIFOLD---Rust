@@ -16,7 +16,7 @@ Three layers of storage to understand:
 | Primitive instances inside a `ChainGraph` | A specific `ChainGraph` | `node_id` within the graph | The runtime `Primitive` impls (e.g. `primitives::Watercolor`) |
 | `StateStore` entries | The compositor | `(owner_key, node_id)` | StateStore-backed per-frame state (`Feedback.prev`, `Smoothing.previous`, `Watercolor` pigment buffers, …) |
 
-The legacy `EffectRegistry` parallel state cache was deleted in the May 2026 migration (block 8d). There is no longer a dual-state-cache class to keep in sync — `StateStore` is the single store, and `clear_all_effect_state` walks one path.
+There is no longer a dual-state-cache class to keep in sync — `StateStore` is the single store, and `clear_all_effect_state` walks one path.
 
 Watercolor's feedback texture lives inside its primitive instance, which the `StateStore` references via `(owner_key, "watercolor")`. When the `ChainGraph` is rebuilt (topology change), the primitive instance is recreated and the StateStore entry is dropped. Stale feedback is lost.
 
@@ -73,9 +73,9 @@ The "no active clip this frame" trigger is the key live-performance behavior: fe
 |---|---|---|
 | Ghost trails / old content visible after loading a different project | `clear_graph_runner_state` not wired into `clear_all_effect_state` | [`layer_compositor.rs::clear_all_effect_state`](../crates/manifold-renderer/src/layer_compositor.rs) — must call `clear_graph_runner_state()` on every chain |
 | Layer's feedback "resets" after a long quiet stretch (>5 min) | Timer-based eviction triggered | `CHAIN_GRACE_FRAMES` — tune if needed, or rethink the policy |
-| Same layer index produces different visuals frame-to-frame | Pre-Stage-1 bug, chains positionally indexed | Won't reoccur — chains are `AHashMap<LayerId, _>` |
-| Master FX state contaminated by layer 0's effects | Pre-`5b77de38` bug, shared `effect_chains[0]` | Won't reoccur — master is a dedicated field |
-| FPS tanks to ~30 fps at 4K with many effects | Pre-`07bfa5d4` bug, chain rebuild thrash | Won't reoccur — chains pinned to `LayerId` |
+| Same layer index produces different visuals frame-to-frame | Chains positionally indexed | Won't reoccur — chains are `AHashMap<LayerId, _>` |
+| Master FX state contaminated by layer 0's effects | Shared `effect_chains[0]` | Won't reoccur — master is a dedicated field |
+| FPS tanks to ~30 fps at 4K with many effects | Chain rebuild thrash | Won't reoccur — chains pinned to `LayerId` |
 | Feedback look subtly different after refactor / migration | Eviction policy change shifted what gets retained between frames | See "When to expect a feedback reset" above |
 | Memory grows unboundedly during a long show | Eviction policy not running, or `current_layers` slice empty | Check that `trim_excess_buffers(frame.layers)` is called every frame |
 

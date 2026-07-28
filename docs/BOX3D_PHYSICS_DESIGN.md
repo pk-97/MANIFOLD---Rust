@@ -187,7 +187,7 @@ rebuild; heightfield refresh and port-shadowed forces are live updates, not rebu
 - Every body is a lit, materialed instanced mesh — PBR bricks, cel-shaded tumbling
   totems — because the render path is the one that already exists.
 
-## 5. Phasing (Sonnet-executable)
+## 5. Phasing
 
 Forbidden, all phases: async/deferred stepping (D2) · World-handle wires (D2) ·
 private renderers (D4) · per-frame world rebuild or per-frame allocation in the

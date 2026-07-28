@@ -10,9 +10,8 @@ timecode — and the doc a bug hunt attacks (section 13). It is the sibling of
 `FREEZE_COMPILER_MAP.md`: that doc maps what turns graphs into pixels; this one
 maps what decides *which clips are alive and what time it is*.
 
-Written at `feat/timeline-ui-redesign` immediately after SESSION_MODE P2 merged
-(`f852d2bc` — `SessionRuntime` as the third ref source). Sections marked (P2)
-are that fresh.
+Written immediately after SESSION_MODE P2 merged (`SessionRuntime` as the
+third ref source); sections marked (P2) are that fresh.
 
 ---
 
@@ -269,7 +268,7 @@ not authority.
   silence = pause; playing: nudge every message (<0.5s) else seek; stopped:
   seek beyond 0.05s. **Currently starved — no subscription wires the receiver
   to `on_timecode_received` (section 13.1).**
-- **AbletonOSC transport (rewritten 2026-07-07 — ABLETON_TRANSPORT_SYNC_DESIGN.md
+- **AbletonOSC transport (ABLETON_TRANSPORT_SYNC_DESIGN.md
   is the authority):** closed-loop pending-expectation state machine
   (`transport_sync.rs`, pure/testable). Commands (play/stop/seek) create
   expectations; inbound `is_playing` + `current_song_time` listener values
@@ -459,12 +458,11 @@ Every magic number on the timing paths, in one place:
     `LIVE_PREWARM_MAX_UNIQUE_CLIPS` / `RECENT_PRIORITY_COUNT` /
     `COMBINED_PREWARM_MAX` are unused. First MIDI fire of a cold video clip
     rides only the 0.02s recently-started gate — black-frame risk on stage.
-11. ~~AbletonOSC inbound transport relay is disabled~~ **FIXED 2026-07-07**
+11. ~~AbletonOSC inbound transport relay is disabled~~ **FIXED**
     (ABLETON_TRANSPORT_SYNC_DESIGN): relay re-enabled through the closed-loop
     state machine — own commands are value-matched acks, not relayable
     echoes; CLK keeps priority, OSC is the fallback authority tier.
-12. ~~`suppress_next_transport` staleness~~ **FIXED for the AbletonOSC path
-    2026-07-07**: the bridge no longer consumes the flag (value-matching
+12. ~~`suppress_next_transport` staleness~~ **FIXED for the AbletonOSC path**: the bridge no longer consumes the flag (value-matching
     replaces it) and AbletonOSC mode clears it each frame when the M4L
     sender is disabled. The M4L sender still uses the flag with the original
     staleness hazard — retired path, deferred cleanup.
@@ -473,7 +471,7 @@ Every magic number on the timing paths, in one place:
     (only `unsubscribe_all` is used, single-subscriber addresses) but a trap
     for the next subscriber.
 14. ~~Round-trip constants are wall-clock guesses~~ **FIXED for position/
-    transport correctness 2026-07-07**: the CLK plane now releases on
+    transport correctness**: the CLK plane now releases on
     value-matched acknowledgment, not on the 0.3s cooldown, and retry
     cadence adapts to measured RTT (EWMA). The 0.3s cooldown and 0.5s
     ownership grace still exist as M4L-path/secondary heuristics, but
