@@ -1466,7 +1466,7 @@ fn azalea_glb_renders_lit_through_render_scene() {
         return;
     }
 
-    let (document, buffers, _images) = crate::node_graph::gltf_load::import_glb(&path)
+    let (document, buffers, _images, _image_report_lines) = crate::node_graph::gltf_load::import_glb(&path)
         .unwrap_or_else(|e| panic!("import_glb({}): {e}", path.display()));
 
     let mut verts: Vec<MeshVertex> = Vec::new();

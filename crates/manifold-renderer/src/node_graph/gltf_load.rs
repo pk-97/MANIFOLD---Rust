@@ -142,15 +142,18 @@ pub(crate) fn parse_document_and_buffers(
     Ok((document, buffers))
 }
 
-pub(crate) fn import_glb(
-    path: &std::path::Path,
-) -> Result<(gltf::Document, Vec<gltf::buffer::Data>, Vec<gltf::image::Data>), String> {
+/// `(document, buffers, images, image_report_lines)` — `image_report_lines`
+/// is BUG-ssgz's per-image decode-failure report (KTX2/BasisU and any other
+/// unsupported source), one line per substituted dummy texture.
+pub(crate) type GlbImport =
+    (gltf::Document, Vec<gltf::buffer::Data>, Vec<gltf::image::Data>, Vec<String>);
+
+pub(crate) fn import_glb(path: &std::path::Path) -> Result<GlbImport, String> {
     let (document, buffers) = parse_document_and_buffers(path)?;
     let base = path.parent().unwrap_or_else(|| std::path::Path::new("./"));
-    let images = import_images_with_webp(&document, base, &buffers)
-        .map_err(|e| format!("{}: image import failed: {e}", path.display()))?;
+    let (images, image_report_lines) = import_images_with_webp(&document, base, &buffers);
 
-    Ok((document, buffers, images))
+    Ok((document, buffers, images, image_report_lines))
 }
 
 /// `gltf::import_images` hard-fails the ENTIRE document the moment any one
@@ -160,27 +163,80 @@ pub(crate) fn import_glb(
 /// all. IMPORT_ANYTHING_WAVE_DESIGN.md W1: decode webp images ourselves
 /// (our `image` dependency has the `webp` feature on) and fall back to the
 /// crate's own per-image decode for everything else.
+///
+/// BUG-ssgz: a per-image decode failure (KTX2/BasisU and any other
+/// unsupported source) no longer aborts the whole import — it substitutes a
+/// dummy texture and returns a report line instead of erroring. Never
+/// returns `Err`; the return type stays a plain tuple rather than `Result`
+/// to make that a compile-time fact at the call site.
 fn import_images_with_webp(
     document: &gltf::Document,
     base: &std::path::Path,
     buffers: &[gltf::buffer::Data],
-) -> Result<Vec<gltf::image::Data>, String> {
+) -> (Vec<gltf::image::Data>, Vec<String>) {
     let mut out = Vec::with_capacity(document.images().count());
+    let mut report_lines = Vec::new();
     for image in document.images() {
         let mime_type = match image.source() {
             gltf::image::Source::View { mime_type, .. } => Some(mime_type),
             gltf::image::Source::Uri { mime_type, .. } => mime_type,
         };
-        if mime_type == Some("image/webp") {
-            out.push(decode_webp_image(&image, buffers)?);
+        let decoded = if mime_type == Some("image/webp") {
+            decode_webp_image(&image, buffers)
         } else {
-            out.push(
-                gltf::image::Data::from_source(image.source(), Some(base), buffers)
-                    .map_err(|e| format!("image {}: decode failed: {e}", image.index()))?,
-            );
+            gltf::image::Data::from_source(image.source(), Some(base), buffers)
+                .map_err(|e| e.to_string())
+        };
+        match decoded {
+            Ok(data) => out.push(data),
+            Err(e) => {
+                if mime_type == Some("image/ktx2") {
+                    report_lines.push(format!(
+                        "image {}: KTX2/BasisU compressed texture is not supported — \
+                         dummy texture substituted (no transcoder)",
+                        image.index()
+                    ));
+                } else {
+                    report_lines.push(format!(
+                        "image {} (\"{}\"): decode failed ({e}) — dummy texture substituted",
+                        image.index(),
+                        image_label(&image)
+                    ));
+                }
+                out.push(dummy_image_data());
+            }
         }
     }
-    Ok(out)
+    (out, report_lines)
+}
+
+/// Best-effort human label for an image-decode-failure report line: the
+/// glTF `name`, else the external URI, else `<unnamed>` for a
+/// bufferView-embedded image with neither.
+fn image_label(image: &gltf::image::Image) -> String {
+    if let Some(name) = image.name() {
+        return name.to_string();
+    }
+    match image.source() {
+        gltf::image::Source::Uri { uri, .. } => uri.to_string(),
+        gltf::image::Source::View { .. } => "<unnamed>".to_string(),
+    }
+}
+
+/// Placeholder substituted for any image MANIFOLD can't decode (BUG-ssgz):
+/// 2x2 magenta RGBA8 — loud enough to spot on a mesh, cheap enough to not
+/// matter. No existing 1x1/checker CPU-side `gltf::image::Data` helper to
+/// reuse (the `1×1 dummy` precedent in `render_instanced_3d_mesh.rs` and
+/// `standalone.rs` is a GPU-side `manifold_gpu::GpuTexture`, a different
+/// layer entirely).
+fn dummy_image_data() -> gltf::image::Data {
+    const MAGENTA: [u8; 4] = [255, 0, 255, 255];
+    gltf::image::Data {
+        pixels: MAGENTA.repeat(4),
+        format: gltf::image::Format::R8G8B8A8,
+        width: 2,
+        height: 2,
+    }
 }
 
 /// Decode one `image/webp` glTF image (bufferView-embedded only — external
@@ -193,10 +249,7 @@ fn decode_webp_image(
     let view = match image.source() {
         gltf::image::Source::View { view, .. } => view,
         gltf::image::Source::Uri { .. } => {
-            return Err(format!(
-                "image {}: external-URI webp images are not supported",
-                image.index()
-            ));
+            return Err("external-URI webp images are not supported".to_string());
         }
     };
     let buf = &buffers[view.buffer().index()].0;
@@ -205,7 +258,7 @@ fn decode_webp_image(
     let encoded = &buf[begin..end];
 
     let decoded = image::load_from_memory_with_format(encoded, image::ImageFormat::WebP)
-        .map_err(|e| format!("image {}: webp decode failed: {e}", image.index()))?
+        .map_err(|e| format!("webp decode failed: {e}"))?
         .to_rgba8();
     let (width, height) = (decoded.width(), decoded.height());
     Ok(gltf::image::Data {
@@ -691,7 +744,7 @@ pub(crate) fn load_gltf_mesh(
     path: &std::path::Path,
     selector: GltfMeshSelector,
 ) -> Result<Vec<MeshVertex>, String> {
-    let (document, buffers, _images) = import_glb(path)?;
+    let (document, buffers, _images, _image_report_lines) = import_glb(path)?;
 
     let mut out = Vec::new();
     match selector {
@@ -771,7 +824,7 @@ pub(crate) fn load_gltf_texture(
     path: &std::path::Path,
     texture_index: u32,
 ) -> Result<(u32, u32, Vec<u8>), String> {
-    let (document, _buffers, images) = import_glb(path)?;
+    let (document, _buffers, images, _image_report_lines) = import_glb(path)?;
 
     let textures: Vec<gltf::Texture> = document.textures().collect();
     let tex = textures.get(texture_index as usize).ok_or_else(|| {
@@ -1393,7 +1446,12 @@ pub(crate) struct GltfImportSummary {
     /// (those hard-fail in [`parse_document_and_buffers`]) — optional
     /// extensions the asset lists that we don't implement, so the import
     /// proceeds without them. One line per extension, never a silent skip.
-    /// `gltf_import.rs` folds these into `ImportReport::report_lines`.
+    /// BUG-mbol: also carries per-primitive geometry skips found by
+    /// `summarize_node` — a Draco- or meshopt-compressed primitive (no
+    /// decoder, BUG-7w79) or any other primitive with no readable POSITION
+    /// data, named by mesh/primitive/node, never a silent zero-vertex drop
+    /// (or, for meshopt, a silent garbage-geometry read). `gltf_import.rs`
+    /// folds these into `ImportReport::report_lines`.
     pub extension_report_lines: Vec<String>,
 }
 
@@ -2179,7 +2237,7 @@ pub(crate) fn load_gltf_skinned_mesh(
     path: &std::path::Path,
     material_index: u32,
 ) -> Result<SkinnedMeshData, String> {
-    let (document, buffers, _images) = import_glb(path)?;
+    let (document, buffers, _images, _image_report_lines) = import_glb(path)?;
     for node in resolve_import_nodes(&document) {
         if let Some(found) = find_skinned_node_for_material(&node, material_index) {
             return flatten_skinned_node(&found, &buffers, material_index);
@@ -2326,7 +2384,7 @@ pub(crate) fn load_gltf_morph_deltas(
     material_index: u32,
     skinned: bool,
 ) -> Result<(Vec<MeshVertex>, u32, u32), String> {
-    let (document, buffers, _images) = import_glb(path)?;
+    let (document, buffers, _images, _image_report_lines) = import_glb(path)?;
     let parent_of = build_parent_map(&document);
     for node in resolve_import_nodes(&document) {
         let Some(found) = find_mesh_node_for_material(&node, material_index) else {
@@ -2399,6 +2457,13 @@ fn summarize_node(
     // one above, so `gltf_import_summary` can compute a per-object center
     // distinct from the whole-scene center.
     per_material_bbox: &mut std::collections::BTreeMap<Option<usize>, ([f32; 3], [f32; 3])>,
+    // A primitive with no readable POSITION data contributes nothing to
+    // `per_material` and is otherwise invisible — without a report line the
+    // material it belonged to just silently has zero vertices and
+    // `gltf_import_summary`'s `filter_map` drops it as "unused." Folded
+    // into `ImportReport::report_lines` the same way as
+    // `extension_report_lines` (`gltf_import.rs`'s `scene.rs` merge).
+    report_lines: &mut Vec<String>,
 ) -> Result<(), String> {
     let local = node.transform().matrix();
     let world = mat4_mul(&parent_world, &local);
@@ -2421,8 +2486,116 @@ fn summarize_node(
         let bind_skin_matrices: Option<Vec<Mat4>> =
             node.skin().map(|skin| bind_pose_skin_matrices(&skin, document, buffers));
         for prim in mesh.primitives() {
+            // BUG-7w79: EXT_meshopt_compression leaves POSITION's
+            // bufferView normal-sized and readable — unlike Draco, whose
+            // base accessor typically has no bufferView at all — so
+            // `reader.read_positions()` below would succeed and hand back
+            // compressed bytes reinterpreted as raw f32, i.e. garbage
+            // geometry with no error. Must be checked BEFORE that read, on
+            // the accessor's bufferView extensions (the compression marker
+            // lives there per the extension's spec, not on the accessor or
+            // primitive itself).
+            let is_meshopt_compressed = prim
+                .get(&gltf::Semantic::Positions)
+                .and_then(|accessor| accessor.view())
+                .is_some_and(|view| view.extension_value("EXT_meshopt_compression").is_some());
+            if is_meshopt_compressed {
+                let label = format!(
+                    "mesh {:?} primitive {} (node {:?})",
+                    mesh.name().unwrap_or("<unnamed>"),
+                    prim.index(),
+                    node.name().unwrap_or("<unnamed>")
+                );
+                report_lines.push(format!(
+                    "{label}: EXT_meshopt_compression is not supported — primitive skipped (no decoder)"
+                ));
+                continue;
+            }
+            // BUG-jfe2: KHR_mesh_quantization stores POSITION/NORMAL/
+            // TEXCOORD_0 as normalized BYTE/SHORT (or plain U32 for indices)
+            // instead of F32 to shrink file size. This module's reads —
+            // here and in the vendored gltf crate's Item::from_slice —
+            // assume F32 stride throughout; a quantized accessor misaligns
+            // every subsequent byte, silent garbage geometry with no error.
+            // Checked BEFORE any accessor is read, same skip-and-report
+            // mechanism as the meshopt/Draco checks above. A non-F32 NORMAL
+            // or TEXCOORD_0 skips the whole primitive even when POSITION is
+            // valid F32 — partial garbage attributes are not acceptable.
+            let quantized_semantic = [
+                (gltf::Semantic::Positions, "POSITION"),
+                (gltf::Semantic::Normals, "NORMAL"),
+                (gltf::Semantic::TexCoords(0), "TEXCOORD_0"),
+            ]
+            .into_iter()
+            .find_map(|(semantic, name)| {
+                prim.get(&semantic).and_then(|accessor| {
+                    (accessor.data_type() != gltf::accessor::DataType::F32)
+                        .then(|| (name, accessor.data_type()))
+                })
+            });
+            if let Some((name, data_type)) = quantized_semantic {
+                let label = format!(
+                    "mesh {:?} primitive {} (node {:?})",
+                    mesh.name().unwrap_or("<unnamed>"),
+                    prim.index(),
+                    node.name().unwrap_or("<unnamed>")
+                );
+                report_lines.push(format!(
+                    "{label}: quantized {name} accessor ({data_type:?}) is not supported — primitive skipped (no dequantization)"
+                ));
+                continue;
+            }
+            // BUG-pm9m: a primitive can carry TEXCOORD_1+ attributes even
+            // when no material slot references them (a common export
+            // habit — bake the second UV set in "just in case"). Nothing
+            // reads them (only `TEXCOORD_0` is ever fetched, e.g. the
+            // `reader.read_tex_coords(0)` calls throughout this module) —
+            // one summary line per primitive rather than per attribute, the
+            // extra sets are ignored as a group.
+            let mut extra_uv_sets: Vec<u32> = prim
+                .attributes()
+                .filter_map(|(semantic, _)| match semantic {
+                    gltf::Semantic::TexCoords(n) if n >= 1 => Some(n),
+                    _ => None,
+                })
+                .collect();
+            if !extra_uv_sets.is_empty() {
+                extra_uv_sets.sort_unstable();
+                extra_uv_sets.dedup();
+                let sets = extra_uv_sets.iter().map(|n| format!("TEXCOORD_{n}")).collect::<Vec<_>>().join(", ");
+                let noun = if extra_uv_sets.len() == 1 { "attribute" } else { "attributes" };
+                report_lines.push(format!(
+                    "mesh {:?} primitive {}: carries {sets} {noun} — additional UV sets are ignored",
+                    mesh.name().unwrap_or("<unnamed>"),
+                    prim.index()
+                ));
+            }
             let reader = prim.reader(|b| buffers.get(b.index()).map(|d| d.0.as_slice()));
             let Some(positions) = reader.read_positions() else {
+                // BUG-mbol: a Draco-compressed primitive's base POSITION
+                // accessor carries no `bufferView` (the real data lives
+                // Draco-encoded in `KHR_draco_mesh_compression`'s
+                // `bufferView`, which MANIFOLD has no decoder for) — that
+                // used to `continue` here with zero report, so the
+                // primitive's material ended up with `vertex_count == 0`
+                // and `gltf_import_summary`'s `filter_map` dropped it as
+                // "unused," vanishing the whole mesh with no trace. Now
+                // named and loud either way: Draco names the extension, a
+                // plain missing-POSITION primitive (malformed asset) still
+                // gets a line instead of a silent skip.
+                let label = format!(
+                    "mesh {:?} primitive {} (node {:?})",
+                    mesh.name().unwrap_or("<unnamed>"),
+                    prim.index(),
+                    node.name().unwrap_or("<unnamed>")
+                );
+                if prim.extension_value("KHR_draco_mesh_compression").is_some() {
+                    report_lines.push(format!(
+                        "{label}: KHR_draco_mesh_compression is not supported — primitive skipped (no decoder)"
+                    ));
+                } else {
+                    report_lines.push(format!("{label}: missing POSITION accessor data — primitive skipped"));
+                }
                 continue;
             };
             let positions: Vec<[f32; 3]> = positions.collect();
@@ -2479,7 +2652,17 @@ fn summarize_node(
     }
 
     for child in node.children() {
-        summarize_node(&child, world, document, buffers, per_material, bbox_min, bbox_max, per_material_bbox)?;
+        summarize_node(
+            &child,
+            world,
+            document,
+            buffers,
+            per_material,
+            bbox_min,
+            bbox_max,
+            per_material_bbox,
+            report_lines,
+        )?;
     }
     Ok(())
 }
@@ -2676,7 +2859,7 @@ fn resolve_animations_for_key(
 /// geometry, the world-space bbox, camera count, and unassigned-geometry
 /// count. One parse; no GPU. See [`GltfImportSummary`].
 pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSummary, String> {
-    let (document, buffers, _images) = import_glb(path)?;
+    let (document, buffers, _images, image_report_lines) = import_glb(path)?;
     let import_nodes = resolve_import_nodes(&document);
 
     let mut per_material: std::collections::BTreeMap<Option<usize>, u32> =
@@ -2687,6 +2870,11 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
     // one above.
     let mut per_material_bbox: std::collections::BTreeMap<Option<usize>, ([f32; 3], [f32; 3])> =
         std::collections::BTreeMap::new();
+    // Per-primitive geometry skips (Draco-compressed or otherwise missing
+    // POSITION data) — folded into `extension_report_lines` below, same
+    // "never a silent skip" doctrine as BUG-213's document-level extension
+    // lines.
+    let mut geometry_report_lines: Vec<String> = Vec::new();
     for node in &import_nodes {
         summarize_node(
             node,
@@ -2697,6 +2885,7 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
             &mut bbox_min,
             &mut bbox_max,
             &mut per_material_bbox,
+            &mut geometry_report_lines,
         )?;
     }
 
@@ -2838,6 +3027,12 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
             let mut base_color_info = pbr.base_color_texture();
             let mut base_color_uv_transform = fold_typed(pbr.base_color_texture());
             let mut mr_texture_index = pbr.metallic_roughness_texture().map(|t| t.texture().index() as u32);
+            // BUG-pm9m: retained alongside `mr_texture_index` (updated in
+            // lockstep, including the spec-gloss override below) purely to
+            // read its `tex_coord()` for the TEXCOORD_n warning further
+            // down — `mr_texture_index` alone only carries the texture,
+            // not which UV set it samples.
+            let mut mr_info = pbr.metallic_roughness_texture();
             let mut mr_uv_transform = fold_typed(pbr.metallic_roughness_texture());
             let mut base_color_factor = pbr.base_color_factor();
             let mut metallic = pbr.metallic_factor();
@@ -2869,11 +3064,13 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 match sg.specular_glossiness_texture() {
                     Some(tex) => {
                         mr_texture_index = Some(tex.texture().index() as u32);
+                        mr_info = sg.specular_glossiness_texture();
                         mr_uv_transform = fold_typed(sg.specular_glossiness_texture());
                         mr_texture_is_gloss_alpha = true;
                     }
                     None => {
                         mr_texture_index = None;
+                        mr_info = None;
                         mr_uv_transform = IDENTITY_UV_TRANSFORM;
                     }
                 }
@@ -2916,6 +3113,16 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
             // that block) can share it too.
             let tex_idx = |v: &serde_json::Value, key: &str| -> Option<u32> {
                 v.get(key)?.get("index")?.as_u64().map(|i| i as u32)
+            };
+            // BUG-pm9m: sibling of `tex_idx` — the raw-JSON texture-info
+            // object's own `texCoord` (glTF spec default 0), read the same
+            // way for the extension texture families below that have no
+            // typed accessor at 1.4.1 (clearcoat/sheen/iridescence/
+            // anisotropy). `None` means the slot itself is absent, not
+            // texCoord 0 — filtered out below same as every typed slot.
+            let tex_coord_idx = |v: &serde_json::Value, key: &str| -> Option<u32> {
+                let obj = v.get(key)?;
+                Some(obj.get("texCoord").and_then(|t| t.as_u64()).unwrap_or(0) as u32)
             };
             let specular_ext = m.specular();
             let specular_factor = specular_factor_override
@@ -3059,10 +3266,79 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 .and_then(|v| v.thickness_texture())
                 .map(|t| t.texture().index() as u32);
 
-            let base_color_texture = base_color_info.map(|t| t.texture().index() as u32);
+            let base_color_texture = base_color_info.as_ref().map(|t| t.texture().index() as u32);
             let normal_texture = m.normal_texture().map(|t| t.texture().index() as u32);
             let occlusion_texture = m.occlusion_texture().map(|t| t.texture().index() as u32);
             let emissive_texture = m.emissive_texture().map(|t| t.texture().index() as u32);
+
+            // BUG-pm9m: `MeshVertex` carries one UV channel end to end (see
+            // the ABI comment near its definition) — every texture slot
+            // samples TEXCOORD_0 regardless of the `texCoord` index it
+            // actually declares. That's a silent wrong-UV bug for any slot
+            // that legitimately points at TEXCOORD_1+ (a baked-AO or
+            // lightmap UV set is the common real-world case). Warning
+            // only, same "never a silent skip" doctrine as the Draco/
+            // meshopt/quantization/KTX2 report lines above — no second UV
+            // set is added (that's a priced ABI decision, not this fix).
+            for (slot, tex_coord) in [
+                ("baseColor", base_color_info.map(|t| t.tex_coord())),
+                ("metallicRoughness", mr_info.map(|t| t.tex_coord())),
+                ("normal", m.normal_texture().map(|t| t.tex_coord())),
+                ("occlusion", m.occlusion_texture().map(|t| t.tex_coord())),
+                ("emissive", m.emissive_texture().map(|t| t.tex_coord())),
+                (
+                    "specular",
+                    specular_ext.as_ref().and_then(|s| s.specular_texture()).map(|t| t.tex_coord()),
+                ),
+                (
+                    "specularColor",
+                    specular_ext.as_ref().and_then(|s| s.specular_color_texture()).map(|t| t.tex_coord()),
+                ),
+                (
+                    "volumeThickness",
+                    volume_ext.as_ref().and_then(|v| v.thickness_texture()).map(|t| t.tex_coord()),
+                ),
+                ("clearcoat", clearcoat_ext.and_then(|v| tex_coord_idx(v, "clearcoatTexture"))),
+                (
+                    "clearcoatRoughness",
+                    clearcoat_ext.and_then(|v| tex_coord_idx(v, "clearcoatRoughnessTexture")),
+                ),
+                (
+                    "clearcoatNormal",
+                    clearcoat_ext.and_then(|v| tex_coord_idx(v, "clearcoatNormalTexture")),
+                ),
+                ("sheenColor", sheen_ext.and_then(|v| tex_coord_idx(v, "sheenColorTexture"))),
+                (
+                    "sheenRoughness",
+                    sheen_ext.and_then(|v| tex_coord_idx(v, "sheenRoughnessTexture")),
+                ),
+                (
+                    "iridescence",
+                    iridescence_ext.and_then(|v| tex_coord_idx(v, "iridescenceTexture")),
+                ),
+                (
+                    "iridescenceThickness",
+                    iridescence_ext.and_then(|v| tex_coord_idx(v, "iridescenceThicknessTexture")),
+                ),
+                (
+                    "anisotropy",
+                    anisotropy_ext.and_then(|v| tex_coord_idx(v, "anisotropyTexture")),
+                ),
+                (
+                    "transmission",
+                    m.transmission().and_then(|t| t.transmission_texture()).map(|t| t.tex_coord()),
+                ),
+            ] {
+                if let Some(n) = tex_coord
+                    && n != 0
+                {
+                    geometry_report_lines.push(format!(
+                        "{label}: {slot} texture uses TEXCOORD_{n} — only UV set 0 is supported, \
+                         map will sample UV0 (likely wrong for baked AO/lightmaps)"
+                    ));
+                }
+            }
+
             // GLB_XFAIL_BURNDOWN_DESIGN.md D3 (BUG-164): one lookup per map
             // family, keyed off the same texture index each map's own
             // field above already resolved — `None` (map unwired) reads
@@ -3267,7 +3543,12 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
 
     // BUG-213: surface optional extensions we don't implement — required
     // ones already hard-failed in `parse_document_and_buffers`.
-    let extension_report_lines = unsupported_optional_extension_lines(&document);
+    let mut extension_report_lines = unsupported_optional_extension_lines(&document);
+    extension_report_lines.extend(geometry_report_lines);
+    // BUG-ssgz: per-image decode failures (KTX2/BasisU and any other
+    // unsupported source) — same "never a silent skip" doctrine, folded in
+    // here rather than a separate `GltfImportSummary` field.
+    extension_report_lines.extend(image_report_lines);
 
     Ok(GltfImportSummary {
         materials,
@@ -3350,7 +3631,7 @@ mod animation_tests {
     #[test]
     fn step_interp_fixture_parses_as_step_not_dropped() {        let path = hostile_dir().join("step_interp.glb");
         assert!(path.exists(), "step_interp.glb fixture missing at {}", path.display());
-        let (document, buffers, _images) = import_glb(&path).expect("parse step_interp.glb");
+        let (document, buffers, _images, _image_report_lines) = import_glb(&path).expect("parse step_interp.glb");
         let animations = parse_animations(&document, &buffers);
         assert_eq!(animations.len(), 1);
         assert!(animations[0].skipped_channels.is_empty(), "STEP must not be skipped");
@@ -3368,7 +3649,7 @@ mod animation_tests {
     fn cubicspline_interp_fixture_parses_with_tangents_deinterleaved() {
         let path = hostile_dir().join("cubicspline_interp.glb");
         assert!(path.exists(), "cubicspline_interp.glb fixture missing at {}", path.display());
-        let (document, buffers, _images) =
+        let (document, buffers, _images, _image_report_lines) =
             import_glb(&path).expect("parse cubicspline_interp.glb");
         let animations = parse_animations(&document, &buffers);
         assert_eq!(animations.len(), 1);
@@ -3473,7 +3754,7 @@ mod animation_tests {
             );
             return;
         }
-        let (document, buffers, _images) = import_glb(&path).expect("parse InterpolationTest.glb");
+        let (document, buffers, _images, _image_report_lines) = import_glb(&path).expect("parse InterpolationTest.glb");
         let animations = parse_animations(&document, &buffers);
         assert_eq!(animations.len(), 9, "one animation clip per channel in this fixture");
 
