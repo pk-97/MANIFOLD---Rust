@@ -12,7 +12,7 @@
 //!
 //! `--param id=value` overrides an outer-card param by id (same mechanism
 //! `render-generator-preset` uses — the import graph's own
-//! `preset_metadata.params`, e.g. `cam_dist`, `sun_int`, `env_intensity`).
+//! `preset_metadata.params`, e.g. `cam_dist`, `7_intensity`, `1_intensity`).
 //! The SAME flag also accepts a `preset_metadata.string_params` id (e.g.
 //! `hdri_file` — GLB_CONFORMANCE_DESIGN.md G-P6): whether `id` names a
 //! numeric card param or a string param is resolved AFTER the import graph
@@ -23,7 +23,7 @@
 //! (`cam_orbit`/`cam_tilt`) every import graph carries. `--non-black-floor F`
 //! (default 0.02, the DamagedHelmet-gpu-test precedent) lowers the
 //! convergence floor for a DELIBERATELY dim render (e.g. a lights-off pass
-//! that zeroes `sun_int`/`env_intensity`) — without it, a legitimately dark
+//! that zeroes `7_intensity`/`1_intensity`) — without it, a legitimately dark
 //! frame and a frame stuck on a mid-decode black texture are
 //! indistinguishable (BUG-100/BUG-117), so the default stays conservative
 //! and callers who know their scene is meant to be dark opt out explicitly.
@@ -228,7 +228,7 @@ fn main() {
 
     // Same outer-card override mechanism `render-generator-preset` uses: the
     // import graph carries its own `preset_metadata.params` (cam_orbit,
-    // cam_tilt, cam_dist, sun_int, env_intensity, ...) AND
+    // cam_tilt, cam_dist, 7_intensity, 1_intensity, ...) AND
     // `preset_metadata.string_params` (model_file, hdri_file). `--param`
     // resolves against both — a numeric card param id sets `params`; a
     // string param id sets `string_overrides` instead (see module doc).
@@ -256,6 +256,10 @@ fn main() {
             }
             None => {
                 eprintln!("error: import graph has no outer param or string param '{id}'");
+                eprintln!(
+                    "available numeric params: {}",
+                    params.iter().map(|p| p.id()).collect::<Vec<_>>().join(", ")
+                );
                 std::process::exit(2);
             }
         }
@@ -329,7 +333,7 @@ fn main() {
 
     // Animation mode: warmup convergence first at anim start value.
     // Resolve overrides ONCE into base params, then clone per frame.
-    let base_params: Vec<Param> = def_clone
+    let mut base_params: Vec<Param> = def_clone
         .preset_metadata
         .as_ref()
         .map(|m| m.params.iter().map(|s| Param::bundled(s.clone())).collect())
@@ -350,6 +354,12 @@ fn main() {
     // Apply string overrides ONCE, not per frame.
     if !string_overrides.is_empty() {
         runtime.apply_string_params(Some(&string_overrides));
+    }
+    // Apply numeric overrides ONCE into base params, then clone per frame.
+    for (id, v) in &args.overrides {
+        if !string_param_ids.contains(id) && let Some(p) = base_params.iter_mut().find(|p| p.id() == id) {
+            p.value = v.parse().unwrap_or_else(|e| panic!("bad value for numeric param '{id}': {e}"));
+        }
     }
 
     // Resolve wildcard matches ONCE.
@@ -372,11 +382,6 @@ fn main() {
 
     // Clone base params, set anim param(s) to start value, rebuild manifest for warmup.
     let mut warmup_params = base_params.clone();
-    for (id, v) in &args.overrides {
-        if !string_param_ids.contains(id) && let Some(p) = warmup_params.iter_mut().find(|p| p.id() == id) {
-            p.value = v.parse().unwrap_or_else(|e| panic!("bad value for numeric param '{id}': {e}"));
-        }
-    }
     for id in &anim_param_ids {
         if let Some(p) = warmup_params.iter_mut().find(|p| p.id() == id) {
             p.value = anim_start;
@@ -401,7 +406,7 @@ fn main() {
         let param_value = anim_start + (anim_end - anim_start) * (i as f32) / (anim_frames as f32 - 1.0).max(1.0);
         let frame_count = (warmup_end_frame + i) as i64;
 
-        // Clone base params (already has user overrides), set anim param(s) value.
+        // Clone base params (already carries the resolved numeric/string overrides), set anim param(s) value.
         let mut seq_params = base_params.clone();
         for id in &anim_param_ids {
             if let Some(p) = seq_params.iter_mut().find(|p| p.id() == id) {
