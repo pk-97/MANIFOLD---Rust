@@ -82,6 +82,14 @@ def main():
                 # Full key inventory: the teammate-payload shape question
                 # (does ANY field discriminate seats?) must be a lookup.
                 seat["keys"] = ",".join(sorted(payload.keys()))
+                # Command traceability (BUG-0x4w): a permission prompt must
+                # be a lookup, not a reconstruction — record what was about
+                # to run, truncated.
+                if event == "PreToolUse":
+                    ti = payload.get("tool_input") or {}
+                    cmd = ti.get("command") or ti.get("file_path")
+                    if isinstance(cmd, str) and cmd:
+                        seat["cmd"] = cmd[:500]
             except (json.JSONDecodeError, AttributeError):
                 pass
         _LOG.parent.mkdir(parents=True, exist_ok=True)
