@@ -26,6 +26,14 @@ doc header. Enforced by crates/manifold-core/tests/docs_lifecycle.rs.
 The `last-changed` date is the drift check: a doc that says "not built" but
 was touched this week is the flag to look closer (the Haiku merge housekeeper
 automates that check; this is the human-readable view).
+
+Header budget (the status-stacking class fix, Peter 2026-07-28): a design doc's
+status header is state + owed/open items + one pointer, capped at HEADER_CAP
+words. History, amendments, and per-phase stories live in the doc body or beads.
+Docs still over budget are pinned at their current size in
+`design_status_header_budget.txt` — any growth fails, and a doc that shrinks
+under the cap must lose its pin (the ratchet only burns down). Enforced with the
+lifecycle check via crates/manifold-core/tests/docs_lifecycle.rs.
 """
 from __future__ import annotations
 
@@ -176,14 +184,77 @@ def dead_shipped_docs() -> list[str]:
     return dead
 
 
+HEADER_CAP = 120  # words; the contract for a healthy status header
+BUDGET_FILE = Path(__file__).with_name("design_status_header_budget.txt")
+
+
+def status_paragraph_words(path: Path) -> int:
+    """Word count of the status header: every paragraph in the header region
+    (before the first `---` or `##`) that starts with a status-family bold tag
+    counts — the stacking disease appends sibling `**P5c …**` paragraphs, and a
+    line-3-only count would miss them."""
+    total, on = 0, False
+    for line in path.read_text(errors="replace").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("##") or stripped == "---":
+            break
+        core = stripped.lstrip("*#").lstrip()
+        if not on and core[:6].lower() == "status" and (len(core) == 6 or core[6] in ":* "):
+            on = True
+        elif on and not stripped:
+            on = False
+        elif not on and stripped.startswith("**") and any(
+                core.startswith(t) for t in ("P", "SHIPPED", "LANDED", "AMENDED", "Wave")):
+            on = True  # stacked sibling status paragraph
+        if on:
+            total += len(stripped.split())
+    return total
+
+
+def header_budget_failures() -> list[str]:
+    """Ratchet lint. A doc over HEADER_CAP fails unless pinned at >= its size;
+    a pinned doc that shrank under the cap fails until its pin is deleted."""
+    pins: dict[str, int] = {}
+    if BUDGET_FILE.exists():
+        for line in BUDGET_FILE.read_text().splitlines():
+            line = line.split("#")[0].strip()
+            if line:
+                name, words = line.rsplit(None, 1)
+                pins[name] = int(words)
+    fails = []
+    for p in sorted(DOCS.glob("*_DESIGN.md")):
+        words = status_paragraph_words(p)
+        pin = pins.pop(p.name, None)
+        if pin is not None and words <= HEADER_CAP:
+            fails.append(f"HEADER {p.name}: {words} words — under cap; delete its pin "
+                         f"from {BUDGET_FILE.name} (the ratchet only burns down)")
+        elif pin is not None and words > pin:
+            fails.append(f"HEADER {p.name}: {words} words, pinned at {pin} — headers "
+                         "never grow; move the new prose to the body or beads")
+        elif pin is None and words > HEADER_CAP:
+            fails.append(f"HEADER {p.name}: {words} words > {HEADER_CAP} cap — the "
+                         "status header is state + owed items + one pointer; history "
+                         "goes to the body or beads")
+    for name in pins:
+        fails.append(f"HEADER {name}: pinned in {BUDGET_FILE.name} but no such doc — delete the pin")
+    return fails
+
+
 def lifecycle_check() -> int:
     dead = dead_shipped_docs()
     for n in dead:
         print(f"DEAD {n}: SHIPPED, cited by no live surface")
+    header_fails = header_budget_failures()
+    for f in header_fails:
+        print(f)
     if dead:
         print(f"lifecycle: FAIL — {len(dead)} shipped doc(s) with no live citation. "
               "Either `git mv docs/<doc> docs/archive/` (+ scripts/gen_docs_index.py) "
               "or add a `Lifecycle: contract — <why>` header line.")
+    if header_fails:
+        print(f"lifecycle: FAIL — {len(header_fails)} status header(s) over budget "
+              f"(cap {HEADER_CAP} words; ratchet file: {BUDGET_FILE.name}).")
+    if dead or header_fails:
         return 1
     print("lifecycle: OK")
     return 0
