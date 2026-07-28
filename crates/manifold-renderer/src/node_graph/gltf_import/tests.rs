@@ -348,6 +348,159 @@ fn draco_primitive_reports_instead_of_vanishing_silently() {
     );
 }
 
+/// Build a minimal, valid `.glb` with TWO materials: `Mat0` has one real
+/// triangle, `Mat1`'s sole primitive's POSITION accessor points at a
+/// bufferView tagged `EXT_meshopt_compression`.
+///
+/// Unlike Draco (`write_synthetic_draco_glb`), meshopt keeps a normal,
+/// correctly-sized bufferView — the whole point of the bug (BUG-7w79) is
+/// that `reader.read_positions()` would happily succeed and hand back
+/// compressed bytes reinterpreted as raw f32, silent garbage geometry with
+/// no error. So `bufferView` 1 here is real, in-range, and exactly the
+/// right length for 3 VEC3<f32> (unlike the Draco fixture's deliberately
+/// truncated one) — detection must come from the `EXT_meshopt_compression`
+/// tag in `bufferViews[1].extensions`, not from a failed read. No
+/// `extensionsRequired` entry (same choice `write_synthetic_draco_glb`
+/// makes for Draco): this fixture reproduces the "primitive silently reads
+/// wrong" shape, not the separate "whole document refuses to load" gate.
+fn write_synthetic_meshopt_glb() -> std::path::PathBuf {
+    let tri: [[f32; 3]; 3] = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+    let mut bin = Vec::with_capacity(72);
+    for v in &tri {
+        for c in v {
+            bin.extend_from_slice(&c.to_le_bytes());
+        }
+    }
+    // Second bufferView's bytes are irrelevant content-wise (never read —
+    // the fix must reject before the read) but must be a real, in-range,
+    // correctly-sized slice so this fixture isolates the extension check
+    // from the "too-short buffer view" path the Draco fixture exercises.
+    for v in &tri {
+        for c in v {
+            bin.extend_from_slice(&c.to_le_bytes());
+        }
+    }
+
+    let doc = serde_json::json!({
+        "asset": { "version": "2.0" },
+        "extensionsUsed": ["EXT_meshopt_compression"],
+        "scene": 0,
+        "scenes": [{ "nodes": [0, 1] }],
+        "nodes": [{ "mesh": 0 }, { "mesh": 1, "name": "MeshoptNode" }],
+        "meshes": [
+            { "primitives": [{ "attributes": { "POSITION": 0 }, "material": 0 }] },
+            {
+                "name": "MeshoptMesh",
+                "primitives": [{ "attributes": { "POSITION": 1 }, "material": 1 }]
+            },
+        ],
+        "accessors": [
+            {
+                "bufferView": 0,
+                "componentType": 5126, // FLOAT
+                "count": 3,
+                "type": "VEC3",
+                "min": [0.0, 0.0, 0.0],
+                "max": [1.0, 1.0, 0.0],
+            },
+            {
+                "bufferView": 1,
+                "componentType": 5126, // FLOAT
+                "count": 3,
+                "type": "VEC3",
+                "min": [0.0, 0.0, 0.0],
+                "max": [1.0, 1.0, 0.0],
+            },
+        ],
+        "bufferViews": [
+            { "buffer": 0, "byteOffset": 0, "byteLength": 36 },
+            {
+                "buffer": 0,
+                "byteOffset": 36,
+                "byteLength": 36,
+                "extensions": {
+                    "EXT_meshopt_compression": {
+                        "buffer": 0,
+                        "byteOffset": 36,
+                        "byteLength": 36,
+                        "byteStride": 12,
+                        "count": 3,
+                        "mode": "ATTRIBUTES",
+                    },
+                },
+            },
+        ],
+        "materials": [
+            { "name": "Mat0", "pbrMetallicRoughness": { "baseColorFactor": [0.5, 0.5, 0.5, 1.0] } },
+            { "name": "Mat1", "pbrMetallicRoughness": { "baseColorFactor": [0.5, 0.5, 0.5, 1.0] } },
+        ],
+        "buffers": [{ "byteLength": bin.len() }],
+    });
+    let json_bytes = serde_json::to_vec(&doc).expect("serialize synthetic meshopt glTF JSON");
+
+    let mut json_padded = json_bytes;
+    while !json_padded.len().is_multiple_of(4) {
+        json_padded.push(b' ');
+    }
+    let mut bin_padded = bin;
+    while !bin_padded.len().is_multiple_of(4) {
+        bin_padded.push(0);
+    }
+    let total_len = 12 + 8 + json_padded.len() + 8 + bin_padded.len();
+
+    let mut glb = Vec::with_capacity(total_len);
+    glb.extend_from_slice(b"glTF");
+    glb.extend_from_slice(&2u32.to_le_bytes());
+    glb.extend_from_slice(&(total_len as u32).to_le_bytes());
+    glb.extend_from_slice(&(json_padded.len() as u32).to_le_bytes());
+    glb.extend_from_slice(b"JSON");
+    glb.extend_from_slice(&json_padded);
+    glb.extend_from_slice(&(bin_padded.len() as u32).to_le_bytes());
+    glb.extend_from_slice(b"BIN\0");
+    glb.extend_from_slice(&bin_padded);
+
+    let path = std::env::temp_dir().join(format!(
+        "manifold_synthetic_meshopt_{}_{}.glb",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    std::fs::write(&path, &glb).expect("write synthetic meshopt glb to temp dir");
+    path
+}
+
+/// BUG-7w79: a meshopt-compressed primitive must never be read as raw
+/// bytes (garbage geometry, no error) — `Mat1` (meshopt-tagged) must be
+/// dropped from the imported objects and named in
+/// `ImportReport::report_lines`, while `Mat0` (real geometry) still
+/// imports normally.
+#[test]
+fn meshopt_primitive_reports_instead_of_reading_garbage() {
+    let path = write_synthetic_meshopt_glb();
+    let (_def, report) = assemble_import_graph(&path).expect("assemble meshopt synthetic glb");
+    std::fs::remove_file(&path).ok();
+
+    assert_eq!(
+        report.material_count, 1,
+        "only Mat0 has readable geometry — Mat1 (meshopt-compressed) is dropped"
+    );
+    assert!(
+        report
+            .report_lines
+            .iter()
+            .any(|l| l.contains("EXT_meshopt_compression") && l.contains("skipped")),
+        "report must name the meshopt skip, got: {:?}",
+        report.report_lines
+    );
+    assert!(
+        report.report_lines.iter().any(|l| l.contains("MeshoptMesh") || l.contains("MeshoptNode")),
+        "report line must identify the mesh/node that was skipped, got: {:?}",
+        report.report_lines
+    );
+}
+
 /// Build a minimal, valid `.glb` with ONE triangle primitive that has NO
 /// `material` key at all — glTF's implicit default material
 /// (GLB_XFAIL_BURNDOWN_DESIGN.md D4, BUG-171). No `materials` array in

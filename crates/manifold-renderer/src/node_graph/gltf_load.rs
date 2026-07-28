@@ -1394,9 +1394,10 @@ pub(crate) struct GltfImportSummary {
     /// extensions the asset lists that we don't implement, so the import
     /// proceeds without them. One line per extension, never a silent skip.
     /// BUG-mbol: also carries per-primitive geometry skips found by
-    /// `summarize_node` — a Draco-compressed primitive (no decoder) or any
-    /// other primitive with no readable POSITION data, named by mesh/
-    /// primitive/node, never a silent zero-vertex drop. `gltf_import.rs`
+    /// `summarize_node` — a Draco- or meshopt-compressed primitive (no
+    /// decoder, BUG-7w79) or any other primitive with no readable POSITION
+    /// data, named by mesh/primitive/node, never a silent zero-vertex drop
+    /// (or, for meshopt, a silent garbage-geometry read). `gltf_import.rs`
     /// folds these into `ImportReport::report_lines`.
     pub extension_report_lines: Vec<String>,
 }
@@ -2432,6 +2433,31 @@ fn summarize_node(
         let bind_skin_matrices: Option<Vec<Mat4>> =
             node.skin().map(|skin| bind_pose_skin_matrices(&skin, document, buffers));
         for prim in mesh.primitives() {
+            // BUG-7w79: EXT_meshopt_compression leaves POSITION's
+            // bufferView normal-sized and readable — unlike Draco, whose
+            // base accessor typically has no bufferView at all — so
+            // `reader.read_positions()` below would succeed and hand back
+            // compressed bytes reinterpreted as raw f32, i.e. garbage
+            // geometry with no error. Must be checked BEFORE that read, on
+            // the accessor's bufferView extensions (the compression marker
+            // lives there per the extension's spec, not on the accessor or
+            // primitive itself).
+            let is_meshopt_compressed = prim
+                .get(&gltf::Semantic::Positions)
+                .and_then(|accessor| accessor.view())
+                .is_some_and(|view| view.extension_value("EXT_meshopt_compression").is_some());
+            if is_meshopt_compressed {
+                let label = format!(
+                    "mesh {:?} primitive {} (node {:?})",
+                    mesh.name().unwrap_or("<unnamed>"),
+                    prim.index(),
+                    node.name().unwrap_or("<unnamed>")
+                );
+                report_lines.push(format!(
+                    "{label}: EXT_meshopt_compression is not supported — primitive skipped (no decoder)"
+                ));
+                continue;
+            }
             let reader = prim.reader(|b| buffers.get(b.index()).map(|d| d.0.as_slice()));
             let Some(positions) = reader.read_positions() else {
                 // BUG-mbol: a Draco-compressed primitive's base POSITION
