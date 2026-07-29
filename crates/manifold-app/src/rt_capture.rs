@@ -177,11 +177,11 @@ pub(crate) fn drain_capture_stats(
     map
 }
 
-/// Resolve a param ID across all layers by testing mutation. Search strategy:
-/// 1. Exact match on param_id
-/// 2. Suffix match on _<param_id> (handles prefixed IDs like "8_rt_enabled")
-/// Returns (layer_index, resolved_param_id) on success, or exits with diagnostics.
-/// Only returns IDs where set_param actually changes the value (proves param exists).
+/// Resolve a param ID across all layers by testing mutation: exact match
+/// first, then suffix match on `_<param_id>` (prefixed IDs like
+/// `8_rt_enabled`). Returns `(layer_index, resolved_param_id)` — only IDs
+/// where `set_param` actually changes the value — or exits with the full
+/// per-layer param listing.
 fn resolve_param_id(project: &manifold_core::project::Project, param_id: &str) -> (usize, String) {
     // Create a test project copy to mutate without side effects.
     let mut test = project.clone();
@@ -230,7 +230,15 @@ fn resolve_param_id(project: &manifold_core::project::Project, param_id: &str) -
     std::process::exit(1);
 }
 
-fn drain_captures(device: &manifold_gpu::GpuDevice, frame: u32) {
+fn drain_captures(
+    device: &manifold_gpu::GpuDevice,
+    frame: u32,
+    // Running last-seen (hit, luma, sd) per channel label — the live-flip
+    // verdict compares snapshots of this map. The per-frame drain empties
+    // RT_CAPTURE_QUEUE, so a drain AT verdict time always sees an empty
+    // queue; the running map is the only place the history survives.
+    last_stats: &mut std::collections::BTreeMap<String, (f64, f64, f64)>,
+) {
     let caps = {
         let mut q = RT_CAPTURE_QUEUE.lock().unwrap();
         for c in &mut *q { c.frame = frame; }
@@ -239,7 +247,10 @@ fn drain_captures(device: &manifold_gpu::GpuDevice, frame: u32) {
     if caps.is_empty() { return; }
     let dir = PathBuf::from("/tmp/rt_capture");
     let _ = std::fs::create_dir_all(&dir);
-    for c in &caps { process_capture(c, device, &dir); }
+    for c in &caps {
+        last_stats.insert(c.label.clone(), compute_rt_channel_stats(c, device));
+        process_capture(c, device, &dir);
+    }
 }
 
 pub(crate) fn arm_capture() {
@@ -366,6 +377,8 @@ pub fn run(args: &[String]) -> ! {
     };
 
     // Track stats before/after live flip for verdict reporting.
+    let mut last_stats: std::collections::BTreeMap<String, (f64, f64, f64)> =
+        Default::default();
     let mut stats_before_flip: Option<std::collections::BTreeMap<String, (f64, f64, f64)>> = None;
     let mut stats_after_flip: Option<std::collections::BTreeMap<String, (f64, f64, f64)>> = None;
     let mut live_flip_sent = false;
@@ -403,14 +416,12 @@ pub fn run(args: &[String]) -> ! {
         }
         ct.timer.wait_for_deadline();
         ct.tick_frame(&state_tx);
-        if let Some(dev) = ct.content_pipeline.native_device() { drain_captures(dev, frame); }
+        if let Some(dev) = ct.content_pipeline.native_device() { drain_captures(dev, frame, &mut last_stats); }
     }
 
     // Capture stats before live flip (at end of phase 1).
     if live_flip_param.is_some() {
-        stats_before_flip = Some(drain_capture_stats(
-            ct.content_pipeline.native_device().expect("gpu device must exist"),
-        ));
+        stats_before_flip = Some(last_stats.clone());
     }
 
     // Send live flip command (toggle the param value).
@@ -440,11 +451,9 @@ pub fn run(args: &[String]) -> ! {
             }
             ct.timer.wait_for_deadline();
             ct.tick_frame(&state_tx);
-            if let Some(dev) = ct.content_pipeline.native_device() { drain_captures(dev, frame); }
+            if let Some(dev) = ct.content_pipeline.native_device() { drain_captures(dev, frame, &mut last_stats); }
         }
-        stats_after_flip = Some(drain_capture_stats(
-            ct.content_pipeline.native_device().expect("gpu device must exist"),
-        ));
+        stats_after_flip = Some(last_stats.clone());
     }
 
     // Phase 2 (paused mode only): Pause, keep calling tick_frame.
@@ -458,33 +467,55 @@ pub fn run(args: &[String]) -> ! {
             }
             ct.timer.wait_for_deadline();
             ct.tick_frame(&state_tx);
-            if let Some(dev) = ct.content_pipeline.native_device() { drain_captures(dev, host); }
+            if let Some(dev) = ct.content_pipeline.native_device() { drain_captures(dev, host, &mut last_stats); }
         }
     }
 
     // Final flush.
-    if let Some(dev) = ct.content_pipeline.native_device() { drain_captures(dev, total_frames); }
+    if let Some(dev) = ct.content_pipeline.native_device() { drain_captures(dev, total_frames, &mut last_stats); }
     drop(state_tx); drain.join().expect("drain join");
 
     // Report live-flip verdict.
-    if live_flip_sent {
-        if let (Some(before), Some(after)) = (stats_before_flip, stats_after_flip) {
+    if live_flip_sent
+        && let (Some(before), Some(after)) = (stats_before_flip, stats_after_flip)
+    {
             let mut changed = false;
-            for (label, (hit_before, luma_before, _sd_before)) in &before {
-                if let Some((hit_after, luma_after, _sd_after)) = after.get(label) {
-                    if (hit_before - hit_after).abs() > 0.01 || (luma_before - luma_after).abs() > 0.01 {
+            // Union of labels: an RT channel that only APPEARS after the
+            // flip (rt off→on) or vanishes (on→off) is the strongest
+            // possible evidence of an effective toggle — a before-keys-only
+            // walk silently missed exactly that case.
+            let labels: std::collections::BTreeSet<&String> =
+                before.keys().chain(after.keys()).collect();
+            for label in labels {
+                let b = before.get(label);
+                let a = after.get(label);
+                match (b, a) {
+                    (Some((hb, lb, _)), Some((ha, la, _))) => {
+                        if (hb - ha).abs() > 0.01 || (lb - la).abs() > 0.01 {
+                            changed = true;
+                            eprintln!(
+                                "[rt-capture] {label} stats changed: hit {hb:.6} → {ha:.6}, luma {lb:.6} → {la:.6}"
+                            );
+                        }
+                    }
+                    (None, Some((ha, la, _))) => {
                         changed = true;
                         eprintln!(
-                            "[rt-capture] {} stats changed: hit {:.6} → {:.6}, luma {:.6} → {:.6}",
-                            label, hit_before, hit_after, luma_before, luma_after
+                            "[rt-capture] {label} APPEARED after flip: hit {ha:.6}, luma {la:.6}"
                         );
                     }
+                    (Some((hb, lb, _)), None) => {
+                        changed = true;
+                        eprintln!(
+                            "[rt-capture] {label} VANISHED after flip (was hit {hb:.6}, luma {lb:.6})"
+                        );
+                    }
+                    (None, None) => unreachable!(),
                 }
             }
             let verdict = if changed { "LIVE-FLIP EFFECTIVE" } else { "LIVE-FLIP INERT" };
             println!("{verdict}");
             eprintln!("{verdict}");
-        }
     }
 
     println!("=== DONE ===");

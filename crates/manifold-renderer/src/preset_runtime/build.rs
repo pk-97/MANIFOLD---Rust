@@ -605,6 +605,7 @@ impl PresetRuntime {
             graph,
             plan,
             last_forced_outputs_epoch: seeded_forced_epoch,
+            forced_outputs_stale: false,
             executor: Executor::with_mock(),
             effect_nodes: vec![segment],
             group_mix_nodes: Vec::new(),

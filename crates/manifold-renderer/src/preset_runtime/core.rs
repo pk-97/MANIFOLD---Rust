@@ -80,6 +80,14 @@ pub struct PresetRuntime {
     /// yields identical ids — pre-bound io slots and persistent-resource
     /// pins stay valid across the swap.
     pub(super) last_forced_outputs_epoch: u64,
+    /// BUG-18l: set once when a live param write changes a node's
+    /// forced-output set (epoch moved past the built value). Plans never
+    /// swap under a live executor — the HOST consumes this via
+    /// [`Self::awaiting_forced_outputs_rebuild`] and rebuilds the whole
+    /// runtime (generator sweep / chain dispatcher), the same
+    /// pending-segments-style handshake `awaiting_segment_swap` uses.
+    /// Never cleared: the rebuild replaces the runtime, flag and all.
+    pub(super) forced_outputs_stale: bool,
     pub(super) executor: Executor,
     /// One slot per effect node in the chain graph, in chain order.
     /// Same length as the active subset of effects at build time.
@@ -1279,6 +1287,7 @@ impl PresetRuntime {
             graph,
             plan,
             last_forced_outputs_epoch: seeded_forced_epoch,
+            forced_outputs_stale: false,
             executor: Executor::new(Box::new(backend)),
             effect_nodes,
             group_mix_nodes,
@@ -1898,29 +1907,36 @@ impl PresetRuntime {
         }
     }
 
-    /// BUG-317/318/319: a live param write changed some node's
+    /// BUG-317/318/319/BUG-18l: a live param write changed some node's
     /// forced-output set (see [`Graph::forced_outputs_epoch`]). The
     /// in-place plan-recompile answer (BUG-317, then BUG-318's executor
     /// invalidation on top) is RETRACTED: swapping `ExecutionPlan` under a
     /// live executor broke the real in-app import scene twice in one night
-    /// (persistent magenta, "vertices unwired") in a way no headless repro
-    /// — synthetic, real-GLB `from_def`, real-GLB with the actual apricot
-    /// asset — reproduces; the executor's own doc states plans never swap
-    /// under a live executor, and it means it. Until the designed fix
-    /// (treat a forced-outputs change as the topology change it is: full
-    /// runtime rebuild through the host path), a live toggle is INERT and
-    /// says so loudly — `render_scene` renders natively when the stored
-    /// G-buffer targets are absent (its own guard), and nothing crashes.
-    /// The stale-but-consistent plan keeps rendering exactly what it did.
+    /// (persistent magenta, "vertices unwired") — the executor's doc states
+    /// plans never swap under a live executor, and it means it. A
+    /// forced-outputs change is a topology change: mark this runtime stale
+    /// and let the HOST rebuild it (the generator per-frame sweep / chain
+    /// dispatcher consume [`Self::awaiting_forced_outputs_rebuild`] in
+    /// their rebuild decisions). State loss across the rebuild is the
+    /// documented, accepted cost; the async accel-build transition (D17)
+    /// keeps the swap soft.
     fn refresh_plan_if_forced_outputs_changed(&mut self) {
         let epoch = self.graph.forced_outputs_epoch();
         if epoch == self.last_forced_outputs_epoch {
             return;
         }
         self.last_forced_outputs_epoch = epoch;
-        log::warn!(
-            "[preset-runtime] forced-outputs param changed live (epoch {epoch}) — the running plan cannot honor it; the toggle takes effect after this scene's runtime rebuilds (project reload / layer rebuild). BUG-319."
+        self.forced_outputs_stale = true;
+        log::info!(
+            "[preset-runtime] forced-outputs param changed live (epoch {epoch}) — flagging this runtime for a host rebuild (BUG-18l)."
         );
+    }
+
+    /// BUG-18l: true once a live forced-outputs change made the compiled
+    /// plan stale. Hosts include this in their rebuild decision, exactly
+    /// like [`Self::awaiting_segment_swap`].
+    pub fn awaiting_forced_outputs_rebuild(&self) -> bool {
+        self.forced_outputs_stale
     }
 
     /// Run one frame against the configured executor (mock-backend test path).
