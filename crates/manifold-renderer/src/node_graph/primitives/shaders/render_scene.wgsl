@@ -335,18 +335,18 @@ const PREFILTER_MAX_MIP: f32 = 5.0;
 @group(0) @binding(38) var specular_color_map: texture_2d<f32>;
 @group(0) @binding(39) var transmission_map: texture_2d<f32>;
 @group(0) @binding(40) var volume_thickness_map: texture_2d<f32>;
-// RAYTRACING_DESIGN.md RT-D3: full-res RT shadow-visibility mask (r =
-// sun visibility [0,1]), written by manifold-gpu's `ShadowRayTracer`
-// half-res dispatch + upsample. `shadow_factor` below samples this via
-// `textureLoad` at the exact fragment pixel (already native-res,
-// depth-aware-upsampled — no filtering) instead of the shadow-map path
-// when `u.scene_params.w > 0.5`. Always bound (ABI-stub discipline); a
-// 1x1 dummy when RT isn't active this frame. RAYTRACING_DESIGN.md section 5.2
-// P2 widened the underlying GPU texture format (Rust-side) to carry a
-// SECOND channel: g = AO [0,1] — same binding, same texture, no WGSL
-// declaration change needed (an unwired/R32Float dummy simply reads 0.0
-// in .g, which `rt_ao_factor` below never samples since `scene_params.w`
-// gates it the same way `shadow_factor` gates .r).
+// RAYTRACING_DESIGN.md RT-D3: full-res RT per-caster shadow-visibility
+// mask, written by manifold-gpu's `ShadowRayTracer` half-res dispatch +
+// upsample. `shadow_factor` below samples this via `textureLoad` at the
+// exact fragment pixel (already native-res, depth-aware-upsampled — no
+// filtering) instead of the shadow-map path when `u.scene_params.w > 0.5`.
+// Always bound (ABI-stub discipline); a 1x1 dummy when RT isn't active
+// this frame. Multi-caster shadow fix: rgba = one visibility channel per
+// shadow-caster slot (r=slot 0 .. a=slot 3 — same slot index the
+// non-RT caster table uses), replacing the single r=sun-visibility
+// channel that traced only `casters[0]`. AO no longer rides this texture
+// at all — it's folded into the RT irradiance term (`rt_irradiance_mask`
+// below) in-kernel.
 @group(0) @binding(41) var rt_shadow_mask: texture_2d<f32>;
 // RAYTRACING_DESIGN.md section 5.2 P2/D3: full-res, temporally-accumulated
 // demodulated irradiance (no albedo folded in — ambient*ao + gi; NO
@@ -602,17 +602,20 @@ fn pcss_shadow_factor(slot: i32, suv: vec2<f32>, ref_depth: f32, z_r: f32, searc
 // caster's frustum read as lit (no shadow data there) rather than
 // clamped-dark.
 fn shadow_factor(world_pos: vec3<f32>, slot_f: f32, frag_xy: vec2<f32>) -> f32 {
+    if slot_f < 0.0 {
+        return 1.0;
+    }
     // RAYTRACING_DESIGN.md RT-D3: single uniform-gated bool branch — RT
     // scenes never touch the shadow-map path below (it isn't even
     // rendered for them, render_scene.rs's `!rt_enabled` gate). Native-
     // res `frag_xy` (`@builtin(position)`, already pixel coordinates)
     // indexes `rt_shadow_mask` directly — it's already full-res and
-    // depth-aware-upsampled, no filtering needed.
+    // depth-aware-upsampled, no filtering needed. Multi-caster shadow fix:
+    // one visibility channel per caster slot, so this light's own slot
+    // picks the channel instead of always reading `.r`.
     if u.scene_params.w > 0.5 {
-        return textureLoad(rt_shadow_mask, vec2<i32>(frag_xy), 0).r;
-    }
-    if slot_f < 0.0 {
-        return 1.0;
+        let texel = textureLoad(rt_shadow_mask, vec2<i32>(frag_xy), 0);
+        return texel[clamp(i32(slot_f + 0.5), 0, 3)];
     }
     let slot = i32(slot_f + 0.5);
     let base = u32(slot) * CASTER_STRIDE;

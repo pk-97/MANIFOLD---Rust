@@ -455,9 +455,27 @@ const SHADOW_RAYS_MSL: &str = r#"
 using namespace metal;
 using namespace metal::raytracing;
 
+// Per-caster shadow support (multi-caster fix): mirrors the Rust
+// `RtCasterParams` field-for-field (P0 section 5.1 kernel lesson). `kind`
+// 0 = sun (`dir_or_pos` = normalized direction FROM surface TOWARD the
+// sun, `cone_or_size` = cone half-angle radians); `kind` 1 = point
+// (`dir_or_pos` = world-space light position, `cone_or_size` = world-units
+// light diameter, 0.0 = hard shadows). `color` is premultiplied
+// color*intensity.
+struct RtCasterParams {
+    packed_float3 dir_or_pos;
+    float  cone_or_size;
+    packed_float3 color;
+    uint   kind;
+};
+
+// MAX_RT_CASTERS: fixed shadow-caster slot count, matches manifold-gpu's
+// Rust `MAX_RT_CASTERS` (no compiler-enforced link between an embedded MSL
+// string constant and a Rust const — same manual-sync discipline this file
+// already uses for `MAX_RT_MATERIAL_TEXTURES`).
+constant uint MAX_RT_CASTERS = 4;
+
 struct ShadowRayParams {
-    packed_float3 sun_dir;   // normalized, points FROM surface TOWARD sun
-    float  sun_cone;         // cone half-angle radians; 0.0 = hard shadows
     uint   shadow_spp;
     uint   frame_index;
     uint2  trace_size;       // half-res (mode B, D11)
@@ -468,7 +486,11 @@ struct ShadowRayParams {
     // per pixel — emissive-hit + sun-bounce (closes the section 5.1 "no sun-bounce
     // term" gap). 0 = GI gather skipped, matching the ao_spp==0 discipline.
     uint   gi_spp;
-    packed_float3 sun_color;     // RT-P2: premultiplied sun color*intensity
+    // Multi-caster fix: number of valid entries in `casters` below. Slots
+    // at/beyond this count are skipped by `trace_shadow_rays` and read back
+    // as visibility 1.0 (unshadowed).
+    uint   caster_count;
+    RtCasterParams casters[MAX_RT_CASTERS];
     packed_float3 ambient_color; // RT-P2: flat ambient/env color
     // RT-T1-B: world-space camera eye — origin of the primary visibility
     // ray cast to find the real hit triangle at this pixel (see
@@ -484,7 +506,10 @@ struct ShadowRayParams {
     // RT-D3: ray origins come from the prepass DEPTH texture + this
     // inverse view-proj — no stored world-pos/normal G-buffer target in
     // P1. Column-major, matches `render_scene.rs`'s `mat4_inverse` output
-    // and `render_scene.wgsl`'s `Uniforms.view_proj` convention.
+    // and `render_scene.wgsl`'s `Uniforms.view_proj` convention. `casters`'
+    // fixed 4*32=128B size lands this at byte offset 208 (a 16-byte
+    // multiple) with no extra alignment padding needed — see the Rust
+    // mirror's offset assert.
     float4x4 inv_view_proj;
 };
 
@@ -803,9 +828,12 @@ static float3 world_pos_from_depth(uint2 pix, uint2 gbuffer_size, float raw_dept
 // normal is a REAL interpolated vertex normal, fetched via a PRIMARY
 // visibility ray + [`RtNormalSource`]'s bindless per-object indirection —
 // replacing the P1-era screen-space depth finite-difference reconstruction
-// (camera-facing, wrong at silhouettes/thin geometry). Output (trace_size): out_sv.r = sun visibility
-// [0,1], out_sv.g = AO [0,1] (RT-P2: extends the SAME kernel/dispatch, not
-// a parallel pass — RAYTRACING_DESIGN.md section 5.2 P2's D16 seam note). out_irr
+// (camera-facing, wrong at silhouettes/thin geometry). Output (trace_size):
+// out_sv = per-caster visibility [0,1], one channel per shadow-caster slot
+// (r=slot 0 .. a=slot 3; slots >= caster_count read 1.0, unshadowed) —
+// multi-caster fix (RT shadows previously traced only casters[0]). AO is
+// gathered in-kernel but folded straight into out_irr below, never written
+// to out_sv. out_irr
 // (RT-P2): demodulated (no-albedo) irradiance = ambient_color*ao + gi —
 // the D3 "accumulate lighting separated from albedo" term, temporally
 // accumulated downstream by `accumulate_irradiance`. No direct-sun term:
@@ -839,11 +867,10 @@ kernel void trace_shadow_rays(
     bool valid;
     float3 wp = world_pos_from_depth(gpix, p.gbuffer_size, depth_tex.read(gpix, 0), p.inv_view_proj, valid);
     if (!valid) {
-        // Void background: unoccluded either way (matches the prototype's
-        // `out_sv.write(float4(1,1,0,0), tid)` void case) — irradiance is
-        // ambient-only (no surface to shadow-test against). `.w = -1`:
-        // no object (RT-T2-C).
-        out_sv.write(float4(1, 1, 0, 0), tid);
+        // Void background: unoccluded either way, every caster slot —
+        // irradiance is ambient-only (no surface to shadow-test against).
+        // `.w = -1`: no object (RT-T2-C).
+        out_sv.write(float4(1, 1, 1, 1), tid);
         out_irr.write(float4(p.ambient_color, 0), tid);
         out_n.write(float4(0, 1, 0, -1.0), tid);
         // BUG-88m: `.a = -1` = "no traced value at this texel". Blend
@@ -869,8 +896,8 @@ kernel void trace_shadow_rays(
     // RT-T1-B (RAYTRACING_DESIGN.md section 8 Tier-1 item 2): real interpolated
     // vertex normal via a PRIMARY visibility ray from the camera through
     // `wp` — only cast when a consumer needs it (AO/GI cosine-hemisphere
-    // sampling below; the shadow ray itself biases along `sun_dir`, not
-    // `n` — BUG-309 follow-up, further down). Falls back to a default
+    // sampling below; each shadow ray biases along its OWN caster
+    // direction, not `n` — BUG-309 follow-up, further down). Falls back to a default
     // up-normal if the primary ray somehow misses (should not happen: `wp`
     // itself came from this same accel's geometry via the depth prepass,
     // but a grazing-angle/epsilon edge case shouldn't crash the kernel).
@@ -936,44 +963,73 @@ kernel void trace_shadow_rays(
         texel_scale = 1e-3; // degenerate/singular reconstruction fallback
     }
     float bias_eps = min(texel_scale * 2.0, BIAS_EPS_CAP);
-    // BUG-309 follow-up: the SHADOW ray biases along `sun_dir`, not `n` —
-    // originally because the (now-removed) depth finite-difference normal
-    // was noisy at this scene's depth-precision scale and produced a
-    // visibly scattered, wide false-shadow footprint even after the
-    // epsilon-scale fix above. `sun_dir` is exact (a CPU-computed light
-    // direction, never reconstructed), and biasing toward the light is
-    // correct for a shadow ray.
-    float3 origin = wp + p.sun_dir * bias_eps;
     // BUG-8p1h: secondary rays (AO / GI / reflection) get their OWN origin,
     // biased along the interpolated vertex normal `n` (real since RT-T1-B)
-    // — never along `sun_dir`. Sharing the sun-biased origin meant a sun
-    // BELOW the surface sank every secondary-ray origin inside the
-    // geometry (self-intersection: ao→0, GI dead, reflections hitting
-    // backfaces), so moving a zero-intensity sun visibly changed lighting
-    // — a lights-out cue integrity bug. Sun position must affect nothing
-    // but the sun's own (intensity-scaled) terms.
+    // — never along a caster's own direction. Sharing a caster-biased
+    // origin meant a caster BELOW the surface sank every secondary-ray
+    // origin inside the geometry (self-intersection: ao→0, GI dead,
+    // reflections hitting backfaces), so moving a zero-intensity caster
+    // visibly changed lighting — a lights-out cue integrity bug. A
+    // caster's position must affect nothing but its own (intensity-scaled)
+    // terms.
     float3 sec_origin = wp + n * bias_eps;
 
-    ray r;
-    r.origin = origin;
-    // t_min: reject any hit closer than the bias itself outright — the
-    // in-kernel self-intersection filter (described as "often the
-    // cleanest fix" for this class of issue) on top of the scale-aware origin offset above, so a
-    // pathological normal/winding case that still lands inside its own
-    // triangle can't register as a false shadow.
-    r.min_distance = bias_eps * 0.5;
-    r.max_distance = INFINITY;
-
+    // Multi-caster fix: trace each caster's own shadow ray independently
+    // (RT shadows previously traced only casters[0], so every other
+    // shadow-casting light rendered as fully lit). Slot i's visibility
+    // rides `sv[i]`; slots >= caster_count stay at their unshadowed
+    // default (1.0).
+    //
+    // BUG-309 follow-up: each shadow ray biases along ITS OWN
+    // toward-light direction, not `n` — the (long-removed) depth
+    // finite-difference normal was noisy at this scene's depth-precision
+    // scale and produced a visibly scattered, wide false-shadow footprint
+    // even after the epsilon-scale fix above. A caster's direction is
+    // exact (CPU-computed, never reconstructed), and biasing toward the
+    // light is correct for a shadow ray.
+    float4 sv = float4(1.0, 1.0, 1.0, 1.0);
     uint spp = max(p.shadow_spp, 1u);
-    float vis = 0.0;
-    for (uint s = 0; s < spp; s++) {
-        r.direction = cone_sample(p.sun_dir, p.sun_cone, rand2(tid, p.frame_index, s));
-        intersection_query<triangle_data, instancing> shadow_q;
-        shadow_q.reset(r, accel);
-        bool blocked = walk_with_alpha_test(shadow_q, normal_sources, material_textures, true);
-        if (!blocked) vis += 1.0;
+    uint n_casters = min(p.caster_count, MAX_RT_CASTERS);
+    for (uint c = 0; c < n_casters; c++) {
+        RtCasterParams cst = p.casters[c];
+        float3 to_light;
+        float cone_half_angle;
+        float max_dist;
+        if (cst.kind == 0u) {
+            // Sun: dir_or_pos is the normalized toward-sun direction.
+            to_light = float3(cst.dir_or_pos);
+            cone_half_angle = cst.cone_or_size;
+            max_dist = INFINITY;
+        } else {
+            // Point: dir_or_pos is the world-space light position.
+            // Occluders BEYOND the light itself must not count, so the
+            // ray stops just short of it.
+            float3 delta = float3(cst.dir_or_pos) - wp;
+            float dist = length(delta);
+            to_light = dist > 1e-6 ? delta / dist : float3(0.0, 1.0, 0.0);
+            cone_half_angle = cst.cone_or_size > 0.0 ? atan(0.5 * cst.cone_or_size / max(dist, 1e-6)) : 0.0;
+            max_dist = max(dist - bias_eps, 0.0);
+        }
+        ray r;
+        r.origin = wp + to_light * bias_eps;
+        // t_min: reject any hit closer than the bias itself outright — the
+        // in-kernel self-intersection filter on top of the scale-aware
+        // origin offset above, so a pathological normal/winding case that
+        // still lands inside its own triangle can't register as a false
+        // shadow.
+        r.min_distance = bias_eps * 0.5;
+        r.max_distance = max_dist;
+        float vis = 0.0;
+        for (uint s = 0; s < spp; s++) {
+            r.direction = cone_sample(to_light, cone_half_angle, rand2(tid, p.frame_index, c * spp + s));
+            intersection_query<triangle_data, instancing> shadow_q;
+            shadow_q.reset(r, accel);
+            bool blocked = walk_with_alpha_test(shadow_q, normal_sources, material_textures, true);
+            if (!blocked) vis += 1.0;
+        }
+        vis /= float(spp);
+        sv[c] = vis;
     }
-    vis /= float(spp);
 
     // RT-P2: AO gather — cosine-weighted hemisphere around the SAME bias
     // normal/origin the shadow ray uses (ported from the prototype's
@@ -997,7 +1053,7 @@ kernel void trace_shadow_rays(
         }
         ao /= float(p.ao_spp);
     }
-    out_sv.write(float4(vis, ao, 0, 0), tid);
+    out_sv.write(sv, tid);
     // RT-T1-C (BUG-311): expose the SAME real interpolated vertex normal
     // (`n`) already computed above for AO/GI cosine sampling, so
     // `accumulate_irradiance`'s reprojection validity test can compare a
@@ -1049,30 +1105,40 @@ kernel void trace_shadow_rays(
                 // vertex-normal buffer existed.
                 float3 hit_pos = gr.origin + gr.direction * gi_dist;
                 float3 hit_n = fetch_interpolated_normal(normal_sources, oi, gi_pid, gi_bary);
-                ray sun_r;
-                sun_r.origin = hit_pos + p.sun_dir * bias_eps;
-                sun_r.direction = cone_sample(p.sun_dir, p.sun_cone, rand2(tid, p.frame_index, 400u + s));
-                sun_r.min_distance = bias_eps * 0.5;
-                sun_r.max_distance = INFINITY;
-                intersection_query<triangle_data, instancing> sun_q;
-                sun_q.reset(sun_r, accel);
-                float hit_sun_vis = walk_with_alpha_test(sun_q, normal_sources, material_textures, true) ? 0.0 : 1.0;
-                float hit_ndotl = max(dot(hit_n, p.sun_dir), 0.0);
-                // Named, documented, tunable (RAYTRACING_DESIGN.md section 5.2 P2's
-                // "denoiser/accumulation parameters are named constants"
-                // rule, extended to P3/T1-B): folds the diffuse BRDF's 1/pi
-                // energy normalization into one scale factor (the RECEIVING
-                // point's own albedo divide happens once downstream in
-                // `render_scene.wgsl`, per D3's demodulated-irradiance
-                // discipline) — `hit_ndotl` above now supplies the real
-                // cosine term this scale used to approximate outright.
-                // Peter's morning gate tuned this range against the OLD
-                // flat-cosine stand-in; `hit_ndotl` only ever makes the
-                // bounce dimmer or equal (never brighter) than that
-                // baseline, so the committed 0.02-0.3 range still holds.
-                // (Declaration hoisted to kernel scope for RT-R1 — see the
-                // GI block's head.)
-                float3 bounce = hit_albedo * float3(p.sun_color) * hit_sun_vis * hit_ndotl * SUN_BOUNCE_INTENSITY_SCALE;
+                // Multi-caster fix: bounce off EVERY sun caster (kind==0),
+                // not just casters[0] — a zero-intensity sun (color 0)
+                // contributes nothing, so this is a strict superset of the
+                // old single-sun behavior.
+                float3 bounce = float3(0.0);
+                for (uint sc = 0; sc < n_casters; sc++) {
+                    RtCasterParams sun_cst = p.casters[sc];
+                    if (sun_cst.kind != 0u) continue;
+                    float3 sdir = float3(sun_cst.dir_or_pos);
+                    ray sun_r;
+                    sun_r.origin = hit_pos + sdir * bias_eps;
+                    sun_r.direction = cone_sample(sdir, sun_cst.cone_or_size, rand2(tid, p.frame_index, 400u + s * MAX_RT_CASTERS + sc));
+                    sun_r.min_distance = bias_eps * 0.5;
+                    sun_r.max_distance = INFINITY;
+                    intersection_query<triangle_data, instancing> sun_q;
+                    sun_q.reset(sun_r, accel);
+                    float hit_sun_vis = walk_with_alpha_test(sun_q, normal_sources, material_textures, true) ? 0.0 : 1.0;
+                    float hit_ndotl = max(dot(hit_n, sdir), 0.0);
+                    // Named, documented, tunable (RAYTRACING_DESIGN.md section 5.2 P2's
+                    // "denoiser/accumulation parameters are named constants"
+                    // rule, extended to P3/T1-B): folds the diffuse BRDF's 1/pi
+                    // energy normalization into one scale factor (the RECEIVING
+                    // point's own albedo divide happens once downstream in
+                    // `render_scene.wgsl`, per D3's demodulated-irradiance
+                    // discipline) — `hit_ndotl` above now supplies the real
+                    // cosine term this scale used to approximate outright.
+                    // Peter's morning gate tuned this range against the OLD
+                    // flat-cosine stand-in; `hit_ndotl` only ever makes the
+                    // bounce dimmer or equal (never brighter) than that
+                    // baseline, so the committed 0.02-0.3 range still holds.
+                    // (Declaration hoisted to kernel scope for RT-R1 — see the
+                    // GI block's head.)
+                    bounce += hit_albedo * float3(sun_cst.color) * hit_sun_vis * hit_ndotl * SUN_BOUNCE_INTENSITY_SCALE;
+                }
                 gi += hit_emissive + bounce;
             }
         }
@@ -1090,8 +1156,8 @@ kernel void trace_shadow_rays(
     // value" (BUG-88m) for fs_pbr's substitution gate — R2 must treat
     // `.a < 0` as invalid too when it lands.
     //
-    // `sec_origin` biases along the surface normal (BUG-8p1h — never
-    // `sun_dir`): the t_min rejection below is what protects the
+    // `sec_origin` biases along the surface normal (BUG-8p1h — never a
+    // caster direction): the t_min rejection below is what protects the
     // reflection ray from self-intersection, same as the shadow ray's.
     const float RT_REFL_MISS_HIT_DIST = 0.0;
     if (p.refl_spp > 0u && obj_id >= 0.0) {
@@ -1159,17 +1225,24 @@ kernel void trace_shadow_rays(
                 // the reflection direction, at the hit surface's roughness.
                 float3 refl_dir = reflect(-normalize(hit_pos - float3(p.camera_pos)), hit_n);
                 float3 hit_specular_env = refl_env_sample(prefiltered_env, refl_dir, hit_roughness);
-                // Sun-bounce term (unchanged from R1).
-                ray sun_r;
-                sun_r.origin = hit_pos + p.sun_dir * bias_eps;
-                sun_r.direction = cone_sample(p.sun_dir, p.sun_cone, rand2(tid, p.frame_index, 500u));
-                sun_r.min_distance = bias_eps * 0.5;
-                sun_r.max_distance = INFINITY;
-                intersection_query<triangle_data, instancing> sun_q;
-                sun_q.reset(sun_r, accel);
-                float hit_sun_vis = walk_with_alpha_test(sun_q, normal_sources, material_textures, true) ? 0.0 : 1.0;
-                float hit_ndotl = max(dot(hit_n, p.sun_dir), 0.0);
-                float3 sun_bounce_term = hit_albedo * float3(p.sun_color) * hit_sun_vis * hit_ndotl * SUN_BOUNCE_INTENSITY_SCALE;
+                // Sun-bounce term — multi-caster fix: sums every sun caster
+                // (kind==0), same discipline as the GI gather's bounce above.
+                float3 sun_bounce_term = float3(0.0);
+                for (uint sc = 0; sc < n_casters; sc++) {
+                    RtCasterParams sun_cst = p.casters[sc];
+                    if (sun_cst.kind != 0u) continue;
+                    float3 sdir = float3(sun_cst.dir_or_pos);
+                    ray sun_r;
+                    sun_r.origin = hit_pos + sdir * bias_eps;
+                    sun_r.direction = cone_sample(sdir, sun_cst.cone_or_size, rand2(tid, p.frame_index, 500u + sc));
+                    sun_r.min_distance = bias_eps * 0.5;
+                    sun_r.max_distance = INFINITY;
+                    intersection_query<triangle_data, instancing> sun_q;
+                    sun_q.reset(sun_r, accel);
+                    float hit_sun_vis = walk_with_alpha_test(sun_q, normal_sources, material_textures, true) ? 0.0 : 1.0;
+                    float hit_ndotl = max(dot(hit_n, sdir), 0.0);
+                    sun_bounce_term += hit_albedo * float3(sun_cst.color) * hit_sun_vis * hit_ndotl * SUN_BOUNCE_INTENSITY_SCALE;
+                }
                 // Full raster-parity shading: emissive + diffuse-env + specular-env + sun-bounce.
                 traced = hit_emissive + hit_albedo * hit_diffuse_env + hit_f0 * hit_specular_env + sun_bounce_term;
             } else {
@@ -1248,7 +1321,7 @@ kernel void upsample_shadow(
     if (tid.x >= p.gbuffer_size.x || tid.y >= p.gbuffer_size.y) return;
     float d = depth_tex.read(tid, 0);
     if (d >= 1.0 - 1e-6) {
-        hi_sv.write(float4(1, 1, 0, 0), tid);
+        hi_sv.write(float4(1, 1, 1, 1), tid);
         hi_irr.write(float4(p.ambient_color, 0), tid);
         hi_n.write(float4(0, 1, 0, -1.0), tid);
         // BUG-88m: `.a = -1` must survive the half->full chain — Blend
@@ -1273,7 +1346,7 @@ kernel void upsample_shadow(
     // normal divergence to near-zero weight while still full-weighting a
     // shared flat surface's own precision noise.
     const float UPSAMPLE_NORMAL_POWER = 32.0;
-    float2 acc_sv = 0.0; float3 acc_irr = 0.0; float3 acc_n = 0.0; float3 acc_refl = 0.0; float wsum = 0.0;
+    float4 acc_sv = 0.0; float3 acc_irr = 0.0; float3 acc_n = 0.0; float3 acc_refl = 0.0; float wsum = 0.0;
     for (int dy = 0; dy <= 1; dy++)
     for (int dx = 0; dx <= 1; dx++) {
         int2 q = clamp(lo_c + int2(dx, dy), int2(0), int2(p.trace_size) - 1);
@@ -1285,13 +1358,13 @@ kernel void upsample_shadow(
         float w_depth = exp(-fabs(qd - d) / 0.001);
         float w_normal = pow(max(dot(ref_n, qn), 0.0), UPSAMPLE_NORMAL_POWER);
         float w = max(w_bilin * w_depth * w_normal, 1e-5);
-        acc_sv += lo_sv.read(uint2(q)).rg * w;
+        acc_sv += lo_sv.read(uint2(q)) * w;
         acc_irr += lo_irr.read(uint2(q)).rgb * w;
         acc_n += qn * w;
         acc_refl += lo_refl.read(uint2(q)).rgb * w;
         wsum += w;
     }
-    hi_sv.write(float4(acc_sv / wsum, 0, 0), tid);
+    hi_sv.write(acc_sv / wsum, tid);
     hi_irr.write(float4(acc_irr / wsum, 0), tid);
     float3 n_avg = acc_n / wsum;
     float n_len = length(n_avg);
@@ -1428,7 +1501,14 @@ kernel void atrous_filter(
         int2(1, 1), int2(1, -1), int2(-1, 1), int2(-1, -1)
     };
     float3 acc_irr = center_irr;
-    float2 acc_sv = src_sv.read(tid).rg;
+    // Multi-caster fix: `src_sv`/`dst_sv` now carry up to 4 independent
+    // caster-slot visibility channels (.rgba), not 2 (.rg — vis+AO, AO
+    // since moved into irradiance) — reading/writing only `.rg` here would
+    // silently zero slots 2/3 on every à-trous pass, outside this file's
+    // stated edit list but a direct correctness consequence of the format
+    // change above (not a judgment call — same treatment as
+    // `upsample_shadow`).
+    float4 acc_sv = src_sv.read(tid);
     float3 acc_refl = src_refl.read(tid).rgb;
     float wsum = 1.0;
     for (int i = 0; i < 8; i++) {
@@ -1444,7 +1524,7 @@ kernel void atrous_filter(
         float w_luma = exp(-fabs(luma(qirr) - center_luma) / luma_sigma);
         float w = w_depth * w_normal * w_luma;
         acc_irr += qirr * w;
-        acc_sv += src_sv.read(uq).rg * w;
+        acc_sv += src_sv.read(uq) * w;
         // RT-R2: the refl channel's own weight — shared depth/normal stops,
         // its own roughness-narrowed luma stop on the REFLECTION signal.
         float3 qrefl = src_refl.read(uq).rgb;
@@ -1454,7 +1534,7 @@ kernel void atrous_filter(
         wsum += w;
     }
     dst_irr.write(float4(acc_irr / wsum, 0), tid);
-    dst_sv.write(float4(acc_sv / wsum, 0, 0), tid);
+    dst_sv.write(acc_sv / wsum, tid);
     // RT-T2-C: `.w` = object id, passed through untouched (never blended).
     dst_n.write(float4(center_n, center_n4.w), tid);
     // RT-R2: reflection radiance filters with roughness-narrowed luma
@@ -1731,6 +1811,45 @@ kernel void debug_fetch_interpolated_normal(
 }
 "#;
 
+/// One shadow-casting light's ray-tracing params — the per-caster payload
+/// of [`ShadowRayParams::casters`]. Field order/packing mirrors the MSL
+/// `RtCasterParams` exactly (P0 section 5.1 kernel lesson).
+///
+/// `kind` 0 = sun (`dir_or_pos` = normalized direction FROM the surface
+/// TOWARD the sun, `cone_or_size` = cone half-angle radians); `kind` 1 =
+/// point (`dir_or_pos` = world-space light position, `cone_or_size` =
+/// world-units light diameter, `0.0` = hard shadows). `color` is
+/// premultiplied color×intensity, same convention as `render_scene.rs`'s
+/// `Light::color`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct RtCasterParams {
+    pub dir_or_pos: [f32; 3],
+    pub cone_or_size: f32,
+    pub color: [f32; 3],
+    pub kind: u32,
+}
+
+const _: () = assert!(std::mem::size_of::<RtCasterParams>() == 32);
+
+impl RtCasterParams {
+    pub const ZERO: Self = Self {
+        dir_or_pos: [0.0; 3],
+        cone_or_size: 0.0,
+        color: [0.0; 3],
+        kind: 0,
+    };
+
+    pub fn new(dir_or_pos: [f32; 3], cone_or_size: f32, color: [f32; 3], kind: u32) -> Self {
+        Self {
+            dir_or_pos,
+            cone_or_size,
+            color,
+            kind,
+        }
+    }
+}
+
 /// CPU mirror of `ShadowRayParams` above — field order and packing MUST
 /// match exactly (P0 section 5.1 kernel lesson: `packed_float3` in MSL == dense
 /// `[f32; 3]` here, no padding).
@@ -1738,32 +1857,35 @@ kernel void debug_fetch_interpolated_normal(
 /// RAYTRACING_DESIGN.md section 5.2 P2 extended this in place (same struct, same
 /// binding(1) slot, same single half-res dispatch — D11/D16's "P2 joins
 /// the SAME half-res dispatch and SAME upsample" seam, not a parallel
-/// pass): `ao_radius`/`ao_spp` drive the added AO-ray gather, `sun_color`/
-/// `ambient_color` are the demodulated-irradiance term's inputs (no
-/// albedo folded in here — that happens once, downstream, in
-/// `render_scene.wgsl`'s shading step, per D3's "accumulate lighting
-/// separated from albedo").
+/// pass): `ao_radius`/`ao_spp` drive the added AO-ray gather, `ambient_color`
+/// is the demodulated-irradiance term's flat-env input (no albedo folded
+/// in here — that happens once, downstream, in `render_scene.wgsl`'s
+/// shading step, per D3's "accumulate lighting separated from albedo").
+///
+/// Per-caster shadow support (multi-caster fix): `sun_dir`/`sun_cone`/
+/// `sun_color` (single-caster-only) replaced with `casters`/`caster_count`
+/// — up to [`MAX_RT_CASTERS`] independently-traced casters, one visibility
+/// channel per slot in `trace_shadow_rays`'s `out_sv` output.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct ShadowRayParams {
-    pub sun_dir: [f32; 3],
-    pub sun_cone: f32,
     pub shadow_spp: u32,
     pub frame_index: u32,
     pub trace_size: [u32; 2],
     pub gbuffer_size: [u32; 2],
     /// World-space max AO ray distance (RT-P2). 0 samples (`ao_spp == 0`)
-    /// skips the AO gather entirely, leaving `out_sv.g` at its cleared
-    /// value.
+    /// skips the AO gather entirely.
     pub ao_radius: f32,
     /// AO rays per pixel (RT-P2 half-res dispatch).
     pub ao_spp: u32,
     /// RT-P3: one-bounce GI gather rays/pixel (emissive-hit + sun-bounce).
     /// 0 skips the gather entirely (same discipline as `ao_spp == 0`).
     pub gi_spp: u32,
-    /// Sun light color, PREMULTIPLIED with intensity (linear HDR) — same
-    /// convention as `render_scene.rs`'s `Light::color`.
-    pub sun_color: [f32; 3],
+    /// Number of valid entries in `casters` (0..=[`MAX_RT_CASTERS`]). Slots
+    /// at/beyond this count are ignored by the kernel and read back as
+    /// visibility 1.0 (unshadowed).
+    pub caster_count: u32,
+    pub casters: [RtCasterParams; MAX_RT_CASTERS],
     /// Flat ambient/env color (scene `atmosphere.ambient_tint` scaled by
     /// a named constant — RAYTRACING_DESIGN.md section 5.2 P2's "denoiser/
     /// accumulation parameters are named constants" rule; the exact
@@ -1782,34 +1904,31 @@ pub struct ShadowRayParams {
     /// = reflection rays/pixel (1 in v1; 0 disables the branch — inert in
     /// T3, the kernel reads these in T5). `refl_max_roughness` =
     /// RT_REFLECTION_MAX_ROUGHNESS (0.6 starting, RD7 BRDF-domain split);
-    /// `refl_rough_band` = the blend-band width. `_pad_refl` makes the
-    /// block a clean 16B so `_pad_align_mat4` still lands `inv_view_proj`
-    /// on its 16-byte boundary (now 112, was 96).
+    /// `refl_rough_band` = the blend-band width. `_pad_refl` pads the block
+    /// to 16B — with `casters` sized as it is, `inv_view_proj` lands on a
+    /// 16-byte boundary (208) without any extra alignment padding; see the
+    /// offset assert below.
     pub refl_spp: u32,
     pub refl_max_roughness: f32,
     pub refl_rough_band: f32,
     _pad_refl: u32,
-    /// MSL's `float4x4` requires 16-byte alignment; the 104 bytes above it
-    /// (88 through `camera_pos` + 16 for RT-R1's `refl_*` block) need 8
-    /// more to reach the next 16-byte boundary (112) — so this 8B pad
-    /// (`[u32; 2]`) lands `inv_view_proj` at 112. `#[repr(C)]` does NOT
-    /// know `[[f32; 4]; 4]` needs 16-byte alignment (natural alignment 4,
-    /// from `f32`) — without this pad the GPU reads `inv_view_proj` early,
-    /// the same alignment-gotcha class as the `packed_float3` lesson
-    /// (P0 section 5.1) for a matrix. Caught by the offset assert below — don't
-    /// resize this padding without re-deriving the offset.
-    _pad_align_mat4: [u32; 2],
     /// Column-major, matches `render_scene.rs`'s `mat4_inverse` output.
     pub inv_view_proj: [[f32; 4]; 4],
 }
 
+/// Fixed per-dispatch shadow-caster slot count — mirrors `render_scene.rs`'s
+/// `MAX_SHADOW_CASTING_LIGHTS` (both are 4; no compiler-enforced link
+/// between the two crates, same manual-sync discipline this file already
+/// uses for other cross-crate constants).
+pub const MAX_RT_CASTERS: usize = 4;
+
 impl ShadowRayParams {
-    /// Construct with the alignment padding zeroed — callers never set
-    /// `_pad_align_mat4` directly (it's not `pub`).
+    /// Construct with the alignment padding zeroed. `casters` may contain
+    /// up to [`MAX_RT_CASTERS`] entries; extras beyond that are ignored and
+    /// `caster_count` is clamped to the slice's (capped) length.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        sun_dir: [f32; 3],
-        sun_cone: f32,
+        casters: &[RtCasterParams],
         shadow_spp: u32,
         frame_index: u32,
         trace_size: [u32; 2],
@@ -1817,7 +1936,6 @@ impl ShadowRayParams {
         ao_radius: f32,
         ao_spp: u32,
         gi_spp: u32,
-        sun_color: [f32; 3],
         ambient_color: [f32; 3],
         camera_pos: [f32; 3],
         inv_view_proj: [[f32; 4]; 4],
@@ -1825,9 +1943,12 @@ impl ShadowRayParams {
         refl_max_roughness: f32,
         refl_rough_band: f32,
     ) -> Self {
+        let caster_count = casters.len().min(MAX_RT_CASTERS) as u32;
+        let mut caster_arr = [RtCasterParams::ZERO; MAX_RT_CASTERS];
+        for (slot, c) in caster_arr.iter_mut().zip(casters.iter()) {
+            *slot = *c;
+        }
         Self {
-            sun_dir,
-            sun_cone,
             shadow_spp,
             frame_index,
             trace_size,
@@ -1835,14 +1956,14 @@ impl ShadowRayParams {
             ao_radius,
             ao_spp,
             gi_spp,
-            sun_color,
+            caster_count,
+            casters: caster_arr,
             ambient_color,
             camera_pos,
             refl_spp,
             refl_max_roughness,
             refl_rough_band,
             _pad_refl: 0,
-            _pad_align_mat4: [0; 2],
             inv_view_proj,
         }
     }
@@ -1879,13 +2000,13 @@ impl GiMaterial {
     }
 }
 
-// RT-D3/RT-P2 alignment gotcha (see `_pad_align_mat4`'s doc comment): this
-// is the regression guard a GPU test alone wouldn't localize as clearly —
-// if `inv_view_proj`'s offset ever drifts from 96 again (a field
-// reordered/resized above it), this fails at compile time instead of
-// silently reading garbage on the GPU.
-const _: () = assert!(std::mem::offset_of!(ShadowRayParams, inv_view_proj) == 112);
-const _: () = assert!(std::mem::size_of::<ShadowRayParams>() == 176);
+// RT-D3/RT-P2 alignment gotcha (see `ShadowRayParams::refl_spp` block's doc
+// comment): this is the regression guard a GPU test alone wouldn't localize
+// as clearly — if `inv_view_proj`'s offset ever drifts from its required
+// 16-byte-aligned value (a field reordered/resized above it), this fails at
+// compile time instead of silently reading garbage on the GPU.
+const _: () = assert!(std::mem::offset_of!(ShadowRayParams, inv_view_proj) == 208);
+const _: () = assert!(std::mem::size_of::<ShadowRayParams>() == 272);
 
 /// RT-T1-B (RAYTRACING_DESIGN.md section 8 Tier-1 item 2): per-object bindless
 /// indirection for real vertex-normal interpolation in the RT trace kernel
@@ -2989,11 +3110,11 @@ impl ShadowRayTracer for MetalShadowRayTracer {
 /// not happen for the shared-storage params buffer P1 always allocates).
 fn params_buffer_gbuffer_size(buffer: &GpuBuffer) -> Option<[u32; 2]> {
     let ptr = buffer.mapped_ptr()?;
-    // Offset of `gbuffer_size` within `ShadowRayParams`: sun_dir(12) +
-    // sun_cone(4) + shadow_spp(4) + frame_index(4) + trace_size(8) = 32.
-    const GBUFFER_SIZE_OFFSET: usize = 32;
+    // Compile-time offset (not a hand-counted magic number) — survives any
+    // future `ShadowRayParams` field reordering/resizing without drifting.
+    let offset = std::mem::offset_of!(ShadowRayParams, gbuffer_size);
     unsafe {
-        let p = ptr.add(GBUFFER_SIZE_OFFSET) as *const u32;
+        let p = ptr.add(offset) as *const u32;
         Some([p.read_unaligned(), p.add(1).read_unaligned()])
     }
 }

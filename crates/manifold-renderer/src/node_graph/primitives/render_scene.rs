@@ -1724,9 +1724,12 @@ impl RenderScene {
 
     /// Half-res trace target + full-res upsampled mask, resized with the
     /// scene's own output resolution (RT-D3's mode-B half-res dispatch,
-    /// D11). RT-P2: widened from `R32Float` (vis only) to `Rg16Float`
-    /// (r = sun visibility, g = AO) — the SAME texture, extending the
-    /// SAME dispatch (D16's seam note), not a second mask.
+    /// D11). RT-P2 widened this from `R32Float` (vis only) to `Rg16Float`
+    /// (r = sun visibility, g = AO). Multi-caster shadow fix widens it
+    /// again to `Rgba16Float`: one visibility channel per shadow-caster
+    /// slot (r=slot 0 .. a=slot 3); AO moved out entirely (folded into
+    /// irradiance in-kernel, never written here) — the SAME texture,
+    /// extending the SAME dispatch (D16's seam note), not a second mask.
     fn ensure_rt_masks(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
         if self.rt_mask_width == width && self.rt_mask_height == height && self.rt_mask_full.is_some() {
             return;
@@ -1738,7 +1741,7 @@ impl RenderScene {
                 width: w,
                 height: h,
                 depth: 1,
-                format: manifold_gpu::GpuTextureFormat::Rg16Float,
+                format: manifold_gpu::GpuTextureFormat::Rgba16Float,
                 dimension: manifold_gpu::GpuTextureDimension::D2,
                 usage: manifold_gpu::GpuTextureUsage::SHADER_WRITE
                     | manifold_gpu::GpuTextureUsage::SHADER_READ
@@ -4059,8 +4062,37 @@ impl EffectNode for RenderScene {
             // handler runs on a separate Metal-owned thread, never
             // synchronously inside evaluate()).
             if rt_ready {
-                let sun = &casters[0];
-                let sun_dir = [-sun.dir[0], -sun.dir[1], -sun.dir[2]];
+                // Multi-caster shadow fix: previously only `casters[0]`
+                // (the first shadow-casting light) was traced — every
+                // other shadow-casting light rendered as fully lit. Build
+                // one `RtCasterParams` per caster (same slot order the
+                // caster table above already uses, so `shadow_factor`'s
+                // `slot_f` indexes this array directly).
+                let rt_casters: Vec<manifold_gpu::raytrace::RtCasterParams> = casters
+                    .iter()
+                    .map(|l| {
+                        let (dir_or_pos, cone_or_size, kind) = match l.mode {
+                            crate::node_graph::light::LightMode::Sun => {
+                                ([-l.dir[0], -l.dir[1], -l.dir[2]], SOFT_SHADOW_CONE_RADIANS, 0u32)
+                            }
+                            crate::node_graph::light::LightMode::Point => {
+                                let light_size = match l.shadow_softness {
+                                    crate::node_graph::light::ShadowSoftness::Contact { light_size } => {
+                                        light_size
+                                    }
+                                    _ => 0.0,
+                                };
+                                (l.pos, light_size, 1u32)
+                            }
+                        };
+                        manifold_gpu::raytrace::RtCasterParams::new(
+                            dir_or_pos,
+                            cone_or_size,
+                            [l.color[0], l.color[1], l.color[2]],
+                            kind,
+                        )
+                    })
+                    .collect();
                 let Some(inv_view_proj) = mat4_inverse(view_proj) else {
                     // A degenerate camera projection — no camera this file
                     // builds produces one; skip the RT pass rather than trace
@@ -4084,8 +4116,7 @@ impl EffectNode for RenderScene {
                     .map(|d| d.uniforms.scene_params[1])
                     .fold(0.0f32, f32::max);
                 let params = manifold_gpu::raytrace::ShadowRayParams::new(
-                    sun_dir,
-                    SOFT_SHADOW_CONE_RADIANS,
+                    &rt_casters,
                     1,
                     self.jitter_frame_index,
                     [half_w, half_h],
@@ -4093,7 +4124,6 @@ impl EffectNode for RenderScene {
                     AO_RADIUS_WORLD_UNITS,
                     AO_SAMPLES_PER_PIXEL,
                     GI_SAMPLES_PER_PIXEL,
-                    [sun.color[0], sun.color[1], sun.color[2]],
                     [
                         atmosphere.ambient_tint[0] * AMBIENT_IRRADIANCE_SCALE * scene_ambient,
                         atmosphere.ambient_tint[1] * AMBIENT_IRRADIANCE_SCALE * scene_ambient,

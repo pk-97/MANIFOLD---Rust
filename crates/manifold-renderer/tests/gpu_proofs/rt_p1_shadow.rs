@@ -37,7 +37,8 @@ use std::ffi::c_void;
 use std::slice;
 
 use manifold_gpu::raytrace::{
-    GiMaterial, MetalShadowRayTracer, RtObjectGeometry, ShadowRayParams, ShadowRayTracer,
+    GiMaterial, MetalShadowRayTracer, RtCasterParams, RtObjectGeometry, ShadowRayParams,
+    ShadowRayTracer,
 };
 use manifold_gpu::{GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
 
@@ -201,9 +202,12 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
     // ao_spp: 0 (AO gather skipped — P1 fixture only proves hard shadows);
     // sun_color/ambient_color: unused by this test's assertions (out_irr
     // is never read here).
+    // Multi-caster shadow fix: a single sun caster in slot 0 — same
+    // `sun_dir`/`sun_cone` this proof always used, now expressed as one
+    // `RtCasterParams` entry instead of top-level `ShadowRayParams` fields.
+    let casters = [RtCasterParams::new([0.0, 0.0, 1.0], 0.0, [0.0, 0.0, 0.0], 0)];
     let params = ShadowRayParams::new(
-        [0.0, 0.0, 1.0],
-        0.0,
+        &casters,
         1,
         0,
         [2, 1],
@@ -211,7 +215,6 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         0.0,
         0,
         0, // RT-P3: gi_spp — 0, GI gather skipped, this proof only asserts on out_sv
-        [0.0, 0.0, 0.0],
         [0.0, 0.0, 0.0],
         [0.0, 0.0, 0.0], // RT-T1-B: camera_pos — unused, ao_spp/gi_spp both 0 above
         IDENTITY,
@@ -413,9 +416,12 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
         mip_levels: 1,
     });
 
+    // Multi-caster shadow fix: a single sun caster in slot 0 — same
+    // `sun_dir`/`sun_cone` this proof always used, now expressed as one
+    // `RtCasterParams` entry instead of top-level `ShadowRayParams` fields.
+    let casters = [RtCasterParams::new([0.0, 0.0, 1.0], 0.0, [0.0, 0.0, 0.0], 0)];
     let params = ShadowRayParams::new(
-        [0.0, 0.0, 1.0],
-        0.0,
+        &casters,
         1,
         0,
         [2, 1],
@@ -423,7 +429,6 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
         0.0,
         0,
         0, // RT-P3: gi_spp — 0, GI gather skipped, this proof only asserts on out_sv
-        [0.0, 0.0, 0.0],
         [0.0, 0.0, 0.0],
         [0.0, 0.0, 0.0], // RT-T1-B: camera_pos — unused, ao_spp/gi_spp both 0 above
         IDENTITY,
