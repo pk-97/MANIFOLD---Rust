@@ -594,6 +594,12 @@ constant float RT_REFL_ACCUM_ALPHA = 0.1;
 // Range 0.3–0.7, untuned.
 constant float RT_REFL_VIRTUAL_REPROJ_ROUGHNESS_BLEND = 0.5;
 
+// RT-R2 clamp (BUG-dx6w): variance-clip width in standard deviations for
+// the specular-history neighborhood clamp. Range 0.5–3.0, untuned
+// (tuning is Peter's look). Smaller = ghosts die faster but more
+// re-noising under motion.
+constant float RT_REFL_CLAMP_GAMMA = 1.0;
+
 struct RtNormalSource {
     ulong  vertex_base_addr;
     uint   vertex_stride;
@@ -1603,6 +1609,36 @@ kernel void atrous_filter(
 // would race, since one thread's write destination (`tid`) can be another
 // thread's read source (`prev_tid`) within the same dispatch, with no
 // ordering guarantee between compute threads.
+// BUG-dx6w: variance clip (Salvi-style) — clamp reprojected specular
+// history to mean ± RT_REFL_CLAMP_GAMMA·stddev of the CURRENT frame's
+// 3x3 reflection neighborhood. The specular path has no depth test (a
+// virtual image's depth never matches the surface), so stale history
+// that passes the normal test previously decayed only at the blend
+// rate — the camera-sweep trail Peter rejected (D-61 verdict). At a
+// noisy texel the box widens with the noise, so converged history
+// survives exactly where there is noise worth amortizing; at a flat
+// texel the box collapses and history snaps to current, which is
+// harmless (nothing to amortize).
+inline float3 clamp_refl_history(float3 hist,
+                                 texture2d<float> hi_refl,
+                                 uint2 tid, uint2 size) {
+    float3 m1 = float3(0.0);
+    float3 m2 = float3(0.0);
+    for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            int2 t = clamp(int2(tid) + int2(dx, dy), int2(0), int2(size) - 1);
+            float3 c = hi_refl.read(uint2(t)).rgb;
+            m1 += c;
+            m2 += c * c;
+        }
+    }
+    m1 /= 9.0;
+    m2 /= 9.0;
+    float3 sigma = sqrt(max(m2 - m1 * m1, float3(0.0)));
+    return clamp(hist, m1 - RT_REFL_CLAMP_GAMMA * sigma,
+                       m1 + RT_REFL_CLAMP_GAMMA * sigma);
+}
+
 kernel void accumulate_irradiance(
     constant AccumulateParams&           p                    [[buffer(1)]],
     // RT-T2-C (object motion): per-object world→prev-world delta
@@ -1816,7 +1852,7 @@ kernel void accumulate_irradiance(
                     }
                 }
                 if (wsum > 1e-4) {
-                    refl_write = mix(rsum / wsum, cur_refl.rgb, RT_REFL_ACCUM_ALPHA);
+                    refl_write = mix(clamp_refl_history(rsum / wsum, hi_refl, tid, p.size), cur_refl.rgb, RT_REFL_ACCUM_ALPHA);
                 }
             }
         }
@@ -1848,6 +1884,23 @@ kernel void debug_fetch_interpolated_normal(
     if (tid != 0u) return;
     float3 n = fetch_interpolated_normal(normal_sources, p.instance_id, p.primitive_id, float2(p.bary));
     out_normal[0] = packed_float3(n);
+}
+
+// BUG-dx6w value-test-only surface, mirroring the RT-T1-B
+// `debug_fetch_interpolated_normal` precedent above — exercises the EXACT
+// SAME `clamp_refl_history` helper `accumulate_irradiance` calls
+// internally, against a caller-supplied 3x3 neighborhood texture and
+// history value, no accumulation pass involved. Not part of the production
+// dispatch path (never called by `render_scene.rs`).
+kernel void debug_clamp_refl_history(
+    texture2d<float>              hi_refl [[texture(0)]],
+    constant packed_float3&        history [[buffer(0)]],
+    device packed_float3*          out     [[buffer(1)]],
+    uint tid [[thread_position_in_grid]])
+{
+    if (tid != 0u) return;
+    float3 r = clamp_refl_history(float3(history), hi_refl, uint2(1, 1), uint2(3, 3));
+    out[0] = packed_float3(r);
 }
 "#;
 
@@ -2565,6 +2618,11 @@ pub struct MetalShadowRayTracer {
     /// doc comment. Always compiled (tiny kernel, negligible cost); never
     /// dispatched by the production `render_scene.rs` path.
     debug_fetch_normal_pipeline: GpuComputePipeline,
+    /// BUG-dx6w value-test-only surface (`debug_clamp_refl_history`'s only
+    /// caller) — see the MSL `debug_clamp_refl_history` kernel's doc
+    /// comment. Always compiled (tiny kernel, negligible cost); never
+    /// dispatched by the production `render_scene.rs` path.
+    debug_clamp_refl_history_pipeline: GpuComputePipeline,
     /// RT-T2-A: 1x1 fully-opaque texture bound into every one of
     /// `trace_shadow_rays`'s `alpha_textures` slots that this frame's
     /// `dispatch_shadow_rays` call doesn't supply a real texture for —
@@ -2706,6 +2764,17 @@ impl MetalShadowRayTracer {
             ]),
         );
 
+        let debug_clamp_refl_history_pipeline = compile_pipeline(
+            device,
+            &library,
+            "debug_clamp_refl_history",
+            identity_slot_map(&[
+                (0, SlotKind::Texture),
+                (0, SlotKind::Buffer),
+                (1, SlotKind::Buffer),
+            ]),
+        );
+
         let dummy_alpha_tex = create_dummy_alpha_texture(device);
 
         Self {
@@ -2714,6 +2783,7 @@ impl MetalShadowRayTracer {
             atrous_pipeline,
             accumulate_pipeline,
             debug_fetch_normal_pipeline,
+            debug_clamp_refl_history_pipeline,
             dummy_alpha_tex,
         }
     }
@@ -2766,6 +2836,75 @@ impl MetalShadowRayTracer {
             enc.setBuffer_offset_atIndex(Some(normal_sources.raw()), 0, 0);
             enc.setBuffer_offset_atIndex(Some(params_buffer.raw()), 0, 1);
             enc.setBuffer_offset_atIndex(Some(out_buffer.raw()), 0, 2);
+            enc.dispatchThreadgroups_threadsPerThreadgroup(
+                MTLSize { width: 1, height: 1, depth: 1 },
+                MTLSize { width: 1, height: 1, depth: 1 },
+            );
+        }
+        enc.endEncoding();
+        cb.commit();
+        unsafe { cb.waitUntilCompleted() };
+
+        let out_ptr = out_buffer
+            .mapped_ptr()
+            .expect("debug output buffer must be CPU-mapped");
+        let mut result = [0.0f32; 3];
+        unsafe {
+            std::ptr::copy_nonoverlapping(out_ptr as *const f32, result.as_mut_ptr(), 3);
+        }
+        result
+    }
+
+    /// BUG-dx6w value-test-only entry point — dispatches the SAME
+    /// `clamp_refl_history` MSL helper `accumulate_irradiance` uses
+    /// internally, against a caller-supplied 3x3 `hi_refl` neighborhood
+    /// (row-major, `neighborhood[0]` = top-left) and a history value. No
+    /// accumulation pass, no ray tracing/RNG involved. Synchronous (commits
+    /// and waits) — test-only call pattern, never used on a hot path.
+    pub fn debug_clamp_refl_history(
+        &self,
+        device: &GpuDevice,
+        neighborhood: &[[f32; 4]; 9],
+        history: [f32; 3],
+    ) -> [f32; 3] {
+        let neighborhood_tex = device.create_texture(&GpuTextureDesc {
+            width: 3,
+            height: 3,
+            depth: 1,
+            format: GpuTextureFormat::Rgba32Float,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ,
+            label: "bug-dx6w-debug-clamp-refl-history-neighborhood",
+            mip_levels: 1,
+        });
+        let neighborhood_bytes: Vec<u8> = neighborhood
+            .iter()
+            .flat_map(|texel| texel.iter().flat_map(|c| c.to_le_bytes()))
+            .collect();
+        device.upload_texture(&neighborhood_tex, &neighborhood_bytes);
+
+        let history_buffer = device.create_buffer_shared(16); // packed_float3, rounded up
+        let history_ptr = history_buffer
+            .mapped_ptr()
+            .expect("debug history buffer must be CPU-mapped");
+        unsafe {
+            std::ptr::copy_nonoverlapping(history.as_ptr(), history_ptr as *mut f32, 3);
+        }
+        let out_buffer = device.create_buffer_shared(16); // packed_float3, rounded up
+        out_buffer.zero_fill();
+
+        let cb = device
+            .raw_queue()
+            .commandBuffer()
+            .expect("Failed to acquire command buffer for BUG-dx6w debug dispatch");
+        let enc: Retained<ProtocolObject<dyn MTLComputeCommandEncoder>> = cb
+            .computeCommandEncoder()
+            .expect("computeCommandEncoder failed");
+        unsafe {
+            enc.setComputePipelineState(&self.debug_clamp_refl_history_pipeline.state);
+            enc.setTexture_atIndex(Some(&neighborhood_tex.raw), 0);
+            enc.setBuffer_offset_atIndex(Some(history_buffer.raw()), 0, 0);
+            enc.setBuffer_offset_atIndex(Some(out_buffer.raw()), 0, 1);
             enc.dispatchThreadgroups_threadsPerThreadgroup(
                 MTLSize { width: 1, height: 1, depth: 1 },
                 MTLSize { width: 1, height: 1, depth: 1 },
