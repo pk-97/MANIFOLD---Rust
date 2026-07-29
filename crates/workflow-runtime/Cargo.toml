@@ -1,0 +1,22 @@
+[package]
+name = "workflow-runtime"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Runner for semantic workflow programs (docs/WORKFLOW_RUNTIME_DESIGN.md):
+# every model interaction is one stateless API call returning a typed
+# artifact; this crate owns all side effects. Leaf crate — depends on no
+# manifold crate. Gates and verdicts are delegated to scripts/gate_runner.py.
+
+[[bin]]
+name = "workflow"
+path = "src/main.rs"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = "0.8"
+
+[lints]
+workspace = true
