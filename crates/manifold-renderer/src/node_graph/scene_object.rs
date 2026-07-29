@@ -33,6 +33,13 @@ pub struct SceneObject {
     /// `false` = no draw AND no shadow cast (an invisible object leaves
     /// no shadow).
     pub visible: bool,
+    /// Whether this object casts shadows onto direct-light shadowing
+    /// (raster shadow maps + the RT shadow-ray pass). `false` removes it
+    /// ONLY from that: it still occludes AO, feeds GI, and appears in
+    /// reflections and primary hits, on both the raster and RT paths —
+    /// mirrors `node.light`'s `cast_shadows` param
+    /// (`primitives/light.rs`), same "float 0..1, modulatable" shape.
+    pub cast_shadows: bool,
     /// Local TRS. Identity ([`Transform::default`]) when the `transform`
     /// input port is unwired.
     pub transform: Transform,
@@ -111,6 +118,7 @@ mod tests {
         // empty construction reads as inert.
         let obj = SceneObject {
             visible: false,
+            cast_shadows: true,
             transform: Transform::default(),
             material: None,
             mesh: None,
@@ -142,6 +150,7 @@ mod tests {
     fn scene_object_is_copy_and_cheap_to_clone() {
         let obj = SceneObject {
             visible: true,
+            cast_shadows: true,
             transform: Transform::default(),
             material: None,
             mesh: Some(Slot(0)),

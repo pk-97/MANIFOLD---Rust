@@ -77,6 +77,7 @@ pub fn card_visible_for(type_id: &str, param: &str) -> bool {
             "shadow_softness",
         ],
         "node.transform_3d" => &["pos_x", "pos_y", "pos_z", "rot_x", "rot_y", "rot_z"],
+        "node.scene_object" => &["cast_shadows"],
         "node.bake_environment" => &["intensity", "fill"],
         // RAYTRACING_DESIGN.md D14/section 5.2/section 9 RD9: the auto-stamp already curates the
         // root to exactly these three (RENDER_SCENE_STAMPED_PARAMS), and the

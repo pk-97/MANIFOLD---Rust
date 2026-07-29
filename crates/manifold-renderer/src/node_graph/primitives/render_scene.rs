@@ -784,7 +784,7 @@ pub struct RenderScene {
     /// emissive) table for the GI gather's emissive-hit + sun-bounce terms
     /// — rebuilt (CPU-mapped, rewritten in place, no realloc unless the
     /// object COUNT changes) every RT-enabled frame from the SAME
-    /// `shadow_caster_draws` order the accel structure's `objects` slice
+    /// `opaque_draws` order the accel structure's `objects` slice
     /// uses, so a GI ray hit's `instance_id` indexes this directly.
     rt_gi_materials: Option<manifold_gpu::GpuBuffer>,
     rt_gi_materials_capacity: usize,
@@ -800,7 +800,7 @@ pub struct RenderScene {
     /// [`manifold_gpu::raytrace::RtNormalSource`] bindless indirection table
     /// for real vertex-normal interpolation in the trace kernel — same
     /// rebuild cadence/discipline as `rt_gi_materials` above (rebuilt every
-    /// RT-ready frame from the SAME `objects`/`shadow_caster_draws` order).
+    /// RT-ready frame from the SAME `objects`/`opaque_draws` order).
     rt_normal_sources: Option<manifold_gpu::GpuBuffer>,
     rt_normal_sources_capacity: usize,
     /// RAYTRACING_DESIGN.md section 5.2 P2: half-res/full-res demodulated
@@ -2906,7 +2906,7 @@ impl EffectNode for RenderScene {
         // "still-empty, pad to one zeroed stub" pass moved to just before
         // the march dispatch (RAYTRACING_DESIGN.md section 5.2 P3 appends
         // emissive pseudo-lights to `shaft_light_data` LATER in this
-        // function, after `shadow_caster_draws` is built; padding here,
+        // function, after `opaque_draws` is built; padding here,
         // before those appends, would leave a stub 3-vec4 at index 0 that
         // `shaft_light_count` (still 0 at THIS point) never accounts for,
         // desyncing the shader's `li * LIGHT_STRIDE` indexing from the
@@ -3178,6 +3178,13 @@ impl EffectNode for RenderScene {
             /// the camera along its forward axis. Used only to order the
             /// Blend group back-to-front; unread for Opaque/Mask objects.
             sort_depth: f32,
+            /// Per-object shadow-cast toggle (`node.scene_object`'s
+            /// `cast_shadows` param). `false` removes this object from the
+            /// raster shadow-map depth pass and the RT shadow-ray mask
+            /// ONLY — it stays in the opaque depth prepass, the RT accel
+            /// structure, AO, GI, reflections, and primary hits on both
+            /// paths.
+            cast_shadows: bool,
             /// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: this object routes to
             /// Pass B AND wants the opaque-scene-color snapshot bound at
             /// @binding(27) (`Blend` + `transmission_factor > 0`). Every
@@ -3474,6 +3481,7 @@ impl EffectNode for RenderScene {
                 alpha_mode,
                 sort_depth,
                 is_transmissive,
+                cast_shadows: object.cast_shadows,
             });
         }
 
@@ -3676,8 +3684,12 @@ impl EffectNode for RenderScene {
         let identity_stub = self.identity_instance_stub.as_ref().expect("ensured");
         // IMPORT_FIDELITY_DESIGN.md D8/F-P5: "a window must not throw an
         // opaque shadow" — Blend objects are excluded from every caster's
-        // depth-only pass below, never just the main draw.
-        let shadow_caster_draws: Vec<&ObjectDraw> = draws
+        // depth-only pass below, never just the main draw. This is the
+        // opaque/mask draw list — NOT a caster list — also feeding the
+        // camera depth prepass and the RT accel structure below, so its
+        // membership stays "every non-Blend object" regardless of that
+        // object's own `cast_shadows` toggle.
+        let opaque_draws: Vec<&ObjectDraw> = draws
             .iter()
             .filter(|d| d.alpha_mode != AlphaMode::Blend)
             .collect();
@@ -3689,6 +3701,12 @@ impl EffectNode for RenderScene {
         // no-op each caster; the explicit gate makes that invariant load-
         // bearing instead of incidental).
         if has_casters && !(rt_enabled && rt_ready) {
+            // Per-object shadow toggle: this raster depth-only pass is the
+            // ONLY place `cast_shadows == false` removes an object from —
+            // it stays in `opaque_draws` (and therefore the prepass/accel
+            // above and below) unchanged.
+            let caster_draws: Vec<&ObjectDraw> =
+                opaque_draws.iter().copied().filter(|d| d.cast_shadows).collect();
             let shadow_pipeline = self.shadow_pipeline.as_ref().expect("ensured").clone();
             let shadow_ds = self.shadow_depth_stencil.as_ref().expect("ensured");
             for (slot, l) in casters.iter().enumerate() {
@@ -3711,8 +3729,8 @@ impl EffectNode for RenderScene {
                 let mut hasher = ahash::AHasher::default();
                 hasher.write(bytemuck::bytes_of(&vp));
                 hasher.write_u32(l.shadow_resolution);
-                hasher.write_usize(shadow_caster_draws.len());
-                for d in &shadow_caster_draws {
+                hasher.write_usize(caster_draws.len());
+                for d in &caster_draws {
                     hasher.write(bytemuck::bytes_of(&d.uniforms.model));
                     d.vertices_generation.hash(&mut hasher);
                     d.instances_generation.hash(&mut hasher);
@@ -3741,14 +3759,14 @@ impl EffectNode for RenderScene {
                 }
                 self.shadow_cache_keys[slot] = Some(shadow_key);
 
-                let shadow_uniforms: Vec<ShadowUniforms> = shadow_caster_draws
+                let shadow_uniforms: Vec<ShadowUniforms> = caster_draws
                     .iter()
                     .map(|d| ShadowUniforms {
                         light_view_proj: vp,
                         model: d.uniforms.model,
                     })
                     .collect();
-                let shadow_bindings: Vec<[GpuBinding; 3]> = shadow_caster_draws
+                let shadow_bindings: Vec<[GpuBinding; 3]> = caster_draws
                     .iter()
                     .zip(&shadow_uniforms)
                     .map(|(d, su)| {
@@ -3770,7 +3788,7 @@ impl EffectNode for RenderScene {
                         ]
                     })
                     .collect();
-                let shadow_draws: Vec<manifold_gpu::DepthMsaaDraw> = shadow_caster_draws
+                let shadow_draws: Vec<manifold_gpu::DepthMsaaDraw> = caster_draws
                     .iter()
                     .zip(&shadow_bindings)
                     .map(|(d, b)| {
@@ -3800,7 +3818,7 @@ impl EffectNode for RenderScene {
         // ATTACHMENT. Reuses `shadow_pipeline`/`shadow_depth_stencil` (a
         // depth-only pipeline + write-enabled-Less state), fed the CAMERA's
         // `view_proj` instead of a light's — same draw set as Pass A's
-        // opaque/mask group (`shadow_caster_draws` already excludes Blend).
+        // opaque/mask group (`opaque_draws` already excludes Blend).
         // Skipped entirely when the scene has no transmissive object
         // (zero-transmission = zero extra passes, same lazy contract as the
         // shaft/velocity features above). ----
@@ -3808,14 +3826,14 @@ impl EffectNode for RenderScene {
             let opaque_depth_pipeline = self.shadow_pipeline.as_ref().expect("ensured above").clone();
             let opaque_depth_ds = self.shadow_depth_stencil.as_ref().expect("ensured above");
             let opaque_depth_snapshot = self.opaque_depth_snapshot.as_ref().expect("ensured above");
-            let cam_uniforms: Vec<ShadowUniforms> = shadow_caster_draws
+            let cam_uniforms: Vec<ShadowUniforms> = opaque_draws
                 .iter()
                 .map(|d| ShadowUniforms {
                     light_view_proj: view_proj,
                     model: d.uniforms.model,
                 })
                 .collect();
-            let cam_bindings: Vec<[GpuBinding; 3]> = shadow_caster_draws
+            let cam_bindings: Vec<[GpuBinding; 3]> = opaque_draws
                 .iter()
                 .zip(&cam_uniforms)
                 .map(|(d, su)| {
@@ -3837,7 +3855,7 @@ impl EffectNode for RenderScene {
                     ]
                 })
                 .collect();
-            let cam_draws: Vec<manifold_gpu::DepthMsaaDraw> = shadow_caster_draws
+            let cam_draws: Vec<manifold_gpu::DepthMsaaDraw> = opaque_draws
                 .iter()
                 .zip(&cam_bindings)
                 .map(|(d, b)| {
@@ -3876,7 +3894,7 @@ impl EffectNode for RenderScene {
         // bearing, per the P1 brief's own escalation line). ----
         if rt_enabled && has_casters {
             let vsize = std::mem::size_of::<MeshVertex>() as u32;
-            let objects: Vec<manifold_gpu::raytrace::RtObjectGeometry> = shadow_caster_draws
+            let objects: Vec<manifold_gpu::raytrace::RtObjectGeometry> = opaque_draws
                 .iter()
                 .map(|d| manifold_gpu::raytrace::RtObjectGeometry {
                     vertex_buffer: d.vertices,
@@ -3896,6 +3914,7 @@ impl EffectNode for RenderScene {
                     alpha_mask: d.alpha_mode == AlphaMode::Mask,
                     alpha_cutoff: d.uniforms.alpha_params[1],
                     base_color_texture: d.base_color_map,
+                    cast_shadows: d.cast_shadows,
                 })
                 .collect();
 
@@ -3929,6 +3948,11 @@ impl EffectNode for RenderScene {
             let topo_key = hasher.finish();
             for o in &objects {
                 hasher.write(bytemuck::bytes_of(&o.transform));
+                // Per-object cast_shadows toggle rewrites only the instance
+                // mask (see `refit_accel`), same cheap path as a transform
+                // change — folded into the SAME key so a toggle with no
+                // transform change still triggers a refit.
+                hasher.write_u8(o.cast_shadows as u8);
             }
             let accel_key = hasher.finish();
             // Content key: topo key plus every draw's slot generation, on a
@@ -3939,7 +3963,7 @@ impl EffectNode for RenderScene {
             // otherwise force a refit every frame).
             let mut content_hasher = ahash::AHasher::default();
             topo_key.hash(&mut content_hasher);
-            for d in shadow_caster_draws.iter() {
+            for d in opaque_draws.iter() {
                 d.vertices_generation.hash(&mut content_hasher);
             }
             let content_key = content_hasher.finish();
@@ -3947,7 +3971,7 @@ impl EffectNode for RenderScene {
             let gpu = ctx.gpu_encoder();
             // RAYTRACING_DESIGN.md section 5.2 P3: sized to THIS frame's object
             // count, same NLL-borrow reason the tracer/masks/params
-            // buffers above are ensured before `shadow_caster_draws`'
+            // buffers above are ensured before `opaque_draws`'
             // long-lived immutable borrow starts.
             ensure_rt_gi_materials(
                 &mut self.rt_gi_materials,
@@ -4111,7 +4135,7 @@ impl EffectNode for RenderScene {
                 // in the graph keeps a floor if ANY material asks for one;
                 // `AMBIENT_IRRADIANCE_SCALE` is the knob-at-1 ceiling, not a
                 // floor.
-                let scene_ambient = shadow_caster_draws
+                let scene_ambient = opaque_draws
                     .iter()
                     .map(|d| d.uniforms.scene_params[1])
                     .fold(0.0f32, f32::max);
@@ -4144,14 +4168,14 @@ impl EffectNode for RenderScene {
                     0.1,
                 );
                 // RAYTRACING_DESIGN.md section 5.2 P3: rebuild the per-object
-                // material table from the SAME `shadow_caster_draws` order
+                // material table from the SAME `opaque_draws` order
                 // the accel's `objects` slice used above — `d.uniforms.
                 // base_color`/`d.uniforms.emission` are the resolved
                 // per-object factors `render_scene.wgsl`'s `resolve_albedo`/
                 // `resolve_emissive` already use for the raster combine, so
                 // the GI gather's emissive-hit/sun-bounce terms read the
                 // SAME material values the surface shading does.
-                let gi_materials_data: Vec<manifold_gpu::raytrace::GiMaterial> = shadow_caster_draws
+                let gi_materials_data: Vec<manifold_gpu::raytrace::GiMaterial> = opaque_draws
                     .iter()
                     .map(|d| {
                         manifold_gpu::raytrace::GiMaterial::new(
@@ -4217,7 +4241,7 @@ impl EffectNode for RenderScene {
                     let ptr = obj_motion_buffer
                         .mapped_ptr()
                         .expect("rt_obj_motion must be CPU-mapped (create_buffer_shared)");
-                    for (i, d) in shadow_caster_draws.iter().enumerate() {
+                    for (i, d) in opaque_draws.iter().enumerate() {
                         let delta = mat4_inverse(d.uniforms.model)
                             .map(|inv| mat4_mul(d.uniforms.prev_model, inv))
                             .unwrap_or(IDENTITY_M4);
@@ -4320,7 +4344,7 @@ impl EffectNode for RenderScene {
                     };
                     let atrous_params = manifold_gpu::raytrace::AtrousParams::new(
                         [width, height], step, history_valid,
-                        shadow_caster_draws.len() as u32,
+                        opaque_draws.len() as u32,
                     );
                     tracer.atrous_pass(
                         gpu.native_enc,
@@ -4362,7 +4386,7 @@ impl EffectNode for RenderScene {
                     [width, height],
                     IRRADIANCE_ACCUM_ALPHA,
                     reset,
-                    shadow_caster_draws.len() as u32,
+                    opaque_draws.len() as u32,
                     cam.pos,
                     inv_view_proj,
                     prev_view_proj,
@@ -4428,7 +4452,7 @@ impl EffectNode for RenderScene {
                 // alone: an RT-enabled scene whose accel isn't ready yet
                 // has no GI-gathered emissive term either, so gating the
                 // glow the same way keeps both RT-P3 additions consistent.
-                for d in &shadow_caster_draws {
+                for d in &opaque_draws {
                     let emission = d.uniforms.emission;
                     if emission[0] > 0.0 || emission[1] > 0.0 || emission[2] > 0.0 {
                         let m = d.uniforms.model;

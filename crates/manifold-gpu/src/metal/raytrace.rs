@@ -182,7 +182,23 @@ pub struct RtObjectGeometry<'a> {
     /// `ensure_normal_sources`'s call site) — an alpha-masked object with no
     /// texture wired is a material-authoring gap, not a crash.
     pub base_color_texture: Option<&'a GpuTexture>,
+    /// Per-object shadow-cast toggle (`node.scene_object`'s `cast_shadows`
+    /// param, threaded through `render_scene.rs`'s `ObjectDraw`). `false`
+    /// clears `RT_MASK_SHADOW_CASTER` from this instance's mask (see
+    /// [`build_instance_buffer`]) — it still carries `RT_MASK_VISIBLE`, so
+    /// it stays hit by every query EXCEPT the shadow/sun-bounce rays that
+    /// mask against `RT_MASK_SHADOW_CASTER` alone.
+    pub cast_shadows: bool,
 }
+
+/// RT instance mask bits (`MTLAccelerationStructureInstanceDescriptor::mask`,
+/// matched by `intersection_query::reset`'s mask argument). Every instance
+/// carries `RT_MASK_VISIBLE`; `RT_MASK_SHADOW_CASTER` is additionally set
+/// only when the object's `cast_shadows` is on. Manual-sync discipline: kept
+/// in lockstep with the MSL `constant uint` pair of the same name in
+/// `SHADOW_RAYS_MSL` below.
+pub const RT_MASK_VISIBLE: u32 = 0x01;
+pub const RT_MASK_SHADOW_CASTER: u32 = 0x02;
 
 /// Encode this object's BLAS build onto an ALREADY-OPEN acceleration-
 /// structure encoder (BUG-308/RT-D4 — see `build_accel`'s doc comment for
@@ -250,6 +266,12 @@ fn to_packed_4x3(m: [[f32; 4]; 4]) -> MTLPackedFloat4x3 {
     }
 }
 
+/// Every instance always carries [`RT_MASK_VISIBLE`]; [`RT_MASK_SHADOW_CASTER`]
+/// is added only when the object's `cast_shadows` is on.
+fn instance_mask(cast_shadows: bool) -> u32 {
+    RT_MASK_VISIBLE | if cast_shadows { RT_MASK_SHADOW_CASTER } else { 0 }
+}
+
 fn build_instance_buffer(device: &GpuDevice, objects: &[RtObjectGeometry]) -> GpuBuffer {
     let stride = std::mem::size_of::<MTLAccelerationStructureInstanceDescriptor>();
     let buf = device.create_buffer_shared((stride * objects.len().max(1)) as u64);
@@ -260,7 +282,7 @@ fn build_instance_buffer(device: &GpuDevice, objects: &[RtObjectGeometry]) -> Gp
         let desc = MTLAccelerationStructureInstanceDescriptor {
             transformationMatrix: to_packed_4x3(obj.transform),
             options: MTLAccelerationStructureInstanceOptions::None,
-            mask: 0xFF,
+            mask: instance_mask(obj.cast_shadows),
             intersectionFunctionTableOffset: 0,
             accelerationStructureIndex: i as u32,
         };
@@ -386,10 +408,15 @@ fn add_ready_completion_handler<T: Send + 'static>(
     }
 }
 
-/// Refit `accel`'s TLAS in place — cheap (instance-transform-only) update,
-/// used when an object's transform changes but its topology/vertex count
-/// doesn't (so the BLAS list is unchanged). Rewrites the instance buffer's
-/// transforms from `objects` first, then refits.
+/// Refit `accel`'s TLAS in place — cheap (instance-transform-and-mask-only)
+/// update, used when an object's transform or `cast_shadows` toggle changes
+/// but its topology/vertex count doesn't (so the BLAS list is unchanged).
+/// Rewrites the instance buffer's transforms AND masks from `objects` first,
+/// then refits — the mask must be kept in lockstep here or a `cast_shadows`
+/// toggle with no accompanying transform change would refit the TLAS
+/// (`render_scene.rs`'s `accel_key` folds `cast_shadows` in alongside the
+/// transform) without ever updating the mask this fn is the only writer of
+/// outside `build_instance_buffer`.
 pub(crate) fn refit_accel(device: &GpuDevice, accel: &RtAccel, objects: &[RtObjectGeometry]) {
     debug_assert_eq!(
         objects.len(),
@@ -398,6 +425,7 @@ pub(crate) fn refit_accel(device: &GpuDevice, accel: &RtAccel, objects: &[RtObje
          list (and instance buffer) don't match; call build_accel again instead (topology change)"
     );
     let stride = std::mem::size_of::<MTLAccelerationStructureInstanceDescriptor>();
+    let mask_offset = std::mem::offset_of!(MTLAccelerationStructureInstanceDescriptor, mask);
     let ptr = accel
         .instance_buffer
         .mapped_ptr()
@@ -406,6 +434,8 @@ pub(crate) fn refit_accel(device: &GpuDevice, accel: &RtAccel, objects: &[RtObje
         unsafe {
             let field_ptr = ptr.add(i * stride) as *mut MTLPackedFloat4x3;
             field_ptr.write_unaligned(to_packed_4x3(obj.transform));
+            let mask_ptr = ptr.add(i * stride + mask_offset) as *mut u32;
+            mask_ptr.write_unaligned(instance_mask(obj.cast_shadows));
         }
     }
 
@@ -474,6 +504,16 @@ struct RtCasterParams {
 // string constant and a Rust const — same manual-sync discipline this file
 // already uses for `MAX_RT_MATERIAL_TEXTURES`).
 constant uint MAX_RT_CASTERS = 4;
+
+// RT instance mask bits — matches manifold-gpu's Rust `RT_MASK_VISIBLE` /
+// `RT_MASK_SHADOW_CASTER` (same manual-sync discipline as `MAX_RT_CASTERS`
+// above). Shadow rays (direct-light visibility + the GI/reflection
+// sun-bounce rays) mask against `RT_MASK_SHADOW_CASTER` alone, so a
+// `cast_shadows = false` object drops out of shadowing ONLY — every other
+// query (primary, AO, GI, reflection) masks against `RT_MASK_VISIBLE`,
+// which every instance always carries.
+constant uint RT_MASK_VISIBLE = 0x01;
+constant uint RT_MASK_SHADOW_CASTER = 0x02;
 
 struct ShadowRayParams {
     uint   shadow_spp;
@@ -924,7 +964,7 @@ kernel void trace_shadow_rays(
             pr.min_distance = 0.0;
             pr.max_distance = dist + dist * 1e-3 + 1e-4;
             intersection_query<triangle_data, instancing> primary_q;
-            primary_q.reset(pr, accel);
+            primary_q.reset(pr, accel, RT_MASK_VISIBLE);
             if (walk_with_alpha_test(primary_q, normal_sources, material_textures, false)) {
                 uint primary_iid = primary_q.get_committed_instance_id();
                 n = fetch_interpolated_normal(normal_sources, primary_iid, primary_q.get_committed_primitive_id(), primary_q.get_committed_triangle_barycentric_coord());
@@ -1023,7 +1063,7 @@ kernel void trace_shadow_rays(
         for (uint s = 0; s < spp; s++) {
             r.direction = cone_sample(to_light, cone_half_angle, rand2(tid, p.frame_index, c * spp + s));
             intersection_query<triangle_data, instancing> shadow_q;
-            shadow_q.reset(r, accel);
+            shadow_q.reset(r, accel, RT_MASK_SHADOW_CASTER);
             bool blocked = walk_with_alpha_test(shadow_q, normal_sources, material_textures, true);
             if (!blocked) vis += 1.0;
         }
@@ -1048,7 +1088,7 @@ kernel void trace_shadow_rays(
         for (uint s = 0; s < p.ao_spp; s++) {
             ao_r.direction = cosine_hemisphere(n, blue_noise_sample(tid, p.frame_index, s, p.ao_spp));
             intersection_query<triangle_data, instancing> ao_q;
-            ao_q.reset(ao_r, accel);
+            ao_q.reset(ao_r, accel, RT_MASK_VISIBLE);
             if (!walk_with_alpha_test(ao_q, normal_sources, material_textures, true)) ao += 1.0;
         }
         ao /= float(p.ao_spp);
@@ -1086,7 +1126,7 @@ kernel void trace_shadow_rays(
         for (uint s = 0; s < p.gi_spp; s++) {
             gr.direction = cosine_hemisphere(n, blue_noise_sample(tid, p.frame_index, s, p.gi_spp));
             intersection_query<triangle_data, instancing> gi_q;
-            gi_q.reset(gr, accel);
+            gi_q.reset(gr, accel, RT_MASK_VISIBLE);
             bool gi_hit = walk_with_alpha_test(gi_q, normal_sources, material_textures, false);
             if (gi_hit) {
                 uint oi = gi_q.get_committed_instance_id();
@@ -1120,7 +1160,7 @@ kernel void trace_shadow_rays(
                     sun_r.min_distance = bias_eps * 0.5;
                     sun_r.max_distance = INFINITY;
                     intersection_query<triangle_data, instancing> sun_q;
-                    sun_q.reset(sun_r, accel);
+                    sun_q.reset(sun_r, accel, RT_MASK_SHADOW_CASTER);
                     float hit_sun_vis = walk_with_alpha_test(sun_q, normal_sources, material_textures, true) ? 0.0 : 1.0;
                     float hit_ndotl = max(dot(hit_n, sdir), 0.0);
                     // Named, documented, tunable (RAYTRACING_DESIGN.md section 5.2 P2's
@@ -1184,7 +1224,7 @@ kernel void trace_shadow_rays(
             rr.min_distance = bias_eps * 0.5;
             rr.max_distance = INFINITY;
             intersection_query<triangle_data, instancing> refl_q;
-            refl_q.reset(rr, accel);
+            refl_q.reset(rr, accel, RT_MASK_VISIBLE);
             float3 traced;
             float hit_dist = RT_REFL_MISS_HIT_DIST;
             if (walk_with_alpha_test(refl_q, normal_sources, material_textures, false)) {
@@ -1238,7 +1278,7 @@ kernel void trace_shadow_rays(
                     sun_r.min_distance = bias_eps * 0.5;
                     sun_r.max_distance = INFINITY;
                     intersection_query<triangle_data, instancing> sun_q;
-                    sun_q.reset(sun_r, accel);
+                    sun_q.reset(sun_r, accel, RT_MASK_SHADOW_CASTER);
                     float hit_sun_vis = walk_with_alpha_test(sun_q, normal_sources, material_textures, true) ? 0.0 : 1.0;
                     float hit_ndotl = max(dot(hit_n, sdir), 0.0);
                     sun_bounce_term += hit_albedo * float3(sun_cst.color) * hit_sun_vis * hit_ndotl * SUN_BOUNCE_INTENSITY_SCALE;

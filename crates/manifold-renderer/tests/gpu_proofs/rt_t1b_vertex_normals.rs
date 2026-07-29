@@ -103,6 +103,7 @@ fn fetch_interpolated_normal_2tri_matches_cpu_oracle() {
         alpha_mask: false,
         alpha_cutoff: 0.5,
         base_color_texture: None,
+        cast_shadows: true,
     }];
 
     let mut normal_sources_slot = None;
