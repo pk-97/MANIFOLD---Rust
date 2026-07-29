@@ -2938,7 +2938,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         {
             *sig = self.native_signal_value;
         }
-        native_enc.add_completed_handler_with_status("Compositor");
+        // Error logging is installed by create_encoder for every buffer
+        // (BUG-665r universal-logging fix) — no per-site call needed.
         if self.profiling_enabled {
             // D6: profiled commit waits synchronously (see the Generators CB
             // above) — never on the live path.
