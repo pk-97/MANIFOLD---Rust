@@ -60,7 +60,7 @@ use manifold_core::params::{Param, ParamManifest};
 use manifold_gpu::GpuDevice;
 use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_renderer::headless_readback::{
-    encode_rgba8_png, non_black_fraction, readback_raw_halves, readback_tonemapped_rgba8,
+    encode_rgba8_png, mean_abs_half_diff, non_black_fraction, readback_raw_halves, readback_tonemapped_rgba8,
 };
 use manifold_renderer::node_graph::PrimitiveRegistry;
 use manifold_renderer::node_graph::gltf_import::assemble_import_graph;
@@ -564,6 +564,15 @@ fn main() {
     println!("OK {} ({}x{})", args.out.display(), filmstrip_width, args.height);
 }
 
+/// BUG-jhpj: "effectively stable" threshold for the epsilon tier of the
+/// convergence check, in mean absolute linear-HDR units per component
+/// (see `mean_abs_half_diff`). Measured on ABeautifulGame with RT on
+/// (this bug's repro): worst steady-state accumulator dither is 0.00076
+/// (mean abs per-component f16); this is 6.6x that worst observed value.
+/// A texture-decode swap (>0.1 linear) is orders of magnitude above,
+/// so the BUG-100/BUG-117 discrimination survives.
+const EPSILON_STABLE: f64 = 5e-3;
+
 /// Single-frame convergence render (warmup phase or normal mode).
 fn render_single_frame(
     device: &GpuDevice,
@@ -578,7 +587,7 @@ fn render_single_frame(
     let mut prev_raw: Option<Vec<u8>> = None;
     let mut stable_count = 0u32;
     let mut converged = false;
-    let mut last_fraction = 0.0f64;
+    let mut last_fraction;
     let mut final_rgba = Vec::new();
 
     // Same convergence-poll pattern as
@@ -640,8 +649,23 @@ fn render_single_frame(
         let io_pending = runtime.io_pending();
         let raw = readback_raw_halves(device, &target.texture, args.width, args.height);
         let byte_stable = prev_raw.as_deref() == Some(raw.as_slice());
+        // BUG-jhpj: the RT irradiance accumulator (fixed-alpha EMA over
+        // per-frame jittered samples) dithers at steady state forever, so
+        // exact byte-stability never lands with RT on. Epsilon tier: a
+        // frame whose mean abs component delta is under EPSILON_STABLE
+        // counts as stable too. Decode swaps exceed this by orders of
+        // magnitude, so the BUG-100/BUG-117 discrimination survives.
+        let mean_diff = if byte_stable {
+            0.0
+        } else {
+            prev_raw
+                .as_deref()
+                .map(|p| mean_abs_half_diff(p, &raw))
+                .unwrap_or(f64::MAX)
+        };
+        let eps_stable = byte_stable || mean_diff < EPSILON_STABLE;
         prev_raw = Some(raw);
-        if byte_stable && !io_pending {
+        if eps_stable && !io_pending {
             stable_count += 1;
         } else {
             stable_count = 0;
@@ -659,8 +683,8 @@ fn render_single_frame(
             let frame_rgba = readback_tonemapped_rgba8(device, &target.texture, args.width, args.height);
             let frame_fraction = non_black_fraction(&frame_rgba);
             println!(
-                "trace: frame={} fraction={:.4} io_pending={} byte_stable={} stable_count={}",
-                frame, frame_fraction, io_pending, byte_stable, stable_count
+                "trace: frame={} fraction={:.4} io_pending={} byte_stable={} stable_count={} mean_diff={:.6}",
+                frame, frame_fraction, io_pending, byte_stable, stable_count, mean_diff
             );
         }
 
@@ -679,8 +703,13 @@ fn render_single_frame(
     }
 
     if !converged {
+        // BUG-jhpj: `last_fraction` is only written after a stable streak,
+        // so a scene that renders fine but never stabilizes used to report
+        // 0.0000 ("all black") — measure the final frame for the warning.
+        let rgba = readback_tonemapped_rgba8(device, &target.texture, args.width, args.height);
+        last_fraction = non_black_fraction(&rgba);
         eprintln!(
-            "render-import: WARNING — never converged after {} frames (last non-black fraction {:.4}); a background texture decode may be stuck",
+            "render-import: WARNING — never converged after {} frames (final-frame non-black fraction {:.4}); a decode may be stuck or the frame never stabilized",
             args.frames_max, last_fraction
         );
         std::process::exit(2);
