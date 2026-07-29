@@ -11,6 +11,11 @@ use crate::artifacts::ArtifactKind;
 #[serde(deny_unknown_fields)]
 pub struct Program {
     pub name: String,
+    /// Hard cap on total tokens across the whole run, retries included —
+    /// the machine guard against runaway spend. Defaults to a generous
+    /// 500K (Peter: sensible at first, must not block normal runs).
+    /// Overrun suspends the run; raise and rerun to resume.
+    pub token_budget: Option<u64>,
     /// Where execute steps land their commits. Required iff the program has one.
     pub target: Option<Target>,
     #[serde(rename = "step")]

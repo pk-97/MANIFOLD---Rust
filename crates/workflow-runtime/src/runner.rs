@@ -59,6 +59,11 @@ pub fn run(cfg: &RunConfig, transport: &dyn ModelTransport) -> Result<Outcome, S
 
     let mut parked: Vec<String> = load_parked(&cfg.run_dir)?.into_iter().map(|p| p.step).collect();
     let mut artifacts: BTreeMap<String, Artifact> = BTreeMap::new();
+    // The runaway guard: tokens spent so far, resumed runs included.
+    let mut budget = Spend {
+        spent: transcript_token_total(&cfg.run_dir)?,
+        cap: program.token_budget.unwrap_or(DEFAULT_TOKEN_BUDGET),
+    };
 
     for (idx, step) in program.steps.iter().enumerate() {
         let state_path = cfg.run_dir.join(format!("step-{idx:02}-{}.json", step.name));
@@ -82,7 +87,7 @@ pub fn run(cfg: &RunConfig, transport: &dyn ModelTransport) -> Result<Outcome, S
 
         match step.opcode {
             Opcode::Generate => {
-                match run_generate(cfg, step, idx, &template_root, &artifacts, transport)? {
+                match run_generate(cfg, step, idx, &template_root, &artifacts, transport, &mut budget)? {
                     Ok(artifact) => {
                         persist(&state_path, &artifact)?;
                         artifacts.insert(step.name.clone(), artifact);
@@ -140,7 +145,7 @@ pub fn run(cfg: &RunConfig, transport: &dyn ModelTransport) -> Result<Outcome, S
             }
             Opcode::Execute => {
                 let wt = ensure_worktree(cfg, program.target.as_ref().expect("validated: target present"))?;
-                match run_execute(cfg, step, idx, &template_root, &artifacts, transport, &wt)? {
+                match run_execute(cfg, step, idx, &template_root, &artifacts, transport, &wt, &mut budget)? {
                     Ok(artifact) => {
                         persist(&state_path, &artifact)?;
                         artifacts.insert(step.name.clone(), artifact);
@@ -154,6 +159,48 @@ pub fn run(cfg: &RunConfig, transport: &dyn ModelTransport) -> Result<Outcome, S
         }
     }
     Ok(Outcome::Done)
+}
+
+/// Generous by default — the guard exists for runaways, not normal runs
+/// (Peter, 2026-07-29). The replay burned ~40K total for scale.
+const DEFAULT_TOKEN_BUDGET: u64 = 500_000;
+
+struct Spend {
+    spent: u64,
+    cap: u64,
+}
+
+impl Spend {
+    /// Checked BEFORE each model call; one call may overrun (cost is unknown
+    /// until the response), never two.
+    fn check(&self) -> Result<(), String> {
+        if self.spent >= self.cap {
+            return Err(format!(
+                "token budget exhausted ({}/{}) — the run is suspended; raise `token_budget` and rerun to resume",
+                self.spent, self.cap
+            ));
+        }
+        Ok(())
+    }
+    fn add(&mut self, result: &Result<crate::transport::CompletionResponse, crate::transport::TransportError>) {
+        if let Ok(r) = result {
+            self.spent += r.usage["total_tokens"].as_u64().unwrap_or(0);
+        }
+    }
+}
+
+/// Resume support: what past invocations of this run already spent.
+fn transcript_token_total(run_dir: &Path) -> Result<u64, String> {
+    let path = run_dir.join("transcript.jsonl");
+    if !path.exists() {
+        return Ok(0);
+    }
+    let mut total = 0;
+    for line in fs::read_to_string(&path).map_err(|e| e.to_string())?.lines() {
+        let v: serde_json::Value = serde_json::from_str(line).map_err(|e| format!("corrupt transcript: {e}"))?;
+        total += v["response"]["usage"]["total_tokens"].as_u64().unwrap_or(0);
+    }
+    Ok(total)
 }
 
 /// The worktree is acquired once per run and remembered in run state (D6),
@@ -187,6 +234,7 @@ fn run_execute(
     artifacts: &BTreeMap<String, Artifact>,
     transport: &dyn ModelTransport,
     wt: &Worktree,
+    budget: &mut Spend,
 ) -> Result<Result<Artifact, ParkedItem>, String> {
     // `file:` inputs for an execute step read the WORKTREE (branch state),
     // falling back nowhere — a missing file is a loud template error.
@@ -194,6 +242,7 @@ fn run_execute(
     let mut feedback: Option<String> = None;
     let max_attempts = u32::from(step.retry_cap) + 1;
     for attempt in 1..=max_attempts {
+        budget.check()?;
         let user = match &feedback {
             None => base_prompt.clone(),
             Some(err) => format!("{base_prompt}\n\nYour previous attempt failed:\n{err}\nEmit a corrected ChangeSet."),
@@ -205,6 +254,7 @@ fn run_execute(
             user,
         };
         let result = transport.complete(&req);
+        budget.add(&result);
         log_transcript(&cfg.run_dir, &step.name, idx, attempt, &req, &result)?;
         let error = match result {
             Err(e) => format!("transport error: {e}"),
@@ -251,11 +301,13 @@ fn run_generate(
     template_root: &Path,
     artifacts: &BTreeMap<String, Artifact>,
     transport: &dyn ModelTransport,
+    budget: &mut Spend,
 ) -> Result<Result<Artifact, ParkedItem>, String> {
     let base_prompt = render_step_template(step, template_root, &cfg.repo_root, artifacts)?;
     let mut feedback: Option<String> = None;
     let max_attempts = u32::from(step.retry_cap) + 1;
     for attempt in 1..=max_attempts {
+        budget.check()?;
         let user = match &feedback {
             None => base_prompt.clone(),
             Some(err) => format!("{base_prompt}\n\nYour previous attempt failed:\n{err}\nEmit a corrected response."),
@@ -267,6 +319,7 @@ fn run_generate(
             user,
         };
         let result = transport.complete(&req);
+        budget.add(&result);
         log_transcript(&cfg.run_dir, &step.name, idx, attempt, &req, &result)?;
         let error = match result {
             Err(e) => format!("transport error: {e}"),
