@@ -1,0 +1,26 @@
+# The P1 vertical slice (WORKFLOW_RUNTIME_DESIGN.md section 5, Phasing):
+# two generate steps + one shell gate, runnable end to end with --mock.
+#   target/debug/workflow run crates/workflow-runtime/programs/toy.toml \
+#     --mock crates/workflow-runtime/programs/toy-mock.jsonl
+name = "toy"
+
+[[step]]
+name = "draft"
+opcode = "generate"
+model = "deepseek-v4-flash"
+max_tokens = 512
+template = "toy-draft.md"
+
+[[step]]
+name = "critique"
+opcode = "generate"
+model = "deepseek-v4-flash"
+max_tokens = 512
+artifact = "verdict"
+template = "toy-critique.md"
+inputs = ["draft"]
+
+[[step]]
+name = "check"
+opcode = "gate"
+gate = ["test -s .claude/orchestration/runs/toy/step-00-draft.json"]

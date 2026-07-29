@@ -1,6 +1,6 @@
 # Workflow Runtime — a Rust runner for semantic workflow programs
 
-**Status:** PROPOSED · 2026-07-29 · Fable
+**Status:** IN PROGRESS — approved by Peter 2026-07-29; P1 (core loop, mock transport) built; P2 (execute + live proxy) next · 2026-07-29 · Fable
 **Prerequisites:** none (R2 readout is in — see intro)
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) – section 6 (Seam briefs) before starting any phase.
 
