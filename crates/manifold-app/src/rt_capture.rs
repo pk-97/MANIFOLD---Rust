@@ -177,6 +177,59 @@ pub(crate) fn drain_capture_stats(
     map
 }
 
+/// Resolve a param ID across all layers by testing mutation. Search strategy:
+/// 1. Exact match on param_id
+/// 2. Suffix match on _<param_id> (handles prefixed IDs like "8_rt_enabled")
+/// Returns (layer_index, resolved_param_id) on success, or exits with diagnostics.
+/// Only returns IDs where set_param actually changes the value (proves param exists).
+fn resolve_param_id(project: &manifold_core::project::Project, param_id: &str) -> (usize, String) {
+    // Create a test project copy to mutate without side effects.
+    let mut test = project.clone();
+
+    // First pass: exact match on all layers.
+    for (layer_idx, layer) in test.timeline.layers.iter_mut().enumerate() {
+        if let Some(gen_params) = layer.gen_params_mut() {
+            let before = gen_params.get_param(param_id);
+            let test_val = if before == 0.0 { 1.0 } else { 0.0 };
+            gen_params.set_param(param_id, test_val);
+            let after = gen_params.get_param(param_id);
+            if (before - after).abs() > 0.01 {
+                eprintln!("[rt-capture] Found param '{param_id}' on layer[{layer_idx}] (exact match, verified {before:.2}→{after:.2})");
+                return (layer_idx, param_id.to_string());
+            }
+        }
+    }
+
+    // Second pass: suffix match (try common node ID prefixes + _<param_id>).
+    for (layer_idx, layer) in test.timeline.layers.iter_mut().enumerate() {
+        if let Some(gen_params) = layer.gen_params_mut() {
+            for prefix in 0..50usize {
+                let candidate = format!("{prefix}_{param_id}");
+                let before = gen_params.get_param(&candidate);
+                let test_val = if before == 0.0 { 1.0 } else { 0.0 };
+                gen_params.set_param(&candidate, test_val);
+                let after = gen_params.get_param(&candidate);
+                if (before - after).abs() > 0.01 {
+                    eprintln!("[rt-capture] Found param '{candidate}' on layer[{layer_idx}] (suffix match, prefix={prefix}, verified {before:.2}→{after:.2})");
+                    return (layer_idx, candidate);
+                }
+            }
+        }
+    }
+
+    // Not found: print diagnostic and exit.
+    eprintln!("[rt-capture] Param '{param_id}' not found (exact or prefixed form) — no layer param mutation took effect.");
+    eprintln!("[rt-capture] Layer inventory:");
+    for (layer_idx, layer) in project.timeline.layers.iter().enumerate() {
+        if let Some(_gen_params) = layer.gen_params() {
+            eprintln!("  layer[{layer_idx}]: has gen_params");
+        } else {
+            eprintln!("  layer[{layer_idx}]: no gen_params");
+        }
+    }
+    std::process::exit(1);
+}
+
 fn drain_captures(device: &manifold_gpu::GpuDevice, frame: u32) {
     let caps = {
         let mut q = RT_CAPTURE_QUEUE.lock().unwrap();
@@ -256,6 +309,19 @@ pub fn run(args: &[String]) -> ! {
     let h = real_project.settings.output_height.max(1) as u32;
     println!("output={w}x{h} fps={fr}");
 
+    // Resolve param IDs from the loaded project BEFORE sending to content thread.
+    let mut resolved_sets: Vec<(usize, String, f32)> = Vec::new();
+    for (param_id, value) in &sets {
+        let (layer_idx, resolved_id) = resolve_param_id(&real_project, param_id);
+        resolved_sets.push((layer_idx, resolved_id, *value));
+    }
+
+    let (resolved_flip_layer, resolved_flip_param) = if let Some(ref flip_id) = live_flip_param {
+        resolve_param_id(&real_project, flip_id)
+    } else {
+        (0, String::new())
+    };
+
     let empty = manifold_core::project::Project::default();
     let mut ct = headless_content_thread(empty, w, h);
     ct.timer.set_target_fps(fr);
@@ -272,12 +338,14 @@ pub fn run(args: &[String]) -> ! {
     ct.handle_command(ContentCommand::Play);
     let rotation_frames = if paused_mode { 60 } else { total_frames };
 
-    // One-shot --set writes, through the same MutateProject path the UI uses.
-    for (param, value) in &sets {
-        let (param, value) = (param.clone(), *value);
+    // One-shot --set writes, using resolved layer indices and param IDs.
+    for (layer_idx, param, value) in resolved_sets {
         ct.handle_command(ContentCommand::MutateProject(Box::new(move |project| {
-            if let Some(g) = project.timeline.layers[0].gen_params_mut() {
+            if let Some(g) = project.timeline.layers.get_mut(layer_idx).and_then(|l| l.gen_params_mut()) {
+                let old = g.get_param(&param);
                 g.set_param(&param, value);
+                let new = g.get_param(&param);
+                eprintln!("[rt-capture] --set: layer[{layer_idx}] param '{param}' {old:.2} → {new:.2}");
             }
         })));
     }
@@ -346,18 +414,21 @@ pub fn run(args: &[String]) -> ! {
     }
 
     // Send live flip command (toggle the param value).
-    if let Some(param_id) = &live_flip_param {
-        let param_id_for_print = param_id.clone();
-        let param_id = param_id.clone();
+    if live_flip_param.is_some() {
+        let param = resolved_flip_param.clone();
+        let layer_idx = resolved_flip_layer;
         ct.handle_command(ContentCommand::MutateProject(Box::new(move |project| {
-            if let Some(g) = project.timeline.layers[0].gen_params_mut() {
+            if let Some(g) = project.timeline.layers.get_mut(layer_idx).and_then(|l| l.gen_params_mut()) {
                 // Read current value and flip it (for bool params).
-                let current = g.get_param(&param_id);
-                g.set_param(&param_id, 1.0 - current);
+                let current = g.get_param(&param);
+                let flipped = 1.0 - current;
+                g.set_param(&param, flipped);
+                let verified = g.get_param(&param);
+                eprintln!("[rt-capture] --live-flip: layer[{layer_idx}] param '{param}' {current:.2} → {verified:.2}");
             }
         })));
         live_flip_sent = true;
-        println!("=== LIVE FLIP: toggled param '{param_id_for_print}' ===");
+        println!("=== LIVE FLIP: toggled param '{resolved_flip_param}' on layer[{resolved_flip_layer}] ===");
     }
 
     // Phase 2: play additional frames after flip.
