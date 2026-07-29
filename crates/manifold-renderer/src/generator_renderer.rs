@@ -613,8 +613,6 @@ impl GeneratorRenderer {
                 if let Some(ls) = self.layer_generators.get_mut(layer_id)
                     && ls.applied_param_version != current_param_version
                 {
-                    // BUG-18l probe: log version bump trigger
-                    eprintln!("[BUG-18l probe] generator_renderer apply_inner_param_overrides: layer_id={:?}, old_version={:?}, new_version={:?}", layer_id, ls.applied_param_version, current_param_version);
                     if let Some(def) = layer.generator_graph() {
                         ls.generator.apply_inner_param_overrides(def);
                     }
