@@ -18,6 +18,10 @@ pub struct Program {
     pub token_budget: Option<u64>,
     /// Where execute steps land their commits. Required iff the program has one.
     pub target: Option<Target>,
+    /// Opt-in: adjacent independent gate-less `generate` steps run threaded.
+    /// Execute NEVER parallelizes (D-59: concurrent GPU gates flake).
+    #[serde(default)]
+    pub parallel: bool,
     #[serde(rename = "step")]
     pub steps: Vec<Step>,
 }
@@ -40,6 +44,13 @@ pub enum Opcode {
     Execute,
     Gate,
     Escalate,
+    /// Deterministic machine step: shell command reshapes artifacts, no model.
+    Transform,
+    /// One generate template over each element of a JSON-array input, collected.
+    Fanout,
+    /// k independent runs of a generate; gate picks the first pass, or a
+    /// verdict majority decides. No model-driven control flow.
+    Sample,
 }
 
 fn default_max_tokens() -> u32 {
@@ -73,6 +84,13 @@ pub struct Step {
     /// Per-command timeout; a gate outliving it is killed and FAILS.
     #[serde(default = "default_gate_timeout")]
     pub gate_timeout_s: u64,
+    /// Transform only: the shell command. Rendered template (if any) on stdin;
+    /// stdout is the artifact. Non-zero exit parks — no retry, it's deterministic.
+    pub command: Option<String>,
+    /// Fanout only: the input (earlier step or `file:`) holding the JSON array.
+    pub over: Option<String>,
+    /// Sample only: number of independent runs (>= 2).
+    pub samples: Option<u8>,
 }
 
 fn default_gate_timeout() -> u64 {
@@ -95,13 +113,26 @@ impl Program {
             if seen.contains(&step.name.as_str()) {
                 return Err(format!("duplicate step name {:?}", step.name));
             }
-            for input in &step.inputs {
-                if !input.starts_with("file:") && !seen.contains(&input.as_str()) {
+            for input in step.inputs.iter().chain(&step.over) {
+                if !input.starts_with("file:")
+                    && !input.starts_with("anchor:")
+                    && !seen.contains(&input.as_str())
+                {
                     return Err(format!(
                         "step {:?} input {:?} names no earlier step (programs are linear)",
                         step.name, input
                     ));
                 }
+            }
+            // Cross-opcode field misuse is loud at load time.
+            if step.command.is_some() && step.opcode != Opcode::Transform {
+                return Err(format!("step {:?}: `command` is transform-only", step.name));
+            }
+            if step.over.is_some() && step.opcode != Opcode::Fanout {
+                return Err(format!("step {:?}: `over` is fanout-only", step.name));
+            }
+            if step.samples.is_some() && step.opcode != Opcode::Sample {
+                return Err(format!("step {:?}: `samples` is sample-only", step.name));
             }
             match step.opcode {
                 Opcode::Generate => {
@@ -142,6 +173,39 @@ impl Program {
                 Opcode::Escalate => {
                     if step.template.is_none() {
                         return Err(format!("escalate step {:?} needs `template` (the question)", step.name));
+                    }
+                }
+                Opcode::Transform => {
+                    if step.command.is_none() {
+                        return Err(format!("transform step {:?} needs `command`", step.name));
+                    }
+                    if step.model.is_some() {
+                        return Err(format!(
+                            "transform step {:?} is deterministic — no `model`",
+                            step.name
+                        ));
+                    }
+                }
+                Opcode::Fanout => {
+                    if step.model.is_none() || step.template.is_none() || step.over.is_none() {
+                        return Err(format!(
+                            "fanout step {:?} needs `model`, `template`, and `over` (the JSON-array input)",
+                            step.name
+                        ));
+                    }
+                }
+                Opcode::Sample => {
+                    if step.model.is_none() || step.template.is_none() {
+                        return Err(format!("sample step {:?} needs `model` and `template`", step.name));
+                    }
+                    if step.samples.unwrap_or(0) < 2 {
+                        return Err(format!("sample step {:?} needs `samples` >= 2", step.name));
+                    }
+                    if step.gate.is_empty() && step.artifact != ArtifactKind::Verdict {
+                        return Err(format!(
+                            "sample step {:?} needs a `gate` to pick the winner, or artifact = \"verdict\" for a majority vote",
+                            step.name
+                        ));
                     }
                 }
             }

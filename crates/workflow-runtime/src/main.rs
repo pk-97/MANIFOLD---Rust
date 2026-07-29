@@ -1,7 +1,9 @@
 //! `workflow run <program.toml> [--run-id <id>] [--mock <responses.jsonl>]`
+//! `workflow check <program.toml>` — lint without spending a token (exit 1 on findings).
+//! `workflow cost <run-dir>` — token ledger from the transcript.
 //! `workflow unpark <run-dir> <step>` — clear a parked step so a rerun retries it.
 //! Exit codes (WORKFLOW_RUNTIME_DESIGN.md section 3, Design body):
-//! 0 done · 10 escalated · 20 parked-and-blocked · 2 error.
+//! 0 done · 10 escalated · 20 parked-and-blocked · 2 error · 1 check findings.
 //! Without --mock, the live proxy transport is used (D4).
 
 use std::path::PathBuf;
@@ -36,8 +38,31 @@ fn real_main() -> Result<ExitCode, String> {
             println!("unparked {step:?} — rerun the program to retry it (a rerun is a new sample)");
             return Ok(ExitCode::SUCCESS);
         }
+        Some("check") => {
+            let [_, program] = args.as_slice() else {
+                return Err("usage: workflow check <program.toml>".into());
+            };
+            let repo_root = std::env::current_dir().map_err(|e| e.to_string())?;
+            let findings = workflow_runtime::check::check(std::path::Path::new(program), &repo_root);
+            if findings.is_empty() {
+                println!("check green — {program} is runnable from {}", repo_root.display());
+                return Ok(ExitCode::SUCCESS);
+            }
+            for f in &findings {
+                println!("FINDING: {f}");
+            }
+            println!("{} finding(s)", findings.len());
+            return Ok(ExitCode::from(1));
+        }
+        Some("cost") => {
+            let [_, run_dir] = args.as_slice() else {
+                return Err("usage: workflow cost <run-dir>".into());
+            };
+            print!("{}", workflow_runtime::cost::summarize(std::path::Path::new(run_dir))?);
+            return Ok(ExitCode::SUCCESS);
+        }
         _ => {
-            return Err("usage: workflow run <program.toml> [--run-id <id>] [--mock <responses.jsonl>] | workflow unpark <run-dir> <step>".into());
+            return Err("usage: workflow run <program.toml> [--run-id <id>] [--mock <responses.jsonl>] | workflow check <program.toml> | workflow cost <run-dir> | workflow unpark <run-dir> <step>".into());
         }
     }
     i += 1;

@@ -18,6 +18,10 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 toml = "0.8"
 ureq = { version = "2", features = ["json"] }
+# ripgrep's own libraries — locate/scrub use them in-process; never a binary
+# on PATH (this machine has no standalone rg; runs must work from cron).
+regex = "1"
+ignore = "0.4"
 
 [lints]
 workspace = true

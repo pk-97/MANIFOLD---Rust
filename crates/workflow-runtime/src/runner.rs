@@ -11,11 +11,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::artifacts::{Artifact, ArtifactKind, ChangeSet};
-use crate::gates::run_gates;
+use crate::artifacts::{Artifact, ArtifactKind, ChangeSet, Verdict};
+use crate::gates::{run_gates, run_gates_env, run_transform};
+use crate::locate;
 use crate::program::{Opcode, Program, Step, Target};
+use crate::scrub;
 use crate::template;
-use crate::transport::{CompletionRequest, ModelTransport};
+use crate::transport::{CompletionRequest, CompletionResponse, ModelTransport, TransportError};
 use crate::worktree::{self, Worktree};
 
 pub struct RunConfig {
@@ -123,16 +125,20 @@ pub fn run(cfg: &RunConfig, transport: &dyn ModelTransport) -> Result<Outcome, S
         cap: program.token_budget.unwrap_or(DEFAULT_TOKEN_BUDGET),
     };
 
-    for (idx, step) in program.steps.iter().enumerate() {
-        let state_path = cfg.run_dir.join(format!("step-{idx:02}-{}.json", step.name));
+    let mut idx = 0;
+    while idx < program.steps.len() {
+        let step = &program.steps[idx];
+        let state_path = state_path_for(&cfg.run_dir, idx, &step.name);
         if state_path.exists() {
             let text = fs::read_to_string(&state_path).map_err(|e| e.to_string())?;
             let artifact: Artifact =
                 serde_json::from_str(&text).map_err(|e| format!("corrupt state {}: {e}", state_path.display()))?;
             artifacts.insert(step.name.clone(), artifact);
+            idx += 1;
             continue;
         }
         if parked.contains(&step.name) {
+            idx += 1;
             continue; // parked in an earlier invocation of this run
         }
         // A step whose input parked cannot proceed: the queue is blocked (exit 20).
@@ -141,6 +147,27 @@ pub fn run(cfg: &RunConfig, transport: &dyn ModelTransport) -> Result<Outcome, S
                 "step {:?} depends on parked step {:?}",
                 step.name, dep
             )));
+        }
+
+        // Parallel generate (v1.1, opt-in): adjacent gate-less generates with
+        // no artifact edges between them run threaded. Execute NEVER
+        // parallelizes (D-59: concurrent GPU gates flake).
+        if program.parallel && pure_generate(step) {
+            let batch = collect_parallel_batch(cfg, &program, idx, &parked);
+            if batch.len() >= 2 {
+                run_parallel_generates(
+                    cfg,
+                    &program,
+                    &batch,
+                    &template_root,
+                    &mut artifacts,
+                    transport,
+                    &mut budget,
+                    &mut parked,
+                )?;
+                idx += batch.len();
+                continue;
+            }
         }
 
         match step.opcode {
@@ -225,9 +252,342 @@ pub fn run(cfg: &RunConfig, transport: &dyn ModelTransport) -> Result<Outcome, S
                     }
                 }
             }
+            Opcode::Transform => {
+                match run_transform_step(cfg, step, &template_root, &artifacts)? {
+                    Ok(artifact) => {
+                        persist(&state_path, &artifact)?;
+                        artifacts.insert(step.name.clone(), artifact);
+                    }
+                    Err(park) => {
+                        append_parked(&cfg.run_dir, &park)?;
+                        parked.push(step.name.clone());
+                    }
+                }
+            }
+            Opcode::Fanout | Opcode::Sample => {
+                let gate_cwd = match &program.target {
+                    Some(t) if !step.gate.is_empty() => ensure_worktree(cfg, t)?.path,
+                    _ => cfg.repo_root.clone(),
+                };
+                let outcome = match step.opcode {
+                    Opcode::Fanout => {
+                        run_fanout(cfg, step, idx, &template_root, &artifacts, transport, &mut budget, &gate_cwd)?
+                    }
+                    _ => run_sample(cfg, step, idx, &template_root, &artifacts, transport, &mut budget, &gate_cwd)?,
+                };
+                match outcome {
+                    Ok(artifact) => {
+                        persist(&state_path, &artifact)?;
+                        artifacts.insert(step.name.clone(), artifact);
+                    }
+                    Err(park) => {
+                        append_parked(&cfg.run_dir, &park)?;
+                        parked.push(step.name.clone());
+                    }
+                }
+            }
         }
+        idx += 1;
     }
     Ok(Outcome::Done)
+}
+
+fn state_path_for(run_dir: &Path, idx: usize, name: &str) -> PathBuf {
+    run_dir.join(format!("step-{idx:02}-{name}.json"))
+}
+
+fn pure_generate(step: &Step) -> bool {
+    step.opcode == Opcode::Generate && step.gate.is_empty()
+}
+
+/// Consecutive not-yet-done pure generates from `start` whose inputs name no
+/// step inside the batch — parallel-safe by construction.
+fn collect_parallel_batch(cfg: &RunConfig, program: &Program, start: usize, parked: &[String]) -> Vec<usize> {
+    let mut batch = vec![start];
+    let mut names: Vec<&str> = vec![&program.steps[start].name];
+    for (j, step) in program.steps.iter().enumerate().skip(start + 1) {
+        let independent = step
+            .inputs
+            .iter()
+            .all(|i| !names.contains(&i.as_str()) && !parked.contains(i));
+        if !pure_generate(step)
+            || state_path_for(&cfg.run_dir, j, &step.name).exists()
+            || parked.contains(&step.name)
+            || !independent
+        {
+            break;
+        }
+        batch.push(j);
+        names.push(&step.name);
+    }
+    batch
+}
+
+/// One thread per batch member; transcript, budget, and state writes happen
+/// AFTER the join, in step order — the run dir stays deterministic. The budget
+/// is checked once for the batch, so a batch may overrun by its width (the
+/// sequential loop's own bound is one call).
+#[allow(clippy::too_many_arguments)] // un-suppressed when the loop grows a params struct
+fn run_parallel_generates(
+    cfg: &RunConfig,
+    program: &Program,
+    batch: &[usize],
+    template_root: &Path,
+    artifacts: &mut BTreeMap<String, Artifact>,
+    transport: &dyn ModelTransport,
+    budget: &mut Spend,
+    parked: &mut Vec<String>,
+) -> Result<(), String> {
+    budget.check()?;
+    // Render sequentially first: prompts see the pre-batch artifact map.
+    let mut jobs: Vec<(usize, &Step, Result<String, String>)> = Vec::new();
+    for &i in batch {
+        let step = &program.steps[i];
+        jobs.push((i, step, render_step_template(step, template_root, &cfg.repo_root, artifacts)));
+    }
+    let results: Vec<Option<ThreadResult>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = jobs
+            .iter()
+            .map(|(_, step, prompt)| {
+                let Ok(prompt) = prompt else { return None };
+                Some(scope.spawn(move || pure_generate_attempts(step, prompt, transport)))
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.map(|h| h.join().expect("parallel generate thread panicked")))
+            .collect()
+    });
+    for ((i, step, prompt), result) in jobs.iter().zip(results) {
+        let state_path = state_path_for(&cfg.run_dir, *i, &step.name);
+        let outcome = match result {
+            None => Err(ParkedItem {
+                step: step.name.clone(),
+                reason: prompt.as_ref().expect_err("no thread means render failed").clone(),
+                attempts: 0,
+            }),
+            Some(thread_result) => {
+                let (attempts, outcome) = thread_result?; // scrub abort kills the run
+                for (attempt, req, result) in &attempts {
+                    budget.add(result);
+                    log_transcript(&cfg.run_dir, &step.name, *i, *attempt, req, result)?;
+                }
+                outcome
+            }
+        };
+        match outcome {
+            Ok(artifact) => {
+                persist(&state_path, &artifact)?;
+                artifacts.insert(step.name.clone(), artifact);
+            }
+            Err(park) => {
+                append_parked(&cfg.run_dir, &park)?;
+                parked.push(step.name.clone());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// One model attempt as data: (attempt number, request, response).
+type Attempt = (u32, CompletionRequest, Result<CompletionResponse, TransportError>);
+/// A parallel-generate thread's outcome; the outer Err is a scrub abort.
+type ThreadResult = Result<(Vec<Attempt>, Result<Artifact, ParkedItem>), String>;
+
+/// The thread body: the model_loop's compose/scrub/call/parse ladder without
+/// side effects — attempts come back for ordered logging.
+fn pure_generate_attempts(step: &Step, base_prompt: &str, transport: &dyn ModelTransport) -> ThreadResult {
+    let mut attempts = Vec::new();
+    let mut feedback: Option<String> = None;
+    let max_attempts = u32::from(step.retry_cap) + 1;
+    for attempt in 1..=max_attempts {
+        let req = CompletionRequest {
+            model: step.model.clone().expect("validated: model present"),
+            max_tokens: step.max_tokens,
+            system: None,
+            user: compose(base_prompt, &feedback),
+        };
+        let result = checked_complete(transport, &step.name, &req)?;
+        let error = match &result {
+            Err(e) => Some(format!("transport error: {e}")),
+            Ok(resp) => Artifact::parse(step.artifact, &resp.content).err(),
+        };
+        attempts.push((attempt, req, result));
+        match error {
+            None => {
+                let (_, _, Ok(resp)) = attempts.last().expect("just pushed") else { unreachable!() };
+                let artifact = Artifact::parse(step.artifact, &resp.content).expect("parsed above");
+                return Ok((attempts, Ok(artifact)));
+            }
+            Some(e) => feedback = Some(e),
+        }
+    }
+    let park = ParkedItem {
+        step: step.name.clone(),
+        reason: feedback.expect("at least one attempt ran"),
+        attempts: max_attempts,
+    };
+    Ok((attempts, Err(park)))
+}
+
+/// TRANSFORM (v1.1): deterministic machine step — rendered template on stdin,
+/// stdout parsed as the artifact. Failures park immediately: same input,
+/// same output, a retry buys nothing.
+fn run_transform_step(
+    cfg: &RunConfig,
+    step: &Step,
+    template_root: &Path,
+    artifacts: &BTreeMap<String, Artifact>,
+) -> Result<Result<Artifact, ParkedItem>, String> {
+    let park = |reason: String, attempts: u32| {
+        Ok(Err(ParkedItem { step: step.name.clone(), reason, attempts }))
+    };
+    let input = match &step.template {
+        Some(_) => match render_step_template(step, template_root, &cfg.repo_root, artifacts) {
+            Ok(p) => p,
+            Err(e) => return park(e, 0),
+        },
+        None => String::new(),
+    };
+    let cmd = step.command.as_ref().expect("validated: transform has command");
+    match run_transform(cmd, &cfg.repo_root, &input, step.gate_timeout_s, &cfg.run_dir) {
+        Err(e) => park(e, 1),
+        Ok(stdout) => match Artifact::parse(step.artifact, &stdout) {
+            Err(e) => park(format!("transform stdout does not parse: {e}"), 1),
+            Ok(artifact) => Ok(Ok(artifact)),
+        },
+    }
+}
+
+/// FANOUT (v1.1): the same generate template over each element of a JSON-array
+/// input, strictly sequential, collected into one array artifact. An element
+/// failing its retry cap parks the WHOLE step — a partial collection is not
+/// an artifact.
+#[allow(clippy::too_many_arguments)] // un-suppressed when the loop grows a params struct
+fn run_fanout(
+    cfg: &RunConfig,
+    step: &Step,
+    idx: usize,
+    template_root: &Path,
+    artifacts: &BTreeMap<String, Artifact>,
+    transport: &dyn ModelTransport,
+    budget: &mut Spend,
+    gate_cwd: &Path,
+) -> Result<Result<Artifact, ParkedItem>, String> {
+    let park0 = |reason: String| Ok(Err(ParkedItem { step: step.name.clone(), reason, attempts: 0 }));
+    let over = step.over.as_ref().expect("validated: fanout has over");
+    let value: serde_json::Value = if let Some(path) = over.strip_prefix("file:") {
+        match fs::read_to_string(cfg.repo_root.join(path)) {
+            Ok(text) => match serde_json::from_str(&text) {
+                Ok(v) => v,
+                Err(e) => return park0(format!("fanout input file {path:?} is not JSON: {e}")),
+            },
+            Err(e) => return park0(format!("fanout input file {path:?}: {e}")),
+        }
+    } else {
+        artifacts.get(over).expect("validated: over names an earlier step").value.clone()
+    };
+    let Some(items) = value.as_array() else {
+        return park0(format!("fanout input {over:?} is not a JSON array"));
+    };
+    let mut collected = Vec::with_capacity(items.len());
+    for (i, item) in items.iter().enumerate() {
+        let label = format!("{}[{i}]", step.name);
+        let rendered_item = match item {
+            serde_json::Value::String(s) => s.clone(),
+            other => serde_json::to_string_pretty(other).expect("JSON value serializes"),
+        };
+        let base_prompt = match render_step_template_with(
+            step,
+            template_root,
+            &cfg.repo_root,
+            artifacts,
+            &[("item", rendered_item)],
+        ) {
+            Ok(p) => p,
+            Err(e) => return park0(e),
+        };
+        match model_loop(cfg, step, idx, &label, &base_prompt, transport, budget, gate_cwd, true)? {
+            Ok(artifact) => collected.push(artifact.value),
+            Err(element_park) => {
+                return Ok(Err(ParkedItem {
+                    step: step.name.clone(),
+                    reason: format!("element {i} of {} parked: {}", items.len(), element_park.reason),
+                    attempts: element_park.attempts,
+                }));
+            }
+        }
+    }
+    Ok(Ok(Artifact { kind: ArtifactKind::Json, value: serde_json::Value::Array(collected) }))
+}
+
+/// SAMPLE (v1.1): k independent runs (rerun-is-a-new-sample, made a feature).
+/// Selection is machine-only: the step's gate picks the first passing
+/// candidate (`$WORKFLOW_SAMPLE` = candidate path), or verdict artifacts
+/// take a strict majority. No winner is a park — never a model tiebreak.
+#[allow(clippy::too_many_arguments)] // un-suppressed when the loop grows a params struct
+fn run_sample(
+    cfg: &RunConfig,
+    step: &Step,
+    idx: usize,
+    template_root: &Path,
+    artifacts: &BTreeMap<String, Artifact>,
+    transport: &dyn ModelTransport,
+    budget: &mut Spend,
+    gate_cwd: &Path,
+) -> Result<Result<Artifact, ParkedItem>, String> {
+    let base_prompt = match render_step_template(step, template_root, &cfg.repo_root, artifacts) {
+        Ok(p) => p,
+        Err(e) => return Ok(Err(ParkedItem { step: step.name.clone(), reason: e, attempts: 0 })),
+    };
+    let k = step.samples.expect("validated: sample has samples");
+    let mut candidates: Vec<(u8, Artifact)> = Vec::new();
+    let mut failures: Vec<String> = Vec::new();
+    for i in 0..k {
+        let label = format!("{}[sample-{i}]", step.name);
+        match model_loop(cfg, step, idx, &label, &base_prompt, transport, budget, gate_cwd, false)? {
+            Ok(artifact) => candidates.push((i, artifact)),
+            Err(p) => failures.push(format!("sample {i}: {}", p.reason)),
+        }
+    }
+    let park = |reason: String| {
+        Ok(Err(ParkedItem { step: step.name.clone(), reason, attempts: u32::from(k) }))
+    };
+    if candidates.is_empty() {
+        return park(format!("all {k} samples failed to parse: {}", failures.join(" | ")));
+    }
+    if !step.gate.is_empty() {
+        for (i, artifact) in &candidates {
+            let cand_path = cfg.run_dir.join(format!("sample-{}-{i}.json", step.name));
+            fs::write(&cand_path, artifact.render()).map_err(|e| e.to_string())?;
+            let report = run_gates_env(
+                &step.gate,
+                gate_cwd,
+                step.gate_timeout_s,
+                &cfg.run_dir,
+                &[("WORKFLOW_SAMPLE", cand_path.as_path())],
+            );
+            if report.pass {
+                return Ok(Ok(artifact.clone()));
+            }
+        }
+        return park(format!("none of the {} parsed samples passed the gate", candidates.len()));
+    }
+    // Verdict vote (validated: gate-less sample means artifact = verdict).
+    let verdict_of = |a: &Artifact| -> String {
+        serde_json::from_value::<Verdict>(a.value.clone()).expect("parsed as Verdict").verdict
+    };
+    let accepts = candidates.iter().filter(|(_, a)| verdict_of(a) == "accept").count();
+    let rejects = candidates.len() - accepts;
+    if accepts == rejects {
+        return park(format!("verdict vote tied {accepts}-{rejects} across {k} samples"));
+    }
+    let majority = if accepts > rejects { "accept" } else { "reject" };
+    let (_, winner) = candidates
+        .iter()
+        .find(|(_, a)| verdict_of(a) == majority)
+        .expect("majority side is non-empty");
+    Ok(Ok(winner.clone()))
 }
 
 /// Generous by default — the guard exists for runaways, not normal runs
@@ -338,8 +698,13 @@ fn run_execute(
         // Re-rendered EVERY attempt: an earlier attempt may have committed,
         // and the model must quote the CURRENT worktree, not a stale excerpt
         // (finding 4 — stale prompts made every red gate a guaranteed park).
-        // `file:` inputs read the WORKTREE, falling back nowhere.
-        let base_prompt = render_step_template(step, template_root, &wt.path, artifacts)?;
+        // `file:`/`anchor:` inputs read the WORKTREE, falling back nowhere.
+        let base_prompt = match render_step_template(step, template_root, &wt.path, artifacts) {
+            Ok(p) => p,
+            Err(e) => {
+                return Ok(Err(ParkedItem { step: step.name.clone(), reason: e, attempts: attempt - 1 }));
+            }
+        };
         let user = match &feedback {
             None => base_prompt.clone(),
             Some(err) => format!("{base_prompt}\n\nYour previous attempt failed:\n{err}\nEmit a corrected ChangeSet."),
@@ -350,7 +715,7 @@ fn run_execute(
             system: None,
             user,
         };
-        let result = transport.complete(&req);
+        let result = checked_complete(transport, &step.name, &req)?;
         budget.add(&result);
         log_transcript(&cfg.run_dir, &step.name, idx, attempt, &req, &result)?;
         let error = match result {
@@ -401,30 +766,48 @@ fn run_generate(
     budget: &mut Spend,
     gate_cwd: &Path,
 ) -> Result<Result<Artifact, ParkedItem>, String> {
-    let base_prompt = render_step_template(step, template_root, &cfg.repo_root, artifacts)?;
+    let base_prompt = match render_step_template(step, template_root, &cfg.repo_root, artifacts) {
+        Ok(p) => p,
+        // Render/resolve failures are deterministic — park without burning calls.
+        Err(e) => return Ok(Err(ParkedItem { step: step.name.clone(), reason: e, attempts: 0 })),
+    };
+    model_loop(cfg, step, idx, &step.name, &base_prompt, transport, budget, gate_cwd, true)
+}
+
+/// The shared model-call loop: compose (base + feedback), scrub, call, parse,
+/// optionally run the step's gate; feed errors back to the retry cap, then park.
+/// `label` keys the transcript and park entries (fanout elements are "step[i]").
+#[allow(clippy::too_many_arguments)] // un-suppressed when the loop grows a params struct
+fn model_loop(
+    cfg: &RunConfig,
+    step: &Step,
+    idx: usize,
+    label: &str,
+    base_prompt: &str,
+    transport: &dyn ModelTransport,
+    budget: &mut Spend,
+    gate_cwd: &Path,
+    use_gate: bool,
+) -> Result<Result<Artifact, ParkedItem>, String> {
     let mut feedback: Option<String> = None;
     let max_attempts = u32::from(step.retry_cap) + 1;
     for attempt in 1..=max_attempts {
         budget.check()?;
-        let user = match &feedback {
-            None => base_prompt.clone(),
-            Some(err) => format!("{base_prompt}\n\nYour previous attempt failed:\n{err}\nEmit a corrected response."),
-        };
         let req = CompletionRequest {
-            model: step.model.clone().expect("validated: generate has model"),
+            model: step.model.clone().expect("validated: model present"),
             max_tokens: step.max_tokens,
             system: None,
-            user,
+            user: compose(base_prompt, &feedback),
         };
-        let result = transport.complete(&req);
+        let result = checked_complete(transport, label, &req)?;
         budget.add(&result);
-        log_transcript(&cfg.run_dir, &step.name, idx, attempt, &req, &result)?;
+        log_transcript(&cfg.run_dir, label, idx, attempt, &req, &result)?;
         let error = match result {
             Err(e) => format!("transport error: {e}"),
             Ok(resp) => match Artifact::parse(step.artifact, &resp.content) {
                 Err(e) => e,
                 Ok(artifact) => {
-                    if step.gate.is_empty() {
+                    if !use_gate || step.gate.is_empty() {
                         return Ok(Ok(artifact));
                     }
                     let report = run_gates(&step.gate, gate_cwd, step.gate_timeout_s, &cfg.run_dir);
@@ -441,10 +824,17 @@ fn run_generate(
         feedback = Some(error);
     }
     Ok(Err(ParkedItem {
-        step: step.name.clone(),
+        step: label.to_string(),
         reason: feedback.expect("at least one attempt ran"),
         attempts: max_attempts,
     }))
+}
+
+fn compose(base: &str, feedback: &Option<String>) -> String {
+    match feedback {
+        None => base.to_string(),
+        Some(err) => format!("{base}\n\nYour previous attempt failed:\n{err}\nEmit a corrected response."),
+    }
 }
 
 fn render_step_template(
@@ -452,6 +842,16 @@ fn render_step_template(
     template_root: &Path,
     repo_root: &Path,
     artifacts: &BTreeMap<String, Artifact>,
+) -> Result<String, String> {
+    render_step_template_with(step, template_root, repo_root, artifacts, &[])
+}
+
+fn render_step_template_with(
+    step: &Step,
+    template_root: &Path,
+    repo_root: &Path,
+    artifacts: &BTreeMap<String, Artifact>,
+    extra: &[(&str, String)],
 ) -> Result<String, String> {
     let template_path = template_root.join(step.template.as_ref().expect("validated: template present"));
     let text = fs::read_to_string(&template_path)
@@ -461,6 +861,9 @@ fn render_step_template(
         let value = if let Some(path) = input.strip_prefix("file:") {
             fs::read_to_string(repo_root.join(path))
                 .map_err(|e| format!("step {:?} input file {path:?}: {e}", step.name))?
+        } else if let Some(spec) = input.strip_prefix("anchor:") {
+            // Deterministic locate: symbol -> defining span, no model call.
+            locate::resolve(repo_root, spec).map_err(|e| format!("step {:?}: {e}", step.name))?
         } else {
             artifacts
                 .get(input)
@@ -469,7 +872,26 @@ fn render_step_template(
         };
         inputs.insert(input.clone(), value);
     }
+    for (key, value) in extra {
+        inputs.insert((*key).to_string(), value.clone());
+    }
     template::render(&text, &inputs).map_err(|e| format!("step {:?}: {e}", step.name))
+}
+
+/// The secrets choke point: NOTHING ships to a transport without this scan —
+/// feedback loops included, a gate tail can leak a key too. A hit aborts the
+/// run (exit 2): a secret in context is an authoring bug no retry fixes.
+fn checked_complete(
+    transport: &dyn ModelTransport,
+    label: &str,
+    req: &CompletionRequest,
+) -> Result<Result<CompletionResponse, TransportError>, String> {
+    for text in req.system.iter().chain(std::iter::once(&req.user)) {
+        scrub::check(text).map_err(|e| {
+            format!("secret-shaped text in step {label:?}'s outbound context: {e} — run aborted; scrub the source, then rerun")
+        })?;
+    }
+    Ok(transport.complete(req))
 }
 
 /// INVARIANT: one transcript line per model request, retries included.
