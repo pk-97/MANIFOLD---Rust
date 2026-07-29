@@ -1586,9 +1586,18 @@ kernel void accumulate_irradiance(
             float3 prev_ndc = prev_clip.xyz / prev_clip.w;
             float2 prev_uv = float2(prev_ndc.x * 0.5 + 0.5, 0.5 - prev_ndc.y * 0.5);
             if (all(prev_uv >= 0.0) && all(prev_uv <= 1.0) && prev_ndc.z >= 0.0 && prev_ndc.z <= 1.0) {
-                // Per-tap validated bilinear history resample: 2x2 footprint,
-                // each tap validated independently (depth + normal), invalid
-                // taps get zero weight; all-invalid = full reject.
+                // Per-tap validated bilinear history resample (BUG-ukg): 2x2
+                // footprint, each tap validated independently (depth + normal),
+                // invalid taps get zero weight, valid taps renormalized;
+                // all-invalid = full reject. A single nearest tap accepted a
+                // neighboring texel's CONTENT under fractional camera
+                // reprojection — the camera-motion smear. Exact self-
+                // reprojection lands fr=(0,0), weight 1 on the own tap, so
+                // static scenes are byte-identical.
+                // DEPTH_REJECT_THRESHOLD: raw NDC-z units, directly comparable
+                // without linearizing (same discipline as `upsample_shadow`'s
+                // depth guide); 5e-3 rejects a different surface while
+                // tolerating one surface's NDC-z noise across a frame.
                 const float DEPTH_REJECT_THRESHOLD = 5e-3;
                 float2 pf = prev_uv * float2(p.size) - 0.5;
                 int2 base = int2(floor(pf));
