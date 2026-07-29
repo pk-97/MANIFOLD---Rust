@@ -1,6 +1,6 @@
 # Ray Tracing — hybrid RT lighting for hero scenes
 
-**Status:** IN PROGRESS — Tier 1+2, the motion class, and reflections R1/R2/R3 LANDED on main (records: section 9.6 (phases)). Peter's L2 look PASSED 2026-07-24; RT is usable under model motion. OPEN: traced-detail wash + motion speckle tuning (R3-era constants, Peter's look); next build phase is Tier 3 item 8 multi-bounce GI (Peter's priority call 2026-07-29 — needs its own phase brief before execution); items 6/9 and P5 export (D13) / P6 frame interp stay show-need-triggered. D-61 sweep verdict PASSED 2026-07-29 after the D-63 clamp + v2 tone-mapped clip; faint extreme-transition residual accepted as BUG-im9s (residual streak, P3). R2 constants (incl. RT_REFL_CLAMP_GAMMA) still untuned — Peter's look, on demand. Perf profiling DEFERRED by Peter until the pipeline is complete. · 2026-07-29 · Fable
+**Status:** IN PROGRESS — Tier 1+2, the motion class, and reflections R1/R2/R3 LANDED on main (records: section 9.6 (phases)). Peter's L2 look PASSED 2026-07-24; RT is usable under model motion. OPEN: traced-detail wash + motion speckle tuning (R3-era constants, Peter's look); next build phase is Tier 3 item 8 multi-bounce GI (Peter's priority call 2026-07-29 — designed section 11 (Multi-bounce GI), 2026-07-30, executing as the WORKFLOW_RUNTIME P3 shakedown); items 6/9 and P5 export (D13) / P6 frame interp stay show-need-triggered. D-61 sweep verdict PASSED 2026-07-29 after the D-63 clamp + v2 tone-mapped clip; faint extreme-transition residual accepted as BUG-im9s (residual streak, P3). R2 constants (incl. RT_REFL_CLAMP_GAMMA) still untuned — Peter's look, on demand. Perf profiling DEFERRED by Peter until the pipeline is complete. · 2026-07-29 · Fable
 **Prerequisites:** none for P0. P1+ gated on P0 numbers and on RENDERING_INFRA_V2 section 2 (G-buffer/motion vectors) for temporal pieces.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -653,3 +653,128 @@ refits stay transform-only. gpu-proofs 1847/1847; Peter's release-build convicti
 PASSED (RT engages after load, toggles live). OPEN from the same repro: converged-static
 RT reads identical to RT-off (traced shell reflections wash out between raw trace and
 accumulated output — R2 filter path, R3 scope); motion speckle/lag at 24 FPS (R3 tuning).
+
+## 11. Multi-bounce GI — path-extended gather (Tier 3 item 8; APPROVED 2026-07-30)
+
+Graduates `RT_TIER3_SCOPING.md` section 3 (T3-8 — multi-bounce GI); that section is this
+design's intake and its findings stand except where the audit below corrects them. Build
+order is Peter's priority call 2026-07-29 (status header). Execution vehicle: this slice
+is WORKFLOW_RUNTIME_DESIGN section 5 (Phasing, P3)'s shakedown — the phases run as a
+workflow program under lead review, not as lane sessions.
+
+**Stage translation.** Colour bleeding between surfaces: a red wall tints the white floor
+next to it; a glowing hero object fills a concave shell with its own colour instead of
+stopping at the first surface. Honest expectation (scoping section 3's warning, kept on
+purpose): at 2 GI spp the second bounce is dim and low-frequency — the fixture proves it
+above threshold; on a hero scene it may read as "slightly richer", not as a feature.
+
+### 11.1 Audit — what exists (verified 2026-07-30)
+
+| Piece | Where | State |
+|---|---|---|
+| One-bounce GI gather | `raytrace.rs:1150-1216` — `gi_spp` loop, cosine hemisphere, hit → emissive + sun-bounce, miss → nothing | The block MB-B extends |
+| Sun-bounce caster loop, copy 1 | `raytrace.rs:1183-1211` (GI gather) | Duplicated — MB-A extracts |
+| Sun-bounce caster loop, copy 2 | `raytrace.rs:1319-1335` (reflection hit shading, `sun_bounce_term`) | Same shape, different seed offsets |
+| Env/ambient term | `ambient_color * ao` (`raytrace.rs:1366`), fed by the scene Ambient knob (`render_scene.rs:4142-4158`) | Env deliberately excluded from the gather (comment `raytrace.rs:1143-1146`) — MB3 keeps that at every depth |
+| Value-test precedent | `tests/gpu_proofs/rt_p3_emissive_gi.rs` (PresetRuntime harness, region probes, `RT_WARMUP_FRAMES`) | MB-B's test copies this harness |
+| Determinism/byte-diff precedent | T2-B native-mode gate (section 8.2): `graph_tool render` at pre/post commits, `cmp`-identical | MB-A's identity gate reuses it |
+
+**Audit correction to the scoping pass:** Finding 2's "one shared `gather_radiance(ray,
+depth)` the term blocks call" no longer maps onto the shipped kernel. Reflections landed
+AFTER that audit with intentionally different hit shading (raster-parity: textured albedo,
+hit-point env, F0 specular — section 9.6 Raster-parity reflections) while the GI gather is
+demodulated and env-excluded by design. The shareable unit is the sun-bounce caster loop
+only; a full shared gather would force one of the two shadings to lie. The refactor is
+scoped accordingly (MB2).
+
+### 11.2 Decisions
+
+- **MB1 — path extension inside the existing GI block; probe/irradiance cache rejected.**
+  Scoping section 3's read, confirmed: probes need invalidation on every gesture, and
+  MANIFOLD's hero objects are animated — the BUG-322 (rotating-object history discard)
+  class of problem, bought voluntarily. Rejected: any spatial cache structure.
+- **MB2 — refactor precondition, scoped by the audit.** Extract ONE sun-bounce helper
+  (hit position/normal/albedo + seed in, summed caster term out) used by both the GI
+  gather and the reflection hit block; restructure the gather into a bounce loop carrying
+  a `throughput` colour. `RT_GI_MAX_BOUNCES = 1` in the refactor phase — output
+  byte-identical, machine-diffed (I-MB1). No MSL recursion: a loop with throughput is the
+  only shape (GPU function recursion is banned by the target anyway).
+- **MB3 — env-miss contributes nothing at ANY depth (Peter 2026-07-30: Ambient knob
+  untouched).** This resolves scoping section 3's blocking question structurally: the
+  gather never adds env at any bounce, so multi-bounce adds only emissive and sun paths —
+  nothing the flat ambient term is faking. No double count by construction; the knob
+  stays a pure performer control (knob 0 = true black holds). Machine check: I-MB2.
+- **MB4 — `RT_GI_MAX_BOUNCES` is a named constant, default 2, range 1–3; NOT a scene
+  param (Peter 2026-07-30).** It joins the committed-budget constants awaiting Peter's
+  deferred re-judge. No Russian roulette at fixed depth 2. The per-extension energy fold
+  is `RT_GI_THROUGHPUT_FOLD` (default 0.318 ≈ 1/π, range 0.1–0.5), a named constant like
+  `SUN_BOUNCE_INTENSITY_SCALE`; the sun-bounce term at every depth keeps
+  `SUN_BOUNCE_INTENSITY_SCALE`, multiplied by the path throughput.
+- **MB5 — demodulation stays first-vertex-only.** The gather returns radiance incident at
+  the primary hit (no primary-surface albedo multiply — D3 discipline unchanged);
+  throughput from bounce 2 onward carries the INTERMEDIATE surfaces' albedo — that
+  carried albedo IS the colour bleed.
+- **MB6 — reflection hit shading stays depth-1.** Section 9.7's recursive-specular
+  deferral stands; the reflection block's only change is calling MB2's helper.
+
+**Consequences, stated honestly:** worst-case GI ray cost doubles (one extension ray plus
+one sun ray per caster per sample); the `trace_ms` delta is a reported number in MB-B's
+phase report, and the budget re-judge stays deferred per Peter's standing call. And the
+effect may be hard to point at on stage at these budgets — the value test sees what the
+eye may not.
+
+### 11.3 Invariants & enforcement
+
+- **I-MB1 — the refactor changes no pixel.** `graph_tool render` of an RT-enabled compare
+  graph at the pre- and post-MB-A commits, `cmp`-identical (T2-B precedent — never a
+  code-diff argument).
+- **I-MB2 — env is never gathered, at any depth.** Value test leg: a scene with geometry,
+  ambient only — zero suns, zero emissive — reads identical (stated epsilon) at bounces=2
+  vs bounces=1.
+- **I-MB3 — the sun-bounce caster loop has one home.** `rg` — the
+  `SUN_BOUNCE_INTENSITY_SCALE` multiply appears inside exactly one function.
+
+### 11.4 Phases (one workflow-program step each, committable)
+
+#### MB-A — bounce-loop refactor, behavior-identical
+
+- *Entry:* main; re-verify `raytrace.rs:1150-1216` (gather block) and `:1319-1335`
+  (reflection sun loop) — a moved anchor is an escalation, not a guess.
+- *Deliverables:* the sun-bounce helper (both call sites converted, seeds passed in so
+  existing sequences are preserved exactly); the gather as a bounce loop with throughput,
+  `RT_GI_MAX_BOUNCES = 1`; `RT_GI_THROUGHPUT_FOLD` declared (unused at 1 bounce is fine —
+  it ships with its consumer in MB-B if clippy objects).
+- *Gate:* (a) clippy `-p manifold-gpu -p manifold-renderer`; (b) the full `rt_` gpu-proofs
+  subset (`cargo test -p manifold-renderer --features gpu-proofs --test gpu_proofs rt_
+  --no-fail-fast` — `cargo test`, never nextest); (c) I-MB1's byte diff; (d) I-MB3's `rg`.
+- *Forbidden moves:* changing any sampled sequence (seed offsets are load-bearing for
+  I-MB1); touching the reflection block's shading beyond the helper call; touching
+  ambient plumbing; MSL recursion.
+
+#### MB-B — second bounce
+
+- *Entry:* MB-A committed, gates green.
+- *Deliverables:* `RT_GI_MAX_BOUNCES = 2`; extension path — at a hit, after shading,
+  `throughput *= hit_albedo * RT_GI_THROUGHPUT_FOLD`, new cosine-hemisphere ray off the
+  hit's interpolated normal, shade again (emissive + sun-bounce × throughput), stop at
+  the depth cap or miss; new value test `tests/gpu_proofs/rt_t38_multibounce.rs` on the
+  `rt_p3_emissive_gi.rs` harness.
+- *Gate:* (a) clippy as MB-A; (b) the value test, three legs in one file — **bleed leg:**
+  emissive quad facing a coloured wall facing a floor region the emitter cannot see
+  directly; floor region mean at bounces=2 exceeds bounces=1 by a stated threshold in the
+  wall's colour channel, against a CPU-computed expectation; **control leg:** bounces=1
+  floor region reads below a stated floor (proves the signal is the second bounce, not
+  leakage); **I-MB2 leg:** ambient-only scene, bounces=2 ≈ bounces=1 within epsilon;
+  (c) the full `rt_` subset; (d) `trace_ms` delta bounces 2-vs-1, a number in the phase
+  report.
+- *Demo (Peter only):* PNG pair bounces 1 vs 2 on an emissive hero scene — **L2; the
+  stage verdict is Peter's look**, per the D19/D20 standing lesson.
+- *Forbidden moves:* a probe cache; a scene param for bounces; Russian roulette;
+  re-tuning `gi_spp`/`ao_spp`/any existing constant; sampling MR or base-colour textures
+  for the bounce hit (flat `GiMaterial` albedo, same as bounce 1); touching the Ambient
+  knob path.
+
+**Phasing-completeness check:** every section 11.2 commitment lands in a phase — MB2
+(MB-A), MB1/MB3/MB4/MB5 (MB-B), MB6 (both phases' forbidden lists). Deferred with
+triggers: bounce count > 2 (trigger: Peter's look wants more after the budget re-judge);
+recursive specular (section 9.7, unchanged).

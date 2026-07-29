@@ -96,7 +96,7 @@ completely. **Revival trigger, stated so it isn't decided by build order:** an e
 still reads noisy after T3-6a and reflections, with the noise traced to emitter *sampling* rather
 than to ray count.
 
-## 3. T3-8 — multi-bounce GI
+## 3. T3-8 — multi-bounce GI — GRADUATED 2026-07-30 → `RAYTRACING_DESIGN.md` section 11 (Multi-bounce GI)
 
 **What it is.** Today's GI is one bounce with a flat 1/π energy fold (`SUN_BOUNCE_INTENSITY_SCALE`,
 `raytrace.rs:965-972`) — light leaves an emitter or the sun, hits one surface, arrives. Multi-bounce
