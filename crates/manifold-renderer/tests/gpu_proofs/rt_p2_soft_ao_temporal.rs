@@ -686,6 +686,13 @@ fn make_upload_r32(device: &GpuDevice, v: f32, label: &str) -> GpuTexture {
 /// edge-clamped 3x3 footprint at that corner reads 4 taps at (0,0), 2 at
 /// (1,0), 2 at (0,1), 1 at (1,1) (Metal `clamp` on the neighborhood index,
 /// same as `clamp_refl_history`'s own edge handling).
+///
+/// BUG-axe9: the box itself is now built in Reinhard-mapped (Karis) space
+/// (`t(c) = c / (1 + luma(c))`, inverted with `c = t / (1 - luma(t))`) — the
+/// blend-leg expectation below maps the 9 neighborhood taps and the seeded
+/// history, clamps in mapped space, then unmaps before the 0.9/0.1 blend,
+/// mirroring `clamp_refl_history` exactly (`luma()` coefficients copied
+/// from `crates/manifold-gpu/src/metal/raytrace.rs`).
 #[test]
 fn refl_channel_blends_history_and_current() {
     let h = shared();
@@ -776,23 +783,48 @@ fn refl_channel_blends_history_and_current() {
     // `clamp_refl_history` edge-clamps its 3x3 neighborhood index the same
     // way, so the 9 taps collapse onto 4 distinct texels with the
     // multiplicities below (see the fn-level doc comment).
-    let history_seed_r = 1.0_f32;
-    let neighborhood_r: [f32; 9] = [
-        REFL_A[0], REFL_A[0], REFL_A[0], REFL_A[0], // (0,0) x4
-        REFL_B[0], REFL_B[0],                       // (1,0) x2
-        REFL_B[0], REFL_B[0],                       // (0,1) x2
-        REFL_A[0],                                  // (1,1) x1
+    //
+    // BUG-axe9: the box is built in Reinhard-mapped space now (`t(c) = c /
+    // (1 + luma(c))`, unmapped with `c = t / (1 - luma(t))`) — mirrors
+    // `clamp_refl_history`'s exact math and `luma()`'s exact coefficients
+    // (`crates/manifold-gpu/src/metal/raytrace.rs`). REFL_A/REFL_B only
+    // populate the R channel, so luma isn't just R — the full 3-vector
+    // form is used, not a scalar shortcut.
+    fn luma(c: [f32; 3]) -> f32 {
+        0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+    }
+    fn tonemap(c: [f32; 3]) -> [f32; 3] {
+        let l = luma(c);
+        c.map(|x| x / (1.0 + l))
+    }
+    fn untonemap(t: [f32; 3]) -> [f32; 3] {
+        let l = luma(t).min(0.999);
+        let denom = 1.0 - l;
+        t.map(|x| x / denom)
+    }
+
+    let history_seed = [1.0_f32, 0.0, 0.0]; // H = (1,0,0,5), rgb only
+    let a3 = [REFL_A[0], REFL_A[1], REFL_A[2]];
+    let b3 = [REFL_B[0], REFL_B[1], REFL_B[2]];
+    let neighborhood: [[f32; 3]; 9] = [
+        a3, a3, a3, a3, // (0,0) x4
+        b3, b3,         // (1,0) x2
+        b3, b3,         // (0,1) x2
+        a3,             // (1,1) x1
     ];
-    let n = neighborhood_r.len() as f32;
-    let m1 = neighborhood_r.iter().sum::<f32>() / n;
-    let m2 = neighborhood_r.iter().map(|v| v * v).sum::<f32>() / n;
-    let sigma = (m2 - m1 * m1).max(0.0).sqrt();
+    let mapped: Vec<[f32; 3]> = neighborhood.iter().map(|&c| tonemap(c)).collect();
+    let n = mapped.len() as f32;
+    let m1: [f32; 3] = std::array::from_fn(|i| mapped.iter().map(|c| c[i]).sum::<f32>() / n);
+    let m2: [f32; 3] = std::array::from_fn(|i| mapped.iter().map(|c| c[i] * c[i]).sum::<f32>() / n);
+    let sigma: [f32; 3] = std::array::from_fn(|i| (m2[i] - m1[i] * m1[i]).max(0.0).sqrt());
     // Mirrors RT_REFL_CLAMP_GAMMA (crates/manifold-gpu/src/metal/raytrace.rs) —
     // retuning that constant requires recomputing this expectation.
     const GAMMA: f32 = 1.0;
-    let lo = m1 - GAMMA * sigma;
-    let hi = m1 + GAMMA * sigma;
-    let clamped_h = history_seed_r.clamp(lo, hi);
+    let lo: [f32; 3] = std::array::from_fn(|i| m1[i] - GAMMA * sigma[i]);
+    let hi: [f32; 3] = std::array::from_fn(|i| m1[i] + GAMMA * sigma[i]);
+    let mapped_history = tonemap(history_seed);
+    let clamped_mapped: [f32; 3] = std::array::from_fn(|i| mapped_history[i].clamp(lo[i], hi[i]));
+    let clamped_h = untonemap(clamped_mapped)[0];
     let current_r_at_pixel = REFL_A[0]; // pixel (0,0): (0+0)%2==0 -> A
     let expected_r = 0.9 * clamped_h + 0.1 * current_r_at_pixel;
 
@@ -800,6 +832,7 @@ fn refl_channel_blends_history_and_current() {
     // from both the raw current value and the pre-clamp unclamped-blend
     // value, so this leg still proves the kernel reads seeded history
     // rather than degenerating to either endpoint.
+    let history_seed_r = history_seed[0];
     let unclamped_blend_r = 0.9 * history_seed_r + 0.1 * current_r_at_pixel;
     assert!(
         (expected_r - current_r_at_pixel).abs() > 0.05,
@@ -813,8 +846,8 @@ fn refl_channel_blends_history_and_current() {
 
     eprintln!(
         "[bisect] refl blend leg (reset=false): \
-         r={blend_r} (expect ~{expected_r} = mix(clamp({history_seed_r}, {lo}, {hi}), \
-         {current_r_at_pixel}, 0.1); m1={m1} sigma={sigma}), \
+         r={blend_r} (expect ~{expected_r} = mix(untonemap(clamp(tonemap({history_seed_r}), \
+         {lo:?}, {hi:?})), {current_r_at_pixel}, 0.1); mapped m1={m1:?} sigma={sigma:?}), \
          g={blend_g}, b={blend_b}, a={blend_a}"
     );
 
@@ -822,7 +855,7 @@ fn refl_channel_blends_history_and_current() {
         (blend_r - expected_r).abs() < 0.01,
         "refl channel with reset=false did NOT blend+clamp as expected: r={blend_r}, \
          expected ~{expected_r} (kernel defect: the refl blend term never reads seeded \
-         history, or the variance clip (BUG-dx6w) isn't engaging)"
+         history, or the mapped-space variance clip (BUG-axe9) isn't engaging)"
     );
 
     // ── Leg 2: reset = true — output must equal C exactly ─────────────

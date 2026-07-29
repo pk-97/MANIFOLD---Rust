@@ -1619,6 +1619,17 @@ kernel void atrous_filter(
 // survives exactly where there is noise worth amortizing; at a flat
 // texel the box collapses and history snaps to current, which is
 // harmless (nothing to amortize).
+//
+// BUG-axe9: the box is built in Reinhard-mapped (Karis) space, not raw
+// linear HDR — an emissive texel at intensity 10+ next to a black one
+// inflates linear sigma so much that the box widens to swallow stale
+// bright history over black, producing a residual streak on fast sweeps
+// and bright-to-black transitions (Peter's verdict, 2026-07-29). Mapping
+// `t(c) = c / (1 + luma(c))` compresses HDR range before computing
+// mean/sigma, so one hot texel no longer dominates the box; the clamped
+// mapped value is inverted back with `c = t / (1 - luma(t))` (valid since
+// luma(t) < 1 by construction — `min(..., 0.999)` guards the invert
+// against float error at the asymptote).
 inline float3 clamp_refl_history(float3 hist,
                                  texture2d<float> hi_refl,
                                  uint2 tid, uint2 size) {
@@ -1628,15 +1639,19 @@ inline float3 clamp_refl_history(float3 hist,
         for (int dx = -1; dx <= 1; ++dx) {
             int2 t = clamp(int2(tid) + int2(dx, dy), int2(0), int2(size) - 1);
             float3 c = hi_refl.read(uint2(t)).rgb;
-            m1 += c;
-            m2 += c * c;
+            float3 tc = c / (1.0 + luma(c));
+            m1 += tc;
+            m2 += tc * tc;
         }
     }
     m1 /= 9.0;
     m2 /= 9.0;
     float3 sigma = sqrt(max(m2 - m1 * m1, float3(0.0)));
-    return clamp(hist, m1 - RT_REFL_CLAMP_GAMMA * sigma,
-                       m1 + RT_REFL_CLAMP_GAMMA * sigma);
+    float3 mapped_hist = hist / (1.0 + luma(hist));
+    float3 clamped = clamp(mapped_hist, m1 - RT_REFL_CLAMP_GAMMA * sigma,
+                                        m1 + RT_REFL_CLAMP_GAMMA * sigma);
+    float inv_denom = 1.0 - min(luma(clamped), 0.999);
+    return clamped / inv_denom;
 }
 
 kernel void accumulate_irradiance(
