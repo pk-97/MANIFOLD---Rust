@@ -7,8 +7,9 @@ can sit broken on main for weeks (BUG-029 profiling, BUG-033 ui-snapshot,
 BUG-hxka gpu-proofs). This script clippy-checks every non-default feature —
 build/lint only, never the GPU-run suites — and exits nonzero on any red.
 
-Part of the landing sweep (GIT_TREE_DISCIPLINE.md section 2): run it wherever
-the full workspace clippy runs. Adding a feature to any crate means adding a
+Runs in the nightly trunk-health sweep (scripts/trunk_health.py), not at
+landing (GIT_TREE_DISCIPLINE.md section 2 (Landing protocol), 2026-07-29).
+Adding a feature to any crate means adding a
 row to MATRIX below — the selftest cross-checks MATRIX against the workspace's
 Cargo.toml [features] sections, so a new feature that isn't listed (or
 exempted with a reason) fails here too.

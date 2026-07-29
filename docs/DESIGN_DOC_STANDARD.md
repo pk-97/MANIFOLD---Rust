@@ -269,13 +269,14 @@ brief is not executable — that's the definition.
   class the phase can actually produce (an id rename can't change pixels → no parity
   runs), and verify ONCE per phase, at the end — batch the work, don't run test cycles
   per sub-step. Clippy follows the same scoping: `-p <touched crates>` at phase gates —
-  a `--workspace` clippy in a cold worktree is a second full build. The single
-  full-workspace sweep (clippy + tests) runs ONCE per pass, at landing time, in the
-  warm main checkout — not per phase, not in the worktree. (Peter, 2026-07-03:
+  a `--workspace` clippy in a cold worktree is a second full build. Landing runs
+  `scripts/landing_gate.py` (touched-crate-only); the full-workspace sweep is not a
+  landing item — it runs nightly on main via `scripts/trunk_health.py`
+  (`.claude/GIT_TREE_DISCIPLINE.md` section 2 (Landing protocol)). (Peter, 2026-07-03:
   granular per-step testing is "massive overkill" — executor static analysis is
-  trusted; the end-of-phase gate catches what matters. Amended 2026-07-10: the sweep
-  moved from "final phase" to "at landing, in the main checkout" — same gate, same
-  coverage, one warm full build instead of N cold ones.)
+  trusted; the end-of-phase gate catches what matters. Amended 2026-07-29: the sweep
+  moved from "at landing" to the nightly trunk-health run — lanes verify their
+  branches; the touched-crate landing gate covers the merge collision.)
 
 ## 6. Seam briefs — refactors and API changes
 
