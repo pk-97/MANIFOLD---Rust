@@ -441,7 +441,6 @@ impl PresetRuntime {
         }
 
         let mut graph = doc.into_graph(registry)?;
-        let plan = compile(&graph)?;
 
         // Re-locate the boundary nodes by runtime id now that we have the live
         // graph.
@@ -467,15 +466,6 @@ impl PresetRuntime {
             .nodes()
             .find(|inst| inst.node.type_id().as_str() == FINAL_OUTPUT_TYPE_ID)
             .map(|inst| inst.id)
-            .ok_or(JsonGeneratorLoadError::MissingFinalOutput)?;
-        // Walk the plan for the FinalOutput step, pull its `in` input resource —
-        // that's what the host pre-binds the target texture to.
-        let final_output_input_resource = plan
-            .steps()
-            .iter()
-            .find(|s| s.node == final_output_id)
-            .and_then(|s| s.inputs.iter().find(|(n, _)| *n == "in"))
-            .map(|(_, res)| *res)
             .ok_or(JsonGeneratorLoadError::MissingFinalOutput)?;
 
         // Resolve the binding specs against the live graph into the SHARED
@@ -536,7 +526,31 @@ impl PresetRuntime {
 
         // Hand the resolved bindings to the shared `BoundGraph` (seeds the
         // skip-cache + plants each binding's declared default).
-        let bound = BoundGraph::new(bindings, &mut graph);
+        let mut bound = BoundGraph::new(bindings, &mut graph);
+        // BUG-kiac/BUG-18l (live forced-output toggles need a real runtime
+        // rebuild): push the card's INITIAL values through the bindings
+        // BEFORE the plan compiles, so `force_consumed_outputs` (BUG-317:
+        // `render_scene`'s `rt_enabled`/`temporal_upscale`) sees the real
+        // values instead of the def defaults. Without this, a saved-project
+        // or `--param` toggle landed via the per-frame apply AFTER compile,
+        // bumped the forced-outputs epoch, and was inert until a rebuild
+        // that never came — "card bindings overwrite node params at build
+        // time" is now literally true at build. Same `BoundGraph::apply`
+        // the per-frame path uses; the skip-cache means frame 1 re-applies
+        // only what diverges. Live flips after build remain BUG-18l.
+        if let Some(manifest) = manifest {
+            bound.apply(&mut graph, manifest);
+        }
+        let plan = compile(&graph)?;
+        // Walk the plan for the FinalOutput step, pull its `in` input resource —
+        // that's what the host pre-binds the target texture to.
+        let final_output_input_resource = plan
+            .steps()
+            .iter()
+            .find(|s| s.node == final_output_id)
+            .and_then(|s| s.inputs.iter().find(|(n, _)| *n == "in"))
+            .map(|(_, res)| *res)
+            .ok_or(JsonGeneratorLoadError::MissingFinalOutput)?;
         // Stable NodeId → live instance over the whole graph.
         let node_map: Vec<(NodeId, NodeInstanceId)> = graph
             .nodes()
