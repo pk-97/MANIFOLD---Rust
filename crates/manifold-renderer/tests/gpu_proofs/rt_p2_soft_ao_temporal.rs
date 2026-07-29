@@ -335,14 +335,17 @@ fn run_accumulate(
     // RT-T2-C: zero objects — every pixel reprojects camera-only, exactly
     // the pre-object-motion behavior this test's expectations encode.
     run_accumulate_with_motion(
-        device, tracer, hi_irr, depth_tex, hi_normal, history, alpha, reset, 0, IDENTITY, label,
+        device, tracer, hi_irr, depth_tex, hi_normal, history, alpha, reset, 0, IDENTITY, IDENTITY,
+        label,
     );
 }
 
 /// RT-T2-C: `run_accumulate` with an explicit object-motion table — one
 /// delta matrix, `obj_count` objects (0 = camera-only reprojection for
-/// every pixel regardless of the id channel's content).
-#[allow(clippy::too_many_arguments)] // un-suppress: collapse into a params struct if this harness gains a 12th knob
+/// every pixel regardless of the id channel's content) — and, for the
+/// BUG-ukg camera-motion proof, an explicit `prev_view_proj` (IDENTITY =
+/// exact self-reprojection, the pre-camera-motion fixture behavior).
+#[allow(clippy::too_many_arguments)] // un-suppress: collapse into a params struct if this harness gains a 13th knob
 fn run_accumulate_with_motion(
     device: &GpuDevice,
     tracer: &MetalShadowRayTracer,
@@ -354,11 +357,13 @@ fn run_accumulate_with_motion(
     reset: bool,
     obj_count: u32,
     obj_motion: [[f32; 4]; 4],
+    prev_view_proj: [[f32; 4]; 4],
     label: &str,
 ) {
     let params_buffer =
         device.create_buffer_shared(std::mem::size_of::<AccumulateParams>() as u64);
-    let params = AccumulateParams::new([W, H], alpha, reset, obj_count, [0.0; 3], IDENTITY, IDENTITY);
+    let params =
+        AccumulateParams::new([W, H], alpha, reset, obj_count, [0.0; 3], IDENTITY, prev_view_proj);
     let obj_motion_buffer =
         device.create_buffer_shared(std::mem::size_of::<[[f32; 4]; 4]>() as u64);
     {
@@ -547,11 +552,11 @@ fn object_motion_reprojection_retains_history_where_camera_only_rejects() {
     let mut history = HistorySet::new(&h.device, "t2c-history");
     run_accumulate_with_motion(
         &h.device, &tracer, &irr_a, &depth_far, &hi_normal, &mut history, TEST_ALPHA, true, 1,
-        IDENTITY, "t2c-warm",
+        IDENTITY, IDENTITY, "t2c-warm",
     );
     run_accumulate_with_motion(
         &h.device, &tracer, &irr_b, &depth_near, &hi_normal, &mut history, TEST_ALPHA, false, 1,
-        delta_z, "t2c-moved",
+        delta_z, IDENTITY, "t2c-moved",
     );
     let with_motion = readback_rgba_f32(history.current_irr());
 
@@ -560,11 +565,11 @@ fn object_motion_reprojection_retains_history_where_camera_only_rejects() {
     let mut control = HistorySet::new(&h.device, "t2c-control-history");
     run_accumulate_with_motion(
         &h.device, &tracer, &irr_a, &depth_far, &hi_normal, &mut control, TEST_ALPHA, true, 0,
-        IDENTITY, "t2c-control-warm",
+        IDENTITY, IDENTITY, "t2c-control-warm",
     );
     run_accumulate_with_motion(
         &h.device, &tracer, &irr_b, &depth_near, &hi_normal, &mut control, TEST_ALPHA, false, 0,
-        IDENTITY, "t2c-control-moved",
+        IDENTITY, IDENTITY, "t2c-control-moved",
     );
     let camera_only = readback_rgba_f32(control.current_irr());
 
@@ -773,6 +778,120 @@ fn refl_channel_blends_history_and_current() {
          r={reset_r}, expected 3.0"
     );
 }
+/// BUG-ukg (camera-motion smear): per-tap validated bilinear resampling
+/// under a FRACTIONAL camera reprojection — the discriminating proof.
+///
+/// Fixture: alternating 0/1 red columns warm the history; the second frame
+/// renders black irradiance through a `prev_view_proj` that translates NDC
+/// x by +0.0375 = 0.6 texel at W=32 (`inv_view_proj` stays IDENTITY), so a
+/// texel at pixel x reprojects to fractional pixel x+0.6: footprint taps
+/// {x, x+1} with weights {0.4, 0.6}; y lands integer, second-row weight 0.
+///
+/// Why this fails pre-fix: the old kernel read ONE nearest tap,
+/// `int(x + 1.1) = x+1`, so an even column read h(x+1) = 1.0 and output
+/// 0.85, not the validated bilinear 0.85 * (0.4*0 + 0.6*1) = 0.51.
+///
+/// Rejection leg: the warm frame's depth is 0.5 everywhere except texel
+/// (11,16) at 0.9, so frame 2 (uniform depth 0.5) finds that tap's stored
+/// depth invalid at pixel (10,16) — zero weight, renormalized to h(10)
+/// alone = 0.0. A plain UNVALIDATED bilinear would output the same 0.51 as
+/// the blend leg — this leg pins the per-tap validation itself.
+#[test]
+fn fractional_camera_reprojection_blends_and_rejects_per_tap() {
+    let h = shared();
+    let tracer = MetalShadowRayTracer::new(&h.device);
+
+    // prev_view_proj: translate NDC x by +0.0375 (0.6 texel at W=32).
+    // Column-major like `rot_z` below: column 3 is translation.
+    let frac_shift = [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0375, 0.0, 0.0, 1.0],
+    ];
+
+    // Alternating red columns (exact in f16): h(x) = x % 2.
+    let irr_hist = {
+        let mut px = Vec::with_capacity((W * H * 4) as usize);
+        for _y in 0..H {
+            for x in 0..W {
+                px.push(f16::from_f32((x % 2) as f32));
+                px.push(f16::from_f32(0.0));
+                px.push(f16::from_f32(0.0));
+                px.push(f16::from_f32(0.0));
+            }
+        }
+        let t = h.device.create_texture(&GpuTextureDesc {
+            width: W,
+            height: H,
+            depth: 1,
+            format: GpuTextureFormat::Rgba16Float,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ,
+            label: "ukg-irr-columns",
+            mip_levels: 1,
+        });
+        h.device.upload_texture(&t, as_bytes(&px));
+        t
+    };
+    let irr_black = upload_irr(&h.device, 0.0, 0.0, 0.0, "ukg-irr-black");
+
+    // Warm depth: 0.5 everywhere, texel (11,16) corrupted to 0.9 — its
+    // stored depth history fails frame 2's validity test at that tap.
+    let depth_warm = {
+        let mut px = vec![0.5f32; (W * H) as usize];
+        px[(16 * W + 11) as usize] = 0.9;
+        let t = h.device.create_texture(&GpuTextureDesc {
+            width: W,
+            height: H,
+            depth: 1,
+            format: GpuTextureFormat::Depth32Float,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ,
+            label: "ukg-depth-spot",
+            mip_levels: 1,
+        });
+        h.device.upload_texture(&t, as_bytes(&px));
+        t
+    };
+    let depth_flat = make_constant_depth(&h.device, "ukg-depth-flat");
+    let normal = make_constant_normal(&h.device, "ukg-normal");
+
+    let mut history = HistorySet::new(&h.device, "ukg-history");
+    run_accumulate_with_motion(
+        &h.device, &tracer, &irr_hist, &depth_warm, &normal, &mut history, TEST_ALPHA, true, 0,
+        IDENTITY, IDENTITY, "ukg-warm",
+    );
+    run_accumulate_with_motion(
+        &h.device, &tracer, &irr_black, &depth_flat, &normal, &mut history, TEST_ALPHA, false, 0,
+        IDENTITY, frac_shift, "ukg-frac-shift",
+    );
+    let out = readback_rgba_f32(history.current_irr());
+    let red = |x: u32, y: u32| out[((y * W + x) * 4) as usize];
+
+    // Bilinear leg, away from the corrupted texel: even column 20, row 8.
+    let expected_blend = (1.0 - TEST_ALPHA) * 0.6;
+    let got_blend = red(20, 8);
+    eprintln!("[BUG-ukg] bilinear leg r = {got_blend} (expect {expected_blend})");
+    assert!(
+        (got_blend - expected_blend).abs() < RESET_EPSILON,
+        "BUG-ukg: fractional camera reprojection is not a validated bilinear \
+         blend (r {got_blend}, expected {expected_blend}; pre-fix nearest-tap \
+         behavior reads h(x+1) alone = 0.85)"
+    );
+
+    // Rejection leg: pixel (10,16)'s footprint tap (11,16) carries the
+    // corrupted stored depth — zero weight, renormalized to h(10) = 0.0.
+    let got_reject = red(10, 16);
+    eprintln!("[BUG-ukg] rejection leg r = {got_reject} (expect 0.0)");
+    assert!(
+        got_reject.abs() < RESET_EPSILON,
+        "BUG-ukg: per-tap validation failed to zero-weight an invalid tap \
+         (r {got_reject}, expected 0.0 — the corrupted neighbor's history \
+         leaked into the blend)"
+    );
+}
+
 /// BUG-322: a ROTATING object must keep its temporal history.
 ///
 /// T2-C carried the reprojected world position through the object's motion
@@ -837,11 +956,11 @@ fn rotating_object_retains_history_when_normals_are_compared_in_one_orientation(
     let mut history = HistorySet::new(&h.device, "t322-history");
     run_accumulate_with_motion(
         &h.device, &tracer, &irr_a, &depth, &normal_prev, &mut history, TEST_ALPHA, true, 1,
-        IDENTITY, "t322-warm",
+        IDENTITY, IDENTITY, "t322-warm",
     );
     run_accumulate_with_motion(
         &h.device, &tracer, &irr_b, &depth, &normal_cur, &mut history, TEST_ALPHA, false, 1,
-        rot_z, "t322-rotated",
+        rot_z, IDENTITY, "t322-rotated",
     );
     let out = readback_rgba_f32(history.current_irr());
 

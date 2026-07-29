@@ -1586,26 +1586,41 @@ kernel void accumulate_irradiance(
             float3 prev_ndc = prev_clip.xyz / prev_clip.w;
             float2 prev_uv = float2(prev_ndc.x * 0.5 + 0.5, 0.5 - prev_ndc.y * 0.5);
             if (all(prev_uv >= 0.0) && all(prev_uv <= 1.0) && prev_ndc.z >= 0.0 && prev_ndc.z <= 1.0) {
-                int2 pt = clamp(int2(prev_uv * float2(p.size)), int2(0), int2(p.size) - 1);
-                uint2 prev_tid = uint2(pt);
-                float  stored_depth  = depth_history_read.read(prev_tid).r;
-                float3 stored_normal = normal_history_read.read(prev_tid).xyz;
-                // DEPTH_REJECT_THRESHOLD: raw NDC-z units — directly
-                // comparable without linearizing (same discipline
-                // `upsample_shadow`'s depth guide already uses). 5e-3
-                // rejects a genuinely different surface/depth layer while
-                // tolerating one shared surface's own NDC-z precision
-                // noise across a single frame of camera motion.
+                // Per-tap validated bilinear history resample (BUG-ukg): 2x2
+                // footprint, each tap validated independently (depth + normal),
+                // invalid taps get zero weight, valid taps renormalized;
+                // all-invalid = full reject. A single nearest tap accepted a
+                // neighboring texel's CONTENT under fractional camera
+                // reprojection — the camera-motion smear. Exact self-
+                // reprojection lands fr=(0,0), weight 1 on the own tap, so
+                // static scenes are byte-identical.
+                // DEPTH_REJECT_THRESHOLD: raw NDC-z units, directly comparable
+                // without linearizing (same discipline as `upsample_shadow`'s
+                // depth guide); 5e-3 rejects a different surface while
+                // tolerating one surface's NDC-z noise across a frame.
                 const float DEPTH_REJECT_THRESHOLD = 5e-3;
-                bool depth_ok = fabs(stored_depth - prev_ndc.z) < DEPTH_REJECT_THRESHOLD;
-                bool normal_ok = dot(normalize(stored_normal), cur_normal_prev) > NORMAL_REJECT_COS_THRESHOLD;
-                if (depth_ok && normal_ok) {
-                    float4 hist = history_read.read(prev_tid);
-                    blended = mix(hist.xyz, cur.xyz, p.alpha);
+                float2 pf = prev_uv * float2(p.size) - 0.5;
+                int2 base = int2(floor(pf));
+                float2 fr = pf - float2(base);
+                float w[4] = { (1.0-fr.x)*(1.0-fr.y), fr.x*(1.0-fr.y), (1.0-fr.x)*fr.y, fr.x*fr.y };
+                int2 offs[4] = { int2(0,0), int2(1,0), int2(0,1), int2(1,1) };
+                float wsum = 0.0; float3 hsum = float3(0.0); float2 msum = float2(0.0);
+                for (int i = 0; i < 4; ++i) {
+                    int2 t = clamp(base + offs[i], int2(0), int2(p.size) - 1);
+                    uint2 tt = uint2(t);
+                    bool depth_ok  = fabs(depth_history_read.read(tt).r - prev_ndc.z) < DEPTH_REJECT_THRESHOLD;
+                    bool normal_ok = dot(normalize(normal_history_read.read(tt).xyz), cur_normal_prev) > NORMAL_REJECT_COS_THRESHOLD;
+                    if (depth_ok && normal_ok) {
+                        wsum += w[i];
+                        hsum += w[i] * history_read.read(tt).xyz;
+                        msum += w[i] * moments_read.read(tt).rg;
+                    }
+                }
+                if (wsum > 1e-4) {
+                    blended = mix(hsum / wsum, cur.xyz, p.alpha);
                     valid = true;
-                    float2 stored_moments = moments_read.read(prev_tid).rg;
-                    moment1 = mix(stored_moments.r, cur_luma, p.alpha);
-                    moment2 = mix(stored_moments.g, cur_luma * cur_luma, p.alpha);
+                    moment1 = mix(msum.x / wsum, cur_luma, p.alpha);
+                    moment2 = mix(msum.y / wsum, cur_luma * cur_luma, p.alpha);
                 }
             }
         }
@@ -1646,11 +1661,27 @@ kernel void accumulate_irradiance(
             float3 rndc = rclip.xyz / rclip.w;
             float2 ruv = float2(rndc.x * 0.5 + 0.5, 0.5 - rndc.y * 0.5);
             if (all(ruv >= 0.0) && all(ruv <= 1.0) && rndc.z >= 0.0 && rndc.z <= 1.0) {
-                int2 rpt = clamp(int2(ruv * float2(p.size)), int2(0), int2(p.size) - 1);
-                uint2 refl_tid = uint2(rpt);
-                float3 stored_normal = normal_history_read.read(refl_tid).xyz;
-                if (dot(normalize(stored_normal), cur_normal_prev) > NORMAL_REJECT_COS_THRESHOLD) {
-                    refl_write = mix(refl_history_read.read(refl_tid).rgb, cur_refl.rgb, RT_REFL_ACCUM_ALPHA);
+                // Per-tap validated bilinear history resample: 2x2 footprint,
+                // each tap validated via normal test only (no depth test — see
+                // contract comment above); invalid taps get zero weight;
+                // all-invalid = full reject.
+                float2 pf = ruv * float2(p.size) - 0.5;
+                int2 base = int2(floor(pf));
+                float2 fr = pf - float2(base);
+                float w[4] = { (1.0-fr.x)*(1.0-fr.y), fr.x*(1.0-fr.y), (1.0-fr.x)*fr.y, fr.x*fr.y };
+                int2 offs[4] = { int2(0,0), int2(1,0), int2(0,1), int2(1,1) };
+                float wsum = 0.0; float3 rsum = float3(0.0);
+                for (int i = 0; i < 4; ++i) {
+                    int2 t = clamp(base + offs[i], int2(0), int2(p.size) - 1);
+                    uint2 tt = uint2(t);
+                    bool normal_ok = dot(normalize(normal_history_read.read(tt).xyz), cur_normal_prev) > NORMAL_REJECT_COS_THRESHOLD;
+                    if (normal_ok) {
+                        wsum += w[i];
+                        rsum += w[i] * refl_history_read.read(tt).rgb;
+                    }
+                }
+                if (wsum > 1e-4) {
+                    refl_write = mix(rsum / wsum, cur_refl.rgb, RT_REFL_ACCUM_ALPHA);
                 }
             }
         }
