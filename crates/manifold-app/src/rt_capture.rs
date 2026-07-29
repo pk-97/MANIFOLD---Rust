@@ -25,68 +25,137 @@
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
-use manifold_renderer::headless_readback::{
-    encode_rgba8_png, linear_to_srgb8, readback_raw_halves,
-};
+use manifold_renderer::headless_readback::{encode_rgba8_png, linear_to_srgb8};
 use manifold_renderer::node_graph::primitives::{
     RtCaptureSlot, RT_CAPTURE_ARM, RT_CAPTURE_ARM_COMPOSITE, RT_CAPTURE_QUEUE,
 };
 use crate::content_command::ContentCommand;
 use crate::headless_harness::headless_content_thread;
 
+/// BUG-fh95: format-aware raw readback + f16 decode. The mask channels
+/// (`rt_mask_half`/`rt_mask_full`) are `Rg16Float` (4 B/px: R=vis, G=ao),
+/// not `Rgba16Float` (8 B/px) — the old fixed-8-byte decode read the mask
+/// garbled (adjacent-pixel bytes landed in b/a), which is what made the
+/// 2026-07-28 open-plane recheck inconclusive. Decodes every capture into
+/// `[r, g, b, a]` f32 pixels; Rg16Float fills b=0, a=0. Unsupported
+/// formats return an empty vec and the caller reports the skip loudly.
+pub(crate) fn decode_capture_pixels(
+    cap: &RtCaptureSlot,
+    device: &manifold_gpu::GpuDevice,
+) -> Vec<[f32; 4]> {
+    use manifold_gpu::GpuTextureFormat;
+    // (bytes/px, component count, f32-not-f16)
+    let (bpp, comps, is_f32) = match cap.tex.format {
+        GpuTextureFormat::Rgba16Float => (8u32, 4usize, false),
+        GpuTextureFormat::Rg16Float => (4u32, 2usize, false),
+        GpuTextureFormat::Rg32Float => (8u32, 2usize, true),
+        other => {
+            eprintln!(
+                "[rt-capture] SKIP {}: unsupported capture format {other:?}",
+                cap.label
+            );
+            return Vec::new();
+        }
+    };
+    let bytes_per_row = cap.w * bpp;
+    let total = u64::from(cap.h * bytes_per_row);
+    let buf = device.create_buffer_shared(total);
+    let mut enc = device.create_encoder("rt-capture-readback");
+    enc.copy_texture_to_buffer(&cap.tex, &buf, cap.w, cap.h, bytes_per_row);
+    enc.commit_and_wait_completed();
+    let ptr = buf
+        .mapped_ptr()
+        .expect("shared readback buffer must expose mapped pointer");
+    let raw: &[u8] = unsafe { std::slice::from_raw_parts(ptr, total as usize) };
+
+    let pixel_count = (cap.w * cap.h) as usize;
+    let mut out = Vec::with_capacity(pixel_count);
+    for i in 0..pixel_count {
+        let base = i * bpp as usize;
+        let mut px = [0.0f32; 4];
+        for (c, slot) in px.iter_mut().enumerate().take(comps) {
+            *slot = if is_f32 {
+                let o = base + c * 4;
+                f32::from_le_bytes([raw[o], raw[o + 1], raw[o + 2], raw[o + 3]])
+            } else {
+                let o = base + c * 2;
+                half::f16::from_bits(u16::from_le_bytes([raw[o], raw[o + 1]])).to_f32()
+            };
+        }
+        out.push(px);
+    }
+    out
+}
+
 /// Shared stats computation — reused by headless harness and live capture.
 /// Returns (hit_frac, mean_luma, stddev).
 pub(crate) fn compute_rt_channel_stats(cap: &RtCaptureSlot, device: &manifold_gpu::GpuDevice) -> (f64, f64, f64) {
-    let raw = readback_raw_halves(device, &cap.tex, cap.w, cap.h);
-    let pixel_count = (cap.w * cap.h) as usize;
+    let pixels = decode_capture_pixels(cap, device);
+    let pixel_count = pixels.len();
     let mut n_hits = 0usize;
     let mut sum_luma = 0.0f64; let mut sum_luma_sq = 0.0f64;
     let is_composite = cap.label == "composite";
-    for i in 0..pixel_count {
-        let base = i * 8;
-        let r = half::f16::from_bits(u16::from_le_bytes([raw[base], raw[base+1]])).to_f32();
-        let g = half::f16::from_bits(u16::from_le_bytes([raw[base+2], raw[base+3]])).to_f32();
-        let b = half::f16::from_bits(u16::from_le_bytes([raw[base+4], raw[base+5]])).to_f32();
-        let a = half::f16::from_bits(u16::from_le_bytes([raw[base+6], raw[base+7]])).to_f32();
+    for [r, g, b, a] in pixels.iter().copied() {
         if is_composite {
             if r > 0.03 || g > 0.03 || b > 0.03 { n_hits += 1; }
-        } else {
-            if a > 0.0 && a < 1e6 && !a.is_nan() { n_hits += 1; }
+        } else if a > 0.0 && a < 1e6 && !a.is_nan() {
+            n_hits += 1;
         }
         let luma = 0.2126 * r.max(0.0) + 0.7152 * g.max(0.0) + 0.0722 * b.max(0.0);
         sum_luma += luma as f64; sum_luma_sq += (luma*luma) as f64;
     }
+    if pixel_count == 0 { return (0.0, 0.0, 0.0); }
     let hit_frac = n_hits as f64 / pixel_count as f64;
-    let mn = if pixel_count > 0 { sum_luma / pixel_count as f64 } else { 0.0 };
-    let vr = if pixel_count > 0 { (sum_luma_sq / pixel_count as f64) - mn*mn } else { 0.0 };
-    let sd = vr.sqrt();
-    (hit_frac, mn, sd)
+    let mn = sum_luma / pixel_count as f64;
+    let vr = (sum_luma_sq / pixel_count as f64) - mn*mn;
+    (hit_frac, mn, vr.sqrt())
 }
 
 fn process_capture(cap: &RtCaptureSlot, device: &manifold_gpu::GpuDevice, out_dir: &std::path::Path) {
     let (hit_frac, mn, sd) = compute_rt_channel_stats(cap, device);
-    let raw = readback_raw_halves(device, &cap.tex, cap.w, cap.h);
-    let pixel_count = (cap.w * cap.h) as usize;
+    let pixels = decode_capture_pixels(cap, device);
+    if pixels.is_empty() {
+        return;
+    }
 
-    // Write tonemapped PNG (alpha channel encodes hit distance for RT channels).
-    let mut rgba8 = Vec::with_capacity(pixel_count * 4);
-    for i in 0..pixel_count {
-        let base = i * 8;
-        let r = half::f16::from_bits(u16::from_le_bytes([raw[base], raw[base+1]])).to_f32();
-        let g = half::f16::from_bits(u16::from_le_bytes([raw[base+2], raw[base+3]])).to_f32();
-        let b = half::f16::from_bits(u16::from_le_bytes([raw[base+4], raw[base+5]])).to_f32();
-        let a = half::f16::from_bits(u16::from_le_bytes([raw[base+6], raw[base+7]])).to_f32();
+    // BUG-fh95: per-channel means + center-region means (middle 20% box) —
+    // the open-plane probe reads vis (r) / ao (g) at frame center from the
+    // RAW `mask_half` trace texture, where the original 0/0 was observed.
+    let mut sum = [0.0f64; 4];
+    let mut csum = [0.0f64; 4];
+    let mut cn = 0usize;
+    let (cw0, cw1) = (cap.w * 2 / 5, cap.w * 3 / 5);
+    let (ch0, ch1) = (cap.h * 2 / 5, cap.h * 3 / 5);
+    for (i, px) in pixels.iter().enumerate() {
+        for c in 0..4 { sum[c] += f64::from(px[c]); }
+        let (x, y) = (i as u32 % cap.w, i as u32 / cap.w);
+        if x >= cw0 && x < cw1 && y >= ch0 && y < ch1 {
+            for c in 0..4 { csum[c] += f64::from(px[c]); }
+            cn += 1;
+        }
+    }
+    let n = pixels.len() as f64;
+    let cd = cn.max(1) as f64;
+
+    // Tonemapped PNG (alpha encodes hit distance for rgba RT channels;
+    // rg mask channels render as r=vis, g=ao, opaque).
+    let mut rgba8 = Vec::with_capacity(pixels.len() * 4);
+    let is_rg = matches!(cap.tex.format, manifold_gpu::GpuTextureFormat::Rg16Float);
+    for [r, g, b, a] in pixels.iter().copied() {
         rgba8.push(linear_to_srgb8(r.max(0.0)));
         rgba8.push(linear_to_srgb8(g.max(0.0)));
         rgba8.push(linear_to_srgb8(b.max(0.0)));
-        rgba8.push((a.clamp(0.0, 1.0) * 255.0) as u8);
+        rgba8.push(if is_rg { 255 } else { (a.clamp(0.0, 1.0) * 255.0) as u8 });
     }
     let png_path = out_dir.join(format!("{}_{:04}.png", cap.label, cap.frame));
     std::fs::write(&png_path, encode_rgba8_png(&rgba8, cap.w, cap.h))
         .unwrap_or_else(|e| eprintln!("[rt-capture] write {}: {e}", png_path.display()));
     eprintln!(
-        "[rt-capture] {} f={:04} dim={}x{} hit={:.6} luma={:.6} sd={:.6} {}",
-        cap.label, cap.frame, cap.w, cap.h, hit_frac, mn, sd, png_path.display(),
+        "[rt-capture] {} f={:04} dim={}x{} hit={:.6} luma={:.6} sd={:.6} mean=[{:.4},{:.4},{:.4},{:.4}] center=[{:.4},{:.4},{:.4},{:.4}] {}",
+        cap.label, cap.frame, cap.w, cap.h, hit_frac, mn, sd,
+        sum[0]/n, sum[1]/n, sum[2]/n, sum[3]/n,
+        csum[0]/cd, csum[1]/cd, csum[2]/cd, csum[3]/cd,
+        png_path.display(),
     );
 }
 

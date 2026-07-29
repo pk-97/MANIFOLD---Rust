@@ -4431,6 +4431,13 @@ impl EffectNode for RenderScene {
                     if let Some(ref t) = self.rt_mask_full { q.push(RtCaptureSlot {
                         label: "mask".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
                     });}
+                    // BUG-fh95: the RAW pre-upsample/pre-denoise trace output
+                    // (out_sv at trace res, R=vis G=ao) — the texture the
+                    // original open-plane 0/0 was read from; the full-res
+                    // mask above can't see it (post-atrous).
+                    if let Some(ref t) = self.rt_mask_half { q.push(RtCaptureSlot {
+                        label: "mask_half".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
+                    });}
                 }
             }
         }
