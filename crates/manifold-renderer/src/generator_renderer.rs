@@ -605,6 +605,12 @@ impl GeneratorRenderer {
                 ls.override_version != current_override_version
                     || ls.built_watched != is_watched_now
                     || ls.applied_relight != (current_relight, current_relight_params)
+                    // BUG-18l: a live forced-outputs change (rt_enabled /
+                    // temporal_upscale) is a topology change — the compiled
+                    // plan can't honor it, so rebuild the runtime here, the
+                    // path that already preserves clip counts and harvests
+                    // state.
+                    || ls.generator.awaiting_forced_outputs_rebuild()
             });
             if !needs_rebuild {
                 // Value-only edit (inner param tweak): push the new values into

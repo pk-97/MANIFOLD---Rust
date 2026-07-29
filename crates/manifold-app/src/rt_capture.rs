@@ -177,7 +177,68 @@ pub(crate) fn drain_capture_stats(
     map
 }
 
-fn drain_captures(device: &manifold_gpu::GpuDevice, frame: u32) {
+/// Resolve a param ID across all layers by testing mutation: exact match
+/// first, then suffix match on `_<param_id>` (prefixed IDs like
+/// `8_rt_enabled`). Returns `(layer_index, resolved_param_id)` — only IDs
+/// where `set_param` actually changes the value — or exits with the full
+/// per-layer param listing.
+fn resolve_param_id(project: &manifold_core::project::Project, param_id: &str) -> (usize, String) {
+    // Create a test project copy to mutate without side effects.
+    let mut test = project.clone();
+
+    // First pass: exact match on all layers.
+    for (layer_idx, layer) in test.timeline.layers.iter_mut().enumerate() {
+        if let Some(gen_params) = layer.gen_params_mut() {
+            let before = gen_params.get_param(param_id);
+            let test_val = if before == 0.0 { 1.0 } else { 0.0 };
+            gen_params.set_param(param_id, test_val);
+            let after = gen_params.get_param(param_id);
+            if (before - after).abs() > 0.01 {
+                eprintln!("[rt-capture] Found param '{param_id}' on layer[{layer_idx}] (exact match, verified {before:.2}→{after:.2})");
+                return (layer_idx, param_id.to_string());
+            }
+        }
+    }
+
+    // Second pass: suffix match (try common node ID prefixes + _<param_id>).
+    for (layer_idx, layer) in test.timeline.layers.iter_mut().enumerate() {
+        if let Some(gen_params) = layer.gen_params_mut() {
+            for prefix in 0..50usize {
+                let candidate = format!("{prefix}_{param_id}");
+                let before = gen_params.get_param(&candidate);
+                let test_val = if before == 0.0 { 1.0 } else { 0.0 };
+                gen_params.set_param(&candidate, test_val);
+                let after = gen_params.get_param(&candidate);
+                if (before - after).abs() > 0.01 {
+                    eprintln!("[rt-capture] Found param '{candidate}' on layer[{layer_idx}] (suffix match, prefix={prefix}, verified {before:.2}→{after:.2})");
+                    return (layer_idx, candidate);
+                }
+            }
+        }
+    }
+
+    // Not found: print diagnostic and exit.
+    eprintln!("[rt-capture] Param '{param_id}' not found (exact or prefixed form) — no layer param mutation took effect.");
+    eprintln!("[rt-capture] Layer inventory:");
+    for (layer_idx, layer) in project.timeline.layers.iter().enumerate() {
+        if let Some(_gen_params) = layer.gen_params() {
+            eprintln!("  layer[{layer_idx}]: has gen_params");
+        } else {
+            eprintln!("  layer[{layer_idx}]: no gen_params");
+        }
+    }
+    std::process::exit(1);
+}
+
+fn drain_captures(
+    device: &manifold_gpu::GpuDevice,
+    frame: u32,
+    // Running last-seen (hit, luma, sd) per channel label — the live-flip
+    // verdict compares snapshots of this map. The per-frame drain empties
+    // RT_CAPTURE_QUEUE, so a drain AT verdict time always sees an empty
+    // queue; the running map is the only place the history survives.
+    last_stats: &mut std::collections::BTreeMap<String, (f64, f64, f64)>,
+) {
     let caps = {
         let mut q = RT_CAPTURE_QUEUE.lock().unwrap();
         for c in &mut *q { c.frame = frame; }
@@ -186,7 +247,10 @@ fn drain_captures(device: &manifold_gpu::GpuDevice, frame: u32) {
     if caps.is_empty() { return; }
     let dir = PathBuf::from("/tmp/rt_capture");
     let _ = std::fs::create_dir_all(&dir);
-    for c in &caps { process_capture(c, device, &dir); }
+    for c in &caps {
+        last_stats.insert(c.label.clone(), compute_rt_channel_stats(c, device));
+        process_capture(c, device, &dir);
+    }
 }
 
 pub(crate) fn arm_capture() {
@@ -225,6 +289,14 @@ pub fn run(args: &[String]) -> ! {
         .find(|w| w[0] == "--disable-driver-at")
         .and_then(|w| w[1].parse().ok());
 
+    // `--live-flip <param_id>`: after initial play phase, flip a scene param
+    // live (e.g., "rt_enabled" or "temporal_upscale") and capture stats before/after
+    // to verify the toggle takes effect. Used to repro BUG-18l (inert live toggles).
+    let live_flip_param: Option<String> = args
+        .windows(2)
+        .find(|w| w[0] == "--live-flip")
+        .map(|w| w[1].to_string());
+
     // Resolve project path: skip the subcommand name (args[0]), then first non-flag arg.
     let project_path = args.iter().skip(1)
         .find(|a| !a.starts_with("--"))
@@ -248,6 +320,19 @@ pub fn run(args: &[String]) -> ! {
     let h = real_project.settings.output_height.max(1) as u32;
     println!("output={w}x{h} fps={fr}");
 
+    // Resolve param IDs from the loaded project BEFORE sending to content thread.
+    let mut resolved_sets: Vec<(usize, String, f32)> = Vec::new();
+    for (param_id, value) in &sets {
+        let (layer_idx, resolved_id) = resolve_param_id(&real_project, param_id);
+        resolved_sets.push((layer_idx, resolved_id, *value));
+    }
+
+    let (resolved_flip_layer, resolved_flip_param) = if let Some(ref flip_id) = live_flip_param {
+        resolve_param_id(&real_project, flip_id)
+    } else {
+        (0, String::new())
+    };
+
     let empty = manifold_core::project::Project::default();
     let mut ct = headless_content_thread(empty, w, h);
     ct.timer.set_target_fps(fr);
@@ -264,12 +349,14 @@ pub fn run(args: &[String]) -> ! {
     ct.handle_command(ContentCommand::Play);
     let rotation_frames = if paused_mode { 60 } else { total_frames };
 
-    // One-shot --set writes, through the same MutateProject path the UI uses.
-    for (param, value) in &sets {
-        let (param, value) = (param.clone(), *value);
+    // One-shot --set writes, using resolved layer indices and param IDs.
+    for (layer_idx, param, value) in resolved_sets {
         ct.handle_command(ContentCommand::MutateProject(Box::new(move |project| {
-            if let Some(g) = project.timeline.layers[0].gen_params_mut() {
+            if let Some(g) = project.timeline.layers.get_mut(layer_idx).and_then(|l| l.gen_params_mut()) {
+                let old = g.get_param(&param);
                 g.set_param(&param, value);
+                let new = g.get_param(&param);
+                eprintln!("[rt-capture] --set: layer[{layer_idx}] param '{param}' {old:.2} → {new:.2}");
             }
         })));
     }
@@ -288,6 +375,13 @@ pub fn run(args: &[String]) -> ! {
                 frame == n + 5 || frame == n + 15 || frame == n + 30 || frame == n + 90
             })
     };
+
+    // Track stats before/after live flip for verdict reporting.
+    let mut last_stats: std::collections::BTreeMap<String, (f64, f64, f64)> =
+        Default::default();
+    let mut stats_before_flip: Option<std::collections::BTreeMap<String, (f64, f64, f64)>> = None;
+    let mut stats_after_flip: Option<std::collections::BTreeMap<String, (f64, f64, f64)>> = None;
+    let mut live_flip_sent = false;
 
     for frame in 0..rotation_frames {
         if disable_driver_at == Some(frame) {
@@ -322,7 +416,44 @@ pub fn run(args: &[String]) -> ! {
         }
         ct.timer.wait_for_deadline();
         ct.tick_frame(&state_tx);
-        if let Some(dev) = ct.content_pipeline.native_device() { drain_captures(dev, frame); }
+        if let Some(dev) = ct.content_pipeline.native_device() { drain_captures(dev, frame, &mut last_stats); }
+    }
+
+    // Capture stats before live flip (at end of phase 1).
+    if live_flip_param.is_some() {
+        stats_before_flip = Some(last_stats.clone());
+    }
+
+    // Send live flip command (toggle the param value).
+    if live_flip_param.is_some() {
+        let param = resolved_flip_param.clone();
+        let layer_idx = resolved_flip_layer;
+        ct.handle_command(ContentCommand::MutateProject(Box::new(move |project| {
+            if let Some(g) = project.timeline.layers.get_mut(layer_idx).and_then(|l| l.gen_params_mut()) {
+                // Read current value and flip it (for bool params).
+                let current = g.get_param(&param);
+                let flipped = 1.0 - current;
+                g.set_param(&param, flipped);
+                let verified = g.get_param(&param);
+                eprintln!("[rt-capture] --live-flip: layer[{layer_idx}] param '{param}' {current:.2} → {verified:.2}");
+            }
+        })));
+        live_flip_sent = true;
+        println!("=== LIVE FLIP: toggled param '{resolved_flip_param}' on layer[{resolved_flip_layer}] ===");
+    }
+
+    // Phase 2: play additional frames after flip.
+    if live_flip_param.is_some() {
+        let flip_frames = 120u32;
+        for frame in rotation_frames..(rotation_frames + flip_frames) {
+            if frame == rotation_frames + 30 || frame == rotation_frames + 90 {
+                arm_capture();
+            }
+            ct.timer.wait_for_deadline();
+            ct.tick_frame(&state_tx);
+            if let Some(dev) = ct.content_pipeline.native_device() { drain_captures(dev, frame, &mut last_stats); }
+        }
+        stats_after_flip = Some(last_stats.clone());
     }
 
     // Phase 2 (paused mode only): Pause, keep calling tick_frame.
@@ -336,13 +467,57 @@ pub fn run(args: &[String]) -> ! {
             }
             ct.timer.wait_for_deadline();
             ct.tick_frame(&state_tx);
-            if let Some(dev) = ct.content_pipeline.native_device() { drain_captures(dev, host); }
+            if let Some(dev) = ct.content_pipeline.native_device() { drain_captures(dev, host, &mut last_stats); }
         }
     }
 
     // Final flush.
-    if let Some(dev) = ct.content_pipeline.native_device() { drain_captures(dev, total_frames); }
+    if let Some(dev) = ct.content_pipeline.native_device() { drain_captures(dev, total_frames, &mut last_stats); }
     drop(state_tx); drain.join().expect("drain join");
+
+    // Report live-flip verdict.
+    if live_flip_sent
+        && let (Some(before), Some(after)) = (stats_before_flip, stats_after_flip)
+    {
+            let mut changed = false;
+            // Union of labels: an RT channel that only APPEARS after the
+            // flip (rt off→on) or vanishes (on→off) is the strongest
+            // possible evidence of an effective toggle — a before-keys-only
+            // walk silently missed exactly that case.
+            let labels: std::collections::BTreeSet<&String> =
+                before.keys().chain(after.keys()).collect();
+            for label in labels {
+                let b = before.get(label);
+                let a = after.get(label);
+                match (b, a) {
+                    (Some((hb, lb, _)), Some((ha, la, _))) => {
+                        if (hb - ha).abs() > 0.01 || (lb - la).abs() > 0.01 {
+                            changed = true;
+                            eprintln!(
+                                "[rt-capture] {label} stats changed: hit {hb:.6} → {ha:.6}, luma {lb:.6} → {la:.6}"
+                            );
+                        }
+                    }
+                    (None, Some((ha, la, _))) => {
+                        changed = true;
+                        eprintln!(
+                            "[rt-capture] {label} APPEARED after flip: hit {ha:.6}, luma {la:.6}"
+                        );
+                    }
+                    (Some((hb, lb, _)), None) => {
+                        changed = true;
+                        eprintln!(
+                            "[rt-capture] {label} VANISHED after flip (was hit {hb:.6}, luma {lb:.6})"
+                        );
+                    }
+                    (None, None) => unreachable!(),
+                }
+            }
+            let verdict = if changed { "LIVE-FLIP EFFECTIVE" } else { "LIVE-FLIP INERT" };
+            println!("{verdict}");
+            eprintln!("{verdict}");
+    }
+
     println!("=== DONE ===");
     std::process::exit(0);
 }
