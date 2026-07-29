@@ -70,6 +70,15 @@ impl Artifact {
                 if v.verdict != "accept" && v.verdict != "reject" {
                     return Err(format!("verdict must be \"accept\" or \"reject\", got {:?}", v.verdict));
                 }
+                // Mirrors gate_runner's MIN_RATIONALE_CHARS: the why is the
+                // record. Enforced here so the retry loop teaches the model,
+                // not the recording step (D8).
+                if v.rationale.trim().chars().count() < 20 {
+                    return Err(
+                        "rationale is too short (< 20 chars) — the why is the record; 'looks good' is not a why"
+                            .to_string(),
+                    );
+                }
                 serde_json::to_value(v).expect("Verdict serializes")
             }
             ArtifactKind::ChangeSet => {

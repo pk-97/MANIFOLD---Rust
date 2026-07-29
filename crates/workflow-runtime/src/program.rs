@@ -22,6 +22,10 @@ pub struct Program {
     /// Execute NEVER parallelizes (D-59: concurrent GPU gates flake).
     #[serde(default)]
     pub parallel: bool,
+    /// Task/bead ID. When set, every completed verdict step is recorded in
+    /// the shared decisions trail via `gate_runner review` (D8). Absent =
+    /// verdicts stay in the run dir (toy/test programs never pollute it).
+    pub task: Option<String>,
     #[serde(rename = "step")]
     pub steps: Vec<Step>,
 }
