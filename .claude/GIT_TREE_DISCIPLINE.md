@@ -100,29 +100,35 @@ Obsolete when: main stops being a locally-landed shared trunk (PR/CI-gated merge
   "Last-known-good" is now a property of the gate (clippy + tests before any
   merge), not of linearity.
 - **To land a workstream:** fetch → merge current `origin/main` into your
-  branch → rerun the gate (touched-crate clippy + focused tests; the full
-  workspace sweep — workspace clippy `--tests` + `cargo nextest run --workspace` +
-  `cargo deny check bans` + `scripts/feature_matrix.py` (non-default features
-  are invisible to the workspace sweep and rot without it, FOUNDATIONAL_GAPS.md
-  A7 (feature-matrix build rot)) — at batched landings per section 2c, or sooner when blast
-  radius says so; plus the UI flow gate — `scripts/run_ui_flows.py
-  --touched origin/main...HEAD` — path-scoped via the flow manifest's
-  `path_triggers`, exits 0 immediately when no flow-mapped path is touched;
-  added after BUG-313 shipped with its catching flow red and unrun. The flow
-  gate is hook-enforced: the run writes a marker
-  (`.claude/orchestration/flow-gate-marker.json`, main checkout) and
-  `preToolUseBash.py` (`flow_gate_guard`) denies a merge into main whose
-  branch touches flow-mapped paths without a green marker at that exact tip) →
-  `git merge --no-ff` into main → push → if the push is
-  rejected because someone landed first, repeat. New/renamed docs need
-  `scripts/gen_docs_index.py` before the sweep — a freshness test
-  enforces it. The gate also owns status housekeeping: in the worktree, run
-  its copy of `.claude/hooks/design_status_check.py origin/main HEAD`, so
-  design-doc status lines land in the same merge as the code. (Bug status
-  lives in beads since BUG_BACKLOG.md froze 2026-07-25 — `bug_status.py` and
-  its landing-time reflow are retired.) The post-merge housekeeper on main is
-  a backstop, not the workflow — its remedies are worktree-shaped, never
-  in-place edits to main.
+  branch → run the worktree's `scripts/landing_gate.py` → `git merge
+  --no-ff` into main → push → if the push is rejected because someone landed
+  first, repeat. The script is the whole landing gate and gates only what
+  the branch touched: design-status housekeeping
+  (`.claude/hooks/design_status_check.py origin/main HEAD`, so status lines
+  land in the same merge as the code), docs-index freshness when docs were
+  added/renamed (`scripts/gen_docs_index.py`), the UI flow gate
+  (`scripts/run_ui_flows.py --touched` — path-scoped via the flow manifest's
+  `path_triggers`; added after BUG-313 (drag flow red and unrun) and
+  hook-enforced: the run writes `.claude/orchestration/flow-gate-marker.json`
+  in the main checkout and `preToolUseBash.py` (`flow_gate_guard`) denies a
+  merge into main whose branch touches flow-mapped paths without a green
+  marker at that exact tip), `cargo deny check bans`, touched-crate clippy
+  `--tests` + touched-crate nextest, and `scripts/gpu_proofs_gate.py` when
+  the diff touches GPU paths. (Bug status lives in beads since
+  BUG_BACKLOG.md froze 2026-07-25 — `bug_status.py` and its landing-time
+  reflow are retired.) The post-merge housekeeper on main is a backstop, not
+  the workflow — its remedies are worktree-shaped, never in-place edits to
+  main.
+- **The workspace-wide sweep is NOT a landing item (Peter, 2026-07-29).**
+  Lanes verify their branches; the only merge-time risk is the touched-crate
+  collision with fresh main, and the touched-crate gate covers it. Workspace
+  clippy `--tests`, `cargo nextest run --workspace`, and
+  `scripts/feature_matrix.py` (non-default features are invisible to the
+  workspace sweep and rot without it, FOUNDATIONAL_GAPS.md A7
+  (feature-matrix build rot)) run nightly on main instead:
+  `scripts/trunk_health.py` (launchd `com.manifold.trunk-health`, 04:30),
+  which files a P1 `trunk-health` bead per red gate. Cross-crate rot
+  surfaces next morning as a bead, never as landing ceremony.
 - **Perf soak is NOT a landing-gate item** (Peter, 2026-07-29 — it burns time
   and GPU on every render-path landing, and the relative baseline is noisy on
   a loaded machine). `cargo xtask perf-soak` (PERF_BUDGET_GATE_DESIGN.md P3)

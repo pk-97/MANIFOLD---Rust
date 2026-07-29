@@ -655,17 +655,16 @@ def _branch_force_targets_main(rest_toks):
 
 LANDING_PROTOCOL_REMINDER = (
     "Landing on main. Protocol (.claude/GIT_TREE_DISCIPLINE.md §2): fetch, "
-    "merge current origin/main into your branch, rerun the gate (clippy + "
-    "focused tests, full workspace sweep if blast radius says so), `git merge "
-    "--no-ff` into main, push — if rejected because someone landed first, "
-    "repeat. Twin-killers: never cherry-pick/re-commit content that already "
-    "exists as commits on a live branch (merge it instead, so SHAs stay "
-    "shared); never delete a branch until `git merge-base --is-ancestor <tip> "
-    "origin/main` confirms its commits are on main. The gate includes the UI "
-    "flow gate: `scripts/run_ui_flows.py --touched origin/main...HEAD` "
-    "(path-scoped via the flow manifest's path_triggers; exits 0 immediately "
-    "when no flow-mapped path is touched — BUG-313 shipped because nobody ran "
-    "the flows)."
+    "merge current origin/main into your branch, run `scripts/landing_gate.py` "
+    "(touched-crate clippy + nextest, deny bans, UI flow gate, docs/design "
+    "status, GPU proofs when GPU paths touched), `git merge --no-ff` into "
+    "main, push — if rejected because someone landed first, repeat. The "
+    "workspace sweep is NOT a landing item; it runs nightly via "
+    "scripts/trunk_health.py. Twin-killers: never cherry-pick/re-commit "
+    "content that already exists as commits on a live branch (merge it "
+    "instead, so SHAs stay shared); never delete a branch until `git "
+    "merge-base --is-ancestor <tip> origin/main` confirms its commits are on "
+    "main."
 )
 
 

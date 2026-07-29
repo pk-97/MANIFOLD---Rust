@@ -136,6 +136,7 @@ def main():
             return 2
 
         # Dedupe check
+        already_filed = False
         try:
             result = subprocess.run([BD, "list", "--status", "open", "--json", "--flat"],
                                    capture_output=True, text=True, timeout=30)
@@ -143,16 +144,22 @@ def main():
                 for line in result.stdout.strip().splitlines():
                     if "trunk-health:" in line and cmd_str in line:
                         print(f"[trunk-health] existing bead found, skipping: {line[:100]}")
-                        continue
+                        already_filed = True
+                        break
         except Exception as e:
             print(f"[trunk-health] dedupe check failed: {e}")
+        if already_filed:
+            continue
 
         # File new bead
         title = f"trunk-health red: {cmd_str[:60]}"
         desc = f"trunk-health: {cmd_str} red on main @{sha} ({datetime.now().strftime('%Y-%m-%d')}); tail: {tail}"
         try:
-            subprocess.run([BD, "create", title, "-t", "bug", "-p", "1", "-l", "trunk-health,open", "-d", desc],
-                          timeout=30)
+            r = subprocess.run([BD, "create", title, "-t", "bug", "-p", "1", "-l", "trunk-health,open", "-d", desc],
+                              capture_output=True, text=True, timeout=30)
+            if r.returncode != 0:
+                print(f"[trunk-health] failed to file bead (exit {r.returncode}): {(r.stderr or '').strip()[:200]}")
+                return 2
             print(f"[trunk-health] filed bead: {title}")
         except Exception as e:
             print(f"[trunk-health] failed to file bead: {e}")

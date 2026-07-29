@@ -155,10 +155,10 @@ Per phase: clippy on TOUCHED crates only (`cargo clippy -p <crate> -- -D warning
 and focused tests via `cargo nextest run -p <crate> --lib` (parallel test binaries;
 GPU-proofs suites STAY on `cargo test` — the in-process `test_device` lock is the
 device serializer, and nextest's process-per-test model would defeat it); batch the
-phase's edits and verify ONCE at the end. The full workspace sweep (workspace clippy + `cargo nextest run --workspace`
-+ `cargo deny check bans`) runs ONCE per workstream, at landing time, in the warm
-main checkout — never in a worktree, where it is a second cold build
-(`feedback_prefer_focused_tests`, `.claude/GIT_TREE_DISCIPLINE.md` section 2c (Build-speed rules (added 2026-07-10 — orchestration wall-clock pass))).
+phase's edits and verify ONCE at the end. Landing runs `scripts/landing_gate.py`
+(touched-crate-only); the full workspace sweep is NOT a landing item — it runs
+nightly on main via `scripts/trunk_health.py`, which files beads on red
+(`feedback_prefer_focused_tests`, `.claude/GIT_TREE_DISCIPLINE.md` section 2 (Landing protocol)).
 
 ## 5. Git modes — reference, don't restate
 

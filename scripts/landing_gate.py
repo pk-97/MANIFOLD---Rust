@@ -16,9 +16,16 @@ from pathlib import Path
 
 
 def run_cmd(cmd, cwd, timeout):
-    """Run subprocess, return (exit, stdout, stderr, duration)."""
+    """Run subprocess, return (exit, stdout, stderr, duration).
+
+    A timeout is a FAIL (-1), never a traceback — the gate must always end
+    at its summary line."""
     start = time.time()
-    r = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True, timeout=timeout)
+    try:
+        r = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        duration = time.time() - start
+        return -1, "", f"TIMEOUT after {duration:.0f}s: {' '.join(cmd)}", duration
     duration = time.time() - start
     return r.returncode, r.stdout, r.stderr, duration
 
