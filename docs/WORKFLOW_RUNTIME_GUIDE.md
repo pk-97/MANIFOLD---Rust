@@ -14,7 +14,13 @@ program should have had.
 ```
 cargo build -p workflow-runtime
 target/debug/workflow run <program.toml> [--run-id <id>] [--mock <responses.jsonl>]
+target/debug/workflow unpark <run-dir> <step>   # clear a parked step, then rerun to retry it
 ```
+
+One live invocation per run dir (a lockfile enforces it); the run id defaults to the
+program's `name`. Rerunning the same command resumes: completed steps load from disk, and a
+changed STEP LIST refuses to resume (raising `token_budget` or editing a template is fine —
+that's the sanctioned resume flow).
 
 Run from the checkout root you want `file:` inputs and gates resolved against. Without
 `--mock` the live litellm proxy is used (must be up: 500s from a seat are a proxy/quota
@@ -33,7 +39,7 @@ State lives in `.claude/orchestration/runs/<run-id>/` (gitignored):
 |---|---|---|
 | 0 | All steps done — but CHECK `parked.jsonl`; parked steps don't block completion | Review artifacts; parked = read the reason before anything else |
 | 10 | Escalated | Write your answer under the marker in the named file, rerun the same command |
-| 20 | A parked step blocks a dependent step | Read `parked.jsonl`; fix the program or brief, rerun (completed steps are kept) |
+| 20 | A parked step blocks a dependent step | Read `parked.jsonl`; fix the cause, then `workflow unpark <run-dir> <step>` and rerun — a plain rerun SKIPS parked steps |
 | 2 | Runtime/transport error (incl. token-budget suspension) | Read the message; budget overrun → raise `token_budget`, rerun to resume |
 
 **Exit 0 is not success by itself.** A run where every model step parked still exits 0 if
@@ -53,6 +59,11 @@ nothing depended on them. Always read `parked.jsonl` and the artifacts before re
   gate runs; a red gate means the branch holds a failing commit and the next attempt stacks a
   fix on top. That's by design (the branch is the workbench, review happens before landing).
 - **POOL FULL on acquire:** the slot ring is exhausted — a loud stop, never worked around.
+- **Gate TIMEOUT:** any gate command outliving `gate_timeout_s` (default 900s) is killed and
+  FAILS with a `TIMEOUT` tail — a hung cargo or deadlocked GPU test parks instead of holding
+  the run overnight.
+- **Stale worktree on resume:** if the slot ring re-issued the run's worktree, resume stops
+  loudly (branch mismatch) — use a fresh run-id; never point a new program at an old run dir.
 
 ## Check-in discipline
 
@@ -61,9 +72,12 @@ a parked step is a NEW SAMPLE, not a retry — same input, different output is n
 (`docs/SEMANTIC_WORKFLOW_PROGRAMS.md` section 4 (the holes): non-determinism survives
 temperature 0). Never call a run green from the exit code alone; the artifacts and
 `parked.jsonl` are the report. Never hand-edit run state except the escalation answer files.
-Cost check: `transcript.jsonl` usage fields sum to the run's spend; the program's
-`token_budget` (default 500K) suspends a runaway run hard — raise it consciously, never
-reflexively.
+Cost check: each transcript line's `response.attempts` array records EVERY HTTP post the
+transport made (internal budget-doubling retries and model fallbacks included); the token
+budget sums those, so hidden retries are never free. `token_budget` (default 500K) suspends
+a runaway run hard — raise it consciously, never reflexively. When answering an escalation,
+write your answer AFTER the final answer marker and never quote the marker line inside your
+answer text.
 
 ## Program reference
 
@@ -87,7 +101,14 @@ artifact = "text"              # text | json | verdict | change_set (execute is 
 template = "brief.md"          # prompt file, relative to the program file
 inputs = ["earlier-step", "file:docs/X.md"]   # {{slot}} substitutions; all must be used
 gate = ["cargo clippy -p x -- -D warnings"]   # exit-code checks; execute REQUIRES one
+gate_timeout_s = 900               # per-command kill-and-FAIL timeout (default 900)
 ```
+
+Gate cwd: with a `[target]`, ALL gates (gate steps and per-step gates) run in the target
+worktree — they verify the work, never the main checkout. `$WORKFLOW_RUN_DIR` is set for
+gate commands that need run state. The worktree slot is NOT auto-released at run end (review
+needs the tree): release it yourself after landing or discarding
+(`scripts/agent-worktree.py release <slot>`).
 
 Opcodes: `generate` = context → artifact, no side effects. `execute` = ChangeSet applied
 atomically in the target worktree, pathspec-only commit, gate in the worktree, red fed back.

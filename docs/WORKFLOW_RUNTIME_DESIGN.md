@@ -153,7 +153,13 @@ P2 (D3/D5/D8), or Deferred.
 
 ## 7. Deferred
 
-- **LOCATE opcode** (model-driven file selection). Revive: first time a pre-selected-context
+- **D8 verdict recording** (`gate_runner review` call after a Verdict artifact) — not wired
+  yet; P3 builds it with the first real reviewed run. Until then verdict artifacts stay in
+  the run dir only (2026-07-29 adversarial review, contract-gap note).
+- **Slot auto-release / `workflow release` verb.** Runs keep their worktree for review;
+  release is manual. Revive if a wave leaks slots to POOL FULL in practice.
+
+- **LOCATE opcode (original list)** (model-driven file selection). Revive: first time a pre-selected-context
   brief parks on "missing context".
 - **Parallel steps.** Revive: a program whose critical path is provably model-latency-bound,
   AND a non-GPU gate set.

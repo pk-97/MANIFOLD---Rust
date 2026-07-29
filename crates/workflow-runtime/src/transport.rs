@@ -20,8 +20,13 @@ pub struct CompletionRequest {
 #[derive(Debug, Clone)]
 pub struct CompletionResponse {
     pub content: String,
-    /// Raw usage object from the provider, for the transcript. Empty for mocks.
+    /// Usage of the FINAL response (kept for artifact context).
     pub usage: serde_json::Value,
+    /// One record per HTTP post, internal retries and fallbacks included:
+    /// {"model": ..., "usage": ...} or {"model": ..., "error": ...}.
+    /// The budget sums these; the transcript logs them (finding 3 of the
+    /// 2026-07-29 adversarial review: hidden retries must not be free).
+    pub attempts: Vec<serde_json::Value>,
 }
 
 #[derive(Debug)]
@@ -66,9 +71,11 @@ impl ModelTransport for MockTransport {
             return Err(TransportError("mock transport exhausted".to_string()));
         };
         *self.requests_served.borrow_mut() += 1;
+        let usage = serde_json::json!({ "total_tokens": self.tokens_per_response });
         Ok(CompletionResponse {
             content,
-            usage: serde_json::json!({ "total_tokens": self.tokens_per_response }),
+            attempts: vec![serde_json::json!({"model": "mock", "usage": usage})],
+            usage,
         })
     }
 }
@@ -120,12 +127,14 @@ impl ModelTransport for LiveTransport {
     fn complete(&self, req: &CompletionRequest) -> Result<CompletionResponse, TransportError> {
         let mut model = req.model.clone();
         let mut budget = req.max_tokens;
+        let mut attempts: Vec<serde_json::Value> = Vec::new();
         loop {
             let resp = match self.post(&model, budget, req) {
                 Ok(v) => v,
                 // Quota/transport failure on the default seat → one hop to the
                 // kimi fast tier (oneshot's verified fallback), then surface.
                 Err(e) if model == "deepseek-v4-flash" => {
+                    attempts.push(serde_json::json!({"model": model, "error": e.to_string()}));
                     eprintln!("workflow: {model} failed ({e}) — falling back to {FALLBACK_MODEL}");
                     model = FALLBACK_MODEL.to_string();
                     continue;
@@ -135,6 +144,7 @@ impl ModelTransport for LiveTransport {
             let content = resp["choices"][0]["message"]["content"].as_str().unwrap_or("").trim().to_string();
             let finish = resp["choices"][0]["finish_reason"].as_str().unwrap_or("").to_string();
             let usage = resp["usage"].clone();
+            attempts.push(serde_json::json!({"model": model, "usage": usage}));
             // Budget exhaustion — empty OR truncated mid-output (the D-54
             // reasoning wall truncates non-empty JSON too) — double and retry.
             if (content.is_empty() || finish == "length") && budget < BUDGET_CAP {
@@ -143,7 +153,7 @@ impl ModelTransport for LiveTransport {
                 continue;
             }
             if !content.is_empty() {
-                return Ok(CompletionResponse { content, usage });
+                return Ok(CompletionResponse { content, usage, attempts });
             }
             return Err(TransportError(format!("empty content from {model} (usage: {usage})")));
         }

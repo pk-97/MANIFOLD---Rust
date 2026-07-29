@@ -202,6 +202,98 @@ fn token_budget_suspends_before_the_next_call() {
 }
 
 #[test]
+fn escalation_question_quoting_the_marker_cannot_self_answer() {
+    // Finding 1: a question that MENTIONS the answer marker must still wait.
+    let fx = Fixture::new(
+        "esc-marker",
+        ESCALATE,
+        &[("q.md", "Write below '## ANSWER (write below this line, then rerun)' please: which alpha?"), ("u.md", "use {{ask}}")],
+    );
+    let mock = MockTransport::new(vec!["used".into()]);
+    let Outcome::Escalated(path) = run(&fx.cfg(), &mock).unwrap() else { panic!() };
+    // Rerun with NO answer written — must stay escalated, never self-answer.
+    let outcome = run(&fx.cfg(), &mock).unwrap();
+    assert_eq!(outcome, Outcome::Escalated(path.clone()));
+    fs::write(&path, format!("{}\n0.07\n", fs::read_to_string(&path).unwrap())).unwrap();
+    assert_eq!(run(&fx.cfg(), &mock).unwrap(), Outcome::Done);
+}
+
+#[test]
+fn unpark_lets_a_rerun_retry() {
+    // Finding 2: parked must be recoverable through the CLI-sanctioned path.
+    let fx = Fixture::new(
+        "unpark",
+        "name = \"u\"\n[[step]]\nname = \"g\"\nopcode = \"gate\"\ngate = [\"test -f flag\"]",
+        &[],
+    );
+    let mock = MockTransport::new(vec![]);
+    assert_eq!(run(&fx.cfg(), &mock).unwrap(), Outcome::Done); // parks g
+    assert!(fx.root.join("run/parked.jsonl").exists());
+    fs::write(fx.root.join("flag"), "x").unwrap(); // fix the environment
+    assert_eq!(run(&fx.cfg(), &mock).unwrap(), Outcome::Done); // still parked: skipped
+    assert!(fx.root.join("run/parked.jsonl").exists());
+    workflow_runtime::runner::unpark(&fx.root.join("run"), "g").unwrap();
+    assert_eq!(run(&fx.cfg(), &mock).unwrap(), Outcome::Done);
+    assert!(fx.root.join("run/step-00-g.json").exists(), "gate retried and passed");
+}
+
+#[test]
+fn changed_step_list_refuses_resume_but_budget_raise_is_fine() {
+    // Finding 7: reordered/renamed steps refuse; a token_budget raise resumes.
+    let fx = Fixture::new("progchange", TWO_STEP, &[("draft.md", "d"), ("critique.md", "c {{draft}}")]);
+    let mock = MockTransport::new(vec!["a".into(), "b".into()]);
+    assert_eq!(run(&fx.cfg(), &mock).unwrap(), Outcome::Done);
+    let renamed = TWO_STEP.replace("draft", "sketch"); // rename ripples through inputs
+    fs::write(fx.root.join("programs/program.toml"), renamed).unwrap();
+    let err = run(&fx.cfg(), &MockTransport::new(vec![])).unwrap_err();
+    assert!(err.contains("step list changed"), "{err}");
+}
+
+#[test]
+fn edit_and_write_to_same_path_is_refused() {
+    // Finding 12: a write would silently clobber the edit.
+    let fx = Fixture::new("overlap", "name = \"placeholder\"\n[[step]]\nname=\"x\"\nopcode=\"gate\"\ngate=[\"true\"]", &[]);
+    let target = init_target_repo(&fx);
+    fs::write(fx.root.join("programs/program.toml"), execute_program(&target, 0)).unwrap();
+    fs::write(fx.root.join("programs/brief.md"), "rename old_name to new_name in:\n{{file:lib.rs}}").unwrap();
+    let overlap = r#"{"edits": [{"path": "lib.rs", "find": "fn old_name()", "replace": "fn new_name()"}],
+        "writes": [{"path": "lib.rs", "content": "fn something_else() {}"}], "commit_message": "overlap"}"#;
+    let mock = MockTransport::new(vec![overlap.into()]);
+    assert_eq!(run(&fx.cfg(), &mock).unwrap(), Outcome::Done); // parks
+    let parked = fs::read_to_string(fx.root.join("run/parked.jsonl")).unwrap();
+    assert!(parked.contains("both `edits` and `writes`"), "{parked}");
+    assert!(fs::read_to_string(target.join("lib.rs")).unwrap().contains("fn old_name()"));
+}
+
+#[test]
+fn torn_trailing_transcript_line_is_tolerated() {
+    // Finding 11: a kill mid-append must not brick the resume.
+    let fx = Fixture::new("torn", TWO_STEP, &[("draft.md", "d"), ("critique.md", "c {{draft}}")]);
+    let mock = MockTransport::new(vec!["a".into(), "b".into()]);
+    assert_eq!(run(&fx.cfg(), &mock).unwrap(), Outcome::Done);
+    let tpath = fx.root.join("run/transcript.jsonl");
+    let mut t = fs::read_to_string(&tpath).unwrap();
+    t.push_str("{\"step\": \"torn mid-wri"); // simulated kill mid-append
+    fs::write(&tpath, t).unwrap();
+    assert_eq!(run(&fx.cfg(), &MockTransport::new(vec![])).unwrap(), Outcome::Done);
+}
+
+#[test]
+fn gate_timeout_kills_and_fails() {
+    // Finding 5: a hung gate dies, marked TIMEOUT.
+    let fx = Fixture::new(
+        "gatehang",
+        "name = \"h\"\n[[step]]\nname = \"hang\"\nopcode = \"gate\"\ngate = [\"sleep 30\"]\ngate_timeout_s = 1",
+        &[],
+    );
+    let start = std::time::Instant::now();
+    assert_eq!(run(&fx.cfg(), &MockTransport::new(vec![])).unwrap(), Outcome::Done); // parks
+    assert!(start.elapsed().as_secs() < 10, "gate must be killed at the timeout");
+    let parked = fs::read_to_string(fx.root.join("run/parked.jsonl")).unwrap();
+    assert!(parked.contains("TIMEOUT"), "{parked}");
+}
+
+#[test]
 fn template_slots_are_loud_both_directions() {
     let mut inputs = BTreeMap::new();
     inputs.insert("a".to_string(), "x".to_string());

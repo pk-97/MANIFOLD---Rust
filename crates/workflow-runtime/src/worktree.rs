@@ -45,6 +45,16 @@ pub fn acquire(repo_root: &Path, label: &str, branch: &str, tip: Option<&str>) -
 /// zero or multiple matches is an error fed back to the model (D5a).
 /// Returns the touched paths (the commit pathspec).
 pub fn apply(worktree: &Path, change: &ChangeSet) -> Result<Vec<String>, String> {
+    // A path in both `edits` and `writes` would silently discard the edit
+    // (finding 12) — refuse.
+    for e in &change.edits {
+        if change.writes.iter().any(|wr| wr.path == e.path) {
+            return Err(format!(
+                "path {} appears in both `edits` and `writes` — pick one; a write replaces the whole file",
+                e.path
+            ));
+        }
+    }
     // Two passes — validate every edit, then write. A failed attempt must
     // leave the tree untouched or the next attempt fights phantom state.
     let mut staged: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
@@ -88,6 +98,30 @@ pub fn apply(worktree: &Path, change: &ChangeSet) -> Result<Vec<String>, String>
     paths.sort();
     paths.dedup();
     Ok(paths)
+}
+
+/// Resume guard (finding 9): the ring may have re-issued a slot since this
+/// run last touched it. Verify the tree exists and is on OUR branch before
+/// committing anything into it.
+pub fn verify(wt: &Worktree, expected_branch: Option<&str>) -> Result<(), String> {
+    if !wt.path.is_dir() {
+        return Err(format!("worktree {} no longer exists — re-run with a fresh run-id", wt.path.display()));
+    }
+    let Some(expected) = expected_branch else { return Ok(()) };
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(&wt.path)
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .output()
+        .map_err(|e| format!("git spawn failed: {e}"))?;
+    let actual = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if actual != expected {
+        return Err(format!(
+            "worktree {} is on branch {actual:?}, expected {expected:?} — the slot was likely re-issued; use a fresh run-id",
+            wt.path.display()
+        ));
+    }
+    Ok(())
 }
 
 /// INVARIANT: pathspec-only — never the index, never `add -A`.

@@ -70,6 +70,13 @@ pub struct Step {
     /// Shell commands; non-zero exit fails the attempt (generate) or the step (gate).
     #[serde(default)]
     pub gate: Vec<String>,
+    /// Per-command timeout; a gate outliving it is killed and FAILS.
+    #[serde(default = "default_gate_timeout")]
+    pub gate_timeout_s: u64,
+}
+
+fn default_gate_timeout() -> u64 {
+    crate::gates::DEFAULT_GATE_TIMEOUT_S
 }
 
 impl Program {
