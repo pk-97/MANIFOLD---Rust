@@ -351,7 +351,7 @@ fn temporal_upscale_toggle_never_stalls_past_20ms() {
     let native_target = h.make_target("rt-t2b-toggle-native");
     let upscale_target = h.make_target("rt-t2b-toggle-upscale");
 
-    const WARMUP_FRAMES_EXEMPT: i64 = 2;
+    use crate::rt_p1_region_probe::WARMUP_FRAMES_EXEMPT;
     let mut worst: (&str, i64, f64) = ("", -1, 0.0);
 
     // native -> upscaled -> native, a few frames each side, simulating a

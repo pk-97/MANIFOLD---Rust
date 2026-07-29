@@ -419,7 +419,7 @@ fn rt_reflections_dispatch_never_stalls_past_20ms() {
     // frame's wall time first — the ceiling below is computed from THIS
     // run's own steady-state frames, so it can't be known until the whole
     // loop (or at least its tail) has run.
-    const WARMUP_FRAMES_EXEMPT: i64 = 2;
+    use crate::rt_p1_region_probe::WARMUP_FRAMES_EXEMPT;
     let mut frame_ms: Vec<f64> = Vec::with_capacity(RT_WARMUP_FRAMES as usize);
     let mut worst: (u32, std::time::Duration) = (0, std::time::Duration::ZERO);
     for frame in 0..RT_WARMUP_FRAMES {

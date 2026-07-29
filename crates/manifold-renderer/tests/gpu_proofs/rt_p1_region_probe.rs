@@ -62,6 +62,14 @@ pub(crate) const STALL_FACTOR: f64 = 8.0;
 /// How many of the tail (most-likely-settled) checked frames form the
 /// steady-state reference the ceiling is computed from.
 pub(crate) const STEADY_TAIL_COUNT: usize = 5;
+/// Frames exempt from the stall assert while the ASYNC accel build settles.
+/// Was a per-test `2`; under full-suite contention the settling window
+/// bleeds to frames 3-4 (observed 33-92ms right after the old cutoff,
+/// distinct from mid-steady noise blips). 5 tolerates a slow async settle
+/// without blinding the gate: the regression class this assert hunts — a
+/// synchronous `commit()`+`waitUntilCompleted()` in the frame path — recurs
+/// on every rebuild/frame, so it still lands in the checked window.
+pub(crate) const WARMUP_FRAMES_EXEMPT: i64 = 5;
 
 /// Ceiling = the greater of [`STALL_ABS_FLOOR_MS`] (the old fixed budget,
 /// kept as a floor so a uniformly-slow-but-stall-free run still passes)
@@ -395,7 +403,6 @@ fn rt_enable_first_frame_never_stalls_past_20ms() {
     // frame's wall time first — the stall ceiling below is computed from
     // THIS run's own steady-state frames, so it can't be known until the
     // whole loop (or at least its tail) has run.
-    const WARMUP_FRAMES_EXEMPT: i64 = 2;
     let mut frame_ms: Vec<f64> = Vec::with_capacity(RT_WARMUP_FRAMES as usize);
     let mut worst: (u32, std::time::Duration) = (0, std::time::Duration::ZERO);
     for frame in 0..RT_WARMUP_FRAMES {
