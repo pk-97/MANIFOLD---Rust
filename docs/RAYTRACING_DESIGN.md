@@ -529,7 +529,9 @@ stale content dies in 1–2 frames; at noisy texels the box widens so amortizati
 where it is needed. Gate consequence: the step-leg pass value moved from ≈1.1 (slow blend — now
 the MUST-FAIL signature of a dead clamp) to measured ≈1.67; new kernel-level value proof
 `rt_r2_clamp.rs` on the RT-T1-B debug-dispatch pattern. RT_REFL_CLAMP_GAMMA (0.5–3.0) joins the
-untuned set — tuning stays Peter's look.
+untuned set — tuning stays Peter's look. v2 same day, BUG-axe9 (tone-mapped variance clip):
+Peter's residual verdict (fast-sweep + bright-to-black streaks) traced to linear-HDR moments —
+one hot texel inflates sigma; the clamp now maps through `c/(1+luma)`, clamps, inverts.
 
 - *Entry:* Raster-parity reflections landed; Base traced reflections' (R1) `trace_ms` delta and
   Peter's L2 verdict recorded in the phase report.
