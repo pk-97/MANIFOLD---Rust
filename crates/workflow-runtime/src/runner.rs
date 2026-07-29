@@ -44,13 +44,71 @@ pub struct ParkedItem {
 
 const ANSWER_MARKER: &str = "## ANSWER (write below this line, then rerun)";
 
+/// One invocation per run dir (finding 8): a double-start would double spend
+/// and interleave state. Stale locks (dead pid) are reclaimed.
+struct RunLock {
+    path: PathBuf,
+}
+
+impl RunLock {
+    fn take(run_dir: &Path) -> Result<RunLock, String> {
+        let path = run_dir.join("run.lock");
+        if let Ok(old) = fs::read_to_string(&path) {
+            let pid: i32 = old.trim().parse().unwrap_or(0);
+            // Signal 0 = existence probe. A live holder is a loud stop.
+            if pid > 0 && unsafe { libc_kill_probe(pid) } {
+                return Err(format!(
+                    "run dir is locked by live pid {pid} ({}) — a second concurrent invocation would double spend; wait or kill it",
+                    path.display()
+                ));
+            }
+        }
+        fs::write(&path, std::process::id().to_string()).map_err(|e| e.to_string())?;
+        Ok(RunLock { path })
+    }
+}
+
+impl Drop for RunLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+/// True iff the pid exists (kill(pid, 0) succeeds or fails with EPERM).
+unsafe fn libc_kill_probe(pid: i32) -> bool {
+    unsafe extern "C" {
+        fn kill(pid: i32, sig: i32) -> i32;
+    }
+    unsafe { kill(pid, 0) == 0 }
+}
+
+/// Resume is keyed by step index+name against the LIVE program file; an
+/// inserted/renamed/reordered step silently corrupts resume (finding 7).
+/// The guard compares the STEP LIST, not bytes — raising `token_budget` or
+/// tweaking a template between reruns are sanctioned resume flows.
+fn check_program_unchanged(cfg: &RunConfig, current: &Program) -> Result<(), String> {
+    let copy_path = cfg.run_dir.join("program.toml");
+    if copy_path.exists() {
+        let saved = Program::load(&copy_path)?;
+        let key = |p: &Program| p.steps.iter().map(|s| s.name.clone()).collect::<Vec<_>>();
+        if key(&saved) != key(current) {
+            return Err(format!(
+                "the program's step list changed since this run started ({:?} -> {:?}) — resume would mis-key step state; use a fresh run-id",
+                key(&saved),
+                key(current)
+            ));
+        }
+    }
+    // Refresh the snapshot so the run dir always shows what actually ran.
+    fs::copy(&cfg.program_path, &copy_path).map_err(|e| format!("cannot copy program: {e}"))?;
+    Ok(())
+}
+
 pub fn run(cfg: &RunConfig, transport: &dyn ModelTransport) -> Result<Outcome, String> {
     let program = Program::load(&cfg.program_path)?;
     fs::create_dir_all(&cfg.run_dir).map_err(|e| format!("cannot create run dir: {e}"))?;
-    let program_copy = cfg.run_dir.join("program.toml");
-    if !program_copy.exists() {
-        fs::copy(&cfg.program_path, &program_copy).map_err(|e| format!("cannot copy program: {e}"))?;
-    }
+    let _lock = RunLock::take(&cfg.run_dir)?;
+    check_program_unchanged(cfg, &program)?;
     let template_root = cfg
         .program_path
         .parent()
@@ -87,7 +145,12 @@ pub fn run(cfg: &RunConfig, transport: &dyn ModelTransport) -> Result<Outcome, S
 
         match step.opcode {
             Opcode::Generate => {
-                match run_generate(cfg, step, idx, &template_root, &artifacts, transport, &mut budget)? {
+                // Same rule as gate steps (finding 6): gates verify the work.
+                let gate_cwd = match &program.target {
+                    Some(t) if !step.gate.is_empty() => ensure_worktree(cfg, t)?.path,
+                    _ => cfg.repo_root.clone(),
+                };
+                match run_generate(cfg, step, idx, &template_root, &artifacts, transport, &mut budget, &gate_cwd)? {
                     Ok(artifact) => {
                         persist(&state_path, &artifact)?;
                         artifacts.insert(step.name.clone(), artifact);
@@ -99,7 +162,13 @@ pub fn run(cfg: &RunConfig, transport: &dyn ModelTransport) -> Result<Outcome, S
                 }
             }
             Opcode::Gate => {
-                let report = run_gates(&step.gate, &cfg.repo_root);
+                // Gates verify the WORK — with a target that's the worktree,
+                // never the main checkout (finding 6).
+                let gate_cwd = match &program.target {
+                    Some(t) => ensure_worktree(cfg, t)?.path,
+                    None => cfg.repo_root.clone(),
+                };
+                let report = run_gates(&step.gate, &gate_cwd, step.gate_timeout_s, &cfg.run_dir);
                 if report.pass {
                     let artifact = Artifact {
                         kind: ArtifactKind::Json,
@@ -184,7 +253,11 @@ impl Spend {
     }
     fn add(&mut self, result: &Result<crate::transport::CompletionResponse, crate::transport::TransportError>) {
         if let Ok(r) = result {
-            self.spent += r.usage["total_tokens"].as_u64().unwrap_or(0);
+            // Sum EVERY HTTP post the transport made (internal retries and
+            // fallbacks included) — hidden retries must not be free.
+            for a in &r.attempts {
+                self.spent += a["usage"]["total_tokens"].as_u64().unwrap_or(0);
+            }
         }
     }
 }
@@ -196,9 +269,27 @@ fn transcript_token_total(run_dir: &Path) -> Result<u64, String> {
         return Ok(0);
     }
     let mut total = 0;
-    for line in fs::read_to_string(&path).map_err(|e| e.to_string())?.lines() {
-        let v: serde_json::Value = serde_json::from_str(line).map_err(|e| format!("corrupt transcript: {e}"))?;
-        total += v["response"]["usage"]["total_tokens"].as_u64().unwrap_or(0);
+    let text = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let lines: Vec<&str> = text.lines().collect();
+    for (i, line) in lines.iter().enumerate() {
+        match serde_json::from_str::<serde_json::Value>(line) {
+            Ok(v) => {
+                let attempts = v["response"]["attempts"].as_array().cloned().unwrap_or_default();
+                if attempts.is_empty() {
+                    total += v["response"]["usage"]["total_tokens"].as_u64().unwrap_or(0);
+                } else {
+                    for a in &attempts {
+                        total += a["usage"]["total_tokens"].as_u64().unwrap_or(0);
+                    }
+                }
+            }
+            // A kill mid-append can tear exactly the LAST line — tolerate it
+            // (finding 11); a torn line anywhere else is real corruption.
+            Err(e) if i + 1 == lines.len() => {
+                eprintln!("workflow: dropping torn trailing transcript line ({e})");
+            }
+            Err(e) => return Err(format!("corrupt transcript: {e}")),
+        }
     }
     Ok(total)
 }
@@ -209,7 +300,11 @@ fn ensure_worktree(cfg: &RunConfig, target: &Target) -> Result<Worktree, String>
     let state = cfg.run_dir.join("worktree.json");
     if state.exists() {
         let text = fs::read_to_string(&state).map_err(|e| e.to_string())?;
-        return serde_json::from_str(&text).map_err(|e| format!("corrupt worktree.json: {e}"));
+        let wt: Worktree =
+            serde_json::from_str(&text).map_err(|e| format!("corrupt worktree.json: {e}"))?;
+        // The ring may have re-issued this slot since (finding 9).
+        worktree::verify(&wt, target.branch.as_deref())?;
+        return Ok(wt);
     }
     let wt = match &target.path {
         Some(path) => Worktree { path: path.clone(), slot: None },
@@ -236,13 +331,15 @@ fn run_execute(
     wt: &Worktree,
     budget: &mut Spend,
 ) -> Result<Result<Artifact, ParkedItem>, String> {
-    // `file:` inputs for an execute step read the WORKTREE (branch state),
-    // falling back nowhere — a missing file is a loud template error.
-    let base_prompt = render_step_template(step, template_root, &wt.path, artifacts)?;
     let mut feedback: Option<String> = None;
     let max_attempts = u32::from(step.retry_cap) + 1;
     for attempt in 1..=max_attempts {
         budget.check()?;
+        // Re-rendered EVERY attempt: an earlier attempt may have committed,
+        // and the model must quote the CURRENT worktree, not a stale excerpt
+        // (finding 4 — stale prompts made every red gate a guaranteed park).
+        // `file:` inputs read the WORKTREE, falling back nowhere.
+        let base_prompt = render_step_template(step, template_root, &wt.path, artifacts)?;
         let user = match &feedback {
             None => base_prompt.clone(),
             Some(err) => format!("{base_prompt}\n\nYour previous attempt failed:\n{err}\nEmit a corrected ChangeSet."),
@@ -267,7 +364,7 @@ fn run_execute(
                         Err(e) => e,
                         Ok(paths) => {
                             let sha = worktree::commit(&wt.path, &paths, &change.commit_message)?;
-                            let report = run_gates(&step.gate, &wt.path);
+                            let report = run_gates(&step.gate, &wt.path, step.gate_timeout_s, &cfg.run_dir);
                             if report.pass {
                                 let value = serde_json::json!({
                                     "change_set": artifact.value, "commit": sha,
@@ -302,6 +399,7 @@ fn run_generate(
     artifacts: &BTreeMap<String, Artifact>,
     transport: &dyn ModelTransport,
     budget: &mut Spend,
+    gate_cwd: &Path,
 ) -> Result<Result<Artifact, ParkedItem>, String> {
     let base_prompt = render_step_template(step, template_root, &cfg.repo_root, artifacts)?;
     let mut feedback: Option<String> = None;
@@ -329,7 +427,7 @@ fn run_generate(
                     if step.gate.is_empty() {
                         return Ok(Ok(artifact));
                     }
-                    let report = run_gates(&step.gate, &cfg.repo_root);
+                    let report = run_gates(&step.gate, gate_cwd, step.gate_timeout_s, &cfg.run_dir);
                     if report.pass {
                         return Ok(Ok(artifact));
                     }
@@ -388,7 +486,7 @@ fn log_transcript(
         "step": step, "index": idx, "attempt": attempt, "ts": ts,
         "request": req,
         "response": match result {
-            Ok(r) => serde_json::json!({"content": r.content, "usage": r.usage}),
+            Ok(r) => serde_json::json!({"content": r.content, "usage": r.usage, "attempts": r.attempts}),
             Err(e) => serde_json::json!({"error": e.to_string()}),
         },
     });
@@ -400,9 +498,13 @@ fn log_transcript(
     writeln!(f, "{line}").map_err(|e| e.to_string())
 }
 
+/// Temp-file + rename: a kill mid-write must never leave a torn step JSON
+/// (finding 11 — a torn artifact bricked every resume).
 fn persist(path: &Path, artifact: &Artifact) -> Result<(), String> {
-    fs::write(path, serde_json::to_string_pretty(artifact).expect("artifact serializes"))
-        .map_err(|e| e.to_string())
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, serde_json::to_string_pretty(artifact).expect("artifact serializes"))
+        .map_err(|e| e.to_string())?;
+    fs::rename(&tmp, path).map_err(|e| e.to_string())
 }
 
 fn load_parked(run_dir: &Path) -> Result<Vec<ParkedItem>, String> {
@@ -415,6 +517,27 @@ fn load_parked(run_dir: &Path) -> Result<Vec<ParkedItem>, String> {
         .lines()
         .map(|l| serde_json::from_str(l).map_err(|e| format!("corrupt parked.jsonl: {e}")))
         .collect()
+}
+
+/// Remove a step's parked entry so a rerun retries it — the sanctioned
+/// un-park (finding 2: parked was forever and the only escape was forbidden
+/// hand-editing). A rerun of a parked step is a NEW SAMPLE by doctrine.
+pub fn unpark(run_dir: &Path, step: &str) -> Result<(), String> {
+    let items = load_parked(run_dir)?;
+    if !items.iter().any(|p| p.step == step) {
+        return Err(format!("step {step:?} is not parked (parked: {:?})", items.iter().map(|p| &p.step).collect::<Vec<_>>()));
+    }
+    let keep: Vec<String> = items
+        .iter()
+        .filter(|p| p.step != step)
+        .map(|p| serde_json::to_string(p).expect("ParkedItem serializes"))
+        .collect();
+    let path = run_dir.join("parked.jsonl");
+    if keep.is_empty() {
+        fs::remove_file(&path).map_err(|e| e.to_string())
+    } else {
+        fs::write(&path, keep.join("\n") + "\n").map_err(|e| e.to_string())
+    }
 }
 
 fn append_parked(run_dir: &Path, item: &ParkedItem) -> Result<(), String> {
@@ -431,7 +554,10 @@ fn read_answer(esc_path: &Path) -> Result<Option<String>, String> {
         return Ok(None);
     }
     let text = fs::read_to_string(esc_path).map_err(|e| e.to_string())?;
-    let Some((_, after)) = text.split_once(ANSWER_MARKER) else {
+    // LAST occurrence: the runtime appends its marker at the END of the file,
+    // so a question that QUOTES the marker text must not self-answer
+    // (finding 1 — an unanswered escalation completed with garbage).
+    let Some((_, after)) = text.rsplit_once(ANSWER_MARKER) else {
         return Err(format!("{} lost its answer marker", esc_path.display()));
     };
     let answer = after.trim();
