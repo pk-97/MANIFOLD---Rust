@@ -225,6 +225,14 @@ pub fn run(args: &[String]) -> ! {
         .find(|w| w[0] == "--disable-driver-at")
         .and_then(|w| w[1].parse().ok());
 
+    // `--live-flip <param_id>`: after initial play phase, flip a scene param
+    // live (e.g., "rt_enabled" or "temporal_upscale") and capture stats before/after
+    // to verify the toggle takes effect. Used to repro BUG-18l (inert live toggles).
+    let live_flip_param: Option<String> = args
+        .windows(2)
+        .find(|w| w[0] == "--live-flip")
+        .map(|w| w[1].to_string());
+
     // Resolve project path: skip the subcommand name (args[0]), then first non-flag arg.
     let project_path = args.iter().skip(1)
         .find(|a| !a.starts_with("--"))
@@ -289,6 +297,11 @@ pub fn run(args: &[String]) -> ! {
             })
     };
 
+    // Track stats before/after live flip for verdict reporting.
+    let mut stats_before_flip: Option<std::collections::BTreeMap<String, (f64, f64, f64)>> = None;
+    let mut stats_after_flip: Option<std::collections::BTreeMap<String, (f64, f64, f64)>> = None;
+    let mut live_flip_sent = false;
+
     for frame in 0..rotation_frames {
         if disable_driver_at == Some(frame) {
             ct.handle_command(ContentCommand::MutateProject(Box::new(move |project| {
@@ -325,6 +338,44 @@ pub fn run(args: &[String]) -> ! {
         if let Some(dev) = ct.content_pipeline.native_device() { drain_captures(dev, frame); }
     }
 
+    // Capture stats before live flip (at end of phase 1).
+    if live_flip_param.is_some() {
+        stats_before_flip = Some(drain_capture_stats(
+            ct.content_pipeline.native_device().expect("gpu device must exist"),
+        ));
+    }
+
+    // Send live flip command (toggle the param value).
+    if let Some(param_id) = &live_flip_param {
+        let param_id_for_print = param_id.clone();
+        let param_id = param_id.clone();
+        ct.handle_command(ContentCommand::MutateProject(Box::new(move |project| {
+            if let Some(g) = project.timeline.layers[0].gen_params_mut() {
+                // Read current value and flip it (for bool params).
+                let current = g.get_param(&param_id);
+                g.set_param(&param_id, 1.0 - current);
+            }
+        })));
+        live_flip_sent = true;
+        println!("=== LIVE FLIP: toggled param '{param_id_for_print}' ===");
+    }
+
+    // Phase 2: play additional frames after flip.
+    if live_flip_param.is_some() {
+        let flip_frames = 120u32;
+        for frame in rotation_frames..(rotation_frames + flip_frames) {
+            if frame == rotation_frames + 30 || frame == rotation_frames + 90 {
+                arm_capture();
+            }
+            ct.timer.wait_for_deadline();
+            ct.tick_frame(&state_tx);
+            if let Some(dev) = ct.content_pipeline.native_device() { drain_captures(dev, frame); }
+        }
+        stats_after_flip = Some(drain_capture_stats(
+            ct.content_pipeline.native_device().expect("gpu device must exist"),
+        ));
+    }
+
     // Phase 2 (paused mode only): Pause, keep calling tick_frame.
     if paused_mode {
         println!("=== PAUSED phase ===");
@@ -343,6 +394,28 @@ pub fn run(args: &[String]) -> ! {
     // Final flush.
     if let Some(dev) = ct.content_pipeline.native_device() { drain_captures(dev, total_frames); }
     drop(state_tx); drain.join().expect("drain join");
+
+    // Report live-flip verdict.
+    if live_flip_sent {
+        if let (Some(before), Some(after)) = (stats_before_flip, stats_after_flip) {
+            let mut changed = false;
+            for (label, (hit_before, luma_before, _sd_before)) in &before {
+                if let Some((hit_after, luma_after, _sd_after)) = after.get(label) {
+                    if (hit_before - hit_after).abs() > 0.01 || (luma_before - luma_after).abs() > 0.01 {
+                        changed = true;
+                        eprintln!(
+                            "[rt-capture] {} stats changed: hit {:.6} → {:.6}, luma {:.6} → {:.6}",
+                            label, hit_before, hit_after, luma_before, luma_after
+                        );
+                    }
+                }
+            }
+            let verdict = if changed { "LIVE-FLIP EFFECTIVE" } else { "LIVE-FLIP INERT" };
+            println!("{verdict}");
+            eprintln!("{verdict}");
+        }
+    }
+
     println!("=== DONE ===");
     std::process::exit(0);
 }
