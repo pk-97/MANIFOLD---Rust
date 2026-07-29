@@ -157,6 +157,32 @@ pub fn readback_raw_halves(device: &GpuDevice, tex: &GpuTexture, w: u32, h: u32)
     unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), total as usize) }.to_vec()
 }
 
+/// BUG-jhpj: mean absolute per-component difference between two raw
+/// `Rgba16Float` readbacks (from [`readback_raw_halves`]), in linear HDR
+/// units. The RT irradiance accumulator is a fixed-alpha EMA fed by
+/// per-frame jittered sample directions, so an RT-on frame dithers at
+/// steady state forever and exact byte-stability never lands — this is the
+/// "effectively stable" measure the convergence loop falls back to. A
+/// texture-decode swap moves whole regions by >0.1 linear, orders of
+/// magnitude above accumulator dither, so the BUG-100/BUG-117
+/// mid-decode-vs-converged discrimination survives. Non-finite components
+/// are skipped (an f16 NaN would poison the mean).
+pub fn mean_abs_half_diff(a: &[u8], b: &[u8]) -> f64 {
+    assert_eq!(a.len(), b.len(), "mean_abs_half_diff: length mismatch");
+    let mut sum = 0.0f64;
+    let mut n = 0usize;
+    for (ca, cb) in a.chunks_exact(2).zip(b.chunks_exact(2)) {
+        let va = f16::from_bits(u16::from_le_bytes([ca[0], ca[1]])).to_f32();
+        let vb = f16::from_bits(u16::from_le_bytes([cb[0], cb[1]])).to_f32();
+        let d = (va - vb).abs();
+        if d.is_finite() {
+            sum += f64::from(d);
+            n += 1;
+        }
+    }
+    if n == 0 { 0.0 } else { sum / n as f64 }
+}
+
 /// Non-black fraction of a tonemapped RGBA8 frame (BUG-100/BUG-117
 /// convergence style: byte-stability alone can't distinguish "converged" from
 /// "every background decode is still mid-load, so three frames in a row are
@@ -228,5 +254,33 @@ mod tests {
             px[3] = 255;
         }
         assert_eq!(non_black_fraction(&rgba), 1.0);
+    }
+
+    #[test]
+    fn mean_abs_half_diff_identical_is_zero() {
+        let mut buf = vec![0u8; 4 * 2]; // Two f16 values
+        let val1 = half::f16::from_f32(1.0).to_bits().to_le_bytes();
+        let val2 = half::f16::from_f32(2.5).to_bits().to_le_bytes();
+        buf[0..2].copy_from_slice(&val1);
+        buf[2..4].copy_from_slice(&val2);
+        assert_eq!(mean_abs_half_diff(&buf, &buf), 0.0);
+    }
+
+    #[test]
+    fn mean_abs_half_diff_known_delta() {
+        // 8 bytes = 4 f16 components (an Rgba16Float pixel).
+        let mut buf_a = vec![0u8; 8];
+        let mut buf_b = vec![0u8; 8];
+        let val1_a = half::f16::from_f32(1.0).to_bits().to_le_bytes();
+        let val1_b = half::f16::from_f32(1.5).to_bits().to_le_bytes(); // 0.5 delta
+        let val2 = half::f16::from_f32(2.0).to_bits().to_le_bytes();
+        buf_a[0..2].copy_from_slice(&val1_a);
+        buf_a[2..4].copy_from_slice(&val2);
+        buf_b[0..2].copy_from_slice(&val1_b);
+        buf_b[2..4].copy_from_slice(&val2);
+        // One of four components differs by 0.5; three are equal:
+        // mean abs diff = 0.5 / 4 = 0.125
+        let result = mean_abs_half_diff(&buf_a, &buf_b);
+        assert!((result - 0.125).abs() < 1e-6, "expected 0.125, got {}", result);
     }
 }
