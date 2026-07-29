@@ -7,6 +7,7 @@ Scheduled by launchd (scripts/com.manifold.trunk-health.plist).
 """
 
 import argparse
+import json
 import subprocess
 import sys
 import time
@@ -60,6 +61,7 @@ def main():
         ["python3", "scripts/feature_matrix.py"],
     ]
 
+    green_gates = []
     red_gates = []
 
     for cmd in gates:
@@ -78,6 +80,7 @@ def main():
             print(f"[dry-run] would run: {cmd_str}")
             print(f"[dry-run] [PASS] {cmd_str}")
             log_lines.append(f"[PASS] {cmd_str}\n")
+            green_gates.append(cmd_str)
             continue
 
         try:
@@ -90,6 +93,8 @@ def main():
                 tail = (out + err).rstrip().splitlines()[-10:]
                 tail_str = "\n".join(tail)[:800]
                 red_gates.append((cmd_str, f"[FAIL] {cmd_str}", tail_str))
+            else:
+                green_gates.append(cmd_str)
         except subprocess.TimeoutExpired:
             print(f"[FAIL] {cmd_str} (timed out)")
             log_lines.append(f"[FAIL] (timed out)\n")
@@ -122,6 +127,11 @@ def main():
         cmd_str = "cargo deny check bans"
         desc = f"trunk-health: {cmd_str} red on main @{sha} ({datetime.now().strftime('%Y-%m-%d')}); tail: simulated tail\nline 2\nline 3"
         print(f"  bd create \"trunk-health red: {cmd_str[:60]}\" -t bug -p 1 -l trunk-health,open -d '{desc}'")
+
+        # Simulate bead auto-close for green gates
+        print("[dry-run] would close beads for green gates:")
+        for green_cmd in green_gates:
+            print(f"[dry-run] would close beads matching trunk-health: {green_cmd}")
         return 0
 
     # Write log
@@ -165,13 +175,36 @@ def main():
             print(f"[trunk-health] failed to file bead: {e}")
             return 2
 
+    # Auto-close beads for green gates — a gate that recovered closes its own
+    # bead even when another gate is still red.
+    try:
+        result = subprocess.run([BD, "list", "--status", "open", "--json", "--flat"],
+                               capture_output=True, text=True, timeout=30)
+        beads = json.loads(result.stdout) if result.returncode == 0 else []
+    except Exception as e:
+        print(f"[trunk-health] bd list failed for bead close: {e}")
+        beads = []
+    for green_cmd in green_gates:
+        for bead in beads:
+            description = bead.get("description", "")
+            if "trunk-health:" in description and green_cmd in description:
+                bead_id = bead.get("id")
+                try:
+                    r = subprocess.run([BD, "close", bead_id],
+                                    capture_output=True, text=True, timeout=30)
+                    if r.returncode == 0:
+                        print(f"[trunk-health] closed {bead_id} (gate green again)")
+                    else:
+                        print(f"[trunk-health] failed to close {bead_id} (exit {r.returncode})")
+                except Exception as e:
+                    print(f"[trunk-health] exception closing {bead_id}: {e}")
+
     if red_gates:
         red_names = ", ".join(cmd_str[:50] for cmd_str, _, _ in red_gates)
         print(f"[trunk-health] RED: {red_names}")
         return 1
-    else:
-        print(f"[trunk-health] green: all gates passed")
-        return 0
+    print(f"[trunk-health] green: all gates passed")
+    return 0
 
 
 if __name__ == "__main__":
