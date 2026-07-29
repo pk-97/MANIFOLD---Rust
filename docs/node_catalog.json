@@ -17523,6 +17523,11 @@
           "name": "visible",
           "required": false,
           "type": "f32"
+        },
+        {
+          "name": "cast_shadows",
+          "required": false,
+          "type": "f32"
         }
       ],
       "label": "Scene Object",
@@ -17537,6 +17542,20 @@
           "default": "1",
           "label": "Visible",
           "name": "visible",
+          "range": [
+            "0",
+            "1"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "1",
+          "enum_values": [
+            "Off",
+            "On"
+          ],
+          "label": "Cast Shadows",
+          "name": "cast_shadows",
           "range": [
             "0",
             "1"
@@ -23687,6 +23706,13 @@
         },
         {
           "default": "1",
+          "id": "86_cast_shadows",
+          "max": "1",
+          "min": "0",
+          "name": "Cast Shadows"
+        },
+        {
+          "default": "1",
           "id": "87_visible",
           "max": "1",
           "min": "0",
@@ -23694,10 +23720,24 @@
         },
         {
           "default": "1",
+          "id": "87_cast_shadows",
+          "max": "1",
+          "min": "0",
+          "name": "Cast Shadows"
+        },
+        {
+          "default": "1",
           "id": "88_visible",
           "max": "1",
           "min": "0",
           "name": "Visible"
+        },
+        {
+          "default": "1",
+          "id": "88_cast_shadows",
+          "max": "1",
+          "min": "0",
+          "name": "Cast Shadows"
         }
       ]
     },
@@ -27699,10 +27739,24 @@
         },
         {
           "default": "1",
+          "id": "32_cast_shadows",
+          "max": "1",
+          "min": "0",
+          "name": "Cast Shadows"
+        },
+        {
+          "default": "1",
           "id": "33_visible",
           "max": "1",
           "min": "0",
           "name": "Visible"
+        },
+        {
+          "default": "1",
+          "id": "33_cast_shadows",
+          "max": "1",
+          "min": "0",
+          "name": "Cast Shadows"
         }
       ]
     },
