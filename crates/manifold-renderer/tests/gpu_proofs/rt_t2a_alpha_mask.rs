@@ -34,8 +34,8 @@ use std::ffi::c_void;
 use std::slice;
 
 use manifold_gpu::raytrace::{
-    ensure_normal_sources, GiMaterial, MetalShadowRayTracer, RtObjectGeometry, ShadowRayParams,
-    ShadowRayTracer,
+    ensure_normal_sources, GiMaterial, MetalShadowRayTracer, RtCasterParams, RtObjectGeometry,
+    ShadowRayParams, ShadowRayTracer,
 };
 use manifold_gpu::{GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
 
@@ -132,6 +132,7 @@ fn run_fixture(alpha_mask: bool) -> [f32; 2] {
         alpha_mask,
         alpha_cutoff: 0.5,
         base_color_texture: Some(&base_color_tex),
+        cast_shadows: true,
     }];
 
     let tracer = MetalShadowRayTracer::new(device);
@@ -200,9 +201,11 @@ fn run_fixture(alpha_mask: bool) -> [f32; 2] {
         mip_levels: 1,
     });
 
+    // Multi-caster shadow fix: a single sun caster in slot 0 — same
+    // `sun_dir`/`sun_cone` this proof always used.
+    let casters = [RtCasterParams::new([0.0, 0.0, 1.0], 0.0, [0.0, 0.0, 0.0], 0)];
     let params = ShadowRayParams::new(
-        [0.0, 0.0, 1.0],
-        0.0,
+        &casters,
         1,
         0,
         [2, 1],
@@ -210,7 +213,6 @@ fn run_fixture(alpha_mask: bool) -> [f32; 2] {
         0.0,
         0,
         0,
-        [0.0, 0.0, 0.0],
         [0.0, 0.0, 0.0],
         [0.0, 0.0, 0.0],
         IDENTITY,

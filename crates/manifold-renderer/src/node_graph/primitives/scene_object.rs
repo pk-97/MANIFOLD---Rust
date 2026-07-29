@@ -59,6 +59,7 @@ crate::primitive! {
         volume_thickness_map: Texture2D optional,
         instances: Array(InstanceTransform) optional,
         visible: ScalarF32 optional,
+        cast_shadows: ScalarF32 optional,
     },
     outputs: {
         object: Object,
@@ -71,6 +72,20 @@ crate::primitive! {
             default: ParamValue::Float(1.0),
             range: Some((0.0, 1.0)),
             enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("cast_shadows"),
+            label: "Cast Shadows",
+            // Stays Float/0..1 (not Bool), same rationale as
+            // `node.light`'s `cast_shadows` (`light.rs`): modulatable by
+            // an LFO/trigger, which the `Bool` `ParamValue` shape doesn't
+            // support. `enum_values` supplies display-only labels for the
+            // card slider text; the primitive's own threshold read
+            // (`> 0.5`, below) is unaffected.
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &["Off", "On"],
         },
     ],
     depth_rule: Terminal,
@@ -87,6 +102,7 @@ crate::primitive! {
 impl Primitive for SceneObjectNode {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let visible = ctx.scalar_or_param("visible", 1.0) > 0.5;
+        let cast_shadows = ctx.scalar_or_param("cast_shadows", 1.0) > 0.5;
         let transform = ctx.inputs.transform("transform").unwrap_or_default();
         let material = ctx.inputs.material("material");
         let mesh = ctx.inputs.slot_of("vertices");
@@ -111,6 +127,7 @@ impl Primitive for SceneObjectNode {
 
         let object = SceneObject {
             visible,
+            cast_shadows,
             transform,
             material,
             mesh,
