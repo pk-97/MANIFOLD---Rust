@@ -126,17 +126,17 @@ impl ModelTransport for LiveTransport {
                 Err(e) => return Err(e),
             };
             let content = resp["choices"][0]["message"]["content"].as_str().unwrap_or("").trim().to_string();
+            let finish = resp["choices"][0]["finish_reason"].as_str().unwrap_or("").to_string();
             let usage = resp["usage"].clone();
+            // Budget exhaustion — empty OR truncated mid-output (the D-54
+            // reasoning wall truncates non-empty JSON too) — double and retry.
+            if (content.is_empty() || finish == "length") && budget < BUDGET_CAP {
+                budget = (budget * 2).min(BUDGET_CAP);
+                eprintln!("workflow: budget exhausted (finish={finish}, {} chars) — retrying at {budget}", content.len());
+                continue;
+            }
             if !content.is_empty() {
                 return Ok(CompletionResponse { content, usage });
-            }
-            let completion = usage["completion_tokens"].as_u64().unwrap_or(0);
-            let reasoning = usage["completion_tokens_details"]["reasoning_tokens"].as_u64().unwrap_or(0);
-            // Reasoning exhausted the budget mid-thought — double and retry.
-            if reasoning >= completion && budget < BUDGET_CAP {
-                budget = (budget * 2).min(BUDGET_CAP);
-                eprintln!("workflow: empty content (reasoning exhausted budget) — retrying at {budget}");
-                continue;
             }
             return Err(TransportError(format!("empty content from {model} (usage: {usage})")));
         }

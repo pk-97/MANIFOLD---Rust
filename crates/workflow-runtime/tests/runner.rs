@@ -281,6 +281,24 @@ fn execute_red_gate_feeds_back_then_recovers() {
 }
 
 #[test]
+fn failed_apply_leaves_tree_untouched() {
+    let fx = Fixture::new("exec-atomic", "name = \"placeholder\"\n[[step]]\nname=\"x\"\nopcode=\"gate\"\ngate=[\"true\"]", &[]);
+    let target = init_target_repo(&fx);
+    fs::write(fx.root.join("programs/program.toml"), execute_program(&target, 0)).unwrap();
+    fs::write(fx.root.join("programs/brief.md"), "rename old_name to new_name in:\n{{file:lib.rs}}").unwrap();
+
+    // First edit is valid, second is not — the first must NOT land on disk.
+    let half_bad = r#"{"edits": [
+        {"path": "lib.rs", "find": "fn old_name()", "replace": "fn new_name()"},
+        {"path": "lib.rs", "find": "fn does_not_exist()", "replace": "x"}],
+        "commit_message": "half bad"}"#;
+    let mock = MockTransport::new(vec![half_bad.into()]);
+    assert_eq!(run(&fx.cfg(), &mock).unwrap(), Outcome::Done); // parks
+    let lib = fs::read_to_string(target.join("lib.rs")).unwrap();
+    assert!(lib.contains("fn old_name()"), "atomic apply: no partial writes, got: {lib}");
+}
+
+#[test]
 fn execute_ambiguous_find_feeds_back_without_commit() {
     let fx = Fixture::new("exec-ambig", "name = \"placeholder\"\n[[step]]\nname=\"x\"\nopcode=\"gate\"\ngate=[\"true\"]", &[]);
     let target = init_target_repo(&fx);

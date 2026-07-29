@@ -45,17 +45,37 @@ pub fn acquire(repo_root: &Path, label: &str, branch: &str, tip: Option<&str>) -
 /// zero or multiple matches is an error fed back to the model (D5a).
 /// Returns the touched paths (the commit pathspec).
 pub fn apply(worktree: &Path, change: &ChangeSet) -> Result<Vec<String>, String> {
-    let mut paths = Vec::new();
+    // Two passes — validate every edit, then write. A failed attempt must
+    // leave the tree untouched or the next attempt fights phantom state.
+    let mut staged: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
     for edit in &change.edits {
-        let path = worktree.join(&edit.path);
-        let text = fs::read_to_string(&path).map_err(|e| format!("edit target {}: {e}", edit.path))?;
+        let text = match staged.get(&edit.path) {
+            Some(t) => t.clone(),
+            None => fs::read_to_string(worktree.join(&edit.path))
+                .map_err(|e| format!("edit target {}: {e}", edit.path))?,
+        };
+        let snippet: String = edit.find.chars().take(160).collect();
         match text.matches(&edit.find).count() {
-            0 => return Err(format!("edit target {}: `find` text not found — quote the file exactly", edit.path)),
+            0 => {
+                return Err(format!(
+                    "edit target {}: this `find` text is not in the file (quote the CURRENT file exactly, whitespace included): {snippet:?}",
+                    edit.path
+                ));
+            }
             1 => {}
-            n => return Err(format!("edit target {}: `find` text matches {n} times — add surrounding lines to make it unique", edit.path)),
+            n => {
+                return Err(format!(
+                    "edit target {}: `find` matches {n} times — add surrounding lines to make it unique: {snippet:?}",
+                    edit.path
+                ));
+            }
         }
-        fs::write(&path, text.replacen(&edit.find, &edit.replace, 1)).map_err(|e| e.to_string())?;
-        paths.push(edit.path.clone());
+        staged.insert(edit.path.clone(), text.replacen(&edit.find, &edit.replace, 1));
+    }
+    let mut paths = Vec::new();
+    for (path, text) in &staged {
+        fs::write(worktree.join(path), text).map_err(|e| e.to_string())?;
+        paths.push(path.clone());
     }
     for w in &change.writes {
         let path = worktree.join(&w.path);

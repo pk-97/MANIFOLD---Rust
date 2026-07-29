@@ -12,7 +12,9 @@ tip = "d017c971"
 [[step]]
 name = "plumbing"
 opcode = "execute"
-model = "deepseek-v4-flash"
+# glm-4.7: Flash parked this replay at cap-3 (D-54 reasoning wall, truncated
+# JSON x3); kimi seat 500'd at the proxy on the second run (2026-07-29).
+model = "glm-4.7"
 max_tokens = 24000
 retry_cap = 2
 template = "replay-r2-step1-brief.md"
