@@ -11,11 +11,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::artifacts::{Artifact, ArtifactKind};
+use crate::artifacts::{Artifact, ArtifactKind, ChangeSet};
 use crate::gates::run_gates;
-use crate::program::{Opcode, Program, Step};
+use crate::program::{Opcode, Program, Step, Target};
 use crate::template;
 use crate::transport::{CompletionRequest, ModelTransport};
+use crate::worktree::{self, Worktree};
 
 pub struct RunConfig {
     pub program_path: PathBuf,
@@ -137,10 +138,109 @@ pub fn run(cfg: &RunConfig, transport: &dyn ModelTransport) -> Result<Outcome, S
                     return Ok(Outcome::Escalated(esc_path));
                 }
             }
-            Opcode::Execute => unreachable!("Program::validate rejects execute in P1"),
+            Opcode::Execute => {
+                let wt = ensure_worktree(cfg, program.target.as_ref().expect("validated: target present"))?;
+                match run_execute(cfg, step, idx, &template_root, &artifacts, transport, &wt)? {
+                    Ok(artifact) => {
+                        persist(&state_path, &artifact)?;
+                        artifacts.insert(step.name.clone(), artifact);
+                    }
+                    Err(park) => {
+                        append_parked(&cfg.run_dir, &park)?;
+                        parked.push(step.name.clone());
+                    }
+                }
+            }
         }
     }
     Ok(Outcome::Done)
+}
+
+/// The worktree is acquired once per run and remembered in run state (D6),
+/// so a resumed run continues in the same tree.
+fn ensure_worktree(cfg: &RunConfig, target: &Target) -> Result<Worktree, String> {
+    let state = cfg.run_dir.join("worktree.json");
+    if state.exists() {
+        let text = fs::read_to_string(&state).map_err(|e| e.to_string())?;
+        return serde_json::from_str(&text).map_err(|e| format!("corrupt worktree.json: {e}"));
+    }
+    let wt = match &target.path {
+        Some(path) => Worktree { path: path.clone(), slot: None },
+        None => worktree::acquire(
+            &cfg.repo_root,
+            target.label.as_ref().expect("validated"),
+            target.branch.as_ref().expect("validated"),
+            target.tip.as_deref(),
+        )?,
+    };
+    fs::write(&state, serde_json::to_string_pretty(&wt).expect("Worktree serializes")).map_err(|e| e.to_string())?;
+    Ok(wt)
+}
+
+/// EXECUTE (D5): model emits a ChangeSet; the runtime applies it, commits with
+/// a pathspec, runs the gate in the worktree, feeds failures back, cap then park.
+fn run_execute(
+    cfg: &RunConfig,
+    step: &Step,
+    idx: usize,
+    template_root: &Path,
+    artifacts: &BTreeMap<String, Artifact>,
+    transport: &dyn ModelTransport,
+    wt: &Worktree,
+) -> Result<Result<Artifact, ParkedItem>, String> {
+    // `file:` inputs for an execute step read the WORKTREE (branch state),
+    // falling back nowhere — a missing file is a loud template error.
+    let base_prompt = render_step_template(step, template_root, &wt.path, artifacts)?;
+    let mut feedback: Option<String> = None;
+    let max_attempts = u32::from(step.retry_cap) + 1;
+    for attempt in 1..=max_attempts {
+        let user = match &feedback {
+            None => base_prompt.clone(),
+            Some(err) => format!("{base_prompt}\n\nYour previous attempt failed:\n{err}\nEmit a corrected ChangeSet."),
+        };
+        let req = CompletionRequest {
+            model: step.model.clone().expect("validated: execute has model"),
+            max_tokens: step.max_tokens,
+            system: None,
+            user,
+        };
+        let result = transport.complete(&req);
+        log_transcript(&cfg.run_dir, &step.name, idx, attempt, &req, &result)?;
+        let error = match result {
+            Err(e) => format!("transport error: {e}"),
+            Ok(resp) => match Artifact::parse(ArtifactKind::ChangeSet, &resp.content) {
+                Err(e) => e,
+                Ok(artifact) => {
+                    let change: ChangeSet =
+                        serde_json::from_value(artifact.value.clone()).expect("parsed as ChangeSet above");
+                    match worktree::apply(&wt.path, &change) {
+                        Err(e) => e,
+                        Ok(paths) => {
+                            let sha = worktree::commit(&wt.path, &paths, &change.commit_message)?;
+                            let report = run_gates(&step.gate, &wt.path);
+                            if report.pass {
+                                let value = serde_json::json!({
+                                    "change_set": artifact.value, "commit": sha,
+                                    "worktree": wt.path, "attempt": attempt,
+                                });
+                                return Ok(Ok(Artifact { kind: ArtifactKind::Json, value }));
+                            }
+                            format!(
+                                "your ChangeSet was applied and committed ({sha}), but the gate is red:\n{}",
+                                serde_json::to_string_pretty(&report).expect("GateReport serializes")
+                            )
+                        }
+                    }
+                }
+            },
+        };
+        feedback = Some(error);
+    }
+    Ok(Err(ParkedItem {
+        step: step.name.clone(),
+        reason: feedback.expect("at least one attempt ran"),
+        attempts: max_attempts,
+    }))
 }
 
 /// Ok(artifact) on success, Err(park) after the retry cap.

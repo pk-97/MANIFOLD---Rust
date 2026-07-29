@@ -13,8 +13,9 @@ pub enum ArtifactKind {
     Json,
     /// Review verdict (recorded through `gate_runner review`, D8).
     Verdict,
-    /// EXECUTE's output: full-file writes + a commit message (D5). Applied in P2.
-    FileWriteSet,
+    /// EXECUTE's output (D5/D5a): unique exact-match edits + new-file writes
+    /// + a commit message.
+    ChangeSet,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,8 +31,19 @@ pub struct FileWrite {
     pub content: String,
 }
 
+/// One exact-match edit. `find` must occur exactly once in the file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FileWriteSet {
+pub struct Edit {
+    pub path: String,
+    pub find: String,
+    pub replace: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChangeSet {
+    #[serde(default)]
+    pub edits: Vec<Edit>,
+    #[serde(default)]
     pub writes: Vec<FileWrite>,
     pub commit_message: String,
 }
@@ -60,14 +72,16 @@ impl Artifact {
                 }
                 serde_json::to_value(v).expect("Verdict serializes")
             }
-            ArtifactKind::FileWriteSet => {
-                let v: FileWriteSet = serde_json::from_str(body).map_err(|e| {
-                    format!("output does not parse as FileWriteSet {{writes: [{{path, content}}], commit_message}}: {e}")
+            ArtifactKind::ChangeSet => {
+                let v: ChangeSet = serde_json::from_str(body).map_err(|e| {
+                    format!(
+                        "output does not parse as ChangeSet {{edits: [{{path, find, replace}}], writes: [{{path, content}}], commit_message}}: {e}"
+                    )
                 })?;
-                if v.writes.is_empty() {
-                    return Err("FileWriteSet.writes is empty".to_string());
+                if v.edits.is_empty() && v.writes.is_empty() {
+                    return Err("ChangeSet has no edits and no writes".to_string());
                 }
-                serde_json::to_value(v).expect("FileWriteSet serializes")
+                serde_json::to_value(v).expect("ChangeSet serializes")
             }
         };
         Ok(Artifact { kind, value })

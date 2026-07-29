@@ -190,13 +190,130 @@ fn template_slots_are_loud_both_directions() {
 }
 
 #[test]
-fn execute_opcode_is_rejected_in_p1() {
+fn ungated_execute_is_rejected() {
     let fx = Fixture::new(
-        "exec",
-        "name = \"e\"\n[[step]]\nname = \"x\"\nopcode = \"execute\"\nmodel = \"mock\"\ntemplate = \"t.md\"\n",
+        "exec-nogate",
+        "name = \"e\"\n[target]\npath = \"/tmp\"\n[[step]]\nname = \"x\"\nopcode = \"execute\"\nmodel = \"mock\"\ntemplate = \"t.md\"\n",
         &[("t.md", "unused")],
     );
     let mock = MockTransport::new(vec![]);
     let err = run(&fx.cfg(), &mock).unwrap_err();
-    assert!(err.contains("P2"), "error must name the phase: {err}");
+    assert!(err.contains("no gate"), "{err}");
+}
+
+/// A throwaway git repo standing in for the target worktree.
+fn init_target_repo(fx: &Fixture) -> PathBuf {
+    let dir = fx.root.join("targetrepo");
+    fs::create_dir_all(&dir).unwrap();
+    let git = |args: &[&str]| {
+        let ok = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&dir)
+            .args(args)
+            .output()
+            .unwrap()
+            .status
+            .success();
+        assert!(ok, "git {args:?} failed");
+    };
+    git(&["init", "-q"]);
+    git(&["config", "user.email", "t@t"]);
+    git(&["config", "user.name", "t"]);
+    fs::write(dir.join("lib.rs"), "fn old_name() {}\nfn keep() {}\n").unwrap();
+    git(&["add", "--", "lib.rs"]);
+    git(&["commit", "-q", "-m", "base", "--", "lib.rs"]);
+    dir
+}
+
+fn execute_program(target: &std::path::Path, retry_cap: u8) -> String {
+    format!(
+        r#"
+name = "exec"
+[target]
+path = "{}"
+[[step]]
+name = "rename"
+opcode = "execute"
+model = "mock"
+retry_cap = {retry_cap}
+template = "brief.md"
+inputs = ["file:lib.rs"]
+gate = ["rg -q new_name lib.rs", "! rg -q old_name lib.rs"]
+"#,
+        target.display()
+    )
+}
+
+#[test]
+fn execute_applies_commits_with_pathspec_and_passes_gate() {
+    let fx = Fixture::new("exec-ok", "name = \"placeholder\"\n[[step]]\nname=\"x\"\nopcode=\"gate\"\ngate=[\"true\"]", &[]);
+    let target = init_target_repo(&fx);
+    fs::write(fx.root.join("programs/program.toml"), execute_program(&target, 2)).unwrap();
+    fs::write(fx.root.join("programs/brief.md"), "rename old_name to new_name in:\n{{file:lib.rs}}").unwrap();
+    // Extra untracked file proves the pathspec: it must NOT enter the commit.
+    fs::write(target.join("stray.txt"), "untracked").unwrap();
+
+    let change = r#"{"edits": [{"path": "lib.rs", "find": "fn old_name()", "replace": "fn new_name()"}], "commit_message": "rename"}"#;
+    let mock = MockTransport::new(vec![change.into()]);
+    assert_eq!(run(&fx.cfg(), &mock).unwrap(), Outcome::Done);
+
+    let show = std::process::Command::new("git")
+        .args(["-C", target.to_str().unwrap(), "show", "--name-only", "--format=%s", "HEAD"])
+        .output()
+        .unwrap();
+    let show = String::from_utf8_lossy(&show.stdout);
+    assert!(show.contains("rename") && show.contains("lib.rs"), "{show}");
+    assert!(!show.contains("stray.txt"), "pathspec-only commits: {show}");
+}
+
+#[test]
+fn execute_red_gate_feeds_back_then_recovers() {
+    let fx = Fixture::new("exec-retry", "name = \"placeholder\"\n[[step]]\nname=\"x\"\nopcode=\"gate\"\ngate=[\"true\"]", &[]);
+    let target = init_target_repo(&fx);
+    fs::write(fx.root.join("programs/program.toml"), execute_program(&target, 2)).unwrap();
+    fs::write(fx.root.join("programs/brief.md"), "rename old_name to new_name in:\n{{file:lib.rs}}").unwrap();
+
+    let wrong = r#"{"edits": [{"path": "lib.rs", "find": "fn keep()", "replace": "fn kept()"}], "commit_message": "wrong edit"}"#;
+    let right = r#"{"edits": [{"path": "lib.rs", "find": "fn old_name()", "replace": "fn new_name()"}], "commit_message": "right edit"}"#;
+    let mock = MockTransport::new(vec![wrong.into(), right.into()]);
+    assert_eq!(run(&fx.cfg(), &mock).unwrap(), Outcome::Done);
+    assert_eq!(*mock.requests_served.borrow(), 2, "gate tail must have been fed back once");
+}
+
+#[test]
+fn failed_apply_leaves_tree_untouched() {
+    let fx = Fixture::new("exec-atomic", "name = \"placeholder\"\n[[step]]\nname=\"x\"\nopcode=\"gate\"\ngate=[\"true\"]", &[]);
+    let target = init_target_repo(&fx);
+    fs::write(fx.root.join("programs/program.toml"), execute_program(&target, 0)).unwrap();
+    fs::write(fx.root.join("programs/brief.md"), "rename old_name to new_name in:\n{{file:lib.rs}}").unwrap();
+
+    // First edit is valid, second is not — the first must NOT land on disk.
+    let half_bad = r#"{"edits": [
+        {"path": "lib.rs", "find": "fn old_name()", "replace": "fn new_name()"},
+        {"path": "lib.rs", "find": "fn does_not_exist()", "replace": "x"}],
+        "commit_message": "half bad"}"#;
+    let mock = MockTransport::new(vec![half_bad.into()]);
+    assert_eq!(run(&fx.cfg(), &mock).unwrap(), Outcome::Done); // parks
+    let lib = fs::read_to_string(target.join("lib.rs")).unwrap();
+    assert!(lib.contains("fn old_name()"), "atomic apply: no partial writes, got: {lib}");
+}
+
+#[test]
+fn execute_ambiguous_find_feeds_back_without_commit() {
+    let fx = Fixture::new("exec-ambig", "name = \"placeholder\"\n[[step]]\nname=\"x\"\nopcode=\"gate\"\ngate=[\"true\"]", &[]);
+    let target = init_target_repo(&fx);
+    fs::write(target.join("lib.rs"), "fn old_name() {}\nfn old_name2() {}\n").unwrap();
+    fs::write(fx.root.join("programs/program.toml"), execute_program(&target, 1)).unwrap();
+    fs::write(fx.root.join("programs/brief.md"), "rename old_name to new_name in:\n{{file:lib.rs}}").unwrap();
+
+    let ambiguous = r#"{"edits": [{"path": "lib.rs", "find": "fn old_name", "replace": "fn new_name"}], "commit_message": "ambiguous"}"#;
+    let mock = MockTransport::new(vec![ambiguous.into(), ambiguous.into()]);
+    assert_eq!(run(&fx.cfg(), &mock).unwrap(), Outcome::Done); // parks, nothing depends on it
+    let parked = fs::read_to_string(fx.root.join("run/parked.jsonl")).unwrap();
+    assert!(parked.contains("matches 2 times"), "{parked}");
+    let log = std::process::Command::new("git")
+        .args(["-C", target.to_str().unwrap(), "log", "--oneline"])
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&log.stdout).lines().count(), 1, "no commit from a failed apply");
 }

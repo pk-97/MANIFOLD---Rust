@@ -11,8 +11,21 @@ use crate::artifacts::ArtifactKind;
 #[serde(deny_unknown_fields)]
 pub struct Program {
     pub name: String,
+    /// Where execute steps land their commits. Required iff the program has one.
+    pub target: Option<Target>,
     #[serde(rename = "step")]
     pub steps: Vec<Step>,
+}
+
+/// Either a pre-acquired worktree `path` (tests, replays into a prepared tree)
+/// or ring acquisition by `label` + `branch` (+ optional `tip`). Exactly one.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Target {
+    pub path: Option<PathBuf>,
+    pub label: Option<String>,
+    pub branch: Option<String>,
+    pub tip: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -85,12 +98,29 @@ impl Program {
                     }
                 }
                 Opcode::Execute => {
-                    // Named stopgap, not a silent stub: the execute loop is P2
-                    // (WORKFLOW_RUNTIME_DESIGN.md section 5, Phasing).
-                    return Err(format!(
-                        "step {:?}: opcode `execute` is not built yet (P2 of WORKFLOW_RUNTIME_DESIGN.md)",
-                        step.name
-                    ));
+                    if step.model.is_none() || step.template.is_none() {
+                        return Err(format!("execute step {:?} needs `model` and `template`", step.name));
+                    }
+                    if step.gate.is_empty() {
+                        return Err(format!(
+                            "execute step {:?} has no gate — an ungated execute is unreviewable",
+                            step.name
+                        ));
+                    }
+                    match &self.target {
+                        None => {
+                            return Err(format!("execute step {:?} needs a [target] table", step.name));
+                        }
+                        Some(t) => {
+                            let by_path = t.path.is_some();
+                            let by_ring = t.label.is_some() && t.branch.is_some();
+                            if by_path == by_ring {
+                                return Err(
+                                    "[target] is exactly one of `path` OR `label`+`branch`".to_string()
+                                );
+                            }
+                        }
+                    }
                 }
                 Opcode::Gate => {
                     if step.gate.is_empty() {

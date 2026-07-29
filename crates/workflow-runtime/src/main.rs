@@ -1,7 +1,7 @@
 //! `workflow run <program.toml> [--run-id <id>] [--mock <responses.jsonl>]`
 //! Exit codes (WORKFLOW_RUNTIME_DESIGN.md section 3, Design body):
 //! 0 done · 10 escalated · 20 parked-and-blocked · 2 error.
-//! P1 ships the mock transport only; the live proxy transport is P2 (D4).
+//! Without --mock, the live proxy transport is used (D4).
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -46,16 +46,17 @@ fn real_main() -> Result<ExitCode, String> {
     }
     let program_path = program_path.ok_or("no program file given")?;
 
-    let Some(mock_path) = mock else {
-        // Named gap, not a fallback: live transport is P2 (D4).
-        return Err("live transport is not built yet (P2 of WORKFLOW_RUNTIME_DESIGN.md) — pass --mock".into());
+    let transport: Box<dyn workflow_runtime::transport::ModelTransport> = match mock {
+        Some(mock_path) => {
+            let responses: Vec<String> = std::fs::read_to_string(&mock_path)
+                .map_err(|e| format!("cannot read mock file: {e}"))?
+                .lines()
+                .map(|l| serde_json::from_str::<String>(l).map_err(|e| format!("mock line is not a JSON string: {e}")))
+                .collect::<Result<_, _>>()?;
+            Box::new(MockTransport::new(responses))
+        }
+        None => Box::new(workflow_runtime::transport::LiveTransport::new().map_err(|e| e.to_string())?),
     };
-    let responses: Vec<String> = std::fs::read_to_string(&mock_path)
-        .map_err(|e| format!("cannot read mock file: {e}"))?
-        .lines()
-        .map(|l| serde_json::from_str::<String>(l).map_err(|e| format!("mock line is not a JSON string: {e}")))
-        .collect::<Result<_, _>>()?;
-    let transport = MockTransport::new(responses);
 
     let repo_root = std::env::current_dir().map_err(|e| e.to_string())?;
     let stem = program_path.file_stem().and_then(|s| s.to_str()).ok_or("bad program filename")?;
@@ -64,7 +65,7 @@ fn real_main() -> Result<ExitCode, String> {
         .join(run_id.unwrap_or_else(|| stem.to_string()));
 
     let cfg = RunConfig { program_path, run_dir: run_dir.clone(), repo_root };
-    match run(&cfg, &transport)? {
+    match run(&cfg, transport.as_ref())? {
         Outcome::Done => {
             println!("done — artifacts in {}", run_dir.display());
             Ok(ExitCode::SUCCESS)
