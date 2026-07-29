@@ -835,6 +835,58 @@ def worktree_add_guard(cmd, cwd):
 
 
 # ---------------------------------------------------------------------------
+# Manifold GUI-launch guard (Peter 2026-07-29)
+#
+# Agents must never launch the full MANIFOLD GUI: it opens a real window on
+# the performance machine and blocks the session forever (the app has no
+# --version/--help — ANY unrecognized argv falls through to the winit
+# event loop; a mistyped flag hung the lead session for 10 minutes today).
+# Headless testing goes through the binary's headless subcommands or the
+# ui-flows script driver. Denied in every mode. Obsolete when the app
+# grows an argv parser that rejects unknown args instead of launching.
+# ---------------------------------------------------------------------------
+
+_MANIFOLD_HEADLESS_SUBCOMMANDS = {"ui-snap", "perf-soak", "rt-capture"}
+
+MANIFOLD_GUI_REASON = (
+    "Launching the full MANIFOLD GUI from an agent is denied — it opens a "
+    "real window and never returns (any unrecognized argv falls through to "
+    "the event loop; there is no --version/--help). Test headlessly: the "
+    "binary's headless subcommands (ui-snap / perf-soak / rt-capture) or "
+    "the ui-flows `--script` driver. Only Peter launches the GUI."
+)
+
+
+def manifold_gui_guard(cmd):
+    """Return a deny reason if any segment runs the manifold app binary
+    (directly or via `cargo run --bin manifold`) without one of the
+    headless subcommands in its argv. Never raises."""
+    try:
+        for toks in _shlex_segments(cmd):
+            toks = _strip_leading_keywords(toks)
+            if not toks:
+                continue
+            head = toks[0]
+            rest = None
+            if head == "manifold" or (
+                head.endswith("/manifold") and ("target/" in head or head == "./manifold")
+            ):
+                rest = toks[1:]
+            elif head == "cargo" and "run" in toks and "--bin" in toks:
+                bin_idx = toks.index("--bin")
+                if bin_idx + 1 >= len(toks) or toks[bin_idx + 1] != "manifold":
+                    continue
+                rest = toks[toks.index("--") + 1:] if "--" in toks else []
+            if rest is None:
+                continue
+            if not any(t in _MANIFOLD_HEADLESS_SUBCOMMANDS for t in rest):
+                return MANIFOLD_GUI_REASON
+        return None
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Destructive outward-action guard (2026-07-26 permission audit)
 #
 # Settings allow rules skip the classifier, so any destructive action
@@ -1449,6 +1501,14 @@ def main() -> int:
     cd_deny = persistent_cd_guard(cmd, cwd)
     if cd_deny:
         json.dump(build_deny([cd_deny]), sys.stdout)
+        return 0
+
+    # 0i. Manifold GUI-launch guard: running the app binary without a
+    # headless subcommand is denied in every mode — it opens a real window
+    # and never returns (Peter 2026-07-29).
+    gui_deny = manifold_gui_guard(cmd)
+    if gui_deny:
+        json.dump(build_deny([gui_deny]), sys.stdout)
         return 0
 
     # 0c. Unverified compound landing-merge guard (T6): denies a compound
