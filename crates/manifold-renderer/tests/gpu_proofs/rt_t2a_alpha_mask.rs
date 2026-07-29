@@ -132,6 +132,7 @@ fn run_fixture(alpha_mask: bool) -> [f32; 2] {
         alpha_mask,
         alpha_cutoff: 0.5,
         base_color_texture: Some(&base_color_tex),
+        mr_texture: None,
         cast_shadows: true,
     }];
 

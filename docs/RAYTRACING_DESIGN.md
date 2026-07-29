@@ -274,9 +274,9 @@ double-tonemap found by the settling test.
 | Prefiltered env mip chain + BRDF LUT + irradiance map | `render_scene.rs:645/647`, `run_ibl_convolution` :1985 | Node-owned at the RT dispatch site — one wire away for ray misses. |
 | RT trace kernel (shadow+AO+GI, ONE dispatch) | `raytrace.rs:735` `trace_shadow_rays`; trait `ShadowRayTracer` :1815 | D16's seam: new ray classes join this dispatch. Primary ray already casts for the T1-B normal — reflection origin+normal already computed. |
 | Hit shading for a secondary ray | `raytrace.rs:940-975` (GI gather) | A reflection ray's hit shading is these lines; RD4 reuses them. |
-| Per-object bindless table | `RtNormalSource` (`raytrace.rs:1533`, 72 B) | Extended twice already (T1-B, T2-A) — the precedent for material fields. |
+| Per-object bindless table | `RtNormalSource` (`crates/manifold-gpu/src/metal/raytrace.rs`, 80 B) | Extended three times already (T1-B, T2-A, Textured roughness R3) — the precedent for material fields. |
 | Per-object material table | `GiMaterial` (`raytrace.rs:1478`, 32 B) | Built at `render_scene.rs:3976`; `pbr_metallic_roughness` (`render_scene.rs:332`) is in the same uniforms struct, unread. |
-| Bindless texture slots | `MAX_RT_ALPHA_TEXTURES = 4` (`raytrace.rs:1558`) | Raster-parity reflections widens it into a general material-texture cap; Textured roughness (R3) consumes it. |
+| Bindless texture slots | `MAX_RT_MATERIAL_TEXTURES = 64` (`crates/manifold-gpu/src/metal/raytrace.rs`) | Raster-parity reflections widened it into a general material-texture cap; Textured roughness (R3) consumes it via `RtNormalSource::mr_tex_index`, no re-widen. |
 | Half-res trace → upsample → à-trous → accumulate chain | `render_scene.rs:4057/4071/4120/4175` | Reflection radiance rides the same chain. |
 | Temporal reset | one shared `TemporalResetDetector` (`render_scene.rs:839`) | A second reset path is forbidden (D15/RT-D2). |
 | Motion reprojection incl. per-object | `accumulate_irradiance` (`raytrace.rs:1206`) + `obj_motion` (section 8.3) | Reflections add one term (virtual hit point, RD6), not a mechanism. |
@@ -559,17 +559,21 @@ one hot texel inflates sigma; the clamp now maps through `c/(1+luma)`, clamps, i
 
 - *Entry:* Stable reflections (R2) landed.
 - *Read-back:* T2-A's commit `62244989` (bindless-texture extension precedent, whole);
-  `RtNormalSource` + `ensure_normal_sources` (`raytrace.rs:1533/1591`); D10.
-- *Deliverables:* `RtNormalSource` grows an MR-texture index (same field pattern as
-  `alpha_tex_index`), riding the general material-texture cap Raster-parity reflections already
-  widened (stated limit + trigger live there — this phase does NOT re-widen); the kernel samples
-  metallic/roughness per texel at
-  the primary hit's interpolated UV (`fetch_interpolated_uv`, `raytrace.rs:556` — already exists),
-  factors when no map bound.
+  `RtNormalSource` + `ensure_normal_sources` (`crates/manifold-gpu/src/metal/raytrace.rs`); D10.
+- *Deliverables:* `RtNormalSource` grows an MR-texture index (`mr_tex_index`, same field pattern as
+  `alpha_tex_index`/`base_color_tex_index`), riding the general material-texture cap Raster-parity
+  reflections already widened (stated limit + trigger live there — this phase does NOT re-widen);
+  the reflection lobe's primary-hit block in `trace_shadow_rays` samples metallic/roughness per
+  texel at the primary hit's interpolated UV (`fetch_interpolated_uv`, already exists), factors
+  (`GiMaterial::metallic_roughness.y`) when no map bound.
+  **LANDED — BUG-7y7d (RT R3: textured roughness in the kernel):** the primary-hit primitive
+  id/barycentric coord are hoisted to kernel scope in the SAME block that already hoists `obj_id`,
+  so no second primary-visibility trace is needed.
 - *Gate:* value test — plane with two-region roughness map (0.0/1.0) + one emissive quad: sharp
   region shows the emitter's mirror image above threshold, rough region does not, both against
-  CPU-computed expectations; held-out input: a real imported glTF with an MR map the builder did
-  not develop against. Plus gpu-proofs.
+  CPU-computed expectations (`tests/gpu_proofs/rt_r3_textured_roughness.rs`); held-out input: a real
+  imported glTF with an MR map the builder did not develop against
+  (`tests/gpu_proofs/rt_r3_heldout_gltf.rs`, `DamagedHelmet.glb`). Plus gpu-proofs.
 - *Forbidden moves:* growing the cap without stating the new limit's trigger; sampling MR maps for
   secondary (GI/AO) rays in the same phase.
 

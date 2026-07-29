@@ -182,6 +182,15 @@ pub struct RtObjectGeometry<'a> {
     /// `ensure_normal_sources`'s call site) — an alpha-masked object with no
     /// texture wired is a material-authoring gap, not a crash.
     pub base_color_texture: Option<&'a GpuTexture>,
+    /// Textured roughness (R3) (RAYTRACING_DESIGN.md section 9.6): this object's
+    /// metallic-roughness texture, sampled (G=roughness, B=metallic — glTF
+    /// packing) at the reflection ray's primary-hit interpolated UV.
+    /// `None` degrades to the flat `GiMaterial::metallic_roughness` factor
+    /// (documented at `ensure_normal_sources`'s call site) — an object with
+    /// no map wired renders exactly as before this feature. Consumed ONLY
+    /// in the reflection lobe at the primary hit; GI/AO/shadow rays and the
+    /// reflection-HIT shading stay flat-factor (out of this phase's scope).
+    pub mr_texture: Option<&'a GpuTexture>,
     /// Per-object shadow-cast toggle (`node.scene_object`'s `cast_shadows`
     /// param, threaded through `render_scene.rs`'s `ObjectDraw`). `false`
     /// clears `RT_MASK_SHADOW_CASTER` from this instance's mask (see
@@ -621,6 +630,12 @@ struct RtNormalSource {
     // index for hit-point material sampling; `MAX_RT_MATERIAL_TEXTURES` or above
     // means "no texture bound" (flat gi_materials albedo is the fallback).
     uint   base_color_tex_index;
+    // Textured roughness (R3) (RAYTRACING_DESIGN.md section 9.6): metallic-roughness
+    // texture index for the reflection lobe's primary-hit sampling;
+    // `MAX_RT_MATERIAL_TEXTURES` or above means "no texture bound" (flat
+    // gi_materials metallic_roughness factor is the fallback).
+    uint   mr_tex_index;
+    uint   _pad;
 };
 
 // RT-T1-B: fetch this object's (`src`) vertex `vi`'s LOCAL-space normal via
@@ -957,6 +972,13 @@ kernel void trace_shadow_rays(
     // shimmer BUG-320 left behind). Stored as float: instance counts are
     // far below f32's 2^24 exact-integer range.
     float obj_id = -1.0;
+    // Textured roughness (R3) (RAYTRACING_DESIGN.md section 9.6): the primary hit's
+    // primitive id + barycentric coord, hoisted to kernel scope (invalid
+    // until the primary ray commits) so the reflection block below can
+    // re-derive the SAME hit's UV for per-texel metallic-roughness —
+    // no second primary-visibility trace.
+    uint primary_pid = 0u;
+    float2 primary_bary = float2(0.0);
     // RT-R1: the primary ray is also the reflection block's source of `n`
     // and `obj_id` (RD3 — vertex normal, not shading normal), so it must
     // cast whenever reflections are on too.
@@ -973,7 +995,9 @@ kernel void trace_shadow_rays(
             primary_q.reset(pr, accel, RT_MASK_VISIBLE);
             if (walk_with_alpha_test(primary_q, normal_sources, material_textures, false)) {
                 uint primary_iid = primary_q.get_committed_instance_id();
-                n = fetch_interpolated_normal(normal_sources, primary_iid, primary_q.get_committed_primitive_id(), primary_q.get_committed_triangle_barycentric_coord());
+                primary_pid = primary_q.get_committed_primitive_id();
+                primary_bary = primary_q.get_committed_triangle_barycentric_coord();
+                n = fetch_interpolated_normal(normal_sources, primary_iid, primary_pid, primary_bary);
                 obj_id = float(primary_iid);
             }
         }
@@ -1210,6 +1234,23 @@ kernel void trace_shadow_rays(
         uint roi = uint(obj_id);
         float4 mr = gi_materials[roi].metallic_roughness;
         float roughness = mr.y;
+        // Textured roughness (R3) (RAYTRACING_DESIGN.md section 9.6): per-texel
+        // roughness at the primary hit's UV REPLACES the flat factor,
+        // matching raster `resolve_mr`'s G=roughness/B=metallic glTF
+        // packing exactly (`max(t.g, 0.01)`, same floor as the raster's
+        // GGX clamp). Deviation from raster parity, named: no
+        // `mr_uv_m`/`mr_uv_t` UV transform applied here — same omission as
+        // the existing RT base-color hit sampling. Metallic has no
+        // in-kernel consumer at the primary hit (Fresnel weighting against
+        // metallic already happens per-texel in raster `fs_pbr`); a
+        // per-texel metallic read here would compute a value nothing uses.
+        device RtNormalSource& rsrc = normal_sources[roi];
+        if (rsrc.mr_tex_index < MAX_RT_MATERIAL_TEXTURES) {
+            float2 primary_uv = fetch_interpolated_uv(normal_sources, roi, primary_pid, primary_bary);
+            constexpr sampler mr_sampler(coord::normalized, address::repeat, filter::linear);
+            float mr_g = material_textures[rsrc.mr_tex_index].sample(mr_sampler, primary_uv).g;
+            roughness = max(mr_g, 0.01);
+        }
         float3 V = normalize(float3(p.camera_pos) - wp);
         float3 R = reflect(-V, n);
         // RD7's env value: direction R at this pixel's roughness mip —
@@ -2160,9 +2201,18 @@ pub struct RtNormalSource {
     /// index for hit-point material sampling; `>= MAX_RT_MATERIAL_TEXTURES` means
     /// "no texture bound" (flat gi_materials albedo is the fallback).
     pub base_color_tex_index: u32,
+    /// Textured roughness (R3) (RAYTRACING_DESIGN.md section 9.6): metallic-roughness
+    /// texture index for the reflection lobe's primary-hit sampling;
+    /// `>= MAX_RT_MATERIAL_TEXTURES` means "no texture bound" (flat
+    /// `GiMaterial::metallic_roughness` factor is the fallback).
+    pub mr_tex_index: u32,
+    /// Explicit pad — this struct leads with a `u64` (align-8); every
+    /// field after it must keep the whole struct's size a multiple of 8,
+    /// same discipline the RT-T2-A extension already established.
+    pub _pad: u32,
 }
 
-const _: () = assert!(std::mem::size_of::<RtNormalSource>() == 72);
+const _: () = assert!(std::mem::size_of::<RtNormalSource>() == 80);
 
 /// Fixed texture-argument-table slot count for per-object material textures
 /// (alpha-mask + base-color; roughness/metallic/normals consume this same cap) —
@@ -2259,6 +2309,27 @@ pub fn ensure_normal_sources<'a>(
             }
             None => RT_MATERIAL_TEX_INDEX_NONE,
         };
+        // Textured roughness (R3) (RAYTRACING_DESIGN.md section 9.6): SAME dedupe-
+        // into-`material_textures`, cap-check, and log-warn-on-full pattern
+        // as `base_color_tex_index` above — rides the one general
+        // material-texture cap Raster-parity reflections widened, no
+        // separate table.
+        let mr_tex_index = match obj.mr_texture {
+            Some(tex) if material_textures.len() < MAX_RT_MATERIAL_TEXTURES => {
+                let idx = material_textures.iter().position(|&t| std::ptr::eq(t, tex))
+                    .unwrap_or_else(|| {
+                        material_textures.push(tex);
+                        material_textures.len() - 1
+                    });
+                idx as u32
+            }
+            Some(_) => {
+                log::warn!("RT material-texture table full ({} bound, {} cap) — object {} MR map degraded to flat metallic_roughness factor",
+                    material_textures.len(), MAX_RT_MATERIAL_TEXTURES, i);
+                RT_MATERIAL_TEX_INDEX_NONE
+            }
+            None => RT_MATERIAL_TEX_INDEX_NONE,
+        };
         let src = RtNormalSource {
             vertex_base_addr: obj.vertex_buffer.gpu_address() + obj.vertex_offset as u64,
             vertex_stride: obj.vertex_stride,
@@ -2269,6 +2340,8 @@ pub fn ensure_normal_sources<'a>(
             alpha_cutoff: obj.alpha_cutoff,
             alpha_tex_index,
             base_color_tex_index,
+            mr_tex_index,
+            _pad: 0,
         };
         unsafe {
             std::ptr::write_unaligned(ptr.add(i * std::mem::size_of::<RtNormalSource>()) as *mut _, src);

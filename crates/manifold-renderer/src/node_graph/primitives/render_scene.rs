@@ -3914,6 +3914,10 @@ impl EffectNode for RenderScene {
                     alpha_mask: d.alpha_mode == AlphaMode::Mask,
                     alpha_cutoff: d.uniforms.alpha_params[1],
                     base_color_texture: d.base_color_map,
+                    // Textured roughness (R3) (RAYTRACING_DESIGN.md section 9.6): same
+                    // "None = unwired, flat factor fallback" shape as
+                    // `base_color_texture` above.
+                    mr_texture: d.mr_map,
                     cast_shadows: d.cast_shadows,
                 })
                 .collect();

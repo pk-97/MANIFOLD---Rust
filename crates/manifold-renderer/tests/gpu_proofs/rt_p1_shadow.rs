@@ -130,6 +130,7 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         alpha_mask: false,
         alpha_cutoff: 0.5,
         base_color_texture: None,
+        mr_texture: None,
             cast_shadows: true,
     }];
     let accel = tracer.build_accel(device, &objects);
@@ -341,6 +342,7 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
             alpha_mask: false,
             alpha_cutoff: 0.5,
             base_color_texture: None,
+            mr_texture: None,
             cast_shadows: true,
         },
         RtObjectGeometry {
@@ -355,6 +357,7 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
             alpha_mask: false,
             alpha_cutoff: 0.5,
             base_color_texture: None,
+            mr_texture: None,
             cast_shadows: true,
         },
     ];
