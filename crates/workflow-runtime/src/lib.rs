@@ -4,9 +4,13 @@
 //! `gates`, `worktree`, and `transport`'s keyget.
 
 pub mod artifacts;
+pub mod check;
+pub mod cost;
 pub mod gates;
+pub mod locate;
 pub mod program;
 pub mod runner;
+pub mod scrub;
 pub mod template;
 pub mod transport;
 pub mod worktree;

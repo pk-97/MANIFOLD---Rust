@@ -1,6 +1,6 @@
 # Workflow Runtime — a Rust runner for semantic workflow programs
 
-**Status:** IN PROGRESS — approved by Peter 2026-07-29; P1 (core loop, mock transport) built; P2 (execute + live proxy) next · 2026-07-29 · Fable
+**Status:** IN PROGRESS — P1 (core loop) + P2 (execute + live proxy) + v1.1 instruction set (D9–D13) built; P3 (R3 shakedown) next · 2026-07-30 · Fable
 **Prerequisites:** none (R2 readout is in — see intro)
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) – section 6 (Seam briefs) before starting any phase.
 
@@ -77,6 +77,38 @@ file. The runtime is mostly wiring.
   with `Verdict` output; the runtime then calls `gate_runner review --task --verdict
   --rationale` so the decisions trail stays in its one home.
 
+v1.1 (Peter, 2026-07-30 — the full instruction set exists BEFORE the compiler writes
+programs; a missing pure opcode fails silently as a contorted program, so defer-until-parked
+never triggers for this class):
+
+- **D9 — pure opcodes: `transform`, `fanout`, `sample`.** No new capabilities, no
+  model-driven control flow. Transform = shell command over stdin→stdout (deterministic;
+  failure parks without retry). Fanout = one generate template per element of a JSON-array
+  input, sequential, collected; a failed element parks the whole step (a partial collection
+  is not an artifact). Sample = k independent generates; the step's gate picks the first
+  passing candidate (`$WORKFLOW_SAMPLE` = candidate path) or verdict artifacts take a strict
+  majority — a tie parks, never a model tiebreak. Rejected again: conditionals, model-decided
+  jumps, any second code-touching opcode.
+- **D10 — deterministic locate: `anchor:` inputs.** `anchor:Symbol` /
+  `anchor:path#Symbol` resolves a Rust definition to its SPAN (brace-counted item) at
+  context assembly — ripgrep-as-a-library (`regex` + `ignore` crates), in-process, no binary
+  on PATH. Zero or ambiguous hits park loudly with the exact miss. This is how reused
+  programs survive repo drift without hardcoded excerpts, and how a godfile contributes one
+  item instead of 5000 lines. Model-driven LOCATE stays deferred (section 7): wrong file
+  selection feeds the parallel-infrastructure failure mode and no gate catches it.
+- **D11 — parallel `generate`, opt-in (`parallel = true`).** Adjacent gate-less generates
+  with no artifact edges between them run threaded; transcript/state writes happen after the
+  join, in step order. Execute NEVER parallelizes — D-59 (concurrent GPU gates flake) is
+  evidence, and review throughput is the real bottleneck anyway.
+- **D12 — secrets scrub at the transport choke point.** Every outbound context (feedback
+  loops included — a gate tail can leak a key) is scanned for high-precision secret shapes;
+  a hit aborts the run (exit 2) with a masked excerpt. Never silent redaction, never a park:
+  a retry cannot fix a leaked key. False positives block runs, so generic heuristics stay out.
+- **D13 — `workflow check` + `workflow cost`.** Check = the standalone linter (schema,
+  template slots both directions, `file:` existence, `anchor:` resolution; ALL findings,
+  exit 1) so the authoring model validates programs before a token is spent. Cost = the
+  per-step/per-model token ledger summed from `transcript.jsonl`.
+
 ## 3. Design body — the loop
 
 One function, per step: assemble context (render template with input artifacts) → POST →
@@ -112,8 +144,11 @@ escalations.
   count equals request count, including retries.
 - **One commit per EXECUTE iteration, pathspec-only.** Enforcement: the runtime constructs
   the git argv itself (`commit -- <paths>`); test asserts the argv shape.
-- **Sequential GPU gates (D-59).** Enforcement: structural — v1 has no concurrency; the
-  program format has no parallel construct to misuse.
+- **Sequential GPU gates (D-59).** Enforcement: structural — only gate-LESS generate steps
+  can parallelize (D11); every gate-running opcode is sequential by construction.
+- **Nothing ships to a transport unscrubbed (D12).** Enforcement: one choke point
+  (`checked_complete`) in front of every model call; unit test — a planted key aborts with
+  zero requests served and a masked error.
 
 ## 5. Phasing
 
@@ -148,8 +183,12 @@ P2 (D3/D5/D8), or Deferred.
 
 1. Rust, not Python (Peter, this session — after the priced alternative was argued once).
 2. Gates/verdicts stay in `gate_runner.py`; the runtime is a caller (D3).
-3. No concurrency, no branching in v1; escalate is the only branch (D7).
+3. Escalate is the only branch — no conditionals, no model-decided jumps. Amended by Peter
+   2026-07-30: parallel `generate` is sanctioned opt-in (D11); concurrent `execute` stays
+   forbidden (D-59).
 4. Full-file writes, not diffs (D5).
+5. The instruction set ships ahead of need for PURE opcodes (D9, Peter 2026-07-30);
+   capability-adding opcodes still earn entry through a named revive condition (section 7).
 
 ## 7. Deferred
 
@@ -159,10 +198,12 @@ P2 (D3/D5/D8), or Deferred.
 - **Slot auto-release / `workflow release` verb.** Runs keep their worktree for review;
   release is manual. Revive if a wave leaks slots to POOL FULL in practice.
 
-- **LOCATE opcode (original list)** (model-driven file selection). Revive: first time a pre-selected-context
-  brief parks on "missing context".
-- **Parallel steps.** Revive: a program whose critical path is provably model-latency-bound,
-  AND a non-GPU gate set.
+- **Model-driven LOCATE** (a model choosing files). Deterministic `anchor:` resolve (D10)
+  covers the drift problem; the model version hands the riskiest judgment to the cheapest
+  seat and its failure mode (missing context → parallel infrastructure) is gate-invisible.
+  Revive: a program parks on "missing context" that anchors provably cannot express.
+- **Parallel `execute`.** Revive: an execute-bound critical path AND a non-GPU gate set AND
+  review bandwidth to absorb it (D-59 stands).
 - **Plan-template library / program reuse.** Revive: after P3, per the concept doc's
   section 9 (open questions).
 - **Replacing lane sessions wholesale.** The agent-teammate machinery stays for consult

@@ -133,6 +133,13 @@ How the opcodes fare:
 - EXECUTE — the one that looks agentic, and it decomposes: a **runtime-driven loop of one-shots**. Model proposes a diff; runtime applies it, runs the gate, feeds the errors back as the next call's context; capped at N rounds, park on cap. Agentless proved exactly this shape on SWE-bench (section 9's citation).
 - The new cost is **context assembly**. A lane earns its keep by reading the repo itself and deciding what it needs; a one-shot call gets only what it is handed. Either the lead pre-selects files at compile time (brief-is-the-whole-game becomes total), or a retrieval opcode exists: `LOCATE : Brief → FileSet` — a model judgment reappearing, but bounded, typed, and inspectable instead of a session wandering. These retrieval-shaped steps are the **"special instructions"** (Peter's term): opcodes that are internally agentic but externally still one artifact out, budget-capped, oracle-checked where possible.
 
+The split, stated plainly (settled 2026-07-30): the FRONTIER model authors programs at
+compile time with full repo access; cheap models execute one-shot with only the pasted
+inputs — no repo access at run time. Context drift is handled mechanically (`anchor:`
+resolve in WORKFLOW_RUNTIME_DESIGN.md D10 — deterministic locate), and a wrong input list
+is a park → regenerate the program with the failure as context. No mid-run file-request
+mechanism; model-driven LOCATE stays deferred.
+
 Honest bound, same shape as always: this removes the lanes' *freedom*, not their *work*. REVIEW stays a model call and stays load-bearing; exploratory work (debugging, design) still doesn't pre-decompose — ESCALATE remains the branch. Every incident to date lived in the freedom, though, which is why this is the version worth building the runtime for. Gated on the R2 readout (section 6); the driver-script standing note (do not build without Peter) covers the runtime too.
 
 ## 9. Open questions / next steps

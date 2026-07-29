@@ -14,8 +14,14 @@ program should have had.
 ```
 cargo build -p workflow-runtime
 target/debug/workflow run <program.toml> [--run-id <id>] [--mock <responses.jsonl>]
+target/debug/workflow check <program.toml>      # lint before spending a token (exit 1 on findings)
+target/debug/workflow cost <run-dir>            # per-step / per-model token ledger
 target/debug/workflow unpark <run-dir> <step>   # clear a parked step, then rerun to retry it
 ```
+
+ALWAYS `check` a program before its first `run` — it verifies templates (slots both
+directions), `file:` existence, and `anchor:` resolution without a model call, and it is
+what the authoring model runs on its own output.
 
 One live invocation per run dir (a lockfile enforces it); the run id defaults to the
 program's `name`. Rerunning the same command resumes: completed steps load from disk, and a
@@ -84,6 +90,8 @@ answer text.
 ```toml
 name = "my-program"            # run-id defaults to this
 token_budget = 200000          # optional; default 500K; hard cap, retries included
+parallel = true                # optional: adjacent independent gate-less generates run
+                               # threaded; execute NEVER parallelizes (D-59)
 
 [target]                       # only for programs with execute steps — exactly ONE form:
 label = "task-label"           # ring-acquire: label + branch (+ optional tip)
@@ -93,15 +101,23 @@ tip = "abc123"                 # base commit; omit for origin/main
 
 [[step]]
 name = "brief"                 # unique; later steps reference it in `inputs`
-opcode = "generate"            # generate | execute | gate | escalate
-model = "glm-4.7"              # any litellm proxy id (generate/execute only)
+opcode = "generate"            # generate | execute | gate | escalate | transform | fanout | sample
+model = "glm-4.7"              # any litellm proxy id (model-calling opcodes only)
 max_tokens = 16000             # starting budget; transport may escalate to 32K
 retry_cap = 2                  # extra attempts after the first (default 2)
 artifact = "text"              # text | json | verdict | change_set (execute is always change_set)
 template = "brief.md"          # prompt file, relative to the program file
-inputs = ["earlier-step", "file:docs/X.md"]   # {{slot}} substitutions; all must be used
+inputs = ["earlier-step", "file:docs/X.md", "anchor:sync_clips_to_time"]
+                               # {{slot}} substitutions; all must be used.
+                               # anchor:Symbol (or anchor:path.rs#Symbol) pastes the
+                               # symbol's defining SPAN, resolved mechanically at run
+                               # time — reused programs survive repo drift, and a
+                               # godfile contributes one item, not the whole file.
 gate = ["cargo clippy -p x -- -D warnings"]   # exit-code checks; execute REQUIRES one
 gate_timeout_s = 900               # per-command kill-and-FAIL timeout (default 900)
+command = "jq '...'"           # transform only: stdin = rendered template, stdout = artifact
+over = "earlier-step"          # fanout only: the JSON-array input; template gets {{item}}
+samples = 3                    # sample only: k independent runs (>= 2)
 ```
 
 Gate cwd: with a `[target]`, ALL gates (gate steps and per-step gates) run in the target
@@ -113,8 +129,16 @@ needs the tree): release it yourself after landing or discarding
 Opcodes: `generate` = context → artifact, no side effects. `execute` = ChangeSet applied
 atomically in the target worktree, pathspec-only commit, gate in the worktree, red fed back.
 `gate` = commands only, no model; red parks. `escalate` = writes the rendered question to
-`escalation-<step>.md` and suspends (exit 10). Heavy gates route through
-`scripts/gate_runner.py` in the gate line — never reimplemented.
+`escalation-<step>.md` and suspends (exit 10). `transform` = deterministic shell reshape of
+artifacts (no model; failure parks without retry). `fanout` = the template once per array
+element, sequential, collected — one failed element parks the whole step. `sample` = k
+independent runs; the gate picks the first passing candidate (it gets `$WORKFLOW_SAMPLE` =
+candidate file path) or `artifact = "verdict"` takes a strict majority (tie parks). Heavy
+gates route through `scripts/gate_runner.py` in the gate line — never reimplemented.
+
+Secrets: every outbound context is scanned for high-precision key shapes before it ships;
+a hit ABORTS the run (exit 2) with a masked excerpt. Scrub the source file, then rerun —
+never weaken a template to dodge it.
 
 Templates are plain markdown with `{{input-name}}` slots. Every input must be used and every
 slot must resolve — both directions error loudly. For execute steps, `file:` paths read the

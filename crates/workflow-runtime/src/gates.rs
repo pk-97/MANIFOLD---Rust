@@ -32,10 +32,22 @@ pub struct GateReport {
 /// outlives the timeout is killed and FAILS (a hung gate must never hold an
 /// overnight run — finding 5 of the 2026-07-29 adversarial review).
 pub fn run_gates(cmds: &[String], cwd: &Path, timeout_s: u64, run_dir: &Path) -> GateReport {
+    run_gates_env(cmds, cwd, timeout_s, run_dir, &[])
+}
+
+/// `extra_env` is how a gate sees per-invocation state it can't get from the
+/// run dir — e.g. `$WORKFLOW_SAMPLE` pointing at a sample candidate.
+pub fn run_gates_env(
+    cmds: &[String],
+    cwd: &Path,
+    timeout_s: u64,
+    run_dir: &Path,
+    extra_env: &[(&str, &Path)],
+) -> GateReport {
     let mut results = Vec::new();
     let mut pass = true;
     for cmd in cmds {
-        let (exit, tail) = run_one(cmd, cwd, Duration::from_secs(timeout_s), run_dir);
+        let (exit, tail) = run_one(cmd, cwd, Duration::from_secs(timeout_s), run_dir, extra_env);
         let ok = exit == 0;
         results.push(GateResult { cmd: cmd.clone(), exit, tail });
         if !ok {
@@ -46,7 +58,77 @@ pub fn run_gates(cmds: &[String], cwd: &Path, timeout_s: u64, run_dir: &Path) ->
     GateReport { results, pass }
 }
 
-fn run_one(cmd: &str, cwd: &Path, timeout: Duration, run_dir: &Path) -> (i32, String) {
+/// TRANSFORM (v1.1): deterministic machine step. `input` goes to stdin,
+/// stdout is the artifact text. Non-zero exit or timeout is Err with the
+/// stderr tail — the caller parks (no retry: same input, same output).
+pub fn run_transform(
+    cmd: &str,
+    cwd: &Path,
+    input: &str,
+    timeout_s: u64,
+    run_dir: &Path,
+) -> Result<String, String> {
+    let out_path = std::env::temp_dir().join(format!("workflow-transform-{}.out", std::process::id()));
+    let err_path = std::env::temp_dir().join(format!("workflow-transform-{}.err", std::process::id()));
+    let make = |p: &Path| std::fs::File::create(p).map_err(|e| format!("transform log create failed: {e}"));
+    let mut child = Command::new("sh")
+        .arg("-c")
+        .arg(cmd)
+        .current_dir(cwd)
+        .env("WORKFLOW_RUN_DIR", run_dir)
+        .stdin(Stdio::piped())
+        .stdout(make(&out_path)?)
+        .stderr(make(&err_path)?)
+        .spawn()
+        .map_err(|e| format!("transform spawn failed: {e}"))?;
+    {
+        let mut stdin = child.stdin.take().expect("stdin was piped");
+        use std::io::Write as _;
+        // The command may exit without reading stdin — a broken pipe is fine.
+        let _ = stdin.write_all(input.as_bytes());
+    }
+    let started = Instant::now();
+    let timeout = Duration::from_secs(timeout_s);
+    let exit = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status.code().unwrap_or(-1),
+            Ok(None) if started.elapsed() > timeout => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let tail = read_tail(&err_path);
+                cleanup(&[&out_path, &err_path]);
+                return Err(format!("transform TIMEOUT after {timeout_s}s (killed)\n{tail}"));
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+            Err(e) => {
+                let _ = child.kill();
+                cleanup(&[&out_path, &err_path]);
+                return Err(format!("transform wait failed: {e}"));
+            }
+        }
+    };
+    let stdout = std::fs::read_to_string(&out_path).unwrap_or_default();
+    let tail = read_tail(&err_path);
+    cleanup(&[&out_path, &err_path]);
+    if exit != 0 {
+        return Err(format!("transform exited {exit}:\n{tail}"));
+    }
+    Ok(stdout)
+}
+
+fn cleanup(paths: &[&Path]) {
+    for p in paths {
+        let _ = std::fs::remove_file(p);
+    }
+}
+
+fn run_one(
+    cmd: &str,
+    cwd: &Path,
+    timeout: Duration,
+    run_dir: &Path,
+    extra_env: &[(&str, &Path)],
+) -> (i32, String) {
     let tmp = std::env::temp_dir().join(format!("workflow-gate-{}.log", std::process::id()));
     let log = match std::fs::File::create(&tmp) {
         Ok(f) => f,
@@ -56,7 +138,8 @@ fn run_one(cmd: &str, cwd: &Path, timeout: Duration, run_dir: &Path) -> (i32, St
         Ok(f) => f,
         Err(e) => return (-1, format!("gate log clone failed: {e}")),
     };
-    let mut child = match Command::new("sh")
+    let mut command = Command::new("sh");
+    command
         .arg("-c")
         .arg(cmd)
         .current_dir(cwd)
@@ -64,8 +147,11 @@ fn run_one(cmd: &str, cwd: &Path, timeout: Duration, run_dir: &Path) -> (i32, St
         .env("WORKFLOW_RUN_DIR", run_dir)
         .stdin(Stdio::null())
         .stdout(log)
-        .stderr(err)
-        .spawn()
+        .stderr(err);
+    for (k, v) in extra_env {
+        command.env(k, v);
+    }
+    let mut child = match command.spawn()
     {
         Ok(c) => c,
         Err(e) => return (-1, format!("spawn failed: {e}")),

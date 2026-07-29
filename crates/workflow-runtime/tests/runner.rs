@@ -62,13 +62,13 @@ fn vertical_slice_and_resume_skips_done_steps() {
     );
     let mock = MockTransport::new(vec!["haiku text".into(), "fine haiku".into()]);
     assert_eq!(run(&fx.cfg(), &mock).unwrap(), Outcome::Done);
-    assert_eq!(*mock.requests_served.borrow(), 2);
+    assert_eq!(mock.requests_served(), 2);
     assert_eq!(fx.transcript_lines(), 2);
 
     // Rerun with an EMPTY mock: completed steps must be loaded, never re-requested.
     let empty = MockTransport::new(vec![]);
     assert_eq!(run(&fx.cfg(), &empty).unwrap(), Outcome::Done);
-    assert_eq!(*empty.requests_served.borrow(), 0);
+    assert_eq!(empty.requests_served(), 0);
     assert_eq!(fx.transcript_lines(), 2, "resume must not add transcript lines");
 }
 
@@ -94,7 +94,7 @@ fn retry_cap_is_hard_then_parks() {
         "{\"verdict\": \"accept\", \"rationale\": \"never reached\"}".into(),
     ]);
     assert_eq!(run(&fx.cfg(), &mock).unwrap(), Outcome::Done);
-    assert_eq!(*mock.requests_served.borrow(), 3, "retry cap must stop at cap+1 requests");
+    assert_eq!(mock.requests_served(), 3, "retry cap must stop at cap+1 requests");
     assert_eq!(fx.transcript_lines(), 3, "every request on the record, retries included");
     let parked = fs::read_to_string(fx.root.join("run/parked.jsonl")).unwrap();
     assert!(parked.contains("\"verdict\""));
@@ -145,7 +145,7 @@ fn red_gate_parks_independent_continues_dependent_blocks() {
     let outcome = run(&fx.cfg(), &mock).unwrap();
     assert_eq!(outcome, Outcome::Blocked("step \"dependent\" depends on parked step \"gatestep\"".into()));
     // The independent step between them still ran (park never blocks the queue).
-    assert_eq!(*mock.requests_served.borrow(), 1);
+    assert_eq!(mock.requests_served(), 1);
 }
 
 const ESCALATE: &str = r#"
@@ -171,7 +171,7 @@ fn escalate_suspends_then_resumes_on_answer() {
     let Outcome::Escalated(path) = outcome else {
         panic!("expected escalation, got {outcome:?}")
     };
-    assert_eq!(*mock.requests_served.borrow(), 0, "suspends before any model call");
+    assert_eq!(mock.requests_served(), 0, "suspends before any model call");
 
     let text = fs::read_to_string(&path).unwrap();
     fs::write(&path, format!("{text}\n0.05\n")).unwrap();
@@ -191,14 +191,14 @@ fn token_budget_suspends_before_the_next_call() {
     let mock = MockTransport::with_tokens_per_response(vec!["one".into(), "two".into()], 8);
     let err = run(&fx.cfg(), &mock).unwrap_err();
     assert!(err.contains("token budget exhausted (8/5)"), "{err}");
-    assert_eq!(*mock.requests_served.borrow(), 1);
+    assert_eq!(mock.requests_served(), 1);
 
     // Resume after a raise: spend is re-read from the transcript, step a is kept.
     let raised = fs::read_to_string(fx.root.join("programs/program.toml")).unwrap().replace("token_budget = 5", "token_budget = 100");
     fs::write(fx.root.join("programs/program.toml"), raised).unwrap();
     let mock2 = MockTransport::with_tokens_per_response(vec!["two".into()], 8);
     assert_eq!(run(&fx.cfg(), &mock2).unwrap(), Outcome::Done);
-    assert_eq!(*mock2.requests_served.borrow(), 1, "resume keeps completed steps");
+    assert_eq!(mock2.requests_served(), 1, "resume keeps completed steps");
 }
 
 #[test]
@@ -351,7 +351,7 @@ model = "mock"
 retry_cap = {retry_cap}
 template = "brief.md"
 inputs = ["file:lib.rs"]
-gate = ["rg -q new_name lib.rs", "! rg -q old_name lib.rs"]
+gate = ["grep -q new_name lib.rs", "! grep -q old_name lib.rs"]
 "#,
         target.display()
     )
@@ -369,6 +369,9 @@ fn execute_applies_commits_with_pathspec_and_passes_gate() {
     let change = r#"{"edits": [{"path": "lib.rs", "find": "fn old_name()", "replace": "fn new_name()"}], "commit_message": "rename"}"#;
     let mock = MockTransport::new(vec![change.into()]);
     assert_eq!(run(&fx.cfg(), &mock).unwrap(), Outcome::Done);
+    // A red gate ALSO commits, so the git asserts below can't tell — this can
+    // (the rg-gates-exit-127 blind spot, found 2026-07-30).
+    assert!(!fx.root.join("run/parked.jsonl").exists(), "gate must actually pass, not park");
 
     let show = std::process::Command::new("git")
         .args(["-C", target.to_str().unwrap(), "show", "--name-only", "--format=%s", "HEAD"])
@@ -390,7 +393,7 @@ fn execute_red_gate_feeds_back_then_recovers() {
     let right = r#"{"edits": [{"path": "lib.rs", "find": "fn old_name()", "replace": "fn new_name()"}], "commit_message": "right edit"}"#;
     let mock = MockTransport::new(vec![wrong.into(), right.into()]);
     assert_eq!(run(&fx.cfg(), &mock).unwrap(), Outcome::Done);
-    assert_eq!(*mock.requests_served.borrow(), 2, "gate tail must have been fed back once");
+    assert_eq!(mock.requests_served(), 2, "gate tail must have been fed back once");
 }
 
 #[test]
@@ -429,4 +432,264 @@ fn execute_ambiguous_find_feeds_back_without_commit() {
         .output()
         .unwrap();
     assert_eq!(String::from_utf8_lossy(&log.stdout).lines().count(), 1, "no commit from a failed apply");
+}
+
+// ── v1.1: transform / fanout / sample / parallel generate / anchors / scrub ──
+
+#[test]
+fn secret_in_context_aborts_before_any_call() {
+    let fx = Fixture::new(
+        "scrub",
+        TWO_STEP,
+        &[
+            ("draft.md", "summarize: sk-abcdefghijklmnopqrstuvwxyz123456"),
+            ("critique.md", "critique this: {{draft}}"),
+        ],
+    );
+    let mock = MockTransport::new(vec!["never sent".into()]);
+    let err = run(&fx.cfg(), &mock).unwrap_err();
+    assert!(err.contains("secret-shaped"), "{err}");
+    assert!(!err.contains("z123456"), "the secret must be masked: {err}");
+    assert_eq!(mock.requests_served(), 0, "nothing ships once a secret is seen");
+    assert_eq!(fx.transcript_lines(), 0);
+}
+
+const TRANSFORM: &str = r#"
+name = "tf"
+[[step]]
+name = "draft"
+opcode = "generate"
+model = "mock"
+template = "draft.md"
+
+[[step]]
+name = "upper"
+opcode = "transform"
+command = "tr 'a-z' 'A-Z'"
+template = "pass.md"
+inputs = ["draft"]
+"#;
+
+#[test]
+fn transform_reshapes_deterministically_no_model() {
+    let fx = Fixture::new("transform", TRANSFORM, &[("draft.md", "say hi"), ("pass.md", "{{draft}}")]);
+    let mock = MockTransport::new(vec!["hello".into()]);
+    assert_eq!(run(&fx.cfg(), &mock).unwrap(), Outcome::Done);
+    assert_eq!(mock.requests_served(), 1, "transform must make no model call");
+    let artifact = fs::read_to_string(fx.root.join("run/step-01-upper.json")).unwrap();
+    assert!(artifact.contains("HELLO"), "{artifact}");
+}
+
+#[test]
+fn transform_nonzero_exit_parks_without_retry() {
+    let program = TRANSFORM.replace("tr 'a-z' 'A-Z'", "exit 3");
+    let fx = Fixture::new("transform-red", &program, &[("draft.md", "say hi"), ("pass.md", "{{draft}}")]);
+    let mock = MockTransport::new(vec!["hello".into()]);
+    assert_eq!(run(&fx.cfg(), &mock).unwrap(), Outcome::Done);
+    let parked = fs::read_to_string(fx.root.join("run/parked.jsonl")).unwrap();
+    assert!(parked.contains("transform exited 3"), "{parked}");
+}
+
+const FANOUT: &str = r#"
+name = "fan"
+[[step]]
+name = "list"
+opcode = "generate"
+model = "mock"
+artifact = "json"
+template = "list.md"
+
+[[step]]
+name = "expand"
+opcode = "fanout"
+model = "mock"
+over = "list"
+template = "each.md"
+"#;
+
+#[test]
+fn fanout_runs_template_per_element_and_collects() {
+    let fx = Fixture::new("fanout", FANOUT, &[("list.md", "list three"), ("each.md", "expand {{item}}")]);
+    let mock = MockTransport::new(vec![
+        r#"["a", "b", "c"]"#.into(),
+        "A!".into(),
+        "B!".into(),
+        "C!".into(),
+    ]);
+    assert_eq!(run(&fx.cfg(), &mock).unwrap(), Outcome::Done);
+    assert_eq!(mock.requests_served(), 4);
+    let artifact: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(fx.root.join("run/step-01-expand.json")).unwrap()).unwrap();
+    assert_eq!(artifact["value"], serde_json::json!(["A!", "B!", "C!"]));
+}
+
+#[test]
+fn fanout_element_past_cap_parks_whole_step() {
+    let program = FANOUT.replace("template = \"each.md\"", "template = \"each.md\"\nartifact = \"json\"\nretry_cap = 0");
+    let fx = Fixture::new("fanout-park", &program, &[("list.md", "list"), ("each.md", "expand {{item}}")]);
+    let mock = MockTransport::new(vec![r#"["a", "b"]"#.into(), "42".into(), "not json".into()]);
+    assert_eq!(run(&fx.cfg(), &mock).unwrap(), Outcome::Done);
+    let parked = fs::read_to_string(fx.root.join("run/parked.jsonl")).unwrap();
+    assert!(parked.contains("element 1 of 2 parked"), "partial collections are not artifacts: {parked}");
+    assert!(!fx.root.join("run/step-01-expand.json").exists());
+}
+
+const SAMPLE_GATE: &str = r#"
+name = "sample-gate"
+[[step]]
+name = "pick"
+opcode = "sample"
+model = "mock"
+samples = 3
+template = "t.md"
+gate = ["grep -q GOOD \"$WORKFLOW_SAMPLE\""]
+"#;
+
+#[test]
+fn sample_gate_picks_first_passing_candidate() {
+    let fx = Fixture::new("sample", SAMPLE_GATE, &[("t.md", "try")]);
+    let mock = MockTransport::new(vec!["bad one".into(), "GOOD two".into(), "GOOD three (never wins)".into()]);
+    assert_eq!(run(&fx.cfg(), &mock).unwrap(), Outcome::Done);
+    assert_eq!(mock.requests_served(), 3, "all k samples are drawn before selection");
+    let artifact = fs::read_to_string(fx.root.join("run/step-00-pick.json")).unwrap();
+    assert!(artifact.contains("GOOD two"), "first pass wins deterministically: {artifact}");
+}
+
+#[test]
+fn sample_no_winner_parks() {
+    let fx = Fixture::new("sample-none", SAMPLE_GATE, &[("t.md", "try")]);
+    let mock = MockTransport::new(vec!["bad".into(), "worse".into(), "nope".into()]);
+    assert_eq!(run(&fx.cfg(), &mock).unwrap(), Outcome::Done);
+    let parked = fs::read_to_string(fx.root.join("run/parked.jsonl")).unwrap();
+    assert!(parked.contains("passed the gate"), "{parked}");
+}
+
+const SAMPLE_VOTE: &str = r#"
+name = "sample-vote"
+[[step]]
+name = "vote"
+opcode = "sample"
+model = "mock"
+samples = 3
+artifact = "verdict"
+template = "t.md"
+"#;
+
+#[test]
+fn sample_verdict_majority_wins_tie_parks() {
+    let accept = r#"{"verdict": "accept", "rationale": "fine"}"#;
+    let reject = r#"{"verdict": "reject", "rationale": "off"}"#;
+    let fx = Fixture::new("vote", SAMPLE_VOTE, &[("t.md", "judge")]);
+    let mock = MockTransport::new(vec![accept.into(), reject.into(), accept.into()]);
+    assert_eq!(run(&fx.cfg(), &mock).unwrap(), Outcome::Done);
+    let artifact = fs::read_to_string(fx.root.join("run/step-00-vote.json")).unwrap();
+    assert!(artifact.contains("accept"), "{artifact}");
+
+    // 2 samples, 1-1: a tie is a park, never a model tiebreak.
+    let tied = SAMPLE_VOTE.replace("samples = 3", "samples = 2").replace("sample-vote", "sample-tie");
+    let fx2 = Fixture::new("vote-tie", &tied, &[("t.md", "judge")]);
+    let mock2 = MockTransport::new(vec![accept.into(), reject.into()]);
+    assert_eq!(run(&fx2.cfg(), &mock2).unwrap(), Outcome::Done);
+    let parked = fs::read_to_string(fx2.root.join("run/parked.jsonl")).unwrap();
+    assert!(parked.contains("tied 1-1"), "{parked}");
+}
+
+const PARALLEL: &str = r#"
+name = "par"
+parallel = true
+[[step]]
+name = "alpha"
+opcode = "generate"
+model = "mock"
+template = "alpha.md"
+
+[[step]]
+name = "beta"
+opcode = "generate"
+model = "mock"
+template = "beta.md"
+
+[[step]]
+name = "join"
+opcode = "generate"
+model = "mock"
+template = "join.md"
+inputs = ["alpha", "beta"]
+"#;
+
+#[test]
+fn parallel_generates_run_and_join_sees_both() {
+    let fx = Fixture::new(
+        "parallel",
+        PARALLEL,
+        &[("alpha.md", "make alpha"), ("beta.md", "make beta"), ("join.md", "join {{alpha}} {{beta}}")],
+    );
+    // Keyed mock: pop order is racy across threads, needles are not.
+    let mock = MockTransport::keyed(vec![
+        ("make alpha".into(), "A-out".into()),
+        ("make beta".into(), "B-out".into()),
+        ("join A-out B-out".into(), "joined".into()),
+    ]);
+    assert_eq!(run(&fx.cfg(), &mock).unwrap(), Outcome::Done);
+    assert_eq!(mock.requests_served(), 3);
+    assert_eq!(fx.transcript_lines(), 3, "parallel attempts are logged after the join");
+    // The join step (dependent) must run AFTER the batch, sequentially.
+    let joined = fs::read_to_string(fx.root.join("run/step-02-join.json")).unwrap();
+    assert!(joined.contains("joined"), "{joined}");
+}
+
+#[test]
+fn anchor_input_resolves_span_and_missing_anchor_parks() {
+    let fx = Fixture::new(
+        "anchor",
+        "name = \"anch\"\n[[step]]\nname = \"read\"\nopcode = \"generate\"\nmodel = \"mock\"\ntemplate = \"t.md\"\ninputs = [\"anchor:target_fn\"]\n",
+        &[("t.md", "explain:\n{{anchor:target_fn}}")],
+    );
+    fs::write(fx.root.join("code.rs"), "pub fn target_fn() -> u32 {\n    7\n}\nfn other() {}\n").unwrap();
+    let mock = MockTransport::new(vec!["explained".into()]);
+    assert_eq!(run(&fx.cfg(), &mock).unwrap(), Outcome::Done);
+    // The model saw the SPAN, not the whole file.
+    let transcript = fs::read_to_string(fx.root.join("run/transcript.jsonl")).unwrap();
+    assert!(transcript.contains("code.rs:1-3"), "{transcript}");
+    assert!(!transcript.contains("fn other"), "span-level, not file-level: {transcript}");
+
+    // Missing anchor: deterministic park, zero model calls.
+    let fx2 = Fixture::new(
+        "anchor-miss",
+        "name = \"anch2\"\n[[step]]\nname = \"read\"\nopcode = \"generate\"\nmodel = \"mock\"\ntemplate = \"t.md\"\ninputs = [\"anchor:gone_fn\"]\n",
+        &[("t.md", "explain:\n{{anchor:gone_fn}}")],
+    );
+    let mock2 = MockTransport::new(vec!["never".into()]);
+    assert_eq!(run(&fx2.cfg(), &mock2).unwrap(), Outcome::Done);
+    assert_eq!(mock2.requests_served(), 0);
+    let parked = fs::read_to_string(fx2.root.join("run/parked.jsonl")).unwrap();
+    assert!(parked.contains("resolves to nothing"), "{parked}");
+}
+
+#[test]
+fn check_linter_collects_all_findings() {
+    let fx = Fixture::new(
+        "lint",
+        "name = \"lint\"\n[[step]]\nname = \"a\"\nopcode = \"generate\"\nmodel = \"mock\"\ntemplate = \"missing.md\"\n[[step]]\nname = \"b\"\nopcode = \"generate\"\nmodel = \"mock\"\ntemplate = \"b.md\"\ninputs = [\"file:no/such/file.rs\", \"a\"]\n",
+        &[("b.md", "uses {{a}} but not the file input")],
+    );
+    let findings = workflow_runtime::check::check(&fx.root.join("programs/program.toml"), &fx.root);
+    assert_eq!(findings.len(), 3, "template miss + unused input + missing file: {findings:?}");
+
+    let ok = Fixture::new(
+        "lint-ok",
+        "name = \"lintok\"\n[[step]]\nname = \"a\"\nopcode = \"generate\"\nmodel = \"mock\"\ntemplate = \"a.md\"\n",
+        &[("a.md", "no inputs")],
+    );
+    assert!(workflow_runtime::check::check(&ok.root.join("programs/program.toml"), &ok.root).is_empty());
+}
+
+#[test]
+fn cost_ledger_sums_transcript() {
+    let fx = Fixture::new("cost", TWO_STEP, &[("draft.md", "d"), ("critique.md", "c {{draft}}")]);
+    let mock = MockTransport::with_tokens_per_response(vec!["a".into(), "b".into()], 11);
+    assert_eq!(run(&fx.cfg(), &mock).unwrap(), Outcome::Done);
+    let report = workflow_runtime::cost::summarize(&fx.root.join("run")).unwrap();
+    assert!(report.contains("TOTAL 22 tokens"), "{report}");
+    assert!(report.contains("draft") && report.contains("critique"), "{report}");
 }

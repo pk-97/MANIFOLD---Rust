@@ -3,8 +3,8 @@
 //! blocking POST to the litellm proxy, key from `cc-fleet keyget` (never
 //! env/argv), reasoning-exhaustion budget doubling, deepseek→kimi fallback.
 
-use std::cell::RefCell;
 use std::collections::VecDeque;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use serde::Serialize;
@@ -38,15 +38,19 @@ impl std::fmt::Display for TransportError {
     }
 }
 
-pub trait ModelTransport {
+/// Sync: parallel generate steps share one transport across threads.
+pub trait ModelTransport: Sync {
     fn complete(&self, req: &CompletionRequest) -> Result<CompletionResponse, TransportError>;
 }
 
 /// Canned responses, consumed in order. Exhaustion is an error — a resumed run
 /// that re-requests a completed step MUST fail loudly, not silently re-answer.
+/// Keyed responses (`keyed`) match on a needle in the request text — the only
+/// deterministic mode under parallel steps, where pop order is racy.
 pub struct MockTransport {
-    responses: RefCell<VecDeque<String>>,
-    pub requests_served: RefCell<u32>,
+    responses: Mutex<VecDeque<String>>,
+    keyed: Vec<(String, String)>,
+    requests_served: Mutex<u32>,
     tokens_per_response: u64,
 }
 
@@ -58,19 +62,48 @@ impl MockTransport {
     /// Each canned response reports this `total_tokens` — for budget tests.
     pub fn with_tokens_per_response(responses: Vec<String>, total_tokens: u64) -> Self {
         MockTransport {
-            responses: RefCell::new(responses.into()),
-            requests_served: RefCell::new(0),
+            responses: Mutex::new(responses.into()),
+            keyed: Vec::new(),
+            requests_served: Mutex::new(0),
             tokens_per_response: total_tokens,
         }
+    }
+
+    /// (needle, response) pairs: the FIRST pair whose needle occurs in the
+    /// request's user text answers it. No match is a loud error.
+    pub fn keyed(pairs: Vec<(String, String)>) -> Self {
+        MockTransport {
+            responses: Mutex::new(VecDeque::new()),
+            keyed: pairs,
+            requests_served: Mutex::new(0),
+            tokens_per_response: 0,
+        }
+    }
+
+    pub fn requests_served(&self) -> u32 {
+        *self.requests_served.lock().expect("mock lock")
     }
 }
 
 impl ModelTransport for MockTransport {
-    fn complete(&self, _req: &CompletionRequest) -> Result<CompletionResponse, TransportError> {
-        let Some(content) = self.responses.borrow_mut().pop_front() else {
-            return Err(TransportError("mock transport exhausted".to_string()));
+    fn complete(&self, req: &CompletionRequest) -> Result<CompletionResponse, TransportError> {
+        let content = if self.keyed.is_empty() {
+            match self.responses.lock().expect("mock lock").pop_front() {
+                Some(c) => c,
+                None => return Err(TransportError("mock transport exhausted".to_string())),
+            }
+        } else {
+            match self.keyed.iter().find(|(needle, _)| req.user.contains(needle)) {
+                Some((_, response)) => response.clone(),
+                None => {
+                    return Err(TransportError(format!(
+                        "keyed mock: no needle matches request starting {:?}",
+                        req.user.chars().take(60).collect::<String>()
+                    )));
+                }
+            }
         };
-        *self.requests_served.borrow_mut() += 1;
+        *self.requests_served.lock().expect("mock lock") += 1;
         let usage = serde_json::json!({ "total_tokens": self.tokens_per_response });
         Ok(CompletionResponse {
             content,
