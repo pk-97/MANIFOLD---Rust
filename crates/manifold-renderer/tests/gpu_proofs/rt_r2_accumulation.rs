@@ -1,12 +1,11 @@
 //! `docs/RAYTRACING_DESIGN.md` section 9.6 R2 gate (Step 4) — specular temporal
 //! accumulation blend-engagement + cut-reset gate.
 //!
-//! RULE: The specular temporal accumulation blends 10% per frame
-//! (0.9 * history + 0.1 * current raw), then (BUG-dx6w) the blended history
-//! is variance-clipped to mean ± RT_REFL_CLAMP_GAMMA·stddev of the CURRENT
-//! frame's 3x3 `hi_refl` neighborhood before the blend. An owner-key change
-//! (cut) resets the accumulator to the raw trace immediately, same as
-//! before.
+//! RULE: The reprojected specular history is variance-clipped (BUG-dx6w) to
+//! mean ± RT_REFL_CLAMP_GAMMA·stddev of the CURRENT frame's 3x3 `hi_refl`
+//! neighborhood, then blended 10% per frame (0.9 * clamped history +
+//! 0.1 * current raw). An owner-key change (cut) resets the accumulator to
+//! the raw trace immediately, same as before.
 //!
 //! Fixture: mirror plane (roughness 0.01, metallic 1.0) at y=0, one emissive
 //! quad at (0, 0.8, 2.0) whose emission_intensity is time-driven via a
