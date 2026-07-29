@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.manifold.trunk-health</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/peterkiemann/MANIFOLD - Rust/scripts/trunk_health.py</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/peterkiemann/MANIFOLD - Rust</string>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>4</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/Users/peterkiemann/MANIFOLD - Rust/.claude/orchestration/trunk-health/launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/peterkiemann/MANIFOLD - Rust/.claude/orchestration/trunk-health/launchd.log</string>
+</dict>
+</plist>
