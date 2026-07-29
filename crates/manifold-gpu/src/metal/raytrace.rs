@@ -337,7 +337,7 @@ pub(crate) fn build_accel(device: &GpuDevice, objects: &[RtObjectGeometry]) -> R
     enc.endEncoding();
 
     let ready = Arc::new(AtomicBool::new(false));
-    add_ready_completion_handler(&cb, Arc::clone(&ready), (blas_scratch, build_scratch));
+    add_ready_completion_handler(&cb, "RT accel build", Arc::clone(&ready), (blas_scratch, build_scratch));
     cb.commit();
 
     RtAccel {
@@ -356,14 +356,29 @@ pub(crate) fn build_accel(device: &GpuDevice, objects: &[RtObjectGeometry]) -> R
 /// duration, so dropping them any earlier (e.g. right after `commit()`
 /// returns, as their local-variable scope would otherwise do) would free
 /// memory the GPU is still using.
+///
+/// Also logs any GPU error on this buffer under `label`: these buffers
+/// commit async with no other observer, so a fault here otherwise shows
+/// up only as "innocent victim" errors on the Compositor buffer while the
+/// culprit stays invisible.
 fn add_ready_completion_handler<T: Send + 'static>(
     cb: &ProtocolObject<dyn MTLCommandBuffer>,
+    label: &'static str,
     ready: Arc<AtomicBool>,
     keep_alive: T,
 ) {
     use block2::RcBlock;
-    let block = RcBlock::new(move |_buf: std::ptr::NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
+    use objc2_metal::MTLCommandBufferStatus;
+    let block = RcBlock::new(move |buf: std::ptr::NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
         let _keep_alive = &keep_alive;
+        let cb = unsafe { buf.as_ref() };
+        if unsafe { cb.status() } == MTLCommandBufferStatus::Error {
+            let (code, desc) = match unsafe { cb.error() } {
+                None => (-1i64, String::from("(nil)")),
+                Some(err) => (err.code() as i64, err.localizedDescription().to_string()),
+            };
+            log::error!("[GPU] Command buffer '{label}' error (code={code}): {desc}");
+        }
         ready.store(true, Ordering::Release);
     });
     unsafe {
@@ -423,7 +438,7 @@ pub(crate) fn refit_accel(device: &GpuDevice, accel: &RtAccel, objects: &[RtObje
         );
     }
     enc.endEncoding();
-    add_ready_completion_handler(&cb, Arc::clone(&accel.ready), ());
+    add_ready_completion_handler(&cb, "RT TLAS refit", Arc::clone(&accel.ready), ());
     cb.commit();
 }
 
