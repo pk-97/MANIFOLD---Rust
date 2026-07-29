@@ -773,6 +773,117 @@ fn refl_channel_blends_history_and_current() {
          r={reset_r}, expected 3.0"
     );
 }
+/// BUG-ukg (camera-motion smear): per-tap validated bilinear resampling.
+///
+/// Under camera motion, reprojection lands on fractional texel positions.
+/// The original kernel rounded to nearest tap (line 1589's `int2 pt =`),
+/// and a neighboring texel's stored depth/normal could pass validation
+/// while its CONTENT belonged to a different surface — stale history blended in.
+///
+/// Fixture: identity camera warmed history, then a fractional camera shift
+/// (0.6 texel units x/y) that puts the reprojection at a .6/.6 fractional
+/// position. The 2x2 neighborhood weights are [(0.4*0.4, 0.6*0.4, 0.4*0.6, 0.6*0.6)]
+/// = [0.16, 0.24, 0.24, 0.36]. Tap (1,1) (the 0.36 weight) has depth 0.6
+/// (history: 0.5), which fails the 5e-3 threshold; taps (0,0)/(0,1)/(1,0)
+/// all have depth 0.5 (history: 0.5). Per-tap validation:
+/// - Tap (0,0): valid, contributes 0.16 * history[0]
+/// - Tap (1,0): valid, contributes 0.24 * history[1]
+/// - Tap (0,1): valid, contributes 0.24 * history[2]
+/// - Tap (1,1): INVALID (depth mismatch), contributes 0
+/// Normalized blend = (0.16*h0 + 0.24*h1 + 0.24*h2) / (0.16+0.24+0.24)
+///                  = (0.16*h0 + 0.24*h1 + 0.24*h2) / 0.64
+///
+/// Pre-fix (single nearest tap at 0.6/0.6 → tap 1,1 exactly): output would
+/// read tap (1,1)'s bad depth, reject, output = current (0.0 red, the fixture's
+/// irr_b color). Post-fix: output = blend_normalized, clearly > 0.0 red.
+#[test]
+fn fractional_reprojection_validates_per_tap_bilinear() {
+    let h = shared();
+    let tracer = MetalShadowRayTracer::new(&h.device);
+
+    // Camera shift: 0.6 texel fractional offset. With identity view-proj,
+    // this directly maps to a fractional reprojection coordinate.
+    // Encode as a camera translate that moves the view by 0.6 texel width —
+    // with `size = 32`, one texel is 1/32 of viewport, so a 0.6-texel shift
+    // is 0.6/32 = 0.01875 in NDC. Column-major translate(0.01875, 0.01875, 0).
+    let frac_shift = [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.01875, 0.01875, 0.0, 1.0], // fractional offset
+    ];
+
+    // History seed: constant red (0.5 luma per-tap)
+    let irr_hist = upload_irr(&h.device, 0.5, 0.0, 0.0, "ukg-irr-history");
+    // Current frame: constant black (will blend toward history's red)
+    let irr_curr = upload_irr(&h.device, 0.0, 0.0, 0.0, "ukg-irr-current");
+
+    // Depth: all 0.5 except for tap (1,1) at 0.6 (mismatch, reject this tap).
+    // To seed per-tap values, we need a custom depth texture builder.
+    let depth_texture = h.device.create_texture(&GpuTextureDesc {
+        width: W,
+        height: H,
+        depth: 1,
+        format: GpuTextureFormat::Depth32Float,
+        dimension: GpuTextureDimension::D2,
+        usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ,
+        label: "ukg-depth",
+        mip_levels: 1,
+    });
+    let mut depth_pixels = vec![0.5f32; (W * H) as usize];
+    // Corrupt a small region around where the reprojection lands (fractional
+    // position 0.6/0.6 * 32 = 19.2, 19.2 — nearest int is (19, 19), so the
+    // 2x2 is (19,19)/(20,19)/(19,20)/(20,20); tap (20,20) gets depth 0.6).
+    if 20 < W && 20 < H {
+        depth_pixels[(20 + 20 * W) as usize] = 0.6; // This tap fails validation
+    }
+    let depth_bytes: &[u8] =
+        unsafe { std::slice::from_raw_parts(depth_pixels.as_ptr().cast::<u8>(),
+                                           std::mem::size_of_val(&depth_pixels[..])) };
+    h.device.upload_texture(&depth_texture, depth_bytes);
+
+    let normal_const = make_constant_normal(&h.device, "ukg-normal");
+
+    let mut history = HistorySet::new(&h.device, "ukg-history");
+    // Warm with history frame
+    run_accumulate_with_motion(
+        &h.device, &tracer, &irr_hist, &depth_texture, &normal_const,
+        &mut history, TEST_ALPHA, true, 0, IDENTITY, "ukg-warm",
+    );
+
+    // Apply fractional camera shift — depth texture is constant, so the
+    // per-tap depth mismatch is the only validation discriminator.
+    run_accumulate_with_motion(
+        &h.device, &tracer, &irr_curr, &depth_texture, &normal_const,
+        &mut history, TEST_ALPHA, false, 0, frac_shift, "ukg-fractional",
+    );
+    let output = readback_rgba_f32(history.current_irr());
+
+    // CPU-expected: blend the 3 valid taps (depth 0.5 history) with weights,
+    // normalized over valid-tap weight sum.
+    // Weights at frac 0.6/0.6: [0.16, 0.24, 0.24, 0.36]
+    // Valid taps: 0, 1, 2 (tap 3 has depth mismatch)
+    // Sum = 0.16 + 0.24 + 0.24 = 0.64
+    // Blended history (red channel only, history is [0.5, 0, 0]):
+    //   (0.16*0.5 + 0.24*0.5 + 0.24*0.5) / 0.64 = (0.64*0.5) / 0.64 = 0.5
+    // Then mix toward current (0.0): 0.5 * (1 - TEST_ALPHA) = 0.5 * 0.85 = 0.425
+    let expected_r = 0.5 * (1.0 - TEST_ALPHA);
+    let mean_r = output.iter().step_by(4).sum::<f32>() / (output.len() / 4) as f32;
+
+    eprintln!(
+        "[BUG-ukg] fractional-reprojection mean r = {mean_r} (expect ~{expected_r} = 3-tap blend)"
+    );
+
+    // Pre-fix would have rejected the single bad tap and output raw current (0.0 red);
+    // post-fix blends the valid 3 taps and retains history (non-zero red).
+    assert!(
+        (mean_r - expected_r).abs() < RESET_EPSILON && mean_r > 0.2,
+        "BUG-ukg: fractional reprojection did NOT blend valid taps \
+         (mean r {mean_r}, expected {expected_r}). Either per-tap validation is not \
+         running, or the bilinear weights are not computed correctly."
+    );
+}
+
 /// BUG-322: a ROTATING object must keep its temporal history.
 ///
 /// T2-C carried the reprojected world position through the object's motion
