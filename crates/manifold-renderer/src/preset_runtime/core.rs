@@ -1656,6 +1656,8 @@ impl PresetRuntime {
                 // would skip-write on stale-prev compare.
                 slot.bound.cache.clear_tail(n_static);
             }
+            // BUG-18l probe: log when bound.apply is called (bindings will reach set_param)
+            eprintln!("[BUG-18l probe] preset_runtime bound.apply: calling apply for {} bindings", slot.bound.bindings.len());
             slot.bound.apply(&mut self.graph, &fx.params);
             // Push the "3D Shading" D3 relight knobs into the spliced graph
             // every frame. Float-knob edits are no longer structural (D8/P7),

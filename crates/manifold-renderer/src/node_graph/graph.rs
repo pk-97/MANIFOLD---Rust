@@ -294,7 +294,16 @@ impl Graph {
         // and no reconfigure (same params ⇒ same port shape). Hosts re-apply
         // bindings and constants every frame; only real changes count.
         if inst.params.get(key.as_ref()) == Some(&value) {
+            // BUG-18l probe: log when rt_enabled write is skipped due to compare-on-write
+            if name.contains("rt_enabled") {
+                eprintln!("[BUG-18l probe] graph.set_param SKIPPED (compare-on-write): name={}, value={:?}", name, value);
+            }
             return Ok(());
+        }
+        // BUG-18l probe: log rt_enabled writes that pass compare-on-write
+        if name.contains("rt_enabled") {
+            let old_value = inst.params.get(key.as_ref());
+            eprintln!("[BUG-18l probe] graph.set_param WRITE: name={}, old={:?} → new={:?}", name, old_value, value);
         }
         // Forced-outputs watch (BUG-317): snapshot the node's forced set
         // before the write, compare after. Default impl returns `&[]` —
@@ -305,6 +314,10 @@ impl Graph {
             inst.param_epoch += 1;
             inst.node.force_consumed_outputs(&inst.params) != forced_before
         };
+        // BUG-18l probe: log if forced_outputs_epoch changed
+        if name.contains("rt_enabled") && forced_changed {
+            eprintln!("[BUG-18l probe] graph.set_param forced_changed=true, bumping forced_outputs_epoch");
+        }
         // Variadic nodes rebuild their port lists when a count-style param
         // changes. Disjoint field borrows (`node` mut, `params` shared).
         inst.node.reconfigure(&inst.params);
