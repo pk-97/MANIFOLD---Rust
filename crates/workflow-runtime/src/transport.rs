@@ -42,13 +42,20 @@ pub trait ModelTransport {
 pub struct MockTransport {
     responses: RefCell<VecDeque<String>>,
     pub requests_served: RefCell<u32>,
+    tokens_per_response: u64,
 }
 
 impl MockTransport {
     pub fn new(responses: Vec<String>) -> Self {
+        Self::with_tokens_per_response(responses, 0)
+    }
+
+    /// Each canned response reports this `total_tokens` — for budget tests.
+    pub fn with_tokens_per_response(responses: Vec<String>, total_tokens: u64) -> Self {
         MockTransport {
             responses: RefCell::new(responses.into()),
             requests_served: RefCell::new(0),
+            tokens_per_response: total_tokens,
         }
     }
 }
@@ -61,7 +68,7 @@ impl ModelTransport for MockTransport {
         *self.requests_served.borrow_mut() += 1;
         Ok(CompletionResponse {
             content,
-            usage: serde_json::Value::Null,
+            usage: serde_json::json!({ "total_tokens": self.tokens_per_response }),
         })
     }
 }

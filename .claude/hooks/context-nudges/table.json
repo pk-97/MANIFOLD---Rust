@@ -22,6 +22,12 @@
       "snippet": "graph-authoring-rules.md"
     },
     {
+      "topic": "workflow-runtime",
+      "globs": ["*crates/workflow-runtime/*", "*workflow-runtime/programs/*"],
+      "command_globs": ["*workflow run*"],
+      "snippet": "workflow-runtime.md"
+    },
+    {
       "topic": "landing",
       "command_globs": ["*git merge*", "*git push*origin main*"],
       "snippet": "landing-protocol.md"

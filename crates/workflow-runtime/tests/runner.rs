@@ -181,6 +181,27 @@ fn escalate_suspends_then_resumes_on_answer() {
 }
 
 #[test]
+fn token_budget_suspends_before_the_next_call() {
+    let fx = Fixture::new(
+        "budget",
+        "name = \"b\"\ntoken_budget = 5\n[[step]]\nname = \"a\"\nopcode = \"generate\"\nmodel = \"mock\"\ntemplate = \"t.md\"\n[[step]]\nname = \"b\"\nopcode = \"generate\"\nmodel = \"mock\"\ntemplate = \"t.md\"\n",
+        &[("t.md", "go")],
+    );
+    // First call reports 8 tokens (> cap 5): the second call must never fire.
+    let mock = MockTransport::with_tokens_per_response(vec!["one".into(), "two".into()], 8);
+    let err = run(&fx.cfg(), &mock).unwrap_err();
+    assert!(err.contains("token budget exhausted (8/5)"), "{err}");
+    assert_eq!(*mock.requests_served.borrow(), 1);
+
+    // Resume after a raise: spend is re-read from the transcript, step a is kept.
+    let raised = fs::read_to_string(fx.root.join("programs/program.toml")).unwrap().replace("token_budget = 5", "token_budget = 100");
+    fs::write(fx.root.join("programs/program.toml"), raised).unwrap();
+    let mock2 = MockTransport::with_tokens_per_response(vec!["two".into()], 8);
+    assert_eq!(run(&fx.cfg(), &mock2).unwrap(), Outcome::Done);
+    assert_eq!(*mock2.requests_served.borrow(), 1, "resume keeps completed steps");
+}
+
+#[test]
 fn template_slots_are_loud_both_directions() {
     let mut inputs = BTreeMap::new();
     inputs.insert("a".to_string(), "x".to_string());
