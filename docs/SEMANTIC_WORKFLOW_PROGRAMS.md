@@ -121,6 +121,20 @@ Honest bound: it controls the **mechanical fraction**, not the judgment fraction
 
 Not novel as a concept — workflow engines and CI pipelines are old. What is new is the **operand**: queue tasks are semantic, executed by models that can be wrong in ways a script never is, with schemas, gates, and escalation built around that fact. Nobody's product does this well, because they all start from "make the agent smarter" instead of "give the agent less to decide."
 
+## 8b. Stateless calls — the R3-era shape (Peter + Fable, 2026-07-29, endorsed as direction)
+
+The narrowing past "lanes make one commit then stop": no agent sessions at all. Every opcode is a stateless API call — `f(context) → typed artifact` literally, one request, one response. The runtime owns every side effect: it assembles the context, applies the diff, runs the gates, writes the files. The model never touches a tool.
+
+The shift that matters is not "no agents" — it is **moving the tool loop from inside the model session into the runtime**. A lane today drives tools and *voluntarily* stops after one commit; that is why the enforcement table has a soft row at all. A stateless call has no capabilities to misuse: one-commit-then-stop, retry caps, and scope discipline stop being goodwill and become structure. The entire prompt row of section 3 dies at once. It also closes most of hole 4.7 (harness-dependence): a runtime that assembles contexts and applies diffs ports anywhere; the hook machine doesn't.
+
+How the opcodes fare:
+
+- BRIEF, REVIEW, SCOPE_CHECK, RECORD, COMPILE_WAVE — already pure `context → artifact`. One call each today, no loss.
+- EXECUTE — the one that looks agentic, and it decomposes: a **runtime-driven loop of one-shots**. Model proposes a diff; runtime applies it, runs the gate, feeds the errors back as the next call's context; capped at N rounds, park on cap. Agentless proved exactly this shape on SWE-bench (section 9's citation).
+- The new cost is **context assembly**. A lane earns its keep by reading the repo itself and deciding what it needs; a one-shot call gets only what it is handed. Either the lead pre-selects files at compile time (brief-is-the-whole-game becomes total), or a retrieval opcode exists: `LOCATE : Brief → FileSet` — a model judgment reappearing, but bounded, typed, and inspectable instead of a session wandering. These retrieval-shaped steps are the **"special instructions"** (Peter's term): opcodes that are internally agentic but externally still one artifact out, budget-capped, oracle-checked where possible.
+
+Honest bound, same shape as always: this removes the lanes' *freedom*, not their *work*. REVIEW stays a model call and stays load-bearing; exploratory work (debugging, design) still doesn't pre-decompose — ESCALATE remains the branch. Every incident to date lived in the freedom, though, which is why this is the version worth building the runtime for. Gated on the R2 readout (section 6); the driver-script standing note (do not build without Peter) covers the runtime too.
+
 ## 9. Open questions / next steps
 
 - **R2 as the pitch.** The machine's next run decides whether this is converging or permanently tax-paying (section 6). **The operational pre-flight checklist lives in `.claude/orchestration/rt-reflections-r2-queue.md`** (blocking items + the workflow upgrades below, scoped to that wave — 2026-07-25).
