@@ -609,6 +609,39 @@ fn make_upload_rgba_f16(device: &GpuDevice, r: f32, g: f32, b: f32, a: f32, labe
     texture
 }
 
+/// BUG-dx6w: 2x2-tiled checkerboard upload — texel `(x,y)` gets `a_rgba` when
+/// `(x+y)%2==0`, else `b_rgba`. Gives `clamp_refl_history`'s current-frame
+/// neighborhood box nonzero variance (a constant-fill texture collapses
+/// `sigma` to 0, degenerate for exercising the clamp itself).
+fn make_upload_rgba_f16_checkerboard(
+    device: &GpuDevice,
+    a_rgba: [f32; 4],
+    b_rgba: [f32; 4],
+    label: &str,
+) -> GpuTexture {
+    let texture = device.create_texture(&GpuTextureDesc {
+        width: W,
+        height: H,
+        depth: 1,
+        format: GpuTextureFormat::Rgba16Float,
+        dimension: GpuTextureDimension::D2,
+        usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ,
+        label,
+        mip_levels: 1,
+    });
+    let mut pixels = Vec::with_capacity((W * H * 4) as usize);
+    for y in 0..H {
+        for x in 0..W {
+            let rgba = if (x + y) % 2 == 0 { a_rgba } else { b_rgba };
+            for c in rgba {
+                pixels.push(f16::from_f32(c));
+            }
+        }
+    }
+    device.upload_texture(&texture, as_bytes(&pixels));
+    texture
+}
+
 /// Upload helper for a single-channel R32Float texture (depth side channel).
 fn make_upload_r32(device: &GpuDevice, v: f32, label: &str) -> GpuTexture {
     let texture = device.create_texture(&GpuTextureDesc {
@@ -628,15 +661,31 @@ fn make_upload_r32(device: &GpuDevice, v: f32, label: &str) -> GpuTexture {
 
 /// RT-R2 bisection instrument (lead-requested): does the refl channel's
 /// accumulate kernel block blend at all? Seeds a known refl history H,
-/// drives hi_refl at C, and measures the output at reset=false (must
-/// blend H toward C) and reset=true (must equal C exactly). The lead reads
-/// the raw numbers — no diagnosis from this file.
+/// drives hi_refl at a checkerboard C, and measures the output at
+/// reset=false (must variance-clip H toward C's neighborhood, then blend
+/// toward C at the read pixel) and reset=true (must equal raw C at the read
+/// pixel exactly). The lead reads the raw numbers — no diagnosis from this
+/// file.
 ///
 /// Normal history and depth history are seeded to match the current frame's
 /// values (both constant), and reprojection uses identity matrices, so every
-/// pixel's reprojection validity test passes unconditionally. If the refl
-/// blend still reads as raw current frame on reset=false, the defect is
-/// inside the MSL kernel block, not in the scene plumbing.
+/// pixel's reprojection validity test passes unconditionally (self-
+/// reprojection, weight 1 on the own tap — same discipline the module doc's
+/// other proofs rely on).
+///
+/// BUG-dx6w: `accumulate_irradiance`'s refl blend now runs the seeded/
+/// reprojected history through `clamp_refl_history` (variance clip to the
+/// CURRENT frame's 3x3 `hi_refl` neighborhood, gamma = `RT_REFL_CLAMP_GAMMA`
+/// = 1.0 in `crates/manifold-gpu/src/metal/raytrace.rs`) before the 0.9/0.1
+/// blend — a CONSTANT hi_refl fill collapses that neighborhood's sigma to 0
+/// and degenerates the clamp (every history value not exactly at the
+/// constant collapses to it), so `hi_refl` here is a 2x2 checkerboard: this
+/// gives the box nonzero variance and keeps the blend leg's power to prove
+/// the kernel reads seeded history (a broken blend path can't reproduce this
+/// specific clamp+blend number by accident). Readback samples pixel (0,0);
+/// edge-clamped 3x3 footprint at that corner reads 4 taps at (0,0), 2 at
+/// (1,0), 2 at (0,1), 1 at (1,1) (Metal `clamp` on the neighborhood index,
+/// same as `clamp_refl_history`'s own edge handling).
 #[test]
 fn refl_channel_blends_history_and_current() {
     let h = shared();
@@ -672,8 +721,13 @@ fn refl_channel_blends_history_and_current() {
     // ── Reflection channel ────────────────────────────────────────────
     // H = (1.0, 0.0, 0.0, 5.0): history seed, .a = 5.0 is a valid hit distance.
     let refl_history = make_upload_rgba_f16(device, 1.0, 0.0, 0.0, 5.0, "bisect-refl-history");
-    // C = (3.0, 0.0, 0.0, 5.0): current frame value, different RGB.
-    let hi_refl = make_upload_rgba_f16(device, 3.0, 0.0, 0.0, 5.0, "bisect-hi-refl");
+    // BUG-dx6w: checkerboard current frame — A=(2,0,0,5) at (x+y) even,
+    // B=(4,0,0,5) at (x+y) odd. Mean r=3.0 (same nominal "current" value the
+    // pre-clamp test used), but nonzero neighborhood variance so the clamp
+    // has a real box to clip H into instead of degenerating.
+    const REFL_A: [f32; 4] = [2.0, 0.0, 0.0, 5.0];
+    const REFL_B: [f32; 4] = [4.0, 0.0, 0.0, 5.0];
+    let hi_refl = make_upload_rgba_f16_checkerboard(device, REFL_A, REFL_B, "bisect-hi-refl");
     let refl_output = make_history(device, "bisect-refl-output");
 
     // ── Buffers ───────────────────────────────────────────────────────
@@ -717,18 +771,58 @@ fn refl_channel_blends_history_and_current() {
     let blend_g = blend[1];
     let blend_b = blend[2];
     let blend_a = blend[3];
-    // mix(H, C, 0.1) = (1.0*0.9 + 3.0*0.1, 0, 0, 5.0) = (1.2, 0, 0, 5.0)
-    let expected_r = 1.0 * 0.9 + 3.0 * 0.1;
+
+    // BUG-dx6w: the readback pixel is (0,0), a texture corner — the MSL
+    // `clamp_refl_history` edge-clamps its 3x3 neighborhood index the same
+    // way, so the 9 taps collapse onto 4 distinct texels with the
+    // multiplicities below (see the fn-level doc comment).
+    let history_seed_r = 1.0_f32;
+    let neighborhood_r: [f32; 9] = [
+        REFL_A[0], REFL_A[0], REFL_A[0], REFL_A[0], // (0,0) x4
+        REFL_B[0], REFL_B[0],                       // (1,0) x2
+        REFL_B[0], REFL_B[0],                       // (0,1) x2
+        REFL_A[0],                                  // (1,1) x1
+    ];
+    let n = neighborhood_r.len() as f32;
+    let m1 = neighborhood_r.iter().sum::<f32>() / n;
+    let m2 = neighborhood_r.iter().map(|v| v * v).sum::<f32>() / n;
+    let sigma = (m2 - m1 * m1).max(0.0).sqrt();
+    // Mirrors RT_REFL_CLAMP_GAMMA (crates/manifold-gpu/src/metal/raytrace.rs) —
+    // retuning that constant requires recomputing this expectation.
+    const GAMMA: f32 = 1.0;
+    let lo = m1 - GAMMA * sigma;
+    let hi = m1 + GAMMA * sigma;
+    let clamped_h = history_seed_r.clamp(lo, hi);
+    let current_r_at_pixel = REFL_A[0]; // pixel (0,0): (0+0)%2==0 -> A
+    let expected_r = 0.9 * clamped_h + 0.1 * current_r_at_pixel;
+
+    // Sanity: the clamp+blend result must stay discriminating — distinct
+    // from both the raw current value and the pre-clamp unclamped-blend
+    // value, so this leg still proves the kernel reads seeded history
+    // rather than degenerating to either endpoint.
+    let unclamped_blend_r = 0.9 * history_seed_r + 0.1 * current_r_at_pixel;
+    assert!(
+        (expected_r - current_r_at_pixel).abs() > 0.05,
+        "test fixture bug: expected_r={expected_r} too close to raw current={current_r_at_pixel}"
+    );
+    assert!(
+        (expected_r - unclamped_blend_r).abs() > 0.05,
+        "test fixture bug: expected_r={expected_r} too close to the pre-clamp \
+         unclamped blend value={unclamped_blend_r}"
+    );
+
     eprintln!(
         "[bisect] refl blend leg (reset=false): \
-         r={blend_r} (expect ~{expected_r} = mix((1,0,0,5), (3,0,0,5), 0.1)), \
+         r={blend_r} (expect ~{expected_r} = mix(clamp({history_seed_r}, {lo}, {hi}), \
+         {current_r_at_pixel}, 0.1); m1={m1} sigma={sigma}), \
          g={blend_g}, b={blend_b}, a={blend_a}"
     );
 
     assert!(
         (blend_r - expected_r).abs() < 0.01,
-        "refl channel with reset=false did NOT blend: r={blend_r}, expected ~{expected_r} \
-         (kernel defect: the refl blend term never reads seeded history)"
+        "refl channel with reset=false did NOT blend+clamp as expected: r={blend_r}, \
+         expected ~{expected_r} (kernel defect: the refl blend term never reads seeded \
+         history, or the variance clip (BUG-dx6w) isn't engaging)"
     );
 
     // ── Leg 2: reset = true — output must equal C exactly ─────────────
@@ -768,14 +862,15 @@ fn refl_channel_blends_history_and_current() {
     let reset_a = reset[3];
     eprintln!(
         "[bisect] refl reset leg (reset=true): \
-         r={reset_r} (expect 3.0 = raw C=\\(3,0,0,5\\) first channel), \
+         r={reset_r} (expect {current_r_at_pixel} = raw checkerboard C at pixel (0,0), \
+         parity even -> A=(2,0,0,5)), \
          g={reset_g}, b={reset_b}, a={reset_a}"
     );
 
     assert!(
-        (reset_r - 3.0).abs() < 0.01,
+        (reset_r - current_r_at_pixel).abs() < 0.01,
         "refl channel with reset=true did NOT write current frame directly: \
-         r={reset_r}, expected 3.0"
+         r={reset_r}, expected {current_r_at_pixel}"
     );
 }
 /// BUG-ukg (camera-motion smear): per-tap validated bilinear resampling
