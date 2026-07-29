@@ -1,6 +1,6 @@
 # Ray Tracing — hybrid RT lighting for hero scenes
 
-**Status:** IN PROGRESS — Tier 1+2, the motion class, and reflections R1/R2 LANDED on main (records: section 9.6 (phases)). Peter's L2 look PASSED 2026-07-24; RT is usable under model motion. OPEN: R3 textured roughness next (owns traced-detail wash + motion speckle); rotation-artifact repro; Tier 3 items 6/8/9; P5 export (D13); P6 frame interp. R2 constants untuned — tuning + the camera-sweep motion verdict are Peter's look (D-61). Perf profiling DEFERRED by Peter until the pipeline is complete. · 2026-07-24 · K3
+**Status:** IN PROGRESS — Tier 1+2, the motion class, and reflections R1/R2 LANDED on main (records: section 9.6 (phases)). Peter's L2 look PASSED 2026-07-24; RT is usable under model motion. OPEN: R3 textured roughness next (owns traced-detail wash + motion speckle); Tier 3 items 6/8/9; P5 export (D13); P6 frame interp. R2 constants untuned — tuning + the camera-sweep motion verdict are Peter's look (D-61). Perf profiling DEFERRED by Peter until the pipeline is complete. · 2026-07-29 · Fable
 **Prerequisites:** none for P0. P1+ gated on P0 numbers and on RENDERING_INFRA_V2 section 2 (G-buffer/motion vectors) for temporal pieces.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
