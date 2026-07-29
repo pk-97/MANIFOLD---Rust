@@ -35,11 +35,13 @@ measurement system.
   frame time where the trace already exposes it). Rejected: per-primitive micro-benchmarks —
   they don't compose, and the corpus's perf escapes (BUG-035 (authoring-hitch)'s 59 ms on-thread conversion)
   were composition effects invisible to unit benchmarks.
-- **D2 — Deliberate run, not default CI.** Same posture as `gpu-proofs`: needs the GPU,
-  takes minutes, flakes under device contention. Invoked when a landing wave touched
-  content-thread or render-path code, and as part of the pre-gig soak (GIG_RESILIENCE
-  companion). Rejected: per-commit CI — wall-time cost and contention flake would rot the
-  gate into being ignored.
+- **D2 — Deliberate run, not default CI, and not landing ceremony.** Same posture as
+  `gpu-proofs`: needs the GPU, takes minutes, flakes under device contention. Invoked
+  on suspicion of frame cost (profiling beads, hot-loop rewrites), as part of the
+  pre-gig soak (GIG_RESILIENCE companion), or when Peter asks — NOT on every
+  render-path landing (Peter 2026-07-29: time+GPU waste; the relative baseline is
+  also noisy on a loaded machine). Rejected: per-commit CI — wall-time cost and
+  contention flake would rot the gate into being ignored.
 - **D3 — Two thresholds, one absolute and one relative.** Hard fail: any frame >20 ms
   (the line DESIGN_DOC_STANDARD section 5 already canonizes). Regression fail: p95 frame time
   >15% above the checked-in baseline. Rejected: absolute-only — it never catches the bleed
