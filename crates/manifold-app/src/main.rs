@@ -160,6 +160,26 @@ fn main() {
             crate::rt_capture::run(&args[1..]);
         }
     }
+    // Unknown argv rejection (Peter 2026-07-29): the GUI launches ONLY with
+    // no args or `--resume <path>`. Everything else used to fall through to
+    // the winit event loop — a mistyped flag, or a feature-gated headless
+    // subcommand invoked on a build WITHOUT that feature, silently opened
+    // the full app on the performance machine and never returned. Agents
+    // test headless; Peter launches the GUI, and he launches it bare.
+    {
+        let args: Vec<String> = std::env::args().collect();
+        let known_gui_argv =
+            args.len() == 1 || args.get(1).map(String::as_str) == Some("--resume");
+        if !known_gui_argv {
+            eprintln!(
+                "manifold: unrecognized argument {:?} — refusing to launch the GUI.\n\
+                 Headless subcommands: ui-snap (feature ui-snapshot), perf-soak / rt-capture \
+                 (feature perf-soak, macOS). GUI: no args, or --resume <breadcrumb-path>.",
+                args[1]
+            );
+            std::process::exit(2);
+        }
+    }
     // --- `--resume <breadcrumb-path>` (GIG_RESILIENCE_DESIGN section 5.2) ---
     // The crash-recovery relaunch path: `manifold --resume <path>` skips
     // everything that isn't pixels. Parsed here (no other CLI arg parsing
