@@ -1,6 +1,6 @@
 # Ray Tracing — hybrid RT lighting for hero scenes
 
-**Status:** IN PROGRESS — Tier 1+2, the motion class, and reflections R1/R2 LANDED on main (records: section 9.6 (phases)). Peter's L2 look PASSED 2026-07-24; RT is usable under model motion. OPEN: R3 textured roughness next (owns traced-detail wash + motion speckle); Tier 3 items 6/8/9; P5 export (D13); P6 frame interp. D-61 sweep verdict FAILED (trails) → fixed by the D-63 variance clip, BUG-dx6w (specular history neighborhood clamp); re-sweep + constant tuning (now incl. RT_REFL_CLAMP_GAMMA) are Peter's look. Perf profiling DEFERRED by Peter until the pipeline is complete. · 2026-07-29 · Fable
+**Status:** IN PROGRESS — Tier 1+2, the motion class, and reflections R1/R2 LANDED on main (records: section 9.6 (phases)). Peter's L2 look PASSED 2026-07-24; RT is usable under model motion. OPEN: R3 textured roughness next (owns traced-detail wash + motion speckle); Tier 3 items 6/8/9; P5 export (D13); P6 frame interp. D-61 sweep verdict PASSED 2026-07-29 after the D-63 clamp + v2 tone-mapped clip; faint extreme-transition residual accepted as BUG-im9s (residual streak, P3). R2 constants (incl. RT_REFL_CLAMP_GAMMA) still untuned — Peter's look, on demand. Perf profiling DEFERRED by Peter until the pipeline is complete. · 2026-07-29 · Fable
 **Prerequisites:** none for P0. P1+ gated on P0 numbers and on RENDERING_INFRA_V2 section 2 (G-buffer/motion vectors) for temporal pieces.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -529,7 +529,9 @@ stale content dies in 1–2 frames; at noisy texels the box widens so amortizati
 where it is needed. Gate consequence: the step-leg pass value moved from ≈1.1 (slow blend — now
 the MUST-FAIL signature of a dead clamp) to measured ≈1.67; new kernel-level value proof
 `rt_r2_clamp.rs` on the RT-T1-B debug-dispatch pattern. RT_REFL_CLAMP_GAMMA (0.5–3.0) joins the
-untuned set — tuning stays Peter's look.
+untuned set — tuning stays Peter's look. v2 same day, BUG-axe9 (tone-mapped variance clip):
+Peter's residual verdict (fast-sweep + bright-to-black streaks) traced to linear-HDR moments —
+one hot texel inflates sigma; the clamp now maps through `c/(1+luma)`, clamps, inverts.
 
 - *Entry:* Raster-parity reflections landed; Base traced reflections' (R1) `trace_ms` delta and
   Peter's L2 verdict recorded in the phase report.
