@@ -73,9 +73,12 @@ file. The runtime is mostly wiring.
   `escalate`. LOCATE is deferred. Rejected: expressions/branching in the program — linear
   steps with escalate-as-the-only-branch is the reliability claim (the concept doc's
   section 7 again).
-- **D8 — review stays a model call, recorded through the existing CLI.** A `generate` step
-  with `Verdict` output; the runtime then calls `gate_runner review --task --verdict
-  --rationale` so the decisions trail stays in its one home.
+- **D8 — review stays a model call, recorded through the existing CLI.** Built 2026-07-30:
+  when the program carries a `task` id, every completed Verdict artifact is recorded via
+  `gate_runner review` with the MODEL as the reviewing seat — the decisions trail keeps its
+  one home. No task = run-dir only (toy runs never pollute the trail). A recording failure
+  is a hard run error; a rationale under gate_runner's 20-char floor is a parse failure the
+  retry loop feeds back.
 
 v1.1 (Peter, 2026-07-30 — the full instruction set exists BEFORE the compiler writes
 programs; a missing pure opcode fails silently as a contorted program, so defer-until-parked
@@ -192,9 +195,6 @@ P2 (D3/D5/D8), or Deferred.
 
 ## 7. Deferred
 
-- **D8 verdict recording** (`gate_runner review` call after a Verdict artifact) — not wired
-  yet; P3 builds it with the first real reviewed run. Until then verdict artifacts stay in
-  the run dir only (2026-07-29 adversarial review, contract-gap note).
 - **Slot auto-release / `workflow release` verb.** Runs keep their worktree for review;
   release is manual. Revive if a wave leaks slots to POOL FULL in practice.
 

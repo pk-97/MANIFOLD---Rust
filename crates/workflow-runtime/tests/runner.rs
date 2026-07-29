@@ -105,7 +105,7 @@ fn parse_feedback_recovers_within_cap() {
     let fx = Fixture::new("recover", VERDICT_STEP, &[("review.md", "review the diff")]);
     let mock = MockTransport::new(vec![
         "garbage".into(),
-        "```json\n{\"verdict\": \"accept\", \"rationale\": \"clean\"}\n```".into(),
+        "```json\n{\"verdict\": \"accept\", \"rationale\": \"clean diff, matches the brief exactly\"}\n```".into(),
     ]);
     assert_eq!(run(&fx.cfg(), &mock).unwrap(), Outcome::Done);
     let artifact = fs::read_to_string(fx.root.join("run/step-00-verdict.json")).unwrap();
@@ -577,8 +577,8 @@ template = "t.md"
 
 #[test]
 fn sample_verdict_majority_wins_tie_parks() {
-    let accept = r#"{"verdict": "accept", "rationale": "fine"}"#;
-    let reject = r#"{"verdict": "reject", "rationale": "off"}"#;
+    let accept = r#"{"verdict": "accept", "rationale": "meets the brief and gates are green"}"#;
+    let reject = r#"{"verdict": "reject", "rationale": "scope creep beyond the named files"}"#;
     let fx = Fixture::new("vote", SAMPLE_VOTE, &[("t.md", "judge")]);
     let mock = MockTransport::new(vec![accept.into(), reject.into(), accept.into()]);
     assert_eq!(run(&fx.cfg(), &mock).unwrap(), Outcome::Done);
@@ -692,4 +692,75 @@ fn cost_ledger_sums_transcript() {
     let report = workflow_runtime::cost::summarize(&fx.root.join("run")).unwrap();
     assert!(report.contains("TOTAL 22 tokens"), "{report}");
     assert!(report.contains("draft") && report.contains("critique"), "{report}");
+}
+
+// ── D8: verdict recording through gate_runner review ──
+
+/// Plant a stub `scripts/gate_runner.py` that appends its argv to a file.
+fn plant_gate_runner_stub(fx: &Fixture) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt as _;
+    let log = fx.root.join("review-calls.log");
+    fs::create_dir_all(fx.root.join("scripts")).unwrap();
+    let stub = fx.root.join("scripts/gate_runner.py");
+    fs::write(&stub, format!("#!/bin/sh\necho \"$@\" >> '{}'\n", log.display())).unwrap();
+    fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
+    log
+}
+
+const VERDICT_WITH_TASK: &str = r#"
+name = "reviewed"
+task = "BUG-test"
+[[step]]
+name = "verdict"
+opcode = "generate"
+model = "mock"
+artifact = "verdict"
+template = "review.md"
+"#;
+
+#[test]
+fn verdict_step_with_task_is_recorded_via_gate_runner() {
+    let fx = Fixture::new("d8", VERDICT_WITH_TASK, &[("review.md", "review the diff")]);
+    let log = plant_gate_runner_stub(&fx);
+    let mock = MockTransport::new(vec![
+        r#"{"verdict": "accept", "rationale": "meets the brief and gates are green"}"#.into(),
+    ]);
+    assert_eq!(run(&fx.cfg(), &mock).unwrap(), Outcome::Done);
+    let calls = fs::read_to_string(&log).unwrap();
+    assert!(calls.contains("review"), "{calls}");
+    assert!(calls.contains("--task BUG-test"), "{calls}");
+    assert!(calls.contains("--verdict accept"), "{calls}");
+    assert!(calls.contains("--by mock"), "the MODEL is the reviewing seat: {calls}");
+
+    // Resume must not double-record: the step loads from disk, no new call.
+    let empty = MockTransport::new(vec![]);
+    assert_eq!(run(&fx.cfg(), &empty).unwrap(), Outcome::Done);
+    assert_eq!(fs::read_to_string(&log).unwrap().lines().count(), 1, "one verdict, one record");
+}
+
+#[test]
+fn verdict_without_task_stays_in_run_dir_and_short_rationale_feeds_back() {
+    // No `task` field: the shared trail is never touched.
+    let fx = Fixture::new("d8-notask", VERDICT_STEP, &[("review.md", "review the diff")]);
+    let log = plant_gate_runner_stub(&fx);
+    let mock = MockTransport::new(vec![
+        // Short rationale: parse failure fed back (mirrors gate_runner's floor).
+        r#"{"verdict": "accept", "rationale": "lgtm"}"#.into(),
+        r#"{"verdict": "accept", "rationale": "meets the brief and gates are green"}"#.into(),
+    ]);
+    assert_eq!(run(&fx.cfg(), &mock).unwrap(), Outcome::Done);
+    assert_eq!(mock.requests_served(), 2, "short rationale must cost a retry");
+    assert!(!log.exists(), "no task, no write to the shared trail");
+}
+
+#[test]
+fn failed_recording_is_a_hard_error() {
+    // A verdict that cannot be recorded must never look green: the fixture
+    // has NO gate_runner stub, so the spawn fails and the run aborts.
+    let fx = Fixture::new("d8-hard", VERDICT_WITH_TASK, &[("review.md", "review the diff")]);
+    let mock = MockTransport::new(vec![
+        r#"{"verdict": "accept", "rationale": "meets the brief and gates are green"}"#.into(),
+    ]);
+    let err = run(&fx.cfg(), &mock).unwrap_err();
+    assert!(err.contains("gate_runner review"), "{err}");
 }

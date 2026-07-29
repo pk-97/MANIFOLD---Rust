@@ -180,6 +180,7 @@ pub fn run(cfg: &RunConfig, transport: &dyn ModelTransport) -> Result<Outcome, S
                 match run_generate(cfg, step, idx, &template_root, &artifacts, transport, &mut budget, &gate_cwd)? {
                     Ok(artifact) => {
                         persist(&state_path, &artifact)?;
+                        record_verdict_if_due(cfg, &program, step, &artifact)?;
                         artifacts.insert(step.name.clone(), artifact);
                     }
                     Err(park) => {
@@ -278,6 +279,7 @@ pub fn run(cfg: &RunConfig, transport: &dyn ModelTransport) -> Result<Outcome, S
                 match outcome {
                     Ok(artifact) => {
                         persist(&state_path, &artifact)?;
+                        record_verdict_if_due(cfg, &program, step, &artifact)?;
                         artifacts.insert(step.name.clone(), artifact);
                     }
                     Err(park) => {
@@ -290,6 +292,32 @@ pub fn run(cfg: &RunConfig, transport: &dyn ModelTransport) -> Result<Outcome, S
         idx += 1;
     }
     Ok(Outcome::Done)
+}
+
+/// D8: a completed verdict step in a program that carries a `task` goes on
+/// the shared decisions trail, with the MODEL as the reviewing seat. No task,
+/// no write — toy runs never pollute decisions.md. Recording failure is a
+/// hard run error: an off-the-record verdict must never look green.
+fn record_verdict_if_due(
+    cfg: &RunConfig,
+    program: &Program,
+    step: &Step,
+    artifact: &Artifact,
+) -> Result<(), String> {
+    if artifact.kind != ArtifactKind::Verdict {
+        return Ok(());
+    }
+    let Some(task) = &program.task else { return Ok(()) };
+    let verdict: Verdict =
+        serde_json::from_value(artifact.value.clone()).map_err(|e| format!("stored Verdict re-parse: {e}"))?;
+    crate::gates::record_review(
+        &cfg.repo_root,
+        task,
+        &verdict.verdict,
+        &format!("{} step {}", program.name, step.name),
+        &verdict.rationale,
+        step.model.as_deref().unwrap_or("model"),
+    )
 }
 
 fn state_path_for(run_dir: &Path, idx: usize, name: &str) -> PathBuf {
@@ -378,6 +406,8 @@ fn run_parallel_generates(
         match outcome {
             Ok(artifact) => {
                 persist(&state_path, &artifact)?;
+                // A verdict step in a parallel batch is still a verdict (D8).
+                record_verdict_if_due(cfg, program, step, &artifact)?;
                 artifacts.insert(step.name.clone(), artifact);
             }
             Err(park) => {

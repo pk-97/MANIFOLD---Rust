@@ -122,6 +122,32 @@ fn cleanup(paths: &[&Path]) {
     }
 }
 
+/// D8: record a completed verdict step in the shared decisions trail via
+/// `scripts/gate_runner.py review` — the trail has ONE home, this module is
+/// its only caller. Failure is a hard run error, never silent.
+pub fn record_review(
+    repo_root: &Path,
+    task: &str,
+    verdict: &str,
+    subject: &str,
+    rationale: &str,
+    by: &str,
+) -> Result<(), String> {
+    let out = Command::new(repo_root.join("scripts/gate_runner.py"))
+        .args(["review", "--task", task, "--verdict", verdict, "--subject", subject, "--rationale", rationale, "--by", by])
+        .current_dir(repo_root)
+        .output()
+        .map_err(|e| format!("gate_runner review spawn failed: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "gate_runner review failed (verdict for {subject} is NOT on the record):\n{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+    Ok(())
+}
+
 fn run_one(
     cmd: &str,
     cwd: &Path,

@@ -92,6 +92,9 @@ name = "my-program"            # run-id defaults to this
 token_budget = 200000          # optional; default 500K; hard cap, retries included
 parallel = true                # optional: adjacent independent gate-less generates run
                                # threaded; execute NEVER parallelizes (D-59)
+task = "<bead id>"             # optional: with it, every verdict step is recorded in the
+                               # shared decisions trail via gate_runner review (D8);
+                               # without it verdicts stay in the run dir
 
 [target]                       # only for programs with execute steps — exactly ONE form:
 label = "task-label"           # ring-acquire: label + branch (+ optional tip)
