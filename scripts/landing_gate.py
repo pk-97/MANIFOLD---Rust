@@ -251,7 +251,26 @@ def main():
             exit_, out, err, duration = run_cmd(
                 ["python3", "scripts/gpu_proofs_gate.py"],
                 cwd=repo, timeout=7200)
-            tail = (out + err).rstrip().splitlines()[-20:]
+            # On failure the tail MUST name the failing tests. gpu_proofs_gate's
+            # summary prints "Failed tests:"/"Drifted goldens:" ABOVE its
+            # per-binary list, so a bare last-20-lines tail scrolls the names
+            # out (observed at the R3 landing: a 4-minute rerun just to learn
+            # the name). Surface those sections plus the verdict line instead.
+            lines = (out + err).rstrip().splitlines()
+            if exit_ == 0:
+                tail = lines[-20:]
+            else:
+                names = []
+                in_section = False
+                for line in lines:
+                    if line.startswith(("Failed tests", "Drifted goldens")):
+                        in_section = True
+                    elif line.startswith(("Per-binary results", "GPU-PROOFS GATE:")):
+                        in_section = False
+                    if in_section and line.strip():
+                        names.append(line)
+                verdict = [l for l in lines if l.startswith("GPU-PROOFS GATE:")]
+                tail = (names + verdict) or lines[-20:]
             status = "PASS" if exit_ == 0 else "FAIL"
             results.append((status, "gpu-proofs", duration, tail))
             print_result("gpu-proofs", status, duration, tail if exit_ != 0 else None)
