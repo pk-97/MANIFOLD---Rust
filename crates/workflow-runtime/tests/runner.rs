@@ -225,7 +225,7 @@ fn init_target_repo(fx: &Fixture) -> PathBuf {
     dir
 }
 
-fn execute_program(target: &PathBuf, retry_cap: u8) -> String {
+fn execute_program(target: &std::path::Path, retry_cap: u8) -> String {
     format!(
         r#"
 name = "exec"
