@@ -1,6 +1,7 @@
 //! Semantic workflow program runner. Design contract: docs/WORKFLOW_RUNTIME_DESIGN.md.
 //! The model is a stateless function `context -> typed artifact`; this crate owns
-//! every side effect. Invariant (structural): no subprocess spawn outside `gates`.
+//! every side effect. Invariant (structural): no subprocess spawn outside
+//! `gates`, `worktree`, and `transport`'s keyget.
 
 pub mod artifacts;
 pub mod gates;
@@ -8,3 +9,4 @@ pub mod program;
 pub mod runner;
 pub mod template;
 pub mod transport;
+pub mod worktree;
