@@ -54,6 +54,7 @@ mod rt_multi_caster_shadow;
 mod rt_object_cast_shadows;
 mod rt_r1_reflection;
 mod rt_r2_accumulation;
+mod rt_r2_clamp;
 mod rt_t2b_temporal_wiring;
 mod rt_w0_gbuffer;
 mod scene_object_migration_round_trip;

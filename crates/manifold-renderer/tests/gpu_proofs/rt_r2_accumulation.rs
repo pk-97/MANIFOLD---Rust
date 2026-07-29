@@ -2,8 +2,11 @@
 //! accumulation blend-engagement + cut-reset gate.
 //!
 //! RULE: The specular temporal accumulation blends 10% per frame
-//! (0.9 * history + 0.1 * current raw). An owner-key change (cut) resets
-//! the accumulator to the raw trace immediately.
+//! (0.9 * history + 0.1 * current raw), then (BUG-dx6w) the blended history
+//! is variance-clipped to mean ± RT_REFL_CLAMP_GAMMA·stddev of the CURRENT
+//! frame's 3x3 `hi_refl` neighborhood before the blend. An owner-key change
+//! (cut) resets the accumulator to the raw trace immediately, same as
+//! before.
 //!
 //! Fixture: mirror plane (roughness 0.01, metallic 1.0) at y=0, one emissive
 //! quad at (0, 0.8, 2.0) whose emission_intensity is time-driven via a
@@ -16,14 +19,25 @@
 //!
 //! Three measurements per run:
 //! - B = baseline (emission 10, converged after 16 warmup + 6 motion frames)
-//! - a_nc = step+1 frame, NO owner change (accumulation blends 0.9*B + 0.1*2B)
+//! - a_nc = step+1 frame, NO owner change
 //! - a_c = step+1 frame, owner_key 1 (accumulation resets, raw 2*B)
 //!
-//! Theory: a_nc/B = 1.1, a_c/B = 2.0
+//! Theory (post-clamp): at the mirror interior the current frame's 3x3
+//! `hi_refl` neighborhood around the step+1 raw trace (≈2*B) is NOT
+//! perfectly zero-variance in practice — real texel-level dithering/AA
+//! gradient gives the box nonzero width — so the stale ≈B history clamps
+//! partway toward ≈2*B rather than landing on it exactly. Measured 2026-07-29:
+//! a_nc/B ≈ 1.67, clearly above the pre-clamp ≈1.1 (the clamp is engaging
+//! and moving the result well past plain 10% blend) and below the cut
+//! leg's ≈1.94, which never touches the blend/clamp path at all (raw
+//! trace reset).
 //!
-//! GATE-MUST-FAIL discipline: if a_nc/B ≈ 2.0 the history isn't engaging
-//! (accumulation dead); if a_c/B ≈ 1.1 the cut didn't reset (reset path dead).
-//! Measured values (2026-07-26): B=?, A_nc=?, A_c=?
+//! GATE-MUST-FAIL discipline: if a_nc/B drops back to ≈1.1, that WAS the
+//! pre-clamp pass value (2026-07-26) — it now means the clamp is not
+//! engaging (stale history survived the variance box unclamped, sweep
+//! trails are back). If a_c/B ≈ 1.1, the cut didn't reset (reset path
+//! dead).
+//! Measured values (2026-07-29): B=2.859054, A_nc=4.760989, A_c=5.538713.
 
 use half::f16;
 use manifold_core::params::ParamManifest;
@@ -348,16 +362,24 @@ fn mirror_pixel(cam: &Camera, world: [f32; 3], w: u32, h: u32) -> (f32, f32) {
     (px.px, px.py)
 }
 
-/// Specular temporal accumulation: blend engagement (no-cut blends at ~10% per
-/// frame) and cut reset (owner-key change discards history immediately).
+/// Specular temporal accumulation: variance-clip engagement (no-cut clamps
+/// stale history into the current-frame neighborhood box before blending)
+/// and cut reset (owner-key change discards history immediately).
 ///
-/// Theory:
+/// Theory (BUG-dx6w clamp):
 /// - B (converged at emission 10): baseline luminance
-/// - a_nc (step+1, no cut): 0.9 * B + 0.1 * (2 * B) = 1.1 * B
-/// - a_c (step+1, cut via owner_key=1): raw trace = 2 * B
+/// - a_nc (step+1, no cut): the stale ≈B history gets variance-clipped
+///   toward the current frame's 3x3 `hi_refl` neighborhood (≈2*B, nonzero
+///   width in practice) before the 0.9/0.1 blend, landing well above the
+///   pre-clamp ≈1.1*B but below the cut leg's raw ≈2*B.
+/// - a_c (step+1, cut via owner_key=1): raw trace ≈ 2 * B (unchanged, never
+///   touches the blend/clamp path)
 ///
-/// Bands: [1.02, 1.25] for blend, [1.8, 2.2] for cut (pinned from measured
-/// values 2026-07-26: B=?, A_nc=?, A_c=?).
+/// Bands (pinned from measured values 2026-07-29: B=2.859054,
+/// A_nc=4.760989, A_c=5.538713 — a_nc/B≈1.665, a_c/B≈1.937):
+/// - a_nc/B: [1.4, 2.2] — clearly separates the clamp-engaged result from
+///   the pre-clamp ≈1.1 MUST-FAIL signature.
+/// - a_c/B: [1.8, 2.2] — unchanged cut-reset band.
 #[test]
 fn specular_history_blends_without_cut_and_resets_on_cut() {
     let h = crate::harness::shared();
@@ -386,7 +408,7 @@ fn specular_history_blends_without_cut_and_resets_on_cut() {
     let ratio_nc = a_nc / b;
     let ratio_c = a_c / b;
 
-    eprintln!("R2 STEP 4 ACCUM GATE — measured values (2026-07-26)");
+    eprintln!("R2 STEP 4 ACCUM GATE — measured values (2026-07-29, post-clamp BUG-dx6w)");
     eprintln!("  B={b:.6}  A_nc={a_nc:.6}  A_c={a_c:.6}");
     eprintln!("  a_nc/B={ratio_nc:.6}  a_c/B={ratio_c:.6}");
     eprintln!("  neighbor={neighbor:.6}  B/neighbor={:.4}", b / neighbor);
@@ -400,11 +422,16 @@ fn specular_history_blends_without_cut_and_resets_on_cut() {
         "Sanity fail: emitter not visible in reflection. B={b:.6} neighbor={neighbor:.6}",
     );
 
-    // Blend: no-cut must show ~10% blend (not full reset).
+    // Clamp (BUG-dx6w): no-cut must land clearly above the pre-clamp ≈1.1
+    // signature because the stale converged history gets variance-clipped
+    // toward the current frame's neighborhood before the blend.
     assert!(
-        ratio_nc > 1.02 && ratio_nc < 1.25,
-        "Blend fail: a_nc/B={ratio_nc:.6}. Expected ≈1.1 (blend engaged). \
-         If ≈2.0, accumulation is dead (gate-must-fail).",
+        ratio_nc > 1.4 && ratio_nc < 2.2,
+        "Clamp fail: a_nc/B={ratio_nc:.6}. Expected ≈1.4-2.2 (clamp engaged, \
+         measured ≈1.67 on 2026-07-29). If ≈1.1, the clamp is not engaging \
+         — that was the pre-clamp pass value (2026-07-26), meaning stale \
+         history is surviving unclamped (gate-must-fail, the sweep trail is \
+         back).",
     );
 
     // Cut: owner change must reset to raw trace (~2x B).
