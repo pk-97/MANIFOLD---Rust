@@ -271,6 +271,8 @@ impl Graph {
         name: &str,
         value: ParamValue,
     ) -> Result<(), GraphError> {
+        // BUG-18l probe: capture graph instance pointer early
+        let instance_id = self as *const _ as usize;
         let inst = self
             .nodes
             .get_mut(&id)
@@ -303,7 +305,7 @@ impl Graph {
         // BUG-18l probe: log rt_enabled writes that pass compare-on-write
         if name.contains("rt_enabled") {
             let old_value = inst.params.get(key.as_ref());
-            eprintln!("[BUG-18l probe] graph.set_param WRITE: name={}, old={:?} → new={:?}", name, old_value, value);
+            eprintln!("[BUG-18l probe] graph.set_param WRITE: graph_ptr=0x{:x}, name={}, old={:?} → new={:?}", instance_id, name, old_value, value);
         }
         // Forced-outputs watch (BUG-317): snapshot the node's forced set
         // before the write, compare after. Default impl returns `&[]` —
@@ -316,7 +318,7 @@ impl Graph {
         };
         // BUG-18l probe: log if forced_outputs_epoch changed
         if name.contains("rt_enabled") && forced_changed {
-            eprintln!("[BUG-18l probe] graph.set_param forced_changed=true, bumping forced_outputs_epoch");
+            eprintln!("[BUG-18l probe] graph.set_param forced_changed=true, bumping forced_outputs_epoch (graph_ptr=0x{:x})", instance_id);
         }
         // Variadic nodes rebuild their port lists when a count-style param
         // changes. Disjoint field borrows (`node` mut, `params` shared).

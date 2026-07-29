@@ -1916,6 +1916,9 @@ impl PresetRuntime {
     /// The stale-but-consistent plan keeps rendering exactly what it did.
     fn refresh_plan_if_forced_outputs_changed(&mut self) {
         let epoch = self.graph.forced_outputs_epoch();
+        // BUG-18l probe: tag this graph instance and log epoch check
+        let graph_ptr = &self.graph as *const _ as usize;
+        eprintln!("[BUG-18l probe] refresh_plan: graph_ptr=0x{:x}, epoch={}, last_epoch={}", graph_ptr, epoch, self.last_forced_outputs_epoch);
         if epoch == self.last_forced_outputs_epoch {
             return;
         }

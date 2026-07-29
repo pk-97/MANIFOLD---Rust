@@ -3025,6 +3025,15 @@ impl EffectNode for RenderScene {
         // folded into `view_proj` — the RT pass's `inv_view_proj` must
         // match the SAME `view_proj` the main draw uses this frame.
         let rt_enabled = matches!(ctx.params.get("rt_enabled"), Some(ParamValue::Bool(true)));
+        // BUG-18l probe: log rt_enabled value this instance reads every call
+        static mut EVAL_COUNTER: u32 = 0;
+        unsafe {
+            EVAL_COUNTER = EVAL_COUNTER.saturating_add(1);
+            if EVAL_COUNTER % 60 == 0 {
+                let self_ptr = self as *const _ as usize;
+                eprintln!("[BUG-18l probe] render_scene.evaluate: instance_ptr=0x{:x}, rt_enabled={}", self_ptr, rt_enabled);
+            }
+        }
         // RAYTRACING_DESIGN.md section 9 RD9 (T4): per-scene reflection toggle,
         // gated on rt_enabled — inert when RT is off entirely. Default ON
         // (Q3). T5 fine-tunes the spp/roughness-band constants.
