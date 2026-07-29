@@ -107,6 +107,28 @@ s = fresh_session()
 run(bash("git log --oneline && cargo test --features gpu-proofs", s))
 check("plumbing+probe compound counts", counter(s) == 1, f"count={counter(s)}")
 
+# --- BUG-q329: textual mentions are not probes ---
+s = fresh_session()
+mentions = [
+    "bd close BUG-yo9m -r 'verified: 15-probe replay with render-import runs'",
+    'git commit -m "gpu_proofs_gate.py: full-suite gate (BUG-gtir)" -- CLAUDE.md',
+    "rg -n gpu-proofs docs/ scripts/",
+    "git merge --no-ff lane/gpu-proofs-gate",
+    "python3 -m py_compile scripts/foo.py && echo gpu-proofs mentioned",
+    "ls lane/render-import-fix/",
+]
+for i in range(2):  # 12 calls — far past DENY_AT if miscounted
+    for c in mentions:
+        out = run(bash(c, s))
+        check(f"mention silent: {c[:40]}…", kind(out) == "silent", f"got {kind(out)}")
+check("mentions never counted", counter(s) == 0, f"count={counter(s)}")
+
+# --- executions still count: wrapper run and direct binary run ---
+s = fresh_session()
+run(bash('python3 "scripts/gpu_proofs_gate.py" --manifest-path /tmp/wt/Cargo.toml', s))
+run(bash("target/release/render-import fixtures/a.glb /tmp/out.png", s))
+check("wrapper + binary runs count", counter(s) == 2, f"count={counter(s)}")
+
 # --- for-loop BODY running a probe still counts (header is data, body is not) ---
 s = fresh_session()
 run(bash("for f in a.glb b.glb; do cargo run --bin render-import -- $f; done", s))

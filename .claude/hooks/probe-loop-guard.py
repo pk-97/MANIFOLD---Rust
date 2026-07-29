@@ -12,7 +12,11 @@ than probe-first. Doctrine: docs/AGENT_ROUTING.md §Lead token economy.
 Mechanism: counts probe-loop actions per session —
   - Edit/Write/MultiEdit touching RT/GPU kernel or shader files
     (manifold-gpu/metal/**, render_scene.rs, *.wgsl under crates/)
-  - Bash running render-import or gpu-proofs tests
+  - Bash EXECUTING the suite or probe binary (cargo test/run with the
+    gpu-proofs feature or render-import bin, the gate wrapper, a direct
+    render-import run) — mentions don't count (BUG-q329): quoted strings
+    are stripped, so commit messages and bead reasons naming the markers
+    never increment the counter.
 Read-only git plumbing is exempt (BUG-0c28): merge-base, rev-parse, log,
 and branch segments are stripped before matching — querying git metadata
 is not probing.
@@ -46,7 +50,25 @@ def is_worker_seat(payload: dict) -> bool:
     return any(payload.get(k) for k in ("agent_id", "agent_type", "teammate_name"))
 
 KERNEL_PATH = re.compile(r"crates/manifold-gpu/src/metal/|render_scene\.rs$|\.wgsl$")
-PROBE_CMD = re.compile(r"render-import|gpu-proofs|gpu_proofs")
+# A probe is an EXECUTION, not a mention (BUG-q329, Peter-approved 2026-07-29:
+# "reclassify probe-loop-guard to execution-shape matching with quote
+# stripping"): count only commands that actually run the suite or the probe
+# binary — cargo test/run with the gpu-proofs feature or the render-import
+# bin, the gate wrapper itself, or a direct render-import invocation (token
+# must END at the name; branch names like lane/render-import-fix don't).
+# Quoted strings are stripped first, so commit messages and bead reasons
+# naming the markers never count. Accepted trade-off: a probe wrapped
+# entirely in quotes evades the counter — the guard is fail-open by design.
+PROBE_CMD = re.compile(
+    r"cargo\s+(?:test|t|run|r)\b[^|;&\n]*?"
+    r"(?:--features[^|;&\n]*?gpu[-_]proofs|--bin\s+render-import)"
+    r"|\brender-import(?=\s|$)"
+)
+# The gate wrapper's path is normally quoted (the repo path has a space), so
+# it must match the RAW command; end-of-token anchor keeps prose mentions
+# like "gpu_proofs_gate.py: …" in commit messages from counting.
+WRAPPER_RUN = re.compile(r"gpu_proofs_gate\.py['\"]?(?=\s|$)")
+QUOTED = re.compile(r"'[^']*'|\"[^\"]*\"")
 # Read-only git plumbing is bookkeeping, not probing (BUG-0c28): a landing's
 # merge-base/rev-parse/log/branch loops must never feed the probe counter,
 # even when branch names or arguments contain probe-marker strings. Strip
@@ -78,8 +100,9 @@ def main() -> None:
             path = ti.get("file_path", "")
             is_probe = bool(KERNEL_PATH.search(path))
         elif tool == "Bash":
-            cmd = GIT_PLUMBING.sub("", FOR_HEADER.sub("", ti.get("command", "")))
-            is_probe = bool(PROBE_CMD.search(cmd))
+            raw = ti.get("command", "")
+            cmd = GIT_PLUMBING.sub("", FOR_HEADER.sub("", QUOTED.sub("", raw)))
+            is_probe = bool(PROBE_CMD.search(cmd)) or bool(WRAPPER_RUN.search(raw))
         if not is_probe:
             return
 
