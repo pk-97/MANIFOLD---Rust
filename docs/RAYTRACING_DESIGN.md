@@ -728,9 +728,10 @@ eye may not.
 - **I-MB1 — the refactor changes no pixel.** `graph_tool render` of an RT-enabled compare
   graph at the pre- and post-MB-A commits, `cmp`-identical (T2-B precedent — never a
   code-diff argument).
-- **I-MB2 — env is never gathered, at any depth.** Value test leg: a scene with geometry,
-  ambient only — zero suns, zero emissive — reads identical (stated epsilon) at bounces=2
-  vs bounces=1.
+- **I-MB2 — env is never gathered, at any depth.** A scene with geometry, ambient only —
+  zero suns, zero emissive — renders `cmp`-identical at bounces=2 vs bounces=1 (the
+  cross-commit pair in MB-B's gate), and the in-repo pin holds its region at the analytic
+  `ambient*ao` value.
 - **I-MB3 — the sun-bounce caster loop has one home.** `rg` — the
   `SUN_BOUNCE_INTENSITY_SCALE` multiply appears inside exactly one function.
 
@@ -759,12 +760,22 @@ eye may not.
   hit's interpolated normal, shade again (emissive + sun-bounce × throughput), stop at
   the depth cap or miss; new value test `tests/gpu_proofs/rt_t38_multibounce.rs` on the
   `rt_p3_emissive_gi.rs` harness.
-- *Gate:* (a) clippy as MB-A; (b) the value test, three legs in one file — **bleed leg:**
-  emissive quad facing a coloured wall facing a floor region the emitter cannot see
-  directly; floor region mean at bounces=2 exceeds bounces=1 by a stated threshold in the
-  wall's colour channel, against a CPU-computed expectation; **control leg:** bounces=1
-  floor region reads below a stated floor (proves the signal is the second bounce, not
-  leakage); **I-MB2 leg:** ambient-only scene, bounces=2 ≈ bounces=1 within epsilon;
+- *Gate:* (a) clippy as MB-A; (b) the bounce discrimination, ruled at compile time
+  (2026-07-30, Fable): `RT_GI_MAX_BOUNCES` is an MSL constant with no runtime knob — a
+  ShadowRayParams field only for testability was priced and rejected (the R1 slot-map
+  incident class, bought for nothing a commit-level A/B already gives). The 1-vs-2 legs
+  run ACROSS the two program commits: MB-A's gate renders the bleed fixture
+  (`tools/rt_prototype/compare/RtBleed.json` — emitter the floor region cannot see,
+  coloured wall both can) and the ambient-only fixture into the run dir; MB-B's gate
+  re-renders both and `scripts/rt_region_probe.py` asserts — **bleed leg:** floor region
+  mean at MB-B exceeds the MB-A capture by a stated threshold in the wall's colour
+  channel; **control leg:** the MB-A capture reads below a stated floor (no leakage at 1
+  bounce); **I-MB2 leg:** the ambient-only pair is `cmp`-identical (env never gathered at
+  depth 2). The in-repo value test `tests/gpu_proofs/rt_t38_multibounce.rs` (PresetRuntime
+  harness, `rt_p3_emissive_gi.rs` precedent) then PINS the shipped bounces=2 behaviour as
+  a regression floor: bleed region above threshold, ambient-only region at its analytic
+  `ambient*ao` value within epsilon — the causal 1-vs-2 proof is the program's, the pin
+  is the repo's;
   (c) the full `rt_` subset; (d) `trace_ms` delta bounces 2-vs-1, a number in the phase
   report.
 - *Demo (Peter only):* PNG pair bounces 1 vs 2 on an emissive hero scene — **L2; the
