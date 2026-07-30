@@ -414,6 +414,39 @@ where
         }
     }
 
+    // Repair pass 3: a def stamped before `default_mirrors_node_param`
+    // existed carries auto exposures whose defaults are stamp-time snapshots
+    // of the node param but which deserialize as authored (the field is
+    // absent, so `false`). `apply_binding_defaults` therefore keeps
+    // replanting the snapshot over whatever the node param now holds, and the
+    // BUG-ji6q clobber survives in every already-imported project. Re-derive
+    // the flag from what the stamp itself would produce: every auto exposure
+    // on a vocab node is a mirror by construction.
+    //
+    // Same shape as pass 2 — no stamped override needed, and the
+    // not-user-added predicate is the guard that keeps a hand-authored
+    // exposure on the same node authored. Idempotent: a second run
+    // re-derives `true` and writes nothing.
+    for (_, node_id, type_id, _, _) in &found {
+        let metadata = provider.metadata_for_type(type_id);
+        for meta_entry in &metadata {
+            let Some(binding) = meta.bindings.iter_mut().find(|b| {
+                !b.user_added
+                    && matches!(
+                        &b.target,
+                        BindingTarget::Node { node_id: nid, param }
+                            if nid == node_id && param == &meta_entry.name
+                    )
+            }) else {
+                continue;
+            };
+            if !binding.default_mirrors_node_param {
+                binding.default_mirrors_node_param = true;
+                changed = true;
+            }
+        }
+    }
+
     changed
 }
 
@@ -569,6 +602,140 @@ mod tests {
             &TestProvider
         ));
         assert_eq!(def, after_first);
+    }
+
+    /// One auto exposure exactly as a def stamped BEFORE
+    /// `default_mirrors_node_param` existed carries it: the field is absent
+    /// on disk, so it deserializes `false` (authored) even though the stamp
+    /// produced it. `user_added` says whether the graph editor's expose
+    /// checkbox minted it instead.
+    fn pre_fix_exposure(node_id: &NodeId, param: &str, user_added: bool) -> (ParamSpecDef, BindingDef) {
+        let id = format!("{}_{}_{}", node_id.as_str(), param, if user_added { "user" } else { "auto" });
+        let spec = ParamSpecDef {
+            id: id.clone(),
+            name: param.to_string(),
+            min: 0.0,
+            max: 1.0,
+            default_value: 0.5,
+            whole_numbers: false,
+            is_toggle: false,
+            is_trigger: false,
+            value_labels: Vec::new(),
+            format_string: None,
+            osc_suffix: String::new(),
+            curve: Default::default(),
+            invert: false,
+            is_angle: false,
+            is_trigger_gate: false,
+            wraps: false,
+            section: Some("Light".to_string()),
+            card_visible: card_visible_for("node.light", param),
+        };
+        let binding = BindingDef {
+            id,
+            label: param.to_string(),
+            default_value: 0.5,
+            target: BindingTarget::Node {
+                node_id: node_id.clone(),
+                param: param.to_string(),
+            },
+            convert: ParamConvert::Float,
+            user_added,
+            scale: 1.0,
+            offset: 0.0,
+            default_mirrors_node_param: false,
+        };
+        (spec, binding)
+    }
+
+    struct LightProvider;
+    impl SceneExposureMetadataProvider for LightProvider {
+        fn metadata_for_type(&self, type_id: &str) -> Vec<SceneParamMetadata> {
+            if type_id == "node.light" {
+                vec![float_meta("intensity", "Intensity")]
+            } else {
+                Vec::new()
+            }
+        }
+    }
+
+    fn def_with_exposures(exposures: Vec<(ParamSpecDef, BindingDef)>) -> EffectGraphDef {
+        let (params, bindings) = exposures.into_iter().unzip();
+        let mut meta = empty_scene_preset_metadata();
+        meta.params = params;
+        meta.bindings = bindings;
+        EffectGraphDef {
+            version: 1,
+            name: None,
+            description: None,
+            preset_metadata: Some(meta),
+            nodes: vec![make_node(7, "node.light")],
+            wires: vec![],
+        }
+    }
+
+    /// BUG-ji6q repair pass 3: a project stamped before the provenance flag
+    /// existed carries auto exposures that deserialize as AUTHORED, so
+    /// `apply_binding_defaults` keeps replanting the stamp-time snapshot and
+    /// the clobber survives every rebuild. The migration re-derives the flag.
+    /// Second run must change nothing — this pass rewrites saved user work,
+    /// so idempotence is asserted, not argued.
+    #[test]
+    fn migrate_marks_pre_fix_auto_exposures_as_mirrors_and_is_idempotent() {
+        let node_id = NodeId::new("n7");
+        let mut def = def_with_exposures(vec![pre_fix_exposure(&node_id, "intensity", false)]);
+        let vocab = ["node.light"];
+
+        assert!(
+            migrate_scene_exposures(&mut def, &vocab, |_n| "Light".to_string(), &LightProvider),
+            "a pre-fix auto exposure must be repaired"
+        );
+        let binding = &def.preset_metadata.as_ref().unwrap().bindings[0];
+        assert!(
+            binding.default_mirrors_node_param,
+            "the stamped exposure's default is a snapshot of the node param, so the \
+             migration must mark it as a mirror — otherwise apply_binding_defaults \
+             keeps replanting it and BUG-ji6q survives in every already-imported project"
+        );
+
+        let after_first = def.clone();
+        assert!(
+            !migrate_scene_exposures(&mut def, &vocab, |_n| "Light".to_string(), &LightProvider),
+            "second run must report no change"
+        );
+        assert_eq!(def, after_first, "second run must not touch a single byte");
+    }
+
+    /// The `!b.user_added` guard is the whole line between repairing a stamp
+    /// and silently discarding what someone chose by hand. A user-authored
+    /// exposure on a stamped card keeps its authored default — which still
+    /// plants — no matter that it targets the same node param as the auto
+    /// one. The user binding is listed FIRST so a loosened predicate would
+    /// reach it before the auto binding and fail here.
+    #[test]
+    fn migrate_leaves_a_user_authored_exposure_authored() {
+        let node_id = NodeId::new("n7");
+        let mut def = def_with_exposures(vec![
+            pre_fix_exposure(&node_id, "intensity", true),
+            pre_fix_exposure(&node_id, "intensity", false),
+        ]);
+
+        assert!(migrate_scene_exposures(
+            &mut def,
+            &["node.light"],
+            |_n| "Light".to_string(),
+            &LightProvider
+        ));
+
+        let meta = def.preset_metadata.as_ref().unwrap();
+        let user = meta.bindings.iter().find(|b| b.user_added).expect("user binding kept");
+        let auto = meta.bindings.iter().find(|b| !b.user_added).expect("auto binding kept");
+        assert!(
+            !user.default_mirrors_node_param,
+            "a hand-authored exposure is a value someone chose — the migration must \
+             leave it authored so its default still plants"
+        );
+        assert!(auto.default_mirrors_node_param, "the auto exposure is still repaired");
     }
 
     /// P1 Task D: a grouped scene-vocab node (e.g. an added object's own
