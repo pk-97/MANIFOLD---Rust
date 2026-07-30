@@ -14,6 +14,21 @@ use crate::locate;
 use crate::program::{Opcode, Program};
 use crate::template;
 
+/// Advisory only — never part of `check()`'s exit-1 findings, so existing
+/// programs don't go red. Untitled steps read as ciphers in `watch`, status,
+/// and park records (Peter, 2026-07-30).
+pub fn warnings(program_path: &Path) -> Vec<String> {
+    let Ok(program) = Program::load(program_path) else {
+        return Vec::new();
+    };
+    program
+        .steps
+        .iter()
+        .filter(|s| s.title.is_none())
+        .map(|s| format!("step {:?} has no `title` — give it a human-readable sentence", s.name))
+        .collect()
+}
+
 pub fn check(program_path: &Path, repo_root: &Path) -> Vec<String> {
     let program = match Program::load(program_path) {
         Ok(p) => p,

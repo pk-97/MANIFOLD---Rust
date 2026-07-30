@@ -37,11 +37,20 @@ pub enum Outcome {
     Blocked(String),
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ParkedItem {
     pub step: String,
+    /// The most informative error seen — never the empty-ChangeSet note when
+    /// a red gate or apply failure preceded it (P3 shakedown, 2026-07-30).
     pub reason: String,
     pub attempts: u32,
+    /// The step's human-readable `title`, when the program gives one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Execute only: the last red gate's FULL report — the composed reason
+    /// string alone lost it when a later attempt failed differently.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gate_report: Option<serde_json::Value>,
 }
 
 const ANSWER_MARKER: &str = "## ANSWER (write below this line, then rerun)";
@@ -166,11 +175,32 @@ pub fn run(cfg: &RunConfig, transport: &dyn ModelTransport) -> Result<Outcome, S
                 step.name, dep
             )));
         }
+        // Execute steps share the ONE target worktree and are inherently
+        // serial: a parked execute means every later execute builds on a
+        // broken base, no `inputs` edge required (P3 shakedown: the runner
+        // advanced past a parked refactor and spent 80K tokens on top of a
+        // broken shader).
+        if step.opcode == Opcode::Execute
+            && let Some(earlier) = program.steps[..idx]
+                .iter()
+                .find(|s| s.opcode == Opcode::Execute && parked.contains(&s.name))
+        {
+            let reason = format!(
+                "execute step {:?} is blocked: earlier execute step {:?} parked in the shared worktree",
+                step.name, earlier.name
+            );
+            crate::status::emit(&cfg.run_dir, |st| {
+                st.state = "blocked".into();
+                st.detail = reason.clone();
+            });
+            return Ok(Outcome::Blocked(reason));
+        }
 
         crate::status::emit(&cfg.run_dir, |st| {
             st.state = "starting".into();
             st.detail = String::new();
             st.step = step.name.clone();
+            st.title = step.title.clone().unwrap_or_default();
             st.step_index = idx + 1;
             st.opcode = format!("{:?}", step.opcode).to_lowercase();
             st.model = step.model.clone().unwrap_or_default();
@@ -244,6 +274,8 @@ pub fn run(cfg: &RunConfig, transport: &dyn ModelTransport) -> Result<Outcome, S
                                 serde_json::to_string(&report).expect("GateReport serializes")
                             ),
                             attempts: 1,
+                            title: step.title.clone(),
+                            ..Default::default()
                         },
                     )?;
                     parked.push(step.name.clone());
@@ -261,9 +293,10 @@ pub fn run(cfg: &RunConfig, transport: &dyn ModelTransport) -> Result<Outcome, S
                 } else {
                     if !esc_path.exists() {
                         let question = render_step_template(step, &template_root, &cfg.repo_root, &artifacts)?;
+                        let title = step.title.as_ref().map(|t| format!(" — {t}")).unwrap_or_default();
                         fs::write(
                             &esc_path,
-                            format!("# ESCALATION: {}\n\n{question}\n\n{ANSWER_MARKER}\n", step.name),
+                            format!("# ESCALATION: {}{title}\n\n{question}\n\n{ANSWER_MARKER}\n", step.name),
                         )
                         .map_err(|e| e.to_string())?;
                     }
@@ -431,6 +464,8 @@ fn run_parallel_generates(
                 step: step.name.clone(),
                 reason: prompt.as_ref().expect_err("no thread means render failed").clone(),
                 attempts: 0,
+                title: step.title.clone(),
+                ..Default::default()
             }),
             Some(thread_result) => {
                 let (attempts, outcome) = thread_result?; // scrub abort kills the run
@@ -495,6 +530,8 @@ fn pure_generate_attempts(step: &Step, base_prompt: &str, transport: &dyn ModelT
         step: step.name.clone(),
         reason: feedback.expect("at least one attempt ran"),
         attempts: max_attempts,
+        title: step.title.clone(),
+        ..Default::default()
     };
     Ok((attempts, Err(park)))
 }
@@ -509,7 +546,13 @@ fn run_transform_step(
     artifacts: &BTreeMap<String, Artifact>,
 ) -> Result<Result<Artifact, ParkedItem>, String> {
     let park = |reason: String, attempts: u32| {
-        Ok(Err(ParkedItem { step: step.name.clone(), reason, attempts }))
+        Ok(Err(ParkedItem {
+            step: step.name.clone(),
+            reason,
+            attempts,
+            title: step.title.clone(),
+            ..Default::default()
+        }))
     };
     let input = match &step.template {
         Some(_) => match render_step_template(step, template_root, &cfg.repo_root, artifacts) {
@@ -543,7 +586,15 @@ fn run_fanout(
     budget: &mut Spend,
     gate_cwd: &Path,
 ) -> Result<Result<Artifact, ParkedItem>, String> {
-    let park0 = |reason: String| Ok(Err(ParkedItem { step: step.name.clone(), reason, attempts: 0 }));
+    let park0 = |reason: String| {
+        Ok(Err(ParkedItem {
+            step: step.name.clone(),
+            reason,
+            attempts: 0,
+            title: step.title.clone(),
+            ..Default::default()
+        }))
+    };
     let over = step.over.as_ref().expect("validated: fanout has over");
     let value: serde_json::Value = if let Some(path) = over.strip_prefix("file:") {
         match fs::read_to_string(cfg.repo_root.join(path)) {
@@ -583,6 +634,8 @@ fn run_fanout(
                     step: step.name.clone(),
                     reason: format!("element {i} of {} parked: {}", items.len(), element_park.reason),
                     attempts: element_park.attempts,
+                    title: step.title.clone(),
+                    ..Default::default()
                 }));
             }
         }
@@ -607,7 +660,15 @@ fn run_sample(
 ) -> Result<Result<Artifact, ParkedItem>, String> {
     let base_prompt = match render_step_template(step, template_root, &cfg.repo_root, artifacts) {
         Ok(p) => p,
-        Err(e) => return Ok(Err(ParkedItem { step: step.name.clone(), reason: e, attempts: 0 })),
+        Err(e) => {
+            return Ok(Err(ParkedItem {
+                step: step.name.clone(),
+                reason: e,
+                attempts: 0,
+                title: step.title.clone(),
+                ..Default::default()
+            }));
+        }
     };
     let k = step.samples.expect("validated: sample has samples");
     let mut candidates: Vec<(u8, Artifact)> = Vec::new();
@@ -620,7 +681,13 @@ fn run_sample(
         }
     }
     let park = |reason: String| {
-        Ok(Err(ParkedItem { step: step.name.clone(), reason, attempts: u32::from(k) }))
+        Ok(Err(ParkedItem {
+            step: step.name.clone(),
+            reason,
+            attempts: u32::from(k),
+            title: step.title.clone(),
+            ..Default::default()
+        }))
     };
     if candidates.is_empty() {
         return park(format!("all {k} samples failed to parse: {}", failures.join(" | ")));
@@ -750,6 +817,8 @@ fn ensure_worktree(cfg: &RunConfig, target: &Target) -> Result<Worktree, String>
 
 /// EXECUTE (D5): model emits a ChangeSet; the runtime applies it, commits with
 /// a pathspec, runs the gate in the worktree, feeds failures back, cap then park.
+/// An empty ChangeSet is a NON-attempt: it never overwrites the real error,
+/// and the park reason is the most informative error seen (P3 shakedown).
 fn run_execute(
     cfg: &RunConfig,
     step: &Step,
@@ -760,7 +829,13 @@ fn run_execute(
     wt: &Worktree,
     budget: &mut Spend,
 ) -> Result<Result<Artifact, ParkedItem>, String> {
-    let mut feedback: Option<String> = None;
+    // A rerun after `workflow unpark` starts from the recorded park reason:
+    // committed progress in the worktree is fixed forward, never re-attempted
+    // blind. One sample deep — the seed is the LAST park only.
+    let mut informative: Option<String> = load_unpark_seed(&cfg.run_dir, &step.name);
+    let mut seeded = informative.is_some();
+    let mut empty_note = false;
+    let mut last_red_gate: Option<serde_json::Value> = None;
     let max_attempts = u32::from(step.retry_cap) + 1;
     for attempt in 1..=max_attempts {
         budget.check()?;
@@ -771,13 +846,35 @@ fn run_execute(
         let base_prompt = match render_step_template(step, template_root, &wt.path, artifacts) {
             Ok(p) => p,
             Err(e) => {
-                return Ok(Err(ParkedItem { step: step.name.clone(), reason: e, attempts: attempt - 1 }));
+                return Ok(Err(ParkedItem {
+                    step: step.name.clone(),
+                    reason: e,
+                    attempts: attempt - 1,
+                    title: step.title.clone(),
+                    gate_report: last_red_gate,
+                }));
             }
         };
-        let user = match &feedback {
-            None => base_prompt.clone(),
-            Some(err) => format!("{base_prompt}\n\nYour previous attempt failed:\n{err}\nEmit a corrected ChangeSet."),
-        };
+        let mut user = base_prompt.clone();
+        match (&informative, seeded) {
+            (Some(err), true) => {
+                user.push_str(&format!(
+                    "\n\nA previous sample of this step parked:\n{err}\nWork already committed in the worktree stands — fix forward from the current file contents."
+                ));
+            }
+            (Some(err), false) => {
+                user.push_str(&format!("\n\nYour previous attempt failed:\n{err}"));
+            }
+            (None, _) => {}
+        }
+        if empty_note {
+            user.push_str(
+                "\n\nYour last response was an EMPTY ChangeSet (no edits, no writes) — that is not an attempt. Emit real edits or writes; never an empty set.",
+            );
+        }
+        if informative.is_some() || empty_note {
+            user.push_str("\nEmit a corrected ChangeSet.");
+        }
         let req = CompletionRequest {
             model: step.model.clone().expect("validated: execute has model"),
             max_tokens: step.max_tokens,
@@ -818,10 +915,14 @@ fn run_execute(
                                 });
                                 return Ok(Ok(Artifact { kind: ArtifactKind::Json, value }));
                             }
-                            format!(
+                            let report_json =
+                                serde_json::to_value(&report).expect("GateReport serializes");
+                            let msg = format!(
                                 "your ChangeSet was applied and committed ({sha}), but the gate is red:\n{}",
-                                serde_json::to_string_pretty(&report).expect("GateReport serializes")
-                            )
+                                serde_json::to_string_pretty(&report_json).expect("Value serializes")
+                            );
+                            last_red_gate = Some(report_json);
+                            msg
                         }
                     }
                 }
@@ -831,12 +932,25 @@ fn run_execute(
             st.state = "retrying".into();
             st.last_error = error.chars().take(300).collect();
         });
-        feedback = Some(error);
+        if error == crate::artifacts::EMPTY_CHANGESET_ERR {
+            // Non-attempt: the real error stays in front of the model and in
+            // the park record; only the empty-set note is added.
+            empty_note = true;
+        } else {
+            informative = Some(error);
+            seeded = false;
+            empty_note = false;
+        }
     }
+    let reason = informative.unwrap_or_else(|| {
+        "every attempt returned an empty ChangeSet (no edits and no writes)".to_string()
+    });
     Ok(Err(ParkedItem {
         step: step.name.clone(),
-        reason: feedback.expect("at least one attempt ran"),
+        reason,
         attempts: max_attempts,
+        title: step.title.clone(),
+        gate_report: last_red_gate,
     }))
 }
 
@@ -854,7 +968,15 @@ fn run_generate(
     let base_prompt = match render_step_template(step, template_root, &cfg.repo_root, artifacts) {
         Ok(p) => p,
         // Render/resolve failures are deterministic — park without burning calls.
-        Err(e) => return Ok(Err(ParkedItem { step: step.name.clone(), reason: e, attempts: 0 })),
+        Err(e) => {
+            return Ok(Err(ParkedItem {
+                step: step.name.clone(),
+                reason: e,
+                attempts: 0,
+                title: step.title.clone(),
+                ..Default::default()
+            }));
+        }
     };
     model_loop(cfg, step, idx, &step.name, &base_prompt, transport, budget, gate_cwd, true)
 }
@@ -928,6 +1050,8 @@ fn model_loop(
         step: label.to_string(),
         reason: feedback.expect("at least one attempt ran"),
         attempts: max_attempts,
+        title: step.title.clone(),
+        ..Default::default()
     }))
 }
 
@@ -1042,14 +1166,28 @@ fn load_parked(run_dir: &Path) -> Result<Vec<ParkedItem>, String> {
         .collect()
 }
 
+fn unpark_seed_path(run_dir: &Path, step: &str) -> PathBuf {
+    run_dir.join(format!("unpark-seed-{step}.txt"))
+}
+
+/// The reason a previously-parked sample recorded, if the step was unparked.
+/// Not consumed on read — a crashed rerun keeps its seed; each `unpark`
+/// overwrites it (one sample deep, no accumulating history).
+fn load_unpark_seed(run_dir: &Path, step: &str) -> Option<String> {
+    fs::read_to_string(unpark_seed_path(run_dir, step)).ok().filter(|s| !s.trim().is_empty())
+}
+
 /// Remove a step's parked entry so a rerun retries it — the sanctioned
 /// un-park (finding 2: parked was forever and the only escape was forbidden
 /// hand-editing). A rerun of a parked step is a NEW SAMPLE by doctrine.
+/// The recorded park reason is left as a seed so the rerun's first attempt
+/// sees what went wrong instead of starting blind (P3 shakedown).
 pub fn unpark(run_dir: &Path, step: &str) -> Result<(), String> {
     let items = load_parked(run_dir)?;
-    if !items.iter().any(|p| p.step == step) {
+    let Some(item) = items.iter().find(|p| p.step == step) else {
         return Err(format!("step {step:?} is not parked (parked: {:?})", items.iter().map(|p| &p.step).collect::<Vec<_>>()));
-    }
+    };
+    fs::write(unpark_seed_path(run_dir, step), &item.reason).map_err(|e| e.to_string())?;
     let keep: Vec<String> = items
         .iter()
         .filter(|p| p.step != step)

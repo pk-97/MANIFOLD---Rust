@@ -36,7 +36,9 @@ fn real_main() -> Result<ExitCode, String> {
                 return Err("usage: workflow unpark <run-dir> <step>".into());
             };
             workflow_runtime::runner::unpark(std::path::Path::new(run_dir), step)?;
-            println!("unparked {step:?} — rerun the program to retry it (a rerun is a new sample)");
+            println!(
+                "unparked {step:?} — rerun the program to retry it; the recorded park reason seeds the first attempt (a rerun is a new sample)"
+            );
             return Ok(ExitCode::SUCCESS);
         }
         Some("check") => {
@@ -45,6 +47,10 @@ fn real_main() -> Result<ExitCode, String> {
             };
             let repo_root = std::env::current_dir().map_err(|e| e.to_string())?;
             let findings = workflow_runtime::check::check(std::path::Path::new(program), &repo_root);
+            // Advisory only — printed, never counted toward exit 1.
+            for w in workflow_runtime::check::warnings(std::path::Path::new(program)) {
+                println!("WARNING: {w}");
+            }
             if findings.is_empty() {
                 println!("check green — {program} is runnable from {}", repo_root.display());
                 return Ok(ExitCode::SUCCESS);
@@ -271,6 +277,9 @@ fn watch_frame(run_dir: &std::path::Path) -> String {
                     st.opcode
                 );
             }
+            if !st.title.is_empty() {
+                _ = writeln!(f, "{}{dim}{}{off}", label(""), st.title);
+            }
             let state_colour = match st.state.as_str() {
                 "run-done" => green,
                 "retrying" | "waiting-on-model" | "gate" => yellow,
@@ -341,6 +350,9 @@ fn watch_frame(run_dir: &std::path::Path) -> String {
                     first = false;
                 }
                 _ = writeln!(f, "  {bold}{}{off} {dim}after {} attempts{off}", p.step, p.attempts);
+                if let Some(t) = &p.title {
+                    _ = writeln!(f, "    {dim}{t}{off}");
+                }
                 for line in wrap(&p.reason, w, "    ") {
                     _ = writeln!(f, "{dim}{line}{off}");
                 }

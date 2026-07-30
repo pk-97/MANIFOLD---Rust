@@ -74,6 +74,10 @@ fn default_retry_cap() -> u8 {
 #[serde(deny_unknown_fields)]
 pub struct Step {
     pub name: String,
+    /// Human-readable one-line sentence (Peter, 2026-07-30: names like "mb-a"
+    /// are ciphers on a dashboard). Surfaced in status.json, `watch`, park
+    /// records, and escalation files; `check` warns when absent.
+    pub title: Option<String>,
     pub opcode: Opcode,
     pub model: Option<String>,
     #[serde(default = "default_max_tokens")]
