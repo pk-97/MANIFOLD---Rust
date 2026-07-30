@@ -15839,6 +15839,10 @@
         {
           "name": "velocity",
           "type": "Texture2D"
+        },
+        {
+          "name": "ao_mask",
+          "type": "Texture2D"
         }
       ],
       "params": [

@@ -1942,6 +1942,67 @@ fn build_import_graph_seeds_source_vertex_count_and_bbox_radius() {
     assert_eq!(seen_counts, vec![250, 900]);
 }
 
+/// AM4 (RAYTRACING_DESIGN.md section 12, Screen-space AO handoff): a
+/// fresh import's "Ambient Occlusion" group carries `node.masked_mix`
+/// and the 4th `ao_mask` interface input, and the outer graph carries
+/// `render_scene.ao_mask -> ao_group.ao_mask`.
+#[test]
+fn build_import_graph_ao_group_consumes_ao_mask() {
+    use manifold_core::effect_graph_def::GROUP_TYPE_ID;
+
+    let summary = GltfImportSummary {
+        materials: vec![full_material(0, "Solid", 500)],
+        bbox_min: [-1.0, -1.0, -1.0],
+        bbox_max: [1.0, 1.0, 1.0],
+        camera_count: 0,
+        default_material_vertex_count: 0,
+        animations: Vec::new(),
+        animation_report_lines: Vec::new(),
+        extension_report_lines: Vec::new(),
+        lights: Vec::new(),
+        cameras: Vec::new(),
+        camera_report_lines: Vec::new(),
+    };
+    let path = std::path::Path::new("/tmp/synthetic_ao_mask_test.glb");
+    let (def, _report) = build_import_graph(&summary, path).expect("build import graph");
+
+    let render_id = def
+        .nodes
+        .iter()
+        .find(|n| n.type_id == "node.render_scene")
+        .map(|n| n.id)
+        .expect("import synthesizes a render_scene node");
+
+    let ao_group_node = def
+        .nodes
+        .iter()
+        .find(|n| n.type_id == GROUP_TYPE_ID && n.title.as_deref() == Some("Ambient Occlusion"))
+        .expect("import synthesizes the Ambient Occlusion group");
+    let ao_group = ao_group_node.group.as_ref().expect("group node carries a GroupDef");
+
+    assert_eq!(ao_group.interface.inputs.len(), 4, "depth, camera, color, ao_mask");
+    let ao_mask_input = ao_group
+        .interface
+        .inputs
+        .iter()
+        .find(|p| p.name == "ao_mask")
+        .expect("group interface must declare ao_mask");
+    assert_eq!(ao_mask_input.port_type, "Texture2D");
+
+    assert!(
+        ao_group.nodes.iter().any(|n| n.type_id == "node.masked_mix"),
+        "AO group must contain node.masked_mix (AM4)"
+    );
+
+    assert!(
+        def.wires.iter().any(|w| w.from_node == render_id
+            && w.from_port == "ao_mask"
+            && w.to_node == ao_group_node.id
+            && w.to_port == "ao_mask"),
+        "outer graph must wire render_scene.ao_mask -> ao_group.ao_mask"
+    );
+}
+
 /// BUG-221: composed per-object recenter. The mesh source is shifted
 /// by `-own_center` (so local `(0,0,0)` becomes THIS object's own
 /// visual center, not wherever the source file authored its local
