@@ -8,6 +8,7 @@ Scheduled by launchd (scripts/com.manifold.trunk-health.plist).
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -19,11 +20,31 @@ MAIN_CHECKOUT = Path("/Users/peterkiemann/MANIFOLD - Rust")
 LOG_DIR = MAIN_CHECKOUT / ".claude/orchestration/trunk-health"
 BD = shutil.which("bd") or "/opt/homebrew/bin/bd"
 
+# launchd hands a job the bare system PATH, so `cargo` and everything cargo
+# shells out to are invisible to a scheduled run: every gate died with
+# FileNotFoundError and filed a P1 bead blaming the gate, not the PATH. Every
+# child gets this env so nested tools resolve the same toolchain.
+TOOL_DIRS = [os.path.expanduser("~/.cargo/bin"), "/opt/homebrew/bin", "/usr/local/bin"]
+
+
+def gate_env():
+    env = os.environ.copy()
+    dirs = [d for d in TOOL_DIRS if os.path.isdir(d)]
+    env["PATH"] = os.pathsep.join(dirs + [env.get("PATH", "")])
+    return env
+
+
+def missing_tools():
+    """Gate binaries this run cannot see. A loud stop beats four false reds."""
+    path = gate_env()["PATH"]
+    return [t for t in ("cargo", "git", "python3") if shutil.which(t, path=path) is None]
+
 
 def run_cmd(cmd, cwd, timeout):
     """Run subprocess, return (exit, stdout, stderr, duration)."""
     start = time.time()
-    r = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True, timeout=timeout)
+    r = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True, timeout=timeout,
+                       env=gate_env())
     duration = time.time() - start
     return r.returncode, r.stdout, r.stderr, duration
 
@@ -37,6 +58,11 @@ def main():
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     log_path = LOG_DIR / f"{datetime.now().strftime('%Y-%m-%d')}.log"
     log_lines = []
+
+    if not args.dry_run and (missing := missing_tools()):
+        print(f"[ABORT] not on PATH: {', '.join(missing)} — no gate can run, nothing filed")
+        log_path.write_text(f"[ABORT] not on PATH: {', '.join(missing)}\n")
+        return 2
 
     # Fetch origin
     print(f"[trunk-health] fetching origin...")
@@ -99,6 +125,14 @@ def main():
             print(f"[FAIL] {cmd_str} (timed out)")
             log_lines.append(f"[FAIL] (timed out)\n")
             red_gates.append((cmd_str, f"[FAIL] {cmd_str} (timed out)", "timeout"))
+        except FileNotFoundError as e:
+            # The gate never ran, so main's health is unknown. Filing a red
+            # bead here blames the gate for the environment and buries the
+            # real signal under P1 noise.
+            print(f"[ABORT] cannot run {cmd_str}: {e}")
+            log_lines.append(f"[ABORT] cannot run: {e}\n")
+            log_path.write_text("".join(log_lines))
+            return 2
         except Exception as e:
             print(f"[FAIL] {cmd_str} ({e})")
             log_lines.append(f"[FAIL] ({e})\n")
