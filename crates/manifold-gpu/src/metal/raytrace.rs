@@ -1782,6 +1782,29 @@ kernel void atrous_filter(
 // mapped value is inverted back with `c = t / (1 - luma(t))` (valid since
 // luma(t) < 1 by construction — `min(..., 0.999)` guards the invert
 // against float error at the asymptote).
+// Spread of the CURRENT reflection signal in a 3x3 neighborhood, as a
+// luminance standard deviation. The specular change gate's noise term: this
+// channel has no moments texture, and spatial spread is the right measure
+// anyway — per-frame noise raises it, a real lighting change moves a whole
+// region together and barely touches it. Edge-clamped, same as
+// `clamp_refl_history`'s own neighborhood handling.
+inline float refl_neighborhood_luma_sd(texture2d<float> hi_refl,
+                                       uint2 tid, uint2 size) {
+    float m1 = 0.0;
+    float m2 = 0.0;
+    for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            int2 t = clamp(int2(tid) + int2(dx, dy), int2(0), int2(size) - 1);
+            float l = luma(hi_refl.read(uint2(t)).rgb);
+            m1 += l;
+            m2 += l * l;
+        }
+    }
+    m1 /= 9.0;
+    m2 /= 9.0;
+    return sqrt(max(m2 - m1 * m1, 0.0));
+}
+
 inline float3 clamp_refl_history(float3 hist,
                                  texture2d<float> hi_refl,
                                  uint2 tid, uint2 size) {
@@ -2096,7 +2119,36 @@ kernel void accumulate_irradiance(
                     }
                 }
                 if (wsum > 1e-4) {
-                    float rn = refl_change_snap ? 1.0 : (nsum / wsum + 1.0);
+                    // The specular channel needs its OWN change gate, not just
+                    // the irradiance block's verdict. Peter: objects "fade out
+                    // with the light, like they are holding the light". Cause:
+                    // in these scenes the demodulated irradiance sits at ~5e-4,
+                    // under the irradiance gate's absolute floor, so that gate
+                    // never trips — while the reflection channel, which carries
+                    // most of the visible lighting on a shiny object, sat on 40
+                    // frames of history and trailed. Same relative/absolute
+                    // form; no sigma term because this channel has no moments
+                    // texture, and its measured frame-to-frame noise is ~0.05%,
+                    // three orders under the relative floor.
+                    // The sigma term is SPATIAL here (3x3 of the current
+                    // reflection) because this channel has no moments texture.
+                    // It is the right discriminator anyway: per-frame noise
+                    // raises local spread, while a real light change moves a
+                    // whole region together and barely touches it. Without it
+                    // the gate tripped on the noisy tail and cost measurable
+                    // static quality (composite 0.076 -> 0.105).
+                    const float RT_REFL_CHANGE_SIGMAS = 4.0;
+                    const float RT_REFL_CHANGE_REL = 0.15;
+                    const float RT_REFL_CHANGE_ABS = 0.01;
+                    float3 rhist = rsum / wsum;
+                    float rhist_luma = luma(rhist);
+                    float rsd = refl_neighborhood_luma_sd(hi_refl, tid, p.size);
+                    bool refl_changed = refl_change_snap
+                        || fabs(luma(cur_refl.rgb) - rhist_luma)
+                               > max(max(RT_REFL_CHANGE_SIGMAS * rsd,
+                                         RT_REFL_CHANGE_REL * rhist_luma),
+                                     RT_REFL_CHANGE_ABS);
+                    float rn = refl_changed ? 2.0 : (nsum / wsum + 1.0);
                     float ralpha = max(1.0 / rn, RT_REFL_ACCUM_ALPHA_MIN);
                     refl_hist_len = min(rn, 1.0 / RT_REFL_ACCUM_ALPHA_MIN);
                     refl_write = mix(clamp_refl_history(rsum / wsum, hi_refl, tid, p.size), cur_refl.rgb, ralpha);
