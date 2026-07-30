@@ -110,6 +110,9 @@ error shows up there the moment it happens, not just at exit.
 ```toml
 name = "my-program"            # run-id defaults to this
 token_budget = 200000          # optional; default 500K; hard cap, retries included
+usd_budget = 10.0              # optional; default $25. Run-wide cap on LANE spend, checked
+                               # before every launch. Lanes bill dollars, so the token bar
+                               # can sit green while the expensive worker runs away
 parallel = true                # optional: adjacent independent gate-less generates run
                                # threaded; execute NEVER parallelizes (D-59)
 task = "<bead id>"             # optional: with it, every verdict step is recorded in the
@@ -133,23 +136,30 @@ opcode = "generate"            # generate | execute | lane | gate | escalate | t
 model = "glm-4.7"              # any litellm proxy id (model-calling opcodes only); for a
                                # lane it is the worker's model id instead
 max_tokens = 16000             # starting budget; transport may escalate to 32K
-retry_cap = 2                  # extra attempts after the first (default 2)
-token_budget = 60000           # optional PER-STEP cap. Exceeding it parks THIS step and the
-                               # run carries on; the program-level cap suspends everything.
-                               # Both stay in force, whichever hits first
+retry_cap = 2                  # extra attempts after the first (default 2). Governs PARSE
+                               # retries for execute; transport failures have their own
+                               # counter, and a substantive failure promotes instead
 provider = "claude"            # lane only: cc-fleet provider (default "claude" — your login)
 max_turns = 40                 # lane only: cap on the worker's agentic turns
-on_fail = "lane"               # execute only: exhausting retry_cap runs ONE lane attempt on
-                               # the accumulated error before parking. Failure-driven only
+on_fail = "lane"               # execute only: the FIRST substantive failure hands the step
+                               # to one lane attempt instead of parking
 lane_model = "sonnet"          # the model that promoted lane uses (falls back to `model`)
 artifact = "text"              # text | json | verdict | change_set (execute is always change_set)
 template = "brief.md"          # prompt file, relative to the program file
-inputs = ["earlier-step", "file:docs/X.md", "anchor:sync_clips_to_time"]
+inputs = ["earlier-step", "file:docs/X.md", "path:src/big.rs",
+          "anchor:sync_clips_to_time", "span:src/metal/raytrace.rs:1200-1240"]
                                # {{slot}} substitutions; all must be used.
-                               # anchor:Symbol (or anchor:path.rs#Symbol) pastes the
-                               # symbol's defining SPAN, resolved mechanically at run
-                               # time — reused programs survive repo drift, and a
-                               # godfile contributes one item, not the whole file.
+                               # file:   pastes the file's CONTENTS.
+                               # path:   pastes the PATH ONLY — what a lane wants, since
+                               #         the worker opens the file itself.
+                               # anchor: Symbol (or path.rs#Symbol) pastes the symbol's
+                               #         defining SPAN, resolved mechanically at run time —
+                               #         reused programs survive repo drift, and a godfile
+                               #         contributes one item, not the whole file.
+                               # span:   explicit 1-based inclusive lines. The only way to
+                               #         reach text INSIDE a raw string (an MSL or WGSL
+                               #         kernel body), where anchor: has no item to match.
+                               #         Line numbers drift — re-check a reused program.
 gate = ["cargo clippy -p x -- -D warnings"]   # exit-code checks; execute REQUIRES one
 gate_timeout_s = 900               # per-command kill-and-FAIL timeout (default 900)
 command = "jq '...'"           # transform only: stdin = rendered template, stdout = artifact
@@ -165,13 +175,24 @@ needs the tree): release it yourself after landing or discarding
 
 Opcodes: `generate` = context → artifact, no side effects. `execute` = ChangeSet applied
 atomically in the target worktree, pathspec-only commit, gate in the worktree, red fed back.
-`lane` = the same contract with a tool-using worker: it edits the worktree itself, the runtime
-enumerates what changed and commits it with an explicit pathspec, then gates. Reach for a lane
-when the output is judged by RUNNING it (code that must compile) and a one-shot `execute`
-when it is judged by READING it — D20 measured six one-shot attempts failing a godfile
-refactor that a lane did in one pass. Lane cost comes back in DOLLARS, reported separately
-from tokens everywhere (`cost`, `watch`, `status.json`). `gate` = commands only, no model;
-red parks. `escalate` = writes the rendered question to
+`lane` = the same contract with a tool-using worker: it edits the worktree AND COMMITS ITS
+OWN WORK, then the runtime gates. What a lane did is measured by HEAD sha delta; a lane that
+returns with a dirty worktree PARKS the step (the runtime never commits on its behalf — that
+would be `add -A` in disguise), and an unmoved HEAD is a non-attempt. Reach for a lane when
+the output is judged by RUNNING it (code that must compile) and a one-shot `execute` when it
+is judged by READING it — D20 measured six one-shot attempts burning 231K tokens on a godfile
+refactor a lane did in one pass. Lane cost comes back in DOLLARS, capped by `usd_budget` and
+reported apart from tokens everywhere (`cost`, `watch`, `status.json`). `gate` = commands
+only, no model; red parks.
+
+`on_fail = "lane"` promotes an execute step on its FIRST substantive failure — a red gate
+after a commit, an empty ChangeSet, a `find` string that isn't in the file, or a write to a
+file that already exists. All four mean the model's picture of the worktree is wrong, and a
+second stateless call handed the pasted error is bad at exactly that. Parse and transport
+failures are NOT substantive: those are cheap and self-correcting, so they retry one-shot
+(transport failures on their own counter, so a dead proxy can't eat the model's attempts).
+One-shot `writes` create NEW files only; rewriting an existing file is lane work, which is a
+spend decision, not a correctness rule. `escalate` = writes the rendered question to
 `escalation-<step>.md` and suspends (exit 10). `transform` = deterministic shell reshape of
 artifacts (no model; failure parks without retry). `fanout` = the template once per array
 element, sequential, collected — one failed element parks the whole step. `sample` = k

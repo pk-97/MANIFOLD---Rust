@@ -351,18 +351,35 @@ fn watch_frame(run_dir: &std::path::Path) -> String {
             } else {
                 green
             };
-            // Lane dollars ride alongside, never inside, the token bar.
-            let lane_usd =
-                if st.usd_spent > 0.0 { format!("{dim}  + ${:.2} lane{off}", st.usd_spent) } else { String::new() };
             _ = writeln!(
                 f,
-                "{}{dim}{} {tc}{:>3}%{off}  {}{dim} of {}{off}{lane_usd}",
+                "{}{dim}{} {tc}{:>3}%{off}  {}{dim} of {}{off}",
                 label("budget"),
                 bar(st.tokens_spent, st.token_budget, 12),
                 pct,
                 commas(st.tokens_spent),
                 commas(st.token_budget)
             );
+            // Lanes bill dollars. Its own bar, because the token bar can sit
+            // green while the expensive worker is the thing running away.
+            if st.usd_budget > 0.0 {
+                let upct = (st.usd_spent * 100.0 / st.usd_budget) as u64;
+                let uc = if upct >= 90 {
+                    red
+                } else if upct >= 70 {
+                    yellow
+                } else {
+                    green
+                };
+                _ = writeln!(
+                    f,
+                    "{}{dim}{} {uc}{upct:>3}%{off}  ${:.2}{dim} of ${:.2}{off}",
+                    label("lane $"),
+                    bar((st.usd_spent * 100.0) as u64, (st.usd_budget * 100.0) as u64, 12),
+                    st.usd_spent,
+                    st.usd_budget
+                );
+            }
             if !st.last_error.is_empty() {
                 _ = writeln!(f, "\n{red}{bold}last error{off}");
                 for line in wrap(&st.last_error, w, "  ") {

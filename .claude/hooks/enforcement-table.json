@@ -122,14 +122,19 @@
       "file": "crates/workflow-runtime/src/runner.rs"
     },
     {
-      "transition": "workflow lane: the worker edits the worktree, the runtime enumerates what changed and commits it with an explicit pathspec, then gates — never `add -A`",
+      "transition": "workflow lane: the worker commits its own work; what it did is measured by HEAD sha delta, a dirty worktree on return parks the step, and the runtime never commits on its behalf (that would be `add -A`)",
       "enforcement": "exit-code",
       "file": "crates/workflow-runtime/src/runner.rs"
     },
     {
-      "transition": "workflow: per-step token_budget parks that step and the run continues; the run-wide cap suspends the run",
+      "transition": "workflow execute: the FIRST substantive failure (gate red after commit, empty ChangeSet, find-miss, rejected write) promotes to a lane on a typed FailureKind, never an error string; parse retries one-shot and transport has its own counter",
       "enforcement": "exit-code",
       "file": "crates/workflow-runtime/src/runner.rs"
+    },
+    {
+      "transition": "workflow: one-shot writes create NEW files only; rewriting an existing file is lane work. Run-wide usd_budget caps lane spend, checked before every launch",
+      "enforcement": "exit-code",
+      "file": "crates/workflow-runtime/src/worktree.rs"
     },
     {
       "transition": "workflow: an abandoned run refuses to rerun until --reopen; every park, unpark (with the human's note), promotion, abandon and reopen lands in ledger.jsonl",

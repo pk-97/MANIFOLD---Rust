@@ -59,6 +59,14 @@ file. The runtime is mostly wiring.
   (acquired via `scripts/agent-worktree.py`), commits with a pathspec, runs the step's gate;
   on red, feeds the gate tail back and loops, cap N (default 2, per D-52), then PARK.
   Rejected: unified diffs — models miscount hunk line numbers; observed class.
+
+  **Amended (P4).** Full-file writes are no longer the execute format. A `write` to a path
+  that already exists is refused before the tree is touched, and promotes (D20); `edits`
+  carry every change to a file that exists. This is a SPEND DECISION, not a correctness
+  rule — a legitimately small whole-file rewrite (a JSON preset, a generated fixture) now
+  routes to a paid lane, and that is the intended trade. The commit message is also no
+  longer the model's: the runtime composes it from the step, its title, and the program's
+  `task`. `commit_message` stays an optional field so older responses parse, and is ignored.
 - **D6 — state is files; a run is resumable.** `.claude/orchestration/runs/<run-id>/`:
   the program copy, `step-NN.<artifact>.json`, `transcript.jsonl` (every request/response,
   usage, model id), `escalation.md`. ESCALATE writes the question and exits 10; the lead
@@ -131,11 +139,12 @@ P3 shakedown rulings (Peter, 2026-07-30 — the mb-a-refactor park exposed all f
   reason is the most informative error seen, never "no edits and no writes" when a red
   gate or apply failure preceded it. The last red gate's full report is preserved in the
   park record (`gate_report` in parked.jsonl), not just the composed feedback string.
-- **D17 — unpark seeds the park reason as initial feedback.** A rerun of a previously
-  parked execute step gets "a previous sample of this step parked: <reason>" in its first
-  prompt, so progress already committed in the worktree is fixed forward instead of
-  re-attempted blind. One sample deep: each unpark overwrites the seed, no accumulating
-  history.
+- **D17 — unpark seeds the park reason — SUPERSEDED by D19, corrected P4.** The seed text
+  no longer reaches a model on any path: D19 gates first, then either completes with zero
+  model calls or replaces the seed with the fresh gate report. The seed file is effectively
+  a boolean ("this is a seeded rerun"). Anything a human wants the next attempt to READ
+  needs its own field — that is what `unpark --note` is, appended after the fresh gate
+  report and labelled as their ruling. One sample deep still holds: each unpark overwrites.
 - **D18 — steps carry a human-readable `title`.** Optional one-line sentence per step,
   surfaced wherever the step name appears (status.json, `watch`, parked.jsonl, escalation
   files); `check` warns (advisory, never exit 1) when absent. Step `name` keys resume
@@ -156,13 +165,30 @@ P3 shakedown rulings (Peter, 2026-07-30 — the mb-a-refactor park exposed all f
   one-shot API step — cheap at scale, trivially auditable, and the reviewer's tool-lessness
   is a feature (it cannot "fix things while it's in there"). An output judged by RUNNING
   it (code that must compile and pass a gate) needs the tool loop — a lane. Measured in
-  P3: six one-shot attempts could not do a godfile MSL refactor (~383K tokens, two
-  structural failure classes no feedback loop fixes: exact-quote edits at that size, and
-  correctness invisible without a compiler); the same task took a lane one pass; the
-  one small quotable edit landed one-shot first try (50K). A refactor-shaped one-shot
-  execute step is a design smell, not a failure mode. Delivery: P4 `lane` opcode — same
-  worktree, same commit-then-gate/park/blocking/gate-first semantics, worker is a headless
-  agent session; `check` lints execute-step scope. Beaded.
+  P3: six one-shot attempts could not do a godfile MSL refactor (`mb-a-refactor`, 231K
+  tokens — two structural failure classes no feedback loop fixes: exact-quote edits at that
+  size, and correctness invisible without a compiler); the same task took a lane one pass;
+  the one small quotable edit landed one-shot first try (50K). A refactor-shaped one-shot
+  execute step is a design smell, not a failure mode.
+
+  **Delivered P4.** `lane` opcode: same worktree, same gate/park/blocking/gate-first
+  semantics; the worker is a headless agent session; what it did is measured by HEAD sha
+  delta, never `git status` (our lanes commit their own work, so porcelain reads a good
+  lane as having done nothing, and committing a porcelain listing is `add -A` in disguise);
+  a dirty tree on return parks the step. D15's blocking predicate widens to every
+  worktree-touching opcode on both sides.
+
+  Promotion is failure-driven and switches on a typed `FailureKind`, never on error
+  strings — promotion costs money, so a reworded message must not change which tier runs.
+  The FIRST substantive failure (gate red after commit, empty ChangeSet, find-miss,
+  rejected write) hands over: those all mean the model's picture of the worktree is wrong,
+  and a second stateless call reasoning about a pasted error is what P3 measured failing.
+  Parse and transport failures are not substantive and still retry one-shot; transport
+  failures get their own counter (run 1 burned two of three attempts on proxy timeouts at
+  zero tokens). A promotion after a committed attempt hands the lane that commit sha and
+  D19's fix-forward framing, or the lane reverts real work. A budget park never promotes.
+  Lane cost is USD and is capped run-wide by `usd_budget`, reported apart from tokens
+  everywhere. Owed: `check` linting execute-step scope.
 
 ## 3. Design body — the loop
 
@@ -190,9 +216,19 @@ escalations.
 
 ## 4. Invariants & enforcement
 
-- **The model never touches repo state.** Enforcement: structural — no tool-call path exists
-  in the crate; negative `rg` gate at landing: zero hits for `std::process::Command` outside
-  the named `gates.rs`/`worktree.rs`/`keyget` call sites.
+- **The model never touches repo state — amended P4, and the amendment is the point.**
+  As written this invariant is false the day a lane lands: a lane IS a tool-call path the
+  crate spawns, and the model on the other end edits and commits the worktree itself.
+  Pretending otherwise would leave the crate's stated enforcement story a lie.
+
+  What survives, and what P4 keeps enforcing: **for every opcode except `lane`**, the model
+  is still a stateless `context -> typed artifact` call with no tools. For `lane`, the
+  runtime still owns every decision that matters — it measures what the lane did by HEAD
+  sha, refuses to commit on the lane's behalf (a dirty tree parks the step), runs the gate
+  itself, and caps and parks. The soft row the runtime was built to delete stays deleted:
+  one-commit-then-stop, retry caps and scope discipline are still structure, not goodwill.
+  The negative `rg` gate keeps its shape with `lane.rs` added to the allowed list —
+  `std::process::Command` outside `gates.rs`/`worktree.rs`/`lane.rs`/`keyget` is still zero.
 - **Retry cap is hard.** Enforcement: unit test — mock transport returning garbage N+1
   times must yield `ParkedItem`, never an (N+1)th request.
 - **Every model interaction is on the record.** Enforcement: unit test — transcript line
@@ -242,10 +278,13 @@ small-edit scale — numbers and the resulting doctrine in D20 (read-vs-run). Th
 itself finished hybrid: program for small edits + gates + probes, lanes for the refactor
 fix-forward and the A/B evidence, lead landing — recorded as the intended P4 shape, not a
 deviation to hide. Shakedown findings all fixed-and-landed same day (request_timeout_s,
-D14 live status, D15–D19) except: `anchor:` cannot span a raw-string MSL const
-(locate.rs brace counting — open), stale `target/debug/workflow` binary class (rebuild
-before first use), BUG-t1p5 (raytrace.rs godfile audit) open. Cost: 482K tokens over two
-runs; ledger in the run dirs.
+D14 live status, D15–D19) except: stale `target/debug/workflow` binary class (rebuild
+before first use) and BUG-t1p5 (raytrace.rs godfile audit), both open. `anchor:` still
+cannot reach a raw-string MSL const — P4's `span:<file>:<start>-<end>` input is the fix,
+and it is the root-cause fix for the whole failure class: that gap is why a 178K-char
+godfile went into all seven model calls of the step that failed while it was asked to
+re-quote exactly out of 3,432 lines. Cost: 482K tokens over two runs; ledger in the run
+dirs.
 
 Phasing-completeness: every section-2 decision is exercised by P1 (D1/D2/D4/D6/D7),
 P2 (D3/D5/D8), or Deferred.

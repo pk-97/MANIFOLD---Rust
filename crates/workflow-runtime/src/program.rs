@@ -16,6 +16,11 @@ pub struct Program {
     /// 500K (Peter: sensible at first, must not block normal runs).
     /// Overrun suspends the run; raise and rerun to resume.
     pub token_budget: Option<u64>,
+    /// Run-wide cap on LANE spend, in dollars. The token budget cannot see it:
+    /// lanes bill USD, so without this a promote-heavy program can spawn a
+    /// lane per execute step while `watch` shows a healthy green token bar.
+    /// Checked before every launch, the same way tokens guard a model call.
+    pub usd_budget: Option<f64>,
     /// Where execute steps land their commits. Required iff the program has one.
     pub target: Option<Target>,
     /// Opt-in: adjacent independent gate-less `generate` steps run threaded.
@@ -114,7 +119,7 @@ pub struct Step {
     pub artifact: ArtifactKind,
     /// Prompt template path, relative to the program file's directory.
     pub template: Option<PathBuf>,
-    /// Prior step names, or `file:<repo-relative path>` literals.
+    /// Prior step names, or one of the `INPUT_PREFIXES` literals.
     #[serde(default)]
     pub inputs: Vec<String>,
     /// Shell commands; non-zero exit fails the attempt (generate) or the step (gate).
@@ -138,16 +143,20 @@ pub struct Step {
     pub provider: Option<String>,
     /// Lane (and a promoted execute): cap on the worker's agentic turns.
     pub max_turns: Option<u32>,
-    /// Execute only: exhausting `retry_cap` runs ONE lane attempt for the same
-    /// step before parking, seeded with the accumulated error (D20).
+    /// Execute only: the FIRST substantive failure (D20 — the model's picture
+    /// of the worktree is wrong) runs one lane attempt for the same step
+    /// instead of parking. Parse and transport failures still retry one-shot.
     pub on_fail: Option<OnFail>,
     /// The model that promoted lane attempt uses; falls back to `model`.
     pub lane_model: Option<String>,
-    /// Per-step token cap. Exceeding it parks THIS step and the run carries on;
-    /// the run-wide `token_budget` suspends everything. Both stay in force,
-    /// whichever hits first wins. (P3: one step ate 280K of a 400K run.)
-    pub token_budget: Option<u64>,
 }
+
+/// Input literals, as opposed to a prior step's name.
+/// `file:` pastes contents · `path:` pastes the PATH ONLY, for a worker that
+/// can open it itself · `anchor:` resolves a Rust item to its span ·
+/// `span:` takes explicit lines, which is the only way to reach text inside a
+/// raw string (an MSL or WGSL kernel body).
+pub const INPUT_PREFIXES: [&str; 4] = ["file:", "path:", "anchor:", "span:"];
 
 /// 30 min: a reasoning-tier model on a whole-file prompt legitimately thinks
 /// past 10 (observed: deepseek-v4-pro, 2026-07-30). A stuck call still dies.
@@ -180,10 +189,7 @@ impl Program {
                 return Err(format!("duplicate step name {:?}", step.name));
             }
             for input in step.inputs.iter().chain(&step.over) {
-                if !input.starts_with("file:")
-                    && !input.starts_with("anchor:")
-                    && !seen.contains(&input.as_str())
-                {
+                if !INPUT_PREFIXES.iter().any(|p| input.starts_with(p)) && !seen.contains(&input.as_str()) {
                     return Err(format!(
                         "step {:?} input {:?} names no earlier step (programs are linear)",
                         step.name, input

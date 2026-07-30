@@ -116,10 +116,15 @@ pub fn run_transform(
         }
     };
     let stdout = std::fs::read_to_string(&out_path).unwrap_or_default();
+    let out_tail = read_tail(&out_path);
     let tail = read_tail(&err_path);
     cleanup(&[&out_path, &err_path]);
     if exit != 0 {
-        return Err(format!("transform exited {exit}:\n{tail}"));
+        // Probe scripts print their RULING on stdout and exit non-zero — the
+        // deltas, controls and thresholds that say WHY. Dropping it made the
+        // most valuable park of the P3 shakedown read "transform exited 1:"
+        // and a human re-ran the probe by hand to learn anything.
+        return Err(format!("transform exited {exit}:\nstdout:\n{out_tail}\nstderr:\n{tail}"));
     }
     Ok(stdout)
 }

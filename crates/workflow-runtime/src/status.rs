@@ -37,6 +37,8 @@ pub struct Status {
     /// USD and folding it into a token count would be a lie.
     #[serde(default)]
     pub usd_spent: f64,
+    #[serde(default)]
+    pub usd_budget: f64,
     /// Most recent error text (transport or parse), kept across transitions
     /// until the step completes — the first thing `watch` shows loudly.
     pub last_error: String,

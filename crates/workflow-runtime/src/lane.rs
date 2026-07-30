@@ -25,6 +25,8 @@ pub struct LaneRequest {
     pub provider: String,
     pub max_turns: u32,
     pub timeout_s: u64,
+    /// Where the live worker records its job handle while it runs.
+    pub run_dir: PathBuf,
 }
 
 /// What the runtime needs back. `envelope` is recorded verbatim in the step
@@ -75,10 +77,24 @@ impl LaneWorker for CcFleetLane {
             .arg("--json")
             .args(["--timeout", &format!("{}s", req.timeout_s)])
             .args(["--max-turns", &req.max_turns.to_string()])
-            .current_dir(&req.worktree);
-        let spawned = cmd.output();
+            .current_dir(&req.worktree)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        let child = cmd.spawn().map_err(|e| {
+            let _ = std::fs::remove_file(&prompt_path);
+            format!("cc-fleet subagent spawn failed: {e}")
+        })?;
+        // The handle exists for as long as the worker does: a killed runtime
+        // must never leave an unrecorded job still writing the worktree.
+        let handle = req.run_dir.join("lane-job.json");
+        let _ = std::fs::write(
+            &handle,
+            serde_json::json!({"pid": child.id(), "worktree": req.worktree, "provider": req.provider}).to_string(),
+        );
+        let spawned = child.wait_with_output();
+        let _ = std::fs::remove_file(&handle);
         let _ = std::fs::remove_file(&prompt_path);
-        let out = spawned.map_err(|e| format!("cc-fleet subagent spawn failed: {e}"))?;
+        let out = spawned.map_err(|e| format!("cc-fleet subagent wait failed: {e}"))?;
         let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
         Ok(parse_envelope(&stdout, out.status.code().unwrap_or(-1), &String::from_utf8_lossy(&out.stderr)))
     }

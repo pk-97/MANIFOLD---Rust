@@ -62,12 +62,16 @@ pub fn check(program_path: &Path, repo_root: &Path) -> Vec<String> {
             }
         }
         for input in step.inputs.iter().chain(&step.over) {
-            if let Some(path) = input.strip_prefix("file:") {
+            if let Some(path) = input.strip_prefix("file:").or_else(|| input.strip_prefix("path:")) {
                 if !repo_root.join(path).is_file() {
                     findings.push(format!("step {:?}: input file {path:?} does not exist", step.name));
                 }
-            } else if let Some(spec) = input.strip_prefix("anchor:")
-                && let Err(e) = locate::resolve(repo_root, spec)
+            } else if let Some(spec) = input.strip_prefix("anchor:") {
+                if let Err(e) = locate::resolve(repo_root, spec) {
+                    findings.push(format!("step {:?}: {e}", step.name));
+                }
+            } else if let Some(spec) = input.strip_prefix("span:")
+                && let Err(e) = locate::span(repo_root, spec)
             {
                 findings.push(format!("step {:?}: {e}", step.name));
             }
