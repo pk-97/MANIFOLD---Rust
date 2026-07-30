@@ -84,6 +84,13 @@ unsafe fn libc_kill_probe(pid: i32) -> bool {
     unsafe { kill(pid, 0) == 0 }
 }
 
+/// `workflow watch`'s liveness check: the pid in `run.lock`, if the process
+/// that holds it is still alive. `None` covers both "no lock" and "dead pid".
+pub fn holder_alive(run_dir: &Path) -> Option<i32> {
+    let pid: i32 = fs::read_to_string(run_dir.join("run.lock")).ok()?.trim().parse().ok()?;
+    (pid > 0 && unsafe { libc_kill_probe(pid) }).then_some(pid)
+}
+
 /// Resume is keyed by step index+name against the LIVE program file; an
 /// inserted/renamed/reordered step silently corrupts resume (finding 7).
 /// The guard compares the STEP LIST, not bytes — raising `token_budget` or
@@ -117,6 +124,13 @@ pub fn run(cfg: &RunConfig, transport: &dyn ModelTransport) -> Result<Outcome, S
         .ok_or("program path has no parent")?
         .to_path_buf();
 
+    let total_steps = program.steps.len();
+    crate::status::emit(&cfg.run_dir, |st| {
+        st.state = "run-started".into();
+        st.detail = format!("{total_steps} steps");
+        st.total_steps = total_steps;
+        st.token_budget = program.token_budget.unwrap_or(DEFAULT_TOKEN_BUDGET);
+    });
     let mut parked: Vec<String> = load_parked(&cfg.run_dir)?.into_iter().map(|p| p.step).collect();
     let mut artifacts: BTreeMap<String, Artifact> = BTreeMap::new();
     // The runaway guard: tokens spent so far, resumed runs included.
@@ -143,11 +157,27 @@ pub fn run(cfg: &RunConfig, transport: &dyn ModelTransport) -> Result<Outcome, S
         }
         // A step whose input parked cannot proceed: the queue is blocked (exit 20).
         if let Some(dep) = step.inputs.iter().find(|i| parked.contains(*i)) {
+            crate::status::emit(&cfg.run_dir, |st| {
+                st.state = "blocked".into();
+                st.detail = format!("step {:?} depends on parked step {:?}", step.name, dep);
+            });
             return Ok(Outcome::Blocked(format!(
                 "step {:?} depends on parked step {:?}",
                 step.name, dep
             )));
         }
+
+        crate::status::emit(&cfg.run_dir, |st| {
+            st.state = "starting".into();
+            st.detail = String::new();
+            st.step = step.name.clone();
+            st.step_index = idx + 1;
+            st.opcode = format!("{:?}", step.opcode).to_lowercase();
+            st.model = step.model.clone().unwrap_or_default();
+            st.attempt = 0;
+            st.max_attempts = u32::from(step.retry_cap) + 1;
+            st.last_error = String::new();
+        });
 
         // Parallel generate (v1.1, opt-in): adjacent gate-less generates with
         // no artifact edges between them run threaded. Execute NEVER
@@ -237,6 +267,10 @@ pub fn run(cfg: &RunConfig, transport: &dyn ModelTransport) -> Result<Outcome, S
                         )
                         .map_err(|e| e.to_string())?;
                     }
+                    crate::status::emit(&cfg.run_dir, |st| {
+                        st.state = "escalated".into();
+                        st.detail = esc_path.display().to_string();
+                    });
                     return Ok(Outcome::Escalated(esc_path));
                 }
             }
@@ -291,6 +325,10 @@ pub fn run(cfg: &RunConfig, transport: &dyn ModelTransport) -> Result<Outcome, S
         }
         idx += 1;
     }
+    crate::status::emit(&cfg.run_dir, |st| {
+        st.state = "run-done".into();
+        st.detail = String::new();
+    });
     Ok(Outcome::Done)
 }
 
@@ -436,6 +474,7 @@ fn pure_generate_attempts(step: &Step, base_prompt: &str, transport: &dyn ModelT
             max_tokens: step.max_tokens,
             system: None,
             user: compose(base_prompt, &feedback),
+            timeout_s: step.request_timeout_s.unwrap_or(crate::program::DEFAULT_REQUEST_TIMEOUT_S),
         };
         let result = checked_complete(transport, &step.name, &req)?;
         let error = match &result {
@@ -744,9 +783,18 @@ fn run_execute(
             max_tokens: step.max_tokens,
             system: None,
             user,
+            timeout_s: step.request_timeout_s.unwrap_or(crate::program::DEFAULT_REQUEST_TIMEOUT_S),
         };
+        crate::status::emit(&cfg.run_dir, |st| {
+            st.state = "waiting-on-model".into();
+            st.detail = format!("{} chars prompt, attempt {attempt}/{max_attempts}", req.user.len());
+            st.attempt = attempt;
+        });
         let result = checked_complete(transport, &step.name, &req)?;
         budget.add(&result);
+        crate::status::emit(&cfg.run_dir, |st| {
+            st.tokens_spent = budget.spent;
+        });
         log_transcript(&cfg.run_dir, &step.name, idx, attempt, &req, &result)?;
         let error = match result {
             Err(e) => format!("transport error: {e}"),
@@ -776,6 +824,10 @@ fn run_execute(
                 }
             },
         };
+        crate::status::emit(&cfg.run_dir, |st| {
+            st.state = "retrying".into();
+            st.last_error = error.chars().take(300).collect();
+        });
         feedback = Some(error);
     }
     Ok(Err(ParkedItem {
@@ -828,9 +880,18 @@ fn model_loop(
             max_tokens: step.max_tokens,
             system: None,
             user: compose(base_prompt, &feedback),
+            timeout_s: step.request_timeout_s.unwrap_or(crate::program::DEFAULT_REQUEST_TIMEOUT_S),
         };
+        crate::status::emit(&cfg.run_dir, |st| {
+            st.state = "waiting-on-model".into();
+            st.detail = format!("{} chars prompt, attempt {attempt}/{max_attempts}", req.user.len());
+            st.attempt = attempt;
+        });
         let result = checked_complete(transport, label, &req)?;
         budget.add(&result);
+        crate::status::emit(&cfg.run_dir, |st| {
+            st.tokens_spent = budget.spent;
+        });
         log_transcript(&cfg.run_dir, label, idx, attempt, &req, &result)?;
         let error = match result {
             Err(e) => format!("transport error: {e}"),
@@ -851,6 +912,10 @@ fn model_loop(
                 }
             },
         };
+        crate::status::emit(&cfg.run_dir, |st| {
+            st.state = "retrying".into();
+            st.last_error = error.chars().take(300).collect();
+        });
         feedback = Some(error);
     }
     Ok(Err(ParkedItem {

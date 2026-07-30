@@ -11,6 +11,7 @@ pub mod locate;
 pub mod program;
 pub mod runner;
 pub mod scrub;
+pub mod status;
 pub mod template;
 pub mod transport;
 pub mod worktree;

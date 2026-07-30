@@ -13,6 +13,9 @@ use serde::Serialize;
 pub struct CompletionRequest {
     pub model: String,
     pub max_tokens: u32,
+    /// Transport deadline for THIS request (program/step-tunable; the old
+    /// agent-wide hardcoded 600s cut off legitimate reasoning-tier calls).
+    pub timeout_s: u64,
     pub system: Option<String>,
     pub user: String,
 }
@@ -134,7 +137,8 @@ impl LiveTransport {
         }
         Ok(LiveTransport {
             key: String::from_utf8_lossy(&out.stdout).trim().to_string(),
-            agent: ureq::AgentBuilder::new().timeout(Duration::from_secs(600)).build(),
+            // No agent-wide deadline: the per-request timeout below governs.
+            agent: ureq::AgentBuilder::new().build(),
         })
     }
 
@@ -147,6 +151,7 @@ impl LiveTransport {
         let body = serde_json::json!({"model": model, "max_tokens": max_tokens, "messages": messages});
         self.agent
             .post(PROXY)
+            .timeout(Duration::from_secs(req.timeout_s))
             .set("Authorization", &format!("Bearer {}", self.key))
             .set("Content-Type", "application/json")
             .send_string(&body.to_string())

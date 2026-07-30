@@ -17,6 +17,7 @@ target/debug/workflow run <program.toml> [--run-id <id>] [--mock <responses.json
 target/debug/workflow check <program.toml>      # lint before spending a token (exit 1 on findings)
 target/debug/workflow cost <run-dir>            # per-step / per-model token ledger
 target/debug/workflow unpark <run-dir> <step>   # clear a parked step, then rerun to retry it
+target/debug/workflow watch <run-dir>           # live dashboard over status.json — token-free, read-only
 ```
 
 ALWAYS `check` a program before its first `run` — it verifies templates (slots both
@@ -83,7 +84,8 @@ transport made (internal budget-doubling retries and model fallbacks included); 
 budget sums those, so hidden retries are never free. `token_budget` (default 500K) suspends
 a runaway run hard — raise it consciously, never reflexively. When answering an escalation,
 write your answer AFTER the final answer marker and never quote the marker line inside your
-answer text.
+answer text. The run dir's `status.json` and `workflow watch` are the live view — a transport
+error shows up there the moment it happens, not just at exit.
 
 ## Program reference
 
@@ -95,6 +97,7 @@ parallel = true                # optional: adjacent independent gate-less genera
 task = "<bead id>"             # optional: with it, every verdict step is recorded in the
                                # shared decisions trail via gate_runner review (D8);
                                # without it verdicts stay in the run dir
+request_timeout_s = 1800       # per model call transport deadline (default 1800); step field overrides
 
 [target]                       # only for programs with execute steps — exactly ONE form:
 label = "task-label"           # ring-acquire: label + branch (+ optional tip)
