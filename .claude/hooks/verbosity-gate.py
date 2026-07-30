@@ -8,10 +8,16 @@ Budgets — non-blank lines and words, fenced code excluded from both:
     normal turn         6 lines / 150 words
     detail requested    18 lines / 400 words
 
+The message measured is the payload's `last_assistant_message`, the exact text
+of the turn that just ended. Scanning the transcript for it instead can land on
+the previous assistant turn, because the Stop hook may fire before that turn's
+row is flushed. No field, no measurement — the hook goes silent.
+
 Detail is keyed off the user's own words in the prompt that opened the turn
-(_DETAIL_CUES). The prompt is the last transcript row that is a real typed
-message: tool_result and isMeta rows are skipped, since a tool-using turn
-otherwise resolves to an empty prompt.
+(_DETAIL_CUES). That comes from the transcript, which is safe: the prompt row is
+written before the turn starts. It is the last row that is a real typed message —
+tool_result and isMeta rows are skipped, or a tool-using turn resolves to an
+empty prompt.
 
 Blocks at most twice per turn, keyed on the prompt row uuid, then lets it
 through. Fails OPEN. State file: VERBOSITY_GATE_STATE, else
@@ -71,13 +77,6 @@ def _text_of(row):
     )
 
 
-def _has_tool_use(row):
-    content = (row.get("message") or {}).get("content")
-    return isinstance(content, list) and any(
-        isinstance(b, dict) and b.get("type") == "tool_use" for b in content
-    )
-
-
 def _is_tool_result(row):
     if row.get("toolUseResult") is not None:
         return True
@@ -133,18 +132,12 @@ def _record(state, session_id, turn_key, n):
 
 def main():
     payload = json.load(sys.stdin)
+    text = payload.get("last_assistant_message")
+    if not isinstance(text, str) or not text.strip():
+        return 0
+
     transcript = payload.get("transcript_path")
-    if not transcript or not Path(transcript).exists():
-        return 0
-
-    rows = _tail_messages(transcript)
-
-    last_assistant = next((r for r in reversed(rows) if r.get("type") == "assistant"), None)
-    if last_assistant is None or _has_tool_use(last_assistant):
-        return 0
-    text = _text_of(last_assistant)
-    if not text.strip():
-        return 0
+    rows = _tail_messages(transcript) if transcript and Path(transcript).exists() else []
 
     last_user = _last_real_user(rows)
     prompt = _text_of(last_user) if last_user else ""

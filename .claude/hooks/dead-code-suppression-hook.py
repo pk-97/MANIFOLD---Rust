@@ -2,10 +2,9 @@
 """PostToolUse(Edit|Write|MultiEdit) nudge: catch a newly added, unannotated
 `#[allow(dead_code)]` / `#[allow(unused...)]` suppression.
 
-Why this exists: suppression is deferral. CLAUDE.md bans bare markers — every
-one must name what un-suppresses it (a design doc, a phase, a wiring task) or
-the code should just be deleted. A passive rule in CLAUDE.md is easy to miss
-mid-edit; this hook fires the moment a bare marker lands.
+CLAUDE.md bans bare markers — every one must name what un-suppresses it (a design doc, a
+phase, a wiring task) or the code should just be deleted. This hook fires the moment a
+bare marker lands.
 
 Fires ONLY when the edit *adds* a marker that wasn't already present:
   - Edit: pattern matches somewhere in new_string but nowhere in old_string.
@@ -16,15 +15,15 @@ Fires ONLY when the edit *adds* a marker that wasn't already present:
     so a full-file rewrite that merely carries forward an existing marker is
     a false positive — accepted, since this hook is advisory only.
 
-A matched marker is exempt if its own attribute line, or any of the up-to-2
-lines directly above it, contains a `//` comment — the heuristic for "names
-its un-suppression trigger". Only Rust files (`.rs`) are considered.
+A matched marker is exempt if its own attribute line, or any of the up-to-2 lines
+directly above it, contains a `//` comment — the heuristic for "names its un-suppression
+trigger". Only Rust files (`.rs`) are considered.
 
 Never blocks: only ever emits `additionalContext`, never a permissionDecision
 (PostToolUse can't undo the write anyway). Fails open on any error.
 
-Receives `{"tool_name": "Edit"|"Write"|"MultiEdit", "tool_input": {...}}` on
-stdin. Emits hookSpecificOutput.additionalContext, or nothing.
+Receives `{"tool_name": "Edit"|"Write"|"MultiEdit", "tool_input": {...}}` on stdin.
+Emits hookSpecificOutput.additionalContext, or nothing.
 """
 import json
 import re

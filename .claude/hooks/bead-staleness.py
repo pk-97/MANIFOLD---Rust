@@ -1,23 +1,21 @@
 #!/usr/bin/env python3
 """SessionStart: surface stale open beads so the pile can't rot silently.
 
-Why: when a bug here gets fixed, it gets fixed fast — the frozen backlog's
-closed set shows median 1 day logged-to-fixed, p90 5 days. An open P1 at a
-week is therefore abnormal, not "still queued". The old markdown backlog died
-by accumulating exactly these — items nobody chose to fix and nobody chose to
-close. This hook is the forced choice.
+An open bead sitting untouched past threshold is abnormal, not "still queued" — the old
+markdown backlog died by accumulating exactly these: items nobody chose to fix and
+nobody chose to close. This hook is the forced choice.
 
 Behavior: reads `bd list --json --flat` (open issues), staleness = days since
-`updated_at`. Thresholds: P1 >= 7 days, P2/P3 >= 21. Prints at most the 5
-oldest per priority — a bounded list gets read, a full one gets ignored.
-Each surfaced item demands one of three moves: fix it, demote it (with
-`bd update`), or close it with a reason. Silent when nothing is stale.
+`updated_at`. Thresholds: P1 >= 7 days, P2/P3 >= 21. Prints at most the 5 oldest per
+priority — a bounded list gets read, a full one gets ignored. Each surfaced item demands
+one of three moves: fix it, demote it (with `bd update`), or close it with a reason.
+Silent when nothing is stale.
 
-Fails OPEN: any error (bd missing, JSON shape change) prints nothing and
-exits 0 — session start must never wedge on housekeeping.
+Fails OPEN: any error (bd missing, JSON shape change) prints nothing and exits 0 —
+session start must never wedge on housekeeping.
 
-Obsolete when: beads is retired as the tracker, or bd grows a native
-staleness/triage surface that the session sees without this hook.
+Obsolete when: beads is retired as the tracker, or bd grows a native staleness/triage
+surface that the session sees without this hook.
 """
 import json
 import subprocess

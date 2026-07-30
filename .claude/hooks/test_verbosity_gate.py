@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for verbosity-gate.py: which row counts as the prompt, and the cap.
+"""Tests for verbosity-gate.py: message source, prompt row, budgets, cap.
 
 Run: python3 .claude/hooks/test_verbosity_gate.py
 """
@@ -43,15 +43,24 @@ def assistant(text, uuid="a1"):
 _STATE_DIR = tempfile.mkdtemp(prefix="vgate-state-")
 
 
-def run(rows, session_id):
-    """Invoke the hook as a subprocess; return (exit_code, stderr)."""
+def run(rows, session_id, final=None):
+    """Invoke the hook as a subprocess; return (exit_code, stderr).
+
+    `final` is the payload's last_assistant_message. Defaults to the last
+    assistant row's text, which is what the harness sends in the normal case.
+    """
     with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as fh:
         for r in rows:
             fh.write(json.dumps(r) + "\n")
         path = fh.name
+    if final is None:
+        final = next((vgate._text_of(r) for r in reversed(rows)
+                      if r.get("type") == "assistant"), "")
+    payload = {"transcript_path": path, "session_id": session_id,
+               "last_assistant_message": final}
     proc = subprocess.run(
         [sys.executable, str(HERE / "verbosity-gate.py")],
-        input=json.dumps({"transcript_path": path, "session_id": session_id}),
+        input=json.dumps(payload),
         capture_output=True, text=True,
         env={**os.environ, "VERBOSITY_GATE_STATE": str(Path(_STATE_DIR) / "state.json")},
     )
@@ -92,6 +101,36 @@ for i in range(4):
     codes.append(run(turn, "sess-cap")[0])
     turn = turn + [user("Stop hook feedback: Over budget", f"m{i}", meta=True), assistant(LONG)]
 check(f"blocks exactly twice then passes (got {codes})", codes == [2, 2, 0, 0])
+
+# --- the message measured is the payload's, not the transcript's --------------
+# The transcript can still be one turn behind when the hook fires, so a stale
+# over-budget row must not decide a short reply's fate, and no field means silent.
+stale = [user("did it land?", "race1"), tool_result(), assistant(LONG, "prev")]
+code, err = run(stale, "sess-race", final=SHORT)
+check("short reply passes despite a long stale transcript row",
+      code == 0 and not err.strip())
+
+code, err = run(stale, "sess-race-long", final=LONG)
+check("long reply blocks on the payload text", code == 2 and "Over budget" in err)
+
+proc = subprocess.run(
+    [sys.executable, str(HERE / "verbosity-gate.py")],
+    input=json.dumps({"session_id": "sess-nofield"}),
+    capture_output=True, text=True,
+    env={**os.environ, "VERBOSITY_GATE_STATE": str(Path(_STATE_DIR) / "state.json")})
+check("no last_assistant_message -> silent", proc.returncode == 0 and not proc.stderr.strip())
+
+# --- fences: closed, unclosed, and indented ----------------------------------
+FENCED = "one line of prose\n```\nthis is code and should not count at all\nneither should this\n```\nlast line of prose"
+check("closed fence excludes its contents", vgate._measure(FENCED) == (2, 8))
+
+UNCLOSED = "prose line one\n```\ncode that never gets closed\nmore code\nstill code"
+check("unclosed fence hides everything after it (undercounts, not over)",
+      vgate._measure(UNCLOSED) == (1, 3))
+
+INDENTED_FENCE = "prose line\n    ```\n    fenced code, indented\n    ```\nmore prose"
+check("indented fence delimiters are still recognised",
+      vgate._measure(INDENTED_FENCE) == (2, 4))
 
 # --- fails open --------------------------------------------------------------
 proc = subprocess.run([sys.executable, str(HERE / "verbosity-gate.py")],

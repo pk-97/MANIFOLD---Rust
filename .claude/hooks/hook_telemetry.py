@@ -1,30 +1,27 @@
 #!/usr/bin/env python3
 """Telemetry pass-through runner for every registered hook.
 
-Why: 30+ hooks, all fail-open, none observed. Whether a hook ever fires —
-let alone ever denies/asks/injects — was an argument, not a lookup. Retiring
-a rule (the "Obsolete when:" census) needs fire counts the same way retiring
-a code path needs coverage. This runner is the counter.
+Whether a hook ever fires — let alone ever denies/asks/injects — should be a lookup, not
+an argument. Retiring a rule (the "Obsolete when:" census) needs fire counts the same
+way retiring a code path needs coverage. This runner is the counter.
 
 settings.json invokes hooks as
     python3 .../hook_telemetry.py <hook-file.py>
 instead of calling the hook directly. The runner pipes stdin through, mirrors
-stdout/stderr exactly, exits with the hook's exit code — behaviorally
-transparent — and appends one JSONL line per invocation to
-.claude/telemetry/hook-fires.jsonl (gitignored via the .claude/* default):
+stdout/stderr exactly, exits with the hook's exit code — behaviorally transparent — and
+appends one JSONL line per invocation to .claude/telemetry/hook-fires.jsonl (gitignored
+via the .claude/* default):
 
     {"ts", "hook", "event", "exit", "out", "err", "ms"}
 
-"Fired and acted" ≈ out > 0 or exit != 0; "fired silent" is out == 0, exit 0.
-Dead-hook census: hooks registered vs hooks appearing in the log over a real
-working window.
+"Fired and acted" is out > 0 or exit != 0; "fired silent" is out == 0, exit 0. Dead-hook
+census: hooks registered vs hooks appearing in the log over a real working window.
 
-Fails OPEN twice over: a logging failure never blocks the hook's verdict, and
-a runner failure to even launch the hook exits 0 (same fail-open contract
-every hook here already has). No timeout imposed — the harness owns that.
+Fails OPEN twice over: a logging failure never blocks the hook's verdict, and a runner
+failure to even launch the hook exits 0. No timeout imposed — the harness owns that.
 
-Obsolete when: the harness itself reports per-hook invocation/decision
-telemetry, or the hook census stops being a maintained practice.
+Obsolete when: the harness itself reports per-hook invocation/decision telemetry, or the
+hook census stops being a maintained practice.
 """
 import json
 import subprocess

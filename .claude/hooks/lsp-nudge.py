@@ -1,39 +1,24 @@
 #!/usr/bin/env python3
 """PreToolUse(Bash) nudge: redirect symbol-shaped rg/grep to the LSP tool.
 
-Why this exists: Claude Code's system prompt biases the model toward grep, and a
-passive "prefer LSP" line in CLAUDE.md loses to it (~1% real-world LSP use). The
-reliable redirect is a *narrow soft-block*: when a search is clearly a Rust
-symbol/definition/impl query, deny it with a reason that names the LSP operation
-to use instead. The model sees the deny reason and adapts.
+Fires only when a search is clearly a Rust symbol/definition/impl query — `fn name`,
+`trait name`, `struct name`, `enum name`, or `impl ... for` — and only when the search
+sweeps a workspace or directory, not an explicit file path (a path-targeted grep is
+reading known code, not searching). A bare keyword, plain identifier, or
+string/JSON/log/doc search passes untouched.
 
-Deliberately narrow to keep false positives near zero — it fires ONLY on
-definition-shaped patterns (`fn name`, `trait name`, `struct name`, `enum name`)
-and trait-impl shapes (`impl ... for`), and ONLY when the search sweeps a
-workspace or directory. A grep aimed at an explicit file path is reading
-intent — the agent already knows where the code lives and wants the lines;
-LSP's rationale (false hits across crates, trait dispatch) doesn't apply, and
-denying it just costs a round trip (2026-07-05: transcript audit showed this
-false-positive class training agents to blanket-append `#grep-ok`, which makes
-the hook inert for the whole session). A bare keyword (`rg "trait"`), a plain
-identifier, a string/JSON/log/doc search — all pass untouched.
+Bypass marker, appended to force the text search through:
+    #grep-ok
+It must be the last thing on its physical line. `#` starts a real shell comment, so
+chaining another command after the marker on the same line (with `;` or `&&`) is
+silently swallowed by the shell and never runs. This hook denies that shape outright
+instead of letting it fail silently.
 
-Bypass: append `#grep-ok` to the command to force the text search through. The
-cost of a false positive is therefore one of: re-issue as an LSP call (the point),
-or re-run with `#grep-ok`.
+Runs as a second PreToolUse Bash hook alongside preToolUseBash.py; a deny here overrides
+that hook's allow (deny takes precedence across hooks).
 
-`#grep-ok` MUST be the last thing on its physical line. `#` starts a real shell
-comment, so anything chained after the marker on the same line (`#grep-ok; cmd`,
-`#grep-ok && cmd`) is silently swallowed by the shell and never runs — this bit
-a session on 2026-07-06 (a required daemon self-grade append was dropped this
-way; see `.claude/daemon/eval/observations.session.jsonl`). This hook now denies
-that shape outright instead of letting the model discover it by lost output.
-
-Runs as a second PreToolUse Bash hook alongside preToolUseBash.py. A `deny` here
-overrides that hook's `allow` (deny takes precedence across hooks).
-
-Receives {"tool_name": "Bash", "tool_input": {"command": "..."}} on stdin.
-Emits hookSpecificOutput.permissionDecision="deny" + reason, or nothing.
+Receives {"tool_name": "Bash", "tool_input": {"command": "..."}} on stdin. Emits
+hookSpecificOutput.permissionDecision="deny" + reason, or nothing.
 """
 import json
 import re

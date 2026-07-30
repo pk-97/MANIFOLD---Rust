@@ -1,35 +1,31 @@
 #!/usr/bin/env python3
 """PreToolUse hook: seat freeze — a stand-down agents cannot ignore.
 
-Why (2026-07-24, Peter + lead, D-53): a GLM-5.2 dispatcher acknowledged a
-stand-down message but continued working through its current turn — spawning
-another lane after being told to stop — because mailbox messages are only
-seen BETWEEN turns. Message-based stand-downs have turn latency; a frozen
-seat must be PHYSICALLY unable to write, spawn, or run commands. Same
-philosophy as the tier guards: enforced by machinery, not hoped-for behavior.
+Message-based stand-downs have turn latency (mailbox messages are only seen BETWEEN
+turns); a frozen seat must be PHYSICALLY unable to write, spawn, or run commands.
 
 Mechanism (deterministic, no model calls): the lead writes
 `.claude/orchestration/frozen-seats.json`:
 
-    {"frozen": ["glm-5.2"], "reason": "quota rotation D-51", "set_by": "...", "set_at": "..."}
+    {"frozen": ["glm-5.2"], "reason": "quota rotation", "set_by": "...", "set_at": "..."}
 
-The hook identifies the caller's model from its transcript's last
-`message.model` (same method as agent-tier-spawn-guard.py) and DENIES all
-non-read-only tools (Bash/Edit/Write/MultiEdit/Agent/NotebookEdit) when the
-caller model exactly matches a frozen entry. Read-only tools (Read/Grep/
-Glob/LSP) pass, so a frozen seat can still answer a final state question.
-Matching is EXACT model-string equality ("glm-5.2" does not freeze
-"glm-4.7"); freeze every model string a seat can appear as if in doubt.
+The hook identifies the caller's model from its transcript's last `message.model` (same
+method as agent-tier-spawn-guard.py) and DENIES all non-read-only tools
+(Bash/Edit/Write/MultiEdit/Agent/NotebookEdit) when the caller model exactly matches a
+frozen entry. Read-only tools (Read/Grep/Glob/LSP) pass, so a frozen seat can still
+answer a final state question. Matching is EXACT model-string equality ("glm-5.2" does
+not freeze "glm-4.7"); freeze every model string a seat can appear as if in doubt.
 
-This does NOT replace TaskStop for halting a running seat — TaskStop kills
-the process; the freeze guard covers the resumable-after-stop hole (agent
-names stay addressable via SendMessage) and makes the state durable for any
-future session that meets the same seat.
+This does NOT replace TaskStop for halting a running seat — TaskStop kills the process;
+the freeze guard covers the resumable-after-stop hole (agent names stay addressable via
+SendMessage) and makes the state durable for any future session that meets the same
+seat.
 
-Fails open on any error (missing/unreadable freeze file or transcript,
-format drift): a guard hook must never be able to block a session.
+Fails open on any error (missing/unreadable freeze file or transcript, format drift): a
+guard hook must never be able to block a session.
 
-Obsolete when: the routing policy in docs/AGENT_ROUTING.md retires the two-tier lead/lane model this guard polices; recheck at each routing-policy revision.
+Obsolete when: the routing policy in docs/AGENT_ROUTING.md retires the two-tier
+lead/lane model this guard polices; recheck at each routing-policy revision.
 """
 import json
 import os

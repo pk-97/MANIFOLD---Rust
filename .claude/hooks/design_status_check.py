@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 """Design-status housekeeper — runs on merge, keeps doc status lines honest.
 
-The board (design_status.py) is only ever as good as the docs' status lines.
-This is the check that catches a doc going stale: when a merge ships code for
-a design whose status line wasn't updated in the same merge, or touches a
-design doc that has no status line at all, this flags it — and, when a `claude`
+The board (design_status.py) is only ever as good as the docs' status lines. This checks
+that a merge shipping code for a design updates that design's status line in the same
+merge, or flags a touched design doc with no status line at all — and, when a `claude`
 CLI is available, asks Haiku to draft the corrected one-line status.
 
-Deterministic detection is free and always runs. Haiku only fires when a
-candidate is found (so a clean merge costs nothing), and it only ever *prints
-a suggestion* — it never edits or commits, because auto-writing to freshly
-merged `main` violates the landing protocol (GIT_TREE_DISCIPLINE.md).
+Deterministic detection is free and always runs. Haiku only fires when a candidate is
+found, and it only ever prints a suggestion — it never edits or commits, since
+auto-writing to freshly merged `main` violates the landing protocol
+(`.claude/GIT_TREE_DISCIPLINE.md`).
 
 Usage (also called from .git/hooks/post-merge with ORIG_HEAD..HEAD):
     python3 .claude/hooks/design_status_check.py [SINCE] [UNTIL]
