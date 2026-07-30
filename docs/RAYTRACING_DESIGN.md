@@ -866,8 +866,9 @@ neighbours instead of growing a fake contact gradient.
 ### 12.3 Invariants & enforcement
 
 - **I-AM1 — migration is idempotent and structure-gated.** Loader test: migrate twice ==
-  once; a deliberately perturbed group is untouched. Fixture: the canonical LiveSchool
-  project loads clean.
+  once; a deliberately perturbed group is untouched. (No real-project fixture leg: the
+  Liveschool fixture was retired 2026-07-30 — pre-3D, so it cannot exercise this
+  migration. PROJECT_IO_MAP.md section 9 (Honest edges) E9 carries the resulting gap.)
 - **I-AM2 — RT on+ready makes the AO group an identity on color.** Gpu proof: RT scene,
   region probe of group input vs output — equal within epsilon.
 - **I-AM3 — baked-look pixels pass the AO group unchanged while lit neighbours darken.**
