@@ -131,47 +131,176 @@ fn real_main() -> Result<ExitCode, String> {
 /// Read-only dashboard over `status.json` (D14) — never touches run state, so
 /// it's safe alongside a live run. Ctrl-C exits; nothing to clean up.
 fn watch(run_dir: &std::path::Path) {
+    use std::io::Write;
     loop {
-        print!("\x1b[2J\x1b[H");
-        let name = run_dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-        match workflow_runtime::runner::holder_alive(run_dir) {
-            Some(pid) => println!("{name} — runner: alive (pid {pid})"),
-            None => println!("{name} — runner: exited"),
+        // One write per tick, cursor homed and each line erased as it's
+        // overwritten. Clearing the whole screen first is what made the
+        // dashboard flash once a second.
+        let mut out = String::from("\x1b[H");
+        for line in watch_frame(run_dir).lines() {
+            out.push_str(line);
+            out.push_str("\x1b[K\r\n");
         }
-        match workflow_runtime::status::read(run_dir) {
-            Some(st) => {
-                println!("{}: {}", st.state, st.detail);
-                if st.total_steps > 0 {
-                    println!("step {}/{} {} [{}]", st.step_index, st.total_steps, st.step, st.opcode);
-                }
-                if !st.model.is_empty() || st.max_attempts > 0 {
-                    println!("model {} — attempt {}/{}", st.model, st.attempt, st.max_attempts);
-                }
-                println!("tokens {}/{}", st.tokens_spent, st.token_budget);
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
-                let elapsed = now.saturating_sub(st.ts);
-                println!("{elapsed}s since last transition");
-                if !st.last_error.is_empty() {
-                    println!("LAST ERROR: {}", st.last_error);
-                }
-            }
-            None => println!("no status.json yet"),
-        }
-        if let Ok(text) = std::fs::read_to_string(run_dir.join("parked.jsonl")) {
-            for line in text.lines() {
-                if let Ok(p) = serde_json::from_str::<workflow_runtime::runner::ParkedItem>(line) {
-                    let reason: String = p.reason.chars().take(120).collect();
-                    println!("PARKED {}: {reason}", p.step);
-                }
-            }
-        }
-        println!();
-        if let Ok(summary) = workflow_runtime::cost::summarize(run_dir) {
-            print!("{summary}");
-        }
+        out.push_str("\x1b[J");
+        let mut stdout = std::io::stdout().lock();
+        let _ = stdout.write_all(out.as_bytes());
+        let _ = stdout.flush();
+        drop(stdout);
         std::thread::sleep(std::time::Duration::from_secs(1));
     }
+}
+
+const DIM: &str = "\x1b[2m";
+const BOLD: &str = "\x1b[1m";
+const RED: &str = "\x1b[31m";
+const GREEN: &str = "\x1b[32m";
+const YELLOW: &str = "\x1b[33m";
+const CYAN: &str = "\x1b[36m";
+const OFF: &str = "\x1b[0m";
+
+/// Colour is off when stdout isn't a terminal or `NO_COLOR` is set; the codes
+/// then collapse to empty strings so the frame stays plain text.
+fn colours_on() -> bool {
+    use std::io::IsTerminal;
+    std::env::var_os("NO_COLOR").is_none() && std::io::stdout().is_terminal()
+}
+
+/// `84120` → `84,120`. Token counts are the numbers Peter reads mid-run.
+fn commas(n: u64) -> String {
+    let s = n.to_string();
+    let mut out = String::with_capacity(s.len() + s.len() / 3);
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
+fn duration(secs: u64) -> String {
+    match secs {
+        s if s < 60 => format!("{s}s"),
+        s if s < 3600 => format!("{}m {:02}s", s / 60, s % 60),
+        s => format!("{}h {:02}m", s / 3600, (s % 3600) / 60),
+    }
+}
+
+fn bar(done: u64, total: u64, width: usize) -> String {
+    let filled = if total == 0 { 0 } else { (done.min(total) * width as u64 / total) as usize };
+    format!("{}{}", "█".repeat(filled), "░".repeat(width - filled))
+}
+
+/// One dashboard frame, built whole so `watch` can emit it in a single write.
+fn watch_frame(run_dir: &std::path::Path) -> String {
+    use std::fmt::Write;
+    let c = colours_on();
+    let p = |code: &'static str| if c { code } else { "" };
+    let (dim, bold, red, green, yellow, cyan, off) =
+        (p(DIM), p(BOLD), p(RED), p(GREEN), p(YELLOW), p(CYAN), p(OFF));
+    let label = |text: &str| format!("{dim}{text:<7}{off}");
+
+    let mut f = String::new();
+    let name = run_dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    match workflow_runtime::runner::holder_alive(run_dir) {
+        Some(pid) => _ = writeln!(f, "{bold}{name}{off}  {green}● running{off} {dim}pid {pid}{off}"),
+        None => _ = writeln!(f, "{bold}{name}{off}  {dim}○ runner exited{off}"),
+    }
+    _ = writeln!(f, "{dim}{}{off}", "─".repeat(64));
+
+    match workflow_runtime::status::read(run_dir) {
+        Some(st) => {
+            let state_colour = match st.state.as_str() {
+                "run-done" => green,
+                "retrying" | "waiting-on-model" | "gate" => yellow,
+                "transport-error" | "parked" | "escalated" | "blocked" => red,
+                _ => cyan,
+            };
+            if st.total_steps > 0 {
+                let steps = bar(st.step_index.saturating_sub(1) as u64, st.total_steps as u64, 12);
+                _ = writeln!(
+                    f,
+                    "{}{bold}{}{off} {dim}({}){off}  {dim}{}/{}{off} {dim}{steps}{off}",
+                    label("step"),
+                    st.step,
+                    st.opcode,
+                    st.step_index,
+                    st.total_steps
+                );
+            }
+            _ = writeln!(f, "{}{state_colour}{}{off} {}", label("state"), st.state, st.detail);
+            if !st.model.is_empty() || st.max_attempts > 0 {
+                let attempt = if st.attempt > 1 { yellow } else { dim };
+                _ = writeln!(
+                    f,
+                    "{}{}  {attempt}attempt {}/{}{off}",
+                    label("model"),
+                    st.model,
+                    st.attempt,
+                    st.max_attempts
+                );
+            }
+            let pct =
+                if st.token_budget == 0 { 0 } else { st.tokens_spent * 100 / st.token_budget };
+            let token_colour = if pct >= 90 {
+                red
+            } else if pct >= 70 {
+                yellow
+            } else {
+                green
+            };
+            _ = writeln!(
+                f,
+                "{}{token_colour}{}{off}{dim} / {}  {} {pct}%{off}",
+                label("tokens"),
+                commas(st.tokens_spent),
+                commas(st.token_budget),
+                bar(st.tokens_spent, st.token_budget, 16)
+            );
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let elapsed = now.saturating_sub(st.ts);
+            // A long silence is the symptom of a stalled transport, so it goes red.
+            let idle = if elapsed >= 300 {
+                red
+            } else if elapsed >= 120 {
+                yellow
+            } else {
+                dim
+            };
+            _ = writeln!(f, "{}{idle}{} since last transition{off}", label("idle"), duration(elapsed));
+            if !st.last_error.is_empty() {
+                _ = writeln!(f, "\n{red}{bold}LAST ERROR{off} {red}{}{off}", st.last_error);
+            }
+        }
+        None => _ = writeln!(f, "{dim}no status.json yet{off}"),
+    }
+    if let Ok(text) = std::fs::read_to_string(run_dir.join("parked.jsonl")) {
+        let mut first = true;
+        for line in text.lines() {
+            if let Ok(p) = serde_json::from_str::<workflow_runtime::runner::ParkedItem>(line) {
+                if first {
+                    f.push('\n');
+                    first = false;
+                }
+                let reason: String = p.reason.chars().take(120).collect();
+                _ = writeln!(f, "{red}PARKED{off} {bold}{}{off} {}", p.step, reason);
+            }
+        }
+    }
+    f.push('\n');
+    if let Ok(summary) = workflow_runtime::cost::summarize(run_dir) {
+        for line in summary.lines() {
+            if line.starts_with("step ") || line.starts_with("model ") {
+                _ = writeln!(f, "{dim}{line}{off}");
+            } else if let Some(total) = line.strip_prefix("TOTAL ") {
+                _ = writeln!(f, "{bold}TOTAL{off} {total}");
+            } else {
+                _ = writeln!(f, "{line}");
+            }
+        }
+    }
+    f
 }
