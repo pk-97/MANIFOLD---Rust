@@ -173,6 +173,20 @@ def main():
             print(f"[dry-run] would close beads matching trunk-health: {green_cmd}")
         return 0
 
+    # Hook-telemetry census — informational only, never files a bead or fails.
+    print(f"[trunk-health] running hook census...")
+    header = "\n=== hook census (7-day window) ===\n"
+    log_lines.append(header)
+    try:
+        census_cmd = ["python3", "scripts/hook_census.py", "--days", "7"]
+        _, census_out, _, _ = run_cmd(census_cmd, cwd=MAIN_CHECKOUT, timeout=120)
+        print(census_out)
+        log_lines.append(census_out)
+    except Exception as e:
+        msg = f"[trunk-health] hook census skipped: {e}\n"
+        print(msg)
+        log_lines.append(msg)
+
     # Write log
     with open(log_path, "a") as f:
         f.writelines(log_lines)
