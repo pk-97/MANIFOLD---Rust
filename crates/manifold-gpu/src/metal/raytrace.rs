@@ -605,7 +605,7 @@ struct GiMaterial {
 // also the disocclusion-ghost bound D-61 cares about — tighter than the
 // diffuse floor for exactly that reason, with the variance clamp
 // (`clamp_refl_history`) as the second guard.
-constant float RT_REFL_ACCUM_ALPHA_MIN = 0.04;
+constant float RT_REFL_ACCUM_ALPHA_MIN = 0.025;
 // RT-R2 (RD6): roughness at/above which reprojection is plain surface
 // reprojection (the GGX-perturbed ray ≈ the surface lobe there).
 // Range 0.3–0.7, untuned.

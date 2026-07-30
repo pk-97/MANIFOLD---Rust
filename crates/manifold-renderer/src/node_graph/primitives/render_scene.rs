@@ -228,7 +228,7 @@ const GI_SAMPLES_PER_PIXEL: u32 = 2;
 /// hide. Committed range 1–8: higher = calmer reflections, linearly more
 /// reflection-ray cost (they are the most expensive ray class, since a hit
 /// shades a full raster-parity surface).
-const REFL_SAMPLES_PER_PIXEL: u32 = 4;
+const REFL_SAMPLES_PER_PIXEL: u32 = 8;
 /// RAYTRACING_DESIGN.md section 8.2 D22: reduced render resolution `temporal_upscale`
 /// draws color/depth/velocity at, relative to the scene's native (canvas)
 /// resolution — `render_dim = native_dim * NUM / DEN` (1/1.5 linear, D22
