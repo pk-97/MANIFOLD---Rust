@@ -1268,13 +1268,13 @@ fn assembles_azalea_into_two_object_render_scene_graph() {
 
     assert_eq!(report.material_count, 2, "azalea has 2 materials with geometry");
     assert_eq!(report.object_count, 2);
-    // BUG-w5wv: both azalea materials actually declare `KHR_materials_unlit`
-    // with a `baseColorTexture` — real-world unlit-textured assets, not a
-    // synthetic case. The importer routes them to `node.unlit_material`
-    // instead of `node.pbr_material`, but `base_color_texture` still wires
-    // to `node.scene_object`'s `base_color_map` port exactly like a non-unlit
-    // material's does (that wiring is unconditional on material kind — see
-    // `object_group.rs`), so `textures_wired` stays 2.
+    // BUG-pt6g (supersedes BUG-w5wv): both azalea materials actually
+    // declare `KHR_materials_unlit` with a `baseColorTexture` — real-world
+    // unlit-textured assets, not a synthetic case — but the importer no
+    // longer routes unlit-flagged materials to `node.unlit_material`; both
+    // now build `node.pbr_material` (default `baked_look = false`, lit).
+    // `textures_wired` stays 2 either way: azalea's materials only declare
+    // `baseColorTexture`, no normal/mr/occlusion/emissive maps to wire.
     assert_eq!(report.textures_wired, 2, "both azalea textures still wire to base_color_map");
     assert_eq!(report.default_material_vertex_count, 0);
     assert!(report.camera_synthesized);
@@ -1404,21 +1404,20 @@ fn assembles_azalea_into_two_object_render_scene_graph() {
     // shared Ambient fill still starts at 0 — softbox lighting comes
     // from the envmap + sun, not a flat fill floor.
     assert_eq!(env_intensity.default_value, 1.0, "environment bakes at softbox intensity 1.0 by default (D7)");
-    // BUG-w5wv: both azalea materials declare `KHR_materials_unlit`, so
-    // both route to `node.unlit_material` (no `ambient` param — `fs_unlit`
-    // has no lighting to fill). With zero materials binding to it, the
-    // shared "Ambient" card is correctly absent rather than orphaned (a
-    // param with nothing bound to it fails `check_card_lints`) — see
-    // `unlit_material_routes_to_unlit_material_card` for the routing gate
-    // itself and `scene.rs`'s conditional push of this card param.
+    // BUG-pt6g (supersedes BUG-w5wv): both azalea materials declare
+    // `KHR_materials_unlit`, but both now route to `node.pbr_material`
+    // (default lit) — every material contributes a `scene_ambient`
+    // binding, so the shared "Ambient" card IS pushed (see
+    // `unlit_material_imports_lit_by_default` for the routing gate itself
+    // and `scene.rs`'s conditional push of this card param, which is now
+    // satisfied).
     assert!(
-        meta.params.iter().all(|p| p.id != "scene_ambient"),
-        "azalea's materials are all unlit — no material binds ambient, so \
-         the shared Ambient card must not be pushed"
+        meta.params.iter().any(|p| p.id == "scene_ambient"),
+        "azalea's materials are lit by default now — the shared Ambient card must be pushed"
     );
     assert!(
-        meta.bindings.iter().all(|b| b.id != "scene_ambient"),
-        "no unlit material contributes a scene_ambient binding"
+        meta.bindings.iter().any(|b| b.id == "scene_ambient"),
+        "every lit-by-default material contributes a scene_ambient binding"
     );
     // The envmap intensity slider is the Environment master; it fans out
     // to envmap.intensity AND hdri_gain.gain (G-P6).
@@ -2945,18 +2944,18 @@ fn imports_all_map_kinds_with_correct_color_spaces() {
     );
 }
 
-/// BUG-w5wv: a material with `KHR_materials_unlit` set must construct a
-/// `node.unlit_material` card, never `node.pbr_material` — the extension's
-/// own doctrine is "ignore every PBR term except baseColor", so this
-/// checks the routing decision itself (the emission-only stopgap this
-/// replaces still built `node.pbr_material`, which carries a residual
-/// specular/IBL sheen `node.unlit_material`'s `fs_unlit` doesn't have).
-/// `full_material` also sets normal/mr/occlusion/emissive textures — an
-/// unlit material must wire none of those (unlit ignores every PBR map
-/// family), but its `base_color_texture` must still wire `base_color_map`,
-/// the same shared port every material kind samples through.
+/// BUG-pt6g (Peter's ruling, supersedes BUG-w5wv): a material with
+/// `KHR_materials_unlit` set no longer routes to `node.unlit_material` —
+/// MANIFOLD is a performance instrument, the performer lights the scene,
+/// so import always builds `node.pbr_material` and leaves its `baked_look`
+/// param at its default (false = lit). `full_material` sets normal/mr/
+/// occlusion/emissive textures too — a photoscan's unlit-flagged material
+/// now wires ALL of them, exactly like a non-unlit material, since it's a
+/// genuine `node.pbr_material` now (the map-family wiring gate that used
+/// to skip them for `m.unlit` is gone — BUG-w5wv's `!m.unlit` check in
+/// `object_group.rs`).
 #[test]
-fn unlit_material_routes_to_unlit_material_card() {
+fn unlit_material_imports_lit_by_default() {
     let mut m = full_material(0, "Glow", 500);
     m.unlit = true;
     m.base_color_factor = [0.9, 0.3, 0.1, 1.0];
@@ -2975,31 +2974,42 @@ fn unlit_material_routes_to_unlit_material_card() {
     };
     let path = std::path::Path::new("/tmp/synthetic_unlit.glb");
     let (def, report) = build_import_graph(&summary, path).expect("build graph");
-    assert_eq!(
-        report.textures_wired, 1,
-        "base_color_texture wiring is unconditional on material kind"
-    );
+    // `textures_wired` counts ONLY the base-colour map (the other PBR
+    // families are tracked via node presence, not this counter — see its
+    // own doc comment in `object_group.rs`: "the base-colour map above is
+    // deliberately NOT a family... it alone increments `textures_wired`").
+    assert_eq!(report.textures_wired, 1, "base_color_texture wiring is unconditional on material kind");
 
     let flat = manifold_core::flatten::flatten_groups(&def).expect("flatten");
 
+    assert!(
+        !flat.nodes.iter().any(|n| n.type_id == "node.unlit_material"),
+        "BUG-pt6g: the importer never routes to node.unlit_material anymore"
+    );
     let mat = flat
         .nodes
         .iter()
-        .find(|n| n.type_id == "node.unlit_material")
-        .expect("unlit material must construct a node.unlit_material card");
+        .find(|n| n.type_id == "node.pbr_material")
+        .expect("an unlit-flagged material must still construct node.pbr_material");
     assert_eq!(mat.params.get("color_r"), Some(&float(0.9)));
     assert_eq!(mat.params.get("color_g"), Some(&float(0.3)));
     assert_eq!(mat.params.get("color_b"), Some(&float(0.1)));
     assert_eq!(mat.params.get("color_a"), Some(&float(1.0)));
-    assert!(
-        !flat.nodes.iter().any(|n| n.type_id == "node.pbr_material"),
-        "an unlit material must never also construct a node.pbr_material card"
+    assert_eq!(
+        mat.params.get("baked_look"),
+        Some(&bool_val(false)),
+        "the importer's own unlit hint is ignored for routing — baked_look stays at its \
+         default (lit) on import, the performer opts in per-material"
     );
 
+    // BUG-pt6g: the OTHER map families (normal/mr/occlusion/emissive), not
+    // just base_color, now get wired for a formerly-unlit material too —
+    // this is the gate `unlit_material_routes_to_unlit_material_card`
+    // (the test this one replaces) used to assert the OPPOSITE of.
     for prefix in ["normal_tex_", "mr_tex_", "occlusion_tex_", "emissive_tex_"] {
         assert!(
-            !flat.nodes.iter().any(|n| n.node_id.starts_with(prefix)),
-            "unlit material must not wire a `{prefix}*` PBR-extension map source"
+            flat.nodes.iter().any(|n| n.node_id.starts_with(prefix)),
+            "lit-by-default material must wire a `{prefix}*` PBR-extension map source"
         );
     }
 
@@ -3010,9 +3020,10 @@ fn unlit_material_routes_to_unlit_material_card() {
         .expect("scene_object bind node");
     assert!(
         flat.wires.iter().any(|w| w.to_node == scene_object.id && w.to_port == "base_color_map"),
-        "unlit material's base_color_texture must still wire scene_object's base_color_map"
+        "base_color_texture must still wire scene_object's base_color_map"
     );
 }
+
 
 /// D5 ORM-packing: when `occlusion_texture` and `mr_texture` share the
 /// same glTF texture index (the common "one packed ORM image" case),

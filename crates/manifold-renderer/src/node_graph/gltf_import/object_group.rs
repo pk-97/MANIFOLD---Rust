@@ -564,189 +564,156 @@ pub(super) fn build_object_group(
             0 // Opaque
         };
 
+        // BUG-pt6g (Peter's ruling): MANIFOLD is a performance instrument —
+        // the performer lights the scene, so `KHR_materials_unlit` no
+        // longer routes to a dedicated `node.unlit_material` node here.
+        // Every material, unlit-flagged or not, always builds
+        // `node.pbr_material` below; its own `baked_look` param (default
+        // false) is what can opt a material OUT of scene lighting, and it
+        // stays at that default on import/re-import — the glTF's own
+        // unlit hint is surfaced to the performer (report line just below)
+        // but deliberately NOT read for routing anymore (BUG-w5wv's prior
+        // behaviour). This was PBR's genuine metallic/roughness data all
+        // along (every glTF field is read genuinely regardless of the
+        // unlit flag — see gltf_load.rs) so no extra fallback is needed:
+        // an unlit-flagged photoscan whose material only declares
+        // `baseColorTexture` gets the glTF spec's own unset-field defaults
+        // (metallicFactor 0.0 unless declared, roughnessFactor 1.0 unless
+        // declared — non-metal, fully rough).
         if m.unlit {
-            // BUG-w5wv: KHR_materials_unlit — the extension's own doctrine
-            // is "ignore every PBR term except baseColor". Route to
-            // `node.unlit_material` (fs_unlit has no lighting math at all,
-            // unlike the emission-only-on-`node.pbr_material` stopgap this
-            // replaces, which still carried a residual specular/IBL sheen
-            // from `fs_pbr`). `color_r/g/b/a` take the material's genuine
-            // base_color_factor/alpha; `base_color_texture` stays wired to
-            // `node.scene_object`'s `base_color_map` port exactly as a
-            // non-unlit material's does (below, unconditional on material
-            // kind) — `resolve_albedo` in `render_3d_mesh.wgsl` samples
-            // that port the SAME way for every material kind, so a
-            // textured unlit material (e.g. the azalea CC0 fixture) keeps
-            // its texture. `emission_r/g/b/emission_intensity` reuse the
-            // SAME gated logic `node.pbr_material` used, so a material that
-            // separately declares `KHR_materials_emissive_strength`
-            // alongside unlit still gets it.
-            //
-            // Known gap (reported, not silently dropped): `node.
-            // unlit_material` has no `uv_*`/`{prefix}wrap_u` param surface
-            // at all (`unlit_material.rs`'s ParamDef list is color/emission/
-            // alpha only) — an unlit material whose baseColorTexture also
-            // carries `KHR_texture_transform`, or a non-default glTF
-            // sampler, loses that here. Neither UnlitTest.glb nor azalea
-            // exercises this (both identity UV, azalea's sampler is the
-            // spec default MANIFOLD already treats as identical to
-            // unwired) — flagged for whoever hits a fixture that does.
-            let mut mat_node =
-                plain_node(mat_id, &mat_node_id, "node.unlit_material", &mat_node_id);
-            mat_node.title = m.name.clone();
-            mat_node.params.insert("color_r".to_string(), float(m.base_color_factor[0]));
-            mat_node.params.insert("color_g".to_string(), float(m.base_color_factor[1]));
-            mat_node.params.insert("color_b".to_string(), float(m.base_color_factor[2]));
-            mat_node.params.insert("color_a".to_string(), float(effective_alpha));
-            let emissive_lit = m.emissive.iter().any(|&c| c > 0.0);
-            mat_node.params.insert("emission_r".to_string(), float(m.emissive[0]));
-            mat_node.params.insert("emission_g".to_string(), float(m.emissive[1]));
-            mat_node.params.insert("emission_b".to_string(), float(m.emissive[2]));
-            mat_node.params.insert(
-                "emission_intensity".to_string(),
-                float(if emissive_lit { m.emissive_strength } else { 0.0 }),
-            );
-            mat_node.params.insert("alpha_mode".to_string(), enum_val(alpha_mode_enum));
-            mat_node.params.insert("alpha_cutoff".to_string(), float(m.alpha_cutoff));
-
-            let mat_node_params = mat_node.params.clone();
-            group_nodes.push(mat_node);
-            stamp_scene_node_exposures_into(
-                &mut card_params,
-                &mut card_bindings,
-                mat_id,
-                &NodeId::new(&mat_node_id),
-                "node.unlit_material",
-                &format!("{group_name} — Material"),
-                &metadata_for_node_type("node.unlit_material"),
-                &mat_node_params,
-            );
-            // No "Ambient" card binding — `node.unlit_material` has no
-            // `ambient` param (fs_unlit has no lighting to fill).
-        } else {
-            let mut mat_node = plain_node(mat_id, &mat_node_id, "node.pbr_material", &mat_node_id);
-            // Author the glTF material's own name as the node's display title
-            // when present, so the graph editor reads as "Leaf" / "Bark" rather
-            // than the anonymous "mat_0" / "mat_1" handle.
-            mat_node.title = m.name.clone();
-            // P3-D T2: the plain glTF-field -> param inserts are a catalog in
-            // materials.rs, walked once by write_material_params. The five
-            // COMPUTED params below are NOT rows
-            // (they read a local, clamp, gate, or select an enum), so they stay
-            // explicit adjacent to the walk.
-            write_material_params(&mut mat_node, m);
-            // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2b: `effective_alpha` is now
-            // exactly `base_color.a` (see its definition above for why the old
-            // transmission-darkening formula was removed).
-            mat_node.params.insert("color_a".to_string(), float(effective_alpha));
-            mat_node
-                .params
-                .insert("roughness".to_string(), float(m.roughness.max(0.01)));
-            // 0.0 ambient: no flat fill floor, so the shadow side of a matte model
-            // goes to true black under the default single-key rig — the hard,
-            // dramatic "lit only by scene lights" look. The shared Ambient card
-            // (below) raises it across every material to restore fill.
-            mat_node.params.insert("ambient".to_string(), float(0.0));
-            // `emission_intensity` is the existing wired multiplier on
-            // `node.pbr_material` — `KHR_materials_emissive_strength` folds into
-            // it directly (D5). No extension present → factor 1.0; gated so a
-            // non-emissive material stays dark (matches the pre-F-P4 "any factor
-            // channel > 0" gate).
-            let emissive_lit = m.emissive.iter().any(|&c| c > 0.0);
-            mat_node.params.insert(
-                "emission_intensity".to_string(),
-                float(if emissive_lit { m.emissive_strength } else { 0.0 }),
-            );
-            mat_node.params.insert("alpha_mode".to_string(), enum_val(alpha_mode_enum));
-            // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3/E4/E5/E6 (D1 revised):
-            // sheen, iridescence, anisotropy, and now (E6) clearcoat/specular/
-            // transmission/volume-thickness textures are all sampled (see the
-            // wiring below) — no report-only warnings remain for any family's
-            // texture in this doc.
-            // Per-map KHR_texture_transform affines (G-P4) — one 6-param set
-            // per map family, identity when the extension is absent.
-            for (prefix, xf) in [
-                ("uv_", &m.base_color_uv_transform),
-                ("nrm_uv_", &m.normal_uv_transform),
-                ("mr_uv_", &m.mr_uv_transform),
-                ("occ_uv_", &m.occlusion_uv_transform),
-                ("em_uv_", &m.emissive_uv_transform),
-            ] {
-                for (part, value) in UV_TRANSFORM_PARTS.iter().zip(xf.iter()) {
-                    mat_node
-                        .params
-                        .insert(format!("{prefix}{part}"), float(*value));
-                }
-            }
-            // GLB_XFAIL_BURNDOWN_DESIGN.md D3 (BUG-164): per-map-family sampler
-            // settings → `node.pbr_material`'s `{prefix}wrap_u/wrap_v/mag_filter/
-            // min_filter` enum params. Index order matches that primitive's
-            // `WRAP_MODES`/`FILTER_MODES` arrays (0 = Repeat / Linear, the
-            // default both sides agree on).
-            let wrap_idx = |w: gltf_load::GltfWrapMode| -> u32 {
-                match w {
-                    gltf_load::GltfWrapMode::Repeat => 0,
-                    gltf_load::GltfWrapMode::ClampToEdge => 1,
-                    gltf_load::GltfWrapMode::MirrorRepeat => 2,
-                }
-            };
-            let filter_idx = |f: gltf_load::GltfFilterMode| -> u32 {
-                match f {
-                    gltf_load::GltfFilterMode::Linear => 0,
-                    gltf_load::GltfFilterMode::Nearest => 1,
-                }
-            };
-            for (prefix, s) in [
-                ("", &m.base_color_sampler),
-                ("nrm_", &m.normal_sampler),
-                ("mr_", &m.mr_sampler),
-                ("occ_", &m.occlusion_sampler),
-                ("em_", &m.emissive_sampler),
-            ] {
-                mat_node
-                    .params
-                    .insert(format!("{prefix}wrap_u"), enum_val(wrap_idx(s.wrap_u)));
-                mat_node
-                    .params
-                    .insert(format!("{prefix}wrap_v"), enum_val(wrap_idx(s.wrap_v)));
-                mat_node.params.insert(
-                    format!("{prefix}mag_filter"),
-                    enum_val(filter_idx(s.mag_filter)),
-                );
-                mat_node.params.insert(
-                    format!("{prefix}min_filter"),
-                    enum_val(filter_idx(s.min_filter)),
-                );
-            }
-            let mat_node_params = mat_node.params.clone();
-            group_nodes.push(mat_node);
-            // P1 scene-panel exposure convergence: expose ALL params of scene-
-            // vocabulary atoms. The old metallic/roughness curation above is
-            // replaced by the primitive's own ParamDef manifest.
-            stamp_scene_node_exposures_into(
-                &mut card_params,
-                &mut card_bindings,
-                mat_id,
-                &NodeId::new(&mat_node_id),
-                "node.pbr_material",
-                &format!("{group_name} — Material"),
-                &metadata_for_node_type("node.pbr_material"),
-                &mat_node_params,
-            );
-
-            // No per-object Metallic/Roughness card sliders (Peter, 2026-07-15:
-            // "no need to modify them and they explode the card" — with one pair
-            // per object, a multi-object import's card grew unusably long). The
-            // material node above still carries the glTF's own metallic/
-            // roughness values; only the card exposure is gone.
-            // One shared "Ambient" fill knob fans out to every material's ambient
-            // (a single source_id across all mat_k bindings — the preset_runtime
-            // fan-out). Default 0.0 = the lights-only look; raise it for flat fill.
-            // The card param itself is pushed once after the loop.
-            card_bindings.push(card_binding(
-                "scene_ambient", "Ambient", 0.0, &mat_node_id, "ambient", 1.0,
+            report_lines.push(format!(
+                "{group_name}: declares KHR_materials_unlit (a pre-baked/flat-shaded look) — \
+                 imported lit by default per BUG-pt6g; flip its \"Baked Look\" card toggle on \
+                 if you want the flat, unshaded look the source asset originally specified"
             ));
         }
+        let mut mat_node = plain_node(mat_id, &mat_node_id, "node.pbr_material", &mat_node_id);
+        // Author the glTF material's own name as the node's display title
+        // when present, so the graph editor reads as "Leaf" / "Bark" rather
+        // than the anonymous "mat_0" / "mat_1" handle.
+        mat_node.title = m.name.clone();
+        // P3-D T2: the plain glTF-field -> param inserts are a catalog in
+        // materials.rs, walked once by write_material_params. The five
+        // COMPUTED params below are NOT rows
+        // (they read a local, clamp, gate, or select an enum), so they stay
+        // explicit adjacent to the walk.
+        write_material_params(&mut mat_node, m);
+        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2b: `effective_alpha` is now
+        // exactly `base_color.a` (see its definition above for why the old
+        // transmission-darkening formula was removed).
+        mat_node.params.insert("color_a".to_string(), float(effective_alpha));
+        mat_node
+            .params
+            .insert("roughness".to_string(), float(m.roughness.max(0.01)));
+        // 0.0 ambient: no flat fill floor, so the shadow side of a matte model
+        // goes to true black under the default single-key rig — the hard,
+        // dramatic "lit only by scene lights" look. The shared Ambient card
+        // (below) raises it across every material to restore fill.
+        mat_node.params.insert("ambient".to_string(), float(0.0));
+        // `emission_intensity` is the existing wired multiplier on
+        // `node.pbr_material` — `KHR_materials_emissive_strength` folds into
+        // it directly (D5). No extension present → factor 1.0; gated so a
+        // non-emissive material stays dark (matches the pre-F-P4 "any factor
+        // channel > 0" gate).
+        let emissive_lit = m.emissive.iter().any(|&c| c > 0.0);
+        mat_node.params.insert(
+            "emission_intensity".to_string(),
+            float(if emissive_lit { m.emissive_strength } else { 0.0 }),
+        );
+        mat_node.params.insert("alpha_mode".to_string(), enum_val(alpha_mode_enum));
+        // BUG-pt6g: default OFF (lit) on every import/re-import, regardless
+        // of the source glTF's own `KHR_materials_unlit` declaration — the
+        // performer opts in per-material, the importer never does it for
+        // them.
+        mat_node.params.insert("baked_look".to_string(), bool_val(false));
+        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3/E4/E5/E6 (D1 revised):
+        // sheen, iridescence, anisotropy, and now (E6) clearcoat/specular/
+        // transmission/volume-thickness textures are all sampled (see the
+        // wiring below) — no report-only warnings remain for any family's
+        // texture in this doc.
+        // Per-map KHR_texture_transform affines (G-P4) — one 6-param set
+        // per map family, identity when the extension is absent.
+        for (prefix, xf) in [
+            ("uv_", &m.base_color_uv_transform),
+            ("nrm_uv_", &m.normal_uv_transform),
+            ("mr_uv_", &m.mr_uv_transform),
+            ("occ_uv_", &m.occlusion_uv_transform),
+            ("em_uv_", &m.emissive_uv_transform),
+        ] {
+            for (part, value) in UV_TRANSFORM_PARTS.iter().zip(xf.iter()) {
+                mat_node
+                    .params
+                    .insert(format!("{prefix}{part}"), float(*value));
+            }
+        }
+        // GLB_XFAIL_BURNDOWN_DESIGN.md D3 (BUG-164): per-map-family sampler
+        // settings → `node.pbr_material`'s `{prefix}wrap_u/wrap_v/mag_filter/
+        // min_filter` enum params. Index order matches that primitive's
+        // `WRAP_MODES`/`FILTER_MODES` arrays (0 = Repeat / Linear, the
+        // default both sides agree on).
+        let wrap_idx = |w: gltf_load::GltfWrapMode| -> u32 {
+            match w {
+                gltf_load::GltfWrapMode::Repeat => 0,
+                gltf_load::GltfWrapMode::ClampToEdge => 1,
+                gltf_load::GltfWrapMode::MirrorRepeat => 2,
+            }
+        };
+        let filter_idx = |f: gltf_load::GltfFilterMode| -> u32 {
+            match f {
+                gltf_load::GltfFilterMode::Linear => 0,
+                gltf_load::GltfFilterMode::Nearest => 1,
+            }
+        };
+        for (prefix, s) in [
+            ("", &m.base_color_sampler),
+            ("nrm_", &m.normal_sampler),
+            ("mr_", &m.mr_sampler),
+            ("occ_", &m.occlusion_sampler),
+            ("em_", &m.emissive_sampler),
+        ] {
+            mat_node
+                .params
+                .insert(format!("{prefix}wrap_u"), enum_val(wrap_idx(s.wrap_u)));
+            mat_node
+                .params
+                .insert(format!("{prefix}wrap_v"), enum_val(wrap_idx(s.wrap_v)));
+            mat_node.params.insert(
+                format!("{prefix}mag_filter"),
+                enum_val(filter_idx(s.mag_filter)),
+            );
+            mat_node.params.insert(
+                format!("{prefix}min_filter"),
+                enum_val(filter_idx(s.min_filter)),
+            );
+        }
+        let mat_node_params = mat_node.params.clone();
+        group_nodes.push(mat_node);
+        // P1 scene-panel exposure convergence: expose ALL params of scene-
+        // vocabulary atoms. The old metallic/roughness curation above is
+        // replaced by the primitive's own ParamDef manifest.
+        stamp_scene_node_exposures_into(
+            &mut card_params,
+            &mut card_bindings,
+            mat_id,
+            &NodeId::new(&mat_node_id),
+            "node.pbr_material",
+            &format!("{group_name} — Material"),
+            &metadata_for_node_type("node.pbr_material"),
+            &mat_node_params,
+        );
+
+        // No per-object Metallic/Roughness card sliders (Peter, 2026-07-15:
+        // "no need to modify them and they explode the card" — with one pair
+        // per object, a multi-object import's card grew unusably long). The
+        // material node above still carries the glTF's own metallic/
+        // roughness values; only the card exposure is gone.
+        // One shared "Ambient" fill knob fans out to every material's ambient
+        // (a single source_id across all mat_k bindings — the preset_runtime
+        // fan-out). Default 0.0 = the lights-only look; raise it for flat fill.
+        // The card param itself is pushed once after the loop.
+        card_bindings.push(card_binding(
+            "scene_ambient", "Ambient", 0.0, &mat_node_id, "ambient", 1.0,
+        ));
 
         // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D1/D3/P3: the group's outward
         // interface is a single `object: Object` port. Internally, the mesh
@@ -991,27 +958,27 @@ pub(super) fn build_object_group(
         // NOT a family (it alone increments `textures_wired` and pre-dates
         // this cache).
         //
-        // BUG-w5wv: skipped entirely for an unlit material — every one of
-        // these families is a PBR/PBR-extension term, and
-        // `KHR_materials_unlit`'s own doctrine is "ignore every PBR term
-        // except baseColor" (wired unconditionally above). `fs_unlit`
-        // doesn't sample any of these maps, so wiring them would just be
-        // dead nodes in the graph.
+        // BUG-pt6g (supersedes BUG-w5wv): every material always builds
+        // `node.pbr_material` now (see the routing comment above), so its
+        // full PBR/PBR-extension map surface always gets wired too —
+        // `m.unlit` no longer gates this. A `baked_look`-true material's
+        // `fs_unlit` shader won't sample these, but the wires stay
+        // harmless dead ends, same as any other PBR field that shader
+        // doesn't read; flipping `baked_look` back to false must not
+        // require a re-import to get the maps back.
         let mut map_tex_cache: std::collections::HashMap<(u32, u32, u32), (u32, String)> =
             std::collections::HashMap::new();
-        if !m.unlit {
-            let mut object_assembly = ObjectAssembly {
-                k,
-                path_str,
-                fresh_id: &mut *fresh_id,
-                group_nodes: &mut group_nodes,
-                group_wires: &mut group_wires,
-                string_bindings: &mut string_bindings,
-                tex_cache: &mut map_tex_cache,
-                scene_object_id,
-            };
-            wire_map_families(m, &mut object_assembly);
-        }
+        let mut object_assembly = ObjectAssembly {
+            k,
+            path_str,
+            fresh_id: &mut *fresh_id,
+            group_nodes: &mut group_nodes,
+            group_wires: &mut group_wires,
+            string_bindings: &mut string_bindings,
+            tex_cache: &mut map_tex_cache,
+            scene_object_id,
+        };
+        wire_map_families(m, &mut object_assembly);
 
         // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D1/D3: the `node.scene_object`
         // node binding this object's mesh/transform/material/maps/instances
