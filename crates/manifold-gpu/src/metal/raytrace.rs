@@ -1656,6 +1656,36 @@ kernel void atrous_filter(
     float refl_luma_sigma = mix(ATROUS_REFL_LUMA_SIGMA_SHINY, ATROUS_REFL_LUMA_SIGMA_ROUGH,
                                 clamp(center_rough / ATROUS_REFL_SIGMA_ROUGHNESS_REF, 0.0, 1.0));
     float center_refl_luma = luma(src_refl.read(tid).rgb);
+    // Variance-guided widening. The roughness lerp above deliberately
+    // narrows the luma stop on a shiny surface to keep a mirror crisp — but
+    // that also disables filtering exactly where the sampled reflection is
+    // noisiest, and no ray budget fixes a filter that has been told to stand
+    // down. So measure the local spread of the reflection signal at THIS
+    // pass's dilation and add it to the stop: a converged texel measures
+    // ~0 spread and keeps its crisp narrow sigma, a boiling one widens and
+    // gets averaged. This is the standard variance-guided edge stop, using a
+    // spatial estimate because the specular channel has no moments texture
+    // (the diffuse one does; adding a second would cost a full-res pair).
+    // Committed range 1-4: higher = calmer, more risk of smearing a true
+    // mirror's detail into its surroundings.
+    const float ATROUS_REFL_VARIANCE_GAIN = 2.0;
+    {
+        float m1 = center_refl_luma;
+        float m2 = center_refl_luma * center_refl_luma;
+        const int2 var_offsets[8] = {
+            int2(1, 0), int2(-1, 0), int2(0, 1), int2(0, -1),
+            int2(1, 1), int2(1, -1), int2(-1, 1), int2(-1, -1)
+        };
+        for (uint i = 0u; i < 8u; ++i) {
+            int2 q = clamp(int2(tid) + var_offsets[i] * int(p.step), int2(0), int2(p.size) - 1);
+            float ql = luma(src_refl.read(uint2(q)).rgb);
+            m1 += ql;
+            m2 += ql * ql;
+        }
+        m1 /= 9.0;
+        m2 /= 9.0;
+        refl_luma_sigma += ATROUS_REFL_VARIANCE_GAIN * sqrt(max(m2 - m1 * m1, 0.0));
+    }
     float wsum_refl = 1.0; // center tap weight 1, same convention as wsum
     // Full 3x3 neighborhood (8 taps, diagonals included) rather than a
     // 4-tap cross: with only `ATROUS_ITERATIONS`=3 total passes budgeted
