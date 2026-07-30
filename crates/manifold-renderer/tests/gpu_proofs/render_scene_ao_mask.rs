@@ -478,3 +478,409 @@ fn unwired_ao_mask_stays_inert_color_output_matches_within_epsilon() {
         );
     }
 }
+
+// ─── I-AM2 / I-AM3: group-level proofs (RAYTRACING_DESIGN.md section 12.3) ─
+//
+// These prove the CONSUMER side of the handoff: the importer's "Ambient
+// Occlusion" node group (`gltf_import/scene.rs:628-694`) actually reads
+// `ao_mask` correctly, not just that `render_scene` emits the right values
+// (the earlier tests in this file already cover that half).
+//
+// Built as the FLATTENED atom equivalent of the group rather than an
+// authored `node.group` — same atoms, same wires, same params, just without
+// the group wrapper (the brief's own suggested simplification; groups
+// flatten to this exact shape at load per `docs/NODE_GROUPS_DESIGN.md`, so
+// this is not a shortcut on the proof, only on how the JSON is authored):
+// `ssao_gtao -> bilateral_blur(H) -> bilateral_blur(V) -> node.mix(Multiply)
+// -> node.masked_mix`. Wires mirror `gltf_import/scene.rs` exactly: `camera`
+// feeds `ssao`/`bilat_h`/`bilat_v` DIRECTLY from the camera node (not through
+// `render_scene`), `depth` and `color` come from `render_scene`, `ao_mask`
+// feeds `masked_mix.mask`, and `masked_mix.a` (untouched passthrough) is
+// `render_scene.color` again — `masked_mix(a=color, b=ssao_mix_out, mask)`
+// selects `a` at mask=0, `b` at mask=1 (confirmed against `masked_mix.rs`'s
+// own `mask=0 -> a` / `mask=1 -> b` gpu_tests).
+//
+// Fixture: a ground `node.grid_mesh` (XZ plane, native `+Y` normal, matches
+// `rt_p3_emissive_gi.rs`'s ground) plus two `node.cube_mesh` objects sitting
+// ON the ground (`pos_y = size/2`, cube spans `+-size/2` per
+// `generate_cube_mesh_body.wgsl`) at `x = -CUBE_OFFSET` (lit) and
+// `x = +CUBE_OFFSET` (baked-look) — real geometric contact corners where
+// `ssao_gtao` computes non-trivial occlusion, so the baked-look leg proves
+// masking actually suppressed a REAL AO term, not a zero-magnitude one.
+// `ssao_gtao`/`bilateral_blur` read screen-space depth and are unaware of
+// per-object materials, so the ground's own material doesn't matter to
+// which pixels show geometric occlusion — only `masked_mix`'s per-pixel
+// `ao_mask` decides whether that occlusion reaches the final color.
+//
+// "Group input"/"group output" are read directly via `dump_textures_all`
+// (no `node.invert` dead-end sink needed here, unlike the lazy `ao_mask`
+// proofs above — `render_scene.color` is never lazy, and `masked_mix.out` is
+// wired to `system.final_output`, so both are live plan outputs already).
+
+const CUBE_SIZE: f32 = 1.4;
+const CUBE_OFFSET: f32 = 2.0;
+const AO_ORBIT: f32 = 0.7;
+const AO_TILT: f32 = 0.95;
+const AO_DISTANCE: f32 = 10.0;
+const AO_FOV_Y: f32 = 0.8;
+const AO_NEAR: f32 = 0.05;
+const AO_FAR: f32 = 200.0;
+const AO_RADIUS: f32 = 1.0;
+
+fn ao_group_scene_json(rt_enabled: bool) -> String {
+    let rt_param = if rt_enabled {
+        r#","rt_enabled":{"type":"Bool","value":true}"#
+    } else {
+        ""
+    };
+    format!(
+        r#"{{"version":2,"name":"RenderSceneAoGroupProof","nodes":[
+        {{"id":0,"typeId":"system.generator_input","nodeId":"input"}},
+        {{"id":1,"typeId":"node.grid_mesh","nodeId":"ground_grid","params":{{
+            "max_capacity":{{"type":"Int","value":8192}},
+            "resolution_x":{{"type":"Int","value":20}},
+            "resolution_y":{{"type":"Int","value":20}},
+            "size_x":{{"type":"Float","value":8.0}},
+            "size_y":{{"type":"Float","value":8.0}}}}}},
+        {{"id":2,"typeId":"node.make_triangles","nodeId":"ground_tris","params":{{
+            "src_cols":{{"type":"Int","value":20}},
+            "src_rows":{{"type":"Int","value":20}}}}}},
+        {{"id":3,"typeId":"node.cube_mesh","nodeId":"cube_lit","params":{{
+            "size":{{"type":"Float","value":{CUBE_SIZE}}}}}}},
+        {{"id":4,"typeId":"node.cube_mesh","nodeId":"cube_baked","params":{{
+            "size":{{"type":"Float","value":{CUBE_SIZE}}}}}}},
+        {{"id":5,"typeId":"node.transform_3d","nodeId":"xf_lit","params":{{
+            "pos_x":{{"type":"Float","value":{neg_offset}}},
+            "pos_y":{{"type":"Float","value":{half_size}}}}}}},
+        {{"id":6,"typeId":"node.transform_3d","nodeId":"xf_baked","params":{{
+            "pos_x":{{"type":"Float","value":{CUBE_OFFSET}}},
+            "pos_y":{{"type":"Float","value":{half_size}}}}}}},
+        {{"id":7,"typeId":"node.orbit_camera","nodeId":"cam","params":{{
+            "orbit":{{"type":"Float","value":{AO_ORBIT}}},
+            "tilt":{{"type":"Float","value":{AO_TILT}}},
+            "distance":{{"type":"Float","value":{AO_DISTANCE}}},
+            "fov_y":{{"type":"Float","value":{AO_FOV_Y}}},
+            "near":{{"type":"Float","value":{AO_NEAR}}},
+            "far":{{"type":"Float","value":{AO_FAR}}}}}}},
+        {{"id":8,"typeId":"node.bake_environment","nodeId":"env","params":{{
+            "width":{{"type":"Int","value":512}},
+            "height":{{"type":"Int","value":256}},
+            "intensity":{{"type":"Float","value":1.0}}}}}},
+        {{"id":9,"typeId":"node.pbr_material","nodeId":"mat_ground","params":{{
+            "color_r":{{"type":"Float","value":0.7}},
+            "color_g":{{"type":"Float","value":0.7}},
+            "color_b":{{"type":"Float","value":0.7}}}}}},
+        {{"id":10,"typeId":"node.pbr_material","nodeId":"mat_lit","params":{{
+            "color_r":{{"type":"Float","value":0.8}},
+            "color_g":{{"type":"Float","value":0.8}},
+            "color_b":{{"type":"Float","value":0.8}}}}}},
+        {{"id":11,"typeId":"node.pbr_material","nodeId":"mat_baked","params":{{
+            "color_r":{{"type":"Float","value":0.8}},
+            "color_g":{{"type":"Float","value":0.8}},
+            "color_b":{{"type":"Float","value":0.8}},
+            "baked_look":{{"type":"Bool","value":true}}}}}},
+        {{"id":20,"typeId":"node.render_scene","nodeId":"scene","params":{{
+            "objects":{{"type":"Int","value":3}},
+            "lights":{{"type":"Int","value":0}}{rt_param}}}}},
+        {{"id":30,"typeId":"node.ssao_gtao","nodeId":"ssao","params":{{
+            "radius":{{"type":"Float","value":{AO_RADIUS}}},
+            "intensity":{{"type":"Float","value":1.0}}}}}},
+        {{"id":31,"typeId":"node.bilateral_blur","nodeId":"bilat_h","params":{{
+            "axis":{{"type":"Enum","value":0}},
+            "depth_sigma":{{"type":"Float","value":0.1}}}}}},
+        {{"id":32,"typeId":"node.bilateral_blur","nodeId":"bilat_v","params":{{
+            "axis":{{"type":"Enum","value":1}},
+            "depth_sigma":{{"type":"Float","value":0.1}}}}}},
+        {{"id":33,"typeId":"node.mix","nodeId":"ssao_mix","params":{{
+            "amount":{{"type":"Float","value":1.0}},
+            "mode":{{"type":"Enum","value":4}}}}}},
+        {{"id":34,"typeId":"node.masked_mix","nodeId":"mask_mix","params":{{}}}},
+        {{"id":99,"typeId":"system.final_output","nodeId":"final"}}
+        ],"wires":[
+        {{"fromNode":1,"fromPort":"vertices","toNode":2,"toPort":"in"}},
+        {{"fromNode":2,"fromPort":"out","toNode":20,"toPort":"mesh_0"}},
+        {{"fromNode":3,"fromPort":"vertices","toNode":20,"toPort":"mesh_1"}},
+        {{"fromNode":4,"fromPort":"vertices","toNode":20,"toPort":"mesh_2"}},
+        {{"fromNode":5,"fromPort":"transform","toNode":20,"toPort":"transform_1"}},
+        {{"fromNode":6,"fromPort":"transform","toNode":20,"toPort":"transform_2"}},
+        {{"fromNode":7,"fromPort":"out","toNode":20,"toPort":"camera"}},
+        {{"fromNode":8,"fromPort":"envmap","toNode":20,"toPort":"envmap"}},
+        {{"fromNode":9,"fromPort":"out","toNode":20,"toPort":"material_0"}},
+        {{"fromNode":10,"fromPort":"out","toNode":20,"toPort":"material_1"}},
+        {{"fromNode":11,"fromPort":"out","toNode":20,"toPort":"material_2"}},
+        {{"fromNode":20,"fromPort":"depth","toNode":30,"toPort":"depth"}},
+        {{"fromNode":7,"fromPort":"out","toNode":30,"toPort":"camera"}},
+        {{"fromNode":30,"fromPort":"out","toNode":31,"toPort":"in"}},
+        {{"fromNode":20,"fromPort":"depth","toNode":31,"toPort":"depth"}},
+        {{"fromNode":7,"fromPort":"out","toNode":31,"toPort":"camera"}},
+        {{"fromNode":31,"fromPort":"out","toNode":32,"toPort":"in"}},
+        {{"fromNode":20,"fromPort":"depth","toNode":32,"toPort":"depth"}},
+        {{"fromNode":7,"fromPort":"out","toNode":32,"toPort":"camera"}},
+        {{"fromNode":20,"fromPort":"color","toNode":33,"toPort":"a"}},
+        {{"fromNode":32,"fromPort":"out","toNode":33,"toPort":"b"}},
+        {{"fromNode":20,"fromPort":"color","toNode":34,"toPort":"a"}},
+        {{"fromNode":33,"fromPort":"out","toNode":34,"toPort":"b"}},
+        {{"fromNode":20,"fromPort":"ao_mask","toNode":34,"toPort":"mask"}},
+        {{"fromNode":34,"fromPort":"out","toNode":99,"toPort":"in"}}
+        ]}}"#,
+        neg_offset = -CUBE_OFFSET,
+        half_size = CUBE_SIZE / 2.0,
+    )
+}
+
+fn ao_group_cam() -> Camera {
+    Camera::orbit_perspective(AO_ORBIT, AO_TILT, AO_DISTANCE, AO_FOV_Y, 0.0, 0.0, AO_NEAR, AO_FAR)
+}
+
+/// Render `json` for `frames` committed calls, returning `(group_input,
+/// group_output, w, h)` — `render_scene.color` (the AO group's `color`
+/// input) and `mask_mix.out` (the group's `out`), both read via
+/// `dump_textures_all` (neither is lazy: `color` always computes,
+/// `mask_mix.out` is wired to `system.final_output`).
+fn render_ao_group(json: &str, frames: i64) -> (Vec<u8>, Vec<u8>, u32, u32) {
+    let h = harness::shared();
+    let registry = PrimitiveRegistry::with_builtin();
+    let mut runtime = PresetRuntime::from_json_str_with_device(
+        json,
+        &registry,
+        std::sync::Arc::clone(&h.device),
+        h.width,
+        h.height,
+        GpuTextureFormat::Rgba16Float,
+        None,
+    )
+    .unwrap_or_else(|e| panic!("ao_group graph must build: {e}\n{json}"));
+    runtime.set_dump_all(true);
+
+    let target = h.make_target("render-scene-ao-group");
+    for frame in 0..frames {
+        let ctx = PresetContext {
+            time: 0.1,
+            beat: 0.2,
+            dt: 1.0 / 60.0,
+            width: h.width,
+            height: h.height,
+            output_width: h.width,
+            output_height: h.height,
+            aspect: h.width as f32 / h.height as f32,
+            owner_key: 0,
+            is_clip_level: false,
+            frame_count: frame,
+            anim_progress: 0.0,
+            trigger_count: 0,
+        };
+        let mut enc = h.device.create_encoder("render-scene-ao-group-enc");
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
+            runtime.render(&mut gpu, &target.texture, &ctx, &manifold_core::params::ParamManifest::default());
+        }
+        enc.commit_and_wait_completed();
+    }
+
+    let dumped = runtime.dump_textures_all();
+    let find = |node: &str, port: &str| -> (Vec<u8>, u32, u32) {
+        let (_, _, _, tex) = dumped
+            .iter()
+            .find(|(n, p, _, _)| n == node && p == port)
+            .unwrap_or_else(|| {
+                panic!(
+                    "no dumped `{port}` output on node `{node}` — dumped ports: {:?}",
+                    dumped.iter().map(|(n, p, _, _)| format!("{n}.{p}")).collect::<Vec<_>>()
+                )
+            });
+        (h.readback(tex), tex.width, tex.height)
+    };
+    let (group_in, iw, ih) = find("scene", "color");
+    let (group_out, ow, oh) = find("mask_mix", "out");
+    assert_eq!((iw, ih), (ow, oh), "group input/output dims must match");
+    (group_in, group_out, iw, ih)
+}
+
+fn luma_rgba16f(bytes: &[u8], idx: usize) -> f32 {
+    let r = f16::from_le_bytes([bytes[idx], bytes[idx + 1]]).to_f32();
+    let g = f16::from_le_bytes([bytes[idx + 2], bytes[idx + 3]]).to_f32();
+    let b = f16::from_le_bytes([bytes[idx + 4], bytes[idx + 5]]).to_f32();
+    0.2126 * r + 0.7152 * g + 0.0722 * b
+}
+
+/// Region probe: returns `(max_abs_channel_delta, mean_luma_in, mean_luma_out)`
+/// over a `radius`-pixel window around `(cx, cy)`.
+fn ao_region_probe(
+    group_in: &[u8],
+    group_out: &[u8],
+    w: u32,
+    h: u32,
+    cx: f32,
+    cy: f32,
+    radius: i32,
+) -> (f32, f64, f64) {
+    let cxi = cx.round() as i32;
+    let cyi = cy.round() as i32;
+    let mut max_delta = 0.0f32;
+    let mut luma_in_sum = 0.0f64;
+    let mut luma_out_sum = 0.0f64;
+    let mut n = 0u64;
+    for dy in -radius..=radius {
+        for dx in -radius..=radius {
+            let x = cxi + dx;
+            let y = cyi + dy;
+            if x < 0 || y < 0 || x >= w as i32 || y >= h as i32 {
+                continue;
+            }
+            let idx = ((y as u32 * w + x as u32) * 8) as usize;
+            for c in 0..4 {
+                let a = f16::from_le_bytes([group_in[idx + c * 2], group_in[idx + c * 2 + 1]]).to_f32();
+                let b = f16::from_le_bytes([group_out[idx + c * 2], group_out[idx + c * 2 + 1]]).to_f32();
+                assert!(a.is_finite() && b.is_finite(), "non-finite AO-group channel at ({x},{y})");
+                max_delta = max_delta.max((a - b).abs());
+            }
+            luma_in_sum += luma_rgba16f(group_in, idx) as f64;
+            luma_out_sum += luma_rgba16f(group_out, idx) as f64;
+            n += 1;
+        }
+    }
+    assert!(n > 0, "AO region window is entirely off-screen");
+    (max_delta, luma_in_sum / n as f64, luma_out_sum / n as f64)
+}
+
+/// I-AM2: with `rt_enabled && rt_ready`, `render_scene` writes `ao_mask = 0`
+/// everywhere a fragment draws (proven in `rt_enabled_and_ready_forces_zero_
+/// everywhere_drawn` above) — `masked_mix`'s `mix(a, b, weight=0) == a`
+/// exactly (its own `wgsl_body`: `clamp(mask.r * amount, 0, 1)` then
+/// `mix(a,b,weight)`), so the WHOLE group must be an identity on colour: BUG-tgbd.
+#[test]
+fn rt_ready_makes_ao_group_identity_on_color() {
+    let json = ao_group_scene_json(true);
+    let h = harness::shared();
+    let registry = PrimitiveRegistry::with_builtin();
+    let mut runtime = PresetRuntime::from_json_str_with_device(
+        &json,
+        &registry,
+        std::sync::Arc::clone(&h.device),
+        h.width,
+        h.height,
+        GpuTextureFormat::Rgba16Float,
+        None,
+    )
+    .unwrap_or_else(|e| panic!("I-AM2 graph must build: {e}\n{json}"));
+    runtime.set_dump_all(true);
+
+    let target = h.make_target("ao-group-rt-identity");
+    for frame in 0..RT_WARMUP_FRAMES {
+        let ctx = PresetContext {
+            time: 0.1,
+            beat: 0.2,
+            dt: 1.0 / 60.0,
+            width: h.width,
+            height: h.height,
+            output_width: h.width,
+            output_height: h.height,
+            aspect: h.width as f32 / h.height as f32,
+            owner_key: 0,
+            is_clip_level: false,
+            frame_count: frame,
+            anim_progress: 0.0,
+            trigger_count: 0,
+        };
+        let mut enc = h.device.create_encoder("ao-group-rt-identity-enc");
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
+            runtime.render(&mut gpu, &target.texture, &ctx, &manifold_core::params::ParamManifest::default());
+        }
+        enc.commit_and_wait_completed();
+    }
+
+    let dumped = runtime.dump_textures_all();
+    let get = |node: &str, port: &str| -> (Vec<u8>, u32, u32) {
+        let (_, _, _, tex) = dumped
+            .iter()
+            .find(|(n, p, _, _)| n == node && p == port)
+            .unwrap_or_else(|| panic!("no dumped `{port}` on `{node}`"));
+        (h.readback(tex), tex.width, tex.height)
+    };
+    let (group_in, w, ht) = get("scene", "color");
+    let (group_out, _, _) = get("mask_mix", "out");
+
+    let camera = ao_group_cam();
+    let lit_px = camera
+        .project_to_pixel([-CUBE_OFFSET, 0.1, 0.0], w, ht)
+        .expect("lit cube base must project in front of the camera");
+
+    const AO_RADIUS_PX: i32 = 6;
+    let (max_delta, luma_in, luma_out) =
+        ao_region_probe(&group_in, &group_out, w, ht, lit_px.px, lit_px.py, AO_RADIUS_PX);
+
+    eprintln!(
+        "[I-AM2] RT-on AO-group identity check at lit-cube-base region ({:.0},{:.0}): \
+         max channel delta = {max_delta:.6}, luma_in = {luma_in:.4}, luma_out = {luma_out:.4}",
+        lit_px.px, lit_px.py
+    );
+
+    const IDENTITY_EPS: f32 = 2e-3;
+    assert!(
+        max_delta < IDENTITY_EPS,
+        "I-AM2 (BUG-tgbd): with rt_enabled && rt_ready the AO group must be an identity on \
+         colour (masked_mix mask=0 -> a everywhere), but the lit-cube-base region differs by up \
+         to {max_delta:.6} (epsilon {IDENTITY_EPS}) — RT scene is still getting double-darkened"
+    );
+}
+
+/// I-AM3: RT off. Two legs, both required:
+///   (a) baked-look object region: group output == group input within
+///       epsilon (masked_mix mask=0 there -> untouched), even though
+///       `ssao_gtao` computes REAL occlusion at that contact corner (same
+///       geometry as the lit leg) — proves masking suppressed a real term,
+///       not a zero one.
+///   (b) lit object region: group output is measurably DARKER than group
+///       input, by a stated relative-luma threshold — proves the AO group
+///       still darkens ordinary lit geometry. BUG-ay0e.
+#[test]
+fn baked_look_passes_through_lit_neighbour_darkens() {
+    let json = ao_group_scene_json(false);
+    let (group_in, group_out, w, h) = render_ao_group(&json, 3);
+
+    let camera = ao_group_cam();
+    let lit_px = camera
+        .project_to_pixel([-CUBE_OFFSET, 0.1, 0.0], w, h)
+        .expect("lit cube base must project in front of the camera");
+    let baked_px = camera
+        .project_to_pixel([CUBE_OFFSET, 0.1, 0.0], w, h)
+        .expect("baked-look cube base must project in front of the camera");
+
+    const AO_RADIUS_PX: i32 = 6;
+    let (lit_delta, lit_luma_in, lit_luma_out) =
+        ao_region_probe(&group_in, &group_out, w, h, lit_px.px, lit_px.py, AO_RADIUS_PX);
+    let (baked_delta, baked_luma_in, baked_luma_out) =
+        ao_region_probe(&group_in, &group_out, w, h, baked_px.px, baked_px.py, AO_RADIUS_PX);
+
+    let lit_darkening = (lit_luma_in - lit_luma_out) / lit_luma_in.max(1e-9);
+    eprintln!(
+        "[I-AM3] lit-cube-base region ({:.0},{:.0}): max channel delta = {lit_delta:.6}, \
+         luma_in = {lit_luma_in:.4}, luma_out = {lit_luma_out:.4}, relative darkening = {:.2}%",
+        lit_px.px,
+        lit_px.py,
+        lit_darkening * 100.0
+    );
+    eprintln!(
+        "[I-AM3] baked-look-cube-base region ({:.0},{:.0}): max channel delta = {baked_delta:.6}, \
+         luma_in = {baked_luma_in:.4}, luma_out = {baked_luma_out:.4}",
+        baked_px.px, baked_px.py
+    );
+
+    const IDENTITY_EPS: f32 = 2e-3;
+    const DARKEN_THRESHOLD: f64 = 0.02;
+    assert!(
+        baked_delta < IDENTITY_EPS,
+        "I-AM3 leg (a) (BUG-ay0e): baked-look region must pass the AO group unchanged (max \
+         channel delta {baked_delta:.6} exceeds epsilon {IDENTITY_EPS}) — masked_mix is not \
+         gating this object's AO"
+    );
+    assert!(
+        lit_darkening > DARKEN_THRESHOLD,
+        "I-AM3 leg (b): lit-neighbour region must darken measurably vs its own group input \
+         (relative darkening {:.2}% does not exceed {:.0}%) — the AO group stopped darkening \
+         ordinary lit geometry",
+        lit_darkening * 100.0,
+        DARKEN_THRESHOLD * 100.0
+    );
+}
