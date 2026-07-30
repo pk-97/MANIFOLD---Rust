@@ -1441,3 +1441,122 @@ fn check_warns_on_untitled_steps_without_failing() {
     // Titles are advisory: the same program has zero exit-1 findings.
     assert!(workflow_runtime::check::check(&fx.root.join("programs/program.toml"), &fx.root).is_empty());
 }
+
+// ── `workflow watch` liveness (BUG this session fixes: a hung gate and a
+// long-but-healthy one render identically; a wedged lane looks like a normal
+// wait). These write status.json / lane-job.json directly rather than
+// driving a real run — the point is to pin `watch::frame`'s rendering of
+// each on-disk shape, including shapes an older binary or a not-yet-arrived
+// step would leave behind. ──
+
+fn watch_run_dir(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("workflow-runtime-watch-{name}-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+fn write_status(dir: &std::path::Path, build: impl FnOnce(&mut workflow_runtime::status::Status)) {
+    let mut st = workflow_runtime::status::Status::default();
+    build(&mut st);
+    fs::write(dir.join("status.json"), serde_json::to_string(&st).unwrap()).unwrap();
+}
+
+#[test]
+fn watch_frame_shows_the_running_gate_command_and_its_elapsed_time() {
+    let dir = watch_run_dir("gate-running");
+    let started = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        - 134; // 2m 14s ago — elapsed is derived at render time, never re-stamped.
+    write_status(&dir, |st| {
+        st.state = "gate".into();
+        st.detail = "cargo nextest run --workspace".into();
+        st.step = "baseline-green".into();
+        st.step_index = 1;
+        st.total_steps = 3;
+        st.opcode = "gate".into();
+        st.gate_index = 3;
+        st.gate_total = 6;
+        st.ts = started;
+        st.token_budget = 100_000;
+    });
+    let frame = workflow_runtime::watch::frame(&dir);
+    assert!(frame.contains("gate 3/6"), "{frame}");
+    assert!(frame.contains("cargo nextest run --workspace"), "{frame}");
+    assert!(frame.contains("2m 14s"), "a long gate must show elapsed, not just a frozen line:\n{frame}");
+}
+
+#[test]
+fn watch_frame_shows_a_live_lane_as_running_with_its_pid() {
+    let dir = watch_run_dir("lane-live");
+    // Our own test process is guaranteed alive — a real pid to probe.
+    let pid = std::process::id();
+    let started = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() - 5;
+    fs::write(
+        dir.join("lane-job.json"),
+        serde_json::json!({"pid": pid, "worktree": "/tmp/x", "provider": "claude", "started_at": started})
+            .to_string(),
+    )
+    .unwrap();
+    write_status(&dir, |st| {
+        st.state = "waiting-on-lane".into();
+        st.detail = "4,527 char brief".into();
+        st.step = "write-failing-test".into();
+        st.step_index = 2;
+        st.total_steps = 3;
+        st.opcode = "lane".into();
+        st.attempt = 1;
+        st.max_attempts = 1;
+    });
+    let frame = workflow_runtime::watch::frame(&dir);
+    assert!(frame.contains("running"), "{frame}");
+    assert!(frame.contains(&format!("pid {pid}")), "{frame}");
+    assert!(!frame.contains("ALARM"), "a live pid must never render as the wedge alarm:\n{frame}");
+}
+
+#[test]
+fn watch_frame_alarms_when_the_lane_pid_is_dead_but_the_step_still_waits() {
+    let dir = watch_run_dir("lane-dead");
+    // A pid guaranteed dead: spawn a trivial child and wait for its exit.
+    let mut child = std::process::Command::new("sh").args(["-c", "true"]).spawn().unwrap();
+    let dead_pid = child.id();
+    child.wait().unwrap();
+    fs::write(
+        dir.join("lane-job.json"),
+        serde_json::json!({"pid": dead_pid, "worktree": "/tmp/x", "provider": "claude"}).to_string(),
+    )
+    .unwrap();
+    write_status(&dir, |st| {
+        st.state = "waiting-on-lane".into();
+        st.detail = "some brief".into();
+        st.step = "write-failing-test".into();
+        st.step_index = 2;
+        st.total_steps = 3;
+    });
+    let frame = workflow_runtime::watch::frame(&dir);
+    assert!(frame.contains("ALARM"), "a dead lane pid while still waiting is the wedge case: {frame}");
+    assert!(frame.contains(&format!("pid {dead_pid}")), "{frame}");
+}
+
+#[test]
+fn watch_frame_never_panics_on_missing_fields_or_a_missing_status_file() {
+    // No status.json at all — a run that hasn't reached its first transition.
+    let empty = watch_run_dir("no-status");
+    let frame = workflow_runtime::watch::frame(&empty);
+    assert!(frame.contains("no status.json yet"), "{frame}");
+
+    // A status.json written by an OLDER binary, missing every field this
+    // session added (gate_index, gate_total) — must still deserialize and
+    // render, never lie about a gate that isn't running.
+    let old = watch_run_dir("old-status-shape");
+    fs::write(
+        old.join("status.json"),
+        r#"{"ts":1,"state":"gate","detail":"cargo test","step":"x","step_index":1,"total_steps":1,"opcode":"gate","model":"","attempt":0,"max_attempts":0,"tokens_spent":0,"token_budget":0,"last_error":""}"#,
+    )
+    .unwrap();
+    let frame = workflow_runtime::watch::frame(&old);
+    assert!(frame.contains("cargo test"), "{frame}");
+    assert!(!frame.contains("gate 0/0"), "a field-less old status must not fabricate gate progress:\n{frame}");
+}

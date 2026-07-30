@@ -86,10 +86,20 @@ impl LaneWorker for CcFleetLane {
         })?;
         // The handle exists for as long as the worker does: a killed runtime
         // must never leave an unrecorded job still writing the worktree.
+        // `started_at` lets `watch` show how long the lane has been running —
+        // derived at render time, never rewritten while the worker is up.
+        let started_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
         let handle = req.run_dir.join("lane-job.json");
         let _ = std::fs::write(
             &handle,
-            serde_json::json!({"pid": child.id(), "worktree": req.worktree, "provider": req.provider}).to_string(),
+            serde_json::json!({
+                "pid": child.id(), "worktree": req.worktree, "provider": req.provider,
+                "started_at": started_at,
+            })
+            .to_string(),
         );
         let spawned = child.wait_with_output();
         let _ = std::fs::remove_file(&handle);
