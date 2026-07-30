@@ -83,7 +83,15 @@ BASELINE = Path("scripts/rt_noise_baseline.json")
 # rt_capture.rs hardcodes its dump directory. Two concurrent captures would
 # interleave PNGs into one pile and silently corrupt both metrics, so runs
 # serialise on a lock instead of racing.
-CAPTURE_DIR = Path("/tmp/rt_capture")
+# A PRIVATE capture directory per gate process, exported so the harness writes
+# there instead of the shared default. The lock below stops two gate runs from
+# racing, but nothing stops a human or another agent running `rt-capture` by
+# hand at the same time — and the harness used to clear a fixed shared path on
+# entry, so an overlapping run silently destroyed the other's frames. That
+# manufactured a phantom "every RT channel is zero" report (BUG-mw0x) when three
+# sessions captured in parallel. Isolation beats remembering not to overlap.
+CAPTURE_DIR = Path(os.environ.setdefault(
+    "MANIFOLD_RT_CAPTURE_DIR", f"/tmp/rt_capture_gate_{os.getpid()}"))
 LOCK_PATH = Path("/tmp/manifold-rt-noise-gate.lock")
 
 FIXTURE_REL = Path("tests/fixtures/rt/RtNoiseTesting.manifold")
@@ -152,17 +160,23 @@ def resolve_fixture(repo, explicit):
 def build_binary(repo):
     """Build the capture harness from the tree under test. A gate that reuses
     whatever binary happens to be lying around measures the wrong code."""
-    log("[rt-noise] building manifold (perf-soak)...")
+    log("[rt-noise] building manifold (release, perf-soak)...")
+    # RELEASE, not debug. Two reasons, both load-bearing. A debug build is code
+    # nobody ships, and this measures a timing-sensitive pipeline: an async
+    # accel build races the first trace dispatch (D17), so a build several times
+    # slower can land on the other side of that race. It also costs ~130s per
+    # capture against ~40s, which is the difference between a gate that runs and
+    # one that gets skipped.
     exit_, out, err, dur = run_cmd(
-        ["cargo", "build", "-p", "manifold-app", "--features", "perf-soak",
-         "--bin", "manifold"], cwd=repo, timeout=3600)
+        ["cargo", "build", "--release", "-p", "manifold-app", "--features",
+         "perf-soak", "--bin", "manifold"], cwd=repo, timeout=3600)
     if exit_ != 0:
         log(f"[FAIL] build failed ({dur:.0f}s)")
         for line in (out + err).rstrip().splitlines()[-20:]:
             log(f"    {line}")
         return None
     log(f"[rt-noise] build ok ({dur:.0f}s)")
-    return repo / "target/debug/manifold"
+    return repo / "target/release/manifold"
 
 
 # ── one capture run ─────────────────────────────────────────────────────
@@ -400,6 +414,8 @@ def main():
     ap.add_argument("--binary", default=None, help="use this manifold binary, skip the build")
     ap.add_argument("--frames", type=int, default=300, help="rt-capture frame count (default 300)")
     ap.add_argument("--repeats", type=int, default=3, help="clean runs to median (default 3)")
+    ap.add_argument("--max-attempts", type=int, default=None,
+                    help="cap on runs including discards (default 2x repeats + 3)")
     ap.add_argument("--baseline", default=None, help="ceilings JSON (default scripts/rt_noise_baseline.json)")
     ap.add_argument("--out-dir", default=None, help="where to keep captures (default target/rt-noise-gate)")
     ap.add_argument("--record", action="store_true", help="write the ceilings from this run instead of gating")
@@ -459,7 +475,11 @@ def main():
 
         runs = []
         attempts = 0
-        max_attempts = args.repeats + 2
+        # Budget for a coin flip, not for the occasional bad run: with BUG-mw0x
+        # (intermittent all-zero RT channels) roughly half of all captures are
+        # discarded, and `repeats + 2` ran out of attempts before it could
+        # median anything.
+        max_attempts = args.max_attempts or (args.repeats * 2 + 3)
         discarded = []
         while len(runs) < args.repeats and attempts < max_attempts:
             attempts += 1
@@ -499,6 +519,12 @@ def main():
             log(f"[FAIL] only {len(runs)}/{args.repeats} clean run(s) in "
                 f"{attempts} attempts: {'; '.join(discarded)}")
             return 2
+        # Always visible, not just on failure: the discard rate IS the harness
+        # health, and it is the number that says whether this gate is trustable.
+        log(f"[rt-noise] {len(runs)} clean run(s) from {attempts} attempt(s), "
+            f"{len(discarded)} discarded")
+        for why in discarded:
+            log(f"[rt-noise]   discarded: {why}")
 
     agg = median_across(runs)
     if args.record:
