@@ -1,0 +1,79 @@
+{"version":2,"name":"RtCompare","description":"RT byte-identity compare graph (RAYTRACING_DESIGN.md section 11 I-MB1): ground + red EMISSIVE occluder + sun, rt_enabled + rt_reflections on, so one deterministic graph_tool render exercises shadow, AO, GI gather (emissive + sun-bounce), and the reflection block. Companion to RasterCompare.json; gate use: render at pre/post commits, cmp bytes.","nodes":[
+{"id":0,"typeId":"system.generator_input","nodeId":"input"},
+{"id":1,"typeId":"node.grid_mesh","nodeId":"ground_grid","params":{
+    "max_capacity":{"type":"Int","value":8192},
+    "resolution_x":{"type":"Int","value":20},
+    "resolution_y":{"type":"Int","value":20},
+    "size_x":{"type":"Float","value":8.0},
+    "size_y":{"type":"Float","value":8.0}}},
+{"id":2,"typeId":"node.make_triangles","nodeId":"ground_tris","params":{
+    "src_cols":{"type":"Int","value":20},
+    "src_rows":{"type":"Int","value":20}}},
+{"id":3,"typeId":"node.orbit_camera","nodeId":"cam","params":{
+    "orbit":{"type":"Float","value":0.7},
+    "tilt":{"type":"Float","value":0.95},
+    "distance":{"type":"Float","value":10.0},
+    "fov_y":{"type":"Float","value":0.8}}},
+{"id":4,"typeId":"node.phong_material","nodeId":"ground_mat","params":{
+    "color_r":{"type":"Float","value":1.0},
+    "color_g":{"type":"Float","value":1.0},
+    "color_b":{"type":"Float","value":1.0},
+    "ambient":{"type":"Float","value":0.05}}},
+{"id":40,"typeId":"node.scene_object","nodeId":"obj0","params":{
+    "visible":{"type":"Float","value":1.0}}},
+{"id":5,"typeId":"node.grid_mesh","nodeId":"occ_grid","params":{
+    "max_capacity":{"type":"Int","value":8192},
+    "resolution_x":{"type":"Int","value":10},
+    "resolution_y":{"type":"Int","value":10},
+    "size_x":{"type":"Float","value":3.0},
+    "size_y":{"type":"Float","value":3.0}}},
+{"id":6,"typeId":"node.make_triangles","nodeId":"occ_tris","params":{
+    "src_cols":{"type":"Int","value":10},
+    "src_rows":{"type":"Int","value":10}}},
+{"id":7,"typeId":"node.transform_3d","nodeId":"occ_xform","params":{
+    "pos_y":{"type":"Float","value":1.5}}},
+{"id":8,"typeId":"node.phong_material","nodeId":"occ_mat","params":{
+    "color_r":{"type":"Float","value":1.0},
+    "color_g":{"type":"Float","value":0.0},
+    "color_b":{"type":"Float","value":0.0},
+    "ambient":{"type":"Float","value":0.05},
+    "emission_r":{"type":"Float","value":1.0},
+    "emission_g":{"type":"Float","value":0.2},
+    "emission_b":{"type":"Float","value":0.1},
+    "emission_intensity":{"type":"Float","value":2.0}}},
+{"id":41,"typeId":"node.scene_object","nodeId":"obj1","params":{
+    "visible":{"type":"Float","value":1.0},
+    "cast_shadows":{"type":"Float","value":1.0}}},
+{"id":30,"typeId":"node.light","nodeId":"sun","params":{
+    "mode":{"type":"Enum","value":0},
+    "pos_x":{"type":"Float","value":4.0},
+    "pos_y":{"type":"Float","value":6.0},
+    "pos_z":{"type":"Float","value":3.0},
+    "aim_x":{"type":"Float","value":0.0},
+    "aim_y":{"type":"Float","value":0.0},
+    "aim_z":{"type":"Float","value":0.0},
+    "color_r":{"type":"Float","value":1.0},
+    "color_g":{"type":"Float","value":1.0},
+    "color_b":{"type":"Float","value":1.0},
+    "intensity":{"type":"Float","value":1.0},
+    "cast_shadows":{"type":"Float","value":1.0}}},
+{"id":20,"typeId":"node.render_scene","nodeId":"scene","params":{
+    "objects":{"type":"Int","value":2},
+    "lights":{"type":"Int","value":1},
+    "rt_enabled":{"type":"Bool","value":true},
+    "rt_reflections":{"type":"Bool","value":true}}},
+{"id":99,"typeId":"system.final_output","nodeId":"out"}
+],"wires":[
+{"fromNode":1,"fromPort":"vertices","toNode":2,"toPort":"in"},
+{"fromNode":2,"fromPort":"out","toNode":40,"toPort":"vertices"},
+{"fromNode":4,"fromPort":"out","toNode":40,"toPort":"material"},
+{"fromNode":40,"fromPort":"object","toNode":20,"toPort":"object_0"},
+{"fromNode":5,"fromPort":"vertices","toNode":6,"toPort":"in"},
+{"fromNode":6,"fromPort":"out","toNode":41,"toPort":"vertices"},
+{"fromNode":7,"fromPort":"transform","toNode":41,"toPort":"transform"},
+{"fromNode":8,"fromPort":"out","toNode":41,"toPort":"material"},
+{"fromNode":41,"fromPort":"object","toNode":20,"toPort":"object_1"},
+{"fromNode":3,"fromPort":"out","toNode":20,"toPort":"camera"},
+{"fromNode":30,"fromPort":"out","toNode":20,"toPort":"light_0"},
+{"fromNode":20,"fromPort":"color","toNode":99,"toPort":"in"}
+]}
