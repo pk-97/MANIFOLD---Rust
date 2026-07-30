@@ -3,15 +3,24 @@
 //! itself (RT-on vs RT-off, or one build vs another) — none compares to a
 //! ground-truth value derived from physics. This file adds one.
 //!
-//! Both tests light a flat, fully-diffuse (Lambertian) albedo-1 PBR plane
+//! Every scene lights a flat, fully-diffuse (Lambertian) albedo-1 PBR plane
 //! with `node.bake_environment`'s new `uniform` mode: a CONSTANT radiance
 //! `L` in every texel/direction, wired straight into `node.render_scene`'s
-//! `envmap` input with zero direct lights and zero material ambient. The
+//! `envmap` input with zero direct lights and zero emission. The
 //! closed-form physics: a Lambertian surface under a uniform field of
 //! incident radiance `L` reflects back exactly `albedo * L` — the diffuse
 //! BRDF (`albedo / pi`) integrated against `L * cos(theta)` over the
 //! hemisphere is `albedo * L * pi / pi = albedo * L`. With albedo 1 and
 //! `L = intensity = 1.0`, the surface must read exactly 1.0.
+//!
+//! The occlusion tests below probe two regions of ONE render rather than
+//! toggling `rt_enabled` between two renders — `furnace_occlusion_scene_json`'s
+//! doc comment states why an on/off toggle is the wrong comparison here (it
+//! is self-defeating: with the ground material's `ambient` at zero, the RT
+//! irradiance term is algebraically zero either way). Every RT-on render in
+//! this file confirms the RT kernel actually dispatched
+//! (`harness::assert_rt_dispatched`) rather than trusting a pixel diff to
+//! rule out "RT never ran at all" (BUG-1l7f's failure class).
 
 use half::f16;
 use manifold_gpu::GpuTextureFormat;
@@ -20,6 +29,7 @@ use manifold_renderer::node_graph::PrimitiveRegistry;
 use manifold_renderer::node_graph::camera::Camera;
 use manifold_renderer::preset_context::PresetContext;
 use manifold_renderer::preset_runtime::PresetRuntime;
+use manifold_renderer::render_target::RenderTarget;
 
 use crate::harness;
 
@@ -78,6 +88,74 @@ fn render_readback(json: &str) -> (Vec<u8>, u32, u32) {
         enc.commit_and_wait_completed();
     }
     (h.readback(&target.texture), h.width, h.height)
+}
+
+fn build_runtime(json: &str) -> (PresetRuntime, RenderTarget) {
+    let h = harness::shared();
+    let registry = PrimitiveRegistry::with_builtin();
+    let runtime = PresetRuntime::from_json_str_with_device(
+        json,
+        &registry,
+        std::sync::Arc::clone(&h.device),
+        h.width,
+        h.height,
+        GpuTextureFormat::Rgba16Float,
+        None,
+    )
+    .expect("RT furnace scene graph must build");
+    let target = h.make_target("rt-furnace-oracle");
+    (runtime, target)
+}
+
+fn render_frame(runtime: &mut PresetRuntime, target: &RenderTarget, frame_count: i64) {
+    let h = harness::shared();
+    let ctx = PresetContext {
+        time: 0.1,
+        beat: 0.2,
+        dt: 1.0 / 60.0,
+        width: h.width,
+        height: h.height,
+        output_width: h.width,
+        output_height: h.height,
+        aspect: h.width as f32 / h.height as f32,
+        owner_key: 0,
+        is_clip_level: false,
+        frame_count,
+        anim_progress: 0.0,
+        trigger_count: 0,
+    };
+    let mut enc = h.device.create_encoder("rt-furnace-oracle-enc");
+    {
+        let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
+        runtime.render(
+            &mut gpu,
+            &target.texture,
+            &ctx,
+            &manifold_core::params::ParamManifest::default(),
+        );
+    }
+    enc.commit_and_wait_completed();
+}
+
+/// Build, settle `RT_WARMUP_FRAMES`, read back, then CONFIRM the RT kernel
+/// actually dispatched on that settled state (`harness::assert_rt_dispatched`
+/// — `render_scene` only pushes capture slots from inside its `rt_enabled &&
+/// rt_ready` branch, which no pixel comparison can substitute for). BUG-1l7f
+/// names the exact failure mode this guards: a scene that never traces at
+/// all still produces SOME pixels, and a bare byte comparison cannot tell
+/// "RT ran and did nothing new" apart from "RT never ran". The readback
+/// happens before the confirmation frame, so the extra frame this runs
+/// (frame `RT_WARMUP_FRAMES`) never contaminates the measured bytes — on
+/// these static scenes it would render identically anyway.
+fn render_readback_confirmed(json: &str, context: &str) -> (Vec<u8>, u32, u32) {
+    let h = harness::shared();
+    let (mut runtime, target) = build_runtime(json);
+    for frame in 0..RT_WARMUP_FRAMES {
+        render_frame(&mut runtime, &target, frame);
+    }
+    let bytes = h.readback(&target.texture);
+    harness::assert_rt_dispatched(|| render_frame(&mut runtime, &target, RT_WARMUP_FRAMES), context);
+    (bytes, h.width, h.height)
 }
 
 /// Same region-average-luma probe `rt_bug17r3_lightless_gi.rs` uses.
@@ -186,13 +264,28 @@ fn uniform_environment_white_surface_returns_the_environment_radiance() {
     );
 }
 
+/// World-space probe points on `furnace_occlusion_scene_json`'s ground
+/// plane: `SHADED_WORLD` sits directly under the occluder's centre,
+/// `OPEN_WORLD` sits well clear of it (the occluder is a 3x3 plate centred
+/// on the origin — 2.2 world units out on both axes clears it with margin)
+/// while staying inside the camera's visible footprint on the plane.
+const SHADED_WORLD: [f32; 3] = [0.0, 0.0, 0.0];
+const OPEN_WORLD: [f32; 3] = [2.2, 0.0, 2.2];
+
 /// Same ground plane and white Lambertian material as
 /// `white_surface_scene_json`, plus a second, non-emissive 3x3 occluder
 /// grid hovering `0.6` world units above the ground centre (`transform_1`'s
 /// `pos_y`) — mirroring `rt_bug17r3_lightless_gi.rs`'s emitter-quad
-/// geometry, but opaque and unlit rather than emissive. `rt_enabled` is the
-/// only thing that differs between the two renders this test compares.
-fn occluded_contact_scene_json(rt_enabled: bool) -> String {
+/// geometry, but opaque and unlit rather than emissive. `rt_enabled` is
+/// always true — this is ONE render, probed at two screen regions, not an
+/// RT-on/RT-off toggle (an RT-off comparison here would be self-defeating:
+/// with `ground_ambient` at 0.0, no lights, and no emission, the RT
+/// irradiance term `ambient_color * ao + gi` is algebraically zero either
+/// way, so toggling `rt_enabled` changes nothing by construction and
+/// proves nothing about whether occlusion traced correctly).
+/// `ground_ambient` is exposed so the diagnostic test below can compare the
+/// shaded-region reading at ambient 0.0 vs 1.0.
+fn furnace_occlusion_scene_json(ground_ambient: f32) -> String {
     format!(
         r#"{{"version":2,"name":"RtFurnaceOcclusion","nodes":[
         {{"id":0,"typeId":"system.generator_input","nodeId":"input"}},
@@ -230,7 +323,7 @@ fn occluded_contact_scene_json(rt_enabled: bool) -> String {
             "color_r":{{"type":"Float","value":1.0}},
             "color_g":{{"type":"Float","value":1.0}},
             "color_b":{{"type":"Float","value":1.0}},
-            "ambient":{{"type":"Float","value":0.0}},
+            "ambient":{{"type":"Float","value":{ground_ambient}}},
             "metallic":{{"type":"Float","value":0.0}},
             "roughness":{{"type":"Float","value":1.0}}}}}},
         {{"id":9,"typeId":"node.pbr_material","nodeId":"occluder_mat","params":{{
@@ -243,7 +336,7 @@ fn occluded_contact_scene_json(rt_enabled: bool) -> String {
         {{"id":20,"typeId":"node.render_scene","nodeId":"scene","params":{{
             "objects":{{"type":"Int","value":2}},
             "lights":{{"type":"Int","value":0}},
-            "rt_enabled":{{"type":"Bool","value":{rt_enabled}}},
+            "rt_enabled":{{"type":"Bool","value":true}},
             "rt_reflections":{{"type":"Bool","value":false}}}}}},
         {{"id":99,"typeId":"system.final_output","nodeId":"out"}}
         ],"wires":[
@@ -257,42 +350,82 @@ fn occluded_contact_scene_json(rt_enabled: bool) -> String {
         {{"fromNode":9,"fromPort":"out","toNode":20,"toPort":"material_1"}},
         {{"fromNode":8,"fromPort":"envmap","toNode":20,"toPort":"envmap"}},
         {{"fromNode":20,"fromPort":"color","toNode":99,"toPort":"in"}}
-        ]}}"#,
-        rt_enabled = rt_enabled,
+        ]}}"#
     )
 }
 
-/// EXPECTED TO FAIL — see the module doc and the assertion message below.
-/// Traced occlusion today only modulates a small flat ambient term; the
-/// environment diffuse term that dominates this scene is a baked-texture
-/// lookup unaffected by ray-traced visibility, so the contact region barely
-/// darkens even though physically it should darken substantially. This test
-/// states the correct behaviour; it is the deliverable whether it passes or
-/// fails.
+/// The real gate, one render, two regions. The physics is unarguable: the
+/// region directly under the occluder sees a small fraction of the uniform
+/// environment, the open region on the same plane sees essentially all of
+/// it, so the shaded region must read substantially darker — no RT-on/
+/// RT-off toggle needed or wanted (see `furnace_occlusion_scene_json`'s
+/// doc comment for why that comparison is self-defeating here).
+/// `assert_rt_dispatched` (inside `render_readback_confirmed`) rules out
+/// the vacuous case where this whole scene rendered pure raster.
 #[test]
-fn traced_occlusion_darkens_an_environment_lit_contact_region() {
-    let (on_bytes, w, h) = render_readback(&occluded_contact_scene_json(true));
-    let (off_bytes, _, _) = render_readback(&occluded_contact_scene_json(false));
+fn traced_occlusion_darkens_the_shaded_region_relative_to_the_open_plane() {
+    let json = furnace_occlusion_scene_json(0.0);
+    let (bytes, w, h) = render_readback_confirmed(&json, "furnace occlusion scene, ambient=0.0, RT enabled");
 
     let cam = Camera::orbit_perspective(ORBIT, TILT, DISTANCE, FOV_Y, 0.0, 0.0, NEAR, FAR);
-    let contact_px = cam
-        .project_to_pixel([0.0, 0.0, 0.0], w, h)
-        .expect("occluder-shadow centre must project in front of the camera");
+    let shaded_px = cam
+        .project_to_pixel(SHADED_WORLD, w, h)
+        .expect("shaded probe must project in front of the camera");
+    let open_px = cam
+        .project_to_pixel(OPEN_WORLD, w, h)
+        .expect("open probe must project in front of the camera");
 
-    const RADIUS: i32 = 10;
-    let on = region_luma(&on_bytes, w, h, contact_px.px, contact_px.py, RADIUS);
-    let off = region_luma(&off_bytes, w, h, contact_px.px, contact_px.py, RADIUS);
-    eprintln!("RT furnace occlusion: rt_off={off:.5} rt_on={on:.5}");
+    const RADIUS: i32 = 8;
+    let shaded = region_luma(&bytes, w, h, shaded_px.px, shaded_px.py, RADIUS);
+    let open = region_luma(&bytes, w, h, open_px.px, open_px.py, RADIUS);
+    eprintln!(
+        "RT furnace occlusion (single render): open={open:.5} shaded={shaded:.5} ratio(shaded/open)={:.4}",
+        shaded / open
+    );
 
     const DARKENING_FRACTION: f64 = 0.20;
     assert!(
-        on <= off * (1.0 - DARKENING_FRACTION),
-        "traced occlusion must darken the contact region under the occluder by at least \
-         {:.0}% vs RT-off (that region sees far less of the environment, so ray-traced \
-         occlusion must remove most of its incident radiance): rt_off={off:.5} rt_on={on:.5} \
-         (ratio {:.4}) — if this fails, that is a real finding about the RT diffuse-occlusion \
-         path, not a test to retune",
+        shaded <= open * (1.0 - DARKENING_FRACTION),
+        "the region directly under the occluder must read at least {:.0}% darker than the open \
+         region on the SAME plane in the SAME render (it sees a small fraction of the uniform \
+         environment; the open region sees essentially all of it): open={open:.5} \
+         shaded={shaded:.5} ratio={:.4} — if this fails, that is a real finding about the RT \
+         diffuse-occlusion path (or the raster environment-diffuse term it doesn't reach), not a \
+         test to retune",
         DARKENING_FRACTION * 100.0,
-        on / off,
+        shaded / open,
+    );
+}
+
+/// DIAGNOSTIC, not a gate — no assertion on which reading is "correct".
+/// `furnace_occlusion_scene_json`'s doc comment names the mechanism: with
+/// the ground material's `ambient` at 0.0 and no lights/emission, the RT
+/// irradiance term (`ambient_color * ao + gi`) is algebraically zero
+/// regardless of whether occlusion traced correctly, because there is
+/// nothing for it to modulate. This records whether lifting `ambient` off
+/// zero is what makes traced occlusion visible at the shaded probe at all
+/// — evidence for or against the "occlusion only reaches a flat ambient
+/// term, never the baked environment-diffuse term" hypothesis, without
+/// this test taking a position on it.
+#[test]
+fn diagnostic_shaded_region_luma_with_ambient_zero_vs_ambient_one() {
+    let zero_json = furnace_occlusion_scene_json(0.0);
+    let one_json = furnace_occlusion_scene_json(1.0);
+    let (zero_bytes, w, h) =
+        render_readback_confirmed(&zero_json, "furnace occlusion scene, ambient=0.0, RT enabled");
+    let (one_bytes, _, _) =
+        render_readback_confirmed(&one_json, "furnace occlusion scene, ambient=1.0, RT enabled");
+
+    let cam = Camera::orbit_perspective(ORBIT, TILT, DISTANCE, FOV_Y, 0.0, 0.0, NEAR, FAR);
+    let shaded_px = cam
+        .project_to_pixel(SHADED_WORLD, w, h)
+        .expect("shaded probe must project in front of the camera");
+
+    const RADIUS: i32 = 8;
+    let ambient_zero = region_luma(&zero_bytes, w, h, shaded_px.px, shaded_px.py, RADIUS);
+    let ambient_one = region_luma(&one_bytes, w, h, shaded_px.px, shaded_px.py, RADIUS);
+    eprintln!(
+        "RT furnace occlusion diagnostic: shaded region luma at ambient=0.0 -> {ambient_zero:.5}, \
+         at ambient=1.0 -> {ambient_one:.5}"
     );
 }
