@@ -1,6 +1,6 @@
 # Workflow Runtime — a Rust runner for semantic workflow programs
 
-**Status:** IN PROGRESS — P1 (core loop) + P2 (execute + live proxy) + v1.1 instruction set (D9–D13) built; P3 (R3 shakedown) next · 2026-07-30 · Fable
+**Status:** IN PROGRESS — P1–P3 DONE (P3 shakedown verdict: section 5 (Phasing — P3 outcome); rulings D14–D20). OWED: P4 lane opcode + read-vs-run doctrine, proposed and beaded (bd: "WORKFLOW_RUNTIME P4: lane opcode + read-vs-run step doctrine, enforced"). · 2026-07-30 · Fable
 **Prerequisites:** none (R2 readout is in — see intro)
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) – section 6 (Seam briefs) before starting any phase.
 
@@ -151,6 +151,18 @@ P3 shakedown rulings (Peter, 2026-07-30 — the mb-a-refactor park exposed all f
   red: the stale seed text is discarded in favor of the fresh full gate report, framed as
   work-stands/gate-is-red/fix-forward. `run_gates` is infallible (a hung gate is a red
   TIMEOUT result, never an error), so there is no fallback path back to the stale seed.
+- **D20 — read-vs-run step doctrine (Peter, 2026-07-30, P3 close-out).** An output judged
+  by READING it (verdicts, classification, summaries, brief drafts, fanout/sample) is a
+  one-shot API step — cheap at scale, trivially auditable, and the reviewer's tool-lessness
+  is a feature (it cannot "fix things while it's in there"). An output judged by RUNNING
+  it (code that must compile and pass a gate) needs the tool loop — a lane. Measured in
+  P3: six one-shot attempts could not do a godfile MSL refactor (~383K tokens, two
+  structural failure classes no feedback loop fixes: exact-quote edits at that size, and
+  correctness invisible without a compiler); the same task took a lane one pass; the
+  one small quotable edit landed one-shot first try (50K). A refactor-shaped one-shot
+  execute step is a design smell, not a failure mode. Delivery: P4 `lane` opcode — same
+  worktree, same commit-then-gate/park/blocking/gate-first semantics, worker is a headless
+  agent session; `check` lints execute-step scope. Beaded.
 
 ## 3. Design body — the loop
 
@@ -218,6 +230,22 @@ queue) end to end under lead review; fix what the wave exposes; add the enforcem
 rows; supersession sweep on the concept doc's section 8b (stateless calls) pointers. Gate:
 `scripts/landing_gate.py` at landing; the R3 slice's own gates. Demo: L2 (run artifacts) +
 the slice's own acceptance.
+
+**P3 outcome (2026-07-30, RAYTRACING_DESIGN.md section 11 (Multi-bounce GI) slice, task
+BUG-17r3 (multi-bounce GI slice)).** DONE — the slice landed; the runtime's verdict is
+split and measured. The machinery held: gates ran every check unprompted, the
+deterministic probe park is the only reason a silently-dead feature (lightless-RT engine
+gate) was caught before landing, D15 blocking protected the budget, D19 gate-first
+completed a lane-repaired step with zero model calls, and the run resumed across six
+mid-run runtime landings. The one-shot EXECUTE bet failed at refactor scale and held at
+small-edit scale — numbers and the resulting doctrine in D20 (read-vs-run). The run
+itself finished hybrid: program for small edits + gates + probes, lanes for the refactor
+fix-forward and the A/B evidence, lead landing — recorded as the intended P4 shape, not a
+deviation to hide. Shakedown findings all fixed-and-landed same day (request_timeout_s,
+D14 live status, D15–D19) except: `anchor:` cannot span a raw-string MSL const
+(locate.rs brace counting — open), stale `target/debug/workflow` binary class (rebuild
+before first use), BUG-t1p5 (raytrace.rs godfile audit) open. Cost: 482K tokens over two
+runs; ledger in the run dirs.
 
 Phasing-completeness: every section-2 decision is exercised by P1 (D1/D2/D4/D6/D7),
 P2 (D3/D5/D8), or Deferred.
