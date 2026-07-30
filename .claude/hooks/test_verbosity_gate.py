@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for verbosity-gate.py: which row counts as the prompt, and the cap.
+"""Tests for verbosity-gate.py: message source, prompt row, budgets, cap.
 
 Run: python3 .claude/hooks/test_verbosity_gate.py
 """
@@ -43,15 +43,21 @@ def assistant(text, uuid="a1"):
 _STATE_DIR = tempfile.mkdtemp(prefix="vgate-state-")
 
 
-def run(rows, session_id, last_assistant_message=None):
-    """Invoke the hook as a subprocess; return (exit_code, stderr)."""
+def run(rows, session_id, final=None):
+    """Invoke the hook as a subprocess; return (exit_code, stderr).
+
+    `final` is the payload's last_assistant_message. Defaults to the last
+    assistant row's text, which is what the harness sends in the normal case.
+    """
     with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as fh:
         for r in rows:
             fh.write(json.dumps(r) + "\n")
         path = fh.name
-    payload = {"transcript_path": path, "session_id": session_id}
-    if last_assistant_message is not None:
-        payload["last_assistant_message"] = last_assistant_message
+    if final is None:
+        final = next((vgate._text_of(r) for r in reversed(rows)
+                      if r.get("type") == "assistant"), "")
+    payload = {"transcript_path": path, "session_id": session_id,
+               "last_assistant_message": final}
     proc = subprocess.run(
         [sys.executable, str(HERE / "verbosity-gate.py")],
         input=json.dumps(payload),
@@ -96,29 +102,23 @@ for i in range(4):
     turn = turn + [user("Stop hook feedback: Over budget", f"m{i}", meta=True), assistant(LONG)]
 check(f"blocks exactly twice then passes (got {codes})", codes == [2, 2, 0, 0])
 
-# --- the harness-provided last_assistant_message wins, races the transcript -
-# Regression for the bug where the hook measured the PREVIOUS turn: it derived
-# "the message that just finished" by scanning the transcript file, which the
-# Stop hook can read before that turn's write has flushed. Simulated here by a
-# transcript that only contains the earlier (long, over-budget) turn, plus a
-# payload last_assistant_message carrying the real, short, just-finished reply
-# that hasn't hit disk yet.
-race_rows = [user("did it land?", "race1"), tool_result(), assistant(LONG, "prev")]
-code, err = run(race_rows, "sess-race-old", last_assistant_message=None)
-check("old-code path (no payload field): stale transcript row blocks",
-      code == 2 and "Over budget" in err)
-
-code, err = run(race_rows, "sess-race-new", last_assistant_message=SHORT)
-check("payload's last_assistant_message overrides the stale transcript row",
+# --- the message measured is the payload's, not the transcript's --------------
+# The transcript can still be one turn behind when the hook fires, so a stale
+# over-budget row must not decide a short reply's fate, and no field means silent.
+stale = [user("did it land?", "race1"), tool_result(), assistant(LONG, "prev")]
+code, err = run(stale, "sess-race", final=SHORT)
+check("short reply passes despite a long stale transcript row",
       code == 0 and not err.strip())
 
-# A shorter rewrite must never score higher than the reply it replaced — that
-# was the observed symptom (166 -> rewritten shorter -> 202). Same transcript,
-# same stale previous-turn row, only the payload's actual final text differs.
-_, err_long_stale = run(race_rows, "sess-shorter-1", last_assistant_message=None)
-_, err_short_new = run(race_rows, "sess-shorter-2", last_assistant_message=SHORT)
-check("shorter rewrite never scores higher via the stale path",
-      "Over budget" in err_long_stale and not err_short_new.strip())
+code, err = run(stale, "sess-race-long", final=LONG)
+check("long reply blocks on the payload text", code == 2 and "Over budget" in err)
+
+proc = subprocess.run(
+    [sys.executable, str(HERE / "verbosity-gate.py")],
+    input=json.dumps({"session_id": "sess-nofield"}),
+    capture_output=True, text=True,
+    env={**os.environ, "VERBOSITY_GATE_STATE": str(Path(_STATE_DIR) / "state.json")})
+check("no last_assistant_message -> silent", proc.returncode == 0 and not proc.stderr.strip())
 
 # --- fences: closed, unclosed, and indented ----------------------------------
 FENCED = "one line of prose\n```\nthis is code and should not count at all\nneither should this\n```\nlast line of prose"

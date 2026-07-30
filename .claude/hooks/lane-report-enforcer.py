@@ -1,27 +1,24 @@
 #!/usr/bin/env python3
 """lane-report-enforcer.py — TeammateIdle hook: no lane goes idle silently.
 
-Problem (Peter 2026-07-25, CRITICAL for team workflow): a teammate lane's
-plain-text turn output is INVISIBLE to the lead — only explicit SendMessage
-calls are delivered. Lanes that finish without calling SendMessage report
-into the void; the lead sees only a contentless idle notification and must
-read transcripts off disk.
+A teammate lane's plain-text turn output is invisible to the lead — only explicit
+SendMessage calls are delivered. A lane that finishes without calling SendMessage
+reports into the void; the lead sees only a contentless idle notification.
 
-Mechanism: TeammateIdle can BLOCK a teammate from going idle (exit 2 sends
-stderr back to the teammate as feedback). This hook reads the lane's
-transcript; if the lane has made no SendMessage tool call since its last
-received message, the hook blocks the idle with feedback ordering it to
-deliver its report via SendMessage to team-lead (or a one-line "nothing to
-report" if it was told to stop). After MAX_BLOCKS consecutive blocks for
-the same teammate, the hook allows the idle and emits a loud systemMessage
-so the failure is visible to the user instead of looping forever.
+Mechanism: TeammateIdle can BLOCK a teammate from going idle (exit 2 sends stderr back
+to the teammate as feedback). This hook reads the lane's transcript; if the lane has
+made no SendMessage call since its last received message, the hook blocks the idle with
+feedback ordering it to deliver its report via SendMessage to team-lead (or a one-line
+"nothing to report" if it was told to stop). After MAX_BLOCKS (3) consecutive blocks for
+the same teammate, the hook allows the idle and emits a loud systemMessage so the
+failure is visible instead of looping forever.
 
-Payload note: TeammateIdle's input fields are undocumented as of
-2026-07-25 — the hook logs every payload to
-/tmp/teammate_idle_payload_last.json for empirical verification, and fails
-OPEN (allows the idle) on any error, so a guard bug never wedges a team.
+Payload note: TeammateIdle's input fields are undocumented — the hook logs every payload
+to /tmp/teammate_idle_payload_last.json for empirical verification, and fails OPEN
+(allows the idle) on any error, so a guard bug never wedges a team.
 
-Obsolete when: the routing policy in docs/AGENT_ROUTING.md retires the two-tier lead/lane model this guard polices; recheck at each routing-policy revision.
+Obsolete when: the routing policy in docs/AGENT_ROUTING.md retires the two-tier
+lead/lane model this guard polices; recheck at each routing-policy revision.
 """
 import json
 import os

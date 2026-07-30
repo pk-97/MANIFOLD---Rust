@@ -77,13 +77,6 @@ def _text_of(row):
     )
 
 
-def _has_tool_use(row):
-    content = (row.get("message") or {}).get("content")
-    return isinstance(content, list) and any(
-        isinstance(b, dict) and b.get("type") == "tool_use" for b in content
-    )
-
-
 def _is_tool_result(row):
     if row.get("toolUseResult") is not None:
         return True
@@ -137,31 +130,14 @@ def _record(state, session_id, turn_key, n):
         pass
 
 
-def _final_text(payload, rows):
-    """Text of the turn that just finished.
-
-    Preferred source: payload["last_assistant_message"], which the harness
-    sets to exactly this turn's text — no re-derivation, no race. Falls back
-    to scanning the transcript tail when the field is absent, for callers
-    that only provide transcript_path.
-    """
-    lam = payload.get("last_assistant_message")
-    if isinstance(lam, str) and lam.strip():
-        return lam
-    last_assistant = next((r for r in reversed(rows) if r.get("type") == "assistant"), None)
-    if last_assistant is None or _has_tool_use(last_assistant):
-        return ""
-    return _text_of(last_assistant)
-
-
 def main():
     payload = json.load(sys.stdin)
+    text = payload.get("last_assistant_message")
+    if not isinstance(text, str) or not text.strip():
+        return 0
+
     transcript = payload.get("transcript_path")
     rows = _tail_messages(transcript) if transcript and Path(transcript).exists() else []
-
-    text = _final_text(payload, rows)
-    if not text.strip():
-        return 0
 
     last_user = _last_real_user(rows)
     prompt = _text_of(last_user) if last_user else ""

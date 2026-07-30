@@ -1,39 +1,32 @@
 #!/usr/bin/env python3
 """Design Status Board — single source of truth for design-doc status.
 
-Reads the `**Status:` line from every docs/*_DESIGN.md and the date of the
-last commit that touched the file, and prints a compact, grouped board.
-
-The whole point: status lives in ONE place — the design doc's own status
-line — and this board is GENERATED from it, never hand-copied. Memory files
-must not restate design status; they point here. Because it reads straight
-from the docs each run, it cannot drift: the moment a build session flips a
-doc's status line, the next board reflects it.
+Reads the `**Status:` line from every docs/*_DESIGN.md and the date of the last commit
+that touched the file, and prints a compact, grouped board. Status lives in ONE place —
+the design doc's own status line — and this board is GENERATED from it, never
+hand-copied. Memory files must not restate design status; they point here. Because it
+reads straight from the docs each run, it cannot drift.
 
 Usage:
     python3 .claude/hooks/design_status.py                    # print the board
     python3 .claude/hooks/design_status.py --raw              # one line per doc, untrimmed
     python3 .claude/hooks/design_status.py --lifecycle-check  # exit 1 on dead docs
 
-Lifecycle check (the docs-pile class fix, Peter 2026-07-28): a SHIPPED design
-doc must either be cited by a live surface (CLAUDE.md, hooks, memory, or any
-non-shipped doc — one hop, no credit for citations from other shipped docs)
-or move to docs/archive/. Liveness is recomputed every run, so a doc whose
-last citation disappears gets flagged automatically; nothing is hand-marked.
-Override for a deliberate uncited keep: a `Lifecycle: contract` line in the
+Lifecycle check: a SHIPPED design doc must either be cited by a live surface (CLAUDE.md,
+hooks, memory, or any non-shipped doc — one hop, no credit for citations from other
+shipped docs) or move to docs/archive/. Liveness is recomputed every run — nothing is
+hand-marked. Override for a deliberate uncited keep: a `Lifecycle: contract` line in the
 doc header. Enforced by crates/manifold-core/tests/docs_lifecycle.rs.
 
-The `last-changed` date is the drift check: a doc that says "not built" but
-was touched this week is the flag to look closer (the Haiku merge housekeeper
-automates that check; this is the human-readable view).
+The `last-changed` date is the drift check: a doc that says "not built" but was touched
+this week is the flag to look closer.
 
-Header budget (the status-stacking class fix, Peter 2026-07-28): a design doc's
-status header is state + owed/open items + one pointer, capped at HEADER_CAP
-words. History, amendments, and per-phase stories live in the doc body or beads.
-Docs still over budget are pinned at their current size in
-`design_status_header_budget.txt` — any growth fails, and a doc that shrinks
-under the cap must lose its pin (the ratchet only burns down). Enforced with the
-lifecycle check via crates/manifold-core/tests/docs_lifecycle.rs.
+Header budget: a design doc's status header is state + owed/open items + one pointer,
+capped at HEADER_CAP words. History, amendments, and per-phase stories live in the doc
+body or beads. Docs still over budget are pinned at their current size in
+`design_status_header_budget.txt` — any growth fails, and a doc that shrinks under the
+cap must lose its pin (the ratchet only burns down). Enforced with the lifecycle check
+via crates/manifold-core/tests/docs_lifecycle.rs.
 """
 from __future__ import annotations
 

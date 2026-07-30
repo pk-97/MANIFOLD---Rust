@@ -1,40 +1,29 @@
 #!/usr/bin/env python3
 """PreToolUse hook for Agent: one-pass launch guard — model tier + teammate naming.
 
-Merges the former agent-model-guard.py and agent-teammate-naming-guard.py.
-Those ran as independent deny-first hooks, so a launch wrong on both counts
-burned two denial turns (2026-07-30, Peter: "launching an agent always wastes
-2 turns with the deny hook"). This guard checks EVERYTHING in one pass and a
-deny spells the complete corrected call — model AND exact name — so one
-retry always lands. Peter's explicit call (2026-07-30): keep denial
-semantics; the guard never auto-fills the model or rewrites the name, because
+Checks everything in one pass; a deny spells the complete corrected call — model AND
+exact name — so one retry always lands. Never auto-fills the model or rewrites the name:
 passing the tier explicitly IS the sign-off.
 
-Model rule (2026-07-06 incident: two workers silently inherited the
-orchestrator's Fable tier, double-billing every token):
-- `model` absent -> deny. House default for workers is "sonnet";
-  "opus"/"fable" are an explicit per-launch decision.
+Model rule:
+- `model` absent -> deny. House default for workers is "sonnet"; "opus"/"fable" are an explicit per-launch decision.
 - "opus"/"fable" -> allowed with a reminder attached.
 
-Naming rule (2026-07-25, Peter: "the hook needs to enforce all of the correct
-naming and conventions for teammates such as their model name and role"):
-  name = "<slot>-<descriptive-task>", kebab-case, task part >= 2 plain words
-  (opaque labels like T1/D-52 denied: no-opaque-task-labels rule).
-The slot label is derived AT SPAWN TIME from the backend the harness will
-actually use: the `model` param selects a tier slot; the session env
-(`ANTHROPIC_DEFAULT_<TIER>_MODEL`, written by cc-fleet / the tmux binding)
-says which backend that slot resolves to. Unset or claude-* -> Anthropic
-path, label = tier name. SHORT_LABEL is the only human-maintained piece —
-extend it when onboarding a model (seat_tool warns when it's missing).
+Naming rule: name = "<slot>-<descriptive-task>", kebab-case, task part >= 2 plain words
+(opaque labels like T1/D-52 denied: no-opaque-task-labels rule). The slot label is
+derived AT SPAWN TIME from the backend the harness will actually use: the `model` param
+selects a tier slot; the session env (`ANTHROPIC_DEFAULT_<TIER>_MODEL`) says which
+backend that slot resolves to. Unset or claude-* -> Anthropic path, label = tier name.
+SHORT_LABEL is the only human-maintained piece — extend it when onboarding a model
+(seat_tool warns when it's missing).
 
-seat_tool.py and gate_runner.py import backend_for_slot()/slot_map() from
-this file — it is the single source of truth for slot labels.
+seat_tool.py and gate_runner.py import backend_for_slot()/slot_map() from this file — it
+is the single source of truth for slot labels.
 
 Fails open on any error: a guard hook must never be able to block a session.
 
-Obsolete when: the routing policy in docs/AGENT_ROUTING.md retires the
-two-tier lead/lane model or the slot-ring naming scheme; recheck at each
-routing-policy revision.
+Obsolete when: the routing policy in docs/AGENT_ROUTING.md retires the two-tier
+lead/lane model or the slot-ring naming scheme; recheck at each routing-policy revision.
 """
 import json
 import os

@@ -1,33 +1,22 @@
 #!/usr/bin/env python3
 """SessionStart hook: tell provider sessions which model and seat they are.
 
-Why (2026-07-24, Peter): provider models (K3/GLM/Flash) run inside the
-Claude Code harness, whose system prompt is written for Claude — so they
-routinely misidentify as Claude/Fable/Opus and sign records with the wrong
-name, polluting provenance in decisions.md, handoffs, and design-doc
-D-entries. The guards never trust self-belief (they read server-reported
-model ids), but the written record does. This hook injects the true
-identity as session context, machine-derived from the same source the
-statusline uses.
+Provider models (K3/GLM/Flash) run inside the Claude Code harness, whose system prompt
+is written for Claude — so they routinely misidentify as Claude/Fable/Opus and sign
+records with the wrong name. The guards never trust self-belief (they read
+server-reported model ids), but the written record does; this hook injects the true
+identity as session context, machine-derived from the same source the statusline uses.
 
-Mechanism (rekeyed 2026-07-24, D-48 slot map): slots no longer identify
-seats — the kimi seat's slots now carry LANE tiers (opus=glm-5.2,
-sonnet=glm-4.7, haiku=deepseek-v4-flash), so matching slot env against
-default_model is wrong (it labelled the K3 lead as zai/dispatcher once
-already). Seat resolution order:
-  1. ANTHROPIC_MODEL — the session's OWN model, injected inline by the
-     `k3m` shell alias (survives profile regeneration; k3 -> kimi).
-  2. ANTHROPIC_DEFAULT_OPUS_MODEL matched against each provider's
-     EFFECTIVE STRONG SLOT (strong_model, else default_model). Unique per
-     seat by invariant: no two seats may share a strong slot.
-  3. base_url — last resort, ambiguous post-proxy (several seats share
-     127.0.0.1:4000).
-Provider -> seat maps per docs/AGENT_ROUTING.md (the tiering). Anthropic
-sessions (no/api.anthropic.com base URL) get nothing — their system prompt
-is already correct.
+Seat resolution order:
+  1. ANTHROPIC_MODEL — the session's OWN model, injected inline by the `k3m` shell alias (survives profile regeneration; k3 -> kimi).
+  2. ANTHROPIC_DEFAULT_OPUS_MODEL matched against each provider's EFFECTIVE STRONG SLOT (strong_model, else default_model). Unique per seat by invariant: no two seats may share a strong slot.
+  3. base_url — last resort, ambiguous post-proxy (several seats share 127.0.0.1:4000).
 
-Fails silent on any error: identity context is a nice-to-have; a hook must
-never block a session.
+Provider -> seat maps per docs/AGENT_ROUTING.md (the tiering). Anthropic sessions
+(no/api.anthropic.com base URL) get nothing — their system prompt is already correct.
+
+Fails silent on any error: identity context is a nice-to-have; a hook must never block a
+session.
 """
 import json
 import os

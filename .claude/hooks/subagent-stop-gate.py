@@ -1,37 +1,35 @@
 #!/usr/bin/env python3
-"""SubagentStop hook: per-lane gate firing for executor-tier stops (P5).
+"""SubagentStop hook: per-lane gate firing for executor-tier stops.
 
-Per GATE_RUNTIME_DESIGN.md P5: when an executor-tier subagent stops,
-run gate_runner per-lane against the lane's brief and block the stop
-if any gate fails (red gates). Non-executor tiers pass through.
+Per docs/GATE_RUNTIME_DESIGN.md (P5 gate firing): when an executor-tier subagent stops,
+run gate_runner per-lane against the lane's brief and block the stop if any gate fails
+(red gates). Non-executor tiers pass through.
 
-Confidence-gated (BUG-og15 binding contract): fires only when the payload
-fields it needs (agent_id, agent_type) are present. On unknown shapes or
-missing task/brief identification, allows the stop and logs the payload
-to /tmp/manifold_subagent_stop_payloads.jsonl for empirical documentation.
+Confidence-gated (BUG-og15 — binding-contract fields): fires only when the payload
+fields it needs (agent_id, agent_type) are present. On unknown shapes or missing
+task/brief identification, allows the stop and logs the payload to
+/tmp/manifold_subagent_stop_payloads.jsonl.
 
-Blocking mechanism (precedent: lane-report-enforcer.py): exit 2 with
-stderr message blocks the stop and sends the message as feedback to the
-subagent. The block counter IS the verdict trail (2026-07-27, replacing a
-private /tmp state file): the task's trailing streak of red per-lane
-verdicts — which gate_runner just appended to — decides. Streak past
-FAIL_STREAK_LIMIT allows through with a loud systemMessage, so the trail
-is the single fact both this hook and gate_runner's stop-retrying
-directive read; two counters can no longer drift.
+Blocking mechanism: exit 2 with stderr message blocks the stop and sends the message as
+feedback to the subagent. The block counter IS the verdict trail: the task's trailing
+streak of red per-lane verdicts, which gate_runner just appended to, decides. Streak
+past FAIL_STREAK_LIMIT allows through with a loud systemMessage, so the trail is the
+single fact both this hook and gate_runner's stop-retrying directive read.
 
-Payload schema (empirically verified 2026-07-25, claude CLI 2.1.219):
+Payload schema:
   hook_event_name: "SubagentStop"
   stop_hook_active: bool — when true, exit 0 immediately (system has decided)
   agent_id: str
   agent_transcript_path: str
   agent_type: str
   last_assistant_message: str (optional)
-  ...plus standard session fields from Kf
+  ...plus standard session fields
 
-Executor tiers (from agent-tier-spawn-guard.py):
-  claude-sonnet, claude-haiku, deepseek*, kimi-k2*, kimi-for-coding
+Executor tiers (from agent-tier-spawn-guard.py): claude-sonnet, claude-haiku, deepseek*,
+kimi-k2*, kimi-for-coding.
 
-Obsolete when: the routing policy in docs/AGENT_ROUTING.md retires the two-tier lead/lane model this guard polices; recheck at each routing-policy revision.
+Obsolete when: the routing policy in docs/AGENT_ROUTING.md retires the two-tier
+lead/lane model this guard polices; recheck at each routing-policy revision.
 """
 
 import json
