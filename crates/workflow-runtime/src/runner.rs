@@ -787,8 +787,11 @@ fn run_execute(
         };
         crate::status::emit(&cfg.run_dir, |st| {
             st.state = "waiting-on-model".into();
-            st.detail = format!("{} chars prompt, attempt {attempt}/{max_attempts}", req.user.len());
+            // Attempt lives in the structured fields only — `detail` repeating it
+            // double-printed in `watch`.
+            st.detail = format!("{} char prompt", crate::status::commas(req.user.len() as u64));
             st.attempt = attempt;
+            st.max_attempts = max_attempts;
         });
         let result = checked_complete(transport, &step.name, &req)?;
         budget.add(&result);
@@ -884,8 +887,11 @@ fn model_loop(
         };
         crate::status::emit(&cfg.run_dir, |st| {
             st.state = "waiting-on-model".into();
-            st.detail = format!("{} chars prompt, attempt {attempt}/{max_attempts}", req.user.len());
+            // Attempt lives in the structured fields only — `detail` repeating it
+            // double-printed in `watch`.
+            st.detail = format!("{} char prompt", crate::status::commas(req.user.len() as u64));
             st.attempt = attempt;
+            st.max_attempts = max_attempts;
         });
         let result = checked_complete(transport, label, &req)?;
         budget.add(&result);

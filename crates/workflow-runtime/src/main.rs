@@ -165,18 +165,7 @@ fn colours_on() -> bool {
     std::env::var_os("NO_COLOR").is_none() && std::io::stdout().is_terminal()
 }
 
-/// `84120` → `84,120`. Token counts are the numbers Peter reads mid-run.
-fn commas(n: u64) -> String {
-    let s = n.to_string();
-    let mut out = String::with_capacity(s.len() + s.len() / 3);
-    for (i, c) in s.chars().enumerate() {
-        if i > 0 && (s.len() - i).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(c);
-    }
-    out
-}
+use workflow_runtime::status::commas;
 
 fn duration(secs: u64) -> String {
     match secs {
@@ -191,6 +180,39 @@ fn bar(done: u64, total: u64, width: usize) -> String {
     format!("{}{}", "█".repeat(filled), "░".repeat(width - filled))
 }
 
+/// Terminal columns, so a long error wraps instead of running off the right
+/// edge. 100 when stdout isn't a terminal (piped output, tests).
+fn term_width() -> usize {
+    let mut ws: libc::winsize = unsafe { std::mem::zeroed() };
+    // SAFETY: TIOCGWINSZ writes a winsize through the pointer; fd 1 may be any
+    // kind of file, in which case the call fails and we keep the fallback.
+    let ok = unsafe { libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, &mut ws) } == 0;
+    if ok && ws.ws_col >= 40 { ws.ws_col as usize } else { 100 }
+}
+
+/// Wrap `text` at `width`, prefixing every line with `indent`. Model errors
+/// quote file contents, so they arrive both long and full of escaped newlines.
+fn wrap(text: &str, width: usize, indent: &str) -> Vec<String> {
+    let body = width.saturating_sub(indent.len()).max(20);
+    let mut out = Vec::new();
+    for para in text.replace("\\n", " ⏎ ").lines() {
+        let mut line = String::new();
+        for word in para.split_whitespace() {
+            if !line.is_empty() && line.chars().count() + 1 + word.chars().count() > body {
+                out.push(format!("{indent}{line}"));
+                line = String::new();
+            }
+            if !line.is_empty() {
+                line.push(' ');
+            }
+            // A single word longer than the body (a pasted path or blob) is cut.
+            line.extend(word.chars().take(body));
+        }
+        out.push(format!("{indent}{line}"));
+    }
+    out
+}
+
 /// One dashboard frame, built whole so `watch` can emit it in a single write.
 fn watch_frame(run_dir: &std::path::Path) -> String {
     use std::fmt::Write;
@@ -200,40 +222,81 @@ fn watch_frame(run_dir: &std::path::Path) -> String {
         (p(DIM), p(BOLD), p(RED), p(GREEN), p(YELLOW), p(CYAN), p(OFF));
     let label = |text: &str| format!("{dim}{text:<7}{off}");
 
+    let w = term_width().min(110);
     let mut f = String::new();
-    let name = run_dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-    match workflow_runtime::runner::holder_alive(run_dir) {
-        Some(pid) => _ = writeln!(f, "{bold}{name}{off}  {green}● running{off} {dim}pid {pid}{off}"),
-        None => _ = writeln!(f, "{bold}{name}{off}  {dim}○ runner exited{off}"),
-    }
-    _ = writeln!(f, "{dim}{}{off}", "─".repeat(64));
 
-    match workflow_runtime::status::read(run_dir) {
+    // ── header: what run, is it alive, how long since it moved ──
+    let name = run_dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let st = workflow_runtime::status::read(run_dir);
+    let elapsed = st.as_ref().map(|s| {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        now.saturating_sub(s.ts)
+    });
+    let liveness = match workflow_runtime::runner::holder_alive(run_dir) {
+        Some(pid) => format!("{green}● running{off} {dim}pid {pid}{off}"),
+        None => format!("{dim}○ runner exited{off}"),
+    };
+    // A long silence is how a stalled transport looks from outside.
+    let idle = match elapsed {
+        Some(s) => {
+            let c = if s >= 300 {
+                red
+            } else if s >= 120 {
+                yellow
+            } else {
+                dim
+            };
+            format!("  {dim}idle{off} {c}{}{off}", duration(s))
+        }
+        None => String::new(),
+    };
+    _ = writeln!(f, "{bold}{name}{off}  {liveness}{idle}");
+    _ = writeln!(f, "{dim}{}{off}", "─".repeat(w));
+
+    // ── progress: step, state, model, budget ──
+    match &st {
         Some(st) => {
+            if st.total_steps > 0 {
+                _ = writeln!(
+                    f,
+                    "{}{dim}{}/{}{off} {} {bold}{}{off} {dim}({}){off}",
+                    label("step"),
+                    st.step_index,
+                    st.total_steps,
+                    bar(st.step_index.saturating_sub(1) as u64, st.total_steps as u64, 12),
+                    st.step,
+                    st.opcode
+                );
+            }
             let state_colour = match st.state.as_str() {
                 "run-done" => green,
                 "retrying" | "waiting-on-model" | "gate" => yellow,
                 "transport-error" | "parked" | "escalated" | "blocked" => red,
                 _ => cyan,
             };
-            if st.total_steps > 0 {
-                let steps = bar(st.step_index.saturating_sub(1) as u64, st.total_steps as u64, 12);
-                _ = writeln!(
-                    f,
-                    "{}{bold}{}{off} {dim}({}){off}  {dim}{}/{}{off} {dim}{steps}{off}",
-                    label("step"),
-                    st.step,
-                    st.opcode,
-                    st.step_index,
-                    st.total_steps
-                );
-            }
-            _ = writeln!(f, "{}{state_colour}{}{off} {}", label("state"), st.state, st.detail);
+            let detail = if st.detail.is_empty() {
+                String::new()
+            } else {
+                format!(" {dim}·{off} {}", st.detail)
+            };
+            _ = writeln!(f, "{}{state_colour}{}{off}{detail}", label("state"), st.state);
             if !st.model.is_empty() || st.max_attempts > 0 {
-                let attempt = if st.attempt > 1 { yellow } else { dim };
+                // Last attempt is the one worth catching before the step parks.
+                let last = st.attempt >= st.max_attempts && st.max_attempts > 0;
+                let ac = if last {
+                    red
+                } else if st.attempt > 1 {
+                    yellow
+                } else {
+                    dim
+                };
+                let flag = if last { "  ← last try" } else { "" };
                 _ = writeln!(
                     f,
-                    "{}{}  {attempt}attempt {}/{}{off}",
+                    "{}{}  {ac}attempt {}/{}{flag}{off}",
                     label("model"),
                     st.model,
                     st.attempt,
@@ -242,7 +305,7 @@ fn watch_frame(run_dir: &std::path::Path) -> String {
             }
             let pct =
                 if st.token_budget == 0 { 0 } else { st.tokens_spent * 100 / st.token_budget };
-            let token_colour = if pct >= 90 {
+            let tc = if pct >= 90 {
                 red
             } else if pct >= 70 {
                 yellow
@@ -251,56 +314,50 @@ fn watch_frame(run_dir: &std::path::Path) -> String {
             };
             _ = writeln!(
                 f,
-                "{}{token_colour}{}{off}{dim} / {}  {} {pct}%{off}",
-                label("tokens"),
+                "{}{dim}{} {tc}{:>3}%{off}  {}{dim} of {}{off}",
+                label("budget"),
+                bar(st.tokens_spent, st.token_budget, 12),
+                pct,
                 commas(st.tokens_spent),
-                commas(st.token_budget),
-                bar(st.tokens_spent, st.token_budget, 16)
+                commas(st.token_budget)
             );
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            let elapsed = now.saturating_sub(st.ts);
-            // A long silence is the symptom of a stalled transport, so it goes red.
-            let idle = if elapsed >= 300 {
-                red
-            } else if elapsed >= 120 {
-                yellow
-            } else {
-                dim
-            };
-            _ = writeln!(f, "{}{idle}{} since last transition{off}", label("idle"), duration(elapsed));
             if !st.last_error.is_empty() {
-                _ = writeln!(f, "\n{red}{bold}LAST ERROR{off} {red}{}{off}", st.last_error);
+                _ = writeln!(f, "\n{red}{bold}last error{off}");
+                for line in wrap(&st.last_error, w, "  ") {
+                    _ = writeln!(f, "{red}{line}{off}");
+                }
             }
         }
         None => _ = writeln!(f, "{dim}no status.json yet{off}"),
     }
+
+    // ── parked steps: the run's open questions ──
     if let Ok(text) = std::fs::read_to_string(run_dir.join("parked.jsonl")) {
         let mut first = true;
         for line in text.lines() {
             if let Ok(p) = serde_json::from_str::<workflow_runtime::runner::ParkedItem>(line) {
                 if first {
-                    f.push('\n');
+                    _ = writeln!(f, "\n{red}{bold}parked{off}");
                     first = false;
                 }
-                let reason: String = p.reason.chars().take(120).collect();
-                _ = writeln!(f, "{red}PARKED{off} {bold}{}{off} {}", p.step, reason);
+                _ = writeln!(f, "  {bold}{}{off} {dim}after {} attempts{off}", p.step, p.attempts);
+                for line in wrap(&p.reason, w, "    ") {
+                    _ = writeln!(f, "{dim}{line}{off}");
+                }
             }
         }
     }
-    f.push('\n');
-    if let Ok(summary) = workflow_runtime::cost::summarize(run_dir) {
-        for line in summary.lines() {
-            if line.starts_with("step ") || line.starts_with("model ") {
-                _ = writeln!(f, "{dim}{line}{off}");
-            } else if let Some(total) = line.strip_prefix("TOTAL ") {
-                _ = writeln!(f, "{bold}TOTAL{off} {total}");
-            } else {
-                _ = writeln!(f, "{line}");
-            }
+
+    // ── ledger: where the tokens went ──
+    if let Ok(l) = workflow_runtime::cost::ledger(run_dir) {
+        _ = writeln!(f, "\n{dim}{:<30}{:>9}{:>12}{off}", "step", "requests", "tokens");
+        for (step, (requests, tokens)) in &l.by_step {
+            _ = writeln!(f, "{step:<30}{requests:>9}{:>12}", commas(*tokens));
         }
+        for (model, tokens) in &l.by_model {
+            _ = writeln!(f, "{dim}{model:<39}{:>12}{off}", commas(*tokens));
+        }
+        _ = writeln!(f, "{bold}{:<39}{:>12}{off}", "TOTAL", commas(l.total));
     }
     f
 }
