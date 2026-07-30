@@ -1,0 +1,72 @@
+# BUG-ji6q (binding default_value replant clobbers live node.params): build the
+# failing regression test FIRST and prove it red against current main. The fix
+# itself is NOT in this program — the bead calls the binding lifecycle
+# load-bearing and asks for full-context review, so the lead does that slice.
+#
+# Also the first live exercise of the `lane` opcode (WORKFLOW_RUNTIME_DESIGN P4).
+# Run from the main checkout:
+#   target/debug/workflow run crates/workflow-runtime/programs/bug-ji6q-clobber-test.toml
+name = "bug-ji6q-clobber-test"
+task = "BUG-ji6q"
+token_budget = 120000
+usd_budget = 8.0
+request_timeout_s = 1800
+
+[target]
+label = "bug-ji6q-clobber-test"
+branch = "lane/bug-ji6q-clobber-test"
+
+# The tree is sane before we judge anything red. Scoped to the crate the test
+# lands in — a red baseline here means stop, not "the new test found a bug".
+[[step]]
+name = "baseline-green"
+title = "The renderer's binding tests are green before we add a failing one"
+opcode = "gate"
+gate_timeout_s = 1800
+gate = [
+  "cargo nextest run -p manifold-renderer --lib preset_runtime::tests",
+]
+
+# Lane, not execute: this writes a new test against a subsystem the worker has
+# to read first (bound_graph binding lifecycle, scene_exposure stamping). Inputs
+# are POINTERS — the lane opens them itself.
+[[step]]
+name = "write-failing-test"
+title = "Write the clobber regression test and prove it red on current main"
+opcode = "lane"
+model = "sonnet"
+max_turns = 60
+retry_cap = 2
+template = "bug-ji6q-clobber-test-brief.md"
+inputs = [
+  "path:crates/manifold-renderer/src/node_graph/bound_graph.rs",
+  "path:crates/manifold-renderer/src/node_graph/scene_exposure.rs",
+  "path:crates/manifold-renderer/src/node_graph/graph_loader.rs",
+  "path:crates/manifold-renderer/src/preset_runtime/tests/binding_seed.rs",
+]
+gate_timeout_s = 1800
+gate = [
+  # The test exists under the name the fix will later un-break.
+  "rg -q 'fn bound_param_write_survives_a_graph_rebuild' crates/manifold-renderer/src/preset_runtime/tests/",
+  # It is wired into the module tree, not orphaned in a file nothing includes.
+  "sh -c 'cargo nextest run -p manifold-renderer --lib bound_param_write_survives_a_graph_rebuild 2>&1 | rg -q \"1 test run\"'",
+  # And it FAILS — a green test here would mean it does not reproduce the bug.
+  "sh -c '! cargo nextest run -p manifold-renderer --lib bound_param_write_survives_a_graph_rebuild'",
+  # Nothing else was broken on the way past.
+  "cargo clippy -p manifold-renderer --tests -- -D warnings",
+  "cargo nextest run -p manifold-renderer --lib preset_runtime::tests -E 'not test(bound_param_write_survives_a_graph_rebuild)'",
+]
+
+# Reading-judged, so a one-shot API call by doctrine (D20): does the test
+# actually pin the mechanism the bead describes, or does it fail for some
+# incidental reason? Recorded to the decisions trail via `task`.
+[[step]]
+name = "conformance-review"
+title = "Model review: does the test pin the described mechanism?"
+opcode = "generate"
+model = "deepseek-v4-pro"
+max_tokens = 8000
+retry_cap = 2
+artifact = "verdict"
+template = "bug-ji6q-review-brief.md"
+inputs = ["write-failing-test"]
