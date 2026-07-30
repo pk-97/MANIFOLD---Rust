@@ -1,6 +1,6 @@
 # Ray Tracing — hybrid RT lighting for hero scenes
 
-**Status:** IN PROGRESS — Tier 1+2, the motion class, reflections R1/R2/R3, and T3-8 multi-bounce GI LANDED on main (records: section 9.6 (phases), section 11.4 (Multi-bounce phases)). The T3-8 work also removed the lightless-RT gate: emissive-only zero-light scenes now get GI/AO/reflections. Peter's L2 look PASSED 2026-07-24; multi-bounce awaits his look. OPEN: traced-detail wash + motion speckle tuning (R3-era constants, Peter's look); `trace_ms` 2-vs-1 number owed from a heavier scene; items 6/9 and P5 export (D13) / P6 frame interp stay show-need-triggered. BUG-im9s (residual streak) accepted P3. R2 constants untuned — Peter's look, on demand. Perf profiling DEFERRED by Peter until the pipeline is complete. · 2026-07-30 · Fable
+**Status:** IN PROGRESS — Tier 1+2, the motion class, reflections R1/R2/R3, and T3-8 multi-bounce GI LANDED on main (records: section 9.6 (phases), section 11.4 (Multi-bounce phases)). The T3-8 work also removed the lightless-RT gate: emissive-only zero-light scenes now get GI/AO/reflections. Peter's L2 look PASSED 2026-07-24; multi-bounce awaits his look. OPEN: traced-detail wash + motion speckle tuning (R3-era constants, Peter's look); `trace_ms` 2-vs-1 number owed from a heavier scene; items 6/9 and P5 export (D13) / P6 frame interp stay show-need-triggered. BUG-im9s (residual streak) accepted P3. R2 constants untuned — Peter's look, on demand. Perf profiling DEFERRED by Peter until the pipeline is complete. Section 12 (Screen-space AO handoff) APPROVED 2026-07-30 — in build. · 2026-07-30 · Fable
 **Prerequisites:** none for P0. P1+ gated on P0 numbers and on RENDERING_INFRA_V2 section 2 (G-buffer/motion vectors) for temporal pieces.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -790,7 +790,7 @@ eye may not.
 triggers: bounce count > 2 (trigger: Peter's look wants more after the budget re-judge);
 recursive specular (section 9.7, unchanged).
 
-#### Phase records (LANDED 2026-07-30, merge `ca4206c1`)
+#### Phase records — multi-bounce (LANDED 2026-07-30, merge `ca4206c1`)
 
 - **MB-A:** landed. One-shot execute could not produce the refactor (six parked attempts
   across two runs — the emitted helper broke MSL's declare-before-use ordering, invisible
@@ -808,3 +808,91 @@ recursive specular (section 9.7, unchanged).
   at fixture scale — measure on a heavier scene when Peter re-judges budgets. Demo pair:
   the run's bleed captures (1 bounce: glow pools under the emitter; 2: the room fills and
   the wall's red crosses the floor).
+
+## 12. Screen-space AO handoff — `ao_mask` (BUG-tgbd + BUG-ay0e; APPROVED 2026-07-30)
+
+Intake: BUG-tgbd (import SSAO group RT-oblivious — double AO with RT on) and BUG-ay0e
+(post-process AO darkens baked-look surfaces). One root cause: the importer's AO group
+(`gltf_import/scene.rs`, the "Ambient Occlusion" group) multiplies screen-space AO onto
+`render_scene`'s final color with no signal about RT state or material kind. The scene
+pass is the only stage that knows both, so it publishes the signal; the group consumes it.
+
+**Stage translation.** RT scenes stop double-darkening corners (GTAO no longer stomps the
+traced AO and multi-bounce bleed); a baked-look photoscan stays flat next to lit
+neighbours instead of growing a fake contact gradient.
+
+### 12.1 Audit — what exists (verified 2026-07-30)
+
+| Piece | Where | State |
+|---|---|---|
+| Lazy G-buffer outputs, MSAA target + resolve pattern | `render_scene.rs:315-340` (`depth` R32Float, `velocity` Rg16Float — rendered only when wired, GBUFFER_DESIGN.md section 2 (Decisions) D1) | `ao_mask` is a third instance of the same mechanism; no spare channel exists (depth 1-ch, velocity 2-ch, color alpha is scene alpha) |
+| The RT gate expression | `render_scene.rs:3588` — `rt_enabled && rt_ready` (latched built flag) | Reused verbatim; bool, not a ramp (Peter 2026-07-30: nobody flips RT mid-show) |
+| Material kind at draw time | `baked_look` in `pbr_material.rs` — BUG-pt6g (unlit imports default to lit) made it the opt-back-in flag → emitted `Material` unlit kind | The per-pixel zero source |
+| Importer AO group | `gltf_import/scene.rs:628-683` — ssao_gtao → bilateral H/V → `node.mix` Multiply | The consumer to rewire |
+| Per-pixel gated blend | `node.masked_mix` — a/b weighted by mask red channel; `mask` is a required input | The atom that applies the mask; no new node needed |
+| Loader migration choke point | `graph_loader.rs` (`migrate_def_type_ids`, `migrate_gltf_anim_v2`) | Third migration goes here; pattern is established and idempotent |
+
+### 12.2 Decisions
+
+- **AM1 — `ao_mask` is a fourth lazy `render_scene` output.** R8Unorm, canvas-sized,
+  MSAA target + resolve on the `velocity` pattern, rendered only when wired. Meaning:
+  per-pixel weight of screen-space AO still owed. Lit raster pixel → 1; unlit-kind
+  material (`baked_look`) → 0; clear value 1 (background AO is already identity there —
+  old behaviour preserved). Rejected: riding an existing channel (none is spare), a new
+  boolean bypass param on the group (fixes the double-AO half only, leaves the
+  baked-look half manual).
+- **AM2 — RT zeroes the whole mask.** When `rt_enabled && rt_ready` (the line-3588
+  expression), the mask is written 0 everywhere. Bool gate; no float ramp — RT toggling
+  is a load-time act, not a performance gesture (Peter 2026-07-30).
+- **AM3 — the name stays `ao_mask`.** Concrete over speculative: a shared
+  "screen-space-terms-owed" signal waits for a second consumer to exist; a port rename
+  later is one more loader migration on an established pattern.
+- **AM4 — the group applies the mask with `node.masked_mix`, downstream of the existing
+  multiply.** New required group input `ao_mask`; `masked_mix(a = color, b = ssao_mix
+  out, mask)` becomes the group output. The existing ssao_gtao/bilateral/mix chain is
+  untouched. Unwired means impossible in migrated/new graphs (the input is wired at
+  assembly and at migration); a group the migration does not recognize keeps `node.mix`
+  and therefore exact old behaviour — nothing on disk changes silently.
+- **AM5 — migration on load, structure-gated.** At the `graph_loader.rs` choke point:
+  match the importer's exact AO group shape (node type-ids + wire set); on match, add the
+  `ao_mask` interface input, insert `masked_mix`, rewire the group output, and wire
+  `render_scene.ao_mask` → group at the outer level. No match (hand-edited group) → leave
+  it alone. Idempotent: a migrated group no longer matches the pre-migration shape.
+- **AM6 — the zero list is `baked_look` only.** Emissive-lit surfaces keep AO (they are
+  lit by default since the BUG-pt6g ruling above and want contact shading like anything
+  else). The list lives in one place — the mask-write site in the scene shader — with
+  this section cited.
+
+### 12.3 Invariants & enforcement
+
+- **I-AM1 — migration is idempotent and structure-gated.** Loader test: migrate twice ==
+  once; a deliberately perturbed group is untouched. Fixture: the canonical LiveSchool
+  project loads clean.
+- **I-AM2 — RT on+ready makes the AO group an identity on color.** Gpu proof: RT scene,
+  region probe of group input vs output — equal within epsilon.
+- **I-AM3 — baked-look pixels pass the AO group unchanged while lit neighbours darken.**
+  Value proof on a two-quad fixture (one `baked_look`, one lit, shared corner).
+- **I-AM4 — RT off, all-lit scene matches old output within epsilon.** Region probe, not
+  `cmp`: `masked_mix` at mask==1 is a lerp, not a select, so byte identity is not owed —
+  state the epsilon in the test.
+
+### 12.4 Phases
+
+#### AM-A — `render_scene` grows the output
+
+- *Deliverables:* `ao_mask` in `RENDER_SCENE_OUTPUTS`; R8Unorm MSAA target + resolve
+  (velocity pattern); shader writes 1 / 0-for-unlit-kind / 0-everywhere under the AM2
+  gate; clear 1. Gpu proof for the three mask states (lit=1, baked_look=0, RT⇒all 0).
+- *Gate:* clippy `-p manifold-renderer`; `scripts/gpu_proofs_gate.py`.
+- *Forbidden:* touching the AO group or loader; any change to color/depth/velocity
+  output behaviour when `ao_mask` is unwired (lazy rule — unwired must stay byte-inert).
+
+#### AM-B — consumer + migration
+
+- *Deliverables:* importer assembles the AM4 group shape and outer wire; AM5 loader
+  migration; I-AM1..I-AM4 tests; `graph_tool validate` + `graph_tool fusion` pre-flight
+  on the assembled import graph.
+- *Gate:* clippy; scoped nextest (`manifold-renderer` loader/import filters); gpu proofs
+  (I-AM2/I-AM3); LiveSchool fixture load.
+- *Close-out:* BUG-tgbd (double AO) and BUG-ay0e (baked-look AO) closed; supersession
+  sweep per CLAUDE.md.
