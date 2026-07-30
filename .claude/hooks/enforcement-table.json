@@ -102,6 +102,26 @@
       "file": "scripts/gate_runner.py"
     },
     {
+      "transition": "workflow execute: apply-commit-gate per attempt, pathspec-only commits, retry cap then park (one-commit-then-stop as structure, not goodwill)",
+      "enforcement": "exit-code",
+      "file": "crates/workflow-runtime/src/runner.rs"
+    },
+    {
+      "transition": "workflow: parked execute blocks every later execute in the shared worktree (exit 20); dependent steps block on parked inputs",
+      "enforcement": "exit-code",
+      "file": "crates/workflow-runtime/src/runner.rs"
+    },
+    {
+      "transition": "workflow: empty ChangeSet is a non-attempt; park reason keeps the most informative error + full gate report",
+      "enforcement": "exit-code",
+      "file": "crates/workflow-runtime/src/runner.rs"
+    },
+    {
+      "transition": "workflow: seeded rerun gates first — green completes token-free, red feeds the fresh gate report",
+      "enforcement": "exit-code",
+      "file": "crates/workflow-runtime/src/runner.rs"
+    },
+    {
       "transition": "UI flow gate on touched paths at landing",
       "enforcement": "exit-code",
       "file": "scripts/run_ui_flows.py"

@@ -1,6 +1,6 @@
 # Ray Tracing — hybrid RT lighting for hero scenes
 
-**Status:** IN PROGRESS — Tier 1+2, the motion class, and reflections R1/R2/R3 LANDED on main (records: section 9.6 (phases)). Peter's L2 look PASSED 2026-07-24; RT is usable under model motion. OPEN: traced-detail wash + motion speckle tuning (R3-era constants, Peter's look); next build phase is Tier 3 item 8 multi-bounce GI (Peter's priority call 2026-07-29 — designed section 11 (Multi-bounce GI), 2026-07-30, executing as the WORKFLOW_RUNTIME P3 shakedown); items 6/9 and P5 export (D13) / P6 frame interp stay show-need-triggered. D-61 sweep verdict PASSED 2026-07-29 after the D-63 clamp + v2 tone-mapped clip; faint extreme-transition residual accepted as BUG-im9s (residual streak, P3). R2 constants (incl. RT_REFL_CLAMP_GAMMA) still untuned — Peter's look, on demand. Perf profiling DEFERRED by Peter until the pipeline is complete. · 2026-07-29 · Fable
+**Status:** IN PROGRESS — Tier 1+2, the motion class, reflections R1/R2/R3, and T3-8 multi-bounce GI LANDED on main (records: section 9.6 (phases), section 11.4 (Multi-bounce phases)). The T3-8 work also removed the lightless-RT gate: emissive-only zero-light scenes now get GI/AO/reflections. Peter's L2 look PASSED 2026-07-24; multi-bounce awaits his look. OPEN: traced-detail wash + motion speckle tuning (R3-era constants, Peter's look); `trace_ms` 2-vs-1 number owed from a heavier scene; items 6/9 and P5 export (D13) / P6 frame interp stay show-need-triggered. BUG-im9s (residual streak) accepted P3. R2 constants untuned — Peter's look, on demand. Perf profiling DEFERRED by Peter until the pipeline is complete. · 2026-07-30 · Fable
 **Prerequisites:** none for P0. P1+ gated on P0 numbers and on RENDERING_INFRA_V2 section 2 (G-buffer/motion vectors) for temporal pieces.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -789,3 +789,22 @@ eye may not.
 (MB-A), MB1/MB3/MB4/MB5 (MB-B), MB6 (both phases' forbidden lists). Deferred with
 triggers: bounce count > 2 (trigger: Peter's look wants more after the budget re-judge);
 recursive specular (section 9.7, unchanged).
+
+#### Phase records (LANDED 2026-07-30, merge `ca4206c1`)
+
+- **MB-A:** landed. One-shot execute could not produce the refactor (six parked attempts
+  across two runs — the emitted helper broke MSL's declare-before-use ordering, invisible
+  to a blind diff); a lane fixed forward on the committed attempt. I-MB1 byte identity and
+  I-MB3 single-home held through the program's gate. Boundary lesson recorded as
+  WORKFLOW_RUNTIME_DESIGN.md section 5 (Phasing — P3 outcome).
+- **MB-B:** landed. The constant flip succeeded one-shot, first attempt. The bleed probe
+  then parked on byte-identical captures — root cause one layer down: the RT pass was
+  gated on `!casters.is_empty()` (predates GI), so zero-light emissive scenes had NO
+  raytraced GI at all. Gate lifted + lightless-GI gpu-proof landed same day (finding of
+  this phase, not of the scoping audit). Honest evidence on the fixed engine, cross-commit
+  A/B: bleed delta 0.019 over the 0.008 threshold, control leg 0.0, ambient pair
+  `cmp`-identical (I-MB2); pin test `rt_t38_multibounce.rs` discriminates 1-vs-2
+  (verified failing at bounces=1). OWED: `trace_ms` 2-vs-1 was below GPU scheduling noise
+  at fixture scale — measure on a heavier scene when Peter re-judges budgets. Demo pair:
+  the run's bleed captures (1 bounce: glow pools under the emitter; 2: the room fills and
+  the wall's red crosses the floor).

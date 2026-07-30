@@ -142,6 +142,17 @@ mechanism; model-driven LOCATE stays deferred.
 
 Honest bound, same shape as always: this removes the lanes' *freedom*, not their *work*. REVIEW stays a model call and stays load-bearing; exploratory work (debugging, design) still doesn't pre-decompose — ESCALATE remains the branch. Every incident to date lived in the freedom, though, which is why this is the version worth building the runtime for. Gated on the R2 readout (section 6); the driver-script standing note (do not build without Peter) covers the runtime too.
 
+**Measured amendment (Peter + Fable, 2026-07-30, WORKFLOW_RUNTIME P3 shakedown).** The
+EXECUTE decomposition above ("a runtime-driven loop of one-shots") was tested on real
+work and holds only below a size floor: small, exactly-quotable edits landed one-shot
+first try; a godfile MSL refactor failed six attempts (~383K tokens) on two structural
+classes no feedback loop fixes — emitting exact-quote edits at that size, and correctness
+that only a compiler can see — and took a lane one pass. The ruling is
+WORKFLOW_RUNTIME_DESIGN.md D20 (read-vs-run step doctrine): outputs judged by reading
+stay one-shot calls; outputs judged by running route to a `lane` opcode (P4, beaded) with
+the same commit-then-gate contract. The runtime's deterministic skeleton — gates, probes,
+parks, budget, resume — is the part that earned its keep unconditionally.
+
 ## 9. Open questions / next steps
 
 - **R2 as the pitch.** The machine's next run decides whether this is converging or permanently tax-paying (section 6). **The operational pre-flight checklist lives in `.claude/orchestration/rt-reflections-r2-queue.md`** (blocking items + the workflow upgrades below, scoped to that wave — 2026-07-25).
