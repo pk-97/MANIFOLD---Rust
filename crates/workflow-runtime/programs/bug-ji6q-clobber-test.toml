@@ -24,7 +24,15 @@ title = "The renderer's binding tests are green before we add a failing one"
 opcode = "gate"
 gate_timeout_s = 1800
 gate = [
-  "cargo nextest run -p manifold-renderer --lib preset_runtime::tests",
+  # `preset_runtime::tests` isn't a real module (the real ones are
+  # `preset_runtime::generator_runtime_tests`, `::bug080_manifest_gate_tests`,
+  # etc.) — an `-E` set expression over the `preset_runtime::` prefix is
+  # what actually selects them. A bare exit-code check isn't enough: nextest
+  # exits nonzero on zero matches too (`error: no tests to run`), so a typo'd
+  # filter and a real regression both read as gate-red the same way. Require
+  # the exit AND the Summary line's test count together — the uniform guard
+  # this program uses everywhere it asserts a test outcome.
+  "sh -c 'out=$(cargo nextest run -p manifold-renderer --lib -E \"test(preset_runtime::)\" 2>&1); ec=$?; printf \"%s\\n\" \"$out\"; [ $ec -eq 0 ] && printf \"%s\" \"$out\" | rg -q \"Summary \\[.*\\] [1-9][0-9]* tests? run\"'",
 ]
 
 # Lane, not execute: this writes a new test against a subsystem the worker has
@@ -42,6 +50,8 @@ inputs = [
   "path:crates/manifold-renderer/src/node_graph/bound_graph.rs",
   "path:crates/manifold-renderer/src/node_graph/scene_exposure.rs",
   "path:crates/manifold-renderer/src/node_graph/graph_loader.rs",
+  "path:crates/manifold-renderer/src/preset_runtime/mod.rs",
+  "path:crates/manifold-renderer/src/preset_runtime/tests/bug080_manifest_gate.rs",
   "path:crates/manifold-renderer/src/preset_runtime/tests/binding_seed.rs",
 ]
 gate_timeout_s = 1800
@@ -51,10 +61,15 @@ gate = [
   # It is wired into the module tree, not orphaned in a file nothing includes.
   "sh -c 'cargo nextest run -p manifold-renderer --lib bound_param_write_survives_a_graph_rebuild 2>&1 | rg -q \"1 test run\"'",
   # And it FAILS — a green test here would mean it does not reproduce the bug.
-  "sh -c '! cargo nextest run -p manifold-renderer --lib bound_param_write_survives_a_graph_rebuild'",
+  # `!` alone is not enough: nextest ALSO exits nonzero when the filter
+  # matches nothing (`error: no tests to run`), so a filter typo would negate
+  # to a false "pass" here without ever running the test. Require the
+  # Summary line to show exactly the one test ran AND failed.
+  "sh -c 'out=$(cargo nextest run -p manifold-renderer --lib bound_param_write_survives_a_graph_rebuild 2>&1); ec=$?; printf \"%s\\n\" \"$out\"; [ $ec -ne 0 ] && printf \"%s\" \"$out\" | rg -q \"Summary \\[.*\\] 1 test run: 0 passed, 1 failed\"'",
   # Nothing else was broken on the way past.
   "cargo clippy -p manifold-renderer --tests -- -D warnings",
-  "cargo nextest run -p manifold-renderer --lib preset_runtime::tests -E 'not test(bound_param_write_survives_a_graph_rebuild)'",
+  # Same module-path fix as baseline-green, plus the same nonzero-count guard.
+  "sh -c 'out=$(cargo nextest run -p manifold-renderer --lib -E \"test(preset_runtime::) - test(bound_param_write_survives_a_graph_rebuild)\" 2>&1); ec=$?; printf \"%s\\n\" \"$out\"; [ $ec -eq 0 ] && printf \"%s\" \"$out\" | rg -q \"Summary \\[.*\\] [1-9][0-9]* tests? run\"'",
 ]
 
 # Reading-judged, so a one-shot API call by doctrine (D20): does the test
