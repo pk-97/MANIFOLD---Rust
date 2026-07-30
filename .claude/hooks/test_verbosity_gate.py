@@ -118,7 +118,10 @@ proc = subprocess.run(
     input=json.dumps({"session_id": "sess-nofield"}),
     capture_output=True, text=True,
     env={**os.environ, "VERBOSITY_GATE_STATE": str(Path(_STATE_DIR) / "state.json")})
-check("no last_assistant_message -> silent", proc.returncode == 0 and not proc.stderr.strip())
+check("no last_assistant_message -> never blocks, but says it is inert",
+      proc.returncode == 0
+      and not proc.stdout.strip()
+      and "gate inert" in proc.stderr)
 
 # --- fences: closed, unclosed, and indented ----------------------------------
 FENCED = "one line of prose\n```\nthis is code and should not count at all\nneither should this\n```\nlast line of prose"
