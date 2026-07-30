@@ -13,13 +13,21 @@ program should have had.
 
 ```
 cargo build -p workflow-runtime
-target/debug/workflow run <program.toml> [--run-id <id>] [--mock <responses.jsonl>]
+target/debug/workflow run <program.toml> [--run-id <id>] [--mock <responses.jsonl>] [--reopen]
 target/debug/workflow check <program.toml>      # lint before spending a token (exit 1 on findings)
-target/debug/workflow cost <run-dir>            # per-step / per-model token ledger
-target/debug/workflow unpark <run-dir> <step>   # clear a parked step, then rerun to retry it;
-                                                # for execute, the rerun checks the gate FIRST — gate
-                                                # green completes with no model call, gate red feeds the
-                                                # FRESH gate report (not the stale park reason) to attempt 1
+target/debug/workflow cost <run-dir>            # per-step / per-model token ledger + lane dollars
+target/debug/workflow unpark <run-dir> <step> --note <text>
+                                                # clear a parked step, then rerun to retry it. --note is
+                                                # REQUIRED: what you decided that makes the retry worth
+                                                # running. It seeds the next attempt and lands on the
+                                                # ledger. For execute and lane, the rerun checks the gate
+                                                # FIRST — gate green completes with no model call, gate red
+                                                # feeds the FRESH gate report (not the stale park reason) to
+                                                # attempt 1; your note survives either way
+target/debug/workflow abandon <run-dir> --reason <text>
+                                                # you took the work over by hand. `run` then REFUSES until
+                                                # `run ... --reopen`. A run ends resumed or abandoned,
+                                                # never neither
 target/debug/workflow watch <run-dir>           # live dashboard over status.json — token-free, read-only
 ```
 
@@ -43,7 +51,12 @@ State lives in `.claude/orchestration/runs/<run-id>/` (gitignored):
   (never the empty-ChangeSet note when a real error preceded it), the step `title`, and —
   for execute — the last red gate's full report.
 - `escalation-<step>.md` — questions awaiting your answer.
-- `worktree.json` — the execute worktree, pinned for the whole run.
+- `worktree.json` — the execute/lane worktree, pinned for the whole run.
+- `ledger.jsonl` — the decision trail: every park, unpark (with your note), promotion,
+  abandon, reopen and completion. The run dir always recorded the stop; this records the
+  thinking, so a resumed run starts from the decision that unblocked it.
+- `abandoned.json` — present only when you took the run over by hand; `run` refuses until
+  `--reopen`.
 
 ## Exit codes — what to do
 
@@ -51,7 +64,7 @@ State lives in `.claude/orchestration/runs/<run-id>/` (gitignored):
 |---|---|---|
 | 0 | All steps done — but CHECK `parked.jsonl`; parked steps don't block completion | Review artifacts; parked = read the reason before anything else |
 | 10 | Escalated | Write your answer under the marker in the named file, rerun the same command |
-| 20 | A parked step blocks a dependent step — OR any execute step after a parked execute (they share one worktree; the block is structural, no `inputs` edge needed) | Read `parked.jsonl`; fix the cause, then `workflow unpark <run-dir> <step>` and rerun — a plain rerun SKIPS parked steps. Unpark seeds the recorded reason into the rerun's first prompt so committed progress is fixed forward |
+| 20 | A parked step blocks a dependent step — OR any execute/lane step after a parked execute/lane (they share one worktree; the block is structural, no `inputs` edge needed) | Read `parked.jsonl`; fix the cause, then `workflow unpark <run-dir> <step> --note <text>` and rerun — a plain rerun SKIPS parked steps. Unpark seeds the recorded reason and your note into the rerun's first prompt so committed progress is fixed forward |
 | 2 | Runtime/transport error (incl. token-budget suspension) | Read the message; budget overrun → raise `token_budget`, rerun to resume |
 
 **Exit 0 is not success by itself.** A run where every model step parked still exits 0 if
@@ -115,10 +128,20 @@ name = "brief"                 # unique; later steps reference it in `inputs` �
                                # key of a live run, so never rename mid-run
 title = "Draft the wiring brief"   # human-readable sentence, shown in status/watch/park
                                # records/escalations; `check` warns when absent
-opcode = "generate"            # generate | execute | gate | escalate | transform | fanout | sample
-model = "glm-4.7"              # any litellm proxy id (model-calling opcodes only)
+opcode = "generate"            # generate | execute | lane | gate | escalate | transform |
+                               # fanout | sample
+model = "glm-4.7"              # any litellm proxy id (model-calling opcodes only); for a
+                               # lane it is the worker's model id instead
 max_tokens = 16000             # starting budget; transport may escalate to 32K
 retry_cap = 2                  # extra attempts after the first (default 2)
+token_budget = 60000           # optional PER-STEP cap. Exceeding it parks THIS step and the
+                               # run carries on; the program-level cap suspends everything.
+                               # Both stay in force, whichever hits first
+provider = "claude"            # lane only: cc-fleet provider (default "claude" — your login)
+max_turns = 40                 # lane only: cap on the worker's agentic turns
+on_fail = "lane"               # execute only: exhausting retry_cap runs ONE lane attempt on
+                               # the accumulated error before parking. Failure-driven only
+lane_model = "sonnet"          # the model that promoted lane uses (falls back to `model`)
 artifact = "text"              # text | json | verdict | change_set (execute is always change_set)
 template = "brief.md"          # prompt file, relative to the program file
 inputs = ["earlier-step", "file:docs/X.md", "anchor:sync_clips_to_time"]
@@ -142,7 +165,13 @@ needs the tree): release it yourself after landing or discarding
 
 Opcodes: `generate` = context → artifact, no side effects. `execute` = ChangeSet applied
 atomically in the target worktree, pathspec-only commit, gate in the worktree, red fed back.
-`gate` = commands only, no model; red parks. `escalate` = writes the rendered question to
+`lane` = the same contract with a tool-using worker: it edits the worktree itself, the runtime
+enumerates what changed and commits it with an explicit pathspec, then gates. Reach for a lane
+when the output is judged by RUNNING it (code that must compile) and a one-shot `execute`
+when it is judged by READING it — D20 measured six one-shot attempts failing a godfile
+refactor that a lane did in one pass. Lane cost comes back in DOLLARS, reported separately
+from tokens everywhere (`cost`, `watch`, `status.json`). `gate` = commands only, no model;
+red parks. `escalate` = writes the rendered question to
 `escalation-<step>.md` and suspends (exit 10). `transform` = deterministic shell reshape of
 artifacts (no model; failure parks without retry). `fanout` = the template once per array
 element, sequential, collected — one failed element parks the whole step. `sample` = k

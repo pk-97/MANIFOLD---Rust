@@ -107,17 +107,32 @@
       "file": "crates/workflow-runtime/src/runner.rs"
     },
     {
-      "transition": "workflow: parked execute blocks every later execute in the shared worktree (exit 20); dependent steps block on parked inputs",
+      "transition": "workflow: a parked execute or lane blocks every later execute or lane in the shared worktree (exit 20); dependent steps block on parked inputs",
       "enforcement": "exit-code",
       "file": "crates/workflow-runtime/src/runner.rs"
     },
     {
-      "transition": "workflow: empty ChangeSet is a non-attempt; park reason keeps the most informative error + full gate report",
+      "transition": "workflow: empty ChangeSet (execute) or an unchanged worktree (lane) is a non-attempt; park reason keeps the most informative error + full gate report",
       "enforcement": "exit-code",
       "file": "crates/workflow-runtime/src/runner.rs"
     },
     {
       "transition": "workflow: seeded rerun gates first — green completes token-free, red feeds the fresh gate report",
+      "enforcement": "exit-code",
+      "file": "crates/workflow-runtime/src/runner.rs"
+    },
+    {
+      "transition": "workflow lane: the worker edits the worktree, the runtime enumerates what changed and commits it with an explicit pathspec, then gates — never `add -A`",
+      "enforcement": "exit-code",
+      "file": "crates/workflow-runtime/src/runner.rs"
+    },
+    {
+      "transition": "workflow: per-step token_budget parks that step and the run continues; the run-wide cap suspends the run",
+      "enforcement": "exit-code",
+      "file": "crates/workflow-runtime/src/runner.rs"
+    },
+    {
+      "transition": "workflow: an abandoned run refuses to rerun until --reopen; every park, unpark (with the human's note), promotion, abandon and reopen lands in ledger.jsonl",
       "enforcement": "exit-code",
       "file": "crates/workflow-runtime/src/runner.rs"
     },

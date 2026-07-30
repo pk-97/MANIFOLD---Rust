@@ -2,8 +2,8 @@
 //! trail belong to `scripts/gate_runner.py` (WORKFLOW_RUNTIME_DESIGN.md D3) —
 //! a program's gate line calls it; this module never re-implements it.
 //!
-//! INVARIANT (structural, rg-gated at landing): this is the only module in the
-//! crate that spawns a subprocess.
+//! INVARIANT (structural, rg-gated at landing): subprocess spawns live only
+//! here, in `worktree.rs`, `lane.rs`, and `transport.rs`'s keyget.
 
 use std::path::Path;
 use std::process::{Command, Stdio};

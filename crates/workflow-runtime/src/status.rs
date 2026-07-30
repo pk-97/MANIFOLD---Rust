@@ -15,8 +15,8 @@ pub struct Status {
     /// Unix seconds of the last transition.
     pub ts: u64,
     /// Machine-readable state: run-started | starting | waiting-on-model |
-    /// gate | transform | retrying | transport-error | parked | escalated |
-    /// blocked | run-done.
+    /// waiting-on-lane | gate | transform | retrying | transport-error |
+    /// parked | escalated | blocked | abandoned | run-done.
     pub state: String,
     /// Human detail for the state (gate command, prompt size, park reason…).
     pub detail: String,
@@ -33,6 +33,10 @@ pub struct Status {
     pub max_attempts: u32,
     pub tokens_spent: u64,
     pub token_budget: u64,
+    /// Lane spend in dollars — its own field because the lane envelope reports
+    /// USD and folding it into a token count would be a lie.
+    #[serde(default)]
+    pub usd_spent: f64,
     /// Most recent error text (transport or parse), kept across transitions
     /// until the step completes — the first thing `watch` shows loudly.
     pub last_error: String,

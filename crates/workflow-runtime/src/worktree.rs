@@ -2,7 +2,7 @@
 //! through the slot ring, change-set application, pathspec-only commits.
 //!
 //! INVARIANT (structural, rg-gated): subprocess spawns live only here, in
-//! `gates.rs`, and in `transport.rs`'s keyget.
+//! `gates.rs`, `lane.rs`, and in `transport.rs`'s keyget.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -122,6 +122,49 @@ pub fn verify(wt: &Worktree, expected_branch: Option<&str>) -> Result<(), String
         ));
     }
     Ok(())
+}
+
+/// Everything dirty in the worktree, as the exact pathspec a LANE's commit
+/// will name: tracked modifications and deletions AND untracked files. `-z`
+/// because a path with a space is quoted in the plain porcelain format and
+/// this repo's paths have spaces.
+///
+/// The run owns its worktree alone and every earlier step commits what it
+/// applied, so dirt here IS the lane's work. Anything else is a crashed step's
+/// leftovers, and committing those beats letting a gate pass on work no commit
+/// records.
+///
+/// INVARIANT: this is how a lane commit stays pathspec-only. `add -A` and
+/// `add .` are never an option, here or anywhere.
+pub fn changed_paths(worktree: &Path) -> Result<Vec<String>, String> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(worktree)
+        .args(["status", "--porcelain", "-z", "--untracked-files=all"])
+        .output()
+        .map_err(|e| format!("git spawn failed: {e}"))?;
+    if !out.status.success() {
+        return Err(format!("git status failed: {}", String::from_utf8_lossy(&out.stderr)));
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut fields = text.split('\0').filter(|s| !s.is_empty());
+    let mut paths = Vec::new();
+    while let Some(entry) = fields.next() {
+        let (code, path) = entry.split_at(entry.len().min(3));
+        // A rename's SOURCE is the next NUL field; both sides go in the
+        // pathspec or the commit records an add without the delete.
+        if (code.starts_with('R') || code.starts_with('C'))
+            && let Some(source) = fields.next()
+        {
+            paths.push(source.to_string());
+        }
+        if !path.is_empty() {
+            paths.push(path.to_string());
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
 }
 
 /// INVARIANT: pathspec-only — never the index, never `add -A`.
