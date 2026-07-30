@@ -25,11 +25,16 @@ grows a native output-budget control.
 """
 import hashlib
 import json
+import os
 import re
 import sys
 from pathlib import Path
 
-_STATE = Path(__file__).resolve().parent.parent / "telemetry" / "verbosity-gate-state.json"
+# Env override exists so the tests get their own state file; nothing else sets it.
+_STATE = Path(
+    os.environ.get("VERBOSITY_GATE_STATE")
+    or Path(__file__).resolve().parent.parent / "telemetry" / "verbosity-gate-state.json"
+)
 _MAX_BLOCKS_PER_TURN = 2
 
 _NORMAL = (6, 150)
@@ -75,6 +80,32 @@ def _has_tool_use(row):
     return isinstance(content, list) and any(
         isinstance(b, dict) and b.get("type") == "tool_use" for b in content
     )
+
+
+def _is_tool_result(row):
+    if row.get("toolUseResult") is not None:
+        return True
+    content = (row.get("message") or {}).get("content")
+    return isinstance(content, list) and any(
+        isinstance(b, dict) and b.get("type") == "tool_result" for b in content
+    )
+
+
+def _last_real_user(rows):
+    """The most recent row that is a prompt Peter actually typed.
+
+    Everything else the transcript files under type "user" is noise for our
+    purposes: tool results (no text at all) and harness-injected rows such as
+    this gate's own feedback (isMeta). Reading those was the bug — a tool-using
+    turn resolved to an empty prompt, so detail cues never fired and every such
+    turn in a session shared one block counter.
+    """
+    for row in reversed(rows):
+        if row.get("type") != "user" or row.get("isMeta") or _is_tool_result(row):
+            continue
+        if _text_of(row).strip():
+            return row
+    return None
 
 
 def _measure(text):
@@ -126,7 +157,7 @@ def main():
     if not text.strip():
         return 0
 
-    last_user = next((r for r in reversed(rows) if r.get("type") == "user"), None)
+    last_user = _last_real_user(rows)
     prompt = _text_of(last_user) if last_user else ""
     max_lines, max_words = _DETAIL if _DETAIL_CUES.search(prompt) else _NORMAL
 
@@ -135,9 +166,13 @@ def main():
         return 0
 
     session_id = payload.get("session_id", "?")
-    # Stable across processes — PYTHONHASHSEED randomisation would reset the
-    # block counter every invocation and turn the gate into a loop.
-    turn_key = hashlib.md5(prompt.encode("utf-8", "replace")).hexdigest()
+    # Keyed on the prompt row's uuid: unique per turn, stable across the
+    # re-runs within a turn. Falls back to a hash of the text (md5, not hash():
+    # PYTHONHASHSEED randomisation would reset the counter every invocation
+    # and turn the gate into a loop).
+    turn_key = (last_user or {}).get("uuid") or hashlib.md5(
+        prompt.encode("utf-8", "replace")
+    ).hexdigest()
     state, blocked = _block_count(session_id, turn_key)
     if blocked >= _MAX_BLOCKS_PER_TURN:
         return 0
