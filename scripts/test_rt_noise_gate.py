@@ -155,9 +155,10 @@ def case_ceilings():
     fails = gate.compare({"refl_raw": fireflies}, baseline)[0]
     check_true("p99.9 breach fails", len(fails) == 1 and "p99.9" in fails[0][1])
 
-    # The whole reason the signal floor exists: on origin/main b10d9d94 three
-    # of four back-to-back runs read every RT channel at zero while the
-    # composite still rendered (BUG-mw0x). Perfectly stable, and worthless.
+    # The whole reason the signal floor exists: seven of ten runs read every RT
+    # channel at zero while the composite still rendered. The cause turned out
+    # to be capture-directory contention (BUG-mw0x), but a delta-only gate had
+    # already called that state calm. Perfectly stable, and worthless.
     dead = {"refl_raw": {"mean": 0.0, "p999": 0.0, "max": 0.0, "level": 0.0,
                          "runs": 3, "pairs": 5}}
     fails = gate.compare(dead, baseline)[0]
