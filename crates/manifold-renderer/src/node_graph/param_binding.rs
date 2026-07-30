@@ -496,17 +496,13 @@ impl ResolvedBinding {
         }
     }
 
-    /// Apply this binding's value to the graph.
-    ///
-    /// `handle` is required iff `target` is [`ResolvedTarget::Composite`].
-    /// Passing `None` for a `Composite` target panics — the caller is
-    /// expected to know whether their effect uses composite routing.
-    pub fn apply(
-        &self,
-        graph: &mut Graph,
-        handle: Option<&CompositeHandle>,
-        value: f32,
-    ) -> Result<(), GraphError> {
+    /// The exact [`ParamValue`] this binding writes for outer value `value`:
+    /// slider reshape, then the angle wrap, then the convert. Split out of
+    /// [`Self::apply`] so a reader that needs to know what the binding WOULD
+    /// write — [`crate::node_graph::bound_graph::find_shadowed_def_params`] —
+    /// asks the write path itself instead of re-deriving the pipeline and
+    /// drifting from it.
+    pub fn write_value(&self, value: f32) -> ParamValue {
         // Card-slider reshape (invert + response curve) for User bindings
         // that opted in; identity / static bindings skip it entirely.
         let value = match &self.reshape {
@@ -522,7 +518,21 @@ impl ResolvedBinding {
         } else {
             value
         };
-        let pv = convert_param_value(self.convert, value);
+        convert_param_value(self.convert, value)
+    }
+
+    /// Apply this binding's value to the graph.
+    ///
+    /// `handle` is required iff `target` is [`ResolvedTarget::Composite`].
+    /// Passing `None` for a `Composite` target panics — the caller is
+    /// expected to know whether their effect uses composite routing.
+    pub fn apply(
+        &self,
+        graph: &mut Graph,
+        handle: Option<&CompositeHandle>,
+        value: f32,
+    ) -> Result<(), GraphError> {
+        let pv = self.write_value(value);
         match &self.target {
             ResolvedTarget::Composite { outer_name } => handle
                 .expect("ResolvedTarget::Composite requires a CompositeHandle")

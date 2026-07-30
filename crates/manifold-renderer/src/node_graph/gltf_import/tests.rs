@@ -2249,6 +2249,92 @@ fn bug303_stamped_transform_survives_preset_runtime_instantiation() {
     }
 }
 
+/// BUG-1l7f, the imported-def footgun at the value level: writing a param onto
+/// an imported def's node is a no-op, because the import promoted that param to
+/// an outer card and `BoundGraph::new` plants the card's default over it. The
+/// same shape as the BUG-303 test above, run backwards — there, the stamped
+/// placement SURVIVES because the exposure default agrees with it; here the
+/// caller breaks that agreement and loses. Both halves are asserted: the live
+/// graph holds the card's number, and the runtime reports the finding by name so
+/// the caller can find out at the point of the mistake instead of through a wrong
+/// measurement days later.
+#[test]
+fn editing_an_imported_defs_node_param_loses_to_the_card_and_is_reported() {
+    let mut mat = full_material(0, "Mat", 100);
+    mat.own_center = [0.0, 0.0, 0.0];
+    let summary = GltfImportSummary {
+        materials: vec![mat],
+        bbox_min: [-1.0, -1.0, -1.0],
+        bbox_max: [1.0, 1.0, 1.0],
+        camera_count: 0,
+        default_material_vertex_count: 0,
+        animations: Vec::new(),
+        animation_report_lines: Vec::new(),
+        extension_report_lines: Vec::new(),
+        lights: Vec::new(),
+        cameras: Vec::new(),
+        camera_report_lines: Vec::new(),
+    };
+    let path = std::path::Path::new("/tmp/synthetic_bug1l7f_test.glb");
+    let (mut def, _report) = build_import_graph(&summary, path).expect("build import graph");
+
+    // The mistake: set the param straight on the node, the way
+    // `rt_r3_heldout_gltf` set `rt_enabled` on `render_scene`.
+    let node_id = manifold_core::NodeId::new("transform_0");
+    let baked = 7.5_f32;
+    // An imported object's producers live inside its own node group, so walk in.
+    fn find_mut<'a>(
+        nodes: &'a mut [manifold_core::effect_graph_def::EffectGraphNode],
+        node_id: &manifold_core::NodeId,
+    ) -> Option<&'a mut manifold_core::effect_graph_def::EffectGraphNode> {
+        for node in nodes.iter_mut() {
+            if &node.node_id == node_id {
+                return Some(node);
+            }
+            if let Some(group) = node.group.as_mut()
+                && let Some(found) = find_mut(&mut group.nodes, node_id)
+            {
+                return Some(found);
+            }
+        }
+        None
+    }
+    let node =
+        find_mut(&mut def.nodes, &node_id).expect("transform_0 present in the imported def");
+    node.params.insert(
+        "pos_x".to_string(),
+        manifold_core::effect_graph_def::SerializedParamValue::Float { value: baked },
+    );
+
+    let registry = PrimitiveRegistry::with_builtin();
+    let runtime = PresetRuntime::from_def(def, &registry, None).expect("instantiate imported def");
+
+    let inst = runtime
+        .graph
+        .instance_by_node_id(&node_id)
+        .expect("transform_0 in the live graph");
+    let got = runtime
+        .graph
+        .get_node(inst)
+        .and_then(|n| n.params.get("pos_x").cloned())
+        .expect("pos_x readable post-build");
+    assert_ne!(
+        got,
+        crate::node_graph::parameters::ParamValue::Float(baked),
+        "if the node-param write ever starts winning, this test is the place that \
+         records the decision — cards are the performer's surface, so that is \
+         Peter's call, not a quiet change (BUG-1l7f)",
+    );
+
+    let findings: Vec<_> = runtime.shadowed_def_params().collect();
+    assert!(
+        findings
+            .iter()
+            .any(|f| f.node_id == "transform_0" && f.param == "pos_x"),
+        "the silent revert must be reported by node and param; got {findings:?}",
+    );
+}
+
 /// Card-visibility curation, importer level: an imported object's
 /// `transform_0.pos_x` exposure must show on the CARD (`card_visible: true`)
 /// while its `scale_x` sibling and every one of its `node.pbr_material`
