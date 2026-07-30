@@ -1,0 +1,588 @@
+{
+ "version": 2,
+ "name": "RtBleed",
+ "description": "Multi-bounce GI bleed fixture (RAYTRACING_DESIGN.md section 11 MB-B gate): emitter over a wide blocker at x=-2.5; open floor at x=+2..4 has no line of sight to the emitter but full sight of the red wall at x=4.5, which sees the emitter. At 1 GI bounce the open-floor probe region gets ambient only; at 2 bounces it gains red-tinted emitter energy via the wall. Zero lights, reflections off. Probe: scripts/rt_region_probe.py.",
+ "nodes": [
+  {
+   "id": 0,
+   "typeId": "system.generator_input",
+   "nodeId": "input"
+  },
+  {
+   "id": 100,
+   "typeId": "node.grid_mesh",
+   "nodeId": "floor_grid",
+   "params": {
+    "max_capacity": {
+     "type": "Int",
+     "value": 8192
+    },
+    "resolution_x": {
+     "type": "Int",
+     "value": 20
+    },
+    "resolution_y": {
+     "type": "Int",
+     "value": 20
+    },
+    "size_x": {
+     "type": "Float",
+     "value": 10.0
+    },
+    "size_y": {
+     "type": "Float",
+     "value": 10.0
+    }
+   }
+  },
+  {
+   "id": 101,
+   "typeId": "node.make_triangles",
+   "nodeId": "floor_tris",
+   "params": {
+    "src_cols": {
+     "type": "Int",
+     "value": 20
+    },
+    "src_rows": {
+     "type": "Int",
+     "value": 20
+    }
+   }
+  },
+  {
+   "id": 102,
+   "typeId": "node.transform_3d",
+   "nodeId": "floor_x",
+   "params": {}
+  },
+  {
+   "id": 103,
+   "typeId": "node.phong_material",
+   "nodeId": "floor_m",
+   "params": {
+    "color_r": {
+     "type": "Float",
+     "value": 1.0
+    },
+    "color_g": {
+     "type": "Float",
+     "value": 1.0
+    },
+    "color_b": {
+     "type": "Float",
+     "value": 1.0
+    },
+    "ambient": {
+     "type": "Float",
+     "value": 0.1
+    }
+   }
+  },
+  {
+   "id": 104,
+   "typeId": "node.scene_object",
+   "nodeId": "floor",
+   "params": {
+    "visible": {
+     "type": "Float",
+     "value": 1.0
+    },
+    "cast_shadows": {
+     "type": "Float",
+     "value": 1.0
+    }
+   }
+  },
+  {
+   "id": 110,
+   "typeId": "node.grid_mesh",
+   "nodeId": "blocker_grid",
+   "params": {
+    "max_capacity": {
+     "type": "Int",
+     "value": 8192
+    },
+    "resolution_x": {
+     "type": "Int",
+     "value": 12
+    },
+    "resolution_y": {
+     "type": "Int",
+     "value": 12
+    },
+    "size_x": {
+     "type": "Float",
+     "value": 6.0
+    },
+    "size_y": {
+     "type": "Float",
+     "value": 6.0
+    }
+   }
+  },
+  {
+   "id": 111,
+   "typeId": "node.make_triangles",
+   "nodeId": "blocker_tris",
+   "params": {
+    "src_cols": {
+     "type": "Int",
+     "value": 12
+    },
+    "src_rows": {
+     "type": "Int",
+     "value": 12
+    }
+   }
+  },
+  {
+   "id": 112,
+   "typeId": "node.transform_3d",
+   "nodeId": "blocker_x",
+   "params": {
+    "pos_x": {
+     "type": "Float",
+     "value": -2.5
+    },
+    "pos_y": {
+     "type": "Float",
+     "value": 1.5
+    }
+   }
+  },
+  {
+   "id": 113,
+   "typeId": "node.phong_material",
+   "nodeId": "blocker_m",
+   "params": {
+    "color_r": {
+     "type": "Float",
+     "value": 1.0
+    },
+    "color_g": {
+     "type": "Float",
+     "value": 1.0
+    },
+    "color_b": {
+     "type": "Float",
+     "value": 1.0
+    },
+    "ambient": {
+     "type": "Float",
+     "value": 0.1
+    }
+   }
+  },
+  {
+   "id": 114,
+   "typeId": "node.scene_object",
+   "nodeId": "blocker",
+   "params": {
+    "visible": {
+     "type": "Float",
+     "value": 1.0
+    },
+    "cast_shadows": {
+     "type": "Float",
+     "value": 1.0
+    }
+   }
+  },
+  {
+   "id": 120,
+   "typeId": "node.grid_mesh",
+   "nodeId": "emitter_grid",
+   "params": {
+    "max_capacity": {
+     "type": "Int",
+     "value": 8192
+    },
+    "resolution_x": {
+     "type": "Int",
+     "value": 4
+    },
+    "resolution_y": {
+     "type": "Int",
+     "value": 4
+    },
+    "size_x": {
+     "type": "Float",
+     "value": 2.0
+    },
+    "size_y": {
+     "type": "Float",
+     "value": 2.0
+    }
+   }
+  },
+  {
+   "id": 121,
+   "typeId": "node.make_triangles",
+   "nodeId": "emitter_tris",
+   "params": {
+    "src_cols": {
+     "type": "Int",
+     "value": 4
+    },
+    "src_rows": {
+     "type": "Int",
+     "value": 4
+    }
+   }
+  },
+  {
+   "id": 122,
+   "typeId": "node.transform_3d",
+   "nodeId": "emitter_x",
+   "params": {
+    "pos_x": {
+     "type": "Float",
+     "value": -2.5
+    },
+    "pos_y": {
+     "type": "Float",
+     "value": 3.0
+    }
+   }
+  },
+  {
+   "id": 123,
+   "typeId": "node.phong_material",
+   "nodeId": "emitter_m",
+   "params": {
+    "color_r": {
+     "type": "Float",
+     "value": 1.0
+    },
+    "color_g": {
+     "type": "Float",
+     "value": 1.0
+    },
+    "color_b": {
+     "type": "Float",
+     "value": 1.0
+    },
+    "ambient": {
+     "type": "Float",
+     "value": 0.0
+    },
+    "emission_r": {
+     "type": "Float",
+     "value": 1.0
+    },
+    "emission_g": {
+     "type": "Float",
+     "value": 1.0
+    },
+    "emission_b": {
+     "type": "Float",
+     "value": 1.0
+    },
+    "emission_intensity": {
+     "type": "Float",
+     "value": 30.0
+    }
+   }
+  },
+  {
+   "id": 124,
+   "typeId": "node.scene_object",
+   "nodeId": "emitter",
+   "params": {
+    "visible": {
+     "type": "Float",
+     "value": 1.0
+    },
+    "cast_shadows": {
+     "type": "Float",
+     "value": 1.0
+    }
+   }
+  },
+  {
+   "id": 130,
+   "typeId": "node.grid_mesh",
+   "nodeId": "wall_grid",
+   "params": {
+    "max_capacity": {
+     "type": "Int",
+     "value": 8192
+    },
+    "resolution_x": {
+     "type": "Int",
+     "value": 20
+    },
+    "resolution_y": {
+     "type": "Int",
+     "value": 20
+    },
+    "size_x": {
+     "type": "Float",
+     "value": 10.0
+    },
+    "size_y": {
+     "type": "Float",
+     "value": 10.0
+    }
+   }
+  },
+  {
+   "id": 131,
+   "typeId": "node.make_triangles",
+   "nodeId": "wall_tris",
+   "params": {
+    "src_cols": {
+     "type": "Int",
+     "value": 20
+    },
+    "src_rows": {
+     "type": "Int",
+     "value": 20
+    }
+   }
+  },
+  {
+   "id": 132,
+   "typeId": "node.transform_3d",
+   "nodeId": "wall_x",
+   "params": {
+    "pos_x": {
+     "type": "Float",
+     "value": 4.5
+    },
+    "pos_y": {
+     "type": "Float",
+     "value": 3.0
+    },
+    "rot_z": {
+     "type": "Float",
+     "value": 1.570796
+    }
+   }
+  },
+  {
+   "id": 133,
+   "typeId": "node.phong_material",
+   "nodeId": "wall_m",
+   "params": {
+    "color_r": {
+     "type": "Float",
+     "value": 1.0
+    },
+    "color_g": {
+     "type": "Float",
+     "value": 0.05
+    },
+    "color_b": {
+     "type": "Float",
+     "value": 0.05
+    },
+    "ambient": {
+     "type": "Float",
+     "value": 0.1
+    }
+   }
+  },
+  {
+   "id": 134,
+   "typeId": "node.scene_object",
+   "nodeId": "wall",
+   "params": {
+    "visible": {
+     "type": "Float",
+     "value": 1.0
+    },
+    "cast_shadows": {
+     "type": "Float",
+     "value": 1.0
+    }
+   }
+  },
+  {
+   "id": 3,
+   "typeId": "node.orbit_camera",
+   "nodeId": "cam",
+   "params": {
+    "orbit": {
+     "type": "Float",
+     "value": 3.6
+    },
+    "tilt": {
+     "type": "Float",
+     "value": 1.0
+    },
+    "distance": {
+     "type": "Float",
+     "value": 14.0
+    },
+    "fov_y": {
+     "type": "Float",
+     "value": 0.8
+    }
+   }
+  },
+  {
+   "id": 20,
+   "typeId": "node.render_scene",
+   "nodeId": "scene",
+   "params": {
+    "objects": {
+     "type": "Int",
+     "value": 4
+    },
+    "lights": {
+     "type": "Int",
+     "value": 0
+    },
+    "rt_enabled": {
+     "type": "Bool",
+     "value": true
+    },
+    "rt_reflections": {
+     "type": "Bool",
+     "value": false
+    }
+   }
+  },
+  {
+   "id": 99,
+   "typeId": "system.final_output",
+   "nodeId": "out"
+  }
+ ],
+ "wires": [
+  {
+   "fromNode": 100,
+   "fromPort": "vertices",
+   "toNode": 101,
+   "toPort": "in"
+  },
+  {
+   "fromNode": 101,
+   "fromPort": "out",
+   "toNode": 104,
+   "toPort": "vertices"
+  },
+  {
+   "fromNode": 102,
+   "fromPort": "transform",
+   "toNode": 104,
+   "toPort": "transform"
+  },
+  {
+   "fromNode": 103,
+   "fromPort": "out",
+   "toNode": 104,
+   "toPort": "material"
+  },
+  {
+   "fromNode": 104,
+   "fromPort": "object",
+   "toNode": 20,
+   "toPort": "object_0"
+  },
+  {
+   "fromNode": 110,
+   "fromPort": "vertices",
+   "toNode": 111,
+   "toPort": "in"
+  },
+  {
+   "fromNode": 111,
+   "fromPort": "out",
+   "toNode": 114,
+   "toPort": "vertices"
+  },
+  {
+   "fromNode": 112,
+   "fromPort": "transform",
+   "toNode": 114,
+   "toPort": "transform"
+  },
+  {
+   "fromNode": 113,
+   "fromPort": "out",
+   "toNode": 114,
+   "toPort": "material"
+  },
+  {
+   "fromNode": 114,
+   "fromPort": "object",
+   "toNode": 20,
+   "toPort": "object_1"
+  },
+  {
+   "fromNode": 120,
+   "fromPort": "vertices",
+   "toNode": 121,
+   "toPort": "in"
+  },
+  {
+   "fromNode": 121,
+   "fromPort": "out",
+   "toNode": 124,
+   "toPort": "vertices"
+  },
+  {
+   "fromNode": 122,
+   "fromPort": "transform",
+   "toNode": 124,
+   "toPort": "transform"
+  },
+  {
+   "fromNode": 123,
+   "fromPort": "out",
+   "toNode": 124,
+   "toPort": "material"
+  },
+  {
+   "fromNode": 124,
+   "fromPort": "object",
+   "toNode": 20,
+   "toPort": "object_2"
+  },
+  {
+   "fromNode": 130,
+   "fromPort": "vertices",
+   "toNode": 131,
+   "toPort": "in"
+  },
+  {
+   "fromNode": 131,
+   "fromPort": "out",
+   "toNode": 134,
+   "toPort": "vertices"
+  },
+  {
+   "fromNode": 132,
+   "fromPort": "transform",
+   "toNode": 134,
+   "toPort": "transform"
+  },
+  {
+   "fromNode": 133,
+   "fromPort": "out",
+   "toNode": 134,
+   "toPort": "material"
+  },
+  {
+   "fromNode": 134,
+   "fromPort": "object",
+   "toNode": 20,
+   "toPort": "object_3"
+  },
+  {
+   "fromNode": 3,
+   "fromPort": "out",
+   "toNode": 20,
+   "toPort": "camera"
+  },
+  {
+   "fromNode": 20,
+   "fromPort": "color",
+   "toNode": 99,
+   "toPort": "in"
+  }
+ ]
+}
