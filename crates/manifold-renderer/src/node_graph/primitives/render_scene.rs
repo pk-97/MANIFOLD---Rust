@@ -3059,15 +3059,20 @@ impl EffectNode for RenderScene {
         // call site deciding "discard temporal history this frame" for
         // EITHER of this node's two temporal consumers — the RT irradiance
         // accumulator (`will_rt_accumulate_this_frame`, mirroring the exact
-        // `rt_enabled && has_casters && rt_ready` gate the accumulate call
-        // site below already used) and MetalFX Temporal's `reset`
-        // (`temporal_upscale`). Mutually-exclusive-by-construction: when RT
-        // will accumulate this frame, that's the one call and the temporal-
-        // upscale-only branch below is skipped; never both — the shared
-        // detector's own contract (`detect_reset` exactly once per frame a
-        // consumer advances) stays intact, and there is still only ONE call
-        // site in the whole node (negative-`rg` gate: no second reset path).
-        let will_rt_accumulate_this_frame = rt_enabled && !casters.is_empty() && rt_ready;
+        // `rt_enabled && rt_ready` gate the accumulate call site below
+        // already used) and MetalFX Temporal's `reset` (`temporal_upscale`).
+        // Mutually-exclusive-by-construction: when RT will accumulate this
+        // frame, that's the one call and the temporal-upscale-only branch
+        // below is skipped; never both — the shared detector's own contract
+        // (`detect_reset` exactly once per frame a consumer advances) stays
+        // intact, and there is still only ONE call site in the whole node
+        // (negative-`rg` gate: no second reset path). BUG-17r3: casters no
+        // longer gate this — a zero-light emissive-only scene still needs
+        // GI/AO/reflections accumulated; casters only gate the SUN/SHADOW
+        // terms within the trace (kernel-side `n_casters` loop, zero-
+        // iteration when `caster_count == 0`, `ShadowRayParams::new` is
+        // well-formed with an empty caster slice).
+        let will_rt_accumulate_this_frame = rt_enabled && rt_ready;
         let reset_decision: Option<bool> = if will_rt_accumulate_this_frame || temporal_upscale {
             Some(self.rt_reset_detector.detect_reset(ctx.owner_key, &ctx.time))
         } else {
@@ -3324,20 +3329,26 @@ impl EffectNode for RenderScene {
             );
             // RAYTRACING_DESIGN.md RT-D3 (P1-part-2): `scene_params.w` was
             // a permanently-zero reserved slot (see the field's doc
-            // comment) — repurposed as the RT-active flag `shadow_factor`
-            // branches on, same reuse doctrine as `alpha_params.zw`
+            // comment) — repurposed as the RT-active flag `shadow_factor`,
+            // `rt_or_flat_ambient` (GI/AO), and the reflection substitution
+            // all branch on, same reuse doctrine as `alpha_params.zw`
             // (clearcoat) and `pbr_metallic_roughness.zw`
-            // (ior/specular_factor). `!casters.is_empty()` mirrors
-            // `has_casters` (declared later in this function, after this
-            // loop) — same underlying `casters` Vec, already populated.
-            uniforms.scene_params[3] = if rt_enabled && rt_ready && !casters.is_empty() { 1.0 } else { 0.0 };
+            // (ior/specular_factor). BUG-17r3: no longer gated on
+            // `!casters.is_empty()` — a zero-light emissive-only scene
+            // still needs RT GI/AO/reflections; `shadow_factor`'s own
+            // caster-slot lookup already no-ops when the light loop has no
+            // caster slot to hand it (`slot_f < 0.0` returns fully lit),
+            // so this flag is safe to raise with zero casters too.
+            uniforms.scene_params[3] = if rt_enabled && rt_ready { 1.0 } else { 0.0 };
             // RAYTRACING_DESIGN.md section 9 RD9/RD1: the reflection-substitution
             // gate — stricter than scene_params.w: the raster may only
             // read `rt_reflection` (binding 43) when the trace dispatch
             // actually ran WITH refl_spp > 0 this frame, i.e. the
             // rt_reflections param is also on. Same per-object write
-            // (scene-wide value, like scene_params.w).
-            uniforms.rt_flags[0] = if rt_reflections && rt_ready && !casters.is_empty() { 1.0 } else { 0.0 };
+            // (scene-wide value, like scene_params.w). BUG-17r3: reflections
+            // trace against the scene geometry, not toward a light — never
+            // caster-gated.
+            uniforms.rt_flags[0] = if rt_reflections && rt_ready { 1.0 } else { 0.0 };
             if base_color_map.is_some() {
                 uniforms.texture_flags[2] = 1.0; // z = base_color_map present (matches resolve_albedo's texture_flags.z gate)
             }
@@ -3881,18 +3892,24 @@ impl EffectNode for RenderScene {
         // shadow-ray dispatch + depth-aware upsample, reading the opaque-
         // depth prepass above (built for this frame's `view_proj` whether
         // or not `has_transmission` — the `|| rt_enabled` gates above).
-        // Runs only when there's a light to trace toward (`has_casters`);
-        // RT-enabled with zero casters degenerates to "nothing to
-        // replace", same as the raster path's shadow-map loop with zero
-        // casters. KNOWN LIMITATION: the accel structure below uses each
-        // object's single `model` transform — instanced objects
-        // (`instances_n` wired) get ONE ray-traced copy at that base
-        // transform, not one per instance (photoscanned-hero-object
-        // scenes, this design's whole framing, are not instanced; a
-        // scene that instances RT-shadowed geometry gets wrong per-
-        // instance shadow positions — escalate if this becomes load-
-        // bearing, per the P1 brief's own escalation line). ----
-        if rt_enabled && has_casters {
+        // BUG-17r3: runs on `rt_enabled` alone — the shadow terms need a
+        // caster, but AO/GI/reflections don't, and this same block builds
+        // the accel structure and runs `dispatch_shadow_rays` (which also
+        // gathers AO/GI/reflections, gated kernel-side on `ao_spp`/
+        // `gi_spp`/`refl_spp`, never on `caster_count`). Zero casters
+        // degenerates `rt_casters` below to an empty slice —
+        // `ShadowRayParams::new` is well-formed with that (`caster_count
+        // = 0`, kernel's `n_casters` loop is zero-iteration, every
+        // `shadow_factor` caster-slot lookup already returns fully-lit
+        // for a light with no caster slot). KNOWN LIMITATION: the accel
+        // structure below uses each object's single `model` transform —
+        // instanced objects (`instances_n` wired) get ONE ray-traced copy
+        // at that base transform, not one per instance (photoscanned-
+        // hero-object scenes, this design's whole framing, are not
+        // instanced; a scene that instances RT-shadowed geometry gets
+        // wrong per-instance shadow positions — escalate if this becomes
+        // load-bearing, per the P1 brief's own escalation line). ----
+        if rt_enabled {
             let vsize = std::mem::size_of::<MeshVertex>() as u32;
             let objects: Vec<manifold_gpu::raytrace::RtObjectGeometry> = opaque_draws
                 .iter()
@@ -4378,8 +4395,7 @@ impl EffectNode for RenderScene {
                 // section 8.2 D22 (T2-B) hoisted the actual call to
                 // `reset_decision` above `will_rt_accumulate_this_frame`
                 // gates identically to this `if rt_ready` branch (nested in
-                // the same `rt_enabled && has_casters` block), so it's
-                // `Some` here.
+                // the same `rt_enabled` block), so it's `Some` here.
                 let reset = reset_decision.expect("will_rt_accumulate_this_frame implies Some")
                     || std::mem::take(&mut self.rt_irr_needs_reset);
                 // RT-T1-C: `prev_view_proj` is the SAME local captured
