@@ -970,6 +970,26 @@ moves and converges when it settles. Section 10's own stance.
 `REFL_SAMPLES_PER_PIXEL` 8, `RT_REFL_FIREFLY_GAIN` 8, `ATROUS_REFL_VARIANCE_GAIN` 2,
 change gates at 4 sigma / 15% / 1e-4.
 
+**The gate that keeps it.** `scripts/rt_noise_gate.py` — same instrument, same metric, as an
+exit code. Median of clean runs per channel against ceilings in
+`scripts/rt_noise_baseline.json`; re-baseline with `--record` and commit the JSON. A channel
+that goes silent FAILS as inert rather than passing, because a dead channel is perfectly
+stable — the one failure mode a delta-only metric cannot see. An async accel rebuild in or
+within 60 frames before the measured window discards the run instead of failing it. Nightly on
+main via `trunk_health.py`; not a landing item, because it costs an app build plus three
+300-frame renders.
+
+Two measurement traps this cost us, both worth knowing before trusting any capture number.
+**Build profile:** a debug build is several times slower, and the RT path has an async accel
+build racing the first trace dispatch (D17) — captures that looked like "RT is intermittently
+dead, 7 runs in 10" came from a debug binary, while release measured 5/5 alive with 1-4%
+run-to-run spread. The gate builds release for that reason, not just for speed.
+**Shared output path:** the capture harness wrote to a fixed `/tmp/rt_capture` and cleared it
+on entry, so two concurrent captures silently destroyed each other's frames — which is most of
+what the "all-zero channels" report actually was (BUG-mw0x, reframed). The directory is now
+overridable via `MANIFOLD_RT_CAPTURE_DIR` and the gate always uses a private one. Measure one
+at a time, in release, or measure nothing.
+
 **Owed:** Peter's look under fast camera motion — longer specular history reopens D-61's
 sweep-trail risk in principle, with the variance clamp and per-texel count reset as the
 guards. 40 frames is the first constant to pull back if it trails. Everything measured here is
