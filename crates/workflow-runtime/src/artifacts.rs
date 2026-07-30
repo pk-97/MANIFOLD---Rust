@@ -18,6 +18,11 @@ pub enum ArtifactKind {
     ChangeSet,
 }
 
+/// The empty-ChangeSet parse error, exported so the execute loop can treat it
+/// as a NON-attempt: it must never overwrite a real error as feedback or park
+/// reason (P3 shakedown, 2026-07-30).
+pub const EMPTY_CHANGESET_ERR: &str = "ChangeSet has no edits and no writes";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Verdict {
     /// "accept" | "reject" — anything else is a parse failure.
@@ -88,7 +93,7 @@ impl Artifact {
                     )
                 })?;
                 if v.edits.is_empty() && v.writes.is_empty() {
-                    return Err("ChangeSet has no edits and no writes".to_string());
+                    return Err(EMPTY_CHANGESET_ERR.to_string());
                 }
                 serde_json::to_value(v).expect("ChangeSet serializes")
             }

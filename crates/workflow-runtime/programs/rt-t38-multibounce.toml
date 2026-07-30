@@ -20,6 +20,7 @@ branch = "lane/rt-t38-multibounce"
 # means are not tonemap-compressed; RtCompare stays default (byte diff).
 [[step]]
 name = "baseline"
+title = "Capture the pre-change RtCompare baseline render"
 opcode = "gate"
 gate_timeout_s = 2400
 gate = [
@@ -28,6 +29,7 @@ gate = [
 
 [[step]]
 name = "mb-a-refactor"
+title = "Bounce-loop refactor, behavior-identical (byte-identical RtCompare)"
 opcode = "execute"
 model = "deepseek-v4-pro"
 max_tokens = 24000
@@ -48,6 +50,7 @@ gate = [
 
 [[step]]
 name = "mb-b-bounce"
+title = "Enable the second GI bounce and capture the bleed/ambient fixtures"
 opcode = "execute"
 model = "deepseek-v4-pro"
 max_tokens = 16000
@@ -67,6 +70,7 @@ gate = [
 # artifact carries pin_threshold for the in-repo regression test.
 [[step]]
 name = "probe-bleed"
+title = "Rule on the bleed-vs-control delta between 1 and 2 bounces"
 opcode = "transform"
 artifact = "json"
 template = "rt-t38-probe-note.md"
@@ -74,6 +78,7 @@ command = "scripts/rt_region_probe.py --a \"$WORKFLOW_RUN_DIR/bleed-1.png\" --b 
 
 [[step]]
 name = "mb-c-pin-test"
+title = "Pin the multi-bounce result with an in-repo regression test"
 opcode = "execute"
 model = "deepseek-v4-pro"
 max_tokens = 24000
@@ -91,6 +96,7 @@ gate = [
 # only on conformance to the written invariants.
 [[step]]
 name = "review"
+title = "Model conformance review of the whole multi-bounce slice"
 opcode = "generate"
 model = "deepseek-v4-pro"
 max_tokens = 8000

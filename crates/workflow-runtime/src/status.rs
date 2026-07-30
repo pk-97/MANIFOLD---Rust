@@ -21,6 +21,9 @@ pub struct Status {
     /// Human detail for the state (gate command, prompt size, park reason…).
     pub detail: String,
     pub step: String,
+    /// The step's human-readable `title` from the program, when given.
+    #[serde(default)]
+    pub title: String,
     /// 1-based position of the current step.
     pub step_index: usize,
     pub total_steps: usize,

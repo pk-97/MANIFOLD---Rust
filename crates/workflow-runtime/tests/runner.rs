@@ -365,6 +365,7 @@ name = "exec"
 path = "{}"
 [[step]]
 name = "rename"
+title = "Rename old_name to new_name"
 opcode = "execute"
 model = "mock"
 retry_cap = {retry_cap}
@@ -782,4 +783,124 @@ fn failed_recording_is_a_hard_error() {
     ]);
     let err = run(&fx.cfg(), &mock).unwrap_err();
     assert!(err.contains("gate_runner review"), "{err}");
+}
+
+// ── P3 shakedown flow fixes: serial executes, empty ChangeSet, unpark seed ──
+
+#[test]
+fn parked_execute_blocks_every_later_execute() {
+    // Execute steps share one worktree: a parked execute blocks later
+    // executes even with no `inputs` edge between them (exit 20).
+    let fx = Fixture::new(
+        "exec-serial",
+        "name = \"placeholder\"\n[[step]]\nname=\"x\"\nopcode=\"gate\"\ngate=[\"true\"]",
+        &[],
+    );
+    let target = init_target_repo(&fx);
+    let program = format!(
+        r#"
+name = "exec-serial"
+[target]
+path = "{}"
+[[step]]
+name = "first"
+opcode = "execute"
+model = "mock"
+retry_cap = 0
+template = "brief.md"
+inputs = ["file:lib.rs"]
+gate = ["true"]
+
+[[step]]
+name = "second"
+opcode = "execute"
+model = "mock"
+retry_cap = 0
+template = "brief.md"
+inputs = ["file:lib.rs"]
+gate = ["true"]
+"#,
+        target.display()
+    );
+    fs::write(fx.root.join("programs/program.toml"), program).unwrap();
+    fs::write(fx.root.join("programs/brief.md"), "edit:\n{{file:lib.rs}}").unwrap();
+    // First step's only attempt fails to parse — it parks.
+    let mock = MockTransport::new(vec!["not a changeset".into(), "never requested".into()]);
+    let outcome = run(&fx.cfg(), &mock).unwrap();
+    let Outcome::Blocked(reason) = outcome else { panic!("expected blocked, got {outcome:?}") };
+    assert!(reason.contains("\"second\"") && reason.contains("\"first\""), "{reason}");
+    assert_eq!(mock.requests_served(), 1, "the second execute must never call the model");
+}
+
+#[test]
+fn empty_changeset_is_a_non_attempt_and_keeps_the_informative_error() {
+    let fx = Fixture::new(
+        "exec-empty",
+        "name = \"placeholder\"\n[[step]]\nname=\"x\"\nopcode=\"gate\"\ngate=[\"true\"]",
+        &[],
+    );
+    let target = init_target_repo(&fx);
+    fs::write(fx.root.join("programs/program.toml"), execute_program(&target, 2)).unwrap();
+    fs::write(fx.root.join("programs/brief.md"), "rename old_name to new_name in:\n{{file:lib.rs}}").unwrap();
+
+    // Attempt 1 applies and commits but the gate is red; 2 and 3 are empty.
+    let wrong = r#"{"edits": [{"path": "lib.rs", "find": "fn keep()", "replace": "fn kept()"}], "commit_message": "wrong edit"}"#;
+    let empty = r#"{"edits": [], "writes": [], "commit_message": "empty"}"#;
+    let mock = MockTransport::new(vec![wrong.into(), empty.into(), empty.into()]);
+    assert_eq!(run(&fx.cfg(), &mock).unwrap(), Outcome::Done); // parks, nothing depends on it
+    assert_eq!(mock.requests_served(), 3, "an empty ChangeSet still costs an attempt");
+
+    let parked = fs::read_to_string(fx.root.join("run/parked.jsonl")).unwrap();
+    assert!(parked.contains("gate is red"), "park reason must keep the red gate: {parked}");
+    assert!(!parked.contains("\"reason\":\"ChangeSet has no edits"), "the empty set must never be the reason: {parked}");
+    assert!(parked.contains("\"gate_report\""), "full gate report preserved in the park record: {parked}");
+    assert!(parked.contains("Rename old_name to new_name"), "the step title rides along: {parked}");
+
+    // The final attempt's prompt carried BOTH the real error and the empty-set note.
+    let transcript = fs::read_to_string(fx.root.join("run/transcript.jsonl")).unwrap();
+    let last = transcript.lines().last().unwrap();
+    assert!(last.contains("EMPTY ChangeSet"), "{last}");
+    assert!(last.contains("gate is red"), "the real error must stay in front of the model: {last}");
+}
+
+#[test]
+fn unpark_seeds_the_park_reason_into_the_rerun() {
+    let fx = Fixture::new(
+        "exec-seed",
+        "name = \"placeholder\"\n[[step]]\nname=\"x\"\nopcode=\"gate\"\ngate=[\"true\"]",
+        &[],
+    );
+    let target = init_target_repo(&fx);
+    fs::write(fx.root.join("programs/program.toml"), execute_program(&target, 0)).unwrap();
+    fs::write(fx.root.join("programs/brief.md"), "rename old_name to new_name in:\n{{file:lib.rs}}").unwrap();
+
+    // Single attempt with a misquoted `find` — parks with the apply error.
+    let bad = r#"{"edits": [{"path": "lib.rs", "find": "fn misquoted()", "replace": "x"}], "commit_message": "bad find"}"#;
+    assert_eq!(run(&fx.cfg(), &MockTransport::new(vec![bad.into()])).unwrap(), Outcome::Done);
+    assert!(fx.root.join("run/parked.jsonl").exists());
+
+    workflow_runtime::runner::unpark(&fx.root.join("run"), "rename").unwrap();
+    let right = r#"{"edits": [{"path": "lib.rs", "find": "fn old_name()", "replace": "fn new_name()"}], "commit_message": "fixed"}"#;
+    assert_eq!(run(&fx.cfg(), &MockTransport::new(vec![right.into()])).unwrap(), Outcome::Done);
+    assert!(!fx.root.join("run/parked.jsonl").exists(), "the rerun must succeed and clear the park");
+
+    // The rerun's FIRST prompt carried the recorded park reason.
+    let transcript = fs::read_to_string(fx.root.join("run/transcript.jsonl")).unwrap();
+    let last = transcript.lines().last().unwrap();
+    assert!(last.contains("A previous sample of this step parked"), "{last}");
+    assert!(last.contains("misquoted"), "the recorded reason must ride along: {last}");
+}
+
+#[test]
+fn check_warns_on_untitled_steps_without_failing() {
+    let fx = Fixture::new(
+        "lint-title",
+        "name = \"t\"\n[[step]]\nname = \"a\"\nopcode = \"gate\"\ngate = [\"true\"]\n[[step]]\nname = \"b\"\ntitle = \"Second gate\"\nopcode = \"gate\"\ngate = [\"true\"]",
+        &[],
+    );
+    let warnings = workflow_runtime::check::warnings(&fx.root.join("programs/program.toml"));
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].contains("\"a\""), "{warnings:?}");
+    // Titles are advisory: the same program has zero exit-1 findings.
+    assert!(workflow_runtime::check::check(&fx.root.join("programs/program.toml"), &fx.root).is_empty());
 }

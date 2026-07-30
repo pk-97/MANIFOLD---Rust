@@ -119,6 +119,28 @@ never triggers for this class):
   program-tunable (`request_timeout_s`, default 1800s — the old hardcoded
   600s cut off deepseek-v4-pro's legitimate reasoning on a 40K-token brief).
 
+P3 shakedown rulings (Peter, 2026-07-30 — the mb-a-refactor park exposed all four):
+
+- **D15 — a parked execute blocks every later execute.** Execute steps share the one
+  `[target]` worktree and are inherently serial; when one parks, any later execute would
+  build on a broken base. The block is structural — no `inputs` declaration needed — and
+  the run exits 20 at the first blocked execute. (Observed: the runner advanced past the
+  parked refactor and spent 80K+ tokens on top of a broken shader.)
+- **D16 — an empty ChangeSet is a non-attempt.** Rejected like a parse failure, but the
+  PREVIOUS error stays as feedback (plus a note that real edits are required); the park
+  reason is the most informative error seen, never "no edits and no writes" when a red
+  gate or apply failure preceded it. The last red gate's full report is preserved in the
+  park record (`gate_report` in parked.jsonl), not just the composed feedback string.
+- **D17 — unpark seeds the park reason as initial feedback.** A rerun of a previously
+  parked execute step gets "a previous sample of this step parked: <reason>" in its first
+  prompt, so progress already committed in the worktree is fixed forward instead of
+  re-attempted blind. One sample deep: each unpark overwrites the seed, no accumulating
+  history.
+- **D18 — steps carry a human-readable `title`.** Optional one-line sentence per step,
+  surfaced wherever the step name appears (status.json, `watch`, parked.jsonl, escalation
+  files); `check` warns (advisory, never exit 1) when absent. Step `name` keys resume
+  state and is never renamed mid-run — `title` is the human surface.
+
 ## 3. Design body — the loop
 
 One function, per step: assemble context (render template with input artifacts) → POST →
