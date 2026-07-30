@@ -790,6 +790,49 @@ static float3 cone_sample(float3 dir, float half_angle, float2 u) {
     float3 t = ortho_basis_x(dir), b = cross(dir, t);
     return normalize(t * (sin_t * cos(phi)) + b * (sin_t * sin(phi)) + dir * cos_t);
 }
+
+// Multi-bounce GI MB2 (RAYTRACING_DESIGN.md section 11): ONE home for the
+// sun-bounce caster loop (invariant I-MB3) — called by the GI gather at
+// every path vertex and by the reflection block's hit shading.
+// `seed_base` preserves each call site's historical rand2 stream exactly
+// (load-bearing for I-MB1's byte identity). Folds the diffuse BRDF's
+// 1/pi via SUN_BOUNCE_INTENSITY_SCALE, named + tunable (0.02-0.3).
+// Declared after `walk_with_alpha_test`, `rand2`, and `cone_sample`
+// (which it calls) — MSL requires a function be declared before use.
+constant float SUN_BOUNCE_INTENSITY_SCALE = 0.08;
+
+static float3 sun_bounce_at_hit(
+    instance_acceleration_structure accel,
+    device RtNormalSource* normal_sources,
+    array<texture2d<float>, MAX_RT_MATERIAL_TEXTURES> material_textures,
+    constant ShadowRayParams& p,
+    uint n_casters,
+    float3 hit_pos,
+    float3 hit_n,
+    float3 hit_albedo,
+    float bias_eps,
+    uint2 tid,
+    uint seed_base)
+{
+    float3 term = float3(0.0);
+    for (uint sc = 0; sc < n_casters; sc++) {
+        RtCasterParams sun_cst = p.casters[sc];
+        if (sun_cst.kind != 0u) continue;
+        float3 sdir = float3(sun_cst.dir_or_pos);
+        ray sun_r;
+        sun_r.origin = hit_pos + sdir * bias_eps;
+        sun_r.direction = cone_sample(sdir, sun_cst.cone_or_size, rand2(tid, p.frame_index, seed_base + sc));
+        sun_r.min_distance = bias_eps * 0.5;
+        sun_r.max_distance = INFINITY;
+        intersection_query<triangle_data, instancing> sun_q;
+        sun_q.reset(sun_r, accel, RT_MASK_SHADOW_CASTER);
+        float hit_sun_vis = walk_with_alpha_test(sun_q, normal_sources, material_textures, true) ? 0.0 : 1.0;
+        float hit_ndotl = max(dot(hit_n, sdir), 0.0);
+        term += hit_albedo * float3(sun_cst.color) * hit_sun_vis * hit_ndotl * SUN_BOUNCE_INTENSITY_SCALE;
+    }
+    return term;
+}
+
 // RT-P2: cosine-weighted hemisphere sample around `n` — ported verbatim
 // from `tools/rt_prototype/shaders/rt_trace.metal`'s `cosine_hemisphere`
 // (the AO/GI gather this kernel's AO term reuses; GI/emissive gather
@@ -1144,72 +1187,49 @@ kernel void trace_shadow_rays(
     // ao` above, which is this kernel's existing flat-env term — the P0
     // prototype had no separate ambient/AO term to double against, ours
     // does, so the gather's own job narrows to emissive + sun-bounce).
-    // Hoisted to kernel scope by RT-R1 (section 9.3 RD4): the reflection block's
-    // hit shading reuses the GI gather's lines including this scale.
-    const float SUN_BOUNCE_INTENSITY_SCALE = 0.08;
     float3 gi = float3(0.0);
+    // MB4 (RAYTRACING_DESIGN.md section 11.2): fixed path depth + per-extension
+    // energy fold. MB-B: depth 2 — one extension bounce carrying intermediate
+    // albedo (colour bleed). Range 1-3.
+    const uint RT_GI_MAX_BOUNCES = 2u;
+    // ~1/pi, range 0.1-0.5. Consumed only when RT_GI_MAX_BOUNCES > 1: each
+    // path extension multiplies throughput by the intermediate surface's
+    // albedo times this fold (MB5 — the primary surface stays demodulated,
+    // D3 discipline; carried intermediate albedo IS the colour bleed).
+    const float RT_GI_THROUGHPUT_FOLD = 0.318;
     if (p.gi_spp > 0) {
-        ray gr;
-        gr.origin = sec_origin;
-        gr.min_distance = bias_eps * 0.5;
-        gr.max_distance = INFINITY;
         for (uint s = 0; s < p.gi_spp; s++) {
+            ray gr;
+            gr.origin = sec_origin;
+            gr.min_distance = bias_eps * 0.5;
+            gr.max_distance = INFINITY;
             gr.direction = cosine_hemisphere(n, blue_noise_sample(tid, p.frame_index, s, p.gi_spp));
-            intersection_query<triangle_data, instancing> gi_q;
-            gi_q.reset(gr, accel, RT_MASK_VISIBLE);
-            bool gi_hit = walk_with_alpha_test(gi_q, normal_sources, material_textures, false);
-            if (gi_hit) {
+            float3 throughput = float3(1.0);
+            for (uint bounce = 0u; bounce < RT_GI_MAX_BOUNCES; bounce++) {
+                intersection_query<triangle_data, instancing> gi_q;
+                gi_q.reset(gr, accel, RT_MASK_VISIBLE);
+                if (!walk_with_alpha_test(gi_q, normal_sources, material_textures, false)) { break; }
                 uint oi = gi_q.get_committed_instance_id();
                 uint gi_pid = gi_q.get_committed_primitive_id();
                 float2 gi_bary = gi_q.get_committed_triangle_barycentric_coord();
                 float gi_dist = gi_q.get_committed_distance();
                 float3 hit_emissive = float3(gi_materials[oi].emissive);
                 float3 hit_albedo = float3(gi_materials[oi].albedo);
-                // Sun-bounce: does sunlight reach the GI ray's hit point?
-                // One more any-hit ray, hit-point origin, same cone
-                // sampling as the primary shadow ray above. RT-T1-B: the
-                // hit-surface normal is now REAL (interpolated via
-                // [`RtNormalSource`], same GI ray's own hit — no extra
-                // trace needed), replacing the flat average-cosine
-                // stand-in this bounce used before a per-object
-                // vertex-normal buffer existed.
                 float3 hit_pos = gr.origin + gr.direction * gi_dist;
                 float3 hit_n = fetch_interpolated_normal(normal_sources, oi, gi_pid, gi_bary);
-                // Multi-caster fix: bounce off EVERY sun caster (kind==0),
-                // not just casters[0] — a zero-intensity sun (color 0)
-                // contributes nothing, so this is a strict superset of the
-                // old single-sun behavior.
-                float3 bounce = float3(0.0);
-                for (uint sc = 0; sc < n_casters; sc++) {
-                    RtCasterParams sun_cst = p.casters[sc];
-                    if (sun_cst.kind != 0u) continue;
-                    float3 sdir = float3(sun_cst.dir_or_pos);
-                    ray sun_r;
-                    sun_r.origin = hit_pos + sdir * bias_eps;
-                    sun_r.direction = cone_sample(sdir, sun_cst.cone_or_size, rand2(tid, p.frame_index, 400u + s * MAX_RT_CASTERS + sc));
-                    sun_r.min_distance = bias_eps * 0.5;
-                    sun_r.max_distance = INFINITY;
-                    intersection_query<triangle_data, instancing> sun_q;
-                    sun_q.reset(sun_r, accel, RT_MASK_SHADOW_CASTER);
-                    float hit_sun_vis = walk_with_alpha_test(sun_q, normal_sources, material_textures, true) ? 0.0 : 1.0;
-                    float hit_ndotl = max(dot(hit_n, sdir), 0.0);
-                    // Named, documented, tunable (RAYTRACING_DESIGN.md section 5.2 P2's
-                    // "denoiser/accumulation parameters are named constants"
-                    // rule, extended to P3/T1-B): folds the diffuse BRDF's 1/pi
-                    // energy normalization into one scale factor (the RECEIVING
-                    // point's own albedo divide happens once downstream in
-                    // `render_scene.wgsl`, per D3's demodulated-irradiance
-                    // discipline) — `hit_ndotl` above now supplies the real
-                    // cosine term this scale used to approximate outright.
-                    // Peter's morning gate tuned this range against the OLD
-                    // flat-cosine stand-in; `hit_ndotl` only ever makes the
-                    // bounce dimmer or equal (never brighter) than that
-                    // baseline, so the committed 0.02-0.3 range still holds.
-                    // (Declaration hoisted to kernel scope for RT-R1 — see the
-                    // GI block's head.)
-                    bounce += hit_albedo * float3(sun_cst.color) * hit_sun_vis * hit_ndotl * SUN_BOUNCE_INTENSITY_SCALE;
+                float3 bounce_term = sun_bounce_at_hit(
+                    accel, normal_sources, material_textures, p, n_casters,
+                    hit_pos, hit_n, hit_albedo, bias_eps, tid,
+                    400u + s * MAX_RT_CASTERS);
+                gi += throughput * (hit_emissive + bounce_term);
+                if (bounce + 1u < RT_GI_MAX_BOUNCES) {
+                    throughput *= hit_albedo * RT_GI_THROUGHPUT_FOLD;
+                    gr.origin = hit_pos + hit_n * bias_eps;
+                    // Extension directions use the plain hash stream (seed
+                    // base 600u), NOT blue_noise_sample — the blue-noise
+                    // sequence is budgeted per first-bounce sample index.
+                    gr.direction = cosine_hemisphere(hit_n, rand2(tid, p.frame_index, 600u + s * MAX_RT_CASTERS + bounce));
                 }
-                gi += hit_emissive + bounce;
             }
         }
         gi /= float(p.gi_spp);
@@ -1314,22 +1334,9 @@ kernel void trace_shadow_rays(
                 float3 hit_specular_env = refl_env_sample(prefiltered_env, refl_dir, hit_roughness);
                 // Sun-bounce term — multi-caster fix: sums every sun caster
                 // (kind==0), same discipline as the GI gather's bounce above.
-                float3 sun_bounce_term = float3(0.0);
-                for (uint sc = 0; sc < n_casters; sc++) {
-                    RtCasterParams sun_cst = p.casters[sc];
-                    if (sun_cst.kind != 0u) continue;
-                    float3 sdir = float3(sun_cst.dir_or_pos);
-                    ray sun_r;
-                    sun_r.origin = hit_pos + sdir * bias_eps;
-                    sun_r.direction = cone_sample(sdir, sun_cst.cone_or_size, rand2(tid, p.frame_index, 500u + sc));
-                    sun_r.min_distance = bias_eps * 0.5;
-                    sun_r.max_distance = INFINITY;
-                    intersection_query<triangle_data, instancing> sun_q;
-                    sun_q.reset(sun_r, accel, RT_MASK_SHADOW_CASTER);
-                    float hit_sun_vis = walk_with_alpha_test(sun_q, normal_sources, material_textures, true) ? 0.0 : 1.0;
-                    float hit_ndotl = max(dot(hit_n, sdir), 0.0);
-                    sun_bounce_term += hit_albedo * float3(sun_cst.color) * hit_sun_vis * hit_ndotl * SUN_BOUNCE_INTENSITY_SCALE;
-                }
+                float3 sun_bounce_term = sun_bounce_at_hit(
+                    accel, normal_sources, material_textures, p, n_casters,
+                    hit_pos, hit_n, hit_albedo, bias_eps, tid, 500u);
                 // Full raster-parity shading: emissive + diffuse-env + specular-env + sun-bounce.
                 traced = hit_emissive + hit_albedo * hit_diffuse_env + hit_f0 * hit_specular_env + sun_bounce_term;
             } else {
