@@ -24,16 +24,16 @@ Respond with JSON only: {"verdict": "accept" | "reject", "rationale": "<1-3 sent
 
 # ChangeSet MB-A
 
-{{mb-a-refactor}}
+{{refactor-bounce-loop}}
 
 # ChangeSet MB-B
 
-{{mb-b-bounce}}
+{{add-second-bounce}}
 
 # ChangeSet MB-C
 
-{{mb-c-pin-test}}
+{{pin-regression-test}}
 
 # Probe result
 
-{{probe-bleed}}
+{{rule-on-bleed-probe}}

@@ -19,7 +19,7 @@ branch = "lane/rt-t38-multibounce"
 # tip, before any execute commit). --linear on the probe fixtures so region
 # means are not tonemap-compressed; RtCompare stays default (byte diff).
 [[step]]
-name = "baseline"
+name = "capture-baseline-render"
 title = "Capture the pre-change RtCompare baseline render"
 opcode = "gate"
 gate_timeout_s = 2400
@@ -28,13 +28,13 @@ gate = [
 ]
 
 [[step]]
-name = "mb-a-refactor"
+name = "refactor-bounce-loop"
 title = "Bounce-loop refactor, behavior-identical (byte-identical RtCompare)"
 opcode = "execute"
 model = "deepseek-v4-pro"
 max_tokens = 24000
 retry_cap = 2
-template = "rt-t38-mb-a-brief.md"
+template = "rt-t38-refactor-bounce-loop-brief.md"
 inputs = ["file:crates/manifold-gpu/src/metal/raytrace.rs"]
 gate_timeout_s = 2400
 gate = [
@@ -49,13 +49,13 @@ gate = [
 ]
 
 [[step]]
-name = "mb-b-bounce"
+name = "add-second-bounce"
 title = "Enable the second GI bounce and capture the bleed/ambient fixtures"
 opcode = "execute"
 model = "deepseek-v4-pro"
 max_tokens = 16000
 retry_cap = 2
-template = "rt-t38-mb-b-brief.md"
+template = "rt-t38-add-second-bounce-brief.md"
 inputs = ["file:crates/manifold-gpu/src/metal/raytrace.rs"]
 gate_timeout_s = 2400
 gate = [
@@ -69,7 +69,7 @@ gate = [
 # The bleed/control ruling (transform, deterministic, parks on red). Its JSON
 # artifact carries pin_threshold for the in-repo regression test.
 [[step]]
-name = "probe-bleed"
+name = "rule-on-bleed-probe"
 title = "Rule on the bleed-vs-control delta between 1 and 2 bounces"
 opcode = "transform"
 artifact = "json"
@@ -77,14 +77,14 @@ template = "rt-t38-probe-note.md"
 command = "scripts/rt_region_probe.py --a \"$WORKFLOW_RUN_DIR/bleed-1.png\" --b \"$WORKFLOW_RUN_DIR/bleed-2.png\" --rect 80,175,230,235 --min-delta 0.008 --max-control 0.01"
 
 [[step]]
-name = "mb-c-pin-test"
+name = "pin-regression-test"
 title = "Pin the multi-bounce result with an in-repo regression test"
 opcode = "execute"
 model = "deepseek-v4-pro"
 max_tokens = 24000
 retry_cap = 2
-template = "rt-t38-mb-c-brief.md"
-inputs = ["probe-bleed", "file:crates/manifold-renderer/tests/gpu_proofs/rt_p3_emissive_gi.rs", "file:crates/manifold-renderer/tests/gpu_proofs/main.rs"]
+template = "rt-t38-pin-regression-test-brief.md"
+inputs = ["rule-on-bleed-probe", "file:crates/manifold-renderer/tests/gpu_proofs/rt_p3_emissive_gi.rs", "file:crates/manifold-renderer/tests/gpu_proofs/main.rs"]
 gate_timeout_s = 2400
 gate = [
   "cargo clippy -p manifold-renderer -- -D warnings",
@@ -95,7 +95,7 @@ gate = [
 # id (D8). The lead's own review still gates the landing — this seat rules
 # only on conformance to the written invariants.
 [[step]]
-name = "review"
+name = "conformance-review"
 title = "Model conformance review of the whole multi-bounce slice"
 opcode = "generate"
 model = "deepseek-v4-pro"
@@ -103,4 +103,4 @@ max_tokens = 8000
 retry_cap = 2
 artifact = "verdict"
 template = "rt-t38-review-brief.md"
-inputs = ["mb-a-refactor", "mb-b-bounce", "mb-c-pin-test", "probe-bleed"]
+inputs = ["refactor-bounce-loop", "add-second-bounce", "pin-regression-test", "rule-on-bleed-probe"]

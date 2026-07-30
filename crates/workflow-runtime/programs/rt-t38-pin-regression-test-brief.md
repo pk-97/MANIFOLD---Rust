@@ -50,7 +50,7 @@ commit_message: "MB-C: rt_t38_multibounce gpu-proof — bleed pin + ambient-neut
 
 # Probe result (the workflow's measured 1-vs-2 delta)
 
-{{probe-bleed}}
+{{rule-on-bleed-probe}}
 
 # Reference: rt_p3_emissive_gi.rs (copy its harness/readback patterns)
 
