@@ -597,7 +597,15 @@ struct GiMaterial {
 
 // RT-R2 (RD6): specular accumulation blend — range 0.05–0.3, untuned
 // (tuning is Peter's look). Smaller = more temporal amortization.
-constant float RT_REFL_ACCUM_ALPHA = 0.1;
+// FLOOR on the specular blend weight — the kernel blends at 1/n (n = the
+// texel's specular history length, carried in `normal_history.w`), so a
+// still mirror converges instead of sitting on the fixed-weight noise
+// floor. One GGX ray per pixel per frame at half res needs every frame of
+// averaging it can get. The floor caps history at 1/alpha frames, which is
+// also the disocclusion-ghost bound D-61 cares about — tighter than the
+// diffuse floor for exactly that reason, with the variance clamp
+// (`clamp_refl_history`) as the second guard.
+constant float RT_REFL_ACCUM_ALPHA_MIN = 0.025;
 // RT-R2 (RD6): roughness at/above which reprojection is plain surface
 // reprojection (the GGX-perturbed ray ≈ the surface lobe there).
 // Range 0.3–0.7, untuned.
@@ -782,6 +790,30 @@ static float2 rand2(uint2 p, uint frame, uint ray) {
 static float3 ortho_basis_x(float3 n) {
     return normalize(fabs(n.x) > 0.9 ? cross(n, float3(0, 1, 0)) : cross(n, float3(1, 0, 0)));
 }
+// Shared luminance weighting (Rec.709) — the reflection firefly clamp, the
+// upsample gather, and `atrous_filter`'s edge-stopping function all use it.
+static float luma(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
+
+// In-register cap on reflection samples per pixel — bounds the fixed-size
+// sample array the firefly clamp's median needs. `REFL_SAMPLES_PER_PIXEL`'s
+// committed range (1-8) is what this has to hold.
+#define MAX_RT_REFL_SPP 8u
+
+// Median luminance of `n` radiance samples (n <= MAX_RT_REFL_SPP), by partial
+// selection — n is 4 in practice, so a sort network buys nothing. Even n takes
+// the lower middle: this anchors a clamp, not a statistic.
+static float median_luma(thread float3* s, uint n) {
+    float l[MAX_RT_REFL_SPP];
+    for (uint i = 0u; i < n; ++i) { l[i] = luma(s[i]); }
+    uint mid = n / 2u;
+    for (uint i = 0u; i <= mid; ++i) {
+        uint m = i;
+        for (uint j = i + 1u; j < n; ++j) { if (l[j] < l[m]) { m = j; } }
+        float t = l[i]; l[i] = l[m]; l[m] = t;
+    }
+    return l[mid];
+}
+
 static float3 cone_sample(float3 dir, float half_angle, float2 u) {
     if (half_angle <= 0.0) return dir;
     float cos_t = mix(1.0, cos(half_angle), u.x);
@@ -1302,9 +1334,21 @@ kernel void trace_shadow_rays(
             // approximation — no ray cast.
             out_refl.write(float4(env, RT_REFL_MISS_HIT_DIST), tid);
         } else {
+            // One GGX sample per pixel per frame left variance the temporal
+            // filter could not hide: measured frame-to-frame change on a
+            // STATIC scene was 4.7 sRGB levels mean with a 171-level 99.9th
+            // percentile — heavy-tailed, i.e. single samples landing on
+            // something very bright. Averaging `refl_spp` samples here
+            // attacks the variance at the source; `RT_REFL_FIREFLY_GAIN`
+            // below attacks the tail.
+            uint rspp = min(max(p.refl_spp, 1u), MAX_RT_REFL_SPP);
+            float3 rsamples[MAX_RT_REFL_SPP];
+            float hit_dist_sum = 0.0;
+            uint hit_count = 0u;
+            for (uint rs = 0u; rs < rspp; ++rs) {
             float3 rdir = R;
             if (roughness > 0.0) {
-                rdir = ggx_reflection_dir(n, V, roughness, blue_noise_sample(tid, p.frame_index, 0u, p.refl_spp));
+                rdir = ggx_reflection_dir(n, V, roughness, blue_noise_sample(tid, p.frame_index, rs, rspp));
             }
             ray rr;
             rr.origin = sec_origin;
@@ -1365,11 +1409,45 @@ kernel void trace_shadow_rays(
                 // GGX-perturbed) direction, roughness mip.
                 traced = refl_env_sample(prefiltered_env, rdir, roughness);
             }
+            rsamples[rs] = traced;
+            if (hit_dist > RT_REFL_MISS_HIT_DIST) { hit_dist_sum += hit_dist; hit_count += 1u; }
+            }
+            // Firefly clamp, anchored on this batch's OWN median luminance.
+            // The tail in the measurement is one sample landing on something
+            // far brighter than its siblings; the median is a typical sample
+            // by construction, so capping at a multiple of it bounds the
+            // outlier without touching a lobe that is uniformly bright.
+            // Anchoring on the prefiltered env instead looked cheaper but is
+            // wrong: a scene with no env chain (Environment Intensity 0) has
+            // env ~ 0, and the cap then erases reflections entirely.
+            // Committed range 4-16: lower = calmer, dimmer highlights;
+            // higher = closer to ground truth, noisier. A 1-sample dispatch
+            // has no median to anchor on, so the clamp is inert there.
+            const float RT_REFL_FIREFLY_GAIN = 8.0;
+            float3 traced_sum = float3(0.0);
+            if (rspp > 2u) {
+                float med = median_luma(rsamples, rspp);
+                float cap = RT_REFL_FIREFLY_GAIN * med;
+                for (uint rs = 0u; rs < rspp; ++rs) {
+                    float3 s = rsamples[rs];
+                    float sl = luma(s);
+                    traced_sum += (sl > cap && sl > 1e-6) ? s * (cap / sl) : s;
+                }
+            } else {
+                for (uint rs = 0u; rs < rspp; ++rs) { traced_sum += rsamples[rs]; }
+            }
+            float3 traced_avg = traced_sum / float(rspp);
+            // R2's reprojection needs ONE surface's distance; the mean over
+            // the samples that actually hit is the lobe's representative
+            // depth. All-miss keeps the env-miss sentinel.
+            float hit_dist_avg = hit_count > 0u
+                ? hit_dist_sum / float(hit_count)
+                : RT_REFL_MISS_HIT_DIST;
             // RD7's band: blend traced -> env across [max_roughness,
             // max_roughness + band] so the cutoff is continuous, not a
             // visible edge (Q2's approved BRDF-domain split).
             float band_t = saturate((roughness - p.refl_max_roughness) / max(p.refl_rough_band, 1e-4));
-            out_refl.write(float4(mix(traced, env, band_t), hit_dist), tid);
+            out_refl.write(float4(mix(traced_avg, env, band_t), hit_dist_avg), tid);
         }
     } else {
         // Reflections off this frame (or the primary ray missed — no
@@ -1394,10 +1472,6 @@ kernel void trace_shadow_rays(
     float3 irradiance = float3(p.ambient_color) * ao + gi;
     out_irr.write(float4(irradiance, 0), tid);
 }
-
-// RT-T1-D shared luminance weighting (Rec.709) — used by both the
-// upsample gather below and `atrous_filter`'s edge-stopping function.
-static float luma(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
 
 // Depth+normal-aware bilateral upsample: half-res (sun-visibility, AO) +
 // demod. irradiance -> full res (RT-D3's "D11 trivial pass"; RT-P2 widened
@@ -1603,6 +1677,36 @@ kernel void atrous_filter(
     float refl_luma_sigma = mix(ATROUS_REFL_LUMA_SIGMA_SHINY, ATROUS_REFL_LUMA_SIGMA_ROUGH,
                                 clamp(center_rough / ATROUS_REFL_SIGMA_ROUGHNESS_REF, 0.0, 1.0));
     float center_refl_luma = luma(src_refl.read(tid).rgb);
+    // Variance-guided widening. The roughness lerp above deliberately
+    // narrows the luma stop on a shiny surface to keep a mirror crisp — but
+    // that also disables filtering exactly where the sampled reflection is
+    // noisiest, and no ray budget fixes a filter that has been told to stand
+    // down. So measure the local spread of the reflection signal at THIS
+    // pass's dilation and add it to the stop: a converged texel measures
+    // ~0 spread and keeps its crisp narrow sigma, a boiling one widens and
+    // gets averaged. This is the standard variance-guided edge stop, using a
+    // spatial estimate because the specular channel has no moments texture
+    // (the diffuse one does; adding a second would cost a full-res pair).
+    // Committed range 1-4: higher = calmer, more risk of smearing a true
+    // mirror's detail into its surroundings.
+    const float ATROUS_REFL_VARIANCE_GAIN = 2.0;
+    {
+        float m1 = center_refl_luma;
+        float m2 = center_refl_luma * center_refl_luma;
+        const int2 var_offsets[8] = {
+            int2(1, 0), int2(-1, 0), int2(0, 1), int2(0, -1),
+            int2(1, 1), int2(1, -1), int2(-1, 1), int2(-1, -1)
+        };
+        for (uint i = 0u; i < 8u; ++i) {
+            int2 q = clamp(int2(tid) + var_offsets[i] * int(p.step), int2(0), int2(p.size) - 1);
+            float ql = luma(src_refl.read(uint2(q)).rgb);
+            m1 += ql;
+            m2 += ql * ql;
+        }
+        m1 /= 9.0;
+        m2 /= 9.0;
+        refl_luma_sigma += ATROUS_REFL_VARIANCE_GAIN * sqrt(max(m2 - m1 * m1, 0.0));
+    }
     float wsum_refl = 1.0; // center tap weight 1, same convention as wsum
     // Full 3x3 neighborhood (8 taps, diagonals included) rather than a
     // 4-tap cross: with only `ATROUS_ITERATIONS`=3 total passes budgeted
@@ -1699,6 +1803,29 @@ kernel void atrous_filter(
 // mapped value is inverted back with `c = t / (1 - luma(t))` (valid since
 // luma(t) < 1 by construction — `min(..., 0.999)` guards the invert
 // against float error at the asymptote).
+// Spread of the CURRENT reflection signal in a 3x3 neighborhood, as a
+// luminance standard deviation. The specular change gate's noise term: this
+// channel has no moments texture, and spatial spread is the right measure
+// anyway — per-frame noise raises it, a real lighting change moves a whole
+// region together and barely touches it. Edge-clamped, same as
+// `clamp_refl_history`'s own neighborhood handling.
+inline float refl_neighborhood_luma_sd(texture2d<float> hi_refl,
+                                       uint2 tid, uint2 size) {
+    float m1 = 0.0;
+    float m2 = 0.0;
+    for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            int2 t = clamp(int2(tid) + int2(dx, dy), int2(0), int2(size) - 1);
+            float l = luma(hi_refl.read(uint2(t)).rgb);
+            m1 += l;
+            m2 += l * l;
+        }
+    }
+    m1 /= 9.0;
+    m2 /= 9.0;
+    return sqrt(max(m2 - m1 * m1, 0.0));
+}
+
 inline float3 clamp_refl_history(float3 hist,
                                  texture2d<float> hi_refl,
                                  uint2 tid, uint2 size) {
@@ -1764,10 +1891,22 @@ kernel void accumulate_irradiance(
     float3 cur_normal = cur_n4.xyz;
     float  cur_luma = luma(cur.xyz);
 
-    if (p.reset != 0u) {
-        history_write.write(cur, tid);
+    // `reset` is a FLAGS word: bit 0 = full reset (cold start / post-cut),
+    // bit 1 = the CPU knows a light param changed this frame. See
+    // `AccumulateParams::with_lighting_changed` for why the flag rides here
+    // instead of a new field.
+    bool cpu_lighting_changed = (p.reset & 2u) != 0u;
+    if ((p.reset & 1u) != 0u) {
+        // `.a` = accumulated frame count (BUG-boil): a cold texel has
+        // exactly one sample, so its next blend takes the current frame at
+        // weight 1/2, not `p.alpha_min`. See the blend below.
+        history_write.write(float4(cur.xyz, 1.0), tid);
         depth_history_write.write(float4(cur_depth, 0, 0, 0), tid);
-        normal_history_write.write(float4(cur_normal, 0), tid);
+        // `.w` = the SPECULAR channel's own accumulated frame count (the
+        // irradiance count rides `history_write.a`). Separate counters
+        // because the two channels reproject differently and reject
+        // independently — specular has no depth test.
+        normal_history_write.write(float4(cur_normal, 1.0), tid);
         moments_write.write(float4(cur_luma, cur_luma * cur_luma, 0, 0), tid);
         refl_history_write.write(hi_refl.read(tid), tid);
         return;
@@ -1784,6 +1923,12 @@ kernel void accumulate_irradiance(
     // visible shimmer until motion stopped (the residual BUG-320 left).
     bool valid = false;
     float3 blended = cur.xyz;
+    // Frames of history behind this texel, carried in `history_write.a`.
+    // 1 = this frame only (a rejected/disoccluded texel is a cold start).
+    float hist_len = 1.0;
+    // Set by the irradiance blend when it decides the light really changed;
+    // read by the reflection block so both channels snap on one decision.
+    bool refl_change_snap = false;
     float moment1 = cur_luma;
     float moment2 = cur_luma * cur_luma;
     // NORMAL_REJECT_COS_THRESHOLD: cosine of the angle between
@@ -1860,30 +2005,107 @@ kernel void accumulate_irradiance(
                 float w[4] = { (1.0-fr.x)*(1.0-fr.y), fr.x*(1.0-fr.y), (1.0-fr.x)*fr.y, fr.x*fr.y };
                 int2 offs[4] = { int2(0,0), int2(1,0), int2(0,1), int2(1,1) };
                 float wsum = 0.0; float3 hsum = float3(0.0); float2 msum = float2(0.0);
+                float nsum = 0.0;
                 for (int i = 0; i < 4; ++i) {
                     int2 t = clamp(base + offs[i], int2(0), int2(p.size) - 1);
                     uint2 tt = uint2(t);
                     bool depth_ok  = fabs(depth_history_read.read(tt).r - prev_ndc.z) < DEPTH_REJECT_THRESHOLD;
                     bool normal_ok = dot(normalize(normal_history_read.read(tt).xyz), cur_normal_prev) > NORMAL_REJECT_COS_THRESHOLD;
                     if (depth_ok && normal_ok) {
+                        float4 h = history_read.read(tt);
                         wsum += w[i];
-                        hsum += w[i] * history_read.read(tt).xyz;
+                        hsum += w[i] * h.xyz;
+                        nsum += w[i] * h.a;
                         msum += w[i] * moments_read.read(tt).rg;
                     }
                 }
                 if (wsum > 1e-4) {
-                    blended = mix(hsum / wsum, cur.xyz, p.alpha);
+                    // BUG-boil: the blend weight FALLS as history builds
+                    // (1/n), instead of a fixed weight. A fixed weight has a
+                    // permanent noise floor — output variance settles at
+                    // alpha/(2-alpha) of the raw single-frame variance and
+                    // stays there, so a static scene boils forever no matter
+                    // how long it sits. 1/n is a true running mean: variance
+                    // keeps falling while the surface stays valid.
+                    // `p.alpha` is now the FLOOR, capping history length at
+                    // 1/alpha frames so genuinely changing light (animated
+                    // params, modulated intensity) still tracks.
+                    float3 hist = hsum / wsum;
+                    float hm1 = msum.x / wsum;
+                    float hm2 = msum.y / wsum;
+                    // A long history converges a still image but LAGS a real
+                    // lighting change — Peter: automated light moves felt slow
+                    // and hard cues stopped landing on the frame. Averaging
+                    // and responsiveness are only in conflict while you cannot
+                    // tell noise from signal, and the moments already say
+                    // which is which: if this frame's luma sits further from
+                    // history than the tracked spread can explain, the light
+                    // really changed, so collapse the count and snap. Noise
+                    // stays inside the band and keeps amortizing.
+                    // SIGMAS covers the noise case; REL is the floor for a
+                    // converged texel whose spread has gone to ~0, expressed
+                    // as a fraction of its own brightness so it scales with
+                    // exposure. Measured frame-to-frame noise here is ~0.03%,
+                    // three orders under REL, so noise cannot trip it.
+                    // One counter serves both the colour and the moments, so a
+                    // trip shortens the noise estimate too — which is exactly
+                    // why the gate must not trip on noise. A first attempt with
+                    // only a relative floor did, and self-sustained: reset ->
+                    // short history -> tiny spread -> reset. Measured at 3x the
+                    // static noise. The absolute floor below is the fix.
+                    const float RT_ACCUM_CHANGE_SIGMAS = 4.0;
+                    const float RT_ACCUM_CHANGE_REL = 0.15;
+                    // Numerical floor only — NOT a perceptual one. An earlier
+                    // version used 0.01 here, which silently disabled the gate
+                    // in any scene whose demodulated irradiance is small (the
+                    // car repro sits at ~5e-4), so a lights-out cue still
+                    // faded over the whole window. Peter caught it by dropping
+                    // sun intensity 10 -> 0 and watching the fade. Scale-free
+                    // is the requirement: the relative term catches a cue at
+                    // ANY magnitude, and the sigma term is what protects a
+                    // near-black noisy texel — an absolute perceptual floor
+                    // cannot do both.
+                    const float RT_ACCUM_CHANGE_ABS = 1e-4;
+                    float hist_luma = luma(hist);
+                    float hist_sd = sqrt(max(hm2 - hm1 * hm1, 0.0));
+                    float change_gate = max(RT_ACCUM_CHANGE_SIGMAS * hist_sd,
+                                            RT_ACCUM_CHANGE_REL * hist_luma);
+                    float dluma = fabs(cur_luma - hist_luma);
+                    bool lighting_changed = cpu_lighting_changed
+                        || (dluma > change_gate && dluma > RT_ACCUM_CHANGE_ABS);
+                    float n_full = nsum / wsum + 1.0;
+                    // Snap to 2, not 1: alpha 0.5 is 75% of a step in two
+                    // frames — a cue lands — while leaving one frame of
+                    // history so a single wild sample cannot define the pixel.
+                    float n = lighting_changed ? 2.0 : n_full;
+                    float alpha = max(1.0 / n, p.alpha);
+                    hist_len = min(n, 1.0 / max(p.alpha, 1e-6));
+                    blended = mix(hist, cur.xyz, alpha);
                     valid = true;
-                    moment1 = mix(msum.x / wsum, cur_luma, p.alpha);
-                    moment2 = mix(msum.y / wsum, cur_luma * cur_luma, p.alpha);
+                    // The moments update on a FLOORED window (>= 4 samples)
+                    // even when the colour snaps to 2. One counter serves both,
+                    // so a snap that also collapsed the spread estimate would
+                    // destroy the statistic that decides the next snap and the
+                    // reset would self-sustain — measured at 3x the static
+                    // noise when that happened.
+                    float m_alpha = max(1.0 / max(n, 4.0), p.alpha);
+                    moment1 = mix(hm1, cur_luma, m_alpha);
+                    moment2 = mix(hm2, cur_luma * cur_luma, m_alpha);
+                    // The SURFACE's lighting changed, so its specular history
+                    // is stale for the same reason — one decision, both
+                    // channels (the reflection block below reads this).
+                    if (lighting_changed) { refl_change_snap = true; }
                 }
             }
         }
     }
-    history_write.write(valid ? float4(blended, 0) : cur, tid);
+    history_write.write(valid ? float4(blended, hist_len) : float4(cur.xyz, 1.0), tid);
     depth_history_write.write(float4(cur_depth, 0, 0, 0), tid);
-    normal_history_write.write(float4(cur_normal, 0), tid);
     moments_write.write(float4(moment1, moment2, 0, 0), tid);
+    // Specular history length, `normal_history.w`. Written below the
+    // reflection block (which computes it) — the normal itself is settled
+    // here, so the deferred write costs nothing.
+    float refl_hist_len = 1.0;
     // RT-R2 (RD6): specular history through the virtual hit point.
     // No depth test — the virtual image's depth never equals the surface
     // depth stored in history; a depth test rejects all mirror history by
@@ -1925,23 +2147,62 @@ kernel void accumulate_irradiance(
                 float2 fr = pf - float2(base);
                 float w[4] = { (1.0-fr.x)*(1.0-fr.y), fr.x*(1.0-fr.y), (1.0-fr.x)*fr.y, fr.x*fr.y };
                 int2 offs[4] = { int2(0,0), int2(1,0), int2(0,1), int2(1,1) };
-                float wsum = 0.0; float3 rsum = float3(0.0);
+                float wsum = 0.0; float3 rsum = float3(0.0); float nsum = 0.0;
                 for (int i = 0; i < 4; ++i) {
                     int2 t = clamp(base + offs[i], int2(0), int2(p.size) - 1);
                     uint2 tt = uint2(t);
-                    bool normal_ok = dot(normalize(normal_history_read.read(tt).xyz), cur_normal_prev) > NORMAL_REJECT_COS_THRESHOLD;
+                    float4 nh = normal_history_read.read(tt);
+                    bool normal_ok = dot(normalize(nh.xyz), cur_normal_prev) > NORMAL_REJECT_COS_THRESHOLD;
                     if (normal_ok) {
                         wsum += w[i];
                         rsum += w[i] * refl_history_read.read(tt).rgb;
+                        nsum += w[i] * nh.w;
                     }
                 }
                 if (wsum > 1e-4) {
-                    refl_write = mix(clamp_refl_history(rsum / wsum, hi_refl, tid, p.size), cur_refl.rgb, RT_REFL_ACCUM_ALPHA);
+                    // The specular channel needs its OWN change gate, not just
+                    // the irradiance block's verdict. Peter: objects "fade out
+                    // with the light, like they are holding the light". Cause:
+                    // in these scenes the demodulated irradiance sits at ~5e-4,
+                    // under the irradiance gate's absolute floor, so that gate
+                    // never trips — while the reflection channel, which carries
+                    // most of the visible lighting on a shiny object, sat on 40
+                    // frames of history and trailed. Same relative/absolute
+                    // form; no sigma term because this channel has no moments
+                    // texture, and its measured frame-to-frame noise is ~0.05%,
+                    // three orders under the relative floor.
+                    // The sigma term is SPATIAL here (3x3 of the current
+                    // reflection) because this channel has no moments texture.
+                    // It is the right discriminator anyway: per-frame noise
+                    // raises local spread, while a real light change moves a
+                    // whole region together and barely touches it. Without it
+                    // the gate tripped on the noisy tail and cost measurable
+                    // static quality (composite 0.076 -> 0.105).
+                    const float RT_REFL_CHANGE_SIGMAS = 4.0;
+                    const float RT_REFL_CHANGE_REL = 0.15;
+                    // Numerical floor only, same reasoning as the irradiance
+                    // gate: an absolute perceptual floor here silently disabled
+                    // the gate in any scene whose reflection radiance is small.
+                    const float RT_REFL_CHANGE_ABS = 1e-4;
+                    float3 rhist = rsum / wsum;
+                    float rhist_luma = luma(rhist);
+                    float rsd = refl_neighborhood_luma_sd(hi_refl, tid, p.size);
+                    float rdluma = fabs(luma(cur_refl.rgb) - rhist_luma);
+                    bool refl_changed = refl_change_snap
+                        || cpu_lighting_changed
+                        || (rdluma > max(RT_REFL_CHANGE_SIGMAS * rsd,
+                                         RT_REFL_CHANGE_REL * rhist_luma)
+                            && rdluma > RT_REFL_CHANGE_ABS);
+                    float rn = refl_changed ? 2.0 : (nsum / wsum + 1.0);
+                    float ralpha = max(1.0 / rn, RT_REFL_ACCUM_ALPHA_MIN);
+                    refl_hist_len = min(rn, 1.0 / RT_REFL_ACCUM_ALPHA_MIN);
+                    refl_write = mix(clamp_refl_history(rsum / wsum, hi_refl, tid, p.size), cur_refl.rgb, ralpha);
                 }
             }
         }
     }
     refl_history_write.write(float4(refl_write, cur_refl.a), tid);
+    normal_history_write.write(float4(cur_normal, refl_hist_len), tid);
 }
 
 // RT-T1-B value-level test surface ONLY (`docs/RAYTRACING_DESIGN.md` section 8
@@ -2445,7 +2706,36 @@ impl AccumulateParams {
             prev_view_proj,
         }
     }
+
+    /// Tell the accumulator the CPU knows a light changed this frame, so it
+    /// collapses its per-texel history length and the cue lands instead of
+    /// averaging in.
+    ///
+    /// Why a flag and not a per-pixel heuristic: the per-texel gates in the
+    /// kernel compare this frame against the tracked spread, which works only
+    /// when the changed term is a large enough share of the channel. A sun
+    /// intensity move is a SMALL share of a buffer dominated by the ambient
+    /// term, so it slipped under the gate and faded over the whole window,
+    /// while an env move — the dominant term — snapped. Peter found exactly
+    /// that split. The engine already knows a light param changed, so it says
+    /// so; the gates stay for what the CPU cannot see (an emissive object
+    /// animated from inside the graph).
+    ///
+    /// Rides `reset`'s spare bits rather than a new field: `AccumulateParams`
+    /// is sized so both `float4x4`s land 16-byte aligned, and a new `u32`
+    /// would break that (the alignment guard above is deliberate).
+    /// Bit 0 = full reset, bit 1 = lighting changed.
+    pub fn with_lighting_changed(mut self, changed: bool) -> Self {
+        if changed {
+            self.reset |= ACCUM_FLAG_LIGHTING_CHANGED;
+        }
+        self
+    }
 }
+
+/// `AccumulateParams::reset` bit 1 — see `with_lighting_changed`. Bit 0 is the
+/// original full-reset meaning, so a plain `reset: true` is still `1`.
+pub const ACCUM_FLAG_LIGHTING_CHANGED: u32 = 2;
 
 /// CPU mirror of the MSL `AtrousParams` struct backing `atrous_filter`
 /// (RT-T1-D, BUG-312). Plain POD, all `u32`, no alignment surprises.

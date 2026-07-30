@@ -1,6 +1,6 @@
 # Ray Tracing — hybrid RT lighting for hero scenes
 
-**Status:** IN PROGRESS — Tier 1+2, the motion class, reflections R1/R2/R3, T3-8 multi-bounce GI and section 12 (Screen-space AO handoff) all landed; phase records in section 9.6 (Phases) and section 11.4 (Multi-bounce phases). OWED: Peter's look at multi-bounce, at traced-detail wash and motion speckle, and at the R2 constants; a `trace_ms` 2-vs-1 number from a heavier scene. Items 6/9, P5 export (D13) and P6 frame interp stay show-need-triggered; perf profiling deferred. · 2026-07-30 · Fable + Opus
+**Status:** IN PROGRESS — Tier 1+2, the motion class, reflections R1/R2/R3, T3-8 multi-bounce GI, section 12 (Screen-space AO handoff) and section 13 (Temporal denoiser rebuild) all landed; phase records in section 9.6 (Phases). OWED: Peter's look at multi-bounce, at the R2 constants, and at the denoiser under fast camera motion; a `trace_ms` 2-vs-1 number from a heavier scene. Items 6/9, P5 export (D13) and P6 frame interp stay show-need-triggered; perf profiling deferred. · 2026-07-30 · Fable + Opus
 **Prerequisites:** none for P0. P1+ gated on P0 numbers and on RENDERING_INFRA_V2 section 2 (G-buffer/motion vectors) for temporal pieces.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -916,3 +916,81 @@ neighbours instead of growing a fake contact gradient.
 - **Owed:** I-AM4's cross-commit epsilon A/B (pre-change main vs post, all-lit RT-off)
   was not run as a separate gate — the unwired-vs-wired 0.000000 delta and the full
   gpu-proofs suite cover the same ground in-repo. Peter's look is the stage oracle.
+
+## 13. Temporal denoiser rebuild — measured, not tuned by eye (2026-07-30, Opus + Peter)
+
+Peter's report: RT lighting boiled constantly and read low-res, on a completely static
+scene. Four wrong answers were eliminated by measurement before the real one appeared, so the
+method matters as much as the result.
+
+**Instrument.** `manifold rt-capture --paused` already existed; its paused phase now captures
+a run of CONSECUTIVE frames, because "what differs between frame N and N+1 when nothing
+moves" is the whole question and sparse captures cannot answer it. Metric: per-pixel
+|delta| between consecutive frames, per channel, mean and 99.9th percentile in 8-bit levels.
+
+**Eliminated, with numbers.** Shadow mask (0.03 levels — stable; Peter's independent
+cure test with the sun cone at 0 agreed). Reset detector (0/120 resets, two runs). "The
+accumulator is broken" — it damped its input 3.5x, which is what its window buys. Attribution
+by per-pixel correlation against the composite named the culprit: reflections +0.66, diffuse
++0.12, shadows +0.05.
+
+**Root cause.** Both accumulators used a FIXED blend weight, which has a permanent noise
+floor: output variance settles at `alpha/(2-alpha)` of the raw single-frame variance and stays
+there. No amount of standing still removes it. Underneath that, the input was one GGX
+reflection sample per pixel per frame at half res, heavy-tailed.
+
+**Built.** Per-texel running mean at `1/n` with the old alpha as a floor (counts ride
+`history.a` for irradiance and `normal_history.w` for specular — spare channels, no new
+textures). `REFL_SAMPLES_PER_PIXEL` 1 -> 8 with a median-anchored firefly clamp.
+Variance-guided widening of the a-trous luma stop, so the filter stops standing down exactly
+where the noise is.
+
+| composite frame-to-frame change | mean | p99.9 | gen ms |
+|---|---|---|---|
+| before | 0.806 | 69 | 25.2 |
+| after | 0.070 | 6 | 25.9 |
+
+**Cue responsiveness — the cost, and its fix.** Long windows lag a real lighting change, which
+Peter hit immediately on stage ("can't do hard lighting transitions any more"). Two threshold
+attempts both failed for the same reason: any fixed fraction is wrong for some scene's mix of
+terms. An absolute floor of 0.01 sat three orders above a real scene's demodulated irradiance
+and disabled the gate entirely; a 15% relative gate caught env changes (the dominant term) but
+not sun changes (a small slice of the same buffer). **The engine knows when a light param
+changed and now says so** — a hash of caster direction/colour/cone/kind plus scene ambient,
+compared frame to frame, riding spare bits of `AccumulateParams::reset`. Per-texel gates stay
+for what the CPU cannot see (an emissive object animated inside the graph). This is section 10
+(RT output & transition contract)'s "lifecycle derives from content change" applied to
+history.
+
+Accepted, named: a continuously automated light sweep runs at short-history quality while it
+moves and converges when it settles. Section 10's own stance.
+
+**Constants** (all in `render_scene.rs` / `raytrace.rs`, ranges in their doc comments):
+`IRRADIANCE_ACCUM_ALPHA` 0.02 floor, `RT_REFL_ACCUM_ALPHA_MIN` 0.025,
+`REFL_SAMPLES_PER_PIXEL` 8, `RT_REFL_FIREFLY_GAIN` 8, `ATROUS_REFL_VARIANCE_GAIN` 2,
+change gates at 4 sigma / 15% / 1e-4.
+
+**The gate that keeps it.** `scripts/rt_noise_gate.py` — same instrument, same metric, as an
+exit code. Median of clean runs per channel against ceilings in
+`scripts/rt_noise_baseline.json`; re-baseline with `--record` and commit the JSON. A channel
+that goes silent FAILS as inert rather than passing, because a dead channel is perfectly
+stable — the one failure mode a delta-only metric cannot see. An async accel rebuild in or
+within 60 frames before the measured window discards the run instead of failing it. Nightly on
+main via `trunk_health.py`; not a landing item, because it costs an app build plus three
+300-frame renders.
+
+Two measurement traps this cost us, both worth knowing before trusting any capture number.
+**Build profile:** a debug build is several times slower, and the RT path has an async accel
+build racing the first trace dispatch (D17) — captures that looked like "RT is intermittently
+dead, 7 runs in 10" came from a debug binary, while release measured 5/5 alive with 1-4%
+run-to-run spread. The gate builds release for that reason, not just for speed.
+**Shared output path:** the capture harness wrote to a fixed `/tmp/rt_capture` and cleared it
+on entry, so two concurrent captures silently destroyed each other's frames — which is most of
+what the "all-zero channels" report actually was (BUG-mw0x, reframed). The directory is now
+overridable via `MANIFOLD_RT_CAPTURE_DIR` and the gate always uses a private one. Measure one
+at a time, in release, or measure nothing.
+
+**Owed:** Peter's look under fast camera motion — longer specular history reopens D-61's
+sweep-trail risk in principle, with the variance clamp and per-texel count reset as the
+guards. 40 frames is the first constant to pull back if it trails. Everything measured here is
+one project, one camera, one material class.

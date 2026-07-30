@@ -710,7 +710,33 @@ impl PresetRuntime {
                                 ),
                             }
                         }
-                        let mut bound = BoundGraph::new(bindings, &mut graph);
+                        // The segment's def carries `c{i}.`-prefixed node ids —
+                        // the same address space `node_map` is keyed in — so it
+                        // resolves this card's bindings directly (BUG-1l7f).
+                        let mut bound = BoundGraph::new(bindings, &mut graph, Some(&view.def));
+                        for finding in bound.shadowed_def_params.clone() {
+                            // A segment def's node ids carry the `c{i}.` prefix,
+                            // so strip it before the per-preset baseline lookup.
+                            let mut plain = finding.clone();
+                            plain.node_id = plain
+                                .node_id
+                                .strip_prefix(prefix.as_str())
+                                .unwrap_or(&finding.node_id)
+                                .to_string();
+                            if crate::node_graph::is_baseline_shadow(
+                                fx.effect_type().as_str(),
+                                &plain,
+                            ) {
+                                continue;
+                            }
+                            record_chain_error(
+                                &mut errors,
+                                ChainError::CardBindingShadowsDefParam {
+                                    effect_type: Some(fx.effect_type().clone()),
+                                    finding,
+                                },
+                            );
+                        }
                         // Carry the segment view's retarget (already prefixed
                         // in this card's `c{i}.` namespace) so an in-place
                         // inner-param edit on a fused-away node reaches the
@@ -1123,7 +1149,22 @@ impl PresetRuntime {
             // against an inner that already matches — closes both the static
             // "touch to update" bug (518436a7) and the symmetric user-binding
             // default-seed gap).
-            let mut bound = BoundGraph::new(bindings, &mut graph);
+            // `splice_def` (not `effective_def`) is what this graph was built
+            // from, so it's the def whose baked node params the planting can
+            // shadow (BUG-1l7f).
+            let mut bound = BoundGraph::new(bindings, &mut graph, Some(splice_def));
+            for finding in bound.shadowed_def_params.clone() {
+                if crate::node_graph::is_baseline_shadow(fx.effect_type().as_str(), &finding) {
+                    continue;
+                }
+                record_chain_error(
+                    &mut errors,
+                    ChainError::CardBindingShadowsDefParam {
+                        effect_type: Some(fx.effect_type().clone()),
+                        finding,
+                    },
+                );
+            }
             // Carry the fused view's retarget so an in-place inner-param edit /
             // undo on a fused-away node reaches the live kernel (BUG-006). Empty
             // clone on an unfused view — the live editor path — so no cost there.
@@ -1519,6 +1560,20 @@ impl PresetRuntime {
     /// chain built and ran cleanly.
     pub fn errors(&self) -> &[ChainError] {
         &self.errors
+    }
+
+    /// Every def-baked node param this runtime's card bindings overwrote at build
+    /// (BUG-1l7f), including the ones [`crate::node_graph::is_baseline_shadow`]
+    /// keeps out of [`Self::errors`]. The assertable form of the diagnostic: a
+    /// test that sets a param on a node of an imported def reads a non-empty
+    /// list here and knows its measurement is of the card default, not of the
+    /// value it asked for.
+    pub fn shadowed_def_params(
+        &self,
+    ) -> impl Iterator<Item = &crate::node_graph::ShadowedDefParam> {
+        self.effect_nodes
+            .iter()
+            .flat_map(|slot| slot.bound.shadowed_def_params.iter())
     }
 
     /// Preset catalog generation this chain was built against (step 10).

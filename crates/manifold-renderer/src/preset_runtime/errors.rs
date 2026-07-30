@@ -177,6 +177,20 @@ pub enum ChainError {
         port: String,
         shadowed_source: String,
     },
+    /// BUG-1l7f: a value baked onto a node param that an outer card owns was
+    /// thrown away at build — [`crate::node_graph::BoundGraph::new`] plants the
+    /// card binding's declared default over it, so the def value never reaches
+    /// evaluation. Detected by
+    /// [`crate::node_graph::find_shadowed_def_params`] on every chain and
+    /// generator build, which is where the writer's mistake is; before this, the
+    /// only symptom was a wrong measurement days later (`rt_r3_heldout_gltf` ran
+    /// its whole life comparing two pure-raster renders because it set
+    /// `rt_enabled` on an imported def's `render_scene` node). Not a build
+    /// failure — the graph still runs, on the card's value.
+    CardBindingShadowsDefParam {
+        effect_type: Option<PresetTypeId>,
+        finding: crate::node_graph::ShadowedDefParam,
+    },
 }
 
 impl std::fmt::Display for ChainError {
@@ -244,6 +258,16 @@ impl std::fmt::Display for ChainError {
                  genuine discrete selector, add it to trigger_shadow_lint::DISCRETE_REPLACE_ALLOWLIST \
                  and record the decision in this preset's description."
             ),
+            Self::CardBindingShadowsDefParam {
+                effect_type,
+                finding,
+            } => {
+                let who = match effect_type {
+                    Some(t) => format!("{}: ", t.as_str()),
+                    None => String::new(),
+                };
+                write!(f, "{who}{finding} (BUG-1l7f)")
+            }
         }
     }
 }

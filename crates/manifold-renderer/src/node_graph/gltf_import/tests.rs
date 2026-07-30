@@ -1807,7 +1807,7 @@ fn build_import_graph_groups_each_object_and_flattens_to_flat_wiring() {
 /// what a specific test cares about (Rust has no field-update syntax
 /// across `..` for `pub(crate)` structs outside the defining module, so
 /// this is a plain builder-by-closure, not `..Default::default()`).
-fn full_material(material_index: u32, name: &str, verts: u32) -> super::gltf_load::GltfMaterialInfo {
+pub(super) fn full_material(material_index: u32, name: &str, verts: u32) -> super::gltf_load::GltfMaterialInfo {
     use super::gltf_load::GltfMaterialInfo;
     GltfMaterialInfo {
         material_index,

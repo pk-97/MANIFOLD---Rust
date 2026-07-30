@@ -1989,6 +1989,7 @@ mod binding_reroute_tests {
                     user_added: false,
                     scale: 2.0,
                     offset: 0.5,
+                    default_mirrors_node_param: false,
                 }],
                 skip_mode: Default::default(),
                 param_aliases: vec![],

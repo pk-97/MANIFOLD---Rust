@@ -85,6 +85,11 @@ def main():
         ["cargo", "nextest", "run", "--workspace"],
         ["cargo", "deny", "check", "bans"],
         ["python3", "scripts/feature_matrix.py"],
+        # RT temporal stability. Nightly and not at landing: it costs an app
+        # build plus a 300-frame render, three times over. Skips green (loudly)
+        # while its ceilings are unvalidated, so it files no beads until the
+        # numbers mean something.
+        ["python3", "scripts/rt_noise_gate.py", "--require-fixture"],
     ]
 
     green_gates = []

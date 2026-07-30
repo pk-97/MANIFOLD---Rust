@@ -55,6 +55,14 @@ const H: u32 = 32;
 /// 0 nor 1 (both of which would degenerate the strobe case).
 const TEST_ALPHA: f32 = 0.15;
 
+/// The kernel blends at `1/n` (n = frames of history behind the texel),
+/// floored at `TEST_ALPHA` — a running mean, so a still surface converges
+/// instead of sitting at a fixed noise floor. Every proof below that
+/// retains history does exactly ONE frame after a reset, and a texel with
+/// one prior sample weights the new one at 1/2. Raise the frame count and
+/// this becomes 1/3, 1/4, ... until the floor bites.
+const SECOND_FRAME_ALPHA: f32 = 0.5;
+
 /// Tight epsilon for the cut-reset proof: two `reset=true` writes of the
 /// SAME constant content should agree almost exactly (f16 round-trip
 /// tolerance only).
@@ -573,7 +581,7 @@ fn object_motion_reprojection_retains_history_where_camera_only_rejects() {
     );
     let camera_only = readback_rgba_f32(control.current_irr());
 
-    let expected_retained = 1.0 - TEST_ALPHA;
+    let expected_retained = 1.0 - SECOND_FRAME_ALPHA;
     let mean_r = |px: &[f32]| {
         px.iter().step_by(4).sum::<f32>() / (px.len() / 4) as f32
     };
@@ -711,7 +719,10 @@ fn refl_channel_blends_history_and_current() {
         make_history_side_channel(device, GpuTextureFormat::R32Float, "bisect-depth-output");
 
     // Normal history seeded at +Y — matches hi_normal dot > 0.9.
-    let normal_history = make_upload_rgba_f16(device, 0.0, 1.0, 0.0, 0.0, "bisect-normal-history");
+    // `.w` = the specular channel's history length. 9 prior frames means the
+    // kernel's `1/n` blend weight lands on exactly 1/10 = 0.1, the weight
+    // every expectation below is computed against.
+    let normal_history = make_upload_rgba_f16(device, 0.0, 1.0, 0.0, 9.0, "bisect-normal-history");
     let normal_output =
         make_history_side_channel(device, GpuTextureFormat::Rgba16Float, "bisect-normal-output");
 
@@ -998,7 +1009,7 @@ fn fractional_camera_reprojection_blends_and_rejects_per_tap() {
     let red = |x: u32, y: u32| out[((y * W + x) * 4) as usize];
 
     // Bilinear leg, away from the corrupted texel: even column 20, row 8.
-    let expected_blend = (1.0 - TEST_ALPHA) * 0.6;
+    let expected_blend = (1.0 - SECOND_FRAME_ALPHA) * 0.6;
     let got_blend = red(20, 8);
     eprintln!("[BUG-ukg] bilinear leg r = {got_blend} (expect {expected_blend})");
     assert!(
@@ -1098,7 +1109,7 @@ fn rotating_object_retains_history_when_normals_are_compared_in_one_orientation(
     // The invariant here ("same surface point, same orientation => history
     // retained") is only defined where the reprojection lands on-screen, so
     // the measurement is the central half rather than a loosened threshold.
-    let expected = 1.0 - TEST_ALPHA;
+    let expected = 1.0 - SECOND_FRAME_ALPHA;
     let (lo, hi) = (W / 4, W - W / 4);
     let mut acc = 0.0f32;
     let mut n = 0u32;
@@ -1117,5 +1128,127 @@ fn rotating_object_retains_history_when_normals_are_compared_in_one_orientation(
          previous orientation against this frame's normal without carrying one into the other's \
          frame, so it rejects by exactly the object's rotation — raw sample counts for the whole \
          gesture, i.e. the helmet shimmer."
+    );
+}
+
+/// The same cue at LOW signal magnitude — the case an absolute floor kills.
+///
+/// The first version of the change gate used `max(sigmas * sd, rel * luma,
+/// 0.01)`. That 0.01 is a perceptual floor living in a signal space whose scale
+/// is scene-dependent: real scenes measure demodulated irradiance around 5e-4,
+/// three orders under it, so `max` pinned the gate at 0.01 and nothing could
+/// ever trip. The gate was dead in exactly the scenes that needed it, and Peter
+/// found it by dropping sun intensity 10 -> 0 and watching the object still
+/// fade. This test is the regression guard for that whole class: same fixture
+/// as the cue proof above, scaled down 50x.
+///
+/// Scene A red 0.02 (luma 4.25e-3) -> B red 0.004 (luma 8.5e-4). |delta| is
+/// 3.4e-3, which clears the relative gate (0.15 * 4.25e-3 = 6.4e-4) but sits
+/// well UNDER an 0.01 absolute floor. Correct snaps to 0.012; the floored
+/// version would read ~0.0177.
+#[test]
+fn lighting_cue_snaps_at_low_signal_magnitude_too() {
+    let h = shared();
+    let tracer = MetalShadowRayTracer::new(&h.device);
+
+    let depth_tex = make_constant_depth(&h.device, "dim-cue-depth");
+    let hi_normal = make_constant_normal(&h.device, "dim-cue-normal");
+    let scene_a = upload_irr(&h.device, 0.02, 0.0, 0.0, "dim-cue-a");
+    let scene_b = upload_irr(&h.device, 0.004, 0.0, 0.0, "dim-cue-b");
+
+    let mut history = HistorySet::new(&h.device, "dim-cue-history");
+    run_accumulate(
+        &h.device, &tracer, &scene_a, &depth_tex, &hi_normal, &mut history, TEST_ALPHA, true,
+        "dim-cue-warm-0",
+    );
+    for i in 1..6 {
+        run_accumulate(
+            &h.device, &tracer, &scene_a, &depth_tex, &hi_normal, &mut history, TEST_ALPHA, false,
+            &format!("dim-cue-warm-{i}"),
+        );
+    }
+    run_accumulate(
+        &h.device, &tracer, &scene_b, &depth_tex, &hi_normal, &mut history, TEST_ALPHA, false,
+        "dim-cue-step",
+    );
+
+    let out = readback_rgba_f32(history.current_irr());
+    let got = out[(((H / 2) * W + W / 2) * 4) as usize];
+    let expected_snap = 0.012_f32; // mix(0.02, 0.004, 0.5)
+    let expected_floored = 0.02 - 0.016 / 7.0; // ~0.0177, the dead-gate reading
+    eprintln!(
+        "[dim cue] r = {got} (snap expects {expected_snap}, dead-gate would read \
+         {expected_floored})"
+    );
+    assert!(
+        (got - expected_snap).abs() < 0.0015,
+        "a lighting cue at low signal magnitude did not snap (r {got}, expected \
+         {expected_snap}; {expected_floored} is the behaviour when an absolute perceptual floor \
+         pins the gate above the whole signal range — the fade Peter saw dropping sun 10 -> 0)"
+    );
+}
+
+/// A hard lighting cue must land in ~one frame, not average in over the
+/// accumulator's whole window.
+///
+/// The static-boil work stretched the temporal window to 40-50 frames, and
+/// Peter immediately hit the consequence on stage: automated light moves felt
+/// slow and hard transitions stopped landing. Averaging and responsiveness only
+/// conflict while you cannot tell noise from signal — the moments texture
+/// already tracks per-texel luma spread, so the accumulator snaps when this
+/// frame sits further from history than that spread can explain.
+///
+/// Fixture: warm a texel on scene A until its 1/n weight is small (n = 6, so
+/// 1/7 next frame), then present scene B whose luma differs far more than the
+/// gate. Constant fixtures leave the tracked spread at ~0, so the gate is
+/// `max(0.15 * hist_luma, 0.01)`.
+///
+/// - Correct: gate trips, count collapses to 2, weight 0.5 — the output lands
+///   halfway to B in ONE frame.
+/// - Pre-fix: weight stays 1/7 and the output barely moves off A. That is the lag.
+///
+/// The two expectations are far apart (0.6 vs 0.886), so this cannot pass by
+/// accident.
+#[test]
+fn hard_lighting_change_snaps_instead_of_averaging_in() {
+    let h = shared();
+    let tracer = MetalShadowRayTracer::new(&h.device);
+
+    let depth_tex = make_constant_depth(&h.device, "cue-depth");
+    let hi_normal = make_constant_normal(&h.device, "cue-normal");
+    // A: red 1.0 (luma 0.2126). B: red 0.2 (luma 0.0425). |delta| = 0.170, far
+    // above the gate at max(0.15 * 0.2126, 0.01) = 0.0319.
+    let scene_a = upload_irr(&h.device, 1.0, 0.0, 0.0, "cue-a");
+    let scene_b = upload_irr(&h.device, 0.2, 0.0, 0.0, "cue-b");
+
+    let mut history = HistorySet::new(&h.device, "cue-history");
+    run_accumulate(
+        &h.device, &tracer, &scene_a, &depth_tex, &hi_normal, &mut history, TEST_ALPHA, true,
+        "cue-warm-0",
+    );
+    for i in 1..6 {
+        run_accumulate(
+            &h.device, &tracer, &scene_a, &depth_tex, &hi_normal, &mut history, TEST_ALPHA, false,
+            &format!("cue-warm-{i}"),
+        );
+    }
+    run_accumulate(
+        &h.device, &tracer, &scene_b, &depth_tex, &hi_normal, &mut history, TEST_ALPHA, false,
+        "cue-step",
+    );
+
+    let out = readback_rgba_f32(history.current_irr());
+    let got = out[(((H / 2) * W + W / 2) * 4) as usize];
+    // Snap: mix(1.0, 0.2, 0.5) = 0.6. Lag at 1/7: mix(1.0, 0.2, 0.1429) = 0.886.
+    let expected_snap = 0.6_f32;
+    let expected_lag = 1.0 - 0.8 / 7.0;
+    eprintln!(
+        "[cue] r = {got} (snap expects {expected_snap}, pre-fix lag would read {expected_lag})"
+    );
+    assert!(
+        (got - expected_snap).abs() < 0.02,
+        "a hard lighting change did not land in one frame (r {got}, expected {expected_snap}; \
+         {expected_lag} is the pre-fix behaviour where a cue averages in over the accumulator's \
+         whole window — the on-stage symptom Peter reported as lights lagging)"
     );
 }

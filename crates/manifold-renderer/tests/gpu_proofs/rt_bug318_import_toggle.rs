@@ -36,12 +36,18 @@ fn ctx(frame_count: i64) -> PresetContext {
     }
 }
 
-fn frame(runtime: &mut PresetRuntime, h: &harness::ParityHarness, target: &manifold_gpu::GpuTexture, f: i64) {
+fn frame(
+    runtime: &mut PresetRuntime,
+    h: &harness::ParityHarness,
+    target: &manifold_gpu::GpuTexture,
+    f: i64,
+    manifest: &manifold_core::params::ParamManifest,
+) {
     let c = ctx(f);
     let mut enc = h.device.create_encoder("bug318-import-frame");
     {
         let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
-        runtime.render(&mut gpu, target, &c, &manifold_core::params::ParamManifest::default());
+        runtime.render(&mut gpu, target, &c, manifest);
     }
     enc.commit_and_wait_completed();
 }
@@ -64,20 +70,16 @@ fn live_rt_toggle_on_imported_glb_scene_never_magenta_clears() {
     let glb = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/gltf/hostile/mixamo_like.glb");
     assert!(glb.exists(), "fixture missing: {glb:?}");
-    let (mut def, report) = assemble_import_graph(&glb).expect("import must succeed");
+    let (def, report) = assemble_import_graph(&glb).expect("import must succeed");
     eprintln!("[bug318] import report: {report:?}");
     // Peter's project plausibly SAVED rt_enabled=true — make the build-time
     // state RT-on so the live toggle exercises the consumed-set SHRINK
-    // direction too (forced depth/velocity dropped, then re-added).
-    {
-        use manifold_core::effect_graph_def::SerializedParamValue;
-        let n = def
-            .nodes
-            .iter_mut()
-            .find(|n| n.type_id == "node.render_scene")
-            .expect("imported def has render_scene");
-        n.params.insert("rt_enabled".into(), SerializedParamValue::Bool { value: true });
-    }
+    // direction too (forced depth/velocity dropped, then re-added). Through the
+    // CARD, which is the only route that survives: the import promoted
+    // `render_scene`'s RT toggles to card params, so writing `rt_enabled` onto
+    // the node reverted at build and this test used to start from RT-off —
+    // meaning the shrink direction it claims to cover never ran (BUG-1l7f).
+    let manifest = harness::import_rt_manifest(&def, true, false);
 
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_def_with_device(
@@ -87,13 +89,14 @@ fn live_rt_toggle_on_imported_glb_scene_never_magenta_clears() {
         W,
         H,
         GpuTextureFormat::Rgba16Float,
-        None,
+        Some(&manifest),
     )
     .expect("imported def must build a runtime");
+    harness::assert_no_shadowed_def_params(&runtime, "bug318 mixamo import");
 
     let target = h.make_target("bug318-import");
     for f in 0..4 {
-        frame(&mut runtime, h, &target.texture, f);
+        frame(&mut runtime, h, &target.texture, f, &manifest);
     }
     let before = crate::rt_t2b_temporal_wiring::readback_rgba_f32(&h.device, &target.texture);
     assert!(
@@ -121,7 +124,7 @@ fn live_rt_toggle_on_imported_glb_scene_never_magenta_clears() {
         )
         .expect("temporal_upscale exists");
     for f in 4..8 {
-        frame(&mut runtime, h, &target.texture, f);
+        frame(&mut runtime, h, &target.texture, f, &manifest);
     }
     runtime
         .graph
@@ -132,7 +135,7 @@ fn live_rt_toggle_on_imported_glb_scene_never_magenta_clears() {
         )
         .expect("rt_enabled exists");
     for f in 8..12 {
-        frame(&mut runtime, h, &target.texture, f);
+        frame(&mut runtime, h, &target.texture, f, &manifest);
     }
     runtime
         .graph
@@ -143,7 +146,7 @@ fn live_rt_toggle_on_imported_glb_scene_never_magenta_clears() {
         )
         .expect("rt_enabled exists");
     for f in 12..18 {
-        frame(&mut runtime, h, &target.texture, f);
+        frame(&mut runtime, h, &target.texture, f, &manifest);
     }
     let after = crate::rt_t2b_temporal_wiring::readback_rgba_f32(&h.device, &target.texture);
     let frac = magenta_fraction(&after);
@@ -184,10 +187,16 @@ fn live_rt_toggle_on_apricot_static_buffers_never_magenta_clears() {
         None,
     )
     .expect("apricot def must build a runtime");
+    harness::assert_no_shadowed_def_params(&runtime, "bug319 apricot import");
 
+    // This case toggles RT on the LIVE graph rather than at build, which does
+    // survive: the skip-on-unchanged cache only writes a binding when the card
+    // value moves, and an empty manifest never moves. So an empty manifest is
+    // the right build state here (RT off), not an oversight.
+    let empty = manifold_core::params::ParamManifest::default();
     let target = h.make_target("bug319-apricot");
     for f in 0..4 {
-        frame(&mut runtime, h, &target.texture, f);
+        frame(&mut runtime, h, &target.texture, f, &empty);
     }
     let before = crate::rt_t2b_temporal_wiring::readback_rgba_f32(&h.device, &target.texture);
     assert!(
@@ -211,7 +220,7 @@ fn live_rt_toggle_on_apricot_static_buffers_never_magenta_clears() {
         )
         .expect("rt_enabled exists");
     for f in 4..10 {
-        frame(&mut runtime, h, &target.texture, f);
+        frame(&mut runtime, h, &target.texture, f, &empty);
     }
     let after = crate::rt_t2b_temporal_wiring::readback_rgba_f32(&h.device, &target.texture);
     let frac = magenta_fraction(&after);

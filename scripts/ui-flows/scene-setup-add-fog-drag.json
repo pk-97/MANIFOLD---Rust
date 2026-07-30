@@ -107,7 +107,8 @@
   "ScrollTo": {
    "target": {
     "Query": {
-     "name": "param_row.31_fog_density.slider"
+     "type": "Button",
+     "under_text": "Fog Density"
     }
    }
   }
@@ -116,14 +117,16 @@
   "Pointer": {
    "target": {
     "Query": {
-     "name": "param_row.31_fog_density.slider"
+     "type": "Button",
+     "under_text": "Fog Density"
     }
    },
    "gesture": {
     "Drag": {
      "to": {
       "Query": {
-       "name": "param_row.31_fog_density.driver_btn"
+       "type": "Label",
+       "under_text": "Fog Density"
       }
      },
      "steps": 8

@@ -245,7 +245,15 @@ fn drain_captures(
         std::mem::take(&mut *q)
     };
     if caps.is_empty() { return; }
-    let dir = PathBuf::from("/tmp/rt_capture");
+    // Overridable because the default is a FIXED shared path: two captures
+    // running at once interleave their PNGs into one pile, and a run that
+    // clears the directory first silently destroys the other's frames. That
+    // produced a phantom "RT channels are all zero" bug report on 2026-07-30
+    // (BUG-mw0x) when three sessions captured in parallel. Callers that may
+    // overlap — the noise gate, any parallel agent — set this to a unique dir.
+    let dir = std::env::var_os("MANIFOLD_RT_CAPTURE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/tmp/rt_capture"));
     let _ = std::fs::create_dir_all(&dir);
     for c in &caps {
         last_stats.insert(c.label.clone(), compute_rt_channel_stats(c, device));
@@ -462,7 +470,12 @@ pub fn run(args: &[String]) -> ! {
         ct.handle_command(ContentCommand::Pause);
         for f in 0..(total_frames - rotation_frames) {
             let host = rotation_frames + f;
-            if f == 10 || f == 30 || f == 90 || f == (total_frames - rotation_frames - 1) {
+            // A run of CONSECUTIVE captures deep into the paused phase: the
+            // static-boil question is "what differs between frame N and
+            // frame N+1 when nothing moves", which sparse captures cannot
+            // answer. Late enough that every accumulator has converged.
+            let consecutive_run = f >= (total_frames - rotation_frames).saturating_sub(6);
+            if f == 10 || f == 30 || f == 90 || consecutive_run {
                 arm_capture();
             }
             ct.timer.wait_for_deadline();

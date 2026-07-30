@@ -38,17 +38,22 @@ fn ctx(frame_count: i64) -> PresetContext {
     }
 }
 
-fn frame(runtime: &mut PresetRuntime, h: &harness::ParityHarness, target: &manifold_gpu::GpuTexture, f: i64) {
+/// The card manifest drives every frame. An EMPTY manifest is what made the
+/// original version of this gate vacuous: it set `rt_enabled` on the def's
+/// `render_scene` node, which the card binding overwrote at build (BUG-1l7f), so
+/// both arms rendered pure raster and the ratio assert passed trivially.
+fn frame(
+    runtime: &mut PresetRuntime,
+    h: &harness::ParityHarness,
+    target: &manifold_gpu::GpuTexture,
+    f: i64,
+    manifest: &manifold_core::params::ParamManifest,
+) {
     let c = ctx(f);
     let mut enc = h.device.create_encoder("bug326-import-frame");
     {
         let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
-        runtime.render(
-            &mut gpu,
-            target,
-            &c,
-            &manifold_core::params::ParamManifest::default(),
-        );
+        runtime.render(&mut gpu, target, &c, manifest);
     }
     enc.commit_and_wait_completed();
 }
@@ -103,25 +108,21 @@ fn build_helmet_harness(
     h: &harness::ParityHarness,
     rt_enabled: bool,
     rt_reflections: bool,
-) -> (PresetRuntime, manifold_gpu::GpuTexture) {
+) -> (
+    PresetRuntime,
+    manifold_gpu::GpuTexture,
+    manifold_core::params::ParamManifest,
+) {
     let glb = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/gltf/DamagedHelmet.glb");
     assert!(glb.exists(), "fixture missing: {glb:?}");
-    let (mut def, report) = assemble_import_graph(&glb).expect("import must succeed");
+    let (def, report) = assemble_import_graph(&glb).expect("import must succeed");
     eprintln!("[bug326-gate] import report: {report:?}");
 
-    if rt_enabled {
-        use manifold_core::effect_graph_def::SerializedParamValue;
-        let n = def
-            .nodes
-            .iter_mut()
-            .find(|n| n.type_id == "node.render_scene")
-            .expect("imported def has render_scene");
-        n.params.insert("rt_enabled".into(), SerializedParamValue::Bool { value: true });
-        if rt_reflections {
-            n.params.insert("rt_reflections".into(), SerializedParamValue::Bool { value: true });
-        }
-    }
+    // The card manifest is the only route that reaches the RT block — the
+    // import promoted `render_scene`'s RT toggles to outer card params, so a
+    // write onto the node itself is reverted at build (BUG-1l7f).
+    let manifest = harness::import_rt_manifest(&def, rt_enabled, rt_reflections);
 
     let registry = PrimitiveRegistry::with_builtin();
     let runtime = PresetRuntime::from_def_with_device(
@@ -131,12 +132,13 @@ fn build_helmet_harness(
         W,
         H,
         GpuTextureFormat::Rgba16Float,
-        None,
+        Some(&manifest),
     )
     .expect("imported def must build a runtime");
+    harness::assert_no_shadowed_def_params(&runtime, "bug326 helmet import");
 
     let target = make_512_target(&h.device, "bug326-gate-target");
-    (runtime, target)
+    (runtime, target, manifest)
 }
 
 /// Render an imported Helmet with RT on, then compare its non-black fraction
@@ -146,9 +148,9 @@ fn imported_glb_rt_on_stays_within_80pct_of_baseline() {
     let h = harness::shared();
 
     // Baseline: rt=0.
-    let (mut rt_baseline, tex_baseline) = build_helmet_harness(h, false, false);
+    let (mut rt_baseline, tex_baseline, base_manifest) = build_helmet_harness(h, false, false);
     for f in 0..90 {
-        frame(&mut rt_baseline, h, &tex_baseline, f);
+        frame(&mut rt_baseline, h, &tex_baseline, f, &base_manifest);
     }
     let baseline_frac = non_black_fraction_rgbf32(&readback_rgba_f32(&h.device, &tex_baseline));
 
@@ -157,11 +159,11 @@ fn imported_glb_rt_on_stays_within_80pct_of_baseline() {
     // back as black on this harness's fresh target (in-app the previous
     // frame persists). Window length is load-dependent (completion-handler
     // delivery), so a fixed frame count is flaky under full-suite load.
-    let (mut rt_on, tex_on) = build_helmet_harness(h, true, true);
+    let (mut rt_on, tex_on, on_manifest) = build_helmet_harness(h, true, true);
     let threshold = 0.20 * baseline_frac;
     let mut on_frac = 0.0f64;
     for f in 0..600 {
-        frame(&mut rt_on, h, &tex_on, f);
+        frame(&mut rt_on, h, &tex_on, f, &on_manifest);
         if f >= 84 && f % 5 == 4 {
             on_frac = on_frac.max(non_black_fraction_rgbf32(&readback_rgba_f32(&h.device, &tex_on)));
             if on_frac >= threshold {
@@ -173,6 +175,15 @@ fn imported_glb_rt_on_stays_within_80pct_of_baseline() {
     eprintln!(
         "[bug326-gate] baseline={:.4} rt_on={:.4} ratio={:.2}",
         baseline_frac, on_frac, on_frac / baseline_frac
+    );
+
+    // Liveness: the RT kernel really dispatched on the rt-on arm. Capture slots
+    // are only pushed from inside `render_scene`'s `rt_enabled && rt_ready`
+    // branch, so a non-empty capture reads the mechanism directly — without this
+    // a pure-raster arm can satisfy the ratio assert below and report nothing.
+    harness::assert_rt_dispatched(
+        || frame(&mut rt_on, h, &tex_on, 600, &on_manifest),
+        "bug326 rt-on arm",
     );
 
     assert!(
