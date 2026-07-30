@@ -670,46 +670,6 @@ static float3 fetch_interpolated_normal(device RtNormalSource* normal_sources, u
     return n * rsqrt(len2);
 }
 
-// Multi-bounce GI MB2 (RAYTRACING_DESIGN.md section 11): ONE home for the
-// sun-bounce caster loop (invariant I-MB3) — called by the GI gather at
-// every path vertex and by the reflection block's hit shading.
-// `seed_base` preserves each call site's historical rand2 stream exactly
-// (load-bearing for I-MB1's byte identity). Folds the diffuse BRDF's
-// 1/pi via SUN_BOUNCE_INTENSITY_SCALE, named + tunable (0.02-0.3).
-constant float SUN_BOUNCE_INTENSITY_SCALE = 0.08;
-
-static float3 sun_bounce_at_hit(
-    instance_acceleration_structure accel,
-    device RtNormalSource* normal_sources,
-    array<texture2d<float>, MAX_RT_MATERIAL_TEXTURES> material_textures,
-    constant ShadowRayParams& p,
-    uint n_casters,
-    float3 hit_pos,
-    float3 hit_n,
-    float3 hit_albedo,
-    float bias_eps,
-    uint2 tid,
-    uint seed_base)
-{
-    float3 term = float3(0.0);
-    for (uint sc = 0; sc < n_casters; sc++) {
-        RtCasterParams sun_cst = p.casters[sc];
-        if (sun_cst.kind != 0u) continue;
-        float3 sdir = float3(sun_cst.dir_or_pos);
-        ray sun_r;
-        sun_r.origin = hit_pos + sdir * bias_eps;
-        sun_r.direction = cone_sample(sdir, sun_cst.cone_or_size, rand2(tid, p.frame_index, seed_base + sc));
-        sun_r.min_distance = bias_eps * 0.5;
-        sun_r.max_distance = INFINITY;
-        intersection_query<triangle_data, instancing> sun_q;
-        sun_q.reset(sun_r, accel, RT_MASK_SHADOW_CASTER);
-        float hit_sun_vis = walk_with_alpha_test(sun_q, normal_sources, material_textures, true) ? 0.0 : 1.0;
-        float hit_ndotl = max(dot(hit_n, sdir), 0.0);
-        term += hit_albedo * float3(sun_cst.color) * hit_sun_vis * hit_ndotl * SUN_BOUNCE_INTENSITY_SCALE;
-    }
-    return term;
-}
-
 // RT-T2-A: fetch vertex `vi`'s LOCAL-space UV via the SAME bindless address
 // `fetch_world_normal` uses (no transform — UV isn't a spatial quantity).
 static float2 fetch_uv(device RtNormalSource& src, uint vi) {
@@ -830,6 +790,49 @@ static float3 cone_sample(float3 dir, float half_angle, float2 u) {
     float3 t = ortho_basis_x(dir), b = cross(dir, t);
     return normalize(t * (sin_t * cos(phi)) + b * (sin_t * sin(phi)) + dir * cos_t);
 }
+
+// Multi-bounce GI MB2 (RAYTRACING_DESIGN.md section 11): ONE home for the
+// sun-bounce caster loop (invariant I-MB3) — called by the GI gather at
+// every path vertex and by the reflection block's hit shading.
+// `seed_base` preserves each call site's historical rand2 stream exactly
+// (load-bearing for I-MB1's byte identity). Folds the diffuse BRDF's
+// 1/pi via SUN_BOUNCE_INTENSITY_SCALE, named + tunable (0.02-0.3).
+// Declared after `walk_with_alpha_test`, `rand2`, and `cone_sample`
+// (which it calls) — MSL requires a function be declared before use.
+constant float SUN_BOUNCE_INTENSITY_SCALE = 0.08;
+
+static float3 sun_bounce_at_hit(
+    instance_acceleration_structure accel,
+    device RtNormalSource* normal_sources,
+    array<texture2d<float>, MAX_RT_MATERIAL_TEXTURES> material_textures,
+    constant ShadowRayParams& p,
+    uint n_casters,
+    float3 hit_pos,
+    float3 hit_n,
+    float3 hit_albedo,
+    float bias_eps,
+    uint2 tid,
+    uint seed_base)
+{
+    float3 term = float3(0.0);
+    for (uint sc = 0; sc < n_casters; sc++) {
+        RtCasterParams sun_cst = p.casters[sc];
+        if (sun_cst.kind != 0u) continue;
+        float3 sdir = float3(sun_cst.dir_or_pos);
+        ray sun_r;
+        sun_r.origin = hit_pos + sdir * bias_eps;
+        sun_r.direction = cone_sample(sdir, sun_cst.cone_or_size, rand2(tid, p.frame_index, seed_base + sc));
+        sun_r.min_distance = bias_eps * 0.5;
+        sun_r.max_distance = INFINITY;
+        intersection_query<triangle_data, instancing> sun_q;
+        sun_q.reset(sun_r, accel, RT_MASK_SHADOW_CASTER);
+        float hit_sun_vis = walk_with_alpha_test(sun_q, normal_sources, material_textures, true) ? 0.0 : 1.0;
+        float hit_ndotl = max(dot(hit_n, sdir), 0.0);
+        term += hit_albedo * float3(sun_cst.color) * hit_sun_vis * hit_ndotl * SUN_BOUNCE_INTENSITY_SCALE;
+    }
+    return term;
+}
+
 // RT-P2: cosine-weighted hemisphere sample around `n` — ported verbatim
 // from `tools/rt_prototype/shaders/rt_trace.metal`'s `cosine_hemisphere`
 // (the AO/GI gather this kernel's AO term reuses; GI/emissive gather
