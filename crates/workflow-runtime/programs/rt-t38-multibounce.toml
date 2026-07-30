@@ -9,6 +9,7 @@
 name = "rt-t38-multibounce"
 task = "BUG-17r3"
 token_budget = 400000
+request_timeout_s = 1800
 
 [target]
 label = "rt-t38-multibounce"

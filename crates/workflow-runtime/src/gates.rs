@@ -47,6 +47,10 @@ pub fn run_gates_env(
     let mut results = Vec::new();
     let mut pass = true;
     for cmd in cmds {
+        crate::status::emit(run_dir, |st| {
+            st.state = "gate".into();
+            st.detail = cmd.clone();
+        });
         let (exit, tail) = run_one(cmd, cwd, Duration::from_secs(timeout_s), run_dir, extra_env);
         let ok = exit == 0;
         results.push(GateResult { cmd: cmd.clone(), exit, tail });
@@ -68,6 +72,10 @@ pub fn run_transform(
     timeout_s: u64,
     run_dir: &Path,
 ) -> Result<String, String> {
+    crate::status::emit(run_dir, |st| {
+        st.state = "transform".into();
+        st.detail = cmd.to_string();
+    });
     let out_path = std::env::temp_dir().join(format!("workflow-transform-{}.out", std::process::id()));
     let err_path = std::env::temp_dir().join(format!("workflow-transform-{}.err", std::process::id()));
     let make = |p: &Path| std::fs::File::create(p).map_err(|e| format!("transform log create failed: {e}"));

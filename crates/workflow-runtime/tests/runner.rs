@@ -72,6 +72,25 @@ fn vertical_slice_and_resume_skips_done_steps() {
     assert_eq!(fx.transcript_lines(), 2, "resume must not add transcript lines");
 }
 
+const ONE_STEP: &str = r#"
+name = "onestep"
+[[step]]
+name = "draft"
+opcode = "generate"
+model = "mock"
+template = "draft.md"
+"#;
+
+#[test]
+fn status_json_tracks_run_to_done() {
+    let fx = Fixture::new("status", ONE_STEP, &[("draft.md", "write a haiku")]);
+    let mock = MockTransport::new(vec!["haiku text".into()]);
+    assert_eq!(run(&fx.cfg(), &mock).unwrap(), Outcome::Done);
+    let st = workflow_runtime::status::read(&fx.root.join("run")).expect("status.json readable");
+    assert_eq!(st.state, "run-done");
+    assert_eq!(st.total_steps, 1);
+}
+
 const VERDICT_STEP: &str = r#"
 name = "review"
 [[step]]

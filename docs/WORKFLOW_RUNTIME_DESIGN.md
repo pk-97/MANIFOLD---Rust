@@ -111,6 +111,13 @@ never triggers for this class):
   template slots both directions, `file:` existence, `anchor:` resolution; ALL findings,
   exit 1) so the authoring model validates programs before a token is spent. Cost = the
   per-step/per-model token ledger summed from `transcript.jsonl`.
+- **D14 — token-free live status (Peter, 2026-07-30, mid-P3).** Every runner
+  transition rewrites `status.json` in the run dir and prints one stdout
+  line; `workflow watch` renders it. Emit-only, swallowed IO errors — status
+  can never fail a run. Born from the first live run: a transport timeout
+  burned silently into its retry. Same finding made the transport deadline
+  program-tunable (`request_timeout_s`, default 1800s — the old hardcoded
+  600s cut off deepseek-v4-pro's legitimate reasoning on a 40K-token brief).
 
 ## 3. Design body — the loop
 

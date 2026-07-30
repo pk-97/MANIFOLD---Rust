@@ -26,6 +26,11 @@ pub struct Program {
     /// the shared decisions trail via `gate_runner review` (D8). Absent =
     /// verdicts stay in the run dir (toy/test programs never pollute it).
     pub task: Option<String>,
+    /// Per-request transport deadline default for every model step. Sized
+    /// for reasoning-tier latency on large prompts (the 2026-07-30 shakedown:
+    /// deepseek-v4-pro thought past the old hardcoded 600s on a 40K-token
+    /// brief and the connection was cut client-side). Step field overrides.
+    pub request_timeout_s: Option<u64>,
     #[serde(rename = "step")]
     pub steps: Vec<Step>,
 }
@@ -95,7 +100,14 @@ pub struct Step {
     pub over: Option<String>,
     /// Sample only: number of independent runs (>= 2).
     pub samples: Option<u8>,
+    /// Transport deadline for this step's model calls; falls back to the
+    /// program-level `request_timeout_s`, then DEFAULT_REQUEST_TIMEOUT_S.
+    pub request_timeout_s: Option<u64>,
 }
+
+/// 30 min: a reasoning-tier model on a whole-file prompt legitimately thinks
+/// past 10 (observed: deepseek-v4-pro, 2026-07-30). A stuck call still dies.
+pub const DEFAULT_REQUEST_TIMEOUT_S: u64 = 1800;
 
 fn default_gate_timeout() -> u64 {
     crate::gates::DEFAULT_GATE_TIMEOUT_S
@@ -105,8 +117,14 @@ impl Program {
     pub fn load(path: &Path) -> Result<Program, String> {
         let text = std::fs::read_to_string(path)
             .map_err(|e| format!("cannot read program {}: {e}", path.display()))?;
-        let program: Program =
+        let mut program: Program =
             toml::from_str(&text).map_err(|e| format!("program {} is not valid: {e}", path.display()))?;
+        // Back-fill so every consumer reads one place: the step field.
+        for step in &mut program.steps {
+            if step.request_timeout_s.is_none() {
+                step.request_timeout_s = program.request_timeout_s;
+            }
+        }
         program.validate()?;
         Ok(program)
     }
