@@ -1189,9 +1189,9 @@ kernel void trace_shadow_rays(
     // does, so the gather's own job narrows to emissive + sun-bounce).
     float3 gi = float3(0.0);
     // MB4 (RAYTRACING_DESIGN.md section 11.2): fixed path depth + per-extension
-    // energy fold. MB-B: depth 2 — one extension bounce carrying intermediate
-    // albedo (colour bleed). Range 1-3.
-    const uint RT_GI_MAX_BOUNCES = 2u;
+    // energy fold. MB-A ships the loop at depth 1 (byte-identical to the
+    // pre-loop gather); MB-B raises the depth to 2. Range 1-3.
+    const uint RT_GI_MAX_BOUNCES = 1u;
     // ~1/pi, range 0.1-0.5. Consumed only when RT_GI_MAX_BOUNCES > 1: each
     // path extension multiplies throughput by the intermediate surface's
     // albedo times this fold (MB5 — the primary surface stays demodulated,
