@@ -52,17 +52,18 @@ fn ctx(frame_count: i64) -> PresetContext {
     }
 }
 
-fn frame(runtime: &mut PresetRuntime, h: &harness::ParityHarness, target: &manifold_gpu::GpuTexture, f: i64) {
+fn frame(
+    runtime: &mut PresetRuntime,
+    h: &harness::ParityHarness,
+    target: &manifold_gpu::GpuTexture,
+    f: i64,
+    params: &manifold_core::params::ParamManifest,
+) {
     let c = ctx(f);
     let mut enc = h.device.create_encoder("r3-heldout-frame");
     {
         let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
-        runtime.render(
-            &mut gpu,
-            target,
-            &c,
-            &manifold_core::params::ParamManifest::default(),
-        );
+        runtime.render(&mut gpu, target, &c, params);
     }
     enc.commit_and_wait_completed();
 }
@@ -118,7 +119,10 @@ fn make_512_target(device: &GpuDevice, label: &str) -> manifold_gpu::GpuTexture 
 /// `flatten_groups` first (a documented no-op when the def has no node
 /// groups) so the mutation always sees the real, executable wire list
 /// regardless of whether the importer happened to group this asset.
-fn build_variant(h: &harness::ParityHarness, strip_mr_map: bool) -> (PresetRuntime, manifold_gpu::GpuTexture, bool) {
+fn build_variant(
+    h: &harness::ParityHarness,
+    strip_mr_map: bool,
+) -> (PresetRuntime, manifold_gpu::GpuTexture, manifold_core::params::ParamManifest, bool) {
     let glb = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/gltf/khronos/DamagedHelmet.glb");
     assert!(glb.exists(), "held-out fixture missing: {glb:?}");
@@ -127,14 +131,10 @@ fn build_variant(h: &harness::ParityHarness, strip_mr_map: bool) -> (PresetRunti
 
     let mut flat = flatten_groups(&def).expect("flatten_groups must succeed (no-op if already flat)");
 
-    use manifold_core::effect_graph_def::SerializedParamValue;
-    let scene = flat
-        .nodes
-        .iter_mut()
-        .find(|n| n.type_id == "node.render_scene")
-        .expect("imported def has render_scene");
-    scene.params.insert("rt_enabled".into(), SerializedParamValue::Bool { value: true });
-    scene.params.insert("rt_reflections".into(), SerializedParamValue::Bool { value: true });
+    // RT comes on through the outer-card manifest, never the `render_scene`
+    // node params — see `harness::import_rt_manifest` for why the node-param
+    // route is a silent no-op (it is what made this gate vacuous).
+    let params = harness::import_rt_manifest(&flat, true, true);
 
     // Structural proxy for "the imported object's MR map is bound" (see
     // module doc's named deviation): at least one scene_object bind node
@@ -175,7 +175,7 @@ fn build_variant(h: &harness::ParityHarness, strip_mr_map: bool) -> (PresetRunti
     .expect("imported def must build a runtime");
 
     let target = make_512_target(&h.device, if strip_mr_map { "r3-heldout-stripped" } else { "r3-heldout-bound" });
-    (runtime, target, mr_wire_count > 0)
+    (runtime, target, params, mr_wire_count > 0)
 }
 
 /// Poll (same discipline as `rt_bug326_fix_gate.rs`: the async accel build
@@ -186,13 +186,14 @@ fn render_until_lit(
     h: &harness::ParityHarness,
     runtime: &mut PresetRuntime,
     target: &manifold_gpu::GpuTexture,
+    params: &manifold_core::params::ParamManifest,
     baseline_frac: f64,
 ) -> Vec<f32> {
     let threshold = 0.20 * baseline_frac;
     let mut best = vec![0.0f32; (W * H * 4) as usize];
     let mut best_frac = 0.0f64;
     for f in 0..600 {
-        frame(runtime, h, target, f);
+        frame(runtime, h, target, f, params);
         if f >= 84 && f % 5 == 4 {
             let px = readback_rgba_f32(&h.device, target);
             let frac = non_black_fraction_rgbf32(&px);
@@ -241,10 +242,11 @@ fn heldout_helmet_mr_map_changes_traced_reflection() {
     // process (reproduces 0/3 in isolation) — extra frames + one retry
     // absorbs that transient without weakening the check itself (still a
     // hard failure if it never lights up).
+    let rt_off_params = manifold_core::params::ParamManifest::default();
     let mut baseline_frac = 0.0f64;
     for attempt in 0..3 {
         for f in 0..(90 + attempt * 60) {
-            frame(&mut rt_off, h, &tex_off, f);
+            frame(&mut rt_off, h, &tex_off, f, &rt_off_params);
         }
         baseline_frac = non_black_fraction_rgbf32(&readback_rgba_f32(&h.device, &tex_off));
         if baseline_frac > 0.01 {
@@ -264,12 +266,19 @@ fn heldout_helmet_mr_map_changes_traced_reflection() {
          retries — a harness/import issue unrelated to R3, not a real reflection-lobe result"
     );
 
-    let (mut bound_runtime, bound_target, mr_was_wired) = build_variant(h, false);
+    let (mut bound_runtime, bound_target, bound_params, mr_was_wired) = build_variant(h, false);
     assert!(mr_was_wired, "structural proxy failed before any rendering — see assertion inside build_variant");
-    let bound_px = render_until_lit(h, &mut bound_runtime, &bound_target, baseline_frac);
+    let bound_px = render_until_lit(h, &mut bound_runtime, &bound_target, &bound_params, baseline_frac);
+    // The whole gate is about the RT kernel's reflection lobe, so prove the
+    // kernel ran before believing any number below.
+    harness::assert_rt_dispatched(
+        || frame(&mut bound_runtime, h, &bound_target, 601, &bound_params),
+        "r3 held-out MR-bound variant",
+    );
 
-    let (mut stripped_runtime, stripped_target, _) = build_variant(h, true);
-    let stripped_px = render_until_lit(h, &mut stripped_runtime, &stripped_target, baseline_frac);
+    let (mut stripped_runtime, stripped_target, stripped_params, _) = build_variant(h, true);
+    let stripped_px =
+        render_until_lit(h, &mut stripped_runtime, &stripped_target, &stripped_params, baseline_frac);
 
     let n = bound_px.len() / 4;
     let mut differing = 0usize;
