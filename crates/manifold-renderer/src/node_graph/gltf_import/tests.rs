@@ -2249,17 +2249,20 @@ fn bug303_stamped_transform_survives_preset_runtime_instantiation() {
     }
 }
 
-/// BUG-1l7f, the imported-def footgun at the value level: writing a param onto
-/// an imported def's node is a no-op, because the import promoted that param to
-/// an outer card and `BoundGraph::new` plants the card's default over it. The
-/// same shape as the BUG-303 test above, run backwards — there, the stamped
-/// placement SURVIVES because the exposure default agrees with it; here the
-/// caller breaks that agreement and loses. Both halves are asserted: the live
-/// graph holds the card's number, and the runtime reports the finding by name so
-/// the caller can find out at the point of the mistake instead of through a wrong
-/// measurement days later.
+/// BUG-1l7f, the part of the imported-def footgun BUG-ji6q did NOT close.
+///
+/// A scene-vocabulary param (`transform_0.pos_x` and friends) is stamped with a
+/// MIRRORED default, so the plant is skipped and a node write now stands — that
+/// is BUG-ji6q, covered by `bound_param_survives_rebuild`. But an import also
+/// carries AUTHORED bindings for the nodes that are not scene vocabulary: the
+/// `env_mode` enum over `env_select.selector`, `ssao_intensity`, the sun fan-outs
+/// onto `envmap.sun_*`, `env_intensity` onto `hdri_gain.gain`. Those defaults are
+/// chosen numbers, they still plant, and a caller who sets one on the node
+/// instead of the card still loses — silently, which is exactly how
+/// `rt_r3_heldout_gltf` measured two raster renders for its whole life. This pins
+/// both halves: the write really is lost, and the runtime names it.
 #[test]
-fn editing_an_imported_defs_node_param_loses_to_the_card_and_is_reported() {
+fn an_imported_defs_authored_binding_still_overwrites_a_node_write_and_reports_it() {
     let mut mat = full_material(0, "Mat", 100);
     mat.own_center = [0.0, 0.0, 0.0];
     let summary = GltfImportSummary {
@@ -2278,31 +2281,17 @@ fn editing_an_imported_defs_node_param_loses_to_the_card_and_is_reported() {
     let path = std::path::Path::new("/tmp/synthetic_bug1l7f_test.glb");
     let (mut def, _report) = build_import_graph(&summary, path).expect("build import graph");
 
-    // The mistake: set the param straight on the node, the way
-    // `rt_r3_heldout_gltf` set `rt_enabled` on `render_scene`.
-    let node_id = manifold_core::NodeId::new("transform_0");
-    let baked = 7.5_f32;
-    // An imported object's producers live inside its own node group, so walk in.
-    fn find_mut<'a>(
-        nodes: &'a mut [manifold_core::effect_graph_def::EffectGraphNode],
-        node_id: &manifold_core::NodeId,
-    ) -> Option<&'a mut manifold_core::effect_graph_def::EffectGraphNode> {
-        for node in nodes.iter_mut() {
-            if &node.node_id == node_id {
-                return Some(node);
-            }
-            if let Some(group) = node.group.as_mut()
-                && let Some(found) = find_mut(&mut group.nodes, node_id)
-            {
-                return Some(found);
-            }
-        }
-        None
-    }
-    let node =
-        find_mut(&mut def.nodes, &node_id).expect("transform_0 present in the imported def");
+    // The mistake: switch the environment to HDRI by writing the node param,
+    // the way `rt_r3_heldout_gltf` set `rt_enabled` on `render_scene`.
+    let node_id = manifold_core::NodeId::new("env_select");
+    let baked = 1.0_f32;
+    let node = def
+        .nodes
+        .iter_mut()
+        .find(|n| n.node_id == node_id)
+        .expect("env_select present in the imported def");
     node.params.insert(
-        "pos_x".to_string(),
+        "selector".to_string(),
         manifold_core::effect_graph_def::SerializedParamValue::Float { value: baked },
     );
 
@@ -2312,25 +2301,25 @@ fn editing_an_imported_defs_node_param_loses_to_the_card_and_is_reported() {
     let inst = runtime
         .graph
         .instance_by_node_id(&node_id)
-        .expect("transform_0 in the live graph");
+        .expect("env_select in the live graph");
     let got = runtime
         .graph
         .get_node(inst)
-        .and_then(|n| n.params.get("pos_x").cloned())
-        .expect("pos_x readable post-build");
+        .and_then(|n| n.params.get("selector").cloned())
+        .expect("selector readable post-build");
     assert_ne!(
         got,
         crate::node_graph::parameters::ParamValue::Float(baked),
-        "if the node-param write ever starts winning, this test is the place that \
-         records the decision — cards are the performer's surface, so that is \
-         Peter's call, not a quiet change (BUG-1l7f)",
+        "if an AUTHORED default ever stops planting, this test is the place that \
+         records the decision — that plant is where a binding's scale/offset fold \
+         is applied, so dropping it renders raw def values (BUG-1l7f)",
     );
 
     let findings: Vec<_> = runtime.shadowed_def_params().collect();
     assert!(
         findings
             .iter()
-            .any(|f| f.node_id == "transform_0" && f.param == "pos_x"),
+            .any(|f| f.node_id == "env_select" && f.param == "selector"),
         "the silent revert must be reported by node and param; got {findings:?}",
     );
 }

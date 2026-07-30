@@ -158,7 +158,12 @@
             // value, so it must land.
             default_mirrors_node_param: false,
         };
-        let _bound = crate::node_graph::BoundGraph::new(vec![binding], &mut graph);
+        let bound = crate::node_graph::BoundGraph::new(vec![binding], &mut graph, Some(&def));
+        assert!(
+            bound.shadowed_def_params.is_empty(),
+            "the def bakes no `intensity` at all here, so the plant overwrites \
+             nothing and there is nothing to report (BUG-1l7f)",
+        );
 
         assert_eq!(
             intensity_of(&graph, inst),
@@ -238,8 +243,20 @@
             default_mirrors_node_param: stamped_binding.default_mirrors_node_param,
         };
         // This is the call every effect/generator rebuild makes:
-        // `BoundGraph::new` → `apply_binding_defaults`.
-        let _bound = crate::node_graph::BoundGraph::new(vec![binding], &mut rebuilt_graph);
+        // `BoundGraph::new` → `apply_binding_defaults`. The def goes in so the
+        // silent-revert detector (BUG-1l7f) runs on exactly the shape BUG-ji6q
+        // fixed: a def-baked 5.0 under a binding whose frozen default is 2.0
+        // reports NOTHING, because a mirrored default doesn't plant. If the
+        // detector ever starts reporting here, it has stopped agreeing with
+        // `apply_binding_defaults` and the log fills with every scene exposure.
+        let bound =
+            crate::node_graph::BoundGraph::new(vec![binding], &mut rebuilt_graph, Some(&def));
+        assert!(
+            bound.shadowed_def_params.is_empty(),
+            "a mirrored default doesn't plant, so the 5.0 write is not shadowed; \
+             got {:?}",
+            bound.shadowed_def_params,
+        );
 
         assert_eq!(
             intensity_of(&rebuilt_graph, rebuilt_inst),

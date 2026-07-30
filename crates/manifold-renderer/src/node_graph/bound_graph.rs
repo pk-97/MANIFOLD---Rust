@@ -86,12 +86,18 @@ pub struct BoundGraph {
 /// One def-baked node param value that a card binding overwrote at build.
 ///
 /// The finding for BUG-1l7f (imported-def param no-op): setting a param on a
-/// node the outer card owns is a silent revert — [`apply_binding_defaults`]
-/// plants the binding's declared default over it the moment the graph is bound,
-/// so the value never reaches evaluation. It cost `rt_r3_heldout_gltf` its whole
-/// existence (it set `rt_enabled` on an imported def's `render_scene` node and
-/// compared two pure-raster renders while asserting an RT conclusion) and cost a
-/// second lane a misdiagnosis on top.
+/// node whose card binding carries an AUTHORED default is a silent revert —
+/// [`apply_binding_defaults`] plants that default over it the moment the graph is
+/// bound, so the value never reaches evaluation. It cost `rt_r3_heldout_gltf` its
+/// whole existence (it set `rt_enabled` on an imported def's `render_scene` node
+/// and compared two pure-raster renders while asserting an RT conclusion) and
+/// cost a second lane a misdiagnosis on top.
+///
+/// A MIRRORED default no longer plants (BUG-ji6q), so scene-vocabulary params —
+/// transforms, materials, lights, cameras, the `render_scene` RT toggles — keep
+/// the node value and are never reported here. What remains is every authored
+/// default: a preset's declared resting value, and an import's curated bindings
+/// (`env_mode`, `ssao_intensity`, the sun fan-outs, `env_intensity`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ShadowedDefParam {
     /// Stable id of the node whose param was overwritten.
@@ -219,13 +225,23 @@ impl BoundGraph {
 /// function gets to make.
 ///
 /// Exactly the disagreements that matter, and nothing else:
+/// - only bindings whose default is AUTHORED. A `default_mirrors_node_param`
+///   binding is a stamp-time snapshot of the node param, and
+///   [`apply_binding_defaults`] no longer plants those at all (BUG-ji6q), so the
+///   node value stands and there is nothing to report. This is the discriminator
+///   that keeps the diagnostic pointed at the class that is still silent: an
+///   AUTHORED default — a number someone chose, carrying the binding's
+///   `scale`/`offset` fold — really does overwrite whatever the def baked.
 /// - only params the def EXPLICITLY declares. A primitive running at its own
 ///   `ParamDef::default` while the binding declares a different number is the
 ///   normal, intended case (SoftFocus's outer `radius` 6.0 over `Blur.radius`
 ///   4.0) — the def says nothing there, so there is nothing to shadow.
 /// - compared as [`ParamValue`]s through [`ResolvedBinding::write_value`], so
 ///   the comparison is against what the binding actually writes — reshape,
-///   angle wrap and convert included — not against the raw slider float.
+///   angle wrap and convert included — not against the raw slider float. This is
+///   what keeps an authored unit fold off the report: FluidSim2D's `curl`
+///   declares 85.0 degrees against `rotation_final.a = 1.4835` radians, one
+///   number seen through the fold, not a disagreement.
 /// - `Trigger` bindings are skipped: their storage is a monotonic counter, so a
 ///   def-baked number is never a value anyone meant to hold.
 ///
@@ -246,7 +262,8 @@ pub fn find_shadowed_def_params(
         let ResolvedTarget::Node { node, param } = &binding.target else {
             continue;
         };
-        if matches!(binding.convert, ParamConvert::Trigger) {
+        // A mirrored default never plants, so it can't shadow anything.
+        if binding.default_mirrors_node_param || matches!(binding.convert, ParamConvert::Trigger) {
             continue;
         }
         let Some(node_id) = graph.get_node(*node).map(|inst| inst.node_id.clone()) else {
@@ -614,6 +631,11 @@ mod tests {
 
     /// A binding whose target node is `feedback` and whose declared default is
     /// `default`, matching [`def_with_scale`]'s node.
+    ///
+    /// AUTHORED (`default_mirrors_node_param: false`), and that is the point of
+    /// every test below: an authored default is the one that still plants over a
+    /// def-baked value, so it is the only kind that can shadow one. The mirrored
+    /// case has its own test.
     fn scale_binding(feedback: NodeInstanceId, default: f32) -> ResolvedBinding {
         ResolvedBinding {
             id: Cow::Borrowed("amount"),
@@ -627,6 +649,7 @@ mod tests {
             source: BindingSource::Static,
             source_id: Cow::Borrowed("amount"),
             reshape: None,
+            default_mirrors_node_param: false,
             wraps_angle: false,
         }
     }
@@ -697,6 +720,33 @@ mod tests {
             scale_of(&graph, feedback),
             ParamValue::Float(6.0),
             "the card default must still be planted — this path is unchanged",
+        );
+    }
+
+    /// The BUG-ji6q half: a MIRRORED default is a stamp-time snapshot of the node
+    /// param, `apply_binding_defaults` skips planting it, and the def value stands.
+    /// Nothing was shadowed, so nothing is reported — the same def+values that fire
+    /// under an authored binding must stay silent under a mirrored one, or every
+    /// imported scene exposure becomes a false finding.
+    #[test]
+    fn mirrored_defaults_are_never_reported_because_they_never_plant() {
+        let (mut graph, feedback) = graph_with_baked_scale(0.9);
+        let def = def_with_scale(0.9);
+        let mut binding = scale_binding(feedback, 0.5);
+        binding.default_mirrors_node_param = true;
+
+        assert!(
+            find_shadowed_def_params(&def, std::slice::from_ref(&binding), &graph).is_empty(),
+            "a mirrored default doesn't plant, so it can't shadow the def value",
+        );
+
+        let bound = BoundGraph::new(vec![binding], &mut graph, Some(&def));
+        assert!(bound.shadowed_def_params.is_empty());
+        assert_eq!(
+            scale_of(&graph, feedback),
+            ParamValue::Float(0.9),
+            "and the def value really does stand — the detector agrees with \
+             apply_binding_defaults rather than second-guessing it (BUG-ji6q)",
         );
     }
 
