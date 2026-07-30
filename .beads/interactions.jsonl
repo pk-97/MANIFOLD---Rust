@@ -96,3 +96,5 @@
 {"id":"int-6d062e55fe1d77057a43b17f7a5cc04f","kind":"field_change","created_at":"2026-07-30T09:31:08.286194Z","actor":"Peter Kiemann","issue_id":"BUG-pt6g","extra":{"field":"status","new_value":"closed","old_value":"open","reason":"Closed"}}
 {"id":"int-6457693dce214567445c3c19ba2f9333","kind":"field_change","created_at":"2026-07-30T12:06:53.218822Z","actor":"Peter Kiemann","issue_id":"BUG-21y","extra":{"field":"status","new_value":"closed","old_value":"open","reason":"Closed"}}
 {"id":"int-19c935c511d43ffa61d9f4a13bba3788","kind":"field_change","created_at":"2026-07-30T12:07:01.927355Z","actor":"Peter Kiemann","issue_id":"BUG-21y","extra":{"field":"status","new_value":"open","old_value":"closed"}}
+{"id":"int-bad72069b334e35d2c9d08de3f23756c","kind":"field_change","created_at":"2026-07-30T12:08:48.138838Z","actor":"Peter Kiemann","issue_id":"BUG-1l7f","extra":{"field":"priority","new_value":"1","old_value":"2"}}
+{"id":"int-981952e43d4cb25a102503a60a877659","kind":"field_change","created_at":"2026-07-30T12:25:59.765888Z","actor":"Peter Kiemann","issue_id":"BUG-m0c9","extra":{"field":"priority","new_value":"2","old_value":"3"}}
