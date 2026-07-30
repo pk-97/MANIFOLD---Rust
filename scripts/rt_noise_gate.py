@@ -20,13 +20,14 @@ reading a picture. The PNGs are just the transport for pixel values; every
 verdict here is a computed number against a committed ceiling.
 
 WHY IT ALSO CHECKS FOR SIGNAL
-A dead channel is perfectly stable. Measured 2026-07-30 on origin/main
-b10d9d94, four back-to-back runs of the same command: three of them had every
-RT channel at exactly zero and the visibility mask pinned at 255 while the
-composite still rendered (BUG-mw0x — intermittent all-zero RT channels). A
-delta-only gate would have called that state calm. Each channel therefore also
-carries a `min_signal_level` floor, and a channel below its floor FAILS as
-inert rather than passing as stable.
+A dead channel is perfectly stable, so the gate refuses to certify one. Seven of
+ten runs on 2026-07-30 read every RT channel at exactly zero with the visibility
+mask pinned at 255 while the composite still rendered — which turned out to be
+capture-directory contention, not an RT defect (BUG-mw0x — concurrent rt-capture
+runs clobbered each other via a shared /tmp dir). The lesson survives its cause:
+a delta-only gate called that state calm. Each channel carries a
+`min_signal_level` floor, and a channel below its floor FAILS as inert rather
+than passing as stable.
 
 FLAKE CONTROL
 Two mechanisms, because a flaky gate gets ignored, which is worse than no gate.
@@ -116,11 +117,12 @@ SIGNAL_FLOOR_FRACTION = 0.25
 MIN_PAIRS = 3
 
 # A literally black channel is not a quiet channel, it is an absent one, and its
-# frame-to-frame delta of 0.0 would drag a median toward a fake-calm verdict.
-# BUG-mw0x makes this a live hazard: on origin/main three of four back-to-back
-# runs produced all-zero RT channels. Such a run is discarded as a failed
-# measurement; `min_signal_level` in the baseline is the backstop for a channel
-# that merely dimmed.
+# frame-to-frame delta of 0.0 would drag a median toward a fake-calm verdict. The
+# private capture dir removed the known cause of black channels, so this guard
+# should now be silent — it stays because it is the cheap check that caught that
+# contamination in the first place, and a silent guard costs nothing. Such a run
+# is discarded as a failed measurement; `min_signal_level` in the baseline is the
+# backstop for a channel that merely dimmed.
 DEAD_CHANNEL_LEVEL = 1e-6
 
 
@@ -475,10 +477,10 @@ def main():
 
         runs = []
         attempts = 0
-        # Budget for a coin flip, not for the occasional bad run: with BUG-mw0x
-        # (intermittent all-zero RT channels) roughly half of all captures are
-        # discarded, and `repeats + 2` ran out of attempts before it could
-        # median anything.
+        # Headroom for a bad streak, not just one bad run. `repeats + 2` ran out
+        # of attempts mid-measurement while captures were being discarded, and
+        # exit 2 because the budget was thin reads the same as exit 2 because the
+        # tree is broken.
         max_attempts = args.max_attempts or (args.repeats * 2 + 3)
         discarded = []
         while len(runs) < args.repeats and attempts < max_attempts:
