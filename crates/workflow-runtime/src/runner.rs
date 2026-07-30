@@ -836,6 +836,34 @@ fn run_execute(
     let mut seeded = informative.is_some();
     let mut empty_note = false;
     let mut last_red_gate: Option<serde_json::Value> = None;
+
+    // Gate-first on a seeded rerun (D19, P3 shakedown 2026-07-30): a previous
+    // sample parked after committing real progress into the worktree.
+    // Calling the model blind either burns a call re-doing already-complete
+    // work (gate green) or hands it the STALE park-reason text instead of
+    // the CURRENT gate state (gate red) — the empty-ChangeSet deadlock that
+    // cost 45K tokens per blind lap in the live run. Run the gate BEFORE the
+    // first call and skip straight to the right branch. `run_gates` is
+    // infallible (a hung gate is a red TIMEOUT result, never an error), so
+    // there is no "gate can't run" fallback to the stale seed text — the
+    // fresh report always wins.
+    if seeded {
+        let report = run_gates(&step.gate, &wt.path, step.gate_timeout_s, &cfg.run_dir);
+        if report.pass {
+            let sha = worktree::head_sha(&wt.path)?;
+            let value = serde_json::json!({
+                // No ChangeSet exists for this sample — the worktree was
+                // already complete when the pre-flight gate ran. Marked
+                // explicitly rather than faking an empty edits: [].
+                "change_set": {"already_complete": true},
+                "commit": sha, "worktree": wt.path, "attempt": 0,
+            });
+            return Ok(Ok(Artifact { kind: ArtifactKind::Json, value }));
+        }
+        let report_json = serde_json::to_value(&report).expect("GateReport serializes");
+        last_red_gate = Some(report_json.clone());
+        informative = Some(serde_json::to_string_pretty(&report_json).expect("Value serializes"));
+    }
     let max_attempts = u32::from(step.retry_cap) + 1;
     for attempt in 1..=max_attempts {
         budget.check()?;
@@ -858,8 +886,10 @@ fn run_execute(
         let mut user = base_prompt.clone();
         match (&informative, seeded) {
             (Some(err), true) => {
+                // Reached only via the gate-first pre-flight above: `err` is
+                // the FRESH gate report, not the stale unpark-seed text.
                 user.push_str(&format!(
-                    "\n\nA previous sample of this step parked:\n{err}\nWork already committed in the worktree stands — fix forward from the current file contents."
+                    "\n\nWork already committed in the worktree stands. The gate is currently red:\n{err}\nFix forward from the current file contents."
                 ));
             }
             (Some(err), false) => {

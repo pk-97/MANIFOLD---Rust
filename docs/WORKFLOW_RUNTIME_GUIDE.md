@@ -17,7 +17,9 @@ target/debug/workflow run <program.toml> [--run-id <id>] [--mock <responses.json
 target/debug/workflow check <program.toml>      # lint before spending a token (exit 1 on findings)
 target/debug/workflow cost <run-dir>            # per-step / per-model token ledger
 target/debug/workflow unpark <run-dir> <step>   # clear a parked step, then rerun to retry it;
-                                                # the recorded park reason seeds the rerun's first prompt
+                                                # for execute, the rerun checks the gate FIRST — gate
+                                                # green completes with no model call, gate red feeds the
+                                                # FRESH gate report (not the stale park reason) to attempt 1
 target/debug/workflow watch <run-dir>           # live dashboard over status.json — token-free, read-only
 ```
 
