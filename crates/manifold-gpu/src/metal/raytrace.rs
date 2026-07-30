@@ -791,6 +791,27 @@ static float3 cone_sample(float3 dir, float half_angle, float2 u) {
     return normalize(t * (sin_t * cos(phi)) + b * (sin_t * sin(phi)) + dir * cos_t);
 }
 
+// The shadow ray's cone jitter is seeded WITHOUT the frame index, unlike
+// every other ray class in this kernel. AO, GI and reflections all feed
+// `accumulate_irradiance`, which averages their per-frame noise away over
+// time — for those, a new seed each frame is the whole point. The shadow
+// visibility mask has no such history: it goes to the shader raw, so any
+// per-frame variation in it IS visible flicker on a static scene.
+//
+// Fixing the seed makes the mask a pure function of scene + camera: a
+// still scene gives a bit-identical mask every frame. What's left is a
+// fixed per-pixel dither, which the three edge-aware atrous passes
+// (`atrous_pass`) already filter — that's what they're for. This
+// mattered most on dense alpha-masked cutout geometry (blossom petals),
+// where nearly every pixel sits in some occluder's penumbra and the
+// alpha test flips as the ray jitters, so the raw mask read as a
+// crawling hatched pattern rather than a shadow.
+//
+// If the mask ever gains real temporal accumulation, restore
+// `p.frame_index` here and the noise becomes useful again. Proof that a
+// still scene stays still: `rt_t2c_shadow_temporal_stability.rs`.
+constant uint RT_SHADOW_JITTER_SEED = 0u;
+
 // Multi-bounce GI MB2 (RAYTRACING_DESIGN.md section 11): ONE home for the
 // sun-bounce caster loop (invariant I-MB3) — called by the GI gather at
 // every path vertex and by the reflection block's hit shading.
@@ -1134,7 +1155,7 @@ kernel void trace_shadow_rays(
         r.max_distance = max_dist;
         float vis = 0.0;
         for (uint s = 0; s < spp; s++) {
-            r.direction = cone_sample(to_light, cone_half_angle, rand2(tid, p.frame_index, c * spp + s));
+            r.direction = cone_sample(to_light, cone_half_angle, rand2(tid, RT_SHADOW_JITTER_SEED, c * spp + s));
             intersection_query<triangle_data, instancing> shadow_q;
             shadow_q.reset(r, accel, RT_MASK_SHADOW_CASTER);
             bool blocked = walk_with_alpha_test(shadow_q, normal_sources, material_textures, true);

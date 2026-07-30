@@ -181,14 +181,45 @@ const FRAMES_IN_FLIGHT: usize = 3;
 /// through SPIRV-Cross → MSL — same discipline as the light buffer.
 const CASTER_VEC4_STRIDE: usize = 5;
 
-/// RAYTRACING_DESIGN.md section 5.2 P2: soft-shadow area-light cone half-angle,
-/// radians (`ShadowRayParams::sun_cone`). `0.0` was P1's hard-shadow
-/// value. Committed range 0.0–0.15 rad (~0–8.6°) is the physically-
-/// plausible area-light softness band for a sun-like source — the exact
-/// look inside that range is Peter's morning-gate tuning call, not this
-/// lane's (P2 brief: "denoiser/accumulation parameter choices land as
-/// named constants with documented ranges").
-const SOFT_SHADOW_CONE_RADIANS: f32 = 0.02;
+/// Sun-caster RT cone half-angle for `ShadowSoftness::Soft`, radians.
+/// Committed range 0.0–0.15 rad (~0–8.6°) is the physically-plausible
+/// area-light softness band for a sun-like source.
+const SUN_CONE_SOFT_RADIANS: f32 = 0.02;
+/// Sun-caster RT cone half-angle for `ShadowSoftness::VerySoft`, radians.
+const SUN_CONE_VERY_SOFT_RADIANS: f32 = 0.06;
+
+/// A sun caster's RT shadow cone half-angle, in radians, from the light's
+/// own `shadow_softness`.
+///
+/// `Hard` MUST be exactly 0.0: `cone_sample` short-circuits at
+/// `half_angle <= 0.0` and returns the caster direction unjittered, so the
+/// visibility mask becomes a deterministic function of the geometry. Any
+/// cone > 0 is a stochastic estimate, and the mask is never temporally
+/// accumulated (`accumulate_irradiance` covers irradiance and reflections
+/// only) — the only thing keeping it stable frame to frame is that the
+/// shadow ray's jitter seed does not include the frame index (see
+/// `raytrace.rs`'s `RT_SHADOW_JITTER_SEED`).
+///
+/// This used to be one hard-coded 0.02 for every sun regardless of the
+/// light's setting, which meant "Hard" could not turn the jitter off. On
+/// dense alpha-masked cutout geometry (blossom petals) nearly every pixel
+/// lies in some occluder's penumbra, so nearly every pixel got a
+/// different visibility answer per frame — the mask reached the screen as
+/// hatched, blotchy noise.
+///
+/// `Contact` maps to the `Soft` cone: contact hardening is what a cone
+/// does for free under ray tracing (penumbra widens with occluder
+/// distance), so the raster path's blocker-search `light_size` has no
+/// meaning here.
+fn sun_cone_half_angle(softness: crate::node_graph::light::ShadowSoftness) -> f32 {
+    use crate::node_graph::light::ShadowSoftness;
+    match softness {
+        ShadowSoftness::Hard => 0.0,
+        ShadowSoftness::Soft | ShadowSoftness::Contact { .. } => SUN_CONE_SOFT_RADIANS,
+        ShadowSoftness::VerySoft => SUN_CONE_VERY_SOFT_RADIANS,
+    }
+}
+
 /// RAYTRACING_DESIGN.md section 5.2 P2: AO rays per pixel in the half-res
 /// dispatch. Committed range 1–16 (higher = less noise, more GPU cost);
 /// Peter's morning gate tunes within it.
@@ -4292,9 +4323,11 @@ impl EffectNode for RenderScene {
                     .iter()
                     .map(|l| {
                         let (dir_or_pos, cone_or_size, kind) = match l.mode {
-                            crate::node_graph::light::LightMode::Sun => {
-                                ([-l.dir[0], -l.dir[1], -l.dir[2]], SOFT_SHADOW_CONE_RADIANS, 0u32)
-                            }
+                            crate::node_graph::light::LightMode::Sun => (
+                                [-l.dir[0], -l.dir[1], -l.dir[2]],
+                                sun_cone_half_angle(l.shadow_softness),
+                                0u32,
+                            ),
                             crate::node_graph::light::LightMode::Point => {
                                 let light_size = match l.shadow_softness {
                                     crate::node_graph::light::ShadowSoftness::Contact { light_size } => {
@@ -5629,6 +5662,33 @@ mod tests {
         // Any value past 2 clamps to High (the enum can only ever carry
         // 0..=2 in practice; this just keeps the decode total).
         assert_eq!(shaft_step_count(3), 32);
+    }
+
+    /// "Hard" must mean an exactly-zero cone, or the RT sun shadow stays a
+    /// stochastic estimate the user asked it not to be — `cone_sample`
+    /// short-circuits only at `<= 0.0`, and the mask has no temporal
+    /// history to average the jitter away. This mapping used to be one
+    /// hard-coded 0.02 for every sun, which is what made alpha-masked
+    /// petals hatch and flicker with softness set to Hard.
+    #[test]
+    fn sun_cone_half_angle_honours_the_lights_softness() {
+        use crate::node_graph::light::ShadowSoftness;
+        assert_eq!(sun_cone_half_angle(ShadowSoftness::Hard), 0.0);
+        assert_eq!(
+            sun_cone_half_angle(ShadowSoftness::Soft),
+            SUN_CONE_SOFT_RADIANS
+        );
+        assert_eq!(
+            sun_cone_half_angle(ShadowSoftness::VerySoft),
+            SUN_CONE_VERY_SOFT_RADIANS
+        );
+        // Contact hardening is what an RT cone does for free, so Contact
+        // rides the Soft cone and ignores the raster blocker-search size.
+        assert_eq!(
+            sun_cone_half_angle(ShadowSoftness::Contact { light_size: 4.0 }),
+            SUN_CONE_SOFT_RADIANS
+        );
+        const { assert!(SUN_CONE_VERY_SOFT_RADIANS > SUN_CONE_SOFT_RADIANS) };
     }
 
     /// D3's committed upsample-tap weight, in isolation: `exp(-(Δz/z_full)^2
