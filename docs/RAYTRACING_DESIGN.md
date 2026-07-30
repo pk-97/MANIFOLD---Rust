@@ -1,6 +1,6 @@
 # Ray Tracing — hybrid RT lighting for hero scenes
 
-**Status:** IN PROGRESS — Tier 1+2, the motion class, reflections R1/R2/R3, T3-8 multi-bounce GI and section 12 (Screen-space AO handoff) all landed; phase records in section 9.6 (Phases) and section 11.4 (Multi-bounce phases). The temporal denoiser was rebuilt 2026-07-30 to a per-texel running mean with an engine-driven cue snap — static flicker 11x down, measured (section 13 (Temporal denoiser rebuild)). OWED: Peter's look at multi-bounce, at the R2 constants, and at the rebuild under fast camera motion; a `trace_ms` 2-vs-1 number from a heavier scene. Items 6/9, P5 export (D13) and P6 frame interp stay show-need-triggered; perf profiling deferred. · 2026-07-30 · Fable + Opus
+**Status:** IN PROGRESS — Tier 1+2, the motion class, reflections R1/R2/R3, T3-8 multi-bounce GI, section 12 (Screen-space AO handoff) and section 13 (Temporal denoiser rebuild) all landed; phase records in section 9.6 (Phases). OWED: Peter's look at multi-bounce, at the R2 constants, and at the denoiser under fast camera motion; a `trace_ms` 2-vs-1 number from a heavier scene. Items 6/9, P5 export (D13) and P6 frame interp stay show-need-triggered; perf profiling deferred. · 2026-07-30 · Fable + Opus
 **Prerequisites:** none for P0. P1+ gated on P0 numbers and on RENDERING_INFRA_V2 section 2 (G-buffer/motion vectors) for temporal pieces.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -969,6 +969,26 @@ moves and converges when it settles. Section 10's own stance.
 `IRRADIANCE_ACCUM_ALPHA` 0.02 floor, `RT_REFL_ACCUM_ALPHA_MIN` 0.025,
 `REFL_SAMPLES_PER_PIXEL` 8, `RT_REFL_FIREFLY_GAIN` 8, `ATROUS_REFL_VARIANCE_GAIN` 2,
 change gates at 4 sigma / 15% / 1e-4.
+
+**The gate that keeps it.** `scripts/rt_noise_gate.py` — same instrument, same metric, as an
+exit code. Median of clean runs per channel against ceilings in
+`scripts/rt_noise_baseline.json`; re-baseline with `--record` and commit the JSON. A channel
+that goes silent FAILS as inert rather than passing, because a dead channel is perfectly
+stable — the one failure mode a delta-only metric cannot see. An async accel rebuild in or
+within 60 frames before the measured window discards the run instead of failing it. Nightly on
+main via `trunk_health.py`; not a landing item, because it costs an app build plus three
+300-frame renders.
+
+Two measurement traps this cost us, both worth knowing before trusting any capture number.
+**Build profile:** a debug build is several times slower, and the RT path has an async accel
+build racing the first trace dispatch (D17) — captures that looked like "RT is intermittently
+dead, 7 runs in 10" came from a debug binary, while release measured 5/5 alive with 1-4%
+run-to-run spread. The gate builds release for that reason, not just for speed.
+**Shared output path:** the capture harness wrote to a fixed `/tmp/rt_capture` and cleared it
+on entry, so two concurrent captures silently destroyed each other's frames — which is most of
+what the "all-zero channels" report actually was (BUG-mw0x, reframed). The directory is now
+overridable via `MANIFOLD_RT_CAPTURE_DIR` and the gate always uses a private one. Measure one
+at a time, in release, or measure nothing.
 
 **Owed:** Peter's look under fast camera motion — longer specular history reopens D-61's
 sweep-trail risk in principle, with the variance clamp and per-texel count reset as the

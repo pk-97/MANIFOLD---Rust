@@ -245,7 +245,15 @@ fn drain_captures(
         std::mem::take(&mut *q)
     };
     if caps.is_empty() { return; }
-    let dir = PathBuf::from("/tmp/rt_capture");
+    // Overridable because the default is a FIXED shared path: two captures
+    // running at once interleave their PNGs into one pile, and a run that
+    // clears the directory first silently destroys the other's frames. That
+    // produced a phantom "RT channels are all zero" bug report on 2026-07-30
+    // (BUG-mw0x) when three sessions captured in parallel. Callers that may
+    // overlap — the noise gate, any parallel agent — set this to a unique dir.
+    let dir = std::env::var_os("MANIFOLD_RT_CAPTURE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/tmp/rt_capture"));
     let _ = std::fs::create_dir_all(&dir);
     for c in &caps {
         last_stats.insert(c.label.clone(), compute_rt_channel_stats(c, device));

@@ -113,6 +113,11 @@ pub struct ParamBinding {
     /// `Linear`/`false` is identity, so existing presets stay byte-identical.
     pub curve: manifold_core::macro_bank::MacroCurve,
     pub invert: bool,
+    /// Mirrors `BindingDef::default_mirrors_node_param` — `true` means
+    /// [`Self::default_value`] is a stamp-time snapshot of the target node's
+    /// param, not a chosen resting value, so [`apply_binding_defaults`] must
+    /// not replant it. `false` for every hand-written spec in this crate.
+    pub default_mirrors_node_param: bool,
 }
 
 /// Routing destination declared on a spec [`ParamBinding`].
@@ -266,6 +271,11 @@ pub struct ResolvedBinding {
     /// feeds cos/sin (2π-periodic), so the wrap is a no-op on the rendered
     /// result for in-range values and only tames a driver that climbs past 2π.
     pub(crate) wraps_angle: bool,
+    /// Carried from `BindingDef::default_mirrors_node_param` through
+    /// [`ParamBinding`] / the generator resolve. The one thing
+    /// [`apply_binding_defaults`] reads to decide whether planting this
+    /// binding's default would revert somebody's write (BUG-ji6q).
+    pub default_mirrors_node_param: bool,
 }
 
 /// Non-identity card mapping applied to a User binding's value at the write
@@ -391,6 +401,7 @@ impl ResolvedBinding {
             b.id.clone(),
             reshape,
             false,
+            b.default_mirrors_node_param,
         ))
     }
 
@@ -461,6 +472,10 @@ impl ResolvedBinding {
             Cow::Owned(core.id.clone()),
             reshape,
             wraps_angle,
+            // A user binding is minted by the graph editor's expose checkbox
+            // against a value the user is looking at — authored, so its
+            // declared default plants as it always has.
+            false,
         ))
     }
 
@@ -482,6 +497,7 @@ impl ResolvedBinding {
         source_id: ParamId,
         reshape: Option<Reshape>,
         wraps_angle: bool,
+        default_mirrors_node_param: bool,
     ) -> Self {
         Self {
             id,
@@ -493,6 +509,7 @@ impl ResolvedBinding {
             source_id,
             reshape,
             wraps_angle,
+            default_mirrors_node_param,
         }
     }
 
@@ -634,6 +651,17 @@ pub fn apply_bindings(
 /// binding default differs from the live inner state) is closed by
 /// the same call.
 ///
+/// **A binding whose default only MIRRORS its target's node param is
+/// skipped** (`ResolvedBinding::default_mirrors_node_param`, set by the
+/// scene-exposure stamp). That default is a snapshot frozen when a GLB
+/// import stamped the card, and `instantiate_def` has already written the
+/// def's live param onto the node — replanting the snapshot reverts every
+/// later writer (def edits, migrations, direct writes) on the next rebuild
+/// (BUG-ji6q). Authored defaults are untouched: for those the plant is
+/// where the binding's `scale`/`offset` fold gets applied, so skipping one
+/// would render a preset's raw def values instead (see
+/// `BindingDef::default_mirrors_node_param` for the FluidSim2D numbers).
+///
 /// Per-binding failures log loudly but never panic — same contract as
 /// the per-frame apply path.
 pub fn apply_binding_defaults(
@@ -642,6 +670,9 @@ pub fn apply_binding_defaults(
     handle: Option<&CompositeHandle>,
 ) {
     for binding in bindings {
+        if binding.default_mirrors_node_param {
+            continue;
+        }
         if let Err(err) = binding.apply(graph, handle, binding.default_value) {
             let tag = match binding.source {
                 BindingSource::Static => "ParamBinding",
@@ -1036,6 +1067,7 @@ mod tests {
             max: 1.0,
             curve: manifold_core::macro_bank::MacroCurve::Linear,
             invert: false,
+            default_mirrors_node_param: false,
         }
     }
 
@@ -1068,6 +1100,7 @@ mod tests {
             source_id: Cow::Borrowed("amount"),
             reshape: None,
             wraps_angle: false,
+            default_mirrors_node_param: false,
         }
     }
 
@@ -1244,6 +1277,7 @@ mod tests {
             source_id: Cow::Borrowed("nonexistent"),
             reshape: None,
             wraps_angle: false,
+            default_mirrors_node_param: false,
         };
         let err = binding.apply(&mut g, None, 0.5).unwrap_err();
         assert!(matches!(err, GraphError::ParamNotFound { .. }));
@@ -1269,6 +1303,7 @@ mod tests {
             source_id: Cow::Borrowed("mode"),
             reshape: None,
             wraps_angle: false,
+            default_mirrors_node_param: false,
         };
         binding.apply(&mut g, None, 0.0).unwrap();
         assert_eq!(
@@ -1303,6 +1338,7 @@ mod tests {
             source_id: Cow::Borrowed("blend_strength"),
             reshape: None,
             wraps_angle: false,
+            default_mirrors_node_param: false,
         };
         binding.apply(&mut g, None, 0.42).unwrap();
         assert_eq!(
@@ -1340,6 +1376,7 @@ mod tests {
             source_id: Cow::Borrowed("rot"),
             reshape: None,
             wraps_angle: true,
+            default_mirrors_node_param: false,
         };
         // 2.5 turns in -> 0.5 turn out.
         binding.apply(&mut g, None, TAU * 2.5).unwrap();
@@ -1388,6 +1425,7 @@ mod tests {
                 source_id: Cow::Borrowed("zoom"),
                 reshape: None,
                 wraps_angle: false,
+                default_mirrors_node_param: false,
             },
         ];
 
@@ -1556,6 +1594,7 @@ mod tests {
                 source_id: Cow::Borrowed("amount"),
                 reshape: None,
                 wraps_angle: false,
+                default_mirrors_node_param: false,
             },
             ResolvedBinding {
                 id: Cow::Borrowed("zoom"),
@@ -1570,6 +1609,7 @@ mod tests {
                 source_id: Cow::Borrowed("amount"), // same manifest param as `amount`
                 reshape: None,
                 wraps_angle: false,
+                default_mirrors_node_param: false,
             },
         ];
         // ONE outer value, applied to BOTH inner targets.

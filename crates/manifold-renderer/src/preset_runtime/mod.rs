@@ -138,3 +138,7 @@ mod chain_fusion_tests;
 #[cfg(test)]
 #[path = "tests/segment_prewarm.rs"]
 mod segment_prewarm_tests;
+
+#[cfg(test)]
+#[path = "tests/bound_param_survives_rebuild.rs"]
+mod bound_param_survives_rebuild_tests;

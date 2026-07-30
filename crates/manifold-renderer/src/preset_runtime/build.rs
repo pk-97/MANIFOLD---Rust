@@ -518,6 +518,7 @@ impl PresetRuntime {
                         std::borrow::Cow::Owned(b.id.clone()),
                         reshape,
                         false,
+                        b.default_mirrors_node_param,
                     ))
                 }
                 BindingTarget::Composite { .. } => None,

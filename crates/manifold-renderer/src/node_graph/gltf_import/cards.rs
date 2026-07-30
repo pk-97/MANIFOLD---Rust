@@ -71,6 +71,7 @@ pub(super) fn card_binding(
         user_added: false,
         scale,
         offset: 0.0,
+        default_mirrors_node_param: false,
     }
 }
 
@@ -194,6 +195,7 @@ pub(super) fn animation_card_bindings(card_bindings: &mut Vec<BindingDef>, id_pr
         user_added: false,
         scale: 1.0,
         offset: 0.0,
+        default_mirrors_node_param: false,
     });
     card_bindings.push(BindingDef {
         id: format!("{id_prefix}_loop_mode"),
@@ -204,6 +206,7 @@ pub(super) fn animation_card_bindings(card_bindings: &mut Vec<BindingDef>, id_pr
         user_added: false,
         scale: 1.0,
         offset: 0.0,
+        default_mirrors_node_param: false,
     });
     card_bindings.push(BindingDef {
         id: format!("{id_prefix}_retrigger"),
@@ -214,5 +217,6 @@ pub(super) fn animation_card_bindings(card_bindings: &mut Vec<BindingDef>, id_pr
         user_added: false,
         scale: 1.0,
         offset: 0.0,
+        default_mirrors_node_param: false,
     });
 }

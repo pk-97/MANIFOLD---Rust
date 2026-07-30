@@ -605,6 +605,33 @@ pub struct BindingDef {
     pub scale: f32,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub offset: f32,
+    /// `true` when `default_value` is a MIRROR of the target node's param
+    /// taken at stamp time, not a resting value anyone chose. Only
+    /// [`crate::scene_exposure::stamp_scene_node_exposures_into`] sets it:
+    /// a GLB import stamps a card over whatever the importer placed, so the
+    /// "default" is just a snapshot of the node.
+    ///
+    /// The distinction decides who wins at build time. `apply_binding_defaults`
+    /// plants each binding's `default_value` onto its inner target, and for an
+    /// AUTHORED default that plant is load-bearing — it is where the binding's
+    /// `scale`/`offset` fold gets applied, so the def's node param and the
+    /// card's default are *deliberately* different numbers. FluidSim2D:
+    /// `curl` declares 85.0 (degrees) against `rotation_final.a = 1.4835`
+    /// (radians), `count_m` declares 2.0 against `active_count_calc.a =
+    /// 2000000.0`, `contrast` declares 3.5 against `display_tone.contrast =
+    /// 3.0`. Skip those plants and the preset renders its raw def values.
+    ///
+    /// A MIRRORED default carries no such intent — it is a second copy of the
+    /// node param, frozen once and never updated, so replanting it reverts
+    /// every later writer (def edits, migrations, direct writes) at the next
+    /// rebuild (BUG-ji6q). Mirrored defaults don't plant; the node param
+    /// stands.
+    ///
+    /// Skipped on serialize when `false`, and absent means `false` — an old
+    /// project's bindings are indistinguishable from authored ones, so they
+    /// keep planting, which is the pre-BUG-ji6q behaviour.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub default_mirrors_node_param: bool,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -1156,6 +1183,7 @@ mod tests {
                 user_added: false,
                 scale: 1.0,
                 offset: 0.0,
+                default_mirrors_node_param: false,
             }],
             skip_mode: SkipModeDef::OnZero {
                 param_id: "amount".to_string(),
