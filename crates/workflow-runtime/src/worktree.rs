@@ -2,7 +2,7 @@
 //! through the slot ring, change-set application, pathspec-only commits.
 //!
 //! INVARIANT (structural, rg-gated): subprocess spawns live only here, in
-//! `gates.rs`, and in `transport.rs`'s keyget.
+//! `gates.rs`, `lane.rs`, and in `transport.rs`'s keyget.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -10,7 +10,10 @@ use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 
-use crate::artifacts::ChangeSet;
+use crate::artifacts::{ChangeSet, FailureKind};
+
+/// An apply failure, typed so the promotion decision never reads error text.
+pub type ApplyError = (FailureKind, String);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Worktree {
@@ -44,14 +47,33 @@ pub fn acquire(repo_root: &Path, label: &str, branch: &str, tip: Option<&str>) -
 /// Apply a change set. Edits are exact-match and must be UNIQUE in the file —
 /// zero or multiple matches is an error fed back to the model (D5a).
 /// Returns the touched paths (the commit pathspec).
-pub fn apply(worktree: &Path, change: &ChangeSet) -> Result<Vec<String>, String> {
+///
+/// One-shot writes are NEW-FILE-ONLY: a write over an existing file is refused
+/// before the tree is touched. That is a spend decision, not a correctness
+/// rule — a legitimately small whole-file rewrite now routes to a paid lane,
+/// which is the intended trade (D5, amended).
+pub fn apply(worktree: &Path, change: &ChangeSet) -> Result<Vec<String>, ApplyError> {
     // A path in both `edits` and `writes` would silently discard the edit
     // (finding 12) — refuse.
     for e in &change.edits {
         if change.writes.iter().any(|wr| wr.path == e.path) {
-            return Err(format!(
-                "path {} appears in both `edits` and `writes` — pick one; a write replaces the whole file",
-                e.path
+            return Err((
+                FailureKind::RejectedWrite,
+                format!(
+                    "path {} appears in both `edits` and `writes` — pick one; a write replaces the whole file",
+                    e.path
+                ),
+            ));
+        }
+    }
+    for w in &change.writes {
+        if worktree.join(&w.path).exists() {
+            return Err((
+                FailureKind::RejectedWrite,
+                format!(
+                    "write to {} refused — one-shot writes create NEW files only; rewriting an existing file is lane work. Use `edits` for a targeted change.",
+                    w.path
+                ),
             ));
         }
     }
@@ -62,37 +84,46 @@ pub fn apply(worktree: &Path, change: &ChangeSet) -> Result<Vec<String>, String>
         let text = match staged.get(&edit.path) {
             Some(t) => t.clone(),
             None => fs::read_to_string(worktree.join(&edit.path))
-                .map_err(|e| format!("edit target {}: {e}", edit.path))?,
+                .map_err(|e| (FailureKind::FindMiss, format!("edit target {}: {e}", edit.path)))?,
         };
         let snippet: String = edit.find.chars().take(160).collect();
+        // Exact match only. A whitespace-tolerant or fuzzy re-anchor can land
+        // an edit in the wrong place and still pass the gate — never add one.
         match text.matches(&edit.find).count() {
             0 => {
-                return Err(format!(
-                    "edit target {}: this `find` text is not in the file (quote the CURRENT file exactly, whitespace included): {snippet:?}",
-                    edit.path
+                return Err((
+                    FailureKind::FindMiss,
+                    format!(
+                        "edit target {}: this `find` text is not in the file (quote the CURRENT file exactly, whitespace included): {snippet:?}",
+                        edit.path
+                    ),
                 ));
             }
             1 => {}
             n => {
-                return Err(format!(
-                    "edit target {}: `find` matches {n} times — add surrounding lines to make it unique: {snippet:?}",
-                    edit.path
+                return Err((
+                    FailureKind::FindMiss,
+                    format!(
+                        "edit target {}: `find` matches {n} times — add surrounding lines to make it unique: {snippet:?}",
+                        edit.path
+                    ),
                 ));
             }
         }
         staged.insert(edit.path.clone(), text.replacen(&edit.find, &edit.replace, 1));
     }
     let mut paths = Vec::new();
+    let io = |e: std::io::Error| (FailureKind::RejectedWrite, e.to_string());
     for (path, text) in &staged {
-        fs::write(worktree.join(path), text).map_err(|e| e.to_string())?;
+        fs::write(worktree.join(path), text).map_err(io)?;
         paths.push(path.clone());
     }
     for w in &change.writes {
         let path = worktree.join(&w.path);
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            fs::create_dir_all(parent).map_err(io)?;
         }
-        fs::write(&path, &w.content).map_err(|e| e.to_string())?;
+        fs::write(&path, &w.content).map_err(io)?;
         paths.push(w.path.clone());
     }
     paths.sort();
@@ -122,6 +153,56 @@ pub fn verify(wt: &Worktree, expected_branch: Option<&str>) -> Result<(), String
         ));
     }
     Ok(())
+}
+
+/// Anything a lane left uncommitted. A lane commits its own work by doctrine,
+/// so this is only ever read as a PROTOCOL VIOLATION check — never as a
+/// pathspec to commit. Committing a porcelain listing is `add -A` with extra
+/// steps (untracked scratch, collapsed `dir/` entries), which is a hard rule.
+/// `-z` because this repo's paths have spaces and plain porcelain quotes them.
+pub fn dirty_paths(worktree: &Path) -> Result<Vec<String>, String> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(worktree)
+        .args(["status", "--porcelain", "-z", "--untracked-files=all"])
+        .output()
+        .map_err(|e| format!("git spawn failed: {e}"))?;
+    if !out.status.success() {
+        return Err(format!("git status failed: {}", String::from_utf8_lossy(&out.stderr)));
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut fields = text.split('\0').filter(|s| !s.is_empty());
+    let mut paths = Vec::new();
+    while let Some(entry) = fields.next() {
+        let (code, path) = entry.split_at(entry.len().min(3));
+        // A rename's source is the next NUL field; both sides are dirt, and
+        // naming one of them is enough to report the violation.
+        if code.starts_with('R') || code.starts_with('C') {
+            fields.next();
+        }
+        if !path.is_empty() {
+            paths.push(path.to_string());
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+
+/// What a lane actually did: the files its own commits touched between the
+/// recorded HEAD and now. The sha delta is the oracle — a well-behaved lane
+/// leaves the tree clean, so porcelain would read it as having done nothing.
+pub fn changed_since(worktree: &Path, before: &str) -> Result<Vec<String>, String> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(worktree)
+        .args(["diff", "--name-only", &format!("{before}..HEAD")])
+        .output()
+        .map_err(|e| format!("git spawn failed: {e}"))?;
+    if !out.status.success() {
+        return Err(format!("git diff failed: {}", String::from_utf8_lossy(&out.stderr)));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).lines().map(str::to_string).collect())
 }
 
 /// INVARIANT: pathspec-only — never the index, never `add -A`.

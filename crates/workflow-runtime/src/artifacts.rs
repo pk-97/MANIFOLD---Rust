@@ -23,6 +23,44 @@ pub enum ArtifactKind {
 /// reason (P3 shakedown, 2026-07-30).
 pub const EMPTY_CHANGESET_ERR: &str = "ChangeSet has no edits and no writes";
 
+/// Why an execute attempt failed. Typed, never sniffed out of an error string:
+/// promotion to a lane costs real money, so a reworded message must not be
+/// able to change which tier runs next.
+///
+/// The order IS the informativeness ranking — a red gate over a committed
+/// change tells you far more than a `find` the model invented, so a later,
+/// weaker failure never overwrites it in the park record (D16).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FailureKind {
+    /// No model output at all. Costs nothing and says nothing about the work.
+    Transport,
+    /// Output did not parse as the artifact type.
+    Parse,
+    /// Parsed, but no edits and no writes.
+    EmptyChangeSet,
+    /// A `find` string is absent from the file, or matches more than once.
+    FindMiss,
+    /// A `write` targets a path that already exists, or a path is in both
+    /// `edits` and `writes`.
+    RejectedWrite,
+    /// Applied and committed, then the gate went red.
+    GateRed,
+}
+
+impl FailureKind {
+    /// Substantive = the model's picture of the worktree is wrong, which a
+    /// second stateless call with the error pasted in is bad at fixing. These
+    /// promote on the FIRST one. Parse and transport failures are cheap and
+    /// often self-correcting, so they retry one-shot (D20).
+    pub fn is_substantive(self) -> bool {
+        matches!(
+            self,
+            FailureKind::EmptyChangeSet | FailureKind::FindMiss | FailureKind::RejectedWrite | FailureKind::GateRed
+        )
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Verdict {
     /// "accept" | "reject" — anything else is a parse failure.
@@ -50,7 +88,31 @@ pub struct ChangeSet {
     pub edits: Vec<Edit>,
     #[serde(default)]
     pub writes: Vec<FileWrite>,
-    pub commit_message: String,
+    /// Kept only so responses written against the old contract still parse.
+    /// The runtime composes the message from the step and the program's task —
+    /// a commit line is run metadata, not something the model gets to author.
+    #[serde(default)]
+    pub commit_message: Option<String>,
+}
+
+impl ChangeSet {
+    /// The typed entry point the execute loop uses. `Artifact::parse` funnels
+    /// here too, flattening to a string for every other caller.
+    pub fn parse(raw: &str) -> Result<ChangeSet, (FailureKind, String)> {
+        let body = strip_code_fences(raw);
+        let v: ChangeSet = serde_json::from_str(body).map_err(|e| {
+            (
+                FailureKind::Parse,
+                format!(
+                    "output does not parse as ChangeSet {{edits: [{{path, find, replace}}], writes: [{{path, content}}]}}: {e}"
+                ),
+            )
+        })?;
+        if v.edits.is_empty() && v.writes.is_empty() {
+            return Err((FailureKind::EmptyChangeSet, EMPTY_CHANGESET_ERR.to_string()));
+        }
+        Ok(v)
+    }
 }
 
 /// A completed step's stored artifact: `{ "kind": ..., "value": ... }`.
@@ -87,14 +149,7 @@ impl Artifact {
                 serde_json::to_value(v).expect("Verdict serializes")
             }
             ArtifactKind::ChangeSet => {
-                let v: ChangeSet = serde_json::from_str(body).map_err(|e| {
-                    format!(
-                        "output does not parse as ChangeSet {{edits: [{{path, find, replace}}], writes: [{{path, content}}], commit_message}}: {e}"
-                    )
-                })?;
-                if v.edits.is_empty() && v.writes.is_empty() {
-                    return Err(EMPTY_CHANGESET_ERR.to_string());
-                }
+                let v = ChangeSet::parse(raw).map_err(|(_, text)| text)?;
                 serde_json::to_value(v).expect("ChangeSet serializes")
             }
         };

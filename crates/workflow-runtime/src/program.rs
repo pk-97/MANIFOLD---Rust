@@ -16,6 +16,11 @@ pub struct Program {
     /// 500K (Peter: sensible at first, must not block normal runs).
     /// Overrun suspends the run; raise and rerun to resume.
     pub token_budget: Option<u64>,
+    /// Run-wide cap on LANE spend, in dollars. The token budget cannot see it:
+    /// lanes bill USD, so without this a promote-heavy program can spawn a
+    /// lane per execute step while `watch` shows a healthy green token bar.
+    /// Checked before every launch, the same way tokens guard a model call.
+    pub usd_budget: Option<f64>,
     /// Where execute steps land their commits. Required iff the program has one.
     pub target: Option<Target>,
     /// Opt-in: adjacent independent gate-less `generate` steps run threaded.
@@ -60,6 +65,26 @@ pub enum Opcode {
     /// k independent runs of a generate; gate picks the first pass, or a
     /// verdict majority decides. No model-driven control flow.
     Sample,
+    /// Execute's semantics with a tool-using worker instead of a ChangeSet
+    /// (D20): for output judged by RUNNING it, where a compiler must be in
+    /// the loop.
+    Lane,
+}
+
+impl Opcode {
+    /// Execute and lane share the ONE target worktree and are inherently
+    /// serial — the D15 block applies to both.
+    pub fn touches_worktree(self) -> bool {
+        matches!(self, Opcode::Execute | Opcode::Lane)
+    }
+}
+
+/// What an execute step does when it exhausts `retry_cap` (D20). Promotion is
+/// failure-driven only — there is no static complexity classifier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OnFail {
+    Lane,
 }
 
 fn default_max_tokens() -> u32 {
@@ -69,6 +94,12 @@ fn default_max_tokens() -> u32 {
 fn default_retry_cap() -> u8 {
     2
 }
+/// Enough turns for a real refactor-and-fix-forward pass; a wedged worker
+/// still dies at `request_timeout_s`.
+pub const DEFAULT_LANE_MAX_TURNS: u32 = 40;
+/// The reserved cc-fleet id that runs the local claude CLI on the user's own
+/// login — no provider row, no key material.
+pub const DEFAULT_LANE_PROVIDER: &str = "claude";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -88,7 +119,7 @@ pub struct Step {
     pub artifact: ArtifactKind,
     /// Prompt template path, relative to the program file's directory.
     pub template: Option<PathBuf>,
-    /// Prior step names, or `file:<repo-relative path>` literals.
+    /// Prior step names, or one of the `INPUT_PREFIXES` literals.
     #[serde(default)]
     pub inputs: Vec<String>,
     /// Shell commands; non-zero exit fails the attempt (generate) or the step (gate).
@@ -106,8 +137,26 @@ pub struct Step {
     pub samples: Option<u8>,
     /// Transport deadline for this step's model calls; falls back to the
     /// program-level `request_timeout_s`, then DEFAULT_REQUEST_TIMEOUT_S.
+    /// Lane steps reuse it as the worker's wall timeout.
     pub request_timeout_s: Option<u64>,
+    /// Lane (and a promoted execute): the cc-fleet provider positional.
+    pub provider: Option<String>,
+    /// Lane (and a promoted execute): cap on the worker's agentic turns.
+    pub max_turns: Option<u32>,
+    /// Execute only: the FIRST substantive failure (D20 — the model's picture
+    /// of the worktree is wrong) runs one lane attempt for the same step
+    /// instead of parking. Parse and transport failures still retry one-shot.
+    pub on_fail: Option<OnFail>,
+    /// The model that promoted lane attempt uses; falls back to `model`.
+    pub lane_model: Option<String>,
 }
+
+/// Input literals, as opposed to a prior step's name.
+/// `file:` pastes contents · `path:` pastes the PATH ONLY, for a worker that
+/// can open it itself · `anchor:` resolves a Rust item to its span ·
+/// `span:` takes explicit lines, which is the only way to reach text inside a
+/// raw string (an MSL or WGSL kernel body).
+pub const INPUT_PREFIXES: [&str; 4] = ["file:", "path:", "anchor:", "span:"];
 
 /// 30 min: a reasoning-tier model on a whole-file prompt legitimately thinks
 /// past 10 (observed: deepseek-v4-pro, 2026-07-30). A stuck call still dies.
@@ -140,10 +189,7 @@ impl Program {
                 return Err(format!("duplicate step name {:?}", step.name));
             }
             for input in step.inputs.iter().chain(&step.over) {
-                if !input.starts_with("file:")
-                    && !input.starts_with("anchor:")
-                    && !seen.contains(&input.as_str())
-                {
+                if !INPUT_PREFIXES.iter().any(|p| input.starts_with(p)) && !seen.contains(&input.as_str()) {
                     return Err(format!(
                         "step {:?} input {:?} names no earlier step (programs are linear)",
                         step.name, input
@@ -159,6 +205,20 @@ impl Program {
             }
             if step.samples.is_some() && step.opcode != Opcode::Sample {
                 return Err(format!("step {:?}: `samples` is sample-only", step.name));
+            }
+            if step.on_fail.is_some() && step.opcode != Opcode::Execute {
+                return Err(format!(
+                    "step {:?}: `on_fail` is execute-only — a lane has nothing to promote to",
+                    step.name
+                ));
+            }
+            if step.lane_model.is_some() && step.opcode != Opcode::Execute {
+                return Err(format!("step {:?}: `lane_model` is execute-only (a lane uses `model`)", step.name));
+            }
+            for (field, set) in [("provider", step.provider.is_some()), ("max_turns", step.max_turns.is_some())] {
+                if set && !step.opcode.touches_worktree() {
+                    return Err(format!("step {:?}: `{field}` is lane-only", step.name));
+                }
             }
             match step.opcode {
                 Opcode::Generate => {
@@ -176,20 +236,19 @@ impl Program {
                             step.name
                         ));
                     }
-                    match &self.target {
-                        None => {
-                            return Err(format!("execute step {:?} needs a [target] table", step.name));
-                        }
-                        Some(t) => {
-                            let by_path = t.path.is_some();
-                            let by_ring = t.label.is_some() && t.branch.is_some();
-                            if by_path == by_ring {
-                                return Err(
-                                    "[target] is exactly one of `path` OR `label`+`branch`".to_string()
-                                );
-                            }
-                        }
+                    self.validate_target(&step.name, "execute")?;
+                }
+                Opcode::Lane => {
+                    if step.template.is_none() {
+                        return Err(format!("lane step {:?} needs `template` (the worker's brief)", step.name));
                     }
+                    if step.gate.is_empty() {
+                        return Err(format!(
+                            "lane step {:?} has no gate — an ungated lane is unreviewable",
+                            step.name
+                        ));
+                    }
+                    self.validate_target(&step.name, "lane")?;
                 }
                 Opcode::Gate => {
                     if step.gate.is_empty() {
@@ -236,6 +295,20 @@ impl Program {
                 }
             }
             seen.push(&step.name);
+        }
+        Ok(())
+    }
+
+    /// Every worktree-touching opcode needs the one `[target]`, declared
+    /// exactly one way.
+    fn validate_target(&self, step: &str, opcode: &str) -> Result<(), String> {
+        let Some(t) = &self.target else {
+            return Err(format!("{opcode} step {step:?} needs a [target] table"));
+        };
+        let by_path = t.path.is_some();
+        let by_ring = t.label.is_some() && t.branch.is_some();
+        if by_path == by_ring {
+            return Err("[target] is exactly one of `path` OR `label`+`branch`".to_string());
         }
         Ok(())
     }

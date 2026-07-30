@@ -1,11 +1,19 @@
-//! `workflow run <program.toml> [--run-id <id>] [--mock <responses.jsonl>]`
+//! `workflow run <program.toml> [--run-id <id>] [--mock <responses.jsonl>] [--reopen]`
 //! `workflow check <program.toml>` — lint without spending a token (exit 1 on findings).
-//! `workflow cost <run-dir>` — token ledger from the transcript.
-//! `workflow unpark <run-dir> <step>` — clear a parked step so a rerun retries it.
+//! `workflow cost <run-dir>` — token and lane-dollar ledger from the transcript.
+//! `workflow unpark <run-dir> <step> --note <text>` — clear a parked step so a
+//! rerun retries it; the note is what you decided that makes the retry worth
+//! running, and it seeds the next attempt.
+//! `workflow abandon <run-dir> --reason <text>` — a run a human took over ends
+//! resumed or abandoned, never neither; `run --reopen` lifts it.
 //! `workflow watch <run-dir>` — live dashboard over status.json, token-free.
 //! Exit codes (WORKFLOW_RUNTIME_DESIGN.md section 3, Design body):
 //! 0 done · 10 escalated · 20 parked-and-blocked · 2 error · 1 check findings.
 //! Without --mock, the live proxy transport is used (D4).
+//!
+//! `ledger.jsonl` is the decision trail: the run dir recorded every stop but
+//! never the thinking, so a resumed run started from a stale status line
+//! instead of the decision that unblocked it.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -28,17 +36,32 @@ fn real_main() -> Result<ExitCode, String> {
     let mut program_path: Option<PathBuf> = None;
     let mut run_id: Option<String> = None;
     let mut mock: Option<PathBuf> = None;
+    let mut reopen = false;
     let mut i = 0;
     match args.first().map(String::as_str) {
         Some("run") => {}
         Some("unpark") => {
-            let [_, run_dir, step] = args.as_slice() else {
-                return Err("usage: workflow unpark <run-dir> <step>".into());
+            let [_, run_dir, step, flag, note] = args.as_slice() else {
+                return Err("usage: workflow unpark <run-dir> <step> --note <text>".into());
             };
-            workflow_runtime::runner::unpark(std::path::Path::new(run_dir), step)?;
+            if flag != "--note" {
+                return Err("usage: workflow unpark <run-dir> <step> --note <text>".into());
+            }
+            workflow_runtime::runner::unpark(std::path::Path::new(run_dir), step, note)?;
             println!(
-                "unparked {step:?} — rerun the program to retry it; the recorded park reason seeds the first attempt (a rerun is a new sample)"
+                "unparked {step:?} — rerun the program to retry it; the park reason and your note seed the first attempt (a rerun is a new sample)"
             );
+            return Ok(ExitCode::SUCCESS);
+        }
+        Some("abandon") => {
+            let [_, run_dir, flag, reason] = args.as_slice() else {
+                return Err("usage: workflow abandon <run-dir> --reason <text>".into());
+            };
+            if flag != "--reason" {
+                return Err("usage: workflow abandon <run-dir> --reason <text>".into());
+            }
+            workflow_runtime::runner::abandon(std::path::Path::new(run_dir), reason)?;
+            println!("abandoned — `workflow run ... --reopen` is the only way back");
             return Ok(ExitCode::SUCCESS);
         }
         Some("check") => {
@@ -76,7 +99,7 @@ fn real_main() -> Result<ExitCode, String> {
             return Ok(ExitCode::SUCCESS);
         }
         _ => {
-            return Err("usage: workflow run <program.toml> [--run-id <id>] [--mock <responses.jsonl>] | workflow check <program.toml> | workflow cost <run-dir> | workflow unpark <run-dir> <step> | workflow watch <run-dir>".into());
+            return Err("usage: workflow run <program.toml> [--run-id <id>] [--mock <responses.jsonl>] [--reopen] | workflow check <program.toml> | workflow cost <run-dir> | workflow unpark <run-dir> <step> --note <text> | workflow abandon <run-dir> --reason <text> | workflow watch <run-dir>".into());
         }
     }
     i += 1;
@@ -90,6 +113,7 @@ fn real_main() -> Result<ExitCode, String> {
                 i += 1;
                 mock = Some(PathBuf::from(args.get(i).ok_or("--mock needs a value")?));
             }
+            "--reopen" => reopen = true,
             other if program_path.is_none() => program_path = Some(PathBuf::from(other)),
             other => return Err(format!("unexpected argument {other:?}")),
         }
@@ -116,6 +140,12 @@ fn real_main() -> Result<ExitCode, String> {
     let run_dir = repo_root
         .join(".claude/orchestration/runs")
         .join(run_id.unwrap_or(program.name));
+
+    // Reopening is a decision, so it goes on the trail before anything runs.
+    if reopen && run_dir.join("abandoned.json").exists() {
+        workflow_runtime::runner::reopen(&run_dir)?;
+        println!("reopened {} — the abandonment is lifted and on the ledger", run_dir.display());
+    }
 
     let cfg = RunConfig { program_path, run_dir: run_dir.clone(), repo_root };
     match run(&cfg, transport.as_ref())? {
@@ -330,6 +360,26 @@ fn watch_frame(run_dir: &std::path::Path) -> String {
                 commas(st.tokens_spent),
                 commas(st.token_budget)
             );
+            // Lanes bill dollars. Its own bar, because the token bar can sit
+            // green while the expensive worker is the thing running away.
+            if st.usd_budget > 0.0 {
+                let upct = (st.usd_spent * 100.0 / st.usd_budget) as u64;
+                let uc = if upct >= 90 {
+                    red
+                } else if upct >= 70 {
+                    yellow
+                } else {
+                    green
+                };
+                _ = writeln!(
+                    f,
+                    "{}{dim}{} {uc}{upct:>3}%{off}  ${:.2}{dim} of ${:.2}{off}",
+                    label("lane $"),
+                    bar((st.usd_spent * 100.0) as u64, (st.usd_budget * 100.0) as u64, 12),
+                    st.usd_spent,
+                    st.usd_budget
+                );
+            }
             if !st.last_error.is_empty() {
                 _ = writeln!(f, "\n{red}{bold}last error{off}");
                 for line in wrap(&st.last_error, w, "  ") {
@@ -360,16 +410,35 @@ fn watch_frame(run_dir: &std::path::Path) -> String {
         }
     }
 
-    // ── ledger: where the tokens went ──
+    // ── cost: where the tokens went ──
     if let Ok(l) = workflow_runtime::cost::ledger(run_dir) {
         _ = writeln!(f, "\n{dim}{:<30}{:>9}{:>12}{off}", "step", "requests", "tokens");
-        for (step, (requests, tokens)) in &l.by_step {
-            _ = writeln!(f, "{step:<30}{requests:>9}{:>12}", commas(*tokens));
+        for (step, s) in &l.by_step {
+            _ = writeln!(f, "{step:<30}{:>9}{:>12}", s.requests, commas(s.tokens));
         }
         for (model, tokens) in &l.by_model {
             _ = writeln!(f, "{dim}{model:<39}{:>12}{off}", commas(*tokens));
         }
         _ = writeln!(f, "{bold}{:<39}{:>12}{off}", "TOTAL", commas(l.total));
+        if l.usd_total > 0.0 {
+            _ = writeln!(f, "{bold}{:<39}{:>12}{off}", "LANE SPEND", format!("${:.4}", l.usd_total));
+        }
+    }
+
+    // ── decision trail: why the run stopped and started again ──
+    let trail = workflow_runtime::ledger::read(run_dir);
+    if !trail.is_empty() {
+        _ = writeln!(f, "\n{dim}decisions{off}");
+        for e in trail.iter().rev().take(5).rev() {
+            let step = e.step.as_deref().map(|s| format!(" {s}")).unwrap_or_default();
+            _ = writeln!(f, "  {bold}{}{off}{dim}{step}{off}", e.kind);
+            // The note is the human's reasoning — the point of the trail.
+            for text in e.note.iter().chain(e.detail.iter().filter(|_| e.note.is_none())) {
+                for line in wrap(&text.chars().take(200).collect::<String>(), w, "    ") {
+                    _ = writeln!(f, "{dim}{line}{off}");
+                }
+            }
+        }
     }
     f
 }

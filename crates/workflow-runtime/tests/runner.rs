@@ -1,11 +1,13 @@
 //! P1 gates (WORKFLOW_RUNTIME_DESIGN.md section 5, Phasing): retry cap, resume,
 //! escalate, transcript completeness, park-vs-block — against the mock seam.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Mutex;
 
-use workflow_runtime::runner::{Outcome, RunConfig, run};
+use workflow_runtime::lane::{LaneOutcome, LaneRequest, LaneWorker};
+use workflow_runtime::runner::{Outcome, RunConfig, run, run_with};
 use workflow_runtime::transport::MockTransport;
 
 struct Fixture {
@@ -251,7 +253,7 @@ fn unpark_lets_a_rerun_retry() {
     fs::write(fx.root.join("flag"), "x").unwrap(); // fix the environment
     assert_eq!(run(&fx.cfg(), &mock).unwrap(), Outcome::Done); // still parked: skipped
     assert!(fx.root.join("run/parked.jsonl").exists());
-    workflow_runtime::runner::unpark(&fx.root.join("run"), "g").unwrap();
+    workflow_runtime::runner::unpark(&fx.root.join("run"), "g", "the flag file exists now").unwrap();
     assert_eq!(run(&fx.cfg(), &mock).unwrap(), Outcome::Done);
     assert!(fx.root.join("run/step-00-g.json").exists(), "gate retried and passed");
 }
@@ -883,7 +885,7 @@ fn unpark_gate_still_red_feeds_the_fresh_report_not_the_stale_seed() {
     assert_eq!(run(&fx.cfg(), &MockTransport::new(vec![bad.into()])).unwrap(), Outcome::Done);
     assert!(fx.root.join("run/parked.jsonl").exists());
 
-    workflow_runtime::runner::unpark(&fx.root.join("run"), "rename").unwrap();
+    workflow_runtime::runner::unpark(&fx.root.join("run"), "rename", "quote the file exactly this time").unwrap();
     let right = r#"{"edits": [{"path": "lib.rs", "find": "fn old_name()", "replace": "fn new_name()"}], "commit_message": "fixed"}"#;
     let mock = MockTransport::new(vec![right.into()]);
     assert_eq!(run(&fx.cfg(), &mock).unwrap(), Outcome::Done);
@@ -931,7 +933,7 @@ fn unpark_gate_already_green_completes_with_zero_model_calls() {
         .output()
         .unwrap();
 
-    workflow_runtime::runner::unpark(&fx.root.join("run"), "rename").unwrap();
+    workflow_runtime::runner::unpark(&fx.root.join("run"), "rename", "quote the file exactly this time").unwrap();
     // Zero-length mock: any model call at all is a hard failure.
     let mock = MockTransport::new(vec![]);
     assert_eq!(run(&fx.cfg(), &mock).unwrap(), Outcome::Done);
@@ -940,6 +942,490 @@ fn unpark_gate_already_green_completes_with_zero_model_calls() {
 
     let state = fs::read_to_string(fx.root.join("run/step-00-rename.json")).unwrap();
     assert!(state.contains("already_complete"), "{state}");
+}
+
+// ── P4: lane opcode, promote-on-first-substantive-failure, USD cap, ledger ──
+
+fn git(dir: &std::path::Path, args: &[&str]) {
+    let ok = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .unwrap()
+        .status
+        .success();
+    assert!(ok, "git {args:?} failed");
+}
+
+/// What a fake lane does before it answers. The live worker is an agent
+/// session; a test must never launch one, so the seam takes a double.
+enum LaneAction {
+    /// Write `path` and COMMIT it — a lane commits its own work by doctrine,
+    /// so this is the well-behaved shape.
+    Commit(&'static str, &'static str),
+    /// Write without committing: a protocol violation the runtime must park.
+    LeaveDirty(&'static str, &'static str),
+    /// Answer having touched nothing: HEAD unmoved, the lane's empty ChangeSet.
+    NoChange,
+    /// The worker itself failed (timeout, budget cap, unknown provider).
+    Fail(&'static str),
+}
+
+struct FakeLane {
+    actions: Mutex<VecDeque<LaneAction>>,
+    launches: Mutex<u32>,
+    prompts: Mutex<Vec<String>>,
+}
+
+impl FakeLane {
+    fn new(actions: Vec<LaneAction>) -> FakeLane {
+        FakeLane { actions: Mutex::new(actions.into()), launches: Mutex::new(0), prompts: Mutex::new(Vec::new()) }
+    }
+    fn launches(&self) -> u32 {
+        *self.launches.lock().unwrap()
+    }
+    fn prompt(&self, i: usize) -> String {
+        self.prompts.lock().unwrap()[i].clone()
+    }
+}
+
+impl LaneWorker for FakeLane {
+    fn run(&self, req: &LaneRequest) -> Result<LaneOutcome, String> {
+        self.prompts.lock().unwrap().push(req.prompt.clone());
+        *self.launches.lock().unwrap() += 1;
+        let action = self.actions.lock().unwrap().pop_front();
+        let Some(action) = action else {
+            return Err("fake lane exhausted — an unexpected launch".to_string());
+        };
+        let envelope = serde_json::json!({"ok": true, "result": "did the work", "total_cost_usd": 0.25});
+        let ok = |e: serde_json::Value| Ok(LaneOutcome { ok: true, envelope: e, usd: 0.25, error: String::new() });
+        match action {
+            LaneAction::Commit(path, content) => {
+                fs::write(req.worktree.join(path), content).unwrap();
+                git(&req.worktree, &["add", "--", path]);
+                git(&req.worktree, &["commit", "-q", "-m", "lane work", "--", path]);
+                ok(envelope)
+            }
+            LaneAction::LeaveDirty(path, content) => {
+                fs::write(req.worktree.join(path), content).unwrap();
+                ok(envelope)
+            }
+            LaneAction::NoChange => ok(envelope),
+            LaneAction::Fail(msg) => Ok(LaneOutcome {
+                ok: false,
+                envelope: serde_json::json!({"ok": false, "error_code": "SUBAGENT_FAILED", "error_msg": msg}),
+                usd: 0.1,
+                error: format!("lane worker failed: {msg}"),
+            }),
+        }
+    }
+}
+
+/// The renamed file the gate wants, and a version that still fails it.
+const RENAMED: &str = "fn new_name() {}\nfn keep() {}\n";
+const STILL_WRONG: &str = "fn old_name() {}\nfn kept() {}\n";
+
+fn lane_program(target: &std::path::Path, retry_cap: u8) -> String {
+    format!(
+        r#"
+name = "lane"
+[target]
+path = "{}"
+[[step]]
+name = "rename"
+title = "Rename old_name to new_name"
+opcode = "lane"
+model = "sonnet"
+retry_cap = {retry_cap}
+template = "brief.md"
+inputs = ["path:lib.rs"]
+gate = ["grep -q new_name lib.rs", "! grep -q old_name lib.rs"]
+"#,
+        target.display()
+    )
+}
+
+fn lane_fixture(name: &str, retry_cap: u8) -> (Fixture, PathBuf) {
+    let fx = Fixture::new(name, "name = \"placeholder\"\n[[step]]\nname=\"x\"\nopcode=\"gate\"\ngate=[\"true\"]", &[]);
+    let target = init_target_repo(&fx);
+    fs::write(fx.root.join("programs/program.toml"), lane_program(&target, retry_cap)).unwrap();
+    fs::write(fx.root.join("programs/brief.md"), "rename old_name to new_name in {{path:lib.rs}}").unwrap();
+    (fx, target)
+}
+
+#[test]
+fn lane_commits_its_own_work_and_the_head_delta_is_the_oracle() {
+    let (fx, target) = lane_fixture("lane-ok", 2);
+    let before = head(&target);
+    let lane = FakeLane::new(vec![LaneAction::Commit("lib.rs", RENAMED)]);
+    assert_eq!(run_with(&fx.cfg(), &MockTransport::new(vec![]), &lane).unwrap(), Outcome::Done);
+    assert_eq!(lane.launches(), 1);
+    assert!(!fx.root.join("run/parked.jsonl").exists(), "the gate must actually pass");
+    assert_ne!(head(&target), before, "the lane's own commit is the work");
+
+    let state = fs::read_to_string(fx.root.join("run/step-00-rename.json")).unwrap();
+    assert!(state.contains("did the work"), "the raw envelope is recorded: {state}");
+    assert!(state.contains("lib.rs"), "the files come from the sha delta: {state}");
+    // The brief named the file by PATH — it must not have pasted the contents.
+    assert!(lane.prompt(0).contains("lib.rs"), "{}", lane.prompt(0));
+    assert!(!lane.prompt(0).contains("fn old_name"), "path: pastes the path, never the file: {}", lane.prompt(0));
+
+    let cost = workflow_runtime::cost::summarize(&fx.root.join("run")).unwrap();
+    assert!(cost.contains("TOTAL 0 tokens") && cost.contains("$0.2500 lane spend"), "{cost}");
+}
+
+#[test]
+fn lane_red_gate_feeds_back_then_green_on_retry() {
+    let (fx, _t) = lane_fixture("lane-retry", 2);
+    let lane =
+        FakeLane::new(vec![LaneAction::Commit("lib.rs", STILL_WRONG), LaneAction::Commit("lib.rs", RENAMED)]);
+    assert_eq!(run_with(&fx.cfg(), &MockTransport::new(vec![]), &lane).unwrap(), Outcome::Done);
+    assert_eq!(lane.launches(), 2);
+    assert!(lane.prompt(1).contains("the gate is red"), "{}", lane.prompt(1));
+    assert!(!fx.root.join("run/parked.jsonl").exists());
+}
+
+#[test]
+fn lane_leaving_the_worktree_dirty_parks_instead_of_committing_for_it() {
+    let (fx, target) = lane_fixture("lane-dirty", 0);
+    let before = head(&target);
+    // The work is correct but uncommitted. Auto-committing it would be
+    // `add -A` in disguise; the runtime must refuse and say so.
+    let lane = FakeLane::new(vec![LaneAction::LeaveDirty("lib.rs", RENAMED)]);
+    assert_eq!(run_with(&fx.cfg(), &MockTransport::new(vec![]), &lane).unwrap(), Outcome::Done);
+    let parked = fs::read_to_string(fx.root.join("run/parked.jsonl")).unwrap();
+    assert!(parked.contains("uncommitted worktree") && parked.contains("lib.rs"), "{parked}");
+    assert_eq!(head(&target), before, "the runtime must not commit on the lane's behalf");
+}
+
+#[test]
+fn lane_same_head_is_a_non_attempt_and_the_cap_parks_with_the_gate_report() {
+    let (fx, _t) = lane_fixture("lane-nochange", 2);
+    // Attempt 1 commits real work and the gate goes red; 2 and 3 do nothing.
+    let lane = FakeLane::new(vec![
+        LaneAction::Commit("lib.rs", STILL_WRONG),
+        LaneAction::NoChange,
+        LaneAction::NoChange,
+    ]);
+    assert_eq!(run_with(&fx.cfg(), &MockTransport::new(vec![]), &lane).unwrap(), Outcome::Done);
+    assert_eq!(lane.launches(), 3, "a no-change run still costs an attempt");
+
+    let parked = fs::read_to_string(fx.root.join("run/parked.jsonl")).unwrap();
+    assert!(parked.contains("gate is red"), "the informative error survives: {parked}");
+    assert!(parked.contains("\"gate_report\""), "{parked}");
+    let last = lane.prompt(2);
+    assert!(last.contains("left the worktree completely unchanged"), "{last}");
+    assert!(last.contains("the gate is red"), "the real error stays in front of it: {last}");
+}
+
+#[test]
+fn parked_lane_blocks_a_later_execute() {
+    // D15 widened: they share the one worktree, so a parked lane must stop a
+    // later execute from building on a broken tree (exit 20).
+    let fx = Fixture::new("lane-blocks", "name = \"placeholder\"\n[[step]]\nname=\"x\"\nopcode=\"gate\"\ngate=[\"true\"]", &[]);
+    let target = init_target_repo(&fx);
+    let program = format!(
+        r#"
+name = "lane-blocks"
+[target]
+path = "{}"
+[[step]]
+name = "first"
+opcode = "lane"
+model = "sonnet"
+retry_cap = 0
+template = "brief.md"
+inputs = ["path:lib.rs"]
+gate = ["grep -q new_name lib.rs"]
+
+[[step]]
+name = "second"
+opcode = "execute"
+model = "mock"
+retry_cap = 0
+template = "brief.md"
+inputs = ["path:lib.rs"]
+gate = ["true"]
+"#,
+        target.display()
+    );
+    fs::write(fx.root.join("programs/program.toml"), program).unwrap();
+    fs::write(fx.root.join("programs/brief.md"), "edit {{path:lib.rs}}").unwrap();
+    let lane = FakeLane::new(vec![LaneAction::NoChange]);
+    let mock = MockTransport::new(vec!["never requested".into()]);
+    let outcome = run_with(&fx.cfg(), &mock, &lane).unwrap();
+    let Outcome::Blocked(reason) = outcome else { panic!("expected blocked, got {outcome:?}") };
+    assert!(reason.contains("\"second\"") && reason.contains("\"first\""), "{reason}");
+    assert_eq!(mock.requests_served(), 0, "the execute must never call the model");
+}
+
+fn head(target: &std::path::Path) -> String {
+    let out = std::process::Command::new("git")
+        .args(["-C", target.to_str().unwrap(), "rev-parse", "HEAD"])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+fn promote_program(target: &std::path::Path, retry_cap: u8, usd_budget: &str) -> String {
+    format!(
+        r#"
+name = "promote"
+{usd_budget}
+[target]
+path = "{}"
+[[step]]
+name = "rename"
+title = "Rename old_name to new_name"
+opcode = "execute"
+model = "mock"
+lane_model = "sonnet"
+on_fail = "lane"
+retry_cap = {retry_cap}
+template = "brief.md"
+inputs = ["file:lib.rs"]
+gate = ["grep -q new_name lib.rs", "! grep -q old_name lib.rs"]
+"#,
+        target.display()
+    )
+}
+
+fn promote_fixture(name: &str, retry_cap: u8, usd_budget: &str) -> (Fixture, PathBuf) {
+    let fx = Fixture::new(name, "name = \"placeholder\"\n[[step]]\nname=\"x\"\nopcode=\"gate\"\ngate=[\"true\"]", &[]);
+    let target = init_target_repo(&fx);
+    fs::write(fx.root.join("programs/program.toml"), promote_program(&target, retry_cap, usd_budget)).unwrap();
+    fs::write(fx.root.join("programs/brief.md"), "rename old_name to new_name in:\n{{file:lib.rs}}").unwrap();
+    (fx, target)
+}
+
+/// A ChangeSet that commits cleanly but leaves the gate red.
+const WRONG_EDIT: &str =
+    r#"{"edits": [{"path": "lib.rs", "find": "fn keep()", "replace": "fn kept()"}]}"#;
+/// A `find` the model invented — nothing is applied, nothing is committed.
+const FIND_MISS: &str =
+    r#"{"edits": [{"path": "lib.rs", "find": "fn misquoted()", "replace": "x"}]}"#;
+const EMPTY: &str = r#"{"edits": [], "writes": []}"#;
+/// A whole-file rewrite of a file that already exists — lane work now.
+const REWRITE: &str = r#"{"writes": [{"path": "lib.rs", "content": "fn new_name() {}\n"}]}"#;
+
+#[test]
+fn every_substantive_failure_promotes_on_the_first_attempt() {
+    // Four kinds, four runs: each must hand over after exactly ONE model call.
+    for (name, response, needle) in [
+        ("gate-red", WRONG_EDIT, "gate is red"),
+        ("find-miss", FIND_MISS, "not in the file"),
+        ("empty", EMPTY, "no edits and no writes"),
+        ("rewrite", REWRITE, "NEW files only"),
+    ] {
+        let (fx, _t) = promote_fixture(&format!("promote-{name}"), 2, "");
+        let mock = MockTransport::new(vec![response.into(), "second call must never happen".into()]);
+        let lane = FakeLane::new(vec![LaneAction::Commit("lib.rs", RENAMED)]);
+        assert_eq!(run_with(&fx.cfg(), &mock, &lane).unwrap(), Outcome::Done, "{name}");
+        assert_eq!(mock.requests_served(), 1, "{name}: retry_cap is 2, but one substantive failure hands over");
+        assert_eq!(lane.launches(), 1, "{name}");
+        assert!(lane.prompt(0).contains(needle), "{name}: the lane gets the typed failure: {}", lane.prompt(0));
+
+        let state = fs::read_to_string(fx.root.join("run/step-00-rename.json")).unwrap();
+        assert!(state.contains("\"promoted\": true"), "{name}: {state}");
+        let trail = fs::read_to_string(fx.root.join("run/ledger.jsonl")).unwrap();
+        assert!(trail.contains("\"promote\""), "{name}: {trail}");
+    }
+}
+
+#[test]
+fn a_promotion_after_a_commit_tells_the_lane_the_work_stands() {
+    let (fx, target) = promote_fixture("promote-sha", 2, "");
+    let base = head(&target);
+    let mock = MockTransport::new(vec![WRONG_EDIT.into()]);
+    let lane = FakeLane::new(vec![LaneAction::Commit("lib.rs", RENAMED)]);
+    assert_eq!(run_with(&fx.cfg(), &mock, &lane).unwrap(), Outcome::Done);
+
+    // The one-shot's commit sha, verbatim, plus D19's fix-forward framing —
+    // without it a lane reverts or redoes real work.
+    let one_shot_sha = head_before_lane(&target, &base);
+    let prompt = lane.prompt(0);
+    assert!(prompt.contains(&one_shot_sha), "the committed sha must be named: {prompt}");
+    assert!(prompt.contains("That work STANDS"), "{prompt}");
+    assert!(prompt.contains("Fix forward"), "{prompt}");
+}
+
+/// The first commit after `base` — the one-shot attempt's own.
+fn head_before_lane(target: &std::path::Path, base: &str) -> String {
+    let out = std::process::Command::new("git")
+        .args(["-C", target.to_str().unwrap(), "rev-list", "--reverse", &format!("{base}..HEAD")])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).lines().next().unwrap().to_string()
+}
+
+#[test]
+fn parse_and_transport_failures_retry_one_shot_and_never_promote() {
+    let (fx, _t) = promote_fixture("promote-parse", 2, "");
+    // Two parse failures then a good ChangeSet: no lane, all three one-shot.
+    let good = r#"{"edits": [{"path": "lib.rs", "find": "fn old_name()", "replace": "fn new_name()"}]}"#;
+    let mock = MockTransport::new(vec!["not json".into(), "still not json".into(), good.into()]);
+    let lane = FakeLane::new(vec![]);
+    assert_eq!(run_with(&fx.cfg(), &mock, &lane).unwrap(), Outcome::Done);
+    assert_eq!(mock.requests_served(), 3, "parse errors are cheap and self-correcting");
+    assert_eq!(lane.launches(), 0, "a parse error is not evidence the model misread the file");
+}
+
+#[test]
+fn transport_failures_have_their_own_counter() {
+    // retry_cap = 0 is ONE model attempt. An exhausted mock is a transport
+    // error every time, and those must not consume it — run 1 lost two of
+    // three attempts to proxy timeouts at zero tokens.
+    let (fx, _t) = promote_fixture("promote-transport", 0, "");
+    let mock = MockTransport::new(vec![]);
+    let lane = FakeLane::new(vec![]);
+    assert_eq!(run_with(&fx.cfg(), &mock, &lane).unwrap(), Outcome::Done);
+    assert_eq!(fx.transcript_lines(), 3, "the transport counter, not retry_cap, bounds this");
+    assert_eq!(lane.launches(), 0, "a dead proxy is not substantive");
+    let parked = fs::read_to_string(fx.root.join("run/parked.jsonl")).unwrap();
+    assert!(parked.contains("3 transport failures"), "{parked}");
+}
+
+#[test]
+fn the_park_record_keeps_the_ranked_best_failure_not_the_last_one() {
+    // No on_fail here: this is the plain retry ladder. A red gate over
+    // committed work outranks the find-miss that follows it, so run 2's most
+    // valuable report is not overwritten by a weaker later failure.
+    let fx = Fixture::new("rank", "name = \"placeholder\"\n[[step]]\nname=\"x\"\nopcode=\"gate\"\ngate=[\"true\"]", &[]);
+    let target = init_target_repo(&fx);
+    fs::write(fx.root.join("programs/program.toml"), execute_program(&target, 2)).unwrap();
+    fs::write(fx.root.join("programs/brief.md"), "rename old_name to new_name in:\n{{file:lib.rs}}").unwrap();
+    let mock = MockTransport::new(vec![WRONG_EDIT.into(), FIND_MISS.into(), FIND_MISS.into()]);
+    assert_eq!(run(&fx.cfg(), &mock).unwrap(), Outcome::Done);
+    assert_eq!(mock.requests_served(), 3);
+
+    let parked = fs::read_to_string(fx.root.join("run/parked.jsonl")).unwrap();
+    assert!(parked.contains("gate is red"), "the red gate must survive: {parked}");
+    assert!(parked.contains("\"gate_report\""), "{parked}");
+}
+
+#[test]
+fn a_write_to_a_new_path_still_succeeds_one_shot() {
+    let fx = Fixture::new("newfile", "name = \"placeholder\"\n[[step]]\nname=\"x\"\nopcode=\"gate\"\ngate=[\"true\"]", &[]);
+    let target = init_target_repo(&fx);
+    let program = execute_program(&target, 0).replace(
+        r#"gate = ["grep -q new_name lib.rs", "! grep -q old_name lib.rs"]"#,
+        r#"gate = ["test -f added.rs"]"#,
+    );
+    fs::write(fx.root.join("programs/program.toml"), program).unwrap();
+    fs::write(fx.root.join("programs/brief.md"), "add a file next to:\n{{file:lib.rs}}").unwrap();
+    let new_file = r#"{"writes": [{"path": "added.rs", "content": "fn added() {}\n"}]}"#;
+    assert_eq!(run(&fx.cfg(), &MockTransport::new(vec![new_file.into()])).unwrap(), Outcome::Done);
+    assert!(!fx.root.join("run/parked.jsonl").exists(), "new-file writes are still one-shot work");
+    assert!(target.join("added.rs").is_file());
+}
+
+#[test]
+fn both_tiers_failing_parks_with_a_reason_naming_each() {
+    let (fx, _t) = promote_fixture("promote-park", 2, "");
+    let mock = MockTransport::new(vec![WRONG_EDIT.into()]);
+    let lane = FakeLane::new(vec![LaneAction::Fail("worker hit its budget cap")]);
+    assert_eq!(run_with(&fx.cfg(), &mock, &lane).unwrap(), Outcome::Done);
+
+    let parked = fs::read_to_string(fx.root.join("run/parked.jsonl")).unwrap();
+    assert!(parked.contains("one-shot execute failed (GateRed)"), "{parked}");
+    assert!(parked.contains("the promoted lane then failed"), "{parked}");
+    assert!(parked.contains("budget cap"), "{parked}");
+}
+
+#[test]
+fn the_usd_budget_blocks_a_lane_launch_and_that_park_never_promotes() {
+    // A tokens-only guard shows a healthy green bar while lanes spend dollars.
+    let (fx, _t) = promote_fixture("promote-broke", 2, "usd_budget = 0.0");
+    let mock = MockTransport::new(vec![WRONG_EDIT.into()]);
+    let lane = FakeLane::new(vec![LaneAction::Commit("lib.rs", RENAMED)]);
+    assert_eq!(run_with(&fx.cfg(), &mock, &lane).unwrap(), Outcome::Done);
+    assert_eq!(lane.launches(), 0, "no dollars, no launch");
+    let parked = fs::read_to_string(fx.root.join("run/parked.jsonl")).unwrap();
+    assert!(parked.contains("lane budget exhausted"), "{parked}");
+}
+
+#[test]
+fn span_input_extracts_the_named_lines_including_inside_a_raw_string() {
+    let fx = Fixture::new(
+        "span",
+        "name = \"sp\"\n[[step]]\nname = \"read\"\nopcode = \"generate\"\nmodel = \"mock\"\ntemplate = \"t.md\"\ninputs = [\"span:kernel.rs:3-4\"]\n",
+        &[("t.md", "explain:\n{{span:kernel.rs:3-4}}")],
+    );
+    // The target line lives inside a raw string, where `anchor:`'s Rust-item
+    // matching cannot reach — the exact case that forced a 178K-char godfile
+    // into every call of the P3 step that failed.
+    fs::write(
+        fx.root.join("kernel.rs"),
+        "const SHADER: &str = r#\"\nkernel void go() {\n  const uint RT_GI_MAX_BOUNCES = 1u;\n  do_work();\n}\n\"#;\n",
+    )
+    .unwrap();
+    assert_eq!(run(&fx.cfg(), &MockTransport::new(vec!["ok".into()])).unwrap(), Outcome::Done);
+    let transcript = fs::read_to_string(fx.root.join("run/transcript.jsonl")).unwrap();
+    assert!(transcript.contains("RT_GI_MAX_BOUNCES"), "{transcript}");
+    assert!(transcript.contains("kernel.rs:3-4"), "provenance line: {transcript}");
+    assert!(!transcript.contains("const SHADER"), "only the named lines: {transcript}");
+
+    // A range past the end of the file is a loud check finding, not a guess.
+    assert!(workflow_runtime::locate::span(&fx.root, "kernel.rs:1-999").unwrap_err().contains("6 lines"));
+}
+
+#[test]
+fn transform_failure_reason_carries_stdout() {
+    // Probe scripts print their RULING on stdout and exit non-zero. Dropping
+    // it made the most valuable park of the P3 shakedown unreadable.
+    let program = TRANSFORM.replace("tr 'a-z' 'A-Z'", "echo RULING delta=0.4 threshold=0.1; exit 1");
+    let fx = Fixture::new("transform-stdout", &program, &[("draft.md", "go"), ("pass.md", "{{draft}}")]);
+    assert_eq!(run(&fx.cfg(), &MockTransport::new(vec!["hello".into()])).unwrap(), Outcome::Done);
+    let parked = fs::read_to_string(fx.root.join("run/parked.jsonl")).unwrap();
+    assert!(parked.contains("RULING delta=0.4"), "the ruling must be in the park reason: {parked}");
+}
+
+#[test]
+fn abandon_blocks_a_rerun_and_reopen_clears_it() {
+    let fx = Fixture::new("abandon", ONE_STEP, &[("draft.md", "write a haiku")]);
+    let run_dir = fx.root.join("run");
+    assert_eq!(run(&fx.cfg(), &MockTransport::new(vec!["haiku text".into()])).unwrap(), Outcome::Done);
+
+    workflow_runtime::runner::abandon(&run_dir, "Peter took this over by hand").unwrap();
+    assert_eq!(workflow_runtime::status::read(&run_dir).unwrap().state, "abandoned");
+
+    let err = run(&fx.cfg(), &MockTransport::new(vec![])).unwrap_err();
+    assert!(err.contains("took this over by hand") && err.contains("--reopen"), "{err}");
+
+    workflow_runtime::runner::reopen(&run_dir).unwrap();
+    assert_eq!(run(&fx.cfg(), &MockTransport::new(vec![])).unwrap(), Outcome::Done);
+    let trail = fs::read_to_string(run_dir.join("ledger.jsonl")).unwrap();
+    assert!(trail.contains("\"abandon\"") && trail.contains("\"reopen\""), "{trail}");
+}
+
+#[test]
+fn unpark_requires_a_note_and_the_note_reaches_the_prompt_after_the_gate_report() {
+    let fx = Fixture::new("unpark-note", "name = \"placeholder\"\n[[step]]\nname=\"x\"\nopcode=\"gate\"\ngate=[\"true\"]", &[]);
+    let target = init_target_repo(&fx);
+    fs::write(fx.root.join("programs/program.toml"), execute_program(&target, 0)).unwrap();
+    fs::write(fx.root.join("programs/brief.md"), "rename old_name to new_name in:\n{{file:lib.rs}}").unwrap();
+    let run_dir = fx.root.join("run");
+
+    assert_eq!(run(&fx.cfg(), &MockTransport::new(vec![FIND_MISS.into()])).unwrap(), Outcome::Done);
+    let err = workflow_runtime::runner::unpark(&run_dir, "rename", "   ").unwrap_err();
+    assert!(err.contains("--note"), "an unpark without reasoning is not a decision: {err}");
+
+    let note = "the find text was invented; quote lib.rs verbatim this time";
+    workflow_runtime::runner::unpark(&run_dir, "rename", note).unwrap();
+    assert!(fs::read_to_string(run_dir.join("ledger.jsonl")).unwrap().contains(note));
+
+    let right = r#"{"edits": [{"path": "lib.rs", "find": "fn old_name()", "replace": "fn new_name()"}]}"#;
+    assert_eq!(run(&fx.cfg(), &MockTransport::new(vec![right.into()])).unwrap(), Outcome::Done);
+    let transcript = fs::read_to_string(run_dir.join("transcript.jsonl")).unwrap();
+    let last = transcript.lines().last().unwrap();
+    // The seed text reaches a model on no path under D19, so the ruling is its
+    // own field — and it lands AFTER the fresh gate report.
+    let gate_at = last.find("The gate is currently red").expect("fresh report");
+    let note_at = last.find("The human who unparked this step ruled").expect("the ruling");
+    assert!(gate_at < note_at, "the ruling comes after the fresh report: {last}");
+    assert!(last.contains("quote lib.rs verbatim"), "{last}");
+    assert!(!last.contains("fn misquoted"), "the stale seed still goes: {last}");
 }
 
 #[test]

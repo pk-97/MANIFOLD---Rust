@@ -11,10 +11,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::artifacts::{Artifact, ArtifactKind, ChangeSet, Verdict};
+use crate::artifacts::{Artifact, ArtifactKind, ChangeSet, FailureKind, Verdict};
 use crate::gates::{run_gates, run_gates_env, run_transform};
+use crate::lane::{CcFleetLane, LaneOutcome, LaneRequest, LaneWorker};
+use crate::ledger;
 use crate::locate;
-use crate::program::{Opcode, Program, Step, Target};
+use crate::program::{OnFail, Opcode, Program, Step, Target};
 use crate::scrub;
 use crate::template;
 use crate::transport::{CompletionRequest, CompletionResponse, ModelTransport, TransportError};
@@ -122,9 +124,62 @@ fn check_program_unchanged(cfg: &RunConfig, current: &Program) -> Result<(), Str
     Ok(())
 }
 
+/// The live entry point: real API transport, real cc-fleet lane worker.
 pub fn run(cfg: &RunConfig, transport: &dyn ModelTransport) -> Result<Outcome, String> {
+    run_with(cfg, transport, &CcFleetLane)
+}
+
+/// A run a human took over ends resumed or abandoned, never neither: a stale
+/// `blocked` status outlived by hours the blocker it named (2026-07-30).
+pub fn abandon(run_dir: &Path, reason: &str) -> Result<(), String> {
+    if !run_dir.is_dir() {
+        return Err(format!("no run dir at {}", run_dir.display()));
+    }
+    let ts = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|e| e.to_string())?.as_secs();
+    let record = serde_json::json!({"ts": ts, "reason": reason});
+    fs::write(
+        run_dir.join("abandoned.json"),
+        serde_json::to_string_pretty(&record).expect("abandon record serializes"),
+    )
+    .map_err(|e| e.to_string())?;
+    crate::status::emit(run_dir, |st| {
+        st.state = "abandoned".into();
+        st.detail = reason.to_string();
+    });
+    ledger::append(run_dir, "abandon", None, None, Some(reason))
+}
+
+/// `workflow run --reopen`: the abandonment is lifted and the decision to lift
+/// it is on the trail.
+pub fn reopen(run_dir: &Path) -> Result<(), String> {
+    let path = run_dir.join("abandoned.json");
+    if !path.exists() {
+        return Err(format!("run {} is not abandoned — nothing to reopen", run_dir.display()));
+    }
+    fs::remove_file(&path).map_err(|e| e.to_string())?;
+    ledger::append(run_dir, "reopen", None, None, None)
+}
+
+/// The recorded reason, when this run was abandoned.
+fn abandoned_reason(run_dir: &Path) -> Option<String> {
+    let text = fs::read_to_string(run_dir.join("abandoned.json")).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    Some(value["reason"].as_str().unwrap_or("no reason recorded").to_string())
+}
+
+pub fn run_with(
+    cfg: &RunConfig,
+    transport: &dyn ModelTransport,
+    lane_worker: &dyn LaneWorker,
+) -> Result<Outcome, String> {
     let program = Program::load(&cfg.program_path)?;
     fs::create_dir_all(&cfg.run_dir).map_err(|e| format!("cannot create run dir: {e}"))?;
+    if let Some(reason) = abandoned_reason(&cfg.run_dir) {
+        return Err(format!(
+            "run {} was abandoned: {reason} — pass --reopen to continue it",
+            cfg.run_dir.display()
+        ));
+    }
     let _lock = RunLock::take(&cfg.run_dir)?;
     check_program_unchanged(cfg, &program)?;
     let template_root = cfg
@@ -139,6 +194,7 @@ pub fn run(cfg: &RunConfig, transport: &dyn ModelTransport) -> Result<Outcome, S
         st.detail = format!("{total_steps} steps");
         st.total_steps = total_steps;
         st.token_budget = program.token_budget.unwrap_or(DEFAULT_TOKEN_BUDGET);
+        st.usd_budget = program.usd_budget.unwrap_or(DEFAULT_USD_BUDGET);
     });
     let mut parked: Vec<String> = load_parked(&cfg.run_dir)?.into_iter().map(|p| p.step).collect();
     let mut artifacts: BTreeMap<String, Artifact> = BTreeMap::new();
@@ -146,6 +202,8 @@ pub fn run(cfg: &RunConfig, transport: &dyn ModelTransport) -> Result<Outcome, S
     let mut budget = Spend {
         spent: transcript_token_total(&cfg.run_dir)?,
         cap: program.token_budget.unwrap_or(DEFAULT_TOKEN_BUDGET),
+        usd: transcript_usd_total(&cfg.run_dir),
+        usd_cap: program.usd_budget.unwrap_or(DEFAULT_USD_BUDGET),
     };
 
     let mut idx = 0;
@@ -175,18 +233,18 @@ pub fn run(cfg: &RunConfig, transport: &dyn ModelTransport) -> Result<Outcome, S
                 step.name, dep
             )));
         }
-        // Execute steps share the ONE target worktree and are inherently
-        // serial: a parked execute means every later execute builds on a
+        // Execute and lane steps share the ONE target worktree and are
+        // inherently serial: a parked one means every later one builds on a
         // broken base, no `inputs` edge required (P3 shakedown: the runner
         // advanced past a parked refactor and spent 80K tokens on top of a
         // broken shader).
-        if step.opcode == Opcode::Execute
+        if step.opcode.touches_worktree()
             && let Some(earlier) = program.steps[..idx]
                 .iter()
-                .find(|s| s.opcode == Opcode::Execute && parked.contains(&s.name))
+                .find(|s| s.opcode.touches_worktree() && parked.contains(&s.name))
         {
             let reason = format!(
-                "execute step {:?} is blocked: earlier execute step {:?} parked in the shared worktree",
+                "step {:?} is blocked: earlier step {:?} parked in the shared worktree",
                 step.name, earlier.name
             );
             crate::status::emit(&cfg.run_dir, |st| {
@@ -307,9 +365,65 @@ pub fn run(cfg: &RunConfig, transport: &dyn ModelTransport) -> Result<Outcome, S
                     return Ok(Outcome::Escalated(esc_path));
                 }
             }
-            Opcode::Execute => {
+            Opcode::Execute | Opcode::Lane => {
                 let wt = ensure_worktree(cfg, program.target.as_ref().expect("validated: target present"))?;
-                match run_execute(cfg, step, idx, &template_root, &artifacts, transport, &wt, &mut budget)? {
+                let outcome = match step.opcode {
+                    Opcode::Lane => {
+                        let seed = load_unpark_seed(&cfg.run_dir, &step.name);
+                        run_lane(
+                            cfg,
+                            step,
+                            idx,
+                            &template_root,
+                            &artifacts,
+                            lane_worker,
+                            &wt,
+                            &mut budget,
+                            LaneStart::Fresh(seed),
+                        )?
+                    }
+                    _ => {
+                        let one_shot = run_execute(
+                            cfg,
+                            step,
+                            idx,
+                            &template_root,
+                            &artifacts,
+                            transport,
+                            &wt,
+                            &mut budget,
+                            program.task.as_deref(),
+                        )?;
+                        match one_shot {
+                            Ok(artifact) => Ok(artifact),
+                            Err(ExecuteStop::Park(park)) => Err(park),
+                            // D20: a refactor-shaped one-shot execute is a
+                            // design smell, and the run only learns which it
+                            // was by failing once.
+                            Err(ExecuteStop::Promote(failure)) => {
+                                ledger::append(
+                                    &cfg.run_dir,
+                                    "promote",
+                                    Some(&step.name),
+                                    None,
+                                    Some(&format!("{:?}: {}", failure.kind, failure.text)),
+                                )?;
+                                run_lane(
+                                    cfg,
+                                    step,
+                                    idx,
+                                    &template_root,
+                                    &artifacts,
+                                    lane_worker,
+                                    &wt,
+                                    &mut budget,
+                                    LaneStart::Promoted(failure),
+                                )?
+                            }
+                        }
+                    }
+                };
+                match outcome {
                     Ok(artifact) => {
                         persist(&state_path, &artifact)?;
                         artifacts.insert(step.name.clone(), artifact);
@@ -362,6 +476,11 @@ pub fn run(cfg: &RunConfig, transport: &dyn ModelTransport) -> Result<Outcome, S
         st.state = "run-done".into();
         st.detail = String::new();
     });
+    // Once per completion: an idempotent rerun of a finished run must not
+    // stack duplicate entries on the trail.
+    if ledger::read(&cfg.run_dir).last().map(|e| e.kind != "run-done").unwrap_or(true) {
+        ledger::append(&cfg.run_dir, "run-done", None, None, None)?;
+    }
     Ok(Outcome::Done)
 }
 
@@ -730,9 +849,17 @@ fn run_sample(
 /// (Peter, 2026-07-29). The replay burned ~40K total for scale.
 const DEFAULT_TOKEN_BUDGET: u64 = 500_000;
 
+/// Generous for the same reason as the token budget: the guard exists for
+/// runaways, not normal runs. A P3-sized wave of lanes lands well under it.
+const DEFAULT_USD_BUDGET: f64 = 25.0;
+
 struct Spend {
     spent: u64,
     cap: u64,
+    /// Lane spend, in dollars. The envelope reports USD, not tokens, and the
+    /// two are never folded together — a dollar is not a token.
+    usd: f64,
+    usd_cap: f64,
 }
 
 impl Spend {
@@ -747,14 +874,32 @@ impl Spend {
         }
         Ok(())
     }
+    /// Checked before every lane launch. Parks the step rather than suspending
+    /// the run: the tokens-only guard shows a healthy green bar while lanes
+    /// spend dollars, so this is the only thing standing between a
+    /// promote-heavy program and an unbounded bill.
+    fn usd_over(&self) -> Option<String> {
+        (self.usd >= self.usd_cap).then(|| {
+            format!(
+                "lane budget exhausted (${:.2}/${:.2}) — no lane launched; raise `usd_budget`, then unpark",
+                self.usd, self.usd_cap
+            )
+        })
+    }
     fn add(&mut self, result: &Result<crate::transport::CompletionResponse, crate::transport::TransportError>) {
-        if let Ok(r) = result {
-            // Sum EVERY HTTP post the transport made (internal retries and
-            // fallbacks included) — hidden retries must not be free.
-            for a in &r.attempts {
-                self.spent += a["usage"]["total_tokens"].as_u64().unwrap_or(0);
-            }
-        }
+        self.spent += response_tokens(result);
+    }
+    fn add_usd(&mut self, usd: f64) {
+        self.usd += usd;
+    }
+}
+
+/// Sum EVERY HTTP post the transport made (internal retries and fallbacks
+/// included) — hidden retries must not be free.
+fn response_tokens(result: &Result<CompletionResponse, TransportError>) -> u64 {
+    match result {
+        Err(_) => 0,
+        Ok(r) => r.attempts.iter().map(|a| a["usage"]["total_tokens"].as_u64().unwrap_or(0)).sum(),
     }
 }
 
@@ -790,6 +935,18 @@ fn transcript_token_total(run_dir: &Path) -> Result<u64, String> {
     Ok(total)
 }
 
+/// Resume support for lane spend. Dollars, kept apart from tokens, and read
+/// from the same one record — the transcript.
+fn transcript_usd_total(run_dir: &Path) -> f64 {
+    let Ok(text) = fs::read_to_string(run_dir.join("transcript.jsonl")) else {
+        return 0.0;
+    };
+    text.lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter_map(|v| v["response"]["total_cost_usd"].as_f64())
+        .sum()
+}
+
 /// The worktree is acquired once per run and remembered in run state (D6),
 /// so a resumed run continues in the same tree.
 fn ensure_worktree(cfg: &RunConfig, target: &Target) -> Result<Worktree, String> {
@@ -815,10 +972,36 @@ fn ensure_worktree(cfg: &RunConfig, target: &Target) -> Result<Worktree, String>
     Ok(wt)
 }
 
+/// One failed execute attempt, typed. `commit` is set when the attempt applied
+/// and committed before failing — a promoted lane must be told that work
+/// stands, or it re-does or reverts it (both P3 runs failed after a commit).
+#[derive(Debug, Clone)]
+struct Failure {
+    kind: FailureKind,
+    text: String,
+    gate_report: Option<serde_json::Value>,
+    commit: Option<String>,
+}
+
+/// How many transport failures one step absorbs before parking, counted apart
+/// from `retry_cap`. Run 1 burned attempts 1 and 2 of 3 on proxy timeouts at
+/// zero tokens and had a single real try left — a dead proxy must not eat the
+/// attempts the model never got.
+const TRANSPORT_RETRY_CAP: u32 = 3;
+
+/// Why an execute step produced no artifact.
+enum ExecuteStop {
+    Park(ParkedItem),
+    /// The first substantive failure on a step carrying `on_fail = "lane"`.
+    Promote(Failure),
+}
+
 /// EXECUTE (D5): model emits a ChangeSet; the runtime applies it, commits with
 /// a pathspec, runs the gate in the worktree, feeds failures back, cap then park.
-/// An empty ChangeSet is a NON-attempt: it never overwrites the real error,
-/// and the park reason is the most informative error seen (P3 shakedown).
+/// An empty ChangeSet is a NON-attempt: it never overwrites the real error.
+/// The park record keeps the RANKED-best failure, not the last one — a red
+/// gate over committed work outranks a find-miss that followed it (D16).
+#[allow(clippy::too_many_arguments)] // un-suppressed when the loop grows a params struct
 fn run_execute(
     cfg: &RunConfig,
     step: &Step,
@@ -828,14 +1011,19 @@ fn run_execute(
     transport: &dyn ModelTransport,
     wt: &Worktree,
     budget: &mut Spend,
-) -> Result<Result<Artifact, ParkedItem>, String> {
+    task: Option<&str>,
+) -> Result<Result<Artifact, ExecuteStop>, String> {
     // A rerun after `workflow unpark` starts from the recorded park reason:
     // committed progress in the worktree is fixed forward, never re-attempted
     // blind. One sample deep — the seed is the LAST park only.
-    let mut informative: Option<String> = load_unpark_seed(&cfg.run_dir, &step.name);
-    let mut seeded = informative.is_some();
+    let seed = load_unpark_seed(&cfg.run_dir, &step.name);
+    let mut seeded = seed.is_some();
+    let human_note = load_unpark_note(&cfg.run_dir, &step.name);
+    // `latest` is what the model is told next; `best` is what the park record
+    // and any promotion carry. They differ on purpose.
+    let mut latest: Option<Failure> = None;
+    let mut best: Option<Failure> = None;
     let mut empty_note = false;
-    let mut last_red_gate: Option<serde_json::Value> = None;
 
     // Gate-first on a seeded rerun (D19, P3 shakedown 2026-07-30): a previous
     // sample parked after committing real progress into the worktree.
@@ -861,40 +1049,50 @@ fn run_execute(
             return Ok(Ok(Artifact { kind: ArtifactKind::Json, value }));
         }
         let report_json = serde_json::to_value(&report).expect("GateReport serializes");
-        last_red_gate = Some(report_json.clone());
-        informative = Some(serde_json::to_string_pretty(&report_json).expect("Value serializes"));
+        let fresh = Failure {
+            kind: FailureKind::GateRed,
+            text: serde_json::to_string_pretty(&report_json).expect("Value serializes"),
+            gate_report: Some(report_json),
+            commit: Some(worktree::head_sha(&wt.path)?),
+        };
+        latest = Some(fresh.clone());
+        best = Some(fresh);
     }
     let max_attempts = u32::from(step.retry_cap) + 1;
-    for attempt in 1..=max_attempts {
+    let park = |failure: Option<&Failure>, reason: String, attempts: u32| {
+        ExecuteStop::Park(ParkedItem {
+            step: step.name.clone(),
+            reason,
+            attempts,
+            title: step.title.clone(),
+            gate_report: failure.and_then(|f| f.gate_report.clone()),
+        })
+    };
+    let mut attempt = 0u32;
+    let mut transport_failures = 0u32;
+    let mut call = 0u32;
+    while attempt < max_attempts {
         budget.check()?;
+        call += 1;
         // Re-rendered EVERY attempt: an earlier attempt may have committed,
         // and the model must quote the CURRENT worktree, not a stale excerpt
         // (finding 4 — stale prompts made every red gate a guaranteed park).
-        // `file:`/`anchor:` inputs read the WORKTREE, falling back nowhere.
+        // File-reading inputs read the WORKTREE, falling back nowhere.
         let base_prompt = match render_step_template(step, template_root, &wt.path, artifacts) {
             Ok(p) => p,
-            Err(e) => {
-                return Ok(Err(ParkedItem {
-                    step: step.name.clone(),
-                    reason: e,
-                    attempts: attempt - 1,
-                    title: step.title.clone(),
-                    gate_report: last_red_gate,
-                }));
-            }
+            Err(e) => return Ok(Err(park(best.as_ref(), e, attempt))),
         };
         let mut user = base_prompt.clone();
-        match (&informative, seeded) {
-            (Some(err), true) => {
-                // Reached only via the gate-first pre-flight above: `err` is
+        match (&latest, seeded) {
+            (Some(f), true) => {
+                // Reached only via the gate-first pre-flight above: this is
                 // the FRESH gate report, not the stale unpark-seed text.
                 user.push_str(&format!(
-                    "\n\nWork already committed in the worktree stands. The gate is currently red:\n{err}\nFix forward from the current file contents."
+                    "\n\nWork already committed in the worktree stands. The gate is currently red:\n{}\nFix forward from the current file contents.",
+                    f.text
                 ));
             }
-            (Some(err), false) => {
-                user.push_str(&format!("\n\nYour previous attempt failed:\n{err}"));
-            }
+            (Some(f), false) => user.push_str(&format!("\n\nYour previous attempt failed:\n{}", f.text)),
             (None, _) => {}
         }
         if empty_note {
@@ -902,8 +1100,14 @@ fn run_execute(
                 "\n\nYour last response was an EMPTY ChangeSet (no edits, no writes) — that is not an attempt. Emit real edits or writes; never an empty set.",
             );
         }
-        if informative.is_some() || empty_note {
+        if latest.is_some() || empty_note {
             user.push_str("\nEmit a corrected ChangeSet.");
+        }
+        if let Some(note) = &human_note {
+            // Last, AFTER the fresh gate report: the seed itself never reaches
+            // a model under D19, so the note needs its own field or it is
+            // write-only. Labelled as a ruling, not as more error text.
+            user.push_str(&format!("\n\nThe human who unparked this step ruled:\n{note}"));
         }
         let req = CompletionRequest {
             model: step.model.clone().expect("validated: execute has model"),
@@ -917,7 +1121,7 @@ fn run_execute(
             // Attempt lives in the structured fields only — `detail` repeating it
             // double-printed in `watch`.
             st.detail = format!("{} char prompt", crate::status::commas(req.user.len() as u64));
-            st.attempt = attempt;
+            st.attempt = attempt + 1;
             st.max_attempts = max_attempts;
         });
         let result = checked_complete(transport, &step.name, &req)?;
@@ -925,63 +1129,313 @@ fn run_execute(
         crate::status::emit(&cfg.run_dir, |st| {
             st.tokens_spent = budget.spent;
         });
-        log_transcript(&cfg.run_dir, &step.name, idx, attempt, &req, &result)?;
-        let error = match result {
-            Err(e) => format!("transport error: {e}"),
-            Ok(resp) => match Artifact::parse(ArtifactKind::ChangeSet, &resp.content) {
-                Err(e) => e,
-                Ok(artifact) => {
-                    let change: ChangeSet =
-                        serde_json::from_value(artifact.value.clone()).expect("parsed as ChangeSet above");
-                    match worktree::apply(&wt.path, &change) {
-                        Err(e) => e,
+        log_transcript(&cfg.run_dir, &step.name, idx, call, &req, &result)?;
+        let failure = match result {
+            // A transport failure produced no output, so it says nothing about
+            // the work and never consumes one of the model's attempts.
+            Err(e) => {
+                transport_failures += 1;
+                Failure {
+                    kind: FailureKind::Transport,
+                    text: format!("transport error: {e}"),
+                    gate_report: None,
+                    commit: None,
+                }
+            }
+            Ok(resp) => {
+                attempt += 1;
+                match ChangeSet::parse(&resp.content) {
+                    Err((kind, text)) => Failure { kind, text, gate_report: None, commit: None },
+                    Ok(change) => match worktree::apply(&wt.path, &change) {
+                        // Nothing was applied: `apply` validates every edit
+                        // before it writes anything.
+                        Err((kind, text)) => Failure { kind, text, gate_report: None, commit: None },
                         Ok(paths) => {
-                            let sha = worktree::commit(&wt.path, &paths, &change.commit_message)?;
+                            let sha =
+                                worktree::commit(&wt.path, &paths, &commit_message(task, step, attempt))?;
                             let report = run_gates(&step.gate, &wt.path, step.gate_timeout_s, &cfg.run_dir);
                             if report.pass {
                                 let value = serde_json::json!({
-                                    "change_set": artifact.value, "commit": sha,
-                                    "worktree": wt.path, "attempt": attempt,
+                                    "change_set": serde_json::to_value(&change).expect("ChangeSet serializes"),
+                                    "commit": sha, "worktree": wt.path, "attempt": attempt,
                                 });
                                 return Ok(Ok(Artifact { kind: ArtifactKind::Json, value }));
                             }
-                            let report_json =
-                                serde_json::to_value(&report).expect("GateReport serializes");
-                            let msg = format!(
-                                "your ChangeSet was applied and committed ({sha}), but the gate is red:\n{}",
-                                serde_json::to_string_pretty(&report_json).expect("Value serializes")
-                            );
-                            last_red_gate = Some(report_json);
-                            msg
+                            let report_json = serde_json::to_value(&report).expect("GateReport serializes");
+                            Failure {
+                                kind: FailureKind::GateRed,
+                                text: format!(
+                                    "your ChangeSet was applied and committed ({sha}), but the gate is red:\n{}",
+                                    serde_json::to_string_pretty(&report_json).expect("Value serializes")
+                                ),
+                                gate_report: Some(report_json),
+                                commit: Some(sha),
+                            }
                         }
-                    }
+                    },
                 }
-            },
+            }
         };
         crate::status::emit(&cfg.run_dir, |st| {
             st.state = "retrying".into();
-            st.last_error = error.chars().take(300).collect();
+            st.last_error = failure.text.chars().take(300).collect();
         });
-        if error == crate::artifacts::EMPTY_CHANGESET_ERR {
-            // Non-attempt: the real error stays in front of the model and in
-            // the park record; only the empty-set note is added.
+        // Ranked, not latest: run 2's full red-gate report from attempt 2 was
+        // overwritten by attempt 3's find-miss, and the park record lost the
+        // only thing worth reading.
+        if best.as_ref().is_none_or(|b| failure.kind >= b.kind) {
+            best = Some(failure.clone());
+        }
+        if failure.kind == FailureKind::EmptyChangeSet {
+            // Non-attempt (D16): the real error stays in front of the model.
             empty_note = true;
         } else {
-            informative = Some(error);
+            latest = Some(failure.clone());
             seeded = false;
             empty_note = false;
         }
+        // The first substantive failure means the model's picture of the
+        // worktree is wrong, and a second stateless call reasoning about a
+        // pasted error is exactly what P3 measured failing six times (231K
+        // tokens) where one lane pass succeeded.
+        if failure.kind.is_substantive() && step.on_fail == Some(OnFail::Lane) {
+            return Ok(Err(ExecuteStop::Promote(best.expect("set on the line above"))));
+        }
+        if failure.kind == FailureKind::Transport && transport_failures >= TRANSPORT_RETRY_CAP {
+            let text = failure.text;
+            return Ok(Err(park(
+                best.as_ref(),
+                format!("{transport_failures} transport failures in a row: {text}"),
+                attempt,
+            )));
+        }
     }
-    let reason = informative.unwrap_or_else(|| {
-        "every attempt returned an empty ChangeSet (no edits and no writes)".to_string()
-    });
-    Ok(Err(ParkedItem {
+    let reason = best
+        .as_ref()
+        .map(|f| f.text.clone())
+        .unwrap_or_else(|| "every attempt returned an empty ChangeSet (no edits and no writes)".to_string());
+    Ok(Err(park(best.as_ref(), reason, max_attempts)))
+}
+
+/// Commit lines are run metadata: composed from the program's task, the step,
+/// and its title. The model does not author them — a `commit_message` in an
+/// old response still parses and is ignored.
+fn commit_message(task: Option<&str>, step: &Step, attempt: u32) -> String {
+    let task = task.map(|t| format!("{t} ")).unwrap_or_default();
+    let title = step.title.as_deref().unwrap_or("workflow step");
+    let retry = if attempt > 1 { format!(" (attempt {attempt})") } else { String::new() };
+    format!("{task}{}: {title}{retry}", step.name)
+}
+
+/// Where a lane attempt starts. `Fresh` is a lane step (carrying its unpark
+/// seed, if any); `Promoted` is an execute step handing over on its first
+/// substantive failure, carrying that failure typed.
+enum LaneStart {
+    Fresh(Option<String>),
+    Promoted(Failure),
+}
+
+/// LANE (D20): execute's contract with a tool-using worker. The runtime still
+/// owns every side effect that decides anything — it enumerates what changed,
+/// commits with a pathspec, runs the gate, feeds the red report back, caps the
+/// attempts and parks. What the worker gains is a compiler inside its loop,
+/// which is the whole difference between output judged by reading it and
+/// output judged by running it.
+#[allow(clippy::too_many_arguments)] // un-suppressed when the loop grows a params struct
+fn run_lane(
+    cfg: &RunConfig,
+    step: &Step,
+    idx: usize,
+    template_root: &Path,
+    artifacts: &BTreeMap<String, Artifact>,
+    worker: &dyn LaneWorker,
+    wt: &Worktree,
+    budget: &mut Spend,
+    start: LaneStart,
+) -> Result<Result<Artifact, ParkedItem>, String> {
+    let promoted = matches!(start, LaneStart::Promoted(_));
+    let (mut informative, mut seeded, mut last_red_gate, max_attempts, one_shot) = match start {
+        LaneStart::Fresh(seed) => {
+            let seeded = seed.is_some();
+            (seed, seeded, None, u32::from(step.retry_cap) + 1, None)
+        }
+        // Exactly one attempt: promotion is the escape hatch from a failed
+        // tier, not a second retry ladder.
+        LaneStart::Promoted(f) => (Some(f.text.clone()), false, f.gate_report.clone(), 1, Some(f)),
+    };
+    let human_note = load_unpark_note(&cfg.run_dir, &step.name);
+    let park = |reason: String, attempts: u32, gate_report: Option<serde_json::Value>| ParkedItem {
         step: step.name.clone(),
         reason,
-        attempts: max_attempts,
+        attempts,
         title: step.title.clone(),
-        gate_report: last_red_gate,
-    }))
+        gate_report,
+    };
+
+    // Gate-first on a seeded rerun (D19), unchanged: the seed describes a
+    // worktree that has since moved; the gate measures the one it is now.
+    if seeded {
+        let report = run_gates(&step.gate, &wt.path, step.gate_timeout_s, &cfg.run_dir);
+        if report.pass {
+            let sha = worktree::head_sha(&wt.path)?;
+            let value = serde_json::json!({
+                "lane": {"already_complete": true},
+                "commit": sha, "worktree": wt.path, "attempt": 0,
+            });
+            return Ok(Ok(Artifact { kind: ArtifactKind::Json, value }));
+        }
+        let report_json = serde_json::to_value(&report).expect("GateReport serializes");
+        informative = Some(serde_json::to_string_pretty(&report_json).expect("Value serializes"));
+        last_red_gate = Some(report_json);
+    }
+
+    let mut no_change_note = false;
+    for attempt in 1..=max_attempts {
+        budget.check()?;
+        // A lane bills dollars, so the token guard cannot see it coming.
+        if let Some(reason) = budget.usd_over() {
+            return Ok(Err(park(reason, attempt - 1, last_red_gate)));
+        }
+        // Re-rendered every attempt against the WORKTREE: the previous attempt
+        // may have committed, and the brief must quote what is there now.
+        let mut user = match render_step_template(step, template_root, &wt.path, artifacts) {
+            Ok(p) => p,
+            Err(e) => return Ok(Err(park(e, attempt - 1, last_red_gate))),
+        };
+        match (&informative, seeded, one_shot.as_ref()) {
+            // A promotion after a committed attempt MUST say the work stands,
+            // or the lane reverts or re-does it — both P3 runs failed after a
+            // commit, so this is the common case, not the corner.
+            (_, _, Some(f)) => match &f.commit {
+                Some(sha) => user.push_str(&format!(
+                    "\n\nA one-shot attempt at this step applied and committed work ({sha}). That work STANDS — do not revert or redo it. It then failed:\n{}\nFix forward from the current file contents.",
+                    f.text
+                )),
+                None => user.push_str(&format!(
+                    "\n\nA one-shot attempt at this step failed without changing anything:\n{}\nStart from the current file contents.",
+                    f.text
+                )),
+            },
+            (Some(err), true, _) => user.push_str(&format!(
+                "\n\nWork already committed in the worktree stands. The gate is currently red:\n{err}\nFix forward from the current file contents."
+            )),
+            (Some(err), false, _) => user.push_str(&format!("\n\nYour previous attempt failed:\n{err}")),
+            (None, _, _) => {}
+        }
+        if no_change_note {
+            user.push_str(
+                "\n\nYour last run left the worktree completely unchanged — that is not an attempt. Edit the files and commit your work.",
+            );
+        }
+        if let Some(note) = &human_note {
+            // Last, after the fresh gate report — the seed reaches a model on
+            // no path under D19, so the ruling needs its own field.
+            user.push_str(&format!("\n\nThe human who unparked this step ruled:\n{note}"));
+        }
+        let req = LaneRequest {
+            worktree: wt.path.clone(),
+            prompt: user,
+            model: lane_model(step, promoted),
+            provider: step.provider.clone().unwrap_or_else(|| crate::program::DEFAULT_LANE_PROVIDER.to_string()),
+            max_turns: step.max_turns.unwrap_or(crate::program::DEFAULT_LANE_MAX_TURNS),
+            timeout_s: step.request_timeout_s.unwrap_or(crate::program::DEFAULT_REQUEST_TIMEOUT_S),
+            run_dir: cfg.run_dir.clone(),
+        };
+        crate::status::emit(&cfg.run_dir, |st| {
+            st.state = "waiting-on-lane".into();
+            st.detail = format!("{} char brief", crate::status::commas(req.prompt.len() as u64));
+            st.attempt = attempt;
+            st.max_attempts = max_attempts;
+        });
+        // The sha delta is the oracle for what a lane did. Our lanes commit
+        // their own work by doctrine, so a well-behaved one leaves the tree
+        // clean and porcelain would read it as having done nothing.
+        let head_before = worktree::head_sha(&wt.path)?;
+        let result = checked_lane(worker, &step.name, &req)?;
+        if let Ok(outcome) = &result {
+            budget.add_usd(outcome.usd);
+        }
+        crate::status::emit(&cfg.run_dir, |st| {
+            st.usd_spent = budget.usd;
+        });
+        log_lane_transcript(&cfg.run_dir, &step.name, idx, attempt, &req, &result)?;
+        let error: Option<String> = match result {
+            Err(e) => Some(e),
+            Ok(outcome) if !outcome.ok => Some(outcome.error),
+            Ok(outcome) => {
+                let head_after = worktree::head_sha(&wt.path)?;
+                let dirty = worktree::dirty_paths(&wt.path)?;
+                if !dirty.is_empty() {
+                    // A lane commits its own work. Auto-committing what it left
+                    // behind is `add -A` in disguise and would sweep untracked
+                    // scratch into the branch — park instead.
+                    return Ok(Err(park(
+                        format!(
+                            "the lane returned with an uncommitted worktree — a lane commits its own work. Dirty: {}",
+                            dirty.join(", ")
+                        ),
+                        attempt,
+                        last_red_gate,
+                    )));
+                }
+                if head_after == head_before {
+                    // The lane analogue of an empty ChangeSet (D16): a
+                    // non-attempt that never overwrites the real error.
+                    no_change_note = true;
+                    None
+                } else {
+                    let report = run_gates(&step.gate, &wt.path, step.gate_timeout_s, &cfg.run_dir);
+                    if report.pass {
+                        let mut value = serde_json::json!({
+                            "lane": outcome.envelope, "commit": head_after,
+                            "files": worktree::changed_since(&wt.path, &head_before)?,
+                            "worktree": wt.path, "attempt": attempt,
+                        });
+                        if promoted {
+                            value["promoted"] = serde_json::Value::Bool(true);
+                        }
+                        return Ok(Ok(Artifact { kind: ArtifactKind::Json, value }));
+                    }
+                    let report_json = serde_json::to_value(&report).expect("GateReport serializes");
+                    let msg = format!(
+                        "your work is committed ({head_after}), but the gate is red:\n{}",
+                        serde_json::to_string_pretty(&report_json).expect("Value serializes")
+                    );
+                    last_red_gate = Some(report_json);
+                    Some(msg)
+                }
+            }
+        };
+        crate::status::emit(&cfg.run_dir, |st| {
+            st.state = "retrying".into();
+            st.last_error = error
+                .clone()
+                .unwrap_or_else(|| "lane left the worktree unchanged".to_string())
+                .chars()
+                .take(300)
+                .collect();
+        });
+        if let Some(e) = error {
+            informative = Some(e);
+            seeded = false;
+            no_change_note = false;
+        }
+    }
+    let reason = informative.unwrap_or_else(|| "every lane attempt left the worktree unchanged".to_string());
+    let reason = match &one_shot {
+        Some(f) => format!(
+            "one-shot execute failed ({:?}): {}\n\nthe promoted lane then failed: {reason}",
+            f.kind, f.text
+        ),
+        None => reason,
+    };
+    Ok(Err(park(reason, max_attempts, last_red_gate)))
+}
+
+/// A promoted execute names its lane model separately (`lane_model`) because
+/// the tier that failed one-shot is rarely the tier worth handing tools.
+fn lane_model(step: &Step, promoted: bool) -> Option<String> {
+    if promoted { step.lane_model.clone().or_else(|| step.model.clone()) } else { step.model.clone() }
 }
 
 /// Ok(artifact) on success, Err(park) after the retry cap.
@@ -1116,9 +1570,18 @@ fn render_step_template_with(
         let value = if let Some(path) = input.strip_prefix("file:") {
             fs::read_to_string(repo_root.join(path))
                 .map_err(|e| format!("step {:?} input file {path:?}: {e}", step.name))?
+        } else if let Some(path) = input.strip_prefix("path:") {
+            // The PATH only. A lane opens the file itself, so pasting 178K
+            // chars of godfile at a worker that can read is pure waste.
+            if !repo_root.join(path).exists() {
+                return Err(format!("step {:?} input path {path:?} does not exist", step.name));
+            }
+            path.to_string()
         } else if let Some(spec) = input.strip_prefix("anchor:") {
             // Deterministic locate: symbol -> defining span, no model call.
             locate::resolve(repo_root, spec).map_err(|e| format!("step {:?}: {e}", step.name))?
+        } else if let Some(spec) = input.strip_prefix("span:") {
+            locate::span(repo_root, spec).map_err(|e| format!("step {:?}: {e}", step.name))?
         } else {
             artifacts
                 .get(input)
@@ -1147,6 +1610,46 @@ fn checked_complete(
         })?;
     }
     Ok(transport.complete(req))
+}
+
+/// The same choke point for the lane path: a brief is outbound context too,
+/// and a gate tail fed back into one can leak a key just as easily.
+fn checked_lane(
+    worker: &dyn LaneWorker,
+    label: &str,
+    req: &LaneRequest,
+) -> Result<Result<LaneOutcome, String>, String> {
+    scrub::check(&req.prompt).map_err(|e| {
+        format!("secret-shaped text in step {label:?}'s outbound context: {e} — run aborted; scrub the source, then rerun")
+    })?;
+    Ok(worker.run(req))
+}
+
+/// INVARIANT: one transcript line per lane launch, retries included. Lane cost
+/// is dollars, so it rides in its own field — never summed into tokens.
+fn log_lane_transcript(
+    run_dir: &Path,
+    step: &str,
+    idx: usize,
+    attempt: u32,
+    req: &LaneRequest,
+    result: &Result<LaneOutcome, String>,
+) -> Result<(), String> {
+    let ts = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|e| e.to_string())?.as_secs();
+    let line = serde_json::json!({
+        "step": step, "index": idx, "attempt": attempt, "ts": ts,
+        "request": req,
+        "response": match result {
+            Ok(o) => serde_json::json!({"ok": o.ok, "envelope": o.envelope, "total_cost_usd": o.usd}),
+            Err(e) => serde_json::json!({"error": e}),
+        },
+    });
+    let mut f = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(run_dir.join("transcript.jsonl"))
+        .map_err(|e| e.to_string())?;
+    writeln!(f, "{line}").map_err(|e| e.to_string())
 }
 
 /// INVARIANT: one transcript line per model request, retries included.
@@ -1200,6 +1703,10 @@ fn unpark_seed_path(run_dir: &Path, step: &str) -> PathBuf {
     run_dir.join(format!("unpark-seed-{step}.txt"))
 }
 
+fn unpark_note_path(run_dir: &Path, step: &str) -> PathBuf {
+    run_dir.join(format!("unpark-note-{step}.txt"))
+}
+
 /// The reason a previously-parked sample recorded, if the step was unparked.
 /// Not consumed on read — a crashed rerun keeps its seed; each `unpark`
 /// overwrites it (one sample deep, no accumulating history).
@@ -1207,17 +1714,32 @@ fn load_unpark_seed(run_dir: &Path, step: &str) -> Option<String> {
     fs::read_to_string(unpark_seed_path(run_dir, step)).ok().filter(|s| !s.trim().is_empty())
 }
 
+/// What the human decided when they unparked. Kept apart from the seed because
+/// the gate-first pre-flight (D19) discards the stale park reason and this must
+/// survive that: their reasoning is about what to do, not about what the gate
+/// just re-measured.
+fn load_unpark_note(run_dir: &Path, step: &str) -> Option<String> {
+    fs::read_to_string(unpark_note_path(run_dir, step)).ok().filter(|s| !s.trim().is_empty())
+}
+
 /// Remove a step's parked entry so a rerun retries it — the sanctioned
 /// un-park (finding 2: parked was forever and the only escape was forbidden
 /// hand-editing). A rerun of a parked step is a NEW SAMPLE by doctrine.
 /// The recorded park reason is left as a seed so the rerun's first attempt
-/// sees what went wrong instead of starting blind (P3 shakedown).
-pub fn unpark(run_dir: &Path, step: &str) -> Result<(), String> {
+/// sees what went wrong instead of starting blind (P3 shakedown), and `note`
+/// — what the human decided that makes this retry worth running — rides with
+/// it and lands on the decision trail.
+pub fn unpark(run_dir: &Path, step: &str, note: &str) -> Result<(), String> {
+    if note.trim().is_empty() {
+        return Err("unpark needs a --note: what did you decide that makes this retry worth running?".to_string());
+    }
     let items = load_parked(run_dir)?;
     let Some(item) = items.iter().find(|p| p.step == step) else {
         return Err(format!("step {step:?} is not parked (parked: {:?})", items.iter().map(|p| &p.step).collect::<Vec<_>>()));
     };
     fs::write(unpark_seed_path(run_dir, step), &item.reason).map_err(|e| e.to_string())?;
+    fs::write(unpark_note_path(run_dir, step), note).map_err(|e| e.to_string())?;
+    ledger::append(run_dir, "unpark", Some(step), Some(note), Some(&item.reason))?;
     let keep: Vec<String> = items
         .iter()
         .filter(|p| p.step != step)
@@ -1231,13 +1753,16 @@ pub fn unpark(run_dir: &Path, step: &str) -> Result<(), String> {
     }
 }
 
+/// The one place a park is recorded — so it is also the one place the decision
+/// trail learns about one.
 fn append_parked(run_dir: &Path, item: &ParkedItem) -> Result<(), String> {
     let mut f = fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(run_dir.join("parked.jsonl"))
         .map_err(|e| e.to_string())?;
-    writeln!(f, "{}", serde_json::to_string(item).expect("ParkedItem serializes")).map_err(|e| e.to_string())
+    writeln!(f, "{}", serde_json::to_string(item).expect("ParkedItem serializes")).map_err(|e| e.to_string())?;
+    ledger::append(run_dir, "park", Some(&item.step), None, Some(&item.reason))
 }
 
 fn read_answer(esc_path: &Path) -> Result<Option<String>, String> {

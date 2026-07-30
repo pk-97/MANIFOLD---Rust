@@ -11,6 +11,29 @@
 
 use std::path::{Path, PathBuf};
 
+/// Resolve `spec` (the part after `span:`) — `<file>:<start>-<end>`, 1-based
+/// and inclusive — against `root`. This is the escape hatch from `anchor:`'s
+/// Rust-item matching: text inside a raw string (an MSL kernel, a WGSL body)
+/// has no item to anchor to, and the alternative was pasting a 178K-char
+/// godfile into every call of a step that then had to re-quote out of it.
+/// Line numbers, unlike a symbol, do drift — re-check a reused program.
+pub fn span(root: &Path, spec: &str) -> Result<String, String> {
+    let bad = || format!("span {spec:?}: expected <file>:<start>-<end>, 1-based inclusive");
+    let (file, range) = spec.rsplit_once(':').ok_or_else(bad)?;
+    let (start, end) = range.split_once('-').ok_or_else(bad)?;
+    let (start, end): (usize, usize) =
+        (start.trim().parse().map_err(|_| bad())?, end.trim().parse().map_err(|_| bad())?);
+    if start == 0 || end < start {
+        return Err(bad());
+    }
+    let text = std::fs::read_to_string(root.join(file)).map_err(|e| format!("span target {file}: {e}"))?;
+    let lines: Vec<&str> = text.lines().collect();
+    if end > lines.len() {
+        return Err(format!("span {spec:?}: {file} has {} lines", lines.len()));
+    }
+    Ok(format!("// {file}:{start}-{end}\n{}", lines[start - 1..end].join("\n")))
+}
+
 /// Resolve `spec` (the part after `anchor:`) against `root`. Returns the
 /// span with a `// path:start-end` provenance line.
 pub fn resolve(root: &Path, spec: &str) -> Result<String, String> {
