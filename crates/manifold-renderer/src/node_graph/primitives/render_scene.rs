@@ -206,20 +206,29 @@ const AO_RADIUS_WORLD_UNITS: f32 = 0.5;
 /// (fraction of the tint's own [0,1] magnitude); Peter's morning gate
 /// tunes the exact ambient intensity.
 const AMBIENT_IRRADIANCE_SCALE: f32 = 0.15;
-/// RAYTRACING_DESIGN.md section 5.2 P2/D3: temporal irradiance accumulation
-/// blend weight (fraction of THIS frame folded into history each frame —
-/// `AccumulateParams::alpha`). Committed range 0.05–0.3: lower = smoother/
-/// more history-heavy (more strobe lag, per D3's design intent), higher =
-/// more responsive (less history retained). Peter's morning gate tunes
-/// the exact look — this lane proves the RESET mechanism (cut vs strobe),
-/// not the aesthetic blend rate.
-const IRRADIANCE_ACCUM_ALPHA: f32 = 0.15;
+/// RAYTRACING_DESIGN.md section 5.2 P2/D3: FLOOR on the temporal irradiance
+/// blend weight (`AccumulateParams::alpha`). The kernel blends at `1/n` where
+/// `n` is the texel's accumulated frame count, so a still surface converges;
+/// this floor caps history at `1/alpha` frames (50 here, ~0.8s at 60fps) so
+/// genuinely changing light still tracks instead of smearing forever.
+/// Committed range 0.01–0.05: lower = cleaner stills, more lag on animated
+/// light. It was a FIXED weight of 0.15 until 2026-07-30 — a fixed weight has
+/// a permanent noise floor (~28% of raw single-frame noise) that no amount of
+/// standing still removes, which was the static boil Peter reported.
+const IRRADIANCE_ACCUM_ALPHA: f32 = 0.02;
 /// RAYTRACING_DESIGN.md section 5.2 P3: one-bounce GI gather rays per pixel
 /// (emissive-hit + sun-bounce). Committed range 1–8 (higher = smoother
 /// emissive bounce, more GPU cost, on top of `AO_SAMPLES_PER_PIXEL`'s own
 /// rays in the SAME half-res dispatch); Peter's morning gate tunes within
 /// it.
 const GI_SAMPLES_PER_PIXEL: u32 = 2;
+/// GGX reflection rays per pixel, in the same half-res dispatch. Was 1,
+/// which measured 4.7 sRGB levels of frame-to-frame change on a fully static
+/// scene with a 171-level 99.9th percentile — variance no temporal filter can
+/// hide. Committed range 1–8: higher = calmer reflections, linearly more
+/// reflection-ray cost (they are the most expensive ray class, since a hit
+/// shades a full raster-parity surface).
+const REFL_SAMPLES_PER_PIXEL: u32 = 8;
 /// RAYTRACING_DESIGN.md section 8.2 D22: reduced render resolution `temporal_upscale`
 /// draws color/depth/velocity at, relative to the scene's native (canvas)
 /// resolution — `render_dim = native_dim * NUM / DEN` (1/1.5 linear, D22
@@ -904,6 +913,12 @@ pub struct RenderScene {
     /// or clobber the shadow/AO dispatch's own params within the same
     /// frame.
     rt_accumulate_params_buffer: Option<manifold_gpu::GpuBuffer>,
+    /// Hash of last frame's lighting inputs (caster direction/position,
+    /// intensity-premultiplied colour, cone, kind, scene ambient, ambient
+    /// tint). A change means a light cue happened, which the accumulator is
+    /// told outright instead of inferring it from pixels. `None` before the
+    /// first RT-ready frame — nothing to compare against, so no snap.
+    rt_lighting_key: Option<u64>,
     /// RAYTRACING_DESIGN.md section 5.2 P2/D3, RT-D2: the SHARED node-local
     /// reset-detection path (`crate::node_graph::temporal_reset`) — the
     /// ONLY call site that decides "discard temporal history this frame"
@@ -1122,6 +1137,7 @@ impl RenderScene {
             rt_irr_full_b: None,
             rt_normal_full_b: None,
             rt_atrous_params_buffer: None,
+            rt_lighting_key: None,
             rt_irr_width: 0,
             rt_irr_height: 0,
             rt_accumulate_params_buffer: None,
@@ -4359,7 +4375,7 @@ impl EffectNode for RenderScene {
                     // the rt_reflections scene param, gated on rt_enabled;
                     // T5 tunes the spp/roughness-band constants. 0.6/0.1 are
                     // the RD7 starting constants.
-                    if rt_reflections { 1 } else { 0 },
+                    if rt_reflections { REFL_SAMPLES_PER_PIXEL } else { 0 },
                     0.6,
                     0.1,
                 );
@@ -4577,6 +4593,39 @@ impl EffectNode for RenderScene {
                 // above (BUG-311) before `self.prev_view_proj` was
                 // overwritten to this frame's `view_proj` — exactly what
                 // MetalFX's own velocity pass reprojects with.
+                // The accumulator should not have to INFER a lighting change
+                // from pixels — this side knows. A per-texel gate only fires
+                // when the changed term is a big enough share of its channel,
+                // so a sun-intensity move (a small slice of a buffer dominated
+                // by the ambient term) faded while an env move snapped. Peter
+                // found exactly that split. Hash the lighting inputs, compare
+                // with last frame, and say so. Cheap: a handful of floats.
+                let lighting_key = {
+                    let mut k = 0xcbf2_9ce4_8422_2325u64;
+                    let mut mix = |bits: u32| {
+                        k ^= u64::from(bits);
+                        k = k.wrapping_mul(0x100_0000_01b3);
+                    };
+                    // `color` is premultiplied with intensity (see
+                    // `node_graph::light`), so an intensity move shows up here
+                    // with no extra plumbing.
+                    for c in &rt_casters {
+                        for f in c.dir_or_pos.iter().chain(c.color.iter()) {
+                            mix(f.to_bits());
+                        }
+                        mix(c.cone_or_size.to_bits());
+                        mix(c.kind);
+                    }
+                    mix(scene_ambient.to_bits());
+                    for f in atmosphere.ambient_tint {
+                        mix(f.to_bits());
+                    }
+                    k
+                };
+                let lighting_changed = self
+                    .rt_lighting_key
+                    .replace(lighting_key)
+                    .is_some_and(|prev| prev != lighting_key);
                 let accumulate_params = manifold_gpu::raytrace::AccumulateParams::new(
                     [width, height],
                     IRRADIANCE_ACCUM_ALPHA,
@@ -4585,7 +4634,8 @@ impl EffectNode for RenderScene {
                     cam.pos,
                     inv_view_proj,
                     prev_view_proj,
-                );
+                )
+                .with_lighting_changed(lighting_changed);
                 let accumulate_params_buffer =
                     self.rt_accumulate_params_buffer.as_ref().expect("ensured above");
                 // RT-T1-C: ping-pong — read last frame's write slot (same
