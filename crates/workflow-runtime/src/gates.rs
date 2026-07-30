@@ -46,10 +46,12 @@ pub fn run_gates_env(
 ) -> GateReport {
     let mut results = Vec::new();
     let mut pass = true;
-    for cmd in cmds {
+    for (i, cmd) in cmds.iter().enumerate() {
         crate::status::emit(run_dir, |st| {
             st.state = "gate".into();
             st.detail = cmd.clone();
+            st.gate_index = i + 1;
+            st.gate_total = cmds.len();
         });
         let (exit, tail) = run_one(cmd, cwd, Duration::from_secs(timeout_s), run_dir, extra_env);
         let ok = exit == 0;
@@ -59,6 +61,12 @@ pub fn run_gates_env(
             break;
         }
     }
+    // Gate line is over — a stale "gate 3/6" must not linger once the report
+    // is back and the runner moves to the next transition.
+    crate::status::emit(run_dir, |st| {
+        st.gate_index = 0;
+        st.gate_total = 0;
+    });
     GateReport { results, pass }
 }
 

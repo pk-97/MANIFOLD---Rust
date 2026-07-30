@@ -42,6 +42,14 @@ pub struct Status {
     /// Most recent error text (transport or parse), kept across transitions
     /// until the step completes — the first thing `watch` shows loudly.
     pub last_error: String,
+    /// 1-based position of the gate command currently running, and how many
+    /// the step has in total. Zero when no gate is running. `ts` (above) is
+    /// this command's start time — `watch` derives elapsed at render time,
+    /// it is never rewritten while the command runs.
+    #[serde(default)]
+    pub gate_index: usize,
+    #[serde(default)]
+    pub gate_total: usize,
 }
 
 /// `84120` → `84,120`. Token and size counts are read by eye mid-run.
