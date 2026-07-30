@@ -597,7 +597,15 @@ struct GiMaterial {
 
 // RT-R2 (RD6): specular accumulation blend — range 0.05–0.3, untuned
 // (tuning is Peter's look). Smaller = more temporal amortization.
-constant float RT_REFL_ACCUM_ALPHA = 0.1;
+// FLOOR on the specular blend weight — the kernel blends at 1/n (n = the
+// texel's specular history length, carried in `normal_history.w`), so a
+// still mirror converges instead of sitting on the fixed-weight noise
+// floor. One GGX ray per pixel per frame at half res needs every frame of
+// averaging it can get. The floor caps history at 1/alpha frames, which is
+// also the disocclusion-ghost bound D-61 cares about — tighter than the
+// diffuse floor for exactly that reason, with the variance clamp
+// (`clamp_refl_history`) as the second guard.
+constant float RT_REFL_ACCUM_ALPHA_MIN = 0.04;
 // RT-R2 (RD6): roughness at/above which reprojection is plain surface
 // reprojection (the GGX-perturbed ray ≈ the surface lobe there).
 // Range 0.3–0.7, untuned.
@@ -1749,7 +1757,11 @@ kernel void accumulate_irradiance(
         // weight 1/2, not `p.alpha_min`. See the blend below.
         history_write.write(float4(cur.xyz, 1.0), tid);
         depth_history_write.write(float4(cur_depth, 0, 0, 0), tid);
-        normal_history_write.write(float4(cur_normal, 0), tid);
+        // `.w` = the SPECULAR channel's own accumulated frame count (the
+        // irradiance count rides `history_write.a`). Separate counters
+        // because the two channels reproject differently and reject
+        // independently — specular has no depth test.
+        normal_history_write.write(float4(cur_normal, 1.0), tid);
         moments_write.write(float4(cur_luma, cur_luma * cur_luma, 0, 0), tid);
         refl_history_write.write(hi_refl.read(tid), tid);
         return;
@@ -1883,8 +1895,11 @@ kernel void accumulate_irradiance(
     }
     history_write.write(valid ? float4(blended, hist_len) : float4(cur.xyz, 1.0), tid);
     depth_history_write.write(float4(cur_depth, 0, 0, 0), tid);
-    normal_history_write.write(float4(cur_normal, 0), tid);
     moments_write.write(float4(moment1, moment2, 0, 0), tid);
+    // Specular history length, `normal_history.w`. Written below the
+    // reflection block (which computes it) — the normal itself is settled
+    // here, so the deferred write costs nothing.
+    float refl_hist_len = 1.0;
     // RT-R2 (RD6): specular history through the virtual hit point.
     // No depth test — the virtual image's depth never equals the surface
     // depth stored in history; a depth test rejects all mirror history by
@@ -1926,23 +1941,29 @@ kernel void accumulate_irradiance(
                 float2 fr = pf - float2(base);
                 float w[4] = { (1.0-fr.x)*(1.0-fr.y), fr.x*(1.0-fr.y), (1.0-fr.x)*fr.y, fr.x*fr.y };
                 int2 offs[4] = { int2(0,0), int2(1,0), int2(0,1), int2(1,1) };
-                float wsum = 0.0; float3 rsum = float3(0.0);
+                float wsum = 0.0; float3 rsum = float3(0.0); float nsum = 0.0;
                 for (int i = 0; i < 4; ++i) {
                     int2 t = clamp(base + offs[i], int2(0), int2(p.size) - 1);
                     uint2 tt = uint2(t);
-                    bool normal_ok = dot(normalize(normal_history_read.read(tt).xyz), cur_normal_prev) > NORMAL_REJECT_COS_THRESHOLD;
+                    float4 nh = normal_history_read.read(tt);
+                    bool normal_ok = dot(normalize(nh.xyz), cur_normal_prev) > NORMAL_REJECT_COS_THRESHOLD;
                     if (normal_ok) {
                         wsum += w[i];
                         rsum += w[i] * refl_history_read.read(tt).rgb;
+                        nsum += w[i] * nh.w;
                     }
                 }
                 if (wsum > 1e-4) {
-                    refl_write = mix(clamp_refl_history(rsum / wsum, hi_refl, tid, p.size), cur_refl.rgb, RT_REFL_ACCUM_ALPHA);
+                    float rn = nsum / wsum + 1.0;
+                    float ralpha = max(1.0 / rn, RT_REFL_ACCUM_ALPHA_MIN);
+                    refl_hist_len = min(rn, 1.0 / RT_REFL_ACCUM_ALPHA_MIN);
+                    refl_write = mix(clamp_refl_history(rsum / wsum, hi_refl, tid, p.size), cur_refl.rgb, ralpha);
                 }
             }
         }
     }
     refl_history_write.write(float4(refl_write, cur_refl.a), tid);
+    normal_history_write.write(float4(cur_normal, refl_hist_len), tid);
 }
 
 // RT-T1-B value-level test surface ONLY (`docs/RAYTRACING_DESIGN.md` section 8

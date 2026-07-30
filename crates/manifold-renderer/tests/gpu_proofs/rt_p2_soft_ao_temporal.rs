@@ -719,7 +719,10 @@ fn refl_channel_blends_history_and_current() {
         make_history_side_channel(device, GpuTextureFormat::R32Float, "bisect-depth-output");
 
     // Normal history seeded at +Y — matches hi_normal dot > 0.9.
-    let normal_history = make_upload_rgba_f16(device, 0.0, 1.0, 0.0, 0.0, "bisect-normal-history");
+    // `.w` = the specular channel's history length. 9 prior frames means the
+    // kernel's `1/n` blend weight lands on exactly 1/10 = 0.1, the weight
+    // every expectation below is computed against.
+    let normal_history = make_upload_rgba_f16(device, 0.0, 1.0, 0.0, 9.0, "bisect-normal-history");
     let normal_output =
         make_history_side_channel(device, GpuTextureFormat::Rgba16Float, "bisect-normal-output");
 
