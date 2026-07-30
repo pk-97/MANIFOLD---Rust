@@ -206,14 +206,16 @@ const AO_RADIUS_WORLD_UNITS: f32 = 0.5;
 /// (fraction of the tint's own [0,1] magnitude); Peter's morning gate
 /// tunes the exact ambient intensity.
 const AMBIENT_IRRADIANCE_SCALE: f32 = 0.15;
-/// RAYTRACING_DESIGN.md section 5.2 P2/D3: temporal irradiance accumulation
-/// blend weight (fraction of THIS frame folded into history each frame —
-/// `AccumulateParams::alpha`). Committed range 0.05–0.3: lower = smoother/
-/// more history-heavy (more strobe lag, per D3's design intent), higher =
-/// more responsive (less history retained). Peter's morning gate tunes
-/// the exact look — this lane proves the RESET mechanism (cut vs strobe),
-/// not the aesthetic blend rate.
-const IRRADIANCE_ACCUM_ALPHA: f32 = 0.15;
+/// RAYTRACING_DESIGN.md section 5.2 P2/D3: FLOOR on the temporal irradiance
+/// blend weight (`AccumulateParams::alpha`). The kernel blends at `1/n` where
+/// `n` is the texel's accumulated frame count, so a still surface converges;
+/// this floor caps history at `1/alpha` frames (50 here, ~0.8s at 60fps) so
+/// genuinely changing light still tracks instead of smearing forever.
+/// Committed range 0.01–0.05: lower = cleaner stills, more lag on animated
+/// light. It was a FIXED weight of 0.15 until 2026-07-30 — a fixed weight has
+/// a permanent noise floor (~28% of raw single-frame noise) that no amount of
+/// standing still removes, which was the static boil Peter reported.
+const IRRADIANCE_ACCUM_ALPHA: f32 = 0.02;
 /// RAYTRACING_DESIGN.md section 5.2 P3: one-bounce GI gather rays per pixel
 /// (emissive-hit + sun-bounce). Committed range 1–8 (higher = smoother
 /// emissive bounce, more GPU cost, on top of `AO_SAMPLES_PER_PIXEL`'s own
@@ -3206,6 +3208,28 @@ impl EffectNode for RenderScene {
         } else {
             None
         };
+        // TEMPORARY instrumentation (static-boil diagnosis): how often the
+        // accumulator throws its history away. A static scene should print
+        // 0/120 after the first frame; anything else means history dies
+        // before it can converge. Delete once the question is answered.
+        if let Some(r) = reset_decision {
+            use std::sync::atomic::{AtomicU32, Ordering};
+            static FRAMES: AtomicU32 = AtomicU32::new(0);
+            static RESETS: AtomicU32 = AtomicU32::new(0);
+            let f = FRAMES.fetch_add(1, Ordering::Relaxed) + 1;
+            if r {
+                RESETS.fetch_add(1, Ordering::Relaxed);
+            }
+            if f.is_multiple_of(120) {
+                println!(
+                    "[RT ACCUM] resets {}/120 (owner {}, t {:.3}s, dt {:.4}s)",
+                    RESETS.swap(0, Ordering::Relaxed),
+                    ctx.owner_key,
+                    ctx.time.seconds.0,
+                    ctx.time.delta.0
+                );
+            }
+        }
         // D22: whether the scratch/upscaler are actually live this frame —
         // `temporal_upscale` folded with hardware availability, assigned
         // inside the "Ensure cached GPU resources" block below (the first

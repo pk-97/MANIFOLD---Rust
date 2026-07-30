@@ -55,6 +55,14 @@ const H: u32 = 32;
 /// 0 nor 1 (both of which would degenerate the strobe case).
 const TEST_ALPHA: f32 = 0.15;
 
+/// The kernel blends at `1/n` (n = frames of history behind the texel),
+/// floored at `TEST_ALPHA` — a running mean, so a still surface converges
+/// instead of sitting at a fixed noise floor. Every proof below that
+/// retains history does exactly ONE frame after a reset, and a texel with
+/// one prior sample weights the new one at 1/2. Raise the frame count and
+/// this becomes 1/3, 1/4, ... until the floor bites.
+const SECOND_FRAME_ALPHA: f32 = 0.5;
+
 /// Tight epsilon for the cut-reset proof: two `reset=true` writes of the
 /// SAME constant content should agree almost exactly (f16 round-trip
 /// tolerance only).
@@ -573,7 +581,7 @@ fn object_motion_reprojection_retains_history_where_camera_only_rejects() {
     );
     let camera_only = readback_rgba_f32(control.current_irr());
 
-    let expected_retained = 1.0 - TEST_ALPHA;
+    let expected_retained = 1.0 - SECOND_FRAME_ALPHA;
     let mean_r = |px: &[f32]| {
         px.iter().step_by(4).sum::<f32>() / (px.len() / 4) as f32
     };
@@ -998,7 +1006,7 @@ fn fractional_camera_reprojection_blends_and_rejects_per_tap() {
     let red = |x: u32, y: u32| out[((y * W + x) * 4) as usize];
 
     // Bilinear leg, away from the corrupted texel: even column 20, row 8.
-    let expected_blend = (1.0 - TEST_ALPHA) * 0.6;
+    let expected_blend = (1.0 - SECOND_FRAME_ALPHA) * 0.6;
     let got_blend = red(20, 8);
     eprintln!("[BUG-ukg] bilinear leg r = {got_blend} (expect {expected_blend})");
     assert!(
@@ -1098,7 +1106,7 @@ fn rotating_object_retains_history_when_normals_are_compared_in_one_orientation(
     // The invariant here ("same surface point, same orientation => history
     // retained") is only defined where the reprojection lands on-screen, so
     // the measurement is the central half rather than a loosened threshold.
-    let expected = 1.0 - TEST_ALPHA;
+    let expected = 1.0 - SECOND_FRAME_ALPHA;
     let (lo, hi) = (W / 4, W - W / 4);
     let mut acc = 0.0f32;
     let mut n = 0u32;

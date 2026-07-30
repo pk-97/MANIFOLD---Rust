@@ -1744,7 +1744,10 @@ kernel void accumulate_irradiance(
     float  cur_luma = luma(cur.xyz);
 
     if (p.reset != 0u) {
-        history_write.write(cur, tid);
+        // `.a` = accumulated frame count (BUG-boil): a cold texel has
+        // exactly one sample, so its next blend takes the current frame at
+        // weight 1/2, not `p.alpha_min`. See the blend below.
+        history_write.write(float4(cur.xyz, 1.0), tid);
         depth_history_write.write(float4(cur_depth, 0, 0, 0), tid);
         normal_history_write.write(float4(cur_normal, 0), tid);
         moments_write.write(float4(cur_luma, cur_luma * cur_luma, 0, 0), tid);
@@ -1763,6 +1766,9 @@ kernel void accumulate_irradiance(
     // visible shimmer until motion stopped (the residual BUG-320 left).
     bool valid = false;
     float3 blended = cur.xyz;
+    // Frames of history behind this texel, carried in `history_write.a`.
+    // 1 = this frame only (a rejected/disoccluded texel is a cold start).
+    float hist_len = 1.0;
     float moment1 = cur_luma;
     float moment2 = cur_luma * cur_luma;
     // NORMAL_REJECT_COS_THRESHOLD: cosine of the angle between
@@ -1839,27 +1845,43 @@ kernel void accumulate_irradiance(
                 float w[4] = { (1.0-fr.x)*(1.0-fr.y), fr.x*(1.0-fr.y), (1.0-fr.x)*fr.y, fr.x*fr.y };
                 int2 offs[4] = { int2(0,0), int2(1,0), int2(0,1), int2(1,1) };
                 float wsum = 0.0; float3 hsum = float3(0.0); float2 msum = float2(0.0);
+                float nsum = 0.0;
                 for (int i = 0; i < 4; ++i) {
                     int2 t = clamp(base + offs[i], int2(0), int2(p.size) - 1);
                     uint2 tt = uint2(t);
                     bool depth_ok  = fabs(depth_history_read.read(tt).r - prev_ndc.z) < DEPTH_REJECT_THRESHOLD;
                     bool normal_ok = dot(normalize(normal_history_read.read(tt).xyz), cur_normal_prev) > NORMAL_REJECT_COS_THRESHOLD;
                     if (depth_ok && normal_ok) {
+                        float4 h = history_read.read(tt);
                         wsum += w[i];
-                        hsum += w[i] * history_read.read(tt).xyz;
+                        hsum += w[i] * h.xyz;
+                        nsum += w[i] * h.a;
                         msum += w[i] * moments_read.read(tt).rg;
                     }
                 }
                 if (wsum > 1e-4) {
-                    blended = mix(hsum / wsum, cur.xyz, p.alpha);
+                    // BUG-boil: the blend weight FALLS as history builds
+                    // (1/n), instead of a fixed weight. A fixed weight has a
+                    // permanent noise floor — output variance settles at
+                    // alpha/(2-alpha) of the raw single-frame variance and
+                    // stays there, so a static scene boils forever no matter
+                    // how long it sits. 1/n is a true running mean: variance
+                    // keeps falling while the surface stays valid.
+                    // `p.alpha` is now the FLOOR, capping history length at
+                    // 1/alpha frames so genuinely changing light (animated
+                    // params, modulated intensity) still tracks.
+                    float n = nsum / wsum + 1.0;
+                    float alpha = max(1.0 / n, p.alpha);
+                    hist_len = min(n, 1.0 / max(p.alpha, 1e-6));
+                    blended = mix(hsum / wsum, cur.xyz, alpha);
                     valid = true;
-                    moment1 = mix(msum.x / wsum, cur_luma, p.alpha);
-                    moment2 = mix(msum.y / wsum, cur_luma * cur_luma, p.alpha);
+                    moment1 = mix(msum.x / wsum, cur_luma, alpha);
+                    moment2 = mix(msum.y / wsum, cur_luma * cur_luma, alpha);
                 }
             }
         }
     }
-    history_write.write(valid ? float4(blended, 0) : cur, tid);
+    history_write.write(valid ? float4(blended, hist_len) : float4(cur.xyz, 1.0), tid);
     depth_history_write.write(float4(cur_depth, 0, 0, 0), tid);
     normal_history_write.write(float4(cur_normal, 0), tid);
     moments_write.write(float4(moment1, moment2, 0, 0), tid);
