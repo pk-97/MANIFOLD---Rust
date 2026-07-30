@@ -6548,17 +6548,33 @@ mod gpu_tests {
             "a second prewarm pass must be a pure cache hit, not add more entries"
         );
 
-        // The exact combination `pipeline_for` would compile lazily on a
-        // glTF scene layer's first draw must already be warm — proves this
-        // isn't just "some pipeline got created."
+        // EVERY combination `pipeline_for` can compile lazily must already
+        // be warm — proves this isn't just "some pipeline got created", and
+        // fails loudly if a new aux-output dimension is added to
+        // `pipeline_for` without being added to `prewarm_pipelines`
+        // (RAYTRACING_DESIGN.md section 12 AM1 added `emit_ao_mask` as
+        // exactly such a dimension).
         let mut scene = RenderScene::default();
         let cache_before_use = device.render_pipeline_cache_len();
-        scene.pipeline_for(&device, MaterialKind::Pbr, false, false);
-        assert_eq!(
-            device.render_pipeline_cache_len(),
-            cache_before_use,
-            "pipeline_for after prewarm must be a cache hit, not compile a new pipeline"
-        );
+        for kind in [
+            MaterialKind::Unlit,
+            MaterialKind::Phong,
+            MaterialKind::Pbr,
+            MaterialKind::Cel,
+        ] {
+            for blend in [false, true] {
+                for (emit_velocity, emit_ao_mask) in
+                    [(false, false), (true, false), (false, true), (true, true)]
+                {
+                    scene.pipeline_for(&device, kind, emit_velocity, emit_ao_mask, blend);
+                    assert_eq!(
+                        device.render_pipeline_cache_len(),
+                        cache_before_use,
+                        "pipeline_for({kind:?}, velocity={emit_velocity}, ao_mask={emit_ao_mask}, blend={blend}) after prewarm must be a cache hit, not compile a new pipeline"
+                    );
+                }
+            }
+        }
     }
 
     // --- G-P3 anisotropic filtering (GLB_CONFORMANCE_DESIGN.md D7) -----
