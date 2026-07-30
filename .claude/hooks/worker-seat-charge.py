@@ -1,28 +1,23 @@
 #!/usr/bin/env python3
-"""worker-seat-charge.py — PreToolUse hook injecting the worker-seat charge
-into every subagent/teammate, once, on its first tool call.
+"""worker-seat-charge.py — PreToolUse hook injecting the worker-seat charge into every
+subagent/teammate, once, on its first tool call.
 
-Why (Peter 2026-07-28): seat-identity.py is SessionStart-wired and
-SessionStart never fires for teammate/subagent spawns (telemetry-verified),
-so no worker ever received its seat charge — a haiku teammate spawned an
-Explore agent with nothing but brief prose telling it not to. Guards deny
-(agent-tier-spawn-guard), but the instructional layer must exist too:
-denial without doctrine turns workers into workaround-hunters (the same
-lane wrote the lead's seam-review unlock file when denied).
+seat-identity.py is SessionStart-wired and SessionStart never fires for
+teammate/subagent spawns, so no worker ever received its seat charge. Guards deny
+(agent-tier-spawn-guard), but the instructional layer must exist too: denial without
+doctrine turns workers into workaround-hunters.
 
 Mechanism: worker seats are identified by payload markers
-(`agent_id`/`agent_type`/`teammate_name` — measured 2026-07-28 via
-telemetry `keys`; lead payloads carry none). First marker-carrying tool
-call per agent identity injects additionalContext; a /tmp state file keyed
-by agent identity suppresses repeats. NEVER env-based and NEVER
-transcript-based: workers inherit the parent's env and their payload
-transcript_path is the PARENT transcript, so both misidentify the seat as
-the lead.
+(`agent_id`/`agent_type`/`teammate_name` — lead payloads carry none). First
+marker-carrying tool call per agent identity injects additionalContext; a /tmp state
+file keyed by agent identity suppresses repeats. NEVER env-based and NEVER
+transcript-based: workers inherit the parent's env and their payload transcript_path is
+the PARENT transcript, so both misidentify the seat as the lead.
 
 Fails OPEN on any error.
 
-Obsolete when: the harness fires SessionStart (or an equivalent start
-event) for subagent/teammate spawns — move the charge there.
+Obsolete when: the harness fires SessionStart (or an equivalent start event) for
+subagent/teammate spawns — move the charge there.
 """
 import json
 import re

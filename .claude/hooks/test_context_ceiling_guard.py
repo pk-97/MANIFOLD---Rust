@@ -108,13 +108,23 @@ if PROJ.is_dir():
     # A lane transcript's user turns are promptSource sdk/none with no human origin;
     # classify independently here so the assertion is not the hook grading itself.
     def typed_by_human(p: Path) -> bool:
+        def anywhere(node) -> bool:
+            # Nested too: a queued command carries origin inside an attachment row.
+            if isinstance(node, dict):
+                o = node.get("origin")
+                if isinstance(o, dict) and o.get("kind") == "human":
+                    return True
+                return any(anywhere(v) for v in node.values())
+            if isinstance(node, list):
+                return any(anywhere(v) for v in node)
+            return False
+
         for line in p.open(errors="replace"):
             try:
                 e = json.loads(line)
             except ValueError:
                 continue
-            o = e.get("origin")
-            if isinstance(o, dict) and o.get("kind") == "human":
+            if anywhere(e):
                 return True
         return False
     mismatches = [p.name for p in real if seats[p] != typed_by_human(p)]

@@ -1,38 +1,29 @@
 #!/usr/bin/env python3
-"""PreToolUse hook for AskUserQuestion: the daemon's deterministic
-pre-question tier (DESIGN.md §2c-ask).
+"""PreToolUse hook for AskUserQuestion: deterministic + semantic pre-question gate.
 
-Why this exists, and why it can't be the async observer: on 2026-07-04 an
-orchestrator hit a "cheap approximation vs. proper primitive" fork and asked
-the user with the shortcut marked "(Recommended)" — the shortcut-as-
-recommendation framing CLAUDE.md's fix-at-the-root rule forbids. The daemon
-never caught it: a question-wait produces no tool events, so nothing revived
-the observer during the 12 minutes it sat idle-exited, and even a live
-observer's whisper lands after the question is already blocking the session.
-This hook runs synchronously, before the question ever renders.
+Two tiers:
 
-Behavior: `common.detect_shortcut_fork` screens the question's own option
-text (no classifier call — deterministic regex, same tier as
-`detect_stopgap_markers`). On a match, deny once per distinct question (a
-hash-keyed marker file lets an identical re-ask through — never bounce the
-same question twice) with a reason quoting fix-at-the-root. Also revives the
-observer via `valve.ensure_observer`, since a question-wait is otherwise a
-blind spot for the idle-exit revival path.
+1. Regex — `common.detect_shortcut_fork` screens the question's own option text for a
+shortcut framed as "(Recommended)" against a proper primitive (CLAUDE.md's
+fix-at-the-root rule). On a match, deny once per distinct question (hash-keyed marker
+file lets an identical re-ask through — never bounce the same question twice), reason
+quotes fix-at-the-root. Also revives the observer via `valve.ensure_observer`, since a
+question-wait is otherwise a blind spot for idle-exit revival.
 
-Semantic tier — WIRED 2026-07-05 with Peter's explicit sign-off ("Yes for
-the semantic ask-gate"). When the regex tier doesn't hit, a SYNCHRONOUS
-Haiku call judges the question against three gates — decidable-from-
-decisions-already-held, mispriced fork, below the ask threshold. A question
-is the one event where a synchronous model call is affordable: rare, already
-blocking, and about to pause the human for minutes. Deny-once semantics via
-the same bounce marker as the regex tier; every verdict (deny or clear) is
-logged to telemetry as `ask_gate` for the next sleep pass. Haiku detects,
-never prescribes — deny reasons are pre-authored (sleep-pass-editable only,
-like moves.md payloads).
+2. Semantic — when the regex tier doesn't hit, a synchronous Haiku call judges the
+question against three gates: decidable-from-decisions-already-held, mispriced fork,
+below the ask threshold. Same deny-once semantics via the bounce marker; every verdict
+(deny or clear) is logged to telemetry as `ask_gate`. Haiku detects, never prescribes —
+deny reasons are pre-authored, sleep-pass-editable only.
+
+Timeout: ASK_GATE_TIMEOUT_S = 30s. `common.classifier_throttled()` skips the semantic
+call outright when the last classifier call ran slow, instead of burning a dead wait. A
+timeout fails open and still refreshes the throttle stamp.
 
 Fails open on any error: this hook must never be able to block a session.
 
-Obsolete when: background/autonomous sessions can genuinely block on user input without stalling work (interactive-only operation).
+Obsolete when: background/autonomous sessions can genuinely block on user input without
+stalling work (interactive-only operation).
 """
 import hashlib
 import json

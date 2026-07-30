@@ -1,29 +1,24 @@
 #!/usr/bin/env python3
-"""PreToolUse hook for Bash: tier-guard `cc-fleet` spawn commands.
+"""PreToolUse hook for Bash: tier-guard cc-fleet spawn commands.
 
-Why (2026-07-24, R2 resolution — AGENT_ROUTING.md §0): provider sessions
-(cc-fleet subagents/teammates) have no Agent tool, so
-agent-tier-spawn-guard.py never sees their spawns — but they DO have Bash,
-and the sanctioned way to spawn a provider agent IS a bash `cc-fleet` call.
-Without this guard, Flash-over-Flash is one bash call away — the
-executor-over-executor failure that killed the overnight waves.
+Provider sessions (cc-fleet subagents/teammates) have no Agent tool, so
+agent-tier-spawn-guard.py never sees their spawns — but they do have Bash, and the
+sanctioned way to spawn a provider agent is a bash cc-fleet call. Without this guard,
+Flash-over-Flash is one bash call away.
 
-Tier rules (model strings measured from real transcripts 2026-07-24:
-`deepseek-v4-flash`, `glm-4.7`, `k3`, `claude-*`):
+Caller tier comes from the payload's `transcript_path`: the last assistant entry's
+`message.model`.
 
-- `cc-fleet spawn` (tmux teammates): denied for EVERY tier incl. lead —
-  dead path on CC >= 2.1.218 (D-48; native Agent-tool lanes instead).
-- Executor tier (deepseek*, kimi-k2*, kimi-for-coding, claude-sonnet/haiku):
-  ALL cc-fleet spawn verbs denied. Executors execute; decisions flow up.
-- Dispatcher tier (glm*): may drive the executor provider only
-  (EXECUTOR_PROVIDERS) via `cc-fleet subagent`. Anything else — spawning
-  zai/kimi seats, workflows, unparseable targets — is denied with an
-  escalate-up pointer.
+Tier rules (model strings: deepseek-v4-flash, glm-4.7, k3, claude-*):
+- cc-fleet spawn (tmux teammates): denied for EVERY tier incl. lead — dead path on CC >= 2.1.218 (native Agent-tool lanes instead).
+- Executor tier (deepseek*, kimi-k2*, kimi-for-coding, claude-sonnet/haiku): ALL cc-fleet spawn verbs denied.
+- Dispatcher tier (glm*): may drive the executor provider only (EXECUTOR_PROVIDERS = opencode, deepseek) via cc-fleet subagent. Anything else — spawning zai/kimi seats, workflows, unparseable targets — is denied with an escalate-up pointer.
 - Lead tier (fable/opus/k3 — anything not matched above): passes through.
 
 Fails open on any error — a guard hook must never block a session.
 
-Obsolete when: the routing policy in docs/AGENT_ROUTING.md retires the provider-tier model this guard polices, or cc-fleet is removed from the toolchain.
+Obsolete when: the routing policy in docs/AGENT_ROUTING.md retires the provider-tier
+model this guard polices, or cc-fleet is removed from the toolchain.
 """
 import json
 import os

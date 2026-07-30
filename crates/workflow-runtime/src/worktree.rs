@@ -27,6 +27,12 @@ pub struct Worktree {
 pub fn acquire(repo_root: &Path, label: &str, branch: &str, tip: Option<&str>) -> Result<Worktree, String> {
     let mut cmd = Command::new(repo_root.join("scripts/agent-worktree.py"));
     cmd.arg("acquire").arg(label).arg(branch).current_dir(repo_root);
+    // Name the lease and give it a pid to probe. A run never releases its slot
+    // (completion, `abandon`, and a kill all leave the lease), so an anonymous
+    // 8h lease was the ring's only clue that the holder was gone — this process
+    // outlives the acquire, so its pid is the honest liveness signal.
+    cmd.arg("--owner").arg(format!("workflow-run:{label}"));
+    cmd.arg("--holder-pid").arg(std::process::id().to_string());
     if let Some(tip) = tip {
         cmd.arg("--tip").arg(tip);
     }

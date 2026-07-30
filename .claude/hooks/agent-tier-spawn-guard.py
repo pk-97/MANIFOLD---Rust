@@ -1,42 +1,26 @@
 #!/usr/bin/env python3
 """PreToolUse hook for Agent: enforce the spawn hierarchy by caller tier.
 
-Why (2026-07-21, Peter + AGENT_ROUTING.md): executors deferring their own
-work to sub-agents recreates executor-over-executor — the exact failure the
-steering model exists to prevent — and until now it was policy, not
-machinery. The chain is lead → (optional dispatcher) → executors, full stop.
+The chain is lead -> (optional dispatcher) -> executors, full stop.
 
-Mechanism (deterministic, no model calls): the hook payload carries
-`transcript_path` — the caller's own conversation JSONL. The last assistant
-entry's `message.model` identifies the calling agent's tier.
+Mechanism (deterministic, no model calls): seat markers
+(`agent_id`/`agent_type`/`teammate_name` in the payload) deny BEFORE any transcript read
+— teammate payloads carry the PARENT transcript, so a transcript-model check would see
+the lead's model and misidentify the caller. For a marker-less (lead) session, the hook
+reads `transcript_path` and takes the last assistant entry's `message.model` as the
+caller's tier.
 
-Tier rules (D-48 native-lane roster, 2026-07-24 — lanes are native Agent
-subagents whose slot env maps to provider models via the litellm proxy;
-see docs/AGENT_ROUTING.md §Native provider lanes):
-
+Tier rules (see docs/AGENT_ROUTING.md, Native provider lanes):
 - LEAD (fable / claude-opus / k3): spawns anything.
-- DISPATCHER / middle (glm-*): may spawn ONLY `model: "haiku"` — the
-  DeepSeek Flash executor slot. Anything else (sonnet/opus/fable lanes,
-  missing model) is denied: dispatchers drive executors, never peers or
-  tiers above themselves.
-- EXECUTOR (deepseek*, kimi-k2*, kimi-for-coding, claude-sonnet/haiku):
-  ALL Agent spawns denied. Executors execute; decisions flow up.
+- DISPATCHER / middle (glm-*): may spawn ONLY `model: "haiku"` — the DeepSeek Flash executor slot. Anything else (sonnet/opus/fable lanes, missing model) is denied.
+- EXECUTOR (deepseek*, kimi-k2*, kimi-for-coding, claude-sonnet/haiku): ALL Agent spawns denied.
 
-Fails open on any error (missing/unreadable transcript, format drift): a
-guard hook must never be able to block a session. `agent-launch-guard.py`
-independently covers the explicit-model requirement for allowed spawns.
+Fails open on any error (missing/unreadable transcript, format drift): a guard hook must
+never be able to block a session. `agent-launch-guard.py` independently covers the
+explicit-model requirement for allowed spawns.
 
-History: 2026-07-24 R2 extended DENY to the open provider roster (model ids
-measured from real transcripts: `deepseek-v4-flash`, `glm-4.7`).
-2026-07-24 D-48 split GLM out of the executor tier: subagent nesting is
-harness-possible and the GLM dispatcher legitimately spawns haiku lanes.
-2026-07-28: seat markers (`agent_id`/`agent_type`/`teammate_name` in the
-payload) now deny BEFORE the transcript read — teammate payloads carry the
-PARENT transcript, so the model check saw the lead's model and let a haiku
-teammate spawn an Explore agent. The transcript-tier path below survives
-only for the marker-less lead session.
-
-Obsolete when: the routing policy in docs/AGENT_ROUTING.md retires the two-tier lead/lane model this guard polices; recheck at each routing-policy revision.
+Obsolete when: the routing policy in docs/AGENT_ROUTING.md retires the two-tier
+lead/lane model this guard polices; recheck at each routing-policy revision.
 """
 import json
 import os

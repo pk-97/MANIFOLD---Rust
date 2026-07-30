@@ -1,32 +1,25 @@
 #!/usr/bin/env python3
-"""delegation-nudge.py — PreToolUse hook that pressures the lead to delegate
-once a session turns into sustained hands-on grinding (Peter 2026-07-28: the
-lead ran a 15-probe render loop itself while the routing doctrine says lanes
-run loops; "you NEVER listen to that rule").
+"""PreToolUse hook that pressures the lead to delegate once a session turns into sustained
+hands-on grinding.
 
 Mechanism (deterministic, count-based, no content heuristics):
-  - Counts EVERY hands-on action per session: Bash commands and
-    Edit/Write/MultiEdit file edits.
+  - Counts every hands-on action per session: Bash commands and Edit/Write/MultiEdit file edits.
   - An Agent tool call marks the session as delegating: it resets the window.
-  - Every NUDGE_EVERY (20) consecutive hands-on actions with no Agent call in
-    between, inject additionalContext telling the lead to stop and consider a
-    lane. Injection repeats every further NUDGE_EVERY actions, so a long
-    grind gets nudged at 20, 40, 60, ...
+  - Every NUDGE_EVERY (20) consecutive hands-on actions with no Agent call in between, inject additionalContext telling the lead to stop and consider a lane. Injection repeats every further NUDGE_EVERY actions.
 
-This hook only nudges — CLAUDE.md's default is "write code directly in the
-main context" for normal-sized work, so denying all sustained direct work
-would fight the contract. The DENY arm for instrument-probe loops lives in
-probe-loop-guard.py. Fails OPEN on any error.
+This hook only nudges — CLAUDE.md's default is "write code directly in the main context"
+for normal-sized work, so denying all sustained direct work would fight the contract.
+The DENY arm for instrument-probe loops lives in probe-loop-guard.py. Fails OPEN on any
+error.
 
-LEAD SEAT ONLY (Peter 2026-07-28): grinding is a lane's job description —
-nudging a worker to spawn agents inverts the routing model. Seat test
-(measured, telemetry `keys` 2026-07-28): subagent/teammate PreToolUse
-payloads carry `agent_id`/`agent_type`; the lead's carry neither. Marker
-present → silent. Never use transcript-model detection for seats: teammate
-payloads carry the PARENT transcript, so the model always reads as the lead.
+LEAD SEAT ONLY: grinding is a lane's job description — nudging a worker to spawn agents
+inverts the routing model. Seat test: subagent/teammate PreToolUse payloads carry
+`agent_id`/`agent_type`; the lead's carry neither. Marker present -> silent. Never use
+transcript-model detection for seats: teammate payloads carry the PARENT transcript, so
+the model always reads as the lead.
 
-Obsolete when: docs/AGENT_ROUTING.md's lead/lane split is retired, or the
-harness itself meters lead token spend against delegation.
+Obsolete when: docs/AGENT_ROUTING.md's lead/lane split is retired, or the harness itself
+meters lead token spend against delegation.
 """
 import json
 import re

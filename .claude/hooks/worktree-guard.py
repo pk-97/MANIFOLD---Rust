@@ -1,42 +1,28 @@
 #!/usr/bin/env python3
-"""PreToolUse(Edit|Write|MultiEdit) guard: keep uncommitted work OFF the main
-checkout. Agents edit in a git worktree; main stays clean, runnable, and safe
-for other sessions (and Peter) to branch from and run.
+"""PreToolUse(Edit|Write|MultiEdit): keep uncommitted work OFF the main checkout.
 
-Why this exists: an agent editing files directly in the main checkout (a) leaves
-main un-runnable while breaking changes sit uncommitted — Peter can't build/run
-the app — and (b) moves the main working tree and HEAD under any other session or
-worktree that branched from it. The fix is structural: never touch the main
-checkout's files directly. This hook denies such edits and points the agent at a
-worktree.
+Main stays clean and runnable for Peter and for any session branching from it.
+Agents edit in a worktree. Denies when the target resolves inside the main
+checkout, except:
+  - paths already under .claude/worktrees/;
+  - tooling under .claude/ (hooks, commands, settings) — no effect on the app
+    build, and gating them would make editing this hook require a worktree.
+    Repo memory lives outside the project dir and never trips;
+  - conflicted files while .git/MERGE_HEAD exists — landing merges happen in the
+    main checkout. Scope: merge_conflict_paths();
+  - docs/**/*.md, all of them including *_DESIGN.md. Adding or renaming a doc
+    still needs gen_docs_index.py in the same commit.
 
-Denies when the target file resolves INSIDE the main checkout, EXCEPT:
-  - files already in a worktree (.claude/worktrees/...) — that's the right place;
-  - tooling/meta files under .claude/ (hooks, daemon, commands, settings) — these
-    don't affect the app build, and gating them would make editing this very hook
-    require a worktree. Repo memory lives outside the project dir and never trips;
-  - unmerged (conflicted) files while .git/MERGE_HEAD exists — landing-protocol
-    merges happen in the main checkout, so conflict resolution edits exactly
-    those files there. See merge_conflict_paths() for scope and failure story;
-  - quick docs: docs/**/*.md — ALL docs, including *_DESIGN.md (approved by
-    Peter 2026-07-20; widened to design docs by Peter 2026-07-24 — the
-    worktree ceremony is overkill for non-breaking doc edits like findings,
-    backlog entries, tombstones, status lines).
-    Adding/renaming a doc still requires gen_docs_index.py in the same commit
-    or the freshness meta-test goes red.
+The deny repeats on every attempt: moving into a worktree makes the path stop
+matching, so the guard falls silent on its own.
 
-The deny repeats on every attempt (no once-per-session sentinel): the only way to
-make the edit land is to actually move into a worktree, at which point the target
-path is no longer in the main checkout and the guard falls silent on its own.
+Fails OPEN on any error or unrecognized shape. A path that resolves cleanly into
+the main checkout is a deliberate deny.
 
-Fails OPEN on any error or unrecognized shape — never blocks a session on a bug.
-A path that resolves cleanly into the main checkout is a deliberate deny, not a
-failure.
+In: {"tool_name", "tool_input": {"file_path"}, "cwd"}. Out:
+hookSpecificOutput.permissionDecision="deny" + reason, or nothing.
 
-Receives `{"tool_name", "tool_input": {"file_path": ...}, "cwd": ...}` on stdin.
-Emits hookSpecificOutput.permissionDecision="deny" + reason, or nothing.
-
-Obsolete when: the main checkout stops being the shared runnable trunk (every seat, lead included, works in disposable worktrees, or landing moves to a server-side gate).
+Obsolete when: the main checkout stops being the shared runnable trunk.
 """
 import json
 import subprocess

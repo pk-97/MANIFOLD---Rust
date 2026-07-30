@@ -1,42 +1,26 @@
 #!/usr/bin/env python3
-"""PreToolUse hook for Workflow: the daemon's launch-announcement +
-model-discipline gate (DESIGN.md §2g, launch tier).
-
-Why this exists: on 2026-07-05 Peter caught an Opus orchestrator launching a
-workflow whose agent() calls carried no explicit model — every worker
-silently inherited the session's Opus tier. The Agent-tool version of this
-failure already has an async anchor (anchor/agent-model-discipline) and a
-ledger annotation; Workflow scripts were the named gap ("agent() model
-choices live inside the script text, not the ledger"). A workflow launch is
-rare, already blocking, and damage-preceding — the §2c-ask criteria for a
-synchronous gate — so this runs deterministically before the fleet exists,
-not as a whisper after it's spent the tokens.
+"""PreToolUse hook for Workflow: launch-announcement + model-discipline gate (DESIGN.md
+section 2g, launch tier).
 
 Two tiers, both deterministic (no classifier call):
 
-1. Model discipline — EVERY launch. Each `agent(` call site in the script
-   must carry an explicit `model:` in its options. A call without one
-   inherits the session model, which is exactly the silent Opus-spawns-Opus
-   path. Violations deny with the offending line numbers. Re-checked on
-   every retry; there is no bounce-out.
+1. Model discipline — every launch. Each `agent(` call site in the script must carry an
+explicit `model:` in its options; a call without one inherits the session model.
+Violations deny with the offending line numbers. Re-checked on every retry — no
+bounce-out.
 
-2. Announce-once — per (session, workflow name). The first launch of a
-   given workflow is denied once with instructions to announce, in visible
-   text to the user: what the workflow is for, why it needs orchestration,
-   the fan-out, and the model tier of every stage with a reason. The parsed
-   roster is embedded in the deny so the announcement is grounded. The
-   relaunch passes. Keyed on the workflow's meta name, NOT a content hash —
-   the retry usually edits the script (adding model:), and a content key
-   would bounce the fixed script a second time.
+2. Announce-once — per (session, workflow name). The first launch of a given workflow is
+denied once with instructions to announce, in visible text to the user: what the
+workflow is for, why it needs orchestration, the fan-out, and the model tier of every
+stage with a reason. The parsed roster is embedded in the deny. The relaunch passes.
+Keyed on the workflow's meta name, not a content hash, so an edited retry (adding
+model:) isn't bounced again.
 
-A launch that clears both tiers emits NO decision: it falls through to the
-normal permission flow. This gate only adds requirements; the §2g bounds
-tier (auto-approve within an allowance) is a separate build and the only
-thing that may ever widen permissions.
+A launch that clears both tiers emits no decision — it falls through to the normal
+permission flow. This gate only adds requirements; it never widens permissions.
 
-Fails open on any error — a parse failure, unreadable scriptPath, or
-unbalanced script never denies. Telemetry: `workflow_gate` records on every
-decision, for sleep-pass review.
+Fails open on any error — a parse failure, unreadable scriptPath, or unbalanced script
+never denies. Telemetry: `workflow_gate` records every decision.
 
 Obsolete when: the cc-fleet workflow engine is retired or gains its own built-in gating.
 """

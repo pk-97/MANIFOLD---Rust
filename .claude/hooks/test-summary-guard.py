@@ -1,26 +1,24 @@
 #!/usr/bin/env python3
 """PostToolUse guard: no test run may pass without a visible summary line.
 
-Failure mode this closes (2026-07-17, depth-relight orchestration): agents
-launch `cargo test` / `cargo nextest` — foreground with a truncating pipe
-(`| tail -1`), or as a background task — and then either idle-wait on a
-process that already exited or report "green" from an exit code without ever
-reading a `test result:` line. Silent test failures and stalled agents both
-trace back to the same sin: the summary line was never in anyone's context.
+Agents launch `cargo test` / `cargo nextest` — foreground with a truncating pipe, or as
+a background task — and then report "green" from an exit code without ever reading a
+`test result:` line. Silent test failures and stalled agents both trace back to the
+summary line never being in anyone's context.
 
-Mechanism: fires on every Bash PostToolUse. If the command is a test
-invocation, require the canonical summary evidence in the captured output —
-`test result:` (cargo test, per-binary) or `Summary [` (nextest). Missing
-evidence injects a loud warning into the calling agent's own context
-(PostToolUse additionalContext reaches subagents in their own context —
-probe-verified 2026-07-04, see daemon-posttooluse.py). Background launches
-get the warning up front, at launch time, since their output arrives later.
+Mechanism: fires on every Bash PostToolUse. If the command is a test invocation, require
+the canonical summary evidence in the captured output — `test result:` (cargo test,
+per-binary) or `Summary [` (nextest). Missing evidence injects a loud warning into the
+calling agent's own context (PostToolUse additionalContext reaches subagents in their
+own context). Background launches get the warning up front, at launch time, since their
+output arrives later.
 
-This is advisory context, not a block — the agent may be mid-pipeline — but
-it is injected EVERY time, so "forgot to check" can no longer survive a
-turn. Fails open on any error.
+This is advisory context, not a block — the agent may be mid-pipeline — but it is
+injected EVERY time, so "forgot to check" can no longer survive a turn. Fails open on
+any error.
 
-Obsolete when: the test runners emit machine-verified summaries the harness checks itself (result verification moves into the tool layer).
+Obsolete when: the test runners emit machine-verified summaries the harness checks
+itself (result verification moves into the tool layer).
 """
 import json
 import re

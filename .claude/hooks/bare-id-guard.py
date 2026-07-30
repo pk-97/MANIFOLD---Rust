@@ -26,8 +26,8 @@ Deterministic contract (this docstring is the spec):
               docs/WIDGET_TREE_DESIGN.md section 5b (param-surface recipe)
           Same-doc refs stay bare; the heading in the same file names them.
 
-  RULE 3  The `§` symbol is banned in prose outright (Peter 2026-07-28) —
-          write `section N`, never the symbol.
+  RULE 3  The `§` symbol is banned in prose outright — write `section N`,
+          never the symbol.
 
   EXEMPT  Fenced code blocks; lines whose first non-space char is `$`; lines
           invoking `bd` (create/show/update/close/list/ready/dep); lines
@@ -39,7 +39,8 @@ Deterministic contract (this docstring is the spec):
 
 Fails open on any error.
 
-Obsolete when: IDs are rendered with their names automatically wherever prose is read (bd/doc tooling inlines titles), so bare IDs stop costing the reader a lookup.
+Obsolete when: IDs are rendered with their names automatically wherever prose is read
+(bd/doc tooling inlines titles), so bare IDs stop costing the reader a lookup.
 """
 import json
 import re

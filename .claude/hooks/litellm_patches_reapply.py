@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
-"""Reapply the MANIFOLD local patches to the litellm venv (D-48, 2026-07-24).
+"""Reapply the MANIFOLD local patches to the litellm venv.
 
-Why: litellm 1.93.0 (latest at patch time) crashes on opencode's streaming
-keepalive chunks — empty `choices` arrays in the anthropic<->openai
-translation path. DeepSeek Flash lanes ride that path (opencode Go speaks
-OpenAI protocol only), so an unpatched venv silently kills the executor
-tier. pip upgrades REVERT these patches; this script re-applies them
-idempotently and verifies.
+litellm crashes on opencode's streaming keepalive chunks — empty `choices` arrays in the
+anthropic<->openai translation path. DeepSeek Flash lanes ride that path (opencode Go
+speaks OpenAI protocol only), so an unpatched venv silently kills the executor tier. pip
+upgrades REVERT these patches; this script re-applies them idempotently and verifies.
 
 Run after ANY litellm upgrade:
     python3 .claude/hooks/litellm_patches_reapply.py
@@ -16,17 +14,17 @@ it is an operational tool, not a Claude Code hook.)
 
 Canary (proves the whole route, not just the patch):
     ANTHROPIC_BASE_URL=http://127.0.0.1:4000 \
-    ANTHROPIC_API_KEY=$(cc-fleet keyget kimi) \
-    claude -p "Reply with exactly: REAL-CC-OK" --model deepseek-v4-flash --max-turns 1
+      ANTHROPIC_API_KEY=$(cc-fleet keyget kimi) \
+      claude -p "Reply with exactly: REAL-CC-OK" --model deepseek-v4-flash --max-turns 1
 
 Also load-bearing, but config-side (survives upgrades, listed for the map):
     ~/.config/litellm/config.yaml
       use_chat_completions_url_for_anthropic_messages: true
     (opencode's /responses endpoint is nonstandard; chat-completions works)
 
-Upstream: worth filing at github.com/BerriAI/litellm — unguarded
-chunk.choices[0] on empty-choices streaming chunks. Delete this directory
-once an upgraded litellm passes the canary unpatched.
+Upstream: worth filing at github.com/BerriAI/litellm — unguarded chunk.choices[0] on
+empty-choices streaming chunks. Delete this directory once an upgraded litellm passes
+the canary unpatched.
 """
 import re
 import sys
