@@ -171,12 +171,12 @@ P3 shakedown rulings (Peter, 2026-07-30 — the mb-a-refactor park exposed all f
   the one small quotable edit landed one-shot first try (50K). A refactor-shaped one-shot
   execute step is a design smell, not a failure mode.
 
-  **Delivered P4.** `lane` opcode: same worktree, same gate/park/blocking/gate-first
-  semantics; the worker is a headless agent session; what it did is measured by HEAD sha
-  delta, never `git status` (our lanes commit their own work, so porcelain reads a good
-  lane as having done nothing, and committing a porcelain listing is `add -A` in disguise);
-  a dirty tree on return parks the step. D15's blocking predicate widens to every
-  worktree-touching opcode on both sides.
+  The lane's contract: same worktree, same gate/park/blocking/gate-first semantics; the
+  worker is a headless agent session; what it did is measured by HEAD sha delta, never
+  `git status` (our lanes commit their own work, so porcelain reads a good lane as having
+  done nothing, and committing a porcelain listing is `add -A` in disguise); a dirty tree
+  on return parks the step. D15's blocking predicate widens to every worktree-touching
+  opcode on both sides.
 
   Promotion is failure-driven and switches on a typed `FailureKind`, never on error
   strings — promotion costs money, so a reworded message must not change which tier runs.
@@ -188,7 +188,7 @@ P3 shakedown rulings (Peter, 2026-07-30 — the mb-a-refactor park exposed all f
   zero tokens). A promotion after a committed attempt hands the lane that commit sha and
   D19's fix-forward framing, or the lane reverts real work. A budget park never promotes.
   Lane cost is USD and is capped run-wide by `usd_budget`, reported apart from tokens
-  everywhere. Owed: `check` linting execute-step scope.
+  everywhere. Still owed: `check` linting execute-step scope.
 
 ## 3. Design body — the loop
 
