@@ -47,6 +47,7 @@ mod rt_p4_metalfx_temporal;
 mod rt_t1a_ghost_speckle;
 mod rt_t1b_vertex_normals;
 mod rt_t2a_alpha_mask;
+mod rt_bug17r3_lightless_gi;
 mod rt_bug318_import_toggle;
 mod rt_bug326_fix_gate;
 mod rt_bug88m_blend_specular_gate;
