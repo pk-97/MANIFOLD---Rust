@@ -1,6 +1,6 @@
 # Workflow Runtime — a Rust runner for semantic workflow programs
 
-**Status:** IN PROGRESS — P1–P3 DONE (P3 shakedown verdict: section 5 (Phasing — P3 outcome); rulings D14–D20). OWED: P4 lane opcode + read-vs-run doctrine, proposed and beaded (bd: "WORKFLOW_RUNTIME P4: lane opcode + read-vs-run step doctrine, enforced"). · 2026-07-30 · Fable
+**Status:** IN PROGRESS — P1–P4 DONE (P3 shakedown verdict and P4 record: section 5 (Phasing); rulings D14–D20). OWED: `check` linting execute-step scope, beaded (bd: "workflow check: lint execute-step scope"). · 2026-07-30 · Fable
 **Prerequisites:** none (R2 readout is in — see intro)
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) – section 6 (Seam briefs) before starting any phase.
 
@@ -286,8 +286,27 @@ godfile went into all seven model calls of the step that failed while it was ask
 re-quote exactly out of 3,432 lines. Cost: 482K tokens over two runs; ledger in the run
 dirs.
 
+**P4 — the lane opcode and the reasoning cuts (one session, 2026-07-30).** DONE. The
+`lane` opcode carries execute's whole contract — same worktree, commit-then-gate,
+cap-then-park, D15 blocking, D19 gate-first — with a tool-using worker (`cc-fleet
+subagent`) instead of a stateless call. What the lane did is measured by HEAD sha delta,
+never `git status`; a dirty tree on return parks as a protocol violation. `on_fail =
+"lane"` promotes an execute step on its FIRST substantive failure, decided by a typed
+`FailureKind` (never by matching error strings) whose declaration order is also D16's
+informativeness ranking. Transport failures no longer consume model attempts. One-shot
+writes are new-file-only (D5 amended). Reasoning removed from the machine where a
+mechanism could hold it instead: runtime-composed commit messages, `path:` inputs that
+name a file without pasting it, `span:` inputs that reach inside raw strings, transform
+stdout preserved in the park reason. A `usd_budget` guards the paid worker the token cap
+cannot see, and `ledger.jsonl` plus a required `unpark --note` record the decision that
+unblocked a park, not just the stop. Rejected during the review that shaped this phase: a
+per-step token budget (for an execute step, parking is stopping the run — D15 — and
+per-step spend has no sound source on resume), a declared touch list (no observed
+failure), and fuzzy `find` re-anchoring (a loose match can edit the wrong place and still
+pass the gate). Owed: `check` linting execute-step scope (D20's second half), beaded.
+
 Phasing-completeness: every section-2 decision is exercised by P1 (D1/D2/D4/D6/D7),
-P2 (D3/D5/D8), or Deferred.
+P2 (D3/D5/D8), P4 (D5 amended, D16, D19, D20), or Deferred.
 
 ## 6. Decided — do not reopen
 
