@@ -154,11 +154,14 @@ Proven: real-fixture loads (burn V4/V5, waypoints large, graphtestsv4
 identity-reconcile), driver/envelope/mapping counts surviving migration +
 roundtrip, history journal push/dedup/prune/unknown-hash, autosave state
 machine (7 unit tests, time injected), snapshot-on-save capture/prune/
-never-shadow-Saved.
+never-shadow-Saved, Liveschool size gate.
 
-Dark: no test constructs a future-version file, a corrupted ZIP, a truncated
-write, or a hash collision. `save_project_v1` and preset/venue files have no
-roundtrip tests in this crate. Real-scale coverage is thin (section 9 E9).
+Dark: the Liveschool fixture is gitignored — `load_liveschool_live_show_v6`
+and the size gate **silently pass when the fixture is absent**, so only
+Peter's machine actually runs the real-scale proof (section 9 E9). No test constructs
+a future-version file, a corrupted ZIP, a truncated write, or a hash
+collision. `save_project_v1` and preset/venue files have no roundtrip tests in
+this crate.
 
 ## 9. Honest edges — latent-bug lenses, ranked
 
@@ -216,12 +219,11 @@ roundtrip tests in this crate. Real-scale coverage is thin (section 9 E9).
   `venue_file.rs` serialize current structs with no migration chain; any
   future shape change strands exported libraries. (Graph presets embedded in
   projects ride the project chain; standalone exports don't.)
-- **E9 — There is no real-scale migration proof.** Migrations are proven
-  against small fixtures only. The Liveschool fixture that used to serve
-  this role is retired (2026-07-30, Peter: an old project, no 3D scenes) —
-  it was gitignored and skip-if-absent, so it never ran outside Peter's
-  machine anyway. A current-era show file, committed or synthesised, would
-  close this; nothing does today.
+- **E9 — The real-scale migration proof is machine-local.** Liveschool
+  fixture tests skip-if-absent and the fixture is gitignored: CI and agent
+  sessions prove migrations against small fixtures only. The
+  `canonical-fixture-liveschool` memory calls it load-bearing; the test
+  suite can't see it.
 - **E10 — Manual-save history is unbounded.** Every manual save adds a gzip
   blob forever (only autos are pruned). A long-lived show file saved
   manually hundreds of times carries hundreds of snapshots; nothing surfaces
