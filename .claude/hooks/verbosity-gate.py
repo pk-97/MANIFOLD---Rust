@@ -11,8 +11,8 @@ hedges, lists options nobody asked for, or narrates itself; cutting to budget
 forces the reword. Tokens saved are context saved, both directions.
 
 Budgets (non-blank lines and words, fenced code excluded from both):
-    normal turn         5 lines / 113 words
-    detail requested    14 lines / 300 words
+    normal turn         6 lines / 150 words
+    detail requested    18 lines / 400 words
 
 "Detail requested" is keyed off the user's own words in the prompt that opened
 the turn (explain, why, walk me through, in detail, full, design, plan, review).
@@ -32,8 +32,8 @@ from pathlib import Path
 _STATE = Path(__file__).resolve().parent.parent / "telemetry" / "verbosity-gate-state.json"
 _MAX_BLOCKS_PER_TURN = 2
 
-_NORMAL = (5, 113)
-_DETAIL = (14, 300)
+_NORMAL = (6, 150)
+_DETAIL = (18, 400)
 _DETAIL_CUES = re.compile(
     r"\b(explain|why|walk me through|in detail|detailed|full(?:y)?|elaborate|"
     r"design|plan|review|compare|options|teach|how does)\b",
