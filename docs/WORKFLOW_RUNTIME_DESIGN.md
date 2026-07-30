@@ -1,6 +1,6 @@
 # Workflow Runtime — a Rust runner for semantic workflow programs
 
-**Status:** IN PROGRESS — P1–P4 DONE (P3 shakedown verdict and P4 record: section 5 (Phasing); rulings D14–D20). OWED: `check` linting execute-step scope, beaded (bd: "workflow check: lint execute-step scope"). · 2026-07-30 · Fable
+**Status:** IN PROGRESS — P1–P4 DONE (P3 shakedown verdict and P4 record: section 5 (Phasing); rulings D14–D20). OWED: `check` linting execute-step scope, beaded (BUG-62z8 (workflow check: lint execute-step scope)). · 2026-07-30 · Fable
 **Prerequisites:** none (R2 readout is in — see intro)
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) – section 6 (Seam briefs) before starting any phase.
 
