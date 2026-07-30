@@ -651,6 +651,13 @@ pub(super) fn build_import_graph(
     ao_nodes.push(bilat_v_node);
     let ao_out_id = fresh_id();
     ao_nodes.push(plain_node(ao_out_id, "ao_out", GROUP_OUTPUT_TYPE_ID, "output"));
+    // AM4 (RAYTRACING_DESIGN.md section 12, Screen-space AO handoff): `mask_mix`
+    // gates the multiply on `ao_mask` (1 lit, 0 baked-look, 0 everywhere under
+    // RT) so RT scenes and baked-look surfaces pass the un-multiplied color
+    // through instead of getting darkened twice.
+    let mask_mix_id = fresh_id();
+    let mask_mix_node = plain_node(mask_mix_id, "mask_mix", "node.masked_mix", "mask_mix");
+    ao_nodes.push(mask_mix_node);
     ao_wires.push(wire(ao_in_id, "depth", ssao_id, "depth"));
     ao_wires.push(wire(ao_in_id, "camera", ssao_id, "camera"));
     ao_wires.push(wire(ao_in_id, "color", ssao_mix_id, "a"));
@@ -661,7 +668,10 @@ pub(super) fn build_import_graph(
     ao_wires.push(wire(ao_in_id, "depth", bilat_v_id, "depth"));
     ao_wires.push(wire(ao_in_id, "camera", bilat_v_id, "camera"));
     ao_wires.push(wire(bilat_v_id, "out", ssao_mix_id, "b"));
-    ao_wires.push(wire(ssao_mix_id, "out", ao_out_id, "out"));
+    ao_wires.push(wire(ao_in_id, "color", mask_mix_id, "a"));
+    ao_wires.push(wire(ssao_mix_id, "out", mask_mix_id, "b"));
+    ao_wires.push(wire(ao_in_id, "ao_mask", mask_mix_id, "mask"));
+    ao_wires.push(wire(mask_mix_id, "out", ao_out_id, "out"));
 
     let ao_group_id = fresh_id();
     let mut ao_group_node = plain_node(ao_group_id, "ao", GROUP_TYPE_ID, "ao");
@@ -672,6 +682,7 @@ pub(super) fn build_import_graph(
                 InterfacePortDef { name: "depth".to_string(), port_type: "Texture2D".to_string() },
                 InterfacePortDef { name: "camera".to_string(), port_type: "Camera".to_string() },
                 InterfacePortDef { name: "color".to_string(), port_type: "Texture2D".to_string() },
+                InterfacePortDef { name: "ao_mask".to_string(), port_type: "Texture2D".to_string() },
             ],
             outputs: vec![InterfacePortDef { name: "out".to_string(), port_type: "Texture2D".to_string() }],
             params: Vec::new(),
@@ -722,6 +733,7 @@ pub(super) fn build_import_graph(
     wires.push(wire(render_id, "depth", ao_group_id, "depth"));
     wires.push(wire(lens_id, "out", ao_group_id, "camera"));
     wires.push(wire(render_id, "color", ao_group_id, "color"));
+    wires.push(wire(render_id, "ao_mask", ao_group_id, "ao_mask"));
     wires.push(wire(ao_group_id, "out", final_id, "in"));
 
     // P1: scene-vocabulary atoms (camera, lens, sun, envmap) are already
