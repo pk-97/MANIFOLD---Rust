@@ -1130,3 +1130,68 @@ fn rotating_object_retains_history_when_normals_are_compared_in_one_orientation(
          gesture, i.e. the helmet shimmer."
     );
 }
+
+/// A hard lighting cue must land in ~one frame, not average in over the
+/// accumulator's whole window.
+///
+/// The static-boil work stretched the temporal window to 40-50 frames, and
+/// Peter immediately hit the consequence on stage: automated light moves felt
+/// slow and hard transitions stopped landing. Averaging and responsiveness only
+/// conflict while you cannot tell noise from signal — the moments texture
+/// already tracks per-texel luma spread, so the accumulator snaps when this
+/// frame sits further from history than that spread can explain.
+///
+/// Fixture: warm a texel on scene A until its 1/n weight is small (n = 6, so
+/// 1/7 next frame), then present scene B whose luma differs far more than the
+/// gate. Constant fixtures leave the tracked spread at ~0, so the gate is
+/// `max(0.15 * hist_luma, 0.01)`.
+///
+/// - Correct: gate trips, count collapses to 2, weight 0.5 — the output lands
+///   halfway to B in ONE frame.
+/// - Pre-fix: weight stays 1/7 and the output barely moves off A. That is the lag.
+///
+/// The two expectations are far apart (0.6 vs 0.886), so this cannot pass by
+/// accident.
+#[test]
+fn hard_lighting_change_snaps_instead_of_averaging_in() {
+    let h = shared();
+    let tracer = MetalShadowRayTracer::new(&h.device);
+
+    let depth_tex = make_constant_depth(&h.device, "cue-depth");
+    let hi_normal = make_constant_normal(&h.device, "cue-normal");
+    // A: red 1.0 (luma 0.2126). B: red 0.2 (luma 0.0425). |delta| = 0.170, far
+    // above the gate at max(0.15 * 0.2126, 0.01) = 0.0319.
+    let scene_a = upload_irr(&h.device, 1.0, 0.0, 0.0, "cue-a");
+    let scene_b = upload_irr(&h.device, 0.2, 0.0, 0.0, "cue-b");
+
+    let mut history = HistorySet::new(&h.device, "cue-history");
+    run_accumulate(
+        &h.device, &tracer, &scene_a, &depth_tex, &hi_normal, &mut history, TEST_ALPHA, true,
+        "cue-warm-0",
+    );
+    for i in 1..6 {
+        run_accumulate(
+            &h.device, &tracer, &scene_a, &depth_tex, &hi_normal, &mut history, TEST_ALPHA, false,
+            &format!("cue-warm-{i}"),
+        );
+    }
+    run_accumulate(
+        &h.device, &tracer, &scene_b, &depth_tex, &hi_normal, &mut history, TEST_ALPHA, false,
+        "cue-step",
+    );
+
+    let out = readback_rgba_f32(history.current_irr());
+    let got = out[(((H / 2) * W + W / 2) * 4) as usize];
+    // Snap: mix(1.0, 0.2, 0.5) = 0.6. Lag at 1/7: mix(1.0, 0.2, 0.1429) = 0.886.
+    let expected_snap = 0.6_f32;
+    let expected_lag = 1.0 - 0.8 / 7.0;
+    eprintln!(
+        "[cue] r = {got} (snap expects {expected_snap}, pre-fix lag would read {expected_lag})"
+    );
+    assert!(
+        (got - expected_snap).abs() < 0.02,
+        "a hard lighting change did not land in one frame (r {got}, expected {expected_snap}; \
+         {expected_lag} is the pre-fix behaviour where a cue averages in over the accumulator's \
+         whole window — the on-stage symptom Peter reported as lights lagging)"
+    );
+}

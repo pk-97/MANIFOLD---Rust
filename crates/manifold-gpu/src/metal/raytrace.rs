@@ -1877,6 +1877,9 @@ kernel void accumulate_irradiance(
     // Frames of history behind this texel, carried in `history_write.a`.
     // 1 = this frame only (a rejected/disoccluded texel is a cold start).
     float hist_len = 1.0;
+    // Set by the irradiance blend when it decides the light really changed;
+    // read by the reflection block so both channels snap on one decision.
+    bool refl_change_snap = false;
     float moment1 = cur_luma;
     float moment2 = cur_luma * cur_luma;
     // NORMAL_REJECT_COS_THRESHOLD: cosine of the angle between
@@ -1978,13 +1981,56 @@ kernel void accumulate_irradiance(
                     // `p.alpha` is now the FLOOR, capping history length at
                     // 1/alpha frames so genuinely changing light (animated
                     // params, modulated intensity) still tracks.
-                    float n = nsum / wsum + 1.0;
+                    float3 hist = hsum / wsum;
+                    float hm1 = msum.x / wsum;
+                    float hm2 = msum.y / wsum;
+                    // A long history converges a still image but LAGS a real
+                    // lighting change — Peter: automated light moves felt slow
+                    // and hard cues stopped landing on the frame. Averaging
+                    // and responsiveness are only in conflict while you cannot
+                    // tell noise from signal, and the moments already say
+                    // which is which: if this frame's luma sits further from
+                    // history than the tracked spread can explain, the light
+                    // really changed, so collapse the count and snap. Noise
+                    // stays inside the band and keeps amortizing.
+                    // SIGMAS covers the noise case; REL is the floor for a
+                    // converged texel whose spread has gone to ~0, expressed
+                    // as a fraction of its own brightness so it scales with
+                    // exposure. Measured frame-to-frame noise here is ~0.03%,
+                    // three orders under REL, so noise cannot trip it.
+                    // One counter serves both the colour and the moments, so a
+                    // trip shortens the noise estimate too — which is exactly
+                    // why the gate must not trip on noise. A first attempt with
+                    // only a relative floor did, and self-sustained: reset ->
+                    // short history -> tiny spread -> reset. Measured at 3x the
+                    // static noise. The absolute floor below is the fix.
+                    const float RT_ACCUM_CHANGE_SIGMAS = 4.0;
+                    const float RT_ACCUM_CHANGE_REL = 0.15;
+                    // Absolute floor: a near-black texel has no meaningful
+                    // relative scale (this scene's demodulated irradiance sits
+                    // at ~5e-4), so a purely relative gate trips on nothing.
+                    const float RT_ACCUM_CHANGE_ABS = 0.01;
+                    float hist_luma = luma(hist);
+                    float hist_sd = sqrt(max(hm2 - hm1 * hm1, 0.0));
+                    float change_gate = max(max(RT_ACCUM_CHANGE_SIGMAS * hist_sd,
+                                                RT_ACCUM_CHANGE_REL * hist_luma),
+                                            RT_ACCUM_CHANGE_ABS);
+                    bool lighting_changed = fabs(cur_luma - hist_luma) > change_gate;
+                    float n_full = nsum / wsum + 1.0;
+                    // Snap to 2, not 1: alpha 0.5 is 75% of a step in two
+                    // frames — a cue lands — while leaving one frame of
+                    // history so a single wild sample cannot define the pixel.
+                    float n = lighting_changed ? 2.0 : n_full;
                     float alpha = max(1.0 / n, p.alpha);
                     hist_len = min(n, 1.0 / max(p.alpha, 1e-6));
-                    blended = mix(hsum / wsum, cur.xyz, alpha);
+                    blended = mix(hist, cur.xyz, alpha);
                     valid = true;
-                    moment1 = mix(msum.x / wsum, cur_luma, alpha);
-                    moment2 = mix(msum.y / wsum, cur_luma * cur_luma, alpha);
+                    moment1 = mix(hm1, cur_luma, alpha);
+                    moment2 = mix(hm2, cur_luma * cur_luma, alpha);
+                    // The SURFACE's lighting changed, so its specular history
+                    // is stale for the same reason — one decision, both
+                    // channels (the reflection block below reads this).
+                    if (lighting_changed) { refl_change_snap = true; }
                 }
             }
         }
@@ -2050,7 +2096,7 @@ kernel void accumulate_irradiance(
                     }
                 }
                 if (wsum > 1e-4) {
-                    float rn = nsum / wsum + 1.0;
+                    float rn = refl_change_snap ? 1.0 : (nsum / wsum + 1.0);
                     float ralpha = max(1.0 / rn, RT_REFL_ACCUM_ALPHA_MIN);
                     refl_hist_len = min(rn, 1.0 / RT_REFL_ACCUM_ALPHA_MIN);
                     refl_write = mix(clamp_refl_history(rsum / wsum, hi_refl, tid, p.size), cur_refl.rgb, ralpha);
