@@ -2029,16 +2029,23 @@ kernel void accumulate_irradiance(
                     // static noise. The absolute floor below is the fix.
                     const float RT_ACCUM_CHANGE_SIGMAS = 4.0;
                     const float RT_ACCUM_CHANGE_REL = 0.15;
-                    // Absolute floor: a near-black texel has no meaningful
-                    // relative scale (this scene's demodulated irradiance sits
-                    // at ~5e-4), so a purely relative gate trips on nothing.
-                    const float RT_ACCUM_CHANGE_ABS = 0.01;
+                    // Numerical floor only — NOT a perceptual one. An earlier
+                    // version used 0.01 here, which silently disabled the gate
+                    // in any scene whose demodulated irradiance is small (the
+                    // car repro sits at ~5e-4), so a lights-out cue still
+                    // faded over the whole window. Peter caught it by dropping
+                    // sun intensity 10 -> 0 and watching the fade. Scale-free
+                    // is the requirement: the relative term catches a cue at
+                    // ANY magnitude, and the sigma term is what protects a
+                    // near-black noisy texel — an absolute perceptual floor
+                    // cannot do both.
+                    const float RT_ACCUM_CHANGE_ABS = 1e-4;
                     float hist_luma = luma(hist);
                     float hist_sd = sqrt(max(hm2 - hm1 * hm1, 0.0));
-                    float change_gate = max(max(RT_ACCUM_CHANGE_SIGMAS * hist_sd,
-                                                RT_ACCUM_CHANGE_REL * hist_luma),
-                                            RT_ACCUM_CHANGE_ABS);
-                    bool lighting_changed = fabs(cur_luma - hist_luma) > change_gate;
+                    float change_gate = max(RT_ACCUM_CHANGE_SIGMAS * hist_sd,
+                                            RT_ACCUM_CHANGE_REL * hist_luma);
+                    float dluma = fabs(cur_luma - hist_luma);
+                    bool lighting_changed = dluma > change_gate && dluma > RT_ACCUM_CHANGE_ABS;
                     float n_full = nsum / wsum + 1.0;
                     // Snap to 2, not 1: alpha 0.5 is 75% of a step in two
                     // frames — a cue lands — while leaving one frame of
@@ -2048,8 +2055,15 @@ kernel void accumulate_irradiance(
                     hist_len = min(n, 1.0 / max(p.alpha, 1e-6));
                     blended = mix(hist, cur.xyz, alpha);
                     valid = true;
-                    moment1 = mix(hm1, cur_luma, alpha);
-                    moment2 = mix(hm2, cur_luma * cur_luma, alpha);
+                    // The moments update on a FLOORED window (>= 4 samples)
+                    // even when the colour snaps to 2. One counter serves both,
+                    // so a snap that also collapsed the spread estimate would
+                    // destroy the statistic that decides the next snap and the
+                    // reset would self-sustain — measured at 3x the static
+                    // noise when that happened.
+                    float m_alpha = max(1.0 / max(n, 4.0), p.alpha);
+                    moment1 = mix(hm1, cur_luma, m_alpha);
+                    moment2 = mix(hm2, cur_luma * cur_luma, m_alpha);
                     // The SURFACE's lighting changed, so its specular history
                     // is stale for the same reason — one decision, both
                     // channels (the reflection block below reads this).
@@ -2139,15 +2153,18 @@ kernel void accumulate_irradiance(
                     // static quality (composite 0.076 -> 0.105).
                     const float RT_REFL_CHANGE_SIGMAS = 4.0;
                     const float RT_REFL_CHANGE_REL = 0.15;
-                    const float RT_REFL_CHANGE_ABS = 0.01;
+                    // Numerical floor only, same reasoning as the irradiance
+                    // gate: an absolute perceptual floor here silently disabled
+                    // the gate in any scene whose reflection radiance is small.
+                    const float RT_REFL_CHANGE_ABS = 1e-4;
                     float3 rhist = rsum / wsum;
                     float rhist_luma = luma(rhist);
                     float rsd = refl_neighborhood_luma_sd(hi_refl, tid, p.size);
+                    float rdluma = fabs(luma(cur_refl.rgb) - rhist_luma);
                     bool refl_changed = refl_change_snap
-                        || fabs(luma(cur_refl.rgb) - rhist_luma)
-                               > max(max(RT_REFL_CHANGE_SIGMAS * rsd,
-                                         RT_REFL_CHANGE_REL * rhist_luma),
-                                     RT_REFL_CHANGE_ABS);
+                        || (rdluma > max(RT_REFL_CHANGE_SIGMAS * rsd,
+                                         RT_REFL_CHANGE_REL * rhist_luma)
+                            && rdluma > RT_REFL_CHANGE_ABS);
                     float rn = refl_changed ? 2.0 : (nsum / wsum + 1.0);
                     float ralpha = max(1.0 / rn, RT_REFL_ACCUM_ALPHA_MIN);
                     refl_hist_len = min(rn, 1.0 / RT_REFL_ACCUM_ALPHA_MIN);

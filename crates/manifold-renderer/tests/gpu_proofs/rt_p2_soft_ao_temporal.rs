@@ -1131,6 +1131,63 @@ fn rotating_object_retains_history_when_normals_are_compared_in_one_orientation(
     );
 }
 
+/// The same cue at LOW signal magnitude — the case an absolute floor kills.
+///
+/// The first version of the change gate used `max(sigmas * sd, rel * luma,
+/// 0.01)`. That 0.01 is a perceptual floor living in a signal space whose scale
+/// is scene-dependent: real scenes measure demodulated irradiance around 5e-4,
+/// three orders under it, so `max` pinned the gate at 0.01 and nothing could
+/// ever trip. The gate was dead in exactly the scenes that needed it, and Peter
+/// found it by dropping sun intensity 10 -> 0 and watching the object still
+/// fade. This test is the regression guard for that whole class: same fixture
+/// as the cue proof above, scaled down 50x.
+///
+/// Scene A red 0.02 (luma 4.25e-3) -> B red 0.004 (luma 8.5e-4). |delta| is
+/// 3.4e-3, which clears the relative gate (0.15 * 4.25e-3 = 6.4e-4) but sits
+/// well UNDER an 0.01 absolute floor. Correct snaps to 0.012; the floored
+/// version would read ~0.0177.
+#[test]
+fn lighting_cue_snaps_at_low_signal_magnitude_too() {
+    let h = shared();
+    let tracer = MetalShadowRayTracer::new(&h.device);
+
+    let depth_tex = make_constant_depth(&h.device, "dim-cue-depth");
+    let hi_normal = make_constant_normal(&h.device, "dim-cue-normal");
+    let scene_a = upload_irr(&h.device, 0.02, 0.0, 0.0, "dim-cue-a");
+    let scene_b = upload_irr(&h.device, 0.004, 0.0, 0.0, "dim-cue-b");
+
+    let mut history = HistorySet::new(&h.device, "dim-cue-history");
+    run_accumulate(
+        &h.device, &tracer, &scene_a, &depth_tex, &hi_normal, &mut history, TEST_ALPHA, true,
+        "dim-cue-warm-0",
+    );
+    for i in 1..6 {
+        run_accumulate(
+            &h.device, &tracer, &scene_a, &depth_tex, &hi_normal, &mut history, TEST_ALPHA, false,
+            &format!("dim-cue-warm-{i}"),
+        );
+    }
+    run_accumulate(
+        &h.device, &tracer, &scene_b, &depth_tex, &hi_normal, &mut history, TEST_ALPHA, false,
+        "dim-cue-step",
+    );
+
+    let out = readback_rgba_f32(history.current_irr());
+    let got = out[(((H / 2) * W + W / 2) * 4) as usize];
+    let expected_snap = 0.012_f32; // mix(0.02, 0.004, 0.5)
+    let expected_floored = 0.02 - 0.016 / 7.0; // ~0.0177, the dead-gate reading
+    eprintln!(
+        "[dim cue] r = {got} (snap expects {expected_snap}, dead-gate would read \
+         {expected_floored})"
+    );
+    assert!(
+        (got - expected_snap).abs() < 0.0015,
+        "a lighting cue at low signal magnitude did not snap (r {got}, expected \
+         {expected_snap}; {expected_floored} is the behaviour when an absolute perceptual floor \
+         pins the gate above the whole signal range — the fade Peter saw dropping sun 10 -> 0)"
+    );
+}
+
 /// A hard lighting cue must land in ~one frame, not average in over the
 /// accumulator's whole window.
 ///
