@@ -22,6 +22,8 @@ ureq = { version = "2", features = ["json"] }
 # on PATH (this machine has no standalone rg; runs must work from cron).
 regex = "1"
 ignore = "0.4"
+# `workflow watch` wraps its dashboard to the real terminal width (TIOCGWINSZ).
+libc = "0.2"
 
 [lints]
 workspace = true

@@ -35,6 +35,19 @@ pub struct Status {
     pub last_error: String,
 }
 
+/// `84120` → `84,120`. Token and size counts are read by eye mid-run.
+pub fn commas(n: u64) -> String {
+    let s = n.to_string();
+    let mut out = String::with_capacity(s.len() + s.len() / 3);
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
 fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
@@ -59,7 +72,9 @@ pub fn emit(run_dir: &Path, update: impl FnOnce(&mut Status)) {
     } else {
         format!("[{}/{} {}] ", st.step_index, st.total_steps, st.step)
     };
-    println!("workflow: {step}{} {}", st.state, st.detail);
+    let retry =
+        if st.attempt > 1 { format!(" (attempt {}/{})", st.attempt, st.max_attempts) } else { String::new() };
+    println!("workflow: {step}{} {}{retry}", st.state, st.detail);
 }
 
 pub fn read(run_dir: &Path) -> Option<Status> {

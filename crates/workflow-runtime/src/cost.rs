@@ -5,14 +5,22 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-pub fn summarize(run_dir: &Path) -> Result<String, String> {
+/// The parsed ledger. `summarize` is one formatter over this; `workflow watch`
+/// is another — the transcript is parsed in exactly one place.
+#[derive(Debug, Default)]
+pub struct Ledger {
+    /// step label → (requests, tokens)
+    pub by_step: BTreeMap<String, (u64, u64)>,
+    /// model actually hit → tokens
+    pub by_model: BTreeMap<String, u64>,
+    pub total: u64,
+}
+
+pub fn ledger(run_dir: &Path) -> Result<Ledger, String> {
     let path = run_dir.join("transcript.jsonl");
     let text = std::fs::read_to_string(&path)
         .map_err(|e| format!("no transcript at {}: {e}", path.display()))?;
-    // (requests, tokens) keyed by step label / by model actually hit.
-    let mut by_step: BTreeMap<String, (u64, u64)> = BTreeMap::new();
-    let mut by_model: BTreeMap<String, u64> = BTreeMap::new();
-    let mut total: u64 = 0;
+    let Ledger { mut by_step, mut by_model, mut total } = Ledger::default();
     for line in text.lines() {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
             continue; // a torn trailing line is tolerated everywhere else too
@@ -36,14 +44,19 @@ pub fn summarize(run_dir: &Path) -> Result<String, String> {
             }
         }
     }
+    Ok(Ledger { by_step, by_model, total })
+}
+
+pub fn summarize(run_dir: &Path) -> Result<String, String> {
+    let l = ledger(run_dir)?;
     let mut out = String::from("step                              requests    tokens\n");
-    for (step, (requests, tokens)) in &by_step {
+    for (step, (requests, tokens)) in &l.by_step {
         out.push_str(&format!("{step:<34}{requests:>8}{tokens:>10}\n"));
     }
     out.push_str("\nmodel                                       tokens\n");
-    for (model, tokens) in &by_model {
+    for (model, tokens) in &l.by_model {
         out.push_str(&format!("{model:<42}{tokens:>10}\n"));
     }
-    out.push_str(&format!("\nTOTAL {total} tokens\n"));
+    out.push_str(&format!("\nTOTAL {} tokens\n", l.total));
     Ok(out)
 }
