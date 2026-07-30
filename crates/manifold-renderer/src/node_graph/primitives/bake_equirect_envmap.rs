@@ -46,6 +46,17 @@ pub struct EnvmapUniforms {
     // slot, so the uniform stays 64 bytes (16 × 4-byte fields, naga
     // uniform-size rule). 0.0 = pure-black void, byte-identical to D7.
     fill_intensity: f32,
+    // RT_FURNACE_ORACLE: white-furnace mode. 1 = ignore `mode`'s gradient/
+    // softbox math entirely and bake a CONSTANT radiance of 1.0 (scaled by
+    // `intensity` below) into every texel/direction — a closed-form
+    // environment for correctness testing. 0 = existing behaviour,
+    // byte-identical (this field grows the uniform buffer past the old
+    // 64-byte/16-field size, so the size pads back out to the next 16-byte
+    // multiple — 80 bytes/20 fields — below).
+    uniform_mode: u32,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 }
 
 crate::primitive! {
@@ -203,6 +214,22 @@ crate::primitive! {
             range: Some((0.0, 2.0)),
             enum_values: &[],
         },
+        ParamDef {
+            name: Cow::Borrowed("uniform"),
+            label: "Uniform (White Furnace)",
+            ty: ParamType::Bool,
+            // A closed-form environment for correctness testing: on, the
+            // baked equirect (and every derived irradiance/prefiltered mip)
+            // is a CONSTANT radiance of `intensity` in every texel and
+            // direction, ignoring `mode`/horizon/emitter/sun entirely. A
+            // fully-diffuse albedo-1 surface under this field must reflect
+            // back exactly `intensity` (the "white furnace" test) — the
+            // renderer's first physically-closed-form correctness oracle.
+            // false (default) keeps every existing preset byte-identical.
+            default: ParamValue::Bool(false),
+            range: None,
+            enum_values: &[],
+        },
     ],
     // depth_rule: procedural HDR envmap bake (no texture input, math-defined, not a file load) — used as a Material/PBR side-channel rather than the main color chain, but structurally a procedural producer like noise/gradient
     depth_rule: SourceHeight,
@@ -287,6 +314,7 @@ impl Primitive for BakeEquirectEnvmap {
         let sun_disc_intensity = read_float("sun_disc_intensity", 0.0);
         let sun_disc_size = read_float("sun_disc_size", 0.0);
         let fill_intensity = read_float("fill", 0.0);
+        let uniform_mode = u32::from(matches!(ctx.params.get("uniform"), Some(ParamValue::Bool(true))));
 
         let Some(envmap) = ctx.outputs.texture_2d("envmap") else {
             return;
@@ -314,6 +342,10 @@ impl Primitive for BakeEquirectEnvmap {
             sun_disc_intensity,
             sun_disc_size,
             fill_intensity,
+            uniform_mode,
+            _pad0: 0.0,
+            _pad1: 0.0,
+            _pad2: 0.0,
         };
 
         // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3/R3 (D7's `last_key`
@@ -411,8 +443,18 @@ mod tests {
     }
 
     #[test]
-    fn uniforms_are_64_bytes() {
-        assert_eq!(std::mem::size_of::<EnvmapUniforms>(), 64);
+    fn uniforms_are_80_bytes() {
+        // RT_FURNACE_ORACLE grew the struct by one field (`uniform_mode`);
+        // WGSL's uniform-address-space size rule requires the next 16-byte
+        // multiple, so 64 -> 80, not 68.
+        assert_eq!(std::mem::size_of::<EnvmapUniforms>(), 80);
+    }
+
+    #[test]
+    fn uniform_param_defaults_to_off() {
+        let defaults = BakeEquirectEnvmap::PARAMS;
+        let uniform_def = defaults.iter().find(|p| p.name == "uniform").expect("uniform param declared");
+        assert_eq!(uniform_def.default, ParamValue::Bool(false));
     }
 
     #[test]
@@ -492,6 +534,7 @@ mod gpu_tests {
         sun_disc_intensity: f32,
         sun_disc_size: f32,
         fill_intensity: f32,
+        uniform_mode: u32,
     ) -> Vec<[f32; 4]> {
         let pipeline =
             device.create_compute_pipeline(include_str!("shaders/bake_equirect_envmap.wgsl"), "cs_main", "bake-env-test");
@@ -513,6 +556,10 @@ mod gpu_tests {
             sun_disc_intensity,
             sun_disc_size,
             fill_intensity,
+            uniform_mode,
+            _pad0: 0.0,
+            _pad1: 0.0,
+            _pad2: 0.0,
         };
         let mut enc = device.create_encoder("bake-env-dispatch");
         enc.dispatch_compute(
@@ -608,7 +655,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         // New shader, mode=0 (gradient) — dispatched via the same `bake()`
         // helper every other test in this module uses.
-        let new_px = bake(&device, w, h, 0, horizon_strength, azimuth_variation, intensity, 3, 6.0, 0.15, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+        let new_px = bake(&device, w, h, 0, horizon_strength, azimuth_variation, intensity, 3, 6.0, 0.15, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0);
 
         // Build-of-record shader, dispatched directly with its own (32-byte)
         // uniform layout.
@@ -652,7 +699,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let (w, h) = (64u32, 64u32);
         let emitter_elevation = 0.15;
         let emitter_width = 0.03; // half_width; falloff band = ±0.03 in "up"
-        let px = bake(&device, w, h, 1, 1.0, 0.12, 1.0, 1u32, 6.0, emitter_elevation, emitter_width, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+        let px = bake(&device, w, h, 1, 1.0, 0.12, 1.0, 1u32, 6.0, emitter_elevation, emitter_width, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0);
 
         use std::f32::consts::PI;
         let mut max_luminance_outside_band: f32 = 0.0;
@@ -693,7 +740,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let (w, h) = (64u32, 64u32);
 
         // (b) fill only (strip intensity 0): every texel strictly positive.
-        let filled = bake(&device, w, h, 1, 1.0, 0.12, 1.0, 3u32, 0.0, 0.15, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.8);
+        let filled = bake(&device, w, h, 1, 1.0, 0.12, 1.0, 3u32, 0.0, 0.15, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.8, 0);
         let min_luminance = filled
             .iter()
             .fold(f32::INFINITY, |m, p| m.min(p[0].max(p[1]).max(p[2])));
@@ -708,8 +755,8 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // by masking the strip band out of the comparison instead: cheaper
         // and exact — bake twice with strip intensity 0 and 9 and assert the
         // OUTSIDE-band texels are bit-identical.
-        let with_strips = bake(&device, w, h, 1, 1.0, 0.12, 1.0, 1u32, 9.0, 0.15, 0.03, 0.0, 0.0, 0.0, 0.0, 0.0, 0.8);
-        let no_strips = bake(&device, w, h, 1, 1.0, 0.12, 1.0, 1u32, 0.0, 0.15, 0.03, 0.0, 0.0, 0.0, 0.0, 0.0, 0.8);
+        let with_strips = bake(&device, w, h, 1, 1.0, 0.12, 1.0, 1u32, 9.0, 0.15, 0.03, 0.0, 0.0, 0.0, 0.0, 0.0, 0.8, 0);
+        let no_strips = bake(&device, w, h, 1, 1.0, 0.12, 1.0, 1u32, 0.0, 0.15, 0.03, 0.0, 0.0, 0.0, 0.0, 0.0, 0.8, 0);
         use std::f32::consts::PI;
         for y in 0..h {
             let v_coord = y as f32 / h as f32;
@@ -731,7 +778,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     fn softbox_emitter_rows_exceed_hdr_one() {
         let device = crate::test_device();
         let (w, h) = (32u32, 64u32);
-        let px = bake(&device, w, h, 1, 1.0, 0.12, 1.0, 1u32, 6.0, 0.15, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+        let px = bake(&device, w, h, 1, 1.0, 0.12, 1.0, 1u32, 6.0, 0.15, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0);
         let max_channel = px.iter().fold(0.0f32, |m, p| m.max(p[0]).max(p[1]).max(p[2]));
         assert!(max_channel > 1.0, "emitter strip must exceed 1.0 (HDR): max={max_channel}");
     }
@@ -757,10 +804,10 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             bands
         }
 
-        let px1 = bake(&device, w, h, 1, 1.0, 0.12, 1.0, 1u32, 6.0, 0.0, 0.02, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+        let px1 = bake(&device, w, h, 1, 1.0, 0.12, 1.0, 1u32, 6.0, 0.0, 0.02, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0);
         assert_eq!(count_bands(&px1, w, h), 1, "emitter_count=1 must bake exactly one strip");
 
-        let px3 = bake(&device, w, h, 1, 1.0, 0.12, 1.0, 3u32, 6.0, 0.0, 0.02, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+        let px3 = bake(&device, w, h, 1, 1.0, 0.12, 1.0, 3u32, 6.0, 0.0, 0.02, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0);
         assert_eq!(count_bands(&px3, w, h), 3, "emitter_count=3 must bake exactly three strips");
     }
 
@@ -777,7 +824,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         };
         let px = bake(
             &device, w, h, 1, 1.0, 0.12, 1.0, 0u32, // zero strips: isolate the disc
-            0.0, 0.0, 0.05, sun_dir.0, sun_dir.1, sun_dir.2, 20.0, 0.08, 0.0,
+            0.0, 0.0, 0.05, sun_dir.0, sun_dir.1, sun_dir.2, 20.0, 0.08, 0.0, 0,
         );
 
         use std::f32::consts::PI;
@@ -817,8 +864,8 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // Direction IS set, but intensity is 0 — must be byte-identical to
         // the direction being unset entirely (D7: "sun_disc_intensity = 0
         // is byte-identical to no-disc").
-        let with_direction_zero_intensity = bake(&device, w, h, 1, 1.0, 0.12, 1.0, 2u32, 6.0, 0.1, 0.04, 0.5, 0.5, 0.5, 0.0, 0.2, 0.0);
-        let no_direction_zero_intensity = bake(&device, w, h, 1, 1.0, 0.12, 1.0, 2u32, 6.0, 0.1, 0.04, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+        let with_direction_zero_intensity = bake(&device, w, h, 1, 1.0, 0.12, 1.0, 2u32, 6.0, 0.1, 0.04, 0.5, 0.5, 0.5, 0.0, 0.2, 0.0, 0);
+        let no_direction_zero_intensity = bake(&device, w, h, 1, 1.0, 0.12, 1.0, 2u32, 6.0, 0.1, 0.04, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0);
 
         for (i, (a, b)) in with_direction_zero_intensity.iter().zip(no_direction_zero_intensity.iter()).enumerate() {
             assert_eq!(a, b, "texel {i}: sun_disc_intensity=0 must be byte-identical regardless of direction");
