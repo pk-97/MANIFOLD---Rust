@@ -12,6 +12,11 @@ Seat resolution order:
   2. ANTHROPIC_DEFAULT_OPUS_MODEL matched against each provider's EFFECTIVE STRONG SLOT (strong_model, else default_model). Unique per seat by invariant: no two seats may share a strong slot.
   3. base_url — last resort, ambiguous post-proxy (several seats share 127.0.0.1:4000).
 
+Never derive a seat from the slot map: a provider's slots carry LANE tiers, not its own
+identity (kimi's are opus=glm-5.2, sonnet=glm-4.7, haiku=deepseek-v4-flash), so matching a
+slot against `default_model` labelled the K3 lead a dispatcher. Step 2 matches the strong
+slot ONLY because no two seats may share one.
+
 Provider -> seat maps per docs/AGENT_ROUTING.md (the tiering). Anthropic sessions
 (no/api.anthropic.com base URL) get nothing — their system prompt is already correct.
 
