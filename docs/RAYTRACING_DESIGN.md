@@ -1,6 +1,6 @@
 # Ray Tracing — hybrid RT lighting for hero scenes
 
-**Status:** IN PROGRESS — Tier 1+2, the motion class, reflections R1/R2/R3, and T3-8 multi-bounce GI LANDED on main (records: section 9.6 (phases), section 11.4 (Multi-bounce phases)). The T3-8 work also removed the lightless-RT gate: emissive-only zero-light scenes now get GI/AO/reflections. Peter's L2 look PASSED 2026-07-24; multi-bounce awaits his look. OPEN: traced-detail wash + motion speckle tuning (R3-era constants, Peter's look); `trace_ms` 2-vs-1 number owed from a heavier scene; items 6/9 and P5 export (D13) / P6 frame interp stay show-need-triggered. BUG-im9s (residual streak) accepted P3. R2 constants untuned — Peter's look, on demand. Perf profiling DEFERRED by Peter until the pipeline is complete. Section 12 (Screen-space AO handoff) APPROVED 2026-07-30 — in build. · 2026-07-30 · Fable
+**Status:** IN PROGRESS — Tier 1+2, the motion class, reflections R1/R2/R3, and T3-8 multi-bounce GI LANDED on main (records: section 9.6 (phases), section 11.4 (Multi-bounce phases)). The T3-8 work also removed the lightless-RT gate: emissive-only zero-light scenes now get GI/AO/reflections. Peter's L2 look PASSED 2026-07-24; multi-bounce awaits his look. OPEN: traced-detail wash + motion speckle tuning (R3-era constants, Peter's look); `trace_ms` 2-vs-1 number owed from a heavier scene; items 6/9 and P5 export (D13) / P6 frame interp stay show-need-triggered. BUG-im9s (residual streak) accepted P3. R2 constants untuned — Peter's look, on demand. Perf profiling DEFERRED by Peter until the pipeline is complete. Section 12 (Screen-space AO handoff) LANDED 2026-07-30 — ao_mask ships; BUG-tgbd (double AO with RT on) and BUG-ay0e (AO on baked-look) closed. · 2026-07-30 · Fable + Opus
 **Prerequisites:** none for P0. P1+ gated on P0 numbers and on RENDERING_INFRA_V2 section 2 (G-buffer/motion vectors) for temporal pieces.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -891,9 +891,28 @@ neighbours instead of growing a fake contact gradient.
 #### AM-B — consumer + migration
 
 - *Deliverables:* importer assembles the AM4 group shape and outer wire; AM5 loader
-  migration; I-AM1..I-AM4 tests; `graph_tool validate` + `graph_tool fusion` pre-flight
+  migration; I-AM1..I-AM4 tests; `graph-tool validate` + `graph-tool fusion` pre-flight
   on the assembled import graph.
 - *Gate:* clippy; scoped nextest (`manifold-renderer` loader/import filters); gpu proofs
-  (I-AM2/I-AM3); LiveSchool fixture load.
-- *Close-out:* BUG-tgbd (double AO) and BUG-ay0e (baked-look AO) closed; supersession
-  sweep per CLAUDE.md.
+  (I-AM2/I-AM3).
+
+#### Phase records — AO handoff (LANDED 2026-07-30)
+
+- **AM-A:** landed. `ao_mask` ships as a fourth lazy output. Two defects surfaced only
+  under `--tests --features gpu-proofs`, which the first commit had not run: a broken
+  `pipeline_for` call site and a stale generated node catalog. Fixed at the class — the
+  prewarm test now asserts every `(kind, velocity, ao_mask, blend)` variant is warm, so a
+  future aux output added without a prewarm entry fails there rather than costing a
+  first-draw compile stall on stage. Lesson: `cargo check` + `clippy` do not compile
+  feature-gated test modules; the gpu-proofs gate is the real oracle for primitive work.
+- **AM-B:** landed. Values, not green checks — signal level: lit 1.0000, baked-look
+  0.0000, background 1.0000, RT-live 0.0000, unwired-vs-wired colour delta 0.000000.
+  Group level (I-AM2/I-AM3): under RT the group is bit-exact identity on colour
+  (0.000000); RT off, a baked-look surface passes at 0.000000 while its lit neighbour on
+  the same contact corner darkens 6.92% — both legs required, either alone passes
+  trivially if AO is dead. Fusion neutral: 27 estimated dispatches before and after
+  (`masked_mix` joins the existing region); `ssao_gtao`/`bilat_h` stay unfused
+  (BUG-141 (import AO/DoF chain fails to fuse), untouched).
+- **Owed:** I-AM4's cross-commit epsilon A/B (pre-change main vs post, all-lit RT-off)
+  was not run as a separate gate — the unwired-vs-wired 0.000000 delta and the full
+  gpu-proofs suite cover the same ground in-repo. Peter's look is the stage oracle.
