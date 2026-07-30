@@ -95,11 +95,34 @@ unsafe fn libc_kill_probe(pid: i32) -> bool {
     unsafe { kill(pid, 0) == 0 }
 }
 
+fn pid_alive(pid: i32) -> bool {
+    pid > 0 && unsafe { libc_kill_probe(pid) }
+}
+
 /// `workflow watch`'s liveness check: the pid in `run.lock`, if the process
 /// that holds it is still alive. `None` covers both "no lock" and "dead pid".
 pub fn holder_alive(run_dir: &Path) -> Option<i32> {
     let pid: i32 = fs::read_to_string(run_dir.join("run.lock")).ok()?.trim().parse().ok()?;
-    (pid > 0 && unsafe { libc_kill_probe(pid) }).then_some(pid)
+    pid_alive(pid).then_some(pid)
+}
+
+/// The lane worker's own liveness, from `lane-job.json` (present only while a
+/// lane step's worker is running — `CcFleetLane::run` removes it on return).
+/// A dead pid while the step still reads `waiting-on-lane` is the wedge case
+/// `watch` exists to catch: the runner is blocked on a `wait()` that will
+/// never return.
+pub struct LaneLiveness {
+    pub pid: i32,
+    pub alive: bool,
+    /// Unix seconds the lane was launched, when the job file recorded one.
+    pub started_at: Option<u64>,
+}
+
+pub fn lane_liveness(run_dir: &Path) -> Option<LaneLiveness> {
+    let text = fs::read_to_string(run_dir.join("lane-job.json")).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let pid = i32::try_from(value["pid"].as_i64()?).ok()?;
+    Some(LaneLiveness { pid, alive: pid_alive(pid), started_at: value["started_at"].as_u64() })
 }
 
 /// Resume is keyed by step index+name against the LIVE program file; an
