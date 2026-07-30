@@ -804,13 +804,13 @@ pub(super) fn build_import_graph(
     // in the object loop above). 0.0 = no flat fill (lights-only); raise it to
     // lift the shadow side of every material at once.
     //
-    // BUG-w5wv: an unlit material's `node.unlit_material` card has no
-    // `ambient` param (`fs_unlit` has no lighting to fill), so the object
-    // loop above skips its binding — an import where EVERY material is
-    // unlit contributes zero "scene_ambient" bindings, and pushing this
-    // slider unconditionally would orphan it (a card param with nothing
-    // bound to it, which `check_card_lints` correctly rejects). Only push
-    // it when at least one material actually bound to it.
+    // BUG-pt6g (supersedes BUG-w5wv): every material the import loop above
+    // builds is `node.pbr_material` now (ambient param always present),
+    // so this is always true for any import with at least one material —
+    // kept conditional (not pushed unconditionally) as a genuine defensive
+    // guard: an import with zero materials would otherwise orphan this
+    // slider (a card param with nothing bound to it, which
+    // `check_card_lints` correctly rejects).
     if card_bindings.iter().any(|b| b.id == "scene_ambient") {
         card_params.push(card_param("scene_ambient", "Ambient", 0.0, 1.0, 0.0, false, "Environment"));
     }

@@ -484,6 +484,7 @@ crate::param_tooltips!("node.pbr_material", {
     "emission_g" => "The green part of the colour the surface glows on its own, before intensity scales it.",
     "emission_b" => "The blue part of the colour the surface glows on its own, before intensity scales it.",
     "emission_intensity" => "How strongly the surface glows on its own, default 0 for no glow. Raise it to make the material light up regardless of the scene lights.",
+    "baked_look" => "Off by default: the material stays lit and responds to the scene's Environment/Ambient/Sun controls. Turn it on to ignore all scene lighting and show the base colour flat, as if it were pre-baked.",
 });
 
 crate::param_tooltips!("node.phong_material", {

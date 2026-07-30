@@ -14000,6 +14000,13 @@
             "1"
           ],
           "type": "enum"
+        },
+        {
+          "default": "false",
+          "label": "Baked Look",
+          "name": "baked_look",
+          "tooltip": "Off by default: the material stays lit and responds to the scene's Environment/Ambient/Sun controls. Turn it on to ignore all scene lighting and show the base colour flat, as if it were pre-baked.",
+          "type": "bool"
         }
       ],
       "purpose": "Cook-Torrance microfacet PBR (D_GGX × G_Smith × F_Schlick) + IBL reflection material. The workhorse for realistic 3D surfaces. The bundled 3D mesh renderers evaluate the BRDF per fragment, blend with envmap-sampled IBL, and combine with diffuse + emission. `metallic` blends F0 from dielectric (≈4%) to metal (= base_color); `roughness` controls the microfacet spread (sharp 0.01 to fully rough 1.0). `clearcoat` (0..1) layers a second, always-dielectric (F0=0.04) GGX specular lobe on top — a car-paint/lacquer coat — with its own `clearcoat_roughness`; the base layer is energy-compensated by the coat's Fresnel (KHR_materials_clearcoat, factor-only v1). Outputs one Material on `out`. Requires BOTH a `light` input AND an `envmap` Texture2D wired to the renderer (the conditional-requirement table enforces this at preset-load).",
@@ -26262,6 +26269,13 @@
           "max": "1",
           "min": "0",
           "name": "Emissive Min Filter"
+        },
+        {
+          "default": "0",
+          "id": "62_baked_look",
+          "max": "1",
+          "min": "0",
+          "name": "Baked Look"
         },
         {
           "default": "0",

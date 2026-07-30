@@ -409,7 +409,7 @@ _Generated from the node registry. Do not hand-edit. 250 nodes registered, group
 | `Kaleidoscope` | Kaleidoscope | effect | Spatial | 2 |
 | `Lightning` | Lightning | generator | Pattern | 7 |
 | `Lissajous` | Lissajous | generator | Geometry | 11 |
-| `MetallicGlass` | Metallic Glass | generator | Sim | 140 |
+| `MetallicGlass` | Metallic Glass | generator | Sim | 141 |
 | `Mirror` | Mirror | effect | Spatial | 2 |
 | `MriVolume` | MRI Volume | generator | Text & Media | 8 |
 | `NestedCubes` | Nested Cubes | generator | Geometry | 6 |
