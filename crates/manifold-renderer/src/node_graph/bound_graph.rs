@@ -321,6 +321,7 @@ mod tests {
             source_id: Cow::Borrowed("amount"),
             reshape: None,
             wraps_angle: false,
+            default_mirrors_node_param: false,
         };
         let mut bound = BoundGraph::new(vec![binding], &mut graph);
 
