@@ -140,6 +140,17 @@ P3 shakedown rulings (Peter, 2026-07-30 — the mb-a-refactor park exposed all f
   surfaced wherever the step name appears (status.json, `watch`, parked.jsonl, escalation
   files); `check` warns (advisory, never exit 1) when absent. Step `name` keys resume
   state and is never renamed mid-run — `title` is the human surface.
+- **D19 — a seeded rerun gates first (Peter, 2026-07-30, later in the P3 shakedown).**
+  D17's seed text goes stale the moment the worktree state it describes changes further —
+  a live run parked an execute step on a red gate over real committed work, and the seeded
+  rerun re-rendered the worktree, saw the work already there, and rationally emitted an
+  empty ChangeSet: "nothing to do," 45K tokens burned per blind lap, because nothing told
+  the model the gate was still red. `run_execute` now runs the step's gate BEFORE the first
+  model call whenever an unpark seed exists. Gate green: the step completes with ZERO model
+  calls (`change_set: {"already_complete": true}`, `commit` = current worktree HEAD). Gate
+  red: the stale seed text is discarded in favor of the fresh full gate report, framed as
+  work-stands/gate-is-red/fix-forward. `run_gates` is infallible (a hung gate is a red
+  TIMEOUT result, never an error), so there is no fallback path back to the stale seed.
 
 ## 3. Design body — the loop
 

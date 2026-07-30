@@ -150,3 +150,19 @@ pub fn commit(worktree: &Path, paths: &[String], message: &str) -> Result<String
     run(&commit)?;
     run(&["rev-parse", "HEAD"])
 }
+
+/// Current HEAD sha — the gate-first pre-flight path (D19) reports this as
+/// `commit` when a seeded rerun's gate is already green and no model call
+/// (and so no fresh commit) happened this sample.
+pub fn head_sha(worktree: &Path) -> Result<String, String> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(worktree)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .map_err(|e| format!("git spawn failed: {e}"))?;
+    if !out.status.success() {
+        return Err(format!("git rev-parse HEAD failed: {}", String::from_utf8_lossy(&out.stderr)));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}

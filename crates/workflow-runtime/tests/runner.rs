@@ -863,10 +863,13 @@ fn empty_changeset_is_a_non_attempt_and_keeps_the_informative_error() {
     assert!(last.contains("gate is red"), "the real error must stay in front of the model: {last}");
 }
 
+/// D19 (gate-first on a seeded rerun): a previously parked execute's rerun
+/// checks the gate BEFORE the first model call, not after — the seed's own
+/// worktree state decides which branch runs, never a blind model call first.
 #[test]
-fn unpark_seeds_the_park_reason_into_the_rerun() {
+fn unpark_gate_still_red_feeds_the_fresh_report_not_the_stale_seed() {
     let fx = Fixture::new(
-        "exec-seed",
+        "exec-seed-red",
         "name = \"placeholder\"\n[[step]]\nname=\"x\"\nopcode=\"gate\"\ngate=[\"true\"]",
         &[],
     );
@@ -874,21 +877,69 @@ fn unpark_seeds_the_park_reason_into_the_rerun() {
     fs::write(fx.root.join("programs/program.toml"), execute_program(&target, 0)).unwrap();
     fs::write(fx.root.join("programs/brief.md"), "rename old_name to new_name in:\n{{file:lib.rs}}").unwrap();
 
-    // Single attempt with a misquoted `find` — parks with the apply error.
+    // Single attempt with a misquoted `find` — apply fails, nothing commits,
+    // the worktree is unchanged from base, so the rerun's gate stays red.
     let bad = r#"{"edits": [{"path": "lib.rs", "find": "fn misquoted()", "replace": "x"}], "commit_message": "bad find"}"#;
     assert_eq!(run(&fx.cfg(), &MockTransport::new(vec![bad.into()])).unwrap(), Outcome::Done);
     assert!(fx.root.join("run/parked.jsonl").exists());
 
     workflow_runtime::runner::unpark(&fx.root.join("run"), "rename").unwrap();
     let right = r#"{"edits": [{"path": "lib.rs", "find": "fn old_name()", "replace": "fn new_name()"}], "commit_message": "fixed"}"#;
-    assert_eq!(run(&fx.cfg(), &MockTransport::new(vec![right.into()])).unwrap(), Outcome::Done);
+    let mock = MockTransport::new(vec![right.into()]);
+    assert_eq!(run(&fx.cfg(), &mock).unwrap(), Outcome::Done);
+    assert_eq!(mock.requests_served(), 1, "the pre-flight gate check costs no model call");
     assert!(!fx.root.join("run/parked.jsonl").exists(), "the rerun must succeed and clear the park");
 
-    // The rerun's FIRST prompt carried the recorded park reason.
+    // The rerun's FIRST prompt carried the FRESH gate report (gate still red
+    // on the unchanged worktree), not the stale "misquoted" park text.
     let transcript = fs::read_to_string(fx.root.join("run/transcript.jsonl")).unwrap();
     let last = transcript.lines().last().unwrap();
-    assert!(last.contains("A previous sample of this step parked"), "{last}");
-    assert!(last.contains("misquoted"), "the recorded reason must ride along: {last}");
+    assert!(last.contains("Work already committed in the worktree stands"), "{last}");
+    assert!(last.contains("The gate is currently red"), "{last}");
+    assert!(last.contains("\\\"pass\\\": false"), "the fresh gate report rides along: {last}");
+    assert!(!last.contains("misquoted"), "the stale seed text must be discarded: {last}");
+}
+
+/// D19 (gate-first on a seeded rerun): if the worktree is already complete
+/// when the pre-flight gate runs, the step finishes with ZERO model calls.
+#[test]
+fn unpark_gate_already_green_completes_with_zero_model_calls() {
+    let fx = Fixture::new(
+        "exec-seed-green",
+        "name = \"placeholder\"\n[[step]]\nname=\"x\"\nopcode=\"gate\"\ngate=[\"true\"]",
+        &[],
+    );
+    let target = init_target_repo(&fx);
+    fs::write(fx.root.join("programs/program.toml"), execute_program(&target, 0)).unwrap();
+    fs::write(fx.root.join("programs/brief.md"), "rename old_name to new_name in:\n{{file:lib.rs}}").unwrap();
+
+    // The edit lands and commits, but the gate is red for an UNRELATED reason
+    // this sample (simulated here as a bad edit that still commits).
+    let wrong = r#"{"edits": [{"path": "lib.rs", "find": "fn keep()", "replace": "fn kept()"}], "commit_message": "wrong edit"}"#;
+    assert_eq!(run(&fx.cfg(), &MockTransport::new(vec![wrong.into()])).unwrap(), Outcome::Done);
+    assert!(fx.root.join("run/parked.jsonl").exists());
+
+    // Out-of-band, the worktree gets fixed forward to a state that DOES pass
+    // the gate (a human, or a later sample's own committed edit landed here).
+    fs::write(target.join("lib.rs"), "fn new_name() {}\nfn kept() {}\n").unwrap();
+    std::process::Command::new("git")
+        .args(["-C", target.to_str().unwrap(), "add", "--", "lib.rs"])
+        .output()
+        .unwrap();
+    std::process::Command::new("git")
+        .args(["-C", target.to_str().unwrap(), "commit", "-q", "-m", "fixed out of band", "--", "lib.rs"])
+        .output()
+        .unwrap();
+
+    workflow_runtime::runner::unpark(&fx.root.join("run"), "rename").unwrap();
+    // Zero-length mock: any model call at all is a hard failure.
+    let mock = MockTransport::new(vec![]);
+    assert_eq!(run(&fx.cfg(), &mock).unwrap(), Outcome::Done);
+    assert_eq!(mock.requests_served(), 0, "gate already green — no model call needed");
+    assert!(!fx.root.join("run/parked.jsonl").exists(), "the rerun must complete and clear the park");
+
+    let state = fs::read_to_string(fx.root.join("run/step-00-rename.json")).unwrap();
+    assert!(state.contains("already_complete"), "{state}");
 }
 
 #[test]
