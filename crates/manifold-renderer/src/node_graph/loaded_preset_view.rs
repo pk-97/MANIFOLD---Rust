@@ -189,6 +189,7 @@ fn binding_def_to_runtime(
         max,
         curve,
         invert,
+        default_mirrors_node_param: def.default_mirrors_node_param,
     }
 }
 

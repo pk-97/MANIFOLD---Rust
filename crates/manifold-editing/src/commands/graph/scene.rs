@@ -3145,6 +3145,7 @@ mod tests {
             user_added: false,
             scale: 1.0,
             offset: 0.0,
+            default_mirrors_node_param: false,
         };
 
         let mut cmd = ImportModelIntoSceneCommand::new(
