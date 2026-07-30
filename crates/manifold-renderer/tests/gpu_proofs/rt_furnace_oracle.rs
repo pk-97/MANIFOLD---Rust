@@ -264,6 +264,15 @@ fn uniform_environment_white_surface_returns_the_environment_radiance() {
     );
 }
 
+/// The occluder carries the SAME albedo-1 white material as the ground, on
+/// purpose. An earlier revision painted it 0.5 grey, and this gate passed at
+/// `ratio 0.5077` — reading the plate's own albedo as if it were shade. The
+/// probe under the plate sees the PLATE, not the floor, so a darker occluder
+/// manufactures the exact number the test is looking for. Matching the albedo
+/// removes that confound: with both surfaces white the ratio is `1.0010`, i.e.
+/// no darkening anywhere in the frame. Never reintroduce a colour difference
+/// between these two materials.
+///
 /// World-space probe points on `furnace_occlusion_scene_json`'s ground
 /// plane: `SHADED_WORLD` sits directly under the occluder's centre,
 /// `OPEN_WORLD` sits well clear of it (the occluder is a 3x3 plate centred
@@ -327,9 +336,9 @@ fn furnace_occlusion_scene_json(ground_ambient: f32) -> String {
             "metallic":{{"type":"Float","value":0.0}},
             "roughness":{{"type":"Float","value":1.0}}}}}},
         {{"id":9,"typeId":"node.pbr_material","nodeId":"occluder_mat","params":{{
-            "color_r":{{"type":"Float","value":0.5}},
-            "color_g":{{"type":"Float","value":0.5}},
-            "color_b":{{"type":"Float","value":0.5}},
+            "color_r":{{"type":"Float","value":1.0}},
+            "color_g":{{"type":"Float","value":1.0}},
+            "color_b":{{"type":"Float","value":1.0}},
             "ambient":{{"type":"Float","value":0.0}},
             "metallic":{{"type":"Float","value":0.0}},
             "roughness":{{"type":"Float","value":1.0}}}}}},
@@ -427,5 +436,93 @@ fn diagnostic_shaded_region_luma_with_ambient_zero_vs_ambient_one() {
     eprintln!(
         "RT furnace occlusion diagnostic: shaded region luma at ambient=0.0 -> {ambient_zero:.5}, \
          at ambient=1.0 -> {ambient_one:.5}"
+    );
+}
+
+/// Same Reinhard+gamma tonemap `render_scene_shadows.rs`'s `write_png` uses.
+fn write_png(bytes: &[u8], w: u32, h: u32, path: &str) {
+    let mut out = Vec::with_capacity((w * h * 4) as usize);
+    for px in bytes.chunks_exact(8) {
+        for c in 0..4 {
+            let v = f16::from_le_bytes([px[c * 2], px[c * 2 + 1]]).to_f32();
+            let mapped = (v / (1.0 + v)).clamp(0.0, 1.0);
+            out.push((mapped.powf(1.0 / 2.2) * 255.0).round() as u8);
+        }
+    }
+    image::save_buffer(path, &out, w, h, image::ExtendedColorType::Rgba8)
+        .unwrap_or_else(|e| panic!("write {path}: {e}"));
+}
+
+/// Raw (untonemapped) linear RGB of one pixel — the value `region_luma`
+/// averages over a window, read at a single texel instead.
+fn raw_pixel_rgb(bytes: &[u8], w: u32, px: f32, py: f32) -> [f32; 3] {
+    let x = px.round() as u32;
+    let y = py.round() as u32;
+    let idx = ((y * w + x) * 8) as usize;
+    let p = &bytes[idx..idx + 8];
+    [
+        f16::from_le_bytes([p[0], p[1]]).to_f32(),
+        f16::from_le_bytes([p[2], p[3]]).to_f32(),
+        f16::from_le_bytes([p[4], p[5]]).to_f32(),
+    ]
+}
+
+/// DIAGNOSTIC — establishes what surface the "shaded" probe in
+/// `traced_occlusion_darkens_the_shaded_region_relative_to_the_open_plane`
+/// is actually reading, per the lead's kernel read: `crates/manifold-gpu/
+/// src/metal/raytrace.rs`'s `gi` only accumulates from `hit_emissive` and a
+/// sun-caster (`kind == 0`) bounce term; this scene has zero lights (no
+/// casters) and a non-emissive occluder, so `gi` is exactly zero, and with
+/// `ambient` at 0.0 `ambient_color` is zero too — the RT irradiance term
+/// `ambient_color * ao + gi` this scene produces is 0 by construction,
+/// regardless of whether occlusion traced correctly. The leading
+/// alternative explanation: `SHADED_WORLD` is the point directly under the
+/// occluder's centre, and the occluder hovers only 0.6 units above it — a
+/// camera ray to that ground point at this file's oblique (not straight-
+/// down) framing may pass through the occluder plate itself before
+/// reaching the ground, in which case the "shaded" reading is the
+/// occluder's OWN albedo reflecting the same uniform environment directly
+/// (the same closed-form `albedo * L` this file's white-surface test
+/// checks), not an occlusion effect on the ground at all. If the occluder
+/// material's own albedo matches the ground's, this alternative predicts
+/// the shaded reading should be close to the OPEN reading and to the
+/// ground-only measurement, not darker than either.
+///
+/// Renders the two-object scene (occluder present) and the ground-only
+/// scene (`white_surface_scene_json`, occluder absent) at the SAME camera,
+/// probes the identical `SHADED_WORLD` pixel in both, dumps the two-object
+/// framebuffer to PNG, and prints the raw per-channel RGB (not the
+/// region-averaged luma) at that one texel for both scenes. No assertion —
+/// this is "find out", not a gate.
+#[test]
+fn diagnose_what_the_shaded_probe_pixel_actually_shows() {
+    let occluder_json = furnace_occlusion_scene_json(0.0);
+    let ground_only_json = white_surface_scene_json();
+
+    let (occluder_bytes, w, h) =
+        render_readback_confirmed(&occluder_json, "furnace occlusion scene (occluder present), RT enabled");
+    let (ground_only_bytes, _, _) =
+        render_readback_confirmed(&ground_only_json, "furnace ground-only scene (occluder absent), RT enabled");
+
+    let png_path = "/tmp/rt_furnace_occluder_present.png";
+    write_png(&occluder_bytes, w, h, png_path);
+
+    let cam = Camera::orbit_perspective(ORBIT, TILT, DISTANCE, FOV_Y, 0.0, 0.0, NEAR, FAR);
+    let shaded_px = cam
+        .project_to_pixel(SHADED_WORLD, w, h)
+        .expect("shaded probe must project in front of the camera");
+
+    const RADIUS: i32 = 8;
+    let occluder_region = region_luma(&occluder_bytes, w, h, shaded_px.px, shaded_px.py, RADIUS);
+    let ground_only_region = region_luma(&ground_only_bytes, w, h, shaded_px.px, shaded_px.py, RADIUS);
+    let occluder_pixel = raw_pixel_rgb(&occluder_bytes, w, shaded_px.px, shaded_px.py);
+    let ground_only_pixel = raw_pixel_rgb(&ground_only_bytes, w, shaded_px.px, shaded_px.py);
+
+    eprintln!(
+        "RT furnace shaded-probe diagnosis: pixel=({:.0},{:.0}) \
+         occluder-present region_luma={occluder_region:.5} raw_rgb={occluder_pixel:?} | \
+         occluder-absent (ground-only) region_luma={ground_only_region:.5} raw_rgb={ground_only_pixel:?} | \
+         PNG={png_path}",
+        shaded_px.px, shaded_px.py,
     );
 }
