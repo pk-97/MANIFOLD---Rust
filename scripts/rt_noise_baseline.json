@@ -1,0 +1,51 @@
+{
+  "schema": 1,
+  "ceilings_validated": false,
+  "note": "SEEDED, NOT MEASURED BY THIS GATE. Ceilings = the 2026-07-30 hand-measured medians on lane/rt-accum-alpha (tip 2ff87c4b) x the same headroom --record applies (mean x2.0 or +0.05, p99.9 x1.8 or +1.0). min_signal_level is 0.0 because no brightness was recorded for that run, so the inert-channel check is disarmed until a real --record. Run scripts/rt_noise_gate.py --record in a tree that HAS the RT accumulation work built, commit the result, and the gate arms itself.",
+  "provenance": {
+    "recorded": "2026-07-30",
+    "commit": "2ff87c4b (lane/rt-accum-alpha, unlanded)",
+    "project": "RtNoiseTesting.manifold",
+    "frames": 300,
+    "repeats": 1,
+    "statistic": "single hand-measured run, not a median — the reason ceilings_validated is false"
+  },
+  "channels": {
+    "composite": {
+      "mean": 0.14,
+      "p999": 10.8,
+      "min_signal_level": 0.0,
+      "measured": { "mean": 0.07, "p999": 6.0 }
+    },
+    "refl_history_write": {
+      "mean": 0.26,
+      "p999": 20.88,
+      "min_signal_level": 0.0,
+      "measured": { "mean": 0.13, "p999": 11.6 }
+    },
+    "refl_raw": {
+      "mean": 1.356,
+      "p999": 55.44,
+      "min_signal_level": 0.0,
+      "measured": { "mean": 0.678, "p999": 30.8 }
+    },
+    "mask": {
+      "mean": 0.083,
+      "p999": 16.2,
+      "min_signal_level": 0.0,
+      "measured": { "mean": 0.033, "p999": 9.0 }
+    },
+    "irr_full": {
+      "mean": 1.126,
+      "p999": 69.48,
+      "min_signal_level": 0.0,
+      "measured": { "mean": 0.563, "p999": 38.6 }
+    },
+    "moments": {
+      "mean": 0.058,
+      "p999": 2.0,
+      "min_signal_level": 0.0,
+      "measured": { "mean": 0.008, "p999": 1.0 }
+    }
+  }
+}
