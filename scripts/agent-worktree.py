@@ -29,12 +29,33 @@ intent. <task-label> is recorded in the lease for `list`; it does NOT
 name the directory (slots are anonymous — that anonymity is the fix:
 per-task names are what let the old pool grow one dir per task).
 
-A slot is idle (reusable) when ALL hold:
-  - `git status --porcelain` is empty (WORKTREE_HANDOFF.md counts as dirt —
-    a stopped session's unfinished work is a busy signal, see
-    GIT_TREE_DISCIPLINE.md §3b);
-  - its HEAD is an ancestor of origin/main (the work landed);
-  - its lease file is absent or older than LEASE_TTL_HOURS.
+Every slot lands in exactly one category (`slot_state`), and only the first two
+are ever handed out automatically:
+
+  IDLE      clean, landed, no lease.
+  RECLAIM   finished work the ring can take back by itself: clean AND landed
+            with only a stale/dead lease in the way, OR clean and a duplicate
+            of a branch another slot already holds (a `checkout -B` artifact —
+            the workstream keeps its seat, this copy is spare).
+  IN-USE    a live lease or a live session. Wait; never reclaim.
+  HUMAN     uncommitted changes, or the SOLE holder of unlanded commits.
+            Never automatic, whatever the lease says.
+
+The never-destroy-work checks run FIRST, so no amount of dead-holder or
+expired-lease evidence can reach a slot holding work that exists nowhere else.
+(WORKTREE_HANDOFF.md counts as dirt — a stopped session's unfinished work is a
+busy signal, see GIT_TREE_DISCIPLINE.md §3b.)
+
+Reclaim lives inside `acquire`'s pool-full path rather than in its own verb:
+the only moment anyone cares that a finished slot is still held is the moment
+the ring is empty, so checking there is free and needs no operator. `release`
+stays the manual path — and now reports what the slot IS afterwards, because a
+dirty tree or unlanded branch pins a slot with no lease at all.
+
+`acquire` REFUSES a branch already checked out in another slot. `git checkout -B`
+overrides git's one-worktree-per-branch rule (plain `checkout` refuses) and
+resets the branch ref under the other worktree: 2026-07-29, four slots on
+lane/wr-p2-replay, one slot's commits stranded in its reflog.
 
 On acquire, a slot whose target/ exceeds TARGET_CAP_GB is wiped before
 handoff (stale artifacts of dead branches otherwise accumulate without
@@ -44,8 +65,11 @@ roughly 270 GB (cap raised 6→10 on 2026-07-17, Peter's call — slots are
 created on demand, so the pool only reaches this if 10 concurrent
 workstreams actually happen).
 
-Release is an optimization, not a safety mechanism: a forgotten lease
-expires after LEASE_TTL_HOURS and only ever pins one slot.
+Release is an optimization, not a safety mechanism: a forgotten lease expires
+after LEASE_TTL_HOURS, or sooner if its `holder_pid` is provably gone. Nothing
+can be made to release on session end — a killed session fires no hook, and
+that is the population that leaks — so the lease records a pid to probe
+instead of trusting anyone to clean up.
 
 `scrub` is the end-of-session counterpart to acquire's lazy cap: acquire
 only wipes the ONE slot it hands out, so a finished wave leaves every
@@ -63,7 +87,9 @@ relief — see ensure_spotlight_exclusion).
 """
 
 import argparse
+import errno
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -88,6 +114,10 @@ REPO = _main_checkout()
 POOL = REPO / ".claude" / "worktrees"
 LEASE_NAME = ".worktree-lease.json"  # gitignored; mtime is the staleness clock
 LEASE_TTL_HOURS = 8
+DEAD_HOLDER_GRACE_H = 0.5  # a dead holder pid only shortens the TTL to this, never
+                           # to zero: a freshly acquired slot is clean+landed (HEAD
+                           # is the tip), so a pid probe that reads dead too eagerly
+                           # would hand a slot away seconds after someone took it.
 MAX_SLOTS = 10         # hard structural cap — there is no override flag
 TARGET_CAP_GB = 25     # per-slot target/ ceiling, enforced at acquire
 SCRUB_TO_GB = 150      # scrub trims the pool under this — below the sentinel's
@@ -111,29 +141,115 @@ def is_landed(wt):
 
 
 def lease_info(wt):
-    """Returns (age_hours or None, owner, task) — None age means no lease."""
+    """Returns (age_hours or None, owner, task, holder_pid) — None age = no lease."""
     lease = wt / LEASE_NAME
     if not lease.exists():
-        return None, "", ""
+        return None, "", "", None
     age_h = (time.time() - lease.stat().st_mtime) / 3600
     try:
         data = json.loads(lease.read_text())
     except (json.JSONDecodeError, OSError):
         data = {}
-    return age_h, data.get("owner", "?"), data.get("task", "?")
+    return age_h, data.get("owner", "?"), data.get("task", "?"), data.get("holder_pid")
+
+
+def pid_alive(pid):
+    """Existence probe, same shape as workflow-runtime's `holder_alive`: signal 0
+    succeeds for a live pid and raises EPERM for one we don't own (also alive)."""
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except PermissionError:
+        return True
+    except (OSError, TypeError, ValueError) as e:
+        return getattr(e, "errno", None) == errno.EPERM
+
+
+def lease_blocks(wt):
+    """Does this slot's lease still reserve it? Returns (blocks: bool, why: str).
+
+    A recorded holder pid that is gone shortens the TTL to DEAD_HOLDER_GRACE_H
+    rather than clearing it outright — dead-holder evidence is a reason to
+    expire sooner, never a licence to skip the never-destroy-work checks that
+    run before this."""
+    age_h, owner, task, holder_pid = lease_info(wt)
+    if age_h is None:
+        return False, "no lease"
+    if age_h >= LEASE_TTL_HOURS:
+        return False, f"lease expired ({age_h:.1f}h > {LEASE_TTL_HOURS}h TTL)"
+    if holder_pid is not None and not pid_alive(holder_pid) and age_h >= DEAD_HOLDER_GRACE_H:
+        return False, f"holder pid {holder_pid} is gone ({owner}, {age_h:.1f}h)"
+    return True, f"leased by {owner} for {task} ({age_h:.1f}h ago)"
+
+
+def branch_holders():
+    """branch name -> [worktree paths checked out on it]. `git checkout -B` does
+    NOT respect git's one-worktree-per-branch rule (plain `checkout` does), so
+    this is the only thing standing between an acquire and resetting a branch
+    ref under someone else's live worktree."""
+    out = git(REPO, "worktree", "list", "--porcelain", check=False)
+    holders, path = {}, None
+    for line in out.stdout.splitlines():
+        if line.startswith("worktree "):
+            path = Path(line[len("worktree "):])
+        elif line.startswith("branch ") and path is not None:
+            holders.setdefault(line[len("branch "):].removeprefix("refs/heads/"), []).append(path)
+    return holders
+
+
+# Slot categories. Only IDLE and RECLAIMABLE are ever handed out automatically.
+IDLE = "IDLE"
+RECLAIMABLE = "RECLAIM"      # finished or duplicated work — safe to return to the ring
+IN_USE = "IN-USE"            # a live lease or a live session; wait, don't reclaim
+NEEDS_HUMAN = "HUMAN"        # uncommitted work, or the sole holder of unlanded commits
+
+
+def slot_state(wt, holders=None):
+    """Returns (category, reason, remedy). Remedy is the exact command or action
+    that frees this slot, so POOL FULL can tell an operator what to do per line.
+
+    Order matters: the never-destroy-work checks (dirty, sole-holder-unlanded)
+    come FIRST, so no amount of dead-holder or expired-lease evidence can ever
+    reach a slot that is holding work which exists nowhere else."""
+    if holders is None:
+        holders = branch_holders()
+    branch = git(wt, "branch", "--show-current").stdout.strip()
+
+    dirt = git(wt, "status", "--porcelain").stdout.strip()
+    if dirt:
+        n = len(dirt.splitlines())
+        return (NEEDS_HUMAN, f"dirty ({n} paths)",
+                f"commit or discard the {n} uncommitted path(s) in {wt}")
+
+    if not is_landed(wt):
+        # The branch ref survives an acquire (`checkout -B <new>` never touches
+        # the old branch), so the commits are never lost either way. What a
+        # second holder proves is that the WORKSTREAM keeps a slot — this one is
+        # a `checkout -B` clobber artifact, not somebody's seat.
+        others = [p for p in holders.get(branch, []) if p != wt]
+        if not others:
+            return (NEEDS_HUMAN, f"unlanded branch {branch} (sole holder)",
+                    f"land or delete {branch}, or detach this slot to origin/main")
+        dupes = ", ".join(p.name for p in others)
+        blocked, why = lease_blocks(wt)
+        if blocked:
+            return (IN_USE, f"{why}; duplicate of {dupes}", f"wait, or release {wt.name}")
+        return (RECLAIMABLE, f"clean duplicate of {dupes} on {branch} — {why}",
+                f"reclaimed automatically; by hand: release {wt.name}")
+
+    blocked, why = lease_blocks(wt)
+    if blocked:
+        return IN_USE, why, f"wait for the lease, or release {wt.name}"
+    if (wt / LEASE_NAME).exists():
+        return (RECLAIMABLE, f"clean, landed, {why}",
+                f"reclaimed automatically; by hand: release {wt.name}")
+    return IDLE, "idle", "already free"
 
 
 def idle_state(wt):
-    """Returns (idle: bool, reason: str)."""
-    dirt = git(wt, "status", "--porcelain").stdout.strip()
-    if dirt:
-        return False, f"dirty ({len(dirt.splitlines())} paths)"
-    if not is_landed(wt):
-        return False, "branch not landed on origin/main"
-    age_h, owner, task = lease_info(wt)
-    if age_h is not None and age_h < LEASE_TTL_HOURS:
-        return False, f"leased by {owner} for {task} ({age_h:.1f}h ago)"
-    return True, "idle"
+    """Back-compat shim: (idle, reason) for callers that only want free-or-not."""
+    cat, reason, _ = slot_state(wt)
+    return cat in (IDLE, RECLAIMABLE), reason
 
 
 def pool_slots():
@@ -211,12 +327,13 @@ def cmd_list(_args):
     if not slots:
         print(f"(pool empty — slots are created on demand, cap {MAX_SLOTS})")
         return
+    holders = branch_holders()
     for wt in slots:
-        idle, reason = idle_state(wt)
+        cat, reason, _ = slot_state(wt, holders)
         branch = git(wt, "branch", "--show-current").stdout.strip() or "(detached)"
         head = git(wt, "rev-parse", "--short", "HEAD").stdout.strip()
         warm = f"{target_bytes(wt) / 2**30:.1f}G target" if target_bytes(wt) else "cold"
-        print(f"{'IDLE' if idle else 'BUSY':4}  {wt.name:8} {branch:40} "
+        print(f"{cat:8} {wt.name:8} {branch:40} "
               f"{head}  {warm:14} {reason}")
 
 
@@ -264,26 +381,81 @@ def slot_has_live_session(wt):
     return False
 
 
+def pool_full_report(slots, states):
+    """Exit loudly, grouped by WHO can free each slot. A flat status list reads as
+    N busy agents when it is really N abandoned trees (2026-07-30: ten slots, one
+    working agent), so abandoned and in-use never share a group again."""
+    groups = [
+        (IN_USE, "IN USE — a live holder; wait"),
+        (NEEDS_HUMAN, "NEEDS A HUMAN — never reclaimed automatically"),
+    ]
+    err = lambda s: print(s, file=sys.stderr)  # noqa: E731
+    for cat, heading in groups:
+        members = [wt for wt in slots if states[wt][0] == cat]
+        if not members:
+            continue
+        err(f"\n{heading}:")
+        for wt in members:
+            _, reason, remedy = states[wt]
+            err(f"  {wt.name}: {reason}")
+            err(f"      -> {remedy}")
+    dirty = sum(1 for wt in slots if "dirty" in states[wt][1])
+    unlanded = sum(1 for wt in slots if "unlanded" in states[wt][1])
+    sys.exit(
+        f"\nPOOL FULL: {len(slots)}/{MAX_SLOTS} slots, none reclaimable "
+        f"({dirty} holding uncommitted work, {unlanded} sole holders of unlanded "
+        "commits). The ring never grows past its cap — this failure is deliberate "
+        "and loud. Clean or land a slot per the remedies above, wait for a lease "
+        f"(TTL {LEASE_TTL_HOURS}h), or surface this to Peter. Do NOT create a "
+        "worktree by hand."
+    )
+
+
+def refuse_if_branch_held_elsewhere(branch, chosen, holders):
+    """`git checkout -B` silently overrides git's one-worktree-per-branch rule and
+    RESETS the branch ref under the other worktree (2026-07-29: four slots on
+    lane/wr-p2-replay, slot-7's reflog recording the reset). Plain `checkout`
+    refuses this; `-B` must be made to refuse it too."""
+    for other in holders.get(branch, []):
+        if other != chosen:
+            sys.exit(
+                f"REFUSED: branch {branch} is already checked out at {other}. "
+                f"`checkout -B` would reset that branch ref under a live worktree "
+                f"and strand its commits in the reflog. Work in {other.name}, or "
+                f"acquire under a different branch name."
+            )
+
+
 def cmd_acquire(args):
     ensure_spotlight_exclusion()
     git(REPO, "fetch", "origin", "main")
     tip = args.tip or "origin/main"
     slots = pool_slots()
+    holders = branch_holders()
 
-    idle = [wt for wt in slots if idle_state(wt)[0]]
-    live = [wt for wt in idle if slot_has_live_session(wt)]
+    states = {wt: slot_state(wt, holders) for wt in slots}
+    free = [wt for wt in slots if states[wt][0] in (IDLE, RECLAIMABLE)]
+    live = [wt for wt in free if slot_has_live_session(wt)]
     if live:
-        idle = [wt for wt in idle if wt not in live]
+        free = [wt for wt in free if wt not in live]
         for wt in live:
             print(f"SKIP {wt.name}: a live session is cd'd inside it "
                   "(reusing it would switch that session's branch mid-flight — "
                   "BUG-luo2)", file=sys.stderr)
-    if idle:
-        wt = max(idle, key=target_bytes)  # warmest target = best build reuse
+    if free:
+        # Reclaim happens HERE rather than in a separate verb: a slot that is
+        # clean and landed (or a clean duplicate of a branch another slot holds)
+        # is finished work, and the only moment anyone cares is the moment the
+        # ring is empty — so the check is free and needs no operator.
+        wt = max(free, key=target_bytes)  # warmest target = best build reuse
+        if states[wt][0] == RECLAIMABLE:
+            print(f"RECLAIM {wt.name}: {states[wt][1]}")
+        refuse_if_branch_held_elsewhere(args.branch, wt, holders)
         enforce_target_cap(wt)
         git(wt, "checkout", "-B", args.branch, tip)
         print(f"REUSED {wt.name} ({target_bytes(wt) / 2**30:.1f}G warm target)")
     elif len(slots) < MAX_SLOTS:
+        refuse_if_branch_held_elsewhere(args.branch, None, holders)
         # Fill the lowest free index so slot names stay dense.
         taken = {wt.name for wt in slots}
         idx = next(i for i in range(MAX_SLOTS)
@@ -293,19 +465,15 @@ def cmd_acquire(args):
         print(f"CREATED {wt.name} (ring at {len(slots) + 1}/{MAX_SLOTS} — "
               "cold build ahead)")
     else:
-        for wt in slots:
-            _, reason = idle_state(wt)
-            print(f"  {wt.name}: {reason}", file=sys.stderr)
-        sys.exit(
-            f"POOL FULL: all {MAX_SLOTS} slots are busy (states above). The ring "
-            "never grows past its cap — this failure is deliberate and loud. "
-            "Either release/land a slot's work, wait for a lease to expire "
-            f"(TTL {LEASE_TTL_HOURS}h), or surface this to Peter. Do NOT create "
-            "a worktree by hand."
-        )
+        pool_full_report(slots, states)
 
+    # holder_pid makes the lease self-describing: liveness becomes a pid probe
+    # instead of an 8h timeout. Default is the CALLER's pid (this script exits
+    # immediately, so its own pid would read dead at once) — a shell that exits
+    # is a false "dead", which is exactly why DEAD_HOLDER_GRACE_H exists.
     (wt / LEASE_NAME).write_text(json.dumps(
         {"owner": args.owner, "task": args.name, "branch": args.branch,
+         "holder_pid": args.holder_pid if args.holder_pid is not None else os.getppid(),
          "acquired": time.strftime("%Y-%m-%dT%H:%M:%S%z")}) + "\n")
     copied = copy_missing_fixtures(wt)
     print(f"FIXTURES: {copied} gitignored file(s) copied from main checkout")
@@ -325,10 +493,11 @@ def build_recency(wt):
 
 def cmd_scrub(_args):
     slots = pool_slots()
+    holders = branch_holders()
     idle = []
     for wt in slots:
-        is_idle, reason = idle_state(wt)
-        if not is_idle:
+        cat, reason, _ = slot_state(wt, holders)
+        if cat not in (IDLE, RECLAIMABLE):
             print(f"KEEP {wt.name}: {reason}")
         elif slot_has_live_session(wt):
             print(f"KEEP {wt.name}: live session inside it")
@@ -356,13 +525,23 @@ def cmd_scrub(_args):
 
 
 def cmd_release(args):
+    """Dropping the lease is only ONE of the things that can pin a slot — a dirty
+    tree or an unlanded branch pins it with no lease at all, and the old
+    "nothing to do" left an operator staring at a slot that stayed unusable
+    (Peter, 2026-07-30). Always report what the slot is after the drop."""
     wt = POOL / args.slot
+    if not wt.is_dir():
+        sys.exit(f"no slot at {wt}")
     lease = wt / LEASE_NAME
     if lease.exists():
         lease.unlink()
         print(f"released {wt}")
     else:
-        print(f"no lease on {wt} — nothing to do")
+        print(f"no lease on {wt}")
+    cat, reason, remedy = slot_state(wt)
+    print(f"{cat}: {reason}")
+    if cat not in (IDLE, RECLAIMABLE):
+        print(f"  -> still pinned. {remedy}")
 
 
 def main():
@@ -377,6 +556,9 @@ def main():
                      help="base commit/ref (default: origin/main after fetch)")
     acq.add_argument("--owner", default="unnamed-session",
                      help="who holds the lease (session id or label)")
+    acq.add_argument("--holder-pid", type=int, default=None, dest="holder_pid",
+                     help="pid whose death expires this lease early (default: "
+                          "the calling process)")
     rel = sub.add_parser("release")
     rel.add_argument("slot", help="slot name printed by acquire (e.g. slot-2)")
     sub.add_parser("scrub")
