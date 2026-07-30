@@ -3215,28 +3215,6 @@ impl EffectNode for RenderScene {
         } else {
             None
         };
-        // TEMPORARY instrumentation (static-boil diagnosis): how often the
-        // accumulator throws its history away. A static scene should print
-        // 0/120 after the first frame; anything else means history dies
-        // before it can converge. Delete once the question is answered.
-        if let Some(r) = reset_decision {
-            use std::sync::atomic::{AtomicU32, Ordering};
-            static FRAMES: AtomicU32 = AtomicU32::new(0);
-            static RESETS: AtomicU32 = AtomicU32::new(0);
-            let f = FRAMES.fetch_add(1, Ordering::Relaxed) + 1;
-            if r {
-                RESETS.fetch_add(1, Ordering::Relaxed);
-            }
-            if f.is_multiple_of(120) {
-                println!(
-                    "[RT ACCUM] resets {}/120 (owner {}, t {:.3}s, dt {:.4}s)",
-                    RESETS.swap(0, Ordering::Relaxed),
-                    ctx.owner_key,
-                    ctx.time.seconds.0,
-                    ctx.time.delta.0
-                );
-            }
-        }
         // D22: whether the scratch/upscaler are actually live this frame —
         // `temporal_upscale` folded with hardware availability, assigned
         // inside the "Ensure cached GPU resources" block below (the first
