@@ -43,6 +43,8 @@ mod object_group;
 mod report;
 mod scene;
 #[cfg(test)]
+mod card_precedence_tests;
+#[cfg(test)]
 mod tests;
 
 pub use merge::{MergePlan, assemble_merge_plan};

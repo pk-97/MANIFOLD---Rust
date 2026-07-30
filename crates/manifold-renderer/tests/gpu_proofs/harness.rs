@@ -98,6 +98,33 @@ pub fn import_rt_manifest(
     manifest
 }
 
+/// Anti-vacuity guard for the whole class `import_rt_manifest` documents: fail
+/// unless every value this runtime's def baked onto a node actually survived the
+/// build.
+///
+/// `BoundGraph::new` plants each card binding's default over its target node, so
+/// a param written onto a node the card owns is a silent no-op (BUG-1l7f). Call
+/// this right after building a runtime from a def you mutated — it turns "my
+/// measurement is secretly of the card default" into a failure at the point of
+/// the mistake, instead of a wrong number read as a conclusion.
+pub fn assert_no_shadowed_def_params(
+    runtime: &manifold_renderer::preset_runtime::PresetRuntime,
+    context: &str,
+) {
+    let findings: Vec<String> = runtime
+        .shadowed_def_params()
+        .map(|f| f.to_string())
+        .collect();
+    assert!(
+        findings.is_empty(),
+        "{context}: {} def-baked node param(s) were overwritten by their card \
+         bindings at build, so this test is measuring the card defaults and not \
+         what it asked for (BUG-1l7f). Drive them through the card manifest:\n{}",
+        findings.len(),
+        findings.join("\n"),
+    );
+}
+
 /// Render one frame with the RT channel capture armed and return whatever
 /// internal RT textures `render_scene` handed over.
 ///

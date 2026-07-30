@@ -526,8 +526,25 @@ impl PresetRuntime {
             .collect();
 
         // Hand the resolved bindings to the shared `BoundGraph` (seeds the
-        // skip-cache + plants each binding's declared default).
-        let mut bound = BoundGraph::new(bindings, &mut graph);
+        // skip-cache + plants each binding's declared default). The flattened
+        // def goes in so that planting is audible: any value the def baked onto
+        // a card-owned node param is about to be thrown away, and the writer
+        // hears about it here instead of through a wrong measurement later
+        // (BUG-1l7f — this is the imported-glTF footgun, since
+        // `assemble_import_graph` promotes EVERY scene-atom param to a card).
+        let mut bound = BoundGraph::new(bindings, &mut graph, flat_doc.as_ref());
+        for finding in bound.shadowed_def_params.clone() {
+            if crate::node_graph::is_baseline_shadow(type_id.as_str(), &finding) {
+                continue;
+            }
+            record_chain_error(
+                &mut chain_errors,
+                ChainError::CardBindingShadowsDefParam {
+                    effect_type: Some(type_id.clone()),
+                    finding,
+                },
+            );
+        }
         // BUG-kiac/BUG-18l (live forced-output toggles need a real runtime
         // rebuild): push the card's INITIAL values through the bindings
         // BEFORE the plan compiles, so `force_consumed_outputs` (BUG-317:
