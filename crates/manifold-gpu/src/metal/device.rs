@@ -1099,7 +1099,7 @@ impl GpuDevice {
             blend,
             sample_count,
             false,
-            None,
+            &[],
             label,
         )
     }
@@ -1132,7 +1132,7 @@ impl GpuDevice {
             blend,
             sample_count,
             alpha_to_coverage,
-            None,
+            &[],
             label,
         )
     }
@@ -1142,10 +1142,10 @@ impl GpuDevice {
     /// `specializations` into `wgsl_source` before compiling (the same
     /// "function constant" mechanism as [`Self::create_specialized_render_pipeline`]
     /// — a single WGSL template compiled into distinct pipeline variants,
-    /// never a second shader file), and — when `aux_color_format` is
-    /// `Some` — declares a second color attachment (index 1) at that pixel
-    /// format so the fragment can write an extra MRT output (e.g.
-    /// velocity). `aux_color_format: None` reproduces exactly
+    /// never a second shader file), and declares one extra color attachment
+    /// (indices 1..) per entry in `aux_color_formats` so the fragment can
+    /// write extra MRT outputs (velocity, ao_mask — RAYTRACING_DESIGN.md
+    /// section 12 AM1). An empty slice reproduces exactly
     /// [`Self::create_render_pipeline_depth_msaa`]'s single-attachment
     /// pipeline, just from substituted source.
     #[allow(clippy::too_many_arguments)]
@@ -1160,7 +1160,7 @@ impl GpuDevice {
         blend: Option<GpuBlendState>,
         sample_count: u32,
         alpha_to_coverage: bool,
-        aux_color_format: Option<GpuTextureFormat>,
+        aux_color_formats: &[GpuTextureFormat],
         label: &str,
     ) -> GpuRenderPipeline {
         let mut source = wgsl_source.to_string();
@@ -1176,7 +1176,7 @@ impl GpuDevice {
             blend,
             sample_count,
             alpha_to_coverage,
-            aux_color_format,
+            aux_color_formats,
             label,
         )
     }
@@ -1192,7 +1192,7 @@ impl GpuDevice {
         blend: Option<GpuBlendState>,
         sample_count: u32,
         alpha_to_coverage: bool,
-        aux_color_format: Option<GpuTextureFormat>,
+        aux_color_formats: &[GpuTextureFormat],
         label: &str,
     ) -> GpuRenderPipeline {
         let base_hash = archive::render_pipeline_hash(wgsl_source, vs_entry, fs_entry);
@@ -1203,7 +1203,7 @@ impl GpuDevice {
             sample_count.hash(&mut h);
             depth_format.hash(&mut h);
             alpha_to_coverage.hash(&mut h);
-            aux_color_format.hash(&mut h);
+            aux_color_formats.hash(&mut h);
             "depth".hash(&mut h);
             h.finish()
         };
@@ -1303,16 +1303,17 @@ impl GpuDevice {
             }
         }
 
-        // Optional MRT aux attachment (index 1) — `docs/GBUFFER_DESIGN.md`
-        // section 2 D3/D5, P2's velocity output. `None` leaves attachment 1 at the
-        // descriptor's default (`PixelFormatInvalid` = unused), reproducing
-        // exactly today's single-color-attachment pipeline. No blending —
-        // velocity (and any future aux MRT use) writes raw values, not a
-        // compositing blend.
-        if let Some(aux_fmt) = aux_color_format {
-            let aux_attach = unsafe { desc.colorAttachments().objectAtIndexedSubscript(1) };
+        // Optional MRT aux attachments (indices 1..) — `docs/GBUFFER_DESIGN.md`
+        // section 2 D3/D5 velocity, RAYTRACING_DESIGN.md section 12 AM1
+        // ao_mask. An empty slice leaves the attachments at the descriptor's
+        // default (`PixelFormatInvalid` = unused), reproducing exactly
+        // today's single-color-attachment pipeline. No blending — aux MRT
+        // outputs write raw values, not a compositing blend.
+        for (i, aux_fmt) in aux_color_formats.iter().enumerate() {
+            let aux_attach =
+                unsafe { desc.colorAttachments().objectAtIndexedSubscript(i + 1) };
             unsafe {
-                aux_attach.setPixelFormat(to_mtl_pixel_format(aux_fmt));
+                aux_attach.setPixelFormat(to_mtl_pixel_format(*aux_fmt));
             }
         }
 

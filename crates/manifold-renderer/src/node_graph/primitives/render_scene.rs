@@ -312,7 +312,7 @@ const _: () = assert!(std::mem::size_of::<LutUniforms>() == 16);
 // `Owned` variant carries drop glue, so `&RENDER_SCENE_OUTPUTS` can no longer
 // be rvalue-static-promoted out of a `const`. A `static` gives the slice a
 // genuine `'static` address to borrow.
-static RENDER_SCENE_OUTPUTS: [NodeOutput; 3] = [
+static RENDER_SCENE_OUTPUTS: [NodeOutput; 4] = [
     NodePort {
         name: std::borrow::Cow::Borrowed("color"),
         ty: PortType::Texture2D,
@@ -333,6 +333,16 @@ static RENDER_SCENE_OUTPUTS: [NodeOutput; 3] = [
     // documented v1 limitation), `Rg16Float` via `output_format` below.
     NodePort {
         name: std::borrow::Cow::Borrowed("velocity"),
+        ty: PortType::Texture2D,
+        kind: PortKind::Output,
+        required: false,
+    },
+    // RAYTRACING_DESIGN.md section 12 AM1: per-pixel weight of screen-space
+    // AO still owed. Lit raster pixel = 1, unlit-kind (baked_look) = 0,
+    // everything = 0 when RT is live (AM2), background clears to 1. Lazy,
+    // same D1 rule as `depth`/`velocity`; `R8Unorm` via `output_format`.
+    NodePort {
+        name: std::borrow::Cow::Borrowed("ao_mask"),
         ty: PortType::Texture2D,
         kind: PortKind::Output,
         required: false,
@@ -414,8 +424,13 @@ struct RenderSceneUniforms {
     /// Atmosphere (P3): fog colour (rgb; a reserved). Scene-wide — the same
     /// values are copied into every object's uniform.
     fog_color: [f32; 4],
-    /// `(fog_density, height_falloff, 0, 0)`. `fog_density == 0` → no fog
-    /// (unwired atmosphere = byte-identical to no atmosphere).
+    /// `(fog_density, height_falloff, ao_mask_owed, 0)`. `fog_density == 0`
+    /// → no fog (unwired atmosphere = byte-identical to no atmosphere).
+    /// `z` (RAYTRACING_DESIGN.md section 12 AM1/AM2/AM6, was a
+    /// permanently-zero reserved slot): the value the EMIT_AO_MASK fragment
+    /// variants write to the ao_mask attachment — 0 for unlit-kind
+    /// materials and scene-wide whenever RT is live, else 1. Written per
+    /// object in the Pass 1 loop; non-mask pipelines never read it.
     fog_params: [f32; 4],
     /// Scene-wide ambient/sky tint (rgb multiplier on the ambient term).
     ambient_tint: [f32; 4],
@@ -517,8 +532,9 @@ pub struct RenderScene {
     /// dimension, `is_blend` — a Blend-material pipeline has its own blend
     /// state and no alpha-to-coverage (see `pipeline_for`), so it is a
     /// distinct compiled pipeline from the opaque/mask one for the same
-    /// `(kind, emit_velocity)`. 4 materials × 2 × 2 = 16 entries max.
-    pipelines: AHashMap<(MaterialKind, bool, bool), manifold_gpu::GpuRenderPipeline>,
+    /// `(kind, emit_velocity, emit_ao_mask, blend)`. 4 materials × 2 × 2 × 2
+    /// = 32 entries max.
+    pipelines: AHashMap<(MaterialKind, bool, bool, bool), manifold_gpu::GpuRenderPipeline>,
     depth_stencil: Option<manifold_gpu::GpuDepthStencilState>,
     /// IMPORT_FIDELITY_DESIGN.md D8/F-P5: depth TEST on (`Less`, matching
     /// `depth_stencil` above) but WRITE off — the sorted transparent
@@ -540,6 +556,14 @@ pub struct RenderScene {
     velocity_msaa: Option<manifold_gpu::GpuTexture>,
     velocity_width: u32,
     velocity_height: u32,
+    /// Memoryless 4x-MSAA `R8Unorm` ao_mask aux-MRT target
+    /// (RAYTRACING_DESIGN.md section 12 AM1). Same D1 lazy rule as
+    /// `velocity_msaa`: allocated ONLY when `evaluate` finds the `ao_mask`
+    /// output wired this frame — an unwired scene never calls
+    /// `ensure_ao_mask_msaa_target`, so it costs nothing.
+    ao_mask_msaa: Option<manifold_gpu::GpuTexture>,
+    ao_mask_width: u32,
+    ao_mask_height: u32,
     /// RAYTRACING_DESIGN.md section 8.2 D22: single-sample `Rgba16Float` scratch
     /// color target — the SAME format `msaa_color` always resolves as —
     /// that Pass A resolves into (instead of the graph's native-res `color`
@@ -1020,6 +1044,9 @@ impl RenderScene {
             velocity_msaa: None,
             velocity_width: 0,
             velocity_height: 0,
+            ao_mask_msaa: None,
+            ao_mask_width: 0,
+            ao_mask_height: 0,
             rt_temporal_color_scratch: None,
             rt_temporal_color_scratch_width: 0,
             rt_temporal_color_scratch_height: 0,
@@ -1314,6 +1341,33 @@ impl RenderScene {
         ));
         self.velocity_width = width;
         self.velocity_height = height;
+    }
+
+    /// Ensure the memoryless MSAA `R8Unorm` ao_mask aux-MRT target matches
+    /// the render target size (RAYTRACING_DESIGN.md section 12 AM1). Called
+    /// ONLY when `evaluate` finds `ao_mask` wired this frame (the same D1
+    /// lazy rule as velocity) — an unwired scene never calls this.
+    fn ensure_ao_mask_msaa_target(
+        &mut self,
+        device: &manifold_gpu::GpuDevice,
+        width: u32,
+        height: u32,
+    ) {
+        if self.ao_mask_width == width
+            && self.ao_mask_height == height
+            && self.ao_mask_msaa.is_some()
+        {
+            return;
+        }
+        self.ao_mask_msaa = Some(device.create_texture_msaa_memoryless(
+            width,
+            height,
+            manifold_gpu::GpuTextureFormat::R8Unorm,
+            MSAA_SAMPLES,
+            "node.render_scene msaa ao_mask",
+        ));
+        self.ao_mask_width = width;
+        self.ao_mask_height = height;
     }
 
     fn ensure_sampler(&mut self, device: &manifold_gpu::GpuDevice) {
@@ -2218,6 +2272,81 @@ impl RenderScene {
         ),
     ];
 
+    /// RAYTRACING_DESIGN.md section 12 AM1: the EMIT_AO_MASK variant. Same
+    /// substitution mechanism as velocity; the mask value is
+    /// `u.fog_params.z` (`ao_mask_owed`, written CPU-side per object: 0 for
+    /// unlit-kind materials and whenever RT is live, else 1 — AM2/AM6), so
+    /// one shared replacement covers all four fragment entries with no
+    /// per-kind shader text.
+    const AO_MASK_SPECIALIZATIONS: &'static [(&'static str, &'static str)] = &[
+        (
+            "// GBUFFER_FSOUT_VELOCITY_STRUCT",
+            "struct FsOut {\n    @location(0) color: vec4<f32>,\n    @location(1) ao_mask: f32,\n};",
+        ),
+        ("-> @location(0) vec4<f32> {", "-> FsOut {"),
+        (
+            "return vec4<f32>(rgb, albedo.a);",
+            "return FsOut(vec4<f32>(rgb, albedo.a), u.fog_params.z);",
+        ),
+    ];
+
+    /// Velocity + ao_mask together: velocity keeps `@location(1)` (the pass
+    /// encodes aux attachments in that order — velocity first, ao_mask
+    /// second), ao_mask takes `@location(2)`.
+    const VELOCITY_AO_MASK_SPECIALIZATIONS: &'static [(&'static str, &'static str)] = &[
+        (
+            "// GBUFFER_FSOUT_VELOCITY_STRUCT",
+            "struct FsOut {\n    @location(0) color: vec4<f32>,\n    @location(1) velocity: vec2<f32>,\n    @location(2) ao_mask: f32,\n};",
+        ),
+        (
+            "// GBUFFER_VSOUT_VELOCITY_FIELDS",
+            "@location(3) clip_now: vec4<f32>,\n    @location(4) clip_prev: vec4<f32>,",
+        ),
+        (
+            "// GBUFFER_VS_VELOCITY_BODY",
+            "out.clip_now = out.clip_pos;\n    let prev_world = u.prev_model * vec4<f32>(inst_pos, 1.0);\n    out.clip_prev = u.prev_view_proj * prev_world;",
+        ),
+        ("-> @location(0) vec4<f32> {", "-> FsOut {"),
+        (
+            "return vec4<f32>(rgb, albedo.a);",
+            "return FsOut(vec4<f32>(rgb, albedo.a), (in.clip_now.xy / in.clip_now.w) - (in.clip_prev.xy / in.clip_prev.w), u.fog_params.z);",
+        ),
+    ];
+
+    /// The specialization list + aux attachment formats + label for an
+    /// aux-emitting pipeline variant. One authority so `pipeline_for` and
+    /// `prewarm_pipelines` can never disagree; `None` = no aux outputs (the
+    /// plain non-specialized pipeline).
+    #[allow(clippy::type_complexity)]
+    fn aux_variant(
+        emit_velocity: bool,
+        emit_ao_mask: bool,
+    ) -> Option<(
+        &'static [(&'static str, &'static str)],
+        &'static [manifold_gpu::GpuTextureFormat],
+        &'static str,
+    )> {
+        use manifold_gpu::GpuTextureFormat::{R8Unorm, Rg16Float};
+        match (emit_velocity, emit_ao_mask) {
+            (false, false) => None,
+            (true, false) => Some((
+                Self::VELOCITY_SPECIALIZATIONS,
+                &[Rg16Float],
+                "node.render_scene.velocity",
+            )),
+            (false, true) => Some((
+                Self::AO_MASK_SPECIALIZATIONS,
+                &[R8Unorm],
+                "node.render_scene.ao_mask",
+            )),
+            (true, true) => Some((
+                Self::VELOCITY_AO_MASK_SPECIALIZATIONS,
+                &[Rg16Float, R8Unorm],
+                "node.render_scene.velocity.ao_mask",
+            )),
+        }
+    }
+
     /// IMPORT_FIDELITY_DESIGN.md D8: classic straight-alpha "over" blend —
     /// `src_alpha / one_minus_src_alpha` on colour, and the matching
     /// straight-alpha formula on the output alpha channel (`src.a + dst.a *
@@ -2245,6 +2374,7 @@ impl RenderScene {
         device: &manifold_gpu::GpuDevice,
         kind: MaterialKind,
         emit_velocity: bool,
+        emit_ao_mask: bool,
         blend: bool,
     ) -> &manifold_gpu::GpuRenderPipeline {
         let fs_entry = match kind {
@@ -2254,22 +2384,24 @@ impl RenderScene {
             MaterialKind::Cel => "fs_cel",
         };
         self.pipelines
-            .entry((kind, emit_velocity, blend))
+            .entry((kind, emit_velocity, emit_ao_mask, blend))
             .or_insert_with(|| {
                 let blend_state = if blend { Some(Self::blend_state()) } else { None };
-                if emit_velocity {
+                if let Some((specs, aux_formats, label)) =
+                    Self::aux_variant(emit_velocity, emit_ao_mask)
+                {
                     device.create_specialized_render_pipeline_depth_msaa(
                         include_str!("shaders/render_scene.wgsl"),
                         "vs_main",
                         fs_entry,
-                        Self::VELOCITY_SPECIALIZATIONS,
+                        specs,
                         manifold_gpu::GpuTextureFormat::Rgba16Float,
                         manifold_gpu::GpuTextureFormat::Depth32Float,
                         blend_state,
                         MSAA_SAMPLES,
                         !blend,
-                        Some(manifold_gpu::GpuTextureFormat::Rg16Float),
-                        "node.render_scene.velocity",
+                        aux_formats,
+                        label,
                     )
                 } else {
                     device.create_render_pipeline_depth_msaa(
@@ -2318,57 +2450,50 @@ impl RenderScene {
                 MaterialKind::Pbr => "fs_pbr",
                 MaterialKind::Cel => "fs_cel",
             };
-            device.create_render_pipeline_depth_msaa(
-                include_str!("shaders/render_scene.wgsl"),
-                "vs_main",
-                fs_entry,
-                manifold_gpu::GpuTextureFormat::Rgba16Float,
-                manifold_gpu::GpuTextureFormat::Depth32Float,
-                None,
-                MSAA_SAMPLES,
-                true,
-                "node.render_scene",
-            );
-            device.create_specialized_render_pipeline_depth_msaa(
-                include_str!("shaders/render_scene.wgsl"),
-                "vs_main",
-                fs_entry,
-                Self::VELOCITY_SPECIALIZATIONS,
-                manifold_gpu::GpuTextureFormat::Rgba16Float,
-                manifold_gpu::GpuTextureFormat::Depth32Float,
-                None,
-                MSAA_SAMPLES,
-                true,
-                Some(manifold_gpu::GpuTextureFormat::Rg16Float),
-                "node.render_scene.velocity",
-            );
             // IMPORT_FIDELITY_DESIGN.md D8/F-P5: the Blend-material pipeline
             // variants (BUG-037 discipline — a live project's first glass
             // draw must be a cache hit, not a first-use compile stall).
-            device.create_render_pipeline_depth_msaa(
-                include_str!("shaders/render_scene.wgsl"),
-                "vs_main",
-                fs_entry,
-                manifold_gpu::GpuTextureFormat::Rgba16Float,
-                manifold_gpu::GpuTextureFormat::Depth32Float,
-                Some(Self::blend_state()),
-                MSAA_SAMPLES,
-                false,
-                "node.render_scene.blend",
-            );
-            device.create_specialized_render_pipeline_depth_msaa(
-                include_str!("shaders/render_scene.wgsl"),
-                "vs_main",
-                fs_entry,
-                Self::VELOCITY_SPECIALIZATIONS,
-                manifold_gpu::GpuTextureFormat::Rgba16Float,
-                manifold_gpu::GpuTextureFormat::Depth32Float,
-                Some(Self::blend_state()),
-                MSAA_SAMPLES,
-                false,
-                Some(manifold_gpu::GpuTextureFormat::Rg16Float),
-                "node.render_scene.blend.velocity",
-            );
+            // RAYTRACING_DESIGN.md section 12 AM1 adds the ao_mask aux
+            // dimension — same lazy-compile-stall argument: every import
+            // graph wires ao_mask, so its variants must be warm. All
+            // compiles below are on-disk-cache hits after the first launch.
+            for blend in [false, true] {
+                let blend_state = blend.then(Self::blend_state);
+                let a2c = !blend;
+                for (emit_velocity, emit_ao_mask) in
+                    [(false, false), (true, false), (false, true), (true, true)]
+                {
+                    if let Some((specs, aux_formats, label)) =
+                        Self::aux_variant(emit_velocity, emit_ao_mask)
+                    {
+                        device.create_specialized_render_pipeline_depth_msaa(
+                            include_str!("shaders/render_scene.wgsl"),
+                            "vs_main",
+                            fs_entry,
+                            specs,
+                            manifold_gpu::GpuTextureFormat::Rgba16Float,
+                            manifold_gpu::GpuTextureFormat::Depth32Float,
+                            blend_state,
+                            MSAA_SAMPLES,
+                            a2c,
+                            aux_formats,
+                            label,
+                        );
+                    } else {
+                        device.create_render_pipeline_depth_msaa(
+                            include_str!("shaders/render_scene.wgsl"),
+                            "vs_main",
+                            fs_entry,
+                            manifold_gpu::GpuTextureFormat::Rgba16Float,
+                            manifold_gpu::GpuTextureFormat::Depth32Float,
+                            blend_state,
+                            MSAA_SAMPLES,
+                            a2c,
+                            "node.render_scene",
+                        );
+                    }
+                }
+            }
         }
 
         // BUG-found-by-P3-perf-gate (VOLUMETRIC_LIGHT_DESIGN.md P3): the
@@ -2752,7 +2877,7 @@ impl EffectNode for RenderScene {
         params: &crate::node_graph::effect_node::ParamValues,
     ) -> Option<(u32, u32)> {
         let temporal_upscale = matches!(params.get("temporal_upscale"), Some(ParamValue::Bool(true)));
-        if temporal_upscale && (port == "depth" || port == "velocity") {
+        if temporal_upscale && (port == "depth" || port == "velocity" || port == "ao_mask") {
             Some((RT_TEMPORAL_RENDER_SCALE_NUM, RT_TEMPORAL_RENDER_SCALE_DEN))
         } else {
             Some((1, 1))
@@ -2792,6 +2917,9 @@ impl EffectNode for RenderScene {
         match port {
             "depth" => Some(manifold_gpu::GpuTextureFormat::R32Float),
             "velocity" => Some(manifold_gpu::GpuTextureFormat::Rg16Float),
+            // RAYTRACING_DESIGN.md section 12 AM1: single-channel AO-owed
+            // weight. Never force-consumed — strictly lazy-by-wire.
+            "ao_mask" => Some(manifold_gpu::GpuTextureFormat::R8Unorm),
             _ => None,
         }
     }
@@ -3089,6 +3217,9 @@ impl EffectNode for RenderScene {
         // consumer actually wired it (checked once per frame, cheap: a
         // step-output lookup, not a texture allocation).
         let velocity_wired = ctx.outputs.texture_2d("velocity").is_some();
+        // RAYTRACING_DESIGN.md section 12 AM1: same D1 lazy rule for the
+        // ao_mask aux output.
+        let ao_mask_wired = ctx.outputs.texture_2d("ao_mask").is_some();
         // VOLUMETRIC_LIGHT_DESIGN.md D1/D3 (P2): the sole CPU gate for the
         // whole light-shaft feature, checked once per frame like
         // `velocity_wired`. `depth_wired` decides whether the march reads
@@ -3196,6 +3327,13 @@ impl EffectNode for RenderScene {
             /// other draw binds the 1×1 dummy there instead — same always-
             /// bind ABI-stub discipline as `normal_map`/`mr_map`/etc above.
             is_transmissive: bool,
+            /// RAYTRACING_DESIGN.md section 12 AM1: kept so the post-loop
+            /// remap below can rebuild a Blend draw's pipeline WITHOUT aux
+            /// outputs when `has_transmission` routes the Blend group to
+            /// Pass B — a single-color-attachment pass that must never be
+            /// paired with a velocity/ao_mask-emitting pipeline (attachment
+            /// layout mismatch).
+            kind: MaterialKind,
         }
 
         let instance_size = std::mem::size_of::<InstanceTransform>() as u64;
@@ -3349,6 +3487,20 @@ impl EffectNode for RenderScene {
             // trace against the scene geometry, not toward a light — never
             // caster-gated.
             uniforms.rt_flags[0] = if rt_reflections && rt_ready { 1.0 } else { 0.0 };
+            // RAYTRACING_DESIGN.md section 12 AM2/AM6: `fog_params.z` was a
+            // permanently-zero reserved slot — repurposed as `ao_mask_owed`,
+            // the value the EMIT_AO_MASK fragment variants write to the
+            // ao_mask attachment. 0 for unlit-kind materials (baked_look)
+            // and scene-wide whenever RT is live; 1 for every lit raster
+            // pixel. Same reserved-slot reuse doctrine as `scene_params.w`
+            // above. Written unconditionally — non-mask pipelines never
+            // read it.
+            uniforms.fog_params[2] =
+                if material.kind == MaterialKind::Unlit || (rt_enabled && rt_ready) {
+                    0.0
+                } else {
+                    1.0
+                };
             if base_color_map.is_some() {
                 uniforms.texture_flags[2] = 1.0; // z = base_color_map present (matches resolve_albedo's texture_flags.z gate)
             }
@@ -3452,7 +3604,7 @@ impl EffectNode for RenderScene {
 
             let pipeline = {
                 let gpu = ctx.gpu_encoder();
-                self.pipeline_for(gpu.device, material.kind, velocity_wired, is_blend)
+                self.pipeline_for(gpu.device, material.kind, velocity_wired, ao_mask_wired, is_blend)
                     .clone()
             };
 
@@ -3493,11 +3645,29 @@ impl EffectNode for RenderScene {
                 sort_depth,
                 is_transmissive,
                 cast_shadows: object.cast_shadows,
+                kind: material.kind,
             });
         }
 
         if draws.is_empty() {
             return;
+        }
+
+        // RAYTRACING_DESIGN.md section 12 AM1: when `has_transmission`
+        // routes the Blend group to Pass B (single color attachment, no
+        // MSAA, no aux MRT — see the E2a seam below), those draws must not
+        // carry a velocity/ao_mask-emitting pipeline: Metal requires the
+        // pipeline's color-attachment layout to match the pass. Rebuild
+        // Blend pipelines aux-free here — the first point `has_transmission`
+        // is fully known. This also closes the latent velocity variant of
+        // the same mismatch (rt_enabled forces velocity consumed, so an
+        // RT + glass scene hit it too).
+        if has_transmission && (velocity_wired || ao_mask_wired) {
+            let gpu = ctx.gpu_encoder();
+            for draw in draws.iter_mut().filter(|d| d.alpha_mode == AlphaMode::Blend) {
+                draw.pipeline =
+                    self.pipeline_for(gpu.device, draw.kind, false, false, true).clone();
+            }
         }
 
         // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: peek `color`'s format
@@ -3538,6 +3708,11 @@ impl EffectNode for RenderScene {
             // is the actual zero-cost-when-unwired enforcement point.
             if velocity_wired {
                 self.ensure_velocity_msaa_target(gpu.device, width, height);
+            }
+            // RAYTRACING_DESIGN.md section 12 AM1: same zero-cost-when-
+            // unwired enforcement point for the ao_mask aux target.
+            if ao_mask_wired {
+                self.ensure_ao_mask_msaa_target(gpu.device, width, height);
             }
             // RAYTRACING_DESIGN.md section 8.2 D22 (T2-B): the render-res color
             // scratch Pass A resolves into, ensured whenever the raw
@@ -4562,6 +4737,8 @@ impl EffectNode for RenderScene {
         // GBUFFER_DESIGN.md section 2 D1/D5 (P2): same lazy rule as `depth` —
         // `None` when unwired, costing zero new bytes (I1).
         let velocity_resolve_target = ctx.outputs.texture_2d("velocity");
+        // RAYTRACING_DESIGN.md section 12 AM1: same lazy rule again.
+        let ao_mask_resolve_target = ctx.outputs.texture_2d("ao_mask");
         let depth_stencil = self.depth_stencil.as_ref().expect("just inserted");
         let depth_tex = self.depth_texture.as_ref().expect("just inserted");
         let msaa_color = self.msaa_color.as_ref().expect("just inserted");
@@ -4944,14 +5121,42 @@ impl EffectNode for RenderScene {
             (Some(msaa), Some(resolve)) => Some((msaa, resolve)),
             _ => None,
         };
-        let aux_color_storage: [(&manifold_gpu::GpuTexture, &manifold_gpu::GpuTexture); 1];
-        let aux_color: &[(&manifold_gpu::GpuTexture, &manifold_gpu::GpuTexture)] =
-            if let Some(pair) = velocity_pair {
-                aux_color_storage = [pair];
-                &aux_color_storage
-            } else {
-                &[]
-            };
+        // RAYTRACING_DESIGN.md section 12 AM1: same both-or-nothing pairing
+        // for ao_mask. Clear colors differ per attachment: velocity 0 (no
+        // motion), ao_mask 1 (background keeps full screen-space AO). The
+        // aux order here (velocity, then ao_mask) MUST match the FsOut
+        // @location order in `aux_variant`'s specializations.
+        let ao_mask_pair = match (self.ao_mask_msaa.as_ref(), ao_mask_resolve_target) {
+            (Some(msaa), Some(resolve)) => Some((msaa, resolve)),
+            _ => None,
+        };
+        let velocity_att = velocity_pair.map(|(msaa, resolve)| manifold_gpu::AuxColorAttachment {
+            msaa,
+            resolve,
+            clear: [0.0; 4],
+        });
+        let ao_mask_att = ao_mask_pair.map(|(msaa, resolve)| manifold_gpu::AuxColorAttachment {
+            msaa,
+            resolve,
+            clear: [1.0; 4],
+        });
+        let aux_storage_two: [manifold_gpu::AuxColorAttachment; 2];
+        let aux_storage_one: [manifold_gpu::AuxColorAttachment; 1];
+        let aux_color: &[manifold_gpu::AuxColorAttachment] = match (velocity_att, ao_mask_att) {
+            (Some(v), Some(a)) => {
+                aux_storage_two = [v, a];
+                &aux_storage_two
+            }
+            (Some(v), None) => {
+                aux_storage_one = [v];
+                &aux_storage_one
+            }
+            (None, Some(a)) => {
+                aux_storage_one = [a];
+                &aux_storage_one
+            }
+            (None, None) => &[],
+        };
 
         let pass_desc = manifold_gpu::DepthMsaaPassDesc {
             msaa_color,

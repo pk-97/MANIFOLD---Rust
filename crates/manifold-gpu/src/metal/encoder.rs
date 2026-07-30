@@ -137,6 +137,18 @@ pub struct DepthMsaaDraw<'a> {
 /// [`GpuEncoder::draw_instanced_depth_msaa_batch`] (unchanged signature)
 /// forwards here with `depth_resolve: None, aux_color: &[]` — byte-identical
 /// to the pre-D3 pass (I1/I4).
+/// One aux MRT attachment in a [`DepthMsaaPassDesc`]: memoryless MSAA
+/// texture + single-sample resolve target + this attachment's clear color.
+/// Per-attachment clear because the semantics differ: velocity clears to 0
+/// (no motion), ao_mask clears to 1 (background keeps full screen-space AO —
+/// RAYTRACING_DESIGN.md section 12 AM1).
+#[derive(Clone, Copy)]
+pub struct AuxColorAttachment<'a> {
+    pub msaa: &'a GpuTexture,
+    pub resolve: &'a GpuTexture,
+    pub clear: [f64; 4],
+}
+
 pub struct DepthMsaaPassDesc<'a> {
     pub msaa_color: &'a GpuTexture,
     pub resolve_target: &'a GpuTexture,
@@ -146,10 +158,10 @@ pub struct DepthMsaaPassDesc<'a> {
     /// render, unlike `Min`/`Max`) into this single-sample `R32Float`
     /// texture. `None` → `DontCare`, exactly today's memoryless depth.
     pub depth_resolve: Option<&'a GpuTexture>,
-    /// Extra MRT color attachments (index 1..), each `(msaa_tex,
-    /// resolve_tex)`. Reserved for P2's velocity output; empty slice today
+    /// Extra MRT color attachments (index 1..). Order must match the
+    /// pipeline's `aux_color_formats` (velocity, then ao_mask). Empty slice
     /// produces exactly the pre-D3 single-color-attachment pass.
-    pub aux_color: &'a [(&'a GpuTexture, &'a GpuTexture)],
+    pub aux_color: &'a [AuxColorAttachment<'a>],
     pub depth_stencil_state: &'a GpuDepthStencilState,
     /// IMPORT_FIDELITY_DESIGN.md D8/F-P5: an optional second draw group,
     /// run immediately after `draws` within the SAME render pass — no
@@ -989,10 +1001,11 @@ impl GpuEncoder {
             });
         }
 
-        // Reserved MRT slots (P2: one for velocity). Each aux attachment
-        // gets its own memoryless multisample + resolve target, same
-        // Clear/MultisampleResolve shape as the primary color attachment.
-        for (i, (aux_msaa, aux_resolve)) in desc.aux_color.iter().enumerate() {
+        // Aux MRT slots (velocity, ao_mask). Each aux attachment gets its
+        // own memoryless multisample + resolve target, same
+        // Clear/MultisampleResolve shape as the primary color attachment;
+        // the clear color is per-attachment (see `AuxColorAttachment`).
+        for (i, aux_att) in desc.aux_color.iter().enumerate() {
             let idx = i + 1;
             let aux = unsafe {
                 pass_desc
@@ -1000,15 +1013,15 @@ impl GpuEncoder {
                     .objectAtIndexedSubscript(idx)
             };
             unsafe {
-                aux.setTexture(Some(&aux_msaa.raw));
-                aux.setResolveTexture(Some(&aux_resolve.raw));
+                aux.setTexture(Some(&aux_att.msaa.raw));
+                aux.setResolveTexture(Some(&aux_att.resolve.raw));
                 aux.setLoadAction(MTLLoadAction::Clear);
                 aux.setStoreAction(MTLStoreAction::MultisampleResolve);
                 aux.setClearColor(objc2_metal::MTLClearColor {
-                    red: 0.0,
-                    green: 0.0,
-                    blue: 0.0,
-                    alpha: 0.0,
+                    red: aux_att.clear[0],
+                    green: aux_att.clear[1],
+                    blue: aux_att.clear[2],
+                    alpha: aux_att.clear[3],
                 });
             }
         }
