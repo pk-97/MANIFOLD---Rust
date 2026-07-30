@@ -222,6 +222,13 @@ const IRRADIANCE_ACCUM_ALPHA: f32 = 0.02;
 /// rays in the SAME half-res dispatch); Peter's morning gate tunes within
 /// it.
 const GI_SAMPLES_PER_PIXEL: u32 = 2;
+/// GGX reflection rays per pixel, in the same half-res dispatch. Was 1,
+/// which measured 4.7 sRGB levels of frame-to-frame change on a fully static
+/// scene with a 171-level 99.9th percentile — variance no temporal filter can
+/// hide. Committed range 1–8: higher = calmer reflections, linearly more
+/// reflection-ray cost (they are the most expensive ray class, since a hit
+/// shades a full raster-parity surface).
+const REFL_SAMPLES_PER_PIXEL: u32 = 4;
 /// RAYTRACING_DESIGN.md section 8.2 D22: reduced render resolution `temporal_upscale`
 /// draws color/depth/velocity at, relative to the scene's native (canvas)
 /// resolution — `render_dim = native_dim * NUM / DEN` (1/1.5 linear, D22
@@ -4383,7 +4390,7 @@ impl EffectNode for RenderScene {
                     // the rt_reflections scene param, gated on rt_enabled;
                     // T5 tunes the spp/roughness-band constants. 0.6/0.1 are
                     // the RD7 starting constants.
-                    if rt_reflections { 1 } else { 0 },
+                    if rt_reflections { REFL_SAMPLES_PER_PIXEL } else { 0 },
                     0.6,
                     0.1,
                 );

@@ -790,6 +790,30 @@ static float2 rand2(uint2 p, uint frame, uint ray) {
 static float3 ortho_basis_x(float3 n) {
     return normalize(fabs(n.x) > 0.9 ? cross(n, float3(0, 1, 0)) : cross(n, float3(1, 0, 0)));
 }
+// Shared luminance weighting (Rec.709) — the reflection firefly clamp, the
+// upsample gather, and `atrous_filter`'s edge-stopping function all use it.
+static float luma(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
+
+// In-register cap on reflection samples per pixel — bounds the fixed-size
+// sample array the firefly clamp's median needs. `REFL_SAMPLES_PER_PIXEL`'s
+// committed range (1-8) is what this has to hold.
+#define MAX_RT_REFL_SPP 8u
+
+// Median luminance of `n` radiance samples (n <= MAX_RT_REFL_SPP), by partial
+// selection — n is 4 in practice, so a sort network buys nothing. Even n takes
+// the lower middle: this anchors a clamp, not a statistic.
+static float median_luma(thread float3* s, uint n) {
+    float l[MAX_RT_REFL_SPP];
+    for (uint i = 0u; i < n; ++i) { l[i] = luma(s[i]); }
+    uint mid = n / 2u;
+    for (uint i = 0u; i <= mid; ++i) {
+        uint m = i;
+        for (uint j = i + 1u; j < n; ++j) { if (l[j] < l[m]) { m = j; } }
+        float t = l[i]; l[i] = l[m]; l[m] = t;
+    }
+    return l[mid];
+}
+
 static float3 cone_sample(float3 dir, float half_angle, float2 u) {
     if (half_angle <= 0.0) return dir;
     float cos_t = mix(1.0, cos(half_angle), u.x);
@@ -1289,9 +1313,21 @@ kernel void trace_shadow_rays(
             // approximation — no ray cast.
             out_refl.write(float4(env, RT_REFL_MISS_HIT_DIST), tid);
         } else {
+            // One GGX sample per pixel per frame left variance the temporal
+            // filter could not hide: measured frame-to-frame change on a
+            // STATIC scene was 4.7 sRGB levels mean with a 171-level 99.9th
+            // percentile — heavy-tailed, i.e. single samples landing on
+            // something very bright. Averaging `refl_spp` samples here
+            // attacks the variance at the source; `RT_REFL_FIREFLY_GAIN`
+            // below attacks the tail.
+            uint rspp = min(max(p.refl_spp, 1u), MAX_RT_REFL_SPP);
+            float3 rsamples[MAX_RT_REFL_SPP];
+            float hit_dist_sum = 0.0;
+            uint hit_count = 0u;
+            for (uint rs = 0u; rs < rspp; ++rs) {
             float3 rdir = R;
             if (roughness > 0.0) {
-                rdir = ggx_reflection_dir(n, V, roughness, blue_noise_sample(tid, p.frame_index, 0u, p.refl_spp));
+                rdir = ggx_reflection_dir(n, V, roughness, blue_noise_sample(tid, p.frame_index, rs, rspp));
             }
             ray rr;
             rr.origin = sec_origin;
@@ -1352,11 +1388,45 @@ kernel void trace_shadow_rays(
                 // GGX-perturbed) direction, roughness mip.
                 traced = refl_env_sample(prefiltered_env, rdir, roughness);
             }
+            rsamples[rs] = traced;
+            if (hit_dist > RT_REFL_MISS_HIT_DIST) { hit_dist_sum += hit_dist; hit_count += 1u; }
+            }
+            // Firefly clamp, anchored on this batch's OWN median luminance.
+            // The tail in the measurement is one sample landing on something
+            // far brighter than its siblings; the median is a typical sample
+            // by construction, so capping at a multiple of it bounds the
+            // outlier without touching a lobe that is uniformly bright.
+            // Anchoring on the prefiltered env instead looked cheaper but is
+            // wrong: a scene with no env chain (Environment Intensity 0) has
+            // env ~ 0, and the cap then erases reflections entirely.
+            // Committed range 4-16: lower = calmer, dimmer highlights;
+            // higher = closer to ground truth, noisier. A 1-sample dispatch
+            // has no median to anchor on, so the clamp is inert there.
+            const float RT_REFL_FIREFLY_GAIN = 8.0;
+            float3 traced_sum = float3(0.0);
+            if (rspp > 2u) {
+                float med = median_luma(rsamples, rspp);
+                float cap = RT_REFL_FIREFLY_GAIN * med;
+                for (uint rs = 0u; rs < rspp; ++rs) {
+                    float3 s = rsamples[rs];
+                    float sl = luma(s);
+                    traced_sum += (sl > cap && sl > 1e-6) ? s * (cap / sl) : s;
+                }
+            } else {
+                for (uint rs = 0u; rs < rspp; ++rs) { traced_sum += rsamples[rs]; }
+            }
+            float3 traced_avg = traced_sum / float(rspp);
+            // R2's reprojection needs ONE surface's distance; the mean over
+            // the samples that actually hit is the lobe's representative
+            // depth. All-miss keeps the env-miss sentinel.
+            float hit_dist_avg = hit_count > 0u
+                ? hit_dist_sum / float(hit_count)
+                : RT_REFL_MISS_HIT_DIST;
             // RD7's band: blend traced -> env across [max_roughness,
             // max_roughness + band] so the cutoff is continuous, not a
             // visible edge (Q2's approved BRDF-domain split).
             float band_t = saturate((roughness - p.refl_max_roughness) / max(p.refl_rough_band, 1e-4));
-            out_refl.write(float4(mix(traced, env, band_t), hit_dist), tid);
+            out_refl.write(float4(mix(traced_avg, env, band_t), hit_dist_avg), tid);
         }
     } else {
         // Reflections off this frame (or the primary ray missed — no
@@ -1381,10 +1451,6 @@ kernel void trace_shadow_rays(
     float3 irradiance = float3(p.ambient_color) * ao + gi;
     out_irr.write(float4(irradiance, 0), tid);
 }
-
-// RT-T1-D shared luminance weighting (Rec.709) — used by both the
-// upsample gather below and `atrous_filter`'s edge-stopping function.
-static float luma(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
 
 // Depth+normal-aware bilateral upsample: half-res (sun-visibility, AO) +
 // demod. irradiance -> full res (RT-D3's "D11 trivial pass"; RT-P2 widened
