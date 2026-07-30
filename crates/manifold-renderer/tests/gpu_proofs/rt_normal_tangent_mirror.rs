@@ -194,14 +194,31 @@ fn build_variant(
 /// the temporal accumulator to settle.
 const SETTLE_FRAMES: i64 = 400;
 
+/// Liveness, two independent ways, both assertions inside the test.
+///
+/// BUG-1l7f (rt-inert-in-gpu-proofs-harness) reports `rt_enabled` true
+/// producing a bit-identical composite to false in this harness, so neither
+/// check is taken on trust:
+///
+/// 1. The RT block ran — `assert_rt_dispatched` reads the mechanism
+///    (`render_scene` only pushes capture slots from inside `rt_enabled &&
+///    rt_ready`), which no pixel comparison can substitute for.
+/// 2. RT changed the output — RT-on vs RT-off composites must differ. This is
+///    the symptom-level check BUG-1l7f describes, and it holds here.
+///
+/// Both hold on this fixture, which is why this module's measurements are
+/// not affected by BUG-1l7f. Whatever that bug is, it is not "RT never runs
+/// in this harness" — a scene driven through `import_rt_manifest` traces.
 #[test]
 fn normal_tangent_mirror_dispatches_rt_on_the_import_path() {
     let h = harness::shared();
+
     let (mut runtime, target, params, _) = build_variant(h, false);
     for f in 0..SETTLE_FRAMES {
         frame(&mut runtime, h, &target, f, &params);
     }
-    let frac = non_black_fraction(&readback_rgba_f32(&h.device, &target));
+    let rt_on_px = readback_rgba_f32(&h.device, &target);
+    let frac = non_black_fraction(&rt_on_px);
     eprintln!("[ntm] RT-on non-black fraction={frac:.4}");
     assert!(
         frac > 0.01,
@@ -210,6 +227,43 @@ fn normal_tangent_mirror_dispatches_rt_on_the_import_path() {
     harness::assert_rt_dispatched(
         || frame(&mut runtime, h, &target, SETTLE_FRAMES, &params),
         "NormalTangentMirrorTest with RT enabled through the card manifest",
+    );
+
+    // Same graph, same lighting, RT off — only the two card toggles differ.
+    let (mut off_runtime, off_target, off_params_base, _) = build_variant(h, false);
+    let off_params = {
+        let mut p = off_params_base;
+        for suffix in ["_rt_enabled", "_rt_reflections"] {
+            let id = p
+                .iter()
+                .find(|q| q.id().ends_with(suffix))
+                .map(|q| q.id().to_string())
+                .expect("card param present");
+            p.get_mut(&id).expect("id came from this manifest").value = 0.0;
+        }
+        p
+    };
+    for f in 0..SETTLE_FRAMES {
+        frame(&mut off_runtime, h, &off_target, f, &off_params);
+    }
+    let rt_off_px = readback_rgba_f32(&h.device, &off_target);
+
+    let n = rt_on_px.len() / 4;
+    let mut max_abs_diff = 0.0f32;
+    let mut sum_abs_diff = 0.0f64;
+    for i in 0..n {
+        for c in 0..3 {
+            let d = (rt_on_px[i * 4 + c] - rt_off_px[i * 4 + c]).abs();
+            max_abs_diff = max_abs_diff.max(d);
+            sum_abs_diff += f64::from(d);
+        }
+    }
+    let mean_abs_diff = sum_abs_diff / (n * 3) as f64;
+    eprintln!("[ntm] RT-on vs RT-off: mean_abs_diff={mean_abs_diff:.6} max_abs_diff={max_abs_diff:.4}");
+    assert!(
+        max_abs_diff > 0.0,
+        "RT-on and RT-off composites are bit-identical — the RT path is inert here (BUG-1l7f), so \
+         every RT number this module reports would be meaningless"
     );
 }
 
