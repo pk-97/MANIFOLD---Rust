@@ -745,6 +745,11 @@ pub(super) fn build_import_graph(
     // control moves both the light and the reflection direction. Use the same
     // default as the auto-generated sun binding so the slider rests
     // consistently on both targets.
+    // These two fan-outs copy a STAMPED binding's default, but they stay
+    // authored (`default_mirrors_node_param: false`) because provenance is
+    // about the binding's own target: nothing writes `envmap.sun_*` or
+    // `hdri_gain.gain` into the def's node params, so the plant is the only
+    // thing that puts the sun direction and the HDRI gain there.
     for (param, axis) in [("pos_x", "sun_x"), ("pos_y", "sun_y"), ("pos_z", "sun_z")] {
         let id = format!("{sun_id}_{param}");
         let default = card_bindings
@@ -764,6 +769,7 @@ pub(super) fn build_import_graph(
             user_added: false,
             scale: 1.0,
             offset: 0.0,
+            default_mirrors_node_param: false,
         });
     }
     // Environment intensity also drives the HDRI exposure gain (G-P6).
@@ -785,6 +791,7 @@ pub(super) fn build_import_graph(
         user_added: false,
         scale: 1.0,
         offset: 0.0,
+        default_mirrors_node_param: false,
     });
 
     // HDRI mode switch: `node.switch_texture` is not scene vocabulary, so it is

@@ -167,6 +167,7 @@ mod tests {
                 user_added: true,
                 scale: 1.0,
                 offset: 0.0,
+                default_mirrors_node_param: false,
             }],
             skip_mode: Default::default(),
             param_aliases: Vec::new(),

@@ -246,6 +246,11 @@ pub fn stamp_scene_node_exposures_into(
             user_added: false,
             scale: 1.0,
             offset: 0.0,
+            // Every default this fn writes is a snapshot of the node's own
+            // param (the stamped override, else the manifest default the node
+            // is already sitting at) — never a value anyone chose against the
+            // node. See `BindingDef::default_mirrors_node_param`.
+            default_mirrors_node_param: true,
         });
 
         changed = true;
@@ -758,6 +763,7 @@ mod tests {
             user_added: false,
             scale: 1.0,
             offset: 0.0,
+            default_mirrors_node_param: false,
         };
         // A user-added binding on the SAME param must survive untouched.
         let user_binding = BindingDef {
@@ -769,6 +775,7 @@ mod tests {
             user_added: true,
             scale: 1.0,
             offset: 0.0,
+            default_mirrors_node_param: false,
         };
 
         let mut def = EffectGraphDef {
@@ -925,6 +932,7 @@ mod tests {
             user_added: false,
             scale: 1.0,
             offset: 0.0,
+            default_mirrors_node_param: false,
         };
         let stale_scale_binding = BindingDef {
             id: "7_scale_x".to_string(),
@@ -935,6 +943,7 @@ mod tests {
             user_added: false,
             scale: 1.0,
             offset: 0.0,
+            default_mirrors_node_param: false,
         };
 
         let mut def = EffectGraphDef {

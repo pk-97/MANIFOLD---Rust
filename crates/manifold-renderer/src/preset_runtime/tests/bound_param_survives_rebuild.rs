@@ -24,7 +24,9 @@
 
     /// A single `node.bake_environment` node, its `intensity` param stamped
     /// to `stamped_intensity` — the card-stamped def a GLB import produces.
-    fn def_with_stamped_bake_environment(stamped_intensity: f32) -> (EffectGraphDef, f32) {
+    fn def_with_stamped_bake_environment(
+        stamped_intensity: f32,
+    ) -> (EffectGraphDef, manifold_core::effect_graph_def::BindingDef) {
         let node_id = NodeId::new("env");
         let metadata = metadata_for_node_type("node.bake_environment");
         assert!(
@@ -59,8 +61,8 @@
         let binding = bindings
             .iter()
             .find(|b| matches!(&b.target, manifold_core::effect_graph_def::BindingTarget::Node { param, .. } if param == "intensity"))
-            .expect("intensity binding stamped");
-        let frozen_default = binding.default_value;
+            .expect("intensity binding stamped")
+            .clone();
 
         let def = EffectGraphDef {
             version: EFFECT_GRAPH_VERSION,
@@ -83,7 +85,15 @@
             }],
             wires: vec![],
         };
-        (def, frozen_default)
+        (def, binding)
+    }
+
+    /// The same single-node def with NO stamped `intensity`, so the live node
+    /// keeps the primitive's own `ParamDef::default`.
+    fn def_without_stamped_params() -> EffectGraphDef {
+        let (mut def, _) = def_with_stamped_bake_environment(2.0);
+        def.nodes[0].params.clear();
+        def
     }
 
     fn intensity_of(graph: &Graph, inst: NodeInstanceId) -> ParamValue {
@@ -109,6 +119,59 @@
         (graph, inst)
     }
 
+    /// The other direction of the same rule, CPU-only: a target still sitting
+    /// at its primitive default DOES take the binding's declared default. The
+    /// end-to-end version (SoftFocus's outer `radius = 6.0` over the inner
+    /// `Blur`'s 4.0) lives in `binding_seed.rs` behind the `gpu-proofs`
+    /// feature; this pins the same behaviour on the default test run, so a
+    /// future edit to the conditional can't quietly turn the plant off.
+    #[test]
+    fn binding_default_still_plants_onto_an_untouched_target() {
+        let registry = PrimitiveRegistry::with_builtin();
+
+        // No `intensity` in the def's node.params, so the live node keeps the
+        // bake_environment primitive's own `ParamDef::default`.
+        let def = def_without_stamped_params();
+        let (mut graph, inst) = build(&def, &registry);
+        let primitive_default = match intensity_of(&graph, inst) {
+            ParamValue::Float(f) => f,
+            other => panic!("bake_environment.intensity is a Float param, got {other:?}"),
+        };
+
+        // A binding whose declared default differs from the primitive's —
+        // SoftFocus's 6.0-over-4.0 shape.
+        let declared_default = primitive_default + 3.0;
+        let binding = ResolvedBinding {
+            id: std::borrow::Cow::Borrowed("intensity"),
+            label: std::borrow::Cow::Borrowed("Intensity"),
+            default_value: declared_default,
+            target: ResolvedTarget::Node {
+                node: inst,
+                param: std::borrow::Cow::Borrowed("intensity"),
+            },
+            convert: crate::node_graph::ParamConvert::Float,
+            source: BindingSource::Static,
+            source_id: std::borrow::Cow::Borrowed("intensity"),
+            reshape: None,
+            wraps_angle: false,
+            // AUTHORED — the preset case. This default is a chosen resting
+            // value, so it must land.
+            default_mirrors_node_param: false,
+        };
+        let _bound = crate::node_graph::BoundGraph::new(vec![binding], &mut graph);
+
+        assert_eq!(
+            intensity_of(&graph, inst),
+            ParamValue::Float(declared_default),
+            "a binding default must still plant when nothing has written the \
+             target — the inner sits at the primitive default, so the card's \
+             declared default is the only claim on it. If this is the primitive \
+             default instead, the BUG-ji6q conditional got too strict and every \
+             card whose binding default differs from its primitive's has to be \
+             'touched' before it renders right."
+        );
+    }
+
     #[test]
     fn bound_param_write_survives_a_graph_rebuild() {
         let registry = PrimitiveRegistry::with_builtin();
@@ -116,10 +179,19 @@
         // Stamp at intensity = 2.0 (frozen into the binding's default_value)
         // and give the def's live node.params that same 2.0 so the FIRST
         // build is unambiguous.
-        let (mut def, frozen_default) = def_with_stamped_bake_environment(2.0);
+        let (mut def, stamped_binding) = def_with_stamped_bake_environment(2.0);
+        let frozen_default = stamped_binding.default_value;
         assert_eq!(
             frozen_default, 2.0,
             "sanity: the binding's frozen default must equal the stamped value"
+        );
+        assert!(
+            stamped_binding.default_mirrors_node_param,
+            "the stamp must mark its defaults as MIRRORS of the node param — that \
+             flag is the whole discriminator. An authored default (a preset's \
+             declared value, which carries the binding's scale/offset fold) still \
+             plants; a mirrored one must not, or it reverts the node param it was \
+             copied from."
         );
 
         let (graph, inst) = build(&def, &registry);
@@ -163,6 +235,7 @@
             source_id: std::borrow::Cow::Borrowed("intensity"),
             reshape: None,
             wraps_angle: false,
+            default_mirrors_node_param: stamped_binding.default_mirrors_node_param,
         };
         // This is the call every effect/generator rebuild makes:
         // `BoundGraph::new` → `apply_binding_defaults`.

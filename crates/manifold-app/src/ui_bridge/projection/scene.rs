@@ -160,6 +160,7 @@ mod sections_for_doc_ids_tests {
                     user_added: false,
                     scale: 1.0,
                     offset: 0.0,
+                    default_mirrors_node_param: false,
                 },
                 // The sun's own pos_x binding.
                 BindingDef {
@@ -171,6 +172,7 @@ mod sections_for_doc_ids_tests {
                     user_added: false,
                     scale: 1.0,
                     offset: 0.0,
+                    default_mirrors_node_param: false,
                 },
                 // D7 fan-out: the SAME id, a SECOND binding targeting the
                 // envmap's sun-disc param — the leak vector.
@@ -183,6 +185,7 @@ mod sections_for_doc_ids_tests {
                     user_added: false,
                     scale: 1.0,
                     offset: 0.0,
+                    default_mirrors_node_param: false,
                 },
             ],
             skip_mode: SkipModeDef::default(),

@@ -2909,6 +2909,7 @@ mod tests {
             max: 3.0,
             curve: manifold_core::macro_bank::MacroCurve::Linear,
             invert: false,
+            default_mirrors_node_param: false,
         };
         let mut retarget: AHashMap<(String, String), (NodeId, String)> = AHashMap::default();
         retarget
