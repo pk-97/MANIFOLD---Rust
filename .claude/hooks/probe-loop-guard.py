@@ -1,59 +1,41 @@
 #!/usr/bin/env python3
-"""probe-loop-guard.py — PreToolUse hook enforcing the review-before-bisect
-rule (Peter 2026-07-25): the lead must not grind iteration loops — instrument
-probes OR edit-run-edit cycles — without first writing the evidence table and
-reviewing the seam.
+"""PreToolUse: the lead must review the seam before grinding an iteration loop.
 
-Why: the 2026-07-25 BUG-326 hunt found the mechanism (depth snapshot wrong on
-imported glb scenes) but burned ~2h of lead context on serial theory loops.
-The repo's seam bugs come from eras of weak briefs; review-first is cheaper
-than probe-first. Doctrine: docs/AGENT_ROUTING.md §Lead token economy.
-Widened 2026-07-30 (Peter): the ladder binds ANY lead loop, not just
-kernel-file probes — a lead re-editing ordinary files after each run is the
-same grind and must not evade the guard because it is "not probing".
+Ladder (doctrine: docs/AGENT_ROUTING.md section Lead token economy): semantic
+review first, then a review lane, probes last and delegated. Binds ANY lead
+loop, not just kernel-file probes.
 
-Mechanism — two counters, either one trips the guard:
+Two counters, either one trips the guard.
 
-PROBE counter (every action counts):
-  - Edit/Write/MultiEdit touching RT/GPU kernel or shader files
-    (manifold-gpu/metal/**, render_scene.rs, *.wgsl under crates/)
-  - Bash EXECUTING the suite or probe binary (cargo test/run with the
-    gpu-proofs feature or render-import bin, the gate wrapper, a direct
-    render-import run) — mentions don't count (BUG-q329): quoted strings
-    are stripped, so commit messages and bead reasons naming the markers
-    never increment the counter.
+PROBE — every action counts:
+  - Edit/Write/MultiEdit on RT/GPU kernel or shader files (manifold-gpu/metal/**,
+    render_scene.rs, *.wgsl under crates/);
+  - Bash RUNNING the suite or probe binary (cargo test/run with gpu-proofs, the
+    render-import bin, the gate wrapper). Quoted strings are stripped first, so
+    naming a marker in a commit message or bead never counts.
 
-LOOP counter (per file, max across files): one cycle = an Edit/Write/
-MultiEdit to a file already edited this session, with an OBSERVATION RUN in
-between (cargo test/t/nextest/run/r, or a target/debug|release binary).
-`cargo check`/`clippy`/`build` are compile-fix iteration, not observation —
-they never mark a run. Healthy work spreads edits across files; a debug
-grind hammers one file, so the per-file max is the discriminator.
+LOOP — per file, max across files: one cycle = an edit to a file already edited
+this session with an observation run in between (cargo test/t/nextest/run/r, or a
+target/debug|release binary). check/clippy/build are compile-fix iteration and
+never mark a run. Healthy work spreads edits across files; a grind hammers one.
 
-Read-only git plumbing is exempt (BUG-0c28): merge-base, rev-parse, log,
-and branch segments are stripped before matching — querying git metadata
-is not probing. For-loop word lists are data, not execution.
+Read-only git plumbing is exempt: merge-base, rev-parse, log, branch segments are
+stripped before matching. For-loop word lists are data, not execution.
 
-At 3 (either counter): warning (additionalContext). At 6+: DENY until the
-session writes /tmp/manifold_seam_review.md (>=200 chars — the evidence
-table), which resets both counters. The review must be newer than the last
-COUNTED action (`last_counted_ts` in the state JSON — never the state file's
-mtime, which non-counting bookkeeping now touches; anchoring on mtime made
-the reset window ~1s, the 2026-07-25 deadlock). A review left over from an
-earlier session never resets (last_counted_ts == 0 → no reset: the
-2026-07-28 silent-disarm, 253 telemetry fires with zero output).
-Fails OPEN on any error.
+At 3: warning. At 6+: deny until the session writes /tmp/manifold_seam_review.md
+(>=200 chars, the evidence table), which resets both counters. The review must be
+newer than `last_counted_ts` in the state JSON — never the state file mtime, which
+bookkeeping touches. last_counted_ts == 0 means no reset, so a stale review from an
+earlier session cannot disarm the guard.
 
-LEAD SEAT ONLY (Peter 2026-07-28): the ladder binds the lead; lanes are the
-delegation target and legitimately run probe loops. Seat test (measured from
-real payloads, telemetry `keys` field 2026-07-28): subagent/teammate
-PreToolUse payloads carry `agent_id`/`agent_type`; the lead's carry neither.
-Marker present → silent. Transcript-model detection is WRONG here: teammate
-payloads carry the PARENT session's transcript and session_id, so the model
-read is always the lead's (the 2026-07-28 friendly-fire deny that pushed a
-haiku lane into writing the lead's seam-review unlock file).
+LEAD SEAT ONLY — lanes are the delegation target and legitimately run probe loops.
+Seat test: subagent payloads carry `agent_id`/`agent_type`, the lead's carries
+neither; marker present -> silent. Transcript-model detection is wrong here,
+because a teammate payload carries the parent's transcript.
 
-Obsolete when: the debug escalation ladder in docs/AGENT_ROUTING.md is retired or replaced; this hook is that doctrine's enforcement arm.
+Fails OPEN.
+
+Obsolete when: the debug escalation ladder in docs/AGENT_ROUTING.md is retired.
 """
 import json
 import os

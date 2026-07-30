@@ -1,58 +1,41 @@
 #!/usr/bin/env python3
-"""
-PreToolUse hook for Bash. Three jobs, evaluated in this order:
+"""PreToolUse hook for Bash. Three jobs, in this order:
 
-  0b. Landing-protocol guard (§1b): main is a merge-based trunk now, not a
-     fast-forward pointer (GIT_TREE_DISCIPLINE.md §2 — the ff-only model
-     produced twin commits under concurrent orchestrators, see the incident
-     log). In the main checkout only: `git branch -f main ...` and any
-     force-push targeting main ASK unconditionally (no foreign-session
-     check — these are wrong regardless of concurrency, they drop commits
-     under the merge model). A non-force push or merge that lands on main
-     gets the normal allow with a short reminder of the landing protocol
-     attached as additionalContext. See `landing_protocol_guard`.
+0b. Landing-protocol guard. In the main checkout only: `git branch -f main ...`
+    and any force-push targeting main ASK unconditionally — both drop commits
+    under the merge-based trunk model. A non-force push or merge landing on main
+    allows, with the landing protocol attached as additionalContext. See
+    `landing_protocol_guard`; protocol is GIT_TREE_DISCIPLINE.md section 2.
 
-  1. ALLOW pre-approved commands outright — even compound ones (pipes,
-     `;` chains, `for`/`while` loops, `$(...)` substitutions) that the
-     static `permissions.allow` matcher can't express, because that
-     matcher only matches a command that *starts* with an allowlisted
-     token (`rg`/`git`/`cargo`/...). A `for f in ...; do rg ...; done`,
-     an `rg foo | head`, or a `git add . && git commit -q -m "..."`
-     reads to it as an unmatched compound and falls through to a manual
-     approval prompt. This hook parses the whole command and, if EVERY
-     command-position is pre-approved, returns permissionDecision="allow"
-     — evaluated before the static matcher and before any prompt.
+1.  ALLOW pre-approved commands outright, including compounds the static
+    `permissions.allow` matcher cannot express — pipes, `;` chains, for/while
+    loops, `$(...)`. That matcher only matches a command that STARTS with an
+    allowlisted token, so `rg foo | head` or `git add . && git commit -m ...`
+    reads as an unmatched compound and prompts. This hook parses the whole
+    command and allows only if EVERY command-position is pre-approved: a known
+    read-only tool, or a normal git/cargo workflow write (CLAUDE.md durably
+    authorizes committing and pushing clean work). Destructive git history or
+    tree rewrites — reset, clean, rebase, gc, filter-branch — are not in the set
+    and still prompt.
 
-     "Pre-approved" means either (a) a known read-only tool, or (b) a
-     normal git/cargo workflow operation that CLAUDE.md durably authorizes
-     ("commit and push when clean — don't ask"). Destructive git history /
-     tree rewrites (reset, clean, rebase, gc, filter-branch) are NOT in the
-     set — they still surface a prompt.
+2.  DENY the leftovers that defeat the matcher and are not pre-approved:
+    write-capable pipes and `cd <dir> && cmd` prefixes. The deny names the
+    rewrite.
 
-  2. DENY the leftovers that defeat the matcher AND aren't pre-approved:
-     write-capable pipes and `cd <dir> && cmd` prefixes. The deny names
-     the rewrite so the model fixes the call instead of forcing Peter to
-     approve it by hand.
+Parsing is escape/quote-aware (`sanitize`): backticks and `$(...)` that are
+escaped or inside single quotes are literal text, not substitutions. Only a
+substitution that would genuinely execute is pulled out and classified.
 
-Parsing is escape/quote-aware (see `sanitize`): backticks and `$(...)`
-that are escaped or sit inside single quotes are literal text (e.g. a
-commit message `-m "fix the \\`foo\\` helper"`) and are NOT treated as
-command substitutions. Only a substitution that would genuinely execute
-(unescaped, outside single quotes) is pulled out and classified.
+Fail-safe: an unsure classifier never allows — it falls through to the deny
+check, then to the normal prompt. Reaching "allow" requires every parsed
+command-position to be a pre-approved head, with no output redirect outside
+/tmp and no mutating flag. A misparse costs one avoidable prompt at worst.
 
-Fail-safe by construction: if the classifier is ever unsure, it does NOT
-allow — it falls through to the deny check, and past that to the normal
-permission flow (a prompt). The only way to reach "allow" is for every
-parsed command-position to be a pre-approved head with no output redirect
-outside /tmp and no mutating flag. A misparse costs at most one avoidable
-prompt; it can never silently green-light an unapproved write.
+In: {"tool_name": "Bash", "tool_input": {"command"}, "session_id", "cwd"}.
+Out: hookSpecificOutput.permissionDecision ("allow"|"ask"|"deny") + reason, or
+nothing.
 
-Receives `{"tool_name": "Bash", "tool_input": {"command": "..."}, "session_id":
-"...", "cwd": "..."}` on stdin. Emits a JSON object with hookSpecificOutput.
-permissionDecision ("allow", "ask", or "deny") plus a reason, or nothing
-(normal flow).
-
-Obsolete when: the harness gains native argument-level Bash permissioning (per-argument allow rules), making the classifier layer redundant.
+Obsolete when: the harness gains native argument-level Bash permissioning.
 """
 import json
 import os

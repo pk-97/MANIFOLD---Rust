@@ -1,65 +1,27 @@
 #!/usr/bin/env python3
-"""PreToolUse hook: warn, then stop, when a seat's context passes the rotation ceiling.
+"""PreToolUse: warn, then stop, when a seat's context passes the rotation ceiling.
 
-Why (2026-07-23, measured — docs/TOKEN_ECONOMICS.md §3c): cost per call grows
-with position in a session because every call re-reads the whole context.
-Measured on 14 days of real transcripts:
+Cost per call grows with position in a session (numbers: docs/TOKEN_ECONOMICS.md
+section 3c). Ceiling is WARN_TOKENS / DENY_TOKENS, ~200K, where the curve is
+still cheap.
 
-    call 0-49    ->  76K avg context
-    call 300-349 -> 321K
-    call 550-599 -> 460K
-    call 1100+   -> 749K
+Context size = the last assistant entry's usage block in the payload's
+`transcript_path` (cache_read + cache_creation + input). No model call.
 
-A session of 400+ calls averages 176 MTok; one under 100 calls averages 4 MTok
--- 41x for the same kind of work. 12% of sessions burn 50% of all tokens.
+Exempt, no warn and no deny:
+  - the lead seat: transcript model matches fable|k3, not opus (same detection
+    as cc-fleet-tier-guard.py);
+  - any conversation seat: the transcript contains at least one user turn
+    stamped `"origin": {"kind": "human"}`. Lane transcripts never carry it.
+    Raw substring scan, no JSON parse — transcripts run to megabytes.
 
-AGENT_ROUTING.md §Overnight previously set the handoff ceiling at "~500K observed
-as the sensible ceiling". The measurement says that is ~2.5x too high: by 500K
-every remaining call costs half a megatoken. This hook enforces ~200K instead,
-which is where the curve is still cheap.
+Past DENY_TOKENS a wrap-up lane stays open: git, Write/Edit to scratchpad /
+.claude/orchestration / handoff files, SendMessage. Everything else denies, so
+the seat exits under its own power and a successor resumes from the handoff.
 
-Mechanism (deterministic, no model calls): the payload carries `transcript_path`
--- the caller's own JSONL. Read the last assistant entry's usage block; that
-IS the current context size (cache_read + cache_creation + input). Warn at
-WARN_TOKENS, deny at DENY_TOKENS with instructions to hand off.
+Fails OPEN. Escape hatch: MANIFOLD_CONTEXT_CEILING=off.
 
-TIER SPLIT (Peter's ruling, 2026-07-24): the ceiling applies to workers and
-dispatchers ONLY. The lead seat (model matches fable|k3 -- NOT opus; same
-transcript-model detection as cc-fleet-tier-guard.py) is fully exempt: no
-warn, no deny; auto-compaction is the backstop. For every other seat,
-including unidentifiable ones, a ceiling hit is a defect signal and behavior
-is unchanged.
-
-HUMAN-SEAT EXEMPTION (Peter's ruling, 2026-07-25): a seat Peter is talking to
-is never rotated out from under him -- the deny was killing useful live
-conversations. The discriminator is in the transcript, not the model: Claude
-Code stamps `"origin": {"kind": "human"}` on every user turn that a human
-actually typed. Measured over 40 real transcripts in this project, that marker
-appears in exactly the seats Peter types into (cli and claude-vscode alike, k3
-/ fable / opus / glm alike) and in NONE of the lane transcripts -- headless
-sdk-cli lanes, native Agent-tool subagents (which inherit the parent
-entrypoint, so entrypoint alone cannot separate them), and prompt-launched
-tmux pane lanes all have zero human-origin turns. Any transcript with at least
-one human turn anywhere in it is a conversation seat and is fully exempt; a
-lane that Peter starts typing into himself becomes exempt from that turn on,
-which is the intended semantics.
-
-Detection is a raw substring scan of the whole file (no JSON parse, no line
-splitting) so it stays cheap on multi-megabyte transcripts.
-
-Denial is not data loss: past DENY_TOKENS a WRAP-UP LANE stays open -- git
-commands (commit clean work), Write/Edit to scratchpad / .claude/orchestration
-/ handoff files, and SendMessage (report up). Everything else is denied. The
-seat exits cleanly under its own power instead of stranding mid-task and
-forcing the lead to spend tokens re-spinning it (Peter's concern, 2026-07-24).
-A successor resumes from the handoff, which is the rotation protocol
-AGENT_ROUTING.md already specifies.
-
-Fails open on any error (missing/unreadable transcript, format drift): a guard
-hook must never be able to block a session. Escape hatch for a genuinely
-unavoidable long seat: MANIFOLD_CONTEXT_CEILING=off in the environment.
-
-Obsolete when: the harness manages context budgets natively (automatic compaction makes the ceiling advisory).
+Obsolete when: the harness manages context budgets natively.
 """
 import json
 import os

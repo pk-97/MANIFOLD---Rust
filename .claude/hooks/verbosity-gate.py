@@ -1,27 +1,23 @@
 #!/usr/bin/env python3
 """Stop hook: block the turn when the final message is over budget.
 
-Why this and not the response-style reminder: injected prose is advice, and
-advice loses to everything else in context (Peter, 2026-07-30: "the hook does
-not work. Ever."). This one is not advice — it reads the message that was just
-written and sends it back to be rewritten.
+Length is the proxy for padding. Injected style advice loses to everything else
+in context; this reads the message that was just written and sends it back.
 
-Length is the proxy for padding. A long answer is long because it restates,
-hedges, lists options nobody asked for, or narrates itself; cutting to budget
-forces the reword. Tokens saved are context saved, both directions.
-
-Budgets (non-blank lines and words, fenced code excluded from both):
+Budgets — non-blank lines and words, fenced code excluded from both:
     normal turn         6 lines / 150 words
     detail requested    18 lines / 400 words
 
-"Detail requested" is keyed off the user's own words in the prompt that opened
-the turn (explain, why, walk me through, in detail, full, design, plan, review).
+Detail is keyed off the user's own words in the prompt that opened the turn
+(_DETAIL_CUES). The prompt is the last transcript row that is a real typed
+message: tool_result and isMeta rows are skipped, since a tool-using turn
+otherwise resolves to an empty prompt.
 
-Blocks at most twice per turn, then lets it through — a gate, not a trap.
-Fails OPEN on any error: a broken gate never eats a turn.
+Blocks at most twice per turn, keyed on the prompt row uuid, then lets it
+through. Fails OPEN. State file: VERBOSITY_GATE_STATE, else
+.claude/telemetry/verbosity-gate-state.json.
 
-Obsolete when: length stops being the symptom Peter flags, or the harness
-grows a native output-budget control.
+Obsolete when: the harness grows a native output-budget control.
 """
 import hashlib
 import json
@@ -30,7 +26,7 @@ import re
 import sys
 from pathlib import Path
 
-# Env override exists so the tests get their own state file; nothing else sets it.
+# Env override: tests only.
 _STATE = Path(
     os.environ.get("VERBOSITY_GATE_STATE")
     or Path(__file__).resolve().parent.parent / "telemetry" / "verbosity-gate-state.json"
@@ -92,14 +88,7 @@ def _is_tool_result(row):
 
 
 def _last_real_user(rows):
-    """The most recent row that is a prompt Peter actually typed.
-
-    Everything else the transcript files under type "user" is noise for our
-    purposes: tool results (no text at all) and harness-injected rows such as
-    this gate's own feedback (isMeta). Reading those was the bug — a tool-using
-    turn resolved to an empty prompt, so detail cues never fired and every such
-    turn in a session shared one block counter.
-    """
+    """The most recent typed prompt. Tool results and isMeta rows are not it."""
     for row in reversed(rows):
         if row.get("type") != "user" or row.get("isMeta") or _is_tool_result(row):
             continue
@@ -166,10 +155,8 @@ def main():
         return 0
 
     session_id = payload.get("session_id", "?")
-    # Keyed on the prompt row's uuid: unique per turn, stable across the
-    # re-runs within a turn. Falls back to a hash of the text (md5, not hash():
-    # PYTHONHASHSEED randomisation would reset the counter every invocation
-    # and turn the gate into a loop).
+    # md5, not hash(): PYTHONHASHSEED randomisation would reset the counter
+    # every invocation.
     turn_key = (last_user or {}).get("uuid") or hashlib.md5(
         prompt.encode("utf-8", "replace")
     ).hexdigest()
