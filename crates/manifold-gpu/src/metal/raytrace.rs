@@ -1870,7 +1870,12 @@ kernel void accumulate_irradiance(
     float3 cur_normal = cur_n4.xyz;
     float  cur_luma = luma(cur.xyz);
 
-    if (p.reset != 0u) {
+    // `reset` is a FLAGS word: bit 0 = full reset (cold start / post-cut),
+    // bit 1 = the CPU knows a light param changed this frame. See
+    // `AccumulateParams::with_lighting_changed` for why the flag rides here
+    // instead of a new field.
+    bool cpu_lighting_changed = (p.reset & 2u) != 0u;
+    if ((p.reset & 1u) != 0u) {
         // `.a` = accumulated frame count (BUG-boil): a cold texel has
         // exactly one sample, so its next blend takes the current frame at
         // weight 1/2, not `p.alpha_min`. See the blend below.
@@ -2045,7 +2050,8 @@ kernel void accumulate_irradiance(
                     float change_gate = max(RT_ACCUM_CHANGE_SIGMAS * hist_sd,
                                             RT_ACCUM_CHANGE_REL * hist_luma);
                     float dluma = fabs(cur_luma - hist_luma);
-                    bool lighting_changed = dluma > change_gate && dluma > RT_ACCUM_CHANGE_ABS;
+                    bool lighting_changed = cpu_lighting_changed
+                        || (dluma > change_gate && dluma > RT_ACCUM_CHANGE_ABS);
                     float n_full = nsum / wsum + 1.0;
                     // Snap to 2, not 1: alpha 0.5 is 75% of a step in two
                     // frames — a cue lands — while leaving one frame of
@@ -2162,6 +2168,7 @@ kernel void accumulate_irradiance(
                     float rsd = refl_neighborhood_luma_sd(hi_refl, tid, p.size);
                     float rdluma = fabs(luma(cur_refl.rgb) - rhist_luma);
                     bool refl_changed = refl_change_snap
+                        || cpu_lighting_changed
                         || (rdluma > max(RT_REFL_CHANGE_SIGMAS * rsd,
                                          RT_REFL_CHANGE_REL * rhist_luma)
                             && rdluma > RT_REFL_CHANGE_ABS);
@@ -2678,7 +2685,36 @@ impl AccumulateParams {
             prev_view_proj,
         }
     }
+
+    /// Tell the accumulator the CPU knows a light changed this frame, so it
+    /// collapses its per-texel history length and the cue lands instead of
+    /// averaging in.
+    ///
+    /// Why a flag and not a per-pixel heuristic: the per-texel gates in the
+    /// kernel compare this frame against the tracked spread, which works only
+    /// when the changed term is a large enough share of the channel. A sun
+    /// intensity move is a SMALL share of a buffer dominated by the ambient
+    /// term, so it slipped under the gate and faded over the whole window,
+    /// while an env move — the dominant term — snapped. Peter found exactly
+    /// that split. The engine already knows a light param changed, so it says
+    /// so; the gates stay for what the CPU cannot see (an emissive object
+    /// animated from inside the graph).
+    ///
+    /// Rides `reset`'s spare bits rather than a new field: `AccumulateParams`
+    /// is sized so both `float4x4`s land 16-byte aligned, and a new `u32`
+    /// would break that (the alignment guard above is deliberate).
+    /// Bit 0 = full reset, bit 1 = lighting changed.
+    pub fn with_lighting_changed(mut self, changed: bool) -> Self {
+        if changed {
+            self.reset |= ACCUM_FLAG_LIGHTING_CHANGED;
+        }
+        self
+    }
 }
+
+/// `AccumulateParams::reset` bit 1 — see `with_lighting_changed`. Bit 0 is the
+/// original full-reset meaning, so a plain `reset: true` is still `1`.
+pub const ACCUM_FLAG_LIGHTING_CHANGED: u32 = 2;
 
 /// CPU mirror of the MSL `AtrousParams` struct backing `atrous_filter`
 /// (RT-T1-D, BUG-312). Plain POD, all `u32`, no alignment surprises.

@@ -913,6 +913,12 @@ pub struct RenderScene {
     /// or clobber the shadow/AO dispatch's own params within the same
     /// frame.
     rt_accumulate_params_buffer: Option<manifold_gpu::GpuBuffer>,
+    /// Hash of last frame's lighting inputs (caster direction/position,
+    /// intensity-premultiplied colour, cone, kind, scene ambient, ambient
+    /// tint). A change means a light cue happened, which the accumulator is
+    /// told outright instead of inferring it from pixels. `None` before the
+    /// first RT-ready frame — nothing to compare against, so no snap.
+    rt_lighting_key: Option<u64>,
     /// RAYTRACING_DESIGN.md section 5.2 P2/D3, RT-D2: the SHARED node-local
     /// reset-detection path (`crate::node_graph::temporal_reset`) — the
     /// ONLY call site that decides "discard temporal history this frame"
@@ -1131,6 +1137,7 @@ impl RenderScene {
             rt_irr_full_b: None,
             rt_normal_full_b: None,
             rt_atrous_params_buffer: None,
+            rt_lighting_key: None,
             rt_irr_width: 0,
             rt_irr_height: 0,
             rt_accumulate_params_buffer: None,
@@ -4586,6 +4593,39 @@ impl EffectNode for RenderScene {
                 // above (BUG-311) before `self.prev_view_proj` was
                 // overwritten to this frame's `view_proj` — exactly what
                 // MetalFX's own velocity pass reprojects with.
+                // The accumulator should not have to INFER a lighting change
+                // from pixels — this side knows. A per-texel gate only fires
+                // when the changed term is a big enough share of its channel,
+                // so a sun-intensity move (a small slice of a buffer dominated
+                // by the ambient term) faded while an env move snapped. Peter
+                // found exactly that split. Hash the lighting inputs, compare
+                // with last frame, and say so. Cheap: a handful of floats.
+                let lighting_key = {
+                    let mut k = 0xcbf2_9ce4_8422_2325u64;
+                    let mut mix = |bits: u32| {
+                        k ^= u64::from(bits);
+                        k = k.wrapping_mul(0x100_0000_01b3);
+                    };
+                    // `color` is premultiplied with intensity (see
+                    // `node_graph::light`), so an intensity move shows up here
+                    // with no extra plumbing.
+                    for c in &rt_casters {
+                        for f in c.dir_or_pos.iter().chain(c.color.iter()) {
+                            mix(f.to_bits());
+                        }
+                        mix(c.cone_or_size.to_bits());
+                        mix(c.kind);
+                    }
+                    mix(scene_ambient.to_bits());
+                    for f in atmosphere.ambient_tint {
+                        mix(f.to_bits());
+                    }
+                    k
+                };
+                let lighting_changed = self
+                    .rt_lighting_key
+                    .replace(lighting_key)
+                    .is_some_and(|prev| prev != lighting_key);
                 let accumulate_params = manifold_gpu::raytrace::AccumulateParams::new(
                     [width, height],
                     IRRADIANCE_ACCUM_ALPHA,
@@ -4594,7 +4634,8 @@ impl EffectNode for RenderScene {
                     cam.pos,
                     inv_view_proj,
                     prev_view_proj,
-                );
+                )
+                .with_lighting_changed(lighting_changed);
                 let accumulate_params_buffer =
                     self.rt_accumulate_params_buffer.as_ref().expect("ensured above");
                 // RT-T1-C: ping-pong — read last frame's write slot (same
