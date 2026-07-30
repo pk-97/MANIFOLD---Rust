@@ -149,10 +149,8 @@ def main():
     if words > max_words:
         over.append(f"{words} words (budget {max_words})")
     print(
-        f"Your answer is {' and '.join(over)}. Rewrite it to fit — same facts, "
-        "fewer words. Cut restatement, hedges, options you don't recommend, and "
-        "anything that doesn't change what Peter does next. Reply with the "
-        "rewritten answer only.",
+        f"Over budget: {' and '.join(over)}. Condense — keep every fact, drop "
+        "the padding. Reply with the shorter version only.",
         file=sys.stderr,
     )
     return 2
