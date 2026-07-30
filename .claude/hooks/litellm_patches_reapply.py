@@ -13,7 +13,9 @@ it is an operational tool, not a Claude Code hook.)
     launchctl kickstart -k gui/$(id -u)/com.manifold.litellm-proxy
 
 Canary (proves the whole route, not just the patch):
-    ANTHROPIC_BASE_URL=http://127.0.0.1:4000     ANTHROPIC_API_KEY=$(cc-fleet keyget kimi)     claude -p "Reply with exactly: REAL-CC-OK" --model deepseek-v4-flash --max-turns 1
+    ANTHROPIC_BASE_URL=http://127.0.0.1:4000 \
+      ANTHROPIC_API_KEY=$(cc-fleet keyget kimi) \
+      claude -p "Reply with exactly: REAL-CC-OK" --model deepseek-v4-flash --max-turns 1
 
 Also load-bearing, but config-side (survives upgrades, listed for the map):
     ~/.config/litellm/config.yaml

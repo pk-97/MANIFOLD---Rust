@@ -134,6 +134,11 @@ def main():
     payload = json.load(sys.stdin)
     text = payload.get("last_assistant_message")
     if not isinstance(text, str) or not text.strip():
+        # A renamed or dropped field would otherwise disarm this gate forever,
+        # and a silent gate is indistinguishable from a compliant one.
+        if "last_assistant_message" not in payload:
+            print("verbosity-gate: payload has no last_assistant_message — gate inert",
+                  file=sys.stderr)
         return 0
 
     transcript = payload.get("transcript_path")

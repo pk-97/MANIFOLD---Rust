@@ -462,7 +462,12 @@ pub fn run(args: &[String]) -> ! {
         ct.handle_command(ContentCommand::Pause);
         for f in 0..(total_frames - rotation_frames) {
             let host = rotation_frames + f;
-            if f == 10 || f == 30 || f == 90 || f == (total_frames - rotation_frames - 1) {
+            // A run of CONSECUTIVE captures deep into the paused phase: the
+            // static-boil question is "what differs between frame N and
+            // frame N+1 when nothing moves", which sparse captures cannot
+            // answer. Late enough that every accumulator has converged.
+            let consecutive_run = f >= (total_frames - rotation_frames).saturating_sub(6);
+            if f == 10 || f == 30 || f == 90 || consecutive_run {
                 arm_capture();
             }
             ct.timer.wait_for_deadline();

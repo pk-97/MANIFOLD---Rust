@@ -18,4 +18,5 @@ pub mod scrub;
 pub mod status;
 pub mod template;
 pub mod transport;
+pub mod watch;
 pub mod worktree;
