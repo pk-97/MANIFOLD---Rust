@@ -23,7 +23,7 @@ see docs/AGENT_ROUTING.md §Native provider lanes):
   ALL Agent spawns denied. Executors execute; decisions flow up.
 
 Fails open on any error (missing/unreadable transcript, format drift): a
-guard hook must never be able to block a session. `agent-model-guard.py`
+guard hook must never be able to block a session. `agent-launch-guard.py`
 independently covers the explicit-model requirement for allowed spawns.
 
 History: 2026-07-24 R2 extended DENY to the open provider roster (model ids

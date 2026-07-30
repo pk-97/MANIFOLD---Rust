@@ -12,7 +12,7 @@ Companion docs: `docs/SEMANTIC_WORKFLOW_PROGRAMS.md` (the IR this implements —
 
 | Piece | Where | State |
 |---|---|---|
-| Deny-capable hook pattern | `.claude/hooks/agent-teammate-naming-guard.py`, `agent-tier-spawn-guard.py`, `worktree-guard.py` | exists — PreToolUse hooks deny with spelled-out fixes |
+| Deny-capable hook pattern | `.claude/hooks/agent-launch-guard.py`, `agent-tier-spawn-guard.py`, `worktree-guard.py` | exists — PreToolUse hooks deny with spelled-out fixes |
 | Two-tier gate pattern (deny-once + re-check) | `.claude/hooks/workflow-gate.py` | exists — precedent for P4's merge clause |
 | Blocking idle hook (feedback to lane) | `.claude/hooks/lane-report-enforcer.py` | exists — TeammateIdle can block; proves hooks steer lanes mid-flight |
 | Bash interception point | `.claude/hooks/preToolUseBash.py` (+ `test_preToolUseBash.py`) | exists — P4's merge clause is one rule here, not a new hook |
@@ -98,7 +98,7 @@ Each phase is one session, Flash-executable: the seams are decided above; phases
 ### P3 — pre-dispatch pack (brief linter)
 
 - **Entry state:** P1 landed.
-- **Read-back:** D1, I3; `.claude/hooks/agent-teammate-naming-guard.py` `slot_map()` (the valid-slot source, derived from session env); DESIGN_DOC_STANDARD section 3 (anchor rules).
+- **Read-back:** D1, I3; `.claude/hooks/agent-launch-guard.py` `slot_map()` (the valid-slot source, derived from session env); DESIGN_DOC_STANDARD section 3 (anchor rules).
 - **Deliverables:** `gate_runner pre-dispatch --brief <path>`: every `file:line` anchor in the brief resolves (file exists, line in range); every gate command in the brief's Gates section shell-parses (`bash -n` equivalent); every named seat/slot is a valid slot label from the naming guard's `slot_map()`; the brief names a bead task matching `BUG-\w+`. Appends a `pre-dispatch` verdict per brief.
 - **Gate:** lint `.claude/orchestration/rt-reflections-r2-queue.md` — a real, dense brief set; must PASS after any genuinely-stale anchor is reported to the lead (stale anchors in R2's queue are findings, not lint bugs). Synthetic broken brief (dead anchor, unparseable gate, bogus slot, no bead) must FAIL naming all four.
 - **Demo:** none — L1.

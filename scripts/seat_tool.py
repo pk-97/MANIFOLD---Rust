@@ -45,7 +45,7 @@ TMUX_CONF = HOME / ".tmux.conf"
 HOOKS = REPO / ".claude/hooks"
 SEAT_IDENTITY = HOOKS / "seat-identity.py"
 TIER_GUARD_CCFLEET = HOOKS / "cc-fleet-tier-guard.py"
-NAMING_GUARD = HOOKS / "agent-teammate-naming-guard.py"
+LAUNCH_GUARD = HOOKS / "agent-launch-guard.py"
 TIER_GUARD_SPAWN = HOOKS / "agent-tier-spawn-guard.py"
 
 # Every file that may carry seat-name tokens. rename rewrites these; check
@@ -82,9 +82,9 @@ def load_manifest():
     return tomllib.loads(MANIFEST.read_text())
 
 
-def load_naming_guard():
+def load_launch_guard():
     import importlib.util
-    spec = importlib.util.spec_from_file_location("naming_guard", NAMING_GUARD)
+    spec = importlib.util.spec_from_file_location("launch_guard", LAUNCH_GUARD)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -234,12 +234,12 @@ def assign(slot, model):
         die(f"profile verify failed: {SLOT_TO_ENV[slot]} = {actual!r}, expected {model!r}")
     print(f"profile verified: {SLOT_TO_ENV[slot]} = {model}")
 
-    guard = load_naming_guard()
+    guard = load_launch_guard()
     _, label = guard.backend_for_slot(slot, {SLOT_TO_ENV[slot]: model})
     if model not in guard.SHORT_LABEL and not model.startswith("claude-"):
-        print(f"WARNING: no SHORT_LABEL for {model!r} in {NAMING_GUARD.name}; "
+        print(f"WARNING: no SHORT_LABEL for {model!r} in {LAUNCH_GUARD.name}; "
               f"lanes will be named {label!r} — extend the guard's map")
-    print(f"naming-guard lane label for {slot!r} = {label!r} (derived from env at spawn time)")
+    print(f"launch-guard lane label for {slot!r} = {label!r} (derived from env at spawn time)")
 
     if f"model_name: {model}" not in LITELLM_CONFIG.read_text():
         print(f"WARNING: {model!r} not in litellm model_list — proxy cannot serve it yet")
@@ -261,7 +261,7 @@ done. Manual follow-ups (prose stays human-edited):
 def show():
     lead = load_manifest()["lead_seat"]
     env = json.loads((PROFILES / f"{lead}.json").read_text())["env"]
-    guard = load_naming_guard()
+    guard = load_launch_guard()
     served = LITELLM_CONFIG.read_text()
     print(f"lead seat: {lead}")
     print(f"{'slot':8} {'providers.toml':22} {'profile env':22} {'lane label':10} served?")

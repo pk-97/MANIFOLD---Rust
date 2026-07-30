@@ -61,11 +61,11 @@ VERDICTS_DIR = Path(
 MAIN_CHECKOUT = Path("/Users/peterkiemann/MANIFOLD - Rust")
 DEFAULT_LITELLM_URL = "http://127.0.0.1:4000/health/liveliness"
 
-# Slot labels from the naming guard (single source of truth) — the guard
+# Slot labels from the launch guard (single source of truth) — the guard
 # derives them from the session env, so gate_runner sees the same map the
 # spawn-time hook will enforce.
-_GUARD_PATH = REPO / ".claude" / "hooks" / "agent-teammate-naming-guard.py"
-_guard_spec = importlib.util.spec_from_file_location("_naming_guard", str(_GUARD_PATH))
+_GUARD_PATH = REPO / ".claude" / "hooks" / "agent-launch-guard.py"
+_guard_spec = importlib.util.spec_from_file_location("_launch_guard", str(_GUARD_PATH))
 _guard_mod = importlib.util.module_from_spec(_guard_spec)
 _guard_spec.loader.exec_module(_guard_mod)
 VALID_SLOTS = sorted({label for _b, label in _guard_mod.slot_map().values()})
@@ -1191,7 +1191,7 @@ def _check_slots(text):
     """Check c: every named lane slot prefix is a valid slot label.
 
     Scans for tokens matching slot-prefix pattern, validates each against
-    VALID_SLOTS (from agent-teammate-naming-guard.py).
+    VALID_SLOTS (from agent-launch-guard.py).
     Returns (exit_code, detail).
     """
     fails = []

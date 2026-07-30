@@ -34,7 +34,7 @@
     {
       "transition": "explicit model per Agent spawn",
       "enforcement": "hook",
-      "file": ".claude/hooks/agent-model-guard.py"
+      "file": ".claude/hooks/agent-launch-guard.py"
     },
     {
       "transition": "no executor-tier agents spawning agents",
@@ -49,7 +49,7 @@
     {
       "transition": "teammate slot naming from the slot map",
       "enforcement": "hook",
-      "file": ".claude/hooks/agent-teammate-naming-guard.py"
+      "file": ".claude/hooks/agent-launch-guard.py"
     },
     {
       "transition": "Agent-tool worktree isolation denied (slot ring instead)",
