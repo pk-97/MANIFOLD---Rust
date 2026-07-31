@@ -1029,7 +1029,14 @@ stillness re-converges. Measured after: center history length converges 68+ at
 everywhere). The static noise gate is untouched (cam_motion = 0 there).
 Residual: glossy virtual-point reprojection (bt<1) still has no parallax validation —
 bounded by `clamp_refl_history`; a prev-view-direction virtual point is the upgrade if
-it shows.
+it shows. Same session's MetalFX audit (temporal_upscale): the motion vectors carried
+the camera jitter baked into BOTH clip positions, one previous-frame jitter of phantom
+motion every frame — MetalFX expects jitter-free vectors (its jitterOffset compensates
+the current frame itself). `velocity_jitter` (cur/prev NDC offsets, all-zero with
+upscale off) now subtracts the delta in the velocity fragment; the extreme-drag
+screen-door grid largely resolves, static and slow-drag captures clean. Residual:
+wholesale MetalFX rejection at ~300 px/frame still falls back to raw half-res —
+TAA-intrinsic; a soft-upsample fallback is Apple's side of the fence.
 
 ## 14. Traced environment diffuse — env joins the GI gather (BUG-yq1d (traced AO never darkens env diffuse); SUPERSEDES MB3; LANDED 2026-07-31 — ED-A (kernel/substitution/constants/clamp + PBR-only consumers ED3a + void-texel fallback, Peter's metal-fixture sign-off), ED-B (sun-disc firefly fixture, gain 32 by measurement, furnace is the noise gate's correctness leg — closes BUG-ipad (noise gate certifies frozen noise); stability ceilings re-baselined), ED-C (white-enclosure convergence: reference irradiance 0.954 vs MC 0.934, ED4's constants certified — closes BUG-qt32 (GI energy constants look unphysical)))
 
