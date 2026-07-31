@@ -15,9 +15,25 @@ pairs and reports mean / 99.9th percentile / max in 8-bit levels. Mean catches
 broad boil; p99.9 catches localised fireflies; max is reported, never gated —
 one pixel is not a verdict.
 
-NO IMAGE ORACLE. RAYTRACING_DESIGN.md section 6 (Wave plan): no agent gates on
-reading a picture. The PNGs are just the transport for pixel values; every
-verdict here is a computed number against a committed ceiling.
+TWO LEGS: STABILITY + CORRECTNESS (ED7, RAYTRACING_DESIGN.md section 14)
+Stability alone cannot certify — the frozen-seed trap (BUG-ipad): a change that
+freezes any RT randomness drives every gated statistic to ~0 while destroying
+the estimate (a fixed N-sample pattern is not convergence). Green therefore
+requires BOTH:
+1. Stability — the frame-to-frame ceilings below.
+2. Correctness — the RT furnace oracle
+   (`crates/manifold-renderer/tests/gpu_proofs/rt_furnace_oracle.rs`, run via
+   `cargo test -p manifold-renderer --features gpu-proofs --test gpu_proofs
+   -- rt_furnace`): a flat albedo-1 surface under a closed-form uniform
+   environment must read back the field radiance on the TRACED path (RT on)
+   and match the raster path (RT off) within tolerance (I-ED4's brightness
+   leg, which since ED-A passes through the env+GI gather, not the irradiance
+   map); a floor-wall corner must read darker than the open floor (I-ED4's
+   corner leg); and the sun-disc firefly fixture must stay under its firefly
+   ceiling while preserving the sun's energy (the ED5 clamp's tuned regime).
+   The furnace is the oracle the noise gate's image-less numbers cannot be
+   — every verdict in BOTH legs is a computed number against a committed
+   ceiling; the PNGs are just the transport for pixel values.
 
 WHY IT ALSO CHECKS FOR SIGNAL
 A dead channel is perfectly stable, so the gate refuses to certify one. Seven of
@@ -27,7 +43,8 @@ capture-directory contention, not an RT defect (BUG-mw0x — concurrent rt-captu
 runs clobbered each other via a shared /tmp dir). The lesson survives its cause:
 a delta-only gate called that state calm. Each channel carries a
 `min_signal_level` floor, and a channel below its floor FAILS as inert rather
-than passing as stable.
+than passing as stable. The furnace leg is the second half of that same lesson
+applied to correctness: a frozen channel is not a converged one.
 
 FLAKE CONTROL
 Two mechanisms, because a flaky gate gets ignored, which is worse than no gate.
@@ -57,10 +74,12 @@ USAGE
   scripts/rt_noise_gate.py                     # gate: build, run, compare
   scripts/rt_noise_gate.py --record            # regenerate the ceilings
   scripts/rt_noise_gate.py --repeats 5 --json  # spread evidence
+  scripts/rt_noise_gate.py --skip-furnace      # stability leg only (recording,
+                                               # or isolating a stability issue)
 
 EXIT CODES
   0  green, or a loud SKIP (fixture absent, ceilings unvalidated)
-  1  a channel exceeded its ceiling, or read inert
+  1  the furnace oracle failed, or a channel exceeded its ceiling / read inert
   2  the measurement could not be made (build failed, no consecutive pairs,
      every repeat contaminated) — an unknown answer, never a green one
 """
@@ -179,6 +198,40 @@ def build_binary(repo):
         return None
     log(f"[rt-noise] build ok ({dur:.0f}s)")
     return repo / "target/release/manifold"
+
+
+# ── the correctness leg (ED7) ───────────────────────────────────────────
+
+
+def run_furnace_oracle(repo, timeout=1800):
+    """The correctness leg: run the RT furnace oracle and report pass/fail.
+
+    The oracle is `crates/manifold-renderer/tests/gpu_proofs/rt_furnace_oracle.rs`
+    — I-ED4's brightness + corner legs, I-ED1's ambient linearity, and the
+    ED-B sun-disc firefly fixture. It is a gpu-proofs test, run the same way
+    `scripts/gpu_proofs_gate.py` runs GPU tests (cargo test, never nextest —
+    process-per-test defeats the device lock). Debug build; the release app
+    build for the stability leg is separate and happens only after this gate
+    passes, so a correctness regression costs seconds, not a 300-frame render.
+
+    Returns (passed, output)."""
+    cmd = [
+        "cargo", "test", "-p", "manifold-renderer", "--features", "gpu-proofs",
+        "--test", "gpu_proofs", "--", "rt_furnace", "--test-threads=1",
+    ]
+    exit_, out, err, dur = run_cmd(cmd, cwd=repo, timeout=timeout)
+    output = out + err
+    # The test summary is the verdict line; the filter (`rt_furnace`) matches
+    # exactly the furnace tests, so a non-zero exit with a build failure and a
+    # non-zero exit with a failed assertion are both a red correctness leg.
+    summary = next((l for l in output.splitlines() if "test result:" in l), None)
+    if exit_ != 0:
+        log(f"[rt-noise] furnace oracle FAILED after {dur:.0f}s"
+            + (f" — {summary.strip()}" if summary else ""))
+        return False, output
+    log(f"[rt-noise] furnace oracle ok ({dur:.0f}s)"
+        + (f" — {summary.strip()}" if summary else ""))
+    return True, output
 
 
 # ── one capture run ─────────────────────────────────────────────────────
@@ -424,6 +477,9 @@ def main():
     ap.add_argument("--require-fixture", action="store_true",
                     help="a missing fixture is a failure, not a skip (nightly uses this)")
     ap.add_argument("--json", action="store_true", help="also emit the aggregate as JSON")
+    ap.add_argument("--skip-furnace", action="store_true",
+                    help="stability leg only — do not run the furnace oracle "
+                         "(recording, or isolating a stability issue)")
     args = ap.parse_args()
 
     repo = Path(args.repo).resolve()
@@ -454,6 +510,22 @@ def main():
                 f"{baseline.get('note', '')} — run --record against a working "
                 f"RT path, commit the JSON, and this gate starts guarding.")
             return 0
+
+    # ED7 correctness leg, FIRST: the furnace oracle is a seconds-cost debug
+    # test, so a correctness regression is caught before the minutes-cost
+    # release build + 300-frame stability capture ever starts. Green requires
+    # BOTH legs — stability alone cannot certify (the frozen-seed trap,
+    # BUG-ipad). `--record` also gates on it: a stability ceiling recorded
+    # against a broken RT path would be garbage.
+    if not args.skip_furnace:
+        furnace_ok, furnace_out = run_furnace_oracle(repo)
+        if not furnace_ok:
+            log("[rt-noise] furnace oracle RED — correctness leg failed; "
+                "stability is not the verdict. Tail:")
+            for line in furnace_out.rstrip().splitlines()[-8:]:
+                log(f"    {line}")
+            log("\nRT NOISE GATE: RED (furnace oracle)")
+            return 1
 
     binary = Path(args.binary).resolve() if args.binary else build_binary(repo)
     if binary is None:
