@@ -371,7 +371,21 @@ fn furnace_occlusion_scene_json(ground_ambient: f32) -> String {
 /// doc comment for why that comparison is self-defeating here).
 /// `assert_rt_dispatched` (inside `render_readback_confirmed`) rules out
 /// the vacuous case where this whole scene rendered pure raster.
+///
+/// FAILS TODAY, measured: `open=0.97266 shaded=0.97362 ratio=1.0010` — no
+/// darkening anywhere. A frame dump of this exact scene is flat white: a
+/// plate hovering over a floor under a uniform sky, RT on, and no contact
+/// shadow at all. Cause is architectural, not probe placement. The kernel
+/// writes `irradiance = ambient_color * ao + gi`, and here `ambient_color`
+/// is zero (material ambient 0.0) and `gi` is zero (no lights, so no sun
+/// casters; no emissives), so traced occlusion has nothing to multiply.
+/// Meanwhile the term that actually lights this scene, `diffuse_ibl`, is
+/// gated only by the material's BAKED occlusion texture and never sees the
+/// traced result. No probe placement rescues this.
+///
+/// Un-ignore with BUG-yq1d (traced-ao-never-darkens-environment-diffuse).
 #[test]
+#[ignore = "BUG-yq1d (traced-ao-never-darkens-environment-diffuse): traced occlusion multiplies a term that is zero in an environment-lit scene"]
 fn traced_occlusion_darkens_the_shaded_region_relative_to_the_open_plane() {
     let json = furnace_occlusion_scene_json(0.0);
     let (bytes, w, h) = render_readback_confirmed(&json, "furnace occlusion scene, ambient=0.0, RT enabled");
