@@ -103,6 +103,15 @@ debug = "line-tables-only"
 # pack a .dSYM on every link. Removes the slowest part of the link step.
 split-debuginfo = "unpacked"
 
+# Test profile — opt-level 2 for the gpu-proofs test binary. Kept on measured
+# win: rt_furnace subset wall 1.035s -> 0.56s (test exec 0.61s -> 0.42s),
+# >1.3x bar. Per-package override ([profile.test.package."manifold-renderer"])
+# measured back at debug speed (0.60s exec, "unoptimized" summary) — it does
+# not opt the [[test]] binary's own code — so the top-level profile is used.
+# Caveat: applies to all test builds workspace-wide.
+[profile.test]
+opt-level = 2
+
 # Release profile — optimise for runtime performance and binary size.
 [profile.release]
 # lto = "fat"
