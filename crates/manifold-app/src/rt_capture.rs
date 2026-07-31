@@ -49,6 +49,12 @@ pub(crate) fn decode_capture_pixels(
         GpuTextureFormat::Rgba16Float => (8u32, 4usize, false),
         GpuTextureFormat::Rg16Float => (4u32, 2usize, false),
         GpuTextureFormat::Rg32Float => (8u32, 2usize, true),
+        // Rgba32Float — the RT luminance-moments history (ED-A moved it from
+        // Rg16Float to Rgba32Float for the variance-precision argument in
+        // render_scene.rs; without this arm the noise gate's `moments`
+        // channel silently vanished from every capture). 16 B/px, 4 comps,
+        // native f32 — the shared f32 decode path below already handles it.
+        GpuTextureFormat::Rgba32Float => (16u32, 4usize, true),
         other => {
             eprintln!(
                 "[rt-capture] SKIP {}: unsupported capture format {other:?}",

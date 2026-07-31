@@ -360,6 +360,206 @@ fn uniform_environment_white_surface_returns_the_environment_radiance() {
     );
 }
 
+/// ED-B (RAYTRACING_DESIGN.md section 14.4): the real-HDRI firefly fixture.
+/// A flat albedo-1 ground plane under a `node.bake_environment` SOFTBOX bake
+/// with a SUN DISK — deliberately NOT the uniform sky the white-surface leg
+/// uses. `fill` lights a dim warm dome (0.3 at the zenith, falling toward the
+/// floor); the sun (direction `(0, 0.7, 0.4)`, elevation ~44°, inside the
+/// ground normal's upper hemisphere; peak radiance 4 * `sun_disc_intensity` =
+/// 40 at mip 0) sits ~130x brighter than the dome around it. At the shipping
+/// gi_spp (2, `GI_SAMPLES_PER_PIXEL` in render_scene.rs) a GI sample that
+/// happens to point at the sun reads an extreme outlier — that is the
+/// sparkle regime the ED5 clamp (`RT_GI_ENV_FIREFLY_GAIN`) exists for. At
+/// gi_spp < 3 a per-sample median is inert (2 samples); the env anchor
+/// (`refl_env_sample(n, 1.0)`) is not.
+///
+/// The two-sun-state builders let the gate measure the sun's true energy
+/// budget: `sun_on` renders the sun-lit environment, `sun_off` the fill
+/// dome alone. The raster (RT-off) leg of each is the unbiased convolution
+/// the traced path must track.
+fn firefly_sun_disc_scene_json(sun_on: bool, rt_on: bool) -> String {
+    let name = if rt_on { "RtFurnaceFireflySunDisc" } else { "RtFurnaceFireflySunDiscOff" };
+    let sun = if sun_on { 10.0 } else { 0.0 };
+    format!(
+        r#"{{"version":2,"name":"{name}","nodes":[
+        {{"id":0,"typeId":"system.generator_input","nodeId":"input"}},
+        {{"id":1,"typeId":"node.grid_mesh","nodeId":"ground_grid","params":{{
+            "max_capacity":{{"type":"Int","value":8192}},
+            "resolution_x":{{"type":"Int","value":20}},
+            "resolution_y":{{"type":"Int","value":20}},
+            "size_x":{{"type":"Float","value":8.0}},
+            "size_y":{{"type":"Float","value":8.0}}}}}},
+        {{"id":2,"typeId":"node.make_triangles","nodeId":"ground_tris","params":{{
+            "src_cols":{{"type":"Int","value":20}},
+            "src_rows":{{"type":"Int","value":20}}}}}},
+        {{"id":3,"typeId":"node.orbit_camera","nodeId":"cam","params":{{
+            "orbit":{{"type":"Float","value":{ORBIT}}},
+            "tilt":{{"type":"Float","value":{TILT}}},
+            "distance":{{"type":"Float","value":{DISTANCE}}},
+            "fov_y":{{"type":"Float","value":{FOV_Y}}}}}}},
+        {{"id":8,"typeId":"node.bake_environment","nodeId":"env","params":{{
+            "width":{{"type":"Int","value":256}},
+            "height":{{"type":"Int","value":128}},
+            "intensity":{{"type":"Float","value":1.0}},
+            "mode":{{"type":"Enum","value":1}},
+            "emitter_count":{{"type":"Int","value":1}},
+            "emitter_intensity":{{"type":"Float","value":0.0}},
+            "emitter_elevation":{{"type":"Float","value":0.15}},
+            "emitter_width":{{"type":"Float","value":0.05}},
+            "sun_x":{{"type":"Float","value":0.0}},
+            "sun_y":{{"type":"Float","value":0.7}},
+            "sun_z":{{"type":"Float","value":0.4}},
+            "sun_disc_intensity":{{"type":"Float","value":{sun}}},
+            "sun_disc_size":{{"type":"Float","value":0.08}},
+            "fill":{{"type":"Float","value":0.3}},
+            "uniform":{{"type":"Bool","value":false}}}}}},
+        {{"id":4,"typeId":"node.pbr_material","nodeId":"ground_mat","params":{{
+            "color_r":{{"type":"Float","value":1.0}},
+            "color_g":{{"type":"Float","value":1.0}},
+            "color_b":{{"type":"Float","value":1.0}},
+            "ambient":{{"type":"Float","value":0.0}},
+            "metallic":{{"type":"Float","value":0.0}},
+            "roughness":{{"type":"Float","value":1.0}}}}}},
+        {{"id":20,"typeId":"node.render_scene","nodeId":"scene","params":{{
+            "objects":{{"type":"Int","value":1}},
+            "lights":{{"type":"Int","value":0}},
+            "rt_enabled":{{"type":"Bool","value":{rt_on}}},
+            "rt_reflections":{{"type":"Bool","value":false}}}}}},
+        {{"id":99,"typeId":"system.final_output","nodeId":"out"}}
+        ],"wires":[
+        {{"fromNode":1,"fromPort":"vertices","toNode":2,"toPort":"in"}},
+        {{"fromNode":2,"fromPort":"out","toNode":20,"toPort":"mesh_0"}},
+        {{"fromNode":3,"fromPort":"out","toNode":20,"toPort":"camera"}},
+        {{"fromNode":4,"fromPort":"out","toNode":20,"toPort":"material_0"}},
+        {{"fromNode":8,"fromPort":"envmap","toNode":20,"toPort":"envmap"}},
+        {{"fromNode":20,"fromPort":"color","toNode":99,"toPort":"in"}}
+        ]}}"#
+    )
+}
+
+/// Per-pixel luma statistics over a square window — the firefly-tail
+/// measurement. Returns `(mean, p99, p99.9, max, frac_above_2)` where
+/// `frac_above_2` is the fraction of pixels whose luma exceeds 2.0 (a
+/// committed firefly threshold ~6x the dim dome). The window is the ground
+/// plane (verified by projection: a radius-30 box around the image centre
+/// at 128² hits world y=0 within the 8x8 grid), so every pixel reads the
+/// traced env+GI estimate, never the sky's direct sun disk.
+#[allow(clippy::type_complexity)]
+fn region_stats(bytes: &[u8], w: u32, h: u32, cx: f32, cy: f32, radius: i32) -> (f64, f64, f64, f64, f64) {
+    let cxi = cx.round() as i32;
+    let cyi = cy.round() as i32;
+    let mut lumas = Vec::new();
+    for dy in -radius..=radius {
+        for dx in -radius..=radius {
+            let x = cxi + dx;
+            let y = cyi + dy;
+            if x < 0 || y < 0 || x >= w as i32 || y >= h as i32 {
+                continue;
+            }
+            let idx = ((y as u32 * w + x as u32) * 8) as usize;
+            let px = &bytes[idx..idx + 8];
+            let r = f16::from_le_bytes([px[0], px[1]]).to_f32();
+            let g = f16::from_le_bytes([px[2], px[3]]).to_f32();
+            let b = f16::from_le_bytes([px[4], px[5]]).to_f32();
+            assert!(r.is_finite() && g.is_finite() && b.is_finite(), "non-finite pixel");
+            lumas.push((0.2126 * r + 0.7152 * g + 0.0722 * b) as f64);
+        }
+    }
+    assert!(!lumas.is_empty(), "region window is entirely off-screen");
+    lumas.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let n = lumas.len() as f64;
+    let mean = lumas.iter().sum::<f64>() / n;
+    let p99 = lumas[(0.99 * n) as usize];
+    let p999 = lumas[((0.999 * n) as usize).min(lumas.len() - 1)];
+    let max = lumas[lumas.len() - 1];
+    let frac_above_2 = lumas.iter().filter(|&&v| v > 2.0).count() as f64 / n;
+    (mean, p99, p999, max, frac_above_2)
+}
+
+/// ED-B gate: the firefly fixture's traced env+GI must stay under a
+/// committed firefly ceiling AND preserve the sun's legitimate energy.
+///
+/// Three measured legs:
+/// - RT-on, sun on: the traced path under test.
+/// - RT-off, sun on: the unbiased raster convolution — the sun-lit ground
+///   truth (converged from frame 1, no temporal accumulation).
+/// - RT-off, sun off: the fill dome alone — the sun's true contribution is
+///   `raster_sun_mean - fill_mean`.
+///
+/// Two assertions, both committed ceilings calibrated on the tuned gain
+/// (`RT_GI_ENV_FIREFLY_GAIN` in raytrace.rs carries the full measurement
+/// table — this fixture is where that number was chosen):
+/// 1. Firefly tail held: zero pixels above luma 2.0 (a pixel at 2.0 is ~6x
+///    the dim dome's mean; the unclamped regime reads 2.6% above it) and
+///    the per-pixel max below 1.6 (the tuned gain-32 clamp cap is ~1.32;
+///    the unclamped max is ~6.0).
+/// 2. Sun energy preserved: the traced path must return at least half of
+///    the sun's true contribution above the fill dome — a clamp that dims
+///    the sun below that is over-clamped (gain-24 returns ~half, gain-16
+///    ~a third, gain-8 essentially nothing).
+#[test]
+fn firefly_sun_disc_env_traced_gi_stays_under_the_firefly_ceiling() {
+    let (bytes, w, h) = render_readback_confirmed(
+        &firefly_sun_disc_scene_json(true, true),
+        "firefly sun-disc scene, RT enabled",
+    );
+
+    let cam = Camera::orbit_perspective(ORBIT, TILT, DISTANCE, FOV_Y, 0.0, 0.0, NEAR, FAR);
+    let center_px = cam
+        .project_to_pixel([0.0, 0.0, 0.0], w, h)
+        .expect("ground-plane centre must project in front of the camera");
+
+    const RADIUS: i32 = 30;
+    let (mean, p99, p999, max, frac_above_2) =
+        region_stats(&bytes, w, h, center_px.px as f32, center_px.py as f32, RADIUS);
+    eprintln!(
+        "RT furnace firefly RT-on (sun): mean={mean:.4} p99={p99:.4} p99.9={p999:.4} max={max:.4} frac_above_2={frac_above_2:.4}"
+    );
+
+    let (off_bytes, _, _) = render_readback(&firefly_sun_disc_scene_json(true, false));
+    let (raster_mean, _, _, _, _) =
+        region_stats(&off_bytes, w, h, center_px.px as f32, center_px.py as f32, RADIUS);
+    eprintln!("RT furnace firefly RT-off (raster, sun): mean={raster_mean:.4}");
+
+    let (no_sun_bytes, _, _) = render_readback(&firefly_sun_disc_scene_json(false, false));
+    let (fill_mean, _, _, _, _) =
+        region_stats(&no_sun_bytes, w, h, center_px.px as f32, center_px.py as f32, RADIUS);
+    eprintln!("RT furnace firefly RT-off (raster, no sun): fill_mean={fill_mean:.4}");
+    write_png(&bytes, w, h, "/tmp/rt_furnace_firefly.png");
+
+    // Assertion 1 — firefly tail held.
+    const FIREFLY_LUMA_THRESHOLD: f64 = 2.0;
+    const MAX_CEILING: f64 = 1.6;
+    assert!(
+        frac_above_2 == 0.0,
+        "firefly fixture must have ZERO pixels above luma {FIREFLY_LUMA_THRESHOLD}: \
+         frac_above_2={frac_above_2:.4} (the unclamped regime reads 2.6%) — the ED5 env \
+         clamp (`RT_GI_ENV_FIREFLY_GAIN`) is not holding the sun-disk sparkle"
+    );
+    assert!(
+        max <= MAX_CEILING,
+        "firefly fixture max luma {max:.4} exceeds the {MAX_CEILING} ceiling (tuned gain-32 cap \
+         ~1.32; unclamped ~6.0) — retune `RT_GI_ENV_FIREFLY_GAIN`"
+    );
+
+    // Assertion 2 — the sun's legitimate energy is preserved (not over-clamped).
+    let sun_contribution = raster_mean - fill_mean;
+    let traced_sun_contribution = (mean - fill_mean).max(0.0);
+    eprintln!(
+        "RT furnace firefly: sun contribution raster={sun_contribution:.4} traced={traced_sun_contribution:.4} \
+         ({:.0}% preserved)",
+        traced_sun_contribution / sun_contribution * 100.0
+    );
+    assert!(
+        traced_sun_contribution >= 0.5 * sun_contribution,
+        "firefly fixture traced path preserves only {:.0}% of the sun's true contribution \
+         (raster sun contribution {sun_contribution:.4}, traced {traced_sun_contribution:.4}) — \
+         the ED5 clamp is over-clamping and dimming legitimate bright-region energy, or the \
+         gather is not reading the sun at all (the frozen-seed attack reads 5%)",
+        traced_sun_contribution / sun_contribution * 100.0,
+    );
+}
+
 /// Second geometry, replacing the earlier hovering-plate occluder. That
 /// version had TWO fatal flaws, both found by direct kernel/geometry proof
 /// rather than by eye:

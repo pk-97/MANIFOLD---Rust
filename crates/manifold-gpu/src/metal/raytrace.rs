@@ -1245,7 +1245,27 @@ kernel void trace_shadow_rays(
     // RT_REFL_FIREFLY_GAIN precedent one order up — the gather env term's
     // only budget is these few spp. At gi_spp < 3 a median is inert; the
     // env anchor is not.
-    const float RT_GI_ENV_FIREFLY_GAIN = 16.0;
+    //
+    // ED-B (RAYTRACING_DESIGN.md section 14.4) measured the tuning on the
+    // sun-disc firefly fixture (`rt_furnace_oracle.rs`): a flat albedo-1
+    // ground under a softbox fill (0.3) + sun disc (peak 40, elevation 44°),
+    // shipping gi_spp 2, 61x61-pixel ground window, 8-bit-luma-equivalent
+    // stats vs the raster (RT-off) convolution as the unbiased reference.
+    // Raster means: fill-only 0.243, with sun 0.327 (sun contribution 0.084).
+    //   gain 8:  mean 0.249, max 0.355  — sun gone (contribution ~7%)
+    //   gain 16: mean 0.270, max 0.752  — sun at ~32% of true
+    //   gain 24: mean 0.288, max 1.037  — sun at ~53%, tail smooth
+    //   gain 32: mean 0.305, max 1.316  — sun at ~73%, tail smooth
+    //   ~1000:   mean 0.511, max 6.024, 2.6% pixels above luma 2 — the
+    //            unclamped sparkle regime this clamp exists for
+    //   (all gains <= 32 keep frac_above_2 == 0; "max" is the smooth clamp
+    //   cap, p99.9 == max — a plateau, not isolated spikes.)
+    //  32 wins: it preserves 73% of the sun's energy (the "don't dim the
+    //  bright region" requirement) while the tail stays a smooth 1.32 cap —
+    //  a 34% margin under the committed firefly threshold (luma 2.0). 24
+    //  is calmer (1.04) but dims the sun to barely half its energy; 16 (the
+    //  pre-ED-B value) dims it to a third.
+    const float RT_GI_ENV_FIREFLY_GAIN = 32.0;
     if (p.gi_spp > 0) {
         // ED5: one anchor per pixel. Inert for a scene with no env chain
         // (the dummy/zeroed chain gives anchor 0 and cap ~0, so the
