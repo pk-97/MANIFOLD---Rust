@@ -52,6 +52,7 @@ mod rt_bug17r3_lightless_gi;
 mod rt_bug318_import_toggle;
 mod rt_bug326_fix_gate;
 mod rt_bug88m_blend_specular_gate;
+mod rt_edc_enclosure;
 mod rt_furnace_oracle;
 mod rt_normal_tangent_mirror;
 mod rt_multi_caster_shadow;
