@@ -155,6 +155,7 @@ fn run_fixture(mr_texture: Option<&manifold_gpu::GpuTexture>, floor_roughness: f
             alpha_cutoff: 0.5,
             base_color_texture: None,
             mr_texture,
+            normal_texture: None,
             cast_shadows: true,
         },
         RtObjectGeometry {
@@ -170,6 +171,7 @@ fn run_fixture(mr_texture: Option<&manifold_gpu::GpuTexture>, floor_roughness: f
             alpha_cutoff: 0.5,
             base_color_texture: None,
             mr_texture: None,
+            normal_texture: None,
             cast_shadows: true,
         },
     ];

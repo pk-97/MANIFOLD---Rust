@@ -104,6 +104,7 @@ fn fetch_interpolated_normal_2tri_matches_cpu_oracle() {
         alpha_cutoff: 0.5,
         base_color_texture: None,
         mr_texture: None,
+        normal_texture: None,
         cast_shadows: true,
     }];
 
