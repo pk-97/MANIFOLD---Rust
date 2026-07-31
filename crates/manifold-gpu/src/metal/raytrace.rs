@@ -2067,6 +2067,20 @@ kernel void accumulate_irradiance(
     texture2d<float, access::write>      sv_m1_write         [[texture(18)]],
     texture2d<float>                     sv_m2_read          [[texture(19)]],
     texture2d<float, access::write>      sv_m2_write         [[texture(20)]],
+    // SV-ACCUM snap-hold countdown (`.x`, per texel). The sigma gate alone
+    // fires ONCE on a real crossing: the moments then straddle the old and
+    // new levels, the honest sigma inflates to ~half the step, and 4*sigma
+    // swallows every subsequent delta — the gate goes dead for exactly the
+    // frames the blend needs to keep snapping (measured: sv 0.5 -> 0.22
+    // over 6 fully-shadowed frames, and the scene-level destination shadow
+    // never forming). On a trip the hold snaps the blend to n=2 for 4 more
+    // frames while the moments keep updating on the floored window — the
+    // crossing converges (0.5^5 residual) and by hold expiry the sigma is
+    // honest again, so boil never re-trips. No moment reset on snap: with
+    // a reset the floor/relative terms alone gate a noisy penumbra's delta
+    // and the texel snaps every frame forever, never amortizing.
+    texture2d<float>                     sv_hold_read        [[texture(21)]],
+    texture2d<float, access::write>      sv_hold_write       [[texture(22)]],
     device GiMaterial*                 gi_materials        [[buffer(3)]],
     uint2 tid [[thread_position_in_grid]])
 {
@@ -2103,6 +2117,7 @@ kernel void accumulate_irradiance(
         sv_history_write.write(cur_sv, tid);
         sv_m1_write.write(cur_sv, tid);
         sv_m2_write.write(cur_sv * cur_sv, tid);
+        sv_hold_write.write(float4(0.0), tid);
         return;
     }
 
@@ -2129,6 +2144,7 @@ kernel void accumulate_irradiance(
     float4 sv_blended = cur_sv;
     float4 sv_m1w = cur_sv;
     float4 sv_m2w = cur_sv * cur_sv;
+    float sv_hold_w = 0.0;
     // Frames of history behind this texel, carried in `moments_write.w`
     // (was `history_write.a` — ED2 moved the ao there). 1 = this frame only
     // (a rejected/disoccluded texel is a cold start).
@@ -2217,6 +2233,7 @@ kernel void accumulate_irradiance(
                 float4 svsum = float4(0.0);
                 float4 sv1sum = float4(0.0);
                 float4 sv2sum = float4(0.0);
+                float svhsum = 0.0;
                 for (int i = 0; i < 4; ++i) {
                     int2 t = clamp(base + offs[i], int2(0), int2(p.size) - 1);
                     uint2 tt = uint2(t);
@@ -2241,6 +2258,7 @@ kernel void accumulate_irradiance(
                         svsum += w[i] * sv_history_read.read(tt);
                         sv1sum += w[i] * sv_m1_read.read(tt);
                         sv2sum += w[i] * sv_m2_read.read(tt);
+                        svhsum += w[i] * sv_hold_read.read(tt).x;
                     }
                 }
                 if (wsum > 1e-4) {
@@ -2338,7 +2356,14 @@ kernel void accumulate_irradiance(
                     float4 sv_gate = max(4.0 * sv_sd,
                                          0.15 * max(sv_hist, cur_sv));
                     bool sv_changed = any(sv_d4 > max(sv_gate, float4(0.05)));
-                    float sv_n = sv_changed ? 2.0 : n_full;
+                    // Snap-hold: the gate fires once, then the straddling
+                    // moments inflate sigma and the gate goes dead — so a
+                    // trip holds the n=2 snap for 4 more frames while the
+                    // moments keep updating (see the binding-21 comment).
+                    float sv_hold_hist = svhsum / wsum;
+                    sv_hold_w = sv_changed ? 4.0 : max(sv_hold_hist - 1.0, 0.0);
+                    bool sv_snap = sv_changed || sv_hold_hist >= 1.0;
+                    float sv_n = sv_snap ? 2.0 : n_full;
                     float sv_alpha = max(1.0 / sv_n, p.alpha);
                     sv_blended = mix(sv_hist, cur_sv, sv_alpha);
                     valid = true;
@@ -2351,10 +2376,11 @@ kernel void accumulate_irradiance(
                     float m_alpha = max(1.0 / max(n, 4.0), p.alpha);
                     moment1 = mix(hm1, cur_luma, m_alpha);
                     moment2 = mix(hm2, cur_luma * cur_luma, m_alpha);
-                    // SV-ACCUM: visibility moments on the SAME floored window
-                    // — a snap shortens the noise estimate for both channels,
-                    // which is exactly what keeps a real crossing snap-
-                    // persistent until it converges.
+                    // SV-ACCUM: visibility moments on the SAME floored
+                    // window, updated even through a snap — a real crossing
+                    // inflates sigma for a few frames (the snap-hold above
+                    // covers the blend meanwhile), then the statistic
+                    // settles honest at the new level.
                     sv_m1w = mix(sv_hm1, cur_sv, m_alpha);
                     sv_m2w = mix(sv_hm2, cur_sv * cur_sv, m_alpha);
                     // The SURFACE's lighting changed, so its specular history
@@ -2377,6 +2403,7 @@ kernel void accumulate_irradiance(
     sv_history_write.write(valid ? sv_blended : cur_sv, tid);
     sv_m1_write.write(sv_m1w, tid);
     sv_m2_write.write(sv_m2w, tid);
+    sv_hold_write.write(float4(sv_hold_w, 0.0, 0.0, 0.0), tid);
     // Specular history length, `normal_history.w`. Written below the
     // reflection block (which computes it) — the normal itself is settled
     // here, so the deferred write costs nothing.
@@ -3322,6 +3349,11 @@ pub trait ShadowRayTracer {
         sv_m1_write: &GpuTexture,
         sv_m2_read: &GpuTexture,
         sv_m2_write: &GpuTexture,
+        // SV-ACCUM snap-hold countdown pair (`.x`, same clock) — a gate
+        // trip holds the n=2 snap for 4 frames because the straddling
+        // moments deaden the sigma gate right after a crossing.
+        sv_hold_read: &GpuTexture,
+        sv_hold_write: &GpuTexture,
         label: &str,
     );
 }
@@ -3483,6 +3515,9 @@ impl MetalShadowRayTracer {
                 (18, SlotKind::Texture),
                 (19, SlotKind::Texture),
                 (20, SlotKind::Texture),
+                // SV-ACCUM snap-hold countdown pair.
+                (21, SlotKind::Texture),
+                (22, SlotKind::Texture),
             ]),
         );
         let debug_fetch_normal_pipeline = compile_pipeline(
@@ -3938,6 +3973,9 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         sv_m1_write: &GpuTexture,
         sv_m2_read: &GpuTexture,
         sv_m2_write: &GpuTexture,
+        // SV-ACCUM snap-hold countdown pair (`.x`).
+        sv_hold_read: &GpuTexture,
+        sv_hold_write: &GpuTexture,
         label: &str,
     ) {
         params_buffer.upload(accumulate_params_bytes(params));
@@ -4044,6 +4082,15 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                 GpuBinding::Texture {
                     binding: 20,
                     texture: sv_m2_write,
+                },
+                // SV-ACCUM snap-hold countdown pair.
+                GpuBinding::Texture {
+                    binding: 21,
+                    texture: sv_hold_read,
+                },
+                GpuBinding::Texture {
+                    binding: 22,
+                    texture: sv_hold_write,
                 },
                 GpuBinding::Buffer {
                     binding: 3,

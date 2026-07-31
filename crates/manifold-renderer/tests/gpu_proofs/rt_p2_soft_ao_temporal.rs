@@ -233,6 +233,10 @@ struct HistorySet {
     /// SV-ACCUM moments: per-channel first/second visibility moments.
     sv_m1: [GpuTexture; 2],
     sv_m2: [GpuTexture; 2],
+    /// SV-ACCUM snap-hold countdown pair (`.x`) — a gate trip holds the
+    /// n=2 snap for 4 frames (the straddling moments deaden the sigma
+    /// gate right after a real crossing).
+    sv_hold: [GpuTexture; 2],
     ping: usize,
 }
 
@@ -272,6 +276,10 @@ impl HistorySet {
             sv_m2: [
                 make_history(device, &format!("{label}-sv-m2-a")),
                 make_history(device, &format!("{label}-sv-m2-b")),
+            ],
+            sv_hold: [
+                make_history(device, &format!("{label}-sv-hold-a")),
+                make_history(device, &format!("{label}-sv-hold-b")),
             ],
             ping: 0,
         }
@@ -327,6 +335,13 @@ impl HistorySet {
     }
     fn write_sv_m2(&self) -> &GpuTexture {
         &self.sv_m2[1 - self.ping]
+    }
+    // SV-ACCUM snap-hold countdown — same ping clock.
+    fn read_sv_hold(&self) -> &GpuTexture {
+        &self.sv_hold[self.ping]
+    }
+    fn write_sv_hold(&self) -> &GpuTexture {
+        &self.sv_hold[1 - self.ping]
     }
     fn advance(&mut self) {
         self.ping = 1 - self.ping;
@@ -490,6 +505,8 @@ fn run_accumulate_with_sv(
             history.write_sv_m1(),
             history.read_sv_m2(),
             history.write_sv_m2(),
+            history.read_sv_hold(),
+            history.write_sv_hold(),
             label,
         );
     }
@@ -840,6 +857,8 @@ fn refl_channel_blends_history_and_current() {
     let sv_m1_out = make_history(device, "bisect-sv-m1-out");
     let sv_m2_in = make_history(device, "bisect-sv-m2-in");
     let sv_m2_out = make_history(device, "bisect-sv-m2-out");
+    let sv_hold_in = make_history(device, "bisect-sv-hold-in");
+    let sv_hold_out = make_history(device, "bisect-sv-hold-out");
 
     // ── Leg 1: reset = false — history must blend toward current ──────
     let blend_params = AccumulateParams::new([W, H], 0.1, false, 0, [0.0; 3], IDENTITY, IDENTITY);
@@ -873,6 +892,8 @@ fn refl_channel_blends_history_and_current() {
             &sv_m1_out,
             &sv_m2_in,
             &sv_m2_out,
+            &sv_hold_in,
+            &sv_hold_out,
             "bisect-blend",
         );
         enc.commit_and_wait_completed();
@@ -995,6 +1016,8 @@ fn refl_channel_blends_history_and_current() {
             &sv_m1_out,
             &sv_m2_in,
             &sv_m2_out,
+            &sv_hold_in,
+            &sv_hold_out,
             "bisect-reset",
         );
         enc.commit_and_wait_completed();
@@ -1356,10 +1379,11 @@ fn hard_lighting_change_snaps_instead_of_averaging_in() {
 // ── SV-ACCUM proofs (2026-07-31) ─────────────────────────────────────
 // The shadow-visibility channel was the only RT channel with no temporal
 // accumulation: raw per-frame half-res samples straight to the fragment
-// shader, the penumbra boil Peter reported. These two proofs pin the
+// shader, the penumbra boil Peter reported. These proofs pin the
 // channel's new contract: it converges temporally like every other
 // channel (a max-amplitude flicker input collapses to its mean with a
-// bounded residual), and a reset still cold-starts it.
+// bounded residual), a reset still cold-starts it, and a real shadow
+// arrival snaps the blend until the new level converges.
 
 #[test]
 fn sv_channel_converges_under_max_amplitude_flicker() {
@@ -1372,11 +1396,11 @@ fn sv_channel_converges_under_max_amplitude_flicker() {
     // the convergence behavior under test.
     let hi_irr = upload_irr(&h.device, 0.5, 0.5, 0.5, "sv-accum-irr");
     // Penumbra BOIL, not a square wave: 0.3/0.7 alternation around the 0.5
-    // mean — amplitude 0.4, under the kernel's 0.5 per-channel sv change
-    // gate (a full 0↔1 flip is a shadow edge crossing and correctly snaps;
-    // boil is small-amplitude noise around a stable mean and must
-    // amortize). Constant irradiance keeps the irr gate quiet for the same
-    // reason.
+    // mean — amplitude 0.4. Once the moments converge the per-channel sigma
+    // sits at ~0.2 and the 4-sigma gate band (~0.8) never trips, so the
+    // blend amortizes at 1/n; a full 0↔1 step is a shadow edge crossing
+    // and correctly snaps. Constant irradiance keeps the irr gate quiet
+    // for the same reason.
     let sv_lo = upload_irr(&h.device, 0.3, 0.3, 0.3, "sv-accum-sv-lo");
     let sv_hi = upload_irr(&h.device, 0.7, 0.7, 0.7, "sv-accum-sv-hi");
     let mut history = HistorySet::new(&h.device, "sv-accum-history");
@@ -1451,9 +1475,11 @@ fn sv_channel_snaps_when_shadow_arrives() {
     // rt_object_motion_shadow proof shows the destination shadow NEVER
     // forming after an occluder move — the whole ground stays lit. This is
     // the same scenario synthetically: warm the sv history fully lit, then
-    // feed fully-shadowed frames WITHOUT reset; the 0.5 per-channel change
-    // gate must snap the blend (alpha 0.5) and the accumulated visibility
-    // must fall fast.
+    // feed fully-shadowed frames WITHOUT reset; the sigma gate must trip
+    // and the snap-hold must keep the blend at n=2 (alpha 0.5) until the
+    // accumulated visibility converges — a gate that fires once and then
+    // deadens on its own straddling moments decays at 1/n instead and the
+    // shadow never forms within the proof's window.
     let h = shared();
     let tracer = MetalShadowRayTracer::new(&h.device);
     let depth_tex = make_constant_depth(&h.device, "sv-snap-depth");
@@ -1482,6 +1508,6 @@ fn sv_channel_snaps_when_shadow_arrives() {
     assert!(
         last < 0.2,
         "sv history did not snap when a shadow arrived (still {last} after 6 fully-shadowed \
-         frames) — the 0.5 per-channel change gate is not engaging"
+         frames) — the sigma gate or its snap-hold is not engaging"
     );
 }

@@ -893,6 +893,10 @@ pub struct RenderScene {
     // SV-ACCUM moments: per-channel first/second visibility moments.
     rt_sv_m1_history: [Option<manifold_gpu::GpuTexture>; 2],
     rt_sv_m2_history: [Option<manifold_gpu::GpuTexture>; 2],
+    // SV-ACCUM snap-hold countdown (`.x`) — a sigma-gate trip holds the
+    // n=2 snap for 4 frames (the straddling moments deaden the gate right
+    // after a real crossing; see the binding-21 comment in raytrace.rs).
+    rt_sv_hold_history: [Option<manifold_gpu::GpuTexture>; 2],
     rt_depth_history: [Option<manifold_gpu::GpuTexture>; 2],
     rt_normal_history: [Option<manifold_gpu::GpuTexture>; 2],
     /// RT-T1-D (BUG-312): per-texel luminance moments (mean, mean-of-
@@ -1156,6 +1160,7 @@ impl RenderScene {
             rt_sv_history: [None, None],
             rt_sv_m1_history: [None, None],
             rt_sv_m2_history: [None, None],
+            rt_sv_hold_history: [None, None],
             rt_depth_history: [None, None],
             rt_normal_history: [None, None],
             rt_moments_history: [None, None],
@@ -1945,6 +1950,11 @@ impl RenderScene {
         self.rt_sv_m2_history = [
             make(width, height, rgba16, "node.render_scene rt_sv_m2_a (SV-ACCUM)"),
             make(width, height, rgba16, "node.render_scene rt_sv_m2_b (SV-ACCUM)"),
+        ]
+        .map(Some);
+        self.rt_sv_hold_history = [
+            make(width, height, rgba16, "node.render_scene rt_sv_hold_a (SV-ACCUM)"),
+            make(width, height, rgba16, "node.render_scene rt_sv_hold_b (SV-ACCUM)"),
         ]
         .map(Some);
         self.rt_depth_history = [
@@ -4774,6 +4784,8 @@ impl EffectNode for RenderScene {
                 let sv_m1_write = self.rt_sv_m1_history[write_idx].as_ref().expect("ensured above");
                 let sv_m2_read = self.rt_sv_m2_history[read_idx].as_ref().expect("ensured above");
                 let sv_m2_write = self.rt_sv_m2_history[write_idx].as_ref().expect("ensured above");
+                let sv_hold_read = self.rt_sv_hold_history[read_idx].as_ref().expect("ensured above");
+                let sv_hold_write = self.rt_sv_hold_history[write_idx].as_ref().expect("ensured above");
                 tracer.accumulate_irradiance(
                     gpu.native_enc,
                     &accumulate_params,
@@ -4801,6 +4813,8 @@ impl EffectNode for RenderScene {
                     sv_m1_write,
                     sv_m2_read,
                     sv_m2_write,
+                    sv_hold_read,
+                    sv_hold_write,
                     "node.render_scene RT-P2/RT-T1-C/RT-T1-D/RT-R2 accumulate_irradiance",
                 );
                 self.rt_history_ping = write_idx;
