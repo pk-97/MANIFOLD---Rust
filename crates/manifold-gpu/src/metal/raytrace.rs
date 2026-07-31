@@ -229,6 +229,11 @@ fn encode_blas_build(
     enc: &ProtocolObject<dyn MTLAccelerationStructureCommandEncoder>,
     obj: &RtObjectGeometry,
 ) -> (Blas, GpuBuffer) {
+    // Q2 probe: log BLAS build sizes
+    if std::env::var("MANIFOLD_PROBE_RT_ACCEL").is_ok() {
+        eprintln!("MANIFOLD_PROBE_RT_ACCEL: encode_blas_build triangle_count={}, vertex_buffer_size={}, vertex_stride={}, vertex_offset={}",
+            obj.triangle_count, obj.vertex_buffer.size(), obj.vertex_stride, obj.vertex_offset);
+    }
     let tri_desc = MTLAccelerationStructureTriangleGeometryDescriptor::descriptor();
     tri_desc.setVertexBuffer(Some(obj.vertex_buffer.raw()));
     tri_desc.setVertexFormat(MTLAttributeFormat::Float3);
@@ -859,6 +864,17 @@ struct AccumulateParams {
     // reprojection — replaces the three-pad layout at the same byte
     // offset so the float4x4s below stay 16-byte aligned.
     packed_float3 camera_pos;
+    // Camera-motion magnitude this frame (radians of view-direction turn
+    // plus a weighted translation term, computed CPU-side). 0 when the
+    // camera held still — every gate below then behaves byte-identically
+    // to before this field existed. The change gates CANNOT tell a real
+    // lighting change from motion-induced content change at a texel
+    // (disocclusion churn, GI gradient resampling, view-dependent
+    // reflection shift all move cur away from hist), so under motion they
+    // snapped on every frame and the snap→rebuild→retrip cycle boiled the
+    // image. The bands widen with motion; the CPU lighting key still
+    // snaps, so real cues keep landing mid-gesture.
+    float cam_motion;
     float4x4 inv_view_proj;
     float4x4 prev_view_proj;
 };
@@ -2166,6 +2182,27 @@ kernel void accumulate_irradiance(
     // Hoisted to function scope: used by both the irradiance
     // validity test and the reflection reprojection block (RT-R2).
     const float NORMAL_REJECT_COS_THRESHOLD = 0.9;
+    // DEPTH_REJECT_THRESHOLD: raw NDC-z units, directly comparable
+    // without linearizing (same discipline as `upsample_shadow`'s
+    // depth guide); 5e-3 rejects a different surface while
+    // tolerating one surface's NDC-z noise across a frame. Hoisted
+    // to function scope: the reflection block's rough-surface taps
+    // (bt→1) validate with the same test.
+    const float DEPTH_REJECT_THRESHOLD = 5e-3;
+    // Camera-motion gate band: every data-driven change gate below multiplies
+    // its tolerance by this. The gates compare cur against hist and cannot
+    // tell a real lighting change from motion-induced content change at a
+    // texel (disocclusion churn, GI gradient resampling, view-dependent
+    // reflection shift) — under a rotating camera they snapped on every
+    // frame, and the snap→rebuild→retrip cycle boiled the image (measured:
+    // history length oscillating 16→1.3 under a 0.08 rad/frame orbit, the
+    // accumulated reflection NOISIER than the raw trace). cam_motion = 0 on
+    // a held camera, so a static frame is byte-identical to before. The CPU
+    // lighting key is NOT scaled — real cues still land mid-gesture.
+    // 60: at 1°/frame (0.017 rad) the band is ~2x; a fast drag (0.1 rad)
+    // is ~7x — noise-scale motion stays inside, a hard cut still exceeds it.
+    const float RT_MOTION_GATE_SCALE = 60.0;
+    float motion_band = 1.0 + p.cam_motion * RT_MOTION_GATE_SCALE;
     // RT-R2 (RD6): hoisted declarations for the virtual-hit-point
     // reprojection — visible to both the irradiance validity block
     // and the reflection block that follows.
@@ -2217,11 +2254,6 @@ kernel void accumulate_irradiance(
                 // reprojection — the camera-motion smear. Exact self-
                 // reprojection lands fr=(0,0), weight 1 on the own tap, so
                 // static scenes are byte-identical.
-                // DEPTH_REJECT_THRESHOLD: raw NDC-z units, directly comparable
-                // without linearizing (same discipline as `upsample_shadow`'s
-                // depth guide); 5e-3 rejects a different surface while
-                // tolerating one surface's NDC-z noise across a frame.
-                const float DEPTH_REJECT_THRESHOLD = 5e-3;
                 float2 pf = prev_uv * float2(p.size) - 0.5;
                 int2 base = int2(floor(pf));
                 float2 fr = pf - float2(base);
@@ -2455,7 +2487,20 @@ kernel void accumulate_irradiance(
                     uint2 tt = uint2(t);
                     float4 nh = normal_history_read.read(tt);
                     bool normal_ok = dot(normalize(nh.xyz), cur_normal_prev) > NORMAL_REJECT_COS_THRESHOLD;
-                    if (normal_ok) {
+                    // Depth validation when (and only when) the reprojection is
+                    // a plain SURFACE reprojection (bt→1, roughness ≥ the RD6
+                    // blend): there the expected previous depth IS the surface
+                    // depth `rndc.z`, and the same test the diffuse channel
+                    // passes under rotation applies. Normal-only acceptance
+                    // let a parallel-but-different surface's stale reflection
+                    // blend in — under camera motion that mis-blend made the
+                    // accumulated channel measurably NOISIER than the raw
+                    // trace (hf 4.0 vs 2.7). For true virtual points (bt<1)
+                    // the depth test is invalid by construction (the virtual
+                    // image is never at the surface depth) and stays skipped.
+                    bool rdepth_ok = bt < 0.999
+                        || fabs(depth_history_read.read(tt).r - rndc.z) < DEPTH_REJECT_THRESHOLD;
+                    if (normal_ok && rdepth_ok) {
                         wsum += w[i];
                         rsum += w[i] * refl_history_read.read(tt).rgb;
                         nsum += w[i] * nh.w;
@@ -2493,11 +2538,23 @@ kernel void accumulate_irradiance(
                     bool refl_changed = refl_change_snap
                         || cpu_lighting_changed
                         || (rdluma > max(RT_REFL_CHANGE_SIGMAS * rsd,
-                                         RT_REFL_CHANGE_REL * rhist_luma)
+                                         RT_REFL_CHANGE_REL * rhist_luma) * motion_band
                             && rdluma > RT_REFL_CHANGE_ABS);
                     float rn = refl_changed ? 2.0 : (nsum / wsum + 1.0);
-                    float ralpha = max(1.0 / rn, RT_REFL_ACCUM_ALPHA_MIN);
-                    refl_hist_len = min(rn, 1.0 / RT_REFL_ACCUM_ALPHA_MIN);
+                    // Specular history is VIEW-DEPENDENT: under camera motion
+                    // a validated texel's stored reflection no longer matches
+                    // what the current view sees (the lobe moved, the
+                    // reflected scene parallaxed) — no reprojection can fix
+                    // that, so the honest response is to carry LESS of it.
+                    // The history cap tightens with cam_motion (5.0: a fast
+                    // 0.17-magnitude drag holds alpha ≈ 0.84 — the output
+                    // leans almost fully on the current frame, so stale
+                    // specular history can't smear; a slow 0.02 drag holds
+                    // n≈10; a held camera gets the 40-frame static cap).
+                    float motion_refl_floor = max(RT_REFL_ACCUM_ALPHA_MIN,
+                                                  min(p.cam_motion * 5.0, 0.9));
+                    float ralpha = max(1.0 / rn, motion_refl_floor);
+                    refl_hist_len = min(rn, 1.0 / motion_refl_floor);
                     refl_write = mix(clamp_refl_history(rsum / wsum, hi_refl, tid, p.size), cur_refl.rgb, ralpha);
                 }
             }
@@ -2994,6 +3051,17 @@ pub struct AccumulateParams {
     /// replaces — keeps `inv_view_proj`/`prev_view_proj` at the same
     /// 16-byte-aligned offsets).
     pub camera_pos: [f32; 3],
+    /// Camera-motion magnitude this frame: radians of view-direction turn
+    /// plus a weighted translation term (see `RenderScene`'s computation).
+    /// 0 on a held camera — the kernel's change gates then behave
+    /// byte-identically to before this field existed. Under motion the
+    /// gates' bands widen (they cannot tell a real lighting change from
+    /// motion-induced content change, and snapped every frame — the
+    /// snap→rebuild→retrip cycle was the camera-rotation boil); the CPU
+    /// lighting key still snaps, so real cues keep landing mid-gesture.
+    pub cam_motion: f32,
+    /// Padding to the 16-byte matrix alignment (MSL pads identically).
+    pub _cam_motion_pad: [f32; 3],
     /// RT-T1-C (BUG-311): current-frame inverse view-proj, for
     /// reconstructing this texel's world position from `depth_tex` — SAME
     /// matrix `ShadowRayParams::inv_view_proj` already carries this frame.
@@ -3006,15 +3074,15 @@ pub struct AccumulateParams {
 }
 
 // `size`(8) + `alpha`(4) + `reset`(4) + `obj_count`(4) + camera_pos(12)
-// = 32 bytes — a multiple of 16, so both `float4x4`s that follow land on
-// a 16-byte boundary (RT-R2's camera_pos replaces the old u32 pads at
-// the same offset).
+// + cam_motion(4) + pad(12) = 48 bytes — a multiple of 16, so both
+// `float4x4`s that follow land on a 16-byte boundary.
 // Asserted directly rather than re-derived, same discipline as the
 // `ShadowRayParams` guard above.
 const _: () = assert!(std::mem::offset_of!(AccumulateParams, camera_pos) == 20);
-const _: () = assert!(std::mem::offset_of!(AccumulateParams, inv_view_proj) == 32);
-const _: () = assert!(std::mem::offset_of!(AccumulateParams, prev_view_proj) == 96);
-const _: () = assert!(std::mem::size_of::<AccumulateParams>() == 160);
+const _: () = assert!(std::mem::offset_of!(AccumulateParams, cam_motion) == 32);
+const _: () = assert!(std::mem::offset_of!(AccumulateParams, inv_view_proj) == 48);
+const _: () = assert!(std::mem::offset_of!(AccumulateParams, prev_view_proj) == 112);
+const _: () = assert!(std::mem::size_of::<AccumulateParams>() == 176);
 
 impl AccumulateParams {
     pub fn new(
@@ -3023,6 +3091,7 @@ impl AccumulateParams {
         reset: bool,
         obj_count: u32,
         camera_pos: [f32; 3],
+        cam_motion: f32,
         inv_view_proj: [[f32; 4]; 4],
         prev_view_proj: [[f32; 4]; 4],
     ) -> Self {
@@ -3032,6 +3101,8 @@ impl AccumulateParams {
             reset: reset as u32,
             obj_count,
             camera_pos,
+            cam_motion,
+            _cam_motion_pad: [0.0; 3],
             inv_view_proj,
             prev_view_proj,
         }

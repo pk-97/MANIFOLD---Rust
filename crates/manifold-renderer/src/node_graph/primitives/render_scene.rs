@@ -626,6 +626,14 @@ pub struct RenderScene {
     /// `None` = no history yet (same first-frame seeding rule as
     /// `prev_model`); reset on every `rebuild`.
     prev_view_proj: Option<[[f32; 4]; 4]>,
+    /// Previous frame's camera position + forward direction, captured
+    /// alongside `prev_view_proj` (same first-frame seeding and rebuild
+    /// reset). Feeds `AccumulateParams::cam_motion`: the temporal change
+    /// gates cannot tell a real lighting change from motion-induced texel
+    /// change, so their bands widen with this magnitude — without it a
+    /// rotating camera snapped the gates every frame and the
+    /// snap→rebuild→retrip cycle boiled the image.
+    prev_cam_state: Option<([f32; 3], [f32; 3])>,
     /// RAYTRACING_DESIGN.md section 5.2 P4: monotonic per-node frame counter
     /// driving the camera-jitter sequence
     /// ([`crate::metalfx_temporal_upscaler::jitter_offset`]) when
@@ -1100,6 +1108,7 @@ impl RenderScene {
             rt_temporal_unavailable_logged: false,
             prev_model: Vec::new(),
             prev_view_proj: None,
+            prev_cam_state: None,
             jitter_frame_index: 0,
             dummy_texture: None,
             sampler: None,
@@ -1327,6 +1336,7 @@ impl RenderScene {
         // starts in.
         self.prev_model = vec![None; n_obj];
         self.prev_view_proj = None;
+        self.prev_cam_state = None;
 
         // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P4 (R5): format every
         // port name exactly once, here, at rebuild time (only reached on an
@@ -3322,6 +3332,33 @@ impl EffectNode for RenderScene {
         // motion, not a spurious first-frame zero.
         let prev_view_proj = self.prev_view_proj.unwrap_or(view_proj);
         self.prev_view_proj = Some(view_proj);
+        // Camera-motion magnitude for the accumulator's change gates
+        // (`AccumulateParams::cam_motion`): radians of view-direction turn
+        // plus translation weighted into the same units (0.3: at the
+        // typical 2–4 unit object distance, orbiting contributes roughly
+        // equally through both terms). First frame after load/rebuild is
+        // 0 — a held camera feeds the gates exactly 0, keeping the static
+        // path byte-identical.
+        let cam_motion = match self.prev_cam_state {
+            Some((ppos, pfwd)) => {
+                let d = (pfwd[0] * cam.fwd[0] + pfwd[1] * cam.fwd[1] + pfwd[2] * cam.fwd[2])
+                    .clamp(-1.0, 1.0);
+                let rot = d.acos();
+                let dp = ((cam.pos[0] - ppos[0]).powi(2)
+                    + (cam.pos[1] - ppos[1]).powi(2)
+                    + (cam.pos[2] - ppos[2]).powi(2))
+                .sqrt();
+                rot + dp * 0.3
+            }
+            None => 0.0,
+        };
+        self.prev_cam_state = Some((cam.pos, cam.fwd));
+        if std::env::var_os("MANIFOLD_PROBE").is_some() && self.jitter_frame_index % 60 == 0 {
+            eprintln!(
+                "[probe] cam_motion={cam_motion:.4} pos=({:.3},{:.3},{:.3}) fwd=({:.3},{:.3},{:.3})",
+                cam.pos[0], cam.pos[1], cam.pos[2], cam.fwd[0], cam.fwd[1], cam.fwd[2]
+            );
+        }
 
         // ---- Pass 1 (mutable phase): validate every object's required
         // inputs, compose its model matrix + uniforms, and get-or-compile
@@ -4362,6 +4399,14 @@ impl EffectNode for RenderScene {
 
             if build_this_frame {
                 let tracer = self.rt_tracer.as_ref().expect("ensured above");
+                // Q1 probe: what did build_accel see?
+                if std::env::var("MANIFOLD_PROBE_RT_ACCEL").is_ok() {
+                    eprintln!("MANIFOLD_PROBE_RT_ACCEL: build called with {} objects", objects.len());
+                    for (i, o) in objects.iter().enumerate() {
+                        let vgen = opaque_draws.get(i).and_then(|d| d.vertices_generation);
+                        eprintln!("  object[{}]: triangle_count={}, vertices_generation={:?}", i, o.triangle_count, vgen);
+                    }
+                }
                 self.rt_accel = Some(tracer.build_accel(gpu.device, &objects));
                 self.rt_accel_topo_key = Some(topo_key);
                 self.rt_accel_content_key = Some(content_key);
@@ -4750,6 +4795,7 @@ impl EffectNode for RenderScene {
                     reset,
                     opaque_draws.len() as u32,
                     cam.pos,
+                    cam_motion,
                     inv_view_proj,
                     prev_view_proj,
                 )

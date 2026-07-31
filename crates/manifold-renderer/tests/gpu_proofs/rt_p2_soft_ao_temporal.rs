@@ -458,7 +458,7 @@ fn run_accumulate_with_sv(
     let params_buffer =
         device.create_buffer_shared(std::mem::size_of::<AccumulateParams>() as u64);
     let params =
-        AccumulateParams::new([W, H], alpha, reset, obj_count, [0.0; 3], IDENTITY, prev_view_proj);
+        AccumulateParams::new([W, H], alpha, reset, obj_count, [0.0; 3], 0.0, IDENTITY, prev_view_proj);
     let obj_motion_buffer =
         device.create_buffer_shared(std::mem::size_of::<[[f32; 4]; 4]>() as u64);
     {
@@ -861,7 +861,7 @@ fn refl_channel_blends_history_and_current() {
     let sv_hold_out = make_history(device, "bisect-sv-hold-out");
 
     // ── Leg 1: reset = false — history must blend toward current ──────
-    let blend_params = AccumulateParams::new([W, H], 0.1, false, 0, [0.0; 3], IDENTITY, IDENTITY);
+    let blend_params = AccumulateParams::new([W, H], 0.1, false, 0, [0.0; 3], 0.0, IDENTITY, IDENTITY);
     {
         let mut enc = device.create_encoder("bisect-blend");
         let gpu = RendererGpuEncoder::new(&mut enc, device);
@@ -985,7 +985,7 @@ fn refl_channel_blends_history_and_current() {
 
     // ── Leg 2: reset = true — output must equal C exactly ─────────────
     let refl_output_reset = make_history(device, "bisect-refl-output-reset");
-    let reset_params = AccumulateParams::new([W, H], 0.1, true, 0, [0.0; 3], IDENTITY, IDENTITY);
+    let reset_params = AccumulateParams::new([W, H], 0.1, true, 0, [0.0; 3], 0.0, IDENTITY, IDENTITY);
     {
         let mut enc = device.create_encoder("bisect-reset");
         let gpu = RendererGpuEncoder::new(&mut enc, device);
