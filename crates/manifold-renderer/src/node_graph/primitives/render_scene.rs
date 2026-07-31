@@ -234,7 +234,7 @@ const IRRADIANCE_ACCUM_ALPHA: f32 = 0.01;
 /// emissive bounce, more GPU cost, on top of `AO_SAMPLES_PER_PIXEL`'s own
 /// rays in the SAME half-res dispatch); Peter's morning gate tunes within
 /// it.
-const GI_SAMPLES_PER_PIXEL: u32 = 2;
+const GI_SAMPLES_PER_PIXEL: u32 = 4;
 /// GGX reflection rays per pixel, in the same half-res dispatch. Was 1,
 /// which measured 4.7 sRGB levels of frame-to-frame change on a fully static
 /// scene with a 171-level 99.9th percentile — variance no temporal filter can
