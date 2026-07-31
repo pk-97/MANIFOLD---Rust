@@ -14,7 +14,7 @@
 //! `L = intensity = 1.0`, the surface must read exactly 1.0.
 //!
 //! The occlusion tests below probe two regions of ONE render rather than
-//! toggling `rt_enabled` between two renders — `furnace_occlusion_scene_json`'s
+//! toggling `rt_enabled` between two renders — `furnace_wall_corner_scene_json`'s
 //! doc comment states why an on/off toggle is the wrong comparison here (it
 //! is self-defeating: with the ground material's `ambient` at zero, the RT
 //! irradiance term is algebraically zero either way). Every RT-on render in
@@ -264,39 +264,78 @@ fn uniform_environment_white_surface_returns_the_environment_radiance() {
     );
 }
 
-/// The occluder carries the SAME albedo-1 white material as the ground, on
-/// purpose. An earlier revision painted it 0.5 grey, and this gate passed at
-/// `ratio 0.5077` — reading the plate's own albedo as if it were shade. The
-/// probe under the plate sees the PLATE, not the floor, so a darker occluder
-/// manufactures the exact number the test is looking for. Matching the albedo
-/// removes that confound: with both surfaces white the ratio is `1.0010`, i.e.
-/// no darkening anywhere in the frame. Never reintroduce a colour difference
-/// between these two materials.
+/// Second geometry, replacing the earlier hovering-plate occluder. That
+/// version had TWO fatal flaws, both found by direct kernel/geometry proof
+/// rather than by eye:
 ///
-/// World-space probe points on `furnace_occlusion_scene_json`'s ground
-/// plane: `SHADED_WORLD` sits directly under the occluder's centre,
-/// `OPEN_WORLD` sits well clear of it (the occluder is a 3x3 plate centred
-/// on the origin — 2.2 world units out on both axes clears it with margin)
-/// while staying inside the camera's visible footprint on the plane.
-const SHADED_WORLD: [f32; 3] = [0.0, 0.0, 0.0];
-const OPEN_WORLD: [f32; 3] = [2.2, 0.0, 2.2];
+/// - Painted the plate 0.5 grey against a white floor. The probe under it
+///   read the PLATE's own albedo, not any shade on the floor — an
+///   albedo-vs-shade confound that made the gate pass at `ratio 0.5077`,
+///   which is just `0.5/1.0`.
+/// - Even repainted white (removing that confound), the plate hovers ABOVE
+///   the floor: the "shaded" probe pixel is the plate's TOP surface, which
+///   sees the full uniform sky no matter how correct occlusion becomes.
+///   The gate could never pass again once the paint confound was fixed —
+///   a trap for whoever fixed the renderer next.
+///
+/// A floor-wall CORNER fixes both: the wall's base edge is welded to the
+/// floor (`pos_y = size_y/2` after a `rot_x = pi/2` rotation puts the base
+/// exactly at world y=0 — see `furnace_wall_corner_scene_json`), so no
+/// probe can ever land on the wall itself (proven below, not eyeballed),
+/// and a point in the corner has roughly half its sky blocked by
+/// construction — the exact behaviour the gate cares about.
+///
+/// World-space probe points, both ON THE FLOOR (y=0):
+/// `CORNER_WORLD` sits 0.8 units in front of the wall's base line (wall at
+/// z=-2.5), `OPEN_WORLD` sits 5.5 units from it, near the room's open side.
+///
+/// Proof neither probe ray can hit the wall (the wall is a flat vertical
+/// plane at world z=-2.5, spanning x in [-1.25,1.25], y in [0,2]):
+/// `Camera::orbit_perspective(ORBIT, TILT, DISTANCE, ...)`'s analytic
+/// formula gives `cam.pos.z = DISTANCE * orbit.sin() * tilt.cos() =
+/// 10 * sin(0.7) * cos(0.95) = 3.7473`. A camera ray to world point `p` is
+/// the segment from `cam.pos` to `p`; its z-coordinate along the segment is
+/// the linear interpolation `z(t) = cam.pos.z + t*(p.z - cam.pos.z)`,
+/// `t` in `[0,1]`, which stays strictly between `cam.pos.z` and `p.z` (a
+/// convex combination never leaves the interval its endpoints span). Both
+/// `cam.pos.z` (3.7473) and BOTH probes' z (-1.7 and 3.0) are `> -2.5`, so
+/// `z(t) > -2.5` for the WHOLE segment in both cases — the ray never
+/// reaches the wall's z=-2.5 plane at all, regardless of x/y, so it cannot
+/// intersect the wall rectangle. Both probes are guaranteed to show floor.
+///
+/// A second, computed (not eyeballed) check on top of that: the SAMPLING
+/// WINDOW around each probe pixel (`region_luma`'s `radius=5`, a 11x11
+/// block) must also stay clear of the wall's own on-screen footprint, or a
+/// neighbouring pixel inside the window could show the wall face instead
+/// of floor. `Camera::project_to_pixel` puts the wall's base edge at
+/// `(78.6,36.5)`-`(103.6,56.2)` and `CORNER_WORLD` at `(82.5,51.3)` — a
+/// straight line in world space projects to a straight line on screen
+/// (a projective-transform property), so interpolating that edge across
+/// the window's x-range `[77.5,87.5]` gives edge-y in `[35.7,43.5]`,
+/// strictly above (smaller-y than) the window's y-range `[46.3,56.3]` —
+/// at least a 2.8px margin, so no pixel in the window can be the wall.
+const CORNER_WORLD: [f32; 3] = [0.0, 0.0, -1.7];
+const OPEN_WORLD: [f32; 3] = [0.0, 0.0, 3.0];
 
 /// Same ground plane and white Lambertian material as
-/// `white_surface_scene_json`, plus a second, non-emissive 3x3 occluder
-/// grid hovering `0.6` world units above the ground centre (`transform_1`'s
-/// `pos_y`) — mirroring `rt_bug17r3_lightless_gi.rs`'s emitter-quad
-/// geometry, but opaque and unlit rather than emissive. `rt_enabled` is
-/// always true — this is ONE render, probed at two screen regions, not an
-/// RT-on/RT-off toggle (an RT-off comparison here would be self-defeating:
-/// with `ground_ambient` at 0.0, no lights, and no emission, the RT
-/// irradiance term `ambient_color * ao + gi` is algebraically zero either
-/// way, so toggling `rt_enabled` changes nothing by construction and
-/// proves nothing about whether occlusion traced correctly).
-/// `ground_ambient` is exposed so the diagnostic test below can compare the
-/// shaded-region reading at ambient 0.0 vs 1.0.
-fn furnace_occlusion_scene_json(ground_ambient: f32) -> String {
+/// `white_surface_scene_json`, plus a second, albedo-1 white, non-emissive
+/// grid rotated vertical (`rot_x = pi/2`) and positioned so its base edge
+/// meets the floor at z=-2.5, forming a floor-wall corner well inside the
+/// camera's view (`node.grid_mesh`'s flat XZ-plane output lies in local
+/// `(x, 0, z)`; `rot_x = pi/2` maps that to world `(x, -z, 0)` — see
+/// `render_scene.rs`'s `euler_xyz_columns` — so `pos_y = size_y/2` puts the
+/// wall's base exactly at world y=0 and its top at y=size_y).
+/// `rt_enabled` is always true — this is ONE render, probed at two screen
+/// regions, not an RT-on/RT-off toggle (an RT-off comparison here would be
+/// self-defeating: with `ground_ambient` at 0.0, no lights, and no
+/// emission, the RT irradiance term `ambient_color * ao + gi` is
+/// algebraically zero either way, so toggling `rt_enabled` changes nothing
+/// by construction and proves nothing about whether occlusion traced
+/// correctly). `ground_ambient` is exposed so the diagnostic test below can
+/// compare the corner-region reading at ambient 0.0 vs 1.0.
+fn furnace_wall_corner_scene_json(ground_ambient: f32) -> String {
     format!(
-        r#"{{"version":2,"name":"RtFurnaceOcclusion","nodes":[
+        r#"{{"version":2,"name":"RtFurnaceWallCorner","nodes":[
         {{"id":0,"typeId":"system.generator_input","nodeId":"input"}},
         {{"id":1,"typeId":"node.grid_mesh","nodeId":"ground_grid","params":{{
             "max_capacity":{{"type":"Int","value":8192}},
@@ -307,17 +346,20 @@ fn furnace_occlusion_scene_json(ground_ambient: f32) -> String {
         {{"id":2,"typeId":"node.make_triangles","nodeId":"ground_tris","params":{{
             "src_cols":{{"type":"Int","value":20}},
             "src_rows":{{"type":"Int","value":20}}}}}},
-        {{"id":5,"typeId":"node.grid_mesh","nodeId":"occluder_grid","params":{{
+        {{"id":5,"typeId":"node.grid_mesh","nodeId":"wall_grid","params":{{
             "max_capacity":{{"type":"Int","value":8192}},
             "resolution_x":{{"type":"Int","value":10}},
             "resolution_y":{{"type":"Int","value":10}},
-            "size_x":{{"type":"Float","value":3.0}},
-            "size_y":{{"type":"Float","value":3.0}}}}}},
-        {{"id":6,"typeId":"node.make_triangles","nodeId":"occluder_tris","params":{{
+            "size_x":{{"type":"Float","value":2.5}},
+            "size_y":{{"type":"Float","value":2.0}}}}}},
+        {{"id":6,"typeId":"node.make_triangles","nodeId":"wall_tris","params":{{
             "src_cols":{{"type":"Int","value":10}},
             "src_rows":{{"type":"Int","value":10}}}}}},
-        {{"id":7,"typeId":"node.transform_3d","nodeId":"occluder_xform","params":{{
-            "pos_y":{{"type":"Float","value":0.6}}}}}},
+        {{"id":7,"typeId":"node.transform_3d","nodeId":"wall_xform","params":{{
+            "pos_x":{{"type":"Float","value":0.0}},
+            "pos_y":{{"type":"Float","value":1.0}},
+            "pos_z":{{"type":"Float","value":-2.5}},
+            "rot_x":{{"type":"Float","value":1.5707963}}}}}},
         {{"id":3,"typeId":"node.orbit_camera","nodeId":"cam","params":{{
             "orbit":{{"type":"Float","value":{ORBIT}}},
             "tilt":{{"type":"Float","value":{TILT}}},
@@ -335,7 +377,7 @@ fn furnace_occlusion_scene_json(ground_ambient: f32) -> String {
             "ambient":{{"type":"Float","value":{ground_ambient}}},
             "metallic":{{"type":"Float","value":0.0}},
             "roughness":{{"type":"Float","value":1.0}}}}}},
-        {{"id":9,"typeId":"node.pbr_material","nodeId":"occluder_mat","params":{{
+        {{"id":9,"typeId":"node.pbr_material","nodeId":"wall_mat","params":{{
             "color_r":{{"type":"Float","value":1.0}},
             "color_g":{{"type":"Float","value":1.0}},
             "color_b":{{"type":"Float","value":1.0}},
@@ -363,92 +405,95 @@ fn furnace_occlusion_scene_json(ground_ambient: f32) -> String {
     )
 }
 
-/// The real gate, one render, two regions. The physics is unarguable: the
-/// region directly under the occluder sees a small fraction of the uniform
-/// environment, the open region on the same plane sees essentially all of
-/// it, so the shaded region must read substantially darker — no RT-on/
-/// RT-off toggle needed or wanted (see `furnace_occlusion_scene_json`'s
+/// The real gate, one render, two regions. The physics is unarguable: a
+/// point in a floor-wall corner has roughly half its sky blocked by
+/// construction, the open region on the same floor sees essentially all of
+/// it, so the corner region must read substantially darker — no RT-on/
+/// RT-off toggle needed or wanted (see `furnace_wall_corner_scene_json`'s
 /// doc comment for why that comparison is self-defeating here).
 /// `assert_rt_dispatched` (inside `render_readback_confirmed`) rules out
-/// the vacuous case where this whole scene rendered pure raster.
+/// the vacuous case where this whole scene rendered pure raster. A PNG
+/// dump of every render lands at `/tmp/rt_furnace_wall_corner.png`.
 ///
-/// FAILS TODAY, measured: `open=0.97266 shaded=0.97362 ratio=1.0010` — no
-/// darkening anywhere. A frame dump of this exact scene is flat white: a
-/// plate hovering over a floor under a uniform sky, RT on, and no contact
-/// shadow at all. Cause is architectural, not probe placement. The kernel
-/// writes `irradiance = ambient_color * ao + gi`, and here `ambient_color`
-/// is zero (material ambient 0.0) and `gi` is zero (no lights, so no sun
-/// casters; no emissives), so traced occlusion has nothing to multiply.
-/// Meanwhile the term that actually lights this scene, `diffuse_ibl`, is
-/// gated only by the material's BAKED occlusion texture and never sees the
-/// traced result. No probe placement rescues this.
+/// FAILS TODAY, measured: `open=0.97314 corner=0.97362 ratio=1.0005` — no
+/// darkening anywhere; the PNG is flat white, floor and wall both lit but
+/// no shadow in the corner. Cause is architectural, not probe placement
+/// (CORNER_WORLD/OPEN_WORLD's doc comment proves both probes read the
+/// floor, not the wall). The kernel writes `irradiance = ambient_color *
+/// ao + gi`, and here `ambient_color` is zero (material ambient 0.0) and
+/// `gi` is zero (no lights, so no sun casters; no emissives), so traced
+/// occlusion has nothing to multiply. Meanwhile the term that actually
+/// lights this scene, `diffuse_ibl`, is gated only by the material's BAKED
+/// occlusion texture and never sees the traced result. No probe placement
+/// rescues this.
 ///
 /// Un-ignore with BUG-yq1d (traced-ao-never-darkens-environment-diffuse).
 #[test]
 #[ignore = "BUG-yq1d (traced-ao-never-darkens-environment-diffuse): traced occlusion multiplies a term that is zero in an environment-lit scene"]
 fn traced_occlusion_darkens_the_shaded_region_relative_to_the_open_plane() {
-    let json = furnace_occlusion_scene_json(0.0);
-    let (bytes, w, h) = render_readback_confirmed(&json, "furnace occlusion scene, ambient=0.0, RT enabled");
+    let json = furnace_wall_corner_scene_json(0.0);
+    let (bytes, w, h) = render_readback_confirmed(&json, "furnace wall-corner scene, ambient=0.0, RT enabled");
+
+    write_png(&bytes, w, h, "/tmp/rt_furnace_wall_corner.png");
 
     let cam = Camera::orbit_perspective(ORBIT, TILT, DISTANCE, FOV_Y, 0.0, 0.0, NEAR, FAR);
-    let shaded_px = cam
-        .project_to_pixel(SHADED_WORLD, w, h)
-        .expect("shaded probe must project in front of the camera");
+    let corner_px = cam
+        .project_to_pixel(CORNER_WORLD, w, h)
+        .expect("corner probe must project in front of the camera");
     let open_px = cam
         .project_to_pixel(OPEN_WORLD, w, h)
         .expect("open probe must project in front of the camera");
 
-    const RADIUS: i32 = 8;
-    let shaded = region_luma(&bytes, w, h, shaded_px.px, shaded_px.py, RADIUS);
+    const RADIUS: i32 = 5;
+    let corner = region_luma(&bytes, w, h, corner_px.px, corner_px.py, RADIUS);
     let open = region_luma(&bytes, w, h, open_px.px, open_px.py, RADIUS);
     eprintln!(
-        "RT furnace occlusion (single render): open={open:.5} shaded={shaded:.5} ratio(shaded/open)={:.4}",
-        shaded / open
+        "RT furnace wall corner (single render): open={open:.5} corner={corner:.5} ratio(corner/open)={:.4}",
+        corner / open
     );
 
     const DARKENING_FRACTION: f64 = 0.20;
     assert!(
-        shaded <= open * (1.0 - DARKENING_FRACTION),
-        "the region directly under the occluder must read at least {:.0}% darker than the open \
-         region on the SAME plane in the SAME render (it sees a small fraction of the uniform \
-         environment; the open region sees essentially all of it): open={open:.5} \
-         shaded={shaded:.5} ratio={:.4} — if this fails, that is a real finding about the RT \
-         diffuse-occlusion path (or the raster environment-diffuse term it doesn't reach), not a \
-         test to retune",
+        corner <= open * (1.0 - DARKENING_FRACTION),
+        "the floor-wall corner region must read at least {:.0}% darker than the open floor \
+         region in the SAME render (a point in the corner has roughly half its sky blocked by \
+         construction): open={open:.5} corner={corner:.5} ratio={:.4} — if this fails, that is a \
+         real finding about the RT diffuse-occlusion path (or the raster environment-diffuse \
+         term it doesn't reach), not a test to retune",
         DARKENING_FRACTION * 100.0,
-        shaded / open,
+        corner / open,
     );
 }
 
 /// DIAGNOSTIC, not a gate — no assertion on which reading is "correct".
-/// `furnace_occlusion_scene_json`'s doc comment names the mechanism: with
+/// `furnace_wall_corner_scene_json`'s doc comment names the mechanism: with
 /// the ground material's `ambient` at 0.0 and no lights/emission, the RT
 /// irradiance term (`ambient_color * ao + gi`) is algebraically zero
 /// regardless of whether occlusion traced correctly, because there is
 /// nothing for it to modulate. This records whether lifting `ambient` off
-/// zero is what makes traced occlusion visible at the shaded probe at all
+/// zero is what makes traced occlusion visible at the corner probe at all
 /// — evidence for or against the "occlusion only reaches a flat ambient
 /// term, never the baked environment-diffuse term" hypothesis, without
 /// this test taking a position on it.
 #[test]
 fn diagnostic_shaded_region_luma_with_ambient_zero_vs_ambient_one() {
-    let zero_json = furnace_occlusion_scene_json(0.0);
-    let one_json = furnace_occlusion_scene_json(1.0);
+    let zero_json = furnace_wall_corner_scene_json(0.0);
+    let one_json = furnace_wall_corner_scene_json(1.0);
     let (zero_bytes, w, h) =
-        render_readback_confirmed(&zero_json, "furnace occlusion scene, ambient=0.0, RT enabled");
+        render_readback_confirmed(&zero_json, "furnace wall-corner scene, ambient=0.0, RT enabled");
     let (one_bytes, _, _) =
-        render_readback_confirmed(&one_json, "furnace occlusion scene, ambient=1.0, RT enabled");
+        render_readback_confirmed(&one_json, "furnace wall-corner scene, ambient=1.0, RT enabled");
 
     let cam = Camera::orbit_perspective(ORBIT, TILT, DISTANCE, FOV_Y, 0.0, 0.0, NEAR, FAR);
-    let shaded_px = cam
-        .project_to_pixel(SHADED_WORLD, w, h)
-        .expect("shaded probe must project in front of the camera");
+    let corner_px = cam
+        .project_to_pixel(CORNER_WORLD, w, h)
+        .expect("corner probe must project in front of the camera");
 
-    const RADIUS: i32 = 8;
-    let ambient_zero = region_luma(&zero_bytes, w, h, shaded_px.px, shaded_px.py, RADIUS);
-    let ambient_one = region_luma(&one_bytes, w, h, shaded_px.px, shaded_px.py, RADIUS);
+    const RADIUS: i32 = 5;
+    let ambient_zero = region_luma(&zero_bytes, w, h, corner_px.px, corner_px.py, RADIUS);
+    let ambient_one = region_luma(&one_bytes, w, h, corner_px.px, corner_px.py, RADIUS);
     eprintln!(
-        "RT furnace occlusion diagnostic: shaded region luma at ambient=0.0 -> {ambient_zero:.5}, \
+        "RT furnace occlusion diagnostic: corner region luma at ambient=0.0 -> {ambient_zero:.5}, \
          at ambient=1.0 -> {ambient_one:.5}"
     );
 }
@@ -467,76 +512,3 @@ fn write_png(bytes: &[u8], w: u32, h: u32, path: &str) {
         .unwrap_or_else(|e| panic!("write {path}: {e}"));
 }
 
-/// Raw (untonemapped) linear RGB of one pixel — the value `region_luma`
-/// averages over a window, read at a single texel instead.
-fn raw_pixel_rgb(bytes: &[u8], w: u32, px: f32, py: f32) -> [f32; 3] {
-    let x = px.round() as u32;
-    let y = py.round() as u32;
-    let idx = ((y * w + x) * 8) as usize;
-    let p = &bytes[idx..idx + 8];
-    [
-        f16::from_le_bytes([p[0], p[1]]).to_f32(),
-        f16::from_le_bytes([p[2], p[3]]).to_f32(),
-        f16::from_le_bytes([p[4], p[5]]).to_f32(),
-    ]
-}
-
-/// DIAGNOSTIC — establishes what surface the "shaded" probe in
-/// `traced_occlusion_darkens_the_shaded_region_relative_to_the_open_plane`
-/// is actually reading, per the lead's kernel read: `crates/manifold-gpu/
-/// src/metal/raytrace.rs`'s `gi` only accumulates from `hit_emissive` and a
-/// sun-caster (`kind == 0`) bounce term; this scene has zero lights (no
-/// casters) and a non-emissive occluder, so `gi` is exactly zero, and with
-/// `ambient` at 0.0 `ambient_color` is zero too — the RT irradiance term
-/// `ambient_color * ao + gi` this scene produces is 0 by construction,
-/// regardless of whether occlusion traced correctly. The leading
-/// alternative explanation: `SHADED_WORLD` is the point directly under the
-/// occluder's centre, and the occluder hovers only 0.6 units above it — a
-/// camera ray to that ground point at this file's oblique (not straight-
-/// down) framing may pass through the occluder plate itself before
-/// reaching the ground, in which case the "shaded" reading is the
-/// occluder's OWN albedo reflecting the same uniform environment directly
-/// (the same closed-form `albedo * L` this file's white-surface test
-/// checks), not an occlusion effect on the ground at all. If the occluder
-/// material's own albedo matches the ground's, this alternative predicts
-/// the shaded reading should be close to the OPEN reading and to the
-/// ground-only measurement, not darker than either.
-///
-/// Renders the two-object scene (occluder present) and the ground-only
-/// scene (`white_surface_scene_json`, occluder absent) at the SAME camera,
-/// probes the identical `SHADED_WORLD` pixel in both, dumps the two-object
-/// framebuffer to PNG, and prints the raw per-channel RGB (not the
-/// region-averaged luma) at that one texel for both scenes. No assertion —
-/// this is "find out", not a gate.
-#[test]
-fn diagnose_what_the_shaded_probe_pixel_actually_shows() {
-    let occluder_json = furnace_occlusion_scene_json(0.0);
-    let ground_only_json = white_surface_scene_json();
-
-    let (occluder_bytes, w, h) =
-        render_readback_confirmed(&occluder_json, "furnace occlusion scene (occluder present), RT enabled");
-    let (ground_only_bytes, _, _) =
-        render_readback_confirmed(&ground_only_json, "furnace ground-only scene (occluder absent), RT enabled");
-
-    let png_path = "/tmp/rt_furnace_occluder_present.png";
-    write_png(&occluder_bytes, w, h, png_path);
-
-    let cam = Camera::orbit_perspective(ORBIT, TILT, DISTANCE, FOV_Y, 0.0, 0.0, NEAR, FAR);
-    let shaded_px = cam
-        .project_to_pixel(SHADED_WORLD, w, h)
-        .expect("shaded probe must project in front of the camera");
-
-    const RADIUS: i32 = 8;
-    let occluder_region = region_luma(&occluder_bytes, w, h, shaded_px.px, shaded_px.py, RADIUS);
-    let ground_only_region = region_luma(&ground_only_bytes, w, h, shaded_px.px, shaded_px.py, RADIUS);
-    let occluder_pixel = raw_pixel_rgb(&occluder_bytes, w, shaded_px.px, shaded_px.py);
-    let ground_only_pixel = raw_pixel_rgb(&ground_only_bytes, w, shaded_px.px, shaded_px.py);
-
-    eprintln!(
-        "RT furnace shaded-probe diagnosis: pixel=({:.0},{:.0}) \
-         occluder-present region_luma={occluder_region:.5} raw_rgb={occluder_pixel:?} | \
-         occluder-absent (ground-only) region_luma={ground_only_region:.5} raw_rgb={ground_only_pixel:?} | \
-         PNG={png_path}",
-        shaded_px.px, shaded_px.py,
-    );
-}
