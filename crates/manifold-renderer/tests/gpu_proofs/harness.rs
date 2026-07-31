@@ -399,3 +399,131 @@ fn leak_static_str(s: String) -> &'static str {
 pub fn port_is_texture(ty: &PortType) -> bool {
     matches!(ty, PortType::Texture2D | PortType::Texture2DTyped(_))
 }
+
+/// Retry a closure once if it panics with the GPU-contention signature
+/// (`command buffer did not reach Completed`, the panic from
+/// `GpuEncoder::commit_and_wait_completed` when the device wedges or kills the
+/// buffer as `InnocentVictim`).
+///
+/// Two sessions sharing one Metal device make the gpu-proofs suite contend:
+/// another process hammers the device, a commit times out, and the commit
+/// panic is a liar — the frame itself was fine, the device was just busy
+/// (BUG-m0c9). Every observed failure of this class is a commit error, never a
+/// value assert, and each named victim passes in isolation on a quiet machine.
+/// This turns that transient into a single re-render of the same idempotent
+/// frame instead of a red run.
+///
+/// A REAL persistent wedge still fails the test: after the one retry the
+/// ORIGINAL panic is resumed, and the retry is announced on stderr with a
+/// greppable `RETRY` line so a swallowed hang never passes silently.
+///
+/// Wrap at the per-frame render+commit boundary (the idempotent unit), never
+/// the whole test — a retried whole test would re-run convergence loops and
+/// readbacks, measuring the retry itself.
+pub fn retry_on_gpu_commit_error<T>(mut f: impl FnMut() -> T) -> T {
+    const SIGNATURE: &str = "command buffer did not reach Completed";
+    let mut first_error: Option<Box<dyn std::any::Any + Send>> = None;
+    for attempt in 1..=2 {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(&mut f));
+        let payload = match result {
+            Ok(value) => return value,
+            Err(payload) => payload,
+        };
+        let msg = panic_message(&payload);
+        if attempt == 1 && msg.contains(SIGNATURE) {
+            eprintln!(
+                "RETRY (BUG-m0c9): GPU commit error under contention — re-rendering the frame once. \
+                 Original panic: {msg}"
+            );
+            first_error = Some(payload);
+            continue;
+        }
+        // Not a commit error, or the retry failed too: a real wedge must fail
+        // the test exactly as it would have without the wrapper.
+        std::panic::resume_unwind(first_error.take().unwrap_or(payload));
+    }
+    unreachable!("the loop returns or resumes on every iteration")
+}
+
+/// Best-effort human-readable message for a panic payload. `panic!` produces
+/// either `&str` (no interpolation) or `String`; anything else is shown as its
+/// debug representation, which the signature check below will not match.
+///
+/// Takes `&Box<dyn Any + Send>`, not `&(dyn Any + Send)`: the inherent
+/// `downcast_ref` on `dyn Any` resolves correctly only when called on the
+/// boxed receiver (the canonical `catch_unwind` pattern) — on a bare
+/// `&(dyn Any + Send)` trait-object reference the type_id comparison silently
+/// fails even for a matching payload.
+fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        format!("{payload:?}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::retry_on_gpu_commit_error;
+
+    /// The exact message shape `GpuEncoder::verify_completed` panics with.
+    /// Panicked via `panic!("{msg}")` with a `String` local — the same form
+    /// the encoder uses — so the payload is a `String` like the real wedge's.
+    const SIG_PANIC: &str = "[GPU] commit_and_wait_completed: command buffer did not reach Completed (status=4, code=1): hang";
+
+    fn commit_error_panic() -> ! {
+        let msg = SIG_PANIC.to_string();
+        panic!("{msg}");
+    }
+
+    #[test]
+    fn retry_recovers_when_the_first_attempt_hits_the_commit_error_signature() {
+        let calls = AtomicUsize::new(0);
+        let value = retry_on_gpu_commit_error(|| {
+            if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                commit_error_panic();
+            }
+            42
+        });
+        assert_eq!(value, 42, "the retried call must produce the closure's result");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "exactly one contended panic, then one retry"
+        );
+    }
+
+    #[test]
+    fn retry_resumes_the_original_panic_when_the_retry_also_fails() {
+        let calls = AtomicUsize::new(0);
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            retry_on_gpu_commit_error(|| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                commit_error_panic();
+            })
+        }));
+        assert!(outcome.is_err(), "a persistent commit hang must still fail the test");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "two attempts, no more — the one retry is used up"
+        );
+    }
+
+    #[test]
+    fn retry_does_not_swallow_an_unrelated_panic() {
+        let calls = AtomicUsize::new(0);
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            retry_on_gpu_commit_error(|| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                panic!("a real value assertion, not a GPU commit error");
+            })
+        }));
+        assert!(outcome.is_err(), "an unrelated panic must propagate immediately");
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "no retry for non-commit errors");
+    }
+}
