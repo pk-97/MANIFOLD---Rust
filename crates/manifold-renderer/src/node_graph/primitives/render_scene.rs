@@ -214,13 +214,21 @@ const AMBIENT_IRRADIANCE_SCALE: f32 = 0.15;
 /// RAYTRACING_DESIGN.md section 5.2 P2/D3: FLOOR on the temporal irradiance
 /// blend weight (`AccumulateParams::alpha`). The kernel blends at `1/n` where
 /// `n` is the texel's accumulated frame count, so a still surface converges;
-/// this floor caps history at `1/alpha` frames (50 here, ~0.8s at 60fps) so
+/// this floor caps history at `1/alpha` frames (100 here, ~1.7s at 60fps) so
 /// genuinely changing light still tracks instead of smearing forever.
 /// Committed range 0.01–0.05: lower = cleaner stills, more lag on animated
 /// light. It was a FIXED weight of 0.15 until 2026-07-30 — a fixed weight has
 /// a permanent noise floor (~28% of raw single-frame noise) that no amount of
 /// standing still removes, which was the static boil Peter reported.
-const IRRADIANCE_ACCUM_ALPHA: f32 = 0.02;
+/// 0.02 → 0.01 (2026-07-31): the rt-noise gate shows no difference (its
+/// capture depth sits below either cap), but a converged LIVE shot — minutes
+/// static, exactly Peter's flicker report — reaches the cap, where residual
+/// variance scales as alpha/(2-alpha): halving the floor halves the boil
+/// every edge-stopped thin-geometry texel sits on (the atrous filter can't
+/// average across its own edge stops, so those texels live on this floor).
+/// The lag cost is covered by the `lighting_key` + per-texel moments gates,
+/// which snap real changes to alpha 0.5; full gpu-proofs suite green.
+const IRRADIANCE_ACCUM_ALPHA: f32 = 0.01;
 /// RAYTRACING_DESIGN.md section 5.2 P3: one-bounce GI gather rays per pixel
 /// (emissive-hit + sun-bounce). Committed range 1–8 (higher = smoother
 /// emissive bounce, more GPU cost, on top of `AO_SAMPLES_PER_PIXEL`'s own
@@ -3895,9 +3903,12 @@ impl EffectNode for RenderScene {
         // LUT textures are ready to sample; see `run_ibl_convolution`'s doc
         // comment for the cache-vs-correctness tradeoff on the two
         // envmap-dependent resources. ----
+        // Read before `ctx.gpu_encoder()` takes a mutable borrow of ctx.
+        // Hoisted out of the convolution block: the RT `lighting_key` below
+        // folds this same generation in so an env rebake snaps the
+        // accumulator instead of fading on the EMA floor.
+        let envmap_generation = ctx.inputs.slot_generation("envmap");
         {
-            // Read before `ctx.gpu_encoder()` takes a mutable borrow of ctx.
-            let envmap_generation = ctx.inputs.slot_generation("envmap");
             let rebuild_epoch = ctx.rebuild_epoch;
             let gpu = ctx.gpu_encoder();
             let sampler = self.sampler.as_ref().expect("ensured").clone();
@@ -4672,6 +4683,20 @@ impl EffectNode for RenderScene {
                     for f in atmosphere.ambient_tint {
                         mix(f.to_bits());
                     }
+                    // The environment map is a lighting input too: a rebake
+                    // (intensity/rotation/emitter layout, from
+                    // bake_equirect_envmap or hdri_source alike) bumps this
+                    // slot's write generation. Without it here an env move
+                    // only tripped the per-texel luma gate where env was
+                    // >15% of a pixel's brightness — in a sun-lit scene the
+                    // env share is under that, so the fade ran on the
+                    // IRRADIANCE_ACCUM_ALPHA floor (~2.5s tail). Peter
+                    // watched exactly that on the env-intensity fader.
+                    // `None` (unwired) mixes as zero: an unwired→wired
+                    // transition still flips the key.
+                    let g = envmap_generation.unwrap_or(0);
+                    mix(g as u32);
+                    mix((g >> 32) as u32);
                     k
                 };
                 let lighting_changed = self
