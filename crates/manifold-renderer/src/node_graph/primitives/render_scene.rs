@@ -214,13 +214,21 @@ const AMBIENT_IRRADIANCE_SCALE: f32 = 0.15;
 /// RAYTRACING_DESIGN.md section 5.2 P2/D3: FLOOR on the temporal irradiance
 /// blend weight (`AccumulateParams::alpha`). The kernel blends at `1/n` where
 /// `n` is the texel's accumulated frame count, so a still surface converges;
-/// this floor caps history at `1/alpha` frames (50 here, ~0.8s at 60fps) so
+/// this floor caps history at `1/alpha` frames (100 here, ~1.7s at 60fps) so
 /// genuinely changing light still tracks instead of smearing forever.
 /// Committed range 0.01–0.05: lower = cleaner stills, more lag on animated
 /// light. It was a FIXED weight of 0.15 until 2026-07-30 — a fixed weight has
 /// a permanent noise floor (~28% of raw single-frame noise) that no amount of
 /// standing still removes, which was the static boil Peter reported.
-const IRRADIANCE_ACCUM_ALPHA: f32 = 0.02;
+/// 0.02 → 0.01 (2026-07-31): the rt-noise gate shows no difference (its
+/// capture depth sits below either cap), but a converged LIVE shot — minutes
+/// static, exactly Peter's flicker report — reaches the cap, where residual
+/// variance scales as alpha/(2-alpha): halving the floor halves the boil
+/// every edge-stopped thin-geometry texel sits on (the atrous filter can't
+/// average across its own edge stops, so those texels live on this floor).
+/// The lag cost is covered by the `lighting_key` + per-texel moments gates,
+/// which snap real changes to alpha 0.5; full gpu-proofs suite green.
+const IRRADIANCE_ACCUM_ALPHA: f32 = 0.01;
 /// RAYTRACING_DESIGN.md section 5.2 P3: one-bounce GI gather rays per pixel
 /// (emissive-hit + sun-bounce). Committed range 1–8 (higher = smoother
 /// emissive bounce, more GPU cost, on top of `AO_SAMPLES_PER_PIXEL`'s own
