@@ -307,11 +307,8 @@ fn settle_and_capture_refl_raw(
 ///
 /// Measured when filed: `refl_raw` bound vs. normal-map-stripped was
 /// BIT-IDENTICAL — differing fraction 0.00000, max abs diff 0.0000, both
-/// variants lit over the same 0.0897 of the frame. Un-ignore together with
-/// BUG-wytp (rt-reflections-are-normal-map-blind); the prerequisite is
-/// BUG-wfxe (gltf-tangent-attribute-dropped-at-import).
+/// variants lit over the same 0.0897 of the frame.
 #[test]
-#[ignore = "BUG-wytp (rt-reflections-are-normal-map-blind): RT traces the vertex normal only"]
 fn normal_tangent_mirror_normal_map_reaches_the_traced_reflection() {
     let h = harness::shared();
     // Warm-up variant, discarded: the FIRST PresetRuntime built in this

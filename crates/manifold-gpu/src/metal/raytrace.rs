@@ -191,6 +191,14 @@ pub struct RtObjectGeometry<'a> {
     /// in the reflection lobe at the primary hit; GI/AO/shadow rays and the
     /// reflection-HIT shading stay flat-factor (out of this phase's scope).
     pub mr_texture: Option<&'a GpuTexture>,
+    /// BUG-wytp (rt-reflections-are-normal-map-blind): this object's tangent-
+    /// space normal map (glTF packing: R/G = tangent-space X/Y, B = Z),
+    /// sampled at the PRIMARY hit's interpolated UV to perturb the shading
+    /// normal feeding the reflection lobe's R and the AO/GI cosine-hemisphere
+    /// gather. `None` degrades to the barycentric vertex normal (pre-BUG-wytp
+    /// behavior). Consumed ONLY at the primary hit; secondary/extension-ray
+    /// hit shading keeps vertex normals.
+    pub normal_texture: Option<&'a GpuTexture>,
     /// Per-object shadow-cast toggle (`node.scene_object`'s `cast_shadows`
     /// param, threaded through `render_scene.rs`'s `ObjectDraw`). `false`
     /// clears `RT_MASK_SHADOW_CASTER` from this instance's mask (see
@@ -647,6 +655,13 @@ struct RtNormalSource {
     // `MAX_RT_MATERIAL_TEXTURES` or above means "no texture bound" (flat
     // gi_materials metallic_roughness factor is the fallback).
     uint   mr_tex_index;
+    // BUG-wytp (rt-reflections-are-normal-map-blind): normal-map texture index
+    // for PRIMARY-hit shading — the perturbed normal feeds both the reflection
+    // lobe's R and the AO/GI cosine-hemisphere gather. `MAX_RT_MATERIAL_TEXTURES`
+    // or above means "no texture bound" (the barycentric vertex normal stands —
+    // pre-BUG-wytp behavior). Sampled at the primary hit's interpolated UV only;
+    // secondary/extension-ray hit shading keeps vertex normals.
+    uint   normal_tex_index;
     uint   _pad;
 };
 
@@ -701,6 +716,69 @@ static float2 fetch_interpolated_uv(device RtNormalSource* normal_sources, uint 
     float2 uv2 = fetch_uv(src, v2);
     float w0 = 1.0 - bary.x - bary.y;
     return uv0 * w0 + uv1 * bary.x + uv2 * bary.y;
+}
+
+// BUG-wytp (rt-reflections-are-normal-map-blind): primary-hit normal-map
+// sampling — the RT analogue of the raster's screen-space cotangent frame
+// (`render_scene.wgsl`'s `cotangent_frame`/`resolve_normal`). The raster has
+// no stored glTF tangent attribute (MeshVertex's 48-byte ABI pins it
+// tangent-less), so it derives T/B from screen-space derivatives of
+// position+UV; the RT kernel derives the SAME frame analytically from the
+// hit triangle's three vertex positions + UVs (Mikkelsen's derivation) —
+// `TANGENT.w` mirrored-handedness is not honored because the frame is a
+// function of the UV parameterization alone, exactly like the raster, which
+// ignores it too. Local-space vertex edges are transformed to world space by
+// `src`'s normal matrix (uniform-scale assumption, same as
+// `fetch_world_normal`; translation cancels in the edge differences), so the
+// derived T/B live in the same space as the world-space `n` they combine
+// with. `t` is Gram-Schmidt-orthogonalized against `n`; `b` is orthogonalized
+// against both `n` and `t` (NOT recomputed as `cross(n, t)` — a UV-mirrored
+// triangle's analytic `b` carries the sign flip the map's G channel expects,
+// and recomputing it would render mirrored-handedness surfaces wrong).
+// Degenerate UVs (zero-area triangle in UV space) fall back to the vertex
+// normal. Returns the perturbed world-space normal.
+static float3 perturb_normal_with_map(
+    device RtNormalSource& src,
+    device RtNormalSource* normal_sources,
+    array<texture2d<float>, MAX_RT_MATERIAL_TEXTURES> material_textures,
+    uint instance_id, uint primitive_id, float2 bary,
+    float3 n)
+{
+    if (src.normal_tex_index >= MAX_RT_MATERIAL_TEXTURES) return n; // no texture bound: vertex normal stands (pre-BUG-wytp behavior)
+    uint v0 = primitive_id * 3u, v1 = v0 + 1u, v2 = v0 + 2u;
+    device const uchar* base = (device const uchar*)src.vertex_base_addr;
+    // Position is the first field of `MeshVertex` (offset 0) — render_scene.rs's
+    // ONLY RT-caster convention (the same single-convention assumption
+    // `fetch_world_normal` names for normals).
+    device const packed_float3* p0_ptr =
+        (device const packed_float3*)(base + (ulong)v0 * (ulong)src.vertex_stride);
+    device const packed_float3* p1_ptr =
+        (device const packed_float3*)(base + (ulong)v1 * (ulong)src.vertex_stride);
+    device const packed_float3* p2_ptr =
+        (device const packed_float3*)(base + (ulong)v2 * (ulong)src.vertex_stride);
+    float3x3 m = float3x3(float3(src.normal_matrix_col0), float3(src.normal_matrix_col1), float3(src.normal_matrix_col2));
+    float3 edge1 = m * (float3(*p1_ptr) - float3(*p0_ptr));
+    float3 edge2 = m * (float3(*p2_ptr) - float3(*p0_ptr));
+    float2 uv0 = fetch_uv(src, v0);
+    float2 uv1 = fetch_uv(src, v1);
+    float2 uv2 = fetch_uv(src, v2);
+    float2 duv1 = uv1 - uv0;
+    float2 duv2 = uv2 - uv0;
+    float det = duv1.x * duv2.y - duv1.y * duv2.x;
+    if (fabs(det) < 1e-12) return n; // degenerate UV parameterization: vertex normal stands
+    float r = 1.0 / det;
+    float3 t = (edge1 * duv2.y - edge2 * duv1.y) * r;
+    float3 b = (edge2 * duv1.x - edge1 * duv2.x) * r;
+    // Gram-Schmidt orthonormalization against the world-space vertex normal.
+    t = normalize(t - n * dot(n, t));
+    b = normalize(b - n * dot(n, b) - t * dot(t, b));
+    // Interpolated UV + decode + combine — the same `coord::normalized,
+    // address::repeat, filter::linear` convention the kernel's MR/alpha
+    // sampling uses (and, like them, no KHR_texture_transform UV fold).
+    float2 uv = fetch_interpolated_uv(normal_sources, instance_id, primitive_id, bary);
+    constexpr sampler normal_sampler(coord::normalized, address::repeat, filter::linear);
+    float3 tn = material_textures[src.normal_tex_index].sample(normal_sampler, uv).rgb * 2.0 - 1.0;
+    return normalize(t * tn.x + b * tn.y + n * tn.z);
 }
 
 // RT-T2-A: sample this candidate triangle's base-color alpha at its
@@ -1048,6 +1126,15 @@ kernel void trace_shadow_rays(
     // itself came from this same accel's geometry via the depth prepass,
     // but a grazing-angle/epsilon edge case shouldn't crash the kernel).
     float3 n = float3(0, 1, 0);
+    // BUG-wytp (rt-reflections-are-normal-map-blind): the SHADING normal —
+    // `n` perturbed by the primary hit's normal map (when one is bound; else
+    // identical to `n`, bit-for-bit). Drives the reflection lobe's R and the
+    // AO/GI cosine-hemisphere gather. `n` itself stays the barycentric vertex
+    // normal for the secondary-ray origin bias (`sec_origin`), the `out_n`
+    // history channel, and the raster-parity `GiMaterial` reads — a perturbed
+    // bias normal risks self-intersection and a perturbed history normal
+    // would reject valid temporal samples on high-frequency maps.
+    float3 shading_n = float3(0, 1, 0);
     // RT-T2-C (object motion): this pixel's primary-hit instance id, or
     // -1 when unknown (no primary ray cast, or it missed). Rides in
     // `out_n.w` — free channel, already threaded through the upsample and
@@ -1083,6 +1170,11 @@ kernel void trace_shadow_rays(
                 primary_pid = primary_q.get_committed_primitive_id();
                 primary_bary = primary_q.get_committed_triangle_barycentric_coord();
                 n = fetch_interpolated_normal(normal_sources, primary_iid, primary_pid, primary_bary);
+                // BUG-wytp: perturb the shading normal from the primary hit's
+                // normal map. Degrades to `n` exactly when no map is bound.
+                shading_n = perturb_normal_with_map(
+                    normal_sources[primary_iid], normal_sources, material_textures,
+                    primary_iid, primary_pid, primary_bary, n);
                 obj_id = float(primary_iid);
             }
         }
@@ -1201,7 +1293,7 @@ kernel void trace_shadow_rays(
         ao_r.min_distance = bias_eps * 0.5;
         ao_r.max_distance = p.ao_radius;
         for (uint s = 0; s < p.ao_spp; s++) {
-            ao_r.direction = cosine_hemisphere(n, blue_noise_sample(tid, p.frame_index, s, p.ao_spp));
+            ao_r.direction = cosine_hemisphere(shading_n, blue_noise_sample(tid, p.frame_index, s, p.ao_spp));
             intersection_query<triangle_data, instancing> ao_q;
             ao_q.reset(ao_r, accel, RT_MASK_VISIBLE);
             if (!walk_with_alpha_test(ao_q, normal_sources, material_textures, true)) ao += 1.0;
@@ -1270,14 +1362,14 @@ kernel void trace_shadow_rays(
         // ED5: one anchor per pixel. Inert for a scene with no env chain
         // (the dummy/zeroed chain gives anchor 0 and cap ~0, so the
         // clamp never fires — env samples there are 0 too).
-        float3 env_anchor = refl_env_sample(prefiltered_env, n, 1.0);
+        float3 env_anchor = refl_env_sample(prefiltered_env, shading_n, 1.0);
         float env_cap = RT_GI_ENV_FIREFLY_GAIN * max(luma(env_anchor), 1e-6);
         for (uint s = 0; s < p.gi_spp; s++) {
             ray gr;
             gr.origin = sec_origin;
             gr.min_distance = bias_eps * 0.5;
             gr.max_distance = INFINITY;
-            gr.direction = cosine_hemisphere(n, blue_noise_sample(tid, p.frame_index, s, p.gi_spp));
+            gr.direction = cosine_hemisphere(shading_n, blue_noise_sample(tid, p.frame_index, s, p.gi_spp));
             float3 throughput = float3(1.0);
             for (uint bounce = 0u; bounce < RT_GI_MAX_BOUNCES; bounce++) {
                 intersection_query<triangle_data, instancing> gi_q;
@@ -1359,7 +1451,7 @@ kernel void trace_shadow_rays(
             roughness = max(mr_g, 0.01);
         }
         float3 V = normalize(float3(p.camera_pos) - wp);
-        float3 R = reflect(-V, n);
+        float3 R = reflect(-V, shading_n);
         // RD7's env value: direction R at this pixel's roughness mip —
         // byte-equal to what fs_pbr would have fetched (I-R1).
         float3 env = refl_env_sample(prefiltered_env, R, roughness);
@@ -1382,7 +1474,12 @@ kernel void trace_shadow_rays(
             for (uint rs = 0u; rs < rspp; ++rs) {
             float3 rdir = R;
             if (roughness > 0.0) {
-                rdir = ggx_reflection_dir(n, V, roughness, blue_noise_sample(tid, p.frame_index, rs, rspp));
+                // BUG-wytp: the GGX lobe's tangent frame is the SHADING normal —
+                // a normal-mapped surface's microsurface frame follows the map,
+                // the same way the raster's GGX direction does. The old `n`
+                // (vertex normal) kept even a mirror-smooth normal-mapped plate
+                // tracing as the flat plate it geometrically is.
+                rdir = ggx_reflection_dir(shading_n, V, roughness, blue_noise_sample(tid, p.frame_index, rs, rspp));
             }
             ray rr;
             rr.origin = sec_origin;
@@ -2560,13 +2657,22 @@ pub struct RtNormalSource {
     /// `>= MAX_RT_MATERIAL_TEXTURES` means "no texture bound" (flat
     /// `GiMaterial::metallic_roughness` factor is the fallback).
     pub mr_tex_index: u32,
+    /// BUG-wytp (rt-reflections-are-normal-map-blind): normal-map texture
+    /// index for PRIMARY-hit shading — the perturbed normal feeds both the
+    /// reflection lobe's R and the AO/GI cosine-hemisphere gather. `>=
+    /// MAX_RT_MATERIAL_TEXTURES` means "no texture bound" (the barycentric
+    /// vertex normal stands — pre-BUG-wytp behavior). Populated from the
+    /// material's normal-map wiring in `render_scene.rs`, same place/shape
+    /// as `mr_tex_index`. Secondary/extension-ray hit shading keeps vertex
+    /// normals.
+    pub normal_tex_index: u32,
     /// Explicit pad — this struct leads with a `u64` (align-8); every
     /// field after it must keep the whole struct's size a multiple of 8,
     /// same discipline the RT-T2-A extension already established.
     pub _pad: u32,
 }
 
-const _: () = assert!(std::mem::size_of::<RtNormalSource>() == 80);
+const _: () = assert!(std::mem::size_of::<RtNormalSource>() == 88);
 
 /// Fixed texture-argument-table slot count for per-object material textures
 /// (alpha-mask + base-color; roughness/metallic/normals consume this same cap) —
@@ -2684,6 +2790,26 @@ pub fn ensure_normal_sources<'a>(
             }
             None => RT_MATERIAL_TEX_INDEX_NONE,
         };
+        // BUG-wytp (rt-reflections-are-normal-map-blind): SAME dedupe-into-
+        // `material_textures`, cap-check, and log-warn-on-full pattern as
+        // `mr_tex_index` above — the normal map rides the one general
+        // material-texture cap, no separate table.
+        let normal_tex_index = match obj.normal_texture {
+            Some(tex) if material_textures.len() < MAX_RT_MATERIAL_TEXTURES => {
+                let idx = material_textures.iter().position(|&t| std::ptr::eq(t, tex))
+                    .unwrap_or_else(|| {
+                        material_textures.push(tex);
+                        material_textures.len() - 1
+                    });
+                idx as u32
+            }
+            Some(_) => {
+                log::warn!("RT material-texture table full ({} bound, {} cap) — object {} normal map degraded to vertex normal",
+                    material_textures.len(), MAX_RT_MATERIAL_TEXTURES, i);
+                RT_MATERIAL_TEX_INDEX_NONE
+            }
+            None => RT_MATERIAL_TEX_INDEX_NONE,
+        };
         let src = RtNormalSource {
             vertex_base_addr: obj.vertex_buffer.gpu_address() + obj.vertex_offset as u64,
             vertex_stride: obj.vertex_stride,
@@ -2695,6 +2821,7 @@ pub fn ensure_normal_sources<'a>(
             alpha_tex_index,
             base_color_tex_index,
             mr_tex_index,
+            normal_tex_index,
             _pad: 0,
         };
         unsafe {

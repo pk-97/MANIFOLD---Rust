@@ -4173,6 +4173,12 @@ impl EffectNode for RenderScene {
                     // "None = unwired, flat factor fallback" shape as
                     // `base_color_texture` above.
                     mr_texture: d.mr_map,
+                    // BUG-wytp (rt-reflections-are-normal-map-blind): the normal map
+                    // reaches the RT kernel exactly the way the MR map does —
+                    // "None = unwired, vertex normal stands" shape. The kernel
+                    // samples it at the primary hit to perturb the reflection
+                    // lobe's R and the AO/GI hemisphere normal.
+                    normal_texture: d.normal_map,
                     cast_shadows: d.cast_shadows,
                 })
                 .collect();
@@ -4254,6 +4260,9 @@ impl EffectNode for RenderScene {
             // color-texture list, threaded straight to `dispatch_shadow_
             // rays` below (same per-frame cadence — this list can change
             // even when topology/transform don't, e.g. a material swap).
+            // BUG-wytp: the same returned list now also carries normal-map
+            // textures (and MR maps, since R3), indexed by
+            // `RtNormalSource::normal_tex_index`/`mr_tex_index`.
             let alpha_textures: Vec<&manifold_gpu::GpuTexture> = manifold_gpu::raytrace::ensure_normal_sources(
                 &mut self.rt_normal_sources,
                 &mut self.rt_normal_sources_capacity,
