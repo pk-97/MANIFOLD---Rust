@@ -704,12 +704,17 @@ scoped accordingly (MB2).
   gather never adds env at any bounce, so multi-bounce adds only emissive and sun paths —
   nothing the flat ambient term is faking. No double count by construction; the knob
   stays a pure performer control (knob 0 = true black holds). Machine check: I-MB2.
+  **SUPERSEDED by section 14 (Traced environment diffuse), 2026-07-31:** the furnace
+  oracle showed knob 0 was never black with a sky wired, and substitution (ED2) gives
+  the no-double-count property without excluding env.
 - **MB4 — `RT_GI_MAX_BOUNCES` is a named constant, default 2, range 1–3; NOT a scene
   param (Peter 2026-07-30).** It joins the committed-budget constants awaiting Peter's
   deferred re-judge. No Russian roulette at fixed depth 2. The per-extension energy fold
   is `RT_GI_THROUGHPUT_FOLD` (default 0.318 ≈ 1/π, range 0.1–0.5), a named constant like
   `SUN_BOUNCE_INTENSITY_SCALE`; the sun-bounce term at every depth keeps
   `SUN_BOUNCE_INTENSITY_SCALE`, multiplied by the path throughput.
+  (Both constants re-derived and re-valued by section 14 (Traced environment diffuse)
+  ED4 — the fold is deleted, the sun scale becomes 1/π.)
 - **MB5 — demodulation stays first-vertex-only.** The gather returns radiance incident at
   the primary hit (no primary-surface albedo multiply — D3 discipline unchanged);
   throughput from bounce 2 onward carries the INTERMEDIATE surfaces' albedo — that
@@ -731,7 +736,8 @@ eye may not.
 - **I-MB2 — env is never gathered, at any depth.** A scene with geometry, ambient only —
   zero suns, zero emissive — renders `cmp`-identical at bounces=2 vs bounces=1 (the
   cross-commit pair in MB-B's gate), and the in-repo pin holds its region at the analytic
-  `ambient*ao` value.
+  `ambient*ao` value. **RETIRED by section 14 (Traced environment diffuse)** — env IS
+  gathered from ED-A on; the ambient-only pin survives as I-ED1's value gate.
 - **I-MB3 — the sun-bounce caster loop has one home.** `rg` — the
   `SUN_BOUNCE_INTENSITY_SCALE` multiply appears inside exactly one function.
 
@@ -994,3 +1000,134 @@ at a time, in release, or measure nothing.
 sweep-trail risk in principle, with the variance clamp and per-texel count reset as the
 guards. 40 frames is the first constant to pull back if it trails. Everything measured here is
 one project, one camera, one material class.
+
+## 14. Traced environment diffuse — env joins the GI gather (BUG-yq1d (traced AO never darkens env diffuse); SUPERSEDES MB3; SPEC 2026-07-31, K3 + Peter — approved direction, not yet executed)
+
+The furnace oracle (lane/rt-furnace-oracle) measured what MB3's "env is never gathered"
+actually costs: with a uniform sky wired, the term that lights the scene is the raster
+irradiance map (`diffuse_ibl`, `render_scene.wgsl`), and no traced ray ever touches it.
+Traced occlusion multiplied only the flat Ambient knob (`irradiance = ambient_color*ao +
+gi`), which defaults to ~zero — so a floor-wall corner under a full sky read 1.0005x the
+open-ground value. Occlusion was absent in any env-lit scene, exactly where it matters.
+
+**Stage translation.** Corners, contact shadows, and concavities darken under sky
+lighting — the difference between objects floating on a backdrop and objects sitting in
+a space. This is most of what "turn RT on" was supposed to buy for env-lit hero scenes.
+
+### 14.1 Why MB3 falls
+
+MB3 (2026-07-30) kept env out of the gather so it could never double-count against the
+flat ambient term, preserving "knob 0 = true black". The furnace evidence shows the
+premise was already false whenever a sky is wired: `diffuse_ibl` lights the scene
+regardless of the knob, so knob 0 was never black in env scenes — the knob is a fill
+control, not a master. Meanwhile the double-count MB3 feared is avoided the same way
+reflections already avoid it: substitution, never addition (RD1/I-R3 discipline).
+
+The scale question that makes substitution clean: `ibl_irradiance.wgsl` bakes the
+irradiance map as the plain average of cosine-weighted env radiance samples (the cos
+and 1/pi cancel — documented in its header). The GI gather is the same estimator with
+the same normalization, so "miss returns env radiance in the ray direction" produces
+exactly the quantity the irradiance map holds, on the same scale. Uniform sky L: both
+return L.
+
+### 14.2 Decisions
+
+- **ED1 — env joins the GI gather at every depth.** A gather ray that misses returns
+  the equirect env radiance in its own direction (mip 0 — unbiased; the prefiltered
+  chain's base level IS the source env, and the kernel already binds it for
+  reflections, so no new binding). Extension rays (bounce >= 1) do the same through
+  `throughput` — this is what makes an enclosure with an opening converge instead of
+  going artificially dark. Cost: one texture fetch per miss, no new rays.
+- **ED2 — substitution, never addition.** The kernel's irradiance texture becomes
+  `.rgb = env+GI gather` (no `ambient_color*ao` folded in), `.a = ao` (free end-to-end
+  today — every stage writes `float4(x, 0)` and reads `.rgb`; the three write sites
+  learn to carry alpha through the same accumulation weights). In `render_scene.wgsl`:
+  `diffuse_ibl`'s irradiance-map fetch is REPLACED by the traced `.rgb` when RT is on
+  (same physical quantity — the 818a06b0 double-count trap, same guard as RD1); the
+  baked material occlusion texture still multiplies (artist micro-occlusion, a
+  different quantity, IMPORT_FIDELITY_DESIGN.md D3 unchanged). `rt_or_flat_ambient`
+  recomposes today's value consumer-side: `albedo * scene_params.y * ambient_tint *
+  AMBIENT_IRRADIANCE_SCALE * mask.a` — the 0.15 ceiling constant mirrors into WGSL
+  (named, cross-mirror comment discipline per `RT_REFL_PREFILTER_MAX_MIP`). Each term
+  is consumed in exactly one place; the Ambient knob never gets `kd_ibl` scaling.
+- **ED3 — demodulation unchanged** (D3/MB5): no primary-surface albedo in-kernel.
+- **ED4 — the two GI constants are settled by the codebase's own conventions, then
+  certified by fixture** (closes BUG-qt32 (GI energy constants look unphysical)).
+  `RT_GI_THROUGHPUT_FOLD` is DELETED: the cosine-weighted estimator's throughput
+  multiplier is the hit albedo alone (pi cancels — the convention
+  `ibl_irradiance.wgsl` documents; the extra 1/pi made bounce 2 ~3.1x dark).
+  `SUN_BOUNCE_INTENSITY_SCALE` becomes 1/pi: the raster light loop's diffuse is
+  `kd * albedo / PI * l_col * n_dot_l` (`render_scene.wgsl` light loop), so sun
+  colour is an irradiance and the second-vertex bounce carries the same 1/pi; 0.08
+  was ~4x dark. Both derivations are stated here so the fixture (ED-C) is checking
+  physics, not curve-fit.
+- **ED5 — firefly control on the env sample.** An HDRI sun disk at mip 0 through 2
+  spp is the sparkle regime the reflection path needed its clamp for. Per-sample cap:
+  `RT_GI_ENV_FIREFLY_GAIN` (named constant, committed range per the RT_REFL_FIREFLY_GAIN
+  precedent) times the roughest-mip env fetch at the surface normal
+  (`refl_env_sample(n, 1.0)` — a typical-value anchor already bound, no new texture).
+  At gi_spp < 3 a median is inert; the env anchor is not.
+- **ED6 — the substitution gate mirrors the reflection fallback.** Traced diffuse
+  substitutes only when RT is on AND the GI gather ran (`gi_spp > 0`); otherwise the
+  irradiance map stands, same discipline as `rt_refl.a < 0` keeping the raster
+  prefiltered fetch. No new scene param (MB4 discipline).
+- **ED7 — the furnace oracle becomes a two-path oracle, and joins the noise gate**
+  (closes BUG-ipad (noise gate certifies frozen noise) when wired). Open-sky
+  brightness must now be returned by the TRACED path (RT on) AND match the raster
+  path (RT off) within tolerance — before this change the brightness leg passed
+  entirely through the raster irradiance map and certified nothing about RT. The
+  corner leg (ratio < 1 by a committed margin) goes live for the first time.
+  `scripts/rt_noise_gate.py` green requires the correctness oracle alongside the
+  stability ceilings — stability alone can no longer certify (the frozen-seed trap).
+
+### 14.3 Invariants & enforcement
+
+- **I-ED1 — no-env RT scenes keep today's ambient/AO values.** Ambient-only fixture
+  (no env, knob swept), probed values equal within 1e-6 — an epsilon gate, not
+  `cmp`: multiplication order changes consumer-side.
+- **I-ED2 — the env term has exactly one consumer.** `rg`: `irradiance_map` is
+  sampled once in `render_scene.wgsl`, at the substitution site; the RT irradiance
+  texture is read in exactly two places (the substitution, the ambient recompose).
+- **I-ED3 — substitution, never addition.** With RT on, irradiance map and traced
+  diffuse never both contribute (RD1 pattern; machine-checked by I-ED2 plus the
+  RT-on/off furnace cross-check).
+- **I-ED4 — furnace, both legs.** Open sky: RT-on brightness 1.0 +/- tolerance, and
+  |RT-on - RT-off| within tolerance. Corner: shaded/open ratio below a committed
+  ceiling, with the white-occluder anti-vacuity discipline from the furnace branch
+  (albedo-1 everything, or the gate reads paint).
+- **I-ED5 — white-enclosure convergence** (BUG-qt32's empirical close): a white
+  multi-bounce enclosure under uniform sky returns the field radiance within
+  tolerance; any deficit is lost energy and fails the gate.
+
+### 14.4 Phases (one lane brief each, lead review per phase)
+
+#### ED-A — kernel + substitution
+
+- *Deliverables:* env-on-miss at all gather depths; ao to `.a` through accumulation
+  (the three write sites); ED2's two consumer changes; ED4's constants; ED5's clamp.
+- *Gate:* clippy `-p manifold-gpu -p manifold-renderer`; `scripts/gpu_proofs_gate.py`
+  including the furnace oracle's I-ED1/I-ED4 legs; the RT suite otherwise green.
+- *Named deviation, gated by eye, not number:* GI/emissive/sun-bounce energy is now
+  weighted by `kd_ibl` and baked occlusion like every other diffuse term — metals
+  lose the unphysical full-strength diffuse fill they get today. Peter reviews one
+  metal fixture render.
+
+#### ED-B — HDRI firefly fixture + noise-gate pairing
+
+- *Deliverables:* real-HDRI scene fixture (sun disk, bright/dim extremes), cap tuned
+  in its committed range; furnace oracle wired into `scripts/rt_noise_gate.py` as the
+  correctness leg (BUG-ipad closes).
+- *Gate:* the paired gate green on the fixture; frozen-seed attack re-run and caught.
+
+#### ED-C — enclosure convergence
+
+- *Deliverables:* I-ED5's white-enclosure fixture with a brute-force converged
+  reference vs the shipping path; BUG-qt32 closes on the measured numbers, whatever
+  they say about ED4's constants.
+- *Gate:* enclosure within tolerance at committed spp/history.
+
+**Consequences, stated honestly.** Worst-case GI cost is unchanged in ray count; the
+env fetch is one texture read per miss. The accumulate/denoise chain carries alpha
+where it carried zero — same bandwidth class, no new texture. And the metal-fill
+deviation above is a real look change on existing RT scenes: darker, correct, and
+Peter signs it off on a fixture before it lands.
