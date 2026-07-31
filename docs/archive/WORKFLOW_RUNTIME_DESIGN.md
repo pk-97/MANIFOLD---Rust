@@ -1,6 +1,6 @@
 # Workflow Runtime — a Rust runner for semantic workflow programs
 
-**Status:** IN PROGRESS — P1–P4 DONE (P3 shakedown verdict and P4 record: section 5 (Phasing); rulings D14–D20). OWED: `check` linting execute-step scope, beaded (BUG-62z8 (workflow check: lint execute-step scope)). · 2026-07-30 · Fable
+**Status:** RETIRED 2026-07-31 — crate deleted. The runtime lost to the standard lead seat on its own measurements: one-shot EXECUTE failed above a small-edit size floor (P3 shakedown, D20); a present lead is the better driver and a lead is always present. Kept for the record; the living pieces are the enforcement table (`.claude/hooks/enforcement-table.json`) and `scripts/gate_runner.py`. · Peter + k3 (lead)
 **Prerequisites:** none (R2 readout is in — see intro)
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) – section 6 (Seam briefs) before starting any phase.
 

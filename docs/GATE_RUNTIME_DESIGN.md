@@ -4,9 +4,9 @@
 **Prerequisites:** none. Self-hosts from P1 onward (P2+ land under their own verdicts).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
-The wave IR (`docs/SEMANTIC_WORKFLOW_PROGRAMS.md` section 2 (The wave IR — the concrete instance we already run)) already names the missing piece: `GATE : Diff -> exit codes [runtime — zero model]`. Today that opcode doesn't exist as machinery — a lane's "green" is a prose claim, and the lead's only verification is re-running the gate or trusting the claim. This design builds GATE as a runtime: one script that executes gates itself, writes typed verdicts to an append-only trail, and fires at four lifecycle points. It is the first component where **the machine, not an agent, says what happened** — the proof of concept for the semantic instruction set. The six proposals from the 2026-07-25 discussion (gate runner, seat preflight, brief linter, verdict-before-merge, wave report, beads queue) are one mechanism with four packs plus a query, not six tools.
+The wave IR (`docs/archive/SEMANTIC_WORKFLOW_PROGRAMS.md` section 2 (The wave IR — the concrete instance we already run)) already names the missing piece: `GATE : Diff -> exit codes [runtime — zero model]`. Today that opcode doesn't exist as machinery — a lane's "green" is a prose claim, and the lead's only verification is re-running the gate or trusting the claim. This design builds GATE as a runtime: one script that executes gates itself, writes typed verdicts to an append-only trail, and fires at four lifecycle points. It is the first component where **the machine, not an agent, says what happened** — the proof of concept for the semantic instruction set. The six proposals from the 2026-07-25 discussion (gate runner, seat preflight, brief linter, verdict-before-merge, wave report, beads queue) are one mechanism with four packs plus a query, not six tools.
 
-Companion docs: `docs/SEMANTIC_WORKFLOW_PROGRAMS.md` (the IR this implements — GATE, plus the soft→hook migration program of section 3 (The enforcement table — the key analytical tool)/section 9 (Open questions / next steps)) · `docs/AGENT_ROUTING.md` (the running roster this serves) · `.claude/orchestration/rt-reflections-r2-queue.md` (R2's pre-flight already carries two items this design subsumes mechanically: verdict rationale, gate discipline).
+Companion docs: `docs/archive/SEMANTIC_WORKFLOW_PROGRAMS.md` (the IR this implements — GATE, plus the soft→hook migration program of section 3 (The enforcement table — the key analytical tool)/section 9 (Open questions / next steps)) · `docs/AGENT_ROUTING.md` (the running roster this serves) · `.claude/orchestration/rt-reflections-r2-queue.md` (R2's pre-flight already carries two items this design subsumes mechanically: verdict rationale, gate discipline).
 
 ## 1. Audit — what exists (verified 2026-07-25, main @ e692762c)
 
@@ -61,7 +61,7 @@ Extend, don't redesign: every firing point is an existing hook; the only new sys
 
 The plausible-wrong turns, forbidden by name:
 
-1. **You will want to build the driver script.** No. The standing note (SEMANTIC_WORKFLOW_PROGRAMS section 7, R1 handoff): "Do not build the driver without Peter." This design is the verdict layer only. The driver is a separate, Peter-gated decision.
+1. **You will want to build the driver script.** No. The experiment ran — the workflow-runtime driver was built, measured, and retired 2026-07-31 (docs/archive/WORKFLOW_RUNTIME_DESIGN.md status header): a present lead is the better driver, and a lead is always present. This design is the verdict layer only.
 2. **You will want lanes to emit verdict JSON.** No — D2. Self-report in a typed costume is still self-report.
 3. **You will want a verdict database/dashboard.** No — JSONL + `rg` + the report query is the whole read path. A store is a second home for truth.
 4. **You will want to retrofit verdicts onto R1 and older waves.** No — forward-only. Retrofitting manufactures data the waves never produced.
@@ -199,10 +199,10 @@ Every transition into a green state is machine-checked; every transition out of 
 
 ## 7. Deferred
 
-- **Driver script** — revive only via Peter, per the standing note (SEMANTIC_WORKFLOW_PROGRAMS section 7).
+- **Driver script** — settled: built as workflow-runtime, retired 2026-07-31 (docs/archive/WORKFLOW_RUNTIME_DESIGN.md status header). Do not revive.
 - **fleet_doctor full drift audit** (profiles↔toml, docs index↔docs, board↔headers, memory pointers↔reality) — separate bead; P2's preflight is the wave-scoped subset, not the audit.
 - **agent-worktree.py cwd anchoring** (nested-worktree bug observed 2026-07-25) — separate bead, small fix.
 - **Hookified brief lint** (PreToolUse Agent deny) — revive when briefs are files by convention, not paste-into-prompt.
-- **Hook migration list** (retry-cap, one-commit-then-stop) — already queued in R2's pre-flight; build deliberately per SEMANTIC_WORKFLOW_PROGRAMS section 9.
-- **Plan-template library** — post-R2, per SEMANTIC_WORKFLOW_PROGRAMS section 7.
+- **Hook migration list** (retry-cap, one-commit-then-stop) — already queued in R2's pre-flight; build deliberately per docs/archive/SEMANTIC_WORKFLOW_PROGRAMS.md section 9 (Open questions / next steps).
+- **Plan-template library** — post-R2, per docs/archive/SEMANTIC_WORKFLOW_PROGRAMS.md section 7 (Where it lands: strict workflow programs, not general compute).
 - **Lane metrics to Prometheus** (gate pass rates next to spend) — revive if the Grafana stack proves useful for spend; verdicts jsonl is the source.
