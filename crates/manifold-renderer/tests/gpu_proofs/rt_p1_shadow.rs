@@ -217,7 +217,6 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         0.0,
         0,
         0, // RT-P3: gi_spp — 0, GI gather skipped, this proof only asserts on out_sv
-        [0.0, 0.0, 0.0],
         [0.0, 0.0, 0.0], // RT-T1-B: camera_pos — unused, ao_spp/gi_spp both 0 above
         IDENTITY,
         0,           // refl_spp — 0, reflections skipped in this fixture
@@ -435,7 +434,6 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
         0.0,
         0,
         0, // RT-P3: gi_spp — 0, GI gather skipped, this proof only asserts on out_sv
-        [0.0, 0.0, 0.0],
         [0.0, 0.0, 0.0], // RT-T1-B: camera_pos — unused, ao_spp/gi_spp both 0 above
         IDENTITY,
         0,           // refl_spp — 0, reflections skipped in this fixture

@@ -215,7 +215,6 @@ fn run_fixture(alpha_mask: bool) -> [f32; 2] {
         0,
         0,
         [0.0, 0.0, 0.0],
-        [0.0, 0.0, 0.0],
         IDENTITY,
         0,           // refl_spp — 0, reflections skipped in this fixture
         0.6,         // refl_max_roughness — RT_REFLECTION_MAX_ROUGHNESS

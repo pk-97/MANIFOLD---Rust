@@ -246,8 +246,8 @@ impl HistorySet {
                 make_history_side_channel(device, GpuTextureFormat::Rgba16Float, &format!("{label}-normal-b")),
             ],
             moments: [
-                make_history_side_channel(device, GpuTextureFormat::Rg32Float, &format!("{label}-moments-a")),
-                make_history_side_channel(device, GpuTextureFormat::Rg32Float, &format!("{label}-moments-b")),
+                make_history_side_channel(device, GpuTextureFormat::Rgba32Float, &format!("{label}-moments-a")),
+                make_history_side_channel(device, GpuTextureFormat::Rgba32Float, &format!("{label}-moments-b")),
             ],
             // RT-R2 (RD6): inert pass-through refl history pair — same
             // Rgba16Float format as irr history.
@@ -730,11 +730,12 @@ fn refl_channel_blends_history_and_current() {
     let irr_history = make_history(device, "bisect-irr-history");
     let irr_output = make_history(device, "bisect-irr-output");
 
-    // Moments channel — valid bindings only.
+    // Moments channel — valid bindings only (Rgba32Float since ED2: `.b`
+    // carries the accumulated ao).
     let moments_history =
-        make_history_side_channel(device, GpuTextureFormat::Rg32Float, "bisect-moments-history");
+        make_history_side_channel(device, GpuTextureFormat::Rgba32Float, "bisect-moments-history");
     let moments_output =
-        make_history_side_channel(device, GpuTextureFormat::Rg32Float, "bisect-moments-output");
+        make_history_side_channel(device, GpuTextureFormat::Rgba32Float, "bisect-moments-output");
 
     // ── Reflection channel ────────────────────────────────────────────
     // H = (1.0, 0.0, 0.0, 5.0): history seed, .a = 5.0 is a valid hit distance.

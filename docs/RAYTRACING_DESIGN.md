@@ -1,6 +1,6 @@
 # Ray Tracing — hybrid RT lighting for hero scenes
 
-**Status:** IN PROGRESS — Tier 1+2, the motion class, reflections R1/R2/R3, T3-8 multi-bounce GI, section 12 (Screen-space AO handoff) and section 13 (Temporal denoiser rebuild) all landed; phase records in section 9.6 (Phases). OWED: Peter's look at multi-bounce, at the R2 constants, and at the denoiser under fast camera motion; a `trace_ms` 2-vs-1 number from a heavier scene. Items 6/9, P5 export (D13) and P6 frame interp stay show-need-triggered; perf profiling deferred. · 2026-07-30 · Fable + Opus
+**Status:** IN PROGRESS — Tier 1+2, the motion class, reflections R1/R2/R3, T3-8 multi-bounce GI, section 12 (Screen-space AO handoff), section 13 (Temporal denoiser rebuild) and section 14 ED-A (traced environment diffuse) all landed; phase records in section 9.6 (Phases). OWED: Peter's look at multi-bounce, at the R2 constants, and at the denoiser under fast camera motion; ED-B/ED-C (section 14.4); a `trace_ms` 2-vs-1 number from a heavier scene. Items 6/9, P5 export (D13) and P6 frame interp stay show-need-triggered; perf profiling deferred. · 2026-07-31 · K3 + Peter
 **Prerequisites:** none for P0. P1+ gated on P0 numbers and on RENDERING_INFRA_V2 section 2 (G-buffer/motion vectors) for temporal pieces.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -1001,7 +1001,7 @@ sweep-trail risk in principle, with the variance clamp and per-texel count reset
 guards. 40 frames is the first constant to pull back if it trails. Everything measured here is
 one project, one camera, one material class.
 
-## 14. Traced environment diffuse — env joins the GI gather (BUG-yq1d (traced AO never darkens env diffuse); SUPERSEDES MB3; SPEC 2026-07-31, K3 + Peter — approved direction, not yet executed)
+## 14. Traced environment diffuse — env joins the GI gather (BUG-yq1d (traced AO never darkens env diffuse); SUPERSEDES MB3; ED-A LANDED 2026-07-31 — kernel/substitution/constants/clamp + PBR-only consumers (ED3a) and the void-texel fallback, Peter's metal-fixture sign-off. OWED: ED-B (HDRI firefly fixture + furnace joins the noise gate, closes BUG-ipad (noise gate certifies frozen noise)), ED-C (enclosure convergence, closes BUG-qt32 (GI energy constants look unphysical)))
 
 The furnace oracle (lane/rt-furnace-oracle) measured what MB3's "env is never gathered"
 actually costs: with a uniform sky wired, the term that lights the scene is the raster
@@ -1051,6 +1051,19 @@ return L.
   (named, cross-mirror comment discipline per `RT_REFL_PREFILTER_MAX_MIP`). Each term
   is consumed in exactly one place; the Ambient knob never gets `kd_ibl` scaling.
 - **ED3 — demodulation unchanged** (D3/MB5): no primary-surface albedo in-kernel.
+- **ED3a — RT lighting consumers are PBR-only (Peter, 2026-07-31).** The ED2
+  substitution lives in `fs_pbr`'s `diffuse_ibl`; phong/cel draws in an RT
+  scene get the `rt_or_flat_ambient` recompose and NO traced env/GI (their
+  old GI coupling was accidental — they rode the shared ambient slot), with
+  a one-time `log::warn` per scene instance so the degradation is loud.
+  Phong is absent from every shipped preset (survey 2026-07-31: only the
+  three RT compare fixtures used it — migrated to `pbr_material` +
+  uniform-black `bake_environment` in ED-A); supporting a second lit
+  consumer would double every RT shading decision for a material nothing
+  ships. Unlit is exempt by design (no lighting). Blend-queue fragments at
+  void texels keep the raster irradiance-map fetch (the `rt_refl.a < 0`
+  fallback discipline — the fragment class from BUG-88m (rt-reflection-substitution-domain-wider-than-trace-domain)
+  — keyed on the kernel's void signature rgb 0/ao 1 in WGSL).
 - **ED4 — the two GI constants are settled by the codebase's own conventions, then
   certified by fixture** (closes BUG-qt32 (GI energy constants look unphysical)).
   `RT_GI_THROUGHPUT_FOLD` is DELETED: the cosine-weighted estimator's throughput
