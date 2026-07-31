@@ -227,6 +227,16 @@ struct HistorySet {
     /// RT-R2 (RD6): specular history ping-pong pair — same lifecycle as
     /// irr history pair above (inert pass-through at this step).
     refl: [GpuTexture; 2],
+    /// SV-ACCUM: shadow-visibility history ping-pong pair — same ping
+    /// clock as every other channel.
+    sv: [GpuTexture; 2],
+    /// SV-ACCUM moments: per-channel first/second visibility moments.
+    sv_m1: [GpuTexture; 2],
+    sv_m2: [GpuTexture; 2],
+    /// SV-ACCUM snap-hold countdown pair (`.x`) — a gate trip holds the
+    /// n=2 snap for 4 frames (the straddling moments deaden the sigma
+    /// gate right after a real crossing).
+    sv_hold: [GpuTexture; 2],
     ping: usize,
 }
 
@@ -254,6 +264,22 @@ impl HistorySet {
             refl: [
                 make_history(device, &format!("{label}-refl-a")),
                 make_history(device, &format!("{label}-refl-b")),
+            ],
+            sv: [
+                make_history(device, &format!("{label}-sv-a")),
+                make_history(device, &format!("{label}-sv-b")),
+            ],
+            sv_m1: [
+                make_history(device, &format!("{label}-sv-m1-a")),
+                make_history(device, &format!("{label}-sv-m1-b")),
+            ],
+            sv_m2: [
+                make_history(device, &format!("{label}-sv-m2-a")),
+                make_history(device, &format!("{label}-sv-m2-b")),
+            ],
+            sv_hold: [
+                make_history(device, &format!("{label}-sv-hold-a")),
+                make_history(device, &format!("{label}-sv-hold-b")),
             ],
             ping: 0,
         }
@@ -290,6 +316,33 @@ impl HistorySet {
     fn write_refl(&self) -> &GpuTexture {
         &self.refl[1 - self.ping]
     }
+    // SV-ACCUM: visibility history read/write — same ping clock.
+    fn read_sv(&self) -> &GpuTexture {
+        &self.sv[self.ping]
+    }
+    fn write_sv(&self) -> &GpuTexture {
+        &self.sv[1 - self.ping]
+    }
+    // SV-ACCUM moments: visibility moments read/write — same ping clock.
+    fn read_sv_m1(&self) -> &GpuTexture {
+        &self.sv_m1[self.ping]
+    }
+    fn write_sv_m1(&self) -> &GpuTexture {
+        &self.sv_m1[1 - self.ping]
+    }
+    fn read_sv_m2(&self) -> &GpuTexture {
+        &self.sv_m2[self.ping]
+    }
+    fn write_sv_m2(&self) -> &GpuTexture {
+        &self.sv_m2[1 - self.ping]
+    }
+    // SV-ACCUM snap-hold countdown — same ping clock.
+    fn read_sv_hold(&self) -> &GpuTexture {
+        &self.sv_hold[self.ping]
+    }
+    fn write_sv_hold(&self) -> &GpuTexture {
+        &self.sv_hold[1 - self.ping]
+    }
     fn advance(&mut self) {
         self.ping = 1 - self.ping;
     }
@@ -297,6 +350,11 @@ impl HistorySet {
     /// `advance()`, matching `self.ping`'s new value.
     fn current_irr(&self) -> &GpuTexture {
         &self.irr[self.ping]
+    }
+    /// The most recently written visibility texture — same contract as
+    /// `current_irr`.
+    fn current_sv(&self) -> &GpuTexture {
+        &self.sv[self.ping]
     }
 }
 
@@ -368,6 +426,35 @@ fn run_accumulate_with_motion(
     prev_view_proj: [[f32; 4]; 4],
     label: &str,
 ) {
+    // SV-ACCUM: fully-lit visibility for the current frame (1 = no shadow)
+    // — the tests here assert on the irr/refl channels, so a constant
+    // pass-through sv is the honest inert input.
+    let hi_sv_lit = upload_irr(device, 1.0, 1.0, 1.0, "p2-hi-sv-lit");
+    run_accumulate_with_sv(
+        device, tracer, hi_irr, depth_tex, hi_normal, history, alpha, reset, obj_count,
+        obj_motion, prev_view_proj, &hi_sv_lit, label,
+    );
+}
+
+/// `run_accumulate` with an explicit shadow-visibility input — the
+/// SV-ACCUM proofs below drive a flickering sv; the pre-existing proofs
+/// get the constant fully-lit dummy via `run_accumulate`.
+#[allow(clippy::too_many_arguments)]
+fn run_accumulate_with_sv(
+    device: &GpuDevice,
+    tracer: &MetalShadowRayTracer,
+    hi_irr: &GpuTexture,
+    depth_tex: &GpuTexture,
+    hi_normal: &GpuTexture,
+    history: &mut HistorySet,
+    alpha: f32,
+    reset: bool,
+    obj_count: u32,
+    obj_motion: [[f32; 4]; 4],
+    prev_view_proj: [[f32; 4]; 4],
+    hi_sv: &GpuTexture,
+    label: &str,
+) {
     let params_buffer =
         device.create_buffer_shared(std::mem::size_of::<AccumulateParams>() as u64);
     let params =
@@ -386,9 +473,6 @@ fn run_accumulate_with_motion(
             );
         }
     }
-    // RT-R2 (RD6): inert pass-through — dummy zero refl texture and a
-    // single-element gi_materials buffer (kernel binds but does not read
-    // in this plumbing step).
     let hi_refl_dummy = upload_irr(device, 0.0, 0.0, 0.0, "p2-hi-refl-dummy");
     let gi_materials_buf = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
     let mut enc = device.create_encoder(label);
@@ -414,6 +498,15 @@ fn run_accumulate_with_motion(
             history.read_refl(),
             history.write_refl(),
             &gi_materials_buf,
+            hi_sv,
+            history.read_sv(),
+            history.write_sv(),
+            history.read_sv_m1(),
+            history.write_sv_m1(),
+            history.read_sv_m2(),
+            history.write_sv_m2(),
+            history.read_sv_hold(),
+            history.write_sv_hold(),
             label,
         );
     }
@@ -755,6 +848,17 @@ fn refl_channel_blends_history_and_current() {
     let obj_motion_buffer =
         device.create_buffer_shared(std::mem::size_of::<[[f32; 4]; 4]>() as u64);
     let gi_materials_buf = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
+    // SV-ACCUM: inert fully-lit visibility input + history/output pair —
+    // these legs assert on the refl channel only.
+    let hi_sv = upload_irr(device, 1.0, 1.0, 1.0, "bisect-hi-sv");
+    let sv_history = make_history(device, "bisect-sv-history");
+    let sv_output = make_history(device, "bisect-sv-output");
+    let sv_m1_in = make_history(device, "bisect-sv-m1-in");
+    let sv_m1_out = make_history(device, "bisect-sv-m1-out");
+    let sv_m2_in = make_history(device, "bisect-sv-m2-in");
+    let sv_m2_out = make_history(device, "bisect-sv-m2-out");
+    let sv_hold_in = make_history(device, "bisect-sv-hold-in");
+    let sv_hold_out = make_history(device, "bisect-sv-hold-out");
 
     // ── Leg 1: reset = false — history must blend toward current ──────
     let blend_params = AccumulateParams::new([W, H], 0.1, false, 0, [0.0; 3], IDENTITY, IDENTITY);
@@ -781,6 +885,15 @@ fn refl_channel_blends_history_and_current() {
             &refl_history,
             &refl_output,
             &gi_materials_buf,
+            &hi_sv,
+            &sv_history,
+            &sv_output,
+            &sv_m1_in,
+            &sv_m1_out,
+            &sv_m2_in,
+            &sv_m2_out,
+            &sv_hold_in,
+            &sv_hold_out,
             "bisect-blend",
         );
         enc.commit_and_wait_completed();
@@ -896,6 +1009,15 @@ fn refl_channel_blends_history_and_current() {
             &refl_history,
             &refl_output_reset,
             &gi_materials_buf,
+            &hi_sv,
+            &sv_history,
+            &sv_output,
+            &sv_m1_in,
+            &sv_m1_out,
+            &sv_m2_in,
+            &sv_m2_out,
+            &sv_hold_in,
+            &sv_hold_out,
             "bisect-reset",
         );
         enc.commit_and_wait_completed();
@@ -1251,5 +1373,141 @@ fn hard_lighting_change_snaps_instead_of_averaging_in() {
         "a hard lighting change did not land in one frame (r {got}, expected {expected_snap}; \
          {expected_lag} is the pre-fix behaviour where a cue averages in over the accumulator's \
          whole window — the on-stage symptom Peter reported as lights lagging)"
+    );
+}
+
+// ── SV-ACCUM proofs (2026-07-31) ─────────────────────────────────────
+// The shadow-visibility channel was the only RT channel with no temporal
+// accumulation: raw per-frame half-res samples straight to the fragment
+// shader, the penumbra boil Peter reported. These proofs pin the
+// channel's new contract: it converges temporally like every other
+// channel (a max-amplitude flicker input collapses to its mean with a
+// bounded residual), a reset still cold-starts it, and a real shadow
+// arrival snaps the blend until the new level converges.
+
+#[test]
+fn sv_channel_converges_under_max_amplitude_flicker() {
+    let h = shared();
+    let tracer = MetalShadowRayTracer::new(&h.device);
+    let depth_tex = make_constant_depth(&h.device, "sv-accum-depth");
+    let hi_normal = make_constant_normal(&h.device, "sv-accum-normal");
+    // Constant irradiance so the irr change gate never trips (it keys on
+    // irr luma) — the sv blend runs at 1/n undisturbed, which is exactly
+    // the convergence behavior under test.
+    let hi_irr = upload_irr(&h.device, 0.5, 0.5, 0.5, "sv-accum-irr");
+    // Penumbra BOIL, not a square wave: 0.3/0.7 alternation around the 0.5
+    // mean — amplitude 0.4. Once the moments converge the per-channel sigma
+    // sits at ~0.2 and the 4-sigma gate band (~0.8) never trips, so the
+    // blend amortizes at 1/n; a full 0↔1 step is a shadow edge crossing
+    // and correctly snaps. Constant irradiance keeps the irr gate quiet
+    // for the same reason.
+    let sv_lo = upload_irr(&h.device, 0.3, 0.3, 0.3, "sv-accum-sv-lo");
+    let sv_hi = upload_irr(&h.device, 0.7, 0.7, 0.7, "sv-accum-sv-hi");
+    let mut history = HistorySet::new(&h.device, "sv-accum-history");
+
+    // Alternate dim/bright frames around the mean. Center pixel read back
+    // at frames 19 and 21.
+    let mut v19 = 0.0f32;
+    for frame in 0..22 {
+        let sv = if frame % 2 == 0 { &sv_lo } else { &sv_hi };
+        run_accumulate_with_sv(
+            &h.device, &tracer, &hi_irr, &depth_tex, &hi_normal, &mut history,
+            TEST_ALPHA, frame == 0, 0, [[0.0; 4]; 4], IDENTITY, sv,
+            &format!("sv-accum-frame-{frame}"),
+        );
+        if frame == 19 {
+            v19 = readback_rgba_f32(history.current_sv())[(((H / 2) * W + W / 2) * 4) as usize];
+        }
+    }
+    let v21 = readback_rgba_f32(history.current_sv())[(((H / 2) * W + W / 2) * 4) as usize];
+
+    let mean = (v19 + v21) / 2.0;
+    let delta = (v21 - v19).abs();
+    eprintln!("[sv-accum] converged mean = {mean} (expect ~0.5), late frame-to-frame delta = {delta} (raw input swings 0.4)");
+    assert!(
+        (mean - 0.5).abs() < 0.06,
+        "sv channel did not converge to the input mean (mean {mean}, expected ~0.5) — \
+         the running-mean blend is not engaging on the visibility channel"
+    );
+    assert!(
+        delta < 0.08,
+        "sv channel still boils late in a static scene (frame-to-frame delta {delta} at frame ~20, \
+         raw input swings 0.4) — temporal amortization is not reaching the shadow mask"
+    );
+}
+
+#[test]
+fn sv_channel_reset_cold_starts_from_current_frame() {
+    let h = shared();
+    let tracer = MetalShadowRayTracer::new(&h.device);
+    let depth_tex = make_constant_depth(&h.device, "sv-reset-depth");
+    let hi_normal = make_constant_normal(&h.device, "sv-reset-normal");
+    let hi_irr = upload_irr(&h.device, 0.5, 0.5, 0.5, "sv-reset-irr");
+    // Warm the sv history on a lit frame, then reset on a 0.25 frame:
+    // history must read exactly the current frame, no lit ghost.
+    let sv_lit = upload_irr(&h.device, 1.0, 1.0, 1.0, "sv-reset-sv-lit");
+    let sv_quarter = upload_irr(&h.device, 0.25, 0.25, 0.25, "sv-reset-sv-quarter");
+    let mut history = HistorySet::new(&h.device, "sv-reset-history");
+    for frame in 0..6 {
+        run_accumulate_with_sv(
+            &h.device, &tracer, &hi_irr, &depth_tex, &hi_normal, &mut history,
+            TEST_ALPHA, frame == 0, 0, [[0.0; 4]; 4], IDENTITY, &sv_lit,
+            &format!("sv-reset-warm-{frame}"),
+        );
+    }
+    run_accumulate_with_sv(
+        &h.device, &tracer, &hi_irr, &depth_tex, &hi_normal, &mut history,
+        TEST_ALPHA, true, 0, [[0.0; 4]; 4], IDENTITY, &sv_quarter,
+        "sv-reset-cut",
+    );
+    let got = readback_rgba_f32(history.current_sv())[(((H / 2) * W + W / 2) * 4) as usize];
+    eprintln!("[sv-reset] post-reset sv = {got} (expect exactly 0.25)");
+    assert!(
+        (got - 0.25).abs() < 1e-3,
+        "sv history kept a ghost through reset (read {got}, expected 0.25) — \
+         a scene cut would leave stale shadows on the frame"
+    );
+}
+
+#[test]
+fn sv_channel_snaps_when_shadow_arrives() {
+    // PROBE (SV-ACCUM finding 2 discrimination, 2026-07-31): the scene-level
+    // rt_object_motion_shadow proof shows the destination shadow NEVER
+    // forming after an occluder move — the whole ground stays lit. This is
+    // the same scenario synthetically: warm the sv history fully lit, then
+    // feed fully-shadowed frames WITHOUT reset; the sigma gate must trip
+    // and the snap-hold must keep the blend at n=2 (alpha 0.5) until the
+    // accumulated visibility converges — a gate that fires once and then
+    // deadens on its own straddling moments decays at 1/n instead and the
+    // shadow never forms within the proof's window.
+    let h = shared();
+    let tracer = MetalShadowRayTracer::new(&h.device);
+    let depth_tex = make_constant_depth(&h.device, "sv-snap-depth");
+    let hi_normal = make_constant_normal(&h.device, "sv-snap-normal");
+    let hi_irr = upload_irr(&h.device, 0.5, 0.5, 0.5, "sv-snap-irr");
+    let sv_lit = upload_irr(&h.device, 1.0, 1.0, 1.0, "sv-snap-sv-lit");
+    let sv_dark = upload_irr(&h.device, 0.0, 0.0, 0.0, "sv-snap-sv-dark");
+    let mut history = HistorySet::new(&h.device, "sv-snap-history");
+    for frame in 0..6 {
+        run_accumulate_with_sv(
+            &h.device, &tracer, &hi_irr, &depth_tex, &hi_normal, &mut history,
+            TEST_ALPHA, frame == 0, 0, [[0.0; 4]; 4], IDENTITY, &sv_lit,
+            &format!("sv-snap-warm-{frame}"),
+        );
+    }
+    let mut last = 1.0f32;
+    for frame in 0..6 {
+        run_accumulate_with_sv(
+            &h.device, &tracer, &hi_irr, &depth_tex, &hi_normal, &mut history,
+            TEST_ALPHA, false, 0, [[0.0; 4]; 4], IDENTITY, &sv_dark,
+            &format!("sv-snap-dark-{frame}"),
+        );
+        last = readback_rgba_f32(history.current_sv())[(((H / 2) * W + W / 2) * 4) as usize];
+        eprintln!("[sv-snap] after dark frame {frame}: sv = {last}");
+    }
+    assert!(
+        last < 0.2,
+        "sv history did not snap when a shadow arrived (still {last} after 6 fully-shadowed \
+         frames) — the sigma gate or its snap-hold is not engaging"
     );
 }

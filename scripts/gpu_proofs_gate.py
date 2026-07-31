@@ -68,8 +68,14 @@ def run_gate(manifest_path: Path, filters: list[str], skips: list[str]) -> tuple
         "--manifest-path",
         str(manifest_path),
     ]
+    # Serial test threads, always: ~135 proofs share one Metal device, and
+    # parallel execution corrupts VALUES, not just timing (BUG-m0c9 — red
+    # sets rotate across identical binaries; the same tests pass serially).
+    # 15s of determinism is cheaper than the re-run-every-landing tax the
+    # parallel mode was paying.
+    cmd.append("--")
+    cmd.append("--test-threads=1")
     if filters or skips:
-        cmd.append("--")
         cmd.extend(filters)
         for skip in skips:
             cmd.extend(["--skip", skip])
