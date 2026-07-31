@@ -106,8 +106,8 @@ def decide(command: str, model: str) -> str:
         return (
             f"cc-fleet {verb} denied: this session runs {model} — an executor "
             "tier. Executors execute; they never spawn agents at any depth "
-            "(docs/AGENT_ROUTING.md). STOP and report the need up to your "
-            "dispatcher instead."
+            "(docs/AGENT_ROUTING.md). STOP and report the need up to the "
+            "lead instead."
         )
     if DISPATCHER_TIER.search(model):
         if verb == "subagent" and target in EXECUTOR_PROVIDERS:

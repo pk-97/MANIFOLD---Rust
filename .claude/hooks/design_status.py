@@ -103,7 +103,18 @@ def bucket_of(status: str) -> int:
     return len(BUCKETS)  # falls into the "no clear status" tail
 
 
-def build_board(raw: bool = False) -> str:
+def _truncate_at_word(text: str, limit: int = 80) -> str:
+    """Truncate text to ~limit chars at a word boundary with ellipsis."""
+    if len(text) <= limit:
+        return text
+    truncated = text[:limit]
+    last_space = truncated.rfind(" ")
+    if last_space > 0:
+        return truncated[:last_space] + " …"
+    return truncated + "…"
+
+
+def build_board(raw: bool = False, compact: bool = False) -> str:
     docs = sorted(DOCS.glob("*_DESIGN.md"))
     rows = []  # (bucket, name, date, status_or_None)
     for path in docs:
@@ -122,6 +133,26 @@ def build_board(raw: bool = False) -> str:
     out.append("DESIGN STATUS BOARD — generated from docs/*_DESIGN.md (the source of truth).")
     out.append("Regenerate: python3 .claude/hooks/design_status.py · never hand-copy status into memory.")
     labels = [b[0] for b in BUCKETS] + ["NO STATUS LINE - check the doc"]
+    if compact:
+        for b, label in enumerate(labels):
+            group = sorted([r for r in rows if r[0] == b], key=lambda r: (r[2], r[1]), reverse=True)
+            if not group:
+                continue
+            if b == 0:
+                # IN PROGRESS / PARTIAL: show individual designs with truncated status
+                out.append(f"\n{label}")
+                width = max((len(n) for _, n, _, _ in group), default=0)
+                for _, name, date, status in group:
+                    text = status or "(no **Status line in doc)"
+                    text = _truncate_at_word(text, 80)
+                    out.append(f"  {name:<{width}}  {date}  {text}")
+            else:
+                # Other sections: one summary line
+                out.append(f"{label}: {len(group)} design{'s' if len(group) > 1 else ''}"
+                           f" — full board: python3 .claude/hooks/design_status.py")
+        return "\n".join(out)
+
+    # Full output (default, non-compact)
     width = max((len(n) for _, n, _, _ in rows), default=0)
     for b, label in enumerate(labels):
         group = sorted([r for r in rows if r[0] == b], key=lambda r: (r[2], r[1]), reverse=True)
@@ -256,8 +287,9 @@ def lifecycle_check() -> int:
 def main() -> int:
     if "--lifecycle-check" in sys.argv:
         return lifecycle_check()
-    board = build_board(raw="--raw" in sys.argv)
-    if "--raw" not in sys.argv:
+    compact = "--compact" in sys.argv
+    board = build_board(raw="--raw" in sys.argv, compact=compact)
+    if "--raw" not in sys.argv and not compact:
         dead = dead_shipped_docs()
         if dead:
             board += (f"\n\nARCHIVE CANDIDATES — shipped, cited by nothing live "
