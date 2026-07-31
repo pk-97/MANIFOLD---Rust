@@ -589,6 +589,11 @@ RD3's trigger).
 
 - **Shading-normal prepass target** — trigger: RD3's mismatch in Base traced reflections' (R1)
   demo or Peter's look; when the trigger fires it is absorbed by Raster-parity reflections (section 9.6).
+  **The trigger FIRED as BUG-wytp (rt-reflections-are-normal-map-blind) and shipped 2026-07-31
+  as IN-KERNEL normal-map sampling instead** (analytic per-triangle TBN at the primary hit,
+  `normal_tex_index` on `RtNormalSource`): the prepass is a depth-only pipeline with no
+  fragment stage, so the prepass target was the bigger build. The prepass target stays deferred —
+  revival: secondary-hit normal fidelity or AO bias artifacts demand it.
 - **Clearcoat / sheen / anisotropic / transmission traced lobes** — trigger: a show asset dominated
   by a coat reflection, plus spare measured ray budget.
 - **Reflection-specific trace resolution** — trigger: Base traced reflections' (R1) `trace_ms`
