@@ -1017,8 +1017,8 @@ _MANIFEST_PATH = MAIN_CHECKOUT / ".claude" / "hooks" / "enforcement-table.json"
 
 
 def _check_enforcement_manifest():
-    """Check h: the enforcement table (machine form of SEMANTIC_WORKFLOW_
-    PROGRAMS §3) matches reality. Hook rows: file exists AND is registered
+    """Check h: the enforcement table (machine form of the concept in
+    docs/archive/SEMANTIC_WORKFLOW_PROGRAMS.md section 3) matches reality. Hook rows: file exists AND is registered
     in settings.json. Exit-code rows with a file: file exists. Prompt rows:
     counted and printed — the visible soft surface the migration program
     burns down."""

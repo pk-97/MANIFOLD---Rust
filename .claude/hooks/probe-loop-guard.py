@@ -193,7 +193,7 @@ def main() -> None:
             "(DeepSeek lane), not lead-run. Write the evidence table to "
             "/tmp/manifold_seam_review.md (>=200 chars) to reset this guard. "
             "Before the next iteration, run the DEBUG_INVESTIGATION skeleton as a "
-            "checklist (SEMANTIC_WORKFLOW_PROGRAMS.md §10): SCHEMA_SEARCH before "
+            "checklist (docs/archive/SEMANTIC_WORKFLOW_PROGRAMS.md section 10): SCHEMA_SEARCH before "
             "any negative claim; GENERALIZE_TRIGGER after the first repro; "
             "CURE_TEST once a perfect action-correlation exists and two read "
             "rounds haven't cracked the mechanism."

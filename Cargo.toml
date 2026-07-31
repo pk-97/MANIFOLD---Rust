@@ -17,7 +17,6 @@ members = [
     "crates/manifold-spectral",
     "crates/manifold-recording",
     "crates/manifold-app",
-    "crates/workflow-runtime",
 ]
 # `cargo run` and bare `cargo test` at workspace root resolve to
 # manifold-app — restores the pre-`check-presets`-binary behavior
