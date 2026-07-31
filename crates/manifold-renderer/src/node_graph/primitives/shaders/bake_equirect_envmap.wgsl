@@ -17,7 +17,7 @@
 // merely approximately.
 //
 // Bindings:
-//   @binding(0) uniforms (64 bytes)
+//   @binding(0) uniforms (80 bytes)
 //   @binding(1) output_tex (rgba16float storage)
 
 struct Uniforms {
@@ -40,6 +40,13 @@ struct Uniforms {
     // radiance so metals have a world to reflect. 0.0 = the original
     // pure-black-void softbox, byte-identical to pre-F-P7 bakes.
     fill_intensity: f32,
+    // RT_FURNACE_ORACLE: white-furnace mode. 1 = bake a CONSTANT radiance
+    // (`intensity`) into every texel/direction, ignoring `mode` entirely.
+    // 0 = existing gradient/softbox behaviour, byte-identical.
+    uniform_mode: u32,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -145,6 +152,16 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 color += vec3<f32>(4.0, 4.0, 3.8) * uniforms.sun_disc_intensity * disc;
             }
         }
+    }
+
+    // RT_FURNACE_ORACLE: white-furnace mode overrides the gradient/softbox
+    // math entirely — every texel/direction gets the SAME radiance, so the
+    // derived irradiance map and prefiltered chain are constant too. Applied
+    // after the mode branch (never inside it) so `uniform_mode == 0u`
+    // leaves the branch above completely untouched — byte-identical to
+    // before this field existed.
+    if uniforms.uniform_mode == 1u {
+        color = vec3<f32>(1.0, 1.0, 1.0);
     }
 
     // Master brightness over every studio term — 0 bakes a fully black map so
