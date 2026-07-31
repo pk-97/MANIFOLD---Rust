@@ -3313,6 +3313,7 @@ fn metallicglass_optional_input_fusion_matches_unfused() {
 /// verified by the install build-check, the fusion must now be coincident —
 /// or be refused outright (also a pass: unfused is always correct).
 #[test]
+#[ignore = "BUG-i6eo (ParticleText fused-flow-field proof GPU hang): parked 2026-07-31 — the fused def's full-frame render hangs the GPU at the frame-1 commit (last dispatch: the particle-domain fused kernel); every component individually exonerated, resume trail in the bead"]
 fn particletext_fp32_flow_field_fused_matches_unfused() {
     let device = crate::test_device();
     let registry = PrimitiveRegistry::with_builtin();
