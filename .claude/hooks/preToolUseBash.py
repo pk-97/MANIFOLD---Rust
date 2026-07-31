@@ -309,8 +309,8 @@ def _top_level_segments(cmd: str):
 def persistent_cd_guard(cmd: str, cwd: str):
     """0g. Deny a top-level `cd` that parks the persistent shell cwd anywhere
     but a checkout root. cwd persists across Bash calls, so a stray `cd`
-    surfaces as a DELAYED failure: the near-miss merge in
-    SEMANTIC_WORKFLOW_PROGRAMS §10.5, then the real thing on 2026-07-27 — a
+    surfaces as a DELAYED failure: the near-miss merge recorded in
+    docs/archive/SEMANTIC_WORKFLOW_PROGRAMS.md section 10 (item 5), then the real thing on 2026-07-27 — a
     no-op `cd` left the shell in a worktree and the landing merge silently
     merged a branch into itself. Correctness guard: runs in EVERY mode.
 

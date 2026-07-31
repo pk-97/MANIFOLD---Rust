@@ -1,6 +1,6 @@
 # Semantic Workflow Programs — concept capture
 
-**Status:** EXPLORATION · captured 2026-07-25 from a Peter ↔ K3 (lead) design discussion · not yet a design doc; no build authorized except where noted. Related: `docs/AGENT_ROUTING.md` (the running implementation), `.claude/orchestration/decisions.md` D-48..D-56 (R1 wave evidence), `rt-reflections-r1-handoff` memory.
+**Status:** ARCHIVED 2026-07-31 — retired with the workflow runtime (verdict: docs/archive/WORKFLOW_RUNTIME_DESIGN.md status header). The durable pieces live on as the enforcement table (`.claude/hooks/enforcement-table.json`), `scripts/gate_runner.py`, and queue-file discipline. Still cited for live rules by `docs/GATE_RUNTIME_DESIGN.md`, `preToolUseBash.py` (persistent-cd rationale), and `probe-loop-guard.py` (SEMANTIC_WORKFLOW_PROGRAMS.md section 10 (DEBUG_INVESTIGATION), the debug skeleton). · Peter + k3 (lead)
 
 ---
 

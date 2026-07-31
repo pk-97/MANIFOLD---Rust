@@ -154,8 +154,8 @@ def lease_info(wt):
 
 
 def pid_alive(pid):
-    """Existence probe, same shape as workflow-runtime's `holder_alive`: signal 0
-    succeeds for a live pid and raises EPERM for one we don't own (also alive)."""
+    """Existence probe: signal 0 succeeds for a live pid and raises EPERM
+    for one we don't own (also alive)."""
     try:
         os.kill(int(pid), 0)
         return True
