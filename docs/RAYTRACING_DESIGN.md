@@ -1,6 +1,6 @@
 # Ray Tracing — hybrid RT lighting for hero scenes
 
-**Status:** IN PROGRESS — Tier 1+2, the motion class, reflections R1/R2/R3, T3-8 multi-bounce GI, section 12 (Screen-space AO handoff) and section 13 (Temporal denoiser rebuild) all landed; phase records in section 9.6 (Phases). OWED: Peter's look at multi-bounce, at the R2 constants, and at the denoiser under fast camera motion; a `trace_ms` 2-vs-1 number from a heavier scene. Items 6/9, P5 export (D13) and P6 frame interp stay show-need-triggered; perf profiling deferred. · 2026-07-30 · Fable + Opus
+**Status:** IN PROGRESS — Tier 1+2, the motion class, reflections R1/R2/R3, T3-8 multi-bounce GI, section 12 (Screen-space AO handoff), section 13 (Temporal denoiser rebuild) and section 14 ED-A (traced environment diffuse) all landed; phase records in section 9.6 (Phases). OWED: Peter's look at multi-bounce, at the R2 constants, and at the denoiser under fast camera motion; ED-B/ED-C (section 14.4); a `trace_ms` 2-vs-1 number from a heavier scene. Items 6/9, P5 export (D13) and P6 frame interp stay show-need-triggered; perf profiling deferred. · 2026-07-31 · K3 + Peter
 **Prerequisites:** none for P0. P1+ gated on P0 numbers and on RENDERING_INFRA_V2 section 2 (G-buffer/motion vectors) for temporal pieces.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -1001,7 +1001,7 @@ sweep-trail risk in principle, with the variance clamp and per-texel count reset
 guards. 40 frames is the first constant to pull back if it trails. Everything measured here is
 one project, one camera, one material class.
 
-## 14. Traced environment diffuse — env joins the GI gather (BUG-yq1d (traced AO never darkens env diffuse); SUPERSEDES MB3; SPEC 2026-07-31, K3 + Peter — approved direction, not yet executed)
+## 14. Traced environment diffuse — env joins the GI gather (BUG-yq1d (traced AO never darkens env diffuse); SUPERSEDES MB3; ED-A LANDED 2026-07-31 — kernel/substitution/constants/clamp + PBR-only consumers (ED3a) and the void-texel fallback, Peter's metal-fixture sign-off. OWED: ED-B (HDRI firefly fixture + furnace joins the noise gate, closes BUG-ipad (noise gate certifies frozen noise)), ED-C (enclosure convergence, closes BUG-qt32 (GI energy constants look unphysical)))
 
 The furnace oracle (lane/rt-furnace-oracle) measured what MB3's "env is never gathered"
 actually costs: with a uniform sky wired, the term that lights the scene is the raster
