@@ -2039,11 +2039,40 @@ kernel void accumulate_irradiance(
     texture2d<float>                     hi_refl             [[texture(11)]],
     texture2d<float>                     refl_history_read   [[texture(12)]],
     texture2d<float, access::write>      refl_history_write  [[texture(13)]],
+    // SV-ACCUM (2026-07-31): shadow-visibility temporal accumulation — the
+    // last RT channel without history. `.rgba` = the four caster slots,
+    // resampled through the SAME validated 4-tap reprojection weights as
+    // the irradiance channel (a shadow lives ON its surface: surface-history
+    // validity implies shadow-history validity), blended with the same
+    // running-mean shape but on its OWN change verdict — a per-channel
+    // sigma gate below, deliberately not the irr luma gate and not the CPU
+    // lighting key (visibility is geometry; strobes must not snap it). Without it the shadow
+    // term is raw per-frame samples at half res — spatially blurred by the
+    // atrous but temporally unfiltered, the boil Peter sees on every
+    // penumbra.
+    texture2d<float>                     hi_sv               [[texture(14)]],
+    texture2d<float>                     sv_history_read     [[texture(15)]],
+    texture2d<float, access::write>      sv_history_write    [[texture(16)]],
+    // SV-ACCUM moments: per-channel (per-caster-slot) first/second moments
+    // of the visibility signal — the discriminator the sv change gate
+    // needs. A per-frame |cur − hist| delta is statistically IDENTICAL for
+    // penumbra boil (binary ray noise around a mid-range mean) and for a
+    // real shadow-edge crossing; only the temporal spread separates them
+    // (a converged texel's sigma falls to ~0, so any sustained delta is
+    // signal) — the same trick the irradiance gate's moments play.
+    // Rgba16Float suffices: visibility is 0..1, its variance ~0.25 at the
+    // noisiest, nowhere near the cancellation floor the irr luma moments
+    // needed Rgba32Float for.
+    texture2d<float>                     sv_m1_read          [[texture(17)]],
+    texture2d<float, access::write>      sv_m1_write         [[texture(18)]],
+    texture2d<float>                     sv_m2_read          [[texture(19)]],
+    texture2d<float, access::write>      sv_m2_write         [[texture(20)]],
     device GiMaterial*                 gi_materials        [[buffer(3)]],
     uint2 tid [[thread_position_in_grid]])
 {
     if (tid.x >= p.size.x || tid.y >= p.size.y) return;
     float4 cur = hi_irr.read(tid);
+    float4 cur_sv = hi_sv.read(tid);
     float  cur_depth = depth_tex.read(tid, 0);
     float4 cur_n4 = hi_normal.read(tid);
     float3 cur_normal = cur_n4.xyz;
@@ -2071,6 +2100,9 @@ kernel void accumulate_irradiance(
         // `.a` is free to carry the ao end-to-end).
         moments_write.write(float4(cur_luma, cur_luma * cur_luma, cur.a, 1.0), tid);
         refl_history_write.write(hi_refl.read(tid), tid);
+        sv_history_write.write(cur_sv, tid);
+        sv_m1_write.write(cur_sv, tid);
+        sv_m2_write.write(cur_sv * cur_sv, tid);
         return;
     }
 
@@ -2091,6 +2123,12 @@ kernel void accumulate_irradiance(
     // `cur.a` (the current frame's ao, .a = ao per the kernel write sites)
     // is the fallback whenever history is rejected.
     float ao_blended = cur.a;
+    // SV-ACCUM: the four caster-visibility channels blend with the SAME
+    // weight `alpha` as the irradiance rgb — one convergence clock, one
+    // snap decision. `cur_sv` is the fallback whenever history is rejected.
+    float4 sv_blended = cur_sv;
+    float4 sv_m1w = cur_sv;
+    float4 sv_m2w = cur_sv * cur_sv;
     // Frames of history behind this texel, carried in `moments_write.w`
     // (was `history_write.a` — ED2 moved the ao there). 1 = this frame only
     // (a rejected/disoccluded texel is a cold start).
@@ -2176,6 +2214,9 @@ kernel void accumulate_irradiance(
                 float wsum = 0.0; float3 hsum = float3(0.0); float2 msum = float2(0.0);
                 float asum = 0.0;
                 float nsum = 0.0;
+                float4 svsum = float4(0.0);
+                float4 sv1sum = float4(0.0);
+                float4 sv2sum = float4(0.0);
                 for (int i = 0; i < 4; ++i) {
                     int2 t = clamp(base + offs[i], int2(0), int2(p.size) - 1);
                     uint2 tt = uint2(t);
@@ -2193,6 +2234,13 @@ kernel void accumulate_irradiance(
                         float4 mo = moments_read.read(tt);
                         nsum += w[i] * mo.w;
                         asum += w[i] * mo.b;
+                        // SV-ACCUM: same validated taps, same weights — the
+                        // visibility history never gets its own reprojection
+                        // test because a shadow lives ON a surface: if the
+                        // surface's history is valid here, so is its shadow's.
+                        svsum += w[i] * sv_history_read.read(tt);
+                        sv1sum += w[i] * sv_m1_read.read(tt);
+                        sv2sum += w[i] * sv_m2_read.read(tt);
                     }
                 }
                 if (wsum > 1e-4) {
@@ -2260,6 +2308,39 @@ kernel void accumulate_irradiance(
                     // ED2: ao temporally accumulates with the SAME weight as
                     // the rgb (one value per pixel, the atrous anchor).
                     ao_blended = mix(asum / wsum, cur.a, alpha);
+                    // SV-ACCUM: the visibility channel runs on `n_full`,
+                    // NOT the lighting-collapsed `n` — it has its own change
+                    // verdict below and deliberately ignores
+                    // `lighting_changed`.
+                    // The verdict the irr gate CANNOT see: an occluder move.
+                    // The receiving surface is unchanged, so its depth/normal
+                    // validate and its irr luma can move less than the irr
+                    // gate — while its visibility flips fully. But a per-frame
+                    // |cur − hist| delta can't tell that flip from penumbra
+                    // boil (binary ray noise around a mid-range mean produces
+                    // the same deltas) — an absolute threshold fires once and
+                    // lets the residual fade at the floor, a relative one
+                    // trips on boil. The temporal SIGMA separates them: a
+                    // boiling texel has sigma ~0.5 and stays inside the band;
+                    // a converged texel's sigma is ~0 and any sustained delta
+                    // is a real edge. Same trick as the irr gate's moments,
+                    // per caster channel. Deliberately NOT OR'd with
+                    // `lighting_changed`: visibility is a geometry term — a
+                    // caster intensity strobe doesn't change it, and snapping
+                    // on the CPU key would discard convergence every strobe
+                    // (D3). A caster MOVE shows up per-texel through this
+                    // gate anyway.
+                    float4 sv_hist = svsum / wsum;
+                    float4 sv_hm1 = sv1sum / wsum;
+                    float4 sv_hm2 = sv2sum / wsum;
+                    float4 sv_sd = sqrt(max(sv_hm2 - sv_hm1 * sv_hm1, float4(0.0)));
+                    float4 sv_d4 = abs(cur_sv - sv_hist);
+                    float4 sv_gate = max(4.0 * sv_sd,
+                                         0.15 * max(sv_hist, cur_sv));
+                    bool sv_changed = any(sv_d4 > max(sv_gate, float4(0.05)));
+                    float sv_n = sv_changed ? 2.0 : n_full;
+                    float sv_alpha = max(1.0 / sv_n, p.alpha);
+                    sv_blended = mix(sv_hist, cur_sv, sv_alpha);
                     valid = true;
                     // The moments update on a FLOORED window (>= 4 samples)
                     // even when the colour snaps to 2. One counter serves both,
@@ -2270,6 +2351,12 @@ kernel void accumulate_irradiance(
                     float m_alpha = max(1.0 / max(n, 4.0), p.alpha);
                     moment1 = mix(hm1, cur_luma, m_alpha);
                     moment2 = mix(hm2, cur_luma * cur_luma, m_alpha);
+                    // SV-ACCUM: visibility moments on the SAME floored window
+                    // — a snap shortens the noise estimate for both channels,
+                    // which is exactly what keeps a real crossing snap-
+                    // persistent until it converges.
+                    sv_m1w = mix(sv_hm1, cur_sv, m_alpha);
+                    sv_m2w = mix(sv_hm2, cur_sv * cur_sv, m_alpha);
                     // The SURFACE's lighting changed, so its specular history
                     // is stale for the same reason — one decision, both
                     // channels (the reflection block below reads this).
@@ -2285,6 +2372,11 @@ kernel void accumulate_irradiance(
     history_write.write(valid ? float4(blended, ao_blended) : float4(cur.xyz, cur.a), tid);
     depth_history_write.write(float4(cur_depth, 0, 0, 0), tid);
     moments_write.write(float4(moment1, moment2, ao_blended, valid ? hist_len : 1.0), tid);
+    // SV-ACCUM: rejected/disoccluded texels cold-start from the current
+    // frame's visibility, same fallback discipline as the irradiance write.
+    sv_history_write.write(valid ? sv_blended : cur_sv, tid);
+    sv_m1_write.write(sv_m1w, tid);
+    sv_m2_write.write(sv_m2w, tid);
     // Specular history length, `normal_history.w`. Written below the
     // reflection block (which computes it) — the normal itself is settled
     // here, so the deferred write costs nothing.
@@ -3217,6 +3309,19 @@ pub trait ShadowRayTracer {
         refl_history_read: &GpuTexture,
         refl_history_write: &GpuTexture,
         gi_materials: &GpuBuffer,
+        // SV-ACCUM: shadow-visibility channel (4 caster slots) — current
+        // frame post-atrous mask + its own ping-pong history pair, same
+        // flip clock as the irradiance/reflection pairs.
+        hi_sv: &GpuTexture,
+        sv_history_read: &GpuTexture,
+        sv_history_write: &GpuTexture,
+        // SV-ACCUM moments: per-channel first/second visibility moments
+        // (two ping-pong pairs, same clock) — the sigma the sv change gate
+        // needs to tell penumbra boil from a real shadow-edge crossing.
+        sv_m1_read: &GpuTexture,
+        sv_m1_write: &GpuTexture,
+        sv_m2_read: &GpuTexture,
+        sv_m2_write: &GpuTexture,
         label: &str,
     );
 }
@@ -3368,6 +3473,16 @@ impl MetalShadowRayTracer {
                 (12, SlotKind::Texture),
                 (13, SlotKind::Texture),
                 (3, SlotKind::Buffer),
+                // SV-ACCUM: hi_sv / sv history pair — same incident class,
+                // same rule.
+                (14, SlotKind::Texture),
+                (15, SlotKind::Texture),
+                (16, SlotKind::Texture),
+                // SV-ACCUM moments (m1/m2 pairs).
+                (17, SlotKind::Texture),
+                (18, SlotKind::Texture),
+                (19, SlotKind::Texture),
+                (20, SlotKind::Texture),
             ]),
         );
         let debug_fetch_normal_pipeline = compile_pipeline(
@@ -3812,6 +3927,17 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         refl_history_read: &GpuTexture,
         refl_history_write: &GpuTexture,
         gi_materials: &GpuBuffer,
+        // SV-ACCUM: shadow-visibility channel (4 caster slots) — current
+        // frame post-atrous mask + its own ping-pong history pair, same
+        // flip clock as the irradiance/reflection pairs.
+        hi_sv: &GpuTexture,
+        sv_history_read: &GpuTexture,
+        sv_history_write: &GpuTexture,
+        // SV-ACCUM moments: per-channel first/second visibility moments.
+        sv_m1_read: &GpuTexture,
+        sv_m1_write: &GpuTexture,
+        sv_m2_read: &GpuTexture,
+        sv_m2_write: &GpuTexture,
         label: &str,
     ) {
         params_buffer.upload(accumulate_params_bytes(params));
@@ -3887,6 +4013,37 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                 GpuBinding::Texture {
                     binding: 13,
                     texture: refl_history_write,
+                },
+                // SV-ACCUM: hi_sv / sv history pair — same incident class,
+                // same rule (slot map extended in the same commit).
+                GpuBinding::Texture {
+                    binding: 14,
+                    texture: hi_sv,
+                },
+                GpuBinding::Texture {
+                    binding: 15,
+                    texture: sv_history_read,
+                },
+                GpuBinding::Texture {
+                    binding: 16,
+                    texture: sv_history_write,
+                },
+                // SV-ACCUM moments (m1/m2 pairs).
+                GpuBinding::Texture {
+                    binding: 17,
+                    texture: sv_m1_read,
+                },
+                GpuBinding::Texture {
+                    binding: 18,
+                    texture: sv_m1_write,
+                },
+                GpuBinding::Texture {
+                    binding: 19,
+                    texture: sv_m2_read,
+                },
+                GpuBinding::Texture {
+                    binding: 20,
+                    texture: sv_m2_write,
                 },
                 GpuBinding::Buffer {
                     binding: 3,
