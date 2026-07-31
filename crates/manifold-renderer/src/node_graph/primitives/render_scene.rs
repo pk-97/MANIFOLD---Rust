@@ -3895,9 +3895,12 @@ impl EffectNode for RenderScene {
         // LUT textures are ready to sample; see `run_ibl_convolution`'s doc
         // comment for the cache-vs-correctness tradeoff on the two
         // envmap-dependent resources. ----
+        // Read before `ctx.gpu_encoder()` takes a mutable borrow of ctx.
+        // Hoisted out of the convolution block: the RT `lighting_key` below
+        // folds this same generation in so an env rebake snaps the
+        // accumulator instead of fading on the EMA floor.
+        let envmap_generation = ctx.inputs.slot_generation("envmap");
         {
-            // Read before `ctx.gpu_encoder()` takes a mutable borrow of ctx.
-            let envmap_generation = ctx.inputs.slot_generation("envmap");
             let rebuild_epoch = ctx.rebuild_epoch;
             let gpu = ctx.gpu_encoder();
             let sampler = self.sampler.as_ref().expect("ensured").clone();
@@ -4672,6 +4675,20 @@ impl EffectNode for RenderScene {
                     for f in atmosphere.ambient_tint {
                         mix(f.to_bits());
                     }
+                    // The environment map is a lighting input too: a rebake
+                    // (intensity/rotation/emitter layout, from
+                    // bake_equirect_envmap or hdri_source alike) bumps this
+                    // slot's write generation. Without it here an env move
+                    // only tripped the per-texel luma gate where env was
+                    // >15% of a pixel's brightness — in a sun-lit scene the
+                    // env share is under that, so the fade ran on the
+                    // IRRADIANCE_ACCUM_ALPHA floor (~2.5s tail). Peter
+                    // watched exactly that on the env-intensity fader.
+                    // `None` (unwired) mixes as zero: an unwired→wired
+                    // transition still flips the key.
+                    let g = envmap_generation.unwrap_or(0);
+                    mix(g as u32);
+                    mix((g >> 32) as u32);
                     k
                 };
                 let lighting_changed = self

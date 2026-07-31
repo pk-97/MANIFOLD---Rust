@@ -1664,11 +1664,22 @@ kernel void upsample_shadow(
     // shared flat surface's own precision noise.
     const float UPSAMPLE_NORMAL_POWER = 32.0;
     float4 acc_sv = 0.0; float3 acc_irr = 0.0; float acc_ao = 0.0; float3 acc_n = 0.0; float3 acc_refl = 0.0; float wsum = 0.0;
+    // All-reject has two sub-cases with different right answers. VOID among
+    // the taps = a silhouette the half-res grid straddles: the floored
+    // equal-average below then blends lit surface with background at full
+    // strength and paints a bright ring on dark edges (the lion halo) —
+    // take the single nearest tap instead (one real sample, no cross-
+    // surface blend). NO void = a corner/thin feature inside geometry:
+    // the floored average is measurably closer to the Monte-Carlo
+    // reference there (rt_edc_enclosure, 0.934 vs 0.965 estimator), so
+    // it stays.
+    uint void_taps = 0u;
     for (int dy = 0; dy <= 1; dy++)
     for (int dx = 0; dx <= 1; dx++) {
         int2 q = clamp(lo_c + int2(dx, dy), int2(0), int2(p.trace_size) - 1);
         uint2 gq = min(uint2((float2(q) + 0.5) / float2(p.trace_size) * float2(p.gbuffer_size)), p.gbuffer_size - 1);
         float qd = depth_tex.read(gq, 0);
+        if (qd >= 1.0 - 1e-6) void_taps++;
         float3 qn = lo_n.read(uint2(q)).xyz;
         float2 f = saturate(1.0 - fabs(lo_uv - 0.5 - float2(q)));
         float w_bilin = f.x * f.y;
@@ -1682,6 +1693,14 @@ kernel void upsample_shadow(
         acc_n += qn * w;
         acc_refl += lo_refl.read(uint2(q)).rgb * w;
         wsum += w;
+    }
+    if (wsum < 1e-4 && void_taps > 0u) {
+        uint2 uq = uint2(nearest_lo);
+        hi_sv.write(lo_sv.read(uq), tid);
+        hi_irr.write(lo_irr.read(uq), tid);
+        hi_n.write(float4(ref_n, ref_n4.w), tid);
+        hi_refl.write(lo_refl.read(uq), tid);
+        return;
     }
     hi_sv.write(acc_sv / wsum, tid);
     hi_irr.write(float4(acc_irr / wsum, acc_ao / wsum), tid);
