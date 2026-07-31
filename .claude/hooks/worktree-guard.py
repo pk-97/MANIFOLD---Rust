@@ -29,11 +29,31 @@ import subprocess
 import sys
 from pathlib import Path
 
-# __file__ is <main>/.claude/hooks/worktree-guard.py; parents[2] is the main
-# checkout root. settings.json invokes the hook via $CLAUDE_PROJECT_DIR, so even
-# a session working inside a worktree runs THIS (main) copy — _PROJECT_DIR is
-# always the true main root. Same derivation preToolUseBash.py relies on.
-_PROJECT_DIR = Path(__file__).resolve().parents[2]
+# settings.json invokes the hook via $CLAUDE_PROJECT_DIR, which under a
+# forked/resumed session can be the SLOT path, not main (observed 2026-07-31:
+# fork at cwd slot-3 ran the slot's own copy of this hook, so parents[2] was
+# the slot and every slot path resolved as "main checkout" — all edits
+# denied). The true main root is the parent of `git rev-parse
+# --git-common-dir` (a worktree's common dir is main/.git); fall back to the
+# __file__ derivation when git can't answer (fails open, per the docstring).
+def _main_root():
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            cwd=Path(__file__).resolve().parent,
+            capture_output=True, text=True, timeout=5,
+        )
+        if out.returncode == 0:
+            common = Path(out.stdout.strip())
+            if not common.is_absolute():
+                common = (Path(__file__).resolve().parent / common)
+            return common.resolve().parent
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return Path(__file__).resolve().parents[2]
+
+
+_PROJECT_DIR = _main_root()
 _WORKTREES_DIR = _PROJECT_DIR / ".claude" / "worktrees"
 _CLAUDE_DIR = _PROJECT_DIR / ".claude"
 
