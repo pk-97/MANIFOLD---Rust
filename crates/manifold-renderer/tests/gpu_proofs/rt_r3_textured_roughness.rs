@@ -250,7 +250,6 @@ fn run_fixture(mr_texture: Option<&manifold_gpu::GpuTexture>, floor_roughness: f
         0.0,
         0, // ao_spp
         0, // gi_spp
-        [0.0, 0.0, 0.0],
         [0.0, 1.0, 0.3], // camera_pos — see module doc's mirror math
         IDENTITY,
         1,   // refl_spp

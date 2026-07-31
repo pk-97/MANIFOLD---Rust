@@ -58,7 +58,7 @@
   },
   {
    "id": 103,
-   "typeId": "node.phong_material",
+   "typeId": "node.pbr_material",
    "nodeId": "floor_m",
    "params": {
     "color_r": {
@@ -76,6 +76,14 @@
     "ambient": {
      "type": "Float",
      "value": 0.1
+    },
+    "metallic": {
+     "type": "Float",
+     "value": 0.0
+    },
+    "roughness": {
+     "type": "Float",
+     "value": 1.0
     }
    }
   },
@@ -153,7 +161,7 @@
   },
   {
    "id": 113,
-   "typeId": "node.phong_material",
+   "typeId": "node.pbr_material",
    "nodeId": "blocker_m",
    "params": {
     "color_r": {
@@ -171,6 +179,14 @@
     "ambient": {
      "type": "Float",
      "value": 0.1
+    },
+    "metallic": {
+     "type": "Float",
+     "value": 0.0
+    },
+    "roughness": {
+     "type": "Float",
+     "value": 1.0
     }
    }
   },
@@ -248,7 +264,7 @@
   },
   {
    "id": 123,
-   "typeId": "node.phong_material",
+   "typeId": "node.pbr_material",
    "nodeId": "emitter_m",
    "params": {
     "color_r": {
@@ -282,6 +298,14 @@
     "emission_intensity": {
      "type": "Float",
      "value": 0.0
+    },
+    "metallic": {
+     "type": "Float",
+     "value": 0.0
+    },
+    "roughness": {
+     "type": "Float",
+     "value": 1.0
     }
    }
   },
@@ -363,7 +387,7 @@
   },
   {
    "id": 133,
-   "typeId": "node.phong_material",
+   "typeId": "node.pbr_material",
    "nodeId": "wall_m",
    "params": {
     "color_r": {
@@ -381,6 +405,14 @@
     "ambient": {
      "type": "Float",
      "value": 0.1
+    },
+    "metallic": {
+     "type": "Float",
+     "value": 0.0
+    },
+    "roughness": {
+     "type": "Float",
+     "value": 1.0
     }
    }
   },
@@ -449,9 +481,38 @@
    "id": 99,
    "typeId": "system.final_output",
    "nodeId": "out"
+  },
+  {
+   "id": 135,
+   "typeId": "node.bake_environment",
+   "nodeId": "env",
+   "params": {
+    "width": {
+     "type": "Int",
+     "value": 64
+    },
+    "height": {
+     "type": "Int",
+     "value": 32
+    },
+    "intensity": {
+     "type": "Float",
+     "value": 0.0
+    },
+    "uniform": {
+     "type": "Bool",
+     "value": true
+    }
+   }
   }
  ],
  "wires": [
+  {
+   "fromNode": 135,
+   "fromPort": "envmap",
+   "toNode": 20,
+   "toPort": "envmap"
+  },
   {
    "fromNode": 100,
    "fromPort": "vertices",

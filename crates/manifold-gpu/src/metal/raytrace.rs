@@ -540,7 +540,11 @@ struct ShadowRayParams {
     // as visibility 1.0 (unshadowed).
     uint   caster_count;
     RtCasterParams casters[MAX_RT_CASTERS];
-    packed_float3 ambient_color; // RT-P2: flat ambient/env color
+    // RT-P2's `ambient_color` is DELETED (ED2, RAYTRACING_DESIGN.md section
+    // 14.2): the flat ambient term no longer enters the kernel — it is
+    // recomposed consumer-side in `render_scene.wgsl`'s `rt_or_flat_ambient`.
+    // The `[[buffer(1)]]` block keeps the 16-byte alignment for
+    // `inv_view_proj` at 208 by construction (the Rust mirror asserts it).
     // RT-T1-B: world-space camera eye — origin of the primary visibility
     // ray cast to find the real hit triangle at this pixel (see
     // `fetch_interpolated_normal` below). Unused when ao_spp==0 && gi_spp==0.
@@ -827,11 +831,15 @@ static float3 cone_sample(float3 dir, float half_angle, float2 u) {
 // sun-bounce caster loop (invariant I-MB3) — called by the GI gather at
 // every path vertex and by the reflection block's hit shading.
 // `seed_base` preserves each call site's historical rand2 stream exactly
-// (load-bearing for I-MB1's byte identity). Folds the diffuse BRDF's
-// 1/pi via SUN_BOUNCE_INTENSITY_SCALE, named + tunable (0.02-0.3).
-// Declared after `walk_with_alpha_test`, `rand2`, and `cone_sample`
-// (which it calls) — MSL requires a function be declared before use.
-constant float SUN_BOUNCE_INTENSITY_SCALE = 0.08;
+// (load-bearing for I-MB1's byte identity). ED4 (RAYTRACING_DESIGN.md
+// section 14.2): exactly 1/pi — the raster light loop's diffuse is
+// `kd * albedo / PI * l_col * n_dot_l` (render_scene.wgsl light loop), so
+// the sun colour is an irradiance and the second-vertex bounce carries the
+// same 1/pi. The old 0.08 was ~4x dark (BUG-qt32). A physical constant,
+// not tunable. Declared after `walk_with_alpha_test`, `rand2`, and
+// `cone_sample` (which it calls) — MSL requires a function be declared
+// before use.
+constant float SUN_BOUNCE_INTENSITY_SCALE = 0.31830988618379067154;
 
 static float3 sun_bounce_at_hit(
     instance_acceleration_structure accel,
@@ -970,10 +978,12 @@ static float3 world_pos_from_depth(uint2 pix, uint2 gbuffer_size, float raw_dept
 // multi-caster fix (RT shadows previously traced only casters[0]). AO is
 // gathered in-kernel but folded straight into out_irr below, never written
 // to out_sv. out_irr
-// (RT-P2): demodulated (no-albedo) irradiance = ambient_color*ao + gi —
-// the D3 "accumulate lighting separated from albedo" term, temporally
-// accumulated downstream by `accumulate_irradiance`. No direct-sun term:
-// the raster light loop owns the sun (see the write site's comment).
+// (RT-P2/D3, ED2): demodulated (no-albedo) irradiance — `.rgb` = the
+// env+GI gather (flat ambient is gone from the kernel; recomposed
+// consumer-side), `.a` = ao, carried through the whole accumulation chain
+// with the same weights. Temporally accumulated downstream by
+// `accumulate_irradiance`. No direct-sun term: the raster light loop owns
+// the sun (see the write site's comment).
 kernel void trace_shadow_rays(
     instance_acceleration_structure  accel          [[buffer(0)]],
     constant ShadowRayParams&        p              [[buffer(1)]],
@@ -1004,10 +1014,10 @@ kernel void trace_shadow_rays(
     float3 wp = world_pos_from_depth(gpix, p.gbuffer_size, depth_tex.read(gpix, 0), p.inv_view_proj, valid);
     if (!valid) {
         // Void background: unoccluded either way, every caster slot —
-        // irradiance is ambient-only (no surface to shadow-test against).
-        // `.w = -1`: no object (RT-T2-C).
+        // no surface to gather against (ED2: rgb 0, alpha = neutral
+        // unoccluded ao 1.0). `.w = -1`: no object (RT-T2-C).
         out_sv.write(float4(1, 1, 1, 1), tid);
-        out_irr.write(float4(p.ambient_color, 0), tid);
+        out_irr.write(float4(0, 0, 0, 1.0), tid);
         out_n.write(float4(0, 1, 0, -1.0), tid);
         // BUG-88m: `.a = -1` = "no traced value at this texel". Blend
         // fragments DO shade here (the depth prepass excludes them, so
@@ -1206,30 +1216,42 @@ kernel void trace_shadow_rays(
     // RT-T2-C: `.w` carries the primary-hit object id (see `obj_id` above).
     out_n.write(float4(n, obj_id), tid);
 
-    // RT-P3 (RAYTRACING_DESIGN.md section 5.2 P3, D4): one-bounce GI gather —
-    // ported from the P0 prototype's `trace_lighting` GI block (ARC
-    // `rt_trace.metal`'s "one-bounce gather: emissive on hit, env on
-    // miss"), extended with the sun-bounce term the P0 section 5.1 results
-    // explicitly flagged as missing ("P0's GI gathers env+emissive only,
-    // no sun-bounce term"). Reuses the SAME bias origin/normal the
-    // shadow+AO rays above already computed — one dispatch, not a
-    // parallel pass (D16's seam note). Demodulated (no local albedo
-    // multiply — same D3 discipline as the sun/AO terms above); env-miss
-    // contributes NOTHING here (not double-counted with `ambient_color *
-    // ao` above, which is this kernel's existing flat-env term — the P0
-    // prototype had no separate ambient/AO term to double against, ours
-    // does, so the gather's own job narrows to emissive + sun-bounce).
+    // RT-P3 (RAYTRACING_DESIGN.md section 5.2 P3, D4): GI gather — ported
+    // from the P0 prototype's `trace_lighting` GI block, extended with the
+    // sun-bounce term the P0 section 5.1 results explicitly flagged as
+    // missing. ED1 (RAYTRACING_DESIGN.md section 14, BUG-yq1d): env joins
+    // the gather at EVERY depth — a miss returns the equirect env radiance
+    // in the ray's own direction, mip 0 (unbiased; the prefiltered chain's
+    // base level IS the source env, already bound for reflections — no new
+    // binding). Extension rays (bounce >= 1) carry it through `throughput`
+    // — this is what makes an enclosure with an opening converge instead
+    // of going artificially dark. Same estimator and normalization as the
+    // raster irradiance map (`ibl_irradiance.wgsl` — cos and 1/pi cancel),
+    // so the same physical quantity, on the same scale: uniform sky L, both
+    // return L. Demodulated (no local albedo multiply — D3 discipline).
     float3 gi = float3(0.0);
     // MB4 (RAYTRACING_DESIGN.md section 11.2): fixed path depth + per-extension
-    // energy fold. MB-B: depth 2 — one extension bounce carrying intermediate
+    // energy. MB-B: depth 2 — one extension bounce carrying intermediate
     // albedo (colour bleed). Range 1-3.
     const uint RT_GI_MAX_BOUNCES = 2u;
-    // ~1/pi, range 0.1-0.5. Consumed only when RT_GI_MAX_BOUNCES > 1: each
-    // path extension multiplies throughput by the intermediate surface's
-    // albedo times this fold (MB5 — the primary surface stays demodulated,
-    // D3 discipline; carried intermediate albedo IS the colour bleed).
-    const float RT_GI_THROUGHPUT_FOLD = 0.318;
+    // ED5 (RAYTRACING_DESIGN.md section 14.2): per-sample env firefly cap. An
+    // HDRI sun disk at mip 0 through 2 spp is the sparkle regime the
+    // reflection path needed its clamp for; capping each env sample at
+    // RT_GI_ENV_FIREFLY_GAIN times the roughest-mip env fetch at the surface
+    // normal (`refl_env_sample(n, 1.0)` — a typical-value anchor already
+    // bound, no new texture) bounds the outlier without touching a surface
+    // that is uniformly bright. Committed range 8-32 (lower = calmer,
+    // dimmer highlights; higher = closer to ground truth, noisier), the
+    // RT_REFL_FIREFLY_GAIN precedent one order up — the gather env term's
+    // only budget is these few spp. At gi_spp < 3 a median is inert; the
+    // env anchor is not.
+    const float RT_GI_ENV_FIREFLY_GAIN = 16.0;
     if (p.gi_spp > 0) {
+        // ED5: one anchor per pixel. Inert for a scene with no env chain
+        // (the dummy/zeroed chain gives anchor 0 and cap ~0, so the
+        // clamp never fires — env samples there are 0 too).
+        float3 env_anchor = refl_env_sample(prefiltered_env, n, 1.0);
+        float env_cap = RT_GI_ENV_FIREFLY_GAIN * max(luma(env_anchor), 1e-6);
         for (uint s = 0; s < p.gi_spp; s++) {
             ray gr;
             gr.origin = sec_origin;
@@ -1240,7 +1262,15 @@ kernel void trace_shadow_rays(
             for (uint bounce = 0u; bounce < RT_GI_MAX_BOUNCES; bounce++) {
                 intersection_query<triangle_data, instancing> gi_q;
                 gi_q.reset(gr, accel, RT_MASK_VISIBLE);
-                if (!walk_with_alpha_test(gi_q, normal_sources, material_textures, false)) { break; }
+                if (!walk_with_alpha_test(gi_q, normal_sources, material_textures, false)) {
+                    // ED1: env radiance in the ray's own direction, mip 0,
+                    // scaled by the path's throughput at extension depths.
+                    float3 env_miss = refl_env_sample(prefiltered_env, gr.direction, 0.0);
+                    float env_l = luma(env_miss);
+                    gi += throughput * ((env_l > env_cap && env_l > 1e-6)
+                        ? env_miss * (env_cap / env_l) : env_miss);
+                    break;
+                }
                 uint oi = gi_q.get_committed_instance_id();
                 uint gi_pid = gi_q.get_committed_primitive_id();
                 float2 gi_bary = gi_q.get_committed_triangle_barycentric_coord();
@@ -1255,7 +1285,12 @@ kernel void trace_shadow_rays(
                     400u + s * MAX_RT_CASTERS);
                 gi += throughput * (hit_emissive + bounce_term);
                 if (bounce + 1u < RT_GI_MAX_BOUNCES) {
-                    throughput *= hit_albedo * RT_GI_THROUGHPUT_FOLD;
+                    // ED4: the throughput multiplier is the hit albedo alone
+                    // — the cosine-weighted estimator's 1/pi cancels (the
+                    // convention `ibl_irradiance.wgsl` documents). The old
+                    // RT_GI_THROUGHPUT_FOLD (~1/pi, extra) made bounce 2
+                    // ~3.1x dark (BUG-qt32); it is deleted.
+                    throughput *= hit_albedo;
                     gr.origin = hit_pos + hit_n * bias_eps;
                     // Extension directions use the plain hash stream (seed
                     // base 600u), NOT blue_noise_sample — the blue-noise
@@ -1437,19 +1472,16 @@ kernel void trace_shadow_rays(
         out_refl.write(float4(0, 0, 0, -1.0), tid);
     }
 
-    // RT-P2/D3: demodulated irradiance — AO-occluded flat ambient plus
-    // RT-P3's gathered emissive/sun-bounce term. NO direct-sun term
-    // (Peter 2026-07-23): `render_scene.wgsl`'s raster light loop already
-    // shades the sun with the full material model (specular, clearcoat)
-    // using this dispatch's shadow mask for visibility, and it consumes
-    // this texture as its ambient slot on top — a sun*n·l*vis copy here
-    // was counted twice and blew every sunlit surface out. No albedo
-    // multiply here either (that happens once, downstream, in
-    // `render_scene.wgsl` — D3's "accumulate lighting separated from
-    // albedo" is what lets a same-clip light-intensity strobe keep
-    // temporal history instead of being treated as a cut).
-    float3 irradiance = float3(p.ambient_color) * ao + gi;
-    out_irr.write(float4(irradiance, 0), tid);
+    // RT-P2/D3, ED2 (RAYTRACING_DESIGN.md section 14.2): demodulated
+    // irradiance — `.rgb` = the env+GI gather, `.a` = ao. NO flat-ambient
+    // fold-in (that moved consumer-side to `render_scene.wgsl`'s
+    // `rt_or_flat_ambient`, per-material) and NO direct-sun term (Peter
+    // 2026-07-23): `render_scene.wgsl`'s raster light loop already shades
+    // the sun with the full material model using this dispatch's shadow
+    // mask for visibility — a sun*n·l·vis copy here was counted twice. No
+    // albedo multiply here either (that happens once, downstream — D3's
+    // "accumulate lighting separated from albedo").
+    out_irr.write(float4(gi, ao), tid);
 }
 
 // Depth+normal-aware bilateral upsample: half-res (sun-visibility, AO) +
@@ -1490,7 +1522,7 @@ kernel void upsample_shadow(
     float d = depth_tex.read(tid, 0);
     if (d >= 1.0 - 1e-6) {
         hi_sv.write(float4(1, 1, 1, 1), tid);
-        hi_irr.write(float4(p.ambient_color, 0), tid);
+        hi_irr.write(float4(0, 0, 0, 1.0), tid);
         hi_n.write(float4(0, 1, 0, -1.0), tid);
         // BUG-88m: `.a = -1` must survive the half->full chain — Blend
         // fragments shade at these "void" texels and fs_pbr's
@@ -1514,7 +1546,7 @@ kernel void upsample_shadow(
     // normal divergence to near-zero weight while still full-weighting a
     // shared flat surface's own precision noise.
     const float UPSAMPLE_NORMAL_POWER = 32.0;
-    float4 acc_sv = 0.0; float3 acc_irr = 0.0; float3 acc_n = 0.0; float3 acc_refl = 0.0; float wsum = 0.0;
+    float4 acc_sv = 0.0; float3 acc_irr = 0.0; float acc_ao = 0.0; float3 acc_n = 0.0; float3 acc_refl = 0.0; float wsum = 0.0;
     for (int dy = 0; dy <= 1; dy++)
     for (int dx = 0; dx <= 1; dx++) {
         int2 q = clamp(lo_c + int2(dx, dy), int2(0), int2(p.trace_size) - 1);
@@ -1527,13 +1559,15 @@ kernel void upsample_shadow(
         float w_normal = pow(max(dot(ref_n, qn), 0.0), UPSAMPLE_NORMAL_POWER);
         float w = max(w_bilin * w_depth * w_normal, 1e-5);
         acc_sv += lo_sv.read(uint2(q)) * w;
-        acc_irr += lo_irr.read(uint2(q)).rgb * w;
+        float4 qirr = lo_irr.read(uint2(q));
+        acc_irr += qirr.rgb * w;
+        acc_ao += qirr.a * w;
         acc_n += qn * w;
         acc_refl += lo_refl.read(uint2(q)).rgb * w;
         wsum += w;
     }
     hi_sv.write(acc_sv / wsum, tid);
-    hi_irr.write(float4(acc_irr / wsum, 0), tid);
+    hi_irr.write(float4(acc_irr / wsum, acc_ao / wsum), tid);
     float3 n_avg = acc_n / wsum;
     float n_len = length(n_avg);
     // RT-T2-C: object ids never blend — carry the nearest tap's id (the
@@ -1620,9 +1654,15 @@ kernel void atrous_filter(
     float3 center_irr = src_irr.read(tid).rgb;
     float center_luma = luma(center_irr);
     float center_var = 0.0;
+    // ED2: the ao carried through the temporal accumulation (moments `.b`)
+    // anchors this filter's `.a` pass-through — the value `accumulate_
+    // irradiance` already stabilised, so the spatial filter never reintroduces
+    // per-frame ao noise. 1.0 before the accumulator has ever run.
+    float center_ao = 1.0;
     if (p.history_valid != 0u) {
-        float2 mo = moments_read.read(tid).rg;
+        float4 mo = moments_read.read(tid);
         center_var = max(mo.g - mo.r * mo.r, 0.0);
+        center_ao = mo.b;
     }
     // ATROUS_DEPTH_SIGMA: raw NDC-z units, same scale `upsample_shadow`'s
     // 0.001 depth guide uses. ATROUS_NORMAL_POWER: same range/rationale as
@@ -1731,7 +1771,7 @@ kernel void atrous_filter(
         wsum_refl += w_refl;
         wsum += w;
     }
-    dst_irr.write(float4(acc_irr / wsum, 0), tid);
+    dst_irr.write(float4(acc_irr / wsum, center_ao), tid);
     dst_sv.write(acc_sv / wsum, tid);
     // RT-T2-C: `.w` = object id, passed through untouched (never blended).
     dst_n.write(float4(center_n, center_n4.w), tid);
@@ -1848,10 +1888,13 @@ kernel void accumulate_irradiance(
     // squares) — the SAME ping-pong-history discipline as the depth/
     // normal pairs above, feeding `atrous_filter`'s variance-adaptive luma
     // sigma (one-frame-lagged, like every other history read here).
-    // `Rg32Float` (not `Rg16Float`): `moment2 - moment1*moment1` is a
+    // `Rgba32Float` (not `Rg16Float`): `moment2 - moment1*moment1` is a
     // difference of two close, similarly-scaled numbers — half-float's
     // ~3-decimal-digit precision would swallow variances at the 1e-4 to
     // 1e-5 scale this filter needs to resolve (catastrophic cancellation).
+    // ED2: `.b` carries the temporally-accumulated ao (the atrous filter's
+    // stable ao anchor) and `.w` the accumulated frame count (moved here so
+    // `history_write.a` is free to carry the ao end-to-end).
     texture2d<float>                     moments_read         [[texture(9)]],
     texture2d<float, access::write>      moments_write        [[texture(10)]],
     // RT-R2 (RD6): reflection channel — current-frame filtered reflections
@@ -1886,7 +1929,11 @@ kernel void accumulate_irradiance(
         // because the two channels reproject differently and reject
         // independently — specular has no depth test.
         normal_history_write.write(float4(cur_normal, 1.0), tid);
-        moments_write.write(float4(cur_luma, cur_luma * cur_luma, 0, 0), tid);
+        // ED2: `.b` carries the accumulated ao (`cur.a`) — the atrous
+        // filter's stable ao anchor; `.w` carries the accumulated frame
+        // count (was `history_write.a` — moved so the history texture's
+        // `.a` is free to carry the ao end-to-end).
+        moments_write.write(float4(cur_luma, cur_luma * cur_luma, cur.a, 1.0), tid);
         refl_history_write.write(hi_refl.read(tid), tid);
         return;
     }
@@ -1902,8 +1949,15 @@ kernel void accumulate_irradiance(
     // visible shimmer until motion stopped (the residual BUG-320 left).
     bool valid = false;
     float3 blended = cur.xyz;
-    // Frames of history behind this texel, carried in `history_write.a`.
-    // 1 = this frame only (a rejected/disoccluded texel is a cold start).
+    // ED2: the accumulated ao, blended with the SAME weight `alpha` as the
+    // rgb below, written to `history_write.a` (the texture the fragment
+    // shader reads) and carried to the atrous filter via `moments_write.b`.
+    // `cur.a` (the current frame's ao, .a = ao per the kernel write sites)
+    // is the fallback whenever history is rejected.
+    float ao_blended = cur.a;
+    // Frames of history behind this texel, carried in `moments_write.w`
+    // (was `history_write.a` — ED2 moved the ao there). 1 = this frame only
+    // (a rejected/disoccluded texel is a cold start).
     float hist_len = 1.0;
     // Set by the irradiance blend when it decides the light really changed;
     // read by the reflection block so both channels snap on one decision.
@@ -1984,6 +2038,7 @@ kernel void accumulate_irradiance(
                 float w[4] = { (1.0-fr.x)*(1.0-fr.y), fr.x*(1.0-fr.y), (1.0-fr.x)*fr.y, fr.x*fr.y };
                 int2 offs[4] = { int2(0,0), int2(1,0), int2(0,1), int2(1,1) };
                 float wsum = 0.0; float3 hsum = float3(0.0); float2 msum = float2(0.0);
+                float asum = 0.0;
                 float nsum = 0.0;
                 for (int i = 0; i < 4; ++i) {
                     int2 t = clamp(base + offs[i], int2(0), int2(p.size) - 1);
@@ -1994,8 +2049,14 @@ kernel void accumulate_irradiance(
                         float4 h = history_read.read(tt);
                         wsum += w[i];
                         hsum += w[i] * h.xyz;
-                        nsum += w[i] * h.a;
                         msum += w[i] * moments_read.read(tt).rg;
+                        // ED2: the ao rides the moments texture's `.b` and
+                        // the frame count its `.w` (history_write's `.a` is
+                        // now the ao), both resampled through the SAME
+                        // validated taps.
+                        float4 mo = moments_read.read(tt);
+                        nsum += w[i] * mo.w;
+                        asum += w[i] * mo.b;
                     }
                 }
                 if (wsum > 1e-4) {
@@ -2060,6 +2121,9 @@ kernel void accumulate_irradiance(
                     float alpha = max(1.0 / n, p.alpha);
                     hist_len = min(n, 1.0 / max(p.alpha, 1e-6));
                     blended = mix(hist, cur.xyz, alpha);
+                    // ED2: ao temporally accumulates with the SAME weight as
+                    // the rgb (one value per pixel, the atrous anchor).
+                    ao_blended = mix(asum / wsum, cur.a, alpha);
                     valid = true;
                     // The moments update on a FLOORED window (>= 4 samples)
                     // even when the colour snaps to 2. One counter serves both,
@@ -2078,9 +2142,13 @@ kernel void accumulate_irradiance(
             }
         }
     }
-    history_write.write(valid ? float4(blended, hist_len) : float4(cur.xyz, 1.0), tid);
+    // ED2: `history_write.a` is the accumulated AO end-to-end — the texture
+    // `render_scene.wgsl` reads for `rt_or_flat_ambient`'s recompose and the
+    // `diffuse_ibl` substitution. The frame count moved to `moments_write.w`
+    // (the same one-frame-lagged ping-pong).
+    history_write.write(valid ? float4(blended, ao_blended) : float4(cur.xyz, cur.a), tid);
     depth_history_write.write(float4(cur_depth, 0, 0, 0), tid);
-    moments_write.write(float4(moment1, moment2, 0, 0), tid);
+    moments_write.write(float4(moment1, moment2, ao_blended, valid ? hist_len : 1.0), tid);
     // Specular history length, `normal_history.w`. Written below the
     // reflection block (which computes it) — the normal itself is settled
     // here, so the deferred write costs nothing.
@@ -2274,10 +2342,12 @@ impl RtCasterParams {
 /// RAYTRACING_DESIGN.md section 5.2 P2 extended this in place (same struct, same
 /// binding(1) slot, same single half-res dispatch — D11/D16's "P2 joins
 /// the SAME half-res dispatch and SAME upsample" seam, not a parallel
-/// pass): `ao_radius`/`ao_spp` drive the added AO-ray gather, `ambient_color`
-/// is the demodulated-irradiance term's flat-env input (no albedo folded
-/// in here — that happens once, downstream, in `render_scene.wgsl`'s
-/// shading step, per D3's "accumulate lighting separated from albedo").
+/// pass): `ao_radius`/`ao_spp` drive the added AO-ray gather. ED2 (section
+/// 14.2) DELETED `ambient_color`: the flat ambient term no longer enters
+/// the kernel — the gather's output is `rgb = env+GI, a = ao`, and the flat
+/// ambient is recomposed consumer-side in `render_scene.wgsl`'s
+/// `rt_or_flat_ambient` (no albedo folded in here — that happens once,
+/// downstream, per D3's "accumulate lighting separated from albedo").
 ///
 /// Per-caster shadow support (multi-caster fix): `sun_dir`/`sun_cone`/
 /// `sun_color` (single-caster-only) replaced with `casters`/`caster_count`
@@ -2303,11 +2373,6 @@ pub struct ShadowRayParams {
     /// visibility 1.0 (unshadowed).
     pub caster_count: u32,
     pub casters: [RtCasterParams; MAX_RT_CASTERS],
-    /// Flat ambient/env color (scene `atmosphere.ambient_tint` scaled by
-    /// a named constant — RAYTRACING_DESIGN.md section 5.2 P2's "denoiser/
-    /// accumulation parameters are named constants" rule; the exact
-    /// intensity is Peter's morning-gate tuning call, not baked in here).
-    pub ambient_color: [f32; 3],
     /// RT-T1-B: world-space camera eye position — the origin of the
     /// PRIMARY visibility ray `trace_shadow_rays` now casts (closest-hit,
     /// toward the depth-reconstructed `wp`) to find which triangle/instance
@@ -2321,14 +2386,17 @@ pub struct ShadowRayParams {
     /// = reflection rays/pixel (1 in v1; 0 disables the branch — inert in
     /// T3, the kernel reads these in T5). `refl_max_roughness` =
     /// RT_REFLECTION_MAX_ROUGHNESS (0.6 starting, RD7 BRDF-domain split);
-    /// `refl_rough_band` = the blend-band width. `_pad_refl` pads the block
-    /// to 16B — with `casters` sized as it is, `inv_view_proj` lands on a
-    /// 16-byte boundary (208) without any extra alignment padding; see the
-    /// offset assert below.
+    /// `refl_rough_band` = the blend-band width. `_pad_refl` is 16 bytes:
+    /// MSL lays out `uint _pad_refl` (4) plus the 12 bytes of implicit
+    /// 16-byte alignment `float4x4 inv_view_proj` demands — the removed
+    /// `ambient_color` field (ED2) previously supplied the first 12 of
+    /// those; without the explicit pad Rust's align-4 `[[f32;4];4]` would
+    /// put `inv_view_proj` at 196 and shift every matrix element. Asserted
+    /// below.
     pub refl_spp: u32,
     pub refl_max_roughness: f32,
     pub refl_rough_band: f32,
-    _pad_refl: u32,
+    _pad_refl: [u8; 16],
     /// Column-major, matches `render_scene.rs`'s `mat4_inverse` output.
     pub inv_view_proj: [[f32; 4]; 4],
 }
@@ -2353,7 +2421,6 @@ impl ShadowRayParams {
         ao_radius: f32,
         ao_spp: u32,
         gi_spp: u32,
-        ambient_color: [f32; 3],
         camera_pos: [f32; 3],
         inv_view_proj: [[f32; 4]; 4],
         refl_spp: u32,
@@ -2375,12 +2442,11 @@ impl ShadowRayParams {
             gi_spp,
             caster_count,
             casters: caster_arr,
-            ambient_color,
             camera_pos,
             refl_spp,
             refl_max_roughness,
             refl_rough_band,
-            _pad_refl: 0,
+            _pad_refl: [0; 16],
             inv_view_proj,
         }
     }

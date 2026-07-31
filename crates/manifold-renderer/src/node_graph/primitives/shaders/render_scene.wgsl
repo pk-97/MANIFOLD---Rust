@@ -195,7 +195,10 @@ struct Uniforms {
     // RAYTRACING_DESIGN.md section 9 RD9/RD1: RT feature flags. x =
     // rt_reflections active this frame (rt_enabled && rt_ready &&
     // rt_reflections && non-empty casters — the trace dispatch ran with
-    // refl_spp > 0, so binding 43 holds traced data). yzw reserved.
+    // refl_spp > 0, so binding 43 holds traced data). y = the traced-
+    // diffuse substitution gate (section 14 ED6: the GI gather ran with
+    // gi_spp > 0, so binding 42's `.rgb` holds env+GI radiance). zw
+    // reserved.
     rt_flags: vec4<f32>,
 };
 
@@ -283,7 +286,16 @@ struct Instance {
 // shared-compile-time-constant discipline as `CASTER_STRIDE`/
 // `MAX_SHADOW_CASTING_LIGHTS` above.
 const PREFILTER_MAX_MIP: f32 = 5.0;
+// RAYTRACING_DESIGN.md section 14 ED2: the flat ambient's knob-at-1
+// ceiling — mirrors `render_scene.rs`'s `AMBIENT_IRRADIANCE_SCALE` (0.15).
+// Same cross-mirror discipline as `PREFILTER_MAX_MIP`/`RT_REFL_PREFILTER_MAX_MIP`.
+const AMBIENT_IRRADIANCE_SCALE: f32 = 0.15;
 @group(0) @binding(16) var prefiltered_specular: texture_2d<f32>;
+// `irradiance_map`: the raster cosine-convolved diffuse irradiance map —
+// sampled EXACTLY ONCE in `fs_pbr`, at the `diffuse_ibl` substitution site
+// (I-ED2). When the GI gather ran (ED6, `rt_flags.y > 0.5`) the traced
+// `.rgb` SUBSTITUTES for this fetch — the same physical quantity, same
+// scale (`ibl_irradiance.wgsl`'s estimator and the gather are identical).
 @group(0) @binding(17) var irradiance_map: texture_2d<f32>;
 @group(0) @binding(18) var brdf_lut: texture_2d<f32>;
 
@@ -348,12 +360,14 @@ const PREFILTER_MAX_MIP: f32 = 5.0;
 // at all — it's folded into the RT irradiance term (`rt_irradiance_mask`
 // below) in-kernel.
 @group(0) @binding(41) var rt_shadow_mask: texture_2d<f32>;
-// RAYTRACING_DESIGN.md section 5.2 P2/D3: full-res, temporally-accumulated
-// demodulated irradiance (no albedo folded in — ambient*ao + gi; NO
-// direct sun, the raster light loop owns that), written by the SAME
-// half-res dispatch's
-// `accumulate_irradiance` step. Always bound (ABI-stub discipline); a
-// 1x1 dummy when RT isn't active this frame.
+// RAYTRACING_DESIGN.md section 5.2 P2/D3, ED2 (section 14.2): full-res,
+// temporally-accumulated demodulated irradiance — `.rgb` = the env+GI
+// gather (the flat ambient no longer enters the kernel), `.a` = the
+// accumulated ao, carried through the whole accumulation chain. Written
+// by `trace_shadow_rays` + `accumulate_irradiance`. Always bound (ABI-stub
+// discipline); a 1x1 dummy when RT isn't active this frame. Read in
+// exactly TWO places (I-ED2): the `diffuse_ibl` substitution (`.rgb`) and
+// `rt_or_flat_ambient` (`.a`).
 @group(0) @binding(42) var rt_irradiance_mask: texture_2d<f32>;
 // RAYTRACING_DESIGN.md section 9 RD1: full-res traced reflection radiance,
 // SUBSTITUTED for the `prefiltered` env fetch in fs_pbr when
@@ -373,10 +387,19 @@ const PREFILTER_MAX_MIP: f32 = 5.0;
 // ray-traced occlusion is already folded in here. Falls back to the
 // original flat-ambient formula when RT is off — byte-identical to
 // before this function existed (I2/I5).
+//
+// ED2 (section 14.2): the RT branch recomposes today's flat-ambient value
+// consumer-side — `albedo * scene_params.y * ambient_tint *
+// AMBIENT_IRRADIANCE_SCALE * mask.a`. The kernel's irradiance texture no
+// longer folds the ambient in; each term is consumed in exactly one place,
+// and the Ambient knob never gets `kd_ibl` scaling. `.a` of the traced
+// texture is the accumulated ao (the kernel write sites carry it through
+// the same weights). RT-off remains `albedo * scene_params.y *
+// ambient_tint.rgb` — the Ambient knob is the flat fill on both paths.
 fn rt_or_flat_ambient(albedo_rgb: vec3<f32>, frag_xy: vec2<f32>) -> vec3<f32> {
     if u.scene_params.w > 0.5 {
-        let irr = textureLoad(rt_irradiance_mask, vec2<i32>(frag_xy), 0).rgb;
-        return albedo_rgb * irr;
+        let irr = textureLoad(rt_irradiance_mask, vec2<i32>(frag_xy), 0);
+        return albedo_rgb * u.scene_params.y * u.ambient_tint.rgb * AMBIENT_IRRADIANCE_SCALE * irr.a;
     }
     return albedo_rgb * u.scene_params.y * u.ambient_tint.rgb;
 }
@@ -1550,7 +1573,31 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let n_azimuth = atan2(N.z, N.x);
     let n_elevation = asin(clamp(N.y, -1.0, 1.0));
     let n_uv = vec2<f32>(n_azimuth / (2.0 * PI) + 0.5, n_elevation / PI + 0.5);
-    let irradiance = textureSampleLevel(irradiance_map, envmap_sampler, n_uv, 0.0).rgb;
+    var irradiance = textureSampleLevel(irradiance_map, envmap_sampler, n_uv, 0.0).rgb;
+    // RAYTRACING_DESIGN.md section 14 ED2/ED6: traced env+GI diffuse
+    // SUBSTITUTES for the irradiance-map fetch when the GI gather ran this
+    // frame (rt_flags.y > 0.5 — set iff `will_rt_accumulate_this_frame`,
+    // which is exactly `gi_spp > 0` on the trace dispatch) — the same
+    // physical quantity, same scale (`ibl_irradiance.wgsl`'s estimator and
+    // the gather are identical), never added on top (RD1/I-R3; the
+    // 818a06b0 double-count trap). ED6 mirrors the reflection fallback
+    // discipline (`rt_refl.a < 0` keeping the raster prefiltered fetch):
+    // off-path byte-identical.
+    if u.scene_params.w > 0.5 && u.rt_flags.y > 0.5 {
+        let traced = textureLoad(rt_irradiance_mask, vec2<i32>(in.clip_pos.xy), 0);
+        // Void fallback (the rt_refl `.a < 0` discipline, BUG-88m's fragment
+        // class): background texels hold the kernel's void value (rgb 0,
+        // ao 1 — written by trace_shadow_rays/upsample_shadow; blends of
+        // exact 0/1 stay exact through accumulation). Blend-queue fragments
+        // shading there (a transparent surface over empty sky) keep the
+        // raster irradiance-map fetch instead of going black. A REAL
+        // surface reads (0,0,0,1) only in a scene with no env, no emissive,
+        // and no sun bounce reaching that pixel — where the raster map
+        // holds the same black, so the fallback is a no-op there.
+        if !all(traced.rgb == vec3<f32>(0.0)) || traced.a < 1.0 {
+            irradiance = traced.rgb;
+        }
+    }
 
     let env_brdf = textureSampleLevel(brdf_lut, envmap_sampler, vec2<f32>(n_dot_v, roughness), 0.0).rg;
     var specular_ibl = prefiltered * (F0 * env_brdf.x + env_brdf.y);

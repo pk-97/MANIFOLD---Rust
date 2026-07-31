@@ -198,13 +198,18 @@ const AO_SAMPLES_PER_PIXEL: u32 = 4;
 /// and this file's synthetic test scenes) — scene-scale dependent per
 /// hero asset; Peter's morning gate tunes per scene.
 const AO_RADIUS_WORLD_UNITS: f32 = 0.5;
-/// RAYTRACING_DESIGN.md section 5.2 P2: flat ambient/env color for the
-/// demodulated-irradiance term = `atmosphere.ambient_tint * this scale *
-/// scene material ambient` (the card's "Ambient" knob — Peter 2026-07-23:
-/// no separate RT ambient control; knob at 0 = true black with RT on).
-/// This constant is the knob-at-1 ceiling. Committed range 0.05–0.5
-/// (fraction of the tint's own [0,1] magnitude); Peter's morning gate
-/// tunes the exact ambient intensity.
+/// RAYTRACING_DESIGN.md section 5.2 P2, ED2 (section 14.2): the flat
+/// ambient's knob-at-1 ceiling. The Rust side no longer reads this
+/// constant directly (the flat ambient is recomposed consumer-side in
+/// `render_scene.wgsl`'s `rt_or_flat_ambient`); it is kept here as the
+/// single source of truth for the WGSL mirror `AMBIENT_IRRADIANCE_SCALE`
+/// in `shaders/render_scene.wgsl` — same cross-mirror discipline as
+/// `RT_REFL_PREFILTER_MAX_MIP` (the WGSL side uses it; this side exists
+/// so the mirror has one owner).
+#[expect(
+    dead_code,
+    reason = "single source of truth for the WGSL mirror constant; the WGSL side reads it"
+)]
 const AMBIENT_IRRADIANCE_SCALE: f32 = 0.15;
 /// RAYTRACING_DESIGN.md section 5.2 P2/D3: FLOOR on the temporal irradiance
 /// blend weight (`AccumulateParams::alpha`). The kernel blends at `1/n` where
@@ -886,6 +891,10 @@ pub struct RenderScene {
     /// "should color history be discarded this frame").
     rt_moments_valid: bool,
     rt_history_ping: usize,
+    /// ED2 (section 14, PBR-only RT consumers): one-shot latch for the
+    /// "phong/cel draw in an RT scene" warning — logged once, never
+    /// per-frame.
+    rt_nonpbr_warned: bool,
     /// RT-T1-C: current-frame half-res/full-res primary-hit vertex normal
     /// (same half/full lifecycle as `rt_irr_half`/`rt_irr_full` — produced
     /// fresh every RT-ready frame, not persistent history).
@@ -1131,6 +1140,7 @@ impl RenderScene {
             rt_moments_history: [None, None],
             rt_moments_valid: false,
             rt_history_ping: 0,
+            rt_nonpbr_warned: false,
             rt_normal_half: None,
             rt_normal_full: None,
             rt_mask_full_b: None,
@@ -1458,7 +1468,7 @@ impl RenderScene {
 
     fn ensure_dummy_texture(&mut self, device: &manifold_gpu::GpuDevice) {
         if self.dummy_texture.is_none() {
-            self.dummy_texture = Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
+            let tex = device.create_texture(&manifold_gpu::GpuTextureDesc {
                 width: 1,
                 height: 1,
                 depth: 1,
@@ -1467,7 +1477,15 @@ impl RenderScene {
                 usage: manifold_gpu::GpuTextureUsage::SHADER_READ,
                 label: "node.render_scene dummy",
                 mip_levels: 1,
-            }));
+            });
+            // RAYTRACING_DESIGN.md section 14 ED1: the dummy doubles as the
+            // "no env chain" stand-in for the GI gather's env-miss (and the
+            // reflection miss) — it must READ as black, not as undefined
+            // GPU memory. Metal's initial texture contents are undefined;
+            // upload a 1x1 black Rgba16Float texel once.
+            let black = [0u8; 8]; // 4 x f16 zero
+            device.upload_texture(&tex, &black);
+            self.dummy_texture = Some(tex);
         }
     }
 
@@ -1900,14 +1918,16 @@ impl RenderScene {
             make(width, height, rgba16, "node.render_scene rt_normal_history_b (RT-T1-C)"),
         ]
         .map(Some);
-        // RT-T1-D (BUG-312): luminance-moments ping-pong history — `Rg32Float`
+        // RT-T1-D (BUG-312): luminance-moments ping-pong history — `Rgba32Float`
         // (not `Rg16Float`) so `moment2 - moment1*moment1` doesn't collapse to
         // noise under half-float's ~3-decimal-digit precision at the 1e-4 to
         // 1e-5 variance scale this filter needs (see the MSL kernel's doc
-        // comment for the full cancellation argument).
+        // comment for the full cancellation argument). ED2: `.b` carries the
+        // temporally-accumulated ao (`accumulate_irradiance`'s `history_write.a`
+        // is the frame count, so the ao rides here).
         self.rt_moments_history = [
-            make(width, height, manifold_gpu::GpuTextureFormat::Rg32Float, "node.render_scene rt_moments_history_a (RT-T1-D)"),
-            make(width, height, manifold_gpu::GpuTextureFormat::Rg32Float, "node.render_scene rt_moments_history_b (RT-T1-D)"),
+            make(width, height, manifold_gpu::GpuTextureFormat::Rgba32Float, "node.render_scene rt_moments_history_a (RT-T1-D)"),
+            make(width, height, manifold_gpu::GpuTextureFormat::Rgba32Float, "node.render_scene rt_moments_history_b (RT-T1-D)"),
         ]
         .map(Some);
         self.rt_moments_valid = false;
@@ -3503,6 +3523,16 @@ impl EffectNode for RenderScene {
             // trace against the scene geometry, not toward a light — never
             // caster-gated.
             uniforms.rt_flags[0] = if rt_reflections && rt_ready { 1.0 } else { 0.0 };
+            // RAYTRACING_DESIGN.md section 14 ED6: rt_flags.y = the traced-
+            // diffuse substitution gate — the raster may only read the RT
+            // irradiance texture's `.rgb` for `diffuse_ibl` when the GI
+            // gather actually ran this frame. gi_spp is always
+            // GI_SAMPLES_PER_PIXEL (> 0) whenever the trace dispatch runs,
+            // so "gi_spp > 0" is exactly `will_rt_accumulate_this_frame`.
+            // Mirrors the reflection fallback discipline (`rt_refl.a < 0`
+            // keeping the raster prefiltered fetch). No new scene param
+            // (MB4).
+            uniforms.rt_flags[1] = if will_rt_accumulate_this_frame { 1.0 } else { 0.0 };
             // RAYTRACING_DESIGN.md section 12 AM2/AM6: `fog_params.z` was a
             // permanently-zero reserved slot — repurposed as `ao_mask_owed`,
             // the value the EMIT_AO_MASK fragment variants write to the
@@ -3895,6 +3925,23 @@ impl EffectNode for RenderScene {
             .iter()
             .filter(|d| d.alpha_mode != AlphaMode::Blend)
             .collect();
+        // RAYTRACING_DESIGN.md section 14 ED2 (PBR-only consumers, Peter
+        // 2026-07-31): phong/cel draws in an RT scene get the flat ambient
+        // recompose and NO traced env/GI — degrade loud, not silent. Once
+        // per scene instance: per-frame spam breaks the hot path, and a
+        // silent hole reads as "RT looks wrong".
+        if will_rt_accumulate_this_frame
+            && !self.rt_nonpbr_warned
+            && opaque_draws
+                .iter()
+                .any(|d| matches!(d.kind, MaterialKind::Phong | MaterialKind::Cel))
+        {
+            self.rt_nonpbr_warned = true;
+            log::warn!(
+                "render_scene: RT lighting reaches PBR materials only — this scene has \
+                 phong/cel objects, which get flat ambient only (RAYTRACING_DESIGN.md section 14 ED2)"
+            );
+        }
         // RAYTRACING_DESIGN.md RT-D3: shadow maps STOP RENDERING for
         // RT-enabled scenes — the RT shadow-ray pass below replaces this
         // entire depth-only-per-caster loop, not runs alongside it (the
@@ -4339,18 +4386,12 @@ impl EffectNode for RenderScene {
                 };
                 let half_w = width.div_ceil(2).max(1);
                 let half_h = height.div_ceil(2).max(1);
-                // The RT ambient floor rides the SAME material `ambient` the
-                // raster path shades with (`scene_params[1]`, fanned out to
-                // every material by the card's one "Ambient" knob) — knob at
-                // 0 must mean true black on BOTH paths, so a lights-out cue
-                // works with RT on. Max across draws: per-material divergence
-                // in the graph keeps a floor if ANY material asks for one;
-                // `AMBIENT_IRRADIANCE_SCALE` is the knob-at-1 ceiling, not a
-                // floor.
-                let scene_ambient = opaque_draws
-                    .iter()
-                    .map(|d| d.uniforms.scene_params[1])
-                    .fold(0.0f32, f32::max);
+                // ED2 (RAYTRACING_DESIGN.md section 14.2): the flat ambient no
+                // longer enters the kernel (`ShadowRayParams` has no
+                // `ambient_color`); each material's Ambient knob is applied
+                // consumer-side in `render_scene.wgsl`'s `rt_or_flat_ambient`
+                // via its own `scene_params[1]` — knob at 0 stays true black
+                // on both paths.
                 let params = manifold_gpu::raytrace::ShadowRayParams::new(
                     &rt_casters,
                     1,
@@ -4360,11 +4401,6 @@ impl EffectNode for RenderScene {
                     AO_RADIUS_WORLD_UNITS,
                     AO_SAMPLES_PER_PIXEL,
                     GI_SAMPLES_PER_PIXEL,
-                    [
-                        atmosphere.ambient_tint[0] * AMBIENT_IRRADIANCE_SCALE * scene_ambient,
-                        atmosphere.ambient_tint[1] * AMBIENT_IRRADIANCE_SCALE * scene_ambient,
-                        atmosphere.ambient_tint[2] * AMBIENT_IRRADIANCE_SCALE * scene_ambient,
-                    ],
                     // RT-T1-B: the primary-visibility-ray origin for the
                     // real interpolated-vertex-normal fetch (AO/GI cosine
                     // sampling) — the SAME camera eye `render_scene.wgsl`'s
@@ -4493,14 +4529,19 @@ impl EffectNode for RenderScene {
                     irr_half,
                     normal_half,
                     refl_half,
-                    // RT-R1 (section 9.3 RD4): the env mip chain the reflection
-                    // miss branch samples — dummy when the scene has no
-                    // IBL chain (the miss then reads the same nothing the
-                    // raster IBL would). dummy_texture is ensured upstream
-                    // of evaluate's RT block (3491).
-                    self.prefiltered_specular.as_ref().unwrap_or(
-                        self.dummy_texture.as_ref().expect("ensured at 3491"),
-                    ),
+                    // RT-R1 (section 9.3 RD4) + ED1 (section 14.2): the env
+                    // mip chain the reflection miss AND the GI gather's env-
+                    // miss sample. The 1x1 BLACK dummy when the scene has no
+                    // IBL chain — the miss then reads the same nothing the
+                    // raster IBL would (the never-convolved prefiltered
+                    // texture's contents are undefined, so binding it would
+                    // feed the gather garbage). dummy_texture is ensured
+                    // upstream of evaluate's RT block (3491) and zeroed.
+                    if envmap_wired.is_some() {
+                        self.prefiltered_specular.as_ref().expect("ensured above")
+                    } else {
+                        self.dummy_texture.as_ref().expect("ensured at 3491")
+                    },
                     "node.render_scene RT-D3/RT-P2/RT-P3 trace_shadow_rays",
                 );
                 tracer.upsample_shadow(
@@ -4608,7 +4649,10 @@ impl EffectNode for RenderScene {
                     };
                     // `color` is premultiplied with intensity (see
                     // `node_graph::light`), so an intensity move shows up here
-                    // with no extra plumbing.
+                    // with no extra plumbing. The Ambient knob is NOT hashed:
+                    // ED2 moved it consumer-side, so it never changes the
+                    // traced irradiance texture — snapping the accumulator on
+                    // it would only waste history.
                     for c in &rt_casters {
                         for f in c.dir_or_pos.iter().chain(c.color.iter()) {
                             mix(f.to_bits());
@@ -4616,7 +4660,6 @@ impl EffectNode for RenderScene {
                         mix(c.cone_or_size.to_bits());
                         mix(c.kind);
                     }
-                    mix(scene_ambient.to_bits());
                     for f in atmosphere.ambient_tint {
                         mix(f.to_bits());
                     }

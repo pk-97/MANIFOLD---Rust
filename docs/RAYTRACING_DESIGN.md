@@ -1051,6 +1051,19 @@ return L.
   (named, cross-mirror comment discipline per `RT_REFL_PREFILTER_MAX_MIP`). Each term
   is consumed in exactly one place; the Ambient knob never gets `kd_ibl` scaling.
 - **ED3 — demodulation unchanged** (D3/MB5): no primary-surface albedo in-kernel.
+- **ED3a — RT lighting consumers are PBR-only (Peter, 2026-07-31).** The ED2
+  substitution lives in `fs_pbr`'s `diffuse_ibl`; phong/cel draws in an RT
+  scene get the `rt_or_flat_ambient` recompose and NO traced env/GI (their
+  old GI coupling was accidental — they rode the shared ambient slot), with
+  a one-time `log::warn` per scene instance so the degradation is loud.
+  Phong is absent from every shipped preset (survey 2026-07-31: only the
+  three RT compare fixtures used it — migrated to `pbr_material` +
+  uniform-black `bake_environment` in ED-A); supporting a second lit
+  consumer would double every RT shading decision for a material nothing
+  ships. Unlit is exempt by design (no lighting). Blend-queue fragments at
+  void texels keep the raster irradiance-map fetch (the `rt_refl.a < 0`
+  fallback discipline — the fragment class from BUG-88m (rt-reflection-substitution-domain-wider-than-trace-domain)
+  — keyed on the kernel's void signature rgb 0/ao 1 in WGSL).
 - **ED4 — the two GI constants are settled by the codebase's own conventions, then
   certified by fixture** (closes BUG-qt32 (GI energy constants look unphysical)).
   `RT_GI_THROUGHPUT_FOLD` is DELETED: the cosine-weighted estimator's throughput
