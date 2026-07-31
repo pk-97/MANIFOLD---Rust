@@ -60,12 +60,17 @@ fn frame(
     params: &manifold_core::params::ParamManifest,
 ) {
     let c = ctx(f);
-    let mut enc = h.device.create_encoder("r3-heldout-frame");
-    {
-        let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
-        runtime.render(&mut gpu, target, &c, params);
-    }
-    enc.commit_and_wait_completed();
+    // A commit can be an InnocentVictim of a shared-GPU contention transient
+    // (BUG-m0c9); re-rendering the same idempotent frame absorbs it. A real
+    // wedge still panics after the single retry.
+    harness::retry_on_gpu_commit_error(|| {
+        let mut enc = h.device.create_encoder("r3-heldout-frame");
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
+            runtime.render(&mut gpu, target, &c, params);
+        }
+        enc.commit_and_wait_completed();
+    });
 }
 
 fn non_black_fraction_rgbf32(px: &[f32]) -> f64 {
