@@ -883,6 +883,16 @@ pub struct RenderScene {
     // RT-R2 (RD6): specular history ping-pong pair — same lifecycle +
     // same ping clock as rt_irr_history (I-R2: one reset path, one flip).
     rt_refl_history: [Option<manifold_gpu::GpuTexture>; 2],
+    // SV-ACCUM: shadow-visibility history ping-pong pair — the four caster
+    // slots accumulate temporally in `accumulate_irradiance` (previously the
+    // only RT channel with no history: raw per-frame samples straight to the
+    // fragment shader = the penumbra boil). Same lifecycle + same ping
+    // clock as rt_irr_history; the fragment's binding-41 mask reads the
+    // just-written slot, exactly the `rt_irr_tex` discipline.
+    rt_sv_history: [Option<manifold_gpu::GpuTexture>; 2],
+    // SV-ACCUM moments: per-channel first/second visibility moments.
+    rt_sv_m1_history: [Option<manifold_gpu::GpuTexture>; 2],
+    rt_sv_m2_history: [Option<manifold_gpu::GpuTexture>; 2],
     rt_depth_history: [Option<manifold_gpu::GpuTexture>; 2],
     rt_normal_history: [Option<manifold_gpu::GpuTexture>; 2],
     /// RT-T1-D (BUG-312): per-texel luminance moments (mean, mean-of-
@@ -1143,6 +1153,9 @@ impl RenderScene {
             rt_refl_full_b: None,
             rt_irr_history: [None, None],
             rt_refl_history: [None, None],
+            rt_sv_history: [None, None],
+            rt_sv_m1_history: [None, None],
+            rt_sv_m2_history: [None, None],
             rt_depth_history: [None, None],
             rt_normal_history: [None, None],
             rt_moments_history: [None, None],
@@ -1914,6 +1927,24 @@ impl RenderScene {
         self.rt_refl_history = [
             make(width, height, rgba16, "node.render_scene rt_refl_history_a (RT-R2)"),
             make(width, height, rgba16, "node.render_scene rt_refl_history_b (RT-R2)"),
+        ]
+        .map(Some);
+        // SV-ACCUM: shadow-visibility history pair — same lifecycle, reset
+        // rule, and ping clock as rt_irr_history/rt_refl_history.
+        self.rt_sv_history = [
+            make(width, height, rgba16, "node.render_scene rt_sv_history_a (SV-ACCUM)"),
+            make(width, height, rgba16, "node.render_scene rt_sv_history_b (SV-ACCUM)"),
+        ]
+        .map(Some);
+        // SV-ACCUM moments: per-channel first/second visibility moments.
+        self.rt_sv_m1_history = [
+            make(width, height, rgba16, "node.render_scene rt_sv_m1_a (SV-ACCUM)"),
+            make(width, height, rgba16, "node.render_scene rt_sv_m1_b (SV-ACCUM)"),
+        ]
+        .map(Some);
+        self.rt_sv_m2_history = [
+            make(width, height, rgba16, "node.render_scene rt_sv_m2_a (SV-ACCUM)"),
+            make(width, height, rgba16, "node.render_scene rt_sv_m2_b (SV-ACCUM)"),
         ]
         .map(Some);
         self.rt_depth_history = [
@@ -4732,6 +4763,17 @@ impl EffectNode for RenderScene {
                 // the same `rt_history_ping` flip (I-R2: no second flip clock).
                 let refl_history_read = self.rt_refl_history[read_idx].as_ref().expect("ensured above");
                 let refl_history_write = self.rt_refl_history[write_idx].as_ref().expect("ensured above");
+                // SV-ACCUM: shadow-visibility history — same read/write
+                // indexing and the same flip clock as every other pair.
+                // `mask_full` is the atrous-filtered current frame (the
+                // even atrous pass count lands it there — see the
+                // ATROUS_ITERATIONS comment above).
+                let sv_history_read = self.rt_sv_history[read_idx].as_ref().expect("ensured above");
+                let sv_history_write = self.rt_sv_history[write_idx].as_ref().expect("ensured above");
+                let sv_m1_read = self.rt_sv_m1_history[read_idx].as_ref().expect("ensured above");
+                let sv_m1_write = self.rt_sv_m1_history[write_idx].as_ref().expect("ensured above");
+                let sv_m2_read = self.rt_sv_m2_history[read_idx].as_ref().expect("ensured above");
+                let sv_m2_write = self.rt_sv_m2_history[write_idx].as_ref().expect("ensured above");
                 tracer.accumulate_irradiance(
                     gpu.native_enc,
                     &accumulate_params,
@@ -4752,6 +4794,13 @@ impl EffectNode for RenderScene {
                     refl_history_read,
                     refl_history_write,
                     gi_materials_buffer,
+                    mask_full,
+                    sv_history_read,
+                    sv_history_write,
+                    sv_m1_read,
+                    sv_m1_write,
+                    sv_m2_read,
+                    sv_m2_write,
                     "node.render_scene RT-P2/RT-T1-C/RT-T1-D/RT-R2 accumulate_irradiance",
                 );
                 self.rt_history_ping = write_idx;
@@ -4804,7 +4853,13 @@ impl EffectNode for RenderScene {
                     if let Some(ref t) = self.rt_moments_history[refl_write] { q.push(RtCaptureSlot {
                         label: "moments".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
                     });}
-                    if let Some(ref t) = self.rt_mask_full { q.push(RtCaptureSlot {
+                    // SV-ACCUM: the `mask` channel dumps the ACCUMULATED
+                    // visibility (the texture binding 41 actually feeds the
+                    // fragment shader) — the gate must measure what the show
+                    // consumes, not the pre-accumulation atrous output.
+                    // `rt_mask_full` stays in the chain (atrous scratch) but
+                    // is no longer the consumed mask.
+                    if let Some(ref t) = self.rt_sv_history[refl_write] { q.push(RtCaptureSlot {
                         label: "mask".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
                     });}
                     // BUG-fh95: the RAW pre-upsample/pre-denoise trace output
@@ -4934,7 +4989,13 @@ impl EffectNode for RenderScene {
         // sampler when `scene_params.w > 0.5` — always bound (the ABI-
         // stub discipline every optional texture in this shader uses),
         // dummy when RT isn't active this frame.
-        let rt_mask_tex = self.rt_mask_full.as_ref().unwrap_or(dummy);
+        // SV-ACCUM: now reads the temporally-ACCUMULATED visibility
+        // history — `rt_history_ping` indexes whichever ping-pong slot
+        // `accumulate_irradiance` most recently WROTE this frame, exactly
+        // the `rt_irr_tex` discipline below. Before SV-ACCUM this bound
+        // the raw post-atrous `rt_mask_full` — the only RT channel with
+        // no temporal amortization, and the penumbra boil Peter reported.
+        let rt_mask_tex = self.rt_sv_history[self.rt_history_ping].as_ref().unwrap_or(dummy);
         // RAYTRACING_DESIGN.md section 5.2 P2, extended RT-T1-C: the temporally-
         // accumulated demodulated-irradiance history — `rt_history_ping`
         // always indexes whichever ping-pong slot `accumulate_irradiance`
