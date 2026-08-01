@@ -18,17 +18,18 @@
 use crate::node_graph::channel_names::well_known;
 use crate::node_graph::ports::{ChannelElementType, ChannelSpec, KnownItem};
 
-/// A 3D mesh vertex with surface normal and UV. Used by
+/// A 3D mesh vertex with surface normal, UV, and tangent. Used by
 /// `node.grid_mesh` and consumed by `node.render_mesh`.
 ///
-/// Layout (48 bytes, std430 / 16-byte aligned):
+/// Layout (64 bytes, std430 / 16-byte aligned):
 /// - position(12) + pad(4)
 /// - normal(12)   + pad(4)
 /// - uv(8)        + pad(8)
-///
-/// The 8-byte `_pad2` tail is the reserved slot for adding
-/// `tangent: [f32; 4]` in a follow-up extension (tangent-space
-/// normal mapping) without another layout change.
+/// - tangent(16)  — glTF TANGENT: xyz = tangent direction, w = ±1
+///   bitangent sign (glTF spec). `[0,0,0,0]` = ABSENT (procedural
+///   meshes, glTF without TANGENT): the shader falls back to the
+///   derived cotangent frame. The w-is-zero test is safe because a
+///   real glTF tangent always carries w ∈ {-1, +1}.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct MeshVertex {
@@ -38,17 +39,19 @@ pub struct MeshVertex {
     pub _pad1: f32,
     pub uv: [f32; 2],
     pub _pad2: [f32; 2],
+    pub tangent: [f32; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<MeshVertex>() == 48);
+const _: () = assert!(std::mem::size_of::<MeshVertex>() == 64);
 
 /// Channels signature for [`MeshVertex`] per `docs/CHANNEL_TYPE_SYSTEM.md` section 6.2.
-/// Std430 stride 48 matches the existing `#[repr(C)]` struct (vec3+vec3+vec2
-/// with std430 alignment producing the same 48 bytes).
+/// Std430 stride 64 matches the existing `#[repr(C)]` struct (vec3+vec3+vec2+vec4
+/// with std430 alignment producing the same 64 bytes).
 pub const MESH_VERTEX_SPECS: &[ChannelSpec] = &[
     ChannelSpec { name: well_known::POSITION, ty: ChannelElementType::Vec3F },
     ChannelSpec { name: well_known::NORMAL,   ty: ChannelElementType::Vec3F },
     ChannelSpec { name: well_known::UV,       ty: ChannelElementType::Vec2F },
+    ChannelSpec { name: well_known::TANGENT,  ty: ChannelElementType::Vec4F },
 ];
 
 impl KnownItem for MeshVertex {

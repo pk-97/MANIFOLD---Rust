@@ -28,6 +28,7 @@ struct MeshVertex {
     _pad1: f32,
     uv: vec2<f32>,
     _pad2: vec2<f32>,
+    tangent: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -54,6 +55,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         dst[idx]._pad1 = 0.0;
         dst[idx].uv = vec2<f32>(0.0, 0.0);
         dst[idx]._pad2 = vec2<f32>(0.0, 0.0);
+        dst[idx].tangent = vec4<f32>(0.0);
         return;
     }
 
@@ -74,4 +76,5 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     dst[idx]._pad1 = 0.0;
     dst[idx].uv = uv;
     dst[idx]._pad2 = vec2<f32>(0.0, 0.0);
+    dst[idx].tangent = vec4<f32>(0.0);
 }

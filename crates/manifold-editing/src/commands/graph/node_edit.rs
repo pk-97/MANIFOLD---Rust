@@ -691,6 +691,12 @@ pub struct SetGraphNodeParamCommand {
     /// `Some(Some(v))` means "key existed with value `v`". `None` at
     /// pre-execute time.
     previous_value: Option<Option<SerializedParamValue>>,
+    /// BUG-1l7f redirect state: when the write rerouted through the owning
+    /// card slot (authored-default binding — the card is the sole authority
+    /// the render sees, so the def-node write would be stomped), the
+    /// manifest id written and the value it held before. Undo restores it.
+    /// `None` = ordinary def-node write.
+    card_redirect: Option<(String, f32)>,
 }
 
 impl SetGraphNodeParamCommand {
@@ -709,6 +715,7 @@ impl SetGraphNodeParamCommand {
             catalog_default,
             scope_path: Vec::new(),
             previous_value: None,
+            card_redirect: None,
         }
     }
 
@@ -739,10 +746,63 @@ impl SetGraphNodeParamCommand {
         self.previous_value = Some(previous);
         self
     }
+
+    /// BUG-1l7f redirect: when an authored-default card binding owns
+    /// `(node_id, param_name)`, write the value through the card slot and
+    /// return `(outer_id, previous_card_value)` for undo. `None` — caller
+    /// stays on the def-write path — when nothing owns the param, when the
+    /// value has no scalar reading (Vec/Color/Table/String), when the fold
+    /// is degenerate, or when the manifest slot is gone (pruned exposure).
+    /// Looks up against the instance's own override when present, else the
+    /// catalog default it tracks — without lifting the catalog into an
+    /// override, since a card write never touches the def.
+    fn write_through_card_slot(&mut self, project: &mut Project) -> Option<(String, f32)> {
+        let target = self.target.clone();
+        let catalog = &self.catalog_default;
+        let node_id = self.node_id;
+        let param_name = self.param_name.clone();
+        let new_value = self.new_value.clone();
+        project.with_preset_graph_mut(&target, |inst| {
+            let def = inst.graph_def().as_ref().unwrap_or(catalog);
+            let slot = manifold_core::effects::card_slot_for_node_param(def, node_id, &param_name)?;
+            let target_value = manifold_core::effects::serialized_value_as_f32(&new_value)?;
+            let card_value = manifold_core::effects::invert_card_reshape(
+                target_value,
+                slot.min,
+                slot.max,
+                slot.invert,
+                slot.curve,
+                slot.scale,
+                slot.offset,
+            )?;
+            // Undo capture mirrors `apply_bindings`' own fallback: manifest
+            // value when the slot exists, the binding's authored default
+            // when it doesn't.
+            let previous = if inst.params.get(&slot.outer_id).is_some() {
+                inst.get_base_param(&slot.outer_id)
+            } else {
+                slot.authored_default
+            };
+            inst.set_base_param(&slot.outer_id, card_value).then_some((slot.outer_id, previous))
+        })?
+    }
 }
 
 impl Command for SetGraphNodeParamCommand {
     fn execute(&mut self, project: &mut Project) {
+        // BUG-1l7f redirect: a write to a card-owned def param (authored
+        // default) reroutes through the card slot — `apply_bindings` makes
+        // the manifest value the sole authority the render sees, so the
+        // def-node write would be stomped next frame. The inverse reshape
+        // (PARAM_TWO_WAY_BINDING_DESIGN.md D2) converts the node-units value
+        // to the card value; never dual-write. Root-level edits only —
+        // binding metadata addresses root node ids.
+        if self.scope_path.is_empty()
+            && let Some((outer_id, previous)) = self.write_through_card_slot(project)
+        {
+            self.card_redirect = Some((outer_id, previous));
+            return;
+        }
         let node_id = self.node_id;
         let param_name = self.param_name.clone();
         let new_value = self.new_value.clone();
@@ -777,6 +837,13 @@ impl Command for SetGraphNodeParamCommand {
     }
 
     fn undo(&mut self, project: &mut Project) {
+        if let Some((outer_id, previous)) = self.card_redirect.take() {
+            let target = self.target.clone();
+            let _ = project.with_preset_graph_mut(&target, |inst| {
+                inst.set_base_param(&outer_id, previous);
+            });
+            return;
+        }
         let Some(prev) = self.previous_value.take() else {
             return;
         };

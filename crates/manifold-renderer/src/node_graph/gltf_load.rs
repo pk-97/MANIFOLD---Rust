@@ -718,6 +718,11 @@ fn flatten_primitive(
         .collect();
     let normals: Option<Vec<[f32; 3]>> = reader.read_normals().map(|it| it.collect());
     let uvs: Option<Vec<[f32; 2]>> = reader.read_tex_coords(0).map(|it| it.into_f32().collect());
+    // BUG-wfxe: TANGENT (vec4: xyz direction + w bitangent sign) feeds
+    // authored tangent-space normal mapping. Direction transforms with the
+    // normal matrix like any covector-adjacent direction here; w passes
+    // through. Absent → [0,0,0,0], the shader's derived-frame sentinel.
+    let tangents: Option<Vec<[f32; 4]>> = reader.read_tangents().map(|it| it.collect());
 
     let world_positions: Vec<[f32; 3]> = positions
         .iter()
@@ -726,6 +731,14 @@ fn flatten_primitive(
     let world_normals: Option<Vec<[f32; 3]>> = normals
         .as_ref()
         .map(|ns| ns.iter().map(|n| normalize3(mat3_mul_vec3(*normal_mat, *n))).collect());
+    let world_tangents: Option<Vec<[f32; 4]>> = tangents.as_ref().map(|ts| {
+        ts.iter()
+            .map(|t| {
+                let d = normalize3(mat3_mul_vec3(*normal_mat, [t[0], t[1], t[2]]));
+                [d[0], d[1], d[2], t[3]]
+            })
+            .collect()
+    });
 
     let indices: Vec<u32> = match reader.read_indices() {
         Some(idx) => idx.into_u32().collect(),
@@ -751,6 +764,7 @@ fn flatten_primitive(
         for &i in &[i0, i1, i2] {
             let normal = world_normals.as_ref().map_or(face_normal, |ns| ns[i]);
             let uv = uvs.as_ref().map_or([0.0, 0.0], |u| u[i]);
+            let tangent = world_tangents.as_ref().map_or([0.0; 4], |ts| ts[i]);
             out.push(MeshVertex {
                 position: world_positions[i],
                 _pad0: 0.0,
@@ -758,6 +772,7 @@ fn flatten_primitive(
                 _pad1: 0.0,
                 uv,
                 _pad2: [0.0, 0.0],
+                tangent,
             });
         }
     }
@@ -2296,6 +2311,12 @@ pub(crate) fn flatten_skinned_node(
             .collect();
         let normals: Option<Vec<[f32; 3]>> = reader.read_normals().map(|it| it.collect());
         let uvs: Option<Vec<[f32; 2]>> = reader.read_tex_coords(0).map(|it| it.into_f32().collect());
+        // BUG-wfxe: authored tangents stay ZERO here deliberately — the GPU
+        // skinning path transforms positions/normals with the joints but has
+        // no tangent transform, so passing the authored frame through would
+        // shade skinned animation with a stale basis. Zero = the shader's
+        // derived-frame sentinel = today's behavior, until the skin shader
+        // learns to skin tangents (follow-up).
         let vjoints: Option<Vec<[u16; 4]>> = reader.read_joints(0).map(|it| it.into_u16().collect());
         let vweights: Option<Vec<[f32; 4]>> = reader.read_weights(0).map(|it| it.into_f32().collect());
         let indices: Vec<u32> = match reader.read_indices() {
@@ -2324,6 +2345,7 @@ pub(crate) fn flatten_skinned_node(
                     _pad1: 0.0,
                     uv,
                     _pad2: [0.0, 0.0],
+                    tangent: [0.0; 4],
                 });
                 joints.push(match &vjoints {
                     Some(j) => [j[i][0] as f32, j[i][1] as f32, j[i][2] as f32, j[i][3] as f32],
@@ -2428,6 +2450,9 @@ fn flatten_rigid_multi_node(
                         _pad1: 0.0,
                         uv,
                         _pad2: [0.0, 0.0],
+                        // Zero like the skinned path — GPU node-slot
+                        // transforms have no tangent transform (BUG-wfxe).
+                        tangent: [0.0; 4],
                     });
                     joints.push([slot as f32, 0.0, 0.0, 0.0]);
                     weights.push([1.0, 0.0, 0.0, 0.0]);
@@ -2572,6 +2597,10 @@ fn flatten_primitive_morph_deltas(
                     _pad1: 0.0,
                     uv: [0.0, 0.0],
                     _pad2: [0.0, 0.0],
+                    // Morph TANGENT deltas exist in the spec (the reader's
+                    // third tuple element above) but morph-blended tangent
+                    // frames are unbuilt — zero = derived-frame sentinel.
+                    tangent: [0.0; 4],
                 });
             }
         }
@@ -4349,6 +4378,60 @@ mod animation_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// BUG-wfxe red proof: `NormalTangentMirrorTest.glb` (Khronos'
+    /// conformance asset for exactly this path — authored tangents with
+    /// BOTH handednesses, w = +1 and w = -1 halves) must import its
+    /// TANGENT accessor end to end — pre-fix every vertex carried the
+    /// `[0,0,0,0]` sentinel. Asserts real tangents (unit-ish xyz, w = ±1)
+    /// and that BOTH signs survive (the mirrored half is the case the
+    /// derived cotangent frame gets wrong).
+    #[test]
+    fn normal_tangent_mirror_fixture_imports_authored_tangents() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/khronos/NormalTangentMirrorTest.glb");
+        assert!(path.exists(), "NormalTangentMirrorTest.glb missing at {}", path.display());
+        let verts = load_gltf_mesh(&path, GltfMeshSelector::WholeScene)
+            .unwrap_or_else(|e| panic!("load_gltf_mesh({}): {e}", path.display()));
+        assert!(!verts.is_empty());
+        let authored = verts.iter().filter(|v| v.tangent[3] != 0.0).count();
+        assert!(
+            authored as f32 > verts.len() as f32 * 0.9,
+            "NormalTangentMirrorTest ships TANGENT — expected >90% authored tangents, \
+             got {authored}/{} (the import is dropping the accessor)",
+            verts.len()
+        );
+        let pos = verts.iter().filter(|v| (v.tangent[3] - 1.0).abs() < 1e-6).count();
+        let neg = verts.iter().filter(|v| (v.tangent[3] + 1.0).abs() < 1e-6).count();
+        assert!(
+            pos > 0 && neg > 0,
+            "both bitangent signs must survive (mirror test asset): +1={pos}, -1={neg}"
+        );
+        let sample = verts.iter().find(|v| v.tangent[3] != 0.0).unwrap();
+        let len = (sample.tangent[0].powi(2) + sample.tangent[1].powi(2) + sample.tangent[2].powi(2))
+            .sqrt();
+        assert!(
+            (len - 1.0).abs() < 0.05,
+            "authored tangent direction must be ~unit (world-transformed), got |t|={len}"
+        );
+    }
+
+    /// BUG-wfxe fallback half: a mesh WITHOUT a TANGENT accessor keeps the
+    /// zero sentinel, so the shader takes the derived cotangent frame
+    /// (pre-BUG-wfxe behavior, byte-identical for procedural meshes).
+    #[test]
+    fn mesh_without_tangent_keeps_zero_sentinel() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/cc0__oomurasaki_azalea_r._x_pulchrum.glb");
+        if !path.exists() {
+            println!("mesh_without_tangent_keeps_zero_sentinel: fixture not found, skipping");
+            return;
+        }
+        let verts = load_gltf_mesh(&path, GltfMeshSelector::WholeScene)
+            .unwrap_or_else(|e| panic!("load_gltf_mesh({}): {e}", path.display()));
+        let authored = verts.iter().filter(|v| v.tangent[3] != 0.0).count();
+        assert_eq!(authored, 0, "azalea ships no TANGENT — every vertex must keep the sentinel");
+    }
 
     /// CPU-only, fast — not gated behind `#[ignore]`. Guards the
     /// file-missing case (no fixture in a checkout without

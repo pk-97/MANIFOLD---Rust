@@ -13,10 +13,11 @@
 // accesses, so unlit/phong/cel pipelines don't reference the envmap
 // binding even though the WGSL declares it.
 //
-// MeshVertex layout (48 bytes):
+// MeshVertex layout (64 bytes):
 //   position: vec3<f32> + pad
 //   normal:   vec3<f32> + pad
 //   uv:       vec2<f32> + pad
+//   tangent:  vec4<f32>
 //
 // Topology: every 3 consecutive vertices form one triangle.
 // The vertex shader looks up vertex `vertex_index` directly from the
@@ -46,6 +47,7 @@ struct Vertex {
     _pad1: f32,
     uv: vec2<f32>,
     _pad2: vec2<f32>,
+    tangent: vec4<f32>,
 };
 
 // Superset uniform — fields inert for kinds that don't read them.

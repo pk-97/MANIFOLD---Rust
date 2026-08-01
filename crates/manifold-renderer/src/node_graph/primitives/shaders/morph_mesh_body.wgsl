@@ -26,5 +26,5 @@ fn body(
     let n = mix(e_in.normal, e_b.normal, tw);
     let mag = max(length(n), 1e-12);
 
-    return Element(pos, n / mag, e_in.uv);
+    return Element(pos, n / mag, e_in.uv, e_in.tangent);
 }
