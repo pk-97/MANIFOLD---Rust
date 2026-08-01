@@ -1468,6 +1468,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     /// the UI reads front surfaces on a SEPARATE MTLDevice: under saturation
     /// the content thread overwrote a surface the UI's composite was still
     /// sampling — the preview tear Peter saw at 60fps under RT load.
+    ///
+    /// Load-bearing beyond presentation (BUG-0ou6, TexturePool encode-pacing
+    /// coupling): this wait is what paces encode to <= frames_in_flight
+    /// ahead of GPU completion, and TexturePool's frame-stamp recycling
+    /// (crates/manifold-gpu/src/metal/texture_pool.rs) is correct only
+    /// under that pacing. Weakening this wait silently breaks the pool's
+    /// recycle safety.
     #[cfg(target_os = "macos")]
     pub fn is_surface_ready(&self) -> bool {
         let pending = self.surface_signal_values[self.write_surface_index];
