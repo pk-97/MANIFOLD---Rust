@@ -2211,6 +2211,7 @@ impl GpuEncoder {
                         (code, desc)
                     }
                 };
+                super::gpu_fault::record_fault(&desc);
                 log::error!(
                     "[GPU] Command buffer '{}' error (code={}): {}",
                     label,

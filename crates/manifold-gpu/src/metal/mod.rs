@@ -18,6 +18,7 @@ mod device;
 mod encoder;
 mod format;
 mod frame_fence;
+pub mod gpu_fault;
 mod msl_cache;
 mod profiling;
 pub mod raytrace;
