@@ -87,7 +87,14 @@ def main():
     anc = subprocess.run(["git", "merge-base", "--is-ancestor", a.branch, "origin/main"],
                          cwd=str(MAIN)).returncode == 0
     if anc:
-        step("delete branch", ["git", "branch", "-d", a.branch], MAIN, check=False)
+        r = step("delete branch", ["git", "branch", "-d", a.branch], MAIN, check=False)
+        if r.returncode != 0:
+            # The common cause: the acquiring worktree still has the branch
+            # checked out (git refuses). A silent survivals means the next
+            # session commits onto a "landed" branch and needs a second
+            # landing (self-observed 2026-08-01).
+            print(f"[land] NOTE: branch delete failed ({r.stderr.strip()[:200]}) — "
+                  f"{a.branch} is fully landed; delete it after its worktree moves off.")
     else:
         print(f"[land] NOTE: {a.branch} tip is not an ancestor of origin/main — left undeleted.")
 
