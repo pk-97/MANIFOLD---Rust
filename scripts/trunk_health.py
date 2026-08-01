@@ -90,6 +90,16 @@ def main():
         # while its ceilings are unvalidated, so it files no beads until the
         # numbers mean something.
         ["python3", "scripts/rt_noise_gate.py", "--require-fixture"],
+        # RT MOTION leg (BUG-sz0u): camera-orbit ramp on the helmet fixture —
+        # the coverage that catches motion-only regressions (D-64 boil,
+        # sv-gate re-trip) the static legs can't see. Red-validated against
+        # boil-era gate behavior before this wiring (sv_hold median 4x over
+        # the healthy ceiling with D-64/tr5o reverted). The fixture is
+        # RtMotionHelmet.manifold, NOT RtNoiseTesting: the noise fixture
+        # shows no red/green separation for this class (measured 2026-08-01).
+        ["python3", "scripts/rt_noise_gate.py", "--motion",
+         "--project", "tests/fixtures/rt/RtMotionHelmet.manifold",
+         "--require-fixture"],
         # Presentation-tear class (BUG-xaw4): legacy policy must keep tearing
         # (probe not blind) AND fenced policy must stay clean (the shipped
         # read-fence contract). GPU-serial here — this loop is sequential.
