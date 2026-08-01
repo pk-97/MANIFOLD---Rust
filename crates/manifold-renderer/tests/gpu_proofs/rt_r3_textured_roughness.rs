@@ -156,6 +156,9 @@ fn run_fixture(mr_texture: Option<&manifold_gpu::GpuTexture>, floor_roughness: f
             base_color_texture: None,
             mr_texture,
             normal_texture: None,
+                        emissive_texture: None,
+                        emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
+                        emissive_uv_t: [0.0, 0.0],
             cast_shadows: true,
         },
         RtObjectGeometry {
@@ -172,6 +175,9 @@ fn run_fixture(mr_texture: Option<&manifold_gpu::GpuTexture>, floor_roughness: f
             base_color_texture: None,
             mr_texture: None,
             normal_texture: None,
+                        emissive_texture: None,
+                        emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
+                        emissive_uv_t: [0.0, 0.0],
             cast_shadows: true,
         },
     ];

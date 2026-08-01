@@ -1527,6 +1527,20 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     /// Handle GPU timeout — clear stale signal to prevent infinite blocking.
     #[cfg(target_os = "macos")]
     pub fn handle_surface_timeout(&mut self) {
+        // BUG-665r: a blacklisted queue never advances the shared event —
+        // without this check the timeout clears the slot, the next commit
+        // errors instantly, and the loop repeats forever (wedged output
+        // that even hangs shutdown). There is no in-process recovery for
+        // a blacklisted queue; die loud and clean so the show restarts in
+        // seconds instead of staring at a frozen frame.
+        if manifold_gpu::gpu_fault::submissions_ignored() {
+            log::error!(
+                "[ContentPipeline] FATAL: the GPU driver blacklisted this process's command \
+                 queue (submissions ignored after prior GPU errors) — rendering cannot \
+                 recover this session. Exiting now; relaunch Manifold. (BUG-665r)"
+            );
+            std::process::exit(70);
+        }
         let idx = self.write_surface_index;
         let pending = self.surface_signal_values[idx];
         let signaled = self.native_event.as_ref().map_or(0, |e| e.signaled_value());

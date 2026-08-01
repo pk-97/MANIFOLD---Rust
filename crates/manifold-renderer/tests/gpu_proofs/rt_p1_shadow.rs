@@ -132,6 +132,9 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         base_color_texture: None,
         mr_texture: None,
         normal_texture: None,
+                        emissive_texture: None,
+                        emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
+                        emissive_uv_t: [0.0, 0.0],
             cast_shadows: true,
     }];
     let accel = tracer.build_accel(device, &objects);
@@ -344,6 +347,9 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
             base_color_texture: None,
             mr_texture: None,
             normal_texture: None,
+                        emissive_texture: None,
+                        emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
+                        emissive_uv_t: [0.0, 0.0],
             cast_shadows: true,
         },
         RtObjectGeometry {
@@ -360,6 +366,9 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
             base_color_texture: None,
             mr_texture: None,
             normal_texture: None,
+                        emissive_texture: None,
+                        emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
+                        emissive_uv_t: [0.0, 0.0],
             cast_shadows: true,
         },
     ];

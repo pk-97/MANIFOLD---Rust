@@ -134,6 +134,9 @@ fn run_fixture(alpha_mask: bool) -> [f32; 2] {
         base_color_texture: Some(&base_color_tex),
         mr_texture: None,
         normal_texture: None,
+                    emissive_texture: None,
+                    emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
+                    emissive_uv_t: [0.0, 0.0],
         cast_shadows: true,
     }];
 

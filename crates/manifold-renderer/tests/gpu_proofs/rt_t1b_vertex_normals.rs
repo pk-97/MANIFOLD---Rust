@@ -105,6 +105,9 @@ fn fetch_interpolated_normal_2tri_matches_cpu_oracle() {
         base_color_texture: None,
         mr_texture: None,
         normal_texture: None,
+                    emissive_texture: None,
+                    emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
+                    emissive_uv_t: [0.0, 0.0],
         cast_shadows: true,
     }];
 

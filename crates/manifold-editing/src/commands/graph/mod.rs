@@ -27,6 +27,7 @@ use manifold_core::effect_graph_def::{
 };
 use manifold_core::project::Project;
 
+mod card_owned_write;
 mod node_edit;
 pub use node_edit::*;
 mod expose;

@@ -199,6 +199,19 @@ pub struct RtObjectGeometry<'a> {
     /// behavior). Consumed ONLY at the primary hit; secondary/extension-ray
     /// hit shading keeps vertex normals.
     pub normal_texture: Option<&'a GpuTexture>,
+    /// BUG-1gqt: this object's emissive texture, sampled at the ray hit's
+    /// interpolated UV (with `emissive_uv_m/t` applied) and multiplied by
+    /// the flat `GiMaterial::emissive` factor — the trace-path mirror of
+    /// the raster's `resolve_emissive`. `None` = factor alone
+    /// (pre-feature behavior). Consumed at every emissive-hit shading
+    /// site (the GI gather's emissive term and the reflection hit's).
+    pub emissive_texture: Option<&'a GpuTexture>,
+    /// BUG-1gqt: KHR_texture_transform fold for the emissive map, in the
+    /// raster's `apply_uv_transform` convention:
+    /// `uv' = (m[0]*u + m[1]*v + t[0], m[2]*u + m[3]*v + t[1])`.
+    /// Identity when the material declares no transform.
+    pub emissive_uv_m: [f32; 4],
+    pub emissive_uv_t: [f32; 2],
     /// Per-object shadow-cast toggle (`node.scene_object`'s `cast_shadows`
     /// param, threaded through `render_scene.rs`'s `ObjectDraw`). `false`
     /// clears `RT_MASK_SHADOW_CASTER` from this instance's mask (see
@@ -421,6 +434,7 @@ fn add_ready_completion_handler<T: Send + 'static>(
                 None => (-1i64, String::from("(nil)")),
                 Some(err) => (err.code() as i64, err.localizedDescription().to_string()),
             };
+            super::gpu_fault::record_fault(&desc);
             log::error!("[GPU] Command buffer '{label}' error (code={code}): {desc}");
         }
         ready.store(true, Ordering::Release);
@@ -667,7 +681,20 @@ struct RtNormalSource {
     // pre-BUG-wytp behavior). Sampled at the primary hit's interpolated UV only;
     // secondary/extension-ray hit shading keeps vertex normals.
     uint   normal_tex_index;
-    uint   _pad;
+    // BUG-1gqt (rt-trace-ignores-emissive-texture): emissive-map texture index
+    // for hit-sample emission — multiplies the flat `GiMaterial.emissive`
+    // factor at every emissive-hit site (GI gather + reflection-hit shading),
+    // the trace-path mirror of the raster's `resolve_emissive`.
+    // `MAX_RT_MATERIAL_TEXTURES` or above means "no texture bound" (factor
+    // alone — pre-BUG-1gqt behavior). `emissive_uv_m/t` is the material's
+    // KHR_texture_transform fold for the emissive map, applied at the hit
+    // sample in the raster's `apply_uv_transform` convention — scalar float
+    // arrays, NOT float4/float2: they must match the Rust mirror's byte
+    // layout exactly and a float4 would 16-align against this offset.
+    uint   emissive_tex_index;
+    float  emissive_uv_m[4];
+    float  emissive_uv_t[2];
+    uint   _pad2[2];
 };
 
 // RT-T1-B: fetch this object's (`src`) vertex `vi`'s LOCAL-space normal via
@@ -784,6 +811,30 @@ static float3 perturb_normal_with_map(
     constexpr sampler normal_sampler(coord::normalized, address::repeat, filter::linear);
     float3 tn = material_textures[src.normal_tex_index].sample(normal_sampler, uv).rgb * 2.0 - 1.0;
     return normalize(t * tn.x + b * tn.y + n * tn.z);
+}
+
+// BUG-1gqt (rt-trace-ignores-emissive-texture): the trace-path mirror of
+// the raster's `resolve_emissive` — the flat `GiMaterial.emissive` factor
+// multiplied by the emissive map's sample at the hit's interpolated UV,
+// with the material's KHR_texture_transform fold applied (the raster's
+// `apply_uv_transform` convention; the RT base-color/MR/normal samples
+// deliberately do NOT fold today — emissive is the first RT sample that
+// must, because a shifted emissive strip is how the BUG-1gqt cure-test
+// catches a missing fold). `emissive_tex_index >= MAX_RT_MATERIAL_TEXTURES`
+// = no map bound: factor alone (pre-BUG-1gqt behavior).
+static float3 emissive_at_hit(
+    float3 factor,
+    device RtNormalSource& src,
+    device RtNormalSource* normal_sources,
+    array<texture2d<float>, MAX_RT_MATERIAL_TEXTURES> material_textures,
+    uint instance_id, uint primitive_id, float2 bary)
+{
+    if (src.emissive_tex_index >= MAX_RT_MATERIAL_TEXTURES) return factor;
+    float2 uv = fetch_interpolated_uv(normal_sources, instance_id, primitive_id, bary);
+    uv = float2(src.emissive_uv_m[0] * uv.x + src.emissive_uv_m[1] * uv.y + src.emissive_uv_t[0],
+                src.emissive_uv_m[2] * uv.x + src.emissive_uv_m[3] * uv.y + src.emissive_uv_t[1]);
+    constexpr sampler em_sampler(coord::normalized, address::repeat, filter::linear);
+    return factor * material_textures[src.emissive_tex_index].sample(em_sampler, uv).rgb;
 }
 
 // RT-T2-A: sample this candidate triangle's base-color alpha at its
@@ -1403,7 +1454,11 @@ kernel void trace_shadow_rays(
                 uint gi_pid = gi_q.get_committed_primitive_id();
                 float2 gi_bary = gi_q.get_committed_triangle_barycentric_coord();
                 float gi_dist = gi_q.get_committed_distance();
-                float3 hit_emissive = float3(gi_materials[oi].emissive);
+                // BUG-1gqt: factor × emissive-map sample at the hit (was:
+                // flat factor only — a black emissive map still lit GI).
+                float3 hit_emissive = emissive_at_hit(
+                    float3(gi_materials[oi].emissive), normal_sources[oi],
+                    normal_sources, material_textures, oi, gi_pid, gi_bary);
                 float3 hit_albedo = float3(gi_materials[oi].albedo);
                 float3 hit_pos = gr.origin + gr.direction * gi_dist;
                 float3 hit_n = fetch_interpolated_normal(normal_sources, oi, gi_pid, gi_bary);
@@ -1518,11 +1573,16 @@ kernel void trace_shadow_rays(
                 uint hpid = refl_q.get_committed_primitive_id();
                 float2 hbary = refl_q.get_committed_triangle_barycentric_coord();
                 hit_dist = refl_q.get_committed_distance();
-                float3 hit_emissive = float3(gi_materials[hoi].emissive);
+                device RtNormalSource& hsrc = normal_sources[hoi];
+                // BUG-1gqt: factor × emissive-map sample at the hit (was:
+                // flat factor only — a black emissive map still lit
+                // reflections).
+                float3 hit_emissive = emissive_at_hit(
+                    float3(gi_materials[hoi].emissive), hsrc,
+                    normal_sources, material_textures, hoi, hpid, hbary);
                 // Sample base-color texture if bound (RtNormalSource.base_color_tex_index),
                 // otherwise flat gi_materials albedo is the fallback.
                 float3 hit_albedo = float3(gi_materials[hoi].albedo);
-                device RtNormalSource& hsrc = normal_sources[hoi];
                 if (hsrc.base_color_tex_index < MAX_RT_MATERIAL_TEXTURES) {
                     float2 hit_uv = fetch_interpolated_uv(normal_sources, hoi, hpid, hbary);
                     constexpr sampler bc_sampler(coord::normalized, address::repeat, filter::linear);
@@ -2872,13 +2932,24 @@ pub struct RtNormalSource {
     /// as `mr_tex_index`. Secondary/extension-ray hit shading keeps vertex
     /// normals.
     pub normal_tex_index: u32,
-    /// Explicit pad — this struct leads with a `u64` (align-8); every
-    /// field after it must keep the whole struct's size a multiple of 8,
-    /// same discipline the RT-T2-A extension already established.
-    pub _pad: u32,
+    /// BUG-1gqt: emissive-map texture index for hit-sample emission
+    /// (GI gather + reflection-hit shading); `>= MAX_RT_MATERIAL_TEXTURES`
+    /// means "no texture bound" (flat `GiMaterial::emissive` factor alone —
+    /// pre-BUG-1gqt behavior).
+    pub emissive_tex_index: u32,
+    /// BUG-1gqt: KHR_texture_transform fold for the emissive map, applied
+    /// at the hit sample — the raster's `apply_uv_transform` convention
+    /// (see `RtObjectGeometry::emissive_uv_m`). Scalar fields, not a
+    /// packed float4: the MSL mirror must match byte-for-byte and a
+    /// `float4` would 16-align against this offset.
+    pub emissive_uv_m: [f32; 4],
+    pub emissive_uv_t: [f32; 2],
+    /// Explicit pad to an 8-byte multiple (u64-led struct, same discipline
+    /// as the fields above).
+    pub _pad2: [u32; 2],
 }
 
-const _: () = assert!(std::mem::size_of::<RtNormalSource>() == 88);
+const _: () = assert!(std::mem::size_of::<RtNormalSource>() == 120);
 
 /// Fixed texture-argument-table slot count for per-object material textures
 /// (alpha-mask + base-color; roughness/metallic/normals consume this same cap) —
@@ -3016,6 +3087,26 @@ pub fn ensure_normal_sources<'a>(
             }
             None => RT_MATERIAL_TEX_INDEX_NONE,
         };
+        // BUG-1gqt (rt-trace-ignores-emissive-texture): SAME dedupe-into-
+        // `material_textures`, cap-check, and log-warn-on-full pattern as
+        // `normal_tex_index` above — the emissive map rides the one general
+        // material-texture cap, no separate table.
+        let emissive_tex_index = match obj.emissive_texture {
+            Some(tex) if material_textures.len() < MAX_RT_MATERIAL_TEXTURES => {
+                let idx = material_textures.iter().position(|&t| std::ptr::eq(t, tex))
+                    .unwrap_or_else(|| {
+                        material_textures.push(tex);
+                        material_textures.len() - 1
+                    });
+                idx as u32
+            }
+            Some(_) => {
+                log::warn!("RT material-texture table full ({} bound, {} cap) — object {} emissive map degraded to flat emissive factor",
+                    material_textures.len(), MAX_RT_MATERIAL_TEXTURES, i);
+                RT_MATERIAL_TEX_INDEX_NONE
+            }
+            None => RT_MATERIAL_TEX_INDEX_NONE,
+        };
         let src = RtNormalSource {
             vertex_base_addr: obj.vertex_buffer.gpu_address() + obj.vertex_offset as u64,
             vertex_stride: obj.vertex_stride,
@@ -3028,7 +3119,10 @@ pub fn ensure_normal_sources<'a>(
             base_color_tex_index,
             mr_tex_index,
             normal_tex_index,
-            _pad: 0,
+            emissive_tex_index,
+            emissive_uv_m: obj.emissive_uv_m,
+            emissive_uv_t: obj.emissive_uv_t,
+            _pad2: [0; 2],
         };
         unsafe {
             std::ptr::write_unaligned(ptr.add(i * std::mem::size_of::<RtNormalSource>()) as *mut _, src);
