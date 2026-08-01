@@ -838,6 +838,55 @@ MANIFOLD_GUI_REASON = (
     "the ui-flows `--script` driver. Only Peter launches the GUI."
 )
 
+# Inline-python guard (Peter 2026-08-01 — an overnight wave blocked on an
+# approval prompt for `python3 - << EOF` heredocs editing repo files).
+# Interpreter-prefixed commands can never be auto-allowed: the reviewer
+# can't see the write inside the payload, which is exactly what
+# docs/PERMISSION_BOUNDARY.md section 4 (the bar for allow rules) forbids —
+# so no settings rule can ever cover the class, and every use either
+# prompts (blocking unattended runs) or sails past review. Deterministic
+# deny, with the corrected forms spelled out:
+# - file edits → the Edit/Write tools (reviewer sees the diff, never prompts)
+# - repo scripts → `scripts/x.py` directly (shebang + exec bit; never
+#   `python3 scripts/x.py` — PERMISSION_BOUNDARY section 3)
+# - throwaway python → Write the script to /tmp and run it as
+#   `/tmp/x.py` (shebang + exec bit), so its content is reviewer-visible
+#   before it runs.
+INLINE_PYTHON_REASON = (
+    "Inline python (`python3 -c`, `python3 -`, heredoc-fed) is denied — "
+    "interpreter-prefixed inline payloads can never skip the permission "
+    "classifier, so they prompt (and blocked an overnight wave, Peter "
+    "2026-08-01). Corrected forms: file edits go through the Edit/Write "
+    "tools; throwaway python goes in a /tmp file via the Write tool and runs "
+    "as `/tmp/x.py` (shebang + exec bit) so the reviewer sees it first; repo "
+    "scripts run directly as `scripts/x.py`."
+)
+
+INLINE_PYTHON_HEADS = {"python", "python2", "python3"}
+
+
+def inline_python_guard(cmd):
+    """Return a deny reason for INLINE python payloads: a python/python2/
+    python3 segment head followed by a flag (`-c`, `-`, any `-x` — the
+    script-path form has no flags) or fed by a heredoc. `python3 <path>` is
+    NOT denied here — the path is reviewer-visible and the classifier
+    handles it (CLAUDE.md's "never via python3" is about allow-rule
+    reliability, not this deny class). Never raises."""
+    try:
+        for toks in _shlex_segments(cmd):
+            toks = _strip_leading_keywords(toks)
+            if not toks:
+                continue
+            head = toks[0].rsplit("/", 1)[-1]
+            if head not in INLINE_PYTHON_HEADS:
+                continue
+            inline = (len(toks) > 1 and toks[1].startswith("-")) or "<<" in " ".join(toks)
+            if inline:
+                return INLINE_PYTHON_REASON
+        return None
+    except Exception:
+        return None
+
 
 def manifold_gui_guard(cmd):
     """Return a deny reason if any segment runs the manifold app binary
@@ -1491,6 +1540,15 @@ def main() -> int:
     gui_deny = manifold_gui_guard(cmd)
     if gui_deny:
         json.dump(build_deny([gui_deny]), sys.stdout)
+        return 0
+
+    # 0j. Inline-python guard: inline python payloads (`-c`, `-`, heredoc)
+    # are denied in every mode — interpreter-prefixed inline code can never
+    # skip the classifier, so it prompts, and a prompt blocks an unattended
+    # wave (Peter 2026-08-01). `python3 <path>` is unaffected.
+    python_deny = inline_python_guard(cmd)
+    if python_deny:
+        json.dump(build_deny([python_deny]), sys.stdout)
         return 0
 
     # 0c. Unverified compound landing-merge guard (T6): denies a compound

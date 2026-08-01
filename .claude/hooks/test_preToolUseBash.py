@@ -668,6 +668,28 @@ def test_flow_gate_touched_flow_file_is_mapped():
           reason is not None, reason)
 
 
+def test_inline_python_heredoc_denied():
+    reason = hook.inline_python_guard("python3 - << 'EOF'\nopen('x','w')\nEOF")
+    check("inline python: heredoc denied", reason is not None, reason)
+
+
+def test_inline_python_dash_c_denied():
+    reason = hook.inline_python_guard("python3 -c 'import os'")
+    check("inline python: -c denied", reason is not None, reason)
+    reason2 = hook.inline_python_guard("python3 - <<'PY'\nprint(1)\nPY")
+    check("inline python: dash-stdin heredoc denied", reason2 is not None, reason2)
+
+
+def test_inline_python_script_path_unaffected():
+    reason = hook.inline_python_guard("python3 scripts/landing_gate.py")
+    check("inline python: script path NOT denied", reason is None, reason)
+    reason2 = hook.inline_python_guard("python3 .claude/hooks/design_status.py --lifecycle-check")
+    check("inline python: hook script path NOT denied", reason2 is None, reason2)
+    reason3 = hook.inline_python_guard("rg foo crates/")
+    check("inline python: non-python segment unaffected", reason3 is None, reason3)
+
+
+
 def main():
     test_cd_guard()
     test_branch_force_main_asks()
@@ -730,6 +752,10 @@ def main():
     test_flow_gate_denies_red_marker()
     test_flow_gate_passes_green_marker_at_tip()
     test_flow_gate_touched_flow_file_is_mapped()
+
+    test_inline_python_heredoc_denied()
+    test_inline_python_dash_c_denied()
+    test_inline_python_script_path_unaffected()
 
     for name in PASS:
         print(f"PASS: {name}")
