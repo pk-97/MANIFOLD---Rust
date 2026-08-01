@@ -35,5 +35,6 @@ fn body(
         vec3<f32>(e_in.position.x, displaced_y, e_in.position.z),
         e_in.normal,
         e_in.uv,
+        e_in.tangent,
     );
 }

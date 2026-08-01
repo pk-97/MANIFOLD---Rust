@@ -29,7 +29,7 @@
 // pattern), byte-identical output. ONE envmap is shared across every PBR
 // object in the scene (an environment map is scene-wide, not per-object).
 //
-// MeshVertex layout (48 bytes), entry point names, and per-kind
+// MeshVertex layout (64 bytes), entry point names, and per-kind
 // dispatch: identical to render_3d_mesh.wgsl.
 
 const PI: f32 = 3.14159265358979;
@@ -41,6 +41,7 @@ struct Vertex {
     _pad1: f32,
     uv: vec2<f32>,
     _pad2: vec2<f32>,
+    tangent: vec4<f32>,
 };
 
 // Superset uniform, rebuilt once per object per draw call. 16-byte
