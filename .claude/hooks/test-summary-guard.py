@@ -27,6 +27,11 @@ import sys
 
 # Evidence that a test run's outcome was actually surfaced.
 SUMMARY = re.compile(r"test result:|Summary \[")
+# Nextest colors its summary ("Summary\x1b[0m [   8.4s]") — the reset code
+# lands between the words and defeats the plain regex, false-positiving the
+# loud warning on every green colored run (2026-08-01, four times in one
+# session). Strip before matching.
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 # Shell operators that separate command positions (mirror of
 # preToolUseBash.py's segment split — kept local so this guard has no
@@ -97,7 +102,7 @@ def main() -> None:
                     text = json.dumps(output)
             else:
                 text = str(output)
-            if SUMMARY.search(text):
+            if SUMMARY.search(_ANSI.sub("", text)):
                 return
             warn = (
                 "UNVERIFIED TEST RUN — this command executed tests but its "
