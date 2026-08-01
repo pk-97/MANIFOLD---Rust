@@ -20,7 +20,7 @@ fn body(idx: u32, count: u32, depth: f32, steps: i32, close: u32, outline_len: u
     let rows = steps + 1;
     let total = u32(cols * rows);
     if idx >= total {
-        return Element2(vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(0.0, 0.0, 0.0), vec2<f32>(0.0, 0.0));
+        return Element2(vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(0.0, 0.0, 0.0), vec2<f32>(0.0, 0.0), vec4<f32>(0.0));
     }
 
     let col = i32(idx) % cols;
@@ -34,5 +34,5 @@ fn body(idx: u32, count: u32, depth: f32, steps: i32, close: u32, outline_len: u
     let pos = vec3<f32>(pt.x, pt.y, depth * f32(row) / row_denom);
     let uv = vec2<f32>(f32(col) / col_denom, f32(row) / row_denom);
 
-    return Element2(pos, vec3<f32>(0.0, 0.0, 0.0), uv);
+    return Element2(pos, vec3<f32>(0.0, 0.0, 0.0), uv, vec4<f32>(0.0));
 }
