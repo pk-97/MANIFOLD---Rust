@@ -4409,12 +4409,23 @@ impl EffectNode for RenderScene {
             //    frame generation bump) never satisfies the recur check
             //    — no rebuild, preserving pre-fix D17 behavior.
             //
-            // When either trigger fires, BOTH topo and content keys are
-            // recorded at build time. The refit path (full accel_key
-            // changes under an UNCHANGED topo key) fires only when
-            // neither trigger has work to do — a content rebuild
+            // The topo key is recorded by ANY build. The content key is
+            // recorded ONLY when the content-settle trigger fired
+            // (BUG-oqta): a topo-triggered build that recorded it would
+            // swallow an in-flight generation bump — async mesh content
+            // landing during the BUG-308 one-frame defer changes the
+            // content key before the build enqueues, and the settle
+            // trigger (which compares against the recorded key) would
+            // then never fire the second build that picks the landed
+            // content up, leaving the empty/stale accel forever. Not
+            // recording it costs one settle-triggered rebuild at startup
+            // even when content was already resident — async and served
+            // by the raster path meanwhile. The refit path (full
+            // accel_key changes under an UNCHANGED topo key) fires only
+            // when neither trigger has work to do — a content rebuild
             // subsumes any pending refit.
             let mut build_this_frame = false;
+            let mut content_trigger_fired = false;
 
             // ── Topo trigger ──
             if self.rt_accel_topo_key != Some(topo_key) {
@@ -4422,6 +4433,19 @@ impl EffectNode for RenderScene {
                     build_this_frame = true;
                 } else {
                     self.rt_accel_pending_key = Some(topo_key);
+                    // BUG-oqta repro knob (probe-only, production-inert):
+                    // stretch the one-frame defer's WALL time so async mesh
+                    // content lands inside the window on any machine — the
+                    // natural race is timing-dependent (7/7 healthy runs on
+                    // one box, 3/4 failing on another). With the window
+                    // open, unfixed code builds once (content key swallowed)
+                    // and fixed code builds twice (settle trigger fires).
+                    if let Ok(ms) = std::env::var("MANIFOLD_PROBE_RT_ACCEL_DEFER_MS")
+                        && let Ok(ms) = ms.parse::<u64>()
+                    {
+                        eprintln!("MANIFOLD_PROBE_RT_ACCEL: defer-window sleep {ms}ms");
+                        std::thread::sleep(std::time::Duration::from_millis(ms));
+                    }
                 }
             }
             // ── Content-settle trigger (only when topo is stable) ──
@@ -4430,6 +4454,7 @@ impl EffectNode for RenderScene {
             {
                 if self.rt_accel_content_pending_key == Some(content_key) {
                     build_this_frame = true;
+                    content_trigger_fired = true;
                 } else {
                     self.rt_accel_content_pending_key = Some(content_key);
                 }
@@ -4447,7 +4472,11 @@ impl EffectNode for RenderScene {
                 }
                 self.rt_accel = Some(tracer.build_accel(gpu.device, &objects));
                 self.rt_accel_topo_key = Some(topo_key);
-                self.rt_accel_content_key = Some(content_key);
+                // BUG-oqta: only a content-settle-triggered build records
+                // the content key (why: the trigger block above).
+                if content_trigger_fired {
+                    self.rt_accel_content_key = Some(content_key);
+                }
                 self.rt_accel_key = Some(accel_key);
                 self.rt_accel_pending_key = None;
                 self.rt_accel_content_pending_key = None;
