@@ -18,6 +18,7 @@ use super::{
     descend_level, install_target_graph, take_target_graph, with_existing_target_graph_mut,
     with_target_graph_mut,
 };
+use super::card_owned_write::card_owned_write_warning;
 
 /// Add a new node to the per-card graph at the given editor position.
 /// The new node has default parameters and no port wires until a
@@ -755,6 +756,11 @@ impl Command for SetGraphNodeParamCommand {
         // wasn't in the (descended) graph level.
         let captured: Option<Option<SerializedParamValue>> =
             with_target_graph_mut(project, &self.target, &self.catalog_default, false, |def| {
+                if scope.is_empty()
+                    && let Some(warning) = card_owned_write_warning(def, node_id, &param_name)
+                {
+                    eprintln!("{warning}");
+                }
                 let (nodes, _wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
                 nodes
                     .iter_mut()
