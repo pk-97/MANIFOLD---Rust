@@ -691,6 +691,12 @@ pub struct SetGraphNodeParamCommand {
     /// `Some(Some(v))` means "key existed with value `v`". `None` at
     /// pre-execute time.
     previous_value: Option<Option<SerializedParamValue>>,
+    /// BUG-1l7f redirect state: when the write rerouted through the owning
+    /// card slot (authored-default binding — the card is the sole authority
+    /// the render sees, so the def-node write would be stomped), the
+    /// manifest id written and the value it held before. Undo restores it.
+    /// `None` = ordinary def-node write.
+    card_redirect: Option<(String, f32)>,
 }
 
 impl SetGraphNodeParamCommand {
@@ -709,6 +715,7 @@ impl SetGraphNodeParamCommand {
             catalog_default,
             scope_path: Vec::new(),
             previous_value: None,
+            card_redirect: None,
         }
     }
 
@@ -739,10 +746,63 @@ impl SetGraphNodeParamCommand {
         self.previous_value = Some(previous);
         self
     }
+
+    /// BUG-1l7f redirect: when an authored-default card binding owns
+    /// `(node_id, param_name)`, write the value through the card slot and
+    /// return `(outer_id, previous_card_value)` for undo. `None` — caller
+    /// stays on the def-write path — when nothing owns the param, when the
+    /// value has no scalar reading (Vec/Color/Table/String), when the fold
+    /// is degenerate, or when the manifest slot is gone (pruned exposure).
+    /// Looks up against the instance's own override when present, else the
+    /// catalog default it tracks — without lifting the catalog into an
+    /// override, since a card write never touches the def.
+    fn write_through_card_slot(&mut self, project: &mut Project) -> Option<(String, f32)> {
+        let target = self.target.clone();
+        let catalog = &self.catalog_default;
+        let node_id = self.node_id;
+        let param_name = self.param_name.clone();
+        let new_value = self.new_value.clone();
+        project.with_preset_graph_mut(&target, |inst| {
+            let def = inst.graph_def().as_ref().unwrap_or(catalog);
+            let slot = manifold_core::effects::card_slot_for_node_param(def, node_id, &param_name)?;
+            let target_value = manifold_core::effects::serialized_value_as_f32(&new_value)?;
+            let card_value = manifold_core::effects::invert_card_reshape(
+                target_value,
+                slot.min,
+                slot.max,
+                slot.invert,
+                slot.curve,
+                slot.scale,
+                slot.offset,
+            )?;
+            // Undo capture mirrors `apply_bindings`' own fallback: manifest
+            // value when the slot exists, the binding's authored default
+            // when it doesn't.
+            let previous = if inst.params.get(&slot.outer_id).is_some() {
+                inst.get_base_param(&slot.outer_id)
+            } else {
+                slot.authored_default
+            };
+            inst.set_base_param(&slot.outer_id, card_value).then_some((slot.outer_id, previous))
+        })?
+    }
 }
 
 impl Command for SetGraphNodeParamCommand {
     fn execute(&mut self, project: &mut Project) {
+        // BUG-1l7f redirect: a write to a card-owned def param (authored
+        // default) reroutes through the card slot — `apply_bindings` makes
+        // the manifest value the sole authority the render sees, so the
+        // def-node write would be stomped next frame. The inverse reshape
+        // (PARAM_TWO_WAY_BINDING_DESIGN.md D2) converts the node-units value
+        // to the card value; never dual-write. Root-level edits only —
+        // binding metadata addresses root node ids.
+        if self.scope_path.is_empty()
+            && let Some((outer_id, previous)) = self.write_through_card_slot(project)
+        {
+            self.card_redirect = Some((outer_id, previous));
+            return;
+        }
         let node_id = self.node_id;
         let param_name = self.param_name.clone();
         let new_value = self.new_value.clone();
@@ -777,6 +837,13 @@ impl Command for SetGraphNodeParamCommand {
     }
 
     fn undo(&mut self, project: &mut Project) {
+        if let Some((outer_id, previous)) = self.card_redirect.take() {
+            let target = self.target.clone();
+            let _ = project.with_preset_graph_mut(&target, |inst| {
+                inst.set_base_param(&outer_id, previous);
+            });
+            return;
+        }
         let Some(prev) = self.previous_value.take() else {
             return;
         };
@@ -1019,6 +1086,251 @@ mod tests {
     use manifold_core::effect_graph_def::{GROUP_TYPE_ID, GroupDef, GroupInterface, InterfacePortDef};
     use manifold_core::effects::PresetInstance;
     use crate::command::Command;
+
+    // ── BUG-1l7f redirect fixtures ──────────────────────────────────────
+
+    /// One node (`id 1`, `node_id "n_a"`) whose `amount` param is owned by
+    /// an authored-default card binding `amount` with a ×2 affine fold, and
+    /// a matching slider spec. `mirror` flips the binding to a stamp-time
+    /// mirror (BUG-ji6q: never plants, node writes stand — no redirect).
+    fn card_owned_def(mirror: bool) -> EffectGraphDef {
+        use manifold_core::effect_graph_def::{
+            BindingDef, BindingTarget, EFFECT_GRAPH_VERSION, EffectGraphNode, ParamSpecDef,
+            PresetMetadata, SkipModeDef,
+        };
+        use manifold_core::effects::ParamConvert;
+        use manifold_core::macro_bank::MacroCurve;
+        use manifold_core::{NodeId, PresetTypeId};
+        let spec = ParamSpecDef {
+            id: "amount".to_string(),
+            name: "Amount".to_string(),
+            min: 0.0,
+            max: 1.0,
+            default_value: 0.0,
+            whole_numbers: false,
+            is_toggle: false,
+            is_trigger: false,
+            value_labels: Vec::new(),
+            format_string: None,
+            osc_suffix: String::new(),
+            curve: MacroCurve::Linear,
+            invert: false,
+            is_angle: false,
+            is_trigger_gate: false,
+            wraps: false,
+            section: None,
+            card_visible: true,
+        };
+        EffectGraphDef {
+            version: EFFECT_GRAPH_VERSION,
+            name: None,
+            description: None,
+            preset_metadata: Some(PresetMetadata {
+                id: PresetTypeId::new("CardOwned"),
+                display_name: "Card Owned".to_string(),
+                category: "Stylize".to_string(),
+                osc_prefix: "card_owned".to_string(),
+                legacy_discriminant: None,
+                available: true,
+                is_line_based: false,
+                params: vec![spec],
+                bindings: vec![BindingDef {
+                    id: "amount".to_string(),
+                    label: "Amount".to_string(),
+                    default_value: 0.25,
+                    target: BindingTarget::Node {
+                        node_id: NodeId::new("n_a"),
+                        param: "amount".to_string(),
+                    },
+                    convert: ParamConvert::Float,
+                    user_added: false,
+                    scale: 2.0,
+                    offset: 0.0,
+                    default_mirrors_node_param: mirror,
+                }],
+                skip_mode: SkipModeDef::Never,
+                param_aliases: Vec::new(),
+                value_aliases: Vec::new(),
+                string_params: Vec::new(),
+                string_bindings: Vec::new(),
+            }),
+            nodes: vec![EffectGraphNode {
+                id: 1,
+                node_id: NodeId::new("n_a"),
+                type_id: "node.x".to_string(),
+                handle: None,
+                params: BTreeMap::new(),
+                exposed_params: Default::default(),
+                editor_pos: None,
+                wgsl_source: None,
+                title: None,
+                output_formats: BTreeMap::new(),
+                output_canvas_scales: BTreeMap::new(),
+                group: None,
+            }],
+            wires: Vec::new(),
+        }
+    }
+
+    /// Project + effect whose graph carries the card-owned def and whose
+    /// manifest holds the `amount` card slot (base 0.0). `with_manifest`
+    /// false simulates a pruned exposure — the slot is gone.
+    fn project_with_card_owned(mirror: bool, with_manifest: bool) -> (Project, EffectId) {
+        let mut project = Project::default();
+        let effect_id = EffectId::new("test-card-fx");
+        let mut fx = PresetInstance::new(PresetTypeId::new("test.fx"));
+        fx.id = effect_id.clone();
+        fx.graph = Some(card_owned_def(mirror));
+        if with_manifest {
+            let spec = card_owned_def(mirror)
+                .preset_metadata
+                .unwrap()
+                .params
+                .pop()
+                .unwrap();
+            fx.params
+                .push(manifold_core::params::Param::bundled(spec));
+        }
+        project.settings.master_effects.push(fx);
+        (project, effect_id)
+    }
+
+    fn card_value_of(project: &Project, id: &EffectId) -> f32 {
+        project.find_effect_by_id(id).unwrap().get_param("amount")
+    }
+
+    /// BUG-1l7f: a def-node write to a card-owned param reroutes through the
+    /// card slot — manifest moves to the inverse-reshaped value, the def
+    /// node is never written, undo restores the card.
+    #[test]
+    fn card_owned_write_reroutes_through_card_slot() {
+        let (mut project, fx) = project_with_card_owned(false, true);
+        let mut cmd = SetGraphNodeParamCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            1,
+            "amount".to_string(),
+            SerializedParamValue::Float { value: 0.5 },
+            card_owned_def(false),
+        );
+        cmd.execute(&mut project);
+        // fold is out = v*2 + 0 → inverse of 0.5 is 0.25 on the card.
+        assert!(
+            (card_value_of(&project, &fx) - 0.25).abs() < 1e-6,
+            "card slot carries the inverse-reshaped value: {}",
+            card_value_of(&project, &fx)
+        );
+        assert!(
+            graph_of(&project, &fx).nodes[0].params.is_empty(),
+            "def node never written — the card is the sole authority"
+        );
+        cmd.undo(&mut project);
+        assert!(
+            (card_value_of(&project, &fx) - 0.0).abs() < 1e-6,
+            "undo restores the pre-edit card value: {}",
+            card_value_of(&project, &fx)
+        );
+    }
+
+    /// BUG-1l7f: with no per-instance override the lookup reads the catalog
+    /// default WITHOUT lifting it into an override — a card write never
+    /// dirties the def.
+    #[test]
+    fn card_owned_write_reads_catalog_without_lifting() {
+        let mut project = Project::default();
+        let effect_id = EffectId::new("test-card-fx");
+        let mut fx = PresetInstance::new(PresetTypeId::new("test.fx"));
+        fx.id = effect_id.clone();
+        let spec = card_owned_def(false)
+            .preset_metadata
+            .unwrap()
+            .params
+            .pop()
+            .unwrap();
+        fx.params.push(manifold_core::params::Param::bundled(spec));
+        project.settings.master_effects.push(fx);
+
+        let mut cmd = SetGraphNodeParamCommand::new(
+            GraphTarget::Effect(effect_id.clone()),
+            1,
+            "amount".to_string(),
+            SerializedParamValue::Float { value: 0.5 },
+            card_owned_def(false),
+        );
+        cmd.execute(&mut project);
+        assert!(
+            (card_value_of(&project, &effect_id) - 0.25).abs() < 1e-6,
+            "redirect resolves against the catalog default"
+        );
+        assert!(
+            project.find_effect_by_id(&effect_id).unwrap().graph.is_none(),
+            "no override lifted for a card write"
+        );
+    }
+
+    /// Mirrored defaults never plant (BUG-ji6q), so the node write stands:
+    /// no redirect, the def takes the value.
+    #[test]
+    fn mirrored_default_stays_on_def_write_path() {
+        let (mut project, fx) = project_with_card_owned(true, true);
+        let mut cmd = SetGraphNodeParamCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            1,
+            "amount".to_string(),
+            SerializedParamValue::Float { value: 0.5 },
+            card_owned_def(true),
+        );
+        cmd.execute(&mut project);
+        assert_eq!(
+            graph_of(&project, &fx).nodes[0].params.get("amount"),
+            Some(&SerializedParamValue::Float { value: 0.5 }),
+            "mirrored binding: def write stands"
+        );
+        assert!(
+            (card_value_of(&project, &fx) - 0.0).abs() < 1e-6,
+            "card slot untouched"
+        );
+    }
+
+    /// A non-scalar value has no card reading — the write stays on the def
+    /// path (with the loud warning) rather than dropping data.
+    #[test]
+    fn non_scalar_value_stays_on_def_write_path() {
+        let (mut project, fx) = project_with_card_owned(false, true);
+        let mut cmd = SetGraphNodeParamCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            1,
+            "amount".to_string(),
+            SerializedParamValue::Vec2 { value: [1.0, 2.0] },
+            card_owned_def(false),
+        );
+        cmd.execute(&mut project);
+        assert_eq!(
+            graph_of(&project, &fx).nodes[0].params.get("amount"),
+            Some(&SerializedParamValue::Vec2 { value: [1.0, 2.0] }),
+            "non-scalar falls through to the def write"
+        );
+        assert!((card_value_of(&project, &fx) - 0.0).abs() < 1e-6);
+    }
+
+    /// A pruned exposure leaves no manifest slot to write — the redirect
+    /// refuses (rather than silently no-oping) and the def path takes it.
+    #[test]
+    fn pruned_card_slot_refuses_redirect() {
+        let (mut project, fx) = project_with_card_owned(false, false);
+        let mut cmd = SetGraphNodeParamCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            1,
+            "amount".to_string(),
+            SerializedParamValue::Float { value: 0.5 },
+            card_owned_def(false),
+        );
+        cmd.execute(&mut project);
+        assert_eq!(
+            graph_of(&project, &fx).nodes[0].params.get("amount"),
+            Some(&SerializedParamValue::Float { value: 0.5 }),
+            "no manifest slot → def write, never a silent drop"
+        );
+    }
 
     /// A batch layout sets every listed node's `editor_pos` in one command,
     /// and undo restores them all — including the never-positioned `None`.
