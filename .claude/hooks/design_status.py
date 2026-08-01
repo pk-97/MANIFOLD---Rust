@@ -167,9 +167,9 @@ def build_board(raw: bool = False, compact: bool = False) -> str:
                 continue
             text = status or "(no **Status line in doc)"
             if len(text) > TRIM:
-                # Status lines append their NEWEST facts at the END (2026-07-11:
-                # head-only truncation hid a same-day "P8 SHIPPED" tail and a
-                # session re-briefed already-landed work). Keep head AND tail.
+                # Status lines append their NEWEST facts at the END — head-only
+                # truncation hid a same-day "P8 SHIPPED" tail and a session
+                # re-briefed already-landed work. Keep head AND tail.
                 head = (TRIM * 2) // 5
                 tail = TRIM - head - 3
                 text = text[:head].rstrip() + " … " + text[-tail:].lstrip()

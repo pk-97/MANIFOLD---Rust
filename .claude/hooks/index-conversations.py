@@ -29,12 +29,11 @@ INDEX_FILE = DIGEST_DIR / "INDEX.md"
 
 PROJECT_ROOT = "MANIFOLD - Rust"
 
-# Digest pruning is effectively OFF (2026-07-09, Peter's call): the full
-# corpus — raw transcripts AND digests — is retained for offline daemon
-# tuning and replay-testing agents against captured history. The built-in
-# transcript cleanup is likewise disabled via cleanupPeriodDays in
-# ~/.claude/settings.json. The searcher still only matches the last 14 days,
-# so old digests cost disk, not context.
+# Digest pruning is effectively OFF: the full corpus — raw transcripts AND
+# digests — is retained for offline daemon tuning and replay-testing agents
+# against captured history. The built-in transcript cleanup is likewise
+# disabled via cleanupPeriodDays in ~/.claude/settings.json. The searcher
+# still only matches the last 14 days, so old digests cost disk, not context.
 DIGEST_RETENTION_DAYS = 36500
 
 # --- Sentiment keywords ---

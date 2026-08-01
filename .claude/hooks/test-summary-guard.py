@@ -29,8 +29,7 @@ import sys
 SUMMARY = re.compile(r"test result:|Summary \[")
 # Nextest colors its summary ("Summary\x1b[0m [   8.4s]") — the reset code
 # lands between the words and defeats the plain regex, false-positiving the
-# loud warning on every green colored run (2026-08-01, four times in one
-# session). Strip before matching.
+# loud warning on every green colored run. Strip before matching.
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 # Shell operators that separate command positions (mirror of
