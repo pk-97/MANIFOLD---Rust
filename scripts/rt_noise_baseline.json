@@ -131,5 +131,20 @@
         "level": 39.8386
       }
     }
+  },
+  "motion": {
+    "validated": true,
+    "sv_hold_median": 0.0263,
+    "moments_center_min": 0.0003,
+    "history_ratio_min": 0.1425,
+    "measured": {
+      "sv_hold_median": 0.0081,
+      "sv_hold_max": 0.0492,
+      "moments_center_min": 0.0005,
+      "moments_center_median": 0.0489,
+      "history_ratio_min": 0.285,
+      "refl_hit_min": 0.0682
+    },
+    "note": "Motion-leg ceilings = measured x headroom (sv_hold median x3+0.002, moments floors x0.7, history ratio x0.5 capped 0.3). Regenerate with scripts/rt_noise_gate.py --motion --record after a legitimate RT change and commit this file. RED-validated against boil-era gate behavior (D-64/tr5o reverted) \u2014 see BUG-sz0u."
   }
 }
