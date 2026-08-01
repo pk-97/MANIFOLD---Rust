@@ -11,6 +11,7 @@ Usage:
     python3 .claude/hooks/design_status.py                    # print the board
     python3 .claude/hooks/design_status.py --raw              # one line per doc, untrimmed
     python3 .claude/hooks/design_status.py --lifecycle-check  # exit 1 on dead docs
+    python3 .claude/hooks/design_status.py --dead-refs        # exit 1 on dead .rs refs
 
 Lifecycle check: a SHIPPED design doc must either be cited by a live surface (CLAUDE.md,
 hooks, memory, or any non-shipped doc — one hop, no credit for citations from other
@@ -284,9 +285,57 @@ def lifecycle_check() -> int:
     return 0
 
 
+def check_dead_refs() -> int:
+    """Check for references to .rs files in docs/*.md that don't exist under crates/.
+
+    Exit 1 if any dead references found in non-archived docs. This catches drift
+    where docs reference deleted or renamed .rs files.
+    """
+    import re
+
+    # Pattern to match .rs file references in markdown.
+    # Matches: `foo.rs`, `path/to/foo.rs`, ../path/to/foo.rs, [text](path/to/foo.rs)
+    RS_PATTERN = re.compile(r'(?:`|\[.*?\]\()?([a-zA-Z0-9_/-]+\.rs)(?:`|\))?')
+
+    all_missing: list[tuple[str, str]] = []
+
+    for doc_path in sorted(DOCS.glob("*.md")):
+        # Skip archived docs
+        if "archive" in doc_path.parts:
+            continue
+
+        content = doc_path.read_text(errors="replace")
+        refs = RS_PATTERN.findall(content)
+
+        for ref in refs:
+            basename = Path(ref).name
+            # Check if basename exists under crates/
+            try:
+                result = subprocess.run(
+                    ["fd", "-q", f"^{basename}$", "crates/"],
+                    cwd=REPO, capture_output=True, timeout=5,
+                )
+                if result.returncode != 0:
+                    all_missing.append((f"{doc_path.name}:{ref}", basename))
+            except Exception:
+                pass
+
+    if not all_missing:
+        print("dead-refs: OK — no missing .rs file references in docs/*.md")
+        return 0
+
+    for doc_ref, basename in all_missing:
+        print(f"DEAD-REF: docs/{doc_ref} (basename: {basename})")
+
+    print(f"dead-refs: FAIL — {len(all_missing)} missing .rs reference(s) in docs/*.md")
+    return 1
+
+
 def main() -> int:
     if "--lifecycle-check" in sys.argv:
         return lifecycle_check()
+    if "--dead-refs" in sys.argv:
+        return check_dead_refs()
     compact = "--compact" in sys.argv
     board = build_board(raw="--raw" in sys.argv, compact=compact)
     if "--raw" not in sys.argv and not compact:
