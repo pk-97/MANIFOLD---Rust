@@ -469,7 +469,7 @@ Match with struct: position 0, velocity 16, life 28, age 32, color 48, total 64.
 
 ### 6.2 `MeshVertex` → `MESH_VERTEX_SPECS`
 
-Existing struct (mesh_common.rs:33), 48 bytes:
+Existing struct (mesh_common.rs:33), 64 bytes (tangent added BUG-wfxe 2026-08-01):
 ```rust
 pub struct MeshVertex {
     pub position: [f32; 3],
@@ -478,6 +478,7 @@ pub struct MeshVertex {
     pub _pad1:    f32,
     pub uv:       [f32; 2],
     pub _pad2:    [f32; 2],
+    pub tangent:  [f32; 4],
 }
 ```
 
@@ -487,6 +488,7 @@ pub const MESH_VERTEX_SPECS: &[ChannelSpec] = &[
     ChannelSpec { name: well_known::POSITION, ty: ChannelElementType::Vec3F },
     ChannelSpec { name: well_known::NORMAL,   ty: ChannelElementType::Vec3F },
     ChannelSpec { name: well_known::UV,       ty: ChannelElementType::Vec2F },
+    ChannelSpec { name: well_known::TANGENT,  ty: ChannelElementType::Vec4F },
 ];
 ```
 
@@ -494,7 +496,8 @@ Std430 layout:
 - position at 0 (align 16, size 12, pad to 16)
 - normal at 16 (align 16, size 12, pad to 32 since next is align 8)
 - uv at 32 (align 8, size 8)
-- sample_stride = round_up(40, 16) = 48 ✓
+- tangent at 48 (align 16, size 16)
+- sample_stride = round_up(64, 16) = 64 ✓
 
 ### 6.3 `CurvePoint` → `CURVE_POINT_SPECS`
 
