@@ -511,19 +511,19 @@ fn firefly_sun_disc_env_traced_gi_stays_under_the_firefly_ceiling() {
 
     const RADIUS: i32 = 30;
     let (mean, p99, p999, max, frac_above_2) =
-        region_stats(&bytes, w, h, center_px.px as f32, center_px.py as f32, RADIUS);
+        region_stats(&bytes, w, h, center_px.px, center_px.py, RADIUS);
     eprintln!(
         "RT furnace firefly RT-on (sun): mean={mean:.4} p99={p99:.4} p99.9={p999:.4} max={max:.4} frac_above_2={frac_above_2:.4}"
     );
 
     let (off_bytes, _, _) = render_readback(&firefly_sun_disc_scene_json(true, false));
     let (raster_mean, _, _, _, _) =
-        region_stats(&off_bytes, w, h, center_px.px as f32, center_px.py as f32, RADIUS);
+        region_stats(&off_bytes, w, h, center_px.px, center_px.py, RADIUS);
     eprintln!("RT furnace firefly RT-off (raster, sun): mean={raster_mean:.4}");
 
     let (no_sun_bytes, _, _) = render_readback(&firefly_sun_disc_scene_json(false, false));
     let (fill_mean, _, _, _, _) =
-        region_stats(&no_sun_bytes, w, h, center_px.px as f32, center_px.py as f32, RADIUS);
+        region_stats(&no_sun_bytes, w, h, center_px.px, center_px.py, RADIUS);
     eprintln!("RT furnace firefly RT-off (raster, no sun): fill_mean={fill_mean:.4}");
     write_png(&bytes, w, h, "/tmp/rt_furnace_firefly.png");
 
