@@ -375,7 +375,7 @@ impl PresetInstance {
             return;
         };
         let (params, base_tracked) =
-            build_param_manifest(self.is_generator(), &self.effect_type, &self.graph, Some(wire));
+            build_param_manifest(self.is_generator(), &self.effect_type, &self.graph, Some(wire), true);
         self.params = params;
         self.base_tracked = base_tracked;
         if template_known_for(self.is_generator(), &self.effect_type, &self.graph) {
@@ -415,7 +415,7 @@ impl PresetInstance {
             .map(|p| (p.id().to_string(), ParamEntryWire::from_param(p, self.base_tracked)))
             .collect();
         let (params, base_tracked) =
-            build_param_manifest(self.is_generator(), &self.effect_type, &self.graph, Some(wire));
+            build_param_manifest(self.is_generator(), &self.effect_type, &self.graph, Some(wire), false);
         self.params = params;
         self.base_tracked = base_tracked;
     }
