@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """PreToolUse(Bash) gate: a merge into main declares which beads it closes.
 
-Rule (Peter 2026-07-30): a fix that ships without touching the tracker leaves a
-closed bug sitting open — BUG-pt6g was fixed, never logged, and came back up as
-the next task. Landing is the one moment the lead knows what actually shipped,
+Rule: a fix that ships without touching the tracker leaves a closed bug
+sitting open. Landing is the one moment the lead knows what actually shipped,
 so the merge message must carry a trailer:
 
     Closes: BUG-abcd, BUG-efgh
@@ -81,8 +80,8 @@ def main() -> int:
     if not hit:
         return deny(
             "This merge lands on main and its message has no `Closes:` trailer "
-            "(closes-trailer-guard.py; Peter 2026-07-30). Add one line naming the "
-            "beads this landing closes, or `Closes: none` if it closes nothing:\n"
+            "(closes-trailer-guard.py). Add one line naming the beads this landing "
+            "closes, or `Closes: none` if it closes nothing:\n"
             "    Closes: BUG-abcd (short name), BUG-efgh (short name)\n"
             "    Closes: none\n"
             "Then run `bd close <id>` for each one after the push. A fix that "

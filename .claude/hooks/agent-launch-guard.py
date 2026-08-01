@@ -93,8 +93,7 @@ def decide(tool_input: dict, env=os.environ) -> tuple[str, str]:
     if model is None:
         defects.append(
             "no explicit `model` — it would silently inherit the "
-            "orchestrator's tier and double-bill the worker (2026-07-06 "
-            f'incident). "{DEFAULT_MODEL}" is the house worker default; '
+            f'orchestrator\'s tier and double-bill the worker. "{DEFAULT_MODEL}" is the house worker default; '
             '"opus"/"fable" only when the task genuinely needs that tier — '
             "passing it explicitly IS the sign-off"
         )
