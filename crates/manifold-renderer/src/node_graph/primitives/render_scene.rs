@@ -4306,6 +4306,12 @@ impl EffectNode for RenderScene {
                     // samples it at the primary hit to perturb the reflection
                     // lobe's R and the AO/GI hemisphere normal.
                     normal_texture: d.normal_map,
+                    // BUG-1gqt: the emissive map + its KHR_texture_transform
+                    // fold reach the trace kernels (factor × sample at the
+                    // hit), mirroring the raster's `resolve_emissive`.
+                    emissive_texture: d.emissive_map,
+                    emissive_uv_m: d.uniforms.emissive_uv_m,
+                    emissive_uv_t: [d.uniforms.emissive_uv_t[0], d.uniforms.emissive_uv_t[1]],
                     cast_shadows: d.cast_shadows,
                 })
                 .collect();

@@ -44,6 +44,7 @@ mod rt_p1_region_probe;
 mod rt_p1_shadow;
 mod rt_p2_soft_ao_temporal;
 mod rt_p3_emissive_gi;
+mod rt_p3_emissive_texture;
 mod rt_p4_metalfx_temporal;
 mod rt_t1a_ghost_speckle;
 mod rt_t1b_vertex_normals;
