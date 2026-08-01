@@ -6667,6 +6667,7 @@ mod gpu_tests {
             _pad1: 0.0,
             uv: [0.0, 0.0],
             _pad2: [0.0, 0.0],
+            tangent: [0.0; 4],
         };
         let quad_verts = [
             mk_vertex(-ext, -ext),
