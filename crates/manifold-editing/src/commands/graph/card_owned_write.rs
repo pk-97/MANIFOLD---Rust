@@ -45,7 +45,7 @@ pub(crate) fn card_owned_write_warning(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::card_owned_write_warning;
     use manifold_core::effect_graph_def::EffectGraphDef;
     use std::collections::BTreeMap;
 
@@ -55,7 +55,6 @@ mod tests {
     /// unbound params.
     #[test]
     fn card_owned_write_warning_scopes_to_authored_defaults() {
-        use super::card_owned_write_warning;
         use manifold_core::effect_graph_def::{
             BindingDef, BindingTarget, EFFECT_GRAPH_VERSION, EffectGraphNode, PresetMetadata,
             SkipModeDef,
