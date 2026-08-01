@@ -1018,7 +1018,9 @@ the snap→rebuild→retrip cycle boiled the image. (2) The specular reprojectio
 taps by normal only — a parallel-but-different surface's stale reflection blended in
 under rotation. Fix: a per-frame `cam_motion` scalar (view-direction turn + weighted
 translation, computed in `render_scene.rs`, 0 on a held camera so the static path is
-byte-identical) widens every data-driven gate band (`1 + 60·cam_motion`); the CPU
+byte-identical) widens every data-driven gate band (`1 + 60·cam_motion`) — as
+shipped this reached only the refl gate; the addendum below corrects the record
+and motion-scales the sv gate); the CPU
 lighting key is NOT scaled, so cues still land mid-gesture. Specular taps whose
 reprojection is a plain surface reprojection (roughness ≥ RD6's blend, bt→1) now take
 the same depth test the diffuse channel passes; and specular history carries a
