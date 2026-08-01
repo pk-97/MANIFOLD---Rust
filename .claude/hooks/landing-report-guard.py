@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """PreToolUse(Write) gate: no new landing reports — that history lives in git.
 
-Rule (Peter 2026-07-28, docs-pile class fix): `docs/landings/` is closed to
-new files. A landing's story goes in the merge commit message; its status goes
-in the design doc header and beads. The 122 existing reports stay as history
-and remain Edit-able (on-touch ID naming etc.) — only Write (file creation /
-overwrite) is denied there.
+Rule: `docs/landings/` is closed to new files. A landing's story goes in the
+merge commit message; its status goes in the design doc header and beads.
+Existing reports stay as history and remain Edit-able — only Write (file
+creation / overwrite) is denied there.
 
 Fails open on any error.
 
@@ -30,10 +29,10 @@ def main() -> int:
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
             "permissionDecisionReason": (
-                "docs/landings/ is closed to new files (landing-report-guard.py; "
-                "Peter 2026-07-28). Landing prose goes in the merge commit message; "
-                "status goes in the design doc header + beads. Existing reports are "
-                "history — Edit is allowed, Write is not."
+                "docs/landings/ is closed to new files (landing-report-guard.py). "
+                "Landing prose goes in the merge commit message; status goes in "
+                "the design doc header + beads. Existing reports are history — "
+                "Edit is allowed, Write is not."
             ),
         }
     }))

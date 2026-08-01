@@ -84,18 +84,18 @@ def decide(command: str, model: str) -> str:
     if not m:
         return ""
     verb, target = m.group(1), (m.group(2) or "")
-    # D-48 (2026-07-24): `cc-fleet spawn` (tmux teammates) is a DEAD PATH on
-    # Claude Code >= 2.1.218 — TeamCreate is retired, teams are implicit, and
-    # the harness cannot address externally-registered teammates. Denied for
-    # EVERY tier, lead included. Provider lanes are native Agent-tool
-    # subagents via the slot map (docs/AGENT_ROUTING.md §Native provider
-    # lanes). `cc-fleet subagent` one-shots remain available per tier below.
+    # `cc-fleet spawn` (tmux teammates) is a DEAD PATH on Claude Code >= 2.1.218
+    # — TeamCreate is retired, teams are implicit, and the harness cannot
+    # address externally-registered teammates. Denied for EVERY tier, lead
+    # included. Provider lanes are native Agent-tool subagents via the slot map
+    # (docs/AGENT_ROUTING.md §Native provider lanes). `cc-fleet subagent`
+    # one-shots remain available per tier below.
     if verb == "spawn":
         return (
             "cc-fleet spawn denied for every tier: the tmux-teammate path is "
             "dead on this harness (TeamCreate retired; teammates unreachable "
-            "via SendMessage — D-48, .claude/orchestration/decisions.md). "
-            "Spawn provider lanes as native Agent-tool subagents instead: "
+            "via SendMessage). Spawn provider lanes as native Agent-tool "
+            "subagents instead: "
             "model \"haiku\"=DeepSeek Flash, \"sonnet\"=GLM-4.7, "
             "\"opus\"=GLM-5.2, \"fable\"=k3 on the K3 seat "
             "(docs/AGENT_ROUTING.md §Native provider lanes)."

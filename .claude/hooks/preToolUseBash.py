@@ -63,9 +63,9 @@ READ_ONLY = {
     # text processing (read-only). `tee` is deliberately excluded — it
     # writes to its file argument, which the redirect guard doesn't cover.
     # `awk` is likewise excluded — system(), in-program `print > path`
-    # writes, and `-f <file>` make it an interpreter, not a filter
-    # (2026-07-26 audit: `awk 'BEGIN{system(...)}'` sailed through both
-    # this list and the old `awk *` allow rules).
+    # writes, and `-f <file>` make it an interpreter, not a filter (audit:
+    # `awk 'BEGIN{system(...)}'` sailed through both this list and the old
+    # `awk *` allow rules).
     "sort", "uniq", "cut", "tr", "jq", "column", "paste", "comm",
     "diff", "cmp", "fold", "expand", "unexpand", "seq",
     # code-shape

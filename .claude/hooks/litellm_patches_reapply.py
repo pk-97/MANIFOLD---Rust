@@ -73,17 +73,16 @@ PATCHES = [
             "            )\n"
         ),
     },
-    # --- reasoning-drop patch set (2026-07-24, glm-4.7 lead): opencode
-    # deepseek-v4-flash reasons UNCONDITIONALLY — reasoning-off request params
-    # (`reasoning: {enabled:false}`, `effort:"none"`) are ignored upstream
-    # (verified by direct probe), so every Flash response carries
-    # reasoning_content, which this adapter translates into a `thinking`
-    # block with an EMPTY signature. The CC harness stream parser rejects it:
-    # "API Error: Content block is not a text block" retry storms (26 in one
-    # T1 lane transcript). The haiku slot never negotiates thinking, so the
-    # correct shape is to DROP reasoning at the bridge: plain text/tool_use
-    # only. Reasoning tokens are billed upstream regardless — the drop only
-    # removes them from the wire, it does not save tokens.
+    # --- reasoning-drop patch set: opencode deepseek-v4-flash reasons
+    # UNCONDITIONALLY — reasoning-off request params (`reasoning:
+    # {enabled:false}`, `effort:"none"`) are ignored upstream (verified by
+    # direct probe), so every Flash response carries reasoning_content, which
+    # this adapter translates into a `thinking` block with an EMPTY signature.
+    # The CC harness stream parser rejects it: "API Error: Content block is
+    # not a text block" retry storms. The haiku slot never negotiates thinking,
+    # so the correct shape is to DROP reasoning at the bridge: plain
+    # text/tool_use only. Reasoning tokens are billed upstream regardless —
+    # the drop only removes them from the wire, it does not save tokens.
     {
         "file": "litellm/llms/anthropic/experimental_pass_through/adapters/transformation.py",
         "regex": (
@@ -139,14 +138,14 @@ PATCHES = [
             "            # is defense in depth for paths that bypass the iterator.\n"
         ),
     },
-    # --- reasoning strip pre-translation (2026-07-24, glm-4.7 lead, second
-    # round): the transformation.py drop above still emits an EMPTY text_delta
-    # for each pure-reasoning chunk, and DeepSeek streams reasoning AFTER tool
-    # call deltas — so the empty text_delta lands on the open tool_use block
-    # and the harness errors "Content block is not a text block" on every
-    # tool-using turn (confirmed by SSE capture). Fix at the iterator: strip
-    # reasoning_content from each chunk BEFORE translation and skip chunks
-    # that carry nothing else (finish_reason/usage chunks always pass).
+    # --- reasoning strip pre-translation (second round): the
+    # transformation.py drop above still emits an EMPTY text_delta for each
+    # pure-reasoning chunk, and DeepSeek streams reasoning AFTER tool call
+    # deltas — so the empty text_delta lands on the open tool_use block and the
+    # harness errors "Content block is not a text block" on every tool-using
+    # turn (confirmed by SSE capture). Fix at the iterator: strip
+    # reasoning_content from each chunk BEFORE translation and skip chunks that
+    # carry nothing else (finish_reason/usage chunks always pass).
     {
         "file": "litellm/llms/anthropic/experimental_pass_through/adapters/streaming_iterator.py",
         # anchor = the module-level import just above the insertion point
@@ -200,14 +199,14 @@ PATCHES = [
         ),
     },
     {
-        # Round 3 (2026-07-24): the residual stray delta. opencode emits
-        # empty-choices chunks with NO usage field (`x-opencode-type:
-        # inference-cost` carrying `normalizedUsage`, plus a trailing
-        # `{"choices":[],"cost":"0"}` after [DONE]) — these never enter the
-        # usage-merge path (which keys on chunk.usage), so they hit the D-48
-        # keepalive translation and emit an empty text_delta against whatever
-        # block is current: after a tool call, the CLOSED tool_use block →
-        # harness "Content block is not a text block" on every tool turn.
+        # Round 3: the residual stray delta. opencode emits empty-choices
+        # chunks with NO usage field (`x-opencode-type: inference-cost`
+        # carrying `normalizedUsage`, plus a trailing `{"choices":[],"cost":"0"}`
+        # after [DONE]) — these never enter the usage-merge path (which keys on
+        # chunk.usage), so they hit the keepalive translation and emit an empty
+        # text_delta against whatever block is current: after a tool call, the
+        # CLOSED tool_use block → harness "Content block is not a text block"
+        # on every tool turn.
         # Skip empty-choices chunks unless they carry a usage to merge.
         "file": "litellm/llms/anthropic/experimental_pass_through/adapters/streaming_iterator.py",
         "regex": (
@@ -225,14 +224,14 @@ PATCHES = [
             "        return getattr(chunk, \"usage\", None) is None\n"
         ),
     },
-    # --- json_schema downgrade (2026-07-25, k3 lead): Claude Code's haiku-slot
-    # session-title call sends output_config.format = json_schema; this adapter
-    # translates it to OpenAI-style response_format json_schema, which the
-    # opencode "Console Go" upstream 400s on — bisected field-by-field from a
-    # captured live request (sidecar on :4055): stream/effort/max_tokens all
-    # tolerated, json_schema the sole trigger, json_object passes WITH
-    # streaming. Result was one failed Flash call per user prompt (18 in 6h)
-    # and no session titles. Every CC structured-output prompt carries its own
+    # --- json_schema downgrade: Claude Code's haiku-slot session-title call
+    # sends output_config.format = json_schema; this adapter translates it to
+    # OpenAI-style response_format json_schema, which the opencode "Console Go"
+    # upstream 400s on — bisected field-by-field from a captured live request
+    # (sidecar on :4055): stream/effort/max_tokens all tolerated, json_schema
+    # the sole trigger, json_object passes WITH streaming. Result was one failed
+    # Flash call per user prompt and no session titles. Every CC structured-output
+    # prompt carries its own
     # "Return JSON..." instruction, so enforcement-only json_object loses
     # nothing — the schema was never honored upstream anyway.
     {

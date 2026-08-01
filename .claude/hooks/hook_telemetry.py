@@ -105,16 +105,16 @@ def main():
             try:
                 payload = json.loads(stdin_data)
                 event = payload.get("hook_event_name", "")
-                # Seat attribution (2026-07-28): the teammate-vs-lead payload
-                # shape is the enforcement surface — guards mis-tiered a
-                # teammate because payloads carry the PARENT transcript.
-                # Record the discriminating fields so seat bugs are a lookup.
+                # Seat attribution: the teammate-vs-lead payload shape is the
+                # enforcement surface — guards mis-tiered a teammate because
+                # payloads carry the PARENT transcript. Record the discriminating
+                # fields so seat bugs are a lookup.
                 for k in ("session_id", "teammate_name", "team_name", "tool_name"):
                     v = payload.get(k)
                     if v:
                         seat[k] = v
-                # Full key inventory: the teammate-payload shape question
-                # (does ANY field discriminate seats?) must be a lookup.
+                # Full key inventory: the teammate-payload shape question (does
+                # ANY field discriminate seats?) must be a lookup.
                 seat["keys"] = ",".join(sorted(payload.keys()))
                 # Command traceability (BUG-0x4w): a permission prompt must
                 # be a lookup, not a reconstruction — record what was about

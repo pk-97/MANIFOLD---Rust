@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """SessionStart hook: inject the current Sydney wall-clock time as context.
 
-Why (2026-07-29, Peter): sessions only get a bare date from the harness,
-while transcripts, git internals, and most logs carry UTC timestamps — a
-session reasoning about "last night" from UTC put an overnight wave on the
-wrong day. Peter lives and performs in Sydney; every time in prose should
-be Sydney local. This prints the authoritative local clock once at session
-start so no session derives it from UTC artifacts.
+Sessions only get a bare date from the harness, while transcripts, git
+internals, and most logs carry UTC timestamps — reasoning about "last night"
+from UTC puts an overnight wave on the wrong day. Peter lives and performs
+in Sydney; every time in prose should be Sydney local. This prints the
+authoritative local clock once at session start so no session derives it
+from UTC artifacts.
 
 Fail-silent: a clock line is a nice-to-have, never blocks a session.
 
