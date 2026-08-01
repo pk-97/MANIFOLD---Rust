@@ -316,7 +316,7 @@ pub(super) fn template_known_for(
 /// `is_reconcile_pass` distinguishes the deserialize-time call (false) from the
 /// `reconcile_manifest` call (true). The deserialize pass runs before the
 /// project's embedded presets are registered, so template resolution failures
-/// are expected and logged only once; the reconcile pass runs after registration,
+/// are expected and silent; the reconcile pass runs after registration,
 /// so placeholders there indicate a genuine BUG-079 unresolved preset and are
 /// logged with a warning.
 pub(super) fn build_param_manifest(
