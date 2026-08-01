@@ -210,8 +210,25 @@ impl Application {
         // deviation #3 for why it takes the pipeline/sampler/scale params
         // it does).
         pseg = std::time::Instant::now();
+        // BUG-xaw4 read fence: lease the bridge slot BEFORE compositing
+        // samples it. The lease pins which surface we sample (front may move
+        // on between the caller's `front_index` read and here) and holds the
+        // content thread's reuse gate (`is_reusable`) until the sampling encoder's GPU
+        // work retires — the handler is attached to the present encoder
+        // below (or a marker encoder on the resize early-return).
         #[cfg(target_os = "macos")]
-        let compositor_tex = self.ui_preview_textures[front_index].as_ref();
+        let preview_lease = self
+            .preview_texture_bridge
+            .as_ref()
+            .map(|b| b.acquire_read());
+        #[cfg(not(target_os = "macos"))]
+        let preview_lease: Option<()> = None;
+        #[cfg(target_os = "macos")]
+        let preview_slot = preview_lease.map_or(front_index, |l| l.slot());
+        #[cfg(not(target_os = "macos"))]
+        let preview_slot = front_index;
+        #[cfg(target_os = "macos")]
+        let compositor_tex = self.ui_preview_textures[preview_slot].as_ref();
         #[cfg(not(target_os = "macos"))]
         let compositor_tex: Option<&manifold_gpu::GpuTexture> = None;
         let video_source_dims = self
@@ -674,6 +691,22 @@ impl Application {
         // it just won't be blitted to screen this frame.
         if self.ws.surface_resized_this_frame {
             self.ws.surface_resized_this_frame = false;
+            // BUG-xaw4: no present encoder this frame, but the composite's
+            // sampling encoder IS in flight — retire the bridge lease on a
+            // marker buffer committed after it (same queue, so ordered).
+            #[cfg(target_os = "macos")]
+            crate::shared_texture::retire_leases_via_marker(
+                &gpu.device,
+                self.content_tx.clone(),
+                preview_lease
+                    .and_then(|lease| {
+                        self.preview_texture_bridge
+                            .as_ref()
+                            .map(|b| (b.clone(), lease))
+                    })
+                    .into_iter()
+                    .collect(),
+            );
             return;
         }
         let drawable = {
@@ -726,6 +759,23 @@ impl Application {
             "Offscreen → Drawable",
         );
         present_enc.present_drawable(&drawable);
+        // BUG-xaw4: retire the bridge lease when this encoder completes —
+        // same queue as the composite's sampling encoder, so its completion
+        // implies the sample has retired. The SurfaceReady wake is what the
+        // content thread's surface wait sleeps on.
+        #[cfg(target_os = "macos")]
+        crate::shared_texture::attach_lease_retire(
+            &present_enc,
+            self.content_tx.clone(),
+            preview_lease
+                .and_then(|lease| {
+                    self.preview_texture_bridge
+                        .as_ref()
+                        .map(|b| (b.clone(), lease))
+                })
+                .into_iter()
+                .collect(),
+        );
         present_enc.commit();
         self.ui_profile.add("present.blit_present", pseg.elapsed());
 

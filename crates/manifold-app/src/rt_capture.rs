@@ -405,7 +405,7 @@ pub fn run(args: &[String]) -> ! {
             || frame == 120
             || frame == 300
             || frame == total.saturating_sub(1)
-            || capture_every.is_some_and(|n| frame >= capture_from && frame % n == 0)
+            || capture_every.is_some_and(|n| frame >= capture_from && frame.is_multiple_of(n))
             || disable_driver_at.is_some_and(|n| {
                 frame == n + 5 || frame == n + 15 || frame == n + 30 || frame == n + 90
             })

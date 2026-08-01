@@ -1557,6 +1557,11 @@ impl Application {
         // node stacked above occludes it) instead of the old flat post-pass blit
         // that ignored node z-order. Phase A reads (build the map + clone the
         // atlas texture); phase B is the two mutable installs.
+        // BUG-xaw4: bridge read leases taken below at each front read;
+        // all retired on the final present encoder's completion (or a
+        // marker buffer on the early returns).
+        #[cfg(target_os = "macos")]
+        let mut bridge_leases: crate::shared_texture::BridgeLeaseBatch = Vec::new();
         #[cfg(target_os = "macos")]
         {
             let atlas_handle =
@@ -1565,11 +1570,13 @@ impl Application {
                 self.node_atlas_texture_bridge.as_ref(),
                 self.graph_canvas.as_ref(),
             ) {
-                let front = bridge.front_index() as usize;
+                let lease = bridge.acquire_read();
+                let front = lease.slot();
                 self.ui_node_atlas_textures
                     .get(front)
                     .and_then(|t| t.as_ref())
                     .map(|atlas_tex| {
+                        bridge_leases.push((bridge.clone(), lease));
                         let layout: ahash::AHashMap<&manifold_core::NodeId, u32> = self
                             .content_state
                             .node_atlas_layout
@@ -1652,15 +1659,33 @@ impl Application {
         // may still be reconfiguring.
         if ws.surface_resized_this_frame {
             ws.surface_resized_this_frame = false;
+            #[cfg(target_os = "macos")]
+            crate::shared_texture::retire_leases_via_marker(
+                &gpu.device,
+                self.content_tx.clone(),
+                std::mem::take(&mut bridge_leases),
+            );
             return;
         }
 
         // ── Late drawable acquisition + blit ──
         let Some(drawable) = surface.next_drawable() else {
+            #[cfg(target_os = "macos")]
+            crate::shared_texture::retire_leases_via_marker(
+                &gpu.device,
+                self.content_tx.clone(),
+                std::mem::take(&mut bridge_leases),
+            );
             return;
         };
         let drawable_tex = drawable.gpu_texture(manifold_gpu::GpuTextureFormat::Bgra8Unorm);
         let (Some(blit_p), Some(blit_s)) = (&self.blit_pipeline, &self.blit_sampler) else {
+            #[cfg(target_os = "macos")]
+            crate::shared_texture::retire_leases_via_marker(
+                &gpu.device,
+                self.content_tx.clone(),
+                std::mem::take(&mut bridge_leases),
+            );
             return;
         };
 
@@ -1705,12 +1730,14 @@ impl Application {
                 && ws.viewport_session.is_none()
                 && let Some(bridge) = self.node_preview_texture_bridge.as_ref()
             {
-                let front = bridge.front_index() as usize;
+                let lease = bridge.acquire_read();
+                let front = lease.slot();
                 if let Some(tex) = self
                     .ui_node_preview_textures
                     .get(front)
                     .and_then(|t| t.as_ref())
                 {
+                    bridge_leases.push((bridge.clone(), lease));
                     present_enc.draw_fullscreen_viewport(
                         blit_p,
                         &drawable_tex,
@@ -1753,8 +1780,10 @@ impl Application {
             // the main/perform window presents. Imported into `ui_preview_textures`
             // by the workspace-preview present path that runs just before this.
             if let Some(bridge) = self.preview_texture_bridge.as_ref() {
-                let front = bridge.front_index() as usize;
+                let lease = bridge.acquire_read();
+                let front = lease.slot();
                 if let Some(tex) = self.ui_preview_textures.get(front).and_then(|t| t.as_ref()) {
+                    bridge_leases.push((bridge.clone(), lease));
                     present_enc.draw_fullscreen_viewport(
                         blit_p,
                         &drawable_tex,
@@ -1777,6 +1806,15 @@ impl Application {
         }
 
         present_enc.present_drawable(&drawable);
+        // BUG-xaw4: every bridge lease taken for this frame retires when the
+        // present encoder completes — it is ordered after the offscreen
+        // passes that sampled the bridges (same queue).
+        #[cfg(target_os = "macos")]
+        crate::shared_texture::attach_lease_retire(
+            &present_enc,
+            self.content_tx.clone(),
+            std::mem::take(&mut bridge_leases),
+        );
         present_enc.commit();
     }
 }

@@ -97,6 +97,9 @@ mod perf_soak_import;
 // ── RT washout probe (temporary, env-gated) ─────────────────────
 #[cfg(all(feature = "perf-soak", target_os = "macos"))]
 mod rt_capture;
+// ── bridge-probe: headless SharedTextureBridge tear detector (BUG-xaw4) ──
+#[cfg(all(feature = "perf-soak", target_os = "macos"))]
+mod bridge_probe;
 mod project_io;
 #[cfg(target_os = "macos")]
 mod shared_texture;
@@ -160,6 +163,14 @@ fn main() {
             crate::rt_capture::run(&args[1..]);
         }
     }
+    // --- `bridge-probe` (headless SharedTextureBridge tear detector) ---
+    #[cfg(all(feature = "perf-soak", target_os = "macos"))]
+    {
+        let args: Vec<String> = std::env::args().collect();
+        if args.get(1).map(String::as_str) == Some("bridge-probe") {
+            crate::bridge_probe::run(&args[1..]);
+        }
+    }
     // Unknown argv rejection (Peter 2026-07-29): the GUI launches ONLY with
     // no args or `--resume <path>`. Everything else used to fall through to
     // the winit event loop — a mistyped flag, or a feature-gated headless
@@ -173,7 +184,7 @@ fn main() {
         if !known_gui_argv {
             eprintln!(
                 "manifold: unrecognized argument {:?} — refusing to launch the GUI.\n\
-                 Headless subcommands: ui-snap (feature ui-snapshot), perf-soak / rt-capture \
+                 Headless subcommands: ui-snap (feature ui-snapshot), perf-soak / rt-capture / bridge-probe \
                  (feature perf-soak, macOS). GUI: no args, or --resume <breadcrumb-path>.",
                 args[1]
             );
