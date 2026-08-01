@@ -90,6 +90,10 @@ def main():
         # while its ceilings are unvalidated, so it files no beads until the
         # numbers mean something.
         ["python3", "scripts/rt_noise_gate.py", "--require-fixture"],
+        # Presentation-tear class (BUG-xaw4): legacy policy must keep tearing
+        # (probe not blind) AND fenced policy must stay clean (the shipped
+        # read-fence contract). GPU-serial here — this loop is sequential.
+        ["python3", "scripts/bridge_probe_gate.py"],
     ]
 
     green_gates = []
