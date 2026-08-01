@@ -4996,6 +4996,12 @@ impl EffectNode for RenderScene {
                     if let Some(ref t) = self.rt_mask_half { q.push(RtCaptureSlot {
                         label: "mask_half".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
                     });}
+                    // BUG-tr5o: the sv snap-HOLD counter — the direct
+                    // observable of gate re-trips under camera motion
+                    // (sustained >0 on penumbra = re-tripping; ~0 = healthy).
+                    if let Some(ref t) = self.rt_sv_hold_history[refl_write] { q.push(RtCaptureSlot {
+                        label: "sv_hold".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
+                    });}
                 }
             }
         }
