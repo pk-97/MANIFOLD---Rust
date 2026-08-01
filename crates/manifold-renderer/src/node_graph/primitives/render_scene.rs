@@ -511,6 +511,15 @@ struct RenderSceneUniforms {
     /// non-empty casters — written alongside `scene_params[3]`). `yzw`
     /// reserved (R2's specular-accumulation flags).
     rt_flags: [f32; 4],
+    /// TAA/MetalFX velocity jitter exclusion: `(cur_x, cur_y, prev_x,
+    /// prev_y)` as NDC offsets (jitter_px × 2/dim). MetalFX's temporal
+    /// scaler expects motion vectors WITHOUT camera jitter (its
+    /// `jitterOffset` compensates the current frame's jitter itself); the
+    /// velocity varyings carry it baked into both clip positions, so the
+    /// fragment subtracts `xy - zw` — the error was one previous-frame
+    /// jitter (±0.5 render px) of phantom motion every frame. All zeros
+    /// when `temporal_upscale` is off — velocity byte-identical to before.
+    velocity_jitter: [f32; 4],
 }
 
 // 736 = 46 × 16 → the naga 16-byte uniform-size rule holds. Was 480 before
@@ -526,7 +535,8 @@ struct RenderSceneUniforms {
 // ONE migration sized for all five families this doc's phases add, per
 // D2 (never grown again per-family). Now 752 after RAYTRACING_DESIGN.md section 9
 // RD9: `rt_flags` (+16) — an RT feature flag word, not a glTF family.
-const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 752);
+// 768 after the velocity jitter-exclusion quad (D-64's MetalFX audit).
+const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 768);
 
 /// Per-(caster, object) uniform for the shadow depth pass
 /// (`shaders/shadow_depth.wgsl`). The vertex shader composes
@@ -626,6 +636,19 @@ pub struct RenderScene {
     /// `None` = no history yet (same first-frame seeding rule as
     /// `prev_model`); reset on every `rebuild`.
     prev_view_proj: Option<[[f32; 4]; 4]>,
+    /// Previous frame's camera position + forward direction, captured
+    /// alongside `prev_view_proj` (same first-frame seeding and rebuild
+    /// reset). Feeds `AccumulateParams::cam_motion`: the temporal change
+    /// gates cannot tell a real lighting change from motion-induced texel
+    /// change, so their bands widen with this magnitude — without it a
+    /// rotating camera snapped the gates every frame and the
+    /// snap→rebuild→retrip cycle boiled the image.
+    prev_cam_state: Option<([f32; 3], [f32; 3])>,
+    /// Previous frame's camera jitter as an NDC offset (0,0 when
+    /// `temporal_upscale` is off) — paired with this frame's in
+    /// `RenderSceneUniforms::velocity_jitter` so the MetalFX motion
+    /// vectors exclude jitter from both ends.
+    prev_jitter_ndc: Option<(f32, f32)>,
     /// RAYTRACING_DESIGN.md section 5.2 P4: monotonic per-node frame counter
     /// driving the camera-jitter sequence
     /// ([`crate::metalfx_temporal_upscaler::jitter_offset`]) when
@@ -1100,6 +1123,8 @@ impl RenderScene {
             rt_temporal_unavailable_logged: false,
             prev_model: Vec::new(),
             prev_view_proj: None,
+            prev_cam_state: None,
+            prev_jitter_ndc: None,
             jitter_frame_index: 0,
             dummy_texture: None,
             sampler: None,
@@ -1327,6 +1352,7 @@ impl RenderScene {
         // starts in.
         self.prev_model = vec![None; n_obj];
         self.prev_view_proj = None;
+        self.prev_cam_state = None;
 
         // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P4 (R5): format every
         // port name exactly once, here, at rebuild time (only reached on an
@@ -2353,7 +2379,7 @@ impl RenderScene {
         ("-> @location(0) vec4<f32> {", "-> FsOut {"),
         (
             "return vec4<f32>(rgb, albedo.a);",
-            "return FsOut(vec4<f32>(rgb, albedo.a), (in.clip_now.xy / in.clip_now.w) - (in.clip_prev.xy / in.clip_prev.w));",
+            "return FsOut(vec4<f32>(rgb, albedo.a), (in.clip_now.xy / in.clip_now.w) - (in.clip_prev.xy / in.clip_prev.w) - (u.velocity_jitter.xy - u.velocity_jitter.zw));",
         ),
     ];
 
@@ -2394,7 +2420,7 @@ impl RenderScene {
         ("-> @location(0) vec4<f32> {", "-> FsOut {"),
         (
             "return vec4<f32>(rgb, albedo.a);",
-            "return FsOut(vec4<f32>(rgb, albedo.a), (in.clip_now.xy / in.clip_now.w) - (in.clip_prev.xy / in.clip_prev.w), u.fog_params.z);",
+            "return FsOut(vec4<f32>(rgb, albedo.a), (in.clip_now.xy / in.clip_now.w) - (in.clip_prev.xy / in.clip_prev.w) - (u.velocity_jitter.xy - u.velocity_jitter.zw), u.fog_params.z);",
         ),
     ];
 
@@ -2918,6 +2944,9 @@ fn build_uniforms(
         // Overwritten per-object right after the build (rt_reflections
         // gate, section 9 RD9) — default 0 = substitution OFF.
         rt_flags: [0.0; 4],
+        // Overwritten per-object right after the build — 0 = no jitter
+        // correction (temporal_upscale off, or first frame).
+        velocity_jitter: [0.0; 4],
     }
 }
 
@@ -3322,6 +3351,43 @@ impl EffectNode for RenderScene {
         // motion, not a spurious first-frame zero.
         let prev_view_proj = self.prev_view_proj.unwrap_or(view_proj);
         self.prev_view_proj = Some(view_proj);
+        // Camera-motion magnitude for the accumulator's change gates
+        // (`AccumulateParams::cam_motion`): radians of view-direction turn
+        // plus translation weighted into the same units (0.3: at the
+        // typical 2–4 unit object distance, orbiting contributes roughly
+        // equally through both terms). First frame after load/rebuild is
+        // 0 — a held camera feeds the gates exactly 0, keeping the static
+        // path byte-identical.
+        let cam_motion = match self.prev_cam_state {
+            Some((ppos, pfwd)) => {
+                let d = (pfwd[0] * cam.fwd[0] + pfwd[1] * cam.fwd[1] + pfwd[2] * cam.fwd[2])
+                    .clamp(-1.0, 1.0);
+                let rot = d.acos();
+                let dp = ((cam.pos[0] - ppos[0]).powi(2)
+                    + (cam.pos[1] - ppos[1]).powi(2)
+                    + (cam.pos[2] - ppos[2]).powi(2))
+                .sqrt();
+                rot + dp * 0.3
+            }
+            None => 0.0,
+        };
+        self.prev_cam_state = Some((cam.pos, cam.fwd));
+        if std::env::var_os("MANIFOLD_PROBE").is_some() && self.jitter_frame_index.is_multiple_of(60) {
+            eprintln!(
+                "[probe] cam_motion={cam_motion:.4} pos=({:.3},{:.3},{:.3}) fwd=({:.3},{:.3},{:.3})",
+                cam.pos[0], cam.pos[1], cam.pos[2], cam.fwd[0], cam.fwd[1], cam.fwd[2]
+            );
+        }
+        // MetalFX velocity jitter exclusion (`velocity_jitter` uniform):
+        // this frame's and last frame's jitter as NDC offsets. MetalFX
+        // expects motion vectors jitter-free (its jitterOffset compensates
+        // the current frame); both clip varyings carry jitter baked in, so
+        // the fragment subtracts the delta. Zero when upscale is off.
+        let jitter_ndc = (
+            jitter_px.0 * 2.0 / width as f32,
+            jitter_px.1 * 2.0 / height as f32,
+        );
+        let prev_jitter_ndc = self.prev_jitter_ndc.replace(jitter_ndc).unwrap_or(jitter_ndc);
 
         // ---- Pass 1 (mutable phase): validate every object's required
         // inputs, compose its model matrix + uniforms, and get-or-compile
@@ -3582,6 +3648,15 @@ impl EffectNode for RenderScene {
             // keeping the raster prefiltered fetch). No new scene param
             // (MB4).
             uniforms.rt_flags[1] = if will_rt_accumulate_this_frame { 1.0 } else { 0.0 };
+            // TAA/MetalFX velocity jitter exclusion (see the field's doc):
+            // the fragment subtracts (cur − prev) from the baked-in-jitter
+            // clip varyings. Zero whenever temporal_upscale is off.
+            uniforms.velocity_jitter = [
+                jitter_ndc.0,
+                jitter_ndc.1,
+                prev_jitter_ndc.0,
+                prev_jitter_ndc.1,
+            ];
             // RAYTRACING_DESIGN.md section 12 AM2/AM6: `fog_params.z` was a
             // permanently-zero reserved slot — repurposed as `ao_mask_owed`,
             // the value the EMIT_AO_MASK fragment variants write to the
@@ -4362,6 +4437,14 @@ impl EffectNode for RenderScene {
 
             if build_this_frame {
                 let tracer = self.rt_tracer.as_ref().expect("ensured above");
+                // Q1 probe: what did build_accel see?
+                if std::env::var("MANIFOLD_PROBE_RT_ACCEL").is_ok() {
+                    eprintln!("MANIFOLD_PROBE_RT_ACCEL: build called with {} objects", objects.len());
+                    for (i, o) in objects.iter().enumerate() {
+                        let vgen = opaque_draws.get(i).and_then(|d| d.vertices_generation);
+                        eprintln!("  object[{}]: triangle_count={}, vertices_generation={:?}", i, o.triangle_count, vgen);
+                    }
+                }
                 self.rt_accel = Some(tracer.build_accel(gpu.device, &objects));
                 self.rt_accel_topo_key = Some(topo_key);
                 self.rt_accel_content_key = Some(content_key);
@@ -4750,6 +4833,7 @@ impl EffectNode for RenderScene {
                     reset,
                     opaque_draws.len() as u32,
                     cam.pos,
+                    cam_motion,
                     inv_view_proj,
                     prev_view_proj,
                 )

@@ -200,6 +200,13 @@ struct Uniforms {
     // gi_spp > 0, so binding 42's `.rgb` holds env+GI radiance). zw
     // reserved.
     rt_flags: vec4<f32>,
+    // TAA/MetalFX velocity jitter exclusion: (cur_x, cur_y, prev_x,
+    // prev_y) as NDC offsets (jitter_px × 2/dim). MetalFX expects motion
+    // vectors WITHOUT camera jitter (its jitterOffset compensates the
+    // current frame's jitter itself); clip_now/clip_prev both carry it
+    // baked in, so the velocity fragment subtracts `xy - zw`. All zeros
+    // when temporal_upscale is off — velocity byte-identical to before.
+    velocity_jitter: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;

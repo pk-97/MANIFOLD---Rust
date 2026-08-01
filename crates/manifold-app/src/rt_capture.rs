@@ -295,6 +295,20 @@ pub fn run(args: &[String]) -> ! {
         .find(|w| w[0] == "--animate")
         .and_then(|w| w[2].parse::<f32>().ok().map(|d| (w[1].clone(), d)));
 
+    // `--capture-every N`: arm on every Nth frame (plus the fixed points) —
+    // consecutive-frame runs during --animate motion, where ghosting and
+    // flicker live. `--capture-from M` skips the early warmup frames.
+    let capture_every: Option<u32> = args
+        .windows(2)
+        .find(|w| w[0] == "--capture-every")
+        .and_then(|w| w[1].parse().ok())
+        .filter(|n: &u32| *n > 0);
+    let capture_from: u32 = args
+        .windows(2)
+        .find(|w| w[0] == "--capture-from")
+        .and_then(|w| w[1].parse().ok())
+        .unwrap_or(0);
+
     // `--disable-driver-at N`: at frame N, MutateProject disables every
     // param driver on layer 0's generator — the "motion stops mid-play"
     // case, with the transport still running.
@@ -335,6 +349,12 @@ pub fn run(args: &[String]) -> ! {
     println!("output={w}x{h} fps={fr}");
 
     // Resolve param IDs from the loaded project BEFORE sending to content thread.
+    // --animate goes through the same resolver: a bare name like "orbit" must
+    // land on the prefixed "5_orbit", otherwise set_param is a silent no-op.
+    let animate: Option<(usize, String, f32)> = animate.map(|(param, delta)| {
+        let (layer_idx, resolved) = resolve_param_id(&real_project, &param);
+        (layer_idx, resolved, delta)
+    });
     let mut resolved_sets: Vec<(usize, String, f32)> = Vec::new();
     for (param_id, value) in &sets {
         let (layer_idx, resolved_id) = resolve_param_id(&real_project, param_id);
@@ -385,6 +405,7 @@ pub fn run(args: &[String]) -> ! {
             || frame == 120
             || frame == 300
             || frame == total.saturating_sub(1)
+            || capture_every.is_some_and(|n| frame >= capture_from && frame.is_multiple_of(n))
             || disable_driver_at.is_some_and(|n| {
                 frame == n + 5 || frame == n + 15 || frame == n + 30 || frame == n + 90
             })
@@ -410,17 +431,18 @@ pub fn run(args: &[String]) -> ! {
             })));
             println!("=== DRIVERS DISABLED at frame {frame} (transport keeps playing) ===");
         }
-        if let Some((param, delta)) = &animate {
+        if let Some((layer_idx, param, delta)) = &animate {
+            let layer_idx = *layer_idx;
             let base = *animate_base.get_or_insert_with(|| {
                 ct.engine
                     .project()
-                    .and_then(|p| p.timeline.layers[0].gen_params())
+                    .and_then(|p| p.timeline.layers[layer_idx].gen_params())
                     .map(|g| g.get_param(param))
                     .unwrap_or(0.0)
             });
             let (param, value) = (param.clone(), base + frame as f32 * delta);
             ct.handle_command(ContentCommand::MutateProject(Box::new(move |project| {
-                if let Some(g) = project.timeline.layers[0].gen_params_mut() {
+                if let Some(g) = project.timeline.layers[layer_idx].gen_params_mut() {
                     g.set_param(&param, value);
                 }
             })));

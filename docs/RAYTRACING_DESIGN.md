@@ -1006,6 +1006,38 @@ sweep-trail risk in principle, with the variance clamp and per-texel count reset
 guards. 40 frames is the first constant to pull back if it trails. Everything measured here is
 one project, one camera, one material class.
 
+**D-64 (2026-08-01, camera motion — gates and specular history learn to move, k3 lead):**
+Peter's look arrived and it was worse than the trail risk: rotating the camera boiled the
+whole image. Measured on the DamagedHelmet orbit fixture (rt-capture `--animate`):
+the accumulated reflection was NOISIER than the raw trace (hf 3.9 vs 2.7), and the
+per-texel history length oscillated 16→1.3 instead of converging. Two root causes, both
+in `accumulate_irradiance`. (1) The change gates compare cur against hist and cannot
+tell a real lighting change from motion-induced texel change (disocclusion churn, GI
+gradient resampling, view-dependent reflection shift), so they snapped every frame and
+the snap→rebuild→retrip cycle boiled the image. (2) The specular reprojection validated
+taps by normal only — a parallel-but-different surface's stale reflection blended in
+under rotation. Fix: a per-frame `cam_motion` scalar (view-direction turn + weighted
+translation, computed in `render_scene.rs`, 0 on a held camera so the static path is
+byte-identical) widens every data-driven gate band (`1 + 60·cam_motion`); the CPU
+lighting key is NOT scaled, so cues still land mid-gesture. Specular taps whose
+reprojection is a plain surface reprojection (roughness ≥ RD6's blend, bt→1) now take
+the same depth test the diffuse channel passes; and specular history carries a
+motion-scaled alpha floor (`min(cam_motion·5, 0.9)`) because specular content is
+view-dependent — no reprojection fixes that, so motion leans on the current frame and
+stillness re-converges. Measured after: center history length converges 68+ at
+0.02 rad/frame (was ~10 with speckle), composite clean at 0.08 rad/frame (was salt
+everywhere). The static noise gate is untouched (cam_motion = 0 there).
+Residual: glossy virtual-point reprojection (bt<1) still has no parallax validation —
+bounded by `clamp_refl_history`; a prev-view-direction virtual point is the upgrade if
+it shows. Same session's MetalFX audit (temporal_upscale): the motion vectors carried
+the camera jitter baked into BOTH clip positions, one previous-frame jitter of phantom
+motion every frame — MetalFX expects jitter-free vectors (its jitterOffset compensates
+the current frame itself). `velocity_jitter` (cur/prev NDC offsets, all-zero with
+upscale off) now subtracts the delta in the velocity fragment; the extreme-drag
+screen-door grid largely resolves, static and slow-drag captures clean. Residual:
+wholesale MetalFX rejection at ~300 px/frame still falls back to raw half-res —
+TAA-intrinsic; a soft-upsample fallback is Apple's side of the fence.
+
 ## 14. Traced environment diffuse — env joins the GI gather (BUG-yq1d (traced AO never darkens env diffuse); SUPERSEDES MB3; LANDED 2026-07-31 — ED-A (kernel/substitution/constants/clamp + PBR-only consumers ED3a + void-texel fallback, Peter's metal-fixture sign-off), ED-B (sun-disc firefly fixture, gain 32 by measurement, furnace is the noise gate's correctness leg — closes BUG-ipad (noise gate certifies frozen noise); stability ceilings re-baselined), ED-C (white-enclosure convergence: reference irradiance 0.954 vs MC 0.934, ED4's constants certified — closes BUG-qt32 (GI energy constants look unphysical)))
 
 The furnace oracle (lane/rt-furnace-oracle) measured what MB3's "env is never gathered"

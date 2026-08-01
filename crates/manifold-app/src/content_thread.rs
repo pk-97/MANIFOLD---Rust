@@ -487,7 +487,14 @@ impl ContentThread {
 
         // Slow path: GPU is behind. Register notification — when the GPU
         // signals, SurfaceReady is sent through cmd_tx, waking recv().
-        if !self.content_pipeline.register_surface_notify(cmd_tx) {
+        // The fast-exit (`false` = the GPU event already fired) must
+        // re-verify the FULL readiness condition: is_surface_ready also
+        // covers the bridge read-fence (BUG-xaw4), and the UI's reads may
+        // still be in flight even when the content queue's own write is
+        // long done. Those retire with a SurfaceReady wake of their own.
+        if !self.content_pipeline.register_surface_notify(cmd_tx)
+            && self.content_pipeline.is_surface_ready()
+        {
             return false; // became ready between check and register
         }
 

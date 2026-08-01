@@ -828,13 +828,13 @@ def worktree_add_guard(cmd, cwd):
 # grows an argv parser that rejects unknown args instead of launching.
 # ---------------------------------------------------------------------------
 
-_MANIFOLD_HEADLESS_SUBCOMMANDS = {"ui-snap", "perf-soak", "rt-capture"}
+_MANIFOLD_HEADLESS_SUBCOMMANDS = {"ui-snap", "perf-soak", "rt-capture", "bridge-probe"}
 
 MANIFOLD_GUI_REASON = (
     "Launching the full MANIFOLD GUI from an agent is denied — it opens a "
     "real window and never returns (any unrecognized argv falls through to "
     "the event loop; there is no --version/--help). Test headlessly: the "
-    "binary's headless subcommands (ui-snap / perf-soak / rt-capture) or "
+    "binary's headless subcommands (ui-snap / perf-soak / rt-capture / bridge-probe) or "
     "the ui-flows `--script` driver. Only Peter launches the GUI."
 )
 

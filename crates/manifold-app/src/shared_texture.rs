@@ -17,6 +17,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use core_foundation::base::TCFType;
 use core_foundation::dictionary::CFMutableDictionary;
+use std::sync::atomic::AtomicBool;
 use core_foundation::number::CFNumber;
 use core_foundation::string::CFString;
 
@@ -43,8 +44,43 @@ pub struct SharedTextureBridge {
     /// Which surface the UI thread should read (0, 1, or 2).
     /// Content thread calls `publish_front()` after confirming GPU completion.
     front_index: AtomicU32,
+    /// Per-slot "has ever been published". `front_index` starts at 0, which
+    /// is indistinguishable from "slot 0 was published" — without this flag
+    /// the read fence's front-moved condition deadlocks at startup: the
+    /// first frame targets slot 0, whose front condition can never clear
+    /// until a frame completes, which requires the first frame to be written
+    /// (bridge-probe measured the hang; production would hit it on launch).
+    published: [AtomicBool; SURFACE_COUNT],
     /// Generation counter — incremented on resize so both sides detect stale textures.
     generation: AtomicU64,
+    // ── Read fence (BUG-xaw4) ─────────────────────────────────────────
+    // The two GpuDevices are separate MTLDevice instances, so MTLSharedEvent
+    // cannot order the UI's reads against the content thread's writes — the
+    // fence is CPU-side atomics advanced by GPU completion handlers.
+    // `reads_in_flight[slot]` counts UI reads of the slot that have been
+    // encoded but not yet GPU-retired. Content's reuse wait
+    // (`wait_reusable`) requires front to have moved off the slot AND the
+    // count at zero before overwriting. A COUNT, not a max-stamp: reads
+    // retire out of order, and a stamp design measured 17.7% torn reads in
+    // the bridge-probe because a later read's retirement covered an earlier
+    // read of the same slot.
+    reads_in_flight: [AtomicU64; SURFACE_COUNT],
+}
+
+/// A UI-side claim on a bridge slot: `slot` was the published front when the
+/// lease was taken. Retire via [`SharedTextureBridge::retire_read`] from the
+/// completion handler of the encoder that sampled the slot — or immediately
+/// if no sample was encoded (a lease with no GPU read behind it may retire
+/// at once).
+#[derive(Clone, Copy)]
+pub struct BridgeReadLease {
+    slot: usize,
+}
+
+impl BridgeReadLease {
+    pub fn slot(&self) -> usize {
+        self.slot
+    }
 }
 
 // SAFETY: IOSurface is a kernel-managed object safe to share across threads.
@@ -53,6 +89,52 @@ unsafe impl Sync for SharedTextureBridge {}
 
 /// Bytes per pixel for Rgba16Float.
 const BPP: u32 = 8;
+
+/// A batch of bridge read leases held by one UI frame.
+pub(crate) type BridgeLeaseBatch = Vec<(std::sync::Arc<SharedTextureBridge>, BridgeReadLease)>;
+
+/// Retire a batch of bridge read leases when `enc`'s GPU work completes,
+/// then wake the content thread with `SurfaceReady` (its surface wait sleeps
+/// on that command). `enc` must be ordered AFTER the encoder that sampled
+/// the bridges on the same queue — any later command buffer qualifies,
+/// because per-queue completion is in commit order.
+pub(crate) fn attach_lease_retire(
+    enc: &manifold_gpu::GpuEncoder,
+    content_tx: Option<crossbeam_channel::Sender<crate::content_command::ContentCommand>>,
+    leases: BridgeLeaseBatch,
+) {
+    if leases.is_empty() {
+        return;
+    }
+    enc.add_completed_handler(move || {
+        for (bridge, lease) in &leases {
+            bridge.retire_read(*lease);
+        }
+        if let Some(ref tx) = content_tx {
+            crate::content_command::ContentCommand::send(
+                tx,
+                crate::content_command::ContentCommand::SurfaceReady,
+            );
+        }
+    });
+}
+
+/// Marker-encoder variant for paths that sampled a bridge but commit no
+/// further work this frame (resize / drawable-starved early returns). The
+/// empty buffer completes only after the sampling encoder ahead of it in the
+/// queue, so the retirement ordering still holds.
+pub(crate) fn retire_leases_via_marker(
+    device: &manifold_gpu::GpuDevice,
+    content_tx: Option<crossbeam_channel::Sender<crate::content_command::ContentCommand>>,
+    leases: BridgeLeaseBatch,
+) {
+    if leases.is_empty() {
+        return;
+    }
+    let enc = device.create_encoder("Bridge-retire");
+    attach_lease_retire(&enc, content_tx, leases);
+    enc.commit();
+}
 
 /// FourCC for kCVPixelFormatType_64RGBAHalf ('RGhA').
 const PIXEL_FORMAT_RGBA16_FLOAT: i32 = 0x52476841u32 as i32;
@@ -114,7 +196,9 @@ impl SharedTextureBridge {
             width: AtomicU32::new(width),
             height: AtomicU32::new(height),
             front_index: AtomicU32::new(0),
+            published: [AtomicBool::new(false), AtomicBool::new(false), AtomicBool::new(false)],
             generation: AtomicU64::new(0),
+            reads_in_flight: [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)],
         }
     }
 
@@ -174,6 +258,14 @@ impl SharedTextureBridge {
         }
         self.front_index.store(0, Ordering::Release);
         self.generation.fetch_add(1, Ordering::Release);
+        // New surfaces, new contract: no read of a stale surface may gate a
+        // write to a fresh one (both sides re-import on the generation bump).
+        for c in &self.reads_in_flight {
+            c.store(0, Ordering::Release);
+        }
+        for p in &self.published {
+            p.store(false, Ordering::Release);
+        }
         log::info!(
             "[SharedTextureBridge] resized {}x IOSurface to {}x{}",
             SURFACE_COUNT,
@@ -192,7 +284,57 @@ impl SharedTextureBridge {
     /// Called by the content thread after confirming the GPU finished
     /// writing to this surface (fence ready).
     pub fn publish_front(&self, index: u32) {
+        self.published[index as usize].store(true, Ordering::Release);
         self.front_index.store(index, Ordering::Release);
+    }
+
+    /// Take a read lease on the current front slot (BUG-xaw4 read fence).
+    /// The in-flight claim is recorded BEFORE the caller encodes its sample,
+    /// then re-validated against front: if front moved mid-acquire the claim
+    /// is released and retried, so a sample is only ever encoded for a slot
+    /// the content thread's `wait_reusable` is already blocked on (the claim
+    /// precedes any possible pass of the count check).
+    pub fn acquire_read(&self) -> BridgeReadLease {
+        loop {
+            let slot = self.front_index() as usize;
+            self.reads_in_flight[slot].fetch_add(1, Ordering::AcqRel);
+            if self.front_index() as usize == slot {
+                return BridgeReadLease { slot };
+            }
+            self.reads_in_flight[slot].fetch_sub(1, Ordering::AcqRel);
+        }
+    }
+
+    /// Mark a read lease's GPU work retired — call from the completion
+    /// handler of the encoder that sampled the slot, or immediately when no
+    /// sample was encoded. Saturating: a lease retired across a resize
+    /// (counters reset) must not underflow.
+    pub fn retire_read(&self, lease: BridgeReadLease) {
+        let _ = self.reads_in_flight[lease.slot].fetch_update(
+            Ordering::AcqRel,
+            Ordering::Acquire,
+            |x| Some(x.saturating_sub(1)),
+        );
+    }
+
+    /// One pass of the reuse condition, non-blocking — the content thread's
+    /// surface-readiness poll shape (`ContentPipeline::is_surface_ready`).
+    /// True when the slot may be overwritten: front has moved off it (so no
+    /// NEW read can start) and every claimed read has retired on the GPU.
+    /// When false the content thread stalls instead of tearing — under
+    /// saturation it paces down rather than sampling-and-writing the same
+    /// surface on two devices at once.
+    pub fn is_reusable(&self, slot: usize) -> bool {
+        let slot_free = !self.published[slot].load(Ordering::Acquire)
+            || self.front_index() as usize != slot;
+        slot_free && self.reads_in_flight[slot].load(Ordering::Acquire) == 0
+    }
+
+    /// Probe-side diagnostics: the in-flight read count for a slot
+    /// (bridge-probe's stuck-state dump; perf-soak is the probe's feature).
+    #[cfg(feature = "perf-soak")]
+    pub fn debug_reads_in_flight(&self, slot: usize) -> u64 {
+        self.reads_in_flight[slot].load(Ordering::Acquire)
     }
 
     /// Current dimensions.
