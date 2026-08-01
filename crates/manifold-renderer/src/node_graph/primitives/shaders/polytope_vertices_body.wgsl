@@ -119,7 +119,7 @@ fn pv_vert_for_shape(shape: u32, i: u32) -> vec3<f32> {
 fn body(idx: u32, count: u32, shape: u32) -> Element {
     let nverts = pv_vert_count_for_shape(shape);
     if idx >= nverts {
-        return Element(vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), vec2<f32>(0.0, 0.0));
+        return Element(vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), vec2<f32>(0.0, 0.0), vec4<f32>(0.0));
     }
 
     let raw = pv_vert_for_shape(shape, idx);
@@ -128,5 +128,5 @@ fn body(idx: u32, count: u32, shape: u32) -> Element {
     let normal = select(raw / len, vec3<f32>(0.0, 1.0, 0.0), len < 1e-8);
     let uv = vec2<f32>(f32(idx) / f32(max(nverts, 1u)), 0.0);
 
-    return Element(pos, normal, uv);
+    return Element(pos, normal, uv, vec4<f32>(0.0));
 }

@@ -17,7 +17,7 @@ fn body(idx: u32, count: u32) -> Element {
         let v1 = buf_in[base + 1u].position;
         let v2 = buf_in[base + 2u].position;
         let n = normalize(cross(v1 - v0, v2 - v0));
-        return Element(e_self.position, n, e_self.uv);
+        return Element(e_self.position, n, e_self.uv, e_self.tangent);
     }
 
     return e_self;
