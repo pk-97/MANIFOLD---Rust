@@ -285,11 +285,19 @@ def lifecycle_check() -> int:
     return 0
 
 
+DEAD_REFS_BASELINE = Path(__file__).with_name("design_status_dead_refs_baseline.txt")
+
+
 def check_dead_refs() -> int:
     """Check for references to .rs files in docs/*.md that don't exist under crates/.
 
-    Exit 1 if any dead references found in non-archived docs. This catches drift
-    where docs reference deleted or renamed .rs files.
+    Ratchet shape (same doctrine as the header-budget pins): the committed
+    baseline (design_status_dead_refs_baseline.txt) holds the backlog the
+    2026-08-01 census (BUG-14qc (docs drift sweep)) found — 441 refs, mostly
+    godfiles the decomposition campaign turned into directory modules. The
+    gate fails ONLY on a hit NOT in the baseline (new drift), and reports
+    baseline entries that no longer hit so the file burns down as docs are
+    fixed on-touch.
     """
     import re
 
@@ -297,7 +305,12 @@ def check_dead_refs() -> int:
     # Matches: `foo.rs`, `path/to/foo.rs`, ../path/to/foo.rs, [text](path/to/foo.rs)
     RS_PATTERN = re.compile(r'(?:`|\[.*?\]\()?([a-zA-Z0-9_/-]+\.rs)(?:`|\))?')
 
-    all_missing: list[tuple[str, str]] = []
+    # One pass: every .rs basename under crates/. A hit means NO file with
+    # that basename exists anywhere — directory-module successors
+    # (param_card.rs -> param_card/) deliberately still count as drift.
+    existing = {p.name for p in (REPO / "crates").rglob("*.rs")}
+
+    all_missing: list[str] = []
 
     for doc_path in sorted(DOCS.glob("*.md")):
         # Skip archived docs
@@ -305,30 +318,35 @@ def check_dead_refs() -> int:
             continue
 
         content = doc_path.read_text(errors="replace")
-        refs = RS_PATTERN.findall(content)
+        for ref in RS_PATTERN.findall(content):
+            if Path(ref).name not in existing:
+                all_missing.append(f"{doc_path.name}:{ref}")
 
-        for ref in refs:
-            basename = Path(ref).name
-            # Check if basename exists under crates/
-            try:
-                result = subprocess.run(
-                    ["fd", "-q", f"^{basename}$", "crates/"],
-                    cwd=REPO, capture_output=True, timeout=5,
-                )
-                if result.returncode != 0:
-                    all_missing.append((f"{doc_path.name}:{ref}", basename))
-            except Exception:
-                pass
+    baseline: set[str] = set()
+    if DEAD_REFS_BASELINE.exists():
+        baseline = {ln.strip() for ln in DEAD_REFS_BASELINE.read_text().splitlines()
+                    if ln.strip() and not ln.startswith("#")}
 
-    if not all_missing:
-        print("dead-refs: OK — no missing .rs file references in docs/*.md")
-        return 0
+    new_hits = sorted(set(all_missing) - baseline)
+    cleared = sorted(baseline - set(all_missing))
 
-    for doc_ref, basename in all_missing:
-        print(f"DEAD-REF: docs/{doc_ref} (basename: {basename})")
+    if cleared:
+        print(f"dead-refs ratchet: {len(cleared)} baseline entr(y/ies) no longer "
+              f"hit — delete them from {DEAD_REFS_BASELINE.name} (the ratchet only burns down):")
+        for entry in cleared:
+            print(f"  CLEARED: {entry}")
 
-    print(f"dead-refs: FAIL — {len(all_missing)} missing .rs reference(s) in docs/*.md")
-    return 1
+    if new_hits:
+        for doc_ref in new_hits:
+            print(f"DEAD-REF: docs/{doc_ref}")
+        print(f"dead-refs: FAIL — {len(new_hits)} NEW missing .rs reference(s) in "
+              f"docs/*.md (baseline holds {len(baseline & set(all_missing))} known; "
+              f"fix the doc or, for intentional historical prose, move the doc to archive/)")
+        return 1
+
+    print(f"dead-refs: OK — no new missing .rs references "
+          f"({len(baseline & set(all_missing))} baselined backlog, {len(cleared)} cleared)")
+    return 0
 
 
 def main() -> int:
