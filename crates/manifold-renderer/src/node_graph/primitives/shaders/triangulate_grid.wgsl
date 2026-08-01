@@ -20,6 +20,7 @@ struct MeshVertex {
     _pad1: f32,
     uv: vec2<f32>,
     _pad2: vec2<f32>,
+    tangent: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: TriangulateUniforms;
@@ -72,6 +73,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         dst[i]._pad1 = 0.0;
         dst[i].uv = vec2<f32>(0.0, 0.0);
         dst[i]._pad2 = vec2<f32>(0.0, 0.0);
+        dst[i].tangent = vec4<f32>(0.0);
         return;
     }
 
@@ -115,4 +117,5 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     dst[i]._pad1 = 0.0;
     dst[i].uv = uv;
     dst[i]._pad2 = vec2<f32>(0.0, 0.0);
+    dst[i].tangent = vec4<f32>(0.0);
 }

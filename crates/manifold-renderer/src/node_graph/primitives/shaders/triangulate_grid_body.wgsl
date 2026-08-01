@@ -45,7 +45,7 @@ fn body(idx: u32, count: u32, src_cols: i32, src_rows: i32) -> Element {
 
     if idx >= total_verts {
         // Padding vertex past the triangle count.
-        return Element(vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), vec2<f32>(0.0, 0.0));
+        return Element(vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), vec2<f32>(0.0, 0.0), vec4<f32>(0.0));
     }
 
     let quad_idx = idx / 6u;
@@ -76,5 +76,5 @@ fn body(idx: u32, count: u32, src_cols: i32, src_rows: i32) -> Element {
     let normal = tg_compute_normal(col, row, src_cols, src_rows);
     let uv = tg_sample_uv(col, row, src_cols, src_rows);
 
-    return Element(pos, normal, uv);
+    return Element(pos, normal, uv, vec4<f32>(0.0));
 }

@@ -59,5 +59,5 @@ fn body(
     }
     nrm = normalize(nrm);
 
-    return Element(pos, nrm, e_in.uv);
+    return Element(pos, nrm, e_in.uv, e_in.tangent);
 }

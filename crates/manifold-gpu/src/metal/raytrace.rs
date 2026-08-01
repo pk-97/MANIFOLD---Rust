@@ -132,7 +132,7 @@ unsafe impl Sync for RtAccel {}
 /// `model_matrix`) — the same layout `render_scene.wgsl`'s `Uniforms.model`
 /// already uses. `vertex_buffer`/`vertex_stride`/`vertex_offset` read
 /// straight from an existing interleaved vertex buffer (e.g.
-/// `render_scene.rs`'s `MeshVertex`, stride 48, position at offset 0) —
+/// `render_scene.rs`'s `MeshVertex`, stride 64, position at offset 0) —
 /// no position-only repack. `index_buffer: None` means a flat,
 /// non-indexed triangle list (every 3 consecutive vertices = 1 triangle
 /// — `render_scene.rs`'s own draw convention), matching Metal's
@@ -752,14 +752,14 @@ static float2 fetch_interpolated_uv(device RtNormalSource* normal_sources, uint 
 
 // BUG-wytp (rt-reflections-are-normal-map-blind): primary-hit normal-map
 // sampling — the RT analogue of the raster's screen-space cotangent frame
-// (`render_scene.wgsl`'s `cotangent_frame`/`resolve_normal`). The raster has
-// no stored glTF tangent attribute (MeshVertex's 48-byte ABI pins it
-// tangent-less), so it derives T/B from screen-space derivatives of
-// position+UV; the RT kernel derives the SAME frame analytically from the
-// hit triangle's three vertex positions + UVs (Mikkelsen's derivation) —
-// `TANGENT.w` mirrored-handedness is not honored because the frame is a
-// function of the UV parameterization alone, exactly like the raster, which
-// ignores it too. Local-space vertex edges are transformed to world space by
+// (`render_scene.wgsl`'s `cotangent_frame`/`resolve_normal`). The RT kernel
+// derives the frame analytically from the hit triangle's three vertex
+// positions + UVs (Mikkelsen's derivation) — the raster gained authored
+// TANGENT support in BUG-wfxe (MeshVertex grew to 64 bytes), but the RT
+// path still derives: feeding the stored tangent through the bindless
+// normal-source table is a named follow-up, and until it lands the
+// mirrored-handedness note below stays exact — `TANGENT.w` is not honored
+// because the frame is a function of the UV parameterization alone. Local-space vertex edges are transformed to world space by
 // `src`'s normal matrix (uniform-scale assumption, same as
 // `fetch_world_normal`; translation cancels in the edge differences), so the
 // derived T/B live in the same space as the world-space `n` they combine

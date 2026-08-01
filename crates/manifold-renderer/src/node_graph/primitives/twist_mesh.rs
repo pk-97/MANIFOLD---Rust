@@ -275,6 +275,7 @@ mod gpu_tests {
             _pad1: 0.0,
             uv,
             _pad2: [0.0, 0.0],
+            tangent: [0.0; 4],
         }
     }
 

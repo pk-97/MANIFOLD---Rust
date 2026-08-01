@@ -81,7 +81,41 @@ struct LayerTexture {
 /// depth (4 frames) sat inside the backlog window and hit wait timeouts.
 const VBUF_RING_SIZE: usize = 16;
 /// Max layers per frame in the pre-allocated vertex buffer.
-const MAX_LAYER_QUADS: usize = 64;
+/// BUG-q7zv: 64 → 256. The 64 cap silently vanished layers past 64 from
+/// the grid/overview previews; 256 covers any project a timeline UI
+/// stays usable at (256 quads × 4 verts × 16 B × 16 ring slots = 256 KB,
+/// negligible). Past 256 the overflow logs once per session — see
+/// `select_layer_quads`.
+const MAX_LAYER_QUADS: usize = 256;
+
+/// Which `(layer_idx, rect)` entries get quads this frame, in order.
+/// Pure (no device, no texture types) so the BUG-q7zv >64-layer
+/// regression is testable without a GPU. Returns the selected entries
+/// and whether the MAX_LAYER_QUADS cap dropped anything — the caller
+/// logs the overflow once rather than vanishing layers silently again.
+fn select_layer_quads(
+    layer_rects: &[(usize, Rect)],
+    textures_len: usize,
+    has_texture: impl Fn(usize) -> bool,
+) -> (Vec<&(usize, Rect)>, bool) {
+    let mut selected = Vec::with_capacity(layer_rects.len().min(MAX_LAYER_QUADS));
+    let mut cap_hit = false;
+    for entry in layer_rects {
+        let (layer_idx, rect) = entry;
+        if *layer_idx >= textures_len || !has_texture(*layer_idx) {
+            continue;
+        }
+        if rect.width <= 0.0 || rect.height <= 0.0 {
+            continue;
+        }
+        if selected.len() >= MAX_LAYER_QUADS {
+            cap_hit = true;
+            break;
+        }
+        selected.push(entry);
+    }
+    (selected, cap_hit)
+}
 
 /// Manages GPU textures for all layer bitmaps and renders them as positioned quads.
 pub struct LayerBitmapGpu {
@@ -106,6 +140,9 @@ pub struct LayerBitmapGpu {
     fence_wait_events: u64,
     /// Pre-allocated scratch for draw list (reused each frame).
     draw_list: Vec<(usize, usize)>,
+    /// BUG-q7zv: the MAX_LAYER_QUADS overflow logs once per session, not
+    /// per frame.
+    cap_overflow_logged: bool,
 }
 
 impl LayerBitmapGpu {
@@ -177,6 +214,7 @@ impl LayerBitmapGpu {
             vbuf_ring_idx: 0,
             vbuf_stamps: [0; VBUF_RING_SIZE],
             frame_fence: None,
+            cap_overflow_logged: false,
             fence_wait_events: 0,
             draw_list: Vec::with_capacity(MAX_LAYER_QUADS),
         }
@@ -275,21 +313,22 @@ impl LayerBitmapGpu {
 
         // Write all layer quad vertices into the ring buffer in one batch.
         let ptr = vbuf.mapped_ptr().unwrap() as *mut BitmapVertex;
-        let mut quad_count = 0usize;
 
         // Collect which layers are valid and write their vertices.
+        let (selected, cap_hit) = select_layer_quads(layer_rects, self.textures.len(), |i| {
+            self.textures[i].is_some()
+        });
+        if cap_hit && !self.cap_overflow_logged {
+            self.cap_overflow_logged = true;
+            eprintln!(
+                "[manifold-renderer] layer preview quads overflowed MAX_LAYER_QUADS \
+                 ({MAX_LAYER_QUADS}) — layers past the cap are missing from grid/overview \
+                 previews this frame (BUG-q7zv). Raise the constant if a real project hits this."
+            );
+        }
         self.draw_list.clear();
-        for &(layer_idx, rect) in layer_rects {
-            if layer_idx >= self.textures.len() || self.textures[layer_idx].is_none() {
-                continue;
-            }
-            if rect.width <= 0.0 || rect.height <= 0.0 {
-                continue;
-            }
-            if quad_count >= MAX_LAYER_QUADS {
-                break;
-            }
-
+        let mut quad_count = 0usize;
+        for &(layer_idx, rect) in selected {
             let (x0, y0) = (rect.x, rect.y);
             let (x1, y1) = (rect.x + rect.width, rect.y + rect.height);
             let verts = [
@@ -362,5 +401,59 @@ impl LayerBitmapGpu {
         if self.textures.len() > count {
             self.textures.truncate(count);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rect() -> Rect {
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 10.0,
+            height: 10.0,
+        }
+    }
+
+    /// BUG-q7zv: 300 visible layers must all be selected — the old 64 cap
+    /// silently dropped every layer past 64 from the previews.
+    #[test]
+    fn select_layer_quads_selects_beyond_64() {
+        let rects: Vec<(usize, Rect)> = (0..300).map(|i| (i, rect())).collect();
+        let (selected, cap_hit) = select_layer_quads(&rects, 300, |_| true);
+        assert!(
+            selected.len() >= 256,
+            "layers past 64 must be selected (cap is {}), got {}",
+            MAX_LAYER_QUADS,
+            selected.len()
+        );
+        assert_eq!(selected.len(), 256, "300 layers exceed the 256 cap exactly");
+        assert!(cap_hit, "the overflow must be reported, not silent");
+        assert_eq!(selected[0].0, 0);
+        assert_eq!(selected[255].0, 255, "selection keeps layer order");
+    }
+
+    /// The realistic case: 70 layers, all visible, none dropped, no overflow.
+    #[test]
+    fn select_layer_quads_70_layers_no_cap() {
+        let rects: Vec<(usize, Rect)> = (0..70).map(|i| (i, rect())).collect();
+        let (selected, cap_hit) = select_layer_quads(&rects, 70, |_| true);
+        assert_eq!(selected.len(), 70);
+        assert!(!cap_hit);
+    }
+
+    /// Missing textures and degenerate rects are skipped before the cap
+    /// counts — a sparse 300-slot texture table with 70 live layers
+    /// selects exactly the live ones.
+    #[test]
+    fn select_layer_quads_skips_missing_and_degenerate() {
+        let mut rects: Vec<(usize, Rect)> = (0..70).map(|i| (i * 4, rect())).collect();
+        rects.push((3, Rect { x: 0.0, y: 0.0, width: 0.0, height: 10.0 }));
+        let live: std::collections::HashSet<usize> = (0..70).map(|i| i * 4).collect();
+        let (selected, cap_hit) = select_layer_quads(&rects, 300, |i| live.contains(&i));
+        assert_eq!(selected.len(), 70, "only live, non-degenerate layers");
+        assert!(!cap_hit);
     }
 }

@@ -29,8 +29,8 @@
 // pattern), byte-identical output. ONE envmap is shared across every PBR
 // object in the scene (an environment map is scene-wide, not per-object).
 //
-// MeshVertex layout (48 bytes), entry point names, and per-kind
-// dispatch: identical to render_3d_mesh.wgsl.
+// MeshVertex layout (64 bytes — BUG-wfxe added tangent), entry point
+// names, and per-kind dispatch: identical to render_3d_mesh.wgsl.
 
 const PI: f32 = 3.14159265358979;
 
@@ -41,6 +41,7 @@ struct Vertex {
     _pad1: f32,
     uv: vec2<f32>,
     _pad2: vec2<f32>,
+    tangent: vec4<f32>,
 };
 
 // Superset uniform, rebuilt once per object per draw call. 16-byte
@@ -709,6 +710,10 @@ struct VsOut {
     // for the NDC divide the velocity fragment code needs). Inert comment
     // in the velocity-off compile.
     // GBUFFER_VSOUT_VELOCITY_FIELDS
+    // BUG-wfxe: authored tangent (xyz world dir, w bitangent sign).
+    // w == 0 = no authored tangent → derived-frame fallback. @location(5)
+    // because EMIT_VELOCITY takes 3 and 4.
+    @location(5) world_tangent: vec4<f32>,
 };
 
 // Instance TRS applies FIRST, the object group's `model` (transform_n)
@@ -744,19 +749,27 @@ fn vs_main(
     // GBUFFER_VS_VELOCITY_BODY
     out.world_normal = normalize((u.model * vec4<f32>(inst_normal, 0.0)).xyz);
     out.uv = v.uv;
+    // BUG-wfxe: tangent transforms with the same instance-rotation + model
+    // chain as the normal (a direction). w carries the bitangent sign
+    // through unscaled; w == 0 (no authored tangent) passes the zero
+    // sentinel through — normalize() of a zero vector would be NaN, so the
+    // direction is selected, not branched (uniform control flow).
+    let t_world = normalize((u.model * vec4<f32>(rot * v.tangent.xyz, 0.0)).xyz);
+    out.world_tangent = vec4<f32>(select(t_world, vec3<f32>(0.0), v.tangent.w == 0.0), v.tangent.w);
     return out;
 }
 
 // IMPORT_FIDELITY_DESIGN.md D4/F-P2: tangent-space (glTF-convention) normal
-// mapping via a screen-space cotangent frame (Mikkelsen's derivation, the
-// technique three.js/filament use when no vertex tangents exist — see
-// MeshVertex's 48-byte ABI-pinned comment: growing it for tangents was
-// priced and rejected). Built purely from `dpdx`/`dpdy` of `world_pos` and
-// `uv` — both screen-space derivatives, so the reconstructed T/B are a
-// function of the surface's own UV parameterization, independent of camera
-// or screen resolution. Uniform per-object branch (texture_flags.x is a
-// per-draw-call uniform, not per-fragment data), so `dpdx`/`dpdy` inside the
-// `if` are legal (same discipline the PCSS branches above already rely on).
+// mapping. The FALLBACK frame is the screen-space cotangent frame
+// (Mikkelsen's derivation, the technique three.js/filament use when no
+// vertex tangents exist) — used when the mesh carries no authored TANGENT
+// (`tangent.w == 0`, every procedural mesh and pre-BUG-wfxe import). Built
+// purely from `dpdx`/`dpdy` of `world_pos` and `uv` — both screen-space
+// derivatives, so the reconstructed T/B are a function of the surface's
+// own UV parameterization, independent of camera or screen resolution.
+// Uniform per-object branch (texture_flags.x is a per-draw-call uniform,
+// not per-fragment data), so `dpdx`/`dpdy` inside the `if` are legal (same
+// discipline the PCSS branches above already rely on).
 fn cotangent_frame(n: vec3<f32>, p: vec3<f32>, uv: vec2<f32>) -> mat3x3<f32> {
     let dp1 = dpdx(p);
     let dp2 = dpdy(p);
@@ -772,25 +785,50 @@ fn cotangent_frame(n: vec3<f32>, p: vec3<f32>, uv: vec2<f32>) -> mat3x3<f32> {
     return mat3x3<f32>(t * inv_max, b * inv_max, n);
 }
 
+// BUG-wfxe: the TBN selector. Both frames are COMPUTED unconditionally
+// and selected column-wise — cotangent_frame uses `dpdx`/`dpdy`, which
+// require uniform control flow, so a per-fragment `if tangent.w != 0`
+// branch around it fails naga validation (fs_pbr). The authored arm
+// (Gram-Schmidt + glTF handedness sign: B = cross(N,T) * w) produces NaN
+// on the zero sentinel (normalize of a zero vector) — discarded by the
+// select, never read.
+fn tbn_for(n: vec3<f32>, p: vec3<f32>, uv: vec2<f32>, tangent: vec4<f32>) -> mat3x3<f32> {
+    let derived = cotangent_frame(n, p, uv);
+    let t = normalize(tangent.xyz - n * dot(tangent.xyz, n));
+    let b = cross(n, t) * tangent.w;
+    let authored = mat3x3<f32>(t, b, n);
+    let use_derived = tangent.w == 0.0;
+    return mat3x3<f32>(
+        select(authored[0], derived[0], use_derived),
+        select(authored[1], derived[1], use_derived),
+        n,
+    );
+}
+
 // Identical to render_3d_mesh.wgsl's SIGNATURE — see that file for the
 // world-space-map path it still uses. render_scene's normal_map_n (D3) is
 // tangent-space (glTF convention: R/G = tangent-space X/Y in [-1,1] packed
 // to [0,1], B = tangent-space Z), reconstructed into world space via the
-// cotangent frame above rather than added directly to the vertex normal.
-fn resolve_normal(uv: vec2<f32>, vertex_normal: vec3<f32>, world_pos: vec3<f32>) -> vec3<f32> {
+// authored tangent frame when present (BUG-wfxe), the cotangent frame
+// otherwise.
+fn resolve_normal(uv: vec2<f32>, vertex_normal: vec3<f32>, world_pos: vec3<f32>, tangent: vec4<f32>) -> vec3<f32> {
     if u.texture_flags.x > 0.5 {
         let n = normalize(vertex_normal);
-        // G-P4: per-map KHR_texture_transform. The cotangent frame is
-        // built from the SAME transformed UV the texture is sampled with
-        // — a rotated/scaled UV space rotates/scales the tangent
-        // directions, and deriving T/B from the untransformed uv would
-        // bend the decoded normals off-axis. Identity transform makes
-        // uv_t == uv bit-for-bit (1*u + 0*v + 0), so pre-G-P4 assets are
-        // byte-identical.
+        // G-P4: per-map KHR_texture_transform. The frame is built from
+        // the SAME transformed UV the texture is sampled with — a
+        // rotated/scaled UV space rotates/scales the tangent directions,
+        // and deriving T/B from the untransformed uv would bend the
+        // decoded normals off-axis. Identity transform makes uv_t == uv
+        // bit-for-bit (1*u + 0*v + 0), so pre-G-P4 assets are
+        // byte-identical. NOTE: the AUTHORED tangent frame belongs to the
+        // mesh's ORIGINAL UV space — a non-identity normal_uv_m rotation
+        // with authored tangents is an unresolved mismatch (glTF keeps
+        // tangent space tied to the same texcoords the transform edits);
+        // no shipped asset combines the two.
         let uv_t = apply_uv_transform(uv, u.normal_uv_m, u.normal_uv_t);
         let sampled = textureSample(normal_map, normal_sampler, uv_t).rgb;
         let tangent_normal = sampled * 2.0 - vec3<f32>(1.0);
-        let tbn = cotangent_frame(n, world_pos, uv_t);
+        let tbn = tbn_for(n, world_pos, uv_t, tangent);
         return normalize(tbn * tangent_normal);
     }
     return normalize(vertex_normal);
@@ -941,11 +979,11 @@ fn resolve_clearcoat(uv: vec2<f32>) -> vec2<f32> {
 // fallback ("if this texture is not given, the geometry/base normal is
 // used instead") and the byte-identical path for every material without
 // this specific texture.
-fn resolve_clearcoat_normal(uv: vec2<f32>, n: vec3<f32>, world_pos: vec3<f32>) -> vec3<f32> {
+fn resolve_clearcoat_normal(uv: vec2<f32>, n: vec3<f32>, world_pos: vec3<f32>, tangent: vec4<f32>) -> vec3<f32> {
     if (clearcoat_family_flags() & 4u) != 0u {
         let sampled = textureSample(clearcoat_normal_map, normal_sampler, uv).rgb;
         let tangent_normal = sampled * 2.0 - vec3<f32>(1.0);
-        let tbn = cotangent_frame(n, world_pos, uv);
+        let tbn = tbn_for(n, world_pos, uv, tangent);
         return normalize(tbn * tangent_normal);
     }
     return n;
@@ -1172,7 +1210,7 @@ fn fs_phong(in: VsOut) -> @location(0) vec4<f32> {
     if u.alpha_params.x == 1.0 && albedo.a < u.alpha_params.y {
         discard;
     }
-    var N = resolve_normal(in.uv, in.world_normal, in.world_pos);
+    var N = resolve_normal(in.uv, in.world_normal, in.world_pos, in.world_tangent);
     let V = normalize(u.camera_pos.xyz - in.world_pos);
     if dot(N, V) < 0.0 {
         N = -N;
@@ -1329,7 +1367,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     if u.alpha_params.x == 1.0 && albedo.a < u.alpha_params.y {
         discard;
     }
-    var N = resolve_normal(in.uv, in.world_normal, in.world_pos);
+    var N = resolve_normal(in.uv, in.world_normal, in.world_pos, in.world_tangent);
     let V = normalize(u.camera_pos.xyz - in.world_pos);
     if dot(N, V) < 0.0 {
         N = -N;
@@ -1394,16 +1432,12 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let g_v = n_dot_v / (n_dot_v * (1.0 - k) + k);
 
     // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E5: `KHR_materials_anisotropy` —
-    // tangent-space GGX stretch. Tangent basis RESOLVED: imported meshes carry no `TANGENT`
-    // attribute (`MeshVertex` is a fixed 48-byte ABI, growing it is its
-    // own vertex-layout project — see the design doc's section 5 Deferred), so
-    // this reuses `cotangent_frame` — the SAME screen-space-derivative
-    // tangent basis `resolve_normal`'s normal mapping already builds,
-    // just computed here unconditionally (uniform control flow: `dpdx`/
-    // `dpdy` need non-divergent branches, and a fragment shader function
-    // call at file scope is inherently non-divergent — same legality
-    // `resolve_normal`'s own per-draw-call-uniform branch relies on).
-    let tbn = cotangent_frame(N, in.world_pos, in.uv);
+    // tangent-space GGX stretch. Tangent basis: authored when the mesh
+    // carries TANGENT (BUG-wfxe), the same cotangent_frame fallback
+    // `resolve_normal` uses otherwise — anisotropy's T and the normal
+    // map's T must be the SAME frame or the stretch axis drifts off the
+    // mapped surface detail.
+    let tbn = tbn_for(N, in.world_pos, in.uv, in.world_tangent);
     let anisotropy = resolve_anisotropy(in.uv);
     let anisotropy_strength = clamp(anisotropy.x, 0.0, 1.0);
     let anisotropy_rotation = anisotropy.y;
@@ -1441,7 +1475,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let clearcoat_resolved = resolve_clearcoat(in.uv);
     let clearcoat = clearcoat_resolved.x;
     let clearcoat_roughness = clearcoat_resolved.y;
-    let Nc = resolve_clearcoat_normal(in.uv, N, in.world_pos);
+    let Nc = resolve_clearcoat_normal(in.uv, N, in.world_pos, in.world_tangent);
     let cc_n_dot_v = max(dot(Nc, V), 0.001);
     let cc_a = clearcoat_roughness * clearcoat_roughness;
     let cc_a2 = cc_a * cc_a;
@@ -1766,7 +1800,7 @@ fn fs_cel(in: VsOut) -> @location(0) vec4<f32> {
     if u.alpha_params.x == 1.0 && albedo.a < u.alpha_params.y {
         discard;
     }
-    var N = resolve_normal(in.uv, in.world_normal, in.world_pos);
+    var N = resolve_normal(in.uv, in.world_normal, in.world_pos, in.world_tangent);
     let V = normalize(u.camera_pos.xyz - in.world_pos);
     if dot(N, V) < 0.0 {
         N = -N;

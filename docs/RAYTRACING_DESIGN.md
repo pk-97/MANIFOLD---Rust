@@ -1,6 +1,6 @@
 # Ray Tracing — hybrid RT lighting for hero scenes
 
-**Status:** IN PROGRESS — Tier 1+2, the motion class, reflections R1/R2/R3, T3-8 multi-bounce GI, section 12 (Screen-space AO handoff), section 13 (Temporal denoiser rebuild) and section 14 (traced environment diffuse, ED-A/B/C) all landed; phase records in section 9.6 (Phases). OWED: Peter's look at multi-bounce, at the R2 constants, at the denoiser under fast camera motion, and at ED-A's env-diffuse look on a real hero scene; a `trace_ms` 2-vs-1 number from a heavier scene. Items 6/9, P5 export (D13) and P6 frame interp stay show-need-triggered; perf profiling deferred. · 2026-07-31 · K3 + Peter
+**Status:** IN PROGRESS — Tier 1+2, the motion class, reflections R1–R3, T3-8 multi-bounce GI, section 12 (screen-space AO), section 13 (temporal denoiser rebuild), section 14 (traced env diffuse) landed; phase records in section 9.6 (Phases). OWED: Peter's look at multi-bounce, R2 constants, the denoiser under fast camera motion, ED-A env-diffuse on a real hero scene; a `trace_ms` 2-vs-1 number from a heavier scene. Items 6/9, P5 export (D13), P6 frame interp stay show-need-triggered. · 2026-07-31 · K3 + Peter
 **Prerequisites:** none for P0. P1+ gated on P0 numbers and on RENDERING_INFRA_V2 section 2 (G-buffer/motion vectors) for temporal pieces.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 

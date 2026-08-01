@@ -5883,6 +5883,27 @@ mod tests {
         );
     }
 
+    /// BUG-wfxe: the scene kernel must naga-parse — a WGSL syntax break
+    /// here is otherwise only caught by GPU pipeline creation. Also pins
+    /// the tangent seam: the Vertex struct carries it, the vertex shader
+    //  exports it, and no stray 48-byte assumption survives in the source.
+    #[test]
+    fn render_scene_wgsl_parses_and_carries_tangent() {
+        let src = include_str!("shaders/render_scene.wgsl");
+        let module = naga::front::wgsl::parse_str(src).expect("render_scene.wgsl must naga-parse");
+        let mut validator = naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        );
+        if let Err(e) = validator.validate(&module) {
+            panic!("render_scene.wgsl validation failed:\n{}", e.emit_to_string(src));
+        }
+        assert!(
+            src.contains("tangent: vec4<f32>") && src.contains("fn tbn_for"),
+            "the authored-tangent path (BUG-wfxe) must be present in the kernel"
+        );
+    }
+
     /// IMPORT_FIDELITY_DESIGN.md D3/F-P2 negative gate: `texture_flags2`
     /// bits must be read ONLY inside their dedicated resolve functions
     /// (`resolve_mr`/`resolve_occlusion`/`resolve_emissive`, plus
@@ -6667,6 +6688,7 @@ mod gpu_tests {
             _pad1: 0.0,
             uv: [0.0, 0.0],
             _pad2: [0.0, 0.0],
+            tangent: [0.0; 4],
         };
         let quad_verts = [
             mk_vertex(-ext, -ext),
