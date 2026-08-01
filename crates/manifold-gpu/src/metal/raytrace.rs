@@ -2387,7 +2387,18 @@ kernel void accumulate_irradiance(
                     float4 sv_d4 = abs(cur_sv - sv_hist);
                     float4 sv_gate = max(4.0 * sv_sd,
                                          0.15 * max(sv_hist, cur_sv));
-                    bool sv_changed = any(sv_d4 > max(sv_gate, float4(0.05)));
+                    // BUG-tr5o / D-64 addendum: motion_band scales the WHOLE
+                    // band including the 0.05 floor — unlike the refl gate's
+                    // 1e-4 numerical floor, 0.05 here is a data floor and it
+                    // is what binds at a converged penumbra texel under
+                    // subpixel-per-frame camera motion: the true edge shift
+                    // lands above 0.05 while sigma is still small from the
+                    // last snap, so the gate re-trips every frame and the
+                    // mask pins at alpha 0.5 for the whole move (measured
+                    // 2026-08-01 via the sv_hold capture: orbit mean hold
+                    // ~0.01 vs static ~0.00001, 1000x). cam_motion = 0 on a
+                    // held camera, so the static path is byte-identical.
+                    bool sv_changed = any(sv_d4 > max(sv_gate, float4(0.05)) * motion_band);
                     // Snap-hold: the gate fires once, then the straddling
                     // moments inflate sigma and the gate goes dead — so a
                     // trip holds the n=2 snap for 4 more frames while the

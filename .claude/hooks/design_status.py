@@ -11,6 +11,7 @@ Usage:
     python3 .claude/hooks/design_status.py                    # print the board
     python3 .claude/hooks/design_status.py --raw              # one line per doc, untrimmed
     python3 .claude/hooks/design_status.py --lifecycle-check  # exit 1 on dead docs
+    python3 .claude/hooks/design_status.py --dead-refs        # exit 1 on dead .rs refs
 
 Lifecycle check: a SHIPPED design doc must either be cited by a live surface (CLAUDE.md,
 hooks, memory, or any non-shipped doc — one hop, no credit for citations from other
@@ -284,9 +285,75 @@ def lifecycle_check() -> int:
     return 0
 
 
+DEAD_REFS_BASELINE = Path(__file__).with_name("design_status_dead_refs_baseline.txt")
+
+
+def check_dead_refs() -> int:
+    """Check for references to .rs files in docs/*.md that don't exist under crates/.
+
+    Ratchet shape (same doctrine as the header-budget pins): the committed
+    baseline (design_status_dead_refs_baseline.txt) holds the backlog the
+    2026-08-01 census (BUG-14qc (docs drift sweep)) found — 441 refs, mostly
+    godfiles the decomposition campaign turned into directory modules. The
+    gate fails ONLY on a hit NOT in the baseline (new drift), and reports
+    baseline entries that no longer hit so the file burns down as docs are
+    fixed on-touch.
+    """
+    import re
+
+    # Pattern to match .rs file references in markdown.
+    # Matches: `foo.rs`, `path/to/foo.rs`, ../path/to/foo.rs, [text](path/to/foo.rs)
+    RS_PATTERN = re.compile(r'(?:`|\[.*?\]\()?([a-zA-Z0-9_/-]+\.rs)(?:`|\))?')
+
+    # One pass: every .rs basename under crates/. A hit means NO file with
+    # that basename exists anywhere — directory-module successors
+    # (param_card.rs -> param_card/) deliberately still count as drift.
+    existing = {p.name for p in (REPO / "crates").rglob("*.rs")}
+
+    all_missing: list[str] = []
+
+    for doc_path in sorted(DOCS.glob("*.md")):
+        # Skip archived docs
+        if "archive" in doc_path.parts:
+            continue
+
+        content = doc_path.read_text(errors="replace")
+        for ref in RS_PATTERN.findall(content):
+            if Path(ref).name not in existing:
+                all_missing.append(f"{doc_path.name}:{ref}")
+
+    baseline: set[str] = set()
+    if DEAD_REFS_BASELINE.exists():
+        baseline = {ln.strip() for ln in DEAD_REFS_BASELINE.read_text().splitlines()
+                    if ln.strip() and not ln.startswith("#")}
+
+    new_hits = sorted(set(all_missing) - baseline)
+    cleared = sorted(baseline - set(all_missing))
+
+    if cleared:
+        print(f"dead-refs ratchet: {len(cleared)} baseline entr(y/ies) no longer "
+              f"hit — delete them from {DEAD_REFS_BASELINE.name} (the ratchet only burns down):")
+        for entry in cleared:
+            print(f"  CLEARED: {entry}")
+
+    if new_hits:
+        for doc_ref in new_hits:
+            print(f"DEAD-REF: docs/{doc_ref}")
+        print(f"dead-refs: FAIL — {len(new_hits)} NEW missing .rs reference(s) in "
+              f"docs/*.md (baseline holds {len(baseline & set(all_missing))} known; "
+              f"fix the doc or, for intentional historical prose, move the doc to archive/)")
+        return 1
+
+    print(f"dead-refs: OK — no new missing .rs references "
+          f"({len(baseline & set(all_missing))} baselined backlog, {len(cleared)} cleared)")
+    return 0
+
+
 def main() -> int:
     if "--lifecycle-check" in sys.argv:
         return lifecycle_check()
+    if "--dead-refs" in sys.argv:
+        return check_dead_refs()
     compact = "--compact" in sys.argv
     board = build_board(raw="--raw" in sys.argv, compact=compact)
     if "--raw" not in sys.argv and not compact:

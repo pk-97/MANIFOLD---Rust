@@ -25,6 +25,17 @@ pub struct FrameTimer {
     /// Number of ticks missed this frame (dt exceeded 2× target = frame drop).
     missed_ticks: u64,
 
+    /// BUG-jbxt (rt-capture frame clock): when true, `consume_tick` returns
+    /// exactly the target frame duration and `realtime_since_start`
+    /// advances by the same fixed step — headless repro harnesses render
+    /// slower than realtime, and wall-clock dt compresses beat-driven
+    /// drivers (a 32-beat sawtooth into ~13 frames at debug res), making
+    /// driver-based motion repros unusable. Wall-clock bookkeeping
+    /// (FPS stats, missed ticks, deadlines) stays wall-honest.
+    frame_clocked: bool,
+    /// Fixed-step engine-time accumulator, read only when `frame_clocked`.
+    frame_clock_seconds: f64,
+
     /// Mach timebase for converting nanoseconds ↔ mach absolute time units.
     /// Cached at construction — the timebase never changes at runtime.
     #[cfg(target_os = "macos")]
@@ -93,6 +104,8 @@ impl FrameTimer {
             smoothed_dt: initial_dt,
             current_fps: target_fps,
             missed_ticks: 0,
+            frame_clocked: false,
+            frame_clock_seconds: 0.0,
             #[cfg(target_os = "macos")]
             mach_timebase: MachTimebase::query(),
         }
@@ -157,17 +170,25 @@ impl FrameTimer {
     /// Consume the tick, returning delta time in seconds.
     pub fn consume_tick(&mut self) -> f64 {
         let now = Instant::now();
-        let dt = (now - self.last_tick_time).as_secs_f64();
+        let wall_dt = (now - self.last_tick_time).as_secs_f64();
         self.last_tick_time = now;
+        let dt = if self.frame_clocked {
+            self.target_frame_duration.as_secs_f64()
+        } else {
+            wall_dt
+        };
         self.last_dt = dt;
-        // Detect missed ticks: if dt exceeds 2× target, we dropped frames
+        self.frame_clock_seconds += dt;
+        // Detect missed ticks: if dt exceeds 2× target, we dropped frames.
+        // Wall dt even when frame-clocked — a slow render IS a dropped
+        // frame, the engine just doesn't feel it.
         let target_secs = self.target_frame_duration.as_secs_f64();
         self.missed_ticks = if target_secs > 0.0 {
-            ((dt / target_secs).floor() as u64).saturating_sub(1)
+            ((wall_dt / target_secs).floor() as u64).saturating_sub(1)
         } else {
             0
         };
-        self.update_fps(dt);
+        self.update_fps(wall_dt);
         dt
     }
 
@@ -179,7 +200,18 @@ impl FrameTimer {
 
     /// Seconds since application start.
     pub fn realtime_since_start(&self) -> f64 {
-        self.app_start_time.elapsed().as_secs_f64()
+        if self.frame_clocked {
+            self.frame_clock_seconds
+        } else {
+            self.app_start_time.elapsed().as_secs_f64()
+        }
+    }
+
+    /// BUG-jbxt: pin engine time to the frame count (see `frame_clocked`).
+    /// Only the perf-soak headless harnesses (rt-capture) call this.
+    #[cfg(any(feature = "perf-soak", test))]
+    pub fn set_frame_clocked(&mut self, on: bool) {
+        self.frame_clocked = on;
     }
 
     /// Last frame's delta time in seconds.
@@ -273,6 +305,19 @@ mod tests {
             elapsed < Duration::from_millis(30),
             "Returned too late: {elapsed:?}"
         );
+    }
+
+    #[test]
+    fn frame_clocked_returns_fixed_dt() {
+        let mut timer = FrameTimer::new(60.0);
+        timer.set_frame_clocked(true);
+        thread::sleep(Duration::from_millis(50)); // slower than realtime
+        let dt = timer.consume_tick();
+        assert!((dt - 1.0 / 60.0).abs() < 1e-9, "dt={dt}");
+        let dt2 = timer.consume_tick(); // no sleep — still fixed
+        assert!((dt2 - 1.0 / 60.0).abs() < 1e-9, "dt2={dt2}");
+        let rt = timer.realtime_since_start();
+        assert!((rt - 2.0 / 60.0).abs() < 1e-9, "realtime={rt}");
     }
 
     #[test]

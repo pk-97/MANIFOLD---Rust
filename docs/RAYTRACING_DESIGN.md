@@ -1038,6 +1038,26 @@ screen-door grid largely resolves, static and slow-drag captures clean. Residual
 wholesale MetalFX rejection at ~300 px/frame still falls back to raw half-res —
 TAA-intrinsic; a soft-upsample fallback is Apple's side of the fence.
 
+**D-64 addendum (2026-08-01, sv gate learns to move too, k3 lead):** recorded
+under BUG-tr5o (RT motion leg for rt_noise_gate). D-64's "widens every
+data-driven gate band" overclaimed — `motion_band` reached only the refl gate;
+the irr and sv gates shipped unscaled. The sv hole was live: under a 0.02
+rad/frame orbit the sv change gate re-fired every frame on converged
+penumbra-edge texels (subpixel true edge shift > the 0.05 data floor while
+sigma was still small from the last snap), pinning the mask at alpha 0.5 for
+the whole move. Measured via a new `sv_hold` rt-capture channel (the snap-hold
+counter texture, the direct observable): orbit mean hold 0.006–0.014, never
+decaying, vs static 0.000006–0.00001 (1000x). Whole-texture sd and per-texel
+time-series both failed as oracles first (scene-gradient domination; 75+
+px/frame edge sweep drowns noise separation at any capture spacing). Fix:
+`motion_band` now scales the WHOLE sv band including the floor — unlike the
+refl gate's 1e-4 numerical floor, sv's 0.05 is a data floor and it is what
+binds. Static path byte-identical (band = 1 at cam_motion = 0). After: orbit
+hold 0.0005–0.003 (5-10x cut; the residual is genuine edge-sweep change,
+which SHOULD snap), mask still tracks the sweep. The irr gate stays unscaled
+by measurement — D-64's composite was clean; its moments self-widen under
+motion.
+
 ## 14. Traced environment diffuse — env joins the GI gather (BUG-yq1d (traced AO never darkens env diffuse); SUPERSEDES MB3; LANDED 2026-07-31 — ED-A (kernel/substitution/constants/clamp + PBR-only consumers ED3a + void-texel fallback, Peter's metal-fixture sign-off), ED-B (sun-disc firefly fixture, gain 32 by measurement, furnace is the noise gate's correctness leg — closes BUG-ipad (noise gate certifies frozen noise); stability ceilings re-baselined), ED-C (white-enclosure convergence: reference irradiance 0.954 vs MC 0.934, ED4's constants certified — closes BUG-qt32 (GI energy constants look unphysical)))
 
 The furnace oracle (lane/rt-furnace-oracle) measured what MB3's "env is never gathered"
