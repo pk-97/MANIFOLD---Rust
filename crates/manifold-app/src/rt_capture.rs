@@ -18,6 +18,9 @@
 //! Usage:
 //!   cargo run --features perf-soak --bin manifold -- manifold rt-capture <project.manifold>
 //!   cargo run ... manifold rt-capture --paused <project>   # Play 60 → Pause 300
+//!   --frame-clock: engine time = 1/fps per rendered frame, not wall clock
+//!                  (BUG-jbxt — driver-based motion repros under slow renders)
+//!   --set-at N param=value: one-shot param snap at frame N (repeatable)
 //!
 //! MANIFOLD_RT_PROBE is NOT required — the subcommand arms the capture
 //! flags directly.
@@ -288,6 +291,24 @@ pub fn run(args: &[String]) -> ! {
         .filter_map(|w| w[1].split_once('=').map(|(k, v)| (k.to_string(), v.parse::<f32>().ok())))
         .filter_map(|(k, v)| v.map(|v| (k, v)))
         .collect();
+    // `--set-at N param=value` (repeatable): one-shot MutateProject write at
+    // frame N — deterministic param snaps (sawtooth wrap, fast user drags)
+    // that --animate's per-frame ramp and the boolean-only --live-flip
+    // can't express (BUG-jbxt).
+    let set_ats: Vec<(u32, String, f32)> = args
+        .windows(3)
+        .filter(|w| w[0] == "--set-at")
+        .filter_map(|w| {
+            let frame = w[1].parse::<u32>().ok()?;
+            let (k, v) = w[2].split_once('=')?;
+            Some((frame, k.to_string(), v.parse::<f32>().ok()?))
+        })
+        .collect();
+    // `--frame-clock` (BUG-jbxt): engine time advances exactly 1/fps per
+    // rendered frame instead of wall clock — without it a harness that
+    // renders slower than realtime compresses beat-driven drivers (a
+    // 32-beat sawtooth into ~13 frames at debug res).
+    let frame_clock = args.iter().any(|a| a == "--frame-clock");
     // `--animate <param> <delta>`: per-frame MutateProject write of
     // base + frame*delta — the same storage-level write a modulator makes.
     let animate: Option<(String, f32)> = args
@@ -360,6 +381,11 @@ pub fn run(args: &[String]) -> ! {
         let (layer_idx, resolved_id) = resolve_param_id(&real_project, param_id);
         resolved_sets.push((layer_idx, resolved_id, *value));
     }
+    let mut resolved_set_ats: Vec<(u32, usize, String, f32)> = Vec::new();
+    for (frame, param_id, value) in &set_ats {
+        let (layer_idx, resolved_id) = resolve_param_id(&real_project, param_id);
+        resolved_set_ats.push((*frame, layer_idx, resolved_id, *value));
+    }
 
     let (resolved_flip_layer, resolved_flip_param) = if let Some(ref flip_id) = live_flip_param {
         resolve_param_id(&real_project, flip_id)
@@ -370,6 +396,7 @@ pub fn run(args: &[String]) -> ! {
     let empty = manifold_core::project::Project::default();
     let mut ct = headless_content_thread(empty, w, h);
     ct.timer.set_target_fps(fr);
+    ct.timer.set_frame_clocked(frame_clock);
     crate::content_thread::apply_realtime_thread_policy(fr);
     ct.handle_command(ContentCommand::LoadProject(Box::new(real_project)));
 
@@ -419,6 +446,19 @@ pub fn run(args: &[String]) -> ! {
     let mut live_flip_sent = false;
 
     for frame in 0..rotation_frames {
+        for (at, layer_idx, param, value) in &resolved_set_ats {
+            if *at == frame {
+                let (layer_idx, param, value) = (*layer_idx, param.clone(), *value);
+                ct.handle_command(ContentCommand::MutateProject(Box::new(move |project| {
+                    if let Some(g) = project.timeline.layers.get_mut(layer_idx).and_then(|l| l.gen_params_mut()) {
+                        let old = g.get_param(&param);
+                        g.set_param(&param, value);
+                        let new = g.get_param(&param);
+                        eprintln!("[rt-capture] --set-at f{frame}: layer[{layer_idx}] param '{param}' {old:.2} → {new:.2}");
+                    }
+                })));
+            }
+        }
         if disable_driver_at == Some(frame) {
             ct.handle_command(ContentCommand::MutateProject(Box::new(move |project| {
                 if let Some(g) = project.timeline.layers[0].gen_params_mut()
