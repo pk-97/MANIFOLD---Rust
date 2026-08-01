@@ -200,7 +200,7 @@ mod gpu_tests {
     use super::*;
 
     fn grid_vertex(pos: [f32; 3], uv: [f32; 2]) -> MeshVertex {
-        MeshVertex { position: pos, _pad0: 0.0, normal: [0.0; 3], _pad1: 0.0, uv, _pad2: [0.0; 2] }
+        MeshVertex { position: pos, _pad0: 0.0, normal: [0.0; 3], _pad1: 0.0, uv, _pad2: [0.0; 2], tangent: [0.0; 4] }
     }
 
     fn dispatch_tri(
