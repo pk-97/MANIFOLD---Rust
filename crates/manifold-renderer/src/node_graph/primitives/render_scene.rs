@@ -954,6 +954,15 @@ pub struct RenderScene {
     rt_mask_full_b: Option<manifold_gpu::GpuTexture>,
     rt_irr_full_b: Option<manifold_gpu::GpuTexture>,
     rt_normal_full_b: Option<manifold_gpu::GpuTexture>,
+    /// RT native terms: which RT terms should trace at native resolution
+    /// instead of half-res. Parsed from MANIFOLD_RT_NATIVE_TERMS env var
+    /// (comma-separated subset of shadow,ao,gi,reflection; empty/absent =
+    /// half-res behavior). Shadow+AO share the rt_mask_half dispatch, so
+    /// listing either one nativizes the shared dispatch.
+    rt_native_shadow: bool,
+    rt_native_ao: bool,
+    rt_native_gi: bool,
+    rt_native_reflection: bool,
     /// Dedicated CPU-mapped upload buffer for `AtrousParams` (tiny: two
     /// `u32`s) — separate from `rt_params_buffer`/
     /// `rt_accumulate_params_buffer` for the same non-clobbering reason
@@ -1197,6 +1206,10 @@ impl RenderScene {
             rt_mask_full_b: None,
             rt_irr_full_b: None,
             rt_normal_full_b: None,
+            rt_native_shadow: false,
+            rt_native_ao: false,
+            rt_native_gi: false,
+            rt_native_reflection: false,
             rt_atrous_params_buffer: None,
             rt_lighting_key: None,
             rt_irr_width: 0,
@@ -1215,6 +1228,22 @@ impl RenderScene {
             object_port_names: Vec::new(),
             light_port_names: Vec::new(),
         };
+
+        // Parse MANIFOLD_RT_NATIVE_TERMS env var once at init
+        let native_terms = std::env::var("MANIFOLD_RT_NATIVE_TERMS")
+            .unwrap_or_default()
+            .to_lowercase();
+        let terms: std::collections::HashSet<&str> = native_terms
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        s.rt_native_shadow = terms.contains("shadow");
+        s.rt_native_ao = terms.contains("ao");
+        s.rt_native_gi = terms.contains("gi");
+        s.rt_native_reflection = terms.contains("reflection");
+
         s.rebuild(DEFAULT_OBJECTS, DEFAULT_LIGHTS);
         s
     }
@@ -1874,8 +1903,11 @@ impl RenderScene {
         if self.rt_mask_width == width && self.rt_mask_height == height && self.rt_mask_full.is_some() {
             return;
         }
-        let half_w = width.div_ceil(2).max(1);
-        let half_h = height.div_ceil(2).max(1);
+
+        // Shadow+AO share a dispatch; if either is native, run at full res
+        let shadow_or_ao_native = self.rt_native_shadow || self.rt_native_ao;
+        let trace_w = if shadow_or_ao_native { width } else { width.div_ceil(2).max(1) };
+        let trace_h = if shadow_or_ao_native { height } else { height.div_ceil(2).max(1) };
         let make = |w: u32, h: u32, label: &'static str| {
             device.create_texture(&manifold_gpu::GpuTextureDesc {
                 width: w,
@@ -1890,7 +1922,7 @@ impl RenderScene {
                 mip_levels: 1,
             })
         };
-        self.rt_mask_half = Some(make(half_w, half_h, "node.render_scene rt_mask_half (RT-D3/RT-P2 vis+ao)"));
+        self.rt_mask_half = Some(make(trace_w, trace_h, "node.render_scene rt_mask_half (RT-D3/RT-P2 vis+ao)"));
         self.rt_mask_full = Some(make(width, height, "node.render_scene rt_mask_full (RT-D3/RT-P2 vis+ao)"));
         // RT-T1-D: à-trous ping-pong scratch — see the field's doc comment.
         self.rt_mask_full_b = Some(make(width, height, "node.render_scene rt_mask_full_b (RT-T1-D atrous)"));
@@ -1910,6 +1942,7 @@ impl RenderScene {
         if self.rt_irr_width == width && self.rt_irr_height == height && self.rt_irr_history[0].is_some() {
             return false;
         }
+
         let half_w = width.div_ceil(2).max(1);
         let half_h = height.div_ceil(2).max(1);
         let make = |w: u32, h: u32, format: manifold_gpu::GpuTextureFormat, label: &'static str| {
@@ -4563,8 +4596,14 @@ impl EffectNode for RenderScene {
                     // camera never hit this).
                     return;
                 };
-                let half_w = width.div_ceil(2).max(1);
-                let half_h = height.div_ceil(2).max(1);
+
+                // Trace resolution is the max of what any active term needs.
+                // Shadow+AO are coupled (share rt_mask_half dispatch). GI and reflection
+                // are separate but currently share the same trace_size in ShadowRayParams.
+                // Use native res if ANY term is native, otherwise half-res.
+                let any_native = self.rt_native_shadow || self.rt_native_ao || self.rt_native_gi || self.rt_native_reflection;
+                let half_w = if any_native { width } else { width.div_ceil(2).max(1) };
+                let half_h = if any_native { height } else { height.div_ceil(2).max(1) };
                 // ED2 (RAYTRACING_DESIGN.md section 14.2): the flat ambient no
                 // longer enters the kernel (`ShadowRayParams` has no
                 // `ambient_color`); each material's Ambient knob is applied
