@@ -4,14 +4,14 @@
 
 ## 0 — K3 lead-in review queue (PENDING, written 2026-07-23 by the outgoing Fable session)
 
-Peter is switching the roster: **Kimi K3 = top session / lead, GLM5.2 = middle dispatcher seat, DeepSeek V4 Flash = lane workers.** The seat *structure* below is empirically proven and carries over unchanged; what is unproven is this roster in those seats. K3 reviews the harness and this doc before running the first wave, and resolves each item here — then deletes it from section 0 and folds the answer into the body.
+Peter is switching the roster: **Kimi K3 = top session / lead, Flash Strong (DeepSeek V4 Pro, `opus` slot) = escalation lanes, Flash Weak (DeepSeek V4 Flash, `haiku` slot) = lane workers, GLM-4.7 = permission classifier only (never lanes; GLM quota is reserved for it, Peter 2026-08-02 — GLM-5.2 holds no seat).** The seat *structure* below is empirically proven and carries over unchanged; what is unproven is this roster in those seats. K3 reviews the harness and this doc before running the first wave, and resolves each item here — then deletes it from section 0 and folds the answer into the body.
 
 **The seat mapping (structural — the body text names whichever model held the seat when the observation was made):**
 
 | Seat | Was (through 2026-07-23) | Is (from 2026-07-24) |
 |---|---|---|
 | Lead / top session | Fable | **Kimi K3** |
-| Dispatcher / middle orchestrator | Opus | **DeepSeek V4 Pro** (native `opus` lane, lane label `pro-*` — swapped off GLM-5.2 2026-08-02, Peter: GLM weekly quota is reserved for the 4.7 classifier) |
+| Dispatcher / middle orchestrator | Opus | **Flash Strong (DeepSeek V4 Pro)** (native `opus` lane, lane label `pro-*` — swapped off GLM-5.2 2026-08-02, Peter: GLM weekly quota is reserved for the 4.7 classifier) |
 | Lane executor | Sonnet 5 / K2.7 | **DeepSeek V4 Flash** (native `haiku` lane per the model slot map) |
 | Consult peer | Kimi K3 | **K3 fork, read-and-discuss only (R4 resolved 2026-07-27)** |
 
@@ -50,9 +50,9 @@ Everything below is proven doctrine under the old roster. Read it as seat descri
 | Agent-tool `model:` | Actual model | Tier |
 |---|---|---|
 | `"fable"` | Kimi K3 | judgment lane (rare — lead-tier work the lead delegates whole) |
-| `"opus"` | DeepSeek V4 Pro | strong escalation lane for multi-stage waves (off GLM-5.2 2026-08-02 — GLM quota reserved for the classifier) |
+| `"opus"` | DeepSeek V4 Pro | **Flash Strong** — escalation lane when Flash Weak fails or the lane work needs stronger judgment within a decided brief (off GLM-5.2 2026-08-02 — GLM quota reserved for the classifier). Lane label `pro-*` |
 | `"sonnet"` | GLM-4.7 | **classifier-dedicated — never spawn lanes on this slot.** The harness auto-mode permission classifier resolves off it (PERMISSION_BOUNDARY.md section 2 (Which model runs it)). Repointed Flash→GLM-4.7 2026-07-27 (Peter: DeepSeek kept dropping out on classifier approvals; classifier fails closed, so slot reliability outranks speed). GLM-4.7 holds NO agent roles — mid lane retired, dispatcher rotation removed |
-| `"haiku"` | DeepSeek V4 Flash | mechanical executor — the bulk tier |
+| `"haiku"` | DeepSeek V4 Flash | **Flash Weak** — mechanical executor, the bulk tier. Lane label `flash-*` |
 
 Quota caution: GLM weekly quota is reserved for the 4.7 classifier (Peter 2026-08-02) — never spawn GLM-5.2 lanes while that holds; the `opus` slot serves DeepSeek V4 Pro instead.
 
