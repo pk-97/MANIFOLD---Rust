@@ -17,211 +17,211 @@
       "lighting": "sun-only",
       "config": "split-baseline",
       "native_terms": "",
+      "median_ms": 27.39,
+      "p95_ms": 27.79,
+      "n": 120
+    },
+    {
+      "fixture": "RtMotionHelmet",
+      "lighting": "sun-only",
+      "config": "shadow",
+      "native_terms": "shadow",
+      "median_ms": 40.14,
+      "p95_ms": 40.65,
+      "n": 120,
+      "delta_vs_split_baseline_ms": 12.75,
+      "fits_41_6ms": true
+    },
+    {
+      "fixture": "RtMotionHelmet",
+      "lighting": "sun-only",
+      "config": "ao",
+      "native_terms": "ao",
+      "median_ms": 75.61,
+      "p95_ms": 79.26,
+      "n": 120,
+      "delta_vs_split_baseline_ms": 48.22,
+      "fits_41_6ms": false
+    },
+    {
+      "fixture": "RtMotionHelmet",
+      "lighting": "sun-only",
+      "config": "gi",
+      "native_terms": "gi",
+      "median_ms": 75.38,
+      "p95_ms": 78.87,
+      "n": 120,
+      "delta_vs_split_baseline_ms": 47.99,
+      "fits_41_6ms": false
+    },
+    {
+      "fixture": "RtMotionHelmet",
+      "lighting": "sun-only",
+      "config": "reflection",
+      "native_terms": "reflection",
+      "median_ms": 75.49,
+      "p95_ms": 79.22,
+      "n": 120,
+      "delta_vs_split_baseline_ms": 48.1,
+      "fits_41_6ms": false
+    },
+    {
+      "fixture": "RtMotionHelmet",
+      "lighting": "sun-only",
+      "config": "all-native",
+      "native_terms": "shadow,ao,gi,reflection",
+      "median_ms": 61.53,
+      "p95_ms": 62.24,
+      "n": 120,
+      "delta_vs_split_baseline_ms": 34.14,
+      "fits_41_6ms": false
+    },
+    {
+      "fixture": "RtMotionHelmet",
+      "lighting": "env-only",
+      "config": "split-baseline",
+      "native_terms": "",
+      "median_ms": 27.51,
+      "p95_ms": 27.84,
+      "n": 120
+    },
+    {
+      "fixture": "RtMotionHelmet",
+      "lighting": "env-only",
+      "config": "shadow",
+      "native_terms": "shadow",
+      "median_ms": 40.15,
+      "p95_ms": 40.68,
+      "n": 120,
+      "delta_vs_split_baseline_ms": 12.64,
+      "fits_41_6ms": true
+    },
+    {
+      "fixture": "RtMotionHelmet",
+      "lighting": "env-only",
+      "config": "ao",
+      "native_terms": "ao",
+      "median_ms": 75.5,
+      "p95_ms": 79.29,
+      "n": 120,
+      "delta_vs_split_baseline_ms": 47.99,
+      "fits_41_6ms": false
+    },
+    {
+      "fixture": "RtMotionHelmet",
+      "lighting": "env-only",
+      "config": "gi",
+      "native_terms": "gi",
+      "median_ms": 75.42,
+      "p95_ms": 79.13,
+      "n": 120,
+      "delta_vs_split_baseline_ms": 47.91,
+      "fits_41_6ms": false
+    },
+    {
+      "fixture": "RtMotionHelmet",
+      "lighting": "env-only",
+      "config": "reflection",
+      "native_terms": "reflection",
+      "median_ms": 75.59,
+      "p95_ms": 79.21,
+      "n": 120,
+      "delta_vs_split_baseline_ms": 48.08,
+      "fits_41_6ms": false
+    },
+    {
+      "fixture": "RtMotionHelmet",
+      "lighting": "env-only",
+      "config": "all-native",
+      "native_terms": "shadow,ao,gi,reflection",
+      "median_ms": 61.54,
+      "p95_ms": 62.28,
+      "n": 120,
+      "delta_vs_split_baseline_ms": 34.03,
+      "fits_41_6ms": false
+    },
+    {
+      "fixture": "RtApricot",
+      "lighting": "sun-only",
+      "config": "split-baseline",
+      "native_terms": "",
+      "median_ms": 27.5,
+      "p95_ms": 27.99,
+      "n": 120
+    },
+    {
+      "fixture": "RtApricot",
+      "lighting": "sun-only",
+      "config": "shadow",
+      "native_terms": "shadow",
+      "median_ms": 40.43,
+      "p95_ms": 42.89,
+      "n": 120,
+      "delta_vs_split_baseline_ms": 12.93,
+      "fits_41_6ms": true
+    },
+    {
+      "fixture": "RtApricot",
+      "lighting": "sun-only",
+      "config": "ao",
+      "native_terms": "ao",
+      "median_ms": 75.63,
+      "p95_ms": 79.46,
+      "n": 120,
+      "delta_vs_split_baseline_ms": 48.13,
+      "fits_41_6ms": false
+    },
+    {
+      "fixture": "RtApricot",
+      "lighting": "sun-only",
+      "config": "gi",
+      "native_terms": "gi",
+      "median_ms": 75.69,
+      "p95_ms": 79.1,
+      "n": 120,
+      "delta_vs_split_baseline_ms": 48.19,
+      "fits_41_6ms": false
+    },
+    {
+      "fixture": "RtApricot",
+      "lighting": "sun-only",
+      "config": "reflection",
+      "native_terms": "reflection",
+      "median_ms": 75.66,
+      "p95_ms": 79.89,
+      "n": 120,
+      "delta_vs_split_baseline_ms": 48.16,
+      "fits_41_6ms": false
+    },
+    {
+      "fixture": "RtApricot",
+      "lighting": "sun-only",
+      "config": "all-native",
+      "native_terms": "shadow,ao,gi,reflection",
+      "median_ms": 61.7,
+      "p95_ms": 62.46,
+      "n": 120,
+      "delta_vs_split_baseline_ms": 34.2,
+      "fits_41_6ms": false
+    },
+    {
+      "fixture": "RtApricot",
+      "lighting": "env-only",
+      "config": "split-baseline",
+      "native_terms": "",
+      "median_ms": 27.51,
+      "p95_ms": 28.05,
+      "n": 120
+    },
+    {
+      "fixture": "RtApricot",
+      "lighting": "env-only",
+      "config": "shadow",
+      "native_terms": "shadow",
       "median_ms": 40.3,
-      "p95_ms": 41.47,
-      "n": 120
-    },
-    {
-      "fixture": "RtMotionHelmet",
-      "lighting": "sun-only",
-      "config": "shadow",
-      "native_terms": "shadow",
-      "median_ms": 40.82,
-      "p95_ms": 41.67,
+      "p95_ms": 40.88,
       "n": 120,
-      "delta_vs_split_baseline_ms": 0.52,
-      "fits_41_6ms": true
-    },
-    {
-      "fixture": "RtMotionHelmet",
-      "lighting": "sun-only",
-      "config": "ao",
-      "native_terms": "ao",
-      "median_ms": 77.06,
-      "p95_ms": 80.43,
-      "n": 120,
-      "delta_vs_split_baseline_ms": 36.77,
-      "fits_41_6ms": false
-    },
-    {
-      "fixture": "RtMotionHelmet",
-      "lighting": "sun-only",
-      "config": "gi",
-      "native_terms": "gi",
-      "median_ms": 77.42,
-      "p95_ms": 82.53,
-      "n": 120,
-      "delta_vs_split_baseline_ms": 37.12,
-      "fits_41_6ms": false
-    },
-    {
-      "fixture": "RtMotionHelmet",
-      "lighting": "sun-only",
-      "config": "reflection",
-      "native_terms": "reflection",
-      "median_ms": 76.52,
-      "p95_ms": 79.83,
-      "n": 120,
-      "delta_vs_split_baseline_ms": 36.22,
-      "fits_41_6ms": false
-    },
-    {
-      "fixture": "RtMotionHelmet",
-      "lighting": "sun-only",
-      "config": "all-native",
-      "native_terms": "shadow,ao,gi,reflection",
-      "median_ms": 109.49,
-      "p95_ms": 120.02,
-      "n": 120,
-      "delta_vs_split_baseline_ms": 69.19,
-      "fits_41_6ms": false
-    },
-    {
-      "fixture": "RtMotionHelmet",
-      "lighting": "env-only",
-      "config": "split-baseline",
-      "native_terms": "",
-      "median_ms": 40.3,
-      "p95_ms": 44.76,
-      "n": 120
-    },
-    {
-      "fixture": "RtMotionHelmet",
-      "lighting": "env-only",
-      "config": "shadow",
-      "native_terms": "shadow",
-      "median_ms": 40.56,
-      "p95_ms": 41.26,
-      "n": 120,
-      "delta_vs_split_baseline_ms": 0.27,
-      "fits_41_6ms": true
-    },
-    {
-      "fixture": "RtMotionHelmet",
-      "lighting": "env-only",
-      "config": "ao",
-      "native_terms": "ao",
-      "median_ms": 76.3,
-      "p95_ms": 79.67,
-      "n": 120,
-      "delta_vs_split_baseline_ms": 36.0,
-      "fits_41_6ms": false
-    },
-    {
-      "fixture": "RtMotionHelmet",
-      "lighting": "env-only",
-      "config": "gi",
-      "native_terms": "gi",
-      "median_ms": 76.37,
-      "p95_ms": 79.45,
-      "n": 120,
-      "delta_vs_split_baseline_ms": 36.08,
-      "fits_41_6ms": false
-    },
-    {
-      "fixture": "RtMotionHelmet",
-      "lighting": "env-only",
-      "config": "reflection",
-      "native_terms": "reflection",
-      "median_ms": 76.47,
-      "p95_ms": 80.15,
-      "n": 120,
-      "delta_vs_split_baseline_ms": 36.17,
-      "fits_41_6ms": false
-    },
-    {
-      "fixture": "RtMotionHelmet",
-      "lighting": "env-only",
-      "config": "all-native",
-      "native_terms": "shadow,ao,gi,reflection",
-      "median_ms": 111.03,
-      "p95_ms": 121.92,
-      "n": 120,
-      "delta_vs_split_baseline_ms": 70.74,
-      "fits_41_6ms": false
-    },
-    {
-      "fixture": "RtApricot",
-      "lighting": "sun-only",
-      "config": "split-baseline",
-      "native_terms": "",
-      "median_ms": 40.45,
-      "p95_ms": 41.43,
-      "n": 120
-    },
-    {
-      "fixture": "RtApricot",
-      "lighting": "sun-only",
-      "config": "shadow",
-      "native_terms": "shadow",
-      "median_ms": 40.74,
-      "p95_ms": 41.52,
-      "n": 120,
-      "delta_vs_split_baseline_ms": 0.3,
-      "fits_41_6ms": true
-    },
-    {
-      "fixture": "RtApricot",
-      "lighting": "sun-only",
-      "config": "ao",
-      "native_terms": "ao",
-      "median_ms": 76.53,
-      "p95_ms": 79.75,
-      "n": 120,
-      "delta_vs_split_baseline_ms": 36.09,
-      "fits_41_6ms": false
-    },
-    {
-      "fixture": "RtApricot",
-      "lighting": "sun-only",
-      "config": "gi",
-      "native_terms": "gi",
-      "median_ms": 76.41,
-      "p95_ms": 79.64,
-      "n": 120,
-      "delta_vs_split_baseline_ms": 35.97,
-      "fits_41_6ms": false
-    },
-    {
-      "fixture": "RtApricot",
-      "lighting": "sun-only",
-      "config": "reflection",
-      "native_terms": "reflection",
-      "median_ms": 76.38,
-      "p95_ms": 79.8,
-      "n": 120,
-      "delta_vs_split_baseline_ms": 35.93,
-      "fits_41_6ms": false
-    },
-    {
-      "fixture": "RtApricot",
-      "lighting": "sun-only",
-      "config": "all-native",
-      "native_terms": "shadow,ao,gi,reflection",
-      "median_ms": 109.76,
-      "p95_ms": 120.54,
-      "n": 120,
-      "delta_vs_split_baseline_ms": 69.31,
-      "fits_41_6ms": false
-    },
-    {
-      "fixture": "RtApricot",
-      "lighting": "env-only",
-      "config": "split-baseline",
-      "native_terms": "",
-      "median_ms": 40.36,
-      "p95_ms": 41.13,
-      "n": 120
-    },
-    {
-      "fixture": "RtApricot",
-      "lighting": "env-only",
-      "config": "shadow",
-      "native_terms": "shadow",
-      "median_ms": 40.69,
-      "p95_ms": 41.99,
-      "n": 120,
-      "delta_vs_split_baseline_ms": 0.33,
+      "delta_vs_split_baseline_ms": 12.79,
       "fits_41_6ms": true
     },
     {
@@ -229,10 +229,10 @@
       "lighting": "env-only",
       "config": "ao",
       "native_terms": "ao",
-      "median_ms": 76.39,
-      "p95_ms": 79.96,
+      "median_ms": 75.54,
+      "p95_ms": 86.67,
       "n": 120,
-      "delta_vs_split_baseline_ms": 36.03,
+      "delta_vs_split_baseline_ms": 48.03,
       "fits_41_6ms": false
     },
     {
@@ -240,10 +240,10 @@
       "lighting": "env-only",
       "config": "gi",
       "native_terms": "gi",
-      "median_ms": 76.61,
-      "p95_ms": 80.3,
+      "median_ms": 75.86,
+      "p95_ms": 79.72,
       "n": 120,
-      "delta_vs_split_baseline_ms": 36.25,
+      "delta_vs_split_baseline_ms": 48.35,
       "fits_41_6ms": false
     },
     {
@@ -251,10 +251,10 @@
       "lighting": "env-only",
       "config": "reflection",
       "native_terms": "reflection",
-      "median_ms": 77.71,
-      "p95_ms": 82.17,
+      "median_ms": 75.53,
+      "p95_ms": 79.18,
       "n": 120,
-      "delta_vs_split_baseline_ms": 37.35,
+      "delta_vs_split_baseline_ms": 48.02,
       "fits_41_6ms": false
     },
     {
@@ -262,10 +262,10 @@
       "lighting": "env-only",
       "config": "all-native",
       "native_terms": "shadow,ao,gi,reflection",
-      "median_ms": 109.64,
-      "p95_ms": 122.56,
+      "median_ms": 61.7,
+      "p95_ms": 62.68,
       "n": 120,
-      "delta_vs_split_baseline_ms": 69.28,
+      "delta_vs_split_baseline_ms": 34.19,
       "fits_41_6ms": false
     }
   ],
@@ -274,201 +274,201 @@
       "fixture": "RtMotionHelmet",
       "lighting": "sun-only",
       "config": "shadow",
-      "split_baseline_median_ms": 40.3,
-      "term_native_median_ms": 40.82,
-      "delta_ms": 0.52,
+      "split_baseline_median_ms": 27.39,
+      "term_native_median_ms": 40.14,
+      "delta_ms": 12.75,
       "fits_41_6ms": true,
-      "verdict": "FITS budget (+0.52ms)"
+      "verdict": "FITS budget (+12.75ms)"
     },
     {
       "fixture": "RtMotionHelmet",
       "lighting": "sun-only",
       "config": "ao",
-      "split_baseline_median_ms": 40.3,
-      "term_native_median_ms": 77.06,
-      "delta_ms": 36.77,
+      "split_baseline_median_ms": 27.39,
+      "term_native_median_ms": 75.61,
+      "delta_ms": 48.22,
       "fits_41_6ms": false,
-      "verdict": "EXCEEDS budget (+36.77ms)"
+      "verdict": "EXCEEDS budget (+48.22ms)"
     },
     {
       "fixture": "RtMotionHelmet",
       "lighting": "sun-only",
       "config": "gi",
-      "split_baseline_median_ms": 40.3,
-      "term_native_median_ms": 77.42,
-      "delta_ms": 37.12,
+      "split_baseline_median_ms": 27.39,
+      "term_native_median_ms": 75.38,
+      "delta_ms": 47.99,
       "fits_41_6ms": false,
-      "verdict": "EXCEEDS budget (+37.12ms)"
+      "verdict": "EXCEEDS budget (+47.99ms)"
     },
     {
       "fixture": "RtMotionHelmet",
       "lighting": "sun-only",
       "config": "reflection",
-      "split_baseline_median_ms": 40.3,
-      "term_native_median_ms": 76.52,
-      "delta_ms": 36.22,
+      "split_baseline_median_ms": 27.39,
+      "term_native_median_ms": 75.49,
+      "delta_ms": 48.1,
       "fits_41_6ms": false,
-      "verdict": "EXCEEDS budget (+36.22ms)"
+      "verdict": "EXCEEDS budget (+48.10ms)"
     },
     {
       "fixture": "RtMotionHelmet",
       "lighting": "sun-only",
       "config": "all-native",
-      "split_baseline_median_ms": 40.3,
-      "all_native_median_ms": 109.49,
-      "delta_ms": 69.19,
+      "split_baseline_median_ms": 27.39,
+      "all_native_median_ms": 61.53,
+      "delta_ms": 34.14,
       "fits_41_6ms": false,
-      "verdict": "EXCEEDS budget (+69.19ms)"
+      "verdict": "EXCEEDS budget (+34.14ms)"
     },
     {
       "fixture": "RtMotionHelmet",
       "lighting": "env-only",
       "config": "shadow",
-      "split_baseline_median_ms": 40.3,
-      "term_native_median_ms": 40.56,
-      "delta_ms": 0.27,
+      "split_baseline_median_ms": 27.51,
+      "term_native_median_ms": 40.15,
+      "delta_ms": 12.64,
       "fits_41_6ms": true,
-      "verdict": "FITS budget (+0.27ms)"
+      "verdict": "FITS budget (+12.64ms)"
     },
     {
       "fixture": "RtMotionHelmet",
       "lighting": "env-only",
       "config": "ao",
-      "split_baseline_median_ms": 40.3,
-      "term_native_median_ms": 76.3,
-      "delta_ms": 36.0,
+      "split_baseline_median_ms": 27.51,
+      "term_native_median_ms": 75.5,
+      "delta_ms": 47.99,
       "fits_41_6ms": false,
-      "verdict": "EXCEEDS budget (+36.00ms)"
+      "verdict": "EXCEEDS budget (+47.99ms)"
     },
     {
       "fixture": "RtMotionHelmet",
       "lighting": "env-only",
       "config": "gi",
-      "split_baseline_median_ms": 40.3,
-      "term_native_median_ms": 76.37,
-      "delta_ms": 36.08,
+      "split_baseline_median_ms": 27.51,
+      "term_native_median_ms": 75.42,
+      "delta_ms": 47.91,
       "fits_41_6ms": false,
-      "verdict": "EXCEEDS budget (+36.08ms)"
+      "verdict": "EXCEEDS budget (+47.91ms)"
     },
     {
       "fixture": "RtMotionHelmet",
       "lighting": "env-only",
       "config": "reflection",
-      "split_baseline_median_ms": 40.3,
-      "term_native_median_ms": 76.47,
-      "delta_ms": 36.17,
+      "split_baseline_median_ms": 27.51,
+      "term_native_median_ms": 75.59,
+      "delta_ms": 48.08,
       "fits_41_6ms": false,
-      "verdict": "EXCEEDS budget (+36.17ms)"
+      "verdict": "EXCEEDS budget (+48.08ms)"
     },
     {
       "fixture": "RtMotionHelmet",
       "lighting": "env-only",
       "config": "all-native",
-      "split_baseline_median_ms": 40.3,
-      "all_native_median_ms": 111.03,
-      "delta_ms": 70.74,
+      "split_baseline_median_ms": 27.51,
+      "all_native_median_ms": 61.54,
+      "delta_ms": 34.03,
       "fits_41_6ms": false,
-      "verdict": "EXCEEDS budget (+70.74ms)"
+      "verdict": "EXCEEDS budget (+34.03ms)"
     },
     {
       "fixture": "RtApricot",
       "lighting": "sun-only",
       "config": "shadow",
-      "split_baseline_median_ms": 40.45,
-      "term_native_median_ms": 40.74,
-      "delta_ms": 0.3,
+      "split_baseline_median_ms": 27.5,
+      "term_native_median_ms": 40.43,
+      "delta_ms": 12.93,
       "fits_41_6ms": true,
-      "verdict": "FITS budget (+0.30ms)"
+      "verdict": "FITS budget (+12.93ms)"
     },
     {
       "fixture": "RtApricot",
       "lighting": "sun-only",
       "config": "ao",
-      "split_baseline_median_ms": 40.45,
-      "term_native_median_ms": 76.53,
-      "delta_ms": 36.09,
+      "split_baseline_median_ms": 27.5,
+      "term_native_median_ms": 75.63,
+      "delta_ms": 48.13,
       "fits_41_6ms": false,
-      "verdict": "EXCEEDS budget (+36.09ms)"
+      "verdict": "EXCEEDS budget (+48.13ms)"
     },
     {
       "fixture": "RtApricot",
       "lighting": "sun-only",
       "config": "gi",
-      "split_baseline_median_ms": 40.45,
-      "term_native_median_ms": 76.41,
-      "delta_ms": 35.97,
+      "split_baseline_median_ms": 27.5,
+      "term_native_median_ms": 75.69,
+      "delta_ms": 48.19,
       "fits_41_6ms": false,
-      "verdict": "EXCEEDS budget (+35.97ms)"
+      "verdict": "EXCEEDS budget (+48.19ms)"
     },
     {
       "fixture": "RtApricot",
       "lighting": "sun-only",
       "config": "reflection",
-      "split_baseline_median_ms": 40.45,
-      "term_native_median_ms": 76.38,
-      "delta_ms": 35.93,
+      "split_baseline_median_ms": 27.5,
+      "term_native_median_ms": 75.66,
+      "delta_ms": 48.16,
       "fits_41_6ms": false,
-      "verdict": "EXCEEDS budget (+35.93ms)"
+      "verdict": "EXCEEDS budget (+48.16ms)"
     },
     {
       "fixture": "RtApricot",
       "lighting": "sun-only",
       "config": "all-native",
-      "split_baseline_median_ms": 40.45,
-      "all_native_median_ms": 109.76,
-      "delta_ms": 69.31,
+      "split_baseline_median_ms": 27.5,
+      "all_native_median_ms": 61.7,
+      "delta_ms": 34.2,
       "fits_41_6ms": false,
-      "verdict": "EXCEEDS budget (+69.31ms)"
+      "verdict": "EXCEEDS budget (+34.20ms)"
     },
     {
       "fixture": "RtApricot",
       "lighting": "env-only",
       "config": "shadow",
-      "split_baseline_median_ms": 40.36,
-      "term_native_median_ms": 40.69,
-      "delta_ms": 0.33,
+      "split_baseline_median_ms": 27.51,
+      "term_native_median_ms": 40.3,
+      "delta_ms": 12.79,
       "fits_41_6ms": true,
-      "verdict": "FITS budget (+0.33ms)"
+      "verdict": "FITS budget (+12.79ms)"
     },
     {
       "fixture": "RtApricot",
       "lighting": "env-only",
       "config": "ao",
-      "split_baseline_median_ms": 40.36,
-      "term_native_median_ms": 76.39,
-      "delta_ms": 36.03,
+      "split_baseline_median_ms": 27.51,
+      "term_native_median_ms": 75.54,
+      "delta_ms": 48.03,
       "fits_41_6ms": false,
-      "verdict": "EXCEEDS budget (+36.03ms)"
+      "verdict": "EXCEEDS budget (+48.03ms)"
     },
     {
       "fixture": "RtApricot",
       "lighting": "env-only",
       "config": "gi",
-      "split_baseline_median_ms": 40.36,
-      "term_native_median_ms": 76.61,
-      "delta_ms": 36.25,
+      "split_baseline_median_ms": 27.51,
+      "term_native_median_ms": 75.86,
+      "delta_ms": 48.35,
       "fits_41_6ms": false,
-      "verdict": "EXCEEDS budget (+36.25ms)"
+      "verdict": "EXCEEDS budget (+48.35ms)"
     },
     {
       "fixture": "RtApricot",
       "lighting": "env-only",
       "config": "reflection",
-      "split_baseline_median_ms": 40.36,
-      "term_native_median_ms": 77.71,
-      "delta_ms": 37.35,
+      "split_baseline_median_ms": 27.51,
+      "term_native_median_ms": 75.53,
+      "delta_ms": 48.02,
       "fits_41_6ms": false,
-      "verdict": "EXCEEDS budget (+37.35ms)"
+      "verdict": "EXCEEDS budget (+48.02ms)"
     },
     {
       "fixture": "RtApricot",
       "lighting": "env-only",
       "config": "all-native",
-      "split_baseline_median_ms": 40.36,
-      "all_native_median_ms": 109.64,
-      "delta_ms": 69.28,
+      "split_baseline_median_ms": 27.51,
+      "all_native_median_ms": 61.7,
+      "delta_ms": 34.19,
       "fits_41_6ms": false,
-      "verdict": "EXCEEDS budget (+69.28ms)"
+      "verdict": "EXCEEDS budget (+34.19ms)"
     }
   ]
 }

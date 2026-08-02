@@ -4624,10 +4624,15 @@ impl EffectNode for RenderScene {
                     return;
                 };
 
-                // RT-A3a: split dispatch — mask and lighting run at separate resolutions.
-                // Each dispatch uses the same kernel with term-specific spp gating.
+                // RT-A3a: split dispatch with fuse-when-same-res rule (D16a).
+                // Run two dispatches ONLY when mask trace size differs from
+                // lighting trace size (shadow native while lighting stays
+                // half). Otherwise fold shadow back into the lighting
+                // dispatch — one dispatch, monolithic perf.
                 let (mask_half_w, mask_half_h) = self.rt_mask_trace_size(width, height);
                 let (light_half_w, light_half_h) = self.rt_lighting_trace_size(width, height);
+                let mask_sizes_differ =
+                    mask_half_w != light_half_w || mask_half_h != light_half_h;
 
                 // ED2 (RAYTRACING_DESIGN.md section 14.2): the flat ambient no
                 // longer enters the kernel (`ShadowRayParams` has no
@@ -4636,8 +4641,9 @@ impl EffectNode for RenderScene {
                 // via its own `scene_params[1]` — knob at 0 stays true black
                 // on both paths.
 
-                // RT-A3a: mask dispatch (shadow visibility only).
-                // shadow_spp=1, ao_spp=0, gi_spp=0, refl_spp=0 → writes out_sv only.
+                // RT-A3a: mask params — built for the split case when trace
+                // sizes differ. When sizes match, unused (shadow folded into
+                // lighting dispatch).
                 let mask_params = manifold_gpu::raytrace::ShadowRayParams::new(
                     &rt_casters,
                     1, // shadow_spp
@@ -4656,12 +4662,14 @@ impl EffectNode for RenderScene {
                     0.1,    // refl_rough_band (unused)
                 );
 
-                // RT-A3a: lighting dispatch (AO + GI + reflection + normal).
-                // shadow_spp=0, ao_spp > 0 and/or gi_spp > 0 and/or refl_spp > 0
-                // → writes out_irr, out_refl, out_n only.
+                // RT-A3a: lighting params (AO + GI + reflection + normal).
+                // D16a fuse rule: shadow_spp=1 when mask and lighting trace
+                // sizes match (one fused dispatch at monolithic perf); 0 when
+                // split (separate mask dispatch handles shadow at its own size).
+                let lighting_shadow_spp: u32 = if mask_sizes_differ { 0 } else { 1 };
                 let lighting_params = manifold_gpu::raytrace::ShadowRayParams::new(
                     &rt_casters,
-                    0, // shadow_spp
+                    lighting_shadow_spp,
                     self.jitter_frame_index,
                     [light_half_w, light_half_h],
                     [width, height],
@@ -4784,39 +4792,36 @@ impl EffectNode for RenderScene {
                 let refl_full = self.rt_refl_full.as_ref().expect("ensured above");
                 let _refl_full_b = self.rt_refl_full_b.as_ref().expect("ensured above");
 
-                // RT-A3a: dispatch M (mask) — shadow visibility only.
-                tracer.dispatch_shadow_rays(
-                    gpu.native_enc,
-                    accel,
-                    &mask_params,
-                    params_buffer,
-                    gi_materials_buffer,
-                    normal_sources_buffer,
-                    &alpha_textures,
-                    depth_tex,
-                    mask_half,
-                    // All output textures must be bound (Metal requirement),
-                    // but only out_sv is written by the mask dispatch.
-                    irr_half,
-                    normal_half,
-                    refl_half,
-                    // RT-R1 (section 9.3 RD4) + ED1 (section 14.2): the env
-                    // mip chain the reflection miss AND the GI gather's env-
-                    // miss sample. The 1x1 BLACK dummy when the scene has no
-                    // IBL chain — the miss then reads the same nothing the
-                    // raster IBL would (the never-convolved prefiltered
-                    // texture's contents are undefined, so binding it would
-                    // feed the gather garbage). dummy_texture is ensured
-                    // upstream of evaluate's RT block (3491) and zeroed.
-                    if envmap_wired.is_some() {
-                        self.prefiltered_specular.as_ref().expect("ensured above")
-                    } else {
-                        self.dummy_texture.as_ref().expect("ensured at 3491")
-                    },
-                    "node.render_scene RT-A3a mask dispatch (shadow visibility)",
-                );
+                // RT-A3a D16a fuse rule: split dispatch ONLY when mask trace
+                // size differs from lighting (shadow native while lighting
+                // stays half). Otherwise one fused dispatch at lighting's
+                // resolution (shadow_spp=1 folded into the lighting params).
+                if mask_sizes_differ {
+                    tracer.dispatch_shadow_rays(
+                        gpu.native_enc,
+                        accel,
+                        &mask_params,
+                        params_buffer,
+                        gi_materials_buffer,
+                        normal_sources_buffer,
+                        &alpha_textures,
+                        depth_tex,
+                        mask_half,
+                        irr_half,
+                        normal_half,
+                        refl_half,
+                        if envmap_wired.is_some() {
+                            self.prefiltered_specular.as_ref().expect("ensured above")
+                        } else {
+                            self.dummy_texture.as_ref().expect("ensured at 3491")
+                        },
+                        "node.render_scene RT-A3a mask dispatch (shadow visibility)",
+                    );
+                }
 
-                // RT-A3a: dispatch L (lighting) — AO + GI + reflection + normal.
+                // RT-A3a: lighting dispatch — AO + GI + reflection + normal.
+                // D16a: when fused (mask_sizes_differ=false), shadow_spp=1
+                // and out_sv is written here (one dispatch, monolithic perf).
                 tracer.dispatch_shadow_rays(
                     gpu.native_enc,
                     accel,
@@ -4826,8 +4831,6 @@ impl EffectNode for RenderScene {
                     normal_sources_buffer,
                     &alpha_textures,
                     depth_tex,
-                    // All output textures must be bound (Metal requirement),
-                    // but only out_irr, out_refl, out_n are written by the lighting dispatch.
                     mask_half,
                     irr_half,
                     normal_half,
