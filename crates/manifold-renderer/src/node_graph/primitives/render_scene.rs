@@ -954,6 +954,16 @@ pub struct RenderScene {
     rt_mask_full_b: Option<manifold_gpu::GpuTexture>,
     rt_irr_full_b: Option<manifold_gpu::GpuTexture>,
     rt_normal_full_b: Option<manifold_gpu::GpuTexture>,
+    /// RT native-resolution toggle, parsed once at init from
+    /// `MANIFOLD_RT_NATIVE_TERMS` (comma-separated subset of
+    /// shadow,ao,gi,reflection). The four terms share ONE trace dispatch
+    /// (`dispatch_shadow_rays`), so listing ANY term nativizes the whole
+    /// dispatch — per-term resolution isolation requires splitting that
+    /// dispatch and is deferred (A3). Empty/absent = D11 half-res for all.
+    rt_native_shadow: bool,
+    rt_native_ao: bool,
+    rt_native_gi: bool,
+    rt_native_reflection: bool,
     /// Dedicated CPU-mapped upload buffer for `AtrousParams` (tiny: two
     /// `u32`s) — separate from `rt_params_buffer`/
     /// `rt_accumulate_params_buffer` for the same non-clobbering reason
@@ -1197,6 +1207,10 @@ impl RenderScene {
             rt_mask_full_b: None,
             rt_irr_full_b: None,
             rt_normal_full_b: None,
+            rt_native_shadow: false,
+            rt_native_ao: false,
+            rt_native_gi: false,
+            rt_native_reflection: false,
             rt_atrous_params_buffer: None,
             rt_lighting_key: None,
             rt_irr_width: 0,
@@ -1215,6 +1229,22 @@ impl RenderScene {
             object_port_names: Vec::new(),
             light_port_names: Vec::new(),
         };
+
+        // Parse MANIFOLD_RT_NATIVE_TERMS env var once at init
+        let native_terms = std::env::var("MANIFOLD_RT_NATIVE_TERMS")
+            .unwrap_or_default()
+            .to_lowercase();
+        let terms: std::collections::HashSet<&str> = native_terms
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        s.rt_native_shadow = terms.contains("shadow");
+        s.rt_native_ao = terms.contains("ao");
+        s.rt_native_gi = terms.contains("gi");
+        s.rt_native_reflection = terms.contains("reflection");
+
         s.rebuild(DEFAULT_OBJECTS, DEFAULT_LIGHTS);
         s
     }
@@ -1870,12 +1900,32 @@ impl RenderScene {
     /// slot (r=slot 0 .. a=slot 3); AO moved out entirely (folded into
     /// irradiance in-kernel, never written here) — the SAME texture,
     /// extending the SAME dispatch (D16's seam note), not a second mask.
+    /// Resolution of the single shared RT trace dispatch (D11). Half-res by
+    /// default; native (full output res) when ANY term is listed in
+    /// `MANIFOLD_RT_NATIVE_TERMS` — the four terms share one dispatch, so they
+    /// cannot be nativized independently (per-term isolation needs split
+    /// dispatches, deferred to A3). Every half-res texture the dispatch
+    /// writes is allocated at this size; the full-res composite targets stay
+    /// full-res, so native turns the half→full upsample into a same-size
+    /// (identity) pass.
+    fn rt_trace_size(&self, width: u32, height: u32) -> (u32, u32) {
+        let any_native = self.rt_native_shadow
+            || self.rt_native_ao
+            || self.rt_native_gi
+            || self.rt_native_reflection;
+        if any_native {
+            (width, height)
+        } else {
+            (width.div_ceil(2).max(1), height.div_ceil(2).max(1))
+        }
+    }
+
     fn ensure_rt_masks(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
         if self.rt_mask_width == width && self.rt_mask_height == height && self.rt_mask_full.is_some() {
             return;
         }
-        let half_w = width.div_ceil(2).max(1);
-        let half_h = height.div_ceil(2).max(1);
+
+        let (trace_w, trace_h) = self.rt_trace_size(width, height);
         let make = |w: u32, h: u32, label: &'static str| {
             device.create_texture(&manifold_gpu::GpuTextureDesc {
                 width: w,
@@ -1890,7 +1940,7 @@ impl RenderScene {
                 mip_levels: 1,
             })
         };
-        self.rt_mask_half = Some(make(half_w, half_h, "node.render_scene rt_mask_half (RT-D3/RT-P2 vis+ao)"));
+        self.rt_mask_half = Some(make(trace_w, trace_h, "node.render_scene rt_mask_half (RT-D3/RT-P2 vis+ao)"));
         self.rt_mask_full = Some(make(width, height, "node.render_scene rt_mask_full (RT-D3/RT-P2 vis+ao)"));
         // RT-T1-D: à-trous ping-pong scratch — see the field's doc comment.
         self.rt_mask_full_b = Some(make(width, height, "node.render_scene rt_mask_full_b (RT-T1-D atrous)"));
@@ -1910,8 +1960,12 @@ impl RenderScene {
         if self.rt_irr_width == width && self.rt_irr_height == height && self.rt_irr_history[0].is_some() {
             return false;
         }
-        let half_w = width.div_ceil(2).max(1);
-        let half_h = height.div_ceil(2).max(1);
+
+        // Half-res textures the trace dispatch writes — allocated at the
+        // dispatch resolution (native when any term is native), matching
+        // `dispatch_shadow_rays`' `trace_size` so native writes stay in
+        // bounds. See `rt_trace_size`.
+        let (half_w, half_h) = self.rt_trace_size(width, height);
         let make = |w: u32, h: u32, format: manifold_gpu::GpuTextureFormat, label: &'static str| {
             device.create_texture(&manifold_gpu::GpuTextureDesc {
                 width: w,
@@ -4563,8 +4617,12 @@ impl EffectNode for RenderScene {
                     // camera never hit this).
                     return;
                 };
-                let half_w = width.div_ceil(2).max(1);
-                let half_h = height.div_ceil(2).max(1);
+
+                // Single shared dispatch resolution (D11 half-res, or native
+                // when any term is listed in MANIFOLD_RT_NATIVE_TERMS) — see
+                // `rt_trace_size`. Every half-res texture the dispatch writes
+                // is allocated at this size, so the writes stay in bounds.
+                let (half_w, half_h) = self.rt_trace_size(width, height);
                 // ED2 (RAYTRACING_DESIGN.md section 14.2): the flat ambient no
                 // longer enters the kernel (`ShadowRayParams` has no
                 // `ambient_color`); each material's Ambient knob is applied
