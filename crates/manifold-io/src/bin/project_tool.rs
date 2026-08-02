@@ -619,40 +619,44 @@ fn scene_set_model(rest: &[String]) -> ExitCode {
         }
     };
 
-    let Some(layer) = layers.get_mut(layer_idx) else {
-        eprintln!("error: failed to get layer at index {layer_idx}");
+    // Simple string-based approach: find .glb paths and replace all occurrences
+    // The model path appears in multiple places (description fields, parameter defaults, etc.)
+    let json_str = serde_json::to_string_pretty(&root).unwrap();
+
+    // Find the current model path by looking for .glb files
+    let old_path: String = json_str.lines()
+        .find_map(|line| {
+            let line = line.trim();
+            // Look for quoted strings ending in .glb that contain paths
+            line.split("\"")
+                .find(|s| s.ends_with(".glb") && s.contains("/"))
+                .map(|s| s.to_string())
+        })
+        .unwrap_or_else(|| {
+            eprintln!("error: no .glb model path found in project (not a 3D scene?)");
+            std::process::exit(1);
+        });
+
+    // Perform the replacement
+    let new_json_str = json_str.replace(old_path.as_str(), model_path);
+
+    // Count how many replacements were made
+    let count = json_str.matches(old_path.as_str()).count();
+    if count == 0 {
+        eprintln!("error: old model path '{}' not found in JSON", old_path);
         return ExitCode::FAILURE;
+    }
+
+    // Parse back to JSON for validation
+    let new_root = match serde_json::from_str::<serde_json::Value>(&new_json_str) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("error: failed to parse edited JSON: {e}");
+            return ExitCode::from(2);
+        }
     };
 
-    // Set the model file path in genParams.def.stringParams
-    // The model_file parameter is in the stringParams array
-    let mut found = false;
-    if let Some(gen_params) = layer.get_mut("genParams") {
-        // Update the description field
-        if let Some(def) = gen_params.get_mut("def") {
-            if let Some(description) = def.get_mut("description") {
-                *description = serde_json::Value::String(format!("Imported from {}", model_path));
-            }
-            if let Some(string_params) = def.get_mut("stringParams") {
-                if let Some(arr) = string_params.as_array_mut() {
-                    for param in arr {
-                        if param.get("id").and_then(|v| v.as_str()) == Some("model_file") {
-                            if let Some(default_value) = param.get_mut("defaultValue") {
-                                *default_value = serde_json::Value::String(model_path.to_string());
-                                found = true;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if found {
-        println!("set model path on layer {}: {}", layer_idx, model_path);
-        return validate_and_save(&root, path);
-    }
-
-    eprintln!("error: layer {} has no model_file parameter (not a 3D scene layer?)", layer_idx);
-    ExitCode::FAILURE
+    println!("set model path on layer {}: {} → {} ({} occurrence(s))",
+             layer_idx, old_path, model_path, count);
+    validate_and_save(&new_root, path)
 }
