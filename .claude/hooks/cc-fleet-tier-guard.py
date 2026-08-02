@@ -11,6 +11,7 @@ Caller tier comes from the payload's `transcript_path`: the last assistant entry
 
 Tier rules (model strings: deepseek-v4-flash, glm-4.7, k3, claude-*):
 - cc-fleet spawn (tmux teammates): denied for EVERY tier incl. lead — dead path on CC >= 2.1.218 (native Agent-tool lanes instead).
+- ANY cc-fleet spawn verb carrying --background: denied for EVERY tier — a raw background spawn has no liveness exit code (Peter 2026-08-02); scripts/fleet_spawn.py owns background spawns and exits nonzero on a dead-at-spawn job.
 - Executor tier (deepseek*, kimi-k2*, kimi-for-coding, claude-sonnet/haiku): ALL cc-fleet spawn verbs denied.
 - Dispatcher tier (glm*): may drive the executor provider only (EXECUTOR_PROVIDERS = opencode, deepseek) via cc-fleet subagent. Anything else — spawning zai/kimi seats, workflows, unparseable targets — is denied with an escalate-up pointer.
 - Lead tier (fable/opus/k3 — anything not matched above): passes through.
@@ -99,6 +100,24 @@ def decide(command: str, model: str) -> str:
             "model \"haiku\"=DeepSeek Flash, \"sonnet\"=GLM-4.7, "
             "\"opus\"=GLM-5.2, \"fable\"=k3 on the K3 seat "
             "(docs/AGENT_ROUTING.md §Native provider lanes)."
+        )
+    # Raw --background spawns are denied for EVERY tier (Peter 2026-08-02:
+    # "exit codes are required" — a background spawn exits 0 with
+    # {"ok": true} even when the provider key is dead; the job fails minutes
+    # later and only a manual poll sees it). scripts/fleet_spawn.py owns the
+    # spawn + a liveness grace window and exits nonzero on a dead-at-spawn
+    # job. A subagent-status poll is not a spawn — SPAWN_CMD already limits
+    # this to spawn verbs.
+    if "--background" in command:
+        return (
+            f"cc-fleet {verb} --background denied for every tier: a raw "
+            "background spawn has no liveness exit code (2026-08-02: a dead "
+            "provider key returned ok:true and the job failed 3 minutes "
+            "later, invisible until a manual poll). Use the wrapper: "
+            "scripts/fleet_spawn.py <provider> --model <id> --timeout 90m "
+            "--max-budget-usd 5 --prompt '<brief>' — it exits nonzero when "
+            "the job dies inside the liveness grace window. Synchronous "
+            "subagent runs (no --background) are unaffected."
         )
     if not model:
         return ""

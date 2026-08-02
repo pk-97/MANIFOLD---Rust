@@ -152,6 +152,35 @@ check("main: missing transcript fails open", out.strip() == "")
 out = run_main("cargo build", "deepseek-v4-flash")
 check("main: non-cc-fleet command untouched", out.strip() == "")
 
+# --- --background spawns denied for every tier (fleet_spawn.py owns them) ---
+for model in ("deepseek-v4-flash", "glm-4.7", "k3", "claude-fable-5", ""):
+    r = hook.decide(
+        "cc-fleet subagent opencode --model strong --background --json -p x",
+        model,
+    )
+    check(f"background denied (model={model or 'empty'})",
+          bool(r) and "fleet_spawn.py" in r)
+check(
+    "background denied: run verb",
+    bool(hook.decide("cc-fleet run --background", "k3")),
+)
+check(
+    "sync subagent unaffected: lead",
+    hook.decide("cc-fleet subagent opencode --model strong --json -p x", "k3") == "",
+)
+check(
+    "sync subagent unaffected: dispatcher to executor provider",
+    hook.decide("cc-fleet subagent opencode --json -p x", "glm-4.7") == "",
+)
+check(
+    "subagent-status poll not a spawn",
+    hook.decide("cc-fleet subagent-status 8f422e60 --json", "k3") == "",
+)
+out = run_main(
+    "cc-fleet subagent opencode --model strong --background --json -p x", "k3"
+)
+check("main: lead background deny emitted", '"deny"' in out)
+
 print()
 if FAILURES:
     print(f"{len(FAILURES)} FAILURES: {FAILURES}")
