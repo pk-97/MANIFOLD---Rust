@@ -1,0 +1,575 @@
+{
+  "schema": 1,
+  "thresholds": {
+    "noise_mean_ceiling": 2.0,
+    "noise_p999_ceiling": 5.0,
+    "sharpness_ratio": 1.25,
+    "halo_width_px": 2.0,
+    "halo_contrast_pct": 5.0
+  },
+  "provenance": {
+    "recorded": "2026-08-02",
+    "commit": "15ff4100489f",
+    "note": "Initial baseline \u2014 expect sharpness and halo legs to TRIP thresholds"
+  },
+  "probe_regions": {
+    "apricot": [
+      {
+        "type": "shadow_boundary",
+        "x": 1400,
+        "y": 600,
+        "width": 100,
+        "height": 100,
+        "center": [
+          0,
+          92
+        ],
+        "transition_width_estimate": 99.0,
+        "contrast_range": [
+          0.0,
+          0.42745098039215684
+        ],
+        "edge_strength": 0.08429214718145674,
+        "rationale": "Hard shadow boundary at (1400, 600), contrast 0.43-0.00"
+      },
+      {
+        "type": "shadow_boundary",
+        "x": 1600,
+        "y": 600,
+        "width": 100,
+        "height": 100,
+        "center": [
+          84,
+          96
+        ],
+        "transition_width_estimate": 15.0,
+        "contrast_range": [
+          0.1411764705882353,
+          0.4
+        ],
+        "edge_strength": 0.0871930004683408,
+        "rationale": "Hard shadow boundary at (1600, 600), contrast 0.40-0.14"
+      },
+      {
+        "type": "shadow_boundary",
+        "x": 1800,
+        "y": 600,
+        "width": 100,
+        "height": 100,
+        "center": [
+          28,
+          97
+        ],
+        "transition_width_estimate": 99.0,
+        "contrast_range": [
+          0.0,
+          0.39215686274509803
+        ],
+        "edge_strength": 0.06518383712607084,
+        "rationale": "Hard shadow boundary at (1800, 600), contrast 0.39-0.00"
+      },
+      {
+        "type": "shadow_boundary",
+        "x": 2000,
+        "y": 600,
+        "width": 100,
+        "height": 100,
+        "center": [
+          93,
+          99
+        ],
+        "transition_width_estimate": 71.0,
+        "contrast_range": [
+          0.13725490196078433,
+          0.35294117647058826
+        ],
+        "edge_strength": 0.08254926938912072,
+        "rationale": "Hard shadow boundary at (2000, 600), contrast 0.35-0.14"
+      },
+      {
+        "type": "shadow_boundary",
+        "x": 1400,
+        "y": 800,
+        "width": 100,
+        "height": 100,
+        "center": [
+          91,
+          49
+        ],
+        "transition_width_estimate": 4.0,
+        "contrast_range": [
+          0.0,
+          1.0
+        ],
+        "edge_strength": 0.17123061178705654,
+        "rationale": "Hard shadow boundary at (1400, 800), contrast 1.00-0.00"
+      }
+    ],
+    "azalea": [
+      {
+        "type": "shadow_boundary",
+        "x": 1400,
+        "y": 600,
+        "width": 100,
+        "height": 100,
+        "center": [
+          7,
+          99
+        ],
+        "transition_width_estimate": 92.0,
+        "contrast_range": [
+          0.13333333333333333,
+          0.2901960784313726
+        ],
+        "edge_strength": 0.07611305326932813,
+        "rationale": "Hard shadow boundary at (1400, 600), contrast 0.29-0.13"
+      },
+      {
+        "type": "shadow_boundary",
+        "x": 1600,
+        "y": 600,
+        "width": 100,
+        "height": 100,
+        "center": [
+          19,
+          96
+        ],
+        "transition_width_estimate": 85.0,
+        "contrast_range": [
+          0.050980392156862744,
+          0.4
+        ],
+        "edge_strength": 0.08872075818282121,
+        "rationale": "Hard shadow boundary at (1600, 600), contrast 0.40-0.05"
+      },
+      {
+        "type": "shadow_boundary",
+        "x": 1800,
+        "y": 600,
+        "width": 100,
+        "height": 100,
+        "center": [
+          95,
+          97
+        ],
+        "transition_width_estimate": 51.0,
+        "contrast_range": [
+          0.22745098039215686,
+          0.3764705882352941
+        ],
+        "edge_strength": 0.06641425084141997,
+        "rationale": "Hard shadow boundary at (1800, 600), contrast 0.38-0.23"
+      },
+      {
+        "type": "shadow_boundary",
+        "x": 2000,
+        "y": 600,
+        "width": 100,
+        "height": 100,
+        "center": [
+          49,
+          98
+        ],
+        "transition_width_estimate": 35.0,
+        "contrast_range": [
+          0.16470588235294117,
+          0.21568627450980393
+        ],
+        "edge_strength": 0.07463465831243374,
+        "rationale": "Hard shadow boundary at (2000, 600), contrast 0.22-0.16"
+      },
+      {
+        "type": "shadow_boundary",
+        "x": 1400,
+        "y": 800,
+        "width": 100,
+        "height": 100,
+        "center": [
+          95,
+          47
+        ],
+        "transition_width_estimate": 7.0,
+        "contrast_range": [
+          0.0,
+          1.0
+        ],
+        "edge_strength": 0.15958648369043252,
+        "rationale": "Hard shadow boundary at (1400, 800), contrast 1.00-0.00"
+      }
+    ],
+    "ambient_occlusion": [
+      {
+        "type": "shadow_boundary",
+        "x": 1400,
+        "y": 600,
+        "width": 100,
+        "height": 100,
+        "center": [
+          62,
+          95
+        ],
+        "transition_width_estimate": 36.0,
+        "contrast_range": [
+          0.10196078431372549,
+          0.38823529411764707
+        ],
+        "edge_strength": 0.08196364526160489,
+        "rationale": "Hard shadow boundary at (1400, 600), contrast 0.39-0.10"
+      },
+      {
+        "type": "shadow_boundary",
+        "x": 1600,
+        "y": 600,
+        "width": 100,
+        "height": 100,
+        "center": [
+          59,
+          96
+        ],
+        "transition_width_estimate": 41.0,
+        "contrast_range": [
+          0.0784313725490196,
+          0.396078431372549
+        ],
+        "edge_strength": 0.08734806904416116,
+        "rationale": "Hard shadow boundary at (1600, 600), contrast 0.40-0.08"
+      },
+      {
+        "type": "shadow_boundary",
+        "x": 1800,
+        "y": 600,
+        "width": 100,
+        "height": 100,
+        "center": [
+          51,
+          97
+        ],
+        "transition_width_estimate": 88.0,
+        "contrast_range": [
+          0.0784313725490196,
+          0.39215686274509803
+        ],
+        "edge_strength": 0.06577040213478037,
+        "rationale": "Hard shadow boundary at (1800, 600), contrast 0.39-0.08"
+      },
+      {
+        "type": "shadow_boundary",
+        "x": 2000,
+        "y": 600,
+        "width": 100,
+        "height": 100,
+        "center": [
+          44,
+          98
+        ],
+        "transition_width_estimate": 55.0,
+        "contrast_range": [
+          0.058823529411764705,
+          0.35294117647058826
+        ],
+        "edge_strength": 0.07901907593319427,
+        "rationale": "Hard shadow boundary at (2000, 600), contrast 0.35-0.06"
+      },
+      {
+        "type": "shadow_boundary",
+        "x": 1400,
+        "y": 800,
+        "width": 100,
+        "height": 100,
+        "center": [
+          99,
+          47
+        ],
+        "transition_width_estimate": 6.0,
+        "contrast_range": [
+          0.0,
+          1.0
+        ],
+        "edge_strength": 0.16158292372646899,
+        "rationale": "Hard shadow boundary at (1400, 800), contrast 1.00-0.00"
+      }
+    ],
+    "car_paint": [
+      {
+        "type": "shadow_boundary",
+        "x": 2000,
+        "y": 600,
+        "width": 100,
+        "height": 100,
+        "center": [
+          99,
+          98
+        ],
+        "transition_width_estimate": 6.0,
+        "contrast_range": [
+          0.08627450980392157,
+          0.4627450980392157
+        ],
+        "edge_strength": 0.08719455745546689,
+        "rationale": "Hard shadow boundary at (2000, 600), contrast 0.46-0.09"
+      },
+      {
+        "type": "shadow_boundary",
+        "x": 1400,
+        "y": 800,
+        "width": 100,
+        "height": 100,
+        "center": [
+          95,
+          45
+        ],
+        "transition_width_estimate": 9.0,
+        "contrast_range": [
+          0.0,
+          1.0
+        ],
+        "edge_strength": 0.15646047695047408,
+        "rationale": "Hard shadow boundary at (1400, 800), contrast 1.00-0.00"
+      },
+      {
+        "type": "shadow_boundary",
+        "x": 1600,
+        "y": 800,
+        "width": 100,
+        "height": 100,
+        "center": [
+          57,
+          29
+        ],
+        "transition_width_estimate": 50.0,
+        "contrast_range": [
+          0.0,
+          1.0
+        ],
+        "edge_strength": 0.14432967703264815,
+        "rationale": "Hard shadow boundary at (1600, 800), contrast 1.00-0.00"
+      },
+      {
+        "type": "shadow_boundary",
+        "x": 1800,
+        "y": 800,
+        "width": 100,
+        "height": 100,
+        "center": [
+          23,
+          30
+        ],
+        "transition_width_estimate": 85.0,
+        "contrast_range": [
+          0.0,
+          1.0
+        ],
+        "edge_strength": 0.1473906209143274,
+        "rationale": "Hard shadow boundary at (1800, 800), contrast 1.00-0.00"
+      },
+      {
+        "type": "shadow_boundary",
+        "x": 2000,
+        "y": 800,
+        "width": 100,
+        "height": 100,
+        "center": [
+          0,
+          64
+        ],
+        "transition_width_estimate": 99.0,
+        "contrast_range": [
+          0.0,
+          1.0
+        ],
+        "edge_strength": 0.21726143583846355,
+        "rationale": "Hard shadow boundary at (2000, 800), contrast 1.00-0.00"
+      }
+    ]
+  },
+  "results": {
+    "apricot": {
+      "sun-only": {
+        "noise": {
+          "composite": {
+            "mean": 0.07805485278367996,
+            "p999": 6.6,
+            "runs": 1
+          }
+        },
+        "sharpness": {
+          "note": "no measurements"
+        },
+        "halo": {
+          "note": "no measurements"
+        }
+      },
+      "env-only": {
+        "noise": {
+          "composite": {
+            "mean": 0.0778797373175621,
+            "p999": 6.6,
+            "runs": 1
+          }
+        },
+        "sharpness": {
+          "note": "no measurements"
+        },
+        "halo": {
+          "note": "no measurements"
+        }
+      },
+      "ambient-floor": {
+        "noise": {
+          "composite": {
+            "mean": 0.07878260016441345,
+            "p999": 6.8,
+            "runs": 1
+          }
+        },
+        "sharpness": {
+          "note": "no measurements"
+        },
+        "halo": {
+          "note": "no measurements"
+        }
+      }
+    },
+    "azalea": {
+      "sun-only": {
+        "noise": {
+          "composite": {
+            "mean": 0.07994422912597657,
+            "p999": 7.0,
+            "runs": 1
+          }
+        },
+        "sharpness": {
+          "note": "no measurements"
+        },
+        "halo": {
+          "note": "no measurements"
+        }
+      },
+      "env-only": {
+        "noise": {
+          "composite": {
+            "mean": 0.07767445296049118,
+            "p999": 6.8,
+            "runs": 1
+          }
+        },
+        "sharpness": {
+          "note": "no measurements"
+        },
+        "halo": {
+          "note": "no measurements"
+        }
+      },
+      "ambient-floor": {
+        "noise": {
+          "composite": {
+            "mean": 0.0785936713218689,
+            "p999": 7.0,
+            "runs": 1
+          }
+        },
+        "sharpness": {
+          "note": "no measurements"
+        },
+        "halo": {
+          "note": "no measurements"
+        }
+      }
+    },
+    "ambient_occlusion": {
+      "sun-only": {
+        "noise": {
+          "composite": {
+            "mean": 0.07856661826372147,
+            "p999": 7.0,
+            "runs": 1
+          }
+        },
+        "sharpness": {
+          "note": "no measurements"
+        },
+        "halo": {
+          "note": "no measurements"
+        }
+      },
+      "env-only": {
+        "noise": {
+          "composite": {
+            "mean": 0.07860653698444367,
+            "p999": 7.0,
+            "runs": 1
+          }
+        },
+        "sharpness": {
+          "note": "no measurements"
+        },
+        "halo": {
+          "note": "no measurements"
+        }
+      },
+      "ambient-floor": {
+        "noise": {
+          "composite": {
+            "mean": 0.07785567343235016,
+            "p999": 6.8,
+            "runs": 1
+          }
+        },
+        "sharpness": {
+          "note": "no measurements"
+        },
+        "halo": {
+          "note": "no measurements"
+        }
+      }
+    },
+    "car_paint": {
+      "sun-only": {
+        "noise": {
+          "composite": {
+            "mean": 0.08131237030029297,
+            "p999": 7.0,
+            "runs": 1
+          }
+        },
+        "sharpness": {
+          "note": "no measurements"
+        },
+        "halo": {
+          "note": "no measurements"
+        }
+      },
+      "env-only": {
+        "noise": {
+          "composite": {
+            "mean": 0.07854888141155243,
+            "p999": 7.0,
+            "runs": 1
+          }
+        },
+        "sharpness": {
+          "note": "no measurements"
+        },
+        "halo": {
+          "note": "no measurements"
+        }
+      },
+      "ambient-floor": {
+        "noise": {
+          "composite": {
+            "mean": 0.0782783180475235,
+            "p999": 6.8,
+            "runs": 1
+          }
+        },
+        "sharpness": {
+          "note": "no measurements"
+        },
+        "halo": {
+          "note": "no measurements"
+        }
+      }
+    }
+  }
+}

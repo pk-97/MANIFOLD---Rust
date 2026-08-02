@@ -595,13 +595,10 @@ fn scene_set_model(rest: &[String]) -> ExitCode {
         return ExitCode::FAILURE;
     };
 
-    let layer_idx = if layer_name.is_some() {
+    let layer_idx = if let Some(name) = layer_name {
         // Find layer by name first, fall back to index
-        let name = layer_name.unwrap();
         layers.iter().position(|l| l.get("name").and_then(|n| n.as_str()) == Some(name))
-            .or_else(|| {
-                if layer_idx < layers.len() { Some(layer_idx) } else { None }
-            })
+            .or(Some(layer_idx).filter(|_| layer_idx < layers.len()))
             .ok_or_else(|| format!("no layer named '{name}' at index {layer_idx}"))
     } else {
         if layer_idx >= layers.len() {
