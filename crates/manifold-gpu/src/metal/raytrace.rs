@@ -1123,15 +1123,28 @@ static float2 blue_noise_sample(uint2 p, uint frame, uint ray, uint spp) {
 // projection, linear or not). Returns false (void background — the
 // prepass never wrote this texel) via `out_valid` when `raw_depth >=
 // 1.0 - 1e-6` (the depth-clear value).
+// BUG-84fv: bit-level finite test — fast-math-safe. isfinite()/NaN
+// comparisons can be compiled away under fast math (the compiler assumes
+// no NaNs); integer ops on the bit pattern can't. Exponent all-ones =
+// inf or NaN, both poison for the intersector.
+static bool rt_finite(float x) {
+    return (as_type<uint>(x) & 0x7f800000u) != 0x7f800000u;
+}
+
 static float3 world_pos_from_depth(uint2 pix, uint2 gbuffer_size, float raw_depth, constant float4x4& inv_view_proj, thread bool& out_valid) {
-    if (raw_depth >= 1.0 - 1e-6) { out_valid = false; return float3(0.0); }
-    out_valid = true;
+    if (!rt_finite(raw_depth) || raw_depth >= 1.0 - 1e-6) { out_valid = false; return float3(0.0); }
     float2 uv = (float2(pix) + 0.5) / float2(gbuffer_size);
     float ndc_x = uv.x * 2.0 - 1.0;
     float ndc_y = 1.0 - uv.y * 2.0;
     float4 clip = float4(ndc_x, ndc_y, raw_depth, 1.0);
     float4 wh = inv_view_proj * clip;
-    return wh.xyz / wh.w;
+    float3 wp = wh.xyz / wh.w;
+    // A non-finite view-proj (a modulated camera param gone NaN reaches here
+    // even with valid depth) must read as void: a NaN world position makes
+    // every ray this texel spawns NaN, and the intersector is undefined on
+    // NaN rays (hang → page fault, BUG-84fv).
+    out_valid = rt_finite(wp.x) && rt_finite(wp.y) && rt_finite(wp.z);
+    return wp;
 }
 
 // Dispatch: trace_size (half-res, D11) grid. `depth_tex` is the full-res
