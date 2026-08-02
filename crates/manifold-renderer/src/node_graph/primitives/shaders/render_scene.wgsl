@@ -193,6 +193,11 @@ struct Uniforms {
     // clearcoat_family_flags()) — bit0=clearcoat_map, bit1=
     // clearcoat_roughness_map, bit2=clearcoat_normal_map present.
     volume_attenuation_color: vec4<f32>,
+    // RAYTRACING_DESIGN.md section 16 TL7: KHR_materials_diffuse_transmission.
+    // x = diffuse transmission factor (default 0.0 — inert). yzw reserved
+    // (first consumer = the future color-texture flag, section 16.8). Mirrors
+    // `RenderSceneUniforms::diffuse_transmission_params` in render_scene.rs.
+    diffuse_transmission_params: vec4<f32>,
     // RAYTRACING_DESIGN.md section 9 RD9/RD1: RT feature flags. x =
     // rt_reflections active this frame (rt_enabled && rt_ready &&
     // rt_reflections && non-empty casters — the trace dispatch ran with
@@ -1361,6 +1366,10 @@ fn eval_iridescence(outside_ior: f32, eta2: f32, cos_theta1: f32, thickness: f32
 // (view-only Schlick) rather than the light-dependent N·H term any
 // single light would give — the standard split-sum substitute for IBL,
 // and the only well-defined choice when light_count can be 0.
+// RAYTRACING_DESIGN.md section 16 TL1: wrap-diffuse constant for the
+// backlit thin-surface term. Range [0, 1] — 0 = sharp terminator
+// (only dead-on backlight), 1 = full wrap (petals glow at wide angles).
+const RT_TRANSMISSION_WRAP: f32 = 0.5;
 @fragment
 fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let albedo = resolve_albedo(in.uv);
@@ -1496,6 +1505,11 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     // `sheen_color` is nonzero (see the composition below), so this cannot
     // perturb `direct`/`direct_coat`'s bit-for-bit value for any material.
     var direct_sheen = vec3<f32>(0.0);
+    // RAYTRACING_DESIGN.md section 16 TL1: accumulated in parallel with
+    // `direct`, same shape as `direct_sheen` — never read unless
+    // `translucency` is nonzero (see the composition below), so this cannot
+    // perturb `direct`/`direct_sheen`'s bit-for-bit value for any material.
+    var direct_translucent = vec3<f32>(0.0);
     let light_count = u32(u.scene_params.x);
     for (var i = 0u; i < light_count; i = i + 1u) {
         let l_dir = lights[i * 2u];
@@ -1575,6 +1589,15 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
         let V_sheen = V_Ashikhmin(n_dot_v, n_dot_l);
         let specular_sheen = sheen_color * D_sheen * V_sheen;
         direct_sheen = direct_sheen + specular_sheen * l_col.rgb * n_dot_l * l_dir.w * vis;
+        // RAYTRACING_DESIGN.md section 16 TL1: wrap-diffuse translucency
+        // around the backward normal — light arriving at the BACK of
+        // the surface. factor 0 makes this exactly zero (byte-identical).
+        // The wrap softens the terminator so petals glow at wide angles, not
+        // just dead-on. vis is the same per-light shadow_factor every other
+        // term uses (RT sv mask when RT is on, shadow map otherwise).
+        let back_l = saturate((dot(-N, L) + RT_TRANSMISSION_WRAP) / (1.0 + RT_TRANSMISSION_WRAP));
+        let factor = u.diffuse_transmission_params.x;
+        direct_translucent = direct_translucent + factor * albedo.rgb / PI * l_col.rgb * back_l * l_dir.w * vis;
     }
 
     // Split-sum IBL (IMPORT_FIDELITY_DESIGN.md D2/F-P1): prefiltered
@@ -1754,6 +1777,12 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     // the same DFG LUT the IBL approximation above doesn't have) — known
     // v1 limitation, same doctrine as `specular_factor`'s f90 note above.
     base_rgb = base_rgb + direct_sheen + sheen_ibl;
+    // RAYTRACING_DESIGN.md section 16 TL1: translucency adds to `base_rgb`
+    // BEFORE the glass block — `transmission_factor` and
+    // `translucency` are independent lobes; a material with both gets both,
+    // matching the Khronos layering where diffuse-transmission and
+    // specular-transmission coexist. factor 0 adds exactly zero.
+    base_rgb = base_rgb + direct_translucent;
     // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2b/D3: transmission REPLACES the
     // diffuse response with the refracted-and-tinted background sample
     // (mixed by transmission_factor, per the glTF sample viewer's

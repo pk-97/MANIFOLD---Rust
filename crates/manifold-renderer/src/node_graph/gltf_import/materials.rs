@@ -354,6 +354,14 @@ const MATERIAL_PARAMS: &[MaterialParam] = &[
         name: "volume_attenuation_color_b",
         value: |m| float(m.volume_attenuation_color[2]),
     },
+    // RAYTRACING_DESIGN.md section 16 TL3: KHR_materials_diffuse_transmission
+    // factor -> pbr_material's translucency param. Color factor/texture stay
+    // deferred (section 16.8) — tint=albedo is the right default for foliage
+    // and the only source for most scans.
+    MaterialParam {
+        name: "translucency",
+        value: |m| float(m.diffuse_transmission_factor),
+    },
 ];
 
 /// Write the plain [`MATERIAL_PARAMS`] catalog onto a `node.pbr_material`

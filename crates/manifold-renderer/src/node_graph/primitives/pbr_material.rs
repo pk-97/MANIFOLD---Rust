@@ -92,6 +92,12 @@ crate::primitive! {
         volume_attenuation_color_r: ScalarF32 optional,
         volume_attenuation_color_g: ScalarF32 optional,
         volume_attenuation_color_b: ScalarF32 optional,
+        // RAYTRACING_DESIGN.md section 16 TL3: thin-surface translucency
+        // for backlit foliage. Default 0.0 (inert). Populated from
+        // KHR_materials_diffuse_transmission's diffuseTransmissionFactor
+        // at import time; dialable as a card param for scans without
+        // extension data.
+        translucency: ScalarF32 optional,
         // GLB_CONFORMANCE_DESIGN.md G-P4/D5: KHR_texture_transform,
         // per-map — one folded 2×3 affine
         // `uv' = (m00*u + m01*v + tx, m10*u + m11*v + ty)` per map family
@@ -435,6 +441,18 @@ crate::primitive! {
             label: "Volume Attenuation Colour B",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        // RAYTRACING_DESIGN.md section 16 TL3: thin-surface translucency.
+        // Default 0.0 = inert (no diffuse transmission — byte-identical to
+        // pre-TL-A output). Dialable on the material card for backlit foliage
+        // scans; populated from KHR_materials_diffuse_transmission at import.
+        ParamDef {
+            name: Cow::Borrowed("translucency"),
+            label: "Translucency",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
             range: Some((0.0, 1.0)),
             enum_values: &[],
         },
@@ -934,6 +952,8 @@ impl Primitive for PbrMaterial {
         let volume_attenuation_color_r = ctx.scalar_or_param("volume_attenuation_color_r", 1.0);
         let volume_attenuation_color_g = ctx.scalar_or_param("volume_attenuation_color_g", 1.0);
         let volume_attenuation_color_b = ctx.scalar_or_param("volume_attenuation_color_b", 1.0);
+        // RAYTRACING_DESIGN.md section 16 TL3.
+        let translucency = ctx.scalar_or_param("translucency", 0.0);
         // One folded per-map UV affine per family (G-P4). The closure keeps
         // the 30 reads mechanical; identity defaults are exactly inert.
         let uv_xf = |prefix: &str| -> [f32; 6] {
@@ -1015,6 +1035,7 @@ impl Primitive for PbrMaterial {
         material.anisotropy_strength = anisotropy_strength;
         material.anisotropy_rotation = anisotropy_rotation;
         material.dispersion = dispersion;
+        material.translucency = translucency;
         material.transmission_factor = transmission;
         material.volume_thickness_factor = volume_thickness;
         material.volume_attenuation_distance = volume_attenuation_distance;
