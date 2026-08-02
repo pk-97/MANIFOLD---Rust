@@ -866,6 +866,13 @@ pub struct RenderScene {
     rt_mask_width: u32,
     rt_mask_height: u32,
     rt_params_buffer: Option<manifold_gpu::GpuBuffer>,
+    /// RT-A3a (D16a split mode): the mask dispatch's OWN params buffer.
+    /// Sharing `rt_params_buffer` raced: `upload()` is a CPU write at
+    /// encode time, so the second upload (lighting) overwrites the first
+    /// (mask) before the GPU runs either — the mask dispatch executed
+    /// with shadow_spp=0 and never wrote the mask (all-zero vis = no
+    /// sun in split mode; Peter's "no lighting at all" 2026-08-02).
+    rt_mask_params_buffer: Option<manifold_gpu::GpuBuffer>,
     /// RAYTRACING_DESIGN.md section 5.2 P3: per-object `GiMaterial` (albedo,
     /// emissive) table for the GI gather's emissive-hit + sun-bounce terms
     /// — rebuilt (CPU-mapped, rewritten in place, no realloc unless the
@@ -1197,6 +1204,7 @@ impl RenderScene {
             rt_mask_width: 0,
             rt_mask_height: 0,
             rt_params_buffer: None,
+            rt_mask_params_buffer: None,
             rt_gi_materials: None,
             rt_gi_materials_capacity: 0,
             rt_obj_motion: None,
@@ -2097,6 +2105,13 @@ impl RenderScene {
     fn ensure_rt_params_buffer(&mut self, device: &manifold_gpu::GpuDevice) {
         if self.rt_params_buffer.is_none() {
             self.rt_params_buffer = Some(device.create_buffer_shared(
+                std::mem::size_of::<manifold_gpu::raytrace::ShadowRayParams>() as u64,
+            ));
+        }
+        // RT-A3a: the mask dispatch needs its own (see the field's doc
+        // comment — a shared buffer races the two encode-time uploads).
+        if self.rt_mask_params_buffer.is_none() {
+            self.rt_mask_params_buffer = Some(device.create_buffer_shared(
                 std::mem::size_of::<manifold_gpu::raytrace::ShadowRayParams>() as u64,
             ));
         }
@@ -4800,6 +4815,7 @@ impl EffectNode for RenderScene {
                 let tracer = self.rt_tracer.as_ref().expect("ensured above");
                 let accel = self.rt_accel.as_ref().expect("rt_ready implies rt_accel.is_some()");
                 let params_buffer = self.rt_params_buffer.as_ref().expect("ensured above");
+                let mask_params_buffer = self.rt_mask_params_buffer.as_ref().expect("ensured above");
                 let normal_sources_buffer = self.rt_normal_sources.as_ref().expect("ensured above");
                 let depth_tex = self.opaque_depth_snapshot.as_ref().expect("ensured above");
                 let mask_half = self.rt_mask_half.as_ref().expect("ensured above");
@@ -4821,7 +4837,7 @@ impl EffectNode for RenderScene {
                         gpu.native_enc,
                         accel,
                         &mask_params,
-                        params_buffer,
+                        mask_params_buffer,
                         gi_materials_buffer,
                         normal_sources_buffer,
                         &alpha_textures,
