@@ -1,6 +1,6 @@
 # Ray Tracing — hybrid RT lighting for hero scenes
 
-**Status:** IN PROGRESS — Tier 1+2, the motion class, reflections R1–R3, T3-8 multi-bounce GI, section 12 (screen-space AO), section 13 (temporal denoiser rebuild), section 14 (traced env diffuse) landed; phase records in section 9.6 (Phases). OWED: Peter's look at multi-bounce, R2 constants, the denoiser under fast camera motion, ED-A env-diffuse on a real hero scene; a `trace_ms` 2-vs-1 number from a heavier scene. Items 6/9, P5 export (D13), P6 frame interp stay show-need-triggered. · 2026-07-31 · K3 + Peter
+**Status:** IN PROGRESS — Tier 1+2, the motion class, reflections R1–R3, T3-8 multi-bounce GI, section 12 (screen-space AO), section 13 (temporal denoiser rebuild), section 14 (traced env diffuse) landed; phase records in section 9.6 (Phases). Section 15 (many-light: caster cap + emissive RIS) APPROVED 2026-08-02, not built. OWED: Peter's look at multi-bounce, R2 constants, the denoiser under fast camera motion, ED-A env-diffuse on a real hero scene; a `trace_ms` 2-vs-1 number from a heavier scene. Item 9 (translucency), P5 export (D13), P6 frame interp stay show-need-triggered. · 2026-08-02 · K3 + Peter
 **Prerequisites:** none for P0. P1+ gated on P0 numbers and on RENDERING_INFRA_V2 section 2 (G-buffer/motion vectors) for temporal pieces.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -1203,3 +1203,387 @@ env fetch is one texture read per miss. The accumulate/denoise chain carries alp
 where it carried zero — same bandwidth class, no new texture. And the metal-fill
 deviation above is a real look change on existing RT scenes: darker, correct, and
 Peter signs it off on a fixture before it lands.
+
+## 15. Many-light direct lighting — caster cap + emissive RIS (Tier 3 item 6; APPROVED 2026-08-02, K3 lead on k3-restir-design's draft; not started)
+
+### 15.0 What changed since the scoping note
+
+Section 8 item 6 (2026-07-23) says "RT shadows are sun-only today; every
+other light is still a shadow map." That is stale. The multi-caster fix
+shipped after it: all `MAX_RT_CASTERS` (= 4) casters — sun AND point — are
+traced per pixel with soft shadows (`render_scene.rs:4533-4557` fills one
+`RtCasterParams` per caster, kind 0 sun cone / kind 1 point with
+`light_size`; kernel loop `crates/manifold-gpu/src/metal/raytrace.rs:1307-1346`),
+and shadow maps never render at all in an RT scene
+(`render_scene.rs:3933` and `:4079` both gate on `!(rt_enabled && rt_ready)`).
+
+The item's real content, restated against today's code:
+
+1. **Casters beyond 4 are unshadowed.** `MAX_RT_CASTERS = 4` is a fixed
+   kernel slot count (`raytrace.rs` (metal) `:542` MSL, `:2791` Rust);
+   `shadow_factor` returns lit for slot −1 (`render_scene.wgsl:636`). A
+   show scene with 6 shadow-casting strobes shadows 4 of them.
+2. **Emissive geometry has no direct-light estimator.** Emissive surfaces
+   light the scene only when a cosine-hemisphere GI gather ray happens to
+   hit them (`raytrace.rs` (metal) `:1459-1469`, `hit_emissive` at bounce
+   1). A small bright emitter — an LED strip, a strobe bar, a glowing edge
+   on a hero scan — is hit by almost no gather rays, so its direct light
+   is statistically absent at 4 GI spp. This is the actual many-light
+   problem in MANIFOLD's scene class, and it is the one worth building.
+
+### 15.1 Audit — what exists (verified 2026-08-02)
+
+| Piece | Where | State |
+|---|---|---|
+| Light types | `crates/manifold-renderer/src/node_graph/light.rs:43-52` (`LightMode`) | **Sun and Point only. No spot light exists** (negative `rg` for `Spot` in `light.rs`). Both modes carry `cast_shadows`, `shadow_softness` (PCF tiers + `Contact { light_size }` PCSS), `shadow_resolution`. |
+| Light count cap | `render_scene.rs:146` (`LIGHT_SLIDER_MAX = 64`), module doc `:14-16` | Uncapped structurally — runtime-sized `@binding(8)` storage buffer; slider soft bound 64, `setBytes` hard ceiling 127. |
+| Real light census | Peter's `~/Downloads/*.manifold`, counted `node.light` occurrences per project 2026-08-02 | Typical 1–10 light nodes; max 20 (`SceneLadders`). **A few dozen is the observed ceiling; the median show scene is single digits.** |
+| Shadow-map path | `render_scene.rs:159` (`MAX_SHADOW_CASTING_LIGHTS = 4`), `:3089-3130` | First 4 `cast_shadows` lights in slot order, one depth-only prepass each; lights past the cap illuminate unshadowed (slot −1 → `shadow_factor` 1.0, `render_scene.wgsl:636`). |
+| RT shadow path | `render_scene.rs:4526-4557`; kernel `raytrace.rs` (metal) `:1304-1346` | All ≤4 casters traced, sun cone (`SOFT_SHADOW_CONE_RADIANS`, `render_scene.rs:191`) and point `light_size` softness; visibility rides `out_sv` RGBA, one channel per slot, consumed by `shadow_factor` at `render_scene.wgsl:647-650`. |
+| sv accumulation | `raytrace.rs` (metal) `:2118-2193` | SV-ACCUM: ping-pong history + per-channel moments + snap-hold; geometry-driven gates, deliberately NOT snapped by the lighting key (visibility is geometry; strobes must not snap it — `:2125`). |
+| GI gather (emissive path) | `raytrace.rs` (metal) `:1428-1486` | 4 spp cosine hemisphere, 2 bounces; bounce-1 `hit_emissive` = factor × emissive-map sample (BUG-1gqt (kernels ignored emissive texture)). Demodulated into `out_irr.rgb`, accumulated, substituted for `diffuse_ibl` in `fs_pbr` (ED2). |
+| Emissive volumetric proxy | `render_scene.rs:4942-4968` | Every emissive object is already an unshadowed Point-mode pseudo-light in the shaft march — the per-object proxy precedent. |
+| Lighting-key snap | `render_scene.rs:4823-4864` | CPU hash of caster direction/colour/cone/kind + ambient snaps history on light-param change (section 13). Does NOT cover in-graph animated emissive — per-texel gates carry that today, same as for the GI gather. |
+| Trace dispatch | `render_scene.rs:4566-4567`, D11/D22 | One dispatch, half of render res; render res = 2/3 native under temporal upscale → trace ≈ 1280×720 ≈ 0.92M texels at 4K. |
+| Ray budget today | kernel + `render_scene.rs:191-244` | Per trace texel: ≤4 shadow + 1 primary + 4 AO + 4 GI × (2 bounces + ≤4 sun-bounce/hit) + 8 refl ≈ 45 rays worst case. |
+| Frame cost | brief + section 13 table | Full-RT frame ~26ms at half-res rays; 24fps ceiling = 41.6ms. |
+| Reset machinery | D15, `render_scene.rs:839` | One `TemporalResetDetector`; a second is forbidden (I-R2 pattern). |
+| Region-probe harness | `tests/gpu_proofs/rt_p1_region_probe.rs`, `rt_p3_emissive_gi.rs` | The gate precedent every phase below copies. |
+
+**Extend, don't redesign.** The emissive-sampling term joins the existing
+`trace_shadow_rays` dispatch and the existing `out_irr` accumulation chain.
+The caster-cap raise extends existing slot tables. No new pass, no new
+temporal state.
+
+### 15.2 Decisions
+
+- **RS1 — two mechanisms for two different gaps, not one ReSTIR.**
+  Analytic lights and emissive geometry are different problems at
+  MANIFOLD's scales and get different answers (RS2, RS3). Rejected: one
+  sampled estimator over a unified light table for everything — it makes
+  the ≤8-caster case stochastic (worse than deterministic) to serve a
+  table shape only the emissive case needs.
+- **RS2 — analytic lights: raise the RT caster cap 4 → 8, deterministic
+  rays, no sampling.** At the observed census (typical <10 light nodes,
+  max 20) every shadow-casting light a real show uses fits in 8 slots, and
+  deterministic per-caster rays are strictly better than sampling at these
+  counts — zero variance, zero MIS, zero clamp machinery. Cost: 0–4 extra
+  shadow rays per trace texel, only on scenes that actually wire >4
+  casters. `MAX_SHADOW_CASTING_LIGHTS` (the raster shadow-map path) stays
+  4 — non-RT scenes are untouched; the raster/RT coverage divergence
+  widens from "RT shadows better" to "RT shadows more", same direction as
+  every RT term so far. Un-suppression trigger for >8: a real show project
+  with >8 shadow-casting lights — at that point re-read RS5's rejection,
+  because that is the light count where sampling starts winning.
+- **RS3 — emissive geometry: RIS (resampled importance sampling, one
+  candidate, no reservoir reuse) over an emissive-triangle light table,
+  one visibility ray per trace texel, demodulated into `out_irr.rgb`.**
+  This is the estimator at the core of ReSTIR DI with the spatial/temporal
+  reservoir machinery deliberately left off — see RS5 for why that is not
+  cowardice but sizing. Unbiased: candidate triangle drawn from an alias
+  table ∝ static geometric power, a point sampled area-uniform on it, one
+  shadow ray to the point, weighted by the full solid-angle factor. Handles
+  any emissive-triangle count at flat per-pixel cost, which is the only
+  sense in which MANIFOLD is a many-light scene class.
+- **RS4 — the term rides `out_irr`; there is no new temporal state of any
+  kind.** The sampled direct-emissive irradiance is the same physical
+  quantity the GI gather already writes (demodulated incident irradiance
+  at the primary surface, no albedo — D3/MB5 discipline). It is added
+  in-kernel to `out_irr.rgb` and inherits upsample, à-trous, accumulation,
+  the D15 reset detector, and the section-13 gates unchanged. Rejected:
+  reservoir textures with their own ping-pong history — a second temporal
+  state machine whose failure modes are exactly the classes three waves
+  paid to tame: BUG-311 (motion ghosting), BUG-312 (speckle), and
+  BUG-322 (rotation shimmer) — built to amortize a signal the existing
+  accumulator already amortizes (it converges 8-spp reflections and 4-spp
+  AO today).
+- **RS5 — full ReSTIR DI (temporal + spatial reservoir reuse) is rejected
+  for this scene class, with a named revival trigger.** ReSTIR's value
+  scales with light count and with rays saved per shading point.
+  MANIFOLD's analytic counts are single digits; its emissive case is
+  served at 1 ray/pixel by RS3; and the heavy temporal+spatial filtering
+  ReSTIR would amortize into already exists as the accumulator + à-trous
+  chain. What reservoirs would buy — cleaner 1-spp input before filtering —
+  is the thing this codebase has repeatedly chosen to buy with accumulation
+  instead (section 13's 1/n running mean). Revival trigger: after RS-C and
+  Peter's deferred ray-budget re-judge, converged stills STILL show
+  emissive-sampling noise the accumulator cannot hide — measured, not
+  eyeballed, on the rt-capture instrument (section 13). At that point
+  reservoirs are a delta on RS3's machinery (the table, the estimator, the
+  clamp all survive), not a redesign.
+- **RS6 — static sampling weights, current-frame evaluation: strobes are
+  free.** The alias table weights are geometric (triangle area × build-time
+  emissive power rank) and built once with the accel; the estimator reads
+  the CURRENT frame's emissive colour from `gi_materials` / the emissive
+  map at evaluation. RIS stays unbiased for any candidate distribution
+  with nonzero probability, so an intensity strobe needs no table rebuild
+  and invalidates nothing — the strobe case reduces to "the term's value
+  changed this frame", which is precisely what the section-13 per-texel
+  gates and the accumulator's snap machinery already govern for the GI
+  gather's emissive term. The lighting key is NOT extended to emissive
+  (it can't see in-graph animation today; per-texel gates carry it — same
+  coverage as the status quo, no regression).
+- **RS7 — substitution, never addition: the sampler owns DIRECT emissive
+  light; the GI gather keeps indirect.** The gather's bounce-1
+  `hit_emissive` is deleted when the sampler runs; bounce ≥ 2 keeps its
+  `hit_emissive` (that IS indirect light), and env/sun-bounce are
+  untouched. The `818a06b0` double-count trap one term over — same guard
+  family as RD1/I-ED3. Machine check: I-RS3.
+- **RS8 — firefly control by table-mean anchor, ED5's pattern one level
+  down.** A near or hot triangle gives one sample a huge weight; at 1
+  candidate there is no median to anchor on (RT_REFL's clamp needs ≥3
+  spp). Cap each sample's luminance at `RT_EMISSIVE_FIREFLY_GAIN` × the
+  light table's mean power — a CPU-computed scalar riding
+  `ShadowRayParams`, the same "typical-value anchor, no new texture" move
+  as ED5's roughest-mip env anchor. Named constant, committed range 8–32
+  per the `RT_GI_ENV_FIREFLY_GAIN` precedent; tuned by measurement on the
+  RS-C fixture, not by eye.
+- **RS9 — resolution: the term inherits the irradiance channel's
+  resolution, whatever the quality wave decides.** It is written into
+  `out_irr` at trace size, so if the wave's A2 measurement moves a ray
+  term native-res, this term follows `out_irr`'s fate automatically. No
+  independent resolution decision exists here.
+- **RS10 — the Metal RT trait grows no new method (RD10 precedent).**
+  `dispatch_shadow_rays` gains the light-table buffer argument;
+  `ShadowRayParams` gains the emissive-sampling fields. Vulkan parity
+  (D9): the table and alias are plain `GpuBuffer`s; sampling is in-kernel
+  ray queries — a translation matter, nothing Apple-shaped crosses
+  `manifold-gpu`.
+
+### 15.3 Architecture
+
+**Light table.** One entry per emissive triangle of every RT-registered
+object with non-black emissive (factor or map): `{ v0, v1, v2 }` world
+positions (refit alongside the TLAS — transforms only, same discipline as
+`refit_accel`) + the alias table (probability + alias index per entry),
+both plain `GpuBuffer`s. Built CPU-side on the content thread at
+accel-build time inside `render_scene`'s existing RT registration —
+D17's async discipline applies unchanged (table lands with the accel's
+ready flag; until then the GI gather owns emissive as today, no partial
+state). Capped at `RT_EMISSIVE_TABLE_MAX = 4096` entries, top-power
+truncation — **Consequences, stated honestly:** beyond 4096 emissive
+triangles the dimmest tail is never sampled (a bias, not a crash);
+a photoscan with an emissive map over most of its surface blows the cap
+by itself, which is why truncation is by power rank, not slot order.
+Trigger to raise or go hierarchical: a hero asset whose emissive tail
+visibly vanishes — Peter's look on the RS-C demo pair.
+
+Weights are static-geometric (RS6): per-entry power = area × build-time
+emissive luma (factor × emissive-map mean; the map mean is computed once
+at registration from the already-uploaded texture). Per-frame intensity
+changes (a strobe, an LFO on emission) never touch the table.
+
+**Kernel flow**, inside `trace_shadow_rays` after the GI block, reusing
+`sec_origin`, `shading_n`, `bias_eps`, `walk_with_alpha_test`:
+
+1. `u = rand2(tid, frame, 700u)` → alias draw → triangle `t`; second draw
+   → area-uniform point `q` on `t` (standard sqrt-remap).
+2. `l = q - sec_origin`; shadow ray toward `q`, `max_distance = |l| -
+   bias_eps`, `RT_MASK_SHADOW_CASTER` — one query, any-hit.
+3. Contribution = `emissive_at_hit(...)` at the triangle's own UV (the
+   current frame's value — RS6) × `max(dot(shading_n, l̂),0)` ×
+   `max(dot(n_t, -l̂),0)` × area / (`|l|²` × pdf), pdf from the alias
+   entry; firefly-capped per RS8; added to the `gi` accumulator BEFORE
+   the `/ gi_spp` divide site owns its own normalization (the term is a
+   single weighted sample, not averaged with the gather).
+4. The GI block's bounce-1 `hit_emissive` line is gated off when the
+   sampler ran (RS7); bounce ≥ 2 unchanged.
+
+**No WGSL change.** The term arrives inside `rt_irradiance_mask.rgb`,
+already substituted for `diffuse_ibl` (ED2) and already modulated by
+albedo/`kd_ibl` consumer-side. The entire raster-side diff is zero lines;
+a larger diff to `render_scene.wgsl` in RS-C means the phase has gone
+wrong (the RS2 sv-mask widening excepted — that phase owns binding 44).
+
+**Stage translation.** A glowing strip or strobe bar on a hero object
+lights its surroundings directly and correctly — crisp enough to read as
+a source, not only as the soft wash the GI gather statistically finds.
+Under a strobe the light lands the same frame the emission flips (RS6),
+with the accumulator's snap machinery deciding convergence speed exactly
+as it does for every other RT term. Cost: one ray per trace texel plus
+the cap raise's 0–4 — about +2% worst-case rays on today's budget.
+
+### 15.4 Invariants & enforcement
+
+- **I-RS1 — one temporal-reset path.** Negative `rg` for a second
+  `TemporalResetDetector` construction in `render_scene.rs` (I-R2
+  pattern). RS4 makes this structural: no new history exists to reset.
+- **I-RS2 — the emissive table is derived state, never a side effect.**
+  Built from the same `objects` slice and registration path as the accel
+  (section 10 contract: the RT scene is a derived cache). Negative `rg`:
+  no table construction outside the RT registration block.
+- **I-RS3 — substitution, never addition.** Cross-commit A/B (MB-B
+  precedent): the emissive fixture's converged direct-light region at
+  RS-C equals the CPU-computed analytic value within stated tolerance,
+  AND the pre-RS-C gather-only capture of the same fixture reads BELOW
+  a stated floor on the small-emitter region (the gather statistically
+  misses it) — both legs required; "adds on top" shows as the RS-C leg
+  reading ~2× analytic and fails loudly.
+- **I-RS4 — no Apple types above `manifold-gpu`.** Standing negative `rg`
+  (`objc2|MTL` zero hits outside `manifold-gpu`) at every phase gate.
+- **I-RS5 — no emissive sampling on the non-RT path.** The sampler block
+  lives inside the existing `rt_ready` dispatch; the native-mode
+  byte-identity discipline (T2-B precedent — real `graph-tool render`
+  machine diff, never a code-diff argument) is re-run at RS-C's gate.
+- **I-RS6 — sv mask channel count matches `MAX_RT_CASTERS`.** After RS2:
+  `rg` — the shadow-mask textures' channel total (two `Rgba16Float`) and
+  the Rust/MSL `MAX_RT_CASTERS` constants agree at 8; `shadow_factor`'s
+  slot indexing covers 0..7 (the `clamp(..., 0, 3)` at
+  `render_scene.wgsl:649` is gone).
+
+### 15.5 Alternatives (priced)
+
+Trace-res ≈ 0.92M texels at 4K/temporal-upscale. Ray costs per texel.
+
+- **Trace every analytic light deterministically, uncapped.** Rays =
+  casters/texel — fine at 4, linearly bad at 20, useless for emissive
+  triangles (they aren't casters). Survives as RS2, capped at 8.
+- **Light-list importance sampling for analytic lights too.** 1 ray/texel
+  regardless of count, but converts 4–8 deterministic visibilities into
+  stochastic ones needing accumulation to converge — strictly worse at
+  observed counts. Becomes interesting past ~16 casters; RS2's trigger
+  names the re-read.
+- **Per-OBJECT emissive proxies instead of per-triangle** (the
+  `shaft_lights` shape — one point/disc light per emissive object): table
+  build collapses to trivial, but an extended emitter (a wall of panels, a
+  long strip) lights from its centroid — no shape, no contact gradient,
+  and the bright end of a strip can't read brighter than the dim end.
+  The per-triangle table is the mechanism that makes emission shape true;
+  the proxy is the named fallback only if RS-B's table build proves
+  intractable in review, not a phase option.
+- **Full ReSTIR DI.** RS5. Priced: reservoir ping-pong textures + a
+  spatial reuse pass + bias correction ≈ the sv/irr accumulation surface
+  area again, to reduce variance the existing accumulator already reduces;
+  the spatial pass re-opens the edge-stop problem à-trous already owns.
+- **Clustered / light-tree sampling.** For thousands of lights.
+  MANIFOLD's observed ceiling is 20 analytic + ≤4096 table entries; a
+  tree over 4096 entries buys nothing over an alias table. Revival
+  trigger: a scene class that makes RS3's cap the binding constraint.
+
+### 15.6 Phases
+
+One lane brief each, committable, every gate numeric. Pre-allocated BUG
+range: assign at wave dispatch.
+
+#### RS-A — caster cap 4 → 8
+
+- *Entry:* main with section 14 landed; re-verify `raytrace.rs` (metal)
+  `:542`/`:2791` (`MAX_RT_CASTERS` still 4 both mirrors), `render_scene.
+  wgsl:649` (the `clamp(..., 0, 3)` slot index), `render_scene.rs:4533`
+  (rt_casters fill). A moved anchor is an escalation, not a guess.
+- *Read-back:* RS1/RS2; the multi-caster fix's own diff shape
+  (`rt_multi_caster_shadow.rs` — the test this phase extends); the MSL/
+  Rust mirror-sync discipline comments at `raytrace.rs` (metal) `:538-542`.
+- *Deliverables:* `MAX_RT_CASTERS` 8 in both mirrors with the manual-sync
+  comment updated; `ShadowRayParams` caster array growth (offset asserts
+  stay green); second sv texture (slots 4–7) through trace → upsample →
+  atrous → SV-ACCUM → binding 44; `shadow_factor` two-texture slot
+  indexing; the 6-caster value test — each caster independently occluded
+  reads its own channel's visibility, CPU-computed expected, on the
+  `rt_p1_region_probe` harness.
+- *Gate:* clippy `-p manifold-gpu -p manifold-renderer`; the new value
+  test; `scripts/gpu_proofs_gate.py`; negative `rg`: `clamp(i32(slot_f + 0.5), 0, 3)`
+  zero hits; `MANIFOLD_RENDER_TRACE=1`, no frame >20ms on an 8-caster
+  fixture, `trace_ms` delta 4-vs-8 casters reported as a number.
+- *Performer gesture:* wire 6 shadow-casting point lights into a playing
+  RT scene — every light's strobe throws its own shadow, no frame >20ms.
+- *Forbidden moves:* touching `MAX_SHADOW_CASTING_LIGHTS` (raster path
+  stays 4); a third sv texture "for headroom"; sampling instead of
+  deterministic rays; claiming channel-count agreement without I-RS6's rg.
+- *Demo:* none — L1 (no new visible surface beyond more-correct shadows;
+  Peter sees it in RS-C's demo pair).
+- *Test scope:* `-p manifold-renderer -p manifold-gpu` + gpu-proofs.
+
+#### RS-B — emissive light table + alias build
+
+- *Entry:* RS-A landed; re-verify the RT registration block
+  (`render_scene.rs:4526` area) and `RtObjectGeometry`'s field set.
+- *Read-back:* RS3/RS6/RS8; D17; the `build_normal_sources` /
+  `ensure_normal_sources` pattern (the per-object bindless-table build
+  this phase's table build mirrors); `GiMaterial` population
+  (`render_scene.rs:4605`).
+- *Deliverables:* per-triangle emissive table + alias table, built
+  CPU-side at accel registration, capped 4096 by power rank; emissive-map
+  mean computed once per registered texture; world-position refit on
+  `refit_accel`; table-mean-power scalar into `ShadowRayParams`; value
+  test — table contents (areas, powers, alias probabilities, truncation
+  order) vs CPU-computed expected on a synthetic multi-object fixture,
+  exact math; held-out input — a real GLB with an emissive map the lane
+  did not develop against, table entry count and total power vs a
+  CPU-computed census of the same asset.
+- *Gate:* clippy `-p manifold-gpu -p manifold-renderer`; both value
+  tests; `scripts/gpu_proofs_gate.py`; I-RS2's negative `rg`.
+- *Forbidden moves:* building the table mid-frame (D17); a new
+  `Arc<Mutex>`; reading the emissive map per frame (the mean is a
+  registration-time computation); per-object proxies "to simplify".
+- *Demo:* none — L1 (no pixels yet; RS-C is the vertical slice).
+- *Test scope:* `-p manifold-renderer -p manifold-gpu` + gpu-proofs.
+
+#### RS-C — kernel sampling + substitution
+
+- *Entry:* RS-B landed; held-out census numbers recorded (in the
+  2026-08-02 automated session: recorded by the lead; Peter's look closes
+  with the wave's other owed looks).
+- *Read-back:* RS3/RS4/RS6/RS7/RS8; the GI block (`raytrace.rs` (metal)
+  `:1428-1486`) whole; `emissive_at_hit` (`:825-838`); ED-B's firefly
+  tuning record (`:1408-1427` — the measurement style RS8's gain copy).
+- *Deliverables:* the section-15.3 kernel block (alias draw, point
+  sample, one visibility ray, solid-angle weight, RS8 clamp); RS7's
+  bounce-1 `hit_emissive` gate; new value test
+  `tests/gpu_proofs/rt_emissive_direct.rs` on the `rt_p3_emissive_gi.rs`
+  harness: a small bright emissive quad above a floor — CPU computes the
+  analytic solid-angle irradiance at a named floor region; converged
+  (accumulated) region mean within stated tolerance; **control leg,
+  mandatory:** the pre-RS-C gather-only behaviour on the identical
+  fixture reads below a stated floor (cross-commit A/B, MB-B precedent),
+  and bounce-2 indirect emissive (a wall only reachable via one bounce)
+  is unchanged within epsilon (proves the RS7 gate didn't amputate
+  indirect).
+- *Gate:* (a) the value test with both legs; (b) I-RS3's substitution
+  pair; (c) I-RS5's native-mode machine diff; (d) negative `rg`: I-RS1,
+  I-RS4; (e) `scripts/gpu_proofs_gate.py`; (f) `MANIFOLD_RENDER_TRACE=1`
+  no frame >20ms, **`trace_ms` delta sampler on vs off reported as a
+  number** — the budget evidence for Peter's deferred ray-budget
+  re-judge; (g) strobe leg: emissive intensity flipped 0 ↔ full across
+  two frames through the real node path, region mean at flip+1 ≥ stated
+  fraction of converged (RS6 — no table rebuild, snap machinery lands
+  the cue).
+- *Performer gesture:* an LFO strobing an emissive hero object's emission
+  on a playing RT scene — the room's lighting strobes with it, same
+  frame, no boil beyond the accumulator's governed convergence.
+- *Forbidden moves:* reservoir textures or any new temporal buffer; a new
+  scene param (ED6/MB4 discipline); a WGSL diff (section 15.3 — zero
+  lines is the spec); averaging the sampled term into the `gi_spp`
+  divisor; touching the env/sun-bounce terms; a second
+  `TemporalResetDetector`; claiming the substitution from a code reading
+  instead of the two-leg gate.
+- *Demo (Peter only):* PNG pair on an emissive-strip hero scene —
+  gather-only vs sampled, converged stills — **L2; the stage verdict is
+  Peter's look** (D19/D20 standing lesson).
+- *Test scope:* `-p manifold-renderer -p manifold-gpu` + gpu-proofs
+  (`cargo test`, never nextest).
+
+**Phasing-completeness check:** every section-15.2 commitment lands in a
+phase — RS2 (RS-A), RS3/RS6/RS8 + table (RS-B), RS3/RS4/RS7/RS8 kernel
+(RS-C); RS1/RS5/RS9/RS10 are structural rulings enforced by I-RS1/I-RS2/
+I-RS5 and the forbidden-move lists. Deferred with triggers below.
+
+### 15.7 Deferred (with revival triggers)
+
+- **Reservoir reuse (full ReSTIR DI).** RS5's measured trigger:
+  converged stills still show emissive-sampling noise after RS-C and the
+  ray-budget re-judge, on the rt-capture instrument.
+- **More than 8 analytic casters.** Trigger: a real show project wiring
+  >8 shadow-casting lights; re-read the light-list-sampling rejection
+  then, not before.
+- **Hierarchical / power-rank-free table (light tree over emissive
+  triangles; emissive-map texel-level entries).** Trigger: a hero asset
+  whose emissive map concentrates in a small texel fraction (the
+  map-mean weight mis-ranks it) or whose emissive tail visibly vanishes
+  under the 4096 cap — Peter's look on the RS-C demo pair.
+- **Specular response to emissive lights** (direct-light specular from
+  the sampled term). The reflection path already picks emissive up at
+  hits; a diffuse-only direct term is the v1 scope call. Trigger: Peter's
+  look reports emissive sources reading flat on glossy floors.
+- **Clustered analytic-light sampling.** Trigger: a scene class past
+  `LIGHT_SLIDER_MAX` — the slider itself moves first.
