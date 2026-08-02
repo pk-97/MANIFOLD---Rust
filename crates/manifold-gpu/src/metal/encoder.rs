@@ -651,6 +651,13 @@ impl GpuEncoder {
                 let () = msg_send![&enc, useResource: &*blas.structure, usage: MTLResourceUsage::Read];
             }
             let () = msg_send![&enc, useResource: accel.instance_buffer.raw(), usage: MTLResourceUsage::Read];
+            // BUG-84fv audit: the kernels also read vertex/index data via
+            // raw addresses (RtNormalSource.vertex_base_addr) — declare
+            // those buffers too, or memory pressure can reclaim them
+            // mid-trace (same reclamation class as above).
+            for geo in &accel.geometry_buffers {
+                let () = msg_send![&enc, useResource: &**geo, usage: MTLResourceUsage::Read];
+            }
         }
         // Same contract for the direct bindings.
         for binding in bindings {
