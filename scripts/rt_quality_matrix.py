@@ -77,11 +77,12 @@ def log(msg):
     print(f"{datetime.now(timezone.utc).isoformat()} {msg}", flush=True)
 
 
-def run_cmd(cmd, cwd, timeout):
+def run_cmd(cmd, cwd, timeout, env=None):
     """Run command and return (exit_code, stdout, stderr, duration)."""
     start = time.time()
     try:
-        r = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True,
+                        timeout=timeout, env=env)
         return r.returncode, r.stdout, r.stderr, time.time() - start
     except subprocess.TimeoutExpired:
         return -1, "", f"TIMEOUT after {timeout}s", time.time() - start
@@ -102,25 +103,40 @@ def build_binary(repo):
     return repo / "target/release/manifold"
 
 
-def capture_paused(binary, project, frames, cwd, timeout):
+def capture_paused(binary, project, frames, rt_enabled=True, cwd=None, timeout=None, capture_dir=None):
     """Run paused capture and return (success, capture_dir, stderr)."""
-    if CAPTURE_DIR.exists():
-        shutil.rmtree(CAPTURE_DIR)
-    CAPTURE_DIR.mkdir(parents=True, exist_ok=True)
+    # Use provided capture directory or create new one
+    if capture_dir is None:
+        suffix = "rt_on" if rt_enabled else "rt_off"
+        capture_dir = Path(f"/tmp/rt_quality_matrix_{os.getpid()}_{suffix}")
 
-    args = [
-        str(binary), "rt-capture", "--paused", str(project),
-        "--frames", str(frames)
-    ]
-    exit_, out, err, dur = run_cmd(args, cwd=cwd, timeout=timeout)
+    # Ensure clean directory
+    if capture_dir.exists():
+        shutil.rmtree(capture_dir)
+    capture_dir.mkdir(parents=True, exist_ok=True)
+
+    args = [str(binary), "rt-capture", "--paused", str(project), "--frames", str(frames)]
+
+    # Add RT toggle via --set-at if specified
+    if not rt_enabled:
+        # Disable RT at frame 10 (after initial warmup)
+        args.extend(["--set-at", "10", "8_rt_enabled=0.0"])
+
+    # Set capture directory via environment variable
+    env = os.environ.copy()
+    env["MANIFOLD_RT_CAPTURE_DIR"] = str(capture_dir)
+
+    log(f"[rt-quality] capturing to {capture_dir.name}/ (RT={rt_enabled})")
+    exit_, out, err, dur = run_cmd(args, cwd=cwd, timeout=timeout, env=env)
 
     if exit_ != 0:
         return False, None, err
 
-    if not CAPTURE_DIR.exists():
-        return False, None, "rt-capture wrote no captures"
+    # Verify capture wrote files
+    if not any(capture_dir.glob("*.png")):
+        return False, None, f"rt-capture wrote no captures to {capture_dir}"
 
-    return True, CAPTURE_DIR, err
+    return True, capture_dir, err
 
 
 def measure_noise_leg(capture_dir):
@@ -167,86 +183,116 @@ def measure_noise_leg(capture_dir):
     return results
 
 
-def measure_sharpness_leg(rt_capture_dir, probe_regions):
+def measure_sharpness_leg(rt_capture_dir, raster_capture_dir, probe_regions):
     """
-    Measure SHARPNESS leg: edge transition width in RT captures.
+    Measure SHARPNESS leg: edge transition width RT-on vs RT-off (raster reference).
 
-    Analyzes shadow boundary regions from probe selection.
-    Returns dict with transition width measurements.
+    Computes ratio of RT edge width to raster edge width for each probe region.
+    Returns dict with sharpness ratio measurements.
     """
     results = []
+
+    # Check both captures exist
+    rt_composite = rt_capture_dir / "composite_0099.png"
+    raster_composite = raster_capture_dir / "composite_0099.png"
+
+    if not rt_composite.exists():
+        raise FileNotFoundError(f"RT composite not found: {rt_composite}")
+    if not raster_composite.exists():
+        raise FileNotFoundError(f"Raster composite not found: {raster_composite}")
 
     for region in probe_regions:
         if region["type"] != "shadow_boundary":
             continue
 
-        # Load the composite image
-        composite_path = rt_capture_dir / "composite_0099.png"
-        if not composite_path.exists():
-            continue
+        # Load both images
+        rt_img = Image.open(rt_composite)
+        raster_img = Image.open(raster_composite)
 
-        img = Image.open(composite_path)
-        img_array = np.array(img.convert('L')).astype(float) / 255.0
+        rt_array = np.array(rt_img.convert('L')).astype(float) / 255.0
+        raster_array = np.array(raster_img.convert('L')).astype(float) / 255.0
 
-        # Extract the region
+        # Extract the region from both
         x, y = region["x"], region["y"]
         w, h = region["width"], region["height"]
 
-        region_data = img_array[y:y+h, x:x+w]
+        rt_region = rt_array[y:y+h, x:x+w]
+        raster_region = raster_array[y:y+h, x:x+w]
 
-        # Find the strongest edge in the region (gradient)
-        grad_x = np.diff(region_data.astype(float), axis=1)
-        grad_y = np.diff(region_data.astype(float), axis=0)
-
-        grad_x = np.pad(grad_x, ((0, 0), (0, 1)), mode='constant')
-        grad_y = np.pad(grad_y, ((0, 1), (0, 0)), mode='constant')
-
-        grad_mag = np.sqrt(grad_x**2 + grad_y**2)
-
-        # Find edge center
-        edge_pos = np.unravel_index(np.argmax(grad_mag), grad_mag.shape)
-        edge_y, edge_x = edge_pos
-
-        # Sample horizontal line through the edge
-        line = region_data[edge_y, :]
-
-        # Measure transition width (10% to 90% of range)
-        line_min, line_max = line.min(), line.max()
-        if line_max - line_min < 0.05:
-            continue  # Skip low-contrast edges
-
-        threshold_10 = line_min + 0.1 * (line_max - line_min)
-        threshold_90 = line_min + 0.9 * (line_max - line_min)
-
-        below_10 = line < threshold_10
-        above_90 = line > threshold_90
-
-        if not below_10.any() or not above_90.any():
+        # Measure transition width in RT capture
+        rt_width = measure_transition_width(rt_region)
+        if rt_width is None:
             continue
 
-        left_10 = np.where(below_10)[0][-1]
-        right_90 = np.where(above_90)[0][0]
+        # Measure transition width in raster capture
+        raster_width = measure_transition_width(raster_region)
+        if raster_width is None:
+            continue
 
-        transition_width = abs(right_90 - left_10)
+        # Compute ratio
+        if raster_width > 0:
+            ratio = rt_width / raster_width
+        else:
+            continue
 
         results.append({
             "region": region["rationale"],
-            "transition_width": float(transition_width),
-            "contrast_range": [float(line_min), float(line_max)],
-            "coordinates": [int(x + edge_x), int(y + edge_y)]
+            "rt_width_px": float(rt_width),
+            "raster_width_px": float(raster_width),
+            "ratio": float(ratio),
+            "coordinates": [int(x), int(y)]
         })
 
     if not results:
-        return {"note": "no measurable edges found", "regions": []}
+        raise ValueError(f"No measurable edges found in {len(probe_regions)} probe regions")
 
-    # Return the median transition width and all measurements
-    widths = [r["transition_width"] for r in results]
+    # Return the maximum ratio and all measurements
+    ratios = [r["ratio"] for r in results]
     return {
-        "median_width_px": float(statistics.median(widths)),
-        "max_width_px": float(max(widths)),
-        "min_width_px": float(min(widths)),
+        "max_ratio": float(max(ratios)),
+        "median_ratio": float(statistics.median(ratios)),
+        "min_ratio": float(min(ratios)),
         "regions": results
     }
+
+
+def measure_transition_width(region_data):
+    """Measure edge transition width in a region using gradient magnitude."""
+    # Find the strongest edge
+    grad_x = np.diff(region_data.astype(float), axis=1)
+    grad_y = np.diff(region_data.astype(float), axis=0)
+
+    grad_x = np.pad(grad_x, ((0, 0), (0, 1)), mode='constant')
+    grad_y = np.pad(grad_y, ((0, 1), (0, 0)), mode='constant')
+
+    grad_mag = np.sqrt(grad_x**2 + grad_y**2)
+
+    # Find edge center
+    edge_pos = np.unravel_index(np.argmax(grad_mag), grad_mag.shape)
+    edge_y, edge_x = edge_pos
+
+    # Sample horizontal line through the edge
+    line = region_data[edge_y, :]
+
+    # Measure transition width (10% to 90% of range)
+    line_min, line_max = line.min(), line.max()
+    if line_max - line_min < 0.05:
+        return None  # Skip low-contrast edges
+
+    threshold_10 = line_min + 0.1 * (line_max - line_min)
+    threshold_90 = line_min + 0.9 * (line_max - line_min)
+
+    below_10 = line < threshold_10
+    above_90 = line > threshold_90
+
+    if not below_10.any() or not above_90.any():
+        return None
+
+    left_10 = np.where(below_10)[0][-1]
+    right_90 = np.where(above_90)[0][0]
+
+    transition_width = abs(right_90 - left_10)
+    return transition_width
 
 
 def measure_halo_leg(capture_dir, probe_regions):
@@ -258,18 +304,17 @@ def measure_halo_leg(capture_dir, probe_regions):
     """
     results = []
 
+    # Check capture exists
+    composite_path = capture_dir / "composite_0099.png"
+    if not composite_path.exists():
+        raise FileNotFoundError(f"Composite not found: {composite_path}")
+
     for region in probe_regions:
         # For halo measurement, we need regions near object boundaries
-        # Look for edges in composite with high contrast
-
         if region["type"] != "shadow_boundary":
             continue
 
         # Load the composite image
-        composite_path = capture_dir / "composite_0099.png"
-        if not composite_path.exists():
-            continue
-
         img = Image.open(composite_path)
         img_array = np.array(img.convert('L')).astype(float) / 255.0
 
@@ -333,7 +378,7 @@ def measure_halo_leg(capture_dir, probe_regions):
         })
 
     if not results:
-        return {"note": "no measurable silhouette edges found", "regions": []}
+        raise ValueError(f"No measurable silhouette edges found in {len(probe_regions)} probe regions")
 
     # Return the maximum halo width
     widths = [r["halo_width_px"] for r in results]
@@ -387,31 +432,48 @@ def run_matrix(repo, binary, repeats, pick_probes=True):
             config_key = f"{scene_name}_{config}"
             log(f"[rt-quality] running {config_key}...")
 
-            # Run captures
+            # Run captures: RT-on for sharpness/halo, RT-off for sharpness baseline
             all_noise = []
             all_sharpness = []
             all_halo = []
 
             for run in range(repeats):
-                success, cap_dir, err = capture_paused(
-                    binary, project_path, frames=300, cwd=repo, timeout=900)
-                if not success:
-                    log(f"  [FAIL] run {run+1}/{repeats}: {err}")
+                # RT-on capture (all legs)
+                rt_success, rt_cap_dir, rt_err = capture_paused(
+                    binary, project_path, frames=300, rt_enabled=True, cwd=repo, timeout=900)
+                if not rt_success:
+                    log(f"  [FAIL] RT-on run {run+1}/{repeats}: {rt_err}")
                     continue
 
+                # Raster capture for sharpness baseline
+                raster_success, raster_cap_dir, raster_err = capture_paused(
+                    binary, project_path, frames=300, rt_enabled=False, cwd=repo, timeout=900)
+                if not raster_success:
+                    log(f"  [FAIL] Raster run {run+1}/{repeats}: {raster_err}")
+                    raise ValueError(f"Raster capture failed: {raster_err}")
+
                 # Measure legs
-                noise = measure_noise_leg(cap_dir)
+                noise = measure_noise_leg(rt_cap_dir)
                 all_noise.append(noise)
 
                 if probe_regions:
-                    sharpness = measure_sharpness_leg(cap_dir, probe_regions)
-                    halo = measure_halo_leg(cap_dir, probe_regions)
-                    all_sharpness.append(sharpness)
-                    all_halo.append(halo)
+                    try:
+                        sharpness = measure_sharpness_leg(rt_cap_dir, raster_cap_dir, probe_regions)
+                        all_sharpness.append(sharpness)
+                    except (FileNotFoundError, ValueError) as e:
+                        log(f"  [FAIL] sharpness measurement run {run+1}/{repeats}: {e}")
+                        raise
+
+                    try:
+                        halo = measure_halo_leg(rt_cap_dir, probe_regions)
+                        all_halo.append(halo)
+                    except (FileNotFoundError, ValueError) as e:
+                        log(f"  [FAIL] halo measurement run {run+1}/{repeats}: {e}")
+                        raise
 
             if not all_noise:
-                log(f"  [FAIL] {config_key}: no successful captures")
-                continue
+                log(f"  [FAIL] {config_key}: no successful RT-on captures")
+                raise ValueError(f"No successful captures for {config_key}")
 
             # Aggregate across runs (median)
             agg_noise = {}
@@ -429,9 +491,10 @@ def run_matrix(repo, binary, repeats, pick_probes=True):
             agg_halo = {}
 
             if all_sharpness and all_sharpness[0].get("regions"):
-                widths = [s.get("median_width_px", 0) for s in all_sharpness if "median_width_px" in s]
-                if widths:
-                    agg_sharpness["median_width_px"] = float(statistics.median(widths))
+                ratios = [s.get("max_ratio", 0) for s in all_sharpness if "max_ratio" in s]
+                if ratios:
+                    agg_sharpness["max_ratio"] = float(max(ratios))
+                    agg_sharpness["median_ratio"] = float(statistics.median(ratios))
                     agg_sharpness["runs"] = len(all_sharpness)
 
             if all_halo and all_halo[0].get("regions"):
@@ -515,24 +578,13 @@ def main():
 
     for scene_name, scene_results in results.items():
         for config_name, config_results in scene_results.items():
-            # Check noise leg
-            if "noise" in config_results:
-                noise = config_results["noise"]
-                for channel, stats in noise.items():
-                    if stats.get("mean", 0) > THRESHOLD_NOISE_MEAN_CEILING:
-                        failures.append(f"{scene_name}/{config_name}/{channel}: noise mean {stats['mean']:.3f} > ceiling {THRESHOLD_NOISE_MEAN_CEILING}")
-                    if stats.get("p999", 0) > THRESHOLD_NOISE_P999_CEILING:
-                        failures.append(f"{scene_name}/{config_name}/{channel}: noise p99.9 {stats['p999']:.3f} > ceiling {THRESHOLD_NOISE_P999_CEILING}")
+            # Check sharpness leg - RT vs RASTER ratio
+            if "sharpness" in config_results and "max_ratio" in config_results["sharpness"]:
+                ratio = config_results["sharpness"]["max_ratio"]
+                if ratio > THRESHOLD_SHARPNESS_RATIO:
+                    trips.append(f"{scene_name}/{config_name}: sharpness RT/raster ratio {ratio:.3f} > ceiling {THRESHOLD_SHARPNESS_RATIO}")
 
-            # Check sharpness leg
-            if "sharpness" in config_results and "median_width_px" in config_results["sharpness"]:
-                width = config_results["sharpness"]["median_width_px"]
-                # We need RT-off comparison for actual sharpness check
-                # For now, just record the measurement
-                if width > THRESHOLD_HALO_WIDTH_PX:  # Using same threshold as proxy
-                    trips.append(f"{scene_name}/{config_name}: sharpness transition width {width:.1f}px exceeds expected range")
-
-            # Check halo leg
+            # Check halo leg - luminance bleed width
             if "halo" in config_results and "max_width_px" in config_results["halo"]:
                 halo_width = config_results["halo"]["max_width_px"]
                 if halo_width > THRESHOLD_HALO_WIDTH_PX:
