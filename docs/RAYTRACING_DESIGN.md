@@ -1,6 +1,6 @@
 # Ray Tracing — hybrid RT lighting for hero scenes
 
-**Status:** IN PROGRESS — Tier 1+2, the motion class, reflections R1–R3, T3-8 multi-bounce GI, section 12 (screen-space AO), section 13 (temporal denoiser rebuild), section 14 (traced env diffuse) landed; phase records in section 9.6 (Phases). Section 15 (many-light: caster cap + emissive RIS) APPROVED 2026-08-02, not built. OWED: Peter's look at multi-bounce, R2 constants, the denoiser under fast camera motion, ED-A env-diffuse on a real hero scene; a `trace_ms` 2-vs-1 number from a heavier scene. Item 9 (translucency), P5 export (D13), P6 frame interp stay show-need-triggered. · 2026-08-02 · K3 + Peter
+**Status:** IN PROGRESS — Tier 1+2, the motion class, reflections R1–R3, T3-8 multi-bounce GI, section 12 (screen-space AO), section 13 (temporal denoiser rebuild), section 14 (traced env diffuse) landed; phase records in section 9.6 (Phases). Section 15 (many-light: caster cap + emissive RIS) and section 16 (thin-surface translucency; volumetric participation deferred) APPROVED 2026-08-02, not built. OWED: Peter's look at multi-bounce, R2 constants, the denoiser under fast camera motion, ED-A env-diffuse on a real hero scene; a `trace_ms` 2-vs-1 number from a heavier scene. P5 export (D13), P6 frame interp stay show-need-triggered. · 2026-08-02 · K3 + Peter
 **Prerequisites:** none for P0. P1+ gated on P0 numbers and on RENDERING_INFRA_V2 section 2 (G-buffer/motion vectors) for temporal pieces.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -1587,3 +1587,374 @@ I-RS5 and the forbidden-move lists. Deferred with triggers below.
   look reports emissive sources reading flat on glossy floors.
 - **Clustered analytic-light sampling.** Trigger: a scene class past
   `LIGHT_SLIDER_MAX` — the slider itself moves first.
+
+## 16. RT translucency — light through thin surfaces (Tier 3 item 9; APPROVED 2026-08-02, K3 lead on k3-translucency-design's draft; not started)
+
+Tier 3 item 9 names two features. **(A) thin-surface transmission** — sunlight
+through a flower petal: the petal glows when backlit, and the light that passes
+through it lands, tinted, on whatever is behind. **(B) volumetric
+participation** — the god-ray march seeing traced occlusion at every march step,
+so beams carve themselves out of haze between the camera and the surface.
+
+**Recommendation: build A now (three one-session phases), keep B
+deferred with a revival trigger.** The audit shows A is a forward-shading term
+plus an extension to a walk that already exists, on data the kernel already
+fetches — cheap in rays and in machinery. B is a per-march-step ray problem: its
+cheapest honest variant costs ~+37% of the entire trace class, and its full form
+is absurd (section 16.6). B also gets a free dividend from A: the transmitted shadow
+mask A produces already flows into the march's sun visibility, so haze under a
+petal canopy dapples at zero extra cost.
+
+**Stage translation.** Peter's hero assets are photoscanned flowers. Today a
+petal between the sun and the camera renders dark on its back side (the shading
+normal is flipped toward the camera, `render_scene.wgsl:1372-1374`, so N·L = 0
+and only IBL/ambient fill remains), and its shadow is a hard black silhouette.
+With A: petals glow their own color when backlit — pink through pink, green
+through green — stacked petals dim each other softly instead of binary, and the
+floor under a backlit flower carries a colored pool instead of a void. That is
+"light through petals" as a stage look, and the factor is one cardable scalar,
+so the glow can breathe with the music like every other material param.
+
+### 16.1 Audit — what exists (verified 2026-08-02)
+
+| Piece | Where | State |
+|---|---|---|
+| Two-sided shading normal | `render_scene.wgsl:1372-1374` (`fs_pbr`: `if dot(N, V) < 0.0 { N = -N; }`) | Present — and it is exactly why backlit petals go dark: after the flip, a petal facing the camera away from the sun has N·L = 0. |
+| Glass transmission (KHR_materials_transmission + volume) | `render_scene.wgsl:1032-1153` (`sample_transmission`/`transmission_diffuse`), composition `:1776-1786` | SHIPPED (GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2/E6): screen-space refraction + Beer–Lambert, REPLACES the diffuse response. Wrong physics for petals — this is the specular/refraction lobe for vases and windows, not diffuse transmission. |
+| Diffuse transmission (KHR_materials_diffuse_transmission) | docs/GLTF_MATERIAL_EXTENSIONS_DESIGN.md section 5 (Deferred); not parsed (`rg diffuse_transmission crates/` → zero code hits; BUG-213 (unparsed-extension reporting) tracks even the missing report line) | The Khronos lobe petals actually want. Its deferral trigger fires here: this design IS the follow-up phase that doc named. D10 (frozen Khronos PBR set) is not violated — this is a shipped-family Khronos extension, not a new material system. |
+| Per-caster RT shadow visibility | `raytrace.rs:1304-1346` (sv loop), consumed by `render_scene.wgsl:635-665` (`shadow_factor` — RT branch `:647-650` reads `rt_shadow_mask`, one channel per caster slot) | The term TL-B extends. Binary today: blocked or not. |
+| Alpha-aware walk | `raytrace.rs:871-898` (`walk_with_alpha_test`), 5 call sites | T2-A's mechanism. A ray at a cutout texel already has three relevant outcomes available: below-cutoff → pass through; accepted → block. TL adds the third state: accepted on a translucent object → attenuate and continue. **Cost-critical observation:** for alpha-mask foliage the hardware early-out is already lost (`encode_blas_build`'s `setOpaque(!alpha_mask)`, comment `raytrace.rs:861`) — shadow rays through petal clusters ALREADY iterate candidate lists. Transmission is an increment on a walk that exists, not a new walk. |
+| Per-object material table | `GiMaterial` (`raytrace.rs:602-606`, 48 B, size-asserted; populated `render_scene.rs:3976`) | Grows one vec4 (translucency factor) — the T1-B/T2-A/R1 extend-the-table precedent, fourth extension. |
+| Sun-bounce caster loop | `sun_bounce_at_hit` (`raytrace.rs:989-1019`, shadow-class ray at `:1014`) | Used by the GI gather and reflection hit shading. Its shadow rays are shadow-class — they transmit under the same rule (TL4). |
+| March sun visibility under RT | `shaft_march.wgsl:85` (binding 10 `rt_shadow_mask`), `:189-194` (one lookup per pixel, surface-depth visibility, documented approximation) | D5's landed half of "RT volumetrics". Reads `out_sv.r` — TL-B's transmitted mask flows into it unchanged (the free dividend). |
+| Volumetric march | `shaft_march.wgsl` whole; steps 16/24/32 (`u.misc.x`), per-light per-step `shadow_vis` taps | Feature B's substrate. All visibility today is texture taps — zero rays. |
+| Accumulation/denoise chain | `render_scene.rs:4057/4071/4120/4175`; sv is temporally accumulated (D-64 addendum, "sv gate") | TL-C's one new texture rides this chain stage-for-stage (the `out_refl` precedent, section 9.3). |
+| Importer material params | `gltf_import/materials.rs:339-350` (`transmission`, `volume_thickness`, attenuation params already mapped); texture table `:193-203` | The `diffuse_transmission` factor mapping goes here. |
+| Uniform free slots | `render_scene.wgsl:120-211`; `render_scene.rs:3705/3708` | **None free at material scope.** The E1 block was sized for five families; both reserved `w` slots are spent as texture-present flags (E6). One new vec4, E1/D2-style with size asserts (TL7). |
+| Photoscanned flower assets carry transmission data? | Importer survey above + asset class knowledge | **No.** AlphaMode MASK + baseColor, no extensions. The factor's source for Peter's scenes is a material card param he dials (TL3) — same as every other look decision on a scan. |
+
+### 16.2 Decisions (TL-numbered)
+
+- **TL1 — the thin-surface model is wrap-diffuse around the backward normal,
+  albedo-tinted, one constant factor.** Committed term, per light, in
+  `fs_pbr`'s light loop (the `direct_sheen` parallel-accumulator precedent,
+  `render_scene.wgsl:1498/1577`):
+
+  ```
+  // N is already flipped toward V (:1372); the transmitted term fires exactly
+  // where the front term can't — light arriving at the BACK of the surface.
+  // wrap (named constant RT_TRANSMISSION_WRAP, default 0.5, range 0–1) softens
+  // the terminator so petals glow at wide angles, not just dead-on.
+  back_l = saturate((dot(-N, L) + wrap) / (1.0 + wrap));
+  direct_translucent += factor * albedo.rgb / PI * l_col.rgb * back_l * l_dir.w * vis;
+  ```
+
+  `vis` is the SAME per-light `shadow_factor` every other term uses — RT sv
+  mask when RT is on, shadow map otherwise. **Why this model:** it is the
+  standard two-sided foliage approximation, and the alternatives fail on the
+  asset class. Rejected: full KHR diffuse-transmission BTDF with thickness +
+  Beer–Lambert attenuation — Peter's scans carry no thickness maps and no
+  volume data; a constant factor IS the constant-thickness case, and buying
+  the full BTDF buys parameters nothing can fill. Rejected: reuse of the E2
+  glass path (`transmission_diffuse`) — refraction of the background is the
+  wrong physics for an opaque-backed petal, and it replaces rather than adds.
+  Thickness attenuation exists as the factor itself (thin petal ~0.3–0.7,
+  fleshy leaf lower — Peter's dial).
+- **TL2 — the forward term runs in `fs_pbr`, zero rays, both paths.** It is an
+  analytic function of data the fragment already has (N, L, albedo, vis).
+  ED3a discipline (section 14.2): PBR-only; cel/phong get nothing. Default
+  factor 0.0 → the accumulator adds exactly zero → byte-identical output, the
+  house zero-default contract, machine-checked (I-TL1). On the raster path
+  (RT off) the petal glow still works (the petal is thinner than the shadow
+  bias, so its own back face reads lit); what RT-off does NOT get is the
+  transmitted pool on the floor (shadow maps carry no transmission) — honest
+  cost, stated: the floor-pool half is RT-only.
+- **TL3 — the parameter is one new `pbr_material` scalar `translucency`
+  (default 0), port-shadowed and cardable; the importer maps
+  KHR_materials_diffuse_transmission's factor into it; nothing auto-defaults.**
+  Three sources, in precedence: the extension's `diffuseTransmissionFactor`
+  when an asset carries it (parse added — BUG-213's family gets its factor
+  leg); Peter's dial on the card for scans that carry nothing; 0 otherwise.
+  Rejected: defaulting Mask-mode materials to a nonzero translucency — changes
+  every existing cutout scene's pixels silently, the exact class the
+  byte-identical discipline exists to kill. Rejected: a scene-level global —
+  a stone vase and a petal in the same scene want different values, and the
+  material card is already where Peter sets roughness per asset. The
+  extension's color factor/texture is a named fidelity gap (section 16.8):
+  tint = albedo, which is physically right for foliage (a petal transmits its
+  own color) and wrong for the three Khronos conformance assets — they become
+  the held-out demo, not the gate.
+- **TL4 — visibility rays transmit; geometry rays block.** A new walk variant
+  `walk_with_transmission` (alongside `walk_with_alpha_test`, sharing its
+  candidate loop): below-cutoff texel → pass (unchanged); accepted hit on an
+  object whose `GiMaterial.translucency > 0` → `tint *= translucency *
+  albedo_at_hit`, continue; accepted hit otherwise → block (unchanged).
+  Bounded: `RT_TRANSMISSION_MAX_HITS = 8` (named constant, range 4–16) and an
+  early-out when `luma(tint) < 1/256`. Called from exactly two sites: the sv
+  caster loop (`raytrace.rs:1341`) and `sun_bounce_at_hit` (`:1014`). AO, GI,
+  reflection, and primary-visibility rays keep the binary walk — a leaf still
+  occludes bounce light and mirrors; transmitting those would be paying
+  walk-extension cost on every ray class for an effect order-of-magnitude
+  below the direct-light one. Machine check: I-TL4 pins the call-site count.
+  The albedo sample at an accepted translucent hit reuses the alpha walk's
+  base-color texture (same texture, same UV — cache-hot for Mask foliage,
+  which already samples it for alpha).
+- **TL5 — grey luminance in `out_sv`, color in ONE new texture for the first
+  sun caster.** Channel arithmetic: `out_sv`'s four channels are the four
+  caster slots; per-caster rgb tint needs 12 channels the texture does not
+  have, and 4-caster colored tint is three textures through every
+  accumulation stage — rejected as disproportionate. Instead: (a) every sv
+  channel carries `luma(tint)` — point casters and the march
+  (`shaft_march.wgsl:193` reads `.r`) work unchanged, grey transmission
+  everywhere; (b) ONE new trace-res `Rgba16Float` texture `out_svt` carries
+  the rgb tint of the first kind==0 caster (CPU picks the slot, passes it in
+  `ShadowRayParams`, mirrors it to the raster in the reserved `rt_flags.z` as
+  slot+1, 0 = none); `fs_pbr` substitutes `vis_rgb = textureLoad(out_svt)`
+  for that light only. A second sun falls back to its luma channel — named
+  honest cost, revival trigger in section 16.8. Hero-scene shape (one sun) is
+  exact; the general case degrades gracefully. `out_svt` rides the existing
+  upsample → à-trous → accumulate chain and the SAME
+  `TemporalResetDetector` (I-R2's negative `rg` discipline extends).
+- **TL6 — translucent objects leave the hardware opaque fast path.**
+  `encode_blas_build`'s `setOpaque(!alpha_mask)` becomes
+  `setOpaque(!(alpha_mask || translucency > 0))`, keyed through the same
+  dirty-key path the alpha flag already rides, under D17's async-build
+  discipline (no mid-frame builds; the bounded raster-presenting transition
+  covers a live factor flip from 0 — same gesture as toggling RT itself).
+  Without this the walk never sees solid-but-thin leaves as candidates.
+- **TL7 — one new material uniform vec4 `diffuse_transmission_params`** (x =
+  factor; yzw reserved, first consumer = the future color-texture flag).
+  Smallest possible E1/D2-style growth, `RenderSceneUniforms` size asserts
+  updated, WGSL mirror documented. No per-phase growth — this is the only one.
+- **TL8 — nothing new accumulates; the sv signal gets smoother, not noisier.**
+  TL-A is analytic over the already-accumulated sv mask. TL-B/C replace binary
+  cutout-edge visibility with partial tints — strictly lower variance at leaf
+  boundaries (the binary in/out flicker at canopy edges becomes a smooth
+  gradient), so the existing sv change-gate and history discipline (D-64 and
+  its addendum) apply unchanged, bands untouched. `out_svt` accumulates with
+  the same weights and the same reset path as the irradiance texture. **No
+  tuning constants join the untuned set beyond TL1's wrap and TL4's hit cap**;
+  Peter's look is the quality gate, per the standing D19/D20 lesson.
+- **TL9 — D9 (Vulkan seam) holds by construction.** The Metal RT trait grows
+  no new method: `ShadowRayParams` gains fields and `dispatch_shadow_rays`
+  gains the `out_svt` texture argument — exactly RD10's shape (section 9.2).
+  The candidate-continuation walk is `rayQueryProceed`-shaped; Vulkan ray
+  queries express the same loop. No Apple types above `manifold-gpu`
+  (standing I-R5 negative `rg` at every gate).
+
+### 16.3 Architecture
+
+Three pieces, each extending an existing mechanism:
+
+**Forward term (TL-A).** `render_scene.wgsl`, `fs_pbr` only: a
+`direct_translucent` accumulator in the light loop (TL1's three lines) and one
+addition at the composition site (`base_rgb = base_rgb + direct_translucent`
+before the glass block at `:1776` — the glass `transmission_factor` and the new
+`translucency` are independent lobes; a material with both gets both, matching
+the Khronos layering where diffuse-transmission and specular-transmission
+coexist). Population: `pbr_material` param → uniform (TL7's slot) at the
+existing material-uniform fold; importer mapping in
+`gltf_import/materials.rs` next to `:339`.
+
+**Transmitting walk (TL-B).** `raytrace.rs`: `GiMaterial` 48 → 64 B (factor +
+pad; MSL/Rust mirror discipline, size asserts both sides — P0's packed_float3
+lesson); `walk_with_transmission` next to `walk_with_alpha_test`; two call
+sites switched (TL4); sv write carries `luma(tint)` instead of binary.
+Population of the factor at `render_scene.rs:3976` from the same material
+uniform the raster reads — one source of truth, no second param path.
+
+**Colored sun tint (TL-C).** `out_svt` allocated and lifecycle-managed by the
+same `ensure_rt_irradiance` pattern as `out_refl` (section 9.3); written only
+in the sv loop for the designated sun slot; upsample/à-trous/accumulate gain
+the texture set exactly as they gained `out_refl`; `fs_pbr` substitutes per
+TL5 (one `textureLoad` behind `rt_flags.z > 0.5 && slot match`, dummy 1×1
+bound otherwise — ABI-stub discipline).
+
+### 16.4 Cost model — rays/pixel/frame against 41.6 ms
+
+Current full-RT frame: ~26 ms (section 13's number). Budget: 41.6 ms. Headroom:
+~15 ms, minus what show content (layers/effects/encode) actually eats — the
+section 7 frame-budget-sharing caveat applies; these numbers are RT-solo.
+
+Trace resolution today: half-res of render res — 2.07M trace px native,
+0.92M under T2-B temporal. Rays per trace px today: ~20–25 (1 primary + spp ×
+casters + 4 AO + 2×2 GI + 8 refl + GI sun-bounce casts).
+
+| Feature | New rays | Other cost | Estimate |
+|---|---|---|---|
+| TL-A forward term | **0** | ~4 ALU × lights in `fs_pbr`; one uniform vec4 | unmeasurable; gate is the byte-identity + a standard trace run |
+| TL-B transmitting walk | **0** | shadow-class walks extend through ≤8 translucent hits; one albedo sample per accepted translucent hit (cache-hot for Mask foliage, which already samples for alpha); solid-translucent objects lose the BLAS opaque fast path (T2-A's foliage already did) | worst case = dense canopy against the sun, every shadow/sun-bounce ray walking to the cap; **measured, not estimated** — TL-B's gate reports `trace_ms` delta on the apricot fixture (the MB-B owed measurement's fixture) |
+| TL-C colored tint | **0** | +1 `Rgba16Float` trace-res texture through upsample/à-trous/accumulate (+~25% chain bandwidth: 4 textures → 5); one `textureLoad` per sun light in `fs_pbr` | small; gate reports the delta |
+| B (deferred) | sun-only every-4th-step: +8 rays/march-px ≈ **+37% of the whole trace class**; all-lights every step: 128 rays/px ≈ 6× the trace class — rejected outright | plus a new march-kernel binding and validation path | see section 16.6 |
+
+The recommendation's shape: A+B+C together add zero rays and one texture; the
+only real risk line is the walk extension, and it is capped, measured, and
+foliage-local. If TL-B's measured delta lands the fixture frame above 32 ms
+(leaving ~10 ms for show content), TL-C pauses and Peter re-judges — that
+number is in TL-B's gate.
+
+### 16.5 Invariants & enforcement
+
+- **I-TL1 — factor 0 is byte-identical.** `graph-tool render` of an RT compare
+  fixture at pre/post TL-A commits, `cmp`-identical (T2-B/I-MB1 precedent —
+  never a code-diff argument).
+- **I-TL2 — `diffuse_transmission_params` has exactly one consumer.** `rg` —
+  one read site in `render_scene.wgsl` (the forward term) plus its population.
+- **I-TL3 — `out_svt` has exactly one consumer.** `rg -c` — declaration plus
+  exactly one `textureLoad` in `render_scene.wgsl` (I-R3's shape).
+- **I-TL4 — geometry rays never transmit.** `rg` — `walk_with_transmission`
+  called from exactly two sites (sv loop, `sun_bounce_at_hit`);
+  `walk_with_alpha_test` keeps its remaining call sites (AO, GI, reflection,
+  primary) untouched.
+- **I-TL5 — one temporal-reset path.** Negative `rg` — zero additional
+  `TemporalResetDetector` constructions (I-R2 extended).
+- **I-TL6 — BLAS opacity tracks translucency.** Unit test on the opacity
+  decision (`alpha_mask || translucency > 0` → non-opaque), the
+  `wants_shafts_gate` precedent.
+- **I-TL7 — no Apple types above `manifold-gpu`.** Standing negative `rg`.
+
+### 16.6 Feature B — volumetric participation: scope, price, revival trigger
+
+**What exists.** The march (`shaft_march.wgsl`) is half-res, 16–32 steps,
+per-light per-step shadow-map taps, and — under RT — ONE sun-visibility lookup
+per pixel from the surface sv mask (`:189-194`), documented as an
+approximation: the mask holds the SURFACE's visibility, so beams cannot form
+from occluders between the camera and the surface. Canopy god-rays — shafts
+through leaf gaps, hanging in the haze in front of the flower — are precisely
+the missing case.
+
+**Scope of the real thing:** per-step traced visibility in the march. Cheapest
+honest variant: sun only, one ray every 4th step (8 rays per march px, half
+res) ≈ +16.6M rays/frame against the current ~45M — +37% of the trace class,
+for one light's beams. All lights, every step: 128 rays/march-px — six times
+the entire trace budget, rejected outright, not deferred.
+
+**Verdict: defer.** The trigger that revives it: (a) the post-pipeline
+ray-budget re-judge (Peter's standing deferral) shows the temporal-upscaled
+config (rays at 1/3 native) with headroom, AND (b) a staged look wants canopy
+god-rays specifically — the alpha-cutout volumetric-shadows item in
+VOLUMETRIC_LIGHT_DESIGN.md section 6 (Deferred) is the same want and joins
+this trigger. When revived, the shape is the sun-only quarter-step variant
+above plus section 15 (many-light) if it has landed, since many-light beam
+carving is the same per-step visibility problem.
+
+**The free dividend, landed with A:** TL-B's transmitted sv mask flows into
+the march's existing `rt_sun_vis` read with zero new work — haze under a
+backlit canopy carries the dappled, tinted brightness of the transmitted mask
+at the surface depth. Not the full look; a real improvement; costs nothing.
+
+### 16.7 Phases (one lane brief each, sequential — all touch the scene pass)
+
+**No PNG oracles for agents** (the wave rule): every gate below is a computed
+number or exit code; PNGs are Peter's morning look only.
+
+#### TL-A — forward thin-transmission term + param + importer parse
+
+- *Entry:* re-verify `render_scene.wgsl:1372` (N-flip), `:1498` (sheen
+  accumulator), `:1776` (composition site), `render_scene.rs:3705/3708` (both
+  reserved `w` slots still spent — a freed slot changes TL7). A moved anchor
+  is an escalation, not a guess.
+- *Read-back:* this section whole; GLTF_MATERIAL_EXTENSIONS_DESIGN.md section
+  5 (the deferred item this revives); the `direct_sheen` accumulator and its
+  byte-identical discipline; `gltf_import/materials.rs:322-350`.
+- *Deliverables:* TL7's uniform vec4 (+ size asserts, WGSL mirror comment);
+  `pbr_material` `translucency` param (default 0, port-shadowed, cardable);
+  TL1's accumulator + composition; importer parse of
+  `KHR_materials_diffuse_transmission` factor → param (color/texture gap
+  logged per BUG-213's pattern); I-TL1/I-TL2 checks by name.
+- *Gate:* (a) value test on the `rt_p1_region_probe` computed-pixel harness —
+  quad, sun dead behind, factor 0.5, wrap 0.5: region mean within epsilon of
+  the CPU-computed wrap term; **control legs, mandatory:** factor 0 reads the
+  pre-term value; sun in FRONT reads no transmitted contribution. (b) I-TL1's
+  byte diff. (c) round-trip: save → reload → probe passes. (d) importer unit
+  test: a diffuse-transmission fixture parses factor → uniform. (e) clippy
+  `-p manifold-renderer`; `cargo test -p manifold-renderer --features
+  gpu-proofs` (`cargo test`, never nextest — the shader is touched).
+- *Performer gesture:* `translucency` on a card fader swept live — gate
+  drives the param, asserts monotonic region-luminance response.
+- *Forbidden moves:* defaulting Mask materials nonzero (TL3); touching the
+  glass transmission block's math; adding the color/texture fidelity
+  (section 16.8); a second consumer of the uniform slot.
+- *Demo (Peter only):* backlit-flower PNG pair on a real scan, factor 0 vs
+  0.5 — **L2. The "does a petal glow like a petal" verdict is Peter's look.**
+  Held-out render: `DiffuseTransmissionPlant.glb` (the conformance asset this
+  partially un-defers) in the landing report.
+
+#### TL-B — transmitting shadow walk (grey in sv, rgb inside)
+
+- *Entry:* TL-A landed; re-verify `raytrace.rs:871-898` (walk), `:1304-1346`
+  (sv loop), `:989-1019` (sun-bounce), `GiMaterial` still 48 B.
+- *Read-back:* TL4/TL5/TL6; T2-A's commit `62244989` (the walk and its
+  candidate-loop gotchas — `commit_triangle_intersection`, not
+  `accept_intersection`); the BUG-309 (night-wave trace bug) and
+  BUG-8p1h (lights-out leak) bias discipline (a transmitting walk crosses
+  more surfaces at more angles; the bias rules are load-bearing).
+- *Deliverables:* `GiMaterial` 64 B + population; `walk_with_transmission`
+  with the cap and early-out; two call sites switched; sv writes `luma(tint)`;
+  TL6's BLAS opacity change + key; I-TL4/I-TL5/I-TL6 checks by name.
+- *Gate:* (a) value tests on the region-probe harness: single translucent
+  occluder (factor 0.5, known albedo) between sun and floor — floor region
+  mean within epsilon of CPU-computed `luma(tint)` × lit value; **control
+  legs:** factor 0 → full shadow; opaque occluder → unchanged; (b) stack test
+  — two stacked 0.5 petals → 0.25 transmitted, exact; (c) cutout regression —
+  below-cutoff texels still pass through an alpha-mask translucent object
+  (T2-A's proofs stay green); (d) **the number:** `trace_ms` delta TL-B on vs
+  off on the apricot scan, in the phase report, against the 32 ms line in
+  section 16.4; `MANIFOLD_RENDER_TRACE=1`, no frame >20 ms; (e) gpu-proofs.
+- *Performer gesture:* flip a hero flower's `translucency` 0 → 0.5 mid-set —
+  D17's bounded transition, no frame >20 ms across it.
+- *Forbidden moves:* transmitting AO/GI/reflection/primary rays (TL4);
+  widening `MAX_RT_MATERIAL_TEXTURES`; a second reset path; retuning any
+  existing constant; claiming the cost from code reading instead of the
+  measured delta.
+- *Demo (Peter only):* canopy-shadow PNG pair (hard black vs soft grey
+  dapple) on a real scan — L2.
+
+#### TL-C — colored sun tint through the chain
+
+- *Entry:* TL-B landed, its `trace_ms` delta inside the section 16.4 line (or
+  Peter's explicit go above it).
+- *Read-back:* TL5; section 9.3's `out_refl` plumbing (the template this
+  copies stage-for-stage); section 10's transition contract (seed-don't-clear
+  applies to the new history).
+- *Deliverables:* `out_svt` + dispatch/param/flag plumbing (TL5/TL9); chain
+  stages extended; `fs_pbr` substitution for the designated sun slot; I-TL3
+  by name.
+- *Gate:* (a) value test — red petal (albedo 1,0.1,0.1, factor 0.6): floor
+  pool's rgb ratio matches CPU-computed tint within epsilon; **control
+  legs:** point caster keeps luma discipline (its rgb contribution equals
+  white × its sv channel); no-sun scene binds the dummy and reads white;
+  (b) cut-reset numeric oracle on the tint history (P2's oracle shape);
+  (c) I-TL3, I-TL5 negative `rg`s; (d) frame-time gate re-run; gpu-proofs.
+- *Performer gesture:* sun color driven by a beat envelope through a flower —
+  the floor pool pulses tinted; gate drives the color and asserts the pool
+  region tracks.
+- *Forbidden moves:* a general per-caster tint texture set (TL5's rejection);
+  consuming `out_svt` anywhere but the one site; touching point-caster
+  shading.
+- *Demo (Peter only):* the pink-pool-under-flower PNG pair — L2, and the
+  wave's close-out look.
+
+**Phasing-completeness check:** TL1–TL3 (TL-A), TL4/TL6 (TL-B), TL5 (TL-C),
+TL7 (TL-A), TL8 (all phases' gates), TL9 (TL-B/TL-C deliverables). Deferred
+with triggers: section 16.8. B: section 16.6, not in a phase.
+
+### 16.8 Deferred (with revival triggers)
+
+- **KHR diffuse-transmission color factor/texture fidelity** — trigger: Peter
+  wants the three Khronos conformance assets green, or an asset whose
+  transmission color is not its albedo shows up. Shape: yzw of TL7's vec4 +
+  the E6 bitmask pattern.
+- **Second-sun and point-caster colored tint** — trigger: a staged look with
+  two suns, or colored canopy shadows from a point light, that luma visibly
+  fails. Shape: one more chain texture per added caster, priced then.
+- **Transmission in AO/GI/reflection rays** — trigger: Peter's look reports
+  bounce light or reflections reading too blocked through foliage. Priced at
+  walk-extension cost on every ray class — the trigger bar is high.
+- **Per-step RT visibility in the volumetric march (feature B)** — section
+  16.6: priced, trigger named there (budget re-judge headroom + a canopy
+  god-ray look; absorbs the VOLUMETRIC_LIGHT_DESIGN.md deferred item named
+  there).
+- **Thickness-varying transmission (thickness maps)** — trigger: an asset
+  class with real thickness data (scanning workflow change). The factor is
+  the constant-thickness case until then.
