@@ -1367,7 +1367,7 @@ fn eval_iridescence(outside_ior: f32, eta2: f32, cos_theta1: f32, thickness: f32
 // single light would give — the standard split-sum substitute for IBL,
 // and the only well-defined choice when light_count can be 0.
 // RAYTRACING_DESIGN.md section 16 TL1: wrap-diffuse constant for the
-// backlit thin-surface term. Range [0, 1] \u{2014} 0 = sharp terminator
+// backlit thin-surface term. Range [0, 1] — 0 = sharp terminator
 // (only dead-on backlight), 1 = full wrap (petals glow at wide angles).
 const RT_TRANSMISSION_WRAP: f32 = 0.5;
 @fragment
@@ -1506,7 +1506,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     // perturb `direct`/`direct_coat`'s bit-for-bit value for any material.
     var direct_sheen = vec3<f32>(0.0);
     // RAYTRACING_DESIGN.md section 16 TL1: accumulated in parallel with
-    // `direct`, same shape as `direct_sheen` \u{2014} never read unless
+    // `direct`, same shape as `direct_sheen` — never read unless
     // `translucency` is nonzero (see the composition below), so this cannot
     // perturb `direct`/`direct_sheen`'s bit-for-bit value for any material.
     var direct_translucent = vec3<f32>(0.0);
@@ -1590,7 +1590,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
         let specular_sheen = sheen_color * D_sheen * V_sheen;
         direct_sheen = direct_sheen + specular_sheen * l_col.rgb * n_dot_l * l_dir.w * vis;
         // RAYTRACING_DESIGN.md section 16 TL1: wrap-diffuse translucency
-        // around the backward normal \u{2014} light arriving at the BACK of
+        // around the backward normal — light arriving at the BACK of
         // the surface. factor 0 makes this exactly zero (byte-identical).
         // The wrap softens the terminator so petals glow at wide angles, not
         // just dead-on. vis is the same per-light shadow_factor every other
@@ -1778,7 +1778,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     // v1 limitation, same doctrine as `specular_factor`'s f90 note above.
     base_rgb = base_rgb + direct_sheen + sheen_ibl;
     // RAYTRACING_DESIGN.md section 16 TL1: translucency adds to `base_rgb`
-    // BEFORE the glass block \u{2014} `transmission_factor` and
+    // BEFORE the glass block — `transmission_factor` and
     // `translucency` are independent lobes; a material with both gets both,
     // matching the Khronos layering where diffuse-transmission and
     // specular-transmission coexist. factor 0 adds exactly zero.
