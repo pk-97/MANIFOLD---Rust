@@ -741,6 +741,13 @@ impl GeneratorRenderer {
                 && let Some(layer_state) = self.layer_generators.get_mut(&layer.layer_id)
                 && let Some(active) = self.active_clips.get_mut(id.as_str())
             {
+                // BUG-84fv: name the card in the "Generators" buffer's fault
+                // log — the buffer covers every generator of the frame, so a
+                // bare buffer label can't say which card hung.
+                gpu.native_enc.note_scope(&format!(
+                    "gen L{layer_index} {} clip {}",
+                    active.generator_type, id
+                ));
                 // Clear reused render targets to prevent stale content from a
                 // previous clip/layer leaking through on the first frame.
                 if active.needs_clear {

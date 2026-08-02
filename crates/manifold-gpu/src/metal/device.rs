@@ -1038,26 +1038,27 @@ impl GpuDevice {
 
     /// Create a new command encoder for one frame's GPU work.
     ///
-    /// Every encoder gets an error-logging completion handler. Error
-    /// logging must be universal, not opt-in per call site: a GPU fault
-    /// on an unlogged buffer surfaces only as "innocent victim" discards
-    /// on OTHER buffers, hiding the culprit (BUG-665r's diagnosis gap).
+    /// Every encoder registers its error-logging completion handler at
+    /// commit time, moving the recorded scopes (`note_scope`) into the
+    /// closure. Error logging is universal, never opt-in per call site:
+    /// a GPU fault on an unlogged buffer surfaces only as "innocent
+    /// victim" discards on OTHER buffers, hiding the culprit (BUG-665r's
+    /// diagnosis gap).
     pub fn create_encoder(&self, label: &str) -> GpuEncoder {
         let cmd_buf = self
             .queue
             .commandBuffer()
             .expect("Failed to acquire command buffer");
         unsafe { cmd_buf.setLabel(Some(&NSString::from_str(label))) };
-        let enc = GpuEncoder {
+        GpuEncoder {
             cmd_buf,
             state: EncoderState::None,
             compute_cache: super::encoder::ComputeBindCache::new(),
             render_cache: RenderBindCache::new(),
             clear_pipelines: self.clear_pipelines() as *const ClearPipelines,
             profile: None,
-        };
-        enc.add_completed_handler_with_status(label);
-        enc
+            scopes: Vec::new(),
+        }
     }
 
     /// Create a compiled depth-stencil state object.
