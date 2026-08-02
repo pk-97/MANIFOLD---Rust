@@ -1736,8 +1736,15 @@ kernel void upsample_shadow(
 {
     if (tid.x >= p.gbuffer_size.x || tid.y >= p.gbuffer_size.y) return;
     float d = depth_tex.read(tid, 0);
+    // RT-A3a (D16a split mode): when the mask dispatch ran at native res,
+    // lo_sv is already gbuffer-sized — the half->full resample would sample
+    // it at the lighting params' half-res coordinates and read its top-left
+    // quarter (Peter's "sun popped / lighting strange" 2026-08-02). A
+    // native mask needs no resample at all: pass the texel through. Detect
+    // by texture size so the params ABI and fused path are untouched.
+    bool sv_native = lo_sv.get_width() == p.gbuffer_size.x && lo_sv.get_height() == p.gbuffer_size.y;
     if (d >= 1.0 - 1e-6) {
-        hi_sv.write(float4(1, 1, 1, 1), tid);
+        hi_sv.write(sv_native ? lo_sv.read(tid) : float4(1, 1, 1, 1), tid);
         hi_irr.write(float4(0, 0, 0, 1.0), tid);
         hi_n.write(float4(0, 1, 0, -1.0), tid);
         // BUG-88m: `.a = -1` must survive the half->full chain — Blend
@@ -1785,7 +1792,7 @@ kernel void upsample_shadow(
         float w_depth = exp(-fabs(qd - d) / 0.001);
         float w_normal = pow(max(dot(ref_n, qn), 0.0), UPSAMPLE_NORMAL_POWER);
         float w = max(w_bilin * w_depth * w_normal, 1e-5);
-        acc_sv += lo_sv.read(uint2(q)) * w;
+        if (!sv_native) { acc_sv += lo_sv.read(uint2(q)) * w; }
         float4 qirr = lo_irr.read(uint2(q));
         acc_irr += qirr.rgb * w;
         acc_ao += qirr.a * w;
@@ -1795,13 +1802,13 @@ kernel void upsample_shadow(
     }
     if (wsum < 1e-4 && void_taps > 0u) {
         uint2 uq = uint2(nearest_lo);
-        hi_sv.write(lo_sv.read(uq), tid);
+        hi_sv.write(sv_native ? lo_sv.read(tid) : lo_sv.read(uq), tid);
         hi_irr.write(lo_irr.read(uq), tid);
         hi_n.write(float4(ref_n, ref_n4.w), tid);
         hi_refl.write(lo_refl.read(uq), tid);
         return;
     }
-    hi_sv.write(acc_sv / wsum, tid);
+    hi_sv.write(sv_native ? lo_sv.read(tid) : acc_sv / wsum, tid);
     hi_irr.write(float4(acc_irr / wsum, acc_ao / wsum), tid);
     float3 n_avg = acc_n / wsum;
     float n_len = length(n_avg);
