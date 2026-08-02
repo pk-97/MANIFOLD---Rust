@@ -11,7 +11,7 @@ Peter is switching the roster: **Kimi K3 = top session / lead, GLM5.2 = middle d
 | Seat | Was (through 2026-07-23) | Is (from 2026-07-24) |
 |---|---|---|
 | Lead / top session | Fable | **Kimi K3** |
-| Dispatcher / middle orchestrator | Opus | **GLM-5.2** (native `opus` lane per the model slot map — supersedes the GLM-4.7/off-peak call; quota caution kept in section Native provider lanes) |
+| Dispatcher / middle orchestrator | Opus | **DeepSeek V4 Pro** (native `opus` lane, lane label `pro-*` — swapped off GLM-5.2 2026-08-02, Peter: GLM weekly quota is reserved for the 4.7 classifier) |
 | Lane executor | Sonnet 5 / K2.7 | **DeepSeek V4 Flash** (native `haiku` lane per the model slot map) |
 | Consult peer | Kimi K3 | **K3 fork, read-and-discuss only (R4 resolved 2026-07-27)** |
 
@@ -50,11 +50,11 @@ Everything below is proven doctrine under the old roster. Read it as seat descri
 | Agent-tool `model:` | Actual model | Tier |
 |---|---|---|
 | `"fable"` | Kimi K3 | judgment lane (rare — lead-tier work the lead delegates whole) |
-| `"opus"` | GLM-5.2 | dispatcher seat for multi-stage waves |
+| `"opus"` | DeepSeek V4 Pro | strong escalation lane for multi-stage waves (off GLM-5.2 2026-08-02 — GLM quota reserved for the classifier) |
 | `"sonnet"` | GLM-4.7 | **classifier-dedicated — never spawn lanes on this slot.** The harness auto-mode permission classifier resolves off it (PERMISSION_BOUNDARY.md section 2 (Which model runs it)). Repointed Flash→GLM-4.7 2026-07-27 (Peter: DeepSeek kept dropping out on classifier approvals; classifier fails closed, so slot reliability outranks speed). GLM-4.7 holds NO agent roles — mid lane retired, dispatcher rotation removed |
 | `"haiku"` | DeepSeek V4 Flash | mechanical executor — the bulk tier |
 
-Quota caution: TOKEN_ECONOMICS section 12 rated GLM-5.2 off-peak-A/B on the z.ai plan; Peter's slot-map decision puts it on the dispatcher slot anyway — if plan-window pressure shows up, the dispatcher slot is the first place to look.
+Quota caution: GLM weekly quota is reserved for the 4.7 classifier (Peter 2026-08-02) — never spawn GLM-5.2 lanes while that holds; the `opus` slot serves DeepSeek V4 Pro instead.
 
 **Dead path — hook-enforced:** `cc-fleet spawn` (tmux teammates) is denied for EVERY tier including the lead (`cc-fleet-tier-guard.py`): TeamCreate was retired in Claude Code ≥2.1.218, teams are implicit per-session, and the harness cannot address externally-registered teammates. `cc-fleet subagent` one-shots remain available per tier. `cc-fleet run` (interactive seat panes) remains the lead's launcher.
 
