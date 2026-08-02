@@ -1310,8 +1310,13 @@ kernel void trace_shadow_rays(
     // exact (CPU-computed, never reconstructed), and biasing toward the
     // light is correct for a shadow ray.
     float4 sv = float4(1.0, 1.0, 1.0, 1.0);
-    uint spp = max(p.shadow_spp, 1u);
     uint n_casters = min(p.caster_count, MAX_RT_CASTERS);
+    // RT-A3a: shadow_spp == 0 (lighting-only dispatch) must skip the caster
+    // rays outright — the out_sv write below is gated, and without this guard
+    // the lighting dispatch traces every shadow ray and discards the result
+    // (measured +13ms/frame at half-res 4K, A3 cost matrix 2026-08-02).
+    if (p.shadow_spp > 0u) {
+    uint spp = p.shadow_spp;
     for (uint c = 0; c < n_casters; c++) {
         RtCasterParams cst = p.casters[c];
         float3 to_light;
@@ -1352,6 +1357,7 @@ kernel void trace_shadow_rays(
         vis /= float(spp);
         sv[c] = vis;
     }
+    } // shadow_spp > 0
 
     // RT-P2: AO gather — cosine-weighted hemisphere around the SAME bias
     // normal/origin the shadow ray uses (ported from the prototype's
