@@ -9,6 +9,8 @@
 //! project_tool tempo at <file.manifold> <beat> [<beat>...]
 //! project_tool clip add-audio <file.manifold> --layer <name> --path <audio>
 //!     --start-beat <B> --duration-beats <B> [--in-point <s>] [--source-duration <s>]
+//! project_tool scene set-model <file.manifold> <model_path>
+//!     --layer <index> [--layer-name <name>]
 //! ```
 //!
 //! ## Why mutations are raw-JSON surgery, not model round-trips
@@ -69,6 +71,7 @@ fn main() -> ExitCode {
         "json" => run_json(rest),
         "tempo" => run_tempo(rest),
         "clip" => run_clip(rest),
+        "scene" => run_scene(rest),
         "-h" | "--help" | "help" => {
             print_usage();
             ExitCode::SUCCESS
@@ -96,7 +99,8 @@ USAGE:
   project_tool tempo set <file.manifold> <points.json> [--no-sync-bpm]
   project_tool tempo at <file.manifold> <beat> [<beat>...]
   project_tool clip add-audio <file.manifold> --layer <name> --path <audio>
-      --start-beat <B> --duration-beats <B> [--in-point <s>] [--source-duration <s>]"
+      --start-beat <B> --duration-beats <B> [--in-point <s>] [--source-duration <s>]
+  project_tool scene set-model <file.manifold> <model_path> --layer <index> [--layer-name <name>]"
     );
 }
 
@@ -533,4 +537,123 @@ fn clip_add_audio(rest: &[String]) -> ExitCode {
 
     println!("added audio clip {clip_id} on '{layer_name}': beats {start_beat}..{end_beat} ({audio_path})");
     validate_and_save(&root, path)
+}
+
+// ── scene ───────────────────────────────────────────────────────────────
+
+fn run_scene(rest: &[String]) -> ExitCode {
+    let Some((sub, rest)) = rest.split_first() else {
+        eprintln!("error: scene subcommand required (set-model)\n");
+        print_usage();
+        return ExitCode::from(2);
+    };
+    match sub.as_str() {
+        "set-model" => scene_set_model(rest),
+        other => {
+            eprintln!("error: unknown scene subcommand '{other}'\n");
+            print_usage();
+            ExitCode::from(2)
+        }
+    }
+}
+
+fn scene_set_model(rest: &[String]) -> ExitCode {
+    let Some(path) = rest.first().filter(|a| !a.starts_with("--")) else {
+        eprintln!("error: scene set-model requires <file.manifold> <model_path> --layer <index>\n");
+        print_usage();
+        return ExitCode::from(2);
+    };
+    let Some(model_path) = rest.get(1).filter(|a| !a.starts_with("--")) else {
+        eprintln!("error: scene set-model requires <model_path>\n");
+        print_usage();
+        return ExitCode::from(2);
+    };
+    let (Some(layer_idx_str), _) = (flag_value(rest, "--layer"), true) else {
+        eprintln!("error: scene set-model requires --layer <index>\n");
+        print_usage();
+        return ExitCode::from(2);
+    };
+    let layer_name = flag_value(rest, "--layer-name");
+    let Ok(layer_idx) = layer_idx_str.parse::<usize>() else {
+        eprintln!("error: --layer must be a number (0-based index)");
+        return ExitCode::from(2);
+    };
+
+    let mut root = match read_raw_json(path).and_then(|j| parse_root(&j)) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(2);
+        }
+    };
+
+    let Some(layers) = root
+        .pointer_mut("/timeline/layers")
+        .and_then(|v| v.as_array_mut())
+    else {
+        eprintln!("error: project has no /timeline/layers array");
+        return ExitCode::FAILURE;
+    };
+
+    let layer_idx = if let Some(name) = layer_name {
+        // Find layer by name first, fall back to index
+        layers.iter().position(|l| l.get("name").and_then(|n| n.as_str()) == Some(name))
+            .or(Some(layer_idx).filter(|_| layer_idx < layers.len()))
+            .ok_or_else(|| format!("no layer named '{name}' at index {layer_idx}"))
+    } else {
+        if layer_idx >= layers.len() {
+            Err(format!("layer index {layer_idx} out of bounds ({} layers)", layers.len()))
+        } else {
+            Ok(layer_idx)
+        }
+    };
+
+    let layer_idx = match layer_idx {
+        Ok(i) => i,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // Simple string-based approach: find .glb paths and replace all occurrences
+    // The model path appears in multiple places (description fields, parameter defaults, etc.)
+    let json_str = serde_json::to_string_pretty(&root).unwrap();
+
+    // Find the current model path by looking for .glb files
+    let old_path: String = json_str.lines()
+        .find_map(|line| {
+            let line = line.trim();
+            // Look for quoted strings ending in .glb that contain paths
+            line.split("\"")
+                .find(|s| s.ends_with(".glb") && s.contains("/"))
+                .map(|s| s.to_string())
+        })
+        .unwrap_or_else(|| {
+            eprintln!("error: no .glb model path found in project (not a 3D scene?)");
+            std::process::exit(1);
+        });
+
+    // Perform the replacement
+    let new_json_str = json_str.replace(old_path.as_str(), model_path);
+
+    // Count how many replacements were made
+    let count = json_str.matches(old_path.as_str()).count();
+    if count == 0 {
+        eprintln!("error: old model path '{}' not found in JSON", old_path);
+        return ExitCode::FAILURE;
+    }
+
+    // Parse back to JSON for validation
+    let new_root = match serde_json::from_str::<serde_json::Value>(&new_json_str) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("error: failed to parse edited JSON: {e}");
+            return ExitCode::from(2);
+        }
+    };
+
+    println!("set model path on layer {}: {} → {} ({} occurrence(s))",
+             layer_idx, old_path, model_path, count);
+    validate_and_save(&new_root, path)
 }
