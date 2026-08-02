@@ -1,0 +1,474 @@
+{
+  "schema": 1,
+  "metadata": {
+    "width": 3840,
+    "height": 2160,
+    "total_frames": 150,
+    "warmup_frames": 30,
+    "measure_frames": 120,
+    "frame_budget_ms": 41.6,
+    "binary": "/Users/peterkiemann/MANIFOLD - Rust/.claude/worktrees/slot-3/target/release/manifold",
+    "recorded": "2026-08-02"
+  },
+  "note": "A3a split-dispatch: mask (shadow) and lighting (AO/GI/reflection) run as separate dispatches at their own resolutions. Term\u2192dispatch mapping: shadow\u2192mask, ao\u2192lighting, gi\u2192lighting, reflection\u2192lighting. Each dispatch runs at native resolution when any of its terms is listed in MANIFOLD_RT_NATIVE_TERMS. Split-baseline (both half-res) should match pre-split baseline; any difference is split overhead.",
+  "measurements": [
+    {
+      "fixture": "RtMotionHelmet",
+      "lighting": "sun-only",
+      "config": "split-baseline",
+      "native_terms": "",
+      "median_ms": 40.3,
+      "p95_ms": 41.47,
+      "n": 120
+    },
+    {
+      "fixture": "RtMotionHelmet",
+      "lighting": "sun-only",
+      "config": "shadow",
+      "native_terms": "shadow",
+      "median_ms": 40.82,
+      "p95_ms": 41.67,
+      "n": 120,
+      "delta_vs_split_baseline_ms": 0.52,
+      "fits_41_6ms": true
+    },
+    {
+      "fixture": "RtMotionHelmet",
+      "lighting": "sun-only",
+      "config": "ao",
+      "native_terms": "ao",
+      "median_ms": 77.06,
+      "p95_ms": 80.43,
+      "n": 120,
+      "delta_vs_split_baseline_ms": 36.77,
+      "fits_41_6ms": false
+    },
+    {
+      "fixture": "RtMotionHelmet",
+      "lighting": "sun-only",
+      "config": "gi",
+      "native_terms": "gi",
+      "median_ms": 77.42,
+      "p95_ms": 82.53,
+      "n": 120,
+      "delta_vs_split_baseline_ms": 37.12,
+      "fits_41_6ms": false
+    },
+    {
+      "fixture": "RtMotionHelmet",
+      "lighting": "sun-only",
+      "config": "reflection",
+      "native_terms": "reflection",
+      "median_ms": 76.52,
+      "p95_ms": 79.83,
+      "n": 120,
+      "delta_vs_split_baseline_ms": 36.22,
+      "fits_41_6ms": false
+    },
+    {
+      "fixture": "RtMotionHelmet",
+      "lighting": "sun-only",
+      "config": "all-native",
+      "native_terms": "shadow,ao,gi,reflection",
+      "median_ms": 109.49,
+      "p95_ms": 120.02,
+      "n": 120,
+      "delta_vs_split_baseline_ms": 69.19,
+      "fits_41_6ms": false
+    },
+    {
+      "fixture": "RtMotionHelmet",
+      "lighting": "env-only",
+      "config": "split-baseline",
+      "native_terms": "",
+      "median_ms": 40.3,
+      "p95_ms": 44.76,
+      "n": 120
+    },
+    {
+      "fixture": "RtMotionHelmet",
+      "lighting": "env-only",
+      "config": "shadow",
+      "native_terms": "shadow",
+      "median_ms": 40.56,
+      "p95_ms": 41.26,
+      "n": 120,
+      "delta_vs_split_baseline_ms": 0.27,
+      "fits_41_6ms": true
+    },
+    {
+      "fixture": "RtMotionHelmet",
+      "lighting": "env-only",
+      "config": "ao",
+      "native_terms": "ao",
+      "median_ms": 76.3,
+      "p95_ms": 79.67,
+      "n": 120,
+      "delta_vs_split_baseline_ms": 36.0,
+      "fits_41_6ms": false
+    },
+    {
+      "fixture": "RtMotionHelmet",
+      "lighting": "env-only",
+      "config": "gi",
+      "native_terms": "gi",
+      "median_ms": 76.37,
+      "p95_ms": 79.45,
+      "n": 120,
+      "delta_vs_split_baseline_ms": 36.08,
+      "fits_41_6ms": false
+    },
+    {
+      "fixture": "RtMotionHelmet",
+      "lighting": "env-only",
+      "config": "reflection",
+      "native_terms": "reflection",
+      "median_ms": 76.47,
+      "p95_ms": 80.15,
+      "n": 120,
+      "delta_vs_split_baseline_ms": 36.17,
+      "fits_41_6ms": false
+    },
+    {
+      "fixture": "RtMotionHelmet",
+      "lighting": "env-only",
+      "config": "all-native",
+      "native_terms": "shadow,ao,gi,reflection",
+      "median_ms": 111.03,
+      "p95_ms": 121.92,
+      "n": 120,
+      "delta_vs_split_baseline_ms": 70.74,
+      "fits_41_6ms": false
+    },
+    {
+      "fixture": "RtApricot",
+      "lighting": "sun-only",
+      "config": "split-baseline",
+      "native_terms": "",
+      "median_ms": 40.45,
+      "p95_ms": 41.43,
+      "n": 120
+    },
+    {
+      "fixture": "RtApricot",
+      "lighting": "sun-only",
+      "config": "shadow",
+      "native_terms": "shadow",
+      "median_ms": 40.74,
+      "p95_ms": 41.52,
+      "n": 120,
+      "delta_vs_split_baseline_ms": 0.3,
+      "fits_41_6ms": true
+    },
+    {
+      "fixture": "RtApricot",
+      "lighting": "sun-only",
+      "config": "ao",
+      "native_terms": "ao",
+      "median_ms": 76.53,
+      "p95_ms": 79.75,
+      "n": 120,
+      "delta_vs_split_baseline_ms": 36.09,
+      "fits_41_6ms": false
+    },
+    {
+      "fixture": "RtApricot",
+      "lighting": "sun-only",
+      "config": "gi",
+      "native_terms": "gi",
+      "median_ms": 76.41,
+      "p95_ms": 79.64,
+      "n": 120,
+      "delta_vs_split_baseline_ms": 35.97,
+      "fits_41_6ms": false
+    },
+    {
+      "fixture": "RtApricot",
+      "lighting": "sun-only",
+      "config": "reflection",
+      "native_terms": "reflection",
+      "median_ms": 76.38,
+      "p95_ms": 79.8,
+      "n": 120,
+      "delta_vs_split_baseline_ms": 35.93,
+      "fits_41_6ms": false
+    },
+    {
+      "fixture": "RtApricot",
+      "lighting": "sun-only",
+      "config": "all-native",
+      "native_terms": "shadow,ao,gi,reflection",
+      "median_ms": 109.76,
+      "p95_ms": 120.54,
+      "n": 120,
+      "delta_vs_split_baseline_ms": 69.31,
+      "fits_41_6ms": false
+    },
+    {
+      "fixture": "RtApricot",
+      "lighting": "env-only",
+      "config": "split-baseline",
+      "native_terms": "",
+      "median_ms": 40.36,
+      "p95_ms": 41.13,
+      "n": 120
+    },
+    {
+      "fixture": "RtApricot",
+      "lighting": "env-only",
+      "config": "shadow",
+      "native_terms": "shadow",
+      "median_ms": 40.69,
+      "p95_ms": 41.99,
+      "n": 120,
+      "delta_vs_split_baseline_ms": 0.33,
+      "fits_41_6ms": true
+    },
+    {
+      "fixture": "RtApricot",
+      "lighting": "env-only",
+      "config": "ao",
+      "native_terms": "ao",
+      "median_ms": 76.39,
+      "p95_ms": 79.96,
+      "n": 120,
+      "delta_vs_split_baseline_ms": 36.03,
+      "fits_41_6ms": false
+    },
+    {
+      "fixture": "RtApricot",
+      "lighting": "env-only",
+      "config": "gi",
+      "native_terms": "gi",
+      "median_ms": 76.61,
+      "p95_ms": 80.3,
+      "n": 120,
+      "delta_vs_split_baseline_ms": 36.25,
+      "fits_41_6ms": false
+    },
+    {
+      "fixture": "RtApricot",
+      "lighting": "env-only",
+      "config": "reflection",
+      "native_terms": "reflection",
+      "median_ms": 77.71,
+      "p95_ms": 82.17,
+      "n": 120,
+      "delta_vs_split_baseline_ms": 37.35,
+      "fits_41_6ms": false
+    },
+    {
+      "fixture": "RtApricot",
+      "lighting": "env-only",
+      "config": "all-native",
+      "native_terms": "shadow,ao,gi,reflection",
+      "median_ms": 109.64,
+      "p95_ms": 122.56,
+      "n": 120,
+      "delta_vs_split_baseline_ms": 69.28,
+      "fits_41_6ms": false
+    }
+  ],
+  "verdicts": [
+    {
+      "fixture": "RtMotionHelmet",
+      "lighting": "sun-only",
+      "config": "shadow",
+      "split_baseline_median_ms": 40.3,
+      "term_native_median_ms": 40.82,
+      "delta_ms": 0.52,
+      "fits_41_6ms": true,
+      "verdict": "FITS budget (+0.52ms)"
+    },
+    {
+      "fixture": "RtMotionHelmet",
+      "lighting": "sun-only",
+      "config": "ao",
+      "split_baseline_median_ms": 40.3,
+      "term_native_median_ms": 77.06,
+      "delta_ms": 36.77,
+      "fits_41_6ms": false,
+      "verdict": "EXCEEDS budget (+36.77ms)"
+    },
+    {
+      "fixture": "RtMotionHelmet",
+      "lighting": "sun-only",
+      "config": "gi",
+      "split_baseline_median_ms": 40.3,
+      "term_native_median_ms": 77.42,
+      "delta_ms": 37.12,
+      "fits_41_6ms": false,
+      "verdict": "EXCEEDS budget (+37.12ms)"
+    },
+    {
+      "fixture": "RtMotionHelmet",
+      "lighting": "sun-only",
+      "config": "reflection",
+      "split_baseline_median_ms": 40.3,
+      "term_native_median_ms": 76.52,
+      "delta_ms": 36.22,
+      "fits_41_6ms": false,
+      "verdict": "EXCEEDS budget (+36.22ms)"
+    },
+    {
+      "fixture": "RtMotionHelmet",
+      "lighting": "sun-only",
+      "config": "all-native",
+      "split_baseline_median_ms": 40.3,
+      "all_native_median_ms": 109.49,
+      "delta_ms": 69.19,
+      "fits_41_6ms": false,
+      "verdict": "EXCEEDS budget (+69.19ms)"
+    },
+    {
+      "fixture": "RtMotionHelmet",
+      "lighting": "env-only",
+      "config": "shadow",
+      "split_baseline_median_ms": 40.3,
+      "term_native_median_ms": 40.56,
+      "delta_ms": 0.27,
+      "fits_41_6ms": true,
+      "verdict": "FITS budget (+0.27ms)"
+    },
+    {
+      "fixture": "RtMotionHelmet",
+      "lighting": "env-only",
+      "config": "ao",
+      "split_baseline_median_ms": 40.3,
+      "term_native_median_ms": 76.3,
+      "delta_ms": 36.0,
+      "fits_41_6ms": false,
+      "verdict": "EXCEEDS budget (+36.00ms)"
+    },
+    {
+      "fixture": "RtMotionHelmet",
+      "lighting": "env-only",
+      "config": "gi",
+      "split_baseline_median_ms": 40.3,
+      "term_native_median_ms": 76.37,
+      "delta_ms": 36.08,
+      "fits_41_6ms": false,
+      "verdict": "EXCEEDS budget (+36.08ms)"
+    },
+    {
+      "fixture": "RtMotionHelmet",
+      "lighting": "env-only",
+      "config": "reflection",
+      "split_baseline_median_ms": 40.3,
+      "term_native_median_ms": 76.47,
+      "delta_ms": 36.17,
+      "fits_41_6ms": false,
+      "verdict": "EXCEEDS budget (+36.17ms)"
+    },
+    {
+      "fixture": "RtMotionHelmet",
+      "lighting": "env-only",
+      "config": "all-native",
+      "split_baseline_median_ms": 40.3,
+      "all_native_median_ms": 111.03,
+      "delta_ms": 70.74,
+      "fits_41_6ms": false,
+      "verdict": "EXCEEDS budget (+70.74ms)"
+    },
+    {
+      "fixture": "RtApricot",
+      "lighting": "sun-only",
+      "config": "shadow",
+      "split_baseline_median_ms": 40.45,
+      "term_native_median_ms": 40.74,
+      "delta_ms": 0.3,
+      "fits_41_6ms": true,
+      "verdict": "FITS budget (+0.30ms)"
+    },
+    {
+      "fixture": "RtApricot",
+      "lighting": "sun-only",
+      "config": "ao",
+      "split_baseline_median_ms": 40.45,
+      "term_native_median_ms": 76.53,
+      "delta_ms": 36.09,
+      "fits_41_6ms": false,
+      "verdict": "EXCEEDS budget (+36.09ms)"
+    },
+    {
+      "fixture": "RtApricot",
+      "lighting": "sun-only",
+      "config": "gi",
+      "split_baseline_median_ms": 40.45,
+      "term_native_median_ms": 76.41,
+      "delta_ms": 35.97,
+      "fits_41_6ms": false,
+      "verdict": "EXCEEDS budget (+35.97ms)"
+    },
+    {
+      "fixture": "RtApricot",
+      "lighting": "sun-only",
+      "config": "reflection",
+      "split_baseline_median_ms": 40.45,
+      "term_native_median_ms": 76.38,
+      "delta_ms": 35.93,
+      "fits_41_6ms": false,
+      "verdict": "EXCEEDS budget (+35.93ms)"
+    },
+    {
+      "fixture": "RtApricot",
+      "lighting": "sun-only",
+      "config": "all-native",
+      "split_baseline_median_ms": 40.45,
+      "all_native_median_ms": 109.76,
+      "delta_ms": 69.31,
+      "fits_41_6ms": false,
+      "verdict": "EXCEEDS budget (+69.31ms)"
+    },
+    {
+      "fixture": "RtApricot",
+      "lighting": "env-only",
+      "config": "shadow",
+      "split_baseline_median_ms": 40.36,
+      "term_native_median_ms": 40.69,
+      "delta_ms": 0.33,
+      "fits_41_6ms": true,
+      "verdict": "FITS budget (+0.33ms)"
+    },
+    {
+      "fixture": "RtApricot",
+      "lighting": "env-only",
+      "config": "ao",
+      "split_baseline_median_ms": 40.36,
+      "term_native_median_ms": 76.39,
+      "delta_ms": 36.03,
+      "fits_41_6ms": false,
+      "verdict": "EXCEEDS budget (+36.03ms)"
+    },
+    {
+      "fixture": "RtApricot",
+      "lighting": "env-only",
+      "config": "gi",
+      "split_baseline_median_ms": 40.36,
+      "term_native_median_ms": 76.61,
+      "delta_ms": 36.25,
+      "fits_41_6ms": false,
+      "verdict": "EXCEEDS budget (+36.25ms)"
+    },
+    {
+      "fixture": "RtApricot",
+      "lighting": "env-only",
+      "config": "reflection",
+      "split_baseline_median_ms": 40.36,
+      "term_native_median_ms": 77.71,
+      "delta_ms": 37.35,
+      "fits_41_6ms": false,
+      "verdict": "EXCEEDS budget (+37.35ms)"
+    },
+    {
+      "fixture": "RtApricot",
+      "lighting": "env-only",
+      "config": "all-native",
+      "split_baseline_median_ms": 40.36,
+      "all_native_median_ms": 109.64,
+      "delta_ms": 69.28,
+      "fits_41_6ms": false,
+      "verdict": "EXCEEDS budget (+69.28ms)"
+    }
+  ]
+}
