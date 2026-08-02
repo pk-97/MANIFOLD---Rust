@@ -9,6 +9,8 @@
 //! project_tool tempo at <file.manifold> <beat> [<beat>...]
 //! project_tool clip add-audio <file.manifold> --layer <name> --path <audio>
 //!     --start-beat <B> --duration-beats <B> [--in-point <s>] [--source-duration <s>]
+//! project_tool scene set-model <file.manifold> <model_path>
+//!     --layer <index> [--layer-name <name>]
 //! ```
 //!
 //! ## Why mutations are raw-JSON surgery, not model round-trips
@@ -69,6 +71,7 @@ fn main() -> ExitCode {
         "json" => run_json(rest),
         "tempo" => run_tempo(rest),
         "clip" => run_clip(rest),
+        "scene" => run_scene(rest),
         "-h" | "--help" | "help" => {
             print_usage();
             ExitCode::SUCCESS
@@ -96,7 +99,8 @@ USAGE:
   project_tool tempo set <file.manifold> <points.json> [--no-sync-bpm]
   project_tool tempo at <file.manifold> <beat> [<beat>...]
   project_tool clip add-audio <file.manifold> --layer <name> --path <audio>
-      --start-beat <B> --duration-beats <B> [--in-point <s>] [--source-duration <s>]"
+      --start-beat <B> --duration-beats <B> [--in-point <s>] [--source-duration <s>]
+  project_tool scene set-model <file.manifold> <model_path> --layer <index> [--layer-name <name>]"
     );
 }
 
@@ -533,4 +537,130 @@ fn clip_add_audio(rest: &[String]) -> ExitCode {
 
     println!("added audio clip {clip_id} on '{layer_name}': beats {start_beat}..{end_beat} ({audio_path})");
     validate_and_save(&root, path)
+}
+
+// ── scene ───────────────────────────────────────────────────────────────
+
+fn run_scene(rest: &[String]) -> ExitCode {
+    let Some((sub, rest)) = rest.split_first() else {
+        eprintln!("error: scene subcommand required (set-model)\n");
+        print_usage();
+        return ExitCode::from(2);
+    };
+    match sub.as_str() {
+        "set-model" => scene_set_model(rest),
+        other => {
+            eprintln!("error: unknown scene subcommand '{other}'\n");
+            print_usage();
+            ExitCode::from(2)
+        }
+    }
+}
+
+fn scene_set_model(rest: &[String]) -> ExitCode {
+    let Some(path) = rest.first().filter(|a| !a.starts_with("--")) else {
+        eprintln!("error: scene set-model requires <file.manifold> <model_path> --layer <index>\n");
+        print_usage();
+        return ExitCode::from(2);
+    };
+    let Some(model_path) = rest.get(1).filter(|a| !a.starts_with("--")) else {
+        eprintln!("error: scene set-model requires <model_path>\n");
+        print_usage();
+        return ExitCode::from(2);
+    };
+    let (Some(layer_idx_str), _) = (flag_value(rest, "--layer"), true) else {
+        eprintln!("error: scene set-model requires --layer <index>\n");
+        print_usage();
+        return ExitCode::from(2);
+    };
+    let layer_name = flag_value(rest, "--layer-name");
+    let Ok(layer_idx) = layer_idx_str.parse::<usize>() else {
+        eprintln!("error: --layer must be a number (0-based index)");
+        return ExitCode::from(2);
+    };
+
+    let mut root = match read_raw_json(path).and_then(|j| parse_root(&j)) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(2);
+        }
+    };
+
+    let Some(layers) = root
+        .pointer_mut("/timeline/layers")
+        .and_then(|v| v.as_array_mut())
+    else {
+        eprintln!("error: project has no /timeline/layers array");
+        return ExitCode::FAILURE;
+    };
+
+    let layer_idx = if layer_name.is_some() {
+        // Find layer by name first, fall back to index
+        let name = layer_name.unwrap();
+        layers.iter().position(|l| l.get("name").and_then(|n| n.as_str()) == Some(name))
+            .or_else(|| {
+                if layer_idx < layers.len() { Some(layer_idx) } else { None }
+            })
+            .ok_or_else(|| format!("no layer named '{name}' at index {layer_idx}"))
+    } else {
+        if layer_idx >= layers.len() {
+            Err(format!("layer index {layer_idx} out of bounds ({} layers)", layers.len()))
+        } else {
+            Ok(layer_idx)
+        }
+    };
+
+    let layer_idx = match layer_idx {
+        Ok(i) => i,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let Some(layer) = layers.get_mut(layer_idx) else {
+        eprintln!("error: failed to get layer at index {layer_idx}");
+        return ExitCode::FAILURE;
+    };
+
+    // Set the model file path in genParams.def.stringParams
+    // The model_file parameter is in the stringParams array
+    let mut found = false;
+    if let Some(gen_params) = layer.get_mut("genParams") {
+        eprintln!("DEBUG: gen_params found, keys: {:?}", gen_params.as_object().map(|o| o.keys().collect::<Vec<_>>()));
+        // Also update the description field
+        if let Some(def) = gen_params.get_mut("def") {
+            eprintln!("DEBUG: def found");
+            if let Some(description) = def.get_mut("description") {
+                eprintln!("DEBUG: description found: {}", description.as_str().unwrap_or("none"));
+                *description = serde_json::Value::String(format!("Imported from {}", model_path));
+            }
+            if let Some(string_params) = def.get_mut("stringParams") {
+                eprintln!("DEBUG: string_params found");
+                if let Some(arr) = string_params.as_array_mut() {
+                    eprintln!("DEBUG: array has {} elements", arr.len());
+                    for param in arr {
+                        if param.get("id").and_then(|v| v.as_str()) == Some("model_file") {
+                            if let Some(default_value) = param.get_mut("defaultValue") {
+                                *default_value = serde_json::Value::String(model_path.to_string());
+                                found = true;
+                                eprintln!("DEBUG: updated defaultValue");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        eprintln!("DEBUG: gen_params NOT found");
+    }
+
+    if found {
+        println!("set model path on layer {}: {}", layer_idx, model_path);
+        return validate_and_save(&root, path);
+    }
+
+    eprintln!("error: layer {} has no model_file parameter (not a 3D scene layer?)", layer_idx);
+    ExitCode::FAILURE
 }
