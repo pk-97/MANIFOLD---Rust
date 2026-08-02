@@ -956,10 +956,11 @@ pub struct RenderScene {
     rt_normal_full_b: Option<manifold_gpu::GpuTexture>,
     /// RT native-resolution toggle, parsed once at init from
     /// `MANIFOLD_RT_NATIVE_TERMS` (comma-separated subset of
-    /// shadow,ao,gi,reflection). The four terms share ONE trace dispatch
-    /// (`dispatch_shadow_rays`), so listing ANY term nativizes the whole
-    /// dispatch — per-term resolution isolation requires splitting that
-    /// dispatch and is deferred (A3). Empty/absent = D11 half-res for all.
+    /// shadow,ao,gi,reflection). RT-A3a split dispatch: terms map to dispatches
+    /// by their actual output writes. Shadow → mask dispatch (out_sv).
+    /// AO/GI/reflection → lighting dispatch (out_irr/out_refl).
+    /// Each dispatch runs at native resolution when ANY of its terms is listed.
+    /// Empty/absent = D11 half-res for all dispatches.
     rt_native_shadow: bool,
     rt_native_ao: bool,
     rt_native_gi: bool,
@@ -1900,17 +1901,22 @@ impl RenderScene {
     /// slot (r=slot 0 .. a=slot 3); AO moved out entirely (folded into
     /// irradiance in-kernel, never written here) — the SAME texture,
     /// extending the SAME dispatch (D16's seam note), not a second mask.
-    /// Resolution of the single shared RT trace dispatch (D11). Half-res by
-    /// default; native (full output res) when ANY term is listed in
-    /// `MANIFOLD_RT_NATIVE_TERMS` — the four terms share one dispatch, so they
-    /// cannot be nativized independently (per-term isolation needs split
-    /// dispatches, deferred to A3). Every half-res texture the dispatch
-    /// writes is allocated at this size; the full-res composite targets stay
-    /// full-res, so native turns the half→full upsample into a same-size
-    /// (identity) pass.
-    fn rt_trace_size(&self, width: u32, height: u32) -> (u32, u32) {
-        let any_native = self.rt_native_shadow
-            || self.rt_native_ao
+    /// RT-A3a: split into mask and lighting dispatches, each at its own resolution.
+    /// Resolution of the mask dispatch (shadow visibility only). Half-res by
+    /// default; native when `rt_native_shadow` is set.
+    fn rt_mask_trace_size(&self, width: u32, height: u32) -> (u32, u32) {
+        if self.rt_native_shadow {
+            (width, height)
+        } else {
+            (width.div_ceil(2).max(1), height.div_ceil(2).max(1))
+        }
+    }
+
+    /// Resolution of the lighting dispatch (AO + GI + reflection + normal).
+    /// Half-res by default; native when ANY lighting term is listed in
+    /// `MANIFOLD_RT_NATIVE_TERMS`.
+    fn rt_lighting_trace_size(&self, width: u32, height: u32) -> (u32, u32) {
+        let any_native = self.rt_native_ao
             || self.rt_native_gi
             || self.rt_native_reflection;
         if any_native {
@@ -1925,7 +1931,7 @@ impl RenderScene {
             return;
         }
 
-        let (trace_w, trace_h) = self.rt_trace_size(width, height);
+        let (mask_trace_w, mask_trace_h) = self.rt_mask_trace_size(width, height);
         let make = |w: u32, h: u32, label: &'static str| {
             device.create_texture(&manifold_gpu::GpuTextureDesc {
                 width: w,
@@ -1940,8 +1946,8 @@ impl RenderScene {
                 mip_levels: 1,
             })
         };
-        self.rt_mask_half = Some(make(trace_w, trace_h, "node.render_scene rt_mask_half (RT-D3/RT-P2 vis+ao)"));
-        self.rt_mask_full = Some(make(width, height, "node.render_scene rt_mask_full (RT-D3/RT-P2 vis+ao)"));
+        self.rt_mask_half = Some(make(mask_trace_w, mask_trace_h, "node.render_scene rt_mask_half (RT-D3/RT-P2 vis)"));
+        self.rt_mask_full = Some(make(width, height, "node.render_scene rt_mask_full (RT-D3/RT-P2 vis)"));
         // RT-T1-D: à-trous ping-pong scratch — see the field's doc comment.
         self.rt_mask_full_b = Some(make(width, height, "node.render_scene rt_mask_full_b (RT-T1-D atrous)"));
         self.rt_mask_width = width;
@@ -1961,11 +1967,10 @@ impl RenderScene {
             return false;
         }
 
-        // Half-res textures the trace dispatch writes — allocated at the
-        // dispatch resolution (native when any term is native), matching
-        // `dispatch_shadow_rays`' `trace_size` so native writes stay in
-        // bounds. See `rt_trace_size`.
-        let (half_w, half_h) = self.rt_trace_size(width, height);
+        // RT-A3a: half-res textures are allocated at each dispatch's own resolution.
+        // Mask textures use rt_mask_trace_size, lighting textures use rt_lighting_trace_size.
+        let (_mask_half_w, _mask_half_h) = self.rt_mask_trace_size(width, height);
+        let (light_half_w, light_half_h) = self.rt_lighting_trace_size(width, height);
         let make = |w: u32, h: u32, format: manifold_gpu::GpuTextureFormat, label: &'static str| {
             device.create_texture(&manifold_gpu::GpuTextureDesc {
                 width: w,
@@ -1981,19 +1986,20 @@ impl RenderScene {
             })
         };
         let rgba16 = manifold_gpu::GpuTextureFormat::Rgba16Float;
-        self.rt_irr_half = Some(make(half_w, half_h, rgba16, "node.render_scene rt_irr_half (RT-P2)"));
+        // Lighting textures (irradiance, reflection, normal) at lighting resolution.
+        self.rt_irr_half = Some(make(light_half_w, light_half_h, rgba16, "node.render_scene rt_irr_half (RT-P2)"));
         self.rt_irr_full = Some(make(width, height, rgba16, "node.render_scene rt_irr_full (RT-P2)"));
         // RT-R1 (section 9.3): half-res reflection-radiance output — same lifecycle
         // as `rt_irr_half` (the dispatch writes it; T5's kernel is the writer;
         // inert/bind-only until then).
-        self.rt_refl_half = Some(make(half_w, half_h, rgba16, "node.render_scene rt_refl_half (RT-R1)"));
+        self.rt_refl_half = Some(make(light_half_w, light_half_h, rgba16, "node.render_scene rt_refl_half (RT-R1)"));
         // RT-R1 (section 9.3): full-res reflection-radiance output target & atrous
         // scratch (mirror `rt_irr_full`/`rt_irr_full_b`). Inert until T5.
         self.rt_refl_full = Some(make(width, height, rgba16, "node.render_scene rt_refl_full (RT-R1)"));
         self.rt_refl_full_b = Some(make(width, height, rgba16, "node.render_scene rt_refl_full_b (RT-R1 atrous)"));
         // RT-T1-C: current-frame primary-hit normal, same half/full
         // lifecycle as irradiance above (not persistent history).
-        self.rt_normal_half = Some(make(half_w, half_h, rgba16, "node.render_scene rt_normal_half (RT-T1-C)"));
+        self.rt_normal_half = Some(make(light_half_w, light_half_h, rgba16, "node.render_scene rt_normal_half (RT-T1-C)"));
         self.rt_normal_full = Some(make(width, height, rgba16, "node.render_scene rt_normal_full (RT-T1-C)"));
         // RT-T1-D: second full-res scratch set for the à-trous filter's
         // ping-pong (same lifecycle as irradiance/normal above — not
@@ -4618,22 +4624,46 @@ impl EffectNode for RenderScene {
                     return;
                 };
 
-                // Single shared dispatch resolution (D11 half-res, or native
-                // when any term is listed in MANIFOLD_RT_NATIVE_TERMS) — see
-                // `rt_trace_size`. Every half-res texture the dispatch writes
-                // is allocated at this size, so the writes stay in bounds.
-                let (half_w, half_h) = self.rt_trace_size(width, height);
+                // RT-A3a: split dispatch — mask and lighting run at separate resolutions.
+                // Each dispatch uses the same kernel with term-specific spp gating.
+                let (mask_half_w, mask_half_h) = self.rt_mask_trace_size(width, height);
+                let (light_half_w, light_half_h) = self.rt_lighting_trace_size(width, height);
+
                 // ED2 (RAYTRACING_DESIGN.md section 14.2): the flat ambient no
                 // longer enters the kernel (`ShadowRayParams` has no
                 // `ambient_color`); each material's Ambient knob is applied
                 // consumer-side in `render_scene.wgsl`'s `rt_or_flat_ambient`
                 // via its own `scene_params[1]` — knob at 0 stays true black
                 // on both paths.
-                let params = manifold_gpu::raytrace::ShadowRayParams::new(
+
+                // RT-A3a: mask dispatch (shadow visibility only).
+                // shadow_spp=1, ao_spp=0, gi_spp=0, refl_spp=0 → writes out_sv only.
+                let mask_params = manifold_gpu::raytrace::ShadowRayParams::new(
                     &rt_casters,
-                    1,
+                    1, // shadow_spp
                     self.jitter_frame_index,
-                    [half_w, half_h],
+                    [mask_half_w, mask_half_h],
+                    [width, height],
+                    0.0,    // ao_radius (unused)
+                    0,      // ao_spp
+                    0,      // gi_spp
+                    // RT-T1-B: camera_pos unused by mask dispatch (no primary ray),
+                    // but kept for API compatibility.
+                    cam.pos,
+                    inv_view_proj,
+                    0,      // refl_spp
+                    0.6,    // refl_max_roughness (unused)
+                    0.1,    // refl_rough_band (unused)
+                );
+
+                // RT-A3a: lighting dispatch (AO + GI + reflection + normal).
+                // shadow_spp=0, ao_spp > 0 and/or gi_spp > 0 and/or refl_spp > 0
+                // → writes out_irr, out_refl, out_n only.
+                let lighting_params = manifold_gpu::raytrace::ShadowRayParams::new(
+                    &rt_casters,
+                    0, // shadow_spp
+                    self.jitter_frame_index,
+                    [light_half_w, light_half_h],
                     [width, height],
                     AO_RADIUS_WORLD_UNITS,
                     AO_SAMPLES_PER_PIXEL,
@@ -4753,16 +4783,20 @@ impl EffectNode for RenderScene {
                 let refl_half = self.rt_refl_half.as_ref().expect("ensured above");
                 let refl_full = self.rt_refl_full.as_ref().expect("ensured above");
                 let _refl_full_b = self.rt_refl_full_b.as_ref().expect("ensured above");
+
+                // RT-A3a: dispatch M (mask) — shadow visibility only.
                 tracer.dispatch_shadow_rays(
                     gpu.native_enc,
                     accel,
-                    &params,
+                    &mask_params,
                     params_buffer,
                     gi_materials_buffer,
                     normal_sources_buffer,
                     &alpha_textures,
                     depth_tex,
                     mask_half,
+                    // All output textures must be bound (Metal requirement),
+                    // but only out_sv is written by the mask dispatch.
                     irr_half,
                     normal_half,
                     refl_half,
@@ -4779,7 +4813,31 @@ impl EffectNode for RenderScene {
                     } else {
                         self.dummy_texture.as_ref().expect("ensured at 3491")
                     },
-                    "node.render_scene RT-D3/RT-P2/RT-P3 trace_shadow_rays",
+                    "node.render_scene RT-A3a mask dispatch (shadow visibility)",
+                );
+
+                // RT-A3a: dispatch L (lighting) — AO + GI + reflection + normal.
+                tracer.dispatch_shadow_rays(
+                    gpu.native_enc,
+                    accel,
+                    &lighting_params,
+                    params_buffer,
+                    gi_materials_buffer,
+                    normal_sources_buffer,
+                    &alpha_textures,
+                    depth_tex,
+                    // All output textures must be bound (Metal requirement),
+                    // but only out_irr, out_refl, out_n are written by the lighting dispatch.
+                    mask_half,
+                    irr_half,
+                    normal_half,
+                    refl_half,
+                    if envmap_wired.is_some() {
+                        self.prefiltered_specular.as_ref().expect("ensured above")
+                    } else {
+                        self.dummy_texture.as_ref().expect("ensured at 3491")
+                    },
+                    "node.render_scene RT-A3a lighting dispatch (AO+GI+reflection+normal)",
                 );
                 tracer.upsample_shadow(
                     gpu.native_enc,

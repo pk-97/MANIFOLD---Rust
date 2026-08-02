@@ -1161,15 +1161,23 @@ kernel void trace_shadow_rays(
         // Void background: unoccluded either way, every caster slot —
         // no surface to gather against (ED2: rgb 0, alpha = neutral
         // unoccluded ao 1.0). `.w = -1`: no object (RT-T2-C).
-        out_sv.write(float4(1, 1, 1, 1), tid);
-        out_irr.write(float4(0, 0, 0, 1.0), tid);
-        out_n.write(float4(0, 1, 0, -1.0), tid);
+        // RT-A3a: gate writes on dispatch role.
+        if (p.shadow_spp > 0u) {
+            out_sv.write(float4(1, 1, 1, 1), tid);
+        }
+        if (p.ao_spp > 0u || p.gi_spp > 0u) {
+            out_irr.write(float4(0, 0, 0, 1.0), tid);
+        }
+        if (p.ao_spp > 0u || p.gi_spp > 0u || p.refl_spp > 0u) {
+            out_n.write(float4(0, 1, 0, -1.0), tid);
+        }
         // BUG-88m: `.a = -1` = "no traced value at this texel". Blend
         // fragments DO shade here (the depth prepass excludes them, so
         // they read as void) and must keep their prefiltered-env IBL —
         // `render_scene.wgsl` gates the rt_reflection substitution on
         // `.a >= 0`. Alpha semantics: >0 hit distance, 0 env-miss
         // (RT_REFL_MISS_HIT_DIST), -1 no valid value.
+        // Reflection gate already exists (refl_spp > 0u).
         out_refl.write(float4(0, 0, 0, -1.0), tid);
         return;
     }
@@ -1367,13 +1375,19 @@ kernel void trace_shadow_rays(
         }
         ao /= float(p.ao_spp);
     }
-    out_sv.write(sv, tid);
+    // RT-A3a: gate mask write on shadow_spp so lighting-only dispatch leaves texture untouched.
+    if (p.shadow_spp > 0u) {
+        out_sv.write(sv, tid);
+    }
     // RT-T1-C (BUG-311): expose the SAME real interpolated vertex normal
     // (`n`) already computed above for AO/GI cosine sampling, so
     // `accumulate_irradiance`'s reprojection validity test can compare a
     // real surface normal instead of reconstructing one from depth.
     // RT-T2-C: `.w` carries the primary-hit object id (see `obj_id` above).
-    out_n.write(float4(n, obj_id), tid);
+    // RT-A3a: gate normal write on lighting terms so mask-only dispatch leaves texture untouched.
+    if (p.ao_spp > 0u || p.gi_spp > 0u || p.refl_spp > 0u) {
+        out_n.write(float4(n, obj_id), tid);
+    }
 
     // RT-P3 (RAYTRACING_DESIGN.md section 5.2 P3, D4): GI gather — ported
     // from the P0 prototype's `trace_lighting` GI block, extended with the
@@ -1674,7 +1688,10 @@ kernel void trace_shadow_rays(
     // mask for visibility — a sun*n·l·vis copy here was counted twice. No
     // albedo multiply here either (that happens once, downstream — D3's
     // "accumulate lighting separated from albedo").
-    out_irr.write(float4(gi, ao), tid);
+    // RT-A3a: gate irradiance write on lighting terms so mask-only dispatch leaves texture untouched.
+    if (p.ao_spp > 0u || p.gi_spp > 0u) {
+        out_irr.write(float4(gi, ao), tid);
+    }
 }
 
 // Depth+normal-aware bilateral upsample: half-res (sun-visibility, AO) +
@@ -2737,6 +2754,12 @@ impl RtCasterParams {
 /// — up to [`MAX_RT_CASTERS`] independently-traced casters, one visibility
 /// channel per slot in `trace_shadow_rays`'s `out_sv` output.
 #[repr(C)]
+/// RT quality A3a: Split-dispatch control.
+/// The single `trace_shadow_rays` kernel now runs twice with different spp masks:
+/// - Mask dispatch: shadow_spp > 0, ao_spp=0, gi_spp=0, refl_spp=0 → writes out_sv only
+/// - Lighting dispatch: shadow_spp=0, ao_spp > 0 and/or gi_spp > 0 and/or refl_spp > 0 → writes out_irr, out_refl, out_n
+///
+/// Each dispatch carries its own trace_size; spp=0 gates kernel writes to leave textures untouched.
 #[derive(Clone, Copy, Debug)]
 pub struct ShadowRayParams {
     pub shadow_spp: u32,
