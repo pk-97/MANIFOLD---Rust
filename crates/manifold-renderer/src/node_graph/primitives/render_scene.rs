@@ -211,6 +211,16 @@ const AO_RADIUS_WORLD_UNITS: f32 = 0.5;
     reason = "single source of truth for the WGSL mirror constant; the WGSL side reads it"
 )]
 const AMBIENT_IRRADIANCE_SCALE: f32 = 0.15;
+
+/// RAYTRACING_DESIGN.md section 16 TL1: wrap-diffuse constant, single source
+/// of truth for the WGSL mirror `RT_TRANSMISSION_WRAP` in
+/// `shaders/render_scene.wgsl`. Range 0..1 — 0 = sharp terminator (only
+/// dead-on backlight), 1 = full wrap (petals glow at wide angles).
+#[expect(
+    dead_code,
+    reason = "single source of truth for the WGSL mirror constant; the WGSL side reads it"
+)]
+const RT_TRANSMISSION_WRAP: f32 = 0.5;
 /// RAYTRACING_DESIGN.md section 5.2 P2/D3: FLOOR on the temporal irradiance
 /// blend weight (`AccumulateParams::alpha`). The kernel blends at `1/n` where
 /// `n` is the texel's accumulated frame count, so a still surface converges;
@@ -504,6 +514,11 @@ struct RenderSceneUniforms {
     /// `KHR_materials_volume`'s `attenuationColor` (`xyz`, default
     /// `[1,1,1]` — neutral). `w` reserved.
     volume_attenuation_color: [f32; 4],
+    /// RAYTRACING_DESIGN.md section 16 TL7: KHR_materials_diffuse_transmission.
+    /// `x` = diffuse transmission factor (default `0.0`, inert — byte-identical
+    /// to pre-TL-A output). `yzw` reserved (first consumer = the future
+    /// color-texture presence flag, section 16.8).
+    diffuse_transmission_params: [f32; 4],
     /// RAYTRACING_DESIGN.md section 9 RD9/RD1: RT feature flags the FRAGMENT
     /// shader needs (scene_params.w only says "RT active", not "the
     /// reflection texture holds traced data this frame"). `x` =
@@ -522,7 +537,7 @@ struct RenderSceneUniforms {
     velocity_jitter: [f32; 4],
 }
 
-// 736 = 46 × 16 → the naga 16-byte uniform-size rule holds. Was 480 before
+// 784 = 49 × 16 → the naga 16-byte uniform-size rule holds. Was 480 before
 // GLB_CONFORMANCE_DESIGN.md G-P4/D5: `pbr_specular_tint` + five per-map
 // `*_uv_m`/`*_uv_t` pairs (+176 bytes, eleven new vec4s —
 // `ior`/`specular_factor` rode existing reserved slots on
@@ -536,7 +551,9 @@ struct RenderSceneUniforms {
 // D2 (never grown again per-family). Now 752 after RAYTRACING_DESIGN.md section 9
 // RD9: `rt_flags` (+16) — an RT feature flag word, not a glTF family.
 // 768 after the velocity jitter-exclusion quad (D-64's MetalFX audit).
-const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 768);
+// 784 after RAYTRACING_DESIGN.md section 16 TL7: diffuse_transmission_params
+// (+16 bytes, one new vec4).
+const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 784);
 
 /// Per-(caster, object) uniform for the shadow depth pass
 /// (`shaders/shadow_depth.wgsl`). The vertex shader composes
@@ -2995,6 +3012,9 @@ fn build_uniforms(
             material.volume_attenuation_color[2],
             0.0,
         ],
+        // RAYTRACING_DESIGN.md section 16 TL7: x = translucency factor,
+        // yzw reserved.
+        diffuse_transmission_params: [material.translucency, 0.0, 0.0, 0.0],
         // Overwritten per-object right after the build (rt_reflections
         // gate, section 9 RD9) — default 0 = substitution OFF.
         rt_flags: [0.0; 4],
