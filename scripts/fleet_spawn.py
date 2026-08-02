@@ -24,6 +24,9 @@ Usage:
 
 Obsolete when: cc-fleet itself fails fast on dead provider auth at spawn
 (the probe moves into the binary) — then this wrapper is a pass-through.
+MOOT since 2026-08-02: lanes are native Agent-tool teammates only
+(cc-fleet-tier-guard.py denies every cc-fleet spawn verb for every tier).
+Retained in case the native-only policy ever reopens.
 """
 import argparse
 import json
