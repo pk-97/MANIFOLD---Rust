@@ -192,14 +192,18 @@ def measure_sharpness_leg(rt_capture_dir, raster_capture_dir, probe_regions):
     """
     results = []
 
-    # Check both captures exist
-    rt_composite = rt_capture_dir / "composite_0099.png"
-    raster_composite = raster_capture_dir / "composite_0099.png"
+    # Find the latest composite frame from both captures (they should match)
+    rt_frames = sorted(rt_capture_dir.glob("composite_*.png"))
+    raster_frames = sorted(raster_capture_dir.glob("composite_*.png"))
 
-    if not rt_composite.exists():
-        raise FileNotFoundError(f"RT composite not found: {rt_composite}")
-    if not raster_composite.exists():
-        raise FileNotFoundError(f"Raster composite not found: {raster_composite}")
+    if not rt_frames:
+        raise FileNotFoundError(f"No RT composites found in {rt_capture_dir}")
+    if not raster_frames:
+        raise FileNotFoundError(f"No raster composites found in {raster_capture_dir}")
+
+    # Use the latest frame from RT capture
+    rt_composite = rt_frames[-1]
+    raster_composite = raster_frames[-1]
 
     for region in probe_regions:
         if region["type"] != "shadow_boundary":
@@ -304,10 +308,12 @@ def measure_halo_leg(capture_dir, probe_regions):
     """
     results = []
 
-    # Check capture exists
-    composite_path = capture_dir / "composite_0099.png"
-    if not composite_path.exists():
-        raise FileNotFoundError(f"Composite not found: {composite_path}")
+    # Find the latest composite frame
+    frames = sorted(capture_dir.glob("composite_*.png"))
+    if not frames:
+        raise FileNotFoundError(f"No composites found in {capture_dir}")
+
+    composite_path = frames[-1]
 
     for region in probe_regions:
         # For halo measurement, we need regions near object boundaries
@@ -563,7 +569,48 @@ def main():
     if args.record:
         write_baseline(baseline_path, results, probe_regions)
         log("[rt-quality] baseline recorded")
+
+    # Always check results against thresholds (even when recording)
+    if not baseline_path.exists():
+        log(f"[SKIP] no baseline at {baseline_path} — run --record first")
         return 0
+
+    baseline = json.loads(baseline_path.read_text())
+
+    # Check results against thresholds
+    failures = []
+    trips = []
+
+    for scene_name, scene_results in results.items():
+        for config_name, config_results in scene_results.items():
+            # Check sharpness leg - RT vs RASTER ratio
+            if "sharpness" in config_results and "max_ratio" in config_results["sharpness"]:
+                ratio = config_results["sharpness"]["max_ratio"]
+                if ratio > THRESHOLD_SHARPNESS_RATIO:
+                    trips.append(f"{scene_name}/{config_name}: sharpness RT/raster ratio {ratio:.3f} > ceiling {THRESHOLD_SHARPNESS_RATIO}")
+
+            # Check halo leg - luminance bleed width
+            if "halo" in config_results and "max_width_px" in config_results["halo"]:
+                halo_width = config_results["halo"]["max_width_px"]
+                if halo_width > THRESHOLD_HALO_WIDTH_PX:
+                    trips.append(f"{scene_name}/{config_name}: halo width {halo_width:.1f}px > ceiling {THRESHOLD_HALO_WIDTH_PX}px")
+
+    if failures:
+        log("\nRT QUALITY MATRIX: RED (FAILURES)")
+        for failure in failures:
+            log(f"  {failure}")
+        return 1
+
+    if trips:
+        log("\nRT QUALITY MATRIX: BASELINE TRIPS (Expected)")
+        log("The oracles successfully detected the current defects:")
+        for trip in trips:
+            log(f"  {trip}")
+        log("\nBaseline recorded with known issues. Fix pipeline will target these measurements.")
+        return 1  # Nonzero exit as required
+
+    log("\nRT QUALITY MATRIX: green")
+    return 0
 
     # Compare against baseline
     if not baseline_path.exists():

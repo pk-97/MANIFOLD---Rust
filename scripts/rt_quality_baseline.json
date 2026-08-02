@@ -9,7 +9,7 @@
   },
   "provenance": {
     "recorded": "2026-08-02",
-    "commit": "15ff4100489f",
+    "commit": "6b3f474195e7",
     "note": "Initial baseline \u2014 expect sharpness and halo legs to TRIP thresholds"
   },
   "probe_regions": {
@@ -21,16 +21,16 @@
         "width": 100,
         "height": 100,
         "center": [
-          0,
-          92
+          42,
+          91
         ],
-        "transition_width_estimate": 99.0,
+        "transition_width_estimate": 57.0,
         "contrast_range": [
           0.0,
-          0.42745098039215684
+          0.5137254901960784
         ],
-        "edge_strength": 0.08429214718145674,
-        "rationale": "Hard shadow boundary at (1400, 600), contrast 0.43-0.00"
+        "edge_strength": 0.08888377803640651,
+        "rationale": "Hard shadow boundary at (1400, 600), contrast 0.51-0.00"
       },
       {
         "type": "shadow_boundary",
@@ -39,16 +39,16 @@
         "width": 100,
         "height": 100,
         "center": [
-          84,
-          96
+          64,
+          95
         ],
-        "transition_width_estimate": 15.0,
+        "transition_width_estimate": 36.0,
         "contrast_range": [
-          0.1411764705882353,
-          0.4
+          0.0,
+          0.38823529411764707
         ],
-        "edge_strength": 0.0871930004683408,
-        "rationale": "Hard shadow boundary at (1600, 600), contrast 0.40-0.14"
+        "edge_strength": 0.09764961206606484,
+        "rationale": "Hard shadow boundary at (1600, 600), contrast 0.39-0.00"
       },
       {
         "type": "shadow_boundary",
@@ -57,34 +57,16 @@
         "width": 100,
         "height": 100,
         "center": [
-          28,
-          97
+          77,
+          98
         ],
-        "transition_width_estimate": 99.0,
+        "transition_width_estimate": 22.0,
         "contrast_range": [
-          0.0,
+          0.058823529411764705,
           0.39215686274509803
         ],
-        "edge_strength": 0.06518383712607084,
-        "rationale": "Hard shadow boundary at (1800, 600), contrast 0.39-0.00"
-      },
-      {
-        "type": "shadow_boundary",
-        "x": 2000,
-        "y": 600,
-        "width": 100,
-        "height": 100,
-        "center": [
-          93,
-          99
-        ],
-        "transition_width_estimate": 71.0,
-        "contrast_range": [
-          0.13725490196078433,
-          0.35294117647058826
-        ],
-        "edge_strength": 0.08254926938912072,
-        "rationale": "Hard shadow boundary at (2000, 600), contrast 0.35-0.14"
+        "edge_strength": 0.06801191786944492,
+        "rationale": "Hard shadow boundary at (1800, 600), contrast 0.39-0.06"
       },
       {
         "type": "shadow_boundary",
@@ -93,16 +75,34 @@
         "width": 100,
         "height": 100,
         "center": [
-          91,
-          49
+          94,
+          57
         ],
-        "transition_width_estimate": 4.0,
+        "transition_width_estimate": 6.0,
         "contrast_range": [
           0.0,
           1.0
         ],
-        "edge_strength": 0.17123061178705654,
+        "edge_strength": 0.18566007379028543,
         "rationale": "Hard shadow boundary at (1400, 800), contrast 1.00-0.00"
+      },
+      {
+        "type": "shadow_boundary",
+        "x": 1600,
+        "y": 800,
+        "width": 100,
+        "height": 100,
+        "center": [
+          93,
+          28
+        ],
+        "transition_width_estimate": 69.0,
+        "contrast_range": [
+          0.0,
+          1.0
+        ],
+        "edge_strength": 0.14506719516438657,
+        "rationale": "Hard shadow boundary at (1600, 800), contrast 1.00-0.00"
       }
     ],
     "azalea": [
@@ -113,16 +113,16 @@
         "width": 100,
         "height": 100,
         "center": [
-          7,
-          99
+          30,
+          90
         ],
-        "transition_width_estimate": 92.0,
+        "transition_width_estimate": 70.0,
         "contrast_range": [
-          0.13333333333333333,
-          0.2901960784313726
+          0.0,
+          0.43137254901960786
         ],
-        "edge_strength": 0.07611305326932813,
-        "rationale": "Hard shadow boundary at (1400, 600), contrast 0.29-0.13"
+        "edge_strength": 0.08707488163188248,
+        "rationale": "Hard shadow boundary at (1400, 600), contrast 0.43-0.00"
       },
       {
         "type": "shadow_boundary",
@@ -131,16 +131,16 @@
         "width": 100,
         "height": 100,
         "center": [
-          19,
-          96
+          44,
+          95
         ],
-        "transition_width_estimate": 85.0,
+        "transition_width_estimate": 56.0,
         "contrast_range": [
-          0.050980392156862744,
-          0.4
+          0.0,
+          0.39215686274509803
         ],
-        "edge_strength": 0.08872075818282121,
-        "rationale": "Hard shadow boundary at (1600, 600), contrast 0.40-0.05"
+        "edge_strength": 0.09581560378793877,
+        "rationale": "Hard shadow boundary at (1600, 600), contrast 0.39-0.00"
       },
       {
         "type": "shadow_boundary",
@@ -149,16 +149,16 @@
         "width": 100,
         "height": 100,
         "center": [
-          95,
-          97
+          89,
+          98
         ],
-        "transition_width_estimate": 51.0,
+        "transition_width_estimate": 8.0,
         "contrast_range": [
-          0.22745098039215686,
-          0.3764705882352941
+          0.1411764705882353,
+          0.39215686274509803
         ],
-        "edge_strength": 0.06641425084141997,
-        "rationale": "Hard shadow boundary at (1800, 600), contrast 0.38-0.23"
+        "edge_strength": 0.06771763247475986,
+        "rationale": "Hard shadow boundary at (1800, 600), contrast 0.39-0.14"
       },
       {
         "type": "shadow_boundary",
@@ -167,16 +167,16 @@
         "width": 100,
         "height": 100,
         "center": [
-          49,
-          98
+          0,
+          99
         ],
-        "transition_width_estimate": 35.0,
+        "transition_width_estimate": 99.0,
         "contrast_range": [
-          0.16470588235294117,
-          0.21568627450980393
+          0.0,
+          0.050980392156862744
         ],
-        "edge_strength": 0.07463465831243374,
-        "rationale": "Hard shadow boundary at (2000, 600), contrast 0.22-0.16"
+        "edge_strength": 0.07876585305442688,
+        "rationale": "Hard shadow boundary at (2000, 600), contrast 0.05-0.00"
       },
       {
         "type": "shadow_boundary",
@@ -185,15 +185,15 @@
         "width": 100,
         "height": 100,
         "center": [
-          95,
-          47
+          99,
+          52
         ],
-        "transition_width_estimate": 7.0,
+        "transition_width_estimate": 6.0,
         "contrast_range": [
           0.0,
           1.0
         ],
-        "edge_strength": 0.15958648369043252,
+        "edge_strength": 0.1799821705603655,
         "rationale": "Hard shadow boundary at (1400, 800), contrast 1.00-0.00"
       }
     ],
@@ -205,16 +205,16 @@
         "width": 100,
         "height": 100,
         "center": [
-          62,
-          95
+          52,
+          89
         ],
-        "transition_width_estimate": 36.0,
+        "transition_width_estimate": 47.0,
         "contrast_range": [
-          0.10196078431372549,
-          0.38823529411764707
+          0.0,
+          0.5176470588235295
         ],
-        "edge_strength": 0.08196364526160489,
-        "rationale": "Hard shadow boundary at (1400, 600), contrast 0.39-0.10"
+        "edge_strength": 0.0876357119591158,
+        "rationale": "Hard shadow boundary at (1400, 600), contrast 0.52-0.00"
       },
       {
         "type": "shadow_boundary",
@@ -223,16 +223,16 @@
         "width": 100,
         "height": 100,
         "center": [
-          59,
-          96
+          80,
+          95
         ],
-        "transition_width_estimate": 41.0,
+        "transition_width_estimate": 19.0,
         "contrast_range": [
-          0.0784313725490196,
-          0.396078431372549
+          0.058823529411764705,
+          0.38823529411764707
         ],
-        "edge_strength": 0.08734806904416116,
-        "rationale": "Hard shadow boundary at (1600, 600), contrast 0.40-0.08"
+        "edge_strength": 0.09986838956846847,
+        "rationale": "Hard shadow boundary at (1600, 600), contrast 0.39-0.06"
       },
       {
         "type": "shadow_boundary",
@@ -241,34 +241,16 @@
         "width": 100,
         "height": 100,
         "center": [
-          51,
+          7,
           97
         ],
-        "transition_width_estimate": 88.0,
+        "transition_width_estimate": 92.0,
         "contrast_range": [
-          0.0784313725490196,
-          0.39215686274509803
+          0.0,
+          0.3764705882352941
         ],
-        "edge_strength": 0.06577040213478037,
-        "rationale": "Hard shadow boundary at (1800, 600), contrast 0.39-0.08"
-      },
-      {
-        "type": "shadow_boundary",
-        "x": 2000,
-        "y": 600,
-        "width": 100,
-        "height": 100,
-        "center": [
-          44,
-          98
-        ],
-        "transition_width_estimate": 55.0,
-        "contrast_range": [
-          0.058823529411764705,
-          0.35294117647058826
-        ],
-        "edge_strength": 0.07901907593319427,
-        "rationale": "Hard shadow boundary at (2000, 600), contrast 0.35-0.06"
+        "edge_strength": 0.06748375205080548,
+        "rationale": "Hard shadow boundary at (1800, 600), contrast 0.38-0.00"
       },
       {
         "type": "shadow_boundary",
@@ -277,108 +259,126 @@
         "width": 100,
         "height": 100,
         "center": [
-          99,
-          47
+          97,
+          58
         ],
         "transition_width_estimate": 6.0,
         "contrast_range": [
           0.0,
           1.0
         ],
-        "edge_strength": 0.16158292372646899,
+        "edge_strength": 0.1809170960545121,
         "rationale": "Hard shadow boundary at (1400, 800), contrast 1.00-0.00"
-      }
-    ],
-    "car_paint": [
-      {
-        "type": "shadow_boundary",
-        "x": 2000,
-        "y": 600,
-        "width": 100,
-        "height": 100,
-        "center": [
-          99,
-          98
-        ],
-        "transition_width_estimate": 6.0,
-        "contrast_range": [
-          0.08627450980392157,
-          0.4627450980392157
-        ],
-        "edge_strength": 0.08719455745546689,
-        "rationale": "Hard shadow boundary at (2000, 600), contrast 0.46-0.09"
       },
       {
         "type": "shadow_boundary",
-        "x": 1400,
+        "x": 1600,
         "y": 800,
         "width": 100,
         "height": 100,
         "center": [
           95,
-          45
+          28
         ],
-        "transition_width_estimate": 9.0,
+        "transition_width_estimate": 63.0,
         "contrast_range": [
           0.0,
           1.0
         ],
-        "edge_strength": 0.15646047695047408,
-        "rationale": "Hard shadow boundary at (1400, 800), contrast 1.00-0.00"
+        "edge_strength": 0.14859519484787728,
+        "rationale": "Hard shadow boundary at (1600, 800), contrast 1.00-0.00"
+      }
+    ],
+    "car_paint": [
+      {
+        "type": "shadow_boundary",
+        "x": 1400,
+        "y": 600,
+        "width": 100,
+        "height": 100,
+        "center": [
+          25,
+          91
+        ],
+        "transition_width_estimate": 76.0,
+        "contrast_range": [
+          0.0,
+          0.42745098039215684
+        ],
+        "edge_strength": 0.08799729615604385,
+        "rationale": "Hard shadow boundary at (1400, 600), contrast 0.43-0.00"
       },
       {
         "type": "shadow_boundary",
         "x": 1600,
-        "y": 800,
+        "y": 600,
         "width": 100,
         "height": 100,
         "center": [
-          57,
-          29
+          28,
+          95
         ],
-        "transition_width_estimate": 50.0,
+        "transition_width_estimate": 71.0,
         "contrast_range": [
           0.0,
-          1.0
+          0.39215686274509803
         ],
-        "edge_strength": 0.14432967703264815,
-        "rationale": "Hard shadow boundary at (1600, 800), contrast 1.00-0.00"
+        "edge_strength": 0.09553946447341613,
+        "rationale": "Hard shadow boundary at (1600, 600), contrast 0.39-0.00"
       },
       {
         "type": "shadow_boundary",
         "x": 1800,
-        "y": 800,
+        "y": 600,
         "width": 100,
         "height": 100,
         "center": [
-          23,
-          30
+          8,
+          97
         ],
-        "transition_width_estimate": 85.0,
+        "transition_width_estimate": 91.0,
         "contrast_range": [
           0.0,
-          1.0
+          0.396078431372549
         ],
-        "edge_strength": 0.1473906209143274,
-        "rationale": "Hard shadow boundary at (1800, 800), contrast 1.00-0.00"
+        "edge_strength": 0.06808516914127058,
+        "rationale": "Hard shadow boundary at (1800, 600), contrast 0.40-0.00"
       },
       {
         "type": "shadow_boundary",
         "x": 2000,
-        "y": 800,
+        "y": 600,
         "width": 100,
         "height": 100,
         "center": [
-          0,
-          64
+          1,
+          99
         ],
         "transition_width_estimate": 99.0,
         "contrast_range": [
           0.0,
+          0.1607843137254902
+        ],
+        "edge_strength": 0.07981246033052446,
+        "rationale": "Hard shadow boundary at (2000, 600), contrast 0.16-0.00"
+      },
+      {
+        "type": "shadow_boundary",
+        "x": 1400,
+        "y": 800,
+        "width": 100,
+        "height": 100,
+        "center": [
+          98,
+          51
+        ],
+        "transition_width_estimate": 5.0,
+        "contrast_range": [
+          0.0,
           1.0
         ],
-        "edge_strength": 0.21726143583846355,
-        "rationale": "Hard shadow boundary at (2000, 800), contrast 1.00-0.00"
+        "edge_strength": 0.1782940778407258,
+        "rationale": "Hard shadow boundary at (1400, 800), contrast 1.00-0.00"
       }
     ]
   },
@@ -387,46 +387,58 @@
       "sun-only": {
         "noise": {
           "composite": {
-            "mean": 0.07805485278367996,
-            "p999": 6.6,
+            "mean": 0.07968402057886123,
+            "p999": 7.0,
             "runs": 1
           }
         },
         "sharpness": {
-          "note": "no measurements"
+          "max_ratio": 1.0754716981132075,
+          "median_ratio": 1.0754716981132075,
+          "runs": 1
         },
         "halo": {
-          "note": "no measurements"
+          "max_width_px": 1.0,
+          "median_width_px": 1.0,
+          "runs": 1
         }
       },
       "env-only": {
         "noise": {
           "composite": {
-            "mean": 0.0778797373175621,
-            "p999": 6.6,
-            "runs": 1
-          }
-        },
-        "sharpness": {
-          "note": "no measurements"
-        },
-        "halo": {
-          "note": "no measurements"
-        }
-      },
-      "ambient-floor": {
-        "noise": {
-          "composite": {
-            "mean": 0.07878260016441345,
+            "mean": 0.08089665621519089,
             "p999": 6.8,
             "runs": 1
           }
         },
         "sharpness": {
-          "note": "no measurements"
+          "max_ratio": 10.0,
+          "median_ratio": 10.0,
+          "runs": 1
         },
         "halo": {
-          "note": "no measurements"
+          "max_width_px": 1.0,
+          "median_width_px": 1.0,
+          "runs": 1
+        }
+      },
+      "ambient-floor": {
+        "noise": {
+          "composite": {
+            "mean": 0.08022796809673309,
+            "p999": 7.0,
+            "runs": 1
+          }
+        },
+        "sharpness": {
+          "max_ratio": 2.0,
+          "median_ratio": 2.0,
+          "runs": 1
+        },
+        "halo": {
+          "max_width_px": 3.0,
+          "median_width_px": 3.0,
+          "runs": 1
         }
       }
     },
@@ -434,46 +446,58 @@
       "sun-only": {
         "noise": {
           "composite": {
-            "mean": 0.07994422912597657,
+            "mean": 0.0813849613070488,
             "p999": 7.0,
             "runs": 1
           }
         },
         "sharpness": {
-          "note": "no measurements"
+          "max_ratio": 5.0,
+          "median_ratio": 5.0,
+          "runs": 1
         },
         "halo": {
-          "note": "no measurements"
+          "max_width_px": 1.0,
+          "median_width_px": 1.0,
+          "runs": 1
         }
       },
       "env-only": {
         "noise": {
           "composite": {
-            "mean": 0.07767445296049118,
-            "p999": 6.8,
-            "runs": 1
-          }
-        },
-        "sharpness": {
-          "note": "no measurements"
-        },
-        "halo": {
-          "note": "no measurements"
-        }
-      },
-      "ambient-floor": {
-        "noise": {
-          "composite": {
-            "mean": 0.0785936713218689,
+            "mean": 0.07967905551195145,
             "p999": 7.0,
             "runs": 1
           }
         },
         "sharpness": {
-          "note": "no measurements"
+          "max_ratio": 0.14285714285714285,
+          "median_ratio": 0.14285714285714285,
+          "runs": 1
         },
         "halo": {
-          "note": "no measurements"
+          "max_width_px": 0.0,
+          "median_width_px": 0.0,
+          "runs": 1
+        }
+      },
+      "ambient-floor": {
+        "noise": {
+          "composite": {
+            "mean": 0.07976315766572953,
+            "p999": 7.0,
+            "runs": 1
+          }
+        },
+        "sharpness": {
+          "max_ratio": 0.625,
+          "median_ratio": 0.625,
+          "runs": 1
+        },
+        "halo": {
+          "max_width_px": 0.0,
+          "median_width_px": 0.0,
+          "runs": 1
         }
       }
     },
@@ -481,46 +505,58 @@
       "sun-only": {
         "noise": {
           "composite": {
-            "mean": 0.07856661826372147,
+            "mean": 0.08035772293806076,
             "p999": 7.0,
             "runs": 1
           }
         },
         "sharpness": {
-          "note": "no measurements"
+          "max_ratio": 0.3018867924528302,
+          "median_ratio": 0.3018867924528302,
+          "runs": 1
         },
         "halo": {
-          "note": "no measurements"
+          "max_width_px": 1.0,
+          "median_width_px": 1.0,
+          "runs": 1
         }
       },
       "env-only": {
         "noise": {
           "composite": {
-            "mean": 0.07860653698444367,
-            "p999": 7.0,
-            "runs": 1
-          }
-        },
-        "sharpness": {
-          "note": "no measurements"
-        },
-        "halo": {
-          "note": "no measurements"
-        }
-      },
-      "ambient-floor": {
-        "noise": {
-          "composite": {
-            "mean": 0.07785567343235016,
+            "mean": 0.0790069729089737,
             "p999": 6.8,
             "runs": 1
           }
         },
         "sharpness": {
-          "note": "no measurements"
+          "max_ratio": 15.0,
+          "median_ratio": 15.0,
+          "runs": 1
         },
         "halo": {
-          "note": "no measurements"
+          "max_width_px": 0.0,
+          "median_width_px": 0.0,
+          "runs": 1
+        }
+      },
+      "ambient-floor": {
+        "noise": {
+          "composite": {
+            "mean": 0.07991221249103546,
+            "p999": 7.0,
+            "runs": 1
+          }
+        },
+        "sharpness": {
+          "max_ratio": 0.5384615384615384,
+          "median_ratio": 0.5384615384615384,
+          "runs": 1
+        },
+        "halo": {
+          "max_width_px": 1.0,
+          "median_width_px": 1.0,
+          "runs": 1
         }
       }
     },
@@ -528,46 +564,58 @@
       "sun-only": {
         "noise": {
           "composite": {
-            "mean": 0.08131237030029297,
+            "mean": 0.08081529885530472,
             "p999": 7.0,
             "runs": 1
           }
         },
         "sharpness": {
-          "note": "no measurements"
+          "max_ratio": 0.7142857142857143,
+          "median_ratio": 0.7142857142857143,
+          "runs": 1
         },
         "halo": {
-          "note": "no measurements"
+          "max_width_px": 1.0,
+          "median_width_px": 1.0,
+          "runs": 1
         }
       },
       "env-only": {
         "noise": {
           "composite": {
-            "mean": 0.07854888141155243,
+            "mean": 0.08090843260288239,
             "p999": 7.0,
             "runs": 1
           }
         },
         "sharpness": {
-          "note": "no measurements"
+          "max_ratio": 82.0,
+          "median_ratio": 82.0,
+          "runs": 1
         },
         "halo": {
-          "note": "no measurements"
+          "max_width_px": 1.0,
+          "median_width_px": 1.0,
+          "runs": 1
         }
       },
       "ambient-floor": {
         "noise": {
           "composite": {
-            "mean": 0.0782783180475235,
-            "p999": 6.8,
+            "mean": 0.08037358522415161,
+            "p999": 7.0,
             "runs": 1
           }
         },
         "sharpness": {
-          "note": "no measurements"
+          "max_ratio": 2.8,
+          "median_ratio": 2.8,
+          "runs": 1
         },
         "halo": {
-          "note": "no measurements"
+          "max_width_px": 1.0,
+          "median_width_px": 1.0,
+          "runs": 1
         }
       }
     }
