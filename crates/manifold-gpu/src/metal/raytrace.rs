@@ -47,7 +47,8 @@ use objc2_metal::{
     MTLAccelerationStructure, MTLAccelerationStructureCommandEncoder,
     MTLAccelerationStructureGeometryDescriptor, MTLAccelerationStructureInstanceDescriptor,
     MTLAccelerationStructureInstanceOptions, MTLAccelerationStructureTriangleGeometryDescriptor,
-    MTLAccelerationStructureUsage, MTLAttributeFormat, MTLCommandBuffer, MTLCommandEncoder,
+    MTLAccelerationStructureUsage, MTLAttributeFormat, MTLBuffer, MTLCommandBuffer,
+    MTLCommandEncoder,
     MTLCommandQueue, MTLCompileOptions, MTLComputeCommandEncoder, MTLComputePipelineState,
     MTLDevice, MTLInstanceAccelerationStructureDescriptor, MTLIndexType, MTLLanguageVersion,
     MTLLibrary, MTLPackedFloat3, MTLPackedFloat4x3, MTLPrimitiveAccelerationStructureDescriptor,
@@ -105,6 +106,17 @@ pub struct RtAccel {
     /// pub(crate): encoder.rs's dispatch useResource coverage (BUG-jddy
     /// arm 5) declares both BLASes and this buffer.
     pub(crate) instance_buffer: GpuBuffer,
+    /// Retained handles to every object's vertex (and index) buffers as
+    /// built. The trace kernels read these through RAW GPU ADDRESSES
+    /// (`RtNormalSource.vertex_base_addr`) — an indirect reach no binding
+    /// declares, exactly the BUG-jddy reclamation class: under memory
+    /// pressure the driver may reclaim a resource no submitted command
+    /// declares usage on (BUG-84fv audit). Retaining them here pins
+    /// lifetime to the accel's; encoder.rs's accel dispatch declares
+    /// useResource on each per trace dispatch. Buffer-identity changes
+    /// are a topology change (refit contract) and rebuild the accel, so
+    /// these never go stale across a refit.
+    pub(crate) geometry_buffers: Vec<Retained<ProtocolObject<dyn MTLBuffer>>>,
     /// BUG-308/RT-D4: `build_accel`/`refit_accel` are async (a single
     /// command buffer is `commit()`-ed, never `waitUntilCompleted()`-ed,
     /// mid-frame) — set `true` by that buffer's completion handler once
@@ -397,12 +409,23 @@ pub(crate) fn build_accel(device: &GpuDevice, objects: &[RtObjectGeometry]) -> R
     add_ready_completion_handler(&cb, "RT accel build", Arc::clone(&ready), (blas_scratch, build_scratch));
     cb.commit();
 
+    // Pin the geometry buffers the trace kernels reach via raw addresses
+    // (RtNormalSource.vertex_base_addr) — see the field's doc comment.
+    let mut geometry_buffers = Vec::with_capacity(objects.len() * 2);
+    for o in objects {
+        geometry_buffers.push(o.vertex_buffer.raw.clone());
+        if let Some(ib) = o.index_buffer {
+            geometry_buffers.push(ib.raw.clone());
+        }
+    }
+
     RtAccel {
         structure,
         descriptor,
         refit_scratch,
         blas,
         instance_buffer,
+        geometry_buffers,
         ready,
     }
 }
