@@ -628,32 +628,24 @@ fn scene_set_model(rest: &[String]) -> ExitCode {
     // The model_file parameter is in the stringParams array
     let mut found = false;
     if let Some(gen_params) = layer.get_mut("genParams") {
-        eprintln!("DEBUG: gen_params found, keys: {:?}", gen_params.as_object().map(|o| o.keys().collect::<Vec<_>>()));
-        // Also update the description field
+        // Update the description field
         if let Some(def) = gen_params.get_mut("def") {
-            eprintln!("DEBUG: def found");
             if let Some(description) = def.get_mut("description") {
-                eprintln!("DEBUG: description found: {}", description.as_str().unwrap_or("none"));
                 *description = serde_json::Value::String(format!("Imported from {}", model_path));
             }
             if let Some(string_params) = def.get_mut("stringParams") {
-                eprintln!("DEBUG: string_params found");
                 if let Some(arr) = string_params.as_array_mut() {
-                    eprintln!("DEBUG: array has {} elements", arr.len());
                     for param in arr {
                         if param.get("id").and_then(|v| v.as_str()) == Some("model_file") {
                             if let Some(default_value) = param.get_mut("defaultValue") {
                                 *default_value = serde_json::Value::String(model_path.to_string());
                                 found = true;
-                                eprintln!("DEBUG: updated defaultValue");
                             }
                         }
                     }
                 }
             }
         }
-    } else {
-        eprintln!("DEBUG: gen_params NOT found");
     }
 
     if found {
