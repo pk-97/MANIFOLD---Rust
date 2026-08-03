@@ -228,6 +228,14 @@ fn run_fixture(alpha_mask: bool) -> [f32; 2] {
     let gi_materials_buffer = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
 
     let mut encoder = device.create_encoder("rt-t2a-shadow-proof");
+    let out_sv2_dummy = device.create_texture(&GpuTextureDesc {
+        width: 1, height: 1, depth: 1,
+        format: GpuTextureFormat::Rgba16Float,
+        dimension: GpuTextureDimension::D2,
+        usage: GpuTextureUsage::SHADER_WRITE | GpuTextureUsage::COPY_SRC,
+        label: "rt-t2a-out_sv2-dummy",
+        mip_levels: 1,
+    });
     tracer.dispatch_shadow_rays(
         &mut encoder,
         &accel,
@@ -238,6 +246,7 @@ fn run_fixture(alpha_mask: bool) -> [f32; 2] {
         &alpha_textures,
         &depth_tex,
         &out_sv,
+        &out_sv2_dummy,
         &out_irr,
         &out_n,
         &out_refl,
