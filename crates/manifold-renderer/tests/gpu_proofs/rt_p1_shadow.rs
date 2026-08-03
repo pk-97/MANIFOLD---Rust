@@ -239,6 +239,7 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         0.6,         // refl_max_roughness — RT_REFLECTION_MAX_ROUGHNESS
         0.1,         // refl_rough_band — blend band width
         0.0,         // RS-B: emissive_table_mean_power — no emissive in fixture
+        0,           // RS-C: emissive_table_count — no emissive in fixture
     );
     let params_buffer = device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
     // RT-P3: unread by this proof (gi_spp == 0 above), same ABI-stub
@@ -247,6 +248,7 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
     // RT-T1-B: unread by this proof (ao_spp == 0 && gi_spp == 0 above),
     // same ABI-stub discipline as `gi_materials_buffer`.
+    let dummy_emissive = device.create_buffer_shared(1);
     let normal_sources_buffer =
         device.create_buffer_shared(std::mem::size_of::<manifold_gpu::raytrace::RtNormalSource>() as u64);
 
@@ -266,6 +268,8 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         &out_n,
         &out_refl,
         &prefiltered_env,
+        &dummy_emissive,
+        &dummy_emissive,
         "trace_shadow_rays-proof",
     );
     encoder.commit_and_wait_completed();
@@ -476,6 +480,7 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
         0.6,         // refl_max_roughness — RT_REFLECTION_MAX_ROUGHNESS
         0.1,         // refl_rough_band — blend band width
         0.0,         // RS-B: emissive_table_mean_power — no emissive in fixture
+        0,           // RS-C: emissive_table_count — no emissive in fixture
     );
     let params_buffer = device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
     // RT-P3: unread by this proof (gi_spp == 0 above), same ABI-stub
@@ -484,6 +489,7 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
         device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
     // RT-T1-B: unread by this proof (ao_spp == 0 && gi_spp == 0 above),
     // same ABI-stub discipline as `gi_materials_buffer`.
+    let dummy_emissive = device.create_buffer_shared(1);
     let normal_sources_buffer =
         device.create_buffer_shared(std::mem::size_of::<manifold_gpu::raytrace::RtNormalSource>() as u64);
 
@@ -503,6 +509,8 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
         &out_n,
         &out_refl,
         &prefiltered_env,
+        &dummy_emissive,
+        &dummy_emissive,
         "trace_shadow_rays-2blas-proof",
     );
     encoder.commit_and_wait_completed();

@@ -677,6 +677,11 @@ pub struct RenderScene {
     /// history does.
     jitter_frame_index: u32,
     dummy_texture: Option<manifold_gpu::GpuTexture>,
+    /// RS-C: 1-byte shared buffer bound as a dummy emissive-triangle/alias
+    /// buffer when no emissive table exists (entry_count=0 in ShadowRayParams
+    /// skips the kernel block — same discipline as the dummy texture for
+    /// the prefiltered-env chain).
+    dummy_emissive_buffer: Option<manifold_gpu::GpuBuffer>,
     sampler: Option<manifold_gpu::GpuSampler>,
     /// GLB_XFAIL_BURNDOWN_DESIGN.md D3: per-map-family material samplers
     /// (bindings 22..26), keyed by [`sampler_cache_key`] — one entry per
@@ -1175,6 +1180,7 @@ impl RenderScene {
             prev_jitter_ndc: None,
             jitter_frame_index: 0,
             dummy_texture: None,
+            dummy_emissive_buffer: None,
             sampler: None,
             material_samplers: AHashMap::default(),
             light_buffers: Vec::new(),
@@ -1614,6 +1620,17 @@ impl RenderScene {
             let black = [0u8; 8]; // 4 x f16 zero
             device.upload_texture(&tex, &black);
             self.dummy_texture = Some(tex);
+        }
+    }
+
+    fn ensure_dummy_emissive_buffer(&mut self, device: &manifold_gpu::GpuDevice) {
+        if self.dummy_emissive_buffer.is_none() {
+            // 1-byte shared buffer — Metal requires a non-null buffer handle
+            // when the kernel declares a `device const` pointer binding, even
+            // when the kernel logically never reads it (entry_count=0 skips
+            // the sampler block).
+            let buf = device.create_buffer_shared(1);
+            self.dummy_emissive_buffer = Some(buf);
         }
     }
 
@@ -4058,6 +4075,7 @@ impl EffectNode for RenderScene {
                 }
             }
             self.ensure_dummy_texture(gpu.device);
+            self.ensure_dummy_emissive_buffer(gpu.device);
             // IMPORT_FIDELITY_DESIGN.md D2/F-P1: split-sum IBL resources —
             // always ensured (fixed size, allocated once) so
             // `@binding(16..18)` always has something valid, regardless of
@@ -4702,6 +4720,12 @@ impl EffectNode for RenderScene {
                     .and_then(|a| a.emissive_table.as_ref())
                     .map(|t| t.mean_power)
                     .unwrap_or(0.0);
+                let emissive_table_entry_count = self
+                    .rt_accel
+                    .as_ref()
+                    .and_then(|a| a.emissive_table.as_ref())
+                    .map(|t| t.entry_count)
+                    .unwrap_or(0);
 
                 // Multi-caster shadow fix: previously only `casters[0]`
                 // (the first shadow-casting light) was traced — every
@@ -4780,6 +4804,7 @@ impl EffectNode for RenderScene {
                     0.6,    // refl_max_roughness (unused)
                     0.1,    // refl_rough_band (unused)
                     emissive_table_mean_power,
+                    emissive_table_entry_count,
                 );
 
                 // RT-A3a: lighting params (AO + GI + reflection + normal).
@@ -4810,6 +4835,7 @@ impl EffectNode for RenderScene {
                     0.6,
                     0.1,
                     emissive_table_mean_power,
+                    emissive_table_entry_count,
                 );
                 // RS-B: gi_materials_data already built above (same order as
                 // `objects` + `accel`), reused for the GPU upload here.
@@ -4908,6 +4934,10 @@ impl EffectNode for RenderScene {
                         } else {
                             self.dummy_texture.as_ref().expect("ensured at 3491")
                         },
+                        // RS-C: dummy emissive buffers (mask dispatch has
+                        // gi_spp=0, so the sampler block is skipped).
+                        self.dummy_emissive_buffer.as_ref().expect("ensured above"),
+                        self.dummy_emissive_buffer.as_ref().expect("ensured above"),
                         "node.render_scene RT-A3a mask dispatch (shadow visibility)",
                     );
                 }
@@ -4934,6 +4964,15 @@ impl EffectNode for RenderScene {
                     } else {
                         self.dummy_texture.as_ref().expect("ensured at 3491")
                     },
+                    // RS-C: pass the real emissive table buffers when
+                    // available (the kernel guards on entry_count > 0);
+                    // fall back to dummy when no emissive geometry exists.
+                    accel.emissive_table.as_ref()
+                        .map(|t| &t.triangles)
+                        .unwrap_or_else(|| self.dummy_emissive_buffer.as_ref().expect("ensured above")),
+                    accel.emissive_table.as_ref()
+                        .map(|t| &t.aliases)
+                        .unwrap_or_else(|| self.dummy_emissive_buffer.as_ref().expect("ensured above")),
                     "node.render_scene RT-A3a lighting dispatch (AO+GI+reflection+normal)",
                 );
                 tracer.upsample_shadow(
