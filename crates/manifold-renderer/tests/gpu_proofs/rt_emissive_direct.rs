@@ -43,10 +43,16 @@ fn region_luma(b: &[u8], w: u32, h: u32, cx: f32, cy: f32, r: i32) -> f64 {
     assert!(n>0);s/n as f64
 }
 
-/// Analytic pixel luma. The kernel RIS estimator's expected value:
-///   E[sample] = emissive * integral cos_theta * cos_emit / |l|^2 dA
-/// through PBR: pixel_luma = (1-metallic)*(1-roughness^2) * albedo * luma_weight * E
-/// Tolerance: +/-30% for 1-sample RIS + 32-frame accumulation.
+/// Analytic pixel luma through the FULL WGSL PBR shading chain.
+/// Kernel: emissive_direct = emissive * cos_theta * cos_emit * total_area / |l|^2
+///   (single RIS sample, then accumulated, then written to rt_irradiance_mask).
+/// WGSL: kd_ibl = (1-f_view)*(1-metallic) ≈ (1-0.04)*(1-0)=0.96 for non-metallic.
+///   diffuse_ibl = kd_ibl * albedo.rgb * traced_irradiance
+///   pixel_luma = 0.2126 * diffuse_ibl.red (emission is red-only, albedo=white)
+///
+/// Tolerance: ±30% (mechanism-derived for 1-sample RIS, no reservoir reuse,
+/// 32-frame accumulation — heavy-tailed GGX-like variance from geometric
+/// cos_theta*cos_emit peak near emitter).
 fn analytic(em: f32, sz: f32, y: f32) -> f64 {
     let ng=64; let h=sz*0.5; let y2=y*y; let da=sz*sz/(ng*ng)as f32;
     let mut e=0.0f64;
@@ -56,8 +62,8 @@ fn analytic(em: f32, sz: f32, y: f32) -> f64 {
         let l2=qx*qx+y2+qz*qz;
         e+=(em as f64 * y2 as f64 / (l2 as f64 * l2 as f64)) * da as f64;
     }}
-    // kd_ibl * albedo * luma_weight * E
-    0.75 * 1.0 * 0.2126 * e
+    // kd_ibl * albedo_luma * luma_weight * E
+    0.96 * 1.0 * 0.2126 * e
 }
 
 fn render(json: &str) -> (Vec<u8>, u32, u32) {
@@ -129,9 +135,9 @@ fn i_rs3_sampler_converges_to_cpu_analytic_gather_misses() {
     let a = analytic(EMIT_R, EMIT_SIZE, EMIT_Y);
 
     let r = delta / a.max(1e-9);
-    eprintln!("I-RS3: on={on_luma:.6} off={off_luma:.6} delta(on-off)={delta:.6} analytic={a:.6} delta/analytic={r:.3}");
-    assert!(r>0.5, "leg 1: delta/analytic={r:.3} < 0.5 — sampler contribution too dim");
-    assert!(r<1.5, "leg 1: delta/analytic={r:.3} > 1.5 — double-count?");
+    println!("I-RS3: on={on_luma:.6} off={off_luma:.6} delta={delta:.6} analytic={a:.6} delta/analytic={r:.3}");
+    assert!(r>0.7, "leg1: {r:.3}<0.7");
+    assert!(r<1.3, "leg1: {r:.3}>1.3");
     assert!(delta > 0.001, "I-RS3: sampler produces no measurable irradiance");
 }
 
