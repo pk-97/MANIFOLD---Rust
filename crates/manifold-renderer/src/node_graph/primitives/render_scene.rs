@@ -863,6 +863,11 @@ pub struct RenderScene {
     /// resource here (unwired/RT-off scenes never allocate these).
     rt_mask_half: Option<manifold_gpu::GpuTexture>,
     rt_mask_full: Option<manifold_gpu::GpuTexture>,
+    /// RS-A (caster cap 4 -> 8): second shadow-visibility quad (caster
+    /// slots 4-7) — half-res trace target + full-res upsampled mask, same
+    /// Rgba16Float format and lifecycle as the first quad.
+    rt_mask_half2: Option<manifold_gpu::GpuTexture>,
+    rt_mask_full2: Option<manifold_gpu::GpuTexture>,
     rt_mask_width: u32,
     rt_mask_height: u32,
     rt_params_buffer: Option<manifold_gpu::GpuBuffer>,
@@ -944,6 +949,12 @@ pub struct RenderScene {
     // n=2 snap for 4 frames (the straddling moments deaden the gate right
     // after a real crossing; see the binding-21 comment in raytrace.rs).
     rt_sv_hold_history: [Option<manifold_gpu::GpuTexture>; 2],
+    // RS-A (caster cap 4 -> 8): second shadow-visibility quad SV-ACCUM
+    // — independent sigma-gate per quad, same flip clock as the first.
+    rt_sv2_history: [Option<manifold_gpu::GpuTexture>; 2],
+    rt_sv2_m1_history: [Option<manifold_gpu::GpuTexture>; 2],
+    rt_sv2_m2_history: [Option<manifold_gpu::GpuTexture>; 2],
+    rt_sv2_hold_history: [Option<manifold_gpu::GpuTexture>; 2],
     rt_depth_history: [Option<manifold_gpu::GpuTexture>; 2],
     rt_normal_history: [Option<manifold_gpu::GpuTexture>; 2],
     /// RT-T1-D (BUG-312): per-texel luminance moments (mean, mean-of-
@@ -976,6 +987,8 @@ pub struct RenderScene {
     /// (what `accumulate_irradiance` already reads), so that call site
     /// needs no changes for which buffer it reads.
     rt_mask_full_b: Option<manifold_gpu::GpuTexture>,
+    /// RS-A (caster cap 4 -> 8): second shadow-visibility quad à-trous scratch.
+    rt_mask_full2_b: Option<manifold_gpu::GpuTexture>,
     rt_irr_full_b: Option<manifold_gpu::GpuTexture>,
     rt_normal_full_b: Option<manifold_gpu::GpuTexture>,
     /// RT native-resolution toggle, parsed once at init from
@@ -1201,6 +1214,8 @@ impl RenderScene {
             rt_accel_built: false,
             rt_mask_half: None,
             rt_mask_full: None,
+            rt_mask_half2: None,
+            rt_mask_full2: None,
             rt_mask_width: 0,
             rt_mask_height: 0,
             rt_params_buffer: None,
@@ -1222,6 +1237,10 @@ impl RenderScene {
             rt_sv_m1_history: [None, None],
             rt_sv_m2_history: [None, None],
             rt_sv_hold_history: [None, None],
+            rt_sv2_history: [None, None],
+            rt_sv2_m1_history: [None, None],
+            rt_sv2_m2_history: [None, None],
+            rt_sv2_hold_history: [None, None],
             rt_depth_history: [None, None],
             rt_normal_history: [None, None],
             rt_moments_history: [None, None],
@@ -1231,6 +1250,7 @@ impl RenderScene {
             rt_normal_half: None,
             rt_normal_full: None,
             rt_mask_full_b: None,
+            rt_mask_full2_b: None,
             rt_irr_full_b: None,
             rt_normal_full_b: None,
             rt_native_shadow: false,
@@ -1973,8 +1993,13 @@ impl RenderScene {
         };
         self.rt_mask_half = Some(make(mask_trace_w, mask_trace_h, "node.render_scene rt_mask_half (RT-D3/RT-P2 vis)"));
         self.rt_mask_full = Some(make(width, height, "node.render_scene rt_mask_full (RT-D3/RT-P2 vis)"));
+        // RS-A (caster cap 4 -> 8): second shadow-visibility quad — same format and lifecycle.
+        self.rt_mask_half2 = Some(make(mask_trace_w, mask_trace_h, "node.render_scene rt_mask_half2 (RS-A vis)"));
+        self.rt_mask_full2 = Some(make(width, height, "node.render_scene rt_mask_full2 (RS-A vis)"));
         // RT-T1-D: à-trous ping-pong scratch — see the field's doc comment.
         self.rt_mask_full_b = Some(make(width, height, "node.render_scene rt_mask_full_b (RT-T1-D atrous)"));
+        // RS-A: second sv quad à-trous ping-pong scratch.
+        self.rt_mask_full2_b = Some(make(width, height, "node.render_scene rt_mask_full2_b (RS-A atrous)"));
         self.rt_mask_width = width;
         self.rt_mask_height = height;
     }
@@ -2066,6 +2091,28 @@ impl RenderScene {
         self.rt_sv_hold_history = [
             make(width, height, rgba16, "node.render_scene rt_sv_hold_a (SV-ACCUM)"),
             make(width, height, rgba16, "node.render_scene rt_sv_hold_b (SV-ACCUM)"),
+        ]
+        .map(Some);
+        // RS-A (caster cap 4 -> 8): second shadow-visibility quad SV-ACCUM —
+        // independent sigma-gate per quad, same flip clock and lifecycle.
+        self.rt_sv2_history = [
+            make(width, height, rgba16, "node.render_scene rt_sv2_history_a (RS-A SV-ACCUM)"),
+            make(width, height, rgba16, "node.render_scene rt_sv2_history_b (RS-A SV-ACCUM)"),
+        ]
+        .map(Some);
+        self.rt_sv2_m1_history = [
+            make(width, height, rgba16, "node.render_scene rt_sv2_m1_a (RS-A SV-ACCUM)"),
+            make(width, height, rgba16, "node.render_scene rt_sv2_m1_b (RS-A SV-ACCUM)"),
+        ]
+        .map(Some);
+        self.rt_sv2_m2_history = [
+            make(width, height, rgba16, "node.render_scene rt_sv2_m2_a (RS-A SV-ACCUM)"),
+            make(width, height, rgba16, "node.render_scene rt_sv2_m2_b (RS-A SV-ACCUM)"),
+        ]
+        .map(Some);
+        self.rt_sv2_hold_history = [
+            make(width, height, rgba16, "node.render_scene rt_sv2_hold_a (RS-A SV-ACCUM)"),
+            make(width, height, rgba16, "node.render_scene rt_sv2_hold_b (RS-A SV-ACCUM)"),
         ]
         .map(Some);
         self.rt_depth_history = [
@@ -4820,6 +4867,8 @@ impl EffectNode for RenderScene {
                 let depth_tex = self.opaque_depth_snapshot.as_ref().expect("ensured above");
                 let mask_half = self.rt_mask_half.as_ref().expect("ensured above");
                 let mask_full = self.rt_mask_full.as_ref().expect("ensured above");
+                let mask_half2 = self.rt_mask_half2.as_ref().expect("ensured above");
+                let mask_full2 = self.rt_mask_full2.as_ref().expect("ensured above");
                 let irr_half = self.rt_irr_half.as_ref().expect("ensured above");
                 let irr_full = self.rt_irr_full.as_ref().expect("ensured above");
                 let normal_half = self.rt_normal_half.as_ref().expect("ensured above");
@@ -4843,6 +4892,7 @@ impl EffectNode for RenderScene {
                         &alpha_textures,
                         depth_tex,
                         mask_half,
+                        mask_half2,
                         irr_half,
                         normal_half,
                         refl_half,
@@ -4868,6 +4918,7 @@ impl EffectNode for RenderScene {
                     &alpha_textures,
                     depth_tex,
                     mask_half,
+                    mask_half2,
                     irr_half,
                     normal_half,
                     refl_half,
@@ -4884,6 +4935,8 @@ impl EffectNode for RenderScene {
                     depth_tex,
                     mask_half,
                     mask_full,
+                    mask_half2,
+                    mask_full2,
                     irr_half,
                     irr_full,
                     normal_half,
@@ -4910,6 +4963,7 @@ impl EffectNode for RenderScene {
                 let moments_read = self.rt_moments_history[read_idx].as_ref().expect("ensured above");
                 let atrous_params_buffer = self.rt_atrous_params_buffer.as_ref().expect("ensured above");
                 let mask_full_b = self.rt_mask_full_b.as_ref().expect("ensured above");
+                let mask_full2_b = self.rt_mask_full2_b.as_ref().expect("ensured above");
                 let irr_full_b = self.rt_irr_full_b.as_ref().expect("ensured above");
                 let normal_full_b = self.rt_normal_full_b.as_ref().expect("ensured above");
                 let refl_full_b = self.rt_refl_full_b.as_ref().expect("ensured above");
@@ -4924,10 +4978,10 @@ impl EffectNode for RenderScene {
                     // is the smallest offset guaranteed to cross into an
                     // adjacent (independently-sampled) half-res block.
                     let step = 2u32 << pass;
-                    let (src_sv, src_irr, src_n, src_refl, dst_sv, dst_irr, dst_n, dst_refl) = if pass % 2 == 0 {
-                        (mask_full, irr_full, normal_full, refl_full, mask_full_b, irr_full_b, normal_full_b, refl_full_b)
+                    let (src_sv, src_irr, src_n, src_refl, dst_sv, dst_irr, dst_n, dst_refl, src_sv2, dst_sv2) = if pass % 2 == 0 {
+                        (mask_full, irr_full, normal_full, refl_full, mask_full_b, irr_full_b, normal_full_b, refl_full_b, mask_full2, mask_full2_b)
                     } else {
-                        (mask_full_b, irr_full_b, normal_full_b, refl_full_b, mask_full, irr_full, normal_full, refl_full)
+                        (mask_full_b, irr_full_b, normal_full_b, refl_full_b, mask_full, irr_full, normal_full, refl_full, mask_full2_b, mask_full2)
                     };
                     let atrous_params = manifold_gpu::raytrace::AtrousParams::new(
                         [width, height], step, history_valid,
@@ -4942,6 +4996,8 @@ impl EffectNode for RenderScene {
                         moments_read,
                         src_sv,
                         dst_sv,
+                        src_sv2,
+                        dst_sv2,
                         src_irr,
                         dst_irr,
                         src_n,
@@ -5060,6 +5116,16 @@ impl EffectNode for RenderScene {
                 let sv_m2_write = self.rt_sv_m2_history[write_idx].as_ref().expect("ensured above");
                 let sv_hold_read = self.rt_sv_hold_history[read_idx].as_ref().expect("ensured above");
                 let sv_hold_write = self.rt_sv_hold_history[write_idx].as_ref().expect("ensured above");
+                // RS-A (caster cap 4 -> 8): second SV-ACCUM channel — same
+                // read/write indexing, same flip clock, independent sigma-gate.
+                let sv2_history_read = self.rt_sv2_history[read_idx].as_ref().expect("ensured above");
+                let sv2_history_write = self.rt_sv2_history[write_idx].as_ref().expect("ensured above");
+                let sv2_m1_read = self.rt_sv2_m1_history[read_idx].as_ref().expect("ensured above");
+                let sv2_m1_write = self.rt_sv2_m1_history[write_idx].as_ref().expect("ensured above");
+                let sv2_m2_read = self.rt_sv2_m2_history[read_idx].as_ref().expect("ensured above");
+                let sv2_m2_write = self.rt_sv2_m2_history[write_idx].as_ref().expect("ensured above");
+                let sv2_hold_read = self.rt_sv2_hold_history[read_idx].as_ref().expect("ensured above");
+                let sv2_hold_write = self.rt_sv2_hold_history[write_idx].as_ref().expect("ensured above");
                 tracer.accumulate_irradiance(
                     gpu.native_enc,
                     &accumulate_params,
@@ -5089,6 +5155,15 @@ impl EffectNode for RenderScene {
                     sv_m2_write,
                     sv_hold_read,
                     sv_hold_write,
+                    mask_full2,
+                    sv2_history_read,
+                    sv2_history_write,
+                    sv2_m1_read,
+                    sv2_m1_write,
+                    sv2_m2_read,
+                    sv2_m2_write,
+                    sv2_hold_read,
+                    sv2_hold_write,
                     "node.render_scene RT-P2/RT-T1-C/RT-T1-D/RT-R2 accumulate_irradiance",
                 );
                 self.rt_history_ping = write_idx;
@@ -5290,6 +5365,11 @@ impl EffectNode for RenderScene {
         // the raw post-atrous `rt_mask_full` — the only RT channel with
         // no temporal amortization, and the penumbra boil Peter reported.
         let rt_mask_tex = self.rt_sv_history[self.rt_history_ping].as_ref().unwrap_or(dummy);
+        // RS-A (caster cap 4 -> 8): second shadow-visibility quad binding
+        // — the accumulated history for caster slots 4-7 (same format and
+        // ABI-stub discipline as `rt_mask_tex`). Always bound; dummy when RT
+        // isn't active.
+        let rt_mask_tex2 = self.rt_sv2_history[self.rt_history_ping].as_ref().unwrap_or(dummy);
         // RAYTRACING_DESIGN.md section 5.2 P2, extended RT-T1-C: the temporally-
         // accumulated demodulated-irradiance history — `rt_history_ping`
         // always indexes whichever ping-pong slot `accumulate_irradiance`
@@ -5304,7 +5384,7 @@ impl EffectNode for RenderScene {
         // write from `accumulate_irradiance` (RT-R2: swapped every frame
         // by the same ping-pong clock as `rt_irr_history`).
         let rt_refl_tex = self.rt_refl_history[self.rt_history_ping].as_ref().unwrap_or(dummy);
-        let binding_sets: Vec<[GpuBinding; 44]> = draws
+        let binding_sets: Vec<[GpuBinding; 45]> = draws
             .iter()
             .map(|draw| {
                 [
@@ -5539,6 +5619,10 @@ impl EffectNode for RenderScene {
                     GpuBinding::Texture {
                         binding: 43,
                         texture: rt_refl_tex,
+                    },
+                    GpuBinding::Texture {
+                        binding: 44,
+                        texture: rt_mask_tex2,
                     },
                 ]
             })

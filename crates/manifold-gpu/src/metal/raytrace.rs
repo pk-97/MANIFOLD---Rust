@@ -562,7 +562,7 @@ struct RtCasterParams {
 // Rust `MAX_RT_CASTERS` (no compiler-enforced link between an embedded MSL
 // string constant and a Rust const — same manual-sync discipline this file
 // already uses for `MAX_RT_MATERIAL_TEXTURES`).
-constant uint MAX_RT_CASTERS = 4;
+constant uint MAX_RT_CASTERS = 8;
 
 // RT instance mask bits — matches manifold-gpu's Rust `RT_MASK_VISIBLE` /
 // `RT_MASK_SHADOW_CASTER` (same manual-sync discipline as `MAX_RT_CASTERS`
@@ -1172,6 +1172,13 @@ kernel void trace_shadow_rays(
     device RtNormalSource*         normal_sources [[buffer(3)]],
     depth2d<float>                   depth_tex      [[texture(0)]],
     texture2d<float, access::write>  out_sv         [[texture(1)]],
+    // RS-A (caster cap 4 -> 8): second shadow-visibility output — caster
+    // slots 4-7 (rgba respectively). Same Rgba16Float format and write
+    // discipline as out_sv; a texel with <4 casters writes white (unoccluded)
+    // for the unused high slots, same as out_sv's low-slot overflow.
+    // Binding 70: the first free slot above the 64 material textures (4..67)
+    // + out_refl (68) + prefiltered_env (69).
+    texture2d<float, access::write>  out_sv2        [[texture(70)]],
     texture2d<float, access::write>  out_irr        [[texture(2)]],
     texture2d<float, access::write>  out_n          [[texture(3)]],
     // RT-T2-A / Raster-parity reflections: fixed slots for per-object material
@@ -1200,6 +1207,7 @@ kernel void trace_shadow_rays(
         // RT-A3a: gate writes on dispatch role.
         if (p.shadow_spp > 0u) {
             out_sv.write(float4(1, 1, 1, 1), tid);
+            out_sv2.write(float4(1, 1, 1, 1), tid);
         }
         if (p.ao_spp > 0u || p.gi_spp > 0u) {
             out_irr.write(float4(0, 0, 0, 1.0), tid);
@@ -1345,7 +1353,12 @@ kernel void trace_shadow_rays(
     // even after the epsilon-scale fix above. A caster's direction is
     // exact (CPU-computed, never reconstructed), and biasing toward the
     // light is correct for a shadow ray.
-    float4 sv = float4(1.0, 1.0, 1.0, 1.0);
+    // RS-A (caster cap 4 -> 8): two float4 visibility vectors — sv_lo holds
+    // slots 0-3 (out_sv), sv_hi holds slots 4-7 (out_sv2). Each written to
+    // its own Rgba16Float texture; the WGSL shadow_factor consumer indexes
+    // across both with slot_f >= 4.0 selecting the second texture.
+    float4 sv_lo = float4(1.0, 1.0, 1.0, 1.0);
+    float4 sv_hi = float4(1.0, 1.0, 1.0, 1.0);
     uint n_casters = min(p.caster_count, MAX_RT_CASTERS);
     // RT-A3a: shadow_spp == 0 (lighting-only dispatch) must skip the caster
     // rays outright — the out_sv write below is gated, and without this guard
@@ -1391,7 +1404,7 @@ kernel void trace_shadow_rays(
             if (!blocked) vis += 1.0;
         }
         vis /= float(spp);
-        sv[c] = vis;
+        if (c < 4u) { sv_lo[c] = vis; } else { sv_hi[c - 4u] = vis; }
     }
     } // shadow_spp > 0
 
@@ -1419,7 +1432,8 @@ kernel void trace_shadow_rays(
     }
     // RT-A3a: gate mask write on shadow_spp so lighting-only dispatch leaves texture untouched.
     if (p.shadow_spp > 0u) {
-        out_sv.write(sv, tid);
+        out_sv.write(sv_lo, tid);
+        out_sv2.write(sv_hi, tid);
     }
     // RT-T1-C (BUG-311): expose the SAME real interpolated vertex normal
     // (`n`) already computed above for AO/GI cosine sampling, so
@@ -1754,6 +1768,10 @@ kernel void upsample_shadow(
     depth2d<float>                  depth_tex [[texture(0)]],
     texture2d<float>                lo_sv     [[texture(1)]],
     texture2d<float, access::write> hi_sv     [[texture(2)]],
+    // RS-A (caster cap 4 -> 8): second shadow-visibility quad — same
+    // half->full bilateral upsample, depth+normal edge-stopped.
+    texture2d<float>                lo_sv2    [[texture(9)]],
+    texture2d<float, access::write> hi_sv2    [[texture(10)]],
     texture2d<float>                lo_irr    [[texture(3)]],
     texture2d<float, access::write> hi_irr    [[texture(4)]],
     // RT-T1-C (BUG-311): the SAME bilateral upsample widened once more (D16's
@@ -1781,6 +1799,7 @@ kernel void upsample_shadow(
     bool sv_native = lo_sv.get_width() == p.gbuffer_size.x && lo_sv.get_height() == p.gbuffer_size.y;
     if (d >= 1.0 - 1e-6) {
         hi_sv.write(sv_native ? lo_sv.read(tid) : float4(1, 1, 1, 1), tid);
+        hi_sv2.write(sv_native ? lo_sv2.read(tid) : float4(1, 1, 1, 1), tid);
         hi_irr.write(float4(0, 0, 0, 1.0), tid);
         hi_n.write(float4(0, 1, 0, -1.0), tid);
         // BUG-88m: `.a = -1` must survive the half->full chain — Blend
@@ -1805,7 +1824,7 @@ kernel void upsample_shadow(
     // normal divergence to near-zero weight while still full-weighting a
     // shared flat surface's own precision noise.
     const float UPSAMPLE_NORMAL_POWER = 32.0;
-    float4 acc_sv = 0.0; float3 acc_irr = 0.0; float acc_ao = 0.0; float3 acc_n = 0.0; float3 acc_refl = 0.0; float wsum = 0.0;
+    float4 acc_sv = 0.0; float4 acc_sv2 = 0.0; float3 acc_irr = 0.0; float acc_ao = 0.0; float3 acc_n = 0.0; float3 acc_refl = 0.0; float wsum = 0.0;
     // All-reject has two sub-cases with different right answers. VOID among
     // the taps = a silhouette the half-res grid straddles: the floored
     // equal-average below then blends lit surface with background at full
@@ -1828,7 +1847,7 @@ kernel void upsample_shadow(
         float w_depth = exp(-fabs(qd - d) / 0.001);
         float w_normal = pow(max(dot(ref_n, qn), 0.0), UPSAMPLE_NORMAL_POWER);
         float w = max(w_bilin * w_depth * w_normal, 1e-5);
-        if (!sv_native) { acc_sv += lo_sv.read(uint2(q)) * w; }
+        if (!sv_native) { acc_sv += lo_sv.read(uint2(q)) * w; acc_sv2 += lo_sv2.read(uint2(q)) * w; }
         float4 qirr = lo_irr.read(uint2(q));
         acc_irr += qirr.rgb * w;
         acc_ao += qirr.a * w;
@@ -1839,12 +1858,14 @@ kernel void upsample_shadow(
     if (wsum < 1e-4 && void_taps > 0u) {
         uint2 uq = uint2(nearest_lo);
         hi_sv.write(sv_native ? lo_sv.read(tid) : lo_sv.read(uq), tid);
+        hi_sv2.write(sv_native ? lo_sv2.read(tid) : lo_sv2.read(uq), tid);
         hi_irr.write(lo_irr.read(uq), tid);
         hi_n.write(float4(ref_n, ref_n4.w), tid);
         hi_refl.write(lo_refl.read(uq), tid);
         return;
     }
     hi_sv.write(sv_native ? lo_sv.read(tid) : acc_sv / wsum, tid);
+    hi_sv2.write(sv_native ? lo_sv2.read(tid) : acc_sv2 / wsum, tid);
     hi_irr.write(float4(acc_irr / wsum, acc_ao / wsum), tid);
     float3 n_avg = acc_n / wsum;
     float n_len = length(n_avg);
@@ -1914,6 +1935,11 @@ kernel void atrous_filter(
     // harder; shiny surface = narrow sigma = preserve crisp mirror image).
     texture2d<float>                 src_refl     [[texture(8)]],
     texture2d<float, access::write>  dst_refl     [[texture(9)]],
+    // RS-A (caster cap 4 -> 8): second shadow-visibility quad — filtered
+    // with the same depth + normal edge-stops; separate accumulator so
+    // a high-slot visibility change doesn't bleed into the low slots.
+    texture2d<float>                 src_sv2      [[texture(11)]],
+    texture2d<float, access::write>  dst_sv2      [[texture(12)]],
     uint2 tid [[thread_position_in_grid]])
 {
     if (tid.x >= p.size.x || tid.y >= p.size.y) return;
@@ -1922,6 +1948,7 @@ kernel void atrous_filter(
         // Void background: pass through unfiltered (nothing to edge-stop
         // against; matches every other stage's void-background handling).
         dst_sv.write(src_sv.read(tid), tid);
+        dst_sv2.write(src_sv2.read(tid), tid);
         dst_irr.write(src_irr.read(tid), tid);
         dst_n.write(src_n.read(tid), tid);
         dst_refl.write(src_refl.read(tid), tid);
@@ -2025,6 +2052,7 @@ kernel void atrous_filter(
     // change above (not a judgment call — same treatment as
     // `upsample_shadow`).
     float4 acc_sv = src_sv.read(tid);
+    float4 acc_sv2 = src_sv2.read(tid);
     float3 acc_refl = src_refl.read(tid).rgb;
     float wsum = 1.0;
     for (int i = 0; i < 8; i++) {
@@ -2041,6 +2069,7 @@ kernel void atrous_filter(
         float w = w_depth * w_normal * w_luma;
         acc_irr += qirr * w;
         acc_sv += src_sv.read(uq) * w;
+        acc_sv2 += src_sv2.read(uq) * w;
         // RT-R2: the refl channel's own weight — shared depth/normal stops,
         // its own roughness-narrowed luma stop on the REFLECTION signal.
         float3 qrefl = src_refl.read(uq).rgb;
@@ -2051,6 +2080,7 @@ kernel void atrous_filter(
     }
     dst_irr.write(float4(acc_irr / wsum, center_ao), tid);
     dst_sv.write(acc_sv / wsum, tid);
+    dst_sv2.write(acc_sv2 / wsum, tid);
     // RT-T2-C: `.w` = object id, passed through untouched (never blended).
     dst_n.write(float4(center_n, center_n4.w), tid);
     // RT-R2: reflection radiance filters with roughness-narrowed luma
@@ -2223,12 +2253,27 @@ kernel void accumulate_irradiance(
     // and the texel snaps every frame forever, never amortizing.
     texture2d<float>                     sv_hold_read        [[texture(21)]],
     texture2d<float, access::write>      sv_hold_write       [[texture(22)]],
+    // RS-A (caster cap 4 -> 8): second shadow-visibility quad (slots 4-7) —
+    // independent SV-ACCUM pipeline: own history, moments, and snap-hold,
+    // same flip clock as the first channel, so a penumbra boil in slots 4-7
+    // never trips the gate on slots 0-3. The surface-history validity test
+    // is shared (a shadow lives on its surface), same as the first channel.
+    texture2d<float>                     hi_sv2              [[texture(23)]],
+    texture2d<float>                     sv2_history_read    [[texture(24)]],
+    texture2d<float, access::write>      sv2_history_write   [[texture(25)]],
+    texture2d<float>                     sv2_m1_read         [[texture(26)]],
+    texture2d<float, access::write>      sv2_m1_write        [[texture(27)]],
+    texture2d<float>                     sv2_m2_read         [[texture(28)]],
+    texture2d<float, access::write>      sv2_m2_write        [[texture(29)]],
+    texture2d<float>                     sv2_hold_read       [[texture(30)]],
+    texture2d<float, access::write>      sv2_hold_write      [[texture(31)]],
     device GiMaterial*                 gi_materials        [[buffer(3)]],
     uint2 tid [[thread_position_in_grid]])
 {
     if (tid.x >= p.size.x || tid.y >= p.size.y) return;
     float4 cur = hi_irr.read(tid);
     float4 cur_sv = hi_sv.read(tid);
+    float4 cur_sv2 = hi_sv2.read(tid);
     float  cur_depth = depth_tex.read(tid, 0);
     float4 cur_n4 = hi_normal.read(tid);
     float3 cur_normal = cur_n4.xyz;
@@ -2260,6 +2305,10 @@ kernel void accumulate_irradiance(
         sv_m1_write.write(cur_sv, tid);
         sv_m2_write.write(cur_sv * cur_sv, tid);
         sv_hold_write.write(float4(0.0), tid);
+        sv2_history_write.write(cur_sv2, tid);
+        sv2_m1_write.write(cur_sv2, tid);
+        sv2_m2_write.write(cur_sv2 * cur_sv2, tid);
+        sv2_hold_write.write(float4(0.0), tid);
         return;
     }
 
@@ -2287,6 +2336,12 @@ kernel void accumulate_irradiance(
     float4 sv_m1w = cur_sv;
     float4 sv_m2w = cur_sv * cur_sv;
     float sv_hold_w = 0.0;
+    // RS-A: second shadow-visibility quad — independent sigma-gate,
+    // same surface-history validity (a shadow lives on its surface).
+    float4 sv2_blended = cur_sv2;
+    float4 sv2_m1w = cur_sv2;
+    float4 sv2_m2w = cur_sv2 * cur_sv2;
+    float sv2_hold_w = 0.0;
     // Frames of history behind this texel, carried in `moments_write.w`
     // (was `history_write.a` — ED2 moved the ao there). 1 = this frame only
     // (a rejected/disoccluded texel is a cold start).
@@ -2392,6 +2447,12 @@ kernel void accumulate_irradiance(
                 float4 sv1sum = float4(0.0);
                 float4 sv2sum = float4(0.0);
                 float svhsum = 0.0;
+                // RS-A: second shadow-visibility quad — resampled through
+                // the SAME validated taps (no separate reprojection test).
+                float4 sv2hsum = float4(0.0);
+                float4 sv2h1sum = float4(0.0);
+                float4 sv2h2sum = float4(0.0);
+                float sv2hhsum = 0.0;
                 for (int i = 0; i < 4; ++i) {
                     int2 t = clamp(base + offs[i], int2(0), int2(p.size) - 1);
                     uint2 tt = uint2(t);
@@ -2417,6 +2478,12 @@ kernel void accumulate_irradiance(
                         sv1sum += w[i] * sv_m1_read.read(tt);
                         sv2sum += w[i] * sv_m2_read.read(tt);
                         svhsum += w[i] * sv_hold_read.read(tt).x;
+                        // RS-A: second visibility channel — same taps,
+                        // same weights, independent sigma-gate after.
+                        sv2hsum += w[i] * sv2_history_read.read(tt);
+                        sv2h1sum += w[i] * sv2_m1_read.read(tt);
+                        sv2h2sum += w[i] * sv2_m2_read.read(tt);
+                        sv2hhsum += w[i] * sv2_hold_read.read(tt).x;
                     }
                 }
                 if (wsum > 1e-4) {
@@ -2552,6 +2619,29 @@ kernel void accumulate_irradiance(
                     // settles honest at the new level.
                     sv_m1w = mix(sv_hm1, cur_sv, m_alpha);
                     sv_m2w = mix(sv_hm2, cur_sv * cur_sv, m_alpha);
+                    // RS-A (caster cap 4 -> 8): independent sigma-gate for
+                    // the second shadow-visibility quad (slots 4-7). The
+                    // surface-history validity test is shared (a shadow
+                    // lives on its surface); the change verdict is fully
+                    // independent so a boil in one quad never trips the
+                    // other. Same constants, same snap-hold discipline as
+                    // the first channel.
+                    float4 sv2_hist = sv2hsum / wsum;
+                    float4 sv2_hm1 = sv2h1sum / wsum;
+                    float4 sv2_hm2 = sv2h2sum / wsum;
+                    float4 sv2_hsd = sqrt(max(sv2_hm2 - sv2_hm1 * sv2_hm1, float4(0.0)));
+                    float4 sv2_d4 = abs(cur_sv2 - sv2_hist);
+                    float4 sv2_gate = max(4.0 * sv2_hsd,
+                                         0.15 * max(sv2_hist, cur_sv2));
+                    bool sv2_changed = any(sv2_d4 > max(sv2_gate, float4(0.05)) * motion_band);
+                    float sv2_hold_hist = sv2hhsum / wsum;
+                    sv2_hold_w = sv2_changed ? 4.0 : max(sv2_hold_hist - 1.0, 0.0);
+                    bool sv2_snap = sv2_changed || sv2_hold_hist >= 1.0;
+                    float sv2_n = sv2_snap ? 2.0 : n_full;
+                    float sv2_alpha = max(1.0 / sv2_n, p.alpha);
+                    sv2_blended = mix(sv2_hist, cur_sv2, sv2_alpha);
+                    sv2_m1w = mix(sv2_hm1, cur_sv2, m_alpha);
+                    sv2_m2w = mix(sv2_hm2, cur_sv2 * cur_sv2, m_alpha);
                     // The SURFACE's lighting changed, so its specular history
                     // is stale for the same reason — one decision, both
                     // channels (the reflection block below reads this).
@@ -2573,6 +2663,12 @@ kernel void accumulate_irradiance(
     sv_m1_write.write(sv_m1w, tid);
     sv_m2_write.write(sv_m2w, tid);
     sv_hold_write.write(float4(sv_hold_w, 0.0, 0.0, 0.0), tid);
+    // RS-A (caster cap 4 -> 8): independent second shadow-visibility
+    // channel — same cold-start discipline.
+    sv2_history_write.write(valid ? sv2_blended : cur_sv2, tid);
+    sv2_m1_write.write(sv2_m1w, tid);
+    sv2_m2_write.write(sv2_m2w, tid);
+    sv2_hold_write.write(float4(sv2_hold_w, 0.0, 0.0, 0.0), tid);
     // Specular history length, `normal_history.w`. Written below the
     // reflection block (which computes it) — the normal itself is settled
     // here, so the deferred write costs nothing.
@@ -2856,11 +2952,12 @@ pub struct ShadowRayParams {
     pub inv_view_proj: [[f32; 4]; 4],
 }
 
-/// Fixed per-dispatch shadow-caster slot count — mirrors `render_scene.rs`'s
-/// `MAX_SHADOW_CASTING_LIGHTS` (both are 4; no compiler-enforced link
-/// between the two crates, same manual-sync discipline this file already
-/// uses for other cross-crate constants).
-pub const MAX_RT_CASTERS: usize = 4;
+/// Fixed per-dispatch shadow-caster slot count — mirrors the embedded MSL
+/// `MAX_RT_CASTERS` at `raytrace.rs` (metal) `:565` (both are 8; no
+/// compiler-enforced link between the two, same manual-sync discipline this
+/// file already uses for other cross-constant constants). RS-A (caster cap
+/// 4 -> 8): doubled from 4; the MSL mirror must stay in sync.
+pub const MAX_RT_CASTERS: usize = 8;
 
 impl ShadowRayParams {
     /// Construct with the alignment padding zeroed. `casters` may contain
@@ -2943,8 +3040,10 @@ impl GiMaterial {
 // as clearly — if `inv_view_proj`'s offset ever drifts from its required
 // 16-byte-aligned value (a field reordered/resized above it), this fails at
 // compile time instead of silently reading garbage on the GPU.
-const _: () = assert!(std::mem::offset_of!(ShadowRayParams, inv_view_proj) == 208);
-const _: () = assert!(std::mem::size_of::<ShadowRayParams>() == 272);
+// RS-A (caster cap 4 -> 8): casters grew from 4×32=128B to 8×32=256B;
+// inv_view_proj offset and total size recomputed. 336 % 16 == 0.
+const _: () = assert!(std::mem::offset_of!(ShadowRayParams, inv_view_proj) == 336);
+const _: () = assert!(std::mem::size_of::<ShadowRayParams>() == 400);
 
 /// RT-T1-B (RAYTRACING_DESIGN.md section 8 Tier-1 item 2): per-object bindless
 /// indirection for real vertex-normal interpolation in the RT trace kernel
@@ -3459,9 +3558,10 @@ pub trait ShadowRayTracer {
     /// called with, so `instance_id` at a GI ray hit indexes it directly):
     /// ray origins + bias normal reconstructed in-kernel from `depth_tex`
     /// (the full-res opaque-depth prepass) + `params.inv_view_proj` — no
-    /// world-pos/normal G-buffer target. Writes (sun visibility, AO) to
-    /// `out_sv` and demodulated irradiance (now including the GI gather)
-    /// to `out_irr`, both at `params.trace_size`. RT-T1-B: `normal_sources`
+    /// world-pos/normal G-buffer target. Writes per-caster visibility to
+    /// `out_sv` (slots 0-3) + `out_sv2` (slots 4-7, RS-A) and demodulated
+    /// irradiance (now including the GI gather) to `out_irr`, all at
+    /// `params.trace_size`. RT-T1-B: `normal_sources`
     /// is the per-object [`RtNormalSource`] bindless table (built via
     /// [`build_normal_sources`] from the SAME `objects` slice `accel` was
     /// built from) — feeds the primary-ray-cast real vertex normal AO/GI
@@ -3482,6 +3582,7 @@ pub trait ShadowRayTracer {
         alpha_textures: &[&GpuTexture],
         depth_tex: &GpuTexture,
         out_sv: &GpuTexture,
+        out_sv2: &GpuTexture,
         out_irr: &GpuTexture,
         out_n: &GpuTexture,
         out_refl: &GpuTexture,
@@ -3497,7 +3598,9 @@ pub trait ShadowRayTracer {
     /// (RT-D3's "D11 trivial pass"; RT-P2 widened the SAME upsample to
     /// also carry irradiance; RT-T1-C widens it once more to carry the
     /// primary-hit vertex normal `accumulate_irradiance`'s reprojection
-    /// validity test needs).
+    /// validity test needs). RS-A (caster cap 4 -> 8): `lo_sv2`/`hi_sv2`
+    /// carry the second shadow-visibility quad (caster slots 4-7), same
+    /// half->full bilateral upsample as the first.
     #[allow(clippy::too_many_arguments)]
     fn upsample_shadow(
         &self,
@@ -3506,6 +3609,8 @@ pub trait ShadowRayTracer {
         depth_tex: &GpuTexture,
         lo_sv: &GpuTexture,
         hi_sv: &GpuTexture,
+        lo_sv2: &GpuTexture,
+        hi_sv2: &GpuTexture,
         lo_irr: &GpuTexture,
         hi_irr: &GpuTexture,
         lo_n: &GpuTexture,
@@ -3522,7 +3627,9 @@ pub trait ShadowRayTracer {
     /// same lag convention as the depth/normal history reads). Called
     /// `ATROUS_ITERATIONS`-1 times by the caller with an increasing
     /// `step` (1, 2, ...), after `upsample_shadow` has already produced
-    /// the initial full-res `src_*` set.
+    /// the initial full-res `src_*` set. RS-A: `src_sv2`/`dst_sv2` filter
+    /// the second shadow-visibility quad independently with the same
+    /// depth+normal edge-stops.
     #[allow(clippy::too_many_arguments)]
     fn atrous_pass(
         &self,
@@ -3534,6 +3641,8 @@ pub trait ShadowRayTracer {
         moments_read: &GpuTexture,
         src_sv: &GpuTexture,
         dst_sv: &GpuTexture,
+        src_sv2: &GpuTexture,
+        dst_sv2: &GpuTexture,
         src_irr: &GpuTexture,
         dst_irr: &GpuTexture,
         src_n: &GpuTexture,
@@ -3584,7 +3693,7 @@ pub trait ShadowRayTracer {
         refl_history_read: &GpuTexture,
         refl_history_write: &GpuTexture,
         gi_materials: &GpuBuffer,
-        // SV-ACCUM: shadow-visibility channel (4 caster slots) — current
+        // SV-ACCUM: shadow-visibility channel (4 caster slots, 0-3) — current
         // frame post-atrous mask + its own ping-pong history pair, same
         // flip clock as the irradiance/reflection pairs.
         hi_sv: &GpuTexture,
@@ -3602,6 +3711,20 @@ pub trait ShadowRayTracer {
         // moments deaden the sigma gate right after a crossing.
         sv_hold_read: &GpuTexture,
         sv_hold_write: &GpuTexture,
+        // RS-A (caster cap 4 -> 8): second shadow-visibility channel
+        // (caster slots 4-7) — same SV-ACCUM pipeline (running-mean blend
+        // with its own sigma-gate + snap-hold), same flip clock, fully
+        // independent from the first channel so a penumbra boil in an
+        // upper-slot caster never trips the non-boiling lower slots.
+        hi_sv2: &GpuTexture,
+        sv2_history_read: &GpuTexture,
+        sv2_history_write: &GpuTexture,
+        sv2_m1_read: &GpuTexture,
+        sv2_m1_write: &GpuTexture,
+        sv2_m2_read: &GpuTexture,
+        sv2_m2_write: &GpuTexture,
+        sv2_hold_read: &GpuTexture,
+        sv2_hold_write: &GpuTexture,
         label: &str,
     );
 }
@@ -3962,6 +4085,7 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         alpha_textures: &[&GpuTexture],
         depth_tex: &GpuTexture,
         out_sv: &GpuTexture,
+        out_sv2: &GpuTexture,
         out_irr: &GpuTexture,
         out_n: &GpuTexture,
         out_refl: &GpuTexture,
@@ -4028,6 +4152,12 @@ impl ShadowRayTracer for MetalShadowRayTracer {
             binding: 5 + MAX_RT_MATERIAL_TEXTURES as u32,
             texture: prefiltered_env,
         });
+        // RS-A (caster cap 4 -> 8): out_sv2 at [[texture(70)]] — the first slot
+        // after prefiltered_env (69).
+        bindings.push(GpuBinding::Texture {
+            binding: 6 + MAX_RT_MATERIAL_TEXTURES as u32,
+            texture: out_sv2,
+        });
         encoder.dispatch_compute_with_accel(&self.trace_pipeline, 0, accel, &bindings, groups, label);
     }
 
@@ -4038,6 +4168,8 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         depth_tex: &GpuTexture,
         lo_sv: &GpuTexture,
         hi_sv: &GpuTexture,
+        lo_sv2: &GpuTexture,
+        hi_sv2: &GpuTexture,
         lo_irr: &GpuTexture,
         hi_irr: &GpuTexture,
         lo_n: &GpuTexture,
@@ -4072,6 +4204,15 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                 GpuBinding::Texture {
                     binding: 2,
                     texture: hi_sv,
+                },
+                // RS-A (caster cap 4 -> 8): second shadow-visibility quad.
+                GpuBinding::Texture {
+                    binding: 9,
+                    texture: lo_sv2,
+                },
+                GpuBinding::Texture {
+                    binding: 10,
+                    texture: hi_sv2,
                 },
                 GpuBinding::Texture {
                     binding: 3,
@@ -4114,6 +4255,8 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         moments_read: &GpuTexture,
         src_sv: &GpuTexture,
         dst_sv: &GpuTexture,
+        src_sv2: &GpuTexture,
+        dst_sv2: &GpuTexture,
         src_irr: &GpuTexture,
         dst_irr: &GpuTexture,
         src_n: &GpuTexture,
@@ -4152,6 +4295,15 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                 GpuBinding::Texture {
                     binding: 3,
                     texture: dst_sv,
+                },
+                // RS-A (caster cap 4 -> 8): second shadow-visibility quad.
+                GpuBinding::Texture {
+                    binding: 11,
+                    texture: src_sv2,
+                },
+                GpuBinding::Texture {
+                    binding: 12,
+                    texture: dst_sv2,
                 },
                 GpuBinding::Texture {
                     binding: 4,
@@ -4210,9 +4362,7 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         refl_history_read: &GpuTexture,
         refl_history_write: &GpuTexture,
         gi_materials: &GpuBuffer,
-        // SV-ACCUM: shadow-visibility channel (4 caster slots) — current
-        // frame post-atrous mask + its own ping-pong history pair, same
-        // flip clock as the irradiance/reflection pairs.
+        // SV-ACCUM: shadow-visibility channel (caster slots 0-3).
         hi_sv: &GpuTexture,
         sv_history_read: &GpuTexture,
         sv_history_write: &GpuTexture,
@@ -4224,6 +4374,17 @@ impl ShadowRayTracer for MetalShadowRayTracer {
         // SV-ACCUM snap-hold countdown pair (`.x`).
         sv_hold_read: &GpuTexture,
         sv_hold_write: &GpuTexture,
+        // RS-A (caster cap 4 -> 8): second shadow-visibility channel
+        // (slots 4-7) — independent SV-ACCUM pipeline.
+        hi_sv2: &GpuTexture,
+        sv2_history_read: &GpuTexture,
+        sv2_history_write: &GpuTexture,
+        sv2_m1_read: &GpuTexture,
+        sv2_m1_write: &GpuTexture,
+        sv2_m2_read: &GpuTexture,
+        sv2_m2_write: &GpuTexture,
+        sv2_hold_read: &GpuTexture,
+        sv2_hold_write: &GpuTexture,
         label: &str,
     ) {
         params_buffer.upload(accumulate_params_bytes(params));
@@ -4285,9 +4446,7 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                     binding: 10,
                     texture: moments_write,
                 },
-                // RT-R2 (RD6): hi_refl / refl history pair / gi_materials —
-                // the R1 slot-map incident class; signatures and slot maps
-                // change together.
+                // RT-R2 (RD6): hi_refl / refl history pair / gi_materials.
                 GpuBinding::Texture {
                     binding: 11,
                     texture: hi_refl,
@@ -4300,8 +4459,7 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                     binding: 13,
                     texture: refl_history_write,
                 },
-                // SV-ACCUM: hi_sv / sv history pair — same incident class,
-                // same rule (slot map extended in the same commit).
+                // SV-ACCUM: hi_sv / sv history pair.
                 GpuBinding::Texture {
                     binding: 14,
                     texture: hi_sv,
@@ -4339,6 +4497,44 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                 GpuBinding::Texture {
                     binding: 22,
                     texture: sv_hold_write,
+                },
+                // RS-A (caster cap 4 -> 8): sv2 channel — full SV-ACCUM
+                // pipeline, independent sigma-gate per quad.
+                GpuBinding::Texture {
+                    binding: 23,
+                    texture: hi_sv2,
+                },
+                GpuBinding::Texture {
+                    binding: 24,
+                    texture: sv2_history_read,
+                },
+                GpuBinding::Texture {
+                    binding: 25,
+                    texture: sv2_history_write,
+                },
+                GpuBinding::Texture {
+                    binding: 26,
+                    texture: sv2_m1_read,
+                },
+                GpuBinding::Texture {
+                    binding: 27,
+                    texture: sv2_m1_write,
+                },
+                GpuBinding::Texture {
+                    binding: 28,
+                    texture: sv2_m2_read,
+                },
+                GpuBinding::Texture {
+                    binding: 29,
+                    texture: sv2_m2_write,
+                },
+                GpuBinding::Texture {
+                    binding: 30,
+                    texture: sv2_hold_read,
+                },
+                GpuBinding::Texture {
+                    binding: 31,
+                    texture: sv2_hold_write,
                 },
                 GpuBinding::Buffer {
                     binding: 3,

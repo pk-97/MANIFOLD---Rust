@@ -57,6 +57,7 @@ mod rt_edc_enclosure;
 mod rt_furnace_oracle;
 mod rt_normal_tangent_mirror;
 mod rt_multi_caster_shadow;
+mod rt_6caster_shadow;
 mod rt_object_cast_shadows;
 mod rt_r1_reflection;
 mod rt_r2_accumulation;

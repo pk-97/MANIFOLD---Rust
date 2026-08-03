@@ -153,6 +153,18 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         label: "rt-p1-out_sv",
         mip_levels: 1,
     });
+    // RS-A (caster cap 4 -> 8): second shadow-visibility output — unread by
+    // this proof (only asserts on out_sv.r for caster slot 0).
+    let out_sv2 = device.create_texture(&GpuTextureDesc {
+        width: 2,
+        height: 1,
+        depth: 1,
+        format: GpuTextureFormat::Rgba16Float,
+        dimension: GpuTextureDimension::D2,
+        usage: GpuTextureUsage::SHADER_WRITE | GpuTextureUsage::COPY_SRC,
+        label: "rt-p1-out_sv2",
+        mip_levels: 1,
+    });
     // RAYTRACING_DESIGN.md section 5.2 P2 widened `trace_shadow_rays` to also
     // write demodulated irradiance — this P1 proof only asserts on
     // `out_sv` (shadow visibility), so `out_irr` is an unread write
@@ -248,6 +260,7 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         &[], // RT-T2-A: no alpha-masked objects in this fixture
         &depth_tex,
         &out_sv,
+        &out_sv2,
         &out_irr,
         &out_n,
         &out_refl,
@@ -388,6 +401,16 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
         label: "rt-p1-2blas-out_sv",
         mip_levels: 1,
     });
+    let out_sv2 = device.create_texture(&GpuTextureDesc {
+        width: 2,
+        height: 1,
+        depth: 1,
+        format: GpuTextureFormat::Rgba16Float,
+        dimension: GpuTextureDimension::D2,
+        usage: GpuTextureUsage::SHADER_WRITE | GpuTextureUsage::COPY_SRC,
+        label: "rt-p1-2blas-out_sv2",
+        mip_levels: 1,
+    });
     // See the single-BLAS proof above for why this stub exists.
     let out_irr = device.create_texture(&GpuTextureDesc {
         width: 2,
@@ -473,6 +496,7 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
         &[], // RT-T2-A: no alpha-masked objects in this fixture
         &depth_tex,
         &out_sv,
+        &out_sv2,
         &out_irr,
         &out_n,
         &out_refl,
