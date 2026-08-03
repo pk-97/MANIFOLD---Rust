@@ -181,11 +181,15 @@ fn run_fixture(cone_half_angle: f32, frame_index: u32) -> Vec<f32> {
         alpha_cutoff: 0.5,
         base_color_texture: Some(&base_color_tex),
         mr_texture: None,
+        normal_texture: None,
+        emissive_texture: None,
+        emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
+        emissive_uv_t: [0.0, 0.0],
         cast_shadows: true,
     }];
 
     let tracer = MetalShadowRayTracer::new(device);
-    let accel = tracer.build_accel(device, &objects);
+    let accel = tracer.build_accel(device, &objects, &[]);
 
     let mut normal_sources_slot = None;
     let mut normal_sources_capacity = 0usize;
@@ -218,6 +222,9 @@ fn run_fixture(cone_half_angle: f32, frame_index: u32) -> Vec<f32> {
         label: "rt-t2c-out_sv",
         mip_levels: 1,
     });
+    // RS-A (caster cap 8): second shadow-visibility output — unread, this
+    // proof asserts on out_sv only (one caster, slot 0).
+    let out_sv2 = write_only_texture(device, GpuTextureFormat::Rgba16Float, "rt-t2c-out_sv2-stub");
     let out_irr = write_only_texture(device, GpuTextureFormat::Rgba16Float, "rt-t2c-out_irr-stub");
     let out_n = write_only_texture(device, GpuTextureFormat::Rgba16Float, "rt-t2c-out_n-stub");
     let out_refl = write_only_texture(device, GpuTextureFormat::Rgba16Float, "rt-t2c-out_refl-stub");
@@ -248,12 +255,12 @@ fn run_fixture(cone_half_angle: f32, frame_index: u32) -> Vec<f32> {
         0.0,
         0, // ao_spp — AO off, this proof is the shadow term only
         0, // gi_spp
-        [0.0, 0.0, 0.0],
-        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0], // camera_pos — unused, ao_spp/gi_spp both 0
         IDENTITY,
         0, // refl_spp
         0.6,
         0.1,
+        0.0, // RS-B: emissive_table_mean_power — no emissive in fixture
     );
     let params_buffer =
         device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
@@ -270,6 +277,7 @@ fn run_fixture(cone_half_angle: f32, frame_index: u32) -> Vec<f32> {
         &alpha_textures,
         &depth_tex,
         &out_sv,
+        &out_sv2,
         &out_irr,
         &out_n,
         &out_refl,
