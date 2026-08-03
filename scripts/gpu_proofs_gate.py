@@ -9,6 +9,11 @@ run into one summary: every failed test name, every golden-mismatch detail
 (file + diff), and a per-binary pass/fail count. Never nextest — process-
 per-test defeats the GPU device lock.
 
+Optional `--filter` / `--skip` args pass through to cargo test so a landing
+can run just the proofs for the subsystem it touched (scripts/landing_gate.py
+computes the scope). Default with no args: the full suite — this is the
+on-demand and nightly-trunk_health role.
+
 Exit 0 iff the underlying cargo run exited 0.
 
 Obsolete when: cargo test reports cross-binary failure summaries natively
@@ -51,7 +56,7 @@ def default_manifest_path() -> Path:
     return Path(__file__).resolve().parent.parent / "Cargo.toml"
 
 
-def run_gate(manifest_path: Path) -> tuple[int, str]:
+def run_gate(manifest_path: Path, filters: list[str], skips: list[str]) -> tuple[int, str]:
     cmd = [
         "cargo",
         "test",
@@ -63,6 +68,17 @@ def run_gate(manifest_path: Path) -> tuple[int, str]:
         "--manifest-path",
         str(manifest_path),
     ]
+    # Serial test threads, always: ~135 proofs share one Metal device, and
+    # parallel execution corrupts VALUES, not just timing (BUG-m0c9 — red
+    # sets rotate across identical binaries; the same tests pass serially).
+    # 15s of determinism is cheaper than the re-run-every-landing tax the
+    # parallel mode was paying.
+    cmd.append("--")
+    cmd.append("--test-threads=1")
+    if filters or skips:
+        cmd.extend(filters)
+        for skip in skips:
+            cmd.extend(["--skip", skip])
     print(f"$ {' '.join(cmd)}", flush=True)
 
     proc = subprocess.Popen(
@@ -160,10 +176,24 @@ def main() -> int:
         default=None,
         help="Path to the workspace Cargo.toml (default: repo root next to scripts/)",
     )
+    parser.add_argument(
+        "--filter",
+        action="append",
+        default=[],
+        metavar="TESTNAME",
+        help="cargo test filter (repeatable); omit for the full suite",
+    )
+    parser.add_argument(
+        "--skip",
+        action="append",
+        default=[],
+        metavar="TESTNAME",
+        help="cargo test --skip filter (repeatable)",
+    )
     args = parser.parse_args()
 
     manifest_path = args.manifest_path or default_manifest_path()
-    exit_code, output = run_gate(manifest_path)
+    exit_code, output = run_gate(manifest_path, args.filter, args.skip)
     print_summary(output, exit_code)
     return exit_code
 

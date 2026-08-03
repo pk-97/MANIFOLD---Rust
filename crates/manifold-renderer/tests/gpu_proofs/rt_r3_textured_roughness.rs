@@ -155,6 +155,10 @@ fn run_fixture(mr_texture: Option<&manifold_gpu::GpuTexture>, floor_roughness: f
             alpha_cutoff: 0.5,
             base_color_texture: None,
             mr_texture,
+            normal_texture: None,
+                        emissive_texture: None,
+                        emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
+                        emissive_uv_t: [0.0, 0.0],
             cast_shadows: true,
         },
         RtObjectGeometry {
@@ -170,12 +174,16 @@ fn run_fixture(mr_texture: Option<&manifold_gpu::GpuTexture>, floor_roughness: f
             alpha_cutoff: 0.5,
             base_color_texture: None,
             mr_texture: None,
+            normal_texture: None,
+                        emissive_texture: None,
+                        emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
+                        emissive_uv_t: [0.0, 0.0],
             cast_shadows: true,
         },
     ];
 
     let tracer = MetalShadowRayTracer::new(device);
-    let accel = tracer.build_accel(device, &objects);
+    let accel = tracer.build_accel(device, &objects, &[]);
 
     let mut normal_sources_slot = None;
     let mut normal_sources_capacity = 0usize;
@@ -196,6 +204,14 @@ fn run_fixture(mr_texture: Option<&manifold_gpu::GpuTexture>, floor_roughness: f
         dimension: GpuTextureDimension::D2,
         usage: GpuTextureUsage::SHADER_WRITE,
         label: "rt-r3-out_sv-stub",
+        mip_levels: 1,
+    });
+    let out_sv2 = device.create_texture(&GpuTextureDesc {
+        width: 2, height: 1, depth: 1,
+        format: GpuTextureFormat::Rgba16Float,
+        dimension: GpuTextureDimension::D2,
+        usage: GpuTextureUsage::SHADER_WRITE,
+        label: "rt-r3-out_sv2-stub",
         mip_levels: 1,
     });
     let out_irr = device.create_texture(&GpuTextureDesc {
@@ -250,12 +266,12 @@ fn run_fixture(mr_texture: Option<&manifold_gpu::GpuTexture>, floor_roughness: f
         0.0,
         0, // ao_spp
         0, // gi_spp
-        [0.0, 0.0, 0.0],
         [0.0, 1.0, 0.3], // camera_pos — see module doc's mirror math
         IDENTITY,
         1,   // refl_spp
         0.6, // refl_max_roughness
         0.1, // refl_rough_band
+        0.0, // RS-B: emissive_table_mean_power — no emissive in fixture
     );
     let params_buffer = device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
 
@@ -280,6 +296,7 @@ fn run_fixture(mr_texture: Option<&manifold_gpu::GpuTexture>, floor_roughness: f
         &material_textures,
         &depth_tex,
         &out_sv,
+        &out_sv2,
         &out_irr,
         &out_n,
         &out_refl,

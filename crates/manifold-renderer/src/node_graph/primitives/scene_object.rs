@@ -358,7 +358,7 @@ mod gpu_tests {
     }
 
     fn mk_vertex(pos: [f32; 3]) -> MeshVertex {
-        MeshVertex { position: pos, _pad0: 0.0, normal: [0.0, 1.0, 0.0], _pad1: 0.0, uv: [0.0, 0.0], _pad2: [0.0, 0.0] }
+        MeshVertex { position: pos, _pad0: 0.0, normal: [0.0, 1.0, 0.0], _pad1: 0.0, uv: [0.0, 0.0], _pad2: [0.0, 0.0], tangent: [0.0; 4] }
     }
 
     /// Test-only mesh producer: its `out` resource is pre-bound directly to

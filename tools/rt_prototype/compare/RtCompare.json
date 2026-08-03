@@ -14,11 +14,13 @@
     "tilt":{"type":"Float","value":0.95},
     "distance":{"type":"Float","value":10.0},
     "fov_y":{"type":"Float","value":0.8}}},
-{"id":4,"typeId":"node.phong_material","nodeId":"ground_mat","params":{
+{"id":4,"typeId":"node.pbr_material","nodeId":"ground_mat","params":{
     "color_r":{"type":"Float","value":1.0},
     "color_g":{"type":"Float","value":1.0},
     "color_b":{"type":"Float","value":1.0},
-    "ambient":{"type":"Float","value":0.05}}},
+    "ambient":{"type":"Float","value":0.05},
+    "metallic":{"type":"Float","value":0.0},
+    "roughness":{"type":"Float","value":1.0}}},
 {"id":40,"typeId":"node.scene_object","nodeId":"obj0","params":{
     "visible":{"type":"Float","value":1.0}}},
 {"id":5,"typeId":"node.grid_mesh","nodeId":"occ_grid","params":{
@@ -32,7 +34,7 @@
     "src_rows":{"type":"Int","value":10}}},
 {"id":7,"typeId":"node.transform_3d","nodeId":"occ_xform","params":{
     "pos_y":{"type":"Float","value":1.5}}},
-{"id":8,"typeId":"node.phong_material","nodeId":"occ_mat","params":{
+{"id":8,"typeId":"node.pbr_material","nodeId":"occ_mat","params":{
     "color_r":{"type":"Float","value":1.0},
     "color_g":{"type":"Float","value":0.0},
     "color_b":{"type":"Float","value":0.0},
@@ -40,7 +42,9 @@
     "emission_r":{"type":"Float","value":1.0},
     "emission_g":{"type":"Float","value":0.2},
     "emission_b":{"type":"Float","value":0.1},
-    "emission_intensity":{"type":"Float","value":2.0}}},
+    "emission_intensity":{"type":"Float","value":2.0},
+    "metallic":{"type":"Float","value":0.0},
+    "roughness":{"type":"Float","value":1.0}}},
 {"id":41,"typeId":"node.scene_object","nodeId":"obj1","params":{
     "visible":{"type":"Float","value":1.0},
     "cast_shadows":{"type":"Float","value":1.0}}},
@@ -62,8 +66,14 @@
     "lights":{"type":"Int","value":1},
     "rt_enabled":{"type":"Bool","value":true},
     "rt_reflections":{"type":"Bool","value":true}}},
+{"id":100,"typeId":"node.bake_environment","nodeId":"env","params":{
+    "width":{"type":"Int","value":64},
+    "height":{"type":"Int","value":32},
+    "intensity":{"type":"Float","value":0.0},
+    "uniform":{"type":"Bool","value":true}}},
 {"id":99,"typeId":"system.final_output","nodeId":"out"}
 ],"wires":[
+{"fromNode":100,"fromPort":"envmap","toNode":20,"toPort":"envmap"},
 {"fromNode":1,"fromPort":"vertices","toNode":2,"toPort":"in"},
 {"fromNode":2,"fromPort":"out","toNode":40,"toPort":"vertices"},
 {"fromNode":4,"fromPort":"out","toNode":40,"toPort":"material"},

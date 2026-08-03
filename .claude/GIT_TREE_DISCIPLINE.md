@@ -102,7 +102,12 @@ Obsolete when: main stops being a locally-landed shared trunk (PR/CI-gated merge
 - **To land a workstream:** fetch → merge current `origin/main` into your
   branch → run the worktree's `scripts/landing_gate.py` → `git merge
   --no-ff` into main → push → if the push is rejected because someone landed
-  first, repeat. The script is the whole landing gate and gates only what
+  first, repeat. **`scripts/land_branch.py` runs this whole ceremony in one
+  command (Peter, 2026-07-31)** — the lead reviews and makes the named-red
+  call, the script does fetch/merge-in/gate/merge/push/bead-close/branch-
+  delete with per-step exit checks; push happens only after a green gate or
+  an explicit `--named-red BUG-id --reason`. The gate script itself is the
+  whole landing gate and gates only what
   the branch touched: design-status housekeeping
   (`.claude/hooks/design_status_check.py origin/main HEAD`, so status lines
   land in the same merge as the code), docs-index freshness when docs were

@@ -52,11 +52,10 @@ def is_worker_seat(payload: dict) -> bool:
     return any(payload.get(k) for k in ("agent_id", "agent_type", "teammate_name"))
 
 KERNEL_PATH = re.compile(r"crates/manifold-gpu/src/metal/|render_scene\.rs$|\.wgsl$")
-# A probe is an EXECUTION, not a mention (BUG-q329, Peter-approved 2026-07-29:
-# "reclassify probe-loop-guard to execution-shape matching with quote
-# stripping"): count only commands that actually run the suite or the probe
-# binary. Quoted strings are stripped first, so commit messages and bead
-# reasons naming the markers never count. Accepted trade-off: a probe wrapped
+# A probe is an EXECUTION, not a mention: count only commands that actually
+# run the suite or the probe binary. Quoted strings are stripped first, so
+# commit messages and bead reasons naming the markers never count. Accepted
+# trade-off: a probe wrapped
 # entirely in quotes evades the counter — the guard is fail-open by design.
 PROBE_CMD = re.compile(
     r"cargo\s+(?:test|t|run|r)\b[^|;&\n]*?"
@@ -184,16 +183,17 @@ def main() -> None:
             shape.append(f"{cycle_n} edit-run-edit cycles on one file")
         msg = (
             f"LOOP GUARD ({' + '.join(shape)} this session) — lead escalation ladder "
-            "(Peter 2026-07-25, widened 2026-07-30 to ALL lead iteration loops, not "
-            "just probes): (1) LEAD semantic code review of the seam first — "
-            "'does this look correct?' is the fastest, cheapest oracle; (2) STUCK? ask "
-            "a tool-using GLM review lane for adversarial review (one-shots fabricate code citations, Peter 2026-07-26 — .claude/hooks/oneshot is mechanical-tasks-only) "
+            "(widened to ALL lead iteration loops, not just probes): (1) LEAD semantic "
+            "code review of the seam first — 'does this look correct?' is the fastest, "
+            "cheapest oracle; (2) STUCK? ask a tool-using GLM review lane for "
+            "adversarial review (one-shots fabricate code citations — "
+            ".claude/hooks/oneshot is mechanical-tasks-only) "
             "--model glm-5.2, or a lane); (3) instrument probes are the LAST RESORT, for "
             "when nothing makes sense and you need a new direction — and they are DELEGATED "
             "(DeepSeek lane), not lead-run. Write the evidence table to "
             "/tmp/manifold_seam_review.md (>=200 chars) to reset this guard. "
             "Before the next iteration, run the DEBUG_INVESTIGATION skeleton as a "
-            "checklist (SEMANTIC_WORKFLOW_PROGRAMS.md §10): SCHEMA_SEARCH before "
+            "checklist (docs/archive/SEMANTIC_WORKFLOW_PROGRAMS.md section 10): SCHEMA_SEARCH before "
             "any negative claim; GENERALIZE_TRIGGER after the first repro; "
             "CURE_TEST once a perfect action-correlation exists and two read "
             "rounds haven't cracked the mechanism."

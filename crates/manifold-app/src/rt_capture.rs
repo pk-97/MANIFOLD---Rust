@@ -18,6 +18,14 @@
 //! Usage:
 //!   cargo run --features perf-soak --bin manifold -- manifold rt-capture <project.manifold>
 //!   cargo run ... manifold rt-capture --paused <project>   # Play 60 → Pause 300
+//!   --frame-clock: engine time = 1/fps per rendered frame, not wall clock
+//!                  (BUG-jbxt — driver-based motion repros under slow renders)
+//!   --set-at N param=value: one-shot param snap at frame N (repeatable)
+//!   --width W / --height H: override render resolution (cost measurement;
+//!                  applied to the in-memory project, file untouched)
+//!   --sync-gpu: block on the GPU fence each frame + print `[GPU_FRAME_MS]`
+//!                  (per-frame GPU cost; without it the content thread pipelines
+//!                  and frame times read as CPU encode only)
 //!
 //! MANIFOLD_RT_PROBE is NOT required — the subcommand arms the capture
 //! flags directly.
@@ -49,6 +57,12 @@ pub(crate) fn decode_capture_pixels(
         GpuTextureFormat::Rgba16Float => (8u32, 4usize, false),
         GpuTextureFormat::Rg16Float => (4u32, 2usize, false),
         GpuTextureFormat::Rg32Float => (8u32, 2usize, true),
+        // Rgba32Float — the RT luminance-moments history (ED-A moved it from
+        // Rg16Float to Rgba32Float for the variance-precision argument in
+        // render_scene.rs; without this arm the noise gate's `moments`
+        // channel silently vanished from every capture). 16 B/px, 4 comps,
+        // native f32 — the shared f32 decode path below already handles it.
+        GpuTextureFormat::Rgba32Float => (16u32, 4usize, true),
         other => {
             eprintln!(
                 "[rt-capture] SKIP {}: unsupported capture format {other:?}",
@@ -274,6 +288,14 @@ pub fn run(args: &[String]) -> ! {
 
     let paused_mode = args.iter().any(|a| a == "--paused");
 
+    // `--sync-gpu` (cost measurement): block on the GPU fence after every
+    // frame and print the per-frame GPU work time as `[GPU_FRAME_MS]`. The
+    // content thread otherwise pipelines (CPU encodes frame N+1 while the GPU
+    // runs N), so `_t_frame`/`[RENDER_TRACE]` measure CPU encode only — useless
+    // for a frame-budget question. Serializing makes each measured frame's
+    // wall-clock ≈ its GPU cost (CPU encode ~0.3ms is negligible overlap).
+    let sync_gpu = args.iter().any(|a| a == "--sync-gpu");
+
     // `--set param=value` (repeatable): one MutateProject write after load —
     // the RT-off baseline runs `--set 8_rt_enabled=0`.
     let sets: Vec<(String, f32)> = args
@@ -282,12 +304,44 @@ pub fn run(args: &[String]) -> ! {
         .filter_map(|w| w[1].split_once('=').map(|(k, v)| (k.to_string(), v.parse::<f32>().ok())))
         .filter_map(|(k, v)| v.map(|v| (k, v)))
         .collect();
+    // `--set-at N param=value` (repeatable): one-shot MutateProject write at
+    // frame N — deterministic param snaps (sawtooth wrap, fast user drags)
+    // that --animate's per-frame ramp and the boolean-only --live-flip
+    // can't express (BUG-jbxt).
+    let set_ats: Vec<(u32, String, f32)> = args
+        .windows(3)
+        .filter(|w| w[0] == "--set-at")
+        .filter_map(|w| {
+            let frame = w[1].parse::<u32>().ok()?;
+            let (k, v) = w[2].split_once('=')?;
+            Some((frame, k.to_string(), v.parse::<f32>().ok()?))
+        })
+        .collect();
+    // `--frame-clock` (BUG-jbxt): engine time advances exactly 1/fps per
+    // rendered frame instead of wall clock — without it a harness that
+    // renders slower than realtime compresses beat-driven drivers (a
+    // 32-beat sawtooth into ~13 frames at debug res).
+    let frame_clock = args.iter().any(|a| a == "--frame-clock");
     // `--animate <param> <delta>`: per-frame MutateProject write of
     // base + frame*delta — the same storage-level write a modulator makes.
     let animate: Option<(String, f32)> = args
         .windows(3)
         .find(|w| w[0] == "--animate")
         .and_then(|w| w[2].parse::<f32>().ok().map(|d| (w[1].clone(), d)));
+
+    // `--capture-every N`: arm on every Nth frame (plus the fixed points) —
+    // consecutive-frame runs during --animate motion, where ghosting and
+    // flicker live. `--capture-from M` skips the early warmup frames.
+    let capture_every: Option<u32> = args
+        .windows(2)
+        .find(|w| w[0] == "--capture-every")
+        .and_then(|w| w[1].parse().ok())
+        .filter(|n: &u32| *n > 0);
+    let capture_from: u32 = args
+        .windows(2)
+        .find(|w| w[0] == "--capture-from")
+        .and_then(|w| w[1].parse().ok())
+        .unwrap_or(0);
 
     // `--disable-driver-at N`: at frame N, MutateProject disables every
     // param driver on layer 0's generator — the "motion stops mid-play"
@@ -318,21 +372,51 @@ pub fn run(args: &[String]) -> ! {
         .and_then(|w| w[1].parse().ok())
         .unwrap_or(360);
 
+    // Optional resolution override (cost measurement): render at this size
+    // regardless of the project's output dims. Applied to the in-memory
+    // project before LoadProject so the content pipeline's own resize lands
+    // on the override (LoadProject re-resizes to settings — see
+    // content_commands.rs); the project file on disk is untouched.
+    // rt_a2_term_cost pins every fixture to 3840x2160 this way.
+    let override_w: Option<u32> = args.windows(2)
+        .find(|w| w[0] == "--width")
+        .and_then(|w| w[1].parse().ok());
+    let override_h: Option<u32> = args.windows(2)
+        .find(|w| w[0] == "--height")
+        .and_then(|w| w[1].parse().ok());
+
     println!("=== RT CAPTURE {}", if paused_mode { "(PAUSED MODE)" } else { "" });
     println!("path: {} frames={}", project_path.display(), total_frames);
 
-    let real_project = manifold_io::loader::load_project_with(&project_path, crate::project_io::install_embedded_presets)
+    let mut real_project = manifold_io::loader::load_project_with(&project_path, crate::project_io::install_embedded_presets)
         .unwrap_or_else(|e| { eprintln!("FAILED: {e}"); std::process::exit(1); });
+    if let Some(w) = override_w {
+        real_project.settings.output_width = w as i32;
+    }
+    if let Some(h) = override_h {
+        real_project.settings.output_height = h as i32;
+    }
     let fr = real_project.settings.frame_rate as f64;
     let w = real_project.settings.output_width.max(1) as u32;
     let h = real_project.settings.output_height.max(1) as u32;
     println!("output={w}x{h} fps={fr}");
 
     // Resolve param IDs from the loaded project BEFORE sending to content thread.
+    // --animate goes through the same resolver: a bare name like "orbit" must
+    // land on the prefixed "5_orbit", otherwise set_param is a silent no-op.
+    let animate: Option<(usize, String, f32)> = animate.map(|(param, delta)| {
+        let (layer_idx, resolved) = resolve_param_id(&real_project, &param);
+        (layer_idx, resolved, delta)
+    });
     let mut resolved_sets: Vec<(usize, String, f32)> = Vec::new();
     for (param_id, value) in &sets {
         let (layer_idx, resolved_id) = resolve_param_id(&real_project, param_id);
         resolved_sets.push((layer_idx, resolved_id, *value));
+    }
+    let mut resolved_set_ats: Vec<(u32, usize, String, f32)> = Vec::new();
+    for (frame, param_id, value) in &set_ats {
+        let (layer_idx, resolved_id) = resolve_param_id(&real_project, param_id);
+        resolved_set_ats.push((*frame, layer_idx, resolved_id, *value));
     }
 
     let (resolved_flip_layer, resolved_flip_param) = if let Some(ref flip_id) = live_flip_param {
@@ -344,6 +428,7 @@ pub fn run(args: &[String]) -> ! {
     let empty = manifold_core::project::Project::default();
     let mut ct = headless_content_thread(empty, w, h);
     ct.timer.set_target_fps(fr);
+    ct.timer.set_frame_clocked(frame_clock);
     crate::content_thread::apply_realtime_thread_policy(fr);
     ct.handle_command(ContentCommand::LoadProject(Box::new(real_project)));
 
@@ -379,6 +464,7 @@ pub fn run(args: &[String]) -> ! {
             || frame == 120
             || frame == 300
             || frame == total.saturating_sub(1)
+            || capture_every.is_some_and(|n| frame >= capture_from && frame.is_multiple_of(n))
             || disable_driver_at.is_some_and(|n| {
                 frame == n + 5 || frame == n + 15 || frame == n + 30 || frame == n + 90
             })
@@ -392,6 +478,19 @@ pub fn run(args: &[String]) -> ! {
     let mut live_flip_sent = false;
 
     for frame in 0..rotation_frames {
+        for (at, layer_idx, param, value) in &resolved_set_ats {
+            if *at == frame {
+                let (layer_idx, param, value) = (*layer_idx, param.clone(), *value);
+                ct.handle_command(ContentCommand::MutateProject(Box::new(move |project| {
+                    if let Some(g) = project.timeline.layers.get_mut(layer_idx).and_then(|l| l.gen_params_mut()) {
+                        let old = g.get_param(&param);
+                        g.set_param(&param, value);
+                        let new = g.get_param(&param);
+                        eprintln!("[rt-capture] --set-at f{frame}: layer[{layer_idx}] param '{param}' {old:.2} → {new:.2}");
+                    }
+                })));
+            }
+        }
         if disable_driver_at == Some(frame) {
             ct.handle_command(ContentCommand::MutateProject(Box::new(move |project| {
                 if let Some(g) = project.timeline.layers[0].gen_params_mut()
@@ -404,17 +503,18 @@ pub fn run(args: &[String]) -> ! {
             })));
             println!("=== DRIVERS DISABLED at frame {frame} (transport keeps playing) ===");
         }
-        if let Some((param, delta)) = &animate {
+        if let Some((layer_idx, param, delta)) = &animate {
+            let layer_idx = *layer_idx;
             let base = *animate_base.get_or_insert_with(|| {
                 ct.engine
                     .project()
-                    .and_then(|p| p.timeline.layers[0].gen_params())
+                    .and_then(|p| p.timeline.layers[layer_idx].gen_params())
                     .map(|g| g.get_param(param))
                     .unwrap_or(0.0)
             });
             let (param, value) = (param.clone(), base + frame as f32 * delta);
             ct.handle_command(ContentCommand::MutateProject(Box::new(move |project| {
-                if let Some(g) = project.timeline.layers[0].gen_params_mut() {
+                if let Some(g) = project.timeline.layers[layer_idx].gen_params_mut() {
                     g.set_param(&param, value);
                 }
             })));
@@ -423,7 +523,20 @@ pub fn run(args: &[String]) -> ! {
             arm_capture();
         }
         ct.timer.wait_for_deadline();
+        let gpu_t0 = std::time::Instant::now();
         ct.tick_frame(&state_tx);
+        if sync_gpu {
+            // Block until this frame's command buffer completes. Wall-clock
+            // from tick start to fence done is the per-frame GPU cost (CPU
+            // encode ~0.3ms is negligible overlap) — the metric a frame budget
+            // is measured against. Without this the content thread pipelines
+            // and per-frame times read as CPU encode only.
+            ct.content_pipeline.wait_for_render_complete();
+            eprintln!(
+                "[GPU_FRAME_MS] frame={frame} ms={:.2}",
+                gpu_t0.elapsed().as_secs_f64() * 1000.0
+            );
+        }
         if let Some(dev) = ct.content_pipeline.native_device() { drain_captures(dev, frame, &mut last_stats); }
     }
 

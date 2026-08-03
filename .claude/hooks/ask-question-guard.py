@@ -37,14 +37,12 @@ sys.path.insert(0, DAEMON_DIR)
 
 BOUNCE_DIR = os.path.join(DAEMON_DIR, "verdicts", "ask_question_bounced")
 
-# 30s not 10 (raised 2026-07-10): telemetry 07-05..07-09 showed 13/14
-# semantic calls timing out — `claude -p` spawn overhead alone is seconds, so
-# the 10s budget sat just under the healthy mode (spawn + ~3s call) and the
-# tier effectively didn't exist. Against a question that pauses the human for
-# minutes, 30s is still free. The saturated mode (minutes, fleet throttling)
-# is not solved by any budget — common.classifier_throttled() skips the call
-# outright when the last classifier call ran slow, instead of burning a dead
-# wait. A timeout still fails open, and still refreshes the throttle stamp.
+# 30s timeout: `claude -p` spawn overhead alone is seconds. Against a
+# question that pauses the human for minutes, 30s is still free. The saturated
+# mode (minutes, fleet throttling) is not solved by any budget —
+# common.classifier_throttled() skips the call outright when the last
+# classifier call ran slow, instead of burning a dead wait. A timeout still
+# fails open, and still refreshes the throttle stamp.
 ASK_GATE_TIMEOUT_S = 30
 
 ASK_GATE_RUBRIC = """You judge ONE question that an AI coding agent is about to ask its human
@@ -145,9 +143,8 @@ def main():
                 "destructive-action call — not a cost tradeoff."
             )
         else:
-            # Semantic tier (wired 2026-07-05 with Peter's explicit sign-off).
-            # Synchronous because a question is rare and already blocking;
-            # any error/timeout/low-confidence verdict falls open.
+            # Semantic tier. Synchronous because a question is rare and already
+            # blocking; any error/timeout/low-confidence verdict falls open.
             tier = "semantic"
             if common.classifier_throttled():
                 # The last classifier call (any caller) timed out or crawled —

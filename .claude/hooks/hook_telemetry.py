@@ -34,6 +34,40 @@ _HOOKS_DIR = Path(__file__).resolve().parent
 _LOG = _HOOKS_DIR.parent / "telemetry" / "hook-fires.jsonl"
 
 
+def _derive_decision(stdout: bytes):
+    """Best-effort parse of hook stdout to derive a decision label.
+
+    Returns a string or None. Never raises.
+    """
+    if not stdout:
+        return None
+    try:
+        payload = json.loads(stdout)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None
+
+    # Permission gates (PreToolUse / AskUserQuestion) carry their verdict
+    # in hookSpecificOutput.permissionDecision.
+    hso = payload.get("hookSpecificOutput")
+    if isinstance(hso, dict):
+        pd = hso.get("permissionDecision")
+        if isinstance(pd, str) and pd:
+            return pd
+
+    # Stop / SubagentStop hooks carry a top-level decision.
+    d = payload.get("decision")
+    if isinstance(d, str) and d:
+        return d
+
+    # Context injection: the hook added additional context to the turn.
+    if isinstance(hso, dict) and isinstance(hso.get("additionalContext"), str) and hso["additionalContext"]:
+        return "context"
+    if isinstance(payload.get("additionalContext"), str) and payload["additionalContext"]:
+        return "context"
+
+    return None
+
+
 def main():
     if len(sys.argv) != 2:
         print("hook_telemetry: usage: hook_telemetry.py <hook-file.py>",
@@ -54,6 +88,9 @@ def main():
         return 0
     ms = round((time.time() - start) * 1000)
 
+    # Derive decision from stdout before mirroring (the parse is best-effort).
+    decision = _derive_decision(r.stdout)
+
     # Mirror the hook verbatim — the harness must see exactly what the hook
     # produced, no framing, no reordering.
     sys.stdout.buffer.write(r.stdout)
@@ -68,16 +105,16 @@ def main():
             try:
                 payload = json.loads(stdin_data)
                 event = payload.get("hook_event_name", "")
-                # Seat attribution (2026-07-28): the teammate-vs-lead payload
-                # shape is the enforcement surface — guards mis-tiered a
-                # teammate because payloads carry the PARENT transcript.
-                # Record the discriminating fields so seat bugs are a lookup.
+                # Seat attribution: the teammate-vs-lead payload shape is the
+                # enforcement surface — guards mis-tiered a teammate because
+                # payloads carry the PARENT transcript. Record the discriminating
+                # fields so seat bugs are a lookup.
                 for k in ("session_id", "teammate_name", "team_name", "tool_name"):
                     v = payload.get(k)
                     if v:
                         seat[k] = v
-                # Full key inventory: the teammate-payload shape question
-                # (does ANY field discriminate seats?) must be a lookup.
+                # Full key inventory: the teammate-payload shape question (does
+                # ANY field discriminate seats?) must be a lookup.
                 seat["keys"] = ",".join(sorted(payload.keys()))
                 # Command traceability (BUG-0x4w): a permission prompt must
                 # be a lookup, not a reconstruction — record what was about
@@ -89,18 +126,21 @@ def main():
                         seat["cmd"] = cmd[:500]
             except (json.JSONDecodeError, AttributeError):
                 pass
+        record = {
+            "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "hook": hook.name,
+            "event": event,
+            "exit": r.returncode,
+            "out": len(r.stdout),
+            "err": len(r.stderr),
+            "ms": ms,
+            **seat,
+        }
+        if decision is not None:
+            record["decision"] = decision
         _LOG.parent.mkdir(parents=True, exist_ok=True)
         with open(_LOG, "a") as f:
-            f.write(json.dumps({
-                "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                "hook": hook.name,
-                "event": event,
-                "exit": r.returncode,
-                "out": len(r.stdout),
-                "err": len(r.stderr),
-                "ms": ms,
-                **seat,
-            }, sort_keys=True) + "\n")
+            f.write(json.dumps(record, sort_keys=True) + "\n")
     except Exception:
         pass  # telemetry must never change hook behavior
 

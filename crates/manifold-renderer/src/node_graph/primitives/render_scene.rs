@@ -229,30 +229,53 @@ const AO_SAMPLES_PER_PIXEL: u32 = 4;
 /// and this file's synthetic test scenes) — scene-scale dependent per
 /// hero asset; Peter's morning gate tunes per scene.
 const AO_RADIUS_WORLD_UNITS: f32 = 0.5;
-/// RAYTRACING_DESIGN.md section 5.2 P2: flat ambient/env color for the
-/// demodulated-irradiance term = `atmosphere.ambient_tint * this scale *
-/// scene material ambient` (the card's "Ambient" knob — Peter 2026-07-23:
-/// no separate RT ambient control; knob at 0 = true black with RT on).
-/// This constant is the knob-at-1 ceiling. Committed range 0.05–0.5
-/// (fraction of the tint's own [0,1] magnitude); Peter's morning gate
-/// tunes the exact ambient intensity.
+/// RAYTRACING_DESIGN.md section 5.2 P2, ED2 (section 14.2): the flat
+/// ambient's knob-at-1 ceiling. The Rust side no longer reads this
+/// constant directly (the flat ambient is recomposed consumer-side in
+/// `render_scene.wgsl`'s `rt_or_flat_ambient`); it is kept here as the
+/// single source of truth for the WGSL mirror `AMBIENT_IRRADIANCE_SCALE`
+/// in `shaders/render_scene.wgsl` — same cross-mirror discipline as
+/// `RT_REFL_PREFILTER_MAX_MIP` (the WGSL side uses it; this side exists
+/// so the mirror has one owner).
+#[expect(
+    dead_code,
+    reason = "single source of truth for the WGSL mirror constant; the WGSL side reads it"
+)]
 const AMBIENT_IRRADIANCE_SCALE: f32 = 0.15;
+
+/// RAYTRACING_DESIGN.md section 16 TL1: wrap-diffuse constant, single source
+/// of truth for the WGSL mirror `RT_TRANSMISSION_WRAP` in
+/// `shaders/render_scene.wgsl`. Range 0..1 — 0 = sharp terminator (only
+/// dead-on backlight), 1 = full wrap (petals glow at wide angles).
+#[expect(
+    dead_code,
+    reason = "single source of truth for the WGSL mirror constant; the WGSL side reads it"
+)]
+const RT_TRANSMISSION_WRAP: f32 = 0.5;
 /// RAYTRACING_DESIGN.md section 5.2 P2/D3: FLOOR on the temporal irradiance
 /// blend weight (`AccumulateParams::alpha`). The kernel blends at `1/n` where
 /// `n` is the texel's accumulated frame count, so a still surface converges;
-/// this floor caps history at `1/alpha` frames (50 here, ~0.8s at 60fps) so
+/// this floor caps history at `1/alpha` frames (100 here, ~1.7s at 60fps) so
 /// genuinely changing light still tracks instead of smearing forever.
 /// Committed range 0.01–0.05: lower = cleaner stills, more lag on animated
 /// light. It was a FIXED weight of 0.15 until 2026-07-30 — a fixed weight has
 /// a permanent noise floor (~28% of raw single-frame noise) that no amount of
 /// standing still removes, which was the static boil Peter reported.
-const IRRADIANCE_ACCUM_ALPHA: f32 = 0.02;
+/// 0.02 → 0.01 (2026-07-31): the rt-noise gate shows no difference (its
+/// capture depth sits below either cap), but a converged LIVE shot — minutes
+/// static, exactly Peter's flicker report — reaches the cap, where residual
+/// variance scales as alpha/(2-alpha): halving the floor halves the boil
+/// every edge-stopped thin-geometry texel sits on (the atrous filter can't
+/// average across its own edge stops, so those texels live on this floor).
+/// The lag cost is covered by the `lighting_key` + per-texel moments gates,
+/// which snap real changes to alpha 0.5; full gpu-proofs suite green.
+const IRRADIANCE_ACCUM_ALPHA: f32 = 0.01;
 /// RAYTRACING_DESIGN.md section 5.2 P3: one-bounce GI gather rays per pixel
 /// (emissive-hit + sun-bounce). Committed range 1–8 (higher = smoother
 /// emissive bounce, more GPU cost, on top of `AO_SAMPLES_PER_PIXEL`'s own
 /// rays in the SAME half-res dispatch); Peter's morning gate tunes within
 /// it.
-const GI_SAMPLES_PER_PIXEL: u32 = 2;
+const GI_SAMPLES_PER_PIXEL: u32 = 4;
 /// GGX reflection rays per pixel, in the same half-res dispatch. Was 1,
 /// which measured 4.7 sRGB levels of frame-to-frame change on a fully static
 /// scene with a 171-level 99.9th percentile — variance no temporal filter can
@@ -522,6 +545,11 @@ struct RenderSceneUniforms {
     /// `KHR_materials_volume`'s `attenuationColor` (`xyz`, default
     /// `[1,1,1]` — neutral). `w` reserved.
     volume_attenuation_color: [f32; 4],
+    /// RAYTRACING_DESIGN.md section 16 TL7: KHR_materials_diffuse_transmission.
+    /// `x` = diffuse transmission factor (default `0.0`, inert — byte-identical
+    /// to pre-TL-A output). `yzw` reserved (first consumer = the future
+    /// color-texture presence flag, section 16.8).
+    diffuse_transmission_params: [f32; 4],
     /// RAYTRACING_DESIGN.md section 9 RD9/RD1: RT feature flags the FRAGMENT
     /// shader needs (scene_params.w only says "RT active", not "the
     /// reflection texture holds traced data this frame"). `x` =
@@ -529,9 +557,18 @@ struct RenderSceneUniforms {
     /// non-empty casters — written alongside `scene_params[3]`). `yzw`
     /// reserved (R2's specular-accumulation flags).
     rt_flags: [f32; 4],
+    /// TAA/MetalFX velocity jitter exclusion: `(cur_x, cur_y, prev_x,
+    /// prev_y)` as NDC offsets (jitter_px × 2/dim). MetalFX's temporal
+    /// scaler expects motion vectors WITHOUT camera jitter (its
+    /// `jitterOffset` compensates the current frame's jitter itself); the
+    /// velocity varyings carry it baked into both clip positions, so the
+    /// fragment subtracts `xy - zw` — the error was one previous-frame
+    /// jitter (±0.5 render px) of phantom motion every frame. All zeros
+    /// when `temporal_upscale` is off — velocity byte-identical to before.
+    velocity_jitter: [f32; 4],
 }
 
-// 736 = 46 × 16 → the naga 16-byte uniform-size rule holds. Was 480 before
+// 784 = 49 × 16 → the naga 16-byte uniform-size rule holds. Was 480 before
 // GLB_CONFORMANCE_DESIGN.md G-P4/D5: `pbr_specular_tint` + five per-map
 // `*_uv_m`/`*_uv_t` pairs (+176 bytes, eleven new vec4s —
 // `ior`/`specular_factor` rode existing reserved slots on
@@ -544,7 +581,10 @@ struct RenderSceneUniforms {
 // ONE migration sized for all five families this doc's phases add, per
 // D2 (never grown again per-family). Now 752 after RAYTRACING_DESIGN.md section 9
 // RD9: `rt_flags` (+16) — an RT feature flag word, not a glTF family.
-const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 752);
+// 768 after the velocity jitter-exclusion quad (D-64's MetalFX audit).
+// 784 after RAYTRACING_DESIGN.md section 16 TL7: diffuse_transmission_params
+// (+16 bytes, one new vec4).
+const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 784);
 
 /// Per-(caster, object) uniform for the shadow depth pass
 /// (`shaders/shadow_depth.wgsl`). The vertex shader composes
@@ -644,6 +684,19 @@ pub struct RenderScene {
     /// `None` = no history yet (same first-frame seeding rule as
     /// `prev_model`); reset on every `rebuild`.
     prev_view_proj: Option<[[f32; 4]; 4]>,
+    /// Previous frame's camera position + forward direction, captured
+    /// alongside `prev_view_proj` (same first-frame seeding and rebuild
+    /// reset). Feeds `AccumulateParams::cam_motion`: the temporal change
+    /// gates cannot tell a real lighting change from motion-induced texel
+    /// change, so their bands widen with this magnitude — without it a
+    /// rotating camera snapped the gates every frame and the
+    /// snap→rebuild→retrip cycle boiled the image.
+    prev_cam_state: Option<([f32; 3], [f32; 3])>,
+    /// Previous frame's camera jitter as an NDC offset (0,0 when
+    /// `temporal_upscale` is off) — paired with this frame's in
+    /// `RenderSceneUniforms::velocity_jitter` so the MetalFX motion
+    /// vectors exclude jitter from both ends.
+    prev_jitter_ndc: Option<(f32, f32)>,
     /// RAYTRACING_DESIGN.md section 5.2 P4: monotonic per-node frame counter
     /// driving the camera-jitter sequence
     /// ([`crate::metalfx_temporal_upscaler::jitter_offset`]) when
@@ -841,9 +894,21 @@ pub struct RenderScene {
     /// resource here (unwired/RT-off scenes never allocate these).
     rt_mask_half: Option<manifold_gpu::GpuTexture>,
     rt_mask_full: Option<manifold_gpu::GpuTexture>,
+    /// RS-A (caster cap 4 -> 8): second shadow-visibility quad (caster
+    /// slots 4-7) — half-res trace target + full-res upsampled mask, same
+    /// Rgba16Float format and lifecycle as the first quad.
+    rt_mask_half2: Option<manifold_gpu::GpuTexture>,
+    rt_mask_full2: Option<manifold_gpu::GpuTexture>,
     rt_mask_width: u32,
     rt_mask_height: u32,
     rt_params_buffer: Option<manifold_gpu::GpuBuffer>,
+    /// RT-A3a (D16a split mode): the mask dispatch's OWN params buffer.
+    /// Sharing `rt_params_buffer` raced: `upload()` is a CPU write at
+    /// encode time, so the second upload (lighting) overwrites the first
+    /// (mask) before the GPU runs either — the mask dispatch executed
+    /// with shadow_spp=0 and never wrote the mask (all-zero vis = no
+    /// sun in split mode; Peter's "no lighting at all" 2026-08-02).
+    rt_mask_params_buffer: Option<manifold_gpu::GpuBuffer>,
     /// RAYTRACING_DESIGN.md section 5.2 P3: per-object `GiMaterial` (albedo,
     /// emissive) table for the GI gather's emissive-hit + sun-bounce terms
     /// — rebuilt (CPU-mapped, rewritten in place, no realloc unless the
@@ -901,6 +966,26 @@ pub struct RenderScene {
     // RT-R2 (RD6): specular history ping-pong pair — same lifecycle +
     // same ping clock as rt_irr_history (I-R2: one reset path, one flip).
     rt_refl_history: [Option<manifold_gpu::GpuTexture>; 2],
+    // SV-ACCUM: shadow-visibility history ping-pong pair — the four caster
+    // slots accumulate temporally in `accumulate_irradiance` (previously the
+    // only RT channel with no history: raw per-frame samples straight to the
+    // fragment shader = the penumbra boil). Same lifecycle + same ping
+    // clock as rt_irr_history; the fragment's binding-41 mask reads the
+    // just-written slot, exactly the `rt_irr_tex` discipline.
+    rt_sv_history: [Option<manifold_gpu::GpuTexture>; 2],
+    // SV-ACCUM moments: per-channel first/second visibility moments.
+    rt_sv_m1_history: [Option<manifold_gpu::GpuTexture>; 2],
+    rt_sv_m2_history: [Option<manifold_gpu::GpuTexture>; 2],
+    // SV-ACCUM snap-hold countdown (`.x`) — a sigma-gate trip holds the
+    // n=2 snap for 4 frames (the straddling moments deaden the gate right
+    // after a real crossing; see the binding-21 comment in raytrace.rs).
+    rt_sv_hold_history: [Option<manifold_gpu::GpuTexture>; 2],
+    // RS-A (caster cap 4 -> 8): second shadow-visibility quad SV-ACCUM
+    // — independent sigma-gate per quad, same flip clock as the first.
+    rt_sv2_history: [Option<manifold_gpu::GpuTexture>; 2],
+    rt_sv2_m1_history: [Option<manifold_gpu::GpuTexture>; 2],
+    rt_sv2_m2_history: [Option<manifold_gpu::GpuTexture>; 2],
+    rt_sv2_hold_history: [Option<manifold_gpu::GpuTexture>; 2],
     rt_depth_history: [Option<manifold_gpu::GpuTexture>; 2],
     rt_normal_history: [Option<manifold_gpu::GpuTexture>; 2],
     /// RT-T1-D (BUG-312): per-texel luminance moments (mean, mean-of-
@@ -917,6 +1002,10 @@ pub struct RenderScene {
     /// "should color history be discarded this frame").
     rt_moments_valid: bool,
     rt_history_ping: usize,
+    /// ED2 (section 14, PBR-only RT consumers): one-shot latch for the
+    /// "phong/cel draw in an RT scene" warning — logged once, never
+    /// per-frame.
+    rt_nonpbr_warned: bool,
     /// RT-T1-C: current-frame half-res/full-res primary-hit vertex normal
     /// (same half/full lifecycle as `rt_irr_half`/`rt_irr_full` — produced
     /// fresh every RT-ready frame, not persistent history).
@@ -929,8 +1018,21 @@ pub struct RenderScene {
     /// (what `accumulate_irradiance` already reads), so that call site
     /// needs no changes for which buffer it reads.
     rt_mask_full_b: Option<manifold_gpu::GpuTexture>,
+    /// RS-A (caster cap 4 -> 8): second shadow-visibility quad à-trous scratch.
+    rt_mask_full2_b: Option<manifold_gpu::GpuTexture>,
     rt_irr_full_b: Option<manifold_gpu::GpuTexture>,
     rt_normal_full_b: Option<manifold_gpu::GpuTexture>,
+    /// RT native-resolution toggle, parsed once at init from
+    /// `MANIFOLD_RT_NATIVE_TERMS` (comma-separated subset of
+    /// shadow,ao,gi,reflection). RT-A3a split dispatch: terms map to dispatches
+    /// by their actual output writes. Shadow → mask dispatch (out_sv).
+    /// AO/GI/reflection → lighting dispatch (out_irr/out_refl).
+    /// Each dispatch runs at native resolution when ANY of its terms is listed.
+    /// Empty/absent = D11 half-res for all dispatches.
+    rt_native_shadow: bool,
+    rt_native_ao: bool,
+    rt_native_gi: bool,
+    rt_native_reflection: bool,
     /// Dedicated CPU-mapped upload buffer for `AtrousParams` (tiny: two
     /// `u32`s) — separate from `rt_params_buffer`/
     /// `rt_accumulate_params_buffer` for the same non-clobbering reason
@@ -1100,6 +1202,8 @@ impl RenderScene {
             rt_temporal_unavailable_logged: false,
             prev_model: Vec::new(),
             prev_view_proj: None,
+            prev_cam_state: None,
+            prev_jitter_ndc: None,
             jitter_frame_index: 0,
             dummy_texture: None,
             sampler: None,
@@ -1141,9 +1245,12 @@ impl RenderScene {
             rt_accel_built: false,
             rt_mask_half: None,
             rt_mask_full: None,
+            rt_mask_half2: None,
+            rt_mask_full2: None,
             rt_mask_width: 0,
             rt_mask_height: 0,
             rt_params_buffer: None,
+            rt_mask_params_buffer: None,
             rt_gi_materials: None,
             rt_gi_materials_capacity: 0,
             rt_obj_motion: None,
@@ -1157,16 +1264,30 @@ impl RenderScene {
             rt_refl_full_b: None,
             rt_irr_history: [None, None],
             rt_refl_history: [None, None],
+            rt_sv_history: [None, None],
+            rt_sv_m1_history: [None, None],
+            rt_sv_m2_history: [None, None],
+            rt_sv_hold_history: [None, None],
+            rt_sv2_history: [None, None],
+            rt_sv2_m1_history: [None, None],
+            rt_sv2_m2_history: [None, None],
+            rt_sv2_hold_history: [None, None],
             rt_depth_history: [None, None],
             rt_normal_history: [None, None],
             rt_moments_history: [None, None],
             rt_moments_valid: false,
             rt_history_ping: 0,
+            rt_nonpbr_warned: false,
             rt_normal_half: None,
             rt_normal_full: None,
             rt_mask_full_b: None,
+            rt_mask_full2_b: None,
             rt_irr_full_b: None,
             rt_normal_full_b: None,
+            rt_native_shadow: false,
+            rt_native_ao: false,
+            rt_native_gi: false,
+            rt_native_reflection: false,
             rt_atrous_params_buffer: None,
             rt_lighting_key: None,
             rt_irr_width: 0,
@@ -1185,6 +1306,22 @@ impl RenderScene {
             object_port_names: Vec::new(),
             light_port_names: Vec::new(),
         };
+
+        // Parse MANIFOLD_RT_NATIVE_TERMS env var once at init
+        let native_terms = std::env::var("MANIFOLD_RT_NATIVE_TERMS")
+            .unwrap_or_default()
+            .to_lowercase();
+        let terms: std::collections::HashSet<&str> = native_terms
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        s.rt_native_shadow = terms.contains("shadow");
+        s.rt_native_ao = terms.contains("ao");
+        s.rt_native_gi = terms.contains("gi");
+        s.rt_native_reflection = terms.contains("reflection");
+
         s.rebuild(DEFAULT_OBJECTS, DEFAULT_LIGHTS);
         s
     }
@@ -1322,6 +1459,7 @@ impl RenderScene {
         // starts in.
         self.prev_model = vec![None; n_obj];
         self.prev_view_proj = None;
+        self.prev_cam_state = None;
 
         // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P4 (R5): format every
         // port name exactly once, here, at rebuild time (only reached on an
@@ -1489,7 +1627,7 @@ impl RenderScene {
 
     fn ensure_dummy_texture(&mut self, device: &manifold_gpu::GpuDevice) {
         if self.dummy_texture.is_none() {
-            self.dummy_texture = Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
+            let tex = device.create_texture(&manifold_gpu::GpuTextureDesc {
                 width: 1,
                 height: 1,
                 depth: 1,
@@ -1498,7 +1636,15 @@ impl RenderScene {
                 usage: manifold_gpu::GpuTextureUsage::SHADER_READ,
                 label: "node.render_scene dummy",
                 mip_levels: 1,
-            }));
+            });
+            // RAYTRACING_DESIGN.md section 14 ED1: the dummy doubles as the
+            // "no env chain" stand-in for the GI gather's env-miss (and the
+            // reflection miss) — it must READ as black, not as undefined
+            // GPU memory. Metal's initial texture contents are undefined;
+            // upload a 1x1 black Rgba16Float texel once.
+            let black = [0u8; 8]; // 4 x f16 zero
+            device.upload_texture(&tex, &black);
+            self.dummy_texture = Some(tex);
         }
     }
 
@@ -1831,12 +1977,37 @@ impl RenderScene {
     /// slot (r=slot 0 .. a=slot 3); AO moved out entirely (folded into
     /// irradiance in-kernel, never written here) — the SAME texture,
     /// extending the SAME dispatch (D16's seam note), not a second mask.
+    /// RT-A3a: split into mask and lighting dispatches, each at its own resolution.
+    /// Resolution of the mask dispatch (shadow visibility only). Half-res by
+    /// default; native when `rt_native_shadow` is set.
+    fn rt_mask_trace_size(&self, width: u32, height: u32) -> (u32, u32) {
+        if self.rt_native_shadow {
+            (width, height)
+        } else {
+            (width.div_ceil(2).max(1), height.div_ceil(2).max(1))
+        }
+    }
+
+    /// Resolution of the lighting dispatch (AO + GI + reflection + normal).
+    /// Half-res by default; native when ANY lighting term is listed in
+    /// `MANIFOLD_RT_NATIVE_TERMS`.
+    fn rt_lighting_trace_size(&self, width: u32, height: u32) -> (u32, u32) {
+        let any_native = self.rt_native_ao
+            || self.rt_native_gi
+            || self.rt_native_reflection;
+        if any_native {
+            (width, height)
+        } else {
+            (width.div_ceil(2).max(1), height.div_ceil(2).max(1))
+        }
+    }
+
     fn ensure_rt_masks(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
         if self.rt_mask_width == width && self.rt_mask_height == height && self.rt_mask_full.is_some() {
             return;
         }
-        let half_w = width.div_ceil(2).max(1);
-        let half_h = height.div_ceil(2).max(1);
+
+        let (mask_trace_w, mask_trace_h) = self.rt_mask_trace_size(width, height);
         let make = |w: u32, h: u32, label: &'static str| {
             device.create_texture(&manifold_gpu::GpuTextureDesc {
                 width: w,
@@ -1851,10 +2022,15 @@ impl RenderScene {
                 mip_levels: 1,
             })
         };
-        self.rt_mask_half = Some(make(half_w, half_h, "node.render_scene rt_mask_half (RT-D3/RT-P2 vis+ao)"));
-        self.rt_mask_full = Some(make(width, height, "node.render_scene rt_mask_full (RT-D3/RT-P2 vis+ao)"));
+        self.rt_mask_half = Some(make(mask_trace_w, mask_trace_h, "node.render_scene rt_mask_half (RT-D3/RT-P2 vis)"));
+        self.rt_mask_full = Some(make(width, height, "node.render_scene rt_mask_full (RT-D3/RT-P2 vis)"));
+        // RS-A (caster cap 4 -> 8): second shadow-visibility quad — same format and lifecycle.
+        self.rt_mask_half2 = Some(make(mask_trace_w, mask_trace_h, "node.render_scene rt_mask_half2 (RS-A vis)"));
+        self.rt_mask_full2 = Some(make(width, height, "node.render_scene rt_mask_full2 (RS-A vis)"));
         // RT-T1-D: à-trous ping-pong scratch — see the field's doc comment.
         self.rt_mask_full_b = Some(make(width, height, "node.render_scene rt_mask_full_b (RT-T1-D atrous)"));
+        // RS-A: second sv quad à-trous ping-pong scratch.
+        self.rt_mask_full2_b = Some(make(width, height, "node.render_scene rt_mask_full2_b (RS-A atrous)"));
         self.rt_mask_width = width;
         self.rt_mask_height = height;
     }
@@ -1871,8 +2047,11 @@ impl RenderScene {
         if self.rt_irr_width == width && self.rt_irr_height == height && self.rt_irr_history[0].is_some() {
             return false;
         }
-        let half_w = width.div_ceil(2).max(1);
-        let half_h = height.div_ceil(2).max(1);
+
+        // RT-A3a: half-res textures are allocated at each dispatch's own resolution.
+        // Mask textures use rt_mask_trace_size, lighting textures use rt_lighting_trace_size.
+        let (_mask_half_w, _mask_half_h) = self.rt_mask_trace_size(width, height);
+        let (light_half_w, light_half_h) = self.rt_lighting_trace_size(width, height);
         let make = |w: u32, h: u32, format: manifold_gpu::GpuTextureFormat, label: &'static str| {
             device.create_texture(&manifold_gpu::GpuTextureDesc {
                 width: w,
@@ -1888,19 +2067,20 @@ impl RenderScene {
             })
         };
         let rgba16 = manifold_gpu::GpuTextureFormat::Rgba16Float;
-        self.rt_irr_half = Some(make(half_w, half_h, rgba16, "node.render_scene rt_irr_half (RT-P2)"));
+        // Lighting textures (irradiance, reflection, normal) at lighting resolution.
+        self.rt_irr_half = Some(make(light_half_w, light_half_h, rgba16, "node.render_scene rt_irr_half (RT-P2)"));
         self.rt_irr_full = Some(make(width, height, rgba16, "node.render_scene rt_irr_full (RT-P2)"));
         // RT-R1 (section 9.3): half-res reflection-radiance output — same lifecycle
         // as `rt_irr_half` (the dispatch writes it; T5's kernel is the writer;
         // inert/bind-only until then).
-        self.rt_refl_half = Some(make(half_w, half_h, rgba16, "node.render_scene rt_refl_half (RT-R1)"));
+        self.rt_refl_half = Some(make(light_half_w, light_half_h, rgba16, "node.render_scene rt_refl_half (RT-R1)"));
         // RT-R1 (section 9.3): full-res reflection-radiance output target & atrous
         // scratch (mirror `rt_irr_full`/`rt_irr_full_b`). Inert until T5.
         self.rt_refl_full = Some(make(width, height, rgba16, "node.render_scene rt_refl_full (RT-R1)"));
         self.rt_refl_full_b = Some(make(width, height, rgba16, "node.render_scene rt_refl_full_b (RT-R1 atrous)"));
         // RT-T1-C: current-frame primary-hit normal, same half/full
         // lifecycle as irradiance above (not persistent history).
-        self.rt_normal_half = Some(make(half_w, half_h, rgba16, "node.render_scene rt_normal_half (RT-T1-C)"));
+        self.rt_normal_half = Some(make(light_half_w, light_half_h, rgba16, "node.render_scene rt_normal_half (RT-T1-C)"));
         self.rt_normal_full = Some(make(width, height, rgba16, "node.render_scene rt_normal_full (RT-T1-C)"));
         // RT-T1-D: second full-res scratch set for the à-trous filter's
         // ping-pong (same lifecycle as irradiance/normal above — not
@@ -1921,6 +2101,51 @@ impl RenderScene {
             make(width, height, rgba16, "node.render_scene rt_refl_history_b (RT-R2)"),
         ]
         .map(Some);
+        // SV-ACCUM: shadow-visibility history pair — same lifecycle, reset
+        // rule, and ping clock as rt_irr_history/rt_refl_history.
+        self.rt_sv_history = [
+            make(width, height, rgba16, "node.render_scene rt_sv_history_a (SV-ACCUM)"),
+            make(width, height, rgba16, "node.render_scene rt_sv_history_b (SV-ACCUM)"),
+        ]
+        .map(Some);
+        // SV-ACCUM moments: per-channel first/second visibility moments.
+        self.rt_sv_m1_history = [
+            make(width, height, rgba16, "node.render_scene rt_sv_m1_a (SV-ACCUM)"),
+            make(width, height, rgba16, "node.render_scene rt_sv_m1_b (SV-ACCUM)"),
+        ]
+        .map(Some);
+        self.rt_sv_m2_history = [
+            make(width, height, rgba16, "node.render_scene rt_sv_m2_a (SV-ACCUM)"),
+            make(width, height, rgba16, "node.render_scene rt_sv_m2_b (SV-ACCUM)"),
+        ]
+        .map(Some);
+        self.rt_sv_hold_history = [
+            make(width, height, rgba16, "node.render_scene rt_sv_hold_a (SV-ACCUM)"),
+            make(width, height, rgba16, "node.render_scene rt_sv_hold_b (SV-ACCUM)"),
+        ]
+        .map(Some);
+        // RS-A (caster cap 4 -> 8): second shadow-visibility quad SV-ACCUM —
+        // independent sigma-gate per quad, same flip clock and lifecycle.
+        self.rt_sv2_history = [
+            make(width, height, rgba16, "node.render_scene rt_sv2_history_a (RS-A SV-ACCUM)"),
+            make(width, height, rgba16, "node.render_scene rt_sv2_history_b (RS-A SV-ACCUM)"),
+        ]
+        .map(Some);
+        self.rt_sv2_m1_history = [
+            make(width, height, rgba16, "node.render_scene rt_sv2_m1_a (RS-A SV-ACCUM)"),
+            make(width, height, rgba16, "node.render_scene rt_sv2_m1_b (RS-A SV-ACCUM)"),
+        ]
+        .map(Some);
+        self.rt_sv2_m2_history = [
+            make(width, height, rgba16, "node.render_scene rt_sv2_m2_a (RS-A SV-ACCUM)"),
+            make(width, height, rgba16, "node.render_scene rt_sv2_m2_b (RS-A SV-ACCUM)"),
+        ]
+        .map(Some);
+        self.rt_sv2_hold_history = [
+            make(width, height, rgba16, "node.render_scene rt_sv2_hold_a (RS-A SV-ACCUM)"),
+            make(width, height, rgba16, "node.render_scene rt_sv2_hold_b (RS-A SV-ACCUM)"),
+        ]
+        .map(Some);
         self.rt_depth_history = [
             make(width, height, manifold_gpu::GpuTextureFormat::R32Float, "node.render_scene rt_depth_history_a (RT-T1-C)"),
             make(width, height, manifold_gpu::GpuTextureFormat::R32Float, "node.render_scene rt_depth_history_b (RT-T1-C)"),
@@ -1931,14 +2156,16 @@ impl RenderScene {
             make(width, height, rgba16, "node.render_scene rt_normal_history_b (RT-T1-C)"),
         ]
         .map(Some);
-        // RT-T1-D (BUG-312): luminance-moments ping-pong history — `Rg32Float`
+        // RT-T1-D (BUG-312): luminance-moments ping-pong history — `Rgba32Float`
         // (not `Rg16Float`) so `moment2 - moment1*moment1` doesn't collapse to
         // noise under half-float's ~3-decimal-digit precision at the 1e-4 to
         // 1e-5 variance scale this filter needs (see the MSL kernel's doc
-        // comment for the full cancellation argument).
+        // comment for the full cancellation argument). ED2: `.b` carries the
+        // temporally-accumulated ao (`accumulate_irradiance`'s `history_write.a`
+        // is the frame count, so the ao rides here).
         self.rt_moments_history = [
-            make(width, height, manifold_gpu::GpuTextureFormat::Rg32Float, "node.render_scene rt_moments_history_a (RT-T1-D)"),
-            make(width, height, manifold_gpu::GpuTextureFormat::Rg32Float, "node.render_scene rt_moments_history_b (RT-T1-D)"),
+            make(width, height, manifold_gpu::GpuTextureFormat::Rgba32Float, "node.render_scene rt_moments_history_a (RT-T1-D)"),
+            make(width, height, manifold_gpu::GpuTextureFormat::Rgba32Float, "node.render_scene rt_moments_history_b (RT-T1-D)"),
         ]
         .map(Some);
         self.rt_moments_valid = false;
@@ -1956,6 +2183,13 @@ impl RenderScene {
     fn ensure_rt_params_buffer(&mut self, device: &manifold_gpu::GpuDevice) {
         if self.rt_params_buffer.is_none() {
             self.rt_params_buffer = Some(device.create_buffer_shared(
+                std::mem::size_of::<manifold_gpu::raytrace::ShadowRayParams>() as u64,
+            ));
+        }
+        // RT-A3a: the mask dispatch needs its own (see the field's doc
+        // comment — a shared buffer races the two encode-time uploads).
+        if self.rt_mask_params_buffer.is_none() {
+            self.rt_mask_params_buffer = Some(device.create_buffer_shared(
                 std::mem::size_of::<manifold_gpu::raytrace::ShadowRayParams>() as u64,
             ));
         }
@@ -2315,7 +2549,7 @@ impl RenderScene {
         ("-> @location(0) vec4<f32> {", "-> FsOut {"),
         (
             "return vec4<f32>(rgb, albedo.a);",
-            "return FsOut(vec4<f32>(rgb, albedo.a), (in.clip_now.xy / in.clip_now.w) - (in.clip_prev.xy / in.clip_prev.w));",
+            "return FsOut(vec4<f32>(rgb, albedo.a), (in.clip_now.xy / in.clip_now.w) - (in.clip_prev.xy / in.clip_prev.w) - (u.velocity_jitter.xy - u.velocity_jitter.zw));",
         ),
     ];
 
@@ -2356,7 +2590,7 @@ impl RenderScene {
         ("-> @location(0) vec4<f32> {", "-> FsOut {"),
         (
             "return vec4<f32>(rgb, albedo.a);",
-            "return FsOut(vec4<f32>(rgb, albedo.a), (in.clip_now.xy / in.clip_now.w) - (in.clip_prev.xy / in.clip_prev.w), u.fog_params.z);",
+            "return FsOut(vec4<f32>(rgb, albedo.a), (in.clip_now.xy / in.clip_now.w) - (in.clip_prev.xy / in.clip_prev.w) - (u.velocity_jitter.xy - u.velocity_jitter.zw), u.fog_params.z);",
         ),
     ];
 
@@ -2877,9 +3111,15 @@ fn build_uniforms(
             material.volume_attenuation_color[2],
             0.0,
         ],
+        // RAYTRACING_DESIGN.md section 16 TL7: x = translucency factor,
+        // yzw reserved.
+        diffuse_transmission_params: [material.translucency, 0.0, 0.0, 0.0],
         // Overwritten per-object right after the build (rt_reflections
         // gate, section 9 RD9) — default 0 = substitution OFF.
         rt_flags: [0.0; 4],
+        // Overwritten per-object right after the build — 0 = no jitter
+        // correction (temporal_upscale off, or first frame).
+        velocity_jitter: [0.0; 4],
     }
 }
 
@@ -3284,6 +3524,43 @@ impl EffectNode for RenderScene {
         // motion, not a spurious first-frame zero.
         let prev_view_proj = self.prev_view_proj.unwrap_or(view_proj);
         self.prev_view_proj = Some(view_proj);
+        // Camera-motion magnitude for the accumulator's change gates
+        // (`AccumulateParams::cam_motion`): radians of view-direction turn
+        // plus translation weighted into the same units (0.3: at the
+        // typical 2–4 unit object distance, orbiting contributes roughly
+        // equally through both terms). First frame after load/rebuild is
+        // 0 — a held camera feeds the gates exactly 0, keeping the static
+        // path byte-identical.
+        let cam_motion = match self.prev_cam_state {
+            Some((ppos, pfwd)) => {
+                let d = (pfwd[0] * cam.fwd[0] + pfwd[1] * cam.fwd[1] + pfwd[2] * cam.fwd[2])
+                    .clamp(-1.0, 1.0);
+                let rot = d.acos();
+                let dp = ((cam.pos[0] - ppos[0]).powi(2)
+                    + (cam.pos[1] - ppos[1]).powi(2)
+                    + (cam.pos[2] - ppos[2]).powi(2))
+                .sqrt();
+                rot + dp * 0.3
+            }
+            None => 0.0,
+        };
+        self.prev_cam_state = Some((cam.pos, cam.fwd));
+        if std::env::var_os("MANIFOLD_PROBE").is_some() && self.jitter_frame_index.is_multiple_of(60) {
+            eprintln!(
+                "[probe] cam_motion={cam_motion:.4} pos=({:.3},{:.3},{:.3}) fwd=({:.3},{:.3},{:.3})",
+                cam.pos[0], cam.pos[1], cam.pos[2], cam.fwd[0], cam.fwd[1], cam.fwd[2]
+            );
+        }
+        // MetalFX velocity jitter exclusion (`velocity_jitter` uniform):
+        // this frame's and last frame's jitter as NDC offsets. MetalFX
+        // expects motion vectors jitter-free (its jitterOffset compensates
+        // the current frame); both clip varyings carry jitter baked in, so
+        // the fragment subtracts the delta. Zero when upscale is off.
+        let jitter_ndc = (
+            jitter_px.0 * 2.0 / width as f32,
+            jitter_px.1 * 2.0 / height as f32,
+        );
+        let prev_jitter_ndc = self.prev_jitter_ndc.replace(jitter_ndc).unwrap_or(jitter_ndc);
 
         // ---- Pass 1 (mutable phase): validate every object's required
         // inputs, compose its model matrix + uniforms, and get-or-compile
@@ -3534,6 +3811,25 @@ impl EffectNode for RenderScene {
             // trace against the scene geometry, not toward a light — never
             // caster-gated.
             uniforms.rt_flags[0] = if rt_reflections && rt_ready { 1.0 } else { 0.0 };
+            // RAYTRACING_DESIGN.md section 14 ED6: rt_flags.y = the traced-
+            // diffuse substitution gate — the raster may only read the RT
+            // irradiance texture's `.rgb` for `diffuse_ibl` when the GI
+            // gather actually ran this frame. gi_spp is always
+            // GI_SAMPLES_PER_PIXEL (> 0) whenever the trace dispatch runs,
+            // so "gi_spp > 0" is exactly `will_rt_accumulate_this_frame`.
+            // Mirrors the reflection fallback discipline (`rt_refl.a < 0`
+            // keeping the raster prefiltered fetch). No new scene param
+            // (MB4).
+            uniforms.rt_flags[1] = if will_rt_accumulate_this_frame { 1.0 } else { 0.0 };
+            // TAA/MetalFX velocity jitter exclusion (see the field's doc):
+            // the fragment subtracts (cur − prev) from the baked-in-jitter
+            // clip varyings. Zero whenever temporal_upscale is off.
+            uniforms.velocity_jitter = [
+                jitter_ndc.0,
+                jitter_ndc.1,
+                prev_jitter_ndc.0,
+                prev_jitter_ndc.1,
+            ];
             // RAYTRACING_DESIGN.md section 12 AM2/AM6: `fog_params.z` was a
             // permanently-zero reserved slot — repurposed as `ao_mask_owed`,
             // the value the EMIT_AO_MASK fragment variants write to the
@@ -3896,9 +4192,12 @@ impl EffectNode for RenderScene {
         // LUT textures are ready to sample; see `run_ibl_convolution`'s doc
         // comment for the cache-vs-correctness tradeoff on the two
         // envmap-dependent resources. ----
+        // Read before `ctx.gpu_encoder()` takes a mutable borrow of ctx.
+        // Hoisted out of the convolution block: the RT `lighting_key` below
+        // folds this same generation in so an env rebake snaps the
+        // accumulator instead of fading on the EMA floor.
+        let envmap_generation = ctx.inputs.slot_generation("envmap");
         {
-            // Read before `ctx.gpu_encoder()` takes a mutable borrow of ctx.
-            let envmap_generation = ctx.inputs.slot_generation("envmap");
             let rebuild_epoch = ctx.rebuild_epoch;
             let gpu = ctx.gpu_encoder();
             let sampler = self.sampler.as_ref().expect("ensured").clone();
@@ -3926,6 +4225,23 @@ impl EffectNode for RenderScene {
             .iter()
             .filter(|d| d.alpha_mode != AlphaMode::Blend)
             .collect();
+        // RAYTRACING_DESIGN.md section 14 ED2 (PBR-only consumers, Peter
+        // 2026-07-31): phong/cel draws in an RT scene get the flat ambient
+        // recompose and NO traced env/GI — degrade loud, not silent. Once
+        // per scene instance: per-frame spam breaks the hot path, and a
+        // silent hole reads as "RT looks wrong".
+        if will_rt_accumulate_this_frame
+            && !self.rt_nonpbr_warned
+            && opaque_draws
+                .iter()
+                .any(|d| matches!(d.kind, MaterialKind::Phong | MaterialKind::Cel))
+        {
+            self.rt_nonpbr_warned = true;
+            log::warn!(
+                "render_scene: RT lighting reaches PBR materials only — this scene has \
+                 phong/cel objects, which get flat ambient only (RAYTRACING_DESIGN.md section 14 ED2)"
+            );
+        }
         // RAYTRACING_DESIGN.md RT-D3: shadow maps STOP RENDERING for
         // RT-enabled scenes — the RT shadow-ray pass below replaces this
         // entire depth-only-per-caster loop, not runs alongside it (the
@@ -4157,7 +4473,46 @@ impl EffectNode for RenderScene {
                     // "None = unwired, flat factor fallback" shape as
                     // `base_color_texture` above.
                     mr_texture: d.mr_map,
+                    // BUG-wytp (rt-reflections-are-normal-map-blind): the normal map
+                    // reaches the RT kernel exactly the way the MR map does —
+                    // "None = unwired, vertex normal stands" shape. The kernel
+                    // samples it at the primary hit to perturb the reflection
+                    // lobe's R and the AO/GI hemisphere normal.
+                    normal_texture: d.normal_map,
+                    // BUG-1gqt: the emissive map + its KHR_texture_transform
+                    // fold reach the trace kernels (factor × sample at the
+                    // hit), mirroring the raster's `resolve_emissive`.
+                    emissive_texture: d.emissive_map,
+                    emissive_uv_m: d.uniforms.emissive_uv_m,
+                    emissive_uv_t: [d.uniforms.emissive_uv_t[0], d.uniforms.emissive_uv_t[1]],
                     cast_shadows: d.cast_shadows,
+                })
+                .collect();
+
+            // RS-B: build gi_materials alongside objects (SAME order) for
+            // the emissive light table at accel-build time. Reused below
+            // for the GPU upload at dispatch time.
+            let gi_materials_data: Vec<manifold_gpu::raytrace::GiMaterial> = opaque_draws
+                .iter()
+                .map(|d| {
+                    manifold_gpu::raytrace::GiMaterial::new(
+                        [
+                            d.uniforms.base_color[0],
+                            d.uniforms.base_color[1],
+                            d.uniforms.base_color[2],
+                        ],
+                        [
+                            d.uniforms.emission[0],
+                            d.uniforms.emission[1],
+                            d.uniforms.emission[2],
+                        ],
+                        [
+                            d.uniforms.pbr_metallic_roughness[0],
+                            d.uniforms.pbr_metallic_roughness[1],
+                            0.0,
+                            0.0,
+                        ],
+                    )
                 })
                 .collect();
 
@@ -4238,6 +4593,9 @@ impl EffectNode for RenderScene {
             // color-texture list, threaded straight to `dispatch_shadow_
             // rays` below (same per-frame cadence — this list can change
             // even when topology/transform don't, e.g. a material swap).
+            // BUG-wytp: the same returned list now also carries normal-map
+            // textures (and MR maps, since R3), indexed by
+            // `RtNormalSource::normal_tex_index`/`mr_tex_index`.
             let alpha_textures: Vec<&manifold_gpu::GpuTexture> = manifold_gpu::raytrace::ensure_normal_sources(
                 &mut self.rt_normal_sources,
                 &mut self.rt_normal_sources_capacity,
@@ -4257,12 +4615,23 @@ impl EffectNode for RenderScene {
             //    frame generation bump) never satisfies the recur check
             //    — no rebuild, preserving pre-fix D17 behavior.
             //
-            // When either trigger fires, BOTH topo and content keys are
-            // recorded at build time. The refit path (full accel_key
-            // changes under an UNCHANGED topo key) fires only when
-            // neither trigger has work to do — a content rebuild
+            // The topo key is recorded by ANY build. The content key is
+            // recorded ONLY when the content-settle trigger fired
+            // (BUG-oqta): a topo-triggered build that recorded it would
+            // swallow an in-flight generation bump — async mesh content
+            // landing during the BUG-308 one-frame defer changes the
+            // content key before the build enqueues, and the settle
+            // trigger (which compares against the recorded key) would
+            // then never fire the second build that picks the landed
+            // content up, leaving the empty/stale accel forever. Not
+            // recording it costs one settle-triggered rebuild at startup
+            // even when content was already resident — async and served
+            // by the raster path meanwhile. The refit path (full
+            // accel_key changes under an UNCHANGED topo key) fires only
+            // when neither trigger has work to do — a content rebuild
             // subsumes any pending refit.
             let mut build_this_frame = false;
+            let mut content_trigger_fired = false;
 
             // ── Topo trigger ──
             if self.rt_accel_topo_key != Some(topo_key) {
@@ -4270,6 +4639,19 @@ impl EffectNode for RenderScene {
                     build_this_frame = true;
                 } else {
                     self.rt_accel_pending_key = Some(topo_key);
+                    // BUG-oqta repro knob (probe-only, production-inert):
+                    // stretch the one-frame defer's WALL time so async mesh
+                    // content lands inside the window on any machine — the
+                    // natural race is timing-dependent (7/7 healthy runs on
+                    // one box, 3/4 failing on another). With the window
+                    // open, unfixed code builds once (content key swallowed)
+                    // and fixed code builds twice (settle trigger fires).
+                    if let Ok(ms) = std::env::var("MANIFOLD_PROBE_RT_ACCEL_DEFER_MS")
+                        && let Ok(ms) = ms.parse::<u64>()
+                    {
+                        eprintln!("MANIFOLD_PROBE_RT_ACCEL: defer-window sleep {ms}ms");
+                        std::thread::sleep(std::time::Duration::from_millis(ms));
+                    }
                 }
             }
             // ── Content-settle trigger (only when topo is stable) ──
@@ -4278,6 +4660,7 @@ impl EffectNode for RenderScene {
             {
                 if self.rt_accel_content_pending_key == Some(content_key) {
                     build_this_frame = true;
+                    content_trigger_fired = true;
                 } else {
                     self.rt_accel_content_pending_key = Some(content_key);
                 }
@@ -4285,9 +4668,21 @@ impl EffectNode for RenderScene {
 
             if build_this_frame {
                 let tracer = self.rt_tracer.as_ref().expect("ensured above");
-                self.rt_accel = Some(tracer.build_accel(gpu.device, &objects));
+                // Q1 probe: what did build_accel see?
+                if std::env::var("MANIFOLD_PROBE_RT_ACCEL").is_ok() {
+                    eprintln!("MANIFOLD_PROBE_RT_ACCEL: build called with {} objects", objects.len());
+                    for (i, o) in objects.iter().enumerate() {
+                        let vgen = opaque_draws.get(i).and_then(|d| d.vertices_generation);
+                        eprintln!("  object[{}]: triangle_count={}, vertices_generation={:?}", i, o.triangle_count, vgen);
+                    }
+                }
+                self.rt_accel = Some(tracer.build_accel(gpu.device, &objects, &gi_materials_data));
                 self.rt_accel_topo_key = Some(topo_key);
-                self.rt_accel_content_key = Some(content_key);
+                // BUG-oqta: only a content-settle-triggered build records
+                // the content key (why: the trigger block above).
+                if content_trigger_fired {
+                    self.rt_accel_content_key = Some(content_key);
+                }
                 self.rt_accel_key = Some(accel_key);
                 self.rt_accel_pending_key = None;
                 self.rt_accel_content_pending_key = None;
@@ -4329,6 +4724,16 @@ impl EffectNode for RenderScene {
             // handler runs on a separate Metal-owned thread, never
             // synchronously inside evaluate()).
             if rt_ready {
+                // RS-B: thread the emissive table's mean power (firefly-cap
+                // anchor) through the params — 0.0 when the scene has no
+                // emissive geometry.
+                let emissive_table_mean_power = self
+                    .rt_accel
+                    .as_ref()
+                    .and_then(|a| a.emissive_table.as_ref())
+                    .map(|t| t.mean_power)
+                    .unwrap_or(0.0);
+
                 // Multi-caster shadow fix: previously only `casters[0]`
                 // (the first shadow-casting light) was traced — every
                 // other shadow-casting light rendered as fully lit. Build
@@ -4370,34 +4775,60 @@ impl EffectNode for RenderScene {
                     // camera never hit this).
                     return;
                 };
-                let half_w = width.div_ceil(2).max(1);
-                let half_h = height.div_ceil(2).max(1);
-                // The RT ambient floor rides the SAME material `ambient` the
-                // raster path shades with (`scene_params[1]`, fanned out to
-                // every material by the card's one "Ambient" knob) — knob at
-                // 0 must mean true black on BOTH paths, so a lights-out cue
-                // works with RT on. Max across draws: per-material divergence
-                // in the graph keeps a floor if ANY material asks for one;
-                // `AMBIENT_IRRADIANCE_SCALE` is the knob-at-1 ceiling, not a
-                // floor.
-                let scene_ambient = opaque_draws
-                    .iter()
-                    .map(|d| d.uniforms.scene_params[1])
-                    .fold(0.0f32, f32::max);
-                let params = manifold_gpu::raytrace::ShadowRayParams::new(
+
+                // RT-A3a: split dispatch with fuse-when-same-res rule (D16a).
+                // Run two dispatches ONLY when mask trace size differs from
+                // lighting trace size (shadow native while lighting stays
+                // half). Otherwise fold shadow back into the lighting
+                // dispatch — one dispatch, monolithic perf.
+                let (mask_half_w, mask_half_h) = self.rt_mask_trace_size(width, height);
+                let (light_half_w, light_half_h) = self.rt_lighting_trace_size(width, height);
+                let mask_sizes_differ =
+                    mask_half_w != light_half_w || mask_half_h != light_half_h;
+
+                // ED2 (RAYTRACING_DESIGN.md section 14.2): the flat ambient no
+                // longer enters the kernel (`ShadowRayParams` has no
+                // `ambient_color`); each material's Ambient knob is applied
+                // consumer-side in `render_scene.wgsl`'s `rt_or_flat_ambient`
+                // via its own `scene_params[1]` — knob at 0 stays true black
+                // on both paths.
+
+                // RT-A3a: mask params — built for the split case when trace
+                // sizes differ. When sizes match, unused (shadow folded into
+                // lighting dispatch).
+                let mask_params = manifold_gpu::raytrace::ShadowRayParams::new(
                     &rt_casters,
-                    1,
+                    1, // shadow_spp
                     self.jitter_frame_index,
-                    [half_w, half_h],
+                    [mask_half_w, mask_half_h],
+                    [width, height],
+                    0.0,    // ao_radius (unused)
+                    0,      // ao_spp
+                    0,      // gi_spp
+                    // RT-T1-B: camera_pos unused by mask dispatch (no primary ray),
+                    // but kept for API compatibility.
+                    cam.pos,
+                    inv_view_proj,
+                    0,      // refl_spp
+                    0.6,    // refl_max_roughness (unused)
+                    0.1,    // refl_rough_band (unused)
+                    emissive_table_mean_power,
+                );
+
+                // RT-A3a: lighting params (AO + GI + reflection + normal).
+                // D16a fuse rule: shadow_spp=1 when mask and lighting trace
+                // sizes match (one fused dispatch at monolithic perf); 0 when
+                // split (separate mask dispatch handles shadow at its own size).
+                let lighting_shadow_spp: u32 = if mask_sizes_differ { 0 } else { 1 };
+                let lighting_params = manifold_gpu::raytrace::ShadowRayParams::new(
+                    &rt_casters,
+                    lighting_shadow_spp,
+                    self.jitter_frame_index,
+                    [light_half_w, light_half_h],
                     [width, height],
                     AO_RADIUS_WORLD_UNITS,
                     AO_SAMPLES_PER_PIXEL,
                     GI_SAMPLES_PER_PIXEL,
-                    [
-                        atmosphere.ambient_tint[0] * AMBIENT_IRRADIANCE_SCALE * scene_ambient,
-                        atmosphere.ambient_tint[1] * AMBIENT_IRRADIANCE_SCALE * scene_ambient,
-                        atmosphere.ambient_tint[2] * AMBIENT_IRRADIANCE_SCALE * scene_ambient,
-                    ],
                     // RT-T1-B: the primary-visibility-ray origin for the
                     // real interpolated-vertex-normal fetch (AO/GI cosine
                     // sampling) — the SAME camera eye `render_scene.wgsl`'s
@@ -4411,41 +4842,10 @@ impl EffectNode for RenderScene {
                     if rt_reflections { REFL_SAMPLES_PER_PIXEL } else { 0 },
                     0.6,
                     0.1,
+                    emissive_table_mean_power,
                 );
-                // RAYTRACING_DESIGN.md section 5.2 P3: rebuild the per-object
-                // material table from the SAME `opaque_draws` order
-                // the accel's `objects` slice used above — `d.uniforms.
-                // base_color`/`d.uniforms.emission` are the resolved
-                // per-object factors `render_scene.wgsl`'s `resolve_albedo`/
-                // `resolve_emissive` already use for the raster combine, so
-                // the GI gather's emissive-hit/sun-bounce terms read the
-                // SAME material values the surface shading does.
-                let gi_materials_data: Vec<manifold_gpu::raytrace::GiMaterial> = opaque_draws
-                    .iter()
-                    .map(|d| {
-                        manifold_gpu::raytrace::GiMaterial::new(
-                            [
-                                d.uniforms.base_color[0],
-                                d.uniforms.base_color[1],
-                                d.uniforms.base_color[2],
-                            ],
-                            [
-                                d.uniforms.emission[0],
-                                d.uniforms.emission[1],
-                                d.uniforms.emission[2],
-                            ],
-                            // RT-R1: the SAME resolved metallic/roughness
-                            // fs_pbr shades with (render_scene.rs:332); z/w
-                            // reserved (ior/specular stay on the raster side).
-                            [
-                                d.uniforms.pbr_metallic_roughness[0],
-                                d.uniforms.pbr_metallic_roughness[1],
-                                0.0,
-                                0.0,
-                            ],
-                        )
-                    })
-                    .collect();
+                // RS-B: gi_materials_data already built above (same order as
+                // `objects` + `accel`), reused for the GPU upload here.
                 let gi_materials_buffer = self.rt_gi_materials.as_ref().expect("ensured above");
                 {
                     // `GiMaterial` is `#[repr(C)]`, all-POD (f32 fields
@@ -4502,10 +4902,13 @@ impl EffectNode for RenderScene {
                 let tracer = self.rt_tracer.as_ref().expect("ensured above");
                 let accel = self.rt_accel.as_ref().expect("rt_ready implies rt_accel.is_some()");
                 let params_buffer = self.rt_params_buffer.as_ref().expect("ensured above");
+                let mask_params_buffer = self.rt_mask_params_buffer.as_ref().expect("ensured above");
                 let normal_sources_buffer = self.rt_normal_sources.as_ref().expect("ensured above");
                 let depth_tex = self.opaque_depth_snapshot.as_ref().expect("ensured above");
                 let mask_half = self.rt_mask_half.as_ref().expect("ensured above");
                 let mask_full = self.rt_mask_full.as_ref().expect("ensured above");
+                let mask_half2 = self.rt_mask_half2.as_ref().expect("ensured above");
+                let mask_full2 = self.rt_mask_full2.as_ref().expect("ensured above");
                 let irr_half = self.rt_irr_half.as_ref().expect("ensured above");
                 let irr_full = self.rt_irr_full.as_ref().expect("ensured above");
                 let normal_half = self.rt_normal_half.as_ref().expect("ensured above");
@@ -4513,28 +4916,58 @@ impl EffectNode for RenderScene {
                 let refl_half = self.rt_refl_half.as_ref().expect("ensured above");
                 let refl_full = self.rt_refl_full.as_ref().expect("ensured above");
                 let _refl_full_b = self.rt_refl_full_b.as_ref().expect("ensured above");
+
+                // RT-A3a D16a fuse rule: split dispatch ONLY when mask trace
+                // size differs from lighting (shadow native while lighting
+                // stays half). Otherwise one fused dispatch at lighting's
+                // resolution (shadow_spp=1 folded into the lighting params).
+                if mask_sizes_differ {
+                    tracer.dispatch_shadow_rays(
+                        gpu.native_enc,
+                        accel,
+                        &mask_params,
+                        mask_params_buffer,
+                        gi_materials_buffer,
+                        normal_sources_buffer,
+                        &alpha_textures,
+                        depth_tex,
+                        mask_half,
+                        mask_half2,
+                        irr_half,
+                        normal_half,
+                        refl_half,
+                        if envmap_wired.is_some() {
+                            self.prefiltered_specular.as_ref().expect("ensured above")
+                        } else {
+                            self.dummy_texture.as_ref().expect("ensured at 3491")
+                        },
+                        "node.render_scene RT-A3a mask dispatch (shadow visibility)",
+                    );
+                }
+
+                // RT-A3a: lighting dispatch — AO + GI + reflection + normal.
+                // D16a: when fused (mask_sizes_differ=false), shadow_spp=1
+                // and out_sv is written here (one dispatch, monolithic perf).
                 tracer.dispatch_shadow_rays(
                     gpu.native_enc,
                     accel,
-                    &params,
+                    &lighting_params,
                     params_buffer,
                     gi_materials_buffer,
                     normal_sources_buffer,
                     &alpha_textures,
                     depth_tex,
                     mask_half,
+                    mask_half2,
                     irr_half,
                     normal_half,
                     refl_half,
-                    // RT-R1 (section 9.3 RD4): the env mip chain the reflection
-                    // miss branch samples — dummy when the scene has no
-                    // IBL chain (the miss then reads the same nothing the
-                    // raster IBL would). dummy_texture is ensured upstream
-                    // of evaluate's RT block (3491).
-                    self.prefiltered_specular.as_ref().unwrap_or(
-                        self.dummy_texture.as_ref().expect("ensured at 3491"),
-                    ),
-                    "node.render_scene RT-D3/RT-P2/RT-P3 trace_shadow_rays",
+                    if envmap_wired.is_some() {
+                        self.prefiltered_specular.as_ref().expect("ensured above")
+                    } else {
+                        self.dummy_texture.as_ref().expect("ensured at 3491")
+                    },
+                    "node.render_scene RT-A3a lighting dispatch (AO+GI+reflection+normal)",
                 );
                 tracer.upsample_shadow(
                     gpu.native_enc,
@@ -4542,6 +4975,8 @@ impl EffectNode for RenderScene {
                     depth_tex,
                     mask_half,
                     mask_full,
+                    mask_half2,
+                    mask_full2,
                     irr_half,
                     irr_full,
                     normal_half,
@@ -4568,6 +5003,7 @@ impl EffectNode for RenderScene {
                 let moments_read = self.rt_moments_history[read_idx].as_ref().expect("ensured above");
                 let atrous_params_buffer = self.rt_atrous_params_buffer.as_ref().expect("ensured above");
                 let mask_full_b = self.rt_mask_full_b.as_ref().expect("ensured above");
+                let mask_full2_b = self.rt_mask_full2_b.as_ref().expect("ensured above");
                 let irr_full_b = self.rt_irr_full_b.as_ref().expect("ensured above");
                 let normal_full_b = self.rt_normal_full_b.as_ref().expect("ensured above");
                 let refl_full_b = self.rt_refl_full_b.as_ref().expect("ensured above");
@@ -4582,10 +5018,10 @@ impl EffectNode for RenderScene {
                     // is the smallest offset guaranteed to cross into an
                     // adjacent (independently-sampled) half-res block.
                     let step = 2u32 << pass;
-                    let (src_sv, src_irr, src_n, src_refl, dst_sv, dst_irr, dst_n, dst_refl) = if pass % 2 == 0 {
-                        (mask_full, irr_full, normal_full, refl_full, mask_full_b, irr_full_b, normal_full_b, refl_full_b)
+                    let (src_sv, src_irr, src_n, src_refl, dst_sv, dst_irr, dst_n, dst_refl, src_sv2, dst_sv2) = if pass % 2 == 0 {
+                        (mask_full, irr_full, normal_full, refl_full, mask_full_b, irr_full_b, normal_full_b, refl_full_b, mask_full2, mask_full2_b)
                     } else {
-                        (mask_full_b, irr_full_b, normal_full_b, refl_full_b, mask_full, irr_full, normal_full, refl_full)
+                        (mask_full_b, irr_full_b, normal_full_b, refl_full_b, mask_full, irr_full, normal_full, refl_full, mask_full2_b, mask_full2)
                     };
                     let atrous_params = manifold_gpu::raytrace::AtrousParams::new(
                         [width, height], step, history_valid,
@@ -4600,6 +5036,8 @@ impl EffectNode for RenderScene {
                         moments_read,
                         src_sv,
                         dst_sv,
+                        src_sv2,
+                        dst_sv2,
                         src_irr,
                         dst_irr,
                         src_n,
@@ -4641,7 +5079,10 @@ impl EffectNode for RenderScene {
                     };
                     // `color` is premultiplied with intensity (see
                     // `node_graph::light`), so an intensity move shows up here
-                    // with no extra plumbing.
+                    // with no extra plumbing. The Ambient knob is NOT hashed:
+                    // ED2 moved it consumer-side, so it never changes the
+                    // traced irradiance texture — snapping the accumulator on
+                    // it would only waste history.
                     for c in &rt_casters {
                         for f in c.dir_or_pos.iter().chain(c.color.iter()) {
                             mix(f.to_bits());
@@ -4649,10 +5090,23 @@ impl EffectNode for RenderScene {
                         mix(c.cone_or_size.to_bits());
                         mix(c.kind);
                     }
-                    mix(scene_ambient.to_bits());
                     for f in atmosphere.ambient_tint {
                         mix(f.to_bits());
                     }
+                    // The environment map is a lighting input too: a rebake
+                    // (intensity/rotation/emitter layout, from
+                    // bake_equirect_envmap or hdri_source alike) bumps this
+                    // slot's write generation. Without it here an env move
+                    // only tripped the per-texel luma gate where env was
+                    // >15% of a pixel's brightness — in a sun-lit scene the
+                    // env share is under that, so the fade ran on the
+                    // IRRADIANCE_ACCUM_ALPHA floor (~2.5s tail). Peter
+                    // watched exactly that on the env-intensity fader.
+                    // `None` (unwired) mixes as zero: an unwired→wired
+                    // transition still flips the key.
+                    let g = envmap_generation.unwrap_or(0);
+                    mix(g as u32);
+                    mix((g >> 32) as u32);
                     k
                 };
                 let lighting_changed = self
@@ -4665,6 +5119,7 @@ impl EffectNode for RenderScene {
                     reset,
                     opaque_draws.len() as u32,
                     cam.pos,
+                    cam_motion,
                     inv_view_proj,
                     prev_view_proj,
                 )
@@ -4688,6 +5143,29 @@ impl EffectNode for RenderScene {
                 // the same `rt_history_ping` flip (I-R2: no second flip clock).
                 let refl_history_read = self.rt_refl_history[read_idx].as_ref().expect("ensured above");
                 let refl_history_write = self.rt_refl_history[write_idx].as_ref().expect("ensured above");
+                // SV-ACCUM: shadow-visibility history — same read/write
+                // indexing and the same flip clock as every other pair.
+                // `mask_full` is the atrous-filtered current frame (the
+                // even atrous pass count lands it there — see the
+                // ATROUS_ITERATIONS comment above).
+                let sv_history_read = self.rt_sv_history[read_idx].as_ref().expect("ensured above");
+                let sv_history_write = self.rt_sv_history[write_idx].as_ref().expect("ensured above");
+                let sv_m1_read = self.rt_sv_m1_history[read_idx].as_ref().expect("ensured above");
+                let sv_m1_write = self.rt_sv_m1_history[write_idx].as_ref().expect("ensured above");
+                let sv_m2_read = self.rt_sv_m2_history[read_idx].as_ref().expect("ensured above");
+                let sv_m2_write = self.rt_sv_m2_history[write_idx].as_ref().expect("ensured above");
+                let sv_hold_read = self.rt_sv_hold_history[read_idx].as_ref().expect("ensured above");
+                let sv_hold_write = self.rt_sv_hold_history[write_idx].as_ref().expect("ensured above");
+                // RS-A (caster cap 4 -> 8): second SV-ACCUM channel — same
+                // read/write indexing, same flip clock, independent sigma-gate.
+                let sv2_history_read = self.rt_sv2_history[read_idx].as_ref().expect("ensured above");
+                let sv2_history_write = self.rt_sv2_history[write_idx].as_ref().expect("ensured above");
+                let sv2_m1_read = self.rt_sv2_m1_history[read_idx].as_ref().expect("ensured above");
+                let sv2_m1_write = self.rt_sv2_m1_history[write_idx].as_ref().expect("ensured above");
+                let sv2_m2_read = self.rt_sv2_m2_history[read_idx].as_ref().expect("ensured above");
+                let sv2_m2_write = self.rt_sv2_m2_history[write_idx].as_ref().expect("ensured above");
+                let sv2_hold_read = self.rt_sv2_hold_history[read_idx].as_ref().expect("ensured above");
+                let sv2_hold_write = self.rt_sv2_hold_history[write_idx].as_ref().expect("ensured above");
                 tracer.accumulate_irradiance(
                     gpu.native_enc,
                     &accumulate_params,
@@ -4708,6 +5186,24 @@ impl EffectNode for RenderScene {
                     refl_history_read,
                     refl_history_write,
                     gi_materials_buffer,
+                    mask_full,
+                    sv_history_read,
+                    sv_history_write,
+                    sv_m1_read,
+                    sv_m1_write,
+                    sv_m2_read,
+                    sv_m2_write,
+                    sv_hold_read,
+                    sv_hold_write,
+                    mask_full2,
+                    sv2_history_read,
+                    sv2_history_write,
+                    sv2_m1_read,
+                    sv2_m1_write,
+                    sv2_m2_read,
+                    sv2_m2_write,
+                    sv2_hold_read,
+                    sv2_hold_write,
                     "node.render_scene RT-P2/RT-T1-C/RT-T1-D/RT-R2 accumulate_irradiance",
                 );
                 self.rt_history_ping = write_idx;
@@ -4760,7 +5256,13 @@ impl EffectNode for RenderScene {
                     if let Some(ref t) = self.rt_moments_history[refl_write] { q.push(RtCaptureSlot {
                         label: "moments".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
                     });}
-                    if let Some(ref t) = self.rt_mask_full { q.push(RtCaptureSlot {
+                    // SV-ACCUM: the `mask` channel dumps the ACCUMULATED
+                    // visibility (the texture binding 41 actually feeds the
+                    // fragment shader) — the gate must measure what the show
+                    // consumes, not the pre-accumulation atrous output.
+                    // `rt_mask_full` stays in the chain (atrous scratch) but
+                    // is no longer the consumed mask.
+                    if let Some(ref t) = self.rt_sv_history[refl_write] { q.push(RtCaptureSlot {
                         label: "mask".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
                     });}
                     // BUG-fh95: the RAW pre-upsample/pre-denoise trace output
@@ -4769,6 +5271,12 @@ impl EffectNode for RenderScene {
                     // mask above can't see it (post-atrous).
                     if let Some(ref t) = self.rt_mask_half { q.push(RtCaptureSlot {
                         label: "mask_half".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
+                    });}
+                    // BUG-tr5o: the sv snap-HOLD counter — the direct
+                    // observable of gate re-trips under camera motion
+                    // (sustained >0 on penumbra = re-tripping; ~0 = healthy).
+                    if let Some(ref t) = self.rt_sv_hold_history[refl_write] { q.push(RtCaptureSlot {
+                        label: "sv_hold".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
                     });}
                 }
             }
@@ -4890,7 +5398,18 @@ impl EffectNode for RenderScene {
         // sampler when `scene_params.w > 0.5` — always bound (the ABI-
         // stub discipline every optional texture in this shader uses),
         // dummy when RT isn't active this frame.
-        let rt_mask_tex = self.rt_mask_full.as_ref().unwrap_or(dummy);
+        // SV-ACCUM: now reads the temporally-ACCUMULATED visibility
+        // history — `rt_history_ping` indexes whichever ping-pong slot
+        // `accumulate_irradiance` most recently WROTE this frame, exactly
+        // the `rt_irr_tex` discipline below. Before SV-ACCUM this bound
+        // the raw post-atrous `rt_mask_full` — the only RT channel with
+        // no temporal amortization, and the penumbra boil Peter reported.
+        let rt_mask_tex = self.rt_sv_history[self.rt_history_ping].as_ref().unwrap_or(dummy);
+        // RS-A (caster cap 4 -> 8): second shadow-visibility quad binding
+        // — the accumulated history for caster slots 4-7 (same format and
+        // ABI-stub discipline as `rt_mask_tex`). Always bound; dummy when RT
+        // isn't active.
+        let rt_mask_tex2 = self.rt_sv2_history[self.rt_history_ping].as_ref().unwrap_or(dummy);
         // RAYTRACING_DESIGN.md section 5.2 P2, extended RT-T1-C: the temporally-
         // accumulated demodulated-irradiance history — `rt_history_ping`
         // always indexes whichever ping-pong slot `accumulate_irradiance`
@@ -4905,7 +5424,7 @@ impl EffectNode for RenderScene {
         // write from `accumulate_irradiance` (RT-R2: swapped every frame
         // by the same ping-pong clock as `rt_irr_history`).
         let rt_refl_tex = self.rt_refl_history[self.rt_history_ping].as_ref().unwrap_or(dummy);
-        let binding_sets: Vec<[GpuBinding; 44]> = draws
+        let binding_sets: Vec<[GpuBinding; 45]> = draws
             .iter()
             .map(|draw| {
                 [
@@ -5140,6 +5659,10 @@ impl EffectNode for RenderScene {
                     GpuBinding::Texture {
                         binding: 43,
                         texture: rt_refl_tex,
+                    },
+                    GpuBinding::Texture {
+                        binding: 44,
+                        texture: rt_mask_tex2,
                     },
                 ]
             })
@@ -5636,6 +6159,27 @@ mod tests {
         assert!(
             src.contains("prefiltered_specular") && src.contains("irradiance_map") && src.contains("brdf_lut"),
             "fs_pbr must consume the split-sum IBL bindings"
+        );
+    }
+
+    /// BUG-wfxe: the scene kernel must naga-parse — a WGSL syntax break
+    /// here is otherwise only caught by GPU pipeline creation. Also pins
+    /// the tangent seam: the Vertex struct carries it, the vertex shader
+    //  exports it, and no stray 48-byte assumption survives in the source.
+    #[test]
+    fn render_scene_wgsl_parses_and_carries_tangent() {
+        let src = include_str!("shaders/render_scene.wgsl");
+        let module = naga::front::wgsl::parse_str(src).expect("render_scene.wgsl must naga-parse");
+        let mut validator = naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        );
+        if let Err(e) = validator.validate(&module) {
+            panic!("render_scene.wgsl validation failed:\n{}", e.emit_to_string(src));
+        }
+        assert!(
+            src.contains("tangent: vec4<f32>") && src.contains("fn tbn_for"),
+            "the authored-tangent path (BUG-wfxe) must be present in the kernel"
         );
     }
 
@@ -6450,6 +6994,7 @@ mod gpu_tests {
             _pad1: 0.0,
             uv: [0.0, 0.0],
             _pad2: [0.0, 0.0],
+            tangent: [0.0; 4],
         };
         let quad_verts = [
             mk_vertex(-ext, -ext),

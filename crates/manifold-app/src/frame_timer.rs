@@ -25,6 +25,17 @@ pub struct FrameTimer {
     /// Number of ticks missed this frame (dt exceeded 2× target = frame drop).
     missed_ticks: u64,
 
+    /// BUG-jbxt (rt-capture frame clock): when true, `consume_tick` returns
+    /// exactly the target frame duration and `realtime_since_start`
+    /// advances by the same fixed step — headless repro harnesses render
+    /// slower than realtime, and wall-clock dt compresses beat-driven
+    /// drivers (a 32-beat sawtooth into ~13 frames at debug res), making
+    /// driver-based motion repros unusable. Wall-clock bookkeeping
+    /// (FPS stats, missed ticks, deadlines) stays wall-honest.
+    frame_clocked: bool,
+    /// Fixed-step engine-time accumulator, read only when `frame_clocked`.
+    frame_clock_seconds: f64,
+
     /// Mach timebase for converting nanoseconds ↔ mach absolute time units.
     /// Cached at construction — the timebase never changes at runtime.
     #[cfg(target_os = "macos")]
@@ -93,6 +104,8 @@ impl FrameTimer {
             smoothed_dt: initial_dt,
             current_fps: target_fps,
             missed_ticks: 0,
+            frame_clocked: false,
+            frame_clock_seconds: 0.0,
             #[cfg(target_os = "macos")]
             mach_timebase: MachTimebase::query(),
         }
@@ -157,17 +170,25 @@ impl FrameTimer {
     /// Consume the tick, returning delta time in seconds.
     pub fn consume_tick(&mut self) -> f64 {
         let now = Instant::now();
-        let dt = (now - self.last_tick_time).as_secs_f64();
+        let wall_dt = (now - self.last_tick_time).as_secs_f64();
         self.last_tick_time = now;
+        let dt = if self.frame_clocked {
+            self.target_frame_duration.as_secs_f64()
+        } else {
+            wall_dt
+        };
         self.last_dt = dt;
-        // Detect missed ticks: if dt exceeds 2× target, we dropped frames
+        self.frame_clock_seconds += dt;
+        // Detect missed ticks: if dt exceeds 2× target, we dropped frames.
+        // Wall dt even when frame-clocked — a slow render IS a dropped
+        // frame, the engine just doesn't feel it.
         let target_secs = self.target_frame_duration.as_secs_f64();
         self.missed_ticks = if target_secs > 0.0 {
-            ((dt / target_secs).floor() as u64).saturating_sub(1)
+            ((wall_dt / target_secs).floor() as u64).saturating_sub(1)
         } else {
             0
         };
-        self.update_fps(dt);
+        self.update_fps(wall_dt);
         dt
     }
 
@@ -179,7 +200,18 @@ impl FrameTimer {
 
     /// Seconds since application start.
     pub fn realtime_since_start(&self) -> f64 {
-        self.app_start_time.elapsed().as_secs_f64()
+        if self.frame_clocked {
+            self.frame_clock_seconds
+        } else {
+            self.app_start_time.elapsed().as_secs_f64()
+        }
+    }
+
+    /// BUG-jbxt: pin engine time to the frame count (see `frame_clocked`).
+    /// Only the perf-soak headless harnesses (rt-capture) call this.
+    #[cfg(any(feature = "perf-soak", test))]
+    pub fn set_frame_clocked(&mut self, on: bool) {
+        self.frame_clocked = on;
     }
 
     /// Last frame's delta time in seconds.
@@ -216,6 +248,16 @@ impl FrameTimer {
         let alpha = 1.0 - (-dt / EWMA_TAU).exp();
         self.smoothed_dt = alpha * dt + (1.0 - alpha) * self.smoothed_dt;
         self.current_fps = 1.0 / self.smoothed_dt;
+    }
+
+    /// Test-only injection point for deterministic EWMA testing.
+    /// Simulates a frame with exact delta time, bypassing wall-clock measurement.
+    #[cfg(test)]
+    fn inject_frame_time(&mut self, dt: f64) {
+        self.last_tick_time = Instant::now();
+        self.last_dt = dt;
+        self.frame_clock_seconds += dt;
+        self.update_fps(dt);
     }
 }
 
@@ -276,18 +318,30 @@ mod tests {
     }
 
     #[test]
+    fn frame_clocked_returns_fixed_dt() {
+        let mut timer = FrameTimer::new(60.0);
+        timer.set_frame_clocked(true);
+        thread::sleep(Duration::from_millis(50)); // slower than realtime
+        let dt = timer.consume_tick();
+        assert!((dt - 1.0 / 60.0).abs() < 1e-9, "dt={dt}");
+        let dt2 = timer.consume_tick(); // no sleep — still fixed
+        assert!((dt2 - 1.0 / 60.0).abs() < 1e-9, "dt2={dt2}");
+        let rt = timer.realtime_since_start();
+        assert!((rt - 2.0 / 60.0).abs() < 1e-9, "realtime={rt}");
+    }
+
+    #[test]
     fn ewma_fps_converges() {
         let mut timer = FrameTimer::new(60.0);
-        // Simulate 30 frames at 60fps
+        // Simulate 30 frames at exactly 60fps (16.67ms per frame)
+        // using deterministic injection — no wall-clock dependency.
         for _ in 0..30 {
-            thread::sleep(Duration::from_millis(16));
-            timer.consume_tick();
+            timer.inject_frame_time(1.0 / 60.0);
         }
-        // EWMA should have converged near 60fps (within tolerance for
-        // test runner scheduling jitter).
+        // EWMA should have converged near 60fps
         let fps = timer.current_fps();
-        assert!(fps > 40.0, "FPS too low: {fps:.1}");
-        assert!(fps < 80.0, "FPS too high: {fps:.1}");
+        assert!(fps > 55.0, "FPS too low: {fps:.1}");
+        assert!(fps < 65.0, "FPS too high: {fps:.1}");
     }
 
     #[test]
@@ -295,13 +349,11 @@ mod tests {
         let mut timer = FrameTimer::new(60.0);
         // Establish baseline at 60fps
         for _ in 0..20 {
-            thread::sleep(Duration::from_millis(16));
-            timer.consume_tick();
+            timer.inject_frame_time(1.0 / 60.0);
         }
         let baseline = timer.current_fps();
         // Simulate a frame drop (2× frame time)
-        thread::sleep(Duration::from_millis(33));
-        timer.consume_tick();
+        timer.inject_frame_time(2.0 / 60.0);
         let after_drop = timer.current_fps();
         // FPS should have decreased
         assert!(

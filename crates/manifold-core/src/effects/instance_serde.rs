@@ -312,11 +312,19 @@ pub(super) fn template_known_for(
 /// calibration by id (alias-aware), append self-describing inline-`spec`
 /// entries that match nothing, and drop unknown entries with a warning
 /// (today's unknown-id policy). Returns the manifest + the `base_tracked` bit.
+///
+/// `is_reconcile_pass` distinguishes the deserialize-time call (false) from the
+/// `reconcile_manifest` call (true). The deserialize pass runs before the
+/// project's embedded presets are registered, so template resolution failures
+/// are expected and silent; the reconcile pass runs after registration,
+/// so placeholders there indicate a genuine BUG-079 unresolved preset and are
+/// logged with a warning.
 pub(super) fn build_param_manifest(
     is_generator: bool,
     effect_type: &PresetTypeId,
     graph: &Option<EffectGraphDef>,
     wire: Option<std::collections::BTreeMap<String, ParamEntryWire>>,
+    is_reconcile_pass: bool,
 ) -> (crate::params::ParamManifest, bool) {
     use crate::params::{Param, ParamOrigin};
     let mut entries: Vec<Param> = gather_known_params(is_generator, effect_type, graph)
@@ -370,11 +378,16 @@ pub(super) fn build_param_manifest(
                 base_tracked |= entry.apply_to(&mut p);
                 entries.push(p);
             } else if !template_known {
-                eprintln!(
-                    "[manifold-core] keeping param {id:?} on {effect_type:?} load with a \
-                     placeholder spec (preset template unresolved — project-local preset \
-                     not registered yet?)"
-                );
+                // Only log during the reconcile pass (after registration).
+                // Deserialize-time placeholders are expected — the project's
+                // embedded presets haven't been registered yet.
+                if is_reconcile_pass {
+                    eprintln!(
+                        "[manifold-core] keeping param {id:?} on {effect_type:?} reconcile \
+                         with a placeholder spec (preset template unresolved — project-local \
+                         preset not registered after registration pass? BUG-079)"
+                    );
+                }
                 // Bundled origin: the placeholder spec never serializes
                 // (only state does), so the real descriptor wins on the
                 // next resolvable load. Card position is tail-appended in
@@ -625,7 +638,7 @@ impl<'de> Deserialize<'de> for PresetInstance {
         // presets have been installed.
         let pending_wire = raw.params.clone();
         let (params, base_tracked) =
-            build_param_manifest(false, &raw.effect_type, &raw.graph, raw.params);
+            build_param_manifest(false, &raw.effect_type, &raw.graph, raw.params, false);
 
         let mut audio_mods = raw.audio_mods;
         if let Some(legacy) = raw.legacy_audio_trigger {
@@ -710,7 +723,7 @@ impl GeneratorInstanceRaw {
         // the effect-kind `Deserialize` impl above for the same pattern.
         let pending_wire = self.params.clone();
         let (params, base_tracked) =
-            build_param_manifest(true, &self.generator_type, &self.graph, self.params);
+            build_param_manifest(true, &self.generator_type, &self.graph, self.params, false);
         let mut audio_mods = self.audio_mods;
         if let Some(legacy) = self.legacy_audio_trigger {
             migrate_legacy_audio_trigger(legacy, &params, &mut audio_mods);

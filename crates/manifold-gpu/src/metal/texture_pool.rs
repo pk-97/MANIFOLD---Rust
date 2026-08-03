@@ -1,6 +1,19 @@
 //! Frame-stamped texture recycling pool.
 //!
 //! Matches Unity's `RenderTexture.GetTemporary()` / `ReleaseTemporary()` pattern.
+//!
+//! SAFETY CONTRACT (BUG-0ou6, TexturePool encode-pacing coupling): recycling
+//! is a frame-COUNTER argument, not a GPU fence — a texture released at frame
+//! F is re-handed-out at frame F + frames_in_flight on the assumption that
+//! the GPU has by then retired every pass from frame F. That assumption holds
+//! ONLY because the content thread's surface-readiness wait
+//! (`ContentPipeline::is_surface_ready`, crates/manifold-app/src/
+//! content_pipeline.rs, BUG-xaw4 (presentation-transport audit)) paces encode
+//! to <= frames_in_flight ahead of GPU completion. If encode pacing is ever
+//! decoupled from GPU completion, this pool can recycle a texture an
+//! in-flight pass still samples (silent tear) — recycling must then become
+//! fence-aware (stamp with the frame's signal value, recycle only when
+//! `is_done`).
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;

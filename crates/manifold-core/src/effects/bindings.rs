@@ -252,6 +252,75 @@ pub fn binding_id_for_node_param_in(
         .map(|b| b.id.clone())
 }
 
+/// Everything a node-param write needs to reroute through the owning card
+/// slot (BUG-1l7f redirect, `PARAM_TWO_WAY_BINDING_DESIGN.md` D2): the
+/// manifest id to write, the fold inputs for [`invert_card_reshape`], and
+/// the binding's authored default — the value the render falls back to when
+/// the manifest slot is absent, which is what undo must restore in that
+/// case.
+#[derive(Debug, Clone)]
+pub struct CardSlotWrite {
+    pub outer_id: String,
+    pub min: f32,
+    pub max: f32,
+    pub invert: bool,
+    pub curve: crate::macro_bank::MacroCurve,
+    pub scale: f32,
+    pub offset: f32,
+    pub authored_default: f32,
+}
+
+/// The card slot that OWNS `param_key` on root node `node_doc_id`, when an
+/// authored-default binding targets it. Scoped to authored defaults for the
+/// same reason as the write-site warning: a mirrored default never plants
+/// (BUG-ji6q), so a node write there stands and rerouting would be wrong.
+/// Root-level only — binding metadata addresses root node ids, and a
+/// group-internal numeric id doesn't resolve against them (mirrors
+/// `card_owned_write_warning`'s scope). `None` also when the binding's
+/// slider spec is missing from `meta.params` — without the fold inputs the
+/// inverse can't be computed, and the caller stays on the def-write path.
+pub fn card_slot_for_node_param(
+    def: &crate::effect_graph_def::EffectGraphDef,
+    node_doc_id: u32,
+    param_key: &str,
+) -> Option<CardSlotWrite> {
+    use crate::effect_graph_def::BindingTarget;
+    let meta = def.preset_metadata.as_ref()?;
+    let node = def.nodes.iter().find(|n| n.id == node_doc_id)?;
+    let binding = meta.bindings.iter().find(|b| {
+        !b.default_mirrors_node_param
+            && matches!(&b.target, BindingTarget::Node { node_id, param }
+                if *node_id == node.node_id && param == param_key)
+    })?;
+    let spec = meta.params.iter().find(|p| p.id == binding.id)?;
+    Some(CardSlotWrite {
+        outer_id: binding.id.clone(),
+        min: spec.min,
+        max: spec.max,
+        invert: spec.invert,
+        curve: spec.curve,
+        scale: binding.scale,
+        offset: binding.offset,
+        authored_default: binding.default_value,
+    })
+}
+
+/// The scalar a card-slot redirect can carry. Vec/Color/Table/String have
+/// no scalar reading of a card slider — the caller stays on the def-write
+/// path (with the loud warning) for those.
+pub fn serialized_value_as_f32(
+    value: &crate::effect_graph_def::SerializedParamValue,
+) -> Option<f32> {
+    use crate::effect_graph_def::SerializedParamValue as V;
+    match value {
+        V::Float { value } => Some(*value),
+        V::Int { value } => Some(*value as f32),
+        V::Bool { value } => Some(if *value { 1.0 } else { 0.0 }),
+        V::Enum { value } => Some(*value as f32),
+        _ => None,
+    }
+}
+
 pub fn apply_card_reshape(
     value: f32,
     min: f32,

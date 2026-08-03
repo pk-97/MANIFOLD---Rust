@@ -18,6 +18,34 @@ from pathlib import Path
 
 MAIN_CHECKOUT = Path("/Users/peterkiemann/MANIFOLD - Rust")
 
+# GPU-proofs landing scope: narrow the gpu-proofs leg to the subsystem a branch
+# touches, so a raytracing-only landing does not pay for the whole ~4.5-min
+# suite. Each row is (path-substrings, (filters, skips)); a changed path whose
+# substring matches a row contributes that scope, and matching scopes UNION
+# (cargo test runs tests matching ANY filter). If no row matches, or any
+# GPU-touching path is left uncovered by a narrow scope, the leg falls back to
+# the FULL suite — never guess narrow. gpu_proofs_gate.py's default is the full
+# suite, so adding a row here is purely additive; the nightly trunk_health
+# sweep keeps the full-suite safety net.
+#   - `rt_` skips `particletext`: the freeze proof `particletext_*` hangs the
+#     GPU on main (BUG-i6eo), so keep it out of RT-scoped runs even though no
+#     rt_ test currently matches it.
+GPU_PROOFS_SCOPE = [
+    (
+        (
+            "crates/manifold-gpu/src/metal/raytrace.rs",
+            "crates/manifold-renderer/src/node_graph/primitives/render_scene.rs",
+            "crates/manifold-renderer/src/node_graph/primitives/shaders/render_scene.wgsl",
+            "crates/manifold-renderer/tests/gpu_proofs/rt_",
+        ),
+        (["rt_"], ["particletext"]),
+    ),
+    (
+        ("crates/manifold-renderer/src/node_graph/freeze/",),
+        (["freeze::"], []),
+    ),
+]
+
 
 def run_cmd(cmd, cwd, timeout):
     """Run subprocess, return (exit, stdout, stderr, duration).
@@ -65,19 +93,53 @@ def get_touched_packages(repo, base_sha):
     return packages
 
 
+def _path_is_gpu(path):
+    """Single-path GPU-trigger predicate.
+
+    Mirrors context-nudge triggers, plus the gpu-proofs test dirs — a change
+    to a proof itself (tests/gpu_proofs/rt_*.rs) must run the gpu-proofs leg,
+    otherwise the very tests a branch edits never execute at landing.
+    """
+    if path.endswith(".wgsl"):
+        return True
+    if path.startswith("crates/manifold-gpu/") or path.startswith("crates/manifold-renderer/src/node_graph/"):
+        return True
+    if "shaders/" in path or "gpu_encoder" in path:
+        return True
+    if "tests/gpu_proofs/" in path:
+        return True
+    return False
+
+
 def touches_gpu_path(repo, base_sha):
-    """Check if diff touches GPU-path files (mirrors context-nudge triggers)."""
+    """Check if diff touches GPU-path files."""
     changed = run_cmd(["git", "diff", "--name-only", f"{base_sha}..HEAD"],
                       cwd=repo, timeout=300)[1]
-    for line in changed.strip().splitlines():
-        line = line.strip()
-        if line.endswith(".wgsl"):
-            return True
-        if line.startswith("crates/manifold-gpu/") or line.startswith("crates/manifold-renderer/src/node_graph/"):
-            return True
-        if "shaders/" in line or "gpu_encoder" in line:
-            return True
-    return False
+    return any(_path_is_gpu(line.strip())
+               for line in changed.strip().splitlines() if line.strip())
+
+
+def gpu_proofs_scope_for_paths(paths):
+    """Return (filters, skips) for changed `paths`, or None for the FULL suite.
+
+    Union of every GPU_PROOFS_SCOPE row a path matches; None (FULL) when no
+    row matches or when any GPU-touching path is left uncovered by a narrow
+    scope. Non-GPU paths (scripts/, docs/) never force FULL by themselves.
+    """
+    filters, skips = [], []
+    covered = set()
+    for pattern_group, (filters_, skips_) in GPU_PROOFS_SCOPE:
+        hits = {p for p in paths if any(pat in p for pat in pattern_group)}
+        if hits:
+            filters.extend(filters_)
+            skips.extend(skips_)
+            covered |= hits
+    if not filters:
+        return None
+    gpu_paths = {p for p in paths if _path_is_gpu(p)}
+    if gpu_paths - covered:
+        return None
+    return (sorted(set(filters)), sorted(set(skips)))
 
 
 def reverse_deps(repo, packages):
@@ -248,9 +310,21 @@ def main():
             results.append(("SKIP", "gpu-proofs", None, None))
             print(f"[SKIP] gpu-proofs — SKIPPED BY FLAG: {args.skip_gpu}")
         else:
-            exit_, out, err, duration = run_cmd(
-                ["python3", "scripts/gpu_proofs_gate.py"],
-                cwd=repo, timeout=7200)
+            changed = run_cmd(["git", "diff", "--name-only", f"{base_sha}..HEAD"],
+                              cwd=repo, timeout=300)[1]
+            paths = [l.strip() for l in changed.strip().splitlines() if l.strip()]
+            scope = gpu_proofs_scope_for_paths(paths)
+            cmd = ["python3", "scripts/gpu_proofs_gate.py"]
+            if scope is None:
+                print("[gpu-proofs] full suite (no narrow scope covers the touched paths)")
+            else:
+                filters, skips = scope
+                for f in filters:
+                    cmd += ["--filter", f]
+                for s in skips:
+                    cmd += ["--skip", s]
+                print(f"[gpu-proofs] scoped to filters={filters} skips={skips}")
+            exit_, out, err, duration = run_cmd(cmd, cwd=repo, timeout=7200)
             # On failure the tail MUST name the failing tests. gpu_proofs_gate's
             # summary prints "Failed tests:"/"Drifted goldens:" ABOVE its
             # per-binary list, so a bare last-20-lines tail scrolls the names

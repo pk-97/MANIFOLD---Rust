@@ -100,6 +100,11 @@ pub struct GpuEncoder {
     /// Per-dispatch timestamp profiling state. `None` (the default) costs
     /// one branch per dispatch; see [`Self::enable_dispatch_profiling`].
     pub(crate) profile: Option<ProfileState>,
+    /// Human-readable scopes recorded via [`Self::note_scope`], moved into
+    /// the fault handler at commit. On a GPU error the log names what the
+    /// buffer was encoding — a bare buffer label like "Generators" covers
+    /// every card of the frame and can't say which one hung (BUG-84fv).
+    pub(crate) scopes: Vec<String>,
 }
 
 unsafe impl Send for GpuEncoder {}
@@ -247,6 +252,7 @@ impl GpuEncoder {
     /// Works on an unprofiled encoder too (empty span list, total only).
     pub fn commit_and_wait_profiled(mut self, device: &GpuDevice) -> GpuFrameProfile {
         self.end_current();
+        self.register_fault_handler();
         self.cmd_buf.commit();
         let total_ms = unsafe {
             self.cmd_buf.waitUntilCompleted();
@@ -645,6 +651,13 @@ impl GpuEncoder {
                 let () = msg_send![&enc, useResource: &*blas.structure, usage: MTLResourceUsage::Read];
             }
             let () = msg_send![&enc, useResource: accel.instance_buffer.raw(), usage: MTLResourceUsage::Read];
+            // BUG-84fv audit: the kernels also read vertex/index data via
+            // raw addresses (RtNormalSource.vertex_base_addr) — declare
+            // those buffers too, or memory pressure can reclaim them
+            // mid-trace (same reclamation class as above).
+            for geo in &accel.geometry_buffers {
+                let () = msg_send![&enc, useResource: &**geo, usage: MTLResourceUsage::Read];
+            }
         }
         // Same contract for the direct bindings.
         for binding in bindings {
@@ -2193,6 +2206,9 @@ impl GpuEncoder {
     }
 
     /// Register a diagnostic completed handler that logs GPU errors.
+    /// Kept for call sites that need the simple form; the universal
+    /// handler with scope capture is registered at commit
+    /// ([`Self::register_fault_handler`]).
     pub fn add_completed_handler_with_status(&self, label: &str) {
         use block2::RcBlock;
         use objc2_metal::MTLCommandBufferStatus;
@@ -2211,6 +2227,7 @@ impl GpuEncoder {
                         (code, desc)
                     }
                 };
+                super::gpu_fault::record_fault(&desc);
                 log::error!(
                     "[GPU] Command buffer '{}' error (code={}): {}",
                     label,
@@ -2224,15 +2241,71 @@ impl GpuEncoder {
         }
     }
 
+    /// Record a human-readable scope (card, layer, pass) against this
+    /// encoder. On a GPU fault the error log lists every scope encoded
+    /// into the buffer, so a hang or page fault names the suspects
+    /// instead of just the buffer (BUG-84fv). A handful of calls per
+    /// frame — per card, not per dispatch.
+    pub fn note_scope(&mut self, scope: &str) {
+        self.scopes.push(scope.to_string());
+    }
+
+    /// Register the error-logging completion handler, moving the recorded
+    /// scopes into the closure. Called from every commit path — not at
+    /// creation — so the scopes hand off by move with no shared state.
+    /// Error logging must be universal, not opt-in per call site: a GPU
+    /// fault on an unlogged buffer surfaces only as "innocent victim"
+    /// discards on OTHER buffers, hiding the culprit (BUG-665r's
+    /// diagnosis gap).
+    fn register_fault_handler(&mut self) {
+        use block2::RcBlock;
+        use objc2_metal::MTLCommandBufferStatus;
+
+        let label = unsafe { self.cmd_buf.label() }
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| String::from("(unlabeled)"));
+        let scopes = std::mem::take(&mut self.scopes);
+        let block = RcBlock::new(move |buf: NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
+            let cb = unsafe { buf.as_ref() };
+            let status = unsafe { cb.status() };
+            if status == MTLCommandBufferStatus::Error {
+                let err = unsafe { cb.error() };
+                let (code, desc) = match err {
+                    None => (-1i64, String::from("(nil)")),
+                    Some(err) => {
+                        let code = err.code() as i64;
+                        let desc = err.localizedDescription().to_string();
+                        (code, desc)
+                    }
+                };
+                super::gpu_fault::record_fault(&desc);
+                if scopes.is_empty() {
+                    log::error!("[GPU] Command buffer '{label}' error (code={code}): {desc}");
+                } else {
+                    log::error!(
+                        "[GPU] Command buffer '{label}' error (code={code}): {desc} \
+                         — encoded scopes: {}",
+                        scopes.join(" | ")
+                    );
+                }
+            }
+        });
+        unsafe {
+            self.cmd_buf.addCompletedHandler(RcBlock::as_ptr(&block));
+        }
+    }
+
     /// Commit the command buffer to the GPU queue.
     pub fn commit(mut self) {
         self.end_current();
+        self.register_fault_handler();
         self.cmd_buf.commit();
     }
 
     /// Commit and block until the GPU has scheduled (not completed) the work.
     pub fn commit_and_wait_scheduled(mut self) {
         self.end_current();
+        self.register_fault_handler();
         self.cmd_buf.commit();
         unsafe { self.cmd_buf.waitUntilScheduled() };
     }
@@ -2248,6 +2321,7 @@ impl GpuEncoder {
     /// (BUG-013). See [`Self::verify_completed`] for the dev-vs-release split.
     pub fn commit_and_wait_completed(mut self) {
         self.end_current();
+        self.register_fault_handler();
         self.cmd_buf.commit();
         unsafe { self.cmd_buf.waitUntilCompleted() };
         self.verify_completed("commit_and_wait_completed");
@@ -2289,6 +2363,7 @@ impl GpuEncoder {
     /// (degenerate / no-GPU-work case). Use for benches/profilers only.
     pub fn commit_and_wait_completed_timed(mut self) -> f64 {
         self.end_current();
+        self.register_fault_handler();
         self.cmd_buf.commit();
         unsafe {
             self.cmd_buf.waitUntilCompleted();

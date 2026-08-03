@@ -23,7 +23,7 @@ fn body(
     let res_y = u32(resolution_y);
 
     if idx >= res_x * res_y {
-        return Element(vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), vec2<f32>(0.0, 0.0));
+        return Element(vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), vec2<f32>(0.0, 0.0), vec4<f32>(0.0));
     }
 
     let row = idx / res_x;
@@ -34,5 +34,5 @@ fn body(
     let x = (nx - 0.5) * size_x;
     let z = (nz - 0.5) * size_y;
 
-    return Element(vec3<f32>(x, 0.0, z), vec3<f32>(0.0, 1.0, 0.0), vec2<f32>(nx, nz));
+    return Element(vec3<f32>(x, 0.0, z), vec3<f32>(0.0, 1.0, 0.0), vec2<f32>(nx, nz), vec4<f32>(0.0));
 }

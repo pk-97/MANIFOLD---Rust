@@ -1460,15 +1460,39 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     // ── Surface readiness (GPU fence notification) ──────────────────────
 
     /// Check if the surface is ready (GPU already finished, or no pending work).
+    ///
+    /// Two conditions (BUG-xaw4): the content queue's OWN frame that last
+    /// wrote this slot has completed (the shared event), AND every bridge the
+    /// UI samples reports the slot reusable — front has moved off it and the
+    /// UI's reads have retired on the GPU. The second half was missing while
+    /// the UI reads front surfaces on a SEPARATE MTLDevice: under saturation
+    /// the content thread overwrote a surface the UI's composite was still
+    /// sampling — the preview tear Peter saw at 60fps under RT load.
+    ///
+    /// Load-bearing beyond presentation (BUG-0ou6, TexturePool encode-pacing
+    /// coupling): this wait is what paces encode to <= frames_in_flight
+    /// ahead of GPU completion, and TexturePool's frame-stamp recycling
+    /// (crates/manifold-gpu/src/metal/texture_pool.rs) is correct only
+    /// under that pacing. Weakening this wait silently breaks the pool's
+    /// recycle safety.
     #[cfg(target_os = "macos")]
     pub fn is_surface_ready(&self) -> bool {
         let pending = self.surface_signal_values[self.write_surface_index];
-        if pending == 0 {
-            return true;
+        let write_done = pending == 0
+            || self
+                .native_event
+                .as_ref()
+                .is_none_or(|e| e.is_done(pending));
+        if !write_done {
+            return false;
         }
-        self.native_event
-            .as_ref()
-            .is_none_or(|e| e.is_done(pending))
+        let slot = self.write_surface_index;
+        let bridge_ok = |b: &Option<Arc<crate::shared_texture::SharedTextureBridge>>| {
+            b.as_ref().is_none_or(|b| b.is_reusable(slot))
+        };
+        bridge_ok(&self.preview_bridge)
+            && bridge_ok(&self.node_preview_bridge)
+            && bridge_ok(&self.node_atlas_bridge)
     }
 
     /// Register a GPU notification for when the current surface becomes
@@ -1503,6 +1527,20 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     /// Handle GPU timeout — clear stale signal to prevent infinite blocking.
     #[cfg(target_os = "macos")]
     pub fn handle_surface_timeout(&mut self) {
+        // BUG-665r: a blacklisted queue never advances the shared event —
+        // without this check the timeout clears the slot, the next commit
+        // errors instantly, and the loop repeats forever (wedged output
+        // that even hangs shutdown). There is no in-process recovery for
+        // a blacklisted queue; die loud and clean so the show restarts in
+        // seconds instead of staring at a frozen frame.
+        if manifold_gpu::gpu_fault::submissions_ignored() {
+            log::error!(
+                "[ContentPipeline] FATAL: the GPU driver blacklisted this process's command \
+                 queue (submissions ignored after prior GPU errors) — rendering cannot \
+                 recover this session. Exiting now; relaunch Manifold. (BUG-665r)"
+            );
+            std::process::exit(70);
+        }
         let idx = self.write_surface_index;
         let pending = self.surface_signal_values[idx];
         let signaled = self.native_event.as_ref().map_or(0, |e| e.signaled_value());

@@ -57,7 +57,7 @@ fn gcm_cube_face_uv(face: u32, unit_pos: vec3<f32>) -> vec2<f32> {
 fn body(idx: u32, count: u32, max_capacity: i32, size: f32) -> Element {
     if idx >= 36u {
         // Padding vertex — degenerate (matches the hand kernel).
-        return Element(vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), vec2<f32>(0.0, 0.0));
+        return Element(vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), vec2<f32>(0.0, 0.0), vec4<f32>(0.0));
     }
 
     let face = idx / 6u;
@@ -66,5 +66,5 @@ fn body(idx: u32, count: u32, max_capacity: i32, size: f32) -> Element {
     let normal = GCM_CUBE_NORMALS[face];
     let uv = gcm_cube_face_uv(face, unit_pos);
 
-    return Element(pos, normal, uv);
+    return Element(pos, normal, uv, vec4<f32>(0.0));
 }

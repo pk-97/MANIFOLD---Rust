@@ -42,7 +42,7 @@ fn body(
     let cols = sides + 1;
     let total = u32(p_len * cols);
     if idx >= total {
-        return Element2(vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(0.0, 0.0, 0.0), vec2<f32>(0.0, 0.0));
+        return Element2(vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(0.0, 0.0, 0.0), vec2<f32>(0.0, 0.0), vec4<f32>(0.0));
     }
 
     let row = i32(idx) / cols;
@@ -88,5 +88,5 @@ fn body(
     let row_denom = max(f32(p_len - 1), 1.0);
     let uv = vec2<f32>(f32(col) / sides_f, f32(row) / row_denom);
 
-    return Element2(pos, vec3<f32>(0.0, 0.0, 0.0), uv);
+    return Element2(pos, vec3<f32>(0.0, 0.0, 0.0), uv, vec4<f32>(0.0));
 }

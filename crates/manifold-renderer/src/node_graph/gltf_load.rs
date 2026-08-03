@@ -62,6 +62,9 @@ const MANIFOLD_SUPPORTED_EXTENSIONS: &[&str] = &[
     "KHR_materials_iridescence",
     "KHR_materials_anisotropy",
     "KHR_materials_dispersion",
+    // RAYTRACING_DESIGN.md section 16 TL3 — raw-JSON sniffed, no typed
+    // accessor at 1.4.1:
+    "KHR_materials_diffuse_transmission",
     // IMPORT_ANYTHING_WAVE_DESIGN.md W1 — raw-JSON sniffed + manual decode,
     // no crate feature exists for this extension at 1.4.1:
     "EXT_texture_webp",
@@ -718,6 +721,11 @@ fn flatten_primitive(
         .collect();
     let normals: Option<Vec<[f32; 3]>> = reader.read_normals().map(|it| it.collect());
     let uvs: Option<Vec<[f32; 2]>> = reader.read_tex_coords(0).map(|it| it.into_f32().collect());
+    // BUG-wfxe: TANGENT (vec4: xyz direction + w bitangent sign) feeds
+    // authored tangent-space normal mapping. Direction transforms with the
+    // normal matrix like any covector-adjacent direction here; w passes
+    // through. Absent → [0,0,0,0], the shader's derived-frame sentinel.
+    let tangents: Option<Vec<[f32; 4]>> = reader.read_tangents().map(|it| it.collect());
 
     let world_positions: Vec<[f32; 3]> = positions
         .iter()
@@ -726,6 +734,14 @@ fn flatten_primitive(
     let world_normals: Option<Vec<[f32; 3]>> = normals
         .as_ref()
         .map(|ns| ns.iter().map(|n| normalize3(mat3_mul_vec3(*normal_mat, *n))).collect());
+    let world_tangents: Option<Vec<[f32; 4]>> = tangents.as_ref().map(|ts| {
+        ts.iter()
+            .map(|t| {
+                let d = normalize3(mat3_mul_vec3(*normal_mat, [t[0], t[1], t[2]]));
+                [d[0], d[1], d[2], t[3]]
+            })
+            .collect()
+    });
 
     let indices: Vec<u32> = match reader.read_indices() {
         Some(idx) => idx.into_u32().collect(),
@@ -751,6 +767,7 @@ fn flatten_primitive(
         for &i in &[i0, i1, i2] {
             let normal = world_normals.as_ref().map_or(face_normal, |ns| ns[i]);
             let uv = uvs.as_ref().map_or([0.0, 0.0], |u| u[i]);
+            let tangent = world_tangents.as_ref().map_or([0.0; 4], |ts| ts[i]);
             out.push(MeshVertex {
                 position: world_positions[i],
                 _pad0: 0.0,
@@ -758,6 +775,7 @@ fn flatten_primitive(
                 _pad1: 0.0,
                 uv,
                 _pad2: [0.0, 0.0],
+                tangent,
             });
         }
     }
@@ -1122,6 +1140,22 @@ pub(crate) struct GltfMaterialInfo {
     /// surface): typed accessor, `gltf` 1.4.1 has the transmission
     /// feature (see `transmission_factor` above).
     pub transmission_texture: Option<u32>,
+    /// RAYTRACING_DESIGN.md section 16 TL3:
+    /// `KHR_materials_diffuse_transmission`'s `diffuseTransmissionFactor`
+    /// (default `0.0` when the extension is absent). Raw-JSON sniff — no
+    /// typed accessor for this extension exists in `gltf`/`gltf-json` 1.4.1.
+    /// Maps to `Material::translucency` via the importer's param table.
+    pub diffuse_transmission_factor: f32,
+    /// `KHR_materials_diffuse_transmission`'s `diffuseTransmissionTexture`
+    /// index, if any (R channel scales `diffuseTransmissionFactor`). Color
+    /// factor/texture fidelity gap per section 16.8 — populated at import,
+    /// logged as a gap, consumed by a deferred phase.
+    #[expect(
+        dead_code,
+        reason = "populated at import for section 16.8 deferred texture path; the BUG-213-style \
+                  gap-report line is generated from the local variable in the parse block"
+    )]
+    pub diffuse_transmission_texture: Option<u32>,
     /// `KHR_materials_clearcoat`'s `clearcoatFactor` (default `0.0` — glTF's
     /// own implicit default, and the value that makes G-P5's coat lobe
     /// exactly inert). GLB_CONFORMANCE_DESIGN.md G-P5/D5: parsed by raw
@@ -2296,6 +2330,12 @@ pub(crate) fn flatten_skinned_node(
             .collect();
         let normals: Option<Vec<[f32; 3]>> = reader.read_normals().map(|it| it.collect());
         let uvs: Option<Vec<[f32; 2]>> = reader.read_tex_coords(0).map(|it| it.into_f32().collect());
+        // BUG-wfxe: authored tangents stay ZERO here deliberately — the GPU
+        // skinning path transforms positions/normals with the joints but has
+        // no tangent transform, so passing the authored frame through would
+        // shade skinned animation with a stale basis. Zero = the shader's
+        // derived-frame sentinel = today's behavior, until the skin shader
+        // learns to skin tangents (follow-up).
         let vjoints: Option<Vec<[u16; 4]>> = reader.read_joints(0).map(|it| it.into_u16().collect());
         let vweights: Option<Vec<[f32; 4]>> = reader.read_weights(0).map(|it| it.into_f32().collect());
         let indices: Vec<u32> = match reader.read_indices() {
@@ -2324,6 +2364,7 @@ pub(crate) fn flatten_skinned_node(
                     _pad1: 0.0,
                     uv,
                     _pad2: [0.0, 0.0],
+                    tangent: [0.0; 4],
                 });
                 joints.push(match &vjoints {
                     Some(j) => [j[i][0] as f32, j[i][1] as f32, j[i][2] as f32, j[i][3] as f32],
@@ -2428,6 +2469,9 @@ fn flatten_rigid_multi_node(
                         _pad1: 0.0,
                         uv,
                         _pad2: [0.0, 0.0],
+                        // Zero like the skinned path — GPU node-slot
+                        // transforms have no tangent transform (BUG-wfxe).
+                        tangent: [0.0; 4],
                     });
                     joints.push([slot as f32, 0.0, 0.0, 0.0]);
                     weights.push([1.0, 0.0, 0.0, 0.0]);
@@ -2572,6 +2616,10 @@ fn flatten_primitive_morph_deltas(
                     _pad1: 0.0,
                     uv: [0.0, 0.0],
                     _pad2: [0.0, 0.0],
+                    // Morph TANGENT deltas exist in the spec (the reader's
+                    // third tuple element above) but morph-blended tangent
+                    // frames are unbuilt — zero = derived-frame sentinel.
+                    tangent: [0.0; 4],
                 });
             }
         }
@@ -3565,6 +3613,46 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 .map(|v| f1(v, "dispersion", 0.0))
                 .unwrap_or(0.0);
 
+            // RAYTRACING_DESIGN.md section 16 TL3:
+            // KHR_materials_diffuse_transmission. Raw-JSON sniff — no typed
+            // accessor at 1.4.1. Factor maps to Material::translucency; color
+            // factor and texture stay deferred per section 16.8 (tint=albedo
+            // is the right default for foliage; the three Khronos conformance
+            // assets become the held-out demo).
+            let diffuse_transmission_ext =
+                m.extension_value("KHR_materials_diffuse_transmission");
+            let diffuse_transmission_factor = diffuse_transmission_ext
+                .map(|v| f1(v, "diffuseTransmissionFactor", 0.0))
+                .unwrap_or(0.0);
+            let diffuse_transmission_texture = diffuse_transmission_ext
+                .and_then(|v| tex_idx(v, "diffuseTransmissionTexture"));
+            let _diffuse_transmission_color_texture = diffuse_transmission_ext
+                .and_then(|v| tex_idx(v, "diffuseTransmissionColorTexture"));
+            // Log fidelity gaps (section 16.8) — color factor and texture
+            // NOT mapped; tint=albedo is the forward-term default.
+            if let Some(ext) = diffuse_transmission_ext {
+                if ext.get("diffuseTransmissionColorFactor").is_some() {
+                    geometry_report_lines.push(format!(
+                        "{label}: KHR_materials_diffuse_transmission diffuseTransmissionColorFactor \
+                         not mapped (v1 uses albedo tint — see docs/RAYTRACING_DESIGN.md section 16.8)"
+                    ));
+                }
+                if ext.get("diffuseTransmissionColorTexture").is_some() {
+                    geometry_report_lines.push(format!(
+                        "{label}: KHR_materials_diffuse_transmission diffuseTransmissionColorTexture \
+                         given — not mapped (v1 color-texture deferred, section 16.8) and \
+                         texture will not be decoded"
+                    ));
+                }
+            }
+            if diffuse_transmission_texture.is_some() {
+                geometry_report_lines.push(format!(
+                    "{label}: KHR_materials_diffuse_transmission diffuseTransmissionTexture \
+                     given — not mapped (v1 factor-only; texture deferred to section 16.8) \
+                     and texture will not be decoded"
+                ));
+            }
+
             // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1: KHR_materials_volume.
             // Typed accessor (`Material::volume()`) — the Cargo feature IS
             // enabled at 1.4.1, unlike the four raw-JSON families above.
@@ -3660,6 +3748,10 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                     "transmission",
                     m.transmission().and_then(|t| t.transmission_texture()).map(|t| t.tex_coord()),
                 ),
+                (
+                    "diffuseTransmission",
+                    diffuse_transmission_ext.and_then(|v| tex_coord_idx(v, "diffuseTransmissionTexture")),
+                ),
             ] {
                 if let Some(n) = tex_coord
                     && n != 0
@@ -3737,6 +3829,8 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                     .transmission()
                     .and_then(|t| t.transmission_texture())
                     .map(|t| t.texture().index() as u32),
+                diffuse_transmission_factor,
+                diffuse_transmission_texture,
                 clearcoat_factor,
                 clearcoat_roughness_factor,
                 clearcoat_texture,
@@ -3849,6 +3943,8 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
             emissive_strength: 1.0,
             transmission_factor: 0.0,
             transmission_texture: None,
+            diffuse_transmission_factor: 0.0,
+            diffuse_transmission_texture: None,
             clearcoat_factor: 0.0,
             clearcoat_roughness_factor: 0.0,
             clearcoat_texture: None,
@@ -4349,6 +4445,60 @@ mod animation_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// BUG-wfxe red proof: `NormalTangentMirrorTest.glb` (Khronos'
+    /// conformance asset for exactly this path — authored tangents with
+    /// BOTH handednesses, w = +1 and w = -1 halves) must import its
+    /// TANGENT accessor end to end — pre-fix every vertex carried the
+    /// `[0,0,0,0]` sentinel. Asserts real tangents (unit-ish xyz, w = ±1)
+    /// and that BOTH signs survive (the mirrored half is the case the
+    /// derived cotangent frame gets wrong).
+    #[test]
+    fn normal_tangent_mirror_fixture_imports_authored_tangents() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/khronos/NormalTangentMirrorTest.glb");
+        assert!(path.exists(), "NormalTangentMirrorTest.glb missing at {}", path.display());
+        let verts = load_gltf_mesh(&path, GltfMeshSelector::WholeScene)
+            .unwrap_or_else(|e| panic!("load_gltf_mesh({}): {e}", path.display()));
+        assert!(!verts.is_empty());
+        let authored = verts.iter().filter(|v| v.tangent[3] != 0.0).count();
+        assert!(
+            authored as f32 > verts.len() as f32 * 0.9,
+            "NormalTangentMirrorTest ships TANGENT — expected >90% authored tangents, \
+             got {authored}/{} (the import is dropping the accessor)",
+            verts.len()
+        );
+        let pos = verts.iter().filter(|v| (v.tangent[3] - 1.0).abs() < 1e-6).count();
+        let neg = verts.iter().filter(|v| (v.tangent[3] + 1.0).abs() < 1e-6).count();
+        assert!(
+            pos > 0 && neg > 0,
+            "both bitangent signs must survive (mirror test asset): +1={pos}, -1={neg}"
+        );
+        let sample = verts.iter().find(|v| v.tangent[3] != 0.0).unwrap();
+        let len = (sample.tangent[0].powi(2) + sample.tangent[1].powi(2) + sample.tangent[2].powi(2))
+            .sqrt();
+        assert!(
+            (len - 1.0).abs() < 0.05,
+            "authored tangent direction must be ~unit (world-transformed), got |t|={len}"
+        );
+    }
+
+    /// BUG-wfxe fallback half: a mesh WITHOUT a TANGENT accessor keeps the
+    /// zero sentinel, so the shader takes the derived cotangent frame
+    /// (pre-BUG-wfxe behavior, byte-identical for procedural meshes).
+    #[test]
+    fn mesh_without_tangent_keeps_zero_sentinel() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/cc0__oomurasaki_azalea_r._x_pulchrum.glb");
+        if !path.exists() {
+            println!("mesh_without_tangent_keeps_zero_sentinel: fixture not found, skipping");
+            return;
+        }
+        let verts = load_gltf_mesh(&path, GltfMeshSelector::WholeScene)
+            .unwrap_or_else(|e| panic!("load_gltf_mesh({}): {e}", path.display()));
+        let authored = verts.iter().filter(|v| v.tangent[3] != 0.0).count();
+        assert_eq!(authored, 0, "azalea ships no TANGENT — every vertex must keep the sentinel");
+    }
 
     /// CPU-only, fast — not gated behind `#[ignore]`. Guards the
     /// file-missing case (no fixture in a checkout without

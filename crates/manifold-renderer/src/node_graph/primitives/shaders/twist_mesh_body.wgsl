@@ -65,5 +65,5 @@ fn body(
         nrm.y = nx * sn + ny * c;
     }
 
-    return Element(pos, nrm, e_in.uv);
+    return Element(pos, nrm, e_in.uv, e_in.tangent);
 }

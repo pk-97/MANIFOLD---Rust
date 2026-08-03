@@ -27,8 +27,6 @@ import os
 import re
 import sys
 
-# glm-4.7 is dispatch-tier (Peter 2026-07-27): classifier-dedicated on the
-# sonnet slot, but still a legitimate dispatcher — haiku-only spawns.
 EXECUTOR_TIERS = re.compile(
     r"claude-(sonnet|haiku)|deepseek|kimi-k2|kimi-for-coding",
     re.IGNORECASE,
@@ -103,15 +101,13 @@ def main() -> None:
     try:
         payload = json.load(sys.stdin)
 
-        # Seat markers first (2026-07-28, measured via telemetry `keys`):
-        # subagent/teammate PreToolUse payloads carry `agent_id`/`agent_type`;
-        # the lead's carry neither. Transcript-model detection CANNOT see
-        # this — teammate payloads carry the PARENT transcript, so the model
-        # reads as the lead and a haiku lane spawned an Explore agent
-        # (2026-07-28). Marker present → deny: with the dispatcher seat
-        # retired (CLAUDE.md Agents), no worker seat spawns anything; if a
-        # dispatcher tier returns, reintroduce its allowance HERE, on
-        # markers, never on transcript model.
+        # Seat markers first: subagent/teammate PreToolUse payloads carry
+        # `agent_id`/`agent_type`; the lead's carry neither. Transcript-model
+        # detection CANNOT see this — teammate payloads carry the PARENT
+        # transcript. Marker present → deny: with the dispatcher seat retired
+        # (CLAUDE.md Agents), no worker seat spawns anything; if a dispatcher
+        # tier returns, reintroduce its allowance HERE, on markers, never on
+        # transcript model.
         if any(payload.get(k) for k in ("agent_id", "agent_type", "teammate_name")):
             deny(
                 "Agent spawn denied: this session is a worker seat "

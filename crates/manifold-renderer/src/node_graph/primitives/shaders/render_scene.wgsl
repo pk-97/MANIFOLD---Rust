@@ -29,8 +29,8 @@
 // pattern), byte-identical output. ONE envmap is shared across every PBR
 // object in the scene (an environment map is scene-wide, not per-object).
 //
-// MeshVertex layout (48 bytes), entry point names, and per-kind
-// dispatch: identical to render_3d_mesh.wgsl.
+// MeshVertex layout (64 bytes — BUG-wfxe added tangent), entry point
+// names, and per-kind dispatch: identical to render_3d_mesh.wgsl.
 
 const PI: f32 = 3.14159265358979;
 
@@ -41,6 +41,7 @@ struct Vertex {
     _pad1: f32,
     uv: vec2<f32>,
     _pad2: vec2<f32>,
+    tangent: vec4<f32>,
 };
 
 // Superset uniform, rebuilt once per object per draw call. 16-byte
@@ -192,11 +193,26 @@ struct Uniforms {
     // clearcoat_family_flags()) — bit0=clearcoat_map, bit1=
     // clearcoat_roughness_map, bit2=clearcoat_normal_map present.
     volume_attenuation_color: vec4<f32>,
+    // RAYTRACING_DESIGN.md section 16 TL7: KHR_materials_diffuse_transmission.
+    // x = diffuse transmission factor (default 0.0 — inert). yzw reserved
+    // (first consumer = the future color-texture flag, section 16.8). Mirrors
+    // `RenderSceneUniforms::diffuse_transmission_params` in render_scene.rs.
+    diffuse_transmission_params: vec4<f32>,
     // RAYTRACING_DESIGN.md section 9 RD9/RD1: RT feature flags. x =
     // rt_reflections active this frame (rt_enabled && rt_ready &&
     // rt_reflections && non-empty casters — the trace dispatch ran with
-    // refl_spp > 0, so binding 43 holds traced data). yzw reserved.
+    // refl_spp > 0, so binding 43 holds traced data). y = the traced-
+    // diffuse substitution gate (section 14 ED6: the GI gather ran with
+    // gi_spp > 0, so binding 42's `.rgb` holds env+GI radiance). zw
+    // reserved.
     rt_flags: vec4<f32>,
+    // TAA/MetalFX velocity jitter exclusion: (cur_x, cur_y, prev_x,
+    // prev_y) as NDC offsets (jitter_px × 2/dim). MetalFX expects motion
+    // vectors WITHOUT camera jitter (its jitterOffset compensates the
+    // current frame's jitter itself); clip_now/clip_prev both carry it
+    // baked in, so the velocity fragment subtracts `xy - zw`. All zeros
+    // when temporal_upscale is off — velocity byte-identical to before.
+    velocity_jitter: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -283,7 +299,16 @@ struct Instance {
 // shared-compile-time-constant discipline as `CASTER_STRIDE`/
 // `MAX_SHADOW_CASTING_LIGHTS` above.
 const PREFILTER_MAX_MIP: f32 = 5.0;
+// RAYTRACING_DESIGN.md section 14 ED2: the flat ambient's knob-at-1
+// ceiling — mirrors `render_scene.rs`'s `AMBIENT_IRRADIANCE_SCALE` (0.15).
+// Same cross-mirror discipline as `PREFILTER_MAX_MIP`/`RT_REFL_PREFILTER_MAX_MIP`.
+const AMBIENT_IRRADIANCE_SCALE: f32 = 0.15;
 @group(0) @binding(16) var prefiltered_specular: texture_2d<f32>;
+// `irradiance_map`: the raster cosine-convolved diffuse irradiance map —
+// sampled EXACTLY ONCE in `fs_pbr`, at the `diffuse_ibl` substitution site
+// (I-ED2). When the GI gather ran (ED6, `rt_flags.y > 0.5`) the traced
+// `.rgb` SUBSTITUTES for this fetch — the same physical quantity, same
+// scale (`ibl_irradiance.wgsl`'s estimator and the gather are identical).
 @group(0) @binding(17) var irradiance_map: texture_2d<f32>;
 @group(0) @binding(18) var brdf_lut: texture_2d<f32>;
 
@@ -348,12 +373,14 @@ const PREFILTER_MAX_MIP: f32 = 5.0;
 // at all — it's folded into the RT irradiance term (`rt_irradiance_mask`
 // below) in-kernel.
 @group(0) @binding(41) var rt_shadow_mask: texture_2d<f32>;
-// RAYTRACING_DESIGN.md section 5.2 P2/D3: full-res, temporally-accumulated
-// demodulated irradiance (no albedo folded in — ambient*ao + gi; NO
-// direct sun, the raster light loop owns that), written by the SAME
-// half-res dispatch's
-// `accumulate_irradiance` step. Always bound (ABI-stub discipline); a
-// 1x1 dummy when RT isn't active this frame.
+// RAYTRACING_DESIGN.md section 5.2 P2/D3, ED2 (section 14.2): full-res,
+// temporally-accumulated demodulated irradiance — `.rgb` = the env+GI
+// gather (the flat ambient no longer enters the kernel), `.a` = the
+// accumulated ao, carried through the whole accumulation chain. Written
+// by `trace_shadow_rays` + `accumulate_irradiance`. Always bound (ABI-stub
+// discipline); a 1x1 dummy when RT isn't active this frame. Read in
+// exactly TWO places (I-ED2): the `diffuse_ibl` substitution (`.rgb`) and
+// `rt_or_flat_ambient` (`.a`).
 @group(0) @binding(42) var rt_irradiance_mask: texture_2d<f32>;
 // RAYTRACING_DESIGN.md section 9 RD1: full-res traced reflection radiance,
 // SUBSTITUTED for the `prefiltered` env fetch in fs_pbr when
@@ -362,6 +389,10 @@ const PREFILTER_MAX_MIP: f32 = 5.0;
 // a 1x1 dummy when RT reflections are off this frame), exactly like
 // rt_irradiance_mask above. Consumed in exactly ONE place (I-R3).
 @group(0) @binding(43) var rt_reflection: texture_2d<f32>;
+// RS-A (caster cap 4 -> 8): second shadow-visibility quad — caster slots
+// 4-7 (rgba respectively). Same format and ABI-stub discipline as
+// rt_shadow_mask. Always bound; a 1x1 dummy when RT isn't active.
+@group(0) @binding(44) var rt_shadow_mask2: texture_2d<f32>;
 
 // RAYTRACING_DESIGN.md section 5.2 P2: RT ambient/AO term. Replaces the flat
 // `scene_params.y` ambient scalar with the ray-traced AO-occluded,
@@ -373,10 +404,19 @@ const PREFILTER_MAX_MIP: f32 = 5.0;
 // ray-traced occlusion is already folded in here. Falls back to the
 // original flat-ambient formula when RT is off — byte-identical to
 // before this function existed (I2/I5).
+//
+// ED2 (section 14.2): the RT branch recomposes today's flat-ambient value
+// consumer-side — `albedo * scene_params.y * ambient_tint *
+// AMBIENT_IRRADIANCE_SCALE * mask.a`. The kernel's irradiance texture no
+// longer folds the ambient in; each term is consumed in exactly one place,
+// and the Ambient knob never gets `kd_ibl` scaling. `.a` of the traced
+// texture is the accumulated ao (the kernel write sites carry it through
+// the same weights). RT-off remains `albedo * scene_params.y *
+// ambient_tint.rgb` — the Ambient knob is the flat fill on both paths.
 fn rt_or_flat_ambient(albedo_rgb: vec3<f32>, frag_xy: vec2<f32>) -> vec3<f32> {
     if u.scene_params.w > 0.5 {
-        let irr = textureLoad(rt_irradiance_mask, vec2<i32>(frag_xy), 0).rgb;
-        return albedo_rgb * irr;
+        let irr = textureLoad(rt_irradiance_mask, vec2<i32>(frag_xy), 0);
+        return albedo_rgb * u.scene_params.y * u.ambient_tint.rgb * AMBIENT_IRRADIANCE_SCALE * irr.a;
     }
     return albedo_rgb * u.scene_params.y * u.ambient_tint.rgb;
 }
@@ -609,13 +649,20 @@ fn shadow_factor(world_pos: vec3<f32>, slot_f: f32, frag_xy: vec2<f32>) -> f32 {
     // scenes never touch the shadow-map path below (it isn't even
     // rendered for them, render_scene.rs's `!rt_enabled` gate). Native-
     // res `frag_xy` (`@builtin(position)`, already pixel coordinates)
-    // indexes `rt_shadow_mask` directly — it's already full-res and
-    // depth-aware-upsampled, no filtering needed. Multi-caster shadow fix:
-    // one visibility channel per caster slot, so this light's own slot
-    // picks the channel instead of always reading `.r`.
+    // indexes the shadow-mask textures directly — they're already full-res
+    // and depth-aware-upsampled, no filtering needed. Multi-caster shadow fix:
+    // one visibility channel per caster slot. RS-A (caster cap 4 -> 8):
+    // two Rgba16Float textures — slots 0-3 in `rt_shadow_mask`, slots 4-7
+    // in `rt_shadow_mask2`; `slot_f >= 4.0` selects the second texture with
+    // the slot index reduced by 4.
     if u.scene_params.w > 0.5 {
         let texel = textureLoad(rt_shadow_mask, vec2<i32>(frag_xy), 0);
-        return texel[clamp(i32(slot_f + 0.5), 0, 3)];
+        let texel2 = textureLoad(rt_shadow_mask2, vec2<i32>(frag_xy), 0);
+        let ch = i32(slot_f + 0.5);
+        if ch < 4 {
+            return texel[ch];
+        }
+        return texel2[ch - 4];
     }
     let slot = i32(slot_f + 0.5);
     let base = u32(slot) * CASTER_STRIDE;
@@ -679,6 +726,10 @@ struct VsOut {
     // for the NDC divide the velocity fragment code needs). Inert comment
     // in the velocity-off compile.
     // GBUFFER_VSOUT_VELOCITY_FIELDS
+    // BUG-wfxe: authored tangent (xyz world dir, w bitangent sign).
+    // w == 0 = no authored tangent → derived-frame fallback. @location(5)
+    // because EMIT_VELOCITY takes 3 and 4.
+    @location(5) world_tangent: vec4<f32>,
 };
 
 // Instance TRS applies FIRST, the object group's `model` (transform_n)
@@ -714,19 +765,27 @@ fn vs_main(
     // GBUFFER_VS_VELOCITY_BODY
     out.world_normal = normalize((u.model * vec4<f32>(inst_normal, 0.0)).xyz);
     out.uv = v.uv;
+    // BUG-wfxe: tangent transforms with the same instance-rotation + model
+    // chain as the normal (a direction). w carries the bitangent sign
+    // through unscaled; w == 0 (no authored tangent) passes the zero
+    // sentinel through — normalize() of a zero vector would be NaN, so the
+    // direction is selected, not branched (uniform control flow).
+    let t_world = normalize((u.model * vec4<f32>(rot * v.tangent.xyz, 0.0)).xyz);
+    out.world_tangent = vec4<f32>(select(t_world, vec3<f32>(0.0), v.tangent.w == 0.0), v.tangent.w);
     return out;
 }
 
 // IMPORT_FIDELITY_DESIGN.md D4/F-P2: tangent-space (glTF-convention) normal
-// mapping via a screen-space cotangent frame (Mikkelsen's derivation, the
-// technique three.js/filament use when no vertex tangents exist — see
-// MeshVertex's 48-byte ABI-pinned comment: growing it for tangents was
-// priced and rejected). Built purely from `dpdx`/`dpdy` of `world_pos` and
-// `uv` — both screen-space derivatives, so the reconstructed T/B are a
-// function of the surface's own UV parameterization, independent of camera
-// or screen resolution. Uniform per-object branch (texture_flags.x is a
-// per-draw-call uniform, not per-fragment data), so `dpdx`/`dpdy` inside the
-// `if` are legal (same discipline the PCSS branches above already rely on).
+// mapping. The FALLBACK frame is the screen-space cotangent frame
+// (Mikkelsen's derivation, the technique three.js/filament use when no
+// vertex tangents exist) — used when the mesh carries no authored TANGENT
+// (`tangent.w == 0`, every procedural mesh and pre-BUG-wfxe import). Built
+// purely from `dpdx`/`dpdy` of `world_pos` and `uv` — both screen-space
+// derivatives, so the reconstructed T/B are a function of the surface's
+// own UV parameterization, independent of camera or screen resolution.
+// Uniform per-object branch (texture_flags.x is a per-draw-call uniform,
+// not per-fragment data), so `dpdx`/`dpdy` inside the `if` are legal (same
+// discipline the PCSS branches above already rely on).
 fn cotangent_frame(n: vec3<f32>, p: vec3<f32>, uv: vec2<f32>) -> mat3x3<f32> {
     let dp1 = dpdx(p);
     let dp2 = dpdy(p);
@@ -742,25 +801,50 @@ fn cotangent_frame(n: vec3<f32>, p: vec3<f32>, uv: vec2<f32>) -> mat3x3<f32> {
     return mat3x3<f32>(t * inv_max, b * inv_max, n);
 }
 
+// BUG-wfxe: the TBN selector. Both frames are COMPUTED unconditionally
+// and selected column-wise — cotangent_frame uses `dpdx`/`dpdy`, which
+// require uniform control flow, so a per-fragment `if tangent.w != 0`
+// branch around it fails naga validation (fs_pbr). The authored arm
+// (Gram-Schmidt + glTF handedness sign: B = cross(N,T) * w) produces NaN
+// on the zero sentinel (normalize of a zero vector) — discarded by the
+// select, never read.
+fn tbn_for(n: vec3<f32>, p: vec3<f32>, uv: vec2<f32>, tangent: vec4<f32>) -> mat3x3<f32> {
+    let derived = cotangent_frame(n, p, uv);
+    let t = normalize(tangent.xyz - n * dot(tangent.xyz, n));
+    let b = cross(n, t) * tangent.w;
+    let authored = mat3x3<f32>(t, b, n);
+    let use_derived = tangent.w == 0.0;
+    return mat3x3<f32>(
+        select(authored[0], derived[0], use_derived),
+        select(authored[1], derived[1], use_derived),
+        n,
+    );
+}
+
 // Identical to render_3d_mesh.wgsl's SIGNATURE — see that file for the
 // world-space-map path it still uses. render_scene's normal_map_n (D3) is
 // tangent-space (glTF convention: R/G = tangent-space X/Y in [-1,1] packed
 // to [0,1], B = tangent-space Z), reconstructed into world space via the
-// cotangent frame above rather than added directly to the vertex normal.
-fn resolve_normal(uv: vec2<f32>, vertex_normal: vec3<f32>, world_pos: vec3<f32>) -> vec3<f32> {
+// authored tangent frame when present (BUG-wfxe), the cotangent frame
+// otherwise.
+fn resolve_normal(uv: vec2<f32>, vertex_normal: vec3<f32>, world_pos: vec3<f32>, tangent: vec4<f32>) -> vec3<f32> {
     if u.texture_flags.x > 0.5 {
         let n = normalize(vertex_normal);
-        // G-P4: per-map KHR_texture_transform. The cotangent frame is
-        // built from the SAME transformed UV the texture is sampled with
-        // — a rotated/scaled UV space rotates/scales the tangent
-        // directions, and deriving T/B from the untransformed uv would
-        // bend the decoded normals off-axis. Identity transform makes
-        // uv_t == uv bit-for-bit (1*u + 0*v + 0), so pre-G-P4 assets are
-        // byte-identical.
+        // G-P4: per-map KHR_texture_transform. The frame is built from
+        // the SAME transformed UV the texture is sampled with — a
+        // rotated/scaled UV space rotates/scales the tangent directions,
+        // and deriving T/B from the untransformed uv would bend the
+        // decoded normals off-axis. Identity transform makes uv_t == uv
+        // bit-for-bit (1*u + 0*v + 0), so pre-G-P4 assets are
+        // byte-identical. NOTE: the AUTHORED tangent frame belongs to the
+        // mesh's ORIGINAL UV space — a non-identity normal_uv_m rotation
+        // with authored tangents is an unresolved mismatch (glTF keeps
+        // tangent space tied to the same texcoords the transform edits);
+        // no shipped asset combines the two.
         let uv_t = apply_uv_transform(uv, u.normal_uv_m, u.normal_uv_t);
         let sampled = textureSample(normal_map, normal_sampler, uv_t).rgb;
         let tangent_normal = sampled * 2.0 - vec3<f32>(1.0);
-        let tbn = cotangent_frame(n, world_pos, uv_t);
+        let tbn = tbn_for(n, world_pos, uv_t, tangent);
         return normalize(tbn * tangent_normal);
     }
     return normalize(vertex_normal);
@@ -911,11 +995,11 @@ fn resolve_clearcoat(uv: vec2<f32>) -> vec2<f32> {
 // fallback ("if this texture is not given, the geometry/base normal is
 // used instead") and the byte-identical path for every material without
 // this specific texture.
-fn resolve_clearcoat_normal(uv: vec2<f32>, n: vec3<f32>, world_pos: vec3<f32>) -> vec3<f32> {
+fn resolve_clearcoat_normal(uv: vec2<f32>, n: vec3<f32>, world_pos: vec3<f32>, tangent: vec4<f32>) -> vec3<f32> {
     if (clearcoat_family_flags() & 4u) != 0u {
         let sampled = textureSample(clearcoat_normal_map, normal_sampler, uv).rgb;
         let tangent_normal = sampled * 2.0 - vec3<f32>(1.0);
-        let tbn = cotangent_frame(n, world_pos, uv);
+        let tbn = tbn_for(n, world_pos, uv, tangent);
         return normalize(tbn * tangent_normal);
     }
     return n;
@@ -1142,7 +1226,7 @@ fn fs_phong(in: VsOut) -> @location(0) vec4<f32> {
     if u.alpha_params.x == 1.0 && albedo.a < u.alpha_params.y {
         discard;
     }
-    var N = resolve_normal(in.uv, in.world_normal, in.world_pos);
+    var N = resolve_normal(in.uv, in.world_normal, in.world_pos, in.world_tangent);
     let V = normalize(u.camera_pos.xyz - in.world_pos);
     if dot(N, V) < 0.0 {
         N = -N;
@@ -1293,13 +1377,17 @@ fn eval_iridescence(outside_ior: f32, eta2: f32, cos_theta1: f32, thickness: f32
 // (view-only Schlick) rather than the light-dependent N·H term any
 // single light would give — the standard split-sum substitute for IBL,
 // and the only well-defined choice when light_count can be 0.
+// RAYTRACING_DESIGN.md section 16 TL1: wrap-diffuse constant for the
+// backlit thin-surface term. Range [0, 1] — 0 = sharp terminator
+// (only dead-on backlight), 1 = full wrap (petals glow at wide angles).
+const RT_TRANSMISSION_WRAP: f32 = 0.5;
 @fragment
 fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let albedo = resolve_albedo(in.uv);
     if u.alpha_params.x == 1.0 && albedo.a < u.alpha_params.y {
         discard;
     }
-    var N = resolve_normal(in.uv, in.world_normal, in.world_pos);
+    var N = resolve_normal(in.uv, in.world_normal, in.world_pos, in.world_tangent);
     let V = normalize(u.camera_pos.xyz - in.world_pos);
     if dot(N, V) < 0.0 {
         N = -N;
@@ -1364,16 +1452,12 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let g_v = n_dot_v / (n_dot_v * (1.0 - k) + k);
 
     // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E5: `KHR_materials_anisotropy` —
-    // tangent-space GGX stretch. Tangent basis RESOLVED: imported meshes carry no `TANGENT`
-    // attribute (`MeshVertex` is a fixed 48-byte ABI, growing it is its
-    // own vertex-layout project — see the design doc's section 5 Deferred), so
-    // this reuses `cotangent_frame` — the SAME screen-space-derivative
-    // tangent basis `resolve_normal`'s normal mapping already builds,
-    // just computed here unconditionally (uniform control flow: `dpdx`/
-    // `dpdy` need non-divergent branches, and a fragment shader function
-    // call at file scope is inherently non-divergent — same legality
-    // `resolve_normal`'s own per-draw-call-uniform branch relies on).
-    let tbn = cotangent_frame(N, in.world_pos, in.uv);
+    // tangent-space GGX stretch. Tangent basis: authored when the mesh
+    // carries TANGENT (BUG-wfxe), the same cotangent_frame fallback
+    // `resolve_normal` uses otherwise — anisotropy's T and the normal
+    // map's T must be the SAME frame or the stretch axis drifts off the
+    // mapped surface detail.
+    let tbn = tbn_for(N, in.world_pos, in.uv, in.world_tangent);
     let anisotropy = resolve_anisotropy(in.uv);
     let anisotropy_strength = clamp(anisotropy.x, 0.0, 1.0);
     let anisotropy_rotation = anisotropy.y;
@@ -1411,7 +1495,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let clearcoat_resolved = resolve_clearcoat(in.uv);
     let clearcoat = clearcoat_resolved.x;
     let clearcoat_roughness = clearcoat_resolved.y;
-    let Nc = resolve_clearcoat_normal(in.uv, N, in.world_pos);
+    let Nc = resolve_clearcoat_normal(in.uv, N, in.world_pos, in.world_tangent);
     let cc_n_dot_v = max(dot(Nc, V), 0.001);
     let cc_a = clearcoat_roughness * clearcoat_roughness;
     let cc_a2 = cc_a * cc_a;
@@ -1432,6 +1516,11 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     // `sheen_color` is nonzero (see the composition below), so this cannot
     // perturb `direct`/`direct_coat`'s bit-for-bit value for any material.
     var direct_sheen = vec3<f32>(0.0);
+    // RAYTRACING_DESIGN.md section 16 TL1: accumulated in parallel with
+    // `direct`, same shape as `direct_sheen` — never read unless
+    // `translucency` is nonzero (see the composition below), so this cannot
+    // perturb `direct`/`direct_sheen`'s bit-for-bit value for any material.
+    var direct_translucent = vec3<f32>(0.0);
     let light_count = u32(u.scene_params.x);
     for (var i = 0u; i < light_count; i = i + 1u) {
         let l_dir = lights[i * 2u];
@@ -1511,6 +1600,15 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
         let V_sheen = V_Ashikhmin(n_dot_v, n_dot_l);
         let specular_sheen = sheen_color * D_sheen * V_sheen;
         direct_sheen = direct_sheen + specular_sheen * l_col.rgb * n_dot_l * l_dir.w * vis;
+        // RAYTRACING_DESIGN.md section 16 TL1: wrap-diffuse translucency
+        // around the backward normal — light arriving at the BACK of
+        // the surface. factor 0 makes this exactly zero (byte-identical).
+        // The wrap softens the terminator so petals glow at wide angles, not
+        // just dead-on. vis is the same per-light shadow_factor every other
+        // term uses (RT sv mask when RT is on, shadow map otherwise).
+        let back_l = saturate((dot(-N, L) + RT_TRANSMISSION_WRAP) / (1.0 + RT_TRANSMISSION_WRAP));
+        let factor = u.diffuse_transmission_params.x;
+        direct_translucent = direct_translucent + factor * albedo.rgb / PI * l_col.rgb * back_l * l_dir.w * vis;
     }
 
     // Split-sum IBL (IMPORT_FIDELITY_DESIGN.md D2/F-P1): prefiltered
@@ -1550,7 +1648,31 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let n_azimuth = atan2(N.z, N.x);
     let n_elevation = asin(clamp(N.y, -1.0, 1.0));
     let n_uv = vec2<f32>(n_azimuth / (2.0 * PI) + 0.5, n_elevation / PI + 0.5);
-    let irradiance = textureSampleLevel(irradiance_map, envmap_sampler, n_uv, 0.0).rgb;
+    var irradiance = textureSampleLevel(irradiance_map, envmap_sampler, n_uv, 0.0).rgb;
+    // RAYTRACING_DESIGN.md section 14 ED2/ED6: traced env+GI diffuse
+    // SUBSTITUTES for the irradiance-map fetch when the GI gather ran this
+    // frame (rt_flags.y > 0.5 — set iff `will_rt_accumulate_this_frame`,
+    // which is exactly `gi_spp > 0` on the trace dispatch) — the same
+    // physical quantity, same scale (`ibl_irradiance.wgsl`'s estimator and
+    // the gather are identical), never added on top (RD1/I-R3; the
+    // 818a06b0 double-count trap). ED6 mirrors the reflection fallback
+    // discipline (`rt_refl.a < 0` keeping the raster prefiltered fetch):
+    // off-path byte-identical.
+    if u.scene_params.w > 0.5 && u.rt_flags.y > 0.5 {
+        let traced = textureLoad(rt_irradiance_mask, vec2<i32>(in.clip_pos.xy), 0);
+        // Void fallback (the rt_refl `.a < 0` discipline, BUG-88m's fragment
+        // class): background texels hold the kernel's void value (rgb 0,
+        // ao 1 — written by trace_shadow_rays/upsample_shadow; blends of
+        // exact 0/1 stay exact through accumulation). Blend-queue fragments
+        // shading there (a transparent surface over empty sky) keep the
+        // raster irradiance-map fetch instead of going black. A REAL
+        // surface reads (0,0,0,1) only in a scene with no env, no emissive,
+        // and no sun bounce reaching that pixel — where the raster map
+        // holds the same black, so the fallback is a no-op there.
+        if !all(traced.rgb == vec3<f32>(0.0)) || traced.a < 1.0 {
+            irradiance = traced.rgb;
+        }
+    }
 
     let env_brdf = textureSampleLevel(brdf_lut, envmap_sampler, vec2<f32>(n_dot_v, roughness), 0.0).rg;
     var specular_ibl = prefiltered * (F0 * env_brdf.x + env_brdf.y);
@@ -1666,6 +1788,12 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     // the same DFG LUT the IBL approximation above doesn't have) — known
     // v1 limitation, same doctrine as `specular_factor`'s f90 note above.
     base_rgb = base_rgb + direct_sheen + sheen_ibl;
+    // RAYTRACING_DESIGN.md section 16 TL1: translucency adds to `base_rgb`
+    // BEFORE the glass block — `transmission_factor` and
+    // `translucency` are independent lobes; a material with both gets both,
+    // matching the Khronos layering where diffuse-transmission and
+    // specular-transmission coexist. factor 0 adds exactly zero.
+    base_rgb = base_rgb + direct_translucent;
     // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2b/D3: transmission REPLACES the
     // diffuse response with the refracted-and-tinted background sample
     // (mixed by transmission_factor, per the glTF sample viewer's
@@ -1712,7 +1840,7 @@ fn fs_cel(in: VsOut) -> @location(0) vec4<f32> {
     if u.alpha_params.x == 1.0 && albedo.a < u.alpha_params.y {
         discard;
     }
-    var N = resolve_normal(in.uv, in.world_normal, in.world_pos);
+    var N = resolve_normal(in.uv, in.world_normal, in.world_pos, in.world_tangent);
     let V = normalize(u.camera_pos.xyz - in.world_pos);
     if dot(N, V) < 0.0 {
         N = -N;

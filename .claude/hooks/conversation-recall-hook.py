@@ -69,7 +69,7 @@ def get_status_board():
     try:
         sys.path.insert(0, str(HOOKS_DIR))
         import design_status
-        return design_status.build_board()
+        return design_status.build_board(compact=True)
     except Exception:
         return ""
 

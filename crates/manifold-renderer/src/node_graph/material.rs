@@ -244,6 +244,12 @@ pub struct Material {
     /// `KHR_materials_dispersion`'s single `dispersion` factor (default
     /// `0.0`, inert).
     pub dispersion: f32,
+    /// RAYTRACING_DESIGN.md section 16 TL3: thin-surface translucency for
+    /// backlit foliage — one scalar factor `[0, 1]`, default `0.0` (inert).
+    /// Populated from `KHR_materials_diffuse_transmission`'s
+    /// `diffuseTransmissionFactor` at import time; dialable on the
+    /// `pbr_material` card for scans that carry no extension data.
+    pub translucency: f32,
     /// `KHR_materials_transmission`'s `transmissionFactor` (default `0.0`,
     /// inert). Already imported and folded into `alpha_mode`/`base_color.a`
     /// at import time (IMPORT_FIDELITY_DESIGN.md D8); this is the SAME
@@ -318,6 +324,7 @@ impl Material {
             anisotropy_strength: 0.0,
             anisotropy_rotation: 0.0,
             dispersion: 0.0,
+            translucency: 0.0,
             transmission_factor: 0.0,
             volume_thickness_factor: 0.0,
             volume_attenuation_distance: crate::node_graph::gltf_load::VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,

@@ -30,5 +30,5 @@ fn body(
     }
 
     let displaced = e_in.position + e_in.normal * (amount * w * f);
-    return Element(displaced, e_in.normal, e_in.uv);
+    return Element(displaced, e_in.normal, e_in.uv, e_in.tangent);
 }

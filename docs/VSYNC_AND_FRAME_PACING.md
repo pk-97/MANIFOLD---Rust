@@ -84,6 +84,16 @@ The workspace preview (small inset in the editor) uses an IOSurface triple buffe
 - GPU completion handler publishes `front_index` when content GPU work finishes
 - UI thread reads latest `front_index` for preview display
 
+### Read fence (BUG-xaw4 (presentation-transport audit), 2026-08-01)
+
+Content and UI use **separate MTLDevice instances** (each `GpuDevice::new()` calls `MTLCreateSystemDefaultDevice`), so MTLSharedEvent cannot order the UI's reads against the content thread's writes. The fence is CPU-side atomics on the bridge (`acquire_read` / `retire_read` / `is_reusable`):
+
+- The UI claims a per-slot in-flight lease before encoding any sample of a bridge surface (4 sites: main present, graph editor ×3, perform mode), revalidates front after claiming, and retires the lease from the completion handler of the present encoder ordered after the sampling encoder (marker encoder on resize/drawable early returns). Retirement wakes the content thread with `SurfaceReady`.
+- Content's `is_surface_ready` requires both halves before reusing a slot: its own write completed (shared event) AND the slot reusable (front moved off it — or never published — and zero reads in flight). When false, the content thread stalls in `wait_for_surface_draining_commands` instead of tearing.
+- Pre-fence symptom: tearing flicker on any moving content under GPU saturation (RT at high res), invisible when static or at low fps. Regression gate: `bridge-probe` headless harness (`--policy legacy` tears, `--policy fenced` clean), perf-soak feature, `crates/manifold-app/src/bridge_probe.rs`.
+
+The clip-atlas `SharedAtlasSurface` stays intentionally unsynchronized (per-cell valid-old-or-new is a documented tradeoff for slowly-changing thumbnails).
+
 ## What We Tried and Why It Failed
 
 ### CVDisplayLink content thread pacing (removed April 2026)
@@ -136,9 +146,7 @@ One CVDisplayLink callback doing content notification + presenter blit + UI sign
 | `manifold-app/src/frame_timer.rs` | `FrameTimer` with mach_wait_until + spin, EWMA FPS |
 | `manifold-app/src/content_pipeline.rs` | Direct present path (nextDrawable → blit → present) |
 | `manifold-app/src/display_link.rs` | `UiDisplayLink` (CVDisplayLink for UI thread only) |
-| `manifold-app/src/shared_texture.rs` | IOSurface triple buffer (workspace preview only) |
-| `manifold-app/src/output_presenter.rs` | CAMetalDisplayLink presenter (dead code, kept for reference) |
+| `manifold-app/src/shared_texture.rs` | IOSurface triple buffer + read fence (workspace preview only) |
 | `manifold-gpu/src/metal/surface.rs` | `GpuSurface` (CAMetalLayer), `GpuDrawable`, displaySyncEnabled |
-| `manifold-gpu/src/metal/vsync.rs` | `GpuVsyncSignal`/`GpuVsyncWaiter` (dead code, kept for reference) |
 | `manifold-gpu/src/metal/encoder.rs` | `present_drawable()`, `commit()` |
 | `manifold-core/src/settings.rs` | `frame_rate` project setting |

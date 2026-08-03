@@ -17,18 +17,21 @@
 //!    2026-07-30.
 //! 2. [`ambient_only_region_matches_the_analytic_ambient_times_ao_value`] —
 //!    I-MB2: `RtAmbientOnly.json` (same geometry, `emission_intensity: 0`)
-//!    has zero lights and zero emissive, so the GI gather's `gi` term is
-//!    algebraically zero at every depth (no sun-bounce caster, no emissive
-//!    hit) — the probe region's colour is exactly `albedo * ambient_color *
-//!    ao` (`raytrace.rs`'s `irradiance = ambient_color * ao + gi`,
-//!    `render_scene.wgsl`'s `rt_or_flat_ambient` albedo multiply). Every
-//!    material in the fixture is white or near-white with `ambient: 0.1`,
-//!    so `ambient_color = ambient_tint(1) * AMBIENT_IRRADIANCE_SCALE(0.15) *
-//!    scene_ambient(0.1) = 0.015` per channel (`render_scene.rs:4173`); the
-//!    open, unoccluded probe region's `ao` reads close to 1 (the epsilon
-//!    below is sized off the actual measured value, not derived from a
-//!    hemisphere-integral you'd have to re-derive by hand). Extra bounces
-//!    must not move this number — depth never gathers env (MB3).
+//!    has zero lights and zero emissive AND no envmap wired, so the GI
+//!    gather's `gi` term is algebraically zero at every depth (no sun-
+//!    bounce caster, no emissive hit, and the env-miss reads the black
+//!    dummy — RAYTRACING_DESIGN.md section 14 ED1 keeps env out of the
+//!    gather whenever the scene has no env chain) — the probe region's
+//!    colour is exactly the consumer-side flat ambient recompose
+//!    (`render_scene.wgsl`'s `rt_or_flat_ambient`:
+//!    `albedo * scene_params.y * ambient_tint * AMBIENT_IRRADIANCE_SCALE *
+//!    mask.a`, ED2). Every material in the fixture is white or near-white
+//!    with `ambient: 0.1`, so that recompose = `1.0 * 0.1 * 1.0 * 0.15 * ao`
+//!    = `0.015 * ao` per channel; the open, unoccluded probe region's `ao`
+//!    reads close to 1 (the epsilon below is sized off the actual measured
+//!    value, not derived from a hemisphere-integral you'd have to re-derive
+//!    by hand). Extra bounces must not move this number — no env chain means
+//!    the gather still contributes nothing.
 
 use std::ffi::c_void;
 use std::slice;
@@ -203,8 +206,9 @@ fn ambient_only_region_matches_the_analytic_ambient_times_ao_value() {
     const EPS: f64 = 0.002;
     assert!(
         (r - AMBIENT_COLOR).abs() < EPS && (g - AMBIENT_COLOR).abs() < EPS,
-        "ambient-only region (rect {PROBE_RECT:?}) must read close to albedo*ambient_color*ao \
+        "ambient-only region (rect {PROBE_RECT:?}) must read close to albedo*ambient*SCALE*ao \
          ({AMBIENT_COLOR:.4} per channel, ao~=1) at the shipped bounces=2 depth — got \
-         r={r:.5} g={g:.5} b={b:.5}; env must never be gathered at any depth (MB3/I-MB2)"
+         r={r:.5} g={g:.5} b={b:.5}; a no-env scene's gather must contribute nothing at any \
+         depth (ED1/I-MB2)"
     );
 }

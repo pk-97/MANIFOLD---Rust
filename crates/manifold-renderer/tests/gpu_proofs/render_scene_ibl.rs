@@ -329,23 +329,21 @@ fn roughness_response_reflection_spreads_monotonically() {
     );
 }
 
-/// D2's irradiance gate, adapted to what the current procedural environment
-/// baker can actually produce: `node.bake_environment` has no "uniform
-/// white" mode (its ambient floor / overhead softbox / two strip-light
-/// terms are unconditional — only `horizon_strength` and `intensity` are
-/// exposed, neither of which flattens the bake to a constant), and adding
-/// one is out of this phase's scope (D2 is IBL math in `render_scene`, not
-/// a new envmap bake mode — that is F-P3's `mode` enum, a different
-/// primitive). This test therefore checks the WEAKER but still meaningful
-/// property the doc's tolerance intends to catch: a fully-metallic,
-/// zero-roughness-adjacent... no — a DIELECTRIC (metallic=0), zero-direct-
-/// light PBR surface lit only by this (non-uniform but everywhere-lit,
-/// `intensity=1.0`) environment renders within a generous multiplicative
-/// band of its own base colour — catching the two failure modes that
-/// matter (IBL evaluating to near-zero, or the diffuse term wildly
-/// exceeding energy conservation) without requiring a uniform source this
-/// phase doesn't build. See `ESCALATION_FP1.md` for why a tighter
-/// value-level match to a literal uniform-white env isn't implemented here.
+/// D2's irradiance gate, written when `node.bake_environment` had no
+/// "uniform white" mode (its ambient floor / overhead softbox / two
+/// strip-light terms were unconditional). This test therefore checks the
+/// WEAKER but still meaningful property the doc's tolerance intends to
+/// catch: a fully-metallic, zero-roughness-adjacent... no — a DIELECTRIC
+/// (metallic=0), zero-direct-light PBR surface lit only by this (non-
+/// uniform but everywhere-lit, `intensity=1.0`) environment renders within
+/// a generous multiplicative band of its own base colour — catching the two
+/// failure modes that matter (IBL evaluating to near-zero, or the diffuse
+/// term wildly exceeding energy conservation). A uniform mode now exists
+/// (RT_FURNACE_ORACLE, `node.bake_environment`'s `uniform` param) with a
+/// tight value-level closed-form check — `rt_furnace_oracle.rs`'s
+/// `uniform_environment_white_surface_returns_the_environment_radiance` —
+/// this test is kept as-is rather than tightened since it exercises a
+/// different (non-flat) environment shape than the furnace test does.
 #[test]
 fn diffuse_ibl_lands_within_a_generous_band_of_albedo() {
     let json = r#"{"version":2,"name":"RenderSceneIblDiffuseProof","nodes":[

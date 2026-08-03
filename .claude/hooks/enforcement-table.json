@@ -1,5 +1,5 @@
 {
-  "comment": "Machine form of SEMANTIC_WORKFLOW_PROGRAMS.md \u00a73 \u2014 every workflow transition and what enforces it. hook = machine, cannot be ignored; exit-code = runtime-checked; prompt = model goodwill (the known failure surface; migrate rows upward one at a time). gate_runner pre-wave verifies hook rows are registered and present, exit-code rows exist, and reports the prompt-row count as the open migration surface. Keep rows aligned with settings.json and the hooks directory; a row here with no live file goes red at wave start.",
+  "comment": "Machine form of the enforcement-table concept (docs/archive/SEMANTIC_WORKFLOW_PROGRAMS.md \u00a73) \u2014 every workflow transition and what enforces it. hook = machine, cannot be ignored; exit-code = runtime-checked; prompt = model goodwill (the known failure surface; migrate rows upward one at a time). gate_runner pre-wave verifies hook rows are registered and present, exit-code rows exist, and reports the prompt-row count as the open migration surface. Keep rows aligned with settings.json and the hooks directory; a row here with no live file goes red at wave start.",
   "transitions": [
     {
       "transition": "worktrees from slot ring only; no agent edits on main",
@@ -100,46 +100,6 @@
       "transition": "pre-dispatch brief lint: anchors resolve, gates parse, slots valid, bead named, predecessors green (--requires phase ordering)",
       "enforcement": "exit-code",
       "file": "scripts/gate_runner.py"
-    },
-    {
-      "transition": "workflow execute: apply-commit-gate per attempt, pathspec-only commits, retry cap then park (one-commit-then-stop as structure, not goodwill)",
-      "enforcement": "exit-code",
-      "file": "crates/workflow-runtime/src/runner.rs"
-    },
-    {
-      "transition": "workflow: a parked execute or lane blocks every later execute or lane in the shared worktree (exit 20); dependent steps block on parked inputs",
-      "enforcement": "exit-code",
-      "file": "crates/workflow-runtime/src/runner.rs"
-    },
-    {
-      "transition": "workflow: empty ChangeSet (execute) or an unchanged worktree (lane) is a non-attempt; park reason keeps the most informative error + full gate report",
-      "enforcement": "exit-code",
-      "file": "crates/workflow-runtime/src/runner.rs"
-    },
-    {
-      "transition": "workflow: seeded rerun gates first — green completes token-free, red feeds the fresh gate report",
-      "enforcement": "exit-code",
-      "file": "crates/workflow-runtime/src/runner.rs"
-    },
-    {
-      "transition": "workflow lane: the worker commits its own work; what it did is measured by HEAD sha delta, a dirty worktree on return parks the step, and the runtime never commits on its behalf (that would be `add -A`)",
-      "enforcement": "exit-code",
-      "file": "crates/workflow-runtime/src/runner.rs"
-    },
-    {
-      "transition": "workflow execute: the FIRST substantive failure (gate red after commit, empty ChangeSet, find-miss, rejected write) promotes to a lane on a typed FailureKind, never an error string; parse retries one-shot and transport has its own counter",
-      "enforcement": "exit-code",
-      "file": "crates/workflow-runtime/src/runner.rs"
-    },
-    {
-      "transition": "workflow: one-shot writes create NEW files only; rewriting an existing file is lane work. Run-wide usd_budget caps lane spend, checked before every launch",
-      "enforcement": "exit-code",
-      "file": "crates/workflow-runtime/src/worktree.rs"
-    },
-    {
-      "transition": "workflow: an abandoned run refuses to rerun until --reopen; every park, unpark (with the human's note), promotion, abandon and reopen lands in ledger.jsonl",
-      "enforcement": "exit-code",
-      "file": "crates/workflow-runtime/src/runner.rs"
     },
     {
       "transition": "UI flow gate on touched paths at landing",

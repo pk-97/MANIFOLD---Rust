@@ -1176,6 +1176,12 @@
             "2"
           ],
           "type": "float"
+        },
+        {
+          "default": "false",
+          "label": "Uniform (White Furnace)",
+          "name": "uniform",
+          "type": "bool"
         }
       ],
       "purpose": "Procedurally bake an HDR studio environment map at the given resolution. Equirectangular layout (longitude × latitude). `mode = gradient` (default) matches the legacy MetallicGlass envmap at 512×256: ambient floor + bright horizon band + overhead softbox + floor fill + two strip lights + azimuthal modulation. `mode = softbox` bakes an exact-zero black base lit only by `emitter_count` bright horizontal emitter strips (soft falloff at strip edges only), plus one optional directional sun disc at `sun_x/sun_y/sun_z` sized by `sun_disc_size` and `sun_disc_intensity` (0 = no disc). Output is HDR — wire into `node.render_mesh`'s `envmap` input (PBR material) for IBL reflections, or `node.tone_map` if displaying directly.",
@@ -12867,6 +12873,11 @@
           "type": "f32"
         },
         {
+          "name": "translucency",
+          "required": false,
+          "type": "f32"
+        },
+        {
           "name": "uv_m00",
           "required": false,
           "type": "f32"
@@ -13405,6 +13416,16 @@
           "default": "1",
           "label": "Volume Attenuation Colour B",
           "name": "volume_attenuation_color_b",
+          "range": [
+            "0",
+            "1"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Translucency",
+          "name": "translucency",
           "range": [
             "0",
             "1"
@@ -25673,6 +25694,13 @@
           "name": "Fill Light"
         },
         {
+          "default": "0",
+          "id": "32_uniform",
+          "max": "1",
+          "min": "0",
+          "name": "Uniform (White Furnace)"
+        },
+        {
           "default": "0.8",
           "id": "62_color_r",
           "max": "1",
@@ -25923,6 +25951,13 @@
           "max": "1",
           "min": "0",
           "name": "Volume Attenuation Colour B"
+        },
+        {
+          "default": "0",
+          "id": "62_translucency",
+          "max": "1",
+          "min": "0",
+          "name": "Translucency"
         },
         {
           "default": "1",
@@ -27152,6 +27187,13 @@
           "max": "2",
           "min": "0",
           "name": "Fill Light"
+        },
+        {
+          "default": "0",
+          "id": "3_uniform",
+          "max": "1",
+          "min": "0",
+          "name": "Uniform (White Furnace)"
         },
         {
           "default": "0",

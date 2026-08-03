@@ -11,9 +11,7 @@ Caller tier comes from the payload's `transcript_path`: the last assistant entry
 
 Tier rules (model strings: deepseek-v4-flash, glm-4.7, k3, claude-*):
 - cc-fleet spawn (tmux teammates): denied for EVERY tier incl. lead — dead path on CC >= 2.1.218 (native Agent-tool lanes instead).
-- Executor tier (deepseek*, kimi-k2*, kimi-for-coding, claude-sonnet/haiku): ALL cc-fleet spawn verbs denied.
-- Dispatcher tier (glm*): may drive the executor provider only (EXECUTOR_PROVIDERS = opencode, deepseek) via cc-fleet subagent. Anything else — spawning zai/kimi seats, workflows, unparseable targets — is denied with an escalate-up pointer.
-- Lead tier (fable/opus/k3 — anything not matched above): passes through.
+- cc-fleet subagent/run/workflow: denied for EVERY tier (Peter 2026-08-02: "We use team lanes native — they provide a reliable messaging system"). Headless lanes are invisible, unmessageable, and outside the lane-health-check. Lanes spawn as native Agent-tool teammates via the slot map. `cc-fleet subagent-status` polls pass (not a spawn verb).
 
 Fails open on any error — a guard hook must never block a session.
 
@@ -34,12 +32,6 @@ SPAWN_CMD = re.compile(
     r"(?:^|&&|\|\||;|\||\$\(|`|\n)\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)*"
     r"(?:\S*/)?cc-fleet\s+(subagent|spawn|run|workflow)(?![\w-])(?:\s+(\S+))?"
 )
-EXECUTOR_TIER = re.compile(
-    r"claude-(sonnet|haiku)|deepseek|kimi-k2|kimi-for-coding", re.IGNORECASE
-)
-DISPATCHER_TIER = re.compile(r"\bglm", re.IGNORECASE)
-# Providers a dispatcher may drive (the mechanical-executor seat).
-EXECUTOR_PROVIDERS = {"opencode", "deepseek"}
 TAIL_BYTES = 256 * 1024
 
 
@@ -84,41 +76,38 @@ def decide(command: str, model: str) -> str:
     if not m:
         return ""
     verb, target = m.group(1), (m.group(2) or "")
-    # D-48 (2026-07-24): `cc-fleet spawn` (tmux teammates) is a DEAD PATH on
-    # Claude Code >= 2.1.218 — TeamCreate is retired, teams are implicit, and
-    # the harness cannot address externally-registered teammates. Denied for
-    # EVERY tier, lead included. Provider lanes are native Agent-tool
-    # subagents via the slot map (docs/AGENT_ROUTING.md §Native provider
-    # lanes). `cc-fleet subagent` one-shots remain available per tier below.
+    # `cc-fleet spawn` (tmux teammates) is a DEAD PATH on Claude Code >= 2.1.218
+    # — TeamCreate is retired, teams are implicit, and the harness cannot
+    # address externally-registered teammates. Denied for EVERY tier, lead
+    # included. Provider lanes are native Agent-tool subagents via the slot map
+    # (docs/AGENT_ROUTING.md §Native provider lanes).
     if verb == "spawn":
         return (
             "cc-fleet spawn denied for every tier: the tmux-teammate path is "
             "dead on this harness (TeamCreate retired; teammates unreachable "
-            "via SendMessage — D-48, .claude/orchestration/decisions.md). "
-            "Spawn provider lanes as native Agent-tool subagents instead: "
+            "via SendMessage). Spawn provider lanes as native Agent-tool "
+            "subagents instead: "
             "model \"haiku\"=DeepSeek Flash, \"sonnet\"=GLM-4.7, "
             "\"opus\"=GLM-5.2, \"fable\"=k3 on the K3 seat "
             "(docs/AGENT_ROUTING.md §Native provider lanes)."
         )
-    if not model:
-        return ""
-    if EXECUTOR_TIER.search(model):
-        return (
-            f"cc-fleet {verb} denied: this session runs {model} — an executor "
-            "tier. Executors execute; they never spawn agents at any depth "
-            "(docs/AGENT_ROUTING.md). STOP and report the need up to your "
-            "dispatcher instead."
-        )
-    if DISPATCHER_TIER.search(model):
-        if verb == "subagent" and target in EXECUTOR_PROVIDERS:
-            return ""
-        return (
-            f"cc-fleet {verb} {target or ''} denied: this session runs {model} "
-            "— the dispatcher tier, which may only drive the executor provider "
-            f"({', '.join(sorted(EXECUTOR_PROVIDERS))}) via `cc-fleet subagent` "
-            "(docs/AGENT_ROUTING.md §0 R6). Anything else escalates to the lead."
-        )
-    return ""
+    # ALL remaining spawn verbs (subagent/run/workflow) denied for EVERY tier
+    # (Peter 2026-08-02: "We use team lanes native — they provide a reliable
+    # messaging system"). Headless cc-fleet lanes are invisible in the UI,
+    # unreachable via SendMessage, and outside the lane-health-check cron;
+    # the 2026-08-02 KEY_INVALID incident proved their failures hide.
+    # `cc-fleet subagent-status` polls are not spawn verbs — SPAWN_CMD's
+    # negative lookahead already excludes them.
+    return (
+        f"cc-fleet {verb} denied for every tier: lanes are NATIVE Agent-tool "
+        "teammates only (Peter 2026-08-02) — headless cc-fleet spawns are "
+        "invisible in the UI, unreachable via SendMessage, and outside the "
+        "lane-health-check. Spawn a native lane instead: model \"haiku\" = "
+        "DeepSeek Flash, \"sonnet\" = GLM-4.7, \"opus\" = GLM-5.2 "
+        "(escalation seat), \"fable\" = k3, named with the slot prefix "
+        "(flash-*/glm47-*/glm52-*/k3-*). `cc-fleet subagent-status <job>` "
+        "polls of already-running jobs are unaffected."
+    )
 
 
 def main() -> None:

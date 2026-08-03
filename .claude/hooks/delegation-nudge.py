@@ -4,7 +4,8 @@ hands-on grinding.
 
 Mechanism (deterministic, count-based, no content heuristics):
   - Counts every hands-on action per session: Bash commands and Edit/Write/MultiEdit file edits.
-  - An Agent tool call marks the session as delegating: it resets the window.
+  - An Agent tool call marks the session as delegating: it resets the window. A
+    SendMessage call (driving a live lane) also resets — orchestrating is delegation.
   - Every NUDGE_EVERY (20) consecutive hands-on actions with no Agent call in between, inject additionalContext telling the lead to stop and consider a lane. Injection repeats every further NUDGE_EVERY actions.
 
 This hook only nudges — CLAUDE.md's default is "write code directly in the main context"
@@ -59,6 +60,13 @@ def main() -> None:
         if tool == "Agent":
             # Delegation observed — the window restarts from here.
             state["hands_on"] = 0
+            state["spawns"] = int(state.get("spawns", 0)) + 1
+            json.dump(state, open(sp, "w"))
+            return
+
+        if tool == "SendMessage":
+            # Driving a live lane IS delegation work, not grinding.
+            state["hands_on"] = 0
             json.dump(state, open(sp, "w"))
             return
 
@@ -72,12 +80,14 @@ def main() -> None:
         if n % NUDGE_EVERY != 0:
             return
 
+        spawns = int(state.get("spawns", 0))
         print(json.dumps({
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "additionalContext": (
-                    f"DELEGATION NUDGE — {n} hands-on actions (Bash/edits) in this "
-                    "session without a single Agent spawn. Stop and route "
+                    f"DELEGATION NUDGE — {n} consecutive hands-on actions "
+                    f"(Bash/edits) since the last delegation signal "
+                    f"({spawns} Agent spawn(s) this session). Stop and route "
                     "(docs/AGENT_ROUTING.md, CLAUDE.md Agents): if what you are doing "
                     "is a decided, mechanical loop — probe renders, bulk edits, "
                     "run-test-fix-repeat, format sweeps — brief a lane "

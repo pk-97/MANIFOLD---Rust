@@ -234,6 +234,8 @@ impl Application {
         // (same source the workspace viewport uses). Zero extra GPU work —
         // the frame is already rendered by the content thread.
         #[cfg(target_os = "macos")]
+        let mut bridge_leases: crate::shared_texture::BridgeLeaseBatch = Vec::new();
+        #[cfg(target_os = "macos")]
         if let (Some(bridge), Some(blit_pipeline), Some(blit_sampler)) = (
             &self.preview_texture_bridge,
             &self.blit_pipeline,
@@ -249,8 +251,10 @@ impl Application {
                     });
                 self.ui_preview_textures = textures.map(Some);
             }
-            let front = bridge.front_index() as usize;
+            let lease = bridge.acquire_read();
+            let front = lease.slot();
             if let Some(source) = self.ui_preview_textures[front].as_ref() {
+                bridge_leases.push((bridge.clone(), lease));
                 let (comp_w, comp_h) = self
                     .content_pipeline_output
                     .as_ref()
@@ -304,25 +308,65 @@ impl Application {
         let drawable = {
             let ws = match self.window_registry.get_mut(&window_id) {
                 Some(ws) => ws,
-                None => return,
+                None => {
+                    #[cfg(target_os = "macos")]
+                    crate::shared_texture::retire_leases_via_marker(
+                        &gpu.device,
+                        self.content_tx.clone(),
+                        std::mem::take(&mut bridge_leases),
+                    );
+                    return;
+                }
             };
             let surface = match ws.surface.as_ref() {
                 Some(s) => s,
-                None => return,
+                None => {
+                    #[cfg(target_os = "macos")]
+                    crate::shared_texture::retire_leases_via_marker(
+                        &gpu.device,
+                        self.content_tx.clone(),
+                        std::mem::take(&mut bridge_leases),
+                    );
+                    return;
+                }
             };
             match surface.next_drawable() {
                 Some(d) => d,
-                None => return,
+                None => {
+                    #[cfg(target_os = "macos")]
+                    crate::shared_texture::retire_leases_via_marker(
+                        &gpu.device,
+                        self.content_tx.clone(),
+                        std::mem::take(&mut bridge_leases),
+                    );
+                    return;
+                }
             }
         };
         let drawable_tex = drawable.gpu_texture(manifold_gpu::GpuTextureFormat::Bgra8Unorm);
         let blit_pipeline = match &self.blit_pipeline {
             Some(p) => p,
-            None => return,
+            None => {
+                #[cfg(target_os = "macos")]
+                crate::shared_texture::retire_leases_via_marker(
+                    &gpu.device,
+                    self.content_tx.clone(),
+                    std::mem::take(&mut bridge_leases),
+                );
+                return;
+            }
         };
         let blit_sampler = match &self.blit_sampler {
             Some(s) => s,
-            None => return,
+            None => {
+                #[cfg(target_os = "macos")]
+                crate::shared_texture::retire_leases_via_marker(
+                    &gpu.device,
+                    self.content_tx.clone(),
+                    std::mem::take(&mut bridge_leases),
+                );
+                return;
+            }
         };
         let mut present_enc = gpu.device.create_encoder("Perform Present");
         present_enc.draw_fullscreen(
@@ -343,6 +387,15 @@ impl Application {
             "Offscreen → Drawable (Perform)",
         );
         present_enc.present_drawable(&drawable);
+        // BUG-xaw4: the preview bridge lease retires when this encoder
+        // completes — ordered after the "Perform Frame" encoder that sampled
+        // the bridge (same queue).
+        #[cfg(target_os = "macos")]
+        crate::shared_texture::attach_lease_retire(
+            &present_enc,
+            self.content_tx.clone(),
+            std::mem::take(&mut bridge_leases),
+        );
         present_enc.commit();
 
         self.frame_count += 1;

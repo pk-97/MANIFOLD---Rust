@@ -409,7 +409,7 @@ _Generated from the node registry. Do not hand-edit. 250 nodes registered, group
 | `Kaleidoscope` | Kaleidoscope | effect | Spatial | 2 |
 | `Lightning` | Lightning | generator | Pattern | 7 |
 | `Lissajous` | Lissajous | generator | Geometry | 11 |
-| `MetallicGlass` | Metallic Glass | generator | Sim | 141 |
+| `MetallicGlass` | Metallic Glass | generator | Sim | 143 |
 | `Mirror` | Mirror | effect | Spatial | 2 |
 | `MriVolume` | MRI Volume | generator | Text & Media | 8 |
 | `NestedCubes` | Nested Cubes | generator | Geometry | 6 |
@@ -418,7 +418,7 @@ _Generated from the node registry. Do not hand-edit. 250 nodes registered, group
 | `ParticleText` | Particle Text | generator | Text & Media | 15 |
 | `Plasma` | Plasma | generator | Pattern | 6 |
 | `QuadMirror` | Quad Mirror | effect | Spatial | 1 |
-| `SceneStarter` | Scene Starter | generator | Geometry | 124 |
+| `SceneStarter` | Scene Starter | generator | Geometry | 125 |
 | `SoftFocus` | Soft Focus | effect | Stylize | 2 |
 | `StarField` | Star Field | generator | Pattern | 8 |
 | `StrangeAttractor` | Strange Attractor | generator | Sim | 11 |

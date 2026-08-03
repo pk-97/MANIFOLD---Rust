@@ -1,0 +1,134 @@
+{
+  "schema": 1,
+  "metadata": {
+    "width": 3840,
+    "height": 2160,
+    "total_frames": 150,
+    "warmup_frames": 30,
+    "measure_frames": 120,
+    "frame_budget_ms": 41.6,
+    "binary": "/Users/peterkiemann/MANIFOLD - Rust/.claude/worktrees/slot-7/target/release/manifold",
+    "recorded": "2026-08-02"
+  },
+  "note": "All four RT terms (shadow vis, AO, GI, reflection) share ONE Metal dispatch (dispatch_shadow_rays) with a single trace_size, so any listed term nativizes the whole dispatch. Per-term resolution attribution requires splitting that dispatch \u2014 deferred to A3. Hence baseline (half-res) vs all-native, not per-term.",
+  "measurements": [
+    {
+      "fixture": "RtMotionHelmet",
+      "lighting": "sun-only",
+      "config": "baseline",
+      "native_terms": "",
+      "median_ms": 27.34,
+      "p95_ms": 27.81,
+      "n": 120
+    },
+    {
+      "fixture": "RtMotionHelmet",
+      "lighting": "sun-only",
+      "config": "all-native",
+      "native_terms": "shadow,ao,gi,reflection",
+      "median_ms": 61.2,
+      "p95_ms": 62.13,
+      "n": 120,
+      "delta_vs_baseline_ms": 33.86,
+      "fits_41_6ms": false
+    },
+    {
+      "fixture": "RtMotionHelmet",
+      "lighting": "env-only",
+      "config": "baseline",
+      "native_terms": "",
+      "median_ms": 27.37,
+      "p95_ms": 27.83,
+      "n": 120
+    },
+    {
+      "fixture": "RtMotionHelmet",
+      "lighting": "env-only",
+      "config": "all-native",
+      "native_terms": "shadow,ao,gi,reflection",
+      "median_ms": 61.2,
+      "p95_ms": 62.08,
+      "n": 120,
+      "delta_vs_baseline_ms": 33.83,
+      "fits_41_6ms": false
+    },
+    {
+      "fixture": "RtApricot",
+      "lighting": "sun-only",
+      "config": "baseline",
+      "native_terms": "",
+      "median_ms": 27.31,
+      "p95_ms": 27.91,
+      "n": 120
+    },
+    {
+      "fixture": "RtApricot",
+      "lighting": "sun-only",
+      "config": "all-native",
+      "native_terms": "shadow,ao,gi,reflection",
+      "median_ms": 61.21,
+      "p95_ms": 61.98,
+      "n": 120,
+      "delta_vs_baseline_ms": 33.9,
+      "fits_41_6ms": false
+    },
+    {
+      "fixture": "RtApricot",
+      "lighting": "env-only",
+      "config": "baseline",
+      "native_terms": "",
+      "median_ms": 27.44,
+      "p95_ms": 27.92,
+      "n": 120
+    },
+    {
+      "fixture": "RtApricot",
+      "lighting": "env-only",
+      "config": "all-native",
+      "native_terms": "shadow,ao,gi,reflection",
+      "median_ms": 61.24,
+      "p95_ms": 62.09,
+      "n": 120,
+      "delta_vs_baseline_ms": 33.8,
+      "fits_41_6ms": false
+    }
+  ],
+  "verdicts": [
+    {
+      "fixture": "RtMotionHelmet",
+      "lighting": "sun-only",
+      "baseline_median_ms": 27.34,
+      "all_native_median_ms": 61.2,
+      "delta_ms": 33.86,
+      "fits_41_6ms": false,
+      "verdict": "EXCEEDS budget"
+    },
+    {
+      "fixture": "RtMotionHelmet",
+      "lighting": "env-only",
+      "baseline_median_ms": 27.37,
+      "all_native_median_ms": 61.2,
+      "delta_ms": 33.83,
+      "fits_41_6ms": false,
+      "verdict": "EXCEEDS budget"
+    },
+    {
+      "fixture": "RtApricot",
+      "lighting": "sun-only",
+      "baseline_median_ms": 27.31,
+      "all_native_median_ms": 61.21,
+      "delta_ms": 33.9,
+      "fits_41_6ms": false,
+      "verdict": "EXCEEDS budget"
+    },
+    {
+      "fixture": "RtApricot",
+      "lighting": "env-only",
+      "baseline_median_ms": 27.44,
+      "all_native_median_ms": 61.24,
+      "delta_ms": 33.8,
+      "fits_41_6ms": false,
+      "verdict": "EXCEEDS budget"
+    }
+  ]
+}

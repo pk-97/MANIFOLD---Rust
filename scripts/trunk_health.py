@@ -90,6 +90,20 @@ def main():
         # while its ceilings are unvalidated, so it files no beads until the
         # numbers mean something.
         ["python3", "scripts/rt_noise_gate.py", "--require-fixture"],
+        # RT MOTION leg (BUG-sz0u): camera-orbit ramp on the helmet fixture —
+        # the coverage that catches motion-only regressions (D-64 boil,
+        # sv-gate re-trip) the static legs can't see. Red-validated against
+        # boil-era gate behavior before this wiring (sv_hold median 4x over
+        # the healthy ceiling with D-64/tr5o reverted). The fixture is
+        # RtMotionHelmet.manifold, NOT RtNoiseTesting: the noise fixture
+        # shows no red/green separation for this class (measured 2026-08-01).
+        ["python3", "scripts/rt_noise_gate.py", "--motion",
+         "--project", "tests/fixtures/rt/RtMotionHelmet.manifold",
+         "--require-fixture"],
+        # Presentation-tear class (BUG-xaw4): legacy policy must keep tearing
+        # (probe not blind) AND fenced policy must stay clean (the shipped
+        # read-fence contract). GPU-serial here — this loop is sequential.
+        ["python3", "scripts/bridge_probe_gate.py"],
     ]
 
     green_gates = []
@@ -172,6 +186,20 @@ def main():
         for green_cmd in green_gates:
             print(f"[dry-run] would close beads matching trunk-health: {green_cmd}")
         return 0
+
+    # Hook-telemetry census — informational only, never files a bead or fails.
+    print(f"[trunk-health] running hook census...")
+    header = "\n=== hook census (7-day window) ===\n"
+    log_lines.append(header)
+    try:
+        census_cmd = ["python3", "scripts/hook_census.py", "--days", "7"]
+        _, census_out, _, _ = run_cmd(census_cmd, cwd=MAIN_CHECKOUT, timeout=120)
+        print(census_out)
+        log_lines.append(census_out)
+    except Exception as e:
+        msg = f"[trunk-health] hook census skipped: {e}\n"
+        print(msg)
+        log_lines.append(msg)
 
     # Write log
     with open(log_path, "a") as f:

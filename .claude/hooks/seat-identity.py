@@ -13,9 +13,12 @@ Seat resolution order:
   3. base_url — last resort, ambiguous post-proxy (several seats share 127.0.0.1:4000).
 
 Never derive a seat from the slot map: a provider's slots carry LANE tiers, not its own
-identity (kimi's are opus=glm-5.2, sonnet=glm-4.7, haiku=deepseek-v4-flash), so matching a
+identity (kimi's are opus=deepseek-v4-pro, sonnet=glm-4.7, haiku=deepseek-v4-flash), so matching a
 slot against `default_model` labelled the K3 lead a dispatcher. Step 2 matches the strong
-slot ONLY because no two seats may share one.
+slot ONLY because no two seats may share one. KNOWN DORMANT COLLISION (2026-08-02, tracked
+in beads): kimi and opencode both carry strong_model=deepseek-v4-pro since the opus slot
+moved off glm-5.2 — step 2 would be ambiguous for a pane without ANTHROPIC_MODEL, but
+native-lanes-only means no such panes are launched (the lead sets ANTHROPIC_MODEL=k3).
 
 Provider -> seat maps per docs/AGENT_ROUTING.md (the tiering). Anthropic sessions
 (no/api.anthropic.com base URL) get nothing — their system prompt is already correct.
@@ -40,14 +43,18 @@ SEATS = {
         "your serving speed is ~35 tok/s, so every token of narration is "
         "~30ms of Peter's time — no thinking out loud before spawning, no "
         "restating the brief back to yourself; briefs, verdicts, and "
-        "decisions only. Delegate early: lanes are 3-5x faster than you.",
+        "decisions only. Delegate early: lanes are 3-5x faster than you. "
+        "When you spawn lanes, the Agent `name` must carry the model-slot "
+        "prefix: haiku -> flash-*, sonnet -> glm47-*, opus -> pro-*, "
+        "fable -> k3-* (agent-launch-guard denies anything else).",
     ),
     "zai": (
         "DISPATCHER",
         "You hold the dispatcher seat: clerical only — pop the queue, brief "
         "lanes, run exit-code gates, accept/reject, escalate. Drive executors "
         "via `cc-fleet subagent opencode` ONLY. You never land, never design; "
-        "decisions flow up to the lead.",
+        "decisions flow up to the lead. Lane names must carry the model-slot "
+        "prefix (haiku -> flash-*) or agent-launch-guard denies the spawn.",
     ),
     "opencode": (
         "EXECUTOR",

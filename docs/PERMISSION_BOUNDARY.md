@@ -38,9 +38,13 @@ the sonnet slot: success locks it in for the session; any non-401 error marks
 the session demoted and it uses branch 3 for every later call, permanently. A
 demoted pane never recovers — restart it.
 
-On the K3 seat the tmux binding sets `ANTHROPIC_DEFAULT_FABLE_MODEL=k3` with
-main model k3, so a demotion lands on glm-5.2. Verified 2026-07-26: a fresh
-session classifies on `deepseek-v4-flash` as intended.
+On the K3 seat the `k3m` alias sets `ANTHROPIC_DEFAULT_FABLE_MODEL=k3` with
+main model k3, so a demotion lands on the opus slot (`deepseek-v4-pro`).
+GLM is off the classifier path entirely (Peter 2026-08-04): sonnet slot =
+`deepseek-v4-flash`, the proxy's flash/pro → glm-4.7 fallbacks are removed,
+and a demotion now stays on DeepSeek. Prior state for context: glm-4.7 held
+the sonnet slot 2026-07-27→08-04 for reliability, until ZAI ran out of weekly
+quota and every classifier call froze.
 
 Oracle: `claude --debug -p '…' --permission-mode auto`, then grep
 `~/.claude/debug/latest` for `classifier_request_started` (prints the model).
