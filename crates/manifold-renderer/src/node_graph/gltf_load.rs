@@ -62,6 +62,9 @@ const MANIFOLD_SUPPORTED_EXTENSIONS: &[&str] = &[
     "KHR_materials_iridescence",
     "KHR_materials_anisotropy",
     "KHR_materials_dispersion",
+    // RAYTRACING_DESIGN.md section 16 TL3 — raw-JSON sniffed, no typed
+    // accessor at 1.4.1:
+    "KHR_materials_diffuse_transmission",
     // IMPORT_ANYTHING_WAVE_DESIGN.md W1 — raw-JSON sniffed + manual decode,
     // no crate feature exists for this extension at 1.4.1:
     "EXT_texture_webp",
@@ -1137,6 +1140,22 @@ pub(crate) struct GltfMaterialInfo {
     /// surface): typed accessor, `gltf` 1.4.1 has the transmission
     /// feature (see `transmission_factor` above).
     pub transmission_texture: Option<u32>,
+    /// RAYTRACING_DESIGN.md section 16 TL3:
+    /// `KHR_materials_diffuse_transmission`'s `diffuseTransmissionFactor`
+    /// (default `0.0` when the extension is absent). Raw-JSON sniff — no
+    /// typed accessor for this extension exists in `gltf`/`gltf-json` 1.4.1.
+    /// Maps to `Material::translucency` via the importer's param table.
+    pub diffuse_transmission_factor: f32,
+    /// `KHR_materials_diffuse_transmission`'s `diffuseTransmissionTexture`
+    /// index, if any (R channel scales `diffuseTransmissionFactor`). Color
+    /// factor/texture fidelity gap per section 16.8 — populated at import,
+    /// logged as a gap, consumed by a deferred phase.
+    #[expect(
+        dead_code,
+        reason = "populated at import for section 16.8 deferred texture path; the BUG-213-style \
+                  gap-report line is generated from the local variable in the parse block"
+    )]
+    pub diffuse_transmission_texture: Option<u32>,
     /// `KHR_materials_clearcoat`'s `clearcoatFactor` (default `0.0` — glTF's
     /// own implicit default, and the value that makes G-P5's coat lobe
     /// exactly inert). GLB_CONFORMANCE_DESIGN.md G-P5/D5: parsed by raw
@@ -3594,6 +3613,46 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 .map(|v| f1(v, "dispersion", 0.0))
                 .unwrap_or(0.0);
 
+            // RAYTRACING_DESIGN.md section 16 TL3:
+            // KHR_materials_diffuse_transmission. Raw-JSON sniff — no typed
+            // accessor at 1.4.1. Factor maps to Material::translucency; color
+            // factor and texture stay deferred per section 16.8 (tint=albedo
+            // is the right default for foliage; the three Khronos conformance
+            // assets become the held-out demo).
+            let diffuse_transmission_ext =
+                m.extension_value("KHR_materials_diffuse_transmission");
+            let diffuse_transmission_factor = diffuse_transmission_ext
+                .map(|v| f1(v, "diffuseTransmissionFactor", 0.0))
+                .unwrap_or(0.0);
+            let diffuse_transmission_texture = diffuse_transmission_ext
+                .and_then(|v| tex_idx(v, "diffuseTransmissionTexture"));
+            let _diffuse_transmission_color_texture = diffuse_transmission_ext
+                .and_then(|v| tex_idx(v, "diffuseTransmissionColorTexture"));
+            // Log fidelity gaps (section 16.8) — color factor and texture
+            // NOT mapped; tint=albedo is the forward-term default.
+            if let Some(ext) = diffuse_transmission_ext {
+                if ext.get("diffuseTransmissionColorFactor").is_some() {
+                    geometry_report_lines.push(format!(
+                        "{label}: KHR_materials_diffuse_transmission diffuseTransmissionColorFactor \
+                         not mapped (v1 uses albedo tint — see docs/RAYTRACING_DESIGN.md section 16.8)"
+                    ));
+                }
+                if ext.get("diffuseTransmissionColorTexture").is_some() {
+                    geometry_report_lines.push(format!(
+                        "{label}: KHR_materials_diffuse_transmission diffuseTransmissionColorTexture \
+                         given — not mapped (v1 color-texture deferred, section 16.8) and \
+                         texture will not be decoded"
+                    ));
+                }
+            }
+            if diffuse_transmission_texture.is_some() {
+                geometry_report_lines.push(format!(
+                    "{label}: KHR_materials_diffuse_transmission diffuseTransmissionTexture \
+                     given — not mapped (v1 factor-only; texture deferred to section 16.8) \
+                     and texture will not be decoded"
+                ));
+            }
+
             // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1: KHR_materials_volume.
             // Typed accessor (`Material::volume()`) — the Cargo feature IS
             // enabled at 1.4.1, unlike the four raw-JSON families above.
@@ -3689,6 +3748,10 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                     "transmission",
                     m.transmission().and_then(|t| t.transmission_texture()).map(|t| t.tex_coord()),
                 ),
+                (
+                    "diffuseTransmission",
+                    diffuse_transmission_ext.and_then(|v| tex_coord_idx(v, "diffuseTransmissionTexture")),
+                ),
             ] {
                 if let Some(n) = tex_coord
                     && n != 0
@@ -3766,6 +3829,8 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                     .transmission()
                     .and_then(|t| t.transmission_texture())
                     .map(|t| t.texture().index() as u32),
+                diffuse_transmission_factor,
+                diffuse_transmission_texture,
                 clearcoat_factor,
                 clearcoat_roughness_factor,
                 clearcoat_texture,
@@ -3878,6 +3943,8 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
             emissive_strength: 1.0,
             transmission_factor: 0.0,
             transmission_texture: None,
+            diffuse_transmission_factor: 0.0,
+            diffuse_transmission_texture: None,
             clearcoat_factor: 0.0,
             clearcoat_roughness_factor: 0.0,
             clearcoat_texture: None,

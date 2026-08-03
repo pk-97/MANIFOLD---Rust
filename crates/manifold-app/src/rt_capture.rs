@@ -21,6 +21,11 @@
 //!   --frame-clock: engine time = 1/fps per rendered frame, not wall clock
 //!                  (BUG-jbxt — driver-based motion repros under slow renders)
 //!   --set-at N param=value: one-shot param snap at frame N (repeatable)
+//!   --width W / --height H: override render resolution (cost measurement;
+//!                  applied to the in-memory project, file untouched)
+//!   --sync-gpu: block on the GPU fence each frame + print `[GPU_FRAME_MS]`
+//!                  (per-frame GPU cost; without it the content thread pipelines
+//!                  and frame times read as CPU encode only)
 //!
 //! MANIFOLD_RT_PROBE is NOT required — the subcommand arms the capture
 //! flags directly.
@@ -283,6 +288,14 @@ pub fn run(args: &[String]) -> ! {
 
     let paused_mode = args.iter().any(|a| a == "--paused");
 
+    // `--sync-gpu` (cost measurement): block on the GPU fence after every
+    // frame and print the per-frame GPU work time as `[GPU_FRAME_MS]`. The
+    // content thread otherwise pipelines (CPU encodes frame N+1 while the GPU
+    // runs N), so `_t_frame`/`[RENDER_TRACE]` measure CPU encode only — useless
+    // for a frame-budget question. Serializing makes each measured frame's
+    // wall-clock ≈ its GPU cost (CPU encode ~0.3ms is negligible overlap).
+    let sync_gpu = args.iter().any(|a| a == "--sync-gpu");
+
     // `--set param=value` (repeatable): one MutateProject write after load —
     // the RT-off baseline runs `--set 8_rt_enabled=0`.
     let sets: Vec<(String, f32)> = args
@@ -359,11 +372,30 @@ pub fn run(args: &[String]) -> ! {
         .and_then(|w| w[1].parse().ok())
         .unwrap_or(360);
 
+    // Optional resolution override (cost measurement): render at this size
+    // regardless of the project's output dims. Applied to the in-memory
+    // project before LoadProject so the content pipeline's own resize lands
+    // on the override (LoadProject re-resizes to settings — see
+    // content_commands.rs); the project file on disk is untouched.
+    // rt_a2_term_cost pins every fixture to 3840x2160 this way.
+    let override_w: Option<u32> = args.windows(2)
+        .find(|w| w[0] == "--width")
+        .and_then(|w| w[1].parse().ok());
+    let override_h: Option<u32> = args.windows(2)
+        .find(|w| w[0] == "--height")
+        .and_then(|w| w[1].parse().ok());
+
     println!("=== RT CAPTURE {}", if paused_mode { "(PAUSED MODE)" } else { "" });
     println!("path: {} frames={}", project_path.display(), total_frames);
 
-    let real_project = manifold_io::loader::load_project_with(&project_path, crate::project_io::install_embedded_presets)
+    let mut real_project = manifold_io::loader::load_project_with(&project_path, crate::project_io::install_embedded_presets)
         .unwrap_or_else(|e| { eprintln!("FAILED: {e}"); std::process::exit(1); });
+    if let Some(w) = override_w {
+        real_project.settings.output_width = w as i32;
+    }
+    if let Some(h) = override_h {
+        real_project.settings.output_height = h as i32;
+    }
     let fr = real_project.settings.frame_rate as f64;
     let w = real_project.settings.output_width.max(1) as u32;
     let h = real_project.settings.output_height.max(1) as u32;
@@ -491,7 +523,20 @@ pub fn run(args: &[String]) -> ! {
             arm_capture();
         }
         ct.timer.wait_for_deadline();
+        let gpu_t0 = std::time::Instant::now();
         ct.tick_frame(&state_tx);
+        if sync_gpu {
+            // Block until this frame's command buffer completes. Wall-clock
+            // from tick start to fence done is the per-frame GPU cost (CPU
+            // encode ~0.3ms is negligible overlap) — the metric a frame budget
+            // is measured against. Without this the content thread pipelines
+            // and per-frame times read as CPU encode only.
+            ct.content_pipeline.wait_for_render_complete();
+            eprintln!(
+                "[GPU_FRAME_MS] frame={frame} ms={:.2}",
+                gpu_t0.elapsed().as_secs_f64() * 1000.0
+            );
+        }
         if let Some(dev) = ct.content_pipeline.native_device() { drain_captures(dev, frame, &mut last_stats); }
     }
 

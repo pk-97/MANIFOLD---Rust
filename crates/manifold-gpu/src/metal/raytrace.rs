@@ -1197,15 +1197,23 @@ kernel void trace_shadow_rays(
         // Void background: unoccluded either way, every caster slot —
         // no surface to gather against (ED2: rgb 0, alpha = neutral
         // unoccluded ao 1.0). `.w = -1`: no object (RT-T2-C).
-        out_sv.write(float4(1, 1, 1, 1), tid);
-        out_irr.write(float4(0, 0, 0, 1.0), tid);
-        out_n.write(float4(0, 1, 0, -1.0), tid);
+        // RT-A3a: gate writes on dispatch role.
+        if (p.shadow_spp > 0u) {
+            out_sv.write(float4(1, 1, 1, 1), tid);
+        }
+        if (p.ao_spp > 0u || p.gi_spp > 0u) {
+            out_irr.write(float4(0, 0, 0, 1.0), tid);
+        }
+        if (p.ao_spp > 0u || p.gi_spp > 0u || p.refl_spp > 0u) {
+            out_n.write(float4(0, 1, 0, -1.0), tid);
+        }
         // BUG-88m: `.a = -1` = "no traced value at this texel". Blend
         // fragments DO shade here (the depth prepass excludes them, so
         // they read as void) and must keep their prefiltered-env IBL —
         // `render_scene.wgsl` gates the rt_reflection substitution on
         // `.a >= 0`. Alpha semantics: >0 hit distance, 0 env-miss
         // (RT_REFL_MISS_HIT_DIST), -1 no valid value.
+        // Reflection gate already exists (refl_spp > 0u).
         out_refl.write(float4(0, 0, 0, -1.0), tid);
         return;
     }
@@ -1338,8 +1346,13 @@ kernel void trace_shadow_rays(
     // exact (CPU-computed, never reconstructed), and biasing toward the
     // light is correct for a shadow ray.
     float4 sv = float4(1.0, 1.0, 1.0, 1.0);
-    uint spp = max(p.shadow_spp, 1u);
     uint n_casters = min(p.caster_count, MAX_RT_CASTERS);
+    // RT-A3a: shadow_spp == 0 (lighting-only dispatch) must skip the caster
+    // rays outright — the out_sv write below is gated, and without this guard
+    // the lighting dispatch traces every shadow ray and discards the result
+    // (measured +13ms/frame at half-res 4K, A3 cost matrix 2026-08-02).
+    if (p.shadow_spp > 0u) {
+    uint spp = p.shadow_spp;
     for (uint c = 0; c < n_casters; c++) {
         RtCasterParams cst = p.casters[c];
         float3 to_light;
@@ -1380,6 +1393,7 @@ kernel void trace_shadow_rays(
         vis /= float(spp);
         sv[c] = vis;
     }
+    } // shadow_spp > 0
 
     // RT-P2: AO gather — cosine-weighted hemisphere around the SAME bias
     // normal/origin the shadow ray uses (ported from the prototype's
@@ -1403,13 +1417,19 @@ kernel void trace_shadow_rays(
         }
         ao /= float(p.ao_spp);
     }
-    out_sv.write(sv, tid);
+    // RT-A3a: gate mask write on shadow_spp so lighting-only dispatch leaves texture untouched.
+    if (p.shadow_spp > 0u) {
+        out_sv.write(sv, tid);
+    }
     // RT-T1-C (BUG-311): expose the SAME real interpolated vertex normal
     // (`n`) already computed above for AO/GI cosine sampling, so
     // `accumulate_irradiance`'s reprojection validity test can compare a
     // real surface normal instead of reconstructing one from depth.
     // RT-T2-C: `.w` carries the primary-hit object id (see `obj_id` above).
-    out_n.write(float4(n, obj_id), tid);
+    // RT-A3a: gate normal write on lighting terms so mask-only dispatch leaves texture untouched.
+    if (p.ao_spp > 0u || p.gi_spp > 0u || p.refl_spp > 0u) {
+        out_n.write(float4(n, obj_id), tid);
+    }
 
     // RT-P3 (RAYTRACING_DESIGN.md section 5.2 P3, D4): GI gather — ported
     // from the P0 prototype's `trace_lighting` GI block, extended with the
@@ -1710,7 +1730,10 @@ kernel void trace_shadow_rays(
     // mask for visibility — a sun*n·l·vis copy here was counted twice. No
     // albedo multiply here either (that happens once, downstream — D3's
     // "accumulate lighting separated from albedo").
-    out_irr.write(float4(gi, ao), tid);
+    // RT-A3a: gate irradiance write on lighting terms so mask-only dispatch leaves texture untouched.
+    if (p.ao_spp > 0u || p.gi_spp > 0u) {
+        out_irr.write(float4(gi, ao), tid);
+    }
 }
 
 // Depth+normal-aware bilateral upsample: half-res (sun-visibility, AO) +
@@ -1749,8 +1772,15 @@ kernel void upsample_shadow(
 {
     if (tid.x >= p.gbuffer_size.x || tid.y >= p.gbuffer_size.y) return;
     float d = depth_tex.read(tid, 0);
+    // RT-A3a (D16a split mode): when the mask dispatch ran at native res,
+    // lo_sv is already gbuffer-sized — the half->full resample would sample
+    // it at the lighting params' half-res coordinates and read its top-left
+    // quarter (Peter's "sun popped / lighting strange" 2026-08-02). A
+    // native mask needs no resample at all: pass the texel through. Detect
+    // by texture size so the params ABI and fused path are untouched.
+    bool sv_native = lo_sv.get_width() == p.gbuffer_size.x && lo_sv.get_height() == p.gbuffer_size.y;
     if (d >= 1.0 - 1e-6) {
-        hi_sv.write(float4(1, 1, 1, 1), tid);
+        hi_sv.write(sv_native ? lo_sv.read(tid) : float4(1, 1, 1, 1), tid);
         hi_irr.write(float4(0, 0, 0, 1.0), tid);
         hi_n.write(float4(0, 1, 0, -1.0), tid);
         // BUG-88m: `.a = -1` must survive the half->full chain — Blend
@@ -1798,7 +1828,7 @@ kernel void upsample_shadow(
         float w_depth = exp(-fabs(qd - d) / 0.001);
         float w_normal = pow(max(dot(ref_n, qn), 0.0), UPSAMPLE_NORMAL_POWER);
         float w = max(w_bilin * w_depth * w_normal, 1e-5);
-        acc_sv += lo_sv.read(uint2(q)) * w;
+        if (!sv_native) { acc_sv += lo_sv.read(uint2(q)) * w; }
         float4 qirr = lo_irr.read(uint2(q));
         acc_irr += qirr.rgb * w;
         acc_ao += qirr.a * w;
@@ -1808,13 +1838,13 @@ kernel void upsample_shadow(
     }
     if (wsum < 1e-4 && void_taps > 0u) {
         uint2 uq = uint2(nearest_lo);
-        hi_sv.write(lo_sv.read(uq), tid);
+        hi_sv.write(sv_native ? lo_sv.read(tid) : lo_sv.read(uq), tid);
         hi_irr.write(lo_irr.read(uq), tid);
         hi_n.write(float4(ref_n, ref_n4.w), tid);
         hi_refl.write(lo_refl.read(uq), tid);
         return;
     }
-    hi_sv.write(acc_sv / wsum, tid);
+    hi_sv.write(sv_native ? lo_sv.read(tid) : acc_sv / wsum, tid);
     hi_irr.write(float4(acc_irr / wsum, acc_ao / wsum), tid);
     float3 n_avg = acc_n / wsum;
     float n_len = length(n_avg);
@@ -2773,6 +2803,12 @@ impl RtCasterParams {
 /// — up to [`MAX_RT_CASTERS`] independently-traced casters, one visibility
 /// channel per slot in `trace_shadow_rays`'s `out_sv` output.
 #[repr(C)]
+/// RT quality A3a: Split-dispatch control.
+/// The single `trace_shadow_rays` kernel now runs twice with different spp masks:
+/// - Mask dispatch: shadow_spp > 0, ao_spp=0, gi_spp=0, refl_spp=0 → writes out_sv only
+/// - Lighting dispatch: shadow_spp=0, ao_spp > 0 and/or gi_spp > 0 and/or refl_spp > 0 → writes out_irr, out_refl, out_n
+///
+/// Each dispatch carries its own trace_size; spp=0 gates kernel writes to leave textures untouched.
 #[derive(Clone, Copy, Debug)]
 pub struct ShadowRayParams {
     pub shadow_spp: u32,

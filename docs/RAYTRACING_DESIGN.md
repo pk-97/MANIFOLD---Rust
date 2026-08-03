@@ -1,6 +1,6 @@
 # Ray Tracing — hybrid RT lighting for hero scenes
 
-**Status:** IN PROGRESS — Tier 1+2, the motion class, reflections R1–R3, T3-8 multi-bounce GI, section 12 (screen-space AO), section 13 (temporal denoiser rebuild), section 14 (traced env diffuse) landed; phase records in section 9.6 (Phases). OWED: Peter's look at multi-bounce, R2 constants, the denoiser under fast camera motion, ED-A env-diffuse on a real hero scene; a `trace_ms` 2-vs-1 number from a heavier scene. Items 6/9, P5 export (D13), P6 frame interp stay show-need-triggered. · 2026-07-31 · K3 + Peter
+**Status:** IN PROGRESS — Tier 1+2, motion class, reflections R1–R3, T3-8 multi-bounce, sections 12–14 (AO, denoiser, env diffuse), section 16 TL-A (translucency), quality wave A1–A3 (oracle, per-term cost, split dispatch) landed. Section 15 (many-light) and 16 TL-B/TL-C approved, not built. OWED: Peter's looks — multi-bounce, R2 constants, fast-camera denoiser, ED-A on a hero scene; `trace_ms` 2-vs-1 from a heavier scene; A3 split-mode matrix remeasure (racy numbers void). P5 export (D13), P6 frame interp show-need-triggered. · 2026-08-03 · K3 + Peter
 **Prerequisites:** none for P0. P1+ gated on P0 numbers and on RENDERING_INFRA_V2 section 2 (G-buffer/motion vectors) for temporal pieces.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -1203,3 +1203,758 @@ env fetch is one texture read per miss. The accumulate/denoise chain carries alp
 where it carried zero — same bandwidth class, no new texture. And the metal-fill
 deviation above is a real look change on existing RT scenes: darker, correct, and
 Peter signs it off on a fixture before it lands.
+
+## 15. Many-light direct lighting — caster cap + emissive RIS (Tier 3 item 6; APPROVED 2026-08-02, K3 lead on k3-restir-design's draft; not started)
+
+### 15.0 What changed since the scoping note
+
+Section 8 item 6 (2026-07-23) says "RT shadows are sun-only today; every
+other light is still a shadow map." That is stale. The multi-caster fix
+shipped after it: all `MAX_RT_CASTERS` (= 4) casters — sun AND point — are
+traced per pixel with soft shadows (`render_scene.rs:4533-4557` fills one
+`RtCasterParams` per caster, kind 0 sun cone / kind 1 point with
+`light_size`; kernel loop `crates/manifold-gpu/src/metal/raytrace.rs:1307-1346`),
+and shadow maps never render at all in an RT scene
+(`render_scene.rs:3933` and `:4079` both gate on `!(rt_enabled && rt_ready)`).
+
+The item's real content, restated against today's code:
+
+1. **Casters beyond 4 are unshadowed.** `MAX_RT_CASTERS = 4` is a fixed
+   kernel slot count (`raytrace.rs` (metal) `:542` MSL, `:2791` Rust);
+   `shadow_factor` returns lit for slot −1 (`render_scene.wgsl:636`). A
+   show scene with 6 shadow-casting strobes shadows 4 of them.
+2. **Emissive geometry has no direct-light estimator.** Emissive surfaces
+   light the scene only when a cosine-hemisphere GI gather ray happens to
+   hit them (`raytrace.rs` (metal) `:1459-1469`, `hit_emissive` at bounce
+   1). A small bright emitter — an LED strip, a strobe bar, a glowing edge
+   on a hero scan — is hit by almost no gather rays, so its direct light
+   is statistically absent at 4 GI spp. This is the actual many-light
+   problem in MANIFOLD's scene class, and it is the one worth building.
+
+### 15.1 Audit — what exists (verified 2026-08-02)
+
+| Piece | Where | State |
+|---|---|---|
+| Light types | `crates/manifold-renderer/src/node_graph/light.rs:43-52` (`LightMode`) | **Sun and Point only. No spot light exists** (negative `rg` for `Spot` in `light.rs`). Both modes carry `cast_shadows`, `shadow_softness` (PCF tiers + `Contact { light_size }` PCSS), `shadow_resolution`. |
+| Light count cap | `render_scene.rs:146` (`LIGHT_SLIDER_MAX = 64`), module doc `:14-16` | Uncapped structurally — runtime-sized `@binding(8)` storage buffer; slider soft bound 64, `setBytes` hard ceiling 127. |
+| Real light census | Peter's `~/Downloads/*.manifold`, counted `node.light` occurrences per project 2026-08-02 | Typical 1–10 light nodes; max 20 (`SceneLadders`). **A few dozen is the observed ceiling; the median show scene is single digits.** |
+| Shadow-map path | `render_scene.rs:159` (`MAX_SHADOW_CASTING_LIGHTS = 4`), `:3089-3130` | First 4 `cast_shadows` lights in slot order, one depth-only prepass each; lights past the cap illuminate unshadowed (slot −1 → `shadow_factor` 1.0, `render_scene.wgsl:636`). |
+| RT shadow path | `render_scene.rs:4526-4557`; kernel `raytrace.rs` (metal) `:1304-1346` | All ≤4 casters traced, sun cone (`SOFT_SHADOW_CONE_RADIANS`, `render_scene.rs:191`) and point `light_size` softness; visibility rides `out_sv` RGBA, one channel per slot, consumed by `shadow_factor` at `render_scene.wgsl:647-650`. |
+| sv accumulation | `raytrace.rs` (metal) `:2118-2193` | SV-ACCUM: ping-pong history + per-channel moments + snap-hold; geometry-driven gates, deliberately NOT snapped by the lighting key (visibility is geometry; strobes must not snap it — `:2125`). |
+| GI gather (emissive path) | `raytrace.rs` (metal) `:1428-1486` | 4 spp cosine hemisphere, 2 bounces; bounce-1 `hit_emissive` = factor × emissive-map sample (BUG-1gqt (kernels ignored emissive texture)). Demodulated into `out_irr.rgb`, accumulated, substituted for `diffuse_ibl` in `fs_pbr` (ED2). |
+| Emissive volumetric proxy | `render_scene.rs:4942-4968` | Every emissive object is already an unshadowed Point-mode pseudo-light in the shaft march — the per-object proxy precedent. |
+| Lighting-key snap | `render_scene.rs:4823-4864` | CPU hash of caster direction/colour/cone/kind + ambient snaps history on light-param change (section 13). Does NOT cover in-graph animated emissive — per-texel gates carry that today, same as for the GI gather. |
+| Trace dispatch | `render_scene.rs:4566-4567`, D11/D22 | One dispatch, half of render res; render res = 2/3 native under temporal upscale → trace ≈ 1280×720 ≈ 0.92M texels at 4K. |
+| Ray budget today | kernel + `render_scene.rs:191-244` | Per trace texel: ≤4 shadow + 1 primary + 4 AO + 4 GI × (2 bounces + ≤4 sun-bounce/hit) + 8 refl ≈ 45 rays worst case. |
+| Frame cost | brief + section 13 table | Full-RT frame ~26ms at half-res rays; 24fps ceiling = 41.6ms. |
+| Reset machinery | D15, `render_scene.rs:839` | One `TemporalResetDetector`; a second is forbidden (I-R2 pattern). |
+| Region-probe harness | `tests/gpu_proofs/rt_p1_region_probe.rs`, `rt_p3_emissive_gi.rs` | The gate precedent every phase below copies. |
+
+**Extend, don't redesign.** The emissive-sampling term joins the existing
+`trace_shadow_rays` dispatch and the existing `out_irr` accumulation chain.
+The caster-cap raise extends existing slot tables. No new pass, no new
+temporal state.
+
+### 15.2 Decisions
+
+- **RS1 — two mechanisms for two different gaps, not one ReSTIR.**
+  Analytic lights and emissive geometry are different problems at
+  MANIFOLD's scales and get different answers (RS2, RS3). Rejected: one
+  sampled estimator over a unified light table for everything — it makes
+  the ≤8-caster case stochastic (worse than deterministic) to serve a
+  table shape only the emissive case needs.
+- **RS2 — analytic lights: raise the RT caster cap 4 → 8, deterministic
+  rays, no sampling.** At the observed census (typical <10 light nodes,
+  max 20) every shadow-casting light a real show uses fits in 8 slots, and
+  deterministic per-caster rays are strictly better than sampling at these
+  counts — zero variance, zero MIS, zero clamp machinery. Cost: 0–4 extra
+  shadow rays per trace texel, only on scenes that actually wire >4
+  casters. `MAX_SHADOW_CASTING_LIGHTS` (the raster shadow-map path) stays
+  4 — non-RT scenes are untouched; the raster/RT coverage divergence
+  widens from "RT shadows better" to "RT shadows more", same direction as
+  every RT term so far. Un-suppression trigger for >8: a real show project
+  with >8 shadow-casting lights — at that point re-read RS5's rejection,
+  because that is the light count where sampling starts winning.
+- **RS3 — emissive geometry: RIS (resampled importance sampling, one
+  candidate, no reservoir reuse) over an emissive-triangle light table,
+  one visibility ray per trace texel, demodulated into `out_irr.rgb`.**
+  This is the estimator at the core of ReSTIR DI with the spatial/temporal
+  reservoir machinery deliberately left off — see RS5 for why that is not
+  cowardice but sizing. Unbiased: candidate triangle drawn from an alias
+  table ∝ static geometric power, a point sampled area-uniform on it, one
+  shadow ray to the point, weighted by the full solid-angle factor. Handles
+  any emissive-triangle count at flat per-pixel cost, which is the only
+  sense in which MANIFOLD is a many-light scene class.
+- **RS4 — the term rides `out_irr`; there is no new temporal state of any
+  kind.** The sampled direct-emissive irradiance is the same physical
+  quantity the GI gather already writes (demodulated incident irradiance
+  at the primary surface, no albedo — D3/MB5 discipline). It is added
+  in-kernel to `out_irr.rgb` and inherits upsample, à-trous, accumulation,
+  the D15 reset detector, and the section-13 gates unchanged. Rejected:
+  reservoir textures with their own ping-pong history — a second temporal
+  state machine whose failure modes are exactly the classes three waves
+  paid to tame: BUG-311 (motion ghosting), BUG-312 (speckle), and
+  BUG-322 (rotation shimmer) — built to amortize a signal the existing
+  accumulator already amortizes (it converges 8-spp reflections and 4-spp
+  AO today).
+- **RS5 — full ReSTIR DI (temporal + spatial reservoir reuse) is rejected
+  for this scene class, with a named revival trigger.** ReSTIR's value
+  scales with light count and with rays saved per shading point.
+  MANIFOLD's analytic counts are single digits; its emissive case is
+  served at 1 ray/pixel by RS3; and the heavy temporal+spatial filtering
+  ReSTIR would amortize into already exists as the accumulator + à-trous
+  chain. What reservoirs would buy — cleaner 1-spp input before filtering —
+  is the thing this codebase has repeatedly chosen to buy with accumulation
+  instead (section 13's 1/n running mean). Revival trigger: after RS-C and
+  Peter's deferred ray-budget re-judge, converged stills STILL show
+  emissive-sampling noise the accumulator cannot hide — measured, not
+  eyeballed, on the rt-capture instrument (section 13). At that point
+  reservoirs are a delta on RS3's machinery (the table, the estimator, the
+  clamp all survive), not a redesign.
+- **RS6 — static sampling weights, current-frame evaluation: strobes are
+  free.** The alias table weights are geometric (triangle area × build-time
+  emissive power rank) and built once with the accel; the estimator reads
+  the CURRENT frame's emissive colour from `gi_materials` / the emissive
+  map at evaluation. RIS stays unbiased for any candidate distribution
+  with nonzero probability, so an intensity strobe needs no table rebuild
+  and invalidates nothing — the strobe case reduces to "the term's value
+  changed this frame", which is precisely what the section-13 per-texel
+  gates and the accumulator's snap machinery already govern for the GI
+  gather's emissive term. The lighting key is NOT extended to emissive
+  (it can't see in-graph animation today; per-texel gates carry it — same
+  coverage as the status quo, no regression).
+- **RS7 — substitution, never addition: the sampler owns DIRECT emissive
+  light; the GI gather keeps indirect.** The gather's bounce-1
+  `hit_emissive` is deleted when the sampler runs; bounce ≥ 2 keeps its
+  `hit_emissive` (that IS indirect light), and env/sun-bounce are
+  untouched. The `818a06b0` double-count trap one term over — same guard
+  family as RD1/I-ED3. Machine check: I-RS3.
+- **RS8 — firefly control by table-mean anchor, ED5's pattern one level
+  down.** A near or hot triangle gives one sample a huge weight; at 1
+  candidate there is no median to anchor on (RT_REFL's clamp needs ≥3
+  spp). Cap each sample's luminance at `RT_EMISSIVE_FIREFLY_GAIN` × the
+  light table's mean power — a CPU-computed scalar riding
+  `ShadowRayParams`, the same "typical-value anchor, no new texture" move
+  as ED5's roughest-mip env anchor. Named constant, committed range 8–32
+  per the `RT_GI_ENV_FIREFLY_GAIN` precedent; tuned by measurement on the
+  RS-C fixture, not by eye.
+- **RS9 — resolution: the term inherits the irradiance channel's
+  resolution, whatever the quality wave decides.** It is written into
+  `out_irr` at trace size, so if the wave's A2 measurement moves a ray
+  term native-res, this term follows `out_irr`'s fate automatically. No
+  independent resolution decision exists here.
+- **RS10 — the Metal RT trait grows no new method (RD10 precedent).**
+  `dispatch_shadow_rays` gains the light-table buffer argument;
+  `ShadowRayParams` gains the emissive-sampling fields. Vulkan parity
+  (D9): the table and alias are plain `GpuBuffer`s; sampling is in-kernel
+  ray queries — a translation matter, nothing Apple-shaped crosses
+  `manifold-gpu`.
+
+### 15.3 Architecture
+
+**Light table.** One entry per emissive triangle of every RT-registered
+object with non-black emissive (factor or map): `{ v0, v1, v2 }` world
+positions (refit alongside the TLAS — transforms only, same discipline as
+`refit_accel`) + the alias table (probability + alias index per entry),
+both plain `GpuBuffer`s. Built CPU-side on the content thread at
+accel-build time inside `render_scene`'s existing RT registration —
+D17's async discipline applies unchanged (table lands with the accel's
+ready flag; until then the GI gather owns emissive as today, no partial
+state). Capped at `RT_EMISSIVE_TABLE_MAX = 4096` entries, top-power
+truncation — **Consequences, stated honestly:** beyond 4096 emissive
+triangles the dimmest tail is never sampled (a bias, not a crash);
+a photoscan with an emissive map over most of its surface blows the cap
+by itself, which is why truncation is by power rank, not slot order.
+Trigger to raise or go hierarchical: a hero asset whose emissive tail
+visibly vanishes — Peter's look on the RS-C demo pair.
+
+Weights are static-geometric (RS6): per-entry power = area × build-time
+emissive luma (factor × emissive-map mean; the map mean is computed once
+at registration from the already-uploaded texture). Per-frame intensity
+changes (a strobe, an LFO on emission) never touch the table.
+
+**Kernel flow**, inside `trace_shadow_rays` after the GI block, reusing
+`sec_origin`, `shading_n`, `bias_eps`, `walk_with_alpha_test`:
+
+1. `u = rand2(tid, frame, 700u)` → alias draw → triangle `t`; second draw
+   → area-uniform point `q` on `t` (standard sqrt-remap).
+2. `l = q - sec_origin`; shadow ray toward `q`, `max_distance = |l| -
+   bias_eps`, `RT_MASK_SHADOW_CASTER` — one query, any-hit.
+3. Contribution = `emissive_at_hit(...)` at the triangle's own UV (the
+   current frame's value — RS6) × `max(dot(shading_n, l̂),0)` ×
+   `max(dot(n_t, -l̂),0)` × area / (`|l|²` × pdf), pdf from the alias
+   entry; firefly-capped per RS8; added to the `gi` accumulator BEFORE
+   the `/ gi_spp` divide site owns its own normalization (the term is a
+   single weighted sample, not averaged with the gather).
+4. The GI block's bounce-1 `hit_emissive` line is gated off when the
+   sampler ran (RS7); bounce ≥ 2 unchanged.
+
+**No WGSL change.** The term arrives inside `rt_irradiance_mask.rgb`,
+already substituted for `diffuse_ibl` (ED2) and already modulated by
+albedo/`kd_ibl` consumer-side. The entire raster-side diff is zero lines;
+a larger diff to `render_scene.wgsl` in RS-C means the phase has gone
+wrong (the RS2 sv-mask widening excepted — that phase owns binding 44).
+
+**Stage translation.** A glowing strip or strobe bar on a hero object
+lights its surroundings directly and correctly — crisp enough to read as
+a source, not only as the soft wash the GI gather statistically finds.
+Under a strobe the light lands the same frame the emission flips (RS6),
+with the accumulator's snap machinery deciding convergence speed exactly
+as it does for every other RT term. Cost: one ray per trace texel plus
+the cap raise's 0–4 — about +2% worst-case rays on today's budget.
+
+### 15.4 Invariants & enforcement
+
+- **I-RS1 — one temporal-reset path.** Negative `rg` for a second
+  `TemporalResetDetector` construction in `render_scene.rs` (I-R2
+  pattern). RS4 makes this structural: no new history exists to reset.
+- **I-RS2 — the emissive table is derived state, never a side effect.**
+  Built from the same `objects` slice and registration path as the accel
+  (section 10 contract: the RT scene is a derived cache). Negative `rg`:
+  no table construction outside the RT registration block.
+- **I-RS3 — substitution, never addition.** Cross-commit A/B (MB-B
+  precedent): the emissive fixture's converged direct-light region at
+  RS-C equals the CPU-computed analytic value within stated tolerance,
+  AND the pre-RS-C gather-only capture of the same fixture reads BELOW
+  a stated floor on the small-emitter region (the gather statistically
+  misses it) — both legs required; "adds on top" shows as the RS-C leg
+  reading ~2× analytic and fails loudly.
+- **I-RS4 — no Apple types above `manifold-gpu`.** Standing negative `rg`
+  (`objc2|MTL` zero hits outside `manifold-gpu`) at every phase gate.
+- **I-RS5 — no emissive sampling on the non-RT path.** The sampler block
+  lives inside the existing `rt_ready` dispatch; the native-mode
+  byte-identity discipline (T2-B precedent — real `graph-tool render`
+  machine diff, never a code-diff argument) is re-run at RS-C's gate.
+- **I-RS6 — sv mask channel count matches `MAX_RT_CASTERS`.** After RS2:
+  `rg` — the shadow-mask textures' channel total (two `Rgba16Float`) and
+  the Rust/MSL `MAX_RT_CASTERS` constants agree at 8; `shadow_factor`'s
+  slot indexing covers 0..7 (the `clamp(..., 0, 3)` at
+  `render_scene.wgsl:649` is gone).
+
+### 15.5 Alternatives (priced)
+
+Trace-res ≈ 0.92M texels at 4K/temporal-upscale. Ray costs per texel.
+
+- **Trace every analytic light deterministically, uncapped.** Rays =
+  casters/texel — fine at 4, linearly bad at 20, useless for emissive
+  triangles (they aren't casters). Survives as RS2, capped at 8.
+- **Light-list importance sampling for analytic lights too.** 1 ray/texel
+  regardless of count, but converts 4–8 deterministic visibilities into
+  stochastic ones needing accumulation to converge — strictly worse at
+  observed counts. Becomes interesting past ~16 casters; RS2's trigger
+  names the re-read.
+- **Per-OBJECT emissive proxies instead of per-triangle** (the
+  `shaft_lights` shape — one point/disc light per emissive object): table
+  build collapses to trivial, but an extended emitter (a wall of panels, a
+  long strip) lights from its centroid — no shape, no contact gradient,
+  and the bright end of a strip can't read brighter than the dim end.
+  The per-triangle table is the mechanism that makes emission shape true;
+  the proxy is the named fallback only if RS-B's table build proves
+  intractable in review, not a phase option.
+- **Full ReSTIR DI.** RS5. Priced: reservoir ping-pong textures + a
+  spatial reuse pass + bias correction ≈ the sv/irr accumulation surface
+  area again, to reduce variance the existing accumulator already reduces;
+  the spatial pass re-opens the edge-stop problem à-trous already owns.
+- **Clustered / light-tree sampling.** For thousands of lights.
+  MANIFOLD's observed ceiling is 20 analytic + ≤4096 table entries; a
+  tree over 4096 entries buys nothing over an alias table. Revival
+  trigger: a scene class that makes RS3's cap the binding constraint.
+
+### 15.6 Phases
+
+One lane brief each, committable, every gate numeric. Pre-allocated BUG
+range: assign at wave dispatch.
+
+#### RS-A — caster cap 4 → 8
+
+- *Entry:* main with section 14 landed; re-verify `raytrace.rs` (metal)
+  `:542`/`:2791` (`MAX_RT_CASTERS` still 4 both mirrors), `render_scene.
+  wgsl:649` (the `clamp(..., 0, 3)` slot index), `render_scene.rs:4533`
+  (rt_casters fill). A moved anchor is an escalation, not a guess.
+- *Read-back:* RS1/RS2; the multi-caster fix's own diff shape
+  (`rt_multi_caster_shadow.rs` — the test this phase extends); the MSL/
+  Rust mirror-sync discipline comments at `raytrace.rs` (metal) `:538-542`.
+- *Deliverables:* `MAX_RT_CASTERS` 8 in both mirrors with the manual-sync
+  comment updated; `ShadowRayParams` caster array growth (offset asserts
+  stay green); second sv texture (slots 4–7) through trace → upsample →
+  atrous → SV-ACCUM → binding 44; `shadow_factor` two-texture slot
+  indexing; the 6-caster value test — each caster independently occluded
+  reads its own channel's visibility, CPU-computed expected, on the
+  `rt_p1_region_probe` harness.
+- *Gate:* clippy `-p manifold-gpu -p manifold-renderer`; the new value
+  test; `scripts/gpu_proofs_gate.py`; negative `rg`: `clamp(i32(slot_f + 0.5), 0, 3)`
+  zero hits; `MANIFOLD_RENDER_TRACE=1`, no frame >20ms on an 8-caster
+  fixture, `trace_ms` delta 4-vs-8 casters reported as a number.
+- *Performer gesture:* wire 6 shadow-casting point lights into a playing
+  RT scene — every light's strobe throws its own shadow, no frame >20ms.
+- *Forbidden moves:* touching `MAX_SHADOW_CASTING_LIGHTS` (raster path
+  stays 4); a third sv texture "for headroom"; sampling instead of
+  deterministic rays; claiming channel-count agreement without I-RS6's rg.
+- *Demo:* none — L1 (no new visible surface beyond more-correct shadows;
+  Peter sees it in RS-C's demo pair).
+- *Test scope:* `-p manifold-renderer -p manifold-gpu` + gpu-proofs.
+
+#### RS-B — emissive light table + alias build
+
+- *Entry:* RS-A landed; re-verify the RT registration block
+  (`render_scene.rs:4526` area) and `RtObjectGeometry`'s field set.
+- *Read-back:* RS3/RS6/RS8; D17; the `build_normal_sources` /
+  `ensure_normal_sources` pattern (the per-object bindless-table build
+  this phase's table build mirrors); `GiMaterial` population
+  (`render_scene.rs:4605`).
+- *Deliverables:* per-triangle emissive table + alias table, built
+  CPU-side at accel registration, capped 4096 by power rank; emissive-map
+  mean computed once per registered texture; world-position refit on
+  `refit_accel`; table-mean-power scalar into `ShadowRayParams`; value
+  test — table contents (areas, powers, alias probabilities, truncation
+  order) vs CPU-computed expected on a synthetic multi-object fixture,
+  exact math; held-out input — a real GLB with an emissive map the lane
+  did not develop against, table entry count and total power vs a
+  CPU-computed census of the same asset.
+- *Gate:* clippy `-p manifold-gpu -p manifold-renderer`; both value
+  tests; `scripts/gpu_proofs_gate.py`; I-RS2's negative `rg`.
+- *Forbidden moves:* building the table mid-frame (D17); a new
+  `Arc<Mutex>`; reading the emissive map per frame (the mean is a
+  registration-time computation); per-object proxies "to simplify".
+- *Demo:* none — L1 (no pixels yet; RS-C is the vertical slice).
+- *Test scope:* `-p manifold-renderer -p manifold-gpu` + gpu-proofs.
+
+#### RS-C — kernel sampling + substitution
+
+- *Entry:* RS-B landed; held-out census numbers recorded (in the
+  2026-08-02 automated session: recorded by the lead; Peter's look closes
+  with the wave's other owed looks).
+- *Read-back:* RS3/RS4/RS6/RS7/RS8; the GI block (`raytrace.rs` (metal)
+  `:1428-1486`) whole; `emissive_at_hit` (`:825-838`); ED-B's firefly
+  tuning record (`:1408-1427` — the measurement style RS8's gain copy).
+- *Deliverables:* the section-15.3 kernel block (alias draw, point
+  sample, one visibility ray, solid-angle weight, RS8 clamp); RS7's
+  bounce-1 `hit_emissive` gate; new value test
+  `tests/gpu_proofs/rt_emissive_direct.rs` on the `rt_p3_emissive_gi.rs`
+  harness: a small bright emissive quad above a floor — CPU computes the
+  analytic solid-angle irradiance at a named floor region; converged
+  (accumulated) region mean within stated tolerance; **control leg,
+  mandatory:** the pre-RS-C gather-only behaviour on the identical
+  fixture reads below a stated floor (cross-commit A/B, MB-B precedent),
+  and bounce-2 indirect emissive (a wall only reachable via one bounce)
+  is unchanged within epsilon (proves the RS7 gate didn't amputate
+  indirect).
+- *Gate:* (a) the value test with both legs; (b) I-RS3's substitution
+  pair; (c) I-RS5's native-mode machine diff; (d) negative `rg`: I-RS1,
+  I-RS4; (e) `scripts/gpu_proofs_gate.py`; (f) `MANIFOLD_RENDER_TRACE=1`
+  no frame >20ms, **`trace_ms` delta sampler on vs off reported as a
+  number** — the budget evidence for Peter's deferred ray-budget
+  re-judge; (g) strobe leg: emissive intensity flipped 0 ↔ full across
+  two frames through the real node path, region mean at flip+1 ≥ stated
+  fraction of converged (RS6 — no table rebuild, snap machinery lands
+  the cue).
+- *Performer gesture:* an LFO strobing an emissive hero object's emission
+  on a playing RT scene — the room's lighting strobes with it, same
+  frame, no boil beyond the accumulator's governed convergence.
+- *Forbidden moves:* reservoir textures or any new temporal buffer; a new
+  scene param (ED6/MB4 discipline); a WGSL diff (section 15.3 — zero
+  lines is the spec); averaging the sampled term into the `gi_spp`
+  divisor; touching the env/sun-bounce terms; a second
+  `TemporalResetDetector`; claiming the substitution from a code reading
+  instead of the two-leg gate.
+- *Demo (Peter only):* PNG pair on an emissive-strip hero scene —
+  gather-only vs sampled, converged stills — **L2; the stage verdict is
+  Peter's look** (D19/D20 standing lesson).
+- *Test scope:* `-p manifold-renderer -p manifold-gpu` + gpu-proofs
+  (`cargo test`, never nextest).
+
+**Phasing-completeness check:** every section-15.2 commitment lands in a
+phase — RS2 (RS-A), RS3/RS6/RS8 + table (RS-B), RS3/RS4/RS7/RS8 kernel
+(RS-C); RS1/RS5/RS9/RS10 are structural rulings enforced by I-RS1/I-RS2/
+I-RS5 and the forbidden-move lists. Deferred with triggers below.
+
+### 15.7 Deferred (with revival triggers)
+
+- **Reservoir reuse (full ReSTIR DI).** RS5's measured trigger:
+  converged stills still show emissive-sampling noise after RS-C and the
+  ray-budget re-judge, on the rt-capture instrument.
+- **More than 8 analytic casters.** Trigger: a real show project wiring
+  >8 shadow-casting lights; re-read the light-list-sampling rejection
+  then, not before.
+- **Hierarchical / power-rank-free table (light tree over emissive
+  triangles; emissive-map texel-level entries).** Trigger: a hero asset
+  whose emissive map concentrates in a small texel fraction (the
+  map-mean weight mis-ranks it) or whose emissive tail visibly vanishes
+  under the 4096 cap — Peter's look on the RS-C demo pair.
+- **Specular response to emissive lights** (direct-light specular from
+  the sampled term). The reflection path already picks emissive up at
+  hits; a diffuse-only direct term is the v1 scope call. Trigger: Peter's
+  look reports emissive sources reading flat on glossy floors.
+- **Clustered analytic-light sampling.** Trigger: a scene class past
+  `LIGHT_SLIDER_MAX` — the slider itself moves first.
+
+## 16. RT translucency — light through thin surfaces (Tier 3 item 9; APPROVED 2026-08-02, K3 lead on k3-translucency-design's draft; **TL-A LANDED 2026-08-02 on wave/rt-quality — wrap term + uniform + cardable param + KHR import; I-TL1 byte-identity, gpu-proofs 140/140**; TL-B/TL-C not started)
+
+Tier 3 item 9 names two features. **(A) thin-surface transmission** — sunlight
+through a flower petal: the petal glows when backlit, and the light that passes
+through it lands, tinted, on whatever is behind. **(B) volumetric
+participation** — the god-ray march seeing traced occlusion at every march step,
+so beams carve themselves out of haze between the camera and the surface.
+
+**Recommendation: build A now (three one-session phases), keep B
+deferred with a revival trigger.** The audit shows A is a forward-shading term
+plus an extension to a walk that already exists, on data the kernel already
+fetches — cheap in rays and in machinery. B is a per-march-step ray problem: its
+cheapest honest variant costs ~+37% of the entire trace class, and its full form
+is absurd (section 16.6). B also gets a free dividend from A: the transmitted shadow
+mask A produces already flows into the march's sun visibility, so haze under a
+petal canopy dapples at zero extra cost.
+
+**Stage translation.** Peter's hero assets are photoscanned flowers. Today a
+petal between the sun and the camera renders dark on its back side (the shading
+normal is flipped toward the camera, `render_scene.wgsl:1372-1374`, so N·L = 0
+and only IBL/ambient fill remains), and its shadow is a hard black silhouette.
+With A: petals glow their own color when backlit — pink through pink, green
+through green — stacked petals dim each other softly instead of binary, and the
+floor under a backlit flower carries a colored pool instead of a void. That is
+"light through petals" as a stage look, and the factor is one cardable scalar,
+so the glow can breathe with the music like every other material param.
+
+### 16.1 Audit — what exists (verified 2026-08-02)
+
+| Piece | Where | State |
+|---|---|---|
+| Two-sided shading normal | `render_scene.wgsl:1372-1374` (`fs_pbr`: `if dot(N, V) < 0.0 { N = -N; }`) | Present — and it is exactly why backlit petals go dark: after the flip, a petal facing the camera away from the sun has N·L = 0. |
+| Glass transmission (KHR_materials_transmission + volume) | `render_scene.wgsl:1032-1153` (`sample_transmission`/`transmission_diffuse`), composition `:1776-1786` | SHIPPED (GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2/E6): screen-space refraction + Beer–Lambert, REPLACES the diffuse response. Wrong physics for petals — this is the specular/refraction lobe for vases and windows, not diffuse transmission. |
+| Diffuse transmission (KHR_materials_diffuse_transmission) | docs/GLTF_MATERIAL_EXTENSIONS_DESIGN.md section 5 (Deferred); not parsed (`rg diffuse_transmission crates/` → zero code hits; BUG-213 (unparsed-extension reporting) tracks even the missing report line) | The Khronos lobe petals actually want. Its deferral trigger fires here: this design IS the follow-up phase that doc named. D10 (frozen Khronos PBR set) is not violated — this is a shipped-family Khronos extension, not a new material system. |
+| Per-caster RT shadow visibility | `raytrace.rs:1304-1346` (sv loop), consumed by `render_scene.wgsl:635-665` (`shadow_factor` — RT branch `:647-650` reads `rt_shadow_mask`, one channel per caster slot) | The term TL-B extends. Binary today: blocked or not. |
+| Alpha-aware walk | `raytrace.rs:871-898` (`walk_with_alpha_test`), 5 call sites | T2-A's mechanism. A ray at a cutout texel already has three relevant outcomes available: below-cutoff → pass through; accepted → block. TL adds the third state: accepted on a translucent object → attenuate and continue. **Cost-critical observation:** for alpha-mask foliage the hardware early-out is already lost (`encode_blas_build`'s `setOpaque(!alpha_mask)`, comment `raytrace.rs:861`) — shadow rays through petal clusters ALREADY iterate candidate lists. Transmission is an increment on a walk that exists, not a new walk. |
+| Per-object material table | `GiMaterial` (`raytrace.rs:602-606`, 48 B, size-asserted; populated `render_scene.rs:3976`) | Grows one vec4 (translucency factor) — the T1-B/T2-A/R1 extend-the-table precedent, fourth extension. |
+| Sun-bounce caster loop | `sun_bounce_at_hit` (`raytrace.rs:989-1019`, shadow-class ray at `:1014`) | Used by the GI gather and reflection hit shading. Its shadow rays are shadow-class — they transmit under the same rule (TL4). |
+| March sun visibility under RT | `shaft_march.wgsl:85` (binding 10 `rt_shadow_mask`), `:189-194` (one lookup per pixel, surface-depth visibility, documented approximation) | D5's landed half of "RT volumetrics". Reads `out_sv.r` — TL-B's transmitted mask flows into it unchanged (the free dividend). |
+| Volumetric march | `shaft_march.wgsl` whole; steps 16/24/32 (`u.misc.x`), per-light per-step `shadow_vis` taps | Feature B's substrate. All visibility today is texture taps — zero rays. |
+| Accumulation/denoise chain | `render_scene.rs:4057/4071/4120/4175`; sv is temporally accumulated (D-64 addendum, "sv gate") | TL-C's one new texture rides this chain stage-for-stage (the `out_refl` precedent, section 9.3). |
+| Importer material params | `gltf_import/materials.rs:339-350` (`transmission`, `volume_thickness`, attenuation params already mapped); texture table `:193-203` | The `diffuse_transmission` factor mapping goes here. |
+| Uniform free slots | `render_scene.wgsl:120-211`; `render_scene.rs:3705/3708` | **None free at material scope.** The E1 block was sized for five families; both reserved `w` slots are spent as texture-present flags (E6). One new vec4, E1/D2-style with size asserts (TL7). |
+| Photoscanned flower assets carry transmission data? | Importer survey above + asset class knowledge | **No.** AlphaMode MASK + baseColor, no extensions. The factor's source for Peter's scenes is a material card param he dials (TL3) — same as every other look decision on a scan. |
+
+### 16.2 Decisions (TL-numbered)
+
+- **TL1 — the thin-surface model is wrap-diffuse around the backward normal,
+  albedo-tinted, one constant factor.** Committed term, per light, in
+  `fs_pbr`'s light loop (the `direct_sheen` parallel-accumulator precedent,
+  `render_scene.wgsl:1498/1577`):
+
+  ```
+  // N is already flipped toward V (:1372); the transmitted term fires exactly
+  // where the front term can't — light arriving at the BACK of the surface.
+  // wrap (named constant RT_TRANSMISSION_WRAP, default 0.5, range 0–1) softens
+  // the terminator so petals glow at wide angles, not just dead-on.
+  back_l = saturate((dot(-N, L) + wrap) / (1.0 + wrap));
+  direct_translucent += factor * albedo.rgb / PI * l_col.rgb * back_l * l_dir.w * vis;
+  ```
+
+  `vis` is the SAME per-light `shadow_factor` every other term uses — RT sv
+  mask when RT is on, shadow map otherwise. **Why this model:** it is the
+  standard two-sided foliage approximation, and the alternatives fail on the
+  asset class. Rejected: full KHR diffuse-transmission BTDF with thickness +
+  Beer–Lambert attenuation — Peter's scans carry no thickness maps and no
+  volume data; a constant factor IS the constant-thickness case, and buying
+  the full BTDF buys parameters nothing can fill. Rejected: reuse of the E2
+  glass path (`transmission_diffuse`) — refraction of the background is the
+  wrong physics for an opaque-backed petal, and it replaces rather than adds.
+  Thickness attenuation exists as the factor itself (thin petal ~0.3–0.7,
+  fleshy leaf lower — Peter's dial).
+- **TL2 — the forward term runs in `fs_pbr`, zero rays, both paths.** It is an
+  analytic function of data the fragment already has (N, L, albedo, vis).
+  ED3a discipline (section 14.2): PBR-only; cel/phong get nothing. Default
+  factor 0.0 → the accumulator adds exactly zero → byte-identical output, the
+  house zero-default contract, machine-checked (I-TL1). On the raster path
+  (RT off) the petal glow still works (the petal is thinner than the shadow
+  bias, so its own back face reads lit); what RT-off does NOT get is the
+  transmitted pool on the floor (shadow maps carry no transmission) — honest
+  cost, stated: the floor-pool half is RT-only.
+- **TL3 — the parameter is one new `pbr_material` scalar `translucency`
+  (default 0), port-shadowed and cardable; the importer maps
+  KHR_materials_diffuse_transmission's factor into it; nothing auto-defaults.**
+  Three sources, in precedence: the extension's `diffuseTransmissionFactor`
+  when an asset carries it (parse added — BUG-213's family gets its factor
+  leg); Peter's dial on the card for scans that carry nothing; 0 otherwise.
+  Rejected: defaulting Mask-mode materials to a nonzero translucency — changes
+  every existing cutout scene's pixels silently, the exact class the
+  byte-identical discipline exists to kill. Rejected: a scene-level global —
+  a stone vase and a petal in the same scene want different values, and the
+  material card is already where Peter sets roughness per asset. The
+  extension's color factor/texture is a named fidelity gap (section 16.8):
+  tint = albedo, which is physically right for foliage (a petal transmits its
+  own color) and wrong for the three Khronos conformance assets — they become
+  the held-out demo, not the gate.
+- **TL4 — visibility rays transmit; geometry rays block.** A new walk variant
+  `walk_with_transmission` (alongside `walk_with_alpha_test`, sharing its
+  candidate loop): below-cutoff texel → pass (unchanged); accepted hit on an
+  object whose `GiMaterial.translucency > 0` → `tint *= translucency *
+  albedo_at_hit`, continue; accepted hit otherwise → block (unchanged).
+  Bounded: `RT_TRANSMISSION_MAX_HITS = 8` (named constant, range 4–16) and an
+  early-out when `luma(tint) < 1/256`. Called from exactly two sites: the sv
+  caster loop (`raytrace.rs:1341`) and `sun_bounce_at_hit` (`:1014`). AO, GI,
+  reflection, and primary-visibility rays keep the binary walk — a leaf still
+  occludes bounce light and mirrors; transmitting those would be paying
+  walk-extension cost on every ray class for an effect order-of-magnitude
+  below the direct-light one. Machine check: I-TL4 pins the call-site count.
+  The albedo sample at an accepted translucent hit reuses the alpha walk's
+  base-color texture (same texture, same UV — cache-hot for Mask foliage,
+  which already samples it for alpha).
+- **TL5 — grey luminance in `out_sv`, color in ONE new texture for the first
+  sun caster.** Channel arithmetic: `out_sv`'s four channels are the four
+  caster slots; per-caster rgb tint needs 12 channels the texture does not
+  have, and 4-caster colored tint is three textures through every
+  accumulation stage — rejected as disproportionate. Instead: (a) every sv
+  channel carries `luma(tint)` — point casters and the march
+  (`shaft_march.wgsl:193` reads `.r`) work unchanged, grey transmission
+  everywhere; (b) ONE new trace-res `Rgba16Float` texture `out_svt` carries
+  the rgb tint of the first kind==0 caster (CPU picks the slot, passes it in
+  `ShadowRayParams`, mirrors it to the raster in the reserved `rt_flags.z` as
+  slot+1, 0 = none); `fs_pbr` substitutes `vis_rgb = textureLoad(out_svt)`
+  for that light only. A second sun falls back to its luma channel — named
+  honest cost, revival trigger in section 16.8. Hero-scene shape (one sun) is
+  exact; the general case degrades gracefully. `out_svt` rides the existing
+  upsample → à-trous → accumulate chain and the SAME
+  `TemporalResetDetector` (I-R2's negative `rg` discipline extends).
+- **TL6 — translucent objects leave the hardware opaque fast path.**
+  `encode_blas_build`'s `setOpaque(!alpha_mask)` becomes
+  `setOpaque(!(alpha_mask || translucency > 0))`, keyed through the same
+  dirty-key path the alpha flag already rides, under D17's async-build
+  discipline (no mid-frame builds; the bounded raster-presenting transition
+  covers a live factor flip from 0 — same gesture as toggling RT itself).
+  Without this the walk never sees solid-but-thin leaves as candidates.
+- **TL7 — one new material uniform vec4 `diffuse_transmission_params`** (x =
+  factor; yzw reserved, first consumer = the future color-texture flag).
+  Smallest possible E1/D2-style growth, `RenderSceneUniforms` size asserts
+  updated, WGSL mirror documented. No per-phase growth — this is the only one.
+- **TL8 — nothing new accumulates; the sv signal gets smoother, not noisier.**
+  TL-A is analytic over the already-accumulated sv mask. TL-B/C replace binary
+  cutout-edge visibility with partial tints — strictly lower variance at leaf
+  boundaries (the binary in/out flicker at canopy edges becomes a smooth
+  gradient), so the existing sv change-gate and history discipline (D-64 and
+  its addendum) apply unchanged, bands untouched. `out_svt` accumulates with
+  the same weights and the same reset path as the irradiance texture. **No
+  tuning constants join the untuned set beyond TL1's wrap and TL4's hit cap**;
+  Peter's look is the quality gate, per the standing D19/D20 lesson.
+- **TL9 — D9 (Vulkan seam) holds by construction.** The Metal RT trait grows
+  no new method: `ShadowRayParams` gains fields and `dispatch_shadow_rays`
+  gains the `out_svt` texture argument — exactly RD10's shape (section 9.2).
+  The candidate-continuation walk is `rayQueryProceed`-shaped; Vulkan ray
+  queries express the same loop. No Apple types above `manifold-gpu`
+  (standing I-R5 negative `rg` at every gate).
+
+### 16.3 Architecture
+
+Three pieces, each extending an existing mechanism:
+
+**Forward term (TL-A).** `render_scene.wgsl`, `fs_pbr` only: a
+`direct_translucent` accumulator in the light loop (TL1's three lines) and one
+addition at the composition site (`base_rgb = base_rgb + direct_translucent`
+before the glass block at `:1776` — the glass `transmission_factor` and the new
+`translucency` are independent lobes; a material with both gets both, matching
+the Khronos layering where diffuse-transmission and specular-transmission
+coexist). Population: `pbr_material` param → uniform (TL7's slot) at the
+existing material-uniform fold; importer mapping in
+`gltf_import/materials.rs` next to `:339`.
+
+**Transmitting walk (TL-B).** `raytrace.rs`: `GiMaterial` 48 → 64 B (factor +
+pad; MSL/Rust mirror discipline, size asserts both sides — P0's packed_float3
+lesson); `walk_with_transmission` next to `walk_with_alpha_test`; two call
+sites switched (TL4); sv write carries `luma(tint)` instead of binary.
+Population of the factor at `render_scene.rs:3976` from the same material
+uniform the raster reads — one source of truth, no second param path.
+
+**Colored sun tint (TL-C).** `out_svt` allocated and lifecycle-managed by the
+same `ensure_rt_irradiance` pattern as `out_refl` (section 9.3); written only
+in the sv loop for the designated sun slot; upsample/à-trous/accumulate gain
+the texture set exactly as they gained `out_refl`; `fs_pbr` substitutes per
+TL5 (one `textureLoad` behind `rt_flags.z > 0.5 && slot match`, dummy 1×1
+bound otherwise — ABI-stub discipline).
+
+### 16.4 Cost model — rays/pixel/frame against 41.6 ms
+
+Current full-RT frame: ~26 ms (section 13's number). Budget: 41.6 ms. Headroom:
+~15 ms, minus what show content (layers/effects/encode) actually eats — the
+section 7 frame-budget-sharing caveat applies; these numbers are RT-solo.
+
+Trace resolution today: half-res of render res — 2.07M trace px native,
+0.92M under T2-B temporal. Rays per trace px today: ~20–25 (1 primary + spp ×
+casters + 4 AO + 2×2 GI + 8 refl + GI sun-bounce casts).
+
+| Feature | New rays | Other cost | Estimate |
+|---|---|---|---|
+| TL-A forward term | **0** | ~4 ALU × lights in `fs_pbr`; one uniform vec4 | unmeasurable; gate is the byte-identity + a standard trace run |
+| TL-B transmitting walk | **0** | shadow-class walks extend through ≤8 translucent hits; one albedo sample per accepted translucent hit (cache-hot for Mask foliage, which already samples for alpha); solid-translucent objects lose the BLAS opaque fast path (T2-A's foliage already did) | worst case = dense canopy against the sun, every shadow/sun-bounce ray walking to the cap; **measured, not estimated** — TL-B's gate reports `trace_ms` delta on the apricot fixture (the MB-B owed measurement's fixture) |
+| TL-C colored tint | **0** | +1 `Rgba16Float` trace-res texture through upsample/à-trous/accumulate (+~25% chain bandwidth: 4 textures → 5); one `textureLoad` per sun light in `fs_pbr` | small; gate reports the delta |
+| B (deferred) | sun-only every-4th-step: +8 rays/march-px ≈ **+37% of the whole trace class**; all-lights every step: 128 rays/px ≈ 6× the trace class — rejected outright | plus a new march-kernel binding and validation path | see section 16.6 |
+
+The recommendation's shape: A+B+C together add zero rays and one texture; the
+only real risk line is the walk extension, and it is capped, measured, and
+foliage-local. If TL-B's measured delta lands the fixture frame above 32 ms
+(leaving ~10 ms for show content), TL-C pauses and Peter re-judges — that
+number is in TL-B's gate.
+
+### 16.5 Invariants & enforcement
+
+- **I-TL1 — factor 0 is byte-identical.** `graph-tool render` of an RT compare
+  fixture at pre/post TL-A commits, `cmp`-identical (T2-B/I-MB1 precedent —
+  never a code-diff argument).
+- **I-TL2 — `diffuse_transmission_params` has exactly one consumer.** `rg` —
+  one read site in `render_scene.wgsl` (the forward term) plus its population.
+- **I-TL3 — `out_svt` has exactly one consumer.** `rg -c` — declaration plus
+  exactly one `textureLoad` in `render_scene.wgsl` (I-R3's shape).
+- **I-TL4 — geometry rays never transmit.** `rg` — `walk_with_transmission`
+  called from exactly two sites (sv loop, `sun_bounce_at_hit`);
+  `walk_with_alpha_test` keeps its remaining call sites (AO, GI, reflection,
+  primary) untouched.
+- **I-TL5 — one temporal-reset path.** Negative `rg` — zero additional
+  `TemporalResetDetector` constructions (I-R2 extended).
+- **I-TL6 — BLAS opacity tracks translucency.** Unit test on the opacity
+  decision (`alpha_mask || translucency > 0` → non-opaque), the
+  `wants_shafts_gate` precedent.
+- **I-TL7 — no Apple types above `manifold-gpu`.** Standing negative `rg`.
+
+### 16.6 Feature B — volumetric participation: scope, price, revival trigger
+
+**What exists.** The march (`shaft_march.wgsl`) is half-res, 16–32 steps,
+per-light per-step shadow-map taps, and — under RT — ONE sun-visibility lookup
+per pixel from the surface sv mask (`:189-194`), documented as an
+approximation: the mask holds the SURFACE's visibility, so beams cannot form
+from occluders between the camera and the surface. Canopy god-rays — shafts
+through leaf gaps, hanging in the haze in front of the flower — are precisely
+the missing case.
+
+**Scope of the real thing:** per-step traced visibility in the march. Cheapest
+honest variant: sun only, one ray every 4th step (8 rays per march px, half
+res) ≈ +16.6M rays/frame against the current ~45M — +37% of the trace class,
+for one light's beams. All lights, every step: 128 rays/march-px — six times
+the entire trace budget, rejected outright, not deferred.
+
+**Verdict: defer.** The trigger that revives it: (a) the post-pipeline
+ray-budget re-judge (Peter's standing deferral) shows the temporal-upscaled
+config (rays at 1/3 native) with headroom, AND (b) a staged look wants canopy
+god-rays specifically — the alpha-cutout volumetric-shadows item in
+VOLUMETRIC_LIGHT_DESIGN.md section 6 (Deferred) is the same want and joins
+this trigger. When revived, the shape is the sun-only quarter-step variant
+above plus section 15 (many-light) if it has landed, since many-light beam
+carving is the same per-step visibility problem.
+
+**The free dividend, landed with A:** TL-B's transmitted sv mask flows into
+the march's existing `rt_sun_vis` read with zero new work — haze under a
+backlit canopy carries the dappled, tinted brightness of the transmitted mask
+at the surface depth. Not the full look; a real improvement; costs nothing.
+
+### 16.7 Phases (one lane brief each, sequential — all touch the scene pass)
+
+**No PNG oracles for agents** (the wave rule): every gate below is a computed
+number or exit code; PNGs are Peter's morning look only.
+
+#### TL-A — forward thin-transmission term + param + importer parse
+
+- *Entry:* re-verify `render_scene.wgsl:1372` (N-flip), `:1498` (sheen
+  accumulator), `:1776` (composition site), `render_scene.rs:3705/3708` (both
+  reserved `w` slots still spent — a freed slot changes TL7). A moved anchor
+  is an escalation, not a guess.
+- *Read-back:* this section whole; GLTF_MATERIAL_EXTENSIONS_DESIGN.md section
+  5 (the deferred item this revives); the `direct_sheen` accumulator and its
+  byte-identical discipline; `gltf_import/materials.rs:322-350`.
+- *Deliverables:* TL7's uniform vec4 (+ size asserts, WGSL mirror comment);
+  `pbr_material` `translucency` param (default 0, port-shadowed, cardable);
+  TL1's accumulator + composition; importer parse of
+  `KHR_materials_diffuse_transmission` factor → param (color/texture gap
+  logged per BUG-213's pattern); I-TL1/I-TL2 checks by name.
+- *Gate:* (a) value test on the `rt_p1_region_probe` computed-pixel harness —
+  quad, sun dead behind, factor 0.5, wrap 0.5: region mean within epsilon of
+  the CPU-computed wrap term; **control legs, mandatory:** factor 0 reads the
+  pre-term value; sun in FRONT reads no transmitted contribution. (b) I-TL1's
+  byte diff. (c) round-trip: save → reload → probe passes. (d) importer unit
+  test: a diffuse-transmission fixture parses factor → uniform. (e) clippy
+  `-p manifold-renderer`; `cargo test -p manifold-renderer --features
+  gpu-proofs` (`cargo test`, never nextest — the shader is touched).
+- *Performer gesture:* `translucency` on a card fader swept live — gate
+  drives the param, asserts monotonic region-luminance response.
+- *Forbidden moves:* defaulting Mask materials nonzero (TL3); touching the
+  glass transmission block's math; adding the color/texture fidelity
+  (section 16.8); a second consumer of the uniform slot.
+- *Demo (Peter only):* backlit-flower PNG pair on a real scan, factor 0 vs
+  0.5 — **L2. The "does a petal glow like a petal" verdict is Peter's look.**
+  Held-out render: `DiffuseTransmissionPlant.glb` (the conformance asset this
+  partially un-defers) in the landing report.
+
+#### TL-B — transmitting shadow walk (grey in sv, rgb inside)
+
+- *Entry:* TL-A landed; re-verify `raytrace.rs:871-898` (walk), `:1304-1346`
+  (sv loop), `:989-1019` (sun-bounce), `GiMaterial` still 48 B.
+- *Read-back:* TL4/TL5/TL6; T2-A's commit `62244989` (the walk and its
+  candidate-loop gotchas — `commit_triangle_intersection`, not
+  `accept_intersection`); the BUG-309 (night-wave trace bug) and
+  BUG-8p1h (lights-out leak) bias discipline (a transmitting walk crosses
+  more surfaces at more angles; the bias rules are load-bearing).
+- *Deliverables:* `GiMaterial` 64 B + population; `walk_with_transmission`
+  with the cap and early-out; two call sites switched; sv writes `luma(tint)`;
+  TL6's BLAS opacity change + key; I-TL4/I-TL5/I-TL6 checks by name.
+- *Gate:* (a) value tests on the region-probe harness: single translucent
+  occluder (factor 0.5, known albedo) between sun and floor — floor region
+  mean within epsilon of CPU-computed `luma(tint)` × lit value; **control
+  legs:** factor 0 → full shadow; opaque occluder → unchanged; (b) stack test
+  — two stacked 0.5 petals → 0.25 transmitted, exact; (c) cutout regression —
+  below-cutoff texels still pass through an alpha-mask translucent object
+  (T2-A's proofs stay green); (d) **the number:** `trace_ms` delta TL-B on vs
+  off on the apricot scan, in the phase report, against the 32 ms line in
+  section 16.4; `MANIFOLD_RENDER_TRACE=1`, no frame >20 ms; (e) gpu-proofs.
+- *Performer gesture:* flip a hero flower's `translucency` 0 → 0.5 mid-set —
+  D17's bounded transition, no frame >20 ms across it.
+- *Forbidden moves:* transmitting AO/GI/reflection/primary rays (TL4);
+  widening `MAX_RT_MATERIAL_TEXTURES`; a second reset path; retuning any
+  existing constant; claiming the cost from code reading instead of the
+  measured delta.
+- *Demo (Peter only):* canopy-shadow PNG pair (hard black vs soft grey
+  dapple) on a real scan — L2.
+
+#### TL-C — colored sun tint through the chain
+
+- *Entry:* TL-B landed, its `trace_ms` delta inside the section 16.4 line (or
+  Peter's explicit go above it).
+- *Read-back:* TL5; section 9.3's `out_refl` plumbing (the template this
+  copies stage-for-stage); section 10's transition contract (seed-don't-clear
+  applies to the new history).
+- *Deliverables:* `out_svt` + dispatch/param/flag plumbing (TL5/TL9); chain
+  stages extended; `fs_pbr` substitution for the designated sun slot; I-TL3
+  by name.
+- *Gate:* (a) value test — red petal (albedo 1,0.1,0.1, factor 0.6): floor
+  pool's rgb ratio matches CPU-computed tint within epsilon; **control
+  legs:** point caster keeps luma discipline (its rgb contribution equals
+  white × its sv channel); no-sun scene binds the dummy and reads white;
+  (b) cut-reset numeric oracle on the tint history (P2's oracle shape);
+  (c) I-TL3, I-TL5 negative `rg`s; (d) frame-time gate re-run; gpu-proofs.
+- *Performer gesture:* sun color driven by a beat envelope through a flower —
+  the floor pool pulses tinted; gate drives the color and asserts the pool
+  region tracks.
+- *Forbidden moves:* a general per-caster tint texture set (TL5's rejection);
+  consuming `out_svt` anywhere but the one site; touching point-caster
+  shading.
+- *Demo (Peter only):* the pink-pool-under-flower PNG pair — L2, and the
+  wave's close-out look.
+
+**Phasing-completeness check:** TL1–TL3 (TL-A), TL4/TL6 (TL-B), TL5 (TL-C),
+TL7 (TL-A), TL8 (all phases' gates), TL9 (TL-B/TL-C deliverables). Deferred
+with triggers: section 16.8. B: section 16.6, not in a phase.
+
+### 16.8 Deferred (with revival triggers)
+
+- **KHR diffuse-transmission color factor/texture fidelity** — trigger: Peter
+  wants the three Khronos conformance assets green, or an asset whose
+  transmission color is not its albedo shows up. Shape: yzw of TL7's vec4 +
+  the E6 bitmask pattern.
+- **Second-sun and point-caster colored tint** — trigger: a staged look with
+  two suns, or colored canopy shadows from a point light, that luma visibly
+  fails. Shape: one more chain texture per added caster, priced then.
+- **Transmission in AO/GI/reflection rays** — trigger: Peter's look reports
+  bounce light or reflections reading too blocked through foliage. Priced at
+  walk-extension cost on every ray class — the trigger bar is high.
+- **Per-step RT visibility in the volumetric march (feature B)** — section
+  16.6: priced, trigger named there (budget re-judge headroom + a canopy
+  god-ray look; absorbs the VOLUMETRIC_LIGHT_DESIGN.md deferred item named
+  there).
+- **Thickness-varying transmission (thickness maps)** — trigger: an asset
+  class with real thickness data (scanning workflow change). The factor is
+  the constant-thickness case until then.
