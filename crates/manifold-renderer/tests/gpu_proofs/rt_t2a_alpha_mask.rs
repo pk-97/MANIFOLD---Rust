@@ -225,6 +225,7 @@ fn run_fixture(alpha_mask: bool) -> [f32; 2] {
         0.1,         // refl_rough_band — blend band width
         0.0,         // RS-B: emissive_table_mean_power — no emissive in fixture
         0,           // RS-C: emissive_table_count — no emissive in fixture
+        0.0,         // RS-C: emissive_table_total_area — no emissive in fixture
     );
     let params_buffer = device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
     let dummy_emissive = device.create_buffer_shared(1);

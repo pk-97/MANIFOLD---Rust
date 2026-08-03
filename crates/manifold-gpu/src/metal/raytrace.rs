@@ -651,7 +651,11 @@ struct ShadowRayParams {
     // RS-C: number of valid entries in `emissive_table`/`emissive_aliases`
     // buffers. 0 = no emissive geometry in the scene — the sampler is skipped.
     uint   emissive_table_count;
-    uint   _pad_refl[2];
+    // RS-C: total world-space area of all emissive triangles in the table.
+    // The RIS estimator corrects for uniform area sampling — the geometry
+    // weight factor is total_area, not entry_count.
+    float  emissive_table_total_area;
+    uint   _pad_refl;
     // RT-D3: ray origins come from the prepass DEPTH texture + this
     // inverse view-proj — no stored world-pos/normal G-buffer target in
     // P1. Column-major, matches `render_scene.rs`'s `mat4_inverse` output
@@ -1672,7 +1676,7 @@ kernel void trace_shadow_rays(
                                 em_tex = material_textures[em_src.emissive_tex_index].sample(em_sampler_direct, uv).rgb;
                             }
                             float3 em_contrib = em_factor * em_tex;
-                            float geom_weight = cos_theta * cos_emit * float(n) / (l_len * l_len);
+                            float geom_weight = cos_theta * cos_emit * max(p.emissive_table_total_area, 1e-12f) / (l_len * l_len);
                             emissive_direct = em_contrib * geom_weight;
                             float em_l = luma(emissive_direct);
                             float em_cap = RT_EMISSIVE_FIREFLY_GAIN * p.emissive_table_mean_power;
@@ -3084,9 +3088,11 @@ pub struct ShadowRayParams {
     /// RS-C: number of valid entries in the emissive table/alias buffers.
     /// 0 = no emissive geometry — the sampler kernel block is skipped.
     pub emissive_table_count: u32,
-    /// Padding after emissive fields to reach the 16-byte boundary
-    /// `inv_view_proj` demands.
-    _pad_refl: [u8; 8],
+    /// RS-C: total world-space area (in world units²) of all emissive
+    /// triangles in the table. The RIS estimator's geometry weight uses
+    /// this as the PDF correction factor for uniform area sampling.
+    pub emissive_table_total_area: f32,
+    _pad_refl: [u8; 4],
     /// Column-major, matches `render_scene.rs`'s `mat4_inverse` output.
     pub inv_view_proj: [[f32; 4]; 4],
 }
@@ -3119,6 +3125,7 @@ impl ShadowRayParams {
         refl_rough_band: f32,
         emissive_table_mean_power: f32,
         emissive_table_count: u32,
+        emissive_table_total_area: f32,
     ) -> Self {
         let caster_count = casters.len().min(MAX_RT_CASTERS) as u32;
         let mut caster_arr = [RtCasterParams::ZERO; MAX_RT_CASTERS];
@@ -3141,7 +3148,8 @@ impl ShadowRayParams {
             refl_rough_band,
             emissive_table_mean_power,
             emissive_table_count,
-            _pad_refl: [0; 8],
+            emissive_table_total_area,
+            _pad_refl: [0; 4],
             inv_view_proj,
         }
     }
@@ -3250,6 +3258,10 @@ pub struct EmissiveLightTable {
     /// Arithmetic mean of per-entry power (area × build-time emissive luma)
     /// — the firefly cap anchor in [`ShadowRayParams::emissive_table_mean_power`].
     pub mean_power: f32,
+    /// RS-C: total world-space area (in world units²) of all table entries.
+    /// The kernel uses this as the RIS geometry-weight factor for unbiased
+    /// area-light sampling.
+    pub total_area: f32,
     /// CPU-side local-space vertices for refit (one per entry, same order).
     local_triangles: Vec<EmissiveTriangleCpu>,
 }
@@ -3377,6 +3389,8 @@ pub fn build_emissive_table(
     let entry_count = candidates.len() as u32;
     let total_power: f32 = candidates.iter().map(|c| c.power).sum();
     let mean_power = total_power / entry_count as f32;
+    // RS-C: total world-space area computed below during upload.
+    let mut total_area: f32 = 0.0;
 
     // Phase 3: build alias table from the power distribution.
     let weights: Vec<f32> = candidates.iter().map(|c| c.power).collect();
@@ -3412,6 +3426,7 @@ pub fn build_emissive_table(
             let w0 = transform_point(&m, c.v0);
             let w1 = transform_point(&m, c.v1);
             let w2 = transform_point(&m, c.v2);
+            total_area += triangle_area(w0, w1, w2);
 
             unsafe {
                 let tri_dst = tri_ptr.add(i * std::mem::size_of::<EmissiveTriangleGpu>())
@@ -3460,6 +3475,7 @@ pub fn build_emissive_table(
             aliases: alias_buf,
             entry_count,
             mean_power,
+            total_area,
             local_triangles,
         })
     }

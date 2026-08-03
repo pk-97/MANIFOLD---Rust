@@ -240,6 +240,7 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
         0.1,         // refl_rough_band — blend band width
         0.0,         // RS-B: emissive_table_mean_power — no emissive in fixture
         0,           // RS-C: emissive_table_count — no emissive in fixture
+        0.0,         // RS-C: emissive_table_total_area — no emissive in fixture
     );
     let params_buffer = device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
     // RT-P3: unread by this proof (gi_spp == 0 above), same ABI-stub
@@ -481,6 +482,7 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
         0.1,         // refl_rough_band — blend band width
         0.0,         // RS-B: emissive_table_mean_power — no emissive in fixture
         0,           // RS-C: emissive_table_count — no emissive in fixture
+        0.0,         // RS-C: emissive_table_total_area — no emissive in fixture
     );
     let params_buffer = device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
     // RT-P3: unread by this proof (gi_spp == 0 above), same ABI-stub

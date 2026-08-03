@@ -4726,6 +4726,18 @@ impl EffectNode for RenderScene {
                     .and_then(|a| a.emissive_table.as_ref())
                     .map(|t| t.entry_count)
                     .unwrap_or(0);
+                // RS-C test-only gate: force the sampler kernel block off.
+                let emissive_table_entry_count = if std::env::var("MANIFOLD_DISABLE_EMISSIVE_SAMPLER").as_deref() == Ok("1") {
+                    0u32
+                } else {
+                    emissive_table_entry_count
+                };
+                let emissive_table_total_area = self
+                    .rt_accel
+                    .as_ref()
+                    .and_then(|a| a.emissive_table.as_ref())
+                    .map(|t| t.total_area)
+                    .unwrap_or(0.0);
 
                 // Multi-caster shadow fix: previously only `casters[0]`
                 // (the first shadow-casting light) was traced — every
@@ -4805,6 +4817,7 @@ impl EffectNode for RenderScene {
                     0.1,    // refl_rough_band (unused)
                     emissive_table_mean_power,
                     emissive_table_entry_count,
+                    emissive_table_total_area,
                 );
 
                 // RT-A3a: lighting params (AO + GI + reflection + normal).
@@ -4836,6 +4849,7 @@ impl EffectNode for RenderScene {
                     0.1,
                     emissive_table_mean_power,
                     emissive_table_entry_count,
+                    emissive_table_total_area,
                 );
                 // RS-B: gi_materials_data already built above (same order as
                 // `objects` + `accel`), reused for the GPU upload here.

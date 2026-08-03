@@ -273,6 +273,7 @@ fn run_fixture(mr_texture: Option<&manifold_gpu::GpuTexture>, floor_roughness: f
         0.1, // refl_rough_band
         0.0, // RS-B: emissive_table_mean_power — no emissive in fixture
         0,   // RS-C: emissive_table_count — no emissive in fixture
+        0.0, // RS-C: emissive_table_total_area — no emissive in fixture
     );
     let params_buffer = device.create_buffer_shared(std::mem::size_of::<ShadowRayParams>() as u64);
 
