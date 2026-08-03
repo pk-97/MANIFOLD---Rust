@@ -19,6 +19,12 @@
 
 ## Serde
 - All serialized structs use camelCase JSON (Unity project format) — getting this wrong silently breaks project loading.
+
+## NaN hygiene
+- Fast math can compile away `isfinite()` and NaN comparisons (the compiler assumes no NaNs) — guard with a bit-level exponent test: `(as_type<uint>(x) & 0x7f800000u) != 0x7f800000u` (`rt_finite` in raytrace.rs).
+- Validity checks written as rejections (`x >= limit` → invalid) PASS NaN through, because every NaN comparison is false. Test the accept-condition or guard finiteness first.
+- Rust `f32::clamp` propagates NaN, and a NaN entering a one-pole smoother poisons it permanently (`smoothed += (NaN - smoothed) * coeff` — NaN in, NaN out forever). Sanitize non-finite at the entry of any modulation/smoothing chain (`audio_mod.rs condition()` does, BUG-84fv).
+- A NaN camera/view matrix NaNs the depth prepass; the RT intersector is undefined on NaN rays (hang → page fault). Void NaN texels at the ray source, never let them reach traversal.
 ---
 name: metal-resource-residency-bugs
 description: "GPU memory-error class agents miss — driver reclaims undeclared resources; symptoms, suspect list, and the cure-decomposition method (BUG-jddy, 2026-07-27)"

@@ -29,57 +29,19 @@ def check(name: str, cond: bool) -> None:
         FAILURES.append(name)
 
 
-# --- decide(): tier rules -------------------------------------------------
+# --- decide(): all spawn verbs denied for every tier (native lanes only) ---
 
-# Executor tier: every spawn verb denied ("spawn" via the dead-path rule).
+# Every spawn verb denied regardless of caller tier (Peter 2026-08-02).
 for verb in ("subagent", "run", "workflow"):
-    r = hook.decide(f"cc-fleet {verb} opencode --prompt hi", "deepseek-v4-flash")
-    check(f"executor denied: {verb}", bool(r) and "executor" in r)
+    for model in ("deepseek-v4-flash", "glm-4.7", "glm-5.2", "k3",
+                  "claude-fable-5", "kimi-k2.7-code", "claude-sonnet-5", ""):
+        r = hook.decide(f"cc-fleet {verb} opencode --prompt hi", model)
+        check(f"all-tier denied: {verb} ({model or 'no model'})",
+              bool(r) and "NATIVE" in r)
 check(
-    "executor denied: spawn (dead path)",
+    "spawn dead-path denied: executor",
     bool(hook.decide("cc-fleet spawn opencode --prompt hi", "deepseek-v4-flash")),
 )
-check(
-    "executor denied: kimi-k2.7",
-    bool(hook.decide("cc-fleet subagent opencode -p x", "kimi-k2.7-code")),
-)
-check(
-    "executor denied: sonnet",
-    bool(hook.decide("cc-fleet subagent opencode -p x", "claude-sonnet-5")),
-)
-
-# Dispatcher tier: may drive the executor provider via subagent, nothing else.
-check(
-    "dispatcher allowed: subagent opencode",
-    hook.decide("cc-fleet subagent opencode --prompt-file b.md", "glm-4.7") == "",
-)
-check(
-    "dispatcher allowed: subagent deepseek",
-    hook.decide("cc-fleet subagent deepseek -p x", "glm-4.7") == "",
-)
-check(
-    "dispatcher denied: subagent zai (self-tier)",
-    bool(hook.decide("cc-fleet subagent zai -p x", "glm-4.7")),
-)
-check(
-    "dispatcher denied: subagent kimi (lead seat)",
-    bool(hook.decide("cc-fleet subagent kimi -p x", "glm-5.2")),
-)
-check(
-    "dispatcher denied: workflow",
-    bool(hook.decide("cc-fleet workflow --script s.js", "glm-4.7")),
-)
-check(
-    "dispatcher denied: spawn",
-    bool(hook.decide("cc-fleet spawn opencode", "glm-4.7")),
-)
-
-# Lead tier: passes through.
-for model in ("claude-fable-5", "claude-opus-4-8", "k3"):
-    check(
-        f"lead allowed: {model}",
-        hook.decide("cc-fleet subagent opencode -p x", model) == "",
-    )
 
 # D-48: `cc-fleet spawn` is a dead path — denied for every tier, lead
 # included, even with no identifiable caller model.
@@ -94,12 +56,9 @@ for cmd in ("cc-fleet list --json", "cc-fleet models opencode --json",
 
 # Compound command still caught.
 check(
-    "executor denied inside compound",
+    "denied inside compound",
     bool(hook.decide("git status && cc-fleet subagent opencode -p x", "deepseek-v4-flash")),
 )
-
-# Empty model (unidentifiable caller): fail open.
-check("no model -> allow", hook.decide("cc-fleet subagent opencode -p x", "") == "")
 
 # Prose mentions (not command position) never match — the 2026-07-24 false
 # positives: commit messages and rg patterns quoting the phrase.
@@ -146,11 +105,17 @@ def run_main(command: str, model_line: str | None) -> str:
 out = run_main("cc-fleet subagent opencode -p x", "deepseek-v4-flash")
 check("main: executor deny emitted", '"deny"' in out)
 out = run_main("cc-fleet subagent opencode -p x", "claude-fable-5")
-check("main: lead passes silently", out.strip() == "")
+check("main: lead deny emitted", '"deny"' in out)
 out = run_main("cc-fleet subagent opencode -p x", None)
 check("main: missing transcript fails open", out.strip() == "")
 out = run_main("cargo build", "deepseek-v4-flash")
 check("main: non-cc-fleet command untouched", out.strip() == "")
+out = run_main("cc-fleet subagent-status 8f422e60 --json", "k3")
+check("main: subagent-status poll passes silently", out.strip() == "")
+out = run_main(
+    "cc-fleet subagent opencode --model strong --background --json -p x", "k3"
+)
+check("main: lead background deny emitted", '"deny"' in out)
 
 print()
 if FAILURES:

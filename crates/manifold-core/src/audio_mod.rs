@@ -312,6 +312,13 @@ impl AudioModShape {
     /// visible here (before the range map) so "fire on the quiet gaps" keeps
     /// working.
     pub fn condition(&self, raw: f32, dt_seconds: f32, smoothed: &mut f32, prev_raw: &mut f32) -> f32 {
+        // A non-finite feature value must never enter the follower: Rust's
+        // clamp propagates NaN, and one NaN poisons `smoothed` permanently
+        // (NaN in, NaN out, forever) — from there it rides map_range into
+        // the target param, and a NaN camera/light param NaNs the depth
+        // prepass and everything downstream (BUG-84fv). Read a glitch as
+        // silence for this frame instead.
+        let raw = if raw.is_finite() { raw } else { 0.0 };
         // Rate-of-change differentiates the feature over real time (per second),
         // scaled by sensitivity and centered at 0.5 so a steady signal reads as
         // mid-range while motion pushes it up (rising) or down (falling). The
@@ -720,8 +727,26 @@ mod tests {
     }
 
     #[test]
-    fn map_range_of_condition_equals_apply() {
-        // condition() then map_range() must reproduce apply() exactly, for a
+    fn condition_sanitizes_non_finite_raw_and_recovers() {
+        // BUG-84fv: a NaN/inf feature value must not poison the one-pole
+        // follower — pre-guard, one NaN made `smoothed` NaN forever, and the
+        // modulated param (e.g. cam_orbit → view matrix) went NaN every frame.
+        for raw in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let shape = AudioModShape::default();
+            let mut s = 0.4;
+            let mut prev = 0.3;
+            let out = shape.condition(raw, 0.016, &mut s, &mut prev);
+            assert!(out.is_finite(), "non-finite raw must not propagate, got {out}");
+            assert!(s.is_finite(), "follower must survive, smoothed = {s}");
+            assert_eq!(prev, 0.0, "sanitized raw reads as silence");
+            // And the follower keeps working on the next honest value.
+            let after = shape.condition(0.8, 0.016, &mut s, &mut prev);
+            assert!(after.is_finite() && after > 0.0, "follower must recover, got {after}");
+        }
+    }
+
+    #[test]
+    fn map_range_of_condition_equals_apply() {        // condition() then map_range() must reproduce apply() exactly, for a
         // handful of shapes/raws — the split is a pure refactor.
         let shapes = [
             AudioModShape::default(),
