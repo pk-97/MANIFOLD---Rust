@@ -66,18 +66,25 @@ fn analytic(em: f32, sz: f32, y: f32) -> f64 {
     0.96 * 1.0 * 0.2126 * e
 }
 
-fn render(json: &str) -> (Vec<u8>, u32, u32) {
+fn render(json: &str) -> (f64, f64) {
+    // frame-0 luma (before accumulation fills in) + converged luma
     let h=harness::shared();
     let reg=PrimitiveRegistry::with_builtin();
     let mut rt=PresetRuntime::from_json_str_with_device(json,&reg,std::sync::Arc::clone(&h.device),h.width,h.height,GpuTextureFormat::Rgba16Float,None).expect("scene");
     let tgt=h.make_target("rs-c");
+    let mut f0: Option<f64> = None;
     for fr in 0..ACCUM_FRAMES{
         let ctx=PresetContext{time:0.1,beat:0.2,dt:1.0/60.0,width:h.width,height:h.height,output_width:h.width,output_height:h.height,aspect:h.width as f32/h.height as f32,owner_key:0,is_clip_level:false,frame_count:fr,anim_progress:0.0,trigger_count:0};
         let mut enc=h.device.create_encoder("rs-c");
         {let mut gpu=RendererGpuEncoder::new(&mut enc,&h.device);rt.render(&mut gpu,&tgt.texture,&ctx,&manifold_core::params::ParamManifest::default());}
         enc.commit_and_wait_completed();
+        if fr == 0 {
+            let bytes = h.readback(&tgt.texture);
+            f0 = Some(probe_luma(&bytes, h.width, h.height));
+        }
     }
-    (h.readback(&tgt.texture),h.width,h.height)
+    let bytes = h.readback(&tgt.texture);
+    (f0.unwrap_or(0.0), probe_luma(&bytes, h.width, h.height))
 }
 
 fn scene_json(er: f32) -> String {
@@ -116,26 +123,27 @@ fn probe_luma(b: &[u8], w: u32, h: u32) -> f64 {
     region_luma(b,w,h,pp.px,pp.py,PROBE_RADIUS)
 }
 
-#[allow(dead_code)] // kept for strobe-leg future use
-fn render_with_env(json: &str, k: &str, v: &str) -> (Vec<u8>, u32, u32) {
-    unsafe { std::env::set_var(k, v); }
-    let r=std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render(json)));
-    unsafe { std::env::remove_var(k); }
-    r.expect("render must not panic")
-}
-
 #[test]
 fn i_rs3_sampler_converges_to_cpu_analytic_gather_misses() {
-    let (on_bytes,w,h) = render(&scene_json(EMIT_R));
-    let (off_bytes,_,_) = render(&scene_json(0.0));
+    // Discriminator: leg 2 (emission=0) FIRST, fresh runtime.
+    // If the floor drops to ~0 → temporal bleed between legs (fix: separate runtimes).
+    // If floor persists → structural (dump frame-0 probe to see raw pre-accumulation).
+    let (off_f0, off_converged) = render(&scene_json(0.0));
+    let (on_f0, on_converged) = render(&scene_json(EMIT_R));
 
-    let on_luma = probe_luma(&on_bytes,w,h);
-    let off_luma = probe_luma(&off_bytes,w,h);
-    let delta = on_luma - off_luma;
     let a = analytic(EMIT_R, EMIT_SIZE, EMIT_Y);
+    println!(
+        "I-RS3 discriminator: off_f0={off_f0:.6} off_conv={off_converged:.6} on_f0={on_f0:.6} on_conv={on_converged:.6} analytic={a:.6}"
+    );
+    println!(
+        "  temporal bleed check: off_f0/analytic={:.5} (should be ~0 if no bleed)",
+        off_f0 / a.max(1e-9)
+    );
 
+    // Leg-1 gate: converged delta(on-off) within ±30% of analytic.
+    let delta = on_converged - off_converged;
     let r = delta / a.max(1e-9);
-    println!("I-RS3: on={on_luma:.6} off={off_luma:.6} delta={delta:.6} analytic={a:.6} delta/analytic={r:.3}");
+    println!("  I-RS3: delta(converged)={delta:.6} delta/analytic={r:.3} (±30%)");
     assert!(r>0.7, "leg1: {r:.3}<0.7");
     assert!(r<1.3, "leg1: {r:.3}>1.3");
     assert!(delta > 0.001, "I-RS3: sampler produces no measurable irradiance");
