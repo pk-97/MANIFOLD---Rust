@@ -35,6 +35,7 @@ const H: u32 = 640;
 const BYTES_PER_ROW: u32 = W * 8;
 /// Bands per frame write — each its own render pass, so a reader sampling
 /// mid-frame catches a partial frame (3/8-band splits measured).
+/// Pinned at 8 for BUG-4qob probabilistic gate (legacy ≥1/7 tears, fenced 0/7).
 const BANDS: u32 = 8;
 
 const VS: &str = r#"
