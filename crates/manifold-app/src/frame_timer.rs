@@ -244,7 +244,7 @@ impl FrameTimer {
             return;
         }
         // Adaptive alpha from time constant. At 60fps (dt=16.6ms, tau=0.3s):
-        // alpha ≈ 0.0.054 → ~5% weight on new sample, 95% on history.
+        // alpha ≈ 0.054 → ~5% weight on new sample, 95% on history.
         let alpha = 1.0 - (-dt / EWMA_TAU).exp();
         self.smoothed_dt = alpha * dt + (1.0 - alpha) * self.smoothed_dt;
         self.current_fps = 1.0 / self.smoothed_dt;
@@ -252,7 +252,7 @@ impl FrameTimer {
 
     /// Test-only injection point for deterministic EWMA testing.
     /// Simulates a frame with exact delta time, bypassing wall-clock measurement.
-    #[cfg(any(feature = "perf-soak", test))]
+    #[cfg(test)]
     fn inject_frame_time(&mut self, dt: f64) {
         self.last_tick_time = Instant::now();
         self.last_dt = dt;
